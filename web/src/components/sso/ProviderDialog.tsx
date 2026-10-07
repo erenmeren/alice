@@ -1,7 +1,8 @@
-import { Button, CopyButton, Group, PasswordInput, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core';
+import { Anchor, Button, CopyButton, Group, PasswordInput, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 import { createProvider, updateProvider, type Provider } from '../../api/sso';
 import { SSO_PROVIDERS_KEY } from '../../api/queryKeys';
 import { AppModal } from '../AppModal';
@@ -51,17 +52,29 @@ export function ProviderDialog({ provider, onClose }: { provider: Provider | nul
           <Text role="status" size="sm" c="green.9">
             {t('settings.saved')}
           </Text>
-          <Text size="sm">
-            <CodeText i18nKey="sso.redirectUri" param="uri" value={save.data.redirect_uri} />
-          </Text>
+          {save.data.redirect_uri ? (
+            <Text size="sm">
+              <CodeText i18nKey="sso.redirectUri" param="uri" value={save.data.redirect_uri} />
+            </Text>
+          ) : (
+            // The address is built from Alice's public address: a provider saved before it was set has none yet.
+            <Text size="sm">
+              {t('sso.redirectUriMissing')}{' '}
+              <Anchor component={Link} to="/settings?tab=general">
+                {t('sso.redirectUriMissingLink')}
+              </Anchor>
+            </Text>
+          )}
           <Group justify="flex-end">
-            <CopyButton value={save.data.redirect_uri}>
-              {({ copied, copy }) => (
-                <Button variant="default" onClick={copy}>
-                  {copied ? t('sso.copied') : t('sso.copy')}
-                </Button>
-              )}
-            </CopyButton>
+            {save.data.redirect_uri && (
+              <CopyButton value={save.data.redirect_uri}>
+                {({ copied, copy }) => (
+                  <Button variant="default" onClick={copy}>
+                    {copied ? t('sso.copied') : t('sso.copy')}
+                  </Button>
+                )}
+              </CopyButton>
+            )}
             <Button onClick={onClose} data-autofocus>
               {t('ui.continue')}
             </Button>

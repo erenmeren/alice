@@ -2199,7 +2199,9 @@
     "switchOffConfirm": "Switch off",
     "removeMappingTitle": "Remove the mapping for {{group}}?",
     "removeMappingText": "Members of this group no longer get this role when they sign in.",
-    "removeMappingConfirm": "Remove mapping"
+    "removeMappingConfirm": "Remove mapping",
+    "redirectUriMissing": "Set Alice's address in Settings → General first; the redirect address appears here afterwards.",
+    "redirectUriMissingLink": "Open the general settings"
   },
   "stepUp": {
     "ssoTitle": "Confirm at your identity provider",

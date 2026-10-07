@@ -2199,7 +2199,9 @@
     "switchOffConfirm": "Kapat",
     "removeMappingTitle": "{{group}} eşlemesi kaldırılsın mı?",
     "removeMappingText": "Bu grubun üyeleri oturum açtıklarında artık bu rolü almaz.",
-    "removeMappingConfirm": "Eşlemeyi kaldır"
+    "removeMappingConfirm": "Eşlemeyi kaldır",
+    "redirectUriMissing": "Önce Ayarlar → Genel bölümünde Alice'in adresini belirleyin; yönlendirme adresi bundan sonra burada görünür.",
+    "redirectUriMissingLink": "Genel ayarları aç"
   },
   "stepUp": {
     "ssoTitle": "Kimlik sağlayıcınızda onaylayın",

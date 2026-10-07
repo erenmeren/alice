@@ -221,4 +221,18 @@ describe('SSOSettings', () => {
     expect(puts).toBe(0);
     expect(screen.getByRole('switch', { name: 'SSO users may be Admin' })).toBeChecked();
   });
+
+  it('shows a hint, a link and no Copy button when the redirect address is empty', async () => {
+    base([http.post('/api/v1/sso/providers', () => HttpResponse.json(providerFixture({ id: 'p3', redirect_uri: '' }), { status: 201 }))]);
+    await renderRoute('/settings?tab=sso');
+    await userEvent.click(await screen.findByRole('button', { name: 'Add identity provider' }));
+    const dialog = await screen.findByRole('dialog');
+    for (const [label, value] of [[/^Name shown/, 'X'], [/^Issuer address/, 'https://i.example.com'], [/^Client ID/, 'c'], [/^Client secret/, 's']] as const)
+      await userEvent.type(within(dialog).getByLabelText(label), value);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save identity provider' }));
+    expect(await within(dialog).findByText(/the redirect address appears here afterwards/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: 'Open the general settings' })).toHaveAttribute('href', '/settings?tab=general');
+    expect(within(dialog).queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument();
+    expect(dialog.querySelector('code')).toBeNull();
+  });
 });
