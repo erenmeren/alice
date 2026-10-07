@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -309,6 +310,16 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 		}
 		if key != "" {
 			checks = append(checks, func() (bool, time.Duration) { return s.export.Allow(key) })
+		}
+	case limitOIDCCallback:
+		// Per binding cookie (S-11): a guessed state is useless without the cookie, so the callback needs no
+		// per-address brute-force bucket; one browser's retries are bounded. Without the cookie the request is an
+		// ordinary anonymous one (the per-address bucket below).
+		if c, err := r.Cookie(oidcCookie); err == nil && c.Value != "" {
+			sum := sha256.Sum256([]byte(c.Value))
+			key := "b:" + hex.EncodeToString(sum[:])
+			checks = append(checks, func() (bool, time.Duration) { return s.oidcCallbacks.Allow(key) })
+			failedCharged = true // replaces the anonymous per-address bucket
 		}
 	}
 	switch p.Kind {

@@ -1136,6 +1136,134 @@ server again.
 
 **What to do.** Wait until the previous download has finished, then export again.
 
+## ALC-SSO-0001: Alice could not read the identity provider's settings
+
+**Meaning.** Adding, changing or re-reading an identity provider failed because Alice could not read its discovery document or key list (param `cause`: connect, tls, status, document, issuer_mismatch, not_https or jwks); nothing was saved. (HTTP 502, reason `sso.discovery_failed`; retryable.)
+
+**Likely cause.** Its discovery document or key list could not be fetched or is not valid (reason: the `cause` label).
+
+**What to do.** Check the issuer address and, for a private certificate authority, its certificate, then try again.
+
+## ALC-SSO-0002: A group cannot be mapped to Administrator
+
+**Meaning.** A group mapping to Administrator was refused and recorded in the audit log. (HTTP 409, reason `sso.admin_mapping_disabled`.)
+
+**Likely cause.** SSO users may be Admin is switched off, so single sign-on users can be at most Operators.
+
+**What to do.** Switch on SSO users may be Admin first, or map the group to another role.
+
+## ALC-SSO-0003: SSO users may be Admin cannot be switched off yet
+
+**Meaning.** Switching off "SSO users may be Admin" was refused. (HTTP 409, reason `sso.admin_mappings_exist`.)
+
+**Likely cause.** Some groups are still mapped to Administrator.
+
+**What to do.** Remove those mappings, then switch the setting off.
+
+## ALC-SSO-0004: Alice's address is not set
+
+**Meaning.** A single sign-on could not start because Alice's own address (Settings, General) is empty. (HTTP 409, reason `sso.public_url_missing`.)
+
+**Likely cause.** The identity provider sends users back to Alice's address, and Alice does not know it yet.
+
+**What to do.** Enter Alice's address under Settings, General, then try again.
+
+## ALC-SSO-0005: This identity provider still has users
+
+**Meaning.** Deleting an identity provider was refused. (HTTP 409, reason `sso.provider_in_use`.)
+
+**Likely cause.** People have signed in through it, so it cannot be deleted.
+
+**What to do.** Switch the provider off instead, or remove its users first.
+
+## ALC-SSO-0006: Your account has no access to Alice, contact your administrator
+
+**Meaning.** A single sign-on was refused: no group of the person has a role in Alice. The sign-in page shows this (`sso_error=sso.no_access`); the person's sessions and API tokens end. (HTTP 403, reason `sso.no_access`.)
+
+**Likely cause.** You signed in at your identity provider, but none of your groups is given a role in Alice.
+
+**What to do.** Ask your administrator to add your group to Alice's group mappings.
+
+## ALC-SSO-0007: Your identity provider did not send your groups
+
+**Meaning.** A single sign-on was refused because the identity provider left out the groups (Microsoft Entra ID sends at most 200). Alice does not ask Microsoft Graph for them. (HTTP 403, reason `sso.groups_overage`.)
+
+**Likely cause.** You are a member of more groups than it puts into a sign-in, so it left them all out.
+
+**What to do.** Ask your administrator to send only the groups assigned to Alice's application (Microsoft Entra ID: "Groups assigned to the application").
+
+## ALC-SSO-0008: Single sign-on was refused for this e-mail address
+
+**Meaning.** A single sign-on was refused because a local account has the same e-mail address. (HTTP 403, reason `sso.email_in_use`.)
+
+**Likely cause.** A local Alice account already uses this e-mail address, and Alice never joins a single sign-on identity to a local account.
+
+**What to do.** Ask your administrator to change or remove the local account's e-mail address, then sign in again.
+
+## ALC-SSO-0009: Alice could not reach the identity provider
+
+**Meaning.** A single sign-on failed because Alice could not reach the identity provider to finish it (token or key list). (HTTP 502, reason `sso.idp_unreachable`; retryable.)
+
+**Likely cause.** The identity provider is down or the network path to it is blocked.
+
+**What to do.** Try again later. Administrators can still sign in with their local account and authenticator code.
+
+## ALC-SSO-0010: The sign-in answer of the identity provider was not accepted
+
+**Meaning.** A single sign-on was refused because the identity provider's answer did not pass Alice's checks (signature, issuer, audience, times, nonce). (HTTP 401, reason `sso.login_invalid`.)
+
+**Likely cause.** Alice could not confirm that the answer really came from your identity provider for this sign-in.
+
+**What to do.** Sign in again. If this keeps happening, ask your administrator to check the single sign-on settings.
+
+## ALC-SSO-0011: This sign-in has expired
+
+**Meaning.** A single sign-on was refused because its state was missing, used, older than 10 minutes or started in another browser. (HTTP 401, reason `sso.login_expired`.)
+
+**Likely cause.** A sign-in must be finished within 10 minutes and in the same browser, and each one can be used only once.
+
+**What to do.** Start the sign-in again.
+
+## ALC-SSO-0012: Your Alice account is disabled
+
+**Meaning.** A single sign-on was refused because the Alice account is disabled. (HTTP 403, reason `sso.user_disabled`.)
+
+**Likely cause.** An administrator disabled your account.
+
+**What to do.** Contact your administrator.
+
+## ALC-SSO-0013: This sign-in option is switched off
+
+**Meaning.** A single sign-on was refused because the identity provider is switched off in Alice. (HTTP 403, reason `sso.provider_disabled`.)
+
+**Likely cause.** An administrator switched off this identity provider in Alice.
+
+**What to do.** Use another sign-in option or contact your administrator.
+
+## ALC-SSO-0014: The confirmation was made with another account
+
+**Meaning.** A confirmation (step-up) at the identity provider was refused because another person answered it. (HTTP 403, reason `sso.stepup_other_user`.)
+
+**Likely cause.** You confirmed at the identity provider as a different person than the one signed in to Alice.
+
+**What to do.** Confirm again with your own account.
+
+## ALC-SSO-0015: The identity provider ended the sign-in
+
+**Meaning.** The identity provider sent the browser back with an error instead of a sign-in. (HTTP 401, reason `sso.idp_error`.)
+
+**Likely cause.** It answered with an error, for example because the sign-in was cancelled or Alice's address is not registered there.
+
+**What to do.** Try again. If this keeps happening, ask your administrator to check that Alice's address is registered at the identity provider.
+
+## ALC-SSO-0016: Your account does not use single sign-on
+
+**Meaning.** A confirmation at an identity provider was asked for a local account. (HTTP 409, reason `sso.not_sso_user`.)
+
+**Likely cause.** Only single sign-on users confirm at the identity provider.
+
+**What to do.** Confirm with your authenticator code instead.
+
 ## ALC-ROT-0001: This key already has a rotation policy
 
 **Meaning.** Creating a rotation policy was refused because the key has one already. (HTTP 409, reason `rotation.policy_exists`.)

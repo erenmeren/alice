@@ -76,6 +76,9 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.SSHKeysDownload: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 	rbac.RotationManage:  row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, allw),
 	rbac.RotationOperate: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+
+	// Phase 7 (SEC-009, R42 row 24): single sign-on configuration is an Administrator's browser session with step-up.
+	rbac.SSOManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -246,6 +249,12 @@ the summary's audit head is for Administrators and Auditors. The CSV exports are
 minute per user or token and one at a time per person; each is recorded in the audit log before the first byte. Saved views
 are a signed-in person's own (` + "`session`" + `, no API token). Every ` + "`/api/v1/settings/...`" + ` route is ` + "`settings.manage`" + `;
 ` + "`POST /api/v1/settings/smtp/actions/test`" + ` is limited to 5 a minute per user.
+
+**Single sign-on (Phase 7).** Every ` + "`/api/v1/sso/...`" + ` route is ` + "`sso.manage`" + `: an Administrator's browser session with
+step-up, never an API token. The sign-in at an identity provider is public: the start is limited like the sign-in form (10 a
+minute per address); ` + "`GET /api/v1/auth/oidc/{id}/callback`" + ` is the only GET that changes state (it consumes the sign-in
+state and creates or steps up a session), is always answered with a 303 redirect and is limited per binding cookie. An SSO
+user's step-up (` + "`POST /api/v1/auth/oidc/stepup`" + `) needs the user's own session.
 `
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {
@@ -387,6 +396,13 @@ func routeRuleViolations(routes []route) []string {
 		case under(p, "/api/v1/dashboard"), under(p, "/api/v1/alerts"), under(p, "/api/v1/notifications"):
 			want = rbac.Read
 		case under(p, "/api/v1/views"):
+			want = rbac.Session
+		// Phase 7 (C13): single sign-on configuration; the sign-in at an identity provider is public, its step-up a session's.
+		case under(p, "/api/v1/sso"):
+			want = rbac.SSOManage
+		case p == "/api/v1/auth/oidc/providers", p == "/api/v1/auth/oidc/{id}/start", p == "/api/v1/auth/oidc/{id}/callback":
+			want = rbac.Public
+		case p == "/api/v1/auth/oidc/stepup":
 			want = rbac.Session
 		case under(p, "/api/v1/audit"):
 			want = rbac.AuditRead
@@ -532,6 +548,21 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"PUT /api/v1/settings/alerts",
 		"GET /api/v1/settings/general",
 		"PUT /api/v1/settings/general",
+		"GET /api/v1/sso/providers",
+		"POST /api/v1/sso/providers",
+		"GET /api/v1/sso/providers/{id}",
+		"PATCH /api/v1/sso/providers/{id}",
+		"DELETE /api/v1/sso/providers/{id}",
+		"POST /api/v1/sso/providers/{id}/actions/refresh",
+		"GET /api/v1/sso/group-mappings",
+		"POST /api/v1/sso/group-mappings",
+		"DELETE /api/v1/sso/group-mappings/{id}",
+		"GET /api/v1/sso/settings",
+		"PUT /api/v1/sso/settings",
+		"GET /api/v1/auth/oidc/providers",
+		"POST /api/v1/auth/oidc/{id}/start",
+		"GET /api/v1/auth/oidc/{id}/callback",
+		"POST /api/v1/auth/oidc/stepup",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -595,6 +626,10 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/alerts", perm: rbac.Session},
 		{method: http.MethodPost, pattern: "/api/v1/views", perm: rbac.Read},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/export", perm: rbac.AuditRead},
+		{method: http.MethodPost, pattern: "/api/v1/sso/providers", perm: rbac.SettingsManage},
+		{method: http.MethodGet, pattern: "/api/v1/sso/settings", perm: rbac.UsersRead},
+		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/stepup", perm: rbac.SessionStepUp},
+		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/{id}/callback", perm: rbac.Session},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -637,6 +672,8 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/dashboard/expiring", perm: rbac.Read},
 		{method: http.MethodDelete, pattern: "/api/v1/views/{id}", perm: rbac.Session},
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read},
+		{method: http.MethodDelete, pattern: "/api/v1/sso/group-mappings/{id}", perm: rbac.SSOManage},
+		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/{id}/start", perm: rbac.Public},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }
@@ -646,7 +683,7 @@ var (
 	lockAvailable = []string{"/api/v1/auth", "/api/v1/setup", "/api/v1/license", "/api/v1/users", "/api/v1/tokens",
 		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings",
 		// Phase 7 (C13): the Dashboard, its conditions and the delivery state are reads; saved views change nothing outside Alice.
-		"/api/v1/dashboard", "/api/v1/alerts", "/api/v1/views", "/api/v1/notifications"}
+		"/api/v1/dashboard", "/api/v1/alerts", "/api/v1/views", "/api/v1/notifications", "/api/v1/sso"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings"}
 	// lockAvailableRoutes are routes of a refused group that work in every license state because

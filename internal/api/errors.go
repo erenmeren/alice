@@ -14,6 +14,7 @@ import (
 
 	"alice/internal/alerts/expiry"
 	"alice/internal/auth"
+	"alice/internal/auth/oidc"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
@@ -160,6 +161,25 @@ var (
 	ErrViewLimit      = ErrorCode{Code: "ALC-RPT-0002", Reason: "views.limit_reached", Status: http.StatusConflict}
 	ErrViewNameTaken  = ErrorCode{Code: "ALC-RPT-0003", Reason: "views.name_taken", Status: http.StatusConflict}
 	ErrExportBusy     = ErrorCode{Code: "ALC-RPT-0004", Reason: "export.busy", Status: http.StatusConflict, Retryable: true}
+
+	// Phase 7 (C15): single sign-on. 0006..0015 are the closed reasons of a refused sign-in or step-up (*oidc.LoginError);
+	// the callback carries them to the sign-in page as sso_error, the other routes answer them.
+	ErrSSODiscoveryFailed      = ErrorCode{Code: "ALC-SSO-0001", Reason: "sso.discovery_failed", Status: http.StatusBadGateway, Retryable: true}
+	ErrSSOAdminMappingDisabled = ErrorCode{Code: "ALC-SSO-0002", Reason: "sso.admin_mapping_disabled", Status: http.StatusConflict}
+	ErrSSOAdminMappingsExist   = ErrorCode{Code: "ALC-SSO-0003", Reason: "sso.admin_mappings_exist", Status: http.StatusConflict}
+	ErrSSOPublicURLMissing     = ErrorCode{Code: "ALC-SSO-0004", Reason: "sso.public_url_missing", Status: http.StatusConflict}
+	ErrSSOProviderInUse        = ErrorCode{Code: "ALC-SSO-0005", Reason: "sso.provider_in_use", Status: http.StatusConflict}
+	ErrSSONoAccess             = ErrorCode{Code: "ALC-SSO-0006", Reason: "sso.no_access", Status: http.StatusForbidden}
+	ErrSSOGroupsOverage        = ErrorCode{Code: "ALC-SSO-0007", Reason: "sso.groups_overage", Status: http.StatusForbidden}
+	ErrSSOEmailInUse           = ErrorCode{Code: "ALC-SSO-0008", Reason: "sso.email_in_use", Status: http.StatusForbidden}
+	ErrSSOIdPUnreachable       = ErrorCode{Code: "ALC-SSO-0009", Reason: "sso.idp_unreachable", Status: http.StatusBadGateway, Retryable: true}
+	ErrSSOLoginInvalid         = ErrorCode{Code: "ALC-SSO-0010", Reason: "sso.login_invalid", Status: http.StatusUnauthorized}
+	ErrSSOLoginExpired         = ErrorCode{Code: "ALC-SSO-0011", Reason: "sso.login_expired", Status: http.StatusUnauthorized}
+	ErrSSOUserDisabled         = ErrorCode{Code: "ALC-SSO-0012", Reason: "sso.user_disabled", Status: http.StatusForbidden}
+	ErrSSOProviderDisabled     = ErrorCode{Code: "ALC-SSO-0013", Reason: "sso.provider_disabled", Status: http.StatusForbidden}
+	ErrSSOStepUpOtherUser      = ErrorCode{Code: "ALC-SSO-0014", Reason: "sso.stepup_other_user", Status: http.StatusForbidden}
+	ErrSSOIdPError             = ErrorCode{Code: "ALC-SSO-0015", Reason: "sso.idp_error", Status: http.StatusUnauthorized}
+	ErrSSONotSSOUser           = ErrorCode{Code: "ALC-SSO-0016", Reason: "sso.not_sso_user", Status: http.StatusConflict}
 
 	// Phase 6: rotation policies and runs (R41, C11). The run results (rotations.result_code) and the location
 	// errors (rotation_locations.error_code) are stored reasons; the API also answers the request refusals with them.
@@ -350,6 +370,9 @@ func AllErrorCodes() []ErrorCode {
 		ErrKeyConnectionAccountFile, ErrKeyInRotation, ErrNotifyQueueFailed,
 		ErrSMTPNotConfigured, ErrSMTPConnect, ErrSMTPTLS, ErrSMTPUntrusted, ErrSMTPAuth, ErrSMTPRejected, ErrSMTPCertNotSeen,
 		ErrSMTPAddressRefused, ErrExportTooLarge, ErrViewLimit, ErrViewNameTaken, ErrExportBusy,
+		ErrSSODiscoveryFailed, ErrSSOAdminMappingDisabled, ErrSSOAdminMappingsExist, ErrSSOPublicURLMissing, ErrSSOProviderInUse,
+		ErrSSONoAccess, ErrSSOGroupsOverage, ErrSSOEmailInUse, ErrSSOIdPUnreachable, ErrSSOLoginInvalid, ErrSSOLoginExpired,
+		ErrSSOUserDisabled, ErrSSOProviderDisabled, ErrSSOStepUpOtherUser, ErrSSOIdPError, ErrSSONotSSOUser,
 		ErrRotPolicyExists, ErrRotInProgress, ErrRotPlanChanged, ErrRotNothingToRotate, ErrRotNotWaiting, ErrRotAddFailed,
 		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
 		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
@@ -551,6 +574,20 @@ var errorMap = []struct {
 	{reports.ErrViewName, ErrViewNameTaken, nil},
 	{reports.ErrExportBusy, ErrExportBusy, nil},
 	{reports.ErrNotFound, ErrNotFound, nil},
+	// Single sign-on (C15). *oidc.DiscoveryError and *oidc.LoginError are matched in classify. The auth sentinels of a
+	// sign-in reach the API only as a LoginError; they are mapped here too so that none can become a 500.
+	// auth.ErrOIDCIdentityInvalid means Alice passed an identity it cannot store: answered as a refused sign-in.
+	{oidc.ErrAdminMappingDisabled, ErrSSOAdminMappingDisabled, nil},
+	{oidc.ErrAdminMappingsExist, ErrSSOAdminMappingsExist, nil},
+	{oidc.ErrPublicURLMissing, ErrSSOPublicURLMissing, nil},
+	{oidc.ErrProviderInUse, ErrSSOProviderInUse, nil},
+	{oidc.ErrNotFound, ErrNotFound, nil},
+	{oidc.ErrVersion, ErrPreconditionFailed, nil},
+	{auth.ErrNotSSOUser, ErrSSONotSSOUser, nil},
+	{auth.ErrOIDCEmailInUse, ErrSSOEmailInUse, nil},
+	{auth.ErrOIDCUserDisabled, ErrSSOUserDisabled, nil},
+	{auth.ErrOIDCOtherUser, ErrSSOStepUpOtherUser, nil},
+	{auth.ErrOIDCIdentityInvalid, ErrSSOLoginInvalid, nil},
 }
 
 type errorPayload struct {
@@ -691,6 +728,18 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 		}
 		return ErrKVImportConfirmNeeded, params, true
 	}
+	var disc *oidc.DiscoveryError
+	if errors.As(err, &disc) {
+		// The cause is one of Alice's closed labels (connect, tls, status, document, issuer_mismatch, not_https, jwks).
+		if !paramCodeRE.MatchString(disc.Cause) {
+			return ErrSSODiscoveryFailed, nil, true
+		}
+		return ErrSSODiscoveryFailed, map[string]string{"cause": disc.Cause}, true
+	}
+	var login *oidc.LoginError
+	if errors.As(err, &login) {
+		return loginErrorCode(login), nil, true
+	}
 	var perr *providers.Error
 	if errors.As(err, &perr) {
 		// Only the stable reason and its allowlisted primitive params reach the client; the
@@ -710,6 +759,17 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 		}
 	}
 	return ErrorCode{}, nil, false
+}
+
+// loginErrorCode is the code of a refused sign-in or step-up: one of ALC-SSO-0006..0015, ALC-SSO-0010 for a reason
+// that is not one of them.
+func loginErrorCode(e *oidc.LoginError) ErrorCode {
+	switch ec := codeForReason("sso." + e.Reason); ec {
+	case ErrSSONoAccess, ErrSSOGroupsOverage, ErrSSOEmailInUse, ErrSSOIdPUnreachable, ErrSSOLoginInvalid, ErrSSOLoginExpired,
+		ErrSSOUserDisabled, ErrSSOProviderDisabled, ErrSSOStepUpOtherUser, ErrSSOIdPError:
+		return ec
+	}
+	return ErrSSOLoginInvalid
 }
 
 // providerParamKeys are the provider error params a client may see: fixed labels, numbers and

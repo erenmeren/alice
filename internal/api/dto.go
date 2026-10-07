@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
+
 	"alice/internal/auth"
 	"alice/internal/setup"
 )
@@ -21,6 +23,9 @@ type userDTO struct {
 	MFAEnrolled bool       `json:"mfa_enrolled"`
 	LastLoginAt *time.Time `json:"last_login_at"`
 	CreatedAt   time.Time  `json:"created_at"`
+	// AuthSource is how the person signs in (local or oidc); SSOProviderID is the identity provider of an SSO user (C10).
+	AuthSource    string     `json:"auth_source"`
+	SSOProviderID *uuid.UUID `json:"sso_provider_id"`
 }
 
 func userJSON(u auth.User) userDTO {
@@ -40,7 +45,18 @@ func userJSON(u auth.User) userDTO {
 		MFAEnrolled: u.MFAEnrolled,
 		LastLoginAt: last,
 		CreatedAt:   u.CreatedAt.UTC(),
+
+		AuthSource:    authSource(u.AuthSource),
+		SSOProviderID: u.SSOProviderID,
 	}
+}
+
+// authSource is a user's sign-in source; a user stored before single sign-on existed is local.
+func authSource(s string) string {
+	if s == "" {
+		return auth.AuthLocal
+	}
+	return s
 }
 
 // sessionDTO is the wire form of auth.SessionInfo; RecoveryCodes is present

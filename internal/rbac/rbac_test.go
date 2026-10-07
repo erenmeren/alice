@@ -71,6 +71,9 @@ var expected = map[rbac.Permission]map[string]rbac.Decision{
 	rbac.SettingsManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.SSOManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
 	rbac.LicenseRead: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": A, "auditor+stepup": A, "token-read-admin": A, "token-operate-admin": A, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": A, "token-noscope-admin": F, "session-unknown-role": F},
@@ -134,7 +137,7 @@ func TestUnknownPermissionIsDenied(t *testing.T) {
 
 func TestPermissionsAreSortedAndHavePolicies(t *testing.T) {
 	ps := rbac.Permissions()
-	assert.Len(t, ps, 22)
+	assert.Len(t, ps, 23)
 	assert.True(t, sort.SliceIsSorted(ps, func(i, j int) bool { return ps[i] < ps[j] }))
 	for _, p := range ps {
 		_, ok := rbac.PolicyFor(p)
@@ -216,4 +219,15 @@ func TestPhase6Policies(t *testing.T) {
 	for _, c := range cases {
 		assert.Equal(t, c.want, rbac.Decide(c.p, c.s), "%s %+v", c.p, c.s)
 	}
+}
+
+func TestPhase7Policies(t *testing.T) {
+	adminUp := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Admin, StepUp: true}
+	admin := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Admin}
+	tok := rbac.Subject{Kind: rbac.APIToken, Role: rbac.Admin, Scope: rbac.ScopeOperate}
+	op := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Operator, StepUp: true}
+	assert.Equal(t, rbac.Allow, rbac.Decide(rbac.SSOManage, adminUp))
+	assert.Equal(t, rbac.DenyStepUp, rbac.Decide(rbac.SSOManage, admin))
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.SSOManage, tok), "no token configures SSO")
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.SSOManage, op))
 }

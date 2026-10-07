@@ -638,6 +638,88 @@
         "action": "Choose another name."
       }
     },
+    "sso": {
+      "discovery_failed": {
+        "title": "Alice could not read the identity provider's settings.",
+        "cause": "Its discovery document or key list could not be fetched or is not valid (reason: {{cause}}).",
+        "action": "Check the issuer address and, for a private certificate authority, its certificate, then try again."
+      },
+      "admin_mapping_disabled": {
+        "title": "A group cannot be mapped to Administrator.",
+        "cause": "SSO users may be Admin is switched off, so single sign-on users can be at most Operators.",
+        "action": "Switch on SSO users may be Admin first, or map the group to another role."
+      },
+      "admin_mappings_exist": {
+        "title": "SSO users may be Admin cannot be switched off yet.",
+        "cause": "Some groups are still mapped to Administrator.",
+        "action": "Remove those mappings, then switch the setting off."
+      },
+      "public_url_missing": {
+        "title": "Alice's address is not set.",
+        "cause": "The identity provider sends users back to Alice's address, and Alice does not know it yet.",
+        "action": "Enter Alice's address under Settings, General, then try again."
+      },
+      "provider_in_use": {
+        "title": "This identity provider still has users.",
+        "cause": "People have signed in through it, so it cannot be deleted.",
+        "action": "Switch the provider off instead, or remove its users first."
+      },
+      "no_access": {
+        "title": "Your account has no access to Alice, contact your administrator.",
+        "cause": "You signed in at your identity provider, but none of your groups is given a role in Alice.",
+        "action": "Ask your administrator to add your group to Alice's group mappings."
+      },
+      "groups_overage": {
+        "title": "Your identity provider did not send your groups.",
+        "cause": "You are a member of more groups than it puts into a sign-in, so it left them all out.",
+        "action": "Ask your administrator to send only the groups assigned to Alice's application (Microsoft Entra ID: \"Groups assigned to the application\")."
+      },
+      "email_in_use": {
+        "title": "Single sign-on was refused for this e-mail address.",
+        "cause": "A local Alice account already uses this e-mail address, and Alice never joins a single sign-on identity to a local account.",
+        "action": "Ask your administrator to change or remove the local account's e-mail address, then sign in again."
+      },
+      "idp_unreachable": {
+        "title": "Alice could not reach the identity provider.",
+        "cause": "The identity provider is down or the network path to it is blocked.",
+        "action": "Try again later. Administrators can still sign in with their local account and authenticator code."
+      },
+      "login_invalid": {
+        "title": "The sign-in answer of the identity provider was not accepted.",
+        "cause": "Alice could not confirm that the answer really came from your identity provider for this sign-in.",
+        "action": "Sign in again. If this keeps happening, ask your administrator to check the single sign-on settings."
+      },
+      "login_expired": {
+        "title": "This sign-in has expired.",
+        "cause": "A sign-in must be finished within 10 minutes and in the same browser, and each one can be used only once.",
+        "action": "Start the sign-in again."
+      },
+      "user_disabled": {
+        "title": "Your Alice account is disabled.",
+        "cause": "An administrator disabled your account.",
+        "action": "Contact your administrator."
+      },
+      "provider_disabled": {
+        "title": "This sign-in option is switched off.",
+        "cause": "An administrator switched off this identity provider in Alice.",
+        "action": "Use another sign-in option or contact your administrator."
+      },
+      "stepup_other_user": {
+        "title": "The confirmation was made with another account.",
+        "cause": "You confirmed at the identity provider as a different person than the one signed in to Alice.",
+        "action": "Confirm again with your own account."
+      },
+      "idp_error": {
+        "title": "The identity provider ended the sign-in.",
+        "cause": "It answered with an error, for example because the sign-in was cancelled or Alice's address is not registered there.",
+        "action": "Try again. If this keeps happening, ask your administrator to check that Alice's address is registered at the identity provider."
+      },
+      "not_sso_user": {
+        "title": "Your account does not use single sign-on.",
+        "cause": "Only single sign-on users confirm at the identity provider.",
+        "action": "Confirm with your authenticator code instead."
+      }
+    },
     "job": {
       "not_waiting": {
         "title": "This task is not waiting for a confirmation.",

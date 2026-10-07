@@ -2791,6 +2791,348 @@ paths:
         "412": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/oidc/providers:
+    get:
+      operationId: listPublicIdentityProviders
+      summary: The identity providers the sign-in page offers (switched on; ID and name only)
+      x-permission: public
+      responses:
+        "200":
+          description: The providers, by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/PublicProvider" } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/oidc/{id}/start:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: startSingleSignOn
+      summary: Begin a single sign-on at an identity provider
+      description: >-
+        Stores a single-use sign-in state (10 minutes) and answers the provider's authorize address, with the
+        __Host-alice_oidc cookie (Secure, HttpOnly, SameSite=Lax, Path=/, Max-Age 600) that binds the sign-in to this
+        browser. The body is empty or {"next"}: a path inside Alice (anything else becomes /). 10 per minute per address
+        (429), as the sign-in form. 404 for an unknown provider, 403 ALC-SSO-0013 for a switched-off one, 409
+        ALC-SSO-0004 while Alice's address is not set.
+      x-permission: public
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                next: { type: string, maxLength: 2048 }
+      responses:
+        "200":
+          description: Where to send the browser
+          headers:
+            Set-Cookie: { schema: { type: string }, description: '__Host-alice_oidc=<binding>' }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthorizeURL" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/oidc/{id}/callback:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: finishSingleSignOn
+      summary: The identity provider's redirect back to Alice (always answered with a redirect, never a JSON page)
+      description: >-
+        The only GET that changes state (A-06 exception): it consumes the sign-in state and signs the person in or
+        confirms their step-up. The __Host-alice_oidc cookie is cleared whatever happens. Success: 303 to the path the
+        sign-in started from, with the session cookie. Refusal: 303 to /login?sso_error=<reason> (a sign-in) or to the
+        page the step-up started from with sso_error=<reason> (before any fragment); the reason is one of
+        sso.no_access, sso.groups_overage, sso.email_in_use, sso.idp_unreachable, sso.login_invalid, sso.login_expired,
+        sso.user_disabled, sso.provider_disabled, sso.stepup_other_user, sso.idp_error (ALC-SSO-0006..0015). Nothing of
+        the provider's answer is shown. 10 per minute per binding cookie (S-11); without the cookie, the anonymous limit
+        per address.
+      x-permission: public
+      parameters:
+        - { name: code, in: query, required: false, schema: { type: string } }
+        - { name: state, in: query, required: false, schema: { type: string } }
+        - { name: error, in: query, required: false, schema: { type: string } }
+      responses:
+        "303":
+          description: To the next page, or to the sign-in or step-up page with sso_error
+          headers:
+            Location: { schema: { type: string } }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/oidc/stepup:
+    post:
+      operationId: startSingleSignOnStepUp
+      summary: Begin an SSO user's step-up at their identity provider (a fresh sign-in there)
+      description: >-
+        As the start, for the signed-in SSO user's own provider (prompt=login, max_age=0). The callback opens the
+        step-up window of this session when the same person answers within 5 minutes. A local user is refused with 409
+        ALC-SSO-0016 (confirm with the authenticator code instead). At most 5 per minute per address.
+      x-permission: session
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                next: { type: string, maxLength: 2048 }
+      responses:
+        "200":
+          description: Where to send the browser
+          headers:
+            Set-Cookie: { schema: { type: string }, description: '__Host-alice_oidc=<binding>' }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthorizeURL" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/sso/providers:
+    get:
+      operationId: listIdentityProviders
+      summary: The configured identity providers, by name (never a client secret)
+      x-permission: sso.manage
+      responses:
+        "200":
+          description: The providers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/IdentityProvider" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createIdentityProvider
+      summary: Add an identity provider (its discovery document is read once; its endpoints are fixed then)
+      description: >-
+        Keys are matched exactly. At most 5 providers (422 validation.out_of_range on name). 502 ALC-SSO-0001 when the
+        discovery document or the key list cannot be read (param cause). The client secret is stored sealed and is never
+        returned or logged. A provider is switched on unless enabled is false. Works while the license is expired.
+      x-permission: sso.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdentityProviderCreate" }
+      responses:
+        "201":
+          description: The provider
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/sso/providers/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getIdentityProvider
+      summary: One identity provider
+      x-permission: sso.manage
+      responses:
+        "200":
+          description: The provider
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProvider" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateIdentityProvider
+      summary: Change an identity provider (If-Match required; only the keys given change)
+      description: >-
+        A new issuer address or CA bundle reads discovery again (502 ALC-SSO-0001 on failure). An issuer change is
+        refused while people have signed in through the provider. null is not a value (400). client_secret replaces the
+        stored secret. 412 ALC-SYS-0008 when If-Match is missing or names another version.
+      x-permission: sso.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/IdentityProviderPatch" }
+      responses:
+        "200":
+          description: The changed provider
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteIdentityProvider
+      summary: Delete an identity provider and its group mappings (If-Match required)
+      description: 409 ALC-SSO-0005 while people have signed in through it (switch it off instead).
+      x-permission: sso.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/sso/providers/{id}/actions/refresh:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: refreshIdentityProvider
+      summary: Read the provider's discovery document and key list again (If-Match required; the body is empty or {})
+      x-permission: sso.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "200":
+          description: The provider
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/IdentityProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/sso/group-mappings:
+    get:
+      operationId: listGroupMappings
+      summary: A provider's group mappings, by group
+      x-permission: sso.manage
+      parameters:
+        - { name: provider_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The mappings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Mapping" } }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createGroupMapping
+      summary: Give the members of a group a role
+      description: >-
+        At most 200 mappings (422 validation.out_of_range on group). A group can be mapped to Administrator only while
+        "SSO users may be Admin" is on (409 ALC-SSO-0002, recorded in the audit log). A person with several mapped groups
+        gets the highest role.
+      x-permission: sso.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [provider_id, group, role]
+              additionalProperties: false
+              properties:
+                provider_id: { type: string, format: uuid }
+                group: { type: string, minLength: 1, maxLength: 255 }
+                role: { type: string, enum: [admin, operator, auditor] }
+      responses:
+        "201":
+          description: The mapping
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Mapping" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/sso/group-mappings/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    delete:
+      operationId: deleteGroupMapping
+      summary: Remove a group mapping of the provider named by provider_id
+      description: 404 when that provider has no mapping with this ID. Sessions of people whose role it gave end at their next sign-in check.
+      x-permission: sso.manage
+      parameters:
+        - { name: provider_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/sso/settings:
+    get:
+      operationId: getSSOSettings
+      summary: The "SSO users may be Admin" switch (never saved - off, version 0)
+      x-permission: sso.manage
+      responses:
+        "200":
+          description: The switch
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SSOSettings" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putSSOSettings
+      summary: Switch "SSO users may be Admin" (If-Match required; "0" for the first save)
+      description: >-
+        Switching it off is refused while groups are mapped to Administrator (409 ALC-SSO-0003); it then demotes SSO
+        Administrators to Operator and ends their sessions.
+      x-permission: sso.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [allow_admin_role]
+              additionalProperties: false
+              properties:
+                allow_admin_role: { type: boolean }
+      responses:
+        "200":
+          description: The switch
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SSOSettings" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
     ID:
@@ -3365,7 +3707,7 @@ components:
         qr_png: { type: string, contentEncoding: base64, description: PNG image of otpauth_uri }
     User:
       type: object
-      required: [id, username, display_name, email, role, locale, disabled, mfa_enrolled, last_login_at, created_at]
+      required: [id, username, display_name, email, role, locale, disabled, mfa_enrolled, last_login_at, created_at, auth_source, sso_provider_id]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -3377,6 +3719,8 @@ components:
         mfa_enrolled: { type: boolean }
         last_login_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
+        auth_source: { type: string, enum: [local, oidc], description: 'How the person signs in: a local account or single sign-on (SSO users have no Alice password or authenticator; their role comes from their groups)' }
+        sso_provider_id: { type: [string, "null"], format: uuid, description: The identity provider of an SSO user; null for a local user }
     SessionInfo:
       type: object
       required: [user, csrf_token, expires_at, idle_expires_at, stepup_until]
@@ -4623,4 +4967,79 @@ components:
       properties:
         public_url: { type: string }
         retired_key_retention_days: { type: integer }
+        version: { type: integer }
+    PublicProvider:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    AuthorizeURL:
+      type: object
+      required: [authorize_url]
+      properties:
+        authorize_url: { type: string, description: "The identity provider's authorize address with the state, nonce and PKCE challenge" }
+    IdentityProvider:
+      type: object
+      required: [id, name, issuer_url, client_id, has_client_secret, scopes, groups_claim, ca_pem, endpoints, enabled, redirect_uri, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        issuer_url: { type: string }
+        client_id: { type: string }
+        has_client_secret: { type: boolean, description: Whether a client secret is stored; the secret itself is never returned }
+        scopes: { type: array, items: { type: string } }
+        groups_claim: { type: string }
+        ca_pem: { type: string }
+        endpoints:
+          type: object
+          required: [authorization, token, jwks]
+          properties:
+            authorization: { type: string }
+            token: { type: string }
+            jwks: { type: string }
+        enabled: { type: boolean }
+        redirect_uri: { type: string, description: 'The address to register at the identity provider; "" while Alice''s address is not set' }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    IdentityProviderCreate:
+      type: object
+      required: [name, issuer_url, client_id, client_secret]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        issuer_url: { type: string, description: An https address }
+        client_id: { type: string, minLength: 1, maxLength: 255 }
+        client_secret: { type: string, writeOnly: true, minLength: 1, maxLength: 1024, description: Request only; never returned or logged }
+        scopes: { type: array, minItems: 1, maxItems: 10, items: { type: string, pattern: '^[A-Za-z0-9_.:/-]{1,64}$' }, description: 'Must include openid; default openid, profile, email' }
+        groups_claim: { type: string, pattern: '^[A-Za-z0-9_.:/-]{1,100}$', description: 'Default groups' }
+        ca_pem: { type: string, maxLength: 65536 }
+        enabled: { type: boolean, default: true }
+    IdentityProviderPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        issuer_url: { type: string }
+        client_id: { type: string, minLength: 1, maxLength: 255 }
+        client_secret: { type: string, writeOnly: true, minLength: 1, maxLength: 1024, description: Request only; replaces the stored secret }
+        scopes: { type: array, minItems: 1, maxItems: 10, items: { type: string } }
+        groups_claim: { type: string }
+        ca_pem: { type: string, maxLength: 65536 }
+        enabled: { type: boolean }
+    Mapping:
+      type: object
+      required: [id, provider_id, group, role, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider_id: { type: string, format: uuid }
+        group: { type: string }
+        role: { type: string, enum: [admin, operator, auditor] }
+        created_at: { type: string, format: date-time }
+    SSOSettings:
+      type: object
+      required: [allow_admin_role, version]
+      properties:
+        allow_admin_role: { type: boolean }
         version: { type: integer }

@@ -638,6 +638,88 @@
         "action": "Başka bir ad seçin."
       }
     },
+    "sso": {
+      "discovery_failed": {
+        "title": "Alice kimlik sağlayıcının ayarlarını okuyamadı.",
+        "cause": "Keşif belgesi ya da anahtar listesi alınamadı veya geçerli değil (neden: {{cause}}).",
+        "action": "Yayıncı adresini ve özel bir sertifika yetkilisi kullanılıyorsa onun sertifikasını denetleyin, ardından yeniden deneyin."
+      },
+      "admin_mapping_disabled": {
+        "title": "Bir grup Yönetici rolüne eşlenemez.",
+        "cause": "SSO kullanıcıları Yönetici olabilir ayarı kapalı; bu nedenle çoklu oturum açma kullanıcıları en çok Operatör olabilir.",
+        "action": "Önce SSO kullanıcıları Yönetici olabilir ayarını açın ya da grubu başka bir role eşleyin."
+      },
+      "admin_mappings_exist": {
+        "title": "SSO kullanıcıları Yönetici olabilir ayarı henüz kapatılamaz.",
+        "cause": "Bazı gruplar hâlâ Yönetici rolüne eşli.",
+        "action": "Bu eşlemeleri kaldırın, ardından ayarı kapatın."
+      },
+      "public_url_missing": {
+        "title": "Alice'in adresi ayarlanmamış.",
+        "cause": "Kimlik sağlayıcı kullanıcıları Alice'in adresine geri gönderir ve Alice bu adresi henüz bilmiyor.",
+        "action": "Ayarlar, Genel bölümünde Alice'in adresini girin, ardından yeniden deneyin."
+      },
+      "provider_in_use": {
+        "title": "Bu kimlik sağlayıcının hâlâ kullanıcıları var.",
+        "cause": "Kişiler bu sağlayıcıyla oturum açtı; bu nedenle silinemez.",
+        "action": "Bunun yerine sağlayıcıyı kapatın ya da önce kullanıcılarını kaldırın."
+      },
+      "no_access": {
+        "title": "Hesabınızın Alice'e erişimi yok, yöneticinize başvurun.",
+        "cause": "Kimlik sağlayıcınızda oturum açtınız, ancak gruplarınızdan hiçbirine Alice'te bir rol verilmemiş.",
+        "action": "Yöneticinizden grubunuzu Alice'in grup eşlemelerine eklemesini isteyin."
+      },
+      "groups_overage": {
+        "title": "Kimlik sağlayıcınız gruplarınızı göndermedi.",
+        "cause": "Bir oturum açmaya koyabileceğinden daha fazla grubun üyesisiniz; bu nedenle hepsini dışarıda bıraktı.",
+        "action": "Yöneticinizden yalnızca Alice uygulamasına atanmış grupların gönderilmesini istemesini isteyin (Microsoft Entra ID: \"Uygulamaya atanmış gruplar\")."
+      },
+      "email_in_use": {
+        "title": "Bu e-posta adresi için çoklu oturum açma reddedildi.",
+        "cause": "Yerel bir Alice hesabı bu e-posta adresini zaten kullanıyor ve Alice bir çoklu oturum açma kimliğini hiçbir zaman yerel bir hesapla birleştirmez.",
+        "action": "Yöneticinizden yerel hesabın e-posta adresini değiştirmesini ya da kaldırmasını isteyin, ardından yeniden oturum açın."
+      },
+      "idp_unreachable": {
+        "title": "Alice kimlik sağlayıcıya ulaşamadı.",
+        "cause": "Kimlik sağlayıcı kapalı ya da ona giden ağ yolu engelli.",
+        "action": "Daha sonra yeniden deneyin. Yöneticiler yerel hesaplarıyla ve doğrulama kodlarıyla oturum açmaya devam edebilir."
+      },
+      "login_invalid": {
+        "title": "Kimlik sağlayıcının oturum açma yanıtı kabul edilmedi.",
+        "cause": "Alice yanıtın bu oturum açma için gerçekten kimlik sağlayıcınızdan geldiğini doğrulayamadı.",
+        "action": "Yeniden oturum açın. Bu durum sürerse yöneticinizden çoklu oturum açma ayarlarını denetlemesini isteyin."
+      },
+      "login_expired": {
+        "title": "Bu oturum açmanın süresi doldu.",
+        "cause": "Bir oturum açma 10 dakika içinde ve aynı tarayıcıda tamamlanmalıdır ve her biri yalnızca bir kez kullanılabilir.",
+        "action": "Oturum açmayı yeniden başlatın."
+      },
+      "user_disabled": {
+        "title": "Alice hesabınız devre dışı.",
+        "cause": "Bir yönetici hesabınızı devre dışı bıraktı.",
+        "action": "Yöneticinize başvurun."
+      },
+      "provider_disabled": {
+        "title": "Bu oturum açma seçeneği kapalı.",
+        "cause": "Bir yönetici bu kimlik sağlayıcıyı Alice'te kapattı.",
+        "action": "Başka bir oturum açma seçeneği kullanın ya da yöneticinize başvurun."
+      },
+      "stepup_other_user": {
+        "title": "Onay başka bir hesapla yapıldı.",
+        "cause": "Kimlik sağlayıcıda Alice'te oturum açmış olan kişiden farklı biri olarak onay verdiniz.",
+        "action": "Kendi hesabınızla yeniden onaylayın."
+      },
+      "idp_error": {
+        "title": "Kimlik sağlayıcı oturum açmayı sonlandırdı.",
+        "cause": "Bir hatayla yanıt verdi; örneğin oturum açma iptal edildi ya da Alice'in adresi orada kayıtlı değil.",
+        "action": "Yeniden deneyin. Bu durum sürerse yöneticinizden Alice'in adresinin kimlik sağlayıcıda kayıtlı olduğunu denetlemesini isteyin."
+      },
+      "not_sso_user": {
+        "title": "Hesabınız çoklu oturum açma kullanmıyor.",
+        "cause": "Yalnızca çoklu oturum açma kullanıcıları kimlik sağlayıcıda onay verir.",
+        "action": "Bunun yerine doğrulama kodunuzla onaylayın."
+      }
+    },
     "job": {
       "not_waiting": {
         "title": "Bu görev bir onay beklemiyor.",

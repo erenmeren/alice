@@ -28,6 +28,7 @@ import (
 	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/auth/oidc"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -118,8 +119,9 @@ type stack struct {
 	mail        *notify.Settings
 	alerts      *alerts.Service
 	reports     *reports.Service
-	tick        *tickClock // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
-	mailbox     *mailbox   // what deliverMail handed to the "SMTP server"
+	sso         *oidc.Service // Phase 7: identity providers and the OIDC sign-in
+	tick        *tickClock    // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
+	mailbox     *mailbox      // what deliverMail handed to the "SMTP server"
 	auditLog    *audit.Log
 	queue       *jobs.Queue
 	runner      *jobs.Runner
@@ -251,6 +253,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 		Notifier: notify.AdminNotifier{Clock: s.clock}, Log: log})
 	s.reports = reports.New(reports.Config{Pool: s.db.App, Clock: s.clock, Audit: auditLog, License: s.license, Alerts: s.alerts,
 		Delivery: s.mail, Inventory: s.inv})
+	s.sso = oidc.New(oidc.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Auth: s.auth, Log: log})
 	s.runner = s.newRunner("", 0)
 }
 
@@ -300,6 +303,7 @@ func (s *stack) deps() Deps {
 		Mail:           s.mail,
 		Alerts:         s.alerts,
 		Reports:        s.reports,
+		SSO:            s.sso,
 		TrustedProxies: s.trusted,
 	}
 }

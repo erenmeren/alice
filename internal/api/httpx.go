@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strings"
 
@@ -463,4 +464,34 @@ func skipJSONValue(b []byte, i, depth int) int {
 		}
 		return i
 	}
+}
+
+// oidcCookie binds a single sign-on to the browser that started it (SEC-011).
+const oidcCookie = "__Host-alice_oidc"
+
+// setBindingCookie stores the sign-in's binding value for 10 minutes. SameSite=Lax (not Strict): the identity
+// provider's redirect back to Alice is a cross-site top-level navigation, on which only Lax cookies are sent; the
+// value alone is useless — the state row holds only its SHA-256 and is single use (SEC-011).
+func setBindingCookie(w http.ResponseWriter, value string) {
+	http.SetCookie(w, &http.Cookie{Name: oidcCookie, Value: value, Path: "/", MaxAge: 600, Secure: true, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode})
+}
+
+// clearBindingCookie deletes the binding cookie (every callback, whatever its outcome).
+func clearBindingCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: oidcCookie, Value: "", Path: "/", MaxAge: -1, Secure: true, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode})
+}
+
+// withQuery adds key=value to the query of a path that claims.SafeNext already made safe, before a fragment (S-13).
+func withQuery(path, key, value string) string {
+	frag := ""
+	if i := strings.IndexByte(path, '#'); i >= 0 {
+		path, frag = path[:i], path[i:]
+	}
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	return path + sep + url.QueryEscape(key) + "=" + url.QueryEscape(value) + frag
 }

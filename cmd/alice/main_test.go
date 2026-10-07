@@ -20,6 +20,7 @@ import (
 	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/auth/oidc"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/deployjobs"
@@ -94,11 +95,12 @@ func TestDBStartupErrorMentionsWaitOnlyForUnreachable(t *testing.T) {
 func TestAPIDepsCarryEveryService(t *testing.T) {
 	svc := &services{auth: &auth.Service{}, setup: &setup.Service{}, audit: &audit.Service{}, license: &license.Service{},
 		inventory: &inventory.Service{}, queue: &jobs.Queue{}, registry: providers.NewRegistry(), sshkeys: &sshkeys.Service{},
-		notifySettings: &notify.Settings{}, alerts: &alerts.Service{}, reports: &reports.Service{}}
+		notifySettings: &notify.Settings{}, alerts: &alerts.Service{}, reports: &reports.Service{}, oidc: &oidc.Service{}}
 	d := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Same(t, svc.notifySettings, d.Mail)
 	assert.Same(t, svc.alerts, d.Alerts)
 	assert.Same(t, svc.reports, d.Reports)
+	assert.Same(t, svc.oidc, d.SSO)
 	assert.Same(t, svc.license, d.License)
 	assert.Same(t, svc.setup, d.Setup)
 	assert.Same(t, svc.auth, d.Auth)
@@ -110,11 +112,12 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	svc.sshkeys = nil
 	assert.Nil(t, newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil).SSHKeys,
 		"a nil service stays a nil interface (the key detail then omits the generated-key fields)")
-	svc.notifySettings, svc.alerts, svc.reports = nil, nil, nil
+	svc.notifySettings, svc.alerts, svc.reports, svc.oidc = nil, nil, nil, nil
 	none := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Nil(t, none.Mail, "a nil *notify.Settings stays a nil interface")
 	assert.Nil(t, none.Alerts)
 	assert.Nil(t, none.Reports)
+	assert.Nil(t, none.SSO)
 	assert.NotNil(t, d.Clock)
 	assert.NotNil(t, d.Log)
 }

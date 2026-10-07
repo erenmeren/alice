@@ -444,7 +444,7 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		Mail:           mailAPI(svc),
 		Alerts:         alertsAPI(svc),
 		Reports:        reportsAPI(svc),
-		// TODO(Task 15): SSO: svc.oidc (the api.Deps field Task 15 adds).
+		SSO:            ssoAPI(svc),
 	}
 }
 
@@ -470,6 +470,13 @@ func alertsAPI(svc *services) api.AlertsService {
 		return nil
 	}
 	return svc.alerts
+}
+
+func ssoAPI(svc *services) api.SSOService {
+	if svc.oidc == nil {
+		return nil
+	}
+	return svc.oidc
 }
 
 func reportsAPI(svc *services) api.ReportsService {

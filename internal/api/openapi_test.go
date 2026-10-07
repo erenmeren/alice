@@ -164,6 +164,13 @@ func TestEveryDocumentedPathIsServed(t *testing.T) {
 		srv.ResetLimits() // more operations than the anonymous limit allows per minute
 		target := pathParamRE.ReplaceAllString(o.path, uuid.NewString())
 		rec := do(h, httpMethod(o.method), target, nil)
+		if o.key() == "GET /api/v1/auth/oidc/{id}/callback" {
+			// The A-06 exception (B13): the identity provider's redirect back is always answered with a redirect, never a
+			// JSON page; testDeps' SSO service refuses it as an expired sign-in.
+			assert.Equal(t, http.StatusSeeOther, rec.Code, o.key())
+			assert.Equal(t, "/login?sso_error=sso.login_expired", rec.Header().Get("Location"))
+			continue
+		}
 		assert.Contains(t, []int{http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized}, rec.Code, o.key())
 		assert.Equal(t, "application/json; charset=utf-8", rec.Header().Get("Content-Type"), o.key())
 	}

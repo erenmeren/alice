@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/url"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/auth/oidc"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
@@ -1379,4 +1381,178 @@ func (f *fakeReports) DeleteView(ctx context.Context, userID, id uuid.UUID) erro
 		return f.DeleteViewFn(ctx, userID, id)
 	}
 	return errNotConfigured
+}
+
+// fakeSSO implements SSOService: one function field per method (errNotConfigured when nil), a call counter.
+type fakeSSO struct {
+	phase7Fake
+	ProvidersFn       func(ctx context.Context) ([]oidc.Provider, error)
+	ProviderFn        func(ctx context.Context, id uuid.UUID) (oidc.Provider, error)
+	PublicProvidersFn func(ctx context.Context) ([]oidc.PublicProvider, error)
+	CreateProviderFn  func(ctx context.Context, a audit.Actor, in oidc.ProviderInput) (oidc.Provider, error)
+	UpdateProviderFn  func(ctx context.Context, a audit.Actor, id uuid.UUID, version int, p oidc.ProviderPatch) (oidc.Provider, error)
+	RefreshProviderFn func(ctx context.Context, a audit.Actor, id uuid.UUID, version int) (oidc.Provider, error)
+	DeleteProviderFn  func(ctx context.Context, a audit.Actor, id uuid.UUID, version int) error
+	MappingsFn        func(ctx context.Context, providerID uuid.UUID) ([]oidc.Mapping, error)
+	CreateMappingFn   func(ctx context.Context, a audit.Actor, providerID uuid.UUID, group string, role rbac.Role) (oidc.Mapping, error)
+	DeleteMappingFn   func(ctx context.Context, a audit.Actor, id uuid.UUID) error
+	SettingsFn        func(ctx context.Context) (oidc.SSOSettings, error)
+	SaveSettingsFn    func(ctx context.Context, a audit.Actor, version int, allowAdmin bool) (oidc.SSOSettings, error)
+	BeginFn           func(ctx context.Context, in oidc.BeginInput) (oidc.Begin, error)
+	CompleteFn        func(ctx context.Context, providerID uuid.UUID, q url.Values, binding string, m auth.Meta) (oidc.Completion, error)
+}
+
+// newFakeSSO is the SSO service of testDeps (C-s4-04): no providers, a start that succeeds, a callback refused as an
+// expired sign-in.
+func newFakeSSO() *fakeSSO {
+	f := &fakeSSO{}
+	f.PublicProvidersFn = func(context.Context) ([]oidc.PublicProvider, error) { return nil, nil }
+	f.BeginFn = func(context.Context, oidc.BeginInput) (oidc.Begin, error) {
+		return oidc.Begin{AuthorizeURL: "https://idp.example.com/authorize", Binding: "binding"}, nil
+	}
+	f.CompleteFn = func(context.Context, uuid.UUID, url.Values, string, auth.Meta) (oidc.Completion, error) {
+		return oidc.Completion{}, &oidc.LoginError{Reason: "login_expired"}
+	}
+	return f
+}
+
+// succeed makes every method answer a harmless success; mappings of any provider hold the mapping asked for.
+func (f *fakeSSO) succeed() {
+	p := oidc.Provider{ID: uuid.New(), Name: "Corp", Version: 1}
+	f.ProvidersFn = func(context.Context) ([]oidc.Provider, error) { return []oidc.Provider{p}, nil }
+	f.ProviderFn = func(context.Context, uuid.UUID) (oidc.Provider, error) { return p, nil }
+	f.PublicProvidersFn = func(context.Context) ([]oidc.PublicProvider, error) { return nil, nil }
+	f.CreateProviderFn = func(context.Context, audit.Actor, oidc.ProviderInput) (oidc.Provider, error) { return p, nil }
+	f.UpdateProviderFn = func(context.Context, audit.Actor, uuid.UUID, int, oidc.ProviderPatch) (oidc.Provider, error) {
+		return p, nil
+	}
+	f.RefreshProviderFn = func(context.Context, audit.Actor, uuid.UUID, int) (oidc.Provider, error) { return p, nil }
+	f.DeleteProviderFn = func(context.Context, audit.Actor, uuid.UUID, int) error { return nil }
+	f.MappingsFn = func(_ context.Context, providerID uuid.UUID) ([]oidc.Mapping, error) { return nil, nil }
+	f.CreateMappingFn = func(_ context.Context, _ audit.Actor, providerID uuid.UUID, group string, role rbac.Role) (oidc.Mapping, error) {
+		return oidc.Mapping{ID: uuid.New(), ProviderID: providerID, Group: group, Role: role}, nil
+	}
+	f.DeleteMappingFn = func(context.Context, audit.Actor, uuid.UUID) error { return nil }
+	f.SettingsFn = func(context.Context) (oidc.SSOSettings, error) { return oidc.SSOSettings{}, nil }
+	f.SaveSettingsFn = func(_ context.Context, _ audit.Actor, version int, allow bool) (oidc.SSOSettings, error) {
+		return oidc.SSOSettings{AllowAdminRole: allow, Version: version + 1}, nil
+	}
+	f.BeginFn = func(context.Context, oidc.BeginInput) (oidc.Begin, error) {
+		return oidc.Begin{AuthorizeURL: "https://idp.example.com/authorize", Binding: "binding"}, nil
+	}
+	f.CompleteFn = func(context.Context, uuid.UUID, url.Values, string, auth.Meta) (oidc.Completion, error) {
+		return oidc.Completion{Session: auth.SessionResult{Token: "tok"}, Next: "/"}, nil
+	}
+}
+
+func (f *fakeSSO) Providers(ctx context.Context) ([]oidc.Provider, error) {
+	f.record()
+	if f.ProvidersFn != nil {
+		return f.ProvidersFn(ctx)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeSSO) Provider(ctx context.Context, id uuid.UUID) (oidc.Provider, error) {
+	f.record()
+	if f.ProviderFn != nil {
+		return f.ProviderFn(ctx, id)
+	}
+	return oidc.Provider{}, errNotConfigured
+}
+
+func (f *fakeSSO) PublicProviders(ctx context.Context) ([]oidc.PublicProvider, error) {
+	f.record()
+	if f.PublicProvidersFn != nil {
+		return f.PublicProvidersFn(ctx)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeSSO) CreateProvider(ctx context.Context, a audit.Actor, in oidc.ProviderInput) (oidc.Provider, error) {
+	f.record()
+	if f.CreateProviderFn != nil {
+		return f.CreateProviderFn(ctx, a, in)
+	}
+	return oidc.Provider{}, errNotConfigured
+}
+
+func (f *fakeSSO) UpdateProvider(ctx context.Context, a audit.Actor, id uuid.UUID, version int, p oidc.ProviderPatch) (oidc.Provider, error) {
+	f.record()
+	if f.UpdateProviderFn != nil {
+		return f.UpdateProviderFn(ctx, a, id, version, p)
+	}
+	return oidc.Provider{}, errNotConfigured
+}
+
+func (f *fakeSSO) RefreshProvider(ctx context.Context, a audit.Actor, id uuid.UUID, version int) (oidc.Provider, error) {
+	f.record()
+	if f.RefreshProviderFn != nil {
+		return f.RefreshProviderFn(ctx, a, id, version)
+	}
+	return oidc.Provider{}, errNotConfigured
+}
+
+func (f *fakeSSO) DeleteProvider(ctx context.Context, a audit.Actor, id uuid.UUID, version int) error {
+	f.record()
+	if f.DeleteProviderFn != nil {
+		return f.DeleteProviderFn(ctx, a, id, version)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeSSO) Mappings(ctx context.Context, providerID uuid.UUID) ([]oidc.Mapping, error) {
+	f.record()
+	if f.MappingsFn != nil {
+		return f.MappingsFn(ctx, providerID)
+	}
+	return nil, errNotConfigured
+}
+
+func (f *fakeSSO) CreateMapping(ctx context.Context, a audit.Actor, providerID uuid.UUID, group string, role rbac.Role) (oidc.Mapping, error) {
+	f.record()
+	if f.CreateMappingFn != nil {
+		return f.CreateMappingFn(ctx, a, providerID, group, role)
+	}
+	return oidc.Mapping{}, errNotConfigured
+}
+
+func (f *fakeSSO) DeleteMapping(ctx context.Context, a audit.Actor, id uuid.UUID) error {
+	f.record()
+	if f.DeleteMappingFn != nil {
+		return f.DeleteMappingFn(ctx, a, id)
+	}
+	return errNotConfigured
+}
+
+func (f *fakeSSO) Settings(ctx context.Context) (oidc.SSOSettings, error) {
+	f.record()
+	if f.SettingsFn != nil {
+		return f.SettingsFn(ctx)
+	}
+	return oidc.SSOSettings{}, errNotConfigured
+}
+
+func (f *fakeSSO) SaveSettings(ctx context.Context, a audit.Actor, version int, allowAdmin bool) (oidc.SSOSettings, error) {
+	f.record()
+	if f.SaveSettingsFn != nil {
+		return f.SaveSettingsFn(ctx, a, version, allowAdmin)
+	}
+	return oidc.SSOSettings{}, errNotConfigured
+}
+
+func (f *fakeSSO) Begin(ctx context.Context, in oidc.BeginInput) (oidc.Begin, error) {
+	f.record()
+	if f.BeginFn != nil {
+		return f.BeginFn(ctx, in)
+	}
+	return oidc.Begin{}, errNotConfigured
+}
+
+func (f *fakeSSO) Complete(ctx context.Context, providerID uuid.UUID, q url.Values, binding string, m auth.Meta) (oidc.Completion, error) {
+	f.record()
+	if f.CompleteFn != nil {
+		return f.CompleteFn(ctx, providerID, q, binding, m)
+	}
+	return oidc.Completion{}, errNotConfigured
 }

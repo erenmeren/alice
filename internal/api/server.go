@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,7 @@ import (
 	"alice/internal/alerts"
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/auth/oidc"
 	"alice/internal/auth/ratelimit"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
@@ -223,6 +225,25 @@ type ReportsService interface {
 	DeleteView(ctx context.Context, userID, id uuid.UUID) error
 }
 
+// SSOService is the part of *oidc.Service the HTTP layer uses (C11, Phase 7): identity providers, group mappings, the
+// "SSO users may be Admin" switch, and the sign-in and step-up at an identity provider.
+type SSOService interface {
+	Providers(ctx context.Context) ([]oidc.Provider, error)
+	Provider(ctx context.Context, id uuid.UUID) (oidc.Provider, error)
+	PublicProviders(ctx context.Context) ([]oidc.PublicProvider, error)
+	CreateProvider(ctx context.Context, a audit.Actor, in oidc.ProviderInput) (oidc.Provider, error)
+	UpdateProvider(ctx context.Context, a audit.Actor, id uuid.UUID, version int, p oidc.ProviderPatch) (oidc.Provider, error)
+	RefreshProvider(ctx context.Context, a audit.Actor, id uuid.UUID, version int) (oidc.Provider, error)
+	DeleteProvider(ctx context.Context, a audit.Actor, id uuid.UUID, version int) error
+	Mappings(ctx context.Context, providerID uuid.UUID) ([]oidc.Mapping, error)
+	CreateMapping(ctx context.Context, a audit.Actor, providerID uuid.UUID, group string, role rbac.Role) (oidc.Mapping, error)
+	DeleteMapping(ctx context.Context, a audit.Actor, id uuid.UUID) error
+	Settings(ctx context.Context) (oidc.SSOSettings, error)
+	SaveSettings(ctx context.Context, a audit.Actor, version int, allowAdmin bool) (oidc.SSOSettings, error)
+	Begin(ctx context.Context, in oidc.BeginInput) (oidc.Begin, error)
+	Complete(ctx context.Context, providerID uuid.UUID, q url.Values, binding string, m auth.Meta) (oidc.Completion, error)
+}
+
 // ProviderCatalog lists the compiled-in providers (providers.Registry).
 type ProviderCatalog interface {
 	List() []providers.Descriptor
@@ -247,6 +268,7 @@ type Deps struct {
 	Mail           MailService
 	Alerts         AlertsService
 	Reports        ReportsService
+	SSO            SSOService
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }
@@ -255,14 +277,15 @@ type Deps struct {
 type limitClass int
 
 const (
-	limitDefault  limitClass = iota // general limit only
-	limitNone                       // no limit (health probes)
-	limitLogin                      // 10 per minute per IP (password and setup-code guessing)
-	limitMFA                        // 5 per minute per IP (verification codes)
-	limitHealth                     // 60 per minute per IP in a bucket of its own (public /healthz, AUD-16)
-	limitDownload                   // 5 per minute per user: private key downloads (SEC-022, R41 row 5)
-	limitTestMail                   // 5 per minute per user: test e-mails (C13)
-	limitExport                     // 10 per minute per user or token: CSV exports (C13)
+	limitDefault      limitClass = iota // general limit only
+	limitNone                           // no limit (health probes)
+	limitLogin                          // 10 per minute per IP (password and setup-code guessing)
+	limitMFA                            // 5 per minute per IP (verification codes)
+	limitHealth                         // 60 per minute per IP in a bucket of its own (public /healthz, AUD-16)
+	limitDownload                       // 5 per minute per user: private key downloads (SEC-022, R41 row 5)
+	limitTestMail                       // 5 per minute per user: test e-mails (C13)
+	limitExport                         // 10 per minute per user or token: CSV exports (C13)
+	limitOIDCCallback                   // 10 per minute per binding cookie: the identity provider's redirect back (S-11)
 )
 
 // route is one documented operation. The route table is the single source of
@@ -299,6 +322,9 @@ type server struct {
 	// testMails: test e-mails per user: 5/min; export: CSV exports per user or token: 10/min (C13).
 	testMails *ratelimit.Limiter
 	export    *ratelimit.Limiter
+	// oidcCallbacks: identity provider callbacks per binding cookie: 10/min (S-11: not per address, so a company
+	// behind one address is not limited to a few sign-ins a minute).
+	oidcCallbacks *ratelimit.Limiter
 	// denials coalesces the guard's denial audit rows (AUD-06).
 	denials *denialCoalescer
 	// chainScan is the one slot for reading the whole audit chain (verification, export) in this
@@ -338,6 +364,8 @@ func newServer(d Deps) *server {
 		testMails: ratelimit.New(d.Clock, 5, time.Minute),
 		export:    ratelimit.New(d.Clock, 10, time.Minute),
 
+		oidcCallbacks: ratelimit.New(d.Clock, 10, time.Minute),
+
 		denials:   newDenialCoalescer(d.Clock),
 		chainScan: make(chan struct{}, 1),
 		scanCtx:   scanCtx,
@@ -376,6 +404,7 @@ func (s *Server) ResetLimits() {
 	s.s.download.Reset()
 	s.s.testMails.Reset()
 	s.s.export.Reset()
+	s.s.oidcCallbacks.Reset()
 	s.s.denials.reset()
 }
 
@@ -461,6 +490,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.systemRoutes()...)
 	routes = append(routes, s.setupRoutes()...)
 	routes = append(routes, s.authRoutes()...)
+	routes = append(routes, s.oidcRoutes()...)
 	routes = append(routes, s.userRoutes()...)
 	routes = append(routes, s.tokenRoutes()...)
 	routes = append(routes, s.auditRoutes()...)
@@ -479,6 +509,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.settingsRoutes()...)
 	routes = append(routes, s.dashboardRoutes()...)
 	routes = append(routes, s.viewRoutes()...)
+	routes = append(routes, s.ssoRoutes()...)
 	return routes
 }
 

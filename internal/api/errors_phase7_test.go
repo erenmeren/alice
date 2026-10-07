@@ -16,6 +16,7 @@ import (
 
 	"alice/internal/alerts/expiry"
 	"alice/internal/auth"
+	"alice/internal/auth/oidc"
 	"alice/internal/i18n"
 	"alice/internal/notify"
 	"alice/internal/reports"
@@ -36,7 +37,20 @@ var phase7Table = []struct {
 	{"ALC-RPT-0001", "export.too_large", 409, false}, {"ALC-RPT-0002", "views.limit_reached", 409, false},
 	{"ALC-RPT-0003", "views.name_taken", 409, false}, {"ALC-RPT-0004", "export.busy", 409, true},
 	{"ALC-USR-0003", "user.sso_user", 409, false},
+	// Task 15: single sign-on.
+	{"ALC-SSO-0001", "sso.discovery_failed", 502, true}, {"ALC-SSO-0002", "sso.admin_mapping_disabled", 409, false},
+	{"ALC-SSO-0003", "sso.admin_mappings_exist", 409, false}, {"ALC-SSO-0004", "sso.public_url_missing", 409, false},
+	{"ALC-SSO-0005", "sso.provider_in_use", 409, false}, {"ALC-SSO-0006", "sso.no_access", 403, false},
+	{"ALC-SSO-0007", "sso.groups_overage", 403, false}, {"ALC-SSO-0008", "sso.email_in_use", 403, false},
+	{"ALC-SSO-0009", "sso.idp_unreachable", 502, true}, {"ALC-SSO-0010", "sso.login_invalid", 401, false},
+	{"ALC-SSO-0011", "sso.login_expired", 401, false}, {"ALC-SSO-0012", "sso.user_disabled", 403, false},
+	{"ALC-SSO-0013", "sso.provider_disabled", 403, false}, {"ALC-SSO-0014", "sso.stepup_other_user", 403, false},
+	{"ALC-SSO-0015", "sso.idp_error", 401, false}, {"ALC-SSO-0016", "sso.not_sso_user", 409, false},
 }
+
+// phase7Params are the params the texts with a placeholder are rendered with.
+var phase7Params = map[string]map[string]string{"ALC-RPT-0001": {"max": "50000"}, "ALC-RPT-0002": {"max": "50"},
+	"ALC-SSO-0001": {"cause": "tls"}}
 
 func TestPhase7CodeTable(t *testing.T) {
 	all := map[string]ErrorCode{}
@@ -77,6 +91,31 @@ func TestPhase7SentinelMapping(t *testing.T) {
 		{reports.ErrExportBusy, "ALC-RPT-0004", nil},
 		{reports.ErrNotFound, "ALC-SYS-0001", nil},
 		{auth.ErrSSOUser, "ALC-USR-0003", nil},
+		{&oidc.DiscoveryError{Cause: "issuer_mismatch"}, "ALC-SSO-0001", map[string]string{"cause": "issuer_mismatch"}},
+		{&oidc.DiscoveryError{Cause: "Not a code"}, "ALC-SSO-0001", nil},
+		{oidc.ErrAdminMappingDisabled, "ALC-SSO-0002", nil},
+		{oidc.ErrAdminMappingsExist, "ALC-SSO-0003", nil},
+		{oidc.ErrPublicURLMissing, "ALC-SSO-0004", nil},
+		{oidc.ErrProviderInUse, "ALC-SSO-0005", nil},
+		{&oidc.LoginError{Reason: "no_access"}, "ALC-SSO-0006", nil},
+		{&oidc.LoginError{Reason: "groups_overage"}, "ALC-SSO-0007", nil},
+		{&oidc.LoginError{Reason: "email_in_use"}, "ALC-SSO-0008", nil},
+		{&oidc.LoginError{Reason: "idp_unreachable"}, "ALC-SSO-0009", nil},
+		{&oidc.LoginError{Reason: "login_invalid"}, "ALC-SSO-0010", nil},
+		{&oidc.LoginError{Reason: "login_expired"}, "ALC-SSO-0011", nil},
+		{&oidc.LoginError{Reason: "user_disabled"}, "ALC-SSO-0012", nil},
+		{&oidc.LoginError{Reason: "provider_disabled"}, "ALC-SSO-0013", nil},
+		{&oidc.LoginError{Reason: "stepup_other_user"}, "ALC-SSO-0014", nil},
+		{&oidc.LoginError{Reason: "idp_error"}, "ALC-SSO-0015", nil},
+		{&oidc.LoginError{Reason: "unknown"}, "ALC-SSO-0010", nil},
+		{&oidc.LoginError{Reason: "provider_in_use"}, "ALC-SSO-0010", nil},
+		{auth.ErrNotSSOUser, "ALC-SSO-0016", nil},
+		{auth.ErrOIDCEmailInUse, "ALC-SSO-0008", nil},
+		{auth.ErrOIDCUserDisabled, "ALC-SSO-0012", nil},
+		{auth.ErrOIDCOtherUser, "ALC-SSO-0014", nil},
+		{auth.ErrOIDCIdentityInvalid, "ALC-SSO-0010", nil},
+		{oidc.ErrNotFound, "ALC-SYS-0001", nil},
+		{oidc.ErrVersion, "ALC-SYS-0008", nil},
 	}
 	for _, c := range cases {
 		ec, params, ok := classify(c.err)
@@ -122,7 +161,7 @@ func TestPhase7CodesHaveTroubleshootingSections(t *testing.T) {
 		section := troubleshootingSection(string(doc), ec.Code)
 		assert.Regexp(t, `(?m)^\*\*Likely cause\.\*\* \S`, section, ec.Code)
 		assert.Regexp(t, `(?m)^\*\*What to do\.\*\* \S`, section, ec.Code)
-		_, params, _ := classify(sentinelOf(ec))
+		params := phase7Params[ec.Code]
 		for _, lang := range []string{"en", "tr"} {
 			for _, part := range []string{"title", "cause", "action"} {
 				text := cat.T(lang, "errors."+ec.Reason+"."+part, params)
@@ -130,14 +169,4 @@ func TestPhase7CodesHaveTroubleshootingSections(t *testing.T) {
 			}
 		}
 	}
-}
-
-// sentinelOf is the errorMap entry's error of a code (nil when none).
-func sentinelOf(ec ErrorCode) error {
-	for _, m := range errorMap {
-		if m.code == ec {
-			return m.err
-		}
-	}
-	return nil
 }

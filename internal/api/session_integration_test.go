@@ -434,6 +434,8 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	for k, v := range phase6Records(t, s, c) {
 		ids[k] = v
 	}
+	ids["/api/v1/sso/providers/"] = ssoProviderRecord(t, s)
+	ids["/api/v1/auth/oidc/"] = ids["/api/v1/sso/providers/"]
 	// Store an audit checkpoint first, so a GET that moved it would be caught.
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
 	require.Equal(t, 1, s.countWhere("settings", "key = 'audit.checkpoint'"))
@@ -483,6 +485,17 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 			wantAudit, wantAction = 1, "inventory.exported"
 		case "/api/v1/views":
 			path += "?page=certificates"
+		case "/api/v1/sso/group-mappings":
+			path += "?provider_id=" + ids["/api/v1/sso/providers/"]
+		case "/api/v1/auth/oidc/{id}/callback":
+			// The A-06 exception (R42 row 18, B13): the identity provider's redirect back is the one GET that changes state
+			// (it consumes the sign-in state and audits a refusal); it is always answered with a redirect.
+			rec := c.do(http.MethodGet, path, nil)
+			assert.Equal(t, http.StatusSeeOther, rec.Code, op.key())
+			assert.Equal(t, "/login?sso_error=sso.login_expired", rec.Header().Get("Location"))
+			before, seq = snapshot(), s.maxAuditSeq()
+			history = s.rowsChecksum("audit_log", "true")
+			continue
 		}
 		rec := c.do(http.MethodGet, path, nil)
 		assert.Equal(t, http.StatusOK, rec.Code, "%s: %s", op.key(), rec.Body.String())
@@ -975,4 +988,17 @@ func TestR10RecoveryCodeSignInIsLimitedToo(t *testing.T) {
 		requireStatus(t, c.do(http.MethodPost, "/api/v1/auth/login", loginBody("ada", adminPassword)), http.StatusOK)
 		requireStatus(t, c.do(http.MethodPost, "/api/v1/auth/mfa/verify", map[string]string{"recovery_code": admin.recovery[0]}), http.StatusOK)
 	})
+}
+
+// ssoProviderRecord stores one identity provider row directly (creating one through the API reads a discovery
+// document) and returns its ID.
+func ssoProviderRecord(t *testing.T, s *stack) string {
+	t.Helper()
+	id := uuid.New()
+	_, err := s.db.Owner.Exec(context.Background(), `INSERT INTO oidc_providers (id, name, issuer_url, client_id, scopes, groups_claim,
+authorization_endpoint, token_endpoint, jwks_uri, enabled, created_at, updated_at)
+VALUES ($1, 'Corp', 'https://idp.example.com', 'alice', '{openid}', 'groups', 'https://idp.example.com/a', 'https://idp.example.com/t',
+'https://idp.example.com/k', true, $2, $2)`, id, s.clock.Now())
+	require.NoError(t, err)
+	return id.String()
 }

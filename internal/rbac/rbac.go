@@ -114,6 +114,10 @@ const (
 	SSHKeysDownload Permission = "sshkeys.download"
 	RotationManage  Permission = "rotation.manage"
 	RotationOperate Permission = "rotation.operate"
+
+	// Phase 7 (SEC-009 "SSO configuration", §25.1, R42 row 24): identity providers, group mappings and the
+	// "SSO users may be Admin" switch — an Administrator in a browser session with step-up; never an API token.
+	SSOManage Permission = "sso.manage"
 )
 
 // Policy describes who may use a permission.
@@ -155,6 +159,8 @@ var policies = map[Permission]Policy{
 	SSHKeysDownload: {Roles: []Role{Admin}, StepUp: true},
 	RotationManage:  {Roles: []Role{Admin}, TokenScope: ScopeOperate},
 	RotationOperate: {Roles: []Role{Admin}, StepUp: true},
+
+	SSOManage: {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

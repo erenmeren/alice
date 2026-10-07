@@ -33,6 +33,10 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/auth/password` | `session` | no | yes | yes | yes | no | no | yes |
 | POST | `/api/v1/auth/recovery-codes` | `session.stepup` | no | yes | yes | yes | no | yes | yes |
 | PUT | `/api/v1/auth/locale` | `session` | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/auth/oidc/providers` | `public` | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/oidc/{id}/start` | `public` | yes | yes | yes | yes | yes | no | yes |
+| GET | `/api/v1/auth/oidc/{id}/callback` | `public` | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/oidc/stepup` | `session` | no | yes | yes | yes | no | no | yes |
 | GET | `/api/v1/users` | `users.read` | no | yes | no | no | read | no | yes |
 | POST | `/api/v1/users` | `users.manage` | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/users/{id}` | `users.read` | no | yes | no | no | read | no | yes |
@@ -140,6 +144,17 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/views` | `session` | no | yes | yes | yes | no | no | yes |
 | POST | `/api/v1/views` | `session` | no | yes | yes | yes | no | no | yes |
 | DELETE | `/api/v1/views/{id}` | `session` | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/sso/providers` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/sso/providers` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/sso/providers/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| PATCH | `/api/v1/sso/providers/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/sso/providers/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/sso/providers/{id}/actions/refresh` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/sso/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/sso/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/sso/group-mappings/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
 
 ## Notes
 
@@ -179,3 +194,9 @@ the summary's audit head is for Administrators and Auditors. The CSV exports are
 minute per user or token and one at a time per person; each is recorded in the audit log before the first byte. Saved views
 are a signed-in person's own (`session`, no API token). Every `/api/v1/settings/...` route is `settings.manage`;
 `POST /api/v1/settings/smtp/actions/test` is limited to 5 a minute per user.
+
+**Single sign-on (Phase 7).** Every `/api/v1/sso/...` route is `sso.manage`: an Administrator's browser session with
+step-up, never an API token. The sign-in at an identity provider is public: the start is limited like the sign-in form (10 a
+minute per address); `GET /api/v1/auth/oidc/{id}/callback` is the only GET that changes state (it consumes the sign-in
+state and creates or steps up a session), is always answered with a 303 redirect and is limited per binding cookie. An SSO
+user's step-up (`POST /api/v1/auth/oidc/stepup`) needs the user's own session.

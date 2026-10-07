@@ -632,6 +632,11 @@ var oneTimeFields = map[string]map[string]bool{
 	"recovery_codes": only("POST /api/v1/setup/admin", "POST /api/v1/auth/mfa/verify", "POST /api/v1/auth/recovery-codes"),
 }
 
+// identityProviderEndpointOps answer an identity provider, whose endpoints.token is the provider's token endpoint
+// address (C13), not an API token; the walker flattens nested names, so "token" is accepted there and nowhere else.
+var identityProviderEndpointOps = only("GET /api/v1/sso/providers", "POST /api/v1/sso/providers", "GET /api/v1/sso/providers/{id}",
+	"PATCH /api/v1/sso/providers/{id}", "POST /api/v1/sso/providers/{id}/actions/refresh")
+
 // asMap accepts both map shapes yaml.v3 produces (unquoted numeric keys such
 // as 200: decode as ints, so their keys are rendered with fmt.Sprint).
 func asMap(v any) map[string]any {
@@ -726,7 +731,7 @@ func TestOpenAPIResponsesExposeNoSecretFields(t *testing.T) {
 			assert.False(t, fields[op][f], "%s exposes %q in a response", op, f)
 		}
 		for f, allowed := range oneTimeFields {
-			if fields[op][f] {
+			if fields[op][f] && (f != "token" || !identityProviderEndpointOps[op]) {
 				assert.True(t, allowed[op], "%s exposes the one-time field %q", op, f)
 			}
 		}
@@ -735,5 +740,8 @@ func TestOpenAPIResponsesExposeNoSecretFields(t *testing.T) {
 		for op := range allowed {
 			assert.True(t, fields[op][f], "%s should document %q in its response", op, f)
 		}
+	}
+	for op := range identityProviderEndpointOps {
+		assert.True(t, fields[op]["token"], "%s documents the provider's endpoints", op)
 	}
 }
