@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,4 +105,15 @@ func TestCustomDialer(t *testing.T) {
 	require.NoError(t, err)
 	err = m.Send(context.Background(), notify.Message{To: "ops@example.com", Subject: "s", Body: "b"})
 	assert.ErrorIs(t, err, notify.ErrSMTPConnect)
+}
+
+// The subject the server presents is cut to 300 runes before anything keeps it.
+func TestServerSubjectIsTruncated(t *testing.T) {
+	s := fakesmtp.Start(t, fakesmtp.Options{Hostname: strings.Repeat("a", 400)})
+	m, err := notify.NewSMTPMailer(smtpConfigFor(s), clock.NewFake(time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)))
+	require.NoError(t, err)
+	err = m.Send(context.Background(), notify.Message{To: "ops@example.com", Subject: "s", Body: "b"})
+	var ce *notify.CertError
+	require.True(t, errors.As(err, &ce), "%v", err)
+	assert.Len(t, []rune(ce.Cert.Subject), 300)
 }

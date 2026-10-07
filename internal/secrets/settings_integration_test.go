@@ -49,3 +49,24 @@ SELECT $1, ciphertext, nonce, wrapped_dek, key_version, updated_at FROM setting_
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
+
+func TestSettingSecretErrorPaths(t *testing.T) {
+	d := pgtest.New(t)
+	k, err := secrets.NewKeyring(1, bytes.Repeat([]byte{7}, 32))
+	require.NoError(t, err)
+	now := time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC)
+	// The table only holds the keys of its CHECK: anything else is refused by the database.
+	err = k.PutSetting(context.Background(), d.App, "not.a.setting", secrets.NewPlaintext([]byte("x")), now)
+	assert.Error(t, err)
+	// A cancelled context fails every statement.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.Error(t, k.PutSetting(ctx, d.App, "notify.smtp.password", secrets.NewPlaintext([]byte("x")), now))
+	_, ok, err := k.GetSetting(ctx, d.App, "notify.smtp.password")
+	assert.Error(t, err)
+	assert.False(t, ok)
+	assert.Error(t, secrets.DeleteSetting(ctx, d.App, "notify.smtp.password"))
+	var n int
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT count(*) FROM setting_secrets`).Scan(&n))
+	assert.Zero(t, n)
+}

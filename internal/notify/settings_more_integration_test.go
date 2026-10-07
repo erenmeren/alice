@@ -248,7 +248,7 @@ func TestImportEnvEdges(t *testing.T) {
 	_, err = s.ImportEnv(ctx, bad, read)
 	require.Error(t, err)
 	bad = base
-	bad.Port = 0
+	bad.Port, bad.PasswordFile = 0, "/pw"
 	_, err = s.ImportEnv(ctx, bad, read)
 	assert.Equal(t, map[string]string{"port": validate.OutOfRange}, fieldsOf(t, err))
 	_, ok, err := s.SMTP(ctx)
@@ -274,4 +274,55 @@ func TestImportEnvEdges(t *testing.T) {
 	assert.False(t, done)
 	assert.Contains(t, logs.String(), "ALICE_SMTP_* is set")
 	assert.NotContains(t, logs.String(), canary)
+}
+
+// Review fix: a user name without a password file is never imported.
+func TestImportEnvRefusesAUserNameWithoutAPassword(t *testing.T) {
+	var logs bytes.Buffer
+	d := pgtest.New(t)
+	clk := clock.NewFake(start)
+	s := notify.NewSettings(notify.SettingsConfig{Pool: d.App, Keyring: mustKeyring(t), Audit: audit.New(clk), Clock: clk,
+		Catalog: mustCatalog(t), Log: slog.New(slog.NewTextHandler(&logs, nil))})
+	ctx := context.Background()
+	read := func(string) ([]byte, error) { return nil, nil }
+	cfg := config.SMTP{Host: "smtp.example.com", Port: 587, From: "alice@example.com", Username: "mailer"}
+	done, err := s.ImportEnv(ctx, cfg, read)
+	require.NoError(t, err)
+	assert.False(t, done)
+	assert.Contains(t, logs.String(), "without a password file")
+	_, ok, err := s.SMTP(ctx)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	cfg.PasswordFile = "/empty"
+	done, err = s.ImportEnv(ctx, cfg, read)
+	require.NoError(t, err)
+	assert.False(t, done, "an empty password file is no password")
+	cfg.Username = ""
+	done, err = s.ImportEnv(ctx, cfg, read)
+	require.NoError(t, err)
+	assert.True(t, done, "no user name, no authentication: fine")
+}
+
+// Review fix: without a user name a password is not stored.
+func TestNoUserNameStoresNoPassword(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	srv := fakesmtp.Start(t, fakesmtp.Options{})
+	in := input(srv, pw(canary))
+	in.Username = ""
+	got, err := h.s.SaveSMTP(ctx, h.who, 0, in)
+	require.NoError(t, err)
+	assert.False(t, got.HasPassword)
+	var n int
+	require.NoError(t, h.d.Owner.QueryRow(ctx, `SELECT count(*) FROM setting_secrets`).Scan(&n))
+	assert.Zero(t, n)
+	// With a user name it is stored; clearing the user name drops it again.
+	got, err = h.s.SaveSMTP(ctx, h.who, got.Version, input(srv, pw(canary)))
+	require.NoError(t, err)
+	assert.True(t, got.HasPassword)
+	in = input(srv, nil)
+	in.Username = ""
+	got, err = h.s.SaveSMTP(ctx, h.who, got.Version, in)
+	require.NoError(t, err)
+	assert.False(t, got.HasPassword)
 }

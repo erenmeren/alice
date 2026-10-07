@@ -31,7 +31,7 @@ func fingerprintOf(c *x509.Certificate) string {
 }
 
 func infoOf(c *x509.Certificate) CertInfo {
-	return CertInfo{Fingerprint: fingerprintOf(c), Subject: oneLine(c.Subject.String()), NotAfter: c.NotAfter.UTC()}
+	return CertInfo{Fingerprint: fingerprintOf(c), Subject: truncateRunes(oneLine(c.Subject.String()), maxSubjectRunes), NotAfter: c.NotAfter.UTC()}
 }
 
 // pinnedTLS accepts exactly the leaf whose SHA-256 is pin: the Administrator's "trust this certificate" (F-62, R42
@@ -53,4 +53,15 @@ func pinnedTLS(host, pin string) *tls.Config {
 			return nil
 		},
 	}
+}
+
+// maxSubjectRunes bounds a server-presented subject before it reaches the seen record, the pin, the audit row and
+// the answer to the Administrator.
+const maxSubjectRunes = 300
+
+func truncateRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }

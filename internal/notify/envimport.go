@@ -56,6 +56,11 @@ func (s *Settings) ImportEnv(ctx context.Context, c config.SMTP, readFile func(s
 		if in.Password != nil && len(in.Password.Bytes()) == 0 {
 			in.Password = nil
 		}
+		if in.Username != "" && in.Password == nil {
+			// The same rule as SaveSMTP: never a record that authenticates with an empty password.
+			s.log.Warn("ALICE_SMTP_USERNAME is set without a password file; the SMTP settings were not imported")
+			return nil
+		}
 		_, verrs := validateSMTP(in)
 		if err := verrs.Err(); err != nil {
 			return fmt.Errorf("notify: ALICE_SMTP_* are not valid: %w", err)

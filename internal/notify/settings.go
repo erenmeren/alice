@@ -270,6 +270,16 @@ func (s *Settings) store(ctx context.Context, tx pgx.Tx, old smtpRecord, in SMTP
 	}
 	authChanged := false
 	switch {
+	case in.Username == "":
+		// No user name, no authentication: an envelope would be unused (and a stale one is dropped).
+		had, err := s.hasPassword(ctx, tx)
+		if err != nil {
+			return smtpRecord{}, false, err
+		}
+		authChanged = had
+		if err := secrets.DeleteSetting(ctx, tx, passwordKey); err != nil {
+			return smtpRecord{}, false, err
+		}
 	case in.Password == nil:
 	case len(in.Password.Bytes()) == 0:
 		authChanged = true
