@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +19,10 @@ import (
 	"alice/internal/testutil/fakeidp"
 	"alice/internal/testutil/seed"
 )
+
+// Not a surface here: jobs.params. The alert scan and the mail drain are periodic tasks run in-process (the stack calls
+// alerts.Scan and notify.Sender.Drain directly, as cmd/alice's scheduler does); no Phase 7 flow queues a job, so the
+// jobs table the dump scans holds no Phase 7 params by construction.
 
 // The Phase 7 secret-leak suite (Review Focus 3, §25.2, S-01..S-05, the global secret rule): the SMTP password, every
 // OIDC client secret, the keyring material behind their envelopes, the browser binding cookie, the OIDC state, nonce,
@@ -139,20 +144,53 @@ func TestPhase7SecretsNeverLeak(t *testing.T) {
 		return key == "POST "+start || key == "POST /api/v1/auth/oidc/stepup"
 	}
 	var canaries []leakCanary
-	plain := func(name, value string) {
-		canaries = append(canaries, leakCanary{secretValue: secretValue{name: name, value: value}, bodyOK: never, headerOK: never})
+	plain := func(name, value string, extra ...string) {
+		t.Helper()
+		require.NotEmpty(t, value, "%s: the canary was captured", name)
+		canaries = append(canaries, leakCanary{secretValue: secretValue{name: name, forms: append(variants(value), extra...)},
+			bodyOK: never, headerOK: never})
 	}
-	plain("SMTP password (stack)", stackSMTPPassword)
-	plain("SMTP password (wrong)", wrongPW)
-	plain("SMTP password (refused)", refusedPW)
-	plain("client secret", s.idp.ClientSecret())
-	plain("client secret (replaced)", otherSecret)
-	plain("client secret (refused)", refusedSecret)
+	// An SMTP password is also looked for as the AUTH PLAIN login a logged transcript would show (base64 of
+	// "\0mailer\0password", with or without an identity).
+	smtpLogin := func(pw string) []string {
+		return []string{base64.StdEncoding.EncodeToString([]byte("\x00mailer\x00" + pw)),
+			base64.StdEncoding.EncodeToString([]byte("mailer\x00mailer\x00" + pw))}
+	}
+	// A client secret is also looked for as the client_secret_basic Authorization header a logged request would show
+	// (base64 of "client_id:secret", the parts form-escaped as x/oauth2 does).
+	basic := func(secret string) []string {
+		id := s.idp.ClientID()
+		return []string{base64.StdEncoding.EncodeToString([]byte(id + ":" + secret)),
+			base64.StdEncoding.EncodeToString([]byte(url.QueryEscape(id) + ":" + url.QueryEscape(secret)))}
+	}
+	plain("SMTP password (stack)", stackSMTPPassword, smtpLogin(stackSMTPPassword)...)
+	plain("SMTP password (wrong)", wrongPW, smtpLogin(wrongPW)...)
+	plain("SMTP password (refused)", refusedPW, smtpLogin(refusedPW)...)
+	plain("client secret", s.idp.ClientSecret(), basic(s.idp.ClientSecret())...)
+	plain("client secret (replaced)", otherSecret, basic(otherSecret)...)
+	plain("client secret (refused)", refusedSecret, basic(refusedSecret)...)
+	// The tokens the provider served (fakeidp.IssuedTokens): the ID token whole and its payload and signature parts
+	// (a logged claim set or signature), and the access token. None is ever stored or logged.
+	issued := s.idp.IssuedTokens()
+	require.Len(t, issued, 3, "the provider served tokens to the sign-in, the refused alg-none sign-in and the step-up")
+	for _, tok := range issued {
+		parts := strings.Split(tok.IDToken, ".")
+		require.Len(t, parts, 3)
+		require.NotEmpty(t, parts[1])
+		plain("ID token", tok.IDToken, parts[1])
+		if parts[2] != "" { // the alg-none token has no signature
+			plain("ID token signature", parts[2])
+		}
+		plain("access token", tok.AccessToken)
+	}
 	for _, v := range codes {
 		plain("authorization code", v)
 	}
 	for _, v := range verifiers {
 		plain("PKCE verifier", v)
+	}
+	for _, v := range append(append(append([]string(nil), bindings...), states...), nonces...) {
+		require.NotEmpty(t, v, "every binding, state and nonce was captured")
 	}
 	for _, v := range bindings {
 		// The binding value is the start's Set-Cookie and nowhere else; the database holds only its SHA-256.

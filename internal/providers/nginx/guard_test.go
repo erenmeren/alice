@@ -164,8 +164,12 @@ func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 	pin, err := os.ReadFile(filepath.Join(root, "internal", "notify", "pin.go")) //nolint:gosec // G304: a fixed source file of the repository
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(pin), needle), "notify skips the chain check in one place only")
-	fn := string(pin)[strings.Index(string(pin), "func pinnedTLS("):]
-	fn = fn[:strings.Index(fn, "\n}\n")]
+	from := strings.Index(string(pin), "func pinnedTLS(")
+	require.Positive(t, from, "notify/pin.go defines pinnedTLS")
+	fn := string(pin)[from:]
+	end := strings.Index(fn, "\n}\n")
+	require.Positive(t, end, "pinnedTLS ends")
+	fn = fn[:end]
 	assert.Contains(t, fn, needle, "the one place is pinnedTLS")
 	assert.Contains(t, fn, "VerifyConnection:", "pinnedTLS checks the pinned leaf itself")
 	assert.Contains(t, fn, "subtle.ConstantTimeCompare(", "pinnedTLS compares the pin")

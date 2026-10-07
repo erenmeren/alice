@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +20,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/alerts/expiry"
+	"alice/internal/notify"
 	"alice/internal/platform/csvx"
 	"alice/internal/reports"
 	"alice/internal/testutil/seed"
@@ -321,6 +322,16 @@ SELECT gen_random_uuid(), encode(sha256(('fp' || i)::bytea), 'hex'),
        encode(sha256(('pk' || i)::bytea), 'hex'), '', 'uploaded', now(), now(), now()
 FROM generate_series(1, $2::int) AS i`, s.clock.Now(), n)
 	require.NoError(t, err)
+	// Formula-like text in every other text column the export writes (label, sans, issuer, serial), and varied numbers
+	// and flags, so a swapped or mis-rendered column cannot pass.
+	_, err = s.db.Owner.Exec(ctx, `UPDATE certificates SET
+label = (ARRAY['=label', '', '@lbl', 'plain label'])[1 + (hashtext(id::text) & 3)],
+sans = CASE WHEN hashtext(id::text) % 2 = 0 THEN ARRAY['-a.export.test', 'b.export.test'] ELSE ARRAY['c.export.test'] END,
+issuer = (ARRAY['+CN=Evil CA', 'CN=Plain CA', E'\tCN=Tab CA'])[1 + (hashtext(id::text) & 3) % 3],
+serial = (ARRAY['-01', '0A1B'])[1 + (hashtext(id::text) & 1)],
+key_bits = 256 + (hashtext(id::text) & 1) * 128, self_signed = hashtext(id::text) % 3 = 0, chain_complete = hashtext(id::text) % 5 <> 0
+WHERE subject_cn LIKE '%.export.test'`)
+	require.NoError(t, err)
 	_, err = s.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
 servers, first_seen_at, last_seen_at)
 SELECT gen_random_uuid(), t.id, 'nginx_file', '/etc/nginx/ssl/' || c.id || '.crt', '/etc/nginx/ssl/' || c.id || '.key', c.id, true, '[]',
@@ -376,10 +387,9 @@ func TestExportOverTheWireEqualsFilteredRows(t *testing.T) {
 	for _, x := range []struct {
 		kind, list, label string
 		filters           []string
-		cell              map[string]string // CSV column -> list field
 	}{
-		{"certificates", "/api/v1/certificates", "certificates", certFilters, map[string]string{"id": "id", "subject_cn": "subject_cn"}},
-		{"ssh-keys", "/api/v1/ssh-keys", "ssh_keys", keyFilters, map[string]string{"id": "id", "fingerprint": "fingerprint", "comment": "comment"}},
+		{"certificates", "/api/v1/certificates", "certificates", certFilters},
+		{"ssh-keys", "/api/v1/ssh-keys", "ssh_keys", keyFilters},
 	} {
 		for _, f := range x.filters {
 			s.api.ResetLimits() // 10 exports a minute per user (limitExport) is tested elsewhere
@@ -388,10 +398,11 @@ func TestExportOverTheWireEqualsFilteredRows(t *testing.T) {
 			rows := csvRows(t, admin.do(http.MethodGet, "/api/v1/"+x.kind+"/export"+f, nil), x.kind, now)
 			require.Equal(t, header[x.kind], rows[0], "%s%s header", x.kind, f)
 			require.Len(t, rows[1:], len(list), "%s%s: the export has the list's rows", x.kind, f)
-			for col, key := range x.cell {
-				i := slices.Index(rows[0], col)
-				for n, r := range rows[1:] {
-					v, _ := list[n][key].(string)
+			// Every cell of every row equals the list's value as the export renders it, through csvx.
+			for n, r := range rows[1:] {
+				require.Len(t, r, len(rows[0]))
+				for i, col := range rows[0] {
+					v := s.exportCell(t, x.kind, col, list[n], now)
 					require.Equal(t, csvx.Safe(v), r[i], "%s%s row %d column %s", x.kind, f, n, col)
 					if csvx.Safe(v) != v {
 						formulas++
@@ -411,12 +422,14 @@ func TestExportOverTheWireEqualsFilteredRows(t *testing.T) {
 			assert.Equal(t, strconv.Itoa(len(list)), details["row_count"])
 			vals, err := url.ParseQuery(strings.TrimPrefix(f, "?"))
 			require.NoError(t, err)
+			want := map[string]string{"kind": x.label, "format": "csv", "row_count": strconv.Itoa(len(list))}
 			for k := range vals {
-				assert.Equal(t, vals.Get(k), details[k], "%s%s: audit detail %s", x.kind, f, k)
+				want[k] = vals.Get(k)
 			}
+			assert.Equal(t, want, details, "%s%s: the audit details are the kind, the format, the count and the filters given", x.kind, f)
 		}
 	}
-	assert.Greater(t, formulas, 100, "the seeded formula-like cells were escaped")
+	assert.Greater(t, formulas, 1000, "the seeded formula-like cells were escaped")
 	all := listAll(t, admin, "/api/v1/certificates")
 	assert.Greater(t, len(all), 200, "the unfiltered export spans more than one list page")
 	assert.Greater(t, len(listAll(t, admin, "/api/v1/ssh-keys")), 200)
@@ -427,6 +440,62 @@ func TestExportOverTheWireEqualsFilteredRows(t *testing.T) {
 	requireError(t, admin.do(http.MethodGet, "/api/v1/certificates/export?limit=10", nil), http.StatusUnprocessableEntity, "ALC-SYS-0006")
 	requireError(t, admin.do(http.MethodGet, "/api/v1/ssh-keys/export?cursor=x", nil), http.StatusUnprocessableEntity, "ALC-SYS-0006")
 	assert.Equal(t, seq, s.maxAuditSeq())
+}
+
+// exportCell renders the list item's value of an export column the way the export writes it (reports/export.go):
+// times in UTC RFC 3339, numbers and booleans as Go formats them, SANs joined by a space, days_left from not_after at
+// the export's now. retired is not in the SSH key list, so it is read from the database.
+func (s *stack) exportCell(t *testing.T, kind, col string, item map[string]any, now time.Time) string {
+	t.Helper()
+	str := func(key string) string {
+		v, ok := item[key].(string)
+		require.True(t, ok, "%s: %s is a string", kind, key)
+		return v
+	}
+	num := func(key string) string {
+		v, ok := item[key].(float64)
+		require.True(t, ok, "%s: %s is a number", kind, key)
+		return strconv.Itoa(int(v))
+	}
+	flag := func(key string) string {
+		v, ok := item[key].(bool)
+		require.True(t, ok, "%s: %s is a boolean", kind, key)
+		return strconv.FormatBool(v)
+	}
+	at := func(key string) time.Time {
+		v, err := time.Parse(time.RFC3339Nano, str(key))
+		require.NoError(t, err)
+		return v
+	}
+	switch kind + "." + col {
+	case "certificates.id", "certificates.subject_cn", "certificates.label", "certificates.issuer", "certificates.serial",
+		"certificates.source", "certificates.key_algorithm", "certificates.fingerprint",
+		"ssh-keys.id", "ssh-keys.fingerprint", "ssh-keys.key_type", "ssh-keys.comment":
+		return str(col)
+	case "certificates.sans":
+		var sans []string
+		for _, v := range item["sans"].([]any) {
+			sans = append(sans, v.(string))
+		}
+		return strings.Join(sans, " ")
+	case "certificates.not_before", "certificates.not_after", "ssh-keys.first_seen_at":
+		return at(col).UTC().Format(time.RFC3339)
+	case "certificates.days_left":
+		return strconv.Itoa(expiry.DaysLeft(at("not_after"), now))
+	case "certificates.key_bits", "certificates.location_count", "ssh-keys.bits", "ssh-keys.location_count", "ssh-keys.target_count":
+		return num(col)
+	case "certificates.self_signed", "certificates.chain_complete", "ssh-keys.managed", "ssh-keys.weak", "ssh-keys.missing":
+		return flag(col)
+	case "ssh-keys.platform_key":
+		return flag("is_platform_key")
+	case "ssh-keys.retired":
+		var retired bool
+		require.NoError(t, s.db.Owner.QueryRow(context.Background(), `SELECT retired_at IS NOT NULL FROM ssh_keys WHERE id = $1`,
+			str("id")).Scan(&retired))
+		return strconv.FormatBool(retired)
+	}
+	t.Fatalf("no rendering for %s column %s", kind, col)
+	return ""
 }
 
 // blockingWriter is a client that reads nothing until it is released: the first byte of the answer blocks.
@@ -470,6 +539,10 @@ func TestExportAuditedBeforeTheFirstByteAndOneAtATime(t *testing.T) {
 	before := s.countWhere("audit_log", "action = 'inventory.exported'")
 	w := &blockingWriter{ResponseRecorder: httptest.NewRecorder(), started: make(chan struct{}), release: make(chan struct{})}
 	done := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(w.release) }) }
+	// A failed require below must not leave the handler blocked on its pool connection (pgtest's cleanup would hang).
+	t.Cleanup(func() { release(); <-done })
 	go func() {
 		defer close(done)
 		admin.rawGET("/api/v1/certificates/export", w)
@@ -495,7 +568,7 @@ func TestExportAuditedBeforeTheFirstByteAndOneAtATime(t *testing.T) {
 	assert.Len(t, rows, 1+9)
 	assert.Equal(t, before+2, s.countWhere("audit_log", "action = 'inventory.exported'"), "a refused export is not audited")
 
-	close(w.release)
+	release()
 	<-done
 	assert.Equal(t, http.StatusOK, w.Code)
 	got, err := csv.NewReader(bytes.NewReader(w.Body.Bytes()[3:])).ReadAll()
@@ -533,7 +606,7 @@ FROM generate_series(1, $2::int) AS i`, s.clock.Now(), reports.MaxExportRows+1)
 	// HEAD runs nothing (no audit row, no file) and names GET.
 	for _, path := range []string{"/api/v1/certificates/export", "/api/v1/ssh-keys/export", "/api/v1/audit/export"} {
 		rec := admin.do(http.MethodHead, path, nil)
-		assert.Equal(t, http.StatusMethodNotAllowed, rec.Code, path)
+		requireError(t, rec, http.StatusMethodNotAllowed, "ALC-SYS-0009")
 		assert.Equal(t, "GET", rec.Header().Get("Allow"), path)
 	}
 	assert.Equal(t, seq+1, s.maxAuditSeq(), "HEAD wrote nothing")
@@ -711,8 +784,8 @@ func TestMailSettingsOverTheWire(t *testing.T) {
 	assert.Equal(t, 0, s.countWhere("setting_secrets", "true"))
 }
 
-// F-61 over the wire: who receives e-mails, the thresholds and the general settings, each with If-Match, validation and
-// an audit row; the alert scan then e-mails exactly the configured recipients.
+// The recipient, threshold and general settings over the wire (F-61's recipient half is TestF61F63ScheduledSendsOverTheWire):
+// each with If-Match, validation and an audit row; the alert scan then e-mails exactly the configured recipients.
 func TestRecipientsThresholdsAndGeneralOverTheWire(t *testing.T) {
 	s, admin, adminAcct := installedWithFakes(t)
 	s.stepUp(admin, adminAcct)
@@ -821,6 +894,17 @@ func TestF60OverTheWire(t *testing.T) {
 	require.NoError(t, err)
 
 	s.smtp.Down()
+	// The banner needs FailingAfter (3) failed attempts in a row: one notice to the two recipients fails twice and the
+	// state is not failing yet.
+	pre := s.notifyAdmins(t)
+	require.Equal(t, 2, pre)
+	assert.Equal(t, pre, s.drainMail())
+	st := s.notificationStatus(admin, adminAcct)
+	assert.Equal(t, false, st["failing"], "two failures are not yet failing")
+	assert.EqualValues(t, 2, st["consecutive_failures"])
+	_, err = s.db.Owner.Exec(ctx, `DELETE FROM notifications_outbox`)
+	require.NoError(t, err)
+
 	_, err = s.alerts.Scan(ctx)
 	require.NoError(t, err)
 	queued := s.count("notifications_outbox")
@@ -831,9 +915,9 @@ func TestF60OverTheWire(t *testing.T) {
 		assert.Equal(t, queued, s.drainMail())
 		s.clock.Advance(time.Hour)
 	}
-	st := s.notificationStatus(admin, adminAcct)
+	st = s.notificationStatus(admin, adminAcct)
 	assert.Equal(t, true, st["failing"])
-	assert.EqualValues(t, 3*queued, st["consecutive_failures"])
+	assert.EqualValues(t, pre+3*queued, st["consecutive_failures"])
 	assert.Equal(t, "smtp.connect", st["last_failure_code"])
 	assert.EqualValues(t, queued, st["pending"])
 	assert.EqualValues(t, 0, st["failed_24h"])
@@ -907,4 +991,97 @@ func TestF60GivesUpAfter24Hours(t *testing.T) {
 	// failed_24h counts rows queued within 48 hours (Task 7 amendment): two days later they are no longer counted.
 	s.clock.Advance(48 * time.Hour)
 	assert.EqualValues(t, 0, s.notificationStatus(admin, adminAcct)["failed_24h"])
+}
+
+// notifyAdmins queues one notice to the Administrators (and the configured addresses) the way every Alice service does
+// (notify.AdminNotifier in the caller's transaction) and returns how many outbox rows it added.
+func (s *stack) notifyAdmins(t *testing.T) int {
+	t.Helper()
+	ctx := context.Background()
+	before := s.count("notifications_outbox")
+	tx, err := s.db.App.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	require.NoError(t, notify.AdminNotifier{Clock: s.clock}.NotifyAdmins(ctx, tx, notify.TemplateTestMail, nil))
+	require.NoError(t, tx.Commit(ctx))
+	return s.count("notifications_outbox") - before
+}
+
+// F-61 and the scheduled half of F-63 over the stack (spec: "SMTP accepts then rejects a recipient: failure recorded per
+// recipient; others delivered"; "scheduled sends fail with alert; secrets not shown"): through the API-configured,
+// pinned settings and the real sender, a refused recipient fails only its own rows, which are retried and delivered
+// once it is accepted; wrong stored credentials make the scheduled sends fail with smtp.auth, which raises the failing
+// state, the dashboard banner and the condition — and no answer, log or row shows the password.
+func TestF61F63ScheduledSendsOverTheWire(t *testing.T) {
+	s, admin, adminAcct := installedWithFakes(t)
+	ctx := context.Background()
+	s.stepUp(admin, adminAcct)
+	requireStatus(t, admin.do(http.MethodPatch, "/api/v1/users/"+adminAcct.id, map[string]string{"email": "ada@example.com"}), http.StatusOK)
+	requireStatus(t, admin.do(http.MethodPut, "/api/v1/settings/notifications", map[string]any{"administrators": true,
+		"addresses": []map[string]string{{"email": "ops@example.com", "locale": "en"}}}, ifMatchOf("0")), http.StatusOK)
+	s.configureMail(admin)
+	_, err := seed.Dashboard(ctx, s.db.Owner, s.clock.Now())
+	require.NoError(t, err)
+
+	// F-61: the server accepts ada and refuses ops.
+	s.smtp.RejectRecipient("ops@example.com")
+	_, err = s.alerts.Scan(ctx)
+	require.NoError(t, err)
+	queued := s.count("notifications_outbox")
+	require.Positive(t, queued)
+	half := queued / 2
+	assert.Equal(t, queued, s.drainMail())
+	assert.Equal(t, half, s.countWhere("notifications_outbox", "to_address = 'ada@example.com' AND status = 'sent' AND attempts = 1"))
+	assert.Equal(t, half, s.countWhere("notifications_outbox", "to_address = 'ops@example.com' AND status = 'pending' AND attempts = 1 "+
+		"AND last_error_code = 'smtp.rejected'"))
+	msgs := s.smtp.Messages()
+	require.Len(t, msgs, half)
+	for _, m := range msgs {
+		assert.Equal(t, []string{"ada@example.com"}, m.To)
+	}
+	st := s.notificationStatus(admin, adminAcct)
+	assert.Equal(t, "smtp.rejected", st["last_failure_code"])
+	assert.NotNil(t, st["last_success_at"])
+	assert.EqualValues(t, half, st["pending"])
+
+	// The refused rows are retried on their own and delivered once the recipient is accepted; nothing is sent twice.
+	s.smtp.RejectRecipient("")
+	s.clock.Advance(time.Minute)
+	assert.Equal(t, half, s.drainMail())
+	assert.Equal(t, queued, s.countWhere("notifications_outbox", "status = 'sent'"))
+	assert.Equal(t, half, s.countWhere("notifications_outbox", "to_address = 'ops@example.com' AND attempts = 2"))
+	assert.Len(t, s.smtp.Messages(), queued)
+	s.clock.Advance(time.Hour)
+	assert.Zero(t, s.drainMail())
+
+	// F-63, scheduled: the stored password is wrong. Two failures are not failing yet; the third is.
+	wrong := canary("smtp-scheduled-wrong")
+	s.signIn(admin, adminAcct)
+	s.stepUp(admin, adminAcct)
+	cur := admin.do(http.MethodGet, "/api/v1/settings/smtp", nil)
+	requireStatus(t, admin.do(http.MethodPut, "/api/v1/settings/smtp", s.mailBody(wrong), ifMatchOf(etagVersion(t, cur))), http.StatusOK)
+	s.smtp.Clear()
+	require.Equal(t, 2, s.notifyAdmins(t))
+	assert.Equal(t, 2, s.drainMail())
+	st = s.notificationStatus(admin, adminAcct)
+	assert.Equal(t, false, st["failing"])
+	assert.Equal(t, "smtp.auth", st["last_failure_code"])
+	s.clock.Advance(time.Minute)
+	assert.Equal(t, 2, s.drainMail())
+	st = s.notificationStatus(admin, adminAcct)
+	assert.Equal(t, true, st["failing"])
+	assert.EqualValues(t, 4, st["consecutive_failures"])
+	assert.Equal(t, "smtp.auth", st["last_failure_code"])
+	assert.Equal(t, 2, s.countWhere("notifications_outbox", "status = 'pending' AND last_error_code = 'smtp.auth'"))
+	assert.Empty(t, s.smtp.Messages())
+	sum := admin.do(http.MethodGet, "/api/v1/dashboard/summary", nil)
+	assert.Contains(t, sum.Body.String(), `"failing":true`)
+	alerts := admin.do(http.MethodGet, "/api/v1/alerts", nil)
+	assert.Contains(t, alerts.Body.String(), `"kind":"notifications_failing"`)
+	assert.Contains(t, alerts.Body.String(), `"error_code":"smtp.auth"`)
+	for _, x := range s.recorded() {
+		assert.NotContains(t, string(x.body), wrong, x.key())
+	}
+	assert.NotContains(t, s.logs.String(), wrong)
+	assertNoSecret(t, "the database", s.dump(), []secretValue{{name: "wrong SMTP password", value: wrong}})
 }
