@@ -22,7 +22,8 @@ type Viewer struct {
 }
 
 // Summary is the dashboard's data. The certificate counts are cumulative windows with the list filter's semantics
-// (expired: not_after < now; Within7: not_after < now+7d, expired ones included), so each equals the rows its link opens.
+// (Expired: not_after <= now; Within7: not_after < now+7d, expired ones included), so each equals the rows its link opens.
+// KVExpired and KVWithin30 count Key Vault keys and client secrets only.
 type Summary struct {
 	GeneratedAt   time.Time
 	Certificates  alerts.Counts
@@ -140,41 +141,39 @@ func (s *Service) Summary(ctx context.Context, v Viewer) (Summary, error) {
 	return out, nil
 }
 
-// certificateCounts fills the cumulative windows from the monitored items themselves (alerts.Items, the one definition
-// of "monitored"), so the numbers cannot drift from the inventory's strict `not_after < bound` filters.
+// countsSQL counts over the same population and with the same predicates as inventory.ListCertificates without a target
+// filter (every certificate row; expired is not_after <= now, a window of n days is not_after < now + n days, expired
+// ones included), so each count equals the rows its dashboard link opens. The Key Vault line counts Key Vault keys and
+// client secrets, which the certificate list does not hold (Key Vault certificates are certificates).
+const countsSQL = `
+WITH kv AS (
+    SELECT k.expires FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
+    WHERE k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL
+    UNION ALL
+    SELECT (cr.public_info->>'secret_expires_on')::timestamptz FROM targets t JOIN credentials cr ON cr.id = t.credential_id
+    WHERE t.type = 'azure_key_vault' AND t.deleted_at IS NULL AND cr.public_info ? 'secret_expires_on'
+)
+SELECT c.expired, c.d7, c.d30, c.d60, k.expired, k.d30
+FROM (SELECT count(*) FILTER (WHERE not_after <= $1::timestamptz) AS expired,
+             count(*) FILTER (WHERE not_after < $2::timestamptz) AS d7,
+             count(*) FILTER (WHERE not_after < $3::timestamptz) AS d30,
+             count(*) FILTER (WHERE not_after < $4::timestamptz) AS d60 FROM certificates) c,
+     (SELECT count(*) FILTER (WHERE expires <= $1::timestamptz) AS expired,
+             count(*) FILTER (WHERE expires < $3::timestamptz) AS d30 FROM kv) k`
+
+// certificateCounts fills the cumulative windows in one statement. Monitored (certificates in use) is the alerts
+// package's one definition.
 func (s *Service) certificateCounts(ctx context.Context, now time.Time) (alerts.Counts, error) {
 	base, err := s.alerts.Counts(ctx)
 	if err != nil {
 		return alerts.Counts{}, fmt.Errorf("reports: %w", err)
 	}
-	items, err := s.alerts.Items(ctx, alerts.Kinds(), now.Add(60*24*time.Hour), 0)
-	if err != nil {
-		return alerts.Counts{}, fmt.Errorf("reports: %w", err)
-	}
 	c := alerts.Counts{Monitored: base.Monitored}
-	d7, d30, d60 := now.Add(7*24*time.Hour), now.Add(30*24*time.Hour), now.Add(60*24*time.Hour)
-	for _, it := range items {
-		if it.Kind == alerts.KindCertificate {
-			if it.ExpiresAt.Before(now) {
-				c.Expired++
-			}
-			if it.ExpiresAt.Before(d7) {
-				c.Within7++
-			}
-			if it.ExpiresAt.Before(d30) {
-				c.Within30++
-			}
-			if it.ExpiresAt.Before(d60) {
-				c.Within60++
-			}
-			continue
-		}
-		if it.ExpiresAt.Before(now) {
-			c.KVExpired++
-		}
-		if it.ExpiresAt.Before(d30) {
-			c.KVWithin30++
-		}
+	day := 24 * time.Hour
+	err = s.pool.QueryRow(ctx, countsSQL, now, now.Add(7*day), now.Add(30*day), now.Add(60*day)).
+		Scan(&c.Expired, &c.Within7, &c.Within30, &c.Within60, &c.KVExpired, &c.KVWithin30)
+	if err != nil {
+		return alerts.Counts{}, fmt.Errorf("reports: count the certificates: %w", err)
 	}
 	return c, nil
 }
@@ -182,7 +181,7 @@ func (s *Service) certificateCounts(ctx context.Context, now time.Time) (alerts.
 func (s *Service) countFailedDeployments(ctx context.Context, now time.Time) (int, error) {
 	var n int
 	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM deployments WHERE status IN `+failedStatuses+`
-AND coalesce(finished_at, created_at) >= $1`, now.Add(-FailedWindow)).Scan(&n)
+AND (status = 'needs_attention' OR coalesce(finished_at, created_at) >= $1)`, now.Add(-FailedWindow)).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("reports: count the failed deployments: %w", err)
 	}
@@ -194,7 +193,7 @@ func (s *Service) failedDeployments(ctx context.Context, now time.Time, limit in
 	rows, err := s.pool.Query(ctx, `SELECT d.id, coalesce(nullif(c.subject_cn, ''), nullif(c.label, ''), left(c.fingerprint_sha256, 16)),
 t.id, t.name::text, d.status, d.error_code, coalesce(d.finished_at, d.created_at)
 FROM deployments d JOIN certificates c ON c.id = d.certificate_id JOIN targets t ON t.id = d.target_id
-WHERE d.status IN `+failedStatuses+` AND coalesce(d.finished_at, d.created_at) >= $1
+WHERE d.status IN `+failedStatuses+` AND (d.status = 'needs_attention' OR coalesce(d.finished_at, d.created_at) >= $1)
 ORDER BY coalesce(d.finished_at, d.created_at) DESC, d.id DESC LIMIT NULLIF($2::int, 0)`, now.Add(-FailedWindow), limit)
 	if err != nil {
 		return nil, fmt.Errorf("reports: read the failed deployments: %w", err)

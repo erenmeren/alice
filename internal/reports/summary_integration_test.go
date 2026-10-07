@@ -14,6 +14,7 @@ import (
 
 	"alice/internal/alerts"
 	"alice/internal/audit"
+	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/notify"
@@ -110,7 +111,9 @@ func TestSummaryCountsMatchTheDatabase(t *testing.T) {
 	s, err := w.svc.Summary(context.Background(), reports.Viewer{Role: rbac.Admin})
 	require.NoError(t, err)
 	// Cumulative windows with the list filter's semantics: each count equals the rows its dashboard link opens.
-	assert.Equal(t, alerts.Counts{Monitored: 8, Expired: 1, Within7: 3, Within30: 6, Within60: 7}, s.Certificates)
+	assert.Equal(t, alerts.Counts{Monitored: 8, Expired: 1, Within7: 4, Within30: 7, Within60: 8}, s.Certificates,
+		"every certificate row, as the list counts them: spare.seed.test (no location) is in the windows, not in Monitored")
+	assertCountsEqualTheList(t, w.d, s.Certificates)
 	assert.Equal(t, 3, s.Targets.Total)
 	assert.Equal(t, 2, s.Targets.ByStatus["ok"])
 	assert.Equal(t, 1, s.Targets.ByStatus["host_key_changed"])
@@ -254,10 +257,12 @@ func TestSummaryWindowBoundariesAreStrict(t *testing.T) {
 	svc := reports.New(reports.Config{Pool: d.App, Clock: clk, Audit: audit.New(clk), Alerts: al, Delivery: delivery{}, License: lic{}})
 	s, err := svc.Summary(ctx, reports.Viewer{Role: rbac.Operator})
 	require.NoError(t, err)
-	assert.Equal(t, alerts.Counts{Monitored: 5, Expired: 0, Within7: 1, Within30: 2, Within60: 4}, s.Certificates)
+	assert.Equal(t, alerts.Counts{Monitored: 5, Expired: 1, Within7: 1, Within30: 2, Within60: 4}, s.Certificates,
+		"expired is not_after <= now; the windows are strict")
+	assertCountsEqualTheList(t, d, s.Certificates)
 }
 
-// The Key Vault line is cumulative too.
+// The Key Vault line is cumulative and counts keys and client secrets only.
 func TestSummaryKeyVaultLineIsCumulative(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
@@ -272,5 +277,49 @@ func TestSummaryKeyVaultLineIsCumulative(t *testing.T) {
 	s, err := svc.Summary(ctx, reports.Viewer{Role: rbac.Operator})
 	require.NoError(t, err)
 	assert.Equal(t, 1, s.Certificates.KVExpired)
-	assert.Equal(t, 3, s.Certificates.KVWithin30, "the expired client secret, the certificate and the key due in 10 days")
+	assert.Equal(t, 2, s.Certificates.KVWithin30, "the expired client secret and the key due in 10 days; the Key Vault certificate is not on this line")
+}
+
+// assertCountsEqualTheList: each count equals the rows inventory.ListCertificates returns for its window (no target filter).
+func assertCountsEqualTheList(t *testing.T, d *pgtest.DB, c alerts.Counts) {
+	t.Helper()
+	clk := clock.NewFake(t0)
+	inv := inventory.New(inventory.Config{Pool: d.App, Clock: clk, Audit: audit.New(clk)})
+	for window, want := range map[string]int{"expired": c.Expired, "7": c.Within7, "30": c.Within30, "60": c.Within60} {
+		f := inventory.CertificateFilter{Expiry: window, Limit: 200}
+		n := 0
+		for {
+			page, err := inv.ListCertificates(context.Background(), f)
+			require.NoError(t, err)
+			n += len(page.Items)
+			if page.NextCursor == "" {
+				break
+			}
+			f.Cursor = page.NextCursor
+		}
+		assert.Equal(t, want, n, "expiry=%s", window)
+	}
+}
+
+// A needs_attention deployment stays on the dashboard however old it is: it is waiting for a person.
+func TestNeedsAttentionDeploymentIsNeverAgedOut(t *testing.T) {
+	w := newWorld(t, false)
+	ctx := context.Background()
+	var cert uuid.UUID
+	require.NoError(t, w.d.Owner.QueryRow(ctx, `SELECT id FROM certificates WHERE subject_cn = 'shop.seed.test'`).Scan(&cert))
+	_, err := seed.Deployment(ctx, w.d.Owner, cert, w.web1, "needs_attention", "", t0.Add(-10*day))
+	require.NoError(t, err)
+	s, err := w.svc.Summary(ctx, reports.Viewer{Role: rbac.Operator})
+	require.NoError(t, err)
+	assert.Equal(t, 3, s.Deployments.Failed7d, "failed, rolled back and the 10-day-old needs_attention one")
+	cs, err := w.svc.Attention(ctx, reports.Viewer{Role: rbac.Operator})
+	require.NoError(t, err)
+	found := false
+	for _, c := range cs {
+		if c.Kind == "deployment_failed" && c.Name == "shop.seed.test" {
+			found = true
+			assert.Equal(t, t0.Add(-10*day), c.Since)
+		}
+	}
+	assert.True(t, found, "listed in the attention conditions")
 }
