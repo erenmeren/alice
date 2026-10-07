@@ -19,11 +19,11 @@ import (
 // refused: a failed sign-in (§25.5): the reason, one more auth.oidc.denied row carrying that reason, and no session.
 func (x *harness) refused(t *testing.T, want string, run func() error) {
 	t.Helper()
-	sessions := x.count(t, `SELECT count(*) FROM sessions WHERE revoked_at IS NULL`)
+	sessions := x.count(t, `SELECT count(*) FROM sessions`)
 	denied := x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'auth.oidc.denied'`)
 	err := run()
 	assert.Equal(t, want, reasonOf(err), "%v", err)
-	assert.LessOrEqual(t, x.count(t, `SELECT count(*) FROM sessions WHERE revoked_at IS NULL`), sessions, "no session")
+	assert.Equal(t, sessions, x.count(t, `SELECT count(*) FROM sessions`), "no session (a revocation is an update, never a new row)")
 	assert.Equal(t, denied+1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'auth.oidc.denied'`))
 	var got string
 	require.NoError(t, x.d.Owner.QueryRow(x.ctx, `SELECT details->>'reason' FROM audit_log WHERE action = 'auth.oidc.denied' ORDER BY seq DESC LIMIT 1`).Scan(&got))
@@ -396,4 +396,15 @@ func TestPruneStates(t *testing.T) {
 	n, err = x.svc.PruneStates(x.ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
+}
+
+// M-1 (O-11): the token endpoint answers but the key set cannot be read: a clear idp_unreachable, not login_invalid.
+func TestJWKSUnreachableIsIdPUnreachable(t *testing.T) {
+	x := newHarness(t)
+	x.ready(t)
+	_, err := x.d.Owner.Exec(x.ctx, `UPDATE oidc_providers SET jwks_uri = 'https://127.0.0.1:1/jwks' WHERE id = $1`, x.prov.ID)
+	require.NoError(t, err)
+	x.refused(t, "idp_unreachable", func() error { _, err := x.login(t, "/"); return err })
+	x.idp.NextLogin(fakeidp.Login{Subject: "u1", Username: "ada", Groups: []string{"ops"}})
+	x.refused(t, "idp_unreachable", func() error { _, err := x.login(t, "/"); return err }) // within the refetch minute
 }

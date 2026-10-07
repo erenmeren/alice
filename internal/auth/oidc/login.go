@@ -294,8 +294,12 @@ func (s *Service) verify(ctx context.Context, p Provider, raw string, row loginS
 	if err != nil {
 		return claims.Claims{}, nil, err
 	}
+	var probe fetchProbe
 	tok, err := gooidc.NewVerifier(p.IssuerURL, ks, &gooidc.Config{ClientID: p.ClientID, SupportedSigningAlgs: SigningAlgs,
-		SkipExpiryCheck: true}).Verify(ctx, raw)
+		SkipExpiryCheck: true}).Verify(withFetchProbe(ctx, &probe), raw)
+	if err != nil && probe.failed {
+		return claims.Claims{}, &refusal{reason: "idp_unreachable", detail: "jwks"}, nil // M-1, O-11
+	}
 	if err != nil {
 		return claims.Claims{}, &refusal{reason: "login_invalid", detail: "signature"}, nil
 	}

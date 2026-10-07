@@ -352,6 +352,17 @@ func (s *Service) UpdateProvider(ctx context.Context, a audit.Actor, id uuid.UUI
 	if err := f.validate(); err != nil {
 		return Provider{}, err
 	}
+	if p.IssuerURL != cur.IssuerURL {
+		// I-1: SSO users are matched by (provider, subject) and a subject is only unique within its issuer (O-09);
+		// pointing a provider with users at another issuer would hand their accounts to that issuer's subjects.
+		var inUse bool
+		if err := s.pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM users WHERE oidc_provider_id = $1)", id).Scan(&inUse); err != nil {
+			return Provider{}, fmt.Errorf("oidc: read the provider's users: %w", err)
+		}
+		if inUse {
+			return Provider{}, ErrProviderInUse
+		}
+	}
 	public, err := s.publicURL(ctx)
 	if err != nil {
 		return Provider{}, err
@@ -366,6 +377,21 @@ func (s *Service) UpdateProvider(ctx context.Context, a audit.Actor, id uuid.UUI
 	}
 	now := s.clock.Now().UTC()
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if p.IssuerURL != cur.IssuerURL {
+			// Checked again under the provider's row lock: a first sign-in's user insert takes FOR KEY SHARE on
+			// this row (the foreign key), so it cannot slip in between. Two statements: the EXISTS must run with a
+			// snapshot taken after the lock was granted, so it sees a user committed while this waited.
+			if _, err := tx.Exec(ctx, "SELECT 1 FROM oidc_providers WHERE id = $1 FOR UPDATE", id); err != nil {
+				return fmt.Errorf("oidc: lock the provider: %w", err)
+			}
+			var inUse bool
+			if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM users WHERE oidc_provider_id = $1)", id).Scan(&inUse); err != nil {
+				return fmt.Errorf("oidc: read the provider's users: %w", err)
+			}
+			if inUse {
+				return ErrProviderInUse
+			}
+		}
 		tag, err := tx.Exec(ctx, `UPDATE oidc_providers SET name = $3, issuer_url = $4, client_id = $5, scopes = $6, groups_claim = $7,
 ca_pem = $8, authorization_endpoint = $9, token_endpoint = $10, jwks_uri = $11, enabled = $12, version = version + 1, updated_at = $13
 WHERE id = $1 AND version = $2`, id, version, p.Name, p.IssuerURL, p.ClientID, p.Scopes, p.GroupsClaim, p.CAPEM,

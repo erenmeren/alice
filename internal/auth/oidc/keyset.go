@@ -34,16 +34,35 @@ var allowedAlgs = []jose.SignatureAlgorithm{jose.RS256, jose.ES256, jose.PS256}
 // cache headers (between 5 minutes and 24 hours, 1 hour without them), so a key the provider withdrew stops
 // verifying at the expiry; an unknown key ID refetches at most once per JWKSRefetchEvery; the JWKS is at most
 // MaxResponseBytes (the client's bound) and maxKeys keys. When the refetch at expiry fails, the expired keys are
-// not used.
+// dropped (fail closed; a deliberate deviation from S-2's "a failed re-read keeps the old set", accepted by the
+// controller as M-2): a withdrawn key never outlives its expiry, at the cost of SSO sign-ins failing for at least a
+// minute after a JWKS outage at expiry. A failed read is reported to the caller through withFetchProbe (M-1).
 type keySet struct {
 	client *http.Client
 	url    string
 	clock  clock.Clock
 
-	mu      sync.Mutex
-	keys    []jose.JSONWebKey
-	expires time.Time
-	fetched time.Time
+	mu          sync.Mutex
+	keys        []jose.JSONWebKey
+	expires     time.Time
+	fetched     time.Time
+	fetchFailed bool // the last read of the JWKS failed
+}
+
+// fetchProbe learns whether verifying one token needed the JWKS and could not read it. go-oidc wraps the key set's
+// error with %v, so the reason travels in the context instead of the error chain.
+type fetchProbe struct{ failed bool }
+
+type fetchProbeKey struct{}
+
+func withFetchProbe(ctx context.Context, p *fetchProbe) context.Context {
+	return context.WithValue(ctx, fetchProbeKey{}, p)
+}
+
+func noteFetchFailure(ctx context.Context) {
+	if p, ok := ctx.Value(fetchProbeKey{}).(*fetchProbe); ok {
+		p.failed = true
+	}
 }
 
 func newKeySet(client *http.Client, url string, clk clock.Clock) *keySet {
@@ -89,17 +108,22 @@ func (k *keySet) keysFor(ctx context.Context, kid string) ([]jose.JSONWebKey, er
 		}
 	}
 	if !k.fetched.IsZero() && now.Sub(k.fetched) < JWKSRefetchEvery {
+		if k.fetchFailed {
+			noteFetchFailure(ctx)
+		}
 		return nil, errSignature
 	}
 	k.fetched = now
 	keys, life, err := k.fetch(ctx)
 	if err != nil {
+		k.fetchFailed = true
+		noteFetchFailure(ctx)
 		if !live {
-			k.keys = nil // fail closed: expired keys are not used
+			k.keys = nil // fail closed: expired keys are not used (M-2)
 		}
 		return nil, err
 	}
-	k.keys, k.expires = keys, now.Add(life)
+	k.keys, k.expires, k.fetchFailed = keys, now.Add(life), false
 	if m := match(keys, kid); len(m) > 0 {
 		return m, nil
 	}

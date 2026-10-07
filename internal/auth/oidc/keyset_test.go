@@ -213,10 +213,14 @@ func TestJWKSExpiredAndUnreachableFailsClosed(t *testing.T) {
 	srv.status = http.StatusServiceUnavailable
 	srv.mu.Unlock()
 	clk.Advance(time.Hour)
-	_, err = ks.VerifySignature(ctx, tok)
+	var probe fetchProbe
+	_, err = ks.VerifySignature(withFetchProbe(ctx, &probe), tok)
 	assert.Error(t, err)
-	_, err = ks.VerifySignature(ctx, tok)
+	assert.True(t, probe.failed, "M-1: the caller learns the key set could not be read")
+	probe = fetchProbe{}
+	_, err = ks.VerifySignature(withFetchProbe(ctx, &probe), tok)
 	assert.Error(t, err)
+	assert.True(t, probe.failed, "still unreadable within the refetch minute")
 	assert.Equal(t, int32(2), srv.hits.Load(), "no second fetch within a minute")
 	srv.mu.Lock()
 	srv.status = 0

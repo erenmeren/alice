@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -288,6 +289,16 @@ func TestProviderLimitsAndDeletion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, public, "a disabled provider is not offered on the sign-in page")
 
+	// I-1: the issuer of a provider with users cannot change (their subjects belong to that issuer, O-09).
+	discoveries := x.idp.Stats().Discovery
+	issuer := x.idp.Issuer() + "/"
+	_, err = x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer})
+	assert.ErrorIs(t, err, oidc.ErrProviderInUse)
+	assert.Equal(t, discoveries, x.idp.Stats().Discovery, "refused before discovery")
+	renamed := "Corp IdP (old)"
+	_, err = x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{Name: &renamed})
+	require.NoError(t, err, "other fields still change")
+
 	other, err := x.svc.CreateProvider(x.ctx, x.admin, oidc.ProviderInput{Name: "Unused", IssuerURL: x.idp.Issuer(), ClientID: "unused",
 		ClientSecret: secrets.NewPlaintext([]byte("s")), CAPEM: string(x.idp.CAPEM())})
 	require.NoError(t, err)
@@ -299,3 +310,37 @@ func TestProviderLimitsAndDeletion(t *testing.T) {
 }
 
 func ptrBool(v bool) *bool { return &v }
+
+// I-1: an issuer change on a provider without users goes through; a first sign-in that inserts its user while the
+// change runs discovery is seen under the provider's row lock, and the change is refused.
+func TestIssuerChangeRefusedOnceAUserArrives(t *testing.T) {
+	x := newHarness(t)
+	idp2 := fakeidp.Start(t, fakeidp.Options{Now: x.clk.Now})
+	issuer2, ca2 := idp2.Issuer(), string(idp2.CAPEM())
+	p, err := x.svc.UpdateProvider(x.ctx, x.admin, x.prov.ID, x.prov.Version, oidc.ProviderPatch{IssuerURL: &issuer2, CAPEM: &ca2})
+	require.NoError(t, err, "no users yet: the issuer may change")
+	assert.Equal(t, issuer2, p.IssuerURL)
+
+	// A first sign-in's insert, not yet committed: the early check sees no user, the locked one waits for it.
+	tx, err := x.d.Owner.Begin(x.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(x.ctx) }()
+	_, err = tx.Exec(x.ctx, `INSERT INTO users (id, username, display_name, auth_source, role, role_source, oidc_provider_id, oidc_issuer,
+oidc_subject, created_at, updated_at) VALUES ($1, 'late', 'Late', 'oidc', 'auditor', 'oidc_mapping', $2, $3, 'u9', now(), now())`,
+		uuid.New(), p.ID, issuer2)
+	require.NoError(t, err)
+	issuer1, ca1 := x.idp.Issuer(), string(x.idp.CAPEM())
+	done := make(chan error, 1)
+	go func() {
+		_, err := x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer1, CAPEM: &ca1})
+		done <- err
+	}()
+	require.Eventually(t, func() bool {
+		return x.count(t, `SELECT count(*) FROM pg_locks WHERE NOT granted`) > 0
+	}, 10*time.Second, 10*time.Millisecond, "the change waits on the provider's row")
+	require.NoError(t, tx.Commit(x.ctx))
+	assert.ErrorIs(t, <-done, oidc.ErrProviderInUse)
+	got, err := x.svc.Provider(x.ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, issuer2, got.IssuerURL, "the issuer did not change")
+}

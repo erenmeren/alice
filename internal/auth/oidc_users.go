@@ -347,6 +347,13 @@ func (s *Service) StepUpOIDC(ctx context.Context, sessionHash []byte, userID uui
 	}
 	var token string
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Lock order (M-3): the "SSO users may be Admin" row FOR SHARE first, then the user row, as SignInOIDC does
+		// and as the switch-off takes them (switch FOR UPDATE, then the SSO Administrators' rows); the reverse order
+		// could deadlock a step-up against a switch-off.
+		var err error
+		if role, err = capRole(ctx, tx, role); err != nil {
+			return err
+		}
 		var (
 			u          ssoUser
 			source     string
@@ -354,7 +361,7 @@ func (s *Service) StepUpOIDC(ctx context.Context, sessionHash []byte, userID uui
 			subject    *string
 			curRole    string
 		)
-		err := tx.QueryRow(ctx, `SELECT username::text, role, auth_source, oidc_provider_id, oidc_subject, disabled_at IS NOT NULL
+		err = tx.QueryRow(ctx, `SELECT username::text, role, auth_source, oidc_provider_id, oidc_subject, disabled_at IS NOT NULL
 FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&u.username, &curRole, &source, &providerID, &subject, &u.disabled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrUnauthenticated
@@ -370,9 +377,6 @@ FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&u.username, &curRole, &sourc
 			return ErrOIDCOtherUser
 		case u.disabled:
 			return ErrOIDCUserDisabled
-		}
-		if role, err = capRole(ctx, tx, role); err != nil {
-			return err
 		}
 		now := s.clock.Now().UTC()
 		live, err := sessionLive(ctx, tx, Principal{SessionHash: sessionHash, UserID: userID}, "full", now)
