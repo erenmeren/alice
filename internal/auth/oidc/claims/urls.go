@@ -15,7 +15,8 @@ var ErrIssuer = errors.New("claims: the issuer must be an https:// address witho
 const maxNext = 2048
 
 // SafeNext returns raw when it is a path inside Alice's web application, else "/". It refuses absolute and
-// scheme-relative addresses, backslashes, white space and control characters, and API paths (O-05).
+// scheme-relative addresses, backslashes, white space and control characters, dot segments and API paths, in the
+// raw and in the percent-decoded path (O-05).
 func SafeNext(raw string) string {
 	if raw == "" || len(raw) > maxNext || raw[0] != '/' || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/\\") ||
 		raw == "/api" || strings.HasPrefix(raw, "/api/") || strings.ContainsRune(raw, '\\') ||
@@ -26,10 +27,27 @@ func SafeNext(raw string) string {
 	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" {
 		return "/"
 	}
-	if dec, err := url.PathUnescape(u.EscapedPath()); err != nil || strings.ContainsAny(dec, "\r\n\\") || strings.HasPrefix(dec, "//") {
+	dec, err := url.PathUnescape(u.EscapedPath())
+	if err != nil || !safeDecodedPath(dec) {
 		return "/"
 	}
 	return raw
+}
+
+// safeDecodedPath checks the percent-decoded path: no backslash or control character (%00, %09,
+// …), not scheme-relative, no "." or ".." segment (a browser resolves "/..//evil.example" to
+// "//evil.example"), and not an API path ("/%61pi/…").
+func safeDecodedPath(dec string) bool {
+	if strings.ContainsRune(dec, '\\') || strings.IndexFunc(dec, unicode.IsControl) >= 0 || strings.HasPrefix(dec, "//") ||
+		dec == "/api" || strings.HasPrefix(dec, "/api/") {
+		return false
+	}
+	for seg := range strings.SplitSeq(dec, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidateIssuer accepts https://host[:port][/path] of at most 500 bytes without user info, query or fragment

@@ -52,3 +52,15 @@ func TestSafeNextKeepsTheFragmentForTheCaller(t *testing.T) {
 	assert.Equal(t, "/settings#mail", SafeNext("/settings#mail"))
 	assert.Equal(t, "/", SafeNext("/settings#ma il"))
 }
+
+// Task 2 review hardening: dot segments and the decoded path. "/..//evil.example" resolves to
+// "//evil.example" on Alice's own host, and "/%61pi/..." is an API path once decoded.
+func TestSafeNextRefusesDotSegmentsAndDecodedAPIPaths(t *testing.T) {
+	for _, v := range []string{"/..//x", "/..//evil.example", "/a/../b", "/a/./b", "/.", "/..", "/a/..", "/%2e%2e//x", "/a/%2E/b",
+		"/%61pi/x", "/%61pi", "/%61%70%69/v1/auth/logout", "/%2F%2F", "/%2F%2Fevil.example", "/%5C", "/%5Cevil", "/a%00b", "/a%09b", "/a%7fb"} {
+		assert.Equal(t, "/", SafeNext(v), "%q", v)
+	}
+	for _, v := range []string{"/apis", "/api-keys", "/a/..b", "/a/.b/c", "/.well", "/certificates/web%20one", "/%61bc"} {
+		assert.Equal(t, v, SafeNext(v), "%q", v)
+	}
+}
