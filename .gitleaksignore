@@ -28,3 +28,6 @@ d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-
 2e3451787475fed3d08f0666ec7e215d3d2995d2:docs/superpowers/plans/2026-10-05-phase-6-ssh-key-rotation.md:generic-api-key:1904
 2e3451787475fed3d08f0666ec7e215d3d2995d2:docs/superpowers/plans/2026-10-05-phase-6-ssh-key-rotation.md:generic-api-key:1910
 2e3451787475fed3d08f0666ec7e215d3d2995d2:docs/superpowers/plans/2026-10-05-phase-6-ssh-key-rotation.md:generic-api-key:1911
+5366bd18c4fcd35cabb92c88fe8711da8e83a9f0:docs/security/reviews/phase-7.md:generic-api-key:219
+28b54985e4e9fcae742a8e75cad4f976cadb04a1:docs/superpowers/plans/2026-10-07-phase-7-alerts-dashboard-sso.md:generic-api-key:13
+28b54985e4e9fcae742a8e75cad4f976cadb04a1:docs/superpowers/plans/2026-10-07-phase-7-alerts-dashboard-sso.md:generic-api-key:7326
