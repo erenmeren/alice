@@ -259,7 +259,7 @@ secrets-scan: ## Scan git history for committed secrets
 
 .PHONY: fs-scan
 fs-scan: ## Scan the source tree for HIGH/CRITICAL vulnerabilities and secrets (trivy fs)
-	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(TRIVY_IMAGE) fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --skip-dirs '**/node_modules',.superpowers,.git,web/playwright-report,web/test-results,bin .
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(TRIVY_IMAGE) fs --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 --skip-dirs '**/node_modules',.superpowers,.claude,.git,web/playwright-report,web/test-results,bin .
 
 .PHONY: image-scan
 image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
