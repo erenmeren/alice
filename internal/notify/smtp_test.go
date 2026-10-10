@@ -10,12 +10,15 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"math/big"
+	"mime"
 	"net"
+	"net/mail"
 	"net/textproto"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -260,6 +263,32 @@ func TestSMTPMailerKeepsTheSubjectOnOneLine(t *testing.T) {
 	require.NoError(t, send(mailer(t, f, nil), notify.Message{To: "ada@example.com", Subject: "Hi\r\nBcc: evil@example.com", Body: "b"}))
 	for _, line := range strings.Split(f.got()[0].data, "\n") {
 		assert.False(t, strings.HasPrefix(line, "Bcc:"), line)
+	}
+}
+
+// Final review minor 14: no header line exceeds 998 octets (RFC 5322 2.1.1), whatever the subject: a long non-ASCII
+// subject is cut to MaxSubjectRunes with an ellipsis and folded between encoded words; a short one arrives unchanged.
+func TestSMTPMailerFoldsAndCapsALongSubject(t *testing.T) {
+	long := "Sertifika süresi doluyor: " + strings.Repeat("ş", 300) + ".example.com"
+	for _, subject := range []string{long, strings.Repeat("a", 2000), "Alice test e-postası", "plain ASCII subject"} {
+		f := newFakeSMTP(t)
+		require.NoError(t, send(mailer(t, f, nil), notify.Message{To: "ada@example.com", Subject: subject, Body: "b"}))
+		raw := f.got()[0].data
+		raw = strings.ReplaceAll(raw, "\r\n", "\n") // the fake reads DATA as text lines
+		head, _, _ := strings.Cut(raw, "\n\n")
+		for _, line := range strings.Split(head, "\n") {
+			assert.LessOrEqual(t, len(line), 998, line)
+		}
+		msg, err := mail.ReadMessage(strings.NewReader(raw))
+		require.NoError(t, err)
+		got, err := new(mime.WordDecoder).DecodeHeader(msg.Header.Get("Subject"))
+		require.NoError(t, err)
+		want := subject
+		if r := []rune(subject); len(r) > notify.MaxSubjectRunes {
+			want = string(r[:notify.MaxSubjectRunes-1]) + "…"
+		}
+		assert.Equal(t, want, got)
+		assert.LessOrEqual(t, utf8.RuneCountInString(got), notify.MaxSubjectRunes)
 	}
 }
 

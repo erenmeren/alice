@@ -192,14 +192,14 @@ func tlsFailure(err error) error {
 	return ErrSMTPTLS
 }
 
-// compose builds a plain-text UTF-8 message. The subject is kept on one line and
-// Q-encoded; the body is base64 so any language and line length is safe.
+// compose builds a plain-text UTF-8 message. The subject is one logical line, capped,
+// Q-encoded and folded (subjectHeader); the body is base64 so any language and line length is safe.
 func (m *SMTPMailer) compose(to *mail.Address, msg Message) []byte {
 	var b bytes.Buffer
 	header := func(k, v string) { b.WriteString(k + ": " + v + "\r\n") }
 	header("From", m.from.String())
 	header("To", to.String())
-	header("Subject", mime.QEncoding.Encode("utf-8", oneLine(msg.Subject)))
+	header("Subject", subjectHeader(msg.Subject))
 	header("Date", m.clock.Now().Format(time.RFC1123Z))
 	header("Message-ID", "<"+uuid.NewString()+"@alice.invalid>")
 	header("MIME-Version", "1.0")
@@ -213,6 +213,24 @@ func (m *SMTPMailer) compose(to *mail.Address, msg Message) []byte {
 	}
 	b.WriteString(enc + "\r\n")
 	return b.Bytes()
+}
+
+// MaxSubjectRunes is the longest subject sent; a longer one is cut with an ellipsis (a certificate's name can be 300
+// characters long).
+const MaxSubjectRunes = 200
+
+// subjectHeader is the Subject value: one line, at most MaxSubjectRunes characters, Q-encoded, and folded between its
+// encoded words (each at most 75 octets), so no header line exceeds the 998 octets of RFC 5322 a strict server enforces.
+func subjectHeader(subject string) string {
+	s := oneLine(subject)
+	if r := []rune(s); len(r) > MaxSubjectRunes {
+		s = string(r[:MaxSubjectRunes-1]) + "…"
+	}
+	enc := mime.QEncoding.Encode("utf-8", s)
+	if enc == s {
+		return s // plain ASCII, at most MaxSubjectRunes octets
+	}
+	return strings.ReplaceAll(enc, "?= =?", "?=\r\n =?")
 }
 
 // oneLine collapses all whitespace, including CR and LF, to single spaces.
