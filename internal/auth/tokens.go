@@ -51,10 +51,15 @@ func tokenHash(secret string) []byte {
 	return h[:]
 }
 
-// CreateToken issues a token for the caller. The secret is returned once.
+// CreateToken issues a token for the caller. The secret is returned once. A single sign-on user
+// gets none (ErrSSOUser): the identity provider owns that identity (SEC-015), and a token would
+// outlive the user's de-provisioning there, which Alice learns of only at the next sign-in (I-2).
 func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewToken) (string, Token, error) {
 	if p.Kind != rbac.UserSession {
 		return "", Token{}, ErrUnauthenticated
+	}
+	if p.AuthSource == AuthOIDC {
+		return "", Token{}, ErrSSOUser
 	}
 	var v validate.Errors
 	switch {
@@ -85,13 +90,16 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 		// The principal's role may predate a role change or disabling; the scope is checked
 		// against the owner's current row, held with FOR SHARE so UpdateUser (FOR UPDATE)
 		// cannot change it before this transaction commits.
-		var role string
-		err := tx.QueryRow(ctx, "SELECT role FROM users WHERE id = $1 AND disabled_at IS NULL FOR SHARE", p.UserID).Scan(&role)
+		var role, source string
+		err := tx.QueryRow(ctx, "SELECT role, auth_source FROM users WHERE id = $1 AND disabled_at IS NULL FOR SHARE", p.UserID).Scan(&role, &source)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrUnauthenticated
 		}
 		if err != nil {
 			return fmt.Errorf("read token owner: %w", err)
+		}
+		if source != AuthLocal {
+			return ErrSSOUser
 		}
 		// The caller's session is checked again under the row lock: a sign-out-everywhere or
 		// password reset that held the row (FOR UPDATE) and committed while this request waited

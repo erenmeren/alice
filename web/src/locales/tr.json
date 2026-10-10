@@ -291,6 +291,7 @@
     "revokeNamed": "İptal et: {{name}}",
     "revokeTitle": "İptal edilecek anahtar: {{name}}",
     "revokeText": "Bu anahtarı kullanan betikler hemen çalışmayı durdurur.",
+    "ssoNoCreate": "Çoklu oturum açma (SSO) ile oturum açtığınız için API anahtarı oluşturamazsınız. Bir betik için anahtar gerekiyorsa bir Yöneticiye başvurun.",
     "revokeConfirm": "Anahtarı iptal et",
     "columns": {
       "name": "Ad",

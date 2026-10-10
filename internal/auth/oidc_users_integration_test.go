@@ -4,6 +4,9 @@ package auth_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -451,6 +454,56 @@ func TestLockoutEmailIsInTheLockoutTransaction(t *testing.T) {
 	assert.Zero(t, e.countAction(t, "auth.lockout", "failure"))
 }
 
+// ssoTokens stores n API tokens of an SSO user as rows, as a token made before SSO users were refused one (I-2) would
+// be: CreateToken no longer issues them. It returns the secrets.
+func (e *env) ssoTokens(t *testing.T, userID uuid.UUID, scope rbac.Scope, n int) []string {
+	t.Helper()
+	var out []string
+	for range n {
+		b := make([]byte, 32)
+		_, _ = rand.Read(b)
+		secret := auth.TokenPrefix + base64.RawURLEncoding.EncodeToString(b)
+		h := sha256.Sum256([]byte(secret))
+		_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, expires_at, created_at)
+VALUES ($1, $2, 'legacy', $3, $4, $5, $6, $7)`, uuid.Must(uuid.NewV7()), userID, h[:], secret[:12], []string{string(scope)},
+			e.clk.Now().Add(30*24*time.Hour), e.clk.Now())
+		require.NoError(t, err)
+		out = append(out, secret)
+	}
+	return out
+}
+
+// I-2: an SSO user gets no API token (ALC-USR-0003): a token would outlive the user's de-provisioning at the identity
+// provider. A local user still gets one.
+func TestSSOUserCannotCreateTokens(t *testing.T) {
+	e := newEnv(t)
+	admin, _ := e.adminPrincipal(t)
+	e.allowAdmin(t, true)
+	p := e.provider(t)
+	id := identity(p, "sub-1", "boss", "")
+	id.AuthTime = e.clk.Now()
+	res, err := e.svc.SignInOIDC(e.ctx, id, rbac.Admin, meta)
+	require.NoError(t, err)
+	pr := e.principal(t, res.Token)
+	require.True(t, pr.Subject(e.clk.Now()).StepUp)
+	for _, scope := range []rbac.Scope{rbac.ScopeRead, rbac.ScopeOperate} {
+		_, _, err = e.svc.CreateToken(e.ctx, pr, meta, auth.NewToken{Name: "deploy", Scope: scope, ExpiresInDays: 1})
+		assert.ErrorIs(t, err, auth.ErrSSOUser, scope)
+	}
+	// The stored row decides, not the principal: a principal claiming a local source is refused as well.
+	forged := pr
+	forged.AuthSource = auth.AuthLocal
+	_, _, err = e.svc.CreateToken(e.ctx, forged, meta, auth.NewToken{Name: "deploy", Scope: rbac.ScopeRead, ExpiresInDays: 1})
+	assert.ErrorIs(t, err, auth.ErrSSOUser)
+	var n int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT count(*) FROM api_tokens WHERE user_id = $1`, pr.UserID).Scan(&n))
+	assert.Zero(t, n)
+	assert.Zero(t, e.countAction(t, "token.created", "success"))
+
+	_, _, err = e.svc.CreateToken(e.ctx, admin, meta, auth.NewToken{Name: "ci", Scope: rbac.ScopeRead, ExpiresInDays: 1})
+	require.NoError(t, err, "a local user still gets a token")
+}
+
 // Controller ruling on O-08/SEC-014: access ended at the identity provider ends every credential Alice
 // issued on it — the sessions and every API token, each revocation audited.
 func TestRefuseOIDCRevokesTokens(t *testing.T) {
@@ -460,7 +513,7 @@ func TestRefuseOIDCRevokesTokens(t *testing.T) {
 	res, err := e.svc.SignInOIDC(e.ctx, id, rbac.Operator, meta)
 	require.NoError(t, err)
 	pr := e.principal(t, res.Token)
-	secrets, _ := e.newTokens(t, pr, 2)
+	secrets := e.ssoTokens(t, pr.UserID, rbac.ScopeRead, 2)
 
 	require.NoError(t, e.svc.RefuseOIDC(e.ctx, id, "login_invalid", meta))
 	assert.True(t, e.tokenWorks(t, secrets[0]), "a token problem says nothing about the user's access")
@@ -487,9 +540,8 @@ func TestDemoteSSOAdminsCapsTokensByTheNewRole(t *testing.T) {
 	res, err := e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "boss", ""), rbac.Admin, meta)
 	require.NoError(t, err)
 	pr := e.principal(t, res.Token)
-	reads, _ := e.newTokens(t, pr, 1)
-	operate, _, err := e.svc.CreateToken(e.ctx, pr, meta, auth.NewToken{Name: "deploy", Scope: rbac.ScopeOperate, ExpiresInDays: 30})
-	require.NoError(t, err)
+	reads := e.ssoTokens(t, pr.UserID, rbac.ScopeRead, 1)
+	operate := e.ssoTokens(t, pr.UserID, rbac.ScopeOperate, 1)[0]
 
 	tx, err := e.db.App.Begin(e.ctx)
 	require.NoError(t, err)

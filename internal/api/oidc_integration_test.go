@@ -539,3 +539,38 @@ func TestX05BreakGlassWhileIdPDown(t *testing.T) {
 	requireError(t, local.do(http.MethodPost, "/api/v1/sso/providers/"+p+"/actions/refresh", nil, ifMatchOf(etagVersion(t, cur))),
 		http.StatusBadGateway, "ALC-SSO-0001")
 }
+
+// I-1 and I-2 over the wire: a silent sign-in at the provider (an hour-old auth_time) gets no step-up window, so a
+// stepped-up action answers ALC-AUTH-0003 and the provider's step-up is needed; a fresh one opens it. Either way an SSO
+// user gets no API token (ALC-USR-0003), and the answer carries no token.
+func TestSSOSessionWindowAndNoTokensOverTheWire(t *testing.T) {
+	s, admin, adminAcct := installedWithFakes(t)
+	p := s.ssoReady(t, admin, adminAcct)
+	body := map[string]any{"name": "deploy", "scope": "read", "expires_in_days": 30}
+	type session struct {
+		StepUpUntil *time.Time `json:"stepup_until"`
+	}
+
+	s.idp.NextLogin(fakeidp.Login{Subject: "u1", Username: "omer", Groups: []string{"alice-operators"},
+		Extra: map[string]any{"auth_time": s.clock.Now().Add(-time.Hour).Unix()}})
+	silent := s.freshClient()
+	require.Equal(t, http.StatusSeeOther, s.browserSSO(t, silent, p).Code)
+	assert.Nil(t, decodeBody[session](t, silent.do(http.MethodGet, "/api/v1/auth/session", nil)).StepUpUntil, "I-1: the window stays closed")
+	requireError(t, silent.do(http.MethodPost, "/api/v1/tokens", body), http.StatusForbidden, "ALC-AUTH-0003")
+
+	s.idp.NextLogin(fakeidp.Login{Subject: "u1", Username: "omer", Groups: []string{"alice-operators"}})
+	require.Equal(t, http.StatusSeeOther, s.stepUpSSO(t, silent, "/tokens").Code)
+	assert.NotNil(t, decodeBody[session](t, silent.do(http.MethodGet, "/api/v1/auth/session", nil)).StepUpUntil, "the step-up opens it")
+	rec := silent.do(http.MethodPost, "/api/v1/tokens", body)
+	requireError(t, rec, http.StatusConflict, "ALC-USR-0003")
+	assert.NotContains(t, rec.Body.String(), "alice_")
+
+	s.idp.NextLogin(fakeidp.Login{Subject: "u1", Username: "omer", Groups: []string{"alice-operators"}})
+	fresh := s.freshClient()
+	require.Equal(t, http.StatusSeeOther, s.browserSSO(t, fresh, p).Code)
+	assert.NotNil(t, decodeBody[session](t, fresh.do(http.MethodGet, "/api/v1/auth/session", nil)).StepUpUntil, "a fresh auth_time opens it")
+	requireError(t, fresh.do(http.MethodPost, "/api/v1/tokens", map[string]any{"name": "ops", "scope": "operate", "expires_in_days": 365}),
+		http.StatusConflict, "ALC-USR-0003")
+	assert.Zero(t, s.countWhere("api_tokens", "user_id = '"+s.userID("omer")+"'"))
+	assert.Zero(t, s.countWhere("audit_log", "action = 'token.created'"))
+}

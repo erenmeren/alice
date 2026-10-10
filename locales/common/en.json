@@ -147,7 +147,7 @@
       },
       "sso_user": {
         "title": "This change is not possible for a single sign-on user.",
-        "cause": "The role of a single sign-on user comes from their groups, and they have no Alice password or authenticator.",
+        "cause": "The role of a single sign-on user comes from their groups. They have no Alice password or authenticator, and they cannot create API tokens.",
         "action": "Change the user's groups at the identity provider; disable the user here if they must stop at once."
       }
     },

@@ -30,14 +30,22 @@ export function TokensPage() {
   const [creating, setCreating] = useState(false);
   const [revoking, setRevoking] = useState<ApiToken | null>(null);
   const [created, setCreated] = useState<string | null>(null);
+  // A single sign-on user gets no API token (the server answers ALC-USR-0003): no create control, a note instead.
+  const { session } = useAuth();
+  const sso = session?.user.auth_source === 'oidc';
 
   return (
     <Stack gap="md">
       <Group justify="space-between">
         <Title order={1}>{t('tokens.title')}</Title>
-        <Button onClick={() => setCreating(true)}>{t('tokens.create')}</Button>
+        {!sso && <Button onClick={() => setCreating(true)}>{t('tokens.create')}</Button>}
       </Group>
       <Text size="sm">{t('tokens.intro')}</Text>
+      {sso && (
+        <Alert color="blue" data-testid="tokens-sso-note">
+          {t('tokens.ssoNoCreate')}
+        </Alert>
+      )}
       {created && (
         <Alert color="yellow" title={t('tokens.createdTitle')}>
           <Stack gap="xs">
@@ -96,7 +104,7 @@ export function TokensPage() {
           </Table.Tbody>
         </Table>
       )}
-      {creating && (
+      {creating && !sso && (
         <CreateTokenModal
           onClose={() => setCreating(false)}
           onCreated={(secret) => {

@@ -291,6 +291,7 @@
     "revokeNamed": "Revoke token {{name}}",
     "revokeTitle": "Revoke the token {{name}}?",
     "revokeText": "Scripts that use this token stop working immediately.",
+    "ssoNoCreate": "You sign in through single sign-on, so you cannot create API tokens. Ask an Administrator if a script needs one.",
     "revokeConfirm": "Revoke token",
     "columns": {
       "name": "Name",

@@ -147,7 +147,7 @@
       },
       "sso_user": {
         "title": "Bu değişiklik çoklu oturum açma kullanıcısı için yapılamaz.",
-        "cause": "Çoklu oturum açma kullanıcısının rolü gruplarından gelir ve Alice parolası ya da doğrulayıcısı yoktur.",
+        "cause": "Çoklu oturum açma kullanıcısının rolü gruplarından gelir. Bu kullanıcının Alice parolası ya da doğrulayıcısı yoktur ve API anahtarı oluşturamaz.",
         "action": "Kullanıcının gruplarını kimlik sağlayıcıda değiştirin; hemen durması gerekiyorsa kullanıcıyı burada devre dışı bırakın."
       }
     },

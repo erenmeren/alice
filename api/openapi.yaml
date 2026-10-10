@@ -544,7 +544,7 @@ paths:
         default: { $ref: "#/components/responses/Error" }
     post:
       operationId: createToken
-      summary: Create an API token; the secret is returned once
+      summary: Create an API token; the secret is returned once. A single sign-on user gets none (409 ALC-USR-0003)
       x-permission: session.stepup
       requestBody:
         required: true
@@ -569,6 +569,7 @@ paths:
                 properties:
                   token: { type: string, description: "alice_ followed by 43 characters; store it now, it is never shown again" }
                   item: { $ref: "#/components/schemas/APIToken" }
+        "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/tokens/{id}:

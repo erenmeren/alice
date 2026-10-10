@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ApiToken, SessionInfo } from '../api/types';
-import { operatorSession, sessionFor } from '../test/fixtures';
+import { operatorSession, sessionFor, ssoSessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -90,6 +90,37 @@ describe('TokensPage', () => {
     const dialog = await screen.findByRole('dialog');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Revoke token' }));
     await waitFor(() => expect(deleted).toBe(token.id));
+  });
+
+  it('offers no token creation to a single sign-on user, who can still revoke a token (I-2)', async () => {
+    signedInAs(ssoSessionFor('admin'), [token]);
+    let posted = false;
+    server.use(
+      http.post('/api/v1/tokens', () => {
+        posted = true;
+        return HttpResponse.json({}, { status: 500 });
+      }),
+    );
+    await renderRoute('/tokens');
+    expect(await screen.findByRole('heading', { name: 'API tokens' })).toBeInTheDocument();
+    expect(
+      await screen.findByText('You sign in through single sign-on, so you cannot create API tokens. Ask an Administrator if a script needs one.'),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create token' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Revoke token backup script' })).toBeInTheDocument();
+    expect(posted).toBe(false);
+  });
+
+  it('tells a single sign-on user in Turkish that tokens are not available', async () => {
+    signedInAs(ssoSessionFor('operator', 'tr'), []);
+    await renderRoute('/tokens', { languages: ['tr-TR'] });
+    expect(await screen.findByRole('heading', { name: 'API anahtarları' })).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        'Çoklu oturum açma (SSO) ile oturum açtığınız için API anahtarı oluşturamazsınız. Bir betik için anahtar gerekiyorsa bir Yöneticiye başvurun.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Anahtar oluştur' })).not.toBeInTheDocument();
   });
 
   it('names the revoke button of each token in Turkish', async () => {
