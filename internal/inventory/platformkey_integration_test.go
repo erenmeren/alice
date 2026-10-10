@@ -196,3 +196,19 @@ func TestSetupGuideWithoutAScriptFailsWithItsOwnError(t *testing.T) {
 	_, err = h.svc.SetupGuide(h.ctx, "")
 	require.ErrorIs(t, err, inventory.ErrNoSetupScript)
 }
+
+// A stored key whose plaintext is not a seed is reported as damaged, without its bytes.
+func TestCredentialsRefuseADamagedPlatformKey(t *testing.T) {
+	h := newHarness(t, withSeed)
+	pk, err := h.svc.EnsurePlatformKey(h.ctx)
+	require.NoError(t, err)
+	env, err := h.keyring.Seal(inventory.CredentialLocation(pk.ID), []byte("short"))
+	require.NoError(t, err)
+	_, err = h.db.Owner.Exec(h.ctx, "UPDATE credentials SET ciphertext = $2, nonce = $3, wrapped_dek = $4, key_version = $5 WHERE id = $1",
+		pk.ID, env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion)
+	require.NoError(t, err)
+	_, _, err = h.svc.Credentials().SSHSigner(h.ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "damaged")
+	assert.NotContains(t, err.Error(), "short")
+}

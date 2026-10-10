@@ -95,3 +95,45 @@ func TestMarkMissingNamesRefusesAnUnknownTable(t *testing.T) {
 	_, err := markMissingNames(context.Background(), nil, "targets", uuid.New(), nil, time.Now())
 	assert.Error(t, err)
 }
+
+func TestPrepareKVKeysAndSecretsAreCheckedItemByItem(t *testing.T) {
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	ver := fmt.Sprintf("%032x", 7)
+	s := &Service{}
+	p, err := s.prepareKV(providers.DiscoveryResult{KV: &providers.KVInventory{
+		KeysListed: true, SecretsListed: true,
+		Keys: []providers.KVKey{
+			{Name: "denied", DetailsProblem: "forbidden"},
+			{Name: "broken", DetailsProblem: "anything else"},
+			{Name: "plain", Details: &providers.KVKeyDetails{Version: ver, Size: 4096}},
+			{Name: "typed", Details: &providers.KVKeyDetails{Version: "bad", KeyType: "rsa", Curve: "P-256", Size: 99999}},
+			{Name: "bad name!"},
+			{Name: "PLAIN"}, // the same name once case is folded
+		},
+		Secrets: []providers.KVSecret{
+			{Name: "ok", ContentType: "text/plain"},
+			{Name: "ctl", ContentType: "a\x00b"},
+			{Name: "bad name!"},
+			{Name: "OK"},
+		}}}, now)
+	assert.NoError(t, err)
+	byName := map[string]kvKeyItem{}
+	for _, k := range p.keys {
+		byName[k.name] = k
+	}
+	assert.Len(t, p.keys, 4)
+	assert.Equal(t, "forbidden", byName["denied"].problem)
+	assert.Equal(t, "failed", byName["broken"].problem, "an unknown problem is reported as a plain failure")
+	assert.True(t, byName["plain"].hasDetails)
+	assert.Equal(t, ver, byName["plain"].version)
+	assert.Equal(t, 4096, byName["plain"].size)
+	assert.Empty(t, byName["plain"].keyType)
+	assert.Empty(t, byName["plain"].curve)
+	assert.Empty(t, byName["typed"].version, "a version id of the wrong shape is not stored")
+	assert.Zero(t, byName["typed"].size, "a size outside the bound is not stored")
+	assert.Len(t, p.secrets, 2)
+	assert.Equal(t, "text/plain", p.secrets[1].contentType)
+	assert.Empty(t, p.secrets[0].contentType, "a content type with a control character is dropped")
+	assert.Contains(t, p.truncated, kvKeys, "an unusable key cuts its kind")
+	assert.Contains(t, p.truncated, kvSecrets)
+}

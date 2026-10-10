@@ -192,3 +192,7 @@ func SetPlanInsertHook(f func(location uuid.UUID)) (restore func()) {
 	planInsertHook = f
 	return func() { planInsertHook = old }
 }
+
+// CredentialLocation exposes credentialLocation to the integration tests, which seal a damaged
+// platform key at the place the real one lives.
+func CredentialLocation(id uuid.UUID) secrets.Location { return credentialLocation(id) }
