@@ -577,3 +577,36 @@ func TestItemsHorizonIsInclusive(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, items, 1)
 }
+
+// "Monitored" (R42 row 4) excludes a missing location and a location on a deleted target (Task 17 review): Items and
+// Counts skip both, also for a certificate that has a live location besides them, whose servers and websites then come
+// from the live location only.
+func TestMissingLocationsAndDeletedTargetsAreNotMonitored(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	s := newService(t, d, clock.NewFake(t0), lic{}, &recorder{})
+	live, missing, gone := seedTarget(t, d, "live", "nginx", nil), seedTarget(t, d, "missing", "nginx", nil), seedTarget(t, d, "gone", "nginx", nil)
+	seedCert(t, d, "mixed.example.com", t0.Add(day), []uuid.UUID{live, missing, gone}, "mixed.example.com")
+	seedCert(t, d, "only-missing.example.com", t0.Add(day), []uuid.UUID{missing})
+	seedCert(t, d, "only-gone.example.com", t0.Add(day), []uuid.UUID{gone})
+	_, err := d.Owner.Exec(ctx, `UPDATE certificate_locations SET missing_since = $2,
+servers = '[{"names": ["stale.example.com"], "listens": [], "file": "/etc/nginx/conf.d/site.conf", "line": 1}]' WHERE target_id = $1`,
+		missing, t0)
+	require.NoError(t, err)
+	_, err = d.Owner.Exec(ctx, `UPDATE certificate_locations SET servers = '[{"names": ["deleted.example.com"], "listens": [],
+"file": "/etc/nginx/conf.d/site.conf", "line": 1}]' WHERE target_id = $1`, gone)
+	require.NoError(t, err)
+	_, err = d.Owner.Exec(ctx, `UPDATE targets SET deleted_at = $2 WHERE id = $1`, gone, t0)
+	require.NoError(t, err)
+
+	c, err := s.Counts(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, c.Monitored)
+	items, err := s.Items(ctx, alerts.Kinds(), t0.Add(30*day), 0)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, "mixed.example.com", items[0].Name)
+	assert.Equal(t, []string{"live"}, items[0].Servers)
+	assert.Equal(t, []uuid.UUID{live}, items[0].TargetIDs)
+	assert.Equal(t, []string{"mixed.example.com"}, items[0].Websites)
+}
