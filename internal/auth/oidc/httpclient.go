@@ -18,8 +18,8 @@ var (
 )
 
 // httpClient is the client of one provider (SEC-013, A-14, R42 row 11): TLS 1.2+, the system roots plus the
-// provider's CA bundle, every connection through netaddr, no proxy, no redirect, a 10-second budget, and answers cut
-// at MaxResponseBytes.
+// provider's CA bundle, every connection through netaddr, no proxy, no redirect, no keep-alive, a 10-second budget,
+// and answers cut at MaxResponseBytes.
 func (s *Service) httpClient(caPEM string) (*http.Client, error) {
 	roots, err := x509.SystemCertPool()
 	if err != nil {
@@ -34,7 +34,9 @@ func (s *Service) httpClient(caPEM string) (*http.Client, error) {
 			return netaddr.DialContext(ctx, &net.Dialer{Timeout: HTTPTimeout}, network, addr)
 		}
 	}
-	tr := &http.Transport{DialContext: dial, Proxy: nil, ForceAttemptHTTP2: true, TLSHandshakeTimeout: HTTPTimeout,
+	// No keep-alive: a client is built per exchange or discovery and never closed, so an idle connection (and its
+	// two goroutines) would outlive every SSO callback until the provider closed it.
+	tr := &http.Transport{DialContext: dial, Proxy: nil, ForceAttemptHTTP2: true, DisableKeepAlives: true, TLSHandshakeTimeout: HTTPTimeout,
 		ResponseHeaderTimeout: HTTPTimeout, MaxResponseHeaderBytes: 64 << 10,
 		TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}}
 	return limitedClient(&http.Client{Transport: tr, Timeout: HTTPTimeout}), nil
