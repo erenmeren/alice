@@ -47,7 +47,7 @@ func TestSignInOIDCProvisionsAndMatchesBySubject(t *testing.T) {
 	pr := e.principal(t, res.Token)
 	assert.Equal(t, rbac.Operator, pr.Role)
 	assert.Equal(t, "oidc", pr.AuthSource)
-	assert.True(t, pr.Subject(e.clk.Now()).StepUp, "the IdP just authenticated the user: the step-up window is open")
+	assert.False(t, pr.Subject(e.clk.Now()).StepUp, "I-1: no auth_time, no proof of a fresh sign-in: the step-up window stays closed")
 	assert.Equal(t, "oidc", res.Info.AuthSource)
 	require.NotNil(t, res.Info.SSOProviderID)
 	assert.Equal(t, p, *res.Info.SSOProviderID)
@@ -207,6 +207,42 @@ func TestS7EmailUpdateKeepsTheCollisionRule(t *testing.T) {
 	// The same address in another case is not a change.
 	_, err = e.svc.SignInOIDC(e.ctx, identity(p, "sub-1", "ada", "ADA@corp.example.com"), rbac.Operator, meta)
 	require.NoError(t, err)
+}
+
+// I-1: an SSO sign-in opens the step-up window only when auth_time is within StepUpWindow of Alice's clock, and the
+// window ends StepUpWindow after auth_time; a stale, future or missing auth_time leaves it closed.
+func TestSignInOIDCOpensStepUpOnlyForAFreshAuthTime(t *testing.T) {
+	e := newEnv(t)
+	p := e.provider(t)
+	now := e.clk.Now()
+	for _, c := range []struct {
+		name     string
+		authTime time.Time
+		until    time.Time // zero: closed
+	}{
+		{"absent", time.Time{}, time.Time{}},
+		{"stale", now.Add(-time.Hour), time.Time{}},
+		{"just outside", now.Add(-auth.StepUpWindow), time.Time{}},
+		{"far future", now.Add(2 * time.Minute), time.Time{}},
+		{"fresh", now, now.Add(auth.StepUpWindow)},
+		{"four minutes old", now.Add(-4 * time.Minute), now.Add(time.Minute)},
+		{"skewed ahead", now.Add(30 * time.Second), now.Add(auth.StepUpWindow)},
+	} {
+		id := identity(p, "sub-"+c.name, "user", "")
+		id.AuthTime = c.authTime
+		res, err := e.svc.SignInOIDC(e.ctx, id, rbac.Operator, meta)
+		require.NoError(t, err, c.name)
+		pr := e.principal(t, res.Token)
+		if c.until.IsZero() {
+			assert.False(t, pr.Subject(now).StepUp, c.name)
+			assert.True(t, pr.StepUpUntil.IsZero(), c.name)
+			assert.Nil(t, res.Info.StepUpUntil, c.name)
+			continue
+		}
+		assert.True(t, pr.Subject(now).StepUp, c.name)
+		assert.True(t, c.until.Equal(pr.StepUpUntil), "%s: %v", c.name, pr.StepUpUntil)
+		assert.False(t, pr.Subject(c.until).StepUp, c.name)
+	}
 }
 
 func TestSSOUserRulesAndBreakGlass(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -58,6 +59,9 @@ type OIDCIdentity struct {
 	Username    string // claims.Username
 	DisplayName string
 	Email       string
+	// AuthTime is the ID token's auth_time (zero when it had none). A sign-in opens the step-up window only when
+	// it is within StepUpWindow of Alice's clock: a silent sign-in at the provider proves no fresh credential (I-1).
+	AuthTime time.Time
 }
 
 // sessionEndingReasons are the refusals that say the user no longer has access: they end the
@@ -226,8 +230,10 @@ func capRole(ctx context.Context, tx pgx.Tx, role rbac.Role) (rbac.Role, error) 
 // its group mappings resolved (C10). In one transaction it finds the user by provider and
 // subject or provisions one (never linking a local account: ErrOIDCEmailInUse), refuses a
 // disabled user, follows the provider's role, display name and e-mail (the e-mail under the
-// same collision rule, S-7), and opens a full session whose step-up window is open: the
-// identity provider has just authenticated the user.
+// same collision rule, S-7), and opens a full session. Its step-up window is open only when
+// the ID token's auth_time shows the provider authenticated the user within StepUpWindow
+// (ssoStepUpUntil); a silent sign-in leaves it closed, and a stepped-up action then needs the
+// provider's step-up (prompt=login, max_age=0).
 func (s *Service) SignInOIDC(ctx context.Context, id OIDCIdentity, role rbac.Role, m Meta) (SessionResult, error) {
 	id, err := id.normalized()
 	if err != nil {
@@ -293,7 +299,8 @@ VALUES ($1, $2, $3, $4, 'oidc', NULL, $5, 'oidc_mapping', $6, $7, $8, $9, $10, $
 			}
 		}
 		userID = u.id
-		if token, err = s.startFullSession(ctx, tx, u.id, m); err != nil {
+		if token, err = s.insertSession(ctx, tx, newSession{userID: u.id, kind: "full", createdAt: now, expiresAt: now.Add(SessionAbsolute),
+			stepUp: ssoStepUpUntil(now, id.AuthTime)}, m); err != nil {
 			return err
 		}
 		// Audit rows last, after every row lock of this transaction.
@@ -305,6 +312,26 @@ VALUES ($1, $2, $3, $4, 'oidc', NULL, $5, 'oidc_mapping', $6, $7, $8, $9, $10, $
 		return SessionResult{}, err
 	}
 	return s.resultFor(ctx, userID, token, nil)
+}
+
+// authTimeSkew is the clock skew accepted on an auth_time in the future, as claims.Leeway.
+const authTimeSkew = time.Minute
+
+// ssoStepUpUntil is the end of the step-up window an SSO sign-in opens: authTime + StepUpWindow,
+// never later than now + StepUpWindow, and nil (closed) when the token had no auth_time, when
+// auth_time is in the future beyond the skew, or when the window has already passed (I-1).
+func ssoStepUpUntil(now, authTime time.Time) *time.Time {
+	if authTime.IsZero() || authTime.After(now.Add(authTimeSkew)) {
+		return nil
+	}
+	until := authTime.UTC().Add(StepUpWindow)
+	if limit := now.Add(StepUpWindow); until.After(limit) {
+		until = limit
+	}
+	if !now.Before(until) {
+		return nil
+	}
+	return &until
 }
 
 // cmpErr returns err when set, else refusal.

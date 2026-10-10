@@ -218,7 +218,7 @@ func (s *Service) complete(ctx context.Context, providerID uuid.UUID, q url.Valu
 		return Completion{}, r, err
 	}
 	*id = auth.OIDCIdentity{ProviderID: p.ID, Issuer: c.Issuer, Subject: c.Subject, Username: claims.Username(c), DisplayName: c.Name,
-		Email: c.Email}
+		Email: c.Email, AuthTime: c.AuthTime}
 	if id.DisplayName == "" {
 		id.DisplayName = id.Username
 	}

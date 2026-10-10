@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/auth"
 	"alice/internal/auth/oidc"
 	"alice/internal/rbac"
 	"alice/internal/testutil/fakeidp"
@@ -352,6 +353,49 @@ func TestStepUpViaIdP(t *testing.T) {
 	require.NoError(t, x.d.Owner.QueryRow(x.ctx, `SELECT id FROM users WHERE username = 'ada-admin'`).Scan(&localID))
 	_, err = x.svc.Begin(x.ctx, oidc.BeginInput{StepUp: true, SessionHash: up.SessionHash, UserID: localID, Next: "/"})
 	assert.Error(t, err)
+}
+
+// I-1: a sign-in opens the step-up window only when the ID token's auth_time is within the 5-minute window of Alice's
+// clock. A silent sign-in at the provider (an old or absent auth_time) leaves it closed, and the provider's step-up
+// (prompt=login, max_age=0) then opens it.
+func TestSignInOpensStepUpOnlyForAFreshAuthTime(t *testing.T) {
+	x := newHarness(t)
+	x.mapGroup(t, "ops", rbac.Operator)
+	signIn := func(name string, l fakeidp.Login, f fakeidp.Fault) auth.Principal {
+		t.Helper()
+		l.Subject, l.Username, l.Groups = "u1", "ada", []string{"ops"}
+		x.idp.SetFault(f)
+		x.idp.NextLogin(l)
+		c, err := x.login(t, "/")
+		require.NoError(t, err, name)
+		pr, err := x.auth.Authenticate(x.ctx, c.Session.Token)
+		require.NoError(t, err, name)
+		return pr
+	}
+	now := x.clk.Now()
+	fresh := signIn("fresh", fakeidp.Login{}, fakeidp.Fault{})
+	assert.True(t, fresh.Subject(now).StepUp, "the provider authenticated the user just now")
+	recent := signIn("recent", fakeidp.Login{Extra: map[string]any{"auth_time": now.Add(-4 * time.Minute).Unix()}}, fakeidp.Fault{})
+	assert.True(t, recent.Subject(now).StepUp)
+	assert.Equal(t, now.Add(time.Minute), recent.StepUpUntil, "the window ends 5 minutes after the provider's sign-in")
+
+	stale := signIn("stale", fakeidp.Login{Extra: map[string]any{"auth_time": now.Add(-time.Hour).Unix()}}, fakeidp.Fault{})
+	assert.False(t, stale.Subject(now).StepUp, "a silent sign-in with an old auth_time")
+	absent := signIn("absent", fakeidp.Login{}, fakeidp.Fault{OmitAuthTime: true})
+	assert.False(t, absent.Subject(now).StepUp, "no auth_time")
+	var open int
+	require.NoError(t, x.d.Owner.QueryRow(x.ctx, `SELECT count(*) FROM sessions WHERE id_hash = ANY($1) AND stepup_until IS NOT NULL`,
+		[][]byte{stale.SessionHash, absent.SessionHash}).Scan(&open))
+	assert.Zero(t, open, "stepup_until is NULL")
+
+	// The provider's step-up still opens the window of the closed session.
+	x.idp.SetFault(fakeidp.Fault{})
+	x.idp.NextLogin(fakeidp.Login{Subject: "u1", Username: "ada", Groups: []string{"ops"}})
+	done, err := x.stepUp(t, stale.SessionHash, stale.UserID)
+	require.NoError(t, err)
+	up, err := x.auth.Authenticate(x.ctx, done.Session.Token)
+	require.NoError(t, err)
+	assert.True(t, up.Subject(x.clk.Now()).StepUp)
 }
 
 // S-1: the step-up re-evaluates groups → role; a user who lost every mapped group is refused and loses the session,
