@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -319,7 +320,7 @@ public_key_sha256, pem_chain, source, first_seen_at, last_seen_at, created_at)
 SELECT gen_random_uuid(), encode(sha256(('fp' || i)::bytea), 'hex'),
        (ARRAY['=HYPERLINK("http://evil")', '+cmd', '-2+3', '@SUM(A1)', 'bulk'])[1 + i % 5] || '-' || i || '.export.test',
        $1::timestamptz - interval '90 days', $1::timestamptz + (i % 90) * interval '1 day', 'ecdsa',
-       encode(sha256(('pk' || i)::bytea), 'hex'), '', 'uploaded', now(), now(), now()
+       encode(sha256(('pk' || i)::bytea), 'hex'), '', (ARRAY['uploaded', 'discovered'])[1 + i % 2], now(), now(), now()
 FROM generate_series(1, $2::int) AS i`, s.clock.Now(), n)
 	require.NoError(t, err)
 	// Formula-like text in every other text column the export writes (label, sans, issuer, serial), and varied numbers
@@ -329,8 +330,18 @@ label = (ARRAY['=label', '', '@lbl', 'plain label'])[1 + (hashtext(id::text) & 3
 sans = CASE WHEN hashtext(id::text) % 2 = 0 THEN ARRAY['-a.export.test', 'b.export.test'] ELSE ARRAY['c.export.test'] END,
 issuer = (ARRAY['+CN=Evil CA', 'CN=Plain CA', E'\tCN=Tab CA'])[1 + (hashtext(id::text) & 3) % 3],
 serial = (ARRAY['-01', '0A1B'])[1 + (hashtext(id::text) & 1)],
-key_bits = 256 + (hashtext(id::text) & 1) * 128, self_signed = hashtext(id::text) % 3 = 0, chain_complete = hashtext(id::text) % 5 <> 0
+self_signed = hashtext(id::text) % 3 = 0, chain_complete = hashtext(id::text) % 5 <> 0,
+not_before = not_before - (abs(hashtext(id::text)) % 7) * interval '1 day',
+key_algorithm = (ARRAY['ecdsa', 'rsa', 'ed25519', 'ecdsa'])[1 + (hashtext(id::text) >> 4 & 3)],
+key_bits = (ARRAY[256, 2048, 256, 384])[1 + (hashtext(id::text) >> 4 & 3)]
 WHERE subject_cn LIKE '%.export.test'`)
+	require.NoError(t, err)
+	// Some certificates are on two servers (location_count 2).
+	_, err = s.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
+servers, first_seen_at, last_seen_at)
+SELECT gen_random_uuid(), t.id, 'nginx_file', '/etc/nginx/ssl/two-' || c.id || '.crt', '/etc/nginx/ssl/two-' || c.id || '.key', c.id, true,
+       '[]', now(), now()
+FROM certificates c, targets t WHERE c.subject_cn LIKE '%.export.test' AND hashtext(c.id::text) % 4 = 0 AND t.name = 'seed-web-3'`)
 	require.NoError(t, err)
 	_, err = s.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
 servers, first_seen_at, last_seen_at)
@@ -339,28 +350,73 @@ SELECT gen_random_uuid(), t.id, 'nginx_file', '/etc/nginx/ssl/' || c.id || '.crt
 FROM certificates c, targets t WHERE c.subject_cn LIKE '%.export.test' AND t.name = 'seed-web-2'`)
 	require.NoError(t, err)
 	_, err = s.db.Owner.Exec(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, first_seen_at, created_at)
-SELECT gen_random_uuid(), 'SHA256:' || substr(encode(sha256(('key' || i)::bytea), 'base64'), 1, 43), 'ssh-ed25519', 256,
+SELECT gen_random_uuid(), 'SHA256:' || substr(encode(sha256(('key' || i)::bytea), 'base64'), 1, 43),
+       (ARRAY['ssh-ed25519', 'ssh-rsa', 'ecdsa-sha2-nistp256', 'ssh-rsa'])[1 + i % 4], (ARRAY[256, 3072, 256, 1024])[1 + i % 4],
        'ssh-ed25519 AAAA' || i, $1::timestamptz - (i * interval '1 minute'), now()
 FROM generate_series(1, $2::int) AS i`, s.clock.Now(), n)
+	require.NoError(t, err)
+	_, err = s.db.Owner.Exec(ctx, `UPDATE ssh_keys SET weak = true WHERE public_key LIKE 'ssh-ed25519 AAAA%' AND bits = 1024`)
+	require.NoError(t, err)
+	_, err = s.db.Owner.Exec(ctx, `UPDATE ssh_keys SET is_platform_key = true
+WHERE id = (SELECT id FROM ssh_keys WHERE public_key = 'ssh-ed25519 AAAA2')`)
 	require.NoError(t, err)
 	_, err = s.db.Owner.Exec(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, comment, flags,
 first_seen_at, last_seen_at)
 SELECT gen_random_uuid(), k.id, t.id, CASE WHEN row_number() OVER () % 2 = 0 THEN 'root' ELSE 'deploy' END, '/home/x/.ssh/authorized_keys', 1,
        (ARRAY['=1+1 ops', 'plain ops', '@admin'])[1 + (row_number() OVER ())::int % 3],
        CASE WHEN row_number() OVER () % 4 = 0 THEN ARRAY['weak'] ELSE ARRAY[]::text[] END, now(), now()
-FROM ssh_keys k, targets t WHERE k.public_key LIKE 'ssh-ed25519 AAAA%' AND t.name IN ('seed-web-1', 'seed-web-2')`)
+FROM ssh_keys k, targets t WHERE k.public_key LIKE 'ssh-ed25519 AAAA%' AND t.name IN ('seed-web-1', 'seed-web-2')
+  AND (t.name = 'seed-web-1' OR hashtext(k.id::text) % 3 <> 0)`)
 	require.NoError(t, err)
+	// Missing locations (listed with missing=true), retired discovered keys, and the platform key on a server, so every
+	// SSH key column varies.
+	_, err = s.db.Owner.Exec(ctx, `UPDATE ssh_key_locations SET missing_since = $1
+WHERE ssh_key_id IN (SELECT id FROM ssh_keys WHERE public_key LIKE 'ssh-ed25519 AAAA%' AND hashtext(id::text) % 7 = 0)`, s.clock.Now())
+	require.NoError(t, err)
+	_, err = s.db.Owner.Exec(ctx, `UPDATE ssh_keys SET retired_at = $1 WHERE public_key LIKE 'ssh-ed25519 AAAA%' AND hashtext(id::text) % 11 = 0`,
+		s.clock.Now())
+	require.NoError(t, err)
+	_, err = s.db.Owner.Exec(ctx, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, comment, flags,
+first_seen_at, last_seen_at, is_alice_connection_key)
+SELECT gen_random_uuid(), k.id, t.id, 'alice-svc', '/home/alice-svc/.ssh/authorized_keys', 1, 'alice platform', '{}', now(), now(), true
+FROM ssh_keys k, targets t WHERE k.is_platform_key AND t.name = 'seed-web-1'`)
+	require.NoError(t, err)
+}
+
+// requireEveryColumnVaries fails when a column holds one value in every row: a swapped or hard-coded column could
+// then pass the cell-by-cell comparison unnoticed (Task 16 re-review).
+func requireEveryColumnVaries(t *testing.T, rows [][]string, label string, except ...string) {
+	t.Helper()
+	require.Greater(t, len(rows), 2, label)
+	for i, col := range rows[0] {
+		if slices.Contains(except, col) {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, r := range rows[1:] {
+			seen[r[i]] = true
+		}
+		require.Greater(t, len(seen), 1, "%s: column %s is constant (%v)", label, col, seen)
+	}
 }
 
 // Review Focus 4, owner step 3: an export over HTTP has exactly the rows the list shows for the same filter, in the
 // list's order, page by page, with every cell csvx-safe and one inventory.exported row naming the filter.
 func TestExportOverTheWireEqualsFilteredRows(t *testing.T) {
-	s, admin, _ := installed(t)
+	s, admin, adminAcct := installed(t)
 	ctx := context.Background()
 	now := s.clock.Now()
 	want, err := seed.Dashboard(ctx, s.db.Owner, now)
 	require.NoError(t, err)
 	seedExportRows(t, s, 230)
+	// Two generated (managed) keys of other types through the API; one of them retired.
+	s.stepUp(admin, adminAcct)
+	for _, kt := range []string{"rsa-3072", "ecdsa-p256"} {
+		requireStatus(t, admin.do(http.MethodPost, "/api/v1/ssh-keys/generate", map[string]string{"label": "export " + kt, "key_type": kt}),
+			http.StatusCreated)
+	}
+	_, err = s.db.Owner.Exec(ctx, `UPDATE ssh_keys SET retired_at = $1 WHERE managed AND key_type = 'ecdsa-sha2-nistp256'`, now)
+	require.NoError(t, err)
 	var web1 string
 	require.NoError(t, s.db.Owner.QueryRow(ctx, `SELECT id::text FROM targets WHERE name = 'seed-web-1'`).Scan(&web1))
 
@@ -398,6 +454,16 @@ func TestExportOverTheWireEqualsFilteredRows(t *testing.T) {
 			rows := csvRows(t, admin.do(http.MethodGet, "/api/v1/"+x.kind+"/export"+f, nil), x.kind, now)
 			require.Equal(t, header[x.kind], rows[0], "%s%s header", x.kind, f)
 			require.Len(t, rows[1:], len(list), "%s%s: the export has the list's rows", x.kind, f)
+			// The unfiltered certificate export holds every kind of row; the SSH key list hides missing keys unless asked,
+			// so "missing" varies only in the missing=true export and the platform key only in the unfiltered one.
+			switch {
+			case x.kind == "certificates" && f == "":
+				requireEveryColumnVaries(t, rows, x.kind+f)
+			case x.kind == "ssh-keys" && f == "":
+				requireEveryColumnVaries(t, rows, x.kind+f, "missing")
+			case x.kind == "ssh-keys" && f == "?missing=true":
+				requireEveryColumnVaries(t, rows, x.kind+f, "platform_key")
+			}
 			// Every cell of every row equals the list's value as the export renders it, through csvx.
 			for n, r := range rows[1:] {
 				require.Len(t, r, len(rows[0]))
