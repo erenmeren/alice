@@ -95,7 +95,7 @@ describe('SSOSettings', () => {
     expect(puts[0]).toEqual({ body: { allow_admin_role: true }, ifMatch: '"0"' });
     await userEvent.click(screen.getByRole('switch', { name: 'SSO users may be Admin' }));
     const confirm = await screen.findByRole('dialog', { name: 'Switch off SSO users may be Admin?' });
-    expect(confirm).toHaveTextContent('becomes an Operator and is signed out');
+    expect(confirm).toHaveTextContent('becomes an Auditor and is signed out'); // DemoteSSOAdmins makes them Auditors (R42 row 24)
     expect(puts).toHaveLength(1);
     await userEvent.click(within(confirm).getByRole('button', { name: 'Switch off' }));
     expect(await screen.findByText('SSO users may be Admin cannot be switched off yet.')).toBeInTheDocument();
@@ -235,6 +235,15 @@ describe('SSOSettings', () => {
     expect(within(dialog).getByRole('link', { name: 'Open the general settings' })).toHaveAttribute('href', '/settings?tab=general');
     expect(within(dialog).queryByRole('button', { name: 'Copy' })).not.toBeInTheDocument();
     expect(dialog.querySelector('code')).toBeNull();
+  });
+
+  // Switching off demotes SSO Administrators to Auditor (DemoteSSOAdmins, R42 row 24): the confirmation names that role
+  // in both languages, never Operator.
+  it.each(['en-US', 'tr-TR'])('says the switch-off makes SSO Administrators Auditors (%s)', async (lang) => {
+    const i18n = await createI18n([lang]);
+    const text = i18n.t('sso.switchOffText');
+    expect(text).toContain(i18n.t('enum.role.auditor', { ns: 'common' }));
+    expect(text).not.toContain(i18n.t('enum.role.operator', { ns: 'common' }));
   });
 
   // A confirm dialog has the modal's own close button too: a button with the same name but the opposite effect would be

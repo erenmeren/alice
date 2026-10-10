@@ -2196,7 +2196,7 @@
     "mfaNote": "Çoklu oturum açmayla oturum açan kullanıcılar kimliklerini kimlik sağlayıcıda doğrular. Kimlik sağlayıcının çok adımlı doğrulama istediğinden emin olun.",
     "deleteShort": "Sil",
     "switchOffTitle": "SSO kullanıcıları Yönetici olabilir ayarı kapatılsın mı?",
-    "switchOffText": "Yönetici olan her çoklu oturum açma kullanıcısı Operatör olur ve oturumu kapatılır. Ayarı yeniden açmak rolü geri vermez.",
+    "switchOffText": "Yönetici olan her çoklu oturum açma kullanıcısı Denetçi olur ve oturumu kapatılır. Ayarı yeniden açmak rolü geri vermez.",
     "switchOffConfirm": "Ayarı kapat",
     "removeMappingTitle": "{{group}} eşlemesi kaldırılsın mı?",
     "removeMappingText": "Bu grubun üyeleri oturum açtıklarında artık bu rolü almaz.",
