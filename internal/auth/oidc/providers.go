@@ -319,7 +319,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $13, $13)`, p.ID, 
 }
 
 // UpdateProvider changes a provider at the given version. A changed issuer or CA bundle reads discovery again; a
-// given secret replaces the stored one. Audited as sso.provider_changed.
+// given secret replaces the stored one, and a changed issuer needs one. Audited as sso.provider_changed.
 func (s *Service) UpdateProvider(ctx context.Context, a audit.Actor, id uuid.UUID, version int, patch ProviderPatch) (Provider, error) {
 	cur, err := s.loadProvider(ctx, s.pool, id)
 	if err != nil {
@@ -348,6 +348,10 @@ func (s *Service) UpdateProvider(ctx context.Context, a audit.Actor, id uuid.UUI
 	f := fields{name: p.Name, issuer: p.IssuerURL, clientID: p.ClientID, groupsClaim: p.GroupsClaim, caPEM: p.CAPEM, scopes: p.Scopes}
 	if patch.ClientSecret != nil {
 		f.secret, f.secretGiven = patch.ClientSecret.Bytes(), true
+	} else if p.IssuerURL != cur.IssuerURL {
+		// The stored client secret is never sent to another issuer: a new issuer needs the secret again (a 422 on
+		// client_secret), so an Administrator or a stepped-up session cannot redirect it to a provider they control.
+		f.secretGiven = true
 	}
 	if err := f.validate(); err != nil {
 		return Provider{}, err

@@ -93,6 +93,48 @@ func TestSaveSMTPValidatesAndVersions(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// Final review minor 11: a stored password is not reused for another server. A new host or port without the password is
+// a 422 on the password field and changes nothing; with the password it saves; the same server keeps the stored one.
+func TestStoredPasswordIsNotSentToAnotherServer(t *testing.T) {
+	h := newHarness(t, nil)
+	ctx := context.Background()
+	srv := fakesmtp.Start(t, fakesmtp.Options{})
+	_, err := h.s.SaveSMTP(ctx, h.who, 0, input(srv, pw(canary)))
+	require.NoError(t, err)
+	for _, move := range []func(*notify.SMTPInput){
+		func(in *notify.SMTPInput) { in.Host = "mail.attacker.example" },
+		func(in *notify.SMTPInput) { in.Port++ },
+	} {
+		in := input(srv, nil)
+		move(&in)
+		_, err = h.s.SaveSMTP(ctx, h.who, 1, in)
+		var verrs validate.Errors
+		require.True(t, errors.As(err, &verrs), "%v", err)
+		require.Len(t, verrs, 1)
+		assert.Equal(t, "password", verrs[0].Field)
+		assert.Equal(t, validate.Required, verrs[0].Code)
+	}
+	cur, ok, err := h.s.SMTP(ctx)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, 1, cur.Version, "a refused save changes nothing")
+	host, _ := srv.Addr()
+	assert.Equal(t, host, cur.Host)
+
+	got, err := h.s.SaveSMTP(ctx, h.who, 1, input(srv, nil))
+	require.NoError(t, err, "the same server keeps the stored password")
+	assert.True(t, got.HasPassword)
+	moved := input(srv, pw("new-"+canary))
+	moved.Host = "mail.example.net"
+	got, err = h.s.SaveSMTP(ctx, h.who, 2, moved)
+	require.NoError(t, err, "a new server with its password")
+	assert.True(t, got.HasPassword)
+	noAuth := input(srv, nil)
+	noAuth.Host, noAuth.Username = "relay.example.net", ""
+	_, err = h.s.SaveSMTP(ctx, h.who, 3, noAuth)
+	require.NoError(t, err, "a new server without authentication needs no password")
+}
+
 // Review Focus 3, S-04: the password is only an envelope; no settings value, audit row or error holds it.
 func TestSMTPPasswordIsAnEnvelope(t *testing.T) {
 	h := newHarness(t, nil)
@@ -143,8 +185,8 @@ func TestTestMailSendsThroughTheSettingsAndTheTrust(t *testing.T) {
 	assert.Equal(t, "Alice test e-postası", msgs[0].Subject, "rendered in the requested language")
 	assert.True(t, msgs[0].Authed)
 
-	// Changing the host or port drops the pin (it belongs to that server).
-	in := input(srv, nil)
+	// Changing the host or port drops the pin (it belongs to that server); it needs the password again.
+	in := input(srv, pw(canary))
 	in.Port++
 	got, err = h.s.SaveSMTP(ctx, h.who, got.Version, in)
 	require.NoError(t, err)
@@ -172,7 +214,7 @@ func TestSeenCertificateIsBoundToHostAndPort(t *testing.T) {
 	require.True(t, errors.As(h.s.TestMail(ctx, h.who, "ops@example.com", "en"), &ce))
 
 	// The host changes (same server by another name), within the hour: the seen record is gone.
-	in := input(srv, nil)
+	in := input(srv, pw(canary))
 	in.Host = "localhost"
 	got, err = h.s.SaveSMTP(ctx, h.who, got.Version, in)
 	require.NoError(t, err)

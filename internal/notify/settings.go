@@ -237,7 +237,10 @@ func (s *Settings) SaveSMTP(ctx context.Context, a audit.Actor, version int, in 
 		if err != nil {
 			return err
 		}
-		if in.Username != "" && ((in.Password == nil && !has) || (in.Password != nil && len(in.Password.Bytes()) == 0)) {
+		// A stored password is never sent to another server: a new host or port needs the password again, so an
+		// Administrator (or a stepped-up session) cannot redirect it to a server they control.
+		moved := rec.Host != in.Host || rec.Port != in.Port
+		if in.Username != "" && ((in.Password == nil && (!has || moved)) || (in.Password != nil && len(in.Password.Bytes()) == 0)) {
 			verrs.Add("password", validate.Required, nil)
 		}
 		if err := verrs.Err(); err != nil {

@@ -819,8 +819,12 @@ func TestMailSettingsOverTheWire(t *testing.T) {
 	assert.Nil(t, decodeBody[smtpView](t, rec).Trusted)
 	version = etagVersion(t, rec)
 	requireError(t, test("ops@example.com"), http.StatusBadGateway, "ALC-NTF-0005")
+	// Final review minor 11: the stored password is not reused for another server; the move needs it again.
 	moved := s.mailBody(nil)
 	moved["port"] = moved["port"].(int) + 1
+	rec = admin.do(http.MethodPut, "/api/v1/settings/smtp", moved, ifMatchOf(version))
+	assert.Equal(t, map[string]string{"password": "validation.required"}, fieldErrors(t, rec))
+	moved["password"] = stackSMTPPassword
 	rec = admin.do(http.MethodPut, "/api/v1/settings/smtp", moved, ifMatchOf(version))
 	requireStatus(t, rec, http.StatusOK)
 	requireError(t, admin.do(http.MethodPost, "/api/v1/settings/smtp/actions/trust", map[string]string{"fingerprint": fp},

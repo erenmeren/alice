@@ -107,7 +107,7 @@ describe('SettingsPage, mail', () => {
       }),
     );
     await renderRoute('/settings?tab=mail');
-    expect(await screen.findByText('A password is stored. Leave the field empty to keep it.')).toBeInTheDocument();
+    expect(await screen.findByText('A password is stored. Leave the field empty to keep it; a new host or port needs the password again.')).toBeInTheDocument();
     expect(screen.getByLabelText('Password')).toHaveValue('');
     await userEvent.click(screen.getByRole('button', { name: 'Save mail settings' }));
     await waitFor(() => expect(bodies).toHaveLength(1));

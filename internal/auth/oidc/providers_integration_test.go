@@ -152,7 +152,7 @@ func TestProviderUpdateRefreshAndLimit(t *testing.T) {
 	assert.Equal(t, 1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'sso.provider_changed' AND details->>'client_auth_replaced' = 'true'`))
 	discoveries := x.idp.Stats().Discovery
 	issuer := x.idp.Issuer() + "/"
-	_, err = x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer})
+	_, err = x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer, ClientSecret: ptrSecret("s2")})
 	var de *oidc.DiscoveryError
 	require.True(t, errors.As(err, &de), "a changed issuer is discovered again: %v", err)
 	assert.Equal(t, discoveries+1, x.idp.Stats().Discovery)
@@ -177,6 +177,33 @@ func TestProviderUpdateRefreshAndLimit(t *testing.T) {
 	_, err = x.svc.CreateProvider(x.ctx, x.admin, oidc.ProviderInput{Name: "Six", IssuerURL: x.idp.Issuer(), ClientID: "c6",
 		ClientSecret: secrets.NewPlaintext([]byte("s")), CAPEM: string(x.idp.CAPEM())})
 	assert.ErrorIs(t, err, oidc.ErrTooMany)
+}
+
+// Final review minor 11: the stored client secret is never sent to another issuer. An issuer change without a new
+// secret is a 422 on client_secret before any discovery, and changes nothing; with the secret it goes through. Other
+// changes, the CA bundle included, keep the stored secret.
+func TestIssuerChangeNeedsTheClientSecret(t *testing.T) {
+	x := newHarness(t)
+	idp2 := fakeidp.Start(t, fakeidp.Options{Now: x.clk.Now})
+	issuer2, ca2 := idp2.Issuer(), string(idp2.CAPEM())
+	discoveries := idp2.Stats().Discovery
+	_, err := x.svc.UpdateProvider(x.ctx, x.admin, x.prov.ID, x.prov.Version, oidc.ProviderPatch{IssuerURL: &issuer2, CAPEM: &ca2})
+	var v validate.Errors
+	require.True(t, errors.As(err, &v), "%v", err)
+	require.Len(t, v, 1)
+	assert.Equal(t, [2]string{"client_secret", validate.Required}, [2]string{v[0].Field, v[0].Code})
+	assert.Equal(t, discoveries, idp2.Stats().Discovery, "refused before discovery")
+	got, err := x.svc.Provider(x.ctx, x.prov.ID)
+	require.NoError(t, err)
+	assert.Equal(t, [2]any{x.idp.Issuer(), x.prov.Version}, [2]any{got.IssuerURL, got.Version}, "nothing changed")
+
+	ca := string(x.idp.CAPEM()) + "\n"
+	p, err := x.svc.UpdateProvider(x.ctx, x.admin, x.prov.ID, x.prov.Version, oidc.ProviderPatch{CAPEM: &ca})
+	require.NoError(t, err, "the same issuer keeps its secret")
+	p, err = x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer2, CAPEM: &ca2,
+		ClientSecret: ptrSecret(idp2.ClientSecret())})
+	require.NoError(t, err, "a new issuer with its secret")
+	assert.Equal(t, issuer2, p.IssuerURL)
 }
 
 func ptrSecret(s string) *secrets.Plaintext { p := secrets.NewPlaintext([]byte(s)); return &p }
@@ -292,7 +319,7 @@ func TestProviderLimitsAndDeletion(t *testing.T) {
 	// I-1: the issuer of a provider with users cannot change (their subjects belong to that issuer, O-09).
 	discoveries := x.idp.Stats().Discovery
 	issuer := x.idp.Issuer() + "/"
-	_, err = x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer})
+	_, err = x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer, ClientSecret: ptrSecret("s2")})
 	assert.ErrorIs(t, err, oidc.ErrProviderInUse)
 	assert.Equal(t, discoveries, x.idp.Stats().Discovery, "refused before discovery")
 	renamed := "Corp IdP (old)"
@@ -317,7 +344,8 @@ func TestIssuerChangeRefusedOnceAUserArrives(t *testing.T) {
 	x := newHarness(t)
 	idp2 := fakeidp.Start(t, fakeidp.Options{Now: x.clk.Now})
 	issuer2, ca2 := idp2.Issuer(), string(idp2.CAPEM())
-	p, err := x.svc.UpdateProvider(x.ctx, x.admin, x.prov.ID, x.prov.Version, oidc.ProviderPatch{IssuerURL: &issuer2, CAPEM: &ca2})
+	p, err := x.svc.UpdateProvider(x.ctx, x.admin, x.prov.ID, x.prov.Version, oidc.ProviderPatch{IssuerURL: &issuer2, CAPEM: &ca2,
+		ClientSecret: ptrSecret(idp2.ClientSecret())})
 	require.NoError(t, err, "no users yet: the issuer may change")
 	assert.Equal(t, issuer2, p.IssuerURL)
 
@@ -332,7 +360,8 @@ oidc_subject, created_at, updated_at) VALUES ($1, 'late', 'Late', 'oidc', 'audit
 	issuer1, ca1 := x.idp.Issuer(), string(x.idp.CAPEM())
 	done := make(chan error, 1)
 	go func() {
-		_, err := x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer1, CAPEM: &ca1})
+		_, err := x.svc.UpdateProvider(x.ctx, x.admin, p.ID, p.Version, oidc.ProviderPatch{IssuerURL: &issuer1, CAPEM: &ca1,
+			ClientSecret: ptrSecret("s1")})
 		done <- err
 	}()
 	require.Eventually(t, func() bool {
