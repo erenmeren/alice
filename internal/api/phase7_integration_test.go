@@ -408,7 +408,7 @@ func TestExportOverTheWireEqualsFilteredRows(t *testing.T) {
 	now := s.clock.Now()
 	want, err := seed.Dashboard(ctx, s.db.Owner, now)
 	require.NoError(t, err)
-	seedExportRows(t, s, 230)
+	seedExportRows(t, s, 260)
 	// Two generated (managed) keys of other types through the API; one of them retired.
 	s.stepUp(admin, adminAcct)
 	for _, kt := range []string{"rsa-3072", "ecdsa-p256"} {
