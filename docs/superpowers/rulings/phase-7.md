@@ -396,3 +396,11 @@ phase named unless given):
   S-1 variants over the wire, the one-hour seen-record expiry over the wire, a failed refetch while cached keys are
   valid, a PKCS #1-keyed HS256 verifier, the fakes' shutdown (keep-alive goroutines; `fakesmtp.Up` re-listens on the
   old port) and their SMTP looseness (an accept-then-reject fault, several refused recipients, wire bytes).
+
+## Gate fixes at the close (2026-10-10)
+
+- **Go 1.27.2 and `x/net` 0.60.0** (daa3b7d): `make vuln` failed on ten standard library findings in Go 1.27.1 and trivy on four HIGH in `x/net` 0.58.0; the vulnerability databases had moved on since Phase 6, so master failed the same way. The five build images are re-pinned by digest; the helper's checksums are computed at build time, so no checksum file changed.
+- **Coverage re-baseline by tests, not by floors**: Go 1.27.2 counts statements differently (the same tests gave `tlscert` 73.6 % on 1.27.1 and 71.2 % on 1.27.2). Six packages fell 0.1 to 2 points under their floors. No floor was lowered; tests for real error branches were added (80ff2ed, b2d89ac, 5804e1a, b825c38, 97b198e). The helper change is test files only, so the binary is unchanged.
+- **gitleaks**: three false positives in the Phase 7 documents ignored by fingerprint (b4874f0).
+- **fs-scan skips `.claude`** (dad4343): the owner's local agent worktrees hold old module versions and are not project content.
+- **Owner follow-up**: the e2e run, the image scan and every other `make ci` stage passed on the final tree; `make ci` was run in two parts because the fs-scan finding was in `.claude`.
