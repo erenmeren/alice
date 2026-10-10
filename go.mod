@@ -1,6 +1,6 @@
 module alice
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.2
@@ -83,6 +83,6 @@ require (
 	go.opentelemetry.io/otel/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 )

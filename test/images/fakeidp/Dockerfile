@@ -3,7 +3,7 @@
 # Never part of a release and never pushed. It holds no key material: its CA, its TLS certificate, its signing keys and its client secret are
 # generated when the container starts (cmd/alice-fakeidp serve). Both base images are the ones deploy/Dockerfile pins.
 
-FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS build
+FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
