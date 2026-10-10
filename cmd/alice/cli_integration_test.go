@@ -281,3 +281,41 @@ VALUES (1, $1, now(), 'evaluation', now())`, license.NewInstallationID())
 	require.Equal(t, 0, code, errOut)
 	assert.Contains(t, out, "State: evaluation")
 }
+
+// failAuditInserts makes every audit insert fail, so the audited operator commands report
+// a storage error instead of success.
+func failAuditInserts(t *testing.T, d *pgtest.DB) {
+	t.Helper()
+	ctx := context.Background()
+	_, err := d.Owner.Exec(ctx, `CREATE FUNCTION test_refuse_audit() RETURNS trigger LANGUAGE plpgsql AS
+		$$ BEGIN RAISE EXCEPTION 'audit refused'; END $$`)
+	require.NoError(t, err)
+	_, err = d.Owner.Exec(ctx, `CREATE TRIGGER test_refuse_audit BEFORE INSERT ON audit_log
+		FOR EACH ROW EXECUTE FUNCTION test_refuse_audit()`)
+	require.NoError(t, err)
+}
+
+func TestCLICommandsReportStorageErrors(t *testing.T) {
+	d := pgtest.New(t)
+	getenv := cliEnv(t, d)
+	insertUser(t, d, "bob", "admin")
+	failAuditInserts(t, d)
+
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"audit", "verify"}, "could not verify the audit log:"},
+		{[]string{"admin", "reset-mfa", "bob"}, "could not reset the authenticator app:"},
+		{[]string{"admin", "unlock", "bob"}, "could not unlock the account:"},
+	}
+	for _, c := range cases {
+		t.Run(strings.Join(c.args, " "), func(t *testing.T) {
+			code, out, errOut := runCLI(t, getenv, c.args...)
+			assert.Equal(t, 1, code, errOut)
+			assert.Contains(t, errOut, c.want)
+			assert.NotContains(t, out, "was unlocked")
+			assert.NotContains(t, out, "was removed")
+		})
+	}
+}
