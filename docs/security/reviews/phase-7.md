@@ -35,8 +35,9 @@ Minor 9) and a consistency scan found 20 blocking and 53 fix-round defects of th
 first task. The Playwright journeys (Task 21) found four product defects and fixed them (D-1, D-2, D-3, D-7) and
 reported three more (D-4 to D-6).
 
-This document was written before the final whole-branch review and the final `make ci` had finished. The cells marked
-`PENDING-FINAL-RUN` are filled from the final run.
+The final whole-branch review (2026-10-10, at 3748eb5: Critical 0, Important 2, Minor 27) is folded into the Findings
+below; its two Important findings and three security-relevant minors were fixed before the final run. The cells marked
+`PENDING-FINAL-RUN` are filled from the final `make ci`.
 
 ## Evidence
 
@@ -48,11 +49,11 @@ run" holds the results of the final `make ci` (which runs `make coverage`) and o
 | # | Check | Command | Expected | Recorded before the final run | Final run |
 |---|---|---|---|---|---|
 | 1 | Unit tests, all packages (pure rules: `expiry` 100 %, `claims` 100 % with `FuzzParse`, `csvx` 100 %; the API's handlers, codes, DTO goldens, authz matrix) | `make test` | ok | ok per package in every report; `claims` `FuzzParse` 20 s, about 2.5 million executions, no crasher (053aa89); api unit 95.9 % (63e2439) | PENDING-FINAL-RUN |
-| 2 | Integration tests, all packages | `make test-integration` | ok | every package ok (64) except `internal/providers/nginx`, whose guard test lacked the one allowed `InsecureSkipVerify` place; fixed in 3d5166f and green (Task 16 report) | PENDING-FINAL-RUN |
-| 3 | O-suite: O-01 to O-14 at service level and over the wire, X-05, S-1 | `go test -tags integration ./internal/auth/oidc ./internal/api -run 'TestO\|TestAdminMappingRefusedWhileOff\|TestOIDC\|TestX05\|TestS1\|TestSSO'` | every case refused with its closed reason, no session, one `auth.oidc.denied` row | `internal/auth/oidc`: 13 `TestO*` functions (O-01 to O-12, O-14; O-13 is `TestAdminMappingRefusedWhileOff`), 31 tests in the package, 87.0 % (2b8b354); over the wire `TestOIDCNegativeSuiteOverTheWire` (every O-row with its exact `Location`, no cookie, one denied row), `TestOIDCStepUpReevaluatesOverTheWire`, `TestOIDCLimitsOverTheWire`, `TestX05BreakGlassWhileIdPDown` (6df6071) | PENDING-FINAL-RUN |
-| 4 | Performance R32: 5,000 certificates, 500 targets, p95 ≤ 500 ms (dashboard) and ≤ 300 ms (lists), three runs | `make perf` (×3) | every p95 within budget | after 394ea97: worst p95 `certificates?q=site42` 41.1 ms of 300 (14 %), `dashboard/expiring` 48.0 ms of 500 (10 %), `dashboard/summary` 7.9 ms; before it the expiring list was at 127–132 % (d7c93db, Task 17 report) | PENDING-FINAL-RUN |
+| 2 | Integration tests, all packages | `make test-integration` | ok | every package ok (64) except `internal/providers/nginx`, whose guard test lacked the one allowed `InsecureSkipVerify` place; fixed in 3d5166f and green (Task 16 report) | ok as part of `make coverage` (exit 0, 2026-10-10), with the final-review fixes |
+| 3 | O-suite: O-01 to O-14 at service level and over the wire, X-05, S-1 | `go test -tags integration ./internal/auth/oidc ./internal/api -run 'TestO\|TestAdminMappingRefusedWhileOff\|TestOIDC\|TestX05\|TestS1\|TestSSO'` | every case refused with its closed reason, no session, one `auth.oidc.denied` row | `internal/auth/oidc`: 13 `TestO*` functions (O-01 to O-12, O-14; O-13 is `TestAdminMappingRefusedWhileOff`), 31 tests in the package, 87.0 % (2b8b354); over the wire `TestOIDCNegativeSuiteOverTheWire` (every O-row with its exact `Location`, no cookie, one denied row), `TestOIDCStepUpReevaluatesOverTheWire`, `TestOIDCLimitsOverTheWire`, `TestX05BreakGlassWhileIdPDown` (6df6071) | ok as part of `make coverage` (exit 0, 2026-10-10), including the new I-1 tests (a sign-in with an old `auth_time` gets no step-up window) and the I-2 token refusal over the wire |
+| 4 | Performance R32: 5,000 certificates, 500 targets, p95 ≤ 500 ms (dashboard) and ≤ 300 ms (lists), three runs | `make perf` (×3) | every p95 within budget | after 394ea97: worst p95 `certificates?q=site42` 41.1 ms of 300 (14 %), `dashboard/expiring` 48.0 ms of 500 (10 %), `dashboard/summary` 7.9 ms; before it the expiring list was at 127–132 % (d7c93db, Task 17 report) | three runs, all passed; worst p95 per path across runs: dashboard/summary 8.2 ms (2 %), dashboard/expiring 47.7 ms (10 %), alerts 2.1 ms (0 %), certificates 1.8 ms (1 %), `expiry=30` 1.8 ms (1 %), `q=site42` 43.1 ms (14 %), targets 4.3 ms (1 %), deployments 3.9 ms (1 %), ssh-keys 0.8 ms (0 %), audit 1.3 ms (0 %); every p95 ≤ 60 % of budget, so `perf` joined `make ci` (4748c6a); per-run values in the rulings |
 | 5 | Playwright: Phase 7 journeys in EN and TR (owner steps 1–5: seeded counts, filter, export = rows, saved view, test mail and trust, the expiry e-mail in the fake SMTP once, the failing banner, SSO refused / Operator / Administrator step-up, break-glass), axe and keyboard | `make e2e-up && make e2e-hardening-check && make e2e`, then `make e2e-down` | all passed | `phase7.spec.ts` 6 passed twice in a row (1.6 min each); full suite 110 passed in 26.8 min after 1fac017, no retry; hardening check 49 lines ok, both fakes included (Task 21 report) | PENDING-FINAL-RUN |
-| 6 | Coverage floors, with new floors for `alerts/expiry` 100, `auth/oidc/claims` 100, `platform/csvx` 100 and `alerts`, `reports`, `auth/oidc`, `testutil/fakesmtp`, `testutil/fakeidp` at their measured values | `make coverage` | ok | `alerts` 91.3 % (394ea97), `reports` 81.9 % (5b64bc0), `auth/oidc` 87.0 % (2b8b354), `fakesmtp` 92.0 % (c77c309), `fakeidp` 92.6 % (41ed252); thin floors: `notify` 88.1 %, `auth` 84.9 %, `inventory` 89.1 %, `jobs` 89.0 %, `audit` 89.0 %, `sshkeys` 89.9 %, `secrets` 83.9 %, `api` 96.6 %, `cmd/alice` 91.4 %, `rbac` 98.0 % (implementers' reports); floors committed in 4748c6a | PENDING-FINAL-RUN |
+| 6 | Coverage floors, with new floors for `alerts/expiry` 100, `auth/oidc/claims` 100, `platform/csvx` 100 and `alerts`, `reports`, `auth/oidc`, `testutil/fakesmtp`, `testutil/fakeidp` at their measured values | `make coverage` | ok | `alerts` 91.3 % (394ea97), `reports` 81.9 % (5b64bc0), `auth/oidc` 87.0 % (2b8b354), `fakesmtp` 92.0 % (c77c309), `fakeidp` 92.6 % (41ed252); thin floors: `notify` 88.1 %, `auth` 84.9 %, `inventory` 89.1 %, `jobs` 89.0 %, `audit` 89.0 %, `sshkeys` 89.9 %, `secrets` 83.9 %, `api` 96.6 %, `cmd/alice` 91.4 %, `rbac` 98.0 % (implementers' reports); floors committed in 4748c6a | ok (exit 0): every earlier floor held; new floors at the measured values — `alerts` 91.3, `alerts/expiry` 100, `auth/oidc` 87.0, `auth/oidc/claims` 100, `platform/csvx` 100, `reports` 81.9, `testutil/fakesmtp` 92.0, `testutil/fakeidp` 92.6 (4748c6a) |
 | 7 | The whole gate | `make ci` (with `TRIVY_IMAGE="--network host <the pinned image>"` on the build machine) | exit code 0 | not run | PENDING-FINAL-RUN |
 | 8 | No secret in the repository | `make secrets-scan` | no leaks | not recorded for this phase | PENDING-FINAL-RUN |
 | 9 | Go vulnerabilities (three new modules: `go-oidc/v3` v3.21.0, `x/oauth2` v0.37.0, `go-jose/v4` v4.1.5) | `make vuln` | none in the code | 0 vulnerabilities affecting the code; one module-level finding, `GO-2026-5932` in `golang.org/x/crypto` v0.57.0 (required before this phase, not called, no fix); none in the new modules (e4086fd, Task 12 report) | PENDING-FINAL-RUN |
@@ -113,17 +114,22 @@ Other evidence recorded by the implementers and reviewers (their reports, not re
   administrator signs in with password and code while every IdP is down (`TestX05BreakGlassWhileIdPDown`; e2e
   break-glass journey).
 - **Step-up** [22]. An SSO user's step-up is a fresh IdP sign-in (`prompt=login`, `max_age=0`) accepted only on a live
-  session of the same user and provider; it re-evaluates the role and never resurrects an ended session (S-1).
+  session of the same user and provider; it re-evaluates the role and never resurrects an ended session (S-1). An SSO
+  **sign-in** opens the step-up window only when the ID token's `auth_time` is at most 5 minutes old (the window ends
+  5 minutes after it); a silent sign-in at the IdP, or no `auth_time`, leaves it closed (final review I-1, bc1a234).
+- **Credentials Alice issues** [21], [23]. SSO users cannot create API tokens (409 `ALC-USR-0003`, final review I-2,
+  e0fa7b8), so de-provisioning at the IdP leaves no Alice credential behind except an open session (up to 12 hours).
 - **Rate limits** [18]. The start keeps the per-address sign-in limit (10 a minute); the callback is limited to 10 a
   minute per binding cookie inside the anonymous 60 a minute per address (a fresh random cookie per request does not
-  escape the address bound, Task 15 I-1).
+  escape the address bound, Task 15 I-1). The start's shared 10 a minute per address is a known limitation behind NAT.
 
 ### E-mail header injection and content
 
 Every e-mail parameter is flattened to one line (CR, LF and other line breaks replaced) before rendering; subjects are
 Q-encoded (`mime.QEncoding`) and bodies base64, so a certificate CN, website name, vault name or user name with CR/LF,
 `{{`, HTML or 2,000 characters never adds a header or a template expansion (`TestRenderFlattensHostileParams`,
-`TestSMTPMailerKeepsTheSubjectOnOneLine`). The recipient list is built by Alice from bare addresses only (no display
+`TestSMTPMailerKeepsTheSubjectOnOneLine`); the Subject is capped at 200 characters and folded between encoded words,
+so no header line exceeds 998 octets (final review minor 14, 24fc606). The recipient list is built by Alice from bare addresses only (no display
 names, angle brackets or comments; duplicates compared as parsed, case-folded mailboxes), and every message has
 exactly one recipient. The test e-mail's recipient is checked with `net/mail`.
 
@@ -169,7 +175,9 @@ guard test requires exactly that place (3d5166f). Trust and untrust are audited 
 The SMTP password (`notify.smtp.password`) and every client secret (`sso.provider.<id>.client_secret`) are rows of
 `setting_secrets`, sealed with the master key (AES-256-GCM, AAD `setting_secrets/<key>/ciphertext`). They exist in
 clear only in the request body that sets them (a `secretText` the handler zeroes) and in a `secrets.Plaintext` opened
-for one SMTP `AUTH PLAIN` or one token exchange; answers carry `has_password` / `has_client_secret` only (the OpenAPI
+for one SMTP `AUTH PLAIN` or one token exchange. A stored secret is never sent to a new destination: a changed mail
+server host or port, or a changed issuer, needs the secret again (422 on `password` / `client_secret`; final review
+minor 11, 993d96a), so a stepped-up session cannot redirect it to a server it controls. Answers carry `has_password` / `has_client_secret` only (the OpenAPI
 forbids `password` and `client_secret` in every response schema). The web keeps them only in its form's state
 (`gcTime: 0` on the mutations). Go strings made by `smtp.PlainAuth` and `oauth2.Config` cannot be cleared (below).
 
@@ -177,7 +185,7 @@ forbids `password` and `client_secret` in every response schema). The web keeps 
 
 Mail servers and identity providers are reached through `netaddr.DialContext`: every resolved address is checked when
 Alice connects, link-local and metadata addresses are refused, loopback and private ones allowed (Administrators
-configure them). OIDC HTTP uses no proxy, follows no redirect, has a 10 s budget and reads at most 1 MiB. The release
+configure them). OIDC HTTP uses no proxy, keeps no idle connection (`DisableKeepAlives`, bab83f0), follows no redirect, has a 10 s budget and reads at most 1 MiB. The release
 build passes no dialer override (`TestReleaseMailSettingsHaveNoDialerOverrideOrFallback`).
 
 ### The exactly-once ledger [2], [5], [31], [32]
@@ -245,8 +253,8 @@ capabilities, non-root, pids limit; `fakesmtp` on the internal network without p
 Found by the pre-flight review, the per-task reviews and their re-reviews, the integration and performance suites,
 the Playwright journeys and the writing of these documents, with the commits that closed them. The reviewers rated
 findings Critical, Important or Minor; none was rated Critical or High. Open findings are marked; minor findings that
-were parked are in "Known limitations" and in the rulings' "Carried to later phases". The final whole-branch review's
-findings are PENDING-FINAL-RUN.
+were parked are in "Known limitations" and in the rulings' "Carried to later phases", which lists every open minor of
+the final whole-branch review by its number.
 
 | ID | Area | Rating | Description | Decision |
 |---|---|---|---|---|
@@ -269,7 +277,7 @@ findings are PENDING-FINAL-RUN.
 | P7-17 | API (OIDC) | Important | A callback with a fresh binding cookie per request escaped every rate limit and ran `Complete` with an audit row each time; providers were created switched on; a HEAD consumed the single-use state; `PUT /sso/settings` without the switch value silently demoted (Task 15 review). | Fixed: 63e2439. |
 | P7-18 | Web (settings) | Important | **Send test e-mail** bypassed the step-up wrapper; switching **SSO users may be Admin** off had no confirmation although it demotes every SSO Administrator (Task 19 review). | Fixed: 1b4cc48. |
 | P7-19 | Test code | Minor | The nginx guard's allow-list of `InsecureSkipVerify` places lacked `notify.pinnedTLS`, so the suite was red (Task 16). | Fixed: 3d5166f (the guard also requires the pin comparison there). |
-| P7-20 | Web (text) | Minor, **open** | The confirmation **Switch off SSO users may be Admin?** says every SSO Administrator "becomes an Operator"; the server demotes them to **Auditor** (R42 [24]); their next single sign-on gives them their mapped role. Found while writing these documents. | Open: the text (`sso.switchOffText`, EN and TR) or the server's target role must change; the admin guide documents the built behaviour. |
+| P7-20 | Web (text) | Minor | The confirmation **Switch off SSO users may be Admin?** said every SSO Administrator "becomes an Operator"; the server demotes them to **Auditor** (R42 [24]). Found while writing these documents. | Fixed: 969d82d ("becomes an Auditor" / "Denetçi olur"). |
 | P7-21 | Test evidence | Important | The export equality compared 2 of 16 and 3 of 13 columns, the SSH key seed kept columns constant (a swap would pass); no ID/access-token canary and no Basic or AUTH PLAIN spellings; F-61 and the scheduled half of F-63 were not over the wire (Task 16 review, re-review). | Fixed (tests only): 41ed252, 6df6071, 313039a. |
 | P7-22 | Alerts (performance) | Important | `GET /dashboard/expiring` had p95 650 ms against its 500 ms budget: the monitored-items CTE was materialized and scanned per certificate (Task 17). | Fixed: 394ea97 (`NOT MATERIALIZED`, proven equivalent by the review); p95 48 ms. |
 | P7-23 | Test evidence | Important | No alerts test covered the two "monitored" exclusions (a missing location, a deleted target) (Task 17 review). | Fixed (tests only): 3748eb5. |
@@ -279,7 +287,12 @@ findings are PENDING-FINAL-RUN.
 | P7-27 | Web (TR) | Minor | The Turkish switch-off confirmation had the same name as the dialog's close button ("Kapat"), with opposite effects (D-3). | Fixed: 5606317. |
 | P7-28 | Jobs (license lock) | Important (pre-existing) | After the clock was set back, the runner skipped the lock sweep while the last sweep lay in the future, so queued external-change work was not held in lock until the clock caught up (D-7; found because the Phase 4 L-29 journeys failed on a reused e2e container). | Fixed: 1fac017; `TestSweepDue`. |
 | P7-29 | Web | Minor, **open** | D-4: after **Save identity provider** the focus falls to `<body>`; D-5: the password field's error sets no `aria-invalid`; D-6: the Users table scrolls the page sideways at 375 px (Phase 1 page). | Open, reported for their owners. |
-| — | Final review | — | PENDING-FINAL-RUN | PENDING-FINAL-RUN |
+| P7-30 | SSO (step-up) | Important | A silent sign-in at the IdP (an IdP session still open, no credential typed) opened the 5-minute step-up window, so "sign out, sign in again through SSO" skipped the SSO step-up for every SEC-009 action: providers, mappings, the Admin switch, API tokens, private-key downloads (final review I-1). | Fixed: bc1a234 (the window opens only for an `auth_time` at most 5 minutes old; amends C10 and R42 [22]). |
+| P7-31 | SSO (credentials) | Important | An SSO user's API token (up to 365 days) outlived de-provisioning at the IdP: tokens were revoked only when the person signed in again and was refused (final review I-2). | Fixed: e0fa7b8 (SSO users cannot create API tokens, 409 `ALC-USR-0003`; the tokens page offers no create control) [21], [23]. |
+| P7-32 | Mail and SSO (secrets) | Minor (security) | A stored SMTP password or client secret was kept when the host or port, or the issuer, changed: an Administrator or a hijacked stepped-up session could redirect it to a server they control (final review minor 11). | Fixed: 993d96a (a new destination needs the secret again, 422). |
+| P7-33 | SSO | Minor | A new IdP transport per exchange or discovery kept an idle TLS connection and two goroutines (final review minor 1). | Fixed: bab83f0 (`DisableKeepAlives`). |
+| P7-34 | Mail | Minor | `mime.QEncoding` never folds: a long non-ASCII CN gave a Subject line of 2–3 KB, which a strict MTA refuses (24 hours of retries and the banner) (final review minor 14). | Fixed: 24fc606 (capped at 200 characters, folded under 998 octets). |
+| — | Final review, other minors | Minor | 24 minors (2–10, 12, 13, 15–27 of task-final-review.md). | Open, carried: listed by number in the rulings' "Carried to later phases"; minor 10 (the SSO start's shared limit) is a known limitation. |
 
 ## Known limitations
 
@@ -302,6 +315,13 @@ SSO:
   Administrator opens the window, for one in-flight callback); `PUT /settings/general` may clear Alice's address while
   a provider is on, after which starts fail cleanly with `ALC-SSO-0004` [42].
 - Providers that accept only `client_secret_post`, or whose endpoints carry a query, cannot be used [19].
+- **Starting a single sign-on shares the sign-in limit of 10 a minute per address** (final review minor 10): behind
+  one NAT address the 11th person starting SSO within a minute gets `ALC-SYS-0005`.
+- **SSO users cannot create API tokens** (P7-31): scripts use a local account's token. An IdP that sends no
+  `auth_time` always needs the IdP step-up before a protected action (P7-30).
+- A successful test e-mail does not end **E-mails could not be sent** (only a real successful send does), and the
+  outbox stalls silently when the mailer cannot be built (for example a password envelope sealed with another master
+  key) (final review minors 12, 13).
 - MFA of SSO users is the identity provider's; Alice cannot see whether it happened. An IdP that ignores
   `prompt=login` makes step-up fail [22].
 - The Users API exposes no SSO subject (the web shows the provider's name); `auth.oidc.denied` rows are not coalesced
@@ -347,7 +367,7 @@ Reports and the web:
   `screens.i18n` sweep.
 - A failed deployment stays listed for 7 days after a later success (no supersede rule); a first verification that
   finds a broken chain stores no checkpoint (the dashboard then shows only the condition).
-- P7-20 (the switch-off text), D-4, D-5, D-6 are open.
+- D-4, D-5, D-6 and the carried minors of the final review are open.
 - The R32 data set has no SSH keys, and `certificates?q=` is a linear scan (14 % of its budget at 5,000
   certificates).
 

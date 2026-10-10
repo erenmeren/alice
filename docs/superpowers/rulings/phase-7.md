@@ -227,16 +227,59 @@ and 53 FIX rows.
 
 ## The performance ruling (Task 22)
 
-PENDING-FINAL-RUN: the ten p95 values of each of the three `make perf` runs, and the ruling (`perf` added to the first
-line of `ci`, or kept outside with a release-checklist line in `04-security.md` §17.7) with its reason. Task 17
-recorded, after its query fix, a highest p95 of 14 % of its budget (`certificates?q=`) over three runs on this machine;
-its review noted that the R32 data set seeds no SSH keys (the SSH key list is measured almost empty) and that the
-`q=` search is linear.
+`make perf` ran three times in a row with nothing else using Docker; all three passed. p95 per path in ms, runs 1 / 2 /
+3 (budget; worst share of the budget):
 
-## Final review
+| Path | Budget | p95 run 1 | p95 run 2 | p95 run 3 | Worst |
+|---|---|---|---|---|---|
+| `/api/v1/dashboard/summary` | 500 | 8.1 | 7.9 | 8.2 | 2 % |
+| `/api/v1/dashboard/expiring?days=30&limit=50` | 500 | 44.2 | 47.7 | 47.6 | 10 % |
+| `/api/v1/alerts` | 500 | 2.1 | 2.1 | 1.5 | 0 % |
+| `/api/v1/certificates` | 300 | 1.7 | 1.5 | 1.5 | 1 % |
+| `/api/v1/certificates?expiry=30` | 300 | 1.7 | 1.8 | 1.6 | 1 % |
+| `/api/v1/certificates?q=site42` | 300 | 41.2 | 41.7 | 43.1 | 14 % |
+| `/api/v1/targets` | 300 | 4.1 | 4.3 | 4.2 | 1 % |
+| `/api/v1/deployments` | 300 | 3.9 | 3.7 | 3.7 | 1 % |
+| `/api/v1/ssh-keys` | 300 | 0.5 | 0.5 | 0.8 | 0 % |
+| `/api/v1/audit` | 300 | 1.3 | 1.1 | 1.1 | 0 % |
 
-PENDING-FINAL-RUN: the final whole-branch review of the phase, its findings and the rulings on them, ran in parallel
-with this document.
+- Ruling: every p95 was at most 60 % of its budget in all three runs (at most 14 %), so `perf` joined the first line of
+  `make ci` (4748c6a) [26] — why: the margin absorbs CI noise and a regression is caught on every run — cost: about
+  13 s more in `make ci`; the 5,000-certificate `q=` substring search is linear (14 % of budget); the R32 data set seeds
+  no SSH keys, so the SSH key list is measured almost empty — reverse: drop `perf` from `ci` in the Makefile and add
+  "`make perf` passes (R32)" to the release checklist (`04-security.md` §17.7).
+
+## Coverage (Task 22)
+
+`make coverage` passed (exit 0): every earlier floor held, and the new floors were added (4748c6a) at the measured
+values: `alerts` 91.3 %, `alerts/expiry` 100 %, `auth/oidc` 87.0 %, `auth/oidc/claims` 100 %, `platform/csvx` 100 %,
+`reports` 81.9 %, `testutil/fakesmtp` 92.0 %, `testutil/fakeidp` 92.6 % (floors rounded down).
+
+## Final review (2026-10-10)
+
+The final whole-branch review at 3748eb5 (task-final-review.md, read-only, four parallel passes): "Needs fixes";
+Critical 0, Important 2, Minor 27; everything else (the OIDC core, secret handling, the exactly-once ledger, the
+export, the dashboard counts, the migration, the authz and i18n seams) verified sound by reading the code.
+
+- I-1 — a silent sign-in at the IdP (the person still had an IdP session) opened the 5-minute step-up window, so
+  "sign out of Alice, sign in again through SSO" skipped the explicit SSO step-up for every SEC-009 action. Ruling:
+  an SSO sign-in opens the window only when the ID token's `auth_time` is at most 5 minutes old (the window ends 5
+  minutes after it); without `auth_time` it stays closed (bc1a234) [22] — why: SEC-009's step-up must mean a fresh
+  credential — cost: an IdP that sends no `auth_time` always needs the step-up (amends C10).
+- I-2 — an SSO user's API token (up to 365 days) outlived de-provisioning at the IdP, because tokens were revoked only
+  when the person signed in again and was refused. Ruling: option (a), SSO users cannot create API tokens (409
+  `ALC-USR-0003`; the tokens page hides **Create token** and shows a note; revoking still works) (e0fa7b8) [21], [23]
+  — why: the IdP owns the identity (SEC-015) and access ended there must end every credential Alice issued — cost: SSO
+  users cannot create API tokens; scripts use a local account's token.
+- Security-relevant minors fixed: 11 — a stored SMTP password or client secret was kept when the host or port, or the
+  issuer, changed, so a stepped-up session could redirect it → a new destination needs the secret again (422)
+  (993d96a); 1 — a new IdP transport per exchange kept an idle connection → `DisableKeepAlives` (bab83f0); 14 — a long
+  non-ASCII subject gave a header line over 998 octets → Subject capped at 200 characters and folded (24fc606). The
+  open text defect P7-20 found while writing these documents (the switch-off dialog said "Operator") was fixed in
+  969d82d ("becomes an Auditor" / "Denetçi olur").
+- Minor 10 (the SSO start shares the 10-a-minute sign-in bucket per address) is accepted as a known limitation —
+  cost: behind one NAT address the 11th start within a minute waits. The other minors are carried (below).
+- The test seed change 4296a50 (260 export rows so the SSH key list always spans one full page) is test-only.
 
 ## Process
 
@@ -277,8 +320,9 @@ Commits per task (from `git log` and the ledger; a range includes the fix rounds
 - Task 16: 2c65b4e, 3d5166f, 41ed252, 6df6071, 313039a. Task 17: 394ea97, d7c93db, 3748eb5.
 - Task 18: a39b5b0, 55be7e7. Task 19: 4bc5ddf, d2c9b04, 1b4cc48, e472744.
 - Task 20: 6f0080c. Task 21: 045c8e7, 7b3fa58, 5606317, 1fac017, 229f178.
-- Task 22: 4748c6a (coverage floors, the perf line); the documentation commits of this task; PENDING-FINAL-RUN: the
-  commit of the final `make ci` evidence and of the final review's fix round, if any.
+- Task 22: 4748c6a (coverage floors, the perf line); 189cb77, 5366bd1 and the documentation follow-up (docs).
+- Final review fix round: bc1a234 (I-1), e0fa7b8 (I-2), 993d96a, bab83f0, 24fc606 (minors 11, 1, 14), 969d82d
+  (P7-20), 4296a50 (test seed).
 
 ## Carried to later phases
 
@@ -305,9 +349,28 @@ Re-deferred by the plan's "Carries and deferred items", with their reasons:
 Parked or deferred in Phase 7 (each also a known limitation or minor in docs/security/reviews/phase-7.md; no later
 phase named unless given):
 
+- From the final review (ids of task-final-review.md), all unassigned: 2 key-set cache entries never evicted; 3 a
+  step-up `Begin` maps any database error to `ErrNotSSOUser`; 4 the provider count checked outside the insert
+  transaction; 5 `SaveSettings` bumps the version and audits when nothing changes; 6 the step-up `auth_time` is not
+  tied to when the step-up began (hardening); 7 guard refusals before the callback handler answer JSON and leave the
+  binding cookie set; 8 `ValidateIssuer` accepts an upper-case `HTTPS://` (the save then answers 500) and `Validate`
+  does not refuse an empty expected issuer or client ID; 9 disabling a provider or deleting a mapping ends no
+  sessions; 10 the SSO start shares the 10-a-minute sign-in bucket (known limitation); 12 a successful test e-mail
+  does not reset the failing state; 13 the outbox stalls silently when the mailer cannot be built (for example an
+  envelope sealed with another master key); 15 one failing over-cap item blocks the kind's 20 most urgent notices;
+  16 `sentLevels` cannot use an index (whole ledger read every scan); 17 the `alert.more` e-mail does not name its
+  kind; 18 the low-impact deferred items (a malformed `secret_expires_on` aborts the Items statement, a corrupt
+  `notify.recipients` row rolls back a lockout, `smtp.PlainAuth`'s string copy, `parseCAPEM` accepts text before the
+  first block, `Failed24h` approximate, the bare `/license` path); 19 the csvx package doc lacks the leading-whitespace
+  residual risk; 20 the Key Vault dashboard line counts expired items under a label "expiring within 30 days" and
+  links to the unfiltered vault list; 21 `CreateView` validates keys but not values; 22 the export slot and export rate
+  limit are per process; 23 the summary reads failed deployments three times and a failed deployment stays listed
+  after a later success; 24 no test of an export under a locked license; 25 dead code `alerts.Counts`' exclusive
+  buckets and `expiry.BucketOf`; 26 expired sign-in states can live up to about 70 minutes before the hourly prune;
+  27 a web comment says `password: ""` removes the password, but the form never sends it.
 - SSO: the in-flight sign-in after an issuer change; a disabled provider ends no open session (M-4); Alice's address
   can be cleared while a provider is on; providers that accept only `client_secret_post` and endpoints with a query
-  (AD FS `?api-version`) are refused; a new HTTP transport per exchange and key-set cache entries never evicted; the
+  (AD FS `?api-version`) are refused; the
   provider count checked outside the insert transaction (concurrent creates can exceed 5); `SaveSettings` audits and
   demotes when nothing changes; a step-up `Begin` maps any database error to `ErrNotSSOUser`; the user-name shape not
   enforced in `normalized`; token principals carry no `AuthSource`; `ended_count` counts unpruned expired sessions; two
@@ -324,8 +387,7 @@ phase named unless given):
   listed after a later success (no supersede rule, a spec question); a first verification that finds a broken chain
   stores no checkpoint; a manual **Verify** that finds a break does not update `jobs.audit_verify` until the next
   scheduled run; the R32 data set has no SSH keys and `certificates?q=` is a linear scan.
-- Web: D-4, D-5, D-6 (above); the switch-off confirmation says SSO Administrators become Operators while the server
-  makes them Auditors (found while writing these documents, P7-20 of the review); Settings screens not in the
+- Web: D-4, D-5, D-6 (above); Settings screens not in the
   `screens.i18n` sweep; the mail form's 422 wording reuses shared field names and shows field errors twice; a cleared
   secret must be retyped after a failed save; trusting remounts the mail form and drops unsaved edits; the mail
   password stays in memory while the Mail tab is open after a save; `ALC-RPT-0004` shows no cooldown; `maxLength`
