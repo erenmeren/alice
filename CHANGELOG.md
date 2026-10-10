@@ -55,7 +55,14 @@
 ### Security
 - SMTP passwords and OIDC client secrets only as envelopes (`setting_secrets`); PKCE S256, single-use state and nonce
   bound to the browser; users matched by provider and subject, never linked to local accounts; every SMTP and OIDC
-  connection through the address rule. A refused SSO user loses their sessions and API tokens.
+  connection through the address rule. A refused SSO user loses their sessions.
+- SSO users cannot create API tokens (`ALC-USR-0003`), so no credential Alice issued outlives de-provisioning at the
+  identity provider. An SSO sign-in opens the 5-minute step-up window only when the ID token's `auth_time` is at most
+  5 minutes old; otherwise (a silent sign-in at the provider, or no `auth_time`) the first stepped-up action needs the
+  step-up at the provider.
+- A stored SMTP password or client secret is never sent to a new destination: a new mail server host or port, or a
+  new issuer, needs the secret again (422). The identity provider client keeps no idle connection. The e-mail Subject
+  is capped at 200 characters and folded so no header line exceeds 998 octets.
 - Mail server certificates are trusted only by the system, the configured CA bundle or a pin an administrator chose
   after a failed test within the hour; no plaintext SMTP.
 
@@ -63,6 +70,8 @@
 - No Microsoft Graph lookup: Entra ID users in more than 200 groups are refused unless the token carries only the
   application's groups.
 - A group removed at the identity provider keeps an open session until it ends (up to 12 hours).
+- Starting a single sign-on shares the sign-in limit of 10 a minute per address: behind one NAT address, the 11th
+  person starting SSO within a minute gets `ALC-SYS-0005`.
 - The full list is in `docs/security/reviews/phase-7.md` ("Known limitations").
 
 ## Unreleased — Phase 6: SSH key lifecycle and rotation

@@ -302,6 +302,14 @@ in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
 - **An SSO user still has access after leaving a group.** The role is read again at every single sign-on and
   confirmation; an open session keeps working until it ends (at most 12 hours). Choose **Disable** on **Users** to
   stop it at once.
+- **"Confirm at your identity provider" right after a single sign-on.** Alice opens the 5-minute confirmation window
+  at a single sign-on only when the provider authenticated the person within the last 5 minutes (`auth_time`); a
+  silent sign-in at the provider, or one without `auth_time`, asks for the confirmation at the first protected
+  action.
+- **Saving the mail settings or a provider says the password or client secret is required.** A new mail server or
+  port, or a new issuer address, needs the secret again: Alice never sends a stored secret to a new destination.
+- **"Too many requests" when starting a single sign-on.** Starting one counts against the sign-in limit of 10 a minute
+  per address; many people behind one address share it. Wait a minute.
 - **An export failed.** `ALC-RPT-0001` (more than 50,000 rows: narrow the filter), `ALC-RPT-0004` (your previous
   export still runs), `ALC-SYS-0005` (more than 10 exports a minute).
 
@@ -519,9 +527,9 @@ is told to delete it.
 
 ## ALC-USR-0003: This change is not possible for a single sign-on user
 
-**Meaning.** A role change, a password reset or an authenticator reset was refused for a user who signs in through an identity provider. (HTTP 409, reason `user.sso_user`.)
+**Meaning.** A role change, a password reset, an authenticator reset or a new API token was refused for a user who signs in through an identity provider. (HTTP 409, reason `user.sso_user`.)
 
-**Likely cause.** The role of a single sign-on user comes from their groups, and they have no Alice password or authenticator.
+**Likely cause.** The role of a single sign-on user comes from their groups. They have no Alice password or authenticator, and they cannot create API tokens.
 
 **What to do.** Change the user's groups at the identity provider; disable the user here if they must stop at once.
 

@@ -121,7 +121,8 @@ browser extension that fakes events does not. For automation use API tokens, whi
 365). Creating a token asks for a fresh 6-digit code if you have not confirmed your identity in the last five
 minutes. The token is shown once; copy it immediately. Scripts send it as `Authorization: Bearer alice_…`.
 A token never has more rights than its owner's current role, and tokens cannot manage users, settings or tokens.
-Revoking a token stops it at once.
+Revoking a token stops it at once. People who sign in through single sign-on cannot create tokens
+([Single sign-on](#roles-sso-users-may-be-admin-and-sso-users)).
 
 Administrators can list and revoke anyone's tokens through the API: `GET /api/v1/tokens?user_id=<id>` and
 `DELETE /api/v1/tokens/<token id>`, from a signed-in browser session. The **API tokens** page shows your own
@@ -286,7 +287,8 @@ sign-on administrators to their identity provider, see [Single sign-on](#single-
 
 Choose **Save mail settings**. The password is stored only encrypted with the master key, never shown again and
 never returned by the API; afterwards the field is empty and says "A password is stored. Leave the field empty to keep
-it." Every change is in the audit log (**Mail settings changed**; the password never).
+it; a new host or port needs the password again." Changing **Mail server** or **Port** without typing the password
+again is refused on the password field: Alice never sends a stored password to a new destination. Every change is in the audit log (**Mail settings changed**; the password never).
 
 **Send test e-mail** sends a test to the address in **Send the test to** (yours by default) through the **saved**
 settings, so save first. Expected: "The test e-mail was sent to <address>." and the e-mail "Alice test e-mail"
@@ -339,7 +341,8 @@ authenticator code) stays on the same page.
 
 Alice keeps the provider's addresses from the time it read them. When the provider moves its endpoints or keys
 address, choose **Read the provider's settings again**. The client secret is stored only encrypted with the master
-key; edit the provider to replace it (an empty field keeps it). Alice sends the secret in the `Authorization` header
+key; edit the provider to replace it (an empty field keeps it; a new **Issuer address** needs the client secret
+again, so a stored secret is never sent to another provider). Alice sends the secret in the `Authorization` header
 (`client_secret_basic`), asks for the scopes `openid profile email`, follows no redirects and accepts tokens signed
 with RS256, ES256 or PS256 only. At most 5 providers, and at most 200 mappings per provider. A provider through which
 people have signed in cannot be deleted (`ALC-SSO-0005`) and its issuer cannot be changed: switch it off instead.
@@ -388,8 +391,8 @@ group is refused ("Your account has no access to Alice, contact your administrat
 cannot be mapped to Administrator.", `ALC-SSO-0002`) and nobody becomes an Administrator through single sign-on.
 Switching it on needs nothing else. Switching it off is refused while a group is mapped to Administrator
 (`ALC-SSO-0003`); otherwise it asks **Switch off SSO users may be Admin?** and then every SSO user who is an
-Administrator loses the role at once and is signed out. As built, Alice makes them **Auditors** (the confirmation text
-says Operators); at their next single sign-on they get the role their groups map to. Switching the setting on again
+Administrator loses the role at once and is signed out. They become **Auditors** (the confirmation says so);
+at their next single sign-on they get the role their groups map to. Switching the setting on again
 gives no role back.
 
 An **SSO user** is created at their first single sign-on ("User created by single sign-on"). Their user name comes
@@ -402,14 +405,21 @@ On **Users**, SSO users carry the badge **Single sign-on**, the two-factor colum
 and there is no **Set a new password**, **Reset two-factor sign-in** or role choice: their role comes from their
 groups at every single sign-on ("Role updated from the identity provider"), and a change by hand is refused
 (`ALC-USR-0003`). **Disable** and **Enable** work as for everyone. SSO users have no password, no authenticator and no
-recovery codes in Alice and cannot be the break-glass account.
+recovery codes in Alice and cannot be the break-glass account. **SSO users cannot create API tokens**
+(`ALC-USR-0003`): **API tokens** shows them a note instead of **Create token** (they can still revoke tokens), so no
+credential Alice issued outlives the person's removal at the identity provider. A script that needs a token uses one
+of a local account.
 
 **Group changes at the identity provider** take effect at the person's next single sign-on or confirmation. A person
-removed from every mapped group is refused there, and Alice then ends all their sessions and revokes their API
-tokens. Until then an open session keeps working (at most 30 minutes idle, 12 hours in all; Alice keeps no refresh
+removed from every mapped group is refused there, and Alice then ends all their sessions. Until then an open session keeps working (at most 30 minutes idle, 12 hours in all; Alice keeps no refresh
 tokens). To stop someone at once, choose **Disable** on **Users**.
 
 ### MFA and confirming your identity
+
+A single sign-on opens the 5-minute window for actions that ask **Confirm it's you** only when the provider reports
+(`auth_time` in the ID token) that it authenticated the person within the last 5 minutes; the window then ends 5
+minutes after that time. A silent sign-in (the person still had a session at the provider), or a provider that sends
+no `auth_time`, leaves it closed: the first such action asks to confirm at the identity provider.
 
 Alice does not ask SSO users for an authenticator code: **multi-factor authentication is the identity provider's
 job, and requiring it there is the customer's responsibility** (for example Conditional Access in Entra ID, an MFA
@@ -421,6 +431,9 @@ provider**: **Continue to <name>** sends the browser to the provider with a requ
 then returns to the page (**Identity confirmed again** in the audit log). A provider that ignores the request and
 reports an older sign-in makes the confirmation fail (`ALC-SSO-0010`). The confirmation also reads the groups again:
 the role may change, and a person no longer in a mapped group is refused and signed out.
+
+Starting a single sign-on counts against the sign-in limit of 10 a minute per address: behind one company address
+(NAT), the 11th person starting a single sign-on within a minute waits ("Too many requests").
 
 ### Break-glass
 
