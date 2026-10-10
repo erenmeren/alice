@@ -269,7 +269,7 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 # ALICE_E2E_PORT (default 9443), so it runs beside the make up stack, which ci never touches.
 .PHONY: ci
 ci: ## Run the full CI pipeline locally
-	$(MAKE) lint test coverage test-ssh build release-symcheck i18n-check web-lint web-coverage vuln secrets-scan fs-scan
+	$(MAKE) lint test coverage perf test-ssh build release-symcheck i18n-check web-lint web-coverage vuln secrets-scan fs-scan
 	@status=0; $(MAKE) e2e-up e2e-hardening-check e2e || status=$$?; $(MAKE) e2e-down; exit $$status
 	$(MAKE) image-check image-scan
 

@@ -31,5 +31,13 @@
   "alice/internal/sshkeys": 89,
   "alice/internal/sshkeys/keymat": 94,
   "alice/internal/sshkeys/plan": 100,
-  "alice/internal/jobs/sshkeyjobs": 86
+  "alice/internal/jobs/sshkeyjobs": 86,
+  "alice/internal/alerts/expiry": 100,
+  "alice/internal/auth/oidc/claims": 100,
+  "alice/internal/platform/csvx": 100,
+  "alice/internal/alerts": 91,
+  "alice/internal/reports": 81,
+  "alice/internal/auth/oidc": 87,
+  "alice/internal/testutil/fakesmtp": 92,
+  "alice/internal/testutil/fakeidp": 92
 }
