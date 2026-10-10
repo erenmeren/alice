@@ -131,3 +131,51 @@ func writeForeignCertificate(t *testing.T, dir string, notBefore, notAfter time.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.key"), keyPEM, 0o600))
 	return certPEM, keyPEM
 }
+
+func TestRefusesCorruptCertificateFiles(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.crt"), []byte("not a certificate"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.key"), []byte("not a key"), 0o600))
+
+	_, err := tlscert.EnsureSelfSigned(dir, []string{"localhost"}, t0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be loaded")
+	assert.Equal(t, []byte("not a certificate"), readFile(t, filepath.Join(dir, "tls.crt")), "a broken pair is never overwritten")
+}
+
+func TestRefusesMismatchedCertificateAndKey(t *testing.T) {
+	dir := t.TempDir()
+	certA, _ := tlscert.GenerateForTest(t, "Other", t0.Add(-time.Hour), t0.Add(24*time.Hour))
+	_, keyB := tlscert.GenerateForTest(t, "Other", t0.Add(-time.Hour), t0.Add(24*time.Hour))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.crt"), certA, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.key"), keyB, 0o600))
+
+	_, err := tlscert.EnsureSelfSigned(dir, nil, t0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "could not be loaded")
+}
+
+func TestFailsWhenKeyDirectoryCannotBeCreated(t *testing.T) {
+	// A dangling symlink is neither a usable directory nor creatable.
+	link := filepath.Join(t.TempDir(), "keys")
+	require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "missing"), link))
+
+	_, err := tlscert.EnsureSelfSigned(link, []string{"localhost"}, t0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create key directory")
+}
+
+func TestFailsWhenCertificateTargetIsADirectory(t *testing.T) {
+	dir := t.TempDir()
+	// A directory named tls.key counts as an existing key, so only tls.crt is
+	// missing and Alice refuses instead of replacing it.
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "tls.key"), 0o700))
+
+	_, err := tlscert.EnsureSelfSigned(dir, []string{"localhost"}, t0)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only one of tls.crt and tls.key exists")
+}

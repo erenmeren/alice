@@ -218,3 +218,32 @@ func TestPlaintextZeroValueAndUnexportedFields(t *testing.T) {
 		assert.NotContains(t, out, fmt.Sprintf("%x", "PLAIN-CANARY"), verb)
 	}
 }
+
+func TestRedactionMethodsCalledDirectly(t *testing.T) {
+	k := keyring(t)
+	want := "secrets.Keyring{version:1 key:[redacted]}"
+	assert.Equal(t, want, k.String())
+	assert.Equal(t, want, k.GoString())
+
+	p := secrets.NewPlaintext([]byte("CANARY-direct"))
+	assert.Equal(t, "[redacted]", p.GoString())
+	assert.Equal(t, "[redacted]", p.String())
+}
+
+func TestVerifyKeyCheckRejectsMalformedValues(t *testing.T) {
+	k := keyring(t)
+	check, err := k.KeyCheck()
+	require.NoError(t, err)
+	require.NoError(t, k.VerifyKeyCheck(check))
+
+	assert.ErrorIs(t, k.VerifyKeyCheck(nil), secrets.ErrMasterKeyMismatch)
+	assert.ErrorIs(t, k.VerifyKeyCheck(check[:12]), secrets.ErrMasterKeyMismatch)
+
+	tampered := bytes.Clone(check)
+	tampered[len(tampered)-1] ^= 0xff
+	assert.ErrorIs(t, k.VerifyKeyCheck(tampered), secrets.ErrMasterKeyMismatch)
+
+	other, err := secrets.NewKeyring(1, testKey(9))
+	require.NoError(t, err)
+	assert.ErrorIs(t, other.VerifyKeyCheck(check), secrets.ErrMasterKeyMismatch)
+}
