@@ -266,8 +266,8 @@ which finishes even when the connection drops.
 | **Outcome not confirmed** | Manual action is needed: the previous files could not be put back, are back but could not be confirmed, another program changed them, or Alice gave up confirming the outcome. | Check the website now; see the error code in [troubleshooting.md](troubleshooting.md) and the backup on the server. |
 | **Needs attention** | Alice is still trying to find out how the deployment ended (see below). | Check the server's connection. |
 
-Administrators with an email address get an email for every deployment that failed or needs manual action, and one
-when a deployment needs attention. A successful deployment sends no email. Every deployment is in the audit log.
+The alert recipients (**Settings → Recipients**, by default every administrator with an email address) get an email
+for every deployment that failed or needs manual action, and one when a deployment needs attention. A successful deployment sends no email. Every deployment is in the audit log.
 
 ### Deployment history
 
@@ -711,7 +711,11 @@ in the same procedure, re-seal the installation record (`license.installation_se
 start reports the installation as tampered and the evaluation as ended. It must also re-encrypt the platform SSH key
 and re-compute the job payload MACs (label `alice/job/v1`). Do not replace `master.key` by hand.
 
-The private keys of generated SSH keys (`managed_private_keys`) must be re-wrapped by the same procedure. The database
+The private keys of generated SSH keys (`managed_private_keys`) must be re-wrapped by the same procedure, and so must
+the secrets of the settings in `setting_secrets` (the SMTP password `notify.smtp.password` and each identity
+provider's client secret `sso.provider.<id>.client_secret`, AAD `setting_secrets/<key>/ciphertext`): a key left
+sealed with the old master key makes e-mail (`smtp.*` failures) or that provider's sign-ins fail until an
+administrator enters the secret again. The database
 accepts a re-wrap only as a change of the wrapped data key and the key version together, and only to a higher key
 version; nothing else of a stored private key can change, and a destroyed one stays destroyed. A re-wrap therefore
 cannot be rolled back in place: going back to the previous master key means restoring the database backup taken
@@ -808,22 +812,27 @@ was the last attempt, the job is stopped and recorded as `job.dead` with `shutdo
 because the stop was planned. A job stopped after a crash or a killed process is announced by email as usual.
 
 Periodic work: license evaluation (hourly in every process, retried within minutes when it fails), email sending
-(every minute), audit chain verification (checked every
-hour, run once a day, recorded as `audit.verified` by `scheduler`), clean-up (hourly: expired sessions and setup
-sessions, finished jobs older than 90 days), scheduling of the daily server scans (every minute) and the check for
+(`notify.send`, every minute; retries for 24 hours, see [Email](#email)), the expiry check (`alerts.scan`, every 15
+minutes, also in lock: it records and queues the expiry e-mails of certificates in use, Key Vault certificates, keys
+and client secrets; at most 20 e-mails per kind and check plus one summary; one check at a time across processes,
+through a database lock, so a second one is skipped and logs `alerts.scan_skipped`; when notices were recorded but
+nobody would get them it logs `alerts.no_recipients`), audit chain verification (checked every
+hour, run once a day, recorded as `audit.verified` by `scheduler`; its result and the verified head hash are on the
+**Dashboard**), clean-up (hourly: expired sessions and setup
+sessions, single sign-on states older than 10 minutes, finished jobs older than 90 days), scheduling of the daily server scans (every minute) and the check for
 interrupted deployments (every minute), and for Key Vaults the queueing of due vault checks with the clean-up of
 imports whose task ended (`kv.schedule`, every minute) and the planning of automatic deployments (`kv.auto_deploy`,
 every minute), and for SSH keys the planning of scheduled rotations (`rotation.plan`, every minute; not while the
 license does not allow changes), the rotation sweep (`rotation.sweep`, every minute, also in lock: it advances every
 run, pauses runs in lock, sends the renewal email and queues the work of each place again, at most five times per
 place and step) and the hourly `sshkey.destroy_retired` (destroys the private keys of keys retired 30 days ago, at most
-500 per run, retires old keys nothing uses any more, and records the outcome of key deploys whose task ended without
+500 per run, after the retention of **Settings → General**, 30 days by default; retires old keys nothing uses any more, and records the outcome of key deploys whose task ended without
 one, queueing a scan of their server; not in lock). A key deploy gets up to 3 attempts; a rotation's place job is
 queued again by the sweep and never sends the dead-job email (the rotation's own emails report its failures). A vault check (`kv.poll`) runs once, without a retry and without a dead-job email (its failure is
 shown on the vault, and the next check follows the vault's interval); an access check (`kv.test_connection`) runs
 once; an import (`kv.import`) gets up to 3 attempts and is retried only before it was sent, and when another path
-ended its import (the vault was removed) the job ends failed with the import's code, without an email. Administrators
-with an email address get an email when a job stops after its last attempt, when a job was changed in the
+ended its import (the vault was removed) the job ends failed with the import's code, without an email. The alert
+recipients get an email when a job stops after its last attempt, when a job was changed in the
 database, and when the daily audit check finds a problem.
 
 ## Checking an audit export outside Alice
@@ -892,43 +901,49 @@ existing installation, Alice starts from the later of the system clock and the r
 
 ## Email
 
-In this release email is configured with environment variables in `deploy/.env`; a Settings page follows in a later
-release. Alice sends license warnings to every enabled administrator with an email address, in their language.
+Since Phase 7 the mail server is set up by an administrator in the web UI, **Settings → Email** (with a test e-mail
+and **Trust this certificate**), and who gets the e-mails in **Settings → Recipients**; see
+[admin-guide.md](admin-guide.md#mail-server). The settings are stored in the database; the password only as an
+envelope encrypted with the master key (table `setting_secrets`), never in a file, a log line or an API answer.
+
+**Upgrading from the `ALICE_SMTP_*` variables.** At the first start of this version, when no mail settings exist in
+the database yet, Alice imports `ALICE_SMTP_HOST`, `ALICE_SMTP_PORT`, `ALICE_SMTP_FROM`, `ALICE_SMTP_USERNAME`,
+`ALICE_SMTP_TLS`, the password from `ALICE_SMTP_PASSWORD_FILE` and the certificate authority from
+`ALICE_SMTP_CA_FILE` **once** (audit entry **Mail settings imported from the environment**, actor `startup`). The rules
+of the import:
+
+- `ALICE_SMTP_USERNAME` without a readable password (no `ALICE_SMTP_PASSWORD_FILE`, or an empty file): nothing is
+  imported and the log says "ALICE_SMTP_USERNAME is set without a password file; the SMTP settings were not imported".
+  Enter the settings in the web UI instead.
+- Values Alice cannot accept, or a password or CA file that cannot be read: Alice does not start and says why; fix or
+  remove the variables.
+- After the import, and whenever mail settings exist (also after an administrator removed them with
+  `DELETE /api/v1/settings/smtp`), the variables are **ignored** and every start logs the warning "ALICE_SMTP_* is set
+  but the mail settings in Settings are used; remove the variables". Remove them from `deploy/.env`, delete the
+  password file from `deploy/secrets/` and the mounts from `docker-compose.override.yml`: changing them has no effect
+  any more.
+
+Alice never sends e-mail unencrypted (`starttls` or `tls`, TLS 1.2 or newer) and checks the server's certificate
+against the system's authorities, the optional certificate authority of the settings, or the certificate an
+administrator pinned. The mail server is reached through the same address rule as SSH (link-local and metadata
+addresses refused, `ALC-NTF-0009`).
+
+**Delivery.** E-mails are queued in the database (`notifications_outbox`) and sent every minute, one per recipient
+(task `notify.send`). A failed send is retried after 30 seconds, doubling up to one hour, for 24 hours after it was
+queued; then it is marked `failed` and Alice logs an error with `event=notify.gave_up`. Every failed attempt is logged
+with a reason code (`smtp.connect`, `smtp.tls`, `smtp.untrusted`, `smtp.auth`, `smtp.rejected`,
+`smtp.address_refused`), never the password or the server's text. After three failed attempts in a row administrators
+see **E-mails could not be sent**; `GET /api/v1/notifications/status` (administrators and their API tokens) gives the
+counts and the last error code. Without mail settings every e-mail is marked `skipped_no_smtp` and never sent later.
 
 **Scheduled SSH key rotations need working email delivery.** A scheduled rotation starts only after its preview email
-was accepted by the mail server for at least one administrator before the planned start; with `ALICE_SMTP_HOST` empty,
-or while the mail server refuses Alice, every scheduled run is cancelled (`ALC-ROT-0017`). **Run now** does not need
-email. See [Previews and notices](#previews-and-notices).
+was accepted by the mail server for at least one recipient before the planned start; without mail settings, or while
+the mail server refuses Alice, every scheduled run is cancelled (`ALC-ROT-0017`). **Run now** does not need email.
+See [Previews and notices](#previews-and-notices). The failing banner and the test e-mail make a broken setup visible
+before a rotation is due.
 
-| Variable | Meaning |
-|---|---|
-| `ALICE_SMTP_HOST` | Mail server. Empty = no email: warnings are then shown only as banners, and each email is recorded as skipped. |
-| `ALICE_SMTP_PORT` | Default 587 with `starttls`, 465 with `tls` |
-| `ALICE_SMTP_FROM` | Sender, for example `Alice <alice@example.com>`; required when `ALICE_SMTP_HOST` is set |
-| `ALICE_SMTP_USERNAME` | Optional user name; needs `ALICE_SMTP_PASSWORD_FILE` (both or neither) |
-| `ALICE_SMTP_PASSWORD_FILE` | Path, inside the container, of a file holding the password (never the password itself) |
-| `ALICE_SMTP_TLS` | `starttls` (default) or `tls`. Alice never sends email unencrypted, needs TLS 1.2 or newer and checks the server certificate. |
-| `ALICE_SMTP_CA_FILE` | Path, inside the container, of a PEM file with a private certificate authority, if the mail server's certificate comes from one |
-
-The password and CA files must be mounted into the container. Add a `docker-compose.override.yml` next to
-`docker-compose.yml`:
-
-    services:
-      alice:
-        volumes:
-          - ./secrets/smtp_password:/run/secrets/smtp_password:ro
-          - ./secrets/smtp_ca.pem:/run/secrets/smtp_ca.pem:ro
-
-and set `ALICE_SMTP_PASSWORD_FILE=/run/secrets/smtp_password` (and `ALICE_SMTP_CA_FILE=/run/secrets/smtp_ca.pem`)
-in `deploy/.env`. `make up` (and `make down`, `make reset`, `make logs` and the other targets of that stack) adds
-the override file when it exists, and `docker compose` run by hand in `deploy/` reads it by itself; keep the file
-and `deploy/secrets/` out of git (both are ignored). The e2e stack (`make e2e-up`) never reads it.
-`ALICE_TRUSTED_PROXIES` and `ALICE_LOG_LEVEL` set in `deploy/.env` reach Alice the same way as the email
-settings (see `docs/dev/getting-started.md`, Configuration).
-Alice refuses to start with a clear message when the settings are inconsistent or a file cannot
-be read; the recovery commands (`alice admin …`, `alice audit verify`) do not read the email settings and keep
-working. A failed send is retried for about 2 hours (10 attempts, 30 seconds doubling up to 30 minutes); every
-failed attempt is logged with a reason code (never the password), and the email is then marked `failed`.
+`ALICE_TRUSTED_PROXIES` and `ALICE_LOG_LEVEL` are still read from `deploy/.env` (see `docs/dev/getting-started.md`,
+Configuration).
 
 ## Health endpoints and request limits
 
@@ -977,3 +992,22 @@ not work on the new one.
 `make e2e-up` starts the **test build** as a separate compose project, `alice-e2e`, with its own database and volumes
 on its own port (`ALICE_E2E_PORT`, default 9443); every Playwright run empties all its tables (`POST /test/reset`).
 It never touches the `make up` stack. Never run the test build on a server.
+
+The e2e stack also runs two test-only fakes, never part of a release and hardened like the other e2e containers
+(`make e2e-hardening-check`): `fakesmtp` (a mail server with STARTTLS and a self-signed certificate generated at
+start, a MailHog-compatible message API, and switches to go down or refuse an address; on the internal network only)
+and `fakeidp` (an OpenID Connect identity provider with discovery, keys, sign-in and token endpoints and a switch for
+the next person who signs in; published on `127.0.0.1:9444` only, reached by Playwright's browser as
+`https://idp.alice-e2e.test:9444` through Chromium's host-resolver rule). Both are driven with `ctl` commands inside
+their containers, for example `docker compose -p alice-e2e exec fakesmtp /alice-fakesmtp ctl messages` or
+`… exec fakeidp /alice-fakeidp ctl next-user --sub S --groups alice-operators`; Phase 7's journeys
+(`web/e2e/phase7.spec.ts`) use them. The e2e build never runs the expiry check on its own: tests run it with
+`POST /test/scheduler/run`, and `POST /test/seed/dashboard` loads the dashboard's data set. The fake identity
+provider signs with the real time, so a test that moves Alice's clock by more than about a minute must do its single
+sign-on steps first.
+
+`make perf` runs the R32 performance test (`TestR32DashboardAndListBudgets`, tags `integration perf`): a test database
+with 5,000 certificates on 500 servers, 500 deployments and 5,000 audit entries, then 10 warm-up and 100 measured
+requests per page through the whole HTTP stack, against the budgets of 500 ms (dashboard) and 300 ms (lists) at the
+95th percentile. It needs Docker (testcontainers) and nothing else using it, and takes about 20 seconds; never run it
+while Playwright runs.

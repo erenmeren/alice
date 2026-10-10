@@ -1,5 +1,70 @@
 # Changelog
 
+## Unreleased — Phase 7: Alerts, dashboard and SSO
+
+**Upgrade notes**
+- Migration `00011` runs at start (alert ledger, settings secrets, saved views, identity providers, SSO users, sign-in
+  states). Once a sent notice, a settings secret, a saved view, a provider or an SSO user exists, it refuses to go
+  down (`Z1015`).
+- **Mail settings move to Settings → Email.** At the first start, `ALICE_SMTP_*` (with `ALICE_SMTP_PASSWORD_FILE` and
+  `ALICE_SMTP_CA_FILE`) are imported once; afterwards they are ignored with a warning in the log — remove them from
+  `deploy/.env`. The password is stored encrypted in the database. A user name without a readable password is not
+  imported (enter the settings in the web UI); an unreadable password or CA file stops the start.
+- **Alert recipients**: every e-mail Alice sends to administrators now goes to the recipients of Settings →
+  Recipients (by default every administrator with an e-mail address, as before).
+- The first expiry check after the upgrade sends one notice for each certificate in use, Key Vault certificate, key
+  and client secret that has already reached a threshold (only the most urgent one), at most 20 per kind plus a
+  summary.
+- Single sign-on needs Alice's address (Settings → General); new identity providers are created switched off.
+- No helper change: `alice-helper` stays at protocol 6 (1.5.0).
+
+### Added
+- Dashboard: certificates expired and within 7, 30 and 60 days (each count equals the list its link opens), Key
+  Vault keys and secrets expiring within 30 days, expiring soon (expired ones marked), failed deployments of the last
+  7 days, servers and vaults by status, license, upcoming rotations, needs attention, and the audit log's last
+  verified head for offline recording (administrators and auditors).
+- Expiry e-mails for certificates in use, Key Vault certificates, keys and client secrets at 60/30/14/7/1 days
+  (editable) and once expired; exactly once per threshold; the license note in lock; the check `alerts.scan` every
+  15 minutes.
+- Settings: Email (test e-mail, trust this certificate, CA bundle), Recipients, Alerts, General (Alice's address,
+  retired-key retention).
+- Retries of e-mail for 24 hours and the "E-mails could not be sent" banner; the sign-in lockout e-mail.
+- Filters in the address, saved views and CSV export (formula-safe, audited before the first byte) for certificates
+  and SSH keys; certificate filters for 7, 14 and 90 days and Key Vault.
+- Single sign-on with OpenID Connect (Entra ID, AD FS, Keycloak): group mappings, "SSO users may be Admin" (off by
+  default), step-up at the identity provider, break-glass with the local administrator.
+- Codes `ALC-NTF-0002..0009`, `ALC-SSO-0001..0016`, `ALC-RPT-0001..0004`, `ALC-USR-0003`, `ALC-SYS-0009`;
+  permission `sso.manage`; `make perf` (R32); e2e-only fakes `fakesmtp` and `fakeidp` and the endpoint
+  `POST /test/seed/dashboard`.
+- Guides: "Dashboard", "Alerts and e-mail", "Mail server", "Single sign-on", "Saved views and export" in
+  `docs/admin-guide.md`; "Email" rewritten in `docs/operator-guide.md`.
+
+### Changed
+- The Home page is the Dashboard. The outbox retries for 24 hours instead of 10 attempts. Key Vault polls read stored
+  versions in one batch. The retention of retired SSH private keys is a setting (30 days by default).
+- A HEAD request to an audited export (`/certificates/export`, `/ssh-keys/export`, `/audit/export`) is refused with
+  405 (`ALC-SYS-0009`) before anything runs.
+- Users and sessions carry `auth_source` and `sso_provider_id`.
+
+### Fixed
+- A lock sweep recorded at a later time (the clock was set back) no longer counts as recent, so queued work is still
+  held in lock (`internal/jobs`).
+- The monitored-items query reads live locations through the certificate index (the expiring list at 5,000
+  certificates went from about 650 ms to about 45 ms).
+
+### Security
+- SMTP passwords and OIDC client secrets only as envelopes (`setting_secrets`); PKCE S256, single-use state and nonce
+  bound to the browser; users matched by provider and subject, never linked to local accounts; every SMTP and OIDC
+  connection through the address rule. A refused SSO user loses their sessions and API tokens.
+- Mail server certificates are trusted only by the system, the configured CA bundle or a pin an administrator chose
+  after a failed test within the hour; no plaintext SMTP.
+
+### Known issues
+- No Microsoft Graph lookup: Entra ID users in more than 200 groups are refused unless the token carries only the
+  application's groups.
+- A group removed at the identity provider keeps an open session until it ends (up to 12 hours).
+- The full list is in `docs/security/reviews/phase-7.md` ("Known limitations").
+
 ## Unreleased — Phase 6: SSH key lifecycle and rotation
 
 **Upgrade notes**

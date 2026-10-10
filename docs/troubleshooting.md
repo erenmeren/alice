@@ -263,6 +263,56 @@ in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
   never deploys it. Add the intermediate certificates to the certificate in Key Vault (a new version) to avoid
   this.
 
+## Alerts, e-mail and single sign-on
+
+- **No e-mails arrive.** Open **Settings → Email** and choose **Send test e-mail** (it uses the saved settings). Its
+  answer names the cause: no mail settings (`ALC-NTF-0002`), server not reachable (`ALC-NTF-0003`), encryption
+  (`ALC-NTF-0004`), certificate not trusted (`ALC-NTF-0005`: compare the fingerprint, then **Trust this
+  certificate**, or enter your certificate authority), user name or password (`ALC-NTF-0006`), sender or recipient
+  refused (`ALC-NTF-0007`), an address Alice does not connect to (`ALC-NTF-0009`). If the test works, check
+  **Settings → Recipients** (with **Send alerts to every administrator with an e-mail address** on, an administrator
+  without an e-mail address on **Users** gets nothing; Alice's log then says `alerts.no_recipients` after an expiry
+  check) and **Settings → Alerts**. The banner **E-mails could not be sent** shows the last error code of the
+  scheduled e-mails (`smtp.connect`, `smtp.tls`, `smtp.untrusted`, `smtp.auth`, `smtp.rejected`,
+  `smtp.address_refused`). A server whose certificate was renewed needs **Trust this certificate** again. E-mails
+  queued while the mail server was down are retried for 24 hours and then given up (`notify.gave_up` in the log).
+- **A certificate expires and no e-mail came.** Only certificates in use on a server are e-mailed: an uploaded
+  certificate on no server, or one whose places all disappeared, is listed but not e-mailed. Each threshold is sent
+  once per expiry date; after a downtime only the most urgent reached threshold is sent; changing the thresholds
+  never resends. In one check at most 20 e-mails per kind are sent; the rest are in one "More expiry notices"
+  e-mail. Look for **Expiry notice recorded** (`alert.sent`) in the audit log.
+- **`ALICE_SMTP_*` changes have no effect.** Since Phase 7 the mail settings live in **Settings → Email**; the
+  variables were imported once and are now ignored (Alice logs a warning at every start). See
+  [operator-guide.md](operator-guide.md#email).
+- **SSO sign-in refused.** The sign-in page shows the reason, and the audit log has one **Single sign-on refused**
+  entry (`auth.oidc.denied`) whose `reason` names it: `no_access` (no group of the person is mapped, `ALC-SSO-0006`),
+  `groups_overage` (Entra ID sent no groups, `ALC-SSO-0007`), `email_in_use` (a local account has the e-mail,
+  `ALC-SSO-0008`), `idp_unreachable` (`ALC-SSO-0009`), `login_invalid` (the token failed a check: signature, issuer,
+  audience, times, nonce, `ALC-SSO-0010`), `login_expired` (started more than 10 minutes ago, in another browser, or
+  used twice, `ALC-SSO-0011`), `user_disabled` (`ALC-SSO-0012`), `provider_disabled` (`ALC-SSO-0013`),
+  `stepup_other_user` (`ALC-SSO-0014`), `idp_error` (the provider answered with an error, often a redirect address
+  that is not registered, `ALC-SSO-0015`). Check the group values against what the provider sends (Entra ID: object
+  IDs; Keycloak with full paths: `/group`), that the redirect address shown in Alice is registered exactly, and that
+  **Settings → General** holds Alice's address (`ALC-SSO-0004`). The local administrator can always sign in with
+  password and authenticator code.
+- **"Alice could not read the identity provider's settings" (`ALC-SSO-0001`).** The `cause` says why: `connect`,
+  `tls` (enter the provider's certificate authority), `status`, `document`, `issuer_mismatch` (the issuer address must
+  be exactly the one in the provider's discovery document, including a trailing `/v2.0` or `/adfs`), `not_https`
+  (also for an endpoint whose address carries a query) or `jwks`.
+- **An SSO user still has access after leaving a group.** The role is read again at every single sign-on and
+  confirmation; an open session keeps working until it ends (at most 12 hours). Choose **Disable** on **Users** to
+  stop it at once.
+- **An export failed.** `ALC-RPT-0001` (more than 50,000 rows: narrow the filter), `ALC-RPT-0004` (your previous
+  export still runs), `ALC-SYS-0005` (more than 10 exports a minute).
+
+The audit actions of these features: `settings.smtp_changed`, `settings.smtp_imported`, `settings.smtp_removed`,
+`settings.smtp_tested`, `settings.smtp_trusted`, `settings.smtp_untrusted`, `settings.recipients_changed`,
+`settings.thresholds_changed`, `settings.general_changed`, `alert.sent`, `alert.summarized`, `inventory.exported`,
+`sso.provider_created`, `sso.provider_changed`, `sso.provider_refreshed`, `sso.provider_deleted`,
+`sso.mapping_created`, `sso.mapping_deleted`, `sso.mapping.denied`, `sso.admin_role_allowed`,
+`sso.admin_role_disallowed`, `auth.oidc.denied`, `user.provisioned`, `user.role_synced`, `user.demoted`,
+`user.sessions_ended`; single sign-ons and confirmations are `auth.login` and `auth.stepup` with `method` `oidc`.
+
 ## License messages
 
 - **"The server clock changed unexpectedly …"** The server's clock is behind the latest time Alice has seen. Alice
@@ -293,8 +343,8 @@ in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
 - **Every upload says "This license was issued with a key this version of Alice does not know."** If this happens
   with every file from your vendor, the build has no vendor key (`alice license keys` says so): install the
   vendor's release build.
-- **No warning emails arrive.** Check `ALICE_SMTP_*` ([operator-guide.md](operator-guide.md#email)) and that the
-  administrators have an email address on **Users**. The container log shows a reason code for each failed attempt.
+- **No warning emails arrive.** See "No e-mails arrive" under
+  [Alerts, e-mail and single sign-on](#alerts-e-mail-and-single-sign-on).
 - **Alice logs "this build embeds no license verification key".** A development or pre-release build: only the
   evaluation works. See `alice license keys`.
 

@@ -50,13 +50,32 @@ This guide walks you through the Alice setup wizard. Allow 10 minutes.
    Expected: **Alice is ready**.
 10. Choose **Go to the dashboard**. Here too, Alice may ask for a new 6-digit code if more than five minutes
     passed.
-    Expected: the home page **Welcome, <your name>**, with a blue evaluation banner if you started the evaluation.
+    Expected: the **Dashboard**, headed **Welcome, <your name>**, with a blue evaluation banner if you started the
+    evaluation.
 
 If you close the browser after step 6, sign in normally (password, then the code from your app). Alice shows a
 red banner **Finish setting up: choose a recovery passphrase.** until you complete step 7,
 **Finish setting up: add a license or start the evaluation.** until you complete step 8, and
 **Finish setting up: open the setup wizard to confirm the last step.** until you complete step 10. The banner
 links back to the wizard.
+
+## After the wizard
+
+The wizard does not set up e-mail or single sign-on: both are in **Settings** (administrators only), see
+[admin-guide.md](admin-guide.md).
+
+- **Settings → Email**: the mail server, then **Send test e-mail**. Without it Alice sends no e-mail at all (expiry
+  alerts, license warnings, sign-in blocks, deployment and rotation e-mails), and scheduled SSH key rotations never
+  start.
+- **Settings → Recipients** and **Settings → Alerts**: who gets the e-mails (by default every administrator with an
+  e-mail address) and how many days before an expiry.
+- **Settings → General**: **Alice's address** (the `https://` address people open), needed for single sign-on and for
+  the link in e-mails.
+- **Settings → Single sign-on**: identity providers and group mappings. Keep the administrator you just created: it
+  is the break-glass account that signs in with password and authenticator code when the identity provider is down.
+
+An installation upgraded from a version that read the mail settings from `ALICE_SMTP_*` takes them over once at its
+first start ([operator-guide.md](operator-guide.md#email)).
 
 ## If something goes wrong
 

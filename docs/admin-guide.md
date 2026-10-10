@@ -1,7 +1,7 @@
 # Administrator Guide
 
-This guide covers day-to-day administration. Sections for alerts and SSO are added in later releases. First-time setup is described in [first-run.md](first-run.md); server commands are in
-[operator-guide.md](operator-guide.md).
+This guide covers day-to-day administration. First-time setup is described in [first-run.md](first-run.md); server
+commands are in [operator-guide.md](operator-guide.md).
 
 ## Users and roles
 
@@ -9,7 +9,7 @@ Alice has three roles:
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Administrator | Everything: users, settings, audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs | — |
+| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs | — |
 | Operator | View inventory; test servers, run discovery and remove SSH keys; generate SSH keys and deploy them; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that, download a private key, manage rotations |
 | Auditor | View inventory read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
@@ -88,12 +88,13 @@ attempt (1, 2, 4, 8 and 16 seconds). After 10, the account is blocked for 15 min
 message stays "Incorrect username or password." even for the right password, so an attacker learns nothing.
 The count starts again only after a complete sign-in (password and code); a correct password on its own does not
 reset it. Because the count is still 10 or more when a block ends, one more wrong attempt starts a new 15-minute
-block. **Set a new password** on **Users** clears the block at once. If the blocked account is the only
+block. **Set a new password** on **Users** clears the block at once (not for single sign-on users, who sign in at their
+identity provider and are never blocked by Alice). If the blocked account is the only
 administrator (so nobody can open **Users**), the server operator runs `alice admin unlock <username>` (see
 [operator-guide.md](operator-guide.md)): it sets the count back to zero and ends the block, and is recorded in the
 audit log (`user.unlocked`, actor `cli`).
-Every sign-in, failure and block is in the audit log (`auth.lockout`). Email notification of blocks arrives in a
-later release.
+Every sign-in, failure and block is in the audit log (`auth.lockout`). Each block also sends one e-mail, "Sign-in
+blocked: <username>", to the alert recipients ([Recipients](#recipients)).
 
 The same failure count also covers **Confirm it's you** codes and the current password on **Change password**: while
 an account is blocked, its owner cannot confirm their identity for administrator actions either, even in a session
@@ -154,9 +155,313 @@ chain.
   All sessions of a person count together, and all API tokens of a person count together.
 - After verification Alice shows the **Fingerprint of the latest entry**. Record it somewhere outside Alice (for
   example in a ticket) from time to time: a later fingerprint that does not continue from it shows that entries
-  were removed. Syslog forwarding arrives in a later release.
+  were removed. The **Dashboard** shows the latest verified entry's hash too (**Audit log head**). Syslog forwarding
+  arrives in a later release.
 - Alice also checks the whole chain once a day on its own (recorded as `audit.verified` by `scheduler`). If the
-  check finds a problem, administrators with an email address get one email about it.
+  check finds a problem, the alert recipients get one email about it and the **Dashboard** shows it under **Needs
+  attention**.
+
+## Dashboard
+
+**Dashboard** is the first page after sign-in (it replaced **Home**). Everyone sees it; what each part shows depends
+on the role. Every count is a link to the list it counts, and that list shows exactly that many rows.
+
+- **Certificates**: **Expired**, **Within 7 days**, **Within 30 days** and **Within 60 days**. The windows include
+  each other and the expired ones, as the **Expiry** filter of **Certificates** does ("Within 30 days" also counts
+  the expired certificates and those within 7 days). They count every certificate in the inventory, also uploaded
+  ones that are on no server. **Certificates in use: N** counts the certificates found on at least one server Alice
+  manages: only those get expiry e-mails (see [Alerts and e-mail](#alerts-and-e-mail)).
+- **Key Vault keys and secrets expiring within 30 days: N** counts the keys of your vaults and the client secrets
+  Alice signs in to vaults with, expired ones included. Key Vault certificates are counted with the certificates.
+- **Expiring soon**: everything in use that expires within 30 days (certificates on servers, Key Vault
+  certificates, keys and client secrets), soonest first, with the server or vault; expired ones come first and are
+  marked **Expired**.
+- **Failed deployments (last 7 days)**: deployments that failed, were rolled back or could not be rolled back in the
+  last 7 days, and every deployment that still needs attention, however old.
+- **Servers and vaults by status**, **License** (operators see only whether the license has expired; administrators
+  and auditors also see its state and **Valid until**) and **Upcoming rotations** (policies whose next run is due
+  within 14 days, and runs that are running or need attention).
+- **Audit log head** (administrators and auditors): the entry number, hash and time of the last entry the daily
+  integrity check verified. Write the hash down outside Alice from time to time (for example in a ticket): a later
+  head that does not continue from it shows that entries were removed. When the last check found a problem, this
+  part says so; open **Audit log** and choose **Verify integrity**.
+- **Needs attention**: servers with **Server identity changed** or **Sign-in refused**, failed deployments, for
+  administrators and auditors a broken audit chain, and for administrators failing e-mail delivery. Each entry links
+  to the page where you deal with it.
+
+Administrators also see the banner **E-mails could not be sent** at the top of every page while e-mail delivery is
+failing (see [Alerts and e-mail](#alerts-and-e-mail)).
+
+## Alerts and e-mail
+
+### What Alice alerts about
+
+Every 15 minutes (the background task `alerts.scan`, which also runs while the license is expired) Alice checks what
+expires and e-mails the recipients:
+
+| Kind | Monitored while |
+|---|---|
+| Certificate in use | It is found at a place that still exists on a server Alice manages |
+| Key Vault certificate | It is enabled and still in the vault, unless its current version is a certificate in use on a server (the certificate e-mail covers it then) |
+| Key Vault key | It is enabled, still in the vault and has an expiry date |
+| Client secret of a vault | Alice signs in to the vault with a client secret; the date is the one typed when the vault was added or its credentials replaced |
+
+By default Alice e-mails 60, 30, 14, 7 and 1 days before the expiry, and once more when it has expired. **Settings →
+Alerts** changes the days (**Send an e-mail this many days before an expiry**): 1 to 10 different whole numbers from
+1 to 365, with **Add threshold** and **Remove threshold N**; **Save alert thresholds** is disabled while a row is
+empty. A change applies from the next check and never sends an e-mail again.
+
+Each threshold is e-mailed once per expiry date, also across restarts and with two Alice processes. When Alice was
+not running while several thresholds passed, the next check sends only the most urgent one (for example only the
+7-day notice after being down from 31 to 13 days before the expiry), and never a less urgent one after a more urgent
+one; a notice skipped that way is never sent later. A renewed certificate (a new expiry date) starts again from the
+first threshold; a certificate replaced on its server is no longer in use and gets no further e-mails.
+
+**Not monitored** by this check: certificates you uploaded or completed from a signing request that are on no server
+(listed, counted on the Dashboard, but not e-mailed until deployed); certificates whose places all disappeared or
+whose servers were removed; disabled Key Vault certificates and keys, keys without an expiry date, and vaults removed
+from Alice. Other conditions keep their own e-mails, each sent once when the condition starts: license warnings (60,
+30, 14, 7 and 1 days before the end, see [License](#license)), a changed server identity, a server that refuses
+Alice's key, failed deployments, a broken audit chain, stopped tasks and rotation events. The Dashboard lists them
+under **Needs attention**.
+
+**The first check after the upgrade** e-mails every monitored item that has already reached a threshold (only its
+most urgent one). In one check Alice sends at most 20 e-mails of each kind; the rest are recorded the same way and
+summed up in one e-mail "More expiry notices: N" per kind. Every notice is in the audit log (**Expiry notice
+recorded**, `alert.sent`; the summary `alert.summarized`).
+
+**What an expiry e-mail says**: the certificate's name, its expiry time in UTC (for example `2026-10-17 09:00 UTC`;
+e-mails do not use the person's time zone), the days left, the websites and servers that use it (up to 10 each) and
+its SHA-256 fingerprint; for Key Vault items the vault's name. It never carries a private key, a secret's value or
+a password. While the license is expired, every expiry e-mail ends with "Note: Alice's license has expired. Renew it
+to resume automatic deployment. License page: …" (Key Vault e-mails also say that Key Vault data may be outdated);
+the link is Alice's address from **Settings → General** followed by `/license` (without the address, only
+`/license`).
+
+### Recipients
+
+**Settings → Recipients** decides who gets every e-mail Alice sends to administrators: the expiry e-mails above, the
+license warnings, the sign-in block e-mail, and the e-mails about deployments, Key Vaults, servers, stopped tasks,
+the audit chain and SSH key rotations.
+
+- **Send alerts to every administrator with an e-mail address** (on by default): every enabled administrator with an
+  e-mail address on **Users**, each in their own language.
+- **More addresses** (**Add address**, up to 20): any address, for example a team mailbox, each with a language
+  (English or Turkish). Type the plain address (`ops@example.com`), without a name or angle brackets. An address that
+  is also an administrator's gets one e-mail.
+
+At least one of the two is needed. **Save recipients** records the change with the addresses in the audit log
+("Alert recipients changed"). When a check records notices but nobody would get them (no extra address, and no
+enabled administrator with an address), Alice still records them and writes a warning to its log
+(`alerts.no_recipients`).
+
+**Sign-in block e-mail**: when a local account is blocked for 15 minutes after 10 wrong attempts, the recipients get
+"Sign-in blocked: <username>" with the number of attempts and the minutes (see [Sign-in protection](#sign-in-protection)).
+
+### Delivery and "E-mails could not be sent"
+
+Alice sends queued e-mails every minute, one per recipient. A failed send is tried again after 30 seconds, doubling up
+to one hour, until 24 hours after the e-mail was queued; then it is marked failed and Alice logs `notify.gave_up`.
+Each recipient is sent to once: when the mail server refuses one address, the others still get their e-mail. Without
+mail settings every e-mail is recorded as skipped and never sent later.
+
+After three failed send attempts in a row (any e-mail, any recipient), administrators see **E-mails could not be
+sent** on every page, with the last error code (for example `smtp.connect`) and **Open the mail settings**; the
+Dashboard lists it under **Needs attention**. The next successful send ends it. One address the mail server refuses
+(`smtp.rejected`) can raise the banner while everyone else gets their e-mails: check **Settings → Recipients**. The
+codes are explained under `ALC-NTF-0003` to `ALC-NTF-0009` in [troubleshooting.md](troubleshooting.md).
+
+## Mail server
+
+Open **Settings** (administrators only; Alice asks for the authenticator code when you open it, or sends single
+sign-on administrators to their identity provider, see [Single sign-on](#single-sign-on)) → **Email**:
+
+| Field | Meaning |
+|---|---|
+| **Mail server**, **Port** | The SMTP server's name or address and port |
+| **Encryption** | **STARTTLS (upgrades an open connection)**, usually port 587, or **TLS (encrypted from the start)**, usually port 465. Alice always encrypts, with TLS 1.2 or newer; there is no unencrypted option |
+| **Sender address** | For example `alice@example.com` |
+| **User name (optional)**, **Password** | The mail server account. A user name needs a password; without a user name Alice does not sign in to the server |
+| **Certificate authority (optional, PEM)** | Your organisation's certificate authority, if the mail server's certificate comes from one (up to 20 certificates, 64 KiB) |
+
+Choose **Save mail settings**. The password is stored only encrypted with the master key, never shown again and
+never returned by the API; afterwards the field is empty and says "A password is stored. Leave the field empty to keep
+it." Every change is in the audit log (**Mail settings changed**; the password never).
+
+**Send test e-mail** sends a test to the address in **Send the test to** (yours by default) through the **saved**
+settings, so save first. Expected: "The test e-mail was sent to <address>." and the e-mail "Alice test e-mail"
+arrives. Each test is in the audit log (**Test e-mail sent**, with the result); each person can send 5 a minute.
+
+**Trusting a certificate.** When the mail server's certificate is not signed by an authority Alice trusts (the system's
+or the one you entered), the test stops before anything is sent and shows **The mail server's certificate is not
+trusted** with its **Fingerprint (SHA-256)**, **Certificate subject** and **Valid until**. Ask the mail server's
+administrator for the fingerprint, or read it yourself, for example with `openssl s_client -connect <server>:587
+-starttls smtp </dev/null | openssl x509 -noout -fingerprint -sha256`, and compare every character. Then choose
+**Trust this certificate**: Alice pins exactly that certificate for this server and port and accepts it from then on
+("Trusted certificate: <fingerprint>"). Only a certificate a test showed in the last hour can be trusted, and only
+once. Changing the server name or port removes the pin. When the server gets a new certificate (also a renewed
+self-signed one), the e-mails fail with `smtp.untrusted` until you send a test and trust the new one; entering the
+certificate authority instead avoids that. **Stop trusting this certificate** removes the pin. Both are in the audit
+log (**Mail server certificate trusted**, **… no longer trusted**).
+
+Alice connects to the mail server's address only when it is not a link-local or cloud metadata address
+(`ALC-NTF-0009`); loopback and private addresses are allowed. There is no button to remove the mail settings: an
+administrator can call `DELETE /api/v1/settings/smtp` (with a fresh authenticator code), which removes them and the
+stored password (**Mail settings removed**); the `ALICE_SMTP_*` variables are then not imported again. How the
+settings of earlier versions (`ALICE_SMTP_*`) were taken over is in [operator-guide.md](operator-guide.md#email).
+
+## Single sign-on
+
+Alice supports single sign-on (SSO) with OpenID Connect identity providers, for example Microsoft Entra ID, AD FS and
+Keycloak. People choose **Sign in with <name>** on the sign-in page; the local sign-in form (password and
+authenticator code) stays on the same page.
+
+### Setting up a provider
+
+1. **Settings → General**: enter **Alice's address**, the `https://` address people use to open Alice (for example
+   `https://alice.example.com`, no path), and choose **Save general settings**. The identity provider sends people
+   back to it; a provider cannot be switched on without it (`ALC-SSO-0004`).
+2. Register Alice at the identity provider (see the sections below). You need the issuer address, a client ID and a
+   client secret.
+3. **Settings → Single sign-on → Add identity provider**: **Name shown on the sign-in page**, **Issuer address**,
+   **Client ID**, **Client secret**, **Groups claim** (the claim that carries the groups, `groups` by default),
+   **Certificate authority (optional, PEM)** when the provider's certificate comes from your own authority, and
+   **Allow sign-in with this provider** (off by default). Choose **Save identity provider**. Alice reads the
+   provider's discovery document and keys at once: the issuer must be an `https://` address and the document must
+   name exactly that issuer; otherwise nothing is saved (`ALC-SSO-0001`, with the cause).
+4. The dialog shows "Redirect address to register at the provider: …" with **Copy**, for example
+   `https://alice.example.com/api/v1/auth/oidc/<id>/callback`. Register exactly this address at the provider, then
+   choose **Continue**.
+5. **Map group**: enter a **Group** value exactly as the provider sends it (upper and lower case count), choose its
+   **Role in Alice**, and add it. Without a mapping nobody can sign in through the provider.
+6. Switch **Allow sign-in with this provider** on (**Edit <name>**). Sign in through it in a private browser window
+   to check.
+
+Alice keeps the provider's addresses from the time it read them. When the provider moves its endpoints or keys
+address, choose **Read the provider's settings again**. The client secret is stored only encrypted with the master
+key; edit the provider to replace it (an empty field keeps it). Alice sends the secret in the `Authorization` header
+(`client_secret_basic`), asks for the scopes `openid profile email`, follows no redirects and accepts tokens signed
+with RS256, ES256 or PS256 only. At most 5 providers, and at most 200 mappings per provider. A provider through which
+people have signed in cannot be deleted (`ALC-SSO-0005`) and its issuer cannot be changed: switch it off instead.
+Every change is in the audit log (**Identity provider added**, **changed**, **settings read again**, **deleted**,
+**Group mapping added**, **removed**, **refused**).
+
+### Microsoft Entra ID
+
+- **Issuer address**: `https://login.microsoftonline.com/<tenant ID>/v2.0`.
+- In the Microsoft Entra admin center, **App registrations → New registration**, platform **Web**, redirect URI =
+  Alice's redirect address. Under **Certificates & secrets** create a client secret (note its expiry: renew it and
+  edit the provider in Alice before it expires). The **Application (client) ID** is the client ID.
+- **Token configuration → Add groups claim**: Entra ID sends the groups as **object IDs** (for example
+  `5b2f…-…`) in the claim `groups`. Map the object IDs, not the display names.
+- **Too many groups**: Entra ID leaves the groups out of the token when a person is in more than 200 groups and sends
+  only a marker. Alice does not ask Microsoft Graph for them: such a person is refused with "Your identity provider
+  did not send your groups" (`ALC-SSO-0007`). Choose **Groups assigned to the application** in the groups claim and
+  assign the groups that should use Alice to the application (**Enterprise applications → Users and groups**), so the
+  token carries only those.
+
+### AD FS
+
+- **Issuer address**: `https://<AD FS host>/adfs`.
+- Add an application group with a server application (confidential, with a generated shared secret: the client
+  secret) whose redirect URI is Alice's redirect address, and allow the scopes `openid`, `profile` and `email`.
+- Send the groups with an issuance transform rule (for example "Send Group Membership as a Claim" or LDAP attribute
+  "Token-Groups"). AD FS names the claim `group` or `http://schemas.xmlsoap.org/claims/Group`: enter the name your
+  rule produces as **Groups claim** in Alice, and map the values it sends.
+- AD FS certificates often come from your own authority: paste it into **Certificate authority (optional, PEM)**.
+  Alice refuses provider endpoints whose address carries a query (`?…`); AD FS's standard endpoints have none.
+
+### Keycloak
+
+- **Issuer address**: `https://<Keycloak host>/realms/<realm>`.
+- Create an OpenID Connect client with **Client authentication** on and the standard flow, and set **Valid redirect
+  URIs** to Alice's redirect address. The client secret is on its **Credentials** tab.
+- Add a **Group Membership** mapper with the token claim name `groups` to the client (or a client scope it uses).
+  With **Full group path** on, the values are paths such as `/alice-operators`: map them that way.
+
+### Roles, "SSO users may be Admin" and SSO users
+
+A person gets the highest role any of their groups is mapped to. Nobody gets a role by default: a person in no mapped
+group is refused ("Your account has no access to Alice, contact your administrator", `ALC-SSO-0006`).
+
+**SSO users may be Admin** is off by default. While it is off, mapping a group to Administrator is refused ("A group
+cannot be mapped to Administrator.", `ALC-SSO-0002`) and nobody becomes an Administrator through single sign-on.
+Switching it on needs nothing else. Switching it off is refused while a group is mapped to Administrator
+(`ALC-SSO-0003`); otherwise it asks **Switch off SSO users may be Admin?** and then every SSO user who is an
+Administrator loses the role at once and is signed out. As built, Alice makes them **Auditors** (the confirmation text
+says Operators); at their next single sign-on they get the role their groups map to. Switching the setting on again
+gives no role back.
+
+An **SSO user** is created at their first single sign-on ("User created by single sign-on"). Their user name comes
+from the provider (`preferred_username`, `upn` or e-mail, letters folded to lower case; a taken name gets `-2`,
+`-3`, …); without one it is `sso-` and 12 characters. Alice recognises them by the provider and the provider's subject
+identifier, never by e-mail, and never joins them to a local account: a first single sign-on whose e-mail belongs to
+a local user is refused (`ALC-SSO-0008`), and so is a later one whose e-mail changed to a local user's.
+
+On **Users**, SSO users carry the badge **Single sign-on**, the two-factor column shows **At the identity provider**,
+and there is no **Set a new password**, **Reset two-factor sign-in** or role choice: their role comes from their
+groups at every single sign-on ("Role updated from the identity provider"), and a change by hand is refused
+(`ALC-USR-0003`). **Disable** and **Enable** work as for everyone. SSO users have no password, no authenticator and no
+recovery codes in Alice and cannot be the break-glass account.
+
+**Group changes at the identity provider** take effect at the person's next single sign-on or confirmation. A person
+removed from every mapped group is refused there, and Alice then ends all their sessions and revokes their API
+tokens. Until then an open session keeps working (at most 30 minutes idle, 12 hours in all; Alice keeps no refresh
+tokens). To stop someone at once, choose **Disable** on **Users**.
+
+### MFA and confirming your identity
+
+Alice does not ask SSO users for an authenticator code: **multi-factor authentication is the identity provider's
+job, and requiring it there is the customer's responsibility** (for example Conditional Access in Entra ID, an MFA
+policy in AD FS, OTP in Keycloak). Alice does not check that it happened.
+
+Actions that ask a local user for a fresh code (**Confirm it's you**) ask an SSO user to **Confirm at your identity
+provider**: **Continue to <name>** sends the browser to the provider with a request for a fresh sign-in
+(`prompt=login`, `max_age=0`). Alice accepts the answer only for the same person and a sign-in at most 5 minutes old,
+then returns to the page (**Identity confirmed again** in the audit log). A provider that ignores the request and
+reports an older sign-in makes the confirmation fail (`ALC-SSO-0010`). The confirmation also reads the groups again:
+the role may change, and a person no longer in a mapped group is refused and signed out.
+
+### Break-glass
+
+The local administrator created in the setup wizard always signs in with password and authenticator code, also when
+every identity provider is down or wrongly configured: keep its password and recovery codes safe and try it from time
+to time. Alice never lets you disable or demote the last enabled local administrator, and an SSO user can never take
+that place.
+
+### Refused sign-ins
+
+A refused single sign-on brings the person back to the sign-in page with a message, and writes one audit entry
+**Single sign-on refused** (`auth.oidc.denied`) with the reason (`no_access`, `groups_overage`, `email_in_use`,
+`idp_unreachable`, `login_invalid`, `login_expired`, `user_disabled`, `provider_disabled`, `stepup_other_user`,
+`idp_error`); no account is created and no session is opened. A sign-in must be finished within 10 minutes in the
+browser that started it. See "SSO sign-in refused" in [troubleshooting.md](troubleshooting.md#alerts-e-mail-and-single-sign-on).
+
+## Saved views and export
+
+**Certificates** and **SSH keys** keep their filters in the page's address: a bookmark or a link reproduces the list
+exactly. **Clear filters** removes them. On **Certificates**, **Expiry** offers **Any date**, **Expired** and
+**Within 7**, **14**, **30**, **60** or **90 days** (each including the expired ones), and **Source** also **Key
+Vault**.
+
+**Save view** stores the current filters under a **Name of the view** (1 to 60 characters; one name per page, upper
+and lower case counting as the same); **Saved views** applies one or deletes it (**Delete view <name>**). Each person
+keeps up to 50 views on the two pages together (`ALC-RPT-0002`). Views are private: nobody else sees them, not even
+an administrator, and they are not in the audit log.
+
+**Export** downloads exactly the rows the list shows with the current filters (all pages, in the same order) as a
+CSV file: `alice-certificates-<date>.csv` or `alice-ssh-keys-<date>.csv`, UTF-8 with a byte order mark, English
+column names (certificates: `id`, `subject_cn`, `label`, `sans`, `issuer`, `serial`, `not_before`, `not_after`,
+`days_left`, `source`, `key_algorithm`, `key_bits`, `self_signed`, `chain_complete`, `fingerprint`,
+`location_count`; SSH keys: `id`, `fingerprint`, `key_type`, `bits`, `comment`, `managed`, `platform_key`, `weak`,
+`location_count`, `target_count`, `missing`, `retired`, `first_seen_at`), times in UTC. A cell that starts with `=`,
+`+`, `-`, `@`, a tab or a carriage return gets a leading apostrophe, so a spreadsheet never runs it as a formula.
+
+Everyone who can see a list can export it, also read-only API tokens and during a license lock. Each export is
+recorded in the audit log (**Inventory exported**, with the filters and the row count) before the first byte is
+sent. Limits: at most 50,000 rows (`ALC-RPT-0001`: narrow the filter), one export at a time per person
+(`ALC-RPT-0004`) and 10 a minute per person or API token. Scripts call `GET /api/v1/certificates/export` or
+`GET /api/v1/ssh-keys/export` with the list's filter parameters (without `cursor` and `limit`).
 
 ## Servers
 
@@ -191,7 +496,7 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
   previous fingerprint** when the previous one is still right (Alice then tests the connection again and blocks the
   server again if it still presents another key). See
   [nginx-host-preparation.md](nginx-host-preparation.md#when-the-server-is-rebuilt). Everything is recorded in the
-  audit log, and administrators with an email address get one email each time a server becomes blocked. The same
+  audit log, and the alert recipients get one email each time a server becomes blocked. The same
   email goes out once when a server refuses Alice's key.
 - **Remove server** (administrators) makes Alice forget the server, closes the SSH connections Alice kept open to it
   and frees its license slot. Nothing is changed on the server.
@@ -259,7 +564,8 @@ previewed plan (public lines only), the state of each place and every step. Ever
 is how Alice later knows whether a line is its own.
 
 **Retired keys.** After a completed rotation the old key is retired once no place uses it. Its private key is
-destroyed 30 days after retirement (fixed in this release); until then an administrator can still download it. The
+destroyed 30 days after retirement; **Settings → General** changes the days (**Keep the private key of a retired SSH
+key for this many days**, 1 to 3650). Until then an administrator can still download it. The
 destruction removes the encrypted key from the database, but database backups taken before it still contain it,
 encrypted with the master key: keep backups as protected as the master key, and expire them.
 
@@ -269,16 +575,17 @@ encrypted with the master key: keep backups as protected as the master key, and 
 |---|---|---|
 | `rotation.plan`: creates the planned run of each policy that is on when its notice time is reached, and emails its preview | minute | does not run |
 | `rotation.sweep`: starts planned runs whose preview email was delivered, advances every run, pauses runs in lock, emails the renewal notice, queues each place's work again (at most five times) | minute | runs |
-| `sshkey.destroy_retired`: destroys private keys retired 30 days ago (up to 500 per run), retires old keys nothing uses, records the outcome of key deploys whose task ended without one and scans their servers | hour | does not run |
+| `sshkey.destroy_retired`: destroys private keys retired longer ago than the retention of **Settings → General** (30 days by default; up to 500 per run), retires old keys nothing uses, records the outcome of key deploys whose task ended without one and scans their servers | hour | does not run |
 
-**Emails.** Every enabled administrator with an email address gets: the preview of each planned run (and of an
+**Emails.** The alert recipients ([Recipients](#recipients); by default every enabled administrator with an email
+address) get: the preview of each planned run (and of an
 on-demand preview, at most once per key in 10 minutes); "nothing to rotate" once per interval when every place is
 skipped; the start of the overlap, one day before its end (overlaps longer than two days) and after **Finish now**;
 a decision needed about places Alice cannot test; completed (or completed with places kept); undone; needs
 attention; paused for the license; the renewal notice after a pause; a late answer from a server. **Scheduled
 rotation needs working email delivery**: a scheduled run starts only after its preview email was accepted by the mail
-server for at least one administrator before the planned start, otherwise it is cancelled (`ALC-ROT-0017`). Without
-email (see [operator-guide.md](operator-guide.md#email)), only **Run now** rotates. Emails name the reason code (for
+server for at least one recipient before the planned start, otherwise it is cancelled (`ALC-ROT-0017`). Without
+email (see [Mail server](#mail-server)), only **Run now** rotates. Emails name the reason code (for
 example `rotation.notice_undelivered`), which [troubleshooting.md](troubleshooting.md) explains.
 
 **After the upgrade** to this version every server refuses key deploys and is skipped by rotations until it has been
@@ -334,8 +641,8 @@ the ones nobody needs.
 
 ### Emails about deployments
 
-Every administrator with an email address gets these emails (when email is set up,
-[operator-guide.md](operator-guide.md#email)):
+The alert recipients ([Recipients](#recipients)) get these emails when the mail server is set up
+([Mail server](#mail-server)):
 
 | Email | Sent when |
 |---|---|
@@ -375,8 +682,8 @@ forms are emptied when the request is sent (they ask the browser not to remember
 **Replace credentials** checks the new ones as when adding a vault and keeps the old ones if the check fails; the
 replaced credentials stay in the database, encrypted, because Alice never deletes stored credentials. Replace a
 client secret or certificate before it expires: the vault's page warns from 30 days before the date (for a secret,
-the date typed when it was added). This release sends no reminder email; after the date the vault shows
-**Credentials expired** (`ALC-AKV-0002`). When Alice cannot decrypt a vault's stored credentials (it runs with
+the date typed when it was added), and a client secret's date is also e-mailed at the alert thresholds
+([Alerts and e-mail](#alerts-and-e-mail)); after the date the vault shows **Credentials expired** (`ALC-AKV-0002`). When Alice cannot decrypt a vault's stored credentials (it runs with
 another master key than the one they were sealed with), a deployment from that vault fails with `ALC-AKV-0041`:
 choose **Replace credentials** (a check of the vault or an import shows the generic `ALC-SYS-0003` in that case).
 
@@ -390,14 +697,15 @@ check the person who asked).
 **Check interval.** Each vault is checked every 15 minutes unless an administrator changes **Check every
 (minutes)** on its page (5 to 1440). **Check now** checks at once.
 
-**Emails.** Administrators with an email address get, per vault: a sign-in that failed three times in a row; a
+**Emails.** The alert recipients get, per vault: a sign-in that failed three times in a row; a
 certificate that disappeared from the vault; a new version of a connected certificate that automatic deployment
 will not deploy (switched off, held for the license or its chain, disabled, expired, not yet valid, older than the
 website's certificate, created before automatic deployment was switched on, replaced by a newer version before it
 was deployed); automatic deployment of a version stopped after three failures; an import that failed or whose
 outcome stays unknown. One check or planner run sends at most 20 emails of one kind per vault, then one summary;
-there is no limit across vaults. No email is sent when the vault firewall refuses Alice. Everything a
-vault does is in the audit log (`vault.*`, `kv.*`, `binding.*`).
+there is no limit across vaults. No email is sent when the vault firewall refuses Alice. Key Vault certificates, keys
+and client secrets that are about to expire are e-mailed by the expiry check ([Alerts and e-mail](#alerts-and-e-mail)).
+Everything a vault does is in the audit log (`vault.*`, `kv.*`, `binding.*`).
 
 ## License
 
@@ -411,13 +719,14 @@ including what lock mode does and how clock changes are handled, is [licensing.m
 License banners appear at the top of every page: the evaluation, the grace period, lock mode and "Alice could not
 check its license since …" for everyone;
 warnings 60/30/14/7/1 days before the end, clock problems, damaged license data, a license that starts later and
-the target limit for administrators only. Administrators with an email address also get the warnings by email when
-the server operator has set up email ([operator-guide.md](operator-guide.md#email)).
+the target limit for administrators only. The alert recipients also get the warnings by email when the mail server is
+set up ([Mail server](#mail-server)).
 
 ## For auditors
 
-Auditors sign in like everyone else (password and authenticator app). They see **Home**, **Servers**, **SSH keys**, **Certificates**, **Deployment history**, **Key Vaults**, **Audit log**,
+Auditors sign in like everyone else (password and authenticator app, or single sign-on). They see **Dashboard**, **Servers**, **SSH keys**, **Certificates**, **Deployment history**, **Key Vaults**, **Audit log**,
 **License** (read only), **API tokens** and **My account**, and no button that changes anything except their own password, recovery codes,
-language and read-only API tokens. On **Audit log** they can filter, **Verify integrity** and export. A read-only
+language, read-only API tokens and their own saved views; they can export the certificate and SSH key lists. On
+**Audit log** they can filter, **Verify integrity** and export. A read-only
 API token lets a script fetch `GET /api/v1/audit` or `GET /api/v1/audit/export?format=json` for regular
 collection.
