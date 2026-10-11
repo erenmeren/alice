@@ -379,7 +379,7 @@ func random() string {
 }
 
 // issueHTTPS makes a throwaway CA and a server certificate it issues for host (and localhost and
-// 127.0.0.1), valid for 30 days. The CA's key is dropped when this returns.
+// 127.0.0.1), valid for 90 days (testssl.sh warns below 30). The CA's key is dropped when this returns.
 func issueHTTPS(now time.Time, host string) (caPEM, certPEM, keyPEM []byte, err error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -391,7 +391,7 @@ func issueHTTPS(now time.Time, host string) (caPEM, certPEM, keyPEM []byte, err 
 	}
 	caTmpl := &x509.Certificate{
 		SerialNumber: serial(), Subject: pkix.Name{CommonName: "Alice ZAP test CA"},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(30 * 24 * time.Hour),
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour),
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign, BasicConstraintsValid: true, IsCA: true, MaxPathLenZero: true,
 	}
 	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
@@ -408,7 +408,7 @@ func issueHTTPS(now time.Time, host string) (caPEM, certPEM, keyPEM []byte, err 
 	}
 	leaf := &x509.Certificate{
 		SerialNumber: serial(), Subject: pkix.Name{CommonName: host},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(30 * 24 * time.Hour),
+		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames: []string{"localhost"}, IPAddresses: []net.IP{net.IPv4(127, 0, 0, 1)},
 	}
