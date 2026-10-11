@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
+	"maps"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -204,6 +205,9 @@ func (i *inst) facts(c *client) facts {
 	require.Equal(i.t, m[2], i.psql("SELECT encode(hash, 'hex') FROM audit_log WHERE seq = "+m[1]))
 	// alicectl audit verify appended its own audit.verified entry after the entries it checked: the head of the chain
 	// that goes into the backup is that entry, the one after the head it reported.
+	// A scheduled verification (M-6, scheduledVerify) between this and the backup would move the head and fail the
+	// drill loudly; it cannot happen: its ticker first fires an hour after the Alice process started, and the drill's
+	// installation runs for minutes.
 	last := strings.Split(i.psql("SELECT seq || ' ' || encode(hash, 'hex') || ' ' || action FROM audit_log ORDER BY seq DESC LIMIT 1"), " ")
 	require.Len(i.t, last, 3)
 	require.Equal(i.t, "audit.verified", last[2])
@@ -307,11 +311,15 @@ func TestReleaseF85Drill(t *testing.T) {
 	out := filepath.Join(i.work, "out", name)
 	must(t, i.sh("install -d -m 0700 \"$(dirname \"$1\")\"", out), "mkdir out")
 	i.writeFile(out, file, "0:0", "0600")
-	for what, needle := range map[string]string{"the mail password": mailPassword, "a PEM header": "-----BEGIN", "the passphrase": passphrase,
-		"the master key": masterKey, "a private key": strings.Split(string(httpsLeaf.KeyPEM), "\n")[1]} {
-		r := i.in("", "grep", "-c", "-F", "-e", needle, out)
-		assert.Equal(t, "0", strings.TrimSpace(r.Out), "grep -c %s in the backup file", what)
-		assert.Equal(t, 1, r.Code, "grep finds no %s", what)
+	// The needles go to grep in 0600 files (grep -f), never as arguments: a secret in docker run's argv would be in the
+	// container's create arguments and in runCmd's failure message (M-1).
+	for n, nd := range []struct{ what, needle string }{{"the mail password", mailPassword}, {"a PEM header", "-----BEGIN"},
+		{"the passphrase", passphrase}, {"the master key", masterKey}, {"a private key", strings.Split(string(httpsLeaf.KeyPEM), "\n")[1]}} {
+		pattern := filepath.Join(i.work, "out", fmt.Sprintf("needle-%d", n))
+		i.writeFile(pattern, []byte(nd.needle+"\n"), "0:0", "0600")
+		r := i.in("", "grep", "-c", "-F", "-f", pattern, out)
+		assert.Equal(t, "0", strings.TrimSpace(r.Out), "grep -c %s in the backup file", nd.what)
+		assert.Equal(t, 1, r.Code, "grep finds no %s", nd.what)
 	}
 
 	// A wrong passphrase: the C7 sentence, no data in the output, nothing changed.
@@ -442,6 +450,7 @@ func TestReleaseRestoreNegatives(t *testing.T) {
 		{"newer", newerHeader(t, good, hdrEnd, "9.0.0"), "This backup was created by a newer Alice version (9.0.0). Install Alice 9.0.0 or newer, then restore."},
 	}
 	countsBefore := stable(i.counts())
+	seqBefore := i.psql("SELECT max(seq) FROM audit_log")
 	keysBefore := i.keysHash()
 	pass := i.passphraseFile("pass", passphrase)
 	for _, tc := range cases {
@@ -451,7 +460,11 @@ func TestReleaseRestoreNegatives(t *testing.T) {
 			r := i.alicectl("restore", path, "--passphrase-file", pass, "--confirm", "RESTORE")
 			assert.Equal(t, 1, r.Code)
 			assert.Equal(t, tc.want, strings.TrimSpace(r.Out))
-			assert.Equal(t, countsBefore, stable(i.counts()), "row counts unchanged")
+			added, total := i.auditSince(seqBefore)
+			assert.Empty(t, added, "a refused restore adds no audit entry")
+			want := maps.Clone(countsBefore)
+			want["audit_log"] += total // only a tolerated scheduled verification (M-6, scheduledVerify)
+			assert.Equal(t, want, stable(i.counts()), "row counts unchanged")
 			assert.Equal(t, keysBefore, i.keysHash(), "keys/ unchanged")
 			assert.Equal(t, rc2, i.runningVersion(), "Alice keeps running")
 		})

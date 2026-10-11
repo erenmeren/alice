@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ func TestReleaseInstallMatrix(t *testing.T) {
 			start := time.Now()
 			r := i.install(rc2)
 			end := time.Now()
-			require.Equal(t, 0, r.Code, r.Out)
+			require.Equal(t, 0, r.Code, redactSetupCode(r.Out))
 			for _, label := range preflightOK {
 				assert.Contains(t, r.Out, ok+label+"\n")
 			}
@@ -50,13 +51,14 @@ func TestReleaseInstallMatrix(t *testing.T) {
 			assert.Contains(t, r.Out, "  Open this address in your web browser:   https://"+hostName+":"+itoa(i.port)+"/setup\n")
 			code := setupCode(t, r.Out)
 			log := string(i.readFile(filepath.Join(i.dir, "install.log")))
-			assert.NotContains(t, log, code, "the setup code is printed to the terminal only (S-4)")
-			assert.Contains(t, log, "Setup code printed to the terminal (not logged).")
+			// Plain booleans: a failing Contains would print the log and the code into the test log (M-1).
+			assert.False(t, strings.Contains(log, code), "the setup code is printed to the terminal only (S-4)")
+			assert.True(t, strings.Contains(log, "Setup code printed to the terminal (not logged)."), "install.log names where the setup code went")
 
 			// Both services healthy; migrate ran (and was removed) before alice started.
 			ps := must(t, i.compose("ps", "--all", "--format", "{{.Service}} {{.State}} {{.Health}}"), "compose ps").Out
 			assert.ElementsMatch(t, []string{"alice running healthy", "postgres running healthy"}, lines(strings.TrimSpace(ps)), ps)
-			assert.Equal(t, "12", i.psql("SELECT max(version_id) FROM goose_db_version WHERE is_applied"), "the migrate service applied every migration")
+			assert.Equal(t, latestMigration(t), i.psql("SELECT max(version_id) FROM goose_db_version WHERE is_applied"), "the migrate service applied every migration")
 
 			// What this engine reports for the loaded images, against the two identifiers RELEASE records (the config
 			// digest for a classic image store, the manifest or index digest for a containerd store; fedcd79).
@@ -161,6 +163,8 @@ find . -type f ! -path ./SHA256SUMS ! -path ./SHA256SUMS.sig | sed 's|^\./||' | 
 		require.NotEqual(t, i.readFile(filepath.Join(pkg, "SHA256SUMS")), i.readFile(filepath.Join(tampered, "SHA256SUMS")))
 
 		other := newInstDir(i, "tamper-install")
+		// Should a regression let this install get past the signature check, its containers and volumes go (M-2).
+		t.Cleanup(func() { composeDown(t, "alice-rel-tamper-install") })
 		r := i.in(tampered, "./install.sh", "--dir", other, "--port", "19448", "--bind", "127.0.0.1", "--hostname", hostName,
 			"--non-interactive", "--project", "alice-rel-tamper-install", "--fingerprint", fingerprint)
 		t.Logf("install.sh of the tampered package (exit %d):\n%s", r.Code, r.Out)
@@ -251,6 +255,22 @@ func run(t *testing.T, dir string, name string, args ...string) {
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s %s: %s", name, strings.Join(args, " "), out)
+}
+
+// latestMigration is the version of the newest migration of this tree (migrations/NNNNN_name.sql), as goose records it.
+func latestMigration(t testing.TB) string {
+	t.Helper()
+	files, err := filepath.Glob(filepath.Join(repo, "migrations", "*.sql"))
+	require.NoError(t, err)
+	latest := 0
+	for _, f := range files {
+		prefix, _, found := strings.Cut(filepath.Base(f), "_")
+		if n, err := strconv.Atoi(prefix); found && err == nil && n > latest {
+			latest = n
+		}
+	}
+	require.Positive(t, latest, "no migration in %s", filepath.Join(repo, "migrations"))
+	return strconv.Itoa(latest)
 }
 
 // releaseValue is the value of KEY= in a RELEASE file.

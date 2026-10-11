@@ -72,33 +72,54 @@ func TestReleaseUpdateAndRollback(t *testing.T) {
 	}
 	signInAgain()
 
-	// unchanged checks what every refused or rolled-back update must leave: rc.2 installed, running and healthy, the
-	// same data. The attempt records its pre-update backup (backup.created and the backup.state setting) and, when it
-	// returned to the backup, the restore (system.restored, the backup.restore_id setting, sessions ended).
-	unchanged := func(t *testing.T, before snapshot, restored bool) {
+	// rc2Backups counts the pre-update backups rc.2 made (the kind names the installed version, §20.1 step 3).
+	preUpgradeRC2 := regexp.MustCompile(`(?m)^alice-backup-[0-9A-Z]{8}-[0-9]{8}T[0-9]{6}Z-pre-upgrade-` + regexp.QuoteMeta(rc2) + `\.alicebak$`)
+	rc2Backups := func() int {
+		return len(preUpgradeRC2.FindAllString(must(i.t, i.sh("cd \"$1\" && ls", filepath.Join(i.dir, "backups")), "ls backups").Out, -1))
+	}
+	// prepare opens a session (so that a restore ending every session is visible) and takes what the attempt is
+	// compared with: the snapshot and the number of rc.2's pre-update backups.
+	prepare := func(t *testing.T) (snapshot, int) {
+		i.t = t
+		signInAgain()
+		before := i.snapshot()
+		require.Positive(t, before.counts["sessions"], "a session is open before the attempt")
+		return before, rc2Backups()
+	}
+
+	// unchanged checks what every refused or rolled-back update must leave: rc.2 installed, running and healthy, one
+	// pre-update backup more, the same data. A rolled-back update (restored) returned to its pre-update backup: the
+	// restore swapped in the database as dumped before backup.created and the backup.state change were written, so it
+	// adds exactly system.restored, gives backup.restore_id a new value (the proof that the restore ran, C1) and ends
+	// every session. An update stopped before any change (step 6, S-15) made and kept its backup: exactly backup.created
+	// and a new backup.state, the sessions kept, no restore ID changed.
+	unchanged := func(t *testing.T, before snapshot, backupsBefore int, restored bool) {
 		t.Helper()
 		assert.Equal(t, rc2, i.installedVersion())
 		assert.Equal(t, rc2, i.runningVersion())
 		i.t = t
 		i.selfcheck()
-		i.requireSame(before, []string{"backup.created", "system.restored"}, []string{"backup.state", "backup.restore_id"}, restored)
+		assert.Equal(t, backupsBefore+1, rc2Backups(), "the attempt made its pre-update backup")
+		if restored {
+			i.requireSame(before, []string{"system.restored"}, []string{"backup.restore_id"}, true)
+		} else {
+			i.requireSame(before, []string{"backup.created"}, []string{"backup.state"}, false)
+		}
 		assert.Empty(t, i.psql("SELECT pid FROM pg_stat_activity WHERE query LIKE '%pg_sleep%' AND pid <> pg_backend_pid()"), "no leftover migration")
 	}
 	parent := i.t
 	defer func() { i.t = parent }()
 
 	t.Run("failing-migration", func(t *testing.T) {
-		i.t = t
-		before := i.snapshot()
+		before, backups := prepare(t)
 		r := i.update(i.download(rc3), pass)
 		assert.Equal(t, 1, r.Code)
 		assert.Contains(t, r.Out, rollbackSentence(rc3, rc2))
-		unchanged(t, before, true)
+		unchanged(t, before, backups, true)
 	})
 
 	t.Run("killed-migration", func(t *testing.T) {
-		i.t = t
-		before := i.snapshot()
+		before, backups := prepare(t)
 		dl := i.download(rc4)
 		name := i.project + "-updater"
 		trackContainer(name)
@@ -115,9 +136,38 @@ func TestReleaseUpdateAndRollback(t *testing.T) {
 			return migrate != "", ""
 		})
 		time.Sleep(10 * time.Second)
-		assert.NotEmpty(t, i.psql("SELECT pid FROM pg_stat_activity WHERE query LIKE '%pg_sleep%' AND pid <> pg_backend_pid()"),
-			"the slow migration runs")
+		pg := i.container("postgres")
+		require.NotEmpty(t, pg, "the postgres container runs")
+		pgStarted := pgStartedAt(t, pg)
+		pids, found := sleepBackends(t, pg)
+		require.True(t, found && pids != "", "the slow migration runs: %q", pids)
 		must(t, docker(t, "kill", migrate), "docker kill the migrate container")
+		killed := time.Now()
+
+		// M-4: the orphaned pg_sleep(120) backend outlives its killed client; the update must end it (the
+		// pg_terminate_backend of its rollback) well before pg_sleep would return by itself, about 110 s after the
+		// kill. Polled straight in the postgres container (docker exec), not through compose while the script swaps
+		// files, and only while that same postgres process runs: a recreated or restarted postgres would also have
+		// ended it. The rollback's restore may recreate postgres with rc.2's image right after the cleanup; then the
+		// poll cannot tell, and the update log below is the proof.
+		var seenGone bool
+		eventually(t, 60*time.Second, 500*time.Millisecond, "the orphaned pg_sleep backend ended within 60 s of the kill", func() (bool, string) {
+			if pgStartedAt(t, pg) != pgStarted {
+				return true, ""
+			}
+			pids, found := sleepBackends(t, pg)
+			if found && pids == "" && pgStartedAt(t, pg) == pgStarted {
+				seenGone = true
+				return true, ""
+			}
+			return false, "pg_sleep backends: " + pids
+		})
+		if seenGone {
+			t.Logf("the orphaned pg_sleep backend was gone %s after the kill, postgres still running", time.Since(killed).Round(100*time.Millisecond))
+		} else {
+			t.Logf("postgres was recreated or restarted %s after the kill before the poll saw the backend gone; the update log decides", time.Since(killed).Round(100*time.Millisecond))
+		}
+
 		var r result
 		select {
 		case r = <-done:
@@ -127,12 +177,17 @@ func TestReleaseUpdateAndRollback(t *testing.T) {
 		t.Logf("alice-update.sh %s with the migrate container killed (exit %d):\n%s", filepath.Base(dl), r.Code, r.Out)
 		assert.Equal(t, 1, r.Code, "rolled back, not exit 3")
 		assert.Contains(t, r.Out, rollbackSentence(rc4, rc2))
-		unchanged(t, before, true)
+		// The rollback's cleanup (lib/alice-lib.sh alice_terminate_leftover_sessions, after "The update failed;
+		// returning to version …") terminated at least one backend: psql's aligned result is one " t" row per pid.
+		log := must(t, i.sh("cat -- \"$(ls -t \"$1\"/update-*.log | head -n 1)\"", i.dir), "the newest update log").Out
+		_, rollback, found := strings.Cut(log, "The update failed; returning to version "+rc2+".")
+		require.True(t, found, "the update log records the rollback")
+		assert.Regexp(t, terminated, rollback, "the rollback ended the orphaned migration backend (M-4)")
+		unchanged(t, before, backups, true)
 	})
 
 	t.Run("stopped-before-change", func(t *testing.T) {
-		i.t = t
-		before := i.snapshot()
+		before, backups := prepare(t)
 		pkg := restagedWithImageID(t, rc3, rc2)
 		dl := filepath.Join(i.work, "dl-restaged")
 		r := docker(t, "run", "--rm", "--network", "none", "-v", i.work+":"+i.work, "-v", filepath.Dir(pkg)+":"+filepath.Dir(pkg)+":ro",
@@ -141,12 +196,39 @@ func TestReleaseUpdateAndRollback(t *testing.T) {
 		must(t, r, "copy the restaged package")
 		r = i.update(filepath.Join(dl, filepath.Base(pkg)), pass)
 		assert.Equal(t, 1, r.Code)
-		assert.Contains(t, r.Out, "[FAIL] The installation package is damaged or incomplete. Download it again and compare the checksum.\n")
+		const imageFail = "[FAIL] The installation package is damaged or incomplete. Download it again and compare the checksum.\n"
+		assert.Contains(t, r.Out, imageFail)
 		assert.Contains(t, r.Out, "The update was stopped before any change; Alice is running version "+rc2+" again.\n")
-		unchanged(t, before, false)
+		// S-15: the image check fails after the pre-update backup was written and verified.
+		backupAt := strings.Index(r.Out, ok+"Backup written: "+filepath.Join(i.dir, "backups")+"/")
+		require.GreaterOrEqual(t, backupAt, 0, "the update reports its backup")
+		assert.Less(t, backupAt, strings.Index(r.Out, imageFail), "the backup comes before the failed image check")
+		unchanged(t, before, backups, false)
 	})
 	i.t = parent
 	signInAgain()
+}
+
+// terminated is psql's aligned answer of pg_terminate_backend for one or more backends, each ended ("t").
+var terminated = regexp.MustCompile(`pg_terminate_backend *\n-+\n(?: t\n)+\(\d+ rows?\)`)
+
+// sleepBackends lists the PIDs of the backends running pg_sleep in the postgres container id, asked with docker exec as
+// the postgres superuser; found is false when the container could not answer (gone or restarting).
+func sleepBackends(t testing.TB, id string) (pids string, found bool) {
+	t.Helper()
+	r := docker(t, "exec", id, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAq", "-c",
+		"SELECT coalesce(string_agg(pid::text, ' '), '') FROM pg_stat_activity WHERE query LIKE '%pg_sleep%' AND pid <> pg_backend_pid()")
+	return strings.TrimSpace(string(r.Stdout)), r.Code == 0
+}
+
+// pgStartedAt is when the container id last started ("" when it is gone).
+func pgStartedAt(t testing.TB, id string) string {
+	t.Helper()
+	r := docker(t, "inspect", "--format", "{{.State.Running}} {{.State.StartedAt}}", id)
+	if r.Code != 0 {
+		return ""
+	}
+	return strings.TrimSpace(r.Out)
 }
 
 // restagedWithImageID is a copy of the stage of version v whose RELEASE names the image of version other (ALICE_IMAGE_ID

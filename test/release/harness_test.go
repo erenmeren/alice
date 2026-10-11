@@ -12,6 +12,10 @@
 // removed again. Nothing is pruned. The work directories live under bin/release-work/ of this tree (M-23); they are
 // created and removed through a root container because the installation's files belong to root and to the
 // container users.
+//
+// A run that go test aborts with its -timeout panic skips TestMain's deferred cleanup (the image tags, the swept
+// containers). The next run then refuses safely, because a tag of the list exists or a project already has
+// containers; remove those by hand (docker rmi, docker compose -p alice-rel-<name> down -v), then run again.
 package release
 
 import (
@@ -395,11 +399,18 @@ func (i *inst) teardown() {
 	for _, c := range i.extra {
 		docker(t, "rm", "-f", "-v", c)
 	}
-	if r := docker(t, "compose", "-p", i.project, "down", "-v", "--remove-orphans"); r.Code != 0 {
-		t.Logf("docker compose -p %s down: %s", i.project, r.Out)
-	}
+	composeDown(t, i.project)
 	if r := i.rootSh(workRoot, "rm -rf -- \"$1\"", i.work); r.Code != 0 {
 		t.Errorf("remove %s: %s", i.work, r.Out)
+	}
+}
+
+// composeDown removes a compose project with its volumes; a failure fails the test, because it leaves containers or
+// volumes behind (M-2).
+func composeDown(t testing.TB, project string) {
+	t.Helper()
+	if r := docker(t, "compose", "-p", project, "down", "-v", "--remove-orphans"); r.Code != 0 {
+		t.Errorf("docker compose -p %s down -v --remove-orphans (exit %d): %s", project, r.Code, r.Out)
 	}
 }
 
@@ -559,52 +570,90 @@ func stable(c map[string]int64) map[string]int64 {
 }
 
 // snapshot is the state an attempt that changes nothing must leave: the row counts of the stable tables, the last
-// audit entry and the setting keys.
+// audit entry and the settings (each key with the MD5 of its value: hashes only, never a value).
 type snapshot struct {
 	counts   map[string]int64
 	auditSeq string
-	settings []string
+	settings map[string]string
 }
 
 func (i *inst) snapshot() snapshot {
 	i.t.Helper()
-	return snapshot{counts: stable(i.counts()), auditSeq: i.psql("SELECT max(seq) FROM audit_log"),
-		settings: strings.Split(i.psql("SELECT string_agg(key, ',' ORDER BY key) FROM settings"), ",")}
+	s := snapshot{counts: stable(i.counts()), auditSeq: i.psql("SELECT max(seq) FROM audit_log"), settings: map[string]string{}}
+	out := i.psql("SELECT coalesce(string_agg(key || '=' || md5(value::text), ',' ORDER BY key), '') FROM settings")
+	for _, kv := range strings.Split(out, ",") {
+		if k, h, found := strings.Cut(kv, "="); found {
+			s.settings[k] = h
+		}
+	}
+	return s
 }
 
-// auditSince lists the actions of the audit entries after seq, in order.
-func (i *inst) auditSince(seq string) []string {
+// scheduledVerify is the SQL condition of an audit row the harness tolerates anywhere (M-6): the daily audit
+// verification of the scheduler (internal/jobs/auditverify.go, actor system "scheduler") appends audit.verified on its
+// own. Its ticker starts with each Alice process and first fires after an hour, so no installation of this harness
+// should see one, but a slow run must not fail because of it: the row is counted and otherwise ignored, and the two
+// settings it writes are in volatileSettings.
+const scheduledVerify = "action = 'audit.verified' AND actor_type = 'system' AND actor_name = 'scheduler'"
+
+// auditSince lists the actions of the audit entries after seq, in order, without the tolerated scheduled
+// verifications, and the number of all entries after seq (those included).
+func (i *inst) auditSince(seq string) ([]string, int64) {
 	i.t.Helper()
-	out := i.psql("SELECT coalesce(string_agg(action, ',' ORDER BY seq), '') FROM audit_log WHERE seq > " + seq)
-	if out == "" {
-		return nil
+	out := i.psql("SELECT count(*) || ';' || coalesce(string_agg(action, ',' ORDER BY seq) FILTER (WHERE NOT (" + scheduledVerify +
+		")), '') FROM audit_log WHERE seq > " + seq)
+	n, actions, found := strings.Cut(out, ";")
+	require.True(i.t, found, "audit since %s: %q", seq, out)
+	total, err := strconv.ParseInt(n, 10, 64)
+	require.NoError(i.t, err)
+	if actions == "" {
+		return nil, total
 	}
-	return strings.Split(out, ",")
+	return strings.Split(actions, ","), total
+}
+
+// volatileSettings are the settings whose values change while Alice runs untouched; their keys are compared, their
+// values not: the selfcheck heartbeat (alicectl selfcheck writes it), the license time high-water mark, the mail
+// delivery state, the audit forwarding state, the SSH deployment reconcile cursor, and the state and checkpoint of the
+// scheduled audit verification (M-6, see scheduledVerify).
+var volatileSettings = map[string]bool{
+	"jobs.heartbeat": true, "time.hwm": true, "notify.delivery": true, "audit.forwarding.state": true,
+	"sshkeys.deploy_reconcile_cursor": true, "jobs.audit_verify": true, "audit.checkpoint": true,
 }
 
 // requireSame compares the installation with a snapshot taken before an attempt that must change no data. The attempt
-// may add only the audit entries of its own bookkeeping (allowedAudit, for example backup.created of the automatic
-// backup), setting keys of allowedSettings, and end the sessions when a restore ran (sessionsEnded).
-func (i *inst) requireSame(before snapshot, allowedAudit, allowedSettings []string, sessionsEnded bool) {
+// must add exactly the audit entries audit (in this order; for example backup.created of the automatic backup), must
+// change (add, or give a new value to) exactly the setting keys of changed, and must end every session when a restore
+// ran (sessionsEnded). Every other row count, setting key and stable setting value stays as it was.
+func (i *inst) requireSame(before snapshot, audit, changed []string, sessionsEnded bool) {
 	t := i.t
 	t.Helper()
 	after := i.snapshot()
-	added := i.auditSince(before.auditSeq)
-	for _, a := range added {
-		assert.Contains(t, allowedAudit, a, "audit entries added by the attempt: %v", added)
-	}
-	for _, k := range after.settings {
-		if !slices.Contains(before.settings, k) {
-			assert.Contains(t, allowedSettings, k, "setting keys added by the attempt")
+	added, total := i.auditSince(before.auditSeq)
+	assert.Equal(t, audit, added, "the audit entries the attempt added")
+	for k, h := range before.settings {
+		v, kept := after.settings[k]
+		assert.True(t, kept, "the attempt removed the setting %s", k)
+		switch {
+		case slices.Contains(changed, k):
+			assert.NotEqual(t, h, v, "the setting %s changed", k)
+		case !volatileSettings[k]:
+			assert.Equal(t, h, v, "the value of the setting %s (MD5)", k)
 		}
 	}
-	for _, k := range before.settings {
-		assert.Contains(t, after.settings, k, "setting keys removed by the attempt")
+	for k := range after.settings {
+		if _, existed := before.settings[k]; !existed {
+			assert.Contains(t, changed, k, "the attempt added the setting %s", k)
+		}
+	}
+	for _, k := range changed {
+		assert.Contains(t, after.settings, k, "the setting %s exists after the attempt", k)
 	}
 	want := maps.Clone(before.counts)
-	want["audit_log"] += int64(len(added))
+	want["audit_log"] += total
 	want["settings"] = int64(len(after.settings))
 	if sessionsEnded {
+		require.Positive(t, before.counts["sessions"], "a session existed before the attempt, so ending them is visible")
 		want["sessions"] = 0
 	}
 	assert.Equal(t, want, after.counts, "row counts")
