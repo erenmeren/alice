@@ -738,3 +738,33 @@ func TestStageRefusesADraftWithoutTest(t *testing.T) {
 	assert.Equal(t, 1, run([]string{"stage", "-allow-draft", "-root", cfg.Root, "-version", "1.0.0", "-out", cfg.Out, "-keys", cfg.Keys}, &out, &out))
 	assert.Contains(t, out.String(), "-allow-draft is for test packages only")
 }
+
+// I-4: a broken-update package is never a customer version, whichever key signs it, and the
+// offline (production-key) build never replaces an existing package of its version.
+func TestBrokenReleaseRefusals(t *testing.T) {
+	script := filepath.Join("..", "..", "deploy", "dev", "build-broken-release.sh")
+	runScript := func(args ...string) (string, int) {
+		out, err := exec.Command(script, args...).CombinedOutput()
+		if err == nil {
+			return string(out), 0
+		}
+		var exitErr *exec.ExitError
+		require.ErrorAs(t, err, &exitErr, string(out))
+		return string(out), exitErr.ExitCode()
+	}
+	dir, key := t.TempDir(), t.TempDir()
+	for _, sign := range []string{"offline", "test"} {
+		out, code := runScript("1.0.1", "fail", sign, dir, key)
+		assert.Equal(t, 2, code, out)
+		assert.Equal(t, "build-broken-release.sh: SIGN="+sign+" needs VERSION=x.y.z-rc.N (a broken package is never a customer version)\n", out)
+	}
+	for _, name := range []string{"alice-1.0.1-rc.1", "sbom-1.0.1-rc.1", "alice-1.0.1-rc.1.tar.gz", "alice-1.0.1-rc.1.tar.gz.sha256",
+		"alice-1.0.1-rc.1.tar.gz.sha256.sig"} {
+		d := t.TempDir()
+		write(t, filepath.Join(d, name), "signed\n", 0o644)
+		out, code := runScript("1.0.1-rc.1", "fail", "offline", d, key)
+		assert.Equal(t, 2, code, out)
+		assert.Equal(t, "build-broken-release.sh: "+filepath.Join(d, name)+" already exists; a package is never replaced (choose the next -rc.N)\n", out)
+		assert.Equal(t, "signed\n", readFile(t, filepath.Join(d, name)))
+	}
+}

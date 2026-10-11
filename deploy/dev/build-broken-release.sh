@@ -11,7 +11,9 @@
 # RELEASE_DIR and RELEASE_TEST_KEY, so the package lands beside the others and shares their test
 # key. SIGN=test runs make release-test (a test-signed package; VERSION must be x.y.z-rc.N);
 # SIGN=offline runs make release (an unsigned stage the vendor signs in the offline ceremony, then
-# make release-pack). The copy is removed afterwards.
+# make release-pack). A broken package is never a customer version: SIGN=offline also needs
+# x.y.z-rc.N and refuses when any output of that version exists in RELEASE_DIR (Task 12 review
+# I-4). The copy is removed afterwards.
 set -Eeuo pipefail
 
 usage() {
@@ -39,19 +41,26 @@ case "$broken" in
   *) usage ;;
 esac
 case "$sign" in
-  test)
-    if [[ "$version" != *-rc.* ]]; then
-      echo "build-broken-release.sh: SIGN=test needs VERSION=x.y.z-rc.N (a test-signed package is never a customer version)" >&2
-      exit 2
-    fi
-    target=release-test
-    ;;
+  test) target=release-test ;;
   offline) target=release ;;
   *) usage ;;
 esac
+if [[ "$version" != *-rc.* ]]; then
+  echo "build-broken-release.sh: SIGN=$sign needs VERSION=x.y.z-rc.N (a broken package is never a customer version)" >&2
+  exit 2
+fi
 if [[ "$release_dir" != /* || "$test_key" != /* ]]; then
   echo "build-broken-release.sh: RELEASE_DIR and RELEASE_TEST_KEY must be absolute paths" >&2
   exit 2
+fi
+if [[ "$sign" == offline ]]; then
+  for f in "$release_dir/alice-$version" "$release_dir/sbom-$version" "$release_dir/alice-$version.tar.gz" \
+    "$release_dir/alice-$version.tar.gz.sha256" "$release_dir/alice-$version.tar.gz.sha256.sig"; do
+    if [[ -e "$f" ]]; then
+      echo "build-broken-release.sh: $f already exists; a package is never replaced (choose the next -rc.N)" >&2
+      exit 2
+    fi
+  done
 fi
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)

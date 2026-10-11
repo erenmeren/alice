@@ -260,7 +260,10 @@ Test packages (`make release-test VERSION=x.y.z-rc.N`, the release harness) are 
 `tools/releasesign` generates at test time in `bin/release-test-key/` (`rk-test-01`, not encrypted). Such a package
 says `TEST_SIGNED=1` in `RELEASE`, the installer warns that it must never be installed for production, and a
 version without `-rc.N` is refused. The broken-update package for the owner's VM test is built with
-`make release-broken VERSION=… BROKEN=fail SIGN=offline` and signed in this ceremony like a release.
+`make release-broken VERSION=x.y.z-rc.N BROKEN=fail SIGN=offline` (for example `1.0.1-rc.1` to test the update
+from `1.0.0`) and signed in this ceremony like a release. Its version is never a customer version: the script
+refuses a version without `-rc.N` and a version whose package already exists in `bin/release/`. Keep it on the test
+VM only and never publish it.
 
 ### Rotation
 
