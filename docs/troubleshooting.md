@@ -2448,3 +2448,203 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** An encrypted private key, a signing request instead of a certificate, two private keys, text after the PEM blocks, or a file of another format.
 
 **What to do.** Upload the certificate and its unencrypted private key as PEM, or a PFX file with its password. To decrypt a key: `openssl pkey -in key.pem -out key-plain.pem`.
+
+## Install and start problems
+
+The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.
+Each line, and what to do ([install-guide.md](install-guide.md) has the preparation steps):
+
+| `[FAIL]` line | What to do |
+|---|---|
+| `This installer must be run with administrator rights. Run it again as: sudo ./install.sh` | Run it with `sudo` (not `sudo -E`). |
+| `Alice needs a 64-bit Intel/AMD Linux server. This machine is <arch>.` | Use an x86_64 server. |
+| `Docker is not installed or not running. Install Docker Engine 24 or newer (see docs/install-guide.md), then run this installer again.` | Install Docker from Docker's repository and start it: `sudo systemctl enable --now docker`. |
+| `Your Docker is too old (found <version>). Alice needs version 24 or newer.` | Install Docker Engine 24 or newer from Docker's repository. |
+| `The Docker compose plugin is missing. Install docker-compose-plugin (see docs/install-guide.md), then run this installer again.` | Install the `docker-compose-plugin` package. |
+| `The Docker socket /var/run/docker.sock can be used by every user on this server. Restrict it to the docker group (chmod 660), then run this installer again.` | `sudo chmod 660 /var/run/docker.sock`, and find what widened it (a drop-in of the `docker.socket` unit, a script). |
+| `OpenSSL 3 is needed to check the package signature. Install the openssl package, then run this installer again.` | Install the `openssl` package (version 3 on Ubuntu 22.04, Debian 12 and Rocky 9). |
+| `Not enough free disk space in <directory>: <n> GB free, 20 GB needed.` | Free space, or install on a larger partition with `--dir`. |
+| `This server has <n> GB of memory. Alice needs at least 4 GB.` | Give the server at least 4 GB (from 3 GB it is a warning only). |
+| `This server has <n> CPU. Alice needs at least 2.` | Give the server at least 2 CPUs. |
+| `Another program is already using port <port> (<program>, pid <pid>). Stop it or run the installer with --port 8443.` | Stop the other program, or use another port with `--port`. |
+| `The package signature is not valid. Do not install this package; download it again and check it with your vendor.` | Do not use the package. Download it again and check it as in the install guide, section 3. |
+| `The installation package is damaged or incomplete. Download it again and compare the checksum.` | A file is missing, changed, or not listed (a link, an extra file). Download the package again and check it. |
+| `The package could not be copied next to <dir> for checking. Check the free disk space, then run this installer again.` | The installer copies the package beside the installation directory first; free disk space there. |
+| `The server clock looks wrong (it says <year>). Fix the date/time first; licenses depend on it.` | Set the date and time and turn on NTP (`sudo timedatectl set-ntp true`). |
+| `Alice is already installed in <dir>. To upgrade use ./alice-update.sh.` | Update instead ([upgrade.md](upgrade.md)). To start over on a server with no data you need, see "A failed first installation" below. |
+| `Docker already has containers of the project alice. Choose another --project, or update the installation that uses it with its own alice-update.sh.` | Another Alice installation runs on this server. Update that one. |
+| `The containers of the project alice could not be listed. Check that Docker is running, then run this installer again.` | Start Docker, then run the installer again. |
+| `The installation directory <dir> has a parent that other users can change (<path>). Choose another --dir.` | Every parent of the installation directory must belong to root and must not be writable by group or others (exit code 2). Choose another `--dir`, or fix the parent's owner and mode. |
+| `<path> is a symbolic link. Remove it, then run this installer again.` | A directory the installer creates exists as a link. Remove the link. |
+
+**The fingerprint question.** After the package checks the installer prints
+`Package signed by release key <key id> (SHA-256 fingerprint <64 hex>). Compare this fingerprint with the one your vendor published.`
+and asks `Does this fingerprint match the one your vendor published? Type yes to continue: `. Anything but `yes`
+prints `Nothing was changed.` (exit code 1). If the fingerprint differs from the one your vendor published, do not
+install the package: it was not signed by your vendor's release key. With `--non-interactive`, a different
+`--fingerprint` stops with `The package fingerprint does not match --fingerprint. Nothing was changed.`, and a
+missing or malformed one is an option error (exit code 2).
+
+**`[WARN] This package is signed with a TEST key. Never install it for production.`** The package was built for the
+vendor's tests and is signed with a test key. Stop (Ctrl-C at the fingerprint question) and ask your vendor for the
+release package. The same warning appears in `alice-update.sh`.
+
+**`[WARN] Test override ALICE_PROC_DIR is set; results of this check are not real.`** (or `ALICE_DOCKER_SOCK`): a
+variable meant for the vendor's tests is set in your shell. Unset it and run the installer again.
+
+**`[WARN] Alice could not confirm that the clock is synchronised. …`** Turn on NTP. **`[WARN] The time zone of this
+server could not be read; Alice uses UTC.`** The daily backup then runs at 02:30 UTC until an administrator changes the
+time zone on **Settings → Backups**.
+
+**`Alice did not start. Send <dir>/install.log to support.`** The database or Alice did not become healthy within 3
+minutes. The installer printed the last 30 log lines of each container above that line, and they are in
+`install.log`. Look for the first error there and in `cd /opt/alice && sudo docker compose logs alice`. Send
+`install.log` and a support bundle to support.
+
+**A failed first installation.** The installer does not undo its work when a step after the checks fails (for example
+`Alice did not start`, or `The installation package is damaged or incomplete.` right after the images were loaded,
+which means the loaded image IDs differ from the package's `RELEASE`). A second run then says
+`Alice is already installed in <dir>.` On a **new** installation, where nothing needs to be kept, remove it and
+start again:
+
+```
+sudo /opt/alice/install.sh --uninstall --purge --confirm DELETE
+```
+
+This deletes `/opt/alice` with everything in it; never run it on an installation with data. Whether the image IDs
+stay the same after `docker load` on a fresh Docker engine (Docker's newer containerd image store among them) is an
+owner check of this release that has not been run yet; if the image check fails on a package you verified, send
+`install.log` and `sudo docker version` to support.
+
+**`Alice is running, but the setup code could not be read. Run: sudo <dir>/alicectl setup-token --reset`** Alice was
+installed and runs; only the code could not be shown. Run the printed command.
+
+**`Unexpected error (line <n>). Nothing was changed.`** or **`… Alice was not installed completely. Send <dir>/install.log to support.`**
+An unexpected command failure. The first form changed nothing: run the installer again after checking its output. The
+second form: send `install.log` to support, then see "A failed first installation".
+
+**Rocky 9 with SELinux enforcing.** This combination has not been verified yet (an owner step of this release). If
+the containers report "permission denied" on their mounted directories, send `install.log` and the output of
+`sudo ausearch -m avc -ts recent` to support.
+
+**Alice does not start after a change: `database schema is at version <n> but this Alice needs <m>: run the migrate service first (docker compose run --rm migrate)`.**
+The database is older than the Alice image, for example after `.env` was edited by hand. Run the update script
+instead of changing image tags by hand ([upgrade.md](upgrade.md)); to bring the schema up to the installed image:
+`cd /opt/alice && sudo docker compose run --rm migrate`, then `sudo docker compose up -d alice`.
+
+## Backup failed
+
+A failed daily backup e-mails the administrators ("Alice could not make its daily backup", with an error code), shows
+**The last backup failed. Alice e-mailed the administrators.** on **Settings → Backups** and on the dashboard, and is
+recorded in the audit log as **Backup failed** with the same code. **Back up now** shows the `ALC-BAK-…` code of the
+section above. The error codes:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `disk_full` | Less free space in the backups directory than twice the newest backup plus 1 GiB; Alice did not start the backup (`ALC-BAK-0004`). | Copy manual, pre-restore and pre-update backups off the server and delete them there; check the free space line on **Settings → Backups**. |
+| `not_configured` | No usable backup key: the recovery passphrase was never set, or the installation's backup key predates the current backup format (a development installation set up before backups existed) (`ALC-BAK-0002`). | Finish the setup wizard's passphrase step. An installation with an old-format key makes no backups until it is set up again on a fresh database. |
+| `io` | Writing, syncing or renaming the file failed, or a file to back up could not be read. | Check the disk and the owner of `/opt/alice/backups` (user 10001) and `/opt/alice/keys`; look at `sudo docker compose logs alice`. |
+| `database` | The database could not be read for the backup. | Check `sudo /opt/alice/alicectl selfcheck`; look at the logs of both containers. |
+| `file_too_large` | One of the key or state files is larger than 1 MiB, which no file Alice writes is. | Check `/opt/alice/keys` and `/opt/alice/state` for files changed by hand. |
+
+After 48 hours without a successful backup, every administrator sees **No successful backup for 48 hours** and gets
+"Alice has had no successful backup for 48 hours". The alarm ends with the next successful backup: fix the cause,
+then choose **Back up now**.
+
+`alicectl backup` on the server answers `Backups start after the recovery passphrase is set. Finish the setup wizard first.`
+for `not_configured` and `Another backup is running. Try again when it has finished.` while another backup runs.
+
+## Restore refused
+
+`alicectl restore` checks everything before it changes anything. Unless the message says otherwise, nothing was
+changed and Alice runs as before (the restore starts it again in every case and runs `selfcheck`).
+
+| Message | Meaning and what to do |
+|---|---|
+| `The backup file must be in <dir>/backups. Copy it there first.` | Copy the file (with its `.sha256` file) into `/opt/alice/backups` ([backup-restore.md](backup-restore.md#restore-on-a-new-server), step 3). A link that leads out of that directory is refused too. |
+| `There is no backup file at that path.` | Check the file name. |
+| `This is not an Alice backup.` | The file is empty, a text file or not a backup. Copy the right file. |
+| `This backup was created by a newer Alice version (<v>). Install Alice <v> or newer, then restore.` | Update Alice first ([upgrade.md](upgrade.md)), or restore on a new server with that version. Without a version in the message, the file's format is newer than this Alice: install the newest version. |
+| `The passphrase is wrong or the file is damaged. Nothing was changed.` | Type the passphrase again (case matters). If it is right, the file was changed or cut: take another copy, for example from the off-host storage, and check it with `alicectl backup verify FILE --deep`. |
+| `A passphrase is needed. Run this command in a terminal, or pass --passphrase-file to alicectl.` | Run it in a terminal, or give `--passphrase-file` with a file only root can read. |
+| `Without a terminal, pass --confirm RESTORE to confirm the restore.` | In a script, add `--confirm RESTORE`. |
+| `Restore cancelled. Nothing was changed.` | You did not type `RESTORE` exactly. |
+| `The backup could not be verified (<reason>). Nothing was changed.` | The loaded data did not pass a check (row counts, the master key check, the installation record). The file is not usable; use another backup and send the reason to support. |
+| `The audit log in this backup is damaged at entry <n>. Nothing was changed. To restore it anyway, run the command again with --accept-broken-audit-log (the damage stays visible in Alice).` | The backup's own audit chain is broken. Prefer another backup. If you need this one, add `--accept-broken-audit-log`; the restore's `system.restored` entry records that the restored log was not intact. |
+| `This installation has data but no recovery passphrase, so no safety backup can be made first. Nothing was changed. To restore anyway, run the command again with --no-safety-backup (the current data is then replaced without a copy).` | The current data cannot be saved first. Add `--no-safety-backup` only if you do not need the current data. |
+| `Not enough free disk space for a restore: <n> GB free, <m> GB needed.` | A restore needs twice the current database plus 1 GiB free beside the database. Free space on the partition of `/opt/alice/data`. |
+| `The restore failed: <reason>` | For example the safety backup of the current data could not be written (free space in the backups directory). Fix the reason and run it again. |
+| `Alice is still connected to the database. Stop it first.` | Another process used the database for 150 seconds after Alice was stopped. Check `cd /opt/alice && sudo docker compose ps` for a container you started by hand, stop it, and run the restore again. |
+| `Another restore is running. Wait for it to finish.` / `Another update or restore of Alice is running in <dir>. Wait until it has finished, then run this again.` | One restore or update at a time. |
+| `An interrupted restore left an unverified copy of the database (<database>_restore) and no live database. …` | See [operator-guide.md](operator-guide.md#an-interrupted-restore). |
+| `ALICE_KEYS_DIR and ALICE_STATE_DIR must be two different directories. Nothing was changed.` | Only after the compose file was changed by hand: restore the package's compose file. |
+| `Alice could not be started again. Run: cd <dir> && sudo docker compose logs alice` | The restore ended but Alice did not become healthy. Read the logs and send a support bundle. |
+
+`alicectl backup verify` without `--deep` can also say
+`The checksum file <file>.sha256 is missing, so the file can only be checked with the passphrase (--deep).`: copy the
+`.sha256` file too, or use `--deep`.
+
+## Update rolled back
+
+**`The update to <new> failed and Alice was returned to <installed>. Your data is unchanged as of <backup time>. Details: <log>. Please send this file to support.`**
+
+The new version did not pass its start or its database update. The update script stopped it, put back the previous
+configuration from `/opt/alice/rollback/<installed>/`, restored the database from the backup it made before the
+update, and started the installed version, which passed `selfcheck`. Alice runs as before the update. Nothing done
+during the update is lost: Alice was stopped for the whole update. Send the update log
+(`/opt/alice/update-<time>.log`) to support and wait for their answer before trying again. The pre-update backup stays
+in `/opt/alice/backups`.
+
+**`The update to <new> failed and Alice could not be returned to <installed> automatically. Your backup is <file>. Restore it by hand: cd <dir> && sudo ./alicectl restore <file>   (details: <log>)`** (exit code 3)
+
+Run the printed restore command (it asks for the passphrase and `RESTORE`): it restores the installed version's data
+from the pre-update backup, starts Alice and runs `selfcheck`. Send the update log to support in any case. The script
+kept its work directory `/opt/alice/.update-<time>/` for support; remove it once the case is closed.
+
+**`Alice <new> is running, but the update could not install all its files. Details: <log>. Please send this file to support.`**
+(exit code 3) The new version runs and passed `selfcheck`, but a script, the release keys, the documentation or the
+version files could not be replaced. Send the update log to support before the next update.
+
+## Update stopped before any change
+
+**`The update was stopped before any change; Alice is running version <installed> again.`** (exit code 1)
+
+The update failed after Alice was stopped but before anything of the installation changed: the backup, its check
+with the passphrase, the rollback copy or the loading of the new images failed. The installed version runs again.
+The update log names the step, for example:
+
+- `[FAIL] The pre-update backup failed.`: see [Backup failed](#backup-failed), for example the free disk space.
+- `[FAIL] The pre-update backup could not be opened with this passphrase.`: the passphrase was mistyped (or the file
+  was damaged). Run the update again and type the passphrase carefully.
+- `[FAIL] The installation package is damaged or incomplete. …` while loading the images: download the package
+  again.
+
+Other messages before any change (wrong version, missing signature, disk space, an unhealthy installation) stop the
+update before Alice is stopped; they are listed in [upgrade.md](upgrade.md#when-the-update-fails).
+
+**`Alice could not be started again. Details: <log>. Please send this file to support.`** (exit code 3) The update
+stopped before any change, but the installed version did not start again. Run
+`cd /opt/alice && sudo docker compose up -d` and `sudo /opt/alice/alicectl selfcheck`, read
+`sudo docker compose logs alice`, and send the update log to support.
+
+## How to create a support bundle
+
+Support asks for a support bundle when a problem is not clear from the error code. On the server:
+
+```
+sudo /opt/alice/alicectl support-bundle
+```
+
+Expected: `Support bundle written: /opt/alice/support-bundle-<time>.tar.gz` (mode 0600). `--out FILE` writes it
+elsewhere; an existing file is never overwritten (`The file <out> already exists.`).
+
+The bundle holds: Alice's own report (`bundle.json`: versions, the configuration without passwords, the `selfcheck`
+results, the database schema version and row counts per table, the license state and days left, job counts,
+the last successful backup and whether backups fail, whether audit forwarding is on and its backlog), the last 2,000
+log lines of Alice and of the database, the container list, `docker version`, `df -h`, and `.env` without any line
+whose name contains `PASSWORD`, `SECRET` or `KEY`.
+
+It never holds a password, a private key, a token, the master key, the recovery passphrase, the Installation ID,
+the customer's name or database content. The logs can name your servers (in messages about connections); look
+through the bundle before you send it (`tar -tzvf`, then `tar -xzf` into an empty directory). Send it to support by the
+channel your support contract names, together with the error code and the `request_id` if you have one.

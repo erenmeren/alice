@@ -121,12 +121,25 @@ codes from phone authenticators fail: the phone follows the real time, the serve
 refused **until the server clock is corrected** (it does not catch up by itself). Correct the clock first; if the
 only administrator still cannot sign in, the server operator runs `alice admin reset-mfa <username>`.
 
+## Moving to new hardware
+
+Moving Alice to a new server through a backup and a restore keeps the license: the Installation ID, the evaluation
+start, the installed licenses and the time record are in every backup, together with the master key that protects
+them. Make a backup on the old server, install the new one with `install.sh --restore-mode` and restore the backup
+there with `alicectl restore` ([backup-restore.md](backup-restore.md#restore-on-a-new-server)). The **License** page
+then shows the same Installation ID and the same license. No new license is needed and the vendor need not be
+contacted.
+
+Shut the old server's Alice down for good: two running copies of one installation would both work on the same
+servers, and your license terms decide whether a second copy is allowed at all.
+
 ## Frequently asked questions
 
 - **We restored a backup onto a new server. Do we need a new license?** No. The Installation ID, the evaluation
-  start and the license are restored with the database. Restore the whole database together with the keys and state
-  volumes: a database restored without its license data (for example only some tables) counts as a removed
-  installation record, and Alice then starts with a new Installation ID whose evaluation has ended.
+  start and the license are restored with the backup ([Moving to new hardware](#moving-to-new-hardware)).
+  `alicectl restore` always restores the whole database together with the key and state files. A database put back by other
+  means without its license data (for example only some tables) counts as a removed installation record, and Alice
+  then starts with a new Installation ID whose evaluation has ended.
 - **We installed Alice again on the same server.** Start the new installation with empty volumes. A new database
   next to the state volume (`alice-state`) of the earlier installation counts as an earlier installation: the new one
   starts with an evaluation that has already ended, and needs a license for its new Installation ID.

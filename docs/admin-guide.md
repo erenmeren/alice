@@ -129,7 +129,8 @@ Administrators can list and revoke anyone's tokens through the API: `GET /api/v1
 tokens.
 
 The API is described in `api/openapi.yaml` in the Alice source (every operation, its request and response
-fields and the permission it needs).
+fields and the permission it needs); [api.md](api.md) explains tokens, errors, paging and gives `curl` examples.
+Tokens never reach backups or any action that asks for **Confirm it's you**.
 
 ## Audit log
 
@@ -156,8 +157,8 @@ chain.
   All sessions of a person count together, and all API tokens of a person count together.
 - After verification Alice shows the **Fingerprint of the latest entry**. Record it somewhere outside Alice (for
   example in a ticket) from time to time: a later fingerprint that does not continue from it shows that entries
-  were removed. The **Dashboard** shows the latest verified entry's hash too (**Audit log head**). Syslog forwarding
-  arrives in a later release.
+  were removed. The **Dashboard** shows the latest verified entry's hash too (**Audit log head**). To keep a copy
+  outside Alice as it is written, forward the log to your syslog server or SIEM ([Audit forwarding](#audit-forwarding)).
 - Alice also checks the whole chain once a day on its own (recorded as `audit.verified` by `scheduler`). If the
   check finds a problem, the alert recipients get one email about it and the **Dashboard** shows it under **Needs
   attention**.
@@ -190,8 +191,19 @@ on the role. Every count is a link to the list it counts, and that list shows ex
   administrators and auditors a broken audit chain, and for administrators failing e-mail delivery. Each entry links
   to the page where you deal with it.
 
+- **Backups** (administrators and auditors): the age of the last successful backup ("3 hours ago"), or
+  **No backup has been made yet.**; **The last backup failed. Alice e-mailed the administrators.** when the last one
+  failed; **No successful backup for 48 hours** in red after 48 hours without a successful backup. **Open the backups**
+  leads to **Settings → Backups** ([Backups](#backups)).
+- **Finish setting up** (administrators, until every item is done): **Set the recovery passphrase** and **Install
+  your HTTPS certificate** (both marked **Required**), **Set up the mail server**, **Add a license** and **Add your
+  first server**. These are the steps the setup wizard lets you skip or postpone; each turns **Done** when it is
+  finished (the HTTPS item when the certificate in use is no longer Alice's temporary one, the mail item when mail
+  settings are saved, the license item when a license is installed), and the list disappears when all are done.
+
 Administrators also see the banner **E-mails could not be sent** at the top of every page while e-mail delivery is
-failing (see [Alerts and e-mail](#alerts-and-e-mail)).
+failing (see [Alerts and e-mail](#alerts-and-e-mail)), and the red banner **No successful backup for 48 hours**
+while no backup has succeeded for 48 hours (it links to **Settings → Backups**).
 
 ## Alerts and e-mail
 
@@ -311,6 +323,162 @@ Alice connects to the mail server's address only when it is not a link-local or 
 administrator can call `DELETE /api/v1/settings/smtp` (with a fresh authenticator code), which removes them and the
 stored password (**Mail settings removed**); the `ALICE_SMTP_*` variables are then not imported again. How the
 settings of earlier versions (`ALICE_SMTP_*`) were taken over is in [operator-guide.md](operator-guide.md#email).
+
+## Backups
+
+**Settings → Backups** (administrators only). Alice makes an encrypted backup of everything every day; this page
+shows the backups on the server, makes one at once and sets the schedule. How backups work, how to copy them off the
+server and how to restore is in [backup-restore.md](backup-restore.md).
+
+At the top:
+
+- **Last successful backup: <time>**, or **No backup has been made yet.**
+- **Free disk space for backups: <size>**. Alice starts a backup only when the free space is at least twice the size
+  of the newest backup plus 1 GiB; otherwise the backup fails with `ALC-BAK-0004` (`disk_full`). Copy older manual and
+  pre-update backups off the server and delete them there to make room.
+- In red, **No successful backup for 48 hours** with "Check the free disk space and the Audit log, then choose Back
+  up now.", and **The last backup failed. Alice e-mailed the administrators.** after a failed backup.
+- Before the recovery passphrase is set: **Backups start after the recovery passphrase is set.**
+- **Backups are stored on this server only. Copy them to another machine regularly.** and **Restoring is done on
+  the server with alicectl restore.** There is no restore button, by design: a restore replaces all data and the
+  encryption key, so it is a deliberate action of the operator on the server.
+
+**Backup files on this server** lists every file, newest first: **File**, **Kind** (**Daily**, **Manual**,
+**Before a restore**, **Before the update to <version>**), **Size**, **Made at** and **Check**:
+
+| Check | Meaning |
+|---|---|
+| **Checked** | The header, the size and the checksum file agree. |
+| **Checksum file missing** | The `.sha256` file is not there (for example a file copied in by hand without it). The operator can still check it with the passphrase (`alicectl backup verify --deep`). |
+| **Damaged: the checksum does not match** | The file changed after it was written. Do not rely on it. |
+| **Not a readable backup file** | The file is not an Alice backup, or its header is damaged. |
+| **Alice cannot read this file: permission denied** / **…: read error** | The file's owner or mode on the server, or a disk error. |
+
+**Back up now** makes a manual backup at once ("Backup made: <name>"); manual backups are never deleted
+automatically. Alice makes one backup at a time: while another one runs, the button is refused with `ALC-BAK-0001`.
+**Download** saves one file to your computer. It is recorded in the audit log (**Backup downloaded**) before the
+first byte is sent. Each person can start 5 downloads a minute (backup and SSH private-key downloads count
+together); **Back up now** is limited to 5 a minute per person too. The file is encrypted: it is useless without the recovery
+passphrase, but treat it as confidential.
+
+**Confirming your identity.** Opening **Settings**, **Back up now** and **Download** need a confirmation from the last
+5 minutes: a fresh 6-digit code (**Confirm it's you**), or for a single sign-on administrator a fresh sign-in at the
+identity provider. API tokens can never list, make or download backups.
+
+**Daily backup** sets the schedule:
+
+| Field | Meaning |
+|---|---|
+| **Daily backup time** | 24-hour clock, for example 02:30 (the default). |
+| **Time zone** | The zone of that time; by default the server's time zone at installation. |
+| **Automatic backups to keep** | From 7 to 60 (default 14). Older daily backups are deleted after each new one (**Old backup deleted** in the audit log). Manual backups and backups made before an update or a restore are never deleted. |
+
+The page shows **Next backup: <time>**. Choose **Save backup schedule**; the change is recorded as **Backup schedule
+changed**. If someone else saved the schedule meanwhile, Alice refuses the save (`ALC-SYS-0008`): reload and try
+again. A backup missed while the server was off is made as soon as Alice runs again.
+
+When a daily backup fails, the administrators get the e-mail "Alice could not make its daily backup" with the error
+code; after 48 hours without a successful backup they get "Alice has had no successful backup for 48 hours" (the mail
+server must be set up, [Mail server](#mail-server)).
+
+## HTTPS certificate
+
+**Settings → HTTPS certificate** (administrators only) shows the **Certificate in use**: its **Subject**, **Names**,
+**Valid until** and **Fingerprint (SHA-256)**, and either **Alice is using your own certificate.** or **Alice is using
+a temporary certificate. Browsers will warn until you upload your own.**
+
+The installer created the temporary certificate. Alice renews it by itself when it is within 7 days of its end
+(**Temporary HTTPS certificate renewed** in the audit log). Alice never renews your own certificate: upload the new
+one before the old one expires.
+
+To install or replace your certificate:
+
+1. Under **Upload certificate** choose the **File format**:
+   - **PEM: a certificate file and a key file**: the **Certificate file (PEM)** with the certificate followed by the
+     intermediate certificates, and the **Private key file (PEM)**, unencrypted;
+   - **PFX (PKCS#12): one file with a password**: the **PFX file** and its **PFX password**.
+2. Choose **Upload certificate**.
+
+Expected: **The new certificate is in use.** Alice uses it at once, without a restart; open connections keep the
+old one until they close. The private key never leaves the server and is never shown again. The replacement is
+recorded as **HTTPS certificate replaced**.
+
+Alice refuses a certificate whose key does not match (`ALC-TLS-0001`), that is not valid now or for less than one
+more day (`ALC-TLS-0002`), whose key is not RSA of at least 2,048 bits or ECDSA P-256/P-384 (`ALC-TLS-0003`), a PFX
+with a wrong password (`ALC-TLS-0004`), or a file it cannot read (`ALC-TLS-0005`). The certificate in use then stays.
+An accepted certificate may come with **The certificate is in use. Check these points:**
+
+- **None of the names in the certificate matches the address of this Alice server, so browsers will warn.**
+- **The chain to a trusted authority is incomplete. Add the intermediate certificates to the certificate file.**
+- **The certificate expires within 30 days.**
+
+Fix these with a new upload. The certificate is part of every backup.
+
+## Audit forwarding
+
+**Settings → Audit forwarding** (administrators only) sends every audit log entry, in order, to your syslog server or
+SIEM, so a copy of the log exists outside Alice as soon as it is written.
+
+| Field | Meaning |
+|---|---|
+| **Forward the audit log** | Switches forwarding on or off. |
+| **Syslog server**, **Port** | The receiver's name or address and port (default 6514, the syslog-over-TLS port). |
+| **Protocol** | **TLS (encrypted, recommended)**; **TCP (not encrypted)**; **UDP (not encrypted; messages can be lost)**. |
+| **Certificate authority of the syslog server (PEM, optional)** | The authority that issued the receiver's certificate, when it is not one the system trusts. It is stored and never shown again (**A CA certificate is set**); leave the field empty to keep it, paste another one to replace it. |
+
+Choose **Save forwarding settings** (recorded as **Audit forwarding settings changed**), then **Send test message**.
+Expected: **The test message was sent.** With TLS, the receiver's certificate must verify against the system's
+authorities plus the CA entered, and must name the host you entered. Alice never connects to link-local or metadata
+addresses (`ALC-AUD-0002`). An unreachable receiver is `ALC-AUD-0003`, an untrusted certificate `ALC-AUD-0004`
+([troubleshooting.md](troubleshooting.md#alc-aud-0003-alice-could-not-reach-the-syslog-receiver)).
+
+**Delivery** shows **Last entry sent: <time>**, **Number of the last entry sent: <seq>**, **Entries waiting to be sent:
+<count>** (the backlog) and the **Last problem** with its time. Alice sends up to 500 entries every 15 seconds. When
+the receiver cannot be reached, nothing is lost locally: the entries stay in Alice's audit log, the backlog grows, and
+forwarding continues from the same entry once the receiver answers. Forwarding never slows down or blocks Alice's own
+recording. Watch the backlog: a backlog that keeps growing means the receiver has not been getting entries.
+
+**Message format.** One RFC 5424 message per entry (octet-counted framing over TCP and TLS, one datagram over UDP, at
+most 8 KiB; long details are cut to fit), facility `auth`, severity `notice` for a success, `warning` for a failure or
+a refusal, and `critical` for a failed integrity check:
+
+```
+<PRI>1 <time> <host> alice - <action> [alice@32473 seq="<seq>" hash="<hex>" prev_hash="<hex>" actor="<actor>" result="<result>"] <JSON of the object and details>
+```
+
+The daily integrity check's checkpoint is sent too, once per new checkpoint, as action `audit.checkpoint` with its
+sequence number and hash.
+
+**Delivery is at most once.** Alice moves on when a message was handed to the network; a connection that breaks
+afterwards can lose messages that the receiver never saw. Each message carries its sequence number (`seq`) and the
+previous entry's hash (`prev_hash`), so the receiver can see a gap: `seq` must grow by exactly one, and each
+`prev_hash` must equal the `hash` of the message before. Set up an alert on a gap in `seq` at the receiver, and fetch
+the missing entries from Alice's JSON export ([api.md](api.md#examples)). After a restore from a backup the receiver
+gets entries again, then `system.restored` under a sequence number it already holds: a second, visible branch
+([backup-restore.md](backup-restore.md#restore-on-the-same-server)).
+
+**Example receiver: rsyslog with TLS.** On the syslog server (rsyslog 8 with the GnuTLS driver, package
+`rsyslog-gnutls`), with a certificate for the name you enter as **Syslog server**, for example in
+`/etc/rsyslog.d/alice.conf`:
+
+```
+global(
+  DefaultNetstreamDriver="gtls"
+  DefaultNetstreamDriverCAFile="/etc/rsyslog-tls/ca.pem"
+  DefaultNetstreamDriverCertFile="/etc/rsyslog-tls/syslog.example.com.pem"
+  DefaultNetstreamDriverKeyFile="/etc/rsyslog-tls/syslog.example.com-key.pem"
+)
+module(load="imtcp" StreamDriver.Name="gtls" StreamDriver.Mode="1" StreamDriver.AuthMode="anon")
+template(name="aliceRaw" type="string" string="%rawmsg%\n")
+ruleset(name="aliceAudit") {
+  action(type="omfile" file="/var/log/alice-audit.log" template="aliceRaw")
+}
+input(type="imtcp" port="6514" ruleset="aliceAudit")
+```
+
+Restart rsyslog, open TCP 6514 on the syslog server for the Alice server's address only (Alice does not present a
+client certificate, hence `AuthMode="anon"`), then choose **Send test message** in Alice. This example is a starting
+point; the vendor's tests use their own test receiver, not rsyslog.
 
 ## Single sign-on
 

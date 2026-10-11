@@ -1,8 +1,14 @@
 # Operator Guide
 
-This guide is for the person who runs the Alice server. Commands run inside the `alice` container. On a
-development machine use the `make` targets; on a server use
-`sudo docker compose exec alice /usr/local/bin/alice <command>` in the Alice directory.
+This guide is for the person who runs the Alice server: system operators and on-call staff. Installing is in
+[install-guide.md](install-guide.md), updating in [upgrade.md](upgrade.md), backups and restores in
+[backup-restore.md](backup-restore.md).
+
+On a server installed from the release package, run the maintenance commands with `alicectl`, as root:
+`sudo /opt/alice/alicectl <command>` ([alicectl reference](#alicectl-reference)). The few commands `alicectl` does not
+wrap run inside the `alice` container: `sudo docker compose exec alice /usr/local/bin/alice <command>` in
+`/opt/alice` (a root shell: the directory is readable by root only). On a development machine use the `make`
+targets.
 
 ## Commands
 
@@ -20,6 +26,241 @@ development machine use the `make` targets; on a server use
 `alice audit verify` does not need the master key, so it works even when Alice refuses to start because of a
 key problem.
 
+## Production layout
+
+`install.sh` creates this layout (`--dir` changes `/opt/alice`; everything else is relative to it):
+
+```
+/opt/alice/                          0750 root          installation directory
+  VERSION, RELEASE                   0644 root          the installed version and its release data
+  docker-compose.yml, .env           0644 / 0640 root   the production compose file; project name, images, port,
+                                                        address, host names, time zone (no secret)
+  install.sh, alice-update.sh, alicectl   0755 root     the scripts of the installed version
+  lib/                               0755 root          script library, database role script
+  release-keys/rk-*.pem              0644 root          release public keys trusted for updates
+  helper/                            0755 root          alice-helper for the managed servers, with checksums
+  docs/, licenses/, sbom/, CHANGELOG.md                 copies from the package
+  secrets/                           0700 root          db_postgres_password, db_owner_password, db_app_password
+  keys/                              0700 user 10001    master.key (0400), tls.crt (0644), tls.key (0400)
+  state/                             0700 user 10001    hwm.dat (license time record)
+  backups/                           0700 user 10001    *.alicebak and *.alicebak.sha256 (0600)
+  data/postgres/                     0700 user 70       the database files
+  rollback/<version>/                0700 root          configuration of the version before the last update
+  install.log, update-<time>.log, support-bundle-<time>.tar.gz   0600 root
+```
+
+The containers run as user 10001 (Alice) and 70 (PostgreSQL), so the files in `keys/`, `state/`, `backups/` and
+`data/` belong to those users. Do not change files there by hand; the scripts do not either.
+
+The database passwords are 32 random bytes each, used only by the containers as Docker secrets. Nobody needs to know
+them, and no command prints them.
+
+## alicectl reference
+
+`alicectl` is the operator's tool. Run it as root: `sudo /opt/alice/alicectl <command>`. While Alice runs, it runs
+the command inside the Alice container; when Alice is stopped, in a one-time maintenance container. Exit codes: `0`
+success, `1` failure, `2` a wrong command, option or file. Nothing `alicectl` prints is written to a log file.
+
+A backup `FILE` must be in `/opt/alice/backups` (a link out of it is refused):
+`The backup file must be in /opt/alice/backups. Copy it there first.` A passphrase is asked on the terminal
+(`Recovery passphrase: `, nothing is shown while you type), or read from the first line of `--passphrase-file FILE`,
+a file that only root can read (mode 600; a file others can read is refused).
+
+| Command | What it does | Output |
+|---|---|---|
+| `alicectl backup` | Makes a manual backup now. No passphrase needed. | `Backup written: /opt/alice/backups/alice-backup-7F3K92QD-20261011T091500Z-manual.alicebak (12.3 MiB)` |
+| `alicectl backup --out /opt/alice/backups/<name>.alicebak` | The same, under a name of your choice (it must end in `.alicebak` and not start with a dot; the path is the one inside the container, `/opt/alice/backups`, whatever `--dir` you installed to). | as above |
+| `alicectl backup --reason TEXT` | Stores a reason in the backup's manifest. | as above |
+| `alicectl backup list` | Lists the backups, newest first. | `NAME  KIND  SIZE  CREATED (UTC)  ALICE  CHECK`, then one row per file; CHECK is `ok`, `missing checksum`, `checksum mismatch`, `unreadable header` or `unreadable (<reason>)`. |
+| `alicectl backup verify FILE` | Checks header, size and checksum file, without the passphrase. | `The backup file looks complete (header, size and checksum are correct).` |
+| `alicectl backup verify FILE --deep` | Decrypts the whole file with the passphrase. Changes nothing. | `The backup opens with this passphrase and is complete: Backup from 2026-10-10 02:30 UTC, Alice 1.0.0, host alice01, installation ALICE-….` |
+| `alicectl restore FILE` | Replaces all data with the backup ([backup-restore.md](backup-restore.md#restore-on-the-same-server)). Options `--passphrase-file FILE`, `--confirm RESTORE`, `--db-only`, `--accept-broken-audit-log`, `--no-safety-backup`. | `Restore finished. Everyone must sign in again. Users and API tokens are as they were when the backup was made; review them.` |
+| `alicectl selfcheck` | Checks the running installation (below). Changes nothing. | Seven `[ OK ]` or `[FAIL]` lines; exit code 0 only when all are OK. |
+| `alicectl audit verify` | Verifies the audit log chain (recorded in the audit log, actor `cli`). | `The audit log is intact: 1234 entries checked, head entry 1234, head hash 9f86d0….` or `Audit log integrity problem at entry <n> (<problem>). <m> entries checked.` (exit code 1) |
+| `alicectl setup-token --reset` | Prints a new one-time setup code to the terminal only. Works only while no administrator exists. | `One-time setup code: <code>`; once an administrator exists: `An administrator already exists, so a setup code is no longer needed. Sign in instead.` |
+| `alicectl support-bundle` | Writes a support bundle ([troubleshooting.md](troubleshooting.md#how-to-create-a-support-bundle)). `--out FILE` chooses the file; an existing file is never overwritten. | `Support bundle written: /opt/alice/support-bundle-<time>.tar.gz` |
+| `alicectl help` | Lists the commands. | |
+
+The failure messages of `backup verify` and `restore` are in [troubleshooting.md](troubleshooting.md#restore-refused).
+
+**`alicectl selfcheck`** prints, for a healthy installation:
+
+```
+[ OK ] Database reachable
+[ OK ] Database schema is current (version <n>)
+[ OK ] Master key opens the stored key check
+[ OK ] Audit log intact (<n> entries, head <first 16 hex characters of the head hash>)
+[ OK ] License readable (<state>)
+[ OK ] HTTPS listener answers with the installed certificate
+[ OK ] Background jobs running (last heartbeat <hh:mm> UTC)
+```
+
+A failed check prints `[FAIL] <check>: <reason>`. The last check waits up to 90 seconds for a heartbeat of the
+background jobs right after a start or a restore, so `selfcheck` can take that long. The update and the restore run
+`selfcheck` themselves; run it after a reboot or any change on the server.
+
+## Backups and restores on the server
+
+The full guide is [backup-restore.md](backup-restore.md). In short, for the operator:
+
+- Alice backs up every day by itself (02:30 in the server's time zone by default) into `/opt/alice/backups`. Copy the
+  files to another machine every night ([backup-restore.md](backup-restore.md#copy-backups-off-the-server)).
+- **Once a month, run `sudo /opt/alice/alicectl backup verify <newest file> --deep`** with the passphrase. Only the
+  deep check proves that the backups open with the passphrase you hold.
+- **Restore on the same server:** `sudo /opt/alice/alicectl restore /opt/alice/backups/<file>`. Alice opens the whole
+  file while it keeps running, asks you to type `RESTORE`, then stops, saves the current data as a `pre-restore`
+  backup, restores, starts again and runs `selfcheck` (also when the restore was refused).
+- **Restore on a new server:** the recovery passphrase is all a new server needs besides the backup file. Install
+  with `sudo ./install.sh --restore-mode` from the package (same or newer version), copy the file into
+  `/opt/alice/backups`, and run `alicectl restore` ([backup-restore.md](backup-restore.md#restore-on-a-new-server)).
+- **After a restore, review users and API tokens.** They are as they were when the backup was made: a person
+  disabled or a token revoked since then is back. Everyone must sign in again.
+- **After a restore with audit forwarding on**, expect the syslog server to receive rows again: from where the
+  backup's forwarding stood, first identical copies of entries it already has (up to the backup's newest entry), then
+  `system.restored` and the entries after it under sequence numbers it already holds with other content. That is a
+  visible fork of the chain, expected after a restore; keep both branches.
+
+### An interrupted restore
+
+A restore loads the backup into a separate database (`alice_restore`) and switches to it in one step only after every
+check passed. If the server loses power or the restore process is killed before that step, the current data stays
+in use and the next restore cleans up.
+
+One case needs a hand: on a **new** server, where no current database exists yet, a restore interrupted before the
+switch leaves the unverified copy, and the next restore stops with
+`An interrupted restore left an unverified copy of the database (<database>_restore) and no live database. Nothing was changed. Drop that copy by hand (see the operator guide), then run the restore again.`
+Drop it, then run the restore again:
+
+```
+cd /opt/alice && sudo docker compose exec -T postgres psql -U postgres -d postgres -c 'DROP DATABASE alice_restore'
+```
+
+After a successful switch, the replaced database is kept as `alice_previous_<time>` until the restore has put the
+restored key files in place, then dropped. If the server stops in between, Alice finishes the key files at its next
+start, and the old copy stays until the next restore drops it. To see whether one is left, and how much space it
+uses:
+
+```
+cd /opt/alice && sudo docker compose exec -T postgres psql -U postgres -d postgres -c '\l+'
+```
+
+## Updates
+
+The full guide is [upgrade.md](upgrade.md): `cd /opt/alice && sudo ./alice-update.sh <package>` (from a root shell),
+with the recovery passphrase at hand. The update stops Alice **before** it makes its backup, so the outage starts
+with the backup and lasts a few minutes; announce it. A failed update returns to the installed version by itself.
+
+## Logs
+
+| What | Where |
+|---|---|
+| Alice's log (JSON lines, no secrets) | `cd /opt/alice && sudo docker compose logs alice` (add `--since 1h` or `-f`) |
+| The database's log | `cd /opt/alice && sudo docker compose logs postgres` |
+| The installation | `/opt/alice/install.log` |
+| Each update | `/opt/alice/update-<time>.log` |
+
+Docker keeps each container's log in files of 20 MB, at most 5 per container; older lines are dropped. Ship the logs
+to your log system with Docker's means if you need them longer. The audit log is not a log file: it is in the
+database ([admin-guide.md](admin-guide.md#audit-log)) and can be forwarded ([admin-guide.md](admin-guide.md#audit-forwarding)).
+
+## Health and monitoring
+
+Alice answers `/livez` (the process is up) and `/healthz` (the database is reachable and current) on its HTTPS port
+([Health endpoints and request limits](#health-endpoints-and-request-limits)). Docker checks the container's health
+itself (`docker compose ps` shows `healthy`).
+
+Alert on:
+
+- **`alicectl selfcheck` failing.** Run it from cron, for example every 15 minutes, and alert on a non-zero exit code:
+
+  ```
+  */15 * * * * root /opt/alice/alicectl selfcheck >/dev/null 2>&1 || logger -t alice-selfcheck "Alice selfcheck failed"
+  ```
+
+- **`/healthz` not answering 200** from your monitoring system (at most once a second, or `/livez`).
+- **The backup alarm.** No successful backup for 48 hours: the red banner for administrators, the e-mails "Alice could
+  not make its daily backup" and "Alice has had no successful backup for 48 hours", the **Backups** card of the
+  dashboard. Also alert when your off-host copy job finds no new file for a day.
+- **The forwarding backlog.** **Entries waiting to be sent** on **Settings → Audit forwarding** (also `forwarding` →
+  `backlog` in the support bundle's `bundle.json`) should stay near zero; a backlog that keeps growing means the
+  syslog server gets nothing. At the syslog server, alert on gaps in `seq`.
+- **The dashboard's conditions.** **Needs attention** (a server's identity changed, a refused sign-in on a server,
+  failed deployments, a broken audit chain, failing e-mail delivery), the license banners, and the e-mail about a
+  failed daily audit check.
+- **Disk space** of the partition holding `/opt/alice` (below).
+- **The HTTPS certificate's end date**, when you uploaded your own: Alice does not renew it.
+
+## Disk space
+
+The partition of `/opt/alice` holds the database, the backups and the logs. Alice refuses work rather than fill it:
+
+| When | Needs free | Refusal |
+|---|---|---|
+| Installation | 20 GB | `Not enough free disk space in <dir>: <n> GB free, 20 GB needed.` |
+| Every backup | twice the newest backup + 1 GiB, in `backups/` | the backup fails with `disk_full` (`ALC-BAK-0004`), e-mail to the administrators |
+| A restore | twice the current database + 1 GiB, beside the database | `Not enough free disk space for a restore: <n> GB free, <m> GB needed.` |
+| An update | twice the database + 5 GB | `Not enough free disk space in <dir>: <n> GB free, <m> GB needed for the update.` |
+
+Check with `df -h /opt/alice` and `sudo du -sh /opt/alice/backups /opt/alice/data`. To make room, copy manual,
+pre-restore and pre-update backups to another machine and delete them on the server (Alice deletes only daily
+backups by itself), remove old `update-*.log` and `support-bundle-*` files, and remove the images of old versions
+that `docker image ls` lists and no container uses.
+
+## Replacing the HTTPS certificate and changing mail settings
+
+Both are done by an administrator in the web interface, without a restart:
+
+- **Settings → HTTPS certificate** → **Upload certificate** ([admin-guide.md](admin-guide.md#https-certificate)). The
+  new certificate is used at once. If the server's name changes, also update `ALICE_TLS_HOSTS` in `/opt/alice/.env`
+  (it names the temporary certificate and the `name_mismatch` check) and restart Alice with
+  `cd /opt/alice && sudo docker compose up -d alice`.
+- **Settings → Email** ([admin-guide.md](admin-guide.md#mail-server)); then **Send test e-mail**.
+
+## Reboot
+
+Docker starts at boot (`systemctl enable docker`), and the database and Alice restart by themselves
+(`restart: unless-stopped`), unless someone stopped them with `docker compose stop`: start them again with
+`cd /opt/alice && sudo docker compose up -d`. After a reboot:
+
+- running jobs whose lease ran out are queued again ([Background jobs](#background-jobs));
+- a daily backup missed while the server was off runs at once;
+- a restore interrupted after its switch is finished at Alice's start;
+- run `sudo /opt/alice/alicectl selfcheck`.
+
+## User off-boarding
+
+When someone leaves:
+
+1. **Disable** the person on **Users** (administrators). Their sessions end at once and their API tokens stop working.
+   For a single sign-on user, also remove them at the identity provider (Alice's role mapping follows the groups).
+2. Revoke their API tokens: administrators list them with `GET /api/v1/tokens?user_id=<id>` and revoke each with
+   `DELETE /api/v1/tokens/<token id>` ([admin-guide.md](admin-guide.md#api-tokens)).
+3. If they knew the recovery passphrase: it cannot be changed in this version, so tighten access to the backup copies
+   (below).
+4. If they had root on the Alice server, they could read the master key: treat the server's secrets as exposed and
+   follow your incident process.
+
+After a restore of an older backup, check again: disabled people and revoked tokens come back with it.
+
+## Moving to a new server
+
+1. Make a manual backup on the old server (`sudo /opt/alice/alicectl backup`) and copy it with its `.sha256` file to
+   the new server.
+2. Stop Alice on the old server (`sudo /opt/alice/install.sh --uninstall`; data and backups stay there).
+3. Restore on the new server ([backup-restore.md](backup-restore.md#restore-on-a-new-server)): the Installation ID and
+   the license come with the backup ([licensing.md](licensing.md#moving-to-new-hardware)).
+4. Point the DNS name to the new server; upload a certificate if the name changed.
+5. Never start the old server's Alice again: two copies of one installation would both rotate keys and deploy
+   certificates.
+
+## What cannot be changed in this version
+
+- **The recovery passphrase.** It is fixed when the administrator sets it in the setup wizard. An exposed passphrase
+  together with a copy of a backup file opens that backup, and every older file stays readable with it for ever:
+  keep the copies of the backups as protected as the passphrase.
+- **The master key.** There is no command to replace it ([Master-key rotation and the installation
+  record](#master-key-rotation-and-the-installation-record)). Never replace `master.key` by hand.
+
 ## Database roles
 
 Alice uses two PostgreSQL roles:
@@ -32,10 +273,16 @@ Alice uses two PostgreSQL roles:
 If `ALICE_MIGRATE_DATABASE_URL` is empty, Alice uses the application URL for both and logs a warning, because the
 audit log is then protected by the triggers only.
 
-In this release the owner role of the Docker Compose stack is the PostgreSQL superuser `alice`, and its URL is in
-the `alice` container's environment. A superuser can switch the triggers off, so anyone who takes over the
-`alice` container could rewrite the audit log. A dedicated non-superuser owner and a separate one-shot migration
-container arrive with the installer packaging.
+On a server installed from the release package, the owner role is `alice_owner`, which is not a superuser, and the
+running Alice container does not have its password: only the one-time `migrate` container (run by the installer and
+the update) and the maintenance container of `alicectl` get it. The schema is changed before Alice starts
+(`ALICE_MIGRATE=external`); an Alice whose database schema is older than its own refuses to start with
+`database schema is at version <n> but this Alice needs <m>: run the migrate service first (docker compose run --rm migrate)`.
+The PostgreSQL superuser exists only inside the database container.
+
+The development stack (`make up`) still uses the PostgreSQL superuser `alice` as the owner role, with its URL in the
+`alice` container's environment. A superuser can switch the triggers off, so there anyone who takes over the `alice`
+container could rewrite the audit log. See [Development stack and production](#development-stack-and-production).
 
 ## Master key
 
@@ -43,7 +290,8 @@ Alice encrypts secrets (for example authenticator secrets) with a 256-bit master
 keys directory (`/opt/alice/keys`). On the very first start Alice creates it (mode 0400). Afterwards:
 
 - If the file is missing, Alice refuses to start ("the master key file is missing but this database already holds
-  encrypted data"). Restore the file from your backup; Alice never creates a new key over existing data.
+  encrypted data"). Restore the installation from a backup ([backup-restore.md](backup-restore.md)): every backup
+  carries the master key. Alice never creates a new key over existing data.
 - If the file is different from the one the database was created with, Alice refuses to start ("the master key
   does not match this database").
 - If the file permissions are wider than 0400, the file belongs to another user, or it is a symbolic link, Alice
@@ -888,9 +1136,9 @@ get a leading apostrophe, so use the JSON export for this check.
 
 Alice keeps its license time record (the latest time it has seen, encrypted and protected with a MAC derived from
 the master key) in `ALICE_STATE_DIR` (default `/opt/alice/state`, the `alice-state` volume, owned by user 10001)
-in addition to the database. Back it up with the other volumes, and restore the database as a whole: a database
-restored without its `license` table (or only some tables) counts as a removed installation record and ends the
-evaluation. On a new, empty database Alice refuses to start when the file exists but cannot be read (for example
+in addition to the database. Every backup includes it, and `alicectl restore` restores it together with the whole
+database ([backup-restore.md](backup-restore.md)): a database put back by other means without its `license` table
+(or only some tables) counts as a removed installation record and ends the evaluation. On a new, empty database Alice refuses to start when the file exists but cannot be read (for example
 because the volume's permissions are wrong): it creates nothing and says "make the state directory readable by
 Alice and start again". A new installation must also start with an empty state volume: a time record left by an
 earlier installation counts as an earlier installation, and the new one starts with an
@@ -980,6 +1228,20 @@ restarts everyone from that address waits until they sign in again. This happens
   one internal address for those clients. Check the **IP address** column of a few audit entries: if different
   people show the same address, this is the case;
 - behind NAT, where many people share one public address.
+
+## Development stack and production
+
+| | Development stack | Production (release package) |
+|---|---|---|
+| Compose file | `deploy/docker-compose.yml` in the source, started with `make up` | `/opt/alice/docker-compose.yml` from the package, started by `install.sh` |
+| Images | built from the source (`alice:dev`) | loaded from the signed package, never pulled (`pull_policy: never`) |
+| Database owner role | the superuser `alice` | `alice_owner` (not a superuser); `alice_app` for the running Alice |
+| Schema changes | at Alice's start | before Alice starts, in the one-time `migrate` container |
+| Data | Docker volumes `alice_*` | directories under `/opt/alice` |
+| Commands | `make setup-token`, `make unlock`, … | `sudo /opt/alice/alicectl …` |
+| Backups, update | not set up for daily use | daily backups, `alice-update.sh` |
+
+Never run the development or the test stack on a production server.
 
 ## Development stack reset
 

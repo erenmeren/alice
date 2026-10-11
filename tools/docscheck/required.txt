@@ -1,2 +1,7 @@
 # <file>\t<text that must still be in it>, one line each. Tasks 14, 17 and 18 add the lines that pin
 # a security promise of the guides (S-23, S-26). Runs of white space in the file match one space.
+docs/install-guide.md	openssl pkeyutl -verify -pubin -inkey rk-2026-01.pem -rawin -in alice-1.0.0.tar.gz.sha256 -sigfile alice-1.0.0.tar.gz.sha256.sig
+docs/install-guide.md	Does this fingerprint match the one your vendor published? Type yes to continue:
+docs/operator-guide.md	Users and API tokens are as they were when the backup was made
+docs/operator-guide.md	Once a month, run `sudo /opt/alice/alicectl backup verify <newest file> --deep`
+docs/admin-guide.md	Delivery is at most once.
