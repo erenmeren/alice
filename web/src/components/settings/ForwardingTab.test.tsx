@@ -56,6 +56,49 @@ describe('ForwardingTab', () => {
     await waitFor(() => expect(sent).toEqual({ enabled: true, host: 'syslog.example.test', port: 601, transport: 'tcp' }));
   });
 
+  it('removes the stored CA certificate when asked, and offers that only while one is set', async () => {
+    let sent: unknown;
+    server.use(
+      ...sessionHandlers(steppedUp),
+      http.get('/api/v1/settings/audit-forwarding', () => HttpResponse.json(forwardingFixture({ enabled: true, host: 'syslog.example.test', ca_set: true, version: 5 }))),
+      http.put('/api/v1/settings/audit-forwarding', async ({ request }) => {
+        sent = await request.json();
+        return HttpResponse.json(forwardingFixture({ enabled: true, host: 'syslog.example.test', ca_set: false, version: 6 }));
+      }),
+    );
+    await renderRoute('/settings?tab=forwarding');
+    const form = await screen.findByTestId('forwarding-form');
+    const caField = within(form).getByLabelText('Certificate authority of the syslog server (PEM, optional)');
+    await userEvent.click(within(form).getByLabelText('Remove the stored CA certificate'));
+    // The field cannot hold a replacement at the same time.
+    expect(caField).toBeDisabled();
+    await userEvent.click(within(form).getByRole('button', { name: 'Save forwarding settings' }));
+    await waitFor(() => expect(sent).toEqual({ enabled: true, host: 'syslog.example.test', port: 6514, transport: 'tls', ca_pem: '' }));
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    expect(screen.queryByText('A CA certificate is set')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Remove the stored CA certificate')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Certificate authority of the syslog server (PEM, optional)')).toBeEnabled();
+  });
+
+  it('tests without the stored CA certificate while its removal is chosen', async () => {
+    let sent: unknown;
+    server.use(
+      ...sessionHandlers(steppedUp),
+      http.get('/api/v1/settings/audit-forwarding', () => HttpResponse.json(forwardingFixture({ enabled: true, host: 'syslog.example.test', ca_set: true, version: 5 }))),
+      http.post('/api/v1/settings/audit-forwarding/test', async ({ request }) => {
+        sent = await request.json();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await renderRoute('/settings?tab=forwarding');
+    const form = await screen.findByTestId('forwarding-form');
+    await userEvent.click(within(form).getByLabelText('Remove the stored CA certificate'));
+    await userEvent.click(within(form).getByRole('button', { name: 'Send test message' }));
+    expect(await screen.findByText('The test message was sent.')).toBeInTheDocument();
+    // A test without a CA uses the system's trusted authorities, as the saved setting would after the removal.
+    expect(sent).toEqual({ enabled: true, host: 'syslog.example.test', port: 6514, transport: 'tls', ca_pem: '' });
+  });
+
   it('sends a test message with the form as it is', async () => {
     let sent: unknown;
     server.use(

@@ -2396,6 +2396,7 @@
     "caPem": "Certificate authority of the syslog server (PEM, optional)",
     "caPemHelp": "Paste a new certificate to replace the stored one; leave the field empty to keep it. Without one, the system's trusted authorities are used.",
     "caSet": "A CA certificate is set",
+    "removeCa": "Remove the stored CA certificate",
     "save": "Save forwarding settings",
     "testSent": "The test message was sent.",
     "state": "Delivery",

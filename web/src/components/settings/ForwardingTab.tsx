@@ -22,8 +22,8 @@ const ERROR_REASONS: Record<string, string> = {
 const MONO = { input: { fontFamily: 'monospace' } };
 
 // ForwardingTab is Settings → Audit forwarding (SEC-073, C10, C12): where the audit log is sent and how far it got.
-// The CA certificate is write-only: the field starts empty, a typed certificate replaces the stored one, and the answer
-// only says whether one is set.
+// The CA certificate is write-only: the field starts empty, a typed certificate replaces the stored one, "Remove the
+// stored CA certificate" removes it, and the answer only says whether one is set.
 export function ForwardingTab() {
   const q = useSetting('forwarding', getForwarding);
   if (q.isPending) return <LoadingIndicator />;
@@ -88,6 +88,8 @@ function ForwardingForm({
   const [port, setPort] = useState<number | string>(settings.port || 6514);
   const [transport, setTransport] = useState<ForwardingTransport>(settings.transport || 'tls');
   const [caPem, setCaPem] = useState('');
+  // removeCa sends ca_pem "" (C12: the stored CA bundle is removed); only offered while one is set.
+  const [removeCa, setRemoveCa] = useState(false);
   // gcTime 0: the request (which may carry a CA certificate) is not kept in the mutation cache.
   const test = useMutation({ gcTime: 0, mutationFn: (body: ForwardingInput) => run(() => testForwarding(body)) });
 
@@ -96,7 +98,7 @@ function ForwardingForm({
     host: host.trim(),
     port: Number(port),
     transport,
-    ...(caPem.trim() ? { ca_pem: caPem } : {}),
+    ...(removeCa ? { ca_pem: '' } : caPem.trim() ? { ca_pem: caPem } : {}),
   });
 
   const submit = (ev: FormEvent) => {
@@ -118,9 +120,12 @@ function ForwardingForm({
           data={(['tls', 'tcp', 'udp'] as const).map((v) => ({ value: v, label: t(`forwarding.transports.${v}`) }))}
         />
         {settings.ca_set && (
-          <Text size="sm" data-testid="forwarding-ca-set">
-            {t('forwarding.caSet')}
-          </Text>
+          <>
+            <Text size="sm" data-testid="forwarding-ca-set">
+              {t('forwarding.caSet')}
+            </Text>
+            <Checkbox label={t('forwarding.removeCa')} checked={removeCa} onChange={(e) => setRemoveCa(e.currentTarget.checked)} />
+          </>
         )}
         <Textarea
           label={t('forwarding.caPem')}
@@ -128,6 +133,7 @@ function ForwardingForm({
           value={caPem}
           onChange={(e) => setCaPem(e.currentTarget.value)}
           error={fieldErrors.ca_pem}
+          disabled={removeCa}
           autosize
           minRows={3}
           maxRows={8}

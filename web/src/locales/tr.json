@@ -2396,6 +2396,7 @@
     "caPem": "Syslog sunucusunun sertifika yetkilisi (PEM, isteğe bağlı)",
     "caPemHelp": "Kayıtlı sertifikanın yerine yenisini yapıştırın; korumak için alanı boş bırakın. Sertifika yoksa sistemin güvendiği yetkililer kullanılır.",
     "caSet": "Bir CA sertifikası tanımlı",
+    "removeCa": "Kayıtlı CA sertifikasını kaldır",
     "save": "İletim ayarlarını kaydet",
     "testSent": "Test mesajı gönderildi.",
     "state": "Gönderim",

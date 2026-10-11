@@ -424,7 +424,7 @@ SIEM, so a copy of the log exists outside Alice as soon as it is written.
 | **Forward the audit log** | Switches forwarding on or off. |
 | **Syslog server**, **Port** | The receiver's name or address and port (default 6514, the syslog-over-TLS port). |
 | **Protocol** | **TLS (encrypted, recommended)**; **TCP (not encrypted)**; **UDP (not encrypted; messages can be lost)**. |
-| **Certificate authority of the syslog server (PEM, optional)** | The authority that issued the receiver's certificate, when it is not one the system trusts. It is stored and never shown again (**A CA certificate is set**); leave the field empty to keep it, paste another one to replace it. |
+| **Certificate authority of the syslog server (PEM, optional)** | The authority that issued the receiver's certificate, when it is not one the system trusts. It is stored and never shown again (**A CA certificate is set**); leave the field empty to keep it, paste another one to replace it, or tick **Remove the stored CA certificate** and save to remove it. |
 
 Choose **Save forwarding settings** (recorded as **Audit forwarding settings changed**), then **Send test message**.
 Expected: **The test message was sent.** With TLS, the receiver's certificate must verify against the system's
