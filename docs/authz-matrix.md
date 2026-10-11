@@ -24,6 +24,8 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/setup/recovery-passphrase` | `settings.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/setup/evaluation` | `settings.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/setup/complete` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/https/keep-temporary` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/mail/skip` | `settings.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/auth/login` | `public` | yes | yes | yes | yes | yes | no | yes |
 | POST | `/api/v1/auth/mfa/enroll` | `mfa_pending` | pending | no | no | no | no | no | yes |
 | POST | `/api/v1/auth/mfa/verify` | `mfa_pending` | pending | no | no | no | no | no | yes |
@@ -155,6 +157,16 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | DELETE | `/api/v1/sso/group-mappings/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
 | PUT | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/backups` | `backup.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/backups` | `backup.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/backups/{name}/download` | `backup.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/backups` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/backups` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/https` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/https` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/audit-forwarding` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/audit-forwarding` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/audit-forwarding/test` | `settings.manage` | no | yes | no | no | no | yes | yes |
 
 ## Notes
 

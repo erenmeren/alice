@@ -11,15 +11,18 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
 
 	"alice/internal/alerts"
 	"alice/internal/audit"
+	"alice/internal/audit/forward"
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
 	"alice/internal/auth/ratelimit"
+	"alice/internal/backup"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -28,6 +31,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/platform/settings"
+	"alice/internal/platform/tlscert"
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/reports"
@@ -82,6 +86,9 @@ type SetupService interface {
 	SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m auth.Meta, passphrase, confirm string) error
 	ChooseEvaluation(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
 	Complete(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
+	// Phase 8 (C11): the wizard's HTTPS and mail steps.
+	KeepTemporaryCertificate(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
+	SkipMail(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
 }
 
 // AuditService is the part of audit.Service the HTTP layer uses.
@@ -244,6 +251,34 @@ type SSOService interface {
 	Complete(ctx context.Context, providerID uuid.UUID, q url.Values, binding string, m auth.Meta) (oidc.Completion, error)
 }
 
+// BackupService is the part of *backup.Service the HTTP layer uses (C8, Phase 8): the list, a backup made now, the
+// download, the free space, the schedule and the state.
+type BackupService interface {
+	Create(ctx context.Context, in backup.CreateInput) (backup.Info, error)
+	List(ctx context.Context) ([]backup.Info, error)
+	Open(ctx context.Context, name string) (*os.File, backup.Info, error)
+	FreeBytes() (uint64, error)
+	Schedule(ctx context.Context) (backup.Schedule, error)
+	SaveSchedule(ctx context.Context, a audit.Actor, version int, in backup.Schedule) (backup.Schedule, error)
+	State(ctx context.Context) (backup.State, error)
+}
+
+// ForwardService is the part of *forward.Forwarder the HTTP layer uses (C10, Phase 8).
+type ForwardService interface {
+	Settings(ctx context.Context) (forward.Settings, forward.State, error)
+	Save(ctx context.Context, in forward.Settings, version int, actor audit.Actor) (forward.Settings, error)
+	Test(ctx context.Context, in forward.Settings) error
+}
+
+// HTTPSService is Alice's HTTPS certificate (C11, Phase 8): what the listener serves, and the installation of an
+// uploaded pair. Install puts the pair in use (tlscert.Store.Install) and only then records it: the wizard's HTTPS
+// choice (setup.RecordCertificateUploaded) and the https.certificate_replaced audit row, in one transaction (cmd/alice
+// wires it; the HTTP layer holds no database pool).
+type HTTPSService interface {
+	Info() tlscert.Info
+	Install(ctx context.Context, p auth.Principal, m auth.Meta, u tlscert.Upload) (tlscert.Info, error)
+}
+
 // ProviderCatalog lists the compiled-in providers (providers.Registry).
 type ProviderCatalog interface {
 	List() []providers.Descriptor
@@ -269,6 +304,9 @@ type Deps struct {
 	Alerts         AlertsService
 	Reports        ReportsService
 	SSO            SSOService
+	Backup         BackupService  // Phase 8: nil leaves the backup routes and the dashboard's backup section unavailable
+	Forward        ForwardService // Phase 8: audit forwarding
+	TLSStore       HTTPSService   // Phase 8: the HTTPS certificate
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }
@@ -513,6 +551,9 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.dashboardRoutes()...)
 	routes = append(routes, s.viewRoutes()...)
 	routes = append(routes, s.ssoRoutes()...)
+	routes = append(routes, s.backupRoutes()...)
+	routes = append(routes, s.httpsRoutes()...)
+	routes = append(routes, s.forwardingRoutes()...)
 	return routes
 }
 

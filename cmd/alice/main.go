@@ -17,10 +17,12 @@ import (
 	// The zone database is in the binary: the distroless image has none, and ALICE_TZ needs it.
 	_ "time/tzdata"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/api"
 	"alice/internal/audit"
+	"alice/internal/auth"
 	"alice/internal/backup"
 	"alice/internal/i18n"
 	"alice/internal/jobs"
@@ -29,6 +31,7 @@ import (
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
 	"alice/internal/platform/tlscert"
+	"alice/internal/setup"
 	"alice/internal/webui"
 	"alice/locales"
 	"alice/migrations"
@@ -529,7 +532,64 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		Alerts:         alertsAPI(svc),
 		Reports:        reportsAPI(svc),
 		SSO:            ssoAPI(svc),
+		Backup:         backupAPI(svc),
+		Forward:        forwardAPI(svc),
+		TLSStore:       httpsAPI(svc),
 	}
+}
+
+// backupAPI, forwardAPI and httpsAPI keep a missing service a nil interface, as sshKeysAPI does (Phase 8).
+func backupAPI(svc *services) api.BackupService {
+	if svc.backup == nil {
+		return nil
+	}
+	return svc.backup
+}
+
+func forwardAPI(svc *services) api.ForwardService {
+	if svc.forward == nil {
+		return nil
+	}
+	return svc.forward
+}
+
+func httpsAPI(svc *services) api.HTTPSService {
+	if svc.tlsStore == nil {
+		return nil
+	}
+	return httpsInstaller{store: svc.tlsStore, setup: svc.setup, audit: svc.auditLog, pool: svc.pool}
+}
+
+// httpsInstaller is the HTTPS certificate of the API (C11): the store serves and installs the pair; once it is in use,
+// the wizard's HTTPS choice and the https.certificate_replaced row (subject, not_after, fingerprint; never the key) are
+// recorded in one transaction.
+type httpsInstaller struct {
+	store *tlscert.Store
+	setup *setup.Service
+	audit *audit.Log
+	pool  *pgxpool.Pool
+}
+
+func (h httpsInstaller) Info() tlscert.Info { return h.store.Info() }
+
+func (h httpsInstaller) Install(ctx context.Context, p auth.Principal, m auth.Meta, u tlscert.Upload) (tlscert.Info, error) {
+	info, err := h.store.Install(u)
+	if err != nil {
+		return tlscert.Info{}, err
+	}
+	err = db.InTx(ctx, h.pool, func(tx pgx.Tx) error {
+		if err := h.setup.RecordCertificateUploaded(ctx, tx, p); err != nil {
+			return err
+		}
+		_, err := h.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "https.certificate_replaced", ObjectType: "certificate",
+			ObjectID: "https", Result: audit.Success, Details: map[string]string{"subject": info.Subject,
+				"not_after": info.NotAfter.UTC().Format(time.RFC3339), "fingerprint": info.FingerprintSHA256}})
+		return err
+	})
+	if err != nil {
+		return tlscert.Info{}, err
+	}
+	return info, nil
 }
 
 // sshKeysAPI keeps a nil *sshkeys.Service a nil interface: the key detail then answers without the

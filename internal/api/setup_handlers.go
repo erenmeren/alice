@@ -24,11 +24,57 @@ func (s *server) setupRoutes() []route {
 		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupRecoveryPassphrase},
 		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupEvaluation},
 		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupComplete},
+		// Phase 8 (C12): the wizard's HTTPS and mail steps. After completion both answer the status and change nothing (S-39).
+		{method: http.MethodPost, pattern: "/api/v1/setup/https/keep-temporary", perm: rbac.SettingsManage, lic: license.ClassAlways,
+			handler: s.setupKeepTemporary},
+		{method: http.MethodPost, pattern: "/api/v1/setup/mail/skip", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupSkipMail},
 	}
 }
 
+// setupStatus answers the wizard's state. Once setup is complete an anonymous caller learns only that and the default
+// language (S-18, R43 row 47); a signed-in caller still gets every step. The session is looked up passively (the idle
+// timeout does not slide); a failed lookup counts as anonymous.
 func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
 	st, err := s.deps.Setup.Status(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if st.Completed && !s.signedIn(r) {
+		writeJSON(w, http.StatusOK, publicSetupStatusDTO{Completed: true, DefaultLocale: st.DefaultLocale})
+		return
+	}
+	writeJSON(w, http.StatusOK, setupStatusJSON(st))
+}
+
+// signedIn reports whether the request carries a session cookie of a signed-in user (not a pending login, not a
+// token, not the wizard's cookie).
+func (s *server) signedIn(r *http.Request) bool {
+	tok := sessionTokenFrom(r)
+	if tok == "" {
+		return false
+	}
+	p, err := s.deps.Auth.AuthenticatePassive(r.Context(), tok)
+	return err == nil && p.Kind == rbac.UserSession
+}
+
+func (s *server) setupKeepTemporary(w http.ResponseWriter, r *http.Request) {
+	if !s.decodeExactOptional(w, r, &struct{}{}, maxActionBody) {
+		return
+	}
+	st, err := s.deps.Setup.KeepTemporaryCertificate(r.Context(), principalFrom(r.Context()), s.meta(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, setupStatusJSON(st))
+}
+
+func (s *server) setupSkipMail(w http.ResponseWriter, r *http.Request) {
+	if !s.decodeExactOptional(w, r, &struct{}{}, maxActionBody) {
+		return
+	}
+	st, err := s.deps.Setup.SkipMail(r.Context(), principalFrom(r.Context()), s.meta(r))
 	if err != nil {
 		s.fail(w, r, err)
 		return

@@ -21,14 +21,17 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/alerts"
 	"alice/internal/audit"
+	"alice/internal/audit/forward"
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
+	"alice/internal/backup"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -42,6 +45,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
+	"alice/internal/platform/tlscert"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -140,6 +144,12 @@ type stack struct {
 	sentPFX     [][]byte
 	closePanics atomic.Bool    // the Key Vault provider's sessions panic when closed (keyvault_harness_integration_test.go)
 	kv          *fakekv.Server // the fake Azure service behind the real azurekv provider (nil: no Key Vault in this stack)
+	// Phase 8: backups (into backupsDir), audit forwarding and the HTTPS certificate store, wired as cmd/alice does.
+	backup     *backup.Service
+	backupsDir string
+	forward    *forward.Forwarder
+	tlsStore   *tlscert.Store
+	backupHook func(name string) // tests: sees every name the backup service is asked to open
 
 	mu        sync.Mutex
 	nginxSrvs []*nginxFixture // the emulated Nginx hosts Alice's own TLS probe can reach
@@ -202,12 +212,14 @@ func (s *stack) start() {
 	s.auth = auth.NewService(auth.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Hasher: hasher, RecoveryHasher: hasher,
 	})
-	s.setup = setup.New(setup.Config{
-		Pool: s.db.App, Auth: s.auth, Keyring: keyring, Audit: auditLog, Clock: s.clock, Hasher: hasher,
-		BackupKDF: secrets.KDFParams{MemoryKiB: 64, Time: 1, Threads: 1}, License: s.license,
-	})
 	s.auditSvc = audit.NewService(auditLog, s.db.App)
 	s.startInventory(keyring, auditLog)
+	s.setup = setup.New(setup.Config{
+		Pool: s.db.App, Auth: s.auth, Keyring: keyring, Audit: auditLog, Clock: s.clock, Hasher: hasher,
+		// The lowest cost the backup header accepts (C7: 8,192 KiB), so the stack's backups open.
+		BackupKDF: secrets.KDFParams{MemoryKiB: 8192, Time: 1, Threads: 1}, License: s.license, Mail: s.mail,
+	})
+	s.startPhase8(keyring, auditLog)
 	s.api = New(s.deps())
 	s.handler = s.api.Handler()
 }
@@ -261,6 +273,59 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.runner = s.newRunner("", 0)
 }
 
+// startPhase8 builds the backup service, the audit forwarder and the certificate store as cmd/alice does (the
+// backup KDF is the fast test one of setup; the forwarder dials through netaddr).
+func (s *stack) startPhase8(keyring *secrets.Keyring, auditLog *audit.Log) {
+	t := s.t
+	t.Helper()
+	log := logging.New(s.logs, slog.LevelDebug)
+	if s.backupsDir == "" {
+		s.backupsDir = t.TempDir()
+	}
+	s.backup = backup.New(backup.Config{Pool: s.db.App, Audit: auditLog, Notifier: notify.AdminNotifier{Clock: s.clock}, Clock: s.clock,
+		Dir: s.backupsDir, KeysDir: s.keysDir, StateDir: s.stateDir, Version: "1.0.0", Log: log, Keyring: keyring})
+	s.forward = forward.New(forward.Config{Pool: s.db.App, Audit: auditLog, Clock: s.clock, Log: log, Hostname: "alice.test"})
+	store, err := tlscert.NewStore(s.keysDir, []string{"localhost"}, s.clock.Now)
+	require.NoError(t, err)
+	s.tlsStore = store
+}
+
+// stackBackup is the stack's backup service with a hook on Open (the path-trick test records every name).
+type stackBackup struct {
+	BackupService
+	s *stack
+}
+
+func (b stackBackup) Open(ctx context.Context, name string) (*os.File, backup.Info, error) {
+	if b.s.backupHook != nil {
+		b.s.backupHook(name)
+	}
+	return b.BackupService.Open(ctx, name)
+}
+
+// stackHTTPS is cmd/alice's httpsInstaller over the stack's store: install, then record the wizard's choice and the
+// audit row in one transaction.
+type stackHTTPS struct{ s *stack }
+
+func (h stackHTTPS) Info() tlscert.Info { return h.s.tlsStore.Info() }
+
+func (h stackHTTPS) Install(ctx context.Context, p auth.Principal, m auth.Meta, u tlscert.Upload) (tlscert.Info, error) {
+	info, err := h.s.tlsStore.Install(u)
+	if err != nil {
+		return tlscert.Info{}, err
+	}
+	err = db.InTx(ctx, h.s.db.App, func(tx pgx.Tx) error {
+		if err := h.s.setup.RecordCertificateUploaded(ctx, tx, p); err != nil {
+			return err
+		}
+		_, err := h.s.auditLog.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "https.certificate_replaced", ObjectType: "certificate",
+			ObjectID: "https", Result: audit.Success, Details: map[string]string{"subject": info.Subject,
+				"not_after": info.NotAfter.UTC().Format(time.RFC3339), "fingerprint": info.FingerprintSHA256}})
+		return err
+	})
+	return info, err
+}
+
 // newRunner builds a job runner with the target and deployment handlers, the way cmd/alice does
 // (the sweep of unfinished deployments is driven by the tests). A second runner with its own worker
 // name and a heartbeat that never beats on the fake clock stands for a process that dies.
@@ -308,6 +373,9 @@ func (s *stack) deps() Deps {
 		Alerts:         s.alerts,
 		Reports:        s.reports,
 		SSO:            s.sso,
+		Backup:         stackBackup{BackupService: s.backup, s: s},
+		Forward:        s.forward,
+		TLSStore:       stackHTTPS{s: s},
 		TrustedProxies: s.trusted,
 	}
 }

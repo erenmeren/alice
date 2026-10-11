@@ -19,8 +19,10 @@ import (
 
 	"alice/internal/alerts"
 	"alice/internal/audit"
+	"alice/internal/audit/forward"
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
+	"alice/internal/backup"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/deployjobs"
@@ -29,6 +31,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
 	"alice/internal/platform/db"
+	"alice/internal/platform/tlscert"
 	"alice/internal/providers"
 	"alice/internal/reports"
 	"alice/internal/setup"
@@ -95,7 +98,8 @@ func TestDBStartupErrorMentionsWaitOnlyForUnreachable(t *testing.T) {
 func TestAPIDepsCarryEveryService(t *testing.T) {
 	svc := &services{auth: &auth.Service{}, setup: &setup.Service{}, audit: &audit.Service{}, license: &license.Service{},
 		inventory: &inventory.Service{}, queue: &jobs.Queue{}, registry: providers.NewRegistry(), sshkeys: &sshkeys.Service{},
-		notifySettings: &notify.Settings{}, alerts: &alerts.Service{}, reports: &reports.Service{}, oidc: &oidc.Service{}}
+		notifySettings: &notify.Settings{}, alerts: &alerts.Service{}, reports: &reports.Service{}, oidc: &oidc.Service{},
+		backup: &backup.Service{}, forward: &forward.Forwarder{}, tlsStore: &tlscert.Store{}}
 	d := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Same(t, svc.notifySettings, d.Mail)
 	assert.Same(t, svc.alerts, d.Alerts)
@@ -109,15 +113,23 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Same(t, svc.queue, d.Jobs)
 	assert.Same(t, svc.registry, d.Providers)
 	assert.Same(t, svc.sshkeys, d.SSHKeys)
+	assert.Same(t, svc.backup, d.Backup)
+	assert.Same(t, svc.forward, d.Forward)
+	require.IsType(t, httpsInstaller{}, d.TLSStore)
+	assert.Same(t, svc.tlsStore, d.TLSStore.(httpsInstaller).store)
 	svc.sshkeys = nil
 	assert.Nil(t, newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil).SSHKeys,
 		"a nil service stays a nil interface (the key detail then omits the generated-key fields)")
 	svc.notifySettings, svc.alerts, svc.reports, svc.oidc = nil, nil, nil, nil
+	svc.backup, svc.forward, svc.tlsStore = nil, nil, nil
 	none := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Nil(t, none.Mail, "a nil *notify.Settings stays a nil interface")
 	assert.Nil(t, none.Alerts)
 	assert.Nil(t, none.Reports)
 	assert.Nil(t, none.SSO)
+	assert.Nil(t, none.Backup)
+	assert.Nil(t, none.Forward)
+	assert.Nil(t, none.TLSStore, "a command has no certificate store")
 	assert.NotNil(t, d.Clock)
 	assert.NotNil(t, d.Log)
 }

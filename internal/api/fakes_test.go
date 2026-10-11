@@ -228,6 +228,8 @@ type fakeSetup struct {
 	SetRecoveryPassphraseFn func(ctx context.Context, p auth.Principal, m auth.Meta, passphrase, confirm string) error
 	CompleteFn              func(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
 	ChooseEvaluationFn      func(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
+	KeepTemporaryFn         func(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
+	SkipMailFn              func(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error)
 }
 
 func (f *fakeSetup) Status(ctx context.Context) (setup.Status, error) {
@@ -292,6 +294,20 @@ func (f *fakeSetup) Complete(ctx context.Context, p auth.Principal, m auth.Meta)
 func (f *fakeSetup) ChooseEvaluation(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error) {
 	if f.ChooseEvaluationFn != nil {
 		return f.ChooseEvaluationFn(ctx, p, m)
+	}
+	return setup.Status{}, errNotConfigured
+}
+
+func (f *fakeSetup) KeepTemporaryCertificate(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error) {
+	if f.KeepTemporaryFn != nil {
+		return f.KeepTemporaryFn(ctx, p, m)
+	}
+	return setup.Status{}, errNotConfigured
+}
+
+func (f *fakeSetup) SkipMail(ctx context.Context, p auth.Principal, m auth.Meta) (setup.Status, error) {
+	if f.SkipMailFn != nil {
+		return f.SkipMailFn(ctx, p, m)
 	}
 	return setup.Status{}, errNotConfigured
 }

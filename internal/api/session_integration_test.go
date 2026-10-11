@@ -437,6 +437,10 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	}
 	ids["/api/v1/sso/providers/"] = phase7Records(t, s, c, admin)
 	ids["/api/v1/auth/oidc/"] = ids["/api/v1/sso/providers/"]
+	// Phase 8: one backup, so its download answers 200 (its only write is the backup.downloaded row).
+	rec := c.do(http.MethodPost, "/api/v1/backups", nil)
+	requireStatus(t, rec, http.StatusCreated)
+	backupName := decodeBody[map[string]any](t, rec)["name"].(string)
 	// Store an audit checkpoint first, so a GET that moved it would be caught.
 	requireStatus(t, c.do(http.MethodPost, "/api/v1/audit/verify", nil), http.StatusOK)
 	require.Equal(t, 1, s.countWhere("settings", "key = 'audit.checkpoint'"))
@@ -486,6 +490,8 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 			wantAudit, wantAction = 1, "inventory.exported"
 		case "/api/v1/views":
 			path += "?page=certificates"
+		case "/api/v1/backups/{name}/download":
+			path, wantAudit, wantAction = strings.ReplaceAll(path, "{name}", backupName), 1, "backup.downloaded"
 		case "/api/v1/sso/group-mappings":
 			path += "?provider_id=" + ids["/api/v1/sso/providers/"]
 		case "/api/v1/auth/oidc/{id}/callback":

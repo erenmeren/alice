@@ -103,6 +103,10 @@ type setupStatusDTO struct {
 	LicenseChosen         bool   `json:"license_chosen"`
 	Completed             bool   `json:"completed"`
 	DefaultLocale         string `json:"default_locale"`
+	// Phase 8 (C11, C12): the HTTPS and mail steps and the step the wizard resumes at.
+	HTTPSChosen bool   `json:"https_chosen"`
+	MailChosen  bool   `json:"mail_chosen"`
+	NextStep    string `json:"next_step"`
 }
 
 func setupStatusJSON(st setup.Status) setupStatusDTO {
@@ -112,6 +116,9 @@ func setupStatusJSON(st setup.Status) setupStatusDTO {
 		LicenseChosen:         st.LicenseChosen,
 		Completed:             st.Completed,
 		DefaultLocale:         st.DefaultLocale,
+		HTTPSChosen:           st.HTTPSChosen,
+		MailChosen:            st.MailChosen,
+		NextStep:              st.NextStep,
 	}
 }
 

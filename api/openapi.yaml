@@ -3143,6 +3143,249 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/backups:
+    get:
+      operationId: listBackups
+      summary: The backups in the backups directory, newest first, with the backup state and the schedule
+      description: >-
+        check is the shallow check of each file (header, size and checksum; ok, missing checksum, checksum mismatch,
+        unreadable header, or unreadable with code permission_denied or io). state.free_bytes is the free space of the
+        backups directory. Administrators with step-up only; never an API token. Works while the license is expired.
+      x-permission: backup.manage
+      responses:
+        "200":
+          description: The backups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, state, schedule]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Backup" } }
+                  state: { $ref: "#/components/schemas/BackupState" }
+                  schedule: { $ref: "#/components/schemas/BackupSchedule" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createBackup
+      summary: Make a backup now (kind manual)
+      description: >-
+        The body is empty or {}. At most 5 per minute per user (429). 409 ALC-BAK-0001 while another backup is being
+        made (retryable), 409 ALC-BAK-0002 before the recovery passphrase is set, 500 ALC-BAK-0004 when the file could
+        not be written (also when the free space is under twice the newest backup plus 1 GiB). Audited backup.created
+        or backup.failed. Works while the license is expired.
+      x-permission: backup.manage
+      responses:
+        "201":
+          description: The backup made
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Backup" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "500": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/backups/{name}/download:
+    get:
+      operationId: downloadBackup
+      summary: Download one backup file (encrypted; it opens only with the recovery passphrase)
+      description: >-
+        name must be a backup file name Alice gives or accepts (alice-backup-<ID8>-<time>-<kind>.alicebak, or a name
+        ending in .alicebak without a path separator, control character or leading dot); anything else is 404
+        ALC-BAK-0003 without touching the file system. The download is audited (backup.downloaded) before the first
+        byte. No range requests (Accept-Ranges none); HEAD is 405. At most 5 per minute per user.
+      x-permission: backup.manage
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string, maxLength: 255 } }
+      responses:
+        "200":
+          description: The file
+          headers:
+            Content-Disposition: { schema: { type: string, examples: ['attachment; filename="alice-backup-7F3K92QD-20261010T023000Z-auto.alicebak"'] } }
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/backups:
+    get:
+      operationId: getBackupSchedule
+      summary: The daily backup schedule (ETag is its version, "0" before the first save)
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: The schedule
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupSchedule" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putBackupSchedule
+      summary: Set the daily backup time, its time zone and the number of automatic backups kept (If-Match required)
+      description: >-
+        time is HH:MM (00:00..23:59), zone an IANA time zone, retention 7..60; 422 with field errors otherwise. 412
+        ALC-SYS-0008 when If-Match is missing or names another version. Audited backup.settings_changed. Works while the
+        license is expired.
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [time, zone, retention]
+              properties:
+                time: { type: string, pattern: '^[0-9]{2}:[0-9]{2}$', examples: ["02:30"] }
+                zone: { type: string, examples: [Europe/Istanbul] }
+                retention: { type: integer, minimum: 7, maximum: 60 }
+      responses:
+        "200":
+          description: The stored schedule
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BackupSchedule" }
+        "400": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/https:
+    get:
+      operationId: getHTTPSCertificate
+      summary: The HTTPS certificate Alice serves (never its key)
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HTTPSInfo" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putHTTPSCertificate
+      summary: Install an HTTPS certificate (applied without a restart)
+      description: >-
+        Either cert_pem and key_pem (the certificate with its chain, and one unencrypted private key) or pfx_base64 with
+        pfx_password. Refusals change nothing: 422 ALC-TLS-0001 (key does not match), 0002 (not valid now or for less
+        than a day), 0003 (key type or size), 0004 (PFX password), 0005 (unreadable upload). The answer's warnings name
+        name_mismatch, chain_incomplete and expires_soon. The key and the password never appear in an answer, a log or
+        the audit row https.certificate_replaced. At most 5 per minute per user.
+      x-permission: settings.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                cert_pem: { type: string }
+                key_pem: { type: string, writeOnly: true }
+                pfx_base64: { type: string, writeOnly: true }
+                pfx_password: { type: string, writeOnly: true }
+      responses:
+        "200":
+          description: The certificate now in use
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HTTPSInfo" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/https/keep-temporary:
+    post:
+      operationId: setupKeepTemporaryCertificate
+      summary: The wizard's HTTPS step - keep Alice's temporary certificate for now
+      description: Audited setup.https_kept_temporary. After completion it answers the status and changes nothing.
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetupStatus" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/setup/mail/skip:
+    post:
+      operationId: setupSkipMail
+      summary: The wizard's mail step - skip it for now
+      description: Audited setup.mail_skipped. After completion, or with mail settings stored, it answers the status and changes nothing.
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: Setup status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetupStatus" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/audit-forwarding:
+    get:
+      operationId: getAuditForwarding
+      summary: Audit forwarding to syslog, with its progress (the CA bundle is write-only)
+      x-permission: settings.manage
+      responses:
+        "200":
+          description: The setting
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Forwarding" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putAuditForwarding
+      summary: Set audit forwarding (If-Match required; "0" for the first save)
+      description: >-
+        ca_pem absent keeps the stored CA bundle, "" removes it, PEM certificates replace it. 422 with field errors, 422
+        ALC-AUD-0002 for an address Alice never connects to, 412 ALC-SYS-0008 for a missing or stale If-Match. Audited
+        audit.forwarding_changed (without the bundle).
+      x-permission: settings.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ForwardingInput" }
+      responses:
+        "200":
+          description: The stored setting
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Forwarding" }
+        "400": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/settings/audit-forwarding/test:
+    post:
+      operationId: testAuditForwarding
+      summary: Send one test message with the given settings (not saved)
+      description: >-
+        204 when it was written; 502 ALC-AUD-0003 (unreachable, retryable), 502 ALC-AUD-0004 (certificate not trusted),
+        422 ALC-AUD-0002 (an address Alice never connects to). At most 5 per minute per user.
+      x-permission: settings.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ForwardingInput" }
+      responses:
+        "204": { description: Sent }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
     ID:
@@ -3603,13 +3846,19 @@ components:
         csrf_token: { type: string, description: Send as X-CSRF-Token on state-changing requests }
     SetupStatus:
       type: object
-      required: [admin_exists, recovery_passphrase_set, license_chosen, completed, default_locale]
+      description: >-
+        Once setup is complete an anonymous caller gets only completed and default_locale; while setup is open, and for a
+        signed-in session, every field.
+      required: [completed, default_locale]
       properties:
         admin_exists: { type: boolean }
         recovery_passphrase_set: { type: boolean }
         license_chosen: { type: boolean, description: A license was uploaded or the evaluation was chosen }
         completed: { type: boolean }
         default_locale: { type: string, examples: [tr] }
+        https_chosen: { type: boolean, description: A certificate was uploaded or the temporary one kept }
+        mail_chosen: { type: boolean, description: Mail settings exist or the step was skipped }
+        next_step: { type: string, enum: ["", passphrase, https, mail, license, platform, done] }
     LicenseBanner:
       type: object
       required: [kind, severity, params]
@@ -4845,6 +5094,21 @@ components:
                 checked_at: { type: string, format: date-time }
                 intact: { type: boolean }
         attention: { type: integer, description: The number of conditions GET /api/v1/alerts lists for the caller }
+        backup:
+          description: Administrators and Auditors; absent for Operators
+          $ref: "#/components/schemas/BackupStatus"
+        setup_checklist:
+          description: >-
+            Administrators only ("Finish setting up"): passphrase and https are required; mail, license and target are
+            recommended. A step skipped in the wizard stays open here.
+          type: array
+          items:
+            type: object
+            required: [item, done, required]
+            properties:
+              item: { type: string, enum: [passphrase, https, mail, license, target] }
+              done: { type: boolean }
+              required: { type: boolean }
     ExpiringItem:
       type: object
       required: [kind, object_id, name, expires_at, days_left, expired, fingerprint, websites, servers, target_ids, vault, vault_id]
@@ -5053,3 +5317,76 @@ components:
       properties:
         allow_admin_role: { type: boolean }
         version: { type: integer }
+    Backup:
+      type: object
+      required: [name, kind, size, created_at, alice_version, check, code]
+      properties:
+        name: { type: string }
+        kind: { type: string, examples: [auto, manual, pre-restore, pre-upgrade-1.0.0] }
+        size: { type: integer }
+        created_at: { type: string, format: date-time }
+        alice_version: { type: string }
+        check: { type: string, enum: [ok, missing checksum, checksum mismatch, unreadable header, unreadable] }
+        code: { type: string, enum: ["", permission_denied, io], description: 'With check unreadable only' }
+    BackupStatus:
+      type: object
+      required: [last_success_at, last_success_name, age_hours, failing, alarm, configured]
+      properties:
+        last_success_at: { type: [string, "null"], format: date-time }
+        last_success_name: { type: string }
+        age_hours: { type: [integer, "null"], description: Whole hours since the last successful backup }
+        failing: { type: boolean, description: The latest backup attempt failed }
+        alarm: { type: boolean, description: 'No successful backup for 48 hours (counted from the setup completion when there was none)' }
+        configured: { type: boolean, description: The recovery passphrase is set }
+    BackupState:
+      allOf:
+        - { $ref: "#/components/schemas/BackupStatus" }
+        - type: object
+          required: [free_bytes]
+          properties:
+            free_bytes: { type: integer, description: Free space of the backups directory }
+    BackupSchedule:
+      type: object
+      required: [time, zone, retention, next_at, version]
+      properties:
+        time: { type: string, examples: ["02:30"] }
+        zone: { type: string, examples: [UTC] }
+        retention: { type: integer, minimum: 7, maximum: 60 }
+        next_at: { type: [string, "null"], format: date-time }
+        version: { type: integer }
+    HTTPSInfo:
+      type: object
+      required: [subject, dns_names, ip_addresses, not_before, not_after, fingerprint_sha256, temporary, warnings]
+      properties:
+        subject: { type: string }
+        dns_names: { type: array, items: { type: string } }
+        ip_addresses: { type: array, items: { type: string } }
+        not_before: { type: string, format: date-time }
+        not_after: { type: string, format: date-time }
+        fingerprint_sha256: { type: string }
+        temporary: { type: boolean, description: "Alice's own self-signed certificate (renewed by Alice)" }
+        warnings: { type: array, items: { type: string, enum: [name_mismatch, chain_incomplete, expires_soon] } }
+    Forwarding:
+      type: object
+      required: [enabled, host, port, transport, ca_set, backlog, cursor_seq, last_sent_at, last_error_code, last_error_at, version]
+      properties:
+        enabled: { type: boolean }
+        host: { type: string }
+        port: { type: integer }
+        transport: { type: string, enum: [tls, tcp, udp] }
+        ca_set: { type: boolean }
+        backlog: { type: integer, description: Audit entries not sent yet }
+        cursor_seq: { type: integer }
+        last_sent_at: { type: [string, "null"], format: date-time }
+        last_error_code: { type: string, enum: ["", unreachable, untrusted, refused_address, write] }
+        last_error_at: { type: [string, "null"], format: date-time }
+        version: { type: integer }
+    ForwardingInput:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        host: { type: string, maxLength: 253 }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        transport: { type: string, enum: [tls, tcp, udp] }
+        ca_pem: { type: string, maxLength: 65536, writeOnly: true, description: 'Absent keeps the stored bundle; "" removes it' }

@@ -13,12 +13,15 @@ import (
 	"time"
 
 	"alice/internal/alerts/expiry"
+	"alice/internal/audit/forward"
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
+	"alice/internal/backup"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/notify"
+	"alice/internal/platform/tlscert"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/rbac"
@@ -609,6 +612,22 @@ var errorMap = []struct {
 	{auth.ErrOIDCUserDisabled, ErrSSOUserDisabled, nil},
 	{auth.ErrOIDCOtherUser, ErrSSOStepUpOtherUser, nil},
 	{auth.ErrOIDCIdentityInvalid, ErrSSOLoginInvalid, nil},
+	// Phase 8 (C12).
+	{backup.ErrRunning, ErrBackupRunning, nil},
+	{backup.ErrNotConfigured, ErrBackupNotConfigured, nil},
+	{backup.ErrNotFound, ErrBackupNotFound, nil},
+	{backup.ErrWrite, ErrBackupWriteFailed, nil},
+	{backup.ErrVersion, ErrPreconditionFailed, nil},
+	{tlscert.ErrKeyMismatch, ErrTLSKeyMismatch, nil},
+	{tlscert.ErrNotValidNow, ErrTLSNotValidNow, nil},
+	{tlscert.ErrWeakKey, ErrTLSWeakKey, nil},
+	{tlscert.ErrPFXPassword, ErrTLSPFXPassword, nil},
+	{tlscert.ErrUnreadable, ErrTLSUnreadable, nil},
+	{forward.ErrAddressRefused, ErrForwardingAddressRefused, nil},
+	{forward.ErrUnreachable, ErrForwardingUnreachable, nil},
+	{forward.ErrUntrusted, ErrForwardingUntrusted, nil},
+	{forward.ErrVersion, ErrPreconditionFailed, nil},
+	{setup.ErrPassphraseTooWeak, ErrPassphraseTooWeak, nil},
 }
 
 type errorPayload struct {

@@ -134,7 +134,7 @@ func TestOnlyTheDecodeHelpersReadRequests(t *testing.T) {
 	allowed := map[string]map[string]bool{
 		// downloadedFile reads the Body of an sshkeys.Download (the file the service built), not a request.
 		"Body":      {"readJSON": true, "decodeExact": true, "decodeExactBody": true, "downloadedFile": true},
-		"PathValue": {"pathUUID": true},
+		"PathValue": {"pathUUID": true, "pathBackupName": true},
 	}
 	forbidden := map[string]bool{"Form": true, "PostForm": true, "FormValue": true, "PostFormValue": true, "ParseForm": true,
 		"ParseMultipartForm": true, "MultipartReader": true, "MultipartForm": true, "FormFile": true, "GetBody": true}

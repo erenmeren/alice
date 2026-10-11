@@ -65,7 +65,7 @@ func TestSetupStatus(t *testing.T) {
 	}
 	rec := call(NewHandler(d), http.MethodGet, "/api/v1/setup/status", "", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":false,"license_chosen":false,"completed":false,"default_locale":"tr"}`, rec.Body.String())
+	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":false,"license_chosen":false,"completed":false,"default_locale":"tr","https_chosen":false,"mail_chosen":false,"next_step":""}`, rec.Body.String())
 }
 
 func TestSetupSessionSetsStrictCookieAndReturnsCSRFToken(t *testing.T) {
@@ -228,7 +228,7 @@ func TestSetupComplete(t *testing.T) {
 	}
 	rec := call(NewHandler(d), http.MethodPost, "/api/v1/setup/complete", "admin-stepup", "")
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":true,"license_chosen":true,"completed":true,"default_locale":"en"}`, rec.Body.String())
+	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":true,"license_chosen":true,"completed":true,"default_locale":"en","https_chosen":false,"mail_chosen":false,"next_step":""}`, rec.Body.String())
 
 	d.Setup.(*fakeSetup).CompleteFn = func(context.Context, auth.Principal, auth.Meta) (setup.Status, error) {
 		return setup.Status{}, setup.ErrIncomplete
@@ -289,7 +289,7 @@ func TestSetupEvaluation(t *testing.T) {
 	}
 	rec := call(NewHandler(d), http.MethodPost, "/api/v1/setup/evaluation", "admin-stepup", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":true,"license_chosen":true,"completed":false,"default_locale":"en"}`, rec.Body.String())
+	assert.JSONEq(t, `{"admin_exists":true,"recovery_passphrase_set":true,"license_chosen":true,"completed":false,"default_locale":"en","https_chosen":false,"mail_chosen":false,"next_step":""}`, rec.Body.String())
 	assert.Equal(t, "admin", got.Username)
 
 	rec = call(NewHandler(d), http.MethodPost, "/api/v1/setup/evaluation", "admin", "")

@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 	"alice/internal/reports"
@@ -27,13 +28,71 @@ func viewer(r *http.Request) reports.Viewer {
 	return reports.Viewer{UserID: p.UserID, Role: p.Role}
 }
 
+// phase8SummaryDTO is the summary with the Phase 8 sections (R43 row 18): the backup state for Administrators and
+// Auditors, the "Finish setting up" checklist for Administrators; absent for every other role, and absent while the
+// Phase 8 services are not wired (Deps.Backup, Deps.TLSStore nil).
+type phase8SummaryDTO struct {
+	dashboardSummaryDTO
+	Backup         *backupStatusDTO   `json:"backup,omitempty"`
+	SetupChecklist []checklistItemDTO `json:"setup_checklist,omitempty"`
+}
+
 func (s *server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
-	sum, err := s.deps.Reports.Summary(r.Context(), viewer(r))
+	ctx := r.Context()
+	sum, err := s.deps.Reports.Summary(ctx, viewer(r))
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, summaryJSON(sum))
+	out := phase8SummaryDTO{dashboardSummaryDTO: summaryJSON(sum)}
+	role := principalFrom(ctx).Role
+	if s.deps.Backup != nil && (role == rbac.Admin || role == rbac.Auditor) {
+		st, err := s.deps.Backup.State(ctx)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		configured, err := s.backupsConfigured(ctx)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		b := backupStatusJSON(st, configured, s.deps.Clock.Now())
+		out.Backup = &b
+	}
+	if s.deps.TLSStore != nil && role == rbac.Admin {
+		if out.SetupChecklist, err = s.setupChecklist(r, sum); err != nil {
+			s.fail(w, r, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// setupChecklist is "Finish setting up" (R43 row 18, §18.5): the recovery passphrase and the HTTPS certificate are
+// required; a mail server, a license and a first server are recommended. A step skipped in the wizard (the temporary
+// certificate kept, mail skipped) stays open here.
+func (s *server) setupChecklist(r *http.Request, sum reports.Summary) ([]checklistItemDTO, error) {
+	ctx := r.Context()
+	st, err := s.deps.Setup.Status(ctx)
+	if err != nil {
+		return nil, err
+	}
+	httpsDone := s.deps.TLSStore != nil && !s.deps.TLSStore.Info().Temporary
+	mailDone := false
+	if s.deps.Mail != nil {
+		if _, mailDone, err = s.deps.Mail.SMTP(ctx); err != nil {
+			return nil, err
+		}
+	}
+	phase := license.Phase(sum.License.Phase)
+	return []checklistItemDTO{
+		{Item: "passphrase", Done: st.RecoveryPassphraseSet, Required: true},
+		{Item: "https", Done: httpsDone, Required: true},
+		{Item: "mail", Done: mailDone},
+		{Item: "license", Done: phase != "" && phase != license.PhaseEvaluation && phase != license.PhaseEvaluationExpired},
+		{Item: "target", Done: sum.Targets.Total > 0},
+	}, nil
 }
 
 // Bounds of the expiring list (C13): ?days 1..365 (default 30), ?limit 1..200 (default 50).
