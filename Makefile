@@ -282,7 +282,9 @@ actionlint: ## Lint the GitHub workflows
 osv: ## osv-scanner over go.mod and the npm lockfile (any finding fails; ignores need id, reason and ignoreUntil)
 	osv-scanner scan source --config osv-scanner.toml -L go.mod -L web/package-lock.json
 test-backup-cycle: ## F-85 full cycle with a test license (integration, testlicense; needs Docker)
-	go test -race -count=1 -tags 'integration testlicense' -run '^TestF85' -v ./internal/backup/
+	out=$$(mktemp); trap 'rm -f "$$out"' EXIT; set -o pipefail; \
+	go test -race -count=1 -tags 'integration testlicense' -run '^TestF85' -v ./internal/backup/ | tee "$$out"; \
+	grep -q -- '^--- PASS: TestF85' "$$out" || { echo 'test-backup-cycle: no TestF85 test passed (does it exist?)' >&2; exit 1; }
 
 .PHONY: secrets-scan
 secrets-scan: ## Scan git history for committed secrets
