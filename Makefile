@@ -100,7 +100,7 @@ build: web helper ## Build the alice binary with the embedded UI (and the helper
 # release build), so a renamed or inlined symbol fails instead of hiding behind another one. The
 # release build also imports no alice/internal/testutil/ package: go list -deps checks the package graph (a
 # constant or an inlined helper leaves no symbol), nm the linked symbols; the e2e build is the positive control.
-E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled|serveRotationOverlap|setPolicyOverlap|serveSeedDashboard)$$
+E2E_SYMBOLS := main\.(damageLicenseFile|tamperNewestLicenseFile|resetInstall|e2eClock|e2eMailbox|drainJobs|runWithinBudget|drainMu|errDrainBudget|runScheduledTask|scheduled|serveRotationOverlap|setPolicyOverlap|serveSeedDashboard|resetTemporaryCertificate|removeBackupFiles)$$
 
 # Test-only data a release binary must not hold (AUD-23): the label the test license signing key is
 # derived from (testKeyLabel in internal/license/keys_testlicense.go) and a route only the e2e build

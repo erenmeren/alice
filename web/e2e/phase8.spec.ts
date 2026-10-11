@@ -413,7 +413,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       // The cloud metadata address is never connected to (ALC-AUD-0002).
       await host.fill('169.254.169.254');
       await saveButton.click();
-      await expect(page.getByText(t('errors.audit.forwarding_address_refused.title')).first()).toBeVisible();
+      await expect(form.getByRole('alert').filter({ hasText: t('errors.audit.forwarding_address_refused.title') })).toBeVisible();
       await expect(page.getByText(t('settings.saved'), { exact: true })).toHaveCount(0);
 
       // Nothing listens on port 1 (ALC-AUD-0003).
