@@ -56,6 +56,34 @@ func TestReleaseServerAnswersTestPathsWithJSON404(t *testing.T) {
 	}
 }
 
+// S-10: the release server serves no debug or metrics endpoint. API paths answer the JSON 404; other paths
+// are the web application's (the SPA shell, never profile, variable or metric data). internal/archtest
+// TestS10ReleaseLinksNoDebugOrMetricsEndpoints proves no build links pprof, expvar or a metrics library.
+func TestS10ReleaseServerHasNoDebugOrMetricsEndpoints(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	h := api.New(api.Deps{
+		Catalog:     cat,
+		Log:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Clock:       newClock(),
+		TestHandler: testHandler(testDeps{}),
+	}).Handler()
+	for _, p := range []string{"/debug/pprof/", "/debug/pprof/heap", "/debug/pprof/goroutine?debug=2", "/debug/vars",
+		"/metrics", "/api/v1/metrics", "/api/v1/debug/pprof/"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, p, nil))
+		body := rec.Body.String()
+		for _, marker := range []string{"Types of profiles available", "goroutine profile", "cmdline", "memstats", "# TYPE", "# HELP"} {
+			assert.NotContains(t, body, marker, p)
+		}
+		if strings.HasPrefix(p, "/api/") {
+			assert.Equal(t, http.StatusNotFound, rec.Code, p)
+		} else {
+			assert.NotEqual(t, "text/plain; charset=utf-8", rec.Header().Get("Content-Type"), p)
+		}
+	}
+}
+
 // The release build runs the job workers; only the e2e build drives jobs through /test/jobs/drain.
 func TestReleaseBuildStartsJobWorkers(t *testing.T) {
 	assert.True(t, startJobWorkers)

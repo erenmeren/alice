@@ -445,3 +445,17 @@ func TestRequires(t *testing.T) {
 	assert.False(t, inBuild(parse("!e2e"), "e2e"))
 	assert.False(t, inBuild(parse("integration")))
 }
+
+// S-10: no build of Alice that ships links a debug or metrics endpoint: net/http/pprof and expvar register
+// /debug/pprof/ and /debug/vars when imported, and no metrics library is linked (Alice serves no /metrics).
+// cmd/alice TestS10ReleaseServerHasNoDebugOrMetricsEndpoints requests the paths from the release server.
+func TestS10ReleaseLinksNoDebugOrMetricsEndpoints(t *testing.T) {
+	for _, tags := range []string{"", "e2e testlicense"} {
+		deps := goListDeps(t, tags, "./cmd/alice", "./cmd/alice-helper")
+		require.Contains(t, deps, "net/http", "positive control: the list holds the standard library (tags %q)", tags)
+		for _, dep := range deps {
+			assert.False(t, dep == "net/http/pprof" || dep == "expvar" || strings.Contains(dep, "prometheus") ||
+				strings.Contains(dep, "opentelemetry"), "tags %q: Alice links %s", tags, dep)
+		}
+	}
+}
