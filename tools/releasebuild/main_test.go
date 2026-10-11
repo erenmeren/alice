@@ -119,7 +119,7 @@ func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
 		"migrations/00001_init.sql":                        "-- +goose Up\n",
 		"migrations/00012_phase8.sql":                      "-- +goose Up\n",
 		"bin/THIRD_PARTY_NOTICES.md":                       "# Notices\n",
-		"bin/release-gates.log":                            "commit\t" + testCommit + "\nlint\t0\tgolangci-lint v2.14.0\ntest\t0\tgo1.27.2\n",
+		"bin/release-gates.log":                            fullGatesLog(testCommit),
 		"bin/sbom/alice-1.0.0.cdx.json":                    "{}\n",
 		"bin/sbom/postgres-1.0.0.cdx.json":                 "{}\n",
 		"bin/sbom/source-1.0.0.cdx.json":                   "{}\n",
@@ -217,8 +217,8 @@ func TestStageLayout(t *testing.T) {
 	checklist := readFile(t, filepath.Join(pkg, "RELEASE-CHECKLIST-SIGNED.txt"))
 	assert.Contains(t, checklist, "Commit: "+testCommit)
 	assert.Contains(t, checklist, "Gates recorded by make release-gates on commit "+testCommit+":\n")
-	assert.Contains(t, checklist, "lint: exit 0 (golangci-lint v2.14.0)")
-	assert.Contains(t, checklist, "test: exit 0 (go1.27.2)")
+	assert.Contains(t, checklist, "  ci: exit 0 (go1.27.2, golangci-lint v2.14.0)\n")
+	assert.Contains(t, checklist, "  release-keycheck: exit 0 (go1.27.2)\n")
 	assert.Contains(t, checklist, "\nSigned: <empty until the vendor signs the checklist>\n")
 	assert.NotContains(t, checklist, "No gate was recorded")
 
@@ -337,6 +337,9 @@ func TestStageRefusesAMissingInput(t *testing.T) {
 		"gates log without commit": func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint\t0\tv2\n", 0o644) },
 		"gates log with only a commit": func(t *testing.T, cfg *stageConfig) {
 			write(t, cfg.GatesLog, "commit\t"+testCommit+"\n", 0o644)
+		},
+		"gates log with a failed gate among all": func(t *testing.T, cfg *stageConfig) {
+			write(t, cfg.GatesLog, strings.Replace(fullGatesLog(testCommit), "testssl\t0\t", "testssl\t1\t", 1), 0o644)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -758,6 +761,81 @@ func TestStageRefusesAStaleGatesLog(t *testing.T) {
 	write(t, cfg.GatesLog, "commit\tabc\nlint\t0\tv2\n", 0o644)
 	require.ErrorContains(t, stage(cfg, &fakeImages{}), "does not start with the line commit")
 	assert.NoDirExists(t, cfg.Out)
+}
+
+// Task 15 review I-1: the production stage requires every gate of releaseGates, each exactly once
+// with exit 0; a skipped gate (RELEASE_GATES_SKIP writes "<gate>\tskipped\t-"), a missing one, a
+// repeated one and one it does not know are refused. A draft lists a skipped gate as skipped.
+func TestStageRequiresEveryGate(t *testing.T) {
+	full := fullGatesLog(testCommit)
+	for name, tc := range map[string]struct{ log, want string }{
+		"missing gate": {
+			log:  strings.Replace(full, "zap-baseline\t0\tzap\n", "", 1),
+			want: "the gates log " + "%s" + " has no line for gate zap-baseline",
+		},
+		"only one gate": {
+			log:  "commit\t" + testCommit + "\nci\t0\tgo1.27.2\n",
+			want: "has no line for gate matrix-check",
+		},
+		"skipped gate": {
+			log:  strings.Replace(full, "release-keycheck\t0\tgo1.27.2", "release-keycheck\tskipped\t-", 1),
+			want: "gate release-keycheck was skipped; a customer release needs every gate to run and pass",
+		},
+		"repeated gate": {
+			log:  full + "ci\t0\tgo1.27.2\n",
+			want: "the gates log line for gate ci appears more than once",
+		},
+		"tree changed during the run": {
+			log:  full + "tree-unchanged\t1\t-\n",
+			want: "gate tree-unchanged exited with 1",
+		},
+		"unknown gate": {
+			log:  full + "lint\t0\tv2\n",
+			want: "the gates log names gate lint, which is not a release gate",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := fixture(t)
+			write(t, cfg.GatesLog, tc.log, 0o644)
+			want := tc.want
+			if strings.Contains(want, "%s") {
+				want = fmt.Sprintf(want, cfg.GatesLog)
+			}
+			require.ErrorContains(t, stage(cfg, &fakeImages{}), want)
+			assert.NoDirExists(t, cfg.Out)
+		})
+	}
+
+	cfg := draftFixture(t)
+	write(t, cfg.GatesLog, strings.Replace(full, "release-keycheck\t0\tgo1.27.2", "release-keycheck\tskipped\t-", 1), 0o644)
+	require.NoError(t, stage(cfg, &fakeImages{}))
+	checklist := readFile(t, filepath.Join(cfg.Out, "alice", "RELEASE-CHECKLIST-SIGNED.txt"))
+	assert.Contains(t, checklist, "  release-keycheck: skipped\n")
+	assert.Contains(t, checklist, "  ci: exit 0 (go1.27.2, golangci-lint v2.14.0)\n")
+}
+
+// The gate list is defined once: deploy/dev/release-gates.sh runs what releasebuild gates prints.
+func TestGatesCommandPrintsTheGateList(t *testing.T) {
+	var out bytes.Buffer
+	require.Equal(t, 0, run([]string{"gates"}, &out, &out))
+	assert.Equal(t, "ci\nmatrix-check\nreproducible-check\ntest-release\ntest-systemd\nzap-baseline\ntestssl\ntest-backup-cycle\ne2e-browsers\nrelease-keycheck\n", out.String())
+	out.Reset()
+	assert.Equal(t, 2, run([]string{"gates", "extra"}, &out, &out))
+}
+
+// fullGatesLog is a gates log of commit with every release gate passed.
+func fullGatesLog(commit string) string {
+	return "commit\t" + commit + "\n" +
+		"ci\t0\tgo1.27.2, golangci-lint v2.14.0\n" +
+		"matrix-check\t0\tgo1.27.2\n" +
+		"reproducible-check\t0\tgo1.27.2\n" +
+		"test-release\t0\tgo1.27.2, docker 29.0.0\n" +
+		"test-systemd\t0\tgo1.27.2, ubuntu 22.04 systemd\n" +
+		"zap-baseline\t0\tzap\n" +
+		"testssl\t0\ttestssl\n" +
+		"test-backup-cycle\t0\tgo1.27.2\n" +
+		"e2e-browsers\t0\tplaywright 1.60.0\n" +
+		"release-keycheck\t0\tgo1.27.2\n"
 }
 
 // I-3: -allow-draft (placeholders, failing gates accepted) only for a test package; a draft

@@ -8,6 +8,8 @@
 //	    After SHA256SUMS.sig exists: alice-<v>.tar.gz (deterministic) and alice-<v>.tar.gz.sha256.
 //	releasebuild keycheck -release DIR -license FILE
 //	    The release public keys are production keys and none of them is a license key (S-12).
+//	releasebuild gates
+//	    Print the release gates, one per line, in the order deploy/dev/release-gates.sh runs them.
 //
 // The stage refuses symbolic links among its inputs (S-7). Without -test every release key must
 // be an rk-YYYY-NN key and the set must equal deploy/release/keys/; -test accepts rk-test-NN keys,
@@ -52,6 +54,15 @@ const draftLicense = "Licensed to the customer under the terms of the signed ord
 
 // checklistUnsigned is the last line of RELEASE-CHECKLIST-SIGNED.txt until the vendor signs it.
 const checklistUnsigned = "Signed: <empty until the vendor signs the checklist>"
+
+// releaseGates are the gates of make release-gates (spec §22.7 stage 6, §17.7), in the order
+// deploy/dev/release-gates.sh runs them (it reads this list through releasebuild gates, so it is
+// defined only here). The production stage requires each exactly once with exit 0 (Task 15
+// review I-1); release-keycheck is last because it fails until the vendor's keys are committed.
+var releaseGates = []string{
+	"ci", "matrix-check", "reproducible-check", "test-release", "test-systemd",
+	"zap-baseline", "testssl", "test-backup-cycle", "e2e-browsers", "release-keycheck",
+}
 
 // requiredGuides are the guides every customer package carries (spec §21; written by Task 17).
 var requiredGuides = []string{"README.md", "api.md", "backup-restore.md", "install-guide.md", "security-overview.md", "upgrade.md"}
@@ -100,6 +111,7 @@ const usage = `Usage:
                      -min-upgrade-from V [-root DIR] [-test] [-allow-draft]
   releasebuild pack -stage DIR -out DIR
   releasebuild keycheck -release DIR -license FILE
+  releasebuild gates
 `
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -159,6 +171,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		if msg, err = keycheck(*rel, *lic); err == nil {
 			_, _ = fmt.Fprintln(stdout, msg)
 		}
+	case "gates":
+		if fs.Parse(args[1:]) != nil || fs.NArg() != 0 {
+			_, _ = fmt.Fprint(stderr, usage)
+			return 2
+		}
+		_, _ = fmt.Fprintln(stdout, strings.Join(releaseGates, "\n"))
 	default:
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2
@@ -464,7 +482,8 @@ func docEntries(cfg stageConfig) ([]entry, error) {
 // checklistFile writes RELEASE-CHECKLIST-SIGNED.txt from the gates log of make release-gates: a
 // first line "commit\t<40 hex>" naming the commit the gates ran on (Task 12 review I-5), then one
 // line "<gate>\t<exit status>\t<tool version>" per gate. It never claims a gate that did not run:
-// the production stage refuses a log of another commit; a draft keeps it and names that commit.
+// the production stage refuses a log of another commit or without every gate (gateLines); a draft
+// keeps it and names that commit.
 func checklistFile(cfg stageConfig) ([]byte, error) {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "Alice %s release checklist\nCommit: %s\n", cfg.Version, cfg.Commit)
@@ -500,23 +519,66 @@ func checklistFile(cfg stageConfig) ([]byte, error) {
 		} else {
 			fmt.Fprintf(&b, "Gates recorded by make release-gates on commit %s:\n", gatesCommit)
 		}
-		for _, l := range lines {
-			f := strings.Split(l, "\t")
-			if len(f) != 3 || f[0] == "" {
-				return nil, fmt.Errorf("the gates log line %q is not <gate>\\t<exit status>\\t<tool version>", l)
-			}
-			status, err := strconv.Atoi(f[1])
-			if err != nil {
-				return nil, fmt.Errorf("the gates log line %q has no exit status", l)
-			}
-			if status != 0 && !cfg.AllowDraft {
-				return nil, fmt.Errorf("gate %s exited with %d; a customer release needs every gate to pass", f[0], status)
-			}
-			fmt.Fprintf(&b, "  %s: exit %d (%s)\n", f[0], status, f[2])
+		if err := gateLines(&b, cfg, lines); err != nil {
+			return nil, err
 		}
 	}
 	b.WriteString(checklistUnsigned + "\n")
 	return b.Bytes(), nil
+}
+
+// gateLines writes the checklist line of each gate. A line's status is an exit status or "skipped"
+// (RELEASE_GATES_SKIP). The production stage requires every gate of releaseGates exactly once with
+// exit 0 and no other gate (Task 15 review I-1); a draft lists what the log holds.
+func gateLines(b *bytes.Buffer, cfg stageConfig, lines []string) error {
+	known := make(map[string]bool, len(releaseGates))
+	for _, g := range releaseGates {
+		known[g] = true
+	}
+	seen := map[string]bool{}
+	for _, l := range lines {
+		f := strings.Split(l, "\t")
+		if len(f) != 3 || f[0] == "" {
+			return fmt.Errorf("the gates log line %q is not <gate>\\t<exit status>\\t<tool version>", l)
+		}
+		name, status := f[0], 0
+		if f[1] == "skipped" {
+			if !cfg.AllowDraft {
+				return fmt.Errorf("gate %s was skipped; a customer release needs every gate to run and pass", name)
+			}
+		} else {
+			var err error
+			if status, err = strconv.Atoi(f[1]); err != nil {
+				return fmt.Errorf("the gates log line %q has no exit status", l)
+			}
+			// A failing line of release-gates.sh's own (tree-unchanged) is refused as a failure.
+			if status != 0 && !cfg.AllowDraft {
+				return fmt.Errorf("gate %s exited with %d; a customer release needs every gate to pass", name, status)
+			}
+		}
+		if !cfg.AllowDraft {
+			if !known[name] {
+				return fmt.Errorf("the gates log names gate %s, which is not a release gate", name)
+			}
+			if seen[name] {
+				return fmt.Errorf("the gates log line for gate %s appears more than once", name)
+			}
+		}
+		seen[name] = true
+		if f[1] == "skipped" {
+			fmt.Fprintf(b, "  %s: skipped\n", name)
+		} else {
+			fmt.Fprintf(b, "  %s: exit %d (%s)\n", name, status, f[2])
+		}
+	}
+	if !cfg.AllowDraft {
+		for _, g := range releaseGates {
+			if !seen[g] {
+				return fmt.Errorf("the gates log %s has no line for gate %s; run make release-gates without RELEASE_GATES_SKIP", cfg.GatesLog, g)
+			}
+		}
+	}
+	return nil
 }
 
 // readGatesLog returns the gates log, or nothing when it does not exist.

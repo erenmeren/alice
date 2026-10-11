@@ -386,13 +386,16 @@ mutation: ## Mutation testing of the security-critical pure packages (advisory; 
 nightly: ## The nightly set (§22.7 stage 5) on this machine; hours; Docker alone
 	$(MAKE) fuzz-nightly test-release test-systemd zap-baseline testssl mutation
 	@status=0; $(MAKE) e2e-up e2e-browsers || status=$$?; $(MAKE) e2e-down; exit $$status
-# release-gates runs every gate of deploy/dev/release-gates.sh in order (ci, matrix-check -strict,
-# reproducible-check, test-release, test-systemd, zap-baseline, testssl, test-backup-cycle, the three
-# browsers, release-keycheck last), also after a failure, and records each in bin/release-gates.log
-# (first line commit<TAB><HEAD>, then <gate><TAB><exit status><TAB><tool version>), which make release
-# turns into RELEASE-CHECKLIST-SIGNED.txt. RELEASE_GATES_SKIP="gate ..." leaves gates out (CI:
-# release-keycheck); a skipped gate gets no line. zap-full and fuzz-release are not in it: they run for
-# hours on the owner's or CI's machine (release.yml) and the release checklist lists them.
+# release-gates runs every gate of deploy/dev/release-gates.sh in order. The list is defined once,
+# in tools/releasebuild (releaseGates; go run ./tools/releasebuild gates prints it): ci, matrix-check
+# -strict, reproducible-check, test-release, test-systemd, zap-baseline, testssl, test-backup-cycle,
+# the three browsers, release-keycheck last. Every gate runs also after a failure and is recorded in
+# bin/release-gates.log (first line commit<TAB><HEAD>, then <gate><TAB><exit status><TAB><tool
+# version>), which make release turns into RELEASE-CHECKLIST-SIGNED.txt; the production stage
+# requires every gate exactly once with exit 0. RELEASE_GATES_SKIP="gate ..." leaves gates out of a
+# local partial run: each gets the line <gate><TAB>skipped<TAB>-, which the production stage refuses.
+# zap-full and fuzz-release are not in it: they run for hours on the owner's or CI's machine
+# (release.yml) and the release checklist lists them.
 RELEASE_GATES_SKIP ?=
 release-gates: ## Every release gate that runs on one machine (§22.7 stage 6, §17.7), logged to bin/release-gates.log; hours; Docker alone
 	RELEASE_GATES_SKIP="$(RELEASE_GATES_SKIP)" GOLANGCI_LINT_VERSION=$(GOLANGCI_LINT_VERSION) MAKE="$(MAKE)" ./deploy/dev/release-gates.sh

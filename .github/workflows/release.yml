@@ -26,7 +26,7 @@ jobs:
       - run: make tools
       - run: make web-install
       - run: cd web && npx playwright install --with-deps chromium firefox webkit
-      - run: make release-gates RELEASE_GATES_SKIP=release-keycheck
+      - run: make release-gates
       - run: make zap-full
       - run: make fuzz-release
       - name: make release (unsigned stage)
