@@ -344,7 +344,7 @@ func TestStageRefusesAMissingInput(t *testing.T) {
 // M-6, R43 row 51: a test package (make release-test: -allow-draft) carries placeholders for what
 // Tasks 17 and 18 and the vendor provide later, and says so.
 func TestStageDraftPlaceholders(t *testing.T) {
-	cfg, _ := fixture(t)
+	cfg := draftFixture(t)
 	require.NoError(t, os.Remove(filepath.Join(cfg.Root, "SECURITY-REPORT.md")))
 	require.NoError(t, os.Remove(cfg.GatesLog))
 	require.NoError(t, os.Remove(filepath.Join(cfg.Root, "docs/install-guide.md")))
@@ -362,13 +362,26 @@ func TestStageDraftPlaceholders(t *testing.T) {
 	assert.NotContains(t, checklist, "exit 0")
 
 	// A draft stage still copies a gates log when there is one, and never claims more.
-	cfg2, _ := fixture(t)
-	cfg2.AllowDraft = true
+	cfg2 := draftFixture(t)
 	write(t, cfg2.GatesLog, "lint\t0\tv2\n", 0o644)
 	require.NoError(t, stage(cfg2, &fakeImages{}))
 	checklist = readFile(t, filepath.Join(cfg2.Out, "alice", "RELEASE-CHECKLIST-SIGNED.txt"))
 	assert.Contains(t, checklist, "lint: exit 0 (v2)")
 	assert.NotContains(t, checklist, "test: exit")
+}
+
+// draftFixture is the fixture as make release-test stages it: -test -allow-draft, a release
+// candidate, a test key.
+func draftFixture(t *testing.T) stageConfig {
+	t.Helper()
+	cfg, _ := fixture(t)
+	cfg.Test, cfg.AllowDraft, cfg.Version = true, true, "1.0.0-rc.1"
+	cfg.Keys = t.TempDir()
+	releaseKey(t, cfg.Keys, "rk-test-01")
+	for _, f := range []string{"alice", "postgres", "source"} {
+		write(t, filepath.Join(cfg.SBOM, f+"-1.0.0-rc.1.cdx.json"), "{}\n", 0o644)
+	}
+	return cfg
 }
 
 // S-7: the stage never packages a symbolic link.
@@ -712,4 +725,16 @@ func TestReleaseChecksTheShippedImage(t *testing.T) {
 	assert.Less(t, build, check)
 	assert.Less(t, check, stageAt)
 	assert.Contains(t, out, "HELPER_SHA256_AMD64=")
+}
+
+// I-3: -allow-draft (placeholders, failing gates accepted) only for a test package; a draft
+// stage with the production key is what the ceremony would sign.
+func TestStageRefusesADraftWithoutTest(t *testing.T) {
+	cfg, _ := fixture(t)
+	cfg.AllowDraft = true
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "-allow-draft is for test packages only (-test)")
+	assert.NoDirExists(t, cfg.Out)
+	var out bytes.Buffer
+	assert.Equal(t, 1, run([]string{"stage", "-allow-draft", "-root", cfg.Root, "-version", "1.0.0", "-out", cfg.Out, "-keys", cfg.Keys}, &out, &out))
+	assert.Contains(t, out.String(), "-allow-draft is for test packages only")
 }

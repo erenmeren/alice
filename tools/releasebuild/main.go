@@ -237,6 +237,8 @@ func (c *stageConfig) validate() error {
 	switch {
 	case !versionRe.MatchString(c.Version):
 		return fmt.Errorf("version %q is not x.y.z or x.y.z-rc.N", c.Version)
+	case c.AllowDraft && !c.Test:
+		return errors.New("-allow-draft is for test packages only (-test); a customer release carries every real input")
 	case c.Test && !rcVersionRe.MatchString(c.Version):
 		return fmt.Errorf("a test-signed package must be a release candidate (x.y.z-rc.N), not %s", c.Version)
 	case !versionRe.MatchString(c.MinUpgradeFrom):
