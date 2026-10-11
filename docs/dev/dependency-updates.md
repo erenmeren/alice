@@ -8,7 +8,7 @@ the same inputs tomorrow (audit AUD-09, SEC-089, SEC-103):
 | GitHub Actions (`uses:`) | full 40-character commit SHA plus `# v1.2.3` comment | `.github/workflows/*.yml` |
 | Docker base images and the `# syntax=` frontend | `image:tag@sha256:<index digest>` | `deploy/Dockerfile`, `test/images/**` |
 | PostgreSQL | `postgres:16-alpine@sha256:...` | `deploy/docker-compose.yml`, `internal/testutil/pgtest/pgtest.go`, `internal/platform/db/db_integration_test.go` |
-| Tool images (gitleaks, trivy) | `GITLEAKS_IMAGE`, `TRIVY_IMAGE` with tag and digest | `Makefile` |
+| Tool images (gitleaks, trivy, ShellCheck) | `GITLEAKS_IMAGE`, `TRIVY_IMAGE`, `SHELLCHECK_IMAGE` with tag and digest; every `*_IMAGE` variable of the Makefile must be pinned that way | `Makefile` |
 
 The tag stays in the reference for readability; Docker verifies the digest, not the tag. Digests are
 of the multi-architecture index, so amd64 and arm64 both keep working.
@@ -25,8 +25,9 @@ run` names a service, not an image; that service's `image:` is checked in its Co
 message names the file and line. Fix it by pinning as below; do not add exceptions without a
 decision recorded here.
 
-What the check does not see: an image named only inside a variable other than `GITLEAKS_IMAGE` /
-`TRIVY_IMAGE` (it fails closed: an unknown variable as the operand is reported), images pulled by
+What the check does not see: an image named only inside a shell variable or a Makefile variable that is not
+named `<NAME>_IMAGE` (it fails closed: such an operand is reported; a `$(<NAME>_IMAGE)` operand must name a
+variable that the Makefile defines, pinned), images pulled by
 programs (the testcontainers Ryuk image, Playwright's browsers), and commands other than the ones
 listed above that fetch images without a `docker://` reference (`docker buildx build` of a remote context, `crane`).
 
@@ -115,3 +116,18 @@ Reviewing a Dependabot pull request: read the release notes; for an image, compa
   `@playwright/test` in the lockfile, the download itself is not content-pinned.
 - `actions/setup-node` and `actions/setup-go` download the Node and Go toolchains by the version
   given to them (`go-version-file: go.mod`, `node-version: 24`).
+
+## The other static gates of `make lint` and `make vuln`
+
+| Target | Checks | Tool |
+| --- | --- | --- |
+| `make shellcheck` | every shell script (`SHELL_SCRIPTS` in the Makefile) with `-x -P SCRIPTDIR`, so `# shellcheck source=` lines resolve next to the script | `SHELLCHECK_IMAGE` (pinned) |
+| `make lockcheck` | `web/package-lock.json` and `go.sum` hold package data only: no extra field, only registry.npmjs.org downloads, only `sha512-` integrity values (a secret-scan substitute for files too large to review) | `tools/lockcheck` |
+| `make docs-check` | commands, flags and `make` targets named in the guides exist; relative links and heading anchors resolve; the sentences of `tools/docscheck/required.txt` are still in their files | `tools/docscheck` |
+| `make actionlint` | the GitHub workflows | `actionlint` (`ACTIONLINT_VERSION`, installed by `make tools`) |
+| `make osv` (in `make vuln`) | `go.mod` and `web/package-lock.json` against the OSV database; any finding fails | `osv-scanner` (`OSV_SCANNER_VERSION`) |
+
+An `osv-scanner` finding is fixed (for npm, `npm update <package> --package-lock-only` in `web/` when the
+range allows the fixed version). If it cannot be fixed, `osv-scanner.toml` takes an `[[IgnoredVulns]]` entry with
+`id`, `reason` and `ignoreUntil` at most 90 days ahead. ShellCheck findings are fixed in the script; a
+`# shellcheck disable=` line needs a reason on the same line.

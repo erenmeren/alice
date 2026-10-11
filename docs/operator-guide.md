@@ -704,7 +704,7 @@ again"). Database backups taken before the destruction still contain the encrypt
 
 ## Master-key rotation and the installation record
 
-Master-key rotation (§7.2 of the design, `alice keys rotate-master`) is not available yet. When it is added it must,
+Master-key rotation (§7.2 of the design) is not available yet; there is no command for it. When it is added it must,
 in the same procedure, re-seal the installation record (`license.installation_seal`, HMAC under the HKDF label
 `alice/installation/v1`) and re-write both copies of the license time record (`settings.time.hwm` and
 `<ALICE_STATE_DIR>/hwm.dat`, labels `alice/hwm/v1` and `alice/hwm-enc/v1`) with the new key; otherwise the next
