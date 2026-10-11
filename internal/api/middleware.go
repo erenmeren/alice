@@ -28,7 +28,11 @@ func (s *server) requestID(next http.Handler) http.Handler {
 	})
 }
 
-const apiCSP = "default-src 'none'; frame-ancestors 'none'"
+// apiCSP is the policy of every response but index.html (SEC-033). base-uri and form-action do not
+// fall back to default-src, so they are named too: an API answer rendered as a document (the OIDC
+// callback's error page, a mistyped Content-Type) can neither set a base URL nor submit a form
+// (ZAP rule 10055, found by make zap-baseline, Phase 8 Task 15).
+const apiCSP = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

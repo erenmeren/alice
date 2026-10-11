@@ -661,7 +661,7 @@ func TestA08SecurityHeadersOnAPIResponses(t *testing.T) {
 	} {
 		h := rec.Header()
 		assert.Equal(t, "max-age=31536000; includeSubDomains", h.Get("Strict-Transport-Security"), name)
-		assert.Equal(t, "default-src 'none'; frame-ancestors 'none'", h.Get("Content-Security-Policy"), name)
+		assert.Equal(t, "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'", h.Get("Content-Security-Policy"), name)
 		assert.Equal(t, "nosniff", h.Get("X-Content-Type-Options"), name)
 		assert.Equal(t, "DENY", h.Get("X-Frame-Options"), name)
 		assert.Equal(t, "no-referrer", h.Get("Referrer-Policy"), name)
