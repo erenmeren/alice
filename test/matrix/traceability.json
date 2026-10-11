@@ -378,13 +378,20 @@
  },
  {
   "id": "L-56",
-  "status": "gap",
-  "note": "No test: a discovered certificate with a notBefore ahead of the clock must warn the Administrator without changing the license state (R28; deferred to Phase 4 by the Phase 2 review, never written)."
+  "status": "partial",
+  "tests": [
+   "internal/license:TestL56L57CertificateNotBeforeNeverAffectsTheLicense"
+  ],
+  "ruling": "docs/superpowers/rulings/phase-8.md G-2",
+  "note": "The license state is computed from the clock and never locks for a certificate whose notBefore is ahead (proven). R28's admin warning \"system clock appears to be behind\" from certificate evidence is not built; the clock_behind banner comes from the time record only."
  },
  {
   "id": "L-57",
-  "status": "gap",
-  "note": "No test: a certificate notBefore far in the future must never change the license state or the effective time (R28; deferred to Phase 4 by the Phase 2 review, never written)."
+  "status": "test",
+  "tests": [
+   "internal/license:TestL56L57CertificateNotBeforeNeverAffectsTheLicense"
+  ],
+  "note": "State, effective time and banners are identical with and without certificates whose notBefore is 3 or 100 years ahead, before and after a restart; no clock event is recorded (the optional warning is not raised)."
  },
  {
   "id": "L-58",
@@ -1062,13 +1069,20 @@
  },
  {
   "id": "F-64",
-  "status": "gap",
-  "note": "No test restarts PostgreSQL under a running deployment job; the crash-recovery paths are proven by F-66 only."
+  "status": "deferred",
+  "ruling": "docs/superpowers/rulings/phase-8.md G-3",
+  "note": "No test restarts PostgreSQL under a running deployment job. Related evidence: the crash-recovery sweep and lease rules (F-66) and pgxpool's reconnect."
  },
  {
   "id": "F-65",
-  "status": "gap",
-  "note": "No test makes PostgreSQL unavailable for two minutes. Partial evidence: internal/api TestHealthzUnavailableHidesCause, TestLivez and TestAuthenticationBackendErrorIsUnavailable; job pause and no loss after the database returns are unproven."
+  "status": "partial",
+  "tests": [
+   "internal/api:TestHealthzUnavailableHidesCause",
+   "internal/api:TestLivez",
+   "internal/api:TestAuthenticationBackendErrorIsUnavailable"
+  ],
+  "ruling": "docs/superpowers/rulings/phase-8.md G-3",
+  "note": "The friendly 503, /healthz failing and /livez passing are proven; that jobs pause and nothing is lost after two minutes without the database is not tested."
  },
  {
   "id": "F-66",
@@ -1299,11 +1313,12 @@
  },
  {
   "id": "S-06",
-  "status": "test",
+  "status": "partial",
   "tests": [
    "internal/backup:TestF87NoPlaintextInTheFile"
   ],
-  "note": "The release tarball and image secret scans are the gitleaks and Trivy gates of make secrets-scan, fs-scan and image-scan (Task 19 evidence)."
+  "note": "The backup file holds no plaintext canary (F-87, test). The release tarball is the two scanned images plus repository files: make secrets-scan (gitleaks, history), fs-scan and image-scan (Trivy, secret scanner) are gates of make ci and make release-gates, recorded in docs/security/reviews/phase-8.md; no test scans the packed tarball itself.",
+  "ruling": "docs/superpowers/rulings/phase-8.md G-5"
  },
  {
   "id": "S-07",
@@ -1335,9 +1350,12 @@
   "id": "S-10",
   "status": "test",
   "tests": [
-   "internal/api:TestSecretsNeverLeak"
+   "internal/api:TestSecretsNeverLeak",
+   "cmd/alice:TestReleaseServerAnswersTestPathsWithJSON404",
+   "cmd/alice:TestS10ReleaseServerHasNoDebugOrMetricsEndpoints",
+   "internal/archtest:TestS10ReleaseLinksNoDebugOrMetricsEndpoints"
   ],
-  "note": "Only the absence of /test/* is tested; no test requests /debug/pprof or /metrics from the release build."
+  "note": "/test/* is absent from the release build; no build links net/http/pprof, expvar or a metrics library, and the release server answers /debug/pprof, /debug/vars and /metrics with no profile, variable or metric data."
  },
  {
   "id": "S-11",
@@ -1398,12 +1416,16 @@
  },
  {
   "id": "R-07",
-  "status": "test",
+  "status": "partial",
   "tests": [
    "internal/auth:TestVerifyBoundsConcurrency",
-   "internal/auth:TestDummyVerifyWaitsForASlot"
+   "internal/auth:TestDummyVerifyWaitsForASlot",
+   "internal/api:TestBackupDownloadRateLimit",
+   "internal/api:TestPhase8RateLimitBucketsAreSeparate",
+   "internal/providers/linuxssh:TestPoolLimitsConnectionsPerTarget"
   ],
-  "note": "Bounded concurrent Argon2 is proven; the stricter per-route limits of backup download and test connection are not tested separately."
+  "note": "Bounded concurrent Argon2, the 5-a-minute backup download and Phase 8 action buckets (audit forwarding test, back up now, HTTPS upload) and the per-target SSH connection bound are proven. A server test connection has only the general per-identity limit and the SSH pool bound; no stricter per-route limit is built for it.",
+  "ruling": "docs/superpowers/rulings/phase-8.md G-8"
  },
  {
   "id": "R-08",
@@ -1503,25 +1525,34 @@
  },
  {
   "id": "A-10",
-  "status": "test",
+  "status": "partial",
   "tests": [
-   "internal/platform/tlscert:TestServerConfig"
+   "internal/platform/tlscert:TestServerConfig",
+   "cmd/alice:TestReleaseComposeIsHardened"
   ],
-  "note": "Server-side TLS 1.2 minimum is proven; the testssl.sh scan is the nightly of Task 15 and Alice serves no plain HTTP listener."
+  "note": "TLS 1.2 minimum (test); the release compose publishes only the HTTPS port (no port 80 listener, test). The testssl.sh grade is the make testssl gate of make release-gates and make nightly (A+ on the release image, docs/security/reviews/phase-8.md); the real host is owner item 4.",
+  "ruling": "docs/superpowers/rulings/phase-8.md G-6"
  },
  {
   "id": "A-11",
-  "status": "gap",
-  "note": "No test injects script or HTML into certificate, server, key and target names and audit reasons and renders them; only the ESLint ban on dangerouslySetInnerHTML (SEC-035) and sso_error=<script> page tests exist."
+  "status": "partial",
+  "tests": [
+   "web/src/xss.test.tsx:A-11: hostile names render as text",
+   "web/src/csp.test.ts:CSP nonce",
+   "internal/api:TestSecurityHeadersOnEveryResponse"
+  ],
+  "ruling": "docs/superpowers/rulings/phase-8.md G-1",
+  "note": "Script and HTML in certificate common names and labels, server names and addresses, SSH key comments, audit actors, objects and reasons render as text with no element, handler or javascript: link (rendered pages, jsdom); the page CSP is tested. Not done: the in-browser Playwright run with fixtures that checks a marker under the CSP."
  },
  {
   "id": "A-12",
-  "status": "test",
+  "status": "partial",
   "tests": [
    "cmd/alice-helper:TestArgumentsOutsideTheVocabularyAreRefused",
    "internal/providers/linuxssh:TestHostileArgumentsNeverBecomeCommands"
   ],
-  "note": "Shell injection is proven; no test sends SQL injection payloads through every list, filter and sort parameter."
+  "note": "Shell injection through every string that reaches the helper or SSH is proven. SQL: every query is parameterized (gosec G201/G202 in make lint, the no-string-building rule) and FuzzOpenAPIInputs fuzzes every create/update body; no test sends SQL-injection payloads through every list, filter and sort parameter, and the active ZAP scan (make zap-full) is an owner/CI gate.",
+  "ruling": "docs/superpowers/rulings/phase-8.md G-7"
  },
  {
   "id": "A-13",
@@ -1683,18 +1714,24 @@
   "id": "X-02",
   "status": "test",
   "tests": [
-   "deploy/dev/check-hardening.sh:read-only"
+   "deploy/dev/check-hardening.sh:read-only",
+   "cmd/alice:TestReleaseComposeIsHardened"
   ],
-  "note": "Proven by the hardening script (make e2e-hardening-check, run by make ci), not by a Go test."
+  "note": "The hardening script (make e2e-hardening-check, run by make ci) checks the running containers; the release compose test checks user, read-only root, capabilities and that PostgreSQL is not published."
  },
  {
   "id": "X-03",
   "status": "test",
   "tests": [
    "tools/pincheck:TestRepositoryIsPinned",
-   "tools/lockcheck:TestAcceptsTheRealLockfiles"
+   "tools/lockcheck:TestAcceptsTheRealLockfiles",
+   "tools/releasebuild:TestStageLayout",
+   "tools/releasebuild:TestStageRefusesAMissingInput",
+   "tools/releasesign:TestGenerateAndSign",
+   "deploy/release:TestSignatureChecks",
+   "test/release:TestReleaseRefusesTamperedAndDowngrade"
   ],
-  "note": "go mod verify and the pin checks are proven here; release signatures and the SBOM are checked by the release tests and gates of Tasks 12, 13 and 19."
+  "note": "Pins and lockfile shape (tests), go mod verify (make vuln); the stage carries the three SBOMs and refuses missing inputs, the release tools sign and the scripts and the release harness refuse a bad or missing signature (tests). The production signature is the owner's ceremony."
  },
  {
   "id": "X-04",
