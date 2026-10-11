@@ -1243,6 +1243,16 @@
     "footer": "This message was sent automatically by Alice. Do not reply to it.",
     "license_note": "Note: Alice's license has expired. Renew it to resume automatic deployment. License page: {{license_url}}",
     "license_note_kv": "Note: Alice's license has expired. Renew it to resume automatic deployment. License page: {{license_url}}\nKey Vault data may be outdated while the license is expired.",
+    "backup": {
+      "failed": {
+        "subject": "Alice could not make its daily backup",
+        "body": "Alice could not make its daily backup at {{time}}. Error: {{error_code}}.\n\nAlice tries again every 5 minutes and does not e-mail again until a backup succeeds. Backups made earlier are kept. Check the Backups tab in Settings and the troubleshooting guide for this error. Open Alice: {{dashboard_url}}"
+      },
+      "alarm": {
+        "subject": "Alice has had no successful backup for 48 hours",
+        "body": "Alice has not made a successful backup for 48 hours. Last successful backup: {{last_success}}.\n\nWithout a recent backup, data changed since then cannot be restored. Fix the cause shown in the Backups tab in Settings, then click Back up now. Open Alice: {{dashboard_url}}"
+      }
+    },
     "notify": {
       "test": {
         "subject": "Alice test e-mail",

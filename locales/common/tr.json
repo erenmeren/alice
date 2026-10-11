@@ -1243,6 +1243,16 @@
     "footer": "Bu ileti Alice tarafından otomatik olarak gönderildi. Lütfen yanıtlamayın.",
     "license_note": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}",
     "license_note_kv": "Not: Alice'in lisansının süresi doldu. Otomatik dağıtımı sürdürmek için lisansı yenileyin. Lisans sayfası: {{license_url}}\nLisansın süresi dolmuşken Key Vault verileri güncel olmayabilir.",
+    "backup": {
+      "failed": {
+        "subject": "Alice günlük yedeğini alamadı",
+        "body": "Alice {{time}} zamanındaki günlük yedeğini alamadı. Hata: {{error_code}}.\n\nAlice her 5 dakikada bir yeniden dener ve bir yedek başarılı olana kadar yeniden e-posta göndermez. Daha önce alınan yedekler saklanır. Ayarlar'daki Yedekler sekmesine ve bu hata için sorun giderme kılavuzuna bakın. Alice'i açın: {{dashboard_url}}"
+      },
+      "alarm": {
+        "subject": "Alice'in 48 saattir başarılı bir yedeği yok",
+        "body": "Alice 48 saattir başarılı bir yedek alamadı. Son başarılı yedek: {{last_success}}.\n\nGüncel bir yedek olmadan, o zamandan beri değişen veriler geri yüklenemez. Ayarlar'daki Yedekler sekmesinde gösterilen nedeni giderin, ardından Şimdi yedekle düğmesine tıklayın. Alice'i açın: {{dashboard_url}}"
+      }
+    },
     "notify": {
       "test": {
         "subject": "Alice test e-postası",
