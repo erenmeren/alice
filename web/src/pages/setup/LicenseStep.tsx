@@ -1,4 +1,4 @@
-import { Button, Divider, Stack, Text, Title } from "@mantine/core";
+import { Button, Divider, Group, Stack, Text, Title } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -15,9 +15,12 @@ import { isGone } from "./gone";
 export function LicenseStep({
   onDone,
   onGone,
+  done = false,
 }: {
   onDone: () => void;
   onGone: () => void;
+  // done: a license is already chosen (the step was reached with Back); Continue goes on without a new choice.
+  done?: boolean;
 }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
@@ -50,6 +53,12 @@ export function LicenseStep({
   return (
     <Stack>
       <Title order={2}>{t("setup.license.title")}</Title>
+      {done && (
+        <Group>
+          <Text>{t("setup.license.doneState")}</Text>
+          <Button onClick={onDone}>{t("ui.continue")}</Button>
+        </Group>
+      )}
       <Text>{t("setup.license.help")}</Text>
       <ErrorAlert error={detail.error} />
       {detail.data && <InstallationID id={detail.data.installation_id} />}

@@ -58,7 +58,14 @@ export interface SetupStatus {
   license_chosen: boolean;
   completed: boolean;
   default_locale: string;
+  // Phase 8 (C11, C12): present while setup is open or for a signed-in session; after completion an anonymous caller gets
+  // only completed and default_locale (S-18).
+  https_chosen?: boolean;
+  mail_chosen?: boolean;
+  next_step?: SetupNextStep;
 }
+
+export type SetupNextStep = 'passphrase' | 'https' | 'mail' | 'license' | 'platform' | 'done';
 
 export interface SetupSessionResponse {
   csrf_token: string;
@@ -693,4 +700,91 @@ export interface LocationPatch {
   verify_port?: number;
   verify_sni?: string;
   skip_verify?: boolean;
+}
+
+// Phase 8 (contract C12). Backups: the list, the state and the schedule.
+// check is "ok", "missing checksum", "checksum mismatch", "unreadable header" or "unreadable"; code says why a file is
+// unreadable ("permission_denied" or "io") and is empty otherwise.
+export interface Backup {
+  name: string;
+  kind: string;
+  size: number;
+  created_at: string;
+  alice_version: string;
+  check: string;
+  code?: string;
+}
+
+export interface BackupState {
+  last_success_at: string | null;
+  last_success_name: string;
+  age_hours: number | null;
+  failing: boolean;
+  alarm: boolean;
+  configured: boolean;
+  free_bytes: number;
+}
+
+// version is the If-Match validator, as for the Phase 7 settings.
+export interface BackupSchedule {
+  time: string;
+  zone: string;
+  retention: number;
+  next_at: string | null;
+  version: number;
+}
+
+export interface BackupList {
+  items: Backup[];
+  state: BackupState;
+  schedule: BackupSchedule;
+}
+
+// The certificate Alice serves. warnings: name_mismatch, chain_incomplete, expires_soon (after an upload).
+export interface HTTPSInfo {
+  subject: string;
+  dns_names: string[];
+  ip_addresses: string[];
+  not_before: string;
+  not_after: string;
+  fingerprint_sha256: string;
+  temporary: boolean;
+  warnings?: string[];
+}
+
+// An upload is either the PEM pair or a PFX with its password; it is a mutation input only, never cached.
+export type HTTPSUpload = { cert_pem: string; key_pem: string } | { pfx_base64: string; pfx_password: string };
+
+export type ForwardingTransport = 'tls' | 'tcp' | 'udp';
+
+// The CA certificate is write-only: ca_pem in a request, ca_set in an answer.
+export interface Forwarding {
+  enabled: boolean;
+  host: string;
+  port: number;
+  transport: ForwardingTransport;
+  ca_set: boolean;
+  backlog: number;
+  cursor_seq: number;
+  last_sent_at: string | null;
+  last_error_code: string;
+  last_error_at: string | null;
+  version: number;
+}
+
+export interface ForwardingInput {
+  enabled: boolean;
+  host: string;
+  port: number;
+  transport: ForwardingTransport;
+  ca_pem?: string;
+}
+
+// The dashboard's backup part (Administrators and Auditors) and the setup checklist (Administrators).
+export type BackupSummary = Omit<BackupState, 'free_bytes'> & { free_bytes?: number };
+export type ChecklistItemName = 'passphrase' | 'https' | 'mail' | 'license' | 'target';
+export interface ChecklistItem {
+  item: ChecklistItemName;
+  done: boolean;
+  required: boolean;
 }

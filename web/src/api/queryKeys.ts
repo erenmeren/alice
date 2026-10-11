@@ -51,9 +51,13 @@ export const viewsKey = (page: string) => ['views', page] as const;
 
 // Phase 7 settings and single sign-on (admin pages). SETTINGS_KEY is a prefix: one invalidation reads every form again.
 export const SETTINGS_KEY = ['settings'] as const;
-export const settingsKey = (name: 'smtp' | 'recipients' | 'alerts' | 'general') => ['settings', name] as const;
+export const settingsKey = (name: 'smtp' | 'recipients' | 'alerts' | 'general' | 'backups' | 'https' | 'forwarding') => ['settings', name] as const;
 export const SSO_KEY = ['sso'] as const;
 export const SSO_PROVIDERS_KEY = ['sso', 'providers'] as const;
 export const SSO_SETTINGS_KEY = ['sso', 'settings'] as const;
 export const ssoMappingsKey = (providerId: string) => ['sso', 'mappings', providerId] as const;
 export const PUBLIC_PROVIDERS_KEY = ['auth', 'oidc', 'providers'] as const;
+
+// Phase 8. The backup list (with its state and schedule); the backup schedule, the HTTPS certificate's information and
+// the audit forwarding are settings (settingsKey). No key holds a secret: uploads and the CA PEM are mutation inputs only.
+export const BACKUPS_KEY = ['backups'] as const;

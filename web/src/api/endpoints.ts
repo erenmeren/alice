@@ -17,6 +17,13 @@ import type {
   SessionWithCodes,
   SetupSessionResponse,
   SetupStatus,
+  Backup,
+  BackupList,
+  BackupSchedule,
+  Forwarding,
+  ForwardingInput,
+  HTTPSInfo,
+  HTTPSUpload,
   TokenCreateRequest,
   User,
   UserCreateRequest,
@@ -82,6 +89,28 @@ export const setRecoveryPassphrase = (passphrase: string, passphraseConfirm: str
 export const chooseEvaluation = () => apiFetch<SetupStatus>(`${v1}/setup/evaluation`, { method: 'POST' });
 
 export const completeSetup = () => apiFetch<SetupStatus>(`${v1}/setup/complete`, { method: 'POST' });
+
+// Phase 8 wizard steps (C12): keep the temporary certificate, skip the mail server. Both need settings.manage.
+export const keepTemporaryCertificate = () => apiFetch<SetupStatus>(`${v1}/setup/https/keep-temporary`, { method: 'POST' });
+export const skipMail = () => apiFetch<SetupStatus>(`${v1}/setup/mail/skip`, { method: 'POST' });
+
+// Phase 8 backups (C12). The download is not fetched: the browser opens backupDownloadPath, so a large file streams to
+// disk instead of into memory.
+const ifMatchVersion = (version: number) => ({ 'If-Match': `"${version}"` });
+export const listBackups = () => apiFetch<BackupList>(`${v1}/backups`);
+export const createBackup = () => apiFetch<Backup>(`${v1}/backups`, { method: 'POST' });
+export const backupDownloadPath = (name: string) => `${v1}/backups/${enc(name)}/download`;
+export const getBackupSchedule = () => apiFetch<BackupSchedule>(`${v1}/settings/backups`);
+export const saveBackupSchedule = (version: number, body: Pick<BackupSchedule, 'time' | 'zone' | 'retention'>) =>
+  apiFetch<BackupSchedule>(`${v1}/settings/backups`, { method: 'PUT', body, headers: ifMatchVersion(version) });
+
+// Phase 8 HTTPS certificate and audit forwarding (C12). The upload and the CA PEM are request bodies only.
+export const getHTTPSInfo = () => apiFetch<HTTPSInfo>(`${v1}/settings/https`);
+export const uploadHTTPSCertificate = (body: HTTPSUpload) => apiFetch<HTTPSInfo>(`${v1}/settings/https`, { method: 'PUT', body });
+export const getForwarding = () => apiFetch<Forwarding>(`${v1}/settings/audit-forwarding`);
+export const saveForwarding = (version: number, body: ForwardingInput) =>
+  apiFetch<Forwarding>(`${v1}/settings/audit-forwarding`, { method: 'PUT', body, headers: ifMatchVersion(version) });
+export const testForwarding = (body: ForwardingInput) => apiFetch<void>(`${v1}/settings/audit-forwarding/test`, { method: 'POST', body });
 
 // Authentication
 export async function login(username: string, password: string): Promise<LoginResponse> {

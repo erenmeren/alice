@@ -37,6 +37,7 @@ import {
   kvCertificateFixture,
   kvVersionFixture,
   emptyDashboardSummary,
+  backupStateFixture,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -162,6 +163,15 @@ const dataHandlers = [
       rotation: { upcoming: [{ policy_id: 'p1', ssh_key_id: 'k1', key_label: 'ci-deploy', next_run_at: '2026-10-10T09:00:00Z' }], running: 1, needs_attention: 1 },
       audit: { head_seq: 42, head_hash: 'ab'.repeat(32), checked_at: '2026-10-07T03:00:00Z', intact: false },
       attention: 5,
+      // Phase 8: the backup card with the alarm (and so the banner), and the setup checklist.
+      backup: backupStateFixture({ failing: true, alarm: true, age_hours: 49 }),
+      setup_checklist: [
+        { item: 'passphrase', done: true, required: true },
+        { item: 'https', done: false, required: true },
+        { item: 'mail', done: false, required: false },
+        { item: 'license', done: true, required: false },
+        { item: 'target', done: false, required: false },
+      ],
     }),
   ),
   http.get('/api/v1/dashboard/expiring', () =>

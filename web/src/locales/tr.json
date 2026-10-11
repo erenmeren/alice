@@ -95,7 +95,14 @@
       "issuer_url": "Yayıncı adresi",
       "groups_claim": "Grup talebi",
       "group": "Grup",
-      "to": "Testin gönderileceği adres"
+      "to": "Testin gönderileceği adres",
+      "time": "Günlük yedekleme saati",
+      "zone": "Saat dilimi",
+      "retention": "Saklanacak otomatik yedek sayısı",
+      "transport": "Protokol",
+      "cert_pem": "Sertifika dosyası",
+      "key_pem": "Özel anahtar dosyası",
+      "enabled": "Denetim kaydını ilet"
     },
     "continue": "Devam",
     "verify": "Doğrula",
@@ -188,7 +195,9 @@
         "fair": "Orta",
         "good": "İyi",
         "strong": "Güçlü"
-      }
+      },
+      "tooWeak": "Bu parolanın tahmin edilmesi çok kolay. En az 20 karakter uzunluğunda yapın ya da büyük harf, rakam ve simge ekleyin.",
+      "doneState": "Kurtarma parolası belirlendi. Burada değiştirilemez."
     },
     "done": {
       "title": "Alice hazır",
@@ -201,7 +210,8 @@
       "uploadTitle": "Lisans dosyasını yükleyin",
       "or": "veya",
       "evaluate": "30 günlük denemeyi başlat (en fazla 5 hedef)",
-      "evaluateHelp": "Deneme süresi Alice kurulduğunda başladı. 30 gün sonra, bir lisans yüklenene kadar Alice otomatik işleri ve sunucularınızdaki değişiklikleri duraklatır. Verileriniz korunur."
+      "evaluateHelp": "Deneme süresi Alice kurulduğunda başladı. 30 gün sonra, bir lisans yüklenene kadar Alice otomatik işleri ve sunucularınızdaki değişiklikleri duraklatır. Verileriniz korunur.",
+      "doneState": "Bir lisans seçildi. Lisansı burada ya da daha sonra Lisans sayfasında değiştirebilirsiniz."
     },
     "platform": {
       "title": "Sunucularınızı bağlayın",
@@ -209,6 +219,19 @@
       "addNow": "Şimdi sunucu ekle",
       "addedFailed": "Sunucu eklendi ancak Alice ilk denetimi tamamlayamadı. Kurulum bittikten sonra Sunucular sayfasından açın.",
       "continue": "Devam"
+    },
+    "back": "Geri",
+    "skip": "Atla",
+    "mail": {
+      "title": "E-posta sunucusu (isteğe bağlı)",
+      "help": "Alice süre dolumu uyarılarını ve başarısız yedeklemelerle ilgili uyarıları e-postayla gönderir. Bu adımı atlayıp e-posta sunucusunu daha sonra Ayarlar bölümünden ayarlayabilirsiniz.",
+      "notSaved": "Önce e-posta ayarlarını kaydedin ya da Atla seçeneğini kullanın."
+    },
+    "https": {
+      "title": "HTTPS sertifikası",
+      "help": "Alice kurulurken geçici bir sertifika oluşturdu. Kurumunuzun sertifikasını şimdi yükleyin ya da geçici sertifikayı kullanmaya devam edip kendi sertifikanızı daha sonra Ayarlar bölümünden yükleyin.",
+      "keptTemporary": "Geçici sertifikayı kullanmaya devam etmeyi seçtiniz. Kendi sertifikanızı daha sonra Ayarlar bölümünden yükleyebilirsiniz.",
+      "uploadedDone": "Kendi sertifikanız kullanımda. Sertifikayı burada ya da daha sonra Ayarlar bölümünden değiştirebilirsiniz."
     }
   },
   "users": {
@@ -518,7 +541,19 @@
       "user_provisioned": "Kullanıcı çoklu oturum açmayla oluşturuldu",
       "user_role_synced": "Rol kimlik sağlayıcıdan güncellendi",
       "user_sessions_ended": "Oturumlar sonlandırıldı",
-      "user_demoted": "SSO yöneticisinin rolü düşürüldü"
+      "user_demoted": "SSO yöneticisinin rolü düşürüldü",
+      "backup_created": "Yedek alındı",
+      "backup_failed": "Yedekleme başarısız oldu",
+      "backup_deleted": "Eski yedek silindi",
+      "backup_downloaded": "Yedek indirildi",
+      "backup_settings_changed": "Yedekleme zamanlaması değiştirildi",
+      "system_restored": "Alice bir yedekten geri yüklendi",
+      "https_certificate_replaced": "HTTPS sertifikası değiştirildi",
+      "https_temporary_renewed": "Geçici HTTPS sertifikası yenilendi",
+      "https_certificate_recovered": "Yarım kalan değişiklikten sonra HTTPS sertifikası onarıldı",
+      "audit_forwarding_changed": "Denetim kaydı iletim ayarları değiştirildi",
+      "setup_https_kept_temporary": "Kurulumda geçici HTTPS sertifikası korundu",
+      "setup_mail_skipped": "Kurulumda e-posta sunucusu atlandı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -576,7 +611,28 @@
       "distinct_object_count": "Farklı nesne sayısı",
       "distinct_token_count": "Farklı API anahtarı sayısı",
       "distinct_ip_count": "Farklı adres sayısı",
-      "ip_samples": "Görülen adresler"
+      "ip_samples": "Görülen adresler",
+      "name": "Dosya",
+      "backup_name": "Yedek",
+      "backup_created_at": "Yedeğin alındığı zaman",
+      "alice_version": "Alice sürümü",
+      "schema_version": "Veritabanı şema sürümü",
+      "audit_intact": "Denetim kaydı bozulmamış",
+      "previous_audit_seq": "Geri yüklemeden önceki son kayıt",
+      "previous_audit_hash": "O kaydın özeti",
+      "safety_backup": "Güvenlik yedeği",
+      "no_safety_backup": "Güvenlik yedeği olmadan",
+      "subject": "Konu",
+      "not_after": "Geçerlilik bitişi",
+      "temporary": "Geçici",
+      "kind": "Tür",
+      "error_code": "Hata kodu",
+      "enabled": "Etkin",
+      "transport": "Protokol",
+      "ca_set": "CA sertifikası tanımlı",
+      "time": "Saat",
+      "zone": "Saat dilimi",
+      "retention": "Saklanan yedek sayısı"
     },
     "detailValues": {
       "reason": {
@@ -983,7 +1039,8 @@
         "send": "Bildirim gönderme"
       },
       "audit": {
-        "verify": "Denetim kaydı doğrulaması"
+        "verify": "Denetim kaydı doğrulaması",
+        "forward": "Denetim kaydı iletimi"
       },
       "maintenance": {
         "cleanup": "Bakım temizliği"
@@ -1008,6 +1065,15 @@
       },
       "alerts": {
         "scan": "Süre dolumu denetimi"
+      },
+      "backup": {
+        "schedule": "Günlük yedekleme"
+      },
+      "jobs": {
+        "heartbeat": "Görev çalıştırıcı denetimi"
+      },
+      "tls": {
+        "renew": "Geçici sertifika yenileme"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
@@ -2079,7 +2145,24 @@
       "where": "Nerede",
       "expires": "Süresi dolar"
     },
-    "loadFailed": "Pano yüklenemedi."
+    "loadFailed": "Pano yüklenemedi.",
+    "checklist": {
+      "title": "Kurulumu tamamlayın",
+      "passphrase": "Kurtarma parolasını belirleyin",
+      "https": "HTTPS sertifikanızı yükleyin",
+      "mail": "E-posta sunucusunu ayarlayın",
+      "license": "Lisans ekleyin",
+      "target": "İlk sunucunuzu ekleyin",
+      "help": "Bu adımlar atlandı ya da henüz tamamlanmadı.",
+      "required": "Gerekli",
+      "done": "Tamamlandı"
+    },
+    "backup": {
+      "title": "Yedekler",
+      "age_one": "{{count}} saat önce",
+      "age_other": "{{count}} saat önce",
+      "open": "Yedekleri aç"
+    }
   },
   "notifications": {
     "failingTitle": "E-postalar gönderilemedi",
@@ -2103,7 +2186,10 @@
       "recipients": "Alıcılar",
       "alerts": "Uyarılar",
       "general": "Genel",
-      "sso": "Çoklu oturum açma"
+      "sso": "Çoklu oturum açma",
+      "backups": "Yedekler",
+      "https": "HTTPS sertifikası",
+      "forwarding": "Denetim kaydı iletimi"
     },
     "tabsLabel": "Ayar bölümleri",
     "mail": {
@@ -2208,5 +2294,115 @@
     "ssoTitle": "Kimlik sağlayıcınızda onaylayın",
     "ssoAction": "{{name}} sayfasına devam et",
     "ssoFallbackName": "kimlik sağlayıcınız"
+  },
+  "backups": {
+    "backUpNow": "Şimdi yedekle",
+    "download": "İndir",
+    "lastSuccess": "Son başarılı yedek: {{time}}",
+    "never": "Henüz yedek alınmadı.",
+    "alarm": "48 saattir başarılı yedek yok",
+    "notConfigured": "Yedekleme, kurtarma parolası belirlendikten sonra başlar.",
+    "schedule": {
+      "time": "Günlük yedekleme saati",
+      "zone": "Saat dilimi",
+      "retention": "Saklanacak otomatik yedek sayısı",
+      "title": "Günlük yedekleme",
+      "timeHelp": "24 saat biçiminde, örneğin 02:30.",
+      "retentionHelp": "7 ile 60 arasında. Elle alınan yedekler ve güncelleme ya da geri yükleme öncesi alınan yedekler hiç silinmez.",
+      "next": "Sonraki yedek: {{time}}",
+      "save": "Yedekleme zamanlamasını kaydet",
+      "timeInvalid": "Saati SS:DD biçiminde girin, örneğin 02:30.",
+      "zoneInvalid": "Listeden bir saat dilimi seçin.",
+      "retentionInvalid": "7 ile 60 arasında bir tam sayı girin."
+    },
+    "offHost": "Yedekler yalnızca bu sunucuda saklanır. Bunları düzenli olarak başka bir makineye kopyalayın.",
+    "restoreHint": "Geri yükleme sunucuda alicectl restore komutuyla yapılır.",
+    "freeSpace": "Yedekler için boş disk alanı: {{size}}",
+    "tableLabel": "Bu sunucudaki yedek dosyaları",
+    "empty": "Henüz yedek dosyası yok.",
+    "columns": {
+      "name": "Dosya",
+      "kind": "Tür",
+      "size": "Boyut",
+      "created": "Oluşturulma zamanı",
+      "check": "Denetim",
+      "actions": "İşlemler"
+    },
+    "kinds": {
+      "auto": "Günlük",
+      "manual": "Elle",
+      "preRestore": "Geri yüklemeden önce",
+      "preUpgrade": "{{version}} sürümüne güncellemeden önce"
+    },
+    "checks": {
+      "ok": "Denetlendi",
+      "missingChecksum": "Sağlama dosyası eksik",
+      "checksumMismatch": "Bozuk: sağlama değeri uyuşmuyor",
+      "unreadableHeader": "Okunabilir bir yedek dosyası değil",
+      "unreadable": "Alice bu dosyayı okuyamıyor",
+      "unreadablePermission": "Alice bu dosyayı okuyamıyor: erişim izni yok",
+      "unreadableIo": "Alice bu dosyayı okuyamıyor: okuma hatası",
+      "unknown": "Bilinmeyen durum"
+    },
+    "created": "Yedek alındı: {{name}}",
+    "failing": "Son yedekleme başarısız oldu. Alice yöneticilere e-posta gönderdi.",
+    "alarmHelp": "Boş disk alanını ve denetim kaydını kontrol edin, ardından Şimdi yedekle seçeneğini kullanın."
+  },
+  "https": {
+    "temporary": "Alice geçici bir sertifika kullanıyor. Kendi sertifikanızı yükleyene kadar tarayıcılar uyarı gösterecek.",
+    "upload": "Sertifika yükle",
+    "keepTemporary": "Geçici sertifikayı kullanmaya devam et",
+    "applied": "Yeni sertifika kullanımda.",
+    "current": "Kullanılan sertifika",
+    "ownCertificate": "Alice kendi sertifikanızı kullanıyor.",
+    "subject": "Konu: {{value}}",
+    "names": "Adlar: {{value}}",
+    "validFrom": "Geçerlilik başlangıcı: {{date}}",
+    "validUntil": "Geçerlilik bitişi: {{date}}",
+    "fingerprint": "Parmak izi (SHA-256): {{value}}",
+    "uploadHelp": "Yeni sertifika hemen kullanılır; Alice yeniden başlatılmaz. Özel anahtar bu sunucudan hiç çıkmaz.",
+    "format": "Dosya biçimi",
+    "formatPem": "PEM: bir sertifika dosyası ve bir anahtar dosyası",
+    "formatPfx": "PFX (PKCS#12): parolalı tek bir dosya",
+    "certFile": "Sertifika dosyası (PEM)",
+    "certFileHelp": "Sertifika ve ardından ara sertifikalar.",
+    "keyFile": "Özel anahtar dosyası (PEM)",
+    "pfxFile": "PFX dosyası",
+    "pfxPassword": "PFX parolası",
+    "missingFiles": "Sertifika dosyasını ve anahtar dosyasını seçin.",
+    "missingPfx": "PFX dosyasını seçin.",
+    "unreadableFile": "Dosya tarayıcıda okunamadı. Dosyayı yeniden seçin.",
+    "warningsTitle": "Sertifika kullanımda. Şu noktaları kontrol edin:",
+    "warnings": {
+      "name_mismatch": "Sertifikadaki adların hiçbiri bu Alice sunucusunun adresiyle eşleşmiyor; bu nedenle tarayıcılar uyarı gösterecek.",
+      "chain_incomplete": "Güvenilen bir sertifika yetkilisine giden zincir eksik. Ara sertifikaları sertifika dosyasına ekleyin.",
+      "expires_soon": "Sertifikanın süresi 30 gün içinde doluyor.",
+      "unknown": "Alice sertifikayla ilgili bu sayfanın açıklayamadığı bir sorun bildirdi."
+    }
+  },
+  "forwarding": {
+    "backlog": "Gönderilmeyi bekleyen kayıtlar: {{count}}",
+    "test": "Test mesajı gönder",
+    "help": "Alice her denetim kaydını sırayla syslog sunucunuza gönderir (RFC 5424). Her kayıt en fazla bir kez gönderilir; sıra numarası, syslog sunucusunun bir boşluğu fark etmesini sağlar.",
+    "enabled": "Denetim kaydını ilet",
+    "host": "Syslog sunucusu",
+    "port": "Bağlantı noktası",
+    "transport": "Protokol",
+    "transports": {
+      "tls": "TLS (şifreli, önerilir)",
+      "tcp": "TCP (şifresiz)",
+      "udp": "UDP (şifresiz; mesajlar kaybolabilir)"
+    },
+    "caPem": "Syslog sunucusunun sertifika yetkilisi (PEM, isteğe bağlı)",
+    "caPemHelp": "Kayıtlı sertifikanın yerine yenisini yapıştırın; korumak için alanı boş bırakın. Sertifika yoksa sistemin güvendiği yetkililer kullanılır.",
+    "caSet": "Bir CA sertifikası tanımlı",
+    "save": "İletim ayarlarını kaydet",
+    "testSent": "Test mesajı gönderildi.",
+    "state": "Gönderim",
+    "lastSent": "Son gönderilen kayıt: {{time}}",
+    "neverSent": "Henüz kayıt gönderilmedi.",
+    "cursor": "Son gönderilen kaydın numarası: {{seq}}",
+    "lastError": "Son sorun ({{time}}): {{problem}}",
+    "unknownError": "hata kodu {{code}}"
   }
 }

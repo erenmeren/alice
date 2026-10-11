@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import { emptyDashboardSummary, licenseDetailFixture, platformKeyFixture, sessionHandlers } from './fixtures';
+import { backupListFixture, backupScheduleFixture, emptyDashboardSummary, forwardingFixture, httpsInfoFixture, licenseDetailFixture, platformKeyFixture, sessionHandlers, smtpFixture } from './fixtures';
 
 // Default handlers: an installed system with nobody signed in. Tests override
 // them with server.use(...); unknown requests fail the test (onUnhandledRequest: 'error').
@@ -21,6 +21,13 @@ export const handlers = [
   // Phase 7 single sign-on: the sign-in page lists the public providers (none by default).
   http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [] })),
   http.post('/api/v1/auth/logout', () => new HttpResponse(null, { status: 204 })),
+  // Phase 8: the Backups, HTTPS certificate and Audit forwarding tabs and the wizard's HTTPS step.
+  http.get('/api/v1/backups', () => HttpResponse.json(backupListFixture())),
+  http.get('/api/v1/settings/backups', () => HttpResponse.json(backupScheduleFixture())),
+  http.get('/api/v1/settings/https', () => HttpResponse.json(httpsInfoFixture())),
+  http.get('/api/v1/settings/audit-forwarding', () => HttpResponse.json(forwardingFixture())),
+  // The wizard's mail step is the Settings mail form.
+  http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
 ];
 
 export const server = setupServer(...handlers);

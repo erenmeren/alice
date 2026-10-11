@@ -7,6 +7,7 @@ import { ssoErrorReason } from '../api/sso';
 import { SSOErrorAlert } from '../components/SSOErrorAlert';
 import type { Role } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
+import { BackupBanner } from '../components/BackupBanner';
 import { LicenseBanners } from '../components/LicenseBanners';
 import { NotificationsBanner } from '../components/NotificationsBanner';
 import { LanguageSwitcher } from '../LanguageSwitcher';
@@ -133,6 +134,7 @@ export function AppLayout() {
         )}
         <LicenseBanners />
         <NotificationsBanner />
+        <BackupBanner />
         <SetupBanner />
         {stateReason && (
           <div style={{ marginBottom: 'var(--mantine-spacing-md)' }}>

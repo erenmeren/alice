@@ -1,4 +1,5 @@
 import { apiFetch } from './client';
+import type { BackupSummary, ChecklistItem } from './types';
 
 // Phase 7 (alerts, dashboard, saved views, CSV export). The shapes are contract C13; times are UTC RFC 3339 strings.
 
@@ -44,6 +45,9 @@ export interface DashboardSummary {
   // null for Operators.
   audit: { head_seq: number; head_hash: string; checked_at: string | null; intact: boolean } | null;
   attention: number;
+  // Phase 8: absent or null for the roles that do not get them (R43 row 18).
+  backup?: BackupSummary | null;
+  setup_checklist?: ChecklistItem[] | null;
 }
 
 export interface ExpiringItem {

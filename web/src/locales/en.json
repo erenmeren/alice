@@ -95,7 +95,14 @@
       "issuer_url": "Issuer address",
       "groups_claim": "Groups claim",
       "group": "Group",
-      "to": "Send the test to"
+      "to": "Send the test to",
+      "time": "Daily backup time",
+      "zone": "Time zone",
+      "retention": "Automatic backups to keep",
+      "transport": "Protocol",
+      "cert_pem": "Certificate file",
+      "key_pem": "Private key file",
+      "enabled": "Forward the audit log"
     },
     "continue": "Continue",
     "verify": "Verify",
@@ -188,7 +195,9 @@
         "fair": "Fair",
         "good": "Good",
         "strong": "Strong"
-      }
+      },
+      "tooWeak": "This passphrase is too easy to guess. Make it at least 20 characters long, or mix in capital letters, digits and symbols.",
+      "doneState": "The recovery passphrase is set. It cannot be changed here."
     },
     "done": {
       "title": "Alice is ready",
@@ -201,7 +210,8 @@
       "uploadTitle": "Upload the license file",
       "or": "or",
       "evaluate": "Start 30-day evaluation (up to 5 targets)",
-      "evaluateHelp": "The evaluation started when Alice was installed. After 30 days, Alice pauses automatic tasks and changes to your servers until a license is uploaded. Your data is kept."
+      "evaluateHelp": "The evaluation started when Alice was installed. After 30 days, Alice pauses automatic tasks and changes to your servers until a license is uploaded. Your data is kept.",
+      "doneState": "A license is chosen. You can change it here or later on the License page."
     },
     "platform": {
       "title": "Connect your servers",
@@ -209,6 +219,19 @@
       "addNow": "Add a server now",
       "addedFailed": "The server was added, but Alice could not finish the first check. After the setup, open it on the Servers page.",
       "continue": "Continue"
+    },
+    "back": "Back",
+    "skip": "Skip",
+    "mail": {
+      "title": "Mail server (optional)",
+      "help": "Alice sends expiry alerts and warnings about failed backups by e-mail. You can skip this step and set up the mail server later under Settings.",
+      "notSaved": "Save the mail settings first, or choose Skip."
+    },
+    "https": {
+      "title": "HTTPS certificate",
+      "help": "Alice made a temporary certificate when it was installed. Upload your organisation's certificate now, or keep the temporary one and upload yours later under Settings.",
+      "keptTemporary": "You chose to keep the temporary certificate. You can upload your own later under Settings.",
+      "uploadedDone": "Your own certificate is in use. You can replace it here or later under Settings."
     }
   },
   "users": {
@@ -518,7 +541,19 @@
       "user_provisioned": "User created by single sign-on",
       "user_role_synced": "Role updated from the identity provider",
       "user_sessions_ended": "Sessions ended",
-      "user_demoted": "SSO administrator demoted"
+      "user_demoted": "SSO administrator demoted",
+      "backup_created": "Backup made",
+      "backup_failed": "Backup failed",
+      "backup_deleted": "Old backup deleted",
+      "backup_downloaded": "Backup downloaded",
+      "backup_settings_changed": "Backup schedule changed",
+      "system_restored": "Alice restored from a backup",
+      "https_certificate_replaced": "HTTPS certificate replaced",
+      "https_temporary_renewed": "Temporary HTTPS certificate renewed",
+      "https_certificate_recovered": "HTTPS certificate repaired after an interrupted change",
+      "audit_forwarding_changed": "Audit forwarding settings changed",
+      "setup_https_kept_temporary": "Temporary HTTPS certificate kept during setup",
+      "setup_mail_skipped": "Mail server skipped during setup"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -576,7 +611,28 @@
       "distinct_object_count": "Different objects",
       "distinct_token_count": "Different API tokens",
       "distinct_ip_count": "Different addresses",
-      "ip_samples": "Addresses seen"
+      "ip_samples": "Addresses seen",
+      "name": "File",
+      "backup_name": "Backup",
+      "backup_created_at": "Backup made at",
+      "alice_version": "Alice version",
+      "schema_version": "Database schema version",
+      "audit_intact": "Audit log intact",
+      "previous_audit_seq": "Last entry before the restore",
+      "previous_audit_hash": "Hash of that entry",
+      "safety_backup": "Safety backup",
+      "no_safety_backup": "Without a safety backup",
+      "subject": "Subject",
+      "not_after": "Valid until",
+      "temporary": "Temporary",
+      "kind": "Kind",
+      "error_code": "Error code",
+      "enabled": "Enabled",
+      "transport": "Protocol",
+      "ca_set": "CA certificate set",
+      "time": "Time",
+      "zone": "Time zone",
+      "retention": "Backups kept"
     },
     "detailValues": {
       "reason": {
@@ -983,7 +1039,8 @@
         "send": "Send a notification"
       },
       "audit": {
-        "verify": "Audit log verification"
+        "verify": "Audit log verification",
+        "forward": "Audit log forwarding"
       },
       "maintenance": {
         "cleanup": "Maintenance cleanup"
@@ -1008,6 +1065,15 @@
       },
       "alerts": {
         "scan": "Expiry check"
+      },
+      "backup": {
+        "schedule": "Daily backup"
+      },
+      "jobs": {
+        "heartbeat": "Task runner check"
+      },
+      "tls": {
+        "renew": "Temporary certificate renewal"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
@@ -2079,7 +2145,24 @@
       "where": "Where",
       "expires": "Expires"
     },
-    "loadFailed": "The dashboard could not be loaded."
+    "loadFailed": "The dashboard could not be loaded.",
+    "checklist": {
+      "title": "Finish setting up",
+      "passphrase": "Set the recovery passphrase",
+      "https": "Install your HTTPS certificate",
+      "mail": "Set up the mail server",
+      "license": "Add a license",
+      "target": "Add your first server",
+      "help": "These steps were skipped or are not finished yet.",
+      "required": "Required",
+      "done": "Done"
+    },
+    "backup": {
+      "title": "Backups",
+      "age_one": "{{count}} hour ago",
+      "age_other": "{{count}} hours ago",
+      "open": "Open the backups"
+    }
   },
   "notifications": {
     "failingTitle": "E-mails could not be sent",
@@ -2103,7 +2186,10 @@
       "recipients": "Recipients",
       "alerts": "Alerts",
       "general": "General",
-      "sso": "Single sign-on"
+      "sso": "Single sign-on",
+      "backups": "Backups",
+      "https": "HTTPS certificate",
+      "forwarding": "Audit forwarding"
     },
     "tabsLabel": "Settings sections",
     "mail": {
@@ -2208,5 +2294,115 @@
     "ssoTitle": "Confirm at your identity provider",
     "ssoAction": "Continue to {{name}}",
     "ssoFallbackName": "your identity provider"
+  },
+  "backups": {
+    "backUpNow": "Back up now",
+    "download": "Download",
+    "lastSuccess": "Last successful backup: {{time}}",
+    "never": "No backup has been made yet.",
+    "alarm": "No successful backup for 48 hours",
+    "notConfigured": "Backups start after the recovery passphrase is set.",
+    "schedule": {
+      "time": "Daily backup time",
+      "zone": "Time zone",
+      "retention": "Automatic backups to keep",
+      "title": "Daily backup",
+      "timeHelp": "24-hour clock, for example 02:30.",
+      "retentionHelp": "From 7 to 60. Manual backups and backups made before an update or a restore are never deleted.",
+      "next": "Next backup: {{time}}",
+      "save": "Save backup schedule",
+      "timeInvalid": "Enter a time as HH:MM, for example 02:30.",
+      "zoneInvalid": "Choose a time zone from the list.",
+      "retentionInvalid": "Enter a whole number from 7 to 60."
+    },
+    "offHost": "Backups are stored on this server only. Copy them to another machine regularly.",
+    "restoreHint": "Restoring is done on the server with alicectl restore.",
+    "freeSpace": "Free disk space for backups: {{size}}",
+    "tableLabel": "Backup files on this server",
+    "empty": "There are no backup files yet.",
+    "columns": {
+      "name": "File",
+      "kind": "Kind",
+      "size": "Size",
+      "created": "Made at",
+      "check": "Check",
+      "actions": "Actions"
+    },
+    "kinds": {
+      "auto": "Daily",
+      "manual": "Manual",
+      "preRestore": "Before a restore",
+      "preUpgrade": "Before the update to {{version}}"
+    },
+    "checks": {
+      "ok": "Checked",
+      "missingChecksum": "Checksum file missing",
+      "checksumMismatch": "Damaged: the checksum does not match",
+      "unreadableHeader": "Not a readable backup file",
+      "unreadable": "Alice cannot read this file",
+      "unreadablePermission": "Alice cannot read this file: permission denied",
+      "unreadableIo": "Alice cannot read this file: read error",
+      "unknown": "Unknown state"
+    },
+    "created": "Backup made: {{name}}",
+    "failing": "The last backup failed. Alice e-mailed the administrators.",
+    "alarmHelp": "Check the free disk space and the Audit log, then choose Back up now."
+  },
+  "https": {
+    "temporary": "Alice is using a temporary certificate. Browsers will warn until you upload your own.",
+    "upload": "Upload certificate",
+    "keepTemporary": "Keep the temporary certificate",
+    "applied": "The new certificate is in use.",
+    "current": "Certificate in use",
+    "ownCertificate": "Alice is using your own certificate.",
+    "subject": "Subject: {{value}}",
+    "names": "Names: {{value}}",
+    "validFrom": "Valid from: {{date}}",
+    "validUntil": "Valid until: {{date}}",
+    "fingerprint": "Fingerprint (SHA-256): {{value}}",
+    "uploadHelp": "The new certificate is used at once; Alice does not restart. The private key never leaves this server.",
+    "format": "File format",
+    "formatPem": "PEM: a certificate file and a key file",
+    "formatPfx": "PFX (PKCS#12): one file with a password",
+    "certFile": "Certificate file (PEM)",
+    "certFileHelp": "The certificate, followed by the intermediate certificates.",
+    "keyFile": "Private key file (PEM)",
+    "pfxFile": "PFX file",
+    "pfxPassword": "PFX password",
+    "missingFiles": "Choose the certificate file and the key file.",
+    "missingPfx": "Choose the PFX file.",
+    "unreadableFile": "The file could not be read in the browser. Choose it again.",
+    "warningsTitle": "The certificate is in use. Check these points:",
+    "warnings": {
+      "name_mismatch": "None of the names in the certificate matches the address of this Alice server, so browsers will warn.",
+      "chain_incomplete": "The chain to a trusted authority is incomplete. Add the intermediate certificates to the certificate file.",
+      "expires_soon": "The certificate expires within 30 days.",
+      "unknown": "Alice reported a problem with the certificate that this page cannot describe."
+    }
+  },
+  "forwarding": {
+    "backlog": "Entries waiting to be sent: {{count}}",
+    "test": "Send test message",
+    "help": "Alice sends every audit log entry, in order, to your syslog server (RFC 5424). Each entry is sent at most once; its sequence number lets the syslog server notice a gap.",
+    "enabled": "Forward the audit log",
+    "host": "Syslog server",
+    "port": "Port",
+    "transport": "Protocol",
+    "transports": {
+      "tls": "TLS (encrypted, recommended)",
+      "tcp": "TCP (not encrypted)",
+      "udp": "UDP (not encrypted; messages can be lost)"
+    },
+    "caPem": "Certificate authority of the syslog server (PEM, optional)",
+    "caPemHelp": "Paste a new certificate to replace the stored one; leave the field empty to keep it. Without one, the system's trusted authorities are used.",
+    "caSet": "A CA certificate is set",
+    "save": "Save forwarding settings",
+    "testSent": "The test message was sent.",
+    "state": "Delivery",
+    "lastSent": "Last entry sent: {{time}}",
+    "neverSent": "No entry has been sent yet.",
+    "cursor": "Number of the last entry sent: {{seq}}",
+    "lastError": "Last problem ({{time}}): {{problem}}",
+    "unknownError": "error code {{code}}"
   }
 }

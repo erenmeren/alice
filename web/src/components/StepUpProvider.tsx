@@ -15,7 +15,22 @@ interface StepUpApi {
   // run calls fn; when the server answers auth.stepup_required it asks for a fresh
   // authenticator code, re-confirms the session and calls fn once more.
   run: <T>(fn: () => Promise<T>) => Promise<T>;
+  // confirm makes sure the session's step-up is fresh before something the browser fetches itself (a download that is
+  // not a fetch() and so cannot be repeated after a refusal): it asks for a code unless the step-up still has a minute.
+  // A cancelled prompt rejects with StepUpCancelled.
+  confirm: () => Promise<void>;
 }
+
+// StepUpCancelled is the rejection of confirm() when the person closes the code prompt.
+export class StepUpCancelled extends Error {
+  constructor() {
+    super('step-up cancelled');
+    this.name = 'StepUpCancelled';
+  }
+}
+
+// A step-up that ends within this margin is renewed before a download, so it cannot expire on the way.
+const FRESH_MARGIN_MS = 60_000;
 
 const StepUpContext = createContext<StepUpApi | null>(null);
 
@@ -84,6 +99,12 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     [askForCode],
   );
 
+  const stepupUntil = session?.stepup_until ?? null;
+  const confirm = useCallback(async () => {
+    if (stepupUntil && Date.parse(stepupUntil) - Date.now() > FRESH_MARGIN_MS) return;
+    await askForCode(new StepUpCancelled());
+  }, [stepupUntil, askForCode]);
+
   // giveUp closes the dialog, clears what was typed and rejects the waiting call with its error.
   const giveUp = useCallback(() => {
     setOpened(false);
@@ -126,7 +147,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
   const providers = useQuery({ queryKey: PUBLIC_PROVIDERS_KEY, queryFn: listPublicProviders, enabled: opened && sso });
   const providerName = providers.data?.items.find((p) => p.id === session?.user.sso_provider_id)?.name ?? t('stepUp.ssoFallbackName');
 
-  const api = useMemo(() => ({ run }), [run]);
+  const api = useMemo(() => ({ run, confirm }), [run, confirm]);
   return (
     <StepUpContext.Provider value={api}>
       {children}

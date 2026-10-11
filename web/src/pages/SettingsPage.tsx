@@ -1,17 +1,21 @@
 import { Stack, Tabs, Title } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { AlertSettings } from '../components/settings/AlertSettings';
+import { BackupsTab } from '../components/settings/BackupsTab';
+import { ForwardingTab } from '../components/settings/ForwardingTab';
+import { HttpsTab } from '../components/settings/HttpsTab';
 import { GeneralSettings } from '../components/settings/GeneralSettings';
 import { MailSettings } from '../components/settings/MailSettings';
 import { RecipientsSettings } from '../components/settings/RecipientsSettings';
 import { SSOSettings } from '../components/sso/SSOSettings';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 
-const TABS = ['mail', 'recipients', 'alerts', 'general', 'sso'] as const;
+const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'forwarding', 'sso'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
-// SettingsPage holds the Administrator's settings: mail, recipients, alert thresholds, general and single sign-on. The tab is
+// SettingsPage holds the Administrator's settings: mail, recipients, alert thresholds, general, backups, the HTTPS
+// certificate, audit forwarding and single sign-on. The tab is
 // in the address (?tab=), so a link opens it. Only the open tab is drawn, and each reads its own setting through step-up.
 export function SettingsPage() {
   const { t } = useTranslation();
@@ -39,6 +43,15 @@ export function SettingsPage() {
         </Tabs.Panel>
         <Tabs.Panel value="general" pt="md">
           <GeneralSettings />
+        </Tabs.Panel>
+        <Tabs.Panel value="backups" pt="md">
+          <BackupsTab />
+        </Tabs.Panel>
+        <Tabs.Panel value="https" pt="md">
+          <HttpsTab />
+        </Tabs.Panel>
+        <Tabs.Panel value="forwarding" pt="md">
+          <ForwardingTab />
         </Tabs.Panel>
         <Tabs.Panel value="sso" pt="md">
           <SSOSettings />

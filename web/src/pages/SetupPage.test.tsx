@@ -10,6 +10,8 @@ import {
   licenseInfoFixture,
   sessionFor,
   sessionHandlers,
+  smtpFixture,
+  httpsInfoFixture,
   targetFixture,
 } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
@@ -55,6 +57,17 @@ describe('setup wizard', () => {
         bodies.passphrase = await request.json();
         status = { ...status, recovery_passphrase_set: true };
         return new HttpResponse(null, { status: 204 });
+      }),
+      http.post('/api/v1/setup/https/keep-temporary', () => {
+        csrfSeen.push('keep-temporary');
+        status = { ...status, https_chosen: true, next_step: 'mail' };
+        return HttpResponse.json(status);
+      }),
+      http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+      http.post('/api/v1/setup/mail/skip', () => {
+        csrfSeen.push('mail-skip');
+        status = { ...status, mail_chosen: true, next_step: 'license' };
+        return HttpResponse.json(status);
       }),
       http.post('/api/v1/setup/evaluation', () => {
         csrfSeen.push('evaluation');
@@ -121,6 +134,12 @@ describe('setup wizard', () => {
       passphrase_confirm: 'correct horse battery staple',
     });
 
+    // R43 row 16: the HTTPS certificate and the mail server come after the recovery passphrase.
+    expect(await screen.findByRole('heading', { name: 'HTTPS certificate' })).toBeInTheDocument();
+    await userEvent.click(await screen.findByTestId('https-keep-temporary'));
+    expect(await screen.findByRole('heading', { name: 'Mail server (optional)' })).toBeInTheDocument();
+    await userEvent.click(await screen.findByTestId('setup-skip'));
+
     expect(await screen.findByRole('heading', { name: 'Add a license' })).toBeInTheDocument();
     expect(screen.getByTestId('installation-id')).toHaveTextContent('ALICE-7F3K-9Q2M-XD41-B8TC');
     await userEvent.click(screen.getByRole('button', { name: 'Start 30-day evaluation (up to 5 targets)' }));
@@ -136,7 +155,7 @@ describe('setup wizard', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
     expect(await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
     // The setup session CSRF token is used before the admin exists, the admin session token after.
-    expect(csrfSeen).toEqual(['setup-csrf', 'csrf-admin', 'evaluation']);
+    expect(csrfSeen).toEqual(['setup-csrf', 'csrf-admin', 'keep-temporary', 'mail-skip', 'evaluation']);
   });
 
   it('explains a wrong setup code', async () => {
@@ -235,7 +254,7 @@ describe('setup wizard', () => {
     expect(await screen.findByRole('dialog', { name: "Confirm it's you" })).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('6-digit code'), '654321');
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    expect(await screen.findByRole('heading', { name: 'Add a license' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'HTTPS certificate' })).toBeInTheDocument();
     expect(attempts).toBe(2);
   });
 
@@ -282,7 +301,7 @@ describe('setup wizard edge cases', () => {
     await userEvent.type(screen.getByLabelText('Repeat the passphrase'), 'correct horse battery staple');
     await userEvent.click(screen.getByLabelText('I stored the passphrase safely'));
     await userEvent.click(screen.getByRole('button', { name: 'Save passphrase' }));
-    await screen.findByRole('heading', { name: 'Add a license' });
+    await screen.findByRole('heading', { name: 'HTTPS certificate' });
     const stored = JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage });
     expect(stored).not.toContain('correct horse');
   });
@@ -434,4 +453,155 @@ describe('startOf', () => {
     expect(startOf({ ...installedStatus, completed: false }, admin)).toBe('platform');
     expect(startOf({ ...installedStatus, completed: false }, sessionFor('operator'))).toBe('home');
   });
+
+  it('resumes at the step the server names (R43 row 16)', () => {
+    const open = { ...installedStatus, completed: false, license_chosen: false, https_chosen: false, mail_chosen: false };
+    expect(startOf({ ...open, next_step: 'https' }, admin)).toBe('https');
+    expect(startOf({ ...open, https_chosen: true, next_step: 'mail' }, admin)).toBe('mail');
+    expect(startOf({ ...open, https_chosen: true, mail_chosen: true, next_step: 'license' }, admin)).toBe('license');
+    expect(startOf({ ...open, license_chosen: true, https_chosen: true, mail_chosen: true, next_step: 'platform' }, admin)).toBe('platform');
+    expect(startOf({ ...open, recovery_passphrase_set: false, next_step: 'passphrase' }, admin)).toBe('passphrase');
+    // A server without next_step: the choices it reports still decide.
+    expect(startOf(open, admin)).toBe('https');
+    expect(startOf({ ...open, https_chosen: true }, admin)).toBe('mail');
+    // An unknown step from a newer server falls back to the reported choices.
+    expect(startOf({ ...open, https_chosen: true, mail_chosen: true, next_step: 'later' as never }, admin)).toBe('license');
+  });
 });
+
+describe('setup wizard steps of Phase 8', () => {
+  const open: SetupStatus = {
+    admin_exists: true,
+    recovery_passphrase_set: true,
+    license_chosen: false,
+    completed: false,
+    default_locale: 'en',
+    https_chosen: false,
+    mail_chosen: false,
+    next_step: 'https',
+  };
+
+  it('opens the mail step directly when the server says the wizard stopped there (resume)', async () => {
+    server.use(...sessionHandlers(sessionFor('admin'), { ...open, https_chosen: true, next_step: 'mail' }), http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)));
+    await renderRoute('/setup');
+    expect(await screen.findByRole('heading', { name: 'Mail server (optional)' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Choose a recovery passphrase' })).not.toBeInTheDocument();
+  });
+
+  it('goes back from the mail step to the HTTPS step in its done state, and from there to the passphrase that cannot change', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { ...open, https_chosen: true, next_step: 'mail' }),
+      http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+      http.get('/api/v1/settings/https', () => HttpResponse.json(httpsInfoFixture({ temporary: true }))),
+    );
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Mail server (optional)' });
+    await userEvent.click(screen.getByTestId('setup-back'));
+    expect(await screen.findByRole('heading', { name: 'HTTPS certificate' })).toBeInTheDocument();
+    expect(await screen.findByText(/You chose to keep the temporary certificate/)).toBeInTheDocument();
+    expect(screen.queryByTestId('https-keep-temporary')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('setup-back'));
+    expect(await screen.findByRole('heading', { name: 'Choose a recovery passphrase' })).toBeInTheDocument();
+    expect(screen.getByText('The recovery passphrase is set. It cannot be changed here.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Recovery passphrase')).not.toBeInTheDocument();
+    // Nothing before the passphrase can be shown again (the recovery codes are shown once).
+    expect(screen.queryByTestId('setup-back')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'HTTPS certificate' })).toBeInTheDocument();
+  });
+
+  it('shows an uploaded certificate as the done state of the HTTPS step', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { ...open, https_chosen: true, next_step: 'mail' }),
+      http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+      http.get('/api/v1/settings/https', () => HttpResponse.json(httpsInfoFixture({ temporary: false }))),
+    );
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Mail server (optional)' });
+    await userEvent.click(screen.getByTestId('setup-back'));
+    expect(await screen.findByText(/Your own certificate is in use/)).toBeInTheDocument();
+  });
+
+  it('goes back through Finish, the servers, the license and the mail step, and forward again', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { ...open, https_chosen: true, mail_chosen: true, license_chosen: true, next_step: 'platform' }),
+      http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+    );
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Connect your servers' });
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Alice is ready' });
+    await userEvent.click(screen.getByTestId('setup-back'));
+    await screen.findByRole('heading', { name: 'Connect your servers' });
+    await userEvent.click(screen.getByTestId('setup-back'));
+    expect(await screen.findByRole('heading', { name: 'Add a license' })).toBeInTheDocument();
+    expect(screen.getByText('A license is chosen. You can change it here or later on the License page.')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('setup-back'));
+    expect(await screen.findByRole('heading', { name: 'Mail server (optional)' })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Add a license' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(await screen.findByRole('heading', { name: 'Connect your servers' })).toBeInTheDocument();
+  });
+
+  it('keeps the passphrase submit disabled for a fair passphrase and says why', async () => {
+    server.use(...sessionHandlers(sessionFor('admin'), { ...open, recovery_passphrase_set: false, next_step: 'passphrase' }));
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Choose a recovery passphrase' });
+    await userEvent.type(screen.getByLabelText('Recovery passphrase'), 'abcdefghijklmnop');
+    await userEvent.type(screen.getByLabelText('Repeat the passphrase'), 'abcdefghijklmnop');
+    await userEvent.click(screen.getByLabelText('I stored the passphrase safely'));
+    expect(screen.getByTestId('passphrase-strength')).toHaveTextContent('Fair');
+    expect(screen.getByText(/This passphrase is too easy to guess/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save passphrase' })).toBeDisabled();
+
+    await userEvent.clear(screen.getByLabelText('Recovery passphrase'));
+    await userEvent.type(screen.getByLabelText('Recovery passphrase'), 'short');
+    expect(screen.getByRole('button', { name: 'Save passphrase' })).toBeDisabled();
+
+    await userEvent.clear(screen.getByLabelText('Recovery passphrase'));
+    await userEvent.type(screen.getByLabelText('Recovery passphrase'), 'abcdefghijklmnopqrst');
+    expect(screen.getByTestId('passphrase-strength')).toHaveTextContent('Good');
+    expect(screen.queryByText(/This passphrase is too easy to guess/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save passphrase' })).toBeEnabled();
+  });
+
+  it('shows the server refusal of a weak passphrase (ALC-SET-0010)', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { ...open, recovery_passphrase_set: false, next_step: 'passphrase' }),
+      http.post('/api/v1/setup/recovery-passphrase', () => errorResponse(422, 'ALC-SET-0010', 'setup.passphrase_too_weak')),
+    );
+    const { i18n } = await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Choose a recovery passphrase' });
+    await userEvent.type(screen.getByLabelText('Recovery passphrase'), 'correct horse battery staple');
+    await userEvent.type(screen.getByLabelText('Repeat the passphrase'), 'correct horse battery staple');
+    await userEvent.click(screen.getByLabelText('I stored the passphrase safely'));
+    await userEvent.click(screen.getByRole('button', { name: 'Save passphrase' }));
+    expect(i18n.exists('errors.setup.passphrase_too_weak.title')).toBe(true);
+    // The page's passphrase warning is an alert too; the refusal is the one with the catalogue title.
+    await waitFor(() =>
+      expect(screen.getAllByRole('alert').some((a) => a.textContent?.includes(i18n.t('errors.setup.passphrase_too_weak.title')))).toBe(true),
+    );
+  });
+
+  it.each([
+    ['en', 'en-US', ['HTTPS certificate', 'Mail server (optional)', 'Choose a recovery passphrase', 'Add a license'], 'Back'],
+    ['tr', 'tr-TR', ['HTTPS sertifikası', 'E-posta sunucusu (isteğe bağlı)', 'Kurtarma parolası belirleyin', 'Lisans ekleyin'], 'Geri'],
+  ])('renders every new step and its done state in %s without a raw key', async (lang, language, [https, mail, passphrase, license], back) => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin', lang), { ...open, https_chosen: true, mail_chosen: true, license_chosen: true, next_step: 'platform' }),
+      http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+    );
+    await renderRoute('/setup', { languages: [language] });
+    for (const heading of [license, mail, https, passphrase]) {
+      await screen.findAllByRole('heading', { level: 2 });
+      await userEvent.click(screen.getByRole('button', { name: back }));
+      expect(await screen.findByRole('heading', { name: heading })).toBeInTheDocument();
+      // The HTTPS step reads the certificate first.
+      if (heading === https) await screen.findByTestId('https-done');
+      expectNoRawKeys();
+    }
+  });
+});
+

@@ -1,4 +1,4 @@
-import { Alert, Button, Checkbox, PasswordInput, Progress, Stack, Text, Title } from '@mantine/core';
+import { Alert, Button, Checkbox, Group, PasswordInput, Progress, Stack, Text, Title } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setRecoveryPassphrase } from '../../api/endpoints';
@@ -14,7 +14,9 @@ const METER: Record<Strength, { value: number; color: string }> = {
   strong: { value: 100, color: 'green' },
 };
 
-export function PassphraseStep({ onDone, onGone }: { onDone: () => void; onGone: () => void }) {
+// PassphraseStep sets the recovery passphrase. The server refuses what passphraseStrength rates tooShort or fair
+// (R43 row 17), so the button follows the same rule. Once set it cannot be changed here: Back shows it as done.
+export function PassphraseStep({ onDone, onGone, done = false }: { onDone: () => void; onGone: () => void; done?: boolean }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const [passphrase, setPassphrase] = useState('');
@@ -24,6 +26,7 @@ export function PassphraseStep({ onDone, onGone }: { onDone: () => void; onGone:
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const strength = passphraseStrength(passphrase);
+  const acceptable = strength === 'good' || strength === 'strong';
 
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
@@ -40,6 +43,18 @@ export function PassphraseStep({ onDone, onGone }: { onDone: () => void; onGone:
       setBusy(false);
     }
   };
+
+  if (done) {
+    return (
+      <Stack>
+        <Title order={2}>{t('setup.passphrase.title')}</Title>
+        <Text>{t('setup.passphrase.doneState')}</Text>
+        <Group>
+          <Button onClick={onDone}>{t('ui.continue')}</Button>
+        </Group>
+      </Stack>
+    );
+  }
 
   return (
     <form onSubmit={submit}>
@@ -67,6 +82,11 @@ export function PassphraseStep({ onDone, onGone }: { onDone: () => void; onGone:
         <Text size="sm" data-testid="passphrase-strength" aria-live="polite">
           {t(`setup.passphrase.strength.${strength}`)}
         </Text>
+        {strength === 'fair' && (
+          <Text size="sm" c="red.9" id="passphrase-too-weak">
+            {t('setup.passphrase.tooWeak')}
+          </Text>
+        )}
         <PasswordInput
           label={t('setup.passphrase.repeat')}
           value={repeat}
@@ -78,7 +98,7 @@ export function PassphraseStep({ onDone, onGone }: { onDone: () => void; onGone:
           checked={stored}
           onChange={(e) => setStored(e.currentTarget.checked)}
         />
-        <Button type="submit" loading={busy} disabled={!stored}>
+        <Button type="submit" loading={busy} disabled={!stored || !acceptable}>
           {t('setup.passphrase.save')}
         </Button>
       </Stack>

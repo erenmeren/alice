@@ -3,6 +3,7 @@ import type { DashboardSummary } from '../api/phase7';
 import type { Provider } from '../api/sso';
 import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
 import type { ManagedKeyInfo } from '../api/sshkeys';
+import type { Backup, BackupList, BackupSchedule, BackupState, Forwarding, HTTPSInfo } from '../api/types';
 import type {
   AccessCheckRow,
   Binding,
@@ -869,3 +870,75 @@ export function providerFixture(o: Partial<Provider> = {}): Provider {
     ...o,
   };
 }
+
+// Phase 8 (contract C12): backups, the backup schedule, the HTTPS certificate and the audit forwarding.
+export const BACKUP_NAME = 'alice-backup-7F3K92QD-20261010T023000Z-auto.alicebak';
+export function backupFixture(o: Partial<Backup> = {}): Backup {
+  return { name: BACKUP_NAME, kind: 'auto', size: 52_400_000, created_at: '2026-10-10T02:30:00Z', alice_version: '1.0.0', check: 'ok', code: '', ...o };
+}
+
+export function backupStateFixture(o: Partial<BackupState> = {}): BackupState {
+  return {
+    last_success_at: '2026-10-10T02:30:00Z',
+    last_success_name: BACKUP_NAME,
+    age_hours: 6,
+    failing: false,
+    alarm: false,
+    configured: true,
+    free_bytes: 41_200_000_000,
+    ...o,
+  };
+}
+
+export function backupScheduleFixture(o: Partial<BackupSchedule> = {}): BackupSchedule {
+  return { time: '02:30', zone: 'Europe/Istanbul', retention: 14, next_at: '2026-10-10T23:30:00Z', version: 3, ...o };
+}
+
+export function backupListFixture(o: Partial<BackupList> = {}): BackupList {
+  return { items: [backupFixture()], state: backupStateFixture(), schedule: backupScheduleFixture(), ...o };
+}
+
+export function httpsInfoFixture(o: Partial<HTTPSInfo> = {}): HTTPSInfo {
+  return {
+    subject: 'CN=alice.example.test',
+    dns_names: ['alice.example.test'],
+    ip_addresses: ['10.0.0.5'],
+    not_before: '2026-10-01T00:00:00Z',
+    not_after: '2027-10-01T00:00:00Z',
+    fingerprint_sha256: 'ab'.repeat(32),
+    temporary: true,
+    ...o,
+  };
+}
+
+export function forwardingFixture(o: Partial<Forwarding> = {}): Forwarding {
+  return {
+    enabled: false,
+    host: '',
+    port: 6514,
+    transport: 'tls',
+    ca_set: false,
+    backlog: 0,
+    cursor_seq: 0,
+    last_sent_at: null,
+    last_error_code: '',
+    last_error_at: null,
+    version: 0,
+    ...o,
+  };
+}
+
+// smtpFixture is the mail settings of an installation without a mail server.
+export const smtpFixture = {
+  configured: false,
+  host: '',
+  port: 587,
+  tls_mode: 'starttls',
+  from: '',
+  username: '',
+  has_password: false,
+  ca_pem: '',
+  trusted_certificate: null,
+  version: 0,
+  updated_at: null,
+};

@@ -32,6 +32,22 @@ export const SCREENS: Screen[] = [
     status: { ...installedStatus, completed: false },
     ready: { en: 'Connect your servers', tr: 'Sunucularınızı bağlayın' },
   },
+  // Phase 8: the wizard's HTTPS certificate and mail server steps, and the three new Settings tabs.
+  {
+    path: '/setup',
+    session: sessionFor('admin'),
+    status: { ...installedStatus, completed: false, license_chosen: false, https_chosen: false, mail_chosen: false, next_step: 'https' },
+    ready: { en: 'Keep the temporary certificate', tr: 'Geçici sertifikayı kullanmaya devam et' },
+  },
+  {
+    path: '/setup',
+    session: sessionFor('admin'),
+    status: { ...installedStatus, completed: false, license_chosen: false, https_chosen: true, mail_chosen: false, next_step: 'mail' },
+    ready: { en: 'Save mail settings', tr: 'Posta ayarlarını kaydet' },
+  },
+  { path: '/settings?tab=backups', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Save backup schedule', tr: 'Yedekleme zamanlamasını kaydet' } },
+  { path: '/settings?tab=https', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Certificate in use', tr: 'Kullanılan sertifika' } },
+  { path: '/settings?tab=forwarding', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Save forwarding settings', tr: 'İletim ayarlarını kaydet' } },
   { path: '/account', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Change password', tr: 'Parolayı değiştir' } },
   { path: '/users', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Operator', tr: 'Operatör' } },
   { path: '/tokens', session: sessionFor('operator'), status: installedStatus, ready: { en: 'Read only', tr: 'Salt okunur' } },

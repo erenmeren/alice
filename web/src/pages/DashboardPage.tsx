@@ -7,11 +7,13 @@ import { ALERTS_KEY, DASHBOARD_KEY, EXPIRING_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
 import { AttentionList } from '../components/dashboard/AttentionList';
 import { AuditHead } from '../components/dashboard/AuditHead';
+import { BackupCard } from '../components/dashboard/BackupCard';
 import { CertificateCounts } from '../components/dashboard/CertificateCounts';
 import { ExpiringList } from '../components/dashboard/ExpiringList';
 import { FailedDeployments } from '../components/dashboard/FailedDeployments';
 import { LicenseCard } from '../components/dashboard/LicenseCard';
 import { RotationUpcoming } from '../components/dashboard/RotationUpcoming';
+import { SetupChecklist } from '../components/dashboard/SetupChecklist';
 import { TargetsByStatus } from '../components/dashboard/TargetsByStatus';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { LoadingIndicator } from '../components/LoadingIndicator';
@@ -57,6 +59,7 @@ export function DashboardPage() {
           ))}
         </Stack>
       )}
+      {s?.setup_checklist && <SetupChecklist items={s.setup_checklist} />}
       {loading && <LoadingIndicator />}
       <SimpleGrid cols={{ base: 1, md: 2, xl: 3 }} aria-busy={loading}>
         {s && <CertificateCounts counts={s.certificates} />}
@@ -66,6 +69,7 @@ export function DashboardPage() {
         {s && <LicenseCard license={s.license} detailed={role === 'admin' || role === 'auditor'} />}
         {s && <RotationUpcoming rotation={s.rotation} />}
         {s?.audit && <AuditHead audit={s.audit} />}
+        {s?.backup && <BackupCard backup={s.backup} admin={role === 'admin'} />}
         {alerts.data && <AttentionList items={alerts.data.items} />}
       </SimpleGrid>
     </Stack>

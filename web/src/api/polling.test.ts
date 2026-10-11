@@ -37,6 +37,8 @@ describe('polling', () => {
       'auth/SessionActivity.tsx',
       'components/AccessCheckPanel.tsx',
       'components/AddServerModal.tsx',
+      // the dashboard summary (getDashboardSummary, a GET), shared with pages/DashboardPage.tsx
+      'components/BackupBanner.tsx',
       'components/BindingPanel.tsx',
       'components/DeployDialog.tsx',
       'components/DeployKeyDialog.tsx',
