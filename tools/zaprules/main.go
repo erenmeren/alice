@@ -3,6 +3,8 @@
 //
 //	go run ./tools/zaprules .zap/rules.tsv                      check the policy
 //	go run ./tools/zaprules -reports bin/zap .zap/rules.tsv     check it, then judge every *.json report in bin/zap
+//	go run ./tools/zaprules -reports bin/zap -expect admin,auditor .zap/rules.tsv
+//	                                                            the same, and admin.json and auditor.json must exist
 //
 // A policy line is "<rule id>\t<IGNORE|WARN|FAIL>\t<reason>\t<expires YYYY-MM-DD>"; lines starting
 // with # and empty lines are comments. ZAP reads the same file (-c): it takes the third field as
@@ -41,9 +43,25 @@ func run(args []string, now time.Time, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("zaprules", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	reports := fs.String("reports", "", "judge every *.json ZAP report in this directory")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
-		_, _ = fmt.Fprintln(stderr, "usage: zaprules [-reports DIR] RULES.tsv")
+	expect := fs.String("expect", "", "comma-separated report names (without .json) that must be in -reports, one per role scanned")
+	usage := func() int {
+		_, _ = fmt.Fprintln(stderr, "usage: zaprules [-reports DIR [-expect NAME,...]] RULES.tsv")
 		return 2
+	}
+	if err := fs.Parse(args); err != nil || fs.NArg() != 1 {
+		return usage()
+	}
+	var expected []string
+	if *expect != "" {
+		if *reports == "" {
+			return usage()
+		}
+		expected = strings.Split(*expect, ",")
+		for _, e := range expected {
+			if e == "" || strings.ContainsAny(e, "/\\") {
+				return usage()
+			}
+		}
 	}
 	pol, err := LoadPolicy(fs.Arg(0), now)
 	if err != nil {
@@ -53,6 +71,13 @@ func run(args []string, now time.Time, stdout, stderr io.Writer) int {
 	_, _ = fmt.Fprintf(stdout, "zaprules: %s: %d rule(s), none expired\n", fs.Arg(0), len(pol))
 	if *reports == "" {
 		return 0
+	}
+	// A role whose scan wrote no report would otherwise pass unnoticed (Task 15 review M-1).
+	for _, e := range expected {
+		if _, err := os.Stat(filepath.Join(*reports, e+".json")); err != nil {
+			_, _ = fmt.Fprintf(stderr, "zaprules: the report %s.json is missing from %s\n", e, *reports)
+			return 1
+		}
 	}
 	files, _ := filepath.Glob(filepath.Join(*reports, "*.json"))
 	if len(files) == 0 {

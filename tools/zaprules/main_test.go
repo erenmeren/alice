@@ -112,3 +112,26 @@ func TestRun(t *testing.T) {
 	assert.Equal(t, 1, run([]string{"-reports", "testdata/none", "testdata/rules.tsv"}, today, &out, &errOut))
 	assert.Contains(t, errOut.String(), "no ZAP report")
 }
+
+// Task 15 review M-1: -expect names the reports a scan must have written (one per role); a missing
+// one fails before any alert is judged, and an empty name is refused.
+func TestRunExpectsTheNamedReports(t *testing.T) {
+	var out, errOut bytes.Buffer
+	assert.Equal(t, 1, run([]string{"-reports", "testdata/reports", "-expect", "unauthenticated,admin,operator", "testdata/rules.tsv"}, today, &out, &errOut))
+	assert.Contains(t, errOut.String(), "zaprules: the report operator.json is missing from testdata/reports")
+	assert.NotContains(t, out.String(), "alert(s) at Medium")
+
+	out.Reset()
+	errOut.Reset()
+	dir := t.TempDir()
+	clean, err := os.ReadFile("testdata/reports/clean.json")
+	require.NoError(t, err)
+	for _, name := range []string{"unauthenticated", "admin"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name+".json"), clean, 0o600))
+	}
+	assert.Equal(t, 0, run([]string{"-reports", dir, "-expect", "unauthenticated,admin", "testdata/rules.tsv"}, today, &out, &errOut), errOut.String())
+
+	errOut.Reset()
+	assert.Equal(t, 2, run([]string{"-reports", dir, "-expect", "admin,,operator", "testdata/rules.tsv"}, today, &out, &errOut))
+	assert.Equal(t, 2, run([]string{"-expect", "admin", "testdata/rules.tsv"}, today, &out, &errOut), "-expect needs -reports")
+}
