@@ -5,3 +5,10 @@
   outline: 2px solid var(--mantine-primary-color-filled);
   outline-offset: -2px;
 }
+
+/* Inline <Code> (names, fingerprints, hashes) wraps with the text around it and never scrolls. Mantine gives every
+   Code overflow: auto; on an inline element Firefox then reports a scrollable region without keyboard access (axe
+   scrollable-region-focusable), and nothing could be scrolled there anyway. A block Code keeps its own scrolling. */
+.mantine-Code-root:not([data-block]) {
+  overflow: visible;
+}
