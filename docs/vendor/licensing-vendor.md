@@ -237,8 +237,10 @@ release commands refuse a license key ("this key is for another purpose").
 1. On the release build machine, from the signed tag: run every release gate of the release checklist (their
    results are recorded in `bin/release-gates.log`, which becomes `RELEASE-CHECKLIST-SIGNED.txt` in the package;
    the log names the commit the gates ran on, and `make release` refuses a log of another commit), then
-   `make release VERSION=x.y.z`. Only a stage built this way is signed; a stage built by CI is only compared with it (`make reproducible-check`
-   compares the binaries) and is never signed (S-26).
+   `make release VERSION=x.y.z`. Only a stage built this way is signed; a stage built by CI is never signed (S-26).
+   What two stages have in common is `helper/alice-helper.sha256` (the helper build is reproducible); the `alice`
+   binary inside the image is built with the release time and is not compared. `make reproducible-check` builds the
+   binaries twice locally and compares those two builds; it does not take a CI stage.
 2. Copy `bin/release/alice-x.y.z/alice/SHA256SUMS` to the offline machine on a clean USB stick and run:
 
        bin/licensectl release-sign --key /media/offline/alice-release/rk-2026-01.key SHA256SUMS

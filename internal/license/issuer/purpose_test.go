@@ -67,8 +67,9 @@ func TestKeyPurposeSeparatesLicenseAndReleaseKeys(t *testing.T) {
 	// type does not turn a release key into a license key.
 	stripped := strings.Replace(string(relPriv), "Alice-Key-Purpose: release\n", "", 1)
 	stripped = strings.ReplaceAll(stripped, "ALICE RELEASE SIGNING KEY", "ALICE LICENSE SIGNING KEY")
+	stripped = strings.Replace(stripped, "Key-Id: rk-2026-01", "Key-Id: vk-2026-01", 1) // passes the license ID check
 	_, err = issuer.OpenKey([]byte(stripped), []byte(testWords))
-	require.Error(t, err)
+	require.ErrorIs(t, err, issuer.ErrWrongPassphrase, "the AAD (purpose) mismatch fails the decryption")
 	// A release header on a license block (or the other way round) is not a key file.
 	mixed := strings.ReplaceAll(string(relPriv), "ALICE RELEASE SIGNING KEY", "ALICE LICENSE SIGNING KEY")
 	_, err = issuer.OpenReleaseKey([]byte(mixed), []byte(testWords))

@@ -801,3 +801,19 @@ func TestBrokenReleaseRefusals(t *testing.T) {
 		assert.Equal(t, "signed\n", readFile(t, filepath.Join(d, name)))
 	}
 }
+
+// Review minor 2: the committed key set is always ROOT/deploy/release/keys; no flag points the
+// production comparison elsewhere.
+func TestStageHasNoProductionKeysFlag(t *testing.T) {
+	var out bytes.Buffer
+	assert.Equal(t, 2, run([]string{"stage", "-production-keys", t.TempDir(), "-version", "1.0.0", "-out", t.TempDir(), "-keys", t.TempDir()}, &out, &out))
+	assert.Contains(t, out.String(), "flag provided but not defined: -production-keys")
+}
+
+// Review minor 12: a source swapped for a symbolic link after the plan is not followed.
+func TestWriteEntryNeverFollowsALink(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "link")
+	require.NoError(t, os.Symlink("/etc/hostname", link))
+	require.Error(t, writeEntry(filepath.Join(dir, "pkg"), entry{dst: "x", src: link, mode: 0o644}))
+}

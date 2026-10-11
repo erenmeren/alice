@@ -39,6 +39,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"alice/internal/license"
@@ -96,7 +97,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 const usage = `Usage:
   releasebuild stage -version V -out DIR -keys DIR -alice-image REF -postgres-image REF -sbom DIR -notices FILE
                      -helper DIR -commit SHA -build-time RFC3339 -gates-log FILE -license FILE
-                     -min-upgrade-from V [-root DIR] [-production-keys DIR] [-test] [-allow-draft]
+                     -min-upgrade-from V [-root DIR] [-test] [-allow-draft]
   releasebuild pack -stage DIR -out DIR
   releasebuild keycheck -release DIR -license FILE
 `
@@ -116,7 +117,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&c.Version, "version", "", "release version x.y.z or x.y.z-rc.N")
 		fs.StringVar(&c.Out, "out", "", "stage directory to create (the package is written to OUT/alice)")
 		fs.StringVar(&c.Keys, "keys", "", "directory with the release public keys rk-*.pem")
-		fs.StringVar(&c.ProductionKeys, "production-keys", "", "committed production keys (default ROOT/deploy/release/keys)")
 		fs.StringVar(&c.AliceImage, "alice-image", "", "alice image reference")
 		fs.StringVar(&c.PostgresImage, "postgres-image", "", "postgres image reference")
 		fs.StringVar(&c.SBOM, "sbom", "", "directory with the three CycloneDX SBOMs")
@@ -579,7 +579,8 @@ func readReleaseKeys(dir string, test bool) ([]releaseKeyFile, error) {
 	return out, nil
 }
 
-// keyEntries returns release-keys/ and the RELEASE_KEY_ID (the newest key). Without -test the
+// keyEntries returns release-keys/ and the RELEASE_KEY_ID: the newest trusted key, which during a
+// rotation is not the signing key (the stage cannot know which key will sign; review minor 1). Without -test the
 // set must equal the committed production keys.
 func keyEntries(cfg stageConfig) ([]entry, string, error) {
 	keys, err := readReleaseKeys(cfg.Keys, cfg.Test)
@@ -797,7 +798,7 @@ func writeEntry(pkg string, e entry) (err error) {
 		}
 	}()
 	if e.src != "" {
-		in, err := os.Open(e.src) //nolint:gosec // G304: a checked input of the stage
+		in, err := os.OpenFile(e.src, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // G304: a checked input of the stage; never through a link swapped in after plan (S-7)
 		if err != nil {
 			return err
 		}
