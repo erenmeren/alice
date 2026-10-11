@@ -464,9 +464,16 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.getByRole('button', { name: t('settings.general.save'), exact: true }).click();
       await expect(page.getByText(t('settings.saved'), { exact: true })).toBeVisible();
 
-      // The tabs work with the arrow keys: from General, ArrowRight opens Single sign-on.
+      // The tabs work with the keyboard. Phase 8 put Backups, HTTPS certificate and Audit forwarding between General and
+      // Single sign-on, the last tab: from General, End moves the focus to it and Enter opens it (the arrow keys open
+      // each tab on the way, and each Phase 8 tab reads its own setting, which may ask for a step-up meanwhile).
+      await expect(page.getByRole('tablist').getByRole('tab')).toHaveText(
+        ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'forwarding', 'sso'].map((x) => t(`settings.tabs.${x}`)),
+      );
       await page.getByRole('tab', { name: t('settings.tabs.general'), selected: true }).focus();
-      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('End');
+      await expect(page.getByRole('tab', { name: t('settings.tabs.sso') })).toBeFocused();
+      await page.keyboard.press('Enter');
       await expect(page.getByRole('tab', { name: t('settings.tabs.sso'), selected: true })).toBeVisible();
       await expect(page).toHaveURL(/\/settings\?tab=sso$/);
       const addProvider = page.getByRole('button', { name: t('sso.addProvider'), exact: true });
