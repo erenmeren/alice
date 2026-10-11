@@ -1,0 +1,9 @@
+{"@programName":"ZAP","@version":"2.17.0","site":[{"@name":"https://127.0.0.1:9445","alerts":[
+ {"pluginid":"40012","alert":"Cross Site Scripting (Reflected)","name":"Cross Site Scripting (Reflected)","riskcode":"3","confidence":"2","count":"1","instances":[{"uri":"https://127.0.0.1:9445/api/v1/x","method":"GET"}]},
+ {"pluginid":"10038","alert":"Content Security Policy (CSP) Header Not Set","name":"Content Security Policy (CSP) Header Not Set","riskcode":"2","confidence":"3","count":"2","instances":[{"uri":"https://127.0.0.1:9445/a","method":"GET"},{"uri":"https://127.0.0.1:9445/b","method":"GET"}]},
+ {"pluginid":"10096","alert":"Timestamp Disclosure - Unix","name":"Timestamp Disclosure - Unix","riskcode":"2","confidence":"1","count":"1","instances":[{"uri":"https://127.0.0.1:9445/c","method":"GET"}]},
+ {"pluginid":"10055","alert":"CSP: Wildcard Directive","name":"CSP: Wildcard Directive","riskcode":"2","confidence":"0","count":"1","instances":[]},
+ {"pluginid":"10021","alert":"X-Content-Type-Options Header Missing","name":"X-Content-Type-Options Header Missing","riskcode":"1","confidence":"2","count":"1","instances":[]},
+ {"pluginid":"10063","alert":"Permissions Policy Header Not Set","name":"Permissions Policy Header Not Set","riskcode":"1","confidence":"2","count":"1","instances":[]},
+ {"pluginid":"10109","alert":"Modern Web Application","name":"Modern Web Application","riskcode":"0","confidence":"2","count":"1","instances":[]}
+]}]}

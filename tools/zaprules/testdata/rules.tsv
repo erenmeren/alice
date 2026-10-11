@@ -1,0 +1,5 @@
+# ZAP rule policy fixture: <rule id> TAB <IGNORE|WARN|FAIL> TAB <reason> TAB <expires YYYY-MM-DD>
+
+10096	IGNORE	Timestamps in the build information are not a disclosure	2027-01-31
+10020	FAIL	Framing must always be refused	2027-01-31
+10038	WARN	CSP is reported at its level	2027-01-31

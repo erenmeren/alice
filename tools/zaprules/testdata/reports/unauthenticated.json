@@ -1,0 +1,3 @@
+{"@programName":"ZAP","@version":"2.17.0","site":[{"@name":"https://127.0.0.1:9445","alerts":[
+ {"pluginid":"10020","alert":"Missing Anti-clickjacking Header","name":"Missing Anti-clickjacking Header","riskcode":"1","confidence":"2","count":"1","instances":[{"uri":"https://127.0.0.1:9445/","method":"GET"}]}
+]}]}

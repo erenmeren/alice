@@ -1,0 +1,6 @@
+# ZAP rule policy (spec §25.7), read by ZAP (-c) and checked by tools/zaprules (make zap-baseline).
+# One line per rule: <rule id> TAB <IGNORE|WARN|FAIL> TAB <reason> TAB <expires YYYY-MM-DD>.
+# Every alert of level Medium or High fails the scan unless its rule is IGNORE here; a FAIL rule
+# fails at any level. Every line needs a written reason and an expiry at most 180 days ahead;
+# an expired line fails the check. Informational and Low alerts are listed in the summary and
+# reviewed at each release (docs/release-checklist.md).

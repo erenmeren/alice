@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration || systemd
 
 package nginx
 
@@ -172,24 +172,44 @@ func startNginxHost(t *testing.T, image, helper string, verified bool) *rnHost {
 	require.NoError(t, err, "the Nginx matrix reaches the container at %s directly: Docker's bridge network must be routable from this host", ip)
 	_ = conn.Close()
 
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	require.NoError(t, err)
-	signer, err := ssh.NewSignerFromKey(priv)
-	require.NoError(t, err)
-
-	h := &rnHost{t: t, image: image, ctr: ctr, ip: ip, target: uuid.New(), hk: &memHostKeys{}, signer: signer,
-		ca: pki.NewCA("Real Nginx "+image, pki.ECDSA256, time.Now()), leaves: map[string]pki.Leaf{}}
-	h.hostname = strings.TrimSpace(h.sh("hostname"))
+	h := newRNHost(t, image, ctr, ip)
 	switch image {
 	case "rocky9":
 		h.scCertDir, h.scKeyDir, h.scGroup, h.modDir = "/etc/pki/tls/certs", "/etc/pki/tls/private", "nginx", "/usr/share/nginx/modules"
 	default:
 		h.scCertDir, h.scKeyDir, h.scGroup, h.modDir = "/etc/ssl/certs", "/etc/ssl/private", "ssl-cert", "/etc/nginx/modules-enabled"
 	}
+	h.runSetupScript(helper, verified)
+	// Nginx starts with the distribution's configuration, as its unit would.
+	h.sh(nginxBin)
+	require.Eventually(t, func() bool { return len(h.workers()) > 0 }, 30*time.Second, 100*time.Millisecond, "nginx started")
+	h.connect(verified)
+	return h
+}
 
-	// The setup script of the nginx profile, exactly as Alice shows it. With the checksums, a
-	// helper that is not this version's is refused first (nothing installed), then the real one.
-	pub := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
+// newRNHost is the host record of a started container at ip, with a new SSH key for Alice and a
+// throwaway test CA (shared by TestRealNginx and TestRealSystemdNginx).
+func newRNHost(t *testing.T, image string, ctr testcontainers.Container, ip string) *rnHost {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	signer, err := ssh.NewSignerFromKey(priv)
+	require.NoError(t, err)
+	h := &rnHost{t: t, image: image, ctr: ctr, ip: ip, target: uuid.New(), hk: &memHostKeys{}, signer: signer,
+		ca: pki.NewCA("Real Nginx "+image, pki.ECDSA256, time.Now()), leaves: map[string]pki.Leaf{}}
+	h.hostname = strings.TrimSpace(h.sh("hostname"))
+	return h
+}
+
+// runSetupScript prepares the host with the setup script of the nginx profile, exactly as Alice shows
+// it. With the checksums, a helper that is not this version's is refused first (nothing installed),
+// then the real one is installed.
+func (h *rnHost) runSetupScript(helper string, verified bool) {
+	t := h.t
+	t.Helper()
+	ctx := context.Background()
+	ctr := h.ctr
+	pub := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())))
 	script, err := linuxssh.SetupScript("nginx", linuxssh.AuthorizedKeysLine(pub, ""), !verified)
 	require.NoError(t, err)
 	require.NoError(t, ctr.CopyToContainer(ctx, []byte(script), "/root/bundle/setup.sh", 0o700))
@@ -212,13 +232,15 @@ func startNginxHost(t *testing.T, image, helper string, verified bool) *rnHost {
 	if verified {
 		require.NotContains(t, out, "cannot verify alice-helper", "the release helper was checked against its checksum")
 	}
-	// Nginx starts with the distribution's configuration, as its unit would.
-	h.sh(nginxBin)
-	require.Eventually(t, func() bool { return len(h.workers()) > 0 }, 30*time.Second, 100*time.Millisecond, "nginx started")
 	sum := sha256.Sum256(helperBytes)
 	require.Equal(t, hex.EncodeToString(sum[:]), strings.Fields(h.sh("sha256sum " + helperproto.HelperPath))[0], "the installed helper is the one copied")
+}
 
-	// The administrator pins the server's host key.
+// connect pins the server's host key as the administrator would and builds Alice's SSH provider and
+// the Nginx provider on it.
+func (h *rnHost) connect(verified bool) {
+	t := h.t
+	t.Helper()
 	hostPub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(h.sh("cat /etc/ssh/ssh_host_ed25519_key.pub")))
 	require.NoError(t, err)
 	pin := linuxssh.HostKeyOf(hostPub)
@@ -230,7 +252,6 @@ func startNginxHost(t *testing.T, image, helper string, verified bool) *rnHost {
 	t.Cleanup(pool.Close)
 	h.lp = linuxssh.New(linuxssh.Options{Pool: pool, AllowUnverifiedHelper: !verified})
 	h.prov = h.provider(nil)
-	return h
 }
 
 // provider is a provider on the host's pool (prober nil: Alice's real TLS probe).

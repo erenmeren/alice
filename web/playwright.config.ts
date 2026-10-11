@@ -23,5 +23,11 @@ export default defineConfig({
     ignoreHTTPSErrors: true, // the stack uses a temporary self-signed certificate
     trace: 'retain-on-failure',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  // make e2e runs Chromium only (--project=chromium); make e2e-browsers runs every spec on all three
+  // (nightly and release, spec §22.7; WebKit needs its system libraries: npx playwright install --with-deps).
+  projects: [
+    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
+    { name: 'webkit', use: { ...devices['Desktop Safari'] } },
+  ],
 });

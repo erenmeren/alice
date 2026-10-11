@@ -228,8 +228,8 @@ unlock: ## End a sign-in delay or lockout: make unlock ACCOUNT=<username> (audit
 	$(COMPOSE) exec -T alice /usr/local/bin/alice admin unlock "$(ACCOUNT)"
 
 .PHONY: e2e
-e2e: ## Run Playwright tests against the e2e stack (make e2e-up first)
-	cd web && npx playwright install chromium && port="$${ALICE_E2E_PORT:-}" && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && { [ -z "$$port" ] || ALICE_E2E_PORT="$$port"; } && export ALICE_E2E_PORT && ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test
+e2e: ## Run Playwright tests on Chromium against the e2e stack (make e2e-up first; make e2e-browsers adds Firefox and WebKit)
+	cd web && npx playwright install chromium && port="$${ALICE_E2E_PORT:-}" && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && { [ -z "$$port" ] || ALICE_E2E_PORT="$$port"; } && export ALICE_E2E_PORT && ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test --project=chromium
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.8.0
@@ -265,6 +265,7 @@ lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e bu
 	golangci-lint run --build-tags integration,e2e,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./internal/license/...
 	golangci-lint run --build-tags integration ./internal/providers/azurekv/...
+	golangci-lint run --build-tags systemd ./internal/providers/nginx/...
 	golangci-lint run --build-tags release ./test/release/...
 
 .PHONY: vuln
@@ -352,6 +353,49 @@ fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly)
 .PHONY: fuzz-release
 fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 7 hours)
 	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-api FUZZTIME=30m
+
+# Dynamic gates (Task 15; spec §22.7 stages 5 and 6, §25.7). zap-baseline, zap-full and testssl scan
+# the release image (alice:ci of make image) as compose project alice-zap on 127.0.0.1:9445
+# (deploy/dev/zap-stack.sh; the stack is always removed afterwards). The scanner images are pinned by
+# tag and digest here and exported to the script, which never takes them from arguments (M-21).
+ZAP_IMAGE     ?= ghcr.io/zaproxy/zaproxy:2.17.0@sha256:7aaa659b0d43078febd82e29bad112285c370727e86ab8340444220e17d9f0d2
+TESTSSL_IMAGE ?= ghcr.io/testssl/testssl.sh:3.2@sha256:51918b1e954df0acee8c08d3ad5ce306710e4fefe49ed0e0f92728ecf9e7ff34
+ZAP_OUT       := bin/zap
+TESTSSL_TARGET ?=
+TESTSSL_CA     ?=
+export ZAP_IMAGE TESTSSL_IMAGE
+
+.PHONY: zap-baseline zap-full testssl test-systemd e2e-browsers mutation nightly release-gates
+zap-baseline: image ## ZAP passive baseline and API scan of the release image, unauthenticated and as Admin, Operator, Auditor (Docker)
+	go run ./tools/zaprules .zap/rules.tsv
+	@status=0; ./deploy/dev/zap-stack.sh up $(ZAP_OUT) && ./deploy/dev/zap-stack.sh scan baseline $(ZAP_OUT) || status=$$?; ./deploy/dev/zap-stack.sh down; exit $$status
+zap-full: image ## ZAP full active scan against a disposable stack (hours; release gate; owner/CI)
+	go run ./tools/zaprules .zap/rules.tsv
+	@status=0; ./deploy/dev/zap-stack.sh up $(ZAP_OUT) && ./deploy/dev/zap-stack.sh scan full $(ZAP_OUT) || status=$$?; ./deploy/dev/zap-stack.sh down; exit $$status
+testssl: ## testssl.sh, grade A or A+ required: the release image on the zap stack, or TESTSSL_TARGET=host:port (TESTSSL_CA=file) without a stack (Docker)
+	@if [ -n "$(TESTSSL_TARGET)" ]; then ./deploy/dev/zap-stack.sh testssl-target "$(TESTSSL_TARGET)" "$(TESTSSL_CA)" $(ZAP_OUT); \
+	else status=0; $(MAKE) image && ./deploy/dev/zap-stack.sh up $(ZAP_OUT) && ./deploy/dev/zap-stack.sh testssl $(ZAP_OUT) || status=$$?; ./deploy/dev/zap-stack.sh down; exit $$status; fi
+test-systemd: helper ## Real-systemd Nginx job (R38 item 16): privileged Ubuntu 22.04 container with systemd as PID 1 (Docker)
+	go test -count=1 -v -timeout 20m -tags systemd -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealSystemdNginx$$' ./internal/providers/nginx/
+e2e-browsers: ## Every Playwright spec on Chromium, Firefox and WebKit in EN and TR (make e2e-up first; nightly and release)
+	cd web && npx playwright install chromium firefox webkit && port="$${ALICE_E2E_PORT:-}" && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && { [ -z "$$port" ] || ALICE_E2E_PORT="$$port"; } && export ALICE_E2E_PORT && ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test --project=chromium --project=firefox --project=webkit
+mutation: ## Mutation testing of the security-critical pure packages (advisory; nightly)
+	gremlins unleash --tags '' ./internal/backup/format
+	gremlins unleash --tags '' ./internal/license
+	gremlins unleash --tags '' ./internal/rbac
+nightly: ## The nightly set (§22.7 stage 5) on this machine; hours; Docker alone
+	$(MAKE) fuzz-nightly test-release test-systemd zap-baseline testssl mutation
+	@status=0; $(MAKE) e2e-up e2e-browsers || status=$$?; $(MAKE) e2e-down; exit $$status
+# release-gates runs every gate of deploy/dev/release-gates.sh in order (ci, matrix-check -strict,
+# reproducible-check, test-release, test-systemd, zap-baseline, testssl, test-backup-cycle, the three
+# browsers, release-keycheck last), also after a failure, and records each in bin/release-gates.log
+# (first line commit<TAB><HEAD>, then <gate><TAB><exit status><TAB><tool version>), which make release
+# turns into RELEASE-CHECKLIST-SIGNED.txt. RELEASE_GATES_SKIP="gate ..." leaves gates out (CI:
+# release-keycheck); a skipped gate gets no line. zap-full and fuzz-release are not in it: they run for
+# hours on the owner's or CI's machine (release.yml) and the release checklist lists them.
+RELEASE_GATES_SKIP ?=
+release-gates: ## Every release gate that runs on one machine (§22.7 stage 6, §17.7), logged to bin/release-gates.log; hours; Docker alone
+	RELEASE_GATES_SKIP="$(RELEASE_GATES_SKIP)" GOLANGCI_LINT_VERSION=$(GOLANGCI_LINT_VERSION) MAKE="$(MAKE)" ./deploy/dev/release-gates.sh
 
 # Release packages (C5; Task 12). make release stages an unsigned package in $(RELEASE_DIR)/alice-$(VERSION)/alice;
 # the vendor signs its SHA256SUMS offline (licensectl release-sign), make release-pack packs it and the

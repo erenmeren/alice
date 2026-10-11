@@ -12,6 +12,8 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.5
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.11.0
+	github.com/moby/moby/api v1.55.0
+	github.com/moby/moby/client v0.5.1
 	github.com/pquerna/otp v1.5.0
 	github.com/pressly/goose/v3 v3.28.0
 	github.com/stretchr/testify v1.12.1
@@ -60,8 +62,6 @@ require (
 	github.com/mfridman/interpolate v0.0.2 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/go-archive v0.3.0 // indirect
-	github.com/moby/moby/api v1.55.0 // indirect
-	github.com/moby/moby/client v0.5.1 // indirect
 	github.com/moby/patternmatcher v0.6.1 // indirect
 	github.com/moby/sys/sequential v0.7.0 // indirect
 	github.com/moby/sys/user v0.4.1 // indirect
