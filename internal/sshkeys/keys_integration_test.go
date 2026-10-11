@@ -39,11 +39,15 @@ func TestGenerateStoresAnEnvelope(t *testing.T) {
 	assert.Equal(t, "ssh_key", owner)
 	assert.Equal(t, "ed25519", algorithm)
 	assert.NotContains(t, string(ct), "PRIVATE KEY")
-	assert.False(t, bytes.HasPrefix(ct, []byte{0x30}), "not DER in clear")
 	pt, err := e.keyring.Open(secrets.Location{Table: "managed_private_keys", RowID: k.PrivateKeyID.String(), Column: "ciphertext"},
 		e.envelope(k.PrivateKeyID))
 	require.NoError(t, err)
 	defer pt.Zero()
+	// Not the DER in clear: the stored bytes hold no part of the key's encoding. (The first byte of an AES-GCM
+	// ciphertext is random, so checking it for the DER tag 0x30 failed in 1 of 256 runs.)
+	require.Greater(t, len(pt.Bytes()), 32)
+	assert.False(t, bytes.Contains(ct, pt.Bytes()[:32]), "not DER in clear")
+	assert.False(t, bytes.Contains(ct, pt.Bytes()[len(pt.Bytes())-32:]), "not DER in clear")
 	pub, fp, err := keymat.PublicOf(pt)
 	require.NoError(t, err)
 	assert.Equal(t, k.PublicKey, pub)
