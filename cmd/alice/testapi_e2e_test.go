@@ -92,7 +92,7 @@ func TestE2EClockAcceptsTenYears(t *testing.T) {
 // The e2e build announces itself: a version suffix and a startup warning.
 func TestE2EBuildIsMarkedInVersionAndWarnsAtStartup(t *testing.T) {
 	var out, errOut bytes.Buffer
-	require.Equal(t, 0, run([]string{"version"}, env(nil), &out, &errOut))
+	require.Equal(t, 0, run([]string{"version"}, env(nil), nil, &out, &errOut))
 	assert.Contains(t, out.String(), "alice dev+e2e (")
 	assert.Equal(t, "dev+e2e", buildVersion().Version)
 

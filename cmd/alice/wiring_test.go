@@ -303,3 +303,44 @@ func TestSSHKeyDepsKeepNilServicesNilInterfaces(t *testing.T) {
 	assert.Panics(t, func() { buildRunner(nil, noKeys, clock.Real{}, slog.New(slog.DiscardHandler)) },
 		"sshkeyjobs.Register refuses a runner without the SSH key service")
 }
+
+// Phase 8 (contract C1): the daily backup check, the certificate renewal, audit forwarding and the heartbeat are
+// periodic tasks of every license state, scheduled by serve; a scheduler without one of them is refused.
+func TestPhase8PeriodicTasksAreWired(t *testing.T) {
+	log := slog.New(slog.DiscardHandler)
+	svc := wiringServices(t)
+	sched := buildScheduler(svc, nil, clock.Real{}, log)
+	want := map[jobs.Type]time.Duration{jobs.BackupSchedule: backupScheduleEvery, jobs.TLSRenew: 6 * time.Hour,
+		jobs.AuditForward: 15 * time.Second, jobs.JobsHeartbeat: time.Minute}
+	names := map[jobs.Type]string{jobs.BackupSchedule: "backup.schedule", jobs.TLSRenew: "tls.renew",
+		jobs.AuditForward: "audit.forward", jobs.JobsHeartbeat: "jobs.heartbeat"}
+	for typ := range want {
+		assert.Equal(t, names[typ], typ.Name)
+		assert.Equal(t, license.ClassAlways, typ.Class, typ.Name)
+		assert.Contains(t, periodicTypes, typ)
+		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
+	}
+	assert.Equal(t, 6*time.Hour, tlsRenewEvery)
+	assert.Equal(t, 15*time.Second, auditForwardEvery)
+	assert.Equal(t, time.Minute, heartbeatEvery)
+	assert.Positive(t, backupScheduleEvery)
+
+	runner := buildRunner(nil, svc, clock.Real{}, log)
+	require.NoError(t, checkWiring(svc.registry, runner, sched))
+	for missing := range want {
+		var tasks []jobs.Task
+		for _, typ := range periodicTypes {
+			if typ != missing {
+				tasks = append(tasks, jobs.Task{Type: typ, Every: time.Minute, Run: func(context.Context) error { return nil }})
+			}
+		}
+		err := checkWiring(svc.registry, runner, jobs.NewScheduler(clock.Real{}, svc.license, log, tasks...))
+		require.Error(t, err, missing.Name)
+		assert.Contains(t, err.Error(), "periodic job type "+missing.Name+" is not scheduled")
+	}
+}
+
+// The tls.renew task of a process without a certificate store (a command) does nothing.
+func TestRenewCertificateWithoutAStoreDoesNothing(t *testing.T) {
+	assert.NoError(t, renewCertificate(context.Background(), &services{}, slog.New(slog.DiscardHandler)))
+}

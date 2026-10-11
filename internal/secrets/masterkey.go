@@ -29,6 +29,9 @@ var (
 	ErrMasterKeyPermissions = errors.New("the master key file permissions are too open")
 	// ErrMasterKeyInvalid: the key file is not a regular file or does not contain a base64-encoded 32-byte key.
 	ErrMasterKeyInvalid = errors.New("the master key file is not valid")
+	// ErrMasterKeyNotRecorded: the database holds no key check yet (Alice never started on it), so there is nothing
+	// to compare a key file with.
+	ErrMasterKeyNotRecorded = errors.New("the database holds no master key check yet")
 )
 
 const masterKeyVersion = 1
@@ -86,6 +89,31 @@ func LoadOrCreateMasterKey(ctx context.Context, q db.Querier, dir string, now ti
 		return nil, err
 	}
 	return k, recordVersion(ctx, q, k, now)
+}
+
+// CheckMasterKey is the read-only half of LoadOrCreateMasterKey (alice selfcheck, C9): the key file in dir must exist,
+// pass the file checks and open the stored key check. It never creates a file or a row: a database without a key
+// check is ErrMasterKeyNotRecorded, a missing file ErrMasterKeyMissing, another key ErrMasterKeyMismatch.
+func CheckMasterKey(ctx context.Context, q db.Querier, dir string) error {
+	path := filepath.Join(dir, MasterKeyFile)
+	check, found, err := currentKeyCheck(ctx, q)
+	switch {
+	case err != nil:
+		return err
+	case !found:
+		return ErrMasterKeyNotRecorded
+	}
+	if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("%w: expected %s", ErrMasterKeyMissing, path)
+	}
+	k, err := loadKeyFile(path)
+	if err != nil {
+		return err
+	}
+	if err := k.VerifyKeyCheck(check); err != nil {
+		return fmt.Errorf("%w: %s belongs to another installation or was replaced", ErrMasterKeyMismatch, path)
+	}
+	return nil
 }
 
 func currentKeyCheck(ctx context.Context, q db.Querier) ([]byte, bool, error) {

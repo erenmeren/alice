@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -19,6 +20,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/api"
+	"alice/internal/audit"
+	"alice/internal/backup"
 	"alice/internal/i18n"
 	"alice/internal/jobs"
 	"alice/internal/platform/clock"
@@ -38,7 +41,17 @@ const usage = `Usage: alice <command>
 
 Commands:
   serve                       Start the Alice server (default)
-  migrate                     Apply database migrations and exit
+  migrate [--to-latest]       Apply database migrations and exit (--to-latest is the default)
+  backup [--out PATH] [--reason TEXT]
+                              Make a backup now (into ALICE_BACKUP_DIR)
+  backup list                 List the backups with their checksum check
+  backup verify FILE [--deep] [--passphrase-stdin]
+                              Check a backup file (--deep: decrypt it with the recovery passphrase)
+  restore FILE [--db-only] [--passphrase-stdin] [--confirm RESTORE] [--accept-broken-audit-log] [--no-safety-backup]
+          [--free-bytes N] [--wait-for-sessions DURATION]
+                              Replace all data with a backup (Alice must be stopped)
+  selfcheck                   Check the database, keys, audit log, license, HTTPS listener and background jobs
+  support-bundle              Print a support report without secrets (JSON)
   healthcheck                 Exit 0 if the local server reports healthy (used by Docker)
   setup-token --reset         Print a new one-time setup code (only before the first administrator exists)
   audit verify                Check the audit log hash chain (exit code 1 if it is broken)
@@ -51,10 +64,12 @@ Commands:
 `
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
+	os.Exit(run(os.Args[1:], os.Getenv, os.Stdin, os.Stdout, os.Stderr))
 }
 
-func run(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+// run executes one command. stdin carries a passphrase (--passphrase-stdin) and the restore confirmation; it is
+// read only by the commands that need them.
+func run(args []string, getenv func(string) string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cmd := "serve"
 	if len(args) > 0 {
 		cmd = args[0]
@@ -76,6 +91,10 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		}
 		return 0
 	case "migrate":
+		if rest := args[min(1, len(args)):]; len(rest) > 1 || (len(rest) == 1 && rest[0] != "--to-latest") {
+			fmt.Fprintln(stderr, "usage: alice migrate [--to-latest]")
+			return 2
+		}
 		if err := migrate(cfg); err != nil {
 			fmt.Fprintln(stderr, "migration failed:", err)
 			return 1
@@ -84,6 +103,14 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		return 0
 	case "healthcheck":
 		return healthcheck(cfg)
+	case "backup":
+		return runBackup(args[1:], cfg, stdin, stdout, stderr)
+	case "restore":
+		return runRestore(args[1:], cfg, stdin, stdout, stderr)
+	case "selfcheck":
+		return runSelfcheck(args[1:], cfg, stdout, stderr)
+	case "support-bundle":
+		return runSupportBundle(args[1:], cfg, stdout, stderr)
 	case "setup-token":
 		return runSetupToken(args[1:], cfg, stdout, stderr)
 	case "audit":
@@ -209,6 +236,14 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		}
 	}()
 
+	// A restore that stopped after its swap point is completed before the master key is loaded: the staged files
+	// belong to the database that is live now, and they are applied only when its restore ID says so (S-1).
+	if applied, err := backup.FinishInterruptedRestore(ctx, pool, cfg.KeysDir, cfg.StateDir); err != nil {
+		return fmt.Errorf("finish the interrupted restore: %w", err)
+	} else if applied {
+		log.Warn("an interrupted restore was completed: the restored keys and time record are now in place",
+			"event", "backup.restore_finished")
+	}
 	clk := newClock()
 	catalog, err := i18n.Load(locales.FS)
 	if err != nil {
@@ -230,8 +265,13 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if h, err := os.Hostname(); err == nil {
 		hosts = append(hosts, h)
 	}
-	cert, err := tlscert.EnsureSelfSigned(cfg.KeysDir, hosts, clk.Now())
+	// The store repairs an interrupted certificate replacement, creates or renews the temporary certificate and
+	// serves the current pair without a restart (C11).
+	svc.tlsStore, err = tlscert.NewStore(cfg.KeysDir, hosts, clk.Now)
 	if err != nil {
+		return err
+	}
+	if err := auditRecoveredCertificate(ctx, svc, log); err != nil {
 		return err
 	}
 	// The installation ID, the time record and the first evaluation exist before any request.
@@ -276,6 +316,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		Inventory: svc.inventory,
 		Runner:    runner,
 		StateDir:  cfg.StateDir,
+		BackupDir: cfg.BackupDir,
 		Log:       log,
 		ResetLimits: func() {
 			if apiServer != nil {
@@ -291,7 +332,7 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	public := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           apiServer.Handler(),
-		TLSConfig:         tlscert.ServerConfig(cert),
+		TLSConfig:         tlscert.ServerConfigFor(svc.tlsStore),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -315,6 +356,11 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	defer stopSched()
 	schedDone := make(chan struct{})
 	go func() {
+		// The first heartbeat comes with the scheduler, not a minute later, so alice selfcheck passes right after a
+		// start or a restore (M-3).
+		if err := writeHeartbeat(schedCtx, pool, clk); err != nil {
+			log.Warn("could not record the scheduler heartbeat", "error_type", fmt.Sprintf("%T", err))
+		}
 		sched.Run(schedCtx)
 		close(schedDone)
 	}()
@@ -564,6 +610,20 @@ func healthcheck(cfg config.Config) int {
 		return 1
 	}
 	return 0
+}
+
+// auditRecoveredCertificate logs and audits what the certificate store repaired at its start (S-13): tlscert is a
+// platform package and cannot write the audit log itself.
+func auditRecoveredCertificate(ctx context.Context, svc *services, log *slog.Logger) error {
+	reason := svc.tlsStore.Recovered()
+	if reason == "" {
+		return nil
+	}
+	info := svc.tlsStore.Info()
+	log.Warn("an interrupted HTTPS certificate replacement was repaired", "event", "https.certificate_recovered", "reason", reason)
+	return svc.audit.Write(ctx, audit.Event{Actor: audit.SystemActor("startup"), Action: "https.certificate_recovered",
+		ObjectType: "certificate", ObjectID: "https", Result: audit.Success, Details: map[string]string{
+			"fingerprint": info.FingerprintSHA256, "temporary": strconv.FormatBool(info.Temporary), "reason": reason}})
 }
 
 func ignoreClosed(err error) error {

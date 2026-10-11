@@ -45,7 +45,7 @@ func TestReleaseBinaryLinksNoTestOrVendorCode(t *testing.T) {
 // nor the test license one).
 func TestReleaseBuildIsUnmarkedAndDoesNotWarn(t *testing.T) {
 	var out, errOut bytes.Buffer
-	require.Equal(t, 0, run([]string{"version"}, env(nil), &out, &errOut))
+	require.Equal(t, 0, run([]string{"version"}, env(nil), nil, &out, &errOut))
 	assert.Contains(t, out.String(), "alice dev (")
 	assert.NotContains(t, out.String(), "e2e")
 	assert.NotContains(t, out.String(), "testlicense")

@@ -73,6 +73,11 @@ const (
 // expiry notices between two Playwright steps; the journeys run alerts.scan with POST /test/scheduler/run.
 const alertsScanEvery = 100 * 365 * 24 * time.Hour
 
+// backupScheduleEvery is the daily backup check's interval in the e2e build: in effect never. The demo clock would
+// otherwise make automatic backups between two Playwright steps; the journeys run backup.schedule with POST
+// /test/scheduler/run.
+const backupScheduleEvery = 100 * 365 * 24 * time.Hour
+
 // azureCAFile is where the fake Azure service (cmd/alice-fakeazure, compose service fakeazure) writes
 // its CA; compose shares the volume read-only with alice (R40 row 35). A variable only so the unit
 // tests can point it at a file of their own.
@@ -316,6 +321,9 @@ func testHandler(d testDeps) http.Handler {
 					return fmt.Errorf("remove the time record: %w", err)
 				}
 			}
+			if err := removeBackupFiles(d.BackupDir); err != nil {
+				return err
+			}
 			e2eClock.Reset()
 			e2eMailbox.reset()
 			d.Setup.ResetLockouts()
@@ -447,6 +455,30 @@ func testHandler(d testDeps) http.Handler {
 		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+// removeBackupFiles empties the backups directory (files only; the directory is a volume): a reset installation has
+// no backups.
+func removeBackupFiles(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the backups directory: %w", err)
+	}
+	for _, en := range entries {
+		if !en.Type().IsRegular() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, en.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove a backup file: %w", err)
+		}
+	}
+	return nil
 }
 
 // resetInstall empties every application table as the owner role. The audit

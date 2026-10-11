@@ -4,10 +4,13 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +23,8 @@ import (
 	"alice/internal/platform/config"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
+	"alice/internal/platform/settings"
+	"alice/internal/platform/tlscert"
 	"alice/internal/testutil/pgtest"
 	"alice/migrations"
 )
@@ -204,4 +209,120 @@ func TestRequireCurrentSchemaFailsClosed(t *testing.T) {
 	require.NoError(t, requireCurrentSchema(ctx, pool))
 	pool.Close()
 	require.Error(t, requireCurrentSchema(ctx, pool))
+}
+
+// stageRestore writes a staging directory as a restore stopped after its swap point leaves it (C1, S-1): the staged
+// files, FILES and RESTORE_ID.
+func stageRestore(t *testing.T, dir, id string, files map[string][]byte) {
+	t.Helper()
+	s := filepath.Join(dir, ".restore-staging")
+	require.NoError(t, os.Mkdir(s, 0o700))
+	var names []string
+	for name, b := range files {
+		mode := os.FileMode(0o400)
+		if name == "tls.crt" {
+			mode = 0o644
+		}
+		require.NoError(t, os.WriteFile(filepath.Join(s, name), b, mode))
+		names = append(names, name)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(s, "FILES"), []byte(strings.Join(names, "\n")+"\n"), 0o400))
+	require.NoError(t, os.WriteFile(filepath.Join(s, "RESTORE_ID"), []byte(id+"\n"), 0o400))
+}
+
+func readFiles(t *testing.T, dir string, names ...string) map[string][]byte {
+	t.Helper()
+	out := map[string][]byte{}
+	for _, n := range names {
+		b, err := os.ReadFile(filepath.Join(dir, n))
+		require.NoError(t, err)
+		out[n] = b
+	}
+	return out
+}
+
+// S-1: serve applies staged files before it loads the master key, but only when the live database's restore ID is the
+// staging's; any other staging is stale and removed, the live files untouched.
+func TestServeFinishesAnInterruptedRestore(t *testing.T) {
+	const id = "0123456789abcdef0123456789abcdef"
+	other := t.TempDir()
+	_, err := tlscert.EnsureSelfSigned(other, []string{"restored.example.test"}, time.Now())
+	require.NoError(t, err)
+	staged := readFiles(t, other, "tls.crt", "tls.key")
+
+	t.Run("the restore ID matches", func(t *testing.T) {
+		i := newCLIInstall(t)
+		i.listening()
+		_, err := tlscert.EnsureSelfSigned(i.keys, []string{"localhost"}, time.Now())
+		require.NoError(t, err)
+		files := readFiles(t, i.keys, "master.key")
+		files["tls.crt"], files["tls.key"] = staged["tls.crt"], staged["tls.key"]
+		stageRestore(t, i.keys, id, files)
+		stageRestore(t, i.state, id, map[string][]byte{})
+		require.NoError(t, settings.Set(i.ctx, i.d.Owner, "backup.restore_id", id, time.Now()))
+
+		stop := i.serve()
+		defer stop()
+		assert.Equal(t, staged, readFiles(t, i.keys, "tls.crt", "tls.key"), "the staged pair is live")
+		assert.NoDirExists(t, filepath.Join(i.keys, ".restore-staging"))
+		assert.NoDirExists(t, filepath.Join(i.state, ".restore-staging"))
+		code, out, errOut := i.run("", "selfcheck")
+		requireHealthy(t, code, out, errOut)
+	})
+	t.Run("another restore ID", func(t *testing.T) {
+		i := newCLIInstall(t)
+		i.listening()
+		_, err := tlscert.EnsureSelfSigned(i.keys, []string{"localhost"}, time.Now())
+		require.NoError(t, err)
+		live := readFiles(t, i.keys, "master.key", "tls.crt", "tls.key")
+		// A master key that would make the start fail if it were applied.
+		files := map[string][]byte{"master.key": []byte(base64.StdEncoding.EncodeToString(make([]byte, 32)) + "\n")}
+		files["tls.crt"], files["tls.key"] = staged["tls.crt"], staged["tls.key"]
+		stageRestore(t, i.keys, id, files)
+		require.NoError(t, settings.Set(i.ctx, i.d.Owner, "backup.restore_id", "ffffffffffffffffffffffffffffffff", time.Now()))
+
+		stop := i.serve()
+		defer stop()
+		assert.Equal(t, live, readFiles(t, i.keys, "master.key", "tls.crt", "tls.key"), "the live files are byte-equal")
+		assert.NoDirExists(t, filepath.Join(i.keys, ".restore-staging"), "the stale staging is removed")
+	})
+}
+
+// S-13: an interrupted certificate installation that the store finishes at the start is audited
+// https.certificate_recovered.
+func TestServeAuditsARecoveredCertificate(t *testing.T) {
+	i := newCLIInstall(t)
+	i.listening()
+	_, err := tlscert.EnsureSelfSigned(i.keys, []string{"localhost"}, time.Now())
+	require.NoError(t, err)
+	other := t.TempDir()
+	_, err = tlscert.EnsureSelfSigned(other, []string{"new.example.test"}, time.Now())
+	require.NoError(t, err)
+	next := readFiles(t, other, "tls.crt", "tls.key")
+	// The key was renamed into place, the certificate was not: tls.crt.new is left.
+	require.NoError(t, os.Remove(filepath.Join(i.keys, "tls.key")))
+	require.NoError(t, os.WriteFile(filepath.Join(i.keys, "tls.key"), next["tls.key"], 0o400))
+	require.NoError(t, os.WriteFile(filepath.Join(i.keys, "tls.crt.new"), next["tls.crt"], 0o644))
+
+	stop := i.serve()
+	defer stop()
+	assert.Equal(t, next["tls.crt"], readFiles(t, i.keys, "tls.crt")["tls.crt"])
+	assert.NoFileExists(t, filepath.Join(i.keys, "tls.crt.new"))
+	rows, err := i.d.Owner.Query(i.ctx, `SELECT actor_name, details->>'reason', details->>'fingerprint', details->>'temporary'
+		FROM audit_log WHERE action = 'https.certificate_recovered'`)
+	require.NoError(t, err)
+	type row struct{ actor, reason, fp, temporary string }
+	var got []row
+	for rows.Next() {
+		var r row
+		require.NoError(t, rows.Scan(&r.actor, &r.reason, &r.fp, &r.temporary))
+		got = append(got, r)
+	}
+	require.NoError(t, rows.Err())
+	require.Len(t, got, 1)
+	assert.Equal(t, "startup", got[0].actor)
+	assert.Equal(t, "finished", got[0].reason)
+	assert.Regexp(t, `^[0-9a-f]{64}$`, got[0].fp)
+	code, out, errOut := i.run("", "selfcheck")
+	requireHealthy(t, code, out, errOut)
 }

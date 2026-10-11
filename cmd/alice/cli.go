@@ -115,12 +115,17 @@ func runAdminUnlock(username string, cfg config.Config, stdout, stderr io.Writer
 
 // withPool opens the application pool for one operator command.
 func withPool(cfg config.Config, stderr io.Writer, fn func(ctx context.Context, pool *pgxpool.Pool) int) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return withPoolCtx(ctx, cfg, stderr, fn)
+}
+
+// withPoolCtx is withPool on the caller's context (a backup has no fixed time limit; a signal ends it).
+func withPoolCtx(ctx context.Context, cfg config.Config, stderr io.Writer, fn func(ctx context.Context, pool *pgxpool.Pool) int) int {
 	if err := cfg.RequireDatabase(); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	pool, err := openDB(ctx, cfg.DatabaseURL, cliBudget)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -132,7 +137,14 @@ func withPool(cfg config.Config, stderr io.Writer, fn func(ctx context.Context, 
 
 // withServices additionally loads the master key and wires the services.
 func withServices(cfg config.Config, stderr io.Writer, fn func(ctx context.Context, svc *services) int) int {
-	return withPool(cfg, stderr, func(ctx context.Context, pool *pgxpool.Pool) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return withServicesCtx(ctx, cfg, stderr, fn)
+}
+
+// withServicesCtx is withServices on the caller's context.
+func withServicesCtx(ctx context.Context, cfg config.Config, stderr io.Writer, fn func(ctx context.Context, svc *services) int) int {
+	return withPoolCtx(ctx, cfg, stderr, func(ctx context.Context, pool *pgxpool.Pool) int {
 		catalog, err := i18n.Load(locales.FS)
 		if err != nil {
 			fmt.Fprintln(stderr, err)

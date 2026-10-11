@@ -142,7 +142,9 @@ func goSources(t *testing.T, root string) []string {
 
 // Global constraint: helperproto.ProbeTLSConfig is the only certificate check Alice skips; both
 // probes (TLSProber here, the helper's tls-probe) use it. Phase 7 adds exactly one more place, the pinned mail
-// server certificate of internal/notify (pinnedTLS), whose VerifyConnection accepts only the pinned leaf.
+// server certificate of internal/notify (pinnedTLS), whose VerifyConnection accepts only the pinned leaf. Phase 8 adds
+// the last one, alice selfcheck's probe of its own listener (cmd/alice/selfcheck.go, C9), whose VerifyConnection
+// accepts only the leaf of keys/tls.crt.
 func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 	root, err := filepath.Abs("../../..")
 	require.NoError(t, err)
@@ -160,7 +162,12 @@ func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 			found = append(found, f)
 		}
 	}
-	assert.Equal(t, []string{"internal/notify/pin.go", "internal/providers/linuxssh/helperproto/helperproto.go"}, found)
+	assert.Equal(t, []string{"cmd/alice/selfcheck.go", "internal/notify/pin.go", "internal/providers/linuxssh/helperproto/helperproto.go"}, found)
+	self, err := os.ReadFile(filepath.Join(root, "cmd", "alice", "selfcheck.go")) //nolint:gosec // G304: a fixed source file of the repository
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(self), needle+":"), "selfcheck skips the chain check in one place only")
+	assert.Contains(t, string(self), "VerifyConnection:", "selfcheck compares the presented leaf with keys/tls.crt")
+	assert.Contains(t, string(self), "bytes.Equal(cs.PeerCertificates[0].Raw, want)")
 	pin, err := os.ReadFile(filepath.Join(root, "internal", "notify", "pin.go")) //nolint:gosec // G304: a fixed source file of the repository
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(pin), needle), "notify skips the chain check in one place only")

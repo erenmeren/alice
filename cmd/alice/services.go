@@ -5,14 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/alerts"
 	"alice/internal/audit"
+	"alice/internal/audit/forward"
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
+	"alice/internal/backup"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -24,6 +28,8 @@ import (
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/config"
+	"alice/internal/platform/netaddr"
+	"alice/internal/platform/tlscert"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
@@ -68,6 +74,11 @@ type services struct {
 	alerts         *alerts.Service  // expiry notices (alerts.scan) and thresholds
 	reports        *reports.Service // dashboard, saved views, exports
 	oidc           *oidc.Service    // identity providers, group mappings, SSO sign-in
+
+	// Phase 8 (contract C8, C10, C11).
+	backup   *backup.Service    // backups, their schedule, state and alarm
+	forward  *forward.Forwarder // audit forwarding to syslog
+	tlsStore *tlscert.Store     // the HTTPS certificate; set by serve only (a command never touches tls.*)
 }
 
 // buildServices loads (or, on a brand-new database, creates) the master key and wires the
@@ -122,6 +133,8 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 	sshPool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clk, HostKeys: inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
 	registerProviders(registry, sshPool, log)
+	// The mail settings exist before the setup service, whose wizard counts configured mail as its mail step (C11).
+	notifySettings := notify.NewSettings(notifySettingsConfig(pool, &services{keyring: keyring, auditLog: auditLog}, catalog, clk, log))
 	setupSvc := setup.New(setup.Config{
 		Pool:      pool,
 		Auth:      authSvc,
@@ -131,6 +144,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		Hasher:    passwords,
 		BackupKDF: secrets.BackupKDF,
 		License:   lic,
+		Mail:      notifySettings, // configured mail counts as the wizard's mail step (C11)
 	})
 	svc := &services{
 		pool:      pool,
@@ -146,13 +160,53 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		sshPool:   sshPool,
 		sshkeys:   sshkeys.New(sshkeysConfig(pool, keyring, auditLog, clk, lic, inv, queue, log)),
 	}
-	svc.notifySettings = notify.NewSettings(notifySettingsConfig(pool, svc, catalog, clk, log))
+	svc.notifySettings = notifySettings
 	svc.alerts = alerts.New(alerts.Config{Pool: pool, Audit: auditLog, Clock: clk, License: lic,
 		Notifier: notify.AdminNotifier{Clock: clk}, Log: log})
 	svc.reports = reports.New(reports.Config{Pool: pool, Clock: clk, Audit: auditLog, License: lic, Alerts: svc.alerts,
 		Delivery: svc.notifySettings, Inventory: inv})
 	svc.oidc = oidc.New(oidcConfig(svc, clk, log))
+	svc.backup = backup.New(backupServiceConfig(cfg, svc, clk, log))
+	svc.forward = forward.New(forwardConfig(cfg, svc, clk, log))
 	return svc, nil
+}
+
+// backupServiceConfig is the backup service of serve and the backup command (C8): the app pool, the keyring that
+// opens the sender key, ALICE_BACKUP_DIR and ALICE_TZ as the schedule's default zone; the binary's release version
+// is written into the headers.
+func backupServiceConfig(cfg config.Config, svc *services, clk clock.Clock, log *slog.Logger) backup.Config {
+	c := backupConfig(cfg, clk, log)
+	c.Pool, c.Audit, c.Keyring, c.Notifier = svc.pool, svc.auditLog, svc.keyring, notify.AdminNotifier{Clock: clk}
+	return c
+}
+
+// forwardConfig is the audit forwarder's configuration (C10): every connection goes through netaddr.DialContext and
+// its address rule (SEC-065); the syslog HOSTNAME is the first ALICE_TLS_HOSTS name, else the host name.
+func forwardConfig(cfg config.Config, svc *services, clk clock.Clock, log *slog.Logger) forward.Config {
+	return forward.Config{
+		Pool:  svc.pool,
+		Audit: svc.auditLog,
+		Clock: clk,
+		Log:   log,
+		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return netaddr.DialContext(ctx, &net.Dialer{Timeout: forwardConnectTimeout}, network, addr)
+		},
+		Hostname: forwardHostname(cfg),
+		AppName:  "alice",
+	}
+}
+
+// forwardConnectTimeout bounds one connection to the syslog receiver.
+const forwardConnectTimeout = 10 * time.Second
+
+func forwardHostname(cfg config.Config) string {
+	if len(cfg.TLSHosts) > 0 {
+		return cfg.TLSHosts[0]
+	}
+	if h, err := os.Hostname(); err == nil {
+		return h
+	}
+	return ""
 }
 
 // notifySettingsConfig is the mail settings' configuration (TestReleaseMailSettingsHaveNoDialerOverrideOrFallback).
@@ -337,7 +391,48 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		jobs.Task{Type: jobs.AlertsScan, Every: alertsScanEvery, Run: func(ctx context.Context) error {
 			return scanAlerts(ctx, svc, log)
 		}},
+		// Phase 8 (C1): the daily backup with its catch-up and 48-hour alarm, the temporary certificate's renewal,
+		// audit forwarding and the heartbeat alice selfcheck reads.
+		jobs.Task{Type: jobs.BackupSchedule, Every: backupScheduleEvery, Run: func(ctx context.Context) error {
+			return svc.backup.RunScheduled(ctx)
+		}},
+		jobs.Task{Type: jobs.TLSRenew, Every: tlsRenewEvery, Run: func(ctx context.Context) error {
+			return renewCertificate(ctx, svc, log)
+		}},
+		jobs.Task{Type: jobs.AuditForward, Every: auditForwardEvery, Run: func(ctx context.Context) error {
+			return svc.forward.Run(ctx)
+		}},
+		jobs.Task{Type: jobs.JobsHeartbeat, Every: heartbeatEvery, Run: func(ctx context.Context) error {
+			return writeHeartbeat(ctx, svc.pool, clk)
+		}},
 	)
+}
+
+// The intervals of the Phase 8 tasks that are the same in every build (contract C1); backupScheduleEvery is per build.
+const (
+	tlsRenewEvery     = 6 * time.Hour
+	auditForwardEvery = 15 * time.Second
+	heartbeatEvery    = time.Minute
+)
+
+// schedulerActor is the actor of the scheduled tasks' audit rows (C14).
+var schedulerActor = audit.SystemActor("scheduler")
+
+// renewCertificate is the tls.renew task: Store.Renew replaces Alice's temporary certificate when it is due (never a
+// certificate the customer installed), and a renewal is audited https.temporary_renewed.
+func renewCertificate(ctx context.Context, svc *services, log *slog.Logger) error {
+	if svc.tlsStore == nil {
+		return nil // a command, not serve: no listener and no certificate to renew
+	}
+	renewed, err := svc.tlsStore.Renew()
+	if err != nil || !renewed {
+		return err
+	}
+	info := svc.tlsStore.Info()
+	log.Info("the temporary HTTPS certificate was renewed", "event", "https.temporary_renewed", "not_after", info.NotAfter)
+	return svc.audit.Write(ctx, audit.Event{Actor: schedulerActor, Action: "https.temporary_renewed", ObjectType: "certificate",
+		ObjectID: "https", Result: audit.Success, Details: map[string]string{
+			"fingerprint": info.FingerprintSHA256, "not_after": info.NotAfter.UTC().Format(time.RFC3339)}})
 }
 
 // buildSender builds the email sender of serve (notify.send). At every drain it asks the mail

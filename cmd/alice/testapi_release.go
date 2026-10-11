@@ -55,3 +55,6 @@ func azureRoots() (*x509.CertPool, error) { return nil, nil }
 
 // testHandler returns nil: release builds have no /test endpoints.
 func testHandler(testDeps) http.Handler { return nil }
+
+// backupScheduleEvery is the interval of the daily backup check (contract C1: backup.schedule every 5 minutes).
+const backupScheduleEvery = 5 * time.Minute

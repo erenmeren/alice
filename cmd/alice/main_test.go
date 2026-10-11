@@ -39,14 +39,14 @@ func env(m map[string]string) func(string) string { return func(k string) string
 
 func TestVersionCommand(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := run([]string{"version"}, env(nil), &out, &errOut)
+	code := run([]string{"version"}, env(nil), nil, &out, &errOut)
 	assert.Equal(t, 0, code)
 	assert.Contains(t, out.String(), "alice dev")
 }
 
 func TestUnknownCommand(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := run([]string{"frobnicate"}, env(nil), &out, &errOut)
+	code := run([]string{"frobnicate"}, env(nil), nil, &out, &errOut)
 	assert.Equal(t, 2, code)
 	assert.Contains(t, errOut.String(), "unknown command")
 	assert.Contains(t, errOut.String(), "serve")
@@ -54,7 +54,7 @@ func TestUnknownCommand(t *testing.T) {
 
 func TestMigrateNeedsDatabaseURL(t *testing.T) {
 	var out, errOut bytes.Buffer
-	code := run([]string{"migrate"}, env(nil), &out, &errOut)
+	code := run([]string{"migrate"}, env(nil), nil, &out, &errOut)
 	assert.Equal(t, 1, code)
 	assert.Contains(t, errOut.String(), "ALICE_DATABASE_URL")
 }
@@ -74,9 +74,9 @@ func TestHealthcheck(t *testing.T) {
 	defer bad.Close()
 
 	var out, errOut bytes.Buffer
-	assert.Equal(t, 0, run([]string{"healthcheck"}, env(map[string]string{"ALICE_HEALTH_ADDR": strings.TrimPrefix(ok.URL, "http://")}), &out, &errOut))
-	assert.Equal(t, 1, run([]string{"healthcheck"}, env(map[string]string{"ALICE_HEALTH_ADDR": strings.TrimPrefix(bad.URL, "http://")}), &out, &errOut))
-	assert.Equal(t, 1, run([]string{"healthcheck"}, env(map[string]string{"ALICE_HEALTH_ADDR": "127.0.0.1:1"}), &out, &errOut))
+	assert.Equal(t, 0, run([]string{"healthcheck"}, env(map[string]string{"ALICE_HEALTH_ADDR": strings.TrimPrefix(ok.URL, "http://")}), nil, &out, &errOut))
+	assert.Equal(t, 1, run([]string{"healthcheck"}, env(map[string]string{"ALICE_HEALTH_ADDR": strings.TrimPrefix(bad.URL, "http://")}), nil, &out, &errOut))
+	assert.Equal(t, 1, run([]string{"healthcheck"}, env(map[string]string{"ALICE_HEALTH_ADDR": "127.0.0.1:1"}), nil, &out, &errOut))
 }
 
 func TestDBStartupErrorMentionsWaitOnlyForUnreachable(t *testing.T) {

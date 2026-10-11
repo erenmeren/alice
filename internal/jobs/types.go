@@ -124,6 +124,17 @@ var (
 	SSHKeyDestroyRetired = Register("sshkey.destroy_retired", license.ClassReadOnly)
 )
 
+// Phase 8 periodic tasks (contract C1), all in every license state: the daily backup check (backup.schedule, every
+// 5 minutes), the renewal of the temporary HTTPS certificate (tls.renew, every 6 hours), audit forwarding
+// (audit.forward, every 15 seconds) and the scheduler's heartbeat that alice selfcheck reads (jobs.heartbeat, every
+// minute). The names are literals (the web's label guard reads literal Register calls).
+var (
+	BackupSchedule = Register("backup.schedule", license.ClassAlways)
+	TLSRenew       = Register("tls.renew", license.ClassAlways)
+	AuditForward   = Register("audit.forward", license.ClassAlways)
+	JobsHeartbeat  = Register("jobs.heartbeat", license.ClassAlways)
+)
+
 // Kind says who asks for a job (jobs.kind).
 type Kind string
 

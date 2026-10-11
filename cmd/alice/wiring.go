@@ -16,7 +16,8 @@ var shippedProviders = []providers.Kind{providers.KindLinuxSSH, providers.KindNg
 // type until it is listed here.
 var periodicTypes = []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
 	jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy,
-	jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.AlertsScan}
+	jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.AlertsScan,
+	jobs.BackupSchedule, jobs.TLSRenew, jobs.AuditForward, jobs.JobsHeartbeat}
 
 // checkWiring refuses to start a server that is not completely wired: a provider this build ships
 // is not registered, a queue job type has no handler on the runner (a queued job of that type is

@@ -31,7 +31,7 @@ func TestCLIUsageErrors(t *testing.T) {
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			assert.Equal(t, 2, run(args, env(nil), &out, &errOut))
+			assert.Equal(t, 2, run(args, env(nil), nil, &out, &errOut))
 			assert.Contains(t, errOut.String(), "usage: alice")
 			assert.Empty(t, out.String())
 		})
@@ -41,14 +41,14 @@ func TestCLIUsageErrors(t *testing.T) {
 func TestCLICommandsNeedDatabaseURL(t *testing.T) {
 	for _, args := range [][]string{{"setup-token", "--reset"}, {"audit", "verify"}, {"admin", "reset-mfa", "bob"}, {"admin", "unlock", "bob"}, {"license", "status"}} {
 		var out, errOut bytes.Buffer
-		assert.Equal(t, 1, run(args, env(nil), &out, &errOut), args)
+		assert.Equal(t, 1, run(args, env(nil), nil, &out, &errOut), args)
 		assert.Contains(t, errOut.String(), "ALICE_DATABASE_URL", args)
 	}
 }
 
 func TestHelpListsOperatorCommands(t *testing.T) {
 	var out, errOut bytes.Buffer
-	assert.Equal(t, 0, run([]string{"help"}, env(nil), &out, &errOut))
+	assert.Equal(t, 0, run([]string{"help"}, env(nil), nil, &out, &errOut))
 	for _, s := range []string{"setup-token --reset", "audit verify", "admin reset-mfa <username>", "admin unlock <username>"} {
 		assert.Contains(t, out.String(), s)
 	}
@@ -56,7 +56,7 @@ func TestHelpListsOperatorCommands(t *testing.T) {
 
 func TestLicenseKeysCommand(t *testing.T) {
 	var out, errOut bytes.Buffer
-	require.Equal(t, 0, run([]string{"license", "keys"}, env(nil), &out, &errOut))
+	require.Equal(t, 0, run([]string{"license", "keys"}, env(nil), nil, &out, &errOut))
 	keys := license.EmbeddedKeys()
 	if keys.Len() == 0 {
 		assert.Contains(t, out.String(), "No license verification key is embedded in this build")
@@ -66,6 +66,6 @@ func TestLicenseKeysCommand(t *testing.T) {
 		assert.Contains(t, out.String(), license.Fingerprint(k.Key))
 	}
 	assert.Equal(t, license.TestKeyTrusted, strings.Contains(out.String(), "WARNING: test build"))
-	assert.Equal(t, 2, run([]string{"license"}, env(nil), &out, &errOut))
-	assert.Equal(t, 2, run([]string{"license", "delete"}, env(nil), &out, &errOut))
+	assert.Equal(t, 2, run([]string{"license"}, env(nil), nil, &out, &errOut))
+	assert.Equal(t, 2, run([]string{"license", "delete"}, env(nil), nil, &out, &errOut))
 }

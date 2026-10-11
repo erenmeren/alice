@@ -40,7 +40,7 @@ func cliEnv(t *testing.T, d *pgtest.DB) func(string) string {
 func runCLI(t *testing.T, getenv func(string) string, args ...string) (int, string, string) {
 	t.Helper()
 	var out, errOut bytes.Buffer
-	code := run(args, getenv, &out, &errOut)
+	code := run(args, getenv, nil, &out, &errOut)
 	return code, out.String(), errOut.String()
 }
 

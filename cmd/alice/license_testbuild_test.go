@@ -18,7 +18,7 @@ import (
 func TestTestLicenseBuildIsMarkedAndWarns(t *testing.T) {
 	require.True(t, license.TestKeyTrusted)
 	var out, errOut bytes.Buffer
-	require.Equal(t, 0, run([]string{"version"}, env(nil), &out, &errOut))
+	require.Equal(t, 0, run([]string{"version"}, env(nil), nil, &out, &errOut))
 	assert.Contains(t, out.String(), "alice dev+testlicense (")
 	assert.Equal(t, "dev+testlicense", buildVersion().Version)
 

@@ -21,6 +21,7 @@ type testDeps struct {
 	Scheduler   *jobs.Scheduler
 	Sender      *notify.Sender
 	StateDir    string
+	BackupDir   string // /test/reset removes the backup files (Phase 8)
 	Log         *slog.Logger
 	ResetLimits func()
 	Inventory   *inventory.Service // the reset creates a new platform key
