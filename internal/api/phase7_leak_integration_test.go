@@ -3,6 +3,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"net/http"
@@ -213,7 +214,13 @@ func TestPhase7SecretsNeverLeak(t *testing.T) {
 		return x, r.Scan(&x.key, &x.e.WrappedDEK, &x.e.KeyVersion)
 	})
 	require.NoError(t, err)
-	require.Len(t, envs, 2, "the SMTP password and the one client secret are stored as envelopes")
+	require.Len(t, envs, 3, "the backup sender key (R43 row 41), the SMTP password and the one client secret are stored as envelopes")
+	sender, ok, err := s.keyring.GetSetting(ctx, s.db.Owner, "backup.sender")
+	require.NoError(t, err)
+	require.True(t, ok)
+	canaries = append(canaries, leakCanary{secretValue: secretValue{name: "backup sender key", forms: binaryForms(bytes.Clone(sender.Bytes()))[1:]},
+		bodyOK: never, headerOK: never})
+	sender.Zero()
 	for _, x := range envs {
 		dek := unwrapDEK(t, s.masterKey(), secrets.Location{Table: "setting_secrets", RowID: x.key, Column: "ciphertext"}, x.e)
 		canaries = append(canaries, leakCanary{secretValue: secretValue{name: "data key of " + x.key, forms: binaryForms(dek)[1:]},

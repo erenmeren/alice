@@ -21,6 +21,9 @@ import (
 // passphraseLock serializes concurrent attempts to set the recovery passphrase.
 const passphraseLock int64 = 7160927315633811301
 
+// keyBackupSender is the setting secret that holds the installation's backup sender private key (R43 row 41).
+const keyBackupSender = "backup.sender"
+
 // authorize repeats the route's settings.manage check (Administrator browser session with a
 // fresh step-up) in the service: the passphrase can be set only once and never reset, so a
 // routing mistake must not let anyone else set it.
@@ -33,7 +36,8 @@ func (s *Service) authorize(p auth.Principal) error {
 
 // SetRecoveryPassphrase generates the X25519 backup key pair and stores the private key
 // wrapped by the passphrase (R4, SEC-048). Neither the passphrase nor a key derived from it
-// is stored. The passphrase can be set only once.
+// is stored. In the same transaction it stores the installation's backup sender key as the
+// master-key envelope backup.sender (R43 row 41). The passphrase can be set only once.
 func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m auth.Meta, passphrase, confirm string) error {
 	if err := s.authorize(p); err != nil {
 		return err
@@ -55,10 +59,12 @@ func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m
 	} else if set {
 		return ErrPassphraseAlreadySet
 	}
-	wrapped, err := secrets.NewBackupKey([]byte(pass), s.kdf)
+	wrapped, sender, err := secrets.NewBackupKey([]byte(pass), s.kdf)
 	if err != nil {
 		return err
 	}
+	senderKey := sender.Bytes()
+	defer clear(senderKey) // best effort (R43 row 53): ecdh keeps its own copy
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", passphraseLock); err != nil {
 			return err
@@ -70,7 +76,11 @@ func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m
 		if set {
 			return ErrPassphraseAlreadySet
 		}
-		if err := settings.Set(ctx, tx, keyBackupKey, wrapped, s.clock.Now().UTC()); err != nil {
+		now := s.clock.Now().UTC()
+		if err := settings.Set(ctx, tx, keyBackupKey, wrapped, now); err != nil {
+			return err
+		}
+		if err := s.keyring.PutSetting(ctx, tx, keyBackupSender, secrets.NewPlaintext(senderKey), now); err != nil {
 			return err
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "setup.recovery_passphrase_set", ObjectType: "setting",

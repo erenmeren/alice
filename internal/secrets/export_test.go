@@ -15,3 +15,9 @@ func SetSyncDirForTest(f func(dir string) error) (restore func()) {
 	syncDir = f
 	return func() { syncDir = old }
 }
+
+// SealBackupKeyForTest wraps priv under Argon2id(passphrase) with the v2 AAD of pub and senderPub, exactly as
+// NewBackupKey does, but with any private key (TestUnwrapChecksThePublicKey).
+func SealBackupKeyForTest(passphrase []byte, p KDFParams, priv, pub, senderPub []byte) (WrappedBackupKey, error) {
+	return wrapBackupKey(passphrase, p, priv, pub, senderPub)
+}

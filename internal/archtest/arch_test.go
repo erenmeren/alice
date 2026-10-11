@@ -38,11 +38,11 @@ var rules = map[string][]string{
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
 	"alice/internal/inventory/...":                   {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/..."},
 	"alice/internal/jobs/...":                        {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
-	"alice/internal/setup/...":                       {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/..."},
+	"alice/internal/setup/...":                       {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
 		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/...",
-		"alice/internal/alerts/...", "alice/internal/reports/..."},
+		"alice/internal/alerts/...", "alice/internal/reports/...", "alice/internal/backup/..."},
 	// SSH key lifecycle (Phase 6). keymat and plan are pure: exact keys win over the subtree rule.
 	"alice/internal/sshkeys/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...",
 		"alice/internal/rbac/...", "alice/internal/providers", "alice/internal/inventory/..."},
@@ -54,6 +54,14 @@ var rules = map[string][]string{
 	"alice/internal/reports/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
 		"alice/internal/notify/...", "alice/internal/alerts/...", "alice/internal/jobs/...", "alice/internal/rbac/..."},
 	"alice/internal/auth/oidc/claims": {platform, "alice/internal/rbac/..."},
+	// Phase 8: the backup container is pure (io.Reader/io.Writer only, no file, socket or database); the dump
+	// knows no other Alice module; the backup module runs the dump, the container and the restore; the audit
+	// forwarder reads the audit log and nothing else.
+	"alice/internal/backup/format": {"alice/internal/secrets"},
+	"alice/internal/backup/dump":   {platform},
+	"alice/internal/backup/...": {platform, "alice/internal/audit/...", "alice/internal/secrets/...", "alice/internal/notify/...",
+		"alice/internal/license/...", "alice/migrations"},
+	"alice/internal/audit/forward": {platform, "alice/internal/audit"},
 	// Test helpers (build tag integration) start PostgreSQL and apply the embedded migrations.
 	"alice/internal/testutil/...": {platform, "alice/migrations"},
 }
@@ -72,6 +80,7 @@ var denied = map[string][]string{
 	"alice/internal/alerts/expiry":                   {"alice/internal/platform/db/..."},
 	"alice/internal/auth/oidc/claims":                {"alice/internal/platform/db/..."},
 	"alice/internal/platform/csvx":                   {"alice/internal/platform/db/..."},
+	"alice/internal/backup/format":                   {platform, "alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -84,6 +93,8 @@ var deniedStd = map[string][]string{
 	"alice/internal/alerts/expiry":    pureDenied,
 	"alice/internal/platform/csvx":    pureDenied,
 	"alice/internal/auth/oidc/claims": pureDeniedURL,
+	// Phase 8: the backup container works on io.Reader and io.Writer only.
+	"alice/internal/backup/format": pureDenied,
 }
 
 var pureDenied = []string{"os/...", "net", "net/http/...", "net/rpc/...", "net/smtp", "net/textproto", "net/url", "net/mail",
@@ -277,6 +288,28 @@ func TestAllowed(t *testing.T) {
 		{"notify to audit allowed", "alice/internal/notify", "alice/internal/audit", true},
 		{"notify to inventory denied", "alice/internal/notify", "alice/internal/inventory", false},
 		{"api to reports allowed", "alice/internal/api", "alice/internal/reports", true},
+		{"format to secrets allowed", "alice/internal/backup/format", "alice/internal/secrets", true},
+		{"format to platform/db denied", "alice/internal/backup/format", "alice/internal/platform/db", false},
+		{"format to platform/clock denied", "alice/internal/backup/format", "alice/internal/platform/clock", false},
+		{"format to audit denied", "alice/internal/backup/format", "alice/internal/audit", false},
+		{"format to os denied", "alice/internal/backup/format", "os", false},
+		{"format to net denied", "alice/internal/backup/format", "net", false},
+		{"format to crypto/hkdf allowed", "alice/internal/backup/format", "crypto/hkdf", true},
+		{"dump to platform/db allowed", "alice/internal/backup/dump", "alice/internal/platform/db", true},
+		{"dump to audit denied", "alice/internal/backup/dump", "alice/internal/audit", false},
+		{"dump to secrets denied", "alice/internal/backup/dump", "alice/internal/secrets", false},
+		{"backup to migrations allowed", "alice/internal/backup", "alice/migrations", true},
+		{"backup to format allowed", "alice/internal/backup", "alice/internal/backup/format", true},
+		{"backup to notify allowed", "alice/internal/backup", "alice/internal/notify", true},
+		{"backup to inventory denied", "alice/internal/backup", "alice/internal/inventory", false},
+		{"backup to api denied", "alice/internal/backup", "alice/internal/api", false},
+		{"forward to audit allowed", "alice/internal/audit/forward", "alice/internal/audit", true},
+		{"forward to platform/netaddr allowed", "alice/internal/audit/forward", "alice/internal/platform/netaddr", true},
+		{"forward to notify denied", "alice/internal/audit/forward", "alice/internal/notify", false},
+		{"forward to secrets denied", "alice/internal/audit/forward", "alice/internal/secrets", false},
+		{"api to backup allowed", "alice/internal/api", "alice/internal/backup", true},
+		{"api to format allowed", "alice/internal/api", "alice/internal/backup/format", true},
+		{"setup to notify allowed", "alice/internal/setup", "alice/internal/notify", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

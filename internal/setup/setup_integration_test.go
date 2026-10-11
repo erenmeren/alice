@@ -5,6 +5,8 @@ package setup_test
 import (
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +55,7 @@ type env struct {
 	auth    *auth.Service
 	setup   *setup.Service
 	license *stubLicense
+	keyring *secrets.Keyring
 }
 
 // stubLicense stands in for license.Service in the wizard tests. It records whether it was
@@ -79,7 +82,7 @@ func newEnv(t *testing.T) *env {
 	a := auth.NewService(auth.Config{Pool: d.App, Keyring: kr, Audit: log, Clock: clk, Hasher: h, RecoveryHasher: h})
 	lic := &stubLicense{}
 	s := setup.New(setup.Config{Pool: d.App, Auth: a, Keyring: kr, Audit: log, Clock: clk, Hasher: h, BackupKDF: fastKDF, License: lic})
-	return &env{ctx: context.Background(), clk: clk, db: d, auth: a, setup: s, license: lic}
+	return &env{ctx: context.Background(), clk: clk, db: d, auth: a, setup: s, license: lic, keyring: kr}
 }
 
 func (e *env) session(t *testing.T) string {
@@ -395,6 +398,63 @@ func TestConcurrentCreateAdminMakesExactlyOneAdministrator(t *testing.T) {
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM audit_log WHERE action = 'setup.admin_created'").Scan(&links))
 	assert.Equal(t, 1, users)
 	assert.Equal(t, 1, links)
+}
+
+// R43 row 41 (pre-flight S-2): the passphrase step also stores the installation's backup sender key as the setting
+// secret backup.sender, a master-key envelope, in the transaction that stores backup.key.
+func TestRecoveryPassphraseStoresTheSenderKey(t *testing.T) {
+	e := newEnv(t)
+	res, _ := e.createAdmin(t)
+	p, err := e.auth.Authenticate(e.ctx, res.Token)
+	require.NoError(t, err)
+	_, ok, err := e.keyring.GetSetting(e.ctx, e.db.Owner, "backup.sender")
+	require.NoError(t, err)
+	require.False(t, ok, "no sender key before the step")
+
+	require.NoError(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, passphrase, passphrase))
+	var w secrets.WrappedBackupKey
+	require.NoError(t, json.Unmarshal([]byte(e.settingRaw(t, "backup.key")), &w))
+	assert.Equal(t, 2, w.Version)
+
+	pt, ok, err := e.keyring.GetSetting(e.ctx, e.db.App, "backup.sender")
+	require.NoError(t, err)
+	require.True(t, ok)
+	senderBytes := bytes.Clone(pt.Bytes())
+	pt.Zero()
+	require.Len(t, senderBytes, 32)
+	sender, err := ecdh.X25519().NewPrivateKey(senderBytes)
+	require.NoError(t, err)
+	assert.Equal(t, w.SenderPublicKey, sender.PublicKey().Bytes(), "backup.sender is the private half of sender_public_key")
+	_, err = w.Unwrap([]byte(passphrase))
+	require.NoError(t, err)
+
+	type row struct {
+		ct, nonce, dek []byte
+		at             time.Time
+	}
+	read := func() (row, int) {
+		var r row
+		var n int
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM setting_secrets").Scan(&n))
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT ciphertext, nonce, wrapped_dek, updated_at FROM setting_secrets WHERE key = 'backup.sender'").
+			Scan(&r.ct, &r.nonce, &r.dek, &r.at))
+		return r, n
+	}
+	before, n := read()
+	assert.Equal(t, 1, n)
+	for _, col := range [][]byte{before.ct, before.nonce, before.dek, bytes.Join([][]byte{before.ct, before.nonce, before.dek}, nil)} {
+		assert.False(t, bytes.Contains(col, senderBytes), "the raw row never holds the sender key in clear")
+	}
+	assert.NotContains(t, e.settingRaw(t, "backup.key"), base64.StdEncoding.EncodeToString(senderBytes))
+
+	e.clk.Advance(time.Minute)
+	require.ErrorIs(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, passphrase, passphrase), setup.ErrPassphraseAlreadySet)
+	after, n := read()
+	assert.Equal(t, 1, n)
+	assert.Equal(t, before, after, "a second call writes nothing")
+	var events int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT count(*) FROM audit_log WHERE action = 'setup.recovery_passphrase_set'").Scan(&events))
+	assert.Equal(t, 1, events)
 }
 
 func TestPassphraseIsNormalized(t *testing.T) {

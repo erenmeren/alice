@@ -851,7 +851,7 @@ func TestMailSettingsOverTheWire(t *testing.T) {
 	rec = admin.do(http.MethodGet, "/api/v1/settings/smtp", nil)
 	requireStatus(t, admin.do(http.MethodDelete, "/api/v1/settings/smtp", nil, ifMatchOf(etagVersion(t, rec))), http.StatusNoContent)
 	assert.False(t, decodeBody[smtpView](t, admin.do(http.MethodGet, "/api/v1/settings/smtp", nil)).Configured)
-	assert.Equal(t, 0, s.countWhere("setting_secrets", "true"))
+	assert.Equal(t, 0, s.countWhere("setting_secrets", "key = 'notify.smtp.password'"), "the password is gone (backup.sender stays)")
 }
 
 // The recipient, threshold and general settings over the wire (F-61's recipient half is TestF61F63ScheduledSendsOverTheWire):
