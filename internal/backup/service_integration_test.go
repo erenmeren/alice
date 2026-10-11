@@ -10,6 +10,7 @@ import (
 	"crypto/ecdh"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -18,6 +19,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -877,6 +879,29 @@ func TestVerifyShallow(t *testing.T) {
 	require.ErrorIs(t, err, backup.ErrDamaged)
 	_, err = e.svc.VerifyDeep(e.ctx, cut, []byte(passphrase))
 	require.ErrorIs(t, err, backup.ErrDamaged)
+}
+
+// A backup whose header names a newer Alice is refused by the deep verification before any decryption, as by the
+// restore (C7, F-83): alicectl restore runs the deep verification first, so its answer must be the version sentence.
+// The header is rewritten without recomputing anything, so a decryption would only find damage.
+func TestVerifyDeepRefusesANewerVersionBeforeDecrypting(t *testing.T) {
+	e := newEnv(t, true)
+	info := e.create(backup.KindManual)
+	data, err := os.ReadFile(info.Path)
+	require.NoError(t, err)
+	n := int(binary.BigEndian.Uint32(data[10:14]))
+	js := regexp.MustCompile(`"alice_version":"[^"]*"`).ReplaceAll(data[14:14+n], []byte(`"alice_version":"9.0.0"`))
+	newer := binary.BigEndian.AppendUint32(append([]byte{}, data[:10]...), uint32(len(js))) //nolint:gosec // G115: a small header
+	newer = append(append(newer, js...), data[14+n:]...)
+	path := filepath.Join(t.TempDir(), "newer.alicebak")
+	require.NoError(t, os.WriteFile(path, newer, 0o600))
+
+	_, err = e.svc.VerifyDeep(e.ctx, path, []byte(passphrase))
+	var en *backup.ErrNewer
+	require.ErrorAs(t, err, &en)
+	assert.Equal(t, "9.0.0", en.Version)
+	_, err = e.svc.VerifyDeep(e.ctx, path, []byte("the wrong passphrase, long enough"))
+	require.ErrorAs(t, err, &en, "refused before the passphrase is tried")
 }
 
 func TestListNewestFirst(t *testing.T) {

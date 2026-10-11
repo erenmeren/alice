@@ -5,6 +5,7 @@
 package backup
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -724,7 +725,26 @@ func readChecksum(path, name string) ([]byte, error) {
 
 // VerifyDeep decrypts the whole file with the passphrase and checks the payload against its manifest. A wrong
 // passphrase or any damage is ErrDamaged (wrapping the cause); a file that is not a backup is format.ErrNotBackup and
-// a newer format format.ErrNewerFormat.
+// a newer format format.ErrNewerFormat. A header that names a newer Alice than this one is *ErrNewer before anything
+// is decrypted, as in the restore (C7, F-83): alicectl restore runs this check first.
 func (s *Service) VerifyDeep(_ context.Context, path string, passphrase []byte) (Manifest, error) {
+	if err := s.refuseNewerHeader(path); err != nil {
+		return Manifest{}, err
+	}
 	return readPayload(path, passphrase, nil)
+}
+
+// refuseNewerHeader returns *ErrNewer when the header of the file names a newer Alice version. Every other outcome,
+// a header that cannot be read included, is left to readPayload, which reports it.
+func (s *Service) refuseNewerHeader(path string) error {
+	f, err := os.Open(path) //nolint:gosec // G304: the path of a backup the operator named
+	if err != nil {
+		return nil //nolint:nilerr // readPayload opens the file again and reports the error
+	}
+	defer func() { _ = f.Close() }()
+	h, err := format.ReadHeader(bufio.NewReader(f))
+	if err == nil && newerVersion(h.AliceVersion, s.c.Version) {
+		return &ErrNewer{Version: h.AliceVersion}
+	}
+	return nil
 }

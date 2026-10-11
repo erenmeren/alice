@@ -271,6 +271,11 @@ func TestCLIRestoreMessages(t *testing.T) {
 		code, _, errOut := i.restore(pass, path, "--passphrase-stdin", "--confirm", "RESTORE", "--wait-for-sessions", "0s")
 		assert.Equal(t, 1, code)
 		assert.Equal(t, "This backup was created by a newer Alice version (9.9.9). Install Alice 9.9.9 or newer, then restore.\n", errOut)
+		// The deep verification, which alicectl restore runs first, gives the same answer before it decrypts anything.
+		code, out, errOut := i.run(pass, "backup", "verify", path, "--deep", "--passphrase-stdin")
+		assert.Equal(t, 1, code)
+		assert.Empty(t, out)
+		assert.Equal(t, "This backup was created by a newer Alice version (9.9.9). Install Alice 9.9.9 or newer, then restore.\n", errOut)
 	})
 	t.Run("damaged", func(t *testing.T) {
 		i := newCLIInstall(t)

@@ -223,12 +223,17 @@ func runBackupVerify(args []string, cfg config.Config, stdin io.Reader, stdout, 
 	}
 	defer clear(pass)
 	m, err := svc.VerifyDeep(context.Background(), file, pass)
+	var newer *backup.ErrNewer
 	switch {
 	case errors.Is(err, format.ErrNotBackup):
 		fmt.Fprintln(stderr, msgNotBackup)
 		return 1
 	case errors.Is(err, format.ErrNewerFormat):
 		fmt.Fprintln(stderr, msgNewerUnknown)
+		return 1
+	case errors.As(err, &newer):
+		msg, _ := restoreError(err) // the restore's C7 sentence, with the version
+		fmt.Fprintln(stderr, msg)
 		return 1
 	case errors.Is(err, backup.ErrDamaged):
 		fmt.Fprintln(stderr, msgDamaged)
