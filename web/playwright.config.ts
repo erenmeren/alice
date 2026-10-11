@@ -26,7 +26,8 @@ export default defineConfig({
   // make e2e runs Chromium only (--project=chromium); make e2e-browsers runs every spec on all three
   // (nightly and release, spec §22.7; WebKit needs its system libraries: npx playwright install --with-deps).
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
+    // The fake identity provider's name maps to its loopback port (e2e/phase7.spec.ts; Firefox and WebKit route it there).
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: ['--host-resolver-rules=MAP idp.alice-e2e.test 127.0.0.1'] } } },
     { name: 'firefox', use: { ...devices['Desktop Firefox'] } },
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },
   ],

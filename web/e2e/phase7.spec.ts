@@ -1,4 +1,4 @@
-import type { APIRequestContext, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, BrowserContext, Locator, Page } from '@playwright/test';
 import {
   ADMIN,
   COPY,
@@ -68,10 +68,38 @@ test.use({
   video: 'off',
   screenshot: 'off',
   ignoreHTTPSErrors: true,
-  // The fake identity provider is https://idp.alice-e2e.test:9444 for Alice (a network alias) and for the browser:
-  // Chromium maps the name to the loopback port compose publishes (never /etc/hosts); nothing else resolves it.
-  launchOptions: { args: ['--host-resolver-rules=MAP idp.alice-e2e.test 127.0.0.1'] },
 });
+// The fake identity provider is https://idp.alice-e2e.test:9444 for Alice (a network alias) and for the browser, where
+// nothing resolves the name (never /etc/hosts). Chromium maps it to the loopback port compose publishes
+// (--host-resolver-rules, set on the chromium project in playwright.config.ts). Firefox and WebKit have no such switch:
+// their requests to that address are sent by Playwright to the same loopback port and answered with the provider's own
+// response (redirects not followed, so the browser follows them as from the provider); a provider that is down is a
+// refused connection, as in Chromium. WebKit cannot be handed a redirect (route.fulfill refuses a 3xx there): it gets a
+// page that goes to the same address at once (a meta refresh, a top-level navigation from the provider's origin).
+const IDP_ORIGIN = 'https://idp.alice-e2e.test:9444';
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+async function routeIdp(context: BrowserContext, redirectByPage: boolean): Promise<void> {
+  await context.route((url) => url.origin === IDP_ORIGIN, async (route) => {
+    const url = IDP_ORIGIN.replace('idp.alice-e2e.test', '127.0.0.1') + route.request().url().slice(IDP_ORIGIN.length);
+    let response;
+    try {
+      response = await route.fetch({ url, maxRedirects: 0 });
+    } catch {
+      await route.abort('connectionrefused');
+      return;
+    }
+    const location = response.headers()['location'];
+    if (redirectByPage && response.status() >= 300 && response.status() < 400 && location) {
+      const target = escapeHtml(new URL(location, route.request().url()).toString());
+      await route.fulfill({ status: 200, contentType: 'text/html', body: `<!doctype html><meta http-equiv="refresh" content="0;url=${target}"><title>redirect</title>` });
+      return;
+    }
+    await route.fulfill({ response });
+  });
+}
+
 let copyPrompt: string | undefined;
 test.beforeAll(() => {
   copyPrompt = process.env.PLAYWRIGHT_NO_COPY_PROMPT;
@@ -207,7 +235,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
 
   test.describe(`Phase 7 alerts, dashboard and SSO (${lang})`, () => {
     test.use({ locale: browserLocale(lang), actionTimeout: 30_000 });
-    test.beforeEach(async ({ request }) => {
+    test.beforeEach(async ({ request, context, browserName }) => {
+      if (browserName !== 'chromium') await routeIdp(context, browserName === 'webkit');
       await resetInstall(request);
       smtpCtl('up');
       smtpCtl('reject', '');
