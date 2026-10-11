@@ -119,7 +119,7 @@ func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
 		"migrations/00001_init.sql":                        "-- +goose Up\n",
 		"migrations/00012_phase8.sql":                      "-- +goose Up\n",
 		"bin/THIRD_PARTY_NOTICES.md":                       "# Notices\n",
-		"bin/release-gates.log":                            "lint\t0\tgolangci-lint v2.14.0\ntest\t0\tgo1.27.2\n",
+		"bin/release-gates.log":                            "commit\t" + testCommit + "\nlint\t0\tgolangci-lint v2.14.0\ntest\t0\tgo1.27.2\n",
 		"bin/sbom/alice-1.0.0.cdx.json":                    "{}\n",
 		"bin/sbom/postgres-1.0.0.cdx.json":                 "{}\n",
 		"bin/sbom/source-1.0.0.cdx.json":                   "{}\n",
@@ -216,6 +216,7 @@ func TestStageLayout(t *testing.T) {
 
 	checklist := readFile(t, filepath.Join(pkg, "RELEASE-CHECKLIST-SIGNED.txt"))
 	assert.Contains(t, checklist, "Commit: "+testCommit)
+	assert.Contains(t, checklist, "Gates recorded by make release-gates on commit "+testCommit+":\n")
 	assert.Contains(t, checklist, "lint: exit 0 (golangci-lint v2.14.0)")
 	assert.Contains(t, checklist, "test: exit 0 (go1.27.2)")
 	assert.Contains(t, checklist, "\nSigned: <empty until the vendor signs the checklist>\n")
@@ -330,6 +331,13 @@ func TestStageRefusesAMissingInput(t *testing.T) {
 			require.NoError(t, os.RemoveAll(filepath.Join(cfg.Root, "migrations")))
 		},
 		"bad image name": func(_ *testing.T, cfg *stageConfig) { cfg.AliceImage = "Alice Image" },
+		"stale gates log": func(t *testing.T, cfg *stageConfig) {
+			write(t, cfg.GatesLog, "commit\t"+strings.Repeat("f", 40)+"\nlint\t0\tv2\n", 0o644)
+		},
+		"gates log without commit": func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint\t0\tv2\n", 0o644) },
+		"gates log with only a commit": func(t *testing.T, cfg *stageConfig) {
+			write(t, cfg.GatesLog, "commit\t"+testCommit+"\n", 0o644)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, _ := fixture(t)
@@ -361,13 +369,24 @@ func TestStageDraftPlaceholders(t *testing.T) {
 	assert.Contains(t, checklist, "Signed: <empty until the vendor signs the checklist>\n")
 	assert.NotContains(t, checklist, "exit 0")
 
-	// A draft stage still copies a gates log when there is one, and never claims more.
+	// A draft stage still copies a gates log when there is one, and never claims more: it names
+	// the commit the gates ran on, which may differ from the package's.
 	cfg2 := draftFixture(t)
-	write(t, cfg2.GatesLog, "lint\t0\tv2\n", 0o644)
+	other := strings.Repeat("f", 40)
+	write(t, cfg2.GatesLog, "commit\t"+other+"\nlint\t0\tv2\n", 0o644)
 	require.NoError(t, stage(cfg2, &fakeImages{}))
 	checklist = readFile(t, filepath.Join(cfg2.Out, "alice", "RELEASE-CHECKLIST-SIGNED.txt"))
+	assert.Contains(t, checklist, "Commit: "+testCommit+"\n")
+	assert.Contains(t, checklist, "Gates recorded by make release-gates on commit "+other+":\n")
 	assert.Contains(t, checklist, "lint: exit 0 (v2)")
 	assert.NotContains(t, checklist, "test: exit")
+
+	// A draft with a log that names no commit says so.
+	cfg3 := draftFixture(t)
+	write(t, cfg3.GatesLog, "lint\t0\tv2\n", 0o644)
+	require.NoError(t, stage(cfg3, &fakeImages{}))
+	checklist = readFile(t, filepath.Join(cfg3.Out, "alice", "RELEASE-CHECKLIST-SIGNED.txt"))
+	assert.Contains(t, checklist, "Gates recorded by make release-gates on an unrecorded commit:\n")
 }
 
 // draftFixture is the fixture as make release-test stages it: -test -allow-draft, a release
@@ -725,6 +744,20 @@ func TestReleaseChecksTheShippedImage(t *testing.T) {
 	assert.Less(t, build, check)
 	assert.Less(t, check, stageAt)
 	assert.Contains(t, out, "HELPER_SHA256_AMD64=")
+}
+
+// I-5: the gates log names the commit its gates ran on (first line "commit\t<40 hex>"); the
+// production stage refuses a log of another commit.
+func TestStageRefusesAStaleGatesLog(t *testing.T) {
+	cfg, _ := fixture(t)
+	other := strings.Repeat("f", 40)
+	write(t, cfg.GatesLog, "commit\t"+other+"\nlint\t0\tv2\n", 0o644)
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "the gates log "+cfg.GatesLog+" was recorded on commit "+other+", not "+testCommit)
+	write(t, cfg.GatesLog, "lint\t0\tv2\n", 0o644)
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "does not start with the line commit")
+	write(t, cfg.GatesLog, "commit\tabc\nlint\t0\tv2\n", 0o644)
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "does not start with the line commit")
+	assert.NoDirExists(t, cfg.Out)
 }
 
 // I-3: -allow-draft (placeholders, failing gates accepted) only for a test package; a draft

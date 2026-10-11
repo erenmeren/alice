@@ -461,8 +461,10 @@ func docEntries(cfg stageConfig) ([]entry, error) {
 	return out, nil
 }
 
-// checklistFile writes RELEASE-CHECKLIST-SIGNED.txt from the gates log of make release-gates (one
-// line "<gate>\t<exit status>\t<tool version>" per gate). It never claims a gate that did not run.
+// checklistFile writes RELEASE-CHECKLIST-SIGNED.txt from the gates log of make release-gates: a
+// first line "commit\t<40 hex>" naming the commit the gates ran on (Task 12 review I-5), then one
+// line "<gate>\t<exit status>\t<tool version>" per gate. It never claims a gate that did not run:
+// the production stage refuses a log of another commit; a draft keeps it and names that commit.
 func checklistFile(cfg stageConfig) ([]byte, error) {
 	var b bytes.Buffer
 	fmt.Fprintf(&b, "Alice %s release checklist\nCommit: %s\n", cfg.Version, cfg.Commit)
@@ -476,13 +478,28 @@ func checklistFile(cfg stageConfig) ([]byte, error) {
 			lines = append(lines, l)
 		}
 	}
+	gatesCommit := ""
+	if len(lines) > 0 {
+		if c, ok := strings.CutPrefix(lines[0], "commit\t"); ok && commitRe.MatchString(c) {
+			gatesCommit, lines = c, lines[1:]
+		} else if !cfg.AllowDraft {
+			return nil, fmt.Errorf("the gates log %q does not start with the line commit\\t<40 hex>; run make release-gates again", cfg.GatesLog)
+		}
+	}
+	if gatesCommit != "" && gatesCommit != cfg.Commit && !cfg.AllowDraft {
+		return nil, fmt.Errorf("the gates log %s was recorded on commit %s, not %s; run make release-gates on this commit", cfg.GatesLog, gatesCommit, cfg.Commit)
+	}
 	if len(lines) == 0 {
 		if !cfg.AllowDraft {
 			return nil, fmt.Errorf("the gates log %q is missing or empty; run make release-gates before make release", cfg.GatesLog)
 		}
 		b.WriteString("No gate was recorded for this package.\n")
 	} else {
-		b.WriteString("Gates recorded by make release-gates:\n")
+		if gatesCommit == "" {
+			b.WriteString("Gates recorded by make release-gates on an unrecorded commit:\n")
+		} else {
+			fmt.Fprintf(&b, "Gates recorded by make release-gates on commit %s:\n", gatesCommit)
+		}
 		for _, l := range lines {
 			f := strings.Split(l, "\t")
 			if len(f) != 3 || f[0] == "" {

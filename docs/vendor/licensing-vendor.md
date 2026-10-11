@@ -235,8 +235,9 @@ release commands refuse a license key ("this key is for another purpose").
 ### Signing ceremony (every release)
 
 1. On the release build machine, from the signed tag: run every release gate of the release checklist (their
-   results are recorded in `bin/release-gates.log`, which becomes `RELEASE-CHECKLIST-SIGNED.txt` in the package),
-   then `make release VERSION=x.y.z`. Only a stage built this way is signed; a stage built by CI is only compared with it (`make reproducible-check`
+   results are recorded in `bin/release-gates.log`, which becomes `RELEASE-CHECKLIST-SIGNED.txt` in the package;
+   the log names the commit the gates ran on, and `make release` refuses a log of another commit), then
+   `make release VERSION=x.y.z`. Only a stage built this way is signed; a stage built by CI is only compared with it (`make reproducible-check`
    compares the binaries) and is never signed (S-26).
 2. Copy `bin/release/alice-x.y.z/alice/SHA256SUMS` to the offline machine on a clean USB stick and run:
 
