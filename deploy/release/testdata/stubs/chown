@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Test stub: records the call and changes nothing (the tests do not run as root).
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record chown "$@"

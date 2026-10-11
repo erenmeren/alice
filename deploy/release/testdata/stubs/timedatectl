@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Test stub: STUB_NTP (yes, no, missing) answers NTPSynchronized; STUB_TZ answers Timezone.
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record timedatectl "$@"
+if [[ "${STUB_NTP:-yes}" == missing ]]; then
+  echo "System has not been booted with systemd as init system (PID 1). Can't operate." >&2
+  exit 1
+fi
+case "$*" in
+  *NTPSynchronized*) printf '%s\n' "${STUB_NTP:-yes}" ;;
+  *Timezone*) printf '%s\n' "${STUB_TZ:-UTC}" ;;
+  *) echo "timedatectl stub: unexpected arguments" >&2; exit 1 ;;
+esac

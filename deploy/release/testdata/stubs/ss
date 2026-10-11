@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Test stub: STUB_PORT_BUSY=<process name> prints one listener (pid 812) on the asked port.
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record ss "$@"
+if [[ -n "${STUB_PORT_BUSY:-}" ]]; then
+  printf 'LISTEN 0      511          0.0.0.0:443        0.0.0.0:*    users:(("%s",pid=812,fd=6))\n' "$STUB_PORT_BUSY"
+fi

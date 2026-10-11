@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Test stub for "stat -c FORMAT [-L] [--] PATH" (the scripts' only form): the tests do not run as
+# root and live below /tmp, so the owner and mode of STUB_STAT_TRUST and of its ancestors are
+# reported as root and 755; /var/run/docker.sock is reported with STUB_SOCK_MODE. Every other path
+# gets the real answer.
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record stat "$@"
+format="" path=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    -c) i=$((i + 1)); format=${args[i]} ;;
+    -L | --) ;;
+    *) path=${args[i]} ;;
+  esac
+done
+fake() {
+  local out=$format
+  out=${out//%a/$1}
+  out=${out//%u/0}
+  out=${out//%g/0}
+  printf '%s\n' "$out"
+}
+if [[ "$path" == /var/run/docker.sock && -n "${STUB_SOCK_MODE:-}" ]]; then
+  fake "$STUB_SOCK_MODE"
+  exit 0
+fi
+trust=${STUB_STAT_TRUST:-}
+if [[ -n "$trust" && ( "$path" == / || "$path" == "$trust" || "$trust" == "$path"/* ) ]]; then
+  fake 755
+  exit 0
+fi
+stub_real stat "$@"

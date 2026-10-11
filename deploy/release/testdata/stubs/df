@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Test stub: "--output=avail" prints STUB_DISK_GB GiB in bytes (with -B1); anything else a fixed table.
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record df "$@"
+case " $* " in
+  *" --output=avail "*)
+    printf 'Avail\n%s\n' "$(( ${STUB_DISK_GB:-100} * 1024 * 1024 * 1024 ))" ;;
+  *)
+    printf 'Filesystem      Size  Used Avail Use%% Mounted on\n/dev/stub       200G  100G  100G  50%% /\n' ;;
+esac

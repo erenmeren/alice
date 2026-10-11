@@ -1,0 +1,315 @@
+#!/usr/bin/env bash
+# alicectl: the operator wrapper of an installation (C4, C6). It lives in the installation
+# directory and runs the alice binary in the alice container (docker compose exec) while Alice
+# runs, else in a one-shot alice-admin container (docker compose run --rm). Exit codes: 0 success,
+# 1 failure, 2 usage.
+#
+# A backup FILE must resolve inside <dir>/backups (realpath plus a prefix check, S-8); the wrapper
+# passes the container path /opt/alice/backups/<name>. A passphrase is read once (from
+# --passphrase-file, from standard input with --passphrase-stdin, or from the terminal) and given
+# to the container on standard input only (S-25). Nothing of this script is written to a log.
+set -Eeuo pipefail
+umask 077
+export LC_ALL=C
+
+here=$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=lib/alice-lib.sh
+. "$here/lib/alice-lib.sh"
+
+dir=$here
+container_backups=/opt/alice/backups
+container_path=""
+restore_mode=0
+support_tmp=""
+
+usage() {
+  cat <<'USAGE'
+Usage: sudo ./alicectl <command> [arguments]
+
+  backup [--out FILE] [--reason TEXT]       write a backup now
+  backup list                               list the backups
+  backup verify FILE [--deep] [--passphrase-file FILE]
+                                            check a backup (--deep: open it with the passphrase)
+  restore FILE [--db-only] [--passphrase-file FILE] [--confirm RESTORE]
+               [--accept-broken-audit-log] [--no-safety-backup]
+                                            replace all data with a backup
+  selfcheck                                 check the running installation
+  audit verify                              verify the audit log chain
+  setup-token --reset                       print a new one-time setup code
+  support-bundle [--out FILE]               write a support bundle (no secrets)
+  help                                      show this text
+
+A backup FILE must be in the backups directory of this installation.
+USAGE
+}
+
+usage_error() {
+  printf '%s\n' "$1" >&2
+  printf 'Run ./alicectl help for the commands.\n' >&2
+  exit 2
+}
+
+# run_alice ARGS... runs the alice binary: exec in the running container, else alice-admin.
+run_alice() {
+  local -a tty=(-T)
+  if [[ -t 0 && -t 1 ]]; then tty=(); fi
+  if alice_running; then
+    alice_compose exec "${tty[@]}" alice /usr/local/bin/alice "$@"
+  else
+    alice_compose run --pull never --rm "${tty[@]}" alice-admin "$@"
+  fi
+}
+
+# run_alice_pass ARGS... runs the alice binary with the passphrase on standard input.
+run_alice_pass() {
+  printf '%s\n' "$alice_pass" | run_alice "$@"
+}
+
+# resolve_backup FILE sets container_path, or exits 2 when FILE is not inside <dir>/backups.
+resolve_backup() {
+  local base real rel name
+  base=$(realpath -e -- "$dir/backups" 2>/dev/null) || base=""
+  real=$(realpath -e -- "$1" 2>/dev/null) || real=""
+  rel=${real#"$base"/}
+  name=${real##*/}
+  if [[ -z "$base" || -z "$real" || "$real" != "$base"/* || "$rel" == */* || ! "$name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    printf 'The backup file must be in %s/backups. Copy it there first.\n' "$dir"
+    exit 2
+  fi
+  container_path="$container_backups/$name"
+}
+
+# get_passphrase FILE STDIN reads the passphrase into alice_pass.
+get_passphrase() {
+  local file=$1 from_stdin=$2 rc
+  if [[ -n "$file" ]]; then
+    rc=0
+    alice_read_passphrase_file "$file" || rc=$?
+    if ((rc != 0)); then exit 2; fi
+  elif ((from_stdin == 1)); then
+    IFS= read -r alice_pass || true
+  elif [[ -t 0 ]]; then
+    IFS= read -r -s -p "Recovery passphrase: " alice_pass </dev/tty || true
+    printf '\n' >&2
+  else
+    printf 'A passphrase is needed. Run this command in a terminal, or pass --passphrase-file to alicectl.\n'
+    exit 2
+  fi
+  if [[ -z "$alice_pass" ]]; then
+    printf 'A passphrase is needed. Run this command in a terminal, or pass --passphrase-file to alicectl.\n'
+    exit 2
+  fi
+}
+
+cmd_backup() {
+  local -a args=()
+  while (($# > 0)); do
+    case "$1" in
+      --out | --reason)
+        (($# >= 2)) || usage_error "$1 needs a value."
+        args+=("$1" "$2")
+        shift 2
+        ;;
+      *) usage_error "Unknown option of backup: $1" ;;
+    esac
+  done
+  run_alice backup "${args[@]}"
+}
+
+cmd_verify() {
+  local file="" deep=0 pfile="" pstdin=0
+  while (($# > 0)); do
+    case "$1" in
+      --deep) deep=1; shift ;;
+      --passphrase-stdin) pstdin=1; shift ;;
+      --passphrase-file)
+        (($# >= 2)) || usage_error "$1 needs a value."
+        pfile=$2
+        shift 2
+        ;;
+      -*) usage_error "Unknown option of backup verify: $1" ;;
+      *)
+        [[ -z "$file" ]] || usage_error "backup verify takes one FILE."
+        file=$1
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$file" ]] || usage_error "backup verify needs a FILE."
+  resolve_backup "$file"
+  if ((deep == 0)); then
+    run_alice backup verify "$container_path"
+    return
+  fi
+  get_passphrase "$pfile" "$pstdin"
+  run_alice_pass backup verify "$container_path" --deep --passphrase-stdin
+}
+
+# restart_after_restore always starts Alice again and runs the selfcheck after a restore (S-16),
+# whether the restore succeeded or failed.
+restart_after_restore() {
+  local rc=$?
+  trap - EXIT
+  trap '' INT TERM
+  alice_pass=""
+  if ! alice_wait_healthy alice; then
+    printf 'Alice could not be started again. Run: cd %s && sudo docker compose logs alice\n' "$dir" >&2
+    rc=1
+  elif ! run_alice selfcheck </dev/null; then
+    rc=1
+  fi
+  if ((rc != 0)); then rc=1; fi
+  exit "$rc"
+}
+
+cmd_restore() {
+  local file="" pfile="" pstdin=0 avail rc=0
+  local -a pass=()
+  while (($# > 0)); do
+    case "$1" in
+      --db-only | --accept-broken-audit-log | --no-safety-backup)
+        pass+=("$1")
+        shift
+        ;;
+      --confirm)
+        (($# >= 2)) || usage_error "$1 needs a value."
+        pass+=("$1" "$2")
+        shift 2
+        ;;
+      --passphrase-file)
+        (($# >= 2)) || usage_error "$1 needs a value."
+        pfile=$2
+        shift 2
+        ;;
+      --passphrase-stdin) pstdin=1; shift ;;
+      -*) usage_error "Unknown option of restore: $1" ;;
+      *)
+        [[ -z "$file" ]] || usage_error "restore takes one FILE."
+        file=$1
+        shift
+        ;;
+    esac
+  done
+  [[ -n "$file" ]] || usage_error "restore needs a FILE."
+  resolve_backup "$file"
+  get_passphrase "$pfile" "$pstdin"
+  if [[ -f "$dir/.restore-mode" ]]; then restore_mode=1; fi
+
+  # 1. Open the whole file with the passphrase while Alice keeps running (S-16).
+  run_alice_pass backup verify "$container_path" --deep --passphrase-stdin || exit 1
+
+  # 2. The free space of the database directory (S-22); df reads no file there.
+  avail=$(df -B1 --output=avail -- "$dir/data/postgres" 2>/dev/null | tail -n 1 | tr -d ' ') || avail=0
+  [[ "$avail" =~ ^[0-9]+$ ]] || avail=0
+
+  # 3. Stop Alice, end leftover sessions (M-4), restore; Alice is started again in every case
+  #    (in restore mode only after a successful restore: there was no Alice before).
+  if ((restore_mode == 0)); then
+    trap 'restart_after_restore' EXIT
+    trap 'exit 1' INT TERM
+  fi
+  alice_compose stop alice
+  if ! alice_terminate_leftover_sessions >/dev/null; then
+    printf '[WARN] Leftover database sessions could not be ended; the restore waits for them.\n' >&2
+  fi
+  printf '%s\n' "$alice_pass" | alice_compose run --pull never --rm -T alice-admin restore "$container_path" \
+    "${pass[@]}" --free-bytes "$avail" --passphrase-stdin || rc=$?
+  alice_pass=""
+  if ((restore_mode == 1)); then
+    if ((rc != 0)); then exit 1; fi
+    rm -f -- "$dir/.restore-mode"
+    alice_wait_healthy alice || exit 1
+    run_alice selfcheck </dev/null || exit 1
+    exit 0
+  fi
+  if ((rc != 0)); then exit 1; fi
+  exit 0
+}
+
+cmd_support_bundle() {
+  local out="" tmp b ts
+  while (($# > 0)); do
+    case "$1" in
+      --out)
+        (($# >= 2)) || usage_error "$1 needs a value."
+        out=$2
+        shift 2
+        ;;
+      *) usage_error "Unknown option of support-bundle: $1" ;;
+    esac
+  done
+  ts=$(date -u +%Y%m%dT%H%M%SZ)
+  if [[ -z "$out" ]]; then out="$dir/support-bundle-$ts.tar.gz"; fi
+  if [[ -e "$out" || -L "$out" ]]; then
+    printf 'The file %s already exists.\n' "$out"
+    exit 2
+  fi
+  tmp=$(mktemp -d -- "$dir/.support-XXXXXX")
+  support_tmp=$tmp
+  trap 'rm -rf -- "$support_tmp"' EXIT
+  b="$tmp/bundle"
+  mkdir -m 0700 -- "$b"
+  alice_compose ps >"$b/ps.txt" 2>&1 || true
+  alice_compose logs --no-color --tail 2000 alice >"$b/logs-alice.txt" 2>&1 || true
+  alice_compose logs --no-color --tail 2000 postgres >"$b/logs-postgres.txt" 2>&1 || true
+  run_alice support-bundle </dev/null >"$b/bundle.json" 2>/dev/null || true
+  alice_docker version >"$b/docker-version.txt" 2>&1 || true
+  df -h >"$b/df.txt" 2>&1 || true
+  grep -Ev '^[^=]*(PASSWORD|SECRET|KEY)[^=]*=' -- "$dir/.env" >"$b/env.txt" 2>/dev/null || true
+  tar -C "$b" -czf "$tmp/bundle.tar.gz" .
+  install -m 0600 -- "$tmp/bundle.tar.gz" "$out"
+  printf 'Support bundle written: %s\n' "$out"
+}
+
+main() {
+  local cmd=${1:-help}
+  if (($# > 0)); then shift; fi
+  if [[ "$cmd" == help || "$cmd" == -h || "$cmd" == --help ]]; then
+    usage
+    exit 0
+  fi
+  if [[ ! -f "$dir/docker-compose.yml" || ! -f "$dir/.env" ]]; then
+    printf 'No installation of Alice was found in %s.\n' "$dir" >&2
+    exit 1
+  fi
+  alice_dir=$dir
+  alice_project=$(alice_env_get COMPOSE_PROJECT_NAME "$dir/.env")
+  alice_valid_project "$alice_project" || {
+    printf 'The project name in %s/.env is not valid.\n' "$dir" >&2
+    exit 1
+  }
+  case "$cmd" in
+    backup)
+      case "${1:-}" in
+        list)
+          shift
+          (($# == 0)) || usage_error "backup list takes no arguments."
+          run_alice backup list
+          ;;
+        verify)
+          shift
+          cmd_verify "$@"
+          ;;
+        *) cmd_backup "$@" ;;
+      esac
+      ;;
+    restore) cmd_restore "$@" ;;
+    selfcheck)
+      (($# == 0)) || usage_error "selfcheck takes no arguments."
+      run_alice selfcheck
+      ;;
+    audit)
+      [[ "$*" == verify ]] || usage_error "Usage: alicectl audit verify"
+      run_alice audit verify
+      ;;
+    setup-token)
+      [[ "$*" == --reset ]] || usage_error "Usage: alicectl setup-token --reset"
+      # Printed to the terminal only; never written to a log (S-4).
+      run_alice setup-token --reset
+      ;;
+    support-bundle) cmd_support_bundle "$@" ;;
+    *) usage_error "Unknown command: $cmd" ;;
+  esac
+}
+
+main "$@"

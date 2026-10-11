@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# Test stub of docker and docker compose. Settings (stub.env, see stub-common.sh):
+#   STUB_DOCKER          missing, down, old, nocompose or ok (default)
+#   STUB_DOCKER_VERSION  the server version printed when ok (default 27.3.1)
+#   STUB_IMAGE_IDS       "ref=id ref=id": what "docker image inspect --format {{.Id}} ref" prints
+#   STUB_COMPOSE_FAIL    "words;words": a compose call whose arguments contain these words in this
+#                        order fails (for example "run migrate" or "alice-admin restore")
+#   STUB_FAIL_OUTPUT     what such a failing call prints
+#   STUB_SLEEP           "words": a compose call matching these words sleeps STUB_SLEEP_SECS first
+#   STUB_RUNNING         the services running at the start ("postgres alice"); kept in the file
+#                        "running" next to the stubs and changed by up, stop and down
+#   STUB_DB_BYTES        what the pg_database_size query prints
+#   STUB_BACKUP_NAME     the file name a backup call reports (and creates in <inst>/backups)
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record docker "$@"
+
+mode=${STUB_DOCKER:-ok}
+if [[ "$mode" == missing ]]; then
+  echo "docker: command not found" >&2
+  exit 127
+fi
+
+# words_match "a b c" args...: the words occur in the arguments in this order.
+words_match() {
+  local -a want
+  read -r -a want <<<"$1"
+  shift
+  local i=0 a
+  for a in "$@"; do
+    if [[ $i -lt ${#want[@]} && "$a" == "${want[i]}" ]]; then i=$((i + 1)); fi
+  done
+  [[ ${#want[@]} -gt 0 && $i -eq ${#want[@]} ]]
+}
+
+running_file="$stub_dir/running"
+if [[ ! -f "$running_file" ]]; then
+  read -r -a initial <<<"${STUB_RUNNING-postgres alice}"
+  printf '%s\n' "${initial[@]}" >"$running_file"
+fi
+set_running() { # add|remove service...
+  local op=$1 s
+  shift
+  for s in "$@"; do
+    grep -vx -- "$s" "$running_file" >"$running_file.new" || true
+    mv "$running_file.new" "$running_file"
+    if [[ "$op" == add ]]; then printf '%s\n' "$s" >>"$running_file"; fi
+  done
+}
+
+case "${1:-}" in
+  version)
+    if [[ "$mode" == down ]]; then
+      echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+      exit 1
+    fi
+    if [[ "$*" == *"{{.Server.Version}}"* ]]; then
+      if [[ "$mode" == old ]]; then echo "20.10.24"; else printf '%s\n' "${STUB_DOCKER_VERSION:-27.3.1}"; fi
+    else
+      printf 'Client: Docker Engine - stub\nServer: Docker Engine - stub %s\n' "${STUB_DOCKER_VERSION:-27.3.1}"
+    fi
+    exit 0
+    ;;
+  info) exit 0 ;;
+  load) echo "Loaded image: stub"; exit 0 ;;
+  image)
+    ref=${*: -1}
+    for pair in ${STUB_IMAGE_IDS:-}; do
+      if [[ "${pair%%=*}" == "$ref" ]]; then printf '%s\n' "${pair#*=}"; exit 0; fi
+    done
+    echo "Error: No such image: $ref" >&2
+    exit 1
+    ;;
+  compose) ;;
+  *) echo "docker stub: unexpected command $1" >&2; exit 1 ;;
+esac
+
+# docker compose [--project-name P] [-f F] [--env-file E] SUB ...
+shift
+compose_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project-name | -p | --env-file) shift 2 ;;
+    -f) compose_file=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
+if [[ "${1:-}" == version ]]; then
+  if [[ "$mode" == nocompose ]]; then
+    echo "docker: 'compose' is not a docker command." >&2
+    exit 1
+  fi
+  echo "2.29.7"
+  exit 0
+fi
+inst=$(dirname "${compose_file:-/nonexistent/x}")
+
+if [[ " $* " == *" --passphrase-stdin "* ]]; then stub_record_stdin; fi
+
+if [[ -n "${STUB_SLEEP:-}" ]] && words_match "$STUB_SLEEP" "$@"; then
+  sleep "${STUB_SLEEP_SECS:-20}"
+fi
+IFS=';' read -r -a fails <<<"${STUB_COMPOSE_FAIL:-}"
+for f in "${fails[@]}"; do
+  if words_match "$f" "$@"; then
+    echo "${STUB_FAIL_OUTPUT:-stub: compose $f failed}" >&2
+    exit 1
+  fi
+done
+
+sub=$1
+shift
+case "$sub" in
+  ps)
+    if [[ " $* " == *" --services "* ]]; then cat "$running_file"; else echo "NAME  SERVICE  STATUS"; fi
+    ;;
+  stop) set_running remove "$@" ;;
+  down) : >"$running_file" ;;
+  up)
+    services=()
+    for a in "$@"; do
+      case "$a" in postgres | alice) services+=("$a") ;; esac
+    done
+    if [[ ${#services[@]} -eq 0 ]]; then services=(postgres alice); fi
+    set_running add "${services[@]}"
+    ;;
+  logs) echo "stub log line" ;;
+  run | exec)
+    words=" $* "
+    case "$words" in
+      *" psql "*pg_database_size*) printf '%s\n' "${STUB_DB_BYTES:-104857600}" ;;
+      *" psql "*pg_terminate_backend*) printf ' pg_terminate_backend\n----------------------\n(0 rows)\n' ;;
+      *" migrate "*) echo "migrations applied" ;;
+      *" backup verify "*)
+        if [[ "$words" == *" --deep "* ]]; then
+          echo "The backup opens with this passphrase and is complete: stub manifest."
+        else
+          echo "The backup file looks complete (header, size and checksum are correct)."
+        fi
+        ;;
+      *" backup list "*) echo "NAME  KIND  SIZE  CREATED (UTC)  ALICE  CHECK" ;;
+      *" backup "*)
+        name=${STUB_BACKUP_NAME:-alice-backup-0123abcd-20261011T000000Z-pre-upgrade-1.0.0-rc.2.alicebak}
+        if [[ -d "$inst/backups" ]]; then : >"$inst/backups/$name"; fi
+        echo "Backup written: /opt/alice/backups/$name (1.0 MiB)"
+        ;;
+      *" restore "*) echo "Restore finished." ;;
+      *" selfcheck "*) echo "[ OK ] Database reachable" ;;
+      *" setup-token "*)
+        echo "One-time setup code: K7QX2M-9TPD4R-WB5H8N-3VZC6A"
+        echo "It stops working as soon as the first administrator is created."
+        ;;
+      *" support-bundle "*) echo '{"stub":true}' ;;
+      *" audit verify "*) echo "The audit log is intact." ;;
+      *) echo "docker stub: unexpected compose $sub $*" >&2; exit 1 ;;
+    esac
+    ;;
+  *) echo "docker stub: unexpected compose $sub" >&2; exit 1 ;;
+esac

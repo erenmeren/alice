@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Test stub: "uname -m" prints STUB_ARCH; anything else runs the real uname.
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record uname "$@"
+if [[ "$*" == "-m" ]]; then
+  printf '%s\n' "${STUB_ARCH:-x86_64}"
+else
+  stub_real uname "$@"
+fi

@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Test stub: prints STUB_CPUS.
+set -euo pipefail
+# shellcheck source=stub-common.sh
+. "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
+stub_record nproc "$@"
+printf '%s\n' "${STUB_CPUS:-4}"
