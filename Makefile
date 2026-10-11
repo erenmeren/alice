@@ -361,7 +361,8 @@ RELEASE_KEYS     ?= deploy/release/keys
 RELEASE_TEST_KEY ?= bin/release-test-key
 RELEASE_COMMIT   ?= $(shell git rev-parse HEAD 2>/dev/null)
 RELEASE_STAGE_FLAGS ?=
-# Every 1.0.x release accepts an update from the first release candidate on; raise it when a release needs an intermediate one.
+# Every 1.0.x release accepts an update from the first release candidate on; raise it when a release needs an intermediate one
+# (the first release signed by a new release key: the overlap release that carried both keys; licensing-vendor.md, Rotation).
 MIN_UPGRADE_FROM ?= 1.0.0-rc.1
 POSTGRES_RELEASE_IMAGE := postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 

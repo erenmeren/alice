@@ -272,8 +272,17 @@ VM only and never publish it.
 2. Commit its `.pem` beside the current one in `deploy/release/keys/` at least one release before you sign with it.
    An installation trusts a new release key only when it arrives in a package signed by a key it already trusts,
    and an update **replaces** the installed `release-keys/` with the package's set (R43 row 21).
-3. Sign with the new key from the next release on; remove the old `.pem` from `deploy/release/keys/` one release
-   later. Installations that skip that release still update, because the release in between trusted both keys.
+3. Sign with the new key from the next release on, and build that first release with
+   `make release VERSION=… MIN_UPGRADE_FROM=<the overlap release>` (the release that first carried both `.pem`
+   files), so its `RELEASE` records that requirement. Remove the old `.pem` from `deploy/release/keys/` in a later
+   release.
+4. Every installation must pass through the overlap release. An update is checked only with the keys the
+   installation already has, and the signature is checked before anything in the package is read, so an
+   installation that skipped the overlap release refuses a package signed with the new key with "The update
+   package signature is not valid" (it never gets as far as the "Install <version> first" message). Say in the
+   release notes and the customer notice of every release signed with the new key: "Install <overlap release>
+   first if you run an older version". In a support case, `ls /opt/alice/release-keys/` shows which keys an
+   installation trusts.
 
 If the release key or its passphrase may have leaked: create a new key, publish its fingerprint, remove the leaked
 key from `deploy/release/keys/` in the next release, and tell customers (spec §17.4) to check the fingerprint the
