@@ -29,6 +29,7 @@ sum_arm64="${HELPER_SHA256_ARM64:?set HELPER_SHA256_ARM64 (make image-check does
 
 work="$(mktemp -d)"
 id=""
+# shellcheck disable=SC2329 # run by the EXIT trap below, which ShellCheck does not follow
 cleanup() {
   if [[ -n "$id" ]]; then docker rm "$id" >/dev/null; fi
   rm -rf "$work"
