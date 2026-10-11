@@ -131,7 +131,7 @@ JOIN ssh_keys k ON k.private_key_id = m.id WHERE k.id = $1`, keyID).Scan(&n))
 }
 
 // browserRequest builds the request c.do would send (same-origin headers, CSRF token, cookies).
-func browserRequest(t *testing.T, c *client, method, path string, body any) *http.Request {
+func browserRequest(t testing.TB, c *client, method, path string, body any) *http.Request {
 	t.Helper()
 	raw, err := json.Marshal(body)
 	require.NoError(t, err)

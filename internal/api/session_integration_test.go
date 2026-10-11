@@ -57,7 +57,7 @@ const (
 )
 
 // installed returns a stack with a finished wizard and the admin's browser.
-func installed(t *testing.T, trusted ...netip.Prefix) (*stack, *client, *account) {
+func installed(t testing.TB, trusted ...netip.Prefix) (*stack, *client, *account) {
 	t.Helper()
 	s := newStack(t, trusted...)
 	admin := &account{username: "ada", password: adminPassword}
@@ -665,7 +665,7 @@ func TestA08SecurityHeadersOnAPIResponses(t *testing.T) {
 }
 
 // createToken steps c up and creates an API token, returning its secret and ID.
-func createToken(t *testing.T, s *stack, c *client, a *account, scope string, days int) (string, string) {
+func createToken(t testing.TB, s *stack, c *client, a *account, scope string, days int) (string, string) {
 	t.Helper()
 	s.stepUp(c, a)
 	rec := c.do(http.MethodPost, "/api/v1/tokens", map[string]any{"name": "ci-" + scope, "scope": scope, "expires_in_days": days})

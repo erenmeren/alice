@@ -189,7 +189,7 @@ func masterKeySecretOf(key []byte) secretValue {
 
 // unwrapDEK recovers the plaintext data-encryption key of an envelope the way
 // secrets.Keyring.Open does (wrap AAD = table/row_id/column/key_version).
-func unwrapDEK(t *testing.T, master []byte, loc secrets.Location, env secrets.Envelope) []byte {
+func unwrapDEK(t testing.TB, master []byte, loc secrets.Location, env secrets.Envelope) []byte {
 	t.Helper()
 	block, err := aes.NewCipher(master)
 	require.NoError(t, err)

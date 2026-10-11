@@ -100,7 +100,7 @@ type DB struct {
 
 // New creates a fresh, migrated database and returns pools for both roles.
 // The pools are closed when the test ends.
-func New(t *testing.T) *DB {
+func New(t testing.TB) *DB {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

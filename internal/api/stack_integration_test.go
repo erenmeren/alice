@@ -103,7 +103,7 @@ type exchange struct {
 func (e exchange) key() string { return e.method + " " + e.path }
 
 type stack struct {
-	t        *testing.T
+	t        testing.TB // a *testing.T, or the *testing.F of a fuzz target (installed(f))
 	db       *pgtest.DB
 	clock    *clock.Fake
 	keysDir  string
@@ -150,7 +150,7 @@ type stack struct {
 	ips       atomic.Int64
 }
 
-func newStack(t *testing.T, trusted ...netip.Prefix) *stack {
+func newStack(t testing.TB, trusted ...netip.Prefix) *stack {
 	t.Helper()
 	return newStackWith(t, stackStart, nil, trusted...)
 }
@@ -159,7 +159,7 @@ func newStack(t *testing.T, trusted ...netip.Prefix) *stack {
 // registers the REAL azurekv provider (its connections mapped to the fake by the integration-only
 // seam, trusting only the fake's CA), the Key Vault job handlers, and trusts the fake's CA as a
 // certificate root of the inventory.
-func newStackWith(t *testing.T, start time.Time, kv func(now func() time.Time) *fakekv.Server, trusted ...netip.Prefix) *stack {
+func newStackWith(t testing.TB, start time.Time, kv func(now func() time.Time) *fakekv.Server, trusted ...netip.Prefix) *stack {
 	t.Helper()
 	s := &stack{
 		t:        t,
@@ -413,7 +413,7 @@ func responseCookies(rec *httptest.ResponseRecorder) []*http.Cookie {
 	return res.Cookies()
 }
 
-func requireStatus(t *testing.T, rec *httptest.ResponseRecorder, want int) {
+func requireStatus(t testing.TB, rec *httptest.ResponseRecorder, want int) {
 	t.Helper()
 	require.Equal(t, want, rec.Code, "body: %s", rec.Body.String())
 }
@@ -430,7 +430,7 @@ type apiError struct {
 }
 
 // requireError asserts the status and the stable ALC code of an error response.
-func requireError(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
+func requireError(t testing.TB, rec *httptest.ResponseRecorder, status int, code string) {
 	t.Helper()
 	requireStatus(t, rec, status)
 	var e apiError
@@ -438,7 +438,7 @@ func requireError(t *testing.T, rec *httptest.ResponseRecorder, status int, code
 	require.Equal(t, code, e.Error.Code, rec.Body.String())
 }
 
-func decodeBody[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
+func decodeBody[T any](t testing.TB, rec *httptest.ResponseRecorder) T {
 	t.Helper()
 	var v T
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &v), rec.Body.String())
@@ -612,7 +612,7 @@ func installedWithFakes(t *testing.T) (*stack, *client, *account) {
 }
 
 // etagVersion is the version of a strong ETag ("3" -> 3 as text).
-func etagVersion(t *testing.T, rec *httptest.ResponseRecorder) string {
+func etagVersion(t testing.TB, rec *httptest.ResponseRecorder) string {
 	t.Helper()
 	tag := rec.Header().Get("ETag")
 	require.Regexp(t, `^"[0-9]+"$`, tag)

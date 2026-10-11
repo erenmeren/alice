@@ -36,7 +36,7 @@ type fixtureKey struct {
 	fp   string
 }
 
-func newFixtureKey(t *testing.T) fixtureKey {
+func newFixtureKey(t testing.TB) fixtureKey {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -185,7 +185,7 @@ func (s *stack) targetLocations(c *client, targetID string, missing bool) []map[
 	}](s.t, rec).Items
 }
 
-func locationOf(t *testing.T, locs []map[string]any, osUser, fp string) map[string]any {
+func locationOf(t testing.TB, locs []map[string]any, osUser, fp string) map[string]any {
 	t.Helper()
 	for _, l := range locs {
 		if l["os_user"] == osUser && l["fingerprint"] == fp {
