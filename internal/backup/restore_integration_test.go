@@ -90,10 +90,20 @@ func (e *env) timeRecords(k *secrets.Keyring) (fromDB, fromFile license.HWMRecor
 	return fromDB, fromFile
 }
 
-// stop closes the test's pools, as stopping Alice does; start opens new ones.
+// stop closes the test's pools, as stopping Alice does, and returns once PostgreSQL lists no session of the database
+// (a closed connection's backend can outlive Close for a moment; TestStopLeavesNoSession); start opens new pools.
 func (e *env) stop() {
+	e.t.Helper()
 	e.db.Owner.Close()
 	e.db.App.Close()
+	conn, err := pgx.Connect(e.ctx, withDB(e.t, e.db.OwnerURL, "postgres", nil))
+	require.NoError(e.t, err)
+	defer func() { _ = conn.Close(context.WithoutCancel(e.ctx)) }()
+	name := dbName(e.t, e.db.OwnerURL)
+	require.Eventually(e.t, func() bool {
+		var n int
+		return conn.QueryRow(e.ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = $1", name).Scan(&n) == nil && n == 0
+	}, 10*time.Second, 5*time.Millisecond, "sessions of the closed pools did not end")
 }
 
 func (e *env) start() {
@@ -705,7 +715,7 @@ func TestRestoreIsAllOrNothing(t *testing.T) {
 				return nil
 			})
 			_, err := e.restoreWith(in)
-			require.Error(t, err)
+			require.ErrorContains(t, err, "injected failure")
 			if afterSafety {
 				// The safety backup was written and audited in the live database before the failure.
 				requireUnchanged(t, before, e.snapshot(), "audit_log", "settings")
@@ -1051,6 +1061,24 @@ func TestRestoreChecksTheCurrentKeyVersion(t *testing.T) {
 
 	_, _, err = e.restoreElsewhere(info.Path, e.createDB(uniqueName("rotated_")), nil)
 	require.NoError(t, err)
+}
+
+// The restore helpers close the test's pools first (stop) and pass WaitForSessions 0; a closed pool's backend can
+// still be listed in pg_stat_activity for a moment, which made a restore refuse with ErrDatabaseInUse in about 1 of
+// 75 runs (the Task 5 and Task 19 flakes). stop returns only when no session of the database is left.
+func TestStopLeavesNoSession(t *testing.T) {
+	e := newRestoreEnv(t)
+	name := dbName(t, e.db.OwnerURL)
+	sp := e.superPool()
+	for range 300 {
+		_, err := e.db.App.Exec(e.ctx, "SELECT 1")
+		require.NoError(t, err)
+		e.stop()
+		var n int
+		require.NoError(t, sp.QueryRow(e.ctx, "SELECT count(*) FROM pg_stat_activity WHERE datname = $1", name).Scan(&n))
+		require.Zero(t, n, "a session of the closed pools is still listed")
+		e.start()
+	}
 }
 
 func TestRestoreRefusesWhileTheDatabaseIsInUse(t *testing.T) {
