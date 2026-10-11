@@ -244,7 +244,7 @@ SHELLCHECK_IMAGE      ?= koalaman/shellcheck:v0.11.0@sha256:bb596a0d169b85ddd81d
 SHELL_SCRIPTS         := $(shell git ls-files -- '*.sh' deploy/release/alicectl 'deploy/release/testdata/stubs/*' deploy/release/testdata/swap-openssl/openssl test/images/e2e-target/systemctl test/images/e2e-target/nginx-wrapper)
 # How long each fuzz target runs; fuzz-nightly and fuzz-release raise it.
 FUZZTIME              ?= 60s
-# Extra flags of matrix-check ("-strict" in release-gates and the last step of Phase 8).
+# Extra flags of matrix-check ("-strict" in lint and release-gates: a gap, a missing named test or a partial row without a ruling fails).
 MATRIXCHECK_FLAGS     ?=
 
 .PHONY: tools
@@ -258,7 +258,7 @@ tools: ## Install pinned Go developer tools into $(HOME)/go/bin
 .PHONY: lint
 lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e build
 	go run ./tools/pincheck
-	$(MAKE) shellcheck lockcheck docs-check actionlint
+	$(MAKE) shellcheck lockcheck docs-check matrix-check actionlint MATRIXCHECK_FLAGS=-strict
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./cmd/...
@@ -280,7 +280,7 @@ shellcheck: ## ShellCheck every shell script (pinned image; -P SCRIPTDIR resolve
 	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(SHELLCHECK_IMAGE) -x -P SCRIPTDIR $(SHELL_SCRIPTS)
 lockcheck: ## Refuse anything but package data in web/package-lock.json and go.sum (secret-scan substitute, R43 row 38)
 	go run ./tools/lockcheck web/package-lock.json go.sum
-matrix-check: ## Every ID of the sections 23-25 matrices maps to existing tests, an owner step or a ruling (-strict: release-gates)
+matrix-check: ## Every ID of the sections 23-25 matrices maps to existing tests, an owner step or a ruling (lint and release-gates run it with -strict)
 	go run ./tools/matrixcheck -spec docs/superpowers/specs/alice-v1/06-quality.md -map test/matrix/traceability.json -doc docs/security/traceability.md $(MATRIXCHECK_FLAGS)
 docs-check: ## Commands named in the guides exist; relative links resolve; required sentences are present
 	go run ./tools/docscheck

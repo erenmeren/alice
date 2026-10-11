@@ -43,13 +43,13 @@ group mapping.
   [Phase 6](docs/security/reviews/phase-6.md), [Phase 7](docs/security/reviews/phase-7.md) and the
   [audit remediation](docs/security/reviews/audit-remediation.md) of the independent audit of 2026-10-04. Phase 8
   (packaging and release) had a pre-flight security review (S-1..S-40) and a pre-flight scan (M-1..M-28) of its
-  plan, and an independent review of every task; its review note `docs/security/reviews/phase-8.md` is written by
-  the final release run.
+  plan, and an independent review of every task; its review note is [phase-8.md](docs/security/reviews/phase-8.md).
 - **Test types** of spec §17.3: authorization matrix, secret-leak canaries, rate limit and lockout, sessions, OIDC,
   crypto known-answer and tamper tests, audit chain, license, injection and fuzzing, failure injection, container
   inspection, backup and restore. The test matrices of spec §23–§25 are mapped ID by ID to the tests that prove them
-  in [the traceability table](docs/security/traceability.md) (`make matrix-check`): on 2026-10-11, 202 IDs, of which
-  196 are mapped to tests, 1 deferred by a ruling and 5 are gaps (section 7, KI-20).
+  in [the traceability table](docs/security/traceability.md) (`make matrix-check`, in `make lint` with `-strict`): 202 IDs,
+  of which 193 are proven by tests, 7 are proven in part (`partial`, each with a ruling), 2 are deferred by a ruling
+  and none is a gap (section 7, KI-20; rulings G-1 to G-8 in `docs/superpowers/rulings/phase-8.md`).
 - **Static and dynamic scanners**, pinned by version or digest (section 4 has the results):
 
 | Tool | Version (pinned in the Makefile) | Run by | Gate (spec §17.1) |
@@ -65,9 +65,9 @@ group mapping.
 | actionlint | v1.7.12 | `make actionlint` | any finding fails |
 | Pinning check | in-tree `tools/pincheck` | `make lint` | an unpinned build input fails |
 | Fuzzing (`go test -fuzz`) | Go 1.27.2 | `make fuzz-nightly` (10 min per target), `make fuzz-release` (30 min per target) | a crash fails |
-| Mutation testing | gremlins v0.6.0 | `mutation` target (added by the dynamic-gates task) | advisory |
-| OWASP ZAP baseline, API scan per role, full active scan | pinned by the dynamic-gates task | `zap-baseline`, `zap-full` targets | Medium or higher fails |
-| testssl.sh | pinned by the dynamic-gates task | `testssl` target | grade below A fails |
+| Mutation testing | gremlins v0.6.0 | `make mutation` | advisory |
+| OWASP ZAP baseline, API scan per role, full active scan | ghcr.io/zaproxy/zaproxy:2.17.0 (by digest) | `make zap-baseline`, `make zap-full` | Medium or higher fails |
+| testssl.sh | ghcr.io/testssl/testssl.sh:3.2 (by digest) | `make testssl` | grade below A fails |
 
 ## 3. Security architecture summary
 
@@ -142,13 +142,13 @@ shows the latest run recorded during Phase 8 development, for context only; it i
 | gitleaks over the release tarball contents | release checklist row | PENDING-FINAL-RUN | | none recorded |
 | Lockfile shape check | `make lockcheck` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: clean |
 | ShellCheck (22 scripts) | `make shellcheck` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: clean |
-| ZAP baseline, unauthenticated | `zap-baseline` target | PENDING-FINAL-RUN | | not yet built |
-| ZAP baseline and API scan as Administrator | `zap-baseline` target | PENDING-FINAL-RUN | | not yet built |
-| ZAP baseline and API scan as Operator | `zap-baseline` target | PENDING-FINAL-RUN | | not yet built |
-| ZAP baseline and API scan as Auditor | `zap-baseline` target | PENDING-FINAL-RUN | | not yet built |
-| ZAP full active scan | `zap-full` target | NOT RUN (owner) | | |
-| testssl.sh grade, e2e stack | `testssl` target | PENDING-FINAL-RUN | | not yet built |
-| testssl.sh grade, release candidate on a real host | `testssl` target with `TESTSSL_TARGET` and `TESTSSL_CA` | NOT RUN (owner) | | |
+| ZAP baseline, unauthenticated | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
+| ZAP baseline and API scan as Administrator | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
+| ZAP baseline and API scan as Operator | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
+| ZAP baseline and API scan as Auditor | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
+| ZAP full active scan | `make zap-full` | NOT RUN (owner) | | |
+| testssl.sh grade, release image (test-CA certificate) | `make testssl` | PENDING-FINAL-RUN | | not yet built |
+| testssl.sh grade, release candidate on a real host | `make testssl TESTSSL_TARGET=… TESTSSL_CA=…` | NOT RUN (owner) | | |
 | Fuzzing, nightly length | `make fuzz-nightly` | PENDING-FINAL-RUN | | each new Phase 8 target run 5 minutes by its task (R43 row 35) |
 | Fuzzing, release length | `make fuzz-release` | NOT RUN (owner) | | |
 | Matrix traceability, strict | `make matrix-check` with `-strict` | PENDING-FINAL-RUN | | 2026-10-11: 196 test, 1 deferred, 5 gap |
@@ -172,7 +172,7 @@ the test-signed package `1.0.0-rc.1` built on 2026-10-11 (`bin/release/sbom-1.0.
 **Accepted vulnerabilities.** An exception needs an ID, a reason and an expiry at most 90 days away
 (`osv-scanner.toml`, `docs/dev/dependency-updates.md`); a High or Critical finding with a fix is fixed, not ignored.
 At the time of writing there is no exception: `osv-scanner.toml` lists none, there is no `.trivyignore`, and the ZAP
-rules file (`.zap/rules.tsv`, created by the dynamic-gates task) does not exist yet. The 90-day limit is checked by
+rules file `.zap/rules.tsv` holds no rule. The 90-day limit is checked by
 review, not by a tool (Task 14 review M3).
 
 | ID | Package or rule | Severity | Justification | Expiry | Source file |
@@ -222,10 +222,10 @@ final release run re-checks every row against the release commit.
 | KI-17 | **The `docker` group can re-tag images** after the installer's image-ID check. [S-36, accepted] | Low (accepted) | Members of the `docker` group are root-equivalent anyway; install and update compare image IDs before they start anything (R43 row 22). | Keep the `docker` group to administrators of the host. |
 | KI-18 | **Zeroing of key material is best effort.** Buffers Alice owns are cleared; Go strings, `big.Int` limbs, `*ecdh.PrivateKey` internals, AES key schedules and library and TLS buffers cannot be. [R43 row 53, S-28, P4-04 and its extensions in Phases 6 and 7, Task 4 review minor 13] | Low (accepted) | Core dumps disabled in the `alice` container (`ulimits: core: 0` in the production compose; not yet asserted by a test, Task 3 review minor 1). | Encrypt swap on the host (part of full-disk encryption). |
 | KI-19 | **The binaries are reproducible; the images and the tarball are not** (image layers carry build metadata). [R43 row 52, S-38] | Info | `make reproducible-check` builds `alice` and both helper binaries twice from clean copies and compares the bytes; only a stage built on the release machine is signed, a CI stage is only compared (S-26). | A security team that rebuilds compares the binaries, not the images. |
-| KI-20 | **Test matrix gaps.** No test yet for L-56 and L-57 (certificate `notBefore` in the future must not change the license state), F-64 and F-65 (PostgreSQL restarted or unavailable under running jobs), A-11 (XSS through stored names, beyond the ban on `dangerouslySetInnerHTML`); R-04's statistical timing test is deferred (P1-03); rows S-10, A-12, A-10, R-07, S-06, X-02 and X-03 are mapped to tests that prove only part of the row. [`docs/security/traceability.md`; Task 14 review I-1] | Medium | The listed parts are covered by the tests the traceability table names; the final release run decides a fix or a ruling for each. | None until closed; see the traceability table of the release. |
+| KI-20 | **Test matrix rows proven only in part, or deferred.** F-64 (PostgreSQL restarted under a running deployment job) and R-04's statistical timing test (P1-03) are deferred; A-10 (testssl is a gate, not a test), A-11 (the in-browser check under the CSP), A-12 (no SQL-injection sweep of every list, filter and sort parameter), F-65 (jobs pause and lose nothing after two minutes without the database), L-56 (R28's certificate-evidence clock warning is not built), R-07 (a server test connection has only the general limit) and S-06 (no scan of the packed tarball itself) are `partial`. [`docs/security/traceability.md`; rulings G-1 to G-8 of `docs/superpowers/rulings/phase-8.md`; Task 14 review I-1] | Low | Each partial row names the tests that prove the rest; parameterized SQL is enforced by `make lint` (gosec G201/G202); `make testssl`, `make secrets-scan`, `make fs-scan` and `make image-scan` are release gates; `make matrix-check -strict` in `make lint` fails on a gap or on a partial row without a ruling. | None; see the traceability table of the release. |
 | KI-21 | **No rotation of the recovery passphrase or the master key in v1.** [R43 row 50, carry 18] | Medium | None in the product; backups stay readable only with the passphrase. | Protect the passphrase like the master key; an exposed passphrase plus a backup copy opens that backup, also every older one. |
 | KI-22 | **Not verified on customer environments.** Nothing was run against Azure (Phase 5), a real identity provider or mail server (Phase 7), sshd variants beyond the three test containers (Phase 6), real systemd with Nginx before the real-systemd job, or real virtual machines (R43 row 28); the image IDs after `docker load` on a fresh engine (including Docker's containerd image store) are unconfirmed (F28). | Medium | Fakes and emulators with fidelity reviews; installs proven in three distributions' containers without network (release harness). | Treat these as not verified until the release checklist records them. |
-| KI-23 | **An HTTPS certificate replacement can be left unaudited.** The new pair is live before the transaction that writes the audit row and the wizard choice; if that transaction fails the answer is an error and no audit row exists. [Task 9 report deviation 2, Task 9 review M-2] | Low | The next read of the HTTPS settings shows the certificate in use. | Check **Settings → HTTPS** after an error during an upload. |
+| KI-23 | **An HTTPS certificate replacement can be left unaudited.** The new pair is live before the transaction that writes the audit row and the wizard choice; the transaction is retried once without the request's cancellation, and if the retry fails too the answer is an error, the new certificate stays in use and the log records `event=https.audit_failed` with the fingerprint (626df97, `internal/setup:TestCertificateInstallerLogsAnUnrecordedReplacement`). [Task 9 report deviation 2, Task 9 review M-2; re-checked by the final release run] | Low | The next read of the HTTPS settings shows the certificate in use; the log line names it. | Check **Settings → HTTPS** after an error during an upload. |
 | KI-24 | **Development installations with a version 1 backup key make no backups** until the wizard runs again on a fresh database. [R43 row 41; owner item 5] | Info | `internal/backup:TestCreateRefusesV1BackupKey`; the dashboard shows the backup failing. | Not applicable to customer installations (no version 1 key was ever released). |
 | KI-25 | **Supply-chain residuals.** The testcontainers Ryuk image and Playwright's browser download are not pinned (test tooling only); CI has never run on a remote (no remote exists yet); `pincheck` recognises only the forms it knows. [R-5, AUD-08, audit-remediation known limitations] | Low | The release is built from pinned inputs on the release machine; `make lint` runs `pincheck`. | None. |
 | KI-26 | **Phase 1 findings still open.** Token-id existence visible through revoke timing; a sign-in over a full session does not revoke the old one; strict same-origin rule; raw startup and CLI error text; audit details guarded by a denylist; export and verify bounded only by the general limit; IPv6 sign-in limits per /64; someone who knows a username can keep it locked out within the caps. [P1-04, P1-05, P1-06, P1-07, P1-09, P1-10, phase-1 known limitations, AUD-25 (b)] | Low | As recorded in `docs/security/reviews/phase-1.md`. | Administrators unlock with **Set a new password** or `alice admin unlock` on the host. |
@@ -236,8 +236,8 @@ final release run re-checks every row against the release commit.
 | KI-31 | **Phase 6 items.** The test login proves authentication only; shared and symlinked `AuthorizedKeysFile` places are skipped or invisible; scheduled rotation needs working e-mail; the thirteen L1–L13 limitations. [phase-6 known limitations] | Low | As recorded in `docs/security/reviews/phase-6.md`. | Check servers kept on the old key after a run that needs attention. |
 | KI-32 | **Phase 7 items.** A group removed at the IdP keeps an open session up to 12 hours; SSO start shares the sign-in limit; no plaintext SMTP; P7-29 accessibility items and 24 carried minors open; the OIDC nonce is stored in clear for at most 10 minutes. [P7-29, phase-7 known limitations] | Low | As recorded in `docs/security/reviews/phase-7.md`. | Disable a departing person in Alice as well as at the IdP. |
 | KI-33 | **Audit-remediation items.** The activity marker is client-asserted; coalesced refusal counts live in memory; failed-credential buckets are shared behind one address; a small sign-in timing difference remains; glibc-only helper; every managed server needs the helper version that the Alice release expects before Alice works on it. [R-1, R-2, R-4, R-9, audit-remediation known limitations] | Low (accepted) | As recorded in `docs/security/reviews/audit-remediation.md`. | Set `ALICE_TRUSTED_PROXIES` behind a reverse proxy. |
-| KI-34 | **Phase 8 review items still open.** Forwarding: control characters pass into syslog structured-data values, UDP messages up to 8 KiB fragment, the test message has no write deadline; TLS store: the keys directory needs hard links, PFX key-derivation and RSA size are not capped beyond 1 MiB (Administrator only); host scripts: `.update-<time>/` stays after a failed update until removed. [Task 7–8 review minors 3, 4, 5, 11, 12; Task 11 review minor 14] | Low | Octet framing over TLS by default; Administrator with step-up for uploads; upgrade guide tells when to remove the directory. | Use TLS transport for forwarding. |
-| KI-35 | **Not in version 1** (customer-visible). Download of TLS private keys; Microsoft Graph lookup for the Entra group overage; JSON-webhook forwarding; nuclei scanning; PDF documents; fewer helper scans per key change; bundled advisory files and the advisory banner of spec §17.4 (the package has no `advisories/` folder). [plan carries 15–17, 20; R43 rows 27, 31, 34; package layout C5] | Info | Documented in the guides. | Use a syslog collector; use application-assigned groups in Entra. |
+| KI-34 | **Phase 8 review items still open.** Forwarding: control characters pass into syslog structured-data values, UDP messages up to 8 KiB fragment, the test message has no write deadline; TLS store: the keys directory needs hard links, PFX key-derivation and RSA size are not capped beyond 1 MiB (Administrator only); host scripts: `.update-<time>/` stays after a failed update until removed. [Task 7–8 review minors 3, 4, 5, 11, 12; Task 11 review minor 14; re-checked against the final release commit: all still open] | Low | Octet framing over TLS by default; Administrator with step-up for uploads; upgrade guide tells when to remove the directory. | Use TLS transport for forwarding. |
+| KI-35 | **Not in version 1** (customer-visible). Download of TLS private keys; Microsoft Graph lookup for the Entra group overage; JSON-webhook forwarding; nuclei scanning; PDF documents; fewer helper scans per key change; bundled advisory files and the advisory banner of spec §17.4 (the package has no `advisories/` folder). [plan carries 15–17, 20; R43 rows 27, 31, 34 and addendum item 68; package layout C5, re-checked: no `advisories/` folder] | Info | Documented in the guides. | Use a syslog collector; use application-assigned groups in Entra. |
 
 ## 8. Customer hardening recommendations
 

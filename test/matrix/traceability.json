@@ -1081,7 +1081,7 @@
    "internal/api:TestLivez",
    "internal/api:TestAuthenticationBackendErrorIsUnavailable"
   ],
-  "ruling": "docs/superpowers/rulings/phase-8.md G-3",
+  "ruling": "docs/superpowers/rulings/phase-8.md G-4",
   "note": "The friendly 503, /healthz failing and /livez passing are proven; that jobs pause and nothing is lost after two minutes without the database is not tested."
  },
  {

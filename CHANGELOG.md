@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased — Phase 8: Packaging and release
+
+**Upgrade notes**
+- Production installations use `deploy/release/docker-compose.yml` through `install.sh`; the development stack
+  (`make up`) is unchanged except a new volume for backups (`alice-backups`, mounted at `/opt/alice/backups`).
+- The production database owner is no longer a superuser and the `alice` container holds no owner credential:
+  migrations run in the one-shot `migrate` service, restores in `alice-admin` (`ALICE_MIGRATE=external`).
+- Migration `00012` adds the backup sender key's storage. An Alice binary refuses a database whose schema is newer
+  than its own migrations.
+- New settings: the daily backup (time, zone, retention), audit forwarding. Backups need the recovery passphrase
+  (set in the wizard); installations without it show "Finish setting up".
+- The recovery passphrase must now be rated "good" or better (a "fair" one is refused, `ALC-SET-0010`).
+- Development installations whose recovery passphrase was set before Phase 8 hold a version 1 backup key and make no
+  backup until the wizard is run again on a fresh database (R43 row 41).
+- No helper change: `alice-helper` stays at protocol 6 (1.5.0); the release bundle ships it in `helper/`.
+
+### Added
+- `install.sh` (preflight, signature and image checks, offline image load, hardened two-container stack, setup code),
+  `alice-update.sh` (signed packages only, automatic pre-update backup, migrations, selfcheck, automatic return to
+  the previous version), `alicectl` (backup, backup list, backup verify [--deep], restore, selfcheck, audit verify,
+  setup-token --reset, support-bundle), `install.sh --restore-mode`, `--uninstall [--purge]`.
+- Encrypted backups (X25519 to the installation's backup key, authenticated by the installation's sender key, AES-256-GCM
+  chunks, the private key inside the file under the recovery passphrase; container format 2), daily at 02:30 with 14 kept,
+  a failure e-mail and a 48-hour alarm; restore into a fresh database with one swap point.
+- Wizard steps "HTTPS certificate" and "Mail server", Back on the steps after the administrator, resume after a reload;
+  the dashboard's "Finish setting up" checklist and backup card; Settings → Backups, HTTPS certificate, Audit forwarding.
+- Audit forwarding to syslog (RFC 5424 over TLS) in chain order with each hash.
+- Release bundle with SBOMs, third-party notices and Ed25519 signatures; `make reproducible-check`, `make release-gates`,
+  `make nightly`; ZAP, testssl, real-systemd, three-browser, mutation and osv-scanner gates; the §23–§25 traceability
+  (`make matrix-check`, in `make lint` with `-strict`; status `partial` for rows proven only in part).
+- Documents: install guide, backup and restore, upgrade, security overview, API, index; `SECURITY-REPORT.md`; the
+  release checklist.
+- Codes `ALC-BAK-0001..0004`, `ALC-TLS-0001..0005`, `ALC-AUD-0002..0004`, `ALC-SET-0010`; permission `backup.manage`.
+
+### Changed
+- The API's Content-Security-Policy also sets `base-uri 'none'` and `form-action 'none'`.
+- After setup completion the public setup status answers only `completed` and the default language; an anonymous
+  visitor of a completed installation is sent to the sign-in page.
+
+### Security
+- P1-01 closed in production (non-superuser owner, no owner credential in the application container); PostgreSQL
+  read-only, non-root, no published port; secrets as files; the temporary HTTPS certificate renewed without a restart.
+- Backups are origin-authenticated: a file built from another installation's public keys does not open with the
+  passphrase (R43 row 41); a restore keeps the newer license time record.
+
 ## Unreleased — Phase 7: Alerts, dashboard and SSO
 
 **Upgrade notes**

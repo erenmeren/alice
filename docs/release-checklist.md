@@ -13,8 +13,11 @@ Rules:
   machine, the production key, a CI runner or an outside party; their procedure is in the sections below.
 - **Result** is `PASS`, `FAIL` (with a reference to the finding) or `N/A` with the reason. A `FAIL` blocks the
   release until fixed and re-run.
-- Targets marked "(target added by the dynamic-gates task)" are not in the Makefile yet; the final release run
-  replaces the note with the `make` command once they exist.
+- `make release-gates` runs every class A gate that runs on one machine (`ci`, `matrix-check` with `-strict`,
+  `reproducible-check`, `test-release`, `test-systemd`, `zap-baseline`, `testssl`, `test-backup-cycle`,
+  `e2e-browsers`, `release-keycheck`) in that order and records each exit status in `bin/release-gates.log`; the
+  production stage refuses the release unless every gate is recorded exactly once with exit 0. The Phase 8 review
+  ([phase-8.md](security/reviews/phase-8.md)) records the development runs; they are not release results.
 
 Release candidate: version ______ commit ______ (40 hex) built on ______ by ______
 
@@ -30,23 +33,23 @@ Release candidate: version ______ commit ______ (40 hex) built on ______ by ____
 | 1.6 | SBOM generated for binary and images and included in the package | `make sbom` (run by `make release`); artefact: `sbom/` in the stage; `tools/releasebuild:TestStageLayout` | A | Release engineer | | | |
 | 1.7 | Authorization matrix test passes for all routes; no route without a declared permission | `make test` (`internal/api:TestAuthzMatrix`, `TestRoutePermissionsMatchSpec`, `TestRouteTableMatchesSpec`, `TestPhase8RoutesAuthz`); `make authz-doc` leaves `docs/authz-matrix.md` unchanged | A | Release engineer | | | |
 | 1.8 | Secret-leak-to-log test passes, including failure paths | `make test-integration` (the leak suites of `internal/api`, `internal/backup:TestF87NoPlaintextInTheFile`, `cmd/alice:TestSupportBundleHasNoSecrets`) | A | Release engineer | | | |
-| 1.9 | Audit chain verifies after the full E2E run and after backup/restore | `make e2e`; `internal/backup:TestF97RestoreContinuesTheChain`; the release harness F-85 drill (`test-release` target, release-harness task) | A | Release engineer | | | |
+| 1.9 | Audit chain verifies after the full E2E run and after backup/restore | `make e2e`; `internal/backup:TestF97RestoreContinuesTheChain`; the release harness F-85 drill (`make test-release`, `TestReleaseF85Drill`) | A | Release engineer | | | |
 | 1.10 | Backup → wipe → restore → verify passes; installation ID and license preserved | `make test-backup-cycle` (`TestF85FullCycle`); the release harness F-85 drill; on a VM: [section 4](#4-update-100--101-on-a-vm) step 3 | A + B | Release engineer; owner on the VM | | | |
-| 1.11 | Update test from the previous release passes, including forced-failure rollback | the release harness update and rollback test (`test-release` target); on a VM: [section 4](#4-update-100--101-on-a-vm) | A + B | Release engineer; owner on the VM | | | |
+| 1.11 | Update test from the previous release passes, including forced-failure rollback | the release harness update and rollback test (`make test-release`, `TestReleaseUpdateAndRollback`); on a VM: [section 4](#4-update-100--101-on-a-vm) | A + B | Release engineer; owner on the VM | | | |
 | 1.12 | Update script rejects a tampered tarball and a downgrade | `make test` (`deploy/release:TestUpdateRefusesTamperedAndDowngrade`, `TestSignatureChecks`, `TestUpdateVerifiesACopy`); the release harness tamper test | A | Release engineer | | | |
 | 1.13 | License tests pass: forged, wrong installation, rollback, jump, expiry, grace, lock; lock leaves data and targets untouched | `make test`, `make test-integration` (`internal/license`), `make fuzz-license`; IDs L-01..L-88 in [the traceability table](security/traceability.md) | A | Release engineer | | | |
 | 1.14 | `licensectl` test vectors verify against the released binary; embedded public keys and key IDs match the vendor key register | `make release-keycheck`; compare the output of `alice license keys` (run in the installed container) with the vendor key register ([licensing-vendor.md](vendor/licensing-vendor.md#2-put-the-public-key-into-alice-builds-once-per-key)) | B | Vendor | | | |
 | 1.15 | No debug endpoints, pprof, test accounts, default passwords or sample keys in the build; the demo-clock build is not shipped | `make release-symcheck`, `make image-check`; `cmd/alice:TestReleaseBuildHasNoTestEndpointsOrDemoClock`, `TestReleaseBinaryLinksNoTestOrVendorCode`; matrix row S-10 (partial, see [SECURITY-REPORT.md](../SECURITY-REPORT.md#7-known-issues-and-residual-risks) KI-20) | A | Release engineer | | | |
 | 1.16 | Security headers and CSP verified on all responses | `make test` (`internal/api:TestSecurityHeadersOnEveryResponse`, `TestIndexGetsFreshNonceMatchingCSP`) | A | Release engineer | | | |
-| 1.17 | `testssl.sh` grade A | `testssl` target against the e2e stack (target added by the dynamic-gates task); on a real host: [section 6](#6-long-gates) | A + B | Release engineer; owner on the host | | | |
+| 1.17 | `testssl.sh` grade A | `make testssl` (the release image on a disposable stack, certificate from a test CA); on a real host: [section 6](#6-long-gates) | A + B | Release engineer; owner on the host | | | |
 | 1.18 | Container inspection: non-root, read-only FS, dropped caps, no DB port published, images pinned by digest | `make test` (`cmd/alice:TestReleaseComposeIsHardened`, `TestAliceServiceHoldsNoOwnerCredential`); `make image-check`; the release harness install matrix runs the hardening checks on the installed stack | A | Release engineer | | | |
 | 1.19 | Rate-limit, lockout, session, CSRF and OIDC test suites pass | `make test-integration` (`internal/api`, `internal/auth`, `internal/auth/oidc`), `make fuzz-oidc`; IDs R-, S- and O- in [the traceability table](security/traceability.md) | A | Release engineer | | | |
 | 1.20 | MFA cannot be bypassed; the wizard administrator is local + MFA; the recovery passphrase flow is tested | `make test-integration` (`internal/setup:TestServerRefusesAFairPassphrase` and the setup suite), `make e2e` | A | Release engineer | | | |
 | 1.21 | A changed host key blocks operations; platform key removal is refused (UI and API) | `make test-integration` (`internal/jobs/targetjobs:TestChangedHostKeyBlocksEveryJob`), `make test-ssh`, `make e2e` | A | Release engineer | | | |
 | 1.22 | Rotation failure-injection tests pass; an incomplete rotation never removes the old key | `make test-integration` (`internal/jobs/sshkeyjobs`, the rotation property test), `make test-ssh` | A | Release engineer | | | |
-| 1.23 | Nginx deploy fault-injection tests pass and restore the original files | `make test-ssh` (real-Nginx matrix); `test-systemd` target (target added by the dynamic-gates task) | A | Release engineer | | | |
+| 1.23 | Nginx deploy fault-injection tests pass and restore the original files | `make test-ssh` (real-Nginx matrix); `make test-systemd` | A | Release engineer | | | |
 | 1.24 | Azure least-privilege table matches the code paths exercised (mock and real suite run) | mock: `make test-integration`; real: `make test-azure` against a real vault ([section 6](#6-long-gates)) | A + B | Owner | | | |
-| 1.25 | Playwright E2E passes in English and Turkish; error messages contain no internal details | `make e2e`; three browsers: `e2e-browsers` target (target added by the dynamic-gates task) | A | Release engineer | | | |
+| 1.25 | Playwright E2E passes in English and Turkish; error messages contain no internal details | `make e2e`; three browsers: `make e2e-browsers` | A | Release engineer | | | |
 | 1.26 | Penetration test findings High/Critical closed and re-tested | [section 7](#7-human-gates), external penetration test | B | Vendor; external tester | | | |
 | 1.27 | `SECURITY-REPORT.md` completed and reviewed; residual risks updated | [SECURITY-REPORT.md](../SECURITY-REPORT.md) sections 4–7 filled, section 10 signed | B | Developer; reviewer | | | |
 | 1.28 | Release notes list security fixes; advisory files updated in the package | `CHANGELOG.md` "Security" section of the release. Version 1 packages have no `advisories/` folder (package layout C5 of the Phase 8 plan): record `N/A` with that reason, or the advisory added | B | Developer | | | |
@@ -58,11 +61,11 @@ Release candidate: version ______ commit ______ (40 hex) built on ______ by ____
 | # | Item | How it is proven | Class | Owner | Result | Date | Initials |
 |---|---|---|---|---|---|---|---|
 | 1.31 | The whole matrices of §23, §24 and §25 green | `make matrix-check MATRIXCHECK_FLAGS=-strict` (no gap, no partial row without a ruling); [the traceability table](security/traceability.md) | A | Release engineer | | | |
-| 1.32 | ZAP baseline and API scan without Medium or High findings (unauthenticated, Administrator, Operator, Auditor) | `zap-baseline` target (target added by the dynamic-gates task) | A | Release engineer | | | |
+| 1.32 | ZAP baseline and API scan without Medium or High findings (unauthenticated, Administrator, Operator, Auditor) | `make zap-baseline` | A | Release engineer | | | |
 | 1.33 | ZAP full active scan without Medium or High findings | `zap-full` target, [section 6](#6-long-gates) | B | Owner | | | |
 | 1.34 | The release binary contains the production public keys and no test tags | `make release-keycheck` (fails until the production release and license keys are committed), `make release-symcheck` | A + B | Vendor | | | |
 | 1.35 | Reproducible build check (the binaries; not the images or the tarball) | `make reproducible-check` on the release build machine | A | Release engineer | | | |
-| 1.36 | Install on clean Ubuntu 22.04, Debian 12 and Rocky 9, also without network | the release harness install matrix (`test-release` target, containers with `--network none`); real VMs: [section 2](#2-vm-installs) | A + B | Release engineer; owner on the VMs | | | |
+| 1.36 | Install on clean Ubuntu 22.04, Debian 12 and Rocky 9, also without network | the release harness install matrix (`make test-release`, `TestReleaseInstallMatrix`, containers with `--network none`); real VMs: [section 2](#2-vm-installs) | A + B | Release engineer; owner on the VMs | | | |
 | 1.37 | Release fuzzing (30 minutes per target) without a crash | `make fuzz-release`, [section 6](#6-long-gates) | B | Owner | | | |
 | 1.38 | No open High or Critical finding | `docs/security/reviews/phase-8.md` (written by the final release run) and every earlier review note | B | Reviewer | | | |
 | 1.39 | Owner steps of every phase repeated once on the release candidate | [section 5](#5-owner-steps-of-every-phase-on-the-release-candidate) | B | Owner (coordinator) | | | |
@@ -124,6 +127,9 @@ table with an `output` chain). Expected: the same results; the installer never n
 |---|---|---|---|---|---|
 | 2.7 | First VM: image IDs after the installer's `docker load` on a fresh engine equal the IDs in `RELEASE` (F28); note the image store | Owner | | | |
 | 2.8 | Rocky 9: no SELinux denial during install, wizard and `selfcheck` (`sudo ausearch -m avc -ts recent` prints nothing) | Owner | | | |
+| 2.9 | Every VM: the installer's preflight line "Clock sane" is `[ OK ]` (the release harness containers have no `timedatectl` and prove only the `[WARN]` branch) | Owner | | | |
+| 2.10 | First VM: "Port free" fails when the port is taken: start `sudo python3 -m http.server 443` in another terminal, run `install.sh` (expected `[FAIL]` naming the port, nothing changed), stop it and install (the harness containers see no host sockets) | Owner | | | |
+| 2.11 | A VM whose engine uses the classic image store: the `ALICE_IMAGE_ID`/`POSTGRES_IMAGE_ID` branch matched (record it in 2.7; the harness engine proves only one branch) | Owner | | | |
 
 ## 3. Offline signing ceremony
 
@@ -232,12 +238,12 @@ row points to that phase's owner table; record the outcome here and in that tabl
 
 | # | Gate | Command | Where | Owner | Result | Date | Initials |
 |---|---|---|---|---|---|---|---|
-| 6.1 | ZAP full active scan, no Medium or High | `zap-full` target (target added by the dynamic-gates task) | a disposable stack of the release candidate | Owner | | | |
+| 6.1 | ZAP full active scan, no Medium or High | `make zap-full` | a disposable stack of the release candidate | Owner | | | |
 | 6.2 | Release fuzzing, 30 minutes per target (about 7 hours), no crash | `make fuzz-release` | release build machine or CI | Owner | | | |
-| 6.3 | Playwright on three browsers in EN and TR, WebKit included | `e2e-browsers` target (target added by the dynamic-gates task) | a machine where WebKit starts | Owner | | | |
-| 6.4 | testssl.sh grade A on a real host with the customer-like certificate | `testssl` target with `TESTSSL_TARGET=<host>:443 TESTSSL_CA=<ca file>` (target added by the dynamic-gates task) | the release candidate on a VM of [section 2](#2-vm-installs) | Owner | | | |
-| 6.5 | First run of the nightly workflow | `.github/workflows/nightly.yml` (added by the dynamic-gates task) after a git remote exists | CI | Owner | | | |
-| 6.6 | First run of the release workflow | `.github/workflows/release.yml` (added by the dynamic-gates task) | CI | Owner | | | |
+| 6.3 | Playwright on three browsers in EN and TR, WebKit included | `make e2e-up && make e2e-browsers; make e2e-down` | a machine where WebKit starts | Owner | | | |
+| 6.4 | testssl.sh grade A on a real host with the customer-like certificate | `make testssl TESTSSL_TARGET=<host>:443 TESTSSL_CA=<ca file>` | the release candidate on a VM of [section 2](#2-vm-installs) | Owner | | | |
+| 6.5 | First run of the nightly workflow | `.github/workflows/nightly.yml` after a git remote exists | CI | Owner | | | |
+| 6.6 | First run of the release workflow | `.github/workflows/release.yml` (record each job's duration: none was measured yet) | CI | Owner | | | |
 | 6.7 | Real-Azure suite | `make test-azure` against a real vault ([azure-setup.md](azure-setup.md)) | owner's tenant | Owner | | | |
 
 ## 7. Human gates
