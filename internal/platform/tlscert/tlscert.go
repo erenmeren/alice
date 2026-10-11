@@ -7,6 +7,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -17,12 +18,19 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"time"
 )
 
-// Organization marks certificates that Alice generated itself.
+// Organization names the certificates that Alice generates itself. It describes them; it does not decide
+// ownership, which only the mark in tls.key does (markType).
 const Organization = "Alice temporary certificate"
+
+// markType is the PEM block Alice writes after the private key in tls.key when it generates the temporary
+// certificate: its bytes are the SHA-256 of that certificate's DER. A pair is Alice's temporary one only when
+// this mark names the live leaf. Install re-encodes an upload's key without it (encodePair), so no upload can
+// carry it, and it travels with tls.key through the replace protocol, backups and restores. Go and OpenSSL
+// read the first private key block of the file and skip this one.
+const markType = "ALICE TEMPORARY CERTIFICATE"
 
 const (
 	validity    = 90 * 24 * time.Hour
@@ -37,15 +45,11 @@ func EnsureSelfSigned(dir string, hosts []string, now time.Time) (tls.Certificat
 
 	switch {
 	case certExists && keyExists:
-		c, err := tls.LoadX509KeyPair(certPath, keyPath)
+		c, keyPEM, err := loadPair(certPath, keyPath)
 		if err != nil {
 			return tls.Certificate{}, fmt.Errorf("the HTTPS certificate in %s could not be loaded: %w", dir, err)
 		}
-		l, err := x509.ParseCertificate(c.Certificate[0])
-		if err != nil {
-			return tls.Certificate{}, fmt.Errorf("the HTTPS certificate in %s is not valid: %w", dir, err)
-		}
-		if !slices.Contains(l.Subject.Organization, Organization) || now.Before(l.NotAfter.Add(-renewBefore)) {
+		if !isTemporary(c.Leaf, keyPEM) || now.Before(c.Leaf.NotAfter.Add(-renewBefore)) {
 			return c, nil
 		}
 	case certExists != keyExists:
@@ -58,7 +62,7 @@ func EnsureSelfSigned(dir string, hosts []string, now time.Time) (tls.Certificat
 	if err := os.Chmod(dir, 0o700); err != nil { //nolint:gosec // G302: directory needs the execute bit
 		return tls.Certificate{}, fmt.Errorf("secure key directory: %w", err)
 	}
-	certPEM, keyPEM, err := generate(Organization, hosts, now.Add(-time.Hour), now.Add(validity))
+	certPEM, keyPEM, err := generateTemporary(hosts, now)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
@@ -85,6 +89,48 @@ func ServerConfig(cert tls.Certificate) *tls.Config {
 			tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 		},
 		Certificates: []tls.Certificate{cert},
+	}
+}
+
+// loadPair reads and parses the pair; it also returns the key file's text, which holds Alice's mark.
+func loadPair(certPath, keyPath string) (tls.Certificate, []byte, error) {
+	certPEM, err := os.ReadFile(certPath) //nolint:gosec // G304: a fixed name in the key directory
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	keyPEM, err := os.ReadFile(keyPath) //nolint:gosec // G304: a fixed name in the key directory
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	c, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		return tls.Certificate{}, nil, err
+	}
+	return c, keyPEM, nil
+}
+
+// generateTemporary creates Alice's temporary certificate and its key, the key file carrying the mark.
+func generateTemporary(hosts []string, now time.Time) (certPEM, keyPEM []byte, err error) {
+	certPEM, keyPEM, err = generate(Organization, hosts, now.Add(-time.Hour), now.Add(validity))
+	if err != nil {
+		return nil, nil, err
+	}
+	b, _ := pem.Decode(certPEM)
+	sum := sha256.Sum256(b.Bytes)
+	return certPEM, append(keyPEM, pem.EncodeToMemory(&pem.Block{Type: markType, Bytes: sum[:]})...), nil
+}
+
+// isTemporary reports whether keyPEM carries Alice's mark for leaf.
+func isTemporary(leaf *x509.Certificate, keyPEM []byte) bool {
+	sum := sha256.Sum256(leaf.Raw)
+	for rest := keyPEM; ; {
+		var b *pem.Block
+		if b, rest = pem.Decode(rest); b == nil {
+			return false
+		}
+		if b.Type == markType && bytes.Equal(b.Bytes, sum[:]) {
+			return true
+		}
 	}
 }
 

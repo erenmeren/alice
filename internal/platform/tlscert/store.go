@@ -133,7 +133,7 @@ func (s *Store) Renew() (bool, error) {
 		s.cur.Store(c)
 		return false, nil
 	}
-	certPEM, keyPEM, err := generate(Organization, s.hosts, now.Add(-time.Hour), now.Add(validity))
+	certPEM, keyPEM, err := generateTemporary(s.hosts, now)
 	if err != nil {
 		return false, err
 	}
@@ -150,11 +150,12 @@ func (s *Store) Renew() (bool, error) {
 
 // load reads the live pair.
 func (s *Store) load() (*current, error) {
-	c, err := tls.LoadX509KeyPair(s.path(crtName), s.path(keyName))
+	c, keyPEM, err := loadPair(s.path(crtName), s.path(keyName))
 	if err != nil {
 		return nil, fmt.Errorf("the HTTPS certificate in %s could not be loaded: %w", s.dir, err)
 	}
 	info := infoOf(c.Leaf)
+	info.Temporary = isTemporary(c.Leaf, keyPEM)
 	if !info.Temporary {
 		chain := make([]*x509.Certificate, 0, len(c.Certificate))
 		for _, der := range c.Certificate {
@@ -254,6 +255,9 @@ func (s *Store) repair() error {
 				return fmt.Errorf("restore the previous certificate: %w", err)
 			}
 			s.recovered = RecoveredRestoredPrevious
+		case pairMatches(crt, key):
+			// The certificate rename failed and the previous key was put back before a stop: the live pair
+			// is whole and only the leftovers below remain (review minor 9).
 		default:
 			return fmt.Errorf("the HTTPS certificate in %s was being replaced and neither the new nor the previous pair is complete", s.dir)
 		}

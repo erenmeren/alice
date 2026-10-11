@@ -245,8 +245,7 @@ func warnings(chain []*x509.Certificate, hosts []string, now time.Time) []string
 func infoOf(leaf *x509.Certificate) Info {
 	sum := sha256.Sum256(leaf.Raw)
 	in := Info{Subject: leaf.Subject.String(), DNSNames: leaf.DNSNames, NotBefore: leaf.NotBefore.UTC(),
-		NotAfter: leaf.NotAfter.UTC(), FingerprintSHA256: hex.EncodeToString(sum[:]),
-		Temporary: slices.Contains(leaf.Subject.Organization, Organization)}
+		NotAfter: leaf.NotAfter.UTC(), FingerprintSHA256: hex.EncodeToString(sum[:])} // Temporary is set by load (isTemporary)
 	for _, ip := range leaf.IPAddresses {
 		in.IPs = append(in.IPs, ip.String())
 	}

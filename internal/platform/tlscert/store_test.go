@@ -424,3 +424,92 @@ func fingerprintDER(der []byte) string {
 	sum := sha256.Sum256(der)
 	return hex.EncodeToString(sum[:])
 }
+
+// A certificate whose organisation reads like Alice's temporary one is still the customer's (review minor 8): it is
+// reported as such and never renewed, whether it was placed in the directory or uploaded.
+func TestACertificateNamedLikeTheTemporaryIsNotAlices(t *testing.T) {
+	t.Run("placed in the directory", func(t *testing.T) {
+		dir := t.TempDir()
+		certPEM, keyPEM := tlscert.GenerateForTest(t, tlscert.Organization, t0.Add(-time.Hour), t0.Add(5*24*time.Hour))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.crt"), certPEM, 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.key"), keyPEM, 0o400))
+		s := newStore(t, dir, &fakeNow{t: t0})
+		assert.False(t, s.Info().Temporary)
+		assert.Equal(t, certPEM, readFile(t, filepath.Join(dir, "tls.crt")), "not renewed at start")
+		renewed, err := s.Renew()
+		require.NoError(t, err)
+		assert.False(t, renewed)
+		assert.Equal(t, keyPEM, readFile(t, filepath.Join(dir, "tls.key")))
+	})
+	t.Run("uploaded", func(t *testing.T) {
+		dir := t.TempDir()
+		clk := &fakeNow{t: t0}
+		s := newStore(t, dir, clk)
+		require.True(t, s.Info().Temporary)
+		certPEM, keyPEM := tlscert.GenerateForTest(t, tlscert.Organization, t0.Add(-time.Hour), t0.AddDate(0, 0, 30))
+		info, err := s.Install(tlscert.Upload{CertPEM: certPEM, KeyPEM: keyPEM})
+		require.NoError(t, err)
+		assert.False(t, info.Temporary)
+		assert.False(t, s.Info().Temporary)
+		clk.set(t0.AddDate(0, 0, 27))
+		renewed, err := s.Renew()
+		require.NoError(t, err)
+		assert.False(t, renewed)
+		assert.Equal(t, certPEM, readFile(t, filepath.Join(dir, "tls.crt")))
+		s2 := newStore(t, dir, clk)
+		assert.False(t, s2.Info().Temporary, "nor after a restart")
+		assert.Equal(t, certPEM, readFile(t, filepath.Join(dir, "tls.crt")))
+	})
+	t.Run("the mark binds the key file to its own certificate", func(t *testing.T) {
+		dir := t.TempDir()
+		newStore(t, dir, &fakeNow{t: t0})
+		marked := readFile(t, filepath.Join(dir, "tls.key"))
+		// Alice's marked key next to another certificate for the same key is not the temporary pair.
+		c, err := tls.X509KeyPair(readFile(t, filepath.Join(dir, "tls.crt")), marked)
+		require.NoError(t, err)
+		other := tlscert.SelfSignForTest(t, c.PrivateKey, tlscert.Organization, t0.Add(-time.Hour), t0.Add(5*24*time.Hour))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.crt"), other, 0o644))
+		s := newStore(t, dir, &fakeNow{t: t0})
+		assert.False(t, s.Info().Temporary)
+		assert.Equal(t, other, readFile(t, filepath.Join(dir, "tls.crt")))
+	})
+}
+
+// A renewal stopped between its renames is finished at the next start and the pair is still Alice's.
+func TestAnInterruptedRenewalStaysTemporary(t *testing.T) {
+	for _, stage := range []string{tlscert.StageKeyWritten, tlscert.StageFilesWritten, tlscert.StageBetweenRenames} {
+		t.Run(stage, func(t *testing.T) {
+			dir := t.TempDir()
+			clk := &fakeNow{t: t0}
+			s := newStore(t, dir, clk)
+			clk.set(t0.Add(85 * 24 * time.Hour))
+			tlscert.SetInstallHook(s, func(st string) error {
+				if st == stage {
+					return errCrash
+				}
+				return nil
+			})
+			_, err := s.Renew()
+			require.ErrorIs(t, err, errCrash)
+			s2 := newStore(t, dir, clk)
+			assert.True(t, s2.Info().Temporary)
+			assert.Equal(t, clk.now().Add(90*24*time.Hour), s2.Info().NotAfter, "renewed by the restart if it was not finished")
+		})
+	}
+}
+
+// The certificate rename failed, the error path put the previous key back, and the process stopped before the
+// leftovers were removed (review minor 9): tls.crt.new and tls.crt.prev remain, the live pair matches. Alice
+// starts with the live pair and removes the leftovers.
+func TestStoreStartsWhenOnlyCertificateLeftoversRemain(t *testing.T) {
+	dir := t.TempDir()
+	s := newStore(t, dir, &fakeNow{t: t0})
+	before := served(t, s)
+	other, _ := customer(t, t0.AddDate(1, 0, 0))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.crt.new"), other.FullchainPEM, 0o644))
+	require.NoError(t, os.Link(filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.crt.prev")))
+	s2 := newStore(t, dir, &fakeNow{t: t0})
+	assert.Equal(t, before, served(t, s2))
+	assert.True(t, s2.Info().Temporary)
+	assert.Equal(t, []string{"tls.crt", "tls.key"}, dirNames(t, dir))
+}

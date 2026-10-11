@@ -1,7 +1,12 @@
 package tlscert
 
 import (
+	"crypto"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"testing"
 	"time"
 )
@@ -38,4 +43,20 @@ func SetSystemRootsForTest(roots ...*x509.Certificate) (restore func()) {
 		return p, nil
 	}
 	return func() { systemRoots = saved }
+}
+
+// SelfSignForTest issues a self-signed certificate for an existing key, without Alice's mark.
+func SelfSignForTest(t *testing.T, key crypto.PrivateKey, org string, notBefore, notAfter time.Time) []byte {
+	t.Helper()
+	signer, ok := key.(crypto.Signer)
+	if !ok {
+		t.Fatal("not a signer")
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(7), Subject: pkix.Name{Organization: []string{org}, CommonName: "Alice"},
+		NotBefore: notBefore, NotAfter: notAfter, DNSNames: []string{"localhost"}}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, signer.Public(), signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
