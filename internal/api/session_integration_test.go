@@ -668,6 +668,18 @@ func TestA08SecurityHeadersOnAPIResponses(t *testing.T) {
 		assert.Equal(t, "no-store", h.Get("Cache-Control"), name)
 		assert.Equal(t, "application/json; charset=utf-8", h.Get("Content-Type"), name)
 	}
+
+	// Task 15 review M-5: the route where make zap-baseline found rule 10055 (form-action has no
+	// default-src fallback), the OIDC callback, answers a bad state with a 303 redirect, not JSON,
+	// and carries the same API policy.
+	cb := s.freshClient().do(http.MethodGet, "/api/v1/auth/oidc/not-a-uuid/callback?state=x&code=y", nil)
+	require.Equal(t, http.StatusSeeOther, cb.Code)
+	assert.Equal(t, "/login?sso_error=sso.login_invalid", cb.Header().Get("Location"))
+	assert.Equal(t, "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'", cb.Header().Get("Content-Security-Policy"), "OIDC callback")
+	assert.Equal(t, "max-age=31536000; includeSubDomains", cb.Header().Get("Strict-Transport-Security"), "OIDC callback")
+	assert.Equal(t, "nosniff", cb.Header().Get("X-Content-Type-Options"), "OIDC callback")
+	assert.Equal(t, "DENY", cb.Header().Get("X-Frame-Options"), "OIDC callback")
+	assert.Equal(t, "no-referrer", cb.Header().Get("Referrer-Policy"), "OIDC callback")
 }
 
 // createToken steps c up and creates an API token, returning its secret and ID.
