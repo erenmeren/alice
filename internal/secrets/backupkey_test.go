@@ -202,3 +202,78 @@ func TestUnwrapChecksThePublicKey(t *testing.T) {
 	_, err = short.Unwrap(pass)
 	assert.ErrorIs(t, err, secrets.ErrDecrypt, "a wrapped value that is not an X25519 key")
 }
+
+// Task 1 review I-1: the passphrase is NFKC-normalised inside secrets, at wrap and at Unwrap, so a restore typed in
+// composed or decomposed Unicode (a macOS terminal, another input method) opens the same key.
+func TestUnwrapNormalisesThePassphrase(t *testing.T) {
+	composed := "çağrı İşgüzar ölçü é ＡＢＣ passphrase"            // NFC, with full-width letters
+	decomposed := "çağrı İşgüzar ölçü é ＡＢＣ passphrase" // NFD
+	require.NotEqual(t, composed, decomposed)
+
+	w, _, err := secrets.NewBackupKey([]byte(composed), fastKDF)
+	require.NoError(t, err)
+	for name, p := range map[string]string{
+		"composed":      composed,
+		"decomposed":    decomposed,
+		"compatibility": "çağrı İşgüzar ölçü é ABC passphrase", // the NFKC form of the full-width letters
+	} {
+		_, err := w.Unwrap([]byte(p))
+		assert.NoError(t, err, name)
+	}
+
+	d, _, err := secrets.NewBackupKey([]byte(decomposed), fastKDF)
+	require.NoError(t, err)
+	_, err = d.Unwrap([]byte(composed))
+	assert.NoError(t, err, "wrapped decomposed, unwrapped composed")
+
+	_, err = w.Unwrap([]byte("cagri Isguzar olcu e ABC passphrase"))
+	assert.ErrorIs(t, err, secrets.ErrDecrypt, "normalisation does not strip the marks")
+}
+
+// Records written before the fix were wrapped with the passphrase setup had already normalised. NFKC is idempotent,
+// so they still open, and Unwrap does not modify the caller's buffer.
+func TestUnwrapOpensKeysWrappedBeforeTheFix(t *testing.T) {
+	normalised := []byte("çağrı İşgüzar ölçü é ABC passphrase") // NFKC already, as setup passed it
+	recipient, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	sender, err := ecdh.X25519().GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	old, err := secrets.SealBackupKeyRawForTest(normalised, fastKDF, recipient.Bytes(), recipient.PublicKey().Bytes(), sender.PublicKey().Bytes())
+	require.NoError(t, err)
+
+	decomposed := []byte("çağrı İşgüzar ölçü é ABC passphrase")
+	for _, p := range [][]byte{normalised, decomposed} {
+		keep := bytes.Clone(p)
+		priv, err := old.Unwrap(p)
+		require.NoError(t, err)
+		assert.Equal(t, recipient.Bytes(), priv.Bytes())
+		assert.Equal(t, keep, p, "the caller's passphrase buffer is not cleared or rewritten")
+	}
+}
+
+// An empty or oversized passphrase is refused at wrap, and at Unwrap it is ErrDecrypt before Argon2 runs.
+func TestBackupKeyPassphraseLength(t *testing.T) {
+	_, _, err := secrets.NewBackupKey(nil, fastKDF)
+	assert.Error(t, err, "empty")
+	_, _, err = secrets.NewBackupKey([]byte{}, fastKDF)
+	assert.Error(t, err, "empty")
+	maxRunes := []byte(strings.Repeat("ş", secrets.MaxPassphraseRunes))
+	_, _, err = secrets.NewBackupKey(maxRunes, fastKDF)
+	assert.NoError(t, err, "the setup maximum (1,024 runes) fits")
+	_, _, err = secrets.NewBackupKey([]byte(strings.Repeat("ş", secrets.MaxPassphraseRunes+1)), fastKDF)
+	assert.Error(t, err, "one rune over")
+	_, _, err = secrets.NewBackupKey([]byte(strings.Repeat("a", 1<<20)), fastKDF)
+	assert.Error(t, err, "1 MiB")
+
+	w, _, err := secrets.NewBackupKey([]byte("the right passphrase!"), fastKDF)
+	require.NoError(t, err)
+	for name, p := range map[string][]byte{
+		"empty":   {},
+		"nil":     nil,
+		"1 MiB":   []byte(strings.Repeat("a", 1<<20)),
+		"1 rune+": []byte(strings.Repeat("ş", secrets.MaxPassphraseRunes+1)),
+	} {
+		_, err := w.Unwrap(p)
+		assert.ErrorIs(t, err, secrets.ErrDecrypt, name)
+	}
+}

@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"crypto/ecdh"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/argon2"
+	"golang.org/x/text/unicode/norm"
 )
 
 // KDFParams are the Argon2id parameters that turn the recovery passphrase
@@ -73,8 +76,42 @@ func NewBackupKey(passphrase []byte, p KDFParams) (WrappedBackupKey, *ecdh.Priva
 	return w, sender, nil
 }
 
-// wrapBackupKey seals priv under Argon2id(passphrase) with the v2 AAD.
+// MaxPassphraseRunes is the longest passphrase in runes after NFKC, the same limit setup enforces.
+const MaxPassphraseRunes = 1024
+
+// maxPassphraseBytes bounds the raw input before it is normalised: 16 bytes per allowed rune leaves room for any
+// decomposed or compatibility spelling of a passphrase within MaxPassphraseRunes.
+const maxPassphraseBytes = 16 * MaxPassphraseRunes
+
+var errPassphraseLength = errors.New("secrets: the recovery passphrase is empty or longer than 1,024 characters")
+
+// normalizePassphrase returns a new buffer with the NFKC form of the passphrase (the form setup checks, SEC-002), so
+// the same text typed composed or decomposed derives the same key. NFKC is idempotent: a passphrase setup already
+// normalised is unchanged. The caller clears the result; the input is never modified.
+func normalizePassphrase(passphrase []byte) ([]byte, error) {
+	if len(passphrase) == 0 || len(passphrase) > maxPassphraseBytes {
+		return nil, errPassphraseLength
+	}
+	pp := norm.NFKC.Append(make([]byte, 0, len(passphrase)), passphrase...)
+	if utf8.RuneCount(pp) > MaxPassphraseRunes {
+		clear(pp)
+		return nil, errPassphraseLength
+	}
+	return pp, nil
+}
+
+// wrapBackupKey seals priv under Argon2id(NFKC(passphrase)) with the v2 AAD.
 func wrapBackupKey(passphrase []byte, p KDFParams, priv, pub, senderPub []byte) (WrappedBackupKey, error) {
+	pp, err := normalizePassphrase(passphrase)
+	if err != nil {
+		return WrappedBackupKey{}, err
+	}
+	defer clear(pp)
+	return sealBackupKey(pp, p, priv, pub, senderPub)
+}
+
+// sealBackupKey seals priv under Argon2id of the passphrase bytes as given.
+func sealBackupKey(passphrase []byte, p KDFParams, priv, pub, senderPub []byte) (WrappedBackupKey, error) {
 	if err := p.validate(); err != nil {
 		return WrappedBackupKey{}, err
 	}
@@ -97,7 +134,9 @@ func backupKeyAD(pub, senderPub []byte) []byte {
 	return append(append(append(ad, backupKeyAAD...), pub...), senderPub...)
 }
 
-// Unwrap recovers the recipient private key. Only version 2 is accepted. A wrong passphrase, any modified field
+// Unwrap recovers the recipient private key. The passphrase is passed as typed: Unwrap applies the same NFKC step as
+// the wrap, so callers never normalise (an empty or over-long passphrase is ErrDecrypt). Only version 2 is accepted.
+// A wrong passphrase, any modified field
 // (including either public key) or a wrapped key whose public half is not PublicKey returns ErrDecrypt. A successful
 // Unwrap therefore also authenticates SenderPublicKey.
 func (w WrappedBackupKey) Unwrap(passphrase []byte) (*ecdh.PrivateKey, error) {
@@ -108,7 +147,12 @@ func (w WrappedBackupKey) Unwrap(passphrase []byte) (*ecdh.PrivateKey, error) {
 	if err := w.KDF.validate(); err != nil {
 		return nil, err
 	}
-	kek := argon2.IDKey(passphrase, w.Salt, w.KDF.Time, w.KDF.MemoryKiB, w.KDF.Threads, KeySize)
+	pp, err := normalizePassphrase(passphrase)
+	if err != nil {
+		return nil, ErrDecrypt
+	}
+	defer clear(pp)
+	kek := argon2.IDKey(pp, w.Salt, w.KDF.Time, w.KDF.MemoryKiB, w.KDF.Threads, KeySize)
 	defer clear(kek)
 	raw, err := open(kek, w.Nonce, w.Ciphertext, backupKeyAD(w.PublicKey, w.SenderPublicKey))
 	if err != nil {

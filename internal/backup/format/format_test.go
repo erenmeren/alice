@@ -136,7 +136,8 @@ func headerLen(t testing.TB, file []byte) int {
 // TestKnownAnswer rebuilds a file with an independent reference implementation of C7 (written here from the
 // primitives, not from the package) and requires byte equality; the committed SHA-256 catches format drift.
 // Everything is deterministic: fixed recipient and sender keys, a fixed wrapped-key record (the writer only copies it)
-// and a seeded ChaCha8 stream for the ephemeral key and the nonce prefix.
+// and a seeded ChaCha8 stream for the ephemeral key and the nonce prefix. testdata/kat_check.py recomputes the same
+// hash with pyca/cryptography and Python's json, independent of encoding/json (run by hand, see its docstring).
 func TestKnownAnswer(t *testing.T) {
 	var kat struct {
 		Seed       byte   `json:"seed"`
@@ -417,8 +418,8 @@ func TestTruncationAndReorderFail(t *testing.T) {
 		"no chunk":             {file[:hl], format.ErrTruncated},
 		"inside first chunk":   {file[:hl+100], format.ErrDecrypt},
 		"inside the tag":       {file[:hl+10], format.ErrTruncated},
-		"at a chunk boundary":  {file[:hl+2*chunk], format.ErrDecrypt},
-		"final chunk removed":  {file[:hl+3*chunk], format.ErrDecrypt},
+		"at a chunk boundary":  {file[:hl+2*chunk], format.ErrTruncated},
+		"final chunk removed":  {file[:hl+3*chunk], format.ErrTruncated},
 		"one byte short":       {file[:len(file)-1], format.ErrDecrypt},
 		"swapped chunks":       {concat(file[:hl], c(file, 1), c(file, 0), c(file, 2), c(file, 3)), format.ErrDecrypt},
 		"foreign chunk":        {concat(file[:hl], c(other, 0), c(file, 1), c(file, 2), c(file, 3)), format.ErrDecrypt},
@@ -779,4 +780,15 @@ func TestWriterNeedsRandomness(t *testing.T) {
 	}
 	// Two files of the same payload differ (another ephemeral key and nonce prefix).
 	assert.NotEqual(t, seal(t, k, payload(10)), seal(t, k, payload(10)))
+}
+
+// Task 1 review I-1: a backup keyed with the composed passphrase opens when the restore types it decomposed.
+func TestOpenNormalisesThePassphrase(t *testing.T) {
+	w, s, err := secrets.NewBackupKey([]byte("çağrı İşgüzar ölçü é yedek parolası"), fastKDF)
+	require.NoError(t, err)
+	plain := payload(1000)
+	file := seal(t, installKey{w: w, s: s}, plain)
+	got, err := open(file, []byte("çağrı İşgüzar ölçü é yedek parolası"))
+	require.NoError(t, err)
+	assert.Equal(t, plain, got)
 }

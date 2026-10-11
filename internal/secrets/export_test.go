@@ -21,3 +21,9 @@ func SetSyncDirForTest(f func(dir string) error) (restore func()) {
 func SealBackupKeyForTest(passphrase []byte, p KDFParams, priv, pub, senderPub []byte) (WrappedBackupKey, error) {
 	return wrapBackupKey(passphrase, p, priv, pub, senderPub)
 }
+
+// SealBackupKeyRawForTest wraps priv under Argon2id of the passphrase bytes exactly as given, without the NFKC step:
+// a record as the code before the I-1 fix wrote it (setup normalised before calling NewBackupKey).
+func SealBackupKeyRawForTest(passphrase []byte, p KDFParams, priv, pub, senderPub []byte) (WrappedBackupKey, error) {
+	return sealBackupKey(passphrase, p, priv, pub, senderPub)
+}

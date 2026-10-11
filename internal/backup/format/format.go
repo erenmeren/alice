@@ -517,8 +517,9 @@ func (r *Reader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// nextChunk reads and opens one chunk. A chunk is final when the stream ends right after it: either it is shorter
-// than a full sealed chunk, or a full one is followed by EOF.
+// nextChunk reads and opens one chunk. A chunk is final when it is shorter than a full sealed chunk. The writer
+// never seals a full chunk as final (a boundary payload gets an empty final chunk), so a full chunk followed by EOF
+// is a stream cut at a chunk boundary: ErrTruncated, without opening it.
 func (r *Reader) nextChunk() error {
 	buf := r.buf[:cap(r.buf)]
 	n := 0
@@ -540,7 +541,7 @@ func (r *Reader) nextChunk() error {
 		case k == 1:
 			r.haveLook = true
 		case errors.Is(lerr, io.EOF):
-			final = true
+			return ErrTruncated
 		default:
 			return fmt.Errorf("format: read the backup: %w", lerr)
 		}
