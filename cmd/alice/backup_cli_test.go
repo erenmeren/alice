@@ -88,7 +88,10 @@ func TestRestoreErrorMessages(t *testing.T) {
 		"Alice is still connected to the database. Stop it first.":          backup.ErrDatabaseInUse,
 		"There is no backup file at that path.":                             backup.ErrNotFound,
 		"The audit log in this backup is damaged at entry 7. Nothing was changed. To restore it anyway, run the command again with --accept-broken-audit-log (the damage stays visible in Alice).": &backup.ErrAuditBroken{Seq: 7},
-		"The restore failed: boom": errors.New("boom"),
+		"The restore failed: boom":                           errors.New("boom"),
+		"Another restore is running. Wait for it to finish.": backup.ErrRestoreRunning,
+		"ALICE_KEYS_DIR and ALICE_STATE_DIR must be two different directories. Nothing was changed.":                                                                                                                  backup.ErrSameDirectory,
+		"An interrupted restore left an unverified copy of the database (<database>_restore) and no live database. Nothing was changed. Drop that copy by hand (see the operator guide), then run the restore again.": backup.ErrUnfinishedStaging,
 	}
 	for want, err := range cases {
 		msg, code := restoreError(err)

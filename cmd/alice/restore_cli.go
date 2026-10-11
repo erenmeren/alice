@@ -134,6 +134,13 @@ func restoreError(err error) (string, int) {
 			noSpace.Free/1e9, int64(math.Ceil(float64(noSpace.Need)/1e9))), 1
 	case errors.Is(err, backup.ErrDatabaseInUse):
 		return msgStillConnected, 1
+	case errors.Is(err, backup.ErrRestoreRunning):
+		return "Another restore is running. Wait for it to finish.", 1
+	case errors.Is(err, backup.ErrSameDirectory):
+		return "ALICE_KEYS_DIR and ALICE_STATE_DIR must be two different directories. Nothing was changed.", 1
+	case errors.Is(err, backup.ErrUnfinishedStaging):
+		return "An interrupted restore left an unverified copy of the database (<database>_restore) and no live database. " +
+			"Nothing was changed. Drop that copy by hand (see the operator guide), then run the restore again.", 1
 	case errors.Is(err, backup.ErrNotFound):
 		return "There is no backup file at that path.", 1
 	case errors.Is(err, errPassphraseTooLong):
