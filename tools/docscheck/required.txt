@@ -5,3 +5,4 @@ docs/install-guide.md	Does this fingerprint match the one your vendor published?
 docs/operator-guide.md	Users and API tokens are as they were when the backup was made
 docs/operator-guide.md	Once a month, run `sudo /opt/alice/alicectl backup verify <newest file> --deep`
 docs/admin-guide.md	Delivery is at most once.
+docs/release-checklist.md	make reproducible-check
