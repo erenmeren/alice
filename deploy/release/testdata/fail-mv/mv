@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Test wrapper for TestUpdateKeepsTheReleaseKeysWhenTheSwapFails: an mv whose source is a
+# release-keys.new directory fails; every other mv runs the real mv (PATH without this directory).
+set -euo pipefail
+for a in "$@"; do
+  if [[ "$a" == */release-keys.new ]]; then
+    echo "mv: stub failure for $a" >&2
+    exit 1
+  fi
+done
+self=${BASH_SOURCE[0]%/*}
+p=":$PATH:"
+p=${p//:"$self":/:}
+p=${p#:}
+p=${p%:}
+PATH=$p exec mv "$@"

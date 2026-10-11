@@ -11,6 +11,9 @@
 #                        "running" next to the stubs and changed by up, stop and down
 #   STUB_DB_BYTES        what the pg_database_size query prints
 #   STUB_BACKUP_NAME     the file name a backup call reports (and creates in <inst>/backups)
+#   STUB_PROJECTS        "p1 p2": compose projects that have containers ("docker ps -a -q --filter
+#                        label=com.docker.compose.project=P" prints a container ID for them)
+#   STUB_PS_FAIL         1: "docker ps" fails
 set -euo pipefail
 # shellcheck source=stub-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/stub-common.sh"
@@ -64,6 +67,20 @@ case "${1:-}" in
     ;;
   info) exit 0 ;;
   load) echo "Loaded image: stub"; exit 0 ;;
+  ps)
+    if [[ -n "${STUB_PS_FAIL:-}" ]]; then
+      echo "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?" >&2
+      exit 1
+    fi
+    label_project=""
+    for a in "$@"; do
+      case "$a" in label=com.docker.compose.project=*) label_project=${a#label=com.docker.compose.project=} ;; esac
+    done
+    for p in ${STUB_PROJECTS:-}; do
+      if [[ -n "$label_project" && "$p" == "$label_project" ]]; then echo "0123456789ab"; fi
+    done
+    exit 0
+    ;;
   image)
     ref=${*: -1}
     for pair in ${STUB_IMAGE_IDS:-}; do

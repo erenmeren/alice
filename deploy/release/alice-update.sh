@@ -174,6 +174,19 @@ refuse_damaged() {
   exit 1
 }
 
+# recover_release_keys puts release-keys/ back when an earlier update stopped between the two
+# renames of replace_release_keys: release-keys.new is then complete (it is renamed only after it
+# was written), else the keys that were in place before are in release-keys.old.
+recover_release_keys() {
+  local k=$dir/release-keys
+  if [[ -e "$k" || -L "$k" ]]; then return 0; fi
+  if [[ -d "$k.new" && ! -L "$k.new" ]]; then
+    mv -T -- "$k.new" "$k"
+  elif [[ -d "$k.old" && ! -L "$k.old" ]]; then
+    mv -T -- "$k.old" "$k"
+  fi
+}
+
 # intake copies the package into the work directory and verifies the copy only (S-3, S-7).
 intake() {
   local name hex line actual rc=0
@@ -220,6 +233,11 @@ preflight() {
     printf '[FAIL] No installation of Alice was found in %s. Run this script from the installation directory: cd /opt/alice && sudo ./alice-update.sh <package>\n' "$dir"
     exit 1
   fi
+  alice_dir=$dir
+  if ! alice_lock; then
+    alice_lock_busy "[FAIL] "
+    exit 1
+  fi
   alice_log_open "$log"
   mkdir -m 0700 -- "$work"
   trap 'cleanup' EXIT
@@ -249,6 +267,7 @@ preflight() {
     exit 1
   fi
   alice_valid_zone "$env_zone" || env_zone=UTC
+  recover_release_keys
 
   intake
   new=$rel_version
@@ -372,20 +391,33 @@ migrate_and_start() {
   }
 }
 
-# finish installs the files of the new release; release-keys/ is replaced, not merged (S-35).
+# replace_release_keys replaces release-keys/ with the keys of the new release, not merging them
+# (S-35): release-keys.new is written completely, then put in place by renames only, so there is
+# no moment with a partly written key directory. When the second rename fails the old keys are
+# renamed back; recover_release_keys repairs a crash between the two renames.
+replace_release_keys() {
+  local f k=$dir/release-keys
+  rm -rf -- "$k.new" "$k.old" || return 1
+  install -d -m 0755 -- "$k.new" || return 1
+  for f in "$pkg"/release-keys/rk-*.pem; do
+    if [[ -f "$f" ]]; then install -m 0644 -- "$f" "$k.new/" || return 1; fi
+  done
+  mv -T -- "$k" "$k.old" || return 1
+  if ! mv -T -- "$k.new" "$k"; then
+    mv -T -- "$k.old" "$k"
+    return 1
+  fi
+  rm -rf -- "$k.old"
+}
+
+# finish installs the files of the new release.
 finish() {
   local f
   for f in install.sh alice-update.sh alicectl; do install -m 0755 -- "$pkg/$f" "$dir/$f"; done
   install -m 0644 -- "$pkg/lib/alice-lib.sh" "$dir/lib/alice-lib.sh"
   if [[ ! -d "$dir/lib/initdb" ]]; then install -d -m 0755 -- "$dir/lib/initdb"; fi
   install -m 0644 -- "$pkg/lib/initdb/10-alice-roles.sh" "$dir/lib/initdb/10-alice-roles.sh"
-  rm -rf -- "$dir/release-keys.new"
-  install -d -m 0755 -- "$dir/release-keys.new"
-  for f in "$pkg"/release-keys/rk-*.pem; do
-    if [[ -f "$f" ]]; then install -m 0644 -- "$f" "$dir/release-keys.new/"; fi
-  done
-  rm -rf -- "$dir/release-keys"
-  mv -- "$dir/release-keys.new" "$dir/release-keys"
+  replace_release_keys
   alice_copy_extras "$pkg" "$dir"
   install -m 0644 -- "$pkg/RELEASE" "$dir/RELEASE"
   install -m 0644 -- "$pkg/VERSION" "$dir/VERSION"

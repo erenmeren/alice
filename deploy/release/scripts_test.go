@@ -18,6 +18,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -28,6 +29,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -148,6 +151,9 @@ func (e *shEnv) cmd(stdin, script string, args ...string) *exec.Cmd {
 	}
 	c.Env = env
 	c.Stdin = strings.NewReader(stdin)
+	// A new session without a controlling terminal: /dev/tty cannot be opened unless a test
+	// gives the script a pseudo-terminal (runTTY), even when go test runs in a terminal.
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	return c
 }
 
@@ -689,8 +695,8 @@ func TestInstallHappyPath(t *testing.T) {
 	assert.NotContains(t, string(env), strings.TrimSpace(string(mk)))
 
 	calls := e.dockerCalls()
-	shOrder(t, calls, []string{"load", "-i", filepath.Join(pkg, "images/alice-1.0.0.tar")},
-		[]string{"load", "-i", filepath.Join(pkg, "images/postgres-1.0.0.tar")},
+	shOrder(t, calls, []string{"load", "-i", "~/alice/images/alice-1.0.0.tar"},
+		[]string{"load", "-i", "~/alice/images/postgres-1.0.0.tar"},
 		[]string{"image", "inspect", "alice:1.0.0"}, []string{"image", "inspect", "alice-postgres:1.0.0"},
 		[]string{"compose", "up", "-d", "--wait", "--wait-timeout", "180", "postgres"},
 		[]string{"compose", "run", "--rm", "migrate"},
@@ -1148,7 +1154,7 @@ func (e *shEnv) snapshot() map[string]string {
 			return err
 		}
 		rel, _ := filepath.Rel(e.inst, p)
-		if strings.HasPrefix(rel, "update-") || strings.HasPrefix(rel, "backups/") {
+		if strings.HasPrefix(rel, "update-") || strings.HasPrefix(rel, "backups/") || rel == ".lock" {
 			return nil
 		}
 		b, err := os.ReadFile(p)
@@ -1309,6 +1315,8 @@ func TestUpdateHappyPathOrder(t *testing.T) {
 	shNoDir(t, filepath.Join(e.inst, "release-keys", "rk-old-01.pem"))
 	_, err = os.Stat(filepath.Join(e.inst, "release-keys", shTestKeyID+".pem"))
 	assert.NoError(t, err)
+	shNoDir(t, filepath.Join(e.inst, "release-keys.new"))
+	shNoDir(t, filepath.Join(e.inst, "release-keys.old"))
 	env, err := os.ReadFile(filepath.Join(e.inst, ".env"))
 	require.NoError(t, err)
 	assert.Contains(t, string(env), "ALICE_IMAGE=alice:1.0.0\n")
@@ -1423,15 +1431,32 @@ func TestUpdateRollsBackWhenMigrationFails(t *testing.T) {
 		[]string{"run", "--rm", "alice-admin", "restore", bk, "--db-only", "--confirm", "RESTORE", "--passphrase-stdin"},
 		[]string{"compose", "up", "-d", "--wait", "alice"},
 		[]string{"selfcheck"})
+	// The update stops Alice and ends the sessions itself before it runs alicectl restore, which
+	// does both again: two stops and two cleanups after migrate, the first pair before the restore's
+	// deep verify.
+	after := calls[mig+1:]
+	stops, terms := 0, 0
+	for _, c := range after {
+		if shHas(c.args, "compose", "stop", "alice") {
+			stops++
+		}
+		if shHas(c.args, "psql", "~pg_terminate_backend") {
+			terms++
+		}
+	}
+	assert.Equal(t, 2, stops, shDump(after))
+	assert.Equal(t, 2, terms, shDump(after))
+	shOrder(t, after, []string{"compose", "stop", "alice"}, []string{"psql", "~pg_terminate_backend"},
+		[]string{"backup", "verify", bk, "--deep"})
 	// The session cleanup command matches by substring of its SQL argument.
 	if len(idx) == 5 {
 		rs := calls[mig+1+idx[2]]
 		require.NotNil(t, rs.stdin)
 		assert.Equal(t, shCanary+"\n", *rs.stdin)
 	}
-	after := e.snapshot()
+	snap := e.snapshot()
 	for _, f := range []string{"docker-compose.yml", ".env", "RELEASE", "VERSION"} {
-		assert.Equal(t, before[f], after[f], "%s restored byte for byte", f)
+		assert.Equal(t, before[f], snap[f], "%s restored byte for byte", f)
 	}
 	_, err := os.Stat(filepath.Join(e.inst, "backups", "alice-backup-0123abcd-20261011T000000Z-pre-upgrade-1.0.0-rc.2.alicebak"))
 	assert.NoError(t, err, "the pre-update backup is kept")
@@ -1457,12 +1482,11 @@ func TestUpdateInterruptedAfterStopRollsBack(t *testing.T) {
 	t.Parallel()
 	e := shNewInstalled(t, "1.0.0-rc.2")
 	e.vars["STUB_SLEEP"] = "run migrate"
-	e.vars["STUB_SLEEP_SECS"] = "30"
+	e.vars["STUB_SLEEP_SECS"] = "2"
 	tb := shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
 	c := e.cmd("", filepath.Join(e.inst, "alice-update.sh"), tb, "--passphrase-file", filepath.Join(e.root, "pass"), "--non-interactive")
 	var out bytes.Buffer
 	c.Stdout, c.Stderr = &out, &out
-	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	require.NoError(t, c.Start())
 	deadline := time.Now().Add(60 * time.Second)
 	for shIndex(e.dockerCalls(), 0, "compose", "run", "migrate") < 0 {
@@ -1470,11 +1494,16 @@ func TestUpdateInterruptedAfterStopRollsBack(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	time.Sleep(200 * time.Millisecond)
-	require.NoError(t, syscall.Kill(-c.Process.Pid, syscall.SIGINT))
+	// Only the script gets the signal: the sleeping migrate stub is not killed and succeeds, so the
+	// update returns only because its INT trap ran (an ignored or untrapped signal would end in
+	// "Alice is now version 1.0.0." or exit 130).
+	require.NoError(t, syscall.Kill(c.Process.Pid, syscall.SIGINT))
 	err := c.Wait()
 	var ee *exec.ExitError
 	require.ErrorAs(t, err, &ee, out.String())
 	assert.Equal(t, 1, ee.ExitCode(), out.String())
+	assert.Contains(t, out.String(), "\nInterrupted.\n")
+	assert.NotContains(t, out.String(), "Alice is now version")
 	if !assert.Contains(t, out.String(), "The update to 1.0.0 failed and Alice was returned to 1.0.0-rc.2.") {
 		logs, _ := filepath.Glob(filepath.Join(e.inst, "update-*.log"))
 		for _, l := range logs {
@@ -1514,7 +1543,8 @@ func TestAlicectl(t *testing.T) {
 		t.Parallel()
 		e := shNewInstalled(t, "1.0.0")
 		shWrite(t, filepath.Join(e.inst, "backups/x.alicebak"), "", 0o600)
-		r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"))
+		r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"),
+			"--confirm", "RESTORE")
 		require.Equal(t, 0, r.code, r.out)
 		calls := e.dockerCalls()
 		idx := shOrder(t, calls,
@@ -1616,7 +1646,7 @@ func TestAlicectl(t *testing.T) {
 		e := shNewInstalled(t, "1.0.0")
 		shWrite(t, filepath.Join(e.inst, "backups/x.alicebak"), "", 0o600)
 		require.NoError(t, os.Chmod(filepath.Join(e.root, "pass"), 0o640))
-		r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"))
+		r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"), "--confirm", "RESTORE")
 		assert.Equal(t, 2, r.code, r.out)
 		assert.Contains(t, r.out, "[WARN] ")
 		assert.Empty(t, e.dockerCalls())
@@ -1625,7 +1655,7 @@ func TestAlicectl(t *testing.T) {
 		t.Parallel()
 		e := shNewInstalled(t, "1.0.0")
 		shWrite(t, filepath.Join(e.inst, "backups/x.alicebak"), "", 0o600)
-		r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"))
+		r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--confirm", "RESTORE")
 		assert.Contains(t, r.out, "A passphrase is needed. Run this command in a terminal, or pass --passphrase-file to alicectl.\n")
 		assert.Equal(t, 2, r.code)
 	})
@@ -1658,7 +1688,7 @@ func TestAlicectlWrongPassphraseNeverStopsAlice(t *testing.T) {
 	e.vars["STUB_COMPOSE_FAIL"] = "backup verify"
 	e.vars["STUB_FAIL_OUTPUT"] = "The passphrase is wrong or the file is damaged. Nothing was changed."
 	shWrite(t, filepath.Join(e.inst, "backups/x.alicebak"), "", 0o600)
-	r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"))
+	r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"), "--confirm", "RESTORE")
 	assert.Equal(t, 1, r.code, r.out)
 	assert.Contains(t, r.out, "The passphrase is wrong or the file is damaged. Nothing was changed.\n")
 	calls := e.dockerCalls()
@@ -1671,7 +1701,7 @@ func TestAlicectlRestartsAliceAfterAFailedRestore(t *testing.T) {
 	e := shNewInstalled(t, "1.0.0")
 	e.vars["STUB_COMPOSE_FAIL"] = "alice-admin restore"
 	shWrite(t, filepath.Join(e.inst, "backups/x.alicebak"), "", 0o600)
-	r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"))
+	r := e.ctl("", "restore", filepath.Join(e.inst, "backups/x.alicebak"), "--passphrase-file", filepath.Join(e.root, "pass"), "--confirm", "RESTORE")
 	assert.Equal(t, 1, r.code, r.out)
 	shOrder(t, e.dockerCalls(), []string{"compose", "stop", "alice"}, []string{"alice-admin", "restore"},
 		[]string{"compose", "up", "-d", "--wait", "alice"}, []string{"selfcheck"})
@@ -1981,4 +2011,383 @@ func TestStaticScannerFindsUnquotedExpansions(t *testing.T) {
 	}
 	code, _ := shStrip(`echo "docker pull x" # docker pull`)
 	assert.NotContains(t, code, "docker")
+}
+
+// ---- fixes of the Task 11 review ----
+
+// shNoStage asserts that install.sh removed its private copy of the package.
+func shNoStage(t *testing.T, parent string) {
+	t.Helper()
+	m, err := filepath.Glob(filepath.Join(parent, ".alice-install-*"))
+	require.NoError(t, err)
+	assert.Empty(t, m, "the private package copy is left behind")
+}
+
+// TestInstallVerifiesACopy (review I-1): right after the first signature check the release key and
+// alicectl of the extracted package are replaced. install.sh must fingerprint, install and load
+// only the copy it verified.
+func TestInstallVerifiesACopy(t *testing.T) {
+	t.Parallel()
+	e := shNew(t)
+	pkg := e.pkg(shPkgOpts{})
+	keyPath := filepath.Join(pkg, "release-keys", shTestKeyID+".pem")
+	signedKey, err := os.ReadFile(keyPath)
+	require.NoError(t, err)
+	signedCtl, err := os.ReadFile(filepath.Join(pkg, "alicectl"))
+	require.NoError(t, err)
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	evilKey, _ := shPubPEM(t, pub, shTestKeyID)
+	shWrite(t, filepath.Join(e.root, "evil.pem"), string(evilKey), 0o644)
+	shWrite(t, filepath.Join(e.root, "evil-alicectl"), "#!/bin/sh\necho evil\n", 0o755)
+	swapDir, err := filepath.Abs("testdata/swap-openssl")
+	require.NoError(t, err)
+	swapLog := filepath.Join(e.root, "swap.log")
+	e.env["SWAP_REAL_PATH"] = os.Getenv("PATH")
+	e.env["SWAP_LOG"] = swapLog
+	e.env["SWAP_ORIGINAL"] = keyPath
+	e.env["SWAP_REPLACEMENT"] = filepath.Join(e.root, "evil.pem")
+	e.env["SWAP_SECOND_ORIGINAL"] = filepath.Join(pkg, "alicectl")
+	e.env["SWAP_SECOND_REPLACEMENT"] = filepath.Join(e.root, "evil-alicectl")
+	e.path = swapDir + ":" + e.path
+
+	r := e.install(pkg)
+	require.Equal(t, 0, r.code, r.out)
+	_, err = os.Stat(swapLog + ".swapped")
+	require.NoError(t, err, "the package was changed during the run")
+	assert.Contains(t, r.out, "(SHA-256 fingerprint "+e.keyHash+")")
+	b, err := os.ReadFile(filepath.Join(e.inst, "release-keys", shTestKeyID+".pem"))
+	require.NoError(t, err)
+	assert.Equal(t, string(signedKey), string(b), "the installed release key is the verified one")
+	b, err = os.ReadFile(filepath.Join(e.inst, "alicectl"))
+	require.NoError(t, err)
+	assert.Equal(t, string(signedCtl), string(b), "the installed alicectl is the verified one")
+	sl, err := os.ReadFile(swapLog)
+	require.NoError(t, err)
+	for _, l := range strings.Split(string(sl), "\n") {
+		assert.NotContains(t, l, pkg+"/", "openssl read the extracted package itself: %s", l)
+	}
+	for _, c := range e.dockerCalls() {
+		for _, a := range c.args {
+			assert.False(t, strings.HasPrefix(a, pkg+"/"), "docker read the extracted package itself: %s", c.line())
+		}
+	}
+	shNoStage(t, e.srv)
+}
+
+func TestInstallRefusesAnotherProjectsContainers(t *testing.T) {
+	t.Parallel()
+	msg := func(p string) string {
+		return "[FAIL] Docker already has containers of the project " + p +
+			". Choose another --project, or update the installation that uses it with its own alice-update.sh.\n"
+	}
+	noCompose := func(t *testing.T, e *shEnv) {
+		t.Helper()
+		for _, c := range e.dockerCalls() {
+			assert.False(t, len(c.args) > 0 && c.args[0] == "compose" && !shHas(c.args, "version"), c.line())
+			assert.False(t, shHas(c.args, "load"), c.line())
+		}
+	}
+	t.Run("named project", func(t *testing.T) {
+		t.Parallel()
+		e := shNew(t)
+		e.vars["STUB_PROJECTS"] = "alice-unit"
+		r := e.install(e.pkg(shPkgOpts{}))
+		assert.Contains(t, r.out, msg("alice-unit"))
+		assert.Equal(t, 1, r.code, r.out)
+		shNoDir(t, e.inst)
+		noCompose(t, e)
+		shOrder(t, e.dockerCalls(), []string{"ps", "-a", "-q", "--filter", "label=com.docker.compose.project=alice-unit"})
+	})
+	t.Run("default project", func(t *testing.T) {
+		t.Parallel()
+		e := shNew(t)
+		e.vars["STUB_PROJECTS"] = "pt-other alice"
+		pkg := e.pkg(shPkgOpts{})
+		r := e.run("", filepath.Join(pkg, "install.sh"), "--dir", e.inst, "--port", "19443", "--bind", "127.0.0.1",
+			"--hostname", "alice.test", "--non-interactive", "--fingerprint", e.keyHash)
+		assert.Contains(t, r.out, msg("alice"))
+		assert.Equal(t, 1, r.code, r.out)
+		shNoDir(t, e.inst)
+		noCompose(t, e)
+	})
+	t.Run("containers of other projects do not matter", func(t *testing.T) {
+		t.Parallel()
+		e := shNew(t)
+		e.vars["STUB_PROJECTS"] = "alice alice-unit-2"
+		r := e.install(e.pkg(shPkgOpts{}))
+		assert.Equal(t, 0, r.code, r.out)
+		assert.Contains(t, r.out, "[ OK ] No installation yet\n")
+	})
+	t.Run("docker cannot list the containers", func(t *testing.T) {
+		t.Parallel()
+		e := shNew(t)
+		e.vars["STUB_PS_FAIL"] = "1"
+		r := e.install(e.pkg(shPkgOpts{}))
+		assert.Contains(t, r.out, "[FAIL] The containers of the project alice-unit could not be listed. Check that Docker is running, then run this installer again.\n")
+		assert.Equal(t, 1, r.code, r.out)
+		shNoDir(t, e.inst)
+	})
+}
+
+func TestUninstallRefusesAnotherProject(t *testing.T) {
+	t.Parallel()
+	e := shNew(t)
+	require.Equal(t, 0, e.install(e.pkg(shPkgOpts{})).code)
+	script := filepath.Join(e.inst, "install.sh")
+	before := len(e.dockerCalls())
+	for _, args := range [][]string{{"--project", "alice"}, {"--project", "alice", "--purge", "--confirm", "DELETE"}} {
+		r := e.run("", script, append([]string{"--dir", e.inst, "--uninstall"}, args...)...)
+		assert.Contains(t, r.out, "--project alice is not the project of the installation in "+e.inst+" (alice-unit). Leave out --project.\n")
+		assert.Equal(t, 2, r.code, r.out)
+		assert.Empty(t, e.dockerCalls()[before:])
+		_, err := os.Stat(filepath.Join(e.inst, "VERSION"))
+		require.NoError(t, err)
+	}
+
+	// A .env without a valid project name is refused even with --project.
+	envPath := filepath.Join(e.inst, ".env")
+	good, err := os.ReadFile(envPath)
+	require.NoError(t, err)
+	shWrite(t, envPath, strings.Replace(string(good), "COMPOSE_PROJECT_NAME=alice-unit", "COMPOSE_PROJECT_NAME=", 1), 0o640)
+	r := e.run("", script, "--dir", e.inst, "--uninstall", "--project", "alice")
+	assert.Contains(t, r.out, "The project name in "+e.inst+"/.env is not valid. Fix COMPOSE_PROJECT_NAME there, then run this again.\n")
+	assert.Equal(t, 2, r.code, r.out)
+	assert.Empty(t, e.dockerCalls()[before:])
+
+	// The project of .env, given or not, is accepted.
+	shWrite(t, envPath, string(good), 0o640)
+	r = e.run("", script, "--dir", e.inst, "--uninstall", "--project", "alice-unit")
+	require.Equal(t, 0, r.code, r.out)
+	calls := e.dockerCalls()[before:]
+	i := shIndex(calls, 0, "compose", "down")
+	require.GreaterOrEqual(t, i, 0)
+	assert.True(t, shHas(calls[i].args, "--project-name", "alice-unit"), calls[i].line())
+}
+
+// shOpenPty opens a pseudo-terminal pair (master, slave).
+func shOpenPty(t *testing.T) (*os.File, *os.File) {
+	t.Helper()
+	m, err := os.OpenFile("/dev/ptmx", os.O_RDWR|syscall.O_NOCTTY|syscall.O_CLOEXEC, 0)
+	require.NoError(t, err)
+	var unlock int32
+	if _, _, en := syscall.Syscall(syscall.SYS_IOCTL, m.Fd(), syscall.TIOCSPTLCK, uintptr(unsafe.Pointer(&unlock))); en != 0 {
+		t.Fatalf("unlockpt: %v", en)
+	}
+	var n uint32
+	if _, _, en := syscall.Syscall(syscall.SYS_IOCTL, m.Fd(), syscall.TIOCGPTN, uintptr(unsafe.Pointer(&n))); en != 0 {
+		t.Fatalf("ptsname: %v", en)
+	}
+	s, err := os.OpenFile(fmt.Sprintf("/dev/pts/%d", n), os.O_RDWR|syscall.O_NOCTTY|syscall.O_CLOEXEC, 0)
+	require.NoError(t, err)
+	return m, s
+}
+
+// runTTY runs script with a pseudo-terminal as its controlling terminal (/dev/tty), ttyInput
+// typed on it, and stdin as standard input; it returns the result (standard output and error)
+// and what the script wrote to the terminal.
+func (e *shEnv) runTTY(stdin, ttyInput, script string, args ...string) (shResult, string) {
+	t := e.t
+	t.Helper()
+	m, s := shOpenPty(t)
+	c := e.cmd(stdin, script, args...)
+	var out bytes.Buffer
+	c.Stdout, c.Stderr = &out, &out
+	c.ExtraFiles = []*os.File{s}
+	c.SysProcAttr = &syscall.SysProcAttr{Setsid: true, Setctty: true, Ctty: 3}
+	require.NoError(t, c.Start())
+	var tty bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&tty, m) // ends with EIO once no process holds the terminal open
+		close(done)
+	}()
+	_, err := m.WriteString(ttyInput)
+	require.NoError(t, err)
+	err = c.Wait()
+	// The test keeps the terminal open until the script has ended (the script closes its inherited
+	// descriptor and opens /dev/tty when it needs it), so everything it wrote is read.
+	require.NoError(t, s.Close())
+	<-done
+	_ = m.Close()
+	code := 0
+	if err != nil {
+		var ee *exec.ExitError
+		require.ErrorAs(t, err, &ee, out.String())
+		code = ee.ExitCode()
+	}
+	return shResult{out: out.String(), code: code}, tty.String()
+}
+
+// TestAlicectlRestoreAsksOnTheTerminal (review I-3): without --confirm the wrapper asks for RESTORE
+// on the terminal after the deep verification and before Alice is stopped; the container itself is
+// always given --confirm RESTORE and never asked.
+func TestAlicectlRestoreAsksOnTheTerminal(t *testing.T) {
+	t.Parallel()
+	const prompt = "Type RESTORE to replace all current data: "
+	setup := func(t *testing.T) (*shEnv, string) {
+		e := shNewInstalled(t, "1.0.0")
+		bk := filepath.Join(e.inst, "backups/x.alicebak")
+		shWrite(t, bk, "", 0o600)
+		return e, bk
+	}
+	restoreCall := func(t *testing.T, e *shEnv) shCall {
+		t.Helper()
+		calls := e.dockerCalls()
+		i := shIndex(calls, 0, "alice-admin", "restore")
+		require.GreaterOrEqual(t, i, 0, shDump(calls))
+		return calls[i]
+	}
+	t.Run("no terminal and no --confirm", func(t *testing.T) {
+		t.Parallel()
+		e, bk := setup(t)
+		r := e.ctl("", "restore", bk, "--passphrase-file", filepath.Join(e.root, "pass"))
+		assert.Contains(t, r.out, "Without a terminal, pass --confirm RESTORE to confirm the restore.\n")
+		assert.Equal(t, 2, r.code, r.out)
+		assert.Empty(t, e.dockerCalls())
+	})
+	t.Run("cancelled before Alice is stopped", func(t *testing.T) {
+		t.Parallel()
+		for _, answer := range []string{"no\n", "restore\n", "\x04"} {
+			e, bk := setup(t)
+			r, tty := e.runTTY("", answer, filepath.Join(e.inst, "alicectl"), "restore", bk, "--passphrase-file", filepath.Join(e.root, "pass"))
+			assert.Equal(t, 1, r.code, r.out)
+			assert.Contains(t, r.out, "Restore cancelled. Nothing was changed.\n")
+			assert.Contains(t, tty, prompt)
+			calls := e.dockerCalls()
+			assert.GreaterOrEqual(t, shIndex(calls, 0, "backup", "verify", "/opt/alice/backups/x.alicebak", "--deep"), 0, shDump(calls))
+			assert.Equal(t, -1, shIndex(calls, 0, "compose", "stop"), shDump(calls))
+			assert.Equal(t, -1, shIndex(calls, 0, "restore"), shDump(calls))
+			assert.Equal(t, -1, shIndex(calls, 0, "compose", "up"), shDump(calls))
+		}
+	})
+	t.Run("confirmed on the terminal", func(t *testing.T) {
+		t.Parallel()
+		e, bk := setup(t)
+		r, tty := e.runTTY("", "RESTORE\n", filepath.Join(e.inst, "alicectl"), "restore", bk, "--passphrase-file", filepath.Join(e.root, "pass"))
+		require.Equal(t, 0, r.code, r.out)
+		assert.Contains(t, tty, prompt)
+		shOrder(t, e.dockerCalls(), []string{"backup", "verify", "--deep"}, []string{"compose", "stop", "alice"},
+			[]string{"alice-admin", "restore", "/opt/alice/backups/x.alicebak", "--confirm", "RESTORE", "--passphrase-stdin"},
+			[]string{"compose", "up", "alice"}, []string{"selfcheck"})
+		rs := restoreCall(t, e)
+		require.NotNil(t, rs.stdin)
+		assert.Equal(t, shCanary+"\n", *rs.stdin)
+	})
+	t.Run("passphrase on standard input, confirmation on the terminal", func(t *testing.T) {
+		t.Parallel()
+		e, bk := setup(t)
+		r, _ := e.runTTY(shCanary+"\n", "RESTORE\n", filepath.Join(e.inst, "alicectl"), "restore", bk, "--db-only", "--passphrase-stdin")
+		require.Equal(t, 0, r.code, r.out)
+		rs := restoreCall(t, e)
+		assert.True(t, shHas(rs.args, "--db-only", "--confirm", "RESTORE"), rs.line())
+		require.NotNil(t, rs.stdin)
+		assert.Equal(t, shCanary+"\n", *rs.stdin)
+		e.shNoCanary()
+	})
+	t.Run("the printed recovery command: passphrase and confirmation on the terminal", func(t *testing.T) {
+		t.Parallel()
+		e, bk := setup(t)
+		// cd <dir> && sudo ./alicectl restore <backup>: nothing but the terminal.
+		r, tty := e.runTTY("", shCanary+"\nRESTORE\n", filepath.Join(e.inst, "alicectl"), "restore", bk)
+		require.Equal(t, 0, r.code, r.out)
+		assert.Contains(t, tty, prompt)
+		calls := e.dockerCalls()
+		v := shIndex(calls, 0, "backup", "verify", "--deep", "--passphrase-stdin")
+		require.GreaterOrEqual(t, v, 0, shDump(calls))
+		require.NotNil(t, calls[v].stdin)
+		assert.Equal(t, shCanary+"\n", *calls[v].stdin)
+		rs := restoreCall(t, e)
+		assert.True(t, shHas(rs.args, "--confirm", "RESTORE"), rs.line())
+		require.NotNil(t, rs.stdin)
+		assert.Equal(t, shCanary+"\n", *rs.stdin)
+		assert.NotContains(t, r.out, shCanary)
+		e.shNoCanary()
+	})
+}
+
+// TestAlicectlRestoreMode covers the branch of an installation prepared with --restore-mode: Alice
+// is started only after a successful restore, and only then is the marker removed.
+func TestAlicectlRestoreMode(t *testing.T) {
+	t.Parallel()
+	setup := func(t *testing.T) (*shEnv, string) {
+		e := shNewInstalled(t, "1.0.0")
+		e.vars["STUB_RUNNING"] = "postgres"
+		shWrite(t, filepath.Join(e.inst, ".restore-mode"), "", 0o600)
+		bk := filepath.Join(e.inst, "backups/x.alicebak")
+		shWrite(t, bk, "", 0o600)
+		return e, bk
+	}
+	t.Run("success", func(t *testing.T) {
+		t.Parallel()
+		e, bk := setup(t)
+		r := e.ctl("", "restore", bk, "--passphrase-file", filepath.Join(e.root, "pass"), "--confirm", "RESTORE")
+		require.Equal(t, 0, r.code, r.out)
+		shNoDir(t, filepath.Join(e.inst, ".restore-mode"))
+		shOrder(t, e.dockerCalls(), []string{"run", "--rm", "alice-admin", "backup", "verify", "--deep"},
+			[]string{"run", "--rm", "alice-admin", "restore", "/opt/alice/backups/x.alicebak", "--confirm", "RESTORE"},
+			[]string{"compose", "up", "-d", "--wait", "alice"}, []string{"exec", "alice", "selfcheck"})
+	})
+	t.Run("failed restore leaves Alice stopped and the marker in place", func(t *testing.T) {
+		t.Parallel()
+		e, bk := setup(t)
+		e.vars["STUB_COMPOSE_FAIL"] = "alice-admin restore"
+		r := e.ctl("", "restore", bk, "--passphrase-file", filepath.Join(e.root, "pass"), "--confirm", "RESTORE")
+		assert.Equal(t, 1, r.code, r.out)
+		_, err := os.Stat(filepath.Join(e.inst, ".restore-mode"))
+		assert.NoError(t, err, "the marker stays for the next attempt")
+		calls := e.dockerCalls()
+		rs := shIndex(calls, 0, "alice-admin", "restore")
+		require.GreaterOrEqual(t, rs, 0, shDump(calls))
+		assert.Equal(t, -1, shIndex(calls, rs+1, "compose", "up"), shDump(calls))
+		assert.Equal(t, -1, shIndex(calls, rs+1, "selfcheck"), shDump(calls))
+	})
+}
+
+// TestUpdateAndRestoreTakeTheLock: while another process holds <dir>/.lock, neither an update nor
+// a restore starts.
+func TestUpdateAndRestoreTakeTheLock(t *testing.T) {
+	t.Parallel()
+	e := shNewInstalled(t, "1.0.0-rc.2")
+	tb := shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
+	bk := filepath.Join(e.inst, "backups/x.alicebak")
+	shWrite(t, bk, "", 0o600)
+	f, err := os.OpenFile(filepath.Join(e.inst, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB))
+	busy := "Another update or restore of Alice is running in " + e.inst + ". Wait until it has finished, then run this again.\n"
+	before := e.snapshot()
+
+	r := e.update(tb)
+	assert.Contains(t, r.out, busy)
+	assert.Equal(t, 1, r.code, r.out)
+	r = e.ctl("", "restore", bk, "--passphrase-file", filepath.Join(e.root, "pass"), "--confirm", "RESTORE")
+	assert.Contains(t, r.out, busy)
+	assert.Equal(t, 1, r.code, r.out)
+	assert.Empty(t, e.dockerCalls(), "nothing ran while the lock was held")
+	assert.Equal(t, before, e.snapshot())
+	shNoUpdateDirs(t, e.inst)
+
+	require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_UN))
+	require.NoError(t, f.Close())
+	r = e.update(tb)
+	assert.Equal(t, 0, r.code, r.out)
+}
+
+// TestUpdateKeepsTheReleaseKeysWhenTheSwapFails: the new release-keys/ is written completely and
+// renamed into place; when that rename fails the installed keys are still there.
+func TestUpdateKeepsTheReleaseKeysWhenTheSwapFails(t *testing.T) {
+	t.Parallel()
+	e := shNewInstalled(t, "1.0.0-rc.2", "rk-old-01.pem")
+	failDir, err := filepath.Abs("testdata/fail-mv")
+	require.NoError(t, err)
+	e.path = failDir + ":" + e.path
+	r := e.update(shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key))
+	assert.Equal(t, 3, r.code, r.out)
+	assert.Contains(t, r.out, "Alice 1.0.0 is running, but the update could not install all its files.")
+	for _, k := range []string{"rk-old-01.pem", shTestKeyID + ".pem"} {
+		_, err := os.Stat(filepath.Join(e.inst, "release-keys", k))
+		assert.NoError(t, err, "release key %s", k)
+	}
+	shNoDir(t, filepath.Join(e.inst, "release-keys.old"))
 }

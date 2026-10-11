@@ -10,6 +10,11 @@
 # Test-only overrides (read in the preflight only, never passed to docker, announced with a
 # [WARN] line on the terminal and in install.log): ALICE_PROC_DIR replaces /proc for the memory
 # check, ALICE_DOCKER_SOCK replaces /var/run/docker.sock for the socket check.
+#
+# The package is copied first into a new root-only directory (mode 0700, beside the installation
+# directory) and only that copy is checked, fingerprinted, installed and loaded: the extracted
+# package belongs to whoever extracted it and may change while the installer waits for the
+# operator (as alice-update.sh does, S-3). The copy is removed on exit.
 set -Eeuo pipefail
 umask 077
 export LC_ALL=C
@@ -35,6 +40,8 @@ failures=0
 openssl_ok=0
 package_ok=0
 zone=UTC
+stage=""
+pkg=""
 
 usage() {
   cat <<'USAGE'
@@ -51,7 +58,8 @@ Usage: sudo ./install.sh [--dir DIR] [--port N] [--bind ADDRESS] [--hostname NAM
                       vendor published (64 hex characters)
   --restore-mode      prepare an empty installation for a restore (no master key; only the
                       database is started)
-  --project NAME      Docker Compose project name (default alice)
+  --project NAME      Docker Compose project name (default alice); no other containers may use
+                      it. With --uninstall it may only repeat the name in DIR/.env
   --uninstall         stop Alice and remove its containers; data and backups stay
   --purge             with --uninstall: also delete DIR with all data and backups
   --confirm DELETE    with --purge: confirm without a prompt
@@ -135,6 +143,26 @@ check_dir_safe() {
   done
 }
 
+# shellcheck disable=SC2329 # called from the EXIT trap
+cleanup() {
+  if [[ -n "$stage" && -d "$stage" ]]; then rm -rf -- "$stage"; fi
+}
+
+# stage_package copies the package into a new root-only directory on the file system of the
+# installation (the nearest existing ancestor of --dir, which check_dir_safe found safe) and sets
+# pkg to the copy.
+stage_package() {
+  local p
+  p=$(dirname -- "$dir")
+  while [[ ! -d "$p" ]]; do p=$(dirname -- "$p"); done
+  stage=$(mktemp -d -- "$p/.alice-install-XXXXXX" 2>/dev/null) || {
+    stage=""
+    return 1
+  }
+  cp -a --no-preserve=ownership -- "$here" "$stage/alice" 2>/dev/null || return 1
+  pkg="$stage/alice"
+}
+
 on_error() {
   local line=$1
   if [[ "$BASHPID" != "$$" ]]; then return 0; fi
@@ -164,7 +192,7 @@ fail_check() {
 
 preflight() {
   local proc_dir=/proc sock=/var/run/docker.sock m ver major mode avail parent p kb gb cpus line proc pid
-  local year build_year ntp reported docker_ok=0 rc
+  local year build_year ntp reported docker_ok=0 rc ids
   if [[ -n "${ALICE_PROC_DIR:-}" ]]; then
     alice_warn "Test override ALICE_PROC_DIR is set; results of this check are not real."
     proc_dir=$ALICE_PROC_DIR
@@ -268,8 +296,12 @@ preflight() {
 
   if ((openssl_ok == 1)); then
     rc=0
-    alice_check_package "$here" "$here/release-keys" || rc=$?
-    if ((rc == 0)) && ! alice_read_release "$here"; then rc=2; fi
+    if ! stage_package; then
+      rc=4
+    else
+      alice_check_package "$pkg" "$pkg/release-keys" || rc=$?
+      if ((rc == 0)) && ! alice_read_release "$pkg"; then rc=2; fi
+    fi
     case "$rc" in
       0)
         alice_ok "Package signature"
@@ -282,6 +314,7 @@ preflight() {
         alice_ok "Package signature"
         fail_check "$alice_damaged"
         ;;
+      4) fail_check "The package could not be copied next to $dir for checking. Check the free disk space, then run this installer again." ;;
       *)
         alice_ok "Package signature"
         alice_ok "Package complete"
@@ -306,8 +339,18 @@ preflight() {
   fi
   if ((reported == 0)); then alice_ok "Clock sane"; fi
 
+  # Containers of the same compose project, from another directory, would be taken over by
+  # "up" and removed by "down": the project must be unused (the default name alice included).
+  ids=""
+  if ((docker_ok == 1)); then
+    ids=$(alice_docker ps -a -q --filter "label=com.docker.compose.project=$project" 2>/dev/null) || ids="?"
+  fi
   if [[ -e "$dir/docker-compose.yml" || -e "$dir/VERSION" ]]; then
     fail_check "Alice is already installed in $dir. To upgrade use ./alice-update.sh."
+  elif [[ "$ids" == "?" ]]; then
+    fail_check "The containers of the project $project could not be listed. Check that Docker is running, then run this installer again."
+  elif [[ -n "$ids" ]]; then
+    fail_check "Docker already has containers of the project $project. Choose another --project, or update the installation that uses it with its own alice-update.sh."
   else
     alice_ok "No installation yet"
   fi
@@ -376,17 +419,17 @@ layout() {
   make_dir "$dir/data" 0700
   make_dir "$dir/data/postgres" 0700 70:70
 
-  install -m 0644 -- "$here/VERSION" "$dir/VERSION"
-  install -m 0644 -- "$here/RELEASE" "$dir/RELEASE"
-  for f in install.sh alice-update.sh alicectl; do install -m 0755 -- "$here/$f" "$dir/$f"; done
-  install -m 0644 -- "$here/lib/alice-lib.sh" "$dir/lib/alice-lib.sh"
-  install -m 0644 -- "$here/lib/initdb/10-alice-roles.sh" "$dir/lib/initdb/10-alice-roles.sh"
-  for f in "$here"/release-keys/rk-*.pem; do
+  install -m 0644 -- "$pkg/VERSION" "$dir/VERSION"
+  install -m 0644 -- "$pkg/RELEASE" "$dir/RELEASE"
+  for f in install.sh alice-update.sh alicectl; do install -m 0755 -- "$pkg/$f" "$dir/$f"; done
+  install -m 0644 -- "$pkg/lib/alice-lib.sh" "$dir/lib/alice-lib.sh"
+  install -m 0644 -- "$pkg/lib/initdb/10-alice-roles.sh" "$dir/lib/initdb/10-alice-roles.sh"
+  for f in "$pkg"/release-keys/rk-*.pem; do
     if [[ -f "$f" ]]; then install -m 0644 -- "$f" "$dir/release-keys/"; fi
   done
-  alice_copy_extras "$here" "$dir"
+  alice_copy_extras "$pkg" "$dir"
   alice_write_env "$dir/.env" "$project" "$rel_alice_image" "$rel_pg_image" "$bind" "$port" "$hostname_arg" "$zone"
-  install -m 0644 -- "$here/docker-compose.yml" "$dir/docker-compose.yml"
+  install -m 0644 -- "$pkg/docker-compose.yml" "$dir/docker-compose.yml"
 }
 
 # write_secret NAME OWNER MODE writes a new random database password (C2).
@@ -417,8 +460,8 @@ secrets() {
 
 load_images() {
   local id
-  alice_quiet alice_docker load -i "$here/images/alice-$rel_version.tar"
-  alice_quiet alice_docker load -i "$here/images/postgres-$rel_version.tar"
+  alice_quiet alice_docker load -i "$pkg/images/alice-$rel_version.tar"
+  alice_quiet alice_docker load -i "$pkg/images/postgres-$rel_version.tar"
   id=$(alice_docker image inspect --format '{{.Id}}' "$rel_alice_image" 2>/dev/null || true)
   if [[ "$id" != "$rel_alice_id" ]]; then
     alice_fail "$alice_damaged"
@@ -485,7 +528,7 @@ closing() {
 }
 
 uninstall_alice() {
-  local answer=""
+  local answer="" env_project
   if [[ "$(id -u)" != 0 ]]; then
     alice_fail "This installer must be run with administrator rights. Run it again as: sudo ./install.sh"
     exit 1
@@ -494,8 +537,14 @@ uninstall_alice() {
     alice_log "Alice is not installed in $dir."
     exit 1
   fi
-  if ((project_set == 0)); then project=$(alice_env_get COMPOSE_PROJECT_NAME "$dir/.env"); fi
-  alice_valid_project "$project" || usage_error "The project name in $dir/.env is not valid; pass --project."
+  # Only the project recorded in .env is removed: --project may repeat it, never name another one.
+  env_project=$(alice_env_get COMPOSE_PROJECT_NAME "$dir/.env" 2>/dev/null) || env_project=""
+  alice_valid_project "$env_project" ||
+    usage_error "The project name in $dir/.env is not valid. Fix COMPOSE_PROJECT_NAME there, then run this again."
+  if ((project_set == 1)) && [[ "$project" != "$env_project" ]]; then
+    usage_error "--project $project is not the project of the installation in $dir ($env_project). Leave out --project."
+  fi
+  project=$env_project
   alice_project=$project
   if ((purge == 1)) && [[ "$confirm" != DELETE ]]; then
     if [[ -z "$confirm" ]]; then
@@ -522,6 +571,7 @@ main() {
   alice_dir=$dir
   alice_project=$project
   check_dir_safe
+  trap 'cleanup' EXIT
   trap 'on_interrupt' INT TERM
   trap 'on_error "$LINENO"' ERR
   if ((uninstall == 1)); then

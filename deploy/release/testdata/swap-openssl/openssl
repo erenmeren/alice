@@ -2,13 +2,15 @@
 # Test wrapper for TestUpdateVerifiesACopy (S-3): runs the real openssl (SWAP_REAL_PATH is the PATH
 # without this directory), records the arguments in SWAP_LOG, and right after the first signature
 # verification replaces the file SWAP_ORIGINAL with SWAP_REPLACEMENT, so a script that read the
-# original again would get other bytes than the ones it verified.
+# original again would get other bytes than the ones it verified. TestInstallVerifiesACopy also
+# sets SWAP_SECOND_ORIGINAL and SWAP_SECOND_REPLACEMENT, a second file replaced at the same moment.
 set -euo pipefail
 printf '%s\n' "$*" >>"$SWAP_LOG"
 rc=0
 PATH=$SWAP_REAL_PATH command openssl "$@" || rc=$?
 if [[ "${1:-}" == pkeyutl && ! -e "$SWAP_LOG.swapped" ]]; then
   cp -- "$SWAP_REPLACEMENT" "$SWAP_ORIGINAL"
+  if [[ -n "${SWAP_SECOND_ORIGINAL:-}" ]]; then cp -- "$SWAP_SECOND_REPLACEMENT" "$SWAP_SECOND_ORIGINAL"; fi
   : >"$SWAP_LOG.swapped"
 fi
 exit "$rc"

@@ -8,6 +8,10 @@
 # passes the container path /opt/alice/backups/<name>. A passphrase is read once (from
 # --passphrase-file, from standard input with --passphrase-stdin, or from the terminal) and given
 # to the container on standard input only (S-25). Nothing of this script is written to a log.
+#
+# restore: without --confirm RESTORE the wrapper itself asks for RESTORE on the terminal, after the
+# deep verification and before Alice is stopped; the container always gets --confirm RESTORE and
+# is never asked (it has no terminal). Without a terminal, --confirm RESTORE is required.
 set -Eeuo pipefail
 umask 077
 export LC_ALL=C
@@ -79,6 +83,11 @@ resolve_backup() {
   container_path="$container_backups/$name"
 }
 
+# tty_available reports whether the controlling terminal can be opened.
+tty_available() {
+  { : </dev/tty; } 2>/dev/null
+}
+
 # get_passphrase FILE STDIN reads the passphrase into alice_pass.
 get_passphrase() {
   local file=$1 from_stdin=$2 rc
@@ -88,9 +97,10 @@ get_passphrase() {
     if ((rc != 0)); then exit 2; fi
   elif ((from_stdin == 1)); then
     IFS= read -r alice_pass || true
-  elif [[ -t 0 ]]; then
-    IFS= read -r -s -p "Recovery passphrase: " alice_pass </dev/tty || true
-    printf '\n' >&2
+  elif tty_available; then
+    printf 'Recovery passphrase: ' >/dev/tty
+    IFS= read -r -s alice_pass </dev/tty || true
+    printf '\n' >/dev/tty
   else
     printf 'A passphrase is needed. Run this command in a terminal, or pass --passphrase-file to alicectl.\n'
     exit 2
@@ -163,7 +173,7 @@ restart_after_restore() {
 }
 
 cmd_restore() {
-  local file="" pfile="" pstdin=0 avail rc=0
+  local file="" pfile="" pstdin=0 confirm=0 avail answer="" rc=0
   local -a pass=()
   while (($# > 0)); do
     case "$1" in
@@ -174,6 +184,7 @@ cmd_restore() {
       --confirm)
         (($# >= 2)) || usage_error "$1 needs a value."
         pass+=("$1" "$2")
+        confirm=1
         shift 2
         ;;
       --passphrase-file)
@@ -192,11 +203,31 @@ cmd_restore() {
   done
   [[ -n "$file" ]] || usage_error "restore needs a FILE."
   resolve_backup "$file"
+  if ((confirm == 0)) && ! tty_available; then
+    usage_error "Without a terminal, pass --confirm RESTORE to confirm the restore."
+  fi
+  alice_dir=$dir
+  if ! alice_lock; then
+    alice_lock_busy ""
+    exit 1
+  fi
   get_passphrase "$pfile" "$pstdin"
   if [[ -f "$dir/.restore-mode" ]]; then restore_mode=1; fi
 
   # 1. Open the whole file with the passphrase while Alice keeps running (S-16).
   run_alice_pass backup verify "$container_path" --deep --passphrase-stdin || exit 1
+
+  # The confirmation, after the manifest line of step 1 and before anything is stopped.
+  if ((confirm == 0)); then
+    printf 'Type RESTORE to replace all current data: ' >/dev/tty
+    IFS= read -r answer </dev/tty || true
+    if [[ "$answer" != RESTORE ]]; then
+      alice_pass=""
+      printf 'Restore cancelled. Nothing was changed.\n'
+      exit 1
+    fi
+    pass+=(--confirm RESTORE)
+  fi
 
   # 2. The free space of the database directory (S-22); df reads no file there.
   avail=$(df -B1 --output=avail -- "$dir/data/postgres" 2>/dev/null | tail -n 1 | tr -d ' ') || avail=0

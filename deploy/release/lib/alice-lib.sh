@@ -82,7 +82,7 @@ alice_quiet() {
 # alice_docker ARGS... runs docker with only PATH, HOME and LC_ALL in its environment, so variables
 # such as ALICE_IMAGE, COMPOSE_FILE, DOCKER_HOST or DOCKER_CONFIG of the caller never reach it.
 alice_docker() {
-  env -i PATH="$PATH" HOME=/root LC_ALL=C docker "$@" 3>&-
+  env -i PATH="$PATH" HOME=/root LC_ALL=C docker "$@" 3>&- 9>&-
 }
 
 # alice_compose ARGS... runs docker compose for the installation in alice_dir.
@@ -109,6 +109,25 @@ alice_running() {
 alice_terminate_leftover_sessions() {
   alice_compose exec -T postgres psql -U postgres -d postgres -v ON_ERROR_STOP=1 -c \
     "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'alice' AND usename IN ('alice_app','alice_owner')"
+}
+
+# ---- the installation lock ----
+
+# alice_lock_busy PREFIX prints why the lock could not be taken.
+alice_lock_busy() {
+  printf '%sAnother update or restore of Alice is running in %s. Wait until it has finished, then run this again.\n' "$1" "$alice_dir"
+}
+
+# alice_lock takes the lock of the installation in alice_dir without waiting: an flock on the file
+# .lock, open on file descriptor 9 until the script ends. One update or restore runs at a time. A
+# child that inherited descriptor 9 from the parent holding the lock (the alicectl restore of an
+# update's rollback) shares that lock: flock on the same open file succeeds again.
+alice_lock() {
+  if ! [[ /dev/fd/9 -ef "$alice_dir/.lock" ]]; then
+    if [[ -L "$alice_dir/.lock" ]]; then return 1; fi
+    exec 9>>"$alice_dir/.lock" || return 1
+  fi
+  flock -n 9
 }
 
 # ---- versions ----
