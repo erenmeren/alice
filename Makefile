@@ -352,7 +352,10 @@ fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 7 
 # vendor signs the outer .sha256. make release-test does all of it with a throw-away test key
 # (release candidates only, TEST_SIGNED=1). make release refuses when outputs of the same VERSION
 # exist (it never replaces a signed package); only make release-test removes them, and only those
-# of a test package (Task 12 review I-2).
+# of a test package (Task 12 review I-2). make release needs Docker: it builds alice:$(VERSION),
+# inspects it with make image-check (build tags, test key, /test routes, user, shell, and the
+# embedded helper checksums against bin/alice-helper.sha256, which the stage checks the bundled
+# helper against; I-6), and saves both images.
 RELEASE_DIR      ?= bin/release
 RELEASE_KEYS     ?= deploy/release/keys
 RELEASE_TEST_KEY ?= bin/release-test-key
@@ -373,8 +376,8 @@ release-preflight: # make release's first prerequisite: refuse before anything i
 .PHONY: release
 # One build time for the image and RELEASE (BUILD_TIME is a recursive ?= and would be re-evaluated per use).
 release: BUILD_TIME := $(BUILD_TIME)
-release: release-preflight helper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; sign SHA256SUMS offline, then make release-pack)
-	$(MAKE) image IMAGE_TAG=$(VERSION) VERSION=$(VERSION) BUILD_TIME=$(BUILD_TIME)
+release: release-preflight helper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; needs Docker; sign SHA256SUMS offline, then make release-pack)
+	$(MAKE) image-check IMAGE_TAG=$(VERSION) VERSION=$(VERSION) BUILD_TIME=$(BUILD_TIME)
 	docker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 	docker tag $(POSTGRES_RELEASE_IMAGE) alice-postgres:$(VERSION)
 	$(MAKE) sbom VERSION=$(VERSION)

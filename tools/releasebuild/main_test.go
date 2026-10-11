@@ -697,3 +697,19 @@ func TestReleaseTestKeepsAProductionStage(t *testing.T) {
 	assert.FileExists(t, filepath.Join(dir, "alice-1.0.0-rc.1/alice/RELEASE"))
 	assert.NoFileExists(t, filepath.Join(keyDir, "test-release.key"), "nothing was built")
 }
+
+// I-6: make release inspects the image it ships (alice:$(VERSION)) with make image-check, which
+// also compares the helper checksums embedded in the image with bin/alice-helper.sha256 (the
+// file the stage checks the bundled helper against), before it saves the image.
+func TestReleaseChecksTheShippedImage(t *testing.T) {
+	out, code := makeIn(t, "-n", "release", "VERSION=1.0.0", "RELEASE_DIR="+t.TempDir())
+	require.Equal(t, 0, code, out)
+	check := strings.Index(out, "./deploy/dev/check-image.sh 1.0.0")
+	build := strings.Index(out, "-t alice:1.0.0 .")
+	stageAt := strings.Index(out, "releasebuild stage")
+	require.NotEqual(t, -1, check, out)
+	require.NotEqual(t, -1, build, out)
+	assert.Less(t, build, check)
+	assert.Less(t, check, stageAt)
+	assert.Contains(t, out, "HELPER_SHA256_AMD64=")
+}
