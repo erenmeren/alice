@@ -33,7 +33,7 @@ var (
 	ErrIncomplete           = errors.New("setup: recovery passphrase not set yet")
 	// ErrLicenseChoiceMissing means Finish was asked before the license step was done.
 	ErrLicenseChoiceMissing = errors.New("setup: choose a license option first")
-	// ErrPassphraseTooWeak means the recovery passphrase rates "fair" (PassphraseStrength); ALC-SET-0010.
+	// ErrPassphraseTooWeak means the NFKC form of the recovery passphrase rates below "good" (PassphraseStrength); ALC-SET-0010.
 	ErrPassphraseTooWeak = errors.New("setup: the recovery passphrase is too easy to guess")
 	// ErrForbidden means the caller is not an administrator's browser session inside its
 	// step-up window (permission settings.manage).

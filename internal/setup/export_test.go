@@ -12,3 +12,6 @@ func SetAfterCodeCheck(s *Service, f func()) { s.afterCodeCheck = f }
 
 // SetAfterCodeRead runs f in StartSession after the stored hash was read, before the comparison.
 func SetAfterCodeRead(s *Service, f func()) { s.afterCodeRead = f }
+
+// CheckPassphrase is the service's length, confirmation and strength check (P1-08).
+var CheckPassphrase = checkPassphrase

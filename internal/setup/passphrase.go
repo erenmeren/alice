@@ -34,14 +34,9 @@ func (s *Service) authorize(p auth.Principal) error {
 	return nil
 }
 
-// SetRecoveryPassphrase generates the X25519 backup key pair and stores the private key
-// wrapped by the passphrase (R4, SEC-048). Neither the passphrase nor a key derived from it
-// is stored. In the same transaction it stores the installation's backup sender key as the
-// master-key envelope backup.sender (R43 row 41). The passphrase can be set only once.
-func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m auth.Meta, passphrase, confirm string) error {
-	if err := s.authorize(p); err != nil {
-		return err
-	}
+// checkPassphrase applies the length limits, the confirmation and the strength rule (P1-08) to the NFKC
+// form of the passphrase, the text the key is derived from.
+func checkPassphrase(passphrase, confirm string) error {
 	pass := norm.NFKC.String(passphrase)
 	n := utf8.RuneCountInString(pass)
 	switch {
@@ -53,11 +48,28 @@ func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m
 		return v
 	case pass != norm.NFKC.String(confirm):
 		return ErrPassphraseMismatch
-	case PassphraseStrength(passphrase) == StrengthFair:
-		// Rated on the typed text, as the browser's meter rates it; refused before any key is generated, so
-		// neither backup.key nor backup.sender exists afterwards.
+	case PassphraseStrength(pass) != StrengthGood && PassphraseStrength(pass) != StrengthStrong:
+		// Rated on the normalised text, and everything below good is refused: a compatibility form that
+		// NFKC lengthens (ﬃ → ffi) rates tooShort as typed but must not pass as the text the key is
+		// derived from (review I-1). Refused before any key is generated, so neither backup.key nor
+		// backup.sender exists afterwards.
 		return ErrPassphraseTooWeak
 	}
+	return nil
+}
+
+// SetRecoveryPassphrase generates the X25519 backup key pair and stores the private key
+// wrapped by the passphrase (R4, SEC-048). Neither the passphrase nor a key derived from it
+// is stored. In the same transaction it stores the installation's backup sender key as the
+// master-key envelope backup.sender (R43 row 41). The passphrase can be set only once.
+func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m auth.Meta, passphrase, confirm string) error {
+	if err := s.authorize(p); err != nil {
+		return err
+	}
+	if err := checkPassphrase(passphrase, confirm); err != nil {
+		return err
+	}
+	pass := norm.NFKC.String(passphrase)
 	if set, err := hasSetting(ctx, s.pool, keyBackupKey); err != nil {
 		return err
 	} else if set {

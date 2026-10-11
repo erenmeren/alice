@@ -189,6 +189,13 @@ func TestServerRefusesAFairPassphrase(t *testing.T) {
 	assert.Zero(t, e.auditCount(t, "setup.recovery_passphrase_set"))
 	assert.NotContains(t, setup.ErrPassphraseTooWeak.Error(), weak)
 
+	// Review I-1: rated as typed this is tooShort (6 runes); its NFKC form is the fair "ffiffiffiffiffiffl".
+	ligatures := "ﬃﬃﬃﬃﬃﬄ"
+	require.Equal(t, setup.StrengthTooShort, setup.PassphraseStrength(ligatures))
+	require.ErrorIs(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, ligatures, ligatures), setup.ErrPassphraseTooWeak)
+	assert.Empty(t, e.settingRaw(t, "backup.key"))
+	assert.Zero(t, e.auditCount(t, "setup.recovery_passphrase_set"))
+
 	good := "Abcdefgh12345678"
 	require.Equal(t, setup.StrengthGood, setup.PassphraseStrength(good))
 	require.NoError(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, good, good), "good is enough")
