@@ -151,3 +151,31 @@ func TestSelfcheckAndSupportBundleWithoutADatabase(t *testing.T) {
 	assert.Equal(t, []any{"database: the database is not reachable"}, b["errors"])
 	assert.Len(t, b["selfcheck"], 7)
 }
+
+// The owner check refuses only a role proven not to own the database; anything else is left to the restore (M-1).
+func TestCheckOwnerRoleLeavesOtherErrorsToTheRestore(t *testing.T) {
+	ctx := context.Background()
+	var notOwner *errNotOwner
+	err := checkOwnerRole(ctx, "postgres://%zz")
+	require.Error(t, err)
+	assert.False(t, errors.As(err, &notOwner))
+	err = checkOwnerRole(ctx, "postgres://alice_owner:pw@127.0.0.1:1/alice?connect_timeout=2")
+	require.Error(t, err, "nothing listens on port 1")
+	assert.False(t, errors.As(err, &notOwner))
+	assert.Equal(t, "role alice_app does not own database alice", (&errNotOwner{role: "alice_app", database: "alice"}).Error())
+}
+
+// A failed owner check that is not a refusal lets the restore run and report the problem in its own words.
+func TestRestoreRunsWhenTheOwnerCheckCannotDecide(t *testing.T) {
+	old, oldCheck := restoreFunc, ownerCheckFunc
+	t.Cleanup(func() { restoreFunc, ownerCheckFunc = old, oldCheck })
+	ownerCheckFunc = func(context.Context, string) error { return errors.New("unreachable") }
+	restoreFunc = func(context.Context, backup.Config, backup.RestoreInput) (backup.RestoreResult, error) {
+		return backup.RestoreResult{}, errors.New("connect: unreachable")
+	}
+	vars := env(map[string]string{"ALICE_DATABASE_URL": "postgres://alice_app@db/alice", "ALICE_MIGRATE_DATABASE_URL": "postgres://alice_owner@db/alice"})
+	var out, errOut bytes.Buffer
+	assert.Equal(t, 1, run([]string{"restore", "/b/x.alicebak", "--passphrase-stdin", "--confirm", "RESTORE"}, vars,
+		strings.NewReader("p\n"), &out, &errOut))
+	assert.Equal(t, "The restore failed: connect: unreachable\n", errOut.String())
+}

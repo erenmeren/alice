@@ -50,6 +50,7 @@ var (
 	heartbeatWait      = 90 * time.Second
 	heartbeatPoll      = 5 * time.Second
 	heartbeatMaxAge    = 5 * time.Minute
+	heartbeatMaxAhead  = time.Minute // a heartbeat further ahead of the clock proves nothing (M-2)
 	errNotReachable    = errors.New("the database is not reachable")
 	errNotInstalledTLS = errors.New("the listener presents another certificate than " + tlsCertFile)
 )
@@ -281,7 +282,8 @@ func installedLeaf(path string) ([]byte, error) {
 	}
 }
 
-// checkHeartbeat waits up to heartbeatWait, reading every heartbeatPoll, for a heartbeat younger than heartbeatMaxAge.
+// checkHeartbeat waits up to heartbeatWait, reading every heartbeatPoll, for a heartbeat younger than heartbeatMaxAge
+// and not more than heartbeatMaxAhead in the future (a running scheduler overwrites one dated ahead within a minute).
 func checkHeartbeat(ctx context.Context, pool *pgxpool.Pool) checkLine {
 	const label = "Background jobs running"
 	clk := clock.Real{}
@@ -298,11 +300,15 @@ func checkHeartbeat(ctx context.Context, pool *pgxpool.Pool) checkLine {
 		switch {
 		case err != nil:
 			return result(label, err)
-		case found && now.Sub(hb.At) < heartbeatMaxAge:
+		case found && now.Sub(hb.At) < heartbeatMaxAge && hb.At.Sub(now) <= heartbeatMaxAhead:
 			return checkLine{Label: fmt.Sprintf("%s (last heartbeat %s UTC)", label, hb.At.UTC().Format("15:04")), OK: true}
 		case !now.Add(heartbeatPoll).Before(deadline):
 			if !found {
 				return checkLine{Label: label, Reason: "no heartbeat was recorded"}
+			}
+			if hb.At.Sub(now) > heartbeatMaxAhead {
+				return checkLine{Label: label, Reason: fmt.Sprintf("the last heartbeat is dated in the future (%s UTC); check the system clock",
+					hb.At.UTC().Format("2006-01-02 15:04"))}
 			}
 			return checkLine{Label: label, Reason: fmt.Sprintf("the last heartbeat was at %s UTC", hb.At.UTC().Format("2006-01-02 15:04"))}
 		}

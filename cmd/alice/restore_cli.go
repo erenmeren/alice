@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -9,6 +10,8 @@ import (
 	"math"
 	"path/filepath"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"alice/internal/backup"
 	"alice/internal/backup/format"
@@ -58,9 +61,21 @@ func runRestore(args []string, cfg config.Config, stdin io.Reader, stdout, stder
 		fmt.Fprintln(stderr, msgPassphraseNeeded)
 		return 2
 	}
-	if cfg.MigrationURL() == "" {
-		fmt.Fprintln(stderr, "ALICE_MIGRATE_DATABASE_URL is not set; a restore needs the database owner role.")
+	// MigrationURL falls back to the application's URL, so the owner URL itself is checked (M-1), and then that its
+	// role owns the database, before the passphrase is asked for.
+	if cfg.MigrateDatabaseURL == "" {
+		fmt.Fprintln(stderr, "ALICE_MIGRATE_DATABASE_URL is not set; a restore needs the database owner role. Nothing was changed.")
 		return 1
+	}
+	ctx, stop := commandContext()
+	defer stop()
+	if err := ownerCheckFunc(ctx, cfg.MigrateDatabaseURL); err != nil {
+		var notOwner *errNotOwner
+		if errors.As(err, &notOwner) {
+			fmt.Fprintf(stderr, "The role in ALICE_MIGRATE_DATABASE_URL (%s) does not own the database %s; a restore needs the "+
+				"database owner role. Nothing was changed.\n", notOwner.role, notOwner.database)
+			return 1
+		}
 	}
 	rin := backup.RestoreInput{
 		Path:              file,
@@ -70,7 +85,7 @@ func runRestore(args []string, cfg config.Config, stdin io.Reader, stdout, stder
 		NoSafetyBackup:    *noSafety,
 		FreeBytes:         *freeBytes,
 		WaitForSessions:   *wait,
-		OwnerURL:          cfg.MigrationURL(),
+		OwnerURL:          cfg.MigrateDatabaseURL,
 	}
 	if *confirm == "" {
 		rin.Confirm = func(m backup.Manifest) bool {
@@ -81,8 +96,6 @@ func runRestore(args []string, cfg config.Config, stdin io.Reader, stdout, stder
 			return err == nil && string(line) == confirmWord
 		}
 	}
-	ctx, stop := commandContext()
-	defer stop()
 	res, err := restoreFunc(ctx, backupConfig(cfg, newClock(), slog.New(slog.DiscardHandler)), rin)
 	for _, w := range res.Warnings {
 		fmt.Fprintln(stderr, "Warning:", w)
@@ -101,6 +114,48 @@ func runRestore(args []string, cfg config.Config, stdin io.Reader, stdout, stder
 	}
 	fmt.Fprintln(stdout, msgRestoreDone)
 	return 0
+}
+
+// ownerCheckFunc is checkOwnerRole; the tests without a database replace it.
+var ownerCheckFunc = checkOwnerRole
+
+// errNotOwner is an owner URL whose role neither owns the live database nor is a superuser.
+type errNotOwner struct{ role, database string }
+
+func (e *errNotOwner) Error() string {
+	return "role " + e.role + " does not own database " + e.database
+}
+
+// checkOwnerRole connects as the owner URL's role to the maintenance database and refuses a role that does not own
+// (and is no member of the owner of) the live database. Any other error, including an unreachable server or a live
+// database that does not exist (an interrupted restore between its two renames), is left to the restore, which
+// reports it in its own words.
+func checkOwnerRole(ctx context.Context, ownerURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cfg, err := pgx.ParseConfig(ownerURL)
+	if err != nil {
+		return err
+	}
+	name := cfg.Database
+	cfg.Database = "postgres"
+	conn, err := pgx.ConnectConfig(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
+	var role string
+	var owner bool
+	err = conn.QueryRow(ctx, `SELECT current_user::text,
+	(SELECT rolsuper FROM pg_roles WHERE rolname = current_user) OR pg_has_role(current_user, d.datdba, 'USAGE')
+FROM pg_database d WHERE d.datname = $1`, name).Scan(&role, &owner)
+	if err != nil {
+		return err
+	}
+	if !owner {
+		return &errNotOwner{role: role, database: name}
+	}
+	return nil
 }
 
 // restoreError maps an error of backup.Restore to its C7 message and exit code.
@@ -125,7 +180,7 @@ func restoreError(err error) (string, int) {
 	case errors.As(err, &broken):
 		return fmt.Sprintf("The audit log in this backup is damaged at entry %d. Nothing was changed. To restore it anyway, "+
 			"run the command again with --accept-broken-audit-log (the damage stays visible in Alice).", broken.Seq), 1
-	case errors.Is(err, backup.ErrCancelled):
+	case errors.Is(err, backup.ErrCancelled), errors.Is(err, errPassphraseCancelled):
 		return msgCancelled, 1
 	case errors.Is(err, backup.ErrNoSafetyBackup):
 		return msgNoSafetyBackup, 1

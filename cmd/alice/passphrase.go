@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"golang.org/x/sys/unix"
@@ -23,6 +26,9 @@ var ttyPath = "/dev/tty"
 
 // errPassphraseTooLong is a passphrase line over maxPassphraseBytes.
 var errPassphraseTooLong = errors.New("the passphrase is longer than 1024 bytes")
+
+// errPassphraseCancelled is a signal (Ctrl-C) at the passphrase prompt.
+var errPassphraseCancelled = errors.New("the passphrase prompt was cancelled")
 
 // stdinIsTerminal reports whether stdin is the process's terminal; a test's reader never is.
 func stdinIsTerminal(stdin io.Reader) bool {
@@ -62,30 +68,79 @@ func (p *passphraseSource) read() ([]byte, error) {
 	return readLine(p.in, maxPassphraseBytes)
 }
 
+// passphraseSignals end the prompt: the terminal is restored before the process acts on them (I-1).
+var passphraseSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+
 // readFromTTY asks on stderr and reads one line from /dev/tty with echo switched off (term.ReadPassword's settings),
-// restoring the terminal afterwards.
+// restoring the terminal afterwards. A signal at the prompt (SIGINT, SIGTERM, SIGHUP, SIGQUIT) restores the settings,
+// closes the terminal, which ends the blocked read, and returns errPassphraseCancelled.
 func readFromTTY(stderr io.Writer) ([]byte, error) {
 	tty, err := os.OpenFile(ttyPath, os.O_RDWR|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return nil, fmt.Errorf("open the terminal: %w", err)
 	}
-	defer func() { _ = tty.Close() }()
-	fd := int(tty.Fd()) //nolint:gosec // G115: a file descriptor fits an int
-	old, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	// The descriptor is reached through SyscallConn, never Fd: Fd switches it to blocking mode, and Close would then
+	// no longer end a pending read.
+	rc, err := tty.SyscallConn()
 	if err != nil {
+		_ = tty.Close()
+		return nil, fmt.Errorf("open the terminal: %w", err)
+	}
+	old, err := getTermios(rc)
+	if err != nil {
+		_ = tty.Close()
 		return nil, fmt.Errorf("read the terminal settings: %w", err)
 	}
+	var once sync.Once
+	restore := func() {
+		once.Do(func() {
+			_ = setTermios(rc, old)
+			_ = tty.Close()
+		})
+	}
+	defer restore()
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, passphraseSignals...)
+	defer signal.Stop(sigs)
 	quiet := *old
 	quiet.Lflag &^= unix.ECHO
 	quiet.Lflag |= unix.ICANON | unix.ISIG
 	quiet.Iflag |= unix.ICRNL
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &quiet); err != nil {
+	if err := setTermios(rc, &quiet); err != nil {
 		return nil, fmt.Errorf("switch the terminal echo off: %w", err)
 	}
-	defer func() { _ = unix.IoctlSetTermios(fd, unix.TCSETS, old) }()
+	var cancelled atomic.Bool
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-sigs:
+			cancelled.Store(true)
+			restore()
+		case <-done:
+		}
+	}()
 	fmt.Fprint(stderr, "Recovery passphrase: ")
 	defer fmt.Fprintln(stderr)
-	return readLine(bufio.NewReaderSize(tty, maxPassphraseBytes+16), maxPassphraseBytes)
+	line, err := readLine(bufio.NewReaderSize(tty, maxPassphraseBytes+16), maxPassphraseBytes)
+	if cancelled.Load() {
+		clear(line)
+		return nil, errPassphraseCancelled
+	}
+	return line, err
+}
+
+func getTermios(rc syscall.RawConn) (*unix.Termios, error) {
+	var t *unix.Termios
+	var err error
+	cerr := rc.Control(func(fd uintptr) { t, err = unix.IoctlGetTermios(int(fd), unix.TCGETS) }) //nolint:gosec // G115
+	return t, errors.Join(cerr, err)
+}
+
+func setTermios(rc syscall.RawConn, t *unix.Termios) error {
+	var err error
+	cerr := rc.Control(func(fd uintptr) { err = unix.IoctlSetTermios(int(fd), unix.TCSETS, t) }) //nolint:gosec // G115
+	return errors.Join(cerr, err)
 }
 
 // readLine reads one line of at most limit bytes and removes exactly one trailing "\n" (and nothing else). A longer

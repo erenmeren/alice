@@ -244,6 +244,23 @@ func TestCLIRestoreMessages(t *testing.T) {
 		assert.Equal(t, 1, code)
 		assert.Equal(t, "This is not an Alice backup.\n", errOut)
 	})
+	t.Run("no owner URL", func(t *testing.T) {
+		i := newCLIInstall(t)
+		path := i.backup()
+		delete(i.vars, "ALICE_MIGRATE_DATABASE_URL")
+		code, _, errOut := i.restore(pass, path, "--passphrase-stdin", "--confirm", "RESTORE", "--wait-for-sessions", "0s")
+		assert.Equal(t, 1, code)
+		assert.Equal(t, "ALICE_MIGRATE_DATABASE_URL is not set; a restore needs the database owner role. Nothing was changed.\n", errOut)
+	})
+	t.Run("not the owner role", func(t *testing.T) {
+		i := newCLIInstall(t)
+		path := i.backup()
+		i.vars["ALICE_MIGRATE_DATABASE_URL"] = i.d.AppURL
+		code, _, errOut := i.restore(pass, path, "--passphrase-stdin", "--confirm", "RESTORE", "--wait-for-sessions", "0s")
+		assert.Equal(t, 1, code)
+		assert.Regexp(t, `^The role in ALICE_MIGRATE_DATABASE_URL \(alice_app\) does not own the database \S+; a restore needs the `+
+			`database owner role\. Nothing was changed\.\n$`, errOut)
+	})
 	t.Run("newer", func(t *testing.T) {
 		i := newCLIInstall(t)
 		old := version.Version
@@ -353,6 +370,10 @@ func TestCLIRestoreFlags(t *testing.T) {
 		got = append(got, in)
 		return backup.RestoreResult{}, nil
 	}
+	oldCheck := ownerCheckFunc
+	t.Cleanup(func() { ownerCheckFunc = oldCheck })
+	var checked []string
+	ownerCheckFunc = func(_ context.Context, url string) error { checked = append(checked, url); return nil }
 	vars := env(map[string]string{"ALICE_DATABASE_URL": "postgres://alice_app@db/alice", "ALICE_MIGRATE_DATABASE_URL": "postgres://alice_owner@db/alice"})
 	var out, errOut bytes.Buffer
 	require.Equal(t, 0, run([]string{"restore", "/b/x.alicebak", "--passphrase-stdin", "--confirm", "RESTORE"}, vars,
@@ -360,6 +381,7 @@ func TestCLIRestoreFlags(t *testing.T) {
 	require.Equal(t, 0, run([]string{"restore", "--passphrase-stdin", "--no-safety-backup", "--db-only", "--accept-broken-audit-log",
 		"--free-bytes", "12345", "--wait-for-sessions", "3s", "/b/y.alicebak"}, vars, strings.NewReader("p\n"), &out, &errOut), errOut.String())
 	require.Len(t, got, 2)
+	assert.Equal(t, []string{"postgres://alice_owner@db/alice", "postgres://alice_owner@db/alice"}, checked, "the owner role is checked first")
 	assert.Equal(t, 150*time.Second, got[0].WaitForSessions)
 	assert.Nil(t, got[0].Confirm, "--confirm RESTORE skips the prompt")
 	assert.False(t, got[0].NoSafetyBackup)

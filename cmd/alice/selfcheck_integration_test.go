@@ -185,6 +185,14 @@ func TestSelfcheckReportsEachFailure(t *testing.T) {
 			failLine(t, i, "[FAIL] Background jobs running"))
 		assert.GreaterOrEqual(t, time.Since(start), 800*time.Millisecond, "the heartbeat line waits before it fails")
 	})
+	t.Run("heartbeat in the future", func(t *testing.T) {
+		i := newCLIInstall(t)
+		i.listening()
+		ahead := time.Now().UTC().Add(10 * time.Minute)
+		require.NoError(t, settings.Set(i.ctx, i.d.Owner, heartbeatKey, heartbeat{At: ahead}, ahead))
+		assert.Equal(t, "[FAIL] Background jobs running: the last heartbeat is dated in the future ("+ahead.Format("2006-01-02 15:04")+
+			" UTC); check the system clock", failLine(t, i, "[FAIL] Background jobs running"))
+	})
 	t.Run("no heartbeat", func(t *testing.T) {
 		i := newCLIInstall(t)
 		i.listening()

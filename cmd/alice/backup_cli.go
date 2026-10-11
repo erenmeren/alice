@@ -213,6 +213,10 @@ func runBackupVerify(args []string, cfg config.Config, stdin io.Reader, stdout, 
 		return 2
 	}
 	pass, err := src.read()
+	if errors.Is(err, errPassphraseCancelled) {
+		fmt.Fprintln(stderr, "Verification cancelled.")
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintln(stderr, "The passphrase could not be read:", err)
 		return 2
