@@ -176,6 +176,27 @@ describe('BackupsTab', () => {
     expect(screen.queryByRole('dialog', { name: "Confirm it's you" })).not.toBeInTheDocument();
   });
 
+  it('asks for a code when the server wants a new step-up although the browser thought it fresh (clock skew)', async () => {
+    saved.length = 0;
+    let calls = 0;
+    server.use(
+      ...sessionHandlers(steppedUp),
+      http.get('/api/v1/backups/:name/download', () =>
+        ++calls === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : new HttpResponse('x', { headers: { 'Content-Type': 'application/octet-stream' } }),
+      ),
+      http.post('/api/v1/auth/stepup', () => HttpResponse.json(steppedUp)),
+    );
+    await renderRoute('/settings?tab=backups');
+    await userEvent.click(await screen.findByTestId(`backup-download-${BACKUP_NAME}`));
+    expect(await screen.findByRole('dialog', { name: "Confirm it's you" })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]?.name).toBe(BACKUP_NAME);
+    expect(calls).toBe(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it.each([
     [429, 'ALC-RATE-0001', 'rate.limited'],
     [404, 'ALC-BAK-0003', 'backup.not_found'],

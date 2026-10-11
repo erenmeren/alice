@@ -81,7 +81,8 @@ function KindLabel({ kind }: { kind: string }) {
 
 // BackupsTab is Settings → Backups (C12, C13): the state, Back up now, the list with downloads, and the daily schedule.
 // Restoring is done on the server (alicectl restore), so the page only says so. Every request needs a fresh step-up
-// (backup.manage, settings.manage); a download is fetched as a Blob after confirm() and saved, never kept in a cache.
+// (backup.manage, settings.manage); a download is fetched as a Blob after confirm() (and through run, so a step-up the
+// server still wants asks for a code) and saved, never kept in a cache.
 export function BackupsTab() {
   const { t, i18n } = useTranslation();
   const { run, confirm } = useStepUp();
@@ -104,7 +105,9 @@ export function BackupsTab() {
     setDownloading(true);
     try {
       await confirm();
-      saveBlob(await downloadBackup(name), name);
+      // run as well: the server decides whether the step-up is fresh, and a browser whose clock is behind the server's
+      // can think it is when it is not; a refusal then asks for the code instead of failing.
+      saveBlob(await run(() => downloadBackup(name)), name);
     } catch (e) {
       if (!(e instanceof StepUpCancelled)) setDownloadError(e);
     } finally {
