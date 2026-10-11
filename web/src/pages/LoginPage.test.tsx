@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SessionInfo } from '../api/types';
 import * as navigation from '../navigation';
-import { errorResponse, freshStatus, installedStatus, sessionFor, sessionHandlers } from '../test/fixtures';
+import { completedAnonymousStatus, errorResponse, freshStatus, installedStatus, sessionFor, sessionHandlers } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -143,6 +143,20 @@ describe('sign-in page', () => {
     expect(screen.getByLabelText('Kullanıcı adı')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Giriş yap' })).toBeInTheDocument();
     expectNoRawKeys();
+  });
+
+  it('shows the sign-in form when setup is complete and the status says nothing more (S-18)', async () => {
+    server.use(...sessionHandlers(null, completedAnonymousStatus));
+    const { router } = await renderRoute('/login');
+    expect(await screen.findByRole('heading', { name: 'Sign in to Alice' })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/login');
+  });
+
+  it('sends an anonymous visitor of a completed installation to the sign-in page, never to setup (S-18)', async () => {
+    server.use(...sessionHandlers(null, completedAnonymousStatus));
+    const { router } = await renderRoute('/');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
+    expect(await screen.findByRole('heading', { name: 'Sign in to Alice' })).toBeInTheDocument();
   });
 
   it('sends signed-in users home and a fresh install to setup', async () => {

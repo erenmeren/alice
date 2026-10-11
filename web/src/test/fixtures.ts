@@ -87,6 +87,10 @@ export const installedStatus: SetupStatus = {
   default_locale: 'en',
 };
 
+// completedAnonymousStatus is what GET /setup/status answers an anonymous caller once setup is complete: exactly
+// {completed, default_locale} (S-18, R43 row 47).
+export const completedAnonymousStatus: SetupStatus = { completed: true, default_locale: 'en' };
+
 export const freshStatus: SetupStatus = {
   admin_exists: false,
   recovery_passphrase_set: false,

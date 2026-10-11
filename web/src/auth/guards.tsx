@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation } from 'react-router';
 import type { Role } from '../api/types';
 import { useAuth } from './AuthProvider';
+import { adminExists } from './setupStatus';
 
 export function PageLoader() {
   const { t } = useTranslation();
@@ -19,7 +20,7 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   const { session, setupStatus, loading, sessionEnded } = useAuth();
   const location = useLocation();
   if (loading) return <PageLoader />;
-  if (setupStatus && !setupStatus.admin_exists) return <Navigate to="/setup" replace />;
+  if (setupStatus && !adminExists(setupStatus)) return <Navigate to="/setup" replace />;
   if (!session) {
     // The sign-in page returns the user to `from` (through safeReturnPath) after sign-in.
     return <Navigate to={sessionEnded ? '/login?ended=1' : '/login'} replace state={{ from: location }} />;

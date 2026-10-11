@@ -12,6 +12,7 @@ import { SSOErrorAlert } from '../components/SSOErrorAlert';
 import type { MfaEnrollment, SessionInfo, SessionWithCodes } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
+import { adminExists } from '../auth/setupStatus';
 import { safeReturnPath } from '../auth/returnPath';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { RecoveryCodes } from '../components/RecoveryCodes';
@@ -169,7 +170,7 @@ export function LoginPage() {
   const returnTo = safeReturnPath((location.state as { from?: unknown } | null)?.from);
 
   if (loading) return <PageLoader />;
-  if (phase === 'password' && setupStatus && !setupStatus.admin_exists) return <Navigate to="/setup" replace />;
+  if (phase === 'password' && setupStatus && !adminExists(setupStatus)) return <Navigate to="/setup" replace />;
   if (phase === 'password' && session) return <Navigate to={returnTo} replace />;
 
   const finish = (s: SessionInfo) => {

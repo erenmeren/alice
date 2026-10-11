@@ -6,6 +6,7 @@ import { createAdmin } from '../api/endpoints';
 import type { MfaEnrollment, SessionInfo, SetupStatus } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
+import { adminExists } from '../auth/setupStatus';
 import { RecoveryCodes } from '../components/RecoveryCodes';
 import { TotpEnrollment } from '../components/TotpEnrollment';
 import { AdminStep } from './setup/AdminStep';
@@ -50,7 +51,7 @@ const BACK: Partial<Record<WizardStep, WizardStep>> = {
 // starts with the setup code; afterwards only the signed-in administrator may finish
 // the remaining steps (spec §18.5), resuming at the first unfinished one (R43 row 16).
 export function startOf(status: SetupStatus | null, session: SessionInfo | null): WizardStep | 'home' | 'login' {
-  if (!status || !status.admin_exists) return 'code';
+  if (!status || !adminExists(status)) return 'code';
   if (!session) return 'login';
   if (session.user.role !== 'admin' || status.completed) return 'home';
   if (status.next_step && RESUMABLE.includes(status.next_step)) return status.next_step;

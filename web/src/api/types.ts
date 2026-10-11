@@ -53,9 +53,11 @@ export interface MfaEnrollment {
 export type MfaInput = { code: string } | { recovery_code: string };
 
 export interface SetupStatus {
-  admin_exists: boolean;
-  recovery_passphrase_set: boolean;
-  license_chosen: boolean;
+  // admin_exists, recovery_passphrase_set and license_chosen are absent from the anonymous answer after completion
+  // (S-18): read whether an administrator exists through adminExists (auth/setupStatus.ts).
+  admin_exists?: boolean;
+  recovery_passphrase_set?: boolean;
+  license_chosen?: boolean;
   completed: boolean;
   default_locale: string;
   // Phase 8 (C11, C12): present while setup is open or for a signed-in session; after completion an anonymous caller gets

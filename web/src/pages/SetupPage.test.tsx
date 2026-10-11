@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SetupStatus } from '../api/types';
 import {
+  completedAnonymousStatus,
   errorResponse,
   freshStatus,
   installedStatus,
@@ -447,6 +448,8 @@ describe('startOf', () => {
     expect(startOf(null, null)).toBe('code');
     expect(startOf(freshStatus, null)).toBe('code');
     expect(startOf(installedStatus, null)).toBe('login');
+    // An anonymous caller of a completed installation gets only {completed, default_locale} (S-18).
+    expect(startOf(completedAnonymousStatus, null)).toBe('login');
     expect(startOf(installedStatus, admin)).toBe('home');
     expect(startOf({ ...installedStatus, completed: false, recovery_passphrase_set: false, license_chosen: false }, admin)).toBe('passphrase');
     expect(startOf({ ...installedStatus, completed: false, license_chosen: false }, admin)).toBe('license');
