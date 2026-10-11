@@ -426,7 +426,7 @@ export function field(scope: Page | Locator, label: string): Locator {
 
 // either matches a copy string in English or Turkish (substring), for screens reached before the
 // language is known or after a user's own language setting may have switched it.
-export function either(key: 'loginHeading' | 'noAccess' | 'sessionEnded' | 'wizardHeading'): RegExp {
+export function either(key: 'loginHeading' | 'noAccess' | 'sessionEnded' | 'wizardHeading' | 'signOut'): RegExp {
   return new RegExp(`${escapeRegExp(COPY.en[key])}|${escapeRegExp(COPY.tr[key])}`);
 }
 
@@ -529,7 +529,8 @@ export const ADMIN: Account = { username: 'admin', fullName: 'Ada Yılmaz', pass
 export const PASSPHRASE = 'kırmızı-kedi-mavi-deniz-2026';
 
 // runWizard installs Alice from scratch through every setup wizard step, including the Phase 2
-// license step: it starts the evaluation, or uploads opts.license (a license file's text).
+// license step: it starts the evaluation, or uploads opts.license (a license file's text). The
+// Phase 8 HTTPS and mail steps keep the temporary certificate and skip the mail server.
 // With opts.a11y, every wizard screen is also checked with axe (expectAccessible).
 export async function runWizard(
   page: Page,
@@ -576,6 +577,11 @@ export async function runWizard(
   await page.getByLabel(c.storedPassphrase).check();
   await page.getByRole('button', { name: c.savePassphrase }).click();
 
+  // Phase 8 wizard steps (R43 row 16) with their default choices: keep the temporary HTTPS certificate, skip the mail
+  // server. The dashboard's "Finish setting up" list keeps both open.
+  await keepTemporaryCertificateStep(page, lang, opts.a11y);
+  await skipMailStep(page, lang, opts.a11y);
+
   await expect(page.getByRole('heading', { name: c.licenseHeading })).toBeVisible();
   await expect(page.getByTestId('installation-id')).toHaveText(/^ALICE(-[0-9A-Z]{4}){4}$/);
   if (opts.a11y) await expectAccessible(page, 'wizard license');
@@ -596,6 +602,38 @@ export async function runWizard(
   await page.getByRole('button', { name: c.toDashboard }).click();
   await expect(page.getByRole('heading', { name: c.welcome(admin.fullName) })).toBeVisible();
   return enrolled;
+}
+
+// keepTemporaryCertificateStep answers the wizard's HTTPS step with "Keep the temporary certificate".
+export async function keepTemporaryCertificateStep(page: Page, lang: Lang, a11y = false): Promise<void> {
+  const t = translator(lang);
+  await expect(page.getByRole('heading', { name: t('setup.https.title'), exact: true })).toBeVisible();
+  const keep = page.getByTestId('https-keep-temporary');
+  await expect(keep).toHaveText(t('https.keepTemporary'));
+  if (a11y) await expectAccessible(page, 'wizard HTTPS certificate');
+  await keep.click();
+}
+
+// skipMailStep answers the wizard's mail server step with Skip.
+export async function skipMailStep(page: Page, lang: Lang, a11y = false): Promise<void> {
+  const t = translator(lang);
+  await expect(page.getByRole('heading', { name: t('setup.mail.title'), exact: true })).toBeVisible();
+  const skip = page.getByTestId('setup-skip');
+  await expect(skip).toHaveText(t('setup.skip'));
+  if (a11y) await expectAccessible(page, 'wizard mail server');
+  await skip.click();
+}
+
+// uploadHttpsPair chooses a PEM certificate and key file in the HTTPS upload form inside scope (the wizard step or
+// Settings → HTTPS certificate) and uploads them. The files exist only in memory; the caller answers a step-up prompt
+// if one may appear.
+export async function uploadHttpsPair(scope: Page | Locator, lang: Lang, pair: PemPair): Promise<void> {
+  const t = translator(lang);
+  const form = scope.getByTestId('https-upload-form');
+  await form.getByRole('radio', { name: t('https.formatPem'), exact: true }).check();
+  await form.getByLabel(t('https.certFile'), { exact: true }).setInputFiles({ name: 'alice.crt', mimeType: 'application/x-pem-file', buffer: Buffer.from(pair.cert) });
+  await form.getByLabel(t('https.keyFile'), { exact: true }).setInputFiles({ name: 'alice.key', mimeType: 'application/x-pem-file', buffer: Buffer.from(pair.key) });
+  await form.getByRole('button', { name: t('https.upload'), exact: true }).click();
 }
 
 // uploadLicense chooses a license file, checks it and confirms the preview dialog. The caller
@@ -631,7 +669,8 @@ export async function signIn(page: Page, request: APIRequestContext, account: Ac
   await expect(page.getByRole('heading', { name: c.mfaHeading })).toBeVisible();
   await field(page, c.code).fill(await freshCode(request, totpSecret));
   await page.getByRole('button', { name: c.verify }).click();
-  await expect(page.getByRole('button', { name: c.signOut })).toBeVisible();
+  // The app switches to the user's own language once signed in, which may differ from the sign-in page's.
+  await expect(page.getByRole('button', { name: either('signOut') })).toBeVisible();
 }
 
 // firstSignIn signs in a user created by an administrator; they enroll TOTP at the first sign-in.
