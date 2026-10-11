@@ -163,6 +163,21 @@
         "title": "Alice denetim kaydını zaten kontrol ediyor veya dışa aktarıyor.",
         "cause": "Alice denetim kaydının tamamını aynı anda yalnızca tek bir kontrol veya dışa aktarma için okur ve şu anda başka biri sürüyor. Hiçbir şey kontrol edilmedi veya dışa aktarılmadı.",
         "action": "Diğer kontrol veya dışa aktarma bitene kadar bekleyip yeniden deneyin."
+      },
+      "forwarding_address_refused": {
+        "title": "Alice bu adrese denetim kaydı göndermez.",
+        "cause": "Syslog alıcısının adresi yerel bağlantı (bulut meta veri adresi gibi), çok noktaya yayın, belirtilmemiş ya da ayrılmış bir adres; Alice bu adreslere hiçbir zaman bağlanmaz. Hiçbir şey kaydedilmedi veya gönderilmedi.",
+        "action": "Ağınızdaki syslog sunucusunun veya SIEM sisteminin adresini girin, ardından kaydedin ya da test mesajını yeniden gönderin."
+      },
+      "forwarding_unreachable": {
+        "title": "Alice syslog alıcısına ulaşamadı.",
+        "cause": "Sunucu adı veya port yanlış olabilir, alıcı kapalı olabilir ya da bir güvenlik duvarı bağlantıyı engelliyor olabilir. Denetim kayıtları sırada bekler ve alıcıya ulaşılınca gönderilir.",
+        "action": "Sunucu adını, portu ve aktarım yöntemini kontrol edin, ardından test mesajını yeniden gönderin."
+      },
+      "forwarding_untrusted": {
+        "title": "Alice syslog alıcısının sertifikasına güvenmiyor.",
+        "cause": "Alıcının TLS sertifikası sistemin sertifika yetkilileri veya girdiğiniz CA ile doğrulanmıyor ya da başka bir sunucu adına düzenlenmiş. Hiçbir şey gönderilmedi.",
+        "action": "Alıcının sertifikasını düzenleyen sertifika yetkilisini girin, sunucu adını kontrol edin, ardından test mesajını yeniden gönderin."
       }
     },
     "setup": {
@@ -210,6 +225,11 @@
         "title": "Kurulum henüz tamamlanmadı.",
         "cause": "Lisans yüklenmedi ve deneme süresi başlatılmadı.",
         "action": "Bir lisans dosyası yükleyin veya 30 günlük denemeyi başlatın, ardından kurulumu tamamlayın."
+      },
+      "passphrase_too_weak": {
+        "title": "Kurtarma parolası kolay tahmin edilebilir.",
+        "cause": "Parola yeterince uzun ama orta düzeyde: çok az farklı sözcük veya karakter türü kullanıyor. Tüm yedekleri koruduğu için Alice daha güçlü bir parola istiyor.",
+        "action": "Birbiriyle ilgisiz birkaç sözcük kullanın ya da harf, rakam ve sembolleri karıştırın; gösterge iyi veya güçlü olana kadar devam edin."
       }
     },
     "license": {
@@ -1222,6 +1242,55 @@
         "title": "Alice bu kasanın kayıtlı kimlik bilgilerini okuyamıyor",
         "cause": "Alice'in bu kasa için kaydettiği oturum açma kimlik bilgilerinin şifresi Alice'in geçerli ana anahtarıyla çözülemiyor (anahtar değiştirildi ya da kayıtlı veri bozuldu). Kasadan hiçbir şey okunmadı. Sunucularınızda hiçbir şey değiştirilmedi.",
         "action": "Kasanın sayfasını açın, Kimlik bilgilerini değiştir'i seçin ve kasanın oturum açma bilgilerini yeniden girin; ardından yeniden dağıtın."
+      }
+    },
+    "backup": {
+      "running": {
+        "title": "Başka bir yedek alınıyor.",
+        "cause": "Günlük zamanlama, başka bir yönetici ya da sunucuda alicectl ile başlatılan bir yedek hâlâ yazılıyor. Alice aynı anda tek bir yedek alır.",
+        "action": "Bitmesi için birkaç dakika bekleyin, ardından yeniden deneyin."
+      },
+      "not_configured": {
+        "title": "Yedekleme henüz ayarlanmadı.",
+        "cause": "Kurtarma parolası belirlenmediği için Alice'in yedekleri şifreleyeceği bir anahtarı yok.",
+        "action": "Kurulum sihirbazında kurtarma parolasını belirleyin. Yedekleme bundan sonra başlar."
+      },
+      "not_found": {
+        "title": "Bu yedek bulunamadı.",
+        "cause": "Yedekler dizininde bu adda bir yedek dosyası yok. Saklama kuralı nedeniyle veya elle silinmiş olabilir.",
+        "action": "Yedek listesini yenileyin ve listede görünen bir dosyayı seçin."
+      },
+      "write_failed": {
+        "title": "Yedek yazılamadı.",
+        "cause": "Yedekler dizini dolu ya da yazılamıyor veya disk bir hata bildirdi. Alice yarım kalan dosyayı sildi; yedek alınmadı.",
+        "action": "Yedekler dizininde yer açın (Yedekler sekmesi boş alanı gösterir), ardından yeniden yedekleyin. Sorun sürerse Alice'in günlüğünü desteğe gönderin."
+      }
+    },
+    "tls": {
+      "key_mismatch": {
+        "title": "Özel anahtar bu sertifikaya ait değil.",
+        "cause": "Yüklenen sertifikaların hiçbiri yüklenen özel anahtar için düzenlenmemiş. Hiçbir şey değiştirilmedi.",
+        "action": "Sertifikayı, düzenlendiği özel anahtarla birlikte yükleyin."
+      },
+      "not_valid_now": {
+        "title": "Sertifika şu anda geçerli değil.",
+        "cause": "Geçerlilik süresi henüz başlamadı, sona erdi ya da bir gün içinde sona eriyor. Hiçbir şey değiştirilmedi.",
+        "action": "Şu anda ve bir günden uzun süre geçerli olan bir sertifika yükleyin ya da sunucunun tarih ve saatini kontrol edin."
+      },
+      "weak_key": {
+        "title": "Sertifikanın anahtarı kabul edilmiyor.",
+        "cause": "Alice 2.048 bit veya daha uzun RSA anahtarlarını ve P-256 ya da P-384 eğrisindeki ECDSA anahtarlarını kabul eder. Hiçbir şey değiştirilmedi.",
+        "action": "Sertifika yetkilinizden kabul edilen türde anahtarı olan bir sertifika isteyin, ardından onu yükleyin."
+      },
+      "pfx_password": {
+        "title": "PFX parolası yanlış.",
+        "cause": "PFX dosyası girdiğiniz parolayla açılamadı. Hiçbir şey değiştirilmedi.",
+        "action": "PFX dosyasının dışa aktarıldığı parolayı girin, ardından yeniden yükleyin."
+      },
+      "unreadable": {
+        "title": "Sertifika dosyası okunamadı.",
+        "cause": "Yüklenen içerik ne sertifikayı ve şifrelenmemiş tek bir özel anahtarı içeren PEM metni ne de bir PFX dosyası ya da 1 MiB'tan büyük. Hiçbir şey değiştirilmedi.",
+        "action": "Sertifikayı ve şifrelenmemiş özel anahtarını PEM olarak ya da parolasıyla birlikte bir PFX dosyası olarak yükleyin."
       }
     }
   },

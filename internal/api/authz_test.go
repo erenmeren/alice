@@ -79,6 +79,8 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 
 	// Phase 7 (SEC-009, R42 row 24): single sign-on configuration is an Administrator's browser session with step-up.
 	rbac.SSOManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	// Phase 8: backups (C12).
+	rbac.BackupManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {

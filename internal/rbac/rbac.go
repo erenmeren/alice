@@ -118,6 +118,10 @@ const (
 	// Phase 7 (SEC-009 "SSO configuration", §25.1, R42 row 24): identity providers, group mappings and the
 	// "SSO users may be Admin" switch — an Administrator in a browser session with step-up; never an API token.
 	SSOManage Permission = "sso.manage"
+
+	// Phase 8 (contract C1, C12): list, make and download backups — an Administrator in a browser session with
+	// step-up, never an API token. A backup holds every secret of the installation (encrypted).
+	BackupManage Permission = "backup.manage"
 )
 
 // Policy describes who may use a permission.
@@ -161,6 +165,8 @@ var policies = map[Permission]Policy{
 	RotationOperate: {Roles: []Role{Admin}, StepUp: true},
 
 	SSOManage: {Roles: []Role{Admin}, StepUp: true},
+
+	BackupManage: {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

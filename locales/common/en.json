@@ -163,6 +163,21 @@
         "title": "Alice is already checking or exporting the audit log.",
         "cause": "Alice reads the whole audit log for one check or export at a time, and another one is running. Nothing was checked or exported.",
         "action": "Wait until the other check or export has finished, then try again."
+      },
+      "forwarding_address_refused": {
+        "title": "Alice does not send audit entries to this address.",
+        "cause": "The syslog receiver's address is a link-local (such as the cloud metadata address), multicast, unspecified or reserved address, which Alice never connects to. Nothing was saved or sent.",
+        "action": "Enter the address of your syslog server or SIEM on your network, then save or send the test message again."
+      },
+      "forwarding_unreachable": {
+        "title": "Alice could not reach the syslog receiver.",
+        "cause": "The host name or port may be wrong, the receiver may be down, or a firewall blocks the connection. Audit entries stay queued and are sent when the receiver can be reached.",
+        "action": "Check the host, port and transport, then send a test message again."
+      },
+      "forwarding_untrusted": {
+        "title": "Alice does not trust the syslog receiver's certificate.",
+        "cause": "The receiver's TLS certificate does not verify against the system's certificate authorities or the CA you entered, or it names another host. Nothing was sent.",
+        "action": "Enter the certificate authority that issued the receiver's certificate, check the host name, then send a test message again."
       }
     },
     "setup": {
@@ -210,6 +225,11 @@
         "title": "Setup is not finished yet.",
         "cause": "No license was uploaded and the evaluation was not started.",
         "action": "Upload a license file or choose Start 30-day evaluation, then finish setup."
+      },
+      "passphrase_too_weak": {
+        "title": "The recovery passphrase is too easy to guess.",
+        "cause": "The passphrase is long enough but rated fair: it uses too few different words or kinds of characters. It protects every backup, so Alice asks for a stronger one.",
+        "action": "Use several unrelated words, or mix letters, digits and symbols, until the meter shows good or strong."
       }
     },
     "license": {
@@ -1222,6 +1242,55 @@
         "title": "Alice cannot read this vault's stored credentials",
         "cause": "The sign-in credentials Alice stored for this vault cannot be decrypted with Alice's current master key (the key was replaced, or the stored data was damaged). Nothing was read from the vault. Nothing was changed on your servers.",
         "action": "Open the vault's page, choose Replace credentials and enter the vault's sign-in details again, then deploy again."
+      }
+    },
+    "backup": {
+      "running": {
+        "title": "Another backup is being made.",
+        "cause": "A backup started by the daily schedule, by another administrator or on the server with alicectl is still being written. Alice makes one backup at a time.",
+        "action": "Wait a few minutes until it has finished, then try again."
+      },
+      "not_configured": {
+        "title": "Backups are not set up yet.",
+        "cause": "No recovery passphrase has been set, so Alice has no key to encrypt backups with.",
+        "action": "Set the recovery passphrase in the setup wizard. Backups start after that."
+      },
+      "not_found": {
+        "title": "This backup was not found.",
+        "cause": "No backup file with this name is in the backups directory. It may have been removed by the retention rule or by hand.",
+        "action": "Reload the list of backups and choose a file that is listed."
+      },
+      "write_failed": {
+        "title": "The backup could not be written.",
+        "cause": "The backups directory is full or not writable, or the disk reported an error. Alice removed the incomplete file; no backup was made.",
+        "action": "Free disk space in the backups directory (the Backups tab shows the free space), then back up again. If it keeps failing, send Alice's log to support."
+      }
+    },
+    "tls": {
+      "key_mismatch": {
+        "title": "The private key does not belong to the certificate.",
+        "cause": "None of the uploaded certificates was made for the uploaded private key. Nothing was changed.",
+        "action": "Upload the certificate together with the private key it was issued for."
+      },
+      "not_valid_now": {
+        "title": "The certificate is not valid now.",
+        "cause": "Its validity has not started yet, has ended, or ends within one day. Nothing was changed.",
+        "action": "Upload a certificate that is valid now and for more than one day, or check the server's date and time."
+      },
+      "weak_key": {
+        "title": "The certificate's key is not accepted.",
+        "cause": "Alice accepts RSA keys of 2,048 bits or more and ECDSA keys on the P-256 or P-384 curve. Nothing was changed.",
+        "action": "Ask your certificate authority for a certificate with an accepted key type, then upload it."
+      },
+      "pfx_password": {
+        "title": "The PFX password is wrong.",
+        "cause": "The PFX file could not be opened with the password you entered. Nothing was changed.",
+        "action": "Enter the password the PFX file was exported with, then upload it again."
+      },
+      "unreadable": {
+        "title": "The certificate file could not be read.",
+        "cause": "The upload is neither PEM text with the certificate and one unencrypted private key nor a PFX file, or it is larger than 1 MiB. Nothing was changed.",
+        "action": "Upload the certificate and its unencrypted private key as PEM, or a PFX file with its password."
       }
     }
   },

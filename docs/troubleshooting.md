@@ -554,6 +554,30 @@ asking. The limit is per Alice process; the daily check and `alice audit verify`
 
 **What to do.** Wait until the other check or export has finished, then try again.
 
+## ALC-AUD-0002: Alice does not send audit entries to this address
+
+**Meaning.** The audit forwarding settings or the test message name a syslog receiver whose address Alice never connects to: a link-local address (the cloud metadata address 169.254.169.254 among them), a multicast, unspecified or reserved address, given directly or as a name that resolves to one. Nothing was saved or sent. (HTTP 422, reason `audit.forwarding_address_refused`.)
+
+**Likely cause.** A typo in the host, or a name that resolves to `169.254.169.254` or `0.0.0.0` in this network.
+
+**What to do.** Enter the address of your syslog server or SIEM on your network under **Settings → Audit forwarding**, then save or choose **Send test message** again.
+
+## ALC-AUD-0003: Alice could not reach the syslog receiver
+
+**Meaning.** The test message, or the background forwarding (every 15 seconds), found no connection to the syslog receiver. Audit entries are never lost locally: they stay in Alice's audit log, the backlog on **Settings → Audit forwarding** grows, and forwarding continues from the same entry once the receiver answers. (HTTP 502, reason `audit.forwarding_unreachable`; retryable.)
+
+**Likely cause.** The host name or port is wrong, the receiver is down, the transport does not match the receiver (TLS, TCP or UDP), or a firewall blocks the connection.
+
+**What to do.** Check the host, port and transport, then choose **Send test message** again. While the receiver stays unreachable, the tab shows the last error and when it happened.
+
+## ALC-AUD-0004: Alice does not trust the syslog receiver's certificate
+
+**Meaning.** The TLS connection to the syslog receiver was refused because its certificate did not verify against the system's certificate authorities plus the CA entered in the settings, or it names another host. Nothing was sent. (HTTP 502, reason `audit.forwarding_untrusted`.)
+
+**Likely cause.** The receiver uses a certificate from an internal certificate authority that was not entered, the host field does not match a name in the certificate, or the certificate has expired.
+
+**What to do.** Paste the certificate authority (PEM) that issued the receiver's certificate into the CA field, make the host match the certificate, then choose **Send test message** again.
+
 ## ALC-SET-0001: Wrong setup code
 
 **Meaning.** The one-time setup code entered in the setup wizard is not correct (HTTP 401).
@@ -627,6 +651,14 @@ details once more. (The wizard has no "Back" button yet.)
 
 **What to do.** On the wizard's license step, upload the license file from your vendor or start the evaluation, then
 choose **Go to the dashboard**. The evaluation has been running since Alice was first started either way.
+
+## ALC-SET-0010: The recovery passphrase is too easy to guess
+
+**Meaning.** The recovery passphrase is long enough but rated **fair**: Alice accepts only a passphrase the strength meter rates good or strong, judged on the text the backup key is derived from. Nothing was stored. (HTTP 422, reason `setup.passphrase_too_weak`.)
+
+**Likely cause.** The passphrase is one word repeated, uses only one kind of character, or follows a pattern (for example `aaaaaaaaaaaaaaaa` or `1234567890123456`).
+
+**What to do.** Use several unrelated words, or mix letters, digits and symbols, until the meter shows good or strong. Write the passphrase down and keep it away from the server: every backup needs it, and it cannot be changed in this version.
 
 ## ALC-LIC-0001: Not available while the license is expired
 
@@ -2344,3 +2376,75 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** Alice runs with another master key than the one the credentials were sealed with (the key file was replaced, or the database was restored next to another key), or the stored row was damaged.
 
 **What to do.** On the vault's page choose **Replace credentials** and enter the vault's sign-in details again (Alice seals them with the current key), then deploy again. If many vaults or servers show this, check first that Alice runs with the right master key file. Only a deployment names this cause: **Check now**, the access check and an import of this vault show `ALC-SYS-0003` in the same situation.
+
+## ALC-BAK-0001: Another backup is being made
+
+**Meaning.** **Back up now** was refused because another backup is being written: one started by the daily schedule, by another administrator or on the server with `alicectl backup`. Alice makes one backup at a time. (HTTP 409, reason `backup.running`; retryable.)
+
+**Likely cause.** The daily backup runs (by default at 02:30 in Alice's time zone), or someone else started a backup moments earlier. A large installation can take several minutes.
+
+**What to do.** Wait a few minutes until the other backup is listed on **Settings → Backups**, then try again if you still need a new one.
+
+## ALC-BAK-0002: Backups are not set up yet
+
+**Meaning.** No backup can be made because Alice has no backup key: the recovery passphrase was never set, or this installation's backup key predates the current backup format. Scheduled backups wait for it too and record the failure. (HTTP 409, reason `backup.not_configured`.)
+
+**Likely cause.** The setup wizard's recovery passphrase step was not completed. A development installation set up before Phase 8 has an old backup key and makes no backups until it is set up again on a fresh database.
+
+**What to do.** Finish the setup wizard's recovery passphrase step; backups start after it. The Backups tab says **Backups start after the recovery passphrase is set.** until then.
+
+## ALC-BAK-0003: This backup was not found
+
+**Meaning.** The backup named in the download request is not in the backups directory, or the name is not one Alice gives or accepts for a backup file. Nothing outside the backups directory is ever opened. (HTTP 404, reason `backup.not_found`.)
+
+**Likely cause.** The file was removed by the retention rule (Alice keeps the newest automatic backups, 14 by default) or by hand on the server after the list was loaded.
+
+**What to do.** Reload **Settings → Backups** and download a file that is listed. Backups you want to keep longer must be copied off the server.
+
+## ALC-BAK-0004: The backup could not be written
+
+**Meaning.** Alice could not write the backup file: the free space check failed before the file was opened, or writing, syncing or renaming the file failed. Alice removed the incomplete file and recorded the failure; a failed daily backup e-mails the administrators. (HTTP 500, reason `backup.write_failed`; retryable.)
+
+**Likely cause.** The disk of the backups directory is nearly full (Alice needs twice the size of the newest backup plus 1 GiB free), the directory is not writable by Alice, or the disk reported an error.
+
+**What to do.** Free disk space in the backups directory (**Settings → Backups** shows the free space): copy older manual and pre-update backups to another machine and delete them on the server, then back up again. If it keeps failing with enough space, send Alice's log to support.
+
+## ALC-TLS-0001: The private key does not belong to the certificate
+
+**Meaning.** The uploaded HTTPS certificate was refused because none of the uploaded certificates was issued for the uploaded private key. The certificate in use did not change. (HTTP 422, reason `tls.key_mismatch`.)
+
+**Likely cause.** The key of another certificate (an older one, or one of another server) was selected, or only the chain was uploaded.
+
+**What to do.** Upload the certificate together with the private key it was issued for (both PEM), or a PFX file that contains both.
+
+## ALC-TLS-0002: The certificate is not valid now
+
+**Meaning.** The uploaded HTTPS certificate was refused because it is not valid now: its validity has not started, has ended, or ends within one day. The certificate in use did not change. (HTTP 422, reason `tls.not_valid_now`.)
+
+**Likely cause.** An expired certificate was uploaded, a new certificate's start date is still ahead, or the server's clock is wrong.
+
+**What to do.** Upload a certificate that is valid now and for more than one day. If the dates look right, check the server's date and time.
+
+## ALC-TLS-0003: The certificate's key is not accepted
+
+**Meaning.** The uploaded HTTPS certificate was refused because of its key type or size. Alice accepts RSA keys of 2,048 bits or more and ECDSA keys on the P-256 or P-384 curve. The certificate in use did not change. (HTTP 422, reason `tls.weak_key`.)
+
+**Likely cause.** An RSA key of 1,024 bits, an Ed25519 key, or an ECDSA key on another curve.
+
+**What to do.** Ask your certificate authority for a certificate with an accepted key, then upload it.
+
+## ALC-TLS-0004: The PFX password is wrong
+
+**Meaning.** The uploaded PFX file could not be opened with the password that came with it. The certificate in use did not change. (HTTP 422, reason `tls.pfx_password`.)
+
+**Likely cause.** A typo in the password, or the password of another export.
+
+**What to do.** Enter the password the PFX file was exported with, then upload it again.
+
+## ALC-TLS-0005: The certificate file could not be read
+
+**Meaning.** The upload is neither PEM text with the certificate and exactly one unencrypted private key nor a PFX file, or a part of it is larger than 1 MiB. The upload is never quoted in the answer or the log. The certificate in use did not change. (HTTP 422, reason `tls.unreadable`.)
+
+**Likely cause.** An encrypted private key, a signing request instead of a certificate, two private keys, text after the PEM blocks, or a file of another format.
+
+**What to do.** Upload the certificate and its unencrypted private key as PEM, or a PFX file with its password. To decrypt a key: `openssl pkey -in key.pem -out key-plain.pem`.

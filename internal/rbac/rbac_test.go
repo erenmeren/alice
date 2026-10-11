@@ -71,6 +71,9 @@ var expected = map[rbac.Permission]map[string]rbac.Decision{
 	rbac.SettingsManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.BackupManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
 	rbac.SSOManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
@@ -137,7 +140,7 @@ func TestUnknownPermissionIsDenied(t *testing.T) {
 
 func TestPermissionsAreSortedAndHavePolicies(t *testing.T) {
 	ps := rbac.Permissions()
-	assert.Len(t, ps, 23)
+	assert.Len(t, ps, 24)
 	assert.True(t, sort.SliceIsSorted(ps, func(i, j int) bool { return ps[i] < ps[j] }))
 	for _, p := range ps {
 		_, ok := rbac.PolicyFor(p)
@@ -230,4 +233,22 @@ func TestPhase7Policies(t *testing.T) {
 	assert.Equal(t, rbac.DenyStepUp, rbac.Decide(rbac.SSOManage, admin))
 	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.SSOManage, tok), "no token configures SSO")
 	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.SSOManage, op))
+}
+
+// Phase 8: backups are an Administrator's, with step-up, never an API token's.
+func TestBackupManagePolicy(t *testing.T) {
+	assert.Equal(t, rbac.Permission("backup.manage"), rbac.BackupManage)
+	adminUp := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Admin, StepUp: true}
+	admin := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Admin}
+	tok := rbac.Subject{Kind: rbac.APIToken, Role: rbac.Admin, Scope: rbac.ScopeOperate}
+	op := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Operator, StepUp: true}
+	aud := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Auditor, StepUp: true}
+	assert.Equal(t, rbac.Allow, rbac.Decide(rbac.BackupManage, adminUp))
+	assert.Equal(t, rbac.DenyStepUp, rbac.Decide(rbac.BackupManage, admin))
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.BackupManage, tok), "no token reads or makes backups")
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.BackupManage, op))
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.BackupManage, aud))
+	pol, ok := rbac.PolicyFor(rbac.BackupManage)
+	require.True(t, ok)
+	assert.Empty(t, pol.TokenScope)
 }

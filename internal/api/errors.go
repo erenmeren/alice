@@ -349,6 +349,22 @@ var (
 	// The vault's sealed sign-in credential cannot be opened with this master key (secrets.ErrDecrypt); a deployment
 	// ends with it before anything is read from the vault (final fix wave).
 	ErrKVCredentialUnreadable = ErrorCode{Code: "ALC-AKV-0041", Reason: "kv.credential_unreadable", Status: http.StatusConflict}
+
+	// Phase 8 (contract C12): backups, the HTTPS certificate upload, audit forwarding and the wizard's passphrase
+	// strength rule (P1-08).
+	ErrBackupRunning            = ErrorCode{Code: "ALC-BAK-0001", Reason: "backup.running", Status: http.StatusConflict, Retryable: true}
+	ErrBackupNotConfigured      = ErrorCode{Code: "ALC-BAK-0002", Reason: "backup.not_configured", Status: http.StatusConflict}
+	ErrBackupNotFound           = ErrorCode{Code: "ALC-BAK-0003", Reason: "backup.not_found", Status: http.StatusNotFound}
+	ErrBackupWriteFailed        = ErrorCode{Code: "ALC-BAK-0004", Reason: "backup.write_failed", Status: http.StatusInternalServerError, Retryable: true}
+	ErrTLSKeyMismatch           = ErrorCode{Code: "ALC-TLS-0001", Reason: "tls.key_mismatch", Status: http.StatusUnprocessableEntity}
+	ErrTLSNotValidNow           = ErrorCode{Code: "ALC-TLS-0002", Reason: "tls.not_valid_now", Status: http.StatusUnprocessableEntity}
+	ErrTLSWeakKey               = ErrorCode{Code: "ALC-TLS-0003", Reason: "tls.weak_key", Status: http.StatusUnprocessableEntity}
+	ErrTLSPFXPassword           = ErrorCode{Code: "ALC-TLS-0004", Reason: "tls.pfx_password", Status: http.StatusUnprocessableEntity}
+	ErrTLSUnreadable            = ErrorCode{Code: "ALC-TLS-0005", Reason: "tls.unreadable", Status: http.StatusUnprocessableEntity}
+	ErrForwardingAddressRefused = ErrorCode{Code: "ALC-AUD-0002", Reason: "audit.forwarding_address_refused", Status: http.StatusUnprocessableEntity}
+	ErrForwardingUnreachable    = ErrorCode{Code: "ALC-AUD-0003", Reason: "audit.forwarding_unreachable", Status: http.StatusBadGateway, Retryable: true}
+	ErrForwardingUntrusted      = ErrorCode{Code: "ALC-AUD-0004", Reason: "audit.forwarding_untrusted", Status: http.StatusBadGateway}
+	ErrPassphraseTooWeak        = ErrorCode{Code: "ALC-SET-0010", Reason: "setup.passphrase_too_weak", Status: http.StatusUnprocessableEntity}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -399,6 +415,9 @@ func AllErrorCodes() []ErrorCode {
 		ErrKVImportNameExists, ErrKVImportInvalid, ErrKVBindingGone, ErrKVAutoDeployOff, ErrKVVaultUnavailable, ErrKVVersionHeld,
 		ErrKVVersionNotHeld, ErrKVVersionSuperseded, ErrKVWaveStopped, ErrKVImportVaultDeleted, ErrKVImportCancelled, ErrKVImportAdminRequired,
 		ErrKVCredentialUnreadable,
+		ErrBackupRunning, ErrBackupNotConfigured, ErrBackupNotFound, ErrBackupWriteFailed,
+		ErrTLSKeyMismatch, ErrTLSNotValidNow, ErrTLSWeakKey, ErrTLSPFXPassword, ErrTLSUnreadable,
+		ErrForwardingAddressRefused, ErrForwardingUnreachable, ErrForwardingUntrusted, ErrPassphraseTooWeak,
 	}
 }
 
