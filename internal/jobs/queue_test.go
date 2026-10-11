@@ -298,3 +298,21 @@ func TestRetryWaitIsCappedAndOnlyForRetries(t *testing.T) {
 	assert.Zero(t, retryWait(Fail("x.y", nil, nil)))
 	assert.Zero(t, retryWait(errors.New("plain")))
 }
+
+// A job without a payload is stored and authenticated as the empty object, so its MAC equals that of an empty
+// payload, and keys are sorted whatever the map's order.
+func TestNilPayloadIsTheEmptyObject(t *testing.T) {
+	assert.Equal(t, "{}", string(canonicalPayload(nil)))
+	assert.Equal(t, canonicalPayload(map[string]string{}), canonicalPayload(nil))
+	assert.Equal(t, `{"a":"1","b":"2"}`, string(canonicalPayload(map[string]string{"b": "2", "a": "1"})))
+}
+
+// classify never returns nil, so a handler that reports failure without an error is still recorded as an
+// unexpected, retryable failure (never a success).
+func TestClassifyNeverReturnsNil(t *testing.T) {
+	f := classify(nil)
+	require.NotNil(t, f)
+	assert.Equal(t, Retryable, f.Class)
+	assert.Equal(t, "internal.unexpected", f.Reason)
+	assert.Equal(t, NeedsAttention, classify(Attention("x.y", nil, nil)).Class)
+}
