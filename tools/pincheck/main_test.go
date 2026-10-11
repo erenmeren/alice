@@ -261,3 +261,26 @@ func TestDockerPullAndDockerfileCase(t *testing.T) {
 		assert.Empty(t, messages(t, name, "FROM alpine:3\n"), name)
 	}
 }
+
+func TestEveryImageVariableOfTheMakefileIsPinned(t *testing.T) {
+	vars := "GITLEAKS_IMAGE ?= g:1@" + dg + "\nTRIVY_IMAGE ?= t:1@" + dg + "\n"
+	assert.Empty(t, messages(t, "Makefile", vars+"SHELLCHECK_IMAGE ?= s:v0.11.0@"+dg+"\nc:\n\tdocker run --rm -v x:/s:ro $(SHELLCHECK_IMAGE) -x a.sh\n"))
+
+	byTag := messages(t, "Makefile", vars+"SHELLCHECK_IMAGE ?= s:v0.11.0\n")
+	require.Len(t, byTag, 1, "a variable by tag only")
+	assert.Contains(t, byTag[0], "SHELLCHECK_IMAGE")
+
+	noTag := messages(t, "Makefile", vars+"OTHER_IMAGE := o@"+dg+"\n")
+	require.Len(t, noTag, 1, "a digest without a tag")
+	assert.Contains(t, noTag[0], "OTHER_IMAGE")
+
+	undefined := messages(t, "Makefile", vars+"c:\n\tdocker run --rm $(MISSING_IMAGE) x\n")
+	require.NotEmpty(t, undefined, "a reference to a variable that is not defined")
+	assert.Contains(t, strings.Join(undefined, "\n"), "MISSING_IMAGE")
+}
+
+func TestTestImageDockerfilesMustPinFromAndCopyFrom(t *testing.T) {
+	assert.Empty(t, messages(t, "test/images/x/Dockerfile", "FROM alpine:3.20@"+dg+"\nCOPY --from=busybox:1@"+dg+" /bin/busybox /b\n"))
+	assert.Len(t, messages(t, "test/images/x/Dockerfile", "FROM alpine:3.20\n"), 1)
+	assert.Len(t, messages(t, "test/images/x/e2e.Dockerfile", "FROM alpine:3.20@"+dg+"\nCOPY --from=busybox:1 /bin/busybox /b\n"), 1)
+}

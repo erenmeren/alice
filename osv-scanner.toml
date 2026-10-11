@@ -1,0 +1,12 @@
+# osv-scanner configuration (make osv, part of make vuln).
+#
+# An ignore needs all three keys, and ignoreUntil is at most 90 days away (review it, then renew
+# it with a new reason or remove it):
+#
+#   [[IgnoredVulns]]
+#   id = "GO-2026-0000"
+#   ignoreUntil = 2026-12-31
+#   reason = "why Alice is not affected, or what blocks the fix"
+#
+# There is none today. A High or Critical finding with a fix is fixed, not ignored
+# (docs/dev/dependency-updates.md).

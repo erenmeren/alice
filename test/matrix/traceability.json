@@ -1,0 +1,1723 @@
+[
+ {
+  "id": "L-01",
+  "status": "test",
+  "tests": [
+   "internal/license:TestEvaluationMode",
+   "internal/license:TestStartCreatesTheInstallationOnce"
+  ]
+ },
+ {
+  "id": "L-02",
+  "status": "test",
+  "tests": [
+   "internal/license:TestEvaluationMode"
+  ]
+ },
+ {
+  "id": "L-03",
+  "status": "test",
+  "tests": [
+   "internal/license:TestEvaluationMode",
+   "internal/license:TestEvaluationNotices"
+  ]
+ },
+ {
+  "id": "L-04",
+  "status": "test",
+  "tests": [
+   "internal/api:TestEvaluationLimitViaAPI",
+   "internal/inventory:TestL04EvaluationAllowsFiveTargets",
+   "internal/license:TestCheckCanAddTargetIsTransactional",
+   "internal/license:TestTargetLimit"
+  ]
+ },
+ {
+  "id": "L-05",
+  "status": "test",
+  "tests": [
+   "internal/license:TestLicenseEndsEvaluation",
+   "internal/license:TestUploadActivatesImmediately"
+  ]
+ },
+ {
+  "id": "L-06",
+  "status": "test",
+  "tests": [
+   "internal/license:TestLicenseEndsEvaluation",
+   "internal/backup:TestF85FullCycle"
+  ]
+ },
+ {
+  "id": "L-07",
+  "status": "test",
+  "tests": [
+   "internal/license:TestEvaluationNotices",
+   "internal/license:TestEvaluationWarnings"
+  ]
+ },
+ {
+  "id": "L-10",
+  "status": "test",
+  "tests": [
+   "internal/license:TestBannersForEveryone",
+   "internal/license:TestExpiryWarningThresholds",
+   "internal/license:TestNoticesAreSentOncePerThreshold"
+  ]
+ },
+ {
+  "id": "L-11",
+  "status": "test",
+  "tests": [
+   "internal/license:TestExpiryWarningThresholds"
+  ]
+ },
+ {
+  "id": "L-12",
+  "status": "test",
+  "tests": [
+   "internal/license:TestExpiryWarningThresholds",
+   "internal/license:TestNoticesAreSentOncePerThreshold"
+  ]
+ },
+ {
+  "id": "L-13",
+  "status": "test",
+  "tests": [
+   "internal/license:TestExpiryWarningThresholds",
+   "internal/license:TestNoticesAreSentOncePerThreshold"
+  ]
+ },
+ {
+  "id": "L-14",
+  "status": "test",
+  "tests": [
+   "internal/license:TestCatchUpSendsOnlyTheCurrentThreshold"
+  ]
+ },
+ {
+  "id": "L-15",
+  "status": "test",
+  "tests": [
+   "internal/api:TestLicenseStatusDependsOnTheRole",
+   "internal/api:TestLicenseUploadAcrossRoles",
+   "internal/license:TestBannersForEveryone"
+  ]
+ },
+ {
+  "id": "L-16",
+  "status": "test",
+  "tests": [
+   "internal/alerts/expiry:TestDowntimeSendsOnlyTheMostUrgent",
+   "internal/license:TestCatchUpSendsOnlyTheCurrentThreshold"
+  ]
+ },
+ {
+  "id": "L-17",
+  "status": "test",
+  "tests": [
+   "internal/license:TestRenewal",
+   "internal/license:TestRenewalRestartsWarnings"
+  ]
+ },
+ {
+  "id": "L-18",
+  "status": "test",
+  "tests": [
+   "internal/alerts:TestL18NoSMTP",
+   "internal/license:TestWithoutEmailTheBannerStillShows",
+   "internal/notify:TestDrainWithoutSMTPSkips"
+  ]
+ },
+ {
+  "id": "L-20",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGraceAndLock",
+   "internal/license:TestTickGraceAndLock"
+  ]
+ },
+ {
+  "id": "L-21",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGraceAndLock"
+  ]
+ },
+ {
+  "id": "L-22",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGraceAndLock",
+   "internal/license:TestGuardRollback",
+   "internal/license:TestTickGraceAndLock"
+  ]
+ },
+ {
+  "id": "L-23",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGraceAndLock"
+  ]
+ },
+ {
+  "id": "L-24",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGraceAndLock",
+   "internal/license:TestTickGraceAndLock"
+  ]
+ },
+ {
+  "id": "L-25",
+  "status": "test",
+  "tests": [
+   "internal/api:TestLockKeepsPlatformAdministrationAvailable"
+  ]
+ },
+ {
+  "id": "L-26",
+  "status": "test",
+  "tests": [
+   "internal/api:TestCreateTargetLicenseErrors",
+   "internal/api:TestKeyVaultInLock",
+   "internal/api:TestLicenseDenialAuditDetails",
+   "internal/api:TestLockRefusesInfrastructureChanges",
+   "internal/inventory:TestAddInLockIsRefused",
+   "internal/inventory:TestImportStateMachine"
+  ]
+ },
+ {
+  "id": "L-27",
+  "status": "test",
+  "tests": [
+   "internal/jobs:TestLockPausesReadOnlyWorkAndRenewalResumesIt"
+  ]
+ },
+ {
+  "id": "L-28",
+  "status": "test",
+  "tests": [
+   "internal/alerts:TestL28LockNote",
+   "internal/notify:TestRenderAddsTheLicenseNote"
+  ]
+ },
+ {
+  "id": "L-29",
+  "status": "test",
+  "tests": [
+   "internal/jobs/targetjobs:TestL29NoRemoteWorkInLock",
+   "internal/jobs/sshkeyjobs:TestNoRemoteCommandFromScheduledWorkInLock",
+   "internal/jobs:TestLockDeletesNothing",
+   "internal/api:TestLockRefusesInfrastructureChanges",
+   "internal/api:TestRotationInLockRunsNoCommand",
+   "internal/api:TestLockAndCertificateDeployments"
+  ]
+ },
+ {
+  "id": "L-30",
+  "status": "test",
+  "tests": [
+   "internal/api:TestLockKeepsPlatformAdministrationAvailable",
+   "internal/jobs:TestLockPausesReadOnlyWorkAndRenewalResumesIt",
+   "internal/license:TestRenewal",
+   "internal/license:TestUploadActivatesImmediately"
+  ]
+ },
+ {
+  "id": "L-31",
+  "status": "test",
+  "tests": [
+   "internal/license:TestRenewal",
+   "internal/license:TestRenewalRestartsWarnings"
+  ]
+ },
+ {
+  "id": "L-32",
+  "status": "test",
+  "tests": [
+   "internal/license:TestAlreadyExpiredRenewal",
+   "internal/license:TestExpiredAndPendingUploads"
+  ]
+ },
+ {
+  "id": "L-33",
+  "status": "test",
+  "tests": [
+   "internal/license:TestUploadActivatesImmediately"
+  ]
+ },
+ {
+  "id": "L-40",
+  "status": "test",
+  "tests": [
+   "internal/api:TestLicenseUploadRefusals",
+   "internal/license:TestCheckRejectsForgeries",
+   "internal/license:TestUploadRejections"
+  ]
+ },
+ {
+  "id": "L-41",
+  "status": "test",
+  "tests": [
+   "internal/license:TestCheckRejectsForgeries",
+   "internal/license:TestUploadRejections"
+  ]
+ },
+ {
+  "id": "L-42",
+  "status": "test",
+  "tests": [
+   "internal/license:TestCheckRejectsForgeries",
+   "internal/license:TestUploadRejections"
+  ]
+ },
+ {
+  "id": "L-43",
+  "status": "test",
+  "tests": [
+   "internal/api:TestLicenseUploadRefusals",
+   "internal/license:TestRejectReasonAndSuffix",
+   "internal/license:TestUploadRejections"
+  ]
+ },
+ {
+  "id": "L-44",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF85FullCycle"
+  ],
+  "note": "Installation ID, installation timestamp and license survive a restore: the full-cycle test of Task 5 asserts them."
+ },
+ {
+  "id": "L-45",
+  "status": "test",
+  "tests": [
+   "internal/license:TestNewerFormatWithNewFieldsAsksForAnUpdate",
+   "internal/license:TestParseLeavesNewerFormatsToCheck",
+   "internal/license:TestUploadRejections"
+  ]
+ },
+ {
+  "id": "L-46",
+  "status": "test",
+  "tests": [
+   "internal/license:TestValidatePayload"
+  ]
+ },
+ {
+  "id": "L-47",
+  "status": "test",
+  "tests": [
+   "internal/license:TestUploadFaultsStoreNothing",
+   "internal/license:TestValidatePayload"
+  ]
+ },
+ {
+  "id": "L-48",
+  "status": "test",
+  "tests": [
+   "internal/license:TestExpiredAndPendingUploads",
+   "internal/license:TestPendingLicense"
+  ]
+ },
+ {
+  "id": "L-49",
+  "status": "test",
+  "tests": [
+   "cmd/alice:TestDamageLicenseFileChangesOnlyTheCustomer",
+   "internal/license:TestStoredFileEditedDirectlyIsIgnored",
+   "internal/license:TestTamperedFileIsAuditedOnce"
+  ]
+ },
+ {
+  "id": "L-50",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGuardFollowsTheClock"
+  ]
+ },
+ {
+  "id": "L-51",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGuardRollback",
+   "internal/license:TestRollbackIsWarnedOncePerDay"
+  ]
+ },
+ {
+  "id": "L-52",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGuardRollback",
+   "internal/license:TestSmallRollbackIsNotAudited"
+  ]
+ },
+ {
+  "id": "L-53",
+  "status": "test",
+  "tests": [
+   "cmd/alice:TestBuildTime",
+   "internal/license:TestStartChoosesTheTimeRecord"
+  ]
+ },
+ {
+  "id": "L-54",
+  "status": "test",
+  "tests": [
+   "internal/license:TestHWMRecordRejectsTampering",
+   "internal/license:TestStartChoosesTheTimeRecord"
+  ]
+ },
+ {
+  "id": "L-55",
+  "status": "test",
+  "tests": [
+   "internal/license:TestStartChoosesTheTimeRecord"
+  ]
+ },
+ {
+  "id": "L-56",
+  "status": "gap",
+  "note": "No test: a discovered certificate with a notBefore ahead of the clock must warn the Administrator without changing the license state (R28; deferred to Phase 4 by the Phase 2 review, never written)."
+ },
+ {
+  "id": "L-57",
+  "status": "gap",
+  "note": "No test: a certificate notBefore far in the future must never change the license state or the effective time (R28; deferred to Phase 4 by the Phase 2 review, never written)."
+ },
+ {
+  "id": "L-58",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGuardRestartsNeverMoveBackwards",
+   "internal/license:TestRestartsNeverMoveEffectiveTimeBackwards"
+  ]
+ },
+ {
+  "id": "L-59",
+  "status": "test",
+  "tests": [
+   "internal/license:TestForwardJumpIsHeldThenAccepted",
+   "internal/license:TestGuardForwardJump"
+  ]
+ },
+ {
+  "id": "L-60",
+  "status": "test",
+  "tests": [
+   "internal/license:TestForwardJumpIsHeldThenAccepted",
+   "internal/license:TestGuardForwardJump"
+  ]
+ },
+ {
+  "id": "L-61",
+  "status": "test",
+  "tests": [
+   "internal/license:TestAProcessFollowsAHoldEndedElsewhere",
+   "internal/license:TestCorrectionDuringAHeldJumpReportsTheGatePhase",
+   "internal/license:TestCorrectionLicenseAcceptsTheJump",
+   "internal/license:TestGuardAcceptJump",
+   "internal/license:TestNewestStartedUploadWins"
+  ]
+ },
+ {
+  "id": "L-62",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGuardSmallForwardCorrectionIsAccepted"
+  ]
+ },
+ {
+  "id": "L-63",
+  "status": "test",
+  "tests": [
+   "internal/license:TestGuardRollback"
+  ]
+ },
+ {
+  "id": "L-70",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL70L71TargetLimit",
+   "internal/license:TestTargetLimit"
+  ]
+ },
+ {
+  "id": "L-71",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL70L71TargetLimit",
+   "internal/license:TestCheckCanAddTargetIsTransactional",
+   "internal/license:TestTargetLimit"
+  ]
+ },
+ {
+  "id": "L-72",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL72DiscoveryAtTheLimit",
+   "internal/inventory:TestL72KeysDoNotCount"
+  ]
+ },
+ {
+  "id": "L-73",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestDeleteAndAddRacingAtTheLimit",
+   "internal/inventory:TestL73DeleteFreesASlot"
+  ]
+ },
+ {
+  "id": "L-74",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL74ConcurrentAddsNeverExceedTheLimit",
+   "internal/inventory:TestNginxTargetsCountTowardTheLicense",
+   "internal/license:TestCheckCanAddTargetIsTransactional"
+  ]
+ },
+ {
+  "id": "L-75",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL75L76SmallerRenewal",
+   "internal/inventory:TestL78LicenseBelowEvaluationTargets",
+   "internal/license:TestTargetLimit"
+  ]
+ },
+ {
+  "id": "L-76",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL75L76SmallerRenewal"
+  ]
+ },
+ {
+  "id": "L-77",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL77LargerRenewal",
+   "internal/license:TestTargetLimit"
+  ]
+ },
+ {
+  "id": "L-78",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestL78LicenseBelowEvaluationTargets",
+   "internal/license:TestTargetLimit"
+  ]
+ },
+ {
+  "id": "L-79",
+  "status": "test",
+  "tests": [
+   "internal/archtest:TestEveryTargetInsertChecksTheLicense",
+   "internal/inventory:TestCreateVaultLicense"
+  ]
+ },
+ {
+  "id": "L-80",
+  "status": "test",
+  "tests": [
+   "internal/api:TestInFlightDeploymentFinishesAcrossTheLock",
+   "internal/jobs/deployjobs:TestL80InFlightDeployFinishesAcrossLock",
+   "internal/jobs/deployjobs:TestL80L82WithAKeyVaultDeployment",
+   "internal/jobs:TestRunningTaskCompletesWhenLockStarts"
+  ]
+ },
+ {
+  "id": "L-81",
+  "status": "test",
+  "tests": [
+   "internal/api:TestBlockedRemovalNeedsConfirmation",
+   "internal/api:TestL81KeyVaultDeploymentHeld",
+   "internal/api:TestLockAndCertificateDeployments",
+   "internal/jobs/deployjobs:TestL80InFlightDeployFinishesAcrossLock",
+   "internal/jobs/deployjobs:TestL81KVDeploymentHeldThenConfirmed",
+   "internal/jobs/deployjobs:TestL81QueuedDeployIsBlockedThenConfirmed"
+  ]
+ },
+ {
+  "id": "L-82",
+  "status": "test",
+  "tests": [
+   "internal/api:TestLockAndCertificateDeployments",
+   "internal/inventory:TestFinishDeploymentAuditsAndEmails",
+   "internal/jobs/deployjobs:TestL80L82WithAKeyVaultDeployment",
+   "internal/jobs/deployjobs:TestL82RollbackRunsDespiteLock",
+   "internal/jobs:TestDeploymentJobsInLock",
+   "internal/jobs:TestInFlightRunFinishesItsStepsAndRollbackDespiteLock"
+  ]
+ },
+ {
+  "id": "L-83",
+  "status": "test",
+  "tests": [
+   "cmd/alice:TestRotationTasksKeepTheirLicenseClasses",
+   "internal/api:TestContinueAfterRenewalOverTheWire",
+   "internal/api:TestL83FlaggedWhenTheLockEnters",
+   "internal/api:TestRotationInLockRunsNoCommand",
+   "internal/jobs/sshkeyjobs:TestL83OverlapLockRemovesNothing",
+   "internal/jobs/sshkeyjobs:TestNoRemoteCommandFromScheduledWorkInLock"
+  ]
+ },
+ {
+  "id": "L-84",
+  "status": "test",
+  "tests": [
+   "internal/api:TestContinueAfterRenewalOverTheWire",
+   "internal/jobs/sshkeyjobs:TestL84RenewalAfterTwentyDays",
+   "internal/sshkeys:TestContinueNeedsTheRenewalNotice",
+   "internal/sshkeys:TestDecisionDeadlineDoesNotRunInLock"
+  ]
+ },
+ {
+  "id": "L-85",
+  "status": "test",
+  "tests": [
+   "cmd/alice:TestRotationTasksCallTheirServiceFunctions",
+   "internal/api:TestL85AndL86LockDuringTheAddOverTheWire",
+   "internal/jobs/sshkeyjobs:TestL85AddInFlightAtLock",
+   "internal/jobs:TestInFlightRunFinishesItsStepsAndRollbackDespiteLock",
+   "internal/jobs:TestPhase6JobClasses"
+  ]
+ },
+ {
+  "id": "L-86",
+  "status": "test",
+  "tests": [
+   "internal/api:TestAbortInLockUndoesOverTheWire",
+   "internal/api:TestAbortIsAllowedInLock",
+   "internal/api:TestL85AndL86LockDuringTheAddOverTheWire",
+   "internal/api:TestRotationInLockRunsNoCommand",
+   "internal/api:TestRouteRuleViolationsCatchesWeakPermissions",
+   "internal/jobs/sshkeyjobs:TestL86VerifyFailsDuringLock"
+  ]
+ },
+ {
+  "id": "L-87",
+  "status": "test",
+  "tests": [
+   "internal/api:TestL87KeyVaultPollInFlightAtLock",
+   "internal/jobs/kvjobs:TestL87PollInFlightAtLock",
+   "internal/jobs:TestInFlightPollFinishesAndTriggersNothingInLock"
+  ]
+ },
+ {
+  "id": "L-88",
+  "status": "test",
+  "tests": [
+   "cmd/alice:TestRotationTasksKeepTheirLicenseClasses",
+   "internal/api:TestL88LockWhenTheNoticeIsDueOverTheWire",
+   "internal/jobs/sshkeyjobs:TestL88LockAtPreviewTime",
+   "internal/jobs:TestLockedTicksPauseWorkWhileAlwaysClassContinues",
+   "internal/jobs:TestPhase6JobClasses",
+   "internal/sshkeys:TestAdvanceGatesEveryForwardStep"
+  ]
+ },
+ {
+  "id": "F-01",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployRollsBackWhenConfigTestFails",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-02",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployRefusesBeforeChangingAnything",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-03",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployReloadFailures",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-04",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployReloadFailures",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-05",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestRecoveryRollsBackAnUnservedCommit",
+   "internal/providers/linuxssh/linuxsshtest:TestEmulatedServedFollowsReloadsAndOtherListeners",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-06",
+  "status": "test",
+  "tests": [
+   "internal/api:TestPrecheckRefusesWebsitesAliceCannotCheck",
+   "internal/jobs/deployjobs:TestDeployPrecheckRefusalsChangeNothing",
+   "internal/jobs/deployjobs:TestKVKeyIsZeroedOnEveryPath",
+   "internal/jobs/deployjobs:TestPrecheckRefusesWebsitesAliceCannotCheck",
+   "internal/providers/linuxssh/linuxsshtest:TestEmulatedServedFollowsReloadsAndOtherListeners",
+   "internal/providers/nginx:TestDeployOutcomeTable"
+  ]
+ },
+ {
+  "id": "F-07",
+  "status": "test",
+  "tests": [
+   "internal/api:TestPrecheckRefusesWebsitesAliceCannotCheck",
+   "internal/jobs/deployjobs:TestDeployPrecheckRefusalsChangeNothing",
+   "internal/jobs/deployjobs:TestPrecheckRefusesWebsitesAliceCannotCheck",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-08",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestLostConnectionDuringTheSendIsRecovered",
+   "internal/providers/nginx:TestDeployConnectionDropIsUncertain",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-09",
+  "status": "test",
+  "tests": [
+   "internal/api:TestDeployFailureJourneys",
+   "internal/api:TestRollbackFailureJourneys"
+  ]
+ },
+ {
+  "id": "F-10",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployRefusesBeforeChangingAnything",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestRealNginx"
+  ]
+ },
+ {
+  "id": "F-11",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployRefusesBeforeChangingAnything"
+  ]
+ },
+ {
+  "id": "F-12",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployRefusesBeforeChangingAnything",
+   "internal/providers/nginx:TestDeployOutcomeTable"
+  ]
+ },
+ {
+  "id": "F-13",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployModes"
+  ]
+ },
+ {
+  "id": "F-14",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestDeployPrecheckRefusalsChangeNothing",
+   "internal/jobs/deployjobs:TestUnreachableServerBeforeTheChange",
+   "internal/providers/nginx:TestDeployOutcomeTable",
+   "internal/providers/nginx:TestOpenRefusesAnOutdatedHelper",
+   "internal/providers/nginx:TestTestConnectionChecksTheNginxProfile"
+  ]
+ },
+ {
+  "id": "F-15",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestDeleteBindingKeepsWhatIsInFlight",
+   "internal/inventory:TestRequestDeploymentRefusals",
+   "internal/inventory:TestRequestKVDeployment",
+   "internal/jobs/deployjobs:TestF15DeploymentsToOneServerNeverOverlap",
+   "migrations:TestOneActiveDeploymentPerLocation"
+  ]
+ },
+ {
+  "id": "F-16",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestF16OneServerFailsTheOtherSucceeds"
+  ]
+ },
+ {
+  "id": "F-17",
+  "status": "test",
+  "tests": [
+   "internal/api:TestDeployBindingHandler",
+   "internal/inventory:TestKVDeployMaterialIncompleteChain",
+   "internal/inventory:TestReleaseHeldVersion",
+   "internal/inventory:TestRequestDeploymentRefusals",
+   "internal/jobs/deployjobs:TestF17IncompleteChainNeedsAnAdministrator",
+   "internal/jobs/deployjobs:TestKVIncompleteChainNeedsTheConfirmation"
+  ]
+ },
+ {
+  "id": "F-18",
+  "status": "test",
+  "tests": [
+   "internal/api:TestUploadJourneyRefusesWithExactMessages"
+  ]
+ },
+ {
+  "id": "F-19",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestRequestDeploymentRefusals",
+   "internal/jobs/deployjobs:TestDeployPrecheckRefusalsChangeNothing",
+   "internal/jobs/deployjobs:TestF19ExpiredAtRunTimeIsRefusedAndAudited",
+   "internal/jobs/deployjobs:TestKVMaterialFailures"
+  ]
+ },
+ {
+  "id": "F-20",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestReconcileMissingChangedOutsideAndInvalidConfiguration",
+   "internal/providers/nginx:TestDiscoverWithoutNginxFails"
+  ]
+ },
+ {
+  "id": "F-21",
+  "status": "test",
+  "tests": [
+   "internal/providers/nginx:TestDiscoverSharedDualAndUnsupportedLocations"
+  ]
+ },
+ {
+  "id": "F-30",
+  "status": "test",
+  "tests": [
+   "internal/api:TestAddServerJourney",
+   "internal/inventory:TestF30FirstContactNeedsConfirmation",
+   "internal/jobs/targetjobs:TestFirstConnectionWaitsForConfirmationThenDiscovers",
+   "internal/providers/fake:TestFakeOpenFollowsThePinningRules",
+   "internal/providers/linuxssh:TestFirstContactStopsBeforeAuthentication",
+   "internal/providers/linuxssh:TestRealOpenSSH"
+  ]
+ },
+ {
+  "id": "F-31",
+  "status": "test",
+  "tests": [
+   "internal/api:TestChangedHostKeyJourney",
+   "internal/inventory:TestChangedKeyNotifiesOnceAndBlocks",
+   "internal/jobs/targetjobs:TestChangedHostKeyBlocksEveryJob",
+   "internal/providers/fake:TestFakeOpenFollowsThePinningRules",
+   "internal/providers/linuxssh:TestChangedHostKeyStopsBeforeAuthentication",
+   "internal/providers/linuxssh:TestRealOpenSSH"
+  ]
+ },
+ {
+  "id": "F-32",
+  "status": "test",
+  "tests": [
+   "internal/api:TestChangedHostKeyJourney",
+   "internal/inventory:TestRepinKeepsHistory",
+   "internal/jobs/targetjobs:TestChangedHostKeyBlocksEveryJob"
+  ]
+ },
+ {
+  "id": "F-33",
+  "status": "test",
+  "tests": [
+   "internal/api:TestChangedHostKeyJourney"
+  ]
+ },
+ {
+  "id": "F-34",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestConnectionStatusTransitions"
+  ]
+ },
+ {
+  "id": "F-35",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestReconcileTracksNewMissingAndOwnKey",
+   "internal/inventory:TestRequestKeyRemovalRefusals",
+   "internal/inventory:TestRequestKeyRemovalRefusesAUserWhoseKeysAreManagedElsewhere",
+   "internal/inventory:TestUnreadSSHDKeepsKeysManagedElsewhere",
+   "internal/providers/linuxssh:TestDiscoverDetectsAuthorizedKeysCommand",
+   "internal/providers/linuxssh:TestRealOpenSSH"
+  ]
+ },
+ {
+  "id": "F-36",
+  "status": "test",
+  "tests": [
+   "internal/api:TestF36ConnectionAccountOverTheAPI",
+   "internal/api:TestF36OwnKeyNeverRotatedOrDownloaded",
+   "internal/api:TestOwnKeyRemovalIsRefused",
+   "internal/inventory:TestProtectedFingerprintsIncludeEveryPlatformKey",
+   "internal/inventory:TestRequestKeyRemovalRefusals",
+   "internal/jobs/sshkeyjobs:TestF36OwnKeyNeverRotated"
+  ]
+ },
+ {
+  "id": "F-37",
+  "status": "test",
+  "tests": [
+   "internal/api:TestF37DeployIntoFileWithoutNewline",
+   "internal/jobs/sshkeyjobs:TestF37RotationIntoFileWithoutNewline",
+   "internal/providers/linuxssh:TestAddAppendsOnItsOwnLine",
+   "internal/providers/linuxssh:TestAddLineStartsOnANewLine",
+   "internal/providers/linuxssh:TestRealOpenSSH"
+  ]
+ },
+ {
+  "id": "F-38",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestWriteRefusesAStaleHash",
+   "internal/api:TestF38DeployWhenTheFileChangesBetweenReadAndWrite",
+   "internal/jobs/sshkeyjobs:TestF38RotationFileChangedBetweenReadAndWrite",
+   "internal/providers/linuxssh:TestConcurrentChangeIsRetriedAndKept",
+   "internal/providers/linuxssh:TestRealOpenSSH"
+  ]
+ },
+ {
+  "id": "F-39",
+  "status": "test",
+  "tests": [
+   "internal/jobs/sshkeyjobs:TestF39SlowHostDuringRotation",
+   "internal/providers/linuxssh:TestRunTimesOutAndClosesSession"
+  ]
+ },
+ {
+  "id": "F-40",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/api:TestSecretLeakSuiteWithAzureCanaries",
+   "internal/inventory:TestPartialListingsAndThrottling",
+   "internal/providers/azurekv:TestDiscoverReportsListFailuresAndKeepsTheRest"
+  ]
+ },
+ {
+  "id": "F-41",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/api:TestPhase5CodesHaveTroubleshootingSections",
+   "internal/api:TestPhase5TextsAreTruthfulAndWorded",
+   "internal/jobs/deployjobs:TestF41MissingSecretsRoleChangesNothing",
+   "internal/jobs/deployjobs:TestKVMaterialFailures",
+   "internal/providers/azurekv:TestReadCertificateSecretRefusals"
+  ]
+ },
+ {
+  "id": "F-42",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/inventory:TestMissingMarkingNeedsACompleteListing"
+  ]
+ },
+ {
+  "id": "F-43",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/providers/azurekv:TestAccessCheckRefusesWhatIsNotTheVault"
+  ]
+ },
+ {
+  "id": "F-44",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/inventory:TestPartialListingsAndThrottling"
+  ]
+ },
+ {
+  "id": "F-45",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/api:TestKeyVaultJourney",
+   "internal/inventory:TestCreateBindingRules",
+   "internal/jobs/deployjobs:TestF45NonExportableAtRunTime"
+  ]
+ },
+ {
+  "id": "F-46",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestNewVersionIsDetectedByVersionAndThumbprint",
+   "internal/inventory:TestAutoDeployApplyTable"
+  ]
+ },
+ {
+  "id": "F-47",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue"
+  ]
+ },
+ {
+  "id": "F-48",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue"
+  ]
+ },
+ {
+  "id": "F-49",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/api:TestSecretLeakSuiteWithAzureCanaries"
+  ]
+ },
+ {
+  "id": "F-50",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/inventory:TestKVFailureTransitions"
+  ]
+ },
+ {
+  "id": "F-51",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/api:TestSecretLeakSuiteWithAzureCanaries"
+  ]
+ },
+ {
+  "id": "F-52",
+  "status": "test",
+  "tests": [
+   "internal/api:TestKeyVaultFailureCatalogue",
+   "internal/api:TestSecretLeakSuiteWithAzureCanaries",
+   "internal/inventory:TestKVFailureTransitions",
+   "internal/providers/azurekv:TestDiscoverReportsListFailuresAndKeepsTheRest"
+  ]
+ },
+ {
+  "id": "F-60",
+  "status": "test",
+  "tests": [
+   "internal/api:TestF60GivesUpAfter24Hours",
+   "internal/api:TestF60OverTheWire",
+   "internal/notify:TestDrainRetriesWithBackoff",
+   "internal/notify:TestF60OutageDeliversOnceAndRaisesFailing",
+   "internal/notify:TestRetriesLastTwentyFourHours"
+  ]
+ },
+ {
+  "id": "F-61",
+  "status": "test",
+  "tests": [
+   "internal/api:TestF61F63ScheduledSendsOverTheWire",
+   "internal/api:TestRecipientsThresholdsAndGeneralOverTheWire",
+   "internal/notify:TestF61PerRecipient"
+  ]
+ },
+ {
+  "id": "F-62",
+  "status": "test",
+  "tests": [
+   "internal/api:TestMailSettingsOverTheWire",
+   "internal/api:TestTestMailAnswers",
+   "internal/notify:TestF62UntrustedCertificateAndThePin",
+   "internal/notify:TestTestMailSendsThroughTheSettingsAndTheTrust"
+  ]
+ },
+ {
+  "id": "F-63",
+  "status": "test",
+  "tests": [
+   "internal/api:TestF61F63ScheduledSendsOverTheWire",
+   "internal/api:TestMailSettingsOverTheWire",
+   "internal/notify:TestSMTPPasswordIsAnEnvelope"
+  ]
+ },
+ {
+  "id": "F-64",
+  "status": "gap",
+  "note": "No test restarts PostgreSQL under a running deployment job; the crash-recovery paths are proven by F-66 only."
+ },
+ {
+  "id": "F-65",
+  "status": "gap",
+  "note": "No test makes PostgreSQL unavailable for two minutes. Partial evidence: internal/api TestHealthzUnavailableHidesCause, TestLivez and TestAuthenticationBackendErrorIsUnavailable; job pause and no loss after the database returns are unproven."
+ },
+ {
+  "id": "F-66",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestDeployKilledAtEveryStepRecovers",
+   "internal/jobs/deployjobs:TestDeploymentSurvivesAKillAtEveryPoint",
+   "internal/jobs:TestKilledWorkerJobIsRecoveredOnce"
+  ]
+ },
+ {
+  "id": "F-67",
+  "status": "test",
+  "tests": [
+   "internal/jobs/sshkeyjobs:TestF67KillBetweenAddAndVerify",
+   "internal/jobs/sshkeyjobs:TestResumedAddIsVerifiedAndRecorded",
+   "internal/sshkeys:TestAddConfirmedOnlyByTheLoginIsRecorded",
+   "migrations:TestRotationRulingStatesAreHeld"
+  ]
+ },
+ {
+  "id": "F-68",
+  "status": "test",
+  "tests": [
+   "test/release:TestReleaseUpdateAndRollback"
+  ]
+ },
+ {
+  "id": "F-69",
+  "status": "test",
+  "tests": [
+   "internal/jobs:TestTwentyWorkersRunThousandJobsExactlyOnce"
+  ]
+ },
+ {
+  "id": "F-70",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF70DiskFullLeavesNothing"
+  ]
+ },
+ {
+  "id": "F-71",
+  "status": "test",
+  "tests": [
+   "internal/secrets:TestMissingKeyFileWithExistingDataRefusesAndCreatesNothing",
+   "internal/secrets:TestCheckMasterKeyNeverCreates"
+  ]
+ },
+ {
+  "id": "F-72",
+  "status": "test",
+  "tests": [
+   "internal/secrets:TestKeyFilePermissionsAndFormat"
+  ]
+ },
+ {
+  "id": "F-80",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF80WrongPassphraseChangesNothing"
+  ]
+ },
+ {
+  "id": "F-81",
+  "status": "test",
+  "tests": [
+   "internal/backup/format:TestEveryFlippedByteFails",
+   "internal/backup:TestF81FlippedByteChangesNothing",
+   "test/release:TestReleaseRestoreNegatives"
+  ]
+ },
+ {
+  "id": "F-82",
+  "status": "test",
+  "tests": [
+   "internal/backup/format:TestTruncationAndReorderFail",
+   "internal/backup:TestF82TruncatedChangesNothing",
+   "test/release:TestReleaseRestoreNegatives"
+  ]
+ },
+ {
+  "id": "F-83",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF83ForeignAndNewer",
+   "test/release:TestReleaseRestoreNegatives"
+  ]
+ },
+ {
+  "id": "F-84",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF84OlderSchemaMigratesForward"
+  ]
+ },
+ {
+  "id": "F-85",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF85FullCycle",
+   "test/release:TestReleaseF85Drill"
+  ]
+ },
+ {
+  "id": "F-86",
+  "status": "test",
+  "tests": [
+   "internal/backup/dump:TestF86ConsistentSnapshot",
+   "internal/backup:TestF86BackupWhileJobsRun"
+  ]
+ },
+ {
+  "id": "F-87",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF87NoPlaintextInTheFile"
+  ]
+ },
+ {
+  "id": "F-88",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF88Retention"
+  ]
+ },
+ {
+  "id": "F-90",
+  "status": "test",
+  "tests": [
+   "internal/audit:TestModifiedRowIsDetected"
+  ]
+ },
+ {
+  "id": "F-91",
+  "status": "test",
+  "tests": [
+   "internal/audit:TestDeletedMiddleRowIsDetected"
+  ]
+ },
+ {
+  "id": "F-92",
+  "status": "test",
+  "tests": [
+   "internal/audit/forward:TestF92CheckpointIsForwarded",
+   "internal/audit:TestTruncatedTailIsDetectedByCheckpoint"
+  ]
+ },
+ {
+  "id": "F-93",
+  "status": "test",
+  "tests": [
+   "internal/audit:TestReorderedRowsAreDetected"
+  ]
+ },
+ {
+  "id": "F-94",
+  "status": "test",
+  "tests": [
+   "internal/audit:TestTriggersBlockUpdateDeleteTruncateForOwner",
+   "migrations:TestAppRoleCannotRewriteAuditLog"
+  ]
+ },
+ {
+  "id": "F-95",
+  "status": "test",
+  "tests": [
+   "internal/audit:TestConcurrentAppendsStayContiguous"
+  ]
+ },
+ {
+  "id": "F-96",
+  "status": "test",
+  "tests": [
+   "internal/audit/forward:TestF96ReceiverDownNeverBlocksTheLocalWrite"
+  ]
+ },
+ {
+  "id": "F-97",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF97RestoreContinuesTheChain"
+  ]
+ },
+ {
+  "id": "S-01",
+  "status": "test",
+  "tests": [
+   "internal/api:TestPlatformKeyNeverLeaks",
+   "internal/api:TestSecretLeakSuiteWithGeneratedKeys",
+   "internal/api:TestSecretsNeverLeak"
+  ]
+ },
+ {
+  "id": "S-02",
+  "status": "test",
+  "tests": [
+   "internal/api:TestSecretsNeverLeak"
+  ]
+ },
+ {
+  "id": "S-03",
+  "status": "test",
+  "tests": [
+   "internal/api:TestSecretsNeverLeak"
+  ]
+ },
+ {
+  "id": "S-04",
+  "status": "test",
+  "tests": [
+   "internal/api:TestSecretLeakSuiteWithGeneratedKeys",
+   "internal/api:TestSecretsNeverLeak",
+   "internal/inventory:TestUploadStoresTheKeyEncrypted",
+   "internal/sshkeys:TestGenerateStoresAnEnvelope",
+   "internal/secrets:TestSettingSecretsRoundTripBoundToTheirKey",
+   "internal/api:TestTLSKeysNeverLeak"
+  ]
+ },
+ {
+  "id": "S-05",
+  "status": "test",
+  "tests": [
+   "internal/api:TestSecretLeakSuiteWithGeneratedKeys",
+   "internal/api:TestSecretsNeverLeak",
+   "internal/sshkeys:TestDownloadRefusals"
+  ]
+ },
+ {
+  "id": "S-06",
+  "status": "test",
+  "tests": [
+   "internal/backup:TestF87NoPlaintextInTheFile"
+  ],
+  "note": "The release tarball and image secret scans are the gitleaks and Trivy gates of make secrets-scan, fs-scan and image-scan (Task 19 evidence)."
+ },
+ {
+  "id": "S-07",
+  "status": "test",
+  "tests": [
+   "internal/api:TestHandlerPanicLeaksNoSecret"
+  ]
+ },
+ {
+  "id": "S-08",
+  "status": "test",
+  "tests": [
+   "internal/api:TestGenerateAndDeployHandlers",
+   "internal/api:TestTLSKeysNeverLeak",
+   "internal/api:TestUnexpectedErrorsAreLoggedWithoutTheirText"
+  ]
+ },
+ {
+  "id": "S-09",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOwnerSteps1And2OverTheWire",
+   "internal/api:TestS09DownloadOfKeysAliceDoesNotHold",
+   "internal/api:TestS09PrivateKeyDownload",
+   "internal/sshkeys:TestDownloadAuditsBeforeTheFile"
+  ]
+ },
+ {
+  "id": "S-10",
+  "status": "test",
+  "tests": [
+   "internal/api:TestSecretsNeverLeak"
+  ],
+  "note": "Only the absence of /test/* is tested; no test requests /debug/pprof or /metrics from the release build."
+ },
+ {
+  "id": "S-11",
+  "status": "test",
+  "tests": [
+   "internal/sshkeys/keymat:TestOpenSSHClearsTheBlockDER",
+   "internal/api:TestRequestSecretsAreZeroedOnEveryPath"
+  ],
+  "note": "Zeroing is proven for request secrets and the OpenSSH key block; no guarantee against the Go GC is claimed."
+ },
+ {
+  "id": "R-01",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR01R02ProgressiveDelayAndLockout",
+   "internal/auth:TestProgressiveDelayThenLockout"
+  ]
+ },
+ {
+  "id": "R-02",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR01R02ProgressiveDelayAndLockout",
+   "internal/auth:TestProgressiveDelayThenLockout"
+  ]
+ },
+ {
+  "id": "R-03",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR03CredentialStuffingHitsThePerIPLimit",
+   "internal/api:TestX05BreakGlassWhileIdPDown"
+  ]
+ },
+ {
+  "id": "R-04",
+  "status": "deferred",
+  "tests": [
+   "internal/api:TestR04UnknownAndExistingUsersFailAlike",
+   "internal/auth:TestDummyVerifyDoesComparableWork"
+  ],
+  "ruling": "Phase 1 review P1-03 (rulings/phase-1.md B22)",
+  "note": "The 200-sample statistical timing test is deferred; the shape and status equality is proven by the listed test and the equal-work dummy Argon2 verification by internal/auth tests."
+ },
+ {
+  "id": "R-05",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR05TOTPReplayBruteForceAndRecoveryCodes"
+  ]
+ },
+ {
+  "id": "R-06",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR06GeneralRateLimitPerIdentity"
+  ]
+ },
+ {
+  "id": "R-07",
+  "status": "test",
+  "tests": [
+   "internal/auth:TestVerifyBoundsConcurrency",
+   "internal/auth:TestDummyVerifyWaitsForASlot"
+  ],
+  "note": "Bounded concurrent Argon2 is proven; the stricter per-route limits of backup download and test connection are not tested separately."
+ },
+ {
+  "id": "R-08",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR08ForwardedForIsIgnoredUnlessProxyIsTrusted"
+  ]
+ },
+ {
+  "id": "R-09",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR09LockoutSurvivesRestart"
+  ]
+ },
+ {
+  "id": "R-10",
+  "status": "test",
+  "tests": [
+   "internal/api:TestR10RecoveryCodeSignInIsLimitedToo"
+  ]
+ },
+ {
+  "id": "A-01",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA01CookieAttributes"
+  ]
+ },
+ {
+  "id": "A-02",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA02ActivityAmongPollsSlides",
+   "internal/api:TestA02BackgroundPollsDoNotKeepASessionAlive",
+   "internal/api:TestA02IdleTimeout",
+   "internal/api:TestA02MarkerOnAnEndedSessionAndTokens",
+   "internal/api:TestA02OnlyAcceptedRequestsSlide",
+   "internal/auth:TestIdleTimeoutSlidesAndAbsoluteLimitHolds"
+  ]
+ },
+ {
+  "id": "A-03",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA03AbsoluteTimeout",
+   "internal/auth:TestIdleTimeoutSlidesAndAbsoluteLimitHolds"
+  ]
+ },
+ {
+  "id": "A-04",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA04SessionIDChangesAtLoginMFAAndStepUp",
+   "internal/api:TestOIDCStepUpReevaluatesOverTheWire",
+   "internal/auth:TestLoginNeedsMFAAndIssuesANewSessionID"
+  ]
+ },
+ {
+  "id": "A-05",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA05LogoutRevocationRoleChangeAndPasswordChange",
+   "internal/auth:TestLogoutInvalidatesTheSession",
+   "internal/auth:TestRoleChangeAndDisableEndSessions"
+  ]
+ },
+ {
+  "id": "A-06",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA06CSRFAndOriginChecks",
+   "internal/api:TestA06GETRoutesNeverChangeState"
+  ]
+ },
+ {
+  "id": "A-07",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA07NoCrossOriginResourceSharing"
+  ]
+ },
+ {
+  "id": "A-08",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA08SecurityHeadersOnAPIResponses"
+  ]
+ },
+ {
+  "id": "A-09",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA09APITokenRules",
+   "internal/rbac:TestPhase6Policies"
+  ]
+ },
+ {
+  "id": "A-10",
+  "status": "test",
+  "tests": [
+   "internal/platform/tlscert:TestServerConfig"
+  ],
+  "note": "Server-side TLS 1.2 minimum is proven; the testssl.sh scan is the nightly of Task 15 and Alice serves no plain HTTP listener."
+ },
+ {
+  "id": "A-11",
+  "status": "gap",
+  "note": "No test injects script or HTML into certificate, server, key and target names and audit reasons and renders them; only the ESLint ban on dangerouslySetInnerHTML (SEC-035) and sso_error=<script> page tests exist."
+ },
+ {
+  "id": "A-12",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestArgumentsOutsideTheVocabularyAreRefused",
+   "internal/providers/linuxssh:TestHostileArgumentsNeverBecomeCommands"
+  ],
+  "note": "Shell injection is proven; no test sends SQL injection payloads through every list, filter and sort parameter."
+ },
+ {
+  "id": "A-13",
+  "status": "test",
+  "tests": [
+   "cmd/alice-helper:TestAttackSymlinkToShadowIsNeverRead",
+   "cmd/alice-helper:TestEscapingSymlinkIsNotACandidate",
+   "cmd/alice-helper:TestDeployRefusesBeforeChangingAnything",
+   "internal/providers/linuxssh:TestRealOpenSSH"
+  ]
+ },
+ {
+  "id": "A-14",
+  "status": "test",
+  "tests": [
+   "internal/api:TestA14KeyVaultSSRF",
+   "internal/notify:TestAddressRefused",
+   "internal/providers/azurekv:TestAzureSDKSurface",
+   "internal/auth/oidc:TestO12InsecureIssuerRefused"
+  ]
+ },
+ {
+  "id": "O-01",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc:TestJWKSRefetchIsRateLimited",
+   "internal/auth/oidc:TestO01Signatures"
+  ]
+ },
+ {
+  "id": "O-02",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc/claims:TestValidateRefusesEachClaim",
+   "internal/auth/oidc:TestO02TimesIssuerAudience"
+  ]
+ },
+ {
+  "id": "O-03",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc/claims:TestValidateRefusesEachClaim",
+   "internal/auth/oidc:TestO03StateNonceAndCodeReplay"
+  ]
+ },
+ {
+  "id": "O-04",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc:TestGoodLoginGivesTheMappedRole",
+   "internal/auth/oidc:TestO04PKCE"
+  ]
+ },
+ {
+  "id": "O-05",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc/claims:TestSafeNextRefusesOpenRedirects",
+   "internal/auth/oidc:TestO05RedirectAndNext"
+  ]
+ },
+ {
+  "id": "O-06",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc/claims:TestResolveRoleCapsAdmin",
+   "internal/auth/oidc:TestO06NoMappedGroup"
+  ]
+ },
+ {
+  "id": "O-07",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc/claims:TestGroupsDetectsOverage",
+   "internal/auth/oidc:TestO07Overage"
+  ]
+ },
+ {
+  "id": "O-08",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc:TestO08GroupRemovedEndsSessions",
+   "internal/auth:TestRefuseOIDCEndsSessions",
+   "internal/auth:TestRefuseOIDCRevokesTokens"
+  ]
+ },
+ {
+  "id": "O-09",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc:TestO09MatchBySubjectNotEmail",
+   "internal/auth/oidc:TestProviderLimitsAndDeletion",
+   "internal/auth:TestSignInOIDCProvisionsAndMatchesBySubject"
+  ]
+ },
+ {
+  "id": "O-10",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc:TestO10NoLinkToLocalAccounts",
+   "internal/auth:TestO10NoLinkToLocalAccounts"
+  ]
+ },
+ {
+  "id": "O-11",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc:TestJWKSRefetchIsRateLimited",
+   "internal/auth/oidc:TestJWKSUnreachableIsIdPUnreachable",
+   "internal/auth/oidc:TestO11IdPDownAndKeyRotation"
+  ]
+ },
+ {
+  "id": "O-12",
+  "status": "test",
+  "tests": [
+   "internal/api:TestSSOProviderStartsSwitchedOffOverTheWire",
+   "internal/auth/oidc/claims:TestValidateIssuer",
+   "internal/auth/oidc:TestO12InsecureIssuerRefused"
+  ]
+ },
+ {
+  "id": "O-13",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc/claims:TestValidateMapping",
+   "internal/auth/oidc:TestAdminMappingRefusedWhileOff",
+   "internal/auth:TestDemoteSSOAdmins"
+  ]
+ },
+ {
+  "id": "O-14",
+  "status": "test",
+  "tests": [
+   "internal/api:TestOIDCNegativeSuiteOverTheWire",
+   "internal/auth/oidc:TestO14LocalMFANotBypassed"
+  ]
+ },
+ {
+  "id": "X-01",
+  "status": "test",
+  "tests": [
+   "internal/jobs:TestEveryJobTypeHasALicenseClass"
+  ]
+ },
+ {
+  "id": "X-02",
+  "status": "test",
+  "tests": [
+   "deploy/dev/check-hardening.sh:read-only"
+  ],
+  "note": "Proven by the hardening script (make e2e-hardening-check, run by make ci), not by a Go test."
+ },
+ {
+  "id": "X-03",
+  "status": "test",
+  "tests": [
+   "tools/pincheck:TestRepositoryIsPinned",
+   "tools/lockcheck:TestAcceptsTheRealLockfiles"
+  ],
+  "note": "go mod verify and the pin checks are proven here; release signatures and the SBOM are checked by the release tests and gates of Tasks 12, 13 and 19."
+ },
+ {
+  "id": "X-04",
+  "status": "test",
+  "tests": [
+   "internal/api:TestChangedHostKeyJourney"
+  ],
+  "note": "Same case as F-31."
+ },
+ {
+  "id": "X-05",
+  "status": "test",
+  "tests": [
+   "internal/api:TestX05BreakGlassWhileIdPDown"
+  ]
+ },
+ {
+  "id": "X-06",
+  "status": "test",
+  "tests": [
+   "internal/auth:TestPasswordPolicy",
+   "internal/auth:TestProductionParametersMatchSpec",
+   "internal/auth/breached:TestContains"
+  ]
+ }
+]

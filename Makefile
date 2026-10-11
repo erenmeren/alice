@@ -228,18 +228,32 @@ e2e: ## Run Playwright tests against the e2e stack (make e2e-up first)
 
 GOLANGCI_LINT_VERSION ?= v2.14.0
 GOVULNCHECK_VERSION   ?= v1.8.0
+OSV_SCANNER_VERSION   ?= v2.6.0
+GREMLINS_VERSION      ?= v0.6.0
+ACTIONLINT_VERSION    ?= v1.7.12
 # Tool images are pinned by tag and by index digest (AUD-09; docs/dev/dependency-updates.md).
 GITLEAKS_IMAGE        ?= ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f
 TRIVY_IMAGE           ?= aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
+SHELLCHECK_IMAGE      ?= koalaman/shellcheck:v0.11.0@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
+# Every shell script of the repository that is not named *.sh as well (tracked files only).
+SHELL_SCRIPTS         := $(shell git ls-files -- '*.sh' deploy/release/alicectl 'deploy/release/testdata/stubs/*' deploy/release/testdata/swap-openssl/openssl test/images/e2e-target/systemctl test/images/e2e-target/nginx-wrapper)
+# How long each fuzz target runs; fuzz-nightly and fuzz-release raise it.
+FUZZTIME              ?= 60s
+# Extra flags of matrix-check ("-strict" in release-gates and the last step of Phase 8).
+MATRIXCHECK_FLAGS     ?=
 
 .PHONY: tools
 tools: ## Install pinned Go developer tools into $(HOME)/go/bin
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	go install github.com/google/osv-scanner/v2/cmd/osv-scanner@$(OSV_SCANNER_VERSION)
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
+	go install github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION)
 
 .PHONY: lint
 lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e build
 	go run ./tools/pincheck
+	$(MAKE) shellcheck lockcheck docs-check actionlint
 	golangci-lint run ./...
 	golangci-lint run --build-tags e2e,testlicense ./cmd/...
 	golangci-lint run --build-tags integration,testlicense ./cmd/...
@@ -252,6 +266,23 @@ vuln: ## Verify the Go module cache against go.sum, then check Go and npm depend
 	go mod verify
 	govulncheck ./...
 	cd web && npm audit --omit=dev --audit-level=high
+	$(MAKE) osv
+
+.PHONY: shellcheck lockcheck matrix-check docs-check actionlint osv test-backup-cycle fuzz-backup fuzz-api fuzz-nightly fuzz-release
+shellcheck: ## ShellCheck every shell script (pinned image; -P SCRIPTDIR resolves the "# shellcheck source=" lines)
+	docker run --rm -v "$(CURDIR):/src:ro" -w /src $(SHELLCHECK_IMAGE) -x -P SCRIPTDIR $(SHELL_SCRIPTS)
+lockcheck: ## Refuse anything but package data in web/package-lock.json and go.sum (secret-scan substitute, R43 row 38)
+	go run ./tools/lockcheck web/package-lock.json go.sum
+matrix-check: ## Every ID of the sections 23-25 matrices maps to existing tests, an owner step or a ruling (-strict: release-gates)
+	go run ./tools/matrixcheck -spec docs/superpowers/specs/alice-v1/06-quality.md -map test/matrix/traceability.json -doc docs/security/traceability.md $(MATRIXCHECK_FLAGS)
+docs-check: ## Commands named in the guides exist; relative links resolve; required sentences are present
+	go run ./tools/docscheck
+actionlint: ## Lint the GitHub workflows
+	actionlint .github/workflows/*.yml
+osv: ## osv-scanner over go.mod and the npm lockfile (any finding fails; ignores need id, reason and ignoreUntil)
+	osv-scanner scan source --config osv-scanner.toml -L go.mod -L web/package-lock.json
+test-backup-cycle: ## F-85 full cycle with a test license (integration, testlicense; needs Docker)
+	go test -race -count=1 -tags 'integration testlicense' -run '^TestF85' -v ./internal/backup/
 
 .PHONY: secrets-scan
 secrets-scan: ## Scan git history for committed secrets
@@ -269,32 +300,50 @@ image-scan: image ## Scan the container image for HIGH/CRITICAL vulnerabilities
 # ALICE_E2E_PORT (default 9443), so it runs beside the make up stack, which ci never touches.
 .PHONY: ci
 ci: ## Run the full CI pipeline locally
-	$(MAKE) lint test coverage perf test-ssh build release-symcheck i18n-check web-lint web-coverage vuln secrets-scan fs-scan
+	$(MAKE) lint test coverage perf test-backup-cycle test-ssh build release-symcheck i18n-check web-lint web-coverage vuln secrets-scan fs-scan
 	@status=0; $(MAKE) e2e-up e2e-hardening-check e2e || status=$$?; $(MAKE) e2e-down; exit $$status
 	$(MAKE) image-check image-scan
 
 .PHONY: fuzz-license
-fuzz-license: ## Fuzz the license parser for 60 s (spec §25.6)
-	go test -count=1 -run '^$$' -fuzz FuzzParseLicense -fuzztime 60s ./internal/license/
+fuzz-license: ## Fuzz the license parser ($(FUZZTIME); spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseLicense -fuzztime $(FUZZTIME) ./internal/license/
 
 .PHONY: fuzz-ssh
-fuzz-ssh: ## Fuzz the authorized_keys and sshd configuration parsers for 60 s each (spec §25.6)
-	go test -count=1 -run '^$$' -fuzz FuzzParseAuthorizedKeys -fuzztime 60s ./internal/providers/linuxssh/
-	go test -count=1 -run '^$$' -fuzz FuzzParseSSHDConfig -fuzztime 60s ./internal/providers/linuxssh/sshdconf/
-	go test -count=1 -run '^$$' -fuzz FuzzAuthorizedLine -fuzztime 60s ./internal/sshkeys/keymat/
+fuzz-ssh: ## Fuzz the authorized_keys and sshd configuration parsers ($(FUZZTIME) each; spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseAuthorizedKeys -fuzztime $(FUZZTIME) ./internal/providers/linuxssh/
+	go test -count=1 -run '^$$' -fuzz FuzzParseSSHDConfig -fuzztime $(FUZZTIME) ./internal/providers/linuxssh/sshdconf/
+	go test -count=1 -run '^$$' -fuzz FuzzAuthorizedLine -fuzztime $(FUZZTIME) ./internal/sshkeys/keymat/
 
 .PHONY: fuzz-oidc
-fuzz-oidc: ## Fuzz the ID token claim parser for 60 s (spec §25.6, Phase 7)
-	go test -count=1 -run '^$$' -fuzz FuzzParse -fuzztime 60s ./internal/auth/oidc/claims/
+fuzz-oidc: ## Fuzz the ID token claim parser ($(FUZZTIME); spec §25.6, Phase 7)
+	go test -count=1 -run '^$$' -fuzz FuzzParse -fuzztime $(FUZZTIME) ./internal/auth/oidc/claims/
 
 .PHONY: fuzz-nginx
-fuzz-nginx: ## Fuzz the nginx -T parser for 60 s (spec §25.6)
-	go test -count=1 -run '^$$' -fuzz FuzzParseNginxConfig -fuzztime 60s ./internal/providers/nginx/nginxconf/
+fuzz-nginx: ## Fuzz the nginx -T parser ($(FUZZTIME); spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseNginxConfig -fuzztime $(FUZZTIME) ./internal/providers/nginx/nginxconf/
 
 .PHONY: fuzz-certs
-fuzz-certs: ## Fuzz the certificate upload and Key Vault secret parsers for 60 s each (spec §25.6)
-	go test -count=1 -run '^$$' -fuzz FuzzParseCertificateUpload -fuzztime 60s ./internal/certs/
-	go test -count=1 -run '^$$' -fuzz FuzzParseKVSecret -fuzztime 60s ./internal/certs/
+fuzz-certs: ## Fuzz the certificate upload and Key Vault secret parsers ($(FUZZTIME) each; spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseCertificateUpload -fuzztime $(FUZZTIME) ./internal/certs/
+	go test -count=1 -run '^$$' -fuzz FuzzParseKVSecret -fuzztime $(FUZZTIME) ./internal/certs/
+
+.PHONY: fuzz-backup
+fuzz-backup: ## Fuzz the backup header, stream and payload decoder ($(FUZZTIME) each)
+	go test -count=1 -run '^$$' -fuzz FuzzBackupHeader -fuzztime $(FUZZTIME) ./internal/backup/format/
+	go test -count=1 -run '^$$' -fuzz FuzzBackupStream -fuzztime $(FUZZTIME) ./internal/backup/format/
+	go test -count=1 -run '^$$' -fuzz FuzzDecoder -fuzztime $(FUZZTIME) ./internal/backup/dump/
+
+.PHONY: fuzz-api
+fuzz-api: ## Fuzz every create/update body of the API (needs Docker; $(FUZZTIME))
+	go test -count=1 -tags integration -run '^$$' -fuzz FuzzOpenAPIInputs -fuzztime $(FUZZTIME) ./internal/api/
+
+.PHONY: fuzz-nightly
+fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly)
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-api FUZZTIME=10m
+
+.PHONY: fuzz-release
+fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 7 hours)
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-api FUZZTIME=30m
 
 .PHONY: release-keycheck
 release-keycheck: ## Release gate: fails until the vendor's production license key is committed (R36)

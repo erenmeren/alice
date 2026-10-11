@@ -1,0 +1,2 @@
+# <file>\t<text that must still be in it>, one line each. Tasks 14, 17 and 18 add the lines that pin
+# a security promise of the guides (S-23, S-26). Runs of white space in the file match one space.

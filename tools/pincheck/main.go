@@ -25,8 +25,9 @@
 //     docker pull (options skipped, continuation lines joined, a trailing # comment ignored) must be
 //     pinned (@sha256:),
 //     one of the pinned Makefile variables, the locally built alice: image, or an image read from an
-//     already running container (see imageOperandOK). The Makefile's GITLEAKS_IMAGE and TRIVY_IMAGE
-//     must themselves be pinned.
+//     already running container (see imageOperandOK). Every *_IMAGE variable of the Makefile
+//     (GITLEAKS_IMAGE, TRIVY_IMAGE, SHELLCHECK_IMAGE, ...) must itself be pinned by tag and digest,
+//     and GITLEAKS_IMAGE and TRIVY_IMAGE must exist.
 //   - Go sources: Image: "..." and postgres.Run(ctx, "...") literals (also split over lines) must be
 //     pinned, and every PostgreSQL literal must equal the image of the postgres service in
 //     deploy/docker-compose.yml.
@@ -67,21 +68,23 @@ func main() {
 }
 
 var (
-	digestRe     = regexp.MustCompile(`@sha256:[0-9a-f]{64}(?:$|[^0-9a-f])`)
-	actionSHARe  = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}$`)
-	versionRe    = regexp.MustCompile(`^#\s*v\d+(?:\.\d+)*\s*$`)
-	usesRe       = regexp.MustCompile(`^\s*(?:-\s+)?uses:\s*(.*)$`)
-	fromRe       = regexp.MustCompile(`(?i)^\s*FROM\s+(.*)$`)
-	argRe        = regexp.MustCompile(`(?i)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$`)
-	copyFromRe   = regexp.MustCompile(`(?i)^\s*(?:COPY|RUN)\b.*?--(?:from|mount=[^\s]*?\bfrom)=([^\s,]+)`)
-	syntaxRe     = regexp.MustCompile(`(?i)^#\s*syntax\s*=\s*(\S+)`)
-	goImageRe    = regexp.MustCompile(`\bImage:\s*"([^"]+)"`)
-	pgRunRe      = regexp.MustCompile(`postgres\.Run\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*,\s*"([^"]+)"`)
-	makeVarRe    = regexp.MustCompile(`^(GITLEAKS_IMAGE|TRIVY_IMAGE)\s*[?:]?=\s*(\S+)`)
-	dockerRunRe  = regexp.MustCompile(`\bdocker\s+(?:container\s+)?(?:run|create)\b`)
-	dockerPullRe = regexp.MustCompile(`\bdocker\s+(?:image\s+)?pull\b`)
-	dockerURLRe  = regexp.MustCompile(`docker://[^\s'"]+`)
-	spaceRe      = regexp.MustCompile(`\s+`)
+	digestRe      = regexp.MustCompile(`@sha256:[0-9a-f]{64}(?:$|[^0-9a-f])`)
+	actionSHARe   = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[^@\s]+)?@[0-9a-f]{40}$`)
+	versionRe     = regexp.MustCompile(`^#\s*v\d+(?:\.\d+)*\s*$`)
+	usesRe        = regexp.MustCompile(`^\s*(?:-\s+)?uses:\s*(.*)$`)
+	fromRe        = regexp.MustCompile(`(?i)^\s*FROM\s+(.*)$`)
+	argRe         = regexp.MustCompile(`(?i)^\s*ARG\s+([A-Za-z_][A-Za-z0-9_]*)(?:=(.*))?$`)
+	copyFromRe    = regexp.MustCompile(`(?i)^\s*(?:COPY|RUN)\b.*?--(?:from|mount=[^\s]*?\bfrom)=([^\s,]+)`)
+	syntaxRe      = regexp.MustCompile(`(?i)^#\s*syntax\s*=\s*(\S+)`)
+	goImageRe     = regexp.MustCompile(`\bImage:\s*"([^"]+)"`)
+	pgRunRe       = regexp.MustCompile(`postgres\.Run\(\s*[A-Za-z_][A-Za-z0-9_.]*\s*,\s*"([^"]+)"`)
+	makeVarRe     = regexp.MustCompile(`^([A-Z][A-Z0-9_]*_IMAGE)\s*[?:]?=\s*(\S+)`)
+	makeRefRe     = regexp.MustCompile(`\$\(([A-Z][A-Z0-9_]*_IMAGE)\)`)
+	makeOperandRe = regexp.MustCompile(`^\$\([A-Z][A-Z0-9_]*_IMAGE\)$`)
+	dockerRunRe   = regexp.MustCompile(`\bdocker\s+(?:container\s+)?(?:run|create)\b`)
+	dockerPullRe  = regexp.MustCompile(`\bdocker\s+(?:image\s+)?pull\b`)
+	dockerURLRe   = regexp.MustCompile(`docker://[^\s'"]+`)
+	spaceRe       = regexp.MustCompile(`\s+`)
 )
 
 // skipDirs are never scanned: VCS data, dependencies, build output, and the working areas of the
@@ -93,8 +96,8 @@ var skipDirs = map[string]bool{
 }
 
 // imageOperandOK reports whether the image operand of a docker run / docker create may be used: a
-// digest-pinned reference; $(GITLEAKS_IMAGE) or $(TRIVY_IMAGE), Makefile variables this tool requires
-// to be pinned; alice:<tag>, the image this repository builds itself; or the image of a container
+// digest-pinned reference; $(<NAME>_IMAGE), a Makefile variable this tool requires to be pinned
+// (and defined); alice:<tag>, the image this repository builds itself; or the image of a container
 // that is already running, read with docker inspect -f '{{.Config.Image}}' (deploy/dev/check-hardening.sh
 // re-runs the SSH target's own image). Only the operand itself counts: an alice: volume name or a
 // digest elsewhere on the line does not.
@@ -105,8 +108,8 @@ func imageOperandOK(op string) bool {
 		return false
 	case digestRe.MatchString(op):
 		return true
-	case op == "$(GITLEAKS_IMAGE)" || op == "$(TRIVY_IMAGE)":
-		return true
+	case makeOperandRe.MatchString(op):
+		return true // every *_IMAGE variable of the Makefile is itself required to be pinned
 	case strings.HasPrefix(op, "alice:") && len(op) > len("alice:"):
 		return true
 	case strings.HasPrefix(op, "$(docker inspect ") && strings.HasSuffix(op, ")") && strings.Contains(op, "'{{.Config.Image}}'"):
@@ -575,8 +578,15 @@ func checkMakefile(path, rel string) []string {
 			continue
 		}
 		found[m[1]] = true
-		if !digestRe.MatchString(m[2]) {
-			out = append(out, fmt.Sprintf("%s:%d: %s is not pinned by @sha256:<digest>", rel, l.n, m[1]))
+		if !digestRe.MatchString(m[2]) || !strings.Contains(strings.SplitN(m[2], "@", 2)[0], ":") {
+			out = append(out, fmt.Sprintf("%s:%d: %s is not pinned by tag and @sha256:<digest>", rel, l.n, m[1]))
+		}
+	}
+	for _, l := range joinContinued(lines) {
+		for _, r := range makeRefRe.FindAllStringSubmatch(l.text, -1) {
+			if !found[r[1]] {
+				out = append(out, fmt.Sprintf("%s:%d: $(%s) is used but not defined as a pinned image variable", rel, l.n, r[1]))
+			}
 		}
 	}
 	for _, v := range []string{"GITLEAKS_IMAGE", "TRIVY_IMAGE"} {
@@ -614,11 +624,11 @@ func checkScript(rel string, first int, lines []string) []string {
 			if len(stmt) > 90 {
 				stmt = stmt[:90] + "..."
 			}
-			out = append(out, fmt.Sprintf("%s: %q uses an image that is not pinned (use a digest, $(GITLEAKS_IMAGE), $(TRIVY_IMAGE) or alice:)", pos, stmt))
+			out = append(out, fmt.Sprintf("%s: %q uses an image that is not pinned (use a digest, a pinned $(<NAME>_IMAGE) or alice:)", pos, stmt))
 		}
 		for _, loc := range dockerPullRe.FindAllStringIndex(text, -1) {
 			if op := pullOperand(text[loc[1]:]); !imageOperandOK(op) {
-				out = append(out, fmt.Sprintf("%s: docker pull %s is not pinned (use a digest, $(GITLEAKS_IMAGE), $(TRIVY_IMAGE) or alice:)", pos, op))
+				out = append(out, fmt.Sprintf("%s: docker pull %s is not pinned (use a digest, a pinned $(<NAME>_IMAGE) or alice:)", pos, op))
 			}
 		}
 		for _, ref := range dockerURLRe.FindAllString(text, -1) {
