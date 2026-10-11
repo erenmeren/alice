@@ -31,17 +31,51 @@ const (
 	testBuildTime = "2026-10-11T08:00:00Z"
 )
 
-// fakeImages stands in for docker: Save writes a small file, ID returns a fixed ID per image.
-type fakeImages struct{ saved []string }
+// fakeImages stands in for docker. Save writes a small docker-save tar (manifest.json with the
+// config digest, index.json with the manifest digest); ID returns what the engine would report:
+// the manifest digest on a containerd image store (the default here), the config digest on a
+// classic store (classic), or something else (id).
+type fakeImages struct {
+	saved   []string
+	classic bool
+	id      string
+	noIndex bool
+}
+
+func fakeDigest(kind, ref string) string {
+	sum := sha256.Sum256([]byte(kind + " " + ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
 
 func (f *fakeImages) ID(ref string) (string, error) {
-	sum := sha256.Sum256([]byte(ref))
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
+	switch {
+	case f.id != "":
+		return f.id, nil
+	case f.classic:
+		return fakeDigest("config", ref), nil
+	}
+	return fakeDigest("index", ref), nil
 }
 
 func (f *fakeImages) Save(ref, path string) error {
 	f.saved = append(f.saved, ref)
-	return os.WriteFile(path, []byte("image "+ref), 0o600)
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	add := func(name, body string) {
+		_ = tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg})
+		_, _ = tw.Write([]byte(body))
+	}
+	cfg := strings.TrimPrefix(fakeDigest("config", ref), "sha256:")
+	add("blobs/sha256/"+cfg, "{}")
+	add("manifest.json", `[{"Config":"blobs/sha256/`+cfg+`","RepoTags":["`+ref+`"],"Layers":[]}]`)
+	if !f.noIndex {
+		add("index.json", `{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"`+
+			fakeDigest("index", ref)+`","size":1}]}`)
+	}
+	if err := tw.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(path, b.Bytes(), 0o600)
 }
 
 func write(t *testing.T, path, content string, mode os.FileMode) {
@@ -178,12 +212,7 @@ func TestStageLayout(t *testing.T) {
 	assert.Equal(t, "Alice license terms of Example Vendor.\n", readFile(t, filepath.Join(pkg, "licenses/LICENSE")))
 	assert.Equal(t, "1.0.0\n", readFile(t, filepath.Join(pkg, "VERSION")))
 
-	img2 := &fakeImages{}
-	aliceID, _ := img2.ID("alice:1.0.0")
-	pgID, _ := img2.ID("alice-postgres:1.0.0")
-	assert.Equal(t, "VERSION=1.0.0\nMIN_UPGRADE_FROM=1.0.0-rc.1\nSCHEMA_VERSION=12\nALICE_IMAGE=alice:1.0.0\nALICE_IMAGE_ID="+aliceID+
-		"\nPOSTGRES_IMAGE=alice-postgres:1.0.0\nPOSTGRES_IMAGE_ID="+pgID+"\nBUILD_COMMIT="+testCommit+"\nBUILD_TIME="+testBuildTime+
-		"\nRELEASE_KEY_ID=rk-2026-01\n", readFile(t, filepath.Join(pkg, "RELEASE")))
+	assert.Equal(t, wantRelease, readFile(t, filepath.Join(pkg, "RELEASE")))
 
 	checklist := readFile(t, filepath.Join(pkg, "RELEASE-CHECKLIST-SIGNED.txt"))
 	assert.Contains(t, checklist, "Commit: "+testCommit)
@@ -220,6 +249,32 @@ func TestStageLayout(t *testing.T) {
 
 	// The stage never overwrites an earlier one.
 	require.ErrorContains(t, stage(cfg, &fakeImages{}), "already exists")
+}
+
+// I-1: RELEASE carries both identifiers of each image, taken from the saved tar: the config
+// digest (what a classic image store reports as .Id after docker load) and the manifest or index
+// digest (what a containerd image store reports).
+var wantRelease = "VERSION=1.0.0\nMIN_UPGRADE_FROM=1.0.0-rc.1\nSCHEMA_VERSION=12\nALICE_IMAGE=alice:1.0.0\n" +
+	"ALICE_IMAGE_ID=" + fakeDigest("config", "alice:1.0.0") + "\nALICE_IMAGE_DIGEST=" + fakeDigest("index", "alice:1.0.0") +
+	"\nPOSTGRES_IMAGE=alice-postgres:1.0.0\nPOSTGRES_IMAGE_ID=" + fakeDigest("config", "alice-postgres:1.0.0") +
+	"\nPOSTGRES_IMAGE_DIGEST=" + fakeDigest("index", "alice-postgres:1.0.0") +
+	"\nBUILD_COMMIT=" + testCommit + "\nBUILD_TIME=" + testBuildTime + "\nRELEASE_KEY_ID=rk-2026-01\n"
+
+func TestStageRecordsBothImageIdentifiers(t *testing.T) {
+	// The build engine reports the config digest (classic store): the same RELEASE.
+	cfg, _ := fixture(t)
+	require.NoError(t, stage(cfg, &fakeImages{classic: true}))
+	assert.Equal(t, wantRelease, readFile(t, filepath.Join(cfg.Out, "alice", "RELEASE")))
+
+	// The engine reports an ID that is neither identifier of the saved tar: refused.
+	cfg, _ = fixture(t)
+	require.ErrorContains(t, stage(cfg, &fakeImages{id: "sha256:" + strings.Repeat("9", 64)}), "neither")
+	assert.NoDirExists(t, cfg.Out)
+
+	// A saved tar without index.json (a docker save without the OCI layout): refused.
+	cfg, _ = fixture(t)
+	require.ErrorContains(t, stage(cfg, &fakeImages{classic: true, noIndex: true}), "index.json")
+	assert.NoDirExists(t, cfg.Out)
 }
 
 func sumLine(t *testing.T, dir, rel, name string) string {

@@ -360,12 +360,12 @@ load_images() {
   alice_quiet alice_docker load -i "$pkg/images/alice-$new.tar" || return 1
   alice_quiet alice_docker load -i "$pkg/images/postgres-$new.tar" || return 1
   id=$(alice_docker image inspect --format '{{.Id}}' "$rel_alice_image" 2>/dev/null) || id=""
-  [[ "$id" == "$rel_alice_id" ]] || {
+  alice_image_id_ok "$id" "$rel_alice_id" "$rel_alice_digest" || {
     alice_fail "$alice_damaged"
     return 1
   }
   id=$(alice_docker image inspect --format '{{.Id}}' "$rel_pg_image" 2>/dev/null) || id=""
-  [[ "$id" == "$rel_pg_id" ]] || {
+  alice_image_id_ok "$id" "$rel_pg_id" "$rel_pg_digest" || {
     alice_fail "$alice_damaged"
     return 1
   }

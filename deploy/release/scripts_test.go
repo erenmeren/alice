@@ -41,11 +41,14 @@ const (
 	shCanary     = "canary-passphrase-7f3a9c1e-never-logged"
 	shAliceID    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	shPostgresID = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-	shTestKeyID  = "rk-test-01"
-	shDamaged    = "The installation package is damaged or incomplete. Download it again and compare the checksum."
-	shBadSig     = "The package signature is not valid. Do not install this package; download it again and check it with your vendor."
-	shBadUpdSig  = "The update package signature is not valid. Do not install this package; download it again and check it with your vendor."
-	shTestWarn   = "[WARN] This package is signed with a TEST key. Never install it for production."
+	// The manifest or index digests a containerd image store reports as .Id (I-1).
+	shAliceDigest    = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	shPostgresDigest = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	shTestKeyID      = "rk-test-01"
+	shDamaged        = "The installation package is damaged or incomplete. Download it again and compare the checksum."
+	shBadSig         = "The package signature is not valid. Do not install this package; download it again and check it with your vendor."
+	shBadUpdSig      = "The update package signature is not valid. Do not install this package; download it again and check it with your vendor."
+	shTestWarn       = "[WARN] This package is signed with a TEST key. Never install it for production."
 )
 
 var shScripts = []string{"install.sh", "alice-update.sh", "alicectl", "lib/alice-lib.sh"}
@@ -179,6 +182,8 @@ type shPkgOpts struct {
 	testSigned bool
 	extraKeys  map[string][]byte // more release-keys/<name> files
 	skipKey    bool              // ship no rk-test-01.pem
+	noDigest   bool              // a RELEASE without ALICE_IMAGE_DIGEST / POSTGRES_IMAGE_DIGEST (before I-1)
+	aliceDig   string            // ALICE_IMAGE_DIGEST instead of shAliceDigest
 }
 
 func shCopyScripts(t *testing.T, dst string) {
@@ -202,9 +207,16 @@ func shWrite(t *testing.T, path, body string, mode fs.FileMode) {
 }
 
 func shRelease(o shPkgOpts) string {
-	r := fmt.Sprintf("VERSION=%s\nMIN_UPGRADE_FROM=%s\nSCHEMA_VERSION=42\nALICE_IMAGE=alice:%s\nALICE_IMAGE_ID=%s\n"+
-		"POSTGRES_IMAGE=alice-postgres:%s\nPOSTGRES_IMAGE_ID=%s\nBUILD_COMMIT=%s\nBUILD_TIME=%s\nRELEASE_KEY_ID=%s\n",
-		o.version, o.minFrom, o.version, shAliceID, o.version, shPostgresID, strings.Repeat("a", 40), o.buildTime, shTestKeyID)
+	aliceDig, pgDig := "ALICE_IMAGE_DIGEST="+shAliceDigest+"\n", "POSTGRES_IMAGE_DIGEST="+shPostgresDigest+"\n"
+	if o.aliceDig != "" {
+		aliceDig = "ALICE_IMAGE_DIGEST=" + o.aliceDig + "\n"
+	}
+	if o.noDigest {
+		aliceDig, pgDig = "", ""
+	}
+	r := fmt.Sprintf("VERSION=%s\nMIN_UPGRADE_FROM=%s\nSCHEMA_VERSION=42\nALICE_IMAGE=alice:%s\nALICE_IMAGE_ID=%s\n%s"+
+		"POSTGRES_IMAGE=alice-postgres:%s\nPOSTGRES_IMAGE_ID=%s\n%sBUILD_COMMIT=%s\nBUILD_TIME=%s\nRELEASE_KEY_ID=%s\n",
+		o.version, o.minFrom, o.version, shAliceID, aliceDig, o.version, shPostgresID, pgDig, strings.Repeat("a", 40), o.buildTime, shTestKeyID)
 	if o.testSigned {
 		r += "TEST_SIGNED=1\n"
 	}
@@ -750,6 +762,44 @@ func TestImageIDMismatchStopsTheInstall(t *testing.T) {
 	assert.Contains(t, r.out, "[FAIL] "+shDamaged+"\n")
 	assert.Equal(t, 1, r.code)
 	assert.Equal(t, -1, shIndex(e.dockerCalls(), 0, "compose", "up"))
+}
+
+// I-1: RELEASE names each image by its config digest (what a classic image store reports as .Id
+// after docker load) and by its manifest or index digest (what a containerd image store
+// reports). Either is accepted; anything else is a damaged package.
+func TestInstallAcceptsEitherImageIdentifier(t *testing.T) {
+	t.Parallel()
+	nine := "sha256:" + strings.Repeat("9", 64)
+	for _, c := range []struct {
+		name, ids string
+		opts      shPkgOpts
+		ok        bool
+	}{
+		{"classic store: config digests", "alice:1.0.0=" + shAliceID + " alice-postgres:1.0.0=" + shPostgresID, shPkgOpts{}, true},
+		{"containerd store: manifest digests", "alice:1.0.0=" + shAliceDigest + " alice-postgres:1.0.0=" + shPostgresDigest, shPkgOpts{}, true},
+		{"one of each", "alice:1.0.0=" + shAliceDigest + " alice-postgres:1.0.0=" + shPostgresID, shPkgOpts{}, true},
+		{"neither", "alice:1.0.0=" + nine + " alice-postgres:1.0.0=" + shPostgresDigest, shPkgOpts{}, false},
+		{"postgres neither", "alice:1.0.0=" + shAliceDigest + " alice-postgres:1.0.0=" + nine, shPkgOpts{}, false},
+		{"no image", "alice-postgres:1.0.0=" + shPostgresDigest, shPkgOpts{}, false},
+		{"older RELEASE without digests", "alice:1.0.0=" + shAliceID + " alice-postgres:1.0.0=" + shPostgresID, shPkgOpts{noDigest: true}, true},
+		{"older RELEASE, containerd ID", "alice:1.0.0=" + shAliceDigest + " alice-postgres:1.0.0=" + shPostgresID, shPkgOpts{noDigest: true}, false},
+		{"malformed digest", "alice:1.0.0=" + shAliceID + " alice-postgres:1.0.0=" + shPostgresID, shPkgOpts{aliceDig: "sha256:abc"}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e := shNew(t)
+			e.vars["STUB_IMAGE_IDS"] = c.ids
+			r := e.install(e.pkg(c.opts))
+			if c.ok {
+				require.Equal(t, 0, r.code, r.out)
+				assert.Contains(t, r.out, "[ OK ] Images loaded and checked\n")
+				return
+			}
+			assert.Contains(t, r.out, "[FAIL] "+shDamaged+"\n")
+			assert.Equal(t, 1, r.code)
+			assert.Equal(t, -1, shIndex(e.dockerCalls(), 0, "compose", "up"))
+		})
+	}
 }
 
 func TestSignatureChecks(t *testing.T) {
@@ -1327,6 +1377,37 @@ func TestUpdateHappyPathOrder(t *testing.T) {
 	logs, _ := filepath.Glob(filepath.Join(e.inst, "update-*.log"))
 	require.Len(t, logs, 1)
 	shMode(t, logs[0], 0o600)
+}
+
+// I-1: the update accepts the image ID a containerd store reports (the manifest digest) and
+// refuses one that is neither identifier of RELEASE.
+func TestUpdateAcceptsEitherImageIdentifier(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, alice string
+		ok          bool
+	}{
+		{"containerd store", shAliceDigest, true},
+		{"neither", "sha256:" + strings.Repeat("9", 64), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e := shNewInstalled(t, "1.0.0-rc.2")
+			e.vars["STUB_IMAGE_IDS"] = "alice:1.0.0-rc.2=" + shAliceID + " alice-postgres:1.0.0-rc.2=" + shPostgresID +
+				" alice:1.0.0=" + c.alice + " alice-postgres:1.0.0=" + shPostgresDigest
+			tb := shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
+			r := e.update(tb)
+			if c.ok {
+				require.Equal(t, 0, r.code, r.out)
+				assert.Contains(t, r.out, "[ OK ] Images of 1.0.0 loaded and checked\n")
+				return
+			}
+			assert.NotEqual(t, 0, r.code, r.out)
+			assert.Contains(t, r.out, "[FAIL] "+shDamaged+"\n")
+			assert.NotContains(t, r.out, "Alice is now version 1.0.0.")
+			assert.Equal(t, -1, shIndex(e.dockerCalls(), 0, "compose", "run", "--rm", "migrate"))
+		})
+	}
 }
 
 func TestUpdateVerifiesACopy(t *testing.T) {

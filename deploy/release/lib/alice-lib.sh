@@ -185,7 +185,7 @@ alice_version_cmp() {
 
 # ---- key=value files (RELEASE, .env) ----
 
-alice_release_keys=" VERSION MIN_UPGRADE_FROM SCHEMA_VERSION ALICE_IMAGE ALICE_IMAGE_ID POSTGRES_IMAGE POSTGRES_IMAGE_ID BUILD_COMMIT BUILD_TIME RELEASE_KEY_ID TEST_SIGNED "
+alice_release_keys=" VERSION MIN_UPGRADE_FROM SCHEMA_VERSION ALICE_IMAGE ALICE_IMAGE_ID ALICE_IMAGE_DIGEST POSTGRES_IMAGE POSTGRES_IMAGE_ID POSTGRES_IMAGE_DIGEST BUILD_COMMIT BUILD_TIME RELEASE_KEY_ID TEST_SIGNED "
 alice_env_keys=" COMPOSE_PROJECT_NAME ALICE_IMAGE POSTGRES_IMAGE ALICE_BIND ALICE_PORT ALICE_TLS_HOSTS ALICE_TZ "
 
 # alice_kv_get KEY FILE prints the value of the first KEY= line (KEY is allowlisted by the callers).
@@ -221,6 +221,8 @@ alice_read_release() {
   rel_alice_id=$(alice_release_get ALICE_IMAGE_ID "$d/RELEASE") || return 1
   rel_pg_image=$(alice_release_get POSTGRES_IMAGE "$d/RELEASE") || return 1
   rel_pg_id=$(alice_release_get POSTGRES_IMAGE_ID "$d/RELEASE") || return 1
+  rel_alice_digest=$(alice_release_get ALICE_IMAGE_DIGEST "$d/RELEASE") || return 1
+  rel_pg_digest=$(alice_release_get POSTGRES_IMAGE_DIGEST "$d/RELEASE") || return 1
   rel_build_time=$(alice_release_get BUILD_TIME "$d/RELEASE") || return 1
   rel_test_signed=$(alice_release_get TEST_SIGNED "$d/RELEASE") || return 1
   [[ "$rel_version" =~ $alice_version_re ]] || return 1
@@ -228,10 +230,21 @@ alice_read_release() {
   [[ "$rel_alice_image" =~ ^[a-z0-9][a-z0-9._/-]{0,127}:[A-Za-z0-9._-]{1,128}$ ]] || return 1
   [[ "$rel_pg_image" =~ ^[a-z0-9][a-z0-9._/-]{0,127}:[A-Za-z0-9._-]{1,128}$ ]] || return 1
   [[ "$rel_alice_id" =~ ^sha256:[0-9a-f]{64}$ && "$rel_pg_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ -z "$rel_alice_digest" || "$rel_alice_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  [[ -z "$rel_pg_digest" || "$rel_pg_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
   v=$(<"$d/VERSION")
   [[ "$v" == "$rel_version" ]] || return 1
   [[ -f "$d/images/alice-$rel_version.tar" && -f "$d/images/postgres-$rel_version.tar" ]] || return 1
   [[ -f "$d/docker-compose.yml" ]] || return 1
+}
+
+# alice_image_id_ok ID CONFIG DIGEST succeeds when ID, what docker image inspect reports after
+# docker load, is the image's config digest (a classic image store) or its manifest or index
+# digest (a containerd image store; DIGEST is empty in a RELEASE written before both were
+# recorded) (I-1).
+alice_image_id_ok() {
+  [[ -n "$1" ]] || return 1
+  [[ "$1" == "$2" || (-n "$3" && "$1" == "$3") ]]
 }
 
 # ---- values written into .env (S-9) ----

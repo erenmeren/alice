@@ -99,10 +99,12 @@ On the first VM, also check that the image IDs survive `docker load` on a fresh 
 
 ```
 sudo docker image inspect --format '{{.Id}}' alice:1.0.0 alice-postgres:1.0.0
-sudo grep IMAGE_ID /opt/alice/RELEASE
+sudo grep -E '_IMAGE_(ID|DIGEST)=' /opt/alice/RELEASE
 ```
 
-Expected: the two IDs printed by the first command equal `ALICE_IMAGE_ID` and `POSTGRES_IMAGE_ID` of the second.
+Expected: the alice ID printed by the first command equals `ALICE_IMAGE_ID` (classic image store) or
+`ALICE_IMAGE_DIGEST` (containerd image store) of the second, and the postgres ID equals `POSTGRES_IMAGE_ID` or
+`POSTGRES_IMAGE_DIGEST`. Record which of the two matched.
 
 **Air-gapped variant.** Repeat steps 1–6 on one more VM of each distribution with outbound traffic blocked before
 the install: either by the hypervisor's network (an isolated network with only the administrator's subnet), or on

@@ -26,6 +26,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -293,13 +294,14 @@ func stage(cfg stageConfig, img images) error {
 			return err
 		}
 	}
-	aliceID, pgID, err := saveImages(cfg, img, pkg)
+	ids, err := saveImages(cfg, img, pkg)
 	if err != nil {
 		return err
 	}
-	release := fmt.Sprintf("VERSION=%s\nMIN_UPGRADE_FROM=%s\nSCHEMA_VERSION=%d\nALICE_IMAGE=%s\nALICE_IMAGE_ID=%s\n"+
-		"POSTGRES_IMAGE=%s\nPOSTGRES_IMAGE_ID=%s\nBUILD_COMMIT=%s\nBUILD_TIME=%s\nRELEASE_KEY_ID=%s\n",
-		cfg.Version, cfg.MinUpgradeFrom, schema, cfg.AliceImage, aliceID, cfg.PostgresImage, pgID, cfg.Commit, cfg.BuildTime, keyID)
+	release := fmt.Sprintf("VERSION=%s\nMIN_UPGRADE_FROM=%s\nSCHEMA_VERSION=%d\nALICE_IMAGE=%s\nALICE_IMAGE_ID=%s\nALICE_IMAGE_DIGEST=%s\n"+
+		"POSTGRES_IMAGE=%s\nPOSTGRES_IMAGE_ID=%s\nPOSTGRES_IMAGE_DIGEST=%s\nBUILD_COMMIT=%s\nBUILD_TIME=%s\nRELEASE_KEY_ID=%s\n",
+		cfg.Version, cfg.MinUpgradeFrom, schema, cfg.AliceImage, ids[0].config, ids[0].digest,
+		cfg.PostgresImage, ids[1].config, ids[1].digest, cfg.Commit, cfg.BuildTime, keyID)
 	if cfg.Test {
 		release += "TEST_SIGNED=1\n"
 	}
@@ -643,44 +645,109 @@ func schemaVersion(root string) (int64, error) {
 	return v, nil
 }
 
+// imageIDs are the two identifiers of one saved image (I-1): the config digest, which a classic
+// image store reports as .Id after docker load, and the manifest or index digest, which a
+// containerd image store reports. RELEASE carries both (ALICE_IMAGE_ID / ALICE_IMAGE_DIGEST) and
+// the install and update scripts accept either.
+type imageIDs struct{ config, digest string }
+
 // saveImages writes images/alice-<v>.tar, images/postgres-<v>.tar and images/images.sha256 and
-// returns the two image IDs.
-func saveImages(cfg stageConfig, img images, pkg string) (aliceID, pgID string, err error) {
+// returns the identifiers of the two images, read from the saved tars. The ID the build engine
+// reports must be one of them.
+func saveImages(cfg stageConfig, img images, pkg string) ([2]imageIDs, error) {
+	var ids [2]imageIDs
 	dir := filepath.Join(pkg, "images")
 	if err := mkdirs(dir); err != nil {
-		return "", "", err
+		return ids, err
 	}
 	var sums strings.Builder
-	ids := make([]string, 2)
 	for i, im := range []struct{ ref, file string }{
 		{cfg.AliceImage, "alice-" + cfg.Version + ".tar"},
 		{cfg.PostgresImage, "postgres-" + cfg.Version + ".tar"},
 	} {
 		id, err := img.ID(im.ref)
 		if err != nil {
-			return "", "", err
+			return ids, err
 		}
 		if !imageIDRe.MatchString(id) {
-			return "", "", fmt.Errorf("the ID %q of %s is not sha256:<64 hex>", id, im.ref)
+			return ids, fmt.Errorf("the ID %q of %s is not sha256:<64 hex>", id, im.ref)
 		}
 		p := filepath.Join(dir, im.file)
 		if err := img.Save(im.ref, p); err != nil {
-			return "", "", err
+			return ids, err
 		}
 		if err := os.Chmod(p, 0o644); err != nil { //nolint:gosec // G302: package files are world-readable (C2)
-			return "", "", err
+			return ids, err
+		}
+		got, err := savedImageIDs(p)
+		if err != nil {
+			return ids, fmt.Errorf("%s: %w", im.file, err)
+		}
+		if id != got.config && id != got.digest {
+			return ids, fmt.Errorf("docker reports %s for %s, which is neither the config digest %s nor the manifest digest %s of the saved image",
+				id, im.ref, got.config, got.digest)
 		}
 		sum, err := fileSHA256(p)
 		if err != nil {
-			return "", "", err
+			return ids, err
 		}
 		sums.WriteString(sum + "  " + im.file + "\n")
-		ids[i] = id
+		ids[i] = got
 	}
 	if err := writeEntry(pkg, entry{dst: "images/images.sha256", data: []byte(sums.String()), mode: 0o644}); err != nil {
-		return "", "", err
+		return ids, err
 	}
-	return ids[0], ids[1], nil
+	return ids, nil
+}
+
+// savedImageIDs reads manifest.json ([0].Config, "blobs/sha256/<hex>" or "<hex>.json") and
+// index.json (manifests[0].digest) of a docker save tar. Each must name exactly one image.
+func savedImageIDs(p string) (imageIDs, error) {
+	var out imageIDs
+	f, err := os.Open(p) //nolint:gosec // G304: an image tar of the new stage
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = f.Close() }()
+	var manifest []struct{ Config string }
+	var index struct {
+		Manifests []struct{ Digest string } `json:"manifests"`
+	}
+	var haveManifest, haveIndex bool
+	tr := tar.NewReader(f)
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return out, err
+		}
+		switch strings.TrimPrefix(h.Name, "./") {
+		case "manifest.json":
+			if err := json.NewDecoder(io.LimitReader(tr, 1<<20)).Decode(&manifest); err != nil {
+				return out, fmt.Errorf("manifest.json: %w", err)
+			}
+			haveManifest = true
+		case "index.json":
+			if err := json.NewDecoder(io.LimitReader(tr, 1<<20)).Decode(&index); err != nil {
+				return out, fmt.Errorf("index.json: %w", err)
+			}
+			haveIndex = true
+		}
+	}
+	if !haveManifest || len(manifest) != 1 {
+		return out, errors.New("the saved image has no manifest.json naming exactly one image")
+	}
+	if !haveIndex || len(index.Manifests) != 1 {
+		return out, errors.New("the saved image has no index.json naming exactly one image (docker save of Docker 25 or later)")
+	}
+	hexID := strings.TrimSuffix(strings.TrimPrefix(manifest[0].Config, "blobs/sha256/"), ".json")
+	out.config, out.digest = "sha256:"+hexID, index.Manifests[0].Digest
+	if !imageIDRe.MatchString(out.config) || !imageIDRe.MatchString(out.digest) {
+		return out, fmt.Errorf("the saved image names %q and %q, not sha256:<64 hex>", manifest[0].Config, out.digest)
+	}
+	return out, nil
 }
 
 func mkdirs(dir string) error {

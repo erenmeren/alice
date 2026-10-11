@@ -463,12 +463,12 @@ load_images() {
   alice_quiet alice_docker load -i "$pkg/images/alice-$rel_version.tar"
   alice_quiet alice_docker load -i "$pkg/images/postgres-$rel_version.tar"
   id=$(alice_docker image inspect --format '{{.Id}}' "$rel_alice_image" 2>/dev/null || true)
-  if [[ "$id" != "$rel_alice_id" ]]; then
+  if ! alice_image_id_ok "$id" "$rel_alice_id" "$rel_alice_digest"; then
     alice_fail "$alice_damaged"
     exit 1
   fi
   id=$(alice_docker image inspect --format '{{.Id}}' "$rel_pg_image" 2>/dev/null || true)
-  if [[ "$id" != "$rel_pg_id" ]]; then
+  if ! alice_image_id_ok "$id" "$rel_pg_id" "$rel_pg_digest"; then
     alice_fail "$alice_damaged"
     exit 1
   fi
