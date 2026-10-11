@@ -1251,6 +1251,10 @@
       "alarm": {
         "subject": "Alice'in 48 saattir başarılı bir yedeği yok",
         "body": "Alice 48 saattir başarılı bir yedek alamadı. Son başarılı yedek: {{last_success}}.\n\nGüncel bir yedek olmadan, o zamandan beri değişen veriler geri yüklenemez. Ayarlar'daki Yedekler sekmesinde gösterilen nedeni giderin, ardından Şimdi yedekle düğmesine tıklayın. Alice'i açın: {{dashboard_url}}"
+      },
+      "alarm_never": {
+        "subject": "Alice henüz hiç başarılı yedek almadı",
+        "body": "Alice, kurulumu 48 saatten uzun süre önce tamamlandığından beri hiç başarılı yedek almadı.\n\nYedek olmadan Alice'in verileri geri yüklenemez. Ayarlar'daki Yedekler sekmesinde gösterilen nedeni giderin, ardından Şimdi yedekle düğmesine tıklayın. Alice'i açın: {{dashboard_url}}"
       }
     },
     "notify": {

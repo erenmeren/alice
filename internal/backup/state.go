@@ -111,9 +111,14 @@ func (s *Service) recordSuccess(ctx context.Context, in CreateInput, info Info) 
 // emailTime is the time format of the e-mails.
 const emailTime = "2006-01-02 15:04 UTC"
 
-// neverText is last_success when there was never a successful backup. The template parameters are one value for every
-// recipient, whatever their language, so it carries both languages.
-const neverText = "never / hiç"
+// dashboardURL is the link of the e-mails: the public URL's root.
+func dashboardURL(ctx context.Context, tx pgx.Tx) (string, error) {
+	g, err := settings.GetGeneral(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(g.PublicURL, "/") + "/", nil
+}
 
 // recordFailure audits backup.failed and records the failure; in the same transaction it queues the failure e-mail
 // once per episode (scheduled backups only) and the 48-hour alarm once (F-70, F-88, R43 row 11).
@@ -126,33 +131,52 @@ func (s *Service) recordFailure(ctx context.Context, in CreateInput, code string
 			Result: audit.Failure, Details: map[string]string{"kind": string(in.Kind), "error_code": code}}); err != nil {
 			return err
 		}
-		sendFailed := in.Kind == KindAuto && !st.FailureNotified
-		sendAlarm := st.Alarm(now) && !st.AlarmNotified
-		if !sendFailed && !sendAlarm {
-			return nil
-		}
-		g, err := settings.GetGeneral(ctx, tx)
-		if err != nil {
-			return err
-		}
-		dashboard := strings.TrimSuffix(g.PublicURL, "/") + "/"
-		if sendFailed {
+		if in.Kind == KindAuto && !st.FailureNotified {
+			dashboard, err := dashboardURL(ctx, tx)
+			if err != nil {
+				return err
+			}
 			if err := s.c.Notifier.NotifyAdmins(ctx, tx, TemplateFailed,
 				map[string]string{"time": now.Format(emailTime), "error_code": code, "dashboard_url": dashboard}); err != nil {
 				return err
 			}
 			st.FailureNotified = true
 		}
-		if sendAlarm {
-			last := neverText
-			if !st.LastSuccessAt.IsZero() {
-				last = st.LastSuccessAt.UTC().Format(emailTime)
-			}
-			if err := s.c.Notifier.NotifyAdmins(ctx, tx, TemplateAlarm, map[string]string{"last_success": last, "dashboard_url": dashboard}); err != nil {
-				return err
-			}
-			st.AlarmNotified = true
-		}
-		return nil
+		return s.queueAlarm(ctx, tx, st, now)
 	})
+}
+
+// checkAlarm queues the 48-hour alarm when it is due and was not sent yet. The scheduler runs it on every tick, so the
+// alarm does not depend on a failure being recorded (a hung backup holding the lock records none; review minor 5).
+func (s *Service) checkAlarm(ctx context.Context) error {
+	now := s.c.Clock.Now().UTC()
+	st, err := s.State(ctx)
+	if err != nil {
+		return err
+	}
+	if !st.Alarm(now) || st.AlarmNotified {
+		return nil // the common case: no write
+	}
+	return s.updateState(ctx, func(tx pgx.Tx, st *State) error { return s.queueAlarm(ctx, tx, st, now) })
+}
+
+// queueAlarm queues the alarm e-mail once per episode: backup.alarm with the last success, or backup.alarm_never when
+// there was none.
+func (s *Service) queueAlarm(ctx context.Context, tx pgx.Tx, st *State, now time.Time) error {
+	if !st.Alarm(now) || st.AlarmNotified {
+		return nil
+	}
+	dashboard, err := dashboardURL(ctx, tx)
+	if err != nil {
+		return err
+	}
+	tpl, params := TemplateAlarmNever, map[string]string{"dashboard_url": dashboard}
+	if !st.LastSuccessAt.IsZero() {
+		tpl, params["last_success"] = TemplateAlarm, st.LastSuccessAt.UTC().Format(emailTime)
+	}
+	if err := s.c.Notifier.NotifyAdmins(ctx, tx, tpl, params); err != nil {
+		return err
+	}
+	st.AlarmNotified = true
+	return nil
 }

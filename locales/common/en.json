@@ -1251,6 +1251,10 @@
       "alarm": {
         "subject": "Alice has had no successful backup for 48 hours",
         "body": "Alice has not made a successful backup for 48 hours. Last successful backup: {{last_success}}.\n\nWithout a recent backup, data changed since then cannot be restored. Fix the cause shown in the Backups tab in Settings, then click Back up now. Open Alice: {{dashboard_url}}"
+      },
+      "alarm_never": {
+        "subject": "Alice has never made a successful backup",
+        "body": "Alice has not made a successful backup since its setup was completed, more than 48 hours ago.\n\nWithout a backup, Alice's data cannot be restored. Fix the cause shown in the Backups tab in Settings, then click Back up now. Open Alice: {{dashboard_url}}"
       }
     },
     "notify": {

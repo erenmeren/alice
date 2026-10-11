@@ -18,7 +18,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -115,7 +114,9 @@ type Config struct {
 // Service makes and manages backups.
 type Service struct {
 	c      Config
-	inDump func() // tests: runs inside the snapshot, after the manifest (export_test.go)
+	cache  checkCache
+	inDump func()            // tests: runs inside the snapshot, after the manifest (export_test.go)
+	hashed func(name string) // tests: counts the whole-file hashes of the shallow check (export_list_test.go)
 }
 
 // New builds the service.
@@ -160,7 +161,8 @@ type Info struct {
 	Size         int64
 	CreatedAt    time.Time
 	AliceVersion string
-	Check        string // "ok", "missing checksum", "checksum mismatch", "unreadable header"
+	Check        string // "ok", "missing checksum", "checksum mismatch", "unreadable header", "unreadable"
+	Code         string // with Check "unreadable": "permission_denied" or "io"
 }
 
 // The values of Info.Check.
@@ -169,6 +171,8 @@ const (
 	CheckMissingChecksum  = "missing checksum"
 	CheckChecksumMismatch = "checksum mismatch"
 	CheckUnreadableHeader = "unreadable header"
+	// CheckUnreadable is a file List could not read at all (permissions, I/O error); Info.Code says which.
+	CheckUnreadable = "unreadable"
 )
 
 // CreateInput is one backup to make. Out is a file name for --out ("" = the standard name).
@@ -239,6 +243,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Info, error) {
 		}
 	}()
 
+	if in.Kind == KindAuto {
+		s.sweepPartials() // under the lock: no other backup is writing
+	}
 	info, err := s.write(ctx, in)
 	if err != nil {
 		code := codeDatabase
@@ -250,7 +257,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Info, error) {
 		}
 		s.c.Log.Error("backup failed", "event", "backup.failed", "kind", string(in.Kind), "reason", code,
 			"error_type", fmt.Sprintf("%T", errors.Unwrap(err)))
-		if rerr := s.recordFailure(ctx, in, code); rerr != nil {
+		if rerr := s.recordFailure(context.WithoutCancel(ctx), in, code); rerr != nil {
 			s.c.Log.Error("could not record a failed backup", "error_type", fmt.Sprintf("%T", rerr))
 		}
 		return Info{}, err
@@ -261,7 +268,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Info, error) {
 	if in.Kind == KindAuto {
 		sch, err := s.Schedule(ctx)
 		if err == nil {
-			_, err = s.Prune(ctx, sch.Retention, in.Actor)
+			_, err = s.prune(ctx, sch.Retention, in.Actor, info.Name)
 		}
 		if err != nil {
 			s.c.Log.Error("could not prune old backups", "error_type", fmt.Sprintf("%T", err))
@@ -690,58 +697,6 @@ func syncDir(dir string) error {
 	return d.Sync()
 }
 
-// Verify is the shallow check without the passphrase (R43 row 4): the header parses within the bounds, the size fits
-// the chunk framing, and the .sha256 file matches. Only a missing file is an error (ErrNotFound); every other finding
-// is in Info.Check.
-func (s *Service) Verify(_ context.Context, path string) (Info, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // G304: the path of a backup the operator named
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return Info{}, ErrNotFound
-		}
-		return Info{}, fmt.Errorf("backup: open %s: %w", filepath.Base(path), err)
-	}
-	defer func() { _ = f.Close() }()
-	fi, err := f.Stat()
-	if err != nil {
-		return Info{}, fmt.Errorf("backup: %w", err)
-	}
-	if !fi.Mode().IsRegular() {
-		return Info{}, ErrNotFound
-	}
-	info := Info{Name: filepath.Base(path), Path: path, Size: fi.Size(), CreatedAt: fi.ModTime().UTC(), Check: CheckUnreadableHeader}
-	cr := &countingReader{r: f}
-	h, err := format.ReadHeader(cr)
-	if err != nil {
-		return info, nil
-	}
-	info.Kind, info.CreatedAt, info.AliceVersion = Kind(h.Kind), h.CreatedAt.UTC(), h.AliceVersion
-	if rest := fi.Size() - cr.n; rest%int64(format.ChunkSize+16) < 16 {
-		return info, nil // a final chunk always has its 16-byte tag and less than a full chunk
-	}
-	want, err := readChecksum(path, info.Name)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		info.Check = CheckMissingChecksum
-		return info, nil
-	case err != nil:
-		info.Check = CheckChecksumMismatch
-		return info, nil
-	}
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return Info{}, fmt.Errorf("backup: %w", err)
-	}
-	hs := sha256.New()
-	if _, err := io.Copy(hs, f); err != nil {
-		return Info{}, fmt.Errorf("backup: read %s: %w", info.Name, err)
-	}
-	info.Check = CheckChecksumMismatch
-	if bytes.Equal(hs.Sum(nil), want) {
-		info.Check = CheckOK
-	}
-	return info, nil
-}
-
 type countingReader struct {
 	r io.Reader
 	n int64
@@ -772,103 +727,4 @@ func readChecksum(path, name string) ([]byte, error) {
 // a newer format format.ErrNewerFormat.
 func (s *Service) VerifyDeep(_ context.Context, path string, passphrase []byte) (Manifest, error) {
 	return readPayload(path, passphrase, nil)
-}
-
-// List returns every backup in Dir, newest first, each with its shallow check.
-func (s *Service) List(ctx context.Context) ([]Info, error) {
-	entries, err := os.ReadDir(s.c.Dir)
-	if err != nil {
-		return nil, fmt.Errorf("backup: read the backups directory: %w", err)
-	}
-	var out []Info
-	for _, en := range entries {
-		if !en.Type().IsRegular() || !ValidName(en.Name()) {
-			continue
-		}
-		info, err := s.Verify(ctx, filepath.Join(s.c.Dir, en.Name()))
-		if errors.Is(err, ErrNotFound) {
-			continue // removed meanwhile
-		}
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, info)
-	}
-	slices.SortStableFunc(out, func(a, b Info) int {
-		if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
-			return c
-		}
-		return strings.Compare(b.Name, a.Name)
-	})
-	return out, nil
-}
-
-// Open opens a backup of Dir for the download. A name that fails ValidName, a missing file, a symbolic link or
-// anything but a regular file is ErrNotFound; nothing outside Dir is ever opened.
-func (s *Service) Open(ctx context.Context, name string) (*os.File, Info, error) {
-	if !ValidName(name) {
-		return nil, Info{}, ErrNotFound
-	}
-	root, err := os.OpenRoot(s.c.Dir)
-	if err != nil {
-		return nil, Info{}, fmt.Errorf("backup: open the backups directory: %w", err)
-	}
-	defer func() { _ = root.Close() }()
-	if fi, err := root.Lstat(name); err != nil || !fi.Mode().IsRegular() {
-		return nil, Info{}, ErrNotFound
-	}
-	f, err := root.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, Info{}, ErrNotFound
-	}
-	info, err := s.Verify(ctx, filepath.Join(s.c.Dir, name))
-	if err != nil {
-		_ = f.Close()
-		return nil, Info{}, err
-	}
-	return f, info, nil
-}
-
-// Prune keeps the newest keep automatic backups whose checksum matches and deletes the older ones with their
-// checksum files, each deletion audited backup.deleted. Other kinds and unverified files are never deleted.
-func (s *Service) Prune(ctx context.Context, keep int, actor audit.Actor) (int, error) {
-	if keep < 1 {
-		return 0, errors.New("backup: retention must keep at least one backup")
-	}
-	list, err := s.List(ctx)
-	if err != nil {
-		return 0, err
-	}
-	kept, deleted := 0, 0
-	for _, info := range list {
-		if info.Kind != KindAuto || info.Check != CheckOK || !standardName.MatchString(info.Name) {
-			continue
-		}
-		if kept < keep {
-			kept++
-			continue
-		}
-		if err := os.Remove(info.Path); err != nil {
-			return deleted, fmt.Errorf("backup: delete %s: %w", info.Name, err)
-		}
-		if err := os.Remove(info.Path + ChecksumExt); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return deleted, fmt.Errorf("backup: delete %s: %w", info.Name+ChecksumExt, err)
-		}
-		deleted++
-		err := db.InTx(ctx, s.c.Pool, func(tx pgx.Tx) error {
-			_, err := s.c.Audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "backup.deleted", ObjectType: "backup",
-				ObjectID: info.Name, Result: audit.Success,
-				Details: map[string]string{"name": info.Name, "kind": string(info.Kind), "deleted_count": "1"}})
-			return err
-		})
-		if err != nil {
-			return deleted, err
-		}
-	}
-	if deleted > 0 {
-		if err := syncDir(s.c.Dir); err != nil {
-			return deleted, fmt.Errorf("backup: sync the backups directory: %w", err)
-		}
-	}
-	return deleted, nil
 }

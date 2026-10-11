@@ -773,12 +773,13 @@ func TestFailureEmailOncePerEpisodeAndAlarmAt48Hours(t *testing.T) {
 			assert.Equal(t, 1, e.outbox("backup.failed"), "queued at the first failure")
 		}
 		if e.clk.Now().Before(setupDone.Add(backup.AlarmAfter)) {
-			assert.Zero(t, e.outbox("backup.alarm"))
+			assert.Zero(t, e.outbox("backup.alarm_never"))
 		}
 		e.clk.Advance(5 * time.Minute)
 	}
 	assert.Equal(t, 1, e.outbox("backup.failed"))
-	assert.Equal(t, 1, e.outbox("backup.alarm"))
+	assert.Equal(t, 1, e.outbox("backup.alarm_never"), "never a success: the second template")
+	assert.Zero(t, e.outbox("backup.alarm"))
 	st := e.state()
 	assert.True(t, st.Alarm(e.clk.Now()))
 	assert.True(t, st.FailureNotified)
@@ -787,8 +788,8 @@ func TestFailureEmailOncePerEpisodeAndAlarmAt48Hours(t *testing.T) {
 	var params map[string]string
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT params FROM notifications_outbox WHERE template_key = 'backup.failed'").Scan(&params))
 	assert.Equal(t, map[string]string{"time": "2026-10-01 09:00 UTC", "error_code": "disk_full", "dashboard_url": "/"}, params)
-	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT params FROM notifications_outbox WHERE template_key = 'backup.alarm'").Scan(&params))
-	assert.Equal(t, map[string]string{"last_success": "never / hiç", "dashboard_url": "/"}, params)
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT params FROM notifications_outbox WHERE template_key = 'backup.alarm_never'").Scan(&params))
+	assert.Equal(t, map[string]string{"dashboard_url": "/"}, params)
 
 	// A success resets the episode.
 	backup.SetStatfs(&e.cfg, func(string) (uint64, error) { return 100 << 30, nil })
@@ -809,7 +810,8 @@ func TestFailureEmailOncePerEpisodeAndAlarmAt48Hours(t *testing.T) {
 	require.Error(t, e.svc.RunScheduled(e.ctx))
 	require.Error(t, e.svc.RunScheduled(e.ctx))
 	assert.Equal(t, 2, e.outbox("backup.failed"))
-	assert.Equal(t, 1, e.outbox("backup.alarm"))
+	assert.Equal(t, 1, e.outbox("backup.alarm_never"))
+	assert.Zero(t, e.outbox("backup.alarm"))
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT params FROM notifications_outbox WHERE template_key = 'backup.failed' ORDER BY created_at DESC LIMIT 1").Scan(&params))
 	assert.Equal(t, "https://alice.example.com/", params["dashboard_url"])
 
@@ -963,10 +965,11 @@ func TestBackupTemplatesRenderInBothLanguages(t *testing.T) {
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"time": "2026-10-10 23:30 UTC", "error_code": "disk_full", "dashboard_url": "https://alice.example.com/",
 		"last_success": "2026-10-08 23:30 UTC"}
-	assert.Equal(t, []string{"backup.failed", "backup.alarm"}, backup.Templates())
+	assert.Equal(t, []string{"backup.failed", "backup.alarm", "backup.alarm_never"}, backup.Templates())
 	subjects := map[string]string{
 		"backup.failed/en": "Alice could not make its daily backup", "backup.failed/tr": "Alice günlük yedeğini alamadı",
 		"backup.alarm/en": "Alice has had no successful backup for 48 hours", "backup.alarm/tr": "Alice'in 48 saattir başarılı bir yedeği yok",
+		"backup.alarm_never/en": "Alice has never made a successful backup", "backup.alarm_never/tr": "Alice henüz hiç başarılı yedek almadı",
 	}
 	for _, tpl := range backup.Templates() {
 		for _, lang := range []string{"en", "tr"} {
@@ -979,6 +982,8 @@ func TestBackupTemplatesRenderInBothLanguages(t *testing.T) {
 		}
 		assert.Contains(t, s.Render("a@example.com", "backup.failed", "en", params).Body, "disk_full")
 		assert.Contains(t, s.Render("a@example.com", "backup.alarm", "tr", params).Body, "2026-10-08 23:30 UTC")
+		assert.NotContains(t, s.Render("a@example.com", "backup.alarm_never", "en", params).Body, "hiç")
+		assert.NotContains(t, s.Render("a@example.com", "backup.alarm_never", "tr", params).Body, "never")
 	}
 }
 

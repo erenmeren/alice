@@ -232,14 +232,88 @@ func appendAudit(t *testing.T, pool *pgxpool.Pool, log *audit.Log, action string
 	}))
 }
 
+// emptyOnPurpose lists the tables the round trip leaves empty, each with the reason. There are none today.
+var emptyOnPurpose = map[string]string{}
+
+// fillRest puts one row into every table fill leaves empty, referring to fill's rows (an Administrator, targets, certificates, a Key
+// Vault certificate, a deployment and a job).
+func fillRest(t *testing.T, d *pgtest.DB) {
+	t.Helper()
+	var cert, target uuid.UUID
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT certificate_id, target_id FROM certificate_locations LIMIT 1").Scan(&cert, &target))
+	_, err := seed.Deployment(ctx, d.Owner, cert, target, "needs_attention", "", time.Now())
+	require.NoError(t, err, "an unfinished deployment, which may get steps")
+	_, err = d.Owner.Exec(ctx, `
+INSERT INTO license (id, installation_id, installed_at, state, updated_at)
+VALUES (1, 'ALICE-ABCD-EFGH-JKLM-NPQR', now(), 'evaluation', now()) ON CONFLICT (id) DO NOTHING;
+INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
+SELECT gen_random_uuid(), 'certificate_expiry', id, 'alert subject', now() + interval '30 days', 30, false, false, now() FROM certificates LIMIT 1;
+INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, expires_at, created_at)
+SELECT gen_random_uuid(), id, 'token', '\x0102', 'alc_', '{read}', now() + interval '1 day', now() FROM users LIMIT 1;
+INSERT INTO bindings (id, kv_certificate_id, kv_target_id, auto_deploy, created_by, created_at)
+SELECT gen_random_uuid(), k.id, k.target_id, false, (SELECT id FROM users LIMIT 1), now() FROM kv_certificates k LIMIT 1;
+INSERT INTO managed_private_keys (id, owner_type, algorithm, bits, public_key_sha256, ciphertext, nonce, wrapped_dek, key_version, created_at)
+VALUES ('a0000000-0000-4000-8000-000000000001', 'csr', 'ecdsa', 256, repeat('a', 64), '\x01', '\x000000000000000000000000', '\x01', 1, now()),
+       ('a0000000-0000-4000-8000-000000000002', 'ssh_key', 'ed25519', 256, repeat('b', 64), '\x02', '\x000000000000000000000001', '\x02', 1, now());
+INSERT INTO csr_requests (id, private_key_id, common_name, csr_pem, status, created_at)
+VALUES (gen_random_uuid(), 'a0000000-0000-4000-8000-000000000001', 'csr.example.test', 'pem', 'pending', now());
+INSERT INTO deployment_steps (id, deployment_id, n, name, status, at) SELECT gen_random_uuid(), id, 1, 'connect', 'ok', now() FROM deployments WHERE state <> 'done' LIMIT 1;
+INSERT INTO host_keys (id, target_id, key_type, public_key, fingerprint_sha256, status, observed_at)
+SELECT gen_random_uuid(), id, 'ssh-ed25519', '\x01', 'SHA256:' || repeat('A', 43), 'observed', now() FROM targets LIMIT 1;
+INSERT INTO job_attempts (id, job_id, attempt, worker_id, started_at) SELECT gen_random_uuid(), id, 1, 'worker', now() FROM jobs LIMIT 1;
+INSERT INTO kv_imports (id, certificate_id, target_id, name, new_version, state, thumbprint, created_at)
+SELECT gen_random_uuid(), (SELECT id FROM certificates LIMIT 1), id, 'import1', true, 'queued', repeat('a', 40), now() FROM targets LIMIT 1;
+INSERT INTO kv_secrets (id, target_id, name, enabled, first_seen_at, last_seen_at)
+SELECT gen_random_uuid(), target_id, 'secret1', true, now(), now() FROM kv_certificates LIMIT 1;
+INSERT INTO license_files (id, seq, sha256, raw_file, uploaded_at) VALUES (gen_random_uuid(), 1, '\x0a0b', '\x01', now());
+INSERT INTO license_history (id, at, event) VALUES (gen_random_uuid(), now(), 'installed');
+INSERT INTO notifications_outbox (id, kind, to_address, template_key, locale, status, next_attempt_at, created_at)
+VALUES (gen_random_uuid(), 'email', 'ayse@example.com', 'notify.test', 'en', 'pending', now(), now());
+INSERT INTO oidc_providers (id, name, issuer_url, client_id, scopes, groups_claim, authorization_endpoint, token_endpoint, jwks_uri, enabled, created_at, updated_at)
+VALUES ('b0000000-0000-4000-8000-000000000001', 'IdP', 'https://idp.example.test', 'client', '{openid}', 'groups',
+        'https://idp.example.test/a', 'https://idp.example.test/t', 'https://idp.example.test/j', true, now(), now());
+INSERT INTO oidc_group_mappings (id, provider_id, group_claim_value, role, created_at)
+VALUES (gen_random_uuid(), 'b0000000-0000-4000-8000-000000000001', 'admins', 'admin', now());
+INSERT INTO oidc_login_states (state_hash, provider_id, binding_hash, nonce, code_verifier, purpose, next_path, created_at, expires_at)
+VALUES (sha256('state'), 'b0000000-0000-4000-8000-000000000001', sha256('binding'), repeat('n', 43), repeat('v', 43), 'login', '/', now(), now() + interval '5 minutes');
+INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, first_seen_at, created_at)
+VALUES ('c0000000-0000-4000-8000-000000000001', 'SHA256:' || repeat('B', 43), 'ssh-ed25519', 'ssh-ed25519 AAAA', now(), now());
+INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, public_key, managed, private_key_id, first_seen_at, created_at)
+VALUES ('c0000000-0000-4000-8000-000000000002', 'SHA256:' || repeat('C', 43), 'ssh-ed25519', 'ssh-ed25519 BBBB', true,
+        'a0000000-0000-4000-8000-000000000002', now(), now());
+INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at)
+SELECT 'e0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000002', id, 'root', '/root/.ssh/authorized_keys', 1, now(), now()
+FROM targets LIMIT 1;
+INSERT INTO rotation_policies (id, ssh_key_id, name, enabled, interval_days, created_at, updated_at)
+VALUES ('f0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000002', 'policy', false, 30, now(), now());
+INSERT INTO rotations (id, policy_id, old_ssh_key_id, trigger, status, plan, plan_digest, new_key_type, overlap_minutes, planned_for, notified_at, created_at, updated_at)
+VALUES ('f1000000-0000-4000-8000-000000000001', 'f0000000-0000-4000-8000-000000000001', 'c0000000-0000-4000-8000-000000000002',
+        'manual', 'dry_run_notified', '{}', repeat('d', 64), 'ed25519', 0, now(), now(), now(), now());
+INSERT INTO rotation_locations (id, rotation_id, n, old_location_id, target_id, os_user, file_path, state, updated_at)
+SELECT 'f2000000-0000-4000-8000-000000000001', 'f1000000-0000-4000-8000-000000000001', 1, id, target_id, os_user, file_path, 'planned', now()
+FROM ssh_key_locations WHERE id = 'e0000000-0000-4000-8000-000000000001';
+INSERT INTO rotation_op_ids (op_id, location_id, kind) VALUES (gen_random_uuid(), 'f2000000-0000-4000-8000-000000000001', 'add');
+INSERT INTO rotation_steps (id, rotation_id, n, location_id, name, status, at)
+VALUES (gen_random_uuid(), 'f1000000-0000-4000-8000-000000000001', 1, 'f2000000-0000-4000-8000-000000000001', 'plan', 'ok', now());
+INSERT INTO saved_views (id, user_id, page, name, query, created_at) SELECT gen_random_uuid(), id, 'certificates', 'view', '{}', now() FROM users LIMIT 1;
+INSERT INTO setup_sessions (id_hash, created_at, idle_expires_at) VALUES (sha256('setup'), now(), now() + interval '1 hour');
+INSERT INTO target_locks (target_id, job_id, operation, locked_by, heartbeat_at, lease_until)
+SELECT (SELECT id FROM targets LIMIT 1), id, 'deploy', 'worker', now(), now() + interval '1 minute' FROM jobs LIMIT 1;`)
+	require.NoError(t, err)
+}
+
 func TestDumpLoadRoundTripsEveryTable(t *testing.T) {
 	a := pgtest.New(t)
 	fill(t, a)
+	fillRest(t, a)
 	countsA := rowCounts(t, a.Owner)
-	for _, name := range []string{"users", "user_mfa", "sessions", "settings", "setting_secrets", "audit_log", "master_key_versions",
-		"targets", "credentials", "certificates", "certificate_locations", "deployments", "kv_certificates",
-		"kv_certificate_versions", "kv_keys", "jobs"} {
-		require.Positivef(t, countsA[name], "table %s was filled", name)
+	// Every table of the catalog has rows, so a new table fails here until fillRest (or emptyOnPurpose) covers it.
+	for _, name := range tableNames(t, a.Owner) {
+		if why, ok := emptyOnPurpose[name]; ok {
+			require.Zerof(t, countsA[name], "table %s is listed as empty: %s", name, why)
+			continue
+		}
+		require.Positivef(t, countsA[name], "table %s has no row: fill it in fillRest or list it in emptyOnPurpose with the reason", name)
 	}
 	payload, counts := dumpDB(t, a.App)
 	assert.Equal(t, countsA, counts)
