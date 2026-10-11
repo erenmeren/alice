@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"path"
+	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -111,6 +114,72 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) error {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
 	return nil
+}
+
+// MigrateTo applies the pending migrations up to and including version, under the same lock as
+// Migrate. Tests use it to build an older schema; production always migrates to the latest.
+func MigrateTo(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, version int64) error {
+	locker, err := lock.NewPostgresSessionLocker()
+	if err != nil {
+		return fmt.Errorf("create migration lock: %w", err)
+	}
+	p, err := newProvider(pool, fsys, goose.WithSessionLocker(locker))
+	if err != nil {
+		return err
+	}
+	if _, err := p.UpTo(ctx, version); err != nil {
+		return fmt.Errorf("apply migrations up to %d: %w", version, err)
+	}
+	return nil
+}
+
+// SchemaVersion returns the highest applied migration version; 0 when goose has never run on the
+// database. It only reads, so the application role can call it (alice_app may SELECT
+// goose_db_version).
+func SchemaVersion(ctx context.Context, q Querier) (int64, error) {
+	var v int64
+	err := q.QueryRow(ctx, "SELECT coalesce(max(version_id), 0) FROM goose_db_version WHERE is_applied").Scan(&v)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == undefinedTable {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read the schema version: %w", err)
+	}
+	return v, nil
+}
+
+// migrationName is a goose SQL migration file: a numeric version, an underscore, a name.
+var migrationName = regexp.MustCompile(`^([0-9]+)_[^/]+\.sql$`)
+
+// LatestVersion returns the highest version among the NNNNN_*.sql files at the root of fsys. Other
+// files are ignored; a .sql file without a version prefix is an error, because goose would refuse it
+// too and the binary would then need a version it cannot name.
+func LatestVersion(fsys fs.FS) (int64, error) {
+	entries, err := fs.ReadDir(fsys, ".")
+	if err != nil {
+		return 0, fmt.Errorf("read the migrations: %w", err)
+	}
+	var latest int64
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || path.Ext(name) != ".sql" {
+			continue
+		}
+		m := migrationName.FindStringSubmatch(name)
+		if m == nil {
+			return 0, fmt.Errorf("migration file %s does not start with a version number and an underscore", name)
+		}
+		v, err := strconv.ParseInt(m[1], 10, 64)
+		if err != nil || v < 1 {
+			return 0, fmt.Errorf("migration file %s has no valid version number", name)
+		}
+		latest = max(latest, v)
+	}
+	if latest == 0 {
+		return 0, errors.New("no migration files found")
+	}
+	return latest, nil
 }
 
 // HealthChecker reports whether the database is reachable and fully migrated.

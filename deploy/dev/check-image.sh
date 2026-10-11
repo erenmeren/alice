@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Checks a built release image of Alice without a database or a network (make image-check, audit
 # AUD-23): how it runs (user, entrypoint, healthcheck), what its file system holds (no shell, no
-# test artefacts, only the alice binary is executable, the keys and state directories), and what
+# test artefacts, only the alice binary is executable, the keys, state and backups directories), and what
 # the binary is (a release build: no build tags, no test license key, no /test routes, both
 # alice-helper checksums, a plain version). Usage: check-image.sh <tag> checks alice:<tag>.
 #
@@ -75,11 +75,13 @@ done < <(find "$work/root" -type f -size +0 -print0 | sort -z)
 check "the only programs are /usr/local/bin/alice and the base's inert motd script" "$programs" "etc/update-motd.d/10-uname usr/local/bin/alice "
 check "has no test artefacts (test CA, shims, fixtures, sources, web modules, files in a home)" \
   "$(paths | count -Eic 'test|fixture|systemctl|nginx|node_modules|\.go$|^src/|^opt/alice-|^(root|home)/.*[^/]$')" "0"
-check "/opt/alice holds only the empty keys and state directories" \
-  "$(paths | count -E '^opt/alice/.' | sort | tr '\n' ' ')" "opt/alice/keys/ opt/alice/state/ "
+check "/opt/alice holds only the empty keys, state and backups directories" \
+  "$(paths | count -E '^opt/alice/.' | sort | tr '\n' ' ')" "opt/alice/backups/ opt/alice/keys/ opt/alice/state/ "
 check "keys directory belongs to 10001" "$(awk '$6 == "opt/alice/keys/" { print $2 }' "$work/files")" "10001/10001"
 check "state directory belongs to 10001 with mode 0700" \
   "$(awk '$6 == "opt/alice/state/" { print $1, $2 }' "$work/files")" "drwx------ 10001/10001"
+check "backups directory belongs to 10001 with mode 0700" \
+  "$(awk '$6 == "opt/alice/backups/" { print $1, $2 }' "$work/files")" "drwx------ 10001/10001"
 
 # What the binary is.
 bin="$work/root/usr/local/bin/alice"

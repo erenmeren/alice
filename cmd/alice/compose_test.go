@@ -176,9 +176,12 @@ func TestComposePassesConfigurationAndUsesTheOverride(t *testing.T) {
 // file, except the ones whose image or built-in default is the right value there.
 func TestComposePassesEveryConfigurationVariable(t *testing.T) {
 	notInCompose := map[string]string{
-		"ALICE_HEALTH_ADDR": "the default 127.0.0.1:8081 is what alice healthcheck in the image asks",
-		"ALICE_KEYS_DIR":    "the default /opt/alice/keys is the alice-keys volume",
-		"ALICE_LISTEN_ADDR": "the default :8443 is the published container port",
+		"ALICE_HEALTH_ADDR":                    "the default 127.0.0.1:8081 is what alice healthcheck in the image asks",
+		"ALICE_KEYS_DIR":                       "the default /opt/alice/keys is the alice-keys volume",
+		"ALICE_LISTEN_ADDR":                    "the default :8443 is the published container port",
+		"ALICE_MIGRATE":                        "the default on-start is the development behaviour (the production compose sets external)",
+		"ALICE_DATABASE_PASSWORD_FILE":         "the development URLs carry their passwords from deploy/.env",
+		"ALICE_MIGRATE_DATABASE_PASSWORD_FILE": "the development URLs carry their passwords from deploy/.env",
 	}
 	dir := "../../internal/platform/config"
 	entries, err := os.ReadDir(dir)
@@ -468,4 +471,19 @@ func TestReleaseComposeNeverMentionsTheMailAndIdPFakes(t *testing.T) {
 			assert.NotContains(t, string(raw), word, f)
 		}
 	}
+}
+
+// M-2: the development stack keeps backups in their own named volume, which the image's 10001-owned
+// /opt/alice/backups directory initialises, and tells Alice where it is.
+func TestComposeMountsTheBackupVolume(t *testing.T) {
+	raw, err := os.ReadFile("../../deploy/docker-compose.yml")
+	require.NoError(t, err)
+	var c struct {
+		Volumes map[string]any `yaml:"volumes"`
+	}
+	require.NoError(t, yaml.Unmarshal(raw, &c))
+	assert.Contains(t, c.Volumes, "alice-backups")
+	alice := readCompose(t, "../../deploy/docker-compose.yml").Services["alice"]
+	assert.Contains(t, alice.Volumes, "alice-backups:/opt/alice/backups")
+	assert.Equal(t, "/opt/alice/backups", alice.Environment["ALICE_BACKUP_DIR"])
 }

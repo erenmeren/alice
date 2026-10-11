@@ -41,6 +41,7 @@ func runImageCheck(t *testing.T, hostGo, binGo string, withSums, ci bool) (strin
 	add("etc/update-motd.d/10-uname", 0o755, "#!/bin/sh\nuname\n", tar.TypeReg)
 	add("opt/alice/keys/", 0o750, "", tar.TypeDir)
 	add("opt/alice/state/", 0o700, "", tar.TypeDir)
+	add("opt/alice/backups/", 0o700, "", tar.TypeDir)
 	add("usr/local/bin/alice", 0o755, binary, tar.TypeReg)
 	require.NoError(t, tw.Close())
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "rootfs.tar"), rootfs.Bytes(), 0o600))

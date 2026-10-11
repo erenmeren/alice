@@ -3,12 +3,17 @@ package config_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -250,4 +255,217 @@ func TestSMTPCredentialsArePaired(t *testing.T) {
 	c, err := config.Load(env(base))
 	require.NoError(t, err, "no authentication at all is allowed")
 	assert.Empty(t, c.SMTP.Username)
+}
+
+// files is a fake reader for LoadWith: a missing name is fs.ErrNotExist.
+func files(m map[string]string) func(string) ([]byte, error) {
+	return func(name string) ([]byte, error) {
+		v, ok := m[name]
+		if !ok {
+			return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
+		}
+		return []byte(v), nil
+	}
+}
+
+const (
+	appURLNoPassword   = "postgres://alice_app@postgres:5432/alice?sslmode=disable"
+	ownerURLNoPassword = "postgres://alice_owner@postgres:5432/alice?sslmode=disable"
+)
+
+func passwordOf(t *testing.T, raw string) string {
+	t.Helper()
+	u, err := url.Parse(raw)
+	require.NoError(t, err)
+	pw, ok := u.User.Password()
+	require.True(t, ok, "the URL carries a password")
+	return pw
+}
+
+// The production compose passes the passwords as files (docker secrets): the file's content
+// without one trailing newline becomes the URL's password, and no rendering shows it.
+func TestDatabasePasswordFromFile(t *testing.T) {
+	c, err := config.LoadWith(env(map[string]string{
+		"ALICE_DATABASE_URL":                   appURLNoPassword,
+		"ALICE_DATABASE_PASSWORD_FILE":         "/run/secrets/db_app_password",
+		"ALICE_MIGRATE_DATABASE_URL":           ownerURLNoPassword,
+		"ALICE_MIGRATE_DATABASE_PASSWORD_FILE": "/run/secrets/db_owner_password",
+	}), files(map[string]string{
+		"/run/secrets/db_app_password":   "s3cret-pw\n",
+		"/run/secrets/db_owner_password": "0wner/pw:@ ?#\n\n",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "s3cret-pw", passwordOf(t, c.DatabaseURL))
+	assert.Equal(t, "0wner/pw:@ ?#\n", passwordOf(t, c.MigrateDatabaseURL), "only one trailing newline is removed; any byte survives the URL")
+	assert.Equal(t, "/run/secrets/db_app_password", c.DatabasePasswordFile)
+	assert.Equal(t, "/run/secrets/db_owner_password", c.MigratePasswordFile)
+	assert.True(t, c.SeparateMigrationRole())
+
+	var buf bytes.Buffer
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("config loaded", "config", c)
+	js, err := json.Marshal(c)
+	require.NoError(t, err)
+	for _, out := range []string{buf.String(), c.String(), fmt.Sprintf("%v", c), fmt.Sprintf("%#v", c), string(js)} {
+		assert.NotContains(t, out, "s3cret-pw")
+		assert.NotContains(t, out, "0wner")
+		assert.Contains(t, out, "xxxxx")
+	}
+}
+
+func TestPasswordFileWithPasswordInURLIsRefused(t *testing.T) {
+	_, err := config.LoadWith(env(map[string]string{
+		"ALICE_DATABASE_URL":           dbURL,
+		"ALICE_DATABASE_PASSWORD_FILE": "/run/secrets/db_app_password",
+	}), files(map[string]string{"/run/secrets/db_app_password": "other-pw"}))
+	require.Error(t, err)
+	assert.Equal(t, "ALICE_DATABASE_URL already contains a password; remove it or remove ALICE_DATABASE_PASSWORD_FILE", err.Error())
+
+	_, err = config.LoadWith(env(map[string]string{
+		"ALICE_DATABASE_URL":                   appURLNoPassword,
+		"ALICE_MIGRATE_DATABASE_URL":           ownerURL,
+		"ALICE_MIGRATE_DATABASE_PASSWORD_FILE": "/run/secrets/db_owner_password",
+	}), files(map[string]string{"/run/secrets/db_owner_password": "other-pw"}))
+	require.Error(t, err)
+	assert.Equal(t, "ALICE_MIGRATE_DATABASE_URL already contains a password; remove it or remove ALICE_MIGRATE_DATABASE_PASSWORD_FILE", err.Error())
+	assert.NotContains(t, err.Error(), "0wner-pw")
+}
+
+func TestEmptyOrUnreadablePasswordFileIsRefused(t *testing.T) {
+	const canary = "canary-pw-71c4"
+	cases := map[string]struct {
+		vars  map[string]string
+		files map[string]string
+		want  string
+	}{
+		"empty app file": {
+			vars:  map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			files: map[string]string{"/s/app": "\n"},
+			want:  "ALICE_DATABASE_PASSWORD_FILE",
+		},
+		"missing app file": {
+			vars: map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			want: "ALICE_DATABASE_PASSWORD_FILE",
+		},
+		"empty owner file": {
+			vars: map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_MIGRATE_DATABASE_URL": ownerURLNoPassword,
+				"ALICE_MIGRATE_DATABASE_PASSWORD_FILE": "/s/owner"},
+			files: map[string]string{"/s/owner": ""},
+			want:  "ALICE_MIGRATE_DATABASE_PASSWORD_FILE",
+		},
+		"unreadable owner file": {
+			vars: map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_MIGRATE_DATABASE_URL": ownerURLNoPassword,
+				"ALICE_MIGRATE_DATABASE_PASSWORD_FILE": "/s/owner"},
+			want: "ALICE_MIGRATE_DATABASE_PASSWORD_FILE",
+		},
+		"file without a URL": {
+			vars:  map[string]string{"ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			files: map[string]string{"/s/app": canary},
+			want:  "ALICE_DATABASE_URL",
+		},
+		"owner file without an owner URL": {
+			vars:  map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_MIGRATE_DATABASE_PASSWORD_FILE": "/s/owner"},
+			files: map[string]string{"/s/owner": canary},
+			want:  "ALICE_MIGRATE_DATABASE_URL",
+		},
+		"unreadable for this user": {
+			vars: map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			want: "ALICE_DATABASE_PASSWORD_FILE names /s/app, which this user may not read",
+		},
+		"URL without a user": {
+			vars:  map[string]string{"ALICE_DATABASE_URL": "postgres://postgres:5432/alice", "ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			files: map[string]string{"/s/app": canary},
+			want:  "ALICE_DATABASE_URL names no user",
+		},
+		"password in the query": {
+			vars:  map[string]string{"ALICE_DATABASE_URL": appURLNoPassword + "&Password=" + canary, "ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			files: map[string]string{"/s/app": "other"},
+			want:  "ALICE_DATABASE_URL already contains a password",
+		},
+		"not a postgres URL": {
+			vars:  map[string]string{"ALICE_DATABASE_URL": "mysql://alice_app@db/alice", "ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			files: map[string]string{"/s/app": canary},
+			want:  "ALICE_DATABASE_URL is not a valid postgres:// URL",
+		},
+		"unparseable URL": {
+			vars:  map[string]string{"ALICE_DATABASE_URL": "postgres://alice_app@host:notaport/" + canary, "ALICE_DATABASE_PASSWORD_FILE": "/s/app"},
+			files: map[string]string{"/s/app": canary},
+			want:  "ALICE_DATABASE_URL",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			read := files(tc.files)
+			if name == "unreadable for this user" {
+				read = func(name string) ([]byte, error) {
+					return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+				}
+			}
+			_, err := config.LoadWith(env(tc.vars), read)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+			assert.NotContains(t, err.Error(), canary)
+		})
+	}
+
+	// The reader's own error can quote what it read; it is never passed on.
+	_, err := config.LoadWith(env(map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_DATABASE_PASSWORD_FILE": "/s/app"}),
+		func(string) ([]byte, error) { return nil, errors.New("read failed near " + canary) })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ALICE_DATABASE_PASSWORD_FILE")
+	assert.NotContains(t, err.Error(), canary)
+}
+
+// Load keeps its signature and reads real files (M-11).
+func TestLoadReadsThePasswordFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "db_app_password")
+	require.NoError(t, os.WriteFile(path, []byte("s3cret-pw\n"), 0o600))
+	c, err := config.Load(env(map[string]string{"ALICE_DATABASE_URL": appURLNoPassword, "ALICE_DATABASE_PASSWORD_FILE": path}))
+	require.NoError(t, err)
+	assert.Equal(t, "s3cret-pw", passwordOf(t, c.DatabaseURL))
+}
+
+func TestMigrateMode(t *testing.T) {
+	c, err := config.Load(env(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "on-start", c.Migrate)
+
+	for _, v := range []string{"on-start", " external "} {
+		c, err = config.Load(env(map[string]string{"ALICE_MIGRATE": v}))
+		require.NoError(t, err)
+		assert.Equal(t, strings.TrimSpace(v), c.Migrate)
+	}
+	for _, v := range []string{"External", "never", "true"} {
+		_, err = config.Load(env(map[string]string{"ALICE_MIGRATE": v}))
+		require.Error(t, err, v)
+		assert.Contains(t, err.Error(), "ALICE_MIGRATE")
+	}
+}
+
+func TestTimeZone(t *testing.T) {
+	c, err := config.Load(env(nil))
+	require.NoError(t, err)
+	require.NotNil(t, c.TZ)
+	assert.Equal(t, time.UTC, c.TZ)
+
+	c, err = config.Load(env(map[string]string{"ALICE_TZ": "Europe/Istanbul"}))
+	require.NoError(t, err)
+	assert.Equal(t, "Europe/Istanbul", c.TZ.String())
+	assert.Contains(t, c.String(), "Europe/Istanbul")
+
+	for _, v := range []string{"Mars/Olympus", "Local", "../../etc/passwd"} {
+		_, err = config.Load(env(map[string]string{"ALICE_TZ": v}))
+		require.Error(t, err, v)
+		assert.Contains(t, err.Error(), "ALICE_TZ")
+	}
+}
+
+func TestBackupDirDefault(t *testing.T) {
+	c, err := config.Load(env(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "/opt/alice/backups", c.BackupDir)
+
+	c, err = config.Load(env(map[string]string{"ALICE_BACKUP_DIR": " /srv/backups "}))
+	require.NoError(t, err)
+	assert.Equal(t, "/srv/backups", c.BackupDir)
+	assert.Contains(t, c.String(), "/srv/backups")
 }

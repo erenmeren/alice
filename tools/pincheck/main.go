@@ -17,7 +17,10 @@
 //     stage. "scratch" passes. FROM ${ARG} is resolved through the ARG default and fails when it
 //     has none.
 //   - Every Compose file (docker-compose*.yml, compose*.yml, and any other YAML file whose top-level
-//     services: entries carry image: or build:): image: of a service without build:.
+//     services: entries carry image: or build:): image: of a service without build:. One exception:
+//     in deploy/release/docker-compose.yml only, an image that is exactly ${ALICE_IMAGE} or
+//     ${POSTGRES_IMAGE} passes, because the release scripts load both images from the signed package
+//     and compare their IDs with RELEASE before any start (R43 row 22).
 //   - The Makefile and shell scripts: the IMAGE operand of every docker run / docker create /
 //     docker pull (options skipped, continuation lines joined, a trailing # comment ignored) must be
 //     pinned (@sha256:),
@@ -522,6 +525,12 @@ func resolveArgs(image string, args map[string]string) (string, bool) {
 	return res, ok
 }
 
+// releaseCompose is the production Compose file; its images are named by the two variables of
+// releaseImageVars, which install.sh and alice-update.sh set to the images they loaded and verified.
+const releaseCompose = "deploy/release/docker-compose.yml"
+
+var releaseImageVars = map[string]bool{"${ALICE_IMAGE}": true, "${POSTGRES_IMAGE}": true}
+
 type composeSvc struct {
 	Image string `yaml:"image"`
 	Build any    `yaml:"build"`
@@ -542,6 +551,9 @@ func checkCompose(path, rel string) []string {
 	for name, svc := range doc.Services {
 		if svc.Build != nil || svc.Image == "" {
 			continue // built here, or no image at all (an override file)
+		}
+		if rel == releaseCompose && releaseImageVars[svc.Image] {
+			continue // loaded from the signed package and checked by ID (R43 row 22)
 		}
 		if !digestRe.MatchString(svc.Image) {
 			out = append(out, fmt.Sprintf("%s: service %s image %s is not pinned by @sha256:<digest>", rel, name, svc.Image))

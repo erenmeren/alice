@@ -36,13 +36,14 @@ RUN sum() { awk -v f="alice-helper-linux-$1" '$2 == f { print $1 }' /out/helper/
  && CGO_ENABLED=0 go build -trimpath -tags "${GO_TAGS}" \
     -ldflags "-s -w -X alice/internal/version.Version=${VERSION} -X alice/internal/version.Commit=${COMMIT} -X alice/internal/version.BuildTime=${BUILD_TIME} -X alice/internal/providers/linuxssh.helperSHA256LinuxAMD64=$a -X alice/internal/providers/linuxssh.helperSHA256LinuxARM64=$b" \
     -o /out/alice ./cmd/alice \
- && mkdir -p /out/keys /out/opt-alice/state && chmod 0700 /out/keys /out/opt-alice/state
+ && mkdir -p /out/keys /out/opt-alice/state /out/opt-alice/backups && chmod 0700 /out/keys /out/opt-alice/state /out/opt-alice/backups
 
 FROM gcr.io/distroless/static-debian12:latest@sha256:d75cdd72874d4790092fcb1b058493ecf6bb5bf2b2b897045b00ff01d91843f2
 COPY --from=build /out/alice /usr/local/bin/alice
 COPY --from=build --chown=10001:10001 /out/keys /opt/alice/keys
-# The state directory is copied as a subdirectory so it keeps mode 0700 (COPY creates its
-# destination directory 0755, and nothing at runtime tightens the state directory).
+# The state and backups directories are copied as subdirectories so they keep mode 0700 (COPY
+# creates its destination directory 0755, and nothing at runtime tightens them); a named volume
+# mounted there starts with that owner and mode.
 COPY --from=build --chown=10001:10001 /out/opt-alice/ /opt/alice/
 USER 10001:10001
 EXPOSE 8443

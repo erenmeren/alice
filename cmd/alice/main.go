@@ -13,6 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	// The zone database is in the binary: the distroless image has none, and ALICE_TZ needs it.
+	_ "time/tzdata"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/api"
@@ -137,13 +140,38 @@ func migrateWith(ctx context.Context, url string, budget time.Duration) error {
 	return db.Migrate(ctx, pool, migrations.FS)
 }
 
+// migrate needs only the owner connection: the production migrate service gets no application
+// credential (S-37). Without an owner URL it falls back to ALICE_DATABASE_URL, as before.
 func migrate(cfg config.Config) error {
-	if err := cfg.RequireDatabase(); err != nil {
-		return err
+	if cfg.MigrateDatabaseURL == "" {
+		if err := cfg.RequireDatabase(); err != nil {
+			return err
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	return migrateWith(ctx, cfg.MigrationURL(), time.Minute)
+}
+
+// requireCurrentSchema refuses a schema older or newer than the migrations built into this binary.
+func requireCurrentSchema(ctx context.Context, pool *pgxpool.Pool) error {
+	want, err := db.LatestVersion(migrations.FS)
+	if err != nil {
+		return err
+	}
+	have, err := db.SchemaVersion(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if have > want {
+		return fmt.Errorf("database schema is at version %d, newer than this Alice (%d): run the Alice version that "+
+			"migrated it, or restore a backup made by this version", have, want)
+	}
+	if have < want {
+		return fmt.Errorf("database schema is at version %d but this Alice needs %d: run the migrate service first "+
+			"(docker compose run --rm migrate)", have, want)
+	}
+	return nil
 }
 
 func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
@@ -151,16 +179,26 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 	log.Info("starting alice", "version", buildVersion().Version, "config", cfg)
-	if !cfg.SeparateMigrationRole() {
-		log.Warn("ALICE_MIGRATE_DATABASE_URL is not set, so migrations and the application share one database role; " +
-			"the audit log is then protected by database triggers only. Set ALICE_MIGRATE_DATABASE_URL to the owner role.")
-	}
-	if err := migrateWith(ctx, cfg.MigrationURL(), dbStartupBudget); err != nil {
-		return err
+	external := cfg.Migrate == config.MigrateExternal
+	if !external {
+		if !cfg.SeparateMigrationRole() {
+			log.Warn("ALICE_MIGRATE_DATABASE_URL is not set, so migrations and the application share one database role; " +
+				"the audit log is then protected by database triggers only. Set ALICE_MIGRATE_DATABASE_URL to the owner role.")
+		}
+		if err := migrateWith(ctx, cfg.MigrationURL(), dbStartupBudget); err != nil {
+			return err
+		}
 	}
 	pool, err := openDB(ctx, cfg.DatabaseURL, dbStartupBudget)
 	if err != nil {
 		return err
+	}
+	if external {
+		// The migrate service ran before this container (P1-01); serve never opens an owner connection.
+		if err := requireCurrentSchema(ctx, pool); err != nil {
+			pool.Close()
+			return err
+		}
 	}
 	// The pool closes last, within dbCloseBudget (closeWithin below); this covers a start that
 	// fails before the workers run, when nothing can hold a connection.

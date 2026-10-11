@@ -106,6 +106,20 @@ func TestComposeForms(t *testing.T) {
 	assert.Empty(t, messages(t, "other.yml", "services:\n  a:\n    ports: []\n"), "services without image: or build: are not a Compose file")
 }
 
+// M-1: the production compose names its two images by variable; the release scripts load them from
+// the signed package and compare the image IDs with RELEASE before any start (R43 row 22). Only that
+// file, only those two exact variables.
+func TestProductionComposeImageVariables(t *testing.T) {
+	const prod = "deploy/release/docker-compose.yml"
+	assert.Empty(t, messages(t, prod, "services:\n  a:\n    image: ${ALICE_IMAGE}\n  b:\n    image: ${POSTGRES_IMAGE}\n  c:\n    image: \"${ALICE_IMAGE}\"\n"))
+	for _, img := range []string{"${ALICE_IMAGE:-alice:1.0.0}", "${OTHER_IMAGE}", "redis:7", "$ALICE_IMAGE", "${ALICE_IMAGE}-x", "${POSTGRES_IMAGE}:16", "alice:1.0.0"} {
+		assert.Len(t, messages(t, prod, "services:\n  a:\n    image: "+img+"\n"), 1, img)
+	}
+	for _, other := range []string{"deploy/docker-compose.yml", "deploy/release/compose.yml", "release/docker-compose.yml", "deploy/release/x/docker-compose.yml"} {
+		assert.Len(t, messages(t, other, "services:\n  a:\n    image: ${ALICE_IMAGE}\n"), 1, other)
+	}
+}
+
 func TestMakefileAndShellRun(t *testing.T) {
 	vars := "GITLEAKS_IMAGE ?= g:1@" + dg + "\nTRIVY_IMAGE ?= t:1@" + dg + "\n"
 	assert.Empty(t, messages(t, "Makefile", vars+"a:\n\tdocker run --rm \\\n\t  -v x:/y \\\n\t  $(GITLEAKS_IMAGE) git\n\tdocker run alice:$(IMAGE_TAG)\n\t@docker run --rm x@"+dg+" y\n\t# docker run bad:1\n"))

@@ -1,0 +1,160 @@
+# Alice production deployment (Phase 8, R43 row 7). install.sh copies this file to the installation
+# directory (/opt/alice by default) next to .env, which names the project (COMPOSE_PROJECT_NAME) and
+# the two images loaded from the release package. Nothing is pulled: the scripts load the images
+# from the package and compare their IDs with RELEASE before any start (pull_policy: never).
+#
+# Database roles: postgres (superuser, this postgres container only), alice_owner (owns database
+# alice and runs migrations and restores; not a superuser) and alice_app (the running server).
+# The alice service never holds an owner credential: the scripts run the one-shot migrate service
+# before alice starts, and alice refuses a schema older than its own (ALICE_MIGRATE=external).
+#
+# Every password is a file under ./secrets (mode and owner set by install.sh); none is in .env, in
+# an environment variable or in an argument list.
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    pull_policy: never
+    restart: unless-stopped
+    user: "70:70"
+    # terse: no "DETAIL: Key (col)=(value)" with row values in the log a support bundle ships (S-19).
+    command: ["postgres", "-c", "log_error_verbosity=terse", "-c", "password_encryption=scram-sha-256"]
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_postgres_password
+      # initdb's own pg_hba.conf trusts TCP from 127.0.0.1 and ::1; every TCP rule asks for a SCRAM
+      # password instead (S-19). The socket stays trusted for the entrypoint's init scripts.
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+    secrets: [db_postgres_password, db_owner_password, db_app_password]
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+      # 10-alice-roles.sh, run once on an empty data directory (copied there by install.sh).
+      - ./lib/initdb:/docker-entrypoint-initdb.d:ro
+    networks: [backend]
+    read_only: true
+    tmpfs: [/tmp, /var/run/postgresql]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 512
+    healthcheck:
+      # Over TCP: the entrypoint's temporary server (socket only) must not count as ready.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d alice"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+    logging: &logging
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
+
+  # One-shot schema migrations as alice_owner: docker compose run --rm migrate. Never started by up.
+  migrate:
+    image: ${ALICE_IMAGE}
+    pull_policy: never
+    profiles: ["admin"]
+    command: ["migrate"]
+    restart: "no"
+    user: "10001:10001"
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      # sslmode=disable: the connection never leaves the internal backend network.
+      ALICE_MIGRATE_DATABASE_URL: postgres://alice_owner@postgres:5432/alice?sslmode=disable
+      ALICE_MIGRATE_DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
+    secrets: [db_owner_password]
+    networks: [backend]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ulimits: { core: 0 }
+    logging: *logging
+
+  alice:
+    image: ${ALICE_IMAGE}
+    pull_policy: never
+    restart: unless-stopped
+    user: "10001:10001"
+    # Running jobs may finish for up to 60 s after SIGTERM (spec §8.8).
+    stop_grace_period: 90s
+    # Migrations are applied by the migrate service before alice starts; alice only checks the version.
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      ALICE_DATABASE_URL: postgres://alice_app@postgres:5432/alice?sslmode=disable
+      ALICE_DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
+      ALICE_MIGRATE: external
+      ALICE_TLS_HOSTS: ${ALICE_TLS_HOSTS:-}
+      ALICE_TZ: ${ALICE_TZ:-UTC}
+      ALICE_STATE_DIR: /opt/alice/state
+      ALICE_BACKUP_DIR: /opt/alice/backups
+    secrets: [db_app_password]
+    ports:
+      - "${ALICE_BIND:-0.0.0.0}:${ALICE_PORT:-443}:8443"
+    volumes:
+      - ./keys:/opt/alice/keys
+      - ./state:/opt/alice/state
+      - ./backups:/opt/alice/backups
+    networks: [frontend, backend]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 2
+    mem_limit: 1g
+    pids_limit: 512
+    # No core dumps: a crash must never write key material to disk.
+    ulimits: { core: 0 }
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/alice", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    logging: *logging
+
+  # Operator commands (backup, restore, setup-token, ...): docker compose run --rm alice-admin <args>.
+  alice-admin:
+    image: ${ALICE_IMAGE}
+    pull_policy: never
+    profiles: ["admin"]
+    entrypoint: ["/usr/local/bin/alice"]
+    restart: "no"
+    user: "10001:10001"
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      ALICE_DATABASE_URL: postgres://alice_app@postgres:5432/alice?sslmode=disable
+      ALICE_DATABASE_PASSWORD_FILE: /run/secrets/db_app_password
+      ALICE_MIGRATE_DATABASE_URL: postgres://alice_owner@postgres:5432/alice?sslmode=disable
+      ALICE_MIGRATE_DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
+      ALICE_KEYS_DIR: /opt/alice/keys
+      ALICE_STATE_DIR: /opt/alice/state
+      ALICE_BACKUP_DIR: /opt/alice/backups
+      ALICE_TZ: ${ALICE_TZ:-UTC}
+    secrets: [db_app_password, db_owner_password]
+    volumes:
+      - ./keys:/opt/alice/keys
+      - ./state:/opt/alice/state
+      - ./backups:/opt/alice/backups
+    networks: [backend]
+    read_only: true
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    ulimits: { core: 0 }
+    logging: *logging
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+
+secrets:
+  db_postgres_password:
+    file: ./secrets/db_postgres_password
+  db_owner_password:
+    file: ./secrets/db_owner_password
+  db_app_password:
+    file: ./secrets/db_app_password

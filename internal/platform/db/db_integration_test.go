@@ -205,3 +205,43 @@ func TestOpenFailsFastOnMissingDatabase(t *testing.T) {
 	assert.Contains(t, err.Error(), "does not exist")
 	assert.Less(t, time.Since(start), 5*time.Second, "a missing database must not be retried")
 }
+
+// MigrateTo stops at the named version; SchemaVersion reads what is applied (0 before goose has
+// run at all); Migrate then brings the schema to LatestVersion.
+func TestMigrateToStopsAtVersion(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := db.Open(ctx, freshDatabaseURL(t))
+	require.NoError(t, err)
+	defer pool.Close()
+
+	v, err := db.SchemaVersion(ctx, pool)
+	require.NoError(t, err)
+	assert.Zero(t, v, "a database goose never touched")
+
+	require.NoError(t, db.MigrateTo(ctx, pool, migrations.FS, 10))
+	v, err = db.SchemaVersion(ctx, pool)
+	require.NoError(t, err)
+	assert.Equal(t, int64(10), v)
+
+	latest, err := db.LatestVersion(migrations.FS)
+	require.NoError(t, err)
+	require.Greater(t, latest, int64(10))
+	require.NoError(t, db.Migrate(ctx, pool, migrations.FS))
+	v, err = db.SchemaVersion(ctx, pool)
+	require.NoError(t, err)
+	assert.Equal(t, latest, v)
+}
+
+// SchemaVersion reports a failed read instead of guessing a version.
+func TestSchemaVersionReportsAnUnreachableDatabase(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool, err := db.Open(ctx, freshDatabaseURL(t))
+	require.NoError(t, err)
+	pool.Close()
+	_, err = db.SchemaVersion(ctx, pool)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read the schema version")
+	require.Error(t, db.MigrateTo(ctx, pool, migrations.FS, 1))
+}
