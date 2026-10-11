@@ -53,6 +53,10 @@ func (s *Service) SetRecoveryPassphrase(ctx context.Context, p auth.Principal, m
 		return v
 	case pass != norm.NFKC.String(confirm):
 		return ErrPassphraseMismatch
+	case PassphraseStrength(passphrase) == StrengthFair:
+		// Rated on the typed text, as the browser's meter rates it; refused before any key is generated, so
+		// neither backup.key nor backup.sender exists afterwards.
+		return ErrPassphraseTooWeak
 	}
 	if set, err := hasSetting(ctx, s.pool, keyBackupKey); err != nil {
 		return err

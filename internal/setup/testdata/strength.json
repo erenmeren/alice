@@ -1,0 +1,202 @@
+[
+  {
+    "passphrase": "",
+    "strength": "tooShort",
+    "note": "empty"
+  },
+  {
+    "passphrase": "short",
+    "strength": "tooShort",
+    "note": "five characters"
+  },
+  {
+    "passphrase": "abcdefghijklmno",
+    "strength": "tooShort",
+    "note": "15 characters"
+  },
+  {
+    "passphrase": "ığdırığdırığdır",
+    "strength": "tooShort",
+    "note": "15 Turkish letters"
+  },
+  {
+    "passphrase": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "strength": "tooShort",
+    "note": "15 emoji (surrogate pairs in JavaScript) are 15 characters"
+  },
+  {
+    "passphrase": "ığdırığdırığdırı",
+    "strength": "fair",
+    "note": "16 letters, counted as runes, not bytes"
+  },
+  {
+    "passphrase": "aaaaaaaaaaaaaaaa",
+    "strength": "fair",
+    "note": "16 characters, one class"
+  },
+  {
+    "passphrase": "AAAAAAAAAAAAAAAA",
+    "strength": "fair",
+    "note": "upper case only"
+  },
+  {
+    "passphrase": "1234567890123456",
+    "strength": "fair",
+    "note": "digits only"
+  },
+  {
+    "passphrase": "!!!!!!!!!!!!!!!!",
+    "strength": "fair",
+    "note": "symbols only"
+  },
+  {
+    "passphrase": "                ",
+    "strength": "fair",
+    "note": "16 spaces: no class, one (empty) word"
+  },
+  {
+    "passphrase": "ğüşöçıİğüşöçıİğü",
+    "strength": "fair",
+    "note": "Turkish letters are one rune each and count as 'other'"
+  },
+  {
+    "passphrase": "ğüşöçıİğüşöçıİğüşöçıİ",
+    "strength": "good",
+    "note": "21 Turkish letters"
+  },
+  {
+    "passphrase": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "strength": "fair",
+    "note": "16 emoji runes"
+  },
+  {
+    "passphrase": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+    "strength": "good",
+    "note": "20 emoji runes"
+  },
+  {
+    "passphrase": "éééééééé",
+    "strength": "fair",
+    "note": "a combining accent is its own rune"
+  },
+  {
+    "passphrase": "ÄÖÜäöüßÄÖÜäöüßÄÖ",
+    "strength": "fair",
+    "note": "non-ASCII letters are not [a-zA-Z]"
+  },
+  {
+    "passphrase": "  aaaaaaaaaaaaaa  ",
+    "strength": "fair",
+    "note": "leading and trailing spaces count as characters, not as word breaks"
+  },
+  {
+    "passphrase": "    a b c d     ",
+    "strength": "good",
+    "note": "four words after trimming"
+  },
+  {
+    "passphrase": "one two three fo",
+    "strength": "good",
+    "note": "16 characters, four words"
+  },
+  {
+    "passphrase": "one two threeeee",
+    "strength": "fair",
+    "note": "three words"
+  },
+  {
+    "passphrase": "Abcdefgh12345678",
+    "strength": "good",
+    "note": "16 characters, three classes"
+  },
+  {
+    "passphrase": "Aa1!Aa1!Aa1!Aa1!",
+    "strength": "good",
+    "note": "16 characters, four classes"
+  },
+  {
+    "passphrase": "Aa1!Aa1!Aa1!Aa1!Aa1!",
+    "strength": "strong",
+    "note": "20 characters, four classes"
+  },
+  {
+    "passphrase": "abcdefghijklmnopqrst",
+    "strength": "good",
+    "note": "20 characters, one class"
+  },
+  {
+    "passphrase": "aaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "strength": "good",
+    "note": "27 characters, one class"
+  },
+  {
+    "passphrase": "abcdefghijklmnopqrstuvwxyzab",
+    "strength": "strong",
+    "note": "28 characters, one class"
+  },
+  {
+    "passphrase": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "strength": "strong",
+    "note": "30 characters"
+  },
+  {
+    "passphrase": "correct horse battery staple",
+    "strength": "strong",
+    "note": "four words, 28 characters"
+  },
+  {
+    "passphrase": "Tr0ub4dor&3-Tr0ub4dor",
+    "strength": "strong",
+    "note": "21 characters, four classes"
+  },
+  {
+    "passphrase": "kırmızı-kedi-mavi-deniz-2026",
+    "strength": "strong",
+    "note": "the e2e fixture"
+  },
+  {
+    "passphrase": "uzun ve güvenli bir kurtarma parolası",
+    "strength": "strong",
+    "note": "the setup test fixture"
+  },
+  {
+    "passphrase": "Şifre Çözme 2026",
+    "strength": "good",
+    "note": "Ş and Ç are 'other', not upper case"
+  },
+  {
+    "passphrase": "a\tb\tc\tddddddddddd",
+    "strength": "good",
+    "note": "tabs separate words"
+  },
+  {
+    "passphrase": "a\nb\nc\nddddddddddddd",
+    "strength": "good",
+    "note": "line feeds separate words"
+  },
+  {
+    "passphrase": "a b c dddddddddddddd",
+    "strength": "strong",
+    "note": "no-break spaces separate words and are no class"
+  },
+  {
+    "passphrase": "abcdddddddddddddd",
+    "strength": "good",
+    "note": "U+0085 is not white space in JavaScript: no word break, class 'other'"
+  },
+  {
+    "passphrase": "a﻿b﻿c﻿dddddddddddddd",
+    "strength": "strong",
+    "note": "U+FEFF is white space in JavaScript"
+  },
+  {
+    "passphrase": "a　b　c　dddddddddddddd",
+    "strength": "strong",
+    "note": "ideographic spaces separate words"
+  },
+  {
+    "passphrase": "a b c dddddddddddddd",
+    "strength": "strong",
+    "note": "line and paragraph separators and the narrow no-break space"
+  }
+]

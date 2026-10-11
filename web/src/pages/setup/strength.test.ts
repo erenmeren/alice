@@ -1,4 +1,7 @@
-import { passphraseStrength } from './strength';
+import { readRepoFile } from '../../test/goSources';
+import { passphraseStrength, type Strength } from './strength';
+
+type Vector = { passphrase: string; strength: Strength; note: string };
 
 describe('passphraseStrength', () => {
   it('rejects fewer than 16 characters, counting letters not bytes', () => {
@@ -10,5 +13,11 @@ describe('passphraseStrength', () => {
     expect(passphraseStrength('abcdefghijklmnopqrst')).toBe('good');
     expect(passphraseStrength('correct horse battery staple')).toBe('strong');
     expect(passphraseStrength('Tr0ub4dor&3-Tr0ub4dor')).toBe('strong');
+  });
+  it('rates the shared vectors exactly like the server', () => {
+    // internal/setup/testdata/strength.json also drives the Go test of setup.PassphraseStrength, which refuses "fair".
+    const vectors = JSON.parse(readRepoFile('internal/setup/testdata/strength.json')) as Vector[];
+    expect(vectors.length).toBeGreaterThanOrEqual(30);
+    for (const v of vectors) expect([v.note, passphraseStrength(v.passphrase)]).toEqual([v.note, v.strength]);
   });
 });

@@ -301,7 +301,8 @@ func TestRecoveryPassphraseAndCompletion(t *testing.T) {
 
 	st, err = e.setup.Complete(e.ctx, p, ip1)
 	require.NoError(t, err)
-	assert.Equal(t, setup.Status{AdminExists: true, RecoveryPassphraseSet: true, LicenseChosen: true, Completed: true, DefaultLocale: "tr"}, st)
+	assert.Equal(t, setup.Status{AdminExists: true, RecoveryPassphraseSet: true, LicenseChosen: true, Completed: true, DefaultLocale: "tr",
+		NextStep: setup.StepDone}, st)
 	_, err = e.setup.Complete(e.ctx, p, ip1)
 	require.NoError(t, err, "completing twice is harmless")
 
