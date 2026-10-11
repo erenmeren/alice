@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -33,6 +34,7 @@ type fakeBackup struct {
 	opened   []string
 	CreateFn func(ctx context.Context, in backup.CreateInput) (backup.Info, error)
 	saved    backup.Schedule
+	openWait time.Duration // Open hashes the whole file before it answers (backup/list.go)
 }
 
 func newFakeBackup(t *testing.T) *fakeBackup {
@@ -59,6 +61,7 @@ func (f *fakeBackup) List(context.Context) ([]backup.Info, error) {
 func (f *fakeBackup) Open(_ context.Context, name string) (*os.File, backup.Info, error) {
 	f.record()
 	f.opened = append(f.opened, name)
+	time.Sleep(f.openWait)
 	if !backup.ValidName(name) {
 		return nil, backup.Info{}, backup.ErrNotFound
 	}
@@ -292,6 +295,71 @@ func TestBackupDownloadNameIsCheckedFirst(t *testing.T) {
 	assert.Equal(t, 1, fa.Count("backup.downloaded"))
 }
 
+// A backup made now and a download (whose Open hashes the file first) outlive the server's write timeout: both
+// handlers extend the response deadline before the slow step (review M-1).
+func TestBackupRoutesOutliveTheServerWriteTimeout(t *testing.T) {
+	d, f := phase8Deps(t)
+	f.backup.openWait = 400 * time.Millisecond
+	f.backup.CreateFn = func(_ context.Context, in backup.CreateInput) (backup.Info, error) {
+		time.Sleep(400 * time.Millisecond)
+		return backup.Info{Name: downloadName, Kind: in.Kind, Size: 12, Check: backup.CheckOK}, nil
+	}
+	s := newServer(d)
+	srv := httptest.NewUnstartedServer(s.handler(s.apiRoutes()))
+	srv.Config.WriteTimeout = 100 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+	for _, rc := range []struct {
+		method, path string
+		want         int
+	}{
+		{http.MethodPost, "/api/v1/backups", http.StatusCreated},
+		{http.MethodGet, "/api/v1/backups/" + downloadName + "/download", http.StatusOK},
+	} {
+		req, err := http.NewRequestWithContext(t.Context(), rc.method, srv.URL+rc.path, nil)
+		require.NoError(t, err)
+		res, err := srv.Client().Do(as(req, "admin-stepup"))
+		require.NoError(t, err, rc.path)
+		body, err := io.ReadAll(res.Body)
+		require.NoError(t, err, rc.path)
+		require.NoError(t, res.Body.Close())
+		assert.Equal(t, rc.want, res.StatusCode, rc.path)
+		assert.NotEmpty(t, body, rc.path)
+	}
+}
+
+// Each of the four 5-a-minute actions has its own bucket per user (review M-4): forwarding tests or HTTPS uploads
+// never block a backup download, and the other way round. The backup download keeps the private-key download bucket.
+func TestPhase8RateLimitBucketsAreSeparate(t *testing.T) {
+	calls := phase8Calls()
+	limited := map[string]string{
+		"download":   "GET /api/v1/backups/" + downloadName + "/download",
+		"backup now": "POST /api/v1/backups",
+		"https":      "PUT /api/v1/settings/https",
+		"fwd test":   "POST /api/v1/settings/audit-forwarding/test",
+	}
+	pattern := func(key string) string { return strings.Replace(key, downloadName, "{name}", 1) }
+	for name, key := range limited {
+		d, _ := phase8Deps(t)
+		s := newServer(d)
+		h := s.handler(s.apiRoutes())
+		send := func(key string) int {
+			method, target, _ := strings.Cut(key, " ")
+			rc := calls[pattern(key)]
+			return callWith(h, method, target, "admin-stepup", rc.body, rc.hdr).Code
+		}
+		for range 5 {
+			require.NotEqual(t, http.StatusTooManyRequests, send(key), name)
+		}
+		assert.Equal(t, http.StatusTooManyRequests, send(key), "%s: the sixth in a minute", name)
+		for other, okey := range limited {
+			if other != name {
+				assert.NotEqual(t, http.StatusTooManyRequests, send(okey), "%s spent %s's bucket", name, other)
+			}
+		}
+	}
+}
+
 func TestAttachmentHeader(t *testing.T) {
 	assert.Equal(t, `attachment; filename="a.alicebak"`, attachment("a.alicebak"))
 	assert.Equal(t, `attachment; filename*=utf-8''%C3%A7%22.alicebak`, attachment(`ç".alicebak`))
@@ -450,6 +518,13 @@ func TestDashboardPhase8SectionsAreRoleFiltered(t *testing.T) {
 	operator := get("operator")
 	assert.NotContains(t, operator, "backup")
 	assert.NotContains(t, operator, "setup_checklist")
+	// A token is never a person at the dashboard: an Administrator's or an Auditor's read token gets neither section
+	// (backup.manage and settings.manage, which show these facts elsewhere, have no token scope).
+	for _, id := range []string{"alice_read_admin", "alice_read_auditor"} {
+		tok := get(id)
+		assert.NotContains(t, tok, "backup", id)
+		assert.NotContains(t, tok, "setup_checklist", id)
+	}
 }
 
 // The next scheduled backup is the next wall-clock time in the schedule's zone, across daylight saving too.

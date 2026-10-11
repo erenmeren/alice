@@ -23,7 +23,7 @@ import (
 func (s *server) backupRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/backups", perm: rbac.BackupManage, handler: s.listBackups},
-		{method: http.MethodPost, pattern: "/api/v1/backups", perm: rbac.BackupManage, limit: limitDownload, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/backups", perm: rbac.BackupManage, limit: limitBackupNow, lic: license.ClassAlways,
 			handler: s.createBackup},
 		{method: http.MethodGet, pattern: "/api/v1/backups/{name}/download", perm: rbac.BackupManage, limit: limitDownload, getOnly: true,
 			handler: s.downloadBackup},
@@ -33,8 +33,15 @@ func (s *server) backupRoutes() []route {
 	}
 }
 
-// backupDownloadTimeout bounds one download: a backup can be large, longer than the server's write timeout.
-const backupDownloadTimeout = time.Hour
+// backupResponseTimeout bounds the answer of a backup made now and of a download: a backup can be large, so making it,
+// hashing it (Open) and sending it take longer than the server's write timeout.
+const backupResponseTimeout = time.Hour
+
+// extendResponseDeadline gives a backup route its own write deadline. It is set first, before the slow step: the
+// server's deadline counts from the request.
+func extendResponseDeadline(w http.ResponseWriter) {
+	_ = http.NewResponseController(w).SetWriteDeadline(clock.Real{}.Now().Add(backupResponseTimeout))
+}
 
 // backupsConfigured reports whether backups are set up: the recovery passphrase exists (R4).
 func (s *server) backupsConfigured(ctx context.Context) (bool, error) {
@@ -87,6 +94,7 @@ func (s *server) listBackups(w http.ResponseWriter, r *http.Request) {
 // createBackup makes a manual backup now. It runs to its end even when the browser goes away: a backup that stopped
 // halfway would only leave a failure behind.
 func (s *server) createBackup(w http.ResponseWriter, r *http.Request) {
+	extendResponseDeadline(w)
 	if !s.decodeExactOptional(w, r, &struct{}{}, maxActionBody) {
 		return
 	}
@@ -108,6 +116,7 @@ func (s *server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, ErrBackupNotFound)
 		return
 	}
+	extendResponseDeadline(w)
 	f, info, err := s.deps.Backup.Open(r.Context(), name)
 	if err != nil {
 		s.fail(w, r, err)
@@ -127,7 +136,6 @@ func (s *server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	if fi, err := f.Stat(); err == nil {
 		h.Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
 	}
-	_ = http.NewResponseController(w).SetWriteDeadline(clock.Real{}.Now().Add(backupDownloadTimeout))
 	w.WriteHeader(http.StatusOK)
 	if _, err := io.Copy(w, f); err != nil {
 		s.deps.Log.Warn("a backup download stopped before its end", "event", "backup.download_incomplete", "request_id", RequestID(r.Context()))

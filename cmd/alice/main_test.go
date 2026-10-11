@@ -115,8 +115,10 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Same(t, svc.sshkeys, d.SSHKeys)
 	assert.Same(t, svc.backup, d.Backup)
 	assert.Same(t, svc.forward, d.Forward)
-	require.IsType(t, httpsInstaller{}, d.TLSStore)
-	assert.Same(t, svc.tlsStore, d.TLSStore.(httpsInstaller).store)
+	require.IsType(t, setup.CertificateInstaller{}, d.TLSStore)
+	assert.Same(t, svc.tlsStore, d.TLSStore.(setup.CertificateInstaller).Store)
+	assert.Same(t, svc.setup, d.TLSStore.(setup.CertificateInstaller).Setup)
+	assert.NotNil(t, d.TLSStore.(setup.CertificateInstaller).Log)
 	svc.sshkeys = nil
 	assert.Nil(t, newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil).SSHKeys,
 		"a nil service stays a nil interface (the key detail then omits the generated-key fields)")

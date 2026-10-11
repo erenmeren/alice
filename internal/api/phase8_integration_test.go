@@ -248,12 +248,13 @@ func TestHTTPSRoutes(t *testing.T) {
 	}
 	expired := s.ca.Issue(pki.Opts{CommonName: "old.example.org", NotBefore: now.Add(-48 * time.Hour), NotAfter: now.Add(-time.Hour)}, now)
 	weak := s.ca.Issue(pki.Opts{CommonName: "weak.example.org", KeyType: pki.RSA1024}, now)
-	pfx := pki.PFX(leaf, s.ca, "right password")
+	const rightPassword, wrongPassword = "pfx-canary-right-Q7v", "pfx-canary-wrong-Q7v"
+	pfx := pki.PFX(leaf, s.ca, rightPassword)
 	for code, body := range map[string]map[string]any{
 		"ALC-TLS-0001": {"cert_pem": string(leaf.FullchainPEM), "key_pem": string(other.KeyPEM)},
 		"ALC-TLS-0002": {"cert_pem": string(expired.FullchainPEM), "key_pem": string(expired.KeyPEM)},
 		"ALC-TLS-0003": {"cert_pem": string(weak.FullchainPEM), "key_pem": string(weak.KeyPEM)},
-		"ALC-TLS-0004": {"pfx_base64": base64.StdEncoding.EncodeToString(pfx), "pfx_password": "wrong password"},
+		"ALC-TLS-0004": {"pfx_base64": base64.StdEncoding.EncodeToString(pfx), "pfx_password": wrongPassword},
 		"ALC-TLS-0005": {"cert_pem": "not a certificate", "key_pem": "nor a key"},
 	} {
 		requireError(t, put(body), http.StatusUnprocessableEntity, code)
@@ -284,15 +285,39 @@ func TestHTTPSRoutes(t *testing.T) {
 	require.NoError(t, conn.Close())
 
 	// A PFX with the right password.
-	rec = put(map[string]any{"pfx_base64": base64.StdEncoding.EncodeToString(pfx), "pfx_password": "right password"})
+	rec = put(map[string]any{"pfx_base64": base64.StdEncoding.EncodeToString(pfx), "pfx_password": rightPassword})
 	requireStatus(t, rec, http.StatusOK)
 
-	// The key never leaves: no answer and no audit row holds it.
+	// The key and the PFX passwords never leave: no answer, no audit row and no log line holds them.
 	keyBody := strings.Split(string(leaf.KeyPEM), "\n")[1]
-	for _, e := range s.recorded() {
-		assert.NotContains(t, string(e.body), keyBody, e.key())
+	for _, canary := range []string{keyBody, keyBody[:20], rightPassword, wrongPassword} {
+		for _, e := range s.recorded() {
+			assert.NotContains(t, string(e.body), canary, e.key())
+		}
+		assert.Zero(t, s.countWhere("audit_log", "details::text LIKE '%"+canary+"%'"))
+		assert.NotContains(t, s.logs.String(), canary)
 	}
-	assert.Zero(t, s.countWhere("audit_log", "details::text LIKE '%"+keyBody[:20]+"%'"))
+}
+
+// The shipped installer (setup.CertificateInstaller): when the database refuses the record of an installed
+// certificate twice, the new certificate stays in use, the answer is a 500 and the gap is logged with fixed labels
+// (event=https.audit_failed, the fingerprint), never the key.
+func TestHTTPSReplacementWhoseRecordFailsIsLogged(t *testing.T) {
+	s, c, admin := installed(t)
+	s.stepUp(c, admin)
+	leaf := s.ca.Issue(pki.Opts{CommonName: "www.example.org", SANs: []string{"www.example.org"}}, s.clock.Now())
+	_, err := s.db.Owner.Exec(context.Background(), "REVOKE INSERT ON settings FROM alice_app")
+	require.NoError(t, err)
+	rec := c.do(http.MethodPut, "/api/v1/settings/https", map[string]any{"cert_pem": string(leaf.FullchainPEM), "key_pem": string(leaf.KeyPEM)})
+	requireStatus(t, rec, http.StatusInternalServerError)
+	info := s.tlsStore.Info()
+	assert.False(t, info.Temporary, "the pair was live before the record")
+	assert.Zero(t, s.countWhere("audit_log", "action = 'https.certificate_replaced'"))
+	logs := s.logs.String()
+	assert.Contains(t, logs, "https.audit_retry")
+	assert.Contains(t, logs, "https.audit_failed")
+	assert.Contains(t, logs, info.FingerprintSHA256)
+	assert.NotContains(t, logs, strings.Split(string(leaf.KeyPEM), "\n")[1])
 }
 
 func TestWizardHTTPSAndMailRoutes(t *testing.T) {
@@ -350,6 +375,9 @@ func TestForwardingRoutes(t *testing.T) {
 	requireError(t, test(noCA), http.StatusBadGateway, "ALC-AUD-0004")
 	requireError(t, test(map[string]any{"enabled": true, "host": "169.254.169.254", "port": port, "transport": "tls"}),
 		http.StatusUnprocessableEntity, "ALC-AUD-0002")
+	rec = c.do(http.MethodPut, "/api/v1/settings/audit-forwarding", map[string]any{"enabled": true, "host": "169.254.169.254",
+		"port": port, "transport": "tls"}, func(r *http.Request) { r.Header.Set("If-Match", `"1"`) })
+	requireError(t, rec, http.StatusUnprocessableEntity, "ALC-AUD-0002")
 	fake.Down()
 	requireError(t, test(stored), http.StatusBadGateway, "ALC-AUD-0003")
 }

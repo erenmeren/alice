@@ -21,7 +21,6 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 	"github.com/stretchr/testify/require"
@@ -303,29 +302,6 @@ func (b stackBackup) Open(ctx context.Context, name string) (*os.File, backup.In
 	return b.BackupService.Open(ctx, name)
 }
 
-// stackHTTPS is cmd/alice's httpsInstaller over the stack's store: install, then record the wizard's choice and the
-// audit row in one transaction.
-type stackHTTPS struct{ s *stack }
-
-func (h stackHTTPS) Info() tlscert.Info { return h.s.tlsStore.Info() }
-
-func (h stackHTTPS) Install(ctx context.Context, p auth.Principal, m auth.Meta, u tlscert.Upload) (tlscert.Info, error) {
-	info, err := h.s.tlsStore.Install(u)
-	if err != nil {
-		return tlscert.Info{}, err
-	}
-	err = db.InTx(ctx, h.s.db.App, func(tx pgx.Tx) error {
-		if err := h.s.setup.RecordCertificateUploaded(ctx, tx, p); err != nil {
-			return err
-		}
-		_, err := h.s.auditLog.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "https.certificate_replaced", ObjectType: "certificate",
-			ObjectID: "https", Result: audit.Success, Details: map[string]string{"subject": info.Subject,
-				"not_after": info.NotAfter.UTC().Format(time.RFC3339), "fingerprint": info.FingerprintSHA256}})
-		return err
-	})
-	return info, err
-}
-
 // newRunner builds a job runner with the target and deployment handlers, the way cmd/alice does
 // (the sweep of unfinished deployments is driven by the tests). A second runner with its own worker
 // name and a heartbeat that never beats on the fake clock stands for a process that dies.
@@ -375,7 +351,7 @@ func (s *stack) deps() Deps {
 		SSO:            s.sso,
 		Backup:         stackBackup{BackupService: s.backup, s: s},
 		Forward:        s.forward,
-		TLSStore:       stackHTTPS{s: s},
+		TLSStore:       setup.CertificateInstaller{Store: s.tlsStore, Setup: s.setup, Log: logging.New(s.logs, slog.LevelDebug)},
 		TrustedProxies: s.trusted,
 	}
 }

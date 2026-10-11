@@ -272,8 +272,8 @@ type ForwardService interface {
 
 // HTTPSService is Alice's HTTPS certificate (C11, Phase 8): what the listener serves, and the installation of an
 // uploaded pair. Install puts the pair in use (tlscert.Store.Install) and only then records it: the wizard's HTTPS
-// choice (setup.RecordCertificateUploaded) and the https.certificate_replaced audit row, in one transaction (cmd/alice
-// wires it; the HTTP layer holds no database pool).
+// choice and the https.certificate_replaced audit row, in one transaction, retried once and logged when it fails
+// (setup.CertificateInstaller, which cmd/alice and the integration stack both wire; the HTTP layer holds no pool).
 type HTTPSService interface {
 	Info() tlscert.Info
 	Install(ctx context.Context, p auth.Principal, m auth.Meta, u tlscert.Upload) (tlscert.Info, error)
@@ -320,10 +320,15 @@ const (
 	limitLogin                          // 10 per minute per IP (password and setup-code guessing)
 	limitMFA                            // 5 per minute per IP (verification codes)
 	limitHealth                         // 60 per minute per IP in a bucket of its own (public /healthz, AUD-16)
-	limitDownload                       // 5 per minute per user: private key downloads (SEC-022, R41 row 5)
+	limitDownload                       // 5 per minute per user: private key and backup downloads (SEC-022, R41 row 5)
 	limitTestMail                       // 5 per minute per user: test e-mails (C13)
 	limitExport                         // 10 per minute per user or token: CSV exports (C13)
 	limitOIDCCallback                   // 10 per minute per binding cookie: the identity provider's redirect back (S-11)
+	// C12's limitDownload (5 per minute per user) for the Phase 8 actions that send no file, each in a bucket of its own
+	// so that one never blocks another or a download (Task 9 review M-4).
+	limitBackupNow   // a backup made now
+	limitHTTPSUpload // an HTTPS certificate upload
+	limitForwardTest // a test message to the audit forwarding server
 )
 
 // route is one documented operation. The route table is the single source of
@@ -363,6 +368,8 @@ type server struct {
 	// testMails: test e-mails per user: 5/min; export: CSV exports per user or token: 10/min (C13).
 	testMails *ratelimit.Limiter
 	export    *ratelimit.Limiter
+	// actions: the Phase 8 actions of C12's limitDownload that send no file, one 5/min-per-user bucket each.
+	actions map[limitClass]*ratelimit.Limiter
 	// oidcCallbacks: identity provider callbacks per binding cookie: 10/min (S-11: not per address, so a company
 	// behind one address is not limited to a few sign-ins a minute).
 	oidcCallbacks *ratelimit.Limiter
@@ -406,6 +413,11 @@ func newServer(d Deps) *server {
 		export:    ratelimit.New(d.Clock, 10, time.Minute),
 
 		oidcCallbacks: ratelimit.New(d.Clock, 10, time.Minute),
+		actions: map[limitClass]*ratelimit.Limiter{
+			limitBackupNow:   ratelimit.New(d.Clock, 5, time.Minute),
+			limitHTTPSUpload: ratelimit.New(d.Clock, 5, time.Minute),
+			limitForwardTest: ratelimit.New(d.Clock, 5, time.Minute),
+		},
 
 		denials:   newDenialCoalescer(d.Clock),
 		chainScan: make(chan struct{}, 1),
@@ -446,6 +458,9 @@ func (s *Server) ResetLimits() {
 	s.s.testMails.Reset()
 	s.s.export.Reset()
 	s.s.oidcCallbacks.Reset()
+	for _, l := range s.s.actions {
+		l.Reset()
+	}
 	s.s.denials.reset()
 }
 

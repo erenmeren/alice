@@ -14,7 +14,7 @@ import (
 func (s *server) httpsRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/settings/https", perm: rbac.SettingsManage, handler: s.getHTTPS},
-		{method: http.MethodPut, pattern: "/api/v1/settings/https", perm: rbac.SettingsManage, limit: limitDownload, lic: license.ClassAlways,
+		{method: http.MethodPut, pattern: "/api/v1/settings/https", perm: rbac.SettingsManage, limit: limitHTTPSUpload, lic: license.ClassAlways,
 			handler: s.putHTTPS},
 	}
 }

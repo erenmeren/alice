@@ -29,8 +29,9 @@ func viewer(r *http.Request) reports.Viewer {
 }
 
 // phase8SummaryDTO is the summary with the Phase 8 sections (R43 row 18): the backup state for Administrators and
-// Auditors, the "Finish setting up" checklist for Administrators; absent for every other role, and absent while the
-// Phase 8 services are not wired (Deps.Backup, Deps.TLSStore nil).
+// Auditors, the "Finish setting up" checklist for Administrators, both in a signed-in browser session only; absent for
+// every other role and for every API token, and absent while the Phase 8 services are not wired (Deps.Backup,
+// Deps.TLSStore nil).
 type phase8SummaryDTO struct {
 	dashboardSummaryDTO
 	Backup         *backupStatusDTO   `json:"backup,omitempty"`
@@ -45,7 +46,13 @@ func (s *server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := phase8SummaryDTO{dashboardSummaryDTO: summaryJSON(sum)}
-	role := principalFrom(ctx).Role
+	// The sections are for people (C12: Administrators and Auditors, Administrators): an API token never gets them,
+	// whatever its owner's role, as backup.manage and settings.manage, which show the same facts, have no token scope.
+	p := principalFrom(ctx)
+	role := p.Role
+	if p.Kind != rbac.UserSession {
+		role = ""
+	}
 	if s.deps.Backup != nil && (role == rbac.Admin || role == rbac.Auditor) {
 		st, err := s.deps.Backup.State(ctx)
 		if err != nil {

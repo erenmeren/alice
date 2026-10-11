@@ -298,6 +298,12 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 			key := "u:" + p.UserID.String()
 			checks = append(checks, func() (bool, time.Duration) { return s.download.Allow(key) })
 		}
+	case limitBackupNow, limitHTTPSUpload, limitForwardTest:
+		// Per user of a browser session, as the download (the permissions allow nothing else), each in its own bucket.
+		if p.Kind == rbac.UserSession && p.UserID != uuid.Nil {
+			key, l := "u:"+p.UserID.String(), s.actions[class]
+			checks = append(checks, func() (bool, time.Duration) { return l.Allow(key) })
+		}
 	case limitTestMail:
 		// Per user of a browser session, as the download: the permission (settings.manage) allows nothing else.
 		if p.Kind == rbac.UserSession && p.UserID != uuid.Nil {

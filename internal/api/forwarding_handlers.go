@@ -15,7 +15,7 @@ func (s *server) forwardingRoutes() []route {
 		{method: http.MethodGet, pattern: "/api/v1/settings/audit-forwarding", perm: rbac.SettingsManage, handler: s.getForwarding},
 		{method: http.MethodPut, pattern: "/api/v1/settings/audit-forwarding", perm: rbac.SettingsManage, lic: license.ClassAlways,
 			handler: s.putForwarding},
-		{method: http.MethodPost, pattern: "/api/v1/settings/audit-forwarding/test", perm: rbac.SettingsManage, limit: limitDownload,
+		{method: http.MethodPost, pattern: "/api/v1/settings/audit-forwarding/test", perm: rbac.SettingsManage, limit: limitForwardTest,
 			lic: license.ClassAlways, handler: s.testForwarding},
 	}
 }

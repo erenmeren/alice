@@ -3,19 +3,22 @@
 package setup_test
 
 import (
-	"errors"
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/notify"
-	"alice/internal/platform/db"
+	"alice/internal/platform/tlscert"
 	"alice/internal/rbac"
 	"alice/internal/setup"
+	"alice/internal/testutil/pki"
 )
 
 // wizardEnv is newEnv with the mail settings wired, as cmd/alice wires them.
@@ -150,30 +153,98 @@ func TestSkipMailWhenMailIsConfiguredChangesNothing(t *testing.T) {
 	assert.Empty(t, e.settingRaw(t, "setup.mail_choice"))
 }
 
-func TestRecordCertificateUploaded(t *testing.T) {
+// installer is the shipped HTTPS installer over a fresh store, logging into a buffer.
+func (e *wizardEnv) installer(t *testing.T) (setup.CertificateInstaller, *bytes.Buffer) {
+	t.Helper()
+	store, err := tlscert.NewStore(t.TempDir(), []string{"localhost"}, e.clk.Now)
+	require.NoError(t, err)
+	var logs bytes.Buffer
+	return setup.CertificateInstaller{Store: store, Setup: e.setup, Log: slog.New(slog.NewTextHandler(&logs, nil))}, &logs
+}
+
+func (e *wizardEnv) upload() (tlscert.Upload, pki.Leaf) {
+	ca := pki.NewCA("Setup Test CA", pki.ECDSA256, e.clk.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.org", SANs: []string{"www.example.org"}}, e.clk.Now())
+	return tlscert.Upload{CertPEM: leaf.FullchainPEM, KeyPEM: leaf.KeyPEM}, leaf
+}
+
+func TestCertificateInstallerRecordsTheChoiceAndTheAuditRow(t *testing.T) {
 	e := newWizardEnv(t)
 	p := e.admin(t)
 	_, err := e.setup.KeepTemporaryCertificate(e.ctx, p, ip1)
 	require.NoError(t, err)
-	require.NoError(t, db.InTx(e.ctx, e.db.App, func(tx pgx.Tx) error { return e.setup.RecordCertificateUploaded(e.ctx, tx, p) }))
+	inst, logs := e.installer(t)
+	u, leaf := e.upload()
+	info, err := inst.Install(e.ctx, p, ip1, u)
+	require.NoError(t, err)
+	assert.False(t, info.Temporary)
+	assert.Equal(t, info, inst.Info())
 	assert.Equal(t, `"uploaded"`, e.settingRaw(t, "setup.https_choice"), "an upload replaces the temporary choice")
 	assert.True(t, e.status(t).HTTPSChosen)
+	var details string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT details::text FROM audit_log WHERE action = 'https.certificate_replaced'").Scan(&details))
+	assert.Contains(t, details, info.FingerprintSHA256)
+	keyLine := strings.Split(string(leaf.KeyPEM), "\n")[1]
+	assert.NotContains(t, details, keyLine)
+	assert.NotContains(t, logs.String(), keyLine)
+	assert.Empty(t, logs.String(), "nothing to report on success")
+}
 
-	// The caller's transaction decides: a rollback keeps the earlier choice.
-	e2 := newWizardEnv(t)
-	p2 := e2.admin(t)
-	errRollback := errors.New("rollback")
-	err = db.InTx(e2.ctx, e2.db.App, func(tx pgx.Tx) error {
-		require.NoError(t, e2.setup.RecordCertificateUploaded(e2.ctx, tx, p2))
-		return errRollback
-	})
-	require.ErrorIs(t, err, errRollback)
-	assert.Empty(t, e2.settingRaw(t, "setup.https_choice"))
+func TestCertificateInstallerRefusesBeforeTouchingThePair(t *testing.T) {
+	e := newWizardEnv(t)
+	p := e.admin(t)
+	operator := p
+	operator.Role = rbac.Operator // the same session with the Operator role: settings.manage is refused
+	inst, _ := e.installer(t)
+	u, _ := e.upload()
+	_, err := inst.Install(e.ctx, operator, ip1, u)
+	require.ErrorIs(t, err, setup.ErrForbidden)
+	assert.True(t, inst.Info().Temporary, "the pair was not installed")
+	assert.Zero(t, e.auditCount(t, "https.certificate_replaced"))
 
-	operator := p // the same session with the Operator role: settings.manage is refused
-	operator.Role = rbac.Operator
-	err = db.InTx(e.ctx, e.db.App, func(tx pgx.Tx) error { return e.setup.RecordCertificateUploaded(e.ctx, tx, operator) })
-	assert.ErrorIs(t, err, setup.ErrForbidden)
+	_, err = inst.Install(e.ctx, p, ip1, tlscert.Upload{CertPEM: []byte("not a certificate"), KeyPEM: []byte("nor a key")})
+	require.Error(t, err)
+	assert.True(t, inst.Info().Temporary)
+	assert.Zero(t, e.auditCount(t, "https.certificate_replaced"))
+	assert.Empty(t, e.settingRaw(t, "setup.https_choice"))
+}
+
+// A browser that goes away after the upload must not leave the replacement unaudited: the record is retried without
+// the request's cancellation.
+func TestCertificateInstallerRetriesTheRecordWithoutTheRequestsCancellation(t *testing.T) {
+	e := newWizardEnv(t)
+	p := e.admin(t)
+	inst, logs := e.installer(t)
+	u, _ := e.upload()
+	ctx, cancel := context.WithCancel(e.ctx)
+	cancel()
+	info, err := inst.Install(ctx, p, ip1, u)
+	require.NoError(t, err)
+	assert.Equal(t, 1, e.auditCount(t, "https.certificate_replaced"))
+	assert.Equal(t, `"uploaded"`, e.settingRaw(t, "setup.https_choice"))
+	assert.Contains(t, logs.String(), "event=https.audit_retry")
+	assert.Contains(t, logs.String(), "fingerprint="+info.FingerprintSHA256)
+	assert.NotContains(t, logs.String(), "https.audit_failed")
+}
+
+// When the database refuses the record twice, the certificate stays in use (it is live already), the caller gets the
+// error and the gap is logged with fixed labels.
+func TestCertificateInstallerLogsAnUnrecordedReplacement(t *testing.T) {
+	e := newWizardEnv(t)
+	p := e.admin(t)
+	inst, logs := e.installer(t)
+	u, leaf := e.upload()
+	_, err := e.db.Owner.Exec(e.ctx, "REVOKE INSERT ON settings FROM alice_app")
+	require.NoError(t, err)
+	_, err = inst.Install(e.ctx, p, ip1, u)
+	require.Error(t, err)
+	assert.False(t, inst.Info().Temporary, "the new certificate is in use")
+	assert.Zero(t, e.auditCount(t, "https.certificate_replaced"))
+	assert.Empty(t, e.settingRaw(t, "setup.https_choice"))
+	assert.Contains(t, logs.String(), "level=ERROR")
+	assert.Contains(t, logs.String(), "event=https.audit_failed")
+	assert.Contains(t, logs.String(), "fingerprint="+inst.Info().FingerprintSHA256)
+	assert.NotContains(t, logs.String(), strings.Split(string(leaf.KeyPEM), "\n")[1])
 }
 
 func TestServerRefusesAFairPassphrase(t *testing.T) {
