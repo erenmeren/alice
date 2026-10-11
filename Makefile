@@ -368,13 +368,13 @@ export ZAP_IMAGE TESTSSL_IMAGE
 .PHONY: zap-baseline zap-full testssl test-systemd e2e-browsers mutation nightly release-gates
 zap-baseline: image ## ZAP passive baseline and API scan of the release image, unauthenticated and as Admin, Operator, Auditor (Docker)
 	go run ./tools/zaprules .zap/rules.tsv
-	@status=0; ./deploy/dev/zap-stack.sh up $(ZAP_OUT) && ./deploy/dev/zap-stack.sh scan baseline $(ZAP_OUT) || status=$$?; ./deploy/dev/zap-stack.sh down; exit $$status
+	./deploy/dev/zap-stack.sh run baseline $(ZAP_OUT)
 zap-full: image ## ZAP full active scan against a disposable stack (hours; release gate; owner/CI)
 	go run ./tools/zaprules .zap/rules.tsv
-	@status=0; ./deploy/dev/zap-stack.sh up $(ZAP_OUT) && ./deploy/dev/zap-stack.sh scan full $(ZAP_OUT) || status=$$?; ./deploy/dev/zap-stack.sh down; exit $$status
+	./deploy/dev/zap-stack.sh run full $(ZAP_OUT)
 testssl: ## testssl.sh, grade A or A+ required: the release image on the zap stack, or TESTSSL_TARGET=host:port (TESTSSL_CA=file) without a stack (Docker)
 	@if [ -n "$(TESTSSL_TARGET)" ]; then ./deploy/dev/zap-stack.sh testssl-target "$(TESTSSL_TARGET)" "$(TESTSSL_CA)" $(ZAP_OUT); \
-	else status=0; $(MAKE) image && ./deploy/dev/zap-stack.sh up $(ZAP_OUT) && ./deploy/dev/zap-stack.sh testssl $(ZAP_OUT) || status=$$?; ./deploy/dev/zap-stack.sh down; exit $$status; fi
+	else $(MAKE) image && ./deploy/dev/zap-stack.sh run testssl $(ZAP_OUT); fi
 test-systemd: helper ## Real-systemd Nginx job (R38 item 16): privileged Ubuntu 22.04 container with systemd as PID 1 (Docker)
 	go test -count=1 -v -timeout 20m -tags systemd -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealSystemdNginx$$' ./internal/providers/nginx/
 e2e-browsers: ## Every Playwright spec on Chromium, Firefox and WebKit in EN and TR (make e2e-up first; nightly and release)

@@ -14,6 +14,18 @@
 #                                               certificate has no chain of trust and caps the grade at B)
 #   zap-stack.sh testssl-target HOST:PORT [CA] OUT   the same against a host the owner names; no stack
 #   zap-stack.sh down                           remove the stack and its volumes
+#   zap-stack.sh run baseline|full|testssl OUT  up, then the scan or testssl, then down, also when the
+#                                               run fails or is interrupted (make zap-baseline, zap-full,
+#                                               testssl; Task 15 review M-3)
+#
+# The authenticated scans must stay authenticated (Task 15 review I-3): requests that end a session
+# (sign-out, and the user actions revoke-sessions, reset-mfa and reset-password) are excluded from
+# the spiders and the scanners (ZAP's global URL exclusions) and, should one still be sent (the Ajax
+# spider's browser clicking "Sign out"), its request line is rewritten to a path that does not exist
+# (a replacer rule), so it never reaches a session-ending route. Before the scans every role's session
+# must be alive, and after each authenticated scan GET /api/v1/auth/session with that role's cookie
+# must still answer 200 for that role; otherwise the scan fails, because the rest of it would have
+# run anonymously under the role's name.
 #
 # A scan fails when any report has an alert of level Medium or High not ignored by .zap/rules.tsv
 # (tools/zaprules prints the counts per level and role into OUT/zap-summary.txt). The scanner images
@@ -80,13 +92,50 @@ down() {
   compose "" down -v --remove-orphans
 }
 
+# session_ending lists the API paths whose requests end a session (the caller's, or a user's): the
+# scans never send them (Task 15 review I-3).
+session_ending=(
+  '/api/v1/auth/logout'
+  '/api/v1/users/[^/?]+/actions/revoke-sessions'
+  '/api/v1/users/[^/?]+/actions/reset-mfa'
+  '/api/v1/users/[^/?]+/actions/reset-password'
+)
+
+# exclusions prints ZAP's -z options that keep the session-ending paths out of every scan: global
+# URL exclusions (spider, Ajax spider, active scanner) and, for a request sent anyway, a replacer
+# rule from index FIRST on that rewrites its request line to /api/v1/zap-excluded, which no route
+# serves. The options hold no space and no backslash: ZAP's scripts split -z on blanks.
+exclusions() {
+  local first=$1 i=0 opts=() path
+  for path in "${session_ending[@]}"; do
+    opts+=("-config globalexcludeurl.url_list.url($i).regex=^https?://[^/]+${path}([?#].*)?\$")
+    opts+=("-config globalexcludeurl.url_list.url($i).description=session-ending-$i -config globalexcludeurl.url_list.url($i).enabled=true")
+    local r=$((first + i))
+    opts+=("-config replacer.full_list($r).description=session-ending-$i -config replacer.full_list($r).enabled=true")
+    opts+=("-config replacer.full_list($r).matchtype=REQ_HEADER_STR -config replacer.full_list($r).regex=true")
+    opts+=("-config replacer.full_list($r).matchstr=^([A-Z]+.(https?://[^/]+)?)${path}(?=[^-a-zA-Z0-9_/])")
+    opts+=("-config replacer.full_list($r).replacement=\$1/api/v1/zap-excluded")
+    i=$((i + 1))
+  done
+  echo "${opts[*]}"
+}
+
+# session_field ROLE OUT FIELD prints COOKIE or CSRF of OUT/ROLE.env, or fails when it is missing.
+session_field() {
+  local role=$1 out=$2 field=$3 value
+  [[ -f "$out/$role.env" ]] || { echo "zap-stack: $out/$role.env is missing; run zap-stack.sh up $out" >&2; return 1; }
+  value=$(sed -n "s/^$field=//p" "$out/$role.env")
+  [[ -n "$value" ]] || { echo "zap-stack: $out/$role.env has no $field; run zap-stack.sh up $out" >&2; return 1; }
+  printf '%s\n' "$value"
+}
+
 # replacer ROLE OUT prints ZAP's -z options that put the role's session cookie, its CSRF token and the
-# activity marker (the session stays alive while ZAP reads, R39) on every request.
+# activity marker (the session stays alive while ZAP reads, R39) on every request, and keep the
+# session-ending paths out of the scan (exclusions).
 replacer() {
   local role=$1 out=$2 cookie csrf
-  cookie=$(sed -n 's/^COOKIE=//p' "$out/$role.env")
-  csrf=$(sed -n 's/^CSRF=//p' "$out/$role.env")
-  [[ -n "$cookie" && -n "$csrf" ]] || { echo "zap-stack: $out/$role.env has no session; run zap-stack.sh up" >&2; exit 1; }
+  cookie=$(session_field "$role" "$out" COOKIE) || return 1
+  csrf=$(session_field "$role" "$out" CSRF) || return 1
   local i=0 opts=() header value
   for header in Cookie X-CSRF-Token X-Alice-Activity; do
     case $header in
@@ -99,7 +148,45 @@ replacer() {
     opts+=("-config replacer.full_list($i).regex=false -config replacer.full_list($i).replacement=$value")
     i=$((i + 1))
   done
+  opts+=("$(exclusions "$i")")
   echo "${opts[*]}"
+}
+
+# load_zopts ROLE OUT sets the global zopts to replacer's options; a missing or empty session file stops
+# the scan here instead of letting it run anonymously under the role's name (Task 15 review I-4:
+# an exit inside -z "$(replacer ...)" would only end the command substitution).
+zopts=
+load_zopts() {
+  zopts=$(replacer "$1" "$2") || { echo "zap-stack: no session options for $1; the scan stops" >&2; exit 1; }
+  [[ -n "$zopts" ]] || { echo "zap-stack: empty session options for $1; the scan stops" >&2; exit 1; }
+}
+
+# alive ROLE OUT checks that the role's session still answers GET /api/v1/auth/session with 200 and
+# that role (Task 15 review I-3). The cookie goes to curl on stdin, not on its command line.
+alive() {
+  local role=$1 out=$2 cookie response status body got
+  cookie=$(session_field "$role" "$out" COOKIE) || return 1
+  response=$(printf 'Cookie: %s\n' "$cookie" | curl -sS --max-time 30 --cacert "$out/test-ca.crt" -H @- \
+    -w '\n%{http_code}' "$base/api/v1/auth/session") || { echo "zap-stack: GET /api/v1/auth/session as $role failed" >&2; return 1; }
+  status=${response##*$'\n'}
+  body=${response%$'\n'*}
+  if [[ "$status" != 200 ]]; then
+    echo "zap-stack: the $role session ended during the scan (GET /api/v1/auth/session: $status)" >&2
+    return 1
+  fi
+  got=$(jq -r '.user.role // empty' <<<"$body") || got=
+  if [[ "$got" != "$role" ]]; then
+    echo "zap-stack: GET /api/v1/auth/session as $role answered role '${got:-none}'" >&2
+    return 1
+  fi
+  echo "zap-stack: the $role session is alive"
+}
+
+# check_alive LABEL ROLE OUT records a session lost during the scan LABEL in the global lost array.
+lost=()
+check_alive() {
+  local label=$1 role=$2 out=$3
+  alive "$role" "$out" || lost+=("$label ($role)")
 }
 
 # zap SCRIPT ARGS... runs one ZAP packaged scan with OUT/wrk as /zap/wrk. ZAP's own exit status 1
@@ -116,32 +203,64 @@ zap() {
 }
 
 scan() {
-  local kind=$1 out=$2
-  [[ -f "$out/admin.env" ]] || { echo "zap-stack: no sessions in $out; run zap-stack.sh up $out first" >&2; exit 1; }
+  local kind=$1 out=$2 role expect
+  for role in "${roles[@]}"; do
+    alive "$role" "$out" || { echo "zap-stack: no live $role session in $out; run zap-stack.sh up $out first" >&2; exit 1; }
+  done
   workdir "$out"
   rm -f "$out"/wrk/*.json "$out"/wrk/*.html
   cp .zap/rules.tsv "$out/wrk/rules.tsv"
   case $kind in
     baseline)
-      zap "$out" zap-baseline.py -t "$base" -c rules.tsv -I -j -J unauthenticated.json -r unauthenticated.html
-      local role
+      local anon
+      anon=$(exclusions 0)
+      zap "$out" zap-baseline.py -t "$base" -c rules.tsv -I -j -J unauthenticated.json -r unauthenticated.html -z "$anon"
       for role in "${roles[@]}"; do
-        zap "$out" zap-baseline.py -t "$base" -c rules.tsv -I -j -J "$role.json" -r "$role.html" -z "$(replacer "$role" "$out")"
+        load_zopts "$role" "$out"
+        zap "$out" zap-baseline.py -t "$base" -c rules.tsv -I -j -J "$role.json" -r "$role.html" -z "$zopts"
+        check_alive "baseline" "$role" "$out"
       done
       # The API, from the OpenAPI file with its server set to the stack, as Administrator.
       sed "s#^  - url: /\$#  - url: $base/#" api/openapi.yaml > "$out/wrk/openapi.yaml"
       grep -q "url: $base/" "$out/wrk/openapi.yaml" || { echo "zap-stack: could not set the server URL of api/openapi.yaml" >&2; exit 1; }
-      zap "$out" zap-api-scan.py -t /zap/wrk/openapi.yaml -f openapi -c rules.tsv -I -J api-admin.json -r api-admin.html -z "$(replacer admin "$out")"
+      load_zopts admin "$out"
+      zap "$out" zap-api-scan.py -t /zap/wrk/openapi.yaml -f openapi -c rules.tsv -I -J api-admin.json -r api-admin.html -z "$zopts"
+      check_alive "api" admin "$out"
+      expect=unauthenticated,admin,operator,auditor,api-admin
       ;;
     full)
-      zap "$out" zap-full-scan.py -t "$base" -c rules.tsv -I -j -J full-admin.json -r full-admin.html -z "$(replacer admin "$out")"
+      load_zopts admin "$out"
+      zap "$out" zap-full-scan.py -t "$base" -c rules.tsv -I -j -J full-admin.json -r full-admin.html -z "$zopts"
+      check_alive "full" admin "$out"
+      expect=full-admin
       ;;
     *) usage ;;
   esac
   local status=0
-  go run ./tools/zaprules -reports "$out/wrk" .zap/rules.tsv | tee "$out/zap-summary.txt" || status=${PIPESTATUS[0]}
+  go run ./tools/zaprules -reports "$out/wrk" -expect "$expect" .zap/rules.tsv | tee "$out/zap-summary.txt" || status=${PIPESTATUS[0]}
+  if ((${#lost[@]} > 0)); then
+    echo "zap-stack: a session ended during the scan, so the rest of it ran unauthenticated: ${lost[*]}" | tee -a "$out/zap-summary.txt" >&2
+    status=1
+  else
+    echo "zap-stack: every authenticated scan kept its session" | tee -a "$out/zap-summary.txt"
+  fi
   echo "zap-stack: reports in $out/wrk (summary $out/zap-summary.txt)"
   return "$status"
+}
+
+# run KIND OUT brings the stack up, runs the scan (baseline, full) or testssl, and always brings it
+# down: on success, failure, or an interrupt of make (Task 15 review M-3).
+run() {
+  local kind=$1 out=$2
+  case $kind in baseline | full | testssl) ;; *) usage ;; esac
+  trap 'down || echo "zap-stack: removing the stack failed" >&2' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  up "$out"
+  case $kind in
+    testssl) testssl_run "$base" "$out/test-ca.crt" "$out" ;;
+    *) scan "$kind" "$out" ;;
+  esac
 }
 
 # testssl_run TARGET CA OUT runs testssl.sh and requires the overall grade A or A+.
@@ -168,6 +287,7 @@ testssl_run() {
 case $1 in
   up) [[ $# -eq 2 ]] || usage; up "$2" ;;
   down) [[ $# -eq 1 ]] || usage; down ;;
+  run) [[ $# -eq 3 ]] || usage; run "$2" "$3" ;;
   scan) [[ $# -eq 3 ]] || usage; scan "$2" "$3" ;;
   testssl) [[ $# -eq 2 ]] || usage; testssl_run "$base" "$2/test-ca.crt" "$2" ;;
   testssl-target)
