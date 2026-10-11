@@ -31,3 +31,17 @@ d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-
 5366bd18c4fcd35cabb92c88fe8711da8e83a9f0:docs/security/reviews/phase-7.md:generic-api-key:219
 28b54985e4e9fcae742a8e75cad4f976cadb04a1:docs/superpowers/plans/2026-10-07-phase-7-alerts-dashboard-sso.md:generic-api-key:13
 28b54985e4e9fcae742a8e75cad4f976cadb04a1:docs/superpowers/plans/2026-10-07-phase-7-alerts-dashboard-sso.md:generic-api-key:7326
+# A fake PEM block whose body is the four characters "AAAA" (no key material): the release key parser must refuse a
+# private-key block (Phase 8 Task 12 negative test).
+0d3c6b49a7ccffb8c3cbbae9fa52b349e41b0730:internal/license/issuer/purpose_test.go:private-key:126
+# Go test names ("<package>:Test…") in the §23–§25 traceability map and its document: identifiers, not keys.
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:docs/security/traceability.md:generic-api-key:80
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:docs/security/traceability.md:generic-api-key:112
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:docs/security/traceability.md:generic-api-key:129
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:docs/security/traceability.md:generic-api-key:136
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:docs/security/traceability.md:generic-api-key:193
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:571
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:879
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:1028
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:1086
+11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:1540
