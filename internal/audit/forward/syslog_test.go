@@ -97,6 +97,55 @@ func TestLongObjectIDIsCut(t *testing.T) {
 	assert.True(t, utf8.Valid(got))
 }
 
+// Review minor 1: an object whose escaped JSON alone exceeds the budget made the cut length negative and
+// cutUTF8 panicked. Every message stays within MaxMessage, valid UTF-8 and valid JSON, whatever the sizes and
+// rune boundaries.
+func TestOversizedObjectsAreCutWithoutPanic(t *testing.T) {
+	ctl := func(n int) string { return strings.Repeat("\x01", n) } // six bytes each once JSON-escaped
+	big := map[string]string{"reason": strings.Repeat("ğ", 5000)}
+	cases := map[string]audit.Entry{}
+	add := func(name string, f func(e *audit.Entry)) {
+		e := entry()
+		f(&e)
+		cases[name] = e
+	}
+	add("object type of 2000 control characters", func(e *audit.Entry) { e.ObjectType = ctl(2000) })
+	add("object type of 9000 two-byte runes", func(e *audit.Entry) { e.ObjectType = strings.Repeat("ş", 9000) })
+	add("object type of four-byte runes and details", func(e *audit.Entry) {
+		e.ObjectType = strings.Repeat("𝄞", 3001)
+		e.Details = big
+	})
+	add("worst object id, actor and details", func(e *audit.Entry) {
+		e.ObjectType = ctl(300)
+		e.ObjectID = ctl(1100)
+		e.ActorName = strings.Repeat(`"`, 300)
+		e.Details = big
+	})
+	for i := range 64 { // odd boundaries: control characters mixed with three- and four-byte runes
+		add("mixed "+strings.Repeat("·", i), func(e *audit.Entry) {
+			e.ObjectType = ctl(i*37) + strings.Repeat("€", i*11) + "𝄞"
+			e.ObjectID = strings.Repeat("€𝄞\x02", 200+i*13)
+			e.Details = map[string]string{"k": ctl(i * 101)}
+		})
+	}
+	for name, e := range cases {
+		var got []byte
+		require.NotPanics(t, func() { got = message(e, strings.Repeat("h", 300), "alice") }, name)
+		require.LessOrEqual(t, len(got), MaxMessage, name)
+		require.True(t, utf8.Valid(got), name)
+		_, body, ok := bytes.Cut(got, []byte(`"] `))
+		require.True(t, ok, name)
+		require.True(t, json.Valid(body), "%s: %s", name, body)
+		var parsed struct {
+			ObjectType string `json:"object_type"`
+			ObjectID   string `json:"object_id"`
+		}
+		require.NoError(t, json.Unmarshal(body, &parsed), name)
+		assert.True(t, strings.HasPrefix(e.ObjectType, parsed.ObjectType), name)
+		assert.True(t, strings.HasPrefix(e.ObjectID, parsed.ObjectID), name)
+	}
+}
+
 func TestSeverity(t *testing.T) {
 	cases := []struct {
 		action string

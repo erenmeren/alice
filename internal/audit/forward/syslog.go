@@ -26,6 +26,7 @@ const (
 	maxMsgID       = 32
 	maxActor       = 255
 	maxObjectID    = 1024
+	maxObjectType  = 255
 	checkpointName = "audit.checkpoint"
 )
 
@@ -69,21 +70,40 @@ func message(e audit.Entry, hostname, app string) []byte {
 	if details == nil {
 		details = map[string]string{}
 	}
-	objectID := cutUTF8(e.ObjectID, maxObjectID)
-	msg := append([]byte(head), marshal(body{ObjectType: e.ObjectType, ObjectID: objectID, Details: details})...)
+	objectType, objectID := cutUTF8(e.ObjectType, maxObjectType), cutUTF8(e.ObjectID, maxObjectID)
+	msg := append([]byte(head), marshal(body{ObjectType: objectType, ObjectID: objectID, Details: details})...)
 	if len(msg) <= MaxMessage {
 		return msg
 	}
-	text := string(marshal(details))
 	budget := MaxMessage - len(head)
-	for n := len(text); ; {
-		n = min(n, len(text))
-		cut := cutUTF8(text, n)
-		b := marshal(cutBody{ObjectType: e.ObjectType, ObjectID: objectID, DetailsText: cut, Truncated: true})
-		if len(b) <= budget || cut == "" {
-			return append([]byte(head), b...)
+	b := fit(string(marshal(details)), budget, func(cut string) []byte {
+		return marshal(cutBody{ObjectType: objectType, ObjectID: objectID, DetailsText: cut, Truncated: true})
+	})
+	if b == nil { // the object alone is over the budget: no details, and the object id cut to fit
+		b = fit(objectID, budget, func(cut string) []byte {
+			return marshal(cutBody{ObjectType: objectType, ObjectID: cut, Truncated: true})
+		})
+	}
+	if b == nil { // unreachable with the caps above (head ≤ ~1.1 KiB, escaped object type ≤ 1.5 KiB); total anyway
+		b = marshal(cutBody{Truncated: true})
+	}
+	return append([]byte(head), b...)
+}
+
+// fit returns build of the longest UTF-8 prefix of s it finds whose result is at most budget bytes, or nil when
+// even the empty prefix is over the budget. JSON escapes can grow a byte up to six, so each step shrinks the
+// prefix by at least half the excess and never below zero (review minor 1).
+func fit(s string, budget int, build func(cut string) []byte) []byte {
+	for n := len(s); ; {
+		cut := cutUTF8(s, max(n, 0))
+		b := build(cut)
+		if len(b) <= budget {
+			return b
 		}
-		n = len(cut) - max(1, (len(b)-budget)/2) // escapes can double a byte; shrink by at least half the excess
+		if cut == "" {
+			return nil
+		}
+		n = len(cut) - max(1, (len(b)-budget)/2)
 	}
 }
 
@@ -127,6 +147,9 @@ func sdEscape(s string) string {
 func cutUTF8(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	if n <= 0 {
+		return ""
 	}
 	for n > 0 && !utf8.RuneStart(s[n]) {
 		n--

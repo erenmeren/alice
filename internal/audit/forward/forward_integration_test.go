@@ -221,8 +221,10 @@ func TestF96ReceiverDownNeverBlocksTheLocalWrite(t *testing.T) {
 	close(stop)
 	wg.Wait()
 	require.Positive(t, runs, "the forwarder ran while the receiver was down")
-	// ± 50 % of the run without forwarding; 250 ms absorb scheduler noise on short runs.
-	assert.Less(t, elapsed, baseline*3/2+250*time.Millisecond, "baseline %v", baseline)
+	// The guarantee is structural: no append path reaches the forwarder (archtest: audit/forward imports audit, so
+	// audit cannot import it). This bound only catches a regression that makes appends wait on delivery, which
+	// would cost a dial or write timeout (seconds) per run; it is wide so CI noise cannot fail it (review minor 7).
+	assert.Less(t, elapsed, baseline*2+time.Second, "baseline %v", baseline)
 
 	err := e.f.Run(ctx)
 	require.ErrorIs(t, err, forward.ErrUnreachable)
