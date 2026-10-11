@@ -1,0 +1,599 @@
+package main
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"alice/internal/license/issuer"
+)
+
+const (
+	testCommit    = "0123456789abcdef0123456789abcdef01234567"
+	testBuildTime = "2026-10-11T08:00:00Z"
+)
+
+// fakeImages stands in for docker: Save writes a small file, ID returns a fixed ID per image.
+type fakeImages struct{ saved []string }
+
+func (f *fakeImages) ID(ref string) (string, error) {
+	sum := sha256.Sum256([]byte(ref))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+func (f *fakeImages) Save(ref, path string) error {
+	f.saved = append(f.saved, ref)
+	return os.WriteFile(path, []byte("image "+ref), 0o600)
+}
+
+func write(t *testing.T, path, content string, mode os.FileMode) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte(content), mode))
+}
+
+func releaseKey(t *testing.T, dir, id string) ed25519.PrivateKey {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	raw, err := issuer.EncodeReleasePublicKey(id, pub)
+	require.NoError(t, err)
+	write(t, filepath.Join(dir, id+".pem"), string(raw), 0o644)
+	return priv
+}
+
+var requiredGuideNames = []string{"README.md", "api.md", "backup-restore.md", "install-guide.md", "security-overview.md", "upgrade.md"}
+
+// fixture builds every input of the production stage in a temporary repository root and returns
+// the configuration that stages it, and the release private key.
+func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
+	t.Helper()
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"deploy/release/install.sh":                        "#!/usr/bin/env bash\necho install\n",
+		"deploy/release/alice-update.sh":                   "#!/usr/bin/env bash\necho update\n",
+		"deploy/release/alicectl":                          "#!/usr/bin/env bash\necho ctl\n",
+		"deploy/release/lib/alice-lib.sh":                  "# lib\n",
+		"deploy/release/postgres/initdb/10-alice-roles.sh": "# roles\n",
+		"deploy/release/docker-compose.yml":                "services: {}\n",
+		"deploy/release/env.template":                      "ALICE_PORT=443\n",
+		"deploy/release/LICENSE.txt":                       "Alice license terms of Example Vendor.\n",
+		"deploy/release/keys/README.md":                    "public keys\n",
+		"docs/operator-guide.md":                           "# Operator\n",
+		"docs/notes.txt":                                   "not a guide\n",
+		"docs/dev/inner.md":                                "not top level\n",
+		"CHANGELOG.md":                                     "# Changelog\n",
+		"SECURITY-REPORT.md":                               "# Security report\n",
+		"migrations/00001_init.sql":                        "-- +goose Up\n",
+		"migrations/00012_phase8.sql":                      "-- +goose Up\n",
+		"bin/THIRD_PARTY_NOTICES.md":                       "# Notices\n",
+		"bin/release-gates.log":                            "lint\t0\tgolangci-lint v2.14.0\ntest\t0\tgo1.27.2\n",
+		"bin/sbom/alice-1.0.0.cdx.json":                    "{}\n",
+		"bin/sbom/postgres-1.0.0.cdx.json":                 "{}\n",
+		"bin/sbom/source-1.0.0.cdx.json":                   "{}\n",
+		"bin/helper/alice-helper-linux-amd64":              "amd64 binary",
+		"bin/helper/alice-helper-linux-arm64":              "arm64 binary",
+	} {
+		write(t, filepath.Join(root, name), content, 0o644)
+	}
+	for _, g := range requiredGuideNames {
+		write(t, filepath.Join(root, "docs", g), "# "+g+"\n", 0o644)
+	}
+	sums := ""
+	for _, a := range []string{"amd64", "arm64"} {
+		sum := sha256.Sum256([]byte(a + " binary"))
+		sums += hex.EncodeToString(sum[:]) + "  alice-helper-linux-" + a + "\n"
+	}
+	write(t, filepath.Join(root, "bin/helper/alice-helper.sha256"), sums, 0o644)
+	priv := releaseKey(t, filepath.Join(root, "deploy/release/keys"), "rk-2026-01")
+	return stageConfig{
+		Root: root, Out: filepath.Join(t.TempDir(), "alice-1.0.0"), Version: "1.0.0",
+		Keys: filepath.Join(root, "deploy/release/keys"), AliceImage: "alice:1.0.0", PostgresImage: "alice-postgres:1.0.0",
+		SBOM: filepath.Join(root, "bin/sbom"), Notices: filepath.Join(root, "bin/THIRD_PARTY_NOTICES.md"),
+		Helper: filepath.Join(root, "bin/helper"), Commit: testCommit, BuildTime: testBuildTime,
+		GatesLog: filepath.Join(root, "bin/release-gates.log"), License: filepath.Join(root, "deploy/release/LICENSE.txt"),
+		MinUpgradeFrom: "1.0.0-rc.1",
+	}, priv
+}
+
+// listFiles returns the regular files under dir (relative, sorted) with their modes.
+func listFiles(t *testing.T, dir string) map[string]os.FileMode {
+	t.Helper()
+	out := map[string]os.FileMode{}
+	require.NoError(t, filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		require.NoError(t, err)
+		info, err := os.Lstat(p)
+		require.NoError(t, err)
+		rel, _ := filepath.Rel(dir, p)
+		if d.IsDir() {
+			assert.Equal(t, os.FileMode(0o755), info.Mode().Perm(), rel)
+			return nil
+		}
+		require.True(t, info.Mode().IsRegular(), rel)
+		out[filepath.ToSlash(rel)] = info.Mode().Perm()
+		return nil
+	}))
+	return out
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return string(b)
+}
+
+func TestStageLayout(t *testing.T) {
+	cfg, _ := fixture(t)
+	img := &fakeImages{}
+	require.NoError(t, stage(cfg, img))
+	assert.Equal(t, []string{"alice:1.0.0", "alice-postgres:1.0.0"}, img.saved)
+
+	pkg := filepath.Join(cfg.Out, "alice")
+	files := listFiles(t, pkg)
+	want := []string{
+		".env.template", "CHANGELOG.md", "RELEASE", "RELEASE-CHECKLIST-SIGNED.txt", "SECURITY-REPORT.md", "SHA256SUMS", "VERSION",
+		"alice-update.sh", "alicectl", "docker-compose.yml",
+		"docs/README.md", "docs/api.md", "docs/backup-restore.md", "docs/install-guide.md", "docs/operator-guide.md",
+		"docs/security-overview.md", "docs/upgrade.md",
+		"helper/alice-helper-linux-amd64", "helper/alice-helper-linux-arm64", "helper/alice-helper.sha256",
+		"images/alice-1.0.0.tar", "images/images.sha256", "images/postgres-1.0.0.tar",
+		"install.sh", "lib/alice-lib.sh", "lib/initdb/10-alice-roles.sh",
+		"licenses/LICENSE", "licenses/THIRD_PARTY_NOTICES.md",
+		"release-keys/rk-2026-01.pem",
+		"sbom/alice-1.0.0.cdx.json", "sbom/postgres-1.0.0.cdx.json", "sbom/source-1.0.0.cdx.json",
+	}
+	got := make([]string, 0, len(files))
+	for f, mode := range files {
+		got = append(got, f)
+		wantMode := os.FileMode(0o644)
+		if f == "install.sh" || f == "alice-update.sh" || f == "alicectl" {
+			wantMode = 0o755
+		}
+		assert.Equal(t, wantMode, mode, f)
+	}
+	sort.Strings(got)
+	assert.Equal(t, want, got)
+
+	assert.Equal(t, "ALICE_PORT=443\n", readFile(t, filepath.Join(pkg, ".env.template")))
+	assert.Equal(t, "# roles\n", readFile(t, filepath.Join(pkg, "lib/initdb/10-alice-roles.sh")))
+	assert.Equal(t, "Alice license terms of Example Vendor.\n", readFile(t, filepath.Join(pkg, "licenses/LICENSE")))
+	assert.Equal(t, "1.0.0\n", readFile(t, filepath.Join(pkg, "VERSION")))
+
+	img2 := &fakeImages{}
+	aliceID, _ := img2.ID("alice:1.0.0")
+	pgID, _ := img2.ID("alice-postgres:1.0.0")
+	assert.Equal(t, "VERSION=1.0.0\nMIN_UPGRADE_FROM=1.0.0-rc.1\nSCHEMA_VERSION=12\nALICE_IMAGE=alice:1.0.0\nALICE_IMAGE_ID="+aliceID+
+		"\nPOSTGRES_IMAGE=alice-postgres:1.0.0\nPOSTGRES_IMAGE_ID="+pgID+"\nBUILD_COMMIT="+testCommit+"\nBUILD_TIME="+testBuildTime+
+		"\nRELEASE_KEY_ID=rk-2026-01\n", readFile(t, filepath.Join(pkg, "RELEASE")))
+
+	checklist := readFile(t, filepath.Join(pkg, "RELEASE-CHECKLIST-SIGNED.txt"))
+	assert.Contains(t, checklist, "Commit: "+testCommit)
+	assert.Contains(t, checklist, "lint: exit 0 (golangci-lint v2.14.0)")
+	assert.Contains(t, checklist, "test: exit 0 (go1.27.2)")
+	assert.Contains(t, checklist, "\nSigned: <empty until the vendor signs the checklist>\n")
+	assert.NotContains(t, checklist, "No gate was recorded")
+
+	// images.sha256 covers both image files.
+	imgSums := readFile(t, filepath.Join(pkg, "images/images.sha256"))
+	assert.Equal(t, sumLine(t, pkg, "images/alice-1.0.0.tar", "alice-1.0.0.tar")+sumLine(t, pkg, "images/postgres-1.0.0.tar", "postgres-1.0.0.tar"), imgSums)
+
+	// SHA256SUMS: sorted, complete, excluding itself and its signature, and correct (sha256sum -c).
+	sums := strings.Split(strings.TrimSuffix(readFile(t, filepath.Join(pkg, "SHA256SUMS")), "\n"), "\n")
+	var names []string
+	for _, line := range sums {
+		hexSum, name, ok := strings.Cut(line, "  ")
+		require.True(t, ok, line)
+		assert.Equal(t, sumLine(t, pkg, name, name), hexSum+"  "+name+"\n")
+		names = append(names, name)
+	}
+	assert.True(t, sort.StringsAreSorted(names))
+	var wantNames []string
+	for _, w := range want {
+		if w != "SHA256SUMS" {
+			wantNames = append(wantNames, w)
+		}
+	}
+	assert.Equal(t, wantNames, names)
+	cmd := exec.Command("sha256sum", "-c", "--strict", "--quiet", "SHA256SUMS")
+	cmd.Dir = pkg
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	// The stage never overwrites an earlier one.
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "already exists")
+}
+
+func sumLine(t *testing.T, dir, rel, name string) string {
+	t.Helper()
+	sum := sha256.Sum256([]byte(readFile(t, filepath.Join(dir, rel))))
+	return hex.EncodeToString(sum[:]) + "  " + name + "\n"
+}
+
+// The production path (make release) refuses whatever a test package may lack (M-6, R43 row 51).
+func TestStageRefusesAMissingInput(t *testing.T) {
+	for name, change := range map[string]func(t *testing.T, cfg *stageConfig){
+		"no SECURITY-REPORT.md": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "SECURITY-REPORT.md")))
+		},
+		"no gates log":        func(t *testing.T, cfg *stageConfig) { require.NoError(t, os.Remove(cfg.GatesLog)) },
+		"empty gates log":     func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "", 0o644) },
+		"failed gate":         func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint\t1\tv2\n", 0o644) },
+		"malformed gates log": func(t *testing.T, cfg *stageConfig) { write(t, cfg.GatesLog, "lint passed\n", 0o644) },
+		"placeholder LICENSE": func(t *testing.T, cfg *stageConfig) { write(t, cfg.License, draftLicense+"\n", 0o644) },
+		"missing guide": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "docs/install-guide.md")))
+		},
+		"no CHANGELOG.md": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "CHANGELOG.md")))
+		},
+		"no install.sh": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "deploy/release/install.sh")))
+		},
+		"no env.template": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "deploy/release/env.template")))
+		},
+		"no roles script": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Root, "deploy/release/postgres/initdb/10-alice-roles.sh")))
+		},
+		"no notices": func(t *testing.T, cfg *stageConfig) { require.NoError(t, os.Remove(cfg.Notices)) },
+		"no source SBOM": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.SBOM, "source-1.0.0.cdx.json")))
+		},
+		"no arm64 helper": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Helper, "alice-helper-linux-arm64")))
+		},
+		"helper checksum differs": func(t *testing.T, cfg *stageConfig) {
+			write(t, filepath.Join(cfg.Helper, "alice-helper-linux-amd64"), "changed", 0o644)
+		},
+		"no release key": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.Remove(filepath.Join(cfg.Keys, "rk-2026-01.pem")))
+		},
+		"bad version":     func(_ *testing.T, cfg *stageConfig) { cfg.Version = "1.0" },
+		"bad commit":      func(_ *testing.T, cfg *stageConfig) { cfg.Commit = "abc" },
+		"bad build time":  func(_ *testing.T, cfg *stageConfig) { cfg.BuildTime = "yesterday" },
+		"bad min upgrade": func(_ *testing.T, cfg *stageConfig) { cfg.MinUpgradeFrom = "one" },
+		"no migrations": func(t *testing.T, cfg *stageConfig) {
+			require.NoError(t, os.RemoveAll(filepath.Join(cfg.Root, "migrations")))
+		},
+		"bad image name": func(_ *testing.T, cfg *stageConfig) { cfg.AliceImage = "Alice Image" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := fixture(t)
+			change(t, &cfg)
+			err := stage(cfg, &fakeImages{})
+			require.Error(t, err)
+			assert.NoDirExists(t, cfg.Out, "a refused stage leaves nothing behind")
+		})
+	}
+}
+
+// M-6, R43 row 51: a test package (make release-test: -allow-draft) carries placeholders for what
+// Tasks 17 and 18 and the vendor provide later, and says so.
+func TestStageDraftPlaceholders(t *testing.T) {
+	cfg, _ := fixture(t)
+	require.NoError(t, os.Remove(filepath.Join(cfg.Root, "SECURITY-REPORT.md")))
+	require.NoError(t, os.Remove(cfg.GatesLog))
+	require.NoError(t, os.Remove(filepath.Join(cfg.Root, "docs/install-guide.md")))
+	write(t, cfg.License, draftLicense+"\n", 0o644)
+	cfg.AllowDraft = true
+	require.NoError(t, stage(cfg, &fakeImages{}))
+	pkg := filepath.Join(cfg.Out, "alice")
+	assert.Equal(t, "SECURITY-REPORT.md: not part of this test package\n", readFile(t, filepath.Join(pkg, "SECURITY-REPORT.md")))
+	assert.Equal(t, "docs/install-guide.md: not part of this test package\n", readFile(t, filepath.Join(pkg, "docs/install-guide.md")))
+	assert.Equal(t, "# upgrade.md\n", readFile(t, filepath.Join(pkg, "docs/upgrade.md")), "an existing guide is copied")
+	assert.Equal(t, draftLicense+"\n", readFile(t, filepath.Join(pkg, "licenses/LICENSE")))
+	checklist := readFile(t, filepath.Join(pkg, "RELEASE-CHECKLIST-SIGNED.txt"))
+	assert.Contains(t, checklist, "No gate was recorded for this package.\n")
+	assert.Contains(t, checklist, "Signed: <empty until the vendor signs the checklist>\n")
+	assert.NotContains(t, checklist, "exit 0")
+
+	// A draft stage still copies a gates log when there is one, and never claims more.
+	cfg2, _ := fixture(t)
+	cfg2.AllowDraft = true
+	write(t, cfg2.GatesLog, "lint\t0\tv2\n", 0o644)
+	require.NoError(t, stage(cfg2, &fakeImages{}))
+	checklist = readFile(t, filepath.Join(cfg2.Out, "alice", "RELEASE-CHECKLIST-SIGNED.txt"))
+	assert.Contains(t, checklist, "lint: exit 0 (v2)")
+	assert.NotContains(t, checklist, "test: exit")
+}
+
+// S-7: the stage never packages a symbolic link.
+func TestStageRefusesSymlinks(t *testing.T) {
+	for name, link := range map[string]func(cfg stageConfig) (target, linkPath string){
+		"script": func(cfg stageConfig) (string, string) {
+			return filepath.Join(cfg.Root, "deploy/release/alicectl"), filepath.Join(cfg.Root, "deploy/release/install.sh")
+		},
+		"guide": func(cfg stageConfig) (string, string) {
+			return "/etc/hostname", filepath.Join(cfg.Root, "docs/extra.md")
+		},
+		"release key": func(cfg stageConfig) (string, string) {
+			return filepath.Join(cfg.Keys, "rk-2026-01.pem"), filepath.Join(cfg.Keys, "rk-2026-02.pem")
+		},
+		"sbom": func(cfg stageConfig) (string, string) {
+			return filepath.Join(cfg.SBOM, "alice-1.0.0.cdx.json"), filepath.Join(cfg.SBOM, "source-1.0.0.cdx.json")
+		},
+		"keys directory": func(cfg stageConfig) (string, string) {
+			return cfg.Keys, filepath.Join(cfg.Root, "keys-link")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, _ := fixture(t)
+			target, linkPath := link(cfg)
+			_ = os.Remove(linkPath)
+			require.NoError(t, os.Symlink(target, linkPath))
+			if name == "keys directory" {
+				cfg.Keys = linkPath
+			}
+			err := stage(cfg, &fakeImages{})
+			require.ErrorContains(t, err, "symbolic link")
+			assert.NoDirExists(t, cfg.Out)
+		})
+	}
+}
+
+// S-11: test keys only with -test (which writes TEST_SIGNED=1), production keys only as committed.
+func TestStageRefusesTestKeysWithoutTestFlag(t *testing.T) {
+	cfg, _ := fixture(t)
+	testKeys := t.TempDir()
+	releaseKey(t, testKeys, "rk-test-01")
+	cfg.Keys = testKeys
+	cfg.Version = "1.0.0-rc.1"
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "rk-test-01")
+
+	// Another key with a production ID, not the committed one: refused.
+	cfg, _ = fixture(t)
+	other := t.TempDir()
+	releaseKey(t, other, "rk-2026-01")
+	cfg.Keys = other
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "deploy/release/keys")
+	// An extra production key beside the committed one: refused.
+	cfg, _ = fixture(t)
+	other = t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(other, "rk-2026-01.pem"), []byte(readFile(t, filepath.Join(cfg.Keys, "rk-2026-01.pem"))), 0o644))
+	releaseKey(t, other, "rk-2026-02")
+	cfg.Keys = other
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "deploy/release/keys")
+	// A key file whose name is not its key ID: refused.
+	cfg, _ = fixture(t)
+	require.NoError(t, os.Rename(filepath.Join(cfg.Keys, "rk-2026-01.pem"), filepath.Join(cfg.Keys, "rk-2026-09.pem")))
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "rk-2026-09")
+
+	// With -test: accepted, marked, and only for a release candidate.
+	cfg, _ = fixture(t)
+	cfg.Keys = testKeys
+	cfg.Test = true
+	require.ErrorContains(t, stage(cfg, &fakeImages{}), "-rc.N")
+	cfg.Version = "1.0.0-rc.1"
+	for _, f := range []string{"alice", "postgres", "source"} {
+		write(t, filepath.Join(cfg.SBOM, f+"-1.0.0-rc.1.cdx.json"), "{}\n", 0o644)
+	}
+	require.NoError(t, stage(cfg, &fakeImages{}))
+	release := readFile(t, filepath.Join(cfg.Out, "alice", "RELEASE"))
+	assert.Contains(t, release, "\nRELEASE_KEY_ID=rk-test-01\nTEST_SIGNED=1\n")
+	assert.FileExists(t, filepath.Join(cfg.Out, "alice", "release-keys", "rk-test-01.pem"))
+}
+
+func signStage(t *testing.T, cfg stageConfig, priv ed25519.PrivateKey) {
+	t.Helper()
+	sums := filepath.Join(cfg.Out, "alice", "SHA256SUMS")
+	data, err := os.ReadFile(sums)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(sums+".sig", ed25519.Sign(priv, data), 0o644))
+}
+
+func TestPackIsDeterministic(t *testing.T) {
+	cfg, priv := fixture(t)
+	require.NoError(t, stage(cfg, &fakeImages{}))
+	signStage(t, cfg, priv)
+
+	outA, outB := t.TempDir(), t.TempDir()
+	tarA, err := pack(cfg.Out, outA)
+	require.NoError(t, err)
+	// Different modification times and umask on disk do not change the package.
+	require.NoError(t, os.Chtimes(filepath.Join(cfg.Out, "alice", "VERSION"), testTime(t, "2030-01-01T00:00:00Z"), testTime(t, "2030-01-01T00:00:00Z")))
+	tarB, err := pack(cfg.Out, outB)
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(outA, "alice-1.0.0.tar.gz"), tarA)
+	a, b := readFile(t, tarA), readFile(t, tarB)
+	assert.Equal(t, a, b, "two packs of one stage are byte for byte equal")
+
+	sum := sha256.Sum256([]byte(a))
+	assert.Equal(t, hex.EncodeToString(sum[:])+"  alice-1.0.0.tar.gz\n", readFile(t, tarA+".sha256"))
+
+	entries := tarEntries(t, tarA)
+	require.NotEmpty(t, entries)
+	assert.Equal(t, "alice/", entries[0].name)
+	names := make([]string, len(entries))
+	for i, e := range entries {
+		names[i] = e.name
+		assert.Equal(t, testBuildTime, e.mtime, e.name)
+		assert.Equal(t, "0 0 root root", e.owner, e.name)
+	}
+	assert.True(t, sort.StringsAreSorted(names), names)
+	assert.Contains(t, names, "alice/SHA256SUMS.sig")
+	assert.Contains(t, names, "alice/lib/initdb/")
+	assert.Contains(t, names, "alice/.env.template")
+	modes := map[string]string{}
+	for _, e := range entries {
+		modes[e.name] = e.mode
+	}
+	assert.Equal(t, "0755", modes["alice/install.sh"])
+	assert.Equal(t, "0644", modes["alice/RELEASE"])
+	assert.Equal(t, "0755", modes["alice/helper/"])
+
+	// gzip header: no name, no time (bytes 4..7 are the MTIME field).
+	raw := []byte(a)
+	assert.Equal(t, []byte{0, 0, 0, 0}, raw[4:8])
+	assert.Zero(t, raw[3]&0x08, "no FNAME")
+
+	// The outer files are never overwritten.
+	_, err = pack(cfg.Out, outA)
+	require.ErrorContains(t, err, "already exists")
+}
+
+func testTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	tm, err := time.Parse(time.RFC3339, s)
+	require.NoError(t, err)
+	return tm
+}
+
+type tarEntry struct{ name, mtime, owner, mode string }
+
+func tarEntries(t *testing.T, path string) []tarEntry {
+	t.Helper()
+	f, err := os.Open(path)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	zr, err := gzip.NewReader(f)
+	require.NoError(t, err)
+	tr := tar.NewReader(zr)
+	var out []tarEntry
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		out = append(out, tarEntry{
+			name: h.Name, mtime: h.ModTime.UTC().Format(time.RFC3339),
+			owner: fmt.Sprintf("%d %d %s %s", h.Uid, h.Gid, h.Uname, h.Gname), mode: fmt.Sprintf("%04o", h.Mode),
+		})
+	}
+	return out
+}
+
+func TestPackRefusesAnUnsignedStage(t *testing.T) {
+	cfg, priv := fixture(t)
+	require.NoError(t, stage(cfg, &fakeImages{}))
+	_, err := pack(cfg.Out, t.TempDir())
+	require.ErrorContains(t, err, "SHA256SUMS.sig")
+
+	// A signature by another key: refused.
+	_, otherPriv, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	signStage(t, cfg, otherPriv)
+	_, err = pack(cfg.Out, t.TempDir())
+	require.ErrorContains(t, err, "signature")
+
+	// Signed correctly, but a file changed after signing: refused.
+	require.NoError(t, os.Remove(filepath.Join(cfg.Out, "alice", "SHA256SUMS.sig")))
+	signStage(t, cfg, priv)
+	write(t, filepath.Join(cfg.Out, "alice", "docs", "README.md"), "changed\n", 0o644)
+	_, err = pack(cfg.Out, t.TempDir())
+	require.ErrorContains(t, err, "docs/README.md")
+	write(t, filepath.Join(cfg.Out, "alice", "docs", "README.md"), "# README.md\n", 0o644)
+	// An unlisted file: refused.
+	write(t, filepath.Join(cfg.Out, "alice", "lib", "initdb", "20-extra.sh"), "x\n", 0o644)
+	_, err = pack(cfg.Out, t.TempDir())
+	require.ErrorContains(t, err, "20-extra.sh")
+	require.NoError(t, os.Remove(filepath.Join(cfg.Out, "alice", "lib", "initdb", "20-extra.sh")))
+	// A symbolic link: refused.
+	require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(cfg.Out, "alice", "docs", "x.md")))
+	_, err = pack(cfg.Out, t.TempDir())
+	require.ErrorContains(t, err, "symbolic link")
+	require.NoError(t, os.Remove(filepath.Join(cfg.Out, "alice", "docs", "x.md")))
+	_, err = pack(cfg.Out, t.TempDir())
+	require.NoError(t, err)
+}
+
+// S-11: a test-signed package is only ever a release candidate; the Makefile refuses before it
+// builds anything.
+func TestReleaseTestNeedsAnRCVersion(t *testing.T) {
+	cmd := exec.Command("make", "-s", "release-test", "VERSION=1.0.0")
+	cmd.Dir = filepath.Join("..", "..")
+	out, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, string(out))
+	assert.Equal(t, 2, exitErr.ExitCode())
+	assert.Equal(t, "make release-test needs VERSION=x.y.z-rc.N (a test-signed package is never a customer version)", strings.SplitN(string(out), "\n", 2)[0])
+	assert.NotContains(t, string(out), "go run", "nothing was built")
+}
+
+// S-12: the release and license public key sets are disjoint.
+func TestReleaseAndLicenseKeysAreDisjoint(t *testing.T) {
+	relDir := t.TempDir()
+	priv := releaseKey(t, relDir, "rk-2026-01")
+	licenseFile := filepath.Join(t.TempDir(), "production.json")
+	other, _, err := ed25519.GenerateKey(nil)
+	require.NoError(t, err)
+	keySet := func(pub ed25519.PublicKey) string {
+		return fmt.Sprintf(`{"keys": [{"key_id": "vk-2026-01", "public_key": %q, "status": "active"}]}`, base64.StdEncoding.EncodeToString(pub))
+	}
+	write(t, licenseFile, keySet(other), 0o644)
+	var out bytes.Buffer
+	require.Equal(t, 0, run([]string{"keycheck", "-release", relDir, "-license", licenseFile}, &out, &out), out.String())
+	assert.Contains(t, out.String(), "disjoint")
+
+	write(t, licenseFile, keySet(priv.Public().(ed25519.PublicKey)), 0o644)
+	out.Reset()
+	assert.Equal(t, 1, run([]string{"keycheck", "-release", relDir, "-license", licenseFile}, &out, &out))
+	assert.Contains(t, out.String(), "rk-2026-01")
+	assert.Contains(t, out.String(), "vk-2026-01")
+
+	// The committed key set of this repository (no license key yet) passes; a test key in the
+	// release directory and an unreadable license key set do not.
+	write(t, licenseFile, `{"keys": []}`, 0o644)
+	out.Reset()
+	require.Equal(t, 0, run([]string{"keycheck", "-release", relDir, "-license", licenseFile}, &out, &out), out.String())
+	releaseKey(t, relDir, "rk-test-01")
+	out.Reset()
+	assert.Equal(t, 1, run([]string{"keycheck", "-release", relDir, "-license", licenseFile}, &out, &out))
+	assert.Contains(t, out.String(), "rk-test-01")
+	require.NoError(t, os.Remove(filepath.Join(relDir, "rk-test-01.pem")))
+	write(t, licenseFile, `{"keys": [`, 0o644)
+	out.Reset()
+	assert.Equal(t, 1, run([]string{"keycheck", "-release", relDir, "-license", licenseFile}, &out, &out))
+	empty := t.TempDir()
+	out.Reset()
+	assert.Equal(t, 1, run([]string{"keycheck", "-release", empty, "-license", licenseFile}, &out, &out))
+}
+
+func TestCommandLine(t *testing.T) {
+	var out bytes.Buffer
+	for _, args := range [][]string{nil, {"other"}, {"stage", "-bogus"}, {"pack"}, {"keycheck"}} {
+		out.Reset()
+		assert.Equal(t, 2, run(args, &out, &out), args)
+	}
+
+	// stage and pack through the command line, with the docker stand-in.
+	cfg, priv := fixture(t)
+	img := &fakeImages{}
+	newImages = func() images { return img }
+	t.Cleanup(func() { newImages = func() images { return dockerImages{} } })
+	args := []string{"stage", "-root", cfg.Root, "-version", cfg.Version, "-out", cfg.Out, "-keys", cfg.Keys,
+		"-alice-image", cfg.AliceImage, "-postgres-image", cfg.PostgresImage, "-sbom", cfg.SBOM, "-notices", cfg.Notices,
+		"-helper", cfg.Helper, "-commit", cfg.Commit, "-build-time", cfg.BuildTime, "-gates-log", cfg.GatesLog,
+		"-license", cfg.License, "-min-upgrade-from", cfg.MinUpgradeFrom}
+	out.Reset()
+	require.Equal(t, 0, run(args, &out, &out), out.String())
+	assert.Contains(t, out.String(), "SHA256SUMS")
+	out.Reset()
+	assert.Equal(t, 1, run(args, &out, &out), "the stage exists")
+	signStage(t, cfg, priv)
+	dest := t.TempDir()
+	out.Reset()
+	require.Equal(t, 0, run([]string{"pack", "-stage", cfg.Out, "-out", dest}, &out, &out), out.String())
+	assert.FileExists(t, filepath.Join(dest, "alice-1.0.0.tar.gz.sha256"))
+	out.Reset()
+	assert.Equal(t, 1, run([]string{"pack", "-stage", cfg.Out, "-out", dest}, &out, &out))
+}

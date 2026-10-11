@@ -24,7 +24,9 @@
 //   - The Makefile and shell scripts: the IMAGE operand of every docker run / docker create /
 //     docker pull (options skipped, continuation lines joined, a trailing # comment ignored) must be
 //     pinned (@sha256:),
-//     one of the pinned Makefile variables, the locally built alice: image, or an image read from an
+//     in the Makefile one of its pinned $(<NAME>_IMAGE) variables, in a shell script "$<NAME>_IMAGE"
+//     when every assignment of that variable in the same script is (or defaults to) a reference
+//     pinned by tag and digest (M-21), the locally built alice: image, or an image read from an
 //     already running container (see imageOperandOK). Every *_IMAGE variable of the Makefile
 //     (GITLEAKS_IMAGE, TRIVY_IMAGE, SHELLCHECK_IMAGE, ...) must itself be pinned by tag and digest,
 //     and GITLEAKS_IMAGE and TRIVY_IMAGE must exist.
@@ -81,6 +83,10 @@ var (
 	makeVarRe     = regexp.MustCompile(`^([A-Z][A-Z0-9_]*_IMAGE)\s*[?:]?=\s*(\S+)`)
 	makeRefRe     = regexp.MustCompile(`\$\(([A-Z][A-Z0-9_]*_IMAGE)\)`)
 	makeOperandRe = regexp.MustCompile(`^\$\([A-Z][A-Z0-9_]*_IMAGE\)$`)
+	shellVarRe    = regexp.MustCompile(`^\$\{?([A-Z][A-Z0-9_]*_IMAGE)\}?$`)
+	shellAssignRe = regexp.MustCompile(`^\s*(?:(?:export|readonly|local|declare(?:\s+-[A-Za-z]+)?)\s+)?([A-Z][A-Z0-9_]*_IMAGE)=(\S*)`)
+	shellColonRe  = regexp.MustCompile(`^\s*:\s+"?\$\{([A-Z][A-Z0-9_]*_IMAGE):=([^}]*)\}"?\s*$`)
+	shellDefRe    = regexp.MustCompile(`^\$\{([A-Za-z_][A-Za-z0-9_]*):[-=]([^}]*)\}$`)
 	dockerRunRe   = regexp.MustCompile(`\bdocker\s+(?:container\s+)?(?:run|create)\b`)
 	dockerPullRe  = regexp.MustCompile(`\bdocker\s+(?:image\s+)?pull\b`)
 	dockerURLRe   = regexp.MustCompile(`docker://[^\s'"]+`)
@@ -95,13 +101,22 @@ var skipDirs = map[string]bool{
 	"pincheck": true, // tools/pincheck holds deliberately unpinned samples in its tests
 }
 
+// operandContext is where an image operand appears: in the Makefile ($(<NAME>_IMAGE) is one of its
+// variables, each required to be pinned), or in a shell script or workflow step (shellVars lists
+// the *_IMAGE variables the script itself pins).
+type operandContext struct {
+	makefile  bool
+	shellVars map[string]bool
+}
+
 // imageOperandOK reports whether the image operand of a docker run / docker create may be used: a
-// digest-pinned reference; $(<NAME>_IMAGE), a Makefile variable this tool requires to be pinned
-// (and defined); alice:<tag>, the image this repository builds itself; or the image of a container
-// that is already running, read with docker inspect -f '{{.Config.Image}}' (deploy/dev/check-hardening.sh
+// digest-pinned reference; in the Makefile $(<NAME>_IMAGE), a variable this tool requires to be
+// pinned (and defined); in a shell script "$<NAME>_IMAGE" pinned by that script (M-21);
+// alice:<tag>, the image this repository builds itself; or the image of a container that is
+// already running, read with docker inspect -f '{{.Config.Image}}' (deploy/dev/check-hardening.sh
 // re-runs the SSH target's own image). Only the operand itself counts: an alice: volume name or a
 // digest elsewhere on the line does not.
-func imageOperandOK(op string) bool {
+func imageOperandOK(op string, ctx operandContext) bool {
 	op = unquote(op)
 	switch {
 	case op == "":
@@ -109,13 +124,50 @@ func imageOperandOK(op string) bool {
 	case digestRe.MatchString(op):
 		return true
 	case makeOperandRe.MatchString(op):
-		return true // every *_IMAGE variable of the Makefile is itself required to be pinned
+		return ctx.makefile // every *_IMAGE variable of the Makefile is itself required to be pinned
+	case shellVarRe.MatchString(op):
+		return ctx.shellVars[shellVarRe.FindStringSubmatch(op)[1]]
 	case strings.HasPrefix(op, "alice:") && len(op) > len("alice:"):
 		return true
 	case strings.HasPrefix(op, "$(docker inspect ") && strings.HasSuffix(op, ")") && strings.Contains(op, "'{{.Config.Image}}'"):
 		return true
 	}
 	return false
+}
+
+// pinnedByTagAndDigest reports whether ref names an image by tag and @sha256 digest.
+func pinnedByTagAndDigest(ref string) bool {
+	return digestRe.MatchString(ref) && strings.Contains(strings.SplitN(ref, "@", 2)[0], ":")
+}
+
+// shellImageVars returns the *_IMAGE variables a shell script pins: every assignment of the
+// variable (NAME=ref, NAME="${NAME:-ref}", : "${NAME:=ref}") names a reference pinned by tag and
+// digest. The caller's environment may override a ${NAME:-ref} default; the Makefile exports the
+// same pinned values (M-21).
+func shellImageVars(lines []string) map[string]bool {
+	pinned := map[string]bool{}
+	for _, l := range joinContinued(lines) {
+		text := stripShellComment(l.text)
+		var name, value string
+		if m := shellColonRe.FindStringSubmatch(text); m != nil {
+			name, value = m[1], m[2]
+		} else if m := shellAssignRe.FindStringSubmatch(text); m != nil {
+			name, value = m[1], unquote(m[2])
+			if d := shellDefRe.FindStringSubmatch(value); d != nil {
+				if d[1] != name {
+					pinned[name] = false
+					continue
+				}
+				value = d[2]
+			}
+		} else {
+			continue
+		}
+		value = unquote(value)
+		ok, seen := pinned[name]
+		pinned[name] = (ok || !seen) && !strings.Contains(value, "$") && pinnedByTagAndDigest(value)
+	}
+	return pinned
 }
 
 // check returns one message per unpinned reference found under root.
@@ -145,9 +197,9 @@ func check(root string) []string {
 			out = append(out, checkCompose(path, rel)...)
 		case name == "Makefile":
 			out = append(out, checkMakefile(path, rel)...)
-			out = append(out, checkDockerRun(path, rel)...)
+			out = append(out, checkDockerRun(path, rel, true)...)
 		case strings.HasSuffix(name, ".sh"):
-			out = append(out, checkDockerRun(path, rel)...)
+			out = append(out, checkDockerRun(path, rel, false)...)
 		case strings.HasSuffix(name, ".go"):
 			goFiles = append(goFiles, path)
 		}
@@ -309,7 +361,7 @@ func checkWorkflowYAML(path, rel string) []string {
 				if run.Style&(yaml.LiteralStyle|yaml.FoldedStyle) != 0 {
 					first++ // the script starts on the line after the | or > indicator
 				}
-				out = append(out, checkScript(rel, first, strings.Split(run.Value, "\n"))...)
+				out = append(out, checkScript(rel, first, strings.Split(run.Value, "\n"), operandContext{})...)
 			}
 		}
 	}
@@ -578,7 +630,7 @@ func checkMakefile(path, rel string) []string {
 			continue
 		}
 		found[m[1]] = true
-		if !digestRe.MatchString(m[2]) || !strings.Contains(strings.SplitN(m[2], "@", 2)[0], ":") {
+		if !pinnedByTagAndDigest(m[2]) {
 			out = append(out, fmt.Sprintf("%s:%d: %s is not pinned by tag and @sha256:<digest>", rel, l.n, m[1]))
 		}
 	}
@@ -598,26 +650,30 @@ func checkMakefile(path, rel string) []string {
 }
 
 // checkDockerRun checks each docker run / docker create statement of a Makefile or shell script.
-func checkDockerRun(path, rel string) []string {
+func checkDockerRun(path, rel string, makefile bool) []string {
 	lines, err := readLines(path)
 	if err != nil {
 		return []string{rel + ": " + err.Error()}
 	}
-	return checkScript(rel, 1, lines)
+	ctx := operandContext{makefile: makefile}
+	if !makefile {
+		ctx.shellVars = shellImageVars(lines)
+	}
+	return checkScript(rel, 1, lines, ctx)
 }
 
 // checkScript checks the shell lines of a script whose first line is line first of rel:
 // continuation lines are joined, a trailing comment is dropped, white space is collapsed, and the
 // image operand of every docker run / docker create must pass imageOperandOK; every docker://
 // reference needs a digest.
-func checkScript(rel string, first int, lines []string) []string {
+func checkScript(rel string, first int, lines []string, ctx operandContext) []string {
 	var out []string
 	for _, l := range joinContinued(lines) {
 		text := spaceRe.ReplaceAllString(strings.TrimSpace(stripShellComment(l.text)), " ")
 		pos := fmt.Sprintf("%s:%d", rel, first+l.n-1)
 		for _, loc := range dockerRunRe.FindAllStringIndex(text, -1) {
 			op := imageOperand(text[loc[1]:])
-			if imageOperandOK(op) {
+			if imageOperandOK(op, ctx) {
 				continue
 			}
 			stmt := text[loc[0]:]
@@ -627,7 +683,7 @@ func checkScript(rel string, first int, lines []string) []string {
 			out = append(out, fmt.Sprintf("%s: %q uses an image that is not pinned (use a digest, a pinned $(<NAME>_IMAGE) or alice:)", pos, stmt))
 		}
 		for _, loc := range dockerPullRe.FindAllStringIndex(text, -1) {
-			if op := pullOperand(text[loc[1]:]); !imageOperandOK(op) {
+			if op := pullOperand(text[loc[1]:]); !imageOperandOK(op, ctx) {
 				out = append(out, fmt.Sprintf("%s: docker pull %s is not pinned (use a digest, a pinned $(<NAME>_IMAGE) or alice:)", pos, op))
 			}
 		}

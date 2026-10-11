@@ -1,7 +1,8 @@
 # Licensing: vendor guide (not shipped to customers)
 
-This guide is for the Alice vendor, the person who signs licenses. It covers `licensectl`, the signing key, the
-issuance ledger, correction licenses and key rotation (spec §16.7, §19.2, R8, R36). Customers never see this guide
+This guide is for the Alice vendor, the person who signs licenses and releases. It covers `licensectl`, the signing
+key, the issuance ledger, correction licenses, key rotation and the separate release key (spec §16.7, §17.5,
+§19.2, SEC-107, R8, R36). Customers never see this guide
 and never get `licensectl`. `licensectl` never uses the network.
 
 ## Rules that never change
@@ -197,3 +198,80 @@ If the private key **or** its passphrase may have leaked:
    lists the old file as **Damaged**, and only uploading the new file ends the lock. Uploading an old file again
    shows "This license was signed with a key that is no longer trusted."
 4. Notify customers (spec §17.4) and start a new ledger and paper log for the new key.
+
+## 9. Release key
+
+Releases are signed with a **release key**, a second Ed25519 key that is never the license key (spec §16.7,
+SEC-107). Compromise of one must not compromise the other, so the two are separate keys with separate
+passphrases, separate backups and separate directories. Every rule of this guide's first section applies to the
+release key too: it is created and used only on the offline machine, and no script, test, assistant or CI job ever
+creates, stores or prints it.
+
+The key file says what it signs: a release key file has the block type `ALICE RELEASE SIGNING KEY` and the header
+`Alice-Key-Purpose: release`, both bound into its encryption. `licensectl issue` refuses a release key, and the
+release commands refuse a license key ("this key is for another purpose").
+
+### Generation (once per key, offline)
+
+1. Choose a **new** Diceware passphrase of at least 6 words, as in step 1 (never the license key's passphrase), and
+   write it on its own paper.
+2. Run, in a directory of its own (never the license key directory, which `licensectl` refuses, and never
+   `deploy/release/keys` of a repository):
+
+       bin/licensectl release-keygen --out /media/offline/alice-release --key-id rk-2026-01
+
+   Expected: `Private release key (encrypted): …/rk-2026-01.key`, `Public release key: …/rk-2026-01.pem`,
+   `Key ID: rk-2026-01` and `Fingerprint (SHA-256): <64 hex>`. Write the fingerprint on the paper. Release key IDs
+   have the form `rk-YYYY-NN`; `rk-test-NN` belongs to the throw-away keys of test packages and is refused.
+3. Back the directory up exactly like the license key (two hardware-encrypted USB drives, a printout of
+   `rk-2026-01.key`, the passphrase paper stored separately).
+4. On the build machine, copy **only** `rk-2026-01.pem` into `deploy/release/keys/` and commit it. Then
+   `make release-keycheck` checks that the release keys are production keys and that none of them is a license key
+   in `internal/license/keys/production.json` (it fails until both keys are committed).
+5. Publish the fingerprint on a vendor channel customers can compare against (your website and the order
+   confirmation). `install.sh` prints it and asks the customer to compare (R43 row 43); the install guide checks the
+   outer signature with the published key first.
+
+### Signing ceremony (every release)
+
+1. On the release build machine, from the signed tag: run every release gate of the release checklist (their
+   results are recorded in `bin/release-gates.log`, which becomes `RELEASE-CHECKLIST-SIGNED.txt` in the package),
+   then `make release VERSION=x.y.z`. Only a stage built this way is signed; a stage built by CI is only compared with it (`make reproducible-check`
+   compares the binaries) and is never signed (S-26).
+2. Copy `bin/release/alice-x.y.z/alice/SHA256SUMS` to the offline machine on a clean USB stick and run:
+
+       bin/licensectl release-sign --key /media/offline/alice-release/rk-2026-01.key SHA256SUMS
+
+   It asks for the passphrase once, prints the SHA-256 of each file it signs, and writes `SHA256SUMS.sig` (a raw
+   64-byte Ed25519 signature). Compare the printed SHA-256 with `sha256sum SHA256SUMS` on the build machine.
+3. Copy `SHA256SUMS.sig` back into `bin/release/alice-x.y.z/alice/`, run `make release-pack VERSION=x.y.z`, and sign
+   the outer checksum the same way:
+
+       bin/licensectl release-sign --key /media/offline/alice-release/rk-2026-01.key alice-x.y.z.tar.gz.sha256
+
+4. Check both signatures before publishing, with `licensectl release-verify --pub rk-2026-01.pem FILE FILE.sig`
+   and with the command the customer's installer uses:
+
+       openssl pkeyutl -verify -pubin -inkey rk-2026-01.pem -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
+
+`release-sign` signs checksum files only (at most 1 MiB) and never overwrites a `.sig`.
+
+Test packages (`make release-test VERSION=x.y.z-rc.N`, the release harness) are signed with a key that
+`tools/releasesign` generates at test time in `bin/release-test-key/` (`rk-test-01`, not encrypted). Such a package
+says `TEST_SIGNED=1` in `RELEASE`, the installer warns that it must never be installed for production, and a
+version without `-rc.N` is refused. The broken-update package for the owner's VM test is built with
+`make release-broken VERSION=… BROKEN=fail SIGN=offline` and signed in this ceremony like a release.
+
+### Rotation
+
+1. Create the next key (`rk-YYYY-NN`) ahead of time, as above, with its own backups.
+2. Commit its `.pem` beside the current one in `deploy/release/keys/` at least one release before you sign with it.
+   An installation trusts a new release key only when it arrives in a package signed by a key it already trusts,
+   and an update **replaces** the installed `release-keys/` with the package's set (R43 row 21).
+3. Sign with the new key from the next release on; remove the old `.pem` from `deploy/release/keys/` one release
+   later. Installations that skip that release still update, because the release in between trusted both keys.
+
+If the release key or its passphrase may have leaked: create a new key, publish its fingerprint, remove the leaked
+key from `deploy/release/keys/` in the next release, and tell customers (spec §17.4) to check the fingerprint the
+installer prints against the newly published one. Packages signed with the leaked key after the leak cannot be told
+apart from genuine ones by signature alone, so customers verify downloads against the new fingerprint only.

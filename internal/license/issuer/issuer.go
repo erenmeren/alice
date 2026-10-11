@@ -1,6 +1,8 @@
 // Package issuer is the vendor side of licensing (spec §16.7, §19.2): the passphrase-protected
-// signing key file, license issuing and the signed issuance ledger. Only cmd/licensectl and
-// tests import it; the alice binary never links it (a test in cmd/alice checks this).
+// signing key file, license issuing and the signed issuance ledger, and the release signing key
+// (SEC-107, R43 rows 20 and 43), which is a separate key with its own purpose. Only
+// cmd/licensectl, the release tools under tools/ and tests import it; the alice binary never
+// links it (a test in cmd/alice checks this).
 package issuer
 
 import (
@@ -9,8 +11,10 @@ import (
 	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -51,12 +55,14 @@ const (
 	MinPassphraseWords  = 6
 	MinPassphraseLength = 24
 
-	privatePEMType = "ALICE LICENSE SIGNING KEY"
-	publicPEMType  = "PUBLIC KEY"
-	keyAAD         = "alice/license-signing-key/v1"
-	maxKDFMemory   = 1024 * 1024 // KiB (1 GiB): a hostile key file cannot exhaust memory
-	maxKDFTime     = 64
-	saltSize       = 16
+	privatePEMType        = "ALICE LICENSE SIGNING KEY"
+	releasePrivatePEMType = "ALICE RELEASE SIGNING KEY"
+	publicPEMType         = "PUBLIC KEY"
+	keyAAD                = "alice/license-signing-key/v1"
+	releaseKeyAAD         = "alice/release-signing-key/v1"
+	maxKDFMemory          = 1024 * 1024 // KiB (1 GiB): a hostile key file cannot exhaust memory
+	maxKDFTime            = 64
+	saltSize              = 16
 )
 
 // Errors.
@@ -66,11 +72,38 @@ var (
 	ErrKeyExists       = errors.New("issuer: a key file already exists here; keygen never overwrites a key")
 	ErrBadKeyFile      = errors.New("issuer: this is not an Alice license signing key file")
 	ErrBadKeyID        = errors.New("issuer: the key ID must look like vk-2026-01")
+	ErrBadReleaseKeyID = errors.New("issuer: the release key ID must look like rk-2026-01")
+	ErrWrongPurpose    = errors.New("issuer: this key is for another purpose: license and release signing keys are separate (spec §16.7)")
 )
+
+// Purpose says what a signing key signs. A key file without the PurposeHeader (every license key
+// file written before release keys existed) is a license key.
+type Purpose string
+
+// The two purposes.
+const (
+	PurposeLicense Purpose = "license"
+	PurposeRelease Purpose = "release"
+)
+
+// PurposeHeader is the PEM header naming a key file's purpose.
+const PurposeHeader = "Alice-Key-Purpose"
 
 // keyIDPattern is stricter than the license format's key ID rule: vendor keys are named by
 // year and number, so the public test key ID (vk-test-01) can never be a vendor key.
 var keyIDPattern = regexp.MustCompile(`^vk-\d{4}-\d{2}$`)
+
+// Release key IDs: rk-YYYY-NN for vendor keys; rk-test-NN only for the throw-away keys of test
+// packages (tools/releasesign), which are never passphrase key files (R43 row 43).
+var (
+	releaseKeyIDPattern     = regexp.MustCompile(`^rk-\d{4}-\d{2}$`)
+	testReleaseKeyIDPattern = regexp.MustCompile(`^rk-test-\d{2}$`)
+)
+
+// IsReleaseKeyID reports whether id names a release key: rk-YYYY-NN, and with test also rk-test-NN.
+func IsReleaseKeyID(id string, test bool) bool {
+	return releaseKeyIDPattern.MatchString(id) || (test && testReleaseKeyIDPattern.MatchString(id))
+}
 
 // CheckPassphrase enforces R8/§16.7: at least six words (separated by spaces or dashes) and
 // 24 characters, as a Diceware passphrase has.
@@ -84,12 +117,16 @@ func CheckPassphrase(p []byte) error {
 
 // SigningKey is an opened signing key. It never prints itself.
 type SigningKey struct {
-	id   string
-	priv ed25519.PrivateKey
+	id      string
+	purpose Purpose
+	priv    ed25519.PrivateKey
 }
 
-// KeyID returns the key ID (vk-YYYY-NN).
+// KeyID returns the key ID (vk-YYYY-NN or rk-YYYY-NN).
 func (k *SigningKey) KeyID() string { return k.id }
+
+// Purpose returns what the key signs.
+func (k *SigningKey) Purpose() Purpose { return k.purpose }
 
 // Public returns the public key.
 func (k *SigningKey) Public() ed25519.PublicKey { return k.priv.Public().(ed25519.PublicKey) }
@@ -117,11 +154,23 @@ func (k *SigningKey) MarshalJSON() ([]byte, error) { return json.Marshal(k.redac
 // Issue signs p and returns the license file. Free-text fields are NFC-normalized before
 // signing (04-security.md), so the same name typed on different systems signs the same bytes.
 func (k *SigningKey) Issue(p license.Payload) ([]byte, error) {
+	if k.purpose != PurposeLicense {
+		return nil, ErrWrongPurpose
+	}
 	f, err := license.Sign(k.priv, k.id, normalize(p))
 	if err != nil {
 		return nil, err
 	}
 	return license.EncodeFile(f)
+}
+
+// SignRelease returns the raw 64-byte Ed25519 signature of data (a SHA256SUMS file or the outer
+// .sha256 of a package, C5). Only a release key signs releases.
+func (k *SigningKey) SignRelease(data []byte) ([]byte, error) {
+	if k.purpose != PurposeRelease {
+		return nil, ErrWrongPurpose
+	}
+	return ed25519.Sign(k.priv, data), nil
 }
 
 // normalize returns p with every free-text string in Unicode NFC.
@@ -137,12 +186,44 @@ func normalize(p license.Payload) license.Payload {
 	return p
 }
 
-// GenerateKey creates a key pair: the private key encrypted under Argon2id(passphrase) with
-// AES-256-GCM, and the public key as a PKIX PEM. Both carry the key ID.
+// GenerateKey creates a license key pair: the private key encrypted under Argon2id(passphrase)
+// with AES-256-GCM, and the public key as a PKIX PEM. Both carry the key ID.
 func GenerateKey(keyID string, passphrase []byte, p KDFParams) (privPEM, pubPEM []byte, err error) {
 	if !keyIDPattern.MatchString(keyID) {
 		return nil, nil, ErrBadKeyID
 	}
+	privPEM, pub, err := generate(PurposeLicense, keyID, passphrase, p)
+	if err != nil {
+		return nil, nil, err
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, nil, err
+	}
+	pubPEM = pem.EncodeToMemory(&pem.Block{Type: publicPEMType, Headers: map[string]string{"Key-Id": keyID}, Bytes: der})
+	return privPEM, pubPEM, nil
+}
+
+// GenerateReleaseKey creates a release key pair (key ID rk-YYYY-NN): the private key file is
+// encrypted like a license key, has its own block type and the header "Alice-Key-Purpose: release"
+// (both bound into the encryption), and the public key is written by EncodeReleasePublicKey.
+func GenerateReleaseKey(keyID string, passphrase []byte, p KDFParams) (privPEM, pubPEM []byte, err error) {
+	if !IsReleaseKeyID(keyID, false) {
+		return nil, nil, ErrBadReleaseKeyID
+	}
+	privPEM, pub, err := generate(PurposeRelease, keyID, passphrase, p)
+	if err != nil {
+		return nil, nil, err
+	}
+	pubPEM, err = EncodeReleasePublicKey(keyID, pub)
+	if err != nil {
+		return nil, nil, err
+	}
+	return privPEM, pubPEM, nil
+}
+
+// generate creates the encrypted private key file of purpose and returns it with the public key.
+func generate(purpose Purpose, keyID string, passphrase []byte, p KDFParams) ([]byte, ed25519.PublicKey, error) {
 	if err := CheckPassphrase(passphrase); err != nil {
 		return nil, nil, err
 	}
@@ -162,6 +243,11 @@ func GenerateKey(keyID string, passphrase []byte, p KDFParams) (privPEM, pubPEM 
 		"Salt":       base64.StdEncoding.EncodeToString(salt),
 		"Public-Key": base64.StdEncoding.EncodeToString(pub),
 	}
+	blockType := privatePEMType
+	if purpose == PurposeRelease {
+		headers[PurposeHeader] = string(PurposeRelease)
+		blockType = releasePrivatePEMType
+	}
 	gcm, err := keyCipher(passphrase, salt, p)
 	if err != nil {
 		return nil, nil, err
@@ -169,14 +255,8 @@ func GenerateKey(keyID string, passphrase []byte, p KDFParams) (privPEM, pubPEM 
 	nonce := make([]byte, gcm.NonceSize())
 	rand.Read(nonce)
 	headers["Nonce"] = base64.StdEncoding.EncodeToString(nonce)
-	ct := gcm.Seal(nil, nonce, seed, keyAADFor(headers))
-	privPEM = pem.EncodeToMemory(&pem.Block{Type: privatePEMType, Headers: headers, Bytes: ct})
-	der, err := x509.MarshalPKIXPublicKey(pub)
-	if err != nil {
-		return nil, nil, err
-	}
-	pubPEM = pem.EncodeToMemory(&pem.Block{Type: publicPEMType, Headers: map[string]string{"Key-Id": keyID}, Bytes: der})
-	return privPEM, pubPEM, nil
+	ct := gcm.Seal(nil, nonce, seed, keyAADFor(purpose, headers))
+	return pem.EncodeToMemory(&pem.Block{Type: blockType, Headers: headers, Bytes: ct}), pub, nil
 }
 
 func keyCipher(passphrase, salt []byte, p KDFParams) (cipher.AEAD, error) {
@@ -189,20 +269,60 @@ func keyCipher(passphrase, salt []byte, p KDFParams) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-// keyAADFor binds the ciphertext to its headers: changing the key ID, the KDF parameters, the
-// salt or the public key makes the file fail to open.
-func keyAADFor(h map[string]string) []byte {
-	return []byte(keyAAD + "\n" + h["Key-Id"] + "\n" + h["Kdf-Params"] + "\n" + h["Salt"] + "\n" + h["Public-Key"])
+// keyAADFor binds the ciphertext to its purpose and headers: changing the purpose, the key ID, the
+// KDF parameters, the salt or the public key makes the file fail to open. A license key keeps the
+// AAD it always had, so existing key files open unchanged.
+func keyAADFor(purpose Purpose, h map[string]string) []byte {
+	prefix := keyAAD
+	if purpose == PurposeRelease {
+		prefix = releaseKeyAAD
+	}
+	return []byte(prefix + "\n" + h["Key-Id"] + "\n" + h["Kdf-Params"] + "\n" + h["Salt"] + "\n" + h["Public-Key"])
 }
 
-// OpenKey decrypts a key file.
+// OpenKey decrypts a license key file. A release key file is refused with ErrWrongPurpose
+// before the passphrase is tried.
 func OpenKey(pemBytes, passphrase []byte) (*SigningKey, error) {
+	return openKey(PurposeLicense, pemBytes, passphrase)
+}
+
+// OpenReleaseKey decrypts a release key file. A license key file is refused with ErrWrongPurpose
+// before the passphrase is tried.
+func OpenReleaseKey(pemBytes, passphrase []byte) (*SigningKey, error) {
+	return openKey(PurposeRelease, pemBytes, passphrase)
+}
+
+// filePurpose returns the purpose a private key block declares: its type and its purpose header
+// must agree (a license block has no header, or "license").
+func filePurpose(block *pem.Block) (Purpose, error) {
+	header, has := block.Headers[PurposeHeader]
+	switch {
+	case block.Type == privatePEMType && (!has || header == string(PurposeLicense)):
+		return PurposeLicense, nil
+	case block.Type == releasePrivatePEMType && header == string(PurposeRelease):
+		return PurposeRelease, nil
+	}
+	return "", ErrBadKeyFile
+}
+
+func openKey(want Purpose, pemBytes, passphrase []byte) (*SigningKey, error) {
 	block, rest := pem.Decode(pemBytes)
-	if block == nil || block.Type != privatePEMType || len(bytes.TrimSpace(rest)) != 0 {
+	if block == nil || len(bytes.TrimSpace(rest)) != 0 {
 		return nil, ErrBadKeyFile
 	}
+	purpose, err := filePurpose(block)
+	if err != nil {
+		return nil, err
+	}
+	if purpose != want {
+		return nil, ErrWrongPurpose
+	}
 	h := block.Headers
-	if !keyIDPattern.MatchString(h["Key-Id"]) || h["Kdf"] != "argon2id" {
+	idOK := keyIDPattern.MatchString(h["Key-Id"])
+	if purpose == PurposeRelease {
+		idOK = IsReleaseKeyID(h["Key-Id"], false)
+	}
+	if !idOK || h["Kdf"] != "argon2id" {
 		return nil, ErrBadKeyFile
 	}
 	var p KDFParams
@@ -223,7 +343,7 @@ func OpenKey(pemBytes, passphrase []byte) (*SigningKey, error) {
 	if len(nonce) != gcm.NonceSize() {
 		return nil, ErrBadKeyFile
 	}
-	seed, err := gcm.Open(nil, nonce, block.Bytes, keyAADFor(h))
+	seed, err := gcm.Open(nil, nonce, block.Bytes, keyAADFor(purpose, h))
 	if err != nil {
 		return nil, ErrWrongPassphrase
 	}
@@ -236,7 +356,7 @@ func OpenKey(pemBytes, passphrase []byte) (*SigningKey, error) {
 		clear(priv)
 		return nil, ErrBadKeyFile
 	}
-	return &SigningKey{id: h["Key-Id"], priv: priv}, nil
+	return &SigningKey{id: h["Key-Id"], purpose: purpose, priv: priv}, nil
 }
 
 // ReadPublicKey reads a public key file written by GenerateKey.
@@ -256,16 +376,80 @@ func ReadPublicKey(pemBytes []byte) (license.PublicKey, error) {
 	return license.PublicKey{ID: block.Headers["Key-Id"], Key: pub, Status: license.KeyActive}, nil
 }
 
-// WriteKeyPair writes a new key pair into dir (created with mode 0700): the private key with
-// mode 0600, the public key with 0644. It never overwrites an existing file.
+// EncodeReleasePublicKey returns a release public key file (C5): the line "key-id: <ID>" and the
+// PKIX PEM block, which OpenSSL reads as it is (text before the block is skipped).
+func EncodeReleasePublicKey(keyID string, pub ed25519.PublicKey) ([]byte, error) {
+	if !IsReleaseKeyID(keyID, true) {
+		return nil, ErrBadReleaseKeyID
+	}
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte("key-id: "+keyID+"\n"), pem.EncodeToMemory(&pem.Block{Type: publicPEMType, Bytes: der})...), nil
+}
+
+// ParseReleasePublicKey reads a file written by EncodeReleasePublicKey (production or test key
+// ID; callers decide which they accept).
+func ParseReleasePublicKey(raw []byte) (keyID string, pub ed25519.PublicKey, err error) {
+	first, rest, ok := bytes.Cut(raw, []byte("\n"))
+	id, isID := strings.CutPrefix(string(first), "key-id: ")
+	if !ok || !isID || !IsReleaseKeyID(id, true) {
+		return "", nil, ErrBadKeyFile
+	}
+	block, tail := pem.Decode(rest)
+	if block == nil || block.Type != publicPEMType || len(block.Headers) != 0 || len(bytes.TrimSpace(tail)) != 0 {
+		return "", nil, ErrBadKeyFile
+	}
+	k, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return "", nil, ErrBadKeyFile
+	}
+	pub, isEd := k.(ed25519.PublicKey)
+	if !isEd {
+		return "", nil, ErrBadKeyFile
+	}
+	return id, pub, nil
+}
+
+// ReleaseFingerprint is the fingerprint install.sh prints and customers compare (C5, S-23): the
+// hex SHA-256 of the DER public key, as "openssl pkey -pubin -outform DER | sha256sum" prints it.
+func ReleaseFingerprint(pub ed25519.PublicKey) string {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:])
+}
+
+// WriteKeyPair writes a new license key pair into dir (created with mode 0700): the private key
+// with mode 0600, the public key with 0644. It never overwrites an existing file.
 func WriteKeyPair(dir, keyID string, passphrase []byte, p KDFParams) (privPath, pubPath string, err error) {
-	privPath, pubPath = filepath.Join(dir, PrivateKeyFile), filepath.Join(dir, PublicKeyFile)
+	return writePair(dir, filepath.Join(dir, PrivateKeyFile), filepath.Join(dir, PublicKeyFile), func() ([]byte, []byte, error) {
+		return GenerateKey(keyID, passphrase, p)
+	})
+}
+
+// WriteReleaseKeyPair writes a new release key pair into dir (created with mode 0700):
+// <key ID>.key (encrypted, 0600) and <key ID>.pem (public, 0644, the file deploy/release/keys/
+// holds). It never overwrites an existing file.
+func WriteReleaseKeyPair(dir, keyID string, passphrase []byte, p KDFParams) (privPath, pubPath string, err error) {
+	if !IsReleaseKeyID(keyID, false) {
+		return "", "", ErrBadReleaseKeyID
+	}
+	return writePair(dir, filepath.Join(dir, keyID+".key"), filepath.Join(dir, keyID+".pem"), func() ([]byte, []byte, error) {
+		return GenerateReleaseKey(keyID, passphrase, p)
+	})
+}
+
+func writePair(dir, privPath, pubPath string, gen func() ([]byte, []byte, error)) (string, string, error) {
 	for _, path := range []string{privPath, pubPath} {
 		if _, err := os.Lstat(path); err == nil {
 			return "", "", ErrKeyExists
 		}
 	}
-	privPEM, pubPEM, err := GenerateKey(keyID, passphrase, p)
+	privPEM, pubPEM, err := gen()
 	if err != nil {
 		return "", "", err
 	}

@@ -347,8 +347,71 @@ fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly)
 fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 7 hours)
 	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-api FUZZTIME=30m
 
+# Release packages (C5; Task 12). make release stages an unsigned package in $(RELEASE_DIR)/alice-$(VERSION)/alice;
+# the vendor signs its SHA256SUMS offline (licensectl release-sign), make release-pack packs it and the
+# vendor signs the outer .sha256. make release-test does all of it with a throw-away test key
+# (release candidates only, TEST_SIGNED=1). Earlier outputs of the same VERSION are removed first.
+RELEASE_DIR      ?= bin/release
+RELEASE_KEYS     ?= deploy/release/keys
+RELEASE_TEST_KEY ?= bin/release-test-key
+RELEASE_COMMIT   ?= $(shell git rev-parse HEAD 2>/dev/null)
+RELEASE_STAGE_FLAGS ?=
+# Every 1.0.x release accepts an update from the first release candidate on; raise it when a release needs an intermediate one.
+MIN_UPGRADE_FROM ?= 1.0.0-rc.1
+POSTGRES_RELEASE_IMAGE := postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+
+.PHONY: release
+# One build time for the image and RELEASE (BUILD_TIME is a recursive ?= and would be re-evaluated per use).
+release: BUILD_TIME := $(BUILD_TIME)
+release: helper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; sign SHA256SUMS offline, then make release-pack)
+	@echo "$(VERSION)" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' || { echo "make release needs VERSION=x.y.z or x.y.z-rc.N"; exit 2; }
+	@test -n "$(RELEASE_COMMIT)" || { echo "make release needs RELEASE_COMMIT (no .git here)"; exit 2; }
+	rm -rf "$(abspath $(RELEASE_DIR))/alice-$(VERSION)" "$(abspath $(RELEASE_DIR))/sbom-$(VERSION)" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256.sig"
+	$(MAKE) image IMAGE_TAG=$(VERSION) VERSION=$(VERSION) BUILD_TIME=$(BUILD_TIME)
+	docker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+	docker tag $(POSTGRES_RELEASE_IMAGE) alice-postgres:$(VERSION)
+	$(MAKE) sbom VERSION=$(VERSION)
+	go run ./tools/releasebuild stage $(RELEASE_STAGE_FLAGS) -version $(VERSION) -out $(abspath $(RELEASE_DIR))/alice-$(VERSION) -keys $(RELEASE_KEYS) \
+	  -alice-image alice:$(VERSION) -postgres-image alice-postgres:$(VERSION) -sbom $(abspath $(RELEASE_DIR))/sbom-$(VERSION) \
+	  -notices bin/THIRD_PARTY_NOTICES.md -helper bin -commit $(RELEASE_COMMIT) -build-time $(BUILD_TIME) \
+	  -gates-log bin/release-gates.log -license deploy/release/LICENSE.txt -min-upgrade-from $(MIN_UPGRADE_FROM)
+
+.PHONY: release-pack
+release-pack: ## Pack a signed stage into alice-$(VERSION).tar.gz with its checksum (sign the .sha256 offline afterwards)
+	go run ./tools/releasebuild pack -stage $(abspath $(RELEASE_DIR))/alice-$(VERSION) -out $(abspath $(RELEASE_DIR))
+
+.PHONY: release-test
+release-test: ## Build, sign with a test key and pack a release (VERSION=x.y.z-rc.N only); never for customers
+	@echo "$(VERSION)" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+' || { echo "make release-test needs VERSION=x.y.z-rc.N (a test-signed package is never a customer version)"; exit 2; }
+	@test -f $(RELEASE_TEST_KEY)/test-release.key || go run ./tools/releasesign generate $(RELEASE_TEST_KEY)
+	$(MAKE) release VERSION=$(VERSION) RELEASE_KEYS=$(RELEASE_TEST_KEY) RELEASE_STAGE_FLAGS="-test -allow-draft"
+	go run ./tools/releasesign sign $(RELEASE_TEST_KEY)/test-release.key $(abspath $(RELEASE_DIR))/alice-$(VERSION)/alice/SHA256SUMS
+	$(MAKE) release-pack VERSION=$(VERSION)
+	go run ./tools/releasesign sign $(RELEASE_TEST_KEY)/test-release.key $(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256
+
+.PHONY: release-broken
+release-broken: ## A package whose image carries a failing (BROKEN=fail) or sleeping (BROKEN=sleep) extra migration, for the update rollback test (SIGN=test: test-signed, rc versions; SIGN=offline: unsigned stage for the ceremony)
+	./deploy/dev/build-broken-release.sh "$(VERSION)" "$(BROKEN)" "$(SIGN)" "$(abspath $(RELEASE_DIR))" "$(abspath $(RELEASE_TEST_KEY))"
+
+.PHONY: sbom
+sbom: ## CycloneDX SBOMs of the alice and postgres images and the source tree (pinned Trivy)
+	mkdir -p $(abspath $(RELEASE_DIR))/sbom-$(VERSION)
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(abspath $(RELEASE_DIR))/sbom-$(VERSION):/out" $(TRIVY_IMAGE) image --format cyclonedx --output /out/alice-$(VERSION).cdx.json alice:$(VERSION)
+	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(abspath $(RELEASE_DIR))/sbom-$(VERSION):/out" $(TRIVY_IMAGE) image --format cyclonedx --output /out/postgres-$(VERSION).cdx.json alice-postgres:$(VERSION)
+	docker run --rm -v "$(CURDIR):/src:ro" -v "$(abspath $(RELEASE_DIR))/sbom-$(VERSION):/out" -w /src $(TRIVY_IMAGE) fs --scanners vuln --format cyclonedx --output /out/source-$(VERSION).cdx.json --skip-dirs '**/node_modules',.claude,.superpowers,.git,bin .
+
+.PHONY: notices
+notices: build ## Third-party notices of the Go modules in bin/alice and the helper, and the bundled npm packages
+	go run ./tools/notices -binaries bin/alice,bin/alice-helper-linux-amd64 -lockfile web/package-lock.json -node-modules web/node_modules -out bin/THIRD_PARTY_NOTICES.md
+
+.PHONY: reproducible-check
+reproducible-check: ## Build alice and the helpers twice from clean copies of HEAD in different paths and compare the bytes
+	./deploy/dev/reproducible-check.sh
+
 .PHONY: release-keycheck
-release-keycheck: ## Release gate: fails until the vendor's production license key is committed (R36)
+release-keycheck: ## Release gate: fails until the vendor's production release and license keys are committed and are separate keys (R36, S-12)
+	@ls $(RELEASE_KEYS)/rk-*.pem >/dev/null 2>&1 || { echo "release-keycheck: no production release public key in $(RELEASE_KEYS) (docs/vendor/licensing-vendor.md, 'Release key')"; exit 1; }
+	go run ./tools/releasebuild keycheck -release $(RELEASE_KEYS) -license internal/license/keys/production.json
 	go test -count=1 -tags releasecheck -run TestProductionKeySetIsReadyForRelease ./internal/license/
 
 .PHONY: coverage

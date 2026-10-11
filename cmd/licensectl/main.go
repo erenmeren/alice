@@ -1,10 +1,10 @@
-// Command licensectl is the vendor's offline license tool (spec §19.2). It never ships to
-// customers, never uses the network, and handles the signing key only in memory.
+// Command licensectl is the vendor's offline license and release signing tool (spec §19.2,
+// §16.7, SEC-107). It never ships to customers, never uses the network, and handles the signing
+// keys only in memory. The license key and the release key are separate keys.
 package main
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -45,6 +45,14 @@ Commands:
   ledger-verify --pub FILE [--ledger FILE]
         Check the issuance ledger (default: issued.csv next to the public key).
 
+Release signing (a separate key; never the license key):
+  release-keygen --out DIR --key-id rk-YYYY-NN
+        Create the release signing key pair (rk-YYYY-NN.key, rk-YYYY-NN.pem).
+  release-sign --key FILE FILE...
+        Sign each checksum file into FILE.sig. Asks for the key passphrase once.
+  release-verify --pub FILE FILE SIG
+        Check a release signature: prints OK or SIGNATURE INVALID.
+
 See docs/vendor/licensing-vendor.md.
 `
 
@@ -70,6 +78,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, ask prompter,
 		return keyset(args[1:], stdout, stderr)
 	case "ledger-verify":
 		return ledgerVerify(args[1:], stdout, stderr)
+	case "release-keygen":
+		return releaseKeygen(args[1:], stdout, stderr, ask)
+	case "release-sign":
+		return releaseSign(args[1:], stdout, stderr, ask)
+	case "release-verify":
+		return releaseVerify(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		_, _ = fmt.Fprint(stdout, usage)
 		return 0
@@ -93,26 +107,11 @@ func keygen(args []string, stdout, stderr io.Writer, ask prompter) int {
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2
 	}
-	pass, err := ask("New key passphrase (at least 6 random words): ")
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
+	pass, ok := newPassphrase(stderr, ask)
+	if !ok {
 		return 1
 	}
 	defer clear(pass)
-	if err := issuer.CheckPassphrase(pass); err != nil {
-		_, _ = fmt.Fprintln(stderr, "The passphrase is too weak: use at least 6 words and 24 characters (Diceware).")
-		return 1
-	}
-	again, err := ask("Repeat the passphrase: ")
-	if err != nil {
-		_, _ = fmt.Fprintln(stderr, err)
-		return 1
-	}
-	defer clear(again)
-	if !bytes.Equal(pass, again) {
-		_, _ = fmt.Fprintln(stderr, "The two passphrases differ. Nothing was written.")
-		return 1
-	}
 	privPath, pubPath, err := issuer.WriteKeyPair(*out, *keyID, pass, issuer.KeyKDF)
 	if errors.Is(err, issuer.ErrKeyExists) {
 		_, _ = fmt.Fprintln(stderr, "A key already exists in", *out, "- keygen never overwrites a key.")

@@ -284,3 +284,37 @@ func TestTestImageDockerfilesMustPinFromAndCopyFrom(t *testing.T) {
 	assert.Len(t, messages(t, "test/images/x/Dockerfile", "FROM alpine:3.20\n"), 1)
 	assert.Len(t, messages(t, "test/images/x/e2e.Dockerfile", "FROM alpine:3.20@"+dg+"\nCOPY --from=busybox:1 /bin/busybox /b\n"), 1)
 }
+
+// M-21: an image operand "$<NAME>_IMAGE" in a shell script passes when the same script gives the
+// variable a digest-pinned default (the Makefile exports the same pinned value); $(<NAME>_IMAGE) is
+// a pinned Makefile variable only in the Makefile (in a shell script it is a command substitution).
+func TestShellImageVariables(t *testing.T) {
+	const s = "deploy/dev/zap-stack.sh"
+	pinned := "zaproxy/zap-stable:2.16.1@" + dg
+	for name, script := range map[string]string{
+		"default form":       "ZAP_IMAGE=\"${ZAP_IMAGE:-" + pinned + "}\"\ndocker run --rm \"$ZAP_IMAGE\" zap.sh\n",
+		"braced operand":     "ZAP_IMAGE=\"${ZAP_IMAGE:-" + pinned + "}\"\ndocker run --rm -v x:/y \"${ZAP_IMAGE}\" zap.sh\n",
+		"plain literal":      "readonly ZAP_IMAGE=" + pinned + "\ndocker pull $ZAP_IMAGE\n",
+		"colon-equals":       ": \"${ZAP_IMAGE:=" + pinned + "}\"\ndocker run --rm \"$ZAP_IMAGE\"\n",
+		"exported, quoted":   "export ZAP_IMAGE='" + pinned + "'\ndocker create \"$ZAP_IMAGE\"\n",
+		"two pinned assigns": "ZAP_IMAGE=" + pinned + "\nZAP_IMAGE=\"${ZAP_IMAGE:-" + pinned + "}\"\ndocker run \"$ZAP_IMAGE\"\n",
+	} {
+		assert.Empty(t, messages(t, s, script), name)
+	}
+	for name, script := range map[string]string{
+		"never assigned":         "docker run --rm \"$ZAP_IMAGE\" zap.sh\n",
+		"assigned by tag":        "ZAP_IMAGE=zaproxy/zap-stable:2.16.1\ndocker run --rm \"$ZAP_IMAGE\"\n",
+		"default by tag":         "ZAP_IMAGE=\"${ZAP_IMAGE:-zaproxy/zap-stable:2.16.1}\"\ndocker run --rm \"$ZAP_IMAGE\"\n",
+		"digest without tag":     "ZAP_IMAGE=zaproxy/zap-stable@" + dg + "\ndocker run --rm \"$ZAP_IMAGE\"\n",
+		"one unpinned assign":    "ZAP_IMAGE=" + pinned + "\nZAP_IMAGE=other:1\ndocker run \"$ZAP_IMAGE\"\n",
+		"default of another var": "ZAP_IMAGE=\"${OTHER:-" + pinned + "}\"\ndocker run \"$ZAP_IMAGE\"\n",
+		"command substitution":   "docker run --rm $(TRIVY_IMAGE) fs .\n",
+		"other variable":         "ZAP_IMAGE=" + pinned + "\ndocker run \"$OTHER_IMAGE\"\n",
+	} {
+		assert.Len(t, messages(t, s, script), 1, name)
+	}
+	// The Makefile rule: a pinned := variable is a valid docker pull / run operand.
+	vars := "GITLEAKS_IMAGE ?= g:1@" + dg + "\nTRIVY_IMAGE ?= t:1@" + dg + "\n"
+	assert.Empty(t, messages(t, "Makefile", vars+"POSTGRES_RELEASE_IMAGE := "+pgRef+"\nr:\n\tdocker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull "+pgRef+"\n\tdocker run --rm $(POSTGRES_RELEASE_IMAGE) true\n"))
+	assert.Len(t, messages(t, "Makefile", vars+"r:\n\tdocker run --rm \"$$ZAP_IMAGE\" true\n"), 1, "a shell variable in a recipe has no pinned default")
+}

@@ -34,7 +34,7 @@ func craftKeyFile(t *testing.T, seed []byte, pub ed25519.PublicKey) []byte {
 	require.NoError(t, err)
 	nonce := make([]byte, gcm.NonceSize())
 	headers["Nonce"] = base64.StdEncoding.EncodeToString(nonce)
-	ct := gcm.Seal(nil, nonce, seed, keyAADFor(headers))
+	ct := gcm.Seal(nil, nonce, seed, keyAADFor(PurposeLicense, headers))
 	return pem.EncodeToMemory(&pem.Block{Type: privatePEMType, Headers: headers, Bytes: ct})
 }
 
