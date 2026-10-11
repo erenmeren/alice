@@ -523,6 +523,30 @@ describe('setup wizard steps of Phase 8', () => {
     expect(await screen.findByText(/Your own certificate is in use/)).toBeInTheDocument();
   });
 
+  it('keeps the typed mail fields (not the password) and the HTTPS format when going Back and forward', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('admin'), { ...open, https_chosen: true, next_step: 'mail' }),
+      http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+      http.get('/api/v1/settings/https', () => HttpResponse.json(httpsInfoFixture({ temporary: true }))),
+    );
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'Mail server (optional)' });
+    await userEvent.type(await screen.findByLabelText('Mail server'), 'mail.example.test');
+    await userEvent.type(screen.getByLabelText('Sender address'), 'alice@example.test');
+    await userEvent.type(screen.getByLabelText('Password'), 'hunter2');
+    await userEvent.click(screen.getByTestId('setup-back'));
+    await screen.findByRole('heading', { name: 'HTTPS certificate' });
+    await userEvent.click(screen.getByLabelText(/PKCS/i));
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { name: 'Mail server (optional)' });
+    expect(await screen.findByLabelText('Mail server')).toHaveValue('mail.example.test');
+    expect(screen.getByLabelText('Sender address')).toHaveValue('alice@example.test');
+    expect(screen.getByLabelText('Password')).toHaveValue('');
+    await userEvent.click(screen.getByTestId('setup-back'));
+    await screen.findByRole('heading', { name: 'HTTPS certificate' });
+    expect(screen.getByLabelText(/PKCS/i)).toBeChecked();
+  });
+
   it('goes back through Finish, the servers, the license and the mail step, and forward again', async () => {
     server.use(
       ...sessionHandlers(sessionFor('admin'), { ...open, https_chosen: true, mail_chosen: true, license_chosen: true, next_step: 'platform' }),

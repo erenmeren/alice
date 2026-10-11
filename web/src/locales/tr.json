@@ -2335,7 +2335,7 @@
       "preUpgrade": "{{version}} sürümüne güncellemeden önce"
     },
     "checks": {
-      "ok": "Denetlendi",
+      "ok": "Doğrulandı",
       "missingChecksum": "Sağlama dosyası eksik",
       "checksumMismatch": "Bozuk: sağlama değeri uyuşmuyor",
       "unreadableHeader": "Okunabilir bir yedek dosyası değil",

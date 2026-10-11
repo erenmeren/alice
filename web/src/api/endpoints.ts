@@ -94,12 +94,12 @@ export const completeSetup = () => apiFetch<SetupStatus>(`${v1}/setup/complete`,
 export const keepTemporaryCertificate = () => apiFetch<SetupStatus>(`${v1}/setup/https/keep-temporary`, { method: 'POST' });
 export const skipMail = () => apiFetch<SetupStatus>(`${v1}/setup/mail/skip`, { method: 'POST' });
 
-// Phase 8 backups (C12). The download is not fetched: the browser opens backupDownloadPath, so a large file streams to
-// disk instead of into memory.
+// Phase 8 backups (C12). The download is fetched as a Blob (never through the query cache), so a refusal (429, 404, an
+// expired step-up) is an ApiError the page shows instead of a replaced tab.
 const ifMatchVersion = (version: number) => ({ 'If-Match': `"${version}"` });
 export const listBackups = () => apiFetch<BackupList>(`${v1}/backups`);
 export const createBackup = () => apiFetch<Backup>(`${v1}/backups`, { method: 'POST' });
-export const backupDownloadPath = (name: string) => `${v1}/backups/${enc(name)}/download`;
+export const downloadBackup = (name: string) => apiFetch<Blob>(`${v1}/backups/${enc(name)}/download`, { responseType: 'blob' });
 export const getBackupSchedule = () => apiFetch<BackupSchedule>(`${v1}/settings/backups`);
 export const saveBackupSchedule = (version: number, body: Pick<BackupSchedule, 'time' | 'zone' | 'retention'>) =>
   apiFetch<BackupSchedule>(`${v1}/settings/backups`, { method: 'PUT', body, headers: ifMatchVersion(version) });

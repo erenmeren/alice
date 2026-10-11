@@ -1,4 +1,4 @@
-import { goTo, openDownload, safeTarget } from './navigation';
+import { goTo, safeTarget } from './navigation';
 
 describe('navigation', () => {
   it('accepts https, and http only on an http page', () => {
@@ -11,10 +11,5 @@ describe('navigation', () => {
   });
   it('goTo ignores an address it refuses', () => {
     expect(() => goTo('javascript:alert(1)')).not.toThrow();
-  });
-  it('openDownload opens only a path of Alice\'s own API', () => {
-    const before = window.location.href;
-    for (const bad of ['https://evil.example/x', '//evil.example/api/v1/x', 'javascript:alert(1)', '/login']) openDownload(bad);
-    expect(window.location.href).toBe(before);
   });
 });

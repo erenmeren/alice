@@ -15,6 +15,7 @@ import { HttpsStep } from './setup/HttpsStep';
 import { LanguageStep } from './setup/LanguageStep';
 import { isGone } from './setup/gone';
 import { LicenseStep } from './setup/LicenseStep';
+import type { MailDraft } from '../components/settings/MailSettings';
 import { MailStep } from './setup/MailStep';
 import { PassphraseStep } from './setup/PassphraseStep';
 import { PlatformStep } from './setup/PlatformStep';
@@ -68,6 +69,9 @@ export function SetupPage() {
   const [step, setStep] = useState<WizardStep | null>(null);
   const [enrollment, setEnrollment] = useState<MfaEnrollment | null>(null);
   const [codes, setCodes] = useState<string[]>([]);
+  // Typed but not yet saved, kept for Back. Never a password, key, PFX or CA file.
+  const [mailDraft, setMailDraft] = useState<MailDraft | null>(null);
+  const [httpsFormat, setHttpsFormat] = useState<'pem' | 'pfx'>('pem');
 
   if (loading) return <PageLoader />;
   const start = startOf(setupStatus, session);
@@ -124,8 +128,8 @@ export function SetupPage() {
             onGone={gone}
           />
         )}
-        {current === 'https' && <HttpsStep done={!!setupStatus?.https_chosen} onDone={() => setStep('mail')} onGone={gone} />}
-        {current === 'mail' && <MailStep onDone={() => setStep('license')} onGone={gone} />}
+        {current === 'https' && <HttpsStep done={!!setupStatus?.https_chosen} format={httpsFormat} onFormat={setHttpsFormat} onDone={() => setStep('mail')} onGone={gone} />}
+        {current === 'mail' && <MailStep draft={mailDraft} onDraft={setMailDraft} onDone={() => setStep('license')} onGone={gone} />}
         {current === 'license' && <LicenseStep done={!!setupStatus?.license_chosen} onDone={() => setStep('platform')} onGone={gone} />}
         {current === 'platform' && <PlatformStep onDone={() => setStep('done')} />}
         {current === 'done' && <DoneStep onGone={gone} />}

@@ -1,6 +1,6 @@
 import { Button, Group, NativeSelect, NumberInput, PasswordInput, Stack, Text, TextInput, Textarea } from '@mantine/core';
 import { useMutation } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../../api/client';
 import { getSMTP, saveSMTP, sendTestMail, trustSMTPCertificate, untrustSMTPCertificate, type SMTPSettings, type TlsMode } from '../../api/settings';
@@ -15,14 +15,24 @@ import { useChange, useSetting } from './useSetting';
 
 // MailSettings is the SMTP server form with the test mail. The stored password never comes back from the server: the field
 // stays empty and a password is sent only when one is typed.
-export function MailSettings() {
+// MailDraft is the non-secret part of the form (never the password). The wizard keeps it while the person goes Back.
+export interface MailDraft {
+  host: string;
+  port: number | string;
+  tlsMode: TlsMode;
+  from: string;
+  username: string;
+  caPem: string;
+}
+
+export function MailSettings({ draft, onDraft }: { draft?: MailDraft | null; onDraft?: (d: MailDraft) => void } = {}) {
   const q = useSetting('smtp', getSMTP);
   if (q.isPending) return <LoadingIndicator />;
   if (q.isError) return <ErrorAlert error={q.error} />;
-  return <MailPanel settings={q.data} />;
+  return <MailPanel settings={q.data} draft={draft ?? null} onDraft={onDraft} />;
 }
 
-function MailPanel({ settings }: { settings: SMTPSettings }) {
+function MailPanel({ settings, draft, onDraft }: { settings: SMTPSettings; draft: MailDraft | null; onDraft?: (d: MailDraft) => void }) {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
   const [to, setTo] = useState(session?.user.email ?? '');
@@ -41,7 +51,7 @@ function MailPanel({ settings }: { settings: SMTPSettings }) {
   return (
     <Stack gap="lg">
       {/* Keyed by the version: a saved or re-read setting draws the form again, which empties the password field. */}
-      <MailForm key={settings.version} settings={settings} onSave={(body) => save.mutate(body)} busy={save.isPending} fieldErrors={fieldErrorsOf(save.error, t, i18n)} />
+      <MailForm key={settings.version} settings={settings} draft={draft} onDraft={onDraft} onSave={(body) => save.mutate(body)} busy={save.isPending} fieldErrors={fieldErrorsOf(save.error, t, i18n)} />
       <SavedNote show={save.isSuccess} />
       <ErrorAlert error={save.error} />
 
@@ -99,15 +109,18 @@ function MailPanel({ settings }: { settings: SMTPSettings }) {
   );
 }
 
-function MailForm({ settings, onSave, busy, fieldErrors }: { settings: SMTPSettings; onSave: (b: Parameters<typeof saveSMTP>[1]) => void; busy: boolean; fieldErrors: Record<string, string> }) {
+function MailForm({ settings, draft, onDraft, onSave, busy, fieldErrors }: { settings: SMTPSettings; draft: MailDraft | null; onDraft?: (d: MailDraft) => void; onSave: (b: Parameters<typeof saveSMTP>[1]) => void; busy: boolean; fieldErrors: Record<string, string> }) {
   const { t } = useTranslation();
-  const [host, setHost] = useState(settings.host);
-  const [port, setPort] = useState<number | string>(settings.port || 587);
-  const [tlsMode, setTlsMode] = useState<TlsMode>(settings.tls_mode || 'starttls');
-  const [from, setFrom] = useState(settings.from);
-  const [username, setUsername] = useState(settings.username);
+  const [host, setHost] = useState(draft?.host ?? settings.host);
+  const [port, setPort] = useState<number | string>(draft?.port ?? (settings.port || 587));
+  const [tlsMode, setTlsMode] = useState<TlsMode>(draft?.tlsMode ?? (settings.tls_mode || 'starttls'));
+  const [from, setFrom] = useState(draft?.from ?? settings.from);
+  const [username, setUsername] = useState(draft?.username ?? settings.username);
   const [password, setPassword] = useState('');
-  const [caPem, setCaPem] = useState(settings.ca_pem);
+  const [caPem, setCaPem] = useState(draft?.caPem ?? settings.ca_pem);
+  useEffect(() => {
+    onDraft?.({ host, port, tlsMode, from, username, caPem });
+  }, [onDraft, host, port, tlsMode, from, username, caPem]);
 
   const submit = (ev: FormEvent) => {
     ev.preventDefault();

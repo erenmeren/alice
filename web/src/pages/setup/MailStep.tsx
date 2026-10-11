@@ -4,14 +4,14 @@ import { useTranslation } from 'react-i18next';
 import { skipMail } from '../../api/endpoints';
 import { useAuth } from '../../auth/AuthProvider';
 import { ErrorAlert } from '../../components/ErrorAlert';
-import { MailSettings } from '../../components/settings/MailSettings';
+import { MailSettings, type MailDraft } from '../../components/settings/MailSettings';
 import { useStepUp } from '../../components/StepUpProvider';
 import { isGone } from './gone';
 
 // MailStep is the wizard's optional mail server step (R43 row 16, Phase 7 carry 21). It is the Settings mail form
 // itself, with its test e-mail. Continue needs saved mail settings (the server then counts mail as chosen); Skip
 // records the choice, and the dashboard's "Finish setting up" list keeps the mail server on it.
-export function MailStep({ onDone, onGone }: { onDone: () => void; onGone: () => void }) {
+export function MailStep({ onDone, onGone, draft, onDraft }: { onDone: () => void; onGone: () => void; draft?: MailDraft | null; onDraft?: (d: MailDraft) => void }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const { refreshSetupStatus } = useAuth();
@@ -50,7 +50,7 @@ export function MailStep({ onDone, onGone }: { onDone: () => void; onGone: () =>
     <Stack>
       <Title order={2}>{t('setup.mail.title')}</Title>
       <Text>{t('setup.mail.help')}</Text>
-      <MailSettings />
+      <MailSettings draft={draft} onDraft={onDraft} />
       {notSaved && (
         <Alert color="yellow" role="alert">
           {t('setup.mail.notSaved')}

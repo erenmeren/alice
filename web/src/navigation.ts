@@ -17,11 +17,3 @@ export function goTo(url: string): void {
   const target = safeTarget(url);
   if (target) window.location.assign(target);
 }
-
-// openDownload lets the browser fetch a file of Alice's own API (a backup): the answer is an attachment, so the page
-// stays, and a large file streams to disk instead of into memory. The path is a relative /api/v1 path; tests replace
-// this function.
-export function openDownload(path: string): void {
-  if (!path.startsWith('/api/v1/')) return;
-  window.location.assign(path);
-}

@@ -1,7 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import * as navigation from '../../navigation';
 import { formatDateTime } from '../../datetime';
 import {
   adminSession,
@@ -18,6 +17,9 @@ import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
 import { formatSize, scheduleProblems, zoneOptions } from './BackupsTab';
+
+const saved: { blob: Blob; name: string }[] = [];
+vi.mock('../saveBlob', () => ({ saveBlob: (blob: Blob, name: string) => saved.push({ blob, name }) }));
 
 const steppedUp = { ...adminSession, stepup_until: '2099-01-01T00:00:00Z' };
 const steppedUpTr = { ...sessionFor('admin', 'tr'), stepup_until: '2099-01-01T00:00:00Z' };
@@ -148,13 +150,13 @@ describe('BackupsTab', () => {
     expect(alert).toHaveTextContent(i18n.exists('errors.backup.running.title') ? i18n.t('errors.backup.running.title') : 'server text for backup.running');
   });
 
-  it('asks for a code before a download and then lets the browser open the file', async () => {
-    const go = vi.spyOn(navigation, 'openDownload').mockImplementation(() => {});
-    let fetched = false;
+  it('asks for a code before a download, then fetches the file as a Blob and saves it', async () => {
+    saved.length = 0;
+    let fetched = 0;
     server.use(
       ...sessionHandlers(adminSession),
       http.get('/api/v1/backups/:name/download', () => {
-        fetched = true;
+        fetched++;
         return new HttpResponse('x', { headers: { 'Content-Type': 'application/octet-stream' } });
       }),
       http.post('/api/v1/auth/stepup', () => HttpResponse.json(steppedUp)),
@@ -162,31 +164,44 @@ describe('BackupsTab', () => {
     await renderRoute('/settings?tab=backups');
     await userEvent.click(await screen.findByTestId(`backup-download-${BACKUP_NAME}`));
     expect(await screen.findByRole('dialog', { name: "Confirm it's you" })).toBeInTheDocument();
-    expect(go).not.toHaveBeenCalled();
+    expect(fetched).toBe(0);
     await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
-    await waitFor(() => expect(go).toHaveBeenCalledWith(`/api/v1/backups/${BACKUP_NAME}/download`));
-    expect(fetched).toBe(false);
+    await waitFor(() => expect(saved).toHaveLength(1));
+    expect(saved[0]?.name).toBe(BACKUP_NAME);
 
     // The step-up is fresh now: a second download needs no code.
-    go.mockClear();
     await userEvent.click(screen.getByTestId(`backup-download-${BACKUP_NAME}`));
-    await waitFor(() => expect(go).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(saved).toHaveLength(2));
     expect(screen.queryByRole('dialog', { name: "Confirm it's you" })).not.toBeInTheDocument();
-    go.mockRestore();
+  });
+
+  it.each([
+    [429, 'ALC-RATE-0001', 'rate.limited'],
+    [404, 'ALC-BAK-0003', 'backup.not_found'],
+  ])('shows an alert and stays on the page when the download is refused with %i', async (status, code, reason) => {
+    saved.length = 0;
+    server.use(
+      ...sessionHandlers(steppedUp),
+      http.get('/api/v1/backups/:name/download', () => errorResponse(status, code, reason)),
+    );
+    await renderRoute('/settings?tab=backups');
+    await userEvent.click(await screen.findByTestId(`backup-download-${BACKUP_NAME}`));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(saved).toHaveLength(0);
+    expect(screen.getByTestId('backups-table')).toBeInTheDocument();
   });
 
   it('downloads nothing when the code prompt is cancelled', async () => {
-    const go = vi.spyOn(navigation, 'openDownload').mockImplementation(() => {});
+    saved.length = 0;
     server.use(...sessionHandlers(adminSession));
     await renderRoute('/settings?tab=backups');
     await userEvent.click(await screen.findByTestId(`backup-download-${BACKUP_NAME}`));
     const dialog = await screen.findByRole('dialog', { name: "Confirm it's you" });
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: "Confirm it's you" })).not.toBeInTheDocument());
-    expect(go).not.toHaveBeenCalled();
+    expect(saved).toHaveLength(0);
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    go.mockRestore();
   });
 
   it('validates the schedule before sending it, then saves it with If-Match', async () => {

@@ -85,12 +85,12 @@ type Format = 'pem' | 'pfx';
 // the password live only in this component's state; they are dropped as soon as the server answers (kept only after a
 // dropped connection or an unreadable file, when nothing was learned), and never reach a query key, the query cache,
 // the address, web storage or the console. The answer replaces the cached certificate information.
-export function HttpsUploadForm({ onApplied }: { onApplied?: (info: HTTPSInfo) => void }) {
+export function HttpsUploadForm({ onApplied, initialFormat, onFormat }: { onApplied?: (info: HTTPSInfo) => void; initialFormat?: 'pem' | 'pfx'; onFormat?: (f: 'pem' | 'pfx') => void }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
   const id = useId();
-  const [format, setFormat] = useState<Format>('pem');
+  const [format, setFormat] = useState<Format>(initialFormat ?? 'pem');
   const [cert, setCert] = useState<File | null>(null);
   const [key, setKey] = useState<File | null>(null);
   const [pfx, setPfx] = useState<File | null>(null);
@@ -153,7 +153,10 @@ export function HttpsUploadForm({ onApplied }: { onApplied?: (info: HTTPSInfo) =
     <form onSubmit={(ev) => void submit(ev)} noValidate data-testid="https-upload-form">
       <Stack gap="sm" maw={560}>
         <Text size="sm">{t('https.uploadHelp')}</Text>
-        <Radio.Group label={t('https.format')} value={format} onChange={(v) => setFormat(v as Format)}>
+        <Radio.Group label={t('https.format')} value={format} onChange={(v) => {
+            setFormat(v as Format);
+            onFormat?.(v as Format);
+          }}>
           <Group mt="xs">
             <Radio value="pem" label={t('https.formatPem')} />
             <Radio value="pfx" label={t('https.formatPfx')} />

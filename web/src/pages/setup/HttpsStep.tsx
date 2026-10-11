@@ -13,7 +13,7 @@ import { isGone } from './gone';
 // HttpsStep is the wizard's HTTPS certificate step (R43 row 16): upload the organisation's certificate (applied at
 // once, without a restart) or keep the temporary one. Reached again with Back, it shows the choice made (done) and
 // still allows an upload.
-export function HttpsStep({ onDone, onGone, done }: { onDone: () => void; onGone: () => void; done: boolean }) {
+export function HttpsStep({ onDone, onGone, done, format, onFormat }: { onDone: () => void; onGone: () => void; done: boolean; format?: 'pem' | 'pfx'; onFormat?: (f: 'pem' | 'pfx') => void }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const { refreshSetupStatus } = useAuth();
@@ -58,6 +58,8 @@ export function HttpsStep({ onDone, onGone, done }: { onDone: () => void; onGone
         {t('https.upload')}
       </Title>
       <HttpsUploadForm
+        initialFormat={format}
+        onFormat={onFormat}
         onApplied={() => {
           setUploaded(true);
           void refreshSetupStatus();

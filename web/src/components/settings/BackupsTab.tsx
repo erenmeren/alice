@@ -2,12 +2,12 @@ import { Alert, Badge, Button, Code, Group, NativeSelect, NumberInput, Stack, Ta
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { backupDownloadPath, createBackup, getBackupSchedule, listBackups, saveBackupSchedule } from '../../api/endpoints';
+import { createBackup, downloadBackup, getBackupSchedule, listBackups, saveBackupSchedule } from '../../api/endpoints';
 import { BACKUPS_KEY, DASHBOARD_KEY } from '../../api/queryKeys';
 import type { Backup, BackupSchedule, BackupState } from '../../api/types';
 import { formatDateTime } from '../../datetime';
-import { openDownload } from '../../navigation';
 import { CodeText } from '../CodeText';
+import { saveBlob } from '../saveBlob';
 import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { LoadingIndicator } from '../LoadingIndicator';
@@ -81,13 +81,14 @@ function KindLabel({ kind }: { kind: string }) {
 
 // BackupsTab is Settings → Backups (C12, C13): the state, Back up now, the list with downloads, and the daily schedule.
 // Restoring is done on the server (alicectl restore), so the page only says so. Every request needs a fresh step-up
-// (backup.manage, settings.manage); a download is opened by the browser after confirm(), never fetched into the page.
+// (backup.manage, settings.manage); a download is fetched as a Blob after confirm() and saved, never kept in a cache.
 export function BackupsTab() {
   const { t, i18n } = useTranslation();
   const { run, confirm } = useStepUp();
   const client = useQueryClient();
   const list = useQuery({ queryKey: BACKUPS_KEY, queryFn: () => run(listBackups) });
   const [downloadError, setDownloadError] = useState<unknown>(null);
+  const [downloading, setDownloading] = useState(false);
   const rowId = useId();
   const backUp = useMutation({
     mutationFn: () => run(createBackup),
@@ -98,12 +99,16 @@ export function BackupsTab() {
   });
 
   const download = async (name: string) => {
+    if (downloading) return;
     setDownloadError(null);
+    setDownloading(true);
     try {
       await confirm();
-      openDownload(backupDownloadPath(name));
+      saveBlob(await downloadBackup(name), name);
     } catch (e) {
       if (!(e instanceof StepUpCancelled)) setDownloadError(e);
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -163,6 +168,7 @@ export function BackupsTab() {
                       <Button
                         size="xs"
                         variant="default"
+                        disabled={downloading}
                         data-testid={`backup-download-${b.name}`}
                         // The file name is data: it describes the button instead of being part of its translated name.
                         aria-describedby={`${rowId}-${i}`}
