@@ -652,3 +652,48 @@ func TestCommandLine(t *testing.T) {
 	out.Reset()
 	assert.Equal(t, 1, run([]string{"pack", "-stage", cfg.Out, "-out", dest}, &out, &out))
 }
+
+// makeIn runs make in the repository root and returns its output and exit code.
+func makeIn(t *testing.T, args ...string) (string, int) {
+	t.Helper()
+	cmd := exec.Command("make", args...)
+	cmd.Dir = filepath.Join("..", "..")
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		return string(out), 0
+	}
+	var exitErr *exec.ExitError
+	require.ErrorAs(t, err, &exitErr, string(out))
+	return string(out), exitErr.ExitCode()
+}
+
+// I-2: make release never deletes or replaces outputs of the same VERSION (a signed package
+// among them); it refuses before it builds anything.
+func TestReleaseRefusesExistingOutputs(t *testing.T) {
+	for _, name := range []string{"alice-1.0.0/alice/SHA256SUMS.sig", "sbom-1.0.0/alice-1.0.0.cdx.json", "alice-1.0.0.tar.gz",
+		"alice-1.0.0.tar.gz.sha256", "alice-1.0.0.tar.gz.sha256.sig"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, filepath.Join(dir, name), "signed\n", 0o644)
+			out, code := makeIn(t, "-s", "release", "VERSION=1.0.0", "RELEASE_DIR="+dir)
+			assert.Equal(t, 2, code, out)
+			assert.Equal(t, "make release: outputs of 1.0.0 already exist in "+dir+"; it never replaces them (make release-test removes those of a test package)",
+				strings.SplitN(out, "\n", 2)[0])
+			assert.NotContains(t, out, "go ", "nothing was built")
+			assert.Equal(t, "signed\n", readFile(t, filepath.Join(dir, name)))
+		})
+	}
+}
+
+// I-2: make release-test removes only the outputs of a test package; a stage without
+// TEST_SIGNED=1 (signed with the production key) is kept.
+func TestReleaseTestKeepsAProductionStage(t *testing.T) {
+	dir, keyDir := t.TempDir(), t.TempDir()
+	write(t, filepath.Join(dir, "alice-1.0.0-rc.1/alice/RELEASE"), "VERSION=1.0.0-rc.1\nRELEASE_KEY_ID=rk-2026-01\n", 0o644)
+	out, code := makeIn(t, "-s", "release-test", "VERSION=1.0.0-rc.1", "RELEASE_DIR="+dir, "RELEASE_TEST_KEY="+keyDir)
+	assert.Equal(t, 2, code, out)
+	assert.Equal(t, "make release-test: "+dir+"/alice-1.0.0-rc.1 is not a test package (no TEST_SIGNED=1); remove it by hand if it is not needed",
+		strings.SplitN(out, "\n", 2)[0])
+	assert.FileExists(t, filepath.Join(dir, "alice-1.0.0-rc.1/alice/RELEASE"))
+	assert.NoFileExists(t, filepath.Join(keyDir, "test-release.key"), "nothing was built")
+}

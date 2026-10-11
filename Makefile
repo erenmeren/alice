@@ -350,7 +350,9 @@ fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 7 
 # Release packages (C5; Task 12). make release stages an unsigned package in $(RELEASE_DIR)/alice-$(VERSION)/alice;
 # the vendor signs its SHA256SUMS offline (licensectl release-sign), make release-pack packs it and the
 # vendor signs the outer .sha256. make release-test does all of it with a throw-away test key
-# (release candidates only, TEST_SIGNED=1). Earlier outputs of the same VERSION are removed first.
+# (release candidates only, TEST_SIGNED=1). make release refuses when outputs of the same VERSION
+# exist (it never replaces a signed package); only make release-test removes them, and only those
+# of a test package (Task 12 review I-2).
 RELEASE_DIR      ?= bin/release
 RELEASE_KEYS     ?= deploy/release/keys
 RELEASE_TEST_KEY ?= bin/release-test-key
@@ -360,13 +362,18 @@ RELEASE_STAGE_FLAGS ?=
 MIN_UPGRADE_FROM ?= 1.0.0-rc.1
 POSTGRES_RELEASE_IMAGE := postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 
+RELEASE_OUTPUTS = "$(abspath $(RELEASE_DIR))/alice-$(VERSION)" "$(abspath $(RELEASE_DIR))/sbom-$(VERSION)" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256.sig"
+
+.PHONY: release-preflight
+release-preflight: # make release's first prerequisite: refuse before anything is built
+	@echo "$(VERSION)" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' || { echo "make release needs VERSION=x.y.z or x.y.z-rc.N"; exit 2; }
+	@test -n "$(RELEASE_COMMIT)" || { echo "make release needs RELEASE_COMMIT (no .git here)"; exit 2; }
+	@for f in $(RELEASE_OUTPUTS); do if [ -e "$$f" ]; then echo "make release: outputs of $(VERSION) already exist in $(abspath $(RELEASE_DIR)); it never replaces them (make release-test removes those of a test package)"; exit 2; fi; done
+
 .PHONY: release
 # One build time for the image and RELEASE (BUILD_TIME is a recursive ?= and would be re-evaluated per use).
 release: BUILD_TIME := $(BUILD_TIME)
-release: helper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; sign SHA256SUMS offline, then make release-pack)
-	@echo "$(VERSION)" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' || { echo "make release needs VERSION=x.y.z or x.y.z-rc.N"; exit 2; }
-	@test -n "$(RELEASE_COMMIT)" || { echo "make release needs RELEASE_COMMIT (no .git here)"; exit 2; }
-	rm -rf "$(abspath $(RELEASE_DIR))/alice-$(VERSION)" "$(abspath $(RELEASE_DIR))/sbom-$(VERSION)" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256" "$(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256.sig"
+release: release-preflight helper notices ## Stage an unsigned release in $(RELEASE_DIR)/alice-$(VERSION) (VERSION=x.y.z; sign SHA256SUMS offline, then make release-pack)
 	$(MAKE) image IMAGE_TAG=$(VERSION) VERSION=$(VERSION) BUILD_TIME=$(BUILD_TIME)
 	docker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 	docker tag $(POSTGRES_RELEASE_IMAGE) alice-postgres:$(VERSION)
@@ -383,6 +390,9 @@ release-pack: ## Pack a signed stage into alice-$(VERSION).tar.gz with its check
 .PHONY: release-test
 release-test: ## Build, sign with a test key and pack a release (VERSION=x.y.z-rc.N only); never for customers
 	@echo "$(VERSION)" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+' || { echo "make release-test needs VERSION=x.y.z-rc.N (a test-signed package is never a customer version)"; exit 2; }
+	@stage="$(abspath $(RELEASE_DIR))/alice-$(VERSION)"; if [ -e "$$stage" ] && ! grep -qx 'TEST_SIGNED=1' "$$stage/alice/RELEASE" 2>/dev/null; then \
+	  echo "make release-test: $$stage is not a test package (no TEST_SIGNED=1); remove it by hand if it is not needed"; exit 2; fi
+	rm -rf $(RELEASE_OUTPUTS)
 	@test -f $(RELEASE_TEST_KEY)/test-release.key || go run ./tools/releasesign generate $(RELEASE_TEST_KEY)
 	$(MAKE) release VERSION=$(VERSION) RELEASE_KEYS=$(RELEASE_TEST_KEY) RELEASE_STAGE_FLAGS="-test -allow-draft"
 	go run ./tools/releasesign sign $(RELEASE_TEST_KEY)/test-release.key $(abspath $(RELEASE_DIR))/alice-$(VERSION)/alice/SHA256SUMS
