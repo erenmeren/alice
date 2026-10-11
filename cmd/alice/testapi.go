@@ -9,6 +9,7 @@ import (
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/notify"
+	"alice/internal/platform/tlscert"
 	"alice/internal/setup"
 	"alice/internal/version"
 )
@@ -21,7 +22,10 @@ type testDeps struct {
 	Scheduler   *jobs.Scheduler
 	Sender      *notify.Sender
 	StateDir    string
-	BackupDir   string // /test/reset removes the backup files (Phase 8)
+	BackupDir   string         // /test/reset removes the backup files (Phase 8)
+	TLS         *tlscert.Store // /test/reset serves a temporary HTTPS certificate again (Phase 8)
+	KeysDir     string
+	TLSHosts    []string
 	Log         *slog.Logger
 	ResetLimits func()
 	Inventory   *inventory.Service // the reset creates a new platform key

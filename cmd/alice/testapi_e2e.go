@@ -32,6 +32,7 @@ import (
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
+	"alice/internal/platform/tlscert"
 	"alice/internal/testutil/seed"
 )
 
@@ -325,6 +326,9 @@ func testHandler(d testDeps) http.Handler {
 				return err
 			}
 			e2eClock.Reset()
+			if err := resetTemporaryCertificate(d.TLS, d.KeysDir, d.TLSHosts, e2eClock.Now()); err != nil {
+				return err
+			}
 			e2eMailbox.reset()
 			d.Setup.ResetLockouts()
 			d.ResetLimits()
@@ -477,6 +481,29 @@ func removeBackupFiles(dir string) error {
 		if err := os.Remove(filepath.Join(dir, en.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("remove a backup file: %w", err)
 		}
+	}
+	return nil
+}
+
+// resetTemporaryCertificate makes the store serve a new temporary HTTPS certificate when it serves an uploaded one: a
+// reset installation has Alice's own certificate, as a new one does (Phase 8 journeys upload certificates in the wizard
+// and in Settings). The uploaded pair and any replacement leftovers are removed, EnsureSelfSigned writes the temporary
+// pair with its mark, and Renew loads it (it re-reads the files and keeps a temporary certificate that is not due).
+// A temporary certificate is left as it is.
+func resetTemporaryCertificate(store *tlscert.Store, dir string, hosts []string, now time.Time) error {
+	if store == nil || store.Info().Temporary {
+		return nil
+	}
+	for _, name := range []string{"tls.crt.new", "tls.key.new", "tls.crt.prev", "tls.key.prev", "tls.crt", "tls.key"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("remove the uploaded HTTPS certificate: %w", err)
+		}
+	}
+	if _, err := tlscert.EnsureSelfSigned(dir, hosts, now); err != nil {
+		return fmt.Errorf("create the temporary HTTPS certificate: %w", err)
+	}
+	if _, err := store.Renew(); err != nil {
+		return fmt.Errorf("load the temporary HTTPS certificate: %w", err)
 	}
 	return nil
 }

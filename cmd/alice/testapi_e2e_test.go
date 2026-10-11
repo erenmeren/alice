@@ -5,9 +5,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -30,6 +32,7 @@ import (
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/netaddr"
+	"alice/internal/platform/tlscert"
 	"alice/internal/providers"
 	"alice/internal/testutil/pki"
 	"alice/internal/testutil/seed"
@@ -724,4 +727,45 @@ func TestE2EMailSettingsFallBackToTheMailbox(t *testing.T) {
 	cfg := notifySettingsConfig(nil, &services{}, nil, e2eClock, slog.New(slog.DiscardHandler))
 	assert.Same(t, e2eMailbox, cfg.Fallback)
 	assert.Nil(t, cfg.Dial)
+}
+
+// A reset installation serves Alice's temporary HTTPS certificate again: a journey that uploads its own certificate
+// (Phase 8 wizard and Settings → HTTPS certificate) must not leave it for the next one, which expects the temporary
+// state. The pair on disk and the served pair both change; a temporary certificate is left as it is.
+func TestResetRestoresTheTemporaryCertificate(t *testing.T) {
+	dir := t.TempDir()
+	hosts := []string{"localhost", "127.0.0.1"}
+	now := time.Now()
+	store, err := tlscert.NewStore(dir, hosts, time.Now)
+	require.NoError(t, err)
+	require.True(t, store.Info().Temporary)
+	temporary := store.Info().FingerprintSHA256
+
+	require.NoError(t, resetTemporaryCertificate(store, dir, hosts, now))
+	assert.Equal(t, temporary, store.Info().FingerprintSHA256, "a temporary certificate is kept")
+
+	leaf := pki.SelfSigned("localhost", pki.ECDSA256, now)
+	info, err := store.Install(tlscert.Upload{CertPEM: leaf.CertPEM, KeyPEM: leaf.KeyPEM})
+	require.NoError(t, err)
+	require.False(t, store.Info().Temporary)
+
+	require.NoError(t, resetTemporaryCertificate(store, dir, hosts, now))
+	got := store.Info()
+	assert.True(t, got.Temporary, "the store serves a temporary certificate again")
+	assert.NotEqual(t, info.FingerprintSHA256, got.FingerprintSHA256)
+	served, err := store.GetCertificate(nil)
+	require.NoError(t, err)
+	assert.Equal(t, got.FingerprintSHA256, fmt.Sprintf("%x", sha256.Sum256(served.Certificate[0])))
+	// The pair on disk is the temporary one too: a restart keeps serving it.
+	again, err := tlscert.NewStore(dir, hosts, time.Now)
+	require.NoError(t, err)
+	assert.True(t, again.Info().Temporary)
+	assert.Equal(t, got.FingerprintSHA256, again.Info().FingerprintSHA256)
+	// The replaced customer pair is not left behind.
+	for _, name := range []string{"tls.crt.prev", "tls.key.prev", "tls.crt.new", "tls.key.new"} {
+		assert.NoFileExists(t, filepath.Join(dir, name))
+	}
+
+	// Without a store (a unit test's dependencies) the reset does nothing.
+	require.NoError(t, resetTemporaryCertificate(nil, dir, hosts, now))
 }

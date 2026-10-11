@@ -318,6 +318,9 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		Runner:    runner,
 		StateDir:  cfg.StateDir,
 		BackupDir: cfg.BackupDir,
+		TLS:       svc.tlsStore,
+		KeysDir:   cfg.KeysDir,
+		TLSHosts:  hosts,
 		Log:       log,
 		ResetLimits: func() {
 			if apiServer != nil {
