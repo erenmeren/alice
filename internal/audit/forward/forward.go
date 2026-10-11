@@ -87,6 +87,9 @@ type Forwarder struct {
 	run      sync.Mutex
 }
 
+// testMessageAction names the message Test sends. It is a syslog MSGID only, never an audit row.
+const testMessageAction = "audit.forwarding_test"
+
 // MaxBatch is the number of rows one Run sends at most.
 const MaxBatch = 500
 
@@ -167,7 +170,7 @@ func (f *Forwarder) Test(ctx context.Context, in Settings) error {
 	}
 	defer func() { _ = conn.Close() }()
 	msg := message(audit.Entry{At: f.clock.Now(), ActorType: audit.ActorSystem, ActorName: f.app,
-		Action: "audit.forwarding_test", ObjectType: "setting", ObjectID: settingsKey, Result: audit.Success},
+		Action: testMessageAction, ObjectType: "setting", ObjectID: settingsKey, Result: audit.Success},
 		f.hostname, f.app)
 	if err := f.write(conn, rec.Transport, msg); err != nil {
 		return fmt.Errorf("%w: %w", ErrUnreachable, err)
