@@ -1,9 +1,12 @@
 package backup_test
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"alice/internal/backup"
 )
@@ -51,4 +54,14 @@ func TestRestoreErrorMessages(t *testing.T) {
 	assert.Equal(t, "backup: the backup could not be verified (seal)", (&backup.ErrNotVerified{Reason: "seal"}).Error())
 	assert.Equal(t, "backup: the audit log in the backup is damaged at entry 7", (&backup.ErrAuditBroken{Seq: 7}).Error())
 	assert.Equal(t, "backup: not enough free disk space for a restore: 1 bytes free, 2 needed", (&backup.ErrNoSpace{Free: 1, Need: 2}).Error())
+}
+
+// Minor 2 (Task 5 review): with one directory for keys and state the staging of one set would replace the other's.
+func TestRestoreRefusesOneDirectoryForKeysAndState(t *testing.T) {
+	d := t.TempDir()
+	_, err := backup.Restore(context.Background(), backup.Config{KeysDir: d, StateDir: d + "/."},
+		backup.RestoreInput{Path: filepath.Join(d, "missing.alicebak")})
+	require.ErrorIs(t, err, backup.ErrSameDirectory)
+	_, err = backup.FinishInterruptedRestore(context.Background(), nil, d, filepath.Join(d, "x", ".."))
+	require.ErrorIs(t, err, backup.ErrSameDirectory)
 }

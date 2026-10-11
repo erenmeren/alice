@@ -56,3 +56,6 @@ func DDL(op, name, to string) string {
 
 // NewerVersion reports whether version v is newer than the running one.
 func NewerVersion(v, running string) bool { return newerVersion(v, running) }
+
+// SetCommit replaces the COMMIT of the swap transaction (tests: a reply lost after the server committed).
+func SetCommit(in *RestoreInput, f func(ctx context.Context, tx pgx.Tx) error) { in.commit = f }

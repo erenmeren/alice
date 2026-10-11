@@ -858,29 +858,199 @@ func TestFinishIgnoresStaleStaging(t *testing.T) {
 }
 
 func TestCleanupNeverDropsTheOnlyCopy(t *testing.T) {
-	e := newRestoreEnv(t)
-	info := e.create(backup.KindManual)
-	e.mutate()
-	live := dbName(t, e.db.OwnerURL)
-	before := e.snapshot()
-	e.stop()
-	sp := e.superPool()
-	_, err := sp.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{live}.Sanitize()+" RENAME TO "+pgx.Identifier{live + "_restore"}.Sanitize())
-	require.NoError(t, err)
-	sp.Close()
+	// No <db> and a <db>_restore that never reached the swap (no staging carries its restore ID): an unverified
+	// database is never made live, and never dropped (Task 5 review, minor 1). The restore refuses and leaves it.
+	t.Run("unverified", func(t *testing.T) {
+		e := newRestoreEnv(t)
+		info := e.create(backup.KindManual)
+		e.mutate()
+		live := dbName(t, e.db.OwnerURL)
+		before := e.snapshot()
+		e.stop()
+		e.renameDB(live, live+"_restore")
 
-	// The restore fails right after its cleanup: the only copy is back under its name, unchanged.
+		_, err := backup.Restore(e.ctx, e.cfg, e.input(info.Path))
+		require.ErrorIs(t, err, backup.ErrUnfinishedStaging)
+		assert.Contains(t, err.Error(), live+"_restore")
+		assert.Equal(t, []string{live + "_restore"}, e.databases(), "the only copy is neither renamed nor dropped")
+		e.renameDB(live+"_restore", live)
+		e.start()
+		requireUnchanged(t, before, e.snapshot())
+	})
+	// The same with both staging directories of its restore ID (the restore reached "staged"): it is renamed, never
+	// dropped, and its files are applied.
+	t.Run("staged", func(t *testing.T) {
+		e := newRestoreEnv(t)
+		info := e.create(backup.KindManual)
+		live := dbName(t, e.db.OwnerURL)
+		id := strings.Repeat("ab", 16)
+		require.NoError(t, settings.Set(e.ctx, e.db.Owner, "backup.restore_id", id, e.clk.Now()))
+		crt, err := os.ReadFile(filepath.Join(e.keysDir, "tls.crt"))
+		require.NoError(t, err)
+		stage(t, e.keysDir, id, map[string][]byte{"tls.crt": crt})
+		stage(t, e.stateDir, id, nil)
+		e.stop()
+		e.renameDB(live, live+"_restore")
+
+		in := e.input(info.Path)
+		backup.SetRestoreHook(&in, func(p string) error {
+			if p == "cleaned" {
+				return errors.New("stop after the cleanup")
+			}
+			return nil
+		})
+		_, err = backup.Restore(e.ctx, e.cfg, in)
+		require.EqualError(t, err, "stop after the cleanup")
+		assert.Equal(t, []string{live}, e.databases())
+		e.requireNoStaging()
+		_, err = os.Stat(filepath.Join(e.keysDir, "tls.key"))
+		assert.ErrorIs(t, err, os.ErrNotExist, "the staged files were applied")
+		e.start()
+	})
+}
+
+func (e *env) renameDB(from, to string) {
+	e.t.Helper()
+	sp := e.superPool()
+	defer sp.Close()
+	_, err := sp.Exec(e.ctx, "ALTER DATABASE "+pgx.Identifier{from}.Sanitize()+" RENAME TO "+pgx.Identifier{to}.Sanitize())
+	require.NoError(e.t, err)
+}
+
+// I-1 (Task 5 review): the COMMIT of the rename transaction reaches the server but its reply is lost. Restore fails,
+// but it must not remove the staging of a swap that happened: the restore ID decides, at the next start or restore.
+func TestRestoreSurvivesALostCommitReply(t *testing.T) {
+	for _, next := range []string{"serve", "restore"} {
+		t.Run("committed/"+next, func(t *testing.T) {
+			e := newRestoreEnv(t)
+			atBackup, auditAtBackup, info := e.backupWithSnapshot()
+			e.mutate()
+			in := e.input(info.Path)
+			backup.SetCommit(&in, func(ctx context.Context, tx pgx.Tx) error {
+				if err := tx.Commit(ctx); err != nil {
+					return err
+				}
+				return errors.New("connection reset while reading the reply")
+			})
+			_, err := e.restoreWith(in)
+			require.Error(t, err)
+			for _, d := range []string{e.keysDir, e.stateDir} {
+				_, err := os.Stat(filepath.Join(d, ".restore-staging", "RESTORE_ID"))
+				require.NoError(t, err, "the staging of a swap that may have happened is kept")
+			}
+			if next == "serve" {
+				applied, err := backup.FinishInterruptedRestore(e.ctx, e.db.App, e.keysDir, e.stateDir)
+				require.NoError(t, err)
+				assert.True(t, applied, "the swap happened, so its staged files are applied")
+				_, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, e.keysDir, e.clk.Now())
+				require.NoError(t, err, "the restored key opens the restored database")
+			}
+			_, err = e.restore(info.Path, nil)
+			require.NoError(t, err)
+			e.requireRestored(atBackup, auditAtBackup)
+			e.requireNoStaging()
+		})
+	}
+	t.Run("not committed", func(t *testing.T) {
+		e := newRestoreEnv(t)
+		atBackup, auditAtBackup, info := e.backupWithSnapshot()
+		e.mutate()
+		before := e.snapshot()
+		in := e.input(info.Path)
+		backup.SetCommit(&in, func(ctx context.Context, tx pgx.Tx) error {
+			_ = tx.Rollback(ctx)
+			return errors.New("connection reset before the commit")
+		})
+		_, err := e.restoreWith(in)
+		require.Error(t, err)
+		applied, err := backup.FinishInterruptedRestore(e.ctx, e.db.App, e.keysDir, e.stateDir)
+		require.NoError(t, err)
+		assert.False(t, applied)
+		e.requireNoStaging()
+		for p, h := range before.files {
+			assert.Equal(t, h, e.snapshot().files[p], "live file %s", p)
+		}
+		_, err = secrets.LoadOrCreateMasterKey(e.ctx, e.db.App, e.keysDir, e.clk.Now())
+		require.NoError(t, err)
+		_, err = e.restore(info.Path, nil)
+		require.NoError(t, err)
+		e.requireRestored(atBackup, auditAtBackup)
+	})
+}
+
+// I-2 (Task 5 review): a second restore of the same database while one runs fails fast and touches nothing.
+func TestConcurrentRestoresAreRefused(t *testing.T) {
+	e := newRestoreEnv(t)
+	atBackup, auditAtBackup, info := e.backupWithSnapshot()
+	e.mutate()
 	in := e.input(info.Path)
+	var second error
+	ran := false
 	backup.SetRestoreHook(&in, func(p string) error {
-		if p == "cleaned" {
-			return errors.New("stop after the cleanup")
+		if p == "previous" {
+			ran = true
+			_, second = backup.Restore(e.ctx, e.cfg, e.input(info.Path))
 		}
 		return nil
 	})
-	_, err = backup.Restore(e.ctx, e.cfg, in)
+	_, err := e.restoreWith(in)
+	require.NoError(t, err)
+	require.True(t, ran)
+	require.ErrorIs(t, second, backup.ErrRestoreRunning)
+	e.requireRestored(atBackup, auditAtBackup)
+	e.requireNoStaging()
+}
+
+// I-2 (Task 5 review): when the swap happened but no staged file was applied (the staging vanished), the previous
+// database is kept and the restore fails naming it, instead of reporting success.
+func TestSwapKeepsThePreviousDatabaseWhenNoFileWasApplied(t *testing.T) {
+	e := newRestoreEnv(t)
+	_, _, info := e.backupWithSnapshot()
+	e.mutate()
+	in := e.input(info.Path)
+	backup.SetRestoreHook(&in, func(p string) error {
+		if p == "previous" {
+			require.NoError(t, os.RemoveAll(filepath.Join(e.keysDir, ".restore-staging")))
+			require.NoError(t, os.RemoveAll(filepath.Join(e.stateDir, ".restore-staging")))
+		}
+		return nil
+	})
+	_, err := e.restoreWith(in)
 	require.Error(t, err)
-	e.start()
-	requireUnchanged(t, before, e.snapshot())
+	prefix := dbName(t, e.db.OwnerURL) + "_previous_"
+	assert.Contains(t, err.Error(), prefix)
+	var kept []string
+	for _, n := range e.databases() {
+		if strings.HasPrefix(n, prefix) {
+			kept = append(kept, n)
+		}
+	}
+	require.Len(t, kept, 1, "the previous database is kept")
+	assert.Contains(t, err.Error(), kept[0])
+}
+
+// Minor 3 (Task 5 review): the key check is that of the newest key version, not of version 1.
+func TestRestoreChecksTheCurrentKeyVersion(t *testing.T) {
+	e := newRestoreEnv(t)
+	k2 := make([]byte, 32)
+	_, _ = rand.Read(k2)
+	kr2, err := secrets.NewKeyring(2, k2)
+	require.NoError(t, err)
+	check, err := kr2.KeyCheck()
+	require.NoError(t, err)
+	_, err = e.db.Owner.Exec(e.ctx, "INSERT INTO master_key_versions (version, key_check, created_at) VALUES (2, $1, $2)", check, e.clk.Now())
+	require.NoError(t, err)
+	var at time.Time
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT installed_at FROM license WHERE id = 1").Scan(&at))
+	_, err = e.db.Owner.Exec(e.ctx, "UPDATE license SET installation_seal = $1 WHERE id = 1", backup.InstallationSeal(kr2, e.installationID, at))
+	require.NoError(t, err)
+	p := filepath.Join(e.keysDir, "master.key")
+	require.NoError(t, os.Remove(p))
+	require.NoError(t, os.WriteFile(p, []byte(base64.StdEncoding.EncodeToString(k2)+"\n"), 0o400))
+	info := e.create(backup.KindManual)
+
+	_, _, err = e.restoreElsewhere(info.Path, e.createDB(uniqueName("rotated_")), nil)
+	require.NoError(t, err)
 }
 
 func TestRestoreRefusesWhileTheDatabaseIsInUse(t *testing.T) {

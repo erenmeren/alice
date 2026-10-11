@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"alice/internal/platform/settings"
 )
 
 // previousName matches the time suffix of a previous database.
@@ -16,8 +19,9 @@ var previousName = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z$`)
 
 // cleanup is the start of every Restore (S-1, R43 row 8). It finishes or removes what an interrupted restore left:
 //
-//   - no <db> but a <db>_restore: the crash came between the two renames; <db>_restore is renamed to <db>, never
-//     dropped (it may be the only copy);
+//   - no <db> but a <db>_restore: it is renamed to <db> only when both staging directories carry its restore ID (the
+//     restore reached "staged", so it was verified); otherwise it is unverified and the restore refuses with
+//     ErrUnfinishedStaging. It is never dropped (it may be the only copy);
 //   - staging directories: FinishInterruptedRestore against the live database applies them when the live database
 //     carries their restore ID, else removes them as stale without touching the live files;
 //   - <db>_restore while <db> exists: an unfinished staging database, dropped;
@@ -33,6 +37,14 @@ func (r *restorer) cleanup(ctx context.Context) error {
 		return err
 	}
 	if !live && restore {
+		ok, err := r.stagedFor(ctx, staging)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return fmt.Errorf("%w: %s exists and %s does not; check it, drop or rename it by hand, then run the restore again",
+				ErrUnfinishedStaging, staging, r.name)
+		}
 		if _, err := r.maint.Exec(ctx, ddl(ddlRename, staging, r.name)); err != nil {
 			return fmt.Errorf("backup: finish an interrupted rename: %w", err)
 		}
@@ -90,6 +102,30 @@ func (r *restorer) finishWithLive(ctx context.Context) error {
 	defer func() { _ = conn.Close(context.WithoutCancel(ctx)) }()
 	_, err = FinishInterruptedRestore(ctx, conn, r.s.c.KeysDir, r.s.c.StateDir)
 	return err
+}
+
+// stagedFor reports whether database name carries a restore ID that both staging directories carry too.
+func (r *restorer) stagedFor(ctx context.Context, name string) (bool, error) {
+	conn, err := r.connectTo(ctx, name)
+	if err != nil {
+		return false, err
+	}
+	var id string
+	found, err := settings.Get(ctx, conn, keyRestoreID, &id)
+	_ = conn.Close(context.WithoutCancel(ctx))
+	if err != nil && !isUndefinedTable(err) {
+		return false, fmt.Errorf("backup: read the restore ID of %s: %w", name, err)
+	}
+	if !found || len(id) != 32 {
+		return false, nil
+	}
+	for _, d := range []string{r.s.c.KeysDir, r.s.c.StateDir} {
+		b, err := readSmall(filepath.Join(d, stagingDir, restoreIDTag))
+		if err != nil || subtle.ConstantTimeCompare([]byte(strings.TrimSuffix(string(b), "\n")), []byte(id)) != 1 {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func stagingPresent(dir string) bool {

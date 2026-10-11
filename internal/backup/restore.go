@@ -55,8 +55,9 @@ type RestoreInput struct {
 	Confirm           func(m Manifest) bool
 	OwnerURL          string // owner role and the live database; the maintenance connection uses database "postgres"
 
-	hook func(point string) error                                                                           // tests: crash points
-	load func(ctx context.Context, conn *pgx.Conn, dec *dump.Decoder, first dump.Frame) (dump.Stats, error) // tests: dump.Load
+	hook   func(point string) error                                                                           // tests: crash points
+	load   func(ctx context.Context, conn *pgx.Conn, dec *dump.Decoder, first dump.Frame) (dump.Stats, error) // tests: dump.Load
+	commit func(ctx context.Context, tx pgx.Tx) error                                                         // tests: the swap's COMMIT
 }
 
 // RestoreResult is a finished restore: the backup's manifest, the path of the safety backup ("" when none was made),
@@ -101,6 +102,11 @@ var (
 	ErrCancelled      = errors.New("backup: restore cancelled")
 	ErrDatabaseInUse  = errors.New("backup: Alice is still connected to the database; stop it first")
 	ErrNoSafetyBackup = errors.New("backup: the installation has data but no recovery passphrase, so no safety backup can be made")
+	ErrRestoreRunning = errors.New("backup: another restore of this database is running; wait for it to finish")
+	ErrSameDirectory  = errors.New("backup: the keys and state directories must be two different directories")
+	// ErrUnfinishedStaging means <db>_restore exists without <db> and never reached its swap: it is not verified, so
+	// it is neither made live nor dropped; the operator decides.
+	ErrUnfinishedStaging = errors.New("backup: an interrupted restore left a database that was never verified and no live database")
 )
 
 // The crash points of a restore, in order (tests stop it at each). "cleaned" follows the leftover cleanup; the two
@@ -110,6 +116,7 @@ var restorePoints = []string{"cleaned", "loaded", "verified", "safety-backup", "
 // Settings keys and fixed names of the restore.
 const (
 	keyRestoreID      = "backup.restore_id"
+	restoreLockKey    = "alice.restore"
 	restoreSuffix     = "_restore"
 	previousSuffix    = "_previous_"
 	maintenanceDB     = "postgres"
@@ -134,6 +141,7 @@ type restorer struct {
 	staging   *pgxpool.Pool   // the owner role on <name>_restore
 	created   bool            // <name>_restore exists because this restore created it
 	staged    bool            // this restore wrote the staging directories
+	renaming  bool            // the swap's COMMIT was sent: whether it happened is unknown until swapped is set
 	swapped   bool            // the databases were renamed: from here on nothing is undone
 	restoreID string          // 32 hex, in the staging database and the staging directories (S-1)
 	m         Manifest
@@ -152,6 +160,9 @@ type restorer struct {
 func Restore(ctx context.Context, cfg Config, in RestoreInput) (res RestoreResult, err error) {
 	r := &restorer{s: New(cfg), in: in, files: map[string][]byte{}}
 	defer r.clearSecrets()
+	if sameDir(cfg.KeysDir, cfg.StateDir) {
+		return RestoreResult{}, ErrSameDirectory
+	}
 	defer func() {
 		if err != nil && !r.swapped {
 			r.abort(ctx)
@@ -192,12 +203,16 @@ func (r *restorer) close(ctx context.Context) {
 }
 
 // abort undoes what this restore created before the swap: the staging database and directories. The live
-// installation was never touched.
+// installation was never touched. Once the swap's COMMIT was sent and its outcome is unknown (a lost reply), abort
+// leaves everything: the restore ID decides at the next start or restore whether the staging is applied or stale.
 func (r *restorer) abort(ctx context.Context) {
 	ctx = context.WithoutCancel(ctx)
 	if r.staging != nil {
 		r.staging.Close()
 		r.staging = nil
+	}
+	if r.renaming {
+		return
 	}
 	if r.created && r.maint != nil {
 		if _, err := r.maint.Exec(ctx, ddl(ddlDrop, r.name+restoreSuffix, "")); err != nil {
@@ -350,6 +365,16 @@ func (r *restorer) connect(ctx context.Context) error {
 	mc.Database = maintenanceDB
 	if r.maint, err = pgx.ConnectConfig(ctx, mc); err != nil {
 		return fmt.Errorf("backup: connect to the database server as the owner: %w", db.ErrUnreachable)
+	}
+	// One restore of a database at a time: a session-level advisory lock on the maintenance connection, held until
+	// it closes (or the process dies). A second restore fails here, before its cleanup could touch the first's
+	// staging.
+	var locked bool
+	if err := r.maint.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtext($1), hashtext($2))", restoreLockKey, r.name).Scan(&locked); err != nil {
+		return fmt.Errorf("backup: take the restore lock: %w", err)
+	}
+	if !locked {
+		return ErrRestoreRunning
 	}
 	return nil
 }
@@ -642,13 +667,17 @@ func (r *restorer) verify(ctx context.Context) error {
 	if *head != r.m.AuditHead {
 		return &ErrNotVerified{Reason: "the audit log does not end where the manifest says"}
 	}
-	k, err := secrets.NewKeyring(1, r.master)
+	// The key file holds the current key: the newest version's key check must open with it.
+	var version int
+	var check []byte
+	if err := r.staging.QueryRow(ctx, "SELECT version, key_check FROM master_key_versions ORDER BY version DESC LIMIT 1").Scan(&version, &check); err != nil {
+		return &ErrNotVerified{Reason: "the master key does not open the stored key check"}
+	}
+	k, err := secrets.NewKeyring(version, r.master)
 	if err != nil {
 		return &ErrNotVerified{Reason: "the master key in the backup is not valid"}
 	}
-	var check []byte
-	if err := r.staging.QueryRow(ctx, "SELECT key_check FROM master_key_versions WHERE version = 1").Scan(&check); err != nil ||
-		k.VerifyKeyCheck(check) != nil {
+	if k.VerifyKeyCheck(check) != nil {
 		return &ErrNotVerified{Reason: "the master key does not open the stored key check"}
 	}
 	var id string

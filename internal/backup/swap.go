@@ -83,8 +83,15 @@ func (r *restorer) swap(ctx context.Context) error {
 	if _, err := tx.Exec(ctx, ddl(ddlRename, r.name+restoreSuffix, r.name)); err != nil {
 		return fmt.Errorf("backup: rename the restored database: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("backup: swap the databases: %w", err)
+	commit := r.in.commit
+	if commit == nil {
+		commit = func(ctx context.Context, tx pgx.Tx) error { return tx.Commit(ctx) }
+	}
+	// From here the outcome is unknown until COMMIT answers: a lost reply may hide a swap that happened, so a failure
+	// must not remove the staging (abort checks renaming); the restore ID decides at the next start or restore.
+	r.renaming = true
+	if err := commit(ctx, tx); err != nil {
+		return fmt.Errorf("backup: the database swap may not have completed; start Alice or run the restore again to finish or undo it: %w", err)
 	}
 	r.swapped = true
 	r.s.c.Log.Info("the restored database is now live", "event", "backup.restore_swapped")
@@ -96,10 +103,18 @@ func (r *restorer) swap(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, err = FinishInterruptedRestore(ctx, conn, r.s.c.KeysDir, r.s.c.StateDir)
+	applied, err := FinishInterruptedRestore(ctx, conn, r.s.c.KeysDir, r.s.c.StateDir)
 	_ = conn.Close(context.WithoutCancel(ctx))
 	if err != nil {
 		return err
+	}
+	if !applied && !r.in.DBOnly {
+		// The staging vanished between "staged" and the swap: the restored database is live without its keys. The
+		// previous database is the way back, so it is kept.
+		if r.previous != "" {
+			return fmt.Errorf("backup: the restored database is live but its key and state files were not applied; the previous database %s is kept", r.previous)
+		}
+		return errors.New("backup: the restored database is live but its key and state files were not applied")
 	}
 	if err := r.point("files"); err != nil {
 		return err
@@ -237,6 +252,9 @@ func writeSynced(path string, b []byte, mode os.FileMode) error {
 // TLS pair the backup lacked, a time record of the old master key); a file listed in FILES but no longer staged was
 // renamed by an earlier, interrupted run. The master key is never removed. Each directory is synced.
 func FinishInterruptedRestore(ctx context.Context, q db.Querier, keysDir, stateDir string) (bool, error) {
+	if sameDir(keysDir, stateDir) {
+		return false, ErrSameDirectory
+	}
 	dirs := map[string][]stagedFile{keysDir: keysFiles, stateDir: stateFiles}
 	present := false
 	for dir := range dirs {
@@ -320,4 +338,15 @@ func removeStaging(dir string) error {
 		return fmt.Errorf("backup: sync %s: %w", dir, err)
 	}
 	return nil
+}
+
+// sameDir reports whether a and b name one directory (lexically, after making them absolute): the staging would then
+// hold only one of the two file sets.
+func sameDir(a, b string) bool {
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return filepath.Clean(a) == filepath.Clean(b)
+	}
+	return aa == bb
 }
