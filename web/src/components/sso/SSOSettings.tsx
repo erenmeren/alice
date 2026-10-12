@@ -53,6 +53,7 @@ export function SSOSettings() {
               role="switch"
               aria-label={t('sso.allowAdmin')}
               aria-describedby={helpId}
+              classNames={{ input: classes.switchInput }}
               checked={settings.data.allow_admin_role}
               disabled={allow.isPending}
               onChange={(e) => (e.currentTarget.checked ? allow.mutate(true) : setConfirmOff(true))}

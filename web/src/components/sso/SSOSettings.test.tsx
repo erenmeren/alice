@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -70,6 +71,20 @@ describe('SSOSettings', () => {
     const allow = screen.getByRole('switch', { name: 'SSO users may be Admin' });
     expect(allow.closest(`.${ui.switchRow}`)).not.toBeNull();
     expect(allow).toHaveAccessibleDescription(/Off by default/);
+  });
+
+  it('lifts the Admin switch\'s input above Mantine\'s track, so a click on the switch lands on the input', async () => {
+    // Mantine draws the track (position:relative; z-index:0) after the absolutely placed input; without a visible label
+    // the track covers the input's centre and a real (Playwright) click is intercepted. jsdom cannot see this, so the
+    // rule itself is pinned here; only the real-browser run of phase7 proves the click.
+    base();
+    await renderRoute('/settings?tab=sso');
+    const sw = await screen.findByRole('switch', { name: 'SSO users may be Admin' });
+    expect(sw).toHaveClass(classes.switchInput);
+    const css = readFileSync('src/components/settings/settings.module.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const rule = /(?:^|\})\s*\.switchInput\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).toMatch(/z-index:\s*1\s*(;|$)/);
+    expect(rule).toMatch(/cursor:\s*pointer/);
   });
 
   it('adds a mapping and removes one, sending the provider with the delete', async () => {
