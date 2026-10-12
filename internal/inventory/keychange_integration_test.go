@@ -458,4 +458,12 @@ func TestListSSHKeysRetiredKeyRemovedByAliceIsNotMissing(t *testing.T) {
 	assert.True(t, got[vanished].Retired)
 	assert.False(t, got[live].Missing)
 	assert.False(t, got[live].Retired)
+
+	// The detail agrees with the list it was opened from (review-fixes L-13).
+	for _, id := range []uuid.UUID{removed, vanished, live} {
+		k, err := h.svc.GetSSHKey(h.ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, got[id].Missing, k.Missing, "missing: %s", k.Fingerprint)
+		assert.Equal(t, got[id].Retired, k.Retired, "retired: %s", k.Fingerprint)
+	}
 }

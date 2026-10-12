@@ -36,8 +36,8 @@ type SSHKey struct {
 	Comment       string
 	LocationCount int
 	TargetCount   int
-	Missing       bool // every location of the key is missing or removed (in the list: not a retired key Alice removed everywhere)
-	Retired       bool // a rotation retired the key (set by ListSSHKeys)
+	Missing       bool // every location of the key is missing or removed, and it is not a retired key Alice removed everywhere
+	Retired       bool // a rotation retired the key
 	FirstSeenAt   time.Time
 	Locations     []KeyLocation
 }
@@ -540,8 +540,10 @@ LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID
 // GetSSHKey returns a key with every location on a live target (including missing and removed ones).
 func (s *Service) GetSSHKey(ctx context.Context, id uuid.UUID) (SSHKey, error) {
 	var k SSHKey
-	err := s.pool.QueryRow(ctx, `SELECT id, fingerprint_sha256, key_type, bits, public_key, managed, is_platform_key, weak, first_seen_at, key_comment
-FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak, &k.FirstSeenAt, &k.Comment)
+	err := s.pool.QueryRow(ctx, `SELECT id, fingerprint_sha256, key_type, bits, public_key, managed, is_platform_key, weak, first_seen_at, key_comment,
+    retired_at IS NOT NULL
+FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak, &k.FirstSeenAt, &k.Comment,
+		&k.Retired)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SSHKey{}, ErrNotFound
 	}
@@ -558,16 +560,23 @@ FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bit
 	}
 	targets := map[uuid.UUID]bool{}
 	var newest time.Time
+	// Missing as ListSSHKeys computes it (review-fixes L-13): every location missing or removed, but not a retired
+	// key that Alice removed everywhere.
 	k.Missing = len(k.Locations) > 0
+	removedEverywhere := len(k.Locations) > 0
 	for _, l := range k.Locations {
 		if l.MissingSince == nil && l.RemovedAt == nil {
 			k.Missing = false
+		}
+		if l.RemovedAt == nil {
+			removedEverywhere = false
 		}
 		targets[l.TargetID] = true
 		if l.LastSeenAt.After(newest) {
 			newest, k.Comment = l.LastSeenAt, l.Comment
 		}
 	}
+	k.Missing = k.Missing && !(k.Retired && removedEverywhere)
 	k.LocationCount, k.TargetCount = len(k.Locations), len(targets)
 	return k, nil
 }
