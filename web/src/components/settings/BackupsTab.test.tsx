@@ -113,6 +113,9 @@ describe('BackupsTab', () => {
     expect(within(table).getByText('Unknown state')).toBeInTheDocument();
     // An unknown kind is data, shown as it is.
     expect(within(table).getByText('something-new').tagName).toBe('CODE');
+    // A file Alice cannot read or check is a failure: a red (danger) badge; a checked file is green.
+    for (const name of ['locked.alicebak', 'bad.alicebak', 'future.alicebak'])
+      expect(within(table).getByText(name).closest('tr')?.querySelector('.mantine-Badge-root')).toHaveAttribute('data-tone', 'danger');
     expect(screen.queryByTestId('backup-download-locked.alicebak')).not.toBeInTheDocument();
     expect(screen.queryByTestId('backup-download-broken.alicebak')).not.toBeInTheDocument();
     expect(screen.getByTestId('backup-download-bad.alicebak')).toBeInTheDocument();
