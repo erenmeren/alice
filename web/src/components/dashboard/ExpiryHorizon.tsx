@@ -1,4 +1,4 @@
-import { Anchor, SegmentedControl } from '@mantine/core';
+import { Anchor, SegmentedControl, VisuallyHidden } from '@mantine/core';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
@@ -60,7 +60,16 @@ export function ExpiryHorizon({ counts }: { counts: Counts }) {
           aria-label={t('dashboard.horizon.window')}
           value={days}
           onChange={(v) => setDays(v as Window)}
-          data={WINDOWS.map((d) => ({ value: d, label: t('dashboard.horizon.days', { days: d }) }))}
+          // The design's short label ("7d") is what is seen; the radio's name is the window in words ("7 days").
+          data={WINDOWS.map((d) => ({
+            value: d,
+            label: (
+              <>
+                <span aria-hidden="true">{t('dashboard.horizon.days', { days: d })}</span>
+                <VisuallyHidden>{t('dashboard.horizon.daysLong', { count: Number(d) })}</VisuallyHidden>
+              </>
+            ),
+          }))}
         />
       }
     >
@@ -70,7 +79,7 @@ export function ExpiryHorizon({ counts }: { counts: Counts }) {
           <p className={classes.horizonText}>{t('dashboard.horizon.headline', { days })}</p>
           {counts.expired > 0 && (
             <StatusBadge tone="danger" icon="CircleAlert">
-              {t('dashboard.expired')} {counts.expired}
+              {t('dashboard.horizon.expiredBadge', { count: counts.expired })}
             </StatusBadge>
           )}
         </div>

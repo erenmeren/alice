@@ -34,18 +34,23 @@ describe('ExpiryHorizon', () => {
   });
   it('states the chosen cumulative window in the headline', async () => {
     await renderApp(<MemoryRouter><ExpiryHorizon counts={counts} /></MemoryRouter>);
-    await userEvent.click(screen.getByRole('radio', { name: '7d' }));
+    // Each window is named in words ("7 days"); the visible label stays the design's short "7d".
+    for (const d of ['7', '30', '60']) {
+      expect(screen.getByRole('radio', { name: `${d} days` })).toBeInTheDocument();
+      expect(screen.getByText(`${d}d`)).toHaveAttribute('aria-hidden', 'true');
+    }
+    await userEvent.click(screen.getByRole('radio', { name: '7 days' }));
     expect(screen.getByTestId('horizon-headline')).toHaveTextContent('4');
     expect(screen.getByTestId('horizon-headline')).toHaveTextContent('expiring within 7 days, expired included');
   });
   it('links the Key Vault keys and secrets on their own line, only when there are some, and draws a zero bucket at the minimum height', async () => {
     const { unmount } = await renderApp(<MemoryRouter><ExpiryHorizon counts={counts} /></MemoryRouter>);
     expect(screen.getByRole('link', { name: 'Key Vault keys and secrets expiring within 30 days: 9' })).toHaveAttribute('href', '/key-vaults');
-    expect(screen.getByTestId('horizon-headline')).toHaveTextContent('Expired 1');
+    expect(screen.getByTestId('horizon-headline')).toHaveTextContent('1 already expired');
     unmount();
     await renderApp(<MemoryRouter><ExpiryHorizon counts={{ ...counts, expired: 0, within_7: 0, kv_within_30: 0 }} /></MemoryRouter>);
     expect(screen.queryByRole('link', { name: /Key Vault/ })).not.toBeInTheDocument();
-    expect(screen.getByTestId('horizon-headline')).not.toHaveTextContent('Expired');
+    expect(screen.getByTestId('horizon-headline')).not.toHaveTextContent('already expired');
     const bars = screen.getByRole('img').querySelectorAll<HTMLElement>('[data-bucket]');
     expect(bars).toHaveLength(4);
     expect(bars[0].style.height).toBe('3px');
