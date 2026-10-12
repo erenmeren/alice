@@ -13,6 +13,10 @@ export interface PaletteItem {
   icon: IconName;
 }
 
+// anotherDialogOpen: a modal dialog (step-up, deploy, a form) is in front; the palette must not open on top of it, or
+// Enter would leave the half-finished flow.
+export const anotherDialogOpen = () => document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+
 const isMac = () => typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
 // CommandPalette is the top bar's "go to a page" dialog (Ctrl+K / ⌘K). It searches only the destinations it is given —
@@ -23,7 +27,14 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
   const navigate = useNavigate();
   const [opened, setOpened] = useState(false);
   const [query, setQuery] = useState('');
-  useHotkeys([['mod+K', () => setOpened(true)]]);
+  useHotkeys([
+    [
+      'mod+K',
+      () => {
+        if (!anotherDialogOpen()) setOpened(true);
+      },
+    ],
+  ]);
   const close = () => {
     setOpened(false);
     setQuery('');

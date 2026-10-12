@@ -15,6 +15,25 @@ describe('command palette', () => {
     await userEvent.type(await screen.findByRole('textbox', { name: 'Find a page…' }), 'audit');
     expect(dialog).toHaveTextContent('No page matches.');
   });
+  it('ignores Ctrl+K while another dialog is open (a half-finished step-up or deploy stays in front)', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderRoute('/');
+    await screen.findByRole('navigation', { name: 'Main navigation' });
+    const other = document.createElement('div');
+    other.setAttribute('role', 'dialog');
+    other.setAttribute('aria-modal', 'true');
+    other.innerHTML = '<button type="button">Inside</button>';
+    document.body.appendChild(other);
+    try {
+      other.querySelector('button')?.focus();
+      await userEvent.keyboard('{Control>}k{/Control}');
+      await expect(screen.findByRole('dialog', { name: 'Go to a page' }, { timeout: 400 })).rejects.toThrow();
+    } finally {
+      other.remove();
+    }
+    await userEvent.keyboard('{Control>}k{/Control}');
+    expect(await screen.findByRole('dialog', { name: 'Go to a page' })).toBeInTheDocument();
+  });
   it('opens the first match with Enter', async () => {
     server.use(...sessionHandlers(adminSession), http.get('/api/v1/audit', () => HttpResponse.json({ items: [], next_cursor: null })));
     const { router } = await renderRoute('/');
