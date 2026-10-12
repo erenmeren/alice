@@ -1,0 +1,12 @@
+/* The audit trail in the Clarity design (alice-design/dist/pages.js auditTable(); styles.css .avatar, .mono,
+   .data-table td p). Colors come from the --alice-* tokens only. */
+.filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.time { font-size: 11px; white-space: nowrap; }
+.secondaryMono { margin: 4px 0 0; font-family: var(--mantine-font-family-monospace); font-size: 10px; color: var(--alice-text-muted); overflow-wrap: anywhere; }
+.actor { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.actor > div { min-width: 0; }
+.actorName { overflow-wrap: anywhere; }
+.avatar { display: grid; place-items: center; width: 25px; height: 25px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--alice-border); background: var(--alice-brand-soft); color: var(--alice-brand); font-size: 9px; font-weight: 600; }
+.footNote { color: var(--alice-text-muted); }
+.footRight { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.notice { display: grid; gap: 4px; }

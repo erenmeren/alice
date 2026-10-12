@@ -10,6 +10,7 @@ import { adminSession, errorResponse, sessionFor } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
+import ui from '../components/ui/ui.module.css';
 
 function entry(seq: number, action: string, result: AuditEntry['result'] = 'success'): AuditEntry {
   return {
@@ -380,6 +381,113 @@ describe('AuditPage', () => {
     );
     await renderRoute('/audit');
     expect(await screen.findByText('System (setup)')).toBeInTheDocument();
+  });
+
+  it('has the design header, the filters in the table toolbar, design rows and the cursor footer', async () => {
+    signedInAs(adminSession);
+    server.use(
+      http.get('/api/v1/audit', () =>
+        HttpResponse.json({
+          items: [
+            { ...entry(7, 'user.created', 'success'), actor_name: 'Ada Lovelace' },
+            { ...entry(6, 'auth.login', 'failure'), details: { reason: 'bad_password' } },
+            { ...entry(5, 'authz.denied', 'denied'), actor_type: 'system', actor_name: 'scheduler', ip: null },
+          ],
+          next_cursor: '5',
+        }),
+      ),
+    );
+    await renderRoute('/audit');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Audit trail' })).toBeInTheDocument();
+    const main = screen.getByRole('main');
+    expect(within(main).getByText('Who did what, where, and with which result.')).toBeInTheDocument();
+    // Header actions: the two exports (plain downloads) and Verify integrity as the primary button.
+    const header = within(main).getByRole('heading', { level: 1 }).closest('header')!;
+    expect(within(header).getByRole('link', { name: 'Export CSV' })).toHaveAttribute('href', auditExportUrl('csv'));
+    expect(within(header).getByRole('link', { name: 'Export JSON' })).toHaveAttribute('href', auditExportUrl('json'));
+    expect(within(header).getByRole('button', { name: 'Verify integrity' })).toHaveAttribute('data-variant', 'filled');
+    expect(within(main).getByText(en.audit.exportHint)).toBeInTheDocument();
+
+    // The filter form sits in the table panel's toolbar, above the named table.
+    const table = await screen.findByRole('table', { name: 'Audit events' });
+    const tablePanel = table.closest(`.${ui.tablePanel}`) as HTMLElement;
+    expect(tablePanel).not.toBeNull();
+    const toolbar = tablePanel.querySelector(`.${ui.toolbar}`) as HTMLElement;
+    expect(within(toolbar).getByLabelText(/^Action starts with/)).toBeInTheDocument();
+    expect(within(toolbar).getByLabelText(/^Result/).tagName).toBe('SELECT');
+    expect(within(toolbar).getByRole('button', { name: 'Apply filters' })).toBeInTheDocument();
+    expect(within(tablePanel).getByRole('group', { name: 'Table, scrolls sideways' })).toBeInTheDocument();
+
+    // Rows: time with the sequence number, the actor with initials, the action, the object, the result badge.
+    const created = screen.getByText('User created').closest('tr')!;
+    expect(within(created).getByText('#7')).toBeInTheDocument();
+    expect(within(created).getByText('AL')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(created).getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(within(created).getByText('10.0.0.7')).toBeInTheDocument();
+    expect(within(created).getByText('IP address')).toBeInTheDocument();
+    expect(within(created).getByText('Success').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    const failed = screen.getByText('#6').closest('tr')!;
+    expect(within(failed).getByText('Failure').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
+    const toggle = within(failed).getByRole('button', { name: 'Details (1)' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(toggle);
+    expect(within(failed).getByRole('group', { name: 'Details' })).toBeInTheDocument();
+    const denied = screen.getByText('System (scheduler)').closest('tr')!;
+    expect(within(denied).getByText('Denied').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'danger');
+
+    // Footer: how many are shown (never a total), the order and Load more.
+    const bottom = tablePanel.querySelector(`.${ui.tableBottom}`) as HTMLElement;
+    expect(within(bottom).getByText('3 shown')).toBeInTheDocument();
+    expect(within(bottom).getByText('Newest first')).toBeInTheDocument();
+    expect(within(bottom).getByRole('button', { name: 'Load more' })).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('shows an empty trail inside the table panel and keeps the filters', async () => {
+    signedInAs(adminSession);
+    server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [], next_cursor: null })));
+    await renderRoute('/audit');
+    const empty = await screen.findByText('No entries match these filters.');
+    const tablePanel = empty.closest(`.${ui.tablePanel}`) as HTMLElement;
+    expect(tablePanel).not.toBeNull();
+    expect(within(tablePanel).getByRole('button', { name: 'Apply filters' })).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('reports the verification as a notice with its scope and, for administrators, the forwarding settings', async () => {
+    signedInAs(adminSession);
+    server.use(
+      http.get('/api/v1/audit', () => HttpResponse.json({ items: [entry(1, 'auth.login')], next_cursor: null })),
+      http.post('/api/v1/audit/verify', () =>
+        HttpResponse.json({ intact: true, checked: 3, head_seq: 3, head_hash: 'cd'.repeat(32), first_bad_seq: null, problem: null }),
+      ),
+    );
+    await renderRoute('/audit');
+    await userEvent.click(await screen.findByRole('button', { name: 'Verify integrity' }));
+    const status = await screen.findByRole('status');
+    expect(status.getAttribute('style')).toContain('--alert-bg: var(--alice-brand-soft)');
+    expect(status).toHaveTextContent('The audit log is intact.');
+    expect(status).toHaveTextContent('Hash-chain continuity, not independent proof against a compromised host.');
+    expect(within(status).getByRole('link', { name: 'Audit forwarding settings' })).toHaveAttribute('href', '/settings?tab=forwarding');
+    expect(within(status).getByText('cd'.repeat(32)).tagName).toBe('CODE');
+  });
+
+  it('reports a broken chain as a danger notice without the settings link for auditors', async () => {
+    signedInAs(sessionFor('auditor'));
+    server.use(
+      http.get('/api/v1/audit', () => HttpResponse.json({ items: [entry(1, 'auth.login')], next_cursor: null })),
+      http.post('/api/v1/audit/verify', () =>
+        HttpResponse.json({ intact: false, checked: 40, head_seq: 41, head_hash: 'ef'.repeat(32), first_bad_seq: 17, problem: 'hash_mismatch' }),
+      ),
+    );
+    await renderRoute('/audit');
+    await userEvent.click(await screen.findByRole('button', { name: 'Verify integrity' }));
+    const status = await screen.findByRole('status');
+    expect(status.getAttribute('style')).toContain('--alert-bg: var(--alice-danger-soft)');
+    expect(status).toHaveTextContent('Audit log integrity problem at entry 17.');
+    expect(status).toHaveTextContent(en.audit.brokenHelp);
+    expect(status).toHaveTextContent(en.audit.page.scope);
+    expect(within(status).queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('does not show the audit log to operators', async () => {

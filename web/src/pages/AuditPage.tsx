@@ -1,14 +1,32 @@
 import { useId, useState, type FormEvent } from 'react';
-import { Alert, Badge, Button, Code, Group, NativeSelect, Stack, Table, Text, TextInput, Title } from '@mantine/core';
+import { Anchor, Button, Code, Group, NativeSelect, Stack, Table, Text, TextInput } from '@mantine/core';
 import { useInfiniteQuery, useMutation } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 import { auditExportUrl, listAudit, verifyAudit } from '../api/endpoints';
 import type { AuditEntry, AuditResult } from '../api/types';
+import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from '../components/ErrorAlert';
+import { CursorFooter, EmptyState, Notice, PageHeader, StatusBadge, type Tone } from '../components/ui';
+import ui from '../components/ui/ui.module.css';
 import { formatDateTime } from '../datetime';
+import { Icon } from '../design/Icon';
+import classes from './AuditPage.module.css';
 
 const PAGE_SIZE = 50;
-const RESULT_COLORS: Record<AuditResult, string> = { success: 'green', failure: 'orange', denied: 'red' };
+// A refusal (denied) is the stronger signal than a failed attempt, as the product's colors had it (red vs orange).
+const RESULT_TONES: Record<AuditResult, Tone> = { success: 'success', failure: 'warning', denied: 'danger' };
+
+// initials are the avatar letters of a display name (two words at most), upper-cased in the reader's language.
+function initials(name: string, lang: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => [...w][0])
+    .join('')
+    .toLocaleUpperCase(lang);
+}
 
 interface Filters {
   action: string;
@@ -77,7 +95,15 @@ function AuditDetails({ details }: { details: Record<string, string> }) {
   return (
     <Stack gap={4}>
       {summary && <Text size="xs">{summary}</Text>}
-      <Button variant="subtle" size="compact-xs" w="fit-content" aria-expanded={open} aria-controls={id} onClick={() => setOpen((o) => !o)}>
+      <Button
+        variant="subtle"
+        size="compact-xs"
+        w="fit-content"
+        aria-expanded={open}
+        aria-controls={id}
+        leftSection={<Icon name={open ? 'ChevronDown' : 'ChevronRight'} size={13} />}
+        onClick={() => setOpen((o) => !o)}
+      >
         {t('audit.detailsToggle', { n: pairs.length })}
       </Button>
       {open && (
@@ -110,6 +136,7 @@ function AuditDetails({ details }: { details: Record<string, string> }) {
 
 export function AuditPage() {
   const { t, i18n } = useTranslation();
+  const { session } = useAuth();
   const [draft, setDraft] = useState<Filters>({ action: '', result: '' });
   const [filters, setFilters] = useState<Filters>({ action: '', result: '' });
 
@@ -137,132 +164,167 @@ export function AuditPage() {
     setFilters({ action: draft.action.trim(), result: draft.result });
   };
   const items = entries.data?.pages.flatMap((p) => p.items) ?? [];
+  const report = verify.data;
 
   return (
-    <Stack gap="md">
-      <Group justify="space-between">
-        <Title order={1}>{t('audit.title')}</Title>
-        <Group gap="xs">
-          <Button onClick={() => verify.mutate()} loading={verify.isPending}>
-            {t('audit.verify')}
-          </Button>
-          <Button component="a" href={auditExportUrl('csv')} download variant="default">
-            {t('audit.exportCsv')}
-          </Button>
-          <Button component="a" href={auditExportUrl('json')} download variant="default">
-            {t('audit.exportJson')}
-          </Button>
-        </Group>
-      </Group>
-
-      {/* The exports are plain downloads (a stream may be large); when another check or export is
-          running the server refuses with ALC-AUD-0001 and the browser reports a failed download. */}
-      <Text size="sm" c="gray.7">
+    <Stack gap="lg">
+      <PageHeader
+        title={t('audit.title')}
+        description={t('audit.page.description')}
+        actions={
+          <>
+            {/* The exports are plain downloads of the whole log (a stream may be large); when another check or
+                export is running the server refuses with ALC-AUD-0001 and the browser reports a failed download. */}
+            <Button component="a" href={auditExportUrl('csv')} download variant="default" leftSection={<Icon name="Download" size={15} />}>
+              {t('audit.exportCsv')}
+            </Button>
+            <Button component="a" href={auditExportUrl('json')} download variant="default" leftSection={<Icon name="Download" size={15} />}>
+              {t('audit.exportJson')}
+            </Button>
+            <Button variant="filled" onClick={() => verify.mutate()} loading={verify.isPending} leftSection={<Icon name="ShieldCheck" size={15} />}>
+              {t('audit.verify')}
+            </Button>
+          </>
+        }
+      />
+      <Text size="sm" c="dimmed">
         {t('audit.exportHint')}
       </Text>
+
       {verify.isError && <ErrorAlert error={verify.error} />}
-      {verify.isSuccess && (
-        <Alert
-          color={verify.data.intact ? 'green' : 'red'}
+      {report && (
+        <Notice
+          tone={report.intact ? 'brand' : 'danger'}
           role="status"
-          title={verify.data.intact ? t('audit.intact') : t('audit.broken', { seq: verify.data.first_bad_seq ?? 0 })}
+          title={report.intact ? t('audit.intact') : t('audit.broken', { seq: report.first_bad_seq ?? 0 })}
+          action={
+            // Only Administrators can open Settings; the forwarding state itself needs a step-up there.
+            session?.user.role === 'admin' && (
+              <Anchor component={Link} to="/settings?tab=forwarding" size="sm" c="inherit" fw={600} underline="always">
+                {t('audit.page.forwarding')}
+              </Anchor>
+            )
+          }
         >
-          <Stack gap={4}>
+          <div className={classes.notice}>
             <Text size="sm">
-              {t('audit.checked', { count: verify.data.checked, formatted: new Intl.NumberFormat(i18n.language).format(verify.data.checked) })}
+              {t('audit.checked', { count: report.checked, formatted: new Intl.NumberFormat(i18n.language).format(report.checked) })}
             </Text>
-            {verify.data.intact && (
-              <Text size="sm">
-                {t('audit.headHash')} <Code>{verify.data.head_hash}</Code>
+            {report.intact && (
+              <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
+                {t('audit.headHash')} <Code translate="no">{report.head_hash}</Code>
               </Text>
             )}
-            {!verify.data.intact && <Text size="sm">{t('audit.brokenHelp')}</Text>}
-          </Stack>
-        </Alert>
+            {!report.intact && <Text size="sm">{t('audit.brokenHelp')}</Text>}
+            {/* What the check proves and what it does not (design: "Scope"). */}
+            <Text size="sm">{t('audit.page.scope')}</Text>
+          </div>
+        </Notice>
       )}
-
-      <form onSubmit={apply}>
-        <Group align="flex-end" gap="sm">
-          <TextInput
-            label={t('audit.filters.action')}
-            value={draft.action}
-            onChange={(e) => setDraft({ ...draft, action: e.currentTarget.value })}
-          />
-          <NativeSelect
-            label={t('audit.filters.result')}
-            value={draft.result}
-            onChange={(e) => setDraft({ ...draft, result: e.currentTarget.value as Filters['result'] })}
-            data={[
-              { value: '', label: t('audit.filters.anyResult') },
-              { value: 'success', label: t('audit.result.success') },
-              { value: 'failure', label: t('audit.result.failure') },
-              { value: 'denied', label: t('audit.result.denied') },
-            ]}
-          />
-          <Button type="submit" variant="light">
-            {t('audit.filters.apply')}
-          </Button>
-        </Group>
-      </form>
 
       {entries.isError && <ErrorAlert error={entries.error} />}
-      {entries.isSuccess && items.length === 0 && <Text c="gray.7">{t('audit.empty')}</Text>}
-      {items.length > 0 && (
-        <Table.ScrollContainer minWidth={900}>
-        <Table striped>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t('audit.columns.time')}</Table.Th>
-              <Table.Th>{t('audit.columns.user')}</Table.Th>
-              <Table.Th>{t('audit.columns.action')}</Table.Th>
-              <Table.Th>{t('audit.columns.object')}</Table.Th>
-              <Table.Th>{t('audit.columns.result')}</Table.Th>
-              <Table.Th>{t('audit.columns.ip')}</Table.Th>
-              <Table.Th>{t('audit.columns.details')}</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {items.map((e) => (
-              <Table.Tr key={e.seq}>
-                <Table.Td>{formatDateTime(e.at, i18n.language)}</Table.Td>
-                <Table.Td>{actor(e)}</Table.Td>
-                <Table.Td>{label(e)}</Table.Td>
-                <Table.Td>
-                  {(e.object_type || e.object_id) && (
-                    <Group gap={4} wrap="wrap">
-                      {e.object_type && <Code translate="no">{e.object_type}</Code>}
-                      {e.object_id && (
-                        <Code translate="no" style={{ overflowWrap: 'anywhere' }}>
-                          {e.object_id}
-                        </Code>
+
+      {/* The ResourceTable look, built here so the filter form stays mounted when a filter matches nothing. */}
+      <div className={ui.tablePanel}>
+        <div className={ui.toolbar}>
+          <form onSubmit={apply} className={classes.filters}>
+            <TextInput label={t('audit.filters.action')} value={draft.action} onChange={(e) => setDraft({ ...draft, action: e.currentTarget.value })} />
+            <NativeSelect
+              label={t('audit.filters.result')}
+              value={draft.result}
+              onChange={(e) => setDraft({ ...draft, result: e.currentTarget.value as Filters['result'] })}
+              data={[
+                { value: '', label: t('audit.filters.anyResult') },
+                { value: 'success', label: t('audit.result.success') },
+                { value: 'failure', label: t('audit.result.failure') },
+                { value: 'denied', label: t('audit.result.denied') },
+              ]}
+            />
+            <Button type="submit" variant="light">
+              {t('audit.filters.apply')}
+            </Button>
+          </form>
+        </div>
+        {entries.isSuccess && items.length === 0 && <EmptyState icon="ScrollText" title={t('audit.empty')} />}
+        {items.length > 0 && (
+          <Table.ScrollContainer minWidth={900}>
+            <Table aria-label={t('audit.page.tableLabel')} highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>{t('audit.columns.time')}</Table.Th>
+                  <Table.Th>{t('audit.columns.user')}</Table.Th>
+                  <Table.Th>{t('audit.columns.action')}</Table.Th>
+                  <Table.Th>{t('audit.columns.object')}</Table.Th>
+                  <Table.Th>{t('audit.columns.result')}</Table.Th>
+                  <Table.Th>{t('audit.columns.details')}</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {items.map((e) => (
+                  <Table.Tr key={e.seq}>
+                    <Table.Td>
+                      <span className={classes.time}>{formatDateTime(e.at, i18n.language)}</span>
+                      <p className={classes.secondaryMono} translate="no">
+                        #{e.seq}
+                      </p>
+                    </Table.Td>
+                    <Table.Td>
+                      <div className={classes.actor}>
+                        <span className={classes.avatar} aria-hidden="true">
+                          {e.actor_type === 'system' ? <Icon name="Settings2" size={13} /> : initials(e.actor_name, i18n.language)}
+                        </span>
+                        <div>
+                          <span className={classes.actorName}>{actor(e)}</span>
+                          {e.ip && (
+                            <p className={classes.secondaryMono}>
+                              {/* The design has no IP column; the address sits under the actor, named for screen readers. */}
+                              <span className={ui.visuallyHidden}>{t('audit.columns.ip')} </span>
+                              <span translate="no">{e.ip}</span>
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </Table.Td>
+                    <Table.Td>{label(e)}</Table.Td>
+                    <Table.Td>
+                      {(e.object_type || e.object_id) && (
+                        <Group gap={4} wrap="wrap">
+                          {e.object_type && <Code translate="no">{e.object_type}</Code>}
+                          {e.object_id && (
+                            <Code translate="no" style={{ overflowWrap: 'anywhere' }}>
+                              {e.object_id}
+                            </Code>
+                          )}
+                        </Group>
                       )}
-                    </Group>
-                  )}
-                </Table.Td>
-                <Table.Td>
-                  <Badge color={RESULT_COLORS[e.result]} variant="light">
-                    {t(`audit.result.${e.result}`)}
-                  </Badge>
-                </Table.Td>
-                <Table.Td>
-                  <Text ff="monospace" size="sm">
-                    {e.ip ?? ''}
-                  </Text>
-                </Table.Td>
-                <Table.Td>
-                  <AuditDetails details={e.details ?? {}} />
-                </Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
-        </Table.ScrollContainer>
-      )}
-      {entries.hasNextPage && (
-        <Button variant="default" onClick={() => void entries.fetchNextPage()} loading={entries.isFetchingNextPage}>
-          {t('audit.loadMore')}
-        </Button>
-      )}
+                    </Table.Td>
+                    <Table.Td>
+                      <StatusBadge tone={RESULT_TONES[e.result] ?? 'neutral'}>{t(`audit.result.${e.result}`)}</StatusBadge>
+                    </Table.Td>
+                    <Table.Td>
+                      <AuditDetails details={e.details ?? {}} />
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
+        )}
+        {items.length > 0 && (
+          <div className={ui.tableBottom}>
+            <span className={classes.footNote}>{t('audit.page.newestFirst')}</span>
+            <div className={classes.footRight}>
+              <CursorFooter
+                shown={items.length}
+                hasMore={entries.hasNextPage}
+                loading={entries.isFetchingNextPage}
+                onMore={() => void entries.fetchNextPage()}
+                moreLabel={t('audit.loadMore')}
+              />
+            </div>
+          </div>
+        )}
+      </div>
     </Stack>
   );
 }
