@@ -1110,7 +1110,41 @@
     "downloadCount_one": "{{count}} kez indirildi",
     "downloadCount_other": "{{count}} kez indirildi",
     "noDownloadPlatform": "Bu, Alice'in kendi bağlantı anahtarıdır. İndirilemez.",
-    "openKey": "SSH anahtarını aç"
+    "openKey": "SSH anahtarını aç",
+    "page": {
+      "description": "Erişimi anlayın. Kontrollü rotasyon uygulayın.",
+      "sections": "SSH anahtarı bölümleri",
+      "inventory": "Envanter",
+      "weakTitle": "Zayıf anahtarlar incelenmeli",
+      "weakText": "Değiştirmeden önce zayıf anahtarın kullanım konumlarını inceleyin.",
+      "showWeak": "Zayıf anahtarları göster",
+      "publicIdentity": "Herkese açık kimlik",
+      "removeNote": "Kaldırma işlemi seçilen tek konum için geçerlidir. Paylaşılan anahtar başka sunucularda bulunmaya devam edebilir.",
+      "reviewBeforeRemoving": "Kaldırmadan önce inceleyin",
+      "columns": {
+        "algorithm": "Algoritma",
+        "locations": "Konumlar",
+        "managed": "Yönetilen"
+      },
+      "discovered": "Keşfedildi",
+      "discoveredOnServer": "Sunucuda keşfedildi",
+      "places_one": "{{count}} konum",
+      "places_other": "{{count}} konum",
+      "onServers_one": "{{count}} sunucuda",
+      "onServers_other": "{{count}} sunucuda",
+      "emptyTitle": "Henüz SSH anahtarı yok",
+      "emptyText": "Alice, bir sunucuyu taradığında bulduğu anahtarları ve sizin oluşturduğunuz anahtarları listeler.",
+      "noMatchTitle": "Eşleşen anahtar yok",
+      "locationsText": "Her sunucudaki hesap ve dosya.",
+      "firstSeen": "İlk görülme",
+      "privateKey": "Özel anahtar",
+      "privateHeld": "Alice'de saklanır. Bu sayfada asla gösterilmez.",
+      "privateNotHeld": "Alice'de bulunmuyor",
+      "weakDetailTitle": "Zayıf algoritma tespit edildi",
+      "weakDetailText": "Erişim konumlarını inceledikten sonra bu anahtarı değiştirin.",
+      "generateNoteTitle": "Özel anahtar verisi burada gösterilmez",
+      "generateNoteText": "Oluşturulan özel anahtarı yalnızca yeniden doğrulama yapan bir yönetici indirebilir."
+    }
   },
   "jobs": {
     "blockedTitle": "Yönetici onayı bekliyor",

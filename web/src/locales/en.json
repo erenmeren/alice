@@ -1110,7 +1110,41 @@
     "downloadCount_one": "Downloaded {{count}} time",
     "downloadCount_other": "Downloaded {{count}} times",
     "noDownloadPlatform": "This is Alice's own connection key. It cannot be downloaded.",
-    "openKey": "Open the SSH key"
+    "openKey": "Open the SSH key",
+    "page": {
+      "description": "Understand access. Rotate with control.",
+      "sections": "SSH key sections",
+      "inventory": "Inventory",
+      "weakTitle": "Weak keys need review",
+      "weakText": "Review a weak key’s locations before replacing it.",
+      "showWeak": "Show weak keys",
+      "publicIdentity": "Public identity",
+      "removeNote": "Removal applies to one selected location. A shared key can still exist on other servers.",
+      "reviewBeforeRemoving": "Review before removing",
+      "columns": {
+        "algorithm": "Algorithm",
+        "locations": "Locations",
+        "managed": "Managed"
+      },
+      "discovered": "Discovered",
+      "discoveredOnServer": "Discovered on a server",
+      "places_one": "{{count}} place",
+      "places_other": "{{count}} places",
+      "onServers_one": "on {{count}} server",
+      "onServers_other": "on {{count}} servers",
+      "emptyTitle": "No SSH keys yet",
+      "emptyText": "Alice lists the keys it finds when it scans a server, and the keys you generate.",
+      "noMatchTitle": "No matching keys",
+      "locationsText": "The exact account and file on each server.",
+      "firstSeen": "First seen",
+      "privateKey": "Private key",
+      "privateHeld": "Held by Alice. It is never displayed on this page.",
+      "privateNotHeld": "Not held by Alice",
+      "weakDetailTitle": "Weak algorithm detected",
+      "weakDetailText": "Replace this key after reviewing its access locations.",
+      "generateNoteTitle": "Private material is never displayed here",
+      "generateNoteText": "Only an administrator with fresh verification can download a generated private key."
+    }
   },
   "jobs": {
     "blockedTitle": "Waiting for an administrator",
