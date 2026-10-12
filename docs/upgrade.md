@@ -5,8 +5,10 @@ returns to the installed version by itself when the new one does not start.
 
 ## Before you update
 
-- [ ] Read the release notes (`CHANGELOG.md` in the package): the minimum version the release updates from, and
-      anything to do before or after.
+- [ ] Check the oldest version the release updates from: `MIN_UPGRADE_FROM` in the package's `RELEASE` file
+      (`grep MIN_UPGRADE_FROM alice/RELEASE` in the extracted package; empty means any older version). The update
+      script refuses an older installation and names the version to install first.
+- [ ] Read the release notes (`CHANGELOG.md` in the package) for anything to do before or after.
 - [ ] There is a recent good backup, and a copy of it off the server
       ([backup-restore.md](backup-restore.md#copy-backups-off-the-server)). The update makes its own backup too.
 - [ ] You have the recovery passphrase at hand. The update cannot run without it: it opens its own backup with it

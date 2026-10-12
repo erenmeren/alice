@@ -67,6 +67,11 @@ var releaseGates = []string{
 // requiredGuides are the guides every customer package carries (spec §21; written by Task 17).
 var requiredGuides = []string{"README.md", "api.md", "backup-restore.md", "install-guide.md", "security-overview.md", "upgrade.md"}
 
+// vendorDocs are top-level docs/*.md files for the vendor only, never shipped (final review B M-7):
+// the release checklist is the vendor's gate, links into the source tree and is carried in the
+// package as its signed result, RELEASE-CHECKLIST-SIGNED.txt.
+var vendorDocs = map[string]bool{"release-checklist.md": true}
+
 var (
 	versionRe   = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$`)
 	rcVersionRe = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$`)
@@ -443,8 +448,8 @@ func plan(cfg stageConfig) ([]entry, string, error) {
 	return entries, keyID, nil
 }
 
-// docEntries returns the top-level docs/*.md files and the required guides (placeholders in a
-// draft, M-6).
+// docEntries returns the top-level docs/*.md files except vendorDocs, and the required guides
+// (placeholders in a draft, M-6).
 func docEntries(cfg stageConfig) ([]entry, error) {
 	dir := filepath.Join(cfg.Root, "docs")
 	if err := directory(dir); err != nil {
@@ -457,7 +462,7 @@ func docEntries(cfg stageConfig) ([]entry, error) {
 	var out []entry
 	have := map[string]bool{}
 	for _, d := range list {
-		if !strings.HasSuffix(d.Name(), ".md") || d.IsDir() {
+		if !strings.HasSuffix(d.Name(), ".md") || d.IsDir() || vendorDocs[d.Name()] {
 			continue
 		}
 		p := filepath.Join(dir, d.Name())

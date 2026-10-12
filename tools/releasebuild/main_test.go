@@ -112,6 +112,7 @@ func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
 		"deploy/release/LICENSE.txt":                       "Alice license terms of Example Vendor.\n",
 		"deploy/release/keys/README.md":                    "public keys\n",
 		"docs/operator-guide.md":                           "# Operator\n",
+		"docs/release-checklist.md":                        "# Vendor gate (final review B M-7)\n",
 		"docs/notes.txt":                                   "not a guide\n",
 		"docs/dev/inner.md":                                "not top level\n",
 		"CHANGELOG.md":                                     "# Changelog\n",
