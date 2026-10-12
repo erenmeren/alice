@@ -6,6 +6,14 @@ import { Icon } from '../design/Icon';
 import { TONE_COLOR, type Tone } from '../theme';
 import { reasonTitle } from './JobErrorAlert';
 
+// KEY_TYPE_NAMES are the SSH key types by their proper names, as the design writes them ("Ed25519"); the names are
+// the same in every language, so they are not catalog text. A type this version does not know reads as sent.
+const KEY_TYPE_NAMES: Record<string, string> = { ed25519: 'Ed25519', 'rsa-3072': 'RSA 3072', 'rsa-4096': 'RSA 4096', 'ecdsa-p256': 'ECDSA P-256' };
+
+export function keyTypeName(type: string): string {
+  return Object.hasOwn(KEY_TYPE_NAMES, type) ? KEY_TYPE_NAMES[type] : type;
+}
+
 // runTone is the meaning of a run's status: a finished rotation is a success, one that needs a person or is waiting
 // for a decision a warning, a run that moves information, and an undone or cancelled run neutral.
 export function runTone(status: string): Tone {

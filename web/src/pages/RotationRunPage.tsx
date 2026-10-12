@@ -11,7 +11,7 @@ import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { RotationPath } from '../components/rotation/RotationPath';
-import { ReasonAlert, labelOf, locationTone, noteText, runTone, skipText } from '../components/rotationText';
+import { keyTypeName, ReasonAlert, labelOf, locationTone, noteText, runTone, skipText } from '../components/rotationText';
 import { reasonTitle } from '../components/JobErrorAlert';
 import { useStepUp } from '../components/StepUpProvider';
 import { DialogActions, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact } from '../components/ui';
@@ -181,7 +181,7 @@ export function RotationRunPage() {
 
   const policy = policies.data?.items.find((p) => p.id === r.policy_id);
   const total = r.location_counts.total;
-  const description = [policy?.name, r.new_key_type, total !== undefined ? t('rotation.page.locations', { count: total }) : undefined].filter(Boolean).join(' · ');
+  const description = [policy?.name, r.new_key_type ? keyTypeName(r.new_key_type) : undefined, total !== undefined ? t('rotation.page.locations', { count: total }) : undefined].filter(Boolean).join(' · ');
   const facts: Fact[] = [
     ...(policy
       ? [

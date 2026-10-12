@@ -522,7 +522,7 @@ describe('RotationRunPage in the design', () => {
     const live = within(header as HTMLElement).getByRole('status');
     expect(live).toHaveAttribute('aria-live', 'polite');
     expect(live.querySelector('.mantine-Badge-root')).toHaveTextContent('Both keys valid');
-    expect(await within(header as HTMLElement).findByText('deploy-production · ed25519 · 6 locations')).toBeInTheDocument();
+    expect(await within(header as HTMLElement).findByText('deploy-production · Ed25519 · 6 locations')).toBeInTheDocument();
     expect(document.querySelectorAll('[role="status"][aria-live="polite"] .mantine-Badge-root')).toHaveLength(1);
   });
 
