@@ -10,7 +10,7 @@
 .stack { display: grid; gap: 20px; align-content: start; min-width: 0; }
 .resourceName { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .resourceName > div { min-width: 0; }
-.resourceIcon { width: 30px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: 6px; background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
+.resourceIcon { width: 30px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: var(--alice-radius-sm); background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
 .name { font-size: 11px; font-weight: 550; overflow-wrap: anywhere; }
 .secondary { margin: 4px 0 0; font-size: 9px; color: var(--alice-text-muted); overflow-wrap: anywhere; }
 .mono { font-family: var(--mantine-font-family-monospace); font-size: 11px; white-space: nowrap; }

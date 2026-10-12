@@ -1,4 +1,4 @@
-import { ActionIcon, Anchor, Button, Stack, Table } from '@mantine/core';
+import { ActionIcon, Anchor, Button, Stack, Table, VisuallyHidden } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -69,19 +69,26 @@ export function TargetsPage() {
 }
 
 // MiniStats is the design's connection summary. The servers list is read completely (listAllServers), so these
-// counts are true totals (R20), never counts of a loaded page.
+// counts are true totals (R20), never counts of a loaded page. Every server is in one bucket: the design's three
+// (connected, identity changed, unreachable) always; a refused sign-in and a server waiting for its fingerprint on their
+// own when there are any; the remaining states (checking, partly working, disabled) as a labelled remainder.
 function MiniStats({ items }: { items: Target[] }) {
   const { t } = useTranslation();
   const count = (status: Target['status']) => items.filter((s) => s.status === status).length;
-  const stats = [
-    { key: 'total', n: items.length, label: t('targets.page.total') },
-    { key: 'ok', n: count('ok'), label: t('targets.page.connected'), tone: 'success' },
-    { key: 'changed', n: count('host_key_changed'), label: t('targets.page.identityChanged'), tone: 'danger' },
-    { key: 'unreachable', n: count('unreachable'), label: t('targets.page.unreachable'), tone: 'warning' },
+  const known = ['ok', 'host_key_changed', 'unreachable', 'auth_failed', 'pending_host_key'];
+  const other = items.filter((s) => !known.includes(s.status)).length;
+  const stats: { key: string; n: number; label: string; tone?: string; always?: boolean }[] = [
+    { key: 'total', n: items.length, label: t('targets.page.servers', { count: items.length }), always: true },
+    { key: 'ok', n: count('ok'), label: t('targets.page.connected'), tone: 'success', always: true },
+    { key: 'changed', n: count('host_key_changed'), label: t('targets.page.identityChanged'), tone: 'danger', always: true },
+    { key: 'unreachable', n: count('unreachable'), label: t('targets.page.unreachable'), tone: 'warning', always: true },
+    { key: 'authFailed', n: count('auth_failed'), label: t('targets.page.signInRefused'), tone: 'danger' },
+    { key: 'pending', n: count('pending_host_key'), label: t('targets.page.awaiting'), tone: 'warning' },
+    { key: 'other', n: other, label: t('targets.page.otherStates', { count: other }) },
   ];
   return (
     <ul role="list" aria-label={t('targets.page.summary')} className={classes.miniStats}>
-      {stats.map((s) => (
+      {stats.filter((s) => s.always || s.n > 0).map((s) => (
         <li key={s.key} className={classes.miniStat} data-tone={s.tone}>
           {s.tone && <span className={classes.dot} aria-hidden="true" />}
           <b>{s.n}</b> {s.label}
@@ -102,7 +109,9 @@ function ServersTable({ items }: { items: Target[] }) {
           <Table.Th>{t('targets.page.columns.platform')}</Table.Th>
           <Table.Th>{t('targets.page.columns.connection')}</Table.Th>
           <Table.Th>{t('targets.page.columns.lastConnected')}</Table.Th>
-          <Table.Th />
+          <Table.Th>
+            <VisuallyHidden>{t('targets.page.columns.open')}</VisuallyHidden>
+          </Table.Th>
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>

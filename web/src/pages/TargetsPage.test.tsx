@@ -485,8 +485,31 @@ describe('TargetsPage in the design', () => {
     await renderRoute('/servers');
     const stats = await screen.findByRole('list', { name: 'Connection summary' });
     const items = within(stats).getAllByRole('listitem');
-    expect(items.map((i) => i.textContent)).toEqual(['5 in total', '2 connected', '1 identity changed', '1 unreachable']);
-    expect(items.map((i) => i.getAttribute('data-tone'))).toEqual([null, 'success', 'danger', 'warning']);
+    // Every server is in a bucket: the one waiting for its fingerprint is counted on its own.
+    expect(items.map((i) => i.textContent)).toEqual(['5 servers', '2 connected', '1 identity changed', '1 unreachable', '1 awaiting fingerprint confirmation']);
+    expect(items.map((i) => i.getAttribute('data-tone'))).toEqual([null, 'success', 'danger', 'warning', 'warning']);
+  });
+
+  it('counts refused sign-ins on their own and the remaining states as a labelled remainder, so the buckets add up', async () => {
+    withTargets('operator', [
+      targetFixture,
+      targetWith({ id: 's2', name: 'web-02', status: 'auth_failed' }),
+      targetWith({ id: 's3', name: 'web-03', status: 'checking' }),
+      targetWith({ id: 's4', name: 'web-04', status: 'disabled' }),
+    ]);
+    await renderRoute('/servers');
+    const items = within(await screen.findByRole('list', { name: 'Connection summary' })).getAllByRole('listitem');
+    // Empty buckets of the less common states are not drawn.
+    expect(items.map((i) => i.textContent)).toEqual(['4 servers', '1 connected', '0 identity changed', '0 unreachable', '1 sign-in refused', '2 in other states']);
+    expect(items.map((i) => i.getAttribute('data-tone'))).toEqual([null, 'success', 'danger', 'warning', 'danger', null]);
+  });
+
+  it('says "1 server" in the singular', async () => {
+    withTargets('operator', [targetFixture]);
+    await renderRoute('/servers');
+    const items = within(await screen.findByRole('list', { name: 'Connection summary' })).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('1 server');
+    expect(items).toHaveLength(4);
   });
 
   it('shows the inventory table: one header row, one row per server, status badges with text and icon, an open link and the footer', async () => {
@@ -494,7 +517,7 @@ describe('TargetsPage in the design', () => {
     await renderRoute('/servers');
     const table = await screen.findByTestId('targets-table');
     expect(within(table).getAllByRole('row')).toHaveLength(3);
-    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Server', 'Address', 'Platform', 'Connection', 'Last connected', '']);
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Server', 'Address', 'Platform', 'Connection', 'Last connected', 'Open']);
     const row = within(table).getByRole('link', { name: 'web-01' }).closest('tr')!;
     expect(within(row).getByText('Ubuntu 22.04.4 LTS')).toBeInTheDocument();
     expect(within(row).getByText('Linux server')).toBeInTheDocument();
