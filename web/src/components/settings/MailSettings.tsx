@@ -27,14 +27,15 @@ export interface MailDraft {
   caPem: string;
 }
 
-export function MailSettings({ draft, onDraft }: { draft?: MailDraft | null; onDraft?: (d: MailDraft) => void } = {}) {
+// plainActions (the wizard) draws the save row without its rule: the wizard's own actions row has it.
+export function MailSettings({ draft, onDraft, plainActions = false }: { draft?: MailDraft | null; onDraft?: (d: MailDraft) => void; plainActions?: boolean } = {}) {
   const q = useSetting('smtp', getSMTP);
   if (q.isPending) return <LoadingIndicator />;
   if (q.isError) return <ErrorAlert error={q.error} />;
-  return <MailPanel settings={q.data} draft={draft ?? null} onDraft={onDraft} />;
+  return <MailPanel settings={q.data} draft={draft ?? null} onDraft={onDraft} plainActions={plainActions} />;
 }
 
-function MailPanel({ settings, draft, onDraft }: { settings: SMTPSettings; draft: MailDraft | null; onDraft?: (d: MailDraft) => void }) {
+function MailPanel({ settings, draft, onDraft, plainActions }: { settings: SMTPSettings; draft: MailDraft | null; onDraft?: (d: MailDraft) => void; plainActions: boolean }) {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
   const [to, setTo] = useState(session?.user.email ?? '');
@@ -53,7 +54,7 @@ function MailPanel({ settings, draft, onDraft }: { settings: SMTPSettings; draft
   return (
     <Stack gap="sm">
       {/* Keyed by the version: a saved or re-read setting draws the form again, which empties the password field. */}
-      <MailForm key={settings.version} settings={settings} draft={draft} onDraft={onDraft} onSave={(body) => save.mutate(body)} busy={save.isPending} fieldErrors={fieldErrorsOf(save.error, t, i18n)} />
+      <MailForm key={settings.version} settings={settings} draft={draft} onDraft={onDraft} onSave={(body) => save.mutate(body)} plainActions={plainActions} busy={save.isPending} fieldErrors={fieldErrorsOf(save.error, t, i18n)} />
       <SavedNote show={save.isSuccess} />
       <ErrorAlert error={save.error} />
 
@@ -111,7 +112,7 @@ function MailPanel({ settings, draft, onDraft }: { settings: SMTPSettings; draft
   );
 }
 
-function MailForm({ settings, draft, onDraft, onSave, busy, fieldErrors }: { settings: SMTPSettings; draft: MailDraft | null; onDraft?: (d: MailDraft) => void; onSave: (b: Parameters<typeof saveSMTP>[1]) => void; busy: boolean; fieldErrors: Record<string, string> }) {
+function MailForm({ settings, draft, onDraft, onSave, plainActions, busy, fieldErrors }: { settings: SMTPSettings; draft: MailDraft | null; onDraft?: (d: MailDraft) => void; onSave: (b: Parameters<typeof saveSMTP>[1]) => void; plainActions: boolean; busy: boolean; fieldErrors: Record<string, string> }) {
   const { t } = useTranslation();
   const [host, setHost] = useState(draft?.host ?? settings.host);
   const [port, setPort] = useState<number | string>(draft?.port ?? (settings.port || 587));
@@ -159,7 +160,7 @@ function MailForm({ settings, draft, onDraft, onSave, busy, fieldErrors }: { set
         />
         <Textarea label={t('settings.mail.caPem')} value={caPem} onChange={(e) => setCaPem(e.currentTarget.value)} error={fieldErrors.ca_pem} autosize minRows={3} maxRows={8} spellCheck={false} styles={{ input: { fontFamily: 'monospace' } }} />
       </Stack>
-      <div className={classes.formActions}>
+      <div className={plainActions ? `${classes.formActions} ${classes.formActionsPlain}` : classes.formActions}>
         <Button type="submit" loading={busy} leftSection={<Icon name="Check" size={15} />}>
           {t('settings.mail.save')}
         </Button>

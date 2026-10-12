@@ -10,6 +10,12 @@
   padding-top: 20px;
   border-top: 1px solid var(--alice-border);
 }
+/* The same row inside the first-run wizard, whose own actions row below draws the one rule: no second separator. */
+.formActionsPlain {
+  margin-top: 16px;
+  padding-top: 0;
+  border-top: 0;
+}
 .formActions :global(.mantine-Button-root) {
   max-width: 100%;
   height: auto;

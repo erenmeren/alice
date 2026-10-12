@@ -36,11 +36,12 @@ describe('HttpsTab', () => {
       expect(screen.getByRole('radio', { name }).closest(`.${classes.checkOption}`)).not.toBeNull();
     }
     expect(screen.getByRole('button', { name: 'Upload certificate' }).closest(`.${classes.formActions}`)).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Upload certificate' }).parentElement).not.toHaveClass(classes.formActionsPlain);
     expect(screen.getByTestId('https-upload-form')).toBeInTheDocument();
     expectNoRawKeys();
   });
 
-  it('makes the whole bordered choice row toggle its input, like the design\'s <label class="check-option">', () => {
+  it('makes the whole bordered choice row toggle its input (like the design\'s <label class="check-option">) and has a plain actions row for the wizard', () => {
     // jsdom cannot click the padding; the rule is pinned: the row is the containing block and the label's ::after
     // covers it, so a click anywhere in the row is a click on the label.
     const css = readFileSync('src/components/settings/settings.module.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -48,6 +49,10 @@ describe('HttpsTab', () => {
       for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) if (m[1].split(',').map((x) => x.trim()).includes(selector)) return m[2];
       return '';
     };
+    // The wizard's plain actions row (the wizard draws the one rule).
+    expect(rule('.formActionsPlain')).toMatch(/border-top:\s*0/);
+    expect(rule('.formActionsPlain')).toMatch(/padding-top:\s*0/);
+    expect(css.indexOf('.formActionsPlain {')).toBeGreaterThan(css.indexOf('.formActions {'));
     expect(rule('.checkOption')).toMatch(/position:\s*relative/);
     expect(rule('.checkOption')).toMatch(/cursor:\s*pointer/);
     for (const label of ['.mantine-Checkbox-label', '.mantine-Radio-label']) {

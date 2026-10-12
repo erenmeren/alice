@@ -6,6 +6,7 @@ import { errorResponse, httpsInfoFixture, sessionFor, sessionHandlers, smtpFixtu
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
+import settings from '../../components/settings/settings.module.css';
 
 const atHttps: SetupStatus = {
   admin_exists: true,
@@ -82,6 +83,8 @@ describe('wizard HTTPS step', () => {
     expect(screen.getByText('or')).toBeInTheDocument();
     expect(keep.closest('[data-actions]')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+    // One separator row only: the wizard's actions row has the rule, the upload's own row inside its box does not.
+    expect(screen.getByRole('button', { name: 'Upload certificate' }).parentElement).toHaveClass(settings.formActions, settings.formActionsPlain);
   });
 
   it('uploads a PFX with its password and clears the password after the request', async () => {

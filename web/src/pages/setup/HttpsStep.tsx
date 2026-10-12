@@ -73,6 +73,7 @@ export function HttpsStep({
           {t('https.upload')}
         </Title>
         <HttpsUploadForm
+          plainActions
           initialFormat={format}
           onFormat={onFormat}
           onApplied={() => {

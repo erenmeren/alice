@@ -94,7 +94,18 @@ type Format = 'pem' | 'pfx';
 // the password live only in this component's state; they are dropped as soon as the server answers (kept only after a
 // dropped connection or an unreadable file, when nothing was learned), and never reach a query key, the query cache,
 // the address, web storage or the console. The answer replaces the cached certificate information.
-export function HttpsUploadForm({ onApplied, initialFormat, onFormat }: { onApplied?: (info: HTTPSInfo) => void; initialFormat?: 'pem' | 'pfx'; onFormat?: (f: 'pem' | 'pfx') => void }) {
+// plainActions (the wizard) draws the upload's actions row without its rule: the wizard's own actions row has it.
+export function HttpsUploadForm({
+  onApplied,
+  initialFormat,
+  onFormat,
+  plainActions = false,
+}: {
+  onApplied?: (info: HTTPSInfo) => void;
+  initialFormat?: 'pem' | 'pfx';
+  onFormat?: (f: 'pem' | 'pfx') => void;
+  plainActions?: boolean;
+}) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
@@ -223,7 +234,7 @@ export function HttpsUploadForm({ onApplied, initialFormat, onFormat }: { onAppl
           </Notice>
         )}
       </Stack>
-      <div className={classes.formActions}>
+      <div className={plainActions ? `${classes.formActions} ${classes.formActionsPlain}` : classes.formActions}>
         <Button type="submit" loading={busy} leftSection={<Icon name="Upload" size={15} />}>
           {t('https.upload')}
         </Button>

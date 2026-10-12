@@ -63,7 +63,7 @@ export function MailStep({
   return (
     <Stack>
       <StepHeading title={t('setup.mail.title')} intro={t('setup.mail.help')} />
-      <MailSettings draft={draft} onDraft={onDraft} />
+      <MailSettings draft={draft} onDraft={onDraft} plainActions />
       {notSaved && (
         <Alert color="yellow" role="alert">
           {t('setup.mail.notSaved')}

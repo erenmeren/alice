@@ -6,6 +6,7 @@ import { errorResponse, httpsInfoFixture, licenseDetailFixture, sessionFor, sess
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
+import settings from '../../components/settings/settings.module.css';
 
 const atMail: SetupStatus = {
   admin_exists: true,
@@ -37,6 +38,8 @@ describe('wizard mail step', () => {
     // Nothing saved yet: Continue explains what is missing.
     await userEvent.click(await screen.findByRole('button', { name: 'Continue' }));
     expect(await screen.findByText('Save the mail settings first, or choose Skip.')).toBeInTheDocument();
+    // One separator row only: the wizard's actions row has the rule, the form's save row does not.
+    expect(screen.getByRole('button', { name: 'Save mail settings' }).parentElement).toHaveClass(settings.formActions, settings.formActionsPlain);
 
     await userEvent.type(screen.getByLabelText('Mail server'), 'mail.example.test');
     await userEvent.type(screen.getByLabelText('Sender address'), 'alice@example.test');
