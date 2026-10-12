@@ -36,7 +36,8 @@ func (i *inst) update(pkg, pass string) result {
 }
 
 // TestReleaseUpdateAndRollback: rc.1 is updated to rc.2 with a pre-upgrade backup; then a failing migration, a killed
-// migration and a wrong image are each rolled back or stopped, and rc.2 keeps running with its data (F-68, M-4, S-15).
+// migration, a new version that fails its selfcheck after its migrations were applied and a wrong image are each rolled
+// back or stopped, and rc.2 keeps running with its data (F-68, M-4, S-15, final review B M-2).
 func TestReleaseUpdateAndRollback(t *testing.T) {
 	i := newInst(t, "update", "debian12", 19445)
 	r := i.install(rc1)
@@ -183,6 +184,21 @@ func TestReleaseUpdateAndRollback(t *testing.T) {
 		_, rollback, found := strings.Cut(log, "The update failed; returning to version "+rc2+".")
 		require.True(t, found, "the update log records the rollback")
 		assert.Regexp(t, terminated, rollback, "the rollback ended the orphaned migration backend (M-4)")
+		unchanged(t, before, backups, true)
+	})
+
+	// Final review B M-2: the migrations of the new version succeed, then the new version fails its selfcheck (rc.5's
+	// extra migration breaks the audit chain). The old version's alice-admin makes the safety backup of a database
+	// with a newer schema, restores the pre-update backup over it and starts again.
+	t.Run("unhealthy-after-migration", func(t *testing.T) {
+		before, backups := prepare(t)
+		r := i.update(i.download(rc5), pass)
+		assert.Equal(t, 1, r.Code, "rolled back, not exit 3")
+		migrated := strings.Index(r.Out, "Starting Alice "+rc5+".\n")
+		require.GreaterOrEqual(t, migrated, 0, "the migrations of %s were applied before it started", rc5)
+		failed := strings.Index(r.Out, "The update failed; returning to version "+rc2+".")
+		require.Greater(t, failed, migrated, "the return began after the new version started")
+		assert.Contains(t, r.Out, rollbackSentence(rc5, rc2))
 		unchanged(t, before, backups, true)
 	})
 

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Builds a release package whose image carries one extra migration that fails (BROKEN=fail:
-# 99990_phase8_broken_test.sql, "SELECT 1/0;") or sleeps for two minutes (BROKEN=sleep:
-# 99991_phase8_slow_test.sql, "SELECT pg_sleep(120);"), for the update rollback tests: the release
+# 99990_phase8_broken_test.sql, "SELECT 1/0;"), sleeps for two minutes (BROKEN=sleep:
+# 99991_phase8_slow_test.sql, "SELECT pg_sleep(120);") or succeeds but appends an audit row whose
+# hash does not continue the chain, so the new version starts and then fails its selfcheck
+# ("Audit log intact") after the migrations were applied (BROKEN=unhealthy:
+# 99992_phase8_unhealthy_test.sql; final review B M-2), for the update rollback tests: the release
 # harness (Task 13) and the owner's VM test (release checklist, owner step 5). M-27, R43 row 30.
 #
-#   build-broken-release.sh VERSION fail|sleep test|offline RELEASE_DIR RELEASE_TEST_KEY
+#   build-broken-release.sh VERSION fail|sleep|unhealthy test|offline RELEASE_DIR RELEASE_TEST_KEY
 #
 # The migration exists only in a git archive copy of HEAD, never in this tree. The copy is built
 # with this tree's commit (RELEASE_COMMIT), its gates log when there is one, and the absolute
@@ -17,7 +20,7 @@
 set -Eeuo pipefail
 
 usage() {
-  echo "usage: build-broken-release.sh VERSION fail|sleep test|offline RELEASE_DIR RELEASE_TEST_KEY" >&2
+  echo "usage: build-broken-release.sh VERSION fail|sleep|unhealthy test|offline RELEASE_DIR RELEASE_TEST_KEY" >&2
   exit 2
 }
 
@@ -37,6 +40,10 @@ case "$broken" in
   sleep)
     migration=99991_phase8_slow_test.sql
     statement='SELECT pg_sleep(120);'
+    ;;
+  unhealthy)
+    migration=99992_phase8_unhealthy_test.sql
+    statement="INSERT INTO audit_log (seq, at, actor_type, actor_name, action, result, prev_hash, hash) SELECT coalesce(max(seq), 0) + 1, now(), 'system', 'broken-release-test', 'test.broken_update', 'success', '\\x00'::bytea, '\\x00'::bytea FROM audit_log;"
     ;;
   *) usage ;;
 esac

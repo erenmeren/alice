@@ -458,7 +458,7 @@ release-test: ## Build, sign with a test key and pack a release (VERSION=x.y.z-r
 	go run ./tools/releasesign sign $(RELEASE_TEST_KEY)/test-release.key $(abspath $(RELEASE_DIR))/alice-$(VERSION).tar.gz.sha256
 
 .PHONY: release-broken
-release-broken: ## A package whose image carries a failing (BROKEN=fail) or sleeping (BROKEN=sleep) extra migration, for the update rollback test (SIGN=test: test-signed, rc versions; SIGN=offline: unsigned stage for the ceremony)
+release-broken: ## A package whose image carries a failing (BROKEN=fail), sleeping (BROKEN=sleep) or chain-breaking but successful (BROKEN=unhealthy) extra migration, for the update rollback tests (SIGN=test: test-signed, rc versions; SIGN=offline: unsigned stage for the ceremony)
 	./deploy/dev/build-broken-release.sh "$(VERSION)" "$(BROKEN)" "$(SIGN)" "$(abspath $(RELEASE_DIR))" "$(abspath $(RELEASE_TEST_KEY))"
 
 .PHONY: sbom

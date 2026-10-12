@@ -56,6 +56,7 @@ const (
 	rc2 = "1.0.0-rc.2"
 	rc3 = "1.0.0-rc.3" // BROKEN=fail: an extra migration "SELECT 1/0;"
 	rc4 = "1.0.0-rc.4" // BROKEN=sleep: an extra migration "SELECT pg_sleep(120);"
+	rc5 = "1.0.0-rc.5" // BROKEN=unhealthy: an extra migration that succeeds and breaks the audit chain (selfcheck fails)
 
 	// hostName is the certificate name of every test installation (--hostname).
 	hostName = "alice-rel.test"
@@ -63,7 +64,7 @@ const (
 	passphrase = "amber canyon violet orbit lantern harbor"
 	// targetImage is the e2e SSH and Nginx target (test/images/e2e-target), built under a tag of this harness.
 	targetImage = "alice-test/release-target:phase8"
-	// minFree is the free space the work directories need (four packages of ~130 MB, their copies, images, M-23).
+	// minFree is the free space the work directories need (five packages of ~130 MB, their copies, images, M-23).
 	minFree = 25 << 30
 
 	ok = "[ OK ] "
@@ -71,7 +72,7 @@ const (
 
 var (
 	distros  = []string{"ubuntu22", "debian12", "rocky9"}
-	versions = []string{rc1, rc2, rc3, rc4}
+	versions = []string{rc1, rc2, rc3, rc4, rc5}
 
 	repo       string // the repository root
 	workRoot   string // <repo>/bin/release-work
@@ -211,8 +212,8 @@ func buildImages() error {
 	return hostRun(ctx, nil, "docker", "build", "--network", "host", "-q", "-t", targetImage, "-f", "test/images/e2e-target/Dockerfile", ".")
 }
 
-// buildReleases builds rc.1 and rc.2 with make release-test and the two broken packages with make release-broken
-// (Task 12, M-7, M-27); all four share the test key of bin/release-test-key. The image tags the builds leave are
+// buildReleases builds rc.1 and rc.2 with make release-test and the three broken packages with make release-broken
+// (Task 12, M-7, M-27, final review B M-2); all five share the test key of bin/release-test-key. The image tags the builds leave are
 // removed afterwards, so every installation loads its images from the package, as on a server.
 // RELEASE_HARNESS_REUSE=1 (a development aid; make test-release never sets it) keeps a package that is already built.
 func buildReleases() error {
@@ -237,6 +238,8 @@ func buildReleases() error {
 			args = []string{"release-broken", "VERSION=" + v, "BROKEN=fail", "SIGN=test"}
 		case rc4:
 			args = []string{"release-broken", "VERSION=" + v, "BROKEN=sleep", "SIGN=test"}
+		case rc5:
+			args = []string{"release-broken", "VERSION=" + v, "BROKEN=unhealthy", "SIGN=test"}
 		default:
 			args = []string{"release-test", "VERSION=" + v}
 		}
