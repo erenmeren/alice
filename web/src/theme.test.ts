@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { Alert, Checkbox, DEFAULT_THEME, MantineProvider, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
+import { Alert, Checkbox, DEFAULT_THEME, MantineProvider, PasswordInput, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import { I18nextProvider } from 'react-i18next';
@@ -212,6 +212,17 @@ describe('design rules', () => {
     expect(link.closest('.mantine-Alert-body')).toHaveClass(classes.alertBody);
     expect(moduleCss).toMatch(/\.alertMessage\s*\{[^}]*overflow:\s*visible/);
     expect(moduleCss).toMatch(/\.alertBody\s*\{[^}]*min-width:\s*0/);
+  });
+
+  // Found by the Phase 9 focus scan: a password field's real input fills a wrapper that clips its overflow, so the
+  // global ring (outside the input) was never visible on password fields. The wrapper draws it instead.
+  it('draws the focus ring of a password field on its wrapper, which cannot clip it', async () => {
+    await renderApp(createElement(PasswordInput, { label: 'p' }), ['en-US']);
+    const input = screen.getByLabelText('p');
+    expect(input).toHaveClass(classes.passwordInnerInput);
+    expect(input.parentElement).toHaveClass(classes.input);
+    expect(moduleCss).toMatch(/\.input:has\(\.passwordInnerInput:focus-visible\)\s*\{[^}]*outline:\s*3px solid var\(--alice-focus\);\s*outline-offset:\s*3px/);
+    expect(moduleCss).toMatch(/\.passwordInnerInput:focus-visible\s*\{\s*outline:\s*0/);
   });
 
   it('draws checked Checkbox, Radio and Switch with the design classes in dark mode', async () => {

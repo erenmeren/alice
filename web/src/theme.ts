@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, Radio, Switch, Table, TableScrollContainer, TableTh, Tabs, Title,
+  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, PasswordInput, Radio, Switch, Table, TableScrollContainer, TableTh, Tabs, Title,
   createTheme, defaultVariantColorsResolver,
   type CSSVariablesResolver, type MantineColorsTuple, type MantineThemeOverride, type VariantColorsResolver,
 } from '@mantine/core';
@@ -163,6 +163,8 @@ export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
       Tabs: Tabs.extend({ classNames: { list: classes.tabsList, tab: classes.tab } }),
       Title: Title.extend({ classNames: { root: classes.title } }),
       Input: Input.extend({ classNames: { input: classes.input } }),
+      // The real input of a password field fills a wrapper that clips its overflow; the wrapper draws the focus ring.
+      PasswordInput: PasswordInput.extend({ classNames: { innerInput: classes.passwordInnerInput } }),
       InputWrapper: InputWrapper.extend({ classNames: { label: classes.inputLabel, description: classes.inputDescription } }),
       // Checked choices draw their check, dot and thumb in the design's colors (mantine.module.css), in both schemes.
       Checkbox: Checkbox.extend({ classNames: { root: classes.checkbox } }),

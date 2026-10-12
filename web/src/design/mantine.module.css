@@ -58,6 +58,9 @@
    its error color (--input-color from --mantine-color-error) still apply. */
 [data-mantine-color-scheme] .input:not([data-error]) { --input-bd: var(--alice-border-strong); --input-color: var(--alice-text); }
 [data-mantine-color-scheme] .input { --input-bg: var(--alice-surface); font-size: 12px; }
+/* A password field's input fills a wrapper with overflow: hidden, which would hide the ring drawn outside the input. */
+.input:has(.passwordInnerInput:focus-visible) { outline: 3px solid var(--alice-focus); outline-offset: 3px; }
+.passwordInnerInput:focus-visible { outline: 0; }
 .inputLabel { font-size: 11px; font-weight: 550; color: var(--alice-text); }
 .inputDescription { font-size: 11px; color: var(--alice-text-secondary); }
 
