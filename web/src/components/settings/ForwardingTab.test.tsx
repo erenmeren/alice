@@ -6,6 +6,7 @@ import { adminSession, errorResponse, forwardingFixture, sessionFor, sessionHand
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
+import classes from './settings.module.css';
 
 const steppedUp = { ...adminSession, stepup_until: '2099-01-01T00:00:00Z' };
 const steppedUpTr = { ...sessionFor('admin', 'tr'), stepup_until: '2099-01-01T00:00:00Z' };
@@ -33,6 +34,13 @@ describe('ForwardingTab', () => {
     expect(await screen.findByText('A CA certificate is set')).toBeInTheDocument();
     expect(screen.getByLabelText('Certificate authority of the syslog server (PEM, optional)')).toHaveValue('');
     expect(screen.getByText('Saved.')).toBeInTheDocument();
+  });
+
+  it('ends the form with its actions row until a test result exists (no empty spaced block)', async () => {
+    server.use(...sessionHandlers(steppedUp));
+    await renderRoute('/settings?tab=forwarding');
+    const form = await screen.findByTestId('forwarding-form');
+    expect(form.lastElementChild).toHaveClass(classes.formActions);
   });
 
   it('keeps the stored CA certificate when the field stays empty', async () => {

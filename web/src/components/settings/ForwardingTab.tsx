@@ -155,14 +155,16 @@ function ForwardingForm({
           {t('forwarding.save')}
         </Button>
       </div>
-      <Stack gap="sm" mt="sm">
-        {test.isSuccess && (
-          <Text role="status" size="sm" c="var(--alice-success)">
-            {t('forwarding.testSent')}
-          </Text>
-        )}
-        <ErrorAlert error={test.error} />
-      </Stack>
+      {(test.isSuccess || test.isError) && (
+        <Stack gap="sm" mt="sm">
+          {test.isSuccess && (
+            <Text role="status" size="sm" c="var(--alice-success)">
+              {t('forwarding.testSent')}
+            </Text>
+          )}
+          <ErrorAlert error={test.error} />
+        </Stack>
+      )}
     </form>
   );
 }
