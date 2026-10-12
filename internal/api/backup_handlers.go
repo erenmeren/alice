@@ -117,13 +117,17 @@ func (s *server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	extendResponseDeadline(w)
-	f, info, err := s.deps.Backup.Open(r.Context(), name)
+	// Open hashes the whole file first, which can outlast the connection (a proxy's read timeout on a multi-GB
+	// backup): it and the audit row run to their end without the request's cancel, as createBackup does, so the
+	// download is not refused halfway with its row lost.
+	ctx := context.WithoutCancel(r.Context())
+	f, info, err := s.deps.Backup.Open(ctx, name)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	defer func() { _ = f.Close() }()
-	if err := s.deps.Audit.Write(r.Context(), audit.Event{Actor: principalFrom(r.Context()).Actor(s.meta(r)), Action: "backup.downloaded",
+	if err := s.deps.Audit.Write(ctx, audit.Event{Actor: principalFrom(r.Context()).Actor(s.meta(r)), Action: "backup.downloaded",
 		ObjectType: "backup", ObjectID: info.Name, Result: audit.Success, Details: map[string]string{"name": info.Name}}); err != nil {
 		s.fail(w, r, err)
 		return

@@ -35,6 +35,9 @@ type fakeBackup struct {
 	CreateFn func(ctx context.Context, in backup.CreateInput) (backup.Info, error)
 	saved    backup.Schedule
 	openWait time.Duration // Open hashes the whole file before it answers (backup/list.go)
+	onOpen   func()        // called first in Open
+	// openCtxErr is the context error Open saw after onOpen and openWait.
+	openCtxErr error
 }
 
 func newFakeBackup(t *testing.T) *fakeBackup {
@@ -58,10 +61,14 @@ func (f *fakeBackup) List(context.Context) ([]backup.Info, error) {
 		CreatedAt: testNow, AliceVersion: "1.0.0", Check: backup.CheckOK}}, nil
 }
 
-func (f *fakeBackup) Open(_ context.Context, name string) (*os.File, backup.Info, error) {
+func (f *fakeBackup) Open(ctx context.Context, name string) (*os.File, backup.Info, error) {
 	f.record()
 	f.opened = append(f.opened, name)
+	if f.onOpen != nil {
+		f.onOpen()
+	}
 	time.Sleep(f.openWait)
+	f.openCtxErr = ctx.Err()
 	if !backup.ValidName(name) {
 		return nil, backup.Info{}, backup.ErrNotFound
 	}
@@ -326,6 +333,50 @@ func TestBackupRoutesOutliveTheServerWriteTimeout(t *testing.T) {
 		assert.Equal(t, rc.want, res.StatusCode, rc.path)
 		assert.NotEmpty(t, body, rc.path)
 	}
+}
+
+// A download whose request context is cancelled while Open re-hashes the file (the connection dropped, e.g. a reverse
+// proxy's read timeout during a multi-GB hash) still finishes Open and its audit row instead of answering 500 with the
+// row lost halfway: Open and the audit write run on a context without cancel, as createBackup does (final review A-1).
+// The review's ReadTimeout path does not cancel under Go 1.27 (startBackgroundRead clears the read deadline); the
+// test below proves that too.
+func TestBackupDownloadSurvivesACancelledRequestContext(t *testing.T) {
+	d, f := phase8Deps(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	f.backup.onOpen = cancel
+	d.Audit = &fakeAudit{WriteFn: func(ctx context.Context, _ audit.Event) error { return ctx.Err() }}
+	s := newServer(d)
+	h := s.handler(s.apiRoutes())
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/backups/"+downloadName+"/download", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, as(req, "admin-stepup"))
+	assert.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.Equal(t, "backup bytes", rec.Body.String())
+	assert.Equal(t, 1, d.Audit.(*fakeAudit).Count("backup.downloaded"))
+	require.ErrorIs(t, f.backup.openCtxErr, nil, "Open saw a cancelled context")
+}
+
+// Over HTTP/1.1 a download whose Open runs past the server's ReadTimeout still audits and sends.
+func TestBackupDownloadOutlivesTheReadTimeout(t *testing.T) {
+	d, f := phase8Deps(t)
+	f.backup.openWait = 400 * time.Millisecond
+	d.Audit = &fakeAudit{WriteFn: func(ctx context.Context, _ audit.Event) error { return ctx.Err() }}
+	s := newServer(d)
+	srv := httptest.NewUnstartedServer(s.handler(s.apiRoutes()))
+	srv.Config.ReadTimeout = 100 * time.Millisecond
+	srv.Start()
+	t.Cleanup(srv.Close)
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/api/v1/backups/"+downloadName+"/download", nil)
+	require.NoError(t, err)
+	res, err := srv.Client().Do(as(req, "admin-stepup"))
+	require.NoError(t, err)
+	body, err := io.ReadAll(res.Body)
+	require.NoError(t, err)
+	require.NoError(t, res.Body.Close())
+	assert.Equal(t, "HTTP/1.1", res.Proto)
+	assert.Equal(t, http.StatusOK, res.StatusCode, string(body))
+	assert.Equal(t, "backup bytes", string(body))
+	assert.Equal(t, 1, d.Audit.(*fakeAudit).Count("backup.downloaded"))
 }
 
 // Each of the four 5-a-minute actions has its own bucket per user (review M-4): forwarding tests or HTTPS uploads
