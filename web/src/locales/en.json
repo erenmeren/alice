@@ -1651,6 +1651,15 @@
     "serverOperationPending": "The new certificate was not written. An unfinished earlier change on the server blocks these files; see below."
   },
   "deployments": {
+    "page": {
+      "description": "Every change has a sequence. Every outcome has evidence.",
+      "sequence": "Deployment sequence",
+      "sequenceSub": "Changes are verified before an operation is marked complete.",
+      "details": "Operation details",
+      "evidence": "Evidence",
+      "triggeredBy": "Triggered by",
+      "system": "Alice (automatic)"
+    },
     "title": "Deployments",
     "intro": "Every certificate deployment with its result. Open one to see each step.",
     "tableLabel": "Deployments",

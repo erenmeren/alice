@@ -1651,6 +1651,15 @@
     "serverOperationPending": "Yeni sertifika yazılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu dosyaları engelliyor; ayrıntılar aşağıda."
   },
   "deployments": {
+    "page": {
+      "description": "Her değişikliğin adımları, her sonucun kanıtı var.",
+      "sequence": "Dağıtım adımları",
+      "sequenceSub": "İşlem tamamlandı olarak işaretlenmeden önce değişiklikler doğrulanır.",
+      "details": "İşlem ayrıntıları",
+      "evidence": "Kanıt",
+      "triggeredBy": "Başlatan",
+      "system": "Alice (otomatik)"
+    },
     "title": "Dağıtımlar",
     "intro": "Sonuçlarıyla birlikte tüm sertifika dağıtımları. Her adımı görmek için birini açın.",
     "tableLabel": "Dağıtımlar",
