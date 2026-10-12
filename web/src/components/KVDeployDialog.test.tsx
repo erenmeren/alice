@@ -17,6 +17,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
 import { KVDeployDialog } from './KVDeployDialog';
+import deploy from './deploy.module.css';
 
 const V_NEW = kvVersionFixture({ id: 'v-new', version: 'aaaaaaaa11111111aaaaaaaa11111111', detected_at: '2026-10-05T00:00:00Z' });
 const V_OLD = kvVersionFixture({ id: 'v-old', version: 'bbbbbbbb22222222bbbbbbbb22222222', detected_at: '2026-09-01T00:00:00Z' });
@@ -57,6 +58,7 @@ describe('KVDeployDialog', () => {
     expect(body).toEqual({ version_id: 'v-new', location_ids: [bindingLocationFixture().location_id, 'loc-2'] });
     const runs = await screen.findAllByTestId('deployment-run');
     expect(runs).toHaveLength(2);
+    for (const run of runs) expect(run).toHaveClass(deploy.separated);
     expect(within(runs[0]).getByText('Read the certificate from Key Vault')).toBeInTheDocument();
     expect(within(runs[0]).getByRole('link', { name: 'Open this deployment' })).toHaveAttribute('href', '/deployments/d1');
   });
@@ -79,7 +81,7 @@ describe('KVDeployDialog', () => {
     expect((screen.getByLabelText('Version') as HTMLSelectElement).value).toBe('v-old');
     await user.click(screen.getByRole('checkbox', { name: /web-01/ }));
     await user.click(screen.getByRole('button', { name: 'Deploy now' }));
-    await screen.findByTestId('deployment-run');
+    expect(await screen.findByTestId('deployment-run')).not.toHaveClass(deploy.separated);
     expect(body).toEqual({ version_id: 'v-old', location_ids: ['loc-2'] });
   });
 
@@ -199,6 +201,8 @@ describe('KVDeployDialog', () => {
     await renderWithStepUp(<KVDeployDialog binding={BINDING} certificate={cert()} onClose={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: 'Deploy now' }));
     await waitFor(() => expect(document.querySelector('[data-refused="true"]')).toHaveTextContent('web-02'));
+    expect(document.querySelector('[data-refused="true"]')).toHaveClass(deploy.refused);
+    expect(document.querySelector('[data-refused="true"]')?.getAttribute('style') ?? '').not.toMatch(/border/);
   });
 
   it('is complete in Turkish', async () => {

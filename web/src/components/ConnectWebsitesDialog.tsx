@@ -10,6 +10,7 @@ import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { LoadingIndicator } from './LoadingIndicator';
 import { useStepUp } from './StepUpProvider';
+import deploy from './deploy.module.css';
 import { DialogActions } from './ui';
 import { keyTypeParam } from './vaultText';
 import { WRAP } from './wrap';
@@ -96,7 +97,7 @@ export function ConnectWebsitesDialog({ certificate, binding, onClose, onDone }:
           {items.map((l) => {
             const bad = refused === l.id;
             return (
-              <Box key={l.id} data-refused={bad ? 'true' : undefined} p="xs" style={bad ? { border: '2px solid var(--alice-danger)', borderRadius: 'var(--alice-radius-sm)' } : undefined}>
+              <Box key={l.id} data-refused={bad ? 'true' : undefined} p="xs" className={bad ? deploy.refused : undefined}>
                 <Checkbox
                   checked={l.id in picked}
                   onChange={(e) => toggle(l, e.currentTarget.checked)}

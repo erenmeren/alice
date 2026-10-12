@@ -1,0 +1,13 @@
+/* The deploy dialogs (DeployDialog, KVDeployDialog, ConnectWebsitesDialog). */
+
+/* With several runs, each starts under a rule. */
+.separated {
+  border-top: 1px solid var(--alice-border);
+  padding-top: 8px;
+}
+
+/* The website a refusal names: framed in the danger tone (the alert and the line inside say why). */
+.refused {
+  border: 2px solid var(--alice-danger);
+  border-radius: var(--alice-radius-sm);
+}

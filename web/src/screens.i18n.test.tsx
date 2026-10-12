@@ -1,3 +1,4 @@
+import { DEFAULT_THEME, mergeMantineTheme } from '@mantine/core';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -43,6 +44,7 @@ import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
 import { SCREENS } from './test/screens';
 import { server } from './test/server';
+import { appTheme, cssVariablesResolver } from './theme';
 
 const token: ApiToken = {
   id: '0192a000-0000-7000-8000-0000000000a1',
@@ -197,6 +199,40 @@ describe.each(['en', 'tr'] as const)('every screen in %s', (lang) => {
     await waitFor(() => expect(screen.getAllByText(s.ready[lang]).length).toBeGreaterThan(0));
     expectNoRawKeys();
   });
+});
+
+// The dark scheme: every screen renders with the scheme set on <html>, its ready text shown and no raw key. jsdom
+// cannot measure contrast (Task 18's axe run does, in browsers); what it can see is a color written into the page
+// itself: an inline literal color, or a Mantine color variable the theme does not map onto a token, would ignore the
+// scheme's tokens.
+const DARK_VARIABLES: Record<string, string> = cssVariablesResolver(mergeMantineTheme(DEFAULT_THEME, appTheme(''))).dark;
+function untokenedColors(style: string): string[] {
+  const literal = style.match(/#[0-9a-f]{3,8}\b|rgba?\(|hsla?\(/gi) ?? [];
+  const mantine = [...style.matchAll(/var\((--mantine-color-[a-z0-9-]+)\)/g)]
+    .map(([, name]) => name)
+    .filter((name) => !DARK_VARIABLES[name]?.startsWith('var(--alice-'));
+  return [...literal, ...mantine];
+}
+
+describe.each(['en', 'tr'] as const)('the dark scheme in %s', (lang) => {
+  it.each(SCREENS.map((s) => [s.path, s] as const))('%s renders from the tokens', async (_path, s) => {
+    const session = s.session ? { ...s.session, user: { ...s.session.user, locale: lang } } : null;
+    server.use(...sessionHandlers(session, s.status), ...dataHandlers);
+    await renderRoute(s.path, { languages: [lang], colorScheme: 'dark' });
+    await waitFor(() => expect(screen.getAllByText(s.ready[lang]).length).toBeGreaterThan(0));
+    expect(document.documentElement).toHaveAttribute('data-mantine-color-scheme', 'dark');
+    expect(screen.getAllByText(s.ready[lang])[0]).toBeVisible();
+    expectNoRawKeys();
+    const inline = [...document.body.querySelectorAll('[style]')].flatMap((el) => untokenedColors(el.getAttribute('style') ?? ''));
+    expect(inline).toEqual([]);
+  });
+});
+
+it('finds an inline color the dark scheme would not draw from the tokens', () => {
+  expect(untokenedColors('--checkbox-color: var(--mantine-color-forest-filled);')).toEqual([]);
+  expect(untokenedColors('--text-color: var(--alice-danger);')).toEqual([]);
+  expect(untokenedColors('--text-color: var(--mantine-color-red-9); color: #000')).toEqual(['#000', '--mantine-color-red-9']);
+  expect(untokenedColors('--progress-section-color: var(--mantine-color-yellow-filled)')).toEqual(['--mantine-color-yellow-filled']);
 });
 
 describe.each(['en', 'tr'] as const)('the SSH key dialogs in %s', (lang) => {

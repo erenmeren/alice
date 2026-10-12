@@ -168,3 +168,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+/* The forwarding state's last problem: a failure line in the danger tone (the text says what failed). */
+.lastError {
+  color: var(--alice-danger);
+}

@@ -15,6 +15,7 @@ import {
 import { renderWithAuth } from '../test/render';
 import { server } from '../test/server';
 import { DeployDialog } from './DeployDialog';
+import deploy from './deploy.module.css';
 
 const NEW_ID = '0192c000-0000-7000-8000-0000000000c9';
 const L1 = '0192c000-0000-7000-8000-0000000000e1';
@@ -217,6 +218,8 @@ describe('DeployDialog from a website', () => {
       return el as HTMLElement;
     });
     expect(within(row).getByText(/Alice stopped here/)).toBeInTheDocument();
+    expect(row).toHaveClass(deploy.refused);
+    expect(row?.getAttribute('style') ?? '').not.toMatch(/border/);
     expect(screen.getByLabelText('Certificate')).toHaveValue(NEW_ID);
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
     expect(screen.queryByRole('list', { name: 'Steps' })).not.toBeInTheDocument();
@@ -266,6 +269,11 @@ describe('DeployDialog from a certificate', () => {
     expect(body).toEqual({ location_ids: [L1, L2], confirm_incomplete_chain: false });
     expect(await screen.findByText('Updated websites: 1 of 2')).toBeInTheDocument();
     expect(screen.getAllByRole('list', { name: 'Steps' })).toHaveLength(2);
+    // Several runs are separated by a rule in the border token (a class, not an inline color).
+    for (const run of screen.getAllByTestId('deployment-run')) {
+      expect(run).toHaveClass(deploy.separated);
+      expect(run.getAttribute('style') ?? '').not.toMatch(/border/);
+    }
     expect(screen.getByText('The new certificate is live and verified.')).toBeInTheDocument();
     expect(screen.getByText('Your server was restored to its previous certificate.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open deployment history' })).toHaveAttribute('href', '/deployments');
@@ -335,6 +343,8 @@ describe('DeployDialog from a certificate', () => {
     await waitFor(() => expect(document.querySelectorAll('[data-refused="true"]')).toHaveLength(1));
     const refused = document.querySelector('[data-refused="true"]') as HTMLElement;
     expect(within(refused).getByRole('checkbox')).toBeChecked();
+    expect(refused).toHaveClass(deploy.refused);
+    expect(refused?.getAttribute('style') ?? '').not.toMatch(/border/);
     expect(within(refused).getByText(/names only the first website/)).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /www\.example\.test/ })).toBeChecked();
     expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();

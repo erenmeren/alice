@@ -15,6 +15,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
 import { ConnectWebsitesDialog } from './ConnectWebsitesDialog';
+import deploy from './deploy.module.css';
 
 const L1 = deployableLocationFixture({ id: 'l1', target_name: 'web-01', cert_path: '/etc/nginx/ssl/a.crt', server_names: ['a.example.test'] });
 const L2 = deployableLocationFixture({ id: 'l2', target_name: 'web-02', cert_path: '/etc/nginx/ssl/b.crt', server_names: ['b.example.test'] });
@@ -105,6 +106,8 @@ describe('ConnectWebsitesDialog', () => {
     expect(bad).toHaveTextContent('web-02');
     expect(document.querySelectorAll('[data-refused="true"]')).toHaveLength(1);
     expect(within(bad).getByText(/Alice stopped here/)).toBeInTheDocument();
+    expect(bad).toHaveClass(deploy.refused);
+    expect(bad?.getAttribute('style') ?? '').not.toMatch(/border/);
   });
 
   it('shows nothing selectable when no website fits', async () => {

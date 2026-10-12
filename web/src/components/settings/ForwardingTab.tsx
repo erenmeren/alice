@@ -65,7 +65,7 @@ function DeliveryState({ settings }: { settings: Forwarding }) {
           <p>{settings.last_sent_at ? t('forwarding.lastSent', { time: formatDateTime(settings.last_sent_at, i18n.language) }) : t('forwarding.neverSent')}</p>
           {settings.cursor_seq > 0 && <p>{t('forwarding.cursor', { seq: settings.cursor_seq })}</p>}
           {settings.last_error_code && (
-            <p style={{ color: 'var(--alice-danger)' }}>{t('forwarding.lastError', { time: formatDateTime(settings.last_error_at, i18n.language), problem })}</p>
+            <p className={classes.lastError}>{t('forwarding.lastError', { time: formatDateTime(settings.last_error_at, i18n.language), problem })}</p>
           )}
         </div>
       </div>

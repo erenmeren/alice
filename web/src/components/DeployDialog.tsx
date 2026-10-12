@@ -24,6 +24,7 @@ import { InternalLink } from './InternalLink';
 import { LocationWarning } from './LocationWarning';
 import { SiteName } from './SiteName';
 import { useSiteLabel } from './useSiteLabel';
+import deploy from './deploy.module.css';
 import { DialogActions } from './ui';
 import { WRAP } from './wrap';
 
@@ -208,7 +209,7 @@ function DeployForm({
           const dep = r.deployment;
           const step = dep ? currentStep(dep.steps) : null;
           return (
-            <Box key={r.id} data-testid="deployment-run" style={{ borderTop: multi ? '1px solid var(--alice-border)' : undefined, paddingTop: multi ? 8 : 0 }}>
+            <Box key={r.id} data-testid="deployment-run" className={multi ? deploy.separated : undefined}>
               <Stack gap="xs">
                 {multi && loc && (
                   <Group gap="xs">
@@ -324,7 +325,7 @@ function DeployForm({
             <Box
               data-refused={refused === location.id ? 'true' : undefined}
               p="xs"
-              style={refused === location.id ? { border: '2px solid var(--alice-danger)', borderRadius: 4 } : undefined}
+              className={refused === location.id ? deploy.refused : undefined}
             >
               <Text size="sm">
                 <SiteName loc={location} />{' '}
@@ -398,7 +399,7 @@ function WebsiteChoice({ place, refused, refusedText, disabled }: { place: Certi
   const problem =
     !place.supported && place.unsupported_reason === 'file_problem' ? [place.problem && t(fileProblemKey(place.problem)), place.key_problem && t(fileProblemKey(place.key_problem))].filter(Boolean) : [];
   return (
-    <Box data-refused={refused ? 'true' : undefined} p="xs" style={refused ? { border: '2px solid var(--alice-danger)', borderRadius: 4 } : undefined}>
+    <Box data-refused={refused ? 'true' : undefined} p="xs" className={refused ? deploy.refused : undefined}>
       <Checkbox
         value={place.id}
         disabled={disabled}

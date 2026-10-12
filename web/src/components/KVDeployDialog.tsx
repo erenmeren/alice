@@ -17,6 +17,7 @@ import { ErrorAlert } from './ErrorAlert';
 import { useNow } from './Expiry';
 import { InternalLink } from './InternalLink';
 import { useStepUp } from './StepUpProvider';
+import deploy from './deploy.module.css';
 import { DialogActions } from './ui';
 import { shortVersion, versionBlock } from './vaultText';
 import { useAuth } from '../auth/AuthProvider';
@@ -138,7 +139,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
             const step = dep ? currentStep(dep.steps) : null;
             const site = siteOf(r.locationId);
             return (
-              <Box key={r.id} data-testid="deployment-run" style={{ borderTop: runs.length > 1 ? '1px solid var(--alice-border)' : undefined, paddingTop: runs.length > 1 ? 8 : 0 }}>
+              <Box key={r.id} data-testid="deployment-run" className={runs.length > 1 ? deploy.separated : undefined}>
                 <Stack gap="xs">
                   {site && (
                     <Text size="sm" fw={600} style={WRAP}>
@@ -222,7 +223,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
                 {binding.locations.map((l) => {
                   const bad = refused === l.location_id;
                   return (
-                    <Box key={l.location_id} data-refused={bad ? 'true' : undefined} p="xs" style={bad ? { border: '2px solid var(--alice-danger)', borderRadius: 'var(--alice-radius-sm)' } : undefined}>
+                    <Box key={l.location_id} data-refused={bad ? 'true' : undefined} p="xs" className={bad ? deploy.refused : undefined}>
                       <Checkbox
                         value={l.location_id}
                         error={bad ? t('bindings.refused') : undefined}

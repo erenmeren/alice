@@ -162,9 +162,10 @@ describe('ForwardingTab', () => {
     expect(screen.getByText('Number of the last entry sent: 1234')).toBeInTheDocument();
     expect(screen.getByText(`Last entry sent: ${formatDateTime('2026-10-10T08:00:00Z', 'en')}`)).toBeInTheDocument();
     expect(i18n.exists('errors.audit.forwarding_unreachable.title')).toBe(true);
-    expect(
-      screen.getByText(`Last problem (${formatDateTime('2026-10-10T09:00:00Z', 'en')}): ${i18n.t('errors.audit.forwarding_unreachable.title')}`),
-    ).toBeInTheDocument();
+    const problem = screen.getByText(`Last problem (${formatDateTime('2026-10-10T09:00:00Z', 'en')}): ${i18n.t('errors.audit.forwarding_unreachable.title')}`);
+    // The danger token comes from the module's class (not an inline color), so both schemes draw it.
+    expect(problem).toHaveClass(classes.lastError);
+    expect(problem).not.toHaveAttribute('style');
   });
 
   it('names an unknown last problem by its code and says when nothing was sent', async () => {
