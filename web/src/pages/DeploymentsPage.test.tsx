@@ -84,6 +84,42 @@ describe('DeploymentsPage', () => {
     expect(within(rows[4]).queryByText('Failed, nothing changed')).not.toBeInTheDocument();
   });
 
+  it('tells a verified success from one whose verification was skipped or not done: never a plain green Succeeded', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/deployments', () =>
+        HttpResponse.json({
+          items: [
+            deploymentFixture({ id: 'v-remote', verified: 'remote' }),
+            deploymentFixture({ id: 'v-local', verified: 'local' }),
+            deploymentFixture({ id: 'v-skipped', verified: 'skipped' }),
+            deploymentFixture({ id: 'v-none', verified: '' }),
+            deploymentFixture({ id: 'v-failed', status: 'failed', verified: '' }),
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await renderRoute('/deployments');
+    const rows = await screen.findAllByTestId('deployment-row');
+    const badge = (row: HTMLElement) => within(row).getByText(/Succeeded|Failed/).closest('.mantine-Badge-root');
+    // Verified from Alice or from the server: the success badge and no qualifier.
+    for (const row of rows.slice(0, 2)) {
+      expect(badge(row)).toHaveAttribute('data-tone', 'success');
+      expect(row).not.toHaveTextContent('Verification:');
+    }
+    // Deployed but not verified: the status word stays (filters and specs read it), the tone is a warning and the line says why.
+    expect(badge(rows[2])).toHaveAttribute('data-tone', 'warning');
+    expect(badge(rows[2])).toHaveAttribute('data-status', 'succeeded');
+    expect(rows[2]).toHaveTextContent('Verification: Skipped');
+    expect(badge(rows[3])).toHaveAttribute('data-tone', 'warning');
+    expect(rows[3]).toHaveTextContent('Verification: Not done');
+    // A deployment that did not succeed keeps its own tone and has no verification line.
+    expect(badge(rows[4])).toHaveAttribute('data-tone', 'danger');
+    expect(rows[4]).not.toHaveTextContent('Verification:');
+    expectNoRawKeys();
+  });
+
   it('pages with Show more using next_cursor', async () => {
     const queries: string[] = [];
     server.use(

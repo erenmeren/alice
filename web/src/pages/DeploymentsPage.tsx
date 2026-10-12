@@ -3,7 +3,7 @@ import { useInfiniteQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { deploymentView } from '../api/deployments';
-import { deploymentStateKey } from '../api/enums';
+import { deploymentStateKey, verifiedKey } from '../api/enums';
 import { listDeployments } from '../api/endpoints';
 import { DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { Deployment } from '../api/types';
@@ -77,6 +77,7 @@ export function DeploymentsPage() {
 function Row({ d, when }: { d: Deployment; when: string }) {
   const { t } = useTranslation();
   const view = deploymentView(d);
+  const unverified = view === 'final' && d.status === 'succeeded' && d.verified !== 'remote' && d.verified !== 'local';
   const labelId = `open-${d.id}`;
   return (
     <Table.Tr data-testid="deployment-row">
@@ -120,7 +121,10 @@ function Row({ d, when }: { d: Deployment; when: string }) {
         )}
       </Table.Td>
       <Table.Td>
-        <DeploymentStatusBadge d={d} />
+        {/* A success Alice did not verify (skipped, or no verification) is not a plain green Succeeded: the word stays,
+            the tone is the detail page's warning and a line says what happened to the verification. */}
+        <DeploymentStatusBadge d={d} tone={unverified ? 'warning' : undefined} />
+        {unverified && <p className={classes.secondary}>{t('deployments.page.verification', { state: t(verifiedKey(d.verified)) })}</p>}
         {view === 'recovering' && <p className={classes.secondary}>{t(deploymentStateKey(d.state))}</p>}
         {view === 'held' && <p className={classes.secondary}>{t('deployments.held')}</p>}
       </Table.Td>

@@ -13,11 +13,12 @@ import { WRAP } from './wrap';
 // DeploymentStatusBadge is the deployment's status in words (a colour is only a cue). A status this
 // version does not know, or '', reads "Unknown" and is neutral. The design's status pill (StatusBadge);
 // the theme never upper-cases it (Turkish dotted/dotless i).
-export function DeploymentStatusBadge({ d, testId }: { d: Pick<Deployment, 'status' | 'error'>; testId?: string }) {
+// `tone` overrides the status's own tone where a page knows more (the history marks an unverified success a warning).
+export function DeploymentStatusBadge({ d, testId, tone }: { d: Pick<Deployment, 'status' | 'error'>; testId?: string; tone?: Tone }) {
   const { t } = useTranslation();
   const cancelled = isCancelled(d);
   return (
-    <StatusBadge tone={deploymentTone(d) ?? 'neutral'} testId={testId} data-status={d.status} data-cancelled={cancelled ? 'true' : undefined}>
+    <StatusBadge tone={tone ?? deploymentTone(d) ?? 'neutral'} testId={testId} data-status={d.status} data-cancelled={cancelled ? 'true' : undefined}>
       {t(deploymentStatusText(d))}
     </StatusBadge>
   );
