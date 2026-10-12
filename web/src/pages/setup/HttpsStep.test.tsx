@@ -62,6 +62,26 @@ describe('wizard HTTPS step', () => {
     expect(await screen.findByRole('heading', { name: 'Mail server (optional)' })).toBeInTheDocument();
   });
 
+  it('offers the two answers as equal choices: upload, or keep the temporary certificate with its warning', async () => {
+    server.use(...sessionHandlers(sessionFor('admin'), atHttps));
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { name: 'HTTPS certificate' });
+    const keep = await screen.findByTestId('https-keep-temporary');
+    const upload = screen.getByTestId('https-upload-form');
+    // Each answer sits in its own bordered box, upload first, with "or" between them; keeping is not the step's
+    // forward action in the actions row.
+    const keepBox = keep.closest('[data-choice]');
+    const uploadBox = upload.closest('[data-choice]');
+    expect(keepBox).not.toBeNull();
+    expect(uploadBox).not.toBeNull();
+    expect(keepBox).not.toBe(uploadBox);
+    expect(uploadBox!.compareDocumentPosition(keepBox!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(keepBox).toHaveTextContent('Replace it before production use.');
+    expect(screen.getByText('or')).toBeInTheDocument();
+    expect(keep.closest('[data-actions]')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Continue' })).not.toBeInTheDocument();
+  });
+
   it('uploads a PFX with its password and clears the password after the request', async () => {
     let body: unknown;
     server.use(
@@ -172,6 +192,7 @@ describe('wizard HTTPS step', () => {
     expect(await screen.findByRole('heading', { name: 'HTTPS sertifikası' })).toBeInTheDocument();
     expect(await screen.findByText(/Alice geçici bir sertifika kullanıyor/)).toBeInTheDocument();
     expect(screen.getByTestId('https-keep-temporary')).toHaveTextContent('Geçici sertifikayı kullanmaya devam et');
+    expect(screen.getByText('Üretim kullanımından önce değiştirin.')).toBeInTheDocument();
     expectNoRawKeys();
   });
 });

@@ -39,7 +39,7 @@ export function SetupShell({ current, children }: { current: WizardStep; childre
 // own buttons on the right.
 export function StepActions({ back, children }: { back?: ReactNode; children: ReactNode }) {
   return (
-    <div className={classes.formActions}>
+    <div className={classes.formActions} data-actions>
       {back}
       <span className={classes.spacer} />
       {children}

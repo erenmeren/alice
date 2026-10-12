@@ -1,4 +1,4 @@
-import { Button, Group, Stack, Text, Title } from '@mantine/core';
+import { Button, Divider, Group, Stack, Text, Title } from '@mantine/core';
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -16,8 +16,9 @@ import classes from './setup.module.css';
 
 // HttpsStep is the wizard's HTTPS certificate step (R43 row 16): upload the organisation's certificate (applied at
 // once, without a restart) or keep the temporary one. Reached again with Back, it shows the choice made (done) and
-// still allows an upload. Continue exists only once a choice is made; until then the actions row offers keeping the
-// temporary certificate.
+// still allows an upload. The two answers are equal choices in bordered boxes (upload first, as the design preselects
+// it), "or" between them; keeping the temporary certificate is never the actions row's forward action. Continue
+// exists only once a choice is made.
 export function HttpsStep({
   onDone,
   onGone,
@@ -67,7 +68,7 @@ export function HttpsStep({
           <Text>{info.data.temporary ? t('setup.https.keptTemporary') : t('setup.https.uploadedDone')}</Text>
         </Group>
       )}
-      <div className={classes.choice}>
+      <div className={classes.choice} data-choice="upload">
         <Title order={3} className={classes.choiceTitle}>
           {t('https.upload')}
         </Title>
@@ -80,15 +81,31 @@ export function HttpsStep({
           }}
         />
       </div>
-      <ErrorAlert error={error} />
+      {!chosen && (
+        <>
+          <Divider
+            label={
+              <Text span size="sm" c="dimmed">
+                {t('setup.license.or')}
+              </Text>
+            }
+            labelPosition="center"
+          />
+          <div className={classes.choice} data-choice="keep">
+            <ErrorAlert error={error} />
+            <div>
+              <Button variant="default" className={classes.wrapButton} data-testid="https-keep-temporary" loading={busy} onClick={() => void keep()}>
+                {t('https.keepTemporary')}
+              </Button>
+            </div>
+            <p className={classes.hint}>{t('setup.https.keepHint')}</p>
+          </div>
+        </>
+      )}
       <StepActions back={back}>
-        {chosen ? (
+        {chosen && (
           <Button onClick={onDone} rightSection={<Icon name="ArrowRight" size={15} />}>
             {t('ui.continue')}
-          </Button>
-        ) : (
-          <Button variant="default" data-testid="https-keep-temporary" loading={busy} onClick={() => void keep()}>
-            {t('https.keepTemporary')}
           </Button>
         )}
       </StepActions>
