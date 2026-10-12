@@ -421,7 +421,9 @@
       "newestFirst": "En yeni önce",
       "tableLabel": "Denetim olayları",
       "scope": "Özet zinciri devamlılığı; ele geçirilmiş bir sunucuya karşı bağımsız kanıt değildir. Harici yönlendirme, yapılandırıldıysa bağımsız kanıt sağlar.",
-      "forwarding": "Denetim kaydı iletimi ayarları"
+      "forwarding": "Denetim kaydı iletimi ayarları",
+      "exportScope": "Dışa aktarılan dosyalar yalnızca filtrelerin gösterdiği kayıtları değil, denetim kaydının tamamını içerir.",
+      "verifiedThrough": "Özet zinciri #{{seq}} numaralı kayda kadar doğrulandı."
     },
     "title": "Denetim kaydı",
     "verify": "Bütünlüğü doğrula",

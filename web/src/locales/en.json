@@ -421,7 +421,9 @@
       "newestFirst": "Newest first",
       "tableLabel": "Audit events",
       "scope": "Hash-chain continuity, not independent proof against a compromised host. External forwarding, where configured, adds independent evidence.",
-      "forwarding": "Audit forwarding settings"
+      "forwarding": "Audit forwarding settings",
+      "exportScope": "Exports contain the whole log, not only the entries the filters show.",
+      "verifiedThrough": "Hash chain verified through entry #{{seq}}."
     },
     "title": "Audit trail",
     "verify": "Verify integrity",
