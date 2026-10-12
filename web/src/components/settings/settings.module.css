@@ -1,0 +1,128 @@
+/* The settings sections' form parts in the Clarity design (alice-design/dist/styles.css .form-actions, .micro-card,
+   .usage-node, .grid2) and the bordered choice rows of the design's setup (.check-option). Tokens only. */
+.formActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--alice-border);
+}
+.formActions :global(.mantine-Button-root) {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--button-height);
+}
+.formActions :global(.mantine-Button-label) {
+  white-space: normal;
+  text-align: center;
+  padding-block: 6px;
+}
+
+/* A sub-section of a settings section (the test e-mail, the backup files, the schedule, the upload, the delivery). */
+.subSection {
+  margin-top: 32px;
+}
+.subTitle {
+  margin: 0 0 14px;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.microCard {
+  min-width: 0;
+  padding: 15px;
+  border: 1px solid var(--alice-border);
+  border-radius: 8px;
+}
+.eyebrow {
+  margin: 0;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: var(--alice-text-muted);
+}
+.microValue {
+  margin: 16px 0 5px;
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.7px;
+  overflow-wrap: anywhere;
+  color: var(--alice-text);
+}
+.microLines {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--alice-text-secondary);
+}
+.microLines > * {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.checkOption {
+  padding: 14px;
+  border: 1px solid var(--alice-border);
+  border-radius: 7px;
+}
+
+/* An identity provider's head (the design's usage-node): icon tile, name, issuer, state, actions. */
+.providerHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 13px 15px;
+  border: 1px solid var(--alice-border);
+  border-radius: 8px;
+  background: var(--alice-surface);
+}
+.providerIcon {
+  width: 30px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--alice-info-soft);
+  color: var(--alice-info);
+}
+.providerText {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.providerName {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.providerIssuer {
+  margin-top: 3px;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.providerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 767px) {
+  .grid2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

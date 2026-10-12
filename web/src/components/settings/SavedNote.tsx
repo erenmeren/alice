@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 export function SavedNote({ show }: { show: boolean }) {
   const { t } = useTranslation();
   return (
-    <Text role="status" size="sm" c="teal.9" mih="1.2em">
+    <Text role="status" size="sm" c="var(--alice-success)" mih="1.2em">
       {show ? t('settings.saved') : ''}
     </Text>
   );

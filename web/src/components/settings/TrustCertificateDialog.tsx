@@ -1,9 +1,10 @@
-import { Button, Code, Group, Stack, Text } from '@mantine/core';
+import { Button, Code, Stack, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import type { ApiError } from '../../api/client';
 import { formatDateTime } from '../../datetime';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
+import { DialogActions } from '../ui';
 import { WRAP } from '../wrap';
 
 // TrustCertificateDialog shows the certificate the mail server presented (ALC-NTF-0005 carries its fingerprint, subject and
@@ -53,14 +54,14 @@ export function TrustCertificateDialog({
           </div>
         )}
         <ErrorAlert error={trustError} />
-        <Group justify="flex-end">
+        <DialogActions>
           <Button variant="default" onClick={onClose}>
             {t('ui.cancel')}
           </Button>
           <Button loading={busy} onClick={() => onTrust(fingerprint)} data-autofocus>
             {t('settings.mail.trust')}
           </Button>
-        </Group>
+        </DialogActions>
       </Stack>
     </AppModal>
   );

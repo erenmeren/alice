@@ -1,11 +1,13 @@
-import { Button, Group, NumberInput, Stack, TextInput } from '@mantine/core';
+import { Button, NumberInput, Stack, TextInput } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getGeneral, saveGeneral, type GeneralSettings as General } from '../../api/settings';
 import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
+import { Icon } from '../../design/Icon';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { SavedNote } from './SavedNote';
+import classes from './settings.module.css';
 import { useChange, useSetting } from './useSetting';
 
 export function GeneralSettings() {
@@ -49,11 +51,11 @@ function GeneralForm({ settings, busy, onSave, fieldErrors }: { settings: Genera
           autoComplete="off"
         />
         <NumberInput label={t('settings.general.retention')} value={days} onChange={setDays} min={1} max={3650} allowDecimal={false} error={fieldErrors.retired_key_retention_days} />
-        <Group>
-          <Button type="submit" loading={busy}>
+        <div className={classes.formActions}>
+          <Button type="submit" loading={busy} leftSection={<Icon name="Check" size={15} />}>
             {t('settings.general.save')}
           </Button>
-        </Group>
+        </div>
       </Stack>
     </form>
   );

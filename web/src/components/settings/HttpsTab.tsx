@@ -1,4 +1,4 @@
-import { Alert, Button, Group, Input, List, PasswordInput, Radio, Stack, Text, Title } from '@mantine/core';
+import { Button, Code, Input, List, PasswordInput, Radio, Stack, Text, Title } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,9 +8,11 @@ import { settingsKey } from '../../api/queryKeys';
 import type { HTTPSInfo, HTTPSUpload } from '../../api/types';
 import { formatDateTime } from '../../datetime';
 import { ErrorAlert } from '../ErrorAlert';
-import { LabelledCode } from '../LabelledCode';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
+import { Icon } from '../../design/Icon';
+import { FactList, Notice } from '../ui';
+import classes from './settings.module.css';
 import { useSetting } from './useSetting';
 
 const KNOWN_WARNINGS = ['name_mismatch', 'chain_incomplete', 'expires_soon'];
@@ -23,36 +25,43 @@ export function HttpsTab() {
   if (q.isPending) return <LoadingIndicator />;
   if (q.isError) return <ErrorAlert error={q.error} />;
   return (
-    <Stack gap="lg">
+    <>
       <CertificateInfo info={q.data} />
-      <Title order={2} size="h4">
-        {t('https.upload')}
-      </Title>
-      <HttpsUploadForm />
-    </Stack>
+      <section className={classes.subSection}>
+        <Title order={3} className={classes.subTitle}>
+          {t('https.upload')}
+        </Title>
+        <HttpsUploadForm />
+      </section>
+    </>
   );
 }
 
-// CertificateInfo shows the certificate in use; its names, subject and fingerprint are data, never translated.
+// CertificateInfo shows the certificate in use as the design's facts (also on the wizard's HTTPS step); its names,
+// subject and fingerprint are data, never translated.
 export function CertificateInfo({ info }: { info: HTTPSInfo }) {
   const { t, i18n } = useTranslation();
   const names = [...(info.dns_names ?? []), ...(info.ip_addresses ?? [])].join(', ');
+  const code = (value: string) => <Code translate="no">{value}</Code>;
   return (
-    <Stack gap="xs">
-      <Title order={2} size="h4">
+    <Stack gap="sm">
+      <Title order={3} className={classes.subTitle}>
         {t('https.current')}
       </Title>
       {info.temporary ? (
-        <Alert color="yellow" role="note" data-testid="https-temporary">
-          {t('https.temporary')}
-        </Alert>
+        <Notice tone="warning" testId="https-temporary" title={t('https.temporary')} />
       ) : (
-        <Text size="sm">{t('https.ownCertificate')}</Text>
+        <Notice tone="success" title={t('https.ownCertificate')} />
       )}
-      <LabelledCode text={t('https.subject', { value: '' })} value={info.subject} />
-      {names && <LabelledCode text={t('https.names', { value: '' })} value={names} />}
-      <Text size="sm">{t('https.validUntil', { date: formatDateTime(info.not_after, i18n.language) })}</Text>
-      <LabelledCode text={t('https.fingerprint', { value: '' })} value={info.fingerprint_sha256} />
+      <FactList
+        label={t('https.current')}
+        facts={[
+          { key: 'subject', label: t('settings.page.subject'), value: code(info.subject) },
+          ...(names ? [{ key: 'names', label: t('settings.page.names'), value: code(names) }] : []),
+          { key: 'until', label: t('settings.page.validUntil'), value: formatDateTime(info.not_after, i18n.language) },
+          { key: 'fingerprint', label: t('settings.page.fingerprint'), value: code(info.fingerprint_sha256) },
+        ]}
+      />
     </Stack>
   );
 }
@@ -151,16 +160,16 @@ export function HttpsUploadForm({ onApplied, initialFormat, onFormat }: { onAppl
   const warnings = applied?.warnings ?? [];
   return (
     <form onSubmit={(ev) => void submit(ev)} noValidate data-testid="https-upload-form">
-      <Stack gap="sm" maw={560}>
+      <Stack gap="sm">
         <Text size="sm">{t('https.uploadHelp')}</Text>
         <Radio.Group label={t('https.format')} value={format} onChange={(v) => {
             setFormat(v as Format);
             onFormat?.(v as Format);
           }}>
-          <Group mt="xs">
-            <Radio value="pem" label={t('https.formatPem')} />
-            <Radio value="pfx" label={t('https.formatPfx')} />
-          </Group>
+          <Stack gap={8} mt="xs">
+            <Radio value="pem" label={t('https.formatPem')} className={classes.checkOption} />
+            <Radio value="pfx" label={t('https.formatPfx')} className={classes.checkOption} />
+          </Stack>
         </Radio.Group>
         {format === 'pem' ? (
           <>
@@ -193,26 +202,17 @@ export function HttpsUploadForm({ onApplied, initialFormat, onFormat }: { onAppl
             />
           </>
         )}
-        {missing && (
-          <Alert color="red" role="alert">
-            {t(missing)}
-          </Alert>
-        )}
+        {missing && <Notice tone="danger" role="alert" title={t(missing)} />}
         {error instanceof ReadError ? (
-          <Alert color="red" role="alert">
-            {t('https.unreadableFile')}
-          </Alert>
+          <Notice tone="danger" role="alert" title={t('https.unreadableFile')} />
         ) : (
           <ErrorAlert error={error} />
         )}
         {applied && (
-          <Alert color="green" role="status">
-            <Text size="sm">{t('https.applied')}</Text>
+          <Notice tone={warnings.length > 0 ? 'warning' : 'success'} role="status" title={t('https.applied')}>
             {warnings.length > 0 && (
               <>
-                <Text size="sm" mt="xs">
-                  {t('https.warningsTitle')}
-                </Text>
+                <Text size="sm">{t('https.warningsTitle')}</Text>
                 <List size="sm">
                   {warnings.map((w) => (
                     <List.Item key={w}>{t(KNOWN_WARNINGS.includes(w) ? `https.warnings.${w}` : 'https.warnings.unknown')}</List.Item>
@@ -220,14 +220,14 @@ export function HttpsUploadForm({ onApplied, initialFormat, onFormat }: { onAppl
                 </List>
               </>
             )}
-          </Alert>
+          </Notice>
         )}
-        <Group>
-          <Button type="submit" loading={busy}>
-            {t('https.upload')}
-          </Button>
-        </Group>
       </Stack>
+      <div className={classes.formActions}>
+        <Button type="submit" loading={busy} leftSection={<Icon name="Upload" size={15} />}>
+          {t('https.upload')}
+        </Button>
+      </div>
     </form>
   );
 }

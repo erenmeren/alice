@@ -3,8 +3,10 @@ import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getThresholds, saveThresholds, type AlertThresholds } from '../../api/settings';
 import { ErrorAlert } from '../ErrorAlert';
+import { Icon } from '../../design/Icon';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { SavedNote } from './SavedNote';
+import classes from './settings.module.css';
 import { useChange, useSetting } from './useSetting';
 
 const MAX_THRESHOLDS = 10;
@@ -61,14 +63,16 @@ function ThresholdForm({ settings, busy, onSave }: { settings: AlertThresholds; 
           </Stack>
         </fieldset>
         <Group>
-          <Button variant="default" disabled={days.length >= MAX_THRESHOLDS} onClick={() => setDays((x) => [...x, ''])}>
+          <Button variant="default" leftSection={<Icon name="Plus" size={15} />} disabled={days.length >= MAX_THRESHOLDS} onClick={() => setDays((x) => [...x, ''])}>
             {t('settings.alerts.add')}
-          </Button>
-          <Button type="submit" loading={busy} disabled={days.some((d) => d === '' || Number.isNaN(Number(d)))}>
-            {t('settings.alerts.save')}
           </Button>
         </Group>
       </Stack>
+      <div className={classes.formActions}>
+        <Button type="submit" loading={busy} leftSection={<Icon name="Check" size={15} />} disabled={days.some((d) => d === '' || Number.isNaN(Number(d)))}>
+          {t('settings.alerts.save')}
+        </Button>
+      </div>
     </form>
   );
 }

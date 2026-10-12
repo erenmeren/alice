@@ -16,6 +16,8 @@ import {
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
+import ui from '../ui/ui.module.css';
+import classes from './settings.module.css';
 import { formatSize, scheduleProblems, zoneOptions } from './BackupsTab';
 
 const saved: { blob: Blob; name: string }[] = [];
@@ -55,6 +57,30 @@ describe('BackupsTab', () => {
     expect(screen.getByText(/Restoring is done on the server with/)).toBeInTheDocument();
     expect(screen.getByText('Free disk space for backups: 41.2 GB')).toBeInTheDocument();
     expectNoRawKeys();
+  });
+
+  it('draws the state and the schedule as the design\'s cards, the files in a resource table and the actions in rows', async () => {
+    server.use(...sessionHandlers(steppedUp));
+    await renderRoute('/settings?tab=backups');
+    const table = await screen.findByTestId('backups-table');
+    expect(table.closest(`.${ui.tablePanel}`)).not.toBeNull();
+    expect(table).toHaveAttribute('aria-label', 'Backup files on this server');
+    const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).toEqual(['File', 'Kind', 'Size', 'Made at', 'Check', 'Actions']);
+    const check = within(table).getByText('Checked').closest('.mantine-Badge-root') as HTMLElement;
+    expect(check).toHaveAttribute('data-tone', 'success');
+    const last = screen.getByText('Last backup').closest(`.${classes.microCard}`) as HTMLElement;
+    expect(last).toHaveTextContent(`Last successful backup: ${formatDateTime('2026-10-10T02:30:00Z', 'en')}`);
+    expect(last).toHaveTextContent('Free disk space for backups: 41.2 GB');
+    const schedule = (await screen.findByText('Schedule')).closest(`.${classes.microCard}`) as HTMLElement;
+    expect(within(schedule).getByText('02:30 Europe/Istanbul')).toHaveAttribute('translate', 'no');
+    expect(schedule).toHaveTextContent(`Next backup: ${formatDateTime('2026-10-10T23:30:00Z', 'en')}`);
+    expect(screen.getByTestId('backup-now').closest(`.${classes.formActions}`)).not.toBeNull();
+    expect((await screen.findByRole('button', { name: 'Save backup schedule' })).closest(`.${classes.formActions}`)).not.toBeNull();
+    expect(screen.getByRole('heading', { level: 3, name: 'Daily backup' })).toBeInTheDocument();
+    // The off-host advice is a note, not an alert: a download that works leaves no alert on the page.
+    expect(screen.getByText('Backups are stored on this server only. Copy them to another machine regularly.').closest('[role="note"]')).not.toBeNull();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows an unreadable file with the reason and offers no download for it', async () => {
@@ -111,6 +137,9 @@ describe('BackupsTab', () => {
     expect(screen.getByText('Backups start after the recovery passphrase is set.')).toBeInTheDocument();
     expect(screen.getByText('The last backup failed. Alice e-mailed the administrators.')).toBeInTheDocument();
     expect(screen.getAllByText('No successful backup for 48 hours').length).toBeGreaterThan(0);
+    expect(screen.getByText('No backup has been made yet.').closest(`.${classes.microCard}`)).not.toBeNull();
+    expect(screen.getByText('There are no backup files yet.').closest(`.${ui.tablePanel}`)).not.toBeNull();
+    expect(screen.getByText('The last backup failed. Alice e-mailed the administrators.').closest('[role="note"]')).not.toBeNull();
   });
 
   it('backs up now and reads the list again', async () => {

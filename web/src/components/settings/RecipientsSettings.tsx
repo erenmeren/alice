@@ -4,8 +4,10 @@ import { useTranslation } from 'react-i18next';
 import { getRecipients, saveRecipients, type Locale, type Recipients } from '../../api/settings';
 import { LANGUAGES } from '../../i18n';
 import { ErrorAlert } from '../ErrorAlert';
+import { Icon } from '../../design/Icon';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { SavedNote } from './SavedNote';
+import classes from './settings.module.css';
 import { useChange, useSetting } from './useSetting';
 
 const MAX_ADDRESSES = 20;
@@ -40,7 +42,7 @@ function RecipientsForm({ settings, busy, onSave }: { settings: Recipients; busy
   return (
     <form onSubmit={submit}>
       <Stack gap="sm" maw={560}>
-        <Checkbox label={t('settings.recipients.administrators')} checked={administrators} onChange={(e) => setAdministrators(e.currentTarget.checked)} />
+        <Checkbox className={classes.checkOption} label={t('settings.recipients.administrators')} checked={administrators} onChange={(e) => setAdministrators(e.currentTarget.checked)} />
         <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
           <legend style={{ fontWeight: 600, padding: 0, marginBottom: 8 }}>{t('settings.recipients.addresses')}</legend>
           <Stack gap="xs">
@@ -69,14 +71,16 @@ function RecipientsForm({ settings, busy, onSave }: { settings: Recipients; busy
           </Stack>
         </fieldset>
         <Group>
-          <Button variant="default" disabled={rows.length >= MAX_ADDRESSES} onClick={() => setRows((x) => [...x, { email: '', locale: 'en' }])}>
+          <Button variant="default" leftSection={<Icon name="Plus" size={15} />} disabled={rows.length >= MAX_ADDRESSES} onClick={() => setRows((x) => [...x, { email: '', locale: 'en' }])}>
             {t('settings.recipients.add')}
-          </Button>
-          <Button type="submit" loading={busy}>
-            {t('settings.recipients.save')}
           </Button>
         </Group>
       </Stack>
+      <div className={classes.formActions}>
+        <Button type="submit" loading={busy} leftSection={<Icon name="Check" size={15} />}>
+          {t('settings.recipients.save')}
+        </Button>
+      </div>
     </form>
   );
 }

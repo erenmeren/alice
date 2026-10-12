@@ -1,4 +1,4 @@
-import { Anchor, Button, CopyButton, Group, PasswordInput, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core';
+import { Anchor, Button, CopyButton, PasswordInput, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,7 @@ import { CodeText } from '../CodeText';
 import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { useStepUp } from '../StepUpProvider';
+import { DialogActions } from '../ui';
 
 // ProviderDialog adds or edits an identity provider. The client secret lives only in this form's state: it is sent when typed,
 // never read back (the server answers has_client_secret only), and is gone with the form once the request was sent. After a
@@ -49,7 +50,7 @@ export function ProviderDialog({ provider, onClose }: { provider: Provider | nul
     return (
       <AppModal opened onClose={onClose} title={title}>
         <Stack gap="sm">
-          <Text role="status" size="sm" c="teal.9">
+          <Text role="status" size="sm" c="var(--alice-success)">
             {t('settings.saved')}
           </Text>
           {save.data.redirect_uri ? (
@@ -65,7 +66,7 @@ export function ProviderDialog({ provider, onClose }: { provider: Provider | nul
               </Anchor>
             </Text>
           )}
-          <Group justify="flex-end">
+          <DialogActions>
             {save.data.redirect_uri && (
               <CopyButton value={save.data.redirect_uri}>
                 {({ copied, copy }) => (
@@ -78,7 +79,7 @@ export function ProviderDialog({ provider, onClose }: { provider: Provider | nul
             <Button onClick={onClose} data-autofocus>
               {t('ui.continue')}
             </Button>
-          </Group>
+          </DialogActions>
         </Stack>
       </AppModal>
     );
@@ -104,14 +105,14 @@ export function ProviderDialog({ provider, onClose }: { provider: Provider | nul
           <Textarea label={t('sso.caPem')} value={caPem} onChange={(e) => setCaPem(e.currentTarget.value)} error={fieldErrors.ca_pem} autosize minRows={3} maxRows={8} spellCheck={false} styles={{ input: { fontFamily: 'monospace' } }} />
           <Switch role="switch" label={t('sso.enabled')} checked={enabled} onChange={(e) => setEnabled(e.currentTarget.checked)} />
           <ErrorAlert error={save.error} />
-          <Group justify="flex-end">
+          <DialogActions>
             <Button variant="default" onClick={onClose}>
               {t('ui.cancel')}
             </Button>
             <Button type="submit" loading={save.isPending}>
               {t('sso.save')}
             </Button>
-          </Group>
+          </DialogActions>
         </Stack>
       </form>
     </AppModal>

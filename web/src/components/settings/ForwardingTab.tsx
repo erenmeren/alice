@@ -1,4 +1,4 @@
-import { Button, Checkbox, Group, NativeSelect, NumberInput, Stack, Text, TextInput, Textarea, Title } from '@mantine/core';
+import { Button, Checkbox, NativeSelect, NumberInput, Stack, Text, TextInput, Textarea, Title } from '@mantine/core';
 import { useMutation } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,7 +9,9 @@ import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
+import { Icon } from '../../design/Icon';
 import { SavedNote } from './SavedNote';
+import classes from './settings.module.css';
 import { useChange, useSetting } from './useSetting';
 
 // The forwarding error codes the server records as the last problem (C12), by their catalogue reason.
@@ -35,7 +37,7 @@ function ForwardingPanel({ settings }: { settings: Forwarding }) {
   const { t, i18n } = useTranslation();
   const save = useChange('forwarding', settings.version, saveForwarding);
   return (
-    <Stack gap="lg">
+    <Stack gap="sm">
       <Text size="sm">{t('forwarding.help')}</Text>
       {/* Keyed by the version: a saved setting draws the form again, which empties the CA field. */}
       <ForwardingForm key={settings.version} settings={settings} busy={save.isPending} onSave={(b) => save.mutate(b)} fieldErrors={fieldErrorsOf(save.error, t, i18n)} />
@@ -52,21 +54,22 @@ function DeliveryState({ settings }: { settings: Forwarding }) {
   const problem =
     reason && i18n.exists(`errors.${reason}.title`) ? t(`errors.${reason}.title`) : t('forwarding.unknownError', { code: settings.last_error_code });
   return (
-    <Stack gap="xs">
-      <Title order={2} size="h4">
+    <section className={classes.subSection}>
+      <Title order={3} className={classes.subTitle}>
         {t('forwarding.state')}
       </Title>
-      <Text size="sm">{t('forwarding.backlog', { count: settings.backlog })}</Text>
-      <Text size="sm">
-        {settings.last_sent_at ? t('forwarding.lastSent', { time: formatDateTime(settings.last_sent_at, i18n.language) }) : t('forwarding.neverSent')}
-      </Text>
-      {settings.cursor_seq > 0 && <Text size="sm">{t('forwarding.cursor', { seq: settings.cursor_seq })}</Text>}
-      {settings.last_error_code && (
-        <Text size="sm" c="red.9">
-          {t('forwarding.lastError', { time: formatDateTime(settings.last_error_at, i18n.language), problem })}
-        </Text>
-      )}
-    </Stack>
+      {/* Whole sentences, not label/value facts: each line is one translated text with its value (no assembly). */}
+      <div className={classes.microCard}>
+        <div className={classes.microLines} style={{ marginTop: 0 }}>
+          <p>{t('forwarding.backlog', { count: settings.backlog })}</p>
+          <p>{settings.last_sent_at ? t('forwarding.lastSent', { time: formatDateTime(settings.last_sent_at, i18n.language) }) : t('forwarding.neverSent')}</p>
+          {settings.cursor_seq > 0 && <p>{t('forwarding.cursor', { seq: settings.cursor_seq })}</p>}
+          {settings.last_error_code && (
+            <p style={{ color: 'var(--alice-danger)' }}>{t('forwarding.lastError', { time: formatDateTime(settings.last_error_at, i18n.language), problem })}</p>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -108,10 +111,12 @@ function ForwardingForm({
 
   return (
     <form onSubmit={submit} data-testid="forwarding-form">
-      <Stack gap="sm" maw={560}>
-        <Checkbox label={t('forwarding.enabled')} checked={enabled} onChange={(e) => setEnabled(e.currentTarget.checked)} />
-        <TextInput label={t('forwarding.host')} value={host} onChange={(e) => setHost(e.currentTarget.value)} error={fieldErrors.host} autoComplete="off" spellCheck={false} />
-        <NumberInput label={t('forwarding.port')} value={port} onChange={setPort} min={1} max={65535} allowDecimal={false} error={fieldErrors.port} />
+      <Stack gap="sm">
+        <Checkbox className={classes.checkOption} label={t('forwarding.enabled')} checked={enabled} onChange={(e) => setEnabled(e.currentTarget.checked)} />
+        <div className={classes.grid2}>
+          <TextInput label={t('forwarding.host')} value={host} onChange={(e) => setHost(e.currentTarget.value)} error={fieldErrors.host} autoComplete="off" spellCheck={false} />
+          <NumberInput label={t('forwarding.port')} value={port} onChange={setPort} min={1} max={65535} allowDecimal={false} error={fieldErrors.port} />
+        </div>
         <NativeSelect
           label={t('forwarding.transport')}
           value={transport}
@@ -141,16 +146,18 @@ function ForwardingForm({
           autoComplete="off"
           styles={MONO}
         />
-        <Group>
-          <Button type="submit" loading={busy}>
-            {t('forwarding.save')}
-          </Button>
-          <Button variant="default" loading={test.isPending} onClick={() => test.mutate(input())}>
-            {t('forwarding.test')}
-          </Button>
-        </Group>
+      </Stack>
+      <div className={classes.formActions}>
+        <Button variant="default" leftSection={<Icon name="Network" size={15} />} loading={test.isPending} onClick={() => test.mutate(input())}>
+          {t('forwarding.test')}
+        </Button>
+        <Button type="submit" loading={busy} leftSection={<Icon name="Check" size={15} />}>
+          {t('forwarding.save')}
+        </Button>
+      </div>
+      <Stack gap="sm" mt="sm">
         {test.isSuccess && (
-          <Text role="status" size="sm" c="teal.9">
+          <Text role="status" size="sm" c="var(--alice-success)">
             {t('forwarding.testSent')}
           </Text>
         )}

@@ -1,6 +1,6 @@
-import { Badge, Button, Code, Group, Paper, Stack, Switch, Text, Title } from '@mantine/core';
+import { Button, Code, Group, Stack, Switch, Text, Title } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SSO_PROVIDERS_KEY, SSO_SETTINGS_KEY } from '../../api/queryKeys';
 import { deleteProvider, getSSOSettings, listProviders, refreshProvider, saveSSOSettings, type Provider } from '../../api/sso';
@@ -8,7 +8,10 @@ import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
-import { WRAP } from '../wrap';
+import { Icon } from '../../design/Icon';
+import { DialogActions, EmptyState, Notice, Panel, StatusBadge } from '../ui';
+import ui from '../ui/ui.module.css';
+import classes from '../settings/settings.module.css';
 import { MappingsTable } from './MappingsTable';
 import { ProviderDialog } from './ProviderDialog';
 
@@ -20,6 +23,7 @@ export function SSOSettings() {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
+  const helpId = useId();
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [confirmOff, setConfirmOff] = useState(false);
   const settings = useQuery({ queryKey: SSO_SETTINGS_KEY, queryFn: () => run(getSSOSettings) });
@@ -32,52 +36,70 @@ export function SSOSettings() {
   });
 
   return (
-    <Stack gap="lg">
+    <Stack gap="md">
       <Stack gap="xs">
         {settings.isPending && <LoadingIndicator />}
         <ErrorAlert error={settings.error} />
-        {settings.data && (
-          <Switch
-            role="switch"
-            label={t('sso.allowAdmin')}
-            aria-describedby="sso-allow-admin-help"
-            checked={settings.data.allow_admin_role}
-            disabled={allow.isPending}
-            onChange={(e) => (e.currentTarget.checked ? allow.mutate(true) : setConfirmOff(true))}
-          />
-        )}
-        <Text size="sm" c="gray.7" id="sso-allow-admin-help">
-          {t('sso.allowAdminHelp')}
-        </Text>
+        {/* The design's switch row: the setting's name and help on the left, the switch on the right. */}
+        <div className={ui.switchRow} style={{ paddingTop: 0 }}>
+          <div>
+            <div className={ui.rowTitle}>{t('sso.allowAdmin')}</div>
+            <p className={ui.rowHelp} id={helpId}>
+              {t('sso.allowAdminHelp')}
+            </p>
+          </div>
+          {settings.data && (
+            <Switch
+              role="switch"
+              aria-label={t('sso.allowAdmin')}
+              aria-describedby={helpId}
+              checked={settings.data.allow_admin_role}
+              disabled={allow.isPending}
+              onChange={(e) => (e.currentTarget.checked ? allow.mutate(true) : setConfirmOff(true))}
+            />
+          )}
+        </div>
         <ErrorAlert error={allow.error} />
         <Text size="sm">{t('sso.mfaNote')}</Text>
       </Stack>
 
-      <Stack gap="sm">
-        <Group justify="space-between">
-          <Title order={2} size="h3">
+      <section className={classes.subSection}>
+        <Group justify="space-between" align="center" mb="sm">
+          <Title order={3} className={classes.subTitle} mb={0}>
             {t('sso.providers')}
           </Title>
-          <Button onClick={() => setDialog({ kind: 'form', provider: null })}>{t('sso.addProvider')}</Button>
+          <Button leftSection={<Icon name="Plus" size={15} />} onClick={() => setDialog({ kind: 'form', provider: null })}>
+            {t('sso.addProvider')}
+          </Button>
         </Group>
-        {providers.isPending && <LoadingIndicator />}
-        <ErrorAlert error={providers.error} />
-        {providers.isSuccess && providers.data.items.length === 0 && <Text c="gray.7">{t('sso.noProviders')}</Text>}
-        {providers.data?.items.map((p) => (
-          <ProviderSection key={p.id} provider={p} onEdit={() => setDialog({ kind: 'form', provider: p })} onDelete={() => setDialog({ kind: 'delete', provider: p })} />
-        ))}
-      </Stack>
+        <Stack gap="md">
+          {providers.isPending && <LoadingIndicator />}
+          <ErrorAlert error={providers.error} />
+          {providers.isSuccess && providers.data.items.length === 0 && (
+            <div className={ui.tablePanel}>
+              <EmptyState icon="Building2" title={t('sso.noProviders')} />
+            </div>
+          )}
+          {providers.data?.items.map((p) => (
+            <ProviderSection key={p.id} provider={p} onEdit={() => setDialog({ kind: 'form', provider: p })} onDelete={() => setDialog({ kind: 'delete', provider: p })} />
+          ))}
+        </Stack>
+      </section>
+
+      <Notice tone="brand" title={t('settings.page.breakGlassTitle')}>
+        {t('settings.page.breakGlassText')}
+      </Notice>
 
       {confirmOff && (
         <AppModal opened onClose={() => setConfirmOff(false)} title={t('sso.switchOffTitle')}>
           <Stack gap="sm">
             <Text size="sm">{t('sso.switchOffText')}</Text>
-            <Group justify="flex-end">
+            <DialogActions>
               <Button variant="default" onClick={() => setConfirmOff(false)}>
                 {t('ui.cancel')}
               </Button>
               <Button
-                color="red.9"
+                color="red"
                 onClick={() => {
                   setConfirmOff(false);
                   allow.mutate(false);
@@ -85,7 +107,7 @@ export function SSOSettings() {
               >
                 {t('sso.switchOffConfirm')}
               </Button>
-            </Group>
+            </DialogActions>
           </Stack>
         </AppModal>
       )}
@@ -106,24 +128,25 @@ function ProviderSection({ provider: p, onEdit, onDelete }: { provider: Provider
       client.setQueryData<{ items: Provider[] }>(SSO_PROVIDERS_KEY, (old) => (old ? { items: old.items.map((x) => (x.id === fresh.id ? fresh : x)) } : old)),
   });
   return (
-    <Paper component="section" aria-label={p.name} withBorder p="md">
+    <Panel aria-label={p.name}>
       <Stack gap="sm">
-        <Group justify="space-between" align="flex-start">
-          <div>
-            <Group gap="xs">
-              <Title order={3} size="h4">
-                {p.name}
-              </Title>
-              <Badge variant="light" color={p.enabled ? 'green' : 'gray'} tt="none">
-                {p.enabled ? t('sso.status.enabled') : t('sso.status.disabled')}
-              </Badge>
-            </Group>
-            <Code translate="no" style={WRAP}>
-              {p.issuer_url}
-            </Code>
+        <div className={classes.providerHead}>
+          <span className={classes.providerIcon}>
+            <Icon name="Building2" size={16} />
+          </span>
+          <div className={classes.providerText}>
+            <Title order={4} className={classes.providerName}>
+              {p.name}
+            </Title>
+            <div className={classes.providerIssuer}>
+              <Code translate="no">{p.issuer_url}</Code>
+            </div>
           </div>
-          <Group gap="xs">
-            <Button size="xs" variant="default" loading={refresh.isPending} onClick={() => refresh.mutate()}>
+          <StatusBadge tone={p.enabled ? 'success' : 'neutral'} icon={p.enabled ? 'CircleCheck' : undefined}>
+            {p.enabled ? t('sso.status.enabled') : t('sso.status.disabled')}
+          </StatusBadge>
+          <div className={classes.providerActions}>
+            <Button size="xs" variant="default" leftSection={<Icon name="RefreshCw" size={14} />} loading={refresh.isPending} onClick={() => refresh.mutate()}>
               {t('sso.refresh')}
             </Button>
             <Button size="xs" variant="default" onClick={onEdit} aria-label={t('sso.edit', { name: p.name })}>
@@ -132,12 +155,12 @@ function ProviderSection({ provider: p, onEdit, onDelete }: { provider: Provider
             <Button size="xs" variant="default" onClick={onDelete} aria-label={t('sso.delete', { name: p.name })}>
               {t('sso.deleteShort')}
             </Button>
-          </Group>
-        </Group>
+          </div>
+        </div>
         <ErrorAlert error={refresh.error} />
         <MappingsTable providerId={p.id} />
       </Stack>
-    </Paper>
+    </Panel>
   );
 }
 
@@ -157,14 +180,14 @@ function DeleteDialog({ provider, onClose }: { provider: Provider; onClose: () =
       <Stack gap="sm">
         <Text size="sm">{t('sso.deleteText')}</Text>
         <ErrorAlert error={remove.error} />
-        <Group justify="flex-end">
+        <DialogActions>
           <Button variant="default" onClick={onClose}>
             {t('ui.cancel')}
           </Button>
-          <Button color="red.9" loading={remove.isPending} onClick={() => remove.mutate()}>
+          <Button color="red" loading={remove.isPending} onClick={() => remove.mutate()}>
             {t('sso.deleteConfirm')}
           </Button>
-        </Group>
+        </DialogActions>
       </Stack>
     </AppModal>
   );

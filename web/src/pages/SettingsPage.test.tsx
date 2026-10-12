@@ -4,6 +4,9 @@ import { http, HttpResponse } from 'msw';
 import { adminSession, errorResponse, operatorSession, sessionFor, sessionHandlers } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
+import { expectNoRawKeys } from '../test/i18nAssert';
+import settingsClasses from '../components/settings/settings.module.css';
+import classes from './SettingsPage.module.css';
 
 const steppedUp = { ...adminSession, stepup_until: '2099-01-01T00:00:00Z' };
 
@@ -196,5 +199,141 @@ describe('SettingsPage, mail', () => {
     await renderRoute('/settings?tab=mail', { languages: ['tr-TR'] });
     expect(await screen.findByRole('button', { name: 'Test e-postası gönder' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Posta ayarlarını kaydet' })).toBeInTheDocument();
+  });
+});
+
+describe('SettingsPage, design', () => {
+  const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'forwarding', 'sso'] as const;
+  const LABELS = ['Email', 'Recipients', 'Alerts', 'General', 'Backups', 'HTTPS certificate', 'Audit forwarding', 'Single sign-on'];
+  const DESCRIPTIONS: Record<(typeof TABS)[number], string> = {
+    mail: 'The mail server Alice uses to send alerts.',
+    recipients: 'The people who receive operational alerts.',
+    alerts: 'Warn early enough to act. Keep urgent signals distinct.',
+    general: 'Defaults for this Alice installation.',
+    backups: 'Encrypted backups protect recovery data. Test your restore procedure separately.',
+    https: 'The certificate presented by this Alice installation.',
+    forwarding: 'Send audit events to an independent syslog or SIEM destination.',
+    sso: 'Connect an OpenID Connect provider and map groups to Alice roles.',
+  };
+  const SAVE: Partial<Record<(typeof TABS)[number], string>> = {
+    mail: 'Save mail settings',
+    recipients: 'Save recipients',
+    alerts: 'Save alert thresholds',
+    general: 'Save general settings',
+    backups: 'Save backup schedule',
+    forwarding: 'Save forwarding settings',
+    https: 'Upload certificate',
+  };
+
+  function every() {
+    server.use(
+      ...sessionHandlers(steppedUp),
+      http.get('/api/v1/settings/notifications', () => HttpResponse.json({ administrators: true, addresses: [], version: 0 })),
+      http.get('/api/v1/settings/alerts', () => HttpResponse.json({ thresholds_days: [60, 30], version: 0 })),
+      http.get('/api/v1/settings/general', () => HttpResponse.json({ public_url: 'https://alice.example.com', retired_key_retention_days: 30, version: 0 })),
+      http.get('/api/v1/sso/settings', () => HttpResponse.json({ allow_admin_role: false, version: 0 })),
+      http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [] })),
+    );
+  }
+
+  it('has the design header and lists the eight sections in order, each with an icon', async () => {
+    every();
+    await renderRoute('/settings');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByText('Make Alice work the way your team does.')).toBeInTheDocument();
+    const list = screen.getByRole('tablist', { name: 'Settings sections' });
+    const tabs = within(list).getAllByRole('tab');
+    expect(tabs).toHaveLength(8);
+    tabs.forEach((tab, i) => {
+      expect(tab).toHaveTextContent(LABELS[i]);
+      expect(tab.textContent).toBe(LABELS[i]);
+      expect(tab.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    });
+    expect(list).toHaveClass(classes.navList);
+    tabs.forEach((tab) => expect(tab).toHaveClass(classes.navTab));
+  });
+
+  it('draws the sections as a vertical list from 768 px', async () => {
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('min-width: 48em'),
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    })) as typeof window.matchMedia;
+    try {
+      every();
+      await renderRoute('/settings');
+      expect(await screen.findByRole('tablist', { name: 'Settings sections' })).toHaveAttribute('aria-orientation', 'vertical');
+    } finally {
+      window.matchMedia = original;
+    }
+  });
+
+  it('draws the sections as a horizontal list on a phone', async () => {
+    every();
+    await renderRoute('/settings');
+    expect(await screen.findByRole('tablist', { name: 'Settings sections' })).toHaveAttribute('aria-orientation', 'horizontal');
+  });
+
+  it('opens a section from the address', async () => {
+    every();
+    await renderRoute('/settings?tab=backups');
+    expect(await screen.findByRole('tab', { name: 'Backups', selected: true })).toBeInTheDocument();
+    expect(await screen.findByTestId('backup-now')).toBeInTheDocument();
+  });
+
+  it('moves along the sections with Home and End, and Enter opens one', async () => {
+    every();
+    const { router } = await renderRoute('/settings?tab=general');
+    const general = await screen.findByRole('tab', { name: 'General', selected: true });
+    general.focus();
+    await userEvent.keyboard('{End}');
+    expect(screen.getByRole('tab', { name: 'Single sign-on' })).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
+    expect(await screen.findByRole('tab', { name: 'Single sign-on', selected: true })).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe('?tab=sso'));
+    await userEvent.keyboard('{Home}');
+    expect(screen.getByRole('tab', { name: 'Email' })).toHaveFocus();
+  });
+
+  it.each(TABS.map((tab, i) => [tab, LABELS[i]] as const))('titles the %s section with its name and description, the save in the actions row', async (tab, label) => {
+    every();
+    await renderRoute(`/settings?tab=${tab}`);
+    const panel = await screen.findByRole('tabpanel');
+    const heading = within(panel).getByRole('heading', { level: 2, name: label });
+    expect(heading).toHaveClass(classes.sectionTitle);
+    expect(within(panel).getByText(DESCRIPTIONS[tab])).toBeInTheDocument();
+    expect(heading.closest(`.${classes.formSection}`)).not.toBeNull();
+    const save = SAVE[tab];
+    if (save) {
+      const button = await within(panel).findByRole('button', { name: save });
+      expect(button.closest(`.${settingsClasses.formActions}`)).not.toBeNull();
+    }
+  });
+
+  it('keeps a local recovery administrator in mind on the single sign-on section', async () => {
+    every();
+    await renderRoute('/settings?tab=sso');
+    expect(await screen.findByText('Keep a local recovery administrator')).toBeInTheDocument();
+    expect(screen.getByText('A local account provides access if the identity provider is unavailable.')).toBeInTheDocument();
+    expect(screen.getByText('Keep a local recovery administrator').closest('[role="note"]')).not.toBeNull();
+  });
+
+  it('is fully translated in Turkish, the section names and descriptions included', async () => {
+    server.use(
+      ...sessionHandlers({ ...sessionFor('admin', 'tr'), stepup_until: '2099-01-01T00:00:00Z' }),
+      http.get('/api/v1/sso/settings', () => HttpResponse.json({ allow_admin_role: false, version: 0 })),
+      http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [] })),
+    );
+    await renderRoute('/settings?tab=sso', { languages: ['tr-TR'] });
+    expect(await screen.findByRole('tablist', { name: 'Ayar bölümleri' })).toBeInTheDocument();
+    expect(screen.getByText('Alice’i ekibinizin çalışma biçimine uyarlayın.')).toBeInTheDocument();
+    expect(await screen.findByText('Yerel kurtarma yöneticisi bulundurun')).toBeInTheDocument();
+    expectNoRawKeys();
   });
 });

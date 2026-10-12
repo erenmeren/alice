@@ -1,5 +1,5 @@
-import { Alert, Badge, Button, Code, Group, NativeSelect, NumberInput, Stack, Table, Text, TextInput, Title } from '@mantine/core';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Button, Code, NativeSelect, NumberInput, Stack, Table, Text, TextInput, Title } from '@mantine/core';
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from '@tanstack/react-query';
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createBackup, downloadBackup, getBackupSchedule, listBackups, saveBackupSchedule } from '../../api/endpoints';
@@ -12,7 +12,11 @@ import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { StepUpCancelled, useStepUp } from '../StepUpProvider';
+import { EmptyState, Notice, ResourceTable, StatusBadge } from '../ui';
+import ui from '../ui/ui.module.css';
+import { Icon } from '../../design/Icon';
 import { SavedNote } from './SavedNote';
+import classes from './settings.module.css';
 import { useChange, useSetting } from './useSetting';
 
 const UNITS = ['kilobyte', 'megabyte', 'gigabyte', 'terabyte'] as const;
@@ -88,6 +92,7 @@ export function BackupsTab() {
   const { run, confirm } = useStepUp();
   const client = useQueryClient();
   const list = useQuery({ queryKey: BACKUPS_KEY, queryFn: () => run(listBackups) });
+  const schedule = useSetting('backups', getBackupSchedule);
   const [downloadError, setDownloadError] = useState<unknown>(null);
   const [downloading, setDownloading] = useState(false);
   const rowId = useId();
@@ -116,104 +121,151 @@ export function BackupsTab() {
   };
 
   return (
-    <Stack gap="lg">
+    <Stack gap="md">
       {list.isPending && <LoadingIndicator />}
       <ErrorAlert error={list.error} />
-      {list.data && <StateLines state={list.data.state} />}
-      <Text size="sm">{t('backups.offHost')}</Text>
-      <Text size="sm">{t('backups.restoreHint')}</Text>
-      <Group>
-        <Button data-testid="backup-now" loading={backUp.isPending} onClick={() => backUp.mutate()}>
+      {list.data && <StateNotices state={list.data.state} />}
+      <div className={classes.grid2}>
+        {list.data && <StateCard state={list.data.state} />}
+        <ScheduleCard schedule={schedule.data} />
+      </div>
+      <Notice tone="info" title={t('backups.offHost')}>
+        {t('backups.restoreHint')}
+      </Notice>
+      <ErrorAlert error={downloadError} />
+      {list.data && list.data.items.length === 0 && (
+        <div className={ui.tablePanel}>
+          <EmptyState icon="DatabaseBackup" title={t('backups.empty')} />
+        </div>
+      )}
+      {list.data && list.data.items.length > 0 && (
+        <ResourceTable label={t('backups.tableLabel')} testId="backups-table" minWidth={720}>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>{t('backups.columns.name')}</Table.Th>
+              <Table.Th>{t('backups.columns.kind')}</Table.Th>
+              <Table.Th>{t('backups.columns.size')}</Table.Th>
+              <Table.Th>{t('backups.columns.created')}</Table.Th>
+              <Table.Th>{t('backups.columns.check')}</Table.Th>
+              <Table.Th>{t('backups.columns.actions')}</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {list.data.items.map((b, i) => (
+              <Table.Tr key={b.name}>
+                <Table.Td>
+                  <Code id={`${rowId}-${i}`} translate="no" style={{ overflowWrap: 'anywhere' }}>
+                    {b.name}
+                  </Code>
+                </Table.Td>
+                <Table.Td>
+                  <KindLabel kind={b.kind} />
+                </Table.Td>
+                <Table.Td>{formatSize(b.size, i18n.language)}</Table.Td>
+                <Table.Td>{formatDateTime(b.created_at, i18n.language)}</Table.Td>
+                <Table.Td>
+                  <StatusBadge tone={b.check === 'ok' ? 'success' : 'danger'} icon={b.check === 'ok' ? 'CircleCheck' : 'CircleAlert'}>
+                    {t(checkLabel(b))}
+                  </StatusBadge>
+                </Table.Td>
+                <Table.Td>
+                  {b.check !== 'unreadable' && (
+                    <Button
+                      size="xs"
+                      variant="default"
+                      leftSection={<Icon name="Download" size={14} />}
+                      disabled={downloading}
+                      data-testid={`backup-download-${b.name}`}
+                      // The file name is data: it describes the button instead of being part of its translated name.
+                      aria-describedby={`${rowId}-${i}`}
+                      onClick={() => void download(b.name)}
+                    >
+                      {t('backups.download')}
+                    </Button>
+                  )}
+                </Table.Td>
+              </Table.Tr>
+            ))}
+          </Table.Tbody>
+        </ResourceTable>
+      )}
+      <div className={classes.formActions}>
+        <Button data-testid="backup-now" leftSection={<Icon name="DatabaseBackup" size={15} />} loading={backUp.isPending} onClick={() => backUp.mutate()}>
           {t('backups.backUpNow')}
         </Button>
-      </Group>
+      </div>
       {backUp.isSuccess && (
-        <Text role="status" size="sm" c="teal.9">
+        <Text role="status" size="sm" c="var(--alice-success)">
           <CodeText i18nKey="backups.created" param="name" value={backUp.data.name} />
         </Text>
       )}
       <ErrorAlert error={backUp.error} />
-      <ErrorAlert error={downloadError} />
-      {list.data && list.data.items.length === 0 && <Text c="gray.7">{t('backups.empty')}</Text>}
-      {list.data && list.data.items.length > 0 && (
-        <Table.ScrollContainer minWidth={720}>
-          <Table striped data-testid="backups-table" aria-label={t('backups.tableLabel')}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t('backups.columns.name')}</Table.Th>
-                <Table.Th>{t('backups.columns.kind')}</Table.Th>
-                <Table.Th>{t('backups.columns.size')}</Table.Th>
-                <Table.Th>{t('backups.columns.created')}</Table.Th>
-                <Table.Th>{t('backups.columns.check')}</Table.Th>
-                <Table.Th>{t('backups.columns.actions')}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {list.data.items.map((b, i) => (
-                <Table.Tr key={b.name}>
-                  <Table.Td>
-                    <Code id={`${rowId}-${i}`} translate="no" style={{ overflowWrap: 'anywhere' }}>
-                      {b.name}
-                    </Code>
-                  </Table.Td>
-                  <Table.Td>
-                    <KindLabel kind={b.kind} />
-                  </Table.Td>
-                  <Table.Td>{formatSize(b.size, i18n.language)}</Table.Td>
-                  <Table.Td>{formatDateTime(b.created_at, i18n.language)}</Table.Td>
-                  <Table.Td>
-                    <Badge variant="light" color={b.check === 'ok' ? 'green' : 'red'} tt="none">
-                      {t(checkLabel(b))}
-                    </Badge>
-                  </Table.Td>
-                  <Table.Td>
-                    {b.check !== 'unreadable' && (
-                      <Button
-                        size="xs"
-                        variant="default"
-                        disabled={downloading}
-                        data-testid={`backup-download-${b.name}`}
-                        // The file name is data: it describes the button instead of being part of its translated name.
-                        aria-describedby={`${rowId}-${i}`}
-                        onClick={() => void download(b.name)}
-                      >
-                        {t('backups.download')}
-                      </Button>
-                    )}
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
-      <ScheduleSettings />
+      <ScheduleSettings query={schedule} />
     </Stack>
   );
 }
 
-function StateLines({ state }: { state: BackupState }) {
+// StateNotices are the backup alarms: no success for 48 hours (an alert), not configured yet, the last backup failed.
+function StateNotices({ state }: { state: BackupState }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {state.alarm && (
+        <Notice tone="danger" role="alert" title={t('backups.alarm')}>
+          {t('backups.alarmHelp')}
+        </Notice>
+      )}
+      {!state.configured && <Notice tone="warning" title={t('backups.notConfigured')} />}
+      {state.failing && <Notice tone="warning" title={t('backups.failing')} />}
+    </>
+  );
+}
+
+// StateCard is the design's micro-card for the last backup and the free space.
+function StateCard({ state }: { state: BackupState }) {
   const { t, i18n } = useTranslation();
   return (
-    <Stack gap="xs">
-      {state.alarm && (
-        <Alert color="red" role="alert" title={t('backups.alarm')}>
-          {t('backups.alarmHelp')}
-        </Alert>
-      )}
-      {!state.configured && <Alert color="yellow" role="note">{t('backups.notConfigured')}</Alert>}
-      {state.failing && <Text size="sm" c="red.9">{t('backups.failing')}</Text>}
-      <Text size="sm">{state.last_success_at ? t('backups.lastSuccess', { time: formatDateTime(state.last_success_at, i18n.language) }) : t('backups.never')}</Text>
-      <Text size="sm">{t('backups.freeSpace', { size: formatSize(state.free_bytes, i18n.language) })}</Text>
-    </Stack>
+    <div className={classes.microCard}>
+      <p className={classes.eyebrow}>{t('settings.page.lastBackup')}</p>
+      <div className={classes.microLines}>
+        <p>{state.last_success_at ? t('backups.lastSuccess', { time: formatDateTime(state.last_success_at, i18n.language) }) : t('backups.never')}</p>
+        <p>{t('backups.freeSpace', { size: formatSize(state.free_bytes, i18n.language) })}</p>
+      </div>
+    </div>
   );
 }
 
-function ScheduleSettings() {
-  const q = useSetting('backups', getBackupSchedule);
-  if (q.isPending) return <LoadingIndicator />;
-  if (q.isError) return <ErrorAlert error={q.error} />;
-  return <SchedulePanel schedule={q.data} />;
+// ScheduleCard is the design's micro-card for the daily schedule: the time and zone (data) and the next run.
+function ScheduleCard({ schedule }: { schedule: BackupSchedule | undefined }) {
+  const { t, i18n } = useTranslation();
+  if (!schedule) return null;
+  return (
+    <div className={classes.microCard}>
+      <p className={classes.eyebrow}>{t('settings.page.schedule')}</p>
+      <p className={classes.microValue} translate="no">
+        {schedule.time} {schedule.zone}
+      </p>
+      {schedule.next_at && (
+        <div className={classes.microLines}>
+          <p>{t('backups.schedule.next', { time: formatDateTime(schedule.next_at, i18n.language) })}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScheduleSettings({ query: q }: { query: UseQueryResult<BackupSchedule> }) {
+  const { t } = useTranslation();
+  return (
+    <section className={classes.subSection}>
+      <Title order={3} className={classes.subTitle}>
+        {t('backups.schedule.title')}
+      </Title>
+      {q.isPending && <LoadingIndicator />}
+      <ErrorAlert error={q.error} />
+      {q.data && <SchedulePanel schedule={q.data} />}
+    </section>
+  );
 }
 
 function SchedulePanel({ schedule }: { schedule: BackupSchedule }) {
@@ -222,10 +274,6 @@ function SchedulePanel({ schedule }: { schedule: BackupSchedule }) {
   const save = useChange('backups', schedule.version, saveBackupSchedule);
   return (
     <Stack gap="sm">
-      <Title order={2} size="h4">
-        {t('backups.schedule.title')}
-      </Title>
-      {schedule.next_at && <Text size="sm">{t('backups.schedule.next', { time: formatDateTime(schedule.next_at, i18n.language) })}</Text>}
       <ScheduleForm
         key={schedule.version}
         schedule={schedule}
@@ -267,7 +315,7 @@ function ScheduleForm({
 
   return (
     <form onSubmit={submit} noValidate>
-      <Stack gap="sm" maw={560}>
+      <Stack gap="sm">
         <TextInput
           label={t('backups.schedule.time')}
           description={t('backups.schedule.timeHelp')}
@@ -296,12 +344,12 @@ function ScheduleForm({
           clampBehavior="none"
           error={problems.retention ? t('backups.schedule.retentionInvalid') : fieldErrors.retention}
         />
-        <Group>
-          <Button type="submit" loading={busy}>
-            {t('backups.schedule.save')}
-          </Button>
-        </Group>
       </Stack>
+      <div className={classes.formActions}>
+        <Button type="submit" loading={busy} leftSection={<Icon name="Check" size={15} />}>
+          {t('backups.schedule.save')}
+        </Button>
+      </div>
     </form>
   );
 }

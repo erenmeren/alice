@@ -1,4 +1,6 @@
-import { Stack, Tabs, Title } from '@mantine/core';
+import { Tabs, Title } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertSettings } from '../components/settings/AlertSettings';
 import { BackupsTab } from '../components/settings/BackupsTab';
@@ -8,55 +10,79 @@ import { GeneralSettings } from '../components/settings/GeneralSettings';
 import { MailSettings } from '../components/settings/MailSettings';
 import { RecipientsSettings } from '../components/settings/RecipientsSettings';
 import { SSOSettings } from '../components/sso/SSOSettings';
+import { PageHeader, Panel } from '../components/ui';
+import { Icon, type IconName } from '../design/Icon';
 import { useUrlFilters } from '../hooks/useUrlFilters';
+import classes from './SettingsPage.module.css';
 
 const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'forwarding', 'sso'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
+const ICONS: Record<Tab, IconName> = {
+  mail: 'Mail',
+  recipients: 'Users',
+  alerts: 'Bell',
+  general: 'Settings2',
+  backups: 'DatabaseBackup',
+  https: 'LockKeyhole',
+  forwarding: 'Network',
+  sso: 'ShieldCheck',
+};
+
+const BODIES: Record<Tab, () => ReactNode> = {
+  mail: () => <MailSettings />,
+  recipients: () => <RecipientsSettings />,
+  alerts: () => <AlertSettings />,
+  general: () => <GeneralSettings />,
+  backups: () => <BackupsTab />,
+  https: () => <HttpsTab />,
+  forwarding: () => <ForwardingTab />,
+  sso: () => <SSOSettings />,
+};
+
 // SettingsPage holds the Administrator's settings: mail, recipients, alert thresholds, general, backups, the HTTPS
-// certificate, audit forwarding and single sign-on. The tab is
-// in the address (?tab=), so a link opens it. Only the open tab is drawn, and each reads its own setting through step-up.
+// certificate, audit forwarding and single sign-on, in the design's settings layout (R16): the sections as a vertical
+// tab list from 768 px (a scrolling row on a phone) and the open section in a panel with its heading and description.
+// The tab is in the address (?tab=), so a link opens it. Only the open tab is drawn, and each reads its own setting
+// through step-up.
 export function SettingsPage() {
   const { t } = useTranslation();
   const [filters, setFilters] = useUrlFilters(TAB_KEYS);
+  const wide = useMediaQuery('(min-width: 48em)', false, { getInitialValueInEffect: false });
   const tab: Tab = (TABS as readonly string[]).includes(filters.tab) ? (filters.tab as Tab) : 'mail';
   return (
-    <Stack gap="md">
-      <Title order={1}>{t('settings.title')}</Title>
-      <Tabs value={tab} onChange={(v) => v && setFilters({ tab: v })} keepMounted={false}>
+    <>
+      <PageHeader title={t('settings.title')} description={t('settings.page.description')} />
+      <Tabs
+        unstyled
+        value={tab}
+        onChange={(v) => v && setFilters({ tab: v })}
+        keepMounted={false}
+        orientation={wide ? 'vertical' : 'horizontal'}
+        classNames={{ root: classes.layout, list: classes.navList, tab: classes.navTab, panel: classes.panel }}
+      >
         <Tabs.List aria-label={t('settings.tabsLabel')}>
           {TABS.map((x) => (
-            <Tabs.Tab key={x} value={x}>
+            <Tabs.Tab key={x} value={x} leftSection={<Icon name={ICONS[x]} size={15} />}>
               {t(`settings.tabs.${x}`)}
             </Tabs.Tab>
           ))}
         </Tabs.List>
-        <Tabs.Panel value="mail" pt="md">
-          <MailSettings />
-        </Tabs.Panel>
-        <Tabs.Panel value="recipients" pt="md">
-          <RecipientsSettings />
-        </Tabs.Panel>
-        <Tabs.Panel value="alerts" pt="md">
-          <AlertSettings />
-        </Tabs.Panel>
-        <Tabs.Panel value="general" pt="md">
-          <GeneralSettings />
-        </Tabs.Panel>
-        <Tabs.Panel value="backups" pt="md">
-          <BackupsTab />
-        </Tabs.Panel>
-        <Tabs.Panel value="https" pt="md">
-          <HttpsTab />
-        </Tabs.Panel>
-        <Tabs.Panel value="forwarding" pt="md">
-          <ForwardingTab />
-        </Tabs.Panel>
-        <Tabs.Panel value="sso" pt="md">
-          <SSOSettings />
-        </Tabs.Panel>
+        {TABS.map((x) => (
+          <Tabs.Panel key={x} value={x}>
+            <Panel>
+              <div className={classes.formSection}>
+                <Title order={2} className={classes.sectionTitle}>
+                  {t(`settings.tabs.${x}`)}
+                </Title>
+                <p className={classes.sectionText}>{t(`settings.page.${x}`)}</p>
+                {BODIES[x]()}
+              </div>
+            </Panel>
+          </Tabs.Panel>
+        ))}
       </Tabs>
-    </Stack>
+    </>
   );
 }

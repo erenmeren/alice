@@ -7,9 +7,11 @@ import { getSMTP, saveSMTP, sendTestMail, trustSMTPCertificate, untrustSMTPCerti
 import { useAuth } from '../../auth/AuthProvider';
 import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
+import { Icon } from '../../design/Icon';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
 import { SavedNote } from './SavedNote';
+import classes from './settings.module.css';
 import { TrustCertificateDialog } from './TrustCertificateDialog';
 import { useChange, useSetting } from './useSetting';
 
@@ -49,20 +51,20 @@ function MailPanel({ settings, draft, onDraft }: { settings: SMTPSettings; draft
   const trusted = settings.trusted_certificate;
 
   return (
-    <Stack gap="lg">
+    <Stack gap="sm">
       {/* Keyed by the version: a saved or re-read setting draws the form again, which empties the password field. */}
       <MailForm key={settings.version} settings={settings} draft={draft} onDraft={onDraft} onSave={(body) => save.mutate(body)} busy={save.isPending} fieldErrors={fieldErrorsOf(save.error, t, i18n)} />
       <SavedNote show={save.isSuccess} />
       <ErrorAlert error={save.error} />
 
       {trusted && (
-        <Stack gap="xs">
+        <Stack gap="xs" className={classes.microCard}>
           {/* The fingerprint is hexadecimal data: it is never translated or case-changed. */}
           <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
             {t('settings.mail.trusted', { fingerprint: trusted.fingerprint })}
           </Text>
           <Group>
-            <Button variant="default" loading={untrust.isPending} onClick={() => untrust.mutate()}>
+            <Button variant="default" size="xs" loading={untrust.isPending} onClick={() => untrust.mutate()}>
               {t('settings.mail.untrust')}
             </Button>
           </Group>
@@ -70,15 +72,15 @@ function MailPanel({ settings, draft, onDraft }: { settings: SMTPSettings; draft
         </Stack>
       )}
 
-      <Stack gap="xs" maw={420}>
-        <TextInput label={t('settings.mail.testTo')} type="email" value={to} onChange={(e) => setTo(e.currentTarget.value)} autoComplete="email" />
-        <Group>
-          <Button variant="default" loading={test.isPending} onClick={() => test.mutate()}>
+      <Stack gap="xs" className={classes.subSection}>
+        <Group align="flex-end" gap="sm">
+          <TextInput style={{ flex: '1 1 240px' }} label={t('settings.mail.testTo')} type="email" value={to} onChange={(e) => setTo(e.currentTarget.value)} autoComplete="email" />
+          <Button variant="default" leftSection={<Icon name="Mail" size={15} />} loading={test.isPending} onClick={() => test.mutate()}>
             {t('settings.mail.sendTest')}
           </Button>
         </Group>
         {test.isSuccess && (
-          <Text role="status" size="sm" c="teal.9">
+          <Text role="status" size="sm" c="var(--alice-success)">
             {t('settings.mail.testSent', { to: to.trim() })}
           </Text>
         )}
@@ -131,9 +133,11 @@ function MailForm({ settings, draft, onDraft, onSave, busy, fieldErrors }: { set
 
   return (
     <form onSubmit={submit}>
-      <Stack gap="sm" maw={560}>
-        <TextInput label={t('settings.mail.host')} value={host} onChange={(e) => setHost(e.currentTarget.value)} error={fieldErrors.host} autoComplete="off" />
-        <NumberInput label={t('settings.mail.port')} value={port} onChange={setPort} min={1} max={65535} allowDecimal={false} error={fieldErrors.port} />
+      <Stack gap="sm">
+        <div className={classes.grid2}>
+          <TextInput label={t('settings.mail.host')} value={host} onChange={(e) => setHost(e.currentTarget.value)} error={fieldErrors.host} autoComplete="off" />
+          <NumberInput label={t('settings.mail.port')} value={port} onChange={setPort} min={1} max={65535} allowDecimal={false} error={fieldErrors.port} />
+        </div>
         <NativeSelect
           label={t('settings.mail.tlsMode')}
           value={tlsMode}
@@ -154,12 +158,12 @@ function MailForm({ settings, draft, onDraft, onSave, busy, fieldErrors }: { set
           autoComplete="new-password"
         />
         <Textarea label={t('settings.mail.caPem')} value={caPem} onChange={(e) => setCaPem(e.currentTarget.value)} error={fieldErrors.ca_pem} autosize minRows={3} maxRows={8} spellCheck={false} styles={{ input: { fontFamily: 'monospace' } }} />
-        <Group>
-          <Button type="submit" loading={busy}>
-            {t('settings.mail.save')}
-          </Button>
-        </Group>
       </Stack>
+      <div className={classes.formActions}>
+        <Button type="submit" loading={busy} leftSection={<Icon name="Check" size={15} />}>
+          {t('settings.mail.save')}
+        </Button>
+      </div>
     </form>
   );
 }

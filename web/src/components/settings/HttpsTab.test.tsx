@@ -6,6 +6,7 @@ import { adminSession, errorResponse, httpsInfoFixture, sessionFor, sessionHandl
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
+import classes from './settings.module.css';
 
 const steppedUp = { ...adminSession, stepup_until: '2099-01-01T00:00:00Z' };
 const steppedUpTr = { ...sessionFor('admin', 'tr'), stepup_until: '2099-01-01T00:00:00Z' };
@@ -20,7 +21,20 @@ describe('HttpsTab', () => {
     expect(subject.tagName).toBe('CODE');
     expect(screen.getByText('alice.example.test, 10.0.0.5').tagName).toBe('CODE');
     expect(screen.getByText('ab'.repeat(32))).toHaveAttribute('translate', 'no');
-    expect(screen.getByText(`Valid until: ${formatDateTime('2027-10-01T00:00:00Z', 'en')}`)).toBeInTheDocument();
+    // The certificate in use is the design's fact list: a term and its value, the data in <code>.
+    const facts = screen.getByLabelText('Certificate in use');
+    expect(facts.tagName).toBe('DL');
+    const until = within(facts).getByText('Valid until');
+    expect(until.tagName).toBe('DT');
+    expect(until.nextElementSibling).toHaveTextContent(formatDateTime('2027-10-01T00:00:00Z', 'en'));
+    expect(within(facts).getByText('Fingerprint (SHA-256)').nextElementSibling).toHaveTextContent('ab'.repeat(32));
+    expect(within(facts).getByText('Subject').nextElementSibling?.querySelector('code')).toHaveTextContent('CN=alice.example.test');
+    expect(screen.getByTestId('https-temporary')).toHaveAttribute('role', 'note');
+    // The two formats are the design's bordered choice rows; the upload sits in the form's actions row.
+    for (const name of ['PEM: a certificate file and a key file', 'PFX (PKCS#12): one file with a password']) {
+      expect(screen.getByRole('radio', { name }).closest(`.${classes.checkOption}`)).not.toBeNull();
+    }
+    expect(screen.getByRole('button', { name: 'Upload certificate' }).closest(`.${classes.formActions}`)).not.toBeNull();
     expect(screen.getByTestId('https-upload-form')).toBeInTheDocument();
     expectNoRawKeys();
   });

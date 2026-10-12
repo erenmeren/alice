@@ -5,6 +5,8 @@ import { createI18n } from '../../i18n';
 import { adminSession, errorResponse, providerFixture, sessionHandlers } from '../../test/fixtures';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
+import ui from '../ui/ui.module.css';
+import classes from '../settings/settings.module.css';
 
 const steppedUp = { ...adminSession, stepup_until: '2099-01-01T00:00:00Z' };
 const settings = (allow = false, version = 0) => HttpResponse.json({ allow_admin_role: allow, version }, { headers: { ETag: `"${version}"` } });
@@ -44,6 +46,30 @@ describe('SSOSettings', () => {
     expect(await within(section).findByText('alice-ops')).toHaveProperty('tagName', 'CODE');
     expect(within(section).getByRole('cell', { name: 'Operator' })).toBeInTheDocument();
     expect(screen.getByText(/confirm their identity at the identity provider/)).toBeInTheDocument();
+  });
+
+  it('draws a provider as a panel with the design\'s head, the mappings in a resource table and the switch in a row', async () => {
+    base([
+      http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [providerFixture(), providerFixture({ id: 'p2', name: 'Old IdP', enabled: false })] })),
+      http.get('/api/v1/sso/group-mappings', () =>
+        HttpResponse.json({ items: [{ id: 'm1', provider_id: 'p1', group: 'alice-ops', role: 'operator', created_at: '2026-10-07T09:00:00Z' }] }),
+      ),
+    ]);
+    await renderRoute('/settings?tab=sso');
+    const section = await screen.findByRole('region', { name: 'Corp IdP' });
+    expect(section).toHaveClass(ui.panel);
+    const head = within(section).getByRole('heading', { level: 4, name: 'Corp IdP' }).closest(`.${classes.providerHead}`) as HTMLElement;
+    expect(within(head).getByText('On').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(within(head).getByText('https://idp.example.com').tagName).toBe('CODE');
+    expect(within(head).getByRole('button', { name: 'Edit Corp IdP' })).toBeInTheDocument();
+    const old = screen.getByRole('region', { name: 'Old IdP' });
+    expect(within(old).getByText('Off').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
+    const table = await within(section).findByRole('table', { name: 'Group mappings' });
+    expect(table.closest(`.${ui.tablePanel}`)).not.toBeNull();
+    expect(screen.getByRole('heading', { level: 3, name: 'Identity providers' })).toBeInTheDocument();
+    const allow = screen.getByRole('switch', { name: 'SSO users may be Admin' });
+    expect(allow.closest(`.${ui.switchRow}`)).not.toBeNull();
+    expect(allow).toHaveAccessibleDescription(/Off by default/);
   });
 
   it('adds a mapping and removes one, sending the provider with the delete', async () => {

@@ -1,4 +1,4 @@
-import { Button, Code, Group, NativeSelect, Stack, Table, Text, TextInput, VisuallyHidden } from '@mantine/core';
+import { Button, Code, Group, NativeSelect, Stack, Table, Text, TextInput, Title, VisuallyHidden } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,8 @@ import { ErrorAlert } from '../ErrorAlert';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
 import { WRAP } from '../wrap';
+import { DialogActions, ResourceTable } from '../ui';
+import classes from '../settings/settings.module.css';
 
 const ROLES: Role[] = ['admin', 'operator', 'auditor'];
 
@@ -41,17 +43,18 @@ export function MappingsTable({ providerId }: { providerId: string }) {
 
   return (
     <Stack gap="xs">
-      <Text fw={600}>{t('sso.mappings')}</Text>
+      <Title order={5} className={classes.subTitle} mb={0} mt="xs">
+        {t('sso.mappings')}
+      </Title>
       {list.isPending && <LoadingIndicator />}
       <ErrorAlert error={list.error} />
       {list.isSuccess &&
         (items.length === 0 ? (
-          <Text size="sm" c="gray.7">
+          <Text size="sm" c="dimmed">
             {t('sso.noMappings')}
           </Text>
         ) : (
-          <Table.ScrollContainer minWidth={320}>
-            <Table>
+          <ResourceTable label={t('sso.mappings')} minWidth={320}>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>{t('sso.columns.group')}</Table.Th>
@@ -78,20 +81,19 @@ export function MappingsTable({ providerId }: { providerId: string }) {
                   </Table.Tr>
                 ))}
               </Table.Tbody>
-            </Table>
-          </Table.ScrollContainer>
+          </ResourceTable>
         ))}
       <ErrorAlert error={remove.error} />
       {confirm && (
         <AppModal opened onClose={() => setConfirm(null)} title={t('sso.removeMappingTitle', { group: confirm.group })}>
           <Stack gap="sm">
             <Text size="sm">{t('sso.removeMappingText')}</Text>
-            <Group justify="flex-end">
+            <DialogActions>
               <Button variant="default" onClick={() => setConfirm(null)}>
                 {t('ui.cancel')}
               </Button>
               <Button
-                color="red.9"
+                color="red"
                 onClick={() => {
                   remove.mutate(confirm.id);
                   setConfirm(null);
@@ -99,7 +101,7 @@ export function MappingsTable({ providerId }: { providerId: string }) {
               >
                 {t('sso.removeMappingConfirm')}
               </Button>
-            </Group>
+            </DialogActions>
           </Stack>
         </AppModal>
       )}
