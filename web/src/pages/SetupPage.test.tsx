@@ -184,7 +184,8 @@ describe('setup wizard', () => {
     expect(await screen.findByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
     // The setup session CSRF token is used before the admin exists, the admin session token after.
     expect(csrfSeen).toEqual(['setup-csrf', 'csrf-admin', 'keep-temporary', 'mail-skip', 'evaluation']);
-  });
+    // Eleven screens and the dashboard's shell at the end: under a loaded test run this takes longer than 5 s.
+  }, 20_000);
 
   it('explains a wrong setup code', async () => {
     server.use(
