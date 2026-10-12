@@ -181,6 +181,16 @@ export function LoginPage() {
   const [withCodes, setWithCodes] = useState<SessionWithCodes | null>(null);
   const [error, setError] = useState<unknown>(null);
 
+  // The enrollment and recovery-code phases replace the form the person was in: focus moves to the new phase's title
+  // (the code phase focuses its own field).
+  const phaseArea = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (phase !== 'enroll' && phase !== 'codes') return;
+    const title = phaseArea.current?.querySelector<HTMLElement>('h2');
+    title?.setAttribute('tabindex', '-1');
+    title?.focus();
+  }, [phase]);
+
   // RequireAuth saved where the user wanted to go; safeReturnPath keeps that same-origin and never /login.
   const ssoReason = ssoErrorReason(params.get('sso_error'));
   const returnTo = safeReturnPath((location.state as { from?: unknown } | null)?.from);
@@ -231,7 +241,7 @@ export function LoginPage() {
         {t('login.title')}
       </Title>
       {phase === 'password' ? <p className={classes.subtitle}>{t('login.subtitle')}</p> : <div className={classes.subtitle} />}
-      <Stack>
+      <Stack ref={phaseArea}>
         {phase === 'password' && params.get('ended') === '1' && !error && (
           <Alert color="yellow">{t('login.sessionEnded')}</Alert>
         )}

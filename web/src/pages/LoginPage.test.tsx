@@ -111,11 +111,14 @@ describe('sign-in page', () => {
     );
     const { router } = await renderRoute('/login');
     await signIn();
-    expect(await screen.findByRole('heading', { name: 'Set up your authenticator app' })).toBeInTheDocument();
+    const enrollHeading = await screen.findByRole('heading', { name: 'Set up your authenticator app' });
+    // The sign-in form has gone: focus moves to the new phase's title.
+    await waitFor(() => expect(enrollHeading).toHaveFocus());
     expect(screen.getByTestId('totp-secret')).toHaveTextContent('JBSWY3DPEHPK3PXP');
     await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
     await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
-    expect(await screen.findByRole('heading', { name: 'Save your recovery codes' })).toBeInTheDocument();
+    const codesHeading = await screen.findByRole('heading', { name: 'Save your recovery codes' });
+    await waitFor(() => expect(codesHeading).toHaveFocus());
     expect(router.state.location.pathname).toBe('/login');
     await userEvent.click(screen.getByLabelText('I saved these codes in a safe place'));
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
