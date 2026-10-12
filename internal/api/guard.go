@@ -437,13 +437,18 @@ func isActivity(r *http.Request) bool {
 	return r.Header.Get(activityHeader) == "1" && SameOrigin(r)
 }
 
+// bearerScheme is the authentication scheme of an API token, with the space that ends it. The scheme name is
+// case-insensitive (RFC 9110 §11.1), so "bearer" and "BEARER" are the same scheme (review L-18).
+const bearerScheme = "Bearer "
+
 func hasBearer(r *http.Request) bool {
-	return strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
+	v := r.Header.Get("Authorization")
+	return len(v) >= len(bearerScheme) && strings.EqualFold(v[:len(bearerScheme)], bearerScheme)
 }
 
 // bearerFrom returns the bearer token of r (hasBearer must hold).
 func bearerFrom(r *http.Request) string {
-	return strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	return strings.TrimSpace(r.Header.Get("Authorization")[len(bearerScheme):])
 }
 
 // SameOrigin reports whether a state-changing request may come from this site: it

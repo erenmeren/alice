@@ -85,6 +85,25 @@ func TestBearerTokensNeedNoCSRFToken(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 }
 
+// RFC 9110 §11.1: the authentication scheme is case-insensitive, so "bearer", "BEARER" and extra spaces after the
+// scheme name the same token (review L-18).
+func TestBearerSchemeIsCaseInsensitive(t *testing.T) {
+	h, _ := guardedHandler(t, testDeps(t, nil), rbac.Read, limitDefault)
+	for _, header := range []string{"bearer alice_read_admin", "BEARER alice_read_admin", "BeArEr   alice_read_admin"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/probe", nil)
+		req.Header.Set("Authorization", header)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code, header)
+		assert.JSONEq(t, `{"user":"admin"}`, rec.Body.String(), header)
+	}
+	for _, header := range []string{"Basic YWxpY2U6eA==", "Bearer", "Bearertoken", "Bearer\talice_read_admin", "Bear alice_read_admin"} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/probe", nil)
+		req.Header.Set("Authorization", header)
+		assert.False(t, hasBearer(req), "%q is no bearer credential", header)
+	}
+}
+
 func TestTokenIsNeverAcceptedFromACookie(t *testing.T) {
 	h, _ := guardedHandler(t, testDeps(t, nil), rbac.Read, limitDefault)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/probe", nil)
