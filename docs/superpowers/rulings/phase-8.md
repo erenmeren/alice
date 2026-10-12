@@ -202,6 +202,20 @@ are false positives and are allowlisted by fingerprint with a comment (0ddf458):
 four characters `AAAA` (`internal/license/issuer/purpose_test.go`, a negative test of the release key parser, 0d3c6b4)
 and ten Go test names in the traceability map and document (11c2bef). No path or rule is allowlisted.
 
+## Final runs (Task 19, Docker alone)
+
+- `make release-gates TRIVY_IMAGE="--network host <the pinned image>"` on f768b68 (2026-10-11): `ci` failed in
+  `internal/sshkeys:TestGenerateStoresAnEnvelope` (a probabilistic assertion, fixed a269e42) and `e2e-browsers` had 6
+  failures, all the forwarding check that ff09d01 had scoped to the form (fixed 5d28639); every other gate passed.
+- The next run on 5d28639 failed in `make ci` on `TestRestoreIsAllOrNothing/error/staged` (a session that came and
+  went; fixed in the tests, da728cb) and was stopped after the `ci` gate.
+- Final: `make release-gates` on da728cb (2026-10-12, 175 minutes, nothing else using Docker): `ci` 0 (the whole
+  `make ci`), `matrix-check` 0, `reproducible-check` 0, `test-release` 0, `test-systemd` 0, `zap-baseline` 0,
+  `testssl` 0 (A+), `test-backup-cycle` 0, `e2e-browsers` 0 (366 passed), `release-keycheck` 2 (no production key:
+  the owner's) — decision: the phase closes with `release-keycheck` the only failing gate, as the plan expects; the
+  production stage (`make release`) stays impossible until the owner commits the keys — cost if wrong: none; the
+  stage refuses the log by itself.
+
 ## Final review
 
 Not held at the time of writing; the controller dispatches it after Task 19 and records its outcome here.
@@ -228,7 +242,8 @@ Commits per task (from `git log` and the ledger; a range includes the fix rounds
 - Task 13: 0296750, bfe404c, f0206d7. Task 14: c4ca26d, a4abe0f, 73892b1, a47c002, 11c2bef, 06d1023.
 - Task 15: 8f488ae, bb213fc, 1c8a9b4, 1cf18ab, 5ea2fbe, ba7d67b, 526f6ee, e3ad353, dd24391.
 - Task 16: f7856df, 2bc4be5, 14f74a0, 677c268, 5283c31, 581b437, 344cfd0, 32efb61. Task 17: 9ebaed2. Task 18: 30d020c.
-- Task 19: 0ddf458, e01135a, 06b402f, b806f35, ff09d01, 305f4e2, 0686aa8 and the documentation commits.
+- Task 19: 0ddf458, e01135a, 06b402f, b806f35, ff09d01, 305f4e2, 0686aa8, 3d4bcaa, 41a49e9, f768b68, a269e42,
+  5d28639, da728cb and the evidence commit.
 
 ## Carried to later phases
 

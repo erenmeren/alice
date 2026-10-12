@@ -46,27 +46,27 @@ never a pass.
 
 | # | Check | Command | Expected | Development runs | Final run |
 |---|---|---|---|---|---|
-| 1 | Unit tests, all packages, race detector | `make test` | ok | ok per package in every report | PENDING-FINAL-RUN |
-| 2 | Integration tests, all packages | `make test-integration` (run inside `make coverage`) | ok | ok per package in every report | PENDING-FINAL-RUN |
-| 3 | F-85 full cycle with a test license | `make test-backup-cycle` | `--- PASS: TestF85FullCycle` | ok (Task 5, Task 15) | PENDING-FINAL-RUN |
-| 4 | Release harness: install matrix, F-85 drill, restore negatives, update and rollback (F-68), tampered and downgrade, uninstall | `make test-release` | every subtest PASS | ok in 1104 s after f0206d7 (Task 13 fix) | PENDING-FINAL-RUN |
-| 5 | Real-systemd Nginx job | `make test-systemd` | PASS | `TestRealSystemdNginx` PASS, systemd 249, nginx 1.18.0 (Task 15) | PENDING-FINAL-RUN |
-| 6 | Reproducible binaries | `make reproducible-check` | identical bytes | ok (Task 12) | PENDING-FINAL-RUN |
-| 7 | ZAP baseline per role and API scan | `make zap-baseline` | no Medium or High | 0 High, 0 Medium; Low: 90004, 2, 100001 (Task 15, bb213fc; again after e3ad353) | PENDING-FINAL-RUN |
-| 8 | testssl.sh on the release image | `make testssl` | A or A+ | A+ (score 96) with the test-CA ECDSA P-256 leaf; B with the temporary certificate (not a CA) | PENDING-FINAL-RUN |
-| 9 | Playwright, Chromium (the `make ci` set) | `make e2e` (inside `make ci`) | all pass | 366/366 on three browsers (Task 16, 32efb61) | PENDING-FINAL-RUN |
-| 10 | Playwright, Chromium, Firefox and WebKit, EN and TR | `make e2e-up && make e2e-browsers; make e2e-down` | all pass | 366/366 (Task 16, 32efb61) | PENDING-FINAL-RUN |
+| 1 | Unit tests, all packages, race detector | `make test` | ok | ok per package in every report | ok, every package (inside `make ci`, da728cb, 2026-10-12) |
+| 2 | Integration tests, all packages | `make test-integration` (run inside `make coverage`) | ok | ok per package in every report | ok, every package (inside `make coverage`, da728cb); the two restore-test flakes fixed in 3d4bcaa and da728cb, the `sshkeys` one in a269e42 |
+| 3 | F-85 full cycle with a test license | `make test-backup-cycle` | `--- PASS: TestF85FullCycle` | ok (Task 5, Task 15) | `--- PASS: TestF85FullCycle` (in `make ci` and as its own gate, da728cb) |
+| 4 | Release harness: install matrix, F-85 drill, restore negatives, update and rollback (F-68), tampered and downgrade, uninstall | `make test-release` | every subtest PASS | ok in 1104 s after f0206d7 (Task 13 fix) | ok in 1027.9 s (da728cb): `TestReleaseInstallMatrix` (ubuntu22, debian12, rocky9), `TestReleaseF85Drill`, `TestReleaseRestoreNegatives` (10 cases), `TestReleaseUpdateAndRollback` (failing-migration, killed-migration, stopped-before-change), `TestReleaseRefusesTamperedAndDowngrade` (3 cases), `TestReleaseUninstallKeepsData` all PASS |
+| 5 | Real-systemd Nginx job | `make test-systemd` | PASS | `TestRealSystemdNginx` PASS, systemd 249, nginx 1.18.0 (Task 15) | `TestRealSystemdNginx` PASS (discovery, deploy_committed_through_systemd, nginx_t_fails_restored; da728cb) |
+| 6 | Reproducible binaries | `make reproducible-check` | identical bytes | ok (Task 12) | ok: `alice` sha256 3f007df6…a65846 and both helpers identical in two clean builds (da728cb) |
+| 7 | ZAP baseline per role and API scan | `make zap-baseline` | no Medium or High | 0 High, 0 Medium; Low: 90004, 2, 100001 (Task 15, bb213fc; again after e3ad353) | exit 0, 0 High, 0 Medium in every role; Low: 90004 (admin, operator, auditor, api-admin), 2 Private IP Disclosure (all roles), 100001 (api-admin, 12); every authenticated scan kept its session (da728cb) |
+| 8 | testssl.sh on the release image | `make testssl` | A or A+ | A+ (score 96) with the test-CA ECDSA P-256 leaf; B with the temporary certificate (not a CA) | A+, score 96 (protocol 100, key exchange 100, cipher 90), test-CA certificate (da728cb) |
+| 9 | Playwright, Chromium (the `make ci` set) | `make e2e` (inside `make ci`) | all pass | 366/366 on three browsers (Task 16, 32efb61) | 122 passed in 29.1 min (da728cb) |
+| 10 | Playwright, Chromium, Firefox and WebKit, EN and TR | `make e2e-up && make e2e-browsers; make e2e-down` | all pass | 366/366 (Task 16, 32efb61) | 366 passed in 1.7 h, Playwright 1.63.0 (da728cb); the run before on f768b68 had 6 failures, all the forwarding check of ff09d01, fixed in 5d28639 |
 | 11 | Mutation testing (advisory) | `make mutation` | recorded | `backup/format` efficacy 100 %, `license` 90.75 %, `rbac` 100 % (Task 15) | not re-run (advisory; nightly) |
 | 12 | Fuzzing, 5 minutes per new target | `go test -fuzz … -fuzztime 5m` | no crash | `FuzzOpenAPIInputs` 1,198,119 executions; `FuzzBackupHeader`, `FuzzBackupStream` and the payload decoder 5 minutes each (Tasks 1, 2, 14) | not re-run |
-| 13 | Coverage floors (Go 1.27.2) | `make coverage` | every floor holds | `internal/jobs` 88.98 % under its floor of 89 (Task 19, first run) | PENDING-FINAL-RUN |
-| 14 | The whole local pipeline | `make ci TRIVY_IMAGE="--network host <pinned image>"` | exit 0 | not run in full before Task 19 | PENDING-FINAL-RUN |
-| 15 | Secrets in the history | `make secrets-scan` | no leaks | 11 false positives in 0d3c6b4 and 11c2bef (Task 15); allowlisted by fingerprint after triage (0ddf458), then no leaks | PENDING-FINAL-RUN |
-| 16 | Go, npm and OSV vulnerabilities | `make vuln` (with `make osv`) | none | 0 after a4abe0f (Task 14) | PENDING-FINAL-RUN |
-| 17 | Trivy, source tree | `make fs-scan` | 0 HIGH/CRITICAL | not recorded in Phase 8 | PENDING-FINAL-RUN |
-| 18 | Trivy, image | `make image-scan` | 0 HIGH/CRITICAL | not recorded in Phase 8 | PENDING-FINAL-RUN |
-| 19 | Matrix traceability, strict | `go run ./tools/matrixcheck -strict …` (also in `make lint`) | exit 0 | 5 gaps (Task 14) | PENDING-FINAL-RUN |
-| 20 | Production keys | `make release-keycheck` | FAILS until the owner commits the production release and license keys | fails: no `rk-*.pem` (Task 15) | PENDING-FINAL-RUN |
-| 21 | Every one-machine release gate, logged | `make release-gates` | every gate 0 except `release-keycheck` | partial run only (Task 15) | PENDING-FINAL-RUN |
+| 13 | Coverage floors (Go 1.27.2) | `make coverage` | every floor holds | `internal/jobs` 88.98 % under its floor of 89 (Task 19, first run) | every floor holds (da728cb; `internal/backup` 85.0 % over its 84, `internal/jobs` 89.2 %) |
+| 14 | The whole local pipeline | `make ci TRIVY_IMAGE="--network host <pinned image>"` | exit 0 | not run in full before Task 19 | exit 0 as the `ci` gate of `make release-gates` (da728cb): lint (with `matrix-check -strict`), test, coverage, perf (worst p95 14 % of budget), test-backup-cycle, test-ssh, build, release-symcheck, i18n-check, web-lint, web-coverage (statements 94.75 %), vuln, secrets-scan, fs-scan, e2e-up, e2e-hardening-check, e2e, image-check, image-scan |
+| 15 | Secrets in the history | `make secrets-scan` | no leaks | 11 false positives in 0d3c6b4 and 11c2bef (Task 15); allowlisted by fingerprint after triage (0ddf458), then no leaks | no leaks found (da728cb, 2026-10-12) |
+| 16 | Go, npm and OSV vulnerabilities | `make vuln` (with `make osv`) | none | 0 after a4abe0f (Task 14) | `go mod verify` ok; govulncheck: 0 affecting the code (1 in a required module, not called); npm audit 0; osv-scanner 0 (da728cb) |
+| 17 | Trivy, source tree | `make fs-scan` | 0 HIGH/CRITICAL | not recorded in Phase 8 | 0 HIGH/CRITICAL (go.mod, web/go.mod, web lockfile; da728cb) |
+| 18 | Trivy, image | `make image-scan` | 0 HIGH/CRITICAL | not recorded in Phase 8 | 0 HIGH/CRITICAL in `alice:ci` (debian 12.15 packages and the Go binary; da728cb); the postgres image is not scanned by `make image-scan` (its SBOM is made by `make sbom`) |
+| 19 | Matrix traceability, strict | `go run ./tools/matrixcheck -strict …` (also in `make lint`) | exit 0 | 5 gaps (Task 14) | exit 0: 202 IDs, 193 by tests, 7 partial, 0 pending, 0 owner, 2 deferred, 0 gaps (da728cb) |
+| 20 | Production keys | `make release-keycheck` | FAILS until the owner commits the production release and license keys | fails: no `rk-*.pem` (Task 15) | exit 2 as expected: no production release public key in `deploy/release/keys` (da728cb) |
+| 21 | Every one-machine release gate, logged | `make release-gates` | every gate 0 except `release-keycheck` | partial run only (Task 15) | `bin/release-gates.log` of da728cb (2026-10-12, 175 min): ci 0, matrix-check 0, reproducible-check 0, test-release 0, test-systemd 0, zap-baseline 0, testssl 0, test-backup-cycle 0, e2e-browsers 0, release-keycheck 2 (expected); tree unchanged during the run |
 | 22 | ZAP full active scan | `make zap-full` | no Medium or High | — | NOT RUN (owner) |
 | 23 | Release fuzzing, 30 minutes per target | `make fuzz-release` | no crash | — | NOT RUN (owner) |
 | 24 | VM installs, air-gapped variant, Rocky 9 enforcing | release checklist section 2 | see there | — | NOT RUN (owner) |
@@ -246,6 +246,8 @@ findings S-1 and S-2 were design changes made before any code. Open minors are i
 | T16 M-1, M-2 | Tests | Minor | Two e2e-only functions not guarded by release-symcheck; an assertion not scoped to its form | Fixed ff09d01 |
 | Matrix gaps | Tests | — | L-56, L-57, A-11, F-64, F-65 had no test | Tests e01135a, b806f35; rulings G-1 to G-8 |
 | Coverage | Tests | — | `internal/jobs` one statement under its floor | Tests 0686aa8 |
+| Flaky tests | Tests | — | Restore tests refused at random by a session of a just-closed pool or a passing server process (`WaitForSessions: 0`); `TestGenerateStoresAnEnvelope` checked a random ciphertext byte (1 in 256) | Fixed 3d4bcaa, da728cb, a269e42 (tests only; the CLI waits 150 s) |
+| ff09d01 | Tests | Minor | Task 16 review M-2 scoped the refused-address check to the form, but the save's alert is outside it (6 failures in three browsers) | Fixed 5d28639 |
 
 ## Known limitations
 

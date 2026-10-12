@@ -13,7 +13,7 @@ a CI runner), or an empty table that the owner fills in. Nothing in an empty cel
 |---|---|
 | Product version | 1.0.0 (release candidate; this report is a draft until section 10 is signed) |
 | Report date | 2026-10-11 (draft) |
-| Commit | (filled in by the final release run) |
+| Commit | Release candidate da728cb1ccca868d09928926d22ffc9d55044291: the final Phase 8 gate run of 2026-10-12 (section 4; `docs/security/reviews/phase-8.md`). The release commit is recorded when 1.0.0 is built. |
 | Authors | Eren Altan (vendor and developer); drafted with AI assistance from the phase reviews and the Phase 8 task reports |
 | Reviewers | |
 | Status | Draft. Not signed off. The release checklist (`docs/release-checklist.md`) is not ticked. |
@@ -125,33 +125,33 @@ contain no test endpoint, demo clock or test key (`cmd/alice:TestReleaseBuildHas
 
 ## 4. Scan results summary
 
-Counts are by severity, Critical / High / Medium / Low, **as last run** for the release commit. Every result cell
-stays `PENDING-FINAL-RUN` until the final release run records it; the raw outputs are kept in
+Counts are by severity, Critical / High / Medium / Low, **as last run**: the final Phase 8 run on the release
+candidate da728cb (2026-10-12); the release itself re-runs every gate on its commit (`make release-gates`); the raw outputs are kept in
 `bin/release-gates.log`, which the package carries as `RELEASE-CHECKLIST-SIGNED.txt` (R43 row 51). The last column
 shows the latest run recorded during Phase 8 development, for context only; it is not the release result.
 
-| Scan | Command | C / H / M / L (release run) | Date | Latest development run |
+| Scan | Command | C / H / M / L (final Phase 8 run) | Date | Latest development run |
 |---|---|---|---|---|
-| gosec and the other linters (golangci-lint) | `make lint` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: exit 0, every golangci-lint run "0 issues" |
-| govulncheck | `make vuln` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: 0 vulnerabilities |
-| osv-scanner (go.mod, web lockfile) | `make osv` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: 1 High (GHSA-68fv-2mgg-jv7q, source-map-js 1.2.1, development dependency) fixed in a4abe0f, then 0 |
-| npm audit | `make vuln` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: 0 vulnerabilities |
-| Trivy fs | `make fs-scan` | PENDING-FINAL-RUN | | none recorded in Phase 8 |
-| Trivy image (alice, postgres) | `make image-scan` | PENDING-FINAL-RUN | | none recorded in Phase 8 |
-| gitleaks (full history) | `make secrets-scan` | PENDING-FINAL-RUN | | none recorded in Phase 8 |
-| gitleaks over the release tarball contents | release checklist row | PENDING-FINAL-RUN | | none recorded |
-| Lockfile shape check | `make lockcheck` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: clean |
-| ShellCheck (22 scripts) | `make shellcheck` | PENDING-FINAL-RUN | | 2026-10-11, Task 14: clean |
-| ZAP baseline, unauthenticated | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
-| ZAP baseline and API scan as Administrator | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
-| ZAP baseline and API scan as Operator | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
-| ZAP baseline and API scan as Auditor | `make zap-baseline` | PENDING-FINAL-RUN | | not yet built |
+| gosec and the other linters (golangci-lint) | `make lint` | 0 findings (every golangci-lint run "0 issues"; pincheck, ShellCheck, lockcheck, docs-check, matrix-check -strict, actionlint clean) (da728cb) | 2026-10-12 | 2026-10-11, Task 14: exit 0, every golangci-lint run "0 issues" |
+| govulncheck | `make vuln` | 0 affecting the code (1 in a required module, not called) (da728cb) | 2026-10-12 | 2026-10-11, Task 14: 0 vulnerabilities |
+| osv-scanner (go.mod, web lockfile) | `make osv` | 0 / 0 / 0 / 0 (da728cb) | 2026-10-12 | 2026-10-11, Task 14: 1 High (GHSA-68fv-2mgg-jv7q, source-map-js 1.2.1, development dependency) fixed in a4abe0f, then 0 |
+| npm audit | `make vuln` | 0 vulnerabilities (da728cb) | 2026-10-12 | 2026-10-11, Task 14: 0 vulnerabilities |
+| Trivy fs | `make fs-scan` | 0 / 0 (HIGH/CRITICAL; vulnerabilities and secrets) (da728cb) | 2026-10-12 | none recorded in Phase 8 |
+| Trivy image (alice, postgres) | `make image-scan` | alice: 0 / 0 (HIGH/CRITICAL); postgres: not scanned by `make image-scan` (SBOM only) (da728cb) | 2026-10-12 | none recorded in Phase 8 |
+| gitleaks (full history) | `make secrets-scan` | no leaks (11 false positives of Phase 8 allowlisted by fingerprint, 0ddf458) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 11 findings in older commits, all false positives (Task 19 triage) |
+| gitleaks over the release tarball contents | release checklist row 1.5 | NOT RUN: no 1.0.0 package exists until the production keys are committed (owner) | | none recorded |
+| Lockfile shape check | `make lockcheck` | clean (da728cb) | 2026-10-12 | 2026-10-11, Task 14: clean |
+| ShellCheck (every tracked script) | `make shellcheck` | clean (da728cb) | 2026-10-12 | 2026-10-11, Task 14: clean |
+| ZAP baseline, unauthenticated | `make zap-baseline` | 0 / 0 / 0 / 1 (Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
+| ZAP baseline and API scan as Administrator | `make zap-baseline` | 0 / 0 / 0 / 2 baseline (90004 COEP missing, Private IP Disclosure); API scan 0 / 0 / 0 / 3 (also 100001 Unexpected Content-Type) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
+| ZAP baseline and API scan as Operator | `make zap-baseline` | 0 / 0 / 0 / 2 (90004, Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
+| ZAP baseline and API scan as Auditor | `make zap-baseline` | 0 / 0 / 0 / 2 (90004, Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
 | ZAP full active scan | `make zap-full` | NOT RUN (owner) | | |
-| testssl.sh grade, release image (test-CA certificate) | `make testssl` | PENDING-FINAL-RUN | | not yet built |
+| testssl.sh grade, release image (test-CA certificate) | `make testssl` | A+ (score 96) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: A+ (score 96) |
 | testssl.sh grade, release candidate on a real host | `make testssl TESTSSL_TARGET=… TESTSSL_CA=…` | NOT RUN (owner) | | |
-| Fuzzing, nightly length | `make fuzz-nightly` | PENDING-FINAL-RUN | | each new Phase 8 target run 5 minutes by its task (R43 row 35) |
+| Fuzzing, nightly length | `make fuzz-nightly` | NOT RUN in Phase 8 (part of `make nightly`, not of `make release-gates`) | | each new Phase 8 target run 5 minutes by its task (R43 row 35) |
 | Fuzzing, release length | `make fuzz-release` | NOT RUN (owner) | | |
-| Matrix traceability, strict | `make matrix-check` with `-strict` | PENDING-FINAL-RUN | | 2026-10-11: 196 test, 1 deferred, 5 gap |
+| Matrix traceability, strict | `make matrix-check` with `-strict` | pass: 202 IDs, 193 test, 7 partial (ruled), 2 deferred, 0 gap (da728cb) | 2026-10-12 | 2026-10-11: 196 test, 1 deferred, 5 gap |
 
 ## 5. Dependency and SBOM summary
 
@@ -160,14 +160,14 @@ The package carries three CycloneDX SBOMs made by the pinned Trivy image (R43 ro
 web lockfile), plus `licenses/THIRD_PARTY_NOTICES.md` generated by `tools/notices`. Proven by
 `tools/releasebuild:TestStageLayout`.
 
-Component counts. The 1.0.0 column is filled in by the final release run. The other column is read from the SBOMs of
+Component counts. The 1.0.0 column is filled in when the 1.0.0 package is built with the production keys. The other column is read from the SBOMs of
 the test-signed package `1.0.0-rc.1` built on 2026-10-11 (`bin/release/sbom-1.0.0-rc.1/`); it is not a release.
 
 | SBOM | 1.0.0 | 1.0.0-rc.1 (test package) |
 |---|---|---|
-| alice image | PENDING-FINAL-RUN | 40 components: 33 Go modules, 5 Debian packages (distroless base), 1 operating system, 1 application |
-| postgres image | PENDING-FINAL-RUN | 51 components: 45 Alpine packages, 4 Go modules, 1 operating system, 1 application |
-| source (go.mod, web lockfile) | PENDING-FINAL-RUN | 126 components: 81 Go modules, 42 npm packages, 3 applications |
+| alice image | not built yet (needs the production keys; owner) | 40 components: 33 Go modules, 5 Debian packages (distroless base), 1 operating system, 1 application |
+| postgres image | not built yet (needs the production keys; owner) | 51 components: 45 Alpine packages, 4 Go modules, 1 operating system, 1 application |
+| source (go.mod, web lockfile) | not built yet (needs the production keys; owner) | 126 components: 81 Go modules, 42 npm packages, 3 applications |
 
 **Accepted vulnerabilities.** An exception needs an ID, a reason and an expiry at most 90 days away
 (`osv-scanner.toml`, `docs/dev/dependency-updates.md`); a High or Critical finding with a fix is fixed, not ignored.
