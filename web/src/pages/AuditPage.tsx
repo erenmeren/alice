@@ -195,7 +195,8 @@ export function AuditPage() {
       {report && (
         <Notice
           tone={report.intact ? 'brand' : 'danger'}
-          role="status"
+          // A broken chain is the result that must be heard: alert interrupts, status waits.
+          role={report.intact ? 'status' : 'alert'}
           title={report.intact ? t('audit.intact') : t('audit.broken', { seq: report.first_bad_seq ?? 0 })}
           action={
             // Only Administrators can open Settings; the forwarding state itself needs a step-up there.

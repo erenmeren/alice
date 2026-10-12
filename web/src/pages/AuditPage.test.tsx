@@ -203,7 +203,8 @@ describe('AuditPage', () => {
     const row = (await screen.findByText('Çıkış')).closest('tr')!;
     expect(within(row).getByText('Başarısız')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Bütünlüğü doğrula' }));
-    expect(await screen.findByRole('status')).toHaveTextContent('Denetim kaydında 17 numaralı kayıtta bütünlük sorunu var.');
+    // A broken chain is announced at once (role alert), an intact one politely (role status).
+    expect(await screen.findByRole('alert')).toHaveTextContent('Denetim kaydında 17 numaralı kayıtta bütünlük sorunu var.');
     // Only the page body counts: the shell header always has language and sign-out controls.
     const buttons = within(screen.getByRole('main')).getAllByRole('button').map((b) => b.textContent);
     expect(buttons).toEqual(['Bütünlüğü doğrula', 'Filtreleri uygula']);
@@ -482,7 +483,8 @@ describe('AuditPage', () => {
     );
     await renderRoute('/audit');
     await userEvent.click(await screen.findByRole('button', { name: 'Verify integrity' }));
-    const status = await screen.findByRole('status');
+    const status = await screen.findByRole('alert');
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(status.getAttribute('style')).toContain('--alert-bg: var(--alice-danger-soft)');
     expect(status).toHaveTextContent('Audit log integrity problem at entry 17.');
     expect(status).toHaveTextContent(en.audit.brokenHelp);
