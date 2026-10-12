@@ -68,6 +68,17 @@ func TestVerifyRejectsMalformedHashes(t *testing.T) {
 		"$argon2id$v=19$m=64,t=1,p=0$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
 		"$argon2id$v=19$m=64,t=1,p=1$!!!$a2V5a2V5a2V5a2V5a2V5a2V5",
 		"$argon2id$v=19$m=64,t=1,p=1$c2FsdHNhbHRzYWx0$",
+		// I-8: the parameters are exactly "v=19" and "m=<n>,t=<n>,p=<n>", nothing before, between or after.
+		"$argon2id$v=19junk$m=64,t=1,p=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$m=64,t=1,p=1junk$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$m=64,t=1,p=1,x=2$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$m=64, t=1,p=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$m=+64,t=1,p=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$t=1,m=64,p=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=+19$m=64,t=1,p=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$m=,t=1,p=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$m=4294967296,t=1,p=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
+		"$argon2id$v=19$m=64,t=1$c2FsdHNhbHRzYWx0$a2V5a2V5a2V5a2V5a2V5a2V5",
 	} {
 		ok, _, err := h.Verify(context.Background(), enc, "x")
 		assert.Error(t, err, enc)

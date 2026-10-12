@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -133,15 +134,20 @@ func decodePHC(encoded string) (Argon2Params, []byte, []byte, error) {
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
 		return Argon2Params{}, nil, nil, errMalformedHash
 	}
-	var version int
-	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil || version != argon2.Version {
+	if version, ok := phcNumber(parts[2], "v="); !ok || version != argon2.Version {
 		return Argon2Params{}, nil, nil, errMalformedHash
 	}
-	var p Argon2Params
-	var threads uint32
-	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &p.MemoryKiB, &p.Time, &threads); err != nil {
+	params := strings.Split(parts[3], ",")
+	if len(params) != 3 {
 		return Argon2Params{}, nil, nil, errMalformedHash
 	}
+	memory, okM := phcNumber(params[0], "m=")
+	timeCost, okT := phcNumber(params[1], "t=")
+	threads, okP := phcNumber(params[2], "p=")
+	if !okM || !okT || !okP {
+		return Argon2Params{}, nil, nil, errMalformedHash
+	}
+	p := Argon2Params{MemoryKiB: memory, Time: timeCost}
 	if p.MemoryKiB == 0 || p.MemoryKiB > maxDecodeMemoryKiB || p.Time == 0 || p.Time > 100 || threads == 0 || threads > 255 {
 		return Argon2Params{}, nil, nil, errMalformedHash
 	}
@@ -155,4 +161,25 @@ func decodePHC(encoded string) (Argon2Params, []byte, []byte, error) {
 		return Argon2Params{}, nil, nil, errMalformedHash
 	}
 	return p, salt, key, nil
+}
+
+// phcNumber reads one PHC parameter "<name>=<decimal>": exactly the name, then only ASCII digits (no sign, no space,
+// nothing after them), at most a uint32 (review I-8).
+func phcNumber(field, name string) (uint32, bool) {
+	digits, ok := strings.CutPrefix(field, name)
+	if !ok || digits == "" || len(digits) > 10 {
+		return 0, false
+	}
+	var n uint64
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		n = n*10 + uint64(c-'0')
+	}
+	if n > math.MaxUint32 {
+		return 0, false
+	}
+	return uint32(n), true //nolint:gosec // G115: n <= math.MaxUint32
 }
