@@ -416,6 +416,13 @@
     }
   },
   "audit": {
+    "page": {
+      "description": "Who did what, where, and with which result.",
+      "newestFirst": "Newest first",
+      "tableLabel": "Audit events",
+      "scope": "Hash-chain continuity, not independent proof against a compromised host. External forwarding, where configured, adds independent evidence.",
+      "forwarding": "Audit forwarding settings"
+    },
     "title": "Audit trail",
     "verify": "Verify integrity",
     "intact": "The audit log is intact.",
@@ -742,6 +749,28 @@
     "summary_other": "{{n}} more like these between {{from}} and {{to}}."
   },
   "license": {
+    "page": {
+      "description": "A predictable annual license. Your data stays yours.",
+      "eyebrow": "Alice license",
+      "upload": "Upload license",
+      "usage": "Managed targets",
+      "usageHelp": "Certificates and keys are not counted.",
+      "ends": "License end",
+      "renewal": "What happens at renewal?",
+      "rule1Title": "Upload the signed file",
+      "rule1": "Review the customer, validity period and target limit before activation.",
+      "rule2Title": "Seven-day grace period",
+      "rule2": "Annual licenses keep full operation during the grace period. Evaluation licenses have no grace period.",
+      "rule3Title": "Your inventory remains accessible",
+      "rule3": "Lock mode does not delete keys or revoke certificates. In-flight changes finish or roll back safely.",
+      "lockedTitle": "License expired · external changes paused",
+      "lockedText": "Inventory, exports, the audit trail and backups remain available. Renew the license to resume changes.",
+      "evaluationEndedTitle": "Evaluation ended · external changes paused",
+      "graceTitle": "License expired · grace period",
+      "graceText": "Full operation continues until {{date}}. Then external changes pause; inventory, exports, the audit trail and backups stay available.",
+      "evaluationTitle": "Evaluation license",
+      "evaluationText": "An evaluation has no grace period: when it ends, external changes pause until a signed license is uploaded."
+    },
     "banner": {
       "open": "Open the License page",
       "evaluation_one": "Evaluation mode: {{count}} day left, up to {{max_targets}} targets. To continue after that, an administrator adds a license on the License page.",

@@ -416,6 +416,13 @@
     }
   },
   "audit": {
+    "page": {
+      "description": "Kim, nerede, ne yaptı ve sonucu ne oldu?",
+      "newestFirst": "En yeni önce",
+      "tableLabel": "Denetim olayları",
+      "scope": "Özet zinciri devamlılığı; ele geçirilmiş bir sunucuya karşı bağımsız kanıt değildir. Harici yönlendirme, yapılandırıldıysa bağımsız kanıt sağlar.",
+      "forwarding": "Denetim kaydı iletimi ayarları"
+    },
     "title": "Denetim kaydı",
     "verify": "Bütünlüğü doğrula",
     "intact": "Denetim kaydı sağlam.",
@@ -742,6 +749,28 @@
     "summary_other": "{{from}} ile {{to}} arasında buna benzer {{n}} kayıt daha."
   },
   "license": {
+    "page": {
+      "description": "Öngörülebilir yıllık lisans. Verileriniz size ait.",
+      "eyebrow": "Alice lisansı",
+      "upload": "Lisans dosyası yükle",
+      "usage": "Yönetilen hedefler",
+      "usageHelp": "Sertifika ve anahtarlar sayılmaz.",
+      "ends": "Lisans bitişi",
+      "renewal": "Yenileme sırasında ne olur?",
+      "rule1Title": "İmzalı dosyayı yükleyin",
+      "rule1": "Etkinleştirmeden önce kurum adını, süreyi ve hedef sınırını inceleyin.",
+      "rule2Title": "Yedi günlük ek süre",
+      "rule2": "Yıllık lisanslar ek sürede tam çalışır. Deneme lisansında ek süre yoktur.",
+      "rule3Title": "Envanteriniz erişilebilir kalır",
+      "rule3": "Kilit modu anahtarları silmez veya sertifikaları iptal etmez. Devam eden işlemler tamamlanır ya da güvenle geri alınır.",
+      "lockedTitle": "Lisans sona erdi · dış değişiklikler duraklatıldı",
+      "lockedText": "Envanter, dışa aktarma, denetim kaydı ve yedekler erişilebilir kalır. Değişikliklere devam etmek için lisansı yenileyin.",
+      "evaluationEndedTitle": "Deneme sona erdi · dış değişiklikler duraklatıldı",
+      "graceTitle": "Lisans süresi doldu · ek süre",
+      "graceText": "Tam çalışma {{date}} tarihine kadar sürer. Ardından dış değişiklikler duraklatılır; envanter, dışa aktarma, denetim kaydı ve yedekler erişilebilir kalır.",
+      "evaluationTitle": "Deneme lisansı",
+      "evaluationText": "Deneme lisansında ek süre yoktur: süre bitince imzalı bir lisans yüklenene kadar dış değişiklikler duraklatılır."
+    },
     "banner": {
       "open": "Lisans sayfasını aç",
       "evaluation_one": "Deneme modu: {{count}} gün kaldı, en fazla {{max_targets}} hedef. Sonrasında devam etmek için bir yönetici Lisans sayfasından lisans ekler.",
