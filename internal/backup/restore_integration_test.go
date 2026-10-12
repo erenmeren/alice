@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1460,6 +1461,70 @@ func TestRestoreEndsSessions(t *testing.T) {
 	assert.Zero(t, e.count("SELECT count(*) FROM sessions"))
 	assert.Zero(t, e.count("SELECT count(*) FROM setup_sessions"))
 	assert.Zero(t, e.count("SELECT count(*) FROM oidc_login_states"))
+}
+
+// Final review A-2: a restore brings back the job queue of the backup. Work that changes servers or Key Vaults
+// (class change), queued or running at backup time, is held for an Administrator (blocked_license: run or discard it
+// on the Jobs page) instead of starting against targets whose state has moved on; a running one's attempt is closed
+// and its target lock released. Other work and finished jobs are untouched. system.restored records the count and the
+// result carries a warning.
+func TestRestoreHoldsQueuedChanges(t *testing.T) {
+	e := newRestoreEnv(t)
+	mac := make([]byte, 32)
+	add := func(class, status string) string {
+		id := uuid.NewString()
+		var lockedBy *string
+		var lockedUntil *time.Time
+		attempts := 0
+		if status == "running" {
+			w, until := "worker-1/1", e.clk.Now().Add(time.Hour)
+			lockedBy, lockedUntil, attempts = &w, &until, 1
+		}
+		_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO jobs (id, type, class, kind, payload, payload_mac, status, run_at, attempts,
+    max_attempts, locked_by, locked_until, created_at) VALUES ($1, 'test.job', $2, 'system', '{}', $3, $4, $5, $6, 3, $7, $8, $5)`,
+			id, class, mac, status, e.clk.Now(), attempts, lockedBy, lockedUntil)
+		require.NoError(t, err)
+		if status == "running" {
+			_, err = e.db.Owner.Exec(e.ctx, `INSERT INTO job_attempts (id, job_id, attempt, worker_id, started_at)
+VALUES (gen_random_uuid(), $1, 1, 'worker-1/1', $2)`, id, e.clk.Now())
+			require.NoError(t, err)
+		}
+		return id
+	}
+	queuedChange, runningChange := add("change", "queued"), add("change", "running")
+	queuedRead, runningAlways, doneChange := add("read_only", "queued"), add("always", "running"), add("change", "succeeded")
+	info := e.create(backup.KindManual)
+
+	res, err := e.restore(info.Path, nil)
+	require.NoError(t, err)
+	status := func(id string) (st string, lockedBy *string) {
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT status, locked_by FROM jobs WHERE id = $1", id).Scan(&st, &lockedBy))
+		return st, lockedBy
+	}
+	for id, want := range map[string]string{queuedChange: "blocked_license", runningChange: "blocked_license", queuedRead: "queued",
+		runningAlways: "running", doneChange: "succeeded"} {
+		got, _ := status(id)
+		assert.Equal(t, want, got, id)
+	}
+	_, lockedBy := status(runningChange)
+	assert.Nil(t, lockedBy, "the held job has no worker")
+	assert.Zero(t, e.count("SELECT count(*) FROM job_attempts WHERE job_id = $1 AND finished_at IS NULL", runningChange),
+		"the cut-off attempt is closed")
+	rows := e.auditRows("system.restored")
+	require.NotEmpty(t, rows)
+	assert.Equal(t, "2", rows[len(rows)-1]["held_jobs"])
+	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "2 tasks") }), res.Warnings)
+
+	// A backup without such work holds nothing and says so.
+	e.reload()
+	_, err = e.db.Owner.Exec(e.ctx, "DELETE FROM jobs")
+	require.NoError(t, err)
+	info = e.create(backup.KindManual)
+	res, err = e.restore(info.Path, nil)
+	require.NoError(t, err)
+	rows = e.auditRows("system.restored")
+	assert.Equal(t, "0", rows[len(rows)-1]["held_jobs"])
+	assert.False(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "tasks") }), res.Warnings)
 }
 
 func TestInstallationSealMatchesTheLicenseModule(t *testing.T) {

@@ -622,6 +622,7 @@
       "previous_audit_hash": "O kaydın özeti",
       "safety_backup": "Güvenlik yedeği",
       "no_safety_backup": "Güvenlik yedeği olmadan",
+      "held_jobs": "Yönetici için bekletilen işler",
       "subject": "Konu",
       "not_after": "Geçerlilik bitişi",
       "temporary": "Geçici",

@@ -184,9 +184,15 @@ nothing was changed. The refusals and what to do are in
 - Everyone signs in again.
 - Users and API tokens are as they were when the backup was made: a person or token removed since then exists again.
   Review **Users** and the API tokens, and disable or revoke what should not be there.
-- The audit log shows **Alice restored from a backup** (`system.restored`) as the newest entry, with the backup's
-  name and the last entry of the replaced log (`previous_audit_seq`, `previous_audit_hash`): the replaced history is
-  named in the chain that replaces it.
+- The task queue is the backup's too. Tasks that change servers or Key Vaults (certificate deployments, Key Vault
+  deployments, key removals, SSH key rotation steps) that were waiting or running when the backup was made do **not**
+  start by themselves: running them against servers whose state has moved on since the backup could, for example,
+  deploy a certificate version that was replaced later. They are held, the restore prints
+  `Warning: <n> tasks of the backup that change servers or Key Vaults (queued or running when it was made) are held: review them under Waiting for an administrator on Servers, then run or discard each.`,
+  and `system.restored` records the number (`held_jobs`). Open **Servers → Waiting for an administrator** and choose
+  **Run now** or **Discard** for each ([admin-guide.md](admin-guide.md#servers)). Tasks that only read (scans,
+  checks) and Alice's own maintenance run as usual, and work that falls due after the restore (renewals, rotation
+  steps) starts as usual: check the rotations and deployments that were in progress.
 - If audit forwarding is on, the syslog server receives entries again from where the backup's forwarding stood:
   first identical copies of entries it already has (up to the backup's newest entry), then `system.restored` and the
   entries after it under sequence numbers it already holds with other content. From there the two chains differ.

@@ -622,6 +622,7 @@
       "previous_audit_hash": "Hash of that entry",
       "safety_backup": "Safety backup",
       "no_safety_backup": "Without a safety backup",
+      "held_jobs": "Tasks held for an administrator",
       "subject": "Subject",
       "not_after": "Valid until",
       "temporary": "Temporary",

@@ -682,7 +682,8 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 - **Remove server** (administrators) makes Alice forget the server, closes the SSH connections Alice kept open to it
   and frees its license slot. Nothing is changed on the server.
 - **Waiting for an administrator** lists work that was paused while the license had expired (for example a key
-  removal), 50 at a time (**Show more** for the rest). After a new license is installed, an administrator chooses
+  removal), and work that changes servers or Key Vaults which a restore brought back from the backup's queue
+  ([backup-restore.md](backup-restore.md#restore-on-the-same-server)), 50 at a time (**Show more** for the rest). After a new license is installed, an administrator chooses
   **Run now** or **Discard** for each item; nothing starts on its own. **Discard** is possible at any time, also
   while the license is expired. Work requested while Alice could not check its license (see [License](#license)) is
   not listed here: it waits and starts by itself after the next successful check.

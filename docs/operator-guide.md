@@ -115,6 +115,9 @@ The full guide is [backup-restore.md](backup-restore.md). In short, for the oper
   `/opt/alice/backups`, and run `alicectl restore` ([backup-restore.md](backup-restore.md#restore-on-a-new-server)).
 - **After a restore, review users and API tokens.** They are as they were when the backup was made: a person
   disabled or a token revoked since then is back. Everyone must sign in again.
+- **After a restore, review the held tasks.** Work of the backup's queue that changes servers or Key Vaults does not
+  start by itself: it waits under **Servers → Waiting for an administrator** (`system.restored` records the number as
+  `held_jobs`).
 - **After a restore with audit forwarding on**, expect the syslog server to receive rows again: from where the
   backup's forwarding stood, first identical copies of entries it already has (up to the backup's newest entry), then
   `system.restored` and the entries after it under sequence numbers it already holds with other content. That is a

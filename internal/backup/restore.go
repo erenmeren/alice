@@ -152,6 +152,7 @@ type restorer struct {
 	warnings  []string
 	previous  string // <name>_previous_<ts>, or "" when no live database existed
 	safety    string // path of the safety backup
+	held      int64  // jobs of the backup held for an Administrator (holdChanges)
 }
 
 // Restore restores a backup into a fresh database, verifies it, makes a safety backup of the live installation and
@@ -700,7 +701,37 @@ func (r *restorer) verify(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("backup: end the sessions of the backup: %w", err)
 	}
-	return nil
+	return r.holdChanges(ctx)
+}
+
+// holdChanges holds the backup's unfinished work that changes servers or Key Vaults (class change, queued or running
+// at backup time) for an Administrator, as a confirmed license lock does (blocked_license, L-81): it would otherwise
+// start with serve against targets whose state has moved on since the backup (a superseded certificate version
+// redeployed, a rotation step on keys rotated later). A running job's cut-off attempt is closed as the reaper closes
+// it and its target lock released. Read-only and platform work runs as usual. The count goes into system.restored.
+func (r *restorer) holdChanges(ctx context.Context) error {
+	return db.InTx(ctx, r.staging, func(tx pgx.Tx) error {
+		now := r.s.c.Clock.Now().UTC()
+		const running = `SELECT id FROM jobs WHERE status = 'running' AND class = 'change'`
+		if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $1, error_code = 'job.lease_expired'
+WHERE finished_at IS NULL AND job_id IN (`+running+`)`, now); err != nil {
+			return fmt.Errorf("backup: close the attempts of the backup's running changes: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE job_id IN (`+running+`)`); err != nil {
+			return fmt.Errorf("backup: release the target locks of the backup's running changes: %w", err)
+		}
+		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'blocked_license', locked_by = NULL, locked_until = NULL
+WHERE class = 'change' AND status IN ('queued', 'running')`)
+		if err != nil {
+			return fmt.Errorf("backup: hold the backup's queued changes: %w", err)
+		}
+		r.held = tag.RowsAffected()
+		if r.held > 0 {
+			r.warn(strconv.FormatInt(r.held, 10) + " tasks of the backup that change servers or Key Vaults (queued or running when it" +
+				" was made) are held: review them under Waiting for an administrator on Servers, then run or discard each.")
+		}
+		return nil
+	})
 }
 
 // installationSeal is the seal of license.(*Service).seal (internal/license/installation.go), which the license
@@ -893,6 +924,7 @@ func (r *restorer) appendRestored(ctx context.Context, live liveState) error {
 		"schema_version":    strconv.FormatInt(r.m.SchemaVersion, 10),
 		"audit_intact":      strconv.FormatBool(r.intact),
 		"safety_backup":     "none",
+		"held_jobs":         strconv.FormatInt(r.held, 10),
 	}
 	if live.head != nil {
 		d["previous_audit_seq"] = strconv.FormatInt(live.head.Seq, 10)
