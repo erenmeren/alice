@@ -471,6 +471,8 @@ describe('AuditPage', () => {
     expect(status.getAttribute('style')).toContain('--alert-bg: var(--alice-brand-soft)');
     expect(status).toHaveTextContent('The audit log is intact.');
     expect(status).toHaveTextContent('Hash-chain continuity, not independent proof against a compromised host.');
+    // The design's "verified through #N", from the report's head_seq.
+    expect(status).toHaveTextContent('Hash chain verified through entry #3.');
     expect(within(status).getByRole('link', { name: 'Audit forwarding settings' })).toHaveAttribute('href', '/settings?tab=forwarding');
     expect(within(status).getByText('cd'.repeat(32)).tagName).toBe('CODE');
   });
@@ -491,6 +493,7 @@ describe('AuditPage', () => {
     expect(status).toHaveTextContent('Audit log integrity problem at entry 17.');
     expect(status).toHaveTextContent(en.audit.brokenHelp);
     expect(status).toHaveTextContent(en.audit.page.scope);
+    expect(status).not.toHaveTextContent('verified through');
     expect(within(status).queryByRole('link')).not.toBeInTheDocument();
   });
 

@@ -215,6 +215,8 @@ export function AuditPage() {
             <Text size="sm">
               {t('audit.checked', { count: report.checked, formatted: new Intl.NumberFormat(i18n.language).format(report.checked) })}
             </Text>
+            {/* The design's "verified through #N": the last entry the intact chain reached (head_seq). */}
+            {report.intact && <Text size="sm">{t('audit.page.verifiedThrough', { seq: report.head_seq })}</Text>}
             {report.intact && (
               <Text size="sm" style={{ overflowWrap: 'anywhere' }}>
                 {t('audit.headHash')} <Code translate="no">{report.head_hash}</Code>
