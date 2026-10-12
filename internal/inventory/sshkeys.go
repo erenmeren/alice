@@ -576,7 +576,7 @@ FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bit
 			newest, k.Comment = l.LastSeenAt, l.Comment
 		}
 	}
-	k.Missing = k.Missing && !(k.Retired && removedEverywhere)
+	k.Missing = k.Missing && (!k.Retired || !removedEverywhere)
 	k.LocationCount, k.TargetCount = len(k.Locations), len(targets)
 	return k, nil
 }

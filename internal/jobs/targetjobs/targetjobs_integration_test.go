@@ -356,7 +356,9 @@ func TestRemoveFailureRetriesOnlyBeforeTheWrite(t *testing.T) {
 		{false, "ssh.file_changed", true},
 		{true, "ssh.file_changed", true},
 	} {
-		e := newEnv(t, func(s providers.Session) providers.Session { return &stepSession{Session: s, wrote: c.wrote, code: c.code} })
+		e := newEnv(t, func(s providers.Session) providers.Session {
+			return &stepSession{Session: s, wrote: c.wrote, code: c.code}
+		})
 		tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 		jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").ID, false)
 		require.NoError(t, err)
