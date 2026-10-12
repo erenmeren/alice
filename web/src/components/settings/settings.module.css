@@ -94,6 +94,12 @@
   position: absolute;
   inset: 0;
 }
+/* The control stays the click target above that cover: its inner box (already position: relative) is lifted with the
+   input and the check mark inside it. */
+.checkOption :global(.mantine-Checkbox-inner),
+.checkOption :global(.mantine-Radio-inner) {
+  z-index: 1;
+}
 
 /* A switch with no visible label (the design's switch row names it beside it). Mantine paints the track
    (position:relative; z-index:0) over the absolutely placed, transparent input; lifting the input keeps a click on the

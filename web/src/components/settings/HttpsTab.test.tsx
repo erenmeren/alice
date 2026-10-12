@@ -61,6 +61,12 @@ describe('HttpsTab', () => {
       expect(after).toMatch(/position:\s*absolute/);
       expect(after).toMatch(/inset:\s*0/);
     }
+    // The control itself stays the click target above that cover (found by the Phase 9 Chromium run: Playwright's
+    // check() of the PFX radio and of "Forward the audit log" was refused, "label … intercepts pointer events"). Its
+    // positioned inner box gets a stacking level above the cover, input and check mark together.
+    for (const inner of ['.mantine-Checkbox-inner', '.mantine-Radio-inner']) {
+      expect(rule(`.checkOption :global(${inner})`)).toMatch(/z-index:\s*1/);
+    }
   });
 
   it('uploads a certificate and shows the new one without a reload', async () => {
