@@ -1981,6 +1981,27 @@
       "keys": "keys",
       "secrets": "secrets",
       "versions": "versions"
+    },
+    "page": {
+      "description": "See certificate versions and the websites connected to them.",
+      "boundaryTitle": "A precise boundary for Azure access",
+      "boundaryText": "Certificates can be monitored and deployed to Nginx. Keys are inventory-only; secrets show metadata only.",
+      "keysOnlyTitle": "Key inventory only",
+      "keysOnlyText": "Azure Key Vault key rotation is outside Alice v1 scope.",
+      "metadataTitle": "Metadata only",
+      "metadataText": "Secret values are never shown. Certificate backing secrets are used only for authorized certificate deployment.",
+      "versions": "Version history",
+      "versionsSub": "A new version is reviewed before it reaches a website.",
+      "policy": "Certificate policy",
+      "autoDeployTitle": "Automatic deployment is an administrator decision",
+      "autoDeployText": "Changing this setting requires fresh identity verification.",
+      "certDescription": "Certificate versions and deployment connections",
+      "keyType": "Key type",
+      "renewal": "Renewal",
+      "rotation": "Rotation in Alice",
+      "rotationValue": "Key Vault keys: inventory only",
+      "details": "Vault details",
+      "interval": "Check interval"
     }
   },
   "bindings": {

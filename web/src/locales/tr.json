@@ -1981,6 +1981,27 @@
       "keys": "anahtarlar",
       "secrets": "gizli anahtarlar",
       "versions": "sürümler"
+    },
+    "page": {
+      "description": "Sertifika sürümlerini ve bunlara bağlı web sitelerini görün.",
+      "boundaryTitle": "Azure erişimi için net kapsam",
+      "boundaryText": "Sertifikalar izlenebilir ve Nginx’e dağıtılabilir. Anahtarlar yalnızca envanter içindir; gizli verilerin sadece üst bilgileri gösterilir.",
+      "keysOnlyTitle": "Yalnızca anahtar envanteri",
+      "keysOnlyText": "Azure Key Vault anahtar rotasyonu Alice v1 kapsamı dışındadır.",
+      "metadataTitle": "Yalnızca üst bilgi",
+      "metadataText": "Gizli veri değerleri gösterilmez. Sertifika özel anahtarları sadece yetkili dağıtımlarda kullanılır.",
+      "versions": "Sürüm geçmişi",
+      "versionsSub": "Yeni sürüm web sitesine ulaşmadan önce incelenir.",
+      "policy": "Sertifika ilkesi",
+      "autoDeployTitle": "Otomatik dağıtım yönetici kararıdır",
+      "autoDeployText": "Bu ayarı değiştirmek için yeniden kimlik doğrulaması gerekir.",
+      "certDescription": "Sertifika sürümleri ve dağıtım bağlantıları",
+      "keyType": "Anahtar türü",
+      "renewal": "Yenileme",
+      "rotation": "Alice'te rotasyon",
+      "rotationValue": "Key Vault anahtarları: yalnızca envanter",
+      "details": "Kasa bilgileri",
+      "interval": "Kontrol aralığı"
     }
   },
   "bindings": {
