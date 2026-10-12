@@ -33,3 +33,22 @@ Decisions taken while fixing the external code review of 2026-10-12 on branch `r
   vault-wide in practice) and three detail failures in a row (the vault, not one certificate, is failing; this also
   bounds the retries a broken vault costs one poll) — cost if wrong: a vault whose certificates fail one by one, with
   successes between them, shows as healthy with unreadable items instead of degraded.
+
+- L-11 (removal after a compare-and-set refusal) — not intentional: fixed (`targetjobs.removeFailed` now applies
+  `sshkeyjobs.definiteNoChange`'s rule, so `ssh.file_changed` after the write step is retried). Other definite helper
+  refusals after the write step started stay uncertain in both packages, as `definiteNoChange` documents — why: only
+  `ssh.file_changed` is produced by the provider itself after it saw every attempt refused; trusting every refusal
+  code there is the L-12 question — cost if wrong: a removal the helper refused for another definite reason waits for
+  a person instead of being retried.
+- L-12 (helper `IO_ERROR` before the write and after the rename) — confirmed (`cmd/alice-helper/write.go`: lock
+  timeout, backup, staging file and directory errors before the rename, and the directory fsync after it, all answer
+  `IO_ERROR`); kept as the intentional conservative choice and carried to v1.x with the other helper protocol
+  changes: Alice treats `IO_ERROR` as uncertain, which only sends a deploy, rotation add or removal to its proving or
+  attention path; it never loses a change or reports one that did not happen. Splitting the code needs a new helper
+  release that every managed server must install, and Alice must keep `IO_ERROR` uncertain for older helpers anyway
+  — cost if wrong: extra manual steps on a full disk or a lock held for more than 30 s.
+- L-13 `UpdatePolicy` without a license gate — intentional: an edit of an enabled policy switches it off and cancels
+  its previewed run, an edit of a disabled policy changes nothing Alice does, and switching a policy on is gated
+  (`SetPolicyEnabled`); disable and delete are not gated either (L-26 lists creating a policy, not editing one) — cost
+  if wrong: none known. The other L-13 items are fixed (attentionParams error, `GetSSHKey` missing/retired,
+  `chain_certificate_expired` over the stored path).
