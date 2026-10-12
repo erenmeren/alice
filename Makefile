@@ -484,7 +484,7 @@ image-notices: ## Third-party notices and the written source offer of the alice 
 
 .PHONY: notices
 notices: build ## Third-party notices of the Go modules in bin/alice and the helper, and the bundled npm packages
-	go run ./tools/notices -binaries bin/alice,bin/alice-helper-linux-amd64 -lockfile web/package-lock.json -node-modules web/node_modules -out bin/THIRD_PARTY_NOTICES.md
+	go run ./tools/notices -binaries bin/alice,bin/alice-helper-linux-amd64 -lockfile web/package-lock.json -node-modules web/node_modules -out bin/THIRD_PARTY_NOTICES.md -vendored web/src/design/THIRD_PARTY.json
 
 .PHONY: reproducible-check
 reproducible-check: ## Build alice and the helpers twice from clean copies of HEAD in different paths and compare the bytes

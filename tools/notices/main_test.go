@@ -153,6 +153,22 @@ func TestCommandLine(t *testing.T) {
 	assert.Contains(t, string(raw), "### Go standard library go")
 	out.Reset()
 	assert.Equal(t, 1, run([]string{"-binaries", filepath.Join(t.TempDir(), "missing"), "-lockfile", lock, "-node-modules", t.TempDir(), "-out", dest + "2"}, &out))
+	assert.NotContains(t, string(raw), "vendored assets", "without -vendored the output has no vendored section")
+
+	// -vendored is optional; when given, its paths are relative to the working directory (the repository root).
+	root, manifest := writeVendored(t, "SIL OPEN FONT LICENSE Version 1.1\n", true)
+	t.Chdir(root)
+	out.Reset()
+	require.Equal(t, 0, run([]string{"-binaries", self, "-lockfile", lock, "-node-modules", t.TempDir(), "-out", dest,
+		"-vendored", manifest}, &out), out.String())
+	raw, err = os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "## Web UI (vendored assets)\n\n### Geist (OFL-1.1)")
+	require.NoError(t, os.Remove(filepath.Join(root, "web/src/design/fonts/geist.woff")))
+	out.Reset()
+	assert.Equal(t, 1, run([]string{"-binaries", self, "-lockfile", lock, "-node-modules", t.TempDir(), "-out", dest,
+		"-vendored", manifest}, &out))
+	assert.Contains(t, out.String(), "vendored asset Geist")
 }
 
 func TestNpmPackageWithoutAnyLicenseFails(t *testing.T) {

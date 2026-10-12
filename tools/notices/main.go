@@ -3,10 +3,13 @@
 // information and the module cache), of the Go standard library, and of every npm package of
 // web/package-lock.json that is not a development dependency (the packages bundled into the web
 // UI). A Go module without a license file fails the tool; an npm package without one is listed with
-// the license its package.json declares.
+// the license its package.json declares. The optional -vendored manifest adds the files copied into
+// the web UI that are not npm packages (fonts, icons; vendored.go), with paths relative to the
+// working directory (the repository root).
 //
 //	go run ./tools/notices -binaries bin/alice,bin/alice-helper-linux-amd64 \
-//	  -lockfile web/package-lock.json -node-modules web/node_modules -out bin/THIRD_PARTY_NOTICES.md
+//	  -lockfile web/package-lock.json -node-modules web/node_modules -out bin/THIRD_PARTY_NOTICES.md \
+//	  -vendored web/src/design/THIRD_PARTY.json
 //
 // "notices images" writes IMAGE_NOTICES.md, the notices of the two container images the package ships (images.go).
 package main
@@ -44,18 +47,19 @@ func run(args []string, stderr io.Writer) int {
 	out := fs.String("out", "", "THIRD_PARTY_NOTICES.md to write")
 	modCache := fs.String("modcache", "", "Go module cache (default: go env GOMODCACHE)")
 	goRoot := fs.String("goroot", "", "Go installation (default: go env GOROOT)")
+	vendored := fs.String("vendored", "", "web/src/design/THIRD_PARTY.json (optional)")
 	if fs.Parse(args) != nil || fs.NArg() != 0 || *binaries == "" || *lockfile == "" || *nodeModules == "" || *out == "" {
 		fs.Usage()
 		return 2
 	}
-	if err := generate(*binaries, *lockfile, *nodeModules, *out, *modCache, *goRoot); err != nil {
+	if err := generate(*binaries, *lockfile, *nodeModules, *out, *modCache, *goRoot, *vendored); err != nil {
 		_, _ = fmt.Fprintln(stderr, "notices:", err)
 		return 1
 	}
 	return 0
 }
 
-func generate(binaries, lockfile, nodeModules, out, modCache, goRoot string) error {
+func generate(binaries, lockfile, nodeModules, out, modCache, goRoot, vendored string) error {
 	in := input{ModCache: modCache, GoRoot: goRoot, NodeModules: nodeModules}
 	var err error
 	if in.ModCache == "" {
@@ -83,6 +87,11 @@ func generate(binaries, lockfile, nodeModules, out, modCache, goRoot string) err
 	in.Modules = mergeModules(lists...)
 	if in.Npm, err = npmPackages(lockfile); err != nil {
 		return err
+	}
+	if vendored != "" {
+		if in.Vendored, err = vendoredAssets(vendored, "."); err != nil {
+			return err
+		}
 	}
 	var buf bytes.Buffer
 	if err := render(&buf, in); err != nil {
@@ -209,6 +218,7 @@ type input struct {
 	GoVersion, GoRoot, ModCache, NodeModules string
 	Modules                                  []module
 	Npm                                      []npmPackage
+	Vendored                                 []vendoredAsset
 }
 
 // escapePath is the module cache's case encoding: an upper-case letter becomes "!" and its
@@ -332,6 +342,9 @@ func render(w io.Writer, in input) error {
 		if err := writeTexts(&b, files); err != nil {
 			return err
 		}
+	}
+	if err := renderVendored(&b, in.Vendored); err != nil {
+		return err
 	}
 	_, err := w.Write(b.Bytes())
 	return err
