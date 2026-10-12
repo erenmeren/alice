@@ -104,7 +104,7 @@ func (s *Service) useRecoveryCode(ctx context.Context, tx pgx.Tx, userID uuid.UU
 		return false, fmt.Errorf("read recovery codes: %w", err)
 	}
 	for _, r := range list {
-		ok, _, err := s.recovery.Verify(ctx, r.hash, norm)
+		ok, _, err := s.checkSecret(ctx, s.recovery, "recovery code", userID, r.hash, norm)
 		if err != nil {
 			return false, err
 		}

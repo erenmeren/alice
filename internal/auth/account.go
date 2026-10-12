@@ -54,7 +54,7 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 				s.hasher.DummyVerify(ctx, cur)
 				return s.auditFailure(ctx, tx, actor, "auth.password_changed", p.UserID.String(), "locked")
 			}
-			ok, _, err := s.hasher.Verify(ctx, *a.hash, cur)
+			ok, _, err := s.checkSecret(ctx, s.hasher, "password", p.UserID, *a.hash, cur)
 			if err != nil {
 				return err
 			}

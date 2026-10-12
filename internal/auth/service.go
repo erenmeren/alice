@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"context"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"time"
 
@@ -53,9 +55,10 @@ type Config struct {
 	Keyring        *secrets.Keyring
 	Audit          *audit.Log
 	Clock          clock.Clock
-	Hasher         *Hasher  // PasswordParams in production
-	RecoveryHasher *Hasher  // RecoveryCodeParams in production
-	Notifier       Notifier // nil: no lockout e-mail
+	Hasher         *Hasher      // PasswordParams in production
+	RecoveryHasher *Hasher      // RecoveryCodeParams in production
+	Notifier       Notifier     // nil: no lockout e-mail
+	Log            *slog.Logger // nil: discarded
 }
 
 // Service implements local authentication, sessions, MFA, users and API tokens.
@@ -68,6 +71,7 @@ type Service struct {
 	recovery *Hasher
 	notifier Notifier
 	csrfKey  []byte
+	log      *slog.Logger
 
 	// credSlots bounds concurrent credential checks (password, TOTP, recovery code) to the
 	// password hasher's concurrency. A check takes a slot before it takes a pool connection,
@@ -89,10 +93,31 @@ func NewService(c Config) *Service {
 		recovery: c.RecoveryHasher,
 		notifier: c.Notifier,
 		csrfKey:  c.Keyring.Derive(secrets.LabelCSRF),
+		log:      logOrDiscard(c.Log),
 
 		credSlots:   make(chan struct{}, c.Hasher.concurrency()),
 		lockTimeout: credentialLockTimeout,
 	}
+}
+
+func logOrDiscard(l *slog.Logger) *slog.Logger {
+	if l == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return l
+}
+
+// checkSecret runs h.Verify. A stored hash that does not parse (a corrupted row) is a failed check, not an error: the
+// same Argon2 work runs (DummyVerify), so the attempt is counted and answered like a wrong secret, and the row is
+// logged for the operator (review I-7). what names the secret in the log line.
+func (s *Service) checkSecret(ctx context.Context, h *Hasher, what string, userID uuid.UUID, encoded, secret string) (ok, rehash bool, err error) {
+	ok, rehash, err = h.Verify(ctx, encoded, secret)
+	if errors.Is(err, errMalformedHash) {
+		s.log.ErrorContext(ctx, "stored "+what+" hash is malformed; the check counts as failed", "user_id", userID.String())
+		h.DummyVerify(ctx, secret)
+		return false, false, nil
+	}
+	return ok, rehash, err
 }
 
 // Meta describes the request that triggered an operation.

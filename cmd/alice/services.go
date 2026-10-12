@@ -101,6 +101,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		Hasher:         passwords,
 		RecoveryHasher: auth.NewHasher(auth.RecoveryCodeParams, recoveryHashConcurrency),
 		Notifier:       notify.AdminNotifier{Clock: clk}, // the lockout e-mail (Phase 7)
+		Log:            log,
 	})
 	lic := license.New(license.Config{
 		Pool:      pool,

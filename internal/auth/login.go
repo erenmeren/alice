@@ -285,7 +285,7 @@ func (s *Service) Login(ctx context.Context, username, password string, m Meta) 
 				s.hasher.DummyVerify(ctx, pw)
 				return s.auditFailure(ctx, tx, actor, "auth.login", a.id.String(), "locked")
 			}
-			ok, rehash, err := s.hasher.Verify(ctx, *a.hash, pw)
+			ok, rehash, err := s.checkSecret(ctx, s.hasher, "password", a.id, *a.hash, pw)
 			if err != nil {
 				return err
 			}
