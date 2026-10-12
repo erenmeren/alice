@@ -1,17 +1,31 @@
-import { Alert, Button, Group, Stack, Text, Title } from '@mantine/core';
-import { useState } from 'react';
+import { Alert, Button, Stack } from '@mantine/core';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { skipMail } from '../../api/endpoints';
 import { useAuth } from '../../auth/AuthProvider';
 import { ErrorAlert } from '../../components/ErrorAlert';
 import { MailSettings, type MailDraft } from '../../components/settings/MailSettings';
 import { useStepUp } from '../../components/StepUpProvider';
+import { Icon } from '../../design/Icon';
 import { isGone } from './gone';
+import { StepActions, StepHeading } from './SetupShell';
 
 // MailStep is the wizard's optional mail server step (R43 row 16, Phase 7 carry 21). It is the Settings mail form
 // itself, with its test e-mail. Continue needs saved mail settings (the server then counts mail as chosen); Skip
 // records the choice, and the dashboard's "Finish setting up" list keeps the mail server on it.
-export function MailStep({ onDone, onGone, draft, onDraft }: { onDone: () => void; onGone: () => void; draft?: MailDraft | null; onDraft?: (d: MailDraft) => void }) {
+export function MailStep({
+  onDone,
+  onGone,
+  draft,
+  onDraft,
+  back,
+}: {
+  onDone: () => void;
+  onGone: () => void;
+  draft?: MailDraft | null;
+  onDraft?: (d: MailDraft) => void;
+  back?: ReactNode;
+}) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const { refreshSetupStatus } = useAuth();
@@ -48,8 +62,7 @@ export function MailStep({ onDone, onGone, draft, onDraft }: { onDone: () => voi
 
   return (
     <Stack>
-      <Title order={2}>{t('setup.mail.title')}</Title>
-      <Text>{t('setup.mail.help')}</Text>
+      <StepHeading title={t('setup.mail.title')} intro={t('setup.mail.help')} />
       <MailSettings draft={draft} onDraft={onDraft} />
       {notSaved && (
         <Alert color="yellow" role="alert">
@@ -57,14 +70,14 @@ export function MailStep({ onDone, onGone, draft, onDraft }: { onDone: () => voi
         </Alert>
       )}
       <ErrorAlert error={error} />
-      <Group>
+      <StepActions back={back}>
         <Button variant="default" data-testid="setup-skip" loading={busy === 'skip'} onClick={() => void skip()}>
           {t('setup.skip')}
         </Button>
-        <Button loading={busy === 'continue'} onClick={() => void go()}>
+        <Button loading={busy === 'continue'} onClick={() => void go()} rightSection={<Icon name="ArrowRight" size={15} />}>
           {t('ui.continue')}
         </Button>
-      </Group>
+      </StepActions>
     </Stack>
   );
 }

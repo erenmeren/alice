@@ -1,17 +1,21 @@
-import { Alert, Button, Checkbox, Group, PasswordInput, Progress, Stack, Text, Title } from '@mantine/core';
+import { Alert, Button, Checkbox, PasswordInput, Progress, Stack, Text } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setRecoveryPassphrase } from '../../api/endpoints';
 import { isGone } from './gone';
 import { ErrorAlert } from '../../components/ErrorAlert';
 import { useStepUp } from '../../components/StepUpProvider';
+import { Icon } from '../../design/Icon';
+import { StepActions, StepHeading } from './SetupShell';
+import classes from './setup.module.css';
 import { passphraseStrength, type Strength } from './strength';
 
+// The meter's colors are the design's semantic tokens (the word under the meter carries the meaning).
 const METER: Record<Strength, { value: number; color: string }> = {
-  tooShort: { value: 10, color: 'red' },
-  fair: { value: 40, color: 'orange' },
-  good: { value: 70, color: 'yellow' },
-  strong: { value: 100, color: 'green' },
+  tooShort: { value: 10, color: 'var(--alice-danger)' },
+  fair: { value: 40, color: 'var(--alice-warning)' },
+  good: { value: 70, color: 'var(--alice-brand)' },
+  strong: { value: 100, color: 'var(--alice-success)' },
 };
 
 // PassphraseStep sets the recovery passphrase. The server refuses what passphraseStrength rates tooShort or fair
@@ -47,11 +51,13 @@ export function PassphraseStep({ onDone, onGone, done = false }: { onDone: () =>
   if (done) {
     return (
       <Stack>
-        <Title order={2}>{t('setup.passphrase.title')}</Title>
+        <StepHeading title={t('setup.passphrase.title')} />
         <Text>{t('setup.passphrase.doneState')}</Text>
-        <Group>
-          <Button onClick={onDone}>{t('ui.continue')}</Button>
-        </Group>
+        <StepActions>
+          <Button onClick={onDone} rightSection={<Icon name="ArrowRight" size={15} />}>
+            {t('ui.continue')}
+          </Button>
+        </StepActions>
       </Stack>
     );
   }
@@ -59,7 +65,7 @@ export function PassphraseStep({ onDone, onGone, done = false }: { onDone: () =>
   return (
     <form onSubmit={submit}>
       <Stack>
-        <Title order={2}>{t('setup.passphrase.title')}</Title>
+        <StepHeading title={t('setup.passphrase.title')} />
         <Alert color="yellow">{t('setup.passphrase.warning')}</Alert>
         <ErrorAlert error={error} />
         {mismatch && (
@@ -83,7 +89,7 @@ export function PassphraseStep({ onDone, onGone, done = false }: { onDone: () =>
           {t(`setup.passphrase.strength.${strength}`)}
         </Text>
         {strength === 'fair' && (
-          <Text size="sm" c="red.9" id="passphrase-too-weak">
+          <Text size="sm" c="var(--alice-danger)" id="passphrase-too-weak">
             {t('setup.passphrase.tooWeak')}
           </Text>
         )}
@@ -94,13 +100,16 @@ export function PassphraseStep({ onDone, onGone, done = false }: { onDone: () =>
           autoComplete="new-password"
         />
         <Checkbox
+          className={classes.checkOption}
           label={t('setup.passphrase.stored')}
           checked={stored}
           onChange={(e) => setStored(e.currentTarget.checked)}
         />
-        <Button type="submit" loading={busy} disabled={!stored || !acceptable}>
-          {t('setup.passphrase.save')}
-        </Button>
+        <StepActions>
+          <Button type="submit" loading={busy} disabled={!stored || !acceptable}>
+            {t('setup.passphrase.save')}
+          </Button>
+        </StepActions>
       </Stack>
     </form>
   );

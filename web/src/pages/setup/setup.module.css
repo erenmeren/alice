@@ -1,0 +1,223 @@
+/* The first-run wizard in the design's setup shell (alice-design/dist/styles.css .setup-layout, .setup-shell,
+   .setup-steps, .setup-step, .setup-step-number, .setup-content, .form-actions, .check-option). Tokens only. */
+.layout {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 35px 25px;
+}
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brandMark {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+.title.title {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.toggles {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.shell {
+  display: grid;
+  grid-template-columns: 245px minmax(0, 1fr);
+  min-height: 610px;
+  margin-top: 40px;
+  overflow: hidden;
+  background: var(--alice-surface);
+  border: 1px solid var(--alice-border);
+  border-radius: var(--alice-radius-lg);
+}
+
+/* The progress rail: a list, never a control. */
+.rail {
+  padding: 30px;
+  background: var(--alice-surface-subtle);
+  border-right: 1px solid var(--alice-border);
+}
+.railTitle {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--alice-text);
+}
+.counter {
+  display: none;
+  margin: 0;
+  font-size: 11px;
+  color: var(--alice-text-muted);
+}
+.railList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.railItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 25px 0;
+  font-size: 12px;
+  color: var(--alice-text-muted);
+}
+.railItem[data-state='current'] {
+  color: var(--alice-brand);
+  font-weight: 600;
+}
+.railItem[data-state='done'] {
+  color: var(--alice-text-secondary);
+}
+.railNumber {
+  display: grid;
+  place-items: center;
+  width: 23px;
+  height: 23px;
+  flex-shrink: 0;
+  border: 1px solid var(--alice-border-strong);
+  border-radius: 50%;
+  font: 10px var(--mantine-font-family-monospace);
+}
+.railItem[data-state='current'] .railNumber {
+  background: var(--alice-brand);
+  border-color: var(--alice-brand);
+  color: var(--alice-on-brand);
+}
+.railItem[data-state='done'] .railNumber {
+  background: var(--alice-success-soft);
+  border-color: var(--alice-brand-line);
+  color: var(--alice-success);
+}
+.railText {
+  display: grid;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* The state word ("Done", "Current step", "Not started") is for screen readers; the marker shows it visually. */
+.railState {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* The step panel. */
+.content {
+  padding: 40px;
+  min-width: 0;
+}
+.content .stepTitle,
+.embedded :global(.mantine-Title-root)[data-order='2'] {
+  font-size: 27px;
+  font-weight: 590;
+  letter-spacing: -1px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.intro {
+  margin: 12px 0 14px;
+  font-size: 12px;
+  color: var(--alice-text-secondary);
+}
+.hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--alice-text-secondary);
+}
+.formActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--alice-border);
+}
+.spacer {
+  flex: 1;
+}
+/* Long labels (Turkish, "Start 30-day evaluation (up to 5 targets)") wrap inside the button instead of widening the
+   page at 390 px. */
+.formActions :global(.mantine-Button-root),
+.wrapButton {
+  max-width: 100%;
+  height: auto;
+  min-height: var(--button-height);
+}
+.formActions :global(.mantine-Button-label),
+.wrapButton :global(.mantine-Button-label) {
+  white-space: normal;
+  text-align: center;
+  padding-block: 6px;
+}
+
+/* The design's bordered choice rows: a radio choice, a confirmation checkbox, or one of two ways to answer a step. */
+.checkOption {
+  padding: 14px;
+  border: 1px solid var(--alice-border);
+  border-radius: 7px;
+}
+.choice {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--alice-border);
+  border-radius: var(--alice-radius-md);
+}
+.choiceTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--alice-text);
+}
+
+@media (max-width: 767px) {
+  .layout {
+    padding: 25px 16px;
+  }
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+    margin-top: 25px;
+  }
+  .rail {
+    padding: 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--alice-border);
+  }
+  .railTitle {
+    display: none;
+  }
+  .counter {
+    display: block;
+  }
+  .railItem {
+    display: none;
+  }
+  .railItem[data-state='current'] {
+    display: flex;
+    margin: 8px 0 0;
+  }
+  .content {
+    padding: 25px;
+  }
+}

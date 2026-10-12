@@ -23,6 +23,33 @@ import { startOf } from './SetupPage';
 const enrollment = { secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', otpauth_uri: 'otpauth://totp/Alice:admin', qr_png: 'iVBORw0KGgo=' };
 const codes = ['AAAA-BBBB-CCCC-DDDD', 'EEEE-FFFF-GGGG-HHHH'];
 
+// The handlers of a fresh installation (nobody signed in, no administrator yet).
+function freshSetupHandlers() {
+  return sessionHandlers(null, freshStatus);
+}
+
+// The handlers of an administrator who stopped the wizard after the passphrase; overrides set the resume point.
+function adminSetupHandlers(overrides: Partial<SetupStatus> = {}) {
+  const status: SetupStatus = {
+    admin_exists: true,
+    recovery_passphrase_set: true,
+    license_chosen: false,
+    completed: false,
+    default_locale: 'en',
+    https_chosen: true,
+    mail_chosen: false,
+    next_step: 'mail',
+    ...overrides,
+  };
+  return [
+    ...sessionHandlers(sessionFor('admin'), status),
+    http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+    http.get('/api/v1/settings/https', () => HttpResponse.json(httpsInfoFixture({ temporary: true }))),
+  ];
+}
+
+const rail = () => screen.getByRole('list', { name: 'Setup progress' });
+
 async function enterCode(code = 'K7QX2M-9TPD4R-WB5H8N-3VZC6A') {
   await userEvent.type(await screen.findByLabelText('Setup code'), code);
   await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
@@ -632,3 +659,87 @@ describe('setup wizard steps of Phase 8', () => {
   });
 });
 
+describe('setup wizard in the design\'s setup shell', () => {
+  it('keeps "Set up Alice" as the only h1 and each step title as an h2 inside the setup shell', async () => {
+    server.use(...freshSetupHandlers());
+    await renderRoute('/setup');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Set up Alice' })).toBeVisible();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('heading', { level: 2, name: 'Enter the setup code' })).toBeVisible();
+    expect(rail()).toBeVisible();
+    expect(screen.getByRole('main')).toContainElement(rail());
+    expect(screen.getByText('Setup', { selector: '.mantine-Badge-label' })).toBeInTheDocument();
+  });
+
+  it('rail marks the step resumed from next_step and Back sits in the step’s actions row', async () => {
+    server.use(...adminSetupHandlers({ next_step: 'mail' }));
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { level: 2, name: 'Mail server (optional)' });
+    expect(within(rail()).getByText('Mail server').closest('li')).toHaveAttribute('aria-current', 'step');
+    const back = screen.getByTestId('setup-back');
+    const skip = screen.getByTestId('setup-skip');
+    expect(back.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(back.parentElement).toBe(skip.parentElement);
+  });
+
+  it('offers the language toggle only on the setup code step; the theme toggle stays', async () => {
+    server.use(
+      ...freshSetupHandlers(),
+      http.post('/api/v1/setup/session', () => HttpResponse.json({ csrf_token: 'setup-csrf' })),
+    );
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { level: 2, name: 'Enter the setup code' });
+    expect(screen.getByRole('button', { name: 'Switch color mode' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Alice kurulumu' })).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Kurulum adımları' })).getByText('Kurulum kodu ve dil')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'English' }));
+    await enterCode();
+    await screen.findByRole('heading', { level: 2, name: 'Choose your language' });
+    expect(screen.queryByRole('button', { name: 'Türkçe' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Switch color mode' })).toBeInTheDocument();
+    // The language step is still the first rail item, and nothing is done yet.
+    expect(within(rail()).getByText('Setup code & language').closest('li')).toHaveAttribute('aria-current', 'step');
+    expect(within(rail()).queryAllByText('Done')).toHaveLength(0);
+  });
+
+  it('has no Back before the HTTPS step and moves the rail only with the wizard’s own buttons', async () => {
+    server.use(...adminSetupHandlers({ recovery_passphrase_set: false, https_chosen: false, next_step: 'passphrase' }));
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { level: 2, name: 'Choose a recovery passphrase' });
+    expect(screen.queryByTestId('setup-back')).not.toBeInTheDocument();
+    const current = within(rail()).getByText('Recovery passphrase').closest('li');
+    expect(current).toHaveAttribute('aria-current', 'step');
+    // Clicking a later rail item goes nowhere: the passphrase is still required.
+    await userEvent.click(within(rail()).getByText('License'));
+    expect(screen.getByRole('heading', { level: 2, name: 'Choose a recovery passphrase' })).toBeInTheDocument();
+    expect(current).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByRole('button', { name: 'Save passphrase' })).toBeDisabled();
+  });
+
+  it.each([
+    ['https', 'HTTPS certificate', 'HTTPS certificate', { https_chosen: false, next_step: 'https' }],
+    ['license', 'Add a license', 'License', { mail_chosen: true, next_step: 'license' }],
+    ['platform', 'Connect your servers', 'First server', { mail_chosen: true, license_chosen: true, next_step: 'platform' }],
+  ] as const)('puts Back first in the actions row of the %s step', async (_step, heading, item, overrides) => {
+    server.use(...adminSetupHandlers(overrides as Partial<SetupStatus>));
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { level: 2, name: heading });
+    expect(within(rail()).getByText(item).closest('li')).toHaveAttribute('aria-current', 'step');
+    const back = screen.getByTestId('setup-back');
+    expect(back).toHaveTextContent('Back');
+    expect(back.parentElement!.firstElementChild).toBe(back);
+  });
+
+  it('puts Back first in the actions row of the last step and marks every rail item done', async () => {
+    server.use(...adminSetupHandlers({ mail_chosen: true, license_chosen: true, next_step: 'platform' }));
+    await renderRoute('/setup');
+    await screen.findByRole('heading', { level: 2, name: 'Connect your servers' });
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    await screen.findByRole('heading', { level: 2, name: 'Alice is ready' });
+    const back = screen.getByTestId('setup-back');
+    expect(back.parentElement!.firstElementChild).toBe(back);
+    expect(within(back.parentElement!).getByRole('button', { name: 'Go to the dashboard' })).toBeInTheDocument();
+    for (const li of within(rail()).getAllByRole('listitem')) expect(li).toHaveTextContent('Done');
+  });
+});

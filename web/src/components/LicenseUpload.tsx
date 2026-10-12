@@ -8,6 +8,7 @@ import { formatDateTime } from "../datetime";
 import { AppModal } from "./AppModal";
 import { ErrorAlert } from "./ErrorAlert";
 import { useStepUp } from "./StepUpProvider";
+import { DialogActions } from "./ui";
 
 const MAX_LICENSE_BYTES = 64 * 1024;
 
@@ -116,32 +117,37 @@ export function LicenseUpload({
         centered
       >
         {preview && p && (
-          <Stack>
-            <Text>
-              {t("license.upload.previewSummary", {
-                customer: p.customer,
-                max: p.max_targets,
-                from: fmt(p.valid_from),
-                until: fmt(p.valid_until),
-              })}
-            </Text>
-            {preview.correction && (
-              <Text size="sm">
-                {t("license.upload.correction", { replaces: p.replaces })}
+          <>
+            <Stack>
+              <Text>
+                {t("license.upload.previewSummary", {
+                  customer: p.customer,
+                  max: p.max_targets,
+                  from: fmt(p.valid_from),
+                  until: fmt(p.valid_until),
+                })}
               </Text>
-            )}
-            {preview.already_expired && (
-              <Alert color="yellow">{t("license.upload.alreadyExpired")}</Alert>
-            )}
-            {preview.pending && (
-              <Alert color="blue">
-                {t("license.upload.pending", { from: fmt(p.valid_from) })}
-              </Alert>
-            )}
-            {preview.duplicate && (
-              <Alert color="blue">{t("license.upload.duplicate")}</Alert>
-            )}
-            <Group justify="flex-end">
+              {preview.correction && (
+                <Text size="sm">
+                  {t("license.upload.correction", { replaces: p.replaces })}
+                </Text>
+              )}
+              {preview.already_expired && (
+                <Alert color="yellow">
+                  {t("license.upload.alreadyExpired")}
+                </Alert>
+              )}
+              {preview.pending && (
+                <Alert color="blue">
+                  {t("license.upload.pending", { from: fmt(p.valid_from) })}
+                </Alert>
+              )}
+              {preview.duplicate && (
+                <Alert color="blue">{t("license.upload.duplicate")}</Alert>
+              )}
+            </Stack>
+            {/* The design's dialog footer bar: Cancel, then the primary action. */}
+            <DialogActions>
               <Button variant="default" onClick={() => setPreview(null)}>
                 {t("license.upload.cancel")}
               </Button>
@@ -150,8 +156,8 @@ export function LicenseUpload({
                   {t("license.upload.confirm")}
                 </Button>
               )}
-            </Group>
-          </Stack>
+            </DialogActions>
+          </>
         )}
       </AppModal>
     </Stack>

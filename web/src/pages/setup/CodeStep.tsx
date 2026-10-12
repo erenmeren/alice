@@ -1,9 +1,12 @@
-import { Button, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Button, Stack, TextInput } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { startSetupSession } from '../../api/endpoints';
 import { isGone } from './gone';
 import { ErrorAlert } from '../../components/ErrorAlert';
+import { Icon } from '../../design/Icon';
+import { StepActions, StepHeading } from './SetupShell';
+import classes from './setup.module.css';
 
 export function CodeStep({ onDone, onGone }: { onDone: () => void; onGone: () => void }) {
   const { t } = useTranslation();
@@ -28,8 +31,7 @@ export function CodeStep({ onDone, onGone }: { onDone: () => void; onGone: () =>
   return (
     <form onSubmit={submit}>
       <Stack>
-        <Title order={2}>{t('setup.code.title')}</Title>
-        <Text>{t('setup.code.help')}</Text>
+        <StepHeading title={t('setup.code.title')} intro={t('setup.code.help')} />
         <ErrorAlert error={error} />
         <TextInput
           label={t('setup.code.label')}
@@ -38,12 +40,12 @@ export function CodeStep({ onDone, onGone }: { onDone: () => void; onGone: () =>
           autoComplete="off"
           spellCheck={false}
         />
-        <Text size="sm" c="gray.7">
-          {t('setup.code.lost')}
-        </Text>
-        <Button type="submit" loading={busy}>
-          {t('ui.continue')}
-        </Button>
+        <p className={classes.hint}>{t('setup.code.lost')}</p>
+        <StepActions>
+          <Button type="submit" loading={busy} rightSection={<Icon name="ArrowRight" size={15} />}>
+            {t('ui.continue')}
+          </Button>
+        </StepActions>
       </Stack>
     </form>
   );

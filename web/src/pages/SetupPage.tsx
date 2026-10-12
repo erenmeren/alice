@@ -1,4 +1,4 @@
-import { Button, Container, Group, Stack, Title } from '@mantine/core';
+import { Button } from '@mantine/core';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useNavigate } from 'react-router';
@@ -9,6 +9,7 @@ import { PageLoader } from '../auth/guards';
 import { adminExists } from '../auth/setupStatus';
 import { RecoveryCodes } from '../components/RecoveryCodes';
 import { TotpEnrollment } from '../components/TotpEnrollment';
+import { Icon } from '../design/Icon';
 import { AdminStep } from './setup/AdminStep';
 import { CodeStep } from './setup/CodeStep';
 import { DoneStep } from './setup/DoneStep';
@@ -20,6 +21,8 @@ import type { MailDraft } from '../components/settings/MailSettings';
 import { MailStep } from './setup/MailStep';
 import { PassphraseStep } from './setup/PassphraseStep';
 import { PlatformStep } from './setup/PlatformStep';
+import { SetupShell } from './setup/SetupShell';
+import classes from './setup/setup.module.css';
 
 export type WizardStep =
   | 'code'
@@ -102,46 +105,53 @@ export function SetupPage() {
     setStep('codes');
   };
 
+  // Back sits first in the step's own actions row (design .form-actions); only BACK decides where it exists.
+  const backButton = back && (
+    <Button variant="default" data-testid="setup-back" leftSection={<Icon name="ArrowLeft" size={15} />} onClick={() => setStep(back)}>
+      {t('setup.back')}
+    </Button>
+  );
+
   return (
-    <Container size="sm" my="xl">
-      <Stack>
-        <Title order={1}>{t('setup.title')}</Title>
-        {current === 'code' && <CodeStep onDone={() => setStep('language')} onGone={gone} />}
-        {current === 'language' && <LanguageStep onDone={() => setStep('admin')} onGone={gone} />}
-        {current === 'admin' && (
-          <AdminStep
-            onGone={gone}
-            onEnrolled={(e) => {
-              setEnrollment(e);
-              setStep('totp');
-            }}
-          />
-        )}
-        {current === 'totp' && enrollment && <TotpEnrollment enrollment={enrollment} onVerify={verifyAdmin} />}
-        {current === 'codes' && <RecoveryCodes codes={codes} onContinue={() => setStep('passphrase')} />}
-        {current === 'passphrase' && (
-          <PassphraseStep
-            done={!!setupStatus?.recovery_passphrase_set}
-            onDone={() => {
-              void refreshSetupStatus();
-              setStep('https');
-            }}
-            onGone={gone}
-          />
-        )}
-        {current === 'https' && <HttpsStep done={!!setupStatus?.https_chosen} format={httpsFormat} onFormat={setHttpsFormat} onDone={() => setStep('mail')} onGone={gone} />}
-        {current === 'mail' && <MailStep draft={mailDraft} onDraft={setMailDraft} onDone={() => setStep('license')} onGone={gone} />}
-        {current === 'license' && <LicenseStep done={!!setupStatus?.license_chosen} onDone={() => setStep('platform')} onGone={gone} />}
-        {current === 'platform' && <PlatformStep onDone={() => setStep('done')} />}
-        {current === 'done' && <DoneStep onGone={gone} />}
-        {back && (
-          <Group>
-            <Button variant="subtle" data-testid="setup-back" onClick={() => setStep(back)}>
-              {t('setup.back')}
-            </Button>
-          </Group>
-        )}
-      </Stack>
-    </Container>
+    <SetupShell current={current}>
+      {current === 'code' && <CodeStep onDone={() => setStep('language')} onGone={gone} />}
+      {current === 'language' && <LanguageStep onDone={() => setStep('admin')} onGone={gone} />}
+      {current === 'admin' && (
+        <AdminStep
+          onGone={gone}
+          onEnrolled={(e) => {
+            setEnrollment(e);
+            setStep('totp');
+          }}
+        />
+      )}
+      {current === 'totp' && enrollment && (
+        <div className={classes.embedded}>
+          <TotpEnrollment enrollment={enrollment} onVerify={verifyAdmin} />
+        </div>
+      )}
+      {current === 'codes' && (
+        <div className={classes.embedded}>
+          <RecoveryCodes codes={codes} onContinue={() => setStep('passphrase')} />
+        </div>
+      )}
+      {current === 'passphrase' && (
+        <PassphraseStep
+          done={!!setupStatus?.recovery_passphrase_set}
+          onDone={() => {
+            void refreshSetupStatus();
+            setStep('https');
+          }}
+          onGone={gone}
+        />
+      )}
+      {current === 'https' && (
+        <HttpsStep done={!!setupStatus?.https_chosen} format={httpsFormat} onFormat={setHttpsFormat} onDone={() => setStep('mail')} onGone={gone} back={backButton} />
+      )}
+      {current === 'mail' && <MailStep draft={mailDraft} onDraft={setMailDraft} onDone={() => setStep('license')} onGone={gone} back={backButton} />}
+      {current === 'license' && <LicenseStep done={!!setupStatus?.license_chosen} onDone={() => setStep('platform')} onGone={gone} back={backButton} />}
+      {current === 'platform' && <PlatformStep onDone={() => setStep('done')} back={backButton} />}
+      {current === 'done' && <DoneStep onGone={gone} back={backButton} />}
+    </SetupShell>
   );
 }

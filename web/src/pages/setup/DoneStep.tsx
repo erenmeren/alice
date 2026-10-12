@@ -1,14 +1,16 @@
-import { Button, Stack, Text, Title } from '@mantine/core';
-import { useState } from 'react';
+import { Button, Stack } from '@mantine/core';
+import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { completeSetup } from '../../api/endpoints';
 import { useAuth } from '../../auth/AuthProvider';
 import { ErrorAlert } from '../../components/ErrorAlert';
 import { useStepUp } from '../../components/StepUpProvider';
+import { Icon } from '../../design/Icon';
 import { isGone } from './gone';
+import { StepActions, StepHeading } from './SetupShell';
 
-export function DoneStep({ onGone }: { onGone: () => void }) {
+export function DoneStep({ onGone, back }: { onGone: () => void; back?: ReactNode }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { refreshSetupStatus } = useAuth();
@@ -32,12 +34,13 @@ export function DoneStep({ onGone }: { onGone: () => void }) {
 
   return (
     <Stack>
-      <Title order={2}>{t('setup.done.title')}</Title>
-      <Text>{t('setup.done.help')}</Text>
+      <StepHeading title={t('setup.done.title')} intro={t('setup.done.help')} />
       <ErrorAlert error={error} />
-      <Button onClick={() => void finish()} loading={busy}>
-        {t('setup.done.button')}
-      </Button>
+      <StepActions back={back}>
+        <Button onClick={() => void finish()} loading={busy} rightSection={<Icon name="ArrowRight" size={15} />}>
+          {t('setup.done.button')}
+        </Button>
+      </StepActions>
     </Stack>
   );
 }

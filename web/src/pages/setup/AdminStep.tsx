@@ -1,10 +1,12 @@
-import { Alert, Button, PasswordInput, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Alert, Button, PasswordInput, Stack, TextInput } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { startAdminEnrollment } from '../../api/endpoints';
 import type { MfaEnrollment } from '../../api/types';
 import { isGone } from './gone';
 import { ErrorAlert } from '../../components/ErrorAlert';
+import { Icon } from '../../design/Icon';
+import { StepActions, StepHeading } from './SetupShell';
 
 export function AdminStep({ onEnrolled, onGone }: { onEnrolled: (e: MfaEnrollment) => void; onGone: () => void }) {
   const { t } = useTranslation();
@@ -37,8 +39,7 @@ export function AdminStep({ onEnrolled, onGone }: { onEnrolled: (e: MfaEnrollmen
   return (
     <form onSubmit={submit}>
       <Stack>
-        <Title order={2}>{t('setup.admin.title')}</Title>
-        <Text>{t('setup.admin.help')}</Text>
+        <StepHeading title={t('setup.admin.title')} intro={t('setup.admin.help')} />
         <ErrorAlert error={error} />
         {mismatch && (
           <Alert color="red" role="alert">
@@ -78,9 +79,11 @@ export function AdminStep({ onEnrolled, onGone }: { onEnrolled: (e: MfaEnrollmen
           onChange={(e) => setRepeat(e.currentTarget.value)}
           autoComplete="new-password"
         />
-        <Button type="submit" loading={busy}>
-          {t('ui.continue')}
-        </Button>
+        <StepActions>
+          <Button type="submit" loading={busy} rightSection={<Icon name="ArrowRight" size={15} />}>
+            {t('ui.continue')}
+          </Button>
+        </StepActions>
       </Stack>
     </form>
   );
