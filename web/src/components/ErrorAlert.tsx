@@ -1,8 +1,23 @@
-import { Alert, List, Text } from '@mantine/core';
+import { Alert, Code, List, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { ApiError, NetworkError } from '../api/client';
 import { keyAlgorithmKey } from '../api/enums';
 import { withRoleCode } from './CodeText';
+
+// ErrorCodeLine writes the translated "Error code: {{code}}" with the code itself in a <Code translate="no">, wherever
+// the language puts the placeholder (the sentence stays the translator's; nothing is assembled from parts).
+function ErrorCodeLine({ code }: { code: string }) {
+  const { t } = useTranslation();
+  const mark = '\u0000';
+  const [before, after = ''] = t('jobs.errorCode', { code: mark }).split(mark);
+  return (
+    <>
+      {before}
+      <Code translate="no">{code}</Code>
+      {after}
+    </>
+  );
+}
 
 // ErrorAlert shows an error in the user's language: what happened, what to do, and the request ID.
 export function ErrorAlert({ error }: { error: unknown }) {
@@ -65,8 +80,14 @@ export function ErrorAlert({ error }: { error: unknown }) {
           ))}
         </List>
       )}
+      {/* The stable ALC-* code (design: a failure states a stable error code), as JobErrorAlert shows it. */}
+      {error.code && (
+        <Text size="xs" c="dimmed" mt="xs">
+          <ErrorCodeLine code={error.code} />
+        </Text>
+      )}
       {error.requestId && (
-        <Text size="xs" c="gray.7" mt="xs">
+        <Text size="xs" c="dimmed" mt="xs">
           {t('ui.requestId', { id: error.requestId })}
         </Text>
       )}
