@@ -147,7 +147,8 @@ export function AppLayout() {
       <a href="#main" className={classes.skipLink}>
         {t('shell.skip')}
       </a>
-      <AppShell.Navbar id="app-navbar" aria-label={t('nav.label')} className={classes.navbar}>
+      {/* The sidebar is an aside (the design's markup); the one named navigation landmark holds only the links. */}
+      <AppShell.Navbar component="aside" id="app-navbar" className={classes.navbar}>
         <Link to="/" className={classes.brand} onClick={nav.close}>
           <img src="/favicon.svg" alt="" className={classes.brandMark} />
           <span>
@@ -166,20 +167,22 @@ export function AppLayout() {
             {version.data && <div className={classes.installationMeta}>{t('shell.versionLine', { version: version.data.version })}</div>}
           </div>
         </div>
-        <div className={classes.navScroll}>
-          {GROUPS.map((g) => {
-            const inGroup = items.filter((i) => i.group === g);
-            if (inGroup.length === 0) return null;
-            return (
-              <div key={g}>
-                {g !== 'none' && <div className={classes.group}>{t(`nav.groups.${g}`)}</div>}
-                {inGroup.map(navLink)}
-              </div>
-            );
-          })}
-        </div>
+        <nav aria-label={t('nav.label')} className={classes.nav}>
+          <div className={classes.navScroll}>
+            {GROUPS.map((g) => {
+              const inGroup = items.filter((i) => i.group === g);
+              if (inGroup.length === 0) return null;
+              return (
+                <div key={g}>
+                  {g !== 'none' && <div className={classes.group}>{t(`nav.groups.${g}`)}</div>}
+                  {inGroup.map(navLink)}
+                </div>
+              );
+            })}
+          </div>
+          <div className={classes.accountLinks}>{account.map(navLink)}</div>
+        </nav>
         <div className={classes.bottom}>
-          {account.map(navLink)}
           <div className={classes.account}>
             <span className={classes.avatar} aria-hidden="true">
               {initials(session.user.display_name, i18n.language)}

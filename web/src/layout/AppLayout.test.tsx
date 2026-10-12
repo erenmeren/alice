@@ -7,12 +7,11 @@ import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 import { ACCOUNT_ITEMS, NAV_ITEMS, isActive } from './AppLayout';
 
-// The brand link ("Alice.") is in the navigation too; it is not a destination.
+// The destinations named in the navigation landmark (the brand link sits outside it, in the sidebar).
 const linkNames = () =>
   within(screen.getByRole('navigation', { name: 'Main navigation' }))
     .getAllByRole('link')
-    .map((a) => a.textContent ?? '')
-    .filter((n) => !n.startsWith('Alice'));
+    .map((a) => a.textContent ?? '');
 
 // rule returns the declarations of a top-level rule of the shell's style sheet.
 const css = readFileSync('src/layout/AppLayout.module.css', 'utf8');
@@ -73,6 +72,22 @@ describe('AppLayout shell', () => {
     expect(screen.getByText('Inventory')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: /Inventory|Operations|Administration/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Inventory' })).not.toBeInTheDocument();
+  });
+
+  it('names as navigation only the links: brand, installation card, account and Sign out sit outside it, in the sidebar', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderRoute('/license');
+    const nav = await screen.findByRole('navigation', { name: 'Main navigation' });
+    const sidebar = screen.getByRole('complementary');
+    expect(sidebar).toHaveAttribute('id', 'app-navbar');
+    expect(sidebar).toContainElement(nav);
+    expect(within(nav).getByRole('link', { name: 'People & access' })).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'Your account' })).toBeInTheDocument();
+    expect(within(nav).queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument();
+    expect(within(nav).queryByTestId('current-user')).not.toBeInTheDocument();
+    expect(within(nav).queryByText('Self-hosted installation')).not.toBeInTheDocument();
+    expect(within(sidebar).getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    expect(within(sidebar).getByTestId('current-user')).toBeInTheDocument();
   });
 
   it('marks the current page and keeps nav names exact', async () => {

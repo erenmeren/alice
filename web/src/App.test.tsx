@@ -102,7 +102,7 @@ describe('application shell', () => {
   it('shows the user name in the sidebar, which phones open with the menu button', async () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     await renderRoute('/');
-    expect(within(await screen.findByRole('navigation')).getByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
+    expect(within(await screen.findByRole('complementary')).getByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
   });
 
   it('shows the setup banner to an admin until the recovery passphrase is set', async () => {

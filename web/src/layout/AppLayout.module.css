@@ -12,6 +12,7 @@
 .installationSymbol { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 6px; background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
 .installationName { font-size: 12px; font-weight: 600; }
 .installationMeta { font-size: 11px; color: var(--alice-text-secondary); }
+.nav { display: flex; flex-direction: column; flex: 1 0 auto; }
 .navScroll { flex: 1 0 auto; }
 .group { margin: 19px 0 8px; padding: 0 10px; font-size: 10px; font-weight: 600; letter-spacing: 1.3px; text-transform: uppercase; color: var(--alice-text-muted); }
 .link { position: relative; min-height: 39px; margin: 2px 0; padding: 9px 11px; border-radius: 7px; color: var(--alice-text-secondary); }
@@ -19,7 +20,8 @@
 .link[data-active] { background: var(--alice-brand-soft); color: var(--alice-brand); font-weight: 600; }
 .link[data-active]::before { content: ''; position: absolute; left: 0; top: calc(50% - 8px); width: 3px; height: 16px; border-radius: 3px; background: var(--alice-brand); }
 .linkLabel { font-size: 13px; overflow-wrap: anywhere; }
-.bottom { display: grid; gap: 6px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--alice-border); }
+.accountLinks { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--alice-border); }
+.bottom { display: grid; gap: 6px; margin-top: 4px; }
 .account { display: flex; align-items: center; gap: 9px; padding: 6px 8px; }
 .accountText { min-width: 0; }
 .avatar { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--alice-border); background: var(--alice-brand-soft); color: var(--alice-brand); font-size: 11px; font-weight: 600; }
