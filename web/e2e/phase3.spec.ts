@@ -64,7 +64,8 @@ const P = {
     keep: 'The server still shows the previous fingerprint',
     dismissed: 'Server identity change dismissed',
     usedWhere: 'Where this key is used',
-    noKeys: 'No SSH keys match these filters.',
+    // An empty inventory (no filter) says so; "No SSH keys match these filters." is the no-match state (Phase 9, Task 9).
+    noKeys: 'No SSH keys yet',
     limit: (n: number) => `Your license allows ${n} targets.`,
     locked: 'Not available while the license is expired.',
     limitReached: (n: number) => `You are using all ${n} licensed targets.`,
@@ -99,7 +100,7 @@ const P = {
     keep: 'Sunucu hâlâ önceki parmak izini gösteriyor',
     dismissed: 'Sunucu kimlik değişikliği yok sayıldı',
     usedWhere: 'Bu anahtarın kullanıldığı yerler',
-    noKeys: 'Bu filtrelere uyan SSH anahtarı yok.',
+    noKeys: 'Henüz SSH anahtarı yok',
     limit: (n: number) => `Lisansınız en fazla ${n} hedefe izin veriyor.`,
     locked: 'Lisans süresi dolduğu için bu işlem kullanılamıyor.',
     limitReached: (n: number) => `Lisanslı ${n} hedefin tamamını kullanıyorsunuz.`,
