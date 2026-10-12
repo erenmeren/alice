@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -651,5 +652,15 @@ describe('KeyVaultDetailPage in the design', () => {
     const notice = await screen.findByTestId('credentials-expiry');
     expect(notice).toHaveAttribute('role', 'status');
     expect(notice.querySelector('svg')).not.toBeNull();
+  });
+});
+
+// Found by the Phase 9 scan (e2e/phase9.spec.ts): the columns' implicit track was sized by the inventory table's
+// minimum width (720 px), so the page scrolled sideways by 348 px at 390 px and by 180 px at 768 px instead of the
+// table scrolling inside its region.
+describe('KeyVaultDetailPage layout', () => {
+  it('lets each column shrink below its tables’ minimum width', () => {
+    const css = readFileSync('src/pages/KeyVaults.module.css', 'utf8');
+    expect(css).toMatch(/\.column, \.side \{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
   });
 });
