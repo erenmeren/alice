@@ -2394,7 +2394,7 @@
       "phaseCurrent": "In progress",
       "phaseNext": "Not started",
       "decisions": "Available decisions",
-      "decisionsHelp": "Review the affected locations before confirming. Each decision asks for a fresh verification code.",
+      "decisionsHelp": "Review the affected locations before confirming. Each decision may ask for a fresh verification code.",
       "transition": "Key transition",
       "results": "Location results",
       "resultsSub": "Old keys are not removed from unverified locations.",

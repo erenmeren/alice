@@ -2394,7 +2394,7 @@
       "phaseCurrent": "Devam ediyor",
       "phaseNext": "Başlamadı",
       "decisions": "Kullanılabilir kararlar",
-      "decisionsHelp": "Onaylamadan önce etkilenen konumları inceleyin. Her karar yeni bir doğrulama kodu ister.",
+      "decisionsHelp": "Onaylamadan önce etkilenen konumları inceleyin. Her karar yeni bir doğrulama kodu isteyebilir.",
       "transition": "Anahtar değişimi",
       "results": "Konum sonuçları",
       "resultsSub": "Doğrulanmamış konumlardan eski anahtarlar kaldırılmaz.",
