@@ -36,6 +36,8 @@ describe('RotationPolicyPanel', () => {
     world(policyFixture({ overlap_days: 0, overlap_minutes: 1, interval_days: 1 }));
     await panel();
     expect(await screen.findByText('Every day')).toBeInTheDocument();
+    // The sentences are a styled list without bullets: the explicit role keeps it a list in WebKit (as C5's attentionList).
+    expect(screen.getByText('Every day').closest('ul')).toHaveAttribute('role', 'list');
     expect(screen.getByText('Overlap: 1 minute')).toBeInTheDocument();
     expect(screen.getByText('The policy is off. Alice plans no run until you switch it on.')).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Rotate automatically' })).not.toBeChecked();

@@ -92,7 +92,7 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
             <h3 className={classes.policyName} translate="no">
               {p.name}
             </h3>
-            <ul className={classes.schedule}>
+            <ul className={classes.schedule} role="list">
               <li>{p.interval_days === 1 ? t('rotation.everyDay') : t('rotation.every', { count: p.interval_days })}</li>
               <li>{t('rotation.overlap', { duration: durationText(t, p.overlap_minutes) })}</li>
               <li>{t('rotation.notifyBefore', { hours: p.notify_before_hours })}</li>
