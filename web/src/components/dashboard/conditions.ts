@@ -91,6 +91,7 @@ export function useConditionItems(items: Condition[]): ConditionItem[] {
     title: conditionLabel(c, t) ?? '',
     name: c.name,
     since: t('dashboard.since', { time: formatDateTime(c.since, i18n.language) }),
-    to: conditionTarget(c, vaultIds),
+    // Until the vaults are read, a failed sign-in is not linked: it could be a Key Vault's, not a server's.
+    to: c.kind === 'auth_failed' && vaults.isPending ? null : conditionTarget(c, vaultIds),
   }));
 }

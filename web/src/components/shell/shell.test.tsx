@@ -116,6 +116,29 @@ describe('attention bell', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
   });
 
+  it('links a failed sign-in nowhere until it knows whether the target is a Key Vault', async () => {
+    let release: () => void = () => undefined;
+    const answered = new Promise<void>((r) => {
+      release = r;
+    });
+    server.use(
+      ...sessionHandlers(adminSession),
+      http.get('/api/v1/alerts', () =>
+        HttpResponse.json({ items: [{ kind: 'auth_failed', object_id: vaultFixture.id, name: vaultFixture.name, since: '2026-10-12T08:00:00Z', error_code: '' }] }),
+      ),
+      http.get('/api/v1/targets', async () => {
+        await answered;
+        return HttpResponse.json({ items: [vaultFixture], next_cursor: null });
+      }),
+    );
+    await renderRoute('/license');
+    await userEvent.click(await screen.findByRole('button', { name: 'View attention items' }));
+    expect(await screen.findByText(vaultFixture.name, { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Sign-in refused/ })).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByRole('link', { name: /Sign-in refused/ })).toHaveAttribute('href', `/key-vaults/${vaultFixture.id}`);
+  });
+
   it('starts at its title while loading and gives focus back to the bell when Escape closes it', async () => {
     let release: () => void = () => undefined;
     const answered = new Promise<void>((r) => {
