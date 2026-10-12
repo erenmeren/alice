@@ -144,11 +144,12 @@ describe("license page", () => {
       http.get("/api/v1/license", () => HttpResponse.json({ ...licenseDetailFixture, ...over }));
     server.use(...sessionHandlers(sessionFor("admin")), detail({ phase: "grace", grace_day: 2 }));
     const first = await renderRoute("/license");
-    expect(await screen.findByTestId("license-phase")).toHaveAttribute("data-tone", "warning");
+    // Grace is danger, as the server's banner (internal/license/banners.go) and docs/licensing.md ("red banner") say.
+    expect(await screen.findByTestId("license-phase")).toHaveAttribute("data-tone", "danger");
     let note = screen.getByRole("note");
     expect(note).toHaveTextContent("License expired · grace period");
     expect(note).toHaveTextContent(/^.*Full operation continues until .*2027.*\. Then external changes pause/);
-    expect(note.getAttribute("style")).toContain("--alert-bg: var(--alice-warning-soft)");
+    expect(note.getAttribute("style")).toContain("--alert-bg: var(--alice-danger-soft)");
     first.unmount();
 
     server.use(detail({ phase: "evaluation", current: null, max_targets: 5, days_left: 30, files: [], history: [] }));

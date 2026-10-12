@@ -17,7 +17,8 @@ const PHASE_TONE: Record<LicensePhase, Tone> = {
   evaluation: "info",
   evaluation_expired: "danger",
   active: "success",
-  grace: "warning",
+  // Grace is danger like the server's grace banner (internal/license/banners.go) and docs/licensing.md.
+  grace: "danger",
   locked: "danger",
 };
 const FILE_TONE: Record<LicenseFileEntry["status"], Tone> = {
@@ -111,7 +112,7 @@ export function LicensePage() {
         );
       case "grace":
         return (
-          <Notice tone="warning" title={t("license.page.graceTitle")}>
+          <Notice tone="danger" title={t("license.page.graceTitle")}>
             {t("license.page.graceText", { date: fmt(d.locks_at) })}
           </Notice>
         );

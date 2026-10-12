@@ -58,6 +58,17 @@ describe('dashboard widgets', () => {
     expect(within(card).getByRole('link', { name: 'License' })).toHaveAttribute('href', '/license');
   });
 
+  it('shows a running evaluation in the info tone, as the License page and the server banner do', async () => {
+    await inRouter(<LicenseCard license={{ expired: false, phase: 'evaluation', ends_at: '2026-11-01T00:00:00Z', days_left: 20 }} detailed />);
+    const card = screen.getByTestId('license-card');
+    expect(within(card).getByText('Evaluation').closest('[data-tone]')).toHaveAttribute('data-tone', 'info');
+  });
+
+  it('shows an active license in the success tone', async () => {
+    await inRouter(<LicenseCard license={{ expired: false, phase: 'active', ends_at: '2027-11-01T00:00:00Z', days_left: 300 }} detailed />);
+    expect(within(screen.getByTestId('license-card')).getByText('Active').closest('[data-tone]')).toHaveAttribute('data-tone', 'success');
+  });
+
   it('lays the attention list out in three columns between 768 and 1020 px, without chevrons, as the design does', () => {
     const css = readFileSync('src/components/dashboard/dashboard.module.css', 'utf8');
     const block = css.slice(css.indexOf('@media (min-width: 768px) and (max-width: 1020px)'));

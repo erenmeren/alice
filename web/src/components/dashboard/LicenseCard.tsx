@@ -13,13 +13,16 @@ export function LicenseCard({ license, detailed }: { license: DashboardSummary['
   const { t, i18n } = useTranslation();
   if (!detailed && !license.expired) return null;
   const phase = license.phase && i18n.exists(`license.phase.${license.phase}`) ? t(`license.phase.${license.phase}`) : null;
+  // The evaluation is info, as on the License page and in the server's banner; an expired phase is danger.
+  const tone = license.expired ? 'danger' : license.phase === 'evaluation' ? 'info' : 'success';
+  const icon = license.expired ? 'CircleAlert' : license.phase === 'evaluation' ? 'Clock3' : 'ShieldCheck';
   return (
     <Widget
       title={t('dashboard.license')}
       testId="license-card"
       action={
         phase ? (
-          <StatusBadge tone={license.expired ? 'danger' : 'success'} icon={license.expired ? 'CircleAlert' : 'ShieldCheck'}>
+          <StatusBadge tone={tone} icon={icon}>
             {phase}
           </StatusBadge>
         ) : (
