@@ -57,6 +57,8 @@ func TestSaveSMTPFieldRules(t *testing.T) {
 		{"empty host", func(in *notify.SMTPInput) { in.Host = "" }, map[string]string{"host": validate.Required}},
 		{"long host", func(in *notify.SMTPInput) { in.Host = strings.Repeat("a", 254) }, map[string]string{"host": validate.TooLong}},
 		{"slash in host", func(in *notify.SMTPInput) { in.Host = "a/b" }, map[string]string{"host": validate.Pattern}},
+		// Review L-4: the dialer adds the brackets of an IPv6 address itself ("[[::1]]:587" would never connect).
+		{"bracketed IPv6 host", func(in *notify.SMTPInput) { in.Host = "[::1]" }, map[string]string{"host": validate.Pattern}},
 		{"port high", func(in *notify.SMTPInput) { in.Port = 70000 }, map[string]string{"port": validate.OutOfRange}},
 		{"empty tls mode", func(in *notify.SMTPInput) { in.TLSMode = "" }, map[string]string{"tls_mode": validate.OneOf}},
 		{"empty from", func(in *notify.SMTPInput) { in.From = "" }, map[string]string{"from": validate.Email}},

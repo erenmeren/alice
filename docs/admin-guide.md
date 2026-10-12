@@ -291,7 +291,7 @@ sign-on administrators to their identity provider, see [Single sign-on](#single-
 
 | Field | Meaning |
 |---|---|
-| **Mail server**, **Port** | The SMTP server's name or address and port |
+| **Mail server**, **Port** | The SMTP server's name or address and port; an IPv6 address without brackets (`2001:db8::25`) |
 | **Encryption** | **STARTTLS (upgrades an open connection)**, usually port 587, or **TLS (encrypted from the start)**, usually port 465. Alice always encrypts, with TLS 1.2 or newer; there is no unencrypted option |
 | **Sender address** | For example `alice@example.com` |
 | **User name (optional)**, **Password** | The mail server account. A user name needs a password; without a user name Alice does not sign in to the server |

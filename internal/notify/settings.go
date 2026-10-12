@@ -67,7 +67,9 @@ const (
 )
 
 var (
-	hostPattern        = regexp.MustCompile(`^[A-Za-z0-9._:\[\]-]+$`)
+	// hostPattern is a DNS name or an IP address. An IPv6 address is written without brackets: the dialer adds them
+	// (net.JoinHostPort), and a bracketed one would be dialled as "[[::1]]:587" (review L-4).
+	hostPattern        = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 	fingerprintPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
