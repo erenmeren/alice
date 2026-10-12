@@ -253,7 +253,8 @@ describe('SettingsPage, design', () => {
     tabs.forEach((tab) => expect(tab).toHaveClass(classes.navTab));
   });
 
-  it('draws the sections as a vertical list from 768 px', async () => {
+  // onWideScreen runs a test body with the 768 px (48em) media query matching, as at phase7's 1280 px, then restores it.
+  async function onWideScreen(body: () => Promise<void>) {
     const original = window.matchMedia;
     window.matchMedia = ((query: string) => ({
       matches: query.includes('min-width: 48em'),
@@ -266,13 +267,35 @@ describe('SettingsPage, design', () => {
       dispatchEvent: () => false,
     })) as typeof window.matchMedia;
     try {
-      every();
-      await renderRoute('/settings');
-      expect(await screen.findByRole('tablist', { name: 'Settings sections' })).toHaveAttribute('aria-orientation', 'vertical');
+      await body();
     } finally {
       window.matchMedia = original;
     }
-  });
+  }
+
+  it('draws the sections as a vertical list from 768 px', () =>
+    onWideScreen(async () => {
+      every();
+      await renderRoute('/settings');
+      expect(await screen.findByRole('tablist', { name: 'Settings sections' })).toHaveAttribute('aria-orientation', 'vertical');
+    }));
+
+  it('moves along the vertical list with the up and down arrows, End and Enter open the last section', () =>
+    onWideScreen(async () => {
+      every();
+      const { router } = await renderRoute('/settings?tab=general');
+      const general = await screen.findByRole('tab', { name: 'General', selected: true });
+      general.focus();
+      await userEvent.keyboard('{ArrowDown}');
+      expect(screen.getByRole('tab', { name: 'Backups' })).toHaveFocus();
+      await userEvent.keyboard('{ArrowUp}');
+      expect(general).toHaveFocus();
+      await userEvent.keyboard('{End}');
+      expect(screen.getByRole('tab', { name: 'Single sign-on' })).toHaveFocus();
+      await userEvent.keyboard('{Enter}');
+      expect(await screen.findByRole('tab', { name: 'Single sign-on', selected: true })).toBeInTheDocument();
+      await waitFor(() => expect(router.state.location.search).toBe('?tab=sso'));
+    }));
 
   it('draws the sections as a horizontal list on a phone', async () => {
     every();
