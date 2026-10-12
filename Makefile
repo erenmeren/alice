@@ -435,9 +435,10 @@ release: release-preflight helper notices ## Stage an unsigned release in $(RELE
 	docker image inspect $(POSTGRES_RELEASE_IMAGE) >/dev/null 2>&1 || docker pull postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
 	docker tag $(POSTGRES_RELEASE_IMAGE) alice-postgres:$(VERSION)
 	$(MAKE) sbom VERSION=$(VERSION)
+	$(MAKE) image-notices VERSION=$(VERSION)
 	go run ./tools/releasebuild stage $(RELEASE_STAGE_FLAGS) -version $(VERSION) -out $(abspath $(RELEASE_DIR))/alice-$(VERSION) -keys $(RELEASE_KEYS) \
 	  -alice-image alice:$(VERSION) -postgres-image alice-postgres:$(VERSION) -sbom $(abspath $(RELEASE_DIR))/sbom-$(VERSION) \
-	  -notices bin/THIRD_PARTY_NOTICES.md -helper bin -commit $(RELEASE_COMMIT) -build-time $(BUILD_TIME) \
+	  -notices bin/THIRD_PARTY_NOTICES.md -image-notices bin/IMAGE_NOTICES.md -helper bin -commit $(RELEASE_COMMIT) -build-time $(BUILD_TIME) \
 	  -gates-log bin/release-gates.log -license deploy/release/LICENSE.txt -min-upgrade-from $(MIN_UPGRADE_FROM)
 
 .PHONY: release-pack
@@ -466,6 +467,20 @@ sbom: ## CycloneDX SBOMs of the alice and postgres images and the source tree (p
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(abspath $(RELEASE_DIR))/sbom-$(VERSION):/out" $(TRIVY_IMAGE) image --format cyclonedx --output /out/alice-$(VERSION).cdx.json alice:$(VERSION)
 	docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(abspath $(RELEASE_DIR))/sbom-$(VERSION):/out" $(TRIVY_IMAGE) image --format cyclonedx --output /out/postgres-$(VERSION).cdx.json alice-postgres:$(VERSION)
 	docker run --rm -v "$(CURDIR):/src:ro" -v "$(abspath $(RELEASE_DIR))/sbom-$(VERSION):/out" -w /src $(TRIVY_IMAGE) fs --scanners vuln --format cyclonedx --output /out/source-$(VERSION).cdx.json --skip-dirs '**/node_modules',.claude,.superpowers,.git,bin .
+
+# The notices of the two images the package ships (final review B I-1): from each image's SBOM (make sbom) and an
+# export of its files (a container created and removed here; alice-postgres:$(VERSION) is a tag of
+# POSTGRES_RELEASE_IMAGE), after make notices, whose Go modules it does not repeat.
+IMAGE_ROOTFS = bin/image-rootfs-$(VERSION)
+.PHONY: image-notices
+image-notices: ## Third-party notices and the written source offer of the alice and postgres images (after make sbom and make notices)
+	rm -rf $(IMAGE_ROOTFS) && mkdir -p $(IMAGE_ROOTFS)
+	cid=$$(docker create alice:$(VERSION)) && { docker export -o $(IMAGE_ROOTFS)/alice.tar "$$cid"; rc=$$?; docker rm "$$cid" >/dev/null; exit $$rc; }
+	cid=$$(docker create $(POSTGRES_RELEASE_IMAGE)) && { docker export -o $(IMAGE_ROOTFS)/postgres.tar "$$cid"; rc=$$?; docker rm "$$cid" >/dev/null; exit $$rc; }
+	go run ./tools/notices images -go-notices bin/THIRD_PARTY_NOTICES.md -out bin/IMAGE_NOTICES.md \
+	  -image alice:$(VERSION)=$(abspath $(RELEASE_DIR))/sbom-$(VERSION)/alice-$(VERSION).cdx.json,$(IMAGE_ROOTFS)/alice.tar \
+	  -image alice-postgres:$(VERSION)=$(abspath $(RELEASE_DIR))/sbom-$(VERSION)/postgres-$(VERSION).cdx.json,$(IMAGE_ROOTFS)/postgres.tar
+	rm -rf $(IMAGE_ROOTFS)
 
 .PHONY: notices
 notices: build ## Third-party notices of the Go modules in bin/alice and the helper, and the bundled npm packages

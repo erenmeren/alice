@@ -112,7 +112,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 const usage = `Usage:
   releasebuild stage -version V -out DIR -keys DIR -alice-image REF -postgres-image REF -sbom DIR -notices FILE
-                     -helper DIR -commit SHA -build-time RFC3339 -gates-log FILE -license FILE
+                     -image-notices FILE -helper DIR -commit SHA -build-time RFC3339 -gates-log FILE -license FILE
                      -min-upgrade-from V [-root DIR] [-test] [-allow-draft]
   releasebuild pack -stage DIR -out DIR
   releasebuild keycheck -release DIR -license FILE
@@ -138,6 +138,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fs.StringVar(&c.PostgresImage, "postgres-image", "", "postgres image reference")
 		fs.StringVar(&c.SBOM, "sbom", "", "directory with the three CycloneDX SBOMs")
 		fs.StringVar(&c.Notices, "notices", "", "THIRD_PARTY_NOTICES.md")
+		fs.StringVar(&c.ImageNotices, "image-notices", "", "IMAGE_NOTICES.md of the two images (go run ./tools/notices images)")
 		fs.StringVar(&c.Helper, "helper", "", "directory with the alice-helper binaries and alice-helper.sha256")
 		fs.StringVar(&c.Commit, "commit", "", "40-hex commit")
 		fs.StringVar(&c.BuildTime, "build-time", "", "RFC 3339 build time")
@@ -198,6 +199,7 @@ type stageConfig struct {
 	Root, Out, Version, Keys, ProductionKeys string
 	AliceImage, PostgresImage                string
 	SBOM, Notices, Helper, GatesLog, License string
+	ImageNotices                             string // IMAGE_NOTICES.md of tools/notices images (final review B I-1)
 	Commit, BuildTime, MinUpgradeFrom        string
 	AllowDraft, Test                         bool
 }
@@ -416,6 +418,10 @@ func plan(cfg stageConfig) ([]entry, string, error) {
 		return nil, "", err
 	}
 	add("licenses/THIRD_PARTY_NOTICES.md", cfg.Notices, 0o644)
+	if err := checkImageNotices(cfg); err != nil {
+		return nil, "", err
+	}
+	add("licenses/IMAGE_NOTICES.md", cfg.ImageNotices, 0o644)
 
 	checklist, err := checklistFile(cfg)
 	if err != nil {
@@ -446,6 +452,27 @@ func plan(cfg stageConfig) ([]entry, string, error) {
 		add("sbom/"+f, filepath.Join(cfg.SBOM, f), 0o644)
 	}
 	return entries, keyID, nil
+}
+
+// checkImageNotices refuses IMAGE_NOTICES.md unless it is that of this package's two images and holds the written
+// source offer (final review B I-1): the package redistributes both images, GPL and LGPL packages among their
+// contents. A test package is held to it too: make release writes it for every package.
+func checkImageNotices(cfg stageConfig) error {
+	if err := regularFile(cfg.ImageNotices); err != nil {
+		return fmt.Errorf("IMAGE_NOTICES (the notices of the images, make image-notices): %w", err)
+	}
+	raw, err := os.ReadFile(cfg.ImageNotices)
+	if err != nil {
+		return err
+	}
+	for _, want := range []string{"## Container image `" + cfg.AliceImage + "`\n", "## Container image `" + cfg.PostgresImage + "`\n",
+		"## Written offer of source code\n"} {
+		if !bytes.Contains(raw, []byte(want)) {
+			return fmt.Errorf("%s is not the IMAGE_NOTICES of %s and %s (no %q); run make image-notices", cfg.ImageNotices,
+				cfg.AliceImage, cfg.PostgresImage, strings.TrimSpace(want))
+		}
+	}
+	return nil
 }
 
 // docEntries returns the top-level docs/*.md files except vendorDocs, and the required guides

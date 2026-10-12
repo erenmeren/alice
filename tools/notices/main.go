@@ -7,6 +7,8 @@
 //
 //	go run ./tools/notices -binaries bin/alice,bin/alice-helper-linux-amd64 \
 //	  -lockfile web/package-lock.json -node-modules web/node_modules -out bin/THIRD_PARTY_NOTICES.md
+//
+// "notices images" writes IMAGE_NOTICES.md, the notices of the two container images the package ships (images.go).
 package main
 
 import (
@@ -31,6 +33,9 @@ import (
 func main() { os.Exit(run(os.Args[1:], os.Stderr)) }
 
 func run(args []string, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "images" {
+		return runImages(args[1:], stderr)
+	}
 	fs := flag.NewFlagSet("notices", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	binaries := fs.String("binaries", "", "comma-separated Go binaries")
@@ -276,7 +281,8 @@ func writeTexts(w io.Writer, files []string) error {
 func render(w io.Writer, in input) error {
 	var b bytes.Buffer
 	b.WriteString("# Third-party notices\n\nAlice includes the software listed below. Each section names the component and its version " +
-		"and gives the license text that the component ships with.\n\n## Go\n\n")
+		"and gives the license text that the component ships with. The contents of the container images that the package " +
+		"ships are listed in IMAGE_NOTICES.md beside this file.\n\n## Go\n\n")
 	goLicense := filepath.Join(in.GoRoot, "LICENSE")
 	fmt.Fprintf(&b, "### Go standard library %s\n\n", in.GoVersion)
 	if err := writeTexts(&b, []string{goLicense}); err != nil {

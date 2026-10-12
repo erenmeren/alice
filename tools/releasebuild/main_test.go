@@ -120,6 +120,7 @@ func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
 		"migrations/00001_init.sql":                        "-- +goose Up\n",
 		"migrations/00012_phase8.sql":                      "-- +goose Up\n",
 		"bin/THIRD_PARTY_NOTICES.md":                       "# Notices\n",
+		"bin/IMAGE_NOTICES.md":                             imageNotices("alice:1.0.0", "alice-postgres:1.0.0"),
 		"bin/release-gates.log":                            fullGatesLog(testCommit),
 		"bin/sbom/alice-1.0.0.cdx.json":                    "{}\n",
 		"bin/sbom/postgres-1.0.0.cdx.json":                 "{}\n",
@@ -143,7 +144,8 @@ func fixture(t *testing.T) (stageConfig, ed25519.PrivateKey) {
 		Root: root, Out: filepath.Join(t.TempDir(), "alice-1.0.0"), Version: "1.0.0",
 		Keys: filepath.Join(root, "deploy/release/keys"), AliceImage: "alice:1.0.0", PostgresImage: "alice-postgres:1.0.0",
 		SBOM: filepath.Join(root, "bin/sbom"), Notices: filepath.Join(root, "bin/THIRD_PARTY_NOTICES.md"),
-		Helper: filepath.Join(root, "bin/helper"), Commit: testCommit, BuildTime: testBuildTime,
+		ImageNotices: filepath.Join(root, "bin/IMAGE_NOTICES.md"),
+		Helper:       filepath.Join(root, "bin/helper"), Commit: testCommit, BuildTime: testBuildTime,
 		GatesLog: filepath.Join(root, "bin/release-gates.log"), License: filepath.Join(root, "deploy/release/LICENSE.txt"),
 		MinUpgradeFrom: "1.0.0-rc.1",
 	}, priv
@@ -192,7 +194,7 @@ func TestStageLayout(t *testing.T) {
 		"helper/alice-helper-linux-amd64", "helper/alice-helper-linux-arm64", "helper/alice-helper.sha256",
 		"images/alice-1.0.0.tar", "images/images.sha256", "images/postgres-1.0.0.tar",
 		"install.sh", "lib/alice-lib.sh", "lib/initdb/10-alice-roles.sh",
-		"licenses/LICENSE", "licenses/THIRD_PARTY_NOTICES.md",
+		"licenses/IMAGE_NOTICES.md", "licenses/LICENSE", "licenses/THIRD_PARTY_NOTICES.md",
 		"release-keys/rk-2026-01.pem",
 		"sbom/alice-1.0.0.cdx.json", "sbom/postgres-1.0.0.cdx.json", "sbom/source-1.0.0.cdx.json",
 	}
@@ -251,6 +253,42 @@ func TestStageLayout(t *testing.T) {
 
 	// The stage never overwrites an earlier one.
 	require.ErrorContains(t, stage(cfg, &fakeImages{}), "already exists")
+}
+
+// imageNotices is a minimal IMAGE_NOTICES.md of tools/notices images for the two images.
+func imageNotices(alice, postgres string) string {
+	return "# Third-party notices of the container images\n\n## Container image `" + alice + "`\n\n## Container image `" + postgres +
+		"`\n\n## Written offer of source code\n\n## License texts in the images\n"
+}
+
+// Final review B I-1: the package carries the notices of the two images it ships (licenses/IMAGE_NOTICES.md, written
+// by tools/notices images), and the stage refuses notices that are missing, or that are not those of these images or
+// lack the written source offer, in a test package too.
+func TestStageNeedsTheImageNotices(t *testing.T) {
+	for name, content := range map[string]string{
+		"other images":  imageNotices("alice:0.9.0", "alice-postgres:0.9.0"),
+		"no offer":      strings.Replace(imageNotices("alice:1.0.0", "alice-postgres:1.0.0"), "## Written offer of source code", "", 1),
+		"only one":      strings.Replace(imageNotices("alice:1.0.0", "alice-postgres:1.0.0"), "## Container image `alice-postgres:1.0.0`", "", 1),
+		"not the notes": "# Notices\n",
+	} {
+		for _, draft := range []bool{false, true} {
+			cfg, _ := fixture(t)
+			if draft {
+				cfg = draftFixture(t)
+			}
+			write(t, cfg.ImageNotices, content, 0o644)
+			require.ErrorContains(t, stage(cfg, &fakeImages{}), "IMAGE_NOTICES", name)
+			assert.NoDirExists(t, cfg.Out, name)
+		}
+	}
+	cfg, _ := fixture(t)
+	require.NoError(t, os.Remove(cfg.ImageNotices))
+	require.Error(t, stage(cfg, &fakeImages{}))
+	assert.NoDirExists(t, cfg.Out)
+
+	cfg, _ = fixture(t)
+	require.NoError(t, stage(cfg, &fakeImages{}))
+	assert.Equal(t, imageNotices("alice:1.0.0", "alice-postgres:1.0.0"), readFile(t, filepath.Join(cfg.Out, "alice/licenses/IMAGE_NOTICES.md")))
 }
 
 // I-1: RELEASE carries both identifiers of each image, taken from the saved tar: the config
@@ -673,6 +711,7 @@ func TestCommandLine(t *testing.T) {
 	t.Cleanup(func() { newImages = func() images { return dockerImages{} } })
 	args := []string{"stage", "-root", cfg.Root, "-version", cfg.Version, "-out", cfg.Out, "-keys", cfg.Keys,
 		"-alice-image", cfg.AliceImage, "-postgres-image", cfg.PostgresImage, "-sbom", cfg.SBOM, "-notices", cfg.Notices,
+		"-image-notices", cfg.ImageNotices,
 		"-helper", cfg.Helper, "-commit", cfg.Commit, "-build-time", cfg.BuildTime, "-gates-log", cfg.GatesLog,
 		"-license", cfg.License, "-min-upgrade-from", cfg.MinUpgradeFrom}
 	out.Reset()

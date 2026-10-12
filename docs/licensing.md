@@ -166,3 +166,10 @@ servers, and your license terms decide whether a second copy is allowed at all.
 - **Can someone edit the license file to get more targets?** No. The file is signed; any change makes it "not a
   valid Alice license". An edited file already stored in the database is ignored, and administrators see "License
   data was changed outside Alice …".
+
+## Third-party software
+
+The package lists the third-party software it contains in `licenses/` (copied to `/opt/alice/licenses/`):
+`THIRD_PARTY_NOTICES.md` for the Go modules and web packages of Alice's own programs, and `IMAGE_NOTICES.md` for the
+contents of the two container images (the PostgreSQL image and Alice's image), with the license texts the images
+carry and a written offer of the source code of their GPL and LGPL components. The SBOMs are in `sbom/`.

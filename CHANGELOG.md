@@ -27,7 +27,8 @@
 - Wizard steps "HTTPS certificate" and "Mail server", Back on the steps after the administrator, resume after a reload;
   the dashboard's "Finish setting up" checklist and backup card; Settings → Backups, HTTPS certificate, Audit forwarding.
 - Audit forwarding to syslog (RFC 5424 over TLS) in chain order with each hash.
-- Release bundle with SBOMs, third-party notices and Ed25519 signatures; `make reproducible-check`, `make release-gates`,
+- Release bundle with SBOMs, third-party notices (Alice's programs, and the contents of both container images with the
+  license texts they carry and a written offer of the GPL/LGPL sources, `licenses/IMAGE_NOTICES.md`) and Ed25519 signatures; `make reproducible-check`, `make release-gates`,
   `make nightly`; ZAP, testssl, real-systemd, three-browser, mutation and osv-scanner gates; the §23–§25 traceability
   (`make matrix-check`, in `make lint` with `-strict`; status `partial` for rows proven only in part).
 - Documents: install guide, backup and restore, upgrade, security overview, API, index; `SECURITY-REPORT.md`; the
