@@ -187,6 +187,17 @@
       "help": "Create a new set if you used most of your codes or think someone saw them. The old codes stop working.",
       "create": "Create new recovery codes",
       "active": "Your new recovery codes are active."
+    },
+    "page": {
+      "description": "Personal security, language and workspace preferences.",
+      "security": "Sign-in and recovery",
+      "signIn": "Sign-in",
+      "local": "Local account + authenticator app",
+      "sso": "Single sign-on",
+      "mfa": "Multi-factor authentication",
+      "mfaOn": "Enabled",
+      "mfaOff": "Not set up",
+      "ssoNote": "Your password and second factor are managed by your identity provider, so they are not changed here."
     }
   },
   "setup": {
@@ -346,7 +357,20 @@
       "enableText": "The person can sign in again with their password and authenticator app.",
       "enableButton": "Enable user"
     },
-    "sso": "Single sign-on"
+    "sso": "Single sign-on",
+    "page": {
+      "description": "Clear responsibilities. Deliberate permissions.",
+      "roles": "Roles",
+      "admin": "Manage the installation, identities and policies.",
+      "operator": "Discover inventory and operate certificates and SSH keys.",
+      "auditor": "Read inventory, inspect evidence and export records.",
+      "table": "People",
+      "person": "Person",
+      "signIn": "Sign-in method",
+      "local": "Local account",
+      "mfaEnrolled": "Authenticator app set up",
+      "mfaPending": "Authenticator app not set up yet"
+    }
   },
   "tokens": {
     "title": "API tokens",
@@ -383,6 +407,12 @@
     "scope": {
       "read": "Read only",
       "operate": "Read and operate"
+    },
+    "page": {
+      "description": "Personal access for automation, bounded by your role.",
+      "boundTitle": "A token never has more access than its owner",
+      "boundText": "An auditor can create read-only tokens. Sensitive actions that need the browser, such as downloading a private key, are not possible with a token.",
+      "table": "Your API tokens"
     }
   },
   "audit": {

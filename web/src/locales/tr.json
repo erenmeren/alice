@@ -187,6 +187,17 @@
       "help": "Kodlarınızın çoğunu kullandıysanız veya birinin gördüğünü düşünüyorsanız yeni bir set oluşturun. Eski kodlar çalışmaz hale gelir.",
       "create": "Yeni kurtarma kodları oluştur",
       "active": "Yeni kurtarma kodlarınız etkin."
+    },
+    "page": {
+      "description": "Kişisel güvenlik, dil ve çalışma alanı tercihleri.",
+      "security": "Oturum açma ve kurtarma",
+      "signIn": "Oturum açma",
+      "local": "Yerel hesap + doğrulama uygulaması",
+      "sso": "Çoklu oturum açma",
+      "mfa": "Çok faktörlü doğrulama",
+      "mfaOn": "Etkin",
+      "mfaOff": "Kurulmadı",
+      "ssoNote": "Parolanız ve ikinci doğrulama adımınız kimlik sağlayıcınız tarafından yönetilir; bu nedenle burada değiştirilmez."
     }
   },
   "setup": {
@@ -346,7 +357,20 @@
       "enableText": "Kişi parolası ve doğrulama uygulamasıyla yeniden giriş yapabilir.",
       "enableButton": "Kullanıcıyı etkinleştir"
     },
-    "sso": "Çoklu oturum açma"
+    "sso": "Çoklu oturum açma",
+    "page": {
+      "description": "Net sorumluluklar. Bilinçli yetkilendirme.",
+      "roles": "Roller",
+      "admin": "Kurulumu, kimlikleri ve ilkeleri yönetir.",
+      "operator": "Envanteri keşfeder, sertifika ve SSH anahtarlarını işletir.",
+      "auditor": "Envanteri okur, kanıtları inceler ve kayıtları dışa aktarır.",
+      "table": "Kişiler",
+      "person": "Kişi",
+      "signIn": "Giriş yöntemi",
+      "local": "Yerel hesap",
+      "mfaEnrolled": "Doğrulama uygulaması kurulu",
+      "mfaPending": "Doğrulama uygulaması henüz kurulmadı"
+    }
   },
   "tokens": {
     "title": "API anahtarları",
@@ -383,6 +407,12 @@
     "scope": {
       "read": "Salt okunur",
       "operate": "Okuma ve işlem"
+    },
+    "page": {
+      "description": "Rolünüzle sınırlı, otomasyon için kişisel erişim.",
+      "boundTitle": "Bir API anahtarı, sahibinin yetkilerini aşamaz",
+      "boundText": "Denetçi yalnızca okuma yetkili API anahtarı oluşturabilir. Özel anahtar indirme gibi tarayıcı gerektiren hassas işlemler API anahtarıyla yapılamaz.",
+      "table": "API anahtarlarınız"
     }
   },
   "audit": {
