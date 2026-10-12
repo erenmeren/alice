@@ -1317,6 +1317,37 @@ func TestUpdateRefusesTamperedAndDowngrade(t *testing.T) {
 	}
 }
 
+// Final review B M-1: a coarse free-space check (3 × the package's size + 1 GiB) runs before the
+// package is copied and unpacked into the installation directory: on a nearly full disk the copy
+// would fill the file system under the running database. A tarball and a directory are both
+// measured; the check comes before anything of the package is read (a bad signature is not even
+// seen), and nothing is left behind.
+func TestUpdateChecksFreeSpaceBeforeTheCopy(t *testing.T) {
+	t.Parallel()
+	for _, kind := range []string{"tarball", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			e := shNewInstalled(t, "1.0.0-rc.2")
+			_, other, _ := ed25519.GenerateKey(rand.Reader)
+			arg := e.pkg(shPkgOpts{version: "1.0.0"})
+			if kind == "tarball" {
+				arg = shTarball(t, arg, filepath.Join(e.root, "dl"), "1.0.0", other)
+			}
+			e.vars["STUB_DISK_GB"] = "1"
+			before := e.snapshot()
+			r := e.update(arg)
+			assert.Equal(t, 1, r.code, r.out)
+			assert.Contains(t, r.out, "Not enough free disk space in "+e.inst+" to unpack the update package: 1 GB free, 2 GB needed.")
+			assert.NotContains(t, r.out, shBadUpdSig)
+			assert.NotContains(t, r.out, "Update package signed by")
+			assert.Equal(t, before, e.snapshot())
+			shNoUpdateDirs(t, e.inst)
+			calls := e.dockerCalls()
+			assert.Equal(t, -1, shIndex(calls, 0, "compose", "stop"), shDump(calls))
+		})
+	}
+}
+
 func TestUpdateHappyPathOrder(t *testing.T) {
 	t.Parallel()
 	e := shNewInstalled(t, "1.0.0-rc.2", "rk-old-01.pem")

@@ -17,9 +17,10 @@ returns to the installed version by itself when the new one does not start.
 - [ ] Check the package as in [install-guide.md](install-guide.md#3-check-the-package-before-you-extract-it): the
       vendor's signature of the `.sha256` file and the checksum.
 
-The update script checks the free disk space (twice the size of the database plus 5 GB in the installation
-directory) and the health of the running installation (`alicectl selfcheck`) itself, and stops before changing
-anything when either is not right.
+The update script checks the free disk space itself, twice: before it copies the package (three times the
+package's size plus 1 GB in the installation directory, for the copy and its unpacking) and after (twice the size
+of the database plus 5 GB). It checks the health of the running installation (`alicectl selfcheck`) too, and stops
+before changing anything when one of them is not right.
 
 ## Run the update
 
@@ -49,12 +50,13 @@ A passphrase file that group or others can read is refused (exit code 2). Delete
 
 ## What the update does
 
-1. **Checks, with nothing changed yet.** Root, Docker, the installation, enough free disk. The package is copied
+1. **Checks, with nothing changed yet.** Root, Docker, the installation, room for the package. The package is copied
    into a directory only root can read (`/opt/alice/.update-<time>/`) and only that copy is used: the signature of
    the `.sha256` file is checked with the release keys **of the installed version** (never with keys that come with
    the new package), then the package's checksum, then the signature and checksums of every file inside it. The new
    version must be newer than the installed one, and the installed one must be at least the package's minimum
-   version (`MIN_UPGRADE_FROM`). Then `alicectl selfcheck` must pass.
+   version (`MIN_UPGRADE_FROM`). Then `alicectl selfcheck` must pass, and there must be enough free disk for the
+   update.
 2. **Passphrase.** Read from the terminal or `--passphrase-file`, kept in memory for this run only.
 3. **Stop.** Alice stops; leftover database sessions are ended.
 4. **Backup.** A backup of the stopped installation, named `…-pre-upgrade-<installed version>.alicebak`, which is
@@ -113,6 +115,7 @@ Messages that stop the update before any change:
 | `Alice <installed> cannot be updated directly to <new>. Install <min> first.` | Update to the named version first, then to the new one. |
 | `The update package signature is not valid. Do not install this package; download it again and check it with your vendor.` | The `.sha256` file is not signed by a release key the installation trusts, the checksum differs, or a companion file is missing. |
 | `The installation package is damaged or incomplete. Download it again and compare the checksum.` | A file inside the package does not match its signed checksum. |
+| `Not enough free disk space in <dir> to unpack the update package: <n> GB free, <m> GB needed.` | Checked before the package is copied. Free disk space, or copy older backups off the server and delete them. |
 | `Not enough free disk space in <dir>: <n> GB free, <m> GB needed for the update.` | Free disk space, or copy older backups off the server and delete them. |
 | `Alice is not healthy now (selfcheck failed). Fix it before updating; see <dir>/update-<ts>.log.` | Run `sudo /opt/alice/alicectl selfcheck`, fix what it reports, then update. |
 | `Another update or restore of Alice is running in <dir>. Wait until it has finished, then run this again.` | One update or restore runs at a time. |

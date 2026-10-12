@@ -187,6 +187,25 @@ recover_release_keys() {
   fi
 }
 
+# intake_space refuses before the copy when the installation's file system lacks room for the
+# package copy and its extraction: 3 × the package's size + 1 GiB (final review B M-1). The copy
+# would otherwise fill the disk under the running database. preflight checks the exact need for
+# the update itself after intake.
+intake_space() {
+  local size avail need
+  if [[ ! -e "$package_arg" ]]; then usage_error "No such package: $package_arg"; fi
+  size=$(du -sbL -- "$package_arg" 2>/dev/null | tail -n 1) || size=0
+  size=${size%%[!0-9]*}
+  [[ "$size" =~ ^[0-9]+$ ]] || size=0
+  avail=$(df -B1 --output=avail -- "$dir" 2>/dev/null | tail -n 1 | tr -d ' ') || avail=0
+  [[ "$avail" =~ ^[0-9]+$ ]] || avail=0
+  need=$((3 * size + 1073741824))
+  if ((avail < need)); then
+    alice_log "Not enough free disk space in $dir to unpack the update package: $((avail / 1073741824)) GB free, $(((need + 1073741823) / 1073741824)) GB needed."
+    exit 1
+  fi
+}
+
 # intake copies the package into the work directory and verifies the copy only (S-3, S-7).
 intake() {
   local name hex line actual rc=0
@@ -269,6 +288,7 @@ preflight() {
   alice_valid_zone "$env_zone" || env_zone=UTC
   recover_release_keys
 
+  intake_space
   intake
   new=$rel_version
   cmp=$(alice_version_cmp "$new" "$installed")
