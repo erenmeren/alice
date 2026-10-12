@@ -147,7 +147,7 @@ export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
     spacing: { xs: '8px', sm: '12px', md: '16px', lg: '24px', xl: '32px' },
     cursorType: 'pointer',
     components: {
-      Alert: Alert.extend({ defaultProps: { variant: 'light', radius: 'md' }, classNames: { root: classes.alert, title: classes.alertTitle, message: classes.alertMessage } }),
+      Alert: Alert.extend({ defaultProps: { variant: 'light', radius: 'md' }, classNames: { root: classes.alert, body: classes.alertBody, title: classes.alertTitle, message: classes.alertMessage } }),
       Badge: Badge.extend({ defaultProps: { radius: 'sm', tt: 'none', variant: 'light' }, classNames: { root: classes.badge } }),
       Button: Button.extend({ defaultProps: { radius: 'sm' }, classNames: { root: classes.button } }),
       Card: Card.extend({ defaultProps: { radius: 'md' }, classNames: { root: classes.panel } }),

@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { Checkbox, DEFAULT_THEME, MantineProvider, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
+import { Alert, Checkbox, DEFAULT_THEME, MantineProvider, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import { I18nextProvider } from 'react-i18next';
@@ -201,6 +201,17 @@ describe('design rules', () => {
     for (const [, , body] of rules) expect(body).not.toMatch(/(^|[;{\s])(background|background-color|color)\s*:/);
     expect(moduleCss).toMatch(/\.input\s*\{[^}]*--input-bg:\s*var\(--alice-surface\)/);
     expect(moduleCss).toMatch(/\.input:not\(\[data-error\]\)\s*\{[^}]*--input-color:\s*var\(--alice-text\)/);
+  });
+
+  // Found by the Phase 9 focus scan (e2e/phase9.spec.ts): Mantine's alert message clips its overflow, which cut off the
+  // 3 px ring (3 px outside) of a link in a banner such as "Open the License page".
+  it('lets a link inside an alert show its whole focus ring: the message does not clip, the body may still shrink', async () => {
+    await renderApp(createElement(Alert, { title: 't' }, createElement('a', { href: '/license' }, 'Open the License page')), ['en-US']);
+    const link = screen.getByRole('link', { name: 'Open the License page' });
+    expect(link.closest('.mantine-Alert-message')).toHaveClass(classes.alertMessage);
+    expect(link.closest('.mantine-Alert-body')).toHaveClass(classes.alertBody);
+    expect(moduleCss).toMatch(/\.alertMessage\s*\{[^}]*overflow:\s*visible/);
+    expect(moduleCss).toMatch(/\.alertBody\s*\{[^}]*min-width:\s*0/);
   });
 
   it('draws checked Checkbox, Radio and Switch with the design classes in dark mode', async () => {
