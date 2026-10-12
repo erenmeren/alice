@@ -154,7 +154,7 @@ describe('setup wizard', () => {
     expect(await screen.findByRole('heading', { name: 'Alice is ready' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Go to the dashboard' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
+    expect(await screen.findByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
     // The setup session CSRF token is used before the admin exists, the admin session token after.
     expect(csrfSeen).toEqual(['setup-csrf', 'csrf-admin', 'keep-temporary', 'mail-skip', 'evaluation']);
   });

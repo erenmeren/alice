@@ -52,7 +52,7 @@ describe('sign-in page', () => {
     await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
     await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
-    expect(await screen.findByRole('heading', { name: 'Welcome, Olcay Öztürk' })).toBeInTheDocument();
+    expect(await screen.findByTestId('current-user')).toHaveTextContent(/^Olcay Öztürk$/);
     expect(body).toEqual({ code: '123456' });
     expect(csrf).toBe('pending-csrf');
   });
