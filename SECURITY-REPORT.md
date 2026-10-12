@@ -100,7 +100,8 @@ point; any failure changes nothing (`TestRestoreIsAllOrNothing`, `TestF80WrongPa
 `TestF97RestoreContinuesTheChain`, `TestRestoreKeepsTheNewerTimeRecord`).
 
 **Authentication and authorization.** Local accounts with Argon2id and mandatory TOTP, or OIDC (Phase 7); sessions
-with CSRF protection and step-up for sensitive actions; four roles and two API token scopes. Every route has a
+with CSRF protection and step-up for sensitive actions; three roles (Administrator, Operator, Auditor;
+`internal/rbac`) and two API token scopes. Every route has a
 declared permission: `internal/api:TestAuthzMatrix`, `TestRoutePermissionsMatchSpec`, `TestPhase8RoutesAuthz`.
 
 **Managed servers.** Alice reaches Linux and Nginx servers over SSH as `alice-svc` with pinned host keys
@@ -241,13 +242,15 @@ final release run re-checks every row against the release commit.
 
 ## 8. Customer hardening recommendations
 
-1. **Host operating system.** Use a supported distribution (Ubuntu 22.04, Debian 12 or Rocky 9 with SELinux
-   enforcing) and apply security updates regularly; reboot for kernel updates in a maintenance window.
+1. **Host operating system.** Use a supported distribution (Ubuntu 22.04, Debian 12 or Rocky 9) and apply security
+   updates regularly; reboot for kernel updates in a maintenance window. Rocky 9 with SELinux enforcing is not
+   verified yet (an owner step of this release; `docs/install-guide.md`).
 2. **Full-disk encryption is required** (R15), including swap and the directory that holds `keys/`, `secrets/`,
    `data/` and `backups/` (KI-01, KI-18).
 3. **Firewall.** Publish only the HTTPS port; allow SSH to the Alice host from administrators only; allow outbound
    traffic only to managed servers, Azure Key Vault, the identity provider, the mail server and the syslog collector
-   that you use (`docs/install-guide.md`, "Firewall"). `install.sh --bind` restricts the published address.
+   that you use (`docs/install-guide.md`, "Firewall"). Leave `install.sh --bind` at its default on a production
+   server (it is for the vendor's test harness; `docs/install-guide.md`) and restrict the address with the firewall.
 4. **`from=` restriction.** Add `from="<Alice address>"` to Alice's line in every managed server's
    `authorized_keys` (KI-02).
 5. **SIEM forwarding.** Turn on audit forwarding (syslog over TLS) to a collector Alice cannot write to; alert on
@@ -255,8 +258,9 @@ final release run re-checks every row against the release commit.
 6. **Off-host backups.** Copy the daily backups to write-protected storage away from the host
    (`docs/backup-restore.md`), keep the recovery passphrase offline and apart from them, run the monthly `--deep`
    check, and rehearse a restore on a second server (KI-11, KI-14, KI-21).
-7. **Docker socket and group.** Keep `/var/run/docker.sock` root-only (the installer refuses a socket others can
-   write) and the `docker` group limited to host administrators (KI-17).
+7. **Docker socket and group.** Keep `/var/run/docker.sock` at Docker's default, mode 660 owned by `root:docker`
+   (the installer refuses a socket every user can use), and the `docker` group limited to host administrators:
+   membership is equivalent to root (KI-17).
 8. **Time.** Run NTP; set the host time zone before installing so the backup schedule follows it (KI-07).
 9. **Release verification.** Verify every package with the vendor-published release key before you extract it, and
    compare the fingerprint the installer prints (KI-09).

@@ -129,9 +129,10 @@ Measured with `make coverage` under Go 1.27.2. Floors are rounded down from the 
 ### Installer (root, preflight, no pull, image IDs)
 
 `install.sh` runs as root and verifies before it changes anything: the outer signature is checked by the operator with
-the vendor-published key (install guide), then the script verifies `SHA256SUMS.sig` with the keys inside the package
-after the operator confirms the release key's fingerprint (`--fingerprint` for unattended installs) [43], checks the
-exact file list and refuses symlinks, and installs from a root-only copy (Task 11 review I-1, fc45ac8). The preflight
+the vendor-published key (install guide), then the script verifies `SHA256SUMS.sig` with the keys inside the package,
+checks the exact file list and refuses symlinks (preflight), and only then shows the fingerprint of the key that
+verified it for the operator to confirm (`--fingerprint` for unattended installs) [43]; it installs from a root-only
+copy (Task 11 review I-1, fc45ac8). The preflight
 refuses an unsafe installation directory, a Docker socket that others can write, a compose project already in use and
 taken ports; images are loaded from the package and compared by image ID with `RELEASE` (both the config digest and
 the manifest digest are recorded, because the containerd image store reports the latter; fedcd79); compose never
