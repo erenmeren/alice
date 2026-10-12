@@ -47,12 +47,20 @@ func (l *vaultLimiter) acquire(ctx context.Context) (release func(), err error) 
 	}
 	l.last = now
 	l.tat = l.tat.Add(l.interval)
+	mine := l.tat
 	wait := l.tat.Add(-l.burst).Sub(now)
 	l.mu.Unlock()
 	if wait > 0 {
 		select {
 		case <-l.clk.After(wait):
 		case <-ctx.Done():
+			// Give the unused slot back when no caller reserved after it (review-fixes I-5); a later
+			// reservation keeps its place, so this slot then stays used (bounded by the burst).
+			l.mu.Lock()
+			if l.tat.Equal(mine) {
+				l.tat = l.tat.Add(-l.interval)
+			}
+			l.mu.Unlock()
 			return nil, ctx.Err()
 		}
 	}

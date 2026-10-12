@@ -160,6 +160,10 @@ func (p *Provider) limiterFor(target uuid.UUID, host string, clk clock.Clock) *v
 	defer p.mu.Unlock()
 	if old, ok := p.hosts[target]; ok && old != host { // a target that moved to another vault
 		delete(p.users[old], target)
+		if len(p.users[old]) == 0 { // like ForgetTarget: the old vault's limiter goes with its last target
+			delete(p.users, old)
+			delete(p.limiters, old)
+		}
 	}
 	p.hosts[target] = host
 	if p.users[host] == nil {

@@ -239,3 +239,44 @@ func TestLimiterBackwardStepWithConcurrentCallers(t *testing.T) {
 	assert.LessOrEqual(t, took, 4300*time.Millisecond)
 	assert.LessOrEqual(t, peak, int32(VaultConcurrency))
 }
+
+// A caller whose context ends while it waits for its rate slot gives the slot back when no later caller reserved
+// after it (review-fixes I-5), so cancelled callers do not delay the next one.
+func TestLimiterReturnsACancelledReservation(t *testing.T) {
+	clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+	l := newVaultLimiter(clk, VaultRate, VaultConcurrency)
+	for range VaultRate { // use the burst
+		rel, err := l.acquire(context.Background())
+		require.NoError(t, err)
+		rel()
+	}
+	l.mu.Lock()
+	before := l.tat
+	l.mu.Unlock()
+	for range 3 {
+		ctx, cancel := context.WithCancel(context.Background())
+		errc := make(chan error, 1)
+		go func() { _, err := l.acquire(ctx); errc <- err }()
+		clk.BlockUntil(1, 0)
+		cancel()
+		require.ErrorIs(t, <-errc, context.Canceled)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	assert.Equal(t, before, l.tat, "the three cancelled reservations were returned")
+}
+
+// A target that moves to another vault drops the first vault's limiter when no other target uses it (I-5).
+func TestAMovedTargetDropsTheOldLimiter(t *testing.T) {
+	p := New(Options{})
+	clk := clock.NewFake(time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC))
+	t1, t2 := uuid.New(), uuid.New()
+	p.limiterFor(t1, "a.vault.azure.net", clk)
+	p.limiterFor(t2, "b.vault.azure.net", clk)
+	p.limiterFor(t1, "c.vault.azure.net", clk)
+	assert.NotContains(t, p.users, "a.vault.azure.net")
+	assert.NotContains(t, p.limiters, "a.vault.azure.net")
+	p.limiterFor(t2, "c.vault.azure.net", clk)
+	assert.NotContains(t, p.limiters, "b.vault.azure.net")
+	assert.Contains(t, p.limiters, "c.vault.azure.net")
+}
