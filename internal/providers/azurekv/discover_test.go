@@ -736,7 +736,53 @@ func TestDiscoverRefusesAPageWithoutValue(t *testing.T) {
 		w.s.FailAll("/certificates/web-cert/versions", fakekv.Fault{Body: `{}`})
 		res, err := w.discover(providers.DiscoverRequest{Certificates: true})
 		require.NoError(t, err)
+		// One certificate's version list is that certificate's details: it stays listed without them (L-10).
+		assert.Empty(t, res.KV.Failures)
+		require.Len(t, res.KV.Certificates, 1)
+		assert.Nil(t, res.KV.Certificates[0].Details)
+		assert.Equal(t, 1, res.KV.DetailsPending)
+	})
+}
+
+// One certificate whose details cannot be read stays listed without them (review-fixes L-10): the rest of the
+// listing and the other details are kept, like keys(). Several failures in a row are a vault problem, and the
+// listing fails as before.
+func TestDiscoverKeepsTheListingWhenOneCertificateDetailFails(t *testing.T) {
+	for name, f := range map[string]fakekv.Fault{
+		"5xx":       {Status: 500},
+		"no value":  {Body: `{}`},
+		"throttled": {Status: 429},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t, fakekv.Options{})
+			w.s.AddCertificate("web-cert", fakekv.CertOptions{CommonName: "www.example.test", Exportable: true})
+			w.s.AddCertificate("bad-cert", fakekv.CertOptions{CommonName: "bad.example.test", Exportable: true})
+			w.s.AddCertificate("zzz-cert", fakekv.CertOptions{CommonName: "z.example.test", Exportable: true})
+			w.s.FailAll("/certificates/bad-cert", f)
+			res, err := w.discover(providers.DiscoverRequest{Certificates: true})
+			require.NoError(t, err)
+			assert.Empty(t, res.KV.Failures)
+			require.Len(t, res.KV.Certificates, 3)
+			got := map[string]bool{}
+			for _, c := range res.KV.Certificates {
+				got[c.Name] = c.Details != nil
+			}
+			assert.Equal(t, map[string]bool{"web-cert": true, "bad-cert": false, "zzz-cert": true}, got)
+			assert.Equal(t, 1, res.KV.DetailsPending)
+			assert.Contains(t, res.Warnings, providers.Warning{Code: providers.WarnKVItemUnreadable,
+				Params: map[string]string{"object": kindCertificates, "count": "1"}})
+		})
+	}
+	t.Run("every detail read fails", func(t *testing.T) {
+		w := newWorld(t, fakekv.Options{})
+		for _, n := range []string{"a-cert", "b-cert", "c-cert", "d-cert"} {
+			w.s.AddCertificate(n, fakekv.CertOptions{CommonName: n + ".example.test", Exportable: true})
+		}
+		w.s.FailAll("/certificates/", fakekv.Fault{Status: 500})
+		res, err := w.discover(providers.DiscoverRequest{Certificates: true})
+		require.NoError(t, err)
 		require.Len(t, res.KV.Failures, 1)
-		assert.Equal(t, codeUnexpected, res.KV.Failures[0].Err.Code)
+		assert.Equal(t, codeUnreachable, res.KV.Failures[0].Err.Code)
+		assert.Empty(t, res.KV.Certificates)
 	})
 }

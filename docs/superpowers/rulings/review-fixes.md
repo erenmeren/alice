@@ -24,3 +24,12 @@ Decisions taken while fixing the external code review of 2026-10-12 on branch `r
   48-hour alarm still runs on every tick — cost if wrong: after a fix, the next automatic backup can wait up to an
   hour (Back up now is immediate); a restart while a success is unrecorded forgets it, so that process makes one more
   backup.
+
+- L-10 (Key Vault certificate details) — all-or-nothing was not intended: inventory already stores a certificate listed
+  without details (`details_pending`, `DetailsPending`). A failed detail read (GET or the version list) now keeps the
+  listing: the certificate stays without details, counts as pending and as unreadable (`kv_item_unreadable`
+  warning), like a key whose details failed. Kept as a failure of the whole certificate listing: the caller's
+  context, a whole-vault code, `azure.forbidden` (it names the missing role, F-40; RBAC for certificate reads is
+  vault-wide in practice) and three detail failures in a row (the vault, not one certificate, is failing; this also
+  bounds the retries a broken vault costs one poll) — cost if wrong: a vault whose certificates fail one by one, with
+  successes between them, shows as healthy with unreadable items instead of degraded.

@@ -274,7 +274,7 @@ func (d *discovery) certificates(req providers.DiscoverRequest) error {
 	}
 
 	known := foldKeys(req.KVKnown)
-	read := 0
+	read, failedInARow := 0, 0
 	var out []providers.KVCertificate
 	for _, e := range entries {
 		c := providers.KVCertificate{Name: e.name, Thumbprint: e.thumb, Enabled: true}
@@ -292,11 +292,12 @@ func (d *discovery) certificates(req providers.DiscoverRequest) error {
 				read++
 				det, versions, gone, err := d.certificateDetails(e.name, k.Version, isKnown)
 				if err != nil {
-					ok, fatal := d.listErr(kindCertificates, err)
-					if fatal != nil || !ok {
+					if done, fatal := d.detailErr(err, &failedInARow); done {
 						return fatal
 					}
-					d.inv.DetailsPending++ // the poll's own deadline: the details wait
+					d.inv.DetailsPending++ // the poll's own deadline, or this certificate's details failed: they wait
+				} else {
+					failedInARow = 0
 				}
 				if gone {
 					continue
@@ -308,6 +309,32 @@ func (d *discovery) certificates(req providers.DiscoverRequest) error {
 	}
 	d.inv.Certificates = out
 	return nil
+}
+
+// maxDetailFailures is how many certificate detail reads may fail in a row before the vault, not the
+// certificate, is taken to be the problem and the certificate listing fails as a whole.
+const maxDetailFailures = 3
+
+// detailErr sorts the error of one certificate's detail read (review-fixes L-10). done: the step ends
+// with fatal (the caller's context or a whole-vault failure), or the listing failed (forbidden, which
+// names the missing role, F-40; or maxDetailFailures in a row) and is discarded. Otherwise the
+// certificate stays listed without details: the poll's own deadline cuts the listing; any other
+// failure counts it as unreadable (WarnKVItemUnreadable), like keys() keeps a key whose details failed.
+func (d *discovery) detailErr(err error, failedInARow *int) (done bool, fatal error) {
+	switch {
+	case d.parent.Err() != nil:
+		return true, ctxError(d.parent.Err())
+	case d.ctx.Err() != nil:
+		d.truncate(kindCertificates)
+		return false, nil
+	}
+	pe := toProviderError(err)
+	*failedInARow++
+	if wholeVaultCodes[pe.Code] || pe.Code == codeForbidden || *failedInARow >= maxDetailFailures {
+		return true, d.failList(kindCertificates, err)
+	}
+	d.drop(kindCertificates)
+	return false, nil
 }
 
 // certificateDetails reads the latest version of a certificate, and its versions when the current
