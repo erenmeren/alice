@@ -115,6 +115,8 @@ Alice remembers the latest time it has seen, in the database and in a protected 
   license accepts the new time at once.
 - A jump that happens while Alice is stopped is counted like normal downtime: it can only make the license end
   sooner, never later. If that happens by mistake, ask the vendor for a correction license.
+- A suspended host or virtual machine is not a jump: Alice measures its running time with the system's boot clock,
+  which keeps counting during a suspend (Linux), so the time that passed while suspended counts normally.
 
 Keep the server time synchronised (NTP). A server clock set back by more than about 30 seconds also makes sign-in
 codes from phone authenticators fail: the phone follows the real time, the server does not, so the codes are

@@ -1045,7 +1045,8 @@ lock. Key rotations pause instead (see [What a license pause does](#what-a-licen
 
 Alice also stops changes when it cannot check its license. Each Alice process checks the license at start, every
 hour and after an upload; a failed check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. When no
-check has succeeded for 3 hours (counted in the time the process was running, so a suspended host does not count),
+check has succeeded for 3 hours (counted in the time since the process started, including time the host or virtual
+machine was suspended),
 everyone sees "Alice could not check its license since …" and every request that works on a server is refused with
 `ALC-LIC-0009`: not only changes (adding, changing or removing a server, confirming a fingerprint, **Remove key**,
 certificate uploads, signing requests, deployments, verification settings, **Run now** of a waiting job) but also

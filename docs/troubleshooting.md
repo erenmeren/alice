@@ -741,7 +741,7 @@ for a correction license (it names the license it replaces and is always accepte
 ## ALC-LIC-0009: The license could not be checked
 
 **Meaning.** Alice checks its license at start, after every upload and every hour, in every Alice process; a failed
-check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. No check has succeeded for more than 3 hours of the process's running time (time while the host was suspended does not count) (`license.unverified`, HTTP 503, retryable), so the action was refused. Nothing was changed. Every action that works on a managed server is refused
+check is tried again after 1, 2, 4 and 8 minutes, then every 10 minutes. No check has succeeded for more than 3 hours since the process started (time while the host was suspended counts; after a long suspend the first check runs at once) (`license.unverified`, HTTP 503, retryable), so the action was refused. Nothing was changed. Every action that works on a managed server is refused
 meanwhile: changes to servers, keys and certificates, and also **Test connection**, **Scan for SSH keys** and
 **Discover**; the daily scans are not started. Everyone sees a red banner with the time of the last successful
 check. Reading everything, signing in, uploading a license, the audit log and its export, user and API token

@@ -5,6 +5,7 @@ package clock
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -24,8 +25,8 @@ type Ticker interface {
 	Stop()
 }
 
-// Monotonic measures elapsed process time ("uptime"). It never decreases and is not
-// affected when someone changes the wall clock (spec R26 compares the two).
+// Monotonic measures elapsed process time ("uptime"), including time the host was suspended where the platform can
+// measure it. It never decreases and is not affected when someone changes the wall clock (spec R26 compares the two).
 type Monotonic interface {
 	Elapsed() time.Duration
 }
@@ -44,11 +45,36 @@ func (Real) After(d time.Duration) <-chan time.Time {
 	return out
 }
 
-// processStart carries Go's monotonic clock reading, so Real.Elapsed ignores wall-clock changes.
-var processStart = time.Now()
+// Real.Elapsed counts from the process start on the boot clock (CLOCK_BOOTTIME on Linux), which counts the time the
+// host or virtual machine was suspended; Go's monotonic reading (CLOCK_MONOTONIC) does not, so a long suspend would look
+// like a forward wall-clock jump to the license time guard (review-fixes L-1). Without a boot clock processStart, which
+// carries Go's monotonic reading, is the fallback. Neither moves when someone sets the wall clock.
+var (
+	bootNow           = bootTime
+	bootStart, bootOK = bootNow()
+	processStart      = time.Now()
+	lastElapsed       atomic.Int64 // the highest Elapsed returned, so a fallback never moves uptime back
+)
 
-// Elapsed returns the monotonic time since the process started.
-func (Real) Elapsed() time.Duration { return time.Since(processStart) }
+// Elapsed returns the time since the process started, including time the host was suspended where the platform
+// can measure it. It never decreases and ignores wall-clock changes.
+func (Real) Elapsed() time.Duration {
+	d := time.Since(processStart)
+	if bootOK {
+		if now, ok := bootNow(); ok {
+			d = now - bootStart
+		}
+	}
+	for {
+		last := lastElapsed.Load()
+		if int64(d) <= last {
+			return time.Duration(last)
+		}
+		if lastElapsed.CompareAndSwap(last, int64(d)) {
+			return d
+		}
+	}
+}
 
 // NewTicker returns a Ticker backed by time.Ticker.
 func (Real) NewTicker(d time.Duration) Ticker {

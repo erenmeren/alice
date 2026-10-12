@@ -1,6 +1,7 @@
 package clock_test
 
 import (
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -337,4 +338,47 @@ func TestFakeBlockUntilWaitsForRegistrations(t *testing.T) {
 	f.Advance(time.Minute)
 	<-ch
 	f.BlockUntil(0, 1) // the ticker is still registered
+}
+
+// TestRealElapsedCountsSuspend: uptime comes from a clock that keeps counting while the host or virtual machine is
+// suspended (CLOCK_BOOTTIME on Linux), so a long suspend is not a forward wall-clock jump for the license time guard.
+func TestRealElapsedCountsSuspend(t *testing.T) {
+	var mu sync.Mutex
+	boot, ok := 100*time.Second, true
+	restore := clock.SetBootClock(func() (time.Duration, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		return boot, ok
+	})
+	defer restore()
+	var m clock.Monotonic = clock.Real{}
+	assert.Less(t, m.Elapsed(), time.Second)
+
+	mu.Lock()
+	boot += 72 * time.Hour // suspended for three days: the process's monotonic clock did not move
+	mu.Unlock()
+	assert.GreaterOrEqual(t, m.Elapsed(), 72*time.Hour, "suspended time counts as uptime")
+
+	mu.Lock()
+	ok = false // the boot clock fails: the process clock is used, and uptime never goes back
+	mu.Unlock()
+	assert.GreaterOrEqual(t, m.Elapsed(), 72*time.Hour, "uptime never decreases")
+}
+
+func TestRealElapsedWithoutABootClock(t *testing.T) {
+	restore := clock.SetBootClock(func() (time.Duration, bool) { return 0, false })
+	defer restore()
+	var m clock.Monotonic = clock.Real{}
+	a := m.Elapsed()
+	time.Sleep(2 * time.Millisecond)
+	assert.Greater(t, m.Elapsed(), a, "the process's monotonic clock is the fallback")
+}
+
+func TestBootClockOnLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("CLOCK_BOOTTIME is Linux only")
+	}
+	now, ok := clock.BootTime()
+	require.True(t, ok)
+	assert.Positive(t, now)
 }
