@@ -1712,7 +1712,7 @@
     "page": {
       "description": "Her değişikliğin adımları, her sonucun kanıtı var.",
       "sequence": "Dağıtım adımları",
-      "sequenceSub": "İşlem tamamlandı olarak işaretlenmeden önce değişiklikler doğrulanır.",
+      "sequenceSub": "Her adım kendi sonucunu gösterir. Çalışmayan bir adım hiçbir zaman tamamlandı olarak gösterilmez.",
       "details": "İşlem ayrıntıları",
       "evidence": "Kanıt",
       "triggeredBy": "Başlatan",

@@ -1712,7 +1712,7 @@
     "page": {
       "description": "Every change has a sequence. Every outcome has evidence.",
       "sequence": "Deployment sequence",
-      "sequenceSub": "Changes are verified before an operation is marked complete.",
+      "sequenceSub": "Each step shows its own result. A step that did not run is never shown as done.",
       "details": "Operation details",
       "evidence": "Evidence",
       "triggeredBy": "Triggered by",
