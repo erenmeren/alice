@@ -772,11 +772,11 @@ then becomes ALC-LIC-0001.
 
 ## ALC-SYS-0009: This request method is not accepted here
 
-**Meaning.** A HEAD request to an export (`/api/v1/certificates/export`, `/api/v1/ssh-keys/export`, `/api/v1/audit/export`) was refused before anything ran; no audit row was written. (HTTP 405, reason `system.method_not_allowed`.)
+**Meaning.** The API address exists but does not accept this request method, or a HEAD request to an export (`/api/v1/certificates/export`, `/api/v1/ssh-keys/export`, `/api/v1/audit/export`) was refused before anything ran; no audit row was written. The `Allow` header of the answer lists the methods the address accepts (not for the exports' HEAD). (HTTP 405, reason `system.method_not_allowed`.)
 
-**Likely cause.** An export is downloaded with GET only; a HEAD request would run the whole export and record it without sending the file.
+**Likely cause.** A script uses the wrong method for the address (for example DELETE where the API documents POST …/actions/…). An export is downloaded with GET only; a HEAD request would run the whole export and record it without sending the file.
 
-**What to do.** Download the file with GET, for example with the Export button.
+**What to do.** Use a method from the `Allow` header and the API reference (`docs/api.md`). Download an export with GET, for example with the Export button.
 
 ## ALC-TGT-0001: Server already exists
 

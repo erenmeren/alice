@@ -15,6 +15,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -182,9 +183,25 @@ func TestUnknownAPIPathIsJSON404InRequestLanguage(t *testing.T) {
 }
 
 func TestWrongMethodOnAPIRouteIsJSONNotSPA(t *testing.T) {
-	// "/api/" is more specific than "/", so a POST to a GET-only API route gets the JSON 404.
-	rec := do(NewHandler(testDeps(t, nil)), http.MethodPost, "/api/v1/version", nil)
+	// "/api/" is more specific than "/", so a POST to a GET-only API route gets a JSON answer: 405 with the
+	// route's methods in Allow (RFC 9110 §15.5.6; review-fixes I-1).
+	h := NewHandler(testDeps(t, nil))
+	rec := do(h, http.MethodPost, "/api/v1/version", nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Equal(t, "GET, HEAD", rec.Header().Get("Allow"))
+	assert.Equal(t, "ALC-SYS-0009", decodeErr(t, rec).Error.Code)
+
+	rec = do(h, http.MethodDelete, "/api/v1/users", nil)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Equal(t, "GET, HEAD, POST", rec.Header().Get("Allow"))
+
+	rec = do(h, http.MethodPut, "/api/v1/users/"+uuid.NewString(), nil) // a path with a wildcard
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	assert.Contains(t, rec.Header().Get("Allow"), "GET")
+
+	rec = do(h, http.MethodDelete, "/api/v1/nope", nil) // no route at all: still 404
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Empty(t, rec.Header().Get("Allow"))
 	assert.Equal(t, "ALC-SYS-0001", decodeErr(t, rec).Error.Code)
 }
 

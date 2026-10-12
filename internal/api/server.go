@@ -12,6 +12,8 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -479,7 +481,7 @@ func (s *server) handler(routes []route) http.Handler {
 	mux := http.NewServeMux()
 	s.register(mux, routes)
 	notFound := func(w http.ResponseWriter, r *http.Request) { s.writeError(w, r, ErrNotFound) }
-	mux.HandleFunc("/api/", notFound)
+	mux.HandleFunc("/api/", s.apiFallback(mux, routes))
 	if s.deps.TestHandler != nil {
 		mux.Handle("/test/", s.deps.TestHandler)
 	} else {
@@ -487,6 +489,39 @@ func (s *server) handler(routes []route) http.Handler {
 	}
 	mux.Handle("/", s.spa())
 	return s.requestID(securityHeaders(s.recoverer(mux)))
+}
+
+// apiFallback answers an /api/ request no route took: 405 with Allow when a route serves the path with
+// another method (the "/api/" catch-all matches every method, so the mux's own 405 never runs;
+// review-fixes I-1), else the JSON 404. It asks mux which pattern each route method would match and
+// runs no handler.
+func (s *server) apiFallback(mux *http.ServeMux, routes []route) http.HandlerFunc {
+	var methods []string
+	for _, r := range routes {
+		methods = append(methods, r.method)
+	}
+	slices.Sort(methods)
+	methods = slices.Compact(methods)
+	return func(w http.ResponseWriter, r *http.Request) {
+		var allow []string
+		for _, m := range methods {
+			probe := r.Clone(r.Context())
+			probe.Method = m
+			if _, pattern := mux.Handler(probe); strings.HasPrefix(pattern, m+" ") {
+				allow = append(allow, m)
+				if m == http.MethodGet {
+					allow = append(allow, http.MethodHead) // the mux serves HEAD with GET
+				}
+			}
+		}
+		if len(allow) > 0 {
+			slices.Sort(allow)
+			w.Header().Set("Allow", strings.Join(allow, ", "))
+			s.writeError(w, r, ErrMethodNotAllowed)
+			return
+		}
+		s.writeError(w, r, ErrNotFound)
+	}
 }
 
 // register is the only place routes reach a mux; every route passes through guard.
