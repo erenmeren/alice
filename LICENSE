@@ -23,8 +23,8 @@ under it. Without such an order form and key, you have no right to install,
 run or use the Software.
 
 Third-party components included in or distributed with the Software remain
-under their own licenses. These are listed in THIRD_PARTY_NOTICES.md and in
-the licenses/ directory of each release package.
+under their own licenses. The notices are generated for, and shipped in, each
+release package (THIRD_PARTY_NOTICES.md and the licenses/ directory).
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
