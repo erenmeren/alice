@@ -82,6 +82,8 @@ describe('CertificateDetailPage', () => {
     expect(within(panel).getByText('Time remaining')).toBeInTheDocument();
     expect(within(panel).getByText('332 days')).toHaveAttribute('data-tone', 'success');
     expect(within(panel).getByRole('progressbar', { name: 'Time remaining' })).toBeInTheDocument();
+    // A whole percentage, so a screen reader does not read out fourteen decimals.
+    expect(within(panel).getByRole('progressbar', { name: 'Time remaining' }).getAttribute('aria-valuenow')).toMatch(/^\d+$/);
     expect(within(panel).getByText('Valid from')).toBeInTheDocument();
     expect(within(panel).getByText('Valid until')).toBeInTheDocument();
     // Far from expiry: the brand notice says what validity does not prove.
@@ -104,6 +106,10 @@ describe('CertificateDetailPage', () => {
     expect(notice).not.toBeNull();
     expect(within(notice).getByText('Upload a valid replacement before deployment.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
+    // The next action is the replacement, not the deployment steps of a certificate that cannot be deployed.
+    const next = screen.getByRole('heading', { name: 'Next action' }).closest('section') as HTMLElement;
+    expect(within(next).getByText('Upload a valid replacement on the Certificates page, then deploy it to the same locations.')).toBeInTheDocument();
+    expect(within(next).queryByText(/follow each deployment step/)).not.toBeInTheDocument();
     const validity = screen.getByRole('heading', { name: 'Validity' }).closest('section') as HTMLElement;
     expect(within(validity).getByText('Expired')).toHaveAttribute('data-tone', 'danger');
   });
@@ -144,7 +150,23 @@ describe('CertificateDetailPage', () => {
     certServer(undefined, [], auditorSession);
     await renderRoute(`/certificates/${ID}`);
     const panel = (await screen.findByRole('heading', { name: 'Next action' })).closest('section') as HTMLElement;
-    expect(within(panel).getByText('Read-only access')).toBeInTheDocument();
+    // The same badge text as on a server's page.
+    expect(within(panel).getByText('Read only')).toBeInTheDocument();
+    expect(within(panel).getByText('Your role can review this certificate. An Operator or an Administrator deploys it.')).toBeInTheDocument();
+    expect(within(panel).queryByText(/follow each deployment step/)).not.toBeInTheDocument();
+  });
+
+  it('gives the deployment steps as the next action only to a role that can deploy a valid certificate with its key', async () => {
+    certServer();
+    await renderRoute(`/certificates/${ID}`);
+    const panel = (await screen.findByRole('heading', { name: 'Next action' })).closest('section') as HTMLElement;
+    expect(within(panel).getByText('Review the certificate, confirm its destinations, then follow each deployment step.')).toBeInTheDocument();
+  });
+
+  it('says a renewal is due today when less than a day is left', async () => {
+    certServer(certificateDetailFixture({ id: ID, not_after: '2026-10-03T20:00:00Z' }));
+    await renderRoute(`/certificates/${ID}`);
+    expect(await screen.findByText('Renewal due today')).toBeInTheDocument();
   });
 
   it('says when the chain is incomplete or the certificate is self-signed', async () => {

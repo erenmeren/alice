@@ -167,7 +167,7 @@ export function CertificateDetailPage() {
           {t('certificates.page.expiredText')}
         </Notice>
       ) : soon ? (
-        <Notice tone="warning" title={t('certificates.page.renewalDue', { count: days })}>
+        <Notice tone="warning" title={days > 0 ? t('certificates.page.renewalDue', { count: days }) : t('certificates.page.renewalDueToday')}>
           {t('certificates.page.renewalText')}
         </Notice>
       ) : (
@@ -268,7 +268,7 @@ export function CertificateDetailPage() {
               <Icon name="CalendarDays" size={20} className={classes.validityIcon} />
             </div>
             <Progress
-              value={expired ? 0 : lifeLeft(c, now)}
+              value={expired ? 0 : Math.round(lifeLeft(c, now))}
               size={5}
               radius={5}
               aria-label={t('certificates.page.remaining')}
@@ -288,7 +288,11 @@ export function CertificateDetailPage() {
 
           <Panel title={t('certificates.page.nextAction')}>
             <Stack gap="sm" align="flex-start">
-              <Text size="sm">{t('certificates.page.nextActionText')}</Text>
+              {/* The deployment steps only where a deployment is possible: the reader's role, an expired certificate and
+                  a missing key each get their own next action. */}
+              {!canOperate && <Text size="sm">{t('certificates.page.nextActionReadOnly')}</Text>}
+              {canOperate && expired && <Text size="sm">{t('certificates.page.nextActionExpired')}</Text>}
+              {canOperate && !expired && c.has_private_key && <Text size="sm">{t('certificates.page.nextActionText')}</Text>}
               {!canOperate && (
                 <StatusBadge tone="neutral" icon="Eye">
                   {t('certificates.page.readOnly')}
