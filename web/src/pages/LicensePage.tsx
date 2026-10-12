@@ -81,6 +81,7 @@ export function LicensePage() {
   const focusUpload = () => uploadRef.current?.querySelector<HTMLInputElement>('input[type="file"]')?.focus();
   const d = detail.data;
   const evaluation = d?.phase === "evaluation" || d?.phase === "evaluation_expired";
+  const usagePct = d && d.max_targets > 0 ? Math.min(100, Math.round((d.targets_used * 100) / d.max_targets)) : 0;
 
   let installedText = "";
   if (installed) {
@@ -207,13 +208,21 @@ export function LicensePage() {
                   </span>
                 </div>
                 {d.max_targets > 0 && (
-                  <Progress
-                    className={classes.progress}
-                    size={5}
-                    radius={5}
-                    value={Math.min(100, Math.round((d.targets_used * 100) / d.max_targets))}
-                    aria-label={t("license.current.usageLabel")}
-                  />
+                  // A bar cannot draw more than 100 %: over the limit it turns the warning color and reads the
+                  // real numbers ("12 of 10 targets used") instead of Mantine's "100%".
+                  <Progress.Root className={classes.progress} size={5} radius={5}>
+                    <Progress.Section
+                      value={usagePct}
+                      color={d.targets_used > d.max_targets ? "var(--alice-warning)" : undefined}
+                      withAria={false}
+                      role="progressbar"
+                      aria-label={t("license.current.usageLabel")}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={usagePct}
+                      aria-valuetext={t("license.current.usage", { used: d.targets_used, max: d.max_targets })}
+                    />
+                  </Progress.Root>
                 )}
                 <p className={classes.small}>{t("license.page.usageHelp")}</p>
               </div>

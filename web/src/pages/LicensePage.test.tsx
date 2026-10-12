@@ -141,6 +141,19 @@ describe("license page", () => {
     expect(note.getAttribute("style")).toContain("--alert-bg: var(--alice-danger-soft)");
   });
 
+  it("shows usage over the limit honestly: a full bar in the warning tone that reads the real numbers", async () => {
+    server.use(
+      ...sessionHandlers(sessionFor("auditor")),
+      http.get("/api/v1/license", () => HttpResponse.json({ ...licenseDetailFixture, targets_used: 12 })),
+    );
+    await renderRoute("/license");
+    const bar = await screen.findByRole("progressbar", { name: "Targets used" });
+    expect(screen.getByText("12 of 10 targets used")).toBeInTheDocument();
+    // The bar cannot draw 120 %; it says the real usage to a screen reader and turns the warning color.
+    expect(bar).toHaveAttribute("aria-valuetext", "12 of 10 targets used");
+    expect(bar.getAttribute("style")).toContain("var(--alice-warning)");
+  });
+
   it("explains the grace period, the evaluation and its end", async () => {
     const detail = (over: object) =>
       http.get("/api/v1/license", () => HttpResponse.json({ ...licenseDetailFixture, ...over }));
