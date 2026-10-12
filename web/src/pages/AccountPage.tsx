@@ -9,7 +9,7 @@ import { useStepUp } from '../components/StepUpProvider';
 import { AppearanceControl, FactList, PageHeader, Panel, StatusBadge } from '../components/ui';
 import { Icon } from '../design/Icon';
 import classes from './People.module.css';
-import { initials } from './UsersPage';
+import { initials } from '../initials';
 
 function ChangePassword() {
   const { t } = useTranslation();

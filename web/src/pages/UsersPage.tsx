@@ -18,6 +18,7 @@ import { useStepUp } from '../components/StepUpProvider';
 import { DialogActions, PageHeader, ResourceTable, StatusBadge } from '../components/ui';
 import { formatDateTime } from '../datetime';
 import { Icon, type IconName } from '../design/Icon';
+import { initials } from '../initials';
 import { AppModal } from '../components/AppModal';
 import classes from './People.module.css';
 
@@ -32,17 +33,6 @@ type Dialog =
   | { kind: 'resetMfa'; user: User }
   | { kind: 'revoke'; user: User }
   | { kind: 'toggle'; user: User };
-
-// initials draws a person's avatar letters from their display name (decorative: the name is written next to it).
-export function initials(name: string, lang: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => [...w][0])
-    .join('')
-    .toLocaleUpperCase(lang);
-}
 
 export function UsersPage() {
   const { t, i18n } = useTranslation();

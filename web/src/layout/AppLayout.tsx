@@ -16,6 +16,7 @@ import { AttentionBell } from '../components/shell/AttentionBell';
 import { CommandPalette, anotherDialogOpen } from '../components/shell/CommandPalette';
 import { LanguageToggle, ThemeToggle } from '../components/ui';
 import { Icon, type IconName } from '../design/Icon';
+import { initials } from '../initials';
 import classes from './AppLayout.module.css';
 
 export type NavGroup = 'none' | 'inventory' | 'operations' | 'administration';
@@ -59,16 +60,6 @@ const GROUPS: NavGroup[] = ['none', 'inventory', 'operations', 'administration']
 export function isActive(item: NavItem, pathname: string): boolean {
   if (item.to === '/') return pathname === '/';
   return pathname === item.to || pathname.startsWith(`${item.to}/`) || (item.match ?? []).some((m) => pathname.startsWith(m));
-}
-
-function initials(name: string, lang: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => [...w][0])
-    .join('')
-    .toLocaleUpperCase(lang);
 }
 
 function SetupBanner() {

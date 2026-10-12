@@ -11,22 +11,12 @@ import { CursorFooter, EmptyState, Notice, PageHeader, StatusBadge, type Tone } 
 import ui from '../components/ui/ui.module.css';
 import { formatDateTime } from '../datetime';
 import { Icon } from '../design/Icon';
+import { initials } from '../initials';
 import classes from './AuditPage.module.css';
 
 const PAGE_SIZE = 50;
 // A refusal (denied) is the stronger signal than a failed attempt, as the product's colors had it (red vs orange).
 const RESULT_TONES: Record<AuditResult, Tone> = { success: 'success', failure: 'warning', denied: 'danger' };
-
-// initials are the avatar letters of a display name (two words at most), upper-cased in the reader's language.
-function initials(name: string, lang: string): string {
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => [...w][0])
-    .join('')
-    .toLocaleUpperCase(lang);
-}
 
 interface Filters {
   action: string;
