@@ -93,7 +93,7 @@ export const SCREENS: Screen[] = [
     path: '/certificates/0192c000-0000-7000-8000-0000000000c1',
     session: sessionFor('operator'),
     status: installedStatus,
-    ready: { en: 'Where this certificate is used', tr: 'Bu sertifikanın kullanıldığı yerler' },
+    ready: { en: 'Where this certificate is used', tr: 'Bu sertifika nerede kullanılıyor?' },
   },
   {
     path: `/servers/${nginxTargetFixture.id}`,
