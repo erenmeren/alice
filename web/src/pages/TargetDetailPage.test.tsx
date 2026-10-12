@@ -587,7 +587,7 @@ describe('TargetDetailPage in the design', () => {
     await renderRoute(path);
     const notice = await screen.findByTestId('host-key-changed');
     expect(notice).toHaveAttribute('role', 'alert');
-    expect(notice).toHaveTextContent('This server’s identity has changed');
+    expect(notice).toHaveTextContent("This server's identity has changed");
     expect(within(notice).getByRole('button', { name: 'Review the new fingerprint' })).toBeInTheDocument();
     expect(screen.queryByText('Connection verified')).not.toBeInTheDocument();
   });
@@ -601,11 +601,39 @@ describe('TargetDetailPage in the design', () => {
     expect(screen.queryByText('Connection verified')).not.toBeInTheDocument();
   });
 
-  it('claims no verified connection while a server waits for its fingerprint', async () => {
+  it('claims no verified connection while a server waits for its fingerprint, and says an administrator must confirm it', async () => {
     onServer('operator', targetWith({ status: 'pending_host_key' }));
     await renderRoute(path);
     await screen.findByTestId('target-status');
     expect(screen.queryByText('Connection verified')).not.toBeInTheDocument();
+    const notice = screen.getByText("An administrator must confirm this server's fingerprint before Alice works on it.").closest('[role="note"]') as HTMLElement;
+    expect(notice).toHaveTextContent('Waiting for fingerprint confirmation');
+  });
+
+  it('says a pending server waits for its fingerprint to an administrator too while the host keys load', async () => {
+    onServer('admin', targetWith({ status: 'pending_host_key' }));
+    server.use(http.get('/api/v1/targets/:id/host-keys', () => new Promise<never>(() => {})));
+    await renderRoute(path);
+    await screen.findByTestId('target-status');
+    expect(screen.getByText("An administrator must confirm this server's fingerprint before Alice works on it.")).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Is this your server?' })).not.toBeInTheDocument();
+  });
+
+  it('gives a refused sign-in a danger notice with the reason, above the fold', async () => {
+    onServer('operator', targetWith({ status: 'auth_failed', last_error: { code: 'ALC-SSH-0002', reason: 'ssh.auth_failed' } }));
+    await renderRoute(path);
+    await screen.findByTestId('target-status');
+    const title = screen.getAllByText('Sign-in refused').find((el) => el.closest('[role="note"]'));
+    const notice = title!.closest('[role="note"]') as HTMLElement;
+    expect(notice).toHaveTextContent(commonEn.errors.ssh.auth_failed.title);
+    expect(screen.queryByText('Connection verified')).not.toBeInTheDocument();
+  });
+
+  it('disables the scan while the identity changed, as the server refuses it', async () => {
+    onServer('operator', targetWith({ status: 'host_key_changed' }));
+    await renderRoute(path);
+    await screen.findByTestId('host-key-changed');
+    expect(screen.getByRole('button', { name: 'Scan for SSH keys' })).toBeDisabled();
   });
 
   it('puts Test connection in the operations panel; auditors see Read only there instead', async () => {
@@ -613,6 +641,8 @@ describe('TargetDetailPage in the design', () => {
     const view = await renderRoute(path);
     const ops = (await screen.findByRole('heading', { name: 'Available operations' })).closest('section')!;
     expect(within(ops).getByText(/restricted helper/)).toBeInTheDocument();
+    // A Linux server has no Nginx: the sentence speaks of its SSH keys.
+    expect(within(ops).queryByText(/Nginx/)).not.toBeInTheDocument();
     expect(within(ops).getByRole('button', { name: 'Test connection' })).toBeInTheDocument();
     expect(within(ops).queryByText('Read only')).not.toBeInTheDocument();
     view.unmount();

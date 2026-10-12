@@ -126,7 +126,13 @@ export function TargetDetailPage() {
 
   const facts = connectionFacts(t, i18n, tg, pinned, discoveryFailed, websitesAsOf(locations.data?.items ?? []));
   const scan = (
-    <Button variant="default" leftSection={<Icon name="RefreshCw" size={15} />} disabled={busy} onClick={() => void runJob(() => discoverTarget(tg.id), true)}>
+    // As in the design, no scan while the server's identity changed: the server refuses it until an administrator decides.
+    <Button
+      variant="default"
+      leftSection={<Icon name="RefreshCw" size={15} />}
+      disabled={busy || tg.status === 'host_key_changed'}
+      onClick={() => void runJob(() => discoverTarget(tg.id), true)}
+    >
       {t(nginx ? 'locations.discover' : 'targets.discover')}
     </Button>
   );
@@ -235,7 +241,7 @@ export function TargetDetailPage() {
             <FactList facts={facts} />
           </Panel>
           <Panel title={t('targets.page.operations')}>
-            <Text className={classes.small}>{t('targets.page.operationsText')}</Text>
+            <Text className={classes.small}>{t(nginx ? 'targets.page.operationsText' : 'targets.page.operationsTextLinux')}</Text>
             <Group gap="xs" mt="lg">
               {canOperate ? (
                 <Button variant="default" leftSection={<Icon name="Network" size={15} />} disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
@@ -288,10 +294,25 @@ export function TargetDetailPage() {
 }
 
 // IdentityNotice is the design's status line under the header: the changed identity (danger, with the review for
-// Administrators), a failed last attempt (warning) or a verified connection. Other states (checking, waiting for the
-// fingerprint, sign-in refused, partly working, disabled) claim nothing here: the status badge and the facts say it.
+// Administrators), a refused sign-in (danger, with the reason), a server waiting for its fingerprint (warning, for every
+// role and also while the host keys load: only an Administrator can confirm it), a failed last attempt (warning) or a
+// verified connection. Checking, partly working and disabled claim nothing here: the status badge and the facts say it.
 function IdentityNotice({ target, admin, onReview }: { target: Target; admin: boolean; onReview: () => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  if (target.status === 'auth_failed') {
+    return (
+      <Notice tone="danger" title={t('enum.targetStatus.auth_failed')}>
+        {target.last_error ? reasonTitle(t, i18n, target.last_error.reason) : null}
+      </Notice>
+    );
+  }
+  if (target.status === 'pending_host_key') {
+    return (
+      <Notice tone="warning" title={t('enum.targetStatus.pending_host_key')}>
+        {t('targets.page.pendingText')}
+      </Notice>
+    );
+  }
   if (target.status === 'host_key_changed') {
     return (
       <Notice
