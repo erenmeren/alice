@@ -38,6 +38,16 @@ describe('UsageTopology', () => {
     expect(screen.queryByText('More locations exist than are shown here.')).not.toBeInTheDocument();
   });
 
+  it('shows the port of the TLS listen (443) when the server block also listens on 80 first', async () => {
+    const both = { names: ['www.example.test'], listens: [{ addr: '*', port: 80, default_server: false }, { addr: '*', port: 443, default_server: false }], file: '/etc/nginx/conf.d/x.conf', line: 1 };
+    const other = { names: ['alt.example.test'], listens: [{ addr: '*', port: 80, default_server: false }, { addr: '*', port: 8443, default_server: false }], file: '/etc/nginx/conf.d/y.conf', line: 1 };
+    await show(certificateDetailFixture({ locations: [locationFixture({ id: 'l1', target_id: 't1', target_name: 'web-01', servers: [both, other] })] }));
+    const link = within(screen.getByRole('list', { name: 'Deployed locations' })).getByRole('link');
+    expect(link).toHaveTextContent('www.example.test:443');
+    expect(link).toHaveTextContent('alt.example.test:8443');
+    expect(link).not.toHaveTextContent(':80');
+  });
+
   it('links by target id, never by name: two servers with the same name stay two links', async () => {
     const cert = certificateDetailFixture({
       locations: [

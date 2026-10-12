@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
-import type { CertificateDetail, CertificateLocation } from '../../api/types';
+import type { CertListen, CertificateDetail, CertificateLocation } from '../../api/types';
 import { Icon, type IconName } from '../../design/Icon';
 import { Panel } from '../ui';
 import classes from './UsageTopology.module.css';
@@ -12,10 +12,20 @@ export function sourceIcon(source: string): IconName {
   return 'FileKey2';
 }
 
-// siteNames are the website names of one location with the port Nginx listens on ("www.example.test:443"), as Alice
-// read them from the server's configuration.
+// tlsPort is the port a server block serves this certificate on. A listen carries no "ssl" flag in the API, so it is
+// 443 when the block listens there, else the first port other than plain-HTTP 80, else the first listen's.
+function tlsPort(listens: CertListen[]): number | null {
+  const port = listens.find((l) => l.port === 443) ?? listens.find((l) => l.port !== 80) ?? listens[0];
+  return port ? port.port : null;
+}
+
+// siteNames are the website names of one location with the port Nginx serves the certificate on
+// ("www.example.test:443"), as Alice read them from the server's configuration.
 function siteNames(loc: CertificateLocation): string[] {
-  return loc.servers.flatMap((s) => s.names.map((n) => (s.listens[0] ? `${n}:${s.listens[0].port}` : n)));
+  return loc.servers.flatMap((s) => {
+    const port = tlsPort(s.listens);
+    return s.names.map((n) => (port !== null ? `${n}:${port}` : n));
+  });
 }
 
 interface TargetNode {
