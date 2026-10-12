@@ -14,7 +14,11 @@
 .alertBody { min-width: 0; }
 .alertMessage { font-size: 12px; color: inherit; overflow: visible; }
 
-.badge { border: 0; font-size: 11px; font-weight: 550; letter-spacing: 0; text-transform: none; padding-inline: 7px; }
+.badge { border: 0; font-size: 11px; font-weight: 550; letter-spacing: 0; text-transform: none; padding-inline: 7px; height: auto; min-height: var(--badge-height); }
+/* Status text is never cut off (Mantine clips the label with an ellipsis, and its 1fr track lets a squeezed badge lose
+   all of it): the label wraps where space is short, and stays on one line in a table, which scrolls in its region. */
+.badgeLabel { white-space: normal; overflow: visible; text-overflow: clip; }
+.table .badgeLabel { white-space: nowrap; }
 
 .button { font-weight: 550; transition: background-color var(--alice-duration), border-color var(--alice-duration); }
 

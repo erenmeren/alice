@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
-import { Alert, Checkbox, DEFAULT_THEME, MantineProvider, PasswordInput, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
+import { Alert, Badge, Checkbox, DEFAULT_THEME, MantineProvider, PasswordInput, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
-import { createElement } from 'react';
+import { createElement, type ComponentType } from 'react';
 import { I18nextProvider } from 'react-i18next';
 import { createI18n } from './i18n';
 import { ThemeProvider } from './ThemeProvider';
@@ -223,6 +223,20 @@ describe('design rules', () => {
     expect(input.parentElement).toHaveClass(classes.input);
     expect(moduleCss).toMatch(/\.input:has\(\.passwordInnerInput:focus-visible\)\s*\{[^}]*outline:\s*3px solid var\(--alice-focus\);\s*outline-offset:\s*3px/);
     expect(moduleCss).toMatch(/\.passwordInnerInput:focus-visible\s*\{\s*outline:\s*0/);
+  });
+
+  // Found by the Phase 9 badge scan (e2e/phase9.spec.ts): Mantine's badge label sits in a 1fr track with overflow:
+  // hidden and an ellipsis, so a squeezed badge lost its status text ("Failed, nothing changed" kept 0 of 129 px on
+  // the Overview at 390 px; "Not in Alice" was cut in the certificates table). Status text must always be readable.
+  it('never cuts a badge’s text off: it wraps, and stays on one line inside a table (which scrolls instead)', async () => {
+    // Badge is polymorphic; createElement cannot infer its props without a cast.
+    await renderApp(createElement(Badge as ComponentType<{ children: string }>, null, 'Failed, nothing changed'), ['en-US']);
+    const label = screen.getByText('Failed, nothing changed');
+    expect(label).toHaveClass('mantine-Badge-label');
+    expect(label).toHaveClass(classes.badgeLabel);
+    expect(moduleCss).toMatch(/\.badge\s*\{[^}]*height:\s*auto;[^}]*min-height:\s*var\(--badge-height\)/);
+    expect(moduleCss).toMatch(/\.badgeLabel\s*\{[^}]*white-space:\s*normal;[^}]*overflow:\s*visible;[^}]*text-overflow:\s*clip/);
+    expect(moduleCss).toMatch(/\.table \.badgeLabel\s*\{\s*white-space:\s*nowrap/);
   });
 
   it('draws checked Checkbox, Radio and Switch with the design classes in dark mode', async () => {
