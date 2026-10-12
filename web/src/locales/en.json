@@ -67,7 +67,8 @@
     "stepUp": {
       "title": "Confirm it's you",
       "help": "For your security, enter the current code from your authenticator app.",
-      "confirm": "Confirm"
+      "confirm": "Confirm",
+      "subtitle": "Fresh identity verification is required for this operation."
     },
     "fields": {
       "username": "Username",
@@ -150,7 +151,17 @@
     "useApp": "Use the code from your app",
     "recoveryCode": "Recovery code",
     "ssoWith": "Sign in with {{name}}",
-    "or": "or"
+    "or": "or",
+    "subtitle": "Sign in with your Alice account.",
+    "mfaNote": "Protected with multi-factor authentication",
+    "brand": {
+      "eyebrow": "Certificates. Keys. Clarity.",
+      "tagline": "A little less uncertainty. A lot more control.",
+      "text": "One considered workspace for the certificates and keys your infrastructure depends on.",
+      "selfHosted": "Self-hosted",
+      "offline": "Offline-ready",
+      "control": "Built for control"
+    }
   },
   "account": {
     "title": "My account",

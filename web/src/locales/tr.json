@@ -67,7 +67,8 @@
     "stepUp": {
       "title": "Kimliğinizi doğrulayın",
       "help": "Güvenliğiniz için doğrulama uygulamanızdaki güncel kodu girin.",
-      "confirm": "Onayla"
+      "confirm": "Onayla",
+      "subtitle": "Bu işlem için yeniden kimlik doğrulaması gerekir."
     },
     "fields": {
       "username": "Kullanıcı adı",
@@ -150,7 +151,17 @@
     "useApp": "Uygulamadaki kodu kullan",
     "recoveryCode": "Kurtarma kodu",
     "ssoWith": "{{name}} ile oturum açın",
-    "or": "ya da"
+    "or": "ya da",
+    "subtitle": "Alice hesabınızla giriş yapın.",
+    "mfaNote": "Çok faktörlü doğrulama ile korunur",
+    "brand": {
+      "eyebrow": "Sertifikalar. Anahtarlar. Netlik.",
+      "tagline": "Daha az belirsizlik. Daha fazla kontrol.",
+      "text": "Altyapınızın dayandığı sertifikalar ve anahtarlar için özenle tasarlanmış tek çalışma alanı.",
+      "selfHosted": "Kendi sunucunuzda",
+      "offline": "Çevrimdışı çalışır",
+      "control": "Kontrol için tasarlandı"
+    }
   },
   "account": {
     "title": "Hesabım",
