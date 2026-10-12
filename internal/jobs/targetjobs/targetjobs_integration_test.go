@@ -327,10 +327,12 @@ func TestRemoveOwnKeyJobNeverReachesTheProvider(t *testing.T) {
 	assert.Nil(t, locationOf(t, e, tg.ID, pk.Fingerprint).RemovedAt)
 }
 
-// stepSession reports the write step before failing, like a connection lost during authkeys-write.
+// stepSession reports the write step before failing with code: ssh.timeout like a connection lost during
+// authkeys-write, ssh.file_changed like the helper refusing every compare-and-set attempt.
 type stepSession struct {
 	providers.Session
 	wrote bool
+	code  string
 }
 
 func (s *stepSession) RemoveAuthorizedKey(ctx context.Context, req providers.AuthKeyChange, log providers.StepLogger) (providers.AuthKeyResult, error) {
@@ -338,23 +340,33 @@ func (s *stepSession) RemoveAuthorizedKey(ctx context.Context, req providers.Aut
 		log.Step("read", providers.StepStarted, nil)
 		log.Step("write", providers.StepStarted, nil)
 	}
-	return providers.AuthKeyResult{}, providers.NewError("ssh.file_changed", true, nil, nil)
+	return providers.AuthKeyResult{}, providers.NewError(s.code, true, nil, nil)
 }
 
-// §8.4: a retryable failure before the first mutation is retried; after it, never.
+// §8.4: a retryable failure before the first mutation is retried; after it, never, unless the helper refused the
+// write because the file changed under it (nothing was written: review-fixes L-11, as sshkeyjobs.definiteNoChange).
 func TestRemoveFailureRetriesOnlyBeforeTheWrite(t *testing.T) {
-	for _, wrote := range []bool{false, true} {
-		e := newEnv(t, func(s providers.Session) providers.Session { return &stepSession{Session: s, wrote: wrote} })
+	for _, c := range []struct {
+		wrote bool
+		code  string
+		retry bool
+	}{
+		{false, "ssh.timeout", true},
+		{true, "ssh.timeout", false},
+		{false, "ssh.file_changed", true},
+		{true, "ssh.file_changed", true},
+	} {
+		e := newEnv(t, func(s providers.Session) providers.Session { return &stepSession{Session: s, wrote: c.wrote, code: c.code} })
 		tg := e.confirmed(hostKey(t), key("deploy", "/home/deploy/.ssh/authorized_keys", 1, "SHA256:dep0000000000000000000000000000000000000000"))
 		jobID, err := e.inv.RequestKeyRemoval(e.ctx, e.admin, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").ID, false)
 		require.NoError(t, err)
 		e.drain()
 		v := e.job(jobID)
-		assert.Equal(t, "ssh.file_changed", v.LastErrorCode)
-		if wrote {
-			assert.Equal(t, jobs.StatusFailed, v.Status, "after the write a failure is final")
+		assert.Equal(t, c.code, v.LastErrorCode)
+		if c.retry {
+			assert.Equal(t, jobs.StatusQueued, v.Status, "%+v: retried later", c)
 		} else {
-			assert.Equal(t, jobs.StatusQueued, v.Status, "before the write a retryable failure is retried later")
+			assert.Equal(t, jobs.StatusFailed, v.Status, "%+v: after the write a failure is final", c)
 		}
 		assert.Equal(t, 1, countRows(t, e, "SELECT count(*) FROM audit_log WHERE action = 'sshkey.remove_failed'"))
 		assert.Nil(t, locationOf(t, e, tg.ID, "SHA256:dep0000000000000000000000000000000000000000").RemovedAt)

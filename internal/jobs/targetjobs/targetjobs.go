@@ -366,10 +366,12 @@ func uncertain(res providers.AuthKeyResult) map[string]any {
 }
 
 // removeFailed handles a provider failure of a removal. Before the write a failure is classified
-// as the provider says (a retryable one runs again). Once the write was sent, or when the
-// provider reports a change together with the error (the outcome is uncertain), the job stops for
-// a person and is never retried: the file may already have changed (§8.4). The key's state is left
-// to the next discovery.
+// as the provider says (a retryable one runs again), and so is ssh.file_changed after it: the
+// helper refused every compare-and-set attempt, so nothing was written (review-fixes L-11, the rule
+// of sshkeyjobs.definiteNoChange). Otherwise, once the write was sent, or when the provider reports
+// a change together with the error (the outcome is uncertain), the job stops for a person and is
+// never retried: the file may already have changed (§8.4). The key's state is left to the next
+// discovery.
 func (h *handlers) removeFailed(ctx context.Context, j jobs.Job, locID uuid.UUID, actor audit.Actor, wrote bool,
 	res providers.AuthKeyResult, err error) (map[string]any, error) {
 	reason, params := reasonOf(err)
@@ -377,7 +379,7 @@ func (h *handlers) removeFailed(ctx context.Context, j jobs.Job, locID uuid.UUID
 	if slices.Contains(connectionReasons, reason) {
 		h.recordFailure(ctx, j.TargetID, err)
 	}
-	if !wrote && !res.Changed {
+	if !res.Changed && (!wrote || reason == "ssh.file_changed") {
 		return nil, jobs.FromProvider(err)
 	}
 	return uncertain(res), jobs.Attention(reason, params, err)
