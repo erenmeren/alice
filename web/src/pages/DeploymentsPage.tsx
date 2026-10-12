@@ -1,20 +1,23 @@
-import { Anchor, Button, Code, Group, Stack, Table, Text, Title } from '@mantine/core';
+import { ActionIcon, Anchor, Code, Stack, Table, VisuallyHidden } from '@mantine/core';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import { deploymentView } from '../api/deployments';
+import { deploymentStateKey } from '../api/enums';
 import { listDeployments } from '../api/endpoints';
 import { DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { Deployment } from '../api/types';
 import { CodeText } from '../components/CodeText';
 import { DeploymentStatusBadge } from '../components/DeploymentView';
 import { ErrorAlert } from '../components/ErrorAlert';
-import { WRAP } from '../components/wrap';
+import { CursorFooter, EmptyState, PageHeader, Panel, ResourceTable } from '../components/ui';
 import { formatDateTime } from '../datetime';
-import { deploymentStateKey } from '../api/enums';
+import { Icon } from '../design/Icon';
+import classes from './Deployments.module.css';
 
 // DeploymentsPage is the history of every certificate deployment, newest first, with its status.
-// The status is the deployment's own (a deployment being recovered shows that, not its job's).
+// The status is the deployment's own (a deployment being recovered shows that, not its job's). The
+// history is cursor-paged, so it never states totals per outcome (R20).
 export function DeploymentsPage() {
   const { t, i18n } = useTranslation();
   const list = useInfiniteQuery({
@@ -27,37 +30,45 @@ export function DeploymentsPage() {
 
   return (
     <Stack gap="md">
-      <Title order={1}>{t('deployments.title')}</Title>
-      <Text size="sm">{t('deployments.intro')}</Text>
+      <PageHeader title={t('deployments.title')} description={t('deployments.page.description')} />
       <ErrorAlert error={list.error} />
-      {list.isSuccess && items.length === 0 && <Text c="gray.7">{t('deployments.empty')}</Text>}
-      {items.length > 0 && (
-        <Table.ScrollContainer minWidth={820}>
-          <Table striped aria-label={t('deployments.tableLabel')}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t('deployments.columns.when')}</Table.Th>
-                <Table.Th>{t('deployments.columns.server')}</Table.Th>
-                <Table.Th>{t('deployments.columns.file')}</Table.Th>
-                <Table.Th>{t('deployments.columns.certificate')}</Table.Th>
-                <Table.Th>{t('deployments.columns.result')}</Table.Th>
-                <Table.Th />
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {items.map((d) => (
-                <Row key={d.id} d={d} when={formatDateTime(d.created_at, i18n.language)} />
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
+      {list.isSuccess && items.length === 0 && (
+        <Panel>
+          <EmptyState icon="Rocket" title={t('deployments.empty')} description={t('deployments.intro')} />
+        </Panel>
       )}
-      {list.hasNextPage && (
-        <Group>
-          <Button variant="default" loading={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>
-            {t('deployments.loadMore')}
-          </Button>
-        </Group>
+      {items.length > 0 && (
+        <ResourceTable
+          label={t('deployments.tableLabel')}
+          minWidth={820}
+          footer={
+            <CursorFooter
+              shown={items.length}
+              hasMore={list.hasNextPage}
+              loading={list.isFetchingNextPage}
+              onMore={() => void list.fetchNextPage()}
+              moreLabel={t('deployments.loadMore')}
+            />
+          }
+        >
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>{t('deployments.columns.certificate')}</Table.Th>
+              <Table.Th>{t('deployments.columns.server')}</Table.Th>
+              <Table.Th>{t('deployments.page.triggeredBy')}</Table.Th>
+              <Table.Th>{t('deployments.columns.result')}</Table.Th>
+              <Table.Th>{t('deployments.columns.when')}</Table.Th>
+              <Table.Th>
+                <VisuallyHidden>{t('deployments.open')}</VisuallyHidden>
+              </Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {items.map((d) => (
+              <Row key={d.id} d={d} when={formatDateTime(d.created_at, i18n.language)} />
+            ))}
+          </Table.Tbody>
+        </ResourceTable>
       )}
     </Stack>
   );
@@ -69,23 +80,35 @@ function Row({ d, when }: { d: Deployment; when: string }) {
   const labelId = `open-${d.id}`;
   return (
     <Table.Tr data-testid="deployment-row">
-      <Table.Td>{when}</Table.Td>
-      <Table.Td style={WRAP}>
-        <Anchor component={Link} to={`/servers/${d.target_id}`} translate="no">
-          {d.target_name}
-        </Anchor>
+      <Table.Td>
+        <div className={classes.resourceName}>
+          <span className={classes.resourceIcon}>
+            <Icon name="Rocket" size={16} />
+          </span>
+          <div>
+            <Anchor component={Link} to={`/certificates/${d.certificate_id}`} className={classes.name} translate="no">
+              {d.certificate_name}
+            </Anchor>
+            <p className={classes.secondaryMono} translate="no">
+              {d.id}
+            </p>
+          </div>
+        </div>
       </Table.Td>
       <Table.Td>
-        <Code translate="no" style={WRAP}>
-          {d.cert_path}
-        </Code>
-      </Table.Td>
-      <Table.Td style={WRAP}>
-        <Anchor component={Link} to={`/certificates/${d.certificate_id}`} translate="no">
-          {d.certificate_name}
+        <Anchor component={Link} to={`/servers/${d.target_id}`} className={classes.name} translate="no">
+          {d.target_name}
         </Anchor>
+        <p className={classes.secondary}>
+          <Code translate="no">{d.cert_path}</Code>
+        </p>
+      </Table.Td>
+      <Table.Td>
+        <span className={classes.small} translate={d.requested_by_name ? 'no' : undefined}>
+          {d.requested_by_name || t('deployments.page.system')}
+        </span>
         {d.source === 'key_vault' && (
-          <Text size="xs" data-testid="deployment-source" style={WRAP}>
+          <p className={classes.secondary} data-testid="deployment-source">
             <CodeText i18nKey="deployments.source.key_vault_named" param="name" value={d.vault_name} />
             {d.kv_version && (
               <>
@@ -93,23 +116,24 @@ function Row({ d, when }: { d: Deployment; when: string }) {
                 <Code translate="no">{d.kv_version.slice(0, 8)}</Code>
               </>
             )}
-          </Text>
+          </p>
         )}
       </Table.Td>
       <Table.Td>
-        <Stack gap={2}>
-          <DeploymentStatusBadge d={d} />
-          {view === 'recovering' && <Text size="xs">{t(deploymentStateKey(d.state))}</Text>}
-          {view === 'held' && <Text size="xs">{t('deployments.held')}</Text>}
-        </Stack>
+        <DeploymentStatusBadge d={d} />
+        {view === 'recovering' && <p className={classes.secondary}>{t(deploymentStateKey(d.state))}</p>}
+        {view === 'held' && <p className={classes.secondary}>{t('deployments.held')}</p>}
+      </Table.Td>
+      <Table.Td>
+        <span className={classes.mono}>{when}</span>
       </Table.Td>
       <Table.Td>
         <span id={labelId} hidden translate="no">
           {t('deployments.openNamed', { name: `${d.certificate_name}, ${when}` })}
         </span>
-        <Anchor component={Link} to={`/deployments/${d.id}`} aria-labelledby={labelId}>
-          {t('deployments.open')}
-        </Anchor>
+        <ActionIcon component={Link} to={`/deployments/${d.id}`} variant="subtle" color="gray" className={classes.openLink} aria-labelledby={labelId}>
+          <Icon name="ChevronRight" size={16} />
+        </ActionIcon>
       </Table.Td>
     </Table.Tr>
   );

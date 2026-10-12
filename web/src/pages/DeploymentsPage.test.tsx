@@ -22,9 +22,37 @@ describe('DeploymentsPage', () => {
     expect(within(rows[0]).getByRole('link', { name: 'www.example.test' })).toHaveAttribute('href', `/certificates/${first.certificate_id}`);
     expect(within(rows[0]).getByText('Succeeded')).toBeInTheDocument();
     expect(within(rows[1]).getByText('Failed, restored')).toBeInTheDocument();
-    expect(within(rows[1]).getByRole('link', { name: /Open deployment: api\.example\.test/ })).toHaveAttribute('href', '/deployments/d-2');
-    expect(within(rows[1]).getByText('Open')).toBeInTheDocument();
+    expect(within(rows[1]).getByRole('link', { name: /^Open deployment: api\.example\.test, / })).toHaveAttribute('href', '/deployments/d-2');
     expectNoRawKeys();
+  });
+
+  it('has the design header and table: tile, certificate with its id, server with the file, who triggered it, the outcome, the time and an open link', async () => {
+    server.use(...sessionHandlers(sessionFor('auditor')), http.get('/api/v1/deployments', () => HttpResponse.json({ items: [first, deploymentFixture({ id: 'd-3', requested_by: null, requested_by_name: '' })], next_cursor: null })));
+    await renderRoute('/deployments');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Deployments' })).toBeInTheDocument();
+    expect(screen.getByText('Every change has a sequence. Every outcome has evidence.')).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: 'Deployments' });
+    expect(within(table).getAllByRole('columnheader').map((th) => th.textContent)).toEqual(['Certificate', 'Server', 'Triggered by', 'Result', 'When', 'Open']);
+    const [row, auto] = within(table).getAllByTestId('deployment-row');
+    expect(row.querySelector('td:first-child svg')).not.toBeNull();
+    expect(within(row).getByText('d-1')).toHaveAttribute('translate', 'no');
+    expect(within(row).getByText('Olcay Öztürk')).toBeInTheDocument();
+    expect(within(auto).getByText('Alice (automatic)')).toBeInTheDocument();
+    // The outcome is the status badge of the design.
+    expect(within(row).getByText('Succeeded').closest('.mantine-Badge-root')).toHaveAttribute('data-status', 'succeeded');
+    // Exactly one link opens the deployment by name; the others are the certificate and the server.
+    expect(within(row).getAllByRole('link').map((a) => a.getAttribute('href'))).toEqual([`/certificates/${first.certificate_id}`, `/servers/${first.target_id}`, '/deployments/d-1']);
+    expect(screen.getByText('2 shown')).toBeInTheDocument();
+  });
+
+  it('shows no outcome totals: the history is paged, so no count of verified or rolled back deployments (R20)', async () => {
+    server.use(...sessionHandlers(sessionFor('auditor')), http.get('/api/v1/deployments', () => HttpResponse.json({ items: [first, second], next_cursor: 'c2' })));
+    await renderRoute('/deployments');
+    const table = await screen.findByRole('table', { name: 'Deployments' });
+    const main = screen.getByRole('main');
+    const outside = (main.textContent ?? '').replace(table.textContent ?? '', '');
+    expect(outside).not.toMatch(/\d+\s*(verified|rolled back|recovering|unchanged|succeeded|failed)/i);
+    expect(within(main).queryByRole('list', { name: /summary/i })).not.toBeInTheDocument();
   });
 
   it('shows state and hold for deployments that are being recovered or held, and Unknown for an unknown status', async () => {
@@ -71,6 +99,7 @@ describe('DeploymentsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
     await waitFor(() => expect(screen.getAllByTestId('deployment-row')).toHaveLength(2));
     expect(queries[1]).toContain('cursor=c2');
+    expect(screen.getByText('2 shown')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });
 
@@ -78,6 +107,7 @@ describe('DeploymentsPage', () => {
     server.use(...sessionHandlers(sessionFor('operator')), http.get('/api/v1/deployments', () => HttpResponse.json({ items: [], next_cursor: null })));
     const view = await renderRoute('/deployments');
     expect(await screen.findByText('No deployments yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
     view.unmount();
     server.use(http.get('/api/v1/deployments', () => errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden')));
     await renderRoute('/deployments');

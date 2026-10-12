@@ -1,42 +1,30 @@
-import { Alert, Badge, Stack, Text } from '@mantine/core';
+import { Alert, Stack, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED, SERVER_OPERATION_PENDING } from '../api/deployments';
 import type { Deployment, ErrorRef } from '../api/types';
 import { formatDateTime } from '../datetime';
+import { Icon, type IconName } from '../design/Icon';
+import { toneOf, type Tone } from '../theme';
 import { withRoleCode } from './CodeText';
 import { LabelledCode } from './LabelledCode';
+import { deploymentTone, StatusBadge } from './ui';
 import { WRAP } from './wrap';
 
-const COLORS: Record<string, string> = {
-  pending: 'blue',
-  running: 'blue',
-  succeeded: 'green',
-  unchanged: 'gray',
-  failed: 'red',
-  rolled_back: 'orange',
-  rollback_failed: 'red',
-  needs_attention: 'orange',
-};
-
 // DeploymentStatusBadge is the deployment's status in words (a colour is only a cue). A status this
-// version does not know, or '', reads "Unknown".
+// version does not know, or '', reads "Unknown" and is neutral. The design's status pill (StatusBadge);
+// the theme never upper-cases it (Turkish dotted/dotless i).
 export function DeploymentStatusBadge({ d, testId }: { d: Pick<Deployment, 'status' | 'error'>; testId?: string }) {
   const { t } = useTranslation();
   const cancelled = isCancelled(d);
   return (
-    // tt="none": no CSS upper-casing of translated text (Turkish dotted/dotless i).
-    <Badge
-      variant="light"
-      color={cancelled ? 'gray' : (COLORS[d.status] ?? 'gray')}
-      tt="none"
-      data-status={d.status}
-      data-cancelled={cancelled ? 'true' : undefined}
-      data-testid={testId}
-    >
+    <StatusBadge tone={deploymentTone(d) ?? 'neutral'} testId={testId} data-status={d.status} data-cancelled={cancelled ? 'true' : undefined}>
       {t(deploymentStatusText(d))}
-    </Badge>
+    </StatusBadge>
   );
 }
+
+// The design's notice icon for each tone (Notice uses the same): a shield with a check only for a success.
+const OUTCOME_ICON: Record<Tone, IconName> = { brand: 'ShieldCheck', success: 'ShieldCheck', warning: 'CircleAlert', danger: 'ShieldAlert', info: 'CircleDot', neutral: 'CircleDot' };
 
 const UNRESOLVED = /\{\{\s*\w+\s*\}\}/;
 
@@ -71,10 +59,16 @@ export function DeploymentErrorAlert({
   const action = text('action');
   const operation = params.operation_id ?? '';
   return (
-    <Alert color={neutral ? 'gray' : 'red'} role={neutral ? 'status' : 'alert'} title={withRoleCode(title, params.role)} data-reason={error.reason}>
+    <Alert
+      color={neutral ? 'gray' : 'red'}
+      role={neutral ? 'status' : 'alert'}
+      title={withRoleCode(title, params.role)}
+      data-reason={error.reason}
+      icon={<Icon name={OUTCOME_ICON[neutral ? 'neutral' : 'danger']} size={17} />}
+    >
       <Stack gap={4}>
         {heading && (
-          <Text size="xs" c="gray.7">
+          <Text size="xs" c="dimmed">
             {heading}
           </Text>
         )}
@@ -82,7 +76,7 @@ export function DeploymentErrorAlert({
         {action && <Text size="sm">{withRoleCode(action, params.role)}</Text>}
         {operation && <LabelledCode text={t('deployments.operation', { id: '' })} value={operation} />}
         {error.code && (
-          <Text size="xs" c="gray.7" style={WRAP}>
+          <Text size="xs" c="dimmed" style={WRAP}>
             {t('jobs.errorCode', { code: error.code })}
           </Text>
         )}
@@ -146,7 +140,7 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
   }
   return (
     <Stack gap="xs">
-      <Alert color={color} role="status">
+      <Alert color={color} role="status" icon={<Icon name={OUTCOME_ICON[toneOf(color)]} size={17} />}>
         <Text size="sm" fw={500}>
           {headline}
         </Text>

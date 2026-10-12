@@ -38,6 +38,58 @@ describe('DeploymentDetailPage', () => {
     expectNoRawKeys();
   });
 
+  it('has the design layout: header with the way back and the status, the outcome notice, the sequence, operation details and evidence', async () => {
+    show(
+      deploymentDetailFixture({
+        id: ID,
+        backup_dir: '/var/lib/alice-helper/backups/0192c000',
+        steps: [...okSteps.slice(0, 6), stepFixture(7, 'verify', 'ok', { mode: 'remote', served: 'ef56'.repeat(16) })],
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    const h1 = await screen.findByRole('heading', { name: 'Deployment', level: 1 });
+    const header = h1.closest('header') as HTMLElement;
+    expect(within(header).getByTestId('deployment-status')).toHaveTextContent('Succeeded');
+    expect(within(header).getByTestId('deployment-headline')).toHaveAttribute('aria-live', 'polite');
+    expect(within(header).getByTestId('deployment-state')).toHaveTextContent('Finished');
+    expect(screen.getByRole('link', { name: 'Back to deployment history' })).toHaveAttribute('href', '/deployments');
+    // The outcome notice comes before the sequence.
+    const notice = screen.getByText('The new certificate is live and verified.').closest('.mantine-Alert-root') as HTMLElement;
+    const sequence = screen.getByRole('heading', { level: 2, name: 'Deployment sequence' });
+    expect(notice.compareDocumentPosition(sequence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const seqPanel = sequence.closest('section') as HTMLElement;
+    expect(seqPanel).toHaveTextContent('Changes are verified before an operation is marked complete.');
+    expect(within(seqPanel).getByRole('list', { name: 'Steps' })).toBeInTheDocument();
+    // Operation details.
+    const details = screen.getByRole('heading', { level: 2, name: 'Operation details' }).closest('section') as HTMLElement;
+    const facts = within(details).getByLabelText('Operation details');
+    expect(facts.tagName).toBe('DL');
+    expect(within(facts).getByRole('link', { name: 'www.example.test' })).toHaveAttribute('href', `/certificates/${deploymentDetailFixture().certificate_id}`);
+    expect(within(facts).getByRole('link', { name: 'web-01' })).toHaveAttribute('href', `/servers/${deploymentDetailFixture().target_id}`);
+    expect(facts).toHaveTextContent('Requested by: Olcay Öztürk');
+    expect(facts).toHaveTextContent('Uploaded');
+    expect(facts).toHaveTextContent(/Started.*Oct 2, 2026/);
+    expect(facts).toHaveTextContent('Checked from Alice');
+    // Evidence: the fingerprints, what the website served and the backup folder, as data.
+    const evidence = screen.getByRole('heading', { level: 2, name: 'Evidence' }).closest('section') as HTMLElement;
+    expect(within(evidence).getByText('ab12'.repeat(16)).tagName).toBe('CODE');
+    expect(within(evidence).getByText('cd34'.repeat(16)).tagName).toBe('CODE');
+    expect(within(evidence).getByText('ef56'.repeat(16))).toHaveAttribute('translate', 'no');
+    expect(within(evidence).getByText('/var/lib/alice-helper/backups/0192c000').tagName).toBe('CODE');
+    expect(evidence).toHaveTextContent('Served certificate:');
+    expectNoRawKeys();
+  });
+
+  it('does not claim a served certificate the verification did not report', async () => {
+    show(deploymentDetailFixture({ id: ID, verified: 'skipped', steps: [...okSteps.slice(0, 6), stepFixture(7, 'verify', 'skipped', { mode: 'skipped' })] }));
+    await renderRoute(`/deployments/${ID}`);
+    const evidence = (await screen.findByRole('heading', { level: 2, name: 'Evidence' })).closest('section') as HTMLElement;
+    expect(evidence).not.toHaveTextContent('Served certificate');
+    expect(within(screen.getByLabelText('Operation details')).getByText('Skipped')).toBeInTheDocument();
+    expect(screen.getByText('The new certificate was deployed and Nginx was reloaded.')).toBeInTheDocument();
+    expect(screen.queryByText('The new certificate is live and verified.')).not.toBeInTheDocument();
+  });
+
   it('shows a rollback with the failed step, the cause and the verification failure', async () => {
     show(
       deploymentDetailFixture({
@@ -104,7 +156,7 @@ describe('DeploymentDetailPage', () => {
       }),
     );
     await renderRoute(`/deployments/${ID}`);
-    expect(await screen.findByText('Technical details')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 2, name: 'Technical details' })).toBeInTheDocument();
     expect(screen.getAllByText('Reason: The certificate and the private key do not belong together.').length).toBeGreaterThan(0);
   });
 
@@ -126,6 +178,7 @@ describe('DeploymentDetailPage', () => {
     expect(within(headline()).getByText('Needs attention')).toBeInTheDocument();
     expect(within(headline()).getByText('Confirming the outcome')).toBeInTheDocument();
     const recovery = screen.getByTestId('recovery');
+    expect(within(recovery).getByRole('heading', { level: 2, name: 'Recovery' })).toBeInTheDocument();
     expect(recovery).toHaveTextContent('Recovery attempts: 4');
     expect(recovery).toHaveTextContent(/Next attempt after: .*Oct 4, 2026/);
     expect(recovery).toHaveTextContent('Alice still cannot confirm the outcome after several attempts and keeps trying.');

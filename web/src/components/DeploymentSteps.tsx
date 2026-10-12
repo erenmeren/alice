@@ -1,8 +1,10 @@
-import { Group, Loader, Text } from '@mantine/core';
+import { Text } from '@mantine/core';
+import type { i18n, TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { FINAL_STATUSES } from '../api/deployments';
 import { configErrorKey, stepNameKey, stepStatusKey } from '../api/enums';
 import type { DeploymentStatus, DeploymentStep } from '../api/types';
+import { OperationTimeline, type StepState } from './ui';
 import { WRAP } from './wrap';
 
 // The five steps a person sees (contract "UI step grouping"): Write covers the key and the
@@ -53,20 +55,11 @@ function statusText(s: Shown): string {
   return s === 'waiting' || s === 'notRun' ? `deployments.stepStatus.${s}` : stepStatusKey(s);
 }
 
-function Icon({ status }: { status: Shown }) {
-  if (status === 'started') return <Loader size={14} aria-hidden />;
-  const glyph = status === 'ok' ? '✓' : status === 'failed' ? '✗' : status === 'unknown' ? '?' : '–';
-  const color = status === 'ok' ? 'green.9' : status === 'failed' ? 'red.9' : 'gray.7';
-  return (
-    <Text span c={color} fw={700} aria-hidden w={14} ta="center">
-      {glyph}
-    </Text>
-  );
-}
+// The design's step states (OperationTimeline): a step that never ran is "not run", never a tick.
+const STATE: Record<Shown, StepState> = { ok: 'done', failed: 'failed', started: 'running', waiting: 'waiting', skipped: 'skipped', notRun: 'notRun', unknown: 'unknown' };
 
-// Step details the server allows (DeploymentStep.params): shown only in the detail page.
-function StepDetails({ step }: { step: DeploymentStep }) {
-  const { t, i18n } = useTranslation();
+// Step details the server allows (DeploymentStep.params): shown only in the detail page. None: no lines.
+function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n): React.ReactNode[] {
   const p = step.params ?? {};
   const lines: React.ReactNode[] = [];
   if (p.error) lines.push(<Text key="error" size="xs">{t('deployments.stepDetail.error', { reason: t(configErrorKey(p.error)) })}</Text>);
@@ -104,7 +97,7 @@ function StepDetails({ step }: { step: DeploymentStep }) {
       </Text>,
     );
   }
-  return <>{lines}</>;
+  return lines;
 }
 
 interface Row {
@@ -115,11 +108,11 @@ interface Row {
   detail?: DeploymentStep;
 }
 
-// DeploymentSteps lists the steps of one deployment with a status each; icons never carry the
-// meaning alone, every row says it in words. The list is not a live region itself: the screen that
-// owns it announces the overall state.
+// DeploymentSteps lists the steps of one deployment with a status each, as the design's operation
+// timeline; markers never carry the meaning alone, every row says it in words. The list is not a live
+// region itself: the screen that owns it announces the overall state.
 export function DeploymentSteps({ steps, status, detailed = false, vault = false }: { steps: DeploymentStep[]; status: DeploymentStatus | ''; detailed?: boolean; vault?: boolean }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const ended = FINAL_STATUSES.has(status);
   const rows: Row[] = [];
   if (detailed) rows.push({ id: 'verify_current', label: t('deployments.steps.verify_current'), status: singleStatus(steps, 'verify_current', ended), detail: lastOf(steps, 'verify_current') });
@@ -138,33 +131,32 @@ export function DeploymentSteps({ steps, status, detailed = false, vault = false
     const known = stepNameKey(name);
     rows.push({ id: name, label: t(known), rawName: known === 'deployments.steps.unknown' ? name : undefined, status: singleStatus(steps, name, ended), detail: lastOf(steps, name) });
   }
+  const detail = (r: Row): React.ReactNode => {
+    const lines = detailed && r.detail ? stepDetails(r.detail, t, i18n) : [];
+    return lines.length > 0 ? lines : undefined;
+  };
   return (
-    <ul aria-label={t('deployments.stepsTitle')} style={{ listStyle: 'none', margin: 0, padding: 0 }} role="list">
-      {rows.map((r) => (
-        <li key={r.id} data-step={r.id} data-status={r.status} style={{ padding: '4px 0' }}>
-          <Group gap="xs" wrap="nowrap" align="flex-start">
-            <Icon status={r.status} />
-            <div style={{ minWidth: 0 }}>
-              <Group gap="xs" wrap="wrap">
-                <Text size="sm" span fw={500}>
-                  {r.label}
-                  {r.rawName && (
-                    <>
-                      {' '}
-                      <code translate="no">{r.rawName}</code>
-                    </>
-                  )}
-                </Text>
-                <Text size="sm" span c="gray.8" data-role="step-status">
-                  {t(statusText(r.status))}
-                </Text>
-              </Group>
-              {detailed && r.detail && <StepDetails step={r.detail} />}
-            </div>
-          </Group>
-        </li>
-      ))}
-    </ul>
+    <OperationTimeline
+      label={t('deployments.stepsTitle')}
+      steps={rows.map((r) => ({
+        id: r.id,
+        title: (
+          <span>
+            {r.label}
+            {r.rawName && (
+              <>
+                {' '}
+                <code translate="no">{r.rawName}</code>
+              </>
+            )}
+          </span>
+        ),
+        state: STATE[r.status],
+        stateLabel: t(statusText(r.status)),
+        detail: detail(r),
+        dataAttrs: { 'data-step': r.id, 'data-status': r.status },
+      }))}
+    />
   );
 }
 

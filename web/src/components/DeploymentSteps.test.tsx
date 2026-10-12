@@ -54,4 +54,40 @@ describe('DeploymentSteps', () => {
     expect(currentStep([stepFixture(2, 'reload'), stepFixture(1, 'backup')])).toBe('deployments.steps.reload');
     expect(currentStep([stepFixture(1, 'brand_new')])).toBe('deployments.steps.unknown');
   });
+  it('is the design operation timeline: an ordered list named Steps, each item keeps data-step, data-status and the state in words', async () => {
+    await renderApp(
+      <DeploymentSteps
+        status="running"
+        detailed
+        steps={[stepFixture(1, 'verify_current'), stepFixture(2, 'backup', 'skipped'), stepFixture(3, 'write_key', 'failed'), stepFixture(4, 'config_test', 'started'), { ...stepFixture(5, 'reload'), status: '' }]}
+      />,
+    );
+    const list = screen.getByRole('list', { name: 'Steps' });
+    expect(list.tagName).toBe('OL');
+    const states = Object.fromEntries(
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => [li.getAttribute('data-step'), [li.getAttribute('data-status'), li.querySelector('[data-role="step-status"]')?.textContent, li.querySelector('[data-state]')?.getAttribute('data-state')]]),
+    );
+    expect(states).toEqual({
+      verify_current: ['ok', 'Done', 'done'],
+      backup: ['skipped', 'Skipped', 'skipped'],
+      write: ['failed', 'Failed', 'failed'],
+      config_test: ['started', 'Running', 'running'],
+      reload: ['unknown', 'Unknown', 'unknown'],
+      verify: ['waiting', 'Waiting', 'waiting'],
+    });
+    // A running step shows a loader as its marker.
+    expect(row('Check').querySelector('[data-state="running"] .mantine-Loader-root')).not.toBeNull();
+  });
+
+  it('never draws a check mark for a step that was not run', async () => {
+    await renderApp(<DeploymentSteps status="failed" steps={[stepFixture(1, 'backup'), stepFixture(2, 'config_test', 'failed')]} />);
+    const reload = row('Reload');
+    expect(reload).toHaveAttribute('data-status', 'notRun');
+    expect(reload.querySelector('[data-role="step-status"]')).toHaveTextContent('Not run');
+    const marker = reload.querySelector('[data-state]') as HTMLElement;
+    expect(marker).toHaveAttribute('data-state', 'notRun');
+    expect(marker.innerHTML).not.toBe(row('Backup').querySelector('[data-state]')?.innerHTML);
+  });
 });

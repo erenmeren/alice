@@ -1,4 +1,4 @@
-import { Alert, Anchor, Box, Card, Code, Group, Stack, Text, Title } from '@mantine/core';
+import { Anchor, Code, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
@@ -6,14 +6,16 @@ import { deploymentView } from '../api/deployments';
 import { getDeployment } from '../api/endpoints';
 import { configErrorKey, deploymentStateKey, stepNameKey, verifiedKey } from '../api/enums';
 import { deploymentKey } from '../api/queryKeys';
-import type { DeploymentDetail } from '../api/types';
+import type { DeploymentDetail, DeploymentStep } from '../api/types';
 import { PageLoader } from '../auth/guards';
 import { DeploymentSteps } from '../components/DeploymentSteps';
 import { DeploymentOutcome, DeploymentStatusBadge } from '../components/DeploymentView';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { LabelledCode } from '../components/LabelledCode';
+import { FactList, Notice, PageHeader, Panel, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
+import classes from './Deployments.module.css';
 
 // How often the page reads the deployment while it can still change: a running deployment moves in
 // seconds, one being recovered or held for the license only when Alice retries or an Administrator
@@ -41,19 +43,17 @@ function refetchEvery(d: DeploymentDetail | undefined, updates: number): number 
   }
 }
 
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <Box component="li" style={{ listStyle: 'none' }}>
-      <Text size="sm" fw={600} component="span" display="block">
-        {label}
-      </Text>
-      <Box component="div">{children}</Box>
-    </Box>
-  );
+// servedFingerprint is the fingerprint the website served when Alice verified this deployment, only
+// when the verification step reported one (never inferred from a green step).
+function servedFingerprint(d: DeploymentDetail): string {
+  let last: DeploymentStep | undefined;
+  for (const s of d.steps) if (s.name === 'verify' && s.params?.served && (!last || s.n > last.n)) last = s;
+  return last?.params.served ?? '';
 }
 
-// DeploymentDetailPage is one deployment: its status and state first (in words), what to do about
-// it, then the steps, the files and fingerprints. It follows a deployment that can still change.
+// DeploymentDetailPage is one deployment: its status and state first (in words), what happened (the
+// outcome notice), then the sequence of steps and the recovery card, the operation details and the
+// evidence (fingerprints, backup folder). It follows a deployment that can still change.
 export function DeploymentDetailPage() {
   const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
@@ -82,141 +82,129 @@ export function DeploymentDetailPage() {
   // through recovery says only that its outcome was confirmed, and after how many attempts.
   const recoveringNow = view !== 'final' && (d.state === 'recovering' || d.status === 'needs_attention');
   const recoveredEarlier = view === 'final' && d.recovery_attempts > 0;
-
-  return (
-    <Stack gap="md">
-      <Anchor component={Link} to="/deployments" w="fit-content" size="sm">
-        {t('deployments.backToList')}
-      </Anchor>
-      <Title order={1}>{t('deployments.detailTitle')}</Title>
-      {/* The headline: status and state in words; assistive technology hears changes (polite). */}
-      <Group gap="md" role="status" aria-live="polite" data-testid="deployment-headline">
-        <Group gap={6}>
-          <Text size="sm" fw={600}>
-            {t('deployments.statusLabel')}
-          </Text>
-          <DeploymentStatusBadge d={d} testId="deployment-status" />
-        </Group>
-        <Group gap={6}>
-          <Text size="sm" fw={600}>
-            {t('deployments.stateLabel')}
-          </Text>
-          <Text size="sm" data-testid="deployment-state">
-            {t(deploymentStateKey(d.state))}
-          </Text>
-        </Group>
-        {view === 'held' && (
-          <Text size="sm" fw={600}>
-            {t('deployments.held')}
-          </Text>
-        )}
-      </Group>
-      <ErrorAlert error={dep.error} />
-      <DeploymentOutcome d={d} />
-      {view === 'working' && (
-        <Alert color="blue" role="status">
-          {t('deploy.working')}
-        </Alert>
-      )}
-      {(recoveringNow || recoveredEarlier) && (
-        <Card withBorder padding="sm" data-testid="recovery">
-          <Stack gap={4}>
-            <Title order={2} size="h4">
-              {t('deployments.recovery.title')}
-            </Title>
-            {recoveringNow ? (
-              <>
-                <Text size="sm">{t('deployments.recovery.attempts', { attempts: d.recovery_attempts })}</Text>
-                {d.recover_after && <Text size="sm">{t('deployments.recovery.next', { time: time(d.recover_after) })}</Text>}
-                <Text size="sm">{t(d.status === 'needs_attention' ? 'deployments.recovery.needsAttention' : 'deployments.recovery.running')}</Text>
-              </>
-            ) : (
-              <Text size="sm">
-                {t(d.status === 'rollback_failed' ? 'deployments.recovery.ended' : 'deployments.recovery.confirmed', { count: d.recovery_attempts })}
-              </Text>
-            )}
-          </Stack>
-        </Card>
-      )}
-      {d.backup_dir !== '' && <LabelledCode text={t('deployments.backup', { path: '' })} value={d.backup_dir} />}
-
-      <Title order={2} size="h3">
-        {t('deployments.stepsTitle')}
-      </Title>
-      <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} />
-
-      {d.previous_fingerprint !== '' && <LabelledCode text={t('deployments.previous', { fingerprint: '' })} value={d.previous_fingerprint} />}
-      {d.new_fingerprint !== '' && <LabelledCode text={t('deployments.new', { fingerprint: '' })} value={d.new_fingerprint} />}
-
-      <Box component="ul" m={0} p={0} style={{ display: 'grid', gap: 12 }} aria-label={t('deployments.detailTitle')}>
-        <Fact label={t('deployments.certificateLabel')}>
-          <Anchor component={Link} to={`/certificates/${d.certificate_id}`} translate="no" style={WRAP}>
-            {d.certificate_name}
-          </Anchor>
-        </Fact>
-        {d.source === 'key_vault' && (
-          <>
-            <Fact label={t('deployments.sourceLabel')}>
-              <Text size="sm">{t('deployments.source.key_vault')}</Text>
-            </Fact>
-            <Fact label={t('deployments.vaultLabel')}>
+  const served = servedFingerprint(d);
+  const link = (to: string, name: string) => (
+    <Anchor component={Link} to={to} translate="no" style={WRAP}>
+      {name}
+    </Anchor>
+  );
+  const code = (v: string) => (
+    <Code translate="no" style={WRAP}>
+      {v}
+    </Code>
+  );
+  const facts: Fact[] = [
+    { key: 'certificate', label: t('deployments.certificateLabel'), value: link(`/certificates/${d.certificate_id}`, d.certificate_name) },
+    { key: 'server', label: t('deployments.serverLabel'), value: link(`/servers/${d.target_id}`, d.target_name) },
+    { key: 'source', label: t('deployments.sourceLabel'), value: t(d.source === 'key_vault' ? 'deployments.source.key_vault' : 'deployments.source.upload') },
+    ...(d.source === 'key_vault'
+      ? [
+          {
+            key: 'vault',
+            label: t('deployments.vaultLabel'),
+            value: (
               <span translate="no" style={WRAP}>
                 {d.vault_name}
               </span>
-            </Fact>
-            {d.kv_version && (
-              <Fact label={t('deployments.versionLabel')}>
-                <Code translate="no" style={WRAP}>
-                  {d.kv_version}
-                </Code>
-              </Fact>
-            )}
-          </>
-        )}
-        <Fact label={t('deployments.serverLabel')}>
-          <Anchor component={Link} to={`/servers/${d.target_id}`} translate="no" style={WRAP}>
-            {d.target_name}
-          </Anchor>
-        </Fact>
-        <Fact label={t('deployments.fileLabel')}>
-          <Code translate="no" style={WRAP}>
-            {d.cert_path}
-          </Code>
-        </Fact>
-        <Fact label={t('deployments.keyFileLabel')}>
-          <Code translate="no" style={WRAP}>
-            {d.key_path}
-          </Code>
-        </Fact>
-        <Fact label={t('deployments.createdLabel')}>
-          <Text size="sm">{time(d.created_at)}</Text>
-          <Text size="sm">{d.requested_by_name ? t('deployments.requestedBy', { name: d.requested_by_name }) : t('deployments.requestedBySystem')}</Text>
-        </Fact>
-        {d.started_at && (
-          <Fact label={t('deployments.startedLabel')}>
-            <Text size="sm">{time(d.started_at)}</Text>
-          </Fact>
-        )}
-        {d.finished_at && (
-          <Fact label={t('deployments.finishedLabel')}>
-            <Text size="sm">{time(d.finished_at)}</Text>
-          </Fact>
-        )}
-        <Fact label={t('deployments.verifiedLabel')}>
-          <Text size="sm">{t(verifiedKey(d.verified))}</Text>
-        </Fact>
-      </Box>
+            ),
+          },
+          ...(d.kv_version ? [{ key: 'version', label: t('deployments.versionLabel'), value: code(d.kv_version) }] : []),
+        ]
+      : []),
+    { key: 'file', label: t('deployments.fileLabel'), value: code(d.cert_path) },
+    { key: 'keyFile', label: t('deployments.keyFileLabel'), value: code(d.key_path) },
+    {
+      key: 'requested',
+      label: t('deployments.createdLabel'),
+      value: (
+        <>
+          <span className={classes.mono}>{time(d.created_at)}</span>
+          <br />
+          {d.requested_by_name ? t('deployments.requestedBy', { name: d.requested_by_name }) : t('deployments.requestedBySystem')}
+        </>
+      ),
+    },
+    ...(d.started_at ? [{ key: 'started', label: t('deployments.startedLabel'), value: <span className={classes.mono}>{time(d.started_at)}</span> }] : []),
+    ...(d.finished_at ? [{ key: 'finished', label: t('deployments.finishedLabel'), value: <span className={classes.mono}>{time(d.finished_at)}</span> }] : []),
+    { key: 'verified', label: t('deployments.verifiedLabel'), value: t(verifiedKey(d.verified)), testId: 'deployment-verified' },
+  ];
+  const evidence = d.new_fingerprint !== '' || d.previous_fingerprint !== '' || served !== '' || d.backup_dir !== '';
 
-      {(d.failed_step || d.cause_step || d.helper_error) && (
-        <Stack gap={2}>
-          <Title order={2} size="h4">
-            {t('deployments.technical')}
-          </Title>
-          {d.failed_step && <Text size="sm">{t('deployments.failedStep', { step: t(stepNameKey(d.failed_step)) })}</Text>}
-          {d.cause_step && <Text size="sm">{t('deployments.causeStep', { step: t(stepNameKey(d.cause_step)) })}</Text>}
-          {d.helper_error && <Text size="sm">{t('deployments.stepDetail.error', { reason: t(configErrorKey(d.helper_error)) })}</Text>}
-        </Stack>
-      )}
+  return (
+    <Stack gap="md">
+      <PageHeader
+        back={{ to: '/deployments', label: t('deployments.backToList') }}
+        title={t('deployments.detailTitle')}
+        description={
+          <span translate="no" style={WRAP}>
+            {d.certificate_name} → {d.target_name}
+          </span>
+        }
+        status={
+          // The headline: status and state in words; assistive technology hears changes (polite).
+          <div role="status" aria-live="polite" data-testid="deployment-headline" className={classes.headline}>
+            <VisuallyHidden>{t('deployments.statusLabel')}</VisuallyHidden>
+            <DeploymentStatusBadge d={d} testId="deployment-status" />
+            <span>
+              <span className={classes.headlineLabel}>{t('deployments.stateLabel')}</span>{' '}
+              <span data-testid="deployment-state">{t(deploymentStateKey(d.state))}</span>
+            </span>
+            {view === 'held' && <strong>{t('deployments.held')}</strong>}
+          </div>
+        }
+      />
+      <ErrorAlert error={dep.error} />
+      <DeploymentOutcome d={d} />
+      {view === 'working' && <Notice tone="info" role="status" title={t('deploy.working')} />}
+
+      <div className={classes.detailGrid}>
+        <div className={classes.stack}>
+          <Panel title={t('deployments.page.sequence')} description={t('deployments.page.sequenceSub')} padded={false}>
+            <DeploymentSteps steps={d.steps} status={d.status} detailed vault={d.source === 'key_vault'} />
+          </Panel>
+          {(recoveringNow || recoveredEarlier) && (
+            <Panel title={t('deployments.recovery.title')} testId="recovery">
+              <Stack gap={4}>
+                {recoveringNow ? (
+                  <>
+                    <Text size="sm">{t('deployments.recovery.attempts', { attempts: d.recovery_attempts })}</Text>
+                    {d.recover_after && <Text size="sm">{t('deployments.recovery.next', { time: time(d.recover_after) })}</Text>}
+                    <Text size="sm">{t(d.status === 'needs_attention' ? 'deployments.recovery.needsAttention' : 'deployments.recovery.running')}</Text>
+                  </>
+                ) : (
+                  <Text size="sm">
+                    {t(d.status === 'rollback_failed' ? 'deployments.recovery.ended' : 'deployments.recovery.confirmed', { count: d.recovery_attempts })}
+                  </Text>
+                )}
+              </Stack>
+            </Panel>
+          )}
+        </div>
+        <div className={`${classes.stack} ${classes.side}`}>
+          <Panel title={t('deployments.page.details')}>
+            <FactList facts={facts} label={t('deployments.page.details')} />
+          </Panel>
+          {evidence && (
+            <Panel title={t('deployments.page.evidence')}>
+              <div className={classes.evidence}>
+                {d.new_fingerprint !== '' && <LabelledCode text={t('deployments.new', { fingerprint: '' })} value={d.new_fingerprint} />}
+                {served !== '' && <LabelledCode text={t('deployments.stepDetail.served', { fingerprint: '' })} value={served} />}
+                {d.previous_fingerprint !== '' && <LabelledCode text={t('deployments.previous', { fingerprint: '' })} value={d.previous_fingerprint} />}
+                {d.backup_dir !== '' && <LabelledCode text={t('deployments.backup', { path: '' })} value={d.backup_dir} />}
+              </div>
+            </Panel>
+          )}
+          {(d.failed_step || d.cause_step || d.helper_error) && (
+            <Panel title={t('deployments.technical')}>
+              <Stack gap={2}>
+                {d.failed_step && <Text size="sm">{t('deployments.failedStep', { step: t(stepNameKey(d.failed_step)) })}</Text>}
+                {d.cause_step && <Text size="sm">{t('deployments.causeStep', { step: t(stepNameKey(d.cause_step)) })}</Text>}
+                {d.helper_error && <Text size="sm">{t('deployments.stepDetail.error', { reason: t(configErrorKey(d.helper_error)) })}</Text>}
+              </Stack>
+            </Panel>
+          )}
+        </div>
+      </div>
     </Stack>
   );
 }
