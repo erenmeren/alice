@@ -225,8 +225,8 @@ Not held at the time of writing; the controller dispatches it after Task 19 and 
 - Several agents shared one working tree and index; every commit used `git commit --only <paths>`; no amend, rebase,
   squash, push or merge. Tasks that start Docker test containers and the Playwright runs never overlapped (Chromium
   aborts requests when a host interface changes); Tasks 13, 15, 16 and 19 ran with Docker alone.
-- The owner's compose project `alice`, image `alice:dev`, volumes `alice_*` and the containers `pt-footbar-pg` and
-  `slaveofai-postgres` were never touched; no prune.
+- The owner's compose project `alice`, image `alice:dev`, volumes `alice_*` and the owner's other local containers
+  were never touched; no prune.
 - Every task had an independent review; Important findings were fixed before the next dependent task, Minor ones were
   fixed, carried to Task 19 or listed as known issues.
 
