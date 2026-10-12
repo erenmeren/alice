@@ -1030,16 +1030,24 @@ func TestSwapKeepsThePreviousDatabaseWhenNoFileWasApplied(t *testing.T) {
 	})
 	_, err := e.restoreWith(in)
 	require.Error(t, err)
-	prefix := dbName(t, e.db.OwnerURL) + "_previous_"
-	assert.Contains(t, err.Error(), prefix)
+	live := dbName(t, e.db.OwnerURL)
 	var kept []string
 	for _, n := range e.databases() {
-		if strings.HasPrefix(n, prefix) {
+		if n != live {
 			kept = append(kept, n)
 		}
 	}
 	require.Len(t, kept, 1, "the previous database is kept")
 	assert.Contains(t, err.Error(), kept[0])
+	assert.Contains(t, err.Error(), "drop it by hand")
+
+	// Final review A-3: running the restore again, the natural reaction to the error, must not drop that way back.
+	// The cleanup drops only <db>_previous_<ts>, the leftover of a swap whose files were applied; the kept one is
+	// <db>_kept_<ts>, which only the operator drops.
+	assert.True(t, strings.HasPrefix(kept[0], live+"_kept_"), kept[0])
+	_, err = e.restore(info.Path, func(in *backup.RestoreInput) { in.NoSafetyBackup = true })
+	require.NoError(t, err)
+	assert.Contains(t, e.databases(), kept[0], "a second restore keeps the database the failed one kept")
 }
 
 // Minor 3 (Task 5 review): the key check is that of the newest key version, not of version 1.

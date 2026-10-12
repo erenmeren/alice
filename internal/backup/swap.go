@@ -110,9 +110,17 @@ func (r *restorer) swap(ctx context.Context) error {
 	}
 	if !applied && !r.in.DBOnly {
 		// The staging vanished between "staged" and the swap: the restored database is live without its keys. The
-		// previous database is the way back, so it is kept.
+		// previous database is the way back, so it is kept, renamed to <db>_kept_<ts>: the cleanup at the start of the
+		// next restore drops only <db>_previous_<ts> (final review A-3), and rerunning the restore is the natural
+		// reaction to this error.
 		if r.previous != "" {
-			return fmt.Errorf("backup: the restored database is live but its key and state files were not applied; the previous database %s is kept", r.previous)
+			kept := r.name + keptSuffix + strings.TrimPrefix(r.previous, r.name+previousSuffix)
+			if _, err := r.maint.Exec(ctx, ddl(ddlRename, r.previous, kept)); err != nil {
+				return fmt.Errorf("backup: the restored database is live but its key and state files were not applied; the previous database %s "+
+					"is the way back and the next restore would drop it: rename it to %s by hand before anything else", r.previous, kept)
+			}
+			return fmt.Errorf("backup: the restored database is live but its key and state files were not applied; the previous database "+
+				"is kept as %s, and no restore drops it: drop it by hand once it is no longer needed", kept)
 		}
 		return errors.New("backup: the restored database is live but its key and state files were not applied")
 	}

@@ -25,7 +25,8 @@ var previousName = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z$`)
 //   - staging directories: FinishInterruptedRestore against the live database applies them when the live database
 //     carries their restore ID, else removes them as stale without touching the live files;
 //   - <db>_restore while <db> exists: an unfinished staging database, dropped;
-//   - <db>_previous_* while <db> exists and no staging remains: the old database of a finished swap, dropped.
+//   - <db>_previous_* while <db> exists and no staging remains: the old database of a finished swap, dropped. A
+//     previous database that a swap kept because no file was applied is <db>_kept_<ts> and is never dropped here.
 func (r *restorer) cleanup(ctx context.Context) error {
 	staging := r.name + restoreSuffix
 	live, err := r.exists(ctx, r.name)

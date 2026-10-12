@@ -147,6 +147,15 @@ uses:
 cd /opt/alice && sudo docker compose exec -T postgres psql -U postgres -d postgres -c '\l+'
 ```
 
+If the restore switched databases but could not put the key files in place (`The restore failed: … the previous
+database is kept as alice_kept_<time> …`), the replaced database is kept as `alice_kept_<time>`. No later restore
+drops it: it is the way back while you find out what happened. Restore again (with `--no-safety-backup` if the
+restore says the current data cannot be saved first), and drop the kept copy by hand once it is no longer needed:
+
+```
+cd /opt/alice && sudo docker compose exec -T postgres psql -U postgres -d postgres -c 'DROP DATABASE alice_kept_<time>'
+```
+
 ## Updates
 
 The full guide is [upgrade.md](upgrade.md): `cd /opt/alice && sudo ./alice-update.sh <package>` (from a root shell),

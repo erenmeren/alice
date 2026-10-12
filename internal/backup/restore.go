@@ -119,6 +119,7 @@ const (
 	restoreLockKey    = "alice.restore"
 	restoreSuffix     = "_restore"
 	previousSuffix    = "_previous_"
+	keptSuffix        = "_kept_" // a previous database a failed apply step kept: never dropped by a cleanup
 	maintenanceDB     = "postgres"
 	sessionPoll       = 2 * time.Second
 	minFreeForRestore = 1 << 30
