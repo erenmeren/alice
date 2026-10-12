@@ -49,7 +49,7 @@ export const SCREENS: Screen[] = [
   { path: '/settings?tab=https', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Certificate in use', tr: 'Kullanılan sertifika' } },
   { path: '/settings?tab=forwarding', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Save forwarding settings', tr: 'İletim ayarlarını kaydet' } },
   { path: '/account', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Change password', tr: 'Parolayı değiştir' } },
-  { path: '/users', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Operator', tr: 'Operatör' } },
+  { path: '/users', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Sign-in method', tr: 'Giriş yöntemi' } },
   { path: '/tokens', session: sessionFor('operator'), status: installedStatus, ready: { en: 'Read only', tr: 'Salt okunur' } },
   { path: '/audit', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'User created', tr: 'Kullanıcı oluşturuldu' } },
   { path: '/license', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Upload a license', tr: 'Lisans yükle' } },
