@@ -1,5 +1,6 @@
+import { join } from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
-import { Alert, Badge, Checkbox, DEFAULT_THEME, MantineProvider, PasswordInput, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
+import { Alert, Badge, Checkbox, DEFAULT_THEME, MantineProvider, PasswordInput, Radio, SegmentedControl, Switch, Table, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
 import { createElement, type ComponentType } from 'react';
 import { I18nextProvider } from 'react-i18next';
@@ -254,5 +255,29 @@ describe('design rules', () => {
     const root = sw.closest('.mantine-Switch-root')!;
     expect(root.querySelector('.mantine-Switch-track')).toHaveClass(classes.switchTrack);
     expect(root.querySelector('.mantine-Switch-thumb')).toHaveClass(classes.switchThumb);
+  });
+
+  it('draws unchecked Checkbox and Radio boundaries and the SegmentedControl from the design classes', async () => {
+    await renderApp(
+      createElement('div', null,
+        createElement(Checkbox, { label: 'c' }),
+        createElement(Radio, { label: 'r' }),
+        createElement(SegmentedControl, { data: ['a', 'b'], 'aria-label': 'seg' })),
+      ['en-US'], { colorScheme: 'dark' });
+    expect(screen.getByRole('checkbox', { name: 'c' })).toHaveClass(classes.checkboxInput);
+    expect(screen.getByRole('radio', { name: 'r' })).toHaveClass(classes.radioInput);
+    const root = document.querySelector('.mantine-SegmentedControl-root')!;
+    expect(root).toHaveClass(classes.segmented);
+    expect(root.querySelector('.mantine-SegmentedControl-indicator')).toHaveClass(classes.segmentedIndicator);
+    expect(root.querySelector('.mantine-SegmentedControl-label')).toHaveClass(classes.segmentedLabel);
+  });
+
+  it('gives the unchecked boundary --alice-border-strong, except in error and disabled states', () => {
+    const css = readFileSync(join('src', 'design', 'mantine.module.css'), 'utf8');
+    const rule = css.match(/[^{}]*\.checkboxInput[^{}]*\{[^}]*\}/)![0];
+    expect(rule).toContain('.radioInput:not(:checked)');
+    expect(rule).toContain(':not([data-error])');
+    expect(rule).toContain(':not(:disabled)');
+    expect(rule).toContain('border-color: var(--alice-border-strong)');
   });
 });

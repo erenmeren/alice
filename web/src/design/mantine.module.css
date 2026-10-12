@@ -83,3 +83,15 @@
 [data-mantine-color-scheme] .switchInput:checked + * > .switchThumb { --switch-thumb-bg: var(--alice-on-brand); }
 [data-mantine-color-scheme] .switchInput:disabled + * > .switchThumb,
 [data-mantine-color-scheme] .switchInput[data-disabled] + * > .switchThumb { --switch-thumb-bg: var(--switch-thumb-bg-disabled); }
+
+/* An unchecked box or circle is a control boundary (WCAG 1.4.11, 3:1): --alice-border-strong, not Mantine's gray-4 or
+   dark-4 (1.5:1). Error and disabled states keep their own colors. */
+[data-mantine-color-scheme] .checkboxInput:not(:checked):not([data-error]):not(:disabled),
+[data-mantine-color-scheme] .radioInput:not(:checked):not([data-error]):not(:disabled) { border-color: var(--alice-border-strong); }
+
+/* The design's .segmented: surface-subtle track with a border, the active segment on --alice-surface in --alice-text,
+   the others in --alice-text-secondary. */
+[data-mantine-color-scheme] .segmented { background: var(--alice-surface-subtle); border: 1px solid var(--alice-border); border-radius: 6px; padding: 3px; }
+[data-mantine-color-scheme] .segmentedIndicator { background: var(--alice-surface); box-shadow: 0 1px 3px #00000010; border-radius: 4px; }
+[data-mantine-color-scheme] .segmentedLabel { color: var(--alice-text-secondary); font-size: 12px; font-weight: 500; }
+[data-mantine-color-scheme] .segmentedLabel:where([data-active], [data-active]:hover, :hover) { color: var(--alice-text); }

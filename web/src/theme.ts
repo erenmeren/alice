@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, PasswordInput, Radio, Switch, Table, TableScrollContainer, TableTh, Tabs, Title,
+  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, PasswordInput, Radio, SegmentedControl, Switch, Table, TableScrollContainer, TableTh, Tabs, Title,
   createTheme, defaultVariantColorsResolver,
   type CSSVariablesResolver, type MantineColorsTuple, type MantineThemeOverride, type VariantColorsResolver,
 } from '@mantine/core';
@@ -167,8 +167,10 @@ export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
       PasswordInput: PasswordInput.extend({ classNames: { innerInput: classes.passwordInnerInput } }),
       InputWrapper: InputWrapper.extend({ classNames: { label: classes.inputLabel, description: classes.inputDescription } }),
       // Checked choices draw their check, dot and thumb in the design's colors (mantine.module.css), in both schemes.
-      Checkbox: Checkbox.extend({ classNames: { root: classes.checkbox } }),
-      Radio: Radio.extend({ classNames: { root: classes.radio } }),
+      Checkbox: Checkbox.extend({ classNames: { root: classes.checkbox, input: classes.checkboxInput } }),
+      Radio: Radio.extend({ classNames: { root: classes.radio, radio: classes.radioInput } }),
+      // The design's .segmented: a subtle track with a border, the active segment on the surface.
+      SegmentedControl: SegmentedControl.extend({ classNames: { root: classes.segmented, indicator: classes.segmentedIndicator, label: classes.segmentedLabel } }),
       Switch: Switch.extend({ classNames: { input: classes.switchInput, track: classes.switchTrack, thumb: classes.switchThumb } }),
       // A table that scrolls sideways on a narrow screen must be reachable with the keyboard (axe
       // scrollable-region-focusable); a table without a link or button in it has nothing else to focus.
