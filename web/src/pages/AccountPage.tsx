@@ -178,9 +178,10 @@ export function AccountPage() {
           <Text className={classes.summary} data-testid="account-summary">
             {t('account.summary', { username: user.username, role })}
           </Text>
+          {/* The Sign-in fact names the authenticator app only when it is set up, as the MFA badge beside it says. */}
           <FactList
             facts={[
-              { key: 'signIn', label: t('account.page.signIn'), value: sso ? t('account.page.sso') : t('account.page.local') },
+              { key: 'signIn', label: t('account.page.signIn'), value: sso ? t('account.page.sso') : user.mfa_enrolled ? t('account.page.local') : t('users.page.local') },
               { key: 'mfa', label: t('account.page.mfa'), value: mfa },
             ]}
           />

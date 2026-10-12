@@ -163,6 +163,9 @@ describe('account page', () => {
     );
     await renderRoute('/account');
     expect((await screen.findByText('Not set up')).closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
+    // The Sign-in fact agrees with the badge: no authenticator app is claimed while none is set up.
+    expect(screen.getByText('Local account', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText('Local account + authenticator app')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Create new recovery codes' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('ALC-SYS-0003');
     expect(screen.queryByTestId('recovery-codes')).not.toBeInTheDocument();
