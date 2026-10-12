@@ -1,0 +1,141 @@
+{
+  "status": "passed",
+  "checks": 724,
+  "routeCombinations": 168,
+  "contrast": [
+    {
+      "theme": "light",
+      "fg": "text",
+      "bg": "canvas",
+      "ratio": 13.75
+    },
+    {
+      "theme": "light",
+      "fg": "text",
+      "bg": "surface",
+      "ratio": 14.77
+    },
+    {
+      "theme": "light",
+      "fg": "textSecondary",
+      "bg": "surface",
+      "ratio": 6.26
+    },
+    {
+      "theme": "light",
+      "fg": "textMuted",
+      "bg": "canvas",
+      "ratio": 5.09
+    },
+    {
+      "theme": "light",
+      "fg": "textMuted",
+      "bg": "surfaceSubtle",
+      "ratio": 4.89
+    },
+    {
+      "theme": "light",
+      "fg": "onBrand",
+      "bg": "brand",
+      "ratio": 7.55
+    },
+    {
+      "theme": "light",
+      "fg": "brand",
+      "bg": "brandSoft",
+      "ratio": 6.61
+    },
+    {
+      "theme": "light",
+      "fg": "success",
+      "bg": "successSoft",
+      "ratio": 6.31
+    },
+    {
+      "theme": "light",
+      "fg": "warning",
+      "bg": "warningSoft",
+      "ratio": 6.16
+    },
+    {
+      "theme": "light",
+      "fg": "danger",
+      "bg": "dangerSoft",
+      "ratio": 5.43
+    },
+    {
+      "theme": "light",
+      "fg": "info",
+      "bg": "infoSoft",
+      "ratio": 5.56
+    },
+    {
+      "theme": "dark",
+      "fg": "text",
+      "bg": "canvas",
+      "ratio": 15.29
+    },
+    {
+      "theme": "dark",
+      "fg": "text",
+      "bg": "surface",
+      "ratio": 13.83
+    },
+    {
+      "theme": "dark",
+      "fg": "textSecondary",
+      "bg": "surface",
+      "ratio": 8.71
+    },
+    {
+      "theme": "dark",
+      "fg": "textMuted",
+      "bg": "canvas",
+      "ratio": 7.69
+    },
+    {
+      "theme": "dark",
+      "fg": "textMuted",
+      "bg": "surfaceSubtle",
+      "ratio": 6.19
+    },
+    {
+      "theme": "dark",
+      "fg": "onBrand",
+      "bg": "brand",
+      "ratio": 9.39
+    },
+    {
+      "theme": "dark",
+      "fg": "brand",
+      "bg": "brandSoft",
+      "ratio": 7.06
+    },
+    {
+      "theme": "dark",
+      "fg": "success",
+      "bg": "successSoft",
+      "ratio": 7.25
+    },
+    {
+      "theme": "dark",
+      "fg": "warning",
+      "bg": "warningSoft",
+      "ratio": 7.72
+    },
+    {
+      "theme": "dark",
+      "fg": "danger",
+      "bg": "dangerSoft",
+      "ratio": 6.6
+    },
+    {
+      "theme": "dark",
+      "fg": "info",
+      "bg": "infoSoft",
+      "ratio": 7.31
+    }
+  ],
+  "visualBrowserQA": "not run: control-browser capability unavailable",
+  "liveBackend": "not connected"
+}

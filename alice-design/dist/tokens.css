@@ -1,0 +1,25 @@
+@font-face{font-family:Geist;src:url('assets/geist.woff') format('woff');font-style:normal;font-weight:100 900;font-display:swap}
+@font-face{font-family:'Geist Mono';src:url('assets/geist-mono.woff') format('woff');font-style:normal;font-weight:100 900;font-display:swap}
+:root{
+  color-scheme:light;
+  --font-sans:'Geist',Arial,sans-serif;--font-mono:'Geist Mono',monospace;
+  --canvas:#f6f7f5;--surface:#ffffff;--surface-raised:#ffffff;--surface-subtle:#f0f3ef;--surface-hover:#f0f5f1;
+  --text:#1b2b27;--text-secondary:#53645e;--text-muted:#5d6d64;--border:#dce3dc;--border-strong:#7e9184;
+  --brand:#145f50;--brand-hover:#104c40;--on-brand:#ffffff;--brand-soft:#e9f2ed;--brand-line:#a7c9b9;
+  --success:#216447;--success-soft:#eaf5ee;--warning:#8b4b0b;--warning-soft:#fff3df;--danger:#b03939;--danger-soft:#fff0ef;
+  --info:#305eb1;--info-soft:#edf2fc;--accent:#d9eea1;--on-accent:#29472d;
+  --chart:#4b9077;--chart-muted:#bbd4c6;--shadow:0 6px 24px #18392b08;--overlay:#0719117a;
+  --focus:#2563b0;--radius-sm:6px;--radius-md:10px;--radius-lg:14px;--radius-xl:20px;
+  --space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:20px;--space-6:24px;--space-8:32px;--space-10:40px;
+  --sidebar:222px;--row-height:67px;--duration:160ms;
+}
+[data-theme=dark]{
+  color-scheme:dark;
+  --canvas:#111816;--surface:#19221e;--surface-raised:#202c25;--surface-subtle:#202c25;--surface-hover:#24352b;
+  --text:#e8eee8;--text-secondary:#b3c1b6;--text-muted:#9cae9f;--border:#34473b;--border-strong:#697e70;
+  --brand:#9cd7b5;--brand-hover:#b6e6ca;--on-brand:#13291d;--brand-soft:#263e30;--brand-line:#507e62;
+  --success:#9ed9b6;--success-soft:#233e2e;--warning:#f0c07e;--warning-soft:#3a3021;--danger:#f2a2a0;--danger-soft:#402a2a;
+  --info:#adc7ff;--info-soft:#283549;--accent:#d9eea1;--on-accent:#29472d;
+  --chart:#83bb9c;--chart-muted:#466452;--shadow:0 6px 24px #00000012;--overlay:#020805b8;--focus:#99bcff;
+}
+[data-density=compact]{--row-height:48px}

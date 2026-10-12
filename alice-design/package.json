@@ -1,0 +1,1 @@
+{"name":"alice-design-lab","version":"1.0.0","private":true,"type":"module","scripts":{"check":"node --check dist/app.js && node --check dist/pages.js && node --check dist/admin.js && node --check dist/guide.js"}}
