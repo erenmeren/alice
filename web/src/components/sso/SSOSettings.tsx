@@ -9,7 +9,7 @@ import { ErrorAlert } from '../ErrorAlert';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
 import { Icon } from '../../design/Icon';
-import { DialogActions, EmptyState, Notice, Panel, StatusBadge } from '../ui';
+import { DialogActions, EmptyState, Notice, StatusBadge } from '../ui';
 import ui from '../ui/ui.module.css';
 import classes from '../settings/settings.module.css';
 import { MappingsTable } from './MappingsTable';
@@ -81,9 +81,13 @@ export function SSOSettings() {
               <EmptyState icon="Building2" title={t('sso.noProviders')} />
             </div>
           )}
-          {providers.data?.items.map((p) => (
-            <ProviderSection key={p.id} provider={p} onEdit={() => setDialog({ kind: 'form', provider: p })} onDelete={() => setDialog({ kind: 'delete', provider: p })} />
-          ))}
+          {providers.data && providers.data.items.length > 0 && (
+            <div>
+              {providers.data.items.map((p) => (
+                <ProviderSection key={p.id} provider={p} onEdit={() => setDialog({ kind: 'form', provider: p })} onDelete={() => setDialog({ kind: 'delete', provider: p })} />
+              ))}
+            </div>
+          )}
         </Stack>
       </section>
 
@@ -129,39 +133,38 @@ function ProviderSection({ provider: p, onEdit, onDelete }: { provider: Provider
       client.setQueryData<{ items: Provider[] }>(SSO_PROVIDERS_KEY, (old) => (old ? { items: old.items.map((x) => (x.id === fresh.id ? fresh : x)) } : old)),
   });
   return (
-    <Panel aria-label={p.name}>
-      <Stack gap="sm">
-        <div className={classes.providerHead}>
-          <span className={classes.providerIcon}>
-            <Icon name="Building2" size={16} />
-          </span>
-          <div className={classes.providerText}>
-            <Title order={4} className={classes.providerName}>
-              {p.name}
-            </Title>
-            <div className={classes.providerIssuer}>
-              <Code translate="no">{p.issuer_url}</Code>
-            </div>
-          </div>
-          <StatusBadge tone={p.enabled ? 'success' : 'neutral'} icon={p.enabled ? 'CircleCheck' : undefined}>
-            {p.enabled ? t('sso.status.enabled') : t('sso.status.disabled')}
-          </StatusBadge>
-          <div className={classes.providerActions}>
-            <Button size="xs" variant="default" leftSection={<Icon name="RefreshCw" size={14} />} loading={refresh.isPending} onClick={() => refresh.mutate()}>
-              {t('sso.refresh')}
-            </Button>
-            <Button size="xs" variant="default" onClick={onEdit} aria-label={t('sso.edit', { name: p.name })}>
-              {t('users.actions.edit')}
-            </Button>
-            <Button size="xs" variant="default" onClick={onDelete} aria-label={t('sso.delete', { name: p.name })}>
-              {t('sso.deleteShort')}
-            </Button>
+    // The design's provider: the usage-node head directly in the settings panel, then the group mappings (no box of its own).
+    <section aria-label={p.name} className={classes.provider}>
+      <div className={classes.providerHead}>
+        <span className={classes.providerIcon}>
+          <Icon name="Building2" size={16} />
+        </span>
+        <div className={classes.providerText}>
+          <Title order={4} className={classes.providerName}>
+            {p.name}
+          </Title>
+          <div className={classes.providerIssuer}>
+            <Code translate="no">{p.issuer_url}</Code>
           </div>
         </div>
-        <ErrorAlert error={refresh.error} />
-        <MappingsTable providerId={p.id} />
-      </Stack>
-    </Panel>
+        <StatusBadge tone={p.enabled ? 'success' : 'neutral'} icon={p.enabled ? 'CircleCheck' : undefined}>
+          {p.enabled ? t('sso.status.enabled') : t('sso.status.disabled')}
+        </StatusBadge>
+        <div className={classes.providerActions}>
+          <Button size="xs" variant="default" leftSection={<Icon name="RefreshCw" size={14} />} loading={refresh.isPending} onClick={() => refresh.mutate()}>
+            {t('sso.refresh')}
+          </Button>
+          <Button size="xs" variant="default" onClick={onEdit} aria-label={t('sso.edit', { name: p.name })}>
+            {t('users.actions.edit')}
+          </Button>
+          <Button size="xs" variant="default" onClick={onDelete} aria-label={t('sso.delete', { name: p.name })}>
+            {t('sso.deleteShort')}
+          </Button>
+        </div>
+      </div>
+      <ErrorAlert error={refresh.error} />
+      <MappingsTable providerId={p.id} />
+    </section>
   );
 }
 

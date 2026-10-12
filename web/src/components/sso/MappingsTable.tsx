@@ -43,7 +43,7 @@ export function MappingsTable({ providerId }: { providerId: string }) {
 
   return (
     <Stack gap="xs">
-      <Title order={5} className={classes.subTitle} mb={0} mt="xs">
+      <Title order={5} className={classes.mappingsTitle}>
         {t('sso.mappings')}
       </Title>
       {list.isPending && <LoadingIndicator />}

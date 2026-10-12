@@ -91,6 +91,20 @@
   cursor: not-allowed;
 }
 
+/* An identity provider in the SSO tab: an unbordered section; the next one is set apart by a rule. */
+.provider + .provider {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--alice-border);
+}
+/* "Group mappings" under a provider's head (the design's h3.mt24.mb16; one level below the provider's name). */
+.mappingsTitle {
+  margin: 24px 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
 /* An identity provider's head (the design's usage-node): icon tile, name, issuer, state, actions. */
 .providerHead {
   display: flex;

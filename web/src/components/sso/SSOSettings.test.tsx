@@ -49,7 +49,7 @@ describe('SSOSettings', () => {
     expect(screen.getByText(/confirm their identity at the identity provider/)).toBeInTheDocument();
   });
 
-  it('draws a provider as a panel with the design\'s head, the mappings in a resource table and the switch in a row', async () => {
+  it('draws a provider as the design does: its bordered head, then the group mappings heading and the resource table, with no extra panel', async () => {
     base([
       http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [providerFixture(), providerFixture({ id: 'p2', name: 'Old IdP', enabled: false })] })),
       http.get('/api/v1/sso/group-mappings', () =>
@@ -58,7 +58,11 @@ describe('SSOSettings', () => {
     ]);
     await renderRoute('/settings?tab=sso');
     const section = await screen.findByRole('region', { name: 'Corp IdP' });
-    expect(section).toHaveClass(ui.panel);
+    // An unbordered named section (phase7 needs only the region) inside the settings panel, not a panel of its own.
+    expect(section.tagName).toBe('SECTION');
+    expect(section).not.toHaveClass(ui.panel);
+    expect(section).toHaveClass(classes.provider);
+    expect(section.closest(`.${ui.panel}`)).not.toBeNull(); // the settings panel around the tab
     const head = within(section).getByRole('heading', { level: 4, name: 'Corp IdP' }).closest(`.${classes.providerHead}`) as HTMLElement;
     expect(within(head).getByText('On').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
     expect(within(head).getByText('https://idp.example.com').tagName).toBe('CODE');
@@ -67,6 +71,15 @@ describe('SSOSettings', () => {
     expect(within(old).getByText('Off').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
     const table = await within(section).findByRole('table', { name: 'Group mappings' });
     expect(table.closest(`.${ui.tablePanel}`)).not.toBeNull();
+    // The head comes first, directly in the section; the mappings heading (the design's mt24/mb16 h3) follows it.
+    expect(head.parentElement).toBe(section);
+    const mappings = within(section).getByRole('heading', { name: 'Group mappings' });
+    expect(mappings).toHaveClass(classes.mappingsTitle);
+    expect(head.compareDocumentPosition(mappings) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Providers after the first are set apart by a rule, not by a box.
+    const css = readFileSync('src/components/settings/settings.module.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(/\.provider \+ \.provider\s*\{([^}]*)\}/.exec(css)?.[1]).toMatch(/border-top:\s*1px solid var\(--alice-border\)/);
+    expect(/(?:^|\})\s*\.mappingsTitle\s*\{([^}]*)\}/.exec(css)?.[1]).toMatch(/margin:\s*24px 0 16px/);
     expect(screen.getByRole('heading', { level: 3, name: 'Identity providers' })).toBeInTheDocument();
     const allow = screen.getByRole('switch', { name: 'SSO users may be Admin' });
     expect(allow.closest(`.${ui.switchRow}`)).not.toBeNull();
