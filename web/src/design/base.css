@@ -1,0 +1,9 @@
+/* Global rules of the Clarity design (alice-design/dist/styles.css): type smoothing, selection and the focus ring. */
+body { -webkit-font-smoothing: antialiased; }
+::selection { background: var(--alice-brand-line); }
+:focus-visible,
+.mantine-focus-auto:focus-visible { outline: 3px solid var(--alice-focus); outline-offset: 3px; }
+.alice-mono { font-family: var(--mantine-font-family-monospace); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

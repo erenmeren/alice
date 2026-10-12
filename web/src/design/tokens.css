@@ -1,0 +1,127 @@
+/* The Clarity design's semantic tokens (alice-design/dist/tokens.css), for the light and the dark scheme. Mantine sets
+   data-mantine-color-scheme on <html>; public/theme-init.js sets it before the app runs. Components read only these
+   variables (and Mantine's, which theme.ts maps onto them): never a hex value or a palette shade. */
+@font-face {
+  font-family: 'Geist';
+  src: url('./fonts/geist.woff') format('woff');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('./fonts/geist-mono.woff') format('woff');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+:root,
+:root[data-mantine-color-scheme='light'] {
+  color-scheme: light;
+  --alice-canvas: #f6f7f5;
+  --alice-surface: #ffffff;
+  --alice-surface-raised: #ffffff;
+  --alice-surface-subtle: #f0f3ef;
+  --alice-surface-hover: #f0f5f1;
+  --alice-text: #1b2b27;
+  --alice-text-secondary: #53645e;
+  --alice-text-muted: #5d6d64;
+  --alice-border: #dce3dc;
+  --alice-border-strong: #7e9184;
+  --alice-brand: #145f50;
+  --alice-brand-hover: #104c40;
+  --alice-on-brand: #ffffff;
+  --alice-brand-soft: #e9f2ed;
+  --alice-brand-line: #a7c9b9;
+  --alice-success: #216447;
+  --alice-success-hover: #1a5038;
+  --alice-success-soft: #eaf5ee;
+  --alice-warning: #8b4b0b;
+  --alice-warning-hover: #6e3b08;
+  --alice-warning-soft: #fff3df;
+  --alice-danger: #b03939;
+  --alice-danger-hover: #8f2c2c;
+  --alice-danger-soft: #fff0ef;
+  --alice-info: #305eb1;
+  --alice-info-hover: #264b8e;
+  --alice-info-soft: #edf2fc;
+  --alice-neutral: #53645e;
+  --alice-neutral-hover: #43534d;
+  --alice-neutral-soft: #f0f3ef;
+  --alice-on-strong: #ffffff;
+  --alice-accent: #d9eea1;
+  --alice-on-accent: #29472d;
+  --alice-chart: #4b9077;
+  --alice-chart-muted: #bbd4c6;
+  --alice-chart-urgent: #d39750;
+  --alice-chart-expired: #c36a65;
+  --alice-shadow: 0 6px 24px #18392b08;
+  --alice-overlay: #0719117a;
+  --alice-focus: #2563b0;
+  --alice-auth-brand-bg: #163b30;
+  --alice-auth-brand-text: #edf3e9;
+  --alice-auth-brand-muted: #bfd1c4;
+  --alice-auth-brand-line: #476b5838;
+}
+:root[data-mantine-color-scheme='dark'] {
+  color-scheme: dark;
+  --alice-canvas: #111816;
+  --alice-surface: #19221e;
+  --alice-surface-raised: #202c25;
+  --alice-surface-subtle: #202c25;
+  --alice-surface-hover: #24352b;
+  --alice-text: #e8eee8;
+  --alice-text-secondary: #b3c1b6;
+  --alice-text-muted: #9cae9f;
+  --alice-border: #34473b;
+  --alice-border-strong: #697e70;
+  --alice-brand: #9cd7b5;
+  --alice-brand-hover: #b6e6ca;
+  --alice-on-brand: #13291d;
+  --alice-brand-soft: #263e30;
+  --alice-brand-line: #507e62;
+  --alice-success: #9ed9b6;
+  --alice-success-hover: #b8e6ca;
+  --alice-success-soft: #233e2e;
+  --alice-warning: #f0c07e;
+  --alice-warning-hover: #f4d09e;
+  --alice-warning-soft: #3a3021;
+  --alice-danger: #f2a2a0;
+  --alice-danger-hover: #f6bab8;
+  --alice-danger-soft: #402a2a;
+  --alice-info: #adc7ff;
+  --alice-info-hover: #c5d7ff;
+  --alice-info-soft: #283549;
+  --alice-neutral: #b3c1b6;
+  --alice-neutral-hover: #c9d4cb;
+  --alice-neutral-soft: #202c25;
+  --alice-on-strong: #13291d;
+  --alice-chart: #83bb9c;
+  --alice-chart-muted: #466452;
+  --alice-shadow: 0 6px 24px #00000012;
+  --alice-overlay: #020805b8;
+  --alice-focus: #99bcff;
+}
+:root {
+  --alice-radius-sm: 6px;
+  --alice-radius-md: 10px;
+  --alice-radius-lg: 14px;
+  --alice-radius-xl: 20px;
+  --alice-sidebar: 222px;
+  --alice-header: 65px;
+  --alice-row-height: 67px;
+  --alice-duration: 160ms;
+}
+:root[data-density='compact'] {
+  --alice-row-height: 48px;
+}
+@media (max-width: 1199px) {
+  :root {
+    --alice-sidebar: 202px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --alice-duration: 0ms;
+  }
+}

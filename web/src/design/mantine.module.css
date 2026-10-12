@@ -1,0 +1,57 @@
+/* The Clarity design's component rules (alice-design/dist/styles.css), applied to Mantine through theme.ts classNames.
+   A rule Mantine also sets under its dark-scheme selector is prefixed with [data-mantine-color-scheme] so it wins in
+   both schemes; an error state is never overridden. */
+.title[data-order='1'] { letter-spacing: -1.3px; }
+.title[data-order='2'] { letter-spacing: -0.3px; }
+
+[data-mantine-color-scheme] .panel { background: var(--alice-surface); color: var(--alice-text); }
+[data-mantine-color-scheme] .panel[data-with-border] { border-color: var(--alice-border); }
+
+.alert { padding: 12px 16px; }
+.alertTitle { font-size: 12px; font-weight: 600; }
+.alertMessage { font-size: 12px; color: inherit; }
+
+.badge { border: 0; font-size: 11px; font-weight: 550; letter-spacing: 0; text-transform: none; padding-inline: 7px; }
+
+.button { font-weight: 550; transition: background-color var(--alice-duration), border-color var(--alice-duration); }
+
+[data-mantine-color-scheme] .code {
+  background: var(--alice-surface-subtle);
+  color: var(--alice-text);
+  font-family: var(--mantine-font-family-monospace);
+  font-size: 0.88em;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+[data-mantine-color-scheme] .dialog { background: var(--alice-surface); border: 1px solid var(--alice-border); box-shadow: 0 30px 90px #00000038; }
+[data-mantine-color-scheme] .dialogHeader { background: var(--alice-surface); border-bottom: 1px solid var(--alice-border); padding: 24px 24px 18px; }
+.dialogTitle { font-size: 20px; font-weight: 600; letter-spacing: -0.6px; }
+.dialogBody { padding: 24px; }
+.dialogOverlay { background: var(--alice-overlay); }
+
+[data-mantine-color-scheme] .table {
+  --table-border-color: var(--alice-border);
+  --table-striped-color: var(--alice-surface-subtle);
+  --table-highlight-on-hover-color: var(--alice-surface-hover);
+  font-size: 12px;
+}
+.table thead th {
+  padding: 10px 18px;
+  font-size: 10px;
+  font-weight: 550;
+  letter-spacing: 0.5px;
+  color: var(--alice-text-muted);
+  background: var(--alice-surface-subtle);
+  white-space: nowrap;
+}
+.table tbody td { padding: 13px 18px; height: var(--alice-row-height); vertical-align: middle; }
+
+.tabsList { gap: 24px; --tab-border-color: var(--alice-border); }
+.tab { padding: 0 0 13px; font-size: 12px; font-weight: 500; color: var(--alice-text-secondary); background: transparent; }
+.tab[data-active] { color: var(--alice-brand); border-color: var(--alice-brand); }
+
+[data-mantine-color-scheme] .input:not([data-error]) { --input-bd: var(--alice-border-strong); }
+[data-mantine-color-scheme] .input { background: var(--alice-surface); color: var(--alice-text); font-size: 12px; }
+.inputLabel { font-size: 11px; font-weight: 550; color: var(--alice-text); }
+.inputDescription { font-size: 11px; color: var(--alice-text-secondary); }

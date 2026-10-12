@@ -5,6 +5,7 @@ import { I18nextProvider } from 'react-i18next';
 import { createMemoryRouter, RouterProvider, type InitialEntry } from 'react-router';
 import { StrictMode, type ReactElement } from 'react';
 import { createI18n } from '../i18n';
+import { appTheme, cssVariablesResolver } from '../theme';
 import { AuthProvider } from '../auth/AuthProvider';
 import { routes } from '../router';
 import { StepUpProvider } from '../components/StepUpProvider';
@@ -13,29 +14,37 @@ function newClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });
 }
 
-function providers(ui: ReactElement, i18n: Awaited<ReturnType<typeof createI18n>>, client: QueryClient) {
+// RenderOptions picks the color scheme a test renders in; without it Mantine follows the (light) test system.
+export interface RenderOptions {
+  colorScheme?: 'light' | 'dark';
+}
+
+// providers renders ui inside the app's own theme (appTheme, cssVariablesResolver), as ThemeProvider does in the app.
+function providers(ui: ReactElement, i18n: Awaited<ReturnType<typeof createI18n>>, client: QueryClient, opts: RenderOptions = {}) {
   return (
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
-        <MantineProvider>{ui}</MantineProvider>
+        <MantineProvider theme={appTheme(i18n.t('ui.scrollRegion'))} cssVariablesResolver={cssVariablesResolver} forceColorScheme={opts.colorScheme}>
+          {ui}
+        </MantineProvider>
       </QueryClientProvider>
     </I18nextProvider>
   );
 }
 
 // renderApp renders a single component with the app providers (no router).
-export async function renderApp(ui: ReactElement, languages: readonly string[] = ['en-US']) {
+export async function renderApp(ui: ReactElement, languages: readonly string[] = ['en-US'], opts: RenderOptions = {}) {
   const i18n = await createI18n(languages);
   const client = newClient();
-  return { ...render(providers(ui, i18n, client)), i18n, client };
+  return { ...render(providers(ui, i18n, client, opts)), i18n, client };
 }
 
 // renderRoute renders the whole application at path, using the real route table.
-export async function renderRoute(path: InitialEntry, opts: { languages?: readonly string[]; strict?: boolean } = {}) {
+export async function renderRoute(path: InitialEntry, opts: { languages?: readonly string[]; strict?: boolean } & RenderOptions = {}) {
   const i18n = await createI18n(opts.languages ?? ['en-US']);
   const router = createMemoryRouter(routes(), { initialEntries: [path] });
   const client = newClient();
-  const ui = providers(<RouterProvider router={router} />, i18n, client);
+  const ui = providers(<RouterProvider router={router} />, i18n, client, opts);
   return { ...render(opts.strict ? <StrictMode>{ui}</StrictMode> : ui), i18n, router, client };
 }
 

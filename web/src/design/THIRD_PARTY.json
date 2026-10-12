@@ -1,0 +1,16 @@
+[
+  {
+    "name": "Geist and Geist Mono",
+    "source": "https://github.com/vercel/geist-font",
+    "license": "OFL-1.1",
+    "files": ["web/src/design/fonts/geist.woff", "web/src/design/fonts/geist-mono.woff"],
+    "licenseFile": "web/src/design/fonts/OFL.txt"
+  },
+  {
+    "name": "Lucide icons (subset)",
+    "source": "https://lucide.dev",
+    "license": "ISC",
+    "files": ["web/src/design/icons.ts"],
+    "licenseFile": "web/src/design/LUCIDE-LICENSE"
+  }
+]

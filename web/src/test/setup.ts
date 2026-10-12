@@ -27,7 +27,8 @@ window.HTMLElement.prototype.scrollIntoView = () => {};
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 beforeEach(() => {
-  localStorage.clear();
+  localStorage.clear(); // also the per-device preferences alice.colorScheme and alice.density
+  document.documentElement.removeAttribute('data-density');
   document.documentElement.lang = 'en';
   setCsrfToken(null);
 });

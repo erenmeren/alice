@@ -1,57 +1,141 @@
-import { InputWrapper, TableScrollContainer, createTheme, defaultVariantColorsResolver, type CSSVariablesResolver, type MantineThemeOverride, type VariantColorsResolver } from '@mantine/core';
+import {
+  Alert, Badge, Button, Card, Code, Input, InputWrapper, Modal, Paper, Table, TableScrollContainer, Tabs, Title,
+  createTheme, defaultVariantColorsResolver,
+  type CSSVariablesResolver, type MantineColorsTuple, type MantineThemeOverride, type VariantColorsResolver,
+} from '@mantine/core';
+import classes from './design/mantine.module.css';
 
-// Mantine hovers a filled button of shade 9 with the lighter shade 8; for red that is #e03131,
-// and white text on it has no safety margin (exact math 4.513:1, but axe measures 4.48:1 on the
-// rendered hover, which fails WCAG AA 4.5:1). That is why the override exists: the danger buttons
-// (color "red.9") hover a darker red instead, #a51d1d at 7.5:1.
-export const DANGER_HOVER = '#a51d1d';
-
-// SCROLL_REGION_CLASS marks the scrolling part of every table scroll container; theme.css draws its
-// keyboard focus ring inside it (the ScrollArea root clips anything drawn outside, overflow: hidden).
+// SCROLL_REGION_CLASS marks the scrolling part of every table scroll container; theme.css draws its keyboard focus ring
+// inside it (the ScrollArea root clips anything drawn outside, overflow: hidden).
 export const SCROLL_REGION_CLASS = 'alice-scroll-region';
 
-// Mantine's "light" and "subtle" variants draw shade-6 text on a pale tint of the
-// same color (for example green 2.2:1, indigo 3.8:1), below WCAG AA (4.5:1).
-// Keep the tint as the color cue and use black text instead.
-const variantColorResolver: VariantColorsResolver = (input) => {
-  const colors = defaultVariantColorsResolver(input);
-  if (input.variant === 'filled' && input.color === 'red.9') {
-    return { ...colors, hover: DANGER_HOVER };
-  }
-  if (input.variant === 'light' || input.variant === 'subtle') {
-    return { ...colors, color: 'var(--mantine-color-black)', hoverColor: 'var(--mantine-color-black)' };
-  }
-  return colors;
+// The design's forest accent as a palette; shade 7 is the light brand. Components that read a palette shade directly
+// (Loader, Progress, Switch, Checkbox) get the brand; everything scheme-dependent comes from the variables below.
+const forest: MantineColorsTuple = ['#e9f2ed', '#d3e6db', '#a7c9b9', '#83bb9c', '#5a9479', '#3d7d64', '#24695a', '#145f50', '#104c40', '#0b3a31'];
+
+export type Tone = 'brand' | 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+
+// The Mantine color a component passes, by the design's semantic tone it stands for. Pages keep saying color="red" or
+// color="yellow"; the resolver turns that into the tone's tokens, in both schemes.
+const TONE_OF: Record<string, Tone> = {
+  forest: 'brand', indigo: 'brand', violet: 'brand', grape: 'brand',
+  green: 'success', teal: 'success', lime: 'success',
+  yellow: 'warning', orange: 'warning',
+  red: 'danger', pink: 'danger',
+  blue: 'info', cyan: 'info',
+  gray: 'neutral', dark: 'neutral',
 };
 
-// cssVariablesResolver goes to the MantineProvider (it is not part of the theme). Mantine draws
-// everything that marks an error from one variable, --mantine-color-error: the message under a field,
-// the text, placeholder, sections, asterisk and border of a field with an error, and the error labels of
-// Checkbox, Radio and Switch. Its default in the light scheme is red 6 (3.1:1 on white); red 9 is 6.1:1.
-// The app is light only (defaultColorScheme="light"), so the dark scheme keeps Mantine's value.
-export const cssVariablesResolver: CSSVariablesResolver = () => ({
-  variables: {},
-  light: { '--mantine-color-error': 'var(--mantine-color-red-9)' },
-  dark: {},
-});
+export const TONE_COLOR: Record<Tone, string> = { brand: 'forest', success: 'green', warning: 'yellow', danger: 'red', info: 'blue', neutral: 'gray' };
 
-// appTheme is the app's theme. scrollRegionLabel names the scrolling part of a table (the caller's
-// translated "ui.scrollRegion"), so the theme is made again when the language changes.
+// toneOf maps "red", "red.9" or a missing color (the primary color) to its tone; anything unknown is neutral.
+export function toneOf(color: string | undefined): Tone {
+  if (!color) return 'brand';
+  return TONE_OF[color.split('.')[0]] ?? 'neutral';
+}
+
+const strong = (t: Tone) => `var(--alice-${t})`;
+const onStrong = (t: Tone) => (t === 'brand' ? 'var(--alice-on-brand)' : 'var(--alice-on-strong)');
+
+// variantColorResolver replaces the light-only overrides of earlier phases (black text on light variants, a darker red
+// hover): every variant draws from the semantic tokens, whose pairs tokens.test.ts holds at 4.5:1 in both schemes.
+export const variantColorResolver: VariantColorsResolver = (input) => {
+  const tone = toneOf(input.color ?? input.theme.primaryColor);
+  const soft = `var(--alice-${tone}-soft)`;
+  switch (input.variant) {
+    case 'filled':
+      return { background: strong(tone), hover: `var(--alice-${tone}-hover)`, color: onStrong(tone), hoverColor: onStrong(tone), border: '1px solid transparent' };
+    case 'light':
+      return {
+        background: soft,
+        hover: `color-mix(in srgb, ${strong(tone)} 10%, ${soft})`,
+        color: strong(tone),
+        hoverColor: strong(tone),
+        border: `1px solid color-mix(in srgb, ${strong(tone)} 30%, transparent)`,
+      };
+    case 'subtle':
+      return { background: 'transparent', hover: soft, color: strong(tone), hoverColor: strong(tone), border: '1px solid transparent' };
+    case 'outline':
+      return { background: 'transparent', hover: soft, color: strong(tone), hoverColor: strong(tone), border: `1px solid ${strong(tone)}` };
+    default:
+      return defaultVariantColorsResolver(input);
+  }
+};
+
+// Mantine's own variables, mapped onto the tokens. The tokens change with data-mantine-color-scheme, so both schemes
+// use the same mapping. Mantine draws everything that marks an error (field message, typed text, placeholder, border,
+// the error labels of Checkbox, Radio and Switch) from --mantine-color-error.
+const SCHEME: Record<string, string> = {
+  '--mantine-color-body': 'var(--alice-canvas)',
+  '--mantine-color-text': 'var(--alice-text)',
+  '--mantine-color-dimmed': 'var(--alice-text-secondary)',
+  '--mantine-color-placeholder': 'var(--alice-text-muted)',
+  '--mantine-color-anchor': 'var(--alice-brand)',
+  '--mantine-color-default': 'var(--alice-surface)',
+  '--mantine-color-default-hover': 'var(--alice-surface-hover)',
+  '--mantine-color-default-color': 'var(--alice-text)',
+  '--mantine-color-default-border': 'var(--alice-border)',
+  '--mantine-color-error': 'var(--alice-danger)',
+  '--mantine-primary-color-filled': 'var(--alice-brand)',
+  '--mantine-primary-color-filled-hover': 'var(--alice-brand-hover)',
+  '--mantine-primary-color-light': 'var(--alice-brand-soft)',
+  '--mantine-primary-color-light-hover': 'var(--alice-surface-hover)',
+  '--mantine-primary-color-light-color': 'var(--alice-brand)',
+  '--mantine-primary-color-contrast': 'var(--alice-on-brand)',
+};
+
+// cssVariablesResolver goes to the MantineProvider (it is not part of the theme).
+export const cssVariablesResolver: CSSVariablesResolver = () => ({ variables: {}, light: SCHEME, dark: SCHEME });
+
+const SANS = "Geist, system-ui, -apple-system, 'Segoe UI', Arial, sans-serif";
+const MONO = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+
+// appTheme is the app's theme. scrollRegionLabel names the scrolling part of a table (the caller's translated
+// "ui.scrollRegion"), so the theme is made again when the language changes.
 export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
   return createTheme({
-    primaryColor: 'indigo',
-    // Shade 7 keeps white text on filled buttons and the active nav item above 4.5:1 (5.0:1).
-    primaryShade: 7,
-    defaultRadius: 'md',
+    colors: { forest },
+    primaryColor: 'forest',
+    primaryShade: { light: 7, dark: 3 },
     variantColorResolver,
+    fontFamily: SANS,
+    fontFamilyMonospace: MONO,
+    headings: {
+      fontFamily: SANS,
+      fontWeight: '600',
+      sizes: {
+        h1: { fontSize: '32px', lineHeight: '1.2', fontWeight: '590' },
+        h2: { fontSize: '16px', lineHeight: '1.5', fontWeight: '600' },
+        h3: { fontSize: '14px', lineHeight: '1.5', fontWeight: '600' },
+        h4: { fontSize: '13px', lineHeight: '1.5', fontWeight: '600' },
+        h5: { fontSize: '12px', lineHeight: '1.5', fontWeight: '600' },
+        h6: { fontSize: '11px', lineHeight: '1.5', fontWeight: '600' },
+      },
+    },
+    fontSizes: { xs: '11px', sm: '12px', md: '14px', lg: '16px', xl: '20px' },
+    radius: { xs: '4px', sm: '6px', md: '10px', lg: '14px', xl: '20px' },
+    defaultRadius: 'sm',
+    spacing: { xs: '8px', sm: '12px', md: '16px', lg: '24px', xl: '32px' },
+    cursorType: 'pointer',
     components: {
-      // Field help texts default to the "dimmed" gray (3.3:1); gray 7 is 8.2:1. (Field errors: see
-      // cssVariablesResolver.)
-      InputWrapper: InputWrapper.extend({ styles: { description: { color: 'var(--mantine-color-gray-7)' } } }),
+      Alert: Alert.extend({ defaultProps: { variant: 'light', radius: 'md' }, classNames: { root: classes.alert, title: classes.alertTitle, message: classes.alertMessage } }),
+      Badge: Badge.extend({ defaultProps: { radius: 'sm', tt: 'none', variant: 'light' }, classNames: { root: classes.badge } }),
+      Button: Button.extend({ defaultProps: { radius: 'sm' }, classNames: { root: classes.button } }),
+      Card: Card.extend({ defaultProps: { radius: 'md' }, classNames: { root: classes.panel } }),
+      Paper: Paper.extend({ defaultProps: { radius: 'md' }, classNames: { root: classes.panel } }),
+      Code: Code.extend({ classNames: { root: classes.code } }),
+      Modal: Modal.extend({
+        defaultProps: { radius: 'lg', overlayProps: { blur: 3 } },
+        classNames: { content: classes.dialog, header: classes.dialogHeader, title: classes.dialogTitle, body: classes.dialogBody, overlay: classes.dialogOverlay },
+      }),
+      Table: Table.extend({ classNames: { table: classes.table } }),
+      Tabs: Tabs.extend({ classNames: { list: classes.tabsList, tab: classes.tab } }),
+      Title: Title.extend({ classNames: { root: classes.title } }),
+      Input: Input.extend({ classNames: { input: classes.input } }),
+      InputWrapper: InputWrapper.extend({ classNames: { label: classes.inputLabel, description: classes.inputDescription } }),
       // A table that scrolls sideways on a narrow screen must be reachable with the keyboard (axe
       // scrollable-region-focusable); a table without a link or button in it has nothing else to focus.
-      // The stop is a named group (a screen reader says what it is; a group is no landmark, so pages with
-      // several tables do not fill the landmark list with one repeated name) with a focus ring drawn inside it.
+      // The stop is a named group (not a landmark) with a focus ring drawn inside it (theme.css).
       TableScrollContainer: TableScrollContainer.extend({
         defaultProps: {
           scrollAreaProps: {

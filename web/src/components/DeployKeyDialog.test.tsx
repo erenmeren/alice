@@ -7,6 +7,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { DeployKeyDialog } from './DeployKeyDialog';
+import { toneOf } from '../theme';
 
 const pending = { ...targetFixture, id: 'p-1', name: 'pending-01', status: 'pending_host_key' as const };
 const FILES: KeyFiles = {
@@ -195,7 +196,8 @@ describe('DeployKeyDialog', () => {
       await renderApp(<DeployKeyDialog keyId="k1" opened onClose={() => {}} />, [lang === 'en' ? 'en-US' : 'tr-TR']);
       await userEvent.click(await screen.findByRole('button', { name: lang === 'en' ? 'Deploy' : 'Dağıt' }));
       const alert = (await screen.findByText(text)).closest('.mantine-Alert-root') as HTMLElement;
-      expect(alert.getAttribute('style')).toContain(`--alert-bg: var(--mantine-color-${color}-light)`);
+      // The theme draws the Mantine color as its design tone (theme.ts toneOf): green success, yellow warning, red danger.
+      expect(alert.getAttribute('style')).toContain(`--alert-bg: var(--alice-${toneOf(color)}-soft)`);
       expectNoRawKeys();
     });
   });
@@ -214,8 +216,8 @@ describe('DeployKeyDialog', () => {
     await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Deploy' }));
     const alert = (await screen.findByText('Alice added the key and verified a login with it.')).closest('.mantine-Alert-root') as HTMLElement;
-    expect(alert.getAttribute('style')).toContain('yellow');
-    expect(alert.getAttribute('style')).not.toContain('green');
+    expect(alert.getAttribute('style')).toContain('var(--alice-warning-soft)');
+    expect(alert.getAttribute('style')).not.toContain('success');
   });
 
   it('shows the note of the job result next to the outcome', async () => {

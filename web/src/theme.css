@@ -2,7 +2,7 @@
    inside the element: the ScrollArea root around it is overflow: hidden and would clip a ring drawn
    outside, as it clips the browser's default one. */
 .alice-scroll-region:focus-visible {
-  outline: 2px solid var(--mantine-primary-color-filled);
+  outline: 2px solid var(--alice-focus);
   outline-offset: -2px;
 }
 
