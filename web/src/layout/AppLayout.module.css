@@ -2,7 +2,9 @@
    rules; plan R5, R6). Mantine's AppShell keeps its own layout variables, so spacing goes on .content. */
 .skipLink { position: fixed; top: -80px; left: 16px; z-index: 2000; padding: 12px; border-radius: 6px; background: var(--alice-brand); color: var(--alice-on-brand); }
 .skipLink:focus { top: 12px; }
-.navbar { display: flex; flex-direction: column; padding: 22px 13px 12px; background: var(--alice-surface); border-right: 1px solid var(--alice-border); }
+.navbar { display: flex; flex-direction: column; padding: 22px 13px 12px; overflow-y: auto; scrollbar-width: thin; background: var(--alice-surface); border-right: 1px solid var(--alice-border); }
+/* The whole sidebar scrolls as one column (a short window or the phone menu): no part of it shrinks or clips its links. */
+.navbar > * { flex-shrink: 0; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 12px 20px; font-size: 26px; font-weight: 650; letter-spacing: -1.6px; color: var(--alice-text); text-decoration: none; }
 .brandMark { width: 30px; height: 30px; }
 .brandDot { color: var(--alice-brand); }
@@ -10,7 +12,7 @@
 .installationSymbol { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 6px; background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
 .installationName { font-size: 12px; font-weight: 600; }
 .installationMeta { font-size: 11px; color: var(--alice-text-secondary); }
-.navScroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.navScroll { flex: 1 0 auto; }
 .group { margin: 19px 0 8px; padding: 0 10px; font-size: 10px; font-weight: 600; letter-spacing: 1.3px; text-transform: uppercase; color: var(--alice-text-muted); }
 .link { position: relative; min-height: 39px; margin: 2px 0; padding: 9px 11px; border-radius: 7px; color: var(--alice-text-secondary); }
 .link:hover { background: var(--alice-surface-hover); color: var(--alice-text); }

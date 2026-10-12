@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -12,6 +13,20 @@ const linkNames = () =>
     .getAllByRole('link')
     .map((a) => a.textContent ?? '')
     .filter((n) => !n.startsWith('Alice'));
+
+// rule returns the declarations of a top-level rule of the shell's style sheet.
+const css = readFileSync('src/layout/AppLayout.module.css', 'utf8');
+const rule = (selector: string) => new RegExp(`^${selector.replace('.', '\\.')} \\{([^}]*)\\}`, 'm').exec(css)?.[1] ?? '';
+
+describe('AppLayout sidebar scrolling', () => {
+  // A short window (a 640x800 phone with the menu open, a 1280x720 laptop) must reach every link: the whole sidebar
+  // scrolls as one column, so the Administration group is never clipped inside a middle scroll area.
+  it('scrolls the whole sidebar, not a clipped middle part', () => {
+    expect(rule('.navbar')).toMatch(/overflow-y: auto/);
+    expect(rule('.navScroll')).not.toMatch(/overflow/);
+    expect(rule('.navScroll')).not.toMatch(/min-height: 0/);
+  });
+});
 
 describe('AppLayout single sign-on refusal', () => {
   it('shows the reason of a refused step-up once and removes it from the address, keeping the rest', async () => {
