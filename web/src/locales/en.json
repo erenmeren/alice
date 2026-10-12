@@ -2384,6 +2384,10 @@
       "runs": "Runs",
       "inspectRun": "Inspect run and locations",
       "path": "Rotation progress",
+      "pathNamed": "Rotation progress: {{name}}",
+      "inspectRunNamed": "Inspect run and locations: {{name}}",
+      "openRunNamed": "Open the current run: {{name}}",
+      "openLastRunNamed": "Open the last run: {{name}}",
       "phase": {
         "generate": "Generate new key",
         "deploy": "Deploy & verify",

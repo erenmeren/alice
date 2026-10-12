@@ -2384,6 +2384,10 @@
       "runs": "İşlemler",
       "inspectRun": "İşlemi ve konumları incele",
       "path": "Rotasyon ilerlemesi",
+      "pathNamed": "Rotasyon ilerlemesi: {{name}}",
+      "inspectRunNamed": "İşlemi ve konumları incele: {{name}}",
+      "openRunNamed": "Şu anki çalıştırmayı aç: {{name}}",
+      "openLastRunNamed": "Son çalıştırmayı aç: {{name}}",
       "phase": {
         "generate": "Yeni anahtar oluştur",
         "deploy": "Dağıt ve doğrula",
