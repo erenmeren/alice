@@ -6,6 +6,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
 import { RotationPreviewDialog } from './RotationPreviewDialog';
+import ui from './ui/ui.module.css';
 
 const PREVIEW = `/api/v1/rotation/policies/${POLICY_ID}/actions/preview`;
 const RUN = `/api/v1/rotation/policies/${POLICY_ID}/actions/run`;
@@ -146,5 +147,16 @@ describe('RotationPreviewDialog', () => {
     expect(await screen.findByText('Değişecek yer sayısı: 1')).toBeInTheDocument();
     expect(screen.getByText('Alice şu anda sunucuya bağlanamıyor.')).toBeInTheDocument();
     expectNoRawKeys();
+  });
+
+  it('puts Close and Run now in the design footer, also in the start confirmation', async () => {
+    server.use(http.post(PREVIEW, () => HttpResponse.json(previewFixture())));
+    await open();
+    const run = await screen.findByRole('button', { name: 'Run now' });
+    await waitFor(() => expect(run).toBeEnabled());
+    expect(run.parentElement).toHaveClass(ui.dialogActions);
+    await userEvent.click(run);
+    const confirm = await screen.findByRole('dialog', { name: 'Start this rotation now?' });
+    expect(within(confirm).getByRole('button', { name: 'Start rotation' }).parentElement).toHaveClass(ui.dialogActions);
   });
 });

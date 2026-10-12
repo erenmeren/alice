@@ -8,6 +8,7 @@ import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { DeployKeyDialog } from './DeployKeyDialog';
 import { toneOf } from '../theme';
+import ui from './ui/ui.module.css';
 
 const pending = { ...targetFixture, id: 'p-1', name: 'pending-01', status: 'pending_host_key' as const };
 const FILES: KeyFiles = {
@@ -226,5 +227,13 @@ describe('DeployKeyDialog', () => {
     await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Deploy' }));
     expect(await screen.findByText('Alice could not connect to test a login.')).toBeInTheDocument();
+  });
+
+  it('puts Cancel and Deploy in the design footer, inside the form', async () => {
+    server.use(...sessionHandlers(operatorSession), http.get('/api/v1/targets', () => HttpResponse.json({ items: [], next_cursor: null })));
+    await renderApp(<DeployKeyDialog keyId="k1" opened onClose={() => {}} />);
+    const submit = await screen.findByRole('button', { name: 'Deploy' });
+    expect(submit.parentElement).toHaveClass(ui.dialogActions);
+    expect(submit.closest('form')).not.toBeNull();
   });
 });

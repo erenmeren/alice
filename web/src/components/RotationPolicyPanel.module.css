@@ -1,0 +1,5 @@
+/* The rotation policy panel in the Clarity design (alice-design/dist/pages.js sshKeyDetail: panel h3, facts). Tokens only. */
+.policyName { margin: 0; font-size: 14px; font-weight: 600; color: var(--alice-text); overflow-wrap: anywhere; }
+.schedule { margin: 0; padding: 0; list-style: none; display: grid; }
+.schedule li { padding: 9px 0; border-bottom: 1px solid var(--alice-border); font-size: 11px; color: var(--alice-text-secondary); }
+.historyTitle { margin: 8px 0 0; font-size: 12px; font-weight: 600; color: var(--alice-text); }

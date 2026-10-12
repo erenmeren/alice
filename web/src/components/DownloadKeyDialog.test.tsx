@@ -6,6 +6,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
 import { DownloadKeyDialog, reasonProblem } from './DownloadKeyDialog';
+import ui from './ui/ui.module.css';
 
 const PASS = 'Canary-passphrase-4711';
 const REASON = 'quarterly access review';
@@ -221,5 +222,13 @@ describe('DownloadKeyDialog', () => {
     expect(await screen.findByRole('dialog', { name: 'Özel anahtarı indir' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'İndir' })).toBeInTheDocument();
     expectNoRawKeys();
+  });
+
+  it('puts Cancel and Download in the design footer, inside the form', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    await renderWithStepUp(<DownloadKeyDialog keyId="k1" label="ci" opened onClose={() => {}} />);
+    const submit = await screen.findByRole('button', { name: 'Download' });
+    expect(submit.parentElement).toHaveClass(ui.dialogActions);
+    expect(submit.closest('form')).not.toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { GenerateKeyDialog } from './GenerateKeyDialog';
+import ui from './ui/ui.module.css';
 
 describe('GenerateKeyDialog', () => {
   beforeEach(() => server.use(...sessionHandlers(operatorSession)));
@@ -57,5 +58,14 @@ describe('GenerateKeyDialog', () => {
   it('does not send an empty name', async () => {
     await renderApp(<GenerateKeyDialog opened onClose={() => {}} onGenerated={() => {}} />);
     expect(await screen.findByRole('button', { name: 'Generate' })).toBeDisabled();
+  });
+
+  it('says private material is never shown and puts its buttons in the design footer after the fields', async () => {
+    await renderApp(<GenerateKeyDialog opened onClose={() => {}} onGenerated={() => {}} />);
+    const note = (await screen.findByText('Private material is never displayed here')).closest('[role="note"]')!;
+    expect(note).toHaveTextContent('Only an administrator with fresh verification can download a generated private key.');
+    const submit = screen.getByRole('button', { name: 'Generate' });
+    expect(submit.parentElement).toHaveClass(ui.dialogActions);
+    expect(submit.closest('form')).not.toBeNull();
   });
 });

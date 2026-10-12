@@ -1,14 +1,16 @@
-import { Alert, Button, Checkbox, Group, PasswordInput, Stack, Textarea } from '@mantine/core';
+import { Alert, Button, Checkbox, PasswordInput, Stack, Textarea } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { sshKey } from '../api/queryKeys';
 import { downloadPrivateKey } from '../api/sshkeys';
+import { Icon } from '../design/Icon';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { fieldErrorsOf } from './fieldErrors';
 import { keyFileName, saveBlob } from './saveBlob';
 import { useStepUp } from './StepUpProvider';
+import { DialogActions } from './ui';
 
 const MIN_REASON = 10;
 const MIN_PASSPHRASE = 12;
@@ -92,9 +94,9 @@ function DownloadForm({ keyId, label, onClose }: { keyId: string; label: string;
         <Alert color="green" role="status">
           {t('sshKeys.downloadDone')}
         </Alert>
-        <Group justify="flex-end">
+        <DialogActions>
           <Button onClick={leave}>{t('ui.close')}</Button>
-        </Group>
+        </DialogActions>
       </Stack>
     );
 
@@ -148,15 +150,15 @@ function DownloadForm({ keyId, label, onClose }: { keyId: string; label: string;
           </>
         )}
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
-          <Button variant="default" onClick={leave}>
-            {t('ui.cancel')}
-          </Button>
-          <Button type="submit" loading={busy}>
-            {t('sshKeys.downloadSubmit')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={leave}>
+          {t('ui.cancel')}
+        </Button>
+        <Button type="submit" leftSection={<Icon name="Download" size={15} />} loading={busy}>
+          {t('sshKeys.downloadSubmit')}
+        </Button>
+      </DialogActions>
     </form>
   );
 }

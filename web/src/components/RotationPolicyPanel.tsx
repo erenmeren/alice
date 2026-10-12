@@ -1,4 +1,4 @@
-import { Anchor, Badge, Button, Group, Stack, Switch, Table, Text, Title } from '@mantine/core';
+import { Anchor, Button, Group, Stack, Switch, Table, Text, VisuallyHidden } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -12,6 +12,10 @@ import { ReasonAlert, durationText, labelOf } from './rotationText';
 import { RotationPolicyDialog } from './RotationPolicyDialog';
 import { RotationPreviewDialog } from './RotationPreviewDialog';
 import { useStepUp } from './StepUpProvider';
+import { DialogActions, Panel, StatusBadge, type Tone } from './ui';
+import classes from './RotationPolicyPanel.module.css';
+
+const RUN_TONE: Partial<Record<string, Tone>> = { completed: 'success', needs_attention: 'warning' };
 
 type Dialog = 'create' | 'edit' | 'preview' | 'delete' | null;
 
@@ -70,146 +74,147 @@ export function RotationPolicyPanel({ keyId, policyId, isAdmin }: { keyId: strin
   };
 
   return (
-    <Stack gap="sm" data-testid="rotation-panel">
-      <Title order={2} size="h4">
-        {t('rotation.title')}
-      </Title>
-      {policyId === null && (
-        <>
-          <Text size="sm">{t('rotation.none')}</Text>
-          {isAdmin && (
-            <Button w="fit-content" size="xs" onClick={() => setDialog('create')}>
-              {t('rotation.create')}
-            </Button>
-          )}
-        </>
-      )}
-      {policyId !== null && policy.isError && <ErrorAlert error={policy.error} />}
-      {p && (
-        <Stack gap="xs">
-          <Text size="sm" fw={600} translate="no">
-            {p.name}
-          </Text>
-          <Text size="sm">{p.interval_days === 1 ? t('rotation.everyDay') : t('rotation.every', { count: p.interval_days })}</Text>
-          <Text size="sm">{t('rotation.overlap', { duration: durationText(t, p.overlap_minutes) })}</Text>
-          <Text size="sm">{t('rotation.notifyBefore', { hours: p.notify_before_hours })}</Text>
-          {/* The state is text beside the switch, not a label inside its track: Mantine draws the track label
-              in gray 6 on gray 3 (2.6:1), below WCAG AA; the switch itself tells a screen reader its state. */}
-          <Group gap="sm">
-            <Switch
-              label={t('rotation.switch')}
-              checked={p.enabled}
-              onChange={(e) => void toggle(p, e.currentTarget.checked)}
-              disabled={!isAdmin || switching}
-            />
-            <Text size="sm" data-testid="rotation-state">
-              {t(p.enabled ? 'rotation.on' : 'rotation.off')}
-            </Text>
-          </Group>
-          {!p.enabled && <Text size="sm">{t('rotation.offHelp')}</Text>}
-          {p.enabled && p.next_run_at && <Text size="sm">{t('rotation.nextRun', { date: formatDateTime(p.next_run_at, i18n.language) })}</Text>}
-          {p.last_run_status && (
-            <Stack gap={4}>
-              <Text size="xs" c="gray.7">
-                {t('rotation.lastRunHelp')}
-              </Text>
-              <Text size="sm">{t('rotation.lastRun', { status: labelOf(t, i18n, 'rotation.status', p.last_run_status) })}</Text>
-              {p.last_run_result && <ReasonAlert error={p.last_run_result} color="yellow" />}
-              {p.last_run_id && (
-                <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.last_run_id)}`} size="sm" w="fit-content">
-                  {t('rotation.openLastRun')}
-                </Anchor>
-              )}
-            </Stack>
-          )}
-          {p.open_rotation_id && (
-            <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.open_rotation_id)}`} size="sm" w="fit-content">
-              {t('rotation.openRun')}
-            </Anchor>
-          )}
-          {isAdmin && (
+    <Panel title={t('rotation.title')} testId="rotation-panel">
+      <Stack gap="sm">
+        {policyId === null && (
+          <>
+            <Text size="sm">{t('rotation.none')}</Text>
+            {isAdmin && (
+              <Button w="fit-content" size="xs" onClick={() => setDialog('create')}>
+                {t('rotation.create')}
+              </Button>
+            )}
+          </>
+        )}
+        {policyId !== null && policy.isError && <ErrorAlert error={policy.error} />}
+        {p && (
+          <Stack gap="xs">
+            <h3 className={classes.policyName} translate="no">
+              {p.name}
+            </h3>
+            <ul className={classes.schedule}>
+              <li>{p.interval_days === 1 ? t('rotation.everyDay') : t('rotation.every', { count: p.interval_days })}</li>
+              <li>{t('rotation.overlap', { duration: durationText(t, p.overlap_minutes) })}</li>
+              <li>{t('rotation.notifyBefore', { hours: p.notify_before_hours })}</li>
+            </ul>
+            {/* The state is text beside the switch, not a label inside its track: Mantine draws the track label
+                in gray 6 on gray 3 (2.6:1), below WCAG AA; the switch itself tells a screen reader its state. */}
             <Group gap="sm">
-              <Button size="xs" variant="default" onClick={() => setDialog('preview')}>
-                {t('rotation.preview')}
-              </Button>
-              <Button size="xs" onClick={() => setDialog('preview')} disabled={started}>
-                {t('rotation.runNow')}
-              </Button>
-              <Button size="xs" variant="default" onClick={() => setDialog('edit')}>
-                {t('rotation.edit')}
-              </Button>
-              <Button size="xs" variant="light" color="red.9" onClick={() => setDialog('delete')}>
-                {t('rotation.delete')}
-              </Button>
+              <Switch
+                label={t('rotation.switch')}
+                checked={p.enabled}
+                onChange={(e) => void toggle(p, e.currentTarget.checked)}
+                disabled={!isAdmin || switching}
+              />
+              <Text size="sm" data-testid="rotation-state">
+                {t(p.enabled ? 'rotation.on' : 'rotation.off')}
+              </Text>
             </Group>
-          )}
-        </Stack>
-      )}
-      <ErrorAlert error={error} />
-      {runs.data && runs.data.items.length > 0 && (
-        <Stack gap="xs">
-          <Title order={3} size="h5">
-            {t('rotation.history')}
-          </Title>
-          <Table.ScrollContainer minWidth={360}>
-            <Table aria-label={t('rotation.history')}>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>{t('rotation.col.planned')}</Table.Th>
-                  <Table.Th>{t('rotation.col.state')}</Table.Th>
-                  <Table.Th />
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
-                {runs.data.items.map((r) => (
-                  <Table.Tr key={r.id}>
-                    <Table.Td>{formatDateTime(r.planned_for, i18n.language)}</Table.Td>
-                    <Table.Td>
-                      <Badge variant="light" color={r.status === 'completed' ? 'green' : r.status === 'needs_attention' ? 'orange' : 'gray'} tt="none">
-                        {labelOf(t, i18n, 'rotation.status', r.status)}
-                      </Badge>
-                    </Table.Td>
-                    <Table.Td>
-                      <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(r.id)}`}>
-                        {t('rotation.openRunLink')}
-                      </Anchor>
-                    </Table.Td>
+            {!p.enabled && <Text size="sm">{t('rotation.offHelp')}</Text>}
+            {p.enabled && p.next_run_at && <Text size="sm">{t('rotation.nextRun', { date: formatDateTime(p.next_run_at, i18n.language) })}</Text>}
+            {p.last_run_status && (
+              <Stack gap={4}>
+                <Text size="xs" c="dimmed">
+                  {t('rotation.lastRunHelp')}
+                </Text>
+                <Text size="sm">{t('rotation.lastRun', { status: labelOf(t, i18n, 'rotation.status', p.last_run_status) })}</Text>
+                {p.last_run_result && <ReasonAlert error={p.last_run_result} color="yellow" />}
+                {p.last_run_id && (
+                  <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.last_run_id)}`} size="sm" w="fit-content">
+                    {t('rotation.openLastRun')}
+                  </Anchor>
+                )}
+              </Stack>
+            )}
+            {p.open_rotation_id && (
+              <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.open_rotation_id)}`} size="sm" w="fit-content">
+                {t('rotation.openRun')}
+              </Anchor>
+            )}
+            {isAdmin && (
+              <Group gap="sm">
+                <Button size="xs" variant="default" onClick={() => setDialog('preview')}>
+                  {t('rotation.preview')}
+                </Button>
+                <Button size="xs" onClick={() => setDialog('preview')} disabled={started}>
+                  {t('rotation.runNow')}
+                </Button>
+                <Button size="xs" variant="default" onClick={() => setDialog('edit')}>
+                  {t('rotation.edit')}
+                </Button>
+                <Button size="xs" variant="light" color="red" onClick={() => setDialog('delete')}>
+                  {t('rotation.delete')}
+                </Button>
+              </Group>
+            )}
+          </Stack>
+        )}
+        <ErrorAlert error={error} />
+        {runs.data && runs.data.items.length > 0 && (
+          <Stack gap="xs">
+            <h3 className={classes.historyTitle}>{t('rotation.history')}</h3>
+            <Table.ScrollContainer minWidth={360}>
+              <Table aria-label={t('rotation.history')}>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>{t('rotation.col.planned')}</Table.Th>
+                    <Table.Th>{t('rotation.col.state')}</Table.Th>
+                    <Table.Th>
+                      <VisuallyHidden>{t('rotation.col.details')}</VisuallyHidden>
+                    </Table.Th>
                   </Table.Tr>
-                ))}
-              </Table.Tbody>
-            </Table>
-          </Table.ScrollContainer>
-        </Stack>
-      )}
-      {dialog === 'create' && <RotationPolicyDialog keyId={keyId} policy={null} onClose={() => setDialog(null)} />}
-      {dialog === 'edit' && p && <RotationPolicyDialog keyId={keyId} policy={p} onClose={() => setDialog(null)} />}
-      {dialog === 'preview' && p && (
-        <RotationPreviewDialog
-          policy={p}
-          onClose={() => setDialog(null)}
-          onStarted={(id) => {
-            setDialog(null);
-            refresh();
-            void client.invalidateQueries({ queryKey: ROTATION_RUNS_KEY });
-            void navigate(`/rotation/runs/${encodeURIComponent(id)}`);
-          }}
-        />
-      )}
-      {dialog === 'delete' && p && (
-        <AppModal opened onClose={() => setDialog(null)} title={t('rotation.delete')}>
-          <Stack gap="sm">
-            <Text size="sm">{t('rotation.deleteConfirm')}</Text>
-            <Group justify="flex-end">
+                </Table.Thead>
+                <Table.Tbody>
+                  {runs.data.items.map((r) => (
+                    <Table.Tr key={r.id}>
+                      <Table.Td>{formatDateTime(r.planned_for, i18n.language)}</Table.Td>
+                      <Table.Td>
+                        <StatusBadge tone={RUN_TONE[r.status] ?? 'neutral'} size="sm">
+                          {labelOf(t, i18n, 'rotation.status', r.status)}
+                        </StatusBadge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(r.id)}`}>
+                          {t('rotation.openRunLink')}
+                        </Anchor>
+                      </Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
+          </Stack>
+        )}
+        {dialog === 'create' && <RotationPolicyDialog keyId={keyId} policy={null} onClose={() => setDialog(null)} />}
+        {dialog === 'edit' && p && <RotationPolicyDialog keyId={keyId} policy={p} onClose={() => setDialog(null)} />}
+        {dialog === 'preview' && p && (
+          <RotationPreviewDialog
+            policy={p}
+            onClose={() => setDialog(null)}
+            onStarted={(id) => {
+              setDialog(null);
+              refresh();
+              void client.invalidateQueries({ queryKey: ROTATION_RUNS_KEY });
+              void navigate(`/rotation/runs/${encodeURIComponent(id)}`);
+            }}
+          />
+        )}
+        {dialog === 'delete' && p && (
+          <AppModal opened onClose={() => setDialog(null)} title={t('rotation.delete')}>
+            <Stack gap="sm">
+              <Text size="sm">{t('rotation.deleteConfirm')}</Text>
+            </Stack>
+            <DialogActions>
               <Button variant="default" onClick={() => setDialog(null)}>
                 {t('ui.cancel')}
               </Button>
-              <Button color="red.9" loading={deleting} onClick={() => void remove(p)}>
+              <Button color="red" loading={deleting} onClick={() => void remove(p)}>
                 {t('rotation.delete')}
               </Button>
-            </Group>
-          </Stack>
-        </AppModal>
-      )}
-    </Stack>
+            </DialogActions>
+          </AppModal>
+        )}
+      </Stack>
+    </Panel>
   );
 }

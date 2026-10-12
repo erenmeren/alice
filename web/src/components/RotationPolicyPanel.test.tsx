@@ -6,6 +6,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderWithStepUp } from '../test/render';
 import { server } from '../test/server';
 import { RotationPolicyPanel } from './RotationPolicyPanel';
+import ui from './ui/ui.module.css';
 
 type Role = 'admin' | 'operator' | 'auditor';
 
@@ -191,5 +192,55 @@ describe('RotationPolicyPanel', () => {
     expect(await screen.findByText('Her 90 günde bir')).toBeInTheDocument();
     expect(screen.getByText('Geçiş süresi: 7 gün')).toBeInTheDocument();
     expectNoRawKeys();
+  });
+
+  it('is the design panel: a titled section, the state as a badge in the history and a named link column', async () => {
+    world(policyFixture());
+    await panel();
+    const section = await screen.findByTestId('rotation-panel');
+    expect(section.tagName).toBe('SECTION');
+    expect(within(section).getByRole('heading', { name: 'Automatic rotation', level: 2 })).toBeInTheDocument();
+    const history = await within(section).findByRole('table', { name: 'Earlier runs' });
+    expect(within(history).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Planned for', 'State', 'Details']);
+    const badge = within(history).getAllByRole('row')[1].querySelector('.mantine-Badge-root')!;
+    expect(badge).toHaveAttribute('data-tone', 'success');
+    expect(within(history).getByRole('link', { name: 'Open' })).toHaveAttribute('href', `/rotation/runs/${RUN_ID}`);
+  });
+
+  it('confirms the deletion in a dialog with the design footer', async () => {
+    world(policyFixture());
+    await panel();
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete policy' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete policy' });
+    expect(within(dialog).getByRole('button', { name: 'Delete policy' }).parentElement).toHaveClass(ui.dialogActions);
+  });
+
+  it('keeps the policy when the deletion is refused and says why; Cancel leaves it alone', async () => {
+    world(policyFixture());
+    server.use(http.delete(`/api/v1/rotation/policies/${POLICY_ID}`, () => errorResponse(412, 'ALC-SYS-0008', 'system.precondition_failed')));
+    await panel();
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete policy' }));
+    let dialog = await screen.findByRole('dialog', { name: 'Delete policy' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete policy' })).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Delete policy' }));
+    dialog = await screen.findByRole('dialog', { name: 'Delete policy' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete policy' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Delete policy' })).not.toBeInTheDocument());
+    expect(await within(screen.getByTestId('rotation-panel')).findByRole('alert')).toBeInTheDocument();
+  });
+
+  it('opens and closes the edit and preview dialogs from the panel', async () => {
+    world(policyFixture());
+    server.use(http.post(`/api/v1/rotation/policies/${POLICY_ID}/actions/preview`, () => new Promise(() => {})));
+    await panel();
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const edit = await screen.findByRole('dialog', { name: 'Edit the rotation policy' });
+    await userEvent.click(within(edit).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit the rotation policy' })).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Preview next run' }));
+    const preview = await screen.findByRole('dialog', { name: 'Preview of the next run' });
+    await userEvent.click(within(preview).getAllByRole('button', { name: 'Close' }).at(-1)!);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Preview of the next run' })).not.toBeInTheDocument());
   });
 });

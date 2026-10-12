@@ -8,10 +8,12 @@ import { keyFiles, sshKey, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import { deployKey, getKeyFiles } from '../api/sshkeys';
 import type { JobError, Target } from '../api/types';
 import { useAbort } from '../api/useAbort';
+import { Icon } from '../design/Icon';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { ReasonAlert, noteText } from './rotationText';
 import { fieldErrorsOf } from './fieldErrors';
+import { DialogActions } from './ui';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 
 // isDeployable: a Linux or Nginx server Alice can sign in to and may change: the host key is confirmed and has not changed,
@@ -125,9 +127,9 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
           {t(result.key)}
           {result.note !== '' && <Text size="sm">{result.note}</Text>}
         </Alert>
-        <Group justify="flex-end">
+        <DialogActions>
           <Button onClick={onClose}>{t('ui.close')}</Button>
-        </Group>
+        </DialogActions>
       </Stack>
     );
 
@@ -207,15 +209,15 @@ function DeployForm({ keyId, onClose }: { keyId: string; onClose: () => void }) 
           </Alert>
         )}
         <JobErrorAlert error={jobError} />
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            {t('ui.cancel')}
-          </Button>
-          <Button type="submit" loading={busy} disabled={!ready}>
-            {t('sshKeys.deploySubmit')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={onClose}>
+          {t('ui.cancel')}
+        </Button>
+        <Button type="submit" leftSection={<Icon name="Rocket" size={15} />} loading={busy} disabled={!ready}>
+          {t('sshKeys.deploySubmit')}
+        </Button>
+      </DialogActions>
     </form>
   );
 }

@@ -1,4 +1,4 @@
-import { Alert, Button, Group, NativeSelect, NumberInput, Stack, TextInput } from '@mantine/core';
+import { Alert, Button, NativeSelect, NumberInput, Stack, TextInput } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,7 @@ import { KEY_TYPES } from '../api/sshkeys';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { fieldErrorsOf } from './fieldErrors';
+import { DialogActions } from './ui';
 
 interface Props {
   keyId: string;
@@ -159,15 +160,15 @@ function PolicyForm({ keyId, policy, onClose }: Props) {
           </Alert>
         )}
         {!notSaved && <ErrorAlert error={error} />}
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            {t('ui.cancel')}
-          </Button>
-          <Button type="submit" loading={busy}>
-            {t('rotation.save')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={onClose}>
+          {t('ui.cancel')}
+        </Button>
+        <Button type="submit" loading={busy}>
+          {t('rotation.save')}
+        </Button>
+      </DialogActions>
     </form>
   );
 }

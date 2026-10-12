@@ -7,6 +7,7 @@ import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { RotationPolicyDialog } from './RotationPolicyDialog';
+import ui from './ui/ui.module.css';
 
 beforeEach(() => server.use(...sessionHandlers(sessionFor('admin'))));
 
@@ -97,5 +98,13 @@ describe('RotationPolicyDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(await screen.findByText(/Your change was not saved because the policy changed in the meantime/)).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('puts Cancel and Save in the design footer, inside the form', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    await renderApp(<RotationPolicyDialog keyId="k1" policy={null} onClose={() => {}} />);
+    const submit = await screen.findByRole('button', { name: 'Save' });
+    expect(submit.parentElement).toHaveClass(ui.dialogActions);
+    expect(submit.closest('form')).not.toBeNull();
   });
 });

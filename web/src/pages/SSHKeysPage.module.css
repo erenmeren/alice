@@ -1,0 +1,30 @@
+/* The SSH key pages in the Clarity design (alice-design/dist/styles.css .toolbar, .resource-name, .resource-icon,
+   .detail-grid, .stack). Colors come from the --alice-* tokens only. */
+.search { flex: 1 1 220px; min-width: 0; }
+.select { flex: 0 1 180px; min-width: 140px; }
+.user { flex: 0 1 150px; min-width: 120px; }
+.switch { align-self: center; }
+.grow { flex: 1 1 0; }
+.resourceName { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.resourceText { min-width: 0; }
+.resourceIcon { width: 30px; height: 34px; display: grid; place-items: center; flex-shrink: 0; border-radius: var(--alice-radius-sm); background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
+.resourceIcon[data-platform] { background: var(--alice-brand-soft); color: var(--alice-brand); }
+.name { font-weight: 600; }
+.secondary { margin: 4px 0 0; font-size: 10px; color: var(--alice-text-muted); overflow-wrap: anywhere; }
+.mono { font-family: var(--mantine-font-family-monospace); font-size: 11px; }
+.badges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.note { margin: 0; font-size: 11px; color: var(--alice-text-muted); }
+.detailGrid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(290px, 1fr); gap: 20px; margin-top: 24px; }
+.stack { display: grid; gap: 20px; align-content: start; min-width: 0; }
+.publicKey { margin-top: 16px; display: grid; gap: 8px; }
+.label { font-size: 11px; font-weight: 550; color: var(--alice-text); }
+@media (max-width: 1199px) {
+  .detailGrid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+@media (max-width: 1020px) {
+  .detailGrid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 767px) {
+  .search, .select, .user { flex: 1 1 100%; }
+  .grow { display: none; }
+}

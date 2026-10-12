@@ -7,6 +7,7 @@ import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { noteText, skipText } from './rotationText';
 import { useStepUp } from './StepUpProvider';
+import { DialogActions } from './ui';
 import { WRAP } from './wrap';
 
 function ChangeCell({ a }: { a: PreviewAction }) {
@@ -177,29 +178,29 @@ function PreviewBody({ policy, onClose, onStarted }: { policy: Policy; onClose: 
             </Table.ScrollContainer>
           </>
         )}
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            {t('ui.close')}
-          </Button>
-          <Button onClick={() => setConfirming(true)} disabled={!preview || loading || preview.change_count === 0}>
-            {t('rotation.runNow')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={onClose}>
+          {t('ui.close')}
+        </Button>
+        <Button onClick={() => setConfirming(true)} disabled={!preview || loading || preview.change_count === 0}>
+          {t('rotation.runNow')}
+        </Button>
+      </DialogActions>
       {confirming && (
         <AppModal opened onClose={() => !starting && setConfirming(false)} title={t('rotation.runConfirmTitle')} centered zIndex={400}>
           <Stack gap="sm">
             <Text size="sm">{t('rotation.previewIntro')}</Text>
             <ErrorAlert error={startError} />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={() => setConfirming(false)} disabled={starting}>
-                {t('ui.cancel')}
-              </Button>
-              <Button loading={starting} onClick={() => void start()}>
-                {t('rotation.runConfirm')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={() => setConfirming(false)} disabled={starting}>
+              {t('ui.cancel')}
+            </Button>
+            <Button loading={starting} onClick={() => void start()}>
+              {t('rotation.runConfirm')}
+            </Button>
+          </DialogActions>
         </AppModal>
       )}
     </>

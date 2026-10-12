@@ -1,12 +1,14 @@
-import { Alert, Button, Group, Radio, Stack, TextInput } from '@mantine/core';
+import { Alert, Button, Radio, Stack, TextInput } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SSH_KEYS_KEY } from '../api/queryKeys';
 import { generateKey, KEY_TYPES, type KeyType } from '../api/sshkeys';
+import { Icon } from '../design/Icon';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { fieldErrorsOf } from './fieldErrors';
+import { DialogActions, Notice } from './ui';
 
 function GenerateForm({ onClose, onGenerated }: { onClose: () => void; onGenerated: (id: string) => void }) {
   const { t, i18n } = useTranslation();
@@ -40,9 +42,9 @@ function GenerateForm({ onClose, onGenerated }: { onClose: () => void; onGenerat
         <Alert color="green" role="status">
           {t('sshKeys.generated')}
         </Alert>
-        <Group justify="flex-end">
+        <DialogActions>
           <Button onClick={onClose}>{t('ui.close')}</Button>
-        </Group>
+        </DialogActions>
       </Stack>
     );
 
@@ -67,16 +69,20 @@ function GenerateForm({ onClose, onGenerated }: { onClose: () => void; onGenerat
             ))}
           </Stack>
         </Radio.Group>
+        {/* The design's note: the private key never reaches this page (only an Administrator's step-up download). */}
+        <Notice tone="info" title={t('sshKeys.page.generateNoteTitle')}>
+          {t('sshKeys.page.generateNoteText')}
+        </Notice>
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            {t('ui.cancel')}
-          </Button>
-          <Button type="submit" loading={busy} disabled={label.trim() === ''}>
-            {t('sshKeys.generateSubmit')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={onClose}>
+          {t('ui.cancel')}
+        </Button>
+        <Button type="submit" leftSection={<Icon name="KeyRound" size={15} />} loading={busy} disabled={label.trim() === ''}>
+          {t('sshKeys.generateSubmit')}
+        </Button>
+      </DialogActions>
     </form>
   );
 }

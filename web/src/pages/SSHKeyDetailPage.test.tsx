@@ -64,6 +64,36 @@ describe('SSHKeyDetailPage', () => {
     expect(screen.queryByRole('button', { name: /^Remove key from/ })).not.toBeInTheDocument();
   });
 
+  it('has the design header, the locations panel and the public identity facts', async () => {
+    onKey('operator');
+    await renderRoute(`/ssh-keys/${key.id}`);
+    const h1 = await screen.findByRole('heading', { name: 'SSH key', level: 1 });
+    const header = h1.closest('header')!;
+    expect(within(header).getByText(/ssh-ed25519, 256 bits/)).toBeInTheDocument();
+    expect(within(header).getByText(/Discovered on a server/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to SSH keys' })).toHaveAttribute('href', '/ssh-keys');
+    const locations = screen.getByTestId('key-locations');
+    expect(locations).toHaveAccessibleName('Where this key is used');
+    expect(screen.getByText('The exact account and file on each server.')).toBeInTheDocument();
+    // The first cell of a location row is the server; the user follows.
+    const firstRow = within(locations).getAllByRole('row')[1];
+    expect(within(firstRow).getAllByRole('cell')[0]).toHaveTextContent('web-01');
+    const facts = screen.getByLabelText('Public identity');
+    expect(within(facts).getByText(key.fingerprint).tagName).toBe('CODE');
+    expect(within(facts).getByText('Not held by Alice')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Public identity', level: 2 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy public key' })).toBeInTheDocument();
+    const note = screen.getByText('Review before removing').closest('[role="note"]')!;
+    expect(note).toHaveTextContent('Removal applies to one selected location. A shared key can still exist on other servers.');
+  });
+
+  it('warns about a weak key and keeps the removal note from an Auditor', async () => {
+    onKey('auditor', { ...key, weak: true, key_type: 'ssh-rsa', bits: 1024 });
+    await renderRoute(`/ssh-keys/${key.id}`);
+    expect(await screen.findByText('Weak algorithm detected')).toBeInTheDocument();
+    expect(screen.queryByText('Review before removing')).not.toBeInTheDocument();
+  });
+
   it('shows the error when the key cannot be loaded', async () => {
     server.use(...sessionHandlers(sessionFor('admin')), http.get('/api/v1/ssh-keys/:id', () => errorResponse(404, 'ALC-SYS-0001', 'system.not_found')));
     await renderRoute(`/ssh-keys/${key.id}`);
@@ -122,6 +152,11 @@ describe('SSHKeyDetailPage', () => {
       expect(screen.getByRole('button', { name: 'Deploy to a server' })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Download private key' })).toBeInTheDocument();
       expect(screen.queryByText('Retired')).not.toBeInTheDocument();
+      // Both are the page's actions (design header), Deploy first: the keyboard goes from Deploy to Download with Tab.
+      const header = screen.getByRole('heading', { name: 'SSH key', level: 1 }).closest('header')!;
+      expect(within(header).getAllByRole('button').map((b) => b.textContent)).toEqual(['Deploy to a server', 'Download private key']);
+      expect(within(header).getByText(/Managed by Alice/)).toBeInTheDocument();
+      expect(within(screen.getByLabelText('Public identity')).getByText('Held by Alice. It is never displayed on this page.')).toBeInTheDocument();
     });
 
     it('says "Downloaded 1 time" in the singular', async () => {
