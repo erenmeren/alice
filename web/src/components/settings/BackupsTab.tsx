@@ -216,7 +216,7 @@ function StateNotices({ state }: { state: BackupState }) {
         </Notice>
       )}
       {!state.configured && <Notice tone="warning" title={t('backups.notConfigured')} />}
-      {state.failing && <Notice tone="warning" title={t('backups.failing')} />}
+      {state.failing && <Notice tone="danger" title={t('backups.failing')} />}
     </>
   );
 }

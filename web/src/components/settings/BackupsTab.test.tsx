@@ -142,7 +142,10 @@ describe('BackupsTab', () => {
     expect(screen.getAllByText('No successful backup for 48 hours').length).toBeGreaterThan(0);
     expect(screen.getByText('No backup has been made yet.').closest(`.${classes.microCard}`)).not.toBeNull();
     expect(screen.getByText('There are no backup files yet.').closest(`.${ui.tablePanel}`)).not.toBeNull();
-    expect(screen.getByText('The last backup failed. Alice e-mailed the administrators.').closest('[role="note"]')).not.toBeNull();
+    // A failed backup is a failure (danger tone) but a standing state, so a note, not an alert.
+    const failed = screen.getByText('The last backup failed. Alice e-mailed the administrators.').closest('[role="note"]') as HTMLElement;
+    expect(failed).not.toBeNull();
+    expect(failed.getAttribute('style')).toContain('--alert-bg: var(--alice-danger-soft)');
   });
 
   it('backs up now and reads the list again', async () => {
