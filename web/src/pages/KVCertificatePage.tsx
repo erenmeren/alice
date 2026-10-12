@@ -259,9 +259,12 @@ export function KVCertificatePage() {
           <Panel title={t('vaults.page.policy')}>
             <FactList facts={policy} label={t('vaults.cert.policyTitle')} />
           </Panel>
-          <Notice tone="brand" title={t('vaults.page.autoDeployTitle')}>
-            {t('vaults.page.autoDeployText')}
-          </Notice>
+          {/* A monitor-only certificate cannot be connected, so it has no automatic deployment to decide. */}
+          {!monitorOnly && (
+            <Notice tone="brand" title={t('vaults.page.autoDeployTitle')}>
+              {t('vaults.page.autoDeployText')}
+            </Notice>
+          )}
         </div>
       </div>
 

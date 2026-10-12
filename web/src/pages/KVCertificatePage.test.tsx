@@ -50,6 +50,8 @@ describe('KVCertificatePage', () => {
     setup('operator', kvCertificateDetailFixture({ exportable: false, versions: [kvVersionFixture({ exportable: false })] }));
     await renderRoute(PATH);
     expect(await screen.findByText(/Monitor only: this certificate's private key cannot be exported/)).toBeInTheDocument();
+    // No connection is possible, so neither is automatic deployment: its notice is not shown.
+    expect(screen.queryByText('Automatic deployment is an administrator decision')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Connect websites' })).toBeDisabled();
   });
 
