@@ -341,7 +341,10 @@ describe('sign-in page design', () => {
     expect(within(main).getByRole('heading', { level: 1, name: 'Sign in to Alice' })).toBeInTheDocument();
     expect(within(main).getByText('Sign in with your Alice account.')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1);
-    expect(within(main).getByText('Protected with multi-factor authentication')).toBeInTheDocument();
+    // The MFA note belongs to the password form only: single sign-on is not protected by Alice's MFA (owner ruling).
+    const note = within(main).getByText('Protected with multi-factor authentication');
+    expect(note.compareDocumentPosition(screen.getByText('or')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(screen.getByRole('button', { name: 'Sign in with Corp IdP' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(main).getByRole('button', { name: 'Switch color mode' })).toBeInTheDocument();
     expect(screen.getByRole('complementary', { name: 'Alice' })).toBeInTheDocument();
     expectNoRawKeys();
@@ -355,6 +358,7 @@ describe('sign-in page design', () => {
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
     expect(screen.queryByText('Sign in with your Alice account.')).not.toBeInTheDocument();
     expect(screen.getByLabelText('6-digit code')).toHaveFocus();
+    expect(screen.queryByText('Protected with multi-factor authentication')).not.toBeInTheDocument();
   });
 
   it('shows the enrollment in the wide form, keeps it after a wrong code and finishes without codes to show', async () => {

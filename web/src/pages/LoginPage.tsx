@@ -260,11 +260,15 @@ export function LoginPage() {
         {phase === 'enroll' && enrollment && <TotpEnrollment enrollment={enrollment} onVerify={verifyEnrollment} />}
         {phase === 'codes' && withCodes && <RecoveryCodes codes={withCodes.recovery_codes ?? []} onContinue={() => finish(withCodes)} />}
       </Stack>
+      {/* Under the password form only: Alice does not enforce MFA for single sign-on (the identity provider does), so the
+          note never sits under the SSO buttons (owner ruling on review M-3). */}
+      {phase === 'password' && (
+        <p className={classes.note}>
+          <Icon name="LockKeyhole" size={14} />
+          {t('login.mfaNote')}
+        </p>
+      )}
       {phase === 'password' && <SSOButtons returnTo={returnTo} onError={setError} />}
-      <p className={classes.note}>
-        <Icon name="LockKeyhole" size={14} />
-        {t('login.mfaNote')}
-      </p>
     </AuthLayout>
   );
 }
