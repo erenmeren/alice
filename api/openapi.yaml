@@ -2540,8 +2540,9 @@ paths:
       operationId: putSMTPSettings
       summary: Set the mail server (If-Match with the ETag is required; "0" for the first save)
       description: >-
-        Keys are matched exactly. password: absent or null keeps the stored one, "" removes it, any other value replaces
-        it; it is stored sealed and never returned or logged. A user name needs a password: with a user name and no
+        Keys are matched exactly. Every key but password must be present: an omitted one is 422 with
+        validation.required on that field and nothing is stored (null is 400). password: absent or null keeps the stored
+        one, "" removes it, any other value replaces it; it is stored sealed and never returned or logged. A user name needs a password: with a user name and no
         stored or new password the answer is 422 with validation.required on password. 412 ALC-SYS-0008 when the
         If-Match header is missing (answered first, before the body is read) or names another version. Changing the
         server name or port forgets a certificate a test e-mail saw. Works while the license is expired.
@@ -2688,7 +2689,8 @@ paths:
       summary: Set the recipients (If-Match required; "0" for the first save)
       description: >-
         At most 20 extra addresses, each a bare address with the language of what is sent to it; at least one source
-        (administrators or an address). Each address object has exactly the keys email and locale.
+        (administrators or an address). Each address object has exactly the keys email and locale. Both keys must be
+        present: an omitted one is 422 with validation.required on that field and nothing is stored (null is 400).
       x-permission: settings.manage
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
@@ -2771,6 +2773,9 @@ paths:
     put:
       operationId: putGeneralSettings
       summary: Set the general settings (If-Match required; "0" for the first save)
+      description: >-
+        Both keys must be present: an omitted one is 422 with validation.required on that field and nothing is stored
+        (null is 400).
       x-permission: settings.manage
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }

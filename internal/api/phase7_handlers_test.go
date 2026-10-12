@@ -2,8 +2,10 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -810,4 +812,72 @@ func TestHeadOnAuditedExportsIsRefused(t *testing.T) {
 	assert.Zero(t, fa.Count("audit.exported"))
 	assert.Equal(t, http.StatusOK, callWith(h, http.MethodHead, "/api/v1/dashboard/summary", "admin", "", nil).Code,
 		"other reads still answer HEAD")
+}
+
+// Review L-7: every key the schema marks required must be present. An omitted one is a 422 "required" on that field and
+// nothing is saved, instead of a zero value that switches mail authentication off, clears the pinned CA bundle, stops
+// the Administrators' e-mails or blanks public_url. null is no value of these fields (400).
+func TestSettingsPutsRequireTheirKeys(t *testing.T) {
+	d, fm, _, _ := phase7Deps(t)
+	s := newServer(d)
+	h := s.handler(s.apiRoutes())
+	saved := 0
+	fm.SaveSMTPFn = func(context.Context, audit.Actor, int, notify.SMTPInput) (notify.SMTPSettings, error) {
+		saved++
+		return notify.SMTPSettings{}, nil
+	}
+	fm.SaveRecipientsFn = func(context.Context, audit.Actor, int, notify.Recipients) (notify.Recipients, error) {
+		saved++
+		return notify.Recipients{}, nil
+	}
+	fm.SaveGeneralFn = func(context.Context, audit.Actor, int, settings.General) (settings.General, error) {
+		saved++
+		return settings.General{}, nil
+	}
+	v := map[string]string{"If-Match": `"1"`}
+	missing := func(rec *httptest.ResponseRecorder) map[string]string {
+		t.Helper()
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+		var body struct {
+			Error struct {
+				Details []struct{ Field, Code string } `json:"details"`
+			} `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		out := map[string]string{}
+		for _, f := range body.Error.Details {
+			out[f.Field] = f.Code
+		}
+		return out
+	}
+	req := validate.Required
+	assert.Equal(t, map[string]string{"username": req, "ca_pem": req},
+		missing(callWith(h, http.MethodPut, "/api/v1/settings/smtp", "admin-stepup", `{"host":"smtp.x","port":587,"tls_mode":"starttls","from":"a@b.c"}`, v)))
+	assert.Equal(t, map[string]string{"host": req, "port": req, "tls_mode": req, "from": req, "username": req, "ca_pem": req},
+		missing(callWith(h, http.MethodPut, "/api/v1/settings/smtp", "admin-stepup", `{"password":"x"}`, v)))
+	assert.Equal(t, map[string]string{"administrators": req},
+		missing(callWith(h, http.MethodPut, "/api/v1/settings/notifications", "admin-stepup", `{"addresses":[]}`, v)))
+	assert.Equal(t, map[string]string{"addresses": req},
+		missing(callWith(h, http.MethodPut, "/api/v1/settings/notifications", "admin-stepup", `{"administrators":true}`, v)))
+	assert.Equal(t, map[string]string{"public_url": req},
+		missing(callWith(h, http.MethodPut, "/api/v1/settings/general", "admin-stepup", `{"retired_key_retention_days":30}`, v)))
+	assert.Equal(t, map[string]string{"public_url": req, "retired_key_retention_days": req},
+		missing(callWith(h, http.MethodPut, "/api/v1/settings/general", "admin-stepup", `{}`, v)))
+	for path, body := range map[string]string{
+		"/api/v1/settings/smtp":          `{"host":"smtp.x","port":587,"tls_mode":"starttls","from":"a@b.c","username":null,"ca_pem":""}`,
+		"/api/v1/settings/notifications": `{"administrators":null,"addresses":[]}`,
+		"/api/v1/settings/general":       `{"public_url":"https://a.example.com","retired_key_retention_days":null}`,
+	} {
+		assert.Equal(t, http.StatusBadRequest, callWith(h, http.MethodPut, path, "admin-stepup", body, v).Code, path)
+	}
+	assert.Zero(t, saved, "nothing was saved")
+
+	// Every key present: saved, and the password stays optional.
+	assert.Equal(t, http.StatusOK, callWith(h, http.MethodPut, "/api/v1/settings/smtp", "admin-stepup",
+		`{"host":"smtp.x","port":587,"tls_mode":"starttls","from":"a@b.c","username":"","ca_pem":""}`, v).Code)
+	assert.Equal(t, http.StatusOK, callWith(h, http.MethodPut, "/api/v1/settings/notifications", "admin-stepup",
+		`{"administrators":false,"addresses":[]}`, v).Code)
+	assert.Equal(t, http.StatusOK, callWith(h, http.MethodPut, "/api/v1/settings/general", "admin-stepup",
+		`{"public_url":"","retired_key_retention_days":30}`, v).Code)
+	assert.Equal(t, 3, saved)
 }

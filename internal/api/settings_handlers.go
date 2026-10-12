@@ -11,6 +11,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/internal/platform/settings"
+	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
 )
@@ -85,13 +86,32 @@ func (s *server) writeSMTP(w http.ResponseWriter, st notify.SMTPSettings, config
 // smtpBody is the mail settings change. The password is a secretText the handler zeroes: absent or null keeps the
 // stored one, "" removes it, any other value replaces it (C13). It never appears in an answer (S-08).
 type smtpBody struct {
-	Host     string      `json:"host"`
-	Port     int         `json:"port"`
-	TLSMode  string      `json:"tls_mode"`
-	From     string      `json:"from"`
-	Username string      `json:"username"`
+	Host     opt[string] `json:"host"`
+	Port     opt[int]    `json:"port"`
+	TLSMode  opt[string] `json:"tls_mode"`
+	From     opt[string] `json:"from"`
+	Username opt[string] `json:"username"`
 	Password *secretText `json:"password"`
-	CAPEM    string      `json:"ca_pem"`
+	CAPEM    opt[string] `json:"ca_pem"`
+}
+
+// present is one key of a settings body that the schema marks required, and whether the body had it.
+type present struct {
+	key string
+	set bool
+}
+
+// requireKeys is the 422 for every required key a settings body left out: a missing key is never read as its zero
+// value, which would switch mail authentication off, clear the pinned CA bundle, stop the Administrators' e-mails or
+// blank public_url (review L-7). nil when every key is there.
+func requireKeys(keys ...present) error {
+	var v validate.Errors
+	for _, k := range keys {
+		if !k.set {
+			v.Add(k.key, validate.Required, nil)
+		}
+	}
+	return v.Err()
 }
 
 func (b *smtpBody) zero() {
@@ -112,7 +132,13 @@ func (s *server) putSMTP(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExact(w, r, &req, maxSMTPBody, "host", "port", "tls_mode", "from", "username", "password", "ca_pem") {
 		return
 	}
-	in := notify.SMTPInput{Host: req.Host, Port: req.Port, TLSMode: req.TLSMode, From: req.From, Username: req.Username, CAPEM: req.CAPEM}
+	if err := requireKeys(present{"host", req.Host.Set}, present{"port", req.Port.Set}, present{"tls_mode", req.TLSMode.Set},
+		present{"from", req.From.Set}, present{"username", req.Username.Set}, present{"ca_pem", req.CAPEM.Set}); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	in := notify.SMTPInput{Host: req.Host.Value, Port: req.Port.Value, TLSMode: req.TLSMode.Value, From: req.From.Value,
+		Username: req.Username.Value, CAPEM: req.CAPEM.Value}
 	if req.Password != nil {
 		pw := secrets.NewPlaintext(*req.Password)
 		in.Password = &pw
@@ -218,14 +244,18 @@ func (s *server) putRecipients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Administrators bool              `json:"administrators"`
-		Addresses      []json.RawMessage `json:"addresses"`
+		Administrators opt[bool]              `json:"administrators"`
+		Addresses      opt[[]json.RawMessage] `json:"addresses"`
 	}
 	if !s.decodeExact(w, r, &req, maxRecipientsBody, "administrators", "addresses") {
 		return
 	}
-	in := notify.Recipients{Administrators: req.Administrators}
-	for _, raw := range req.Addresses {
+	if err := requireKeys(present{"administrators", req.Administrators.Set}, present{"addresses", req.Addresses.Set}); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	in := notify.Recipients{Administrators: req.Administrators.Value}
+	for _, raw := range req.Addresses.Value {
 		var a addressDTO
 		if _, ok := scanKeys(raw, func(k []byte, earlier []string) (string, bool) { return exactKey(k, addressKeys, earlier) }); !ok ||
 			json.Unmarshal(raw, &a) != nil {
@@ -294,14 +324,18 @@ func (s *server) putGeneral(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		PublicURL string `json:"public_url"`
-		Days      int    `json:"retired_key_retention_days"`
+		PublicURL opt[string] `json:"public_url"`
+		Days      opt[int]    `json:"retired_key_retention_days"`
 	}
 	if !s.decodeExact(w, r, &req, maxSettingsBody, "public_url", "retired_key_retention_days") {
 		return
 	}
+	if err := requireKeys(present{"public_url", req.PublicURL.Set}, present{"retired_key_retention_days", req.Days.Set}); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	g, err := s.deps.Mail.SaveGeneral(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), version,
-		settings.General{PublicURL: req.PublicURL, RetiredKeyRetentionDays: req.Days})
+		settings.General{PublicURL: req.PublicURL.Value, RetiredKeyRetentionDays: req.Days.Value})
 	if err != nil {
 		s.fail(w, r, err)
 		return
