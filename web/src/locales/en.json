@@ -1,6 +1,5 @@
 {
   "home": {
-    "title": "Welcome, {{name}}",
     "subtitle": "Alice keeps track of your TLS certificates and SSH keys.",
     "serverChecking": "Checking the server…",
     "serverVersion": "Server version: {{version}}",
@@ -26,11 +25,11 @@
     "openMenu": "Open navigation",
     "closeMenu": "Close navigation",
     "home": "Home",
-    "users": "Users",
-    "audit": "Audit log",
+    "users": "People & access",
+    "audit": "Audit trail",
     "license": "License",
     "tokens": "API tokens",
-    "account": "My account",
+    "account": "Your account",
     "servers": "Servers",
     "sshKeys": "SSH keys",
     "signOutFailed": "Could not sign you out. Try again.",
@@ -39,10 +38,16 @@
     "setupBannerFinish": "Finish setting up: open the setup wizard to confirm the last step.",
     "setupBannerLicense": "Finish setting up: add a license or start the evaluation.",
     "certificates": "Certificates",
-    "deployments": "Deployment history",
+    "deployments": "Deployments",
     "keyVaults": "Key Vaults",
-    "dashboard": "Dashboard",
-    "settings": "Settings"
+    "dashboard": "Overview",
+    "settings": "Settings",
+    "rotations": "Key rotations",
+    "groups": {
+      "inventory": "Inventory",
+      "operations": "Operations",
+      "administration": "Administration"
+    }
   },
   "ui": {
     "loading": "Loading…",
@@ -164,7 +169,7 @@
     }
   },
   "account": {
-    "title": "My account",
+    "title": "Your account",
     "summary": "Signed in as {{username}} ({{role}})",
     "languageHelp": "Use the language switcher at the top of the page. Your choice is saved on your account.",
     "password": {
@@ -228,7 +233,7 @@
     },
     "done": {
       "title": "Alice is ready",
-      "help": "Your administrator account and recovery passphrase are set. Next, add the people who will use Alice on the Users page.",
+      "help": "Your administrator account and recovery passphrase are set. Next, add the people who will use Alice on the People & access page.",
       "button": "Go to the dashboard"
     },
     "license": {
@@ -280,7 +285,7 @@
     }
   },
   "users": {
-    "title": "Users",
+    "title": "People & access",
     "add": "Add user",
     "create": "Create user",
     "save": "Save changes",
@@ -380,7 +385,7 @@
     }
   },
   "audit": {
-    "title": "Audit log",
+    "title": "Audit trail",
     "verify": "Verify integrity",
     "intact": "The audit log is intact.",
     "broken": "Audit log integrity problem at entry {{seq}}.",
@@ -1518,7 +1523,7 @@
     "serverOperationPending": "The new certificate was not written. An unfinished earlier change on the server blocks these files; see below."
   },
   "deployments": {
-    "title": "Deployment history",
+    "title": "Deployments",
     "intro": "Every certificate deployment with its result. Open one to see each step.",
     "tableLabel": "Deployments",
     "columns": {
@@ -2153,8 +2158,7 @@
     "overlapOnHold": "The overlap is on hold: it resumes after you choose Continue, with the time that was left."
   },
   "dashboard": {
-    "title": "Dashboard",
-    "welcome": "Welcome, {{name}}",
+    "title": "Overview",
     "expiringSoon": "Expiring soon",
     "expired": "Expired",
     "within7": "Within 7 days",
@@ -2172,7 +2176,7 @@
     "auditHead": "Audit log head",
     "auditHeadHelp": "Write down this value regularly outside Alice: it lets you prove later that no entry was removed.",
     "kvExpiring": "Key Vault keys and secrets expiring within 30 days: {{count}}",
-    "auditBroken": "The last check found an integrity problem in the audit log. Open the Audit log and verify it.",
+    "auditBroken": "The last check found an integrity problem in the audit log. Open the Audit trail and verify it.",
     "noFailed": "No deployment failed in the last 7 days.",
     "failedCount": "Failed deployments: {{count}}",
     "noTargets": "No servers or vaults are connected yet.",
@@ -2212,7 +2216,7 @@
   },
   "notifications": {
     "failingTitle": "E-mails could not be sent",
-    "failingBody": "The last {{count}} attempts to send an e-mail failed. Last error: {{code}}. Alerts are still shown on the Dashboard.",
+    "failingBody": "The last {{count}} attempts to send an e-mail failed. Last error: {{code}}. Alerts are still shown on the Overview.",
     "openSettings": "Open the mail settings"
   },
   "filters": {
@@ -2392,7 +2396,7 @@
     },
     "created": "Backup made: {{name}}",
     "failing": "The last backup failed. Alice e-mailed the administrators.",
-    "alarmHelp": "Check the free disk space and the Audit log, then choose Back up now."
+    "alarmHelp": "Check the free disk space and the Audit trail, then choose Back up now."
   },
   "https": {
     "temporary": "Alice is using a temporary certificate. Browsers will warn until you upload your own.",
@@ -2451,5 +2455,24 @@
     "cursor": "Number of the last entry sent: {{seq}}",
     "lastError": "Last problem ({{time}}): {{problem}}",
     "unknownError": "error code {{code}}"
+  },
+  "shell": {
+    "skip": "Skip to content",
+    "workspace": "Workspace",
+    "details": "Details",
+    "installation": "Self-hosted installation",
+    "versionLine": "Version {{version}}",
+    "footer": "Self-hosted · Alice {{version}}",
+    "search": {
+      "open": "Search pages",
+      "title": "Go to a page",
+      "placeholder": "Find a page…",
+      "hint": "Only pages you can open · Enter opens the first · Esc closes",
+      "empty": "No page matches."
+    },
+    "attention": {
+      "open": "View attention items",
+      "overview": "Open the overview"
+    }
   }
 }

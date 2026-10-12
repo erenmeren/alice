@@ -1,6 +1,5 @@
 {
   "home": {
-    "title": "Hoş geldiniz, {{name}}",
     "subtitle": "Alice, TLS sertifikalarınızı ve SSH anahtarlarınızı takip eder.",
     "serverChecking": "Sunucu kontrol ediliyor…",
     "serverVersion": "Sunucu sürümü: {{version}}",
@@ -26,11 +25,11 @@
     "openMenu": "Gezinmeyi aç",
     "closeMenu": "Gezinmeyi kapat",
     "home": "Ana sayfa",
-    "users": "Kullanıcılar",
+    "users": "Kişiler ve erişim",
     "audit": "Denetim kaydı",
     "license": "Lisans",
     "tokens": "API anahtarları",
-    "account": "Hesabım",
+    "account": "Hesabınız",
     "servers": "Sunucular",
     "sshKeys": "SSH anahtarları",
     "signOutFailed": "Oturumunuz kapatılamadı. Tekrar deneyin.",
@@ -39,10 +38,16 @@
     "setupBannerFinish": "Kurulumu tamamlayın: son adımı onaylamak için kurulum sihirbazını açın.",
     "setupBannerLicense": "Kurulumu tamamlayın: bir lisans ekleyin veya denemeyi başlatın.",
     "certificates": "Sertifikalar",
-    "deployments": "Dağıtım geçmişi",
+    "deployments": "Dağıtımlar",
     "keyVaults": "Key Vault kasaları",
-    "dashboard": "Pano",
-    "settings": "Ayarlar"
+    "dashboard": "Genel bakış",
+    "settings": "Ayarlar",
+    "rotations": "Anahtar rotasyonları",
+    "groups": {
+      "inventory": "Envanter",
+      "operations": "Operasyon",
+      "administration": "Yönetim"
+    }
   },
   "ui": {
     "loading": "Yükleniyor…",
@@ -164,7 +169,7 @@
     }
   },
   "account": {
-    "title": "Hesabım",
+    "title": "Hesabınız",
     "summary": "Oturum açan: {{username}} ({{role}})",
     "languageHelp": "Sayfanın üstündeki dil seçiciyi kullanın. Seçiminiz hesabınıza kaydedilir.",
     "password": {
@@ -228,7 +233,7 @@
     },
     "done": {
       "title": "Alice hazır",
-      "help": "Yönetici hesabınız ve kurtarma parolanız ayarlandı. Şimdi Kullanıcılar sayfasından Alice'i kullanacak kişileri ekleyin.",
+      "help": "Yönetici hesabınız ve kurtarma parolanız ayarlandı. Şimdi Kişiler ve erişim sayfasından Alice'i kullanacak kişileri ekleyin.",
       "button": "Ana sayfaya git"
     },
     "license": {
@@ -280,7 +285,7 @@
     }
   },
   "users": {
-    "title": "Kullanıcılar",
+    "title": "Kişiler ve erişim",
     "add": "Kullanıcı ekle",
     "create": "Kullanıcıyı oluştur",
     "save": "Değişiklikleri kaydet",
@@ -1518,7 +1523,7 @@
     "serverOperationPending": "Yeni sertifika yazılmadı. Sunucudaki tamamlanmamış önceki bir değişiklik bu dosyaları engelliyor; ayrıntılar aşağıda."
   },
   "deployments": {
-    "title": "Dağıtım geçmişi",
+    "title": "Dağıtımlar",
     "intro": "Sonuçlarıyla birlikte tüm sertifika dağıtımları. Her adımı görmek için birini açın.",
     "tableLabel": "Dağıtımlar",
     "columns": {
@@ -2153,8 +2158,7 @@
     "overlapOnHold": "Geçiş süresi beklemede: Devam et'i seçtiğinizde, kalan süreyle birlikte yeniden başlar."
   },
   "dashboard": {
-    "title": "Pano",
-    "welcome": "Hoş geldiniz, {{name}}",
+    "title": "Genel bakış",
     "expiringSoon": "Süresi yakında dolacaklar",
     "expired": "Süresi doldu",
     "within7": "7 gün içinde",
@@ -2191,7 +2195,7 @@
       "where": "Nerede",
       "expires": "Süresi dolar"
     },
-    "loadFailed": "Pano yüklenemedi.",
+    "loadFailed": "Genel bakış yüklenemedi.",
     "checklist": {
       "title": "Kurulumu tamamlayın",
       "passphrase": "Kurtarma parolasını belirleyin",
@@ -2212,7 +2216,7 @@
   },
   "notifications": {
     "failingTitle": "E-postalar gönderilemedi",
-    "failingBody": "Son {{count}} e-posta gönderme denemesi başarısız oldu. Son hata: {{code}}. Uyarılar Pano'da gösterilmeye devam ediyor.",
+    "failingBody": "Son {{count}} e-posta gönderme denemesi başarısız oldu. Son hata: {{code}}. Uyarılar Genel bakış sayfasında gösterilmeye devam ediyor.",
     "openSettings": "Posta ayarlarını aç"
   },
   "filters": {
@@ -2451,5 +2455,24 @@
     "cursor": "Son gönderilen kaydın numarası: {{seq}}",
     "lastError": "Son sorun ({{time}}): {{problem}}",
     "unknownError": "hata kodu {{code}}"
+  },
+  "shell": {
+    "skip": "İçeriğe geç",
+    "workspace": "Çalışma alanı",
+    "details": "Ayrıntılar",
+    "installation": "Kurum içi kurulum",
+    "versionLine": "Sürüm {{version}}",
+    "footer": "Kendi sunucunuzda · Alice {{version}}",
+    "search": {
+      "open": "Sayfalarda ara",
+      "title": "Bir sayfaya gidin",
+      "placeholder": "Bir sayfa bulun…",
+      "hint": "Yalnızca açabileceğiniz sayfalar · Enter ilkini açar · Esc kapatır",
+      "empty": "Eşleşen sayfa yok."
+    },
+    "attention": {
+      "open": "İlgi bekleyenleri gör",
+      "overview": "Genel bakışı aç"
+    }
   }
 }
