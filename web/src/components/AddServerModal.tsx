@@ -11,7 +11,9 @@ import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { HostKeyConfirm } from './HostKeyConfirm';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert } from './JobErrorAlert';
+import { DialogActions } from './ui';
 import { WRAP } from './wrap';
+import { Icon } from '../design/Icon';
 
 // form: nothing exists yet. working: a request or a job is running. confirm: waiting for the
 // Administrator's comparison. failed: the server exists but the check did not succeed (the dialog
@@ -182,8 +184,12 @@ export function AddServerModal({
             <NumberInput label={t('targets.form.port')} value={port} onChange={setPort} min={1} max={65535} allowDecimal={false} required />
             <TextInput label={t('targets.form.username')} value={username} onChange={(e) => setUsername(e.currentTarget.value)} required maxLength={32} />
             {problem}
-            <Button type="submit">{t('targets.form.submit')}</Button>
           </Stack>
+          <DialogActions>
+            <Button type="submit" rightSection={<Icon name="ArrowRight" size={15} />}>
+              {t('targets.form.submit')}
+            </Button>
+          </DialogActions>
         </form>
       )}
       {phase === 'confirm' && target && candidate && (
@@ -198,12 +204,12 @@ export function AddServerModal({
           {error !== null && problem}
           <JobErrorAlert error={jobError} />
           {!blocked && error === null && <Text size="sm">{t('targets.failedHelp')}</Text>}
-          <Group justify="flex-end">
+          <DialogActions>
             <Button variant="default" onClick={close}>
               {t('ui.close')}
             </Button>
             {!onFailedClose && <Button onClick={openServer}>{t('targets.openServer')}</Button>}
-          </Group>
+          </DialogActions>
         </Stack>
       )}
     </AppModal>
@@ -227,7 +233,7 @@ function ProfileScript({ type }: { type: ServerType }) {
       </Code>
       <CopyButton value={script}>
         {({ copied, copy }) => (
-          <Button size="xs" variant="light" onClick={copy} w="fit-content">
+          <Button size="xs" variant="light" onClick={copy} w="fit-content" leftSection={<Icon name={copied ? 'Check' : 'Copy'} size={14} />}>
             {copied ? t('targets.prepare.copied') : t('targets.prepare.copy')}
           </Button>
         )}

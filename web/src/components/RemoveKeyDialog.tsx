@@ -10,6 +10,7 @@ import { useAuth } from '../auth/AuthProvider';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
+import { DialogActions } from './ui';
 import { WRAP } from './wrap';
 
 // RemoveKeyDialog removes one key from one authorized_keys file through the sshkey.remove job.
@@ -79,16 +80,15 @@ export function RemoveKeyDialog({ location, onClose, onDone }: { location: KeyLo
         {blocked && <BlockedJobAlert />}
         {stopped && <StoppedJobAlert />}
         <JobErrorAlert error={jobError} />
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            {t('sshKeys.removeCancel')}
-          </Button>
-          {/* red 9: white text 5.4:1 (WCAG AA). */}
-          <Button color="red.9" loading={busy} disabled={needsRootConfirm && !rootConfirmed} onClick={() => void submit()}>
-            {t('sshKeys.removeConfirm')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={onClose}>
+          {t('sshKeys.removeCancel')}
+        </Button>
+        <Button color="red" loading={busy} disabled={needsRootConfirm && !rootConfirmed} onClick={() => void submit()}>
+          {t('sshKeys.removeConfirm')}
+        </Button>
+      </DialogActions>
     </AppModal>
   );
 }

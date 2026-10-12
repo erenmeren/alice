@@ -1,6 +1,7 @@
 import { Button, Code, Group, Stack, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import type { HostKey } from '../api/types';
+import { Icon } from '../design/Icon';
 import { WRAP } from './wrap';
 
 // HostKeyConfirm asks a person to compare the presented fingerprint with the one the server
@@ -25,17 +26,17 @@ export function HostKeyConfirm({
       <Text size="sm" fw={600}>
         {t('hostKeys.fingerprintLabel')}
       </Text>
-      <Code block data-testid="host-key-fingerprint" style={WRAP}>
+      <Code block data-testid="host-key-fingerprint" style={WRAP} translate="no">
         {hostKey.fingerprint}
       </Code>
       <Text size="sm" fw={600}>
         {t('hostKeys.commandLabel')}
       </Text>
-      <Code block data-testid="host-key-command" style={WRAP}>
+      <Code block data-testid="host-key-command" style={WRAP} translate="no">
         {hostKey.verify_command}
       </Code>
       {onNo && (
-        <Text size="xs" c="gray.7">
+        <Text size="xs" c="dimmed">
           {t('hostKeys.pendingNote')}
         </Text>
       )}
@@ -45,7 +46,7 @@ export function HostKeyConfirm({
             {t('hostKeys.no')}
           </Button>
         )}
-        <Button onClick={onYes} loading={busy}>
+        <Button onClick={onYes} loading={busy} leftSection={<Icon name="Fingerprint" size={15} />}>
           {t('hostKeys.yes')}
         </Button>
       </Group>

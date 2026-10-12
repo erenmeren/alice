@@ -1,4 +1,4 @@
-import { Alert, Button, Checkbox, Group, Stack, Text, TextInput } from '@mantine/core';
+import { Alert, Button, Checkbox, Stack, Text, TextInput } from '@mantine/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -7,9 +7,11 @@ import { updateLocation } from '../api/endpoints';
 import { locationsKey } from '../api/queryKeys';
 import type { CertificateLocation, LocationPatch } from '../api/types';
 import { parsePort, validateSNI } from '../api/validation';
+import { Icon } from '../design/Icon';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { SiteName } from './SiteName';
+import { DialogActions } from './ui';
 
 interface Props {
   // location is the latest copy of the website (the list refreshes it after a save or a 412).
@@ -106,7 +108,7 @@ function SettingsForm({ location, canEdit, onClose }: Props) {
         </Text>
         <Text size="sm">{t('locations.verify.help')}</Text>
         {!canEdit && (
-          <Alert color="gray" role="note">
+          <Alert color="gray" role="note" icon={<Icon name="Eye" size={17} />}>
             {t('locations.verify.readOnly')}
           </Alert>
         )}
@@ -158,17 +160,17 @@ function SettingsForm({ location, canEdit, onClose }: Props) {
             {t('locations.verify.notSaved')}
           </Alert>
         )}
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            {canEdit ? t('locations.verify.cancel') : t('locations.verify.close')}
-          </Button>
-          {canEdit && (
-            <Button type="submit" loading={busy}>
-              {t('locations.verify.save')}
-            </Button>
-          )}
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={onClose}>
+          {canEdit ? t('locations.verify.cancel') : t('locations.verify.close')}
+        </Button>
+        {canEdit && (
+          <Button type="submit" loading={busy}>
+            {t('locations.verify.save')}
+          </Button>
+        )}
+      </DialogActions>
     </form>
   );
 }

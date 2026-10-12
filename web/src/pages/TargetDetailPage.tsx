@@ -1,4 +1,5 @@
-import { Alert, Button, Card, Code, Group, Loader, Stack, Table, Text, Textarea, Title } from '@mantine/core';
+import { Alert, Button, Code, Group, Loader, Stack, Table, Text, Textarea } from '@mantine/core';
+import type { i18n as I18n, TFunction } from 'i18next';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,21 +16,24 @@ import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { HostKeyConfirm } from '../components/HostKeyConfirm';
-import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from '../components/JobErrorAlert';
+import { BlockedJobAlert, JobErrorAlert, reasonTitle, StillWorkingAlert, StoppedJobAlert } from '../components/JobErrorAlert';
 import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
 import { useStepUp } from '../components/StepUpProvider';
 import { TargetStatusBadge } from '../components/TargetStatusBadge';
 import { useLocations, websitesAsOf } from '../components/useLocations';
 import { WebsitesPanel } from '../components/WebsitesPanel';
+import { DialogActions, EmptyState, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
+import { Icon } from '../design/Icon';
+import classes from './TargetsPage.module.css';
 
 // TargetDetailPage is one server: its status and facts, the actions Operators and Administrators
 // may run, the host-key review after a changed identity (Administrators, step-up, SEC-080), and
 // the SSH keys found on it.
 export function TargetDetailPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
   const { session } = useAuth();
   const navigate = useNavigate();
@@ -120,130 +124,132 @@ export function TargetDetailPage() {
   const nginx = tg.type === 'nginx';
   const visibleKeys = (keys.data?.items ?? []).filter((k) => !k.removed_at);
 
+  const facts = connectionFacts(t, i18n, tg, pinned, discoveryFailed, websitesAsOf(locations.data?.items ?? []));
+  const scan = (
+    <Button variant="default" leftSection={<Icon name="RefreshCw" size={15} />} disabled={busy} onClick={() => void runJob(() => discoverTarget(tg.id), true)}>
+      {t(nginx ? 'locations.discover' : 'targets.discover')}
+    </Button>
+  );
+
   return (
-    <Stack gap="md">
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={4}>
-          <Title order={1} style={WRAP}>
-            {tg.name}
-          </Title>
-          {(tg.type === 'linux' || tg.type === 'nginx') && (
-            <Text size="xs" c="gray.7">
-              {t(`targets.typeLabel.${tg.type}`)}
-            </Text>
-          )}
-          <Text size="sm" style={WRAP}>
-            {t('targets.address', { user: tg.username, host: tg.host, port: tg.port })}
+    <Stack gap={0}>
+      <PageHeader
+        back={{ to: '/servers', label: t('targets.page.back') }}
+        icon="Server"
+        title={<span translate="no">{tg.name}</span>}
+        status={<TargetStatusBadge status={tg.status} testId="target-status" />}
+        description={t('targets.address', { user: tg.username, host: tg.host, port: tg.port })}
+        actions={
+          canOperate && (
+            <>
+              {scan}
+              {admin && (
+                <Button variant="light" color="red" disabled={busy} onClick={() => setDeleting(true)}>
+                  {t('targets.delete')}
+                </Button>
+              )}
+            </>
+          )
+        }
+      />
+      <Stack gap="md">
+        {added && (
+          <Alert color="green" role="status">
+            {t('targets.added')}
+          </Alert>
+        )}
+        <IdentityNotice target={tg} admin={admin} onReview={() => setRepinning(true)} />
+        {busy && (
+          <Group gap="sm" role="status" aria-live="polite">
+            <Loader size="sm" aria-hidden />
+            <Text size="sm">{t('targets.working')}</Text>
+          </Group>
+        )}
+        {done && (
+          <Text size="sm" role="status">
+            {t('targets.jobDone')}
           </Text>
-        </Stack>
-        <TargetStatusBadge status={tg.status} testId="target-status" />
-      </Group>
-      {added && (
-        <Alert color="green" role="status">
-          {t('targets.added')}
-        </Alert>
-      )}
-      {tg.status === 'host_key_changed' && (
-        <Alert color="red" role="alert" data-testid="host-key-changed">
-          <Stack gap="xs">
-            <Text size="sm">{t('targets.hostKeyChanged')}</Text>
-            {admin && (
-              <Button size="xs" color="red.9" w="fit-content" onClick={() => setRepinning(true)}>
-                {t('hostKeys.review')}
-              </Button>
-            )}
-          </Stack>
-        </Alert>
-      )}
-      {tg.status === 'pending_host_key' && admin && observed && (
-        <Card withBorder padding="md">
-          <Stack gap="xs">
-            <Title order={2} size="h3">
-              {t('hostKeys.confirmTitle')}
-            </Title>
-            <HostKeyConfirm host={tg.host} hostKey={observed} busy={busy} onYes={() => void runJob(() => confirmHostKey(tg.id, observed.id, observed.fingerprint))} />
-          </Stack>
-        </Card>
-      )}
-      <Facts target={tg} discoveryFailed={discoveryFailed} asOf={websitesAsOf(locations.data?.items ?? [])} />
-      {canOperate && (
-        <Group gap="sm">
-          <Button variant="default" disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
-            {t('targets.test')}
-          </Button>
-          <Button variant="default" disabled={busy} onClick={() => void runJob(() => discoverTarget(tg.id), true)}>
-            {t(nginx ? 'locations.discover' : 'targets.discover')}
-          </Button>
-          {admin && (
-            <Button variant="light" color="red.9" disabled={busy} onClick={() => setDeleting(true)}>
-              {t('targets.delete')}
-            </Button>
+        )}
+        {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
+        {blocked && <BlockedJobAlert />}
+        {stopped && <StoppedJobAlert />}
+        <JobErrorAlert error={jobError} />
+        <FactWarnings target={tg} />
+      </Stack>
+
+      <div className={classes.detailGrid}>
+        <div className={classes.stack}>
+          {tg.status === 'pending_host_key' && admin && observed && (
+            <Panel title={t('hostKeys.confirmTitle')}>
+              <HostKeyConfirm host={tg.host} hostKey={observed} busy={busy} onYes={() => void runJob(() => confirmHostKey(tg.id, observed.id, observed.fingerprint))} />
+            </Panel>
           )}
-        </Group>
-      )}
-      {busy && (
-        <Group gap="sm" role="status" aria-live="polite">
-          <Loader size="sm" aria-hidden />
-          <Text size="sm">{t('targets.working')}</Text>
-        </Group>
-      )}
-      {done && (
-        <Text size="sm" role="status">
-          {t('targets.jobDone')}
-        </Text>
-      )}
-      {error instanceof JobTimeoutError ? <StillWorkingAlert /> : <ErrorAlert error={error} />}
-      {blocked && <BlockedJobAlert />}
-      {stopped && <StoppedJobAlert />}
-      <JobErrorAlert error={jobError} />
-
-      {nginx && <WebsitesPanel target={tg} discoveryFailed={discoveryFailed} />}
-
-      <Title order={2} size="h3">
-        {t('targets.keysTitle')}
-      </Title>
-      <ErrorAlert error={keys.error} />
-      {keys.isSuccess && visibleKeys.length === 0 && <Text c="gray.7">{t('targets.noKeys')}</Text>}
-      {visibleKeys.length > 0 && (
-        <Table.ScrollContainer minWidth={720}>
-          <Table striped data-testid="target-keys">
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t('sshKeys.user')}</Table.Th>
-                <Table.Th>{t('sshKeys.key')}</Table.Th>
-                <Table.Th>{t('sshKeys.file')}</Table.Th>
-                <Table.Th>{t('sshKeys.comment')}</Table.Th>
-                <Table.Th>{t('sshKeys.actions')}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {visibleKeys.map((k) => (
-                <Table.Tr key={k.id}>
-                  <Table.Td>{k.os_user}</Table.Td>
-                  <Table.Td>
-                    <Stack gap={2}>
-                      <Text size="xs">{k.key_type}</Text>
-                      <Code style={WRAP}>{k.fingerprint}</Code>
-                      <KeyFlags location={k} />
-                    </Stack>
-                  </Table.Td>
-                  <Table.Td>
-                    <Code style={WRAP}>{k.file_path}</Code>
-                  </Table.Td>
-                  <Table.Td style={WRAP}>{k.comment}</Table.Td>
-                  <Table.Td>
-                    {canOperate && (
-                      <Button size="xs" variant="light" color="red.9" onClick={() => setRemoving(k)} aria-label={t('sshKeys.removeNamed', { user: k.os_user })}>
-                        {t('sshKeys.removeConfirm')}
-                      </Button>
-                    )}
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
+          {nginx && <WebsitesPanel target={tg} discoveryFailed={discoveryFailed} />}
+          <Panel title={t('targets.keysTitle')} padded={false}>
+            <ErrorAlert error={keys.error} />
+            {keys.isSuccess && visibleKeys.length === 0 && <EmptyState icon="KeyRound" title={t('targets.noKeys')} />}
+            {visibleKeys.length > 0 && (
+              <Table.ScrollContainer minWidth={720}>
+                <Table data-testid="target-keys" aria-label={t('targets.keysTitle')} highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>{t('sshKeys.user')}</Table.Th>
+                      <Table.Th>{t('sshKeys.key')}</Table.Th>
+                      <Table.Th>{t('sshKeys.file')}</Table.Th>
+                      <Table.Th>{t('sshKeys.comment')}</Table.Th>
+                      <Table.Th>{t('sshKeys.actions')}</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {visibleKeys.map((k) => (
+                      <Table.Tr key={k.id}>
+                        <Table.Td translate="no">{k.os_user}</Table.Td>
+                        <Table.Td>
+                          <Stack gap={2}>
+                            <Text size="xs">{k.key_type}</Text>
+                            <Code style={WRAP}>{k.fingerprint}</Code>
+                            <KeyFlags location={k} />
+                          </Stack>
+                        </Table.Td>
+                        <Table.Td>
+                          <Code style={WRAP}>{k.file_path}</Code>
+                        </Table.Td>
+                        <Table.Td style={WRAP}>{k.comment}</Table.Td>
+                        <Table.Td>
+                          {canOperate && (
+                            <Button size="xs" variant="light" color="red" onClick={() => setRemoving(k)} aria-label={t('sshKeys.removeNamed', { user: k.os_user })}>
+                              {t('sshKeys.removeConfirm')}
+                            </Button>
+                          )}
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            )}
+          </Panel>
+        </div>
+        <div className={`${classes.stack} ${classes.side}`}>
+          <Panel title={t('targets.page.connection')}>
+            <FactList facts={facts} />
+          </Panel>
+          <Panel title={t('targets.page.operations')}>
+            <Text className={classes.small}>{t('targets.page.operationsText')}</Text>
+            <Group gap="xs" mt="lg">
+              {canOperate ? (
+                <Button variant="default" leftSection={<Icon name="Network" size={15} />} disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
+                  {t('targets.test')}
+                </Button>
+              ) : (
+                <StatusBadge tone="neutral" icon="Eye">
+                  {t('targets.page.readOnly')}
+                </StatusBadge>
+              )}
+            </Group>
+          </Panel>
+        </div>
+      </div>
 
       {repinning && (
         <RepinDialog
@@ -281,27 +287,101 @@ export function TargetDetailPage() {
   );
 }
 
-function Facts({ target, discoveryFailed, asOf }: { target: Target; discoveryFailed: boolean; asOf: string | null }) {
-  const { t, i18n } = useTranslation();
+// IdentityNotice is the design's status line under the header: the changed identity (danger, with the review for
+// Administrators), a failed last attempt (warning) or a verified connection. Other states (checking, waiting for the
+// fingerprint, sign-in refused, partly working, disabled) claim nothing here: the status badge and the facts say it.
+function IdentityNotice({ target, admin, onReview }: { target: Target; admin: boolean; onReview: () => void }) {
+  const { t } = useTranslation();
+  if (target.status === 'host_key_changed') {
+    return (
+      <Notice
+        tone="danger"
+        role="alert"
+        testId="host-key-changed"
+        title={t('targets.page.identityChangedTitle')}
+        action={
+          admin && (
+            <Button size="xs" color="red" leftSection={<Icon name="Fingerprint" size={14} />} onClick={onReview}>
+              {t('hostKeys.review')}
+            </Button>
+          )
+        }
+      >
+        {t('targets.hostKeyChanged')}
+      </Notice>
+    );
+  }
+  if (target.status === 'unreachable') {
+    return (
+      <Notice tone="warning" title={t('targets.page.unreachableTitle')}>
+        {t('targets.page.unreachableText')}
+      </Notice>
+    );
+  }
+  if (target.status === 'ok') {
+    return (
+      <Notice tone="brand" title={t('targets.page.verifiedTitle')}>
+        {t('targets.page.verifiedText')}
+      </Notice>
+    );
+  }
+  return null;
+}
+
+// connectionFacts is the design's "Connection details" list, with the product's own facts (sign-in user, helper and
+// Nginx versions, the last problem) in the same list.
+function connectionFacts(t: TFunction, i18n: I18n, target: Target, pinned: HostKey | null, discoveryFailed: boolean, asOf: string | null): Fact[] {
+  const lang = i18n.language;
+  const f = target.facts;
+  const nginx = target.type === 'nginx' ? f.nginx : undefined;
+  const facts: Fact[] = [
+    { key: 'state', label: t('targets.page.facts.state'), value: <TargetStatusBadge status={target.status} /> },
+    { key: 'address', label: t('targets.page.facts.address'), value: <Code translate="no">{`${target.host}:${target.port}`}</Code> },
+    { key: 'user', label: t('targets.page.facts.user'), value: <Code translate="no">{target.username}</Code> },
+  ];
+  if (target.type === 'linux' || target.type === 'nginx') facts.push({ key: 'platform', label: t('targets.page.facts.platform'), value: t(`targets.typeLabel.${target.type}`) });
+  if (f.os.pretty_name) facts.push({ key: 'os', label: t('targets.page.facts.os'), value: f.os.pretty_name });
+  if (f.helper_version) facts.push({ key: 'helper', label: t('targets.page.facts.helper'), value: f.helper_version });
+  if (nginx?.version) facts.push({ key: 'nginx', label: t('targets.page.facts.nginx'), value: nginx.version });
+  else if (nginx && !nginx.found) facts.push({ key: 'nginx', label: t('targets.page.facts.nginx'), value: t('targets.facts.nginxNotFound') });
+  facts.push({
+    key: 'connected',
+    label: t('targets.page.facts.lastConnected'),
+    value: target.last_success_at ? formatDateTime(target.last_success_at, lang) : t('targets.page.never'),
+  });
+  facts.push({
+    key: 'scan',
+    label: t('targets.page.facts.lastScan'),
+    value: (
+      <>
+        {target.last_discovery_at ? formatDateTime(target.last_discovery_at, lang) : t('targets.facts.neverScanned')}
+        {nginx && nginxState(target, discoveryFailed).stale && asOf && (
+          <Text size="xs" c="dimmed" role="note" mt={4}>
+            {t('targets.facts.nginxStale', { time: formatDateTime(asOf, lang) })}
+          </Text>
+        )}
+      </>
+    ),
+  });
+  if (target.discovery_interval_hours > 0) {
+    facts.push({ key: 'interval', label: t('targets.page.facts.discoveryInterval'), value: t('targets.page.everyHours', { count: target.discovery_interval_hours }) });
+  }
+  if (pinned) facts.push({ key: 'fingerprint', label: t('targets.page.facts.hostFingerprint'), value: <Code translate="no">{pinned.fingerprint}</Code> });
+  if (target.status !== 'ok' && target.last_error) {
+    facts.push({ key: 'problem', label: t('targets.page.facts.lastProblem'), value: reasonTitle(t, i18n, target.last_error.reason) });
+  }
+  return facts;
+}
+
+// FactWarnings words what the last scan reported about the server (helper warnings and unreadable key lines).
+function FactWarnings({ target }: { target: Target }) {
+  const { t } = useTranslation();
   const f = target.facts;
   // unreadable_line is shown per line from facts.unreadable below, so the summary warning is skipped here.
   const warnings = f.warnings.filter((w) => w.code !== 'unreadable_line');
+  if (warnings.length === 0 && f.unreadable.length === 0) return null;
   return (
-    <Stack gap={4}>
-      {f.os.pretty_name && <Text size="sm">{t('targets.facts.os', { name: f.os.pretty_name })}</Text>}
-      {f.helper_version && <Text size="sm">{t('targets.facts.helper', { version: f.helper_version })}</Text>}
-      {target.type === 'nginx' && f.nginx?.version && <Text size="sm">{t('targets.facts.nginx', { version: f.nginx.version })}</Text>}
-      {target.type === 'nginx' && f.nginx && !f.nginx.found && f.nginx.version === '' && <Text size="sm">{t('targets.facts.nginxNotFound')}</Text>}
-      {target.type === 'nginx' && nginxState(target, discoveryFailed).stale && asOf && (
-        <Text size="sm" role="note">
-          {t('targets.facts.nginxStale', { time: formatDateTime(asOf, i18n.language) })}
-        </Text>
-      )}
-      <Text size="sm">
-        {target.last_discovery_at
-          ? t('targets.facts.lastDiscovery', { time: formatDateTime(target.last_discovery_at, i18n.language) })
-          : t('targets.facts.neverScanned')}
-      </Text>
+    <Stack gap="xs">
       {warnings.map((w) => (
         <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP}>
           {t(warningKey(w), w.params)}
@@ -419,7 +499,7 @@ function RepinDialog({
           {observed && (
             <Stack gap={4}>
               <Text size="sm">{t('hostKeys.acceptHelp')}</Text>
-              <Button type="submit" color="red.9" w="fit-content" loading={acting === 'accept'} disabled={acting !== null || cleanReason.length < 10}>
+              <Button type="submit" color="red" w="fit-content" loading={acting === 'accept'} disabled={acting !== null || cleanReason.length < 10}>
                 {t('hostKeys.repin')}
               </Button>
             </Stack>
@@ -439,12 +519,12 @@ function RepinDialog({
               </Button>
             </Stack>
           )}
-          <Group justify="flex-end">
-            <Button variant="default" onClick={onClose}>
-              {t('hostKeys.cancel')}
-            </Button>
-          </Group>
         </Stack>
+        <DialogActions>
+          <Button variant="default" onClick={onClose}>
+            {t('hostKeys.cancel')}
+          </Button>
+        </DialogActions>
       </form>
     </AppModal>
   );
@@ -470,15 +550,15 @@ function DeleteTargetDialog({ target, onClose, onDeleted }: { target: Target; on
       <Stack gap="sm">
         <Text size="sm">{t('targets.deleteHelp')}</Text>
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
-          <Button variant="default" onClick={onClose}>
-            {t('targets.cancel')}
-          </Button>
-          <Button color="red.9" loading={busy} onClick={() => void confirm()}>
-            {t('targets.delete')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={onClose}>
+          {t('targets.cancel')}
+        </Button>
+        <Button color="red" loading={busy} onClick={() => void confirm()}>
+          {t('targets.delete')}
+        </Button>
+      </DialogActions>
     </AppModal>
   );
 }

@@ -302,3 +302,16 @@ describe('WebsitesPanel on an Nginx server', () => {
     expect(posted).toBe(1);
   });
 });
+
+describe('WebsitesPanel in the design', () => {
+  it('is a named panel region with the design subtitle and status badges with tone and text', async () => {
+    onNginx('operator', [locationFixture({ certificate: CERT }), locationFixture({ id: 'l2', active_deployment_id: '0192c000-0000-7000-8000-0000000000d1' })]);
+    await renderRoute(path);
+    const region = await screen.findByRole('region', { name: 'Websites on this server' });
+    expect(region.tagName).toBe('SECTION');
+    expect(within(region).getByText(/Alice never changes the Nginx configuration/)).toBeInTheDocument();
+    const rows = await within(region).findAllByTestId('location-row');
+    expect(within(rows[0]).getByText('Ready').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(within(rows[1]).getByText('Deployment in progress').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'info');
+  });
+});

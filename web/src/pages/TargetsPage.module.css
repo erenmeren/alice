@@ -1,0 +1,35 @@
+/* The servers pages in the Clarity design (alice-design/dist/styles.css: .mini-stats, .mini-stat, .resource-name,
+   .resource-icon, .detail-grid, .stack). Colors come from the --alice-* tokens only. */
+.miniStats { display: flex; flex-wrap: wrap; gap: 28px; margin: 0 0 22px; padding: 0; list-style: none; }
+.miniStat { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--alice-text-secondary); }
+.miniStat b { font-size: 18px; font-weight: 550; color: var(--alice-text); font-variant-numeric: tabular-nums; }
+.miniStat[data-tone='success'] { --dot: var(--alice-success); }
+.miniStat[data-tone='danger'] { --dot: var(--alice-danger); }
+.miniStat[data-tone='warning'] { --dot: var(--alice-warning); }
+.dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--dot); }
+.stack { display: grid; gap: 20px; align-content: start; min-width: 0; }
+.resourceName { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.resourceName > div { min-width: 0; }
+.resourceIcon { width: 30px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: 6px; background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
+.name { font-size: 11px; font-weight: 550; overflow-wrap: anywhere; }
+.secondary { margin: 4px 0 0; font-size: 9px; color: var(--alice-text-muted); overflow-wrap: anywhere; }
+.mono { font-family: var(--mantine-font-family-monospace); font-size: 11px; white-space: nowrap; }
+.openLink { color: var(--alice-text-muted); }
+.small { font-size: 11px; color: var(--alice-text-secondary); }
+.detailGrid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(290px, 1fr); gap: 20px; margin-top: 24px; }
+@media (max-width: 1199px) {
+  .detailGrid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+/* Below 1020 px the design stacks the columns and lays each column's panels side by side; the left column holds wide
+   tables, so only the right column (facts, operations) goes two-up. */
+@media (max-width: 1020px) {
+  .detailGrid { grid-template-columns: minmax(0, 1fr); }
+  .detailGrid > .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .miniStats { gap: 18px; }
+}
+@media (max-width: 767px) {
+  .detailGrid > .side { grid-template-columns: minmax(0, 1fr); }
+  .miniStats { gap: 12px; }
+  .miniStat { font-size: 10px; }
+  .miniStat b { font-size: 16px; }
+}

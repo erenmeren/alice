@@ -451,3 +451,80 @@ describe('TargetsPage and Key Vaults', () => {
     expect(within(table).queryByText('Prod vault')).not.toBeInTheDocument();
   });
 });
+
+describe('TargetsPage in the design', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('has the design header: the h1, the description, and Add server for administrators only', async () => {
+    withTargets('admin');
+    const view = await renderRoute('/servers');
+    expect(await screen.findByRole('heading', { name: 'Servers', level: 1 })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByText('Know what is connected, what changed, and what needs a closer look.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add server' })).toBeInTheDocument();
+    view.unmount();
+    withTargets('auditor');
+    await renderRoute('/servers');
+    await screen.findByTestId('targets-table');
+    expect(screen.queryByRole('button', { name: 'Add server' })).not.toBeInTheDocument();
+  });
+
+  it('counts the connection states over the complete list, every page of it', async () => {
+    const page1 = [
+      targetFixture,
+      targetWith({ id: 's2', name: 'web-02', status: 'host_key_changed' }),
+      targetWith({ id: 's3', name: 'web-03', status: 'unreachable' }),
+    ];
+    const page2 = [targetWith({ id: 's4', name: 'web-04', status: 'ok' }), targetWith({ id: 's5', name: 'web-05', status: 'pending_host_key' })];
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.get('/api/v1/targets', ({ request }) =>
+        new URL(request.url).searchParams.get('cursor') ? HttpResponse.json({ items: page2, next_cursor: null }) : HttpResponse.json({ items: page1, next_cursor: 'c2' }),
+      ),
+    );
+    await renderRoute('/servers');
+    const stats = await screen.findByRole('list', { name: 'Connection summary' });
+    const items = within(stats).getAllByRole('listitem');
+    expect(items.map((i) => i.textContent)).toEqual(['5 in total', '2 connected', '1 identity changed', '1 unreachable']);
+    expect(items.map((i) => i.getAttribute('data-tone'))).toEqual([null, 'success', 'danger', 'warning']);
+  });
+
+  it('shows the inventory table: one header row, one row per server, status badges with text and icon, an open link and the footer', async () => {
+    withTargets('operator', [targetFixture, targetWith({ id: 's2', name: 'web-02', type: 'nginx', status: 'host_key_changed', last_success_at: null })]);
+    await renderRoute('/servers');
+    const table = await screen.findByTestId('targets-table');
+    expect(within(table).getAllByRole('row')).toHaveLength(3);
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Server', 'Address', 'Platform', 'Connection', 'Last connected', '']);
+    const row = within(table).getByRole('link', { name: 'web-01' }).closest('tr')!;
+    expect(within(row).getByText('Ubuntu 22.04.4 LTS')).toBeInTheDocument();
+    expect(within(row).getByText('Linux server')).toBeInTheDocument();
+    const badge = within(row).getByText('Connected').closest('.mantine-Badge-root')!;
+    expect(badge).toHaveAttribute('data-tone', 'success');
+    expect(badge.querySelector('svg')).not.toBeNull();
+    expect(within(row).getByRole('link', { name: 'Open web-01' })).toHaveAttribute('href', `/servers/${targetFixture.id}`);
+    const changed = within(table).getByRole('link', { name: 'web-02' }).closest('tr')!;
+    expect(within(changed).getByText('Server identity changed').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'danger');
+    expect(within(changed).getByText('Nginx server')).toBeInTheDocument();
+    expect(within(changed).getByText('Never')).toBeInTheDocument();
+    expect(screen.getByText('Azure Key Vaults are listed separately.')).toBeInTheDocument();
+  });
+
+  it('replaces the table with the empty state when there are no servers', async () => {
+    withTargets('admin', []);
+    await renderRoute('/servers');
+    expect(await screen.findByText('No servers yet. Prepare a server with the command below, then add it.')).toBeInTheDocument();
+    expect(screen.queryByTestId('targets-table')).not.toBeInTheDocument();
+  });
+
+  it('shows the held jobs and the platform key as panels for administrators', async () => {
+    withTargets('admin');
+    const blocked = jobFixture({ id: 'job-b', type: 'sshkey.remove', status: 'blocked_license', finished_at: null });
+    server.use(http.get('/api/v1/jobs', () => HttpResponse.json({ items: [blocked], next_cursor: null })));
+    await renderRoute('/servers');
+    const held = await screen.findByTestId('blocked-jobs');
+    expect(held.tagName).toBe('SECTION');
+    expect(within(held).getByRole('heading', { name: 'Waiting for an administrator', level: 2 })).toBeInTheDocument();
+    const prepare = (await screen.findByRole('heading', { name: 'Prepare a server for Alice', level: 2 })).closest('section')!;
+    expect(within(prepare).getByTestId('platform-public-key')).toBeInTheDocument();
+  });
+});

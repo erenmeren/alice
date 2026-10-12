@@ -66,8 +66,8 @@ describe('TargetDetailPage', () => {
     await renderRoute(path);
     expect(await screen.findByRole('heading', { name: 'web-01', level: 1 })).toBeInTheDocument();
     expect(screen.getByTestId('target-status')).toHaveTextContent('Connected');
-    expect(screen.getByText('Operating system: Ubuntu 22.04.4 LTS')).toBeInTheDocument();
-    expect(screen.getByText('alice-helper version: 1.0.0')).toBeInTheDocument();
+    expect(screen.getByText('Operating system', { selector: 'dt' }).nextElementSibling).toHaveTextContent('Ubuntu 22.04.4 LTS');
+    expect(screen.getByText('alice-helper version', { selector: 'dt' }).nextElementSibling).toHaveTextContent('1.0.0');
     expect(screen.getByText('The SSH server ignores this key file because its permissions are too open: /home/old/.ssh/authorized_keys')).toBeInTheDocument();
     const table = await screen.findByTestId('target-keys');
     expect(within(table).getByText('ci@build').closest('tr')).toHaveTextContent('deploy');
@@ -128,7 +128,7 @@ describe('TargetDetailPage', () => {
     await userEvent.click(within(stepUp).getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Accept the new server fingerprint' })).not.toBeInTheDocument());
     expect(body).toEqual({ fingerprint: observed.fingerprint, reason: 'CHG-2026-0412 reinstall' });
-    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('target-status')).toHaveTextContent(/^Connected$/));
     expect(screen.queryByTestId('host-key-changed')).not.toBeInTheDocument();
   });
 
@@ -176,7 +176,7 @@ describe('TargetDetailPage', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Accept the new server fingerprint' })).not.toBeInTheDocument());
     expect(repinned).toBe(pinned.id);
     expect(body).toEqual({ fingerprint: pinned.fingerprint, reason: 'Traffic was misrouted for an hour' });
-    expect(await screen.findByText('Connected')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('target-status')).toHaveTextContent(/^Connected$/));
     expect(screen.queryByTestId('host-key-changed')).not.toBeInTheDocument();
   });
 
@@ -507,7 +507,7 @@ describe('TargetDetailPage', () => {
     it('shows the Nginx version and the websites above the SSH keys', async () => {
       nginxServer('operator');
       await renderRoute(`/servers/${nginxTargetFixture.id}`);
-      expect(await screen.findByText('Nginx version: 1.24.0')).toBeInTheDocument();
+      expect((await screen.findByText('Nginx version', { selector: 'dt' })).nextElementSibling).toHaveTextContent('1.24.0');
       const websites = screen.getByRole('heading', { name: 'Websites on this server' });
       const keys = screen.getByRole('heading', { name: 'SSH keys on this server' });
       expect(websites.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -547,5 +547,87 @@ describe('TargetDetailPage', () => {
       expect(screen.getByText('An Nginx configuration file can be changed by users other than root: /etc/nginx/conf.d/w.conf')).toBeInTheDocument();
       expect(screen.getByText(/more websites than Alice lists/)).toBeInTheDocument();
     });
+  });
+});
+
+describe('TargetDetailPage in the design', () => {
+  beforeEach(() => localStorage.clear());
+
+  it('has the detail header: back link, server tile, the name as the only h1 and the status badge', async () => {
+    onServer('operator');
+    await renderRoute(path);
+    const h1 = await screen.findByRole('heading', { name: 'web-01', level: 1 });
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(h1).toHaveAttribute('data-detail');
+    expect(screen.getByRole('link', { name: 'All servers' })).toHaveAttribute('href', '/servers');
+    const status = screen.getByTestId('target-status');
+    expect(status).toHaveTextContent(/^Connected$/);
+    expect(status).toHaveAttribute('data-tone', 'success');
+    expect(screen.getByText('Alice signs in as alice-svc at web-01.example.com, port 22.')).toBeInTheDocument();
+  });
+
+  it('confirms a verified connection and lists the connection details with the pinned fingerprint in mono', async () => {
+    onServer('operator');
+    await renderRoute(path);
+    expect(await screen.findByText('Connection verified')).toBeInTheDocument();
+    expect(screen.getByText('Observed SSH identity matches the pinned fingerprint.')).toBeInTheDocument();
+    const facts = screen.getByRole('heading', { name: 'Connection details' }).closest('section')!;
+    const value = (label: string) => within(facts).getByText(label, { selector: 'dt' }).nextElementSibling as HTMLElement;
+    expect(value('Address')).toHaveTextContent('web-01.example.com:22');
+    expect(value('Platform')).toHaveTextContent('Linux server');
+    expect(value('Operating system')).toHaveTextContent('Ubuntu 22.04.4 LTS');
+    expect(value('alice-helper version')).toHaveTextContent('1.0.0');
+    expect(value('Discovery interval')).toHaveTextContent('Every 24 hours');
+    expect(within(value('State')).getByText('Connected')).toBeInTheDocument();
+    expect(await within(facts).findByText(pinned.fingerprint)).toHaveProperty('tagName', 'CODE');
+  });
+
+  it('shows a danger notice with the review button when the identity changed (administrators)', async () => {
+    onServer('admin', targetWith({ status: 'host_key_changed' }));
+    await renderRoute(path);
+    const notice = await screen.findByTestId('host-key-changed');
+    expect(notice).toHaveAttribute('role', 'alert');
+    expect(notice).toHaveTextContent('This server’s identity has changed');
+    expect(within(notice).getByRole('button', { name: 'Review the new fingerprint' })).toBeInTheDocument();
+    expect(screen.queryByText('Connection verified')).not.toBeInTheDocument();
+  });
+
+  it('says that the last connection attempt failed for an unreachable server, with the problem', async () => {
+    onServer('operator', targetWith({ status: 'unreachable', last_error: { code: 'ALC-SSH-0001', reason: 'ssh.unreachable' } }));
+    await renderRoute(path);
+    expect(await screen.findByText('The last connection attempt failed')).toBeInTheDocument();
+    expect(screen.getByText('Inventory reflects the last successful discovery. Check reachability before changing credentials.')).toBeInTheDocument();
+    expect(screen.getByText(commonEn.errors.ssh.unreachable.title)).toBeInTheDocument();
+    expect(screen.queryByText('Connection verified')).not.toBeInTheDocument();
+  });
+
+  it('claims no verified connection while a server waits for its fingerprint', async () => {
+    onServer('operator', targetWith({ status: 'pending_host_key' }));
+    await renderRoute(path);
+    await screen.findByTestId('target-status');
+    expect(screen.queryByText('Connection verified')).not.toBeInTheDocument();
+  });
+
+  it('puts Test connection in the operations panel; auditors see Read only there instead', async () => {
+    onServer('operator');
+    const view = await renderRoute(path);
+    const ops = (await screen.findByRole('heading', { name: 'Available operations' })).closest('section')!;
+    expect(within(ops).getByText(/restricted helper/)).toBeInTheDocument();
+    expect(within(ops).getByRole('button', { name: 'Test connection' })).toBeInTheDocument();
+    expect(within(ops).queryByText('Read only')).not.toBeInTheDocument();
+    view.unmount();
+    onServer('auditor');
+    await renderRoute(path);
+    const readOnly = (await screen.findByRole('heading', { name: 'Available operations' })).closest('section')!;
+    expect(within(readOnly).getByText('Read only')).toBeInTheDocument();
+    expect(within(readOnly).queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('keeps the OS user as the first cell of the key table', async () => {
+    onServer('operator');
+    await renderRoute(path);
+    const table = await screen.findByTestId('target-keys');
+    const row = within(table).getByText('root@bastion').closest('tr')!;
+    expect(within(row).getAllByRole('cell')[0]).toHaveTextContent(/^root$/);
   });
 });

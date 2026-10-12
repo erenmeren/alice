@@ -1,4 +1,4 @@
-import { Button, Card, Group, Stack, Table, Text, Title } from '@mantine/core';
+import { Button, Group, Stack, Table, Text } from '@mantine/core';
 import { useInfiniteQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,7 @@ import type { Deployment, Job } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { ErrorAlert } from './ErrorAlert';
 import { InternalLink } from './InternalLink';
+import { Panel } from './ui';
 
 // DEPLOY_JOB is the job type of a deployment (internal/inventory/jobs.go JobCertificateDeploy).
 const DEPLOY_JOB = 'certificate.deploy';
@@ -76,15 +77,22 @@ export function BlockedJobsPanel() {
 
   if (items.length === 0) return null;
   return (
-    <Card withBorder padding="md" data-testid="blocked-jobs">
+    <Panel
+      testId="blocked-jobs"
+      title={t('jobs.blockedTitle')}
+      description={t('jobs.blockedHelp')}
+      footer={
+        jobs.hasNextPage && (
+          <Button variant="default" size="xs" onClick={() => void jobs.fetchNextPage()} loading={jobs.isFetchingNextPage}>
+            {t('jobs.blockedShowMore')}
+          </Button>
+        )
+      }
+    >
       <Stack gap="xs">
-        <Title order={2} size="h3">
-          {t('jobs.blockedTitle')}
-        </Title>
-        <Text size="sm">{t('jobs.blockedHelp')}</Text>
         <ErrorAlert error={error} />
         <Table.ScrollContainer minWidth={480}>
-          <Table>
+          <Table aria-label={t('jobs.blockedTitle')}>
             <Table.Tbody>
               {items.map((job) => {
                 const dep = job.type === DEPLOY_JOB ? deploymentOf(job) : undefined;
@@ -139,12 +147,7 @@ export function BlockedJobsPanel() {
             </Table.Tbody>
           </Table>
         </Table.ScrollContainer>
-        {jobs.hasNextPage && (
-          <Button variant="default" w="fit-content" onClick={() => void jobs.fetchNextPage()} loading={jobs.isFetchingNextPage}>
-            {t('jobs.blockedShowMore')}
-          </Button>
-        )}
       </Stack>
-    </Card>
+    </Panel>
   );
 }

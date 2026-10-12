@@ -1,4 +1,4 @@
-import { Alert, Badge, Box, Button, Code, Group, Stack, Switch, Table, Text, Title } from '@mantine/core';
+import { Alert, Box, Button, Code, Group, Stack, Switch, Table, Text } from '@mantine/core';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
@@ -17,6 +17,7 @@ import { reasonTitle } from './JobErrorAlert';
 import { siteIsData } from './SiteName';
 import { useLocations, websitesAsOf } from './useLocations';
 import { useSiteLabel } from './useSiteLabel';
+import { EmptyState, Panel, StatusBadge } from './ui';
 import { WRAP } from './wrap';
 
 const BLOCK_KEYS: Record<DeployBlock, string> = {
@@ -68,53 +69,50 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const lastScan = asOf ? formatDateTime(asOf, i18n.language) : '';
 
   return (
-    <Stack gap="sm" aria-labelledby="websites-title" role="region">
-      <Title order={2} size="h3" id="websites-title">
-        {t('locations.title')}
-      </Title>
-      <Text size="sm">{t('locations.intro')}</Text>
-
-      {state.configInvalid && (
-        <Alert color="red" role="alert" data-testid="config-invalid">
-          <Stack gap={2}>
-            <Text size="sm" fw={500}>
-              {t('locations.configInvalid')}
-            </Text>
-            {nginx && nginx.config_error !== '' && <Text size="sm">{t(configErrorKey(nginx.config_error))}</Text>}
-            {nginx && nginx.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(nginx.config_error_reason))}</Text>}
-            {nginx && nginx.config_error_file !== '' && (
-              <LabelledCode text={t('locations.configFile', { file: '' })} value={nginx.config_error_file} />
-            )}
-          </Stack>
-        </Alert>
-      )}
-      {state.stale && (
-        <Alert color="yellow" role="status" title={t('locations.stale.title')} data-testid="stale-websites">
-          <Stack gap={2}>
-            <Text size="sm">{lastScan ? t('locations.stale.help', { time: lastScan }) : t('locations.stale.neverScanned')}</Text>
-            <Text size="sm" fw={500}>
-              {t('locations.deployUnavailable')}
-            </Text>
-            {state.block && (
-              <Text size="sm">
-                {state.block === 'last_error' && target.last_error ? reasonTitle(t, i18n, target.last_error.reason) : t(BLOCK_KEYS[state.block])}
+    <Panel title={t('locations.title')} description={t('locations.intro')} aria-label={t('locations.title')} padded={false}>
+      <Stack gap="sm" px={22} py="md">
+        {state.configInvalid && (
+          <Alert color="red" role="alert" data-testid="config-invalid">
+            <Stack gap={2}>
+              <Text size="sm" fw={500}>
+                {t('locations.configInvalid')}
               </Text>
-            )}
-          </Stack>
-        </Alert>
-      )}
+              {nginx && nginx.config_error !== '' && <Text size="sm">{t(configErrorKey(nginx.config_error))}</Text>}
+              {nginx && nginx.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(nginx.config_error_reason))}</Text>}
+              {nginx && nginx.config_error_file !== '' && (
+                <LabelledCode text={t('locations.configFile', { file: '' })} value={nginx.config_error_file} />
+              )}
+            </Stack>
+          </Alert>
+        )}
+        {state.stale && (
+          <Alert color="yellow" role="status" title={t('locations.stale.title')} data-testid="stale-websites">
+            <Stack gap={2}>
+              <Text size="sm">{lastScan ? t('locations.stale.help', { time: lastScan }) : t('locations.stale.neverScanned')}</Text>
+              <Text size="sm" fw={500}>
+                {t('locations.deployUnavailable')}
+              </Text>
+              {state.block && (
+                <Text size="sm">
+                  {state.block === 'last_error' && target.last_error ? reasonTitle(t, i18n, target.last_error.reason) : t(BLOCK_KEYS[state.block])}
+                </Text>
+              )}
+            </Stack>
+          </Alert>
+        )}
 
-      <Switch label={t('locations.showMissing')} checked={showMissing} onChange={(e) => setShowMissing(e.currentTarget.checked)} />
-      <ErrorAlert error={locs.error} />
-      {locs.data?.truncated && (
-        <Alert color="yellow" role="status">
-          {t('locations.truncated')}
-        </Alert>
-      )}
-      {locs.isSuccess && items.length === 0 && <Text c="gray.7">{t('locations.empty')}</Text>}
+        <Switch label={t('locations.showMissing')} checked={showMissing} onChange={(e) => setShowMissing(e.currentTarget.checked)} />
+        <ErrorAlert error={locs.error} />
+        {locs.data?.truncated && (
+          <Alert color="yellow" role="status">
+            {t('locations.truncated')}
+          </Alert>
+        )}
+      </Stack>
+      {locs.isSuccess && items.length === 0 && <EmptyState icon="Globe" title={t('locations.empty')} />}
       {items.length > 0 && (
         <Table.ScrollContainer minWidth={960}>
-          <Table striped aria-label={t('locations.tableLabel')}>
+          <Table aria-label={t('locations.tableLabel')} highlightOnHover>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>{t('locations.columns.website')}</Table.Th>
@@ -145,7 +143,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
 
       {deploying && <DeployDialog opened onClose={() => setDeploying(null)} location={deploying} />}
       {settingsFor && <LocationSettingsDialog location={settingsFor} canEdit={admin} onClose={() => setSettingsId(null)} />}
-    </Stack>
+    </Panel>
   );
 }
 
@@ -194,7 +192,7 @@ function LocationRow({
           {first && (
             <Stack gap={0}>
               <LabelledCode size="xs" text={t('locations.definedIn', { file: '' })} value={first.file} />
-              <Text size="xs" c="gray.7">
+              <Text size="xs" c="dimmed">
                 {t('locations.definedLine', { line: first.line })}
               </Text>
             </Stack>
@@ -230,22 +228,22 @@ function LocationRow({
         <Stack gap={4}>
           <Group gap={4}>
             {missing ? (
-              <Badge variant="light" color="gray" tt="none">
+              <StatusBadge tone="neutral" size="sm">
                 {t('locations.missing')}
-              </Badge>
+              </StatusBadge>
             ) : l.supported ? (
-              <Badge variant="light" color="green" tt="none">
+              <StatusBadge tone="success" icon="CircleCheck" size="sm">
                 {t('locations.ready')}
-              </Badge>
+              </StatusBadge>
             ) : (
-              <Badge variant="light" color="gray" tt="none">
+              <StatusBadge tone="neutral" size="sm">
                 {t('locations.notSupported')}
-              </Badge>
+              </StatusBadge>
             )}
             {l.active_deployment_id !== null && (
-              <Badge variant="light" color="blue" tt="none">
+              <StatusBadge tone="info" icon="RefreshCw" size="sm">
                 {t('locations.deploying')}
-              </Badge>
+              </StatusBadge>
             )}
           </Group>
           {missing && <Text size="xs">{t('locations.missingSince', { time: formatDateTime(l.missing_since, i18n.language) })}</Text>}

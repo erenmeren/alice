@@ -52,7 +52,7 @@ export function JobErrorAlert({ error }: { error: JobError | null }) {
     <Alert color="red" role="alert" title={withRoleCode(reasonTitle(t, i18n, error.reason, params), params.role)}>
       {i18n.exists(actionKey) && <Text size="sm">{withRoleCode(t(actionKey, params), params.role)}</Text>}
       {error.code && (
-        <Text size="xs" c="gray.7" mt="xs">
+        <Text size="xs" c="dimmed" mt="xs" translate="no">
           {t('jobs.errorCode', { code: error.code })}
         </Text>
       )}

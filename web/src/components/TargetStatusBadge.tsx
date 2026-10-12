@@ -1,25 +1,13 @@
-import { Badge } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import type { TargetStatus } from '../api/types';
+import { StatusBadge, TARGET_ICON, TARGET_TONE } from './ui';
 
-// The color is a cue only; the text always names the status.
-const COLORS: Record<TargetStatus, string> = {
-  ok: 'green',
-  checking: 'blue',
-  degraded: 'orange',
-  pending_host_key: 'yellow',
-  unreachable: 'orange',
-  host_key_changed: 'red',
-  auth_failed: 'red',
-  disabled: 'gray',
-};
-
+// TargetStatusBadge names a server's connection state: text + icon (or dot) + tone, never color alone.
 export function TargetStatusBadge({ status, testId }: { status: TargetStatus; testId?: string }) {
   const { t } = useTranslation();
-  // tt="none": no CSS upper-casing of translated text (Turkish dotted/dotless i, spec §10.5).
   return (
-    <Badge variant="light" color={COLORS[status] ?? 'gray'} tt="none" data-testid={testId}>
+    <StatusBadge tone={TARGET_TONE[status] ?? 'neutral'} icon={TARGET_ICON[status]} testId={testId}>
       {t(`enum.targetStatus.${status}`)}
-    </Badge>
+    </StatusBadge>
   );
 }
