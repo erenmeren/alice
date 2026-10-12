@@ -2620,7 +2620,26 @@
       "retention": "Kullanımdan kaldırılan bir SSH anahtarının özel anahtarını bu kadar gün sakla",
       "save": "Genel ayarları kaydet"
     },
-    "saved": "Kaydedildi."
+    "saved": "Kaydedildi.",
+    "page": {
+      "description": "Alice’i ekibinizin çalışma biçimine uyarlayın.",
+      "mail": "Alice’in uyarıları göndermek için kullandığı e-posta sunucusu.",
+      "recipients": "Operasyon uyarılarını alan kişiler.",
+      "alerts": "Harekete geçmek için yeterince erken uyarın. Acil sinyalleri ayırt edin.",
+      "general": "Bu Alice kurulumu için varsayılanlar.",
+      "backups": "Şifreli yedekler kurtarma verisini korur. Geri yükleme sürecinizi ayrıca test edin.",
+      "https": "Bu Alice kurulumunun sunduğu sertifika.",
+      "forwarding": "Denetim olaylarını bağımsız bir syslog veya SIEM hedefine yönlendirin.",
+      "sso": "Bir OpenID Connect sağlayıcısı bağlayın ve grupları Alice rolleriyle eşleştirin.",
+      "breakGlassTitle": "Yerel kurtarma yöneticisi bulundurun",
+      "breakGlassText": "Kimlik sağlayıcısına ulaşılamadığında yerel hesap erişim sağlar.",
+      "subject": "Konu",
+      "names": "Adlar",
+      "validUntil": "Geçerlilik bitişi",
+      "fingerprint": "Parmak izi (SHA-256)",
+      "lastBackup": "Son yedek",
+      "schedule": "Zamanlama"
+    }
   },
   "sso": {
     "providers": "Kimlik sağlayıcılar",

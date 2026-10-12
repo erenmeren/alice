@@ -2620,7 +2620,26 @@
       "retention": "Keep the private key of a retired SSH key for this many days",
       "save": "Save general settings"
     },
-    "saved": "Saved."
+    "saved": "Saved.",
+    "page": {
+      "description": "Make Alice work the way your team does.",
+      "mail": "The mail server Alice uses to send alerts.",
+      "recipients": "The people who receive operational alerts.",
+      "alerts": "Warn early enough to act. Keep urgent signals distinct.",
+      "general": "Defaults for this Alice installation.",
+      "backups": "Encrypted backups protect recovery data. Test your restore procedure separately.",
+      "https": "The certificate presented by this Alice installation.",
+      "forwarding": "Send audit events to an independent syslog or SIEM destination.",
+      "sso": "Connect an OpenID Connect provider and map groups to Alice roles.",
+      "breakGlassTitle": "Keep a local recovery administrator",
+      "breakGlassText": "A local account provides access if the identity provider is unavailable.",
+      "subject": "Subject",
+      "names": "Names",
+      "validUntil": "Valid until",
+      "fingerprint": "Fingerprint (SHA-256)",
+      "lastBackup": "Last backup",
+      "schedule": "Schedule"
+    }
   },
   "sso": {
     "providers": "Identity providers",
