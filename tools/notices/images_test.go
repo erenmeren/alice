@@ -172,3 +172,66 @@ func TestImagesCommand(t *testing.T) {
 	assert.Equal(t, 2, run([]string{"images", "-out", out}, &stderr), "no image")
 	assert.Equal(t, 2, run([]string{"images", "-go-notices", goNotices, "-out", out, "-image", "alice:1.0.0"}, &stderr), "malformed -image")
 }
+
+// An Alpine package's own license files (/usr/share/licenses/<name>/), a common-licenses link (GPL → GPL-3), a license
+// given as an expression, and an image whose packages declare no GPL license: the offer says there is none.
+func TestImageNoticesFollowLinksAndPackageLicenses(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "a.cdx.json"), `{"components":[
+ {"type":"library","name":"zlib","version":"1.3","purl":"pkg:apk/alpine/zlib@1.3?distro=3.24.2","licenses":[{"expression":"Zlib OR MIT"}]},
+ {"type":"library","name":"tool","version":"1","purl":"pkg:apk/alpine/tool@1","licenses":[{"license":{"id":"GPL+"}}]}]}`)
+	rootfsTar(t, filepath.Join(dir, "a.tar"), map[string]string{
+		"./usr/share/licenses/zlib/LICENSE": "zlib license text",
+		"usr/share/common-licenses/GPL-3":   "GPL 3 text",
+	}, map[string]string{"usr/share/common-licenses/GPL-1": "/usr/share/common-licenses/GPL-3"})
+	write(t, filepath.Join(dir, "n.md"), "# Notices\n")
+	var out bytes.Buffer
+	require.NoError(t, renderImages(&out, []imageInput{{Ref: "a:1", SBOM: filepath.Join(dir, "a.cdx.json"), Rootfs: filepath.Join(dir, "a.tar")}},
+		filepath.Join(dir, "n.md")))
+	doc := out.String()
+	assert.Contains(t, doc, "| zlib | 1.3 | Zlib OR MIT |  | [/usr/share/licenses/zlib/LICENSE](#text-a-1-usr-share-licenses-zlib-license) |")
+	assert.Contains(t, doc, "zlib license text")
+	assert.Contains(t, doc, "Alpine aports (https://gitlab.alpinelinux.org/alpine/aports), package tool")
+
+	fs, err := readRootfs(filepath.Join(dir, "a.tar"))
+	require.NoError(t, err)
+	text, ok := fs.text("usr/share/common-licenses/GPL-1")
+	assert.True(t, ok)
+	assert.Equal(t, "GPL 3 text", text, "a link is followed")
+	_, ok = fs.text("usr/share/common-licenses/none")
+	assert.False(t, ok)
+
+	write(t, filepath.Join(dir, "b.cdx.json"), `{"components":[{"type":"library","name":"m","version":"1","purl":"pkg:apk/alpine/m@1","licenses":[{"license":{"id":"MIT"}}]}]}`)
+	out.Reset()
+	require.NoError(t, renderImages(&out, []imageInput{{Ref: "b:1", SBOM: filepath.Join(dir, "b.cdx.json"), Rootfs: filepath.Join(dir, "a.tar")}},
+		filepath.Join(dir, "n.md")))
+	assert.Contains(t, out.String(), "No component of the images declares a GPL or LGPL license.")
+
+	// A broken SBOM and a broken tar are errors.
+	write(t, filepath.Join(dir, "bad.cdx.json"), "{")
+	require.Error(t, renderImages(&bytes.Buffer{}, []imageInput{{Ref: "c:1", SBOM: filepath.Join(dir, "bad.cdx.json"), Rootfs: filepath.Join(dir, "a.tar")}},
+		filepath.Join(dir, "n.md")))
+	write(t, filepath.Join(dir, "bad.tar"), "not a tar archive at all, but long enough to be read as a header block? no")
+	_, err = readRootfs(filepath.Join(dir, "bad.tar"))
+	require.Error(t, err)
+}
+
+func TestSourceLocation(t *testing.T) {
+	assert.Equal(t, "the Go module x/y@v1", sourceLocation(cdxComponent{Name: "x/y", Version: "v1", Purl: "pkg:golang/x/y@v1"}))
+	assert.Equal(t, "not known from the SBOM; ask the vendor (offer above)", sourceLocation(cdxComponent{Name: "z", Purl: "pkg:rpm/z@1"}))
+	assert.Equal(t, "https://snapshot.debian.org/package/libc/1%3A2.36/",
+		sourceLocation(cdxComponent{Name: "libc6", Version: "2.36", Purl: "pkg:deb/debian/libc6@2.36",
+			Properties: []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			}{{"aquasecurity:trivy:SrcName", "libc"}, {"aquasecurity:trivy:SrcVersion", "1:2.36"}}}))
+}
+
+func TestImagesCommandFailures(t *testing.T) {
+	dir, images, goNotices := imageFixture(t)
+	var stderr bytes.Buffer
+	img := "-image=" + images[0].Ref + "=" + images[0].SBOM + "," + filepath.Join(dir, "missing.tar")
+	assert.Equal(t, 1, run([]string{"images", "-go-notices", goNotices, "-out", filepath.Join(dir, "o.md"), img}, &stderr))
+	good := "-image=" + images[0].Ref + "=" + images[0].SBOM + "," + images[0].Rootfs
+	assert.Equal(t, 1, run([]string{"images", "-go-notices", goNotices, "-out", filepath.Join(dir, "no", "such", "o.md"), good}, &stderr))
+}
