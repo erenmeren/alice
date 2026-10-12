@@ -137,8 +137,10 @@ checks every route against every role and token). The full matrix is in [authz-m
 - Alice checks the whole chain every day and on demand (**Verify integrity**, `alicectl audit verify`). The newest
   verified hash is shown on the dashboard for recording outside Alice.
 - **Forwarding** sends every entry, in order, to the customer's syslog server or SIEM (RFC 5424, over TLS by
-  default), with its sequence number, hash and previous hash, so the receiver holds an independent copy and can check
-  the chain. Delivery is at most once: a lost connection can lose a message, and the receiver sees the gap in the
+  default), with its sequence number, hash and previous hash, so the receiver holds an independent copy of the hashes
+  and can check that the entries link up; it cannot recompute a hash from the message, which leaves out some hashed
+  fields (actor ID, client address, request ID) and cuts long details ([admin-guide.md](admin-guide.md#audit-forwarding)).
+  Delivery is at most once: a lost connection can lose a message, and the receiver sees the gap in the
   sequence numbers ([admin-guide.md](admin-guide.md#audit-forwarding)).
 - A restore from a backup is itself recorded, naming the replaced history (its last entry), so a rollback of the
   audit log is visible.

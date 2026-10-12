@@ -457,6 +457,13 @@ the missing entries from Alice's JSON export ([api.md](api.md#examples)). After 
 gets entries again, then `system.restored` under a sequence number it already holds: a second, visible branch
 ([backup-restore.md](backup-restore.md#restore-on-the-same-server)).
 
+**What the receiver can check.** The forwarded stream lets the receiver check that the entries link up (`seq` and
+`prev_hash`) and keep the hashes outside Alice. It cannot recompute an entry's `hash` from the message: the hash also
+covers fields the message does not carry (the actor's ID and type, the client address and the request ID), and long
+details or actor names are cut to fit the message. To prove that an entry's
+content matches its hash, compare the forwarded `hash` with Alice's JSON export of that entry, which carries every
+field, and run **Verify integrity** (`alicectl audit verify`).
+
 **Example receiver: rsyslog with TLS.** On the syslog server (rsyslog 8 with the GnuTLS driver, package
 `rsyslog-gnutls`), with a certificate for the name you enter as **Syslog server**, for example in
 `/etc/rsyslog.d/alice.conf`:
