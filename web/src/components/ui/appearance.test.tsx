@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { renderApp } from '../../test/render';
@@ -40,6 +40,39 @@ describe('AppearanceControl', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Language' }), 'tr');
     await waitFor(() => expect(root).toHaveAttribute('lang', 'tr'));
     expect(saved).toHaveBeenCalledOnce();
+  });
+});
+
+describe('AppearanceControl accessibility', () => {
+  it('groups the color modes under their legend and moves between them with the arrow keys', async () => {
+    await renderApp(<AppearanceControl signedIn={false} />);
+    const group = screen.getByRole('group', { name: 'Color mode' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios).toHaveLength(3);
+    expect(new Set(radios.map((r) => r.getAttribute('name'))).size).toBe(1);
+    await userEvent.click(radios[0]);
+    expect(localStorage.getItem('alice.colorScheme')).toBe('light');
+    await userEvent.keyboard('{ArrowRight}');
+    expect(radios[1]).toBeChecked();
+    expect(radios[1]).toHaveFocus();
+    expect(localStorage.getItem('alice.colorScheme')).toBe('dark');
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(radios[0]).toBeChecked();
+    expect(localStorage.getItem('alice.colorScheme')).toBe('light');
+  });
+  it('gives two controls on one page separate radio groups', async () => {
+    await renderApp(<><AppearanceControl signedIn={false} /><AppearanceControl signedIn={false} /></>);
+    const [a, b] = screen.getAllByRole('group', { name: 'Color mode' });
+    expect(within(a).getAllByRole('radio')[0].getAttribute('name')).not.toBe(within(b).getAllByRole('radio')[0].getAttribute('name'));
+  });
+  it('describes the compact switch and the language select with their help texts', async () => {
+    await renderApp(<AppearanceControl signedIn />);
+    expect(screen.getByRole('switch', { name: 'Compact tables' })).toHaveAccessibleDescription('Use 48 px rows to see more information at once.');
+    expect(screen.getByRole('combobox', { name: 'Language' })).toHaveAccessibleDescription('Saved to your account, so it follows you to other browsers.');
+  });
+  it('gives the language select no description when the choice stays on this device', async () => {
+    await renderApp(<AppearanceControl signedIn={false} />);
+    expect(screen.getByRole('combobox', { name: 'Language' })).not.toHaveAttribute('aria-describedby');
   });
 });
 

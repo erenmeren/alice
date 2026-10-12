@@ -1,5 +1,8 @@
 .pageHead { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 26px; }
 .pageHeadText { min-width: 0; }
+/* A detail page's title is a resource name (a CN, a host name): it breaks anywhere rather than scroll the page. */
+.pageTitle { min-width: 0; overflow-wrap: anywhere; }
+.pageHead .pageTitle[data-detail] { font-size: 27px; }
 .eyebrow { font-family: var(--mantine-font-family-monospace); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 1.3px; color: var(--alice-text-muted); margin-bottom: 7px; }
 .description { font-size: 12px; margin-top: 9px; color: var(--alice-text-secondary); }
 .actions { flex-wrap: wrap; justify-content: flex-end; }
@@ -7,25 +10,26 @@
 .detailIcon { width: 48px; height: 52px; border: 1px solid var(--alice-border); background: var(--alice-surface); border-radius: 6px; display: grid; place-items: center; color: var(--alice-text-secondary); flex-shrink: 0; }
 .panel { background: var(--alice-surface); border: 1px solid var(--alice-border); border-radius: var(--alice-radius-md); overflow: hidden; min-width: 0; }
 .panelHead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 22px 0; }
-.panelTitle { font-size: 16px; }
+.panelHead > div { min-width: 0; }
+.panelTitle { font-size: 16px; overflow-wrap: anywhere; }
 .panelDescription { font-size: 11px; margin-top: 4px; color: var(--alice-text-secondary); }
 .panelBody { padding: 22px; }
 .panelFlush { padding-top: 16px; }
-.panelFoot { padding: 12px 22px; border-top: 1px solid var(--alice-border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--alice-text-muted); }
+.panelFoot { padding: 12px 22px; border-top: 1px solid var(--alice-border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 10px; color: var(--alice-text-muted); }
 .tablePanel { background: var(--alice-surface); border: 1px solid var(--alice-border); border-radius: var(--alice-radius-md); overflow: hidden; min-width: 0; }
 .toolbar { display: flex; align-items: flex-end; gap: 8px; padding: 16px 18px; border-bottom: 1px solid var(--alice-border); flex-wrap: wrap; }
-.tableBottom { padding: 13px 18px; border-top: 1px solid var(--alice-border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 11px; color: var(--alice-text-muted); }
+.tableBottom { padding: 13px 18px; border-top: 1px solid var(--alice-border); display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-size: 10px; color: var(--alice-text-muted); }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; }
 .facts { margin: 0; display: grid; }
-.fact { padding: 12px 0; border-bottom: 1px solid var(--alice-border); display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 12px; font-size: 12px; }
+.fact { padding: 12px 0; border-bottom: 1px solid var(--alice-border); display: grid; grid-template-columns: 125px minmax(0, 1fr); gap: 12px; font-size: 11px; }
 .fact:first-child { padding-top: 0; }
 .fact:last-child { border-bottom: 0; padding-bottom: 0; }
-.factLabel { color: var(--alice-text-muted); font-size: 11px; }
+.factLabel { color: var(--alice-text-muted); font-size: 10px; }
 .factValue { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .timeline { list-style: none; margin: 0; padding: 22px; }
 .timelineStep { position: relative; display: flex; gap: 14px; padding-bottom: 25px; }
 .timelineStep:last-child { padding-bottom: 0; }
-.timelineStep::before { content: ''; position: absolute; left: 13px; top: 28px; bottom: 0; width: 1px; background: var(--alice-border); }
+.timelineStep::before { content: ''; position: absolute; left: 13px; top: 25px; bottom: 0; width: 1px; background: var(--alice-border); }
 .timelineStep:last-child::before { display: none; }
 .stepMarker { width: 28px; height: 28px; border: 1px solid var(--alice-border); border-radius: 50%; background: var(--alice-surface-subtle); display: grid; place-items: center; flex-shrink: 0; color: var(--alice-text-muted); position: relative; z-index: 1; }
 .stepMarker[data-state='done'] { background: var(--alice-success-soft); border-color: var(--alice-brand-line); color: var(--alice-success); }
@@ -33,24 +37,26 @@
 .stepMarker[data-state='running'], .stepMarker[data-state='waiting'] { background: var(--alice-info-soft); color: var(--alice-info); }
 .stepText { flex: 1; min-width: 0; }
 .stepTitle { font-size: 12px; font-weight: 600; margin-top: 4px; }
-.stepStatus { font-size: 11px; color: var(--alice-text-secondary); }
-.stepDetail { font-size: 11px; margin-top: 5px; color: var(--alice-text-secondary); overflow-wrap: anywhere; }
+.stepStatus { font-size: 10px; color: var(--alice-text-secondary); }
+.stepDetail { font-size: 10px; margin-top: 5px; color: var(--alice-text-secondary); overflow-wrap: anywhere; }
 .stepTime { margin-left: auto; padding-top: 5px; font-family: var(--mantine-font-family-monospace); font-size: 10px; color: var(--alice-text-muted); white-space: nowrap; }
 .attentionList { list-style: none; margin: 0; padding: 9px 0 0; }
 .attentionRow { display: flex; align-items: flex-start; gap: 11px; width: 100%; padding: 16px 22px; border: 0; border-bottom: 1px solid var(--alice-border); background: none; text-align: left; font: inherit; color: var(--alice-text); text-decoration: none; }
+/* Inside ring: the row is full width in a panel that clips (overflow: hidden). */
+.attentionRow:focus-visible { outline-offset: -3px; }
 li:last-child > .attentionRow { border-bottom: 0; }
 a.attentionRow:hover, button.attentionRow:hover { background: var(--alice-surface-hover); }
 .statusBox { width: 29px; height: 29px; border-radius: 7px; display: grid; place-items: center; flex-shrink: 0; background: var(--alice-warning-soft); color: var(--alice-warning); }
 .statusBox[data-tone='danger'] { background: var(--alice-danger-soft); color: var(--alice-danger); }
 .statusBox[data-tone='info'] { background: var(--alice-info-soft); color: var(--alice-info); }
 .attentionText { display: grid; gap: 4px; min-width: 0; }
-.attentionTitle { font-size: 12px; font-weight: 600; }
-.attentionDetail { font-size: 11px; color: var(--alice-text-secondary); overflow-wrap: anywhere; }
+.attentionTitle { font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
+.attentionDetail { font-size: 10px; color: var(--alice-text-secondary); overflow-wrap: anywhere; }
 .attentionMeta { font-size: 10px; color: var(--alice-text-muted); }
 .chevron { margin-left: auto; align-self: center; flex-shrink: 0; color: var(--alice-text-muted); }
 .empty { text-align: center; padding: 60px 24px; }
 .emptyIcon { color: var(--alice-text-muted); margin-bottom: 14px; }
-.emptyTitle { margin: 0; font-size: 16px; font-weight: 600; color: var(--alice-text); }
+.emptyTitle { margin: 0; font-size: 16px; font-weight: 600; color: var(--alice-text); overflow-wrap: anywhere; }
 .emptyText { margin: 8px auto 18px; max-width: 330px; font-size: 12px; color: var(--alice-text-secondary); }
 .noticeAction { margin-top: 10px; }
 .metricStrip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 24px; padding: 23px 0; background: var(--alice-surface); border: 1px solid var(--alice-border); border-radius: var(--alice-radius-md); }
@@ -60,18 +66,20 @@ a.metric:hover .metricValue { color: var(--alice-brand); }
 .metricLabel { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--alice-text-secondary); }
 .metricLabel svg { color: var(--alice-text-muted); }
 .metricValue { display: block; margin: 9px 0 6px; font-size: 33px; font-weight: 530; line-height: 1.1; letter-spacing: -1.3px; font-variant-numeric: tabular-nums; }
-.metricFoot { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--alice-text-secondary); }
+.metricFoot { display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--alice-text-secondary); }
 .metricFoot[data-tone='warning'] { color: var(--alice-warning); }
 .metricFoot[data-tone='danger'] { color: var(--alice-danger); }
 .linkTabs { display: flex; gap: 24px; margin-bottom: 24px; border-bottom: 1px solid var(--alice-border); overflow-x: auto; }
 .linkTab { display: flex; align-items: center; gap: 8px; margin-bottom: -1px; padding: 0 0 13px; border-bottom: 2px solid transparent; white-space: nowrap; font-size: 12px; font-weight: 500; color: var(--alice-text-secondary); text-decoration: none; }
+/* Inside ring: the tab row scrolls sideways, which clips anything drawn outside it. */
+.linkTab:focus-visible { outline-offset: -3px; }
 .linkTab[data-active] { border-color: var(--alice-brand); color: var(--alice-brand); }
 .dialogActions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; margin: 24px -24px -24px; padding: 16px 24px; border-top: 1px solid var(--alice-border); background: var(--alice-surface-subtle); }
 .dialogNote { margin-right: auto; font-size: 11px; color: var(--alice-text-muted); }
 .modeSet { border: 0; margin: 0; padding: 0; min-width: 0; }
 .fieldLabel { padding: 0; font-size: 11px; font-weight: 550; color: var(--alice-text); }
-.appearanceOptions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin-top: 12px; }
-.appearanceOption { display: block; padding: 10px; border: 1px solid var(--alice-border); border-radius: 8px; font-size: 12px; cursor: pointer; }
+.appearanceOptions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin-top: 17px; }
+.appearanceOption { display: block; padding: 10px; border: 1px solid var(--alice-border); border-radius: 8px; font-size: 11px; cursor: pointer; }
 .appearanceOption[data-active] { padding: 9px; border: 2px solid var(--alice-brand); }
 .appearanceOption:has(input:focus-visible) { outline: 3px solid var(--alice-focus); outline-offset: 3px; }
 /* The previews show each mode as it looks, whatever the current scheme: fixed colors on purpose (aria-hidden). */
@@ -88,12 +96,16 @@ a.metric:hover .metricValue { color: var(--alice-brand); }
 .switchRow { display: flex; align-items: center; gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--alice-border); }
 .switchRow > :last-child { margin-left: auto; flex-shrink: 0; }
 .rowTitle { font-size: 14px; font-weight: 600; }
-.rowHelp { margin: 4px 0 0; font-size: 11px; color: var(--alice-text-secondary); }
+.rowHelp { margin: 4px 0 0; font-size: 10px; color: var(--alice-text-secondary); }
 .langCode { text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px; }
-@media (max-width: 1199px) { .panelHead { padding: 18px 18px 0; } .panelBody { padding: 18px; } }
+@media (max-width: 1199px) { .panelHead { padding: 18px 18px 0; } .panelBody { padding: 18px; } .metric { padding: 0 17px; } }
 @media (max-width: 1019px) { .pageHead { align-items: flex-start; } .metricStrip { padding: 18px 0; } .metricValue { font-size: 28px; } }
 @media (max-width: 767px) {
   .pageHead { flex-wrap: wrap; gap: 12px; margin-bottom: 22px; }
+  .pageHead .pageTitle { font-size: 28px; }
+  .pageHead .pageTitle[data-detail] { font-size: 22px; }
+  .detailIcon { width: 40px; height: 44px; }
+  .description { font-size: 11px; }
   .actions { justify-content: flex-start; }
   .toolbar, .tableBottom { padding: 12px; }
   .fact { grid-template-columns: 110px minmax(0, 1fr); }
@@ -101,7 +113,13 @@ a.metric:hover .metricValue { color: var(--alice-brand); }
   .metric { padding: 18px; border-bottom: 1px solid var(--alice-border); }
   .metric:nth-child(2n) { border-right: 0; }
   .metric:nth-last-child(-n + 2) { border-bottom: 0; }
+  .metricLabel { font-size: 10px; }
   .metricValue { font-size: 30px; }
+  .metricFoot { font-size: 9px; }
+  .linkTabs { gap: 20px; }
+  .linkTab { font-size: 11px; }
+  .timeline { padding: 18px; }
+  .attentionRow { padding: 16px 18px; }
   .appearanceOptions { gap: 7px; }
   .switchRow { flex-wrap: wrap; }
 }

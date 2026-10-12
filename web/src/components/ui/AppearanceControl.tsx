@@ -1,4 +1,5 @@
 import { NativeSelect, Switch, useMantineColorScheme, type MantineColorScheme } from '@mantine/core';
+import { useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import { setMyLocale } from '../../api/endpoints';
 import { Icon } from '../../design/Icon';
@@ -22,6 +23,7 @@ export function AppearanceControl({ signedIn }: AppearanceControlProps) {
   const { t, i18n } = useTranslation();
   const { colorScheme, setColorScheme } = useMantineColorScheme();
   const [density, setDensity] = useDensity();
+  const id = useId();
   const changeLanguage = async (code: Lang) => {
     try {
       await setLanguage(i18n, code);
@@ -45,7 +47,7 @@ export function AppearanceControl({ signedIn }: AppearanceControlProps) {
             const active = colorScheme === m.value;
             return (
               <label key={m.value} className={classes.appearanceOption} data-active={active || undefined}>
-                <input type="radio" name="alice-color-mode" value={m.value} checked={active} onChange={() => setColorScheme(m.value)} className={classes.visuallyHidden} />
+                <input type="radio" name={`${id}-color-mode`} value={m.value} checked={active} onChange={() => setColorScheme(m.value)} className={classes.visuallyHidden} />
                 <span className={classes.miniApp} data-mode={m.value} aria-hidden="true">
                   <i />
                   <span />
@@ -62,16 +64,22 @@ export function AppearanceControl({ signedIn }: AppearanceControlProps) {
       <div className={classes.switchRow}>
         <div>
           <div className={classes.rowTitle}>{t('appearance.compact')}</div>
-          <p className={classes.rowHelp}>{t('appearance.compactHelp')}</p>
+          <p id={`${id}-compact-help`} className={classes.rowHelp}>{t('appearance.compactHelp')}</p>
         </div>
-        <Switch checked={density === 'compact'} onChange={(e) => setDensity(e.currentTarget.checked ? 'compact' : 'comfortable')} aria-label={t('appearance.compact')} />
+        <Switch checked={density === 'compact'} onChange={(e) => setDensity(e.currentTarget.checked ? 'compact' : 'comfortable')} aria-label={t('appearance.compact')} aria-describedby={`${id}-compact-help`} />
       </div>
       <div className={classes.switchRow}>
         <div>
           <div className={classes.rowTitle}>{t('language.label')}</div>
-          {signedIn && <p className={classes.rowHelp}>{t('appearance.languageHelp')}</p>}
+          {/* Mantine's input owns aria-describedby: the select carries the help as its (visually hidden) description and
+              this visible copy is hidden from assistive technology, so it is read once. */}
+          {signedIn && (
+            <p className={classes.rowHelp} aria-hidden="true">
+              {t('appearance.languageHelp')}
+            </p>
+          )}
         </div>
-        <NativeSelect aria-label={t('language.label')} value={i18n.language} onChange={(e) => void changeLanguage(e.currentTarget.value as Lang)} data={LANGUAGES.map((l) => ({ value: l.code, label: l.name }))} />
+        <NativeSelect aria-label={t('language.label')} description={signedIn ? t('appearance.languageHelp') : undefined} classNames={{ description: classes.visuallyHidden }} value={i18n.language} onChange={(e) => void changeLanguage(e.currentTarget.value as Lang)} data={LANGUAGES.map((l) => ({ value: l.code, label: l.name }))} />
       </div>
     </div>
   );

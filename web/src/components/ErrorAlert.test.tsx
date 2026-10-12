@@ -39,6 +39,16 @@ describe('ErrorAlert', () => {
     expect(screen.getByText('Request ID: req-7')).toBeInTheDocument();
   });
 
+  it('shows the error code in Turkish, still untranslated', async () => {
+    const err = new ApiError(409, {
+      code: 'ALC-ROT-0001', reason: 'rotation.policy_exists', message_key: 'errors.rotation.policy_exists',
+      message: 'm', request_id: 'req-7', retryable: false,
+    });
+    await renderApp(<ErrorAlert error={err} />, ['tr-TR']);
+    expect(screen.getByRole('alert')).toHaveTextContent('Hata kodu: ALC-ROT-0001');
+    expect(screen.getByText('ALC-ROT-0001')).toHaveAttribute('translate', 'no');
+  });
+
   it('shows no error code line when the API error has no code', async () => {
     await renderApp(<ErrorAlert error={apiError('auth.invalid_credentials', { code: '' })} />);
     expect(screen.getByRole('alert')).not.toHaveTextContent('Error code');

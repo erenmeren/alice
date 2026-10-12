@@ -1,12 +1,46 @@
 import { readFileSync } from 'node:fs';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { MemoryRouter } from 'react-router';
 import { Table } from '@mantine/core';
 import { renderApp } from '../../test/render';
 import { AttentionItem, CursorFooter, DialogActions, EmptyState, FactList, LinkTabs, MetricStrip, Notice, OperationTimeline, PageHeader, Panel, ResourceTable, StatusBadge } from '.';
+import classes from './ui.module.css';
 
 const css = readFileSync('src/components/ui/ui.module.css', 'utf8');
+
+// splitCss separates the top-level rules from the bodies of the @media blocks (keyed by their condition).
+function splitCss(source: string): { top: string; media: Record<string, string> } {
+  let top = '';
+  const media: Record<string, string> = {};
+  let i = 0;
+  while (i < source.length) {
+    const at = source.indexOf('@media', i);
+    if (at < 0) {
+      top += source.slice(i);
+      break;
+    }
+    top += source.slice(i, at);
+    const open = source.indexOf('{', at);
+    let depth = 1;
+    let j = open + 1;
+    for (; depth > 0; j++) depth += source[j] === '{' ? 1 : source[j] === '}' ? -1 : 0;
+    media[source.slice(at + 6, open).trim()] = (media[source.slice(at + 6, open).trim()] ?? '') + source.slice(open + 1, j - 1);
+    i = j;
+  }
+  return { top, media };
+}
+const sheet = splitCss(css.replace(/\/\*[\s\S]*?\*\//g, ''));
+// decls returns the declarations of every rule whose selector list contains the selector exactly.
+function decls(source: string, selector: string): string {
+  const out: string[] = [];
+  for (const m of source.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (m[1].split(',').map((x) => x.trim()).includes(selector)) out.push(m[2]);
+  }
+  return out.join(';');
+}
+const mobile = sheet.media['(max-width: 767px)'];
 
 describe('PageHeader', () => {
   it('is the page’s only level-1 heading, with eyebrow, description, actions and a back link', async () => {
@@ -16,6 +50,64 @@ describe('PageHeader', () => {
     expect(screen.getByText('Monday')).toBeVisible();
     expect(screen.getByRole('link', { name: 'All certificates' })).toHaveAttribute('href', '/certificates');
     expect(screen.getByRole('button', { name: 'Export' })).toBeVisible();
+  });
+});
+
+describe('long resource names', () => {
+  it('break inside the page, panel, attention and empty-state titles instead of scrolling the page sideways', async () => {
+    await renderApp(<MemoryRouter><PageHeader title="seed-web-3.prod.example.internal" icon="Server" /></MemoryRouter>);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveClass(classes.pageTitle);
+    expect(decls(sheet.top, '.pageTitle')).toMatch(/min-width:\s*0/);
+    for (const sel of ['.pageTitle', '.panelTitle', '.attentionTitle', '.emptyTitle']) expect(decls(sheet.top, sel)).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(decls(sheet.top, '.panelHead > div')).toMatch(/min-width:\s*0/);
+  });
+});
+
+describe('focus rings', () => {
+  it('are drawn inside full-width attention rows and link tabs, whose containers clip anything outside', () => {
+    expect(decls(sheet.top, '.attentionRow:focus-visible')).toMatch(/outline-offset:\s*-3px/);
+    expect(decls(sheet.top, '.linkTab:focus-visible')).toMatch(/outline-offset:\s*-3px/);
+  });
+});
+
+describe('text sizes', () => {
+  it.each([
+    ['.fact', 'font-size: 11px'],
+    ['.factLabel', 'font-size: 10px'],
+    ['.panelFoot', 'font-size: 10px'],
+    ['.tableBottom', 'font-size: 10px'],
+    ['.metricFoot', 'font-size: 10px'],
+    ['.attentionTitle', 'font-size: 11px'],
+    ['.attentionDetail', 'font-size: 10px'],
+    ['.stepStatus', 'font-size: 10px'],
+    ['.stepDetail', 'font-size: 10px'],
+    ['.rowHelp', 'font-size: 10px'],
+    ['.appearanceOption', 'font-size: 11px'],
+    ['.appearanceOptions', 'margin-top: 17px'],
+    ['.timelineStep::before', 'top: 25px'],
+  ])('%s follows the design (%s)', (sel, decl) => {
+    expect(decls(sheet.top, sel)).toContain(decl);
+  });
+
+  it.each([
+    ['.pageHead .pageTitle', 'font-size: 28px'],
+    ['.pageHead .pageTitle[data-detail]', 'font-size: 22px'],
+    ['.description', 'font-size: 11px'],
+    ['.metricLabel', 'font-size: 10px'],
+    ['.metricFoot', 'font-size: 9px'],
+    ['.linkTabs', 'gap: 20px'],
+    ['.linkTab', 'font-size: 11px'],
+    ['.timeline', 'padding: 18px'],
+    ['.attentionRow', 'padding: 16px 18px'],
+    ['.detailIcon', 'width: 40px'],
+  ])('%s shrinks on a phone as in the design (%s)', (sel, decl) => {
+    expect(decls(mobile, sel)).toContain(decl);
+  });
+
+  it('gives a detail page’s title the design’s smaller size', async () => {
+    await renderApp(<PageHeader title="seed-web-3" icon="Server" />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveAttribute('data-detail');
+    expect(decls(sheet.top, '.pageHead .pageTitle[data-detail]')).toContain('font-size: 27px');
   });
 });
 
@@ -46,6 +138,16 @@ describe('ResourceTable', () => {
     expect(screen.getByRole('group', { name: 'Table, scrolls sideways' })).toHaveAttribute('tabindex', '0');
     expect(screen.getByRole('textbox', { name: 'Search' })).toBeVisible();
     expect(screen.getByText('2 shown')).toBeVisible();
+    expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveAttribute('scope', 'col');
+  });
+
+  it('keeps a header cell’s own scope', async () => {
+    await renderApp(
+      <ResourceTable label="Keys">
+        <Table.Tbody><Table.Tr><Table.Th scope="row">k</Table.Th><Table.Td>v</Table.Td></Table.Tr></Table.Tbody>
+      </ResourceTable>,
+    );
+    expect(screen.getByRole('rowheader', { name: 'k' })).toHaveAttribute('scope', 'row');
   });
 });
 
@@ -61,6 +163,70 @@ describe('CursorFooter', () => {
     await renderApp(<CursorFooter shown={51} hasMore={false} loading={false} onMore={more} moreLabel="Load more" />);
     expect(screen.getByText('51 shown')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
+  });
+});
+
+// LoadMoreTable pages 50 more rows on Load more; the last page ends when `gate` resolves.
+function LoadMoreTable({ gate, onMore }: { gate: Promise<void>; onMore: () => void }) {
+  const [rows, setRows] = useState(50);
+  const [loading, setLoading] = useState(false);
+  const more = async () => {
+    onMore();
+    setLoading(true);
+    await gate;
+    setRows(60);
+    setLoading(false);
+  };
+  return (
+    <ResourceTable label="Keys" footer={<CursorFooter shown={rows} hasMore={rows < 60} loading={loading} onMore={() => void more()} moreLabel="Load more" />}>
+      <Table.Tbody><Table.Tr><Table.Td>{rows}</Table.Td></Table.Tr></Table.Tbody>
+    </ResourceTable>
+  );
+}
+
+describe('CursorFooter keyboard focus', () => {
+  it('keeps focus on Load more while loading and moves it to the table when the last page arrives', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const onMore = vi.fn();
+    await renderApp(<LoadMoreTable gate={gate} onMore={onMore} />);
+    const button = screen.getByRole('button', { name: /Load more/ });
+    button.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(onMore).toHaveBeenCalledOnce();
+    // Loading: still focused and announced as unavailable, not disabled (a disabled button drops focus).
+    expect(button).toHaveFocus();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).not.toBeDisabled();
+    await userEvent.keyboard('{Enter}');
+    expect(onMore).toHaveBeenCalledOnce();
+    release();
+    await screen.findByText('60 shown');
+    expect(screen.queryByRole('button', { name: /Load more/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Table, scrolls sideways' })).toHaveFocus();
+  });
+
+  it('announces the new count politely and leaves focus alone when it was elsewhere', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    await renderApp(<LoadMoreTable gate={gate} onMore={() => undefined} />);
+    expect(screen.getByText('50 shown')).toHaveAttribute('aria-live', 'polite');
+    await userEvent.click(screen.getByRole('button', { name: /Load more/ }));
+    (document.activeElement as HTMLElement).blur();
+    release();
+    await screen.findByText('60 shown');
+    expect(document.body).toHaveFocus();
+  });
+
+  it('falls back to the count when it is not in a table', async () => {
+    function Bare() {
+      const [more, setMore] = useState(true);
+      return <CursorFooter shown={more ? 5 : 6} hasMore={more} loading={false} onMore={() => setMore(false)} moreLabel="Load more" />;
+    }
+    await renderApp(<Bare />);
+    screen.getByRole('button', { name: 'Load more' }).focus();
+    await userEvent.keyboard('{Enter}');
+    expect(screen.getByText('6 shown')).toHaveFocus();
   });
 });
 
@@ -92,6 +258,7 @@ describe('OperationTimeline', () => {
       { id: 'reload', title: 'Reload Nginx', state: 'notRun', stateLabel: 'Not run' },
     ]} />);
     const list = screen.getByRole('list', { name: 'Steps' });
+    expect(list).toHaveAttribute('role', 'list'); // WebKit drops the list role of an unstyled list
     const items = within(list).getAllByRole('listitem');
     expect(items[0]).toHaveAttribute('data-step', 'backup');
     expect(items[0].querySelector('[data-role="step-status"]')).toHaveTextContent('Done');

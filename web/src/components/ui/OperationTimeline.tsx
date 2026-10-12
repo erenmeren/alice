@@ -33,7 +33,8 @@ const MARKER: Record<Exclude<StepState, 'running'>, IconName> = {
 // the marker alone never carries the meaning. A step that was not run says so — never a green tick (IMPLEMENTATION §5).
 export function OperationTimeline({ steps, label }: OperationTimelineProps) {
   return (
-    <ol className={classes.timeline} aria-label={label}>
+    // role="list": WebKit drops the list role of a list drawn without bullets.
+    <ol className={classes.timeline} aria-label={label} role="list">
       {steps.map((s) => (
         <li key={s.id} className={classes.timelineStep} {...s.dataAttrs}>
           <span className={classes.stepMarker} data-state={s.state} aria-hidden="true">

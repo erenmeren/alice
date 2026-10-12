@@ -33,7 +33,10 @@ export function PageHeader({ title, description, eyebrow, actions, back, icon, s
                 <Icon name={icon} size={23} />
               </span>
             )}
-            <Title order={1}>{title}</Title>
+            {/* A detail page (with its resource tile) uses the design's smaller detail-title size. */}
+            <Title order={1} className={classes.pageTitle} data-detail={icon ? true : undefined}>
+              {title}
+            </Title>
             {status}
           </Group>
           {description && <Text className={classes.description}>{description}</Text>}

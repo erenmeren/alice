@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, Radio, Switch, Table, TableScrollContainer, Tabs, Title,
+  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, Radio, Switch, Table, TableScrollContainer, TableTh, Tabs, Title,
   createTheme, defaultVariantColorsResolver,
   type CSSVariablesResolver, type MantineColorsTuple, type MantineThemeOverride, type VariantColorsResolver,
 } from '@mantine/core';
@@ -129,6 +129,8 @@ export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
         classNames: { content: classes.dialog, header: classes.dialogHeader, title: classes.dialogTitle, body: classes.dialogBody, overlay: classes.dialogOverlay },
       }),
       Table: Table.extend({ classNames: { table: classes.table } }),
+      // The design's tables mark header cells as column headers; a row header passes scope="row" itself.
+      TableTh: TableTh.extend({ defaultProps: { scope: 'col' } }),
       Tabs: Tabs.extend({ classNames: { list: classes.tabsList, tab: classes.tab } }),
       Title: Title.extend({ classNames: { root: classes.title } }),
       Input: Input.extend({ classNames: { input: classes.input } }),
