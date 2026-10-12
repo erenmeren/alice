@@ -435,9 +435,11 @@ export async function uiLang(page: Page): Promise<Lang> {
 
 // expectSignedInAs proves who is signed in after a sign-in or the wizard: the Overview heading and the sidebar's name
 // (the design has no personal "Welcome" heading; label change 2 of docs/superpowers/plans/2026-10-12-phase-9-design.md).
+// The heading matches either language: the account's language is applied after the shell first renders, so reading the
+// page language once could pick the one that is about to change (a new account starts in English on a Turkish run).
 export async function expectSignedInAs(page: Page, name: string): Promise<void> {
-  const lang = await uiLang(page);
-  await expect(page.getByRole('heading', { level: 1, name: translator(lang)('dashboard.title') })).toBeVisible();
+  const title = (lang: Lang) => escapeRegExp(translator(lang)('dashboard.title'));
+  await expect(page.getByRole('heading', { level: 1, name: new RegExp(`${title('en')}|${title('tr')}`) })).toBeVisible();
   await expect(page.getByTestId('current-user')).toHaveText(name);
 }
 
