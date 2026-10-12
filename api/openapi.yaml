@@ -622,9 +622,9 @@ paths:
         Go's csv.Reader.Comment or pandas' comment="#"):
         "# alice audit export: intact=<true|false> checked=<n> head_seq=<n> head_hash=<hex>", followed on a
         broken chain by " first_bad_seq=<n> problem=<hash_mismatch|sequence_gap|tail_truncated>". The header
-        row is the second line. Cells that start with =, +, -, @, a tab or a carriage return get a leading
-        apostrophe. One verification or export runs at a time per Alice process; another one is refused with
-        503 ALC-AUD-0001 (retryable, Retry-After).
+        row is the second line. Cells that start with =, +, -, @, a tab, a carriage return or a line feed get a
+        leading apostrophe. One verification or export runs at a time per Alice process; another one is refused
+        with 503 ALC-AUD-0001 (retryable, Retry-After).
         HEAD is refused with 405 ALC-SYS-0009 without verifying or recording anything.
       responses:
         "200":
@@ -2334,9 +2334,9 @@ paths:
         The whole list for the filters, in the list's order: UTF-8 with a byte order mark, a header row
         (id,subject_cn,label,sans,issuer,serial,not_before,not_after,days_left,source,key_algorithm,key_bits,self_signed,chain_complete,fingerprint,location_count;
         SANs separated by a space, times RFC 3339 UTC), then one row per certificate. Cells that start with =, +, -, @, a
-        tab or a carriage return get a leading apostrophe, so a spreadsheet never runs them as a formula. No private key
-        and no PEM is ever part of an export. The export is recorded in the audit log (inventory.exported with the
-        filters and the row count) before the first byte is sent. At most 50,000 rows: a filter that matches more is
+        tab, a carriage return or a line feed get a leading apostrophe, so a spreadsheet never runs them as a
+        formula. No private key and no PEM is ever part of an export. The export is recorded in the audit log
+        (inventory.exported with the filters and the row count) before the first byte is sent. At most 50,000 rows: a filter that matches more is
         refused with 409 ALC-RPT-0001 before anything is written (a JSON error, no file); Alice counts the rows first and
         then streams them, so rows added between the count and the end of the file can make the file stop at 50,000
         rows without an error. One export at a time per person (409 ALC-RPT-0004, retryable, Retry-After); at most 10

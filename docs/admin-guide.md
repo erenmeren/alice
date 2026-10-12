@@ -636,7 +636,8 @@ column names (certificates: `id`, `subject_cn`, `label`, `sans`, `issuer`, `seri
 `days_left`, `source`, `key_algorithm`, `key_bits`, `self_signed`, `chain_complete`, `fingerprint`,
 `location_count`; SSH keys: `id`, `fingerprint`, `key_type`, `bits`, `comment`, `managed`, `platform_key`, `weak`,
 `location_count`, `target_count`, `missing`, `retired`, `first_seen_at`), times in UTC. A cell that starts with `=`,
-`+`, `-`, `@`, a tab or a carriage return gets a leading apostrophe, so a spreadsheet never runs it as a formula.
+`+`, `-`, `@`, a tab, a carriage return or a line feed gets a leading apostrophe, so a spreadsheet never runs it as
+a formula.
 
 Everyone who can see a list can export it, also read-only API tokens and during a license lock. Each export is
 recorded in the audit log (**Inventory exported**, with the filters and the row count) before the first byte is

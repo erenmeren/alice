@@ -14,7 +14,7 @@ import (
 // Review Focus 4: every formula prefix a spreadsheet evaluates is neutralised; nothing else changes.
 func TestSafeNeutralisesFormulaPrefixes(t *testing.T) {
 	for in, want := range map[string]string{
-		"=1+1": "'=1+1", "+1": "'+1", "-1": "'-1", "@SUM(A1)": "'@SUM(A1)", "\tx": "'\tx", "\rx": "'\rx",
+		"=1+1": "'=1+1", "+1": "'+1", "-1": "'-1", "@SUM(A1)": "'@SUM(A1)", "\tx": "'\tx", "\rx": "'\rx", "\nx": "'\nx", "\n=1": "'\n=1",
 		"=HYPERLINK(\"http://x\")": "'=HYPERLINK(\"http://x\")",
 		"admin":                    "admin", "": "", "İzmir": "İzmir", " =1": " =1", "a=1": "a=1", "'quoted": "'quoted",
 	} {

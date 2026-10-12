@@ -10,14 +10,14 @@ import (
 
 const bom = "\xEF\xBB\xBF"
 
-// Safe neutralises spreadsheet formula injection: a value that starts with = + - @ TAB or CR is prefixed with an
+// Safe neutralises spreadsheet formula injection: a value that starts with = + - @ TAB, CR or LF is prefixed with an
 // apostrophe. Other values are returned unchanged.
 func Safe(v string) string {
 	if v == "" {
 		return v
 	}
 	switch v[0] {
-	case '=', '+', '-', '@', '\t', '\r':
+	case '=', '+', '-', '@', '\t', '\r', '\n':
 		return "'" + v
 	}
 	return v

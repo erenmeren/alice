@@ -1142,8 +1142,8 @@ To recompute the chain yourself, for each entry in `seq` order:
 2. `hash = SHA-256(previous hash || that JSON)`, where the previous hash of the first entry is 32 zero bytes.
 3. Compare with the entry's `hash` (hex).
 
-The CSV export is meant for spreadsheets: cells that start with `=`, `+`, `-`, `@`, a tab or a carriage return
-get a leading apostrophe, so use the JSON export for this check.
+The CSV export is meant for spreadsheets: cells that start with `=`, `+`, `-`, `@`, a tab, a carriage return or a
+line feed get a leading apostrophe, so use the JSON export for this check.
 
 ## State volume
 
