@@ -3831,6 +3831,8 @@ Gap rows: the language step stays separate (design: a select on step 1); TOTP QR
 
 **Interfaces:** none new.
 
+**Deliberate fixed color (review of Tasks 15/16, M-5):** `.qrTile { background: #ffffff }` in `web/src/components/auth/auth.module.css` is intentional, not a missed token: authenticator apps scan dark-on-light, so the TOTP QR tile stays white in both schemes. The guard must allow it (the file is in `HEX_ALLOWED` below) and Step 2 must not "fix" it to a token. If the allowlist is ever narrowed from the file to selectors, keep `.qrTile` allowed.
+
 - [ ] **Step 1: Write the failing guard**
 
 `web/src/design/colorRules.test.ts`:
