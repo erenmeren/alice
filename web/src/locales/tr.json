@@ -281,7 +281,8 @@
       "title": "HTTPS sertifikası",
       "help": "Alice kurulurken geçici bir sertifika oluşturdu. Kurumunuzun sertifikasını şimdi yükleyin ya da geçici sertifikayı kullanmaya devam edip kendi sertifikanızı daha sonra Ayarlar bölümünden yükleyin.",
       "keptTemporary": "Geçici sertifikayı kullanmaya devam etmeyi seçtiniz. Kendi sertifikanızı daha sonra Ayarlar bölümünden yükleyebilirsiniz.",
-      "uploadedDone": "Kendi sertifikanız kullanımda. Sertifikayı burada ya da daha sonra Ayarlar bölümünden değiştirebilirsiniz."
+      "uploadedDone": "Kendi sertifikanız kullanımda. Sertifikayı burada ya da daha sonra Ayarlar bölümünden değiştirebilirsiniz.",
+      "keepHint": "Üretim kullanımından önce değiştirin."
     }
   },
   "users": {

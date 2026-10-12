@@ -281,7 +281,8 @@
       "title": "HTTPS certificate",
       "help": "Alice made a temporary certificate when it was installed. Upload your organisation's certificate now, or keep the temporary one and upload yours later under Settings.",
       "keptTemporary": "You chose to keep the temporary certificate. You can upload your own later under Settings.",
-      "uploadedDone": "Your own certificate is in use. You can replace it here or later under Settings."
+      "uploadedDone": "Your own certificate is in use. You can replace it here or later under Settings.",
+      "keepHint": "Replace it before production use."
     }
   },
   "users": {
