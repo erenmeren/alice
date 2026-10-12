@@ -2366,7 +2366,8 @@
       "evidence": "Evidence trail",
       "evidenceSub": "A traceable result for each sensitive action.",
       "evidenceLabel": "Latest audit entries",
-      "noEvidence": "No audit entries yet."
+      "noEvidence": "No audit entries yet.",
+      "openTrail": "Open audit trail"
     }
   },
   "notifications": {

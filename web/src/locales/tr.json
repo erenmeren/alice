@@ -2366,7 +2366,8 @@
       "evidence": "Kanıt kaydı",
       "evidenceSub": "Her hassas işlem için izlenebilir sonuç.",
       "evidenceLabel": "Son denetim kayıtları",
-      "noEvidence": "Henüz denetim kaydı yok."
+      "noEvidence": "Henüz denetim kaydı yok.",
+      "openTrail": "Denetim kaydını aç"
     }
   },
   "notifications": {
