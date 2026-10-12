@@ -42,7 +42,7 @@ describe('UsersPage', () => {
     signedInAs(adminSession);
     withUsers([adminSession.user, operator]);
     await renderRoute('/users');
-    expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'People & access' })).toBeInTheDocument();
     const row = (await screen.findByText('operator1')).closest('tr')!;
     expect(within(row).getByText('Operator')).toBeInTheDocument();
     expect(within(row).getByText('Not set up yet')).toBeInTheDocument();
@@ -53,7 +53,7 @@ describe('UsersPage', () => {
     signedInAs(sessionFor('admin', 'tr')); // the signed-in user's locale wins over the browser language
     withUsers([operator]);
     await renderRoute('/users', { languages: ['tr-TR'] });
-    expect(await screen.findByRole('heading', { name: 'Kullanıcılar' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Kişiler ve erişim' })).toBeInTheDocument();
     expect(await screen.findByText('Operatör')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Kullanıcı ekle' })).toBeInTheDocument();
   });
@@ -197,7 +197,7 @@ describe('UsersPage access and step-up', () => {
     signedInAs(sessionFor('operator'));
     await renderRoute('/users');
     expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Users' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'People & access' })).not.toBeInTheDocument();
   });
 
   it('asks for an authenticator code and retries when step-up is required', async () => {

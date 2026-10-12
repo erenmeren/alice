@@ -34,11 +34,12 @@ function handlers(over: Record<string, unknown> = {}) {
 }
 
 describe('DashboardPage', () => {
-  it('keeps the welcome line as the page heading and the server status', async () => {
+  it('has Overview as its only page heading and keeps the server status', async () => {
     server.use(...sessionHandlers(adminSession), ...handlers());
     await renderRoute('/');
-    expect(await screen.findByRole('heading', { level: 1, name: `Welcome, ${adminSession.user.display_name}` })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { level: 2, name: 'Dashboard' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.queryByText(/Welcome/)).not.toBeInTheDocument();
     expect(await screen.findByText('Server version: 1.2.3')).toBeInTheDocument();
     expect(screen.getByTestId('server-status')).toBeInTheDocument();
   });
@@ -138,7 +139,7 @@ describe('DashboardPage', () => {
   it('renders in Turkish', async () => {
     server.use(...sessionHandlers(sessionFor('admin', 'tr')), ...handlers());
     await renderRoute('/', { languages: ['tr-TR'] });
-    expect(await screen.findByRole('heading', { name: 'Pano' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Genel bakış' })).toBeInTheDocument();
     expect(await screen.findByText('Süresi yakında dolacaklar')).toBeInTheDocument();
   });
 });

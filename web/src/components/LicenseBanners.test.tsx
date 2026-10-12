@@ -111,7 +111,7 @@ describe('license banners', () => {
   it('shows nothing when there is nothing to say', async () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     expect(screen.queryByTestId(/license-banner-/)).not.toBeInTheDocument();
   });
 });
@@ -133,7 +133,7 @@ describe('license status poll carries activity (AUD-01)', () => {
       }),
     );
     await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     await vi.waitFor(() => expect(marks.length).toBeGreaterThan(0));
     resetActivity(false);
     const before = marks.length;

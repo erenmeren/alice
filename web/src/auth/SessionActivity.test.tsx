@@ -18,7 +18,7 @@ describe('session activity (AUD-01)', () => {
     const ours = (calls: unknown[][]) => calls.filter(([, fn]) => fn === activity.noteInput).length;
     server.use(...sessionHandlers(sessionFor('admin')), http.post('/api/v1/auth/logout', () => new HttpResponse(null, { status: 204 })));
     const { router } = await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     expect(install).toHaveBeenCalledTimes(1);
     expect(ours(add.mock.calls)).toBe(5);
     expect(ours(remove.mock.calls)).toBe(0);
@@ -39,7 +39,7 @@ describe('session activity (AUD-01)', () => {
     const remove = vi.spyOn(window, 'removeEventListener');
     server.use(...sessionHandlers(sessionFor('operator')));
     const { unmount } = await renderRoute('/');
-    await screen.findByRole('heading', { name: /^Welcome/ });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     unmount();
     expect(remove.mock.calls.filter(([, fn]) => fn === activity.noteInput)).toHaveLength(5);
   });
@@ -58,7 +58,7 @@ describe('session activity (AUD-01)', () => {
       }),
     );
     await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     expect(marks).toEqual({ status: null, session: '1' });
   });
 
@@ -118,7 +118,7 @@ describe('session activity: hidden tabs and StrictMode (AUD-01 follow-ups)', () 
     server.use(...sessionHandlers(sessionFor('admin')));
     const seen = countStatus();
     await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     await waitFor(() => expect(seen.marks.length).toBeGreaterThan(0));
     const before = seen.marks.length;
 
@@ -140,7 +140,7 @@ describe('session activity: hidden tabs and StrictMode (AUD-01 follow-ups)', () 
   it('sends nothing when the tab is shown again', async () => {
     server.use(...sessionHandlers(sessionFor('operator')));
     await renderRoute('/');
-    await screen.findByRole('heading', { name: /^Welcome/ });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     const seen = countStatus();
     activity.noteInput(keydown);
     setVisibility('visible');
@@ -159,7 +159,7 @@ describe('session activity: hidden tabs and StrictMode (AUD-01 follow-ups)', () 
     server.use(...sessionHandlers(sessionFor('admin')));
     const seen = countStatus();
     await renderRoute('/', { strict: true });
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     for (const type of ['pointerdown', 'click', 'keydown', 'wheel', 'touchstart']) expect(net(type), type).toBe(1);
     await vi.waitFor(() => expect(seen.marks.length).toBe(1));
     await vi.advanceTimersByTimeAsync(60_000);

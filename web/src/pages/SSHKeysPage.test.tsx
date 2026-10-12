@@ -73,7 +73,8 @@ describe('SSHKeysPage', () => {
     await waitFor(() => expect(queries.at(-1)?.get('missing')).toBe('true'));
     await userEvent.type(screen.getByLabelText('User'), 'deploy');
     await waitFor(() => expect(queries.at(-1)?.get('os_user')).toBe('deploy'));
-    await userEvent.type(screen.getByLabelText(/^Search/), 'İzmir');
+    // In the page body: the shell's top bar has a "Search pages" button too.
+    await userEvent.type(within(screen.getByRole('main')).getByLabelText(/^Search/), 'İzmir');
     // The search is debounced: the server sees the whole word once, not one query per letter.
     await waitFor(() => expect(queries.at(-1)?.get('q')).toBe('İzmir'));
     expect(queries.filter((q) => q.get('q') === 'İ')).toHaveLength(0);

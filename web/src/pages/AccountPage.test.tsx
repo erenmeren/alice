@@ -16,7 +16,7 @@ describe('account page', () => {
   it('shows who is signed in', async () => {
     server.use(...sessionHandlers(sessionFor('auditor')));
     await renderRoute('/account');
-    expect(await screen.findByRole('heading', { name: 'My account' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Your account' })).toBeInTheDocument();
     expect(screen.getByTestId('account-summary')).toHaveTextContent('Signed in as auditor (Auditor)');
   });
 

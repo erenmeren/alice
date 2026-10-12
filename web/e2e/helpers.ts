@@ -144,26 +144,25 @@ export const COPY = {
     mfaInvalid: 'The verification code is not correct.',
     sessionEnded: 'Your session ended. Please sign in again.',
     navHome: 'Home',
-    navUsers: 'Users',
-    navAudit: 'Audit log',
+    navUsers: 'People & access',
+    navAudit: 'Audit trail',
     navTokens: 'API tokens',
-    navAccount: 'My account',
+    navAccount: 'Your account',
     signOut: 'Sign out',
-    welcome: (name: string) => `Welcome, ${name}`,
     noAccess: 'You do not have access to this page.',
-    usersHeading: 'Users',
+    usersHeading: 'People & access',
     addUser: 'Add user',
     role: 'Role',
     initialPassword: 'Initial password',
     createUser: 'Create user',
     stepUpHeading: "Confirm it's you",
     stepUpConfirm: 'Confirm',
-    auditHeading: 'Audit log',
+    auditHeading: 'Audit trail',
     verifyIntegrity: 'Verify integrity',
     intact: 'The audit log is intact.',
     userCreatedAction: 'User created',
     tokensHeading: 'API tokens',
-    accountHeading: 'My account',
+    accountHeading: 'Your account',
     navLabel: 'Main navigation',
     openNav: 'Open navigation',
     closeNav: 'Close navigation',
@@ -296,14 +295,13 @@ export const COPY = {
     mfaInvalid: 'Doğrulama kodu hatalı.',
     sessionEnded: 'Oturumunuz sona erdi. Lütfen yeniden giriş yapın.',
     navHome: 'Ana sayfa',
-    navUsers: 'Kullanıcılar',
+    navUsers: 'Kişiler ve erişim',
     navAudit: 'Denetim kaydı',
     navTokens: 'API anahtarları',
-    navAccount: 'Hesabım',
+    navAccount: 'Hesabınız',
     signOut: 'Çıkış yap',
-    welcome: (name: string) => `Hoş geldiniz, ${name}`,
     noAccess: 'Bu sayfaya erişim yetkiniz yok.',
-    usersHeading: 'Kullanıcılar',
+    usersHeading: 'Kişiler ve erişim',
     addUser: 'Kullanıcı ekle',
     role: 'Rol',
     initialPassword: 'İlk parola',
@@ -315,7 +313,7 @@ export const COPY = {
     intact: 'Denetim kaydı sağlam.',
     userCreatedAction: 'Kullanıcı oluşturuldu',
     tokensHeading: 'API anahtarları',
-    accountHeading: 'Hesabım',
+    accountHeading: 'Hesabınız',
     navLabel: 'Ana gezinme',
     openNav: 'Gezinmeyi aç',
     closeNav: 'Gezinmeyi kapat',
@@ -433,6 +431,14 @@ export function either(key: 'loginHeading' | 'noAccess' | 'sessionEnded' | 'wiza
 // uiLang reads the language the app is currently rendered in (<html lang>).
 export async function uiLang(page: Page): Promise<Lang> {
   return (await page.locator('html').getAttribute('lang')) === 'tr' ? 'tr' : 'en';
+}
+
+// expectSignedInAs proves who is signed in after a sign-in or the wizard: the Overview heading and the sidebar's name
+// (the design has no personal "Welcome" heading; label change 2 of docs/superpowers/plans/2026-10-12-phase-9-design.md).
+export async function expectSignedInAs(page: Page, name: string): Promise<void> {
+  const lang = await uiLang(page);
+  await expect(page.getByRole('heading', { level: 1, name: translator(lang)('dashboard.title') })).toBeVisible();
+  await expect(page.getByTestId('current-user')).toHaveText(name);
 }
 
 export async function resetInstall(request: APIRequestContext): Promise<void> {
@@ -600,7 +606,7 @@ export async function runWizard(
   await expect(page.getByRole('heading', { name: c.doneHeading })).toBeVisible();
   if (opts.a11y) await expectAccessible(page, 'wizard done');
   await page.getByRole('button', { name: c.toDashboard }).click();
-  await expect(page.getByRole('heading', { name: c.welcome(admin.fullName) })).toBeVisible();
+  await expectSignedInAs(page, admin.fullName);
   return enrolled;
 }
 

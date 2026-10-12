@@ -5,6 +5,7 @@ import {
   advanceClock,
   browserLocale,
   expect,
+  expectSignedInAs,
   expectAccessible,
   field,
   freshCode,
@@ -304,7 +305,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByTestId('license-phase')).toHaveText(l.phaseActive);
       await expect(page.getByTestId(/^license-banner-/)).toHaveCount(0);
       await page.goto('/');
-      await expect(page.getByRole('heading', { name: c.welcome(ADA.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADA.fullName);
       await expect(page.getByTestId(/^license-banner-/)).toHaveCount(0);
     });
 

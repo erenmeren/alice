@@ -110,10 +110,10 @@ const P = {
 
 type PCopy = (typeof P)[Lang];
 
-// chooseLanguage switches the signed-in user's UI language with the header switcher (saved on the account).
+// chooseLanguage switches the signed-in user's UI language with the top bar's toggle, named by the other language (saved on the account).
 async function chooseLanguage(page: Page, lang: Lang): Promise<void> {
   if ((await uiLang(page)) === lang) return;
-  await page.getByText(LANGUAGE_NAMES[lang], { exact: true }).click();
+  await page.getByRole('button', { name: LANGUAGE_NAMES[lang], exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', lang);
 }
 

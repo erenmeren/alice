@@ -14,6 +14,7 @@ import {
   browserLocale,
   enrollTotp,
   expect,
+  expectSignedInAs,
   expectAccessible,
   expectWide,
   field,
@@ -237,7 +238,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.getByRole('button', { name: c.continue, exact: true }).click();
       await expect(page.getByRole('heading', { name: c.doneHeading })).toBeVisible();
       await page.getByRole('button', { name: c.toDashboard }).click();
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
 
       // The uploaded certificate is done on the checklist; the skipped mail server is not.
       const checklist = page.getByTestId('setup-checklist');
@@ -378,7 +379,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await firstSignIn(page, request, OPERATOR);
       const answer = (await (await summary).json()) as { backup?: unknown };
       expect(answer.backup ?? null, 'an Operator gets no backup state').toBeNull();
-      await expect(page.getByRole('heading', { name: either(OPERATOR.fullName) })).toBeVisible();
+      await expectSignedInAs(page, OPERATOR.fullName); // a new account starts in English, whatever the test language
       await expect(banner).toHaveCount(0);
       await expect(page.getByTestId('backup-card')).toHaveCount(0);
       await signOut(page);
@@ -392,7 +393,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByTestId('backups-table').locator('tbody tr')).toHaveCount(1);
       await expect(banner).toHaveCount(0);
       await page.goto('/');
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
       await expect(page.getByTestId('backup-card').getByText(textWith(t, 'backups.lastSuccess', 'time'))).toBeVisible();
       await expect(banner).toHaveCount(0);
     });
@@ -488,9 +489,4 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       }
     });
   });
-}
-
-// either matches a welcome heading in English or Turkish: a new account starts in English, whatever the test language.
-function either(name: string): RegExp {
-  return new RegExp(`^(${escapeRegExp(COPY.en.welcome(name))}|${escapeRegExp(COPY.tr.welcome(name))})$`);
 }

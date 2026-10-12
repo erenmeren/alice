@@ -106,7 +106,7 @@ function escapeRegExp(s: string): string {
 
 async function chooseLanguage(page: Page, lang: Lang): Promise<void> {
   if ((await uiLang(page)) === lang) return;
-  await page.getByText(LANGUAGE_NAMES[lang], { exact: true }).click();
+  await page.getByRole('button', { name: LANGUAGE_NAMES[lang], exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', lang);
 }
 

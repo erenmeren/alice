@@ -87,13 +87,13 @@ describe('DeploymentsPage', () => {
   it('is in the navigation for every role', async () => {
     server.use(...sessionHandlers(sessionFor('auditor')), http.get('/api/v1/deployments', () => HttpResponse.json({ items: [], next_cursor: null })));
     await renderRoute('/');
-    expect(await screen.findByRole('link', { name: 'Deployment history' })).toHaveAttribute('href', '/deployments');
+    expect(await screen.findByRole('link', { name: 'Deployments' })).toHaveAttribute('href', '/deployments');
   });
 
   it('is shown in Turkish', async () => {
     server.use(...sessionHandlers(sessionFor('operator', 'tr')), http.get('/api/v1/deployments', () => HttpResponse.json({ items: [first], next_cursor: null })));
     await renderRoute('/deployments', { languages: ['tr-TR'] });
-    expect(await screen.findByRole('heading', { name: 'Dağıtım geçmişi' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Dağıtımlar' })).toBeInTheDocument();
     expect(await screen.findByText('Başarılı')).toBeInTheDocument();
     expectNoRawKeys();
   });

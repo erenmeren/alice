@@ -1,8 +1,17 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { adminSession, operatorSession, sessionHandlers } from '../test/fixtures';
+import { http, HttpResponse } from 'msw';
+import { adminSession, auditorSession, operatorSession, sessionHandlers } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
+import { ACCOUNT_ITEMS, NAV_ITEMS, isActive } from './AppLayout';
+
+// The brand link ("Alice.") is in the navigation too; it is not a destination.
+const linkNames = () =>
+  within(screen.getByRole('navigation', { name: 'Main navigation' }))
+    .getAllByRole('link')
+    .map((a) => a.textContent ?? '')
+    .filter((n) => !n.startsWith('Alice'));
 
 describe('AppLayout single sign-on refusal', () => {
   it('shows the reason of a refused step-up once and removes it from the address, keeping the rest', async () => {
@@ -25,5 +34,78 @@ describe('AppLayout single sign-on refusal', () => {
     server.use(...sessionHandlers(adminSession));
     await renderRoute('/');
     expect(await screen.findByRole('link', { name: 'Settings' })).toHaveAttribute('href', '/settings');
+  });
+});
+
+describe('AppLayout shell', () => {
+  it.each([
+    [adminSession, ['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Audit trail', 'People & access', 'Settings', 'License', 'Your account', 'API tokens']],
+    [operatorSession, ['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Your account', 'API tokens']],
+    [auditorSession, ['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Audit trail', 'License', 'Your account', 'API tokens']],
+  ])('renders the destinations of each role, in the design’s groups', async (session, expected) => {
+    server.use(...sessionHandlers(session));
+    await renderRoute('/');
+    await screen.findByRole('navigation', { name: 'Main navigation' });
+    expect(linkNames()).toEqual(expected);
+  });
+
+  it('has one navigation landmark, group labels that are neither headings nor links, and one h1', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderRoute('/license');
+    await screen.findByRole('heading', { level: 1 });
+    expect(screen.getAllByRole('navigation')).toHaveLength(1);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByText('Inventory')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Inventory|Operations|Administration/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Inventory' })).not.toBeInTheDocument();
+  });
+
+  it('marks the current page and keeps nav names exact', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderRoute('/license');
+    const link = await screen.findByRole('link', { name: 'License' });
+    expect(link).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByRole('link', { name: 'Overview' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('shows the signed-in name alone, a visible Sign out button, the language toggle and the footer version', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderRoute('/');
+    expect(await screen.findByTestId('current-user')).toHaveTextContent(new RegExp(`^${adminSession.user.display_name}$`));
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Türkçe' })).toBeVisible();
+    expect(await screen.findByText(/Self-hosted · Alice/)).toBeVisible();
+  });
+
+  it('puts the skip link, the navigation, the top bar and the main area in this order (Tab budget)', async () => {
+    server.use(...sessionHandlers(adminSession));
+    const { container } = await renderRoute('/');
+    await screen.findByRole('navigation', { name: 'Main navigation' });
+    const skip = screen.getByRole('link', { name: 'Skip to content' });
+    const nav = screen.getByRole('navigation', { name: 'Main navigation' });
+    const search = screen.getByRole('button', { name: 'Search pages' });
+    const main = screen.getByRole('main');
+    expect(skip.compareDocumentPosition(nav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(nav.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(search.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(main).toHaveAttribute('id', 'main');
+    expect(container.querySelector('a[href="#main"]')).toBe(skip);
+  });
+
+  it('writes the breadcrumb as plain text', async () => {
+    // The server page itself may fail here (no target 'abc'): only the shell is under test.
+    server.use(...sessionHandlers(adminSession), http.get(/\/api\/v1\/targets\/.*/, () => new HttpResponse(null, { status: 404 })));
+    await renderRoute('/servers/abc');
+    const crumb = await screen.findByTestId('breadcrumb');
+    expect(crumb).toHaveTextContent('Workspace');
+    expect(crumb).toHaveTextContent('Servers');
+    expect(crumb).toHaveTextContent('Details');
+    expect(within(crumb).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('activates Key rotations for run pages through match', () => {
+    expect(isActive({ to: '/rotations', labelKey: 'nav.rotations', roles: [], icon: 'RotateCw', group: 'operations', match: ['/rotation/'] }, '/rotation/runs/1')).toBe(true);
+    expect(isActive(NAV_ITEMS[0], '/servers')).toBe(false);
+    expect(ACCOUNT_ITEMS.map((i) => i.to)).toEqual(['/account', '/tokens']);
   });
 });

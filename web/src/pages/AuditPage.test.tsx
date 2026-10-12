@@ -144,7 +144,7 @@ describe('AuditPage', () => {
       }),
     );
     await renderRoute('/audit');
-    expect(await screen.findByRole('heading', { name: 'Audit log' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Audit trail' })).toBeInTheDocument();
     expect(await screen.findByText('User created')).toBeInTheDocument();
     expect(screen.getByText('Sign-in block lifted')).toBeInTheDocument();
     const raw = screen.getByText('custom.future_action').closest('tr')!;
@@ -212,9 +212,10 @@ describe('AuditPage', () => {
     signedInAs(adminSession);
     const evil = { ...entry(1, 'auth.login'), actor_name: '<img src=x onerror=alert(1)>' };
     server.use(http.get('/api/v1/audit', () => HttpResponse.json({ items: [evil], next_cursor: null })));
-    const { container } = await renderRoute('/audit');
+    await renderRoute('/audit');
     expect(await screen.findByText('<img src=x onerror=alert(1)>')).toBeInTheDocument();
-    expect(container.querySelector('img')).toBeNull();
+    // The page body has no image at all (the shell's brand mark is in the navigation).
+    expect(screen.getByRole('main').querySelector('img')).toBeNull();
   });
 
   it('shows the object of a row and its details as labelled values (AUD-25 d)', async () => {
@@ -385,6 +386,6 @@ describe('AuditPage', () => {
     signedInAs(sessionFor('operator'));
     await renderRoute('/audit');
     expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Audit log' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Audit trail' })).not.toBeInTheDocument();
   });
 });

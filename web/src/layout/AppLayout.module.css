@@ -1,0 +1,48 @@
+/* The application shell of the Clarity design (alice-design/dist/styles.css .sidebar … .footer, the 1600/1200/760 px
+   rules; plan R5, R6). Mantine's AppShell keeps its own layout variables, so spacing goes on .content. */
+.skipLink { position: fixed; top: -80px; left: 16px; z-index: 2000; padding: 12px; border-radius: 6px; background: var(--alice-brand); color: var(--alice-on-brand); }
+.skipLink:focus { top: 12px; }
+.navbar { display: flex; flex-direction: column; padding: 22px 13px 12px; background: var(--alice-surface); border-right: 1px solid var(--alice-border); }
+.brand { display: flex; align-items: center; gap: 9px; padding: 0 12px 20px; font-size: 26px; font-weight: 650; letter-spacing: -1.6px; color: var(--alice-text); text-decoration: none; }
+.brandMark { width: 30px; height: 30px; }
+.brandDot { color: var(--alice-brand); }
+.installation { display: flex; align-items: center; gap: 9px; margin: 0 4px 18px; padding: 10px; border: 1px solid var(--alice-border); border-radius: 8px; }
+.installationSymbol { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 6px; background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
+.installationName { font-size: 12px; font-weight: 600; }
+.installationMeta { font-size: 11px; color: var(--alice-text-secondary); }
+.navScroll { flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.group { margin: 19px 0 8px; padding: 0 10px; font-size: 10px; font-weight: 600; letter-spacing: 1.3px; text-transform: uppercase; color: var(--alice-text-muted); }
+.link { position: relative; min-height: 39px; margin: 2px 0; padding: 9px 11px; border-radius: 7px; color: var(--alice-text-secondary); }
+.link:hover { background: var(--alice-surface-hover); color: var(--alice-text); }
+.link[data-active] { background: var(--alice-brand-soft); color: var(--alice-brand); font-weight: 600; }
+.link[data-active]::before { content: ''; position: absolute; left: 0; top: calc(50% - 8px); width: 3px; height: 16px; border-radius: 3px; background: var(--alice-brand); }
+.linkLabel { font-size: 13px; overflow-wrap: anywhere; }
+.bottom { display: grid; gap: 6px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--alice-border); }
+.account { display: flex; align-items: center; gap: 9px; padding: 6px 8px; }
+.accountText { min-width: 0; }
+.avatar { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 50%; border: 1px solid var(--alice-border); background: var(--alice-brand-soft); color: var(--alice-brand); font-size: 11px; font-weight: 600; }
+.accountName { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.accountRole { font-size: 11px; color: var(--alice-text-secondary); }
+.header { background: var(--alice-canvas); border-bottom: 1px solid var(--alice-border); }
+.headerInner { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 100%; padding: 0 34px; }
+.headerStart { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.breadcrumb { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 12px; color: var(--alice-text-muted); }
+.breadcrumb strong { font-weight: 500; color: var(--alice-text); overflow-wrap: anywhere; }
+.topActions { display: flex; align-items: center; gap: 9px; flex-shrink: 0; }
+.divider { width: 1px; height: 20px; background: var(--alice-border); }
+.content { max-width: 1700px; margin: 0 auto; padding: 30px 34px 48px; }
+.banners { display: grid; gap: 12px; margin-bottom: 16px; }
+.banners:empty { display: none; }
+.footer { display: flex; align-items: center; gap: 8px; margin-top: 26px; font-size: 11px; color: var(--alice-text-muted); }
+@media (min-width: 1600px) { .content { padding: 35px 44px; } .headerInner { padding: 0 44px; } }
+@media (max-width: 1199px) { .content { padding: 26px 24px; } .headerInner { padding: 0 24px; } }
+@media (max-width: 767px) {
+  /* The "alt" layout puts the sidebar at the top of the window; on a phone the open menu starts under the top bar, so
+     the menu button that closes it stays visible and clickable (e2e contract). */
+  .navbar { top: var(--app-shell-header-offset, 0rem); height: calc(100dvh - var(--app-shell-header-offset, 0rem)); }
+  .headerInner { padding: 0 15px; gap: 8px; }
+  .breadcrumb { display: none; }
+  .content { padding: 24px 16px 32px; }
+  .topActions { gap: 4px; }
+  .divider { display: none; }
+}

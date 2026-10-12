@@ -3,6 +3,7 @@ import {
   COPY,
   advanceClock,
   expect,
+  expectSignedInAs,
   browserLocale,
   either,
   expectAccessible,
@@ -34,7 +35,7 @@ async function openNav(page: Page, name: string) {
   await page.getByRole('link', { name, exact: true }).click();
 }
 
-// createUser adds a user on the Users page. With expectStepUp the server must ask for a fresh
+// createUser adds a user on the People & access page. With expectStepUp the server must ask for a fresh
 // authenticator code first (SEC-009: user administration needs step-up); without it a prompt is
 // answered only if it appears. With a11y, the Add user and step-up dialogs are checked with axe.
 async function createUser(
@@ -155,7 +156,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByText(c.mfaInvalid)).toBeVisible();
       await field(page, c.code).fill(totp(totpSecret, await serverNow(request)));
       await page.getByRole('button', { name: c.verify }).click();
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
 
       // Idle timeout: 31 minutes without activity ends the session.
       await advanceClock(request, 31 * 60);
@@ -180,7 +181,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       }
       expect(reads.length).toBeGreaterThan(0);
       expect(reads.filter((r) => r.marked), 'a request without input carried the activity mark').toEqual([]);
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
 
       await advanceClock(request, 2 * 60); // 31 minutes after the last input, 2 after the last poll
       expect(await backgroundRead(page)).toBe(401);
@@ -192,8 +193,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await signOut(page);
       await signIn(page, request, ADMIN, totpSecret); // a new session: its 12 hours start now
       const signedInAt = await serverNow(request);
-      const home = page.getByRole('heading', { name: c.welcome(ADMIN.fullName) });
-      await expect(home).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
+      const home = page.getByRole('heading', { level: 1 });
       const reads = watchActivity(page);
       // Real input between the clock steps, the kinds a person reading gives: a scroll, a key, a click.
       const inputs = [() => page.mouse.wheel(0, 40), () => page.keyboard.press('Shift'), () => home.click()];
@@ -249,7 +250,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByRole('heading', { name: c.mfaHeading })).toBeVisible();
       await field(page, c.code).fill(await freshCode(request, totpSecret));
       await page.getByRole('button', { name: c.verify }).click();
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
     });
 
     test('three roles behave differently and the audit chain verifies', async ({ page, request }) => {
@@ -271,7 +272,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByText(c.intact)).toBeVisible();
       await signOut(page);
 
-      // Operator: no Users, no Audit log.
+      // Operator: no People & access, no Audit trail.
       await firstSignIn(page, request, OPERATOR);
       let u = COPY[await uiLang(page)];
       await expect(page.getByRole('link', { name: u.navTokens, exact: true })).toBeVisible();
@@ -283,7 +284,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(page.getByText(either('noAccess'))).toBeVisible();
       await signOut(page);
 
-      // Auditor: sees the Audit log and can verify it, but cannot manage users.
+      // Auditor: sees the Audit trail and can verify it, but cannot manage users.
       await firstSignIn(page, request, AUDITOR);
       u = COPY[await uiLang(page)];
       await expect(page.getByRole('link', { name: u.navUsers, exact: true })).toHaveCount(0);
@@ -313,7 +314,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await tabTo(page, field(page, c.code));
       await page.keyboard.type(await freshCode(request, totpSecret));
       await page.keyboard.press('Enter');
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
 
       // The navigation is keyboard-operable too.
       await tabTo(page, page.getByRole('link', { name: c.navUsers, exact: true }));
@@ -428,7 +429,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await confirm.getByRole('button', { name: c.cancel }).click();
       await expect(confirm).toHaveCount(0);
 
-      // My account: a new set of recovery codes.
+      // Your account: a new set of recovery codes.
       await openNav(page, c.navAccount);
       await expect(page.getByRole('heading', { name: c.accountHeading })).toBeVisible();
       await page.getByRole('button', { name: c.newRecoveryCodes }).click();
@@ -449,13 +450,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await field(page, c.recoveryCode).fill(recoveryCodes[0] ?? '');
       await expectAccessible(page, 'sign-in with a recovery code');
       await page.getByRole('button', { name: c.verify }).click();
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
 
       await page.goto('/no-such-page');
       await expect(page.getByRole('heading', { name: c.notFoundTitle })).toBeVisible();
       await expectAccessible(page, 'not found');
       await page.goto('/'); // the not-found page has no app shell and so no Sign out button
-      await expect(page.getByRole('heading', { name: c.welcome(ADMIN.fullName) })).toBeVisible();
+      await expectSignedInAs(page, ADMIN.fullName);
       await signOut(page);
 
       // No-access page, as an operator.

@@ -7,9 +7,12 @@ import { LICENSE_STATUS_KEY } from '../api/queryKeys';
 import type { BannerSeverity, LicenseBanner } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { formatDateTime } from '../datetime';
+import { Icon, type IconName } from '../design/Icon';
 
 // Colors of spec §19.3: blue information, yellow warning, orange for the last days, red when expired.
 const COLORS: Record<BannerSeverity, string> = { info: 'blue', warning: 'yellow', caution: 'orange', danger: 'red' };
+// The design's status-line icon per severity (status is text + icon + color).
+const ICONS: Record<BannerSeverity, IconName> = { info: 'CircleDot', warning: 'CircleAlert', caution: 'CircleAlert', danger: 'ShieldAlert' };
 
 // Banner parameters that are instants; they are shown in the reader's language and time zone.
 const TIME_PARAMS = new Set(['ends_at', 'ended_at', 'valid_until', 'valid_from', 'locks_at', 'system_time', 'last_seen', 'last_checked']);
@@ -43,11 +46,12 @@ export function LicenseBanners() {
     .filter(({ key, values }) => i18n.exists(key, values));
   if (shown.length === 0) return null;
   return (
-    <Stack gap="xs" mb="md">
+    <Stack gap="xs">
       {shown.map(({ b, key, values }) => (
         <Alert
           key={b.kind}
           color={COLORS[b.severity] ?? 'blue'}
+          icon={<Icon name={ICONS[b.severity] ?? 'CircleDot'} />}
           role={b.severity === 'danger' ? 'alert' : 'status'}
           data-testid={`license-banner-${b.kind}`}
           style={{ overflowWrap: 'anywhere' }}
@@ -56,7 +60,7 @@ export function LicenseBanners() {
           {admin && (
             <>
               {' '}
-              <Anchor component={Link} to="/license" c="black" underline="always">
+              <Anchor component={Link} to="/license" c="inherit" fw={600} underline="always">
                 {t('license.banner.open')}
               </Anchor>
             </>

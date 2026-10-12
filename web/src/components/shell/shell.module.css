@@ -1,0 +1,12 @@
+/* The top bar's page palette and attention popover (alice-design/dist/styles.css .search-trigger, .kbd, .command-*). */
+.trigger { color: var(--alice-text-muted); }
+.kbd { padding: 3px 5px; border: 1px solid var(--alice-border); border-radius: 4px; background: var(--alice-surface); color: var(--alice-text-muted); font: 10px var(--mantine-font-family-monospace); }
+.results { list-style: none; margin: 12px 0 0; padding: 0; max-height: 400px; overflow: auto; }
+.item { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 7px; font-size: 13px; color: var(--alice-text); text-decoration: none; }
+.item:hover, .item[data-first] { background: var(--alice-brand-soft); }
+.item:focus-visible { outline-offset: -3px; }
+.empty { padding: 12px; font-size: 13px; color: var(--alice-text-secondary); }
+.hint { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--alice-border); font-size: 11px; color: var(--alice-text-muted); }
+.bellTitle { margin: 0; padding: 4px 6px 0; font-size: 14px; font-weight: 600; color: var(--alice-text); }
+.bellState { padding: 12px 6px; font-size: 12px; color: var(--alice-text-secondary); }
+.bellFoot { display: block; margin-top: 4px; padding: 10px 6px 2px; border-top: 1px solid var(--alice-border); font-size: 12px; font-weight: 600; }

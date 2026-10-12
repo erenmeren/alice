@@ -42,12 +42,7 @@ export function DashboardPage() {
   const failed = [summary, expiring, alerts].filter((q) => q.isError);
   return (
     <Stack gap="md">
-      <div>
-        <Title order={1}>{t('dashboard.welcome', { name: session?.user.display_name ?? '' })}</Title>
-        <Title order={2} size="h3" mt="xs">
-          {t('dashboard.title')}
-        </Title>
-      </div>
+      <Title order={1}>{t('dashboard.title')}</Title>
       <Text size="sm" c="gray.7" data-testid="server-status" aria-live="polite">
         {status}
       </Text>

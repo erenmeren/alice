@@ -338,13 +338,13 @@ async function nav(page: Page, t: Translate, key: string): Promise<void> {
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 }
 
-// chooseLanguage switches the signed-in user's UI language with the header switcher (saved on the account).
+// chooseLanguage switches the signed-in user's UI language with the top bar's toggle, named by the other language (saved on the account).
 async function chooseLanguage(page: Page, lang: Lang): Promise<void> {
   if ((await uiLang(page)) === lang) return;
   // The choice is saved on the account (PUT /auth/locale) once the page is translated. A full page load before the
   // answer cancels the request, and the next load applies the account's old language (AuthProvider).
   const saved = page.waitForResponse((r) => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/v1/auth/locale');
-  await page.getByText(LANGUAGE_NAMES[lang], { exact: true }).click();
+  await page.getByRole('button', { name: LANGUAGE_NAMES[lang], exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('lang', lang);
   expect((await saved).ok(), 'the language is saved on the account').toBe(true);
 }

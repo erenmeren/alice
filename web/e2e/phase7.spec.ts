@@ -8,6 +8,7 @@ import {
   apiAs,
   browserLocale,
   expect,
+  expectSignedInAs,
   expectAccessibleAt,
   field,
   idpCA,
@@ -265,7 +266,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       // Owner step 2 (§26.9 "a seeded environment shows the expected counts"): every count is a link whose list has
       // exactly that many rows; the expiring list starts with the expired certificate.
       await page.goto('/');
-      await expect(page.getByRole('heading', { level: 1, name: t('dashboard.welcome', { name: ADA.fullName }) })).toBeVisible();
+      await expectSignedInAs(page, ADA.fullName);
       const counts = page.getByTestId('dashboard-counts');
       const lines: [string, number, string][] = [
         ['dashboard.expired', seeded.certificates.expired, 'expired'],
@@ -468,7 +469,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await runScheduled(request, 'notify.send');
       expect(subjects().filter((s) => s === oneDay), 'exactly once').toHaveLength(1);
       await signIn(page, request, ADA, totpSecret);
-      await expect(page.getByRole('heading', { level: 1, name: t('dashboard.welcome', { name: ADA.fullName }) })).toBeVisible();
+      await expectSignedInAs(page, ADA.fullName);
       await expect(page.getByTestId('attention-list')).toBeVisible();
       await expect(page.getByTestId('notifications-banner')).toHaveCount(0);
 
@@ -615,8 +616,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       });
       await page.goto('/login');
       await ssoButton.click();
-      await expect(page.getByRole('heading', { level: 1, name: t('dashboard.welcome', { name: OMER.name }) })).toBeVisible();
-      await expect(page.getByTestId('current-user')).toHaveText(OMER.name);
+      await expectSignedInAs(page, OMER.name);
       const afterIdp = frames.slice(frames.findIndex((u) => u.startsWith('https://idp.alice-e2e.test:9444')));
       test.info().annotations.push({ type: 'SSO main-frame addresses', description: afterIdp.join(' -> ') });
       test.info().annotations.push({ type: 'SSO session cookie', description: (await Promise.all(cookieSeen)).join('; ') });
@@ -642,7 +642,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await ssoButton.click();
       await expect(page.getByText('unavailable')).toBeVisible(); // the identity provider's own error page; the browser stays there
       await signIn(page, request, ADA, totpSecret);
-      await expect(page.getByRole('heading', { level: 1, name: t('dashboard.welcome', { name: ADA.fullName }) })).toBeVisible();
+      await expectSignedInAs(page, ADA.fullName);
       idpCtl('up');
 
       // The SSO user is listed as such; the audit log tells the story.
@@ -713,7 +713,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       idpCtl('next-user', '--sub', ZEYNEP.sub, '--username', ZEYNEP.username, '--name', ZEYNEP.name, '--email', ZEYNEP.email, '--groups', 'alice-admins');
       await signOut(page);
       await page.getByRole('button', { name: t('login.ssoWith', { name: IDP_NAME }), exact: true }).click();
-      await expect(page.getByRole('heading', { level: 1, name: t('dashboard.welcome', { name: ZEYNEP.name }) })).toBeVisible();
+      await expectSignedInAs(page, ZEYNEP.name);
       const navigation = page.getByRole('navigation', { name: t('nav.label') });
       await expect(navigation.getByRole('link', { name: t('nav.settings'), exact: true })).toBeVisible();
       await advanceClock(request, STEP_UP_SECONDS + 1);

@@ -9,7 +9,8 @@ function navLabels(): string[] {
   const nav = screen.getByRole('navigation');
   return within(nav)
     .getAllByRole('link')
-    .map((a) => a.textContent ?? '');
+    .map((a) => a.textContent ?? '')
+    .filter((n) => !n.startsWith('Alice')); // the brand link is not a destination
 }
 
 describe('application shell', () => {
@@ -29,30 +30,32 @@ describe('application shell', () => {
   it('shows the admin home page with the server version and the full navigation', async () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     await renderRoute('/');
-    expect(await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
+    expect(screen.getByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
     await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
-    expect(navLabels()).toEqual(['Dashboard', 'Servers', 'Key Vaults', 'Certificates', 'Deployment history', 'SSH keys', 'Users', 'Settings', 'Audit log', 'License', 'API tokens', 'My account']);
+    expect(navLabels()).toEqual(['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Audit trail', 'People & access', 'Settings', 'License', 'Your account', 'API tokens']);
   });
 
-  it('hides Users and Audit log from operators', async () => {
+  it('hides People & access and Audit trail from operators', async () => {
     server.use(...sessionHandlers(sessionFor('operator')));
     await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Olcay Öztürk' });
-    expect(navLabels()).toEqual(['Dashboard', 'Servers', 'Key Vaults', 'Certificates', 'Deployment history', 'SSH keys', 'API tokens', 'My account']);
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    expect(navLabels()).toEqual(['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Your account', 'API tokens']);
   });
 
-  it('shows the audit log but not Users to auditors, in Turkish', async () => {
+  it('shows the audit trail but not People & access to auditors, in Turkish', async () => {
     server.use(...sessionHandlers(sessionFor('auditor', 'tr')));
     await renderRoute('/', { languages: ['tr-TR'] });
-    expect(await screen.findByRole('heading', { name: 'Hoş geldiniz, Ilgın Işık' })).toBeInTheDocument();
-    expect(navLabels()).toEqual(['Pano', 'Sunucular', 'Key Vault kasaları', 'Sertifikalar', 'Dağıtım geçmişi', 'SSH anahtarları', 'Denetim kaydı', 'Lisans', 'API anahtarları', 'Hesabım']);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Genel bakış' })).toBeInTheDocument();
+    expect(screen.getByTestId('current-user')).toHaveTextContent(/^Ilgın Işık$/);
+    expect(navLabels()).toEqual(['Genel bakış', 'Sertifikalar', 'SSH anahtarları', 'Sunucular', 'Key Vault kasaları', 'Dağıtımlar', 'Denetim kaydı', 'Lisans', 'Hesabınız', 'API anahtarları']);
     expect(document.documentElement.lang).toBe('tr');
   });
 
   it('switches to the language saved on the account after sign-in', async () => {
     server.use(...sessionHandlers(sessionFor('admin', 'tr')));
     await renderRoute('/');
-    expect(await screen.findByRole('heading', { name: 'Hoş geldiniz, Ayşe Yılmaz' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Genel bakış' })).toBeInTheDocument();
   });
 
   it('saves a language change on the account when signed in', async () => {
@@ -65,9 +68,9 @@ describe('application shell', () => {
       }),
     );
     await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
-    await userEvent.click(screen.getByText('Türkçe'));
-    expect(await screen.findByRole('heading', { name: 'Hoş geldiniz, Ayşe Yılmaz' })).toBeInTheDocument();
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Genel bakış' })).toBeInTheDocument();
     await waitFor(() => expect(saved).toBe('tr'));
     expect(localStorage.getItem('alice.lang')).toBe('tr');
   });
@@ -75,12 +78,12 @@ describe('application shell', () => {
   it('opens and closes the navigation with the menu button and closes it after navigating', async () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     const { router } = await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     const menu = screen.getByRole('button', { name: 'Open navigation' });
     expect(menu).toHaveAttribute('aria-expanded', 'false');
     await userEvent.click(menu);
     expect(screen.getByRole('button', { name: 'Close navigation' })).toHaveAttribute('aria-expanded', 'true');
-    await userEvent.click(within(screen.getByRole('navigation')).getByRole('link', { name: 'Users' }));
+    await userEvent.click(within(screen.getByRole('navigation')).getByRole('link', { name: 'People & access' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/users'));
     expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'false');
   });
@@ -88,18 +91,18 @@ describe('application shell', () => {
   it('closes the navigation after any navigation, not only a menu link', async () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     const { router } = await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Ayşe Yılmaz' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     await userEvent.click(screen.getByRole('button', { name: 'Open navigation' }));
     expect(screen.getByRole('button', { name: 'Close navigation' })).toHaveAttribute('aria-expanded', 'true');
     await act(() => router.navigate('/account'));
-    expect(await screen.findByRole('heading', { name: 'My account' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Your account' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute('aria-expanded', 'false');
   });
 
-  it('hides the user name below the small breakpoint so the header fits phones', async () => {
+  it('shows the user name in the sidebar, which phones open with the menu button', async () => {
     server.use(...sessionHandlers(sessionFor('admin')));
     await renderRoute('/');
-    expect(await screen.findByTestId('current-user')).toHaveClass('mantine-visible-from-sm');
+    expect(within(await screen.findByRole('navigation')).getByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
   });
 
   it('shows the setup banner to an admin until the recovery passphrase is set', async () => {
@@ -129,7 +132,7 @@ describe('application shell', () => {
       }),
     );
     await renderRoute('/');
-    await screen.findByRole('heading', { name: 'Welcome, Olcay Öztürk' });
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
     expect(screen.queryByTestId('setup-banner')).not.toBeInTheDocument();
   });
 
@@ -258,7 +261,7 @@ describe('a tab that resumes during a rate limit (AUD-16)', () => {
     await waitFor(() => expect(refused).toBeGreaterThan(0));
     await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('The server cannot be reached right now.'));
     expect(router.state.location.pathname).toBe('/');
-    expect(screen.getByRole('heading', { name: 'Welcome, Ayşe Yılmaz' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
     expect(screen.queryAllByRole('alert')).toHaveLength(0);
     act(() => focusManager.setFocused(undefined));
   });
