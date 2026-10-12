@@ -67,7 +67,7 @@ export const SCREENS: Screen[] = [
     path: `/key-vaults/${vaultFixture.id}/certificates/0192d000-0000-7000-8000-0000000000c1`,
     session: sessionFor('operator'),
     status: installedStatus,
-    ready: { en: 'Versions', tr: 'Sürümler' },
+    ready: { en: 'Version history', tr: 'Sürüm geçmişi' },
   },
   { path: '/ssh-keys', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'deploy@laptop', tr: 'deploy@laptop' } },
   {
