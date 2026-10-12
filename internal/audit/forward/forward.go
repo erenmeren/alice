@@ -26,8 +26,8 @@ import (
 	"alice/internal/audit"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/netaddr"
-	"alice/internal/platform/validate"
 	"alice/internal/platform/settings"
+	"alice/internal/platform/validate"
 )
 
 // Transport is how messages reach the receiver.
