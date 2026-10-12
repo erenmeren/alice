@@ -1,6 +1,5 @@
 {
   "home": {
-    "subtitle": "Alice, TLS sertifikalarınızı ve SSH anahtarlarınızı takip eder.",
     "serverChecking": "Sunucu kontrol ediliyor…",
     "serverVersion": "Sunucu sürümü: {{version}}",
     "serverUnreachable": "Sunucuya şu anda ulaşılamıyor. Bir dakika sonra sayfayı yenilemeyi deneyin."
@@ -921,10 +920,7 @@
     "add": "Sunucu ekle",
     "empty": "Henüz sunucu yok. Bir sunucuyu aşağıdaki komutla hazırlayın, sonra ekleyin.",
     "columns": {
-      "name": "Ad",
-      "address": "Adres",
-      "status": "Durum",
-      "problem": "Son sorun"
+      "address": "Adres"
     },
     "prepare": {
       "title": "Sunucuyu Alice için hazırlayın",
@@ -968,11 +964,7 @@
     "noKeys": "Alice bu sunucuda henüz SSH anahtarı bulmadı.",
     "hostKeyChanged": "Sunucunun kimliği değişti, bu yüzden Alice bu sunucudaki tüm işleri durdurdu. Değişikliği kabul etmeden önce güvenlik ekibinizden doğrulamasını isteyin.",
     "facts": {
-      "os": "İşletim sistemi: {{name}}",
-      "helper": "alice-helper sürümü: {{version}}",
-      "lastDiscovery": "Son tarama: {{time}}",
       "neverScanned": "Henüz taranmadı.",
-      "nginx": "Nginx sürümü: {{version}}",
       "nginxStale": "Aşağıdaki Nginx bilgileri güncel olmayabilir. Alice bu sunucudan web sitelerini en son {{time}} tarihinde okudu.",
       "nginxNotFound": "Bu sunucuda Nginx bulunamadı."
     },
@@ -1349,7 +1341,6 @@
     "columns": {
       "name": "Ad",
       "expires": "Bitiş",
-      "daysLeft": "Kalan gün",
       "usedOn": "Kullanıldığı yer",
       "key": "Özel anahtar"
     },
@@ -2419,11 +2410,9 @@
     "daysLeft_other": "{{count}} gün kaldı",
     "noneExpiring": "30 gün içinde süresi dolan bir şey yok.",
     "failedDeployments": "Başarısız dağıtımlar (son 7 gün)",
-    "targetsByStatus": "Durumlarına göre sunucular ve kasalar",
     "license": "Lisans",
     "rotationUpcoming": "Yaklaşan yenilemeler",
     "needsAttention": "İlgi bekleyenler",
-    "auditHead": "Denetim kaydının son durumu",
     "auditHeadHelp": "Bu değeri düzenli olarak Alice dışında bir yere not edin: daha sonra hiçbir kaydın silinmediğini kanıtlamanızı sağlar.",
     "kvExpiring": "30 gün içinde süresi dolacak Key Vault anahtarları ve gizli değerleri: {{count}}",
     "auditBroken": "Son denetim, denetim kaydında bir bütünlük sorunu buldu. Denetim kaydını açın ve doğrulayın.",
@@ -2435,9 +2424,6 @@
     "noUpcoming": "Planlanmış bir yenileme yok.",
     "rotationRunning": "Çalışan yenilemeler: {{count}}",
     "rotationAttention": "İlgi bekleyen yenilemeler: {{count}}",
-    "auditSeq": "Kayıt numarası: {{seq}}",
-    "auditChecked": "Son denetim: {{time}}",
-    "hash": "Özet değeri: {{hash}}",
     "noAttention": "İlgilenmenizi gerektiren bir şey yok.",
     "since": "{{time}} tarihinden beri",
     "columns": {
@@ -2458,7 +2444,6 @@
       "done": "Tamamlandı"
     },
     "backup": {
-      "title": "Yedekler",
       "age_one": "{{count}} saat önce",
       "age_other": "{{count}} saat önce",
       "open": "Yedekleri aç"
@@ -2757,7 +2742,6 @@
     "applied": "Yeni sertifika kullanımda.",
     "current": "Kullanılan sertifika",
     "ownCertificate": "Alice kendi sertifikanızı kullanıyor.",
-    "validFrom": "Geçerlilik başlangıcı: {{date}}",
     "uploadHelp": "Yeni sertifika hemen kullanılır; Alice yeniden başlatılmaz. Özel anahtar bu sunucudan hiç çıkmaz.",
     "format": "Dosya biçimi",
     "formatPem": "PEM: bir sertifika dosyası ve bir anahtar dosyası",

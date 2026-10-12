@@ -1,6 +1,5 @@
 {
   "home": {
-    "subtitle": "Alice keeps track of your TLS certificates and SSH keys.",
     "serverChecking": "Checking the server…",
     "serverVersion": "Server version: {{version}}",
     "serverUnreachable": "The server cannot be reached right now. Try reloading the page in a minute."
@@ -921,10 +920,7 @@
     "add": "Add server",
     "empty": "No servers yet. Prepare a server with the command below, then add it.",
     "columns": {
-      "name": "Name",
-      "address": "Address",
-      "status": "Status",
-      "problem": "Last problem"
+      "address": "Address"
     },
     "prepare": {
       "title": "Prepare a server for Alice",
@@ -968,11 +964,7 @@
     "noKeys": "Alice has not found any SSH keys on this server yet.",
     "hostKeyChanged": "The server's identity has changed, so Alice stopped all work on it. Ask your security team to confirm the change before you accept it.",
     "facts": {
-      "os": "Operating system: {{name}}",
-      "helper": "alice-helper version: {{version}}",
-      "lastDiscovery": "Last scan: {{time}}",
       "neverScanned": "Not scanned yet.",
-      "nginx": "Nginx version: {{version}}",
       "nginxStale": "The Nginx details below may be out of date. Alice last read websites from this server on {{time}}.",
       "nginxNotFound": "Nginx was not found on this server."
     },
@@ -1349,7 +1341,6 @@
     "columns": {
       "name": "Name",
       "expires": "Expires",
-      "daysLeft": "Days left",
       "usedOn": "Used on",
       "key": "Private key"
     },
@@ -2419,11 +2410,9 @@
     "daysLeft_other": "{{count}} days left",
     "noneExpiring": "Nothing expires within 30 days.",
     "failedDeployments": "Failed deployments (last 7 days)",
-    "targetsByStatus": "Servers and vaults by status",
     "license": "License",
     "rotationUpcoming": "Upcoming rotations",
     "needsAttention": "Needs attention",
-    "auditHead": "Audit log head",
     "auditHeadHelp": "Write down this value regularly outside Alice: it lets you prove later that no entry was removed.",
     "kvExpiring": "Key Vault keys and secrets expiring within 30 days: {{count}}",
     "auditBroken": "The last check found an integrity problem in the audit log. Open the Audit trail and verify it.",
@@ -2435,9 +2424,6 @@
     "noUpcoming": "No rotation is scheduled.",
     "rotationRunning": "Rotations running: {{count}}",
     "rotationAttention": "Rotations that need attention: {{count}}",
-    "auditSeq": "Entry number: {{seq}}",
-    "auditChecked": "Last checked: {{time}}",
-    "hash": "Hash: {{hash}}",
     "noAttention": "Nothing needs your attention.",
     "since": "Since {{time}}",
     "columns": {
@@ -2458,7 +2444,6 @@
       "done": "Done"
     },
     "backup": {
-      "title": "Backups",
       "age_one": "{{count}} hour ago",
       "age_other": "{{count}} hours ago",
       "open": "Open the backups"
@@ -2757,7 +2742,6 @@
     "applied": "The new certificate is in use.",
     "current": "Certificate in use",
     "ownCertificate": "Alice is using your own certificate.",
-    "validFrom": "Valid from: {{date}}",
     "uploadHelp": "The new certificate is used at once; Alice does not restart. The private key never leaves this server.",
     "format": "File format",
     "formatPem": "PEM: a certificate file and a key file",
