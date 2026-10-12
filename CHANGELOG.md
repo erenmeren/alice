@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — External code review fixes (2026-10-12)
+
+**Behaviour changes**
+- `PUT /settings/smtp`, `/settings/notifications` and `/settings/general` answer 422 for a missing required key
+  and save nothing (they used to apply the zero value: an omitted `username` disabled SMTP authentication and
+  deleted the stored password). A JSON `null` is 400.
+- An SMTP host written as a bracketed IPv6 literal is refused (422); write IPv6 without brackets.
+- The `Bearer` scheme of the `Authorization` header is matched case-insensitively (RFC 7235).
+- A wrong method on an `/api/*` path answers 405 `ALC-SYS-0009` with an `Allow` header; unknown paths still 404.
+- An SSO callback with no stored state is audited at most once a minute per client address.
+- CSV exports also guard a cell that starts with a line feed.
+- A bad backup key is recorded once per episode instead of every 5 minutes; other backup failures retry after
+  5 minutes, doubling up to 1 hour. After a fix, the next automatic backup can wait up to an hour.
+- Uptime comes from CLOCK_BOOTTIME on Linux: a suspended host no longer looks like a clock that stood still.
+
+**Fixes**: SSO first sign-in with a user name taken by a concurrent sign-in (was a 500); e-mail is no longer sent
+inside an open database transaction; the temporary HTTPS certificate is written crash-safely; the rate limiter
+evicts least-recently-used buckets in batches; transaction rollback and the leadership check are bounded in time;
+nginx `include` patterns match like glob(3); Key Vault listings survive one unreadable certificate; licensectl
+month arithmetic clamps at month end. The backup documentation now states exactly what the sender key does and
+does not authenticate (KI-14). Details and rulings: `docs/superpowers/rulings/review-fixes.md`.
+
 ## Unreleased — Phase 8: Packaging and release
 
 **Upgrade notes**
