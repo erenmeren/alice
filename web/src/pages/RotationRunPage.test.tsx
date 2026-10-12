@@ -547,7 +547,20 @@ describe('RotationRunPage in the design', () => {
     expect(await within(panel).findByText('deploy-production')).toBeInTheDocument();
     expect(within(panel).getByText('Every 90 days')).toBeInTheDocument();
     expect(within(panel).getByText('Scheduled run')).toBeInTheDocument();
-    expect(within(panel).getByText('Notice sent')).toBeInTheDocument();
+    // notified_at is when Alice announced the run (and queued the email), not a delivery mark.
+    expect(within(panel).getByText('Announced')).toBeInTheDocument();
+    expect(within(panel).queryByText(/sent/i)).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['notice_error', { notice_error: { code: 'ALC-NTF-0001', reason: 'notify.queue_failed' } }],
+    ['notice_state', { notice_state: { code: 'ALC-ROT-0021', reason: 'rotation.notice_pending' } }],
+  ])('states no announcement fact next to a %s: the email did not go out', async (_, extra) => {
+    serve({ ...runFixture({ status: 'overlap' }), ...extra });
+    await open();
+    const panel = await screen.findByRole('region', { name: 'Key transition' });
+    expect(within(panel).queryByText('Announced')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Notice sent/)).not.toBeInTheDocument();
   });
 
   it('names the location results and keeps the places table and its rows', async () => {

@@ -191,7 +191,9 @@ export function RotationRunPage() {
       : []),
     { key: 'trigger', label: t('rotation.page.trigger'), value: t(`rotation.trigger.${r.trigger === 'scheduled' ? 'scheduled' : 'manual'}`) },
     { key: 'planned', label: t('rotation.page.plannedFor'), value: formatDateTime(r.planned_for, i18n.language) },
-    ...(r.notified_at ? [{ key: 'notice', label: t('rotation.page.noticeSent'), value: formatDateTime(r.notified_at, i18n.language) }] : []),
+    // notified_at is when Alice announced the run and queued the email, not a delivery mark: it is stated as the
+    // announcement, and not at all while the server reports a problem with the notice (failed or still pending).
+    ...(r.notified_at && notice === null ? [{ key: 'notice', label: t('rotation.page.announced'), value: formatDateTime(r.notified_at, i18n.language) }] : []),
     ...(r.finished_at ? [{ key: 'finished', label: t('rotation.page.finished'), value: formatDateTime(r.finished_at, i18n.language) }] : []),
   ];
 
