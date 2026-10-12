@@ -47,6 +47,8 @@ export function SSHKeyDetailPage() {
   const k = key.data;
   const mk = k.managed_key ?? null;
   const live = mk !== null && mk.destroyed_at === null;
+  // Alice's own connection key is never "managed", yet Alice certainly holds its private half (not downloadable).
+  const privateFact = live ? t('sshKeys.page.privateHeld') : k.is_platform_key ? t('sshKeys.page.privatePlatform') : t('sshKeys.page.privateNotHeld');
   const state = (l: KeyLocation) => (l.removed_at ? t('sshKeys.removedByAlice') : l.missing_since ? t('sshKeys.missing') : t('sshKeys.present'));
   const origin = k.managed ? t('sshKeys.managedTitle') : k.is_platform_key ? t('sshKeys.aliceKey') : t('sshKeys.page.discoveredOnServer');
 
@@ -177,7 +179,7 @@ export function SSHKeyDetailPage() {
                 { key: 'algorithm', label: t('sshKeys.page.columns.algorithm'), value: <span translate="no">{t('sshKeys.keyType', { type: k.key_type, bits: k.bits })}</span> },
                 ...(k.comment ? [{ key: 'comment', label: t('sshKeys.comment'), value: <span translate="no">{k.comment}</span> }] : []),
                 { key: 'firstSeen', label: t('sshKeys.page.firstSeen'), value: formatDateTime(k.first_seen_at, i18n.language) },
-                { key: 'private', label: t('sshKeys.page.privateKey'), value: live ? t('sshKeys.page.privateHeld') : t('sshKeys.page.privateNotHeld') },
+                { key: 'private', label: t('sshKeys.page.privateKey'), value: privateFact },
               ]}
             />
             <div className={classes.publicKey}>

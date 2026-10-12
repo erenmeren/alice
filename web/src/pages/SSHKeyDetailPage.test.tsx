@@ -237,6 +237,10 @@ describe('SSHKeyDetailPage', () => {
     expect(await screen.findByText("This is Alice's own connection key. It cannot be downloaded.")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Download private key' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Deploy to a server' })).not.toBeInTheDocument();
+    // Alice holds the private half of its own connection key, although the key is never "managed".
+    const facts = screen.getByLabelText('Public identity');
+    expect(within(facts).getByText('Held by Alice for its own connections. It cannot be downloaded.')).toBeInTheDocument();
+    expect(within(facts).queryByText('Not held by Alice')).not.toBeInTheDocument();
   });
 
   it('shows a key found on a server without the managed section', async () => {
