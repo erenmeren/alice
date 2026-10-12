@@ -44,7 +44,10 @@ function BellContent({ onDone }: { onDone: () => void }) {
     );
   return (
     <>
-      <p className={classes.bellTitle}>{t('dashboard.needsAttention')}</p>
+      {/* Focus starts here, before the rows (which may still be loading), never at the footer link after them. */}
+      <p className={classes.bellTitle} tabIndex={-1} data-autofocus>
+        {t('dashboard.needsAttention')}
+      </p>
       {body}
       <Anchor component={Link} to="/" className={classes.bellFoot} onClick={onDone}>
         {t('shell.attention.overview')}
@@ -60,7 +63,7 @@ export function AttentionBell() {
   const [opened, setOpened] = useState(false);
   return (
     // The bell sits in the fixed top bar and never scrolls away, so the dropdown need not hide with a detached target.
-    <Popover opened={opened} onChange={setOpened} position="bottom-end" width={340} trapFocus shadow="md" hideDetached={false}>
+    <Popover opened={opened} onChange={setOpened} position="bottom-end" width={340} trapFocus returnFocus shadow="md" hideDetached={false}>
       <Popover.Target>
         <ActionIcon variant="subtle" color="gray" size="lg" aria-label={t('shell.attention.open')} title={t('shell.attention.open')} aria-expanded={opened} onClick={() => setOpened((o) => !o)}>
           <Icon name="Bell" />

@@ -97,6 +97,31 @@ describe('attention bell', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
   });
 
+  it('starts at its title while loading and gives focus back to the bell when Escape closes it', async () => {
+    let release: () => void = () => undefined;
+    const answered = new Promise<void>((r) => {
+      release = r;
+    });
+    server.use(
+      ...sessionHandlers(adminSession),
+      http.get('/api/v1/alerts', async () => {
+        await answered;
+        return HttpResponse.json({ items: [] });
+      }),
+    );
+    await renderRoute('/license');
+    const bell = await screen.findByRole('button', { name: 'View attention items' });
+    bell.focus();
+    await userEvent.keyboard('{Enter}');
+    // The rows are still loading: focus starts at the popover's title, not at the footer link after the rows.
+    await waitFor(() => expect(screen.getByText('Needs attention')).toHaveFocus());
+    release();
+    expect(await screen.findByText('Nothing needs your attention.')).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByText('Nothing needs your attention.')).not.toBeInTheDocument());
+    await waitFor(() => expect(bell).toHaveFocus());
+  });
+
   it('says when nothing needs attention, and shows a failed read', async () => {
     server.use(...sessionHandlers(adminSession), http.get('/api/v1/alerts', () => HttpResponse.json({ items: [] })));
     await renderRoute('/license');
