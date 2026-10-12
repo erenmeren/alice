@@ -249,6 +249,24 @@
     },
     "back": "Geri",
     "skip": "Atla",
+    "rail": {
+      "label": "Kurulum adımları",
+      "title": "Size ait çalışma alanı",
+      "code": "Kurulum kodu ve dil",
+      "admin": "Yönetici ve MFA",
+      "passphrase": "Kurtarma parolası",
+      "https": "HTTPS sertifikası",
+      "mail": "E-posta sunucusu",
+      "license": "Lisans",
+      "platform": "İlk sunucu",
+      "done": "Tamamlandı",
+      "current": "Geçerli adım",
+      "next": "Başlamadı",
+      "counter": "Adım {{n}} / {{total}}"
+    },
+    "shell": {
+      "badge": "Kurulum"
+    },
     "mail": {
       "title": "E-posta sunucusu (isteğe bağlı)",
       "help": "Alice süre dolumu uyarılarını ve başarısız yedeklemelerle ilgili uyarıları e-postayla gönderir. Bu adımı atlayıp e-posta sunucusunu daha sonra Ayarlar bölümünden ayarlayabilirsiniz.",

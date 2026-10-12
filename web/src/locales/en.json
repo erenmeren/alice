@@ -249,6 +249,24 @@
     },
     "back": "Back",
     "skip": "Skip",
+    "rail": {
+      "label": "Setup progress",
+      "title": "Your private workspace",
+      "code": "Setup code & language",
+      "admin": "Administrator & MFA",
+      "passphrase": "Recovery passphrase",
+      "https": "HTTPS certificate",
+      "mail": "Mail server",
+      "license": "License",
+      "platform": "First server",
+      "done": "Done",
+      "current": "Current step",
+      "next": "Not started",
+      "counter": "Step {{n}} of {{total}}"
+    },
+    "shell": {
+      "badge": "Setup"
+    },
     "mail": {
       "title": "Mail server (optional)",
       "help": "Alice sends expiry alerts and warnings about failed backups by e-mail. You can skip this step and set up the mail server later under Settings.",
