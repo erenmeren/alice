@@ -285,7 +285,8 @@ in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
   variables were imported once and are now ignored (Alice logs a warning at every start). See
   [operator-guide.md](operator-guide.md#email).
 - **SSO sign-in refused.** The sign-in page shows the reason, and the audit log has one **Single sign-on refused**
-  entry (`auth.oidc.denied`) whose `reason` names it: `no_access` (no group of the person is mapped, `ALC-SSO-0006`),
+  entry (`auth.oidc.denied`; for a return that names no sign-in Alice started, at most one a minute per address) whose
+  `reason` names it: `no_access` (no group of the person is mapped, `ALC-SSO-0006`),
   `groups_overage` (Entra ID sent no groups, `ALC-SSO-0007`), `email_in_use` (a local account has the e-mail,
   `ALC-SSO-0008`), `idp_unreachable` (`ALC-SSO-0009`), `login_invalid` (the token failed a check: signature, issuer,
   audience, times, nonce, `ALC-SSO-0010`), `login_expired` (started more than 10 minutes ago, in another browser, or

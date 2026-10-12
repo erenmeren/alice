@@ -19,6 +19,7 @@ import (
 
 	"alice/internal/auth"
 	"alice/internal/auth/oidc/claims"
+	"alice/internal/auth/ratelimit"
 	"alice/internal/platform/settings"
 	"alice/internal/rbac"
 )
@@ -151,9 +152,11 @@ func (s *Service) keySetFor(p Provider) (*keySet, error) {
 }
 
 // refusal is a refused completion: its closed reason and, for a token problem, the claims reason (both safe to log).
+// noState marks a callback that named no stored state (none, an unknown or an already used one).
 type refusal struct {
-	reason string
-	detail string
+	reason  string
+	detail  string
+	noState bool
 }
 
 // Complete finishes a sign-in or step-up from the callback's query (C11): it consumes the state, checks the
@@ -164,11 +167,21 @@ func (s *Service) Complete(ctx context.Context, providerID uuid.UUID, q url.Valu
 	id := auth.OIDCIdentity{ProviderID: providerID}
 	var st loginState
 	refuse := func(r refusal) error {
-		if err := s.auth.RefuseOIDC(ctx, id, r.reason, m); err != nil {
-			return err
+		audited := true
+		if r.noState {
+			// Review L-8: at most one row a minute per address for a callback that identifies no sign-in.
+			key := ratelimit.IPKey(m.IP)
+			if audited = !s.unknownStateAudited.Contains(key); audited {
+				s.unknownStateAudited.Add(key)
+			}
+		}
+		if audited {
+			if err := s.auth.RefuseOIDC(ctx, id, r.reason, m); err != nil {
+				return err
+			}
 		}
 		s.log.InfoContext(ctx, "single sign-on refused", "provider_id", providerID.String(), "reason", r.reason, "detail", r.detail,
-			"stepup", st.stepUp, "request_id", m.RequestID)
+			"stepup", st.stepUp, "audited", audited, "request_id", m.RequestID)
 		return &LoginError{Reason: r.reason, StepUp: st.stepUp, Next: st.next}
 	}
 	c, r, err := s.complete(ctx, providerID, q, binding, m, &id, &st)
@@ -185,14 +198,14 @@ func (s *Service) complete(ctx context.Context, providerID uuid.UUID, q url.Valu
 	id *auth.OIDCIdentity, st *loginState) (Completion, *refusal, error) {
 	state := q.Get("state")
 	if state == "" {
-		return Completion{}, &refusal{reason: "login_expired"}, nil
+		return Completion{}, &refusal{reason: "login_expired", noState: true}, nil
 	}
 	row, found, err := s.consumeState(ctx, state)
 	if err != nil {
 		return Completion{}, nil, err
 	}
 	if !found {
-		return Completion{}, &refusal{reason: "login_expired"}, nil
+		return Completion{}, &refusal{reason: "login_expired", noState: true}, nil
 	}
 	*st = row
 	if !s.clock.Now().Before(row.expires) || row.providerID != providerID || subtle.ConstantTimeCompare(row.binding, sum(binding)) != 1 {

@@ -622,7 +622,9 @@ that place.
 A refused single sign-on brings the person back to the sign-in page with a message, and writes one audit entry
 **Single sign-on refused** (`auth.oidc.denied`) with the reason (`no_access`, `groups_overage`, `email_in_use`,
 `idp_unreachable`, `login_invalid`, `login_expired`, `user_disabled`, `provider_disabled`, `stepup_other_user`,
-`idp_error`); no account is created and no session is opened. A sign-in must be finished within 10 minutes in the
+`idp_error`); no account is created and no session is opened. A return to Alice that names no sign-in Alice started
+(no state, an unknown one, or one already used) is recorded at most once a minute per client address, so a stream
+of forged returns cannot fill the audit log. A sign-in must be finished within 10 minutes in the
 browser that started it. See "SSO sign-in refused" in [troubleshooting.md](troubleshooting.md#alerts-e-mail-and-single-sign-on).
 
 ## Saved views and export

@@ -19,6 +19,7 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/auth/ratelimit"
 	"alice/internal/platform/clock"
 	"alice/internal/secrets"
 )
@@ -138,7 +139,19 @@ type Service struct {
 	log     *slog.Logger
 
 	keySets sync.Map // keySetKey -> *keySet: one bounded cache per provider version
+
+	// unknownStateAudited holds the client addresses whose callback without a stored state was audited in the last
+	// unknownStateWindow (review L-8).
+	unknownStateAudited *ratelimit.Recent
 }
+
+// unknownStateWindow is how often a callback that names no stored state is audited per client address: the callback
+// is public, and such a request identifies no sign-in, so a stream of random states writes one row a minute per
+// address instead of one per request (review L-8).
+const unknownStateWindow = time.Minute
+
+// maxUnknownStateAddresses bounds the addresses remembered for unknownStateWindow.
+const maxUnknownStateAddresses = 10_000
 
 type keySetKey struct {
 	id      uuid.UUID
@@ -151,7 +164,8 @@ func New(c Config) *Service {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, auth: c.Auth, dial: c.Dial, log: log}
+	return &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, auth: c.Auth, dial: c.Dial, log: log,
+		unknownStateAudited: ratelimit.NewRecent(c.Clock, unknownStateWindow, maxUnknownStateAddresses)}
 }
 
 // RedirectURI is the provider's callback address under Alice's public address, "" while it is unset.

@@ -2866,7 +2866,9 @@ paths:
         sign-in started from, with the session cookie. Refusal: 303 to /login?sso_error=<reason> (a sign-in) or to the
         page the step-up started from with sso_error=<reason> (before any fragment); the reason is one of
         sso.no_access, sso.groups_overage, sso.email_in_use, sso.idp_unreachable, sso.login_invalid, sso.login_expired,
-        sso.user_disabled, sso.provider_disabled, sso.stepup_other_user, sso.idp_error (ALC-SSO-0006..0015). Nothing of
+        sso.user_disabled, sso.provider_disabled, sso.stepup_other_user, sso.idp_error (ALC-SSO-0006..0015). Every
+        refusal writes an auth.oidc.denied audit entry, except that a callback naming no stored state (none, an unknown
+        or an already used one) is audited at most once a minute per client address. Nothing of
         the provider's answer is shown. Limited to 10 per minute per binding cookie (one browser's retries) and to the
         anonymous 60 per minute per address (S-11; not the sign-in form's 10, so the browsers behind one company address
         still finish their sign-ins). HEAD is refused with 405 ALC-SYS-0009 without completing anything.

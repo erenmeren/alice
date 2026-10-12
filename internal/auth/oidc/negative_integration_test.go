@@ -3,11 +3,13 @@
 package oidc_test
 
 import (
+	"net/netip"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -90,6 +92,7 @@ func TestO03StateNonceAndCodeReplay(t *testing.T) {
 	x.refused(t, "login_expired", func() error { _, err := x.svc.Complete(x.ctx, x.prov.ID, q, "other-browser", meta); return err })
 	x.refused(t, "login_expired", func() error { _, err := x.svc.Complete(x.ctx, x.prov.ID, q, b.Binding, meta); return err })
 	missing := url.Values{"code": q["code"]}
+	x.clk.Advance(time.Minute) // a callback without a stored state is audited once a minute per address (review L-8)
 	x.refused(t, "login_expired", func() error { _, err := x.svc.Complete(x.ctx, x.prov.ID, missing, b.Binding, meta); return err })
 	// An authorization code that was used once is refused when replayed under a fresh state.
 	b1, err := x.svc.Begin(x.ctx, oidc.BeginInput{ProviderID: x.prov.ID, Next: "/"})
@@ -451,4 +454,43 @@ func TestJWKSUnreachableIsIdPUnreachable(t *testing.T) {
 	x.refused(t, "idp_unreachable", func() error { _, err := x.login(t, "/"); return err })
 	x.idp.NextLogin(fakeidp.Login{Subject: "u1", Username: "ada", Groups: []string{"ops"}})
 	x.refused(t, "idp_unreachable", func() error { _, err := x.login(t, "/"); return err }) // within the refetch minute
+}
+
+// Review L-8: the callback is public. A callback that names no stored state (none at all, a random or a replayed one)
+// identifies no sign-in, so its refusals are audited at most once a minute per client address; any other refusal,
+// and the first of a minute, still writes its row.
+func TestUnknownStateRefusalsAreCoalescedPerAddress(t *testing.T) {
+	x := newHarness(t)
+	x.ready(t)
+	denied := func() int {
+		return x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'auth.oidc.denied'`)
+	}
+	bogus := func(m auth.Meta, q url.Values) {
+		t.Helper()
+		_, err := x.svc.Complete(x.ctx, uuid.New(), q, "cookie", m)
+		assert.Equal(t, "login_expired", reasonOf(err))
+	}
+	before := denied()
+	bogus(meta, url.Values{"state": {"x"}})
+	assert.Equal(t, before+1, denied(), "the first one of a minute is audited")
+	for range 20 {
+		bogus(meta, url.Values{"state": {uuid.NewString()}})
+		bogus(meta, url.Values{})
+	}
+	assert.Equal(t, before+1, denied(), "the rest of the minute is not")
+	other := meta
+	other.IP = netip.MustParseAddr("198.51.100.7")
+	bogus(other, url.Values{"state": {"x"}})
+	assert.Equal(t, before+2, denied(), "another address has its own minute")
+	x.clk.Advance(time.Minute)
+	bogus(meta, url.Values{"state": {"x"}})
+	assert.Equal(t, before+3, denied(), "the next minute is audited again")
+
+	// A refusal of a real (stored) state is always audited.
+	b, err := x.svc.Begin(x.ctx, oidc.BeginInput{ProviderID: x.prov.ID, Next: "/"})
+	require.NoError(t, err)
+	cb, err := x.idp.Authorize(b.AuthorizeURL)
+	require.NoError(t, err)
+	u, _ := url.Parse(cb)
+	x.refused(t, "login_expired", func() error { _, err := x.svc.Complete(x.ctx, x.prov.ID, u.Query(), "other-browser", meta); return err })
 }
