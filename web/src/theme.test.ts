@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { Checkbox, DEFAULT_THEME, MantineProvider, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
 import { createElement } from 'react';
@@ -64,6 +64,52 @@ describe('semantic colors', () => {
       expect(scheme['--mantine-primary-color-filled']).toBe('var(--alice-brand)');
       expect(scheme['--mantine-color-default-border']).toBe('var(--alice-border)');
     }
+  });
+  // Checkbox, Radio, Tabs, Progress and Loader write the primary color into an inline variable
+  // (--checkbox-color: var(--mantine-color-forest-filled)); it must be the brand token, not palette shade 3 or 7.
+  it('draws the primary color’s own variables from the brand tokens in both schemes', () => {
+    const vars = cssVariablesResolver(full);
+    for (const scheme of [vars.light, vars.dark]) {
+      expect(scheme['--mantine-color-forest-filled']).toBe('var(--alice-brand)');
+      expect(scheme['--mantine-color-forest-filled-hover']).toBe('var(--alice-brand-hover)');
+      expect(scheme['--mantine-color-forest-light']).toBe('var(--alice-brand-soft)');
+      expect(scheme['--mantine-color-forest-light-color']).toBe('var(--alice-brand)');
+      expect(scheme['--mantine-color-forest-outline']).toBe('var(--alice-brand)');
+      expect(scheme['--mantine-color-forest-text']).toBe('var(--alice-brand)');
+    }
+  });
+  it('draws disabled controls from the tokens in both schemes', () => {
+    const vars = cssVariablesResolver(full);
+    for (const scheme of [vars.light, vars.dark]) {
+      expect(scheme['--mantine-color-disabled']).toBe('var(--alice-surface-subtle)');
+      expect(scheme['--mantine-color-disabled-color']).toBe('var(--alice-text-muted)');
+      expect(scheme['--mantine-color-disabled-border']).toBe('var(--alice-border)');
+    }
+  });
+  // Mantine draws its dark scheme (popover and menu surfaces, hovers, borders, the select chevron, segmented controls,
+  // the close button) from its neutral "dark" palette; mapped onto the tokens, those surfaces match the canvas.
+  it('maps every shade of Mantine’s dark palette onto a token in the dark scheme only', () => {
+    const vars = cssVariablesResolver(full);
+    const tokens = readFileSync('src/design/tokens.css', 'utf8');
+    const darkBlock = tokens.slice(tokens.indexOf(":root[data-mantine-color-scheme='dark']"));
+    for (let n = 0; n <= 9; n++) {
+      const value = vars.dark[`--mantine-color-dark-${n}`];
+      expect(value).toMatch(/^var\(--alice-[a-z-]+\)$/);
+      expect(darkBlock).toContain(`${value.slice(4, -1)}:`);
+      expect(vars.light[`--mantine-color-dark-${n}`]).toBeUndefined();
+    }
+  });
+  it('leaves no other palette shade in Mantine’s dark-scheme rules for a component the app uses', () => {
+    const shades = new Set<string>();
+    for (const [, sel, body] of mantineCss.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if (!/data-mantine-color-scheme='dark'/.test(sel) || sel.trim().startsWith(':root')) continue;
+      for (const [, shade] of body.matchAll(/--mantine-color-([a-z]+-\d)\b/g)) if (!shade.startsWith('dark-')) shades.add(shade);
+    }
+    // Tooltip (gray-2) and the typography styles' <mark> (yellow-5): components the app does not use.
+    expect([...shades].sort()).toEqual(['gray-2', 'yellow-5']);
+    const sources = (readdirSync('src', { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f));
+    const users = sources.filter((f) => /\b(Tooltip|TypographyStylesProvider|Typography)\b/.test(readFileSync(`src/${f}`, 'utf8')));
+    expect(users).toEqual([]);
   });
   it('uses the bundled Geist fonts with system fallbacks', () => {
     expect(full.fontFamily).toMatch(/^Geist, /);

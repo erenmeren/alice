@@ -34,6 +34,13 @@ const TEXT_PAIRS: [string, string][] = [
   ['on-brand', 'brand'], ['on-brand', 'brand-hover'], ['brand', 'brand-soft'], ['brand', 'surface'], ['brand', 'canvas'], ['brand', 'surface-hover'],
   ...TONES.flatMap((t): [string, string][] => [[t, `${t}-soft`], ['on-strong', t], ['on-strong', `${t}-hover`], [t, 'surface']]),
 ];
+// The pairs Mantine's own rules draw once theme.ts maps its "dark" palette and its disabled colors onto the tokens:
+// popover and menu text on surface-raised, a hovered menu item on border, segmented labels on canvas and surface-hover,
+// disabled text on surface-subtle.
+const MANTINE_PAIRS: [string, string][] = [
+  ['text', 'surface-raised'], ['text-secondary', 'surface-raised'], ['text-muted', 'surface-raised'],
+  ['text', 'border'], ['text-secondary', 'surface-hover'], ['text-muted', 'surface-hover'],
+];
 
 describe.each([
   ['light', ':root[data-mantine-color-scheme=\'light\']'],
@@ -42,7 +49,7 @@ describe.each([
   const light = tokensOf(':root[data-mantine-color-scheme=\'light\']');
   const tokens = { ...light, ...tokensOf(selector) };
 
-  it.each(TEXT_PAIRS)('%s on %s reaches 4.5:1', (fg, bg) => {
+  it.each([...TEXT_PAIRS, ...MANTINE_PAIRS])('%s on %s reaches 4.5:1', (fg, bg) => {
     expect(contrast(tokens[fg], tokens[bg])).toBeGreaterThanOrEqual(4.5);
   });
 
@@ -51,7 +58,7 @@ describe.each([
   });
 
   it('draws field borders and the focus ring at 3:1 (non-text contrast)', () => {
-    for (const bg of ['surface', 'canvas']) {
+    for (const bg of ['surface', 'canvas', 'surface-raised']) {
       expect(contrast(tokens['border-strong'], tokens[bg])).toBeGreaterThanOrEqual(3);
       expect(contrast(tokens.focus, tokens[bg])).toBeGreaterThanOrEqual(3);
     }

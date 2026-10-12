@@ -82,10 +82,39 @@ const SCHEME: Record<string, string> = {
   '--mantine-primary-color-light-hover': 'var(--alice-surface-hover)',
   '--mantine-primary-color-light-color': 'var(--alice-brand)',
   '--mantine-primary-color-contrast': 'var(--alice-on-brand)',
+  // The primary color by name: Checkbox, Radio, Tabs, Progress and Loader write var(--mantine-color-forest-filled)
+  // into their inline variables; it is the brand token, not the palette's shade 7 (light) or 3 (dark).
+  '--mantine-color-forest-filled': 'var(--alice-brand)',
+  '--mantine-color-forest-filled-hover': 'var(--alice-brand-hover)',
+  '--mantine-color-forest-light': 'var(--alice-brand-soft)',
+  '--mantine-color-forest-light-hover': 'var(--alice-surface-hover)',
+  '--mantine-color-forest-light-color': 'var(--alice-brand)',
+  '--mantine-color-forest-outline': 'var(--alice-brand)',
+  '--mantine-color-forest-outline-hover': 'var(--alice-brand-soft)',
+  '--mantine-color-forest-text': 'var(--alice-brand)',
+  '--mantine-color-disabled': 'var(--alice-surface-subtle)',
+  '--mantine-color-disabled-color': 'var(--alice-text-muted)',
+  '--mantine-color-disabled-border': 'var(--alice-border)',
+};
+
+// Mantine's dark-scheme rules draw surfaces, hovers, borders and secondary text (popovers, menus, segmented
+// controls, the select chevron, the close button) from its neutral "dark" palette. In the dark scheme each shade is the
+// token it stands for, so those parts sit on the design's green-grey canvas; tokens.test.ts holds the text pairs.
+const DARK_PALETTE: Record<string, string> = {
+  '--mantine-color-dark-0': 'var(--alice-text)',
+  '--mantine-color-dark-1': 'var(--alice-text-secondary)',
+  '--mantine-color-dark-2': 'var(--alice-text-muted)',
+  '--mantine-color-dark-3': 'var(--alice-border-strong)',
+  '--mantine-color-dark-4': 'var(--alice-border)',
+  '--mantine-color-dark-5': 'var(--alice-surface-hover)',
+  '--mantine-color-dark-6': 'var(--alice-surface-raised)',
+  '--mantine-color-dark-7': 'var(--alice-surface)',
+  '--mantine-color-dark-8': 'var(--alice-canvas)',
+  '--mantine-color-dark-9': 'var(--alice-canvas)',
 };
 
 // cssVariablesResolver goes to the MantineProvider (it is not part of the theme).
-export const cssVariablesResolver: CSSVariablesResolver = () => ({ variables: {}, light: SCHEME, dark: SCHEME });
+export const cssVariablesResolver: CSSVariablesResolver = () => ({ variables: {}, light: SCHEME, dark: { ...SCHEME, ...DARK_PALETTE } });
 
 const SANS = "Geist, system-ui, -apple-system, 'Segoe UI', Arial, sans-serif";
 const MONO = "'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
