@@ -945,7 +945,6 @@
       "openNamed": "Open {{name}}",
       "never": "Never",
       "back": "All servers",
-      "subtitle": "{{address}} · {{platform}}",
       "identityChangedTitle": "This server’s identity has changed",
       "verifiedTitle": "Connection verified",
       "verifiedText": "Observed SSH identity matches the pinned fingerprint.",
