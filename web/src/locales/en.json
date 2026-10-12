@@ -9,6 +9,18 @@
   "language": {
     "label": "Language"
   },
+  "appearance": {
+    "title": "A workspace that feels right",
+    "description": "Choose a color mode and information density. Your preference stays on this device.",
+    "colorMode": "Color mode",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System",
+    "compact": "Compact tables",
+    "compactHelp": "Use 48 px rows to see more information at once.",
+    "languageHelp": "Saved to your account, so it follows you to other browsers.",
+    "toggle": "Switch color mode"
+  },
   "nav": {
     "label": "Main navigation",
     "openMenu": "Open navigation",
@@ -46,6 +58,10 @@
     "cancel": "Cancel",
     "close": "Close",
     "scrollRegion": "Table, scrolls sideways",
+    "table": {
+      "shown_one": "{{count}} shown",
+      "shown_other": "{{count}} shown"
+    },
     "codeLabel": "6-digit code",
     "usernameHelp": "2 to 64 characters: English letters (A–Z), digits, dot, underscore or hyphen. Start with a letter or digit.",
     "stepUp": {

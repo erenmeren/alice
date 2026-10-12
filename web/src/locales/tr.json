@@ -9,6 +9,18 @@
   "language": {
     "label": "Dil"
   },
+  "appearance": {
+    "title": "Size uygun bir çalışma alanı",
+    "description": "Renk modunu ve bilgi yoğunluğunu seçin. Tercihiniz bu cihazda saklanır.",
+    "colorMode": "Renk modu",
+    "light": "Açık",
+    "dark": "Koyu",
+    "system": "Sistem",
+    "compact": "Kompakt tablolar",
+    "compactHelp": "Tek seferde daha fazla bilgi için 48 piksel satırlar kullanın.",
+    "languageHelp": "Hesabınıza kaydedilir; diğer tarayıcılarda da geçerli olur.",
+    "toggle": "Renk modunu değiştir"
+  },
   "nav": {
     "label": "Ana gezinme",
     "openMenu": "Gezinmeyi aç",
@@ -46,6 +58,10 @@
     "cancel": "İptal",
     "close": "Kapat",
     "scrollRegion": "Tablo, yana kaydırılır",
+    "table": {
+      "shown_one": "{{count}} kayıt gösteriliyor",
+      "shown_other": "{{count}} kayıt gösteriliyor"
+    },
     "codeLabel": "6 haneli kod",
     "usernameHelp": "2 ile 64 karakter arası: İngilizce harfler (A–Z), rakamlar, nokta, alt çizgi veya tire. Bir harf ya da rakamla başlayın.",
     "stepUp": {
