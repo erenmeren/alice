@@ -4,6 +4,8 @@ import type { WizardStep } from '../SetupPage';
 import classes from './setup.module.css';
 
 const ITEMS = ['code', 'admin', 'passphrase', 'https', 'mail', 'license', 'platform'] as const;
+// RAIL_LENGTH is the number of rail items ("Step n of 7").
+export const RAIL_LENGTH = ITEMS.length;
 const INDEX: Record<WizardStep, number> = {
   code: 0,
   language: 0,
@@ -31,7 +33,7 @@ export function SetupRail({ current }: { current: WizardStep }) {
   return (
     <div className={classes.rail}>
       <p className={classes.railTitle}>{t('setup.rail.title')}</p>
-      <p className={classes.counter}>{t('setup.rail.counter', { n: Math.min(at + 1, ITEMS.length), total: ITEMS.length })}</p>
+      <p className={classes.counter}>{t('setup.rail.counter', { n: Math.min(at + 1, RAIL_LENGTH), total: RAIL_LENGTH })}</p>
       <ol className={classes.railList} aria-label={t('setup.rail.label')}>
         {ITEMS.map((item, i) => {
           const state = i < at ? 'done' : i === at ? 'current' : 'next';

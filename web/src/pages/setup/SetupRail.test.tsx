@@ -1,8 +1,22 @@
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { renderApp } from '../../test/render';
 import type { WizardStep } from '../SetupPage';
 import { SetupRail, railIndex } from './SetupRail';
+import { SetupShell, StepHeading } from './SetupShell';
+
+function Walk() {
+  const [step, setStep] = useState<WizardStep>('https');
+  return (
+    <SetupShell current={step}>
+      {step !== 'license' && <StepHeading title={`Title of ${step}`} />}
+      <button type="button" onClick={() => setStep(step === 'https' ? 'mail' : 'license')}>
+        Next
+      </button>
+    </SetupShell>
+  );
+}
 
 describe('SetupRail', () => {
   it('maps every wizard step to its rail item', () => {
@@ -49,5 +63,20 @@ describe('SetupRail', () => {
     expect(within(rail).getByText('Kurulum kodu ve dil').closest('li')).toHaveAttribute('aria-current', 'step');
     expect(screen.getByText('Adım 1 / 7')).toBeInTheDocument();
     expect(screen.getByText('Size ait çalışma alanı')).toBeInTheDocument();
+  });
+
+  it('moves focus to the new step title and announces the step politely, never on the first screen', async () => {
+    await renderApp(<Walk />);
+    const first = screen.getByRole('heading', { level: 2, name: 'Title of https' });
+    expect(first).not.toHaveFocus();
+    const live = document.querySelector('[aria-live="polite"]');
+    expect(live).toHaveTextContent(/^$/);
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(screen.getByRole('heading', { level: 2, name: 'Title of mail' })).toHaveFocus();
+    expect(live).toHaveTextContent('Step 5 of 7');
+    // A step whose title is not drawn yet: the content area itself takes the focus.
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(document.activeElement?.tagName).toBe('SECTION');
+    expect(live).toHaveTextContent('Step 6 of 7');
   });
 });
