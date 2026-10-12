@@ -1,0 +1,40 @@
+/* The Key rotations page and the rotation run page in the Clarity design (alice-design/dist/styles.css .rotation-path,
+   .rotation-phase, .detail-grid, .stack, .data-table td p). Colors come from the --alice-* tokens only. */
+.path { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 24px 0; margin: 0; list-style: none; }
+.phase { border-top: 3px solid var(--alice-border); padding-top: 12px; min-width: 0; display: grid; gap: 4px; }
+.phase[data-state='done'] { border-top-color: var(--alice-brand); }
+.phase[data-state='current'] { border-top-color: var(--alice-warning); }
+.phaseName { font-size: 11px; font-weight: 600; color: var(--alice-text); overflow-wrap: anywhere; }
+.phaseNumber { font-family: var(--mantine-font-family-monospace); }
+.phaseState { font-size: 10px; color: var(--alice-text-secondary); }
+.runs { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.run { padding: 18px 0; border-bottom: 1px solid var(--alice-border); }
+.run:first-child { padding-top: 0; }
+.run:last-child { border-bottom: 0; padding-bottom: 0; }
+.runHead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.runTitle { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.runIcon { width: 30px; height: 34px; display: grid; place-items: center; flex-shrink: 0; border-radius: var(--alice-radius-sm); background: var(--alice-brand-soft); color: var(--alice-brand); }
+.runName { margin: 0; font-size: 14px; font-weight: 600; color: var(--alice-text); overflow-wrap: anywhere; }
+.runTime { margin: 4px 0 0; font-size: 11px; color: var(--alice-text-secondary); }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.secondary { margin: 4px 0 0; font-size: 10px; color: var(--alice-text-muted); overflow-wrap: anywhere; }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.links { display: grid; gap: 4px; justify-items: start; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(290px, 1fr); gap: 20px; align-items: start; }
+.stack { display: grid; gap: 20px; align-content: start; min-width: 0; }
+.fingerprint { display: grid; gap: 6px; margin-bottom: 16px; }
+.label { font-size: 10px; color: var(--alice-text-muted); }
+.counts { padding: 0 18px 16px; }
+.help { margin: 16px 0 0; font-size: 11px; color: var(--alice-text-secondary); }
+.decisions { display: grid; gap: 8px; justify-items: start; }
+@media (max-width: 1199px) {
+  .grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+@media (max-width: 1020px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 767px) {
+  .path { gap: 8px; }
+  .phaseName { font-size: 10px; }
+  .phaseState { font-size: 9px; }
+}

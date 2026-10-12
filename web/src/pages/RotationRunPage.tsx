@@ -1,20 +1,24 @@
-import { Alert, Anchor, Badge, Button, Checkbox, Code, Group, List, Stack, Table, Text, Title } from '@mantine/core';
+import { Anchor, Button, Checkbox, Code, Group, List, Stack, Table, Text } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
 import { ROTATION_POLICIES_KEY, ROTATION_RUNS_KEY, runKey, SSH_KEYS_KEY } from '../api/queryKeys';
-import { abortRun, continueRun, finishRunNow, getRun, keepOldKey, runPollInterval, type Run, type RunLocation, type RunStep } from '../api/rotation';
+import { abortRun, continueRun, finishRunNow, getRun, keepOldKey, listPolicies, runPollInterval, type Run, type RunLocation, type RunStep } from '../api/rotation';
 import { useAuth } from '../auth/AuthProvider';
 import type { ErrorRef } from '../api/types';
 import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
-import { ReasonAlert, labelOf, noteText, skipText } from '../components/rotationText';
+import { RotationPath } from '../components/rotation/RotationPath';
+import { ReasonAlert, labelOf, locationTone, noteText, runTone, skipText } from '../components/rotationText';
 import { reasonTitle } from '../components/JobErrorAlert';
 import { useStepUp } from '../components/StepUpProvider';
+import { DialogActions, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
+import { Icon } from '../design/Icon';
+import classes from './Rotations.module.css';
 
 // Reasons that mean "look at this", not "this went fine": a key that was already gone when Alice undid its addition,
 // and a late answer that arrived after Alice had given up on a step.
@@ -26,6 +30,9 @@ function noticeOf(r: Run): ErrorRef | null {
 }
 
 type Confirm = 'finish_now' | 'abort' | 'keep_old' | null;
+
+// The statuses RotationPath draws (it renders nothing for the others); the page leaves out the empty panel too.
+const PATH_STATUSES: Record<string, true> = { dry_run_notified: true, adding_new: true, verifying_new: true, overlap: true, removing_old: true, completed: true };
 
 function stepLabel(t: ReturnType<typeof useTranslation>['t'], i18n: ReturnType<typeof useTranslation>['i18n'], s: RunStep): string {
   if (i18n.exists(`rotation.step.${s.name}`)) return t(`rotation.step.${s.name}`);
@@ -52,9 +59,7 @@ function LocationRow({ l }: { l: RunLocation }) {
         </Code>
       </Table.Td>
       <Table.Td>
-        <Badge variant="light" color={l.state === 'removed' || l.state === 'verified' ? 'green' : l.state.endsWith('_failed') ? 'red' : l.state === 'kept_old' || l.state === 'skipped' ? 'yellow' : 'gray'} tt="none">
-          {labelOf(t, i18n, 'rotation.loc', l.state)}
-        </Badge>
+        <StatusBadge tone={locationTone(l.state)}>{labelOf(t, i18n, 'rotation.loc', l.state)}</StatusBadge>
       </Table.Td>
       <Table.Td>
         <Stack gap={4}>
@@ -64,13 +69,13 @@ function LocationRow({ l }: { l: RunLocation }) {
           {l.error && (
             <Text size="xs" style={WRAP}>
               {warn && (
-                <Badge variant="light" color="yellow" tt="none" mr={6}>
+                <StatusBadge tone="warning" icon="CircleAlert" style={{ marginRight: 6 }}>
                   {t('rotation.warning')}
-                </Badge>
+                </StatusBadge>
               )}
               {reasonTitle(t, i18n, l.error.reason, l.error.params ?? {})}
               {l.error.code && (
-                <Text span size="xs" c="gray.7">
+                <Text span size="xs" c="dimmed">
                   {' '}
                   {t('jobs.errorCode', { code: l.error.code })}
                 </Text>
@@ -129,6 +134,9 @@ export function RotationRunPage() {
     queryFn: () => getRun(id),
     refetchInterval: (q) => runPollInterval(q.state.data, q.state.error),
   });
+  // The policy's name and interval for the header and the facts: the same list the Key rotations page reads (every live
+  // policy, read permission). A run whose policy is gone simply shows no policy facts.
+  const policies = useQuery({ queryKey: [...ROTATION_POLICIES_KEY, 'all'], queryFn: listPolicies });
 
   if (query.isPending) return <PageLoader />;
   if (query.isError && !query.data)
@@ -171,180 +179,218 @@ export function RotationRunPage() {
     return l ? `${l.target_name}, ${l.os_user}` : '';
   };
 
+  const policy = policies.data?.items.find((p) => p.id === r.policy_id);
+  const total = r.location_counts.total;
+  const description = [policy?.name, r.new_key_type, total !== undefined ? t('rotation.page.locations', { count: total }) : undefined].filter(Boolean).join(' · ');
+  const facts: Fact[] = [
+    ...(policy
+      ? [
+          { key: 'policy', label: t('rotation.page.policy'), value: <span translate="no">{policy.name}</span> },
+          { key: 'interval', label: t('rotation.page.interval'), value: policy.interval_days === 1 ? t('rotation.everyDay') : t('rotation.every', { count: policy.interval_days }) },
+        ]
+      : []),
+    { key: 'trigger', label: t('rotation.page.trigger'), value: t(`rotation.trigger.${r.trigger === 'scheduled' ? 'scheduled' : 'manual'}`) },
+    { key: 'planned', label: t('rotation.page.plannedFor'), value: formatDateTime(r.planned_for, i18n.language) },
+    ...(r.notified_at ? [{ key: 'notice', label: t('rotation.page.noticeSent'), value: formatDateTime(r.notified_at, i18n.language) }] : []),
+    ...(r.finished_at ? [{ key: 'finished', label: t('rotation.page.finished'), value: formatDateTime(r.finished_at, i18n.language) }] : []),
+  ];
+
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="flex-start">
-        <Title order={1}>{t('rotation.runTitle')}</Title>
-        <div role="status" aria-live="polite">
-          <Badge size="lg" variant="light" color={r.status === 'completed' ? 'green' : r.status === 'needs_attention' ? 'orange' : 'indigo'} tt="none">
-            {labelOf(t, i18n, 'rotation.status', r.status)}
-          </Badge>
-        </div>
-      </Group>
-      <Anchor component={Link} to={`/ssh-keys/${encodeURIComponent(r.status === 'completed' && r.new_ssh_key_id ? r.new_ssh_key_id : r.old_ssh_key_id)}`} w="fit-content" size="sm">
-        {t('rotation.backToKey')}
-      </Anchor>
-      <Text size="sm">{t(`rotation.trigger.${r.trigger === 'scheduled' ? 'scheduled' : 'manual'}`)}</Text>
-      <Text size="sm">{t('rotation.plannedFor', { date: formatDateTime(r.planned_for, i18n.language) })}</Text>
-      <Text size="sm" fw={600}>
-        {t('rotation.oldKey')}
-      </Text>
-      <Code translate="no" style={WRAP}>
-        {r.old_fingerprint}
-      </Code>
-      {r.new_fingerprint !== '' && (
-        <>
-          <Text size="sm" fw={600}>
-            {t('rotation.newKey')}
-          </Text>
-          <Code translate="no" style={WRAP}>
-            {r.new_fingerprint}
-          </Code>
-        </>
-      )}
-      {r.status === 'overlap' && r.paused_license && <Text size="sm">{t('rotation.overlapOnHold')}</Text>}
-      {r.status === 'overlap' && !r.paused_license && r.overlap_until && <Text size="sm">{t('rotation.overlapUntil', { date: formatDateTime(r.overlap_until, i18n.language) })}</Text>}
-      {r.awaiting_decision && !r.paused_license && r.decision_due_at && <Text size="sm">{t('rotation.decisionDue', { date: formatDateTime(r.decision_due_at, i18n.language) })}</Text>}
-      {r.finished_at && <Text size="sm">{t('rotation.finishedAt', { date: formatDateTime(r.finished_at, i18n.language) })}</Text>}
+      <PageHeader
+        back={{ to: `/ssh-keys/${encodeURIComponent(r.status === 'completed' && r.new_ssh_key_id ? r.new_ssh_key_id : r.old_ssh_key_id)}`, label: t('rotation.backToKey') }}
+        title={t('rotation.runTitle')}
+        description={description}
+        status={
+          // The run's state is a polite live region holding only the badge: it follows the run while the page polls.
+          <div role="status" aria-live="polite">
+            <StatusBadge size="lg" tone={runTone(r.status)}>
+              {labelOf(t, i18n, 'rotation.status', r.status)}
+            </StatusBadge>
+          </div>
+        }
+      />
       {r.paused_license && (
-        <Alert color="red" role="alert">
+        <Notice
+          tone="danger"
+          role="alert"
+          title={t('rotation.page.pausedTitle')}
+          action={
+            <Anchor component={Link} to="/license" size="sm" c="inherit" underline="always">
+              {t('rotation.openLicense')}
+            </Anchor>
+          }
+        >
           <Text size="sm">{t('rotation.pausedBanner')}</Text>
           {allowed.has('abort') && <Text size="sm">{t('rotation.licensePaused')}</Text>}
-          {/* Black, underlined: the indigo link is 4.4:1 on the red tint (LicenseBanners does the same). */}
-          <Anchor component={Link} to="/license" size="sm" c="black" underline="always">
-            {t('rotation.openLicense')}
-          </Anchor>
-        </Alert>
+        </Notice>
+      )}
+      {r.status === 'overlap' && (
+        <Notice tone="info" title={t('rotation.page.bothKeys')}>
+          {r.paused_license ? (
+            <Text size="sm">{t('rotation.overlapOnHold')}</Text>
+          ) : (
+            r.overlap_until && <Text size="sm">{t('rotation.overlapUntil', { date: formatDateTime(r.overlap_until, i18n.language) })}</Text>
+          )}
+        </Notice>
+      )}
+      {r.awaiting_decision && !r.paused_license && r.decision_due_at && (
+        <Notice tone="warning" title={t('rotation.page.decisionTitle')}>
+          <Text size="sm">{t('rotation.decisionDue', { date: formatDateTime(r.decision_due_at, i18n.language) })}</Text>
+        </Notice>
       )}
       {notice && notice.reason !== 'rotation.paused_license' && <ReasonAlert error={notice} color="yellow" />}
       {query.isError && query.data && <ErrorAlert error={query.error} />}
       {r.result && <ReasonAlert error={r.result} color={resultWarn ? 'yellow' : 'red'} />}
-      {Object.keys(r.location_counts).length > 0 && (
-        <List size="sm" listStyleType="none" data-testid="run-counts">
-          {Object.entries(r.location_counts).map(([k, n]) => (
-            <List.Item key={k}>{t('rotation.countLine', { label: labelOf(t, i18n, 'rotation.counts', k), count: n })}</List.Item>
-          ))}
-        </List>
-      )}
-      {r.kept_count > 0 && (
-        <Stack gap={2}>
-          <Text size="sm" fw={600}>
-            {t('rotation.keptCount', { count: r.kept_count })}
-          </Text>
-          <Text size="sm">{t('rotation.keptHelp')}</Text>
-        </Stack>
-      )}
       <ErrorAlert error={error} />
-      {decisions.length > 0 && (
-        <Stack gap="xs">
-          {allowed.has('continue') && <Text size="sm">{t('rotation.continueHelp')}</Text>}
-          <Group gap="sm">
-            {allowed.has('continue') && (
-              <Button loading={busy} onClick={() => void decide(() => continueRun(id))}>
-                {t('rotation.continue')}
-              </Button>
+      <div className={classes.grid}>
+        <div className={classes.stack}>
+          {/* A stopped, undoing or unknown run has no progress path: the badge and the reason say what happened. */}
+          {r.status in PATH_STATUSES && (
+            <Panel title={t('rotation.page.path')}>
+              <RotationPath status={r.status} />
+            </Panel>
+          )}
+          <Panel title={t('rotation.page.results')} description={t('rotation.page.resultsSub')} aria-label={t('rotation.page.results')} padded={false}>
+            {Object.keys(r.location_counts).length > 0 && (
+              <List size="sm" listStyleType="none" data-testid="run-counts" className={classes.counts}>
+                {Object.entries(r.location_counts).map(([k, n]) => (
+                  <List.Item key={k}>{t('rotation.countLine', { label: labelOf(t, i18n, 'rotation.counts', k), count: n })}</List.Item>
+                ))}
+              </List>
             )}
-            {allowed.has('finish_now') && (
-              <Button variant="default" onClick={() => setConfirm('finish_now')}>
-                {t('rotation.finishNow')}
-              </Button>
+            <Table.ScrollContainer minWidth={760}>
+              <Table striped aria-label={t('rotation.places')} data-testid="run-locations">
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>{t('rotation.col.server')}</Table.Th>
+                    <Table.Th>{t('rotation.col.user')}</Table.Th>
+                    <Table.Th>{t('rotation.col.file')}</Table.Th>
+                    <Table.Th>{t('rotation.col.state')}</Table.Th>
+                    <Table.Th>{t('rotation.col.details')}</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {(r.locations ?? []).map((l) => (
+                    <LocationRow key={l.id} l={l} />
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </Table.ScrollContainer>
+          </Panel>
+          {r.kept_count > 0 && (
+            <Notice tone="warning" title={t('rotation.keptCount', { count: r.kept_count })}>
+              <Text size="sm">{t('rotation.keptHelp')}</Text>
+            </Notice>
+          )}
+          {(r.steps ?? []).length > 0 && (
+            <Panel title={t('rotation.steps')}>
+              <List size="sm" spacing={4} listStyleType="none" data-testid="run-steps">
+                {(r.steps ?? []).map((s) => (
+                  <List.Item key={s.n}>
+                    <Group gap={6} wrap="wrap">
+                      <Text size="xs" c="dimmed">
+                        {formatDateTime(s.at, i18n.language)}
+                      </Text>
+                      <Text size="sm">{stepLabel(t, i18n, s)}</Text>
+                      {s.location_id && (
+                        <Text size="xs" translate="no" style={WRAP}>
+                          {locationName(s.location_id)}
+                        </Text>
+                      )}
+                      {(s.name === 'late_result' || s.name === 'undo_not_sent') && (
+                        <StatusBadge tone="warning" icon="CircleAlert">
+                          {t('rotation.warning')}
+                        </StatusBadge>
+                      )}
+                      {s.status === 'failed' && (
+                        <StatusBadge tone="danger" icon="CircleX">
+                          {labelOf(t, i18n, 'rotation.stepStatus', 'failed')}
+                        </StatusBadge>
+                      )}
+                    </Group>
+                  </List.Item>
+                ))}
+              </List>
+            </Panel>
+          )}
+        </div>
+        <div className={classes.stack}>
+          <Panel title={t('rotation.page.transition')} aria-label={t('rotation.page.transition')}>
+            <div className={classes.fingerprint}>
+              <span className={classes.label}>{t('rotation.oldKey')}</span>
+              <Code translate="no" style={WRAP}>
+                {r.old_fingerprint}
+              </Code>
+            </div>
+            {r.new_fingerprint !== '' && (
+              <div className={classes.fingerprint}>
+                <span className={classes.label}>{t('rotation.newKey')}</span>
+                <Code translate="no" style={WRAP}>
+                  {r.new_fingerprint}
+                </Code>
+              </div>
             )}
-            {allowed.has('keep_old') && (
-              <Button variant="default" onClick={() => setConfirm('keep_old')}>
-                {t('rotation.keepOld')}
-              </Button>
-            )}
-            {allowed.has('abort') && (
-              <Button color="red.9" variant="light" onClick={() => setConfirm('abort')}>
-                {t('rotation.abort')}
-              </Button>
-            )}
-          </Group>
-        </Stack>
-      )}
-      <Title order={2} size="h3">
-        {t('rotation.places')}
-      </Title>
-      <Table.ScrollContainer minWidth={760}>
-        <Table striped aria-label={t('rotation.places')} data-testid="run-locations">
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t('rotation.col.server')}</Table.Th>
-              <Table.Th>{t('rotation.col.user')}</Table.Th>
-              <Table.Th>{t('rotation.col.file')}</Table.Th>
-              <Table.Th>{t('rotation.col.state')}</Table.Th>
-              <Table.Th>{t('rotation.col.details')}</Table.Th>
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {(r.locations ?? []).map((l) => (
-              <LocationRow key={l.id} l={l} />
-            ))}
-          </Table.Tbody>
-        </Table>
-      </Table.ScrollContainer>
-      {(r.steps ?? []).length > 0 && (
-        <>
-          <Title order={2} size="h3">
-            {t('rotation.steps')}
-          </Title>
-          <List size="sm" spacing={4} listStyleType="none" data-testid="run-steps">
-            {(r.steps ?? []).map((s) => (
-              <List.Item key={s.n}>
-                <Group gap={6} wrap="wrap">
-                  <Text size="xs" c="gray.7">
-                    {formatDateTime(s.at, i18n.language)}
-                  </Text>
-                  <Text size="sm">{stepLabel(t, i18n, s)}</Text>
-                  {s.location_id && (
-                    <Text size="xs" translate="no" style={WRAP}>
-                      {locationName(s.location_id)}
-                    </Text>
-                  )}
-                  {(s.name === 'late_result' || s.name === 'undo_not_sent') && (
-                    <Badge variant="light" color="yellow" tt="none">
-                      {t('rotation.warning')}
-                    </Badge>
-                  )}
-                  {s.status === 'failed' && (
-                    <Badge variant="light" color="red" tt="none">
-                      {labelOf(t, i18n, 'rotation.stepStatus', 'failed')}
-                    </Badge>
-                  )}
-                </Group>
-              </List.Item>
-            ))}
-          </List>
-        </>
-      )}
+            <FactList facts={facts} />
+          </Panel>
+          {decisions.length > 0 && (
+            <Panel title={t('rotation.page.decisions')} aria-label={t('rotation.page.decisions')}>
+              <div className={classes.decisions}>
+                {allowed.has('continue') && <Text size="sm">{t('rotation.continueHelp')}</Text>}
+                {allowed.has('continue') && (
+                  <Button loading={busy} leftSection={<Icon name="CirclePlay" size={15} />} onClick={() => void decide(() => continueRun(id))}>
+                    {t('rotation.continue')}
+                  </Button>
+                )}
+                {allowed.has('finish_now') && (
+                  <Button variant="default" leftSection={<Icon name="CheckCheck" size={15} />} onClick={() => setConfirm('finish_now')}>
+                    {t('rotation.finishNow')}
+                  </Button>
+                )}
+                {allowed.has('keep_old') && (
+                  <Button variant="default" leftSection={<Icon name="LockKeyhole" size={15} />} onClick={() => setConfirm('keep_old')}>
+                    {t('rotation.keepOld')}
+                  </Button>
+                )}
+                {allowed.has('abort') && (
+                  <Button color="red" variant="light" leftSection={<Icon name="CircleOff" size={15} />} onClick={() => setConfirm('abort')}>
+                    {t('rotation.abort')}
+                  </Button>
+                )}
+              </div>
+              <p className={classes.help}>{t('rotation.page.decisionsHelp')}</p>
+            </Panel>
+          )}
+        </div>
+      </div>
       {confirm === 'finish_now' && (
         <AppModal opened onClose={closeConfirm} title={t('rotation.finishNow')}>
           <Stack gap="sm">
             <Text size="sm">{t('rotation.finishNowHelp')}</Text>
-            <Group justify="flex-end">
-              <Button variant="default" onClick={closeConfirm}>
-                {t('ui.cancel')}
-              </Button>
-              <Button loading={busy} onClick={() => void decide(() => finishRunNow(id))}>
-                {t('rotation.finishNow')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={closeConfirm}>
+              {t('ui.cancel')}
+            </Button>
+            <Button loading={busy} onClick={() => void decide(() => finishRunNow(id))}>
+              {t('rotation.finishNow')}
+            </Button>
+          </DialogActions>
         </AppModal>
       )}
       {confirm === 'abort' && (
         <AppModal opened onClose={closeConfirm} title={t('rotation.abort')}>
           <Stack gap="sm">
             <Text size="sm">{t('rotation.abortConfirm')}</Text>
-            <Group justify="flex-end">
-              <Button variant="default" onClick={closeConfirm}>
-                {t('ui.cancel')}
-              </Button>
-              <Button color="red.9" loading={busy} onClick={() => void decide(() => abortRun(id))}>
-                {t('rotation.abort')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={closeConfirm}>
+              {t('ui.cancel')}
+            </Button>
+            <Button color="red" loading={busy} onClick={() => void decide(() => abortRun(id))}>
+              {t('rotation.abort')}
+            </Button>
+          </DialogActions>
         </AppModal>
       )}
       {confirm === 'keep_old' && (
@@ -370,15 +416,15 @@ export function RotationRunPage() {
                 />
               ))}
             </Stack>
-            <Group justify="flex-end">
-              <Button variant="default" onClick={closeConfirm}>
-                {t('ui.cancel')}
-              </Button>
-              <Button loading={busy} disabled={kept.size === 0} onClick={() => void decide(() => keepOldKey(id, unverifiable.filter((l) => kept.has(l.id)).map((l) => l.id)))}>
-                {t('rotation.keepOld')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={closeConfirm}>
+              {t('ui.cancel')}
+            </Button>
+            <Button loading={busy} disabled={kept.size === 0} onClick={() => void decide(() => keepOldKey(id, unverifiable.filter((l) => kept.has(l.id)).map((l) => l.id)))}>
+              {t('rotation.keepOld')}
+            </Button>
+          </DialogActions>
         </AppModal>
       )}
     </Stack>

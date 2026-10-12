@@ -28,6 +28,9 @@ export const handlers = [
   http.get('/api/v1/settings/audit-forwarding', () => HttpResponse.json(forwardingFixture())),
   // The wizard's mail step is the Settings mail form.
   http.get('/api/v1/settings/smtp', () => HttpResponse.json(smtpFixture)),
+  // Phase 9: the Key rotations page and the run page read every policy; the rotations page reads the runs.
+  http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [] })),
+  http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [], next_cursor: null })),
 ];
 
 export const server = setupServer(...handlers);

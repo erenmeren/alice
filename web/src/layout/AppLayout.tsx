@@ -40,6 +40,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/servers', labelKey: 'nav.servers', roles: ALL, icon: 'Server', group: 'inventory' },
   { to: '/key-vaults', labelKey: 'nav.keyVaults', roles: ALL, icon: 'Cloud', group: 'inventory' },
   { to: '/deployments', labelKey: 'nav.deployments', roles: ALL, icon: 'Rocket', group: 'operations' },
+  { to: '/rotations', labelKey: 'nav.rotations', roles: ALL, icon: 'RotateCw', group: 'operations', match: ['/rotation/'] },
   { to: '/audit', labelKey: 'nav.audit', roles: ['admin', 'auditor'], icon: 'ScrollText', group: 'operations' },
   { to: '/users', labelKey: 'nav.users', roles: ['admin'], icon: 'Users', group: 'administration' },
   { to: '/settings', labelKey: 'nav.settings', roles: ['admin'], icon: 'Settings2', group: 'administration' },

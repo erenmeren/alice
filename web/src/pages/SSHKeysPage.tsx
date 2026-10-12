@@ -23,12 +23,14 @@ import classes from './SSHKeysPage.module.css';
 const SSH_FILTER_KEYS = ['target_id', 'os_user', 'q', 'flag', 'missing'] as const;
 const FLAGS: KeyFlag[] = ['weak', 'command', 'root_without_from', 'duplicate', 'cert_authority', 'security_key'];
 
-// SSH_KEY_TABS are the design's two SSH key sections (R19): the inventory and the key rotations, plain links with
-// aria-current (not a tablist). The rotations page (Task 10) shows the same tabs; a run page counts as Key rotations.
+// SSH_KEY_TABS are the design's two SSH key sections (R19): the inventory and the rotation policies, plain links with
+// aria-current (not a tablist). The rotations page shows the same tabs; a run page counts as the rotations tab. The
+// second tab is "Rotation policies" (the design's label), not "Key rotations": that is the navigation link's name, and
+// link names stay unique on a page.
 export function SSH_KEY_TABS(t: TFunction | ((key: string) => string)): LinkTab[] {
   return [
     { to: '/ssh-keys', label: t('sshKeys.page.inventory') },
-    { to: '/rotations', label: t('nav.rotations'), match: ['/rotation/'] },
+    { to: '/rotations', label: t('rotation.page.policies'), match: ['/rotation/'] },
   ];
 }
 

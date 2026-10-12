@@ -2,7 +2,38 @@ import { Alert, Text } from '@mantine/core';
 import type { i18n as I18n, TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import type { ErrorRef } from '../api/types';
+import { Icon } from '../design/Icon';
+import { TONE_COLOR, type Tone } from '../theme';
 import { reasonTitle } from './JobErrorAlert';
+
+// runTone is the meaning of a run's status: a finished rotation is a success, one that needs a person or is waiting
+// for a decision a warning, a run that moves information, and an undone or cancelled run neutral.
+export function runTone(status: string): Tone {
+  switch (status) {
+    case 'completed':
+      return 'success';
+    case 'overlap':
+    case 'verifying_new':
+    case 'rolling_back':
+    case 'needs_attention':
+      return 'warning';
+    case 'dry_run_notified':
+    case 'adding_new':
+    case 'removing_old':
+      return 'info';
+    default:
+      return 'neutral';
+  }
+}
+
+// locationTone is the meaning of one place's state: the new key works or the old key is gone (success), a step failed
+// (danger), the old key stays or the place was skipped (warning), anything else is on its way (neutral).
+export function locationTone(state: string): Tone {
+  if (state === 'removed' || state === 'verified') return 'success';
+  if (state.endsWith('_failed')) return 'danger';
+  if (state === 'kept_old' || state === 'skipped') return 'warning';
+  return 'neutral';
+}
 
 // label looks up prefix.<name>; a name this version has no text for gets prefix.unknown, never the raw name.
 export function labelOf(t: TFunction, i18n: I18n, prefix: string, name: string): string {
@@ -30,11 +61,18 @@ export function ReasonAlert({ error, color = 'red' }: { error: ErrorRef; color?:
   const { t, i18n } = useTranslation();
   const params = error.params ?? {};
   const actionKey = `errors.${error.reason}.action`;
+  // The color prop keeps its old names for the callers; it maps onto the semantic danger and warning tones.
+  const danger = color === 'red';
   return (
-    <Alert color={color} role={color === 'red' ? 'alert' : 'status'} title={reasonTitle(t, i18n, error.reason, params)}>
+    <Alert
+      color={TONE_COLOR[danger ? 'danger' : 'warning']}
+      role={danger ? 'alert' : 'status'}
+      title={reasonTitle(t, i18n, error.reason, params)}
+      icon={<Icon name={danger ? 'ShieldAlert' : 'CircleAlert'} size={17} />}
+    >
       {i18n.exists(actionKey) && <Text size="sm">{t(actionKey, params)}</Text>}
       {error.code && (
-        <Text size="xs" c="gray.7" mt="xs">
+        <Text size="xs" c="dimmed" mt="xs">
           {t('jobs.errorCode', { code: error.code })}
         </Text>
       )}

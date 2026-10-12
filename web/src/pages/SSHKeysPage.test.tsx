@@ -113,7 +113,7 @@ describe('SSHKeysPage', () => {
     expect(screen.queryByText('No matching keys')).not.toBeInTheDocument();
   });
 
-  it('has the design header with Export and Generate key, and the link tabs to Key rotations', async () => {
+  it('has the design header with Export and Generate key, and the link tabs to the rotation policies', async () => {
     keysServer('operator');
     await renderRoute('/ssh-keys');
     expect(await screen.findByRole('heading', { name: 'SSH keys', level: 1 })).toBeInTheDocument();
@@ -124,7 +124,7 @@ describe('SSHKeysPage', () => {
     expect(screen.getAllByRole('button', { name: 'Export' })).toHaveLength(1);
     const tabs = screen.getByRole('group', { name: 'SSH key sections' });
     expect(within(tabs).getByRole('link', { name: 'Inventory' })).toHaveAttribute('aria-current', 'page');
-    const rotations = within(tabs).getByRole('link', { name: 'Key rotations' });
+    const rotations = within(tabs).getByRole('link', { name: 'Rotation policies' });
     expect(rotations).toHaveAttribute('href', '/rotations');
     expect(rotations).not.toHaveAttribute('aria-current');
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
@@ -134,7 +134,7 @@ describe('SSHKeysPage', () => {
     const tabs = SSH_KEY_TABS((k: string) => k);
     expect(tabs).toEqual([
       { to: '/ssh-keys', label: 'sshKeys.page.inventory' },
-      { to: '/rotations', label: 'nav.rotations', match: ['/rotation/'] },
+      { to: '/rotations', label: 'rotation.page.policies', match: ['/rotation/'] },
     ]);
   });
 

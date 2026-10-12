@@ -23,6 +23,7 @@ import { TargetDetailPage } from './pages/TargetDetailPage';
 import { TargetsPage } from './pages/TargetsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SetupPage } from './pages/SetupPage';
+import { RotationsPage } from './pages/RotationsPage';
 import { SSHKeyDetailPage } from './pages/SSHKeyDetailPage';
 import { SSHKeysPage } from './pages/SSHKeysPage';
 import { TokensPage } from './pages/TokensPage';
@@ -70,6 +71,7 @@ export function routes(): RouteObject[] {
             { path: 'deployments/:id', element: <DeploymentDetailPage /> },
             { path: 'ssh-keys', element: <SSHKeysPage /> },
             { path: 'ssh-keys/:id', element: <SSHKeyDetailPage /> },
+            { path: 'rotations', element: <RotationsPage /> },
             { path: 'rotation/runs/:id', element: <RotationRunPage /> },
             {
               path: 'users',

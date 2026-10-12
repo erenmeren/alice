@@ -158,6 +158,8 @@ export interface RunQuery {
   limit?: number;
 }
 
+// listPolicies is every live policy (GET /rotation/policies, read; no cursor: the server answers them all).
+export const listPolicies = () => apiFetch<{ items: Policy[] }>(`${v1}/policies`);
 export const getPolicy = (id: string) => apiFetch<Policy>(`${v1}/policies/${enc(id)}`);
 export const createPolicy = (body: PolicyInput) => apiFetch<Policy>(`${v1}/policies`, { method: 'POST', body });
 export const updatePolicy = (id: string, version: number, body: PolicyPatch) =>

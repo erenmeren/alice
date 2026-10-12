@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { Run } from '../api/rotation';
-import { errorResponse, runFixture, runLocationFixture, RUN_ID, sessionFor, sessionHandlers } from '../test/fixtures';
+import { errorResponse, policyFixture, runFixture, runLocationFixture, RUN_ID, sessionFor, sessionHandlers } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -507,5 +507,106 @@ describe('RotationRunPage', () => {
     serve(bare);
     await open();
     expect(await screen.findByRole('heading', { name: 'Key rotation', level: 1 })).toBeInTheDocument();
+  });
+});
+
+describe('RotationRunPage in the design', () => {
+  it('has the run title as the only h1 with the status badge in its polite live region, and the key, type and places as its description', async () => {
+    serve(runFixture({ status: 'overlap', location_counts: { total: 6, verified: 6 } }));
+    server.use(http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [policyFixture({ name: 'deploy-production' })] })));
+    await open();
+    const h1 = await screen.findByRole('heading', { level: 1 });
+    expect(h1).toHaveTextContent('Key rotation');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    const header = h1.closest('header')!;
+    const live = within(header as HTMLElement).getByRole('status');
+    expect(live).toHaveAttribute('aria-live', 'polite');
+    expect(live.querySelector('.mantine-Badge-root')).toHaveTextContent('Both keys valid');
+    expect(await within(header as HTMLElement).findByText('deploy-production · ed25519 · 6 locations')).toBeInTheDocument();
+    expect(document.querySelectorAll('[role="status"][aria-live="polite"] .mantine-Badge-root')).toHaveLength(1);
+  });
+
+  it('draws the progress path for a moving run and none for a stopped one', async () => {
+    serve(runFixture({ status: 'overlap' }));
+    const v = await open();
+    expect(await screen.findByRole('list', { name: 'Rotation progress' })).toBeInTheDocument();
+    v.unmount();
+    serve(runFixture({ status: 'aborted' }));
+    await open();
+    await screen.findByRole('heading', { level: 1, name: 'Key rotation' });
+    expect(screen.queryByRole('list', { name: 'Rotation progress' })).not.toBeInTheDocument();
+  });
+
+  it('shows the key transition: old and new fingerprints in code and the run facts', async () => {
+    serve(runFixture({ status: 'overlap', trigger: 'scheduled' }));
+    server.use(http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [policyFixture({ name: 'deploy-production' })] })));
+    await open();
+    const panel = await screen.findByRole('region', { name: 'Key transition' });
+    expect(within(panel).getByText('SHA256:oldOldOldOldOldOldOldOldOldOldOldOldOld0').tagName).toBe('CODE');
+    expect(within(panel).getByText('SHA256:newNewNewNewNewNewNewNewNewNewNewNewNew0').tagName).toBe('CODE');
+    expect(await within(panel).findByText('deploy-production')).toBeInTheDocument();
+    expect(within(panel).getByText('Every 90 days')).toBeInTheDocument();
+    expect(within(panel).getByText('Scheduled run')).toBeInTheDocument();
+    expect(within(panel).getByText('Notice sent')).toBeInTheDocument();
+  });
+
+  it('names the location results and keeps the places table and its rows', async () => {
+    serve(runFixture());
+    await open();
+    const results = await screen.findByRole('region', { name: 'Location results' });
+    expect(within(results).getByText('Old keys are not removed from unverified locations.')).toBeInTheDocument();
+    expect(within(results).getByRole('table', { name: 'Places' })).toHaveAttribute('data-testid', 'run-locations');
+    expect(within(results).getByTestId('run-counts')).toBeInTheDocument();
+    const row = within(results).getByTestId('run-location');
+    expect(within(row).getByRole('cell', { name: 'deploy' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['admin', ['finish_now', 'abort'], true],
+    ['admin', [], false],
+    ['operator', ['finish_now', 'abort'], false],
+    ['auditor', ['continue'], false],
+  ] as const)('shows the decisions panel to %s with actions %j: %s', async (role, allowed, shown) => {
+    serve(runFixture({ actions_allowed: [...allowed] }), role);
+    await open();
+    await screen.findByRole('heading', { level: 1, name: 'Key rotation' });
+    const panel = screen.queryByRole('region', { name: 'Available decisions' });
+    expect(panel !== null).toBe(shown);
+    if (panel) {
+      expect(within(panel).getByText('Review the affected locations before confirming. Each decision asks for a fresh verification code.')).toBeInTheDocument();
+      expect(within(panel).getByRole('button', { name: 'Finish now' })).toBeInTheDocument();
+      expect(within(panel).getByRole('button', { name: 'Stop and undo' })).toBeInTheDocument();
+    }
+  });
+
+  it('keeps the license pause as one alert with its link in the notice color', async () => {
+    serve(runFixture({ status: 'overlap', paused_license: true, actions_allowed: ['abort'] }));
+    await open();
+    const alert = (await screen.findByText(/Paused: the license expired/)).closest('[role="alert"]') as HTMLElement;
+    expect(alert).not.toBeNull();
+    expect(within(alert).getByText('Paused by the license')).toBeInTheDocument();
+    const link = within(alert).getByRole('link', { name: 'Open the license page' });
+    expect(link).toHaveAttribute('data-underline', 'always');
+    expect(screen.getAllByRole('alert')).toHaveLength(1);
+  });
+
+  it('colors the place and step states by meaning, with text', async () => {
+    serve(
+      runFixture({
+        status: 'needs_attention',
+        locations: [
+          runLocationFixture({ id: 'a', state: 'removed' }),
+          runLocationFixture({ id: 'b', n: 2, state: 'add_failed' }),
+          runLocationFixture({ id: 'c', n: 3, state: 'kept_old' }),
+          runLocationFixture({ id: 'd', n: 4, state: 'planned' }),
+        ],
+        steps: [{ n: 1, location_id: null, name: 'paused', status: 'failed', at: '2026-10-06T09:00:00Z', params: {} }],
+      }),
+    );
+    await open();
+    const rows = await screen.findAllByTestId('run-location');
+    const tone = (row: HTMLElement) => row.querySelector('.mantine-Badge-root')?.getAttribute('data-tone');
+    expect(rows.map(tone)).toEqual(['success', 'danger', 'warning', 'neutral']);
+    expect(within(screen.getByTestId('run-steps')).getByText('Failed').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'danger');
   });
 });
