@@ -39,6 +39,11 @@ const (
 	baseBackoff  = 30 * time.Second
 	maxBackoff   = time.Hour
 	sendTimeout  = 60 * time.Second
+	// sendLease is how long a claimed e-mail is not due while it is sent: longer than sendTimeout, so a send that is
+	// still running is never taken by another drain.
+	sendLease = sendTimeout + time.Minute
+	// finishTimeout bounds storing a send's outcome.
+	finishTimeout = 10 * time.Second
 )
 
 // Sender drains the outbox.
@@ -78,20 +83,49 @@ func (s *Sender) Drain(ctx context.Context) (int, error) {
 	}
 }
 
+// claimed is an outbox row taken for one send: leased (not due) until the send is finished.
+type claimed struct {
+	id              uuid.UUID
+	to, tpl, locale string
+	params          map[string]string
+	attempts        int // including this one
+	createdAt       time.Time
+}
+
+// one handles the next due e-mail, if any. The row is claimed and leased in one short transaction, the message is
+// sent with no transaction open and no pooled connection held, and the outcome is stored in a second short
+// transaction (review L-6). A send whose outcome cannot be stored (the process dies, the database is gone) is retried
+// once the lease ends: delivery is at least once, as the server may have accepted the message.
 func (s *Sender) one(ctx context.Context, mailer Mailer) (bool, error) {
-	handled := false
+	c, handled, err := s.claim(ctx, mailer)
+	if err != nil || c == nil {
+		return handled, err
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
+	sendErr := mailer.Send(sendCtx, s.Render(c.to, c.tpl, c.locale, c.params))
+	cancel()
+	// The message may be out: store that even when ctx ended meanwhile (shutdown), so it is not sent twice.
+	finishCtx, cancelFinish := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+	defer cancelFinish()
+	return true, s.finish(finishCtx, c, sendErr)
+}
+
+// claim takes the next due row. Without a mailer it is recorded as skipped, with parameters that do not parse as
+// failed; both are handled without a claim. Otherwise its attempt is counted and it is leased for sendLease.
+func (s *Sender) claim(ctx context.Context, mailer Mailer) (*claimed, bool, error) {
+	var (
+		c       *claimed
+		handled bool
+	)
 	err := db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
 		now := s.Clock.Now().UTC()
 		var (
-			id              uuid.UUID
-			to, tpl, locale string
-			raw             []byte
-			attempts        int
-			createdAt       time.Time
+			row claimed
+			raw []byte
 		)
 		err := tx.QueryRow(ctx, `SELECT id, to_address, template_key, params, locale, attempts, created_at FROM notifications_outbox
 WHERE status = 'pending' AND next_attempt_at <= $1 ORDER BY next_attempt_at, id LIMIT 1 FOR UPDATE SKIP LOCKED`, now).
-			Scan(&id, &to, &tpl, &raw, &locale, &attempts, &createdAt)
+			Scan(&row.id, &row.to, &row.tpl, &raw, &row.locale, &row.attempts, &row.createdAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -101,42 +135,59 @@ WHERE status = 'pending' AND next_attempt_at <= $1 ORDER BY next_attempt_at, id 
 		handled = true
 		if mailer == nil {
 			_, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'skipped_no_smtp', last_error_code = 'smtp.not_configured'
-WHERE id = $1`, id)
+WHERE id = $1`, row.id)
 			return err
 		}
-		var params map[string]string
-		if err := json.Unmarshal(raw, &params); err != nil {
-			_, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'failed', last_error_code = 'template.params' WHERE id = $1`, id)
+		if err := json.Unmarshal(raw, &row.params); err != nil {
+			_, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'failed', last_error_code = 'template.params' WHERE id = $1`, row.id)
 			return err
 		}
-		sendCtx, cancel := context.WithTimeout(ctx, sendTimeout)
-		sendErr := mailer.Send(sendCtx, s.Render(to, tpl, locale, params))
-		cancel()
-		attempts++
+		row.attempts++
+		if _, err := tx.Exec(ctx, `UPDATE notifications_outbox SET attempts = $2, next_attempt_at = $3 WHERE id = $1`,
+			row.id, row.attempts, now.Add(sendLease)); err != nil {
+			return fmt.Errorf("notify: lease the e-mail: %w", err)
+		}
+		c = &row
+		return nil
+	})
+	if err != nil {
+		return nil, handled, err
+	}
+	return c, handled, nil
+}
+
+// finish stores the outcome of c's send. The update is fenced on the attempt count: when the lease ran out and
+// another drain took the row meanwhile, that drain's outcome is the one kept.
+func (s *Sender) finish(ctx context.Context, c *claimed, sendErr error) error {
+	return db.InTx(ctx, s.Pool, func(tx pgx.Tx) error {
+		now := s.Clock.Now().UTC()
 		if sendErr == nil {
-			if _, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'sent', sent_at = $2, attempts = $3, last_error_code = ''
-WHERE id = $1`, id, now, attempts); err != nil {
+			tag, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = 'sent', sent_at = $2, last_error_code = ''
+WHERE id = $1 AND status = 'pending' AND attempts = $3`, c.id, now, c.attempts)
+			if err != nil || tag.RowsAffected() == 0 {
 				return err
 			}
 			return recordDelivery(ctx, tx, true, "", now)
 		}
 		code := ErrorCode(sendErr)
 		status := "pending"
-		if now.Sub(createdAt) >= GiveUpAfter {
+		if now.Sub(c.createdAt) >= GiveUpAfter {
 			status = "failed"
-			s.log().Error("email not sent after "+strconv.Itoa(attempts)+" attempts; giving up",
-				"event", "notify.gave_up",
-				"outbox_id", id.String(), "attempt", attempts, "reason", code)
-		} else {
-			s.log().Warn("email not sent; it will be retried", "outbox_id", id.String(), "attempt", attempts, "reason", code)
 		}
-		if _, err = tx.Exec(ctx, `UPDATE notifications_outbox SET status = $2, attempts = $3, next_attempt_at = $4, last_error_code = $5
-WHERE id = $1`, id, status, attempts, now.Add(backoff(attempts)), code); err != nil {
+		tag, err := tx.Exec(ctx, `UPDATE notifications_outbox SET status = $2, next_attempt_at = $3, last_error_code = $4
+WHERE id = $1 AND status = 'pending' AND attempts = $5`, c.id, status, now.Add(backoff(c.attempts)), code, c.attempts)
+		if err != nil || tag.RowsAffected() == 0 {
 			return err
+		}
+		if status == "failed" {
+			s.log().Error("email not sent after "+strconv.Itoa(c.attempts)+" attempts; giving up",
+				"event", "notify.gave_up",
+				"outbox_id", c.id.String(), "attempt", c.attempts, "reason", code)
+		} else {
+			s.log().Warn("email not sent; it will be retried", "outbox_id", c.id.String(), "attempt", c.attempts, "reason", code)
 		}
 		return recordDelivery(ctx, tx, false, code, now)
 	})
-	return handled, err
 }
 
 func (s *Sender) log() *slog.Logger {

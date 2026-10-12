@@ -217,3 +217,84 @@ func TestConcurrentDrainsSendEachEmailOnce(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{"sent": 30}, statuses(t, d))
 }
+
+// probeMailer checks, while it "sends", that the e-mail's row is neither locked nor holding a pooled connection, and
+// that another drain does not pick the row up meanwhile.
+type probeMailer struct {
+	t      *testing.T
+	d      *pgtest.DB
+	other  *notify.Sender
+	calls  int
+	locked error
+	inUse  int32
+	again  int
+}
+
+func (p *probeMailer) Send(ctx context.Context, _ notify.Message) error {
+	p.calls++
+	tx, err := p.d.Owner.Begin(ctx)
+	require.NoError(p.t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, p.locked = tx.Exec(ctx, `SELECT id FROM notifications_outbox FOR UPDATE NOWAIT`)
+	p.inUse = p.d.App.Stat().AcquiredConns()
+	if p.other != nil {
+		p.again, err = p.other.Drain(ctx)
+		require.NoError(p.t, err)
+	}
+	return nil
+}
+
+// Review L-6: the SMTP exchange runs outside any database transaction. The row is leased first (it is not due while
+// it is being sent), so a failed commit after the server accepted the message cannot roll the row back to a due
+// "pending" and send it again at the next drain, and no pooled connection waits on the mail server.
+func TestDrainSendsOutsideTheTransaction(t *testing.T) {
+	d := pgtest.New(t)
+	clk := clock.NewFake(start)
+	addUser(t, d, "ayse", "admin", "ayse@example.com", "en", false)
+	queue(t, d, clk, license.TemplateLocked)
+	m := &probeMailer{t: t, d: d}
+	s := sender(t, d, clk, m)
+	m.other = sender(t, d, clk, &fakeMailer{})
+	n, err := s.Drain(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 1, m.calls)
+	assert.NoError(t, m.locked, "no row lock is held during the send")
+	assert.Zero(t, m.inUse, "no pooled connection is held during the send")
+	assert.Zero(t, m.again, "a second drain does not take a row that is being sent")
+	assert.Equal(t, map[string]int{"sent": 1}, statuses(t, d))
+	var attempts int
+	require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT attempts FROM notifications_outbox").Scan(&attempts))
+	assert.Equal(t, 1, attempts)
+}
+
+type hookMailer struct{ hook func() error }
+
+func (h hookMailer) Send(context.Context, notify.Message) error { return h.hook() }
+
+// A send that outlives its lease (a stalled mail server) does not overwrite the outcome of the drain that took the
+// row after the lease ended: the outcome is fenced on the attempt count.
+func TestAnOutcomeAfterTheLeaseIsDropped(t *testing.T) {
+	for _, slowErr := range []error{nil, notify.ErrSMTPConnect} {
+		d := pgtest.New(t)
+		clk := clock.NewFake(start)
+		addUser(t, d, "ayse", "admin", "ayse@example.com", "en", false)
+		queue(t, d, clk, license.TemplateLocked)
+		fast := &fakeMailer{}
+		slow := sender(t, d, clk, hookMailer{hook: func() error {
+			clk.Advance(3 * time.Minute) // past the lease
+			n, err := sender(t, d, clk, fast).Drain(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, 1, n, "the row is due again once the lease ended")
+			return slowErr
+		}})
+		_, err := slow.Drain(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, map[string]int{"sent": 1}, statuses(t, d), "%v", slowErr)
+		var attempts int
+		var code string
+		require.NoError(t, d.Owner.QueryRow(context.Background(), "SELECT attempts, last_error_code FROM notifications_outbox").Scan(&attempts, &code))
+		assert.Equal(t, 2, attempts)
+		assert.Empty(t, code, "the later drain's success is kept")
+	}
+}
