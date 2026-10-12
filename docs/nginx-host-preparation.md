@@ -173,7 +173,7 @@ key may not belong together: run `nginx -t` first, and let the other program wri
 the intended certificate from Alice. To go back after a deployment that **succeeded**, the easiest way is to deploy the previous certificate
 again (Alice needs its private key: upload it first). If that is not possible, restore the backup by hand, as root, while the folder still exists:
 
-1. Find the deployment in Alice (**Deployment history**) and note its **Certificate file**, **Key file** and
+1. Find the deployment in Alice (**Deployments**) and note its **Certificate file**, **Key file** and
    **Backup on the server**.
 2. On the server read `journal.json` in that folder (`cat /var/lib/alice-helper/backups/<deployment ID>/journal.json`):
    `cert_resolved` and `key_resolved` name the files that were replaced (for a Let's Encrypt link, the file the link

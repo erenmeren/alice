@@ -173,7 +173,7 @@ with the backup and lasts a few minutes; announce it. A failed update returns to
 
 Docker keeps each container's log in files of 20 MB, at most 5 per container; older lines are dropped. Ship the logs
 to your log system with Docker's means if you need them longer. The audit log is not a log file: it is in the
-database ([admin-guide.md](admin-guide.md#audit-log)) and can be forwarded ([admin-guide.md](admin-guide.md#audit-forwarding)).
+database ([admin-guide.md](admin-guide.md#audit-trail)) and can be forwarded ([admin-guide.md](admin-guide.md#audit-forwarding)).
 
 ## Health and monitoring
 
@@ -191,12 +191,12 @@ Alert on:
 
 - **`/healthz` not answering 200** from your monitoring system (at most once a second, or `/livez`).
 - **The backup alarm.** No successful backup for 48 hours: the red banner for administrators, the e-mails "Alice could
-  not make its daily backup" and "Alice has had no successful backup for 48 hours", the **Backups** card of the
-  dashboard. Also alert when your off-host copy job finds no new file for a day.
+  not make its daily backup" and "Alice has had no successful backup for 48 hours", **Recovery readiness**
+  on the Overview's **Assurance** tab. Also alert when your off-host copy job finds no new file for a day.
 - **The forwarding backlog.** **Entries waiting to be sent** on **Settings → Audit forwarding** (also `forwarding` →
   `backlog` in the support bundle's `bundle.json`) should stay near zero; a backlog that keeps growing means the
   syslog server gets nothing. At the syslog server, alert on gaps in `seq`.
-- **The dashboard's conditions.** **Needs attention** (a server's identity changed, a refused sign-in on a server,
+- **The Overview's conditions.** **Needs attention** (a server's identity changed, a refused sign-in on a server,
   failed deployments, a broken audit chain, failing e-mail delivery), the license banners, and the e-mail about a
   failed daily audit check.
 - **Disk space** of the partition holding `/opt/alice` (below).
@@ -243,7 +243,7 @@ Docker starts at boot (`systemctl enable docker`), and the database and Alice re
 
 When someone leaves:
 
-1. **Disable** the person on **Users** (administrators). Their sessions end at once and their API tokens stop working.
+1. **Disable** the person on **People & access** (administrators). Their sessions end at once and their API tokens stop working.
    For a single sign-on user, also remove them at the identity provider (Alice's role mapping follows the groups).
 2. Revoke their API tokens: administrators list them with `GET /api/v1/tokens?user_id=<id>` and revoke each with
    `DELETE /api/v1/tokens/<token id>` ([admin-guide.md](admin-guide.md#api-tokens)).
@@ -529,14 +529,22 @@ which finishes even when the connection drops.
 The alert recipients (**Settings → Recipients**, by default every administrator with an email address) get an email
 for every deployment that failed or needs manual action, and one when a deployment needs attention. A successful deployment sends no email. Every deployment is in the audit log.
 
-### Deployment history
+### Deployments
 
-**Deployment history** lists every deployment, newest first, with the server, certificate file, certificate and
-result. **Open** shows the deployment: **Status** and **State**, who requested it, **Previous certificate** and **New
-certificate** (fingerprints), **Verification**, the **Steps** with their results, the error with what to do, and
-**Backup on the server** (`/var/lib/alice-helper/backups/<deployment ID>`). A certificate's page lists its own
-deployments. There is no button to repeat or undo a deployment: deploy again, or deploy the earlier certificate
-(Alice needs its key). Undoing by hand from the backup is described in
+**Deployments** (it was called **Deployment history** before) lists every deployment, newest first: the certificate,
+the server with the certificate file, who triggered it (a person, or **Alice (automatic)**), the result and when it
+was requested. A deployment that succeeded without being verified keeps **Succeeded** in a warning color with
+"Verification: Skipped" or "Verification: Not done" under it. **Show more** loads older deployments; the page shows
+how many are listed ("N shown") and never a total or a count per result. The arrow at the end of a row (**Open
+deployment**) opens the deployment: **Status** and **State** at the top, then the outcome (after a failure, the error
+with what to do), the **Deployment sequence** (each step with its own result; a step that did not run is never shown
+as done), **Operation details** (certificate, server, source, certificate and key file, when it was requested, by
+whom, started and finished, and **Verification**), **Evidence** (the new certificate's fingerprint, the served
+certificate's when the verification reported it, the **Previous certificate** and the **Backup on the server**,
+`/var/lib/alice-helper/backups/<deployment ID>`) and, when Alice has them, **Technical details** (the failed step,
+its cause and the helper's error). A certificate's page lists its own deployments. There is no
+button to repeat or undo a deployment: deploy again, or deploy the earlier certificate (Alice needs its key). Undoing
+by hand from the backup is described in
 [nginx-host-preparation.md](nginx-host-preparation.md#restoring-a-previous-certificate-by-hand).
 
 ### Interrupted deployments
@@ -666,7 +674,7 @@ Alice plans once a minute, so a new version found by a check is deployed about a
 deployments are ordinary deployments (see [Deploying a certificate](#deploying-a-certificate)) with one more first
 step, **Read the certificate from Key Vault**: Alice reads the secret of that exact version (never "the latest")
 and checks it before anything is sent to the server. A failure in that step changes nothing on the server (for
-example `ALC-AKV-0003` when Alice lacks **Key Vault Secrets User**). **Deployment history** shows such deployments
+example `ALC-AKV-0003` when Alice lacks **Key Vault Secrets User**). **Deployments** shows such deployments
 as "From Key Vault: <vault>". Switching automatic deployment off takes effect at once: queued automatic deployments
 of the connection do not start (`ALC-AKV-0032`).
 
@@ -842,6 +850,12 @@ new key type of a policy that is on switches it off and cancels a planned run th
 again afterwards. Renaming leaves it on. **Delete policy** leaves the key as it is and cancels a planned run that has
 not started; it is refused while a run has started. A rotation always covers every place of the key (there are no
 partial policies) and there are no weekday or time-of-day schedules.
+
+**Key rotations** (under **Operations** in the navigation, for every role; also reached from **SSH keys** through the
+**Rotation policies** tab) shows the rotations that are running, each with its progress (**Generate new key**,
+**Deploy & verify**, **Overlap period**, **Retire old key**) and **Inspect run and locations**, and every policy with
+its interval, overlap, next run and last result. The page only reads: policies are created, changed and run on the
+key's own page, and the decisions of a run are on the run's page.
 
 ### Previews and notices
 
@@ -1079,7 +1093,7 @@ and client secrets; at most 20 e-mails per kind and check plus one summary; one 
 through a database lock, so a second one is skipped and logs `alerts.scan_skipped`; when notices were recorded but
 nobody would get them it logs `alerts.no_recipients`), audit chain verification (checked every
 hour, run once a day, recorded as `audit.verified` by `scheduler`; its result and the verified head hash are on the
-**Dashboard**), clean-up (hourly: expired sessions and setup
+**Overview**, tab **Assurance**), clean-up (hourly: expired sessions and setup
 sessions, single sign-on states older than 10 minutes, finished jobs older than 90 days), scheduling of the daily server scans (every minute) and the check for
 interrupted deployments (every minute), and for Key Vaults the queueing of due vault checks with the clean-up of
 imports whose task ended (`kv.schedule`, every minute) and the planning of automatic deployments (`kv.auto_deploy`,
@@ -1098,7 +1112,7 @@ database, and when the daily audit check finds a problem.
 
 ## Checking an audit export outside Alice
 
-The JSON export (`GET /api/v1/audit/export?format=json`, or **Export JSON** on the **Audit log** page) holds a
+The JSON export (`GET /api/v1/audit/export?format=json`, or **Export JSON** on the **Audit trail** page) holds a
 `verification` object (the result Alice computed, with `head_seq` and `head_hash`) and all `entries` in order.
 Entries appended while the export was being written are not covered by `verification`. The response header
 `X-Alice-Audit-Intact` carries the same result. An export may take up to 10 minutes to write; for a log too large

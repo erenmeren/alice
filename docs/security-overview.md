@@ -135,7 +135,7 @@ checks every route against every role and token). The full matrix is in [authz-m
   the chain. The application's database role can only add and read entries, and triggers refuse changes for every
   role.
 - Alice checks the whole chain every day and on demand (**Verify integrity**, `alicectl audit verify`). The newest
-  verified hash is shown on the dashboard for recording outside Alice.
+  verified hash is shown on the Overview (tab **Assurance**) for recording outside Alice.
 - **Forwarding** sends every entry, in order, to the customer's syslog server or SIEM (RFC 5424, over TLS by
   default), with its sequence number, hash and previous hash, so the receiver holds an independent copy of the hashes
   and can check that the entries link up; it cannot recompute a hash from the message, which leaves out some hashed
@@ -215,7 +215,7 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
   backup copy made before and after; protect the copies.
 - **Audit log limits.** The chain proves that entries were not changed or removed in between; someone with control
   of the whole server can cut the newest entries or replace the database with an older copy. Forwarding to a syslog
-  server and recording the dashboard's head hash outside Alice make this visible. Forwarding is at most once.
+  server and recording the Overview's head hash outside Alice make this visible. Forwarding is at most once.
 - **License clock heuristics** can be bypassed by someone in full control of the host; this harms no paying customer.
 - **Trust on first use** for new servers' host keys and for the first package's release key, mitigated by the
   administrator's fingerprint comparison.
@@ -231,10 +231,10 @@ assessment, not a legal opinion or a certification.
 
 | Control area | Alice feature | Evidence |
 |---|---|---|
-| Access control and least privilege | Three roles, per-route permissions, scoped API tokens | [authz-matrix.md](authz-matrix.md); **Users** page; audit entries of role changes |
+| Access control and least privilege | Three roles, per-route permissions, scoped API tokens | [authz-matrix.md](authz-matrix.md); **People & access** page; audit entries of role changes |
 | Strong authentication | Mandatory MFA for local accounts, MFA at the identity provider for single sign-on, confirmation for sensitive actions | Admin settings; audit entries of sign-ins and confirmations |
 | Session management | 30-minute idle and 12-hour absolute limits; sessions ended on disable | [admin-guide.md](admin-guide.md#staying-signed-in) |
-| Logging and monitoring | Hash-chained audit log, daily verification, syslog/SIEM forwarding | Audit export with verification result; SIEM records; dashboard head hash |
+| Logging and monitoring | Hash-chained audit log, daily verification, syslog/SIEM forwarding | Audit export with verification result; SIEM records; the Overview's head hash |
 | Integrity of records | Hash chain, insert-only database role, triggers | `alicectl audit verify` output; export re-checked outside Alice |
 | Encryption of data at rest | Envelope encryption (AES-256-GCM) of secrets; encrypted backups | This document; `SECURITY-REPORT.md` |
 | Encryption in transit | HTTPS, SSH, TLS to services | Port table above; TLS scan results in `SECURITY-REPORT.md` |

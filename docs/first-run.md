@@ -32,6 +32,9 @@ Have these ready:
 1. Open `https://<server-address>/setup` in your browser. Accept the temporary certificate warning. Alice shows
    **Set up Alice**.
    Expected: **Enter the setup code**, with a **Setup code** field.
+   The left column shows where you are; it is not a menu: each step's own buttons move on. (On a phone it shows only
+   the current step, as "Step n of 7".) The moon or sun button at the top switches between light and dark, and on
+   this first step the **TR**/**EN** button switches the wizard's language until you choose one in step 3.
 2. Type the setup code and choose **Continue**. After five wrong codes from one computer, the wizard waits
    15 minutes before it accepts new attempts.
    Expected: **Choose your language**.
@@ -75,7 +78,7 @@ Have these ready:
     Expected: **Alice is ready**.
 12. Choose **Go to the dashboard**. Here too, Alice may ask for a new 6-digit code if more than five minutes
     passed.
-    Expected: the **Dashboard**, headed **Welcome, <your name>**, with a blue evaluation banner if you started the
+    Expected: the **Overview**, with your name in the sidebar, a blue evaluation banner if you started the
     evaluation, and **Finish setting up** listing what you skipped.
 
 **Back** is on every step from **HTTPS certificate** on. It shows the step before as it is now (for example the
@@ -91,7 +94,7 @@ complete step 10, and **Finish setting up: open the setup wizard to confirm the 
 
 ## After the wizard
 
-The **Dashboard** lists what is still open under **Finish setting up** (the recovery passphrase and your HTTPS
+The **Overview** lists what is still open under **Finish setting up** (the recovery passphrase and your HTTPS
 certificate are marked **Required**). Everything else is in **Settings** (administrators only), see
 [admin-guide.md](admin-guide.md).
 

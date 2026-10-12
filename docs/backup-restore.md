@@ -56,8 +56,8 @@ When there is not enough free disk space in the backups directory (twice the siz
 Alice does not start the backup at all. A failed daily backup e-mails the administrators ("Alice could not make its
 daily backup", with the error code, for example `disk_full`). After 48 hours without a successful backup,
 administrators see the red banner **No successful backup for 48 hours** on every page and get the e-mail "Alice has
-had no successful backup for 48 hours". The **Dashboard** shows the age of the last successful backup to
-administrators and auditors.
+had no successful backup for 48 hours". The **Overview** (tab **Assurance**, **Recovery readiness**) shows the age of the last successful
+backup to administrators and auditors.
 
 Backups start only once the recovery passphrase is set in the setup wizard. Until then **Settings → Backups** says
 **Backups start after the recovery passphrase is set.**
@@ -186,7 +186,7 @@ nothing was changed. The refusals and what to do are in
 
 - Everyone signs in again.
 - Users and API tokens are as they were when the backup was made: a person or token removed since then exists again.
-  Review **Users** and the API tokens, and disable or revoke what should not be there.
+  Review **People & access** and the API tokens, and disable or revoke what should not be there.
 - The task queue is the backup's too. Tasks that change servers or Key Vaults (certificate deployments, Key Vault
   deployments, key removals, SSH key rotation steps) that were waiting or running when the backup was made do **not**
   start by themselves: running them against servers whose state has moved on since the backup could, for example,

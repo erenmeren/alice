@@ -1,5 +1,47 @@
 # Changelog
 
+## Unreleased — Phase 9: the Clarity design
+
+**Changed**
+- The web interface follows the Clarity product design (`alice-design/`): warm neutral surfaces, a forest accent,
+  the bundled Geist fonts and Lucide icons, grouped navigation (Inventory, Operations, Administration), page headers,
+  resource tables, status badges, fact lists, operation timelines and attention items.
+- Light, dark and system color modes and a compact table density (per computer, on **Your account** or with the
+  moon/sun button in the top bar); the language stays per account (the **TR**/**EN** button in the top bar, or the
+  language select on **Your account**).
+- Page names: Dashboard → **Overview**, Users → **People & access**, Audit log → **Audit trail**, My account →
+  **Your account**, Deployment history → **Deployments**. The Overview has Operations and Assurance tabs: audit
+  integrity, recovery readiness (backups), the license and the newest audit entries are on **Assurance**, which
+  administrators and auditors see; operators see the license state through the banners. The "Welcome, <name>"
+  heading is gone; the signed-in name is in the sidebar.
+- The expiry horizon on the Overview draws four exclusive bars (expired, 1–7, 8–30, 31–60 days); the count links stay
+  cumulative and open exactly the rows they count.
+- Sign-in uses the design's split layout; the first-run wizard shows a progress rail. Every setup check is unchanged.
+- New page **Key rotations** (`/rotations`): running rotations and every policy (read-only). On **SSH keys**, its tab
+  is **Rotation policies**.
+- A page palette (Ctrl+K, ⌘K on a Mac) lists the pages your role may open; the bell shows the attention items.
+- Error messages show their `ALC-*` code.
+- **Your account** shows single sign-on users no password form and no **Create new recovery codes** (the server
+  always refused both for them) and says that their identity provider manages them.
+- **Deployments** marks a success that was not verified ("Verification: Skipped" or "Not done") instead of showing it
+  like a verified one; lists say how many rows are shown ("N shown") and never a total.
+- The License page shows the grace period in red, as its banner does; an intact audit verification says which entry
+  it verified through.
+
+**Accessibility**
+- Status is shown with text and an icon besides color; a 3 px focus ring on every control; one heading level 1 per
+  page and one navigation landmark.
+- The wizard moves focus to each new step's title and announces "Step n of 7"; sign-in moves focus to the
+  enrollment and recovery-code steps; Escape closes the phone menu and returns to its button.
+- Dark mode is checked for contrast (every text and background pair at 4.5:1 or more, controls at 3:1).
+
+**Upgrade notes**
+- No API, permission or data change. Bookmarks keep working (`/rotation/runs/<id>` is unchanged).
+- The browser stores `alice.colorScheme` and `alice.density` in local storage.
+- `THIRD_PARTY_NOTICES.md` lists the bundled fonts (SIL OFL 1.1) and icons (ISC AND MIT: Lucide, with the
+  Feather-derived icons under MIT).
+- Where the product differs from the design, and why: [docs/design-gaps.md](docs/design-gaps.md).
+
 ## Unreleased — External code review fixes (2026-10-12)
 
 **Behaviour changes**

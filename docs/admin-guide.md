@@ -17,16 +17,16 @@ The full list of which role may call which API operation is in [authz-matrix.md]
 
 ### Add a person
 
-1. Open **Users** and choose **Add user**.
+1. Open **People & access** and choose **Add user**.
 2. Enter the username, full name, optional email, **Role** and an **Initial password** (at least 12 characters).
 3. Choose **Create user**. If you have not confirmed your identity in the last five minutes, Alice asks for a
    6-digit code (**Confirm it's you**).
 4. Give the person their username and initial password through a separate channel. At their first sign-in they
    scan a QR code with their authenticator app and save their own recovery codes. Alice does not force them to
-   change the initial password; ask them to do so on **My account** (**Change password**).
+   change the initial password; ask them to do so on **Your account** (**Change password**).
 
-Expected: the person appears in the list; the **Two-factor sign-in** column shows "Not set up yet" until their
-first sign-in.
+Expected: the person appears in the **People** table; its **Sign-in method** column shows **Local account** with
+"Authenticator app not set up yet" until their first sign-in.
 
 Usernames use the letters A–Z, digits, dot, underscore and dash (2 to 64 characters) and must start with a letter
 or digit. They are compared without
@@ -35,7 +35,7 @@ create a lookalike account; full names may use any letters.
 
 ### Change a role, disable a person, reset their MFA or password
 
-Open **Users**, choose **Manage** on the person's row and choose the action: **Edit** (name, email, role),
+Open **People & access**, choose **Manage** on the person's row and choose the action: **Edit** (name, email, role),
 **Reset two-factor sign-in**, **Set a new password**, **Sign out everywhere**, **Disable** or **Enable**. Every
 one of these asks for a fresh 6-digit code if you have not confirmed your identity in the last five minutes.
 
@@ -43,7 +43,7 @@ Changing a role, disabling a person, resetting their MFA or password, and **Sign
 current sessions immediately. **Set a new password**, **Sign out everywhere** and **Disable** also revoke all their
 API tokens (the dialogs say so); enabling the account again does not bring the tokens back. A token is refused from
 its next request on; a task a token or session already queued still runs. A role change and **Reset two-factor
-sign-in** keep the tokens (they follow the new role), and so does a person's own password change on **My account**.
+sign-in** keep the tokens (they follow the new role), and so does a person's own password change on **Your account**.
 The audit log records one "API token revoked" entry per token (with the reason) and the number of revoked tokens
 on the reset, sign-out or disable entry.
 
@@ -65,7 +65,7 @@ First decide what may be known to someone else:
   password and code. Do not use it when the credentials may be known: whoever knows them signs in again just as
   easily.
 
-Then open **Audit log** and check the entries that show the person in the **User** column (use **Load more** for
+Then open **Audit trail** and check the entries that show the person in the **User** column (use **Load more** for
 older entries, or **Export JSON** and search the file); **Details** of an entry shows what it changed.
 
 **Reset two-factor sign-in** and a role change on their own end the sessions but do **not** revoke API tokens: a
@@ -75,9 +75,9 @@ token keeps working with the person's current role. Only **Set a new password**,
 ## Multi-factor authentication and recovery codes
 
 Every local account must use an authenticator app. Each code works once. If a person loses their phone they sign
-in with one of their recovery codes (each works once) and then create new recovery codes on **My account**
+in with one of their recovery codes (each works once) and then create new recovery codes on **Your account**
 (**Create new recovery codes**; the old codes stop working).
-If they have no recovery codes left, an administrator resets their MFA on **Users**; if the only administrator has
+If they have no recovery codes left, an administrator resets their MFA on **People & access**; if the only administrator has
 lost both the authenticator and the recovery codes, the server operator runs `alice admin reset-mfa <username>`
 (see [operator-guide.md](operator-guide.md)). Resetting MFA does not end a sign-in block; see below.
 
@@ -88,9 +88,9 @@ attempt (1, 2, 4, 8 and 16 seconds). After 10, the account is blocked for 15 min
 message stays "Incorrect username or password." even for the right password, so an attacker learns nothing.
 The count starts again only after a complete sign-in (password and code); a correct password on its own does not
 reset it. Because the count is still 10 or more when a block ends, one more wrong attempt starts a new 15-minute
-block. **Set a new password** on **Users** clears the block at once (not for single sign-on users, who sign in at their
+block. **Set a new password** on **People & access** clears the block at once (not for single sign-on users, who sign in at their
 identity provider and are never blocked by Alice). If the blocked account is the only
-administrator (so nobody can open **Users**), the server operator runs `alice admin unlock <username>` (see
+administrator (so nobody can open **People & access**), the server operator runs `alice admin unlock <username>` (see
 [operator-guide.md](operator-guide.md)): it sets the count back to zero and ends the block, and is recorded in the
 audit log (`user.unlocked`, actor `cli`).
 Every sign-in, failure and block is in the audit log (`auth.lockout`). Each block also sends one e-mail, "Sign-in
@@ -114,6 +114,16 @@ sign-in page says "Your session ended. Please sign in again."; what was typed in
 Tools that drive the browser's real input (remote desktop, browser automation) count as activity; a script or
 browser extension that fakes events does not. For automation use API tokens, which have no idle timeout.
 
+## Appearance
+
+Each person chooses how Alice looks on **Your account**, in the appearance panel (**A workspace that feels right**):
+the **Color mode** **Light**, **Dark** or **System** (follows the computer's setting; the default) and **Compact
+tables** (shorter table rows, to see more at once). The
+moon/sun button in the top bar switches between light and dark directly. Both choices stay on that computer and
+browser (in its local storage), not in the account: another computer starts with the system setting. The language
+is different: it belongs to the account and follows the person to every browser. Choose it in the same panel
+(**Language**) or with the **TR**/**EN** button in the top bar.
+
 ## API tokens
 
 **API tokens** lets each person create tokens for scripts. Choose a **Name**, the **Access** (**Read only** or
@@ -132,15 +142,18 @@ The API is described in `api/openapi.yaml` in the Alice source (every operation,
 fields and the permission it needs); [api.md](api.md) explains tokens, errors, paging and gives `curl` examples.
 Tokens never reach backups or any action that asks for **Confirm it's you**.
 
-## Audit log
+## Audit trail
 
-**Audit log** (administrators and auditors) lists every sign-in, failure, denied request and change, newest
+**Audit trail** (administrators and auditors) lists every sign-in, failure, denied request and change, newest
 first. Each entry is linked to the previous one with a SHA-256 hash, so changing or deleting an entry breaks the
 chain.
 
-- **Verify integrity** checks the whole chain. Expected: "The audit log is intact." If it reports "Audit log
-  integrity problem at entry N", keep a copy of the database and of an export, and contact your security team.
-- **Export CSV** / **Export JSON** download the whole log with its verification result. Exports are recorded in
+- **Verify integrity** checks the whole chain. Expected: "The audit log is intact." with "Hash chain verified through
+  entry #N.". If it reports "Audit log integrity problem at entry N", keep a copy of the database and of an export,
+  and contact your security team. The result also says what the check proves: the chain is continuous, which is not
+  independent proof against someone who controls the server; forwarding adds that ([Audit forwarding](#audit-forwarding)).
+- **Export CSV** / **Export JSON** download the whole log with its verification result, never only the entries the
+  filters show. Exports are recorded in
   the audit log. The CSV file's first line carries the result (`# alice audit export: intact=true …`); the column
   names are on line 2. Use the JSON export to re-check the chain outside Alice: the CSV export protects spreadsheet
   users by prefixing cells that start with `=`, `+`, `-` or `@` with an apostrophe, so its cells are not always
@@ -149,7 +162,9 @@ chain.
   answers "Alice is already checking or exporting the audit log." and an export download fails: wait until the other
   one has finished and try again. Such refusals are recorded too ("Audit log export refused: another check or export
   was running").
-- The **Object** column names what an entry is about, and **Details** opens its recorded values.
+- **Action starts with** and **Result**, then **Apply filters**, narrow the list. The **User** column shows the
+  person (and the address they came from); the **Object** column names what an entry is about, and **Details** opens
+  its recorded values. The page loads the newest entries first; **Load more** adds older ones.
 - Repeated refusals are recorded once per 10 minutes. When the same person is refused the same thing on the same
   page or API operation again within 10 minutes (permission denied, or blocked by the license), Alice writes no new
   entry; when the 10 minutes end it adds one entry whose details say how many more refusals like it there were and
@@ -157,44 +172,68 @@ chain.
   All sessions of a person count together, and all API tokens of a person count together.
 - After verification Alice shows the **Fingerprint of the latest entry**. Record it somewhere outside Alice (for
   example in a ticket) from time to time: a later fingerprint that does not continue from it shows that entries
-  were removed. The **Dashboard** shows the latest verified entry's hash too (**Audit log head**). To keep a copy
+  were removed. The **Overview** shows the latest verified entry's hash too (**Assurance → Audit integrity**,
+  **Head hash**). To keep a copy
   outside Alice as it is written, forward the log to your syslog server or SIEM ([Audit forwarding](#audit-forwarding)).
 - Alice also checks the whole chain once a day on its own (recorded as `audit.verified` by `scheduler`). If the
-  check finds a problem, the alert recipients get one email about it and the **Dashboard** shows it under **Needs
+  check finds a problem, the alert recipients get one email about it and the **Overview** shows it under **Needs
   attention**.
 
-## Dashboard
+## Overview
 
-**Dashboard** is the first page after sign-in (it replaced **Home**). Everyone sees it; what each part shows depends
-on the role. Every count is a link to the list it counts, and that list shows exactly that many rows.
+**Overview** is the first page after sign-in (it was called **Dashboard** before). Everyone sees it; what each part
+shows depends on the role. It reads its numbers again every minute; **Refresh** reads them at once. The line beside
+the tabs says which Alice version answered and when the numbers were made (**Updated …**). Every count that is a
+link opens the list it counts, and that list shows exactly that many rows.
 
-- **Certificates**: **Expired**, **Within 7 days**, **Within 30 days** and **Within 60 days**. The windows include
-  each other and the expired ones, as the **Expiry** filter of **Certificates** does ("Within 30 days" also counts
-  the expired certificates and those within 7 days). They count every certificate in the inventory, also uploaded
-  ones that are on no server. **Certificates in use: N** counts the certificates found on at least one server Alice
-  manages: only those get expiry e-mails (see [Alerts and e-mail](#alerts-and-e-mail)).
-- **Key Vault keys and secrets expiring within 30 days: N** counts the keys of your vaults and the client secrets
-  Alice signs in to vaults with, expired ones included. Key Vault certificates are counted with the certificates.
-- **Expiring soon**: everything in use that expires within 30 days (certificates on servers, Key Vault
-  certificates, keys and client secrets), soonest first, with the server or vault; expired ones come first and are
-  marked **Expired**.
-- **Failed deployments (last 7 days)**: deployments that failed, were rolled back or could not be rolled back in the
-  last 7 days, and every deployment that still needs attention, however old.
-- **Servers and vaults by status**, **License** (operators see only whether the license has expired; administrators
-  and auditors also see its state and **Valid until**) and **Upcoming rotations** (policies whose next run is due
-  within 14 days, and runs that are running or need attention).
-- **Audit log head** (administrators and auditors): the entry number, hash and time of the last entry the daily
-  integrity check verified. Write the hash down outside Alice from time to time (for example in a ticket): a later
-  head that does not continue from it shows that entries were removed. When the last check found a problem, this
-  part says so; open **Audit log** and choose **Verify integrity**.
+Four numbers sit at the top: **Monitored certificates** (the certificates in use, with how many expire within 30 days,
+expired included; opens **Certificates** with that filter), **Managed targets** (servers and Key Vaults, with how many
+need review: **Server identity changed**, **Sign-in refused**, **Cannot be reached**, **Partly working** or **Waiting
+for fingerprint confirmation**; opens **Servers**), **Key rotations** (rotations in progress; opens **Key rotations**)
+and **Needs attention** (the number of entries in the list of that name below).
+
+The page has two tabs. **Operations** is for everyone:
+
+- **Expiration horizon**: four bars, **Expired**, **1–7 days**, **8–30 days** and **31–60 days**; each certificate is
+  in exactly one bar. **7d**, **30d** and **60d** choose the window of the large number ("expiring within 30 days,
+  expired included"), with **N already expired** beside it. Below the bars are the links **Expired**, **Within 7
+  days**, **Within 30 days** and **Within 60 days**. These windows include each other and the expired ones, as the
+  **Expiry** filter of **Certificates** does ("Within 30 days" also counts the expired certificates and those within
+  7 days). They count every certificate in the inventory, also uploaded ones that are on no server. **Certificates in
+  use: N** counts the certificates found on at least one server Alice manages: only those get expiry e-mails (see
+  [Alerts and e-mail](#alerts-and-e-mail)). **Key Vault keys and secrets expiring within 30 days: N** counts the keys
+  of your vaults and the client secrets Alice signs in to vaults with, expired ones included; Key Vault certificates
+  are counted with the certificates.
 - **Needs attention**: servers with **Server identity changed** or **Sign-in refused**, failed deployments, for
   administrators and auditors a broken audit chain, and for administrators failing e-mail delivery. Each entry links
-  to the page where you deal with it.
+  to the page where you deal with it; **N open** is the number of entries.
+- **Upcoming renewals**: the 10 soonest of everything in use that expires within 30 days (certificates on servers,
+  Key Vault certificates, keys and client secrets), with the server or vault; expired ones come first and are marked
+  **Expired**. **View all** opens **Certificates** with the 30-day filter.
+- **Target connectivity**: how many servers and vaults are **Connected** out of all of them, a bar with one part per
+  state, and a link per state.
+- **Failed deployments (last 7 days)**: deployments that failed, were rolled back or could not be rolled back in the
+  last 7 days, and every deployment that still needs attention, however old.
+- **Key rotation**: policies whose next run is due within 14 days, and how many runs are running or need attention;
+  **View rotations** opens **Key rotations**.
 
-- **Backups** (administrators and auditors): the age of the last successful backup ("3 hours ago"), or
-  **No backup has been made yet.**; **The last backup failed. Alice e-mailed the administrators.** when the last one
-  failed; **No successful backup for 48 hours** in red after 48 hours without a successful backup. **Open the backups**
-  leads to **Settings → Backups** ([Backups](#backups)).
+**Assurance** is for administrators and auditors (operators do not see this tab):
+
+- **Audit integrity**: **Chain intact** or **Integrity problem**, the entry number the daily integrity check verified
+  up to, when it ran (**Last verified**) and the **Head hash**. Write the hash down outside Alice from time to time
+  (for example in a ticket): a later head that does not continue from it shows that entries were removed. When the
+  last check found a problem, this part says so; open **Audit trail** and choose **Verify integrity**. Administrators
+  also see **Forwarding**, a link to **Settings → Audit forwarding**; the Overview does not read the forwarding state.
+- **Recovery readiness** (backups): the age of the last successful backup ("3 hours ago"), or **No backup has been
+  made yet.**; **The last backup failed. Alice e-mailed the administrators.** when the last one failed; **No
+  successful backup for 48 hours** in red after 48 hours without a successful backup. **Restore drill** says "Not
+  established by a backup checksum": a backup that checks out is not yet a restore that worked; run the
+  [disaster-recovery drill](backup-restore.md#disaster-recovery-drill). **Open the backups** (administrators) leads to **Settings → Backups**
+  ([Backups](#backups)).
+- **License**: its state and **Valid until**. Operators see the license only through the banners at the top of every
+  page.
+- **Evidence trail**: the 5 newest audit entries; **Open audit trail** opens the whole list.
+
 - **Finish setting up** (administrators, until every item is done): **Set the recovery passphrase** and **Install
   your HTTPS certificate** (both marked **Required**), **Set up the mail server**, **Add a license** and **Add your
   first server**. These are the steps the setup wizard lets you skip or postpone; each turns **Done** when it is
@@ -231,11 +270,11 @@ one; a notice skipped that way is never sent later. A renewed certificate (a new
 first threshold; a certificate replaced on its server is no longer in use and gets no further e-mails.
 
 **Not monitored** by this check: certificates you uploaded or completed from a signing request that are on no server
-(listed, counted on the Dashboard, but not e-mailed until deployed); certificates whose places all disappeared or
+(listed, counted on the Overview, but not e-mailed until deployed); certificates whose places all disappeared or
 whose servers were removed; disabled Key Vault certificates and keys, keys without an expiry date, and vaults removed
 from Alice. Other conditions keep their own e-mails, each sent once when the condition starts: license warnings (60,
 30, 14, 7 and 1 days before the end, see [License](#license)), a changed server identity, a server that refuses
-Alice's key, failed deployments, a broken audit chain, stopped tasks and rotation events. The Dashboard lists them
+Alice's key, failed deployments, a broken audit chain, stopped tasks and rotation events. The Overview lists them
 under **Needs attention**.
 
 **The first check after the upgrade** e-mails every monitored item that has already reached a threshold (only its
@@ -258,7 +297,7 @@ license warnings, the sign-in block e-mail, and the e-mails about deployments, K
 the audit chain and SSH key rotations.
 
 - **Send alerts to every administrator with an e-mail address** (on by default): every enabled administrator with an
-  e-mail address on **Users**, each in their own language.
+  e-mail address on **People & access**, each in their own language.
 - **More addresses** (**Add address**, up to 20): any address, for example a team mailbox, each with a language
   (English or Turkish). Type the plain address (`ops@example.com`), without a name or angle brackets. An address that
   is also an administrator's gets one e-mail.
@@ -280,7 +319,7 @@ mail settings every e-mail is recorded as skipped and never sent later.
 
 After three failed send attempts in a row (any e-mail, any recipient), administrators see **E-mails could not be
 sent** on every page, with the last error code (for example `smtp.connect`) and **Open the mail settings**; the
-Dashboard lists it under **Needs attention**. The next successful send ends it. One address the mail server refuses
+Overview lists it under **Needs attention**. The next successful send ends it. One address the mail server refuses
 (`smtp.rejected`) can raise the banner while everyone else gets their e-mails: check **Settings → Recipients**. The
 codes are explained under `ALC-NTF-0003` to `ALC-NTF-0009` in [troubleshooting.md](troubleshooting.md).
 
@@ -576,18 +615,19 @@ from the provider (`preferred_username`, `upn` or e-mail, letters folded to lowe
 identifier, never by e-mail, and never joins them to a local account: a first single sign-on whose e-mail belongs to
 a local user is refused (`ALC-SSO-0008`), and so is a later one whose e-mail changed to a local user's.
 
-On **Users**, SSO users carry the badge **Single sign-on**, the two-factor column shows **At the identity provider**,
-and there is no **Set a new password**, **Reset two-factor sign-in** or role choice: their role comes from their
+On **People & access**, SSO users carry the badge **Single sign-on** in the **Sign-in method** column, with their
+provider's name and **At the identity provider**, and there is no **Set a new password**, **Reset two-factor sign-in** or role choice: their role comes from their
 groups at every single sign-on ("Role updated from the identity provider"), and a change by hand is refused
 (`ALC-USR-0003`). **Disable** and **Enable** work as for everyone. SSO users have no password, no authenticator and no
-recovery codes in Alice and cannot be the break-glass account. **SSO users cannot create API tokens**
+recovery codes in Alice and cannot be the break-glass account; their **Your account** page shows no password form
+and no **Create new recovery codes**, and says that their identity provider manages both. **SSO users cannot create API tokens**
 (`ALC-USR-0003`): **API tokens** shows them a note instead of **Create token** (they can still revoke tokens), so no
 credential Alice issued outlives the person's removal at the identity provider. A script that needs a token uses one
 of a local account.
 
 **Group changes at the identity provider** take effect at the person's next single sign-on or confirmation. A person
 removed from every mapped group is refused there, and Alice then ends all their sessions. Until then an open session keeps working (at most 30 minutes idle, 12 hours in all; Alice keeps no refresh
-tokens). To stop someone at once, choose **Disable** on **Users**.
+tokens). To stop someone at once, choose **Disable** on **People & access**.
 
 ### MFA and confirming your identity
 
@@ -916,9 +956,10 @@ set up ([Mail server](#mail-server)).
 
 ## For auditors
 
-Auditors sign in like everyone else (password and authenticator app, or single sign-on). They see **Dashboard**, **Servers**, **SSH keys**, **Certificates**, **Deployment history**, **Key Vaults**, **Audit log**,
-**License** (read only), **API tokens** and **My account**, and no button that changes anything except their own password, recovery codes,
+Auditors sign in like everyone else (password and authenticator app, or single sign-on). They see **Overview** (with its **Assurance** tab), **Certificates**, **SSH keys**, **Servers**, **Key Vaults**,
+**Deployments**, **Key rotations**, **Audit trail**, **License** (read only), **API tokens** and **Your account**, and
+no button that changes anything except their own password, recovery codes,
 language, read-only API tokens and their own saved views; they can export the certificate and SSH key lists. On
-**Audit log** they can filter, **Verify integrity** and export. A read-only
+**Audit trail** they can filter, **Verify integrity** and export. A read-only
 API token lets a script fetch `GET /api/v1/audit` or `GET /api/v1/audit/export?format=json` for regular
 collection.

@@ -7,11 +7,11 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **"Incorrect username or password." although the password is right.** After 5 wrong attempts Alice makes the
   account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait and try again with care: until a
   complete sign-in, one more wrong attempt starts a new 15-minute block. An administrator can see `auth.lockout`
-  in the audit log, and **Set a new password** on **Users** lifts the block at once. If you are the only
+  in the audit log, and **Set a new password** on **People & access** lifts the block at once. If you are the only
   administrator, the server operator runs `alice admin unlock <username>` ([operator-guide.md](operator-guide.md));
   `alice admin reset-mfa` does not end a block.
 - **Lost the phone with the authenticator app.** Choose **Use a recovery code** on the sign-in page. Without
-  recovery codes, ask an administrator to reset your MFA (**Users**). If you are the only administrator, the
+  recovery codes, ask an administrator to reset your MFA (**People & access**). If you are the only administrator, the
   server operator runs `alice admin reset-mfa <username>` ([operator-guide.md](operator-guide.md)).
 - **"Your session ended. Please sign in again."** Sessions end after 30 minutes without activity and always after
   12 hours. Pages that refresh themselves do not count as activity; clicking, typing, scrolling with the wheel or
@@ -209,7 +209,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   happens when another `server` block answers on the server's own address and port: Alice's check reaches that
   block instead. Check the website in a browser and see the previous point.
 - **"Alice is still finishing an earlier deployment on this server" (`ALC-DEP-0002`).** Wait until that deployment
-  shows a result in **Deployment history**; at most about a day when the server stays unreachable.
+  shows a result in **Deployments**; at most about a day when the server stays unreachable.
 - **"The certificate file changed since Alice last looked" (`ALC-NGX-0006`).** Another tool (for example certbot)
   replaced the file. Decide which tool manages this website; choose **Discover** before deploying again.
 - **"The server does not have enough free disk space." (`ALC-NGX-0005`).** The server needs room for the new files, their backups and 10 MiB
@@ -271,7 +271,7 @@ in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
   certificate**, or enter your certificate authority), user name or password (`ALC-NTF-0006`), sender or recipient
   refused (`ALC-NTF-0007`), an address Alice does not connect to (`ALC-NTF-0009`). If the test works, check
   **Settings → Recipients** (with **Send alerts to every administrator with an e-mail address** on, an administrator
-  without an e-mail address on **Users** gets nothing; Alice's log then says `alerts.no_recipients` after an expiry
+  without an e-mail address on **People & access** gets nothing; Alice's log then says `alerts.no_recipients` after an expiry
   check) and **Settings → Alerts**. The banner **E-mails could not be sent** shows the last error code of the
   scheduled e-mails (`smtp.connect`, `smtp.tls`, `smtp.untrusted`, `smtp.auth`, `smtp.rejected`,
   `smtp.address_refused`). A server whose certificate was renewed needs **Trust this certificate** again. E-mails
@@ -301,7 +301,7 @@ in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
   be exactly the one in the provider's discovery document, including a trailing `/v2.0` or `/adfs`), `not_https`
   (also for an endpoint whose address carries a query) or `jwks`.
 - **An SSO user still has access after leaving a group.** The role is read again at every single sign-on and
-  confirmation; an open session keeps working until it ends (at most 12 hours). Choose **Disable** on **Users** to
+  confirmation; an open session keeps working until it ends (at most 12 hours). Choose **Disable** on **People & access** to
   stop it at once.
 - **"Confirm at your identity provider" right after a single sign-on.** Alice opens the 5-minute confirmation window
   at a single sign-on only when the provider authenticated the person within the last 5 minutes (`auth_time`); a
@@ -468,7 +468,7 @@ is told to delete it.
 
 **Likely cause.** The enrollment page was opened twice.
 
-**What to do.** Enter a code from the app. If the device is lost, an administrator can reset it (**Users**, **Manage**, **Reset two-factor sign-in**), or the host administrator can run `alice admin reset-mfa <username>`.
+**What to do.** Enter a code from the app. If the device is lost, an administrator can reset it (**People & access**, **Manage**, **Reset two-factor sign-in**), or the host administrator can run `alice admin reset-mfa <username>`.
 
 ## ALC-AUTH-0008: Password too short
 
@@ -2026,7 +2026,7 @@ A deployment may show `ALC-DEP-0019` (the files are back but the website was not
 - Alice tried and the undo did not finish (the step **recover_pending** in the deployment's history shows it failed). It may have put back one of the two files.
 - The change's record on the server cannot be read (see below).
 
-**Where to find the operation id.** Open the deployment in **Deployment history**: the error's details show `operation_id`, and so does the step **recover_pending** if Alice tried the undo. It is a deployment ID; if Alice still has a deployment with that ID, the history shows it.
+**Where to find the operation id.** Open the deployment in **Deployments**: the error's details show `operation_id`, and so does the step **recover_pending** if Alice tried the undo. It is a deployment ID; if Alice still has a deployment with that ID, the history shows it.
 
 **What to do.** On the server, as root:
 
@@ -2544,7 +2544,7 @@ instead of changing image tags by hand ([upgrade.md](upgrade.md)); to bring the 
 ## Backup failed
 
 A failed daily backup e-mails the administrators ("Alice could not make its daily backup", with an error code), shows
-**The last backup failed. Alice e-mailed the administrators.** on **Settings → Backups** and on the dashboard, and is
+**The last backup failed. Alice e-mailed the administrators.** on **Settings → Backups** and on the Overview (tab **Assurance**), and is
 recorded in the audit log as **Backup failed** with the same code. **Back up now** shows the `ALC-BAK-…` code of the
 section above. Alice tries the daily backup again after 5 minutes, then after 10, 20 and 40 minutes, then every hour;
 a `not_configured` failure is recorded once and the backup is made at the first check (every 5 minutes) after the key
