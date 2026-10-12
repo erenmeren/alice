@@ -40,8 +40,9 @@ const x25519KeySize = 32
 // Neither the passphrase nor a passphrase-derived key is ever stored.
 //
 // SenderPublicKey is the public half of the installation's sender key S (R43 row 41). The wrap binds it, so the
-// passphrase authenticates it: a backup file is readable only when it was also keyed with S's private half, which
-// never leaves the installation.
+// passphrase authenticates it: someone who does not know the passphrase cannot make a file the passphrase opens
+// without S's private half, which never leaves the installation. A passphrase holder can: the passphrase unwraps R's
+// private half, and R_priv*S_pub equals S_priv*R_pub (KI-14).
 type WrappedBackupKey struct {
 	Version         int       `json:"version"`
 	PublicKey       []byte    `json:"public_key"`

@@ -43,8 +43,9 @@
 ### Security
 - P1-01 closed in production (non-superuser owner, no owner credential in the application container); PostgreSQL
   read-only, non-root, no published port; secrets as files; the temporary HTTPS certificate renewed without a restart.
-- Backups are origin-authenticated: a file built from another installation's public keys does not open with the
-  passphrase (R43 row 41); a restore keeps the newer license time record.
+- Backups are origin-authenticated against anyone without the recovery passphrase: a file built from another
+  installation's public keys does not open with the passphrase (R43 row 41; a passphrase holder can still forge one,
+  KI-14); a restore keeps the newer license time record.
 
 ## Unreleased — Phase 7: Alerts, dashboard and SSO
 

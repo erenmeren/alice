@@ -53,7 +53,7 @@ Data flows:
 | TB3 | Alice and managed servers | SSH host keys pinned on first contact and confirmed by an administrator; data from servers is treated as untrusted; a server-side helper with a fixed command set; addresses checked on every connection (no link-local or metadata addresses). |
 | TB4 | Alice and cloud and customer services | TLS with certificate verification against the system authorities (plus a customer CA where configured); the same address rule. |
 | TB5 | Containers and host | Non-root containers, read-only root file systems, no capabilities, `no-new-privileges`; the host scripts never act on files inside the directories containers can write. |
-| TB6 | Offline media | Release packages signed (Ed25519) and verified before use; license files signed by the vendor; backups encrypted and origin-authenticated. |
+| TB6 | Offline media | Release packages signed (Ed25519) and verified before use; license files signed by the vendor; backups encrypted and origin-authenticated against anyone without the recovery passphrase (not against a passphrase holder: KI-14). |
 
 ## What Alice stores, and where
 
@@ -88,7 +88,15 @@ entry, a job parameter or an error message, and the test suite checks this with 
     under the master key. The passphrase itself is never stored.
   - Each file is encrypted with a file key derived (HKDF-SHA256) from two X25519 agreements: a fresh ephemeral key
     and the installation's sender key, each with the backup public key. A file is therefore bound to the installation
-    that made it: a file built from another backup's public parts does not open.
+    that made it **against anyone who does not know the recovery passphrase**: a file built from another backup's
+    public parts does not open. This does not authenticate a file against a passphrase holder. X25519 agreement is
+    symmetric, so whoever can unwrap the backup private key (the passphrase and any one backup file) computes the same
+    second agreement and can build a file the passphrase opens, with a master key, database and audit chain of their
+    choosing; the restore's checks then verify against that file's own contents (`SECURITY-REPORT.md` KI-14).
+    Authenticating the author against a passphrase holder would need a signature by a key the passphrase does not
+    reveal, checked against a trust root kept outside the installation and its backups (for example a public key the
+    operator records separately and enters at restore). Version 1 has no such trust root: the recovery passphrase is
+    as sensitive as the master key.
   - The content is compressed and sealed in 64 KiB chunks with AES-256-GCM; each chunk's authentication covers the
     file header and a final-chunk marker, so changed, reordered, cut or extended files are refused before the current
     data is touched.
@@ -185,7 +193,7 @@ The design follows a STRIDE analysis per component. The main scenarios:
 |---|---|---|
 | Takeover of the Alice platform | MFA, roles, confirmation for sensitive actions, narrow helper on servers, audit log with external forwarding | Alice holds access to every managed server: a full compromise reaches them all (within the helper's command set). |
 | Theft of the database or a backup | Envelope encryption; backups sealed with the recovery passphrase | A thief with the database **and** the master key file, or a backup **and** the passphrase, reads the secrets. |
-| A forged or altered backup restored | Origin-authenticated backups, authenticated chunks, verification before the switch, the restore recorded in the audit chain | An administrator with the passphrase can restore an older genuine backup; the audit log shows it. |
+| A forged or altered backup restored | Backups origin-authenticated against anyone without the passphrase, authenticated chunks, verification before the switch, the restore recorded in the audit chain | Anyone with the passphrase and one backup file can forge a backup that restores (KI-14); an administrator with the passphrase can restore an older genuine backup; the audit log shows both. |
 | Malicious operator | Operators cannot download private keys, read the audit log or change servers and policies; every action audited | Operators can deploy certificates and add or remove keys on existing servers. |
 | Man in the middle | TLS everywhere; SSH host key pinning; certificate verification | First contact with a new server relies on the administrator comparing its fingerprint (trust on first use). |
 | Tampered update | Signed packages verified with the installed keys; the package copied before use; automatic backup and rollback | Trust in the first installation rests on the operator comparing the published fingerprint. |

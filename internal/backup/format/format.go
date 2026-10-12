@@ -1,7 +1,11 @@
 // Package format is the encrypted backup container (R4, SEC-048; C7; R43 row 41): a clear, bounded header that carries
 // the passphrase-wrapped backup key, then the payload in 64 KiB AES-256-GCM chunks with a final flag. The file key is
 // HKDF-SHA256 of two X25519 agreements: an ephemeral key with the recipient (the backup key) and the installation's
-// sender key with the recipient, so only a holder of the sender private key can make a file the passphrase opens.
+// sender key with the recipient. The second agreement authenticates the origin only against someone who does not know
+// the recovery passphrase: a file built from another backup's public parts without the sender private key does not
+// open. It does not authenticate a file against a passphrase holder: X25519 is symmetric (S_priv*R_pub =
+// R_priv*S_pub), the passphrase unwraps R_priv and S_pub is in the clear header, so anyone with the passphrase can
+// make a file the passphrase opens without the sender key (KI-14, TestPassphraseHolderCanForge).
 //
 // The package is pure: it works on io.Reader and io.Writer only and never opens a file, a socket or a database.
 package format

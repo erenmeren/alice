@@ -28,7 +28,10 @@ key that only the installation's **backup key pair** can derive. The private hal
 inside the file, sealed with the **recovery passphrase** (Argon2id, 64 MiB of memory, 3 passes). Making a backup
 therefore needs no passphrase; opening one needs the passphrase and nothing else, also on a new server. Every file
 is also bound to the installation that made it (a second, installation-only key): a file that someone assembled
-from the public parts of another backup does not open with your passphrase. See
+from the public parts of another backup does not open with your passphrase. That protection holds only against people
+who do not know the passphrase: anyone who knows the recovery passphrase and has one of your backup files can build a
+file that opens with it, and a restore of that file installs whatever they put in it. Keep the passphrase as secret as
+the master key, and restore only backups you made and kept write-protected off the host. See
 [security-overview.md](security-overview.md#encryption) for the details.
 
 **File names.** `alice-backup-<first 8 characters of the Installation ID>-<UTC time>-<kind>.alicebak`, for example

@@ -180,6 +180,14 @@ func TestKnownAnswer(t *testing.T) {
 // use it as an attacker's writer.
 func reference(t testing.TB, w secrets.WrappedBackupKey, sender *ecdh.PrivateKey, plain []byte, rnd io.Reader) []byte {
 	t.Helper()
+	return referenceAuth(t, w, sender.ECDH, plain, rnd)
+}
+
+// referenceAuth is reference with the second Diffie-Hellman supplied by auth (given the recipient public key), so a
+// test can compute it from the other side of the agreement.
+func referenceAuth(t testing.TB, w secrets.WrappedBackupKey, auth func(*ecdh.PublicKey) ([]byte, error), plain []byte,
+	rnd io.Reader) []byte {
+	t.Helper()
 	seed := make([]byte, 32) // the ephemeral private key: 32 bytes from rnd (GenerateKey ignores its reader since Go 1.26)
 	_, err := io.ReadFull(rnd, seed)
 	require.NoError(t, err)
@@ -192,7 +200,7 @@ func reference(t testing.TB, w secrets.WrappedBackupKey, sender *ecdh.PrivateKey
 	require.NoError(t, err)
 	shared, err := eph.ECDH(recipient)
 	require.NoError(t, err)
-	authShared, err := sender.ECDH(recipient) // the second Diffie-Hellman: origin authentication (R43 row 41)
+	authShared, err := auth(recipient) // the second Diffie-Hellman: origin authentication (R43 row 41)
 	require.NoError(t, err)
 	salt := append(append(append([]byte{}, eph.PublicKey().Bytes()...), w.PublicKey...), w.SenderPublicKey...)
 	key, err := hkdf.Key(sha256.New, append(shared, authShared...), salt, "alice/backup/v2", 32)
@@ -295,6 +303,26 @@ func TestForgedBackupWithCopiedWrappedKeyFails(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = format.OpenWithKey(bytes.NewReader(forged), priv, k.s.PublicKey())
 	require.ErrorIs(t, err, format.ErrDecrypt, "the header names another sender")
+}
+
+// TestPassphraseHolderCanForge pins the limit of the origin authentication (KI-14, R43 row 41): X25519 is symmetric
+// (S_priv*R_pub = R_priv*S_pub), and the passphrase unwraps R_priv while S_pub is in the clear header, so anyone who
+// knows the recovery passphrase can build a file the passphrase opens without the sender private key. The sender key
+// stops only a forger who does not know the passphrase (TestForgedBackupWithCopiedWrappedKeyFails).
+func TestPassphraseHolderCanForge(t *testing.T) {
+	k := wrapped(t)
+	hdr, err := format.ReadHeader(bytes.NewReader(seal(t, k, payload(10))))
+	require.NoError(t, err)
+	priv, err := hdr.WrappedKey.Unwrap(pass) // only the passphrase and the copied header
+	require.NoError(t, err)
+	sender, err := ecdh.X25519().NewPublicKey(hdr.WrappedKey.SenderPublicKey)
+	require.NoError(t, err)
+	plain := []byte("CANARY a master.key and administrators chosen by the passphrase holder")
+	forged := referenceAuth(t, hdr.WrappedKey, func(*ecdh.PublicKey) ([]byte, error) { return priv.ECDH(sender) },
+		plain, rand.NewChaCha8([32]byte{7}))
+	got, err := open(forged, pass)
+	require.NoError(t, err, "the passphrase holder forges a file the passphrase opens")
+	assert.Equal(t, plain, got)
 }
 
 func TestWriterRefusesAnotherSenderKey(t *testing.T) {
