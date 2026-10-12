@@ -69,3 +69,12 @@ func IsUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolation
 }
+
+// IsUniqueViolationOn reports whether err is a PostgreSQL unique-constraint violation of the named constraint (or
+// unique index). A caller that maps a violation to one specific error ("this user name is taken") uses it, so a
+// violation of any other unique constraint of the table stays an internal error instead of being misreported
+// (review L-14).
+func IsUniqueViolationOn(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == uniqueViolation && pgErr.ConstraintName == constraint
+}

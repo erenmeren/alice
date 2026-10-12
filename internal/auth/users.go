@@ -72,6 +72,10 @@ func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (User, error) {
 	return getUser(ctx, s.pool, id)
 }
 
+// UsernameConstraint is the unique constraint on users.username (migrations/00002_core.sql); only its violation means
+// "this user name is taken".
+const UsernameConstraint = "users_username_key"
+
 // CreateUser adds a local user. The user enrolls TOTP at first login.
 func (s *Service) CreateUser(ctx context.Context, p Principal, m Meta, in NewUser) (User, error) {
 	v := ValidateProfile(in.Username, in.DisplayName, in.Email)
@@ -91,7 +95,7 @@ func (s *Service) CreateUser(ctx context.Context, p Principal, m Meta, in NewUse
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, password_changed_at, created_at, updated_at)
 VALUES ($1, $2, $3, $4, 'local', $5, $6, $7, $7, $7)`, id, in.Username, in.Email, in.DisplayName, hash, string(in.Role), now); err != nil {
-			if db.IsUniqueViolation(err) {
+			if db.IsUniqueViolationOn(err, UsernameConstraint) {
 				return ErrUsernameTaken
 			}
 			return fmt.Errorf("create user: %w", err)

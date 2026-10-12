@@ -64,6 +64,10 @@ func mappingDetails(m Mapping) map[string]string {
 	return map[string]string{"mapping_id": m.ID.String(), "provider_id": m.ProviderID.String(), "group": m.Group, "role": string(m.Role)}
 }
 
+// groupMappingConstraint is the unique constraint on (provider_id, group_claim_value) of oidc_group_mappings
+// (migrations/00011_alerts_dashboard_sso.sql); only its violation is a duplicate group (review L-14).
+const groupMappingConstraint = "oidc_group_mappings_provider_id_group_claim_value_key"
+
 // CreateMapping maps a group of a provider to a role. Administrator is refused while "SSO users may be Admin" is
 // off (ErrAdminMappingDisabled, audited as sso.mapping.denied); the switch row is locked first (S-5). A group is
 // mapped once per provider.
@@ -96,7 +100,7 @@ EXISTS (SELECT 1 FROM oidc_group_mappings WHERE provider_id = $1 AND group_claim
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO oidc_group_mappings (id, provider_id, group_claim_value, role, created_by, created_at)
 VALUES ($1, $2, $3, $4, $5, $6)`, m.ID, providerID, group, string(role), userID(a), m.CreatedAt); err != nil {
-			if db.IsUniqueViolation(err) {
+			if db.IsUniqueViolationOn(err, groupMappingConstraint) {
 				return validate.Errors{{Field: "group", Code: validate.Duplicate}}
 			}
 			return fmt.Errorf("oidc: store the group mapping: %w", err)
