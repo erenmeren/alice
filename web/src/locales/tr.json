@@ -927,6 +927,50 @@
     "typeLabel": {
       "linux": "Linux sunucusu",
       "nginx": "Nginx sunucusu"
+    },
+    "page": {
+      "description": "Bağlı hedefleri, değişiklikleri ve incelenmesi gerekenleri görün.",
+      "total": "toplam",
+      "connected": "bağlı",
+      "identityChanged": "kimlik değişti",
+      "unreachable": "erişilemiyor",
+      "summary": "Bağlantı özeti",
+      "vaultsElsewhere": "Azure Key Vault kasaları ayrı listelenir.",
+      "columns": {
+        "server": "Sunucu",
+        "platform": "Platform",
+        "connection": "Bağlantı",
+        "lastConnected": "Son bağlantı"
+      },
+      "openNamed": "Aç: {{name}}",
+      "never": "Hiç",
+      "back": "Tüm sunucular",
+      "subtitle": "{{address}} · {{platform}}",
+      "identityChangedTitle": "Bu sunucunun kimliği değişti",
+      "verifiedTitle": "Bağlantı doğrulandı",
+      "verifiedText": "Gözlemlenen SSH kimliği sabitlenen parmak iziyle eşleşiyor.",
+      "unreachableTitle": "Son bağlantı denemesi başarısız oldu",
+      "unreachableText": "Envanter son başarılı keşfi yansıtır. Kimlik bilgilerini değiştirmeden önce erişimi kontrol edin.",
+      "connection": "Bağlantı ayrıntıları",
+      "facts": {
+        "state": "Durum",
+        "address": "Adres",
+        "user": "Sunucudaki kullanıcı",
+        "platform": "Platform",
+        "os": "İşletim sistemi",
+        "helper": "alice-helper sürümü",
+        "nginx": "Nginx sürümü",
+        "lastConnected": "Son bağlantı",
+        "lastScan": "Son tarama",
+        "discoveryInterval": "Keşif aralığı",
+        "hostFingerprint": "Sunucu parmak izi",
+        "lastProblem": "Son sorun"
+      },
+      "everyHours_one": "Saatte bir",
+      "everyHours_other": "{{count}} saatte bir",
+      "operations": "Kullanılabilir işlemler",
+      "operationsText": "Alice, kısıtlı yardımcı aracı üzerinden sertifika ve anahtar dosyalarını günceller. Nginx yapılandırması sizin kontrolünüzdedir.",
+      "readOnly": "Salt okunur"
     }
   },
   "hostKeys": {

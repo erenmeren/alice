@@ -927,6 +927,50 @@
     "typeLabel": {
       "linux": "Linux server",
       "nginx": "Nginx server"
+    },
+    "page": {
+      "description": "Know what is connected, what changed, and what needs a closer look.",
+      "total": "in total",
+      "connected": "connected",
+      "identityChanged": "identity changed",
+      "unreachable": "unreachable",
+      "summary": "Connection summary",
+      "vaultsElsewhere": "Azure Key Vaults are listed separately.",
+      "columns": {
+        "server": "Server",
+        "platform": "Platform",
+        "connection": "Connection",
+        "lastConnected": "Last connected"
+      },
+      "openNamed": "Open {{name}}",
+      "never": "Never",
+      "back": "All servers",
+      "subtitle": "{{address}} · {{platform}}",
+      "identityChangedTitle": "This server’s identity has changed",
+      "verifiedTitle": "Connection verified",
+      "verifiedText": "Observed SSH identity matches the pinned fingerprint.",
+      "unreachableTitle": "The last connection attempt failed",
+      "unreachableText": "Inventory reflects the last successful discovery. Check reachability before changing credentials.",
+      "connection": "Connection details",
+      "facts": {
+        "state": "State",
+        "address": "Address",
+        "user": "User on the server",
+        "platform": "Platform",
+        "os": "Operating system",
+        "helper": "alice-helper version",
+        "nginx": "Nginx version",
+        "lastConnected": "Last connected",
+        "lastScan": "Last scan",
+        "discoveryInterval": "Discovery interval",
+        "hostFingerprint": "Host fingerprint",
+        "lastProblem": "Last problem"
+      },
+      "everyHours_one": "Every hour",
+      "everyHours_other": "Every {{count}} hours",
+      "operations": "Available operations",
+      "operationsText": "Alice updates certificate and key files through its restricted helper. Nginx configuration remains under your control.",
+      "readOnly": "Read only"
     }
   },
   "hostKeys": {
