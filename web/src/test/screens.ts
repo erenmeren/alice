@@ -76,6 +76,9 @@ export const SCREENS: Screen[] = [
     status: installedStatus,
     ready: { en: 'Where this key is used', tr: 'Bu anahtarın kullanıldığı yerler' },
   },
+  { path: '/rotations', session: sessionFor('admin'), status: installedStatus, ready: { en: 'No rotation is running.', tr: 'Çalışan rotasyon yok.' } },
+  { path: '/rotations', session: sessionFor('operator'), status: installedStatus, ready: { en: 'No rotation is running.', tr: 'Çalışan rotasyon yok.' } },
+  { path: '/rotations', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'No rotation is running.', tr: 'Çalışan rotasyon yok.' } },
   {
     path: '/rotation/runs/0192e000-0000-7000-8000-0000000000r1',
     session: sessionFor('admin'),
