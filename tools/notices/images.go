@@ -190,7 +190,7 @@ func readRootfs(p string) (rootfs, error) {
 		case tar.TypeSymlink:
 			t := h.Linkname
 			if !strings.HasPrefix(t, "/") {
-				t = path.Join(path.Dir(name), t)
+				t = path.Join(path.Dir(name), t) //nolint:gosec // G305: a lookup key in memory; nothing is written to disk
 			}
 			fs.links[name] = strings.TrimPrefix(path.Clean(t), "/")
 		}
@@ -231,7 +231,7 @@ func commonLicense(id string) string {
 
 func copyleft(ids []string) bool {
 	for _, id := range ids {
-		if strings.Contains(strings.ToUpper(id), "GPL") {
+		if strings.Contains(id, "GPL") { // SPDX identifiers: GPL-*, LGPL-*, AGPL-*
 			return true
 		}
 	}
@@ -241,7 +241,13 @@ func copyleft(ids []string) bool {
 var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
 
 func anchor(ref, p string) string {
-	return "text-" + strings.Trim(slugRe.ReplaceAllString(strings.ToLower(ref+"-"+p), "-"), "-")
+	lower := strings.Map(func(r rune) rune { // ASCII only: image references and paths
+		if r >= 'A' && r <= 'Z' {
+			return r + 'a' - 'A'
+		}
+		return r
+	}, ref+"-"+p)
+	return "text-" + strings.Trim(slugRe.ReplaceAllString(lower, "-"), "-")
 }
 
 func cell(s string) string { return strings.ReplaceAll(s, "|", `\|`) }
