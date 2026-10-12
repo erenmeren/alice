@@ -50,6 +50,8 @@ describe('wizard HTTPS step', () => {
     await userEvent.upload(screen.getByLabelText('Private key file (PEM)'), pem('key file text', 'site.key'));
     await userEvent.click(screen.getByRole('button', { name: 'Upload certificate' }));
     expect(await screen.findByText('The new certificate is in use.')).toBeInTheDocument();
+    // In use, but with warnings: the notice is yellow (warning), not green.
+    expect(screen.getByText('The new certificate is in use.').closest('[role="status"]')?.getAttribute('style')).toContain('--alert-bg: var(--alice-warning-soft)');
     expect(body).toEqual({ cert_pem: 'certificate file text', key_pem: 'key file text' });
     expect(screen.getByText(/None of the names in the certificate matches/)).toBeInTheDocument();
     expect(screen.getByText(/The chain to a trusted authority is incomplete/)).toBeInTheDocument();

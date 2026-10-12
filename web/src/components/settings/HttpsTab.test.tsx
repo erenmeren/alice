@@ -54,6 +54,8 @@ describe('HttpsTab', () => {
     await userEvent.upload(within(form).getByLabelText('Private key file (PEM)'), pem('KEY', 'a.key'));
     await userEvent.click(within(form).getByRole('button', { name: 'Upload certificate' }));
     expect(await screen.findByText('The new certificate is in use.')).toBeInTheDocument();
+    // No warnings: the notice is green (success).
+    expect(screen.getByText('The new certificate is in use.').closest('[role="status"]')?.getAttribute('style')).toContain('--alert-bg: var(--alice-success-soft)');
     expect(body).toEqual({ cert_pem: 'CERT', key_pem: 'KEY' });
     expect(await screen.findByText('Alice is using your own certificate.')).toBeInTheDocument();
     expect(screen.getByText('CN=alice.corp.example')).toBeInTheDocument();
