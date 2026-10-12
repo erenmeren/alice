@@ -70,9 +70,48 @@ func TestLimiterBoundsMemory(t *testing.T) {
 		l.Allow(fmt.Sprintf("ip:%d", i))
 	}
 	assert.LessOrEqual(t, len(l.buckets), maxKeys)
-	c.Advance(time.Hour) // every bucket is full again, so all are evictable
+	for i := 0; len(l.buckets) < maxKeys; i++ {
+		l.Allow(fmt.Sprintf("more:%d", i))
+	}
+	c.Advance(time.Hour) // every bucket is full again, so all are evictable at the next eviction
 	l.Allow("fresh")
 	assert.Len(t, l.buckets, 1)
+}
+
+// Review L-17: a full limiter does not scan every key for each new one. One pass frees maxKeys/10 slots (idle keys first,
+// then the least recently used), so the following new keys need no scan at all.
+func TestLimiterEvictsInBatches(t *testing.T) {
+	c := clock.NewFake(t0)
+	l := New(c, 5, time.Minute)
+	for i := range maxKeys {
+		l.Allow(fmt.Sprintf("ip:%d", i)) // every bucket is below its limit: none is idle
+		c.Advance(time.Millisecond)
+	}
+	require.Len(t, l.buckets, maxKeys)
+	l.Allow("new-0")
+	assert.Len(t, l.buckets, evictTo+1, "one pass makes room for many new keys")
+	assert.NotContains(t, l.buckets, "ip:0", "the least recently used key goes first")
+	assert.Contains(t, l.buckets, fmt.Sprintf("ip:%d", maxKeys-1), "the most recent key stays")
+	for i := 1; i < maxKeys-evictTo; i++ {
+		l.Allow(fmt.Sprintf("new-%d", i))
+	}
+	assert.Len(t, l.buckets, maxKeys, "no eviction until the limiter is full again")
+	ok, _ := l.Allow(fmt.Sprintf("ip:%d", maxKeys-1))
+	assert.True(t, ok, "a kept key keeps its bucket")
+}
+
+func TestLockoutEvictsInBatches(t *testing.T) {
+	c := clock.NewFake(t0)
+	l := NewLockout(c, 5, time.Hour, time.Hour)
+	for i := range maxKeys {
+		l.Fail(fmt.Sprintf("ip:%d", i)) // inside its window: none has expired
+		c.Advance(time.Millisecond)
+	}
+	require.Len(t, l.entries, maxKeys)
+	l.Fail("new")
+	assert.Len(t, l.entries, evictTo+1)
+	assert.NotContains(t, l.entries, "ip:0")
+	assert.Contains(t, l.entries, fmt.Sprintf("ip:%d", maxKeys-1))
 }
 
 func TestLockoutLocksAfterMaxFailures(t *testing.T) {

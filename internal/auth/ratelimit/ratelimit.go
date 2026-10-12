@@ -5,6 +5,7 @@ package ratelimit
 
 import (
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -13,6 +14,30 @@ import (
 
 // maxKeys bounds memory: at most this many keys are tracked per limiter.
 const maxKeys = 10_000
+
+// evictTo is how many keys a full limiter or lockout keeps after an eviction pass. One O(n log n) pass frees
+// maxKeys/10 slots, so a stream of new keys (many IPv6 /64s, say) costs an amortised O(log n) per key under the
+// mutex, not an O(n) scan for every new key (review L-17).
+const evictTo = maxKeys - maxKeys/10
+
+// evictOldest deletes the oldest keys of m (by at) until at most keep remain. The caller holds the lock.
+func evictOldest[V any](m map[string]V, keep int, at func(V) time.Time) {
+	if len(m) <= keep {
+		return
+	}
+	type aged struct {
+		key string
+		at  time.Time
+	}
+	all := make([]aged, 0, len(m))
+	for k, v := range m {
+		all = append(all, aged{k, at(v)})
+	}
+	slices.SortFunc(all, func(a, b aged) int { return a.at.Compare(b.at) })
+	for _, a := range all[:len(m)-keep] {
+		delete(m, a.key)
+	}
+}
 
 // IPKey is the per-address key for limiters and lockouts. IPv4-mapped IPv6
 // addresses count as IPv4, and IPv6 addresses are grouped by /64, the
@@ -103,24 +128,16 @@ func (l *Limiter) refill(b *bucket, now time.Time) {
 	}
 }
 
-// evict drops buckets that have refilled completely (idle keys); if none, the
-// least recently used one. The caller holds l.mu.
+// evict drops buckets that have refilled completely (idle keys), then the least
+// recently used ones until at most evictTo remain. The caller holds l.mu. It does not
+// refill the buckets it keeps, so their last use still orders them.
 func (l *Limiter) evict(now time.Time) {
-	var oldestKey string
-	var oldest time.Time
 	for k, b := range l.buckets {
-		l.refill(b, now)
-		if b.tokens >= l.limit {
+		if b.tokens+now.Sub(b.last).Seconds()*l.limit/l.per.Seconds() >= l.limit {
 			delete(l.buckets, k)
-			continue
-		}
-		if oldestKey == "" || b.last.Before(oldest) {
-			oldestKey, oldest = k, b.last
 		}
 	}
-	if len(l.buckets) >= maxKeys && oldestKey != "" {
-		delete(l.buckets, oldestKey)
-	}
+	evictOldest(l.buckets, evictTo, func(b *bucket) time.Time { return b.last })
 }
 
 // Lockout locks a key for lockFor after maxFailures failures within window.
@@ -200,22 +217,14 @@ func (l *Lockout) Reset() {
 	l.entries = map[string]*entry{}
 }
 
-// evict drops expired entries; if none, the oldest. The caller holds l.mu.
+// evict drops expired entries, then the oldest until at most evictTo remain. The caller holds l.mu.
 func (l *Lockout) evict(now time.Time) {
-	var oldestKey string
-	var oldest time.Time
 	for k, e := range l.entries {
 		if !now.Before(e.lockedUntil) && now.Sub(e.first) >= l.window {
 			delete(l.entries, k)
-			continue
-		}
-		if oldestKey == "" || e.first.Before(oldest) {
-			oldestKey, oldest = k, e.first
 		}
 	}
-	if len(l.entries) >= maxKeys && oldestKey != "" {
-		delete(l.entries, oldestKey)
-	}
+	evictOldest(l.entries, evictTo, func(e *entry) time.Time { return e.first })
 }
 
 func ceilSecond(d time.Duration) time.Duration {
