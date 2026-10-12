@@ -4,11 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// rollbackTimeout bounds InTx's rollback. It runs on a context that the caller's cancellation does not end (a
+// cancelled request still rolls back), so without a bound a connection that no longer answers would hold the caller
+// until the TCP timeout (review L-15). A rollback that times out closes the connection, and PostgreSQL rolls back
+// the transaction of a session that ends.
+var rollbackTimeout = 5 * time.Second
 
 // uniqueViolation is the PostgreSQL SQLSTATE for a duplicate key.
 const uniqueViolation = "23505"
@@ -39,7 +46,9 @@ func InTx(ctx context.Context, pool *pgxpool.Pool, fn func(tx pgx.Tx) error) (er
 		p := recover()
 		if !committed {
 			// Covers errors, panics and runtime.Goexit (t.FailNow inside fn).
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+			rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+			_ = tx.Rollback(rbCtx)
+			cancel()
 		}
 		if p != nil {
 			panic(p)
