@@ -72,6 +72,15 @@ describe('RouteErrorPage', () => {
     expectNoRawKeys();
   });
 
+  it('has one h1 in the form side of the sign-in layout, without the brand side', async () => {
+    await renderWithBrokenRoute('/boom-public');
+    const heading = await screen.findByRole('heading', { level: 1, name: 'Something went wrong' });
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(screen.getByRole('main')).toContainElement(heading);
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+  });
+
   it('is shown in Turkish on a public route too', async () => {
     await renderWithBrokenRoute('/boom-public', ['tr-TR']);
     expect(await screen.findByRole('heading', { level: 1, name: 'Bir sorun oluştu' })).toBeInTheDocument();

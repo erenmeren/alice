@@ -1,6 +1,8 @@
-import { Anchor, Button, Container, Group, Stack, Text, Title } from '@mantine/core';
+import { Anchor, Button } from '@mantine/core';
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { AuthLayout, AuthMessage } from '../components/auth/AuthLayout';
+import { Icon } from '../design/Icon';
 
 // RouteErrorPage is the error element of the top-level route (AUD-25 d): an error thrown while a
 // screen renders shows this page instead of a blank one. It never shows the error itself (its text
@@ -14,17 +16,21 @@ export function RouteErrorPage() {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => heading.current?.focus(), []);
   return (
-    <Container size="sm" mt="xl">
-      <Stack>
-        <Title order={1} ref={heading} tabIndex={-1}>
-          {t('routeError.title')}
-        </Title>
-        <Text>{t('routeError.text')}</Text>
-        <Group>
-          <Button onClick={() => window.location.reload()}>{t('routeError.reload')}</Button>
-          <Anchor href="/">{t('ui.backHome')}</Anchor>
-        </Group>
-      </Stack>
-    </Container>
+    <AuthLayout brand={false}>
+      <AuthMessage
+        icon="CircleAlert"
+        title={t('routeError.title')}
+        text={t('routeError.text')}
+        headingRef={heading}
+        actions={
+          <>
+            <Button onClick={() => window.location.reload()} leftSection={<Icon name="RefreshCw" size={15} />}>
+              {t('routeError.reload')}
+            </Button>
+            <Anchor href="/">{t('ui.backHome')}</Anchor>
+          </>
+        }
+      />
+    </AuthLayout>
   );
 }

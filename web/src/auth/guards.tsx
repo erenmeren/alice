@@ -1,7 +1,8 @@
-import { Center, Loader, Text } from '@mantine/core';
+import { Button, Center, Loader } from '@mantine/core';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Navigate, useLocation } from 'react-router';
+import { Link, Navigate, useLocation } from 'react-router';
+import { AuthMessage } from '../components/auth/AuthLayout';
 import type { Role } from '../api/types';
 import { useAuth } from './AuthProvider';
 import { adminExists } from './setupStatus';
@@ -28,15 +29,25 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
-// RequireRole hides a page from roles that may not use it. The server enforces the same rule.
+// RequireRole hides a page from roles that may not use it. The server enforces the same rule. The no-access view is the
+// design's deniedPage(): the page's <h1> says so, with the way home.
 export function RequireRole({ roles, children }: { roles: Role[]; children: ReactNode }) {
   const { t } = useTranslation();
   const { session } = useAuth();
   if (!session || !roles.includes(session.user.role)) {
+    // role="alert" as before: the refusal is announced when the page is reached through the navigation.
     return (
-      <Text role="alert" mt="xl">
-        {t('ui.noAccess')}
-      </Text>
+      <div role="alert">
+        <AuthMessage
+          icon="ShieldAlert"
+          title={t('ui.noAccess')}
+          actions={
+            <Button component={Link} to="/" variant="default">
+              {t('ui.backHome')}
+            </Button>
+          }
+        />
+      </div>
     );
   }
   return <>{children}</>;

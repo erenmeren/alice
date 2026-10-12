@@ -3,6 +3,7 @@ import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MfaEnrollment } from '../api/types';
 import { ErrorAlert } from './ErrorAlert';
+import auth from './auth/auth.module.css';
 
 interface Props {
   enrollment: MfaEnrollment;
@@ -34,13 +35,16 @@ export function TotpEnrollment({ enrollment, onVerify }: Props) {
       <Stack>
         <Title order={2}>{t('ui.totp.title')}</Title>
         <Text>{t('ui.totp.help')}</Text>
-        <Image
-          src={`data:image/png;base64,${enrollment.qr_png}`}
-          alt={t('ui.totp.qrAlt')}
-          w={200}
-          h={200}
-          fit="contain"
-        />
+        {/* A white tile in both schemes: authenticator apps scan dark-on-light. */}
+        <div className={auth.qrTile}>
+          <Image
+            src={`data:image/png;base64,${enrollment.qr_png}`}
+            alt={t('ui.totp.qrAlt')}
+            w={200}
+            h={200}
+            fit="contain"
+          />
+        </div>
         <Text size="sm">{t('ui.totp.manual')}</Text>
         <Code block data-testid="totp-secret">
           {enrollment.secret}

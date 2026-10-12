@@ -10,6 +10,7 @@ import { errorResponse, sessionFor, sessionHandlers, ssoSessionFor } from '../te
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { StepUpProvider, useStepUp } from './StepUpProvider';
+import ui from './ui/ui.module.css';
 
 function Probe() {
   const { run } = useStepUp();
@@ -292,5 +293,48 @@ describe('StepUpProvider', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('failed: auth.stepup_required'));
     go.mockRestore();
+  });
+
+  it('is the design dialog: the subtitle, the focused code field, Cancel and Confirm in the footer bar, Enter submits', async () => {
+    let body: unknown = null;
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.post('/api/v1/sensitive', () => (body ? HttpResponse.json({}) : errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required'))),
+      http.post('/api/v1/auth/stepup', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(sessionFor('admin'));
+      }),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: "Confirm it's you" });
+    expect(within(dialog).getByText('Fresh identity verification is required for this operation.')).toBeInTheDocument();
+    const field = within(dialog).getByLabelText('6-digit code');
+    await waitFor(() => expect(field).toHaveFocus());
+    const confirm = within(dialog).getByRole('button', { name: 'Confirm' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    const footer = confirm.parentElement!;
+    expect(footer).toBe(cancel.parentElement);
+    expect(footer).toHaveClass(ui.dialogActions);
+    expect(confirm.querySelector('svg')).not.toBeNull();
+    await userEvent.type(field, '123456{Enter}');
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('done'));
+    expect(body).toEqual({ code: '123456' });
+  });
+
+  it('keeps the SSO variant: its continue button has the focus and there is no textbox', async () => {
+    server.use(
+      ...sessionHandlers(ssoSessionFor('admin')),
+      http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [{ id: 'p1', name: 'Corp IdP' }] })),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Confirm at your identity provider' });
+    expect(within(dialog).getByText('Fresh identity verification is required for this operation.')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument();
+    const go = await within(dialog).findByRole('button', { name: 'Continue to Corp IdP' });
+    await waitFor(() => expect(go).toHaveFocus());
+    expect(go.parentElement).toHaveClass(ui.dialogActions);
   });
 });

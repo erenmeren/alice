@@ -1,6 +1,6 @@
-import { Alert, Button, Container, Divider, Group, PasswordInput, Stack, TextInput, Title } from '@mantine/core';
+import { Alert, Button, PasswordInput, Stack, TextInput, Title } from '@mantine/core';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { isApiError } from '../api/client';
@@ -17,7 +17,9 @@ import { safeReturnPath } from '../auth/returnPath';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { RecoveryCodes } from '../components/RecoveryCodes';
 import { TotpEnrollment } from '../components/TotpEnrollment';
-import { LanguageSwitcher } from '../LanguageSwitcher';
+import { AuthLayout } from '../components/auth/AuthLayout';
+import classes from '../components/auth/auth.module.css';
+import { Icon } from '../design/Icon';
 
 type Phase = 'password' | 'mfa' | 'enroll' | 'codes';
 
@@ -58,7 +60,7 @@ function PasswordForm({ onDone, onError }: { onDone: (p: Phase, e?: MfaEnrollmen
           onChange={(e) => setPassword(e.currentTarget.value)}
           autoComplete="current-password"
         />
-        <Button type="submit" loading={busy}>
+        <Button type="submit" loading={busy} fullWidth h={42} rightSection={<Icon name="ArrowRight" size={15} />}>
           {t('login.signIn')}
         </Button>
       </Stack>
@@ -80,14 +82,24 @@ function SSOButtons({ returnTo, onError }: { returnTo: string; onError: (e: unkn
   const items = providers.data?.items ?? [];
   if (items.length === 0) return null;
   return (
-    <Stack gap="xs">
-      <Divider label={t('login.or')} labelPosition="center" styles={{ label: { color: 'var(--mantine-color-gray-7)' } }} />
-      {items.map((p) => (
-        <Button key={p.id} variant="default" loading={start.isPending && start.variables === p.id} onClick={() => start.mutate(p.id)}>
-          {t('login.ssoWith', { name: p.name })}
-        </Button>
-      ))}
-    </Stack>
+    <>
+      <div className={classes.divider}>{t('login.or')}</div>
+      <Stack gap="xs">
+        {items.map((p) => (
+          <Button
+            key={p.id}
+            variant="default"
+            fullWidth
+            h={42}
+            leftSection={<Icon name="Building2" size={15} />}
+            loading={start.isPending && start.variables === p.id}
+            onClick={() => start.mutate(p.id)}
+          >
+            {t('login.ssoWith', { name: p.name })}
+          </Button>
+        ))}
+      </Stack>
+    </>
   );
 }
 
@@ -96,6 +108,9 @@ function MfaForm({ onSession, onError }: { onSession: (s: SessionInfo) => void; 
   const [recovery, setRecovery] = useState(false);
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
+  // The code field takes the focus when the step opens and when the kind of code changes.
+  const field = useRef<HTMLInputElement>(null);
+  useEffect(() => field.current?.focus(), [recovery]);
 
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
@@ -118,6 +133,7 @@ function MfaForm({ onSession, onError }: { onSession: (s: SessionInfo) => void; 
         {recovery ? (
           <TextInput
             key="recovery"
+            ref={field}
             label={t('login.recoveryCode')}
             value={value}
             onChange={(e) => setValue(e.currentTarget.value)}
@@ -127,6 +143,7 @@ function MfaForm({ onSession, onError }: { onSession: (s: SessionInfo) => void; 
         ) : (
           <TextInput
             key="code"
+            ref={field}
             label={t('ui.codeLabel')}
             value={value}
             onChange={(e) => setValue(e.currentTarget.value)}
@@ -135,20 +152,19 @@ function MfaForm({ onSession, onError }: { onSession: (s: SessionInfo) => void; 
             maxLength={6}
           />
         )}
-        <Group justify="space-between">
-          <Button
-            variant="subtle"
-            onClick={() => {
-              setRecovery(!recovery);
-              setValue('');
-            }}
-          >
-            {recovery ? t('login.useApp') : t('login.useRecovery')}
-          </Button>
-          <Button type="submit" loading={busy}>
-            {t('ui.verify')}
-          </Button>
-        </Group>
+        <Button type="submit" loading={busy} fullWidth h={42}>
+          {t('ui.verify')}
+        </Button>
+        <Button
+          variant="subtle"
+          fullWidth
+          onClick={() => {
+            setRecovery(!recovery);
+            setValue('');
+          }}
+        >
+          {recovery ? t('login.useApp') : t('login.useRecovery')}
+        </Button>
       </Stack>
     </form>
   );
@@ -206,12 +222,16 @@ export function LoginPage() {
   };
 
   return (
-    <Container size="xs" my="xl">
+    <AuthLayout wide={phase === 'enroll' || phase === 'codes'}>
+      <span className={classes.iconTile}>
+        <Icon name="Fingerprint" size={16} />
+      </span>
+      {/* One h1 in every phase: the code, enrollment and recovery-code steps add their own h2 below it. */}
+      <Title order={1} size={29} className={classes.heading}>
+        {t('login.title')}
+      </Title>
+      {phase === 'password' ? <p className={classes.subtitle}>{t('login.subtitle')}</p> : <div className={classes.subtitle} />}
       <Stack>
-        <Group justify="flex-end">
-          <LanguageSwitcher />
-        </Group>
-        <Title order={1}>{t('login.title')}</Title>
         {phase === 'password' && params.get('ended') === '1' && !error && (
           <Alert color="yellow">{t('login.sessionEnded')}</Alert>
         )}
@@ -226,11 +246,15 @@ export function LoginPage() {
             }}
           />
         )}
-        {phase === 'password' && <SSOButtons returnTo={returnTo} onError={setError} />}
         {phase === 'mfa' && <MfaForm onSession={finish} onError={onMfaError} />}
         {phase === 'enroll' && enrollment && <TotpEnrollment enrollment={enrollment} onVerify={verifyEnrollment} />}
         {phase === 'codes' && withCodes && <RecoveryCodes codes={withCodes.recovery_codes ?? []} onContinue={() => finish(withCodes)} />}
       </Stack>
-    </Container>
+      {phase === 'password' && <SSOButtons returnTo={returnTo} onError={setError} />}
+      <p className={classes.note}>
+        <Icon name="LockKeyhole" size={14} />
+        {t('login.mfaNote')}
+      </p>
+    </AuthLayout>
   );
 }

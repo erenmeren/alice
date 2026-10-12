@@ -1,6 +1,8 @@
-import { Button, Checkbox, Code, Group, List, Stack, Text, Title } from '@mantine/core';
+import { Button, Checkbox, Group, Stack, Text, Title } from '@mantine/core';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Icon } from '../design/Icon';
+import auth from './auth/auth.module.css';
 
 interface Props {
   codes: string[];
@@ -36,18 +38,21 @@ export function RecoveryCodes({ codes, onContinue }: Props) {
     <Stack>
       <Title order={2}>{t('ui.recoveryCodes.title')}</Title>
       <Text>{t('ui.recoveryCodes.help')}</Text>
-      <List data-testid="recovery-codes" listStyleType="none" spacing={4}>
+      {/* role="list": WebKit drops the list role of a list without bullets. */}
+      <ul data-testid="recovery-codes" className={auth.codes} role="list">
         {codes.map((c) => (
-          <List.Item key={c}>
-            <Code>{c}</Code>
-          </List.Item>
+          <li key={c}>
+            <code className={auth.code} translate="no">
+              {c}
+            </code>
+          </li>
         ))}
-      </List>
+      </ul>
       <Group>
-        <Button variant="default" onClick={() => void copy()}>
+        <Button variant="default" leftSection={<Icon name="Copy" size={15} />} onClick={() => void copy()}>
           {t('ui.recoveryCodes.copy')}
         </Button>
-        <Button variant="default" onClick={download}>
+        <Button variant="default" leftSection={<Icon name="Download" size={15} />} onClick={download}>
           {t('ui.recoveryCodes.download')}
         </Button>
         {copied && (

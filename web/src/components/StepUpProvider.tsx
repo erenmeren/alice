@@ -1,4 +1,4 @@
-import { Button, Group, Stack, Text, TextInput } from '@mantine/core';
+import { Button, Stack, Text, TextInput } from '@mantine/core';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,8 +8,10 @@ import { PUBLIC_PROVIDERS_KEY } from '../api/queryKeys';
 import { listPublicProviders, startSSOStepUp } from '../api/sso';
 import { goTo } from '../navigation';
 import { useAuth } from '../auth/AuthProvider';
+import { Icon } from '../design/Icon';
 import { ErrorAlert } from './ErrorAlert';
 import { AppModal } from './AppModal';
+import { DialogActions } from './ui';
 
 interface StepUpApi {
   // run calls fn; when the server answers auth.stepup_required it asks for a fresh
@@ -153,42 +155,49 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
       {children}
       {/* zIndex above page modals (default 200): step-up often opens on top of an open form dialog. */}
       <AppModal opened={opened} onClose={cancel} title={sso ? t('stepUp.ssoTitle') : t('ui.stepUp.title')} centered zIndex={1000} transitionProps={{ duration: 0 }}>
+        {/* The design's stepUp(): the reason first, the code field, then the footer bar with Cancel and Confirm. */}
         {sso ? (
-          <Stack>
-            <ErrorAlert error={ssoStart.error} />
-            <Group justify="flex-end">
+          <>
+            <Stack>
+              <Text size="sm">{t('ui.stepUp.subtitle')}</Text>
+              <ErrorAlert error={ssoStart.error} />
+            </Stack>
+            <DialogActions>
               <Button variant="default" onClick={cancel}>
                 {t('ui.cancel')}
               </Button>
-              <Button loading={ssoStart.isPending} onClick={() => ssoStart.mutate()} data-autofocus>
+              <Button loading={ssoStart.isPending} onClick={() => ssoStart.mutate()} leftSection={<Icon name="ArrowUpRight" size={15} />} data-autofocus>
                 {t('stepUp.ssoAction', { name: providerName })}
               </Button>
-            </Group>
-          </Stack>
+            </DialogActions>
+          </>
         ) : (
-        <form onSubmit={submit}>
-          <Stack>
-            <Text size="sm">{t('ui.stepUp.help')}</Text>
-            <ErrorAlert error={error} />
-            <TextInput
-              label={t('ui.codeLabel')}
-              value={code}
-              onChange={(e) => setCode(e.currentTarget.value)}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={6}
-              data-autofocus
-            />
-            <Group justify="flex-end">
+          <form onSubmit={submit}>
+            <Stack>
+              <Text size="sm">{t('ui.stepUp.subtitle')}</Text>
+              <Text size="sm" c="dimmed">
+                {t('ui.stepUp.help')}
+              </Text>
+              <ErrorAlert error={error} />
+              <TextInput
+                label={t('ui.codeLabel')}
+                value={code}
+                onChange={(e) => setCode(e.currentTarget.value)}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                maxLength={6}
+                data-autofocus
+              />
+            </Stack>
+            <DialogActions>
               <Button variant="default" onClick={cancel}>
                 {t('ui.cancel')}
               </Button>
-              <Button type="submit" loading={busy}>
+              <Button type="submit" loading={busy} leftSection={<Icon name="ShieldCheck" size={15} />}>
                 {t('ui.stepUp.confirm')}
               </Button>
-            </Group>
-          </Stack>
-        </form>
+            </DialogActions>
+          </form>
         )}
       </AppModal>
     </StepUpContext.Provider>

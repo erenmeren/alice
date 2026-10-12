@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SessionInfo } from '../api/types';
@@ -230,9 +230,17 @@ describe('sign-in page safety', () => {
     expect(screen.getByLabelText('Password')).toHaveValue('');
   });
 
-  it('has a language switcher', async () => {
+  it('has the language toggle, which switches the page to Turkish without a session', async () => {
+    let saved = false;
+    server.use(http.put('/api/v1/auth/locale', () => {
+      saved = true;
+      return new HttpResponse(null, { status: 204 });
+    }));
     await renderRoute('/login');
-    expect(await screen.findByRole('radio', { name: 'Türkçe' })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Türkçe' }));
+    expect(await screen.findByRole('heading', { level: 1, name: "Alice'e giriş yapın" })).toBeInTheDocument();
+    expect(screen.getByText('Alice hesabınızla giriş yapın.')).toBeInTheDocument();
+    expect(saved).toBe(false);
   });
 
   describe('single sign-on', () => {
@@ -313,5 +321,57 @@ describe('sign-in page safety', () => {
       await screen.findByRole('button', { name: 'Sign in' });
       expect(screen.queryByText('or')).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('sign-in page design', () => {
+  it('has the split layout: one h1 in the form side, the subtitle, one "Sign in" button, SSO under the divider and the MFA note', async () => {
+    server.use(
+      ...sessionHandlers(null),
+      http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [{ id: 'p1', name: 'Corp IdP' }] })),
+    );
+    await renderRoute('/login');
+    await screen.findByRole('button', { name: 'Sign in with Corp IdP' });
+    const main = screen.getByRole('main');
+    expect(screen.getAllByRole('main')).toHaveLength(1);
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(within(main).getByRole('heading', { level: 1, name: 'Sign in to Alice' })).toBeInTheDocument();
+    expect(within(main).getByText('Sign in with your Alice account.')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Sign in' })).toHaveLength(1);
+    expect(within(main).getByText('Protected with multi-factor authentication')).toBeInTheDocument();
+    expect(within(main).getByRole('button', { name: 'Switch color mode' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Alice' })).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('keeps one h1 in the code step and widens the form for the enrollment', async () => {
+    server.use(...loginHandlers('mfa_required', () => HttpResponse.json(sessionFor('operator'))));
+    await renderRoute('/login');
+    await signIn();
+    expect(await screen.findByRole('heading', { level: 2, name: 'Enter your verification code' })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.queryByText('Sign in with your Alice account.')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('6-digit code')).toHaveFocus();
+  });
+
+  it('shows the enrollment in the wide form, keeps it after a wrong code and finishes without codes to show', async () => {
+    let tries = 0;
+    server.use(
+      ...loginHandlers('mfa_enrollment_required', () =>
+        ++tries === 1 ? errorResponse(401, 'ALC-AUTH-0006', 'auth.mfa_invalid') : HttpResponse.json(sessionFor('operator')),
+      ),
+    );
+    const { router } = await renderRoute('/login');
+    await signIn();
+    const heading = await screen.findByRole('heading', { name: 'Set up your authenticator app' });
+    expect(heading.closest('[data-wide]')).not.toBeNull();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    await userEvent.type(screen.getByLabelText('6-digit code'), '000000');
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The verification code is not correct.');
+    await userEvent.clear(screen.getByLabelText('6-digit code'));
+    await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
   });
 });

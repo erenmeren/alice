@@ -1,7 +1,8 @@
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../test/render';
 import { RecoveryCodes } from './RecoveryCodes';
+import auth from './auth/auth.module.css';
 
 const codes = ['AAAA-BBBB-CCCC-DDDD', 'EEEE-FFFF-GGGG-HHHH'];
 
@@ -35,5 +36,23 @@ describe('RecoveryCodes', () => {
       click.mockRestore();
       vi.unstubAllGlobals();
     }
+  });
+
+  it('shows the ten codes in a mono grid and continues only after the codes are saved', async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `AAAA-BBBB-CCCC-000${i}`);
+    const onContinue = vi.fn();
+    await renderApp(<RecoveryCodes codes={ten} onContinue={onContinue} />);
+    const list = screen.getByTestId('recovery-codes');
+    expect(list).toHaveClass(auth.codes);
+    expect(within(list).getAllByRole('listitem')).toHaveLength(10);
+    expect(list.textContent!.match(/[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/g)).toEqual(ten);
+    const next = screen.getByRole('button', { name: 'Continue' });
+    expect(next).toBeDisabled();
+    await userEvent.click(screen.getByLabelText('I saved these codes in a safe place'));
+    expect(next).toBeEnabled();
+    await userEvent.click(next);
+    expect(onContinue).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Copy codes' }).querySelector('svg')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Download codes' }).querySelector('svg')).not.toBeNull();
   });
 });

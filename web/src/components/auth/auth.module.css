@@ -1,0 +1,65 @@
+/* The Clarity design's sign-in layout (alice-design/dist/styles.css .auth-*), also used by the not-found and error
+   pages (form side only) and by the authenticator enrollment and recovery codes. The brand side keeps its fixed
+   colors in both schemes, as the design does (--alice-auth-brand-*). */
+.layout { min-height: 100vh; min-height: 100dvh; display: grid; grid-template-columns: 1.05fr 1fr; background: var(--alice-surface); color: var(--alice-text); }
+.single { min-height: 100vh; min-height: 100dvh; display: grid; grid-template-columns: minmax(0, 1fr); background: var(--alice-surface); color: var(--alice-text); }
+
+.brandSide { position: relative; overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; padding: 50px 55px; background: var(--alice-auth-brand-bg); color: var(--alice-auth-brand-text); }
+.brand { display: flex; align-items: center; gap: 9px; font-size: 29px; font-weight: 650; letter-spacing: -1.8px; line-height: 1.2; }
+.brandMark { width: 30px; height: 30px; }
+.brandDot { color: var(--alice-auth-brand-muted); }
+.copy { position: relative; z-index: 1; max-width: 500px; margin: 90px 0; }
+.eyebrow { margin: 0 0 25px; font-family: var(--mantine-font-family-monospace); font-size: 10px; font-weight: 500; letter-spacing: 1.3px; text-transform: uppercase; color: var(--alice-auth-brand-muted); }
+.tagline { margin: 0; max-width: 520px; font-size: 52px; font-weight: 500; letter-spacing: -2.5px; line-height: 1.1; color: var(--alice-auth-brand-text); }
+.text { margin: 23px 0 0; max-width: 380px; font-size: 14px; line-height: 1.8; color: var(--alice-auth-brand-muted); }
+.orbit { position: absolute; right: -150px; bottom: 30px; width: 490px; height: 490px; border: 1px solid var(--alice-auth-brand-line); border-radius: 50%; }
+.orbit::before, .orbit::after { content: ''; position: absolute; border: 1px solid var(--alice-auth-brand-line); border-radius: 50%; }
+.orbit::before { inset: 45px; }
+.orbit::after { inset: 95px; }
+.brandFooter { position: relative; z-index: 1; display: flex; flex-wrap: wrap; gap: 0; margin: 0; padding: 0; list-style: none; font-size: 10px; color: var(--alice-auth-brand-muted); }
+.brandFooter li + li::before { content: '·'; margin-inline: 18px; }
+
+.formSide { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; padding: 80px 50px 50px; }
+.top { position: absolute; top: 30px; right: 30px; display: flex; align-items: center; gap: 10px; }
+.form { width: 100%; max-width: 350px; min-width: 0; }
+.form[data-wide] { max-width: 420px; }
+
+/* Form side content (sign-in phases, not-found, error and no-access messages). */
+.iconTile { width: 30px; height: 34px; display: grid; place-items: center; flex-shrink: 0; border-radius: 6px; background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
+.heading { margin-top: 22px; overflow-wrap: anywhere; }
+.subtitle { margin: 9px 0 30px; font-size: 12px; color: var(--alice-text-secondary); }
+.divider { display: flex; align-items: center; gap: 14px; margin: 22px 0; font-size: 10px; color: var(--alice-text-muted); }
+.divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--alice-border); }
+.note { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 24px 0 0; font-size: 10px; color: var(--alice-text-muted); }
+.message { text-align: center; padding: 24px 0; }
+.message .iconTile { margin: 0 auto; width: 48px; height: 52px; }
+.messageText { margin: 9px auto 22px; max-width: 330px; font-size: 12px; color: var(--alice-text-secondary); }
+.actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
+
+/* The QR code stays dark on white in both schemes: authenticator apps scan dark-on-light. */
+.qrTile { align-self: flex-start; display: inline-block; padding: 12px; border-radius: 10px; background: #ffffff; border: 1px solid var(--alice-border); }
+
+/* Recovery codes: a two-column mono grid on the subtle surface. */
+.codes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; padding: 16px; list-style: none; border: 1px solid var(--alice-border); border-radius: 8px; background: var(--alice-surface-subtle); }
+.code { font-family: var(--mantine-font-family-monospace); font-size: 13px; color: var(--alice-text); overflow-wrap: anywhere; }
+
+@media (max-width: 1199px) {
+  .tagline { font-size: 43px; }
+}
+
+@media (max-width: 1020px) {
+  .brandSide { padding: 35px; }
+  .formSide { padding: 80px 35px 35px; }
+}
+
+@media (max-width: 767px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .brandSide { display: none; }
+  .formSide { min-height: 100dvh; padding: 65px 16px 28px; }
+  .top { top: 16px; right: 16px; }
+  .form { max-width: 370px; }
+}
+
+@media (max-width: 420px) {
+  .codes { grid-template-columns: minmax(0, 1fr); }
+}
