@@ -2513,6 +2513,36 @@ func TestUpdateAndRestoreTakeTheLock(t *testing.T) {
 	assert.Equal(t, 0, r.code, r.out)
 }
 
+// Final review B M-4: --uninstall and --uninstall --purge take the same lock as an update or a
+// restore; while it is held they stop nothing and delete nothing.
+func TestUninstallTakesTheLock(t *testing.T) {
+	t.Parallel()
+	for _, purge := range []bool{false, true} {
+		t.Run(fmt.Sprintf("purge=%v", purge), func(t *testing.T) {
+			t.Parallel()
+			e := shNewInstalled(t, "1.0.0-rc.2")
+			f, err := os.OpenFile(filepath.Join(e.inst, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+			require.NoError(t, err)
+			require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB))
+			args := []string{"--dir", e.inst, "--uninstall"}
+			if purge {
+				args = append(args, "--purge", "--confirm", "DELETE")
+			}
+			before := e.snapshot()
+			r := e.run("", filepath.Join(e.inst, "install.sh"), args...)
+			assert.Equal(t, 1, r.code, r.out)
+			assert.Contains(t, r.out, "[FAIL] Another update or restore of Alice is running in "+e.inst+".")
+			assert.Empty(t, e.dockerCalls(), "nothing ran while the lock was held")
+			assert.Equal(t, before, e.snapshot())
+
+			require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_UN))
+			require.NoError(t, f.Close())
+			r = e.run("", filepath.Join(e.inst, "install.sh"), args...)
+			assert.Equal(t, 0, r.code, r.out)
+		})
+	}
+}
+
 // TestUpdateKeepsTheReleaseKeysWhenTheSwapFails: the new release-keys/ is written completely and
 // renamed into place; when that rename fails the installed keys are still there.
 func TestUpdateKeepsTheReleaseKeysWhenTheSwapFails(t *testing.T) {

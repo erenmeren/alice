@@ -279,3 +279,6 @@ sudo /opt/alice/install.sh --uninstall --purge
 The installer asks `This deletes <dir> with all data and backups. Type DELETE to continue: ` (with `/opt/alice` for `<dir>`). Anything but
 `DELETE` prints `Nothing was deleted.` For a script, add `--confirm DELETE`. The loaded Docker images stay; remove
 them with `sudo docker image rm` if you need the space.
+
+Neither runs while an update or a restore is running: they stop with
+`[FAIL] Another update or restore of Alice is running in /opt/alice. Wait until it has finished, then run this again.`

@@ -556,6 +556,11 @@ uninstall_alice() {
       exit 1
     fi
   fi
+  # The lock of an update or restore (final review B M-4): never stop or delete under one.
+  if ! alice_lock; then
+    alice_lock_busy "[FAIL] "
+    exit 1
+  fi
   alice_compose down
   if ((purge == 1)); then
     rm -rf -- "$dir"
