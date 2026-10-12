@@ -33,7 +33,10 @@ cd /opt/alice && sudo ./alice-update.sh /root/alice-1.0.1.tar.gz
 
 The installation directory can be read by root only: open a root shell first (`sudo -i`), or run
 `sudo /opt/alice/alice-update.sh /root/alice-1.0.1.tar.gz`, which does the same (the script always works on the
-installation it belongs to). The script also accepts an extracted package directory instead of the tarball.
+installation it belongs to). The script also accepts an extracted package instead of the tarball: the directory
+you extracted it into as in [install-guide.md](install-guide.md#4-extract-and-install) (`/root/alice-1.0.1`), or the
+`alice` directory inside it (`/root/alice-1.0.1/alice`). Check the tarball as in the install guide before you extract
+it: an extracted package has no `.sha256` file, so only the signature over the files inside it is checked.
 
 Type the recovery passphrase at `Recovery passphrase (needed for the automatic backup): `.
 

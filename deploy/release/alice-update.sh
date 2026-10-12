@@ -187,6 +187,15 @@ recover_release_keys() {
   fi
 }
 
+# package_dir accepts the directory a tarball was extracted into (tar -C /root/alice-1.0.1, as in
+# install-guide.md) as well as its alice/ directory itself (final review B M-8): a directory without
+# a RELEASE file but with an alice/ directory (not a link) stands for that alice/.
+package_dir() {
+  if [[ -d "$package_arg" && ! -e "$package_arg/RELEASE" && -d "$package_arg/alice" && ! -L "$package_arg/alice" ]]; then
+    package_arg="${package_arg%/}/alice"
+  fi
+}
+
 # intake_space refuses before the copy when the installation's file system lacks room for the
 # package copy and its extraction: 3 × the package's size + 1 GiB (final review B M-1). The copy
 # would otherwise fill the disk under the running database. preflight checks the exact need for
@@ -304,6 +313,7 @@ preflight() {
   alice_valid_zone "$env_zone" || env_zone=UTC
   recover_release_keys
 
+  package_dir
   intake_space
   intake
   new=$rel_version

@@ -1525,6 +1525,18 @@ func TestUpdateAcceptsEitherImageIdentifier(t *testing.T) {
 	}
 }
 
+// Final review B M-8: the directory that install-guide.md extracts the tarball into
+// (tar -C /root/alice-1.0.1, which holds alice/) is accepted as well as alice/ itself; only the
+// alice/ inside it is copied and verified.
+func TestUpdateAcceptsTheExtractionDirectory(t *testing.T) {
+	t.Parallel()
+	e := shNewInstalled(t, "1.0.0-rc.2")
+	pkg := e.pkg(shPkgOpts{version: "1.0.0"})
+	r := e.update(filepath.Dir(pkg))
+	require.Equal(t, 0, r.code, r.out)
+	assert.Contains(t, r.out, "Alice is now version 1.0.0.\n")
+}
+
 func TestUpdateVerifiesACopy(t *testing.T) {
 	t.Parallel()
 	e := shNewInstalled(t, "1.0.0-rc.2")
