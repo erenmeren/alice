@@ -58,7 +58,8 @@ describe('DeploymentDetailPage', () => {
     const sequence = screen.getByRole('heading', { level: 2, name: 'Deployment sequence' });
     expect(notice.compareDocumentPosition(sequence) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const seqPanel = sequence.closest('section') as HTMLElement;
-    expect(seqPanel).toHaveTextContent('Changes are verified before an operation is marked complete.');
+    // The subtitle is true of every deployment, including one whose verification was skipped.
+    expect(seqPanel).toHaveTextContent('Each step shows its own result. A step that did not run is never shown as done.');
     expect(within(seqPanel).getByRole('list', { name: 'Steps' })).toBeInTheDocument();
     // Operation details.
     const details = screen.getByRole('heading', { level: 2, name: 'Operation details' }).closest('section') as HTMLElement;
@@ -88,6 +89,8 @@ describe('DeploymentDetailPage', () => {
     expect(within(screen.getByLabelText('Operation details')).getByText('Skipped')).toBeInTheDocument();
     expect(screen.getByText('The new certificate was deployed and Nginx was reloaded.')).toBeInTheDocument();
     expect(screen.queryByText('The new certificate is live and verified.')).not.toBeInTheDocument();
+    // Nothing on the page promises a verification that did not happen.
+    expect(document.body).not.toHaveTextContent(/verified before/i);
   });
 
   it('shows a rollback with the failed step, the cause and the verification failure', async () => {
