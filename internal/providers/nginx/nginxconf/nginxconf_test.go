@@ -741,3 +741,92 @@ func TestSectionsReachedByAnInclude(t *testing.T) {
 	assert.False(t, c.Sections[1].Included)
 	assert.True(t, c.Sections[2].Included)
 }
+
+// nginx expands include patterns with glob(3), where "[!...]" negates a set (review-fixes L-9). Go's filepath.Match
+// read "!" as a member, so the sections were not reached and the helper refused the configuration as changed.
+func TestIncludeGlobNegation(t *testing.T) {
+	dump := "# configuration file /etc/nginx/nginx.conf:\nhttp { include conf.d/[!_]*.conf; include x/[^_]*.conf; }\n\n" +
+		"# configuration file /etc/nginx/conf.d/a.conf:\nserver { listen 443 ssl; ssl_certificate /etc/a.crt; ssl_certificate_key /etc/a.key; }\n\n" +
+		"# configuration file /etc/nginx/x/b.conf:\n\n"
+	c, err := Parse([]byte(dump), "/etc/nginx")
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, s := range c.Sections {
+		got[s.File] = s.Included
+	}
+	assert.Equal(t, map[string]bool{"/etc/nginx/nginx.conf": false, "/etc/nginx/conf.d/a.conf": true, "/etc/nginx/x/b.conf": true}, got)
+	require.Len(t, c.Servers, 1)
+}
+
+func TestSegMatchIsGlob3(t *testing.T) {
+	for _, c := range []struct {
+		pat, name string
+		want      bool
+	}{
+		{"[!_]*.conf", "a.conf", true},
+		{"[!_]*.conf", "_a.conf", false},
+		{"[^_]*.conf", "_a.conf", false},
+		{"[^_]*.conf", "b.conf", true},
+		{"[!]]x", "ax", true},
+		{"[!]]x", "]x", false},
+		{"[]]x", "]x", true},
+		{"[]-a]x", "^x", true}, // a range from ']' to 'a'
+		{"[a-c]", "b", true},
+		{"[a-c]", "d", false},
+		{"[!a-c]", "d", true},
+		{"[a-]", "-", true},
+		{"[\\]]", "]", true},
+		{"[a\\-c]", "b", false},
+		{"[a\\-c]", "-", true},
+		{"\\*", "*", true},
+		{"\\*", "a", false},
+		{"[ab", "[ab", true}, // no closing ']': a literal '['
+		{"[ab", "a", false},
+		{"*", ".hidden", false},
+		{"?hidden", ".hidden", false},
+		{"[!_]hidden", ".hidden", false},
+		{".*", ".hidden", true},
+		{"a*b*c", "aXbYbZc", true},
+		{"a*b*c", "aXbYbZ", false},
+		{"*.conf", "a.conf.bak", false},
+		{"?", "é", false}, // one byte in the C locale nginx runs in
+		{"??", "é", true},
+		{"[[:alpha:]]x", "ax", false}, // character classes are not supported: no match (fail closed)
+		{"", "", true},
+		{"", "a", false},
+	} {
+		assert.Equal(t, c.want, segMatch(c.pat, c.name), "%q ~ %q", c.pat, c.name)
+	}
+}
+
+// FuzzSegMatch: never panics, and on ASCII without sets or escapes it agrees with filepath.Match, which is right for
+// '*' and '?' (the leading-dot rule aside).
+func FuzzSegMatch(f *testing.F) {
+	f.Add("[!_]*.conf", "a.conf")
+	f.Add("[^_]*.conf", "_a.conf")
+	f.Add("[!]]x", "]x")
+	f.Add("[]-a]x", "^x")
+	f.Add("[\\]]*", "]a")
+	f.Add("[ab", "[ab")
+	f.Add("a*b*c?", "aXbYbZcQ")
+	f.Add("*", ".hidden")
+	f.Fuzz(func(t *testing.T, pat, name string) {
+		got := segMatch(pat, name)
+		ascii := func(s string) bool {
+			for i := range len(s) {
+				if s[i] >= 0x80 {
+					return false
+				}
+			}
+			return true
+		}
+		if !ascii(pat) || !ascii(name) || strings.ContainsAny(pat, "[\\/") || strings.Contains(name, "/") ||
+			strings.HasPrefix(name, ".") || len(pat) > maxSegment || len(name) > maxSegment {
+			return
+		}
+		want, err := filepath.Match(pat, name)
+		if err == nil && got != want {
+			t.Fatalf("segMatch(%q, %q) = %v, filepath.Match = %v", pat, name, got, want)
+		}
+	})
+}

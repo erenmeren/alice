@@ -34,6 +34,8 @@ func FuzzParseNginxConfig(f *testing.F) {
 	f.Add([]byte(inheritedPairs(4, 3, true)))      // A2-I2: shared http-level file sets
 	f.Add([]byte(ownKeysPairs(3, 2)))              // A2-I2: inherited certificates, own keys
 	f.Add([]byte(inheritedPairs(300, 300, false))) // A2-I2: over the pair budget
+	f.Add([]byte("# configuration file /etc/nginx/nginx.conf:\nhttp { include conf.d/[!_]*.conf; include c/[]!-]?[^a-c\\]].conf; include d/[x; }\n" +
+		"# configuration file /etc/nginx/conf.d/a.conf:\nserver { listen 443 ssl; ssl_certificate /a; ssl_certificate_key /b; }\n")) // L-9: glob(3) sets
 	f.Fuzz(func(t *testing.T, in []byte) {
 		c1, err1 := Parse(in, "/etc/nginx")
 		c2, err2 := Parse(in, "/etc/nginx")

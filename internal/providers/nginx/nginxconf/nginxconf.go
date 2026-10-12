@@ -722,8 +722,13 @@ func (e *expander) reached() ([]bool, error) {
 	return out, nil
 }
 
-// segMatch matches one path segment like glob(3): a leading '.' of the name is matched only by a
-// literal '.' of the pattern, never by *, ? or [.
+// segMatch matches one path segment like glob(3) in the C locale nginx runs in (it sets no locale): '*'
+// matches any bytes, '?' one byte, "[...]" one byte of a set, negated by a leading '!' or '^', with
+// ranges and a leading ']' as a member; '\' quotes the next byte, also inside a set; a '[' without its
+// ']' is a literal '['. A leading '.' of the name is matched only by a literal '.' of the pattern,
+// never by *, ? or [. Character classes, equivalence classes and collating symbols ("[:", "[=", "[.")
+// are not supported: such a pattern matches nothing, and the configuration is then reported changed
+// (fail closed). filepath.Match differs on "[!...]" (review-fixes L-9).
 func segMatch(pat, name string) bool {
 	if len(pat) > maxSegment || len(name) > maxSegment {
 		return false
@@ -731,8 +736,98 @@ func segMatch(pat, name string) bool {
 	if strings.IndexByte("*?[", firstByte(pat)) >= 0 && strings.HasPrefix(name, ".") {
 		return false
 	}
-	ok, err := filepath.Match(pat, name)
-	return err == nil && ok
+	if strings.Contains(pat, "[:") || strings.Contains(pat, "[=") || strings.Contains(pat, "[.") {
+		return false
+	}
+	// Every unit but '*' matches exactly one byte, so backtracking to the last '*' is enough:
+	// O(len(pat)*len(name)), which match's work budget already charges.
+	p, n, starP, starN := 0, 0, -1, 0
+	for n < len(name) {
+		if p < len(pat) && pat[p] == '*' {
+			starP, starN = p, n
+			p++
+			continue
+		}
+		if p < len(pat) {
+			if ok, next := globUnit(pat, p, name[n]); ok {
+				p, n = next, n+1
+				continue
+			}
+		}
+		if starP < 0 {
+			return false
+		}
+		starN++
+		p, n = starP+1, starN
+	}
+	for p < len(pat) && pat[p] == '*' {
+		p++
+	}
+	return p == len(pat)
+}
+
+// globUnit matches the one-byte unit of pat at p (not '*') against b and returns the index after it.
+func globUnit(pat string, p int, b byte) (bool, int) {
+	switch pat[p] {
+	case '?':
+		return true, p + 1
+	case '\\':
+		if p+1 < len(pat) {
+			return pat[p+1] == b, p + 2
+		}
+		return b == '\\', p + 1
+	case '[':
+		if ok, next, closed := globSet(pat, p, b); closed {
+			return ok, next
+		}
+		return b == '[', p + 1 // no closing ']': a literal '['
+	}
+	return pat[p] == b, p + 1
+}
+
+// globSet matches the bracket expression of pat starting at p ('[') against b. closed is false when
+// the expression has no closing ']'.
+func globSet(pat string, p int, b byte) (ok bool, next int, closed bool) {
+	i := p + 1
+	negate := i < len(pat) && (pat[i] == '!' || pat[i] == '^')
+	if negate {
+		i++
+	}
+	in := false
+	for first := true; ; first = false {
+		if i >= len(pat) {
+			return false, 0, false
+		}
+		if pat[i] == ']' && !first {
+			return in != negate, i + 1, true
+		}
+		lo, j := setByte(pat, i)
+		if j < 0 {
+			return false, 0, false
+		}
+		hi := lo
+		if j+1 < len(pat) && pat[j] == '-' && pat[j+1] != ']' {
+			if hi, j = setByte(pat, j+1); j < 0 {
+				return false, 0, false
+			}
+		}
+		if lo <= b && b <= hi {
+			in = true
+		}
+		i = j
+	}
+}
+
+// setByte reads one member byte of a set at i, a '\' quoting the next one; it returns the index after
+// it, or -1 at the end of the pattern.
+func setByte(pat string, i int) (byte, int) {
+	if pat[i] == '\\' {
+		if i+1 >= len(pat) {
+			return 0, -1
+		}
+		return pat[i+1], i + 2
+	}
+	return pat[i], i + 1
 }
 
 func firstByte(s string) byte {
