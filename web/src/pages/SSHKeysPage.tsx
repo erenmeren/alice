@@ -58,6 +58,9 @@ export function SSHKeysPage() {
     getNextPageParam: (last) => last.next_cursor,
   });
   const items = keys.data?.pages.flatMap((p) => p.items) ?? [];
+  // The weak-key notice is not shown on an empty inventory (no key to review) nor when the weak filter is already on
+  // (its link would lead to the page already shown).
+  const showWeakNotice = filters.flag !== 'weak' && !(keys.isSuccess && items.length === 0 && !filtered);
 
   const toolbar = (
     <>
@@ -134,17 +137,19 @@ export function SSHKeysPage() {
       />
       <LinkTabs items={SSH_KEY_TABS(t)} label={t('sshKeys.page.sections')} />
       {/* No count: the list is cursor-paged, so the number of weak keys is unknown here (R20). */}
-      <Notice
-        tone="warning"
-        title={t('sshKeys.page.weakTitle')}
-        action={
-          <Anchor component={Link} to="/ssh-keys?flag=weak" c="inherit" underline="always" size="sm">
-            {t('sshKeys.page.showWeak')}
-          </Anchor>
-        }
-      >
-        {t('sshKeys.page.weakText')}
-      </Notice>
+      {showWeakNotice && (
+        <Notice
+          tone="warning"
+          title={t('sshKeys.page.weakTitle')}
+          action={
+            <Anchor component={Link} to="/ssh-keys?flag=weak" c="inherit" underline="always" size="sm">
+              {t('sshKeys.page.showWeak')}
+            </Anchor>
+          }
+        >
+          {t('sshKeys.page.weakText')}
+        </Notice>
+      )}
       <ErrorAlert error={keys.error} />
       {/* The design's table panel (ResourceTable look); the toolbar stays mounted whether rows or an empty state follow,
           so the search box keeps its focus while a person types a search without matches. */}

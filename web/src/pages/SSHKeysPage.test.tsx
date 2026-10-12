@@ -111,6 +111,8 @@ describe('SSHKeysPage', () => {
     expect(await screen.findByText('No SSH keys yet')).toBeInTheDocument();
     expect(screen.getByText('Alice lists the keys it finds when it scans a server, and the keys you generate.')).toBeInTheDocument();
     expect(screen.queryByText('No matching keys')).not.toBeInTheDocument();
+    // An empty inventory has no weak key to review.
+    expect(screen.queryByText('Weak keys need review')).not.toBeInTheDocument();
   });
 
   it('has the design header with Export and Generate key, and the link tabs to the rotation policies', async () => {
@@ -149,6 +151,8 @@ describe('SSHKeysPage', () => {
     await userEvent.click(link);
     await waitFor(() => expect(router.state.location.search).toBe('?flag=weak'));
     expect(screen.getByLabelText('Finding')).toHaveValue('weak');
+    // The weak filter is on: the notice would only link to the page already shown.
+    expect(screen.queryByText('Weak keys need review')).not.toBeInTheDocument();
   });
 
   it('shows each row as the design resource and states only how many rows are shown', async () => {
