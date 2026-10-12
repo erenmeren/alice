@@ -13,6 +13,7 @@ import { AppModal } from './AppModal';
 import { CodeText } from './CodeText';
 import { DeploymentErrorAlert } from './DeploymentView';
 import { ErrorAlert } from './ErrorAlert';
+import { DialogActions } from './ui';
 import { InternalLink } from './InternalLink';
 import { LoadingIndicator } from './LoadingIndicator';
 import { BlockedJobAlert, StillWorkingAlert } from './JobErrorAlert';
@@ -118,10 +119,14 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
           {lateTimeout && <StillWorkingAlert textKey="imports.stillWorking" />}
           {late !== null && <ErrorAlert error={late} />}
           {result && <ImportOutcome result={result} />}
-          <Group justify="flex-end">
-            {result?.state === 'failed' && result.can_retry && <Button variant="default" onClick={reset}>{t('imports.retry')}</Button>}
+          <DialogActions>
+            {result?.state === 'failed' && result.can_retry && (
+              <Button variant="default" onClick={reset}>
+                {t('imports.retry')}
+              </Button>
+            )}
             <Button onClick={onClose}>{t('ui.close')}</Button>
-          </Group>
+          </DialogActions>
         </Stack>
       ) : (
         <form
@@ -131,7 +136,9 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
           }}
         >
           <Stack gap="sm">
-            <Text size="sm">{t('imports.privateKeyNote')}</Text>
+            <Text size="sm" c="dimmed">
+              {t('imports.privateKeyNote')}
+            </Text>
             {vaults.isPending && <LoadingIndicator />}
             <ErrorAlert error={vaults.error} />
             {vaults.isSuccess && usable.length === 0 && (
@@ -182,15 +189,15 @@ export function ImportToKeyVaultDialog({ certificate, onClose }: { certificate: 
               </Alert>
             )}
             <ErrorAlert error={error} />
-            <Group justify="flex-end">
-              <Button variant="default" disabled={busy} onClick={onClose}>
-                {t('ui.cancel')}
-              </Button>
-              <Button type="submit" loading={busy} disabled={!valid || chosen === '' || (confirm !== null && !agreed)}>
-                {t('imports.action')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" disabled={busy} onClick={onClose}>
+              {t('ui.cancel')}
+            </Button>
+            <Button type="submit" loading={busy} disabled={!valid || chosen === '' || (confirm !== null && !agreed)}>
+              {t('imports.action')}
+            </Button>
+          </DialogActions>
         </form>
       )}
     </AppModal>

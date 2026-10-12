@@ -1,4 +1,4 @@
-import { Alert, Button, Card, Code, Group, Stack, Table, Text, Textarea, Title } from '@mantine/core';
+import { Alert, Button, Code, Group, Stack, Table, Text, Textarea } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -11,6 +11,7 @@ import { formatDateTime } from '../datetime';
 import { AppModal } from './AppModal';
 import { CSRPem } from './CSRPem';
 import { ErrorAlert } from './ErrorAlert';
+import { DialogActions, Panel } from './ui';
 import { UploadWarnings } from './UploadWarnings';
 import { WRAP } from './wrap';
 
@@ -73,9 +74,9 @@ function CompleteDialog({
             {t('certificates.csr.completed')}
           </Alert>
           <UploadWarnings warnings={result.warnings} />
-          <Group justify="flex-end">
+          <DialogActions>
             <Button onClick={close}>{t('ui.close')}</Button>
-          </Group>
+          </DialogActions>
         </Stack>
       ) : (
         <form onSubmit={(ev) => void submit(ev)} noValidate>
@@ -95,15 +96,15 @@ function CompleteDialog({
               styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
             />
             <ErrorAlert error={error} />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={onClose}>
-                {t('certificates.cancel')}
-              </Button>
-              <Button type="submit" loading={busy}>
-                {t('certificates.csr.completeSubmit')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={onClose}>
+              {t('certificates.cancel')}
+            </Button>
+            <Button type="submit" loading={busy}>
+              {t('certificates.csr.completeSubmit')}
+            </Button>
+          </DialogActions>
         </form>
       )}
     </AppModal>
@@ -120,10 +121,10 @@ function ShowDialog({ csr, onClose }: { csr: CSR; onClose: () => void }) {
           {namesOf(csr)}
         </Code>
         <CSRPem csr={csr} />
-        <Group justify="flex-end">
-          <Button onClick={onClose}>{t('ui.close')}</Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button onClick={onClose}>{t('ui.close')}</Button>
+      </DialogActions>
     </AppModal>
   );
 }
@@ -152,16 +153,16 @@ function CancelDialog({ csr, onClose, onCancelled }: { csr: CSR; onClose: () => 
         <Text size="sm">{t('certificates.csr.cancelHelp')}</Text>
         <Code translate="no" style={WRAP}>{namesOf(csr)}</Code>
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
-          <Button variant="default" data-autofocus onClick={onClose}>
-            {t('certificates.csr.keep')}
-          </Button>
-          {/* red 9: white text 5.4:1 (WCAG AA). */}
-          <Button color="red.9" loading={busy} onClick={() => void confirm()}>
-            {t('certificates.csr.cancelRequest')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" data-autofocus onClick={onClose}>
+          {t('certificates.csr.keep')}
+        </Button>
+        {/* The danger tone's filled pair (tokens.test.ts holds it at 4.5:1 in both schemes). */}
+        <Button color="red" loading={busy} onClick={() => void confirm()}>
+          {t('certificates.csr.cancelRequest')}
+        </Button>
+      </DialogActions>
     </AppModal>
   );
 }
@@ -184,56 +185,51 @@ export function PendingCSRs({ canOperate, onCompleted }: { canOperate: boolean; 
     <>
       <ErrorAlert error={list.error} />
       {pending.length > 0 && (
-        <Card withBorder padding="md" data-testid="pending-csrs">
-          <Stack gap="xs">
-            <Title order={2} size="h3">
-              {t('certificates.csr.pendingTitle')}
-            </Title>
-            <Table.ScrollContainer minWidth={560}>
-              <Table>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>{t('certificates.csr.names')}</Table.Th>
-                    <Table.Th>{t('certificates.detail.key')}</Table.Th>
-                    <Table.Th>{t('certificates.csr.createdColumn')}</Table.Th>
-                    <Table.Th>{t('sshKeys.actions')}</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {pending.map((c) => (
-                    <Table.Tr key={c.id}>
-                      <Table.Td>
-                        <Code translate="no" style={WRAP} id={`csr-names-${c.id}`}>
-                          {namesOf(c)}
-                        </Code>
-                      </Table.Td>
-                      <Table.Td>{t('certificates.detail.keyValue', { algorithm: t(keyAlgorithmKey(c.key_algorithm)), bits: c.key_bits })}</Table.Td>
-                      <Table.Td>{formatDateTime(c.created_at, i18n.language)}</Table.Td>
-                      <Table.Td>
-                        <Group gap="xs" wrap="nowrap">
-                          <Button size="xs" variant="default" onClick={() => setShowing(c)} id={`csr-show-${c.id}`} aria-labelledby={`csr-show-${c.id} csr-names-${c.id}`}>
-                            {t('certificates.csr.viewPem')}
+        <Panel testId="pending-csrs" title={t('certificates.csr.pendingTitle')} padded={false}>
+          <Table.ScrollContainer minWidth={560}>
+            <Table aria-label={t('certificates.csr.pendingTitle')}>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>{t('certificates.csr.names')}</Table.Th>
+                  <Table.Th>{t('certificates.detail.key')}</Table.Th>
+                  <Table.Th>{t('certificates.csr.createdColumn')}</Table.Th>
+                  <Table.Th>{t('sshKeys.actions')}</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {pending.map((c) => (
+                  <Table.Tr key={c.id}>
+                    <Table.Td>
+                      <Code translate="no" style={WRAP} id={`csr-names-${c.id}`}>
+                        {namesOf(c)}
+                      </Code>
+                    </Table.Td>
+                    <Table.Td>{t('certificates.detail.keyValue', { algorithm: t(keyAlgorithmKey(c.key_algorithm)), bits: c.key_bits })}</Table.Td>
+                    <Table.Td>{formatDateTime(c.created_at, i18n.language)}</Table.Td>
+                    <Table.Td>
+                      <Group gap="xs" wrap="nowrap">
+                        <Button size="xs" variant="default" onClick={() => setShowing(c)} id={`csr-show-${c.id}`} aria-labelledby={`csr-show-${c.id} csr-names-${c.id}`}>
+                          {t('certificates.csr.viewPem')}
+                        </Button>
+                        {canOperate && (
+                          <>
+                          {/* The name of each button is its text plus the request's names (data, so not an aria-label text). */}
+                          <Button size="xs" variant="light" onClick={() => setCompleting(c)} id={`csr-complete-${c.id}`} aria-labelledby={`csr-complete-${c.id} csr-names-${c.id}`}>
+                            {t('certificates.csr.complete')}
                           </Button>
-                          {canOperate && (
-                            <>
-                            {/* The name of each button is its text plus the request's names (data, so not an aria-label text). */}
-                            <Button size="xs" variant="light" onClick={() => setCompleting(c)} id={`csr-complete-${c.id}`} aria-labelledby={`csr-complete-${c.id} csr-names-${c.id}`}>
-                              {t('certificates.csr.complete')}
-                            </Button>
-                            <Button size="xs" variant="subtle" color="red.9" onClick={() => setCancelling(c)} id={`csr-cancel-${c.id}`} aria-labelledby={`csr-cancel-${c.id} csr-names-${c.id}`}>
-                              {t('certificates.csr.cancelRequest')}
-                            </Button>
-                            </>
-                          )}
-                        </Group>
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-            </Table.ScrollContainer>
-          </Stack>
-        </Card>
+                          <Button size="xs" variant="subtle" color="red" onClick={() => setCancelling(c)} id={`csr-cancel-${c.id}`} aria-labelledby={`csr-cancel-${c.id} csr-names-${c.id}`}>
+                            {t('certificates.csr.cancelRequest')}
+                          </Button>
+                          </>
+                        )}
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
+        </Panel>
       )}
       {completing && (
         <CompleteDialog

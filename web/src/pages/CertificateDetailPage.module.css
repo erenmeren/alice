@@ -1,0 +1,29 @@
+/* The certificate detail in the Clarity design (alice-design/dist/styles.css .detail-grid, .validity, .large-value,
+   .progress-track). Tokens only. */
+.titleCode { background: none; padding: 0; color: inherit; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(290px, 1fr); gap: 20px; align-items: start; }
+.column, .side { display: grid; gap: 20px; min-width: 0; align-content: start; }
+.validity { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.eyebrow { font-family: var(--mantine-font-family-monospace); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 1.3px; color: var(--alice-text-muted); }
+.largeValue { margin-top: 12px; font-size: 38px; font-weight: 500; letter-spacing: -1.7px; line-height: 1.1; color: var(--alice-text); }
+.largeValue[data-tone='danger'] { color: var(--alice-danger); }
+.largeValue[data-tone='warning'] { color: var(--alice-warning); }
+.validityIcon { color: var(--alice-text-muted); flex-shrink: 0; }
+.progress { background-color: var(--alice-surface-subtle); }
+.progressSection { background-color: var(--alice-brand); }
+.progress[data-soon] .progressSection { background-color: var(--alice-warning); }
+.validityFacts { margin-top: 24px; }
+.dataHandling { display: flex; gap: 12px; align-items: flex-start; }
+.lock { color: var(--alice-success); flex-shrink: 0; margin-top: 2px; }
+.h3 { font-size: 14px; font-weight: 600; }
+
+@media (max-width: 1199px) {
+  .grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+@media (max-width: 1019px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .side { grid-template-columns: minmax(0, 1fr); }
+}

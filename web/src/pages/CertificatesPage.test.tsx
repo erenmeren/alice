@@ -2,10 +2,12 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
+  adminSession,
   auditorSession,
   certificateDetailFixture,
   certificateFixture,
   csrFixture,
+  emptyDashboardSummary,
   errorResponse,
   operatorSession,
   sessionHandlers,
@@ -17,6 +19,7 @@ import { server } from '../test/server';
 
 const targets = http.get('/api/v1/targets', () => HttpResponse.json({ items: [targetFixture], next_cursor: null }));
 const noCsrs = http.get('/api/v1/certificates/csr', () => HttpResponse.json({ items: [] }));
+const oneCertificate = http.get('/api/v1/certificates', () => HttpResponse.json({ items: [certificateFixture()], next_cursor: null }));
 
 describe('CertificatesPage', () => {
   beforeEach(() => {
@@ -24,6 +27,108 @@ describe('CertificatesPage', () => {
     vi.setSystemTime(new Date('2026-10-03T12:00:00Z'));
   });
   afterEach(() => vi.useRealTimers());
+
+  it('shows the design header, chips with the summary’s cumulative counts and none on All', async () => {
+    server.use(
+      ...sessionHandlers(adminSession),
+      targets,
+      noCsrs,
+      oneCertificate,
+      http.get('/api/v1/dashboard/summary', () =>
+        HttpResponse.json({ ...emptyDashboardSummary, certificates: { ...emptyDashboardSummary.certificates, expired: 1, within_7: 4, within_30: 7 } }),
+      ),
+    );
+    await renderRoute('/certificates');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Certificates' })).toBeVisible();
+    expect(screen.getByText('Every certificate. Every location. One inventory.')).toBeVisible();
+    const chips = screen.getByRole('group', { name: 'Expiry shortcuts' });
+    expect(within(chips).getByRole('button', { name: 'All certificates' })).toHaveTextContent(/^All certificates$/);
+    expect(within(chips).getByRole('button', { name: 'All certificates' })).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() => expect(within(chips).getByRole('button', { name: /Next 7 days/ })).toHaveTextContent('4'));
+    expect(within(chips).getByRole('button', { name: /Next 30 days/ })).toHaveTextContent('7');
+    expect(within(chips).getByRole('button', { name: /Expired/ })).toHaveTextContent('1');
+    expect(screen.getByText('Expiry filters are cumulative: “Next 30 days” includes expired certificates.')).toBeVisible();
+  });
+
+  it('sets the same URL filter as the native expiry select from a chip', async () => {
+    server.use(...sessionHandlers(adminSession), targets, noCsrs, oneCertificate);
+    const { router } = await renderRoute('/certificates');
+    await userEvent.click(within(await screen.findByRole('group', { name: 'Expiry shortcuts' })).getByRole('button', { name: /Next 30 days/ }));
+    expect(router.state.location.search).toBe('?expiry=30');
+    expect(screen.getByRole('combobox', { name: 'Expiry' })).toHaveValue('30');
+    expect(within(screen.getByRole('group', { name: 'Expiry shortcuts' })).getByRole('button', { name: /Next 30 days/ })).toHaveAttribute('aria-pressed', 'true');
+    // All clears the expiry filter only.
+    await userEvent.click(within(screen.getByRole('group', { name: 'Expiry shortcuts' })).getByRole('button', { name: 'All certificates' }));
+    expect(router.state.location.search).toBe('');
+  });
+
+  it.each([
+    ['/certificates', 'Your inventory starts here'],
+    ['/certificates?q=nothing', 'No matching certificates'],
+  ])('tells an empty inventory from a filter without matches (%s)', async (path, text) => {
+    server.use(...sessionHandlers(adminSession), targets, noCsrs, http.get('/api/v1/certificates', () => HttpResponse.json({ items: [], next_cursor: null })));
+    await renderRoute(path);
+    expect(await screen.findByText(text)).toBeVisible();
+    expect(screen.queryByTestId('certificates-table')).not.toBeInTheDocument();
+  });
+
+  it('clears the filters from the no-match state', async () => {
+    server.use(...sessionHandlers(operatorSession), targets, noCsrs, http.get('/api/v1/certificates', () => HttpResponse.json({ items: [], next_cursor: null })));
+    const { router } = await renderRoute('/certificates?expiry=7');
+    expect(await screen.findByText('No certificates match these filters.')).toBeVisible();
+    expect(screen.getByText('Try a different search or clear your filters.')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(await screen.findByText('Your inventory starts here')).toBeVisible();
+  });
+
+  it('pages with the cursor and states only how many rows are shown', async () => {
+    server.use(
+      ...sessionHandlers(operatorSession),
+      targets,
+      noCsrs,
+      http.get('/api/v1/certificates', ({ request }) => {
+        const cursor = new URL(request.url).searchParams.get('cursor');
+        if (cursor === 'p2') return HttpResponse.json({ items: [certificateFixture({ id: 'c3', subject_cn: 'second.example.test' })], next_cursor: null });
+        return HttpResponse.json({ items: [certificateFixture({ id: 'c1' })], next_cursor: 'p2' });
+      }),
+    );
+    await renderRoute('/certificates');
+    expect(await screen.findByText('1 shown')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
+    expect(await screen.findByText('2 shown')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/ of \d+/)).not.toBeInTheDocument();
+  });
+
+  it('shows each row as the design’s resource: source tile, name in code, source and issuer, algorithm and key badge', async () => {
+    server.use(
+      ...sessionHandlers(operatorSession),
+      targets,
+      noCsrs,
+      http.get('/api/v1/certificates', () =>
+        HttpResponse.json({
+          items: [
+            certificateFixture({ id: 'c1', source: 'azure_kv', has_private_key: true }),
+            certificateFixture({ id: 'c2', subject_cn: 'found.example.test', source: 'discovered', has_private_key: false, key_algorithm: 'rsa', key_bits: 2048 }),
+          ],
+          next_cursor: null,
+        }),
+      ),
+    );
+    await renderRoute('/certificates');
+    const table = await screen.findByTestId('certificates-table');
+    const rows = within(table).getAllByRole('row');
+    expect(rows[1].querySelector('code')).toHaveTextContent('www.example.test');
+    expect(rows[1].querySelector('p')).toHaveTextContent('Azure Key Vault · CN=Example Test CA');
+    expect(rows[1].querySelector('[data-source="azure_kv"]')).not.toBeNull();
+    expect(within(rows[1]).getByText('ECDSA, 256 bit')).toBeInTheDocument();
+    expect(within(rows[1]).getByText('In Alice').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(rows[2].querySelector('p')).toHaveTextContent('Found on servers · CN=Example Test CA');
+    expect(within(rows[2]).getByText('Not in Alice').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
+    // The link is the name alone: e2e finds rows by the link name.
+    expect(within(rows[2]).getByRole('link', { name: 'found.example.test' })).toHaveAttribute('href', '/certificates/c2');
+  });
 
   it('lists certificates with days left, expired ones marked', async () => {
     server.use(

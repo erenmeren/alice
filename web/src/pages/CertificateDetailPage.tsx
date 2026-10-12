@@ -1,4 +1,4 @@
-import { Alert, Anchor, Badge, Box, Button, Code, Group, Stack, Table, Text, Title } from '@mantine/core';
+import { Anchor, Button, Code, CopyButton, Group, Progress, Stack, Table, Text, Title } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,23 +10,26 @@ import { certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import type { CertificateDetail } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
+import { UsageTopology } from '../components/certificates/UsageTopology';
 import { DeployDialog } from '../components/DeployDialog';
 import { ErrorAlert } from '../components/ErrorAlert';
-import { Expiry, useNow } from '../components/Expiry';
+import { daysLeft, expiryState, useNow } from '../components/Expiry';
 import { ImportHistory } from '../components/ImportHistory';
 import { ImportToKeyVaultDialog } from '../components/ImportToKeyVaultDialog';
+import { expiryTone, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
-import { formatDateTime } from '../datetime';
+import { formatDate, formatDateTime } from '../datetime';
+import { Icon } from '../design/Icon';
+import classes from './CertificateDetailPage.module.css';
 
-function Fact({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <Box component="li" style={{ listStyle: 'none' }}>
-      <Text size="sm" fw={600} component="span" display="block">
-        {label}
-      </Text>
-      <Box component="div">{children}</Box>
-    </Box>
-  );
+const DAY_MS = 86_400_000;
+
+// lifeLeft is the share of the certificate's validity period still ahead, 0 to 100 (the validity bar).
+function lifeLeft(c: CertificateDetail, now: number): number {
+  const start = Date.parse(c.not_before);
+  const end = Date.parse(c.not_after);
+  if (!(end > start)) return 0;
+  return Math.max(0, Math.min(100, ((end - now) / (end - start)) * 100));
 }
 
 // CertificateDetailPage is one certificate (public data only: the private key never reaches the
@@ -59,195 +62,279 @@ export function CertificateDetailPage() {
     );
   const c: CertificateDetail = cert.data;
   const expired = Date.parse(c.not_after) <= now;
+  const state = expiryState(c.not_after, now);
+  const days = daysLeft(c.not_after, now);
+  const soon = !expired && Date.parse(c.not_after) - now < 7 * DAY_MS;
   const first = c.locations[0];
   const canDeploy = canOperate && c.has_private_key && !expired && first !== undefined;
   const sourceKey = `enum.certificateSource.${c.source}`;
+  const sourceText = i18n.exists(sourceKey) ? t(sourceKey) : c.source;
   const upcoming = deployments.data?.items ?? [];
+  const name = c.label || c.subject_cn;
+
+  const facts: Fact[] = [
+    { key: 'subject', label: t('certificates.detail.subject'), value: <Code translate="no" style={WRAP}>{c.subject}</Code> },
+    { key: 'issuer', label: t('certificates.detail.issuer'), value: <Code translate="no" style={WRAP}>{c.issuer}</Code> },
+    {
+      key: 'names',
+      label: t('certificates.detail.names'),
+      value:
+        c.sans.length === 0 ? (
+          t('certificates.detail.noNames')
+        ) : (
+          <Group gap={4}>
+            {c.sans.map((n) => (
+              <Code translate="no" key={n} style={WRAP}>
+                {n}
+              </Code>
+            ))}
+          </Group>
+        ),
+    },
+    { key: 'serial', label: t('certificates.detail.serial'), value: <Code translate="no" style={WRAP}>{c.serial}</Code> },
+    { key: 'key', label: t('certificates.detail.key'), value: t('certificates.detail.keyValue', { algorithm: t(keyAlgorithmKey(c.key_algorithm)), bits: c.key_bits }) },
+    {
+      key: 'chain',
+      label: t('certificates.page.chain'),
+      value: (
+        <Stack gap={6} align="flex-start">
+          <StatusBadge tone={c.chain_complete ? 'success' : 'warning'} icon={c.chain_complete ? 'CircleCheck' : 'CircleAlert'}>
+            {c.chain_complete ? t('certificates.page.chainComplete') : t('certificates.page.chainIncomplete')}
+          </StatusBadge>
+          <span>{c.chain_complete ? t('certificates.detail.chainComplete') : t('certificates.detail.chainIncomplete')}</span>
+          {/* Alice completes a stored chain when the same certificate is uploaded again with the full
+              chain; a certificate from a signing request cannot be completed that way. */}
+          {!c.chain_complete && canOperate && (c.source === 'uploaded' || c.source === 'discovered') && (
+            <span data-testid="chain-hint">{t('certificates.detail.chainCompleteByUpload')}</span>
+          )}
+        </Stack>
+      ),
+    },
+    {
+      key: 'privateKey',
+      label: t('certificates.columns.key'),
+      value: (
+        <StatusBadge tone={c.has_private_key ? 'success' : 'neutral'} icon={c.has_private_key ? 'LockKeyhole' : 'Eye'}>
+          {c.has_private_key ? t('certificates.keyHeld') : t('certificates.keyNotHeld')}
+        </StatusBadge>
+      ),
+    },
+    { key: 'fingerprint', label: t('certificates.detail.fingerprint'), value: <Code translate="no" style={WRAP}>{c.fingerprint}</Code> },
+    { key: 'source', label: t('certificates.detail.source'), value: sourceText },
+  ];
 
   return (
     <Stack gap="md">
-      <Anchor component={Link} to="/certificates" w="fit-content" size="sm">
-        {t('certificates.detail.backToList')}
-      </Anchor>
-      <Title order={1} style={WRAP}>
-        {c.label || c.subject_cn ? <Code translate="no" fz="inherit" fw="inherit" style={WRAP}>{c.label || c.subject_cn}</Code> : t('certificates.noName')}
-      </Title>
-      {c.self_signed && (
-        <Group>
-          <Badge variant="light" color="gray" tt="none">
-            {t('certificates.detail.selfSigned')}
-          </Badge>
-        </Group>
-      )}
-      {c.chain_complete ? (
-        <Text size="sm">{t('certificates.detail.chainComplete')}</Text>
-      ) : (
-        <Alert color="yellow" role="status">
-          <Text size="sm">{t('certificates.detail.chainIncomplete')}</Text>
-          {/* Alice completes a stored chain when the same certificate is uploaded again with the full
-              chain; a certificate from a signing request cannot be completed that way. */}
-          {canOperate && (c.source === 'uploaded' || c.source === 'discovered') && (
-            <Text size="sm" data-testid="chain-hint">
-              {t('certificates.detail.chainCompleteByUpload')}
-            </Text>
-          )}
-        </Alert>
-      )}
-      {!c.has_private_key && (
-        <Alert color="gray" role="status">
-          {t('certificates.detail.noKey')}
-        </Alert>
-      )}
-      {expired && (
-        <Alert color="red" role="status">
-          {t('certificates.detail.expiredNoDeploy')}
-        </Alert>
-      )}
-      <Box component="ul" p={0} m={0} aria-label={t('certificates.detail.facts')} style={{ display: 'grid', gap: 'var(--mantine-spacing-sm)' }}>
-        <Fact label={t('certificates.detail.subject')}>
-          <Code translate="no" style={WRAP}>{c.subject}</Code>
-        </Fact>
-        <Fact label={t('certificates.detail.issuer')}>
-          <Code translate="no" style={WRAP}>{c.issuer}</Code>
-        </Fact>
-        <Fact label={t('certificates.detail.names')}>
-          {c.sans.length === 0 ? (
-            <Text size="sm">{t('certificates.detail.noNames')}</Text>
+      <PageHeader
+        back={{ to: '/certificates', label: t('certificates.detail.backToList') }}
+        icon="FileKey2"
+        title={
+          name ? (
+            <Code translate="no" fz="inherit" fw="inherit" className={classes.titleCode} style={WRAP}>
+              {name}
+            </Code>
           ) : (
-            <Group gap={4}>
-              {c.sans.map((n) => (
-                <Code translate="no" key={n} style={WRAP}>
-                  {n}
-                </Code>
-              ))}
-            </Group>
-          )}
-        </Fact>
-        <Fact label={t('certificates.detail.serial')}>
-          <Code translate="no" style={WRAP}>{c.serial}</Code>
-        </Fact>
-        <Fact label={t('certificates.detail.validFrom')}>
-          <Text size="sm">{formatDateTime(c.not_before, i18n.language)}</Text>
-        </Fact>
-        <Fact label={t('certificates.detail.validUntil')}>
-          <Expiry notAfter={c.not_after} />
-        </Fact>
-        <Fact label={t('certificates.detail.key')}>
-          <Text size="sm">{t('certificates.detail.keyValue', { algorithm: t(keyAlgorithmKey(c.key_algorithm)), bits: c.key_bits })}</Text>
-        </Fact>
-        <Fact label={t('certificates.columns.key')}>
-          <Text size="sm">{c.has_private_key ? t('certificates.keyHeld') : t('certificates.keyNotHeld')}</Text>
-        </Fact>
-        <Fact label={t('certificates.detail.fingerprint')}>
-          <Code translate="no" style={WRAP}>{c.fingerprint}</Code>
-        </Fact>
-        <Fact label={t('certificates.detail.source')}>
-          <Text size="sm">{i18n.exists(sourceKey) ? t(sourceKey) : c.source}</Text>
-        </Fact>
-      </Box>
-      {canDeploy && (
-        <Stack gap={4}>
-          <Button w="fit-content" onClick={() => setDeploying(true)}>
-            {t('certificates.detail.deploy')}
-          </Button>
-          <Text size="sm">{t('certificates.detail.deployHelp')}</Text>
-        </Stack>
-      )}
-      {canOperate && c.has_private_key && !expired && (
-        <Stack gap={4}>
-          <Button w="fit-content" variant="default" disabled={!admin} onClick={() => setImporting(true)}>
-            {t('imports.action')}
-          </Button>
-          <Text size="sm">{t(admin ? 'certificates.detail.importHelp' : 'imports.adminOnly')}</Text>
-        </Stack>
-      )}
-      {canOperate && c.has_private_key && !expired && first === undefined && (
-        <Alert color="blue" role="note" data-testid="deploy-hint">
-          <Stack gap={4} align="flex-start">
-            <Text size="sm">{t('certificates.detail.deployHint')}</Text>
-            {/* Black and underlined like the license banner links: the primary color on the blue
-                tint is below 4.5:1 (axe, e2e). */}
-            <Anchor component={Link} to="/servers" size="sm" c="black" underline="always">
-              {t('certificates.detail.openServers')}
-            </Anchor>
-          </Stack>
-        </Alert>
-      )}
-
-      <Title order={2} size="h3">
-        {t('certificates.detail.usedWhere')}
-      </Title>
-      {c.locations.length === 0 ? (
-        <Text size="sm">{t('certificates.detail.notUsed')}</Text>
+            t('certificates.noName')
+          )
+        }
+        description={`${sourceText} · ${t('certificates.page.firstSeen', { date: formatDate(c.first_seen_at, i18n.language) })}`}
+        status={
+          c.self_signed ? (
+            <StatusBadge tone="neutral" icon="CircleDot">
+              {t('certificates.detail.selfSigned')}
+            </StatusBadge>
+          ) : undefined
+        }
+        actions={
+          <>
+            <CopyButton value={c.fingerprint}>
+              {({ copied, copy }) => (
+                <Button variant="default" leftSection={<Icon name={copied ? 'Check' : 'Copy'} size={15} />} onClick={copy}>
+                  {copied ? t('certificates.page.fingerprintCopied') : t('certificates.page.copyFingerprint')}
+                </Button>
+              )}
+            </CopyButton>
+            {canDeploy && (
+              <Button leftSection={<Icon name="Rocket" size={15} />} onClick={() => setDeploying(true)}>
+                {t('certificates.detail.deploy')}
+              </Button>
+            )}
+          </>
+        }
+      />
+      {expired ? (
+        <Notice tone="danger" title={t('certificates.detail.expiredNoDeploy')}>
+          {t('certificates.page.expiredText')}
+        </Notice>
+      ) : soon ? (
+        <Notice tone="warning" title={t('certificates.page.renewalDue', { count: days })}>
+          {t('certificates.page.renewalText')}
+        </Notice>
       ) : (
-        <Table.ScrollContainer minWidth={560}>
-          <Table striped aria-label={t('certificates.detail.usedWhere')}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t('certificates.detail.columns.server')}</Table.Th>
-                <Table.Th>{t('certificates.detail.columns.website')}</Table.Th>
-                <Table.Th>{t('certificates.detail.columns.file')}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {c.locations.map((l) => {
-                const name = l.servers[0]?.names[0];
-                return (
-                  <Table.Tr key={l.id}>
-                    <Table.Td>
-                      <Anchor component={Link} to={`/servers/${l.target_id}`}>
-                        {l.target_name}
-                      </Anchor>
-                    </Table.Td>
-                    <Table.Td>{name ? <Code translate="no" style={WRAP}>{name}</Code> : t('certificates.detail.noNames')}</Table.Td>
-                    <Table.Td>
-                      <Code translate="no" style={WRAP}>{l.cert_path}</Code>
-                    </Table.Td>
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
+        <Notice tone="brand" title={t('certificates.page.validTitle')}>
+          {t('certificates.page.validityNote')}
+        </Notice>
       )}
-      {c.locations_truncated && <Text size="sm">{t('certificates.detail.moreLocations')}</Text>}
 
-      <Title order={2} size="h3">
-        {t('certificates.detail.deployments')}
-      </Title>
-      <ErrorAlert error={deployments.error} />
-      {deployments.isSuccess && upcoming.length === 0 && <Text size="sm">{t('certificates.detail.noDeployments')}</Text>}
-      {upcoming.length > 0 && (
-        <Table.ScrollContainer minWidth={560}>
-          <Table striped aria-label={t('certificates.detail.deployments')}>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>{t('certificates.detail.columns.when')}</Table.Th>
-                <Table.Th>{t('certificates.detail.columns.server')}</Table.Th>
-                <Table.Th>{t('certificates.detail.columns.file')}</Table.Th>
-                <Table.Th>{t('certificates.detail.columns.result')}</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {upcoming.map((d) => (
-                <Table.Tr key={d.id}>
-                  <Table.Td>{formatDateTime(d.created_at, i18n.language)}</Table.Td>
-                  <Table.Td>{d.target_name}</Table.Td>
-                  <Table.Td>
-                    <Code translate="no" style={WRAP}>{d.cert_path}</Code>
-                  </Table.Td>
-                  <Table.Td>
-                    <Anchor component={Link} to={`/deployments/${d.id}`}>
-                      {t(deploymentStatusText(d))}
+      <div className={classes.grid}>
+        <div className={classes.column}>
+          <UsageTopology certificate={c} />
+          <Panel title={t('certificates.page.details')}>
+            <FactList label={t('certificates.detail.facts')} facts={facts} />
+          </Panel>
+          {c.locations.length > 0 && (
+            <Panel title={t('certificates.page.locations')} padded={false} footer={c.locations_truncated ? <span>{t('certificates.detail.moreLocations')}</span> : undefined}>
+              <Table.ScrollContainer minWidth={560}>
+                <Table aria-label={t('certificates.detail.usedWhere')} highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>{t('certificates.detail.columns.server')}</Table.Th>
+                      <Table.Th>{t('certificates.detail.columns.website')}</Table.Th>
+                      <Table.Th>{t('certificates.detail.columns.file')}</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {c.locations.map((l) => {
+                      const site = l.servers[0]?.names[0];
+                      return (
+                        <Table.Tr key={l.id}>
+                          <Table.Td>
+                            <Anchor component={Link} to={`/servers/${l.target_id}`} translate="no">
+                              {l.target_name}
+                            </Anchor>
+                          </Table.Td>
+                          <Table.Td>{site ? <Code translate="no" style={WRAP}>{site}</Code> : t('certificates.detail.noNames')}</Table.Td>
+                          <Table.Td>
+                            <Code translate="no" style={WRAP}>
+                              {l.cert_path}
+                            </Code>
+                          </Table.Td>
+                        </Table.Tr>
+                      );
+                    })}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            </Panel>
+          )}
+          <Panel title={t('certificates.detail.deployments')} padded={upcoming.length === 0}>
+            <ErrorAlert error={deployments.error} />
+            {deployments.isSuccess && upcoming.length === 0 && <Text size="sm">{t('certificates.detail.noDeployments')}</Text>}
+            {upcoming.length > 0 && (
+              <Table.ScrollContainer minWidth={560}>
+                <Table aria-label={t('certificates.detail.deployments')} highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>{t('certificates.detail.columns.when')}</Table.Th>
+                      <Table.Th>{t('certificates.detail.columns.server')}</Table.Th>
+                      <Table.Th>{t('certificates.detail.columns.file')}</Table.Th>
+                      <Table.Th>{t('certificates.detail.columns.result')}</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {upcoming.map((d) => (
+                      <Table.Tr key={d.id}>
+                        <Table.Td>{formatDateTime(d.created_at, i18n.language)}</Table.Td>
+                        <Table.Td translate="no">{d.target_name}</Table.Td>
+                        <Table.Td>
+                          <Code translate="no" style={WRAP}>
+                            {d.cert_path}
+                          </Code>
+                        </Table.Td>
+                        <Table.Td>
+                          <Anchor component={Link} to={`/deployments/${d.id}`}>
+                            {t(deploymentStatusText(d))}
+                          </Anchor>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            )}
+          </Panel>
+          {c.has_private_key && <ImportHistory certificateId={c.id} />}
+        </div>
+
+        <div className={classes.side}>
+          <Panel title={t('certificates.page.validity')}>
+            <div className={classes.validity}>
+              <div>
+                <div className={classes.eyebrow}>{t('certificates.page.remaining')}</div>
+                <div className={classes.largeValue} data-tone={expiryTone(state)}>
+                  {expired ? t('certificates.expired') : t('certificates.daysLeft', { count: days })}
+                </div>
+              </div>
+              <Icon name="CalendarDays" size={20} className={classes.validityIcon} />
+            </div>
+            <Progress
+              value={expired ? 0 : lifeLeft(c, now)}
+              size={5}
+              radius={5}
+              aria-label={t('certificates.page.remaining')}
+              className={classes.progress}
+              classNames={{ section: classes.progressSection }}
+              data-soon={days <= 30 ? true : undefined}
+            />
+            <div className={classes.validityFacts}>
+              <FactList
+                facts={[
+                  { key: 'from', label: t('certificates.detail.validFrom'), value: formatDateTime(c.not_before, i18n.language) },
+                  { key: 'until', label: t('certificates.detail.validUntil'), value: formatDateTime(c.not_after, i18n.language) },
+                ]}
+              />
+            </div>
+          </Panel>
+
+          <Panel title={t('certificates.page.nextAction')}>
+            <Stack gap="sm" align="flex-start">
+              <Text size="sm">{t('certificates.page.nextActionText')}</Text>
+              {!canOperate && (
+                <StatusBadge tone="neutral" icon="Eye">
+                  {t('certificates.page.readOnly')}
+                </StatusBadge>
+              )}
+              {canDeploy && <Text size="sm">{t('certificates.detail.deployHelp')}</Text>}
+              {!c.has_private_key && <Notice tone="neutral" title={t('certificates.detail.noKey')} />}
+              {canOperate && c.has_private_key && !expired && first === undefined && (
+                <Notice
+                  tone="info"
+                  testId="deploy-hint"
+                  title={t('certificates.detail.deployHint')}
+                  action={
+                    // Underlined in the notice's own (info) color: readable on the tint in both color schemes.
+                    <Anchor component={Link} to="/servers" size="sm" c="inherit" underline="always">
+                      {t('certificates.detail.openServers')}
                     </Anchor>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
-      {c.has_private_key && <ImportHistory certificateId={c.id} />}
+                  }
+                />
+              )}
+              {canOperate && c.has_private_key && !expired && (
+                <Stack gap={4} align="flex-start">
+                  <Button variant="default" leftSection={<Icon name="Cloud" size={15} />} disabled={!admin} onClick={() => setImporting(true)}>
+                    {t('imports.action')}
+                  </Button>
+                  <Text size="sm">{t(admin ? 'certificates.detail.importHelp' : 'imports.adminOnly')}</Text>
+                </Stack>
+              )}
+            </Stack>
+          </Panel>
+
+          <Panel title={t('certificates.page.dataHandling')}>
+            <div className={classes.dataHandling}>
+              <Icon name="LockKeyhole" size={18} className={classes.lock} />
+              <div>
+                <Title order={3} className={classes.h3}>
+                  {t('certificates.page.keysPrivate')}
+                </Title>
+                <Text size="sm" mt={8}>
+                  {t('certificates.page.keysPrivateText')}
+                </Text>
+              </div>
+            </div>
+          </Panel>
+        </div>
+      </div>
       {importing && admin && <ImportToKeyVaultDialog certificate={c} onClose={() => setImporting(false)} />}
       {canDeploy && <DeployDialog opened={deploying} onClose={() => setDeploying(false)} certificate={c} />}
     </Stack>

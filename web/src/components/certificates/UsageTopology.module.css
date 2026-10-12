@@ -1,0 +1,26 @@
+/* The design's source-to-location view (alice-design/dist/styles.css .topology, .topology-flow, .connector,
+   .usage-node, .topology-label). Tokens only; the dotted background is drawn with --alice-border. */
+.topology { margin-top: 16px; padding: 25px 20px; background-image: radial-gradient(var(--alice-border) 0.8px, transparent 0.8px); background-size: 14px 14px; }
+.flow { display: grid; grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr); align-items: center; }
+.label { margin: 0 0 8px; font-family: var(--mantine-font-family-monospace); font-size: 9px; text-transform: uppercase; letter-spacing: 1px; color: var(--alice-text-muted); }
+.node { display: flex; align-items: center; gap: 10px; padding: 13px 15px; border: 1px solid var(--alice-border); border-radius: var(--alice-radius-sm); background: var(--alice-surface); color: var(--alice-text); text-decoration: none; min-width: 0; }
+a.node:hover { background: var(--alice-surface-hover); }
+.center { background: var(--alice-brand-soft); border-color: var(--alice-brand-line); }
+.icon { display: grid; place-items: center; flex-shrink: 0; color: var(--alice-text-secondary); }
+.center .icon { color: var(--alice-brand); }
+.text { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; }
+.text strong { font-size: 11px; }
+.text p, .sites { margin: 0; font-size: 9px; color: var(--alice-text-secondary); }
+.arrow { margin-left: auto; flex-shrink: 0; color: var(--alice-text-muted); }
+.connector { position: relative; height: 1px; background: var(--alice-brand-line); }
+.connector::after { content: ''; position: absolute; right: 0; top: -2px; width: 5px; height: 5px; border-top: 1px solid var(--alice-brand-line); border-right: 1px solid var(--alice-brand-line); transform: rotate(45deg); }
+.targets { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.none { margin: 0; font-size: 11px; color: var(--alice-text-secondary); }
+
+@media (max-width: 767px) {
+  .topology { padding: 18px 12px; }
+  .flow { grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); }
+  .node { padding: 10px; gap: 7px; }
+  .text strong { font-size: 10px; }
+  .text p, .sites { font-size: 8px; }
+}

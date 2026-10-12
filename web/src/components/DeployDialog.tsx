@@ -14,6 +14,7 @@ import { useAbort } from '../api/useAbort';
 import type { Certificate, CertificateLocation, DeployResult, DeploymentDetail } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { formatDate } from '../datetime';
+import { Icon } from '../design/Icon';
 import { AppModal } from './AppModal';
 import { DeploymentOutcome } from './DeploymentView';
 import { currentStep, DeploymentSteps } from './DeploymentSteps';
@@ -23,6 +24,7 @@ import { InternalLink } from './InternalLink';
 import { LocationWarning } from './LocationWarning';
 import { SiteName } from './SiteName';
 import { useSiteLabel } from './useSiteLabel';
+import { DialogActions } from './ui';
 import { WRAP } from './wrap';
 
 export interface DeployDialogProps {
@@ -206,14 +208,14 @@ function DeployForm({
           const dep = r.deployment;
           const step = dep ? currentStep(dep.steps) : null;
           return (
-            <Box key={r.id} data-testid="deployment-run" style={{ borderTop: multi ? '1px solid var(--mantine-color-gray-4)' : undefined, paddingTop: multi ? 8 : 0 }}>
+            <Box key={r.id} data-testid="deployment-run" style={{ borderTop: multi ? '1px solid var(--alice-border)' : undefined, paddingTop: multi ? 8 : 0 }}>
               <Stack gap="xs">
                 {multi && loc && (
                   <Group gap="xs">
                     <Text size="sm" fw={600}>
                       <SiteName loc={loc} />
                     </Text>
-                    <Text size="sm" c="gray.7" translate="no">
+                    <Text size="sm" c="dimmed" translate="no">
                       {loc.target_name}
                     </Text>
                   </Group>
@@ -225,7 +227,7 @@ function DeployForm({
                 ))}
                 <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} />
                 {step && dep && !isSettled(dep) && (
-                  <Text size="xs" c="gray.7" aria-live="polite">
+                  <Text size="xs" c="dimmed" aria-live="polite">
                     {t('deployments.currentStep', { step: t(step) })}
                   </Text>
                 )}
@@ -254,12 +256,15 @@ function DeployForm({
             {!allFinal && <Text size="sm">{t('deploy.partialOpen', { open })}</Text>}
           </Stack>
         )}
-        <Group justify="space-between">
-          <InternalLink to="/deployments" size="sm">
-            {t('deploy.openHistory')}
-          </InternalLink>
+        <DialogActions
+          note={
+            <InternalLink to="/deployments" size="sm">
+              {t('deploy.openHistory')}
+            </InternalLink>
+          }
+        >
           <Button onClick={close}>{t('deploy.close')}</Button>
-        </Group>
+        </DialogActions>
       </Stack>
     );
   }
@@ -319,11 +324,11 @@ function DeployForm({
             <Box
               data-refused={refused === location.id ? 'true' : undefined}
               p="xs"
-              style={refused === location.id ? { border: '2px solid var(--mantine-color-red-9)', borderRadius: 4 } : undefined}
+              style={refused === location.id ? { border: '2px solid var(--alice-danger)', borderRadius: 4 } : undefined}
             >
               <Text size="sm">
                 <SiteName loc={location} />{' '}
-                <Text span c="gray.7" translate="no">
+                <Text span c="dimmed" translate="no">
                   {location.target_name}
                 </Text>
               </Text>
@@ -331,7 +336,7 @@ function DeployForm({
                 {location.cert_path}
               </Code>
               {refused === location.id && (
-                <Text size="sm" c="red.9" role="alert" mt={4}>
+                <Text size="sm" c="var(--alice-danger)" role="alert" mt={4}>
                   {refusedText}
                 </Text>
               )}
@@ -366,16 +371,15 @@ function DeployForm({
         {incompleteChain && admin && <Checkbox label={t('deploy.confirmChain')} checked={confirmChain} onChange={(e) => setConfirmChain(e.currentTarget.checked)} />}
 
         <ErrorAlert error={error} />
-
-        <Group justify="flex-end">
-          <Button variant="default" onClick={close} disabled={busy}>
-            {t('deploy.cancel')}
-          </Button>
-          <Button type="submit" loading={busy} disabled={!ready}>
-            {t('deploy.submit')}
-          </Button>
-        </Group>
       </Stack>
+      <DialogActions>
+        <Button variant="default" onClick={close} disabled={busy}>
+          {t('deploy.cancel')}
+        </Button>
+        <Button type="submit" loading={busy} disabled={!ready} leftSection={<Icon name="Rocket" size={15} />}>
+          {t('deploy.submit')}
+        </Button>
+      </DialogActions>
     </form>
   );
 }
@@ -394,7 +398,7 @@ function WebsiteChoice({ place, refused, refusedText, disabled }: { place: Certi
   const problem =
     !place.supported && place.unsupported_reason === 'file_problem' ? [place.problem && t(fileProblemKey(place.problem)), place.key_problem && t(fileProblemKey(place.key_problem))].filter(Boolean) : [];
   return (
-    <Box data-refused={refused ? 'true' : undefined} p="xs" style={refused ? { border: '2px solid var(--mantine-color-red-9)', borderRadius: 4 } : undefined}>
+    <Box data-refused={refused ? 'true' : undefined} p="xs" style={refused ? { border: '2px solid var(--alice-danger)', borderRadius: 4 } : undefined}>
       <Checkbox
         value={place.id}
         disabled={disabled}
@@ -402,7 +406,7 @@ function WebsiteChoice({ place, refused, refusedText, disabled }: { place: Certi
         label={
           <span>
             <SiteName loc={place} />{' '}
-            <Text span c="gray.7" translate="no">
+            <Text span c="dimmed" translate="no">
               {place.target_name}
             </Text>{' '}
             <Code translate="no">{place.cert_path}</Code>

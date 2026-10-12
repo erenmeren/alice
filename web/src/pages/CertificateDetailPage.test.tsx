@@ -43,7 +43,7 @@ describe('CertificateDetailPage', () => {
     const query = certServer();
     await renderRoute(`/certificates/${ID}`);
     expect(await screen.findByRole('heading', { name: 'www.example.test', level: 1 })).toBeInTheDocument();
-    const facts = screen.getByRole('list', { name: 'Certificate details' });
+    const facts = screen.getByLabelText('Certificate details');
     expect(within(facts).getByText('CN=www.example.test')).toBeInTheDocument();
     expect(within(facts).getByText('CN=Example Test CA')).toBeInTheDocument();
     expect(within(facts).getByText('0a1b2c')).toBeInTheDocument();
@@ -59,6 +59,92 @@ describe('CertificateDetailPage', () => {
     expect(within(row).getByText('www.example.test')).toBeInTheDocument();
     expect(within(row).getByText('/etc/nginx/ssl/www.crt')).toBeInTheDocument();
     expect(query()).toBe(`?certificate_id=${ID}&limit=5`);
+  });
+
+  it('shows the design header: back link, resource tile, the label as the only h1 and the source line', async () => {
+    certServer(certificateDetailFixture({ id: ID, label: 'Shop', self_signed: true }));
+    await renderRoute(`/certificates/${ID}`);
+    const h1 = await screen.findByRole('heading', { level: 1 });
+    expect(h1).toHaveTextContent('Shop');
+    expect(h1.querySelector('code')).toHaveTextContent('Shop');
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(h1).toHaveAttribute('data-detail');
+    expect(screen.getByRole('link', { name: 'Back to certificates' })).toHaveAttribute('href', '/certificates');
+    expect(screen.getByText('Uploaded · First seen Oct 1, 2026')).toBeInTheDocument();
+    expect(screen.getByText('Self-signed certificate')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Copy fingerprint' })).toBeInTheDocument();
+  });
+
+  it('shows the validity panel: days left, a progress bar and the valid from/until dates', async () => {
+    certServer();
+    await renderRoute(`/certificates/${ID}`);
+    const panel = (await screen.findByRole('heading', { name: 'Validity' })).closest('section') as HTMLElement;
+    expect(within(panel).getByText('Time remaining')).toBeInTheDocument();
+    expect(within(panel).getByText('332 days')).toHaveAttribute('data-tone', 'success');
+    expect(within(panel).getByRole('progressbar', { name: 'Time remaining' })).toBeInTheDocument();
+    expect(within(panel).getByText('Valid from')).toBeInTheDocument();
+    expect(within(panel).getByText('Valid until')).toBeInTheDocument();
+    // Far from expiry: the brand notice says what validity does not prove.
+    expect(screen.getByText('Certificate is within its validity period')).toBeInTheDocument();
+    expect(screen.getByText('Certificate validity alone does not verify the remote endpoint.')).toBeInTheDocument();
+  });
+
+  it('warns when the certificate expires within seven days', async () => {
+    certServer(certificateDetailFixture({ id: ID, not_after: '2026-10-08T12:00:00Z' }));
+    await renderRoute(`/certificates/${ID}`);
+    expect(await screen.findByText('Renewal due in 5 days')).toBeInTheDocument();
+    expect(screen.getByText('5 days', { selector: '[data-tone]' })).toHaveAttribute('data-tone', 'warning');
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeEnabled();
+  });
+
+  it('shows an expired certificate with a danger notice and no Deploy', async () => {
+    certServer(certificateDetailFixture({ id: ID, not_after: '2026-09-01T00:00:00Z' }));
+    await renderRoute(`/certificates/${ID}`);
+    const notice = (await screen.findByText('This certificate has expired and cannot be deployed.')).closest('[role="note"]') as HTMLElement;
+    expect(notice).not.toBeNull();
+    expect(within(notice).getByText('Upload a valid replacement before deployment.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
+    const validity = screen.getByRole('heading', { name: 'Validity' }).closest('section') as HTMLElement;
+    expect(within(validity).getByText('Expired')).toHaveAttribute('data-tone', 'danger');
+  });
+
+  it('shows where the certificate is used from its locations, and says when more exist', async () => {
+    certServer(
+      certificateDetailFixture({
+        id: ID,
+        locations_truncated: true,
+        locations: [locationFixture({ id: 'l1', target_id: 't-9', target_name: 'edge-9' })],
+      }),
+    );
+    await renderRoute(`/certificates/${ID}`);
+    expect(await screen.findByRole('heading', { name: 'Where this certificate is used' })).toBeInTheDocument();
+    const node = within(screen.getByRole('list', { name: 'Deployed locations' })).getByRole('link');
+    expect(node).toHaveAttribute('href', '/servers/t-9');
+    expect(node).toHaveTextContent('www.example.test:443');
+    expect(screen.getByText('More locations exist than are shown here.')).toBeInTheDocument();
+    expect(screen.getByText('Some websites are not shown.')).toBeInTheDocument();
+    // The used-where table keeps its name and one row per website (plus the header row).
+    expect(within(screen.getByRole('table', { name: 'Where this certificate is used' })).getAllByRole('row')).toHaveLength(2);
+  });
+
+  it('shows the chain as a status in the facts and keeps the private key out of the page', async () => {
+    certServer(certificateDetailFixture({ id: ID, chain_complete: false }));
+    await renderRoute(`/certificates/${ID}`);
+    const facts = await screen.findByLabelText('Certificate details');
+    expect(within(facts).getByText('Incomplete').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
+    expect(within(facts).getByTestId('chain-hint')).toBeInTheDocument();
+    expect(within(facts).getByText('In Alice').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    // "In Alice" appears once on the page (the e2e reads it by its exact text).
+    expect(screen.getAllByText('In Alice')).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Private keys stay private' })).toBeInTheDocument();
+    expect(screen.getByText(/TLS private keys are never returned to the browser/)).toBeInTheDocument();
+  });
+
+  it('tells an Auditor the access is read-only in the next action panel', async () => {
+    certServer(undefined, [], auditorSession);
+    await renderRoute(`/certificates/${ID}`);
+    const panel = (await screen.findByRole('heading', { name: 'Next action' })).closest('section') as HTMLElement;
+    expect(within(panel).getByText('Read-only access')).toBeInTheDocument();
   });
 
   it('says when the chain is incomplete or the certificate is self-signed', async () => {
@@ -178,12 +264,12 @@ describe('CertificateDetailPage', () => {
       expect(within(hint).getByRole('link', { name: 'Open the servers' })).toHaveAttribute('href', '/servers');
     });
 
-    it('draws the hint link black and underlined, readable on the blue tint (axe color-contrast)', async () => {
+    it('draws the hint link underlined in the notice color, readable on the tint in both schemes (axe color-contrast)', async () => {
       certServer(certificateDetailFixture({ id: ID, locations: [] }));
       await renderRoute(`/certificates/${ID}`);
       const link = within(await screen.findByTestId('deploy-hint')).getByRole('link', { name: 'Open the servers' });
       expect(link).toHaveAttribute('data-underline', 'always');
-      expect(link.style.getPropertyValue('color')).toBe('var(--mantine-color-black)');
+      expect(link.style.getPropertyValue('color')).toBe('inherit');
     });
 
     it('shows no hint to Auditors, for a certificate without a key or one that is already used', async () => {

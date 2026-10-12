@@ -1,4 +1,4 @@
-import { Anchor, Button, Code, Stack, Table, Text, Title } from '@mantine/core';
+import { Anchor, Button, Code, Stack, Table, Text } from '@mantine/core';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,7 @@ import { KV_IMPORTS_KEY, VAULTS_KEY } from '../api/queryKeys';
 import { formatDateTime } from '../datetime';
 import { ErrorAlert } from './ErrorAlert';
 import { reasonTitle } from './JobErrorAlert';
+import { Panel } from './ui';
 import { shortVersion } from './vaultText';
 import { WRAP } from './wrap';
 
@@ -97,27 +98,40 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
     setRetrying(null);
   };
   if (vaults.isSuccess && ids.length === 0) return null;
+  const notes = error !== null || failures.size > 0 || (imports.isSuccess && items.length === 0 && failures.size === 0);
   return (
-    <Stack gap="sm" data-testid="import-history">
-      <Title order={2} size="h3">
-        {t('imports.history.title')}
-      </Title>
-      <ErrorAlert error={error} />
-      {[...failures].map(([id, e]) => (
-        <Stack gap={6} key={id} data-testid="import-history-failed">
-          <Text size="sm" style={WRAP}>
-            {t('imports.history.loadFailed', { vault: names.get(id) || t('imports.history.unnamedVault') })}
-          </Text>
-          <ErrorAlert error={e} />
-          <Button size="xs" variant="default" w="fit-content" loading={retrying === id} onClick={() => void tryAgain(id)}>
-            {t('imports.history.tryAgain')}
+    <Panel
+      testId="import-history"
+      title={t('imports.history.title')}
+      padded={false}
+      footer={
+        imports.hasNextPage ? (
+          <Button variant="default" size="xs" loading={imports.isFetchingNextPage} onClick={() => void imports.fetchNextPage()}>
+            {t('vaults.showMore')}
           </Button>
+        ) : undefined
+      }
+    >
+      {notes && (
+        <Stack gap="sm" px={22} pb={items.length > 0 ? 0 : 22}>
+          <ErrorAlert error={error} />
+          {[...failures].map(([id, e]) => (
+            <Stack gap={6} key={id} data-testid="import-history-failed">
+              <Text size="sm" style={WRAP}>
+                {t('imports.history.loadFailed', { vault: names.get(id) || t('imports.history.unnamedVault') })}
+              </Text>
+              <ErrorAlert error={e} />
+              <Button size="xs" variant="default" w="fit-content" loading={retrying === id} onClick={() => void tryAgain(id)}>
+                {t('imports.history.tryAgain')}
+              </Button>
+            </Stack>
+          ))}
+          {imports.isSuccess && items.length === 0 && failures.size === 0 && <Text size="sm">{t('imports.history.empty')}</Text>}
         </Stack>
-      ))}
-      {imports.isSuccess && items.length === 0 && failures.size === 0 && <Text size="sm">{t('imports.history.empty')}</Text>}
+      )}
       {items.length > 0 && (
         <Table.ScrollContainer minWidth={640}>
-          <Table striped aria-label={t('imports.history.tableLabel')}>
+          <Table aria-label={t('imports.history.tableLabel')} highlightOnHover>
             <Table.Thead>
               <Table.Tr>
                 {(['when', 'vault', 'name', 'state', 'version'] as const).map((c) => (
@@ -156,11 +170,6 @@ export function ImportHistory({ certificateId }: { certificateId: string }) {
           </Table>
         </Table.ScrollContainer>
       )}
-      {imports.hasNextPage && (
-        <Button variant="default" w="fit-content" loading={imports.isFetchingNextPage} onClick={() => void imports.fetchNextPage()}>
-          {t('vaults.showMore')}
-        </Button>
-      )}
-    </Stack>
+    </Panel>
   );
 }

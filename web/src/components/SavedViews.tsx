@@ -5,7 +5,9 @@ import { useTranslation } from 'react-i18next';
 import { createView, deleteView, listViews, type SavedView, type ViewPage } from '../api/phase7';
 import { viewsKey } from '../api/queryKeys';
 import { AppModal } from './AppModal';
+import { Icon } from '../design/Icon';
 import { ErrorAlert } from './ErrorAlert';
+import { DialogActions } from './ui';
 
 const MAX_NAME_RUNES = 60;
 
@@ -62,14 +64,16 @@ export function SavedViews({ page, keys, values, set }: Props) {
         {/* No focus placeholder: a role="menu" may hold menu items only (axe aria-required-children). */}
         <Menu shadow="md" width={280} withinPortal withInitialFocusPlaceholder={false}>
           <Menu.Target>
-            <Button variant="default">{t('filters.views')}</Button>
+            <Button variant="default" leftSection={<Icon name="SlidersHorizontal" size={15} />}>
+              {t('filters.views')}
+            </Button>
           </Menu.Target>
           <Menu.Dropdown>
             {items.length === 0 && <Menu.Label>{t('filters.noViews')}</Menu.Label>}
             {items.map((v) => (
               <Fragment key={v.id}>
                 <Menu.Item onClick={() => apply(v)}>{v.name}</Menu.Item>
-                <Menu.Item c="red.9" onClick={() => remove.mutate(v.id)}>
+                <Menu.Item c="var(--alice-danger)" onClick={() => remove.mutate(v.id)}>
                   {t('filters.deleteView', { name: v.name })}
                 </Menu.Item>
               </Fragment>
@@ -93,15 +97,15 @@ export function SavedViews({ page, keys, values, set }: Props) {
           <Stack gap="sm">
             <TextInput label={t('filters.viewName')} value={name} onChange={(e) => setName(e.currentTarget.value)} error={tooLong ? t('filters.viewNameTooLong') : undefined} data-autofocus />
             <ErrorAlert error={create.error} />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={() => setSaving(false)}>
-                {t('ui.cancel')}
-              </Button>
-              <Button type="submit" loading={create.isPending} disabled={!name.trim() || tooLong}>
-                {t('filters.saveView')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={() => setSaving(false)}>
+              {t('ui.cancel')}
+            </Button>
+            <Button type="submit" loading={create.isPending} disabled={!name.trim() || tooLong}>
+              {t('filters.saveView')}
+            </Button>
+          </DialogActions>
         </form>
       </AppModal>
     </Stack>

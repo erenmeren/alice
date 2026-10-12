@@ -59,4 +59,17 @@ describe('Expiry', () => {
     expect(screen.queryByText('Oct 15, 2026')).not.toBeInTheDocument();
     expect(screen.getByText('12 days')).toBeInTheDocument();
   });
+
+  it.each([
+    ['2026-09-01T00:00:00Z', 'Expired', 'expired', 'danger'],
+    ['2026-10-15T12:00:00Z', '12 days', 'within30', 'warning'],
+    ['2026-12-01T00:00:00Z', '58 days', 'within60', 'info'],
+    ['2027-09-01T00:00:00Z', '332 days', 'ok', 'success'],
+  ])('%s renders as a status badge: text, icon and the tone of its state', async (notAfter, text, state, tone) => {
+    await renderApp(<Expiry notAfter={notAfter} part="badge" />);
+    const badge = screen.getByText(text).closest('.mantine-Badge-root');
+    expect(badge).toHaveAttribute('data-state', state);
+    expect(badge).toHaveAttribute('data-tone', tone);
+    expect(badge?.querySelector('svg')).not.toBeNull();
+  });
 });

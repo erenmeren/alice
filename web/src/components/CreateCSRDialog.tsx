@@ -1,4 +1,4 @@
-import { Alert, Button, Group, NativeSelect, Stack, Text, Textarea, TextInput } from '@mantine/core';
+import { Alert, Button, NativeSelect, Stack, Text, Textarea, TextInput } from '@mantine/core';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { createCSR } from '../api/endpoints';
@@ -6,6 +6,7 @@ import type { CSR, CSRKeyType } from '../api/types';
 import { AppModal } from './AppModal';
 import { CSRPem } from './CSRPem';
 import { ErrorAlert } from './ErrorAlert';
+import { DialogActions } from './ui';
 
 // namesOf turns "one name per line" into the list the API takes: trimmed, no empty lines.
 function namesOf(text: string): string[] {
@@ -54,14 +55,16 @@ function CSRForm({ onClose, onCreated }: { onClose: () => void; onCreated: (csr:
             {t('certificates.csr.created')}
           </Alert>
           <CSRPem csr={created} />
-          <Group justify="flex-end">
+          <DialogActions>
             <Button onClick={onClose}>{t('ui.close')}</Button>
-          </Group>
+          </DialogActions>
         </Stack>
       ) : (
         <form onSubmit={(ev) => void submit(ev)} noValidate>
           <Stack gap="sm">
-            <Text size="sm">{t('certificates.csr.help')}</Text>
+            <Text size="sm" c="dimmed">
+              {t('certificates.csr.help')}
+            </Text>
             <TextInput
               data-autofocus
               label={t('certificates.csr.commonName')}
@@ -93,15 +96,15 @@ function CSRForm({ onClose, onCreated }: { onClose: () => void; onCreated: (csr:
               ]}
             />
             <ErrorAlert error={error} />
-            <Group justify="flex-end">
-              <Button variant="default" onClick={onClose}>
-                {t('certificates.cancel')}
-              </Button>
-              <Button type="submit" loading={busy}>
-                {t('certificates.csr.submit')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={onClose}>
+              {t('certificates.cancel')}
+            </Button>
+            <Button type="submit" loading={busy}>
+              {t('certificates.csr.submit')}
+            </Button>
+          </DialogActions>
         </form>
       )}
     </>

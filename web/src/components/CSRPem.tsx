@@ -1,6 +1,7 @@
 import { Button, CopyButton, Group, Stack, Textarea } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import type { CSR } from '../api/types';
+import { Icon } from '../design/Icon';
 
 // csrFileName is a safe file name for a request: a wildcard name has no "*", and anything outside
 // letters, digits, dot, dash and underscore becomes "_" (no path separators, no leading dot).
@@ -41,12 +42,12 @@ export function CSRPem({ csr }: { csr: CSR }) {
       <Group>
         <CopyButton value={csr.csr_pem}>
           {({ copied, copy }) => (
-            <Button variant="light" onClick={copy}>
+            <Button variant="light" leftSection={<Icon name={copied ? 'Check' : 'Copy'} size={15} />} onClick={copy}>
               {copied ? t('certificates.csr.copied') : t('certificates.csr.copy')}
             </Button>
           )}
         </CopyButton>
-        <Button variant="default" onClick={() => downloadText(csrFileName(csr.common_name), csr.csr_pem)}>
+        <Button variant="default" leftSection={<Icon name="Download" size={15} />} onClick={() => downloadText(csrFileName(csr.common_name), csr.csr_pem)}>
           {t('certificates.csr.download')}
         </Button>
       </Group>

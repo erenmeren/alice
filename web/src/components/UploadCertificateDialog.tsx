@@ -1,12 +1,14 @@
-import { Alert, Button, FileInput, Group, PasswordInput, SegmentedControl, Stack, Text, Textarea, TextInput } from '@mantine/core';
+import { Alert, Button, FileInput, PasswordInput, SegmentedControl, Stack, Text, Textarea, TextInput } from '@mantine/core';
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError, NetworkError } from '../api/client';
 import { uploadCertificate } from '../api/endpoints';
+import { Icon } from '../design/Icon';
 import { CHAIN_COMPLETED } from '../api/enums';
 import type { UploadRequest, UploadResult } from '../api/types';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
+import { DialogActions } from './ui';
 import { UploadWarnings } from './UploadWarnings';
 
 // MAX_BYTES is what the API accepts for one field and for a PFX file decoded (256 KiB).
@@ -131,14 +133,16 @@ function UploadForm({ onClose, onUploaded }: { onClose: () => void; onUploaded: 
             {t(result.warnings.includes(CHAIN_COMPLETED) ? 'certificates.upload.chainCompleted' : 'certificates.upload.uploaded')}
           </Alert>
           <UploadWarnings warnings={result.warnings} />
-          <Group justify="flex-end">
+          <DialogActions>
             <Button onClick={onClose}>{t('ui.close')}</Button>
-          </Group>
+          </DialogActions>
         </Stack>
       ) : (
         <form onSubmit={(ev) => void submit(ev)} noValidate>
           <Stack gap="sm">
-            <Text size="sm">{t('certificates.upload.help')}</Text>
+            <Text size="sm" c="dimmed">
+              {t('certificates.upload.help')}
+            </Text>
             <Stack gap={4}>
               <Text size="sm" fw={500} id={formatId}>
                 {t('certificates.upload.format')}
@@ -217,15 +221,15 @@ function UploadForm({ onClose, onUploaded }: { onClose: () => void; onUploaded: 
             ) : (
               <ErrorAlert error={error} />
             )}
-            <Group justify="flex-end">
-              <Button variant="default" onClick={onClose}>
-                {t('certificates.cancel')}
-              </Button>
-              <Button type="submit" loading={busy}>
-                {t('certificates.upload.submit')}
-              </Button>
-            </Group>
           </Stack>
+          <DialogActions>
+            <Button variant="default" onClick={onClose}>
+              {t('certificates.cancel')}
+            </Button>
+            <Button type="submit" loading={busy} leftSection={<Icon name="Upload" size={15} />}>
+              {t('certificates.upload.submit')}
+            </Button>
+          </DialogActions>
         </form>
       )}
     </>
