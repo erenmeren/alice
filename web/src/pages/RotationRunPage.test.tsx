@@ -586,7 +586,7 @@ describe('RotationRunPage in the design', () => {
     const panel = screen.queryByRole('region', { name: 'Available decisions' });
     expect(panel !== null).toBe(shown);
     if (panel) {
-      expect(within(panel).getByText('Review the affected locations before confirming. Each decision asks for a fresh verification code.')).toBeInTheDocument();
+      expect(within(panel).getByText('Review the affected locations before confirming. Each decision may ask for a fresh verification code.')).toBeInTheDocument();
       expect(within(panel).getByRole('button', { name: 'Finish now' })).toBeInTheDocument();
       expect(within(panel).getByRole('button', { name: 'Stop and undo' })).toBeInTheDocument();
     }
