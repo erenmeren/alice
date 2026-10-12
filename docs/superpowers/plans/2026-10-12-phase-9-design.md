@@ -45,7 +45,7 @@
 These settle every place where the design, the product and the tests pull in different directions. Executors follow them; a reviewer checks against them.
 
 - **R1 Stack.** Keep React/Mantine, the CSP nonce, i18n catalogs, query semantics, RBAC, step-up, cursor pagination and server-derived action eligibility (IMPLEMENTATION §§1–6). The design's HTML/CSS is translated into Mantine theme overrides, CSS modules and small components — never copied as `innerHTML`.
-- **R2 Vendored assets, no new dependency.** Fonts (`geist.woff`, `geist-mono.woff`, `OFL.txt`) and the 76-icon Lucide subset (`icons.js`, `LUCIDE-LICENSE`) are copied into `web/src/design/`. Icons render as React SVG elements from data (no `innerHTML`). Their licenses enter `THIRD_PARTY_NOTICES.md` through a `-vendored` manifest in `tools/notices` (Task 2). System-font fallbacks stay in the stacks.
+- **R2 Vendored assets, no new dependency.** Fonts (`geist.woff`, `geist-mono.woff`, `OFL.txt`) and the 75-icon Lucide subset (`icons.js`, `LUCIDE-LICENSE`) are copied into `web/src/design/`. Icons render as React SVG elements from data (no `innerHTML`). Their licenses enter `THIRD_PARTY_NOTICES.md` through a `-vendored` manifest in `tools/notices` (Task 2). System-font fallbacks stay in the stacks.
 - **R3 Tokens.** The design's tokens become `--alice-*` CSS variables (C1) for `data-mantine-color-scheme="light"` and `"dark"`, plus hover tokens and `--alice-on-strong` that the design implies but does not name (needed for filled semantic buttons). Mantine's own variables map to them (C2). Light/subtle variants use the semantic `*-soft` background with the semantic foreground — this replaces the old "black text" override (IMPLEMENTATION §1); `--mantine-color-error` is `--alice-danger` in both schemes.
 - **R4 Color mode and density are per-device preferences.** `MantineProvider` gets `defaultColorScheme="auto"` and `localStorageColorSchemeManager({ key: 'alice.colorScheme' })`; density is `alice.density` (`comfortable` 67 px rows / `compact` 48 px). `web/public/theme-init.js` (a same-origin script, allowed by `script-src 'self'`) applies both before the bundle runs, so a dark-mode user never sees a light flash. Language keeps its existing account-level persistence (`PUT /auth/locale` + `alice.lang`). A blocked `localStorage` changes nothing but persistence.
 - **R5 Shell.** Mantine `AppShell` stays (its mobile off-canvas behaviour and `Burger` are e2e contract), restyled: a 222 px sidebar (202 px between 768 and 1199 px), 65 px top bar, breakpoint `sm` (768 px; the design's 760). DOM order: skip link → navbar → header → main (keeps the 25-Tab budget to the People & access link). Sidebar: brand, installation card ("Self-hosted installation" + Alice version — no organization name: the product has no tenancy model and operators cannot read the license customer), one `<nav aria-label={t('nav.label')}>` with an ungrouped Overview and the groups **Inventory** (Certificates, SSH keys, Servers, Key Vaults), **Operations** (Deployments, Key rotations, Audit trail), **Administration** (People & access, Settings, License) — group labels are plain text, not headings, not links; then the account block (avatar initials, `data-testid="current-user"` with the display name only, role) with visible links **Your account** and **API tokens** and a visible **Sign out** button. The design's account dialog is not used: the e2e needs a visible Sign out button and plain links.
@@ -136,7 +136,7 @@ New (all under `web/` unless stated):
 | Path | Responsibility | Task |
 |---|---|---|
 | `src/design/fonts/geist.woff`, `geist-mono.woff`, `OFL.txt` | Vendored Geist fonts and their license (copied byte for byte from `alice-design/dist/assets`) | 1 |
-| `src/design/icons.ts`, `src/design/LUCIDE-LICENSE` | Generated Lucide icon data (76 icons) and its license | 1 |
+| `src/design/icons.ts`, `src/design/LUCIDE-LICENSE` | Generated Lucide icon data (75 icons) and its license | 1 |
 | `src/design/Icon.tsx` (+ test) | `Icon` component: SVG from icon data, decorative (`aria-hidden`) | 1 |
 | `src/design/tokens.css` (+ `tokens.test.ts`) | `--alice-*` tokens for light and dark, density, `@font-face` | 1 |
 | `src/design/mantine.module.css` | Mantine component classes in the design's look (Alert, Badge, Button, Paper/Card, Code, Modal, Table, Tabs, Title, inputs) | 1 |
@@ -349,7 +349,7 @@ Exports (other tasks import these names): `SCROLL_REGION_CLASS` (unchanged `'ali
 
 ### C4. Icons (Task 1)
 
-`import { Icon, type IconName } from '../design/Icon'` — `<Icon name="ShieldCheck" size={18} className?={…} />`. Always decorative (`aria-hidden="true"`, `focusable="false"`); the text next to it carries the meaning. `IconName` is the union of the 76 names in `alice-design/dist/icons.js` (there is no `X`: use `CircleX`; no `Sun`/`Moon` substitutes needed — both exist).
+`import { Icon, type IconName } from '../design/Icon'` — `<Icon name="ShieldCheck" size={18} className?={…} />`. Always decorative (`aria-hidden="true"`, `focusable="false"`); the text next to it carries the meaning. `IconName` is the union of the 75 names in `alice-design/dist/icons.js`. `X`, `CircleX`, `Sun`, `Moon`, `Monitor` and `Laptop` all exist; use `X` for close/dismiss and `CircleX` for a failed status.
 
 ### C5. Shared UI components (`web/src/components/ui`, Task 3; import from `../components/ui` via `index.ts`)
 
@@ -407,7 +407,7 @@ Moved out of `AttentionList.tsx` unchanged in meaning: `conditionTarget(c: Condi
 
 ### C8. Test helpers (Task 1)
 
-`renderApp(ui, languages?, opts?: { colorScheme?: 'light' | 'dark' })`, `renderRoute(path, { languages?, strict?, colorScheme? })`, `renderWithAuth`, `renderWithStepUp` keep their signatures and render inside the **app** theme (`appTheme`, `cssVariablesResolver`, `forceColorScheme` when `colorScheme` is given). `src/test/setup.ts` keeps `matchMedia` returning `matches: false` and clears `alice.colorScheme`/`alice.density` with the rest of `localStorage` and removes `data-density` from `<html>` before each test.
+`renderApp(ui, languages?, opts?: { colorScheme?: 'light' | 'dark' })`, `renderRoute(path, { languages?, strict?, colorScheme? })`, `renderWithAuth`, `renderWithStepUp` keep their signatures and render inside the **app** theme (`appTheme`, `cssVariablesResolver`, `forceColorScheme` when `colorScheme` is given). The test providers use the app's color-scheme manager (`localStorageColorSchemeManager({ key: COLOR_SCHEME_KEY })`, i.e. `alice.colorScheme`) and `defaultColorScheme="auto"`, as `ThemeProvider` does. `src/test/setup.ts` keeps `matchMedia` returning `matches: false` and clears `alice.colorScheme`/`alice.density` with the rest of `localStorage` and removes `data-density` from `<html>` before each test.
 
 ### C9. Translation namespaces (who adds which keys)
 
@@ -463,7 +463,7 @@ Expected: no `cmp` output, then `1`.
   {
     "name": "Lucide icons (subset)",
     "source": "https://lucide.dev",
-    "license": "ISC",
+    "license": "ISC AND MIT",
     "files": ["web/src/design/icons.ts"],
     "licenseFile": "web/src/design/LUCIDE-LICENSE"
   }
@@ -563,8 +563,8 @@ describe('Icon', () => {
     expect(svg).toHaveClass('x');
     expect(svg.children).toHaveLength(ICONS.ShieldCheck.length);
   });
-  it('carries the 76 icons of the design and nothing that needs innerHTML', () => {
-    expect(Object.keys(ICONS)).toHaveLength(76);
+  it('carries the 75 icons of the design and nothing that needs innerHTML', () => {
+    expect(Object.keys(ICONS)).toHaveLength(75);
     for (const parts of Object.values(ICONS)) for (const [tag] of parts) expect(['path', 'circle', 'rect', 'line', 'ellipse', 'polyline', 'polygon']).toContain(tag);
   });
 });
@@ -1055,7 +1055,7 @@ export function useDensity(): [Density, (d: Density) => void] {
 
 `web/src/main.tsx`: imports in this order: `@mantine/core/styles.css`, `./design/tokens.css`, `./theme.css`, `./design/base.css`; then `applyDensity(readDensity())` before `startApp`.
 
-`web/src/test/render.tsx` (C8): the `providers()` helper uses `appTheme(i18n.t('ui.scrollRegion'))`, `cssVariablesResolver`, and `forceColorScheme={opts.colorScheme}` when given; add the optional `opts` argument to `renderApp` and the `colorScheme` field to `renderRoute`'s options. `web/src/test/setup.ts`: in `beforeEach`, also `document.documentElement.removeAttribute('data-density')`.
+`web/src/test/render.tsx` (C8): the `providers()` helper uses `appTheme(i18n.t('ui.scrollRegion'))`, `cssVariablesResolver`, `forceColorScheme={opts.colorScheme}` when given, and the app's `colorSchemeManager` (`localStorageColorSchemeManager({ key: COLOR_SCHEME_KEY })`) with `defaultColorScheme="auto"`; add the optional `opts` argument to `renderApp` and the `colorScheme` field to `renderRoute`'s options. `web/src/test/setup.ts`: in `beforeEach`, also `document.documentElement.removeAttribute('data-density')`.
 
 - [ ] **Step 4: Run the tests and the whole suite**
 
@@ -4190,7 +4190,7 @@ Report: the three-browser pass counts, the path of `bin/design-evidence/index.ht
 **Upgrade notes**
 - No API, permission or data change. Bookmarks keep working (`/rotation/runs/<id>` is unchanged).
 - The browser stores `alice.colorScheme` and `alice.density` in local storage.
-- `THIRD_PARTY_NOTICES.md` lists the bundled fonts (SIL OFL 1.1) and icons (ISC).
+- `THIRD_PARTY_NOTICES.md` lists the bundled fonts (SIL OFL 1.1) and icons (ISC AND MIT: Lucide, with the Feather-derived icons under MIT).
 ```
 
 - [ ] **Step 4: Final checks (no Docker; do not run `make lint` while Task 19 runs Playwright)**
