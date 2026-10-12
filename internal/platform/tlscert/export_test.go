@@ -60,3 +60,10 @@ func SelfSignForTest(t *testing.T, key crypto.PrivateKey, org string, notBefore,
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
+
+// SetEnsureHook calls f at each stage of EnsureSelfSigned's write; a non-nil error stops it there without any
+// cleanup, as a crash would. The returned function removes the hook.
+func SetEnsureHook(f func(stage string) error) (restore func()) {
+	ensureHook = f
+	return func() { ensureHook = nil }
+}

@@ -171,65 +171,82 @@ func (s *Store) load() (*current, error) {
 }
 
 // replace writes a new pair with the .prev/.new protocol. Callers hold s.mu.
-func (s *Store) replace(certPEM, keyPEM []byte) (err error) {
-	crt, key := s.path(crtName), s.path(keyName)
-	s.removeLeftovers()
+func (s *Store) replace(certPEM, keyPEM []byte) error {
+	return replacePair(s.dir, certPEM, keyPEM, s.hook)
+}
+
+// replacePair writes a new pair into dir with the .prev/.new protocol (S-13): both .new files are written and
+// synced, hard links keep the live pair as .prev, then the key and the certificate are renamed into place and the
+// leftovers removed. repair finishes or undoes a pair that stopped between the renames. When dir holds no live pair
+// (the first creation) there is nothing to keep as .prev. hook (tests) stops it at a stage without cleanup, as a
+// crash would. Callers run repair first: leftovers of an earlier interrupted replacement are removed here.
+func replacePair(dir string, certPEM, keyPEM []byte, hook func(stage string) error) (err error) {
+	crt, key := filepath.Join(dir, crtName), filepath.Join(dir, keyName)
+	at := func(stage string) error {
+		if hook == nil {
+			return nil
+		}
+		if err := hook(stage); err != nil {
+			return errors.Join(errHookStop, err)
+		}
+		return nil
+	}
+	removeLeftovers(dir)
 	defer func() {
 		if err != nil && !errors.Is(err, errHookStop) {
-			s.removeLeftovers()
+			removeLeftovers(dir)
 		}
 	}()
-	if err := os.Link(crt, crt+prevExt); err != nil {
-		return fmt.Errorf("keep the previous certificate: %w", err)
-	}
-	if err := os.Link(key, key+prevExt); err != nil {
-		return fmt.Errorf("keep the previous key: %w", err)
+	hadPair := exists(crt) || exists(key)
+	if hadPair {
+		if err := os.Link(crt, crt+prevExt); err != nil {
+			return fmt.Errorf("keep the previous certificate: %w", err)
+		}
+		if err := os.Link(key, key+prevExt); err != nil {
+			return fmt.Errorf("keep the previous key: %w", err)
+		}
 	}
 	if err := writeNew(key+newExt, keyPEM, 0o400); err != nil {
 		return err
 	}
-	if err := s.at(stageKeyWritten); err != nil {
+	if err := at(stageKeyWritten); err != nil {
 		return err
 	}
 	if err := writeNew(crt+newExt, certPEM, 0o644); err != nil {
 		return err
 	}
-	if err := s.at(stageFilesWritten); err != nil {
+	if err := at(stageFilesWritten); err != nil {
 		return err
 	}
 	if err := os.Rename(key+newExt, key); err != nil {
 		return fmt.Errorf("install the key: %w", err)
 	}
-	if err := s.at(stageBetweenRenames); err != nil {
+	if err := at(stageBetweenRenames); err != nil {
 		return err
 	}
 	if err := os.Rename(crt+newExt, crt); err != nil {
-		// Put the previous key back so the pair on disk matches again.
-		return errors.Join(fmt.Errorf("install the certificate: %w", err), os.Rename(key+prevExt, key))
+		// Put the previous key back so the pair on disk matches again; without one, remove the lone new key.
+		undo := os.Remove(key)
+		if hadPair {
+			undo = os.Rename(key+prevExt, key)
+		}
+		return errors.Join(fmt.Errorf("install the certificate: %w", err), undo)
 	}
-	if err := syncDir(s.dir); err != nil {
+	if err := syncDir(dir); err != nil {
 		return err
 	}
-	s.removeLeftovers()
-	return syncDir(s.dir)
+	removeLeftovers(dir)
+	return syncDir(dir)
 }
 
 // errHookStop marks an error returned by the test hook: Install stops there and cleans nothing up, like a crash.
 var errHookStop = errors.New("tlscert: stopped by a test hook")
 
-func (s *Store) at(stage string) error {
-	if s.hook == nil {
-		return nil
-	}
-	if err := s.hook(stage); err != nil {
-		return errors.Join(errHookStop, err)
-	}
-	return nil
-}
+func (s *Store) removeLeftovers() { removeLeftovers(s.dir) }
 
-func (s *Store) removeLeftovers() {
+func removeLeftovers(dir string) {
 	for _, n := range []string{crtName + newExt, keyName + newExt, crtName + prevExt, keyName + prevExt} {
-		_ = os.Remove(s.path(n))
+		_ = os.Remove(filepath.Join(dir, n))
 	}
 }
 
@@ -261,6 +278,12 @@ func (s *Store) repair() error {
 		default:
 			return fmt.Errorf("the HTTPS certificate in %s was being replaced and neither the new nor the previous pair is complete", s.dir)
 		}
+	}
+	if !exists(crt) && !exists(key) {
+		// The first creation of the temporary pair stopped before its key was renamed: nothing is live, the
+		// leftovers go and EnsureSelfSigned creates the pair again.
+		s.removeLeftovers()
+		return syncDir(s.dir)
 	}
 	if !pairMatches(crt, key) {
 		return fmt.Errorf("the HTTPS certificate and key in %s do not match", s.dir)

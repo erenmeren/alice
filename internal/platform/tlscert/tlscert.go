@@ -38,7 +38,8 @@ const (
 )
 
 // EnsureSelfSigned returns the certificate in dir, creating or renewing
-// Alice's own temporary certificate when needed.
+// Alice's own temporary certificate when needed. A directory an interrupted replacement left behind must be
+// repaired first (NewStore does).
 func EnsureSelfSigned(dir string, hosts []string, now time.Time) (tls.Certificate, error) {
 	certPath, keyPath := filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
 	certExists, keyExists := exists(certPath), exists(keyPath)
@@ -66,10 +67,9 @@ func EnsureSelfSigned(dir string, hosts []string, now time.Time) (tls.Certificat
 	if err != nil {
 		return tls.Certificate{}, err
 	}
-	if err := writeAtomic(keyPath, keyPEM, 0o400); err != nil {
-		return tls.Certificate{}, err
-	}
-	if err := writeAtomic(certPath, certPEM, 0o644); err != nil {
+	// The .new/.prev protocol of Store.Renew, so a crash between the two renames leaves a pair the next start's
+	// repair finishes or undoes instead of a new key beside the old certificate (review-fixes L-2).
+	if err := replacePair(dir, certPEM, keyPEM, ensureHook); err != nil {
 		return tls.Certificate{}, err
 	}
 	return tls.X509KeyPair(certPEM, keyPEM)
@@ -176,31 +176,10 @@ func generate(org string, hosts []string, notBefore, notAfter time.Time) (certPE
 		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), nil
 }
 
-func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-"+filepath.Base(path)+"-*")
-	if err != nil {
-		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }() // no-op after a successful rename
-	if err := tmp.Chmod(mode); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := bytes.NewReader(data).WriteTo(tmp); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
-}
-
 func exists(p string) bool {
 	_, err := os.Stat(p)
 	return !errors.Is(err, os.ErrNotExist)
 }
+
+// ensureHook (tests) stops EnsureSelfSigned at a stage, as a crash would.
+var ensureHook func(stage string) error

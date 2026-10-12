@@ -179,3 +179,52 @@ func TestFailsWhenCertificateTargetIsADirectory(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "only one of tls.crt and tls.key exists")
 }
+
+// EnsureSelfSigned writes with the same .new/.prev protocol as Store.Renew (review-fixes L-2): a crash at any stage
+// of a startup renewal or of the first creation leaves a directory the next start repairs, never a mismatched pair.
+func TestAnInterruptedStartupRenewalLeavesAStartablePair(t *testing.T) {
+	for _, stage := range []string{tlscert.StageKeyWritten, tlscert.StageFilesWritten, tlscert.StageBetweenRenames} {
+		t.Run(stage, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := tlscert.EnsureSelfSigned(dir, hosts, t0)
+			require.NoError(t, err)
+			later := t0.Add(85 * 24 * time.Hour) // due for renewal
+			restore := tlscert.SetEnsureHook(func(st string) error {
+				if st == stage {
+					return errCrash
+				}
+				return nil
+			})
+			_, err = tlscert.EnsureSelfSigned(dir, hosts, later)
+			restore()
+			require.ErrorIs(t, err, errCrash)
+
+			s := newStore(t, dir, &fakeNow{t: later})
+			assert.True(t, s.Info().Temporary)
+			assert.Equal(t, later.Add(90*24*time.Hour), s.Info().NotAfter)
+			assert.Equal(t, []string{"tls.crt", "tls.key"}, dirNames(t, dir))
+			assert.Equal(t, os.FileMode(0o400), mode(t, filepath.Join(dir, "tls.key")))
+		})
+	}
+}
+
+func TestAnInterruptedCreationLeavesAStartableDirectory(t *testing.T) {
+	for _, stage := range []string{tlscert.StageKeyWritten, tlscert.StageFilesWritten, tlscert.StageBetweenRenames} {
+		t.Run(stage, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "keys")
+			restore := tlscert.SetEnsureHook(func(st string) error {
+				if st == stage {
+					return errCrash
+				}
+				return nil
+			})
+			_, err := tlscert.EnsureSelfSigned(dir, hosts, t0)
+			restore()
+			require.ErrorIs(t, err, errCrash)
+
+			s := newStore(t, dir, &fakeNow{t: t0})
+			assert.True(t, s.Info().Temporary)
+			assert.Equal(t, []string{"tls.crt", "tls.key"}, dirNames(t, dir))
+		})
+	}
+}
