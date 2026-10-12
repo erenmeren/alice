@@ -1170,6 +1170,7 @@
       "privateKey": "Özel anahtar",
       "privateHeld": "Alice'de saklanır. Bu sayfada asla gösterilmez.",
       "privateNotHeld": "Alice'de bulunmuyor",
+      "privatePlatform": "Alice'in kendi bağlantıları için Alice'de saklanır. İndirilemez.",
       "weakDetailTitle": "Zayıf algoritma tespit edildi",
       "weakDetailText": "Erişim konumlarını inceledikten sonra bu anahtarı değiştirin.",
       "generateNoteTitle": "Özel anahtar verisi burada gösterilmez",

@@ -1170,6 +1170,7 @@
       "privateKey": "Private key",
       "privateHeld": "Held by Alice. It is never displayed on this page.",
       "privateNotHeld": "Not held by Alice",
+      "privatePlatform": "Held by Alice for its own connections. It cannot be downloaded.",
       "weakDetailTitle": "Weak algorithm detected",
       "weakDetailText": "Replace this key after reviewing its access locations.",
       "generateNoteTitle": "Private material is never displayed here",
