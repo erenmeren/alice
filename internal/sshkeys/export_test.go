@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // HoldGenerationSlots takes every generation slot until the returned release is called.
@@ -84,4 +85,9 @@ func SetReconcileBatch(t *testing.T, n int) {
 	old := reconcileBatch
 	reconcileBatch = n
 	t.Cleanup(func() { reconcileBatch = old })
+}
+
+// AttentionParams runs the needs_attention mail's parameter query for the rotation run in tx.
+func AttentionParams(ctx context.Context, s *Service, tx pgx.Tx, runID uuid.UUID) (map[string]string, error) {
+	return s.attentionParams(ctx, tx, runRow{id: runID}, ReasonUndoFailed)
 }

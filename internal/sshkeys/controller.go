@@ -484,7 +484,11 @@ func (c *advance) removing(ctx context.Context) error {
 			ReasonRemoveIncomplete, kept); err != nil {
 			return err
 		}
-		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, c.s.attentionParams(ctx, c.tx, c.run, ReasonRemoveIncomplete))
+		params, err := c.s.attentionParams(ctx, c.tx, c.run, ReasonRemoveIncomplete)
+		if err != nil {
+			return err
+		}
+		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, params)
 	}
 	if err := c.setStatus(ctx, StatusCompleted, "", ", kept_count = $5", kept); err != nil {
 		return err
@@ -551,7 +555,9 @@ func (s *Service) retireIfUnused(ctx context.Context, tx pgx.Tx, actor audit.Act
 
 // attentionParams are the needs_attention mail's parameters: the servers where an undo failed are
 // named (re-review N4).
-func (s *Service) attentionParams(ctx context.Context, tx pgx.Tx, run runRow, code string) map[string]string {
+//
+// A failed query is returned (review-fixes L-13): it has aborted the transaction, so nothing after it could succeed.
+func (s *Service) attentionParams(ctx context.Context, tx pgx.Tx, run runRow, code string) (map[string]string, error) {
 	// Every param the template names is always sent ("0" and "—" when there is none): a template never
 	// receives a missing param.
 	p := map[string]string{"key_label": run.oldLabel, "code": code}
@@ -560,7 +566,7 @@ func (s *Service) attentionParams(ctx context.Context, tx pgx.Tx, run runRow, co
 		if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(array_agg(DISTINCT t.name::text ORDER BY t.name::text), '{}')
 FROM rotation_locations l JOIN targets t ON t.id = l.target_id WHERE l.rotation_id = $1 AND l.state = $2`, run.id, st.state).
 			Scan(&count, &names); err != nil {
-			count, names = 0, nil
+			return nil, fmt.Errorf("sshkeys: read the servers of the needs-attention mail: %w", err)
 		}
 		if len(names) > 10 {
 			names = append(names[:10], "…")
@@ -568,7 +574,7 @@ FROM rotation_locations l JOIN targets t ON t.id = l.target_id WHERE l.rotation_
 		p[st.prefix+"_count"] = strconv.Itoa(count)
 		p[st.prefix+"_servers"] = listOrDash(names)
 	}
-	return p
+	return p, nil
 }
 
 // listOrDash joins names with ", ", or "—" when there is none.
@@ -618,7 +624,11 @@ func (c *advance) rollingBack(ctx context.Context) error {
 		if err := c.setStatus(ctx, StatusNeedsAttention, ReasonUndoFailed, ", result_code = $5", ReasonUndoFailed); err != nil {
 			return err
 		}
-		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, c.s.attentionParams(ctx, c.tx, c.run, ReasonUndoFailed))
+		params, err := c.s.attentionParams(ctx, c.tx, c.run, ReasonUndoFailed)
+		if err != nil {
+			return err
+		}
+		return c.s.mail(ctx, c.tx, TemplateNeedsAttention, params)
 	}
 	if err := c.setStatus(ctx, StatusAborted, c.run.resultCode, ""); err != nil {
 		return err
