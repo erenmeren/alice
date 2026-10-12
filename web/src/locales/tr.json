@@ -2267,7 +2267,6 @@
       "manual": "Bir yönetici başlattı"
     },
     "plannedFor": "Planlanan zaman: {{date}}",
-    "finishedAt": "Bitiş: {{date}}",
     "overlapUntil": "İki anahtar da şu zamana kadar çalışır: {{date}}",
     "decisionDue": "{{date}} zamanından önce karar verin; aksi hâlde Alice yenilemeyi geri alır.",
     "pausedBanner": "Duraklatıldı: lisansın süresi doldu ya da lisans denetlenemedi. Lisans yeniden geçerli olana ve siz Devam et'i seçene kadar Alice bu yenileme için yeni anahtar eklemez ve eski anahtarı kaldırmaz.",

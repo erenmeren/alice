@@ -2267,7 +2267,6 @@
       "manual": "Started by an administrator"
     },
     "plannedFor": "Planned for {{date}}",
-    "finishedAt": "Finished {{date}}",
     "overlapUntil": "Both keys work until {{date}}",
     "decisionDue": "Decide before {{date}}, or Alice undoes the rotation.",
     "pausedBanner": "Paused: the license expired or could not be checked. Alice adds no new key and removes no old key for this rotation until the license is valid again and you choose Continue.",
