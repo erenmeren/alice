@@ -18,16 +18,20 @@ describe('AttentionList', () => {
       ),
     );
     await renderWithAuth(<AttentionList items={[cond('auth_failed', 'v-1', 'prod-vault'), cond('auth_failed', 's-1', 'web-1'), cond('host_key_changed', 's-2', 'web-2')]} />);
-    const links = await screen.findAllByRole('link');
+    // A failed sign-in is linked once the vaults are read (it could be a Key Vault's).
     await vi.waitFor(() => expect(screen.getAllByRole('link').map((l) => l.getAttribute('href'))).toEqual(['/key-vaults/v-1', '/servers/s-1', '/servers/s-2']));
-    expect(links).toHaveLength(3);
+    expect(screen.getAllByRole('listitem')).toHaveLength(3);
+    expect(screen.getByText('prod-vault', { exact: true })).toBeVisible();
+    expect(screen.getByText('3 open')).toBeVisible();
   });
 
   it('asks for the vaults only when a condition could name one', async () => {
     let asked = 0;
     server.use(...sessionHandlers(adminSession), http.get('/api/v1/targets', () => { asked++; return HttpResponse.json({ items: [], next_cursor: null }); }));
     await renderWithAuth(<AttentionList items={[cond('host_key_changed', 's-2', 'web-2'), cond('deployment_failed', 'd-1', 'x'), cond('audit_broken', '', ''), cond('notifications_failing', '', '')]} />);
-    expect(await screen.findByRole('link', { name: 'Server identity changed' })).toHaveAttribute('href', '/servers/s-2');
+    // The link is named by what happened, then the resource and since when (the design's attention row).
+    expect(await screen.findByRole('link', { name: /^Server identity changed\s*web-2\s*Since / })).toHaveAttribute('href', '/servers/s-2');
+    expect(screen.getByRole('link', { name: /^The last check found an integrity problem/ })).toHaveAttribute('href', '/audit');
     expect(asked).toBe(0);
   });
 });

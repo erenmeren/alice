@@ -11,9 +11,11 @@ const withBackup = (backup: unknown) => http.get('/api/v1/dashboard/summary', ()
 describe('BackupCard', () => {
   it('shows an Administrator the last successful backup, its age and a link to the Backups tab', async () => {
     server.use(...sessionHandlers(adminSession), withBackup(backupStateFixture({ age_hours: 6 })));
-    await renderRoute('/');
+    await renderRoute('/?view=assurance');
     const card = await screen.findByTestId('backup-card');
-    expect(within(card).getByRole('heading', { name: 'Backups' })).toBeInTheDocument();
+    expect(within(card).getByRole('heading', { name: 'Recovery readiness' })).toBeInTheDocument();
+    expect(within(card).getByText('Latest backup available')).toBeVisible();
+    expect(within(card).getByText('Not established by a backup checksum')).toBeVisible();
     expect(within(card).getByText(`Last successful backup: ${formatDateTime('2026-10-10T02:30:00Z', 'en')}`)).toBeInTheDocument();
     expect(within(card).getByText('6 hours ago')).toBeInTheDocument();
     expect(within(card).getByRole('link', { name: 'Open the backups' })).toHaveAttribute('href', '/settings?tab=backups');
@@ -22,7 +24,7 @@ describe('BackupCard', () => {
 
   it('shows an Auditor the same, without the link to the settings', async () => {
     server.use(...sessionHandlers(auditorSession), withBackup(backupStateFixture({ age_hours: 1 })));
-    await renderRoute('/');
+    await renderRoute('/?view=assurance');
     const card = await screen.findByTestId('backup-card');
     expect(within(card).getByText('1 hour ago')).toBeInTheDocument();
     expect(within(card).queryByRole('link')).not.toBeInTheDocument();
@@ -40,16 +42,17 @@ describe('BackupCard', () => {
       ...sessionHandlers(adminSession),
       withBackup(backupStateFixture({ last_success_at: null, last_success_name: '', age_hours: null, failing: true, alarm: true, configured: true })),
     );
-    await renderRoute('/');
+    await renderRoute('/?view=assurance');
     const card = await screen.findByTestId('backup-card');
     expect(within(card).getByText('No backup has been made yet.')).toBeInTheDocument();
     expect(within(card).getByText('The last backup failed. Alice e-mailed the administrators.')).toBeInTheDocument();
     expect(within(card).getByText('No successful backup for 48 hours')).toBeInTheDocument();
+    expect(within(card).queryByText('Latest backup available')).not.toBeInTheDocument();
   });
 
   it('says backups start after the recovery passphrase', async () => {
     server.use(...sessionHandlers(sessionFor('admin', 'tr')), withBackup(backupStateFixture({ configured: false, last_success_at: null, age_hours: null })));
-    await renderRoute('/', { languages: ['tr-TR'] });
+    await renderRoute('/?view=assurance', { languages: ['tr-TR'] });
     const card = await screen.findByTestId('backup-card');
     expect(within(card).getByText('Yedekleme, kurtarma parolası belirlendikten sonra başlar.')).toBeInTheDocument();
     expectNoRawKeys();

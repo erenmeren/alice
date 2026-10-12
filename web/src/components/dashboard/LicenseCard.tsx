@@ -1,8 +1,10 @@
-import { Anchor, Badge, Group, Stack, Text } from '@mantine/core';
+import { Anchor } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import type { DashboardSummary } from '../../api/phase7';
 import { formatDateTime } from '../../datetime';
+import { StatusBadge } from '../ui';
+import classes from './dashboard.module.css';
 import { Widget } from './Widget';
 
 // LicenseCard: Administrators and Auditors see the phase, the end date and the days left; an Operator (phase "") sees
@@ -10,29 +12,34 @@ import { Widget } from './Widget';
 export function LicenseCard({ license, detailed }: { license: DashboardSummary['license']; detailed: boolean }) {
   const { t, i18n } = useTranslation();
   if (!detailed && !license.expired) return null;
+  const phase = license.phase && i18n.exists(`license.phase.${license.phase}`) ? t(`license.phase.${license.phase}`) : null;
   return (
-    <Widget title={t('dashboard.license')} testId="license-card">
-      <Stack gap="xs">
-        <Group gap="xs">
-          {license.phase && i18n.exists(`license.phase.${license.phase}`) && (
-            <Badge variant="light" color={license.expired ? 'red' : 'green'} tt="none">
-              {t(`license.phase.${license.phase}`)}
-            </Badge>
-          )}
-          {license.expired && !license.phase && (
-            <Badge variant="light" color="red" tt="none">
+    <Widget
+      title={t('dashboard.license')}
+      testId="license-card"
+      action={
+        phase ? (
+          <StatusBadge tone={license.expired ? 'danger' : 'success'} icon={license.expired ? 'CircleAlert' : 'ShieldCheck'}>
+            {phase}
+          </StatusBadge>
+        ) : (
+          license.expired && (
+            <StatusBadge tone="danger" icon="CircleAlert">
               {t('dashboard.expired')}
-            </Badge>
-          )}
-        </Group>
-        {detailed && license.ends_at && <Text size="sm">{t('dashboard.licenseEnds', { date: formatDateTime(license.ends_at, i18n.language) })}</Text>}
-        {detailed && license.days_left !== null && <Text size="sm">{t('dashboard.daysLeft', { count: license.days_left })}</Text>}
-        {detailed && (
-          <Anchor component={Link} to="/license" size="sm">
+            </StatusBadge>
+          )
+        )
+      }
+      footer={
+        detailed && (
+          <Anchor component={Link} to="/license" size="xs">
             {t('nav.license')}
           </Anchor>
-        )}
-      </Stack>
+        )
+      }
+    >
+      {detailed && license.days_left !== null && <span className={classes.largeValue}>{t('dashboard.daysLeft', { count: license.days_left })}</span>}
+      {detailed && license.ends_at && <p className={classes.caption}>{t('dashboard.licenseEnds', { date: formatDateTime(license.ends_at, i18n.language) })}</p>}
     </Widget>
   );
 }

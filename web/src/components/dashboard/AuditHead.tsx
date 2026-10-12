@@ -1,31 +1,65 @@
-import { Stack, Text } from '@mantine/core';
+import { Anchor, Code } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router';
 import type { DashboardSummary } from '../../api/phase7';
 import { formatDateTime } from '../../datetime';
-import { CodeText } from '../CodeText';
+import { FactList, Notice, StatusBadge } from '../ui';
 import { WRAP } from '../wrap';
+import classes from './dashboard.module.css';
 import { Widget } from './Widget';
 
-// AuditHead is shown to Administrators and Auditors (audit is null for Operators and for an empty log: then hidden).
+// AuditHead is the design's "Audit integrity", shown to Administrators and Auditors (audit is null for Operators and for
+// an empty log: then hidden). It states what the latest chain check found and what that does not prove: hash-chain
+// continuity is no independent proof against a compromised host (IMPLEMENTATION §3); no score is derived from it.
 export function AuditHead({ audit }: { audit: NonNullable<DashboardSummary['audit']> }) {
   const { t, i18n } = useTranslation();
   return (
-    <Widget title={t('dashboard.auditHead')} testId="audit-head">
-      <Stack gap="xs">
-        <Text size="sm">{t('dashboard.auditSeq', { seq: audit.head_seq })}</Text>
-        <Text size="sm" style={WRAP}>
-          <CodeText i18nKey="dashboard.hash" param="hash" value={audit.head_hash} />
-        </Text>
-        {audit.checked_at && <Text size="sm">{t('dashboard.auditChecked', { time: formatDateTime(audit.checked_at, i18n.language) })}</Text>}
-        {!audit.intact && (
-          <Text size="sm" c="red.8" role="alert">
-            {t('dashboard.auditBroken')}
-          </Text>
-        )}
-        <Text size="sm" c="gray.7">
-          {t('dashboard.auditHeadHelp')}
-        </Text>
-      </Stack>
+    <Widget
+      title={t('dashboard.assurance.audit')}
+      description={t('dashboard.assurance.auditSub')}
+      testId="audit-head"
+      action={
+        audit.intact ? (
+          <StatusBadge tone="success" icon="ShieldCheck">
+            {t('dashboard.assurance.intact')}
+          </StatusBadge>
+        ) : (
+          <StatusBadge tone="danger" icon="ShieldAlert">
+            {t('dashboard.assurance.broken')}
+          </StatusBadge>
+        )
+      }
+      footer={
+        <Anchor component={Link} to="/audit" size="xs">
+          {t('dashboard.assurance.inspect')}
+        </Anchor>
+      }
+    >
+      {!audit.intact && (
+        <Notice tone="danger" role="alert" title={t('dashboard.auditBroken')} />
+      )}
+      <div className={audit.intact ? undefined : classes.section}>
+        <span className={classes.largeValue}>{audit.head_seq}</span>
+        <p className={classes.caption}>{t('dashboard.assurance.seqCaption')}</p>
+      </div>
+      <div className={classes.section}>
+        <FactList
+          facts={[
+            { key: 'checked', label: t('dashboard.assurance.lastChecked'), value: audit.checked_at ? formatDateTime(audit.checked_at, i18n.language) : t('dashboard.assurance.notChecked') },
+            {
+              key: 'hash',
+              label: t('dashboard.assurance.headHash'),
+              value: (
+                <Code translate="no" style={WRAP}>
+                  {audit.head_hash}
+                </Code>
+              ),
+            },
+          ]}
+        />
+      </div>
+      <p className={classes.note}>{t('dashboard.auditHeadHelp')}</p>
+      <p className={classes.note}>{t('dashboard.assurance.scope')}</p>
     </Widget>
   );
 }

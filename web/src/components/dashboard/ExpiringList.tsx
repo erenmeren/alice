@@ -1,8 +1,9 @@
-import { Anchor, Code, Group, Table, Text } from '@mantine/core';
+import { Anchor, Code, Group, Table } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 import type { ExpiringItem } from '../../api/phase7';
 import { Expiry } from '../Expiry';
+import { EmptyState } from '../ui';
 import { WRAP } from '../wrap';
 import { Widget } from './Widget';
 
@@ -23,15 +24,33 @@ function where(i: ExpiringItem): string[] {
   return sites.length > 0 ? sites : i.servers;
 }
 
+// ExpiringList is "Upcoming renewals": the server's first rows of what expires within 30 days, soonest first, the
+// expired included. It is a preview, never a total: the footer says how many are shown and links to the full list.
 export function ExpiringList({ items }: { items: ExpiringItem[] }) {
   const { t } = useTranslation();
   return (
-    <Widget title={t('dashboard.expiringSoon')} testId="expiring-list">
+    <Widget
+      title={t('dashboard.panels.renewals')}
+      description={t('dashboard.panels.renewalsSub')}
+      testId="expiring-list"
+      padded={false}
+      footer={
+        items.length > 0 && (
+          <>
+            <span>{t('dashboard.panels.renewalsShown', { count: items.length })}</span>
+            <Anchor component={Link} to="/certificates?expiry=30" size="xs">
+              {t('dashboard.panels.viewAll')}
+            </Anchor>
+          </>
+        )
+      }
+    >
       {items.length === 0 ? (
-        <Text c="gray.7">{t('dashboard.noneExpiring')}</Text>
+        <EmptyState icon="CircleCheck" title={t('dashboard.noneExpiring')} />
       ) : (
+        // The table sits flush in the panel (the design's panel table); the theme keeps its named, focusable scroll region.
         <Table.ScrollContainer minWidth={420}>
-          <Table aria-label={t('dashboard.expiringSoon')}>
+          <Table aria-label={t('dashboard.panels.renewals')} highlightOnHover>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>{t('dashboard.columns.name')}</Table.Th>

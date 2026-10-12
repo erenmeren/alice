@@ -1,0 +1,93 @@
+/* The Overview's panels (alice-design/dist/styles.css: .horizon*, .bars, .bar-column, .attention-*, .health-*,
+   .activity-*, .rotation-*, .large-value). Tokens only. */
+
+/* Expiration horizon */
+.horizon { display: flex; align-items: center; gap: 32px; padding: 23px 22px 0; }
+.horizonSummary { min-width: 95px; display: grid; justify-items: start; gap: 6px; }
+.horizonNumber { font-size: 47px; letter-spacing: -2px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.horizonText { margin: 0; font-size: 11px; color: var(--alice-text-secondary); }
+.horizonChart { flex: 1; min-width: 0; }
+.bars { display: flex; gap: 8px; height: 118px; align-items: flex-end; border-bottom: 1px solid var(--alice-border); }
+.barColumn { height: 100%; flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; }
+.barNumber { font-family: var(--mantine-font-family-monospace); font-size: 9px; color: var(--alice-text-muted); }
+.bar { display: block; width: 100%; min-width: 5px; min-height: 3px; border-radius: 3px 3px 0 0; background: var(--alice-chart-muted); transition: height var(--alice-duration); }
+.bar[data-bucket='expired'] { background: var(--alice-chart-expired); }
+.bar[data-bucket='d7'] { background: var(--alice-chart-urgent); }
+.bar[data-bucket='d30'] { background: var(--alice-chart); }
+.chartLabels { display: flex; gap: 8px; margin-top: 10px; font-size: 9px; color: var(--alice-text-muted); }
+.chartLabels > span { flex: 1; min-width: 0; text-align: center; overflow-wrap: anywhere; }
+.horizonKey { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 15px; padding: 20px 22px; font-size: 11px; color: var(--alice-text-secondary); }
+.countLink { font-size: 11px; }
+.countLink b { font-variant-numeric: tabular-nums; }
+.keyText { color: var(--alice-text-secondary); }
+.keyNote { flex-basis: 100%; margin: 0; font-size: 10px; color: var(--alice-text-muted); }
+
+/* Needs attention: the design lays the list out in three columns when the grid is one column wide (1020 px), back to
+   rows below 768 px. */
+.attentionCount { white-space: nowrap; }
+@media (min-width: 768px) and (max-width: 1020px) {
+  .attentionList { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding-top: 15px; }
+  .attentionList > li > * { height: 100%; padding: 16px; border-bottom: 0; border-right: 1px solid var(--alice-border); }
+  .attentionList > li:nth-child(3n) > * { border-right: 0; }
+  .attentionList > li:last-child > * { border-right: 0; }
+  .attentionList > li > * > svg:last-child { display: none; }
+}
+
+/* Large values (connectivity, audit, backup) */
+.largeValue { font-size: 38px; letter-spacing: -1.7px; font-weight: 500; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.valueRow { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.valueNote { font-size: 11px; color: var(--alice-text-muted); }
+.caption { margin: 10px 0 0; font-size: 11px; color: var(--alice-text-secondary); }
+.note { margin: 18px 0 0; font-size: 11px; color: var(--alice-text-secondary); }
+.section { margin-top: 24px; }
+
+/* Target connectivity */
+.healthTrack { display: flex; gap: 4px; margin: 18px 0 14px; }
+.healthTrack > i { height: 16px; min-width: 6px; border-radius: 3px; background: var(--alice-chart); }
+.healthTrack > i[data-tone='warning'] { background: var(--alice-chart-urgent); }
+.healthTrack > i[data-tone='danger'] { background: var(--alice-chart-expired); }
+.healthTrack > i[data-tone='info'], .healthTrack > i[data-tone='neutral'] { background: var(--alice-chart-muted); }
+.statusLinks { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 11px; }
+
+/* Recent (failed) deployments */
+.activityList { list-style: none; margin: 0; padding: 8px 22px 18px; }
+.activityItem { display: flex; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--alice-border); }
+.activityItem:last-child { border-bottom: 0; }
+.activityIcon { margin-top: 3px; flex-shrink: 0; }
+.activityIcon[data-tone='danger'] { color: var(--alice-danger); }
+.activityIcon[data-tone='warning'] { color: var(--alice-warning); }
+.activityText { display: grid; gap: 5px; min-width: 0; font-size: 11px; justify-items: start; }
+.activityText p { margin: 0; font-size: 10px; color: var(--alice-text-secondary); overflow-wrap: anywhere; }
+.activityTime { margin-left: auto; font-size: 10px; white-space: nowrap; color: var(--alice-text-muted); }
+
+/* Key rotation */
+.rotationList { list-style: none; margin: 0; padding: 0; }
+.rotationItem { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; padding: 12px 0; border-bottom: 1px solid var(--alice-border); font-size: 11px; }
+.rotationItem:first-child { padding-top: 0; }
+.rotationItem:last-child { border-bottom: 0; }
+.rotationItem time { color: var(--alice-text-muted); font-size: 10px; }
+.badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+
+/* Setup checklist */
+.checklist { list-style: none; margin: 16px 0 0; padding: 0; }
+.checklistItem { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 14px 22px; border-top: 1px solid var(--alice-border); font-size: 12px; }
+
+@media (max-width: 1199px) {
+  .horizon { gap: 18px; }
+  .horizonSummary { min-width: 80px; }
+}
+@media (max-width: 1020px) {
+  .bars { height: 130px; }
+  .horizonSummary { min-width: 135px; }
+}
+@media (max-width: 767px) {
+  .horizon { padding: 20px 18px 0; gap: 20px; flex-wrap: wrap; }
+  .horizonSummary { min-width: 80px; }
+  .horizonNumber { font-size: 40px; }
+  .bars, .chartLabels { gap: 5px; }
+  .barNumber { font-size: 8px; }
+  .horizonKey { padding: 20px 18px; gap: 8px 12px; }
+  .activityList { padding: 8px 18px 18px; }
+  .checklistItem { padding: 14px 18px; }
+}
+.checklistPanel { margin-bottom: 24px; }

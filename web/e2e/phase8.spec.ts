@@ -344,8 +344,9 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await answerStepUp(page, request, lang, totpSecret, backupsHeadingDone(page));
       await expect(field(page, t('backups.schedule.retention'))).toHaveValue('21');
 
-      // The dashboard's backup card shows the last success.
+      // The dashboard's backup card (on the Assurance tab) shows the last success.
       await page.goto('/');
+      await page.getByRole('tab', { name: t('dashboard.tabs.assurance') }).click();
       const card = page.getByTestId('backup-card');
       await expect(card).toBeVisible();
       await expect(card.getByText(textWith(t, 'backups.lastSuccess', 'time'))).toBeVisible();
@@ -371,6 +372,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await signIn(page, request, ADMIN, totpSecret);
       await expect(banner).toBeVisible();
       await expect(banner).toHaveText(t('backups.alarm'));
+      await page.getByRole('tab', { name: t('dashboard.tabs.assurance') }).click();
       await expect(page.getByTestId('backup-card').getByText(t('backups.alarm'), { exact: true })).toBeVisible();
       await wide(page, 'dashboard with the 48-hour banner');
       await signOut(page);
@@ -381,6 +383,9 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(answer.backup ?? null, 'an Operator gets no backup state').toBeNull();
       await expectSignedInAs(page, OPERATOR.fullName); // a new account starts in English, whatever the test language
       await expect(banner).toHaveCount(0);
+      // An Operator's summary has no audit and no backup part: the Overview has only its Operations tab.
+      await expect(page.getByTestId('dashboard-counts')).toBeVisible();
+      await expect(page.getByRole('tab')).toHaveCount(1);
       await expect(page.getByTestId('backup-card')).toHaveCount(0);
       await signOut(page);
 
@@ -394,6 +399,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expect(banner).toHaveCount(0);
       await page.goto('/');
       await expectSignedInAs(page, ADMIN.fullName);
+      await page.getByRole('tab', { name: t('dashboard.tabs.assurance') }).click();
       await expect(page.getByTestId('backup-card').getByText(textWith(t, 'backups.lastSuccess', 'time'))).toBeVisible();
       await expect(banner).toHaveCount(0);
     });
