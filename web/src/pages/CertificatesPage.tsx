@@ -83,6 +83,9 @@ export function CertificatesPage() {
     expiry: EXPIRIES.some((x) => x.value === urlFilters.expiry) ? urlFilters.expiry : '',
   };
   const filtered = Object.values(filters).some((v) => v !== '');
+  // Any filter other than the expiry window. The chips' counts come from the dashboard summary and count the whole
+  // inventory (each equals the rows of ?expiry=N alone), so they are shown only while nothing else narrows the list.
+  const narrowed = Object.entries(filters).some(([k, v]) => k !== 'expiry' && v !== '');
   const [search, onSearch, resetSearch] = useDebouncedParam(filters.q, (q) => setFilters({ q }));
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -197,8 +200,9 @@ export function CertificatesPage() {
       />
       <div className={classes.chips} role="group" aria-label={t('certificates.page.chips')}>
         {CHIPS.map((c) => {
-          const pressed = filters.expiry === c.value;
-          const n = c.count && counts ? counts[c.count] : undefined;
+          // "All certificates" is pressed only when nothing at all is filtered: never "all" over a filtered list.
+          const pressed = c.value === '' ? !filtered : filters.expiry === c.value;
+          const n = c.count && counts && !narrowed ? counts[c.count] : undefined;
           return (
             <Button
               key={c.value || 'all'}
@@ -209,7 +213,13 @@ export function CertificatesPage() {
               onClick={() => setFilters({ expiry: c.value })}
             >
               {t(c.key)}
-              {n !== undefined && <b className={classes.chipCount}>{n}</b>}
+              {/* The space keeps the label and the count two words in the accessible name ("Next 7 days 4"). */}
+              {n !== undefined && (
+                <>
+                  {' '}
+                  <b className={classes.chipCount}>{n}</b>
+                </>
+              )}
             </Button>
           );
         })}

@@ -47,7 +47,34 @@ describe('CertificatesPage', () => {
     await waitFor(() => expect(within(chips).getByRole('button', { name: /Next 7 days/ })).toHaveTextContent('4'));
     expect(within(chips).getByRole('button', { name: /Next 30 days/ })).toHaveTextContent('7');
     expect(within(chips).getByRole('button', { name: /Expired/ })).toHaveTextContent('1');
+    // The label and the count are two words of the accessible name.
+    expect(within(chips).getByRole('button', { name: 'Next 7 days 4' })).toBeVisible();
     expect(screen.getByText('Expiry filters are cumulative: “Next 30 days” includes expired certificates.')).toBeVisible();
+  });
+
+  it('shows the whole-inventory counts only while no other filter narrows the list, and All pressed only when nothing is filtered', async () => {
+    server.use(
+      ...sessionHandlers(adminSession),
+      targets,
+      noCsrs,
+      oneCertificate,
+      http.get('/api/v1/dashboard/summary', () =>
+        HttpResponse.json({ ...emptyDashboardSummary, certificates: { ...emptyDashboardSummary.certificates, expired: 1, within_7: 4, within_30: 7 } }),
+      ),
+    );
+    const { unmount } = await renderRoute(`/certificates?target_id=${targetFixture.id}`);
+    const chips = await screen.findByRole('group', { name: 'Expiry shortcuts' });
+    await screen.findByTestId('certificates-table');
+    // The summary counts all certificates; beside a list narrowed to one server they would not match its rows.
+    expect(within(chips).getByRole('button', { name: 'Next 7 days' })).toHaveTextContent(/^Next 7 days$/);
+    expect(within(chips).getByRole('button', { name: 'Expired' })).toHaveTextContent(/^Expired$/);
+    expect(within(chips).getByRole('button', { name: 'All certificates' })).toHaveAttribute('aria-pressed', 'false');
+    unmount();
+    await renderRoute('/certificates?q=shop&expiry=30');
+    const again = await screen.findByRole('group', { name: 'Expiry shortcuts' });
+    expect(within(again).getByRole('button', { name: 'Next 30 days' })).toHaveAttribute('aria-pressed', 'true');
+    expect(within(again).getByRole('button', { name: 'Next 30 days' })).toHaveTextContent(/^Next 30 days$/);
+    expect(within(again).getByRole('button', { name: 'All certificates' })).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('sets the same URL filter as the native expiry select from a chip', async () => {
