@@ -27,6 +27,24 @@ describe('AppLayout sidebar scrolling', () => {
   });
 });
 
+describe('AppLayout design details', () => {
+  it('writes the brand in lowercase, closes the installation card with a lock and sizes the phone top bar for touch', () => {
+    expect(rule('.brandName')).toMatch(/text-transform: lowercase/);
+    const phone = css.slice(css.indexOf('@media (max-width: 767px)'));
+    expect(phone).toMatch(/\.topActions :global\(\.mantine-ActionIcon-root\),\s*\.burger \{ min-width: 42px; min-height: 42px; \}/);
+  });
+
+  it('shows the search label from 1200 px only and ends the installation card with a lock icon', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderRoute('/');
+    const search = await screen.findByRole('button', { name: 'Search pages' });
+    expect(within(search).getByText('Search pages')).toHaveClass('mantine-visible-from-lg');
+    const text = screen.getByText('Self-hosted installation').parentElement;
+    expect(text?.nextElementSibling?.tagName).toBe('svg');
+    expect(text?.nextElementSibling?.nextElementSibling).toBeNull();
+  });
+});
+
 describe('AppLayout single sign-on refusal', () => {
   it('shows the reason of a refused step-up once and removes it from the address, keeping the rest', async () => {
     server.use(...sessionHandlers(operatorSession));

@@ -164,7 +164,7 @@ export function AppLayout() {
       <AppShell.Navbar component="aside" id="app-navbar" className={classes.navbar}>
         <Link to="/" className={classes.brand} onClick={nav.close}>
           <img src="/favicon.svg" alt="" className={classes.brandMark} />
-          <span>
+          <span className={classes.brandName}>
             {t('app.name', { ns: 'common' })}
             <span className={classes.brandDot} aria-hidden="true">
               .
@@ -175,10 +175,11 @@ export function AppLayout() {
           <span className={classes.installationSymbol} aria-hidden="true">
             <Icon name="Building2" size={16} />
           </span>
-          <div>
+          <div className={classes.installationText}>
             <div className={classes.installationName}>{t('shell.installation')}</div>
             {version.data && <div className={classes.installationMeta}>{t('shell.versionLine', { version: version.data.version })}</div>}
           </div>
+          <Icon name="LockKeyhole" size={14} className={classes.installationLock} />
         </div>
         <nav aria-label={t('nav.label')} className={classes.nav}>
           <div className={classes.navScroll}>
@@ -217,6 +218,7 @@ export function AppLayout() {
           <div className={classes.headerStart}>
             <Burger
               ref={burger}
+              className={classes.burger}
               opened={navOpened}
               onClick={nav.toggle}
               hiddenFrom="sm"

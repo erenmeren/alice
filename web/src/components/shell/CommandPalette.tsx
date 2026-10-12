@@ -50,7 +50,8 @@ export function CommandPalette({ items }: { items: PaletteItem[] }) {
   return (
     <>
       <Button variant="subtle" color="gray" size="xs" className={classes.trigger} aria-label={t('shell.search.open')} leftSection={<Icon name="Search" size={15} />} onClick={() => setOpened(true)}>
-        <Box component="span" visibleFrom="sm">
+        {/* The design hides the label below 1200 px (styles.css), the shortcut below 760 px. */}
+        <Box component="span" visibleFrom="lg">
           {t('shell.search.open')}
         </Box>
         <Box component="kbd" visibleFrom="sm" aria-hidden="true" className={classes.kbd} ml={8}>

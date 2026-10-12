@@ -6,11 +6,15 @@
 /* The whole sidebar scrolls as one column (a short window or the phone menu): no part of it shrinks or clips its links. */
 .navbar > * { flex-shrink: 0; }
 .brand { display: flex; align-items: center; gap: 9px; padding: 0 12px 20px; font-size: 26px; font-weight: 650; letter-spacing: -1.6px; color: var(--alice-text); text-decoration: none; }
+/* The design's wordmark is lowercase ("alice."); CSS keeps the catalog's name for assistive technology. */
+.brandName { text-transform: lowercase; }
 .brandMark { width: 30px; height: 30px; }
 .brandDot { color: var(--alice-brand); }
 .installation { display: flex; align-items: center; gap: 9px; margin: 0 4px 18px; padding: 10px; border: 1px solid var(--alice-border); border-radius: 8px; }
 .installationSymbol { display: grid; place-items: center; width: 30px; height: 30px; flex-shrink: 0; border-radius: 6px; background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
 .installationName { font-size: 12px; font-weight: 600; }
+.installationText { flex: 1; min-width: 0; }
+.installationLock { flex-shrink: 0; color: var(--alice-text-muted); }
 .installationMeta { font-size: 11px; color: var(--alice-text-secondary); }
 .nav { display: flex; flex-direction: column; flex: 1 0 auto; }
 .navScroll { flex: 1 0 auto; }
@@ -48,5 +52,8 @@
   .breadcrumb { display: none; }
   .content { padding: 24px 16px 32px; }
   .topActions { gap: 4px; }
+  /* Touch targets of the design's phone top bar (.icon-btn at 42 px below 760 px). */
+  .topActions :global(.mantine-ActionIcon-root),
+  .burger { min-width: 42px; min-height: 42px; }
   .divider { display: none; }
 }
