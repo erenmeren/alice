@@ -1050,8 +1050,6 @@
     "showMissing": "Show keys that are no longer found",
     "missingBadge": "No longer found",
     "keyType": "{{type}}, {{bits}} bits",
-    "locationCount": "Places used",
-    "targetCount": "Servers",
     "empty": "No SSH keys match these filters.",
     "loadMore": "Show more",
     "detailTitle": "SSH key",
@@ -1697,7 +1695,6 @@
     "columns": {
       "when": "When",
       "server": "Server",
-      "file": "Certificate file",
       "certificate": "Certificate",
       "result": "Result"
     },
@@ -1808,7 +1805,6 @@
     "intro": "Alice watches the certificates, keys and secrets of your Azure Key Vaults and can deploy their certificates to your Nginx websites.",
     "columns": {
       "name": "Name",
-      "address": "Address",
       "status": "Status",
       "auth": "Sign-in method",
       "checked": "Last successful check"
@@ -1919,7 +1915,6 @@
     "replaceTitle": "Replace the sign-in credentials",
     "replaceHelp": "Alice checks the new credentials as when adding a vault. Nothing changes if the check fails.",
     "replaced": "Credentials replaced.",
-    "lastChecked": "Last successful check: {{time}}",
     "pollInterval": "Alice checks this vault every {{minutes}} minutes.",
     "pollSave": "Save interval",
     "pollSaved": "Interval saved.",
@@ -1945,7 +1940,6 @@
       "policyTitle": "Policy",
       "exportable": "Private key exportable",
       "exportableUnknown": "Not read yet",
-      "keyValue": "Key: {{type}}, {{bits}} bits",
       "issuer": "Issuer",
       "renews": "Key Vault renews this certificate itself.",
       "noRenew": "Key Vault does not renew this certificate itself.",
@@ -1976,7 +1970,6 @@
       "releaseHelpManual": "Nothing is deployed. Use Deploy now when you want this version on a website.",
       "releasedAuto": "Version released. Alice may deploy it by itself, usually within a minute.",
       "releasedManual": "Version released. Nothing is deployed; use Deploy now when you want it on a website.",
-      "keyValueNoSize": "Key: {{type}}",
       "releaseHelpChain": "Automatic deployment never deploys an incomplete chain: if the chain is still incomplete, Alice holds this version again. To deploy it as it is, use Deploy now and confirm the chain.",
       "releasedChain": "Version released. Automatic deployment will not deploy an incomplete chain; use Deploy now and confirm the chain.",
       "releaseHelpChainManual": "Nothing is deployed. Deploy now asks for the chain confirmation again when you deploy this version.",

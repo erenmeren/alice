@@ -1050,8 +1050,6 @@
     "showMissing": "Artık bulunmayan anahtarları göster",
     "missingBadge": "Artık bulunmuyor",
     "keyType": "{{type}}, {{bits}} bit",
-    "locationCount": "Kullanıldığı yer sayısı",
-    "targetCount": "Sunucu sayısı",
     "empty": "Bu filtrelere uyan SSH anahtarı yok.",
     "loadMore": "Daha fazla göster",
     "detailTitle": "SSH anahtarı",
@@ -1697,7 +1695,6 @@
     "columns": {
       "when": "Zaman",
       "server": "Sunucu",
-      "file": "Sertifika dosyası",
       "certificate": "Sertifika",
       "result": "Sonuç"
     },
@@ -1808,7 +1805,6 @@
     "intro": "Alice, Azure Key Vault kasalarınızdaki sertifikaları, anahtarları ve gizli anahtarları izler; kasadaki sertifikaları Nginx web sitelerinize dağıtabilir.",
     "columns": {
       "name": "Ad",
-      "address": "Adres",
       "status": "Durum",
       "auth": "Oturum açma yöntemi",
       "checked": "Son başarılı denetim"
@@ -1919,7 +1915,6 @@
     "replaceTitle": "Oturum açma kimlik bilgilerini değiştirin",
     "replaceHelp": "Alice yeni kimlik bilgilerini kasa eklerkenki gibi denetler. Denetim başarısız olursa hiçbir şey değişmez.",
     "replaced": "Kimlik bilgileri değiştirildi.",
-    "lastChecked": "Son başarılı denetim: {{time}}",
     "pollInterval": "Alice bu kasayı {{minutes}} dakikada bir denetler.",
     "pollSave": "Aralığı kaydet",
     "pollSaved": "Aralık kaydedildi.",
@@ -1945,7 +1940,6 @@
       "policyTitle": "İlke",
       "exportable": "Özel anahtar dışa aktarılabilir",
       "exportableUnknown": "Henüz okunmadı",
-      "keyValue": "Anahtar: {{type}}, {{bits}} bit",
       "issuer": "Veren",
       "renews": "Key Vault bu sertifikayı kendisi yeniler.",
       "noRenew": "Key Vault bu sertifikayı kendisi yenilemez.",
@@ -1976,7 +1970,6 @@
       "releaseHelpManual": "Hiçbir şey dağıtılmaz. Bu sürümü bir web sitesinde istediğinizde Şimdi dağıt düğmesini kullanın.",
       "releasedAuto": "Sürüm serbest bırakıldı. Alice bu sürümü kendiliğinden dağıtabilir, genellikle bir dakika içinde.",
       "releasedManual": "Sürüm serbest bırakıldı. Hiçbir şey dağıtılmaz; istediğinizde Şimdi dağıt düğmesini kullanın.",
-      "keyValueNoSize": "Anahtar: {{type}}",
       "releaseHelpChain": "Otomatik dağıtım eksik bir zinciri hiçbir zaman dağıtmaz: zincir hâlâ eksikse Alice bu sürümü yeniden bekletir. Olduğu gibi dağıtmak için Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.",
       "releasedChain": "Sürüm serbest bırakıldı. Otomatik dağıtım eksik bir zinciri dağıtmaz; Şimdi dağıt düğmesini kullanın ve zinciri onaylayın.",
       "releaseHelpChainManual": "Hiçbir şey dağıtılmaz. Bu sürümü dağıttığınızda Şimdi dağıt zincir onayını yeniden ister.",
