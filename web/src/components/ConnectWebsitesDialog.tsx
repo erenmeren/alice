@@ -1,4 +1,4 @@
-import { Alert, Box, Button, Checkbox, Code, Group, Stack, Text, TextInput } from '@mantine/core';
+import { Alert, Box, Button, Checkbox, Code, Stack, Text, TextInput } from '@mantine/core';
 import { useDebouncedValue } from '@mantine/hooks';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
@@ -10,6 +10,7 @@ import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
 import { LoadingIndicator } from './LoadingIndicator';
 import { useStepUp } from './StepUpProvider';
+import { DialogActions } from './ui';
 import { keyTypeParam } from './vaultText';
 import { WRAP } from './wrap';
 
@@ -95,7 +96,7 @@ export function ConnectWebsitesDialog({ certificate, binding, onClose, onDone }:
           {items.map((l) => {
             const bad = refused === l.id;
             return (
-              <Box key={l.id} data-refused={bad ? 'true' : undefined} p="xs" style={bad ? { border: '2px solid var(--mantine-color-red-9)', borderRadius: 4 } : undefined}>
+              <Box key={l.id} data-refused={bad ? 'true' : undefined} p="xs" style={bad ? { border: '2px solid var(--alice-danger)', borderRadius: 'var(--alice-radius-sm)' } : undefined}>
                 <Checkbox
                   checked={l.id in picked}
                   onChange={(e) => toggle(l, e.currentTarget.checked)}
@@ -138,14 +139,14 @@ export function ConnectWebsitesDialog({ certificate, binding, onClose, onDone }:
           </Alert>
         )}
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
+        <DialogActions>
           <Button variant="default" disabled={busy} onClick={onClose}>
             {t('ui.cancel')}
           </Button>
           <Button loading={busy} disabled={chosen.length === 0 || tooMany} onClick={() => void submit()}>
             {t(binding ? 'bindings.addWebsites' : 'bindings.connect')}
           </Button>
-        </Group>
+        </DialogActions>
       </Stack>
     </AppModal>
   );

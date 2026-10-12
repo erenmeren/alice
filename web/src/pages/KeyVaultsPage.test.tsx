@@ -32,7 +32,51 @@ describe('KeyVaultsPage', () => {
     expect(within(row).getByText('Connected')).toBeInTheDocument();
     expect(within(row).getByText('Client secret')).toBeInTheDocument();
     expect(within(row).queryByText('No successful check yet')).not.toBeInTheDocument();
-    for (const h of ['Name', 'Address', 'Status', 'Sign-in method', 'Last successful check']) expect(within(table).getByRole('columnheader', { name: h })).toBeInTheDocument();
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Name', 'Status', 'Sign-in method', 'Last successful check']);
+  });
+
+  it('has the design header: the title, the description and Add Key Vault with its icon for an Administrator', async () => {
+    withVaults('admin');
+    await renderRoute('/key-vaults');
+    const h1 = await screen.findByRole('heading', { name: 'Key Vaults', level: 1 });
+    expect(h1.closest('header')).toHaveTextContent('See certificate versions and the websites connected to them.');
+    const add = screen.getByRole('button', { name: 'Add Key Vault' });
+    expect(add.querySelector('svg')).not.toBeNull();
+    expect(screen.queryByText(/Alice watches the certificates, keys and secrets/)).not.toBeInTheDocument();
+  });
+
+  it('shows each vault as the design\'s resource: the Azure tile, the name link and the address below it, the status as a badge', async () => {
+    withVaults('auditor', [vaultWith({ status: 'auth_failed', last_error: { code: 'ALC-AKV-0001', reason: 'azure.auth_failed' } })]);
+    await renderRoute('/key-vaults');
+    const table = await screen.findByTestId('vaults-table');
+    const first = within(table).getAllByRole('row')[1].querySelector('td')!;
+    const tile = first.querySelector('[data-tone="info"]');
+    expect(tile).not.toBeNull();
+    expect(tile!.querySelector('svg')).not.toBeNull();
+    expect(within(first).getByRole('link', { name: 'Prod vault' })).toBeInTheDocument();
+    expect(within(first).getByText('https://contoso-prod.vault.azure.net').tagName).toBe('CODE');
+    const badge = within(table).getByText('Credentials refused').closest('.mantine-Badge-root')!;
+    expect(badge).toHaveAttribute('data-tone', 'danger');
+  });
+
+  it('states the Azure access boundary below the table and keeps the held jobs for an Administrator', async () => {
+    withVaults('admin');
+    server.use(http.get('/api/v1/jobs', () => HttpResponse.json({ items: [jobFixture()], next_cursor: null })));
+    await renderRoute('/key-vaults');
+    const table = await screen.findByTestId('vaults-table');
+    const boundary = screen.getByText('A precise boundary for Azure access').closest('[role="note"]')!;
+    expect(boundary).not.toBeNull();
+    expect(boundary).toHaveTextContent('Keys are inventory-only; secrets show metadata only.');
+    expect(table.compareDocumentPosition(boundary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(await screen.findByTestId('blocked-jobs')).toBeInTheDocument();
+  });
+
+  it('shows the empty inventory as an empty state with the product text, and no second Add button', async () => {
+    withVaults('admin', []);
+    await renderRoute('/key-vaults');
+    expect(await screen.findByText('No Key Vault yet. Add one to see its certificates and keys.')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Add Key Vault/ })).toHaveLength(1);
+    expect(screen.queryByTestId('vaults-table')).not.toBeInTheDocument();
   });
 
   it('puts the table in its own scroll container (375 px) and names it', async () => {

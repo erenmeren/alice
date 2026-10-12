@@ -53,10 +53,11 @@ describe('KeyVaultDetailPage header', () => {
     expect(within(signs).getByText(OBJECT_ID).tagName).toBe('CODE');
     expect(screen.getByText(TENANT_ID).tagName).toBe('CODE');
     expect(screen.getByText(CLIENT_ID).tagName).toBe('CODE');
-    expect(screen.getByText(/^Last successful check:/)).toBeInTheDocument();
+    const details = screen.getByLabelText('Vault details');
+    expect(within(details).getByText('Last successful check').tagName).toBe('DT');
     expect(screen.getByText('Alice checks this vault every 15 minutes.')).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Access check' })).toBeInTheDocument();
-    expect(screen.getByText('Roles Alice needs', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText('Roles Alice needs', { selector: 'h2' })).toBeInTheDocument();
   });
 
   it('redirects a server id to the server page', async () => {
@@ -578,3 +579,77 @@ describe('KeyVaultDetailPage fix round', () => {
   });
 });
 
+
+describe('KeyVaultDetailPage in the design', () => {
+  it('has the detail header: back link, the name as the only h1, the address in <code>, the status and Check now', async () => {
+    asRole('operator');
+    await renderRoute(PATH);
+    const h1 = await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Back to Key Vaults' })).toHaveAttribute('href', '/key-vaults');
+    const header = h1.closest('header')!;
+    expect(within(header).getByText('https://contoso-prod.vault.azure.net').tagName).toBe('CODE');
+    expect(within(header).getByTestId('vault-status')).toHaveTextContent('Connected');
+    expect(within(header).getByTestId('vault-status')).toHaveAttribute('data-tone', 'success');
+    expect(within(header).getByRole('button', { name: 'Check now' })).toBeInTheDocument();
+  });
+
+  it('puts the sign-in facts, the interval, the access check and the role guide in panels', async () => {
+    asRole('admin');
+    await renderRoute(PATH);
+    await screen.findByRole('heading', { name: 'Prod vault', level: 1 });
+    for (const name of ['Vault details', 'Check interval', 'Access check', 'Roles Alice needs']) expect(screen.getByRole('heading', { name, level: 2 }).closest('section')).not.toBeNull();
+    expect(screen.getByTestId('access-check').tagName).toBe('SECTION');
+    expect(screen.getByTestId('role-guide').tagName).toBe('SECTION');
+    const facts = screen.getByLabelText('Vault details');
+    expect(within(facts).getByText('Sign-in method').tagName).toBe('DT');
+    expect(within(facts).getByText(TENANT_ID).tagName).toBe('CODE');
+  });
+
+  it('says on the Keys tab that keys are inventory only and on the Secrets tab that only metadata is shown', async () => {
+    asRole('auditor');
+    server.use(
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/keys`, () => HttpResponse.json({ items: [kvKeyFixture()], next_cursor: null })),
+      http.get(`/api/v1/targets/${VAULT_ID}/kv/secrets`, () => HttpResponse.json({ items: [kvSecretFixture()], next_cursor: null })),
+    );
+    await renderRoute(PATH);
+    await screen.findByText('No certificates in this vault.');
+    expect(screen.queryByText('Key inventory only')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Keys' }));
+    const keys = await screen.findByRole('table', { name: 'Keys' });
+    const keysNote = screen.getByText('Key inventory only').closest('[role="note"]')!;
+    expect(keysNote).toHaveTextContent('Azure Key Vault key rotation is outside Alice v1 scope.');
+    expect(keys.closest('[role="group"]')).toHaveAttribute('aria-label', 'Table, scrolls sideways');
+    await userEvent.click(screen.getByRole('tab', { name: 'Secrets' }));
+    const secrets = await screen.findByRole('table', { name: 'Secrets' });
+    expect(screen.getByText('Metadata only').closest('[role="note"]')).toHaveTextContent('Secret values are never shown.');
+    expect(secrets.closest('[role="group"]')).toHaveAttribute('aria-label', 'Table, scrolls sideways');
+    expect(screen.queryByText('Key inventory only')).not.toBeInTheDocument();
+  });
+
+  it('shows the inventory chips as status badges and states how many rows are shown', async () => {
+    asRole('operator');
+    server.use(http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, () => HttpResponse.json({ items: [kvCertificateFixture({ bound: true, exportable: false })], next_cursor: null })));
+    await renderRoute(PATH);
+    const table = await screen.findByRole('table', { name: 'Certificates' });
+    expect(within(table).getByText('Monitor only').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
+    expect(within(table).getByText('Connected websites').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(screen.getByText('1 shown')).toBeInTheDocument();
+  });
+
+  it('explains a vault state in a notice that keeps vault-status-help', async () => {
+    asRole('operator', vaultWith({ status: 'unreachable', last_error: { code: 'ALC-AKV-0006', reason: 'azure.unreachable' } }));
+    await renderRoute(PATH);
+    const help = await screen.findByTestId('vault-status-help');
+    expect(help).toHaveTextContent(/^Alice cannot reach Azure or this vault right now\. Alice tries again at the next check\.$/);
+    expect(help.closest('[role="note"]')).not.toBeNull();
+  });
+
+  it('shows the credentials warning as a notice', async () => {
+    asRole('admin', vaultWith({}, { auth: 'client_secret', secret_expires_on: '2020-01-01T00:00:00Z' }));
+    await renderRoute(PATH);
+    const notice = await screen.findByTestId('credentials-expiry');
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(notice.querySelector('svg')).not.toBeNull();
+  });
+});

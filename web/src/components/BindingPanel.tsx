@@ -1,4 +1,4 @@
-import { Alert, Anchor, Button, Code, Group, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
+import { Anchor, Button, Code, Group, Stack, Table, Text, VisuallyHidden } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -17,6 +17,8 @@ import { ErrorAlert } from './ErrorAlert';
 import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 import { KVDeployDialog } from './KVDeployDialog';
 import { ROLE_SECRETS_USER } from './roleCommands';
+import { Icon } from '../design/Icon';
+import { DialogActions, EmptyState, Notice, Panel, StatusBadge, type Tone } from './ui';
 import { shortVersion } from './vaultText';
 import { WRAP } from './wrap';
 
@@ -24,6 +26,9 @@ import { WRAP } from './wrap';
 // state, automatic deployment, whether Alice may read the certificate's secret, and Deploy now.
 // Operators and Administrators connect, add, remove and deploy; only an Administrator switches
 // automatic deployment (and adds websites to a connection that deploys by itself).
+// It is the design's "Connected websites" panel: the source certificate's destinations, each with its state.
+const STATE_TONE: Record<string, Tone> = { deployed: 'success', pending: 'info', failed: 'danger', stopped: 'warning', not_deployed: 'neutral' };
+
 export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaultId: string; certificate: KVCertificateDetail; canOperate: boolean; admin: boolean }) {
   const { t } = useTranslation();
   const client = useQueryClient();
@@ -38,24 +43,22 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
     void client.invalidateQueries({ queryKey: KV_CERTIFICATES_KEY });
   };
 
-  const heading = (
-    <Title order={2} size="h3">
-      {t('bindings.title')}
-    </Title>
-  );
-
   if (summary === null) {
     const monitorOnly = certificate.exportable === false;
     return (
-      <Stack gap="sm" data-testid="binding-panel">
-        {heading}
-        <Text size="sm">{t('bindings.none')}</Text>
-        {monitorOnly && <Text size="sm">{t('bindings.connectNeedsExport')}</Text>}
-        {canOperate && (
-          <Button w="fit-content" disabled={monitorOnly || certificate.missing_since !== null} onClick={() => setConnecting(true)}>
-            {t('bindings.connect')}
-          </Button>
-        )}
+      <Panel title={t('bindings.title')} testId="binding-panel">
+        <EmptyState
+          icon="Server"
+          title={t('bindings.none')}
+          description={monitorOnly ? t('bindings.connectNeedsExport') : undefined}
+          action={
+            canOperate && (
+              <Button leftSection={<Icon name="Plus" size={15} />} disabled={monitorOnly || certificate.missing_since !== null} onClick={() => setConnecting(true)}>
+                {t('bindings.connect')}
+              </Button>
+            )
+          }
+        />
         {connecting && (
           <ConnectWebsitesDialog
             certificate={certificate}
@@ -66,113 +69,117 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
             }}
           />
         )}
-      </Stack>
+      </Panel>
     );
   }
 
   if (binding.isPending) return <LoadingIndicator />;
   if (!binding.data)
     return (
-      <Stack gap="sm">
-        {heading}
+      <Panel title={t('bindings.title')}>
         <ErrorAlert error={binding.error} />
-      </Stack>
+      </Panel>
     );
   const b = binding.data;
   return (
-    <Stack gap="sm" data-testid="binding-panel">
-      {heading}
-      <Table.ScrollContainer minWidth={560}>
-        <Table striped aria-label={t('bindings.title')}>
-          <Table.Thead>
-            <Table.Tr>
-              <Table.Th>{t('bindings.columns.server')}</Table.Th>
-              <Table.Th>{t('bindings.columns.path')}</Table.Th>
-              <Table.Th>{t('bindings.columns.state')}</Table.Th>
-              {canOperate && (
-                <Table.Th>
-                  <VisuallyHidden>{t('bindings.columns.actions')}</VisuallyHidden>
-                </Table.Th>
-              )}
-            </Table.Tr>
-          </Table.Thead>
-          <Table.Tbody>
-            {b.locations.map((l) => (
-              <Table.Tr key={l.location_id} data-testid="binding-location">
-                <Table.Td style={WRAP}>
-                  <Anchor component={Link} to={`/servers/${l.target_id}`} translate="no">
-                    {l.target_name}
-                  </Anchor>
-                </Table.Td>
-                <Table.Td>
-                  <Code translate="no" style={WRAP}>
-                    {l.cert_path}
-                  </Code>
-                </Table.Td>
-                <Table.Td>
-                  <Stack gap={2}>
-                    <Text size="sm" data-state={l.state}>
-                      {l.state === 'deployed' ? <CodeText i18nKey="bindings.state.deployed" param="version" value={shortVersion(l.version)} /> : t(`bindings.state.${l.state}`)}
-                    </Text>
-                    {l.deployment_id && (
-                      <Anchor component={Link} to={`/deployments/${l.deployment_id}`} size="xs">
-                        {t('deploy.openDeployment')}
-                      </Anchor>
-                    )}
-                  </Stack>
-                </Table.Td>
+    <Panel title={t('bindings.title')} testId="binding-panel">
+      <Stack gap="md">
+        <Table.ScrollContainer minWidth={560}>
+          <Table aria-label={t('bindings.title')} highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>{t('bindings.columns.server')}</Table.Th>
+                <Table.Th>{t('bindings.columns.path')}</Table.Th>
+                <Table.Th>{t('bindings.columns.state')}</Table.Th>
                 {canOperate && (
-                  <Table.Td>
-                    <RemoveWebsite binding={b} locationId={l.location_id} name={l.target_name} onDone={refresh} />
-                  </Table.Td>
+                  <Table.Th>
+                    <VisuallyHidden>{t('bindings.columns.actions')}</VisuallyHidden>
+                  </Table.Th>
                 )}
               </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
-      </Table.ScrollContainer>
-      {b.stopped_version !== '' && (
-        <Alert color="orange" role="status" data-testid="stopped-help">
-          <CodeText i18nKey="bindings.stoppedHelp" param="version" value={shortVersion(b.stopped_version)} />
-        </Alert>
-      )}
-      <AutoDeploySwitch binding={b} admin={admin} exportable={certificate.exportable} onChanged={refresh} />
-      <DeployAccess vaultId={vaultId} certificate={certificate} canOperate={canOperate} />
-      {canOperate && (
-        <Group gap="sm">
-          <Button onClick={() => setDeploying(true)}>{t('bindings.deployNow')}</Button>
-          <Button variant="default" disabled={b.auto_deploy && !admin} onClick={() => setAdding(true)}>
-            {t('bindings.addWebsites')}
-          </Button>
-          <Button variant="light" color="red.9" onClick={() => setDeleting(true)}>
-            {t('bindings.delete')}
-          </Button>
-        </Group>
-      )}
-      {b.auto_deploy && !admin && <Text size="sm">{t('bindings.addAdminOnly')}</Text>}
-      {deploying && <KVDeployDialog binding={b} certificate={certificate} onClose={() => setDeploying(false)} />}
-      {adding && (
-        <ConnectWebsitesDialog
-          certificate={certificate}
-          binding={b}
-          onClose={() => setAdding(false)}
-          onDone={() => {
-            setAdding(false);
-            refresh();
-          }}
-        />
-      )}
-      {deleting && (
-        <DeleteBindingDialog
-          binding={b}
-          onClose={() => setDeleting(false)}
-          onDeleted={() => {
-            setDeleting(false);
-            refresh();
-          }}
-        />
-      )}
-    </Stack>
+            </Table.Thead>
+            <Table.Tbody>
+              {b.locations.map((l) => (
+                <Table.Tr key={l.location_id} data-testid="binding-location">
+                  <Table.Td style={WRAP}>
+                    <Anchor component={Link} to={`/servers/${l.target_id}`} translate="no">
+                      {l.target_name}
+                    </Anchor>
+                  </Table.Td>
+                  <Table.Td>
+                    <Code translate="no" style={WRAP}>
+                      {l.cert_path}
+                    </Code>
+                  </Table.Td>
+                  <Table.Td>
+                    <Stack gap={4} align="flex-start">
+                      <StatusBadge tone={STATE_TONE[l.state] ?? 'neutral'} data-state={l.state} style={{ maxWidth: '100%' }}>
+                        {l.state === 'deployed' ? <CodeText i18nKey="bindings.state.deployed" param="version" value={shortVersion(l.version)} /> : t(`bindings.state.${l.state}`)}
+                      </StatusBadge>
+                      {l.deployment_id && (
+                        <Anchor component={Link} to={`/deployments/${l.deployment_id}`} size="xs">
+                          {t('deploy.openDeployment')}
+                        </Anchor>
+                      )}
+                    </Stack>
+                  </Table.Td>
+                  {canOperate && (
+                    <Table.Td>
+                      <RemoveWebsite binding={b} locationId={l.location_id} name={l.target_name} onDone={refresh} />
+                    </Table.Td>
+                  )}
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Table.ScrollContainer>
+        {b.stopped_version !== '' && (
+          <Notice tone="warning" role="status" testId="stopped-help" title={<CodeText i18nKey="bindings.stoppedHelp" param="version" value={shortVersion(b.stopped_version)} />} />
+        )}
+        <AutoDeploySwitch binding={b} admin={admin} exportable={certificate.exportable} onChanged={refresh} />
+        <DeployAccess vaultId={vaultId} certificate={certificate} canOperate={canOperate} />
+        {canOperate && (
+          <Group gap="sm">
+            <Button leftSection={<Icon name="Rocket" size={15} />} onClick={() => setDeploying(true)}>
+              {t('bindings.deployNow')}
+            </Button>
+            <Button variant="default" leftSection={<Icon name="Plus" size={15} />} disabled={b.auto_deploy && !admin} onClick={() => setAdding(true)}>
+              {t('bindings.addWebsites')}
+            </Button>
+            <Button variant="light" color="red" onClick={() => setDeleting(true)}>
+              {t('bindings.delete')}
+            </Button>
+          </Group>
+        )}
+        {b.auto_deploy && !admin && (
+          <Text size="sm" c="dimmed">
+            {t('bindings.addAdminOnly')}
+          </Text>
+        )}
+        {deploying && <KVDeployDialog binding={b} certificate={certificate} onClose={() => setDeploying(false)} />}
+        {adding && (
+          <ConnectWebsitesDialog
+            certificate={certificate}
+            binding={b}
+            onClose={() => setAdding(false)}
+            onDone={() => {
+              setAdding(false);
+              refresh();
+            }}
+          />
+        )}
+        {deleting && (
+          <DeleteBindingDialog
+            binding={b}
+            onClose={() => setDeleting(false)}
+            onDeleted={() => {
+              setDeleting(false);
+              refresh();
+            }}
+          />
+        )}
+      </Stack>
+    </Panel>
   );
 }
 
@@ -247,10 +254,14 @@ function RemoveWebsite({ binding, locationId, name, onDone }: { binding: Binding
   };
   return (
     <Stack gap={2}>
-      <Button size="xs" variant="light" color="red.9" loading={busy} disabled={last} aria-label={t('bindings.removeNamed', { site: name })} onClick={() => void remove()}>
+      <Button size="xs" variant="light" color="red" loading={busy} disabled={last} aria-label={t('bindings.removeNamed', { site: name })} onClick={() => void remove()}>
         {t('bindings.removeWebsite')}
       </Button>
-      {last && <Text size="xs">{t('bindings.lastWebsite')}</Text>}
+      {last && (
+        <Text size="xs" c="dimmed">
+          {t('bindings.lastWebsite')}
+        </Text>
+      )}
       <ErrorAlert error={error} />
     </Stack>
   );
@@ -276,14 +287,14 @@ function DeleteBindingDialog({ binding, onClose, onDeleted }: { binding: Binding
       <Stack gap="sm">
         <Text size="sm">{t('bindings.deleteHelp')}</Text>
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
+        <DialogActions>
           <Button variant="default" onClick={onClose}>
             {t('ui.cancel')}
           </Button>
-          <Button color="red.9" loading={busy} onClick={() => void confirm()}>
+          <Button color="red" loading={busy} onClick={() => void confirm()}>
             {t('bindings.delete')}
           </Button>
-        </Group>
+        </DialogActions>
       </Stack>
     </AppModal>
   );

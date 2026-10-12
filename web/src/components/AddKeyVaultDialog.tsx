@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { createVault, type VaultCreated } from '../api/keyvault';
 import { TARGETS_KEY } from '../api/queryKeys';
 import type { Target } from '../api/types';
+import { Icon } from '../design/Icon';
 import { AccessChecklist, accessRows } from './AccessCheckPanel';
 import { AppModal } from './AppModal';
 import { CodeText } from './CodeText';
@@ -14,6 +15,7 @@ import { RoleGuide } from './RoleGuide';
 import { buildSignIn, emptySignIn, PfxTooLargeError, signInReady, wipeSecrets, type SignInState } from './signIn';
 import { SignInFields } from './SignInFields';
 import { useStepUp } from './StepUpProvider';
+import { DialogActions } from './ui';
 import { vaultNameOf } from './vaultText';
 import { VaultStatusBadge } from './VaultStatusBadge';
 
@@ -121,14 +123,14 @@ export function AddKeyVaultDialog({ onClose, onAdded }: { onClose: () => void; o
                 <RoleGuide clientId={signIn.clientId.trim()} vaultName={vaultNameOf(vaultUrl)} />
               </Box>
             </Box>
-            <Group justify="flex-end">
+            <DialogActions>
               <Button variant="default" onClick={leave}>
                 {t('ui.cancel')}
               </Button>
-              <Button type="submit" disabled={!ready}>
+              <Button type="submit" leftSection={<Icon name="ShieldCheck" size={15} />} disabled={!ready}>
                 {t('vaults.add')}
               </Button>
-            </Group>
+            </DialogActions>
           </Stack>
         </form>
       )}
@@ -157,12 +159,14 @@ export function AddKeyVaultDialog({ onClose, onAdded }: { onClose: () => void; o
             </Alert>
           )}
           {partly && <RoleGuide clientId={vault?.client_id || undefined} vaultName={vault?.name} openPolicies={access?.permission_model === 'access_policy'} />}
-          <Group justify="flex-end">
+          <DialogActions>
             <Button variant="default" onClick={onClose}>
               {t('ui.close')}
             </Button>
-            <Button onClick={() => onAdded(created.target)}>{t('vaults.openVault')}</Button>
-          </Group>
+            <Button rightSection={<Icon name="ArrowRight" size={15} />} onClick={() => onAdded(created.target)}>
+              {t('vaults.openVault')}
+            </Button>
+          </DialogActions>
         </Stack>
       )}
     </AppModal>

@@ -1,4 +1,5 @@
 import { Box, Button, Code, CopyButton, Stack, Table, Text, Title } from '@mantine/core';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CMD_CERTIFICATES_OFFICER,
@@ -13,6 +14,8 @@ import {
   ROLE_SECRETS_USER,
   type CommandValues,
 } from './roleCommands';
+import { Icon } from '../design/Icon';
+import { Panel } from './ui';
 import { WRAP } from './wrap';
 
 interface Row {
@@ -38,7 +41,7 @@ function CommandCell({ command, label }: { command: string; label: string }) {
       </Code>
       <CopyButton value={command}>
         {({ copied, copy }) => (
-          <Button size="xs" variant="light" w="fit-content" onClick={copy} aria-label={t('vaults.roles.copyNamed', { what: label })}>
+          <Button size="xs" variant="light" w="fit-content" leftSection={<Icon name={copied ? 'Check' : 'Copy'} size={13} />} onClick={copy} aria-label={t('vaults.roles.copyNamed', { what: label })}>
             {copied ? t('targets.prepare.copied') : t('vaults.roles.copy')}
           </Button>
         )}
@@ -52,15 +55,26 @@ function CommandCell({ command, label }: { command: string; label: string }) {
 // does not use Azure roles. The client ID, the vault's name and the certificate's name fill the
 // placeholders where known. Role names are never translated and always shown in <Code>. The
 // commands are the text of roleCommands.ts, which the setup guide repeats.
-export function RoleGuide({ clientId, vaultName, certificateName, openPolicies = false }: CommandValues & { openPolicies?: boolean }) {
+// On a vault's page (panel) it is the design's Panel with an h2; inside a dialog it keeps its h3.
+export function RoleGuide({ clientId, vaultName, certificateName, openPolicies = false, panel = false }: CommandValues & { openPolicies?: boolean; panel?: boolean }) {
   const { t } = useTranslation();
   const values = { clientId, vaultName, certificateName };
-  return (
-    <Stack gap="xs" data-testid="role-guide">
-      <Title order={3} size="h4">
-        {t('vaults.roles.title')}
-      </Title>
-      <Text size="sm">{t('vaults.roles.intro')}</Text>
+  const frame = (children: ReactNode) =>
+    panel ? (
+      <Panel title={t('vaults.roles.title')} description={t('vaults.roles.intro')} testId="role-guide">
+        <Stack gap="xs">{children}</Stack>
+      </Panel>
+    ) : (
+      <Stack gap="xs" data-testid="role-guide">
+        <Title order={3} size="h4">
+          {t('vaults.roles.title')}
+        </Title>
+        <Text size="sm">{t('vaults.roles.intro')}</Text>
+        {children}
+      </Stack>
+    );
+  return frame(
+    <>
       <Table.ScrollContainer minWidth={560}>
         <Table aria-label={t('vaults.roles.title')}>
           <Table.Thead>
@@ -82,7 +96,7 @@ export function RoleGuide({ clientId, vaultName, certificateName, openPolicies =
                         <Code translate="no">{r.role}</Code>
                       </Text>
                       {r.id === 'monitor' && (
-                        <Text size="xs" c="gray.8">
+                        <Text size="xs" c="dimmed">
                           {t('vaults.roles.readerUnconfirmed')}
                         </Text>
                       )}
@@ -114,6 +128,6 @@ export function RoleGuide({ clientId, vaultName, certificateName, openPolicies =
           })}
         </Stack>
       </Box>
-    </Stack>
+    </>,
   );
 }

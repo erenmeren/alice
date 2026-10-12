@@ -39,8 +39,9 @@ describe('KVCertificatePage', () => {
     const policy = screen.getByLabelText('Policy');
     expect(policy).toHaveTextContent('Private key exportable');
     expect(policy).toHaveTextContent('Yes');
-    expect(policy).toHaveTextContent('Key: RSA, 3072 bits');
+    expect(within(policy).getByText('Key type').tagName).toBe('DT');
     expect(within(policy).getByText('RSA').tagName).toBe('CODE');
+    expect(policy).toHaveTextContent('3072 bits');
     expect(policy).toHaveTextContent('Contoso CA');
     expect(policy).toHaveTextContent('Key Vault renews this certificate itself.');
   });
@@ -249,7 +250,7 @@ describe('KVCertificatePage', () => {
     setup('operator', kvCertificateDetailFixture({ key_type: 'EC', key_size: 0 }));
     await renderRoute(PATH);
     const policy = await screen.findByLabelText('Policy');
-    expect(policy).toHaveTextContent('Key: EC');
+    expect(within(policy).getByText('EC').tagName).toBe('CODE');
     expect(policy).not.toHaveTextContent('0 bits');
   });
 
@@ -293,10 +294,58 @@ describe('KVCertificatePage', () => {
   it('is complete in Turkish', async () => {
     setup('admin', kvCertificateDetailFixture({ versions: [{ ...V1, held: true, held_reason: 'license' }], binding: SUMMARY, bound: true, exportable: true }), 'tr');
     await renderRoute(PATH, { languages: ['tr-TR'] });
-    expect(await screen.findByText('Sürümler')).toBeInTheDocument();
+    expect(await screen.findByText('Sürüm geçmişi')).toBeInTheDocument();
     expect(screen.getByTestId('held-text')).toHaveTextContent('Bu sürüm bir yöneticiyi bekliyor: sürüm ortaya çıktıktan sonra bir süre lisans kullanılamadı.');
     expect(screen.getByRole('button', { name: 'aaaaaaaa sürümünü serbest bırak' })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Şimdi dağıt' })).toBeInTheDocument());
     expectNoRawKeys(screen.getByRole('heading', { level: 1 }).parentElement as HTMLElement);
+  });
+
+  describe('in the design', () => {
+    it('has the detail header: back to the vault, the name as the only h1, the design subtitle and the chips as status badges', async () => {
+      setup('operator', kvCertificateDetailFixture({ exportable: false, binding: SUMMARY, bound: true }));
+      await renderRoute(PATH);
+      const h1 = await screen.findByRole('heading', { name: 'web-cert', level: 1 });
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+      expect(screen.getByRole('link', { name: 'Back to the vault' })).toHaveAttribute('href', `/key-vaults/${VAULT_ID}`);
+      const header = h1.closest('header')!;
+      expect(header).toHaveTextContent('Certificate versions and deployment connections');
+      expect(within(header).getByText('Monitor only').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
+      expect(within(header).getByText('Connected websites: 1').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    });
+
+    it('shows the versions in the Version history panel, the connected websites below them, the policy and the auto-deploy notice beside them', async () => {
+      setup('admin', kvCertificateDetailFixture({ versions: [{ ...V1, held: true, held_reason: 'license' }, V0], binding: SUMMARY, bound: true, current_version: V1.version }));
+      await renderRoute(PATH);
+      const versions = (await screen.findByRole('heading', { name: 'Version history', level: 2 })).closest('section')!;
+      expect(versions).toHaveTextContent('A new version is reviewed before it reaches a website.');
+      const table = within(versions).getByRole('table', { name: 'Versions' });
+      const rows = within(table).getAllByTestId('kv-version-row');
+      expect(rows).toHaveLength(2);
+      expect(rows[0]).toHaveAttribute('data-held', 'true');
+      expect(rows[1]).not.toHaveAttribute('data-held');
+      expect(within(rows[0]).getByTestId('held-text')).toBeInTheDocument();
+      expect(within(rows[0]).getByText('Held').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
+      expect(within(rows[0]).getByRole('button', { name: 'Release version aaaaaaaa' })).toBeInTheDocument();
+      const binding = await screen.findByTestId('binding-panel');
+      expect(binding.tagName).toBe('SECTION');
+      const policy = screen.getByRole('heading', { name: 'Certificate policy', level: 2 }).closest('section')!;
+      expect(within(policy).getByLabelText('Policy')).toHaveTextContent('Rotation in AliceKey Vault keys: inventory only');
+      const auto = screen.getByText('Automatic deployment is an administrator decision').closest('[role="note"]')!;
+      expect(auto).toHaveTextContent('Changing this setting requires fresh identity verification.');
+      const follows = (a: Node, b: Node) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+      expect(follows(versions, binding)).toBe(true);
+      expect(follows(binding, policy)).toBe(true);
+      expect(follows(policy, auto)).toBe(true);
+    });
+
+    it('shows the websites state as a status badge that keeps data-state', async () => {
+      setup('operator', kvCertificateDetailFixture({ versions: [V1], binding: SUMMARY, bound: true, current_version: V1.version }));
+      await renderRoute(PATH);
+      const location = await screen.findByTestId('binding-location');
+      const state = location.querySelector('[data-state]')!;
+      expect(state.closest('.mantine-Badge-root')).not.toBeNull();
+      expect(state).toHaveAttribute('data-tone');
+    });
   });
 });

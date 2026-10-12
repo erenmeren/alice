@@ -1,4 +1,4 @@
-import { Button, Checkbox, Group, Loader, NativeSelect, Stack, Table, Text, Title } from '@mantine/core';
+import { Button, Checkbox, Group, Loader, NativeSelect, Stack, Table, Text } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -13,6 +13,8 @@ import { ErrorAlert } from './ErrorAlert';
 import { LoadingIndicator } from './LoadingIndicator';
 import { BlockedJobAlert, JobErrorAlert, reasonTitle, StillWorkingAlert, StoppedJobAlert } from './JobErrorAlert';
 import { ROLE_CERTIFICATES_OFFICER, ROLE_READER, ROLE_SECRETS_USER } from './roleCommands';
+import { Icon } from '../design/Icon';
+import { Panel, StatusBadge } from './ui';
 
 export type RowId = 'monitor' | 'deploy' | 'import';
 export interface CheckRow {
@@ -47,7 +49,12 @@ export function accessRows(access: VaultAccess | null): CheckRow[] {
 
 function Result({ row }: { row: CheckRow }) {
   const { t, i18n } = useTranslation();
-  if (row.result === 'ok') return <Text size="sm">{t('vaults.access.ok')}</Text>;
+  if (row.result === 'ok')
+    return (
+      <StatusBadge tone="success" icon="CircleCheck">
+        {t('vaults.access.ok')}
+      </StatusBadge>
+    );
   if (row.result === 'forbidden')
     return (
       <Text size="sm">
@@ -56,12 +63,18 @@ function Result({ row }: { row: CheckRow }) {
     );
   if (row.result === 'failed')
     return (
-      <Stack gap={0}>
-        <Text size="sm">{t('vaults.access.failed')}</Text>
+      <Stack gap={4} align="flex-start">
+        <StatusBadge tone="danger" icon="CircleAlert">
+          {t('vaults.access.failed')}
+        </StatusBadge>
         {row.error && <Text size="xs">{reasonTitle(t, i18n, row.error.reason, row.error.params ?? {})}</Text>}
       </Stack>
     );
-  return <Text size="sm">{t(row.id === 'import' ? 'vaults.access.importNote' : 'vaults.access.notChecked')}</Text>;
+  return (
+    <Text size="sm" c="dimmed">
+      {t(row.id === 'import' ? 'vaults.access.importNote' : 'vaults.access.notChecked')}
+    </Text>
+  );
 }
 
 // AccessChecklist is the three rows (monitor, deploy, import) with what Alice may do.
@@ -91,12 +104,16 @@ export function AccessChecklist({ access }: { access: VaultAccess | null }) {
           </Table.Tbody>
         </Table>
       </Table.ScrollContainer>
-      {access && <Text size="xs">{t('vaults.access.checkedAt', { time: formatDateTime(access.checked_at, i18n.language) })}</Text>}
+      {access && (
+        <Text size="xs" c="dimmed">
+          {t('vaults.access.checkedAt', { time: formatDateTime(access.checked_at, i18n.language) })}
+        </Text>
+      )}
     </Stack>
   );
 }
 
-// AccessCheckPanel is the "Access check" of a vault: the checklist, and for Administrators and
+// AccessCheckPanel is the "Access check" panel of a vault: the checklist, and for Administrators and
 // Operators "Check again" (a job; the panel waits for it) with the option to also read one
 // certificate's secret once, which is what proves the deploy role.
 export function AccessCheckPanel({ vaultId, access, canOperate, certificateId }: { vaultId: string; access: VaultAccess | null; canOperate: boolean; certificateId?: string }) {
@@ -141,52 +158,51 @@ export function AccessCheckPanel({ vaultId, access, canOperate, certificateId }:
   };
 
   return (
-    <Stack gap="sm" data-testid="access-check">
-      <Title order={2} size="h3">
-        {t('vaults.access.title')}
-      </Title>
-      <AccessChecklist access={access} />
-      {canOperate && (
-        <Stack gap="xs">
-          {certificateId === undefined && <Checkbox label={t('vaults.access.deployToo')} checked={deployToo} onChange={(e) => setDeployToo(e.currentTarget.checked)} disabled={busy} />}
-          {deployToo && certificateId === undefined && (
-            <>
-              {certs.isPending && <LoadingIndicator />}
-              <ErrorAlert error={certs.error} />
-              {certs.isSuccess && usable.length === 0 && <Text size="sm">{t('vaults.access.noExportable')}</Text>}
-              {usable.length > 0 && (
-                <NativeSelect
-                  label={t('vaults.access.pickCertificate')}
-                  value={picked}
-                  onChange={(e) => setPicked(e.currentTarget.value)}
-                  data={[{ value: '', label: t('vaults.access.chooseCertificate') }, ...usable.map((c) => ({ value: c.id, label: c.name }))]}
-                  disabled={busy}
-                />
-              )}
-            </>
-          )}
-          <Group>
-            <Button variant="default" loading={busy} disabled={deployToo && picked === ''} onClick={() => void run()}>
-              {t('vaults.access.run')}
-            </Button>
+    <Panel title={t('vaults.access.title')} testId="access-check">
+      <Stack gap="sm">
+        <AccessChecklist access={access} />
+        {canOperate && (
+          <Stack gap="xs">
+            {certificateId === undefined && <Checkbox label={t('vaults.access.deployToo')} checked={deployToo} onChange={(e) => setDeployToo(e.currentTarget.checked)} disabled={busy} />}
+            {deployToo && certificateId === undefined && (
+              <>
+                {certs.isPending && <LoadingIndicator />}
+                <ErrorAlert error={certs.error} />
+                {certs.isSuccess && usable.length === 0 && <Text size="sm">{t('vaults.access.noExportable')}</Text>}
+                {usable.length > 0 && (
+                  <NativeSelect
+                    label={t('vaults.access.pickCertificate')}
+                    value={picked}
+                    onChange={(e) => setPicked(e.currentTarget.value)}
+                    data={[{ value: '', label: t('vaults.access.chooseCertificate') }, ...usable.map((c) => ({ value: c.id, label: c.name }))]}
+                    disabled={busy}
+                  />
+                )}
+              </>
+            )}
+            <Group>
+              <Button variant="default" leftSection={<Icon name="RefreshCw" size={15} />} loading={busy} disabled={deployToo && picked === ''} onClick={() => void run()}>
+                {t('vaults.access.run')}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+        {busy && (
+          <Group gap="sm" role="status" aria-live="polite">
+            <Loader size="sm" aria-hidden />
+            <Text size="sm">{t('vaults.access.working')}</Text>
           </Group>
-        </Stack>
-      )}
-      {busy && (
-        <Group gap="sm" role="status" aria-live="polite">
-          <Loader size="sm" aria-hidden />
-          <Text size="sm">{t('vaults.access.working')}</Text>
-        </Group>
-      )}
-      {done && (
-        <Text size="sm" role="status">
-          {t('targets.jobDone')}
-        </Text>
-      )}
-      {error instanceof JobTimeoutError ? <StillWorkingAlert textKey="vaults.stillWorking" /> : <ErrorAlert error={error} />}
-      {blocked && <BlockedJobAlert />}
-      {stopped && <StoppedJobAlert />}
-      <JobErrorAlert error={jobError} />
-    </Stack>
+        )}
+        {done && (
+          <Text size="sm" role="status">
+            {t('targets.jobDone')}
+          </Text>
+        )}
+        {error instanceof JobTimeoutError ? <StillWorkingAlert textKey="vaults.stillWorking" /> : <ErrorAlert error={error} />}
+        {blocked && <BlockedJobAlert />}
+        {stopped && <StoppedJobAlert />}
+        <JobErrorAlert error={jobError} />
+      </Stack>
+    </Panel>
   );
 }

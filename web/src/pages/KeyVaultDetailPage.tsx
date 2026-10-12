@@ -1,6 +1,6 @@
-import { Alert, Anchor, Button, Code, Group, Loader, NumberInput, Stack, Text, Title } from '@mantine/core';
+import { Alert, Anchor, Button, Code, Group, Loader, NumberInput, Stack, Text } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, Navigate, useNavigate, useParams } from 'react-router';
 import { getTarget } from '../api/endpoints';
@@ -23,25 +23,19 @@ import { RoleGuide } from '../components/RoleGuide';
 import { useStepUp } from '../components/StepUpProvider';
 import { VaultInventory } from '../components/VaultInventory';
 import { warningKey } from '../api/warnings';
-import { authKey } from '../components/vaultText';
+import { authKey, vaultStatusKey } from '../components/vaultText';
 import { VaultStatusBadge } from '../components/VaultStatusBadge';
+import { DialogActions, FactList, Notice, PageHeader, Panel, TARGET_TONE, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
-
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <Group gap="xs" align="baseline" wrap="wrap">
-      <Text size="sm" fw={600}>
-        {label}
-      </Text>
-      {children}
-    </Group>
-  );
-}
+import { Icon } from '../design/Icon';
+import classes from './KeyVaults.module.css';
 
 // KeyVaultDetailPage is one vault: its status in words, how Alice signs in, the access check with the
 // roles to grant, and the actions people may run (Check now for Administrators and Operators; replace
-// the credentials, the check interval and removal for Administrators).
+// the credentials, the check interval and removal for Administrators). The design's vault page is the header, the
+// inventory tabs and their notices; the product adds the sign-in facts, the interval, the access check and the
+// role guide as panels in the design's detail grid.
 export function KeyVaultDetailPage() {
   const { t, i18n } = useTranslation();
   const { id = '' } = useParams();
@@ -111,133 +105,127 @@ export function KeyVaultDetailPage() {
   const endState = credentialsEnd ? expiryState(credentialsEnd, now) : 'ok';
   const statusHelp = ['degraded', 'auth_failed', 'unreachable', 'checking', 'disabled'].includes(tg.status) ? `vaults.statusHelp.${tg.status}` : null;
 
+  const facts: Fact[] = [
+    { key: 'auth', label: t('vaults.fields.auth'), value: t(authKey(v.auth)) },
+    ...(v.tenant_id !== '' ? [{ key: 'tenant', label: t('vaults.fields.tenant_id'), value: <Code translate="no">{v.tenant_id}</Code> }] : []),
+    ...(v.client_id !== '' ? [{ key: 'client', label: t('vaults.fields.client_id'), value: <Code translate="no">{v.client_id}</Code> }] : []),
+    ...(v.auth === 'certificate' && v.cert_thumbprint !== '' ? [{ key: 'thumb', label: t('vaults.certThumbprint'), value: <Code translate="no">{v.cert_thumbprint}</Code> }] : []),
+    ...(v.auth === 'certificate' && v.cert_not_after ? [{ key: 'certEnd', label: t('vaults.certExpires'), value: <Expiry notAfter={v.cert_not_after} /> }] : []),
+    ...(v.auth === 'client_secret' && v.secret_expires_on ? [{ key: 'secretEnd', label: t('vaults.secretExpires'), value: <Expiry notAfter={v.secret_expires_on} /> }] : []),
+    { key: 'checked', label: t('vaults.columns.checked'), value: tg.last_success_at ? formatDateTime(tg.last_success_at, i18n.language) : t('vaults.neverChecked') },
+  ];
+
   return (
-    <Stack gap="md">
-      <Anchor component={Link} to="/key-vaults" w="fit-content" size="sm">
-        {t('vaults.backToList')}
-      </Anchor>
-      <Group justify="space-between" align="flex-start">
-        <Stack gap={4}>
-          <Title order={1} style={WRAP}>
-            {tg.name}
-          </Title>
+    <Stack gap={0}>
+      <PageHeader
+        back={{ to: '/key-vaults', label: t('vaults.backToList') }}
+        title={<span translate="no">{tg.name}</span>}
+        status={<VaultStatusBadge target={tg} testId="vault-status" />}
+        description={
           <Code translate="no" style={WRAP}>
             {v.url}
           </Code>
-        </Stack>
-        <VaultStatusBadge target={tg} testId="vault-status" />
-      </Group>
-      {statusHelp && (
-        <Text size="sm" data-testid="vault-status-help">
-          {t(statusHelp)}
-        </Text>
-      )}
-      {tg.last_error && <JobErrorAlert error={tg.last_error} />}
-      {tg.last_error?.reason === 'azure.firewall' && tg.last_error.params?.client_address && (
-        <div data-testid="vault-firewall-address">
-          <Fact label={t('vaults.firewallAddress')}>
-            <Code translate="no" style={WRAP}>
-              {tg.last_error.params.client_address}
-            </Code>
-          </Fact>
-        </div>
-      )}
-      {credentialsEnd && endState !== 'ok' && endState !== 'within60' && (
-        <Alert color={endState === 'expired' ? 'red' : 'yellow'} role="status" data-testid="credentials-expiry">
-          {t(endState === 'expired' ? 'vaults.credentialsExpiredNow' : 'vaults.credentialsExpireSoon')}
-        </Alert>
-      )}
-      <Stack gap={4} role="group" aria-label={t('vaults.title')}>
-        <Fact label={t('vaults.fields.auth')}>
-          <Text size="sm">{t(authKey(v.auth))}</Text>
-        </Fact>
-        {v.tenant_id !== '' && (
-          <Fact label={t('vaults.fields.tenant_id')}>
-            <Code translate="no" style={WRAP}>
-              {v.tenant_id}
-            </Code>
-          </Fact>
+        }
+        actions={
+          canOperate && (
+            <>
+              <Button leftSection={<Icon name="RefreshCw" size={15} />} disabled={busy} onClick={() => void checkNow()}>
+                {t('vaults.checkNow')}
+              </Button>
+              {admin && (
+                <Button variant="default" leftSection={<Icon name="LockKeyhole" size={15} />} disabled={busy} onClick={() => setReplacing(true)}>
+                  {t('vaults.replaceCredentials')}
+                </Button>
+              )}
+              {admin && (
+                <Button variant="light" color="red" disabled={busy} onClick={() => setDeleting(true)}>
+                  {t('vaults.delete')}
+                </Button>
+              )}
+            </>
+          )
+        }
+      />
+      <Stack gap="md">
+        {statusHelp && (
+          <Notice tone={TARGET_TONE[tg.status] ?? 'neutral'} title={t(vaultStatusKey(tg))}>
+            <span data-testid="vault-status-help">{t(statusHelp)}</span>
+          </Notice>
         )}
-        {v.client_id !== '' && (
-          <Fact label={t('vaults.fields.client_id')}>
-            <Code translate="no" style={WRAP}>
-              {v.client_id}
-            </Code>
-          </Fact>
+        {tg.last_error && <JobErrorAlert error={tg.last_error} />}
+        {tg.last_error?.reason === 'azure.firewall' && tg.last_error.params?.client_address && (
+          <div data-testid="vault-firewall-address">
+            <FactList
+              facts={[
+                {
+                  label: t('vaults.firewallAddress'),
+                  value: (
+                    <Code translate="no" style={WRAP}>
+                      {tg.last_error.params.client_address}
+                    </Code>
+                  ),
+                },
+              ]}
+            />
+          </div>
         )}
-        {v.auth === 'certificate' && v.cert_thumbprint !== '' && (
-          <Fact label={t('vaults.certThumbprint')}>
-            <Code translate="no" style={WRAP}>
-              {v.cert_thumbprint}
-            </Code>
-          </Fact>
+        {credentialsEnd && endState !== 'ok' && endState !== 'within60' && (
+          <Notice
+            tone={endState === 'expired' ? 'danger' : 'warning'}
+            role="status"
+            testId="credentials-expiry"
+            title={t(endState === 'expired' ? 'vaults.credentialsExpiredNow' : 'vaults.credentialsExpireSoon')}
+          />
         )}
-        {v.auth === 'certificate' && v.cert_not_after && (
-          <Fact label={t('vaults.certExpires')}>
-            <Expiry notAfter={v.cert_not_after} />
-          </Fact>
+        {busy && (
+          <Group gap="sm" role="status" aria-live="polite">
+            <Loader size="sm" aria-hidden />
+            <Text size="sm">{t('targets.working')}</Text>
+          </Group>
         )}
-        {v.auth === 'client_secret' && v.secret_expires_on && (
-          <Fact label={t('vaults.secretExpires')}>
-            <Expiry notAfter={v.secret_expires_on} />
-          </Fact>
-        )}
-        {v.access && v.access.object_id !== '' && (
-          <Text size="sm">
-            <CodeText i18nKey="vaults.signsInAs" param="objectId" value={v.access.object_id} />
+        {done && (
+          <Text size="sm" role="status">
+            {t('targets.jobDone')}
           </Text>
         )}
-        <Text size="sm">{tg.last_success_at ? t('vaults.lastChecked', { time: formatDateTime(tg.last_success_at, i18n.language) }) : t('vaults.neverChecked')}</Text>
+        {replaced && (
+          <Alert color="green" role="status">
+            {t('vaults.replaced')}
+          </Alert>
+        )}
+        {error instanceof JobTimeoutError ? <StillWorkingAlert textKey="vaults.stillWorking" /> : <ErrorAlert error={error} />}
+        {blocked && <BlockedJobAlert />}
+        {stopped && <StoppedJobAlert />}
+        <JobErrorAlert error={jobError} />
+
+        {tg.facts.warnings.map((w) => (
+          <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP} data-testid="vault-warning">
+            {t(warningKey(w), { ...w.params, ...(w.params.object ? { object: i18n.exists(`vaults.kind.${w.params.object}`) ? t(`vaults.kind.${w.params.object}`) : t('enum.unknown') } : {}) })}
+            {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? <Code ml="xs">{w.code}</Code> : null}
+          </Alert>
+        ))}
       </Stack>
-      <PollInterval target={tg} editable={admin} />
-      {canOperate && (
-        <Group gap="sm">
-          <Button variant="default" disabled={busy} onClick={() => void checkNow()}>
-            {t('vaults.checkNow')}
-          </Button>
-          {admin && (
-            <Button variant="default" disabled={busy} onClick={() => setReplacing(true)}>
-              {t('vaults.replaceCredentials')}
-            </Button>
-          )}
-          {admin && (
-            <Button variant="light" color="red.9" disabled={busy} onClick={() => setDeleting(true)}>
-              {t('vaults.delete')}
-            </Button>
-          )}
-        </Group>
-      )}
-      {busy && (
-        <Group gap="sm" role="status" aria-live="polite">
-          <Loader size="sm" aria-hidden />
-          <Text size="sm">{t('targets.working')}</Text>
-        </Group>
-      )}
-      {done && (
-        <Text size="sm" role="status">
-          {t('targets.jobDone')}
-        </Text>
-      )}
-      {replaced && (
-        <Alert color="green" role="status">
-          {t('vaults.replaced')}
-        </Alert>
-      )}
-      {error instanceof JobTimeoutError ? <StillWorkingAlert textKey="vaults.stillWorking" /> : <ErrorAlert error={error} />}
-      {blocked && <BlockedJobAlert />}
-      {stopped && <StoppedJobAlert />}
-      <JobErrorAlert error={jobError} />
 
-      {tg.facts.warnings.map((w) => (
-        <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP} data-testid="vault-warning">
-          {t(warningKey(w), { ...w.params, ...(w.params.object ? { object: i18n.exists(`vaults.kind.${w.params.object}`) ? t(`vaults.kind.${w.params.object}`) : t('enum.unknown') } : {}) })}
-          {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? <Code ml="xs">{w.code}</Code> : null}
-        </Alert>
-      ))}
-      <VaultInventory vaultId={tg.id} />
-
-      <AccessCheckPanel vaultId={tg.id} access={v.access} canOperate={canOperate} />
-      <RoleGuide clientId={v.client_id || undefined} vaultName={v.name} openPolicies={v.access?.permission_model === 'access_policy'} />
+      <div className={classes.grid}>
+        <div className={classes.column}>
+          <VaultInventory vaultId={tg.id} />
+          <AccessCheckPanel vaultId={tg.id} access={v.access} canOperate={canOperate} />
+          <RoleGuide panel clientId={v.client_id || undefined} vaultName={v.name} openPolicies={v.access?.permission_model === 'access_policy'} />
+        </div>
+        <div className={classes.side}>
+          <Panel title={t('vaults.page.details')}>
+            <FactList facts={facts} label={t('vaults.page.details')} />
+            {v.access && v.access.object_id !== '' && (
+              <Text className={classes.small} mt="lg">
+                <CodeText i18nKey="vaults.signsInAs" param="objectId" value={v.access.object_id} />
+              </Text>
+            )}
+          </Panel>
+          <Panel title={t('vaults.page.interval')}>
+            <PollInterval target={tg} editable={admin} />
+          </Panel>
+        </div>
+      </div>
 
       {replacing && (
         <ReplaceCredentialsDialog
@@ -286,7 +274,7 @@ function PollInterval({ target, editable }: { target: Target; editable: boolean 
     setBusy(false);
     await client.invalidateQueries({ queryKey: TARGETS_KEY });
   };
-  if (!editable) return <Text size="sm">{t('vaults.pollInterval', { minutes })}</Text>;
+  if (!editable) return <Text className={classes.small}>{t('vaults.pollInterval', { minutes })}</Text>;
   return (
     <form
       onSubmit={(e) => {
@@ -342,14 +330,14 @@ function DeleteVaultDialog({ vault, onClose, onDeleted }: { vault: Target; onClo
           </Alert>
         )}
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
+        <DialogActions>
           <Button variant="default" onClick={onClose}>
             {t('ui.cancel')}
           </Button>
-          <Button color="red.9" loading={busy} onClick={() => void confirm(hasBindings)}>
+          <Button color="red" loading={busy} onClick={() => void confirm(hasBindings)}>
             {t(hasBindings ? 'vaults.deleteWithBindings' : 'vaults.delete')}
           </Button>
-        </Group>
+        </DialogActions>
       </Stack>
     </AppModal>
   );

@@ -1,0 +1,31 @@
+/* The Key Vault pages in the Clarity design (alice-design/dist/styles.css .resource-name, .resource-icon.azure,
+   .data-table td p, .detail-grid, .stack, .usage-node). Colors come from the --alice-* tokens only. */
+.resourceName { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.resourceText { min-width: 0; }
+.resourceIcon { width: 30px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: var(--alice-radius-sm); background: var(--alice-surface-subtle); color: var(--alice-text-secondary); }
+.resourceIcon[data-tone='info'] { background: var(--alice-info-soft); color: var(--alice-info); }
+.name { font-size: 12px; font-weight: 550; overflow-wrap: anywhere; }
+/* The design's last cascade sets secondary cell text to 10 px (styles.css line 15). */
+.secondary { margin: 4px 0 0; font-size: 10px; color: var(--alice-text-muted); overflow-wrap: anywhere; }
+.secondary code { font-size: 10px; }
+.mono { font-family: var(--mantine-font-family-monospace); font-size: 11px; white-space: nowrap; }
+.small { font-size: 11px; color: var(--alice-text-secondary); overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.headerChips { display: flex; flex-wrap: wrap; gap: 6px; }
+.tabNotice { margin-bottom: 16px; }
+.tabPanel { padding-top: 20px; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(290px, 1fr); gap: 20px; align-items: start; margin-top: 24px; }
+.column, .side { display: grid; gap: 20px; min-width: 0; align-content: start; }
+.actionsCell { display: grid; gap: 4px; justify-items: start; }
+
+@media (max-width: 1199px) {
+  .grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+}
+/* Below 1020 px the design stacks the columns and lays the side panels two across (one across on phones). */
+@media (max-width: 1020px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 767px) {
+  .side { grid-template-columns: minmax(0, 1fr); }
+}

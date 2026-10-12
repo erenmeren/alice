@@ -1,4 +1,4 @@
-import { Alert, Anchor, Badge, Box, Button, Checkbox, Code, Group, Stack, Table, Text, Title } from '@mantine/core';
+import { Anchor, Box, Button, Checkbox, Code, Group, Stack, Table, Text } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -15,25 +15,17 @@ import { Expiry, useNow } from '../components/Expiry';
 import { KVDeployDialog } from '../components/KVDeployDialog';
 import { ROLE_SECRETS_USER } from '../components/roleCommands';
 import { useStepUp } from '../components/StepUpProvider';
+import { DialogActions, EmptyState, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact, type Tone } from '../components/ui';
 import { isRecentNewVersion, shortVersion, versionBlock } from '../components/vaultText';
 import { WRAP } from '../components/wrap';
 import { formatDate, formatDateTime } from '../datetime';
+import classes from './KeyVaults.module.css';
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <Group gap="xs" align="baseline" wrap="wrap">
-      <Text size="sm" fw={600}>
-        {label}
-      </Text>
-      {children}
-    </Group>
-  );
-}
-
-const Chip = ({ children, color = 'gray' }: { children: ReactNode; color?: string }) => (
-  <Badge variant="light" color={color} tt="none">
+// Chip is a state of the certificate or of a version as the design's status badge.
+const Chip = ({ children, tone = 'neutral' }: { children: ReactNode; tone?: Tone }) => (
+  <StatusBadge tone={tone} size="sm">
     {children}
-  </Badge>
+  </StatusBadge>
 );
 
 // What releasing a held version leads to, from what the page knows. Automatic deployment never
@@ -93,152 +85,185 @@ export function KVCertificatePage() {
   const monitorOnly = c.exportable === false;
   // The versions arrive newest first.
   const versions = c.versions;
+  const chips = [
+    monitorOnly && <Chip key="monitor">{t('vaults.monitorOnly')}</Chip>,
+    c.missing_since !== null && (
+      <Chip key="removed" tone="warning">
+        {t('vaults.removed')}
+      </Chip>
+    ),
+    !c.enabled && <Chip key="disabled">{t('vaults.disabledChip')}</Chip>,
+    c.bound && (
+      <Chip key="bound" tone="success">
+        {t('vaults.connected', { count: c.binding?.location_count ?? 0 })}
+      </Chip>
+    ),
+  ].filter(Boolean);
+  const policy: Fact[] = [
+    { key: 'exportable', label: t('vaults.cert.exportable'), value: c.exportable === null ? t('vaults.cert.exportableUnknown') : t(c.exportable ? 'vaults.yes' : 'vaults.no') },
+    ...(c.key_type !== ''
+      ? [
+          {
+            key: 'key',
+            label: t('vaults.page.keyType'),
+            value: (
+              <Group gap={6} wrap="wrap">
+                <Code translate="no" style={WRAP}>
+                  {c.key_type}
+                </Code>
+                {c.key_size > 0 && <span>{t('vaults.keys.bits', { bits: c.key_size })}</span>}
+              </Group>
+            ),
+          },
+        ]
+      : []),
+    ...(c.issuer_name !== ''
+      ? [
+          {
+            key: 'issuer',
+            label: t('vaults.cert.issuer'),
+            value: (
+              <Text span inherit translate="no" style={WRAP}>
+                {c.issuer_name}
+              </Text>
+            ),
+          },
+        ]
+      : []),
+    ...(c.content_type !== ''
+      ? [
+          {
+            key: 'contentType',
+            label: t('vaults.cert.contentType'),
+            value: (
+              <Text span inherit translate="no" style={WRAP}>
+                {c.content_type}
+              </Text>
+            ),
+          },
+        ]
+      : []),
+    { key: 'renewal', label: t('vaults.page.renewal'), value: t(c.auto_renew ? 'vaults.cert.renews' : 'vaults.cert.noRenew') },
+    ...(c.expires ? [{ key: 'expires', label: t('vaults.cert.expires'), value: <Expiry notAfter={c.expires} /> }] : []),
+    { key: 'rotation', label: t('vaults.page.rotation'), value: t('vaults.page.rotationValue') },
+  ];
 
   return (
-    <Stack gap="md">
-      {back}
-      <Title order={1} style={WRAP}>
-        <span translate="no">{c.name}</span>
-      </Title>
-      <Group gap={4}>
-        {monitorOnly && <Chip>{t('vaults.monitorOnly')}</Chip>}
-        {c.missing_since !== null && <Chip color="orange">{t('vaults.removed')}</Chip>}
-        {!c.enabled && <Chip>{t('vaults.disabledChip')}</Chip>}
-        {c.bound && <Chip color="green">{t('vaults.connected', { count: c.binding?.location_count ?? 0 })}</Chip>}
-      </Group>
-      {monitorOnly && (
-        <Alert color="gray" role="status">
-          {t('vaults.cert.notExportable')}
-        </Alert>
-      )}
-      {c.details_pending && (
-        <Alert color="gray" role="status">
-          {t('vaults.cert.detailsPending')}
-        </Alert>
-      )}
-      {!monitorOnly && c.deploy_access === 'forbidden' && (
-        <Alert color="yellow" role="status">
-          <CodeText i18nKey="vaults.cert.secretsRole" param="role" value={ROLE_SECRETS_USER} />
-        </Alert>
-      )}
-      {released && (
-        <Alert color="green" role="status">
-          {t(RELEASED[released])}
-        </Alert>
-      )}
-
-      <Title order={2} size="h3">
-        {t('vaults.cert.policyTitle')}
-      </Title>
-      <Stack gap={4} role="group" aria-label={t('vaults.cert.policyTitle')}>
-        <Fact label={t('vaults.cert.exportable')}>
-          <Text size="sm">{c.exportable === null ? t('vaults.cert.exportableUnknown') : t(c.exportable ? 'vaults.yes' : 'vaults.no')}</Text>
-        </Fact>
-        {c.key_type !== '' && (
-          <Text size="sm" style={WRAP}>
-            <CodeText i18nKey={c.key_size > 0 ? 'vaults.cert.keyValue' : 'vaults.cert.keyValueNoSize'} param="type" value={c.key_type} params={{ bits: c.key_size }} />
-          </Text>
+    <Stack gap={0}>
+      <PageHeader
+        back={{ to: `/key-vaults/${vaultId}`, label: t('vaults.cert.backToVault') }}
+        title={<span translate="no">{c.name}</span>}
+        description={t('vaults.page.certDescription')}
+        status={chips.length > 0 ? <div className={classes.headerChips}>{chips}</div> : undefined}
+      />
+      <Stack gap="md">
+        {monitorOnly && <Notice tone="neutral" role="status" title={t('vaults.cert.notExportable')} />}
+        {c.details_pending && <Notice tone="neutral" role="status" title={t('vaults.cert.detailsPending')} />}
+        {!monitorOnly && c.deploy_access === 'forbidden' && (
+          <Notice tone="warning" role="status" title={<CodeText i18nKey="vaults.cert.secretsRole" param="role" value={ROLE_SECRETS_USER} />} />
         )}
-        {c.issuer_name !== '' && (
-          <Fact label={t('vaults.cert.issuer')}>
-            <Text size="sm" translate="no" style={WRAP}>
-              {c.issuer_name}
-            </Text>
-          </Fact>
-        )}
-        {c.content_type !== '' && (
-          <Fact label={t('vaults.cert.contentType')}>
-            <Text size="sm" translate="no" style={WRAP}>
-              {c.content_type}
-            </Text>
-          </Fact>
-        )}
-        <Text size="sm">{t(c.auto_renew ? 'vaults.cert.renews' : 'vaults.cert.noRenew')}</Text>
-        {c.expires && (
-          <Fact label={t('vaults.cert.expires')}>
-            <Expiry notAfter={c.expires} />
-          </Fact>
-        )}
+        {released && <Notice tone="success" role="status" title={t(RELEASED[released])} />}
       </Stack>
 
-      <Title order={2} size="h3">
-        {t('vaults.cert.versionsTitle')}
-      </Title>
-      {versions.length === 0 && <Text size="sm">{t('vaults.cert.noVersions')}</Text>}
-      {versions.length > 0 && (
-        <Table.ScrollContainer minWidth={900}>
-          <Table striped aria-label={t('vaults.cert.versionsTitle')}>
-            <Table.Thead>
-              <Table.Tr>
-                {(['version', 'thumbprint', 'validFrom', 'validTo', 'enabled', 'found', 'state', 'actions'] as const).map((k) => (
-                  <Table.Th key={k}>{t(`vaults.cert.vcolumns.${k}`)}</Table.Th>
-                ))}
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {versions.map((v, i) => {
-                const block = versionBlock(v, now);
-                const current = v.version === c.current_version;
-                const heldText = v.held ? t(v.held_reason === 'incomplete_chain' ? 'vaults.heldChain' : 'vaults.heldVersion') : '';
-                const newer = i === 0 && isRecentNewVersion(v.kv_created_at, c.first_seen_at, now);
-                // An Operator cannot confirm a chain Alice knows is incomplete: the row says so up front.
-                const reason = !c.binding ? null : v.held && !admin ? 'heldAdmin' : (block ?? (!admin && v.chain_incomplete ? 'chainAdmin' : null));
-                return (
-                  <Table.Tr key={v.id} data-testid="kv-version-row" data-held={v.held ? 'true' : undefined}>
-                    <Table.Td>
-                      <Stack gap={2}>
-                        <Code translate="no">{shortVersion(v.version)}</Code>
-                        {current && <Chip color="blue">{t('vaults.cert.current')}</Chip>}
-                      </Stack>
-                    </Table.Td>
-                    <Table.Td>
-                      <Code translate="no" style={WRAP}>
-                        {v.thumbprint}
-                      </Code>
-                    </Table.Td>
-                    <Table.Td>{v.not_before ? formatDate(v.not_before, i18n.language) : ''}</Table.Td>
-                    <Table.Td>{v.expires ? <Expiry notAfter={v.expires} /> : t('vaults.noExpiry')}</Table.Td>
-                    <Table.Td>{t(v.enabled ? 'vaults.yes' : 'vaults.no')}</Table.Td>
-                    <Table.Td>{formatDateTime(v.detected_at, i18n.language)}</Table.Td>
-                    <Table.Td>
-                      <Stack gap={4}>
-                        <Group gap={4}>
-                          {newer && <Chip color="blue">{t('vaults.newVersion')}</Chip>}
-                          {v.held && <Chip color="yellow">{t('vaults.heldChip')}</Chip>}
-                          {v.exportable === false && <Chip>{t('vaults.monitorOnly')}</Chip>}
-                        </Group>
-                        {v.held && (
-                          <Text size="xs" data-testid="held-text">
-                            {heldText}
-                          </Text>
-                        )}
-                      </Stack>
-                    </Table.Td>
-                    <Table.Td>
-                      <Stack gap={4}>
-                        {canOperate && c.binding && (
-                          <Button size="xs" disabled={reason !== null} aria-label={t('vaults.cert.deployNamed', { version: shortVersion(v.version) })} onClick={() => setDeploy(v.id)}>
-                            {t('bindings.deployNow')}
-                          </Button>
-                        )}
-                        {canOperate && c.binding && reason !== null && <Text size="xs">{t(`bindings.cannot.${reason}`)}</Text>}
-                        {v.held && admin && (
-                          <Button size="xs" variant="default" aria-label={t('vaults.cert.releaseNamed', { version: shortVersion(v.version) })} onClick={() => setReleasing(v)}>
-                            {t('vaults.cert.release')}
-                          </Button>
-                        )}
-                        {v.held && !admin && <Text size="xs">{t('vaults.cert.releaseAdminOnly')}</Text>}
-                      </Stack>
-                    </Table.Td>
-                  </Table.Tr>
-                );
-              })}
-            </Table.Tbody>
-          </Table>
-        </Table.ScrollContainer>
-      )}
+      <div className={classes.grid}>
+        <div className={classes.column}>
+          <Panel title={t('vaults.page.versions')} description={t('vaults.page.versionsSub')} padded={false}>
+            {versions.length === 0 && <EmptyState icon="FileKey2" title={t('vaults.cert.noVersions')} />}
+            {versions.length > 0 && (
+              <Table.ScrollContainer minWidth={900}>
+                <Table aria-label={t('vaults.cert.versionsTitle')} highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      {(['version', 'thumbprint', 'validFrom', 'validTo', 'enabled', 'found', 'state', 'actions'] as const).map((k) => (
+                        <Table.Th key={k}>{t(`vaults.cert.vcolumns.${k}`)}</Table.Th>
+                      ))}
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {versions.map((v, i) => {
+                      const block = versionBlock(v, now);
+                      const current = v.version === c.current_version;
+                      const heldText = v.held ? t(v.held_reason === 'incomplete_chain' ? 'vaults.heldChain' : 'vaults.heldVersion') : '';
+                      const newer = i === 0 && isRecentNewVersion(v.kv_created_at, c.first_seen_at, now);
+                      // An Operator cannot confirm a chain Alice knows is incomplete: the row says so up front.
+                      const reason = !c.binding ? null : v.held && !admin ? 'heldAdmin' : (block ?? (!admin && v.chain_incomplete ? 'chainAdmin' : null));
+                      return (
+                        <Table.Tr key={v.id} data-testid="kv-version-row" data-held={v.held ? 'true' : undefined}>
+                          <Table.Td>
+                            <Stack gap={4} align="flex-start">
+                              <Code translate="no">{shortVersion(v.version)}</Code>
+                              {current && <Chip tone="info">{t('vaults.cert.current')}</Chip>}
+                            </Stack>
+                          </Table.Td>
+                          <Table.Td>
+                            <Code translate="no" style={WRAP}>
+                              {v.thumbprint}
+                            </Code>
+                          </Table.Td>
+                          <Table.Td>{v.not_before ? formatDate(v.not_before, i18n.language) : ''}</Table.Td>
+                          <Table.Td>{v.expires ? <Expiry notAfter={v.expires} /> : t('vaults.noExpiry')}</Table.Td>
+                          <Table.Td>{t(v.enabled ? 'vaults.yes' : 'vaults.no')}</Table.Td>
+                          <Table.Td>
+                            <span className={classes.mono}>{formatDateTime(v.detected_at, i18n.language)}</span>
+                          </Table.Td>
+                          <Table.Td>
+                            <Stack gap={4}>
+                              <div className={classes.chips}>
+                                {newer && <Chip tone="info">{t('vaults.newVersion')}</Chip>}
+                                {v.held && <Chip tone="warning">{t('vaults.heldChip')}</Chip>}
+                                {v.exportable === false && <Chip>{t('vaults.monitorOnly')}</Chip>}
+                              </div>
+                              {v.held && (
+                                <Text size="xs" data-testid="held-text">
+                                  {heldText}
+                                </Text>
+                              )}
+                            </Stack>
+                          </Table.Td>
+                          <Table.Td>
+                            <div className={classes.actionsCell}>
+                              {canOperate && c.binding && (
+                                <Button size="xs" disabled={reason !== null} aria-label={t('vaults.cert.deployNamed', { version: shortVersion(v.version) })} onClick={() => setDeploy(v.id)}>
+                                  {t('bindings.deployNow')}
+                                </Button>
+                              )}
+                              {canOperate && c.binding && reason !== null && (
+                                <Text size="xs" c="dimmed">
+                                  {t(`bindings.cannot.${reason}`)}
+                                </Text>
+                              )}
+                              {v.held && admin && (
+                                <Button size="xs" variant="default" aria-label={t('vaults.cert.releaseNamed', { version: shortVersion(v.version) })} onClick={() => setReleasing(v)}>
+                                  {t('vaults.cert.release')}
+                                </Button>
+                              )}
+                              {v.held && !admin && (
+                                <Text size="xs" c="dimmed">
+                                  {t('vaults.cert.releaseAdminOnly')}
+                                </Text>
+                              )}
+                            </div>
+                          </Table.Td>
+                        </Table.Tr>
+                      );
+                    })}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            )}
+          </Panel>
 
-      <BindingPanel vaultId={vaultId} certificate={c} canOperate={canOperate} admin={admin} />
+          <BindingPanel vaultId={vaultId} certificate={c} canOperate={canOperate} admin={admin} />
+        </div>
+        <div className={classes.side}>
+          <Panel title={t('vaults.page.policy')}>
+            <FactList facts={policy} label={t('vaults.cert.policyTitle')} />
+          </Panel>
+          <Notice tone="brand" title={t('vaults.page.autoDeployTitle')}>
+            {t('vaults.page.autoDeployText')}
+          </Notice>
+        </div>
+      </div>
 
       {deploy !== null && <KVDeploy certificateId={id} vaultId={vaultId} versionId={deploy} onClose={() => setDeploy(null)} />}
       {releasing && (
@@ -273,9 +298,9 @@ function DeployWithBinding({ certificate, versionId, onClose }: { certificate: K
       <AppModal opened onClose={onClose} title={t('bindings.deployTitle')}>
         <Stack gap="sm">
           <ErrorAlert error={binding.error} />
-          <Group justify="flex-end">
+          <DialogActions>
             <Button onClick={onClose}>{t('ui.close')}</Button>
-          </Group>
+          </DialogActions>
         </Stack>
       </AppModal>
     );
@@ -313,14 +338,14 @@ function ReleaseDialog({ vaultId, certificateId, version, kind, onClose, onRelea
         <Text size="sm">{t(RELEASE_HELP[kind])}</Text>
         {chain && <Box><Checkbox label={t('deploy.confirmChain')} checked={confirm} onChange={(e) => setConfirm(e.currentTarget.checked)} /></Box>}
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
+        <DialogActions>
           <Button variant="default" onClick={onClose}>
             {t('ui.cancel')}
           </Button>
           <Button loading={busy} disabled={chain && !confirm} onClick={() => void go()}>
             {t('vaults.cert.release')}
           </Button>
-        </Group>
+        </DialogActions>
       </Stack>
     </AppModal>
   );

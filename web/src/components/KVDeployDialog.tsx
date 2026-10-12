@@ -17,8 +17,10 @@ import { ErrorAlert } from './ErrorAlert';
 import { useNow } from './Expiry';
 import { InternalLink } from './InternalLink';
 import { useStepUp } from './StepUpProvider';
+import { DialogActions } from './ui';
 import { shortVersion, versionBlock } from './vaultText';
 import { useAuth } from '../auth/AuthProvider';
+import { Icon } from '../design/Icon';
 import { WRAP } from './wrap';
 
 interface Run {
@@ -136,7 +138,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
             const step = dep ? currentStep(dep.steps) : null;
             const site = siteOf(r.locationId);
             return (
-              <Box key={r.id} data-testid="deployment-run" style={{ borderTop: runs.length > 1 ? '1px solid var(--mantine-color-gray-4)' : undefined, paddingTop: runs.length > 1 ? 8 : 0 }}>
+              <Box key={r.id} data-testid="deployment-run" style={{ borderTop: runs.length > 1 ? '1px solid var(--alice-border)' : undefined, paddingTop: runs.length > 1 ? 8 : 0 }}>
                 <Stack gap="xs">
                   {site && (
                     <Text size="sm" fw={600} style={WRAP}>
@@ -145,7 +147,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
                   )}
                   <DeploymentSteps steps={dep?.steps ?? []} status={dep?.status ?? 'pending'} vault />
                   {step && dep && !isSettled(dep) && (
-                    <Text size="xs" c="gray.7" aria-live="polite">
+                    <Text size="xs" c="dimmed" aria-live="polite">
                       {t('deployments.currentStep', { step: t(step) })}
                     </Text>
                   )}
@@ -170,12 +172,15 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
               {t('deploy.partial', { ok: runs.filter((r) => r.deployment?.status === 'succeeded').length, total: runs.length })}
             </Text>
           )}
-          <Group justify="space-between">
-            <InternalLink to="/deployments" size="sm">
-              {t('deploy.openHistory')}
-            </InternalLink>
+          <DialogActions
+            note={
+              <InternalLink to="/deployments" size="sm">
+                {t('deploy.openHistory')}
+              </InternalLink>
+            }
+          >
             <Button onClick={close}>{t('deploy.close')}</Button>
-          </Group>
+          </DialogActions>
         </Stack>
       ) : (
         <form
@@ -217,7 +222,7 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
                 {binding.locations.map((l) => {
                   const bad = refused === l.location_id;
                   return (
-                    <Box key={l.location_id} data-refused={bad ? 'true' : undefined} p="xs" style={bad ? { border: '2px solid var(--mantine-color-red-9)', borderRadius: 4 } : undefined}>
+                    <Box key={l.location_id} data-refused={bad ? 'true' : undefined} p="xs" style={bad ? { border: '2px solid var(--alice-danger)', borderRadius: 'var(--alice-radius-sm)' } : undefined}>
                       <Checkbox
                         value={l.location_id}
                         error={bad ? t('bindings.refused') : undefined}
@@ -239,14 +244,14 @@ export function KVDeployDialog({ binding, certificate, versionId, onClose }: { b
             )}
             {chainOffer && <Checkbox label={t('deploy.confirmChain')} checked={confirmChain} onChange={(e) => setConfirmChain(e.currentTarget.checked)} />}
             <ErrorAlert error={error} />
-            <Group justify="flex-end">
+            <DialogActions>
               <Button variant="default" disabled={busy} onClick={close}>
                 {t('deploy.cancel')}
               </Button>
-              <Button type="submit" loading={busy} disabled={!ready}>
+              <Button type="submit" leftSection={<Icon name="Rocket" size={15} />} loading={busy} disabled={!ready}>
                 {t('bindings.deploySubmit')}
               </Button>
-            </Group>
+            </DialogActions>
           </Stack>
         </form>
       )}

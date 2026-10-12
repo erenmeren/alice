@@ -11,6 +11,7 @@ import { fieldErrorsOf } from './fieldErrors';
 import { buildSignIn, emptySignIn, PfxTooLargeError, signInReady, wipeSecrets, type SignInState } from './signIn';
 import { SignInFields } from './SignInFields';
 import { useStepUp } from './StepUpProvider';
+import { DialogActions } from './ui';
 
 // ReplaceCredentialsDialog replaces how Alice signs in to a vault: the fields of adding a vault
 // without the name and the address. The request carries the vault's version (If-Match) and needs a
@@ -74,14 +75,14 @@ export function ReplaceCredentialsDialog({ vault, onClose, onReplaced }: { vault
             <SignInFields value={signIn} onChange={setSignIn} fieldErrors={fieldErrors} />
             {retype && <Alert color="gray">{t('vaults.retypeSecret')}</Alert>}
             <ErrorAlert error={error} />
-            <Group justify="flex-end">
+            <DialogActions>
               <Button variant="default" onClick={leave}>
                 {t('ui.cancel')}
               </Button>
               <Button type="submit" disabled={!signInReady(signIn)}>
                 {t('vaults.replaceCredentials')}
               </Button>
-            </Group>
+            </DialogActions>
           </Stack>
         </form>
       )}

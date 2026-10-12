@@ -1,17 +1,14 @@
-import { Badge } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import type { Target } from '../api/types';
+import { StatusBadge, TARGET_ICON, TARGET_TONE } from './ui';
 import { vaultStatusKey } from './vaultText';
 
-// The colour is a cue only; the text always names the status.
-const COLORS: Record<string, string> = { ok: 'green', checking: 'blue', degraded: 'orange', unreachable: 'orange', auth_failed: 'red', disabled: 'gray' };
-
+// VaultStatusBadge names a vault's state in its own words (vaultStatusKey): text + icon (or dot) + tone, never color alone.
 export function VaultStatusBadge({ target, testId }: { target: Pick<Target, 'status' | 'last_error' | 'vault'>; testId?: string }) {
   const { t } = useTranslation();
-  // tt="none": no CSS upper-casing of translated text (Turkish dotted/dotless i).
   return (
-    <Badge variant="light" color={COLORS[target.status] ?? 'gray'} tt="none" data-testid={testId}>
+    <StatusBadge tone={TARGET_TONE[target.status] ?? 'neutral'} icon={TARGET_ICON[target.status]} testId={testId}>
       {t(vaultStatusKey(target))}
-    </Badge>
+    </StatusBadge>
   );
 }

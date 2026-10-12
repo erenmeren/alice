@@ -5,6 +5,7 @@ import { setAutoDeploy, type Binding } from '../api/keyvault';
 import { formatDateTime } from '../datetime';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
+import { DialogActions } from './ui';
 import { useStepUp } from './StepUpProvider';
 
 // AutoDeploySwitch is "Automatic deployment" of a connection. An Administrator switches it (a fresh
@@ -53,8 +54,16 @@ export function AutoDeploySwitch({ binding, admin, exportable, onChanged }: { bi
         )}
       </Group>
       <Text size="sm">{t(binding.auto_deploy ? 'bindings.autoDeployHelp' : 'bindings.autoDeployHelpOff')}</Text>
-      {binding.auto_deploy && binding.auto_since && <Text size="xs">{t('bindings.autoDeploySince', { time: formatDateTime(binding.auto_since, i18n.language) })}</Text>}
-      {!admin && <Text size="xs">{t('bindings.adminOnly')}</Text>}
+      {binding.auto_deploy && binding.auto_since && (
+        <Text size="xs" c="dimmed">
+          {t('bindings.autoDeploySince', { time: formatDateTime(binding.auto_since, i18n.language) })}
+        </Text>
+      )}
+      {!admin && (
+        <Text size="xs" c="dimmed">
+          {t('bindings.adminOnly')}
+        </Text>
+      )}
       {!confirming && <ErrorAlert error={error} />}
       {confirming && (
         <AppModal opened onClose={() => !busy && setConfirming(false)} title={t('bindings.autoDeployConfirmTitle')}>
@@ -62,14 +71,14 @@ export function AutoDeploySwitch({ binding, admin, exportable, onChanged }: { bi
             <Text size="sm">{t('bindings.autoDeployHelp')}</Text>
             <Text size="sm">{t('bindings.autoDeployOnlyNew')}</Text>
             <ErrorAlert error={error} />
-            <Group justify="flex-end">
+            <DialogActions>
               <Button variant="default" disabled={busy} onClick={() => setConfirming(false)}>
                 {t('ui.cancel')}
               </Button>
               <Button loading={busy} onClick={() => void set(true)}>
                 {t('bindings.autoDeployConfirm')}
               </Button>
-            </Group>
+            </DialogActions>
           </Stack>
         </AppModal>
       )}
