@@ -3,7 +3,6 @@ package inventory
 import (
 	"bytes"
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -293,8 +292,10 @@ ORDER BY sel.grp, sel.at DESC, sel.id DESC`, maxListedPendingCSRs, listedFinishe
 
 // signedWarnings are an upload's warnings for a signed certificate (certs.ValidateSigned reports
 // only whether the chain is complete), plus WarnCSRNameMismatch when the certificate's SANs do
-// not cover every requested name (the inventory's server-name rule, nameCovered).
-func signedWarnings(pemText []byte, p certs.Parsed, complete bool, requested []string, now time.Time) []string {
+// not cover every requested name (the inventory's server-name rule, nameCovered). An expired
+// certificate counts only on p's ordered chain, the path Alice stores; one off it is dropped
+// (review-fixes L-13).
+func signedWarnings(p certs.Parsed, complete bool, requested []string, now time.Time) []string {
 	out := []string{}
 	if now.Before(p.NotBefore) {
 		out = append(out, "not_yet_valid")
@@ -302,14 +303,11 @@ func signedWarnings(pemText []byte, p certs.Parsed, complete bool, requested []s
 	if !complete {
 		out = append(out, "chain_incomplete")
 	}
-	if all, err := certs.ParseChainPEM(pemText); err == nil {
-		for _, c := range append([]*x509.Certificate{all.Leaf}, all.Chain...) {
-			// The leaf and any other certificate of its key (an old one of a reused key) are not
-			// chain certificates.
-			if !bytes.Equal(c.RawSubjectPublicKeyInfo, p.Leaf.RawSubjectPublicKeyInfo) && !now.Before(c.NotAfter) {
-				out = append(out, "chain_certificate_expired")
-				break
-			}
+	for _, c := range p.Chain {
+		// Any certificate of the leaf's key (an old one of a reused key) is not a chain certificate.
+		if !bytes.Equal(c.RawSubjectPublicKeyInfo, p.Leaf.RawSubjectPublicKeyInfo) && !now.Before(c.NotAfter) {
+			out = append(out, "chain_certificate_expired")
+			break
 		}
 	}
 	for _, n := range requested {
@@ -379,7 +377,7 @@ JOIN managed_private_keys k ON k.id = r.private_key_id WHERE r.id = $1`, id).Sca
 		reason, out := refusal(err)
 		return reject(rejected{reason: reason}, out)
 	}
-	warnings := signedWarnings(buf, p, complete, req.SANs, now)
+	warnings := signedWarnings(p, complete, req.SANs, now)
 
 	var placed placement
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {

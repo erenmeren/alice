@@ -228,8 +228,8 @@ func TestValidateUploadAcceptsACASelfSignedCertificate(t *testing.T) {
 	assert.True(t, v.ChainComplete)
 }
 
-// Chain certificates are not refused when expired, but they are reported and
-// they keep the chain from being complete unless another valid path exists.
+// Chain certificates are not refused when expired, but they are reported when they are on the
+// stored path, and they keep the chain from being complete unless another valid path exists.
 func TestChainCertificateValidity(t *testing.T) {
 	fresh := pki.Opts{CommonName: "www.example.test", NotBefore: now.Add(-time.Hour), NotAfter: now.AddDate(0, 0, 90)}
 
@@ -275,7 +275,13 @@ func TestChainCertificateValidity(t *testing.T) {
 			v, err := ValidateUpload(Upload{CertificatePEM: in, PrivateKeyPEM: l.KeyPEM}, now, rootsOf(ca))
 			require.NoError(t, err)
 			assert.True(t, v.ChainComplete)
-			assert.Equal(t, []string{"chain_certificate_expired"}, v.Warnings)
+			// The expired cross-sign is off the leaf-to-root path, so Alice neither stores nor deploys it: no
+			// warning about it (review-fixes L-13).
+			assert.Empty(t, v.Warnings)
+			assert.NotContains(t, v.Chain, v.Leaf)
+			for _, c := range v.Chain {
+				assert.True(t, now.Before(c.NotAfter), "only the valid path is kept")
+			}
 			v.PrivateKeyDER.Zero()
 		}
 	})

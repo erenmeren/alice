@@ -92,7 +92,7 @@ func ValidateUpload(u Upload, now time.Time, roots *x509.CertPool) (Validated, e
 	if !v.ChainComplete {
 		v.Warnings = append(v.Warnings, "chain_incomplete")
 	}
-	if anyExpired(others, signer.Public(), now) {
+	if anyExpired(chain, signer.Public(), now) {
 		v.Warnings = append(v.Warnings, "chain_certificate_expired")
 	}
 	return v, nil
@@ -124,11 +124,11 @@ func pickLeaf(all []*x509.Certificate, now time.Time, match func(*x509.Certifica
 	return best
 }
 
-// anyExpired reports whether one of the uploaded certificates other than the
-// leaf has expired. Such an upload is accepted (old bundles carry a harmless
-// expired cross-sign) but flagged. An expired certificate of the leaf's own key
-// (the old certificate of a reused key, left in the file) is not a chain
-// certificate and is not counted.
+// anyExpired reports whether a certificate of the ordered chain (the path from
+// the leaf towards its root that Alice stores and deploys) has expired. Such an
+// upload is accepted but flagged. An uploaded certificate off that path (a stale
+// cross-sign beside a valid path, an old copy) is dropped and not counted
+// (review-fixes L-13), nor is a certificate of the leaf's own key.
 func anyExpired(others []*x509.Certificate, leafKey crypto.PublicKey, now time.Time) bool {
 	for _, c := range others {
 		if !now.Before(c.NotAfter) && !samePublicKey(c.PublicKey, leafKey) {
