@@ -106,7 +106,7 @@ export const SCREENS: Screen[] = [
     path: '/deployments/0192c000-0000-7000-8000-0000000000d1',
     session: sessionFor('operator'),
     status: installedStatus,
-    ready: { en: 'Steps', tr: 'Adımlar' },
+    ready: { en: 'Deployment sequence', tr: 'Dağıtım adımları' },
   },
   { path: '/missing', session: null, status: installedStatus, ready: { en: 'Page not found', tr: 'Sayfa bulunamadı' } },
 ];
