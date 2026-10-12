@@ -10,7 +10,7 @@ import type { ErrorRef } from '../api/types';
 import { PageLoader } from '../auth/guards';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
-import { RotationPath } from '../components/rotation/RotationPath';
+import { hasRotationPath, RotationPath } from '../components/rotation/RotationPath';
 import { keyTypeName, ReasonAlert, labelOf, locationTone, noteText, runTone, skipText } from '../components/rotationText';
 import { reasonTitle } from '../components/JobErrorAlert';
 import { useStepUp } from '../components/StepUpProvider';
@@ -30,9 +30,6 @@ function noticeOf(r: Run): ErrorRef | null {
 }
 
 type Confirm = 'finish_now' | 'abort' | 'keep_old' | null;
-
-// The statuses RotationPath draws (it renders nothing for the others); the page leaves out the empty panel too.
-const PATH_STATUSES: Record<string, true> = { dry_run_notified: true, adding_new: true, verifying_new: true, overlap: true, removing_old: true, completed: true };
 
 function stepLabel(t: ReturnType<typeof useTranslation>['t'], i18n: ReturnType<typeof useTranslation>['i18n'], s: RunStep): string {
   if (i18n.exists(`rotation.step.${s.name}`)) return t(`rotation.step.${s.name}`);
@@ -248,9 +245,9 @@ export function RotationRunPage() {
       <div className={classes.grid}>
         <div className={classes.stack}>
           {/* A stopped, undoing or unknown run has no progress path: the badge and the reason say what happened. */}
-          {r.status in PATH_STATUSES && (
+          {hasRotationPath(r.status) && (
             <Panel title={t('rotation.page.path')}>
-              <RotationPath status={r.status} />
+              <RotationPath status={r.status} paused={r.paused_license} />
             </Panel>
           )}
           <Panel title={t('rotation.page.results')} description={t('rotation.page.resultsSub')} aria-label={t('rotation.page.results')} padded={false}>

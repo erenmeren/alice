@@ -526,6 +526,16 @@ describe('RotationRunPage in the design', () => {
     expect(document.querySelectorAll('[role="status"][aria-live="polite"] .mantine-Badge-root')).toHaveLength(1);
   });
 
+  it('says Paused, not In progress, for the current phase of a run the license paused', async () => {
+    serve(runFixture({ status: 'overlap', paused_license: true, actions_allowed: ['abort'] }));
+    await open();
+    const path = await screen.findByRole('list', { name: 'Rotation progress' });
+    const current = within(path).getAllByRole('listitem')[2];
+    expect(current).toHaveAttribute('aria-current', 'step');
+    expect(current).toHaveTextContent('Paused');
+    expect(path).not.toHaveTextContent('In progress');
+  });
+
   it('draws the progress path for a moving run and none for a stopped one', async () => {
     serve(runFixture({ status: 'overlap' }));
     const v = await open();

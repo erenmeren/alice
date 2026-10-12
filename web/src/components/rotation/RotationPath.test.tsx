@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { renderApp } from '../../test/render';
-import { RotationPath } from './RotationPath';
+import { hasRotationPath, RotationPath } from './RotationPath';
 
 const NAMES = ['Generate new key', 'Deploy & verify', 'Overlap period', 'Retire old key'];
 
@@ -32,6 +32,41 @@ describe('RotationPath', () => {
     within(screen.getByRole('list', { name: 'Rotation progress' }))
       .getAllByRole('listitem')
       .forEach((li, i) => expect(li).toHaveTextContent(text[states[i] as keyof typeof text]));
+  });
+
+  it('is a list to assistive technology despite list-style: none, and marks the current phase as the step', async () => {
+    await renderApp(<RotationPath status="overlap" />);
+    const path = screen.getByRole('list', { name: 'Rotation progress' });
+    expect(path).toHaveAttribute('role', 'list');
+    const items = within(path).getAllByRole('listitem');
+    expect(items.map((li) => li.getAttribute('aria-current'))).toEqual([null, null, 'step', null]);
+  });
+
+  it('marks no step current once the run completed', async () => {
+    await renderApp(<RotationPath status="completed" />);
+    expect(screen.getByRole('list', { name: 'Rotation progress' }).querySelector('[aria-current]')).toBeNull();
+  });
+
+  it('says Paused for the current phase of a paused run, never In progress', async () => {
+    await renderApp(<RotationPath status="adding_new" paused />);
+    const items = within(screen.getByRole('list', { name: 'Rotation progress' })).getAllByRole('listitem');
+    expect(items[1]).toHaveTextContent('Paused');
+    expect(items[1]).toHaveAttribute('data-state', 'current');
+    expect(items.some((li) => li.textContent?.includes('In progress'))).toBe(false);
+  });
+
+  it('names the path after its run when given a name, so several paths on a page are told apart', async () => {
+    await renderApp(<RotationPath status="overlap" name="deploy-production" />);
+    expect(screen.getByRole('list', { name: 'Rotation progress: deploy-production' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['dry_run_notified', true],
+    ['completed', true],
+    ['rolling_back', false],
+    ['from_the_future', false],
+  ])('hasRotationPath(%s) is %s, the same statuses the path draws', (status, drawn) => {
+    expect(hasRotationPath(status)).toBe(drawn);
   });
 
   it.each(['rolling_back', 'aborted', 'needs_attention', 'cancelled', 'unknown', 'from_the_future'])('draws no path for %s: a stopped run is never shown as progress', async (status) => {
