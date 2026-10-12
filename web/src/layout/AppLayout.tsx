@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Alert, Anchor, AppShell, Burger, Button, NavLink } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useQuery } from '@tanstack/react-query';
@@ -13,7 +13,7 @@ import { BackupBanner } from '../components/BackupBanner';
 import { LicenseBanners } from '../components/LicenseBanners';
 import { NotificationsBanner } from '../components/NotificationsBanner';
 import { AttentionBell } from '../components/shell/AttentionBell';
-import { CommandPalette } from '../components/shell/CommandPalette';
+import { CommandPalette, anotherDialogOpen } from '../components/shell/CommandPalette';
 import { LanguageToggle, ThemeToggle } from '../components/ui';
 import { Icon, type IconName } from '../design/Icon';
 import classes from './AppLayout.module.css';
@@ -115,6 +115,19 @@ export function AppLayout() {
   useEffect(() => {
     closeNav();
   }, [location.pathname, closeNav]);
+  // Escape closes the open phone menu (the design's app.js) and returns focus to the menu button, unless a dialog in
+  // front of it takes the key.
+  const burger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!navOpened) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || anotherDialogOpen()) return;
+      closeNav();
+      burger.current?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [navOpened, closeNav]);
   if (!session) return null;
   const items = NAV_ITEMS.filter((i) => i.roles.includes(session.user.role));
   const account = ACCOUNT_ITEMS.filter((i) => i.roles.includes(session.user.role));
@@ -203,6 +216,7 @@ export function AppLayout() {
         <div className={classes.headerInner}>
           <div className={classes.headerStart}>
             <Burger
+              ref={burger}
               opened={navOpened}
               onClick={nav.toggle}
               hiddenFrom="sm"

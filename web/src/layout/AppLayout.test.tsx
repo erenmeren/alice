@@ -122,6 +122,27 @@ describe('AppLayout shell', () => {
     expect(container.querySelector('a[href="#main"]')).toBe(skip);
   });
 
+  it('closes the phone menu on Escape and gives focus back to the menu button', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderRoute('/');
+    await userEvent.click(await screen.findByRole('button', { name: 'Open navigation' }));
+    const close = screen.getByRole('button', { name: 'Close navigation' });
+    expect(close).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.keyboard('a');
+    // A modal dialog in front takes Escape for itself.
+    const other = document.createElement('div');
+    other.setAttribute('role', 'dialog');
+    other.setAttribute('aria-modal', 'true');
+    document.body.appendChild(other);
+    await userEvent.keyboard('{Escape}');
+    other.remove();
+    expect(close).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.keyboard('{Escape}');
+    const open = screen.getByRole('button', { name: 'Open navigation' });
+    expect(open).toHaveAttribute('aria-expanded', 'false');
+    expect(open).toHaveFocus();
+  });
+
   it('writes the breadcrumb as plain text', async () => {
     // The server page itself may fail here (no target 'abc'): only the shell is under test.
     server.use(...sessionHandlers(adminSession), http.get(/\/api\/v1\/targets\/.*/, () => new HttpResponse(null, { status: 404 })));
