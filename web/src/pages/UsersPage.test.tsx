@@ -45,8 +45,48 @@ describe('UsersPage', () => {
     expect(await screen.findByRole('heading', { name: 'People & access' })).toBeInTheDocument();
     const row = (await screen.findByText('operator1')).closest('tr')!;
     expect(within(row).getByText('Operator')).toBeInTheDocument();
-    expect(within(row).getByText('Not set up yet')).toBeInTheDocument();
+    expect(within(row).getByText('Authenticator app not set up yet')).toBeInTheDocument();
     expect(within(row).getByText('Oğuz Işık')).toBeInTheDocument();
+  });
+
+  it('has the design header, the three role cards and the people table in its scroll region', async () => {
+    signedInAs(adminSession);
+    withUsers([adminSession.user, { ...operator, email: 'oguz@example.com', disabled: true, last_login_at: '2026-10-01T09:30:00Z' }]);
+    await renderRoute('/users');
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'People & access' });
+    expect(h1.closest('header')).toHaveTextContent('Clear responsibilities. Deliberate permissions.');
+    expect(within(h1.closest('header')!).getByRole('button', { name: 'Add user' })).toBeInTheDocument();
+    const roles = screen.getByRole('group', { name: 'Roles' });
+    const cards = within(roles).getAllByRole('heading', { level: 2 });
+    expect(cards.map((c) => c.textContent)).toEqual(['Administrator', 'Operator', 'Auditor']);
+    expect(roles).toHaveTextContent('Manage the installation, identities and policies.');
+    expect(roles).toHaveTextContent('Discover inventory and operate certificates and SSH keys.');
+    expect(roles).toHaveTextContent('Read inventory, inspect evidence and export records.');
+
+    const table = await screen.findByRole('table', { name: 'People' });
+    expect(screen.getByRole('group', { name: 'Table, scrolls sideways' })).toContainElement(table);
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
+      'Person',
+      'Role',
+      'Sign-in method',
+      'Status',
+      'Last sign-in',
+      'Actions',
+    ]);
+    const row = within(table).getByText('operator1').closest('tr')!;
+    // Person: initials, name, user name and e-mail; then the role, the sign-in method with the authenticator state, the status.
+    expect(within(row).getByText('OI')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(row).getByText('Oğuz Işık')).toBeInTheDocument();
+    expect(within(row).getByText('oguz@example.com')).toBeInTheDocument();
+    expect(within(row).getByText('Operator')).toBeInTheDocument();
+    expect(within(row).getByText('Local account').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
+    expect(within(row).getByText('Disabled').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
+    expect(within(row).getByRole('button', { name: 'Manage operator1' })).toBeInTheDocument();
+    const admin = within(table).getByText('admin').closest('tr')!;
+    expect(within(admin).getByText('Authenticator app set up')).toBeInTheDocument();
+    expect(within(admin).getByText('Local account').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(within(admin).getByText('Active').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(within(admin).getByText('Never')).toBeInTheDocument();
   });
 
   it('is fully translated in Turkish', async () => {
@@ -54,7 +94,10 @@ describe('UsersPage', () => {
     withUsers([operator]);
     await renderRoute('/users', { languages: ['tr-TR'] });
     expect(await screen.findByRole('heading', { name: 'Kişiler ve erişim' })).toBeInTheDocument();
-    expect(await screen.findByText('Operatör')).toBeInTheDocument();
+    const row = (await screen.findByText('operator1')).closest('tr')!;
+    expect(within(row).getByText('Operatör')).toBeInTheDocument();
+    expect(within(row).getByText('Doğrulama uygulaması henüz kurulmadı')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Roller' })).toHaveTextContent('Envanteri okur, kanıtları inceler ve kayıtları dışa aktarır.');
     expect(screen.getByRole('button', { name: 'Kullanıcı ekle' })).toBeInTheDocument();
   });
 
@@ -246,7 +289,9 @@ describe('UsersPage access and step-up', () => {
     const row = (await screen.findByText('ayse@corp.example')).closest('tr')!;
     expect(within(row).getByText('Single sign-on')).toBeInTheDocument();
     expect(await within(row).findByText('Corp IdP')).toBeInTheDocument();
-    expect(within(row).queryByText('Not set up yet')).not.toBeInTheDocument();
+    expect(within(row).getByText('At the identity provider')).toBeInTheDocument();
+    expect(within(row).queryByText('Authenticator app not set up yet')).not.toBeInTheDocument();
+    expect(within(row).queryByText('Local account')).not.toBeInTheDocument();
     const local = screen.getByText('operator1').closest('tr')!;
     expect(within(local).queryByText('Single sign-on')).not.toBeInTheDocument();
 
@@ -279,5 +324,55 @@ describe('UsersPage access and step-up', () => {
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save changes' }));
     expect(await screen.findByText('This change is not possible for a single sign-on user.')).toBeInTheDocument();
     expect(body).not.toHaveProperty('role');
+  });
+
+  it('shows why the list cannot be read', async () => {
+    signedInAs(adminSession);
+    server.use(http.get('/api/v1/users', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')));
+    await renderRoute('/users');
+    expect(await screen.findByRole('alert')).toHaveTextContent('ALC-SYS-0003');
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('enables a disabled user, edits a name and e-mail, and sets a new password', async () => {
+    signedInAs(adminSession);
+    const disabled: User = { ...operator, disabled: true };
+    withUsers([disabled]);
+    const patches: unknown[] = [];
+    let password: unknown = null;
+    server.use(
+      http.patch('/api/v1/users/:id', async ({ request }) => {
+        patches.push(await request.json());
+        return HttpResponse.json(disabled);
+      }),
+      http.post('/api/v1/users/:id/actions/reset-password', async ({ request }) => {
+        password = await request.json();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await renderRoute('/users');
+    await userEvent.click(await screen.findByRole('button', { name: 'Manage operator1' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Enable' }));
+    await userEvent.click(within(await screen.findByRole('dialog', { name: 'Enable operator1?' })).getByRole('button', { name: 'Enable user' }));
+    await waitFor(() => expect(patches).toEqual([{ disabled: false }]));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage operator1' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Edit' }));
+    const edit = await screen.findByRole('dialog', { name: 'Edit operator1' });
+    await userEvent.clear(within(edit).getByLabelText(/^Full name/));
+    await userEvent.type(within(edit).getByLabelText(/^Full name/), 'Oğuz Yeni');
+    await userEvent.type(within(edit).getByLabelText(/^Email/), 'oguz@example.com');
+    await userEvent.click(within(edit).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(patches[1]).toEqual({ display_name: 'Oğuz Yeni', email: 'oguz@example.com', role: 'operator' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage operator1' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Set a new password' }));
+    const reset = await screen.findByRole('dialog', { name: 'Set a new password for operator1' });
+    await userEvent.type(within(reset).getByLabelText(/^New password/), 'a brand new password');
+    await userEvent.click(within(reset).getByRole('button', { name: 'Set password' }));
+    await waitFor(() => expect(password).not.toBeNull());
+    expect(JSON.stringify(password)).toContain('a brand new password');
   });
 });

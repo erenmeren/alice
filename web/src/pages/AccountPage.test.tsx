@@ -1,7 +1,7 @@
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { errorResponse, sessionFor, sessionHandlers } from '../test/fixtures';
+import { errorResponse, sessionFor, sessionHandlers, ssoSessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -18,6 +18,67 @@ describe('account page', () => {
     await renderRoute('/account');
     expect(await screen.findByRole('heading', { name: 'Your account' })).toBeInTheDocument();
     expect(screen.getByTestId('account-summary')).toHaveTextContent('Signed in as auditor (Auditor)');
+  });
+
+  it('has the design header, the profile panel and the appearance panel', async () => {
+    server.use(...sessionHandlers(sessionFor('admin')));
+    await renderRoute('/account');
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'Your account' });
+    expect(h1.closest('header')).toHaveTextContent('Personal security, language and workspace preferences.');
+
+    const profile = screen.getByRole('heading', { level: 2, name: 'Sign-in and recovery' }).closest('section')!;
+    expect(within(profile).getByText('AY')).toHaveAttribute('aria-hidden', 'true');
+    expect(within(profile).getByText('Ayşe Yılmaz')).toBeInTheDocument();
+    expect(within(profile).getByText('Administrator')).toBeInTheDocument();
+    expect(within(profile).getByText('admin@example.com')).toBeInTheDocument();
+    expect(within(profile).getByTestId('account-summary')).toHaveTextContent('Signed in as admin (Administrator)');
+    const facts = profile.querySelector('dl')!;
+    expect(facts).toHaveTextContent('Local account + authenticator app');
+    expect(within(facts).getByText('Enabled').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(within(profile).getByRole('button', { name: 'Create new recovery codes' })).toBeInTheDocument();
+    expect(within(profile).getByRole('button', { name: 'Change password' })).toBeInTheDocument();
+    expect(within(profile).getByLabelText('Current password')).toBeInTheDocument();
+
+    const appearance = screen.getByRole('heading', { level: 2, name: 'A workspace that feels right' }).closest('section')!;
+    expect(appearance).toHaveTextContent('Choose a color mode and information density. Your preference stays on this device.');
+    const mode = within(appearance).getByRole('group', { name: 'Color mode' });
+    expect(within(mode).getAllByRole('radio').map((r) => r.closest('label')!.textContent)).toEqual(['Light', 'Dark', 'System']);
+    await userEvent.click(within(mode).getByRole('radio', { name: 'Dark' }));
+    expect(localStorage.getItem('alice.colorScheme')).toBe('dark');
+    await userEvent.click(within(appearance).getByRole('switch', { name: 'Compact tables' }));
+    expect(localStorage.getItem('alice.density')).toBe('compact');
+    expect(within(appearance).getByRole('combobox', { name: 'Language' })).toHaveValue('en');
+    // The old pointer to the top bar's switch is gone: the language is chosen here.
+    expect(screen.queryByText(/Use the language switcher at the top of the page/)).not.toBeInTheDocument();
+  });
+
+  it('saves the language chosen on the page to the account', async () => {
+    let saved: unknown = null;
+    server.use(
+      ...sessionHandlers(sessionFor('operator')),
+      http.put('/api/v1/auth/locale', async ({ request }) => {
+        saved = await request.json();
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await renderRoute('/account');
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Language' }), 'tr');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Hesabınız' })).toBeInTheDocument();
+    await waitFor(() => expect(saved).toEqual({ locale: 'tr' }));
+  });
+
+  it('shows a single sign-on account without a password form or recovery codes', async () => {
+    server.use(...sessionHandlers(ssoSessionFor('operator')));
+    await renderRoute('/account');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Your account' })).toBeInTheDocument();
+    expect(screen.getByTestId('account-summary')).toHaveTextContent('Signed in as ayse@corp.example (Operator)');
+    expect(screen.getByText('Single sign-on')).toBeInTheDocument();
+    expect(screen.getByText('At the identity provider').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
+    expect(screen.getByText('Your password and second factor are managed by your identity provider, so they are not changed here.')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Change password' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create new recovery codes' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'A workspace that feels right' })).toBeInTheDocument();
   });
 
   it('changes the password and keeps the user signed in with the new session', async () => {
@@ -92,5 +153,18 @@ describe('account page', () => {
     await userEvent.click(screen.getByLabelText('I saved these codes in a safe place'));
     await userEvent.click(screen.getByRole('button', { name: 'Continue' }));
     expect(await screen.findByText('Your new recovery codes are active.')).toBeInTheDocument();
+  });
+
+  it('shows an authenticator that is not set up, and why new recovery codes could not be made', async () => {
+    const session = sessionFor('operator');
+    server.use(
+      ...sessionHandlers({ ...session, user: { ...session.user, mfa_enrolled: false, email: '' } }),
+      http.post('/api/v1/auth/recovery-codes', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')),
+    );
+    await renderRoute('/account');
+    expect((await screen.findByText('Not set up')).closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
+    await userEvent.click(screen.getByRole('button', { name: 'Create new recovery codes' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('ALC-SYS-0003');
+    expect(screen.queryByTestId('recovery-codes')).not.toBeInTheDocument();
   });
 });

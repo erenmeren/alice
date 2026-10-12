@@ -1,18 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import {
-  Alert,
-  Button,
-  Code,
-  CopyButton,
-  Group,
-  NativeSelect,
-  NumberInput,
-  Stack,
-  Table,
-  Text,
-  TextInput,
-  Title,
-} from '@mantine/core';
+import { Alert, Button, Code, CopyButton, Group, NativeSelect, NumberInput, Stack, Table, Text, TextInput, VisuallyHidden } from '@mantine/core';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { createToken, listTokens, revokeToken } from '../api/endpoints';
@@ -20,8 +7,11 @@ import type { ApiToken, TokenScope } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { useStepUp } from '../components/StepUpProvider';
+import { DialogActions, EmptyState, Notice, PageHeader, Panel, ResourceTable, StatusBadge } from '../components/ui';
 import { formatDateTime } from '../datetime';
+import { Icon } from '../design/Icon';
 import { AppModal } from '../components/AppModal';
+import classes from './People.module.css';
 
 export function TokensPage() {
   const { t, i18n } = useTranslation();
@@ -29,6 +19,7 @@ export function TokensPage() {
   const tokens = useQuery({ queryKey: ['tokens'], queryFn: () => listTokens() });
   const [creating, setCreating] = useState(false);
   const [revoking, setRevoking] = useState<ApiToken | null>(null);
+  // The new token's secret lives only in this component's state: shown once, never in a URL, the query cache or storage.
   const [created, setCreated] = useState<string | null>(null);
   // A single sign-on user gets no API token (the server answers ALC-USR-0003): no create control, a note instead.
   const { session } = useAuth();
@@ -36,27 +27,36 @@ export function TokensPage() {
 
   return (
     <Stack gap="md">
-      <Group justify="space-between">
-        <Title order={1}>{t('tokens.title')}</Title>
-        {!sso && <Button onClick={() => setCreating(true)}>{t('tokens.create')}</Button>}
-      </Group>
-      <Text size="sm">{t('tokens.intro')}</Text>
+      <PageHeader
+        title={t('tokens.title')}
+        description={t('tokens.page.description')}
+        actions={
+          !sso && (
+            <Button leftSection={<Icon name="Plus" size={15} />} onClick={() => setCreating(true)}>
+              {t('tokens.create')}
+            </Button>
+          )
+        }
+      />
+      <Notice tone="brand" title={t('tokens.page.boundTitle')}>
+        {t('tokens.page.boundText')}
+      </Notice>
       {sso && (
-        <Alert color="blue" data-testid="tokens-sso-note">
+        <Notice tone="info" title={t('users.sso')} testId="tokens-sso-note">
           {t('tokens.ssoNoCreate')}
-        </Alert>
+        </Notice>
       )}
       {created && (
-        <Alert color="yellow" title={t('tokens.createdTitle')}>
+        <Alert color="yellow" title={t('tokens.createdTitle')} icon={<Icon name="KeyRound" size={17} />}>
           <Stack gap="xs">
             <Text size="sm">{t('tokens.createdText')}</Text>
-            <Code block data-testid="new-token">
+            <Code block data-testid="new-token" translate="no">
               {created}
             </Code>
             <Group>
               <CopyButton value={created}>
                 {({ copied, copy }) => (
-                  <Button size="xs" variant="light" onClick={copy}>
+                  <Button size="xs" variant="default" leftSection={<Icon name="Copy" size={14} />} onClick={copy}>
                     {copied ? t('tokens.copied') : t('tokens.copy')}
                   </Button>
                 )}
@@ -69,9 +69,13 @@ export function TokensPage() {
         </Alert>
       )}
       {tokens.isError && <ErrorAlert error={tokens.error} />}
-      {tokens.isSuccess && tokens.data.items.length === 0 && <Text c="gray.7">{t('tokens.empty')}</Text>}
+      {tokens.isSuccess && tokens.data.items.length === 0 && (
+        <Panel>
+          <EmptyState icon="KeyRound" title={t('tokens.empty')} description={t('tokens.intro')} />
+        </Panel>
+      )}
       {tokens.isSuccess && tokens.data.items.length > 0 && (
-        <Table striped>
+        <ResourceTable label={t('tokens.page.table')} minWidth={720}>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>{t('tokens.columns.name')}</Table.Th>
@@ -79,30 +83,45 @@ export function TokensPage() {
               <Table.Th>{t('tokens.columns.access')}</Table.Th>
               <Table.Th>{t('tokens.columns.expires')}</Table.Th>
               <Table.Th>{t('tokens.columns.lastUsed')}</Table.Th>
-              <Table.Th>{t('tokens.columns.actions')}</Table.Th>
+              <Table.Th>
+                <VisuallyHidden>{t('tokens.columns.actions')}</VisuallyHidden>
+              </Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
             {tokens.data.items.map((tok) => (
               <Table.Tr key={tok.id}>
-                <Table.Td>{tok.name}</Table.Td>
                 <Table.Td>
-                  <Text ff="monospace" size="sm">
-                    {tok.prefix}
-                  </Text>
+                  <p className={classes.name}>{tok.name}</p>
                 </Table.Td>
-                <Table.Td>{t(`tokens.scope.${tok.scope}`)}</Table.Td>
-                <Table.Td>{formatDateTime(tok.expires_at, i18n.language)}</Table.Td>
-                <Table.Td>{tok.last_used_at ? formatDateTime(tok.last_used_at, i18n.language) : t('tokens.never')}</Table.Td>
                 <Table.Td>
-                  <Button size="xs" variant="light" color="red" onClick={() => setRevoking(tok)} aria-label={t('tokens.revokeNamed', { name: tok.name })}>
+                  <span className={classes.time} translate="no">
+                    {tok.prefix}
+                  </span>
+                </Table.Td>
+                <Table.Td>
+                  <StatusBadge tone={tok.scope === 'operate' ? 'info' : 'neutral'} icon={tok.scope === 'operate' ? 'Settings2' : 'Eye'}>
+                    {t(`tokens.scope.${tok.scope}`)}
+                  </StatusBadge>
+                </Table.Td>
+                <Table.Td className={classes.time}>{formatDateTime(tok.expires_at, i18n.language)}</Table.Td>
+                <Table.Td className={classes.time}>{tok.last_used_at ? formatDateTime(tok.last_used_at, i18n.language) : t('tokens.never')}</Table.Td>
+                <Table.Td>
+                  <Button
+                    size="xs"
+                    variant="subtle"
+                    color="red"
+                    leftSection={<Icon name="X" size={14} />}
+                    onClick={() => setRevoking(tok)}
+                    aria-label={t('tokens.revokeNamed', { name: tok.name })}
+                  >
                     {t('tokens.revoke')}
                   </Button>
                 </Table.Td>
               </Table.Tr>
             ))}
           </Table.Tbody>
-        </Table>
+        </ResourceTable>
       )}
       {creating && !sso && (
         <CreateTokenModal
@@ -175,9 +194,11 @@ function CreateTokenModal({ onClose, onCreated }: { onClose: () => void; onCreat
             required
           />
           <ErrorAlert error={error} />
-          <Button type="submit" loading={busy}>
-            {t('tokens.submit')}
-          </Button>
+          <DialogActions>
+            <Button type="submit" loading={busy}>
+              {t('tokens.submit')}
+            </Button>
+          </DialogActions>
         </Stack>
       </form>
     </AppModal>
@@ -205,15 +226,15 @@ function RevokeTokenModal({ token, onClose, onDone }: { token: ApiToken; onClose
       <Stack gap="sm">
         <Text size="sm">{t('tokens.revokeText')}</Text>
         <ErrorAlert error={error} />
-        <Group justify="flex-end">
+        <DialogActions>
           <Button variant="default" onClick={onClose}>
             {t('tokens.cancel')}
           </Button>
-          {/* red 9: white text 5.4:1; the default red shade is below WCAG AA (4.5:1). */}
-          <Button color="red.9" loading={busy} onClick={() => void confirm()}>
+          {/* The theme's red is the danger tone, with --alice-on-strong text on it (≥ 4.5:1 in both schemes). */}
+          <Button color="red" loading={busy} onClick={() => void confirm()}>
             {t('tokens.revokeConfirm')}
           </Button>
-        </Group>
+        </DialogActions>
       </Stack>
     </AppModal>
   );
