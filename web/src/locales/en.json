@@ -171,7 +171,6 @@
   "account": {
     "title": "Your account",
     "summary": "Signed in as {{username}} ({{role}})",
-    "languageHelp": "Use the language switcher at the top of the page. Your choice is saved on your account.",
     "password": {
       "title": "Change password",
       "current": "Current password",
@@ -311,11 +310,8 @@
     "resetPasswordTitle": "Set a new password for {{name}}",
     "resetPasswordText": "The person is signed out everywhere, their API tokens stop working, and they must use this password at the next sign-in. Give it to them in a safe way.",
     "columns": {
-      "username": "Username",
-      "name": "Full name",
       "role": "Role",
       "status": "Status",
-      "mfa": "Two-factor sign-in",
       "lastLogin": "Last sign-in",
       "actions": "Actions"
     },
@@ -333,8 +329,6 @@
       "disabled": "Disabled"
     },
     "mfa": {
-      "enrolled": "Set up",
-      "notEnrolled": "Not set up yet",
       "atProvider": "At the identity provider"
     },
     "actions": {
@@ -807,10 +801,8 @@
       "locked": "Expired, locked"
     },
     "current": {
-      "title": "Current license",
       "summary_one": "Valid until {{date}}, {{count}} target",
       "summary_other": "Valid until {{date}}, {{count}} targets",
-      "customer": "Licensed to {{customer}} (license {{id}})",
       "evaluation_one": "Evaluation: {{count}} day left, up to {{max}} targets.",
       "evaluation_other": "Evaluation: {{count}} days left, up to {{max}} targets.",
       "usage": "{{used}} of {{max}} targets used",

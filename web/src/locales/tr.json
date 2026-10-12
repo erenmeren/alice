@@ -171,7 +171,6 @@
   "account": {
     "title": "Hesabınız",
     "summary": "Oturum açan: {{username}} ({{role}})",
-    "languageHelp": "Sayfanın üstündeki dil seçiciyi kullanın. Seçiminiz hesabınıza kaydedilir.",
     "password": {
       "title": "Parolayı değiştir",
       "current": "Mevcut parola",
@@ -311,11 +310,8 @@
     "resetPasswordTitle": "Yeni parola belirlenecek kullanıcı: {{name}}",
     "resetPasswordText": "Kişinin tüm oturumları kapatılır, API anahtarları çalışmaz olur ve bir sonraki girişte bu parolayı kullanması gerekir. Parolayı kişiye güvenli bir yolla iletin.",
     "columns": {
-      "username": "Kullanıcı adı",
-      "name": "Ad soyad",
       "role": "Rol",
       "status": "Durum",
-      "mfa": "İki adımlı giriş",
       "lastLogin": "Son giriş",
       "actions": "İşlemler"
     },
@@ -333,8 +329,6 @@
       "disabled": "Devre dışı"
     },
     "mfa": {
-      "enrolled": "Kuruldu",
-      "notEnrolled": "Henüz kurulmadı",
       "atProvider": "Kimlik sağlayıcıda"
     },
     "actions": {
@@ -807,10 +801,8 @@
       "locked": "Süresi doldu, kilitli"
     },
     "current": {
-      "title": "Geçerli lisans",
       "summary_one": "Geçerlilik sonu {{date}}, {{count}} hedef",
       "summary_other": "Geçerlilik sonu {{date}}, {{count}} hedef",
-      "customer": "Lisans sahibi: {{customer}} (lisans {{id}})",
       "evaluation_one": "Deneme: {{count}} gün kaldı, en fazla {{max}} hedef.",
       "evaluation_other": "Deneme: {{count}} gün kaldı, en fazla {{max}} hedef.",
       "usage": "Kullanımdaki hedef: {{used}} / {{max}}",
