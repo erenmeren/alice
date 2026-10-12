@@ -2031,7 +2031,7 @@
       "metadataTitle": "Metadata only",
       "metadataText": "Secret values are never shown. Certificate backing secrets are used only for authorized certificate deployment.",
       "versions": "Version history",
-      "versionsSub": "A new version is reviewed before it reaches a website.",
+      "versionsSub": "Newest first. A held version waits for an administrator.",
       "policy": "Certificate policy",
       "autoDeployTitle": "Automatic deployment is an administrator decision",
       "autoDeployText": "Changing this setting requires fresh identity verification.",

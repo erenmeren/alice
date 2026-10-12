@@ -2031,7 +2031,7 @@
       "metadataTitle": "Yalnızca üst bilgi",
       "metadataText": "Gizli veri değerleri gösterilmez. Sertifika özel anahtarları sadece yetkili dağıtımlarda kullanılır.",
       "versions": "Sürüm geçmişi",
-      "versionsSub": "Yeni sürüm web sitesine ulaşmadan önce incelenir.",
+      "versionsSub": "En yenisi önce. Bekletilen sürüm bir yöneticiyi bekler.",
       "policy": "Sertifika ilkesi",
       "autoDeployTitle": "Otomatik dağıtım yönetici kararıdır",
       "autoDeployText": "Bu ayarı değiştirmek için yeniden kimlik doğrulaması gerekir.",
