@@ -96,6 +96,14 @@ func (s *Service) updateState(ctx context.Context, fn func(tx pgx.Tx, st *State)
 // recordSuccess audits backup.created and resets the failure episode.
 func (s *Service) recordSuccess(ctx context.Context, in CreateInput, info Info) error {
 	return s.updateState(ctx, func(tx pgx.Tx, st *State) error {
+		if s.recordHook != nil {
+			if err := s.recordHook(); err != nil {
+				return err
+			}
+		}
+		if st.LastSuccessName == info.Name {
+			return nil // recorded already (a retry after a commit whose answer was lost)
+		}
 		st.LastSuccessAt, st.LastSuccessName = info.CreatedAt, info.Name
 		if in.Kind == KindAuto {
 			st.LastAutoSuccessAt = info.CreatedAt

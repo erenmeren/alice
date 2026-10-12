@@ -2545,7 +2545,9 @@ instead of changing image tags by hand ([upgrade.md](upgrade.md)); to bring the 
 A failed daily backup e-mails the administrators ("Alice could not make its daily backup", with an error code), shows
 **The last backup failed. Alice e-mailed the administrators.** on **Settings → Backups** and on the dashboard, and is
 recorded in the audit log as **Backup failed** with the same code. **Back up now** shows the `ALC-BAK-…` code of the
-section above. The error codes:
+section above. Alice tries the daily backup again after 5 minutes, then after 10, 20 and 40 minutes, then every hour;
+a `not_configured` failure is recorded once and the backup is made at the first check (every 5 minutes) after the key
+works again. To back up at once after fixing the cause, choose **Back up now**. The error codes:
 
 | Code | Meaning | What to do |
 |---|---|---|

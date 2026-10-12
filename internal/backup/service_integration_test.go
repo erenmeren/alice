@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -770,8 +771,9 @@ func TestFailureEmailOncePerEpisodeAndAlarmAt48Hours(t *testing.T) {
 	backup.SetStatfs(&e.cfg, func(string) (uint64, error) { return 0, nil })
 	e.rebuild()
 	for e.clk.Now().Before(setupDone.Add(49 * time.Hour)) {
-		require.Error(t, e.svc.RunScheduled(e.ctx))
+		err := e.svc.RunScheduled(e.ctx) // an error on an attempt, nil while the retry gap runs (L-3)
 		if e.clk.Now().Equal(setupDone) {
+			require.Error(t, err)
 			assert.Equal(t, 1, e.outbox("backup.failed"), "queued at the first failure")
 		}
 		if e.clk.Now().Before(setupDone.Add(backup.AlarmAfter)) {
@@ -786,16 +788,18 @@ func TestFailureEmailOncePerEpisodeAndAlarmAt48Hours(t *testing.T) {
 	assert.True(t, st.Alarm(e.clk.Now()))
 	assert.True(t, st.FailureNotified)
 	assert.True(t, st.AlarmNotified)
-	assert.Greater(t, st.ConsecutiveFailures, 500)
+	assert.Greater(t, st.ConsecutiveFailures, 45, "retried at least hourly")
+	assert.Less(t, st.ConsecutiveFailures, 60, "not every 5 minutes")
 	var params map[string]string
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT params FROM notifications_outbox WHERE template_key = 'backup.failed'").Scan(&params))
 	assert.Equal(t, map[string]string{"time": "2026-10-01 09:00 UTC", "error_code": "disk_full", "dashboard_url": "/"}, params)
 	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT params FROM notifications_outbox WHERE template_key = 'backup.alarm_never'").Scan(&params))
 	assert.Equal(t, map[string]string{"dashboard_url": "/"}, params)
 
-	// A success resets the episode.
+	// A success resets the episode; the next attempt comes at the end of the retry gap (at most an hour).
 	backup.SetStatfs(&e.cfg, func(string) (uint64, error) { return 100 << 30, nil })
 	e.rebuild()
+	e.clk.Advance(time.Hour)
 	require.NoError(t, e.svc.RunScheduled(e.ctx))
 	st = e.state()
 	assert.False(t, st.Alarm(e.clk.Now()))
@@ -810,6 +814,7 @@ func TestFailureEmailOncePerEpisodeAndAlarmAt48Hours(t *testing.T) {
 	e.rebuild()
 	e.clk.Advance(24 * time.Hour)
 	require.Error(t, e.svc.RunScheduled(e.ctx))
+	e.clk.Advance(5 * time.Minute)
 	require.Error(t, e.svc.RunScheduled(e.ctx))
 	assert.Equal(t, 2, e.outbox("backup.failed"))
 	assert.Equal(t, 1, e.outbox("backup.alarm_never"))
@@ -1140,4 +1145,105 @@ func TestVerifyDeepRefusesAPayloadThatDisagreesWithItsManifest(t *testing.T) {
 	}
 	_, err = e.svc.VerifyDeep(e.ctx, filepath.Join(t.TempDir(), "missing.alicebak"), []byte(passphrase))
 	require.ErrorIs(t, err, backup.ErrNotFound)
+}
+
+// A backup key that does not work (here a key of the unreleased version 1) is recorded once per episode, not on
+// every 5-minute tick (review-fixes L-3); a working key again makes the backup at the next tick.
+func TestScheduledRunRecordsABrokenKeyOncePerEpisode(t *testing.T) {
+	e := newEnv(t, true)
+	e.completeSetup()
+	var good map[string]any
+	_, err := settings.Get(e.ctx, e.db.Owner, "backup.key", &good)
+	require.NoError(t, err)
+	bad := maps.Clone(good)
+	bad["version"] = 1
+	require.NoError(t, settings.Set(e.ctx, e.db.Owner, "backup.key", bad, e.clk.Now()))
+
+	start := e.clk.Now()
+	for e.clk.Now().Before(start.Add(24 * time.Hour)) {
+		_ = e.svc.RunScheduled(e.ctx)
+		e.clk.Advance(5 * time.Minute)
+	}
+	assert.Len(t, e.auditRows("backup.failed"), 1, "one failure row for the episode")
+	assert.Equal(t, 1, e.outbox("backup.failed"))
+	assert.Empty(t, e.files())
+	st := e.state()
+	assert.Equal(t, "not_configured", st.LastErrorCode)
+	assert.Equal(t, 1, st.ConsecutiveFailures)
+
+	require.NoError(t, settings.Set(e.ctx, e.db.Owner, "backup.key", good, e.clk.Now()))
+	require.NoError(t, e.svc.RunScheduled(e.ctx))
+	assert.Len(t, e.files(), 2, "the backup and its checksum file")
+	assert.False(t, e.state().Failing())
+}
+
+// Other persistent failures are retried with a growing gap (5 minutes doubling to one hour), not every 5 minutes.
+func TestScheduledRetriesBackOff(t *testing.T) {
+	e := newEnv(t, true)
+	e.completeSetup()
+	backup.SetStatfs(&e.cfg, func(string) (uint64, error) { return 0, nil })
+	e.rebuild()
+	start := e.clk.Now()
+	for e.clk.Now().Before(start.Add(24 * time.Hour)) {
+		_ = e.svc.RunScheduled(e.ctx)
+		e.clk.Advance(5 * time.Minute)
+	}
+	// 5, 10, 20, 40 minutes, then hourly: 5 attempts in the first 75 minutes and one an hour afterwards.
+	n := len(e.auditRows("backup.failed"))
+	assert.GreaterOrEqual(t, n, 24)
+	assert.LessOrEqual(t, n, 30)
+	assert.Equal(t, n, e.state().ConsecutiveFailures)
+}
+
+// When recording a scheduled backup fails after its file was made, the old backups are still pruned, and later ticks
+// record the success instead of making another full backup (review-fixes L-3).
+func TestScheduledRunAfterAFailedStateWriteMakesNoSecondBackup(t *testing.T) {
+	e := newEnv(t, true)
+	e.completeSetup()
+	_, err := e.svc.SaveSchedule(e.ctx, audit.SystemActor("test"), 0,
+		backup.Schedule{Time: "02:30", Zone: "UTC", Retention: backup.MinRetention})
+	require.NoError(t, err)
+	for range backup.MinRetention {
+		e.create(backup.KindAuto)
+		e.clk.Advance(time.Hour)
+	}
+	autos := func() []string {
+		t.Helper()
+		list, err := e.svc.List(e.ctx)
+		require.NoError(t, err)
+		var names []string
+		for _, i := range list {
+			if i.Kind == backup.KindAuto {
+				names = append(names, i.Name)
+			}
+		}
+		return names
+	}
+	before := autos()
+	require.Len(t, before, backup.MinRetention)
+
+	e.clk.Set(time.Date(2026, 10, 2, 2, 30, 0, 0, time.UTC))
+	stateErr := errors.New("the state write failed")
+	backup.SetRecordHook(e.svc, func() error { return stateErr })
+	require.ErrorIs(t, e.svc.RunScheduled(e.ctx), stateErr)
+	after := autos()
+	require.Len(t, after, backup.MinRetention, "the new backup is in and the oldest was pruned")
+	assert.NotContains(t, after, before[len(before)-1], "the oldest is gone")
+
+	for range 3 {
+		e.clk.Advance(5 * time.Minute)
+		require.ErrorIs(t, e.svc.RunScheduled(e.ctx), stateErr)
+	}
+	assert.Equal(t, after, autos(), "no second backup while the state cannot be written")
+
+	backup.SetRecordHook(e.svc, nil)
+	e.clk.Advance(5 * time.Minute)
+	require.NoError(t, e.svc.RunScheduled(e.ctx))
+	assert.Equal(t, after, autos())
+	st := e.state()
+	assert.Equal(t, after[0], st.LastSuccessName)
+	assert.Len(t, e.auditRows("backup.created"), backup.MinRetention+1, "the success recorded once")
+	e.clk.Advance(5 * time.Minute)
+	require.NoError(t, e.svc.RunScheduled(e.ctx))
+	assert.Equal(t, after, autos())
 }

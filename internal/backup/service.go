@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode"
@@ -118,6 +119,17 @@ type Service struct {
 	cache  checkCache
 	inDump func()            // tests: runs inside the snapshot, after the manifest (export_test.go)
 	hashed func(name string) // tests: counts the whole-file hashes of the shallow check (export_list_test.go)
+	// recordHook (tests) runs inside recordSuccess's transaction; an error fails the state write (export_test.go).
+	recordHook func() error
+
+	pendingMu sync.Mutex
+	pending   *pendingSuccess // a scheduled backup that was made but whose success could not be recorded
+}
+
+// pendingSuccess is a made scheduled backup whose state write failed (review-fixes L-3).
+type pendingSuccess struct {
+	in   CreateInput
+	info Info
 }
 
 // New builds the service.
@@ -263,10 +275,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Info, error) {
 		}
 		return Info{}, err
 	}
-	if err := s.recordSuccess(ctx, in, info); err != nil {
-		return info, err
-	}
+	rerr := s.recordSuccess(ctx, in, info)
 	if in.Kind == KindAuto {
+		if rerr != nil {
+			// The file is made: the scheduler records it at its next tick instead of making another (L-3).
+			s.pendingMu.Lock()
+			s.pending = &pendingSuccess{in: in, info: info}
+			s.pendingMu.Unlock()
+		}
 		sch, err := s.Schedule(ctx)
 		if err == nil {
 			_, err = s.prune(ctx, sch.Retention, in.Actor, info.Name)
@@ -274,6 +290,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Info, error) {
 		if err != nil {
 			s.c.Log.Error("could not prune old backups", "error_type", fmt.Sprintf("%T", err))
 		}
+	}
+	if rerr != nil {
+		return info, rerr
 	}
 	return info, nil
 }
