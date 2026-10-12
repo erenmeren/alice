@@ -19,8 +19,8 @@ describe('RotationsPage', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Key rotations' })).toBeVisible();
     expect(screen.getByRole('link', { name: 'Key rotations' })).toHaveAttribute('aria-current', 'page');
     const active = screen.getByRole('region', { name: 'Active rotations' });
-    expect(within(active).getAllByRole('link', { name: 'Inspect run and locations' })).toHaveLength(1);
-    expect(within(active).getByRole('link', { name: 'Inspect run and locations' })).toHaveAttribute('href', '/rotation/runs/r1');
+    expect(within(active).getAllByRole('link', { name: /^Inspect run and locations/ })).toHaveLength(1);
+    expect(within(active).getByRole('link', { name: 'Inspect run and locations: deploy-production' })).toHaveAttribute('href', '/rotation/runs/r1');
     expect(screen.getByRole('table', { name: 'Rotation policies' })).toHaveTextContent('deploy-production');
     expect(screen.queryByRole('button', { name: /Create|Run now|Finish|Stop/ })).not.toBeInTheDocument();
   });
@@ -50,14 +50,22 @@ describe('RotationsPage', () => {
   it('shows each active run with its key, status, time, progress and link; a paused run shows no countdown', async () => {
     server.use(
       ...sessionHandlers(adminSession),
-      http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [policyFixture({ id: POLICY_ID, name: 'deploy-production', enabled: true })] })),
+      http.get('/api/v1/rotation/policies', () =>
+        HttpResponse.json({
+          items: [
+            policyFixture({ id: POLICY_ID, name: 'deploy-production', enabled: true }),
+            policyFixture({ id: 'p3', name: 'nightly', ssh_key_id: 'k3', enabled: true }),
+            policyFixture({ id: 'p4', name: 'quarterly', ssh_key_id: 'k4', enabled: true }),
+          ],
+        }),
+      ),
       http.get('/api/v1/rotation/runs', () =>
         HttpResponse.json({
           items: [
             runFixture({ id: 'r1', status: 'overlap', overlap_until: '2026-10-13T08:05:00Z' }),
             runFixture({ id: 'r2', policy_id: 'gone', status: 'overlap', paused_license: true }),
-            runFixture({ id: 'r3', status: 'dry_run_notified' }),
-            runFixture({ id: 'r4', status: 'rolling_back' }),
+            runFixture({ id: 'r3', policy_id: 'p3', status: 'dry_run_notified' }),
+            runFixture({ id: 'r4', policy_id: 'p4', status: 'rolling_back' }),
             runFixture({ id: 'r5', status: 'aborted' }),
           ],
           next_cursor: null,
@@ -71,16 +79,31 @@ describe('RotationsPage', () => {
     expect(within(items[0]).getByRole('heading', { level: 3, name: 'deploy-production' })).toBeInTheDocument();
     expect(within(items[0]).getByText('Both keys valid')).toBeInTheDocument();
     expect(within(items[0]).getByText(/^Both keys work until/)).toBeInTheDocument();
-    expect(within(items[0]).getByRole('list', { name: 'Rotation progress' })).toBeInTheDocument();
+    expect(within(items[0]).getByRole('list', { name: 'Rotation progress: deploy-production' })).toBeInTheDocument();
+    // The runs are a list to assistive technology too (list-style: none drops it in WebKit).
+    expect(items[0].parentElement).toHaveAttribute('role', 'list');
     // A run whose policy is gone is named by its old key's fingerprint; a license pause shows no end time.
     expect(within(items[1]).getByText('SHA256:oldOldOldOldOldOldOldOldOldOldOldOldOld0').tagName).toBe('CODE');
-    expect(within(items[1]).getByText('Paused')).toBeInTheDocument();
+    expect(within(items[1]).getAllByText('Paused')).toHaveLength(2);
+    // The paused run's current phase says it is paused, never that it is moving.
+    expect(within(items[1]).getByRole('list', { name: /^Rotation progress/ })).not.toHaveTextContent('In progress');
     expect(within(items[1]).getByText('The overlap is on hold: it resumes after you choose Continue, with the time that was left.')).toBeInTheDocument();
     expect(within(items[1]).queryByText(/^Both keys work until/)).not.toBeInTheDocument();
     expect(within(items[2]).getByText(/^Planned for/)).toBeInTheDocument();
     // Undoing is not progress: the badge and no path.
     expect(within(items[3]).getByText('Undoing')).toBeInTheDocument();
-    expect(within(items[3]).queryByRole('list', { name: 'Rotation progress' })).not.toBeInTheDocument();
+    expect(within(items[3]).queryByRole('list', { name: /^Rotation progress/ })).not.toBeInTheDocument();
+    // Every run's link has its own name: the policy, or the old key of a run whose policy is gone.
+    const links = within(active).getAllByRole('link', { name: /^Inspect run and locations: / });
+    expect(links).toHaveLength(4);
+    expect(links.map((a) => a.getAttribute('aria-label'))).toEqual([
+      'Inspect run and locations: deploy-production',
+      'Inspect run and locations: SHA256:oldOldOldOldOldOldOldOldOldOldOldOldOld0',
+      'Inspect run and locations: nightly',
+      'Inspect run and locations: quarterly',
+    ]);
+    // The link starts with its visible text (WCAG 2.5.3, label in name).
+    expect(links[0]).toHaveTextContent('Inspect run and locations');
     expect(within(active).getByText('4 shown')).toBeInTheDocument();
     expectNoRawKeys();
   });
@@ -101,7 +124,7 @@ describe('RotationsPage', () => {
     expect(await screen.findByText('No running rotation among the runs shown so far.')).toBeInTheDocument();
     expect(screen.queryByText('No rotation is running.')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Show more' }));
-    expect(await screen.findByRole('link', { name: 'Inspect run and locations' })).toHaveAttribute('href', '/rotation/runs/r9');
+    expect(await screen.findByRole('link', { name: /^Inspect run and locations: / })).toHaveAttribute('href', '/rotation/runs/r9');
     expect(cursors).toEqual([null, 'c2']);
     expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
   });
@@ -128,14 +151,15 @@ describe('RotationsPage', () => {
     expect(rows[1]).toHaveTextContent('7 days');
     expect(within(rows[1]).getByText('On')).toBeInTheDocument();
     expect(rows[1]).toHaveTextContent('Last run: Completed');
-    expect(within(rows[1]).getByRole('link', { name: 'Open the last run' })).toHaveAttribute('href', '/rotation/runs/r0');
-    expect(within(rows[1]).queryByRole('link', { name: 'Open the current run' })).not.toBeInTheDocument();
+    expect(within(rows[1]).getByRole('link', { name: 'Open the last run: deploy-production' })).toHaveAttribute('href', '/rotation/runs/r0');
+    expect(within(rows[1]).getByText('Open the last run')).toBeInTheDocument();
+    expect(within(rows[1]).queryByRole('link', { name: /^Open the current run/ })).not.toBeInTheDocument();
     expect(within(rows[2]).getByRole('link', { name: 'ci-<b>deploy</b>' })).toHaveAttribute('href', '/ssh-keys/k2');
     expect(document.querySelector('b')).toBeNull();
     expect(rows[2]).toHaveTextContent('Every day');
     expect(rows[2]).toHaveTextContent('30 minutes');
     expect(rows[2]).toHaveTextContent('In progress');
-    expect(within(rows[2]).getByRole('link', { name: 'Open the current run' })).toHaveAttribute('href', '/rotation/runs/r1');
+    expect(within(rows[2]).getByRole('link', { name: 'Open the current run: ci-<b>deploy</b>' })).toHaveAttribute('href', '/rotation/runs/r1');
     expect(within(rows[3]).getByText('Off')).toBeInTheDocument();
     expect(rows[3]).toHaveTextContent('Not planned');
   });

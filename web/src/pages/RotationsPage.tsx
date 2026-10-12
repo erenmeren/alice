@@ -23,6 +23,8 @@ function ActiveRun({ run, policy }: { run: RunSummary; policy: Policy | undefine
   const { t, i18n } = useTranslation();
   const lang = i18n.language;
   // A license pause stops the clock: no end time is shown, only that the overlap is on hold (as on the run page).
+  // The run's name for its path and link, so several runs on the page are told apart: its policy, or the old key.
+  const name = policy?.name ?? run.old_fingerprint;
   const time = run.paused_license
     ? run.status === 'overlap'
       ? t('rotation.overlapOnHold')
@@ -60,8 +62,8 @@ function ActiveRun({ run, policy }: { run: RunSummary; policy: Policy | undefine
           )}
         </div>
       </div>
-      <RotationPath status={run.status} />
-      <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(run.id)}`} size="sm">
+      <RotationPath status={run.status} paused={run.paused_license} name={name} />
+      <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(run.id)}`} size="sm" aria-label={t('rotation.page.inspectRunNamed', { name })}>
         {t('rotation.page.inspectRun')}
       </Anchor>
     </li>
@@ -89,12 +91,12 @@ function PolicyRow({ p }: { p: Policy }) {
       <Table.Td>
         <div className={classes.links}>
           {p.open_rotation_id && (
-            <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.open_rotation_id)}`} size="sm">
+            <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.open_rotation_id)}`} size="sm" aria-label={t('rotation.page.openRunNamed', { name: p.name })}>
               {t('rotation.openRun')}
             </Anchor>
           )}
           {p.last_run_id && (
-            <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.last_run_id)}`} size="sm">
+            <Anchor component={Link} to={`/rotation/runs/${encodeURIComponent(p.last_run_id)}`} size="sm" aria-label={t('rotation.page.openLastRunNamed', { name: p.name })}>
               {t('rotation.openLastRun')}
             </Anchor>
           )}
@@ -141,7 +143,8 @@ export function RotationsPage() {
           <ErrorAlert error={runs.error} />
         ) : active.length > 0 ? (
           <>
-            <ul className={classes.runs}>
+            {/* role="list": list-style: none makes WebKit drop the list semantics. */}
+            <ul role="list" className={classes.runs}>
               {active.map((r) => (
                 <ActiveRun key={r.id} run={r} policy={byId.get(r.policy_id)} />
               ))}
