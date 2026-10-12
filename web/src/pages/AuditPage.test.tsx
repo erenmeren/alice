@@ -408,6 +408,8 @@ describe('AuditPage', () => {
     expect(within(header).getByRole('link', { name: 'Export JSON' })).toHaveAttribute('href', auditExportUrl('json'));
     expect(within(header).getByRole('button', { name: 'Verify integrity' })).toHaveAttribute('data-variant', 'filled');
     expect(within(main).getByText(en.audit.exportHint)).toBeInTheDocument();
+    // The exports ignore the filters: the page says so (GET /audit/export takes only the format).
+    expect(within(main).getByText('Exports contain the whole log, not only the entries the filters show.')).toBeInTheDocument();
 
     // The filter form sits in the table panel's toolbar, above the named table.
     const table = await screen.findByRole('table', { name: 'Audit events' });

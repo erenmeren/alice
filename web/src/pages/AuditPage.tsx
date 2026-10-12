@@ -190,6 +190,10 @@ export function AuditPage() {
       <Text size="sm" c="dimmed">
         {t('audit.exportHint')}
       </Text>
+      {/* GET /audit/export takes only the format: the filters below never narrow a download. */}
+      <Text size="sm" c="dimmed">
+        {t('audit.page.exportScope')}
+      </Text>
 
       {verify.isError && <ErrorAlert error={verify.error} />}
       {report && (
