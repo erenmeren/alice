@@ -320,7 +320,9 @@ describe('KVCertificatePage', () => {
       setup('admin', kvCertificateDetailFixture({ versions: [{ ...V1, held: true, held_reason: 'license' }, V0], binding: SUMMARY, bound: true, current_version: V1.version }));
       await renderRoute(PATH);
       const versions = (await screen.findByRole('heading', { name: 'Version history', level: 2 })).closest('section')!;
-      expect(versions).toHaveTextContent('A new version is reviewed before it reaches a website.');
+      // Automatic deployment skips any review, so the subtitle promises none (only a held version waits).
+      expect(versions).toHaveTextContent('Newest first. A held version waits for an administrator.');
+      expect(versions).not.toHaveTextContent(/reviewed/);
       const table = within(versions).getByRole('table', { name: 'Versions' });
       const rows = within(table).getAllByTestId('kv-version-row');
       expect(rows).toHaveLength(2);
