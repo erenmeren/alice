@@ -9,10 +9,13 @@ import classes from './dashboard.module.css';
 import { Widget } from './Widget';
 
 // AttentionList is "Needs attention": each known condition as the design's attention item (what happened, the resource
-// as its own text, since when, where to act), in the server's order.
+// as its own text, since when, where to act), in the server's order. The "N open" badge counts the server's conditions
+// (GET /alerts for the caller), the same number as the Overview's "Needs attention" metric (summary.attention); a
+// condition of a kind this version cannot show is counted and named as such, never dropped silently.
 export function AttentionList({ items }: { items: Condition[] }) {
   const { t } = useTranslation();
   const shown = useConditionItems(items);
+  const unshown = items.length - shown.length;
   return (
     <Widget
       title={t('dashboard.needsAttention')}
@@ -20,16 +23,15 @@ export function AttentionList({ items }: { items: Condition[] }) {
       testId="attention-list"
       padded={false}
       action={
-        shown.length > 0 && (
+        items.length > 0 && (
           <StatusBadge tone="warning" className={classes.attentionCount}>
-            {t('dashboard.panels.open', { count: shown.length })}
+            {t('dashboard.panels.open', { count: items.length })}
           </StatusBadge>
         )
       }
     >
-      {shown.length === 0 ? (
-        <EmptyState icon="ShieldCheck" title={t('dashboard.noAttention')} />
-      ) : (
+      {items.length === 0 && <EmptyState icon="ShieldCheck" title={t('dashboard.noAttention')} />}
+      {shown.length > 0 && (
         <ul role="list" className={cx(ui.attentionList, classes.attentionList)}>
           {shown.map((c) => (
             <li key={c.key}>
@@ -51,6 +53,7 @@ export function AttentionList({ items }: { items: Condition[] }) {
           ))}
         </ul>
       )}
+      {unshown > 0 && <p className={classes.unshown}>{t('dashboard.panels.unshown', { count: unshown })}</p>}
     </Widget>
   );
 }

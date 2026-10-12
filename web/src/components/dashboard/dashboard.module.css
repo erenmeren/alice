@@ -39,6 +39,8 @@
 .valueNote { font-size: 11px; color: var(--alice-text-muted); }
 .caption { margin: 10px 0 0; font-size: 11px; color: var(--alice-text-secondary); }
 .note { margin: 18px 0 0; font-size: 11px; color: var(--alice-text-secondary); }
+/* A condition of a kind this version cannot show: counted in the badge, named here (the panel is flush). */
+.unshown { margin: 0; padding: 12px 22px; font-size: 11px; color: var(--alice-text-secondary); }
 .section { margin-top: 24px; }
 
 /* Target connectivity */

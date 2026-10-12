@@ -34,4 +34,19 @@ describe('AttentionList', () => {
     expect(screen.getByRole('link', { name: /^The last check found an integrity problem/ })).toHaveAttribute('href', '/audit');
     expect(asked).toBe(0);
   });
+
+  it('counts the server\'s conditions in the badge, the same number as the Needs attention metric, and says how many it cannot show', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderWithAuth(<AttentionList items={[cond('host_key_changed', 's-2', 'web-2'), cond('something_new', 'q', 'future')]} />);
+    expect(await screen.findByText('2 open')).toBeVisible();
+    expect(screen.getAllByRole('listitem')).toHaveLength(1);
+    expect(screen.getByText('1 condition of a kind this version cannot show.')).toBeVisible();
+  });
+
+  it('never says nothing needs attention while the server lists a condition it cannot show', async () => {
+    server.use(...sessionHandlers(adminSession));
+    await renderWithAuth(<AttentionList items={[cond('something_new', 'q', 'future')]} />);
+    expect(await screen.findByText('1 open')).toBeVisible();
+    expect(screen.queryByText('Nothing needs your attention.')).not.toBeInTheDocument();
+  });
 });
