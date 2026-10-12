@@ -93,8 +93,10 @@ describe("license page", () => {
 
     // The renewal rules: three numbered rules.
     const rules = screen.getByRole("heading", { level: 2, name: "What happens at renewal?" }).closest("section")!;
-    // Divs, as the design's .rule-list: the page holds no extra list items (the shell's bell test counts them).
-    const items = Array.from(rules.querySelectorAll<HTMLElement>(`.${classes.ruleItem}`));
+    // An ordered list (role=list keeps it a list for VoiceOver after list-style: none); the 01–03 tiles are hidden.
+    const list = within(rules).getByRole("list");
+    expect(list.tagName).toBe("OL");
+    const items = within(list).getAllByRole("listitem");
     expect(items).toHaveLength(3);
     expect(items.map((i) => within(i).getByRole("heading", { level: 3 }).textContent)).toEqual([
       "Upload the signed file",

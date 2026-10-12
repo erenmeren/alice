@@ -244,9 +244,9 @@ export function LicensePage() {
 
             <div className={classes.stack}>
               <Panel title={t("license.page.renewal")}>
-                <div className={classes.ruleList}>
+                <ol role="list" className={classes.ruleList}>
                   {RULES.map((n) => (
-                    <div key={n} className={classes.ruleItem}>
+                    <li key={n} className={classes.ruleItem}>
                       <span className={classes.ruleNum} aria-hidden="true">
                         {`0${n}`}
                       </span>
@@ -256,9 +256,9 @@ export function LicensePage() {
                         </Title>
                         <p className={classes.ruleText}>{t(`license.page.rule${n}`)}</p>
                       </div>
-                    </div>
+                    </li>
                   ))}
-                </div>
+                </ol>
               </Panel>
 
               {d.history.length > 0 && (
