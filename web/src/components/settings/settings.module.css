@@ -74,9 +74,19 @@
 }
 
 .checkOption {
+  position: relative;
   padding: 14px;
   border: 1px solid var(--alice-border);
   border-radius: 7px;
+  cursor: pointer;
+}
+/* The whole row toggles, like the design's <label class="check-option">: the label's ::after covers the row (its
+   containing block), so a click on the padding is a click on the label. The input keeps its own focus ring. */
+.checkOption :global(.mantine-Checkbox-label)::after,
+.checkOption :global(.mantine-Radio-label)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
 }
 
 /* A switch with no visible label (the design's switch row names it beside it). Mantine paints the track
