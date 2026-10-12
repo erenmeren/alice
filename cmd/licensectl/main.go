@@ -145,7 +145,7 @@ func issue(args []string, stdin io.Reader, stdout, stderr io.Writer, ask prompte
 	customer := fs.String("customer", "", "customer name")
 	targets := fs.Int("targets", 0, "number of managed targets")
 	from := fs.String("from", "", "first valid day (YYYY-MM-DD); default today")
-	months := fs.Int("months", 12, "validity in months")
+	months := fs.Int("months", 12, "validity in calendar months (a later day than the end month has ends on its last day)")
 	features := fs.String("features", "", "comma-separated feature names (unused in v1)")
 	replaces := fs.String("replaces", "", "license ID a correction license replaces")
 	shorten := fs.Bool("shorten", false, "allow a correction to end earlier than the license it replaces")

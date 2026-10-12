@@ -498,6 +498,16 @@ type Request struct {
 	LicenseID    string   // "" = LIC-<year>-<6 random digits>
 }
 
+// addMonths returns t plus n calendar months on the same day of the month, or on the last day of a shorter target
+// month (2026-01-31 + 1 month = 2026-02-28). time.AddDate would carry the overflow into the next month (2026-03-03,
+// review-fixes L-5). The time of day is kept.
+func addMonths(t time.Time, n int) time.Time {
+	first := time.Date(t.Year(), t.Month()+time.Month(n), 1, 0, 0, 0, 0, t.Location())
+	last := first.AddDate(0, 1, -1).Day()
+	return time.Date(first.Year(), first.Month(), min(t.Day(), last), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(),
+		t.Location())
+}
+
 // BuildPayload turns a request into a valid payload. A license normally starts at most a day
 // in the past (§16.3: issued_at <= valid_from + 24h); a correction license (Replaces) may start
 // earlier and then carries issued_at = valid_from ("may have an earlier issued_at", R7).
@@ -547,7 +557,7 @@ func BuildPayload(req Request, now time.Time) (license.Payload, error) {
 		InstallationID: id,
 		IssuedAt:       issued,
 		ValidFrom:      from,
-		ValidUntil:     from.AddDate(0, months, 0),
+		ValidUntil:     addMonths(from, months),
 		MaxTargets:     req.Targets,
 		Features:       features,
 		Format:         license.FormatVersion,

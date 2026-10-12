@@ -456,3 +456,27 @@ func TestLedgerChecksNeedAValidKeyAndLedger(t *testing.T) {
 	_, err = l.Record(k, p, []byte("file"), false)
 	require.ErrorIs(t, err, issuer.ErrLedgerBroken, "a broken ledger is never extended")
 }
+
+// A term in months ends on the same day of the month, or on the last day of a shorter month (review-fixes L-5):
+// AddDate would carry the overflow into the next month (2026-01-31 + 1 month = 2026-03-03).
+func TestBuildPayloadClampsTheTermToTheMonthEnd(t *testing.T) {
+	id := license.NewInstallationID()
+	for _, c := range []struct {
+		from   string
+		months int
+		want   time.Time
+	}{
+		{"2026-01-31", 1, time.Date(2026, 2, 28, 0, 0, 0, 0, time.UTC)},
+		{"2026-08-31", 6, time.Date(2027, 2, 28, 0, 0, 0, 0, time.UTC)},
+		{"2026-03-31", 1, time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC)},
+		{"2027-12-31", 2, time.Date(2028, 2, 29, 0, 0, 0, 0, time.UTC)},
+		{"2026-01-30", 13, time.Date(2027, 2, 28, 0, 0, 0, 0, time.UTC)},
+		{"2026-01-15", 1, time.Date(2026, 2, 15, 0, 0, 0, 0, time.UTC)},
+		{"2026-11-30T12:00:00+03:00", 3, time.Date(2027, 2, 28, 9, 0, 0, 0, time.UTC)},
+	} {
+		p, err := issuer.BuildPayload(issuer.Request{Installation: id, Customer: "C", Targets: 1, From: c.from,
+			Months: c.months, Replaces: "LIC-X-1"}, now)
+		require.NoError(t, err, c.from)
+		assert.True(t, p.ValidUntil.Equal(c.want), "%s + %d months: got %s, want %s", c.from, c.months, p.ValidUntil, c.want)
+	}
+}
