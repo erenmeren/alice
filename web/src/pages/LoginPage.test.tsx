@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -380,5 +381,23 @@ describe('sign-in page design', () => {
     await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
     await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+  });
+});
+
+describe('sign-in buttons on phones', () => {
+  it('are 42 px tall and grow to the design’s 44 px touch target below 768 px', async () => {
+    const css = readFileSync('src/components/auth/auth.module.css', 'utf8');
+    expect(css).toMatch(/^\.authButton \{ min-height: 42px; \}/m);
+    const phone = css.slice(css.indexOf('@media (max-width: 767px)'));
+    expect(phone.slice(0, phone.indexOf('\n}') + 2)).toMatch(/\.authButton \{ min-height: 44px; \}/);
+    server.use(
+      ...sessionHandlers(null),
+      http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [{ id: 'p1', name: 'Corp IdP' }] })),
+    );
+    await renderRoute('/login');
+    await screen.findByRole('button', { name: 'Sign in with Corp IdP' });
+    for (const name of ['Sign in', 'Sign in with Corp IdP']) {
+      expect(screen.getByRole('button', { name }).className).toMatch(/authButton/);
+    }
   });
 });

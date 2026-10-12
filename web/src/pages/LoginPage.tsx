@@ -60,7 +60,7 @@ function PasswordForm({ onDone, onError }: { onDone: (p: Phase, e?: MfaEnrollmen
           onChange={(e) => setPassword(e.currentTarget.value)}
           autoComplete="current-password"
         />
-        <Button type="submit" loading={busy} fullWidth h={42} rightSection={<Icon name="ArrowRight" size={15} />}>
+        <Button type="submit" loading={busy} fullWidth className={classes.authButton} rightSection={<Icon name="ArrowRight" size={15} />}>
           {t('login.signIn')}
         </Button>
       </Stack>
@@ -90,7 +90,7 @@ function SSOButtons({ returnTo, onError }: { returnTo: string; onError: (e: unkn
             key={p.id}
             variant="default"
             fullWidth
-            h={42}
+            className={classes.authButton}
             leftSection={<Icon name="Building2" size={15} />}
             loading={start.isPending && start.variables === p.id}
             onClick={() => start.mutate(p.id)}
@@ -152,7 +152,7 @@ function MfaForm({ onSession, onError }: { onSession: (s: SessionInfo) => void; 
             maxLength={6}
           />
         )}
-        <Button type="submit" loading={busy} fullWidth h={42}>
+        <Button type="submit" loading={busy} fullWidth className={classes.authButton}>
           {t('ui.verify')}
         </Button>
         <Button
