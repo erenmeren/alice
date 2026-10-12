@@ -107,7 +107,8 @@ describe('attention bell', () => {
     await userEvent.click(bell);
     const row = await screen.findByRole('link', { name: /Sign-in refused/ });
     await waitFor(() => expect(row).toHaveAttribute('href', `/key-vaults/${vaultFixture.id}`));
-    expect(screen.getAllByRole('listitem')).toHaveLength(1); // the unknown kind is not shown
+    // Count only the bell's own list: the page behind it (here /license) may hold lists of its own.
+    expect(within(row.closest('ul') as HTMLElement).getAllByRole('listitem')).toHaveLength(1); // the unknown kind is not shown
     await userEvent.click(row);
     await waitFor(() => expect(router.state.location.pathname).toBe(`/key-vaults/${vaultFixture.id}`));
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Open the overview' })).not.toBeInTheDocument());
