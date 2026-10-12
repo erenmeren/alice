@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -78,4 +79,59 @@ func TestOnlyOneSchedulerLeads(t *testing.T) {
 	l1.Close() // process 1 stops
 	require.Eventually(t, func() bool { clk.Advance(time.Minute); return runs2.Load() >= 1 }, 10*time.Second, 5*time.Millisecond)
 	assert.NoError(t, s2.RunNow(e.ctx, testLeaderTask.Name), "RunNow is an explicit request and runs regardless")
+}
+
+// Review L-16: with the pool exhausted, a leadership check gives up after a bounded wait for a connection, and it
+// does not hold the leader's mutex while it waits, so Close (and every other check) is not queued behind it.
+func TestLeaderCheckOnAnExhaustedPoolIsBounded(t *testing.T) {
+	e := newQEnv(t)
+	old := leaderAcquireTimeout
+	leaderAcquireTimeout = 2 * time.Second
+	t.Cleanup(func() { leaderAcquireTimeout = old })
+	cfg, err := pgxpool.ParseConfig(e.d.AppURL)
+	require.NoError(t, err)
+	cfg.MaxConns = 1
+	pool, err := pgxpool.NewWithConfig(e.ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(pool.Close)
+	holder, err := pool.Acquire(e.ctx)
+	require.NoError(t, err)
+	l := NewLeader(pool, quiet)
+
+	checked := make(chan bool, 1)
+	start := time.Now()
+	go func() { checked <- l.IsLeader(context.Background()) }() // the Run context: never cancelled
+	require.Eventually(t, func() bool {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		return l.acquiring
+	}, 5*time.Second, 5*time.Millisecond, "the check waits for a connection")
+	t.Cleanup(holder.Release) // on a failure below: lets the stuck calls end
+	second := make(chan bool, 1)
+	go func() { second <- l.IsLeader(e.ctx) }()
+	select {
+	case ok := <-second:
+		assert.False(t, ok, "not the leader while the first check waits")
+	case <-time.After(time.Second):
+		t.Fatal("a second check queued behind the first")
+	}
+	closed := make(chan struct{})
+	go func() { l.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for the check's connection")
+	}
+	select {
+	case ok := <-checked:
+		assert.False(t, ok)
+		assert.Less(t, time.Since(start), 10*time.Second)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the check did not give up waiting for a connection")
+	}
+	holder.Release()
+	assert.False(t, l.IsLeader(e.ctx), "a closed leader never leads")
+	other := NewLeader(e.d.App, quiet)
+	t.Cleanup(other.Close)
+	assert.True(t, other.IsLeader(e.ctx), "the lock is free")
 }
