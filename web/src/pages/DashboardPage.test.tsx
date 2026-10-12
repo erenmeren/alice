@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { AuditEntry } from '../api/types';
-import { adminSession, auditorSession, backupStateFixture, emptyDashboardSummary, operatorSession, sessionFor, sessionHandlers } from '../test/fixtures';
+import { adminSession, auditorSession, backupStateFixture, emptyDashboardSummary, forwardingFixture, operatorSession, sessionFor, sessionHandlers } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
@@ -69,7 +69,7 @@ describe('DashboardPage', () => {
     server.use(...sessionHandlers(adminSession), ...dashboardHandlers());
     await renderRoute('/');
     const strip = await screen.findByRole('group', { name: 'Summary' });
-    expect(within(strip).getByRole('link', { name: /Monitored certificates\s*8\s*6 expire within 30 days/ })).toHaveAttribute('href', '/certificates?expiry=30');
+    expect(within(strip).getByRole('link', { name: /Monitored certificates\s*8\s*6 expire within 30 days, expired included/ })).toHaveAttribute('href', '/certificates?expiry=30');
     expect(within(strip).getByRole('link', { name: /Managed targets\s*3\s*1 needs review/ })).toHaveAttribute('href', '/servers');
     expect(within(strip).getByRole('link', { name: /Key rotations\s*1\s*1 rotation in progress/ })).toHaveAttribute('href', '/rotations');
     expect(within(strip).getByText('Conditions to resolve')).toBeVisible();
@@ -180,8 +180,10 @@ describe('DashboardPage', () => {
 
   it('hides the Assurance tab for an Operator, whose summary has no audit and no backup', async () => {
     server.use(...sessionHandlers(operatorSession), ...dashboardHandlers({ audit: null, backup: null, notifications: null, license: { expired: true, phase: '', ends_at: null, days_left: null } }));
-    await renderRoute('/?view=assurance');
+    const { router } = await renderRoute('/?view=assurance');
     await screen.findByTestId('dashboard-counts');
+    // The view the role does not have leaves the address too, so a reload or a copied link does not carry it.
+    await waitFor(() => expect(router.state.location.search).toBe(''));
     expect(screen.queryByRole('tab', { name: 'Assurance' })).not.toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Operations', selected: true })).toBeVisible();
     expect(screen.queryByTestId('backup-card')).not.toBeInTheDocument();
@@ -210,6 +212,14 @@ describe('DashboardPage', () => {
     const head = await screen.findByTestId('audit-head');
     expect(within(head).getByText('Chain intact')).toBeVisible();
     expect(within(head).getByText('42')).toBeVisible();
+    // The number is the last verification checkpoint's, not the log's current head (it keeps growing after the check).
+    expect(within(head).getByText('entries checked through sequence #42')).toBeVisible();
+    expect(within(head).queryByText(/latest entry/)).not.toBeInTheDocument();
+    // Forwarding is a fact with the way to set it up, never a state: reading the setting needs a fresh verification
+    // (every /settings read does), which the dashboard does not ask for.
+    const forwarding = within(head).getByRole('link', { name: 'Configure and verify in Settings' });
+    expect(forwarding).toHaveAttribute('href', '/settings?tab=forwarding');
+    expect(forwarding.closest('dd')?.previousElementSibling).toHaveTextContent('Forwarding');
     expect(within(head).getByText('ab'.repeat(32))).toBeVisible();
     expect(within(head).getByText(/not independent proof against a compromised host/)).toBeVisible();
     expect(within(head).getByRole('link', { name: 'Inspect audit trail' })).toHaveAttribute('href', '/audit');
@@ -256,10 +266,68 @@ describe('DashboardPage', () => {
     expect(await within(await screen.findByTestId('evidence-trail')).findByText('No audit entries yet.')).toBeVisible();
   });
 
+  it('never reads the forwarding setting on the dashboard (a settings read asks for a fresh verification)', async () => {
+    let asked = 0;
+    server.use(
+      http.get('/api/v1/settings/audit-forwarding', () => {
+        asked++;
+        return HttpResponse.json(forwardingFixture());
+      }),
+      ...sessionHandlers(adminSession),
+      ...dashboardHandlers(),
+    );
+    await renderRoute('/?view=assurance');
+    await screen.findByTestId('evidence-trail');
+    expect(asked).toBe(0);
+  });
+
+  it('refreshes the overview on request, beside the 60-second polling', async () => {
+    let reads = 0;
+    server.use(
+      http.get('/api/v1/dashboard/summary', () => {
+        reads++;
+        return HttpResponse.json(summary());
+      }),
+      ...sessionHandlers(adminSession),
+      ...dashboardHandlers(),
+    );
+    await renderRoute('/');
+    await screen.findByTestId('dashboard-counts');
+    const before = reads;
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    await waitFor(() => expect(reads).toBe(before + 1));
+    // "Add target" stays on the Servers and Key Vaults pages (two kinds of target, two dialogs).
+    expect(screen.queryByRole('button', { name: /Add/ })).not.toBeInTheDocument();
+  });
+
+  it('draws neither tab panel for a deep link to the Assurance view until the summary says whether it exists', async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    server.use(
+      http.get('/api/v1/dashboard/summary', async () => {
+        await gate;
+        return HttpResponse.json(summary());
+      }),
+      ...sessionHandlers(adminSession),
+      ...dashboardHandlers(),
+    );
+    await renderRoute('/?view=assurance');
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    // The expiring list and the alerts are read already; the Operations panel must not flash before the Assurance one.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByTestId('expiring-list')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('attention-list')).not.toBeInTheDocument();
+    release();
+    expect(await screen.findByTestId('audit-head')).toBeVisible();
+    expect(screen.queryByTestId('expiring-list')).not.toBeInTheDocument();
+  });
+
   it('shows an Auditor the Assurance tab with the audit head and the detailed license', async () => {
     server.use(...sessionHandlers(auditorSession), ...dashboardHandlers({ notifications: null }));
     await renderRoute('/?view=assurance');
     expect(within(await screen.findByTestId('audit-head')).getByText('ab'.repeat(32))).toBeInTheDocument();
+    // The forwarding setting is an Administrator's: an Auditor gets no link to a settings page it cannot open.
+    expect(within(screen.getByTestId('audit-head')).queryByText('Forwarding')).not.toBeInTheDocument();
     expect(within(screen.getByTestId('license-card')).getByText(/^Valid until: /)).toBeVisible();
     expect(within(screen.getByTestId('license-card')).getByText('40 days left')).toBeVisible();
   });

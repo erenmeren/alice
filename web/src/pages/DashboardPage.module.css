@@ -5,6 +5,8 @@
 .tabsList::before { display: none; }
 .tabsTab { margin-bottom: -1px; }
 .updated { margin-left: auto; align-self: center; padding-bottom: 8px; font-size: 11px; color: var(--alice-text-muted); }
+/* The design's Clock3 before the status line. */
+.clock { margin-right: 5px; vertical-align: -2px; }
 .grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(310px, 1fr); gap: 20px; align-items: start; }
 .assurance { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
 .wide { grid-column: 1 / -1; }

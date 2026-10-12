@@ -1,5 +1,6 @@
-import { Anchor, Code, Stack, Table, Tabs, Text } from '@mantine/core';
-import { useQuery } from '@tanstack/react-query';
+import { Anchor, Button, Code, Stack, Table, Tabs, Text } from '@mantine/core';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link, useSearchParams } from 'react-router';
@@ -25,6 +26,7 @@ import { useNow } from '../components/Expiry';
 import { LoadingIndicator } from '../components/LoadingIndicator';
 import { EmptyState, MetricStrip, PageHeader, StatusBadge, type Metric, type Tone } from '../components/ui';
 import { formatDateTime } from '../datetime';
+import { Icon } from '../design/Icon';
 import classes from './DashboardPage.module.css';
 
 // Background reads: they are polling, so they do not carry the activity mark (R39 item 1).
@@ -129,6 +131,18 @@ export function DashboardPage() {
   const summary = useQuery({ queryKey: DASHBOARD_KEY, queryFn: getDashboardSummary, refetchInterval: REFRESH_MS });
   const expiring = useQuery({ queryKey: EXPIRING_KEY, queryFn: () => getExpiring(30, 10), refetchInterval: REFRESH_MS });
   const alerts = useQuery({ queryKey: ALERTS_KEY, queryFn: getAlerts, refetchInterval: REFRESH_MS });
+  const client = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
+  // Refresh reads the Overview again now (the summary and the evidence trail under DASHBOARD_KEY, the renewals, the
+  // conditions), beside the 60-second polling.
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      await Promise.all([client.refetchQueries({ queryKey: DASHBOARD_KEY }), expiring.refetch(), alerts.refetch()]);
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   let status = t('home.serverChecking');
   if (version.isSuccess) status = t('home.serverVersion', { version: version.data.version });
@@ -139,13 +153,26 @@ export function DashboardPage() {
   // Each failing query shows its own error, so a partial dashboard says which part is missing.
   const failed = [summary, expiring, alerts].filter((q) => q.isError);
   const assuranceAllowed = !!(s?.audit || s?.backup);
-  const view = params.get('view') === 'assurance' && assuranceAllowed ? 'assurance' : 'operations';
+  const requested = params.get('view') === 'assurance';
+  const view = requested && assuranceAllowed ? 'assurance' : 'operations';
+  // A link to the Assurance view waits for the summary, which says whether the role has that view: neither panel is drawn
+  // meanwhile (no Operations flash before Assurance). A role without it falls back to Operations, and the address drops
+  // the view, so a reload or a copied link does not carry it.
+  const waitingForView = requested && summary.isPending;
+  useEffect(() => {
+    if (requested && !summary.isPending && !assuranceAllowed) setParams({}, { replace: true });
+  }, [requested, summary.isPending, assuranceAllowed, setParams]);
   return (
     <>
       <PageHeader
         eyebrow={new Intl.DateTimeFormat(i18n.language, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(now)}
         title={t('dashboard.title')}
         description={t('dashboard.description')}
+        actions={
+          <Button variant="default" leftSection={<Icon name="RefreshCw" size={15} />} loading={refreshing} onClick={() => void refresh()}>
+            {t('dashboard.refresh')}
+          </Button>
+        }
       />
       {failed.length > 0 && (
         <Stack gap="xs" mb="md">
@@ -170,26 +197,29 @@ export function DashboardPage() {
           </Tabs.List>
           {/* " · " separates two complete translated strings; it is not sentence assembly. */}
           <span className={classes.updated} data-testid="server-status" aria-live="polite">
+            <Icon name="Clock3" size={13} className={classes.clock} />
             {status}
             {s && ` · ${t('dashboard.updated', { time: formatDateTime(s.generated_at, i18n.language) })}`}
           </span>
         </div>
         {loading && <LoadingIndicator />}
         {s && <MetricStrip label={t('dashboard.metrics.label')} items={metrics(s, t)} />}
-        <Tabs.Panel value="operations">
-          <div className={classes.grid} aria-busy={loading}>
-            {s && <ExpiryHorizon counts={s.certificates} />}
-            {alerts.data && <AttentionList items={alerts.data.items} />}
-            {expiring.data && <ExpiringList items={expiring.data.items} />}
-            {s && <TargetsByStatus targets={s.targets} />}
-            {s && <FailedDeployments deployments={s.deployments} />}
-            {s && <RotationUpcoming rotation={s.rotation} />}
-          </div>
-        </Tabs.Panel>
+        {!waitingForView && (
+          <Tabs.Panel value="operations">
+            <div className={classes.grid} aria-busy={loading}>
+              {s && <ExpiryHorizon counts={s.certificates} />}
+              {alerts.data && <AttentionList items={alerts.data.items} />}
+              {expiring.data && <ExpiringList items={expiring.data.items} />}
+              {s && <TargetsByStatus targets={s.targets} />}
+              {s && <FailedDeployments deployments={s.deployments} />}
+              {s && <RotationUpcoming rotation={s.rotation} />}
+            </div>
+          </Tabs.Panel>
+        )}
         {assuranceAllowed && s && (
           <Tabs.Panel value="assurance">
             <div className={classes.assurance}>
-              {s.audit && <AuditHead audit={s.audit} />}
+              {s.audit && <AuditHead audit={s.audit} admin={role === 'admin'} />}
               {s.backup && <BackupCard backup={s.backup} admin={role === 'admin'} />}
               <LicenseCard license={s.license} detailed={role === 'admin' || role === 'auditor'} />
               {view === 'assurance' && <EvidenceTrail />}
