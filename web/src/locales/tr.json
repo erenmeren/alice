@@ -1716,7 +1716,8 @@
       "details": "İşlem ayrıntıları",
       "evidence": "Kanıt",
       "triggeredBy": "Başlatan",
-      "system": "Alice (otomatik)"
+      "system": "Alice (otomatik)",
+      "verification": "Doğrulama: {{state}}"
     },
     "title": "Dağıtımlar",
     "intro": "Sonuçlarıyla birlikte tüm sertifika dağıtımları. Her adımı görmek için birini açın.",

@@ -1716,7 +1716,8 @@
       "details": "Operation details",
       "evidence": "Evidence",
       "triggeredBy": "Triggered by",
-      "system": "Alice (automatic)"
+      "system": "Alice (automatic)",
+      "verification": "Verification: {{state}}"
     },
     "title": "Deployments",
     "intro": "Every certificate deployment with its result. Open one to see each step.",
