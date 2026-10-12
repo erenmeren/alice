@@ -345,12 +345,17 @@ preflight() {
   if ((docker_ok == 1)); then
     ids=$(alice_docker ps -a -q --filter "label=com.docker.compose.project=$project" 2>/dev/null) || ids="?"
   fi
-  if [[ -e "$dir/docker-compose.yml" || -e "$dir/VERSION" ]]; then
+  # VERSION marks a complete layout (layout writes it last). install.log without VERSION is a
+  # layout that stopped halfway, before anything started: this run completes it (final review B
+  # M-5). A compose file without either is not ours.
+  if [[ -e "$dir/VERSION" ]] || [[ -e "$dir/docker-compose.yml" && ! -f "$dir/install.log" ]]; then
     fail_check "Alice is already installed in $dir. To upgrade use ./alice-update.sh."
   elif [[ "$ids" == "?" ]]; then
     fail_check "The containers of the project $project could not be listed. Check that Docker is running, then run this installer again."
   elif [[ -n "$ids" ]]; then
     fail_check "Docker already has containers of the project $project. Choose another --project, or update the installation that uses it with its own alice-update.sh."
+  elif [[ -f "$dir/install.log" ]]; then
+    alice_warn "An earlier installation in $dir stopped before its files were complete; this one completes it."
   else
     alice_ok "No installation yet"
   fi
@@ -419,7 +424,6 @@ layout() {
   make_dir "$dir/data" 0700
   make_dir "$dir/data/postgres" 0700 70:70
 
-  install -m 0644 -- "$pkg/VERSION" "$dir/VERSION"
   install -m 0644 -- "$pkg/RELEASE" "$dir/RELEASE"
   for f in install.sh alice-update.sh alicectl; do install -m 0755 -- "$pkg/$f" "$dir/$f"; done
   install -m 0644 -- "$pkg/lib/alice-lib.sh" "$dir/lib/alice-lib.sh"
@@ -430,6 +434,9 @@ layout() {
   alice_copy_extras "$pkg" "$dir"
   alice_write_env "$dir/.env" "$project" "$rel_alice_image" "$rel_pg_image" "$bind" "$port" "$hostname_arg" "$zone"
   install -m 0644 -- "$pkg/docker-compose.yml" "$dir/docker-compose.yml"
+  # Last: VERSION marks a complete layout. Until it exists a new install completes the layout and
+  # --uninstall --purge deletes it (final review B M-5).
+  install -m 0644 -- "$pkg/VERSION" "$dir/VERSION"
 }
 
 # write_secret NAME OWNER MODE writes a new random database password (C2).
@@ -527,11 +534,46 @@ closing() {
   code=""
 }
 
+# confirm_purge asks for DELETE unless --confirm DELETE was given; anything else stops.
+confirm_purge() {
+  local answer=""
+  if [[ "$confirm" == DELETE ]]; then return 0; fi
+  if [[ -z "$confirm" ]]; then
+    printf 'This deletes %s with all data and backups. Type DELETE to continue: ' "$dir"
+    IFS= read -r answer || true
+  fi
+  if [[ "$answer" != DELETE ]]; then
+    alice_log "Nothing was deleted."
+    exit 1
+  fi
+}
+
+# uninstall_incomplete handles a layout that stopped before VERSION was written (install.log but
+# no VERSION): nothing of it was ever started (the containers start after the layout), so there is
+# nothing to stop; --purge deletes the directory.
+uninstall_incomplete() {
+  if ! alice_lock; then
+    alice_lock_busy "[FAIL] "
+    exit 1
+  fi
+  if ((purge == 0)); then
+    alice_log "The installation in $dir stopped before it was complete; nothing of it runs. Delete it with --uninstall --purge, or run the installer again to complete it."
+    return 0
+  fi
+  confirm_purge
+  rm -rf -- "$dir"
+  printf 'The incomplete installation in %s was deleted.\n' "$dir"
+}
+
 uninstall_alice() {
-  local answer="" env_project
+  local env_project
   if [[ "$(id -u)" != 0 ]]; then
     alice_fail "This installer must be run with administrator rights. Run it again as: sudo ./install.sh"
     exit 1
+  fi
+  if [[ ! -f "$dir/VERSION" && -f "$dir/install.log" && ! -L "$dir/install.log" ]]; then
+    uninstall_incomplete
+    exit 0
   fi
   if [[ ! -f "$dir/docker-compose.yml" || ! -f "$dir/VERSION" ]]; then
     alice_log "Alice is not installed in $dir."
@@ -546,16 +588,7 @@ uninstall_alice() {
   fi
   project=$env_project
   alice_project=$project
-  if ((purge == 1)) && [[ "$confirm" != DELETE ]]; then
-    if [[ -z "$confirm" ]]; then
-      printf 'This deletes %s with all data and backups. Type DELETE to continue: ' "$dir"
-      IFS= read -r answer || true
-    fi
-    if [[ "$answer" != DELETE ]]; then
-      alice_log "Nothing was deleted."
-      exit 1
-    fi
-  fi
+  if ((purge == 1)); then confirm_purge; fi
   # The lock of an update or restore (final review B M-4): never stop or delete under one.
   if ! alice_lock; then
     alice_lock_busy "[FAIL] "

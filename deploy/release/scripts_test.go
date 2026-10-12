@@ -1065,6 +1065,63 @@ func TestInstallRefusesAnExistingInstallation(t *testing.T) {
 	assert.Equal(t, -1, shIndex(e.dockerCalls(), before, "compose", "up"))
 }
 
+// Final review B M-5: a layout step that fails (here the .env write, as on a full disk) leaves a
+// directory that both a new install and --uninstall accept: VERSION, the mark of a complete
+// layout, is written last; install.log without VERSION is a layout that stopped halfway, which a
+// new install completes and --uninstall --purge deletes.
+func TestInstallLayoutFailureIsRecoverable(t *testing.T) {
+	t.Parallel()
+	half := func(t *testing.T) *shEnv {
+		e := shNew(t)
+		failDir, err := filepath.Abs("testdata/fail-mv")
+		require.NoError(t, err)
+		path := e.path
+		e.path = failDir + ":" + e.path
+		e.env["STUB_FAIL_MV"] = "/.env.new"
+		r := e.install(e.pkg(shPkgOpts{}))
+		require.Equal(t, 1, r.code, r.out)
+		assert.Contains(t, r.out, "Alice was not installed completely.")
+		for _, f := range []string{"VERSION", "docker-compose.yml"} {
+			_, err := os.Stat(filepath.Join(e.inst, f))
+			assert.ErrorIs(t, err, os.ErrNotExist, f)
+		}
+		_, err = os.Stat(filepath.Join(e.inst, "install.log"))
+		require.NoError(t, err)
+		e.path = path
+		delete(e.env, "STUB_FAIL_MV")
+		return e
+	}
+	t.Run("install again", func(t *testing.T) {
+		t.Parallel()
+		e := half(t)
+		r := e.install(e.pkg(shPkgOpts{}))
+		require.Equal(t, 0, r.code, r.out)
+		assert.Contains(t, r.out, "An earlier installation in "+e.inst+" stopped before its files were complete; this one completes it.")
+		_, err := os.Stat(filepath.Join(e.inst, "VERSION"))
+		require.NoError(t, err)
+	})
+	t.Run("uninstall", func(t *testing.T) {
+		t.Parallel()
+		e := half(t)
+		r := e.run("", filepath.Join(e.inst, "install.sh"), "--dir", e.inst, "--uninstall")
+		require.Equal(t, 0, r.code, r.out)
+		assert.Contains(t, r.out, "The installation in "+e.inst+" stopped before it was complete; nothing of it runs.")
+		assert.Equal(t, -1, shIndex(e.dockerCalls(), 0, "compose", "down"))
+		r = e.run("", filepath.Join(e.inst, "install.sh"), "--dir", e.inst, "--uninstall", "--purge", "--confirm", "DELETE")
+		require.Equal(t, 0, r.code, r.out)
+		shNoDir(t, e.inst)
+	})
+	// A directory with a compose file but neither VERSION nor install.log is not ours: still refused.
+	t.Run("foreign compose file", func(t *testing.T) {
+		t.Parallel()
+		e := shNew(t)
+		shWrite(t, filepath.Join(e.inst, "docker-compose.yml"), "services: {}\n", 0o644)
+		r := e.install(e.pkg(shPkgOpts{}))
+		assert.Equal(t, 1, r.code, r.out)
+		assert.Contains(t, r.out, "[FAIL] Alice is already installed in "+e.inst+".")
+	})
+}
+
 func TestRestoreModeStartsOnlyPostgres(t *testing.T) {
 	t.Parallel()
 	e := shNew(t)

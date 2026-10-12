@@ -2511,7 +2511,15 @@ start again:
 sudo /opt/alice/install.sh --uninstall --purge --confirm DELETE
 ```
 
-This deletes `/opt/alice` with everything in it; never run it on an installation with data. Whether the image IDs
+This deletes `/opt/alice` with everything in it; never run it on an installation with data.
+
+If the installer stopped while it was still writing its files (a full disk, for example), before `VERSION` was
+written, nothing of it was started: a second run completes the files, saying
+`[WARN] An earlier installation in <dir> stopped before its files were complete; this one completes it.`, and
+`--uninstall` says `The installation in <dir> stopped before it was complete; nothing of it runs. …`
+(`--uninstall --purge` deletes it).
+
+Whether the image IDs
 stay the same after `docker load` on a fresh Docker engine (Docker's newer containerd image store among them) is an
 owner check of this release that has not been run yet; if the image check fails on a package you verified, send
 `install.log` and `sudo docker version` to support.

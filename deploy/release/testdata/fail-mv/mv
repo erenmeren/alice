@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Test wrapper for TestUpdateKeepsTheReleaseKeysWhenTheSwapFails: an mv whose source is a
-# release-keys.new directory fails; every other mv runs the real mv (PATH without this directory).
+# release-keys.new directory fails, and so does one with an argument ending in STUB_FAIL_MV when
+# that is set (TestInstallLayoutFailureIsRecoverable); every other mv runs the real mv (PATH
+# without this directory).
 set -euo pipefail
 for a in "$@"; do
-  if [[ "$a" == */release-keys.new ]]; then
+  if [[ "$a" == */release-keys.new || ( -n "${STUB_FAIL_MV:-}" && "$a" == *"$STUB_FAIL_MV" ) ]]; then
     echo "mv: stub failure for $a" >&2
     exit 1
   fi
