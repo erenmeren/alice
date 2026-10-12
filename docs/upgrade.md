@@ -55,8 +55,11 @@ A passphrase file that group or others can read is refused (exit code 2). Delete
    the `.sha256` file is checked with the release keys **of the installed version** (never with keys that come with
    the new package), then the package's checksum, then the signature and checksums of every file inside it. The new
    version must be newer than the installed one, and the installed one must be at least the package's minimum
-   version (`MIN_UPGRADE_FROM`). Then `alicectl selfcheck` must pass, and there must be enough free disk for the
-   update.
+   version (`MIN_UPGRADE_FROM`). The script prints the SHA-256 fingerprint of the installed release key that signed
+   the package (`Update package signed by release key <id> (SHA-256 fingerprint <hex>). …`) and of each release key
+   the package brings (`The package brings release key <id> (SHA-256 fingerprint <hex>).`): after the update only
+   those are trusted. Compare them with the fingerprints your vendor published. Then `alicectl selfcheck` must
+   pass, and there must be enough free disk for the update.
 2. **Passphrase.** Read from the terminal or `--passphrase-file`, kept in memory for this run only.
 3. **Stop.** Alice stops; leftover database sessions are ended.
 4. **Backup.** A backup of the stopped installation, named `…-pre-upgrade-<installed version>.alicebak`, which is

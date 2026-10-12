@@ -239,7 +239,23 @@ intake() {
     *) refuse_damaged ;;
   esac
   alice_read_release "$pkg" || refuse_damaged
-  alice_ok "Update package signed by release key $(basename -- "$alice_sig_key" .pem)"
+  print_key_fingerprints
+}
+
+# print_key_fingerprints prints the fingerprint of the installed release key that signed the
+# package and of every key the package brings, which replace the installed ones (S-35): after a
+# suspected key leak the customer compares them with the fingerprints the vendor published
+# (final review B M-3).
+print_key_fingerprints() {
+  local f fp
+  fp=$(alice_fingerprint "$alice_sig_key") || refuse_damaged
+  alice_ok "Update package signed by release key $(basename -- "$alice_sig_key" .pem) (SHA-256 fingerprint $fp). Compare this fingerprint with the one your vendor published."
+  for f in "$pkg"/release-keys/rk-*.pem; do
+    [[ -f "$f" ]] || continue
+    fp=$(alice_fingerprint "$f") || refuse_damaged
+    alice_log "The package brings release key $(basename -- "$f" .pem) (SHA-256 fingerprint $fp)."
+  done
+  alice_log "After the update only the release keys the package brings are trusted."
 }
 
 preflight() {

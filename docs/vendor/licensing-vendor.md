@@ -287,6 +287,17 @@ VM only and never publish it.
    installation trusts.
 
 If the release key or its passphrase may have leaked: create a new key, publish its fingerprint, remove the leaked
-key from `deploy/release/keys/` in the next release, and tell customers (spec §17.4) to check the fingerprint the
-installer prints against the newly published one. Packages signed with the leaked key after the leak cannot be told
-apart from genuine ones by signature alone, so customers verify downloads against the new fingerprint only.
+key from `deploy/release/keys/` in the next release, and tell customers (spec §17.4) what follows. Packages signed
+with the leaked key after the leak cannot be told apart from genuine ones by signature alone, and an installation
+still trusts the leaked key until an update replaces its `release-keys/` with the package's set (S-35): an update
+checks a package only with the keys already installed, so a package signed with the leaked key passes it.
+Customers therefore:
+
+- before **every** install and **every** update, run the three checks of install-guide.md section 3 ("Check the
+  package before you extract it") with the newly published key and its fingerprint, and install or update only a
+  package that passes them;
+- compare the fingerprints the scripts print with the newly published one: the installer prints
+  `Package signed by release key <id> (SHA-256 fingerprint <hex>)`, and `alice-update.sh` prints
+  `Update package signed by release key <id> (SHA-256 fingerprint <hex>)` and one line
+  `The package brings release key <id> (SHA-256 fingerprint <hex>).` per key the package installs. Stop the update
+  (Ctrl-C) when a key it brings is not one the vendor published; the update asks no question before it stops Alice.

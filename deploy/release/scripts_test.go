@@ -1348,6 +1348,33 @@ func TestUpdateChecksFreeSpaceBeforeTheCopy(t *testing.T) {
 	}
 }
 
+// Final review B M-3: the update prints (and logs) the SHA-256 fingerprint of the installed release
+// key that signed the package, and of every key the package carries, which replace the installed
+// ones: a customer who suspects a leaked key compares them with the fingerprints the vendor
+// published, as the installer's line asks.
+func TestUpdatePrintsReleaseKeyFingerprints(t *testing.T) {
+	t.Parallel()
+	e := shNewInstalled(t, "1.0.0-rc.2")
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	next, nextHash := shPubPEM(t, pub, "rk-test-02")
+	pkg := e.pkg(shPkgOpts{version: "1.0.0", extraKeys: map[string][]byte{"rk-test-02.pem": next}})
+	r := e.update(shTarball(t, pkg, filepath.Join(e.root, "dl"), "1.0.0", e.key))
+	require.Equal(t, 0, r.code, r.out)
+	signed := "[ OK ] Update package signed by release key " + shTestKeyID + " (SHA-256 fingerprint " + e.keyHash +
+		"). Compare this fingerprint with the one your vendor published.\n"
+	assert.Contains(t, r.out, signed)
+	for id, hash := range map[string]string{shTestKeyID: e.keyHash, "rk-test-02": nextHash} {
+		assert.Contains(t, r.out, "The package brings release key "+id+" (SHA-256 fingerprint "+hash+")")
+	}
+	assert.Contains(t, r.out, "After the update only the release keys the package brings are trusted.\n")
+	logs, err := filepath.Glob(filepath.Join(e.inst, "update-*.log"))
+	require.NoError(t, err)
+	require.Len(t, logs, 1)
+	b, err := os.ReadFile(logs[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(b), signed)
+}
+
 func TestUpdateHappyPathOrder(t *testing.T) {
 	t.Parallel()
 	e := shNewInstalled(t, "1.0.0-rc.2", "rk-old-01.pem")
