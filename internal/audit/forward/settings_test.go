@@ -62,6 +62,24 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+// A test needs a host whatever Enabled says: with none, net.JoinHostPort("", port) would dial the local machine
+// (final review A-4). Nothing is dialled.
+func TestTestRequiresAHost(t *testing.T) {
+	dialled := false
+	f := New(Config{Clock: clock.Real{}, Dial: func(context.Context, string, string) (net.Conn, error) {
+		dialled = true
+		return nil, errors.New("no dial expected")
+	}})
+	for _, in := range []Settings{{}, {Enabled: false, Port: 6514, Transport: TransportTCP}, {Enabled: true, Port: 514}} {
+		err := f.Test(t.Context(), in)
+		var verrs validate.Errors
+		require.True(t, errors.As(err, &verrs), "%+v: %v", in, err)
+		assert.Equal(t, "host", verrs[0].Field)
+		assert.Equal(t, validate.Required, verrs[0].Code)
+	}
+	assert.False(t, dialled)
+}
+
 func TestNewDefaults(t *testing.T) {
 	f := New(Config{Clock: clock.Real{}})
 	assert.Equal(t, "alice", f.app)

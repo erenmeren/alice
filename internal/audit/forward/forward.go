@@ -26,6 +26,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/netaddr"
+	"alice/internal/platform/validate"
 	"alice/internal/platform/settings"
 )
 
@@ -155,6 +156,12 @@ func (f *Forwarder) Test(ctx context.Context, in Settings) error {
 	in, err := normalize(in)
 	if err != nil {
 		return err
+	}
+	if in.Host == "" {
+		// A disabled configuration may leave the host empty, a test may not: ":<port>" dials the local machine.
+		var v validate.Errors
+		v.Add("host", validate.Required, nil)
+		return v.Err()
 	}
 	rec := record{Host: in.Host, Port: in.Port, Transport: in.Transport, CAPEM: in.CAPEM}
 	if in.CAPEM == "" && in.CASet {
