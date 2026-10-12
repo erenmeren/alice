@@ -9,7 +9,7 @@
   {
     "name": "Lucide icons (subset)",
     "source": "https://lucide.dev",
-    "license": "ISC",
+    "license": "ISC AND MIT",
     "files": ["web/src/design/icons.ts"],
     "licenseFile": "web/src/design/LUCIDE-LICENSE"
   }

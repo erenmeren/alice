@@ -20,8 +20,8 @@ type vendoredAsset struct {
 	text        string
 }
 
-// vendoredAssets reads the manifest and every license text; a missing license, name or listed file is an error, so a
-// release never ships an asset without its notice.
+// vendoredAssets reads the manifest and every license text; a missing license, name or listed file, an empty files
+// list or a directory listed as a file is an error, so a release never ships an asset without its notice.
 func vendoredAssets(manifest, root string) ([]vendoredAsset, error) {
 	raw, err := os.ReadFile(manifest) //nolint:gosec // G304: the manifest path is the operator's flag
 	if err != nil {
@@ -33,12 +33,23 @@ func vendoredAssets(manifest, root string) ([]vendoredAsset, error) {
 	}
 	for i := range out {
 		a := &out[i]
+		name := a.Name
+		if name == "" {
+			name = "(unnamed)"
+		}
 		if a.Name == "" || a.License == "" || a.LicenseFile == "" {
-			return nil, fmt.Errorf("vendored asset %q: name, license and licenseFile are required", a.Name)
+			return nil, fmt.Errorf("vendored asset %s: name, license and licenseFile are required", name)
+		}
+		if len(a.Files) == 0 {
+			return nil, fmt.Errorf("vendored asset %s: files must list at least one file", name)
 		}
 		for _, f := range a.Files {
-			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(f))); err != nil {
-				return nil, fmt.Errorf("vendored asset %s: %s: %w", a.Name, f, err)
+			st, err := os.Stat(filepath.Join(root, filepath.FromSlash(f)))
+			if err != nil {
+				return nil, fmt.Errorf("vendored asset %s: %s: %w", name, f, err)
+			}
+			if st.IsDir() {
+				return nil, fmt.Errorf("vendored asset %s: %s is a directory, not a file", name, f)
 			}
 		}
 		text, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(a.LicenseFile))) //nolint:gosec // G304: a path from the repository's manifest
