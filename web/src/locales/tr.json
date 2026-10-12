@@ -2407,6 +2407,7 @@
       "trigger": "Nasıl başladı",
       "plannedFor": "Planlanan zaman",
       "noticeSent": "Bildirim gönderildi",
+      "announced": "Duyuruldu",
       "finished": "Bitiş zamanı"
     }
   },
