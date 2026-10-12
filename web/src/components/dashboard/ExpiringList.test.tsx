@@ -29,4 +29,9 @@ describe('ExpiringList', () => {
     expect(href('future')).toBeNull();
     expect(screen.getByText('future')).toBeInTheDocument();
   });
+
+  it('says one row is shown in the singular', async () => {
+    await renderWithAuth(<ExpiringList items={[item({ name: 'only' })]} />);
+    expect(screen.getByText('The soonest one is shown.')).toBeVisible();
+  });
 });
