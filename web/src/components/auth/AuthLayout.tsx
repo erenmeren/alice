@@ -11,12 +11,15 @@ export interface AuthLayoutProps {
   brand?: boolean;
   // wide gives the form side room for the authenticator enrollment and the recovery codes.
   wide?: boolean;
+  // signedIn makes the language toggle save the choice to the account, as the shell's toggle does (a signed-in person
+  // on the not-found page).
+  signedIn?: boolean;
 }
 
 // AuthLayout is the design's sign-in layout (loginPage): a brand side with the product's promise and a form side.
 // The brand side is decorative context (an aside, no heading): the form side carries the page's only <h1> and is the
-// page's only <main>. The toggles sit top right; the language toggle never saves to an account (nobody is signed in).
-export function AuthLayout({ children, brand = true, wide = false }: AuthLayoutProps) {
+// page's only <main>. The toggles sit top right; the language toggle saves to the account only when signedIn says so.
+export function AuthLayout({ children, brand = true, wide = false, signedIn = false }: AuthLayoutProps) {
   const { t } = useTranslation();
   return (
     <div className={brand ? classes.layout : classes.single}>
@@ -47,7 +50,7 @@ export function AuthLayout({ children, brand = true, wide = false }: AuthLayoutP
       <main className={classes.formSide}>
         <div className={classes.top}>
           <ThemeToggle />
-          <LanguageToggle signedIn={false} />
+          <LanguageToggle signedIn={signedIn} />
         </div>
         <div className={classes.form} data-wide={wide || undefined}>
           {children}

@@ -1,4 +1,6 @@
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { http, HttpResponse } from 'msw';
 import { sessionFor, sessionHandlers } from '../test/fixtures';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderRoute } from '../test/render';
@@ -23,5 +25,37 @@ describe('NotFoundPage', () => {
     await renderRoute('/no-such-page', { languages: ['tr-TR'] });
     expect(await screen.findByRole('heading', { level: 1, name: 'Sayfa bulunamadı' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Ana sayfaya dön' })).toBeInTheDocument();
+  });
+
+  it('saves a signed-in person’s language choice to the account, as the shell’s toggle does', async () => {
+    const saved: unknown[] = [];
+    server.use(
+      ...sessionHandlers(sessionFor('admin')),
+      http.put('/api/v1/auth/locale', async ({ request }) => {
+        saved.push(await request.json());
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await renderRoute('/no-such-page');
+    await screen.findByRole('heading', { level: 1, name: 'Page not found' });
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Sayfa bulunamadı' })).toBeInTheDocument();
+    await waitFor(() => expect(saved).toHaveLength(1));
+  });
+
+  it('never saves the choice without a session', async () => {
+    let saved = false;
+    server.use(
+      ...sessionHandlers(null),
+      http.put('/api/v1/auth/locale', () => {
+        saved = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await renderRoute('/no-such-page');
+    await screen.findByRole('heading', { level: 1, name: 'Page not found' });
+    await userEvent.click(screen.getByRole('button', { name: 'Türkçe' }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Sayfa bulunamadı' })).toBeInTheDocument();
+    expect(saved).toBe(false);
   });
 });
