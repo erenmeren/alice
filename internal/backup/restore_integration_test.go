@@ -129,8 +129,10 @@ func (e *env) reload() {
 	e.svc = backup.New(e.cfg)
 }
 
+// input is a restore of path with the test passphrase. It waits up to 10 s for other sessions to end, as the CLI does
+// for 150 s (TestRestoreHelpersTolerateATransientSession).
 func (e *env) input(path string) backup.RestoreInput {
-	return backup.RestoreInput{Path: path, Passphrase: []byte(passphrase), OwnerURL: e.db.OwnerURL}
+	return backup.RestoreInput{Path: path, Passphrase: []byte(passphrase), OwnerURL: e.db.OwnerURL, WaitForSessions: 10 * time.Second}
 }
 
 // restoreWith runs a restore while the test's pools are closed. The fake clock moves on a minute first, so safety
@@ -582,7 +584,7 @@ func (e *env) restoreElsewhere(path, ownerURL string, edit func(*backup.RestoreI
 	o.cfg = backup.Config{Audit: o.audit, Clock: o.clk, Dir: o.dir, KeysDir: o.keysDir, StateDir: o.stateDir, Version: "1.0.0",
 		Hostname: func() (string, error) { return "new-host", nil }}
 	backup.SetStatfs(&o.cfg, func(string) (uint64, error) { return 100 << 30, nil })
-	in := backup.RestoreInput{Path: path, Passphrase: []byte(passphrase), OwnerURL: ownerURL}
+	in := backup.RestoreInput{Path: path, Passphrase: []byte(passphrase), OwnerURL: ownerURL, WaitForSessions: 10 * time.Second}
 	if edit != nil {
 		edit(&in)
 	}
@@ -1063,9 +1065,9 @@ func TestRestoreChecksTheCurrentKeyVersion(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// The restore helpers close the test's pools first (stop) and pass WaitForSessions 0; a closed pool's backend can
-// still be listed in pg_stat_activity for a moment, which made a restore refuse with ErrDatabaseInUse in about 1 of
-// 75 runs (the Task 5 and Task 19 flakes). stop returns only when no session of the database is left.
+// The restore helpers close the test's pools first (stop); a closed pool's backend can still be listed in
+// pg_stat_activity for a moment (4 of 300 closes), which made a restore refuse with ErrDatabaseInUse while the tests
+// passed WaitForSessions 0 (the Task 5 and Task 19 flakes). stop returns only when no session of the database is left.
 func TestStopLeavesNoSession(t *testing.T) {
 	e := newRestoreEnv(t)
 	name := dbName(t, e.db.OwnerURL)
@@ -1089,11 +1091,35 @@ func TestRestoreRefusesWhileTheDatabaseIsInUse(t *testing.T) {
 	e.stop()
 	conn, err := pgx.Connect(e.ctx, e.db.AppURL)
 	require.NoError(t, err)
-	_, err = backup.Restore(e.ctx, e.cfg, e.input(info.Path))
+	in := e.input(info.Path)
+	in.WaitForSessions = 0
+	_, err = backup.Restore(e.ctx, e.cfg, in)
 	require.ErrorIs(t, err, backup.ErrDatabaseInUse)
 	require.NoError(t, conn.Close(e.ctx))
 	e.start()
 	e.requireNothingChanged(before, backups)
+}
+
+// The tests' restores tolerate a session that ends on its own within seconds (a closed connection's backend, or a
+// server process such as an autovacuum worker that the shared test server sends to any of its many databases): with
+// the old default of WaitForSessions 0 one such session refused a restore of make coverage at random
+// (TestRestoreIsAllOrNothing/error/staged in Task 19's make ci). A refusal is still tested with WaitForSessions 0
+// (TestRestoreRefusesWhileTheDatabaseIsInUse).
+func TestRestoreHelpersTolerateATransientSession(t *testing.T) {
+	e := newRestoreEnv(t)
+	atBackup, auditAtBackup, info := e.backupWithSnapshot()
+	e.clk.Advance(time.Minute)
+	e.stop()
+	conn, err := pgx.Connect(e.ctx, e.db.AppURL)
+	require.NoError(t, err)
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		_ = conn.Close(context.Background())
+	}()
+	_, err = backup.Restore(e.ctx, e.cfg, e.input(info.Path))
+	e.start()
+	require.NoError(t, err)
+	e.requireRestored(atBackup, auditAtBackup)
 }
 
 func TestRestoreWaitsForALeftoverSession(t *testing.T) {

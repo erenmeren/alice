@@ -546,7 +546,8 @@ func TestF85FullCycle(t *testing.T) {
 
 	f.clk.Advance(5 * time.Minute)
 	rcfg := backup.Config{Clock: f.clk, Dir: f.dir, KeysDir: f.keysDir, StateDir: f.stateDir, Version: "1.0.0"}
-	res, err := backup.Restore(f.ctx, rcfg, backup.RestoreInput{Path: info.Path, Passphrase: []byte(passphrase), OwnerURL: f.db.OwnerURL})
+	res, err := backup.Restore(f.ctx, rcfg, backup.RestoreInput{Path: info.Path, Passphrase: []byte(passphrase), OwnerURL: f.db.OwnerURL,
+		WaitForSessions: 10 * time.Second}) // a server process may visit the new database (TestRestoreHelpersTolerateATransientSession)
 	require.NoError(t, err)
 	assert.Empty(t, res.SafetyBackup, "an empty database has nothing to back up first")
 
