@@ -18,6 +18,9 @@
 :root,
 :root[data-mantine-color-scheme='light'] {
   color-scheme: light;
+  /* Mantine's page background and text before the provider mounts (it writes the same mapping from theme.ts). */
+  --mantine-color-body: var(--alice-canvas);
+  --mantine-color-text: var(--alice-text);
   --alice-canvas: #f6f7f5;
   --alice-surface: #ffffff;
   --alice-surface-raised: #ffffff;
@@ -65,6 +68,8 @@
 }
 :root[data-mantine-color-scheme='dark'] {
   color-scheme: dark;
+  --mantine-color-body: var(--alice-canvas);
+  --mantine-color-text: var(--alice-text);
   --alice-canvas: #111816;
   --alice-surface: #19221e;
   --alice-surface-raised: #202c25;

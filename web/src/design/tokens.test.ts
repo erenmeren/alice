@@ -66,3 +66,46 @@ it('has the same token names in both schemes and a compact density row', () => {
   expect(css).toMatch(/:root\[data-density='compact'\]\s*\{\s*--alice-row-height:\s*48px;/);
   expect(css).not.toMatch(/https?:\/\//); // fonts are local (CSP font-src 'self', offline installations)
 });
+
+// Mantine draws the check of a checked Checkbox, the dot of a Radio and the thumb of a Switch on the brand color; the
+// design rules (mantine.module.css) give them the design's colors, which reach 3:1 (non-text contrast) in both schemes.
+describe('checked controls', () => {
+  const moduleCss = readFileSync('src/design/mantine.module.css', 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  // tokenOf finds the --alice-* token the design rule for selector (in both schemes) assigns to variable.
+  function tokenOf(selector: string, variable: string): string {
+    const part = `[data-mantine-color-scheme] ${selector}`;
+    for (const [, sel, body] of moduleCss.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      if (!sel.split(',').map((x) => x.trim()).includes(part)) continue;
+      const m = body.match(new RegExp(`${variable}:\\s*var\\(--alice-([a-z-]+)\\)`));
+      if (m) return m[1];
+    }
+    throw new Error(`no ${variable} under ${part}`);
+  }
+  const PAIRS: [string, string, string, string][] = [
+    ['the check', ".checkbox:where([data-variant='filled'])", '--checkbox-icon-color', 'brand'],
+    ['the radio dot', '.radio', '--radio-icon-color', 'brand'],
+    ['the switch thumb when on', '.switchInput:checked + * > .switchThumb', '--switch-thumb-bg', 'brand'],
+  ];
+  describe.each(['light', 'dark'])('%s', (scheme) => {
+    const tokens = { ...tokensOf(':root[data-mantine-color-scheme=\'light\']'), ...tokensOf(`:root[data-mantine-color-scheme='${scheme}']`) };
+    it.each(PAIRS)('%s reaches 3:1 on its background', (_what, part, variable, bg) => {
+      const fg = tokenOf(part, variable);
+      expect(fg).toBe('on-brand');
+      expect(contrast(tokens[fg], tokens[bg])).toBeGreaterThanOrEqual(3);
+    });
+    it('the switch thumb when off reaches 3:1 on its track', () => {
+      const thumb = tokenOf('.switchThumb', '--switch-thumb-bg');
+      const track = tokenOf('.switchTrack', '--switch-bg');
+      expect(contrast(tokens[thumb], tokens[track])).toBeGreaterThanOrEqual(3);
+    });
+  });
+});
+
+it('gives the page the design canvas before the app mounts (Mantine’s body and text variables in both schemes)', () => {
+  for (const selector of [':root,\n:root[data-mantine-color-scheme=\'light\']', ':root[data-mantine-color-scheme=\'dark\']']) {
+    const rule = css.slice(css.indexOf(`${selector} {`));
+    const body = rule.slice(0, rule.indexOf('}'));
+    expect(body).toMatch(/--mantine-color-body:\s*var\(--alice-canvas\);/);
+    expect(body).toMatch(/--mantine-color-text:\s*var\(--alice-text\);/);
+  }
+});

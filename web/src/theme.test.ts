@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { DEFAULT_THEME, MantineProvider, Table, mergeMantineTheme } from '@mantine/core';
+import { Checkbox, DEFAULT_THEME, MantineProvider, Radio, Switch, Table, mergeMantineTheme } from '@mantine/core';
 import { render, screen } from '@testing-library/react';
 import { createElement } from 'react';
 import { I18nextProvider } from 'react-i18next';
 import { createI18n } from './i18n';
 import { ThemeProvider } from './ThemeProvider';
+import { renderApp } from './test/render';
+import classes from './design/mantine.module.css';
 import { SCROLL_REGION_CLASS, TONE_COLOR, appTheme, cssVariablesResolver, toneOf, variantColorResolver } from './theme';
 
 const theme = appTheme('Table, scrolls sideways');
@@ -141,5 +143,34 @@ describe('color mode', () => {
     localStorage.setItem('alice.colorScheme', 'dark');
     await renderProvider();
     expect(document.documentElement).toHaveAttribute('data-mantine-color-scheme', 'dark');
+  });
+});
+
+describe('design rules', () => {
+  const moduleCss = readFileSync('src/design/mantine.module.css', 'utf8');
+
+  it('styles fields through Mantine’s input variables, so the disabled and error states keep their own colors', () => {
+    const rules = [...moduleCss.matchAll(/([^{}]*\.input\b[^{}]*)\{([^}]*)\}/g)];
+    expect(rules.length).toBeGreaterThan(0);
+    for (const [, , body] of rules) expect(body).not.toMatch(/(^|[;{\s])(background|background-color|color)\s*:/);
+    expect(moduleCss).toMatch(/\.input\s*\{[^}]*--input-bg:\s*var\(--alice-surface\)/);
+    expect(moduleCss).toMatch(/\.input:not\(\[data-error\]\)\s*\{[^}]*--input-color:\s*var\(--alice-text\)/);
+  });
+
+  it('draws checked Checkbox, Radio and Switch with the design classes in dark mode', async () => {
+    await renderApp(
+      createElement('div', null,
+        createElement(Checkbox, { label: 'c', defaultChecked: true }),
+        createElement(Radio, { label: 'r', defaultChecked: true }),
+        createElement(Switch, { label: 's', defaultChecked: true })),
+      ['en-US'], { colorScheme: 'dark' });
+    expect(document.documentElement).toHaveAttribute('data-mantine-color-scheme', 'dark');
+    expect(screen.getByRole('checkbox', { name: 'c' }).closest('.mantine-Checkbox-root')).toHaveClass(classes.checkbox);
+    expect(screen.getByRole('radio', { name: 'r' }).closest('.mantine-Radio-root')).toHaveClass(classes.radio);
+    const sw = screen.getByRole('switch', { name: 's' });
+    expect(sw).toHaveClass(classes.switchInput);
+    const root = sw.closest('.mantine-Switch-root')!;
+    expect(root.querySelector('.mantine-Switch-track')).toHaveClass(classes.switchTrack);
+    expect(root.querySelector('.mantine-Switch-thumb')).toHaveClass(classes.switchThumb);
   });
 });

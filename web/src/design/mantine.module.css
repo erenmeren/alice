@@ -51,7 +51,25 @@
 .tab { padding: 0 0 13px; font-size: 12px; font-weight: 500; color: var(--alice-text-secondary); background: transparent; }
 .tab[data-active] { color: var(--alice-brand); border-color: var(--alice-brand); }
 
-[data-mantine-color-scheme] .input:not([data-error]) { --input-bd: var(--alice-border-strong); }
-[data-mantine-color-scheme] .input { background: var(--alice-surface); color: var(--alice-text); font-size: 12px; }
+/* Fields set Mantine's input variables, not the properties: Mantine's disabled rule (--input-disabled-bg/-color) and
+   its error color (--input-color from --mantine-color-error) still apply. */
+[data-mantine-color-scheme] .input:not([data-error]) { --input-bd: var(--alice-border-strong); --input-color: var(--alice-text); }
+[data-mantine-color-scheme] .input { --input-bg: var(--alice-surface); font-size: 12px; }
 .inputLabel { font-size: 11px; font-weight: 550; color: var(--alice-text); }
 .inputDescription { font-size: 11px; color: var(--alice-text-secondary); }
+
+/* Checked choices: the check and the radio dot in --alice-on-brand on the brand (Mantine draws them white, 1.6:1 on the
+   dark scheme's mint). A component's own iconColor (an inline variable) and the outline variants still win. */
+[data-mantine-color-scheme] .checkbox:where([data-variant='filled']) { --checkbox-icon-color: var(--alice-on-brand); }
+[data-mantine-color-scheme] .radio { --radio-icon-color: var(--alice-on-brand); }
+
+/* The design's .switch: a --alice-border-strong track with a --alice-surface thumb; on, the brand track with an
+   --alice-on-brand thumb. Mantine's disabled track and thumb keep their colors. */
+[data-mantine-color-scheme] .switchTrack { --switch-bg: var(--alice-border-strong); }
+[data-mantine-color-scheme] .switchInput:checked + .switchTrack { --switch-bg: var(--switch-color); }
+[data-mantine-color-scheme] .switchInput:disabled + .switchTrack,
+[data-mantine-color-scheme] .switchInput[data-disabled] + .switchTrack { --switch-bg: var(--switch-disabled-color); }
+[data-mantine-color-scheme] .switchThumb { --switch-thumb-bg: var(--alice-surface); }
+[data-mantine-color-scheme] .switchInput:checked + * > .switchThumb { --switch-thumb-bg: var(--alice-on-brand); }
+[data-mantine-color-scheme] .switchInput:disabled + * > .switchThumb,
+[data-mantine-color-scheme] .switchInput[data-disabled] + * > .switchThumb { --switch-thumb-bg: var(--switch-thumb-bg-disabled); }

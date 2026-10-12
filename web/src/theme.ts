@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Button, Card, Code, Input, InputWrapper, Modal, Paper, Table, TableScrollContainer, Tabs, Title,
+  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, Radio, Switch, Table, TableScrollContainer, Tabs, Title,
   createTheme, defaultVariantColorsResolver,
   type CSSVariablesResolver, type MantineColorsTuple, type MantineThemeOverride, type VariantColorsResolver,
 } from '@mantine/core';
@@ -133,6 +133,10 @@ export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
       Title: Title.extend({ classNames: { root: classes.title } }),
       Input: Input.extend({ classNames: { input: classes.input } }),
       InputWrapper: InputWrapper.extend({ classNames: { label: classes.inputLabel, description: classes.inputDescription } }),
+      // Checked choices draw their check, dot and thumb in the design's colors (mantine.module.css), in both schemes.
+      Checkbox: Checkbox.extend({ classNames: { root: classes.checkbox } }),
+      Radio: Radio.extend({ classNames: { root: classes.radio } }),
+      Switch: Switch.extend({ classNames: { input: classes.switchInput, track: classes.switchTrack, thumb: classes.switchThumb } }),
       // A table that scrolls sideways on a narrow screen must be reachable with the keyboard (axe
       // scrollable-region-focusable); a table without a link or button in it has nothing else to focus.
       // The stop is a named group (not a landmark) with a focus ring drawn inside it (theme.css).
