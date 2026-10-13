@@ -28,11 +28,23 @@ const (
 	// ValidUser), reports the /etc/passwd entries it cannot list (unlisted), returns the content of
 	// the files it read (inline) so a discovery needs no authkeys-read for them, and keeps its whole
 	// answer within MaxListOutput (truncated).
-	Protocol   = 6
-	Version    = "1.5.0"
+	// Protocol 7 (ACME, Task 7): acme-challenge-put and acme-challenge-rm write and remove one
+	// HTTP-01 token file in ACMEChallengeDir. Nothing else changed: a protocol 6 helper serves every
+	// other operation (MinProtocol); only an HTTP-01 challenge needs 7 (HTTP01MinProtocol).
+	Protocol   = 7
+	Version    = "1.6.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
+
+// MinProtocol is the oldest helper protocol Alice opens a session with (linuxssh.Open answers
+// ssh.helper_outdated below it). It stays 6 when the helper moves to 7 (A1 of the ACME plan): a
+// server that was not reinstalled keeps working for everything it did before.
+const MinProtocol = 6
+
+// HTTP01MinProtocol is the helper protocol an HTTP-01 challenge needs (acme-challenge-put and
+// acme-challenge-rm). Only that operation checks it.
+const HTTP01MinProtocol = 7
 
 // HelperBudget bounds one helper call on the server (R37 item 17): the helper gives up before
 // Alice's longest command budget (60 s) ends, with a 10 s margin, and never replaces a file after
@@ -817,4 +829,96 @@ func dropInline(resp *AuthKeysListResponse, excess int) bool {
 		}
 	}
 	return dropped
+}
+
+// Protocol 7 subcommands (ACME HTTP-01, Task 7). Alice never edits the Nginx configuration: the
+// administrator publishes ACMEWebroot on port 80 with a location block of their own, and the helper
+// only writes and removes one token file in ACMEChallengeDir.
+const (
+	// SubACMEChallengePut: "acme-challenge-put --token T", the key authorization on stdin. The
+	// file ACMEChallengeDir/T is created (or replaced atomically), root's, mode 0644.
+	SubACMEChallengePut = "acme-challenge-put"
+	// SubACMEChallengeRm: "acme-challenge-rm --token T" removes ACMEChallengeDir/T; a missing file
+	// (or a missing directory) is success with Removed false.
+	SubACMEChallengeRm = "acme-challenge-rm"
+)
+
+// HTTP-01 webroot (fixed: no argument names a path).
+const (
+	// ACMEWebroot is the directory the administrator publishes on port 80 for
+	// /.well-known/acme-challenge/ ("root /var/www/alice-acme;").
+	ACMEWebroot = "/var/www/alice-acme"
+	// ACMEChallengeDir holds the token files. The administrator creates it (root's, 0755); the
+	// helper never creates a directory and refuses a path with a link, a directory that is not
+	// root's or that group or others can write, or one on a pseudo or FUSE file system.
+	ACMEChallengeDir = ACMEWebroot + "/.well-known/acme-challenge"
+	// MaxACMEBody bounds acme-challenge-put's stdin.
+	MaxACMEBody = 512
+	// MinACMEToken and MaxACMEToken bound a token (RFC 8555 §8.3: at least 128 bits of entropy,
+	// base64url without padding, so at least 22 characters).
+	MinACMEToken = 22
+	MaxACMEToken = 128
+	// acmeThumbprintLen is the base64url length (no padding) of a SHA-256 JWK thumbprint.
+	acmeThumbprintLen = 43
+)
+
+// ACMEChallengeDirElems are the path elements of ACMEChallengeDir below "/", in walk order.
+func ACMEChallengeDirElems() []string {
+	return strings.Split(strings.TrimPrefix(ACMEChallengeDir, "/"), "/")
+}
+
+// ACMEChallengePath is the token file of a valid token on the server.
+func ACMEChallengePath(token string) string { return ACMEChallengeDir + "/" + token }
+
+// ACMEChallengeURLPath is the URL path the CA (and Alice's own check) fetches for a token.
+func ACMEChallengeURLPath(token string) string { return "/.well-known/acme-challenge/" + token }
+
+func isBase64URL(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_'
+}
+
+// ValidACMEToken reports whether s is an HTTP-01 token the helper accepts as a file name:
+// MinACMEToken to MaxACMEToken characters of [A-Za-z0-9_-]. No ".", "/", NUL, space or non-ASCII
+// byte can pass, so a token is always one plain name in ACMEChallengeDir. A token may start with
+// "-" (base64url); the helper reads it as the value of --token, never as an option.
+func ValidACMEToken(s string) bool {
+	if len(s) < MinACMEToken || len(s) > MaxACMEToken {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if !isBase64URL(s[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidKeyAuthorization reports whether body is the key authorization of token (RFC 8555 §8.1):
+// the token, ".", and the 43-character base64url SHA-256 thumbprint of the account key, with
+// nothing before or after (no newline). Its length is fixed by the token, so a body cut short in
+// transit is refused rather than published.
+func ValidKeyAuthorization(token string, body []byte) bool {
+	if !ValidACMEToken(token) || len(body) != len(token)+1+acmeThumbprintLen || string(body[:len(token)]) != token || body[len(token)] != '.' {
+		return false
+	}
+	for _, c := range body[len(token)+1:] {
+		if !isBase64URL(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// ACMEChallengePutResponse answers acme-challenge-put.
+type ACMEChallengePutResponse struct {
+	OK       bool   `json:"ok"`
+	Path     string `json:"path"`     // the token file (ACMEChallengePath)
+	Replaced bool   `json:"replaced"` // a token file of that name existed and was replaced
+}
+
+// ACMEChallengeRmResponse answers acme-challenge-rm.
+type ACMEChallengeRmResponse struct {
+	OK      bool   `json:"ok"`
+	Path    string `json:"path"`
+	Removed bool   `json:"removed"` // false: there was no such file (success)
 }

@@ -112,11 +112,14 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 		release(conn.Healthy())
 		return nil, err
 	}
-	if v.Protocol < helperproto.Protocol {
+	// MinProtocol, not Protocol (A1): a helper that predates the HTTP-01 commands still serves every
+	// other operation; PublishHTTP01Token and RemoveHTTP01Token check HTTP01MinProtocol themselves.
+	if v.Protocol < helperproto.MinProtocol {
 		release(true)
 		return nil, providers.NewError("ssh.helper_outdated", false, nil, map[string]string{
-			"helper_protocol": strconv.Itoa(v.Protocol), "required_protocol": strconv.Itoa(helperproto.Protocol)})
+			"helper_protocol": strconv.Itoa(v.Protocol), "required_protocol": strconv.Itoa(helperproto.MinProtocol)})
 	}
+	conn.helperProtocol.Store(int64(v.Protocol))
 	v.Helper = cleanValue(v.Helper, 40)
 	return &session{conn: conn, cfg: cfg, caps: p.caps, version: v, release: release, target: t.ID, dialer: p.pool.dialer}, nil
 }

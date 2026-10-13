@@ -821,7 +821,7 @@ func TestConnOf(t *testing.T) {
 	require.True(t, ok)
 	res, err := c.Run(context.Background(), CmdVersion())
 	require.NoError(t, err)
-	assert.Contains(t, string(res.Stdout), `"protocol":6`)
+	assert.Contains(t, string(res.Stdout), `"protocol":`+strconv.Itoa(helperproto.Protocol))
 	require.NoError(t, s.Close())
 	_, ok = ConnOf(s)
 	assert.False(t, ok, "a closed session's connection may serve another session")

@@ -554,6 +554,9 @@ type Conn struct {
 	clock    clock.Clock
 	// dead is closed once the SSH connection has ended (closed by Alice or dropped by the server).
 	dead chan struct{}
+	// helperProtocol is the protocol the helper reported at the last Open on this connection (0:
+	// not known yet); the HTTP-01 methods check it (helperproto.HTTP01MinProtocol).
+	helperProtocol atomic.Int64
 
 	mu     sync.Mutex
 	broken bool

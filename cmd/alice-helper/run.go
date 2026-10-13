@@ -55,6 +55,9 @@ var commands = map[string]command{
 	helperproto.SubNginxStatus:   {privileged: true, handle: cmdNginxStatus},
 	helperproto.SubNginxFence:    {privileged: true, handle: cmdNginxFence},
 	helperproto.SubTLSProbe:      {handle: cmdTLSProbe},
+	// Protocol 7 (ACME HTTP-01): one token file in helperproto.ACMEChallengeDir.
+	helperproto.SubACMEChallengePut: {privileged: true, handle: cmdACMEChallengePut},
+	helperproto.SubACMEChallengeRm:  {privileged: true, handle: cmdACMEChallengeRm},
 }
 
 // commandBudget bounds one call. Alice gives authkeys-list, -read and -write 60 s (R37 item 17);
