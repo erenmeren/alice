@@ -39,7 +39,7 @@ var rules = map[string][]string{
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
 	// a hook's dns01 configuration; the client and solvers never import it back.
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
-		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01"},
+		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/renew"},
 	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
 	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
 	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
@@ -77,6 +77,8 @@ var rules = map[string][]string{
 	// Key generation and signing requests of ACME orders are pure: the key DER is a secrets.Plaintext; no database,
 	// file, network or clock. The inventory seals what it generates (the only Alice package that imports it).
 	"alice/internal/acme/keygen": {"alice/internal/secrets"},
+	// The renewal decision (Task 11) is pure: times in, a decision out; the inventory applies it.
+	"alice/internal/acme/renew": {},
 	// Phase 8: the backup container is pure (io.Reader/io.Writer only, no file, socket or database); the dump
 	// knows no other Alice module; the backup module runs the dump, the container and the restore; the audit
 	// forwarder reads the audit log and nothing else.
@@ -112,6 +114,7 @@ var denied = map[string][]string{
 	"alice/internal/acme/solver/dns01":               {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver/http01":              {"alice/internal/platform/db/..."},
 	"alice/internal/acme/keygen":                     {"alice/internal/platform/db/..."},
+	"alice/internal/acme/renew":                      {"alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -128,6 +131,7 @@ var deniedStd = map[string][]string{
 	"alice/internal/backup/format": pureDenied,
 	// ACME (plan 2026-10-13): key generation and signing requests.
 	"alice/internal/acme/keygen": pureDenied,
+	"alice/internal/acme/renew":  pureDenied,
 }
 
 var pureDenied = []string{"os/...", "net", "net/http/...", "net/rpc/...", "net/smtp", "net/textproto", "net/url", "net/mail",
@@ -342,6 +346,12 @@ func TestAllowed(t *testing.T) {
 		{"http01 to secrets denied", "alice/internal/acme/solver/http01", "alice/internal/secrets", false},
 		{"http01 to platform/db denied", "alice/internal/acme/solver/http01", "alice/internal/platform/db", false},
 		{"acme to http01 denied", "alice/internal/acme", "alice/internal/acme/solver/http01", false},
+		{"renew to time allowed", "alice/internal/acme/renew", "time", true},
+		{"renew to platform denied", "alice/internal/acme/renew", "alice/internal/platform/clock", false},
+		{"renew to platform/db denied", "alice/internal/acme/renew", "alice/internal/platform/db", false},
+		{"renew to acme denied", "alice/internal/acme/renew", "alice/internal/acme", false},
+		{"renew to net/http denied", "alice/internal/acme/renew", "net/http", false},
+		{"inventory to renew allowed", "alice/internal/inventory", "alice/internal/acme/renew", true},
 		{"acme to solver allowed", "alice/internal/acme", "alice/internal/acme/solver", true},
 		{"acme to netaddr allowed", "alice/internal/acme", "alice/internal/platform/netaddr", true},
 		{"keygen to secrets allowed", "alice/internal/acme/keygen", "alice/internal/secrets", true},
