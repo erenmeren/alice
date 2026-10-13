@@ -273,6 +273,19 @@ func getACMECert(ctx context.Context, q db.Querier, id uuid.UUID, forUpdate bool
 	if err != nil {
 		return ACMECertificate{}, fmt.Errorf("inventory: read the ACME certificate: %w", err)
 	}
+	if forUpdate {
+		// Under READ COMMITTED a row lock re-checks only the locked row: the subqueries above kept the snapshot the
+		// statement started with, before a concurrent RequestOrder (or binding) that held the lock committed. Read
+		// them again in statements of their own, which see everything committed before the lock was granted.
+		c.RunningOrderID = nil
+		err := q.QueryRow(ctx, "SELECT id FROM acme_orders WHERE acme_certificate_id = $1 AND state = 'running'", id).Scan(&c.RunningOrderID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return ACMECertificate{}, fmt.Errorf("inventory: read the ACME certificate's running order: %w", err)
+		}
+		if err := q.QueryRow(ctx, "SELECT count(*) FROM acme_bindings WHERE acme_certificate_id = $1", id).Scan(&c.Bindings); err != nil {
+			return ACMECertificate{}, fmt.Errorf("inventory: count the ACME certificate's bindings: %w", err)
+		}
+	}
 	return c, nil
 }
 

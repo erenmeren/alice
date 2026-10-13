@@ -133,38 +133,83 @@ func orderKeyState(ctx context.Context, q db.Querier, orderID uuid.UUID) error {
 const MaxConcurrentACMEKeygens = 2
 
 // BeginACMEOrderKey generates the private key of a running issue order with the key policy of its ACME certificate
-// (read from the database in tx, never taken from the caller; keygen.ErrKeyPolicy for a value keygen does not know)
-// and seals it into the order's pending_key_* columns, in tx (the order is never left with a key that is not
-// committed with it). Generation waits for one of MaxConcurrentACMEKeygens slots. It returns the key's signer for the
-// CSR (keygen.NewCSR) and nothing else; the DER is zeroed before it returns. ErrNotFound, ErrACMEOrderNotRunning,
-// ErrACMEPendingKey (the order has a key already: use LoadPendingKey).
+// (read from the database, never taken from the caller; keygen.ErrKeyPolicy for a value keygen does not know) and
+// seals it into the order's pending_key_* columns, in tx. Generation waits for one of MaxConcurrentACMEKeygens slots;
+// it holds tx's connection meanwhile, so the acme.issue job uses NewACMEOrderKey, which generates before it opens a
+// transaction. It returns the key's signer for the CSR (keygen.NewCSR) and nothing else; the DER is zeroed before it
+// returns. ErrNotFound, ErrACMEOrderNotRunning, ErrACMEPendingKey (the order has a key already: use LoadPendingKey).
 func (s *Service) BeginACMEOrderKey(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) (crypto.Signer, error) {
+	policy, err := orderKeyPolicy(ctx, tx, orderID)
+	if err != nil {
+		return nil, err
+	}
+	key, err := s.generateOrderKey(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	return s.storeOrderKey(ctx, tx, orderID, key)
+}
+
+// NewACMEOrderKey is BeginACMEOrderKey for the acme.issue job: the key policy is read and the key generated (waiting
+// for a keygen slot) WITHOUT a database connection held, then it is sealed and stored in a short transaction of its
+// own (the order was inserted and committed by RequestOrder; a crash between the two leaves an order without a key,
+// which the sweep abandons).
+func (s *Service) NewACMEOrderKey(ctx context.Context, orderID uuid.UUID) (crypto.Signer, error) {
+	policy, err := orderKeyPolicy(ctx, s.pool, orderID)
+	if err != nil {
+		return nil, err
+	}
+	key, err := s.generateOrderKey(ctx, policy)
+	if err != nil {
+		return nil, err
+	}
+	var signer crypto.Signer
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		signer, err = s.storeOrderKey(ctx, tx, orderID, key)
+		return err
+	})
+	if err != nil {
+		key.Zero()
+		return nil, err
+	}
+	return signer, nil
+}
+
+// orderKeyPolicy is the key policy of a running issue order without a key (ErrNotFound, ErrACMEOrderNotRunning,
+// ErrACMEPendingKey, keygen.ErrKeyPolicy).
+func orderKeyPolicy(ctx context.Context, q db.Querier, orderID uuid.UUID) (keygen.KeyPolicy, error) {
 	var keyType string
-	err := tx.QueryRow(ctx, `SELECT c.key_type FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id WHERE o.id = $1`,
+	err := q.QueryRow(ctx, `SELECT c.key_type FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id WHERE o.id = $1`,
 		orderID).Scan(&keyType)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, ErrNotFound
+		return "", ErrNotFound
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inventory: read the ACME order's key policy: %w", err)
+		return "", fmt.Errorf("inventory: read the ACME order's key policy: %w", err)
 	}
-	if err := orderKeyState(ctx, tx, orderID); !errors.Is(err, errOrderKeyFree) {
-		return nil, err
+	if err := orderKeyState(ctx, q, orderID); !errors.Is(err, errOrderKeyFree) {
+		return "", err
 	}
-	policy, err := keygen.ParseKeyPolicy(keyType)
-	if err != nil {
-		return nil, err
-	}
+	return keygen.ParseKeyPolicy(keyType)
+}
+
+// generateOrderKey generates a key in one of the keygen slots (no database connection is involved).
+func (s *Service) generateOrderKey(ctx context.Context, policy keygen.KeyPolicy) (*keygen.Key, error) {
 	select {
 	case s.acmeKeygens <- struct{}{}:
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	key, err := keygen.Generate(policy)
-	<-s.acmeKeygens
-	if err != nil {
-		return nil, err
+	defer func() { <-s.acmeKeygens }()
+	if s.keygenSeam != nil {
+		s.keygenSeam()
 	}
+	return keygen.Generate(policy)
+}
+
+// storeOrderKey seals key (zeroing its DER) into a running issue order without a key, in tx.
+func (s *Service) storeOrderKey(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, key *keygen.Key) (crypto.Signer, error) {
 	env, err := sealPendingKey(s.keyring, orderID, key)
 	if err != nil {
 		return nil, err
@@ -179,21 +224,6 @@ WHERE id = $1 AND state = 'running' AND kind = 'issue' AND pending_key_ct IS NUL
 		return nil, orderKeyState(ctx, tx, orderID)
 	}
 	return key.Signer, nil
-}
-
-// NewACMEOrderKey is BeginACMEOrderKey in its own transaction (the acme.issue job's: the order was inserted and
-// committed by RequestOrder, so a crash between the two leaves an order without a key, which the sweep abandons).
-func (s *Service) NewACMEOrderKey(ctx context.Context, orderID uuid.UUID) (crypto.Signer, error) {
-	var signer crypto.Signer
-	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var err error
-		signer, err = s.BeginACMEOrderKey(ctx, tx, orderID)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	return signer, nil
 }
 
 // LoadPendingKey opens the pending key of a running issue order (crash recovery: the order was begun, the

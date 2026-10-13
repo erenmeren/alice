@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
+	"alice/internal/secrets"
 )
 
 func TestACMEFailureBackoff(t *testing.T) {
@@ -46,6 +48,7 @@ func TestACMEOrderErrorCode(t *testing.T) {
 		{errPendingKeySeal, "acme.secret_unreadable", 0},
 		{keygen.ErrKeyPolicy, acme.ReasonKeyPolicyNotAllowed, 0},
 		{ErrACMEPendingKey, ACMEOrderAbandoned, 0},
+		{ErrNotFound, "system.not_found", 0},
 		{ErrACMEChainMismatch, acme.ReasonDirectoryInvalid, 0},
 		{certs.ErrExpired, acme.ReasonDirectoryInvalid, 0},
 		{context.DeadlineExceeded, acme.ReasonNotIssuedInTime, 0},
@@ -74,3 +77,30 @@ func TestACMECertFieldValidation(t *testing.T) {
 	assert.Equal(t, validate.Errors{{Field: "names", Code: validate.Required}, {Field: "hook_id", Code: validate.Required},
 		{Field: "provider_id", Code: validate.Required}}, verrs)
 }
+
+func TestHookPatchValidation(t *testing.T) {
+	cur := ACMEHook{Name: "dns", URL: "https://dns.example.test/hook", AllowedSuffixes: []string{"example.test"},
+		PropagationWaitSeconds: 5, PollTimeoutSeconds: 60}
+	bad := "x"
+	_, _, errs := validateHookPatch(cur, ACMEHookPatch{Name: ptrTo(""), URL: ptrTo("http://dns.example.test"), CABundlePEM: &bad,
+		AllowedSuffixes: &[]string{"*.bad"}, PropagationWaitSeconds: ptrTo(500), Secret: secretOf("short")})
+	fields := map[string]bool{}
+	for _, fe := range errs {
+		fields[fe.Field] = true
+	}
+	for _, f := range []string{"name", "url", "ca_bundle_pem", "allowed_suffixes", "propagation_wait_seconds", "secret"} {
+		assert.True(t, fields[f], f)
+	}
+	f, changed, errs := validateHookPatch(cur, ACMEHookPatch{Name: ptrTo("dns2"), URL: ptrTo("https://dns2.example.test/hook"),
+		AllowedSuffixes: &[]string{"lab.example.test"}, PollTimeoutSeconds: ptrTo(30), Secret: secretOf("0123456789abcdefXYZ")})
+	assert.Empty(t, errs)
+	assert.Equal(t, []string{"name", "url", "allowed_suffixes", "poll_timeout_seconds", "secret"}, changed)
+	assert.Equal(t, "dns2", f.name)
+	assert.NotNil(t, f.secret)
+	for _, s := range []string{"", "short", strings.Repeat("a", 257), "0123456789abcdef\n"} {
+		assert.NotNil(t, validHookSecret([]byte(s)), "%q", s)
+	}
+	assert.Nil(t, validHookSecret([]byte("0123456789abcdef")))
+}
+
+func secretOf(s string) secrets.Plaintext { return secrets.NewPlaintext([]byte(s)) }

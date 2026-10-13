@@ -79,6 +79,7 @@ type Service struct {
 	acmeKeygens chan struct{} // the slots of concurrent ACME order key generations (BeginACMEOrderKey)
 
 	rolloverSeam rolloverOutcome // tests only: replaces the CA's rollover outcome (crash simulation)
+	keygenSeam   func()          // tests only: runs inside a keygen slot, before an order's key is generated
 }
 
 // New builds the service.

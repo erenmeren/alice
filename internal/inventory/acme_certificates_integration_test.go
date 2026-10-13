@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -521,13 +522,16 @@ func TestACMEPresentedRecordsAndCleanupBookkeeping(t *testing.T) {
 	require.NotNil(t, g.CleanupAt)
 
 	// The sweep queues a cleanup again only after the retry wait.
-	n, err := w.svc.EnqueueACMECleanups(w.ctx, time.Hour)
+	n, err := w.svc.EnqueueACMECleanups(w.ctx, time.Hour, 7*24*time.Hour)
 	require.NoError(t, err)
 	assert.Zero(t, n)
 	w.clock.Advance(61 * time.Minute)
-	n, err = w.svc.EnqueueACMECleanups(w.ctx, time.Hour)
+	n, err = w.svc.EnqueueACMECleanups(w.ctx, time.Hour, 7*24*time.Hour)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
+	n, err = w.svc.EnqueueACMECleanups(w.ctx, time.Hour, time.Hour)
+	require.NoError(t, err)
+	assert.Zero(t, n, "given up on an order that ended longer ago than the limit")
 
 	require.NoError(t, w.svc.RemoveACMEPresented(w.ctx, o.ID, rec("a")))
 	require.NoError(t, w.svc.RemoveACMEPresented(w.ctx, o.ID, rec("c")))
@@ -692,4 +696,223 @@ func TestACMEOrderWorkAndKey(t *testing.T) {
 	cfg.Secret.Zero()
 	_, err = w.svc.ACMEHookCleanupConfig(w.ctx, uuid.New())
 	require.ErrorIs(t, err, inventory.ErrNotFound)
+}
+
+// waitForLockWaiter waits until a session of the database waits for a row lock (the other side of an interleaving).
+func (w *certWorld) waitForLockWaiter() {
+	w.t.Helper()
+	deadline := time.Now().Add(10 * time.Second) //nolint:forbidigo // a wall-clock bound for a database wait
+	for time.Now().Before(deadline) {            //nolint:forbidigo // see above
+		if w.count("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock' AND datname = current_database()") > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	w.t.Fatal("no session waited for the row lock")
+}
+
+// I1: an Update or Delete that waits for the certificate's row lock while a RequestOrder transaction (or a binding)
+// commits sees that order (or binding): the change is refused, never both.
+func TestACMEChangesSeeAConcurrentOrder(t *testing.T) {
+	w := newCertWorld(t)
+	web := w.seedTarget("web-race", "nginx", "race.example.test")
+	for _, tc := range []struct {
+		name    string
+		binding bool
+		change  func(id uuid.UUID) error
+		want    error
+	}{
+		{"names change vs order", false, func(id uuid.UUID) error {
+			_, err := w.svc.UpdateACMECertificate(w.ctx, w.admin, id, inventory.ACMECertificatePatch{Names: &[]string{"other.example.test"}})
+			return err
+		}, inventory.ErrACMEOrderRunning},
+		{"delete vs order", false, func(id uuid.UUID) error { return w.svc.DeleteACMECertificate(w.ctx, w.admin, id) }, inventory.ErrACMEOrderRunning},
+		{"key type vs binding", true, func(id uuid.UUID) error {
+			_, err := w.svc.UpdateACMECertificate(w.ctx, w.admin, id, inventory.ACMECertificatePatch{KeyType: ptr("rsa_2048")})
+			return err
+		}, inventory.ErrACMEKeyTypeLocked},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := w.create(w.dnsInput(strings.ReplaceAll(tc.name, " ", "-") + ".example.test"))
+			tx, err := w.db.App.Begin(w.ctx)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(w.ctx) }()
+			_, err = tx.Exec(w.ctx, "SELECT 1 FROM acme_certificates WHERE id = $1 FOR UPDATE", c.ID)
+			require.NoError(t, err)
+			if tc.binding {
+				loc := uuid.New()
+				_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, first_seen_at, last_seen_at)
+VALUES ($1, $2, 'nginx_file', $3, true, now(), now())`, loc, web, "/etc/nginx/ssl/"+loc.String()+".crt")
+				require.NoError(t, err)
+				_, err = tx.Exec(w.ctx, "INSERT INTO acme_bindings (acme_certificate_id, location_id, created_at) VALUES ($1, $2, now())", c.ID, loc)
+			} else {
+				_, err = tx.Exec(w.ctx, "INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at) VALUES ($1, $2, 'issue', 'running', now())",
+					uuid.New(), c.ID)
+			}
+			require.NoError(t, err)
+			done := make(chan error, 1)
+			go func() { done <- tc.change(c.ID) }()
+			w.waitForLockWaiter()
+			require.NoError(t, tx.Commit(w.ctx))
+			require.ErrorIs(t, <-done, tc.want)
+			got, err := w.svc.GetACMECertificate(w.ctx, c.ID)
+			require.NoError(t, err, "not deleted")
+			assert.Equal(t, c.Names, got.Names)
+			assert.Equal(t, c.KeyType, got.KeyType)
+		})
+	}
+}
+
+// M6: an order's key is generated with no database connection held (the slot wait and the generation run outside
+// any transaction), so a pool of one connection is never starved by key generation.
+func TestACMEOrderKeyHoldsNoConnectionWhileGenerating(t *testing.T) {
+	w := newCertWorld(t)
+	cfg := w.db.App.Config().Copy()
+	cfg.MaxConns = 1
+	tiny, err := pgxpool.NewWithConfig(w.ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(tiny.Close)
+	svc := inventory.New(inventory.Config{Pool: tiny, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
+		Registry: w.reg, Jobs: w.jobs})
+	var held []int32
+	var mu sync.Mutex
+	inventory.SetKeygenSeam(svc, func() {
+		mu.Lock()
+		held = append(held, tiny.Stat().AcquiredConns())
+		mu.Unlock()
+	})
+	var orders []uuid.UUID
+	for i := range 3 {
+		c := w.create(w.dnsInput(fmt.Sprintf("tiny%d.example.test", i)))
+		_, err := w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET key_type = 'rsa_3072' WHERE id = $1", c.ID)
+		require.NoError(t, err)
+		o, err := w.svc.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderIssue)
+		require.NoError(t, err)
+		orders = append(orders, o.ID)
+	}
+	_, err = svc.NewACMEOrderKey(w.ctx, orders[0])
+	require.NoError(t, err)
+	require.Equal(t, []int32{0}, held, "no connection is held while the key is generated")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, id := range orders[1:] {
+		wg.Add(1)
+		go func() { defer wg.Done(); _, err := svc.NewACMEOrderKey(w.ctx, id); errs <- err }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err, "two keys on a one-connection pool")
+	}
+	assert.Equal(t, 3, w.count("SELECT count(*) FROM acme_orders WHERE pending_key_ct IS NOT NULL"))
+}
+
+// A database that cannot be reached: every ACME read and write answers with an error (never a panic, never a
+// half-written row), and nothing reaches a CA.
+func TestACMEWithoutADatabase(t *testing.T) {
+	w := newCertWorld(t)
+	cfg := w.db.App.Config().Copy()
+	cfg.ConnConfig.Host, cfg.ConnConfig.Port = "127.0.0.1", 1
+	cfg.ConnConfig.ConnectTimeout = time.Second
+	gone, err := pgxpool.NewWithConfig(w.ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(gone.Close)
+	svc := inventory.New(inventory.Config{Pool: gone, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
+		Registry: w.reg, Jobs: w.jobs})
+	before := w.requests()
+	id := uuid.New()
+	hook := w.hook.ID
+	in := w.dnsInput("gone.example.test")
+	ctx := w.ctx
+	calls := map[string]func() error{
+		"get certificate":   func() error { _, err := svc.GetACMECertificate(ctx, id); return err },
+		"list certificates": func() error { _, err := svc.ListACMECertificates(ctx); return err },
+		"create":            func() error { _, err := svc.CreateACMECertificate(ctx, w.admin, in); return err },
+		"update": func() error {
+			_, err := svc.UpdateACMECertificate(ctx, w.admin, id, inventory.ACMECertificatePatch{AutoDeploy: ptr(true)})
+			return err
+		},
+		"delete":       func() error { return svc.DeleteACMECertificate(ctx, w.admin, id) },
+		"request":      func() error { _, err := svc.RequestOrder(ctx, w.operator, id, inventory.ACMEOrderIssue); return err },
+		"get order":    func() error { _, err := svc.GetACMEOrder(ctx, id); return err },
+		"list orders":  func() error { _, err := svc.ListACMEOrders(ctx, id, 5); return err },
+		"order work":   func() error { _, err := svc.ACMEOrderWork(ctx, id); return err },
+		"order client": func() error { _, err := svc.ACMEOrderClient(ctx, id); return err },
+		"order url":    func() error { return svc.RecordACMEOrderURL(ctx, id, "https://ca.example.test/o") },
+		"add record":   func() error { return svc.AddACMEPresented(ctx, id, inventory.ACMEPresented{HookID: &hook}) },
+		"remove record": func() error {
+			return svc.RemoveACMEPresented(ctx, id, inventory.ACMEPresented{HookID: &hook})
+		},
+		"test success":   func() error { return svc.SucceedACMETestOrder(ctx, id) },
+		"fail":           func() error { return svc.FailACMEOrder(ctx, id, "acme.hook_refused", 0) },
+		"abort":          func() error { return svc.AbortACMEOrder(ctx, id, "acme.hook_refused") },
+		"cleanup":        func() error { return svc.EnqueueACMECleanup(ctx, id) },
+		"cleanup work":   func() error { _, err := svc.ACMECleanupWork(ctx, id); return err },
+		"record cleanup": func() error { return svc.RecordACMECleanup(ctx, id, "", true) },
+		"stale":          func() error { _, err := svc.StaleACMEOrders(ctx, time.Minute); return err },
+		"cleanups":       func() error { _, err := svc.EnqueueACMECleanups(ctx, time.Hour, time.Hour); return err },
+		"new key":        func() error { _, err := svc.NewACMEOrderKey(ctx, id); return err },
+		"load key":       func() error { _, err := svc.LoadPendingKey(ctx, id); return err },
+		"finish":         func() error { _, err := svc.FinishACMEOrder(ctx, id, [][]byte{{1}}); return err },
+		"hook config":    func() error { _, err := svc.ACMEHookSolverConfig(ctx, hook); return err },
+		"hook cleanup":   func() error { _, err := svc.ACMEHookCleanupConfig(ctx, hook); return err },
+		"get account":    func() error { _, err := svc.GetACMEAccount(ctx, id); return err },
+		"list accounts":  func() error { _, err := svc.ListACMEAccounts(ctx, id); return err },
+		"signer":         func() error { _, _, err := svc.ACMEAccountSigner(ctx, id); return err },
+		"list hooks":     func() error { _, err := svc.ListACMEHooks(ctx); return err },
+		"get hook":       func() error { _, err := svc.GetACMEHook(ctx, id); return err },
+		"list providers": func() error { _, err := svc.ListACMEProviders(ctx); return err },
+		"get provider":   func() error { _, err := svc.GetACMEProvider(ctx, id); return err },
+		"delete hook":    func() error { return svc.DeleteACMEHook(ctx, w.admin, id) },
+		"delete provider": func() error {
+			return svc.DeleteACMEProvider(ctx, w.admin, id)
+		},
+		"register": func() error { _, err := svc.RegisterACMEAccount(ctx, w.admin, id, "", true); return err },
+		"rollover": func() error { _, err := svc.RolloverACMEAccount(ctx, w.admin, id); return err },
+		"recover":  func() error { _, err := svc.RecoverACMERollover(ctx, w.admin, id); return err },
+		"deactivate": func() error {
+			_, err := svc.DeactivateACMEAccount(ctx, w.admin, id)
+			return err
+		},
+	}
+	for name, call := range calls {
+		err := call()
+		assert.Error(t, err, name)
+		assert.NotErrorIs(t, err, inventory.ErrNotFound, name)
+	}
+	assert.Equal(t, before, w.requests(), "no CA was contacted")
+}
+
+// The provider or account an order needs went away after the definition was made.
+func TestACMEOrderWithoutItsProvider(t *testing.T) {
+	w := newCertWorld(t)
+	c := w.create(w.dnsInput("noprov.example.test"))
+	require.ErrorIs(t, w.svc.DeleteACMEHook(w.ctx, w.admin, w.hook.ID), inventory.ErrACMEHookInUse)
+	_, err := w.svc.CreateACMEHook(w.ctx, w.admin, inventory.ACMEHookInput{Name: "DNS", URL: w.fake.Credentials().HookURL,
+		Secret: secrets.NewPlaintext([]byte(w.fake.Credentials().HookSecret)), AllowedSuffixes: []string{"example.test"}})
+	require.ErrorIs(t, err, inventory.ErrACMENameTaken, "hook names are unique, case-insensitively")
+
+	o, err := w.svc.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderTest)
+	require.NoError(t, err)
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE acme_accounts SET state = 'retired' WHERE id = $1", w.account.ID)
+	require.NoError(t, err)
+	_, err = w.svc.ACMEOrderClient(w.ctx, o.ID)
+	require.ErrorIs(t, err, inventory.ErrACMEAccountState, "no active account")
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE acme_providers SET deleted_at = now() WHERE id = $1", w.provider.ID)
+	require.NoError(t, err)
+	_, err = w.svc.ACMEOrderClient(w.ctx, o.ID)
+	require.ErrorIs(t, err, inventory.ErrACMEAccountState, "a deleted provider")
+	require.NoError(t, w.svc.FailACMEOrder(w.ctx, o.ID, "acme.account_state", 0))
+	_, err = w.svc.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderIssue)
+	require.ErrorIs(t, err, inventory.ErrACMEAccountState)
+
+	// A deleted definition: the order's client is refused, and the job's work says so.
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET deleted_at = now() WHERE id = $1", c.ID)
+	require.NoError(t, err)
+	_, err = w.svc.ACMEOrderClient(w.ctx, o.ID)
+	require.ErrorIs(t, err, inventory.ErrNotFound)
+	work, err := w.svc.ACMEOrderWork(w.ctx, o.ID)
+	require.NoError(t, err)
+	assert.True(t, work.Deleted)
 }

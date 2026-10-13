@@ -207,3 +207,6 @@ func (s *Service) SetACMERolloverSeam(f func(acme.RolloverOutcome) acme.Rollover
 func (s *Service) OpenACMEEAB(ctx context.Context, id uuid.UUID) (string, secrets.Plaintext, error) {
 	return s.openEAB(ctx, s.pool, id)
 }
+
+// SetKeygenSeam runs f inside a keygen slot before an ACME order's key is generated (tests only).
+func SetKeygenSeam(s *Service, f func()) { s.keygenSeam = f }

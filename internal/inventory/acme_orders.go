@@ -248,6 +248,8 @@ type ACMEOrderWork struct {
 	ProviderID       uuid.UUID
 	ProviderSuffixes []string
 	HookSuffixes     []string // nil without a hook (or a deleted one: then nothing is admitted)
+	// Deleted: the ACME certificate was deleted (the job ends the order without contacting the CA).
+	Deleted bool
 }
 
 // ACMEOrderWork reads an order with its certificate, provider and hook (ErrNotFound).
@@ -258,10 +260,10 @@ func (s *Service) ACMEOrderWork(ctx context.Context, orderID uuid.UUID) (ACMEOrd
 	}
 	w := ACMEOrderWork{Order: o}
 	err = s.pool.QueryRow(ctx, `SELECT o.order_url, o.pending_key_ct IS NOT NULL, c.names, c.challenge, c.hook_id, c.http_target_id, c.provider_id,
-    p.allowed_suffixes, (SELECT h.allowed_suffixes FROM acme_hooks h WHERE h.id = c.hook_id AND h.deleted_at IS NULL)
+    p.allowed_suffixes, (SELECT h.allowed_suffixes FROM acme_hooks h WHERE h.id = c.hook_id AND h.deleted_at IS NULL), c.deleted_at IS NOT NULL
 FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id JOIN acme_providers p ON p.id = c.provider_id
 WHERE o.id = $1`, orderID).Scan(&w.OrderURL, &w.HasKey, &w.Names, &w.Challenge, &w.HookID, &w.HTTPTargetID, &w.ProviderID,
-		&w.ProviderSuffixes, &w.HookSuffixes)
+		&w.ProviderSuffixes, &w.HookSuffixes, &w.Deleted)
 	if err != nil {
 		return ACMEOrderWork{}, fmt.Errorf("inventory: read the ACME order's certificate: %w", err)
 	}
@@ -282,12 +284,12 @@ func (w ACMEOrderWork) NamesAllowed() bool {
 // certificate is moved to it when it still names an older one, e.g. after a directory change), its key
 // (ACMEAccountSigner: ErrACMERolloverPending while a key change is unsettled), the guarded transport with the
 // provider's bundle. ErrACMEAccountState when the provider is deleted or has no active account; ErrACMEOrderNotRunning
-// for an order that ended.
+// for an order that ended; ErrNotFound for an unknown order or a deleted ACME certificate.
 func (s *Service) ACMEOrderClient(ctx context.Context, orderID uuid.UUID) (*acme.Client, error) {
 	var state string
 	var certID, providerID, accountID uuid.UUID
 	err := s.pool.QueryRow(ctx, `SELECT o.state, c.id, c.provider_id, c.account_id FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id
-WHERE o.id = $1`, orderID).Scan(&state, &certID, &providerID, &accountID)
+WHERE o.id = $1 AND c.deleted_at IS NULL`, orderID).Scan(&state, &certID, &providerID, &accountID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return nil, ErrNotFound
@@ -540,6 +542,8 @@ type ACMEStaleOrder struct {
 	OrderURL  string
 	HasKey    bool
 	StartedAt time.Time
+	Presented int  // records still listed (published, or about to be)
+	Deleted   bool // the ACME certificate was deleted
 }
 
 // maxACMESweepBatch bounds one sweep step.
@@ -548,7 +552,8 @@ const maxACMESweepBatch = 50
 // StaleACMEOrders lists running orders started more than olderThan ago that no running acme.issue job holds
 // (oldest first, at most 50).
 func (s *Service) StaleACMEOrders(ctx context.Context, olderThan time.Duration) ([]ACMEStaleOrder, error) {
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, c.names, o.order_url, o.pending_key_ct IS NOT NULL, o.started_at
+	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, c.names, o.order_url, o.pending_key_ct IS NOT NULL, o.started_at,
+    jsonb_array_length(o.presented), c.deleted_at IS NOT NULL
 FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id
 WHERE o.state = 'running' AND o.started_at < $1
   AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.type = 'acme.issue' AND j.status = 'running' AND j.payload->>'order_id' = o.id::text)
@@ -560,7 +565,7 @@ ORDER BY o.started_at, o.id LIMIT $2`, s.clock.Now().UTC().Add(-olderThan), maxA
 	var out []ACMEStaleOrder
 	for rows.Next() {
 		var o ACMEStaleOrder
-		if err := rows.Scan(&o.ID, &o.Kind, &o.Names, &o.OrderURL, &o.HasKey, &o.StartedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.Kind, &o.Names, &o.OrderURL, &o.HasKey, &o.StartedAt, &o.Presented, &o.Deleted); err != nil {
 			return nil, fmt.Errorf("inventory: read a stale ACME order: %w", err)
 		}
 		out = append(out, o)
@@ -568,14 +573,17 @@ ORDER BY o.started_at, o.id LIMIT $2`, s.clock.Now().UTC().Add(-olderThan), maxA
 	return out, rows.Err()
 }
 
-// EnqueueACMECleanups queues the acme.cleanup job of every ended order that still lists records and whose last
-// cleanup attempt is older than retryAfter (or that never had one: a job lost before it ran); at most 50 per call.
-// It returns how many orders it asked for (a live job of an order answers again, dedupe).
-func (s *Service) EnqueueACMECleanups(ctx context.Context, retryAfter time.Duration) (int, error) {
+// EnqueueACMECleanups queues the acme.cleanup job of every ended order that still lists records, whose last cleanup
+// attempt is older than retryAfter (or that never had one: a job lost before it ran) and that ended less than giveUpAfter
+// ago (after that the records stay listed with the last failure on the order and its audit row acme.order.cleanup_failed:
+// a hook or a server that is gone for good is not asked forever); at most 50 per call. It returns how many orders it
+// asked for (a live job of an order answers again, dedupe).
+func (s *Service) EnqueueACMECleanups(ctx context.Context, retryAfter, giveUpAfter time.Duration) (int, error) {
 	n := 0
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT id FROM acme_orders WHERE state <> 'running' AND presented <> '[]'::jsonb
-AND (cleanup_at IS NULL OR cleanup_at < $1) ORDER BY finished_at, id LIMIT $2`, s.clock.Now().UTC().Add(-retryAfter), maxACMESweepBatch)
+AND (cleanup_at IS NULL OR cleanup_at < $1) AND finished_at > $3 ORDER BY finished_at, id LIMIT $2`, s.clock.Now().UTC().Add(-retryAfter),
+			maxACMESweepBatch, s.clock.Now().UTC().Add(-giveUpAfter))
 		if err != nil {
 			return fmt.Errorf("inventory: list the ACME orders to clean up: %w", err)
 		}
@@ -642,6 +650,8 @@ func ACMEOrderErrorCode(err error) (string, time.Duration) {
 		return acme.ReasonKeyPolicyNotAllowed, 0
 	case errors.Is(err, ErrACMEPendingKey):
 		return ACMEOrderAbandoned, 0
+	case errors.Is(err, ErrNotFound):
+		return "system.not_found", 0
 	case ACMEFinishRefused(err):
 		return acme.ReasonDirectoryInvalid, 0 // the CA's certificate does not fit the order
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
