@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/acme"
 	"alice/internal/i18n"
 	"alice/locales"
 )
@@ -79,5 +80,16 @@ func TestACMEErrorCodesAreCatalogued(t *testing.T) {
 			}
 		}
 		assert.NotEqual(t, cat.T("en", "errors."+c.Reason+".title", nil), cat.T("tr", "errors."+c.Reason+".title", nil), "%s is translated", c.Code)
+	}
+}
+
+// The ACME client keeps its own reason strings (it does not import the API); every one of them must be a
+// registered ALC-ACM reason, so a renamed or removed code fails here.
+func TestACMEClientReasonsAreRegistered(t *testing.T) {
+	require.NotEmpty(t, acme.Reasons())
+	for _, r := range acme.Reasons() {
+		c := codeForReason(r)
+		assert.NotEqual(t, ErrUnexpected, c, r)
+		assert.True(t, strings.HasPrefix(c.Code, "ALC-ACM-"), r)
 	}
 }

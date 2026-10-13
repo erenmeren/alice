@@ -56,6 +56,10 @@ var rules = map[string][]string{
 	"alice/internal/auth/oidc/claims": {platform, "alice/internal/rbac/..."},
 	// ACME (plan 2026-10-13): the guarded outbound transport knows the platform and nothing else.
 	"alice/internal/acme/transport": {"alice/internal/platform/netaddr"},
+	// The ACME client wraps golang.org/x/crypto/acme: the transport, the solver contract and the platform, never
+	// the API or the inventory (they call it, not the other way round). The solver contract knows the platform only.
+	"alice/internal/acme":        {platform, "alice/internal/acme/transport", "alice/internal/acme/solver"},
+	"alice/internal/acme/solver": {platform},
 	// Phase 8: the backup container is pure (io.Reader/io.Writer only, no file, socket or database); the dump
 	// knows no other Alice module; the backup module runs the dump, the container and the restore; the audit
 	// forwarder reads the audit log and nothing else.
@@ -86,6 +90,8 @@ var denied = map[string][]string{
 	"alice/internal/auth/oidc/claims":                {"alice/internal/platform/db/..."},
 	"alice/internal/platform/csvx":                   {"alice/internal/platform/db/..."},
 	"alice/internal/backup/format":                   {platform, "alice/internal/platform/db/..."},
+	"alice/internal/acme":                            {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver":                     {"alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -296,6 +302,20 @@ func TestAllowed(t *testing.T) {
 		{"acme transport to platform allowed", "alice/internal/acme/transport", "alice/internal/platform/netaddr", true},
 		{"acme transport to secrets denied", "alice/internal/acme/transport", "alice/internal/secrets", false},
 		{"acme transport to platform/db denied", "alice/internal/acme/transport", "alice/internal/platform/db", false},
+		{"acme to transport allowed", "alice/internal/acme", "alice/internal/acme/transport", true},
+		{"acme to solver allowed", "alice/internal/acme", "alice/internal/acme/solver", true},
+		{"acme to netaddr allowed", "alice/internal/acme", "alice/internal/platform/netaddr", true},
+		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},
+		{"acme to api denied", "alice/internal/acme", "alice/internal/api", false},
+		{"acme to inventory denied", "alice/internal/acme", "alice/internal/inventory", false},
+		{"acme to secrets denied", "alice/internal/acme", "alice/internal/secrets", false},
+		{"acme to platform/db denied", "alice/internal/acme", "alice/internal/platform/db", false},
+		{"acme to fakeacme denied", "alice/internal/acme", "alice/internal/testutil/fakeacme", false},
+		{"solver to platform allowed", "alice/internal/acme/solver", "alice/internal/platform/netaddr", true},
+		{"solver to acme denied", "alice/internal/acme/solver", "alice/internal/acme", false},
+		{"solver to transport denied", "alice/internal/acme/solver", "alice/internal/acme/transport", false},
+		{"solver to api denied", "alice/internal/acme/solver", "alice/internal/api", false},
+		{"solver to inventory denied", "alice/internal/acme/solver", "alice/internal/inventory", false},
 		{"csvx to os denied", "alice/internal/platform/csvx", "os", false},
 		{"notify to audit allowed", "alice/internal/notify", "alice/internal/audit", true},
 		{"notify to inventory denied", "alice/internal/notify", "alice/internal/inventory", false},
