@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased — Certificates from certificate authorities (ACME)
+
+**Added**
+- Alice gets, renews and deploys certificates from a certificate authority that speaks ACME (RFC 8555): Let's
+  Encrypt, ZeroSSL, or your own (step-ca, EJBCA, an ACME gateway). **Settings → Certificate authorities**
+  (administrators): authorities with an optional CA bundle and external account binding, one account per authority
+  (terms shown before you accept them, account key rotation and deactivation), DNS hooks, and per authority and hook
+  the domain endings Alice may request (an empty list allows nothing).
+- New page **Issued certificates** (`/acme`, every role): the list, a status page per certificate (renewal, orders,
+  current certificate, websites), the **Get a certificate** wizard (administrators), **Test run** (checks the names
+  without issuing anything), **Get certificate now** / **Order now**, **Deploy now**, connecting websites, **Renew
+  now** and **Release** (administrators).
+- Proof of the names by a DNS hook (DNS-01; a small HTTPS service of yours, also for wildcards) or by a file on an
+  Nginx server (HTTP-01; the server's administrator publishes one directory with three Nginx lines; Alice never edits
+  the Nginx configuration).
+- Automatic renewal (default 30 days before expiry, or at a third of the lifetime, earlier when the authority's
+  renewal information suggests it), with growing waits after failures, an e-mail after 3 failures and a stop after 5.
+  Automatic deployment through the existing verified deployment (same checks, same automatic undo), in groups of 5,
+  stopped after 3 failures; certificates with an incomplete chain or received before the license allowed changes
+  again are held for an administrator.
+- Error codes `ALC-ACM-0001` to `ALC-ACM-0036` and `ALC-SSH-0013` ([docs/troubleshooting.md](docs/troubleshooting.md)).
+- API: 29 routes under `/api/v1/acme/` (permissions `acme.view`, `acme.operate`, `acme.manage`, `acme.preview`; see
+  `docs/authz-matrix.md`); certificates gain the source `acme`, deployments the trigger `acme_renewal`.
+- `make fuzz-acme` (`fuzz-acme-docs`, `fuzz-acme-order`), part of the nightly and release fuzzing.
+
+**Security**
+- Nothing is contacted until an administrator sets up an authority. Every connection to an authority or a hook is
+  https only (also for the addresses the authority's answers name), follows no redirect, ignores proxy settings, reads
+  at most 1 MiB and uses Alice's address rule (no link-local or metadata addresses). The web proof's own check is plain
+  HTTP to port 80 of the name. The new outbound connections are in `docs/security-overview.md`.
+- Account keys, external account keys and hook secrets are stored encrypted with the master key, are write-only, and
+  never appear in an API answer, log, audit entry, task or e-mail (a leak test checks this with planted values).
+- Only administrators, with a fresh code and never with an API token, add authorities, hooks and names, and switch
+  automatic deployment on. Operators can test, order, deploy and connect websites with automatic deployment off.
+- While the license is locked no authority, hook or server is contacted for certificates.
+
+**Upgrade notes**
+- Migration `00013` adds the ACME tables and extends the certificate source and deployment trigger values (its Down
+  turns `acme` certificates into `uploaded` and `acme_renewal` deployments into `retry`).
+- `alice-helper` 1.6.0 (protocol 7) adds `acme-challenge-put` and `acme-challenge-rm` and two sudoers lines in the
+  `nginx` profile. Servers with helper 1.5.0 (protocol 6) keep working for everything else; only the HTTP-01 proof on
+  a server needs the new helper and setup commands ([docs/nginx-host-preparation.md](docs/nginx-host-preparation.md)).
+- A restore switches automatic renewal off on every certificate from a certificate authority; switch it on again on
+  each certificate's page when the restored installation is the one in use.
+- No new Go module or npm package; `THIRD_PARTY_NOTICES.md` is unchanged.
+- Not verified against a real certificate authority, real DNS or real renewal information: try it with **Let's
+  Encrypt (staging, for tests)** first. Limits of this version (no revocation, no HTTPS proxy, no built-in DNS
+  providers, no TLS-ALPN-01): [docs/admin-guide.md](docs/admin-guide.md#certificate-authorities-acme). Rulings:
+  `docs/superpowers/rulings/acme-issuance.md`; review: `docs/security/reviews/acme-issuance.md`.
+
 ## Unreleased — Phase 9: the Clarity design
 
 **Changed**
