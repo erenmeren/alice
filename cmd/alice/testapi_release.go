@@ -41,6 +41,9 @@ const acmeSweepEvery = time.Minute
 // acmeScheduleEvery is the interval of the ACME renewal planner (acme.schedule; design row 6).
 const acmeScheduleEvery = time.Minute
 
+// acmeAutoDeployEvery is the interval of the ACME automatic deployment planner (acme.auto_deploy; design row 7).
+const acmeAutoDeployEvery = time.Minute
+
 // rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
 // rotation tasks (contract C1: rotation.plan and rotation.sweep every minute, sshkey.destroy_retired
 // every hour). The sweep's minute keeps a removal well inside the 15-minute bound of its re-check

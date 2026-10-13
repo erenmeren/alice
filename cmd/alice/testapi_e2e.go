@@ -71,6 +71,11 @@ const acmeSweepEvery = 100 * 365 * 24 * time.Hour
 // {"task": "acme.schedule"}.
 const acmeScheduleEvery = 100 * 365 * 24 * time.Hour
 
+// acmeAutoDeployEvery is the ACME automatic deployment planner's interval in the e2e build: in effect never, like the
+// Key Vault planner (the demo clock would otherwise deploy between two Playwright steps). The task stays scheduled
+// (checkWiring, RunNow): the journeys run it with POST /test/scheduler/run {"task": "acme.auto_deploy"}.
+const acmeAutoDeployEvery = 100 * 365 * 24 * time.Hour
+
 // rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
 // rotation tasks in the e2e build: in effect never, like the sweep (the demo clock would otherwise
 // plan, advance or finish a run between two Playwright steps). The tasks stay scheduled (checkWiring,

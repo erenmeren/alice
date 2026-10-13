@@ -85,7 +85,7 @@ func TestServeSchedulerTasksRun(t *testing.T) {
 
 	for _, task := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup, jobs.DiscoverySchedule,
 		jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy, jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired,
-		jobs.AlertsScan, jobs.ACMESchedule, jobs.ACMESweep} {
+		jobs.AlertsScan, jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep} {
 		require.NoError(t, sched.RunNow(ctx, task.Name), task.Name)
 	}
 
