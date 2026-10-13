@@ -71,9 +71,9 @@ describe('AppLayout single sign-on refusal', () => {
 
 describe('AppLayout shell', () => {
   it.each([
-    [adminSession, ['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Settings', 'License', 'Your account', 'API tokens']],
-    [operatorSession, ['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Your account', 'API tokens']],
-    [auditorSession, ['Overview', 'Certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'License', 'Your account', 'API tokens']],
+    [adminSession, ['Overview', 'Certificates', 'Issued certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Settings', 'License', 'Your account', 'API tokens']],
+    [operatorSession, ['Overview', 'Certificates', 'Issued certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Your account', 'API tokens']],
+    [auditorSession, ['Overview', 'Certificates', 'Issued certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'License', 'Your account', 'API tokens']],
   ])('renders the destinations of each role, in the design’s groups', async (session, expected) => {
     server.use(...sessionHandlers(session));
     await renderRoute('/');

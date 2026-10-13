@@ -89,3 +89,54 @@
 .helpBody > p {
   margin: 0;
 }
+
+/* Get a certificate: the step rail (the setup wizard's rail, laid out across the dialog) and the step heading. */
+.rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0 0 12px;
+  list-style: none;
+  border-bottom: 1px solid var(--alice-border);
+  font-size: 12px;
+  color: var(--alice-text-muted);
+}
+.railItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.railItem[data-state='current'] {
+  color: var(--alice-text);
+  font-weight: 600;
+}
+.railItem[data-state='done'] {
+  color: var(--alice-text-secondary);
+}
+.railNumber {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--alice-border);
+  border-radius: 50%;
+  font-size: 11px;
+}
+.railItem[data-state='current'] .railNumber {
+  border-color: var(--alice-brand);
+  color: var(--alice-brand);
+}
+.railItem[data-state='done'] .railNumber {
+  background: var(--alice-success-soft);
+  color: var(--alice-success);
+  border-color: transparent;
+}
+.stepTitle {
+  margin: 0;
+}
+.stepTitle:focus-visible {
+  outline: 3px solid var(--alice-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

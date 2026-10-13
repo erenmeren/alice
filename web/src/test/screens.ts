@@ -1,5 +1,5 @@
 import type { SessionInfo, SetupStatus } from '../api/types';
-import { freshStatus, installedStatus, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
+import { ACME_CERT_ID, freshStatus, installedStatus, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
 
 export interface Screen {
   path: string;
@@ -100,6 +100,11 @@ export const SCREENS: Screen[] = [
     status: installedStatus,
     ready: { en: 'Where this certificate is used', tr: 'Bu sertifika nerede kullanılıyor?' },
   },
+  // The ACME work: Issued certificates (the list and a status page with every panel filled).
+  { path: '/acme', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Renews automatically', tr: 'Kendiliğinden yenilenir' } },
+  { path: '/acme', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Next renewal', tr: 'Sonraki yenileme' } },
+  { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'Websites using this certificate', tr: 'Bu sertifikayı kullanan web siteleri' } },
+  { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Automatic renewal stopped', tr: 'Otomatik yenileme durdu' } },
   {
     path: `/servers/${nginxTargetFixture.id}`,
     session: sessionFor('operator'),

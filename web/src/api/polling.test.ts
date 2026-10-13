@@ -7,6 +7,7 @@ import { watchDeployments } from './deployments';
 import { getDeployment, getLicenseStatus, getTarget, listAudit, listJobs } from './endpoints';
 import { waitForJob } from './jobs';
 import { getKVImport } from './keyvault';
+import { getACMECertificate, listACMEOrders } from './acme';
 
 // AUD-01 follow-up: a request the SPA sends by itself (a poll) must never be state-changing: the
 // server slides a session's idle timeout on any non-GET request, so an automatic POST would keep
@@ -47,6 +48,8 @@ describe('polling', () => {
       'components/KVDeployDialog.tsx',
       'components/NotificationsBanner.tsx',
       'components/RemoveKeyDialog.tsx',
+      // an issued certificate and its orders while an order runs (getACMECertificate, listACMEOrders: GETs)
+      'pages/AcmeCertificatePage.tsx',
       'pages/DashboardPage.tsx',
       'pages/DeploymentDetailPage.tsx',
       'pages/KeyVaultDetailPage.tsx',
@@ -69,6 +72,8 @@ describe('polling', () => {
       http.get('/api/v1/deployments/:id', ({ params }) => HttpResponse.json(deploymentDetailFixture({ id: String(params.id) }))),
       http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ status: 'succeeded' }))),
       http.get('/api/v1/targets/:id/kv/imports/:import', () => HttpResponse.json({})),
+      http.get('/api/v1/acme/certificates/:id', () => HttpResponse.json({})),
+      http.get('/api/v1/acme/certificates/:id/orders', () => HttpResponse.json({ items: [] })),
     );
     await getLicenseStatus();
     await getLicenseStatus({ keepalive: true });
@@ -77,7 +82,9 @@ describe('polling', () => {
     await waitForJob('j1', { intervalMs: 1 });
     await getKVImport('v1', 'i1');
     await watchDeployments(['d1', 'd2'], { intervalMs: 1 });
-    expect(methods.length).toBeGreaterThanOrEqual(6);
+    await getACMECertificate('a1');
+    await listACMEOrders('a1', 20);
+    expect(methods.length).toBeGreaterThanOrEqual(8);
     expect(methods.filter((m) => !m.startsWith('GET '))).toEqual([]);
   });
 });

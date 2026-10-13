@@ -5,6 +5,8 @@ import { SessionActivity } from './auth/SessionActivity';
 import { StepUpProvider } from './components/StepUpProvider';
 import { AppLayout } from './layout/AppLayout';
 import { AccountPage } from './pages/AccountPage';
+import { AcmeCertificatePage } from './pages/AcmeCertificatePage';
+import { AcmeCertificatesPage } from './pages/AcmeCertificatesPage';
 import { AuditPage } from './pages/AuditPage';
 import { CertificateDetailPage } from './pages/CertificateDetailPage';
 import { CertificatesPage } from './pages/CertificatesPage';
@@ -67,6 +69,9 @@ export function routes(): RouteObject[] {
             { path: 'key-vaults/:vaultId/certificates/:id', element: <KVCertificatePage /> },
             { path: 'certificates', element: <CertificatesPage /> },
             { path: 'certificates/:id', element: <CertificateDetailPage /> },
+            // Issued certificates (ACME): every role reads them (acme.view); the pages hide what a role cannot do.
+            { path: 'acme', element: <AcmeCertificatesPage /> },
+            { path: 'acme/:id', element: <AcmeCertificatePage /> },
             { path: 'deployments', element: <DeploymentsPage /> },
             { path: 'deployments/:id', element: <DeploymentDetailPage /> },
             { path: 'ssh-keys', element: <SSHKeysPage /> },

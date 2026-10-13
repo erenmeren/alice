@@ -1,5 +1,5 @@
 import { http, HttpResponse } from 'msw';
-import type { ACMEAccount, ACMECertificate, ACMEHook, ACMEProvider } from '../api/acme';
+import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
 import type { DashboardSummary } from '../api/phase7';
 import type { Provider } from '../api/sso';
 import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
@@ -1031,6 +1031,55 @@ export function acmeCertificateFixture(o: Partial<ACMECertificate> = {}): ACMECe
     bindings_count: 0,
     created_at: '2026-10-13T08:00:00Z',
     updated_at: '2026-10-13T08:00:00Z',
+    ...o,
+  };
+}
+
+// Issued certificates: an order of the ACME certificate, its current certificate and a website bound to it.
+export const ACME_ORDER_ID = '0192f000-0000-7000-8000-0000000000a5';
+export const ACME_CURRENT_ID = '0192f000-0000-7000-8000-0000000000a6';
+
+export function acmeOrderFixture(o: Partial<ACMEOrder> = {}): ACMEOrder {
+  return {
+    id: ACME_ORDER_ID,
+    acme_certificate_id: ACME_CERT_ID,
+    kind: 'issue',
+    state: 'succeeded',
+    trigger: 'manual',
+    started_at: '2026-10-13T09:00:00Z',
+    finished_at: '2026-10-13T09:01:00Z',
+    error: null,
+    certificate_id: ACME_CURRENT_ID,
+    requested_by: null,
+    presented: 0,
+    cleanup_at: null,
+    cleanup_error: null,
+    ...o,
+  };
+}
+
+export const acmeCurrentFixture = (o: Partial<NonNullable<ACMECertificate['current']>> = {}): NonNullable<ACMECertificate['current']> => ({
+  id: ACME_CURRENT_ID,
+  fingerprint_sha256: '0123456789abcdef'.repeat(4),
+  not_before: '2026-10-13T09:00:00Z',
+  not_after: '2099-01-11T09:00:00Z',
+  chain_complete: true,
+  ...o,
+});
+
+export function acmeBindingFixture(o: Partial<ACMEBinding> = {}): ACMEBinding {
+  return {
+    acme_certificate_id: ACME_CERT_ID,
+    location_id: LOCATION_ID,
+    target_id: nginxTargetFixture.id,
+    target_name: 'web-nginx',
+    cert_path: '/etc/nginx/ssl/www.crt',
+    auto_deploy: false,
+    state: 'current',
+    attention_at: null,
+    attention: null,
+    served_certificate_id: ACME_CURRENT_ID,
+    created_at: '2026-10-13T09:05:00Z',
     ...o,
   };
 }

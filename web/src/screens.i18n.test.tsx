@@ -43,6 +43,9 @@ import {
   acmeCertificateFixture,
   acmeHookFixture,
   acmeProviderFixture,
+  acmeBindingFixture,
+  acmeCurrentFixture,
+  acmeOrderFixture,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -171,6 +174,41 @@ const dataHandlers = [
   ),
   http.get('/api/v1/acme/hooks', () => HttpResponse.json({ items: [acmeHookFixture(), acmeHookFixture({ id: 'h2', name: 'Other DNS', allowed_suffixes: [], secret_configured: false })] })),
   http.get('/api/v1/acme/certificates', () => HttpResponse.json({ items: [acmeCertificateFixture()], next_cursor: null })),
+  // An issued certificate whose renewal stopped, held for the license, with every kind of website and order.
+  http.get('/api/v1/acme/certificates/:id', () =>
+    HttpResponse.json(
+      acmeCertificateFixture({
+        state: 'stopped',
+        stopped_reason: 'renewal_failures',
+        failures: 5,
+        last_attempt_at: '2026-10-13T10:00:00Z',
+        last_error: { code: 'ALC-ACM-0008', reason: 'acme.hook_refused' },
+        current: acmeCurrentFixture({ chain_complete: false }),
+        ari_window: { start: '2098-12-01T00:00:00Z', end: '2098-12-03T00:00:00Z' },
+        deploy_held_reason: 'license',
+        deploy_stopped: true,
+        auto_deploy: true,
+      }),
+    ),
+  ),
+  http.get('/api/v1/acme/certificates/:id/orders', () =>
+    HttpResponse.json({
+      items: [
+        acmeOrderFixture({ kind: 'test', state: 'failed', trigger: 'renewal', error: { code: 'ALC-ACM-0006', reason: 'acme.validation_failed_dns' } }),
+        acmeOrderFixture({ id: 'o2', state: 'succeeded' }),
+        acmeOrderFixture({ id: 'o3', state: 'running', finished_at: null, cleanup_error: { code: 'ALC-ACM-0008', reason: 'acme.hook_refused' } }),
+      ],
+    }),
+  ),
+  http.get('/api/v1/acme/certificates/:id/bindings', () =>
+    HttpResponse.json({
+      items: [
+        acmeBindingFixture({ auto_deploy: true }),
+        acmeBindingFixture({ location_id: 'l2', state: 'pending', served_certificate_id: 'older' }),
+        acmeBindingFixture({ location_id: 'l3', state: 'attention', served_certificate_id: null, attention_at: '2026-10-13T10:00:00Z', attention: { code: 'ALC-ACM-0033', reason: 'acme.deploy_stopped' } }),
+      ],
+    }),
+  ),
   http.post('/api/v1/acme/providers/:id/preview', () =>
     HttpResponse.json({ terms_of_service_url: 'https://ca.example.com/terms', terms_url_unsafe: false, external_account_required: true, key_change_supported: true, renewal_info_supported: true, website: '' }),
   ),
@@ -383,5 +421,57 @@ describe.each(['en', 'tr'] as const)('the certificate authority dialogs in %s', 
     await openAndClose(screen.getByRole('button', { name: t('Add DNS hook', 'DNS kancası ekle') }));
     await openAndClose(screen.getAllByRole('button', { name: t('Edit Internal DNS', 'Internal DNS öğesini düzenle') })[0]);
     await openAndClose(screen.getAllByRole('button', { name: t('Remove Internal DNS', 'Internal DNS öğesini kaldır') })[0]);
+  });
+});
+
+describe.each(['en', 'tr'] as const)('the issued certificate dialogs in %s', (lang) => {
+  it('open the wizard steps and the status page dialogs with no untranslated keys', async () => {
+    const admin = sessionFor('admin');
+    server.use(
+      ...sessionHandlers({ ...admin, user: { ...admin.user, locale: lang }, stepup_until: '2099-01-01T00:00:00Z' }, installedStatus),
+      http.get('/api/v1/acme/providers', () => HttpResponse.json({ items: [acmeProviderFixture(), acmeProviderFixture({ id: 'p2', name: 'Corp CA', active_account_id: null })] })),
+      http.get('/api/v1/certificate-locations', () => HttpResponse.json({ items: [{ id: 'dl1', target_id: 't1', target_name: 'web-a', cert_path: '/a.crt', key_path: '/a.key', key_type: 'ecdsa', server_names: [], binding_id: 'kv' }], next_cursor: null })),
+      ...dataHandlers,
+    );
+    const t = (en: string, tr: string) => (lang === 'en' ? en : tr);
+    const { router } = await renderRoute('/acme', { languages: [lang] });
+    await userEvent.click(await screen.findByRole('button', { name: t('Get a certificate', 'Sertifika al') }));
+    const wizard = await screen.findByRole('dialog', { name: t('Get a certificate', 'Sertifika al') });
+    await within(wizard).findByRole('radio', { name: 'LE staging' });
+    expectNoRawKeys();
+    await userEvent.click(within(wizard).getByRole('radio', { name: 'LE staging' }));
+    const next = () => userEvent.click(within(wizard).getByRole('button', { name: t('Next', 'İleri') }));
+    await next();
+    await userEvent.type(within(wizard).getByRole('textbox', { name: t('Name', 'Ad') }), 'www.other.org{Enter}');
+    expectNoRawKeys();
+    await next();
+    await userEvent.click(within(wizard).getByRole('radio', { name: t('Web proof (file on the web server)', 'Web kanıtı (web sunucusunda bir dosya)') }));
+    await next();
+    expectNoRawKeys();
+    await userEvent.click(within(wizard).getByRole('radio', { name: t('DNS proof (DNS hook)', 'DNS kanıtı (DNS kancası)') }));
+    await userEvent.selectOptions(within(wizard).getByLabelText(t('DNS hook', 'DNS kancası')), acmeHookFixture().id);
+    await next();
+    expectNoRawKeys();
+    await next();
+    expectNoRawKeys();
+    await userEvent.click(within(wizard).getByRole('button', { name: t('Cancel', 'İptal') }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await router.navigate(`/acme/${acmeCertificateFixture().id}`);
+    await screen.findByText(t('Websites using this certificate', 'Bu sertifikayı kullanan web siteleri'));
+    const cancel = t('Cancel', 'İptal');
+    const openAndClose = async (button: HTMLElement) => {
+      await userEvent.click(button);
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).queryAllByRole('status', { name: /Loading|Yükleniyor/ })).toEqual([]));
+      expectNoRawKeys();
+      await userEvent.click(within(dialog).getByRole('button', { name: cancel }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    };
+    await openAndClose(screen.getByRole('button', { name: t('Delete', 'Sil') }));
+    await openAndClose(screen.getByRole('button', { name: t('Add websites', 'Web sitesi ekle') }));
+    await openAndClose(screen.getByRole('button', { name: t('Deploy now', 'Şimdi dağıt') }));
+    await openAndClose(screen.getAllByRole('button', { name: new RegExp(t('^Remove ', ' öğesini kaldır$')) })[0]);
+    await openAndClose(screen.getAllByRole('switch', { name: new RegExp(t('^Automatic deployment for', 'için otomatik dağıtım$')) })[1]);
   });
 });
