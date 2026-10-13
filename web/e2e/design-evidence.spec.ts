@@ -14,7 +14,7 @@ const ROUTES: [string, string][] = [
   ['overview', '/'], ['assurance', '/?view=assurance'], ['certificates', '/certificates'], ['ssh-keys', '/ssh-keys'],
   ['servers', '/servers'], ['key-vaults', '/key-vaults'], ['deployments', '/deployments'], ['rotations', '/rotations'],
   ['audit', '/audit'], ['people', '/users'], ['license', '/license'], ['account', '/account'], ['tokens', '/tokens'],
-  ...(['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'forwarding', 'sso'] as const).map((tab): [string, string] => [`settings-${tab}`, `/settings?tab=${tab}`]),
+  ...(['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso'] as const).map((tab): [string, string] => [`settings-${tab}`, `/settings?tab=${tab}`]),
 ];
 const shots: string[] = [];
 

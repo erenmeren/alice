@@ -280,7 +280,7 @@ design, the product and the tests:
 
 | Screen | What the design lacks | How it was filled (components / tokens) | Task | Status |
 |---|---|---|---|---|
-| Settings | the product's eight tabs with a separate Recipients tab (the design's: Appearance, General, Notifications, Alerts, SSO, Backups, HTTPS, Forwarding) | the product's eight tabs, order and addresses as the vertical section navigation with icons (R16) | 14 | differs |
+| Settings | the product's eight tabs with a separate Recipients tab (the design's: Appearance, General, Notifications, Alerts, SSO, Backups, HTTPS, Forwarding) | the product's eight tabs, order and addresses as the vertical section navigation with icons (R16); the ACME work adds a ninth, Certificate authorities (`?tab=acme`, after HTTPS certificate) | 14, ACME 14 | differs |
 | Settings | Appearance, organization name, display time zone, default language, idle timeout | not built (R16, R21): Appearance is on Your account; the rest has no backend | 14 | not built |
 | Settings → Email | untrusted-certificate dialog, trusted fingerprint, test e-mail, write-only password | `AppModal` + `DialogActions`, micro-card, sub-section row | 14 | filled |
 | Settings → Alerts | threshold rows instead of a comma list and switches | number rows with remove buttons, Add threshold, Save in `.formActions` | 14 | differs |
@@ -291,6 +291,10 @@ design, the product and the tests:
 | Settings → Audit forwarding | enable, write-only CA with remove, test message, refused address, backlog and cursor | `.checkOption` checkbox, CA line + remove checkbox, Test + Save, delivery micro-card of whole sentences (not a `FactList`: the e2e reads the sentences) | 14 | filled |
 | Settings → SSO | "SSO users may be Admin" and its confirmation, providers, refresh/edit/delete, mappings, empty states | `.switchRow` + dialog; providers as named sections with the design's usage-node head, `StatusBadge` On/Off, mappings `ResourceTable`; break-glass brand Notice | 14 | filled |
 | Settings | form fields at 11 px on `--surface` | Mantine inputs with the theme's field styles | 14 | differs |
+| Settings → Certificate authorities (ACME) | the whole screen family: the design predates ACME issuance and has no certificate authority, account or DNS hook screen | built from the SSO tab's pattern: a sub-section per list (h3), each authority and hook as a named section with the usage-node head (icon tile, h4 name, host as `Code`, `StatusBadge`s with icon + text: preset, account state, external account key, secret), allowed names as `Code` chips or a warning badge, the account as a `FactList` with its actions; `EmptyState`s with an explanation; an info `Notice` that nothing is contacted until an account is registered | ACME 14 | follow-up |
+| Settings → Certificate authorities (ACME) | dialogs: add/edit authority (preset select, CA bundle, external account binding with write-only secret key, allowed names), register account (terms checkbox), rotate key / check key change, deactivate (affected certificate count), add/edit DNS hook (write-only secret, bounded waits), removals | `AppModal` + `DialogActions` + `ErrorAlert` + field errors, as the SSO provider dialog; allowed names as removable chips (`.chips`, a `CloseButton` per entry) with the rules told before the save | ACME 14 | follow-up |
+| Settings → Certificate authorities (ACME) | the DNS hook's wire contract for its author | a native `<details>` disclosure ("How does the hook work?") with a 3 px `--alice-focus` ring on its summary | ACME 14 | follow-up |
+| Settings → Certificate authorities (ACME) | the terms of service link before registration | not built: the API has no directory preview, so the terms checkbox is generic and the account shows the terms' address after registration | ACME 14 | differs |
 
 ### Sign-in, step-up, error pages
 
@@ -378,3 +382,5 @@ Components (`web/src/components/ui` unless noted):
 - An explicit "Not reported by the verification" line for the served fingerprint on a deployment.
 - Focus after a dialog removes its own trigger (repin, key removal, certificate dialogs).
 - Whole-row clicks on the wizard's own choice rows, as in Settings.
+- A design for the ACME screens (Settings → Certificate authorities and the Issued certificates pages): they were built
+  from the existing components and tokens, without a counterpart in `alice-design/`.

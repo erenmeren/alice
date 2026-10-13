@@ -26,7 +26,7 @@ const ROUTES = [
   '/', '/?view=assurance', '/certificates', '/ssh-keys', '/servers', '/key-vaults', '/deployments', '/rotations',
   '/audit', '/users', '/license', '/account', '/tokens',
 ] as const;
-const SETTINGS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'forwarding', 'sso'] as const;
+const SETTINGS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso'] as const;
 
 async function applyScheme(page: Page, scheme: 'light' | 'dark'): Promise<void> {
   await page.emulateMedia({ colorScheme: scheme });
