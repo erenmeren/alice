@@ -161,7 +161,8 @@ describe('the ACME client', () => {
       [() => acme.createACMEProvider({ name: 'n', directory_url: 'https://d' }), 'POST', '/api/v1/acme/providers', { name: 'n', directory_url: 'https://d' }],
       [() => acme.updateACMEProvider(id, { remove_eab: true }), 'PATCH', '/api/v1/acme/providers/p1', { remove_eab: true }],
       [() => acme.deleteACMEProvider(id), 'DELETE', '/api/v1/acme/providers/p1'],
-      [() => acme.registerACMEAccount(id, { tos_accepted: true }), 'POST', '/api/v1/acme/providers/p1/account', { tos_accepted: true }],
+      [() => acme.previewACMEProvider(id), 'POST', '/api/v1/acme/providers/p1/preview'],
+      [() => acme.registerACMEAccount(id, { tos_accepted: true, accepted_terms_url: 'https://t' }), 'POST', '/api/v1/acme/providers/p1/account', { tos_accepted: true, accepted_terms_url: 'https://t' }],
       [() => acme.rolloverACMEAccount('a1'), 'POST', '/api/v1/acme/accounts/a1/rollover'],
       [() => acme.recoverACMERollover('a1'), 'POST', '/api/v1/acme/accounts/a1/rollover/recover'],
       [() => acme.deactivateACMEAccount('a1'), 'POST', '/api/v1/acme/accounts/a1/deactivate'],
@@ -212,5 +213,10 @@ describe('the ACME query keys', () => {
     expect(keys.ACME_PROVIDER_LIST_KEY.slice(0, 2)).toEqual([...keys.ACME_PROVIDERS_KEY]);
     expect(keys.acmeOrdersKey('c').slice(0, 3)).toEqual([...keys.acmeCertificateKey('c')]);
     expect(keys.acmeCertificateListKey({ provider_id: 'p' })).not.toEqual(keys.acmeCertificateListKey({ provider_id: 'q' }));
+    // The preview sits under the provider but no providers invalidation refreshes it (it contacts the CA).
+    expect(keys.acmePreviewKey('p').slice(0, 3)).toEqual([...keys.acmeProviderKey('p')]);
+    expect(keys.notACMEPreview({ queryKey: keys.acmePreviewKey('p') })).toBe(false);
+    expect(keys.notACMEPreview({ queryKey: keys.acmeProviderKey('p') })).toBe(true);
+    expect(keys.notACMEPreview({ queryKey: keys.ACME_PROVIDER_LIST_KEY })).toBe(true);
   });
 });

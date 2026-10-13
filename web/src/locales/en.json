@@ -2933,7 +2933,8 @@
       "savedNext": "Nothing was contacted. Register an account with this authority next, to start using it.",
       "deleteTitle": "Remove {{name}}?",
       "deleteText": "Alice forgets the settings of this certificate authority. This is only possible when no certificate uses it and its account is deactivated.",
-      "deleteConfirm": "Remove certificate authority"
+      "deleteConfirm": "Remove certificate authority",
+      "bundleTooLarge": "The CA certificates can be at most 64 KiB. Paste only the certificates that are needed."
     },
     "account": {
       "regionLabel": "Account with {{name}}",
@@ -2960,10 +2961,21 @@
       "intro": "Alice creates a new account key and registers it with the certificate authority. This is the first time Alice contacts the authority.",
       "email": "Contact e-mail (optional)",
       "emailHelp": "The authority may send notices to this address, for example about problems with your certificates.",
-      "tos": "I accept the terms of service of this certificate authority",
-      "tosHelp": "Alice cannot show the terms before it contacts the authority; read them on the authority's website. If the authority publishes terms, the account is only registered when you accept them. The account then shows the address of the terms.",
+      "tos": "I have read and accept the terms at this address",
+      "tosHelp": "The authority publishes these terms. The account is registered for exactly these terms; if the authority changes them before you register, Alice shows the new ones.",
       "submit": "Register account",
-      "done": "The account is registered. You can now get certificates from this authority."
+      "done": "The account is registered. You can now get certificates from this authority.",
+      "contacting": "Contacting {{host}} to read its terms of service…",
+      "previewFailed": "Alice could not read the terms of the certificate authority, so the account cannot be registered yet.",
+      "retry": "Try again",
+      "termsChangedTitle": "The terms of service changed",
+      "termsChangedText": "The authority changed its terms after they were shown here. Nothing was registered. Read the new terms below and accept them again.",
+      "eabRequiredTitle": "This authority needs an external account binding",
+      "eabRequiredText": "The authority only accepts accounts with a key ID and a secret key from your account with them, and none is stored. Edit the certificate authority and enter both first, or the registration will be refused.",
+      "unsafeTitle": "The terms cannot be shown safely",
+      "unsafeText": "The authority publishes its terms at an address that is not a safe https address, so Alice does not show it and does not register an account. Ask the authority, or check that the directory address is right.",
+      "termsAt": "Terms of service:",
+      "noTerms": "This authority publishes no terms of service. The account can be registered without accepting any."
     },
     "rollover": {
       "title": "Rotate the account key for {{name}}?",

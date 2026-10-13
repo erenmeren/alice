@@ -64,6 +64,19 @@ export interface ACMEProviderPatch extends Partial<ACMEProviderCreate> {
 export interface ACMEAccountRegister {
   contact_email?: string;
   tos_accepted?: boolean;
+  // The terms address the preview showed: the CA's terms changed when it differs now (422 ALC-ACM-0003).
+  accepted_terms_url?: string;
+}
+
+// What the CA's directory says, read before the registration (POST .../preview). Both addresses are safe https links
+// or "": terms_url_unsafe says the CA publishes terms at an address that is not one, and then no registration is offered.
+export interface ACMEProviderPreview {
+  terms_of_service_url: string;
+  terms_url_unsafe: boolean;
+  external_account_required: boolean;
+  key_change_supported: boolean;
+  renewal_info_supported: boolean;
+  website: string;
 }
 
 export interface ACMEHook {
@@ -263,6 +276,9 @@ export const getACMEProvider = (id: string, signal?: AbortSignal) => apiFetch<AC
 export const createACMEProvider = (body: ACMEProviderCreate) => apiFetch<ACMEProvider>(`${v1}/providers`, { method: 'POST', body });
 export const updateACMEProvider = (id: string, body: ACMEProviderPatch) => apiFetch<ACMEProvider>(`${v1}/providers/${enc(id)}`, { method: 'PATCH', body });
 export const deleteACMEProvider = (id: string) => apiFetch<void>(`${v1}/providers/${enc(id)}`, { method: 'DELETE' });
+// previewACMEProvider contacts the CA (its directory only) for the registration form: an Administrator, no step-up.
+export const previewACMEProvider = (id: string, signal?: AbortSignal) =>
+  apiFetch<ACMEProviderPreview>(`${v1}/providers/${enc(id)}/preview`, { method: 'POST', signal });
 export const registerACMEAccount = (providerId: string, body: ACMEAccountRegister) =>
   apiFetch<ACMEAccount>(`${v1}/providers/${enc(providerId)}/account`, { method: 'POST', body });
 export const rolloverACMEAccount = (id: string) => apiFetch<ACMEAccount>(`${v1}/accounts/${enc(id)}/rollover`, { method: 'POST' });

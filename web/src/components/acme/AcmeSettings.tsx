@@ -16,7 +16,7 @@ import {
   type ACMEHook,
   type ACMEProvider,
 } from '../../api/acme';
-import { ACME_HOOKS_KEY, ACME_HOOK_LIST_KEY, ACME_PROVIDERS_KEY, ACME_PROVIDER_LIST_KEY } from '../../api/queryKeys';
+import { ACME_CERTIFICATES_KEY, ACME_HOOKS_KEY, ACME_HOOK_LIST_KEY, ACME_PROVIDERS_KEY, ACME_PROVIDER_LIST_KEY, notACMEPreview } from '../../api/queryKeys';
 import { useAuth } from '../../auth/AuthProvider';
 import { Icon, type IconName } from '../../design/Icon';
 import { AppModal } from '../AppModal';
@@ -343,7 +343,9 @@ function DeleteDialog({ title, text, confirm, remove, invalidate, onClose }: Del
   const del = useMutation({
     mutationFn: () => run(remove),
     onSuccess: async () => {
-      await client.invalidateQueries({ queryKey: invalidate });
+      await client.invalidateQueries({ queryKey: invalidate, predicate: notACMEPreview });
+      // The certificates name their provider and hook: a list of Issued certificates reads them again.
+      await client.invalidateQueries({ queryKey: ACME_CERTIFICATES_KEY });
       onClose();
     },
   });

@@ -1,20 +1,23 @@
-import { Anchor, Button, Checkbox, Stack, Text, TextInput, Title } from '@mantine/core';
+import { Anchor, Button, Checkbox, Group, Loader, Stack, Text, TextInput, Title } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   accountStateKey,
   deactivateACMEAccount,
+  directoryHost,
   getACMEProvider,
   listACMECertificates,
+  previewACMEProvider,
   recoverACMERollover,
   registerACMEAccount,
   rolloverACMEAccount,
   type ACMEAccount,
+  type ACMEAccountRegister,
   type ACMEProvider,
 } from '../../api/acme';
 import { isApiError } from '../../api/client';
-import { ACME_PROVIDERS_KEY, acmeCertificateListKey, acmeProviderKey } from '../../api/queryKeys';
+import { ACME_CERTIFICATES_KEY, ACME_PROVIDERS_KEY, acmeCertificateListKey, acmePreviewKey, acmeProviderKey, notACMEPreview } from '../../api/queryKeys';
 import { formatDateTime } from '../../datetime';
 import { Icon } from '../../design/Icon';
 import { safeTarget } from '../../navigation';
@@ -53,7 +56,7 @@ export function AccountPanel({ provider, canManage }: { provider: ACMEProvider; 
   const account = currentAccount(detail.data?.accounts ?? []);
   const live = account !== null && (account.state === 'active' || account.state === 'pending_rollover');
   const pending = provider.pending_rollover || account?.state === 'pending_rollover';
-  const tos = account?.tos_url ? safeTarget(account.tos_url) : null;
+  const tos = account?.tos_url ? httpsLink(account.tos_url) : null;
 
   return (
     <section className={classes.account} aria-label={t('acme.account.regionLabel', { name: provider.name })}>
@@ -129,24 +132,34 @@ export function AccountPanel({ provider, canManage }: { provider: ACMEProvider; 
   );
 }
 
-// useAccountAction runs one account operation through the step-up and refreshes the providers afterwards (also after
-// a refusal: an unsettled key change shows on the provider).
-function useAccountAction(fn: () => Promise<ACMEAccount>) {
+// useAccountAction runs one account operation through the step-up and refreshes the providers and the ACME
+// certificates afterwards (also after a refusal: an unsettled key change shows on the provider). The registration
+// form's directory preview is left alone: it contacts the CA.
+function useAccountAction<V = void>(fn: (v: V) => Promise<ACMEAccount>) {
   const { run } = useStepUp();
   const client = useQueryClient();
   return useMutation({
-    mutationFn: () => run(fn),
-    onSettled: () => client.invalidateQueries({ queryKey: ACME_PROVIDERS_KEY }),
+    mutationFn: (v: V) => run(() => fn(v)),
+    onSettled: async () => {
+      await client.invalidateQueries({ queryKey: ACME_PROVIDERS_KEY, predicate: notACMEPreview });
+      await client.invalidateQueries({ queryKey: ACME_CERTIFICATES_KEY });
+    },
   });
 }
 
 // CheckKeyChange asks the authority which account key it knows, to settle a key change whose answer did not arrive.
-function CheckKeyChange({ account }: { account: ACMEAccount }) {
+function CheckKeyChange({ account, onSettled }: { account: ACMEAccount; onSettled?: () => void }) {
   const { t } = useTranslation();
   const check = useAccountAction(() => recoverACMERollover(account.id));
   return (
     <>
-      <Button size="xs" variant="default" leftSection={<Icon name="RefreshCw" size={14} />} loading={check.isPending} onClick={() => check.mutate()}>
+      <Button
+        size="xs"
+        variant="default"
+        leftSection={<Icon name="RefreshCw" size={14} />}
+        loading={check.isPending}
+        onClick={() => check.mutate(undefined, { onSuccess: () => onSettled?.() })}
+      >
         {t('acme.account.checkKeyChange')}
       </Button>
       {check.isSuccess && (
@@ -159,15 +172,73 @@ function CheckKeyChange({ account }: { account: ACMEAccount }) {
   );
 }
 
+// WithData writes a translated sentence with a technical value (a host name) where the language puts the placeholder,
+// the value marked translate="no" (as ErrorAlert's code line does): the sentence stays the translator's.
+const MARK = '\u0000';
+function WithData({ text, value }: { text: string; value: string }) {
+  const [before, after = ''] = text.split(MARK);
+  return (
+    <>
+      {before}
+      <span translate="no">{value}</span>
+      {after}
+    </>
+  );
+}
+
+// httpsLink is an address that may be linked as the terms: https only (safeTarget also lets http through on an http
+// page, for development), which the server checks too.
+function httpsLink(url: string): string | null {
+  const target = safeTarget(url);
+  return target?.startsWith('https:') ? target : null;
+}
+
+// TERMS_CHANGED: the registration was refused because the CA's terms are no longer the ones shown (ALC-ACM-0003).
+const TERMS_CHANGED = 'acme.terms_not_accepted';
+
+// RegisterDialog reads the CA's directory once when it opens (the preview: an Administrator, no step-up) and shows its
+// terms of service as a link BEFORE the box can be ticked. The box stays disabled until the preview has answered; no
+// terms: no box, the registration goes without; terms at an unsafe address or a failed preview: no registration. The
+// registration names the terms shown (accepted_terms_url): when the CA changed them meanwhile it is refused, the
+// preview runs again and the new terms are shown.
 function RegisterDialog({ provider, onClose }: { provider: ACMEProvider; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const [email, setEmail] = useState('');
   const [tos, setTos] = useState(false);
-  const register = useAccountAction(() => registerACMEAccount(provider.id, { ...(email.trim() ? { contact_email: email.trim() } : {}), tos_accepted: tos }));
+  const [termsChanged, setTermsChanged] = useState(false);
+  const preview = useQuery({
+    queryKey: acmePreviewKey(provider.id),
+    queryFn: ({ signal }) => previewACMEProvider(provider.id, signal),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+  const register = useAccountAction((body: ACMEAccountRegister) => registerACMEAccount(provider.id, body));
   const fieldErrors = fieldErrorsOf(register.error, t, i18n);
+  const info = preview.isSuccess && !preview.isFetching ? preview.data : null;
+  const termsLink = info?.terms_of_service_url ? httpsLink(info.terms_of_service_url) : null;
+  const unsafe = info !== null && (info.terms_url_unsafe || (info.terms_of_service_url !== '' && termsLink === null));
+  const hasTerms = termsLink !== null && !unsafe;
+  const ready = info !== null && !unsafe && (!hasTerms || tos);
+  const host = directoryHost(provider.directory_url);
+
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
-    register.mutate();
+    if (register.isPending || !ready || !info) return;
+    setTermsChanged(false);
+    const body: ACMEAccountRegister = { ...(email.trim() ? { contact_email: email.trim() } : {}), tos_accepted: hasTerms && tos };
+    if (hasTerms) body.accepted_terms_url = info.terms_of_service_url;
+    register.mutate(body, {
+      onError: (e) => {
+        if (!isApiError(e, TERMS_CHANGED)) return;
+        // The terms are not the ones shown any more: read them again and ask for the consent again.
+        setTermsChanged(true);
+        setTos(false);
+        void preview.refetch();
+      },
+    });
   };
   const title = t('acme.register.title', { name: provider.name });
   if (register.isSuccess) {
@@ -201,13 +272,72 @@ function RegisterDialog({ provider, onClose }: { provider: ACMEProvider; onClose
             autoComplete="email"
             data-autofocus
           />
-          <Checkbox label={t('acme.register.tos')} description={t('acme.register.tosHelp')} checked={tos} onChange={(e) => setTos(e.currentTarget.checked)} />
-          <ErrorAlert error={register.error} />
+          {preview.isFetching && (
+            <Group gap="xs" role="status">
+              <Loader size="xs" aria-hidden />
+              <Text size="sm">
+                <WithData text={t('acme.register.contacting', { host: MARK })} value={host} />
+              </Text>
+            </Group>
+          )}
+          {preview.isError && !preview.isFetching && (
+            <>
+              <Text size="sm">{t('acme.register.previewFailed')}</Text>
+              <ErrorAlert error={preview.error} />
+              <Group>
+                <Button size="xs" variant="default" leftSection={<Icon name="RefreshCw" size={14} />} onClick={() => void preview.refetch()}>
+                  {t('acme.register.retry')}
+                </Button>
+              </Group>
+            </>
+          )}
+          {termsChanged && (
+            <Notice tone="warning" title={t('acme.register.termsChangedTitle')} role="alert">
+              <Text size="sm">{t('acme.register.termsChangedText')}</Text>
+            </Notice>
+          )}
+          {info?.external_account_required && !provider.eab_configured && (
+            <Notice tone="warning" title={t('acme.register.eabRequiredTitle')}>
+              <Text size="sm">{t('acme.register.eabRequiredText')}</Text>
+            </Notice>
+          )}
+          {unsafe && (
+            <Notice tone="danger" title={t('acme.register.unsafeTitle')}>
+              <Text size="sm">{t('acme.register.unsafeText')}</Text>
+              {info?.terms_of_service_url && (
+                <Text size="sm" translate="no">
+                  {info.terms_of_service_url}
+                </Text>
+              )}
+            </Notice>
+          )}
+          {/* The box exists while the answer is awaited (disabled), and with terms: never without the link above it. */}
+          {(info === null || hasTerms) && !unsafe && (
+            <Stack gap={4}>
+              {hasTerms && termsLink && (
+                <Text size="sm">
+                  {t('acme.register.termsAt')}{' '}
+                  <Anchor href={termsLink} target="_blank" rel="noopener noreferrer" translate="no">
+                    {info?.terms_of_service_url} <Icon name="ExternalLink" size={12} />
+                  </Anchor>
+                </Text>
+              )}
+              <Checkbox
+                label={t('acme.register.tos')}
+                description={t('acme.register.tosHelp')}
+                checked={tos}
+                disabled={!hasTerms}
+                onChange={(e) => setTos(e.currentTarget.checked)}
+              />
+            </Stack>
+          )}
+          {info !== null && !hasTerms && !unsafe && <Text size="sm">{t('acme.register.noTerms')}</Text>}
+          {!isApiError(register.error, TERMS_CHANGED) && <ErrorAlert error={register.error} />}
           <DialogActions>
             <Button variant="default" onClick={onClose}>
               {t('ui.cancel')}
             </Button>
-            <Button type="submit" loading={register.isPending}>
+            <Button type="submit" loading={register.isPending} disabled={!ready}>
               {t('acme.register.submit')}
             </Button>
           </DialogActions>
@@ -220,6 +350,8 @@ function RegisterDialog({ provider, onClose }: { provider: ACMEProvider; onClose
 function RolloverDialog({ provider, account, onClose }: { provider: ACMEProvider; account: ACMEAccount; onClose: () => void }) {
   const { t } = useTranslation();
   const rollover = useAccountAction(() => rolloverACMEAccount(account.id));
+  // settled: Check key change answered; the earlier ALC-ACM-0024 refusal no longer applies and is hidden.
+  const [settled, setSettled] = useState(false);
   const title = t('acme.rollover.title', { name: provider.name });
   return (
     <AppModal opened onClose={onClose} title={title}>
@@ -231,8 +363,21 @@ function RolloverDialog({ provider, account, onClose }: { provider: ACMEProvider
         ) : (
           <Text size="sm">{t('acme.rollover.text')}</Text>
         )}
+        {settled && !rollover.isSuccess && !rollover.error && (
+          <Text role="status" size="sm" c="var(--alice-success)">
+            {t('acme.account.checked')}
+          </Text>
+        )}
         <ErrorAlert error={rollover.error} />
-        {isApiError(rollover.error, ROLLOVER_PENDING) && <CheckKeyChange account={account} />}
+        {isApiError(rollover.error, ROLLOVER_PENDING) && (
+          <CheckKeyChange
+            account={account}
+            onSettled={() => {
+              setSettled(true);
+              rollover.reset();
+            }}
+          />
+        )}
         <DialogActions>
           {rollover.isSuccess ? (
             <Button onClick={onClose} data-autofocus>
@@ -243,7 +388,13 @@ function RolloverDialog({ provider, account, onClose }: { provider: ACMEProvider
               <Button variant="default" onClick={onClose}>
                 {t('ui.cancel')}
               </Button>
-              <Button loading={rollover.isPending} onClick={() => rollover.mutate()}>
+              <Button
+                loading={rollover.isPending}
+                onClick={() => {
+                  setSettled(false);
+                  rollover.mutate();
+                }}
+              >
                 {t('acme.rollover.confirm')}
               </Button>
             </>

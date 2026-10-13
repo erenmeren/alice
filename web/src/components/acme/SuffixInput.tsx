@@ -1,5 +1,5 @@
 import { Button, CloseButton, Stack, Text, TextInput } from '@mantine/core';
-import { useId, type KeyboardEvent } from 'react';
+import type { KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { suffixProblem } from '../../api/acme';
 import { Notice } from '../ui';
@@ -19,6 +19,10 @@ export interface SuffixInputProps {
   disabled?: boolean;
 }
 
+// PEM_MAX is the size the server accepts for a CA bundle (64 KiB, as UTF-8 bytes).
+const PEM_MAX = 64 * 1024;
+export const pemTooLarge = (pem: string) => new TextEncoder().encode(pem).length > PEM_MAX;
+
 // takeDraft adds a typed entry the person did not add with the button: the list to save, or the problem's label key.
 export function takeDraft(list: string[], draft: string): { list: string[]; problem: string } {
   if (draft.trim() === '') return { list, problem: '' };
@@ -31,7 +35,6 @@ export function takeDraft(list: string[], draft: string): { list: string[]; prob
 // told before the save. An empty list allows no name at all, which the warning below says.
 export function SuffixInput({ value, onChange, draft, onDraftChange, problem, onProblem, serverError, disabled }: SuffixInputProps) {
   const { t } = useTranslation();
-  const listId = useId();
   const add = () => {
     const r = takeDraft(value, draft);
     onProblem(r.problem);
@@ -61,14 +64,15 @@ export function SuffixInput({ value, onChange, draft, onDraftChange, problem, on
           autoComplete="off"
           spellCheck={false}
           disabled={disabled}
-          aria-describedby={value.length > 0 ? listId : undefined}
         />
         <Button variant="default" onClick={add} disabled={disabled || draft.trim() === ''}>
           {t('acme.suffix.add')}
         </Button>
       </div>
       {value.length > 0 ? (
-        <ul className={classes.chips} id={listId} aria-label={t('acme.suffix.listLabel')}>
+        // Mantine sets the input's aria-describedby itself (its error and description); the chips are a named list
+        // right after the field, not part of its description.
+        <ul className={classes.chips} aria-label={t('acme.suffix.listLabel')}>
           {value.map((s) => (
             <li key={s} className={classes.chip}>
               <span className={classes.chipText} translate="no">

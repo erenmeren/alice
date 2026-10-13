@@ -12,23 +12,26 @@ import {
   type ACMEProvider,
   type ACMEProviderPatch,
 } from '../../api/acme';
-import { ACME_PROVIDERS_KEY } from '../../api/queryKeys';
+import { ACME_PROVIDERS_KEY, notACMEPreview } from '../../api/queryKeys';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { useStepUp } from '../StepUpProvider';
 import { DialogActions, Notice } from '../ui';
 import ui from '../ui/ui.module.css';
-import { SuffixInput, takeDraft } from './SuffixInput';
+import { SuffixInput, pemTooLarge, takeDraft } from './SuffixInput';
 
 type Preset = Exclude<ACMEPreset, ''>;
+
+const BUNDLE_TOO_LARGE = 'acme.provider.bundleTooLarge';
 
 
 // ProviderDialog adds or changes a certificate authority. The preset only fills in the directory address; nothing is
 // contacted when it is saved (the first contact is the account registration). The external account binding's secret
-// key lives in this form's state only: on save it moves to a ref that the request takes and empties, so it is never a
-// mutation variable (no cache holds it), it is never read back (the server answers eab_configured) and a refusal asks
-// for it again. Only the fields that changed are sent on a change, so an unchanged directory address never asks to
+// key lives in this form's state only: it stays in the field until the save succeeds or the dialog closes (a local
+// problem, a refusal or a cancelled step-up keep what was typed), the request reads it through a ref that it empties at
+// once, so it is never a mutation variable (no cache holds it), and it is never read back (the server answers
+// eab_configured). Only the fields that changed are sent on a change, so an unchanged directory address never asks to
 // retire the account.
 export function ProviderDialog({ provider, onClose }: { provider: ACMEProvider | null; onClose: () => void }) {
   const { t, i18n } = useTranslation();
@@ -66,14 +69,17 @@ export function ProviderDialog({ provider, onClose }: { provider: ACMEProvider |
       const patch: ACMEProviderPatch = { ...eab };
       if (name.trim() !== provider.name) patch.name = name.trim();
       if (directoryChanged) patch.directory_url = directory.trim();
-      if (preset !== provider.preset) patch.preset = preset;
+      if (preset !== initialPreset) patch.preset = preset; // a stored '' shows as My own CA: unchanged, not sent
       if (bundle !== provider.ca_bundle_pem) patch.ca_bundle_pem = bundle;
       if (list.join('\n') !== provider.allowed_suffixes.join('\n')) patch.allowed_suffixes = list;
       if (removeEab && !secret) patch.remove_eab = true;
       if (needsConfirm && confirmDirectory) patch.confirm_directory_change = true;
       return run(() => updateACMEProvider(provider.id, patch));
     },
-    onSuccess: () => client.invalidateQueries({ queryKey: ACME_PROVIDERS_KEY }),
+    onSuccess: () => {
+      setHmac('');
+      return client.invalidateQueries({ queryKey: ACME_PROVIDERS_KEY, predicate: notACMEPreview });
+    },
   });
 
   const choosePreset = (value: string) => {
@@ -85,12 +91,16 @@ export function ProviderDialog({ provider, onClose }: { provider: ACMEProvider |
 
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
+    if (save.isPending) return; // Enter pressed again while the request runs
     const secret = hmac;
-    setHmac(''); // gone from the form whatever the answer; a refusal asks for it again
     const kidChanged = kid.trim() !== (provider?.eab_kid ?? '');
     // Both or neither: a secret key needs its key ID, and a new key ID needs its secret key.
     if ((secret && !kid.trim()) || (!secret && kid.trim() && kidChanged && !removeEab)) {
       setLocal('acme.provider.eabBoth');
+      return;
+    }
+    if (pemTooLarge(bundle)) {
+      setLocal(BUNDLE_TOO_LARGE);
       return;
     }
     const drafted = takeDraft(suffixes, draft);
@@ -165,7 +175,7 @@ export function ProviderDialog({ provider, onClose }: { provider: ACMEProvider |
             placeholder="-----BEGIN CERTIFICATE-----"
             value={bundle}
             onChange={(e) => setBundle(e.currentTarget.value)}
-            error={fieldErrors.ca_bundle_pem}
+            error={local === BUNDLE_TOO_LARGE ? t(BUNDLE_TOO_LARGE) : fieldErrors.ca_bundle_pem}
             autosize
             minRows={3}
             maxRows={8}
@@ -205,7 +215,7 @@ export function ProviderDialog({ provider, onClose }: { provider: ACMEProvider |
           <Notice tone="info" title={t('acme.provider.noContactTitle')}>
             <Text size="sm">{t('acme.provider.noContactText')}</Text>
           </Notice>
-          {local && (
+          {local && local !== BUNDLE_TOO_LARGE && (
             <Text role="alert" size="sm" c="var(--alice-danger)">
               {t(local)}
             </Text>

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { QueryClient } from '@tanstack/react-query';
@@ -40,8 +40,20 @@ function base(opts: { providers?: ACMEProvider[]; hooks?: ACMEHook[]; extra?: Ex
       return HttpResponse.json({ ...p, accounts: p.active_account_id ? [acmeAccountFixture({ id: p.active_account_id, state: p.pending_rollover ? 'pending_rollover' : 'active' })] : [] });
     }),
     http.get(HOOKS, () => HttpResponse.json({ items: opts.hooks ?? [acmeHookFixture()] })),
+    http.post(`${PROVIDERS}/:id/preview`, () => HttpResponse.json(preview())),
   );
 }
+
+const TERMS = 'https://letsencrypt.org/documents/LE-SA-v1.5.pdf';
+const preview = (o: Record<string, unknown> = {}) => ({
+  terms_of_service_url: TERMS,
+  terms_url_unsafe: false,
+  external_account_required: false,
+  key_change_supported: true,
+  renewal_info_supported: true,
+  website: 'https://letsencrypt.org',
+  ...o,
+});
 
 // cached is everything the query and mutation caches hold, as text: a secret must never be in it.
 function cached(client: QueryClient): string {
@@ -211,7 +223,8 @@ describe('Certificate authorities settings', () => {
     await userEvent.type(within(dialog).getByLabelText(/^Secret key/), 'canary-hmac-only');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save certificate authority' }));
     expect(await within(dialog).findByText(/Enter both the key ID and the secret key, or neither/)).toBeInTheDocument();
-    expect(within(dialog).getByLabelText(/^Secret key/)).toHaveValue('');
+    expect(within(dialog).getByLabelText(/^Secret key/)).toHaveValue('canary-hmac-only'); // a local problem keeps it
+    await userEvent.clear(within(dialog).getByLabelText(/^Secret key/));
     await userEvent.type(within(dialog).getByLabelText(/^Key ID/), 'kid-only');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save certificate authority' }));
     expect(await within(dialog).findByText(/Enter both the key ID and the secret key, or neither/)).toBeInTheDocument();
@@ -331,18 +344,25 @@ describe('Certificate authorities settings', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
-  it('registers an account: refused without the terms the authority publishes, registered once they are accepted', async () => {
+  it('shows the terms as a link before the box can be ticked, and registers for exactly those terms', async () => {
     const bodies: unknown[] = [];
+    let previews = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
     let providers = [acmeProviderFixture({ active_account_id: null })];
     base({
       providers,
       extra: [
         http.get(PROVIDERS, () => HttpResponse.json({ items: providers })),
+        http.post(`${PROVIDERS}/:id/preview`, async ({ params }) => {
+          expect(params.id).toBe(ACME_PROVIDER_ID);
+          previews++;
+          await gate;
+          return HttpResponse.json(preview());
+        }),
         http.post(`${PROVIDERS}/:id/account`, async ({ request, params }) => {
           expect(params.id).toBe(ACME_PROVIDER_ID);
-          const body = (await request.json()) as { tos_accepted: boolean };
-          bodies.push(body);
-          if (!body.tos_accepted) return errorResponse(422, 'ALC-ACM-0003', 'acme.terms_not_accepted');
+          bodies.push(await request.json());
           providers = [acmeProviderFixture()];
           return HttpResponse.json(acmeAccountFixture(), { status: 201 });
         }),
@@ -353,21 +373,141 @@ describe('Certificate authorities settings', () => {
     expect(within(section).getByText('No account').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'neutral');
     expect(await within(section).findByText(/No account is registered yet/)).toBeInTheDocument();
     expect(within(section).queryByRole('button', { name: 'Rotate account key' })).not.toBeInTheDocument();
+    expect(previews).toBe(0); // nothing is contacted before the form opens
     await userEvent.click(within(section).getByRole('button', { name: 'Register account' }));
     const dialog = await screen.findByRole('dialog', { name: 'Register an account with LE staging' });
     expect(dialog).toHaveTextContent('This is the first time Alice contacts the authority.');
+    // While the directory is read: the host is named, the box and the registration are disabled.
+    expect(await within(dialog).findByText(/to read its terms of service/)).toHaveTextContent('Contacting acme-staging-v02.api.letsencrypt.org to read its terms of service…');
+    expect(within(dialog).getByText('acme-staging-v02.api.letsencrypt.org')).toHaveAttribute('translate', 'no');
+    const box = within(dialog).getByRole('checkbox', { name: 'I have read and accept the terms at this address' });
+    expect(box).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Register account' })).toBeDisabled();
+    expect(within(dialog).queryByRole('link')).not.toBeInTheDocument();
+    release();
+    const link = await within(dialog).findByRole('link', { name: new RegExp(TERMS.replace(/\./g, '\\.')) });
+    expect(link).toHaveAttribute('href', TERMS);
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(link).toHaveAttribute('translate', 'no');
+    // The link comes before the box in the dialog, and the box is only now enabled; Register waits for the tick.
+    expect(link.compareDocumentPosition(box) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(box).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: 'Register account' })).toBeDisabled();
     await userEvent.type(within(dialog).getByLabelText(/^Contact e-mail/), 'ops@example.com');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Register account' }));
-    expect(await within(dialog).findByText('The terms of service have not been accepted.')).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('checkbox', { name: /I accept the terms of service/ }));
+    await userEvent.click(box);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Register account' }));
     expect(await within(dialog).findByText(/The account is registered/)).toBeInTheDocument();
-    expect(bodies).toEqual([
-      { contact_email: 'ops@example.com', tos_accepted: false },
-      { contact_email: 'ops@example.com', tos_accepted: true },
-    ]);
+    expect(bodies).toEqual([{ contact_email: 'ops@example.com', tos_accepted: true, accepted_terms_url: TERMS }]);
+    expect(previews).toBe(1); // read once, not again by the refresh of the providers
     await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
     expect(await within(section).findByText('Account registered')).toBeInTheDocument();
+  });
+
+  it('registers at an authority without terms: no box, and no terms are sent', async () => {
+    let body: unknown;
+    base({
+      providers: [acmeProviderFixture({ active_account_id: null })],
+      extra: [
+        http.post(`${PROVIDERS}/:id/preview`, () => HttpResponse.json(preview({ terms_of_service_url: '' }))),
+        http.post(`${PROVIDERS}/:id/account`, async ({ request }) => ((body = await request.json()), HttpResponse.json(acmeAccountFixture({ tos_url: '' }), { status: 201 }))),
+      ],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Register account' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText(/This authority publishes no terms of service/)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Register account' }));
+    expect(await within(dialog).findByText(/The account is registered/)).toBeInTheDocument();
+    expect(body).toEqual({ tos_accepted: false });
+  });
+
+  it.each([
+    ['the server flags the terms address as unsafe', preview({ terms_of_service_url: '', terms_url_unsafe: true })],
+    ['the terms address is not https', preview({ terms_of_service_url: 'http://ca.example/terms' })],
+  ])('refuses the registration when %s', async (_why, answer) => {
+    let registers = 0;
+    base({
+      providers: [acmeProviderFixture({ active_account_id: null })],
+      extra: [http.post(`${PROVIDERS}/:id/preview`, () => HttpResponse.json(answer)), http.post(`${PROVIDERS}/:id/account`, () => (registers++, HttpResponse.json(acmeAccountFixture())))],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Register account' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('The terms cannot be shown safely')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('link')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Register account' })).toBeDisabled();
+    if (answer.terms_of_service_url) expect(within(dialog).getByText(String(answer.terms_of_service_url))).toHaveAttribute('translate', 'no');
+    fireEvent.submit(within(dialog).getByRole('button', { name: 'Register account' }).closest('form') as HTMLFormElement);
+    expect(registers).toBe(0);
+  });
+
+  it('blocks the registration while the terms cannot be read, and tries again', async () => {
+    let previews = 0;
+    base({
+      providers: [acmeProviderFixture({ active_account_id: null })],
+      extra: [http.post(`${PROVIDERS}/:id/preview`, () => (++previews === 1 ? errorResponse(502, 'ALC-ACM-0001', 'acme.provider_unreachable') : HttpResponse.json(preview())))],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Register account' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('The certificate authority could not be reached.')).toBeInTheDocument();
+    expect(within(dialog).getByText(/could not read the terms/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('checkbox')).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Register account' })).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Try again' }));
+    expect(await within(dialog).findByRole('link', { name: /LE-SA-v1\.5\.pdf/ })).toBeInTheDocument();
+    expect(within(dialog).queryByText('The certificate authority could not be reached.')).not.toBeInTheDocument();
+    expect(previews).toBe(2);
+  });
+
+  it('reads the terms again and asks again when the authority changed them before the registration (ALC-ACM-0003)', async () => {
+    const NEW = 'https://letsencrypt.org/documents/LE-SA-v1.6.pdf';
+    const bodies: { accepted_terms_url?: string }[] = [];
+    let previews = 0;
+    base({
+      providers: [acmeProviderFixture({ active_account_id: null })],
+      extra: [
+        http.post(`${PROVIDERS}/:id/preview`, () => HttpResponse.json(preview({ terms_of_service_url: ++previews === 1 ? TERMS : NEW }))),
+        http.post(`${PROVIDERS}/:id/account`, async ({ request }) => {
+          const body = (await request.json()) as { accepted_terms_url?: string };
+          bodies.push(body);
+          return body.accepted_terms_url === NEW ? HttpResponse.json(acmeAccountFixture({ tos_url: NEW }), { status: 201 }) : errorResponse(422, 'ALC-ACM-0003', 'acme.terms_not_accepted');
+        }),
+      ],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Register account' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(await within(dialog).findByRole('checkbox', { name: 'I have read and accept the terms at this address' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Register account' }));
+    expect(await within(dialog).findByText('The terms of service changed')).toBeInTheDocument();
+    expect(within(dialog).queryByText('The terms of service have not been accepted.')).not.toBeInTheDocument();
+    expect(await within(dialog).findByRole('link', { name: /LE-SA-v1\.6\.pdf/ })).toHaveAttribute('href', NEW);
+    expect(within(dialog).getByRole('checkbox')).not.toBeChecked();
+    expect(within(dialog).getByRole('button', { name: 'Register account' })).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole('checkbox'));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Register account' }));
+    expect(await within(dialog).findByText(/The account is registered/)).toBeInTheDocument();
+    expect(bodies.map((b) => b.accepted_terms_url)).toEqual([TERMS, NEW]);
+    expect(previews).toBe(2);
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ])('warns before the registration when the authority needs an external account binding (stored: %s)', async (stored, warned) => {
+    base({
+      providers: [acmeProviderFixture({ active_account_id: null, eab_configured: stored })],
+      extra: [http.post(`${PROVIDERS}/:id/preview`, () => HttpResponse.json(preview({ external_account_required: true })))],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Register account' }));
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByRole('link');
+    expect(within(dialog).queryByText('This authority needs an external account binding') !== null).toBe(warned);
   });
 
   it.each([
@@ -386,6 +526,7 @@ describe('Certificate authorities settings', () => {
     await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Register account' }));
     const dialog = await screen.findByRole('dialog');
+    await userEvent.click(await within(dialog).findByRole('checkbox', { name: 'I have read and accept the terms at this address' }));
     await userEvent.click(within(dialog).getByRole('button', { name: 'Register account' }));
     expect(await within(dialog).findByText(text)).toBeInTheDocument();
     expect(within(dialog).getByText(code)).toBeInTheDocument();
@@ -409,6 +550,8 @@ describe('Certificate authorities settings', () => {
     expect(within(dialog).getByText(/use "Check key change"/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Check key change' }));
     expect(await within(dialog).findByText('The key change is settled.')).toBeInTheDocument();
+    expect(within(dialog).queryByText('The account key change is not finished.')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
     expect(recovered).toBe(ACME_ACCOUNT_ID);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Rotate account key' }));
     expect(await within(dialog).findByText('The account key was replaced.')).toBeInTheDocument();
@@ -449,9 +592,11 @@ describe('Certificate authorities settings', () => {
   ])('warns that %i certificates stop renewing before the account is deactivated', async (count, cursor, text) => {
     let query = '';
     let deactivated = '';
+    let reads = 0;
     base({
       extra: [
         http.get('/api/v1/acme/certificates', ({ request }) => {
+          reads++;
           query = new URL(request.url).search;
           return HttpResponse.json({ items: Array.from({ length: count }, (_, i) => acmeCertificateFixture({ id: `c${i}` })), next_cursor: cursor });
         }),
@@ -465,9 +610,11 @@ describe('Certificate authorities settings', () => {
     expect(within(dialog).getByText(/They are not renewed until a new account is registered/)).toBeInTheDocument();
     expect(query).toBe(`?provider_id=${ACME_PROVIDER_ID}&limit=200`);
     expect(deactivated).toBe('');
+    const before = reads;
     await userEvent.click(within(dialog).getByRole('button', { name: 'Deactivate account' }));
     expect(await within(dialog).findByText('The account is deactivated.')).toBeInTheDocument();
     expect(deactivated).toBe(ACME_ACCOUNT_ID);
+    await waitFor(() => expect(reads).toBeGreaterThan(before)); // the ACME certificates are read again
     await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
   });
 
@@ -556,7 +703,8 @@ describe('DNS hooks', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS hook' }));
     expect(await within(dialog).findByText('The secret needs 16 to 256 characters.')).toBeInTheDocument();
     expect(within(dialog).getByText('Both times together can be at most 120 seconds.')).toBeInTheDocument();
-    expect(within(dialog).getByLabelText(/^Secret/)).toHaveValue('');
+    expect(within(dialog).getByLabelText(/^Secret/)).toHaveValue('short'); // a local problem keeps it
+    await userEvent.clear(within(dialog).getByLabelText(/^Secret/));
     const poll = within(dialog).getByLabelText(/^Time to wait for the record/);
     await userEvent.clear(poll);
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS hook' }));
@@ -644,6 +792,134 @@ describe('DNS hooks', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Remove DNS hook' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     expect(calls).toBe(2);
+  });
+});
+
+describe('typed secrets and repeated saves', () => {
+  it('keeps the typed secret key when the step-up is cancelled, and sends one request for a double Enter', async () => {
+    let creates = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    base({
+      providers: [],
+      extra: [
+        http.post(PROVIDERS, async () => {
+          creates++;
+          if (creates === 1) return errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required');
+          await gate;
+          return HttpResponse.json(acmeProviderFixture(), { status: 201 });
+        }),
+      ],
+    });
+    const { client } = await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add certificate authority' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add certificate authority' });
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'ZeroSSL');
+    await userEvent.type(within(dialog).getByLabelText(/^Key ID/), 'kid-1');
+    await userEvent.type(within(dialog).getByLabelText(/^Secret key/), 'canary-kept-hmac');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save certificate authority' }));
+    const stepUp = await screen.findByRole('dialog', { name: "Confirm it's you" });
+    await userEvent.click(within(stepUp).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: "Confirm it's you" })).not.toBeInTheDocument());
+    expect(within(dialog).getByLabelText(/^Secret key/)).toHaveValue('canary-kept-hmac');
+    expect(cached(client)).not.toContain('canary-kept-hmac');
+    // Save again, then Enter while the request runs: one request only.
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save certificate authority' }));
+    await waitFor(() => expect(creates).toBe(2));
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), '{Enter}');
+    release();
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(creates).toBe(2);
+    expect(document.body.innerHTML).not.toContain('canary-kept-hmac');
+    expect(cached(client)).not.toContain('canary-kept-hmac');
+  });
+
+  it('keeps the hook secret after a refusal, and sends one request for a double Enter', async () => {
+    let creates = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    base({
+      hooks: [],
+      extra: [
+        http.post(HOOKS, async () => {
+          creates++;
+          if (creates === 1) return errorResponse(409, 'ALC-ACM-0020', 'acme.name_taken');
+          await gate;
+          return HttpResponse.json(acmeHookFixture(), { status: 201 });
+        }),
+      ],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add DNS hook' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'DNS');
+    await userEvent.type(within(dialog).getByLabelText(/^Address of the hook/), 'https://h.example.com');
+    await userEvent.type(within(dialog).getByLabelText(/^Secret/), 'canary-hook-kept-0123');
+    await userEvent.type(within(dialog).getByLabelText(/^Allowed names/), 'example.com');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS hook' }));
+    expect(await within(dialog).findByText('This name is already used.')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Secret/)).toHaveValue('canary-hook-kept-0123');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS hook' }));
+    await waitFor(() => expect(creates).toBe(2));
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), '{Enter}');
+    release();
+    expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
+    expect(creates).toBe(2);
+  });
+
+  it('refuses a CA bundle over 64 KiB before sending, in both dialogs', async () => {
+    let sent = 0;
+    base({ providers: [], hooks: [], extra: [http.post(PROVIDERS, () => (sent++, HttpResponse.json(acmeProviderFixture()))), http.post(HOOKS, () => (sent++, HttpResponse.json(acmeHookFixture())))] });
+    await open();
+    const big = 'x'.repeat(64 * 1024 + 1);
+    await userEvent.click(await screen.findByRole('button', { name: 'Add certificate authority' }));
+    let dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'X');
+    fireEvent.change(within(dialog).getByLabelText(/^Root certificate of your CA/), { target: { value: big } });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save certificate authority' }));
+    expect(await within(dialog).findByText(/can be at most 64 KiB/)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Root certificate of your CA/)).toHaveAttribute('aria-invalid', 'true');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Add DNS hook' }));
+    dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/^Secret/), 'x'.repeat(16));
+    fireEvent.change(within(dialog).getByLabelText(/^Root certificate of the hook/), { target: { value: big } });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS hook' }));
+    expect(await within(dialog).findByText(/can be at most 64 KiB/)).toBeInTheDocument();
+    expect(sent).toBe(0);
+  });
+
+  it('does not send a preset for an authority stored without one when nothing else changed', async () => {
+    let patch: unknown;
+    base({
+      providers: [acmeProviderFixture({ preset: '' })],
+      extra: [http.patch(`${PROVIDERS}/:id`, async ({ request }) => ((patch = await request.json()), HttpResponse.json(acmeProviderFixture())))],
+    });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit LE staging' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Certificate authority')).toHaveValue('custom');
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), ' 2');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save certificate authority' }));
+    await waitFor(() => expect(patch).toEqual({ name: 'LE staging 2' }));
+  });
+
+  it("keeps Mantine's description and error on the allowed-names field, and names the chips list", async () => {
+    base({ providers: [] });
+    await open();
+    await userEvent.click(await screen.findByRole('button', { name: 'Add certificate authority' }));
+    const dialog = await screen.findByRole('dialog');
+    const input = within(dialog).getByLabelText(/^Allowed names/);
+    const described = () => (input.getAttribute('aria-describedby') ?? '').split(' ').map((id) => document.getElementById(id)?.textContent ?? `missing ${id}`);
+    expect(described()).toEqual([expect.stringContaining('Type a domain ending')]);
+    await userEvent.type(input, 'com{Enter}');
+    expect(described()).toEqual([expect.stringContaining('Use at least two parts'), expect.stringContaining('Type a domain ending')]);
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    await userEvent.clear(input);
+    await userEvent.type(input, 'example.com{Enter}');
+    expect(described()).toEqual([expect.stringContaining('Type a domain ending')]);
+    expect(within(dialog).getByRole('list', { name: 'Allowed names' })).toHaveTextContent('example.com');
   });
 });
 

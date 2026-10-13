@@ -171,6 +171,9 @@ const dataHandlers = [
   ),
   http.get('/api/v1/acme/hooks', () => HttpResponse.json({ items: [acmeHookFixture(), acmeHookFixture({ id: 'h2', name: 'Other DNS', allowed_suffixes: [], secret_configured: false })] })),
   http.get('/api/v1/acme/certificates', () => HttpResponse.json({ items: [acmeCertificateFixture()], next_cursor: null })),
+  http.post('/api/v1/acme/providers/:id/preview', () =>
+    HttpResponse.json({ terms_of_service_url: 'https://ca.example.com/terms', terms_url_unsafe: false, external_account_required: true, key_change_supported: true, renewal_info_supported: true, website: '' }),
+  ),
   // The dashboard with every widget filled, so the sweep covers their texts too.
   http.get('/api/v1/dashboard/summary', () =>
     HttpResponse.json({
@@ -365,7 +368,8 @@ describe.each(['en', 'tr'] as const)('the certificate authority dialogs in %s', 
     const openAndClose = async (button: HTMLElement) => {
       await userEvent.click(button);
       const dialog = await screen.findByRole('dialog');
-      await waitFor(() => expect(within(dialog).queryByRole('status', { name: t('Loading…', 'Yükleniyor…') })).not.toBeInTheDocument());
+      // Nothing still loading or contacting the authority (the registration's preview).
+      await waitFor(() => expect(within(dialog).queryAllByRole('status')).toEqual([]));
       expectNoRawKeys();
       await userEvent.click(within(dialog).getByRole('button', { name: cancel }));
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

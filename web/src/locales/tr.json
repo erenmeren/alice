@@ -2933,7 +2933,8 @@
       "savedNext": "Hiçbir yere bağlanılmadı. Kullanmaya başlamak için şimdi bu yetkilide bir hesap kaydedin.",
       "deleteTitle": "{{name}} kaldırılsın mı?",
       "deleteText": "Alice bu sertifika yetkilisinin ayarlarını siler. Bu yalnızca onu kullanan bir sertifika kalmadığında ve hesabı devre dışı bırakıldığında mümkündür.",
-      "deleteConfirm": "Sertifika yetkilisini kaldır"
+      "deleteConfirm": "Sertifika yetkilisini kaldır",
+      "bundleTooLarge": "CA sertifikaları en fazla 64 KiB olabilir. Yalnızca gereken sertifikaları yapıştırın."
     },
     "account": {
       "regionLabel": "{{name}} hesabı",
@@ -2960,10 +2961,21 @@
       "intro": "Alice yeni bir hesap anahtarı oluşturur ve onu sertifika yetkilisine kaydeder. Alice yetkiliye ilk kez bu adımda bağlanır.",
       "email": "İletişim e-postası (isteğe bağlı)",
       "emailHelp": "Yetkili bu adrese, örneğin sertifikalarınızla ilgili sorunlar hakkında bildirim gönderebilir.",
-      "tos": "Bu sertifika yetkilisinin hizmet koşullarını kabul ediyorum",
-      "tosHelp": "Alice koşulları yetkiliye bağlanmadan gösteremez; koşulları yetkilinin web sitesinde okuyun. Yetkili koşul yayımlıyorsa hesap yalnızca bunları kabul ettiğinizde kaydedilir. Ardından hesapta koşulların adresi görünür.",
+      "tos": "Bu adresteki koşulları okudum ve kabul ediyorum",
+      "tosHelp": "Yetkili bu koşulları yayımlıyor. Hesap tam olarak bu koşullarla kaydedilir; yetkili siz kaydetmeden önce koşulları değiştirirse Alice yenilerini gösterir.",
       "submit": "Hesap kaydet",
-      "done": "Hesap kaydedildi. Artık bu yetkiliden sertifika alabilirsiniz."
+      "done": "Hesap kaydedildi. Artık bu yetkiliden sertifika alabilirsiniz.",
+      "contacting": "Hizmet koşullarını okumak için {{host}} adresine bağlanılıyor…",
+      "previewFailed": "Alice sertifika yetkilisinin koşullarını okuyamadı; bu yüzden hesap henüz kaydedilemez.",
+      "retry": "Yeniden dene",
+      "termsChangedTitle": "Hizmet koşulları değişti",
+      "termsChangedText": "Yetkili, koşullar burada gösterildikten sonra onları değiştirdi. Hiçbir şey kaydedilmedi. Aşağıdaki yeni koşulları okuyun ve yeniden kabul edin.",
+      "eabRequiredTitle": "Bu yetkili harici hesap bağlama istiyor",
+      "eabRequiredText": "Yetkili yalnızca onlardaki hesabınızdan alınmış bir anahtar kimliği ve gizli anahtar içeren hesapları kabul ediyor ve kayıtlı bir tane yok. Önce sertifika yetkilisini düzenleyip ikisini girin; aksi halde kayıt reddedilir.",
+      "unsafeTitle": "Koşullar güvenli biçimde gösterilemiyor",
+      "unsafeText": "Yetkili koşullarını güvenli bir https adresi olmayan bir adreste yayımlıyor; bu yüzden Alice bu adresi göstermez ve hesap kaydetmez. Yetkiliye danışın veya dizin adresinin doğru olduğunu kontrol edin.",
+      "termsAt": "Hizmet koşulları:",
+      "noTerms": "Bu yetkili hizmet koşulu yayımlamıyor. Hesap herhangi bir koşul kabul edilmeden kaydedilebilir."
     },
     "rollover": {
       "title": "{{name}} için hesap anahtarı yenilensin mi?",

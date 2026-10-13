@@ -20,7 +20,7 @@ import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { useStepUp } from '../StepUpProvider';
 import { DialogActions, Notice } from '../ui';
-import { SuffixInput, takeDraft } from './SuffixInput';
+import { SuffixInput, pemTooLarge, takeDraft } from './SuffixInput';
 
 interface Sent {
   suffixes: string[];
@@ -30,9 +30,10 @@ interface Sent {
 
 const asNumber = (v: number | string) => (typeof v === 'number' ? v : v.trim() === '' ? NaN : Number(v));
 
-// HookDialog adds or changes a DNS hook. The secret lives in this form's state only: on save it moves to a ref that the
-// request takes and empties, so it is never a mutation variable (no cache holds it) and never read back (the server
-// answers secret_configured); a refusal asks for it again. The two waits are checked against their bounds before anything is sent (the server checks them again).
+// HookDialog adds or changes a DNS hook. The secret lives in this form's state only: it stays in the field until the
+// save succeeds or the dialog closes (a local problem, a refusal or a cancelled step-up keep what was typed), the
+// request reads it through a ref that it empties at once, so it is never a mutation variable (no cache holds it), and
+// it is never read back (the server answers secret_configured). The two waits are checked against their bounds before anything is sent (the server checks them again).
 export function HookDialog({ hook, onClose }: { hook: ACMEHook | null; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const { run } = useStepUp();
@@ -76,13 +77,16 @@ export function HookDialog({ hook, onClose }: { hook: ACMEHook | null; onClose: 
       if (s.poll !== hook.poll_timeout_seconds) patch.poll_timeout_seconds = s.poll;
       return run(() => updateACMEHook(hook.id, patch));
     },
-    onSuccess: () => client.invalidateQueries({ queryKey: ACME_HOOKS_KEY }),
+    onSuccess: () => {
+      setSecret('');
+      return client.invalidateQueries({ queryKey: ACME_HOOKS_KEY });
+    },
   });
 
   const submit = (ev: FormEvent) => {
     ev.preventDefault();
+    if (save.isPending) return; // Enter pressed again while the request runs
     const typed = secret;
-    setSecret(''); // gone from the form whatever the answer; a refusal asks for it again
     const problems: Record<string, string> = {};
     const w = asNumber(wait);
     const p = asNumber(poll);
@@ -91,6 +95,7 @@ export function HookDialog({ hook, onClose }: { hook: ACMEHook | null; onClose: 
     if (!Number.isInteger(w) || w < 0 || w > HOOK_WAIT_MAX) problems.propagation_wait_seconds = t('acme.hook.waitRange', { max: HOOK_WAIT_MAX });
     if (!Number.isInteger(p) || p < HOOK_POLL_MIN || p > HOOK_POLL_MAX) problems.poll_timeout_seconds = t('acme.hook.pollRange', { min: HOOK_POLL_MIN, max: HOOK_POLL_MAX });
     else if (Number.isInteger(w) && w + p > HOOK_TOTAL_MAX) problems.poll_timeout_seconds = t('acme.hook.totalRange', { max: HOOK_TOTAL_MAX });
+    if (pemTooLarge(bundle)) problems.ca_bundle_pem = t('acme.provider.bundleTooLarge');
     const drafted = takeDraft(suffixes, draft);
     if (drafted.problem) setDraftProblem(drafted.problem);
     setLocal(problems);

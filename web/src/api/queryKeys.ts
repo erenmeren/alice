@@ -68,6 +68,10 @@ export const ACME_KEY = ['acme'] as const;
 export const ACME_PROVIDERS_KEY = ['acme', 'providers'] as const;
 export const ACME_PROVIDER_LIST_KEY = ['acme', 'providers', 'list'] as const;
 export const acmeProviderKey = (id: string) => ['acme', 'providers', id] as const;
+// The registration form's directory preview: it contacts the CA, so it is read when the form opens and is never
+// refreshed by an invalidation of the providers (notACMEPreview).
+export const acmePreviewKey = (id: string) => ['acme', 'providers', id, 'preview'] as const;
+export const notACMEPreview = (q: { queryKey: readonly unknown[] }) => !(q.queryKey[0] === 'acme' && q.queryKey[3] === 'preview');
 export const ACME_HOOKS_KEY = ['acme', 'hooks'] as const;
 export const ACME_HOOK_LIST_KEY = ['acme', 'hooks', 'list'] as const;
 export const ACME_CERTIFICATES_KEY = ['acme', 'certificates'] as const;
