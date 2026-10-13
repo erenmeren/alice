@@ -87,6 +87,7 @@ var inventorySentinels = map[string]error{
 	"ErrACMELocationNotBound": inventory.ErrACMELocationNotBound, "ErrACMEBindingGone": inventory.ErrACMEBindingGone,
 	"ErrACMEAutoDeployOff": inventory.ErrACMEAutoDeployOff, "ErrACMESuperseded": inventory.ErrACMESuperseded,
 	"ErrACMEDeployStopped": inventory.ErrACMEDeployStopped, "ErrACMEDeployHeld": inventory.ErrACMEDeployHeld,
+	"ErrACMENoBindings": inventory.ErrACMENoBindings, "ErrACMETooManyBindings": inventory.ErrACMETooManyBindings,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,

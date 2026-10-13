@@ -3762,8 +3762,9 @@ paths:
       summary: Change an ACME certificate (absent fields stay)
       description: >-
         409 ALC-ACM-0016 when what an order uses changes while one runs; 409 ALC-ACM-0018 when the key type changes while
-        locations are bound. auto_renew false to true starts automatic renewal afresh; auto_deploy false to true needs the license.
-        Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
+        locations are bound. auto_renew false to true starts automatic renewal afresh (like rearm); auto_deploy false to true needs
+        the license. Administrator with a fresh step-up, never an API token. At most 10 a minute per user (the ACME actions'
+        limit). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
       requestBody:
         required: true
@@ -3782,6 +3783,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
     delete:
       operationId: deleteACMECertificate
@@ -3926,8 +3928,9 @@ paths:
         Key Vault certificate or another ACME certificate), 409 ALC-CRT-0010 (key type), 409 ALC-NGX-0007 (location
         unsupported). Switching unattended deployment on (auto_deploy true for a new binding or one whose automatic deployment
         is off) needs an Administrator's browser session with a fresh step-up (403 ALC-AUTH-0003 without it; an API token or an
-        Operator: 403 ALC-AUTH-0002); binding with it off, keeping it on and switching it off need acme.operate. Refused with
-        403 ALC-LIC-0001 while the license is locked.
+        Operator: 403 ALC-AUTH-0002); binding with it off, keeping it on and switching it off need acme.operate. The rule is
+        applied inside the change itself, so a binding switched off by another request in the meantime is not switched on again
+        without the step-up. Refused with 403 ALC-LIC-0001 while the license is locked, switching off included (carry).
       x-permission: acme.operate
       requestBody:
         required: false
@@ -3964,9 +3967,9 @@ paths:
       operationId: deployACMECertificate
       summary: Deploy now - deploy the current certificate to bound locations (one deployment and one job per location)
       description: >-
-        location_ids absent means every bound location (at most 20). All or nothing; a refusal decided for one location carries
-        params.location_id: 422 ALC-ACM-0029 (not bound) and the Phase 4 refusals of a deployment. 409 ALC-ACM-0027 (not
-        issued yet), 409 ALC-CRT-0011 (an incomplete chain; an Administrator's confirm_incomplete_chain). At most 10 a minute per
+        location_ids absent means every bound location: 409 ALC-ACM-0035 when none is bound, 422 ALC-ACM-0036 when more than 20
+        are (name them). All or nothing; a refusal decided for one location carries params.location_id: 422 ALC-ACM-0029 (not
+        bound) and the Phase 4 refusals of a deployment. 409 ALC-ACM-0027 (not issued yet), 409 ALC-CRT-0011 (an incomplete chain; an Administrator's confirm_incomplete_chain). At most 10 a minute per
         user or token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.operate
       requestBody:

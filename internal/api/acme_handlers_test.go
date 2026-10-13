@@ -574,11 +574,11 @@ func TestACMEBindingAutoDeployNeedsAFreshStepUp(t *testing.T) {
 	fa := d.Audit.(*fakeAudit)
 	existing := []inventory.ACMEBinding{}
 	f.ListACMEBindingsFn = func(context.Context, uuid.UUID) ([]inventory.ACMEBinding, error) { return existing, nil }
-	var added []bool
-	f.AddACMEBindingFn = func(_ context.Context, _ inventory.Actor, id, loc uuid.UUID, auto bool) (inventory.ACMEBinding, error) {
+	var added, stricts []bool
+	f.AddACMEBindingFn = func(_ context.Context, _ inventory.Actor, id, loc uuid.UUID, auto, strict bool) (inventory.ACMEBinding, error) {
 		assert.Equal(t, acmeCertID, id)
 		assert.Equal(t, acmeLocID, loc)
-		added = append(added, auto)
+		added, stricts = append(added, auto), append(stricts, strict)
 		return sampleACMEBinding(auto), nil
 	}
 	path := "/api/v1/acme/certificates/" + acmeCertID.String() + "/bindings/" + acmeLocID.String()
@@ -604,6 +604,7 @@ func TestACMEBindingAutoDeployNeedsAFreshStepUp(t *testing.T) {
 	assert.Empty(t, added, "nothing reached the inventory")
 	require.Equal(t, http.StatusOK, call(h, http.MethodPut, path, "admin-stepup", on).Code)
 	assert.Equal(t, []bool{true}, added)
+	assert.Equal(t, []bool{true}, stricts, "the session's strength reaches the inventory, which decides inside its transaction")
 
 	// An existing binding whose automatic deployment is off is switched on: the same rule.
 	existing = []inventory.ACMEBinding{sampleACMEBinding(false)}
@@ -615,6 +616,7 @@ func TestACMEBindingAutoDeployNeedsAFreshStepUp(t *testing.T) {
 	require.Equal(t, http.StatusOK, call(h, http.MethodPut, path, "alice_operate_operator", `{"auto_deploy":false}`).Code)
 	require.Equal(t, http.StatusOK, call(h, http.MethodPut, path, "operator", "").Code)
 	assert.Equal(t, []bool{true, false, false}, added)
+	assert.Equal(t, []bool{true, false, false, false}, stricts, "an Operator's session and a token are never strict")
 	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPut, path, "operator", `{"auto_deploy":"yes"}`).Code)
 	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPut, path, "operator", `{"auto":true}`).Code)
 
@@ -627,7 +629,7 @@ func TestACMEBindingAutoDeployNeedsAFreshStepUp(t *testing.T) {
 		{inventory.ErrAdminRequired, "ALC-AUTH-0002"}, {license.ErrLocked, "ALC-LIC-0001"},
 		{&inventory.KeyTypeMismatchError{Expected: "rsa", Actual: "ecdsa"}, "ALC-CRT-0010"},
 	} {
-		f.AddACMEBindingFn = func(context.Context, inventory.Actor, uuid.UUID, uuid.UUID, bool) (inventory.ACMEBinding, error) {
+		f.AddACMEBindingFn = func(context.Context, inventory.Actor, uuid.UUID, uuid.UUID, bool, bool) (inventory.ACMEBinding, error) {
 			return inventory.ACMEBinding{}, tc.err
 		}
 		code, _, _ := errorField(t, call(h, http.MethodPut, path, "operator", ""))
@@ -1010,4 +1012,94 @@ func TestACMEBindingListAndFollowUpReads(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/acme/providers/"+acmeProvID.String(), "auditor", "").Code)
 	f.DeleteACMEHookFn = func(context.Context, inventory.Actor, uuid.UUID) error { return nil }
 	assert.Equal(t, http.StatusNoContent, call(h, http.MethodDelete, "/api/v1/acme/hooks/"+acmeHookID.String(), "admin-stepup", "").Code)
+}
+
+// Fix round 1 (I1): the handler saw "already on" and asked for no step-up, but the binding was switched off meanwhile;
+// the inventory refuses the switch-on inside its transaction (ErrAutoDeployNeedsStepUp) and the caller gets the step-up
+// answer (an Administrator) or 403 ALC-AUTH-0002 (a token, which can never step up).
+func TestACMEBindingSwitchOnRaceIsAnsweredWithTheStepUp(t *testing.T) {
+	h, f, _ := acmeDeps(t)
+	f.ListACMEBindingsFn = func(context.Context, uuid.UUID) ([]inventory.ACMEBinding, error) {
+		return []inventory.ACMEBinding{sampleACMEBinding(true)}, nil // the handler's read: on
+	}
+	var strict []bool
+	f.AddACMEBindingFn = func(_ context.Context, _ inventory.Actor, _, _ uuid.UUID, _, s bool) (inventory.ACMEBinding, error) {
+		strict = append(strict, s)
+		if !s {
+			return inventory.ACMEBinding{}, inventory.ErrAutoDeployNeedsStepUp // switched off in between
+		}
+		return sampleACMEBinding(true), nil
+	}
+	path := "/api/v1/acme/certificates/" + acmeCertID.String() + "/bindings/" + acmeLocID.String()
+	rec := call(h, http.MethodPut, path, "admin", `{"auto_deploy":true}`)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	code, reason, _ := errorField(t, rec)
+	assert.Equal(t, "auth.stepup_required", reason)
+	assert.Equal(t, "ALC-AUTH-0003", code)
+	rec = call(h, http.MethodPut, path, "alice_operate_admin", `{"auto_deploy":true}`)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	code, _, _ = errorField(t, rec)
+	assert.Equal(t, "ALC-AUTH-0002", code)
+	assert.Equal(t, http.StatusOK, call(h, http.MethodPut, path, "admin-stepup", `{"auto_deploy":true}`).Code)
+	assert.Equal(t, []bool{false, false, true}, strict)
+}
+
+// Fix round 1 (M1): switching auto_renew on through PATCH re-arms the renewal like /rearm, so the definition's PATCH is in
+// the ACME bucket (10 a minute per user).
+func TestACMECertificatePatchIsRateLimited(t *testing.T) {
+	_, f, d := acmeDeps(t)
+	s := newServer(d)
+	h := s.handler(s.apiRoutes())
+	f.UpdateACMECertificateFn = func(context.Context, inventory.Actor, uuid.UUID, inventory.ACMECertificatePatch) (inventory.ACMECertificate, error) {
+		return sampleACMECert(), nil
+	}
+	path := "/api/v1/acme/certificates/" + acmeCertID.String()
+	for i := range 10 {
+		require.Equal(t, http.StatusOK, call(h, http.MethodPatch, path, "admin-stepup", `{"auto_renew":true}`).Code, "#%d", i+1)
+	}
+	rec := call(h, http.MethodPatch, path, "admin-stepup", `{"auto_renew":true}`)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+}
+
+// Fix round 1 (M4): read tokens change nothing, whatever the method.
+func TestACMEReadTokensChangeNothing(t *testing.T) {
+	h, _, _ := acmeDeps(t)
+	for _, tok := range []string{"alice_read_admin", "alice_read_auditor"} {
+		for _, r := range []struct{ method, path string }{
+			{http.MethodPatch, "/api/v1/acme/certificates/" + acmeCertID.String()},
+			{http.MethodDelete, "/api/v1/acme/certificates/" + acmeCertID.String()},
+			{http.MethodPatch, "/api/v1/acme/providers/" + acmeProvID.String()},
+			{http.MethodDelete, "/api/v1/acme/providers/" + acmeProvID.String()},
+			{http.MethodPatch, "/api/v1/acme/hooks/" + acmeHookID.String()},
+			{http.MethodDelete, "/api/v1/acme/hooks/" + acmeHookID.String()},
+			{http.MethodDelete, "/api/v1/acme/certificates/" + acmeCertID.String() + "/bindings/" + acmeLocID.String()},
+		} {
+			rec := call(h, r.method, r.path, tok, "{}")
+			require.Equal(t, http.StatusForbidden, rec.Code, tok+" "+r.method+" "+r.path)
+			code, _, _ := errorField(t, rec)
+			assert.Equal(t, "ALC-AUTH-0002", code)
+		}
+	}
+}
+
+// Fix round 1 (M2): Deploy now without named websites answers its own codes; their texts name the limit, which must
+// stay the inventory's.
+func TestACMEDeployNowWithoutNamedWebsites(t *testing.T) {
+	h, f, _ := acmeDeps(t)
+	assert.Equal(t, 20, inventory.MaxDeployLocations, "locales/common and troubleshooting say 'at most 20'")
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+	}{{inventory.ErrACMENoBindings, 409, "ALC-ACM-0035"}, {inventory.ErrACMETooManyBindings, 422, "ALC-ACM-0036"}} {
+		f.DeployACMENowFn = func(context.Context, inventory.Actor, uuid.UUID, inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error) {
+			return nil, tc.err
+		}
+		rec := call(h, http.MethodPost, "/api/v1/acme/certificates/"+acmeCertID.String()+"/deploy", "operator", "")
+		require.Equal(t, tc.status, rec.Code)
+		code, _, details := errorField(t, rec)
+		assert.Equal(t, tc.code, code)
+		assert.Empty(t, details, "no field error on a field the request did not send")
+	}
 }

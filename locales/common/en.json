@@ -1441,6 +1441,16 @@
         "title": "This certificate is waiting for an administrator.",
         "cause": "Alice holds this certificate for an administrator before it is deployed automatically (it arrived before the license allowed changes again, or Alice cannot confirm the certificates that vouch for it). A deployment that was waiting sent nothing to the server.",
         "action": "An administrator checks the certificate, then chooses Deploy now or releases it for automatic deployment."
+      },
+      "no_bindings": {
+        "title": "No website is connected to this certificate yet.",
+        "cause": "Deploy now puts the certificate on the websites connected to it, and none is connected.",
+        "action": "Connect at least one website to the certificate, then choose Deploy now again."
+      },
+      "too_many_bindings": {
+        "title": "Choose the websites to deploy to.",
+        "cause": "This certificate is connected to more websites than one deployment request can take (at most 20).",
+        "action": "Select the websites to deploy to, at most 20 at a time, and choose Deploy now again."
       }
     },
     "tls": {

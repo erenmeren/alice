@@ -60,7 +60,8 @@ func (s *server) acmeRoutes() []route {
 		{method: http.MethodGet, pattern: certs, perm: view, handler: s.listACMECertificates},
 		{method: http.MethodPost, pattern: certs, perm: manage, lic: change, handler: s.createACMECertificate},
 		{method: http.MethodGet, pattern: certs + "/{id}", perm: view, handler: s.getACMECertificate},
-		{method: http.MethodPatch, pattern: certs + "/{id}", perm: manage, lic: change, handler: s.updateACMECertificate},
+		// limitACME: switching auto_renew on re-arms automatic renewal (a fresh series against the CA, like /rearm).
+		{method: http.MethodPatch, pattern: certs + "/{id}", perm: manage, lic: change, limit: limitACME, handler: s.updateACMECertificate},
 		{method: http.MethodDelete, pattern: certs + "/{id}", perm: manage, lic: always, handler: s.deleteACMECertificate},
 		{method: http.MethodPost, pattern: certs + "/{id}/order", perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderIssue)},
 		{method: http.MethodPost, pattern: certs + "/{id}/test", perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderTest)},
@@ -889,9 +890,12 @@ func (s *server) listACMEBindings(w http.ResponseWriter, r *http.Request) {
 
 // putACMEBinding binds a location to the certificate (or changes its auto_deploy). Switching unattended deployment ON
 // — a new binding with auto_deploy true, or an existing one switched from off to on — is an Administrator's browser
-// session with a fresh step-up, never an API token (strictActionFor acme.manage; Task 12 ruling I2); the inventory
-// checks the role and the licence again. Binding with auto_deploy off, keeping it on and switching it off need only
-// acme.operate.
+// session with a fresh step-up, never an API token (Task 12 ruling I2). The decision is the inventory's, inside its
+// transaction under the certificate's row lock, with the strength of this session (strictSession; ErrAutoDeployNeedsStepUp,
+// ErrAdminRequired, the licence): a switch-off between this handler's read and the call cannot let a request without the
+// step-up switch it on again (Task 13 fix round 1, as the Key Vault's UpdateBindingLocationsStrict). The handler's own
+// read only answers the plain case early, audited like the guard (strictActionFor acme.manage). Binding with auto_deploy
+// off, keeping it on and switching it off need only acme.operate.
 func (s *server) putACMEBinding(w http.ResponseWriter, r *http.Request) {
 	id, ok1 := pathUUID(r, "id")
 	loc, ok2 := pathUUID(r, "location_id")
@@ -915,7 +919,8 @@ func (s *server) putACMEBinding(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	b, err := s.deps.ACME.AddACMEBinding(r.Context(), s.actor(r), id, loc, req.AutoDeploy)
+	strict := rbac.Decide(rbac.AcmeManage, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) == rbac.Allow
+	b, err := s.deps.ACME.AddACMEBindingStrict(r.Context(), s.actor(r), id, loc, req.AutoDeploy, strict)
 	if err != nil {
 		s.fail(w, r, err)
 		return

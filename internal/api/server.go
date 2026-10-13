@@ -197,7 +197,7 @@ type ACMEService interface {
 	ReArmACMEAutoRenew(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.ACMECertificate, error)
 	ReleaseACMEDeployHold(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	ListACMEBindings(ctx context.Context, id uuid.UUID) ([]inventory.ACMEBinding, error)
-	AddACMEBinding(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy bool) (inventory.ACMEBinding, error)
+	AddACMEBindingStrict(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)
 	RemoveACMEBinding(ctx context.Context, a inventory.Actor, id, location uuid.UUID) error
 	DeployACMENow(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error)
 }

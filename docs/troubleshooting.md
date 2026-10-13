@@ -2738,6 +2738,22 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** An administrator checks the certificate, then chooses Deploy now or releases it for automatic deployment.
 
+## ALC-ACM-0035: No website is connected to this certificate yet
+
+**Meaning.** Deploy now of a certificate from a certificate authority, with no website chosen, puts it on every website connected to it, and none is connected. Nothing was deployed. (HTTP 409, reason `acme.no_bindings`.)
+
+**Likely cause.** The certificate was issued but no website was connected to it yet, or the last connection was removed.
+
+**What to do.** Connect at least one website to the certificate, then choose Deploy now again.
+
+## ALC-ACM-0036: Choose the websites to deploy to
+
+**Meaning.** Deploy now of a certificate from a certificate authority, with no website chosen, would deploy to every website connected to it, and it is connected to more websites than one deployment request can take (at most 20). Nothing was deployed. (HTTP 422, reason `acme.too_many_bindings`.)
+
+**Likely cause.** The certificate is connected to many websites.
+
+**What to do.** Select the websites to deploy to, at most 20 at a time, and choose Deploy now again.
+
 ## Install and start problems
 
 The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.

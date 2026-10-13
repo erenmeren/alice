@@ -36,7 +36,7 @@ type fakeACME struct {
 	ReArmACMEAutoRenewFn    func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.ACMECertificate, error)
 	ReleaseACMEDeployHoldFn func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	ListACMEBindingsFn      func(ctx context.Context, id uuid.UUID) ([]inventory.ACMEBinding, error)
-	AddACMEBindingFn        func(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy bool) (inventory.ACMEBinding, error)
+	AddACMEBindingFn        func(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)
 	RemoveACMEBindingFn     func(ctx context.Context, a inventory.Actor, id, location uuid.UUID) error
 	DeployACMENowFn         func(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error)
 }
@@ -216,9 +216,9 @@ func (f *fakeACME) ListACMEBindings(ctx context.Context, id uuid.UUID) ([]invent
 	return nil, errNotConfigured
 }
 
-func (f *fakeACME) AddACMEBinding(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy bool) (inventory.ACMEBinding, error) {
+func (f *fakeACME) AddACMEBindingStrict(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error) {
 	if f.AddACMEBindingFn != nil {
-		return f.AddACMEBindingFn(ctx, a, id, location, autoDeploy)
+		return f.AddACMEBindingFn(ctx, a, id, location, autoDeploy, strictSession)
 	}
 	return inventory.ACMEBinding{}, errNotConfigured
 }

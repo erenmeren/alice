@@ -40,6 +40,7 @@ var acmeTable = []struct {
 	{"ALC-ACM-0029", "acme.location_not_bound", 422, false}, {"ALC-ACM-0030", "acme.binding_gone", 409, false},
 	{"ALC-ACM-0031", "acme.auto_deploy_off", 409, false}, {"ALC-ACM-0032", "acme.certificate_superseded", 409, false},
 	{"ALC-ACM-0033", "acme.deploy_stopped", 409, false}, {"ALC-ACM-0034", "acme.deploy_held", 409, false},
+	{"ALC-ACM-0035", "acme.no_bindings", 409, false}, {"ALC-ACM-0036", "acme.too_many_bindings", 422, false},
 }
 
 // Every ACME code is registered as the table says, translated in English and Turkish without placeholders, and has a

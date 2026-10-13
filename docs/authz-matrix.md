@@ -212,7 +212,8 @@ API token (403 ALC-AUTH-0003 without the step-up, 403 ALC-AUTH-0002 for a token 
 - `PUT /api/v1/acme/certificates/{id}/bindings/{location_id}`: when it switches unattended deployment on (`auto_deploy: true` for a
   new binding, or for a binding whose automatic deployment is off). Then it needs what `acme.manage` needs (an Administrator's
   browser session with a fresh step-up, never an API token); binding with automatic deployment off, keeping it on and switching it
-  off are `acme.operate` as listed. The inventory checks the role and the license again.
+  off are `acme.operate` as listed. The inventory decides inside its transaction with the strength of the session, so a binding
+  switched off by another request in the meantime is not switched on again without the step-up (403 ALC-AUTH-0003).
 
 **`credentials.manage`** is Administrator with step-up and no API token. Besides adding a Key Vault and replacing its credentials
 it gates switching automatic deployment on or off, releasing a held version and importing a certificate into a vault (a
@@ -227,7 +228,8 @@ Alice, and a lock must not hold the keys of the customer's own servers hostage.
 their accounts, DNS hooks and the certificate definitions (with their name lists), re-arming automatic renewal and releasing a held
 certificate are `acme.manage`: an Administrator's browser session with step-up, never an API token. Ordering a renewal, a test
 run, binding locations and Deploy now are `acme.operate` (Operators and operate tokens). The routes that contact a certificate
-authority or start work (account registration, key change and its check, deactivation, order, test run, re-arm, Deploy now) are
+authority or start work (account registration, key change and its check, deactivation, order, test run, re-arm, a change of a
+certificate definition (switching automatic renewal on re-arms it), Deploy now) are
 limited to 10 a minute per user or token. In lock every ACME change is refused with ALC-LIC-0001 (no certificate authority is
 contacted) except `DELETE /api/v1/acme/certificates/{id}` and `DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}`,
 which only reduce what Alice does (no renewal, no deployment), like removing a Key Vault connection.

@@ -415,6 +415,9 @@ var (
 	ErrACMCertificateSuperseded = ErrorCode{Code: "ALC-ACM-0032", Reason: "acme.certificate_superseded", Status: http.StatusConflict}
 	ErrACMDeployStopped         = ErrorCode{Code: "ALC-ACM-0033", Reason: "acme.deploy_stopped", Status: http.StatusConflict}
 	ErrACMDeployHeld            = ErrorCode{Code: "ALC-ACM-0034", Reason: "acme.deploy_held", Status: http.StatusConflict}
+	// Deploy now without named websites (Task 13 fix round 1): none is bound, or more than one request takes.
+	ErrACMNoBindings      = ErrorCode{Code: "ALC-ACM-0035", Reason: "acme.no_bindings", Status: http.StatusConflict}
+	ErrACMTooManyBindings = ErrorCode{Code: "ALC-ACM-0036", Reason: "acme.too_many_bindings", Status: http.StatusUnprocessableEntity}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -474,6 +477,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMHookInUse, ErrACMNameTaken, ErrACMAccountExists, ErrACMDirectoryChangeUnconfirmed, ErrACMAccountState, ErrACMRolloverPending,
 		ErrACMSecretUnreadable, ErrACMOrderAbandoned, ErrACMNotIssued, ErrACMLocationBound, ErrACMLocationNotBound,
 		ErrACMBindingGone, ErrACMAutoDeployOff, ErrACMCertificateSuperseded, ErrACMDeployStopped, ErrACMDeployHeld,
+		ErrACMNoBindings, ErrACMTooManyBindings,
 	}
 }
 
@@ -628,6 +632,8 @@ var errorMap = []struct {
 	{inventory.ErrACMESuperseded, ErrACMCertificateSuperseded, nil},
 	{inventory.ErrACMEDeployStopped, ErrACMDeployStopped, nil},
 	{inventory.ErrACMEDeployHeld, ErrACMDeployHeld, nil},
+	{inventory.ErrACMENoBindings, ErrACMNoBindings, nil},
+	{inventory.ErrACMETooManyBindings, ErrACMTooManyBindings, nil}, // the texts name the limit (inventory.MaxDeployLocations, 20)
 	// The inventory repeats the session check inside its transaction (a hold or a switch-on can appear after the
 	// API looked): what it refuses is a session without a fresh step-up.
 	{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired, nil},

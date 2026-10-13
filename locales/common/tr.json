@@ -1441,6 +1441,16 @@
         "title": "Bu sertifika bir yöneticiyi bekliyor.",
         "cause": "Alice bu sertifikayı otomatik dağıtmadan önce bir yönetici için bekletiyor (lisans değişikliklere yeniden izin vermeden önce geldi ya da Alice ona kefil olan sertifikaları doğrulayamıyor). Bekleyen bir dağıtım sunucuya hiçbir şey göndermedi.",
         "action": "Bir yönetici sertifikayı denetler, ardından Şimdi dağıt düğmesine tıklar ya da sertifikayı otomatik dağıtım için serbest bırakır."
+      },
+      "no_bindings": {
+        "title": "Bu sertifikaya henüz hiçbir web sitesi bağlı değil.",
+        "cause": "Şimdi dağıt, sertifikayı ona bağlı web sitelerine yerleştirir ve bağlı hiçbir web sitesi yok.",
+        "action": "Sertifikaya en az bir web sitesi bağlayın, ardından yeniden Şimdi dağıt düğmesine tıklayın."
+      },
+      "too_many_bindings": {
+        "title": "Dağıtılacak web sitelerini seçin.",
+        "cause": "Bu sertifika, tek bir dağıtım isteğinin alabileceğinden daha fazla web sitesine bağlı (en fazla 20).",
+        "action": "Dağıtılacak web sitelerini bir seferde en fazla 20 olacak şekilde seçin ve yeniden Şimdi dağıt düğmesine tıklayın."
       }
     },
     "tls": {
