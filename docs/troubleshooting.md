@@ -296,8 +296,6 @@ below.
   website shows **Needs attention** from about a minute after the failure. Use **Deploy now** after fixing the cause.
 - **After Deploy now the website still says "Waiting for deployment".** The page does not refresh the websites by
   itself: reload it, or follow the deployment on **Deployments**.
-- **The e-mail says "choose Renew now" but there is no such button.** **Renew now** appears for administrators only
-  when automatic renewal stopped; otherwise use **Order now**.
 - **A restored installation does not renew.** A restore switches automatic renewal off on every certificate from a
   certificate authority; switch it on again on each certificate's page.
 
@@ -2632,7 +2630,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Wait for the running order to finish, then check the certificate.
 
-## ALC-ACM-0017: This proof method is not available yet
+## ALC-ACM-0017: This proof method cannot be used here
 
 **Meaning.** The web proof (HTTP-01) cannot be used for these names or this server. Nothing was changed. (HTTP 422, reason `acme.challenge_unavailable`.)
 
@@ -2718,7 +2716,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** The first order of the certificate has not finished or did not succeed.
 
-**What to do.** Get the certificate first (**Get certificate now** on its page under **Issued certificates**; the message's "Renew now" means that button), then connect the websites or deploy it.
+**What to do.** Get the certificate first (**Get certificate now** on its page under **Issued certificates**), then connect the websites or deploy it.
 
 ## ALC-ACM-0028: This website already follows another certificate
 

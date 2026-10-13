@@ -238,8 +238,6 @@ Critical; the plan reviews' blocking findings were design changes made before an
   the status page does not poll deployments after **Deploy now**.
 - Expiry e-mails do not cover an ACME certificate before it is on a server (the renewal e-mails do).
 - No per-run cap on ACME e-mails (one per certificate and kind).
-- Some UI and e-mail texts say "Renew now" where **Order now** (or **Get certificate now**) is meant (the ALC-ACM-0027
-  action, the `acme.renewal_failed` e-mail); the guides explain it.
 - `.alice-acme-*` temp files of a killed helper are not swept.
 - Inventory coverage is 89.2–89.5 % against its floor of 89.
 

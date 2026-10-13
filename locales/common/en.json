@@ -1353,9 +1353,9 @@
         "action": "Wait until the running order finishes; its result appears on the certificate."
       },
       "challenge_unavailable": {
-        "title": "This proof method is not available yet.",
-        "cause": "The chosen way to prove the name (web proof) is not available in this version, or on this server. Nothing was changed.",
-        "action": "Choose the DNS proof, or update the helper on the server if it supports the web proof."
+        "title": "This proof method cannot be used here.",
+        "cause": "The web proof (HTTP-01) cannot prove these names on this server: it cannot prove a wildcard name, and it needs a server that Alice manages as an Nginx server. Nothing was changed.",
+        "action": "Choose the DNS proof, or choose an Nginx server that answers for these names on port 80."
       },
       "key_type_locked": {
         "title": "The key type cannot be changed.",
@@ -1405,7 +1405,7 @@
       "not_issued": {
         "title": "This certificate has not been issued yet.",
         "cause": "The certificate authority has not issued a certificate for these names yet, so there is nothing to connect to a website or to deploy.",
-        "action": "Get the certificate first (Renew now), then connect the websites or deploy it."
+        "action": "Get the certificate first (Get certificate now on its page), then connect the websites or deploy it."
       },
       "location_bound": {
         "title": "This website already follows another certificate.",
@@ -1746,11 +1746,11 @@
     "acme": {
       "renewal_failed": {
         "subject": "Alice could not renew the certificate for {{name}}",
-        "body": "Alice tried to renew the certificate for {{names}} {{count}} times in a row and did not succeed.\n\nReason of the last attempt: {{reason}}\n\nThe current certificate stays in use and keeps working until {{expires_at}}. Alice keeps trying by itself and waits longer between the attempts. After 5 failed attempts in a row it stops trying.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page shows the reason of each attempt. Remove the cause, then choose Renew now."
+        "body": "Alice tried to renew the certificate for {{names}} {{count}} times in a row and did not succeed.\n\nReason of the last attempt: {{reason}}\n\nThe current certificate stays in use and keeps working until {{expires_at}}. Alice keeps trying by itself and waits longer between the attempts. After 5 failed attempts in a row it stops trying.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page shows the reason of each attempt. Remove the cause, then choose Order now to renew it at once."
       },
       "auto_renew_stopped": {
         "subject": "Automatic renewal stopped: certificate for {{name}}",
-        "body": "Alice stopped renewing the certificate for {{names}} by itself, because {{count}} attempts in a row failed.\n\nReason of the last attempt: {{reason}}\n\nThe current certificate stays in use until {{expires_at}}. After that time, visitors of the websites that use it see a security warning.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page shows the reason of each attempt. Remove the cause, then choose Renew now. When that renewal succeeds, Alice renews the certificate by itself again."
+        "body": "Alice stopped renewing the certificate for {{names}} by itself, because {{count}} attempts in a row failed.\n\nReason of the last attempt: {{reason}}\n\nThe current certificate stays in use until {{expires_at}}. After that time, visitors of the websites that use it see a security warning.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page shows the reason of each attempt. Remove the cause, then choose Order now to renew it at once: when that succeeds, Alice renews the certificate by itself again. An administrator can also choose Renew now, so that Alice renews it at the next planned time."
       },
       "auto_deploy_stopped": {
         "subject": "Automatic deployment stopped: certificate for {{name}}",

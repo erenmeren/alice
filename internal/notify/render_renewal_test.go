@@ -167,9 +167,15 @@ func TestACMERenewalTemplatesRenderInBothLanguages(t *testing.T) {
 	assert.Equal(t, "Alice could not renew the certificate for www.örnek.example", en.Subject)
 	assert.Contains(t, en.Body, "Reason of the last attempt: The authority is limiting requests.")
 	assert.Contains(t, en.Body, "open Issued certificates in Alice")
+	assert.Contains(t, en.Body, "choose Order now", "the button that orders at once")
+	assert.NotContains(t, en.Body, "Renew now", "Renew now only re-arms a stopped certificate")
+	trFailed := s.Render("ada@example.com", inventory.TemplateACMERenewalFailed, "tr", params)
+	assert.Contains(t, trFailed.Body, "Şimdi iste")
+	assert.NotContains(t, trFailed.Body, "Şimdi yenile")
 	tr := s.Render("ada@example.com", inventory.TemplateACMEAutoRenewStopped, "tr", params)
 	assert.Equal(t, "Otomatik yenileme durdu: www.örnek.example sertifikası", tr.Subject)
 	assert.Contains(t, tr.Body, "Şimdi yenile")
+	assert.Contains(t, tr.Body, "Şimdi iste", "a stopped certificate is renewed at once with Order now")
 	assert.Contains(t, tr.Body, "Lütfen yanıtlamayın.", "the footer is in the reader's language")
 }
 

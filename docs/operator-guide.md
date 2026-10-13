@@ -824,9 +824,6 @@ e-mail; the current certificate keeps working until it expires. Fix the cause sh
 - an administrator can also choose **Renew now** (with a fresh code), which switches automatic renewal on again so
   that Alice renews at the next planned time.
 
-The e-mails ask you to "choose Renew now": when the certificate is not stopped yet, or you are an operator, use
-**Order now**.
-
 ### Websites of an issued certificate
 
 **Websites using this certificate** lists the websites (a certificate file on a managed Nginx server) that follow

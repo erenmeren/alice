@@ -138,3 +138,18 @@ func TestACMEInventoryErrorsMapToTheirCodes(t *testing.T) {
 		assert.Equal(t, ErrACMDirectoryInvalid, ec, r)
 	}
 }
+
+// The texts name the buttons that exist: an order is "Get certificate now" before the first issuance (Renew now only
+// re-arms a stopped certificate), and the web proof is available, so 0017 says what it refuses instead of "not yet".
+func TestACMETextsNameTheRealButtons(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	assert.Contains(t, cat.T("en", "errors.acme.not_issued.action", nil), "Get certificate now")
+	assert.Contains(t, cat.T("tr", "errors.acme.not_issued.action", nil), "Sertifikayı şimdi al")
+	for _, lang := range []string{"en", "tr"} {
+		assert.NotContains(t, cat.T(lang, "errors.acme.not_issued.action", nil), map[string]string{"en": "Renew now", "tr": "Şimdi yenile"}[lang])
+	}
+	assert.Equal(t, "This proof method cannot be used here.", cat.T("en", "errors.acme.challenge_unavailable.title", nil))
+	assert.NotContains(t, cat.T("en", "errors.acme.challenge_unavailable.cause", nil), "not available in this version")
+	assert.NotContains(t, cat.T("tr", "errors.acme.challenge_unavailable.title", nil), "henüz")
+}

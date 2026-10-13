@@ -164,7 +164,7 @@ Rulings recorded in the task report, adopted:
 - `ReArmACMEAutoRenew` (**Renew now**) resets failures and the notice mark and switches automatic renewal on; it does
   not order. Audit `acme.auto_renew.rearmed` (not in the plan's audit list; added).
 - Deferred minors: a stopped or auto-renew-off neighbour can hold its provider ≤ 24 h; more than 150 candidates per
-  tick wait for the next run; the e-mails name "Issued certificates"/"Renew now" (Task 15 used those labels).
+  tick wait for the next run; the e-mails name "Issued certificates" and the real buttons (Task 15 labels; corrected in the Task 18 fix round).
 
 ## Task 12: bindings and automatic deployment
 
@@ -248,11 +248,12 @@ Rulings recorded in the task report, adopted:
   not changed): `ALC-ACM-0006` (no "hook test" exists), `ALC-ACM-0012` (an account also blocks removal),
   `ALC-ACM-0017` (HTTP-01 is enabled; the causes are wildcards and non-Nginx servers), `ALC-ACM-0027` (the button is
   **Get certificate now**).
-- **Not changed, carried**: the locale texts that say "Renew now" where an order is meant (`errors.acme.not_issued.action`,
-  `email.acme.renewal_failed`) and the title of `ALC-ACM-0017` ("not available yet") — product strings in two languages
-  covered by render tests, outside a documentation task — the guides and the troubleshooting page explain them —
-  cost: a reader of the e-mail looks for a button that only Administrators see on a stopped certificate — reverse:
-  edit `locales/common/{en,tr}.json` (and the troubleshooting heading of 0017 with it).
+- Fixed on the coordinator's request (Task 18 fix round): the product texts that said "Renew now" where an order is
+  meant now name the real buttons in en and tr — `errors.acme.not_issued.action` (**Get certificate now**),
+  `email.acme.renewal_failed` (**Order now**), and `email.acme.auto_renew_stopped` (**Order now** to renew at once,
+  an Administrator's **Renew now** to re-arm); `ALC-ACM-0017` is retitled "This proof method cannot be used here"
+  with its real causes (wildcard names, a server that is not a managed Nginx server); the troubleshooting heading
+  follows the title.
 - A11's "the UI shows a banner" after a restore was not built: the restore prints a warning and the certificates show
   automatic renewal "Off" (design-gap follow-up).
 - No new Go module: `go.mod`, `go.sum` and the web lockfile are unchanged since f369b83, and `make notices` produced a
