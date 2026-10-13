@@ -1,6 +1,9 @@
 // Package transport is the only outbound HTTP client of ACME and DNS hooks: TLS 1.2+, system roots plus an
 // optional CA bundle, every connection through netaddr, no environment proxy, no redirect, no keep-alive, https
 // only (checked for every request URL, including URLs a CA returns), and answers cut at MaxResponseBytes.
+//
+// Callers must treat every non-2xx and every 3xx answer as a failure (redirects are returned, never followed),
+// and must never log a url.Error raw: it carries the full request URL including the query string.
 package transport
 
 import (
@@ -32,16 +35,14 @@ var (
 	ErrTooLarge = errors.New("acme transport: the answer is too large")
 )
 
-// Options tunes a client; the zero value is the production setting.
-type Options struct {
-	// Dial replaces the netaddr dialer (tests only).
-	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
-	// Timeout replaces the overall budget (tests only); zero means Timeout.
-	Timeout time.Duration
-}
+type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// New builds the client. caPEM may be empty; otherwise its certificates are added to the system roots.
-func New(caPEM string, o Options) (*http.Client, error) {
+// New builds the client. caPEM may be empty; otherwise its certificates are added to the system roots. There is
+// no exported way to replace the dialer or the budget: every connection goes through netaddr.
+func New(caPEM string) (*http.Client, error) { return build(caPEM, nil, 0) }
+
+// build is New with the test seams: dial (nil means netaddr) and budget (zero means Timeout).
+func build(caPEM string, dial dialFunc, budget time.Duration) (*http.Client, error) {
 	roots, err := x509.SystemCertPool()
 	if err != nil || roots == nil {
 		roots = x509.NewCertPool()
@@ -49,11 +50,9 @@ func New(caPEM string, o Options) (*http.Client, error) {
 	if caPEM != "" && !roots.AppendCertsFromPEM([]byte(caPEM)) {
 		return nil, ErrCABundle
 	}
-	budget := o.Timeout
 	if budget <= 0 {
 		budget = Timeout
 	}
-	dial := o.Dial
 	if dial == nil {
 		dial = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			return netaddr.DialContext(ctx, &net.Dialer{Timeout: budget}, network, addr)

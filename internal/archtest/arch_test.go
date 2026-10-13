@@ -55,7 +55,7 @@ var rules = map[string][]string{
 		"alice/internal/notify/...", "alice/internal/alerts/...", "alice/internal/jobs/...", "alice/internal/rbac/..."},
 	"alice/internal/auth/oidc/claims": {platform, "alice/internal/rbac/..."},
 	// ACME (plan 2026-10-13): the guarded outbound transport knows the platform and nothing else.
-	"alice/internal/acme/transport": {platform},
+	"alice/internal/acme/transport": {"alice/internal/platform/netaddr"},
 	// Phase 8: the backup container is pure (io.Reader/io.Writer only, no file, socket or database); the dump
 	// knows no other Alice module; the backup module runs the dump, the container and the restore; the audit
 	// forwarder reads the audit log and nothing else.
@@ -288,6 +288,7 @@ func TestAllowed(t *testing.T) {
 		{"oidc to inventory denied", "alice/internal/auth/oidc", "alice/internal/inventory", false},
 		{"acme transport to platform allowed", "alice/internal/acme/transport", "alice/internal/platform/netaddr", true},
 		{"acme transport to secrets denied", "alice/internal/acme/transport", "alice/internal/secrets", false},
+		{"acme transport to platform/db denied", "alice/internal/acme/transport", "alice/internal/platform/db", false},
 		{"csvx to os denied", "alice/internal/platform/csvx", "os", false},
 		{"notify to audit allowed", "alice/internal/notify", "alice/internal/audit", true},
 		{"notify to inventory denied", "alice/internal/notify", "alice/internal/inventory", false},
