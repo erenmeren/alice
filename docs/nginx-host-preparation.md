@@ -22,8 +22,10 @@ safe.
    processor). If they differ, the script stops: the file is not the `alice-helper` of this Alice version. (A
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
-   file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release needs helper
-   protocol 6 (`alice-helper` 1.5.0): accounts with dots, capitals or a final `$` in their names are listed, accounts
+   file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release ships
+   `alice-helper` 1.6.0 (protocol 7, which adds the two HTTP-01 challenge commands of "Publishing HTTP-01
+   challenges") and still works with a protocol 6 helper (`alice-helper` 1.5.0) for everything else. Protocol 6:
+   accounts with dots, capitals or a final `$` in their names are listed, accounts
    it cannot list are reported by user ID, and a scan reads the key files in one pass (protocol 6); the Nginx
    certificate commands with `nginx-fence` (protocol 5); and the protocol 3 rule that a key-file change whose content
    did not arrive complete is refused. See "Updating the helper".
@@ -54,7 +56,7 @@ want it, ask for the commands through the API with `GET /api/v1/ssh-keys/platfor
 | Profile | For | Allowed helper subcommands (with `sudo`) |
 |---|---|---|
 | `linux` | Servers where Alice manages SSH keys only | `sshd-dump`, `hostkeys`, `cleanup`, `authkeys-list`, `authkeys-read`, `authkeys-write` |
-| `nginx` | Nginx servers: their certificates and their SSH keys | everything in `linux` plus `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`, `nginx-status`, `nginx-fence` |
+| `nginx` | Nginx servers: their certificates and their SSH keys | everything in `linux` plus `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`, `nginx-status`, `nginx-fence`, `acme-challenge-put`, `acme-challenge-rm` |
 
 Choose the profile under **Server type** (**Linux server** or **Nginx server**) on the **Servers** page, and add the
 server in Alice with the same **Server type**. A Linux server never gets the Nginx permissions. Both profiles
@@ -72,13 +74,15 @@ Cmnd_Alias ALICE_NGINX_ONLY = \
     /usr/local/libexec/alice-helper nginx-deploy --op ????????-????-????-????-???????????? --cert /* --key /* --expect-cert-sha256 ???????????????????????????????????????????????????????????????? --content-sha256 ????????????????????????????????????????????????????????????????, \
     /usr/local/libexec/alice-helper nginx-restore --op ????????-????-????-????-????????????, \
     /usr/local/libexec/alice-helper nginx-status --op ????????-????-????-????-????????????, \
-    /usr/local/libexec/alice-helper nginx-fence --op ????????-????-????-????-????????????
+    /usr/local/libexec/alice-helper nginx-fence --op ????????-????-????-????-????????????, \
+    /usr/local/libexec/alice-helper acme-challenge-put --token ??????????????????????*, \
+    /usr/local/libexec/alice-helper acme-challenge-rm --token ??????????????????????*
 
 alice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY
 ```
 
 Each `?` stands for exactly one character, so the operation ID (the deployment's ID) and the two SHA-256 values have
-a fixed length. sudo's `*` also matches spaces, so `sudo` alone would let a few extra words through after a path;
+a fixed length, and a challenge token has at least 22 characters. sudo's `*` also matches spaces, so `sudo` alone would let a few extra words through after a path;
 the helper checks its whole argument list itself and refuses anything that is not exactly what Alice sends.
 
 | Line | What it allows |
@@ -88,10 +92,51 @@ the helper checks its whole argument list itself and refuses anything that is no
 | `nginx-deploy` | Replaces one certificate file and its key file with the content Alice sends on standard input, as one transaction (below). The two paths must be a pair that the current Nginx configuration uses. |
 | `nginx-restore` | Puts back the previous files of one earlier `nginx-deploy`, from its backup. |
 | `nginx-status` | Reports how one earlier `nginx-deploy` ended (from its journal) and whether the helper is busy. |
+| `acme-challenge-put` | Writes one file, `/var/www/alice-acme/.well-known/acme-challenge/<token>`, with the text Alice sends on standard input (the "key authorization" a certificate authority asks for in an HTTP-01 challenge). See "Publishing HTTP-01 challenges". |
+| `acme-challenge-rm` | Removes that one file again. |
 | `nginx-fence` | Makes sure one earlier `nginx-deploy` can never run any more. Alice uses it when it finds no journal for a deployment whose answer it never got, and (when the server answers) before it records an outcome as not confirmed: the helper writes a small "fenced" journal under the lock, after which a late `nginx-deploy` of that deployment (for example one stuck in `sudo` while the connection dropped) refuses before it reads the new key and without changing anything. If the deployment had started after all, the helper answers its journal instead and Alice finishes or undoes it. |
 
 `tls-probe` (no `sudo`) connects to a website on the server itself (for example `127.0.0.1:443`) and reports the
 certificate it serves. Alice uses it to check a website it cannot reach from its own network.
+
+### Publishing HTTP-01 challenges (optional)
+
+To prove to a certificate authority (for example Let's Encrypt) that a name belongs to you, Alice can use the HTTP-01
+method: the authority fetches `http://<name>/.well-known/acme-challenge/<token>` on port 80 and expects a short text.
+Only do this preparation on a server that answers for the name on port 80 and only if you want Alice to use that
+method; the DNS method needs nothing on the server.
+
+**Alice never edits the Nginx configuration.** You publish one fixed directory yourself, and the helper only writes
+and removes one small file in it while a certificate is being requested.
+
+1. Create the directory, owned by root and writable by nobody else (every directory on the path must be root's and
+   not writable by its group or by others, and none may be a symbolic link; the helper refuses otherwise and never
+   creates a directory):
+
+   ```sh
+   mkdir -p /var/www/alice-acme/.well-known/acme-challenge
+   chown root:root /var/www /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge
+   chmod 0755 /var/www /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge
+   ```
+
+   With SELinux (RHEL, Rocky, AlmaLinux) also run `restorecon -R /var/www/alice-acme`.
+2. Add these three lines to the `server` block that listens on port 80 for the names (inside the block, before any
+   `return 301` or other `location` that would answer `/.well-known/acme-challenge/` first):
+
+   ```nginx
+   location /.well-known/acme-challenge/ {
+       root /var/www/alice-acme;
+   }
+   ```
+
+3. Check and reload Nginx yourself: `nginx -t && systemctl reload nginx`.
+
+The helper writes the file `/var/www/alice-acme/.well-known/acme-challenge/<token>` (root's, mode 0644, so Nginx can
+read it) under a new temporary name and renames it into place, and removes it when the challenge is over. The token
+is 22 to 128 letters, digits, `-` or `_`; the text must be exactly the token, a dot and 43 such characters. Anything
+else is refused, and no other path is ever written or removed. Alice checks the file itself by fetching the URL
+before it asks the authority to validate. A server whose helper is older than protocol 7 keeps working for
+everything else; Alice asks you to reinstall the helper there (see "Updating the helper") before it uses this method.
 
 ### How the helper decides what it may change
 
@@ -348,7 +393,8 @@ and then ends **Outcome not confirmed** (`ALC-DEP-0018`), because Alice cannot f
 
 Each Alice release names the helper protocol it needs. When it needs a newer one than a server has, Alice shows the
 server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `required_protocol` 6) and does nothing more on it: no scan, no key
-removal, no deployment, no recovery.
+removal, no deployment, no recovery. A protocol 6 helper is enough for everything but the HTTP-01 challenge commands
+(protocol 7): only a certificate request that uses that method on the server asks you to reinstall the helper.
 
 **Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.5.0, protocol 6) also works
 with the previous Alice release, so you can update every server ahead of time. If you update Alice first, every
@@ -360,8 +406,10 @@ server's page. The commands install the new helper and the new sudoers file toge
 a deployment that sudo refuses is not a clean failure (sudo may already have read the new key), it goes to
 **Confirming the outcome** until the lines are back.
 
-This release (protocol 6, `alice-helper` 1.5.0) changes what the helper reports about accounts and how a scan reads
-key files; the sudoers file is the same as for protocol 5 (which added `nginx-fence` and its line). A deployment
+Protocol 7 (`alice-helper` 1.6.0) adds `acme-challenge-put` and `acme-challenge-rm` and their two sudoers lines in
+the `nginx` profile; nothing else changed. Protocol 6 (`alice-helper` 1.5.0) changed what the helper reports about
+accounts and how a scan reads key files; its sudoers file is the same as for protocol 5 (which added `nginx-fence` and
+its line). A deployment
 that was interrupted before the update is finished by the new helper as usual.
 
 ## Removing Alice from a server
@@ -376,7 +424,9 @@ rm -rf /var/lib/alice-svc /var/lib/alice-helper
 ```
 
 `/var/lib/alice-helper` also holds the backups of replaced certificate and key files (private keys included); the
-`rm -rf` removes them. Nginx and its certificate files stay as they are.
+`rm -rf` removes them. Nginx and its certificate files stay as they are. If you prepared "Publishing HTTP-01
+challenges", remove the `location /.well-known/acme-challenge/` lines yourself, reload Nginx and
+`rm -rf /var/www/alice-acme`.
 
 `userdel -r` is not used because the home directory belongs to root. If `userdel` reports that `alice-svc` is still
 logged in, a job that was already running when you removed the server has not finished yet: wait a minute and run it

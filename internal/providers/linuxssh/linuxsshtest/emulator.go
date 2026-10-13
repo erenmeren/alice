@@ -63,6 +63,7 @@ type Emulator struct {
 	maxUsers    int            // accounts listed at most (the helper's 200 when 0)
 	accounts    *accountList   // SetAccounts: the /etc/passwd names authkeys-list reports (derived from users when nil)
 	nx          *nginxHost     // the emulated Nginx (nginx.go); created on first use
+	acmeWeb     *acmeState     // the emulated HTTP-01 webroot (acme.go); created on first use
 }
 
 type accountList struct {
@@ -271,6 +272,7 @@ var flagTokens = map[string]bool{
 	"--expect-sha256": true, "--content-sha256": true, "--op": true, // protocol 3
 	"--cert": true, "--key": true, "--expect-cert-sha256": true, // protocol 4: nginx-deploy
 	"--addr": true, "--port": true, "--sni": true, "--key-type": true, // protocol 4: tls-probe
+	"--token": true, // protocol 7: acme-challenge-put and -rm
 }
 
 func isFlagToken(f string) bool { return flagTokens[f] }
@@ -358,6 +360,9 @@ func (e *Emulator) handle(cmd string, stdin []byte) Response {
 	}
 	if isNginxSub(sub) {
 		return e.handleNginx(sudo, sub, args, stdin)
+	}
+	if isACMESub(sub) {
+		return e.handleACME(sudo, sub, args, stdin)
 	}
 	if sub == helperproto.SubTLSProbe {
 		if sudo {

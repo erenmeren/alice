@@ -217,6 +217,46 @@ func CmdTLSProbe(addr string, port int, sni, keyType string) (HelperCommand, err
 		timeout: DefaultCommandTimeout, maxOutput: smallOutput}, nil
 }
 
+// quoteToken quotes an HTTP-01 token (helperproto.ValidACMEToken: 22 to 128 characters of
+// [A-Za-z0-9_-]). It is quoteArg for the one value that may start with "-": a base64url token does
+// so one time in 64, and quoteArg refuses a leading "-" because it would read as an option. The
+// helper's acme-challenge-* subcommands take exactly "--token <value>" by position, so the value is
+// never parsed as an option; its vocabulary holds no quote, space or shell metacharacter, so single
+// quotes make it one literal word.
+func quoteToken(token string) (string, error) {
+	if !helperproto.ValidACMEToken(token) {
+		return "", ErrInvalidArgument
+	}
+	return "'" + token + "'", nil
+}
+
+// CmdACMEChallengePut publishes an HTTP-01 key authorization as the token file
+// helperproto.ACMEChallengePath(token) (protocol 7). The key authorization goes on stdin; it must be
+// exactly the token, ".", and the account key's thumbprint (helperproto.ValidKeyAuthorization), which
+// the helper checks again, so a body cut short in transit is refused rather than published.
+func CmdACMEChallengePut(token string, keyAuthorization []byte) (HelperCommand, error) {
+	if !helperproto.ValidKeyAuthorization(token, keyAuthorization) {
+		return HelperCommand{}, ErrInvalidArgument
+	}
+	q, err := quoteToken(token)
+	if err != nil {
+		return HelperCommand{}, err
+	}
+	c := privileged(helperproto.SubACMEChallengePut, DefaultCommandTimeout, smallOutput, "--token", q)
+	c.stdin = owned(keyAuthorization)
+	return c, nil
+}
+
+// CmdACMEChallengeRm removes the token file of an HTTP-01 challenge (protocol 7); a missing file is
+// success.
+func CmdACMEChallengeRm(token string) (HelperCommand, error) {
+	q, err := quoteToken(token)
+	if err != nil {
+		return HelperCommand{}, err
+	}
+	return privileged(helperproto.SubACMEChallengeRm, DefaultCommandTimeout, smallOutput, "--token", q), nil
+}
+
 func quoteAll(values ...string) ([]string, error) {
 	out := make([]string, 0, len(values))
 	for _, v := range values {

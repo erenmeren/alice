@@ -44,7 +44,9 @@ Cmnd_Alias ALICE_NGINX_ONLY = \
     /usr/local/libexec/alice-helper nginx-deploy --op ????????-????-????-????-???????????? --cert /* --key /* --expect-cert-sha256 ???????????????????????????????????????????????????????????????? --content-sha256 ????????????????????????????????????????????????????????????????, \
     /usr/local/libexec/alice-helper nginx-restore --op ????????-????-????-????-????????????, \
     /usr/local/libexec/alice-helper nginx-status --op ????????-????-????-????-????????????, \
-    /usr/local/libexec/alice-helper nginx-fence --op ????????-????-????-????-????????????
+    /usr/local/libexec/alice-helper nginx-fence --op ????????-????-????-????-????????????, \
+    /usr/local/libexec/alice-helper acme-challenge-put --token ??????????????????????*, \
+    /usr/local/libexec/alice-helper acme-challenge-rm --token ??????????????????????*
 
 alice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY
 `
@@ -377,6 +379,7 @@ func TestHelperCheckRunsInAShell(t *testing.T) {
 func TestNginxSudoersLinesAreWhatTheSpecSays(t *testing.T) {
 	assert.Equal(t, 36, len(sudoersOpID))
 	assert.Equal(t, 64, len(sudoersSHA))
+	assert.Equal(t, helperproto.MinACMEToken, strings.Count(sudoersToken, "?"), "the shortest token")
 	assert.NotContains(t, goldenSudoersNginx, "tls-probe", "tls-probe is unprivileged")
 	assert.NotContains(t, goldenSudoersNginx, "log_input")
 }
@@ -391,9 +394,14 @@ func TestNginxSudoersMatchesEveryBuiltCommand(t *testing.T) {
 	require.NoError(t, err)
 	fence, err := CmdNginxFence(testOp)
 	require.NoError(t, err)
+	tok := "-" + strings.Repeat("a", 42) // a base64url token may start with "-"
+	put, err := CmdACMEChallengePut(tok, []byte(tok+"."+strings.Repeat("t", 43)))
+	require.NoError(t, err)
+	rm, err := CmdACMEChallengeRm(strings.Repeat("b", helperproto.MinACMEToken))
+	require.NoError(t, err)
 	patterns := sudoersPatterns(t, "nginx")
-	require.Len(t, patterns, 12)
-	for _, cmd := range []HelperCommand{CmdNginxDump(), CmdNginxTest(), deploy, restore, status, fence} {
+	require.Len(t, patterns, 14)
+	for _, cmd := range []HelperCommand{CmdNginxDump(), CmdNginxTest(), deploy, restore, status, fence, put, rm} {
 		args := sudoArgs(t, cmd)
 		n := 0
 		for _, p := range patterns {
@@ -430,11 +438,15 @@ func TestNginxSudoersMatchesEveryBuiltCommand(t *testing.T) {
 		// the Phase 4 draft's commands and everything else
 		"stat /etc/shadow", "read-cert /etc/shadow", "install-cert /etc/x", "backup /etc/x", "restore /etc/x",
 		"nginx-reload", "tls-probe --addr 1.1.1.1", "tls-probe",
+		// acme-challenge: no token, a token shorter than 22 characters, no --token, another flag
+		"acme-challenge-put", "acme-challenge-put --token", "acme-challenge-put --token " + strings.Repeat("a", 21),
+		"acme-challenge-rm " + strings.Repeat("a", 43), "acme-challenge-rm --path " + strings.Repeat("a", 43),
+		"acme-challenge-put " + strings.Repeat("a", 43) + " --token", "acme-challenge-ls --token " + strings.Repeat("a", 43),
 	} {
 		assert.False(t, anyGlob(patterns, bad), "%q must be refused", bad)
 	}
 	linux := sudoersPatterns(t, "linux")
-	for _, cmd := range []HelperCommand{CmdNginxDump(), CmdNginxTest(), deploy, restore, status} {
+	for _, cmd := range []HelperCommand{CmdNginxDump(), CmdNginxTest(), deploy, restore, status, put, rm} {
 		assert.False(t, anyGlob(linux, sudoArgs(t, cmd)), "a Linux server never gets nginx subcommands")
 	}
 }

@@ -455,16 +455,22 @@ func TestRealOpenSSH(t *testing.T) {
 			require.NoError(t, err)
 			nProbe, err := CmdTLSProbe("127.0.0.1", 9, "", helperproto.ProbeAny)
 			require.NoError(t, err)
+			// Protocol 7: the HTTP-01 token commands are nginx-profile lines too (a token may start with "-").
+			acmeTok := "-" + strings.Repeat("Q", 42)
+			nPut, err := CmdACMEChallengePut(acmeTok, []byte(acmeTok+"."+strings.Repeat("t", 43)))
+			require.NoError(t, err)
+			nRm, err := CmdACMEChallengeRm(acmeTok)
+			require.NoError(t, err)
 			runLine := func(c HelperCommand) (int, string) {
 				return h.exec([]string{"sh", "-c", c.Line() + " </dev/null"}, tcexec.WithUser(ServiceUser))
 			}
-			for _, c := range []HelperCommand{nDump, nTest, nDeploy, nRestore, nStatus} {
+			for _, c := range []HelperCommand{nDump, nTest, nDeploy, nRestore, nStatus, nPut, nRm} {
 				code, out := runLine(c)
 				assert.NotZero(t, code, c.Subcommand())
 				assert.Regexp(t, sudoRefused, out, "%s: the linux profile refuses it in sudo", c.Subcommand())
 			}
 			require.Contains(t, h.mustExec("sh", "-c", "cd /root/bundle && sh ./setup-nginx.sh"), "This server is ready for Alice.")
-			for _, c := range []HelperCommand{nDump, nTest, nDeploy, nRestore, nStatus} {
+			for _, c := range []HelperCommand{nDump, nTest, nDeploy, nRestore, nStatus, nPut, nRm} {
 				_, out := runLine(c)
 				assert.NotRegexp(t, sudoRefused, out, "%s: sudo let the built line through", c.Subcommand())
 				assert.Contains(t, out, `"ok":`, "%s: the helper ran and answered", c.Subcommand())
@@ -473,6 +479,12 @@ func TestRealOpenSSH(t *testing.T) {
 			assert.Contains(t, out, `"phase":"none"`)
 			_, out = runLine(nRestore)
 			assert.Contains(t, out, helperproto.CodeUnknownOp)
+			// No challenge directory was prepared: put needs it (stdin is empty, refused first anyway),
+			// rm has nothing to remove.
+			_, out = runLine(nPut)
+			assert.Contains(t, out, helperproto.CodeBadContent)
+			_, out = runLine(nRm)
+			assert.Contains(t, out, `"removed":false`)
 			// tls-probe needs no sudo: it runs as alice-svc and the helper answers for itself.
 			code, out = runLine(nProbe)
 			assert.NotRegexp(t, sudoRefused, out)
@@ -495,6 +507,8 @@ func TestRealOpenSSH(t *testing.T) {
 				"nginx-deploy --op " + opS + " --cert " + urlA + " --key " + urlK + " --expect-cert-sha256 " + sha64,
 				"nginx-deploy --op " + opS + " --cert relative.crt --key " + urlK + " --expect-cert-sha256 " + sha64 + " --content-sha256 " + sha64,
 				"nginx-reload", "stat /etc/shadow", "read-cert /etc/shadow", "install-cert /etc/x", "backup /etc/x", "restore /etc/x",
+				"acme-challenge-put", "acme-challenge-put --token " + strings.Repeat("a", 21), "acme-challenge-rm " + acmeTok,
+				"acme-challenge-rm --path " + acmeTok,
 			} {
 				code, out = h.exec(append([]string{"sudo", "-n", helperproto.HelperPath}, strings.Fields(bad)...), tcexec.WithUser(ServiceUser))
 				assert.NotZero(t, code, bad)

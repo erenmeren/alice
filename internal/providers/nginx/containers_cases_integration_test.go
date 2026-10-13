@@ -143,10 +143,15 @@ func (h *rnHost) testSudo(t *testing.T) {
 	require.NoError(t, err)
 	fence, err := linuxssh.CmdNginxFence(uuid.New()) // its own operation: the status below reads op's
 	require.NoError(t, err)
+	acmeTok := "-" + strings.Repeat("Q", 42) // protocol 7; a base64url token may start with "-"
+	acmePut, err := linuxssh.CmdACMEChallengePut(acmeTok, []byte(acmeTok+"."+strings.Repeat("t", 43)))
+	require.NoError(t, err)
+	acmeRm, err := linuxssh.CmdACMEChallengeRm(acmeTok)
+	require.NoError(t, err)
 	// Every built line: sudo lets it through and the helper answers (stdin is empty, so nothing is
 	// written: nginx-deploy and authkeys-write refuse the content).
 	for _, c := range []linuxssh.HelperCommand{linuxssh.CmdSSHDDump(), linuxssh.CmdHostKeys(), linuxssh.CmdAuthKeysList(), read, write, cleanup,
-		linuxssh.CmdNginxDump(), linuxssh.CmdNginxTest(), deploy, restore, status, fence} {
+		linuxssh.CmdNginxDump(), linuxssh.CmdNginxTest(), deploy, restore, status, fence, acmePut, acmeRm} {
 		_, out := h.execAs(asSvc, "sh", "-c", c.Line()+" </dev/null")
 		assert.NotRegexp(t, sudoRefused, out, "%s: sudo lets the built line through", c.Subcommand())
 		assert.Contains(t, out, `"ok":`, "%s: the helper ran and answered", c.Subcommand())
@@ -190,6 +195,11 @@ func (h *rnHost) testSudo(t *testing.T) {
 		{dep(rnWWW+" --cert /etc/x.crt", rnWWWKey), "helper"},
 		{"nginx-deploy --op " + o + " --cert " + rnWWW + " --key " + rnWWWKey + " --key /x.key --expect-cert-sha256 " + sha + " --content-sha256 " + sha, "helper"},
 		{"nginx-reload", "sudo"}, {"read-cert /etc/shadow", "sudo"}, {"tls-probe --addr 127.0.0.1 --port 9 --sni _ --key-type any", "sudo"},
+		{"acme-challenge-put", "sudo"}, {"acme-challenge-put --token", "sudo"}, {"acme-challenge-put --token " + strings.Repeat("a", 21), "sudo"},
+		{"acme-challenge-rm " + acmeTok, "sudo"}, {"acme-challenge-rm --path " + acmeTok, "sudo"},
+		// The token's '*' also matches further words and any byte: only the helper refuses these.
+		{"acme-challenge-rm --token " + acmeTok + " extra", "helper"}, {"acme-challenge-put --token ../../../../../etc/passwd", "helper"},
+		{"acme-challenge-rm --token " + strings.Repeat("a", 22) + "/../../x", "helper"},
 	} {
 		code, out := h.execAs(asSvc, append([]string{"sudo", "-n", helperproto.HelperPath}, strings.Fields(v.args)...)...)
 		assert.NotZero(t, code, v.args)
