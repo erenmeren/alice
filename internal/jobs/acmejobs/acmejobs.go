@@ -5,18 +5,20 @@
 //
 // The CA conversation runs here, on the Alice server: the account key, the order's private key and the hook secret are
 // opened by the inventory and live only for the call (A10); nothing secret is in a job payload, a result, a log line or
-// an error (the order's error code is a closed reason). An order is ended on every way out: success
-// (inventory.FinishACMEOrder or SucceedACMETestOrder) or inventory.FailACMEOrder with the order's code, called on a
-// context detached from the job's (a lost lease or a shutdown must not leave the pending key behind). The one
-// exception is a database failure while the issued certificate is stored: the order stays running with its key and
-// its URL, and the sweep finishes it from the CA (A8). Every challenge record is persisted before it is published
+// an error (the order's error code is a closed reason). An order is ended on every way out, a panic included (the
+// order is ended, then the panic goes on to the runner): success (inventory.FinishACMEOrder or SucceedACMETestOrder) or
+// inventory.FailACMEOrder with the order's code (a failure is counted and backed off), called on a context detached
+// from the job's. Two ways out leave the order running with its key and its CA URL for the sweep to finish from the CA
+// (A8): a database failure while the issued certificate is stored, and a job context that ended (shutdown, lost
+// lease) after the CA created the order and its key was persisted. A job context that ended before that aborts the
+// order with job.lease_expired without counting a failure. Every challenge record is persisted before it is published
 // (A12), removed from the record once it is gone, and the acme.cleanup job (ClassAlways) removes what is left in every
 // license state.
 //
 // Licence: acme.issue is ClassChange (the runner never claims it in lock); the handler asks the gate again before
-// each publication, so a lock that begins during an order publishes nothing more and ends the order (license.locked;
-// what was published is cleaned up). The sweep contacts a CA only to finish an order that was issued, and only while
-// the gate allows changes; otherwise it abandons the order.
+// each publication and once more right before finalize, so a lock that begins during an order publishes nothing more,
+// // sends no CSR and ends the order (license.locked; what was published is cleaned up). The sweep contacts a CA only to
+// resume an interrupted order, and only while the gate allows changes.
 package acmejobs
 
 import (
@@ -50,6 +52,8 @@ type Inventory interface {
 	FinishACMEOrder(ctx context.Context, orderID uuid.UUID, chainDER [][]byte) (inventory.ACMEIssued, error)
 	SucceedACMETestOrder(ctx context.Context, orderID uuid.UUID) error
 	FailACMEOrder(ctx context.Context, orderID uuid.UUID, code string, retryAfter time.Duration) error
+	AbortACMEOrder(ctx context.Context, orderID uuid.UUID, code string) error
+	GetACMEOrder(ctx context.Context, id uuid.UUID) (inventory.ACMEOrder, error)
 	RecordACMEOrderURL(ctx context.Context, orderID uuid.UUID, url string) error
 	AddACMEPresented(ctx context.Context, orderID uuid.UUID, p inventory.ACMEPresented) error
 	RemoveACMEPresented(ctx context.Context, orderID uuid.UUID, p inventory.ACMEPresented) error
@@ -59,7 +63,7 @@ type Inventory interface {
 	ACMEHookSolverConfig(ctx context.Context, hookID uuid.UUID) (dns01.Config, error)
 	ACMEHookCleanupConfig(ctx context.Context, hookID uuid.UUID) (dns01.Config, error)
 	StaleACMEOrders(ctx context.Context, olderThan time.Duration) ([]inventory.ACMEStaleOrder, error)
-	EnqueueACMECleanups(ctx context.Context, retryAfter time.Duration) (int, error)
+	EnqueueACMECleanups(ctx context.Context, retryAfter, giveUpAfter time.Duration) (int, error)
 	TargetRef(ctx context.Context, id uuid.UUID) (providers.TargetRef, inventory.Target, error)
 	Credentials() providers.CredentialSource
 	HostKeyStore() providers.HostKeyStore
@@ -89,14 +93,17 @@ const (
 	openTimeout   = time.Minute
 	// StaleAfter is the age of a running order no job holds that the sweep ends: the order timeout plus a margin.
 	StaleAfter = acme.DefaultOrderTimeout + 10*time.Minute
-	// CleanupRetry is how long the sweep waits after a failed cleanup before it queues the cleanup again.
-	CleanupRetry = time.Hour
+	// CleanupRetry is how long the sweep waits after a failed cleanup before it queues the cleanup again, and
+	// CleanupGiveUp how long after the order ended it stops (the records stay listed with the last failure).
+	CleanupRetry  = time.Hour
+	CleanupGiveUp = 7 * 24 * time.Hour
 )
 
 // Job failure reasons that are not an order's code.
 const (
-	reasonNotFound   = "system.not_found"
-	reasonUnexpected = "internal.unexpected"
+	reasonNotFound     = "system.not_found"
+	reasonUnexpected   = "internal.unexpected"
+	reasonLeaseExpired = "job.lease_expired"
 )
 
 // Register registers acme.issue and acme.cleanup; it panics on a missing dependency, so a build that forgot one never
@@ -177,37 +184,77 @@ type orderRun struct {
 	id uuid.UUID
 	// crashed: the crash seam stopped the run (nothing more is done, as after a real crash).
 	crashed bool
+	// urlRecorded and keyStored: the CA created the order and its key is persisted, so the sweep can resume it.
+	urlRecorded, keyStored bool
 }
 
-// run does the order and ends it on every way out.
+// errPanicked and errUnended are the failures of a run that panicked or returned without ending its order.
+var (
+	errPanicked = errors.New("acmejobs: the order run panicked")
+	errUnended  = errors.New("acmejobs: the order run returned without ending the order")
+)
+
+// run does the order and ends it on every way out, a panic included (the order is ended, then the panic goes on to
+// the runner). Outcomes: success; a failure (FailACMEOrder: failure counted, backoff); left running for the sweep (the
+// issued certificate could not be stored, or the job's context ended after the CA created the order and its key was
+// persisted: a shutdown or a lost lease is not the certificate's failure); interrupted before that (AbortACMEOrder
+// with job.lease_expired: nothing counted).
 func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 	inv := o.h.d.Inventory
 	var failure error
-	leftRunning := false
+	succeeded, leftRunning := false, false
 	defer func() {
+		p := recover()
 		if o.crashed {
 			res, err = nil, jobs.Fail(reasonUnexpected, nil, errCrashed)
+			if p != nil {
+				panic(p)
+			}
 			return
+		}
+		if !succeeded && !leftRunning && failure == nil {
+			failure = errUnended
+			if p != nil {
+				failure = errPanicked
+			}
 		}
 		dctx, cancel := detached(ctx)
 		defer cancel()
 		params := map[string]string{"order_id": o.id.String()}
+		interrupted := ctx.Err() != nil && failure != nil && p == nil
 		switch {
-		case failure != nil:
+		case succeeded:
+		case interrupted && o.urlRecorded && o.keyStored:
+			leftRunning = true
+			o.h.d.Log.Warn("an ACME order was interrupted; the ACME sweep resumes it", "order_id", o.id.String(), "event", "acme_order_interrupted")
+			res, err = nil, jobs.Fail(reasonLeaseExpired, params, ctx.Err())
+		case interrupted:
+			if aerr := inv.AbortACMEOrder(dctx, o.id, reasonLeaseExpired); aerr != nil && !errors.Is(aerr, inventory.ErrACMEOrderNotRunning) {
+				o.h.d.Log.Error("could not end an interrupted ACME order", "order_id", o.id.String(), "error_type", fmt.Sprintf("%T", aerr))
+			}
+			res, err = nil, jobs.Fail(reasonLeaseExpired, params, ctx.Err())
+		case leftRunning:
+			o.h.d.Log.Error("the issued certificate could not be stored; the ACME sweep finishes the order", "order_id", o.id.String(),
+				"event", "acme_order_left_running")
+			res, err = nil, jobs.Fail(reasonUnexpected, params, nil)
+		default:
 			code, after := inventory.ACMEOrderErrorCode(failure)
 			if ferr := inv.FailACMEOrder(dctx, o.id, code, after); ferr != nil && !errors.Is(ferr, inventory.ErrACMEOrderNotRunning) {
 				o.h.d.Log.Error("could not end a failed ACME order", "order_id", o.id.String(), "error_type", fmt.Sprintf("%T", ferr))
 			}
 			res, err = nil, jobs.Fail(code, params, failure)
-		case leftRunning:
-			o.h.d.Log.Error("the issued certificate could not be stored; the ACME sweep finishes the order", "order_id", o.id.String(),
-				"event", "acme_order_left_running")
-			res, err = nil, jobs.Fail(reasonUnexpected, params, nil)
 		}
 		if cerr := inv.EnqueueACMECleanup(dctx, o.id); cerr != nil {
 			o.h.d.Log.Error("could not queue the cleanup of an ACME order", "order_id", o.id.String(), "error_type", fmt.Sprintf("%T", cerr))
 		}
+		if p != nil {
+			panic(p)
+		}
 	}()
+	if o.w.Deleted {
+		failure = inventory.ErrNotFound
+		return nil, nil
+	}
 	if err := o.h.d.Gate.Allow(license.ClassChange); err != nil {
 		failure = errLocked
 		return nil, nil
@@ -234,15 +281,13 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 			failure = err
 			return nil, nil
 		}
-		if o.crashed {
-			return nil, nil
-		}
 		dctx, cancel := detached(ctx)
 		defer cancel()
 		if err := inv.SucceedACMETestOrder(dctx, o.id); err != nil {
 			failure = err
 			return nil, nil
 		}
+		succeeded = true
 		return map[string]any{"order_id": o.id.String(), "kind": inventory.ACMEOrderTest, "state": inventory.ACMEOrderSucceeded}, nil
 	}
 
@@ -251,6 +296,7 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 		failure = err
 		return nil, nil
 	}
+	o.keyStored = true
 	csr, err := keygen.NewCSR(signer, o.w.Names)
 	if err != nil {
 		failure = err
@@ -270,9 +316,16 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 	issued, err := inv.FinishACMEOrder(dctx, o.id, chain)
 	if err != nil && !inventory.ACMEFinishRefused(err) {
 		issued, err = inv.FinishACMEOrder(dctx, o.id, chain) // one more try: a database that answered late
+		if errors.Is(err, inventory.ErrACMEOrderNotRunning) {
+			// The first commit may have landed with its answer lost: the order says what happened.
+			if cur, gerr := inv.GetACMEOrder(dctx, o.id); gerr == nil && cur.State == inventory.ACMEOrderSucceeded && cur.CertificateID != nil {
+				issued, err = inventory.ACMEIssued{CertificateID: *cur.CertificateID}, nil
+			}
+		}
 	}
 	switch {
 	case err == nil:
+		succeeded = true
 		return map[string]any{"order_id": o.id.String(), "kind": inventory.ACMEOrderIssue, "state": inventory.ACMEOrderSucceeded,
 			"certificate_id": issued.CertificateID.String(), "reused": issued.Reused, "chain_complete": issued.ChainComplete}, nil
 	case inventory.ACMEFinishRefused(err):
@@ -285,15 +338,25 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 
 // options are the order's callbacks: the CA's order URL is stored for a resume (A8); each challenge is persisted
 // before it is published (A12), after the gate was asked again (a lock that began during the order publishes
-// nothing more); a challenge that was removed again is taken out of the record (one whose removal failed stays for
-// the cleanup job).
+// nothing more), and the gate is asked once more right before finalize; a challenge that was removed again is taken
+// out of the record (one whose removal failed stays for the cleanup job).
 func (o *orderRun) options(ctx context.Context) []acme.OrderOption {
 	inv := o.h.d.Inventory
 	return []acme.OrderOption{
 		acme.WithOnOrder(func(url string) error {
 			dctx, cancel := detached(ctx)
 			defer cancel()
-			return inv.RecordACMEOrderURL(dctx, o.id, url)
+			if err := inv.RecordACMEOrderURL(dctx, o.id, url); err != nil {
+				return err
+			}
+			o.urlRecorded = true
+			return nil
+		}),
+		acme.WithBeforeFinalize(func() error {
+			if err := o.h.d.Gate.Allow(license.ClassChange); err != nil {
+				return errLocked
+			}
+			return nil
 		}),
 		acme.WithOnPresent(func(ch solver.Challenge) error {
 			if err := o.h.d.Gate.Allow(license.ClassChange); err != nil {

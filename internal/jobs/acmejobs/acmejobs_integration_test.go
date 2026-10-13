@@ -4,7 +4,11 @@ package acmejobs
 
 import (
 	"encoding/base64"
+	"net"
+	"net/netip"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,8 +17,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/acme"
+	"alice/internal/acme/solver"
+	"alice/internal/acme/solver/http01"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/platform/netaddr/netaddrtest"
 	"alice/internal/testutil/fakeacme"
 )
 
@@ -390,7 +397,7 @@ func TestCrashAfterIssueIsResumedBySweep(t *testing.T) {
 	assert.Zero(t, w.keyColumns(o.ID))
 }
 
-// In lock a crashed order that could be resumed is abandoned without a CA call.
+// In lock a crashed order that could be resumed waits without a CA call, and is abandoned after ResumeFor.
 func TestSweepInLockNeverAsksTheCA(t *testing.T) {
 	w := newWorld(t)
 	c := w.dnsCert("lockcrash.example.test")
@@ -403,7 +410,12 @@ func TestSweepInLockNeverAsksTheCA(t *testing.T) {
 	w.fake.ClearRequests()
 	require.NoError(t, w.h.sweep(w.ctx))
 	assert.Empty(t, w.fake.Requests())
-	assert.Equal(t, inventory.ACMEOrderAbandoned, w.getOrder(o.ID).ErrorCode)
+	assert.Equal(t, inventory.ACMEOrderRunning, w.getOrder(o.ID).State, "nothing is published: it waits for the lock to end")
+	assert.Equal(t, 4, w.keyColumns(o.ID))
+	w.clock.Advance(ResumeFor)
+	require.NoError(t, w.h.sweep(w.ctx))
+	assert.Empty(t, w.fake.Requests())
+	assert.Equal(t, inventory.ACMEOrderAbandoned, w.getOrder(o.ID).ErrorCode, "after ResumeFor it is abandoned, still without a CA call")
 	assert.Zero(t, w.keyColumns(o.ID))
 }
 
@@ -447,4 +459,87 @@ func TestSweepTask(t *testing.T) {
 	assert.Equal(t, time.Minute, task.Every)
 	require.NoError(t, task.Run(w.ctx))
 	assert.Panics(t, func() { SweepTask(Deps{}, time.Minute) })
+}
+
+// The real HTTP-01 path: the job opens the Nginx server's session (a fake publisher at the session boundary), the
+// real http01 solver publishes through it, fetches the token itself and removes it; the fake CA validates over HTTP.
+func TestIssueHTTP01WithTheRealSolver(t *testing.T) {
+	w := newWorld(t)
+	addr := strings.TrimPrefix(w.web.URL, "http://")
+	_, portText, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	port, err := strconv.Atoi(portText)
+	require.NoError(t, err)
+	var checks atomic.Int64
+	w.h.newHTTP01 = func(c http01.Config) (solver.Solver, error) {
+		s, err := http01.New(c)
+		if err != nil {
+			return nil, err
+		}
+		http01.SetTestTarget(s, port, netaddrtest.Resolver(func(string) []netip.Addr {
+			checks.Add(1)
+			return []netip.Addr{netip.MustParseAddr("127.0.0.1")}
+		}))
+		return s, nil
+	}
+	web := w.webTarget("web-real")
+	c, err := w.inv.CreateACMECertificate(w.ctx, w.admin, inventory.ACMECertificateInput{ProviderID: w.provider.ID,
+		Names: []string{"real.example.test"}, Challenge: inventory.ACMEChallengeHTTP01, HTTPTargetID: &web})
+	require.NoError(t, err)
+	w.fake.SetHTTPTarget("real.example.test", addr)
+	o := w.order(c, inventory.ACMEOrderIssue)
+	w.drain()
+	o = w.getOrder(o.ID)
+	require.Equal(t, inventory.ACMEOrderSucceeded, o.State, o.ErrorCode)
+	assert.Positive(t, checks.Load(), "the solver checked the token URL itself")
+	assert.Equal(t, 1, w.pub.puts)
+	assert.Zero(t, w.pub.live(), "the token file was removed")
+	assert.Zero(t, o.Presented)
+
+	// A token that is not served: the solver's own check fails before the CA is asked to validate.
+	w.pub.mu.Lock()
+	w.pub.hide = true
+	w.pub.mu.Unlock()
+	validations := w.fake.Counters()["validations-http-01"]
+	o = w.order(c, inventory.ACMEOrderIssue)
+	w.drain()
+	assert.Equal(t, acme.ReasonValidationFailedHTTP, w.getOrder(o.ID).ErrorCode)
+	assert.Equal(t, validations, w.fake.Counters()["validations-http-01"])
+	assert.Zero(t, w.pub.live())
+}
+
+// The gate is asked once more right before finalize: a lock that begins after the authorizations were validated sends
+// no CSR (M3).
+func TestLockBeforeFinalizeSendsNoCSR(t *testing.T) {
+	w := newWorld(t)
+	c := w.dnsCert("fin.example.test")
+	o := w.order(c, inventory.ACMEOrderIssue)
+	w.gate.lockWhen = func() bool { return w.fake.Counters()["validations-dns-01"] >= 1 }
+	w.drain()
+	o = w.getOrder(o.ID)
+	assert.Equal(t, inventory.ACMELicenseLocked, o.ErrorCode)
+	assert.Zero(t, w.fake.Counters()["finalize"])
+	assert.Zero(t, w.keyColumns(o.ID))
+	assert.Zero(t, w.dnsLeft())
+}
+
+// An order whose acme.issue job is still running is not stale, however old (M10).
+func TestStaleExcludesARunningJob(t *testing.T) {
+	w := newWorld(t)
+	c := w.dnsCert("busy.example.test")
+	o := w.order(c, inventory.ACMEOrderIssue)
+	_, err := w.db.Owner.Exec(w.ctx, `UPDATE jobs SET status = 'running', attempts = 1, started_at = $1, locked_by = 'other-worker',
+locked_until = $2 WHERE type = 'acme.issue'`, w.clock.Now(), w.clock.Now().Add(time.Hour))
+	require.NoError(t, err)
+	w.clock.Advance(StaleAfter + time.Minute)
+	stale, err := w.inv.StaleACMEOrders(w.ctx, StaleAfter)
+	require.NoError(t, err)
+	assert.Empty(t, stale)
+	require.NoError(t, w.h.sweep(w.ctx))
+	assert.Equal(t, inventory.ACMEOrderRunning, w.getOrder(o.ID).State)
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE jobs SET status = 'failed', finished_at = $1 WHERE type = 'acme.issue'", w.clock.Now())
+	require.NoError(t, err)
+	stale, err = w.inv.StaleACMEOrders(w.ctx, StaleAfter)
+	require.NoError(t, err)
+	assert.Len(t, stale, 1)
 }
