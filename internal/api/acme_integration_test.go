@@ -88,7 +88,6 @@ func (w *acmeWorld) waitIssued(c *client, id string) map[string]any {
 	return nil
 }
 
-
 // The whole journey over HTTP: a provider with a private CA bundle and EAB, the account (terms of service), a DNS
 // hook, a DNS-01 certificate, an order polled until issued, a binding and Deploy now; the served leaf is the issued
 // one. No response, log line, audit row or job payload holds the EAB key or the hook secret.
