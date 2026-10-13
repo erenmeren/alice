@@ -149,6 +149,9 @@ var (
 	ErrBadAnswer = errors.New("acme: the CA's answer is not valid")
 	// ErrOrderNotResumable is an order ResumeOrder cannot finish: still pending (never validated) or invalid.
 	ErrOrderNotResumable = errors.New("acme: the order cannot be finished any more")
+	// ErrChainKeyMismatch is an issued leaf that does not hold the CSR's key or exactly the ordered names (reason
+	// directory_invalid, like ErrBadAnswer; unlike a garbled answer it is a definitive refusal of the order).
+	ErrChainKeyMismatch = errors.New("acme: the issued certificate does not match the order's key or names")
 	// ErrRolloverUnsupported is a CA without keyChange.
 	ErrRolloverUnsupported = errors.New("acme: the CA does not support account key rollover")
 )

@@ -423,7 +423,8 @@ func sameNames(got, want []string) bool {
 	return len(set) == 0
 }
 
-// checkChain checks that the CA returned a certificate for the CSR's key and exactly the ordered names.
+// checkChain checks that the CA returned a certificate for the CSR's key and exactly the ordered names: a chain that
+// does not parse is ErrBadAnswer (like any garbled answer), a leaf of another key or other names ErrChainKeyMismatch.
 func checkChain(chain [][]byte, pub crypto.PublicKey, names []string) error {
 	bad := newError(ReasonDirectoryInvalid, ErrBadAnswer)
 	if len(chain) == 0 {
@@ -435,7 +436,8 @@ func checkChain(chain [][]byte, pub crypto.PublicKey, names []string) error {
 	}
 	k, ok := pub.(interface{ Equal(crypto.PublicKey) bool })
 	if !ok || !k.Equal(leaf.PublicKey) || !sameNames(leaf.DNSNames, names) {
-		return bad
+		// A well-formed certificate that is not the one ordered: a CA-side refusal of this order, not a garbled answer.
+		return newError(ReasonDirectoryInvalid, ErrChainKeyMismatch)
 	}
 	for _, der := range chain[1:] {
 		if _, err := x509.ParseCertificate(der); err != nil {

@@ -104,7 +104,16 @@ func TestResumeChecksTheChain(t *testing.T) {
 	other, _ := csrFor(t, names...)
 	_, err = c.ResumeOrder(testCtx(t), url, names, other)
 	requireReason(t, err, ReasonDirectoryInvalid)
-	assert.ErrorIs(t, err, ErrBadAnswer)
+	assert.ErrorIs(t, err, ErrChainKeyMismatch)
+	assert.NotErrorIs(t, err, ErrBadAnswer, "a well-formed certificate of another key is not a garbled answer")
+
+	// A garbled (oversized) answer while resuming is the transport's, not a mismatch.
+	require.NoError(t, s.AddFault(fakeacme.Fault{Endpoint: "order", Kind: fakeacme.FaultGiant, Times: 1}))
+	_, err = c.ResumeOrder(testCtx(t), url, names, csr)
+	requireReason(t, err, ReasonDirectoryInvalid)
+	assert.NotErrorIs(t, err, ErrChainKeyMismatch)
+	_, err = c.ResumeOrder(testCtx(t), url, names, csr)
+	require.NoError(t, err, "the next try works")
 
 	// The CA is down: the failure is the CA's, not "not resumable".
 	require.NoError(t, s.AddFault(fakeacme.Fault{Endpoint: "order", Kind: fakeacme.FaultServerInternal}))
