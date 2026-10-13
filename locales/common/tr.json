@@ -1389,8 +1389,8 @@
       },
       "rollover_pending": {
         "title": "Hesap anahtarı değişikliği tamamlanmadı.",
-        "cause": "Alice sertifika yetkilisinden hesap anahtarını değiştirmesini istedi, ancak yanıt gelmedi; bu nedenle yetkilinin hangi anahtarı kullandığı henüz bilinmiyor.",
-        "action": "Alice'in yetkiliye yeniden sorması için \"Anahtar değişikliğini denetle\" düğmesini kullanın. Bu durum netleşene kadar başka bir şey değişmez."
+        "cause": "Bu hesabın başka bir değişikliği hâlâ sürüyor ya da Alice sertifika yetkilisinden hesap anahtarını değiştirmesini istedi ve yanıt gelmedi; bu nedenle yetkilinin hangi anahtarı kullandığı henüz bilinmiyor.",
+        "action": "Biraz bekleyip yeniden deneyin. Bekleyen bir anahtar değişikliği varsa Alice'in yetkiliye yeniden sorması için \"Anahtar değişikliğini denetle\" düğmesini kullanın; bu durum netleşene kadar başka bir şey değişmez."
       },
       "secret_unreadable": {
         "title": "Kayıtlı bir gizli bilgi okunamıyor.",

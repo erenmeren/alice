@@ -596,6 +596,8 @@ var errorMap = []struct {
 	{inventory.ErrACMEAccountExists, ErrACMAccountExists, nil},
 	{inventory.ErrACMEAccountState, ErrACMAccountState, nil},
 	{inventory.ErrACMERolloverPending, ErrACMRolloverPending, nil},
+	// Another account operation of the provider holds its lock: the same "not settled yet, try again" answer.
+	{inventory.ErrACMEProviderBusy, ErrACMRolloverPending, nil},
 	// The inventory repeats the session check inside its transaction (a hold or a switch-on can appear after the
 	// API looked): what it refuses is a session without a fresh step-up.
 	{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired, nil},

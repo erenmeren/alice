@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/acme"
 	"alice/internal/acme/keygen"
@@ -64,6 +65,9 @@ var (
 	// ErrACMERolloverPending: a key rollover of the provider's account is unsettled (the CA's answer was lost, or a
 	// rollover is running); RecoverACMERollover settles it.
 	ErrACMERolloverPending = errors.New("inventory: a key change of the ACME account is not settled")
+	// ErrACMEProviderBusy: another account operation of the provider (in this or another process) holds its lock;
+	// nothing was done. The API answers it with ALC-ACM-0024 (acme.rollover_pending, retryable): try again shortly.
+	ErrACMEProviderBusy = errors.New("inventory: another change of the ACME account is running")
 )
 
 // ACMEError is a failure of a CA exchange: Reason is one of acme.Reasons() (the ALC-ACM reasons the API maps),
@@ -206,36 +210,68 @@ func (s *Service) ListACMEAccounts(ctx context.Context, providerID uuid.UUID) ([
 // acmeLockBudget bounds the release of a provider's lock (a stuck database closes the session instead).
 const acmeLockBudget = 10 * time.Second
 
+// acmeLockWait is how long a caller tries to take a busy provider's lock, and acmeLockRetry the pause between two
+// tries. No connection is held between tries: a waiter never takes a pool connection the holder needs.
+const (
+	acmeLockWait  = 2 * time.Second
+	acmeLockRetry = 100 * time.Millisecond
+)
+
 // lockACMEProvider serializes the CA operations of one provider's account (a registration, a rollover, its recovery, a
 // deactivation) ACROSS processes: a PostgreSQL session advisory lock, held on a dedicated connection for the whole
-// operation, CA calls included. It waits for the holder (or ctx). release must be called; a lock that cannot be
-// released cleanly closes its session, which releases it.
+// operation, CA calls included. It never blocks inside the database: pg_try_advisory_lock, retried for at most
+// acmeLockWait with the connection given back between tries, then ErrACMEProviderBusy. So the holder needs at most one
+// more connection for its own work and waiters cannot starve it. release must be called; a lock that cannot be
+// released cleanly (or whose session was lost meanwhile) closes its session and logs acme_provider_lock_lost.
 func (s *Service) lockACMEProvider(ctx context.Context, id uuid.UUID) (release func(), err error) {
-	conn, err := s.pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("inventory: database connection for the ACME provider lock: %w", err)
-	}
 	key := "acme.provider." + id.String()
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", key); err != nil {
-		// The lock may have been granted as the context ended: closing the session drops it either way.
-		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acmeLockBudget)
-		_ = conn.Conn().Close(closeCtx)
-		cancel()
+	for try := 1; ; try++ {
+		conn, err := s.pool.Acquire(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("inventory: database connection for the ACME provider lock: %w", err)
+		}
+		var got bool
+		if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock(hashtextextended($1, 0))", key).Scan(&got); err != nil {
+			// The lock may have been granted as the query failed: closing the session drops it either way.
+			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acmeLockBudget)
+			_ = conn.Conn().Close(closeCtx)
+			cancel()
+			conn.Release()
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("inventory: take the ACME provider lock: %w", err)
+		}
+		if got {
+			return func() { s.releaseACMEProviderLock(ctx, conn, id, key) }, nil
+		}
 		conn.Release()
-		if ctx.Err() != nil {
+		if try >= int(acmeLockWait/acmeLockRetry) {
+			return nil, ErrACMEProviderBusy
+		}
+		t := time.NewTimer(acmeLockRetry)
+		select {
+		case <-ctx.Done():
+			t.Stop()
 			return nil, ctx.Err()
+		case <-t.C:
 		}
-		return nil, fmt.Errorf("inventory: take the ACME provider lock: %w", err)
 	}
-	return func() {
-		relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acmeLockBudget)
-		defer cancel()
-		var unlocked bool
-		if err := conn.QueryRow(relCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key).Scan(&unlocked); err != nil || !unlocked {
-			_ = conn.Conn().Close(relCtx)
-		}
-		conn.Release()
-	}, nil
+}
+
+// releaseACMEProviderLock gives a provider's lock back. An unlock that fails or finds no lock means the session was
+// lost while the operation ran (another process may have overlapped it): WARN acme_provider_lock_lost, and the session
+// is closed so nothing stays locked.
+func (s *Service) releaseACMEProviderLock(ctx context.Context, conn *pgxpool.Conn, id uuid.UUID, key string) {
+	relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acmeLockBudget)
+	defer cancel()
+	var unlocked bool
+	if err := conn.QueryRow(relCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key).Scan(&unlocked); err != nil || !unlocked {
+		s.log.Warn("an ACME account operation lost its provider lock while it ran; another process may have overlapped it",
+			"provider_id", id.String(), "event", "acme_provider_lock_lost")
+		_ = conn.Conn().Close(relCtx)
+	}
+	conn.Release()
 }
 
 // acmeClientFor builds a client of the provider's directory through the guarded transport with the provider's CA

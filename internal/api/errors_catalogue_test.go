@@ -77,6 +77,7 @@ var inventorySentinels = map[string]error{
 	"ErrACMENameTaken": inventory.ErrACMENameTaken, "ErrACMEDirectoryChange": inventory.ErrACMEDirectoryChange,
 	"ErrACMESecretUnreadable": inventory.ErrACMESecretUnreadable, "ErrACMEAccountExists": inventory.ErrACMEAccountExists,
 	"ErrACMEAccountState": inventory.ErrACMEAccountState, "ErrACMERolloverPending": inventory.ErrACMERolloverPending,
+	"ErrACMEProviderBusy": inventory.ErrACMEProviderBusy,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,

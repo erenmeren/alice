@@ -1389,8 +1389,8 @@
       },
       "rollover_pending": {
         "title": "The account key change is not finished.",
-        "cause": "Alice asked the certificate authority to change the account key, but the answer did not arrive, so it is not yet known which key the authority uses.",
-        "action": "Use \"Check key change\" to let Alice ask the authority again. Nothing else changes until it is settled."
+        "cause": "Another change of this account is still running, or Alice asked the certificate authority to change the account key and the answer did not arrive, so it is not yet known which key the authority uses.",
+        "action": "Wait a moment and try again. If a key change is waiting, use \"Check key change\" to let Alice ask the authority again; nothing else changes until it is settled."
       },
       "secret_unreadable": {
         "title": "A stored secret cannot be read.",

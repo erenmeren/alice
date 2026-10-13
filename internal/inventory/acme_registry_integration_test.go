@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -793,18 +794,22 @@ func TestACMERolloverIsSerializedAcrossProcesses(t *testing.T) {
 			return err
 		},
 	} {
-		ctx, cancel := context.WithTimeout(w.ctx, 300*time.Millisecond)
-		err := call(ctx)
-		cancel()
-		assert.ErrorIs(t, err, context.DeadlineExceeded, "%s waits for process A's lock", name)
+		began := time.Now()
+		err := call(w.ctx)
+		assert.ErrorIs(t, err, inventory.ErrACMEProviderBusy, "%s: process A holds the provider's lock", name)
+		assert.Less(t, time.Since(began), 5*time.Second, "%s gives up after a bounded wait", name)
 	}
+	ctx, cancel := context.WithTimeout(w.ctx, 150*time.Millisecond)
+	_, err := b.RecoverACMERollover(ctx, w.admin, a.ID)
+	cancel()
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "a caller's own deadline ends the wait")
 	assert.Len(t, w.accountStates(p.ID), 2, "the pending key is untouched")
 	close(proceed)
 	require.ErrorIs(t, <-done, inventory.ErrACMERolloverPending)
 	w.svc.SetACMERolloverSeam(nil)
 
 	// Process A is done; its pending key is young: process B refuses to decide, whatever the CA says now.
-	_, err := b.RecoverACMERollover(w.ctx, w.admin, a.ID)
+	_, err = b.RecoverACMERollover(w.ctx, w.admin, a.ID)
 	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending)
 	_, _, err = b.ACMEAccountSigner(w.ctx, a.ID)
 	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending)
@@ -848,4 +853,66 @@ func TestACMEDeactivateRetryAfterLostAnswer(t *testing.T) {
 	_, err = w.svc.DeactivateACMEAccount(w.ctx, w.admin, b.ID)
 	assert.Equal(t, acme.ReasonProviderUnreachable, reasonOf(err), "%v", err)
 	assert.Equal(t, map[uuid.UUID]string{b.ID: inventory.ACMEAccountActive}, w.accountStates(q.ID))
+}
+
+// Many callers on one provider at once (double clicks, retries) never deadlock the pool: a waiter holds no connection
+// while it waits, so with a pool of 3 connections every caller returns quickly with success or a clean refusal.
+func TestACMEProviderLockDoesNotStarveThePool(t *testing.T) {
+	w := newRegistryWorld(t, fakeacme.Options{})
+	p := w.provider("Crowded CA", false)
+	cfg, err := pgxpool.ParseConfig(w.db.AppURL)
+	require.NoError(t, err)
+	cfg.MaxConns = 3
+	small, err := pgxpool.NewWithConfig(w.ctx, cfg)
+	require.NoError(t, err)
+	t.Cleanup(small.Close)
+	svc := inventory.New(inventory.Config{Pool: small, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
+		Registry: w.reg, Jobs: w.jobs})
+
+	const n = 12
+	ctx, cancel := context.WithTimeout(w.ctx, 30*time.Second)
+	defer cancel()
+	stop := make(chan struct{})
+	maxHeld := make(chan int32, 1)
+	go func() {
+		var peak int32
+		for {
+			select {
+			case <-stop:
+				maxHeld <- peak
+				return
+			default:
+			}
+			if a := small.Stat().AcquiredConns(); a > peak {
+				peak = a
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	began := time.Now()
+	results := make(chan error, n)
+	for range n {
+		go func() {
+			_, err := svc.RegisterACMEAccount(ctx, w.admin, p.ID, "", true)
+			results <- err
+		}()
+	}
+	var ok, refused int
+	for range n {
+		switch err := <-results; {
+		case err == nil:
+			ok++
+		case errors.Is(err, inventory.ErrACMEProviderBusy), errors.Is(err, inventory.ErrACMEAccountExists):
+			refused++
+		default:
+			t.Errorf("unexpected error %v", err)
+		}
+	}
+	close(stop)
+	assert.Equal(t, 1, ok, "exactly one account")
+	assert.Equal(t, n-1, refused)
+	assert.Less(t, time.Since(began), 15*time.Second, "no deadlock: everyone returns well before the deadline")
+	assert.NoError(t, ctx.Err())
+	assert.LessOrEqual(t, <-maxHeld, int32(3))
+	assert.Len(t, w.accountStates(p.ID), 1)
 }

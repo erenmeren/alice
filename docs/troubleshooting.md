@@ -2652,11 +2652,11 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-ACM-0024: The account key change is not finished
 
-**Meaning.** An account key rollover was sent to the authority but its answer was lost, or another rollover of the provider is running. The new key is kept as pending until it is settled. Registration, a second rollover, deactivation and a directory change wait for it. (HTTP 409, reason `acme.rollover_pending`; retryable.)
+**Meaning.** Another account operation of this provider (registration, key change, check or deactivation, in any Alice process) is running, or an account key rollover was sent to the authority but its answer was lost. The new key is kept as pending until it is settled. Registration, a second rollover, deactivation and a directory change wait for it. (HTTP 409, reason `acme.rollover_pending`; retryable.)
 
-**Likely cause.** A network failure or timeout during the key change.
+**Likely cause.** A double click or a retry while the first request still runs, or a network failure or timeout during the key change.
 
-**What to do.** Run the key change check (recover): Alice asks the authority which key it knows and settles the account.
+**What to do.** Try again in a moment. If a key change is waiting, run the key change check (recover) a few minutes later: Alice asks the authority which key it knows and settles the account.
 
 ## ALC-ACM-0025: A stored secret cannot be read
 
