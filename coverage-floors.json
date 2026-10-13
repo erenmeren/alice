@@ -38,6 +38,7 @@
   "alice/internal/alerts": 91,
   "alice/internal/reports": 81,
   "alice/internal/auth/oidc": 87,
+  "alice/internal/acme/transport": 92,
   "alice/internal/testutil/fakesmtp": 92,
   "alice/internal/testutil/fakeidp": 92,
   "alice/internal/backup/format": 95,
