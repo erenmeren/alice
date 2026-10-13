@@ -262,6 +262,12 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 			return Material{}, err
 		}
 	} else if withKey {
+		if d.Trigger == TriggerACMERenewal {
+			// A queued automatic ACME deployment is judged again before the key is opened (Task 12, I1).
+			if err := s.acmeDeployPrecheck(ctx, d); err != nil {
+				return Material{}, err
+			}
+		}
 		if keyID == nil {
 			return Material{}, ErrNoPrivateKey
 		}

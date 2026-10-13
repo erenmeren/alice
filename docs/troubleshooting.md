@@ -2698,6 +2698,46 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Connect the website to the certificate first, or leave it out of the selection.
 
+## ALC-ACM-0030: The website no longer follows this certificate
+
+**Meaning.** An automatic deployment of a certificate from a certificate authority was waiting to run, but the website was disconnected from the certificate (or the certificate was removed, or the website now follows another certificate). Nothing was sent to the server. This is a deployment's result, not an answer to a request. (HTTP 409, reason `acme.binding_gone`.)
+
+**Likely cause.** The binding was removed or the ACME certificate deleted while the deployment waited (for example during a long licence lock).
+
+**What to do.** Nothing to do if this was intended. Otherwise connect the website to the certificate again and choose Deploy now.
+
+## ALC-ACM-0031: Automatic deployment was switched off
+
+**Meaning.** An automatic deployment of a certificate from a certificate authority was waiting to run, but automatic deployment was switched off for the certificate or for this website. Nothing was sent to the server. This is a deployment's result, not an answer to a request. (HTTP 409, reason `acme.auto_deploy_off`.)
+
+**Likely cause.** An administrator switched automatic deployment off while the deployment waited.
+
+**What to do.** Nothing to do if this was intended. To put the certificate on the website now, choose Deploy now.
+
+## ALC-ACM-0032: A newer certificate replaced this one
+
+**Meaning.** An automatic deployment was waiting to run, but the certificate authority has issued a newer certificate for these names since. Nothing was sent to the server; Alice deploys the newer certificate instead. This is a deployment's result, not an answer to a request. (HTTP 409, reason `acme.certificate_superseded`.)
+
+**Likely cause.** A renewal finished while the earlier certificate's deployment waited.
+
+**What to do.** Nothing to do: the newer certificate is deployed automatically.
+
+## ALC-ACM-0033: Automatic deployment of this certificate stopped
+
+**Meaning.** Three deployments of this certificate failed, so Alice stopped deploying it automatically. A deployment that was still waiting sent nothing to the server. This is a deployment's result, not an answer to a request. (HTTP 409, reason `acme.deploy_stopped`.)
+
+**Likely cause.** The certificate failed to deploy three times; the remaining queued deployment was not run.
+
+**What to do.** Look at the failed deployments, remove the cause, then choose Deploy now.
+
+## ALC-ACM-0034: This certificate is waiting for an administrator
+
+**Meaning.** Alice holds this certificate for an administrator before it is deployed automatically (it arrived before the license allowed changes again, or Alice cannot confirm the certificates that vouch for it). A deployment that was waiting sent nothing to the server. This is a deployment's result, not an answer to a request. (HTTP 409, reason `acme.deploy_held`.)
+
+**Likely cause.** The certificate was held for an administrator after the deployment was queued.
+
+**What to do.** An administrator checks the certificate, then chooses Deploy now or releases it for automatic deployment.
+
 ## Install and start problems
 
 The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.

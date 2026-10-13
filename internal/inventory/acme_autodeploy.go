@@ -414,3 +414,67 @@ func acmeDeployParams(names []string) map[string]string {
 	}
 	return p
 }
+
+// Refusals of a queued automatic ACME deployment when its job runs (acmeDeployPrecheck): the state the planner queued it
+// in no longer holds. The engine ends the deployment with the matching closed reason before it contacts the server; the
+// planner treats every one of them as neutral (NeutralDeploymentReasons).
+var (
+	// ErrACMEBindingGone: the location no longer follows the ACME certificate (the binding was removed, the definition
+	// deleted, or the location now follows another certificate).
+	ErrACMEBindingGone = errors.New("inventory: the location no longer follows the ACME certificate")
+	// ErrACMEAutoDeployOff: automatic deployment of the ACME certificate or of the binding was switched off.
+	ErrACMEAutoDeployOff = errors.New("inventory: automatic deployment of the ACME certificate was switched off")
+	// ErrACMESuperseded: a newer certificate replaced the one the deployment was queued for.
+	ErrACMESuperseded = errors.New("inventory: the ACME certificate was renewed again since the deployment was queued")
+	// ErrACMEDeployStopped: the automatic deployments of the certificate stopped after failures.
+	ErrACMEDeployStopped = errors.New("inventory: the automatic deployments of the certificate stopped")
+	// ErrACMEDeployHeld: the certificate is held for an Administrator.
+	ErrACMEDeployHeld = errors.New("inventory: the certificate is held for an Administrator")
+)
+
+// Closed reasons of those refusals (deployments.error_code; neutral for the planner).
+const (
+	ReasonACMEBindingGone   = "acme.binding_gone"
+	ReasonACMEAutoDeployOff = "acme.auto_deploy_off"
+	ReasonACMESuperseded    = "acme.certificate_superseded"
+	ReasonACMEDeployStopped = "acme.deploy_stopped"
+	ReasonACMEDeployHeld    = "acme.deploy_held"
+)
+
+// acmeDeployPrecheck judges a queued automatic ACME deployment (trigger acme_renewal) again when its job is about to send:
+// the location must still follow an ACME certificate whose certificates include the deployed one, automatic deployment
+// must be on for the certificate and the binding, the deployed certificate must still be the current one, and its
+// automatic deployments must be neither stopped nor held (unless released). One statement; read-only.
+func (s *Service) acmeDeployPrecheck(ctx context.Context, d Deployment) error {
+	var (
+		live, certAuto, bindAuto, ours bool
+		current, held, released        *uuid.UUID
+		stopped                        *uuid.UUID
+		reason                         string
+	)
+	err := s.pool.QueryRow(ctx, `SELECT c.deleted_at IS NULL, c.auto_deploy, b.auto_deploy, c.current_certificate_id, c.deploy_held_certificate_id,
+    c.deploy_held_reason, c.deploy_released_certificate_id, c.deploy_stopped_certificate_id,
+    c.current_certificate_id = $2 OR EXISTS (SELECT 1 FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.certificate_id = $2)
+FROM acme_bindings b JOIN acme_certificates c ON c.id = b.acme_certificate_id WHERE b.location_id = $1`, d.LocationID, d.CertificateID).
+		Scan(&live, &certAuto, &bindAuto, &current, &held, &reason, &released, &stopped, &ours)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrACMEBindingGone
+	}
+	if err != nil {
+		return fmt.Errorf("inventory: judge the automatic deployment again: %w", err)
+	}
+	is := func(p *uuid.UUID) bool { return p != nil && *p == d.CertificateID }
+	switch {
+	case !live || !ours:
+		return ErrACMEBindingGone
+	case !certAuto || !bindAuto:
+		return ErrACMEAutoDeployOff
+	case !is(current):
+		return ErrACMESuperseded
+	case is(stopped):
+		return ErrACMEDeployStopped
+	case is(held) && (reason != ACMEHoldLicense || !is(released)):
+		return ErrACMEDeployHeld
+	}
+	return nil
+}

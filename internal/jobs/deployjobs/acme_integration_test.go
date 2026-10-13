@@ -174,7 +174,7 @@ func (w *acmeWorld) issueFirst() (inventory.ACMECertificate, string) {
 	require.NoError(w.t, err)
 	w.drain()
 	cert1, fp1 := w.current(c.ID)
-	_, err = w.inv.AddACMEBinding(w.ctx, w.operator, c.ID, w.loc, true)
+	_, err = w.inv.AddACMEBinding(w.ctx, w.admin, c.ID, w.loc, true) // unattended deployment: an Administrator's act
 	require.NoError(w.t, err)
 	ids := w.planDeploy(cert1)
 	require.Len(w.t, ids, 1)
@@ -392,4 +392,68 @@ func TestACMERenewalDeployRecoveredInLock(t *testing.T) {
 	assert.Equal(t, fp1, state)
 	assert.Equal(t, fp1, probe)
 	assert.Equal(t, fp1, w.location(w.s, wwwCert).DeployedFingerprint)
+}
+
+// Fix round 1, I1: a queued automatic deployment is judged again when its job runs. When the request no longer holds
+// (binding removed, definition deleted, automatic deployment switched off for the certificate or the binding, a newer
+// certificate became current, the wave stopped, the certificate held), the engine ends it failed with the closed ACME
+// reason before any server contact; the planner counts none of them.
+func TestACMEQueuedDeploymentIsJudgedAgain(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(w *acmeWorld, c inventory.ACMECertificate, cert1, cert2 uuid.UUID)
+		reason string
+	}{
+		{"the binding was removed", func(w *acmeWorld, c inventory.ACMECertificate, _, _ uuid.UUID) {
+			require.NoError(w.t, w.inv.RemoveACMEBinding(w.ctx, w.operator, c.ID, w.loc))
+		}, inventory.ReasonACMEBindingGone},
+		{"the definition was deleted", func(w *acmeWorld, c inventory.ACMECertificate, _, _ uuid.UUID) {
+			require.NoError(w.t, w.inv.DeleteACMECertificate(w.ctx, w.admin, c.ID))
+		}, inventory.ReasonACMEBindingGone},
+		{"automatic deployment of the certificate was switched off", func(w *acmeWorld, c inventory.ACMECertificate, _, _ uuid.UUID) {
+			off := false
+			_, err := w.inv.UpdateACMECertificate(w.ctx, w.admin, c.ID, inventory.ACMECertificatePatch{AutoDeploy: &off})
+			require.NoError(w.t, err)
+		}, inventory.ReasonACMEAutoDeployOff},
+		{"automatic deployment of the binding was switched off", func(w *acmeWorld, c inventory.ACMECertificate, _, _ uuid.UUID) {
+			_, err := w.inv.AddACMEBinding(w.ctx, w.operator, c.ID, w.loc, false)
+			require.NoError(w.t, err)
+		}, inventory.ReasonACMEAutoDeployOff},
+		{"a newer certificate is current", func(w *acmeWorld, c inventory.ACMECertificate, cert1, _ uuid.UUID) {
+			// The definition's current certificate moved away from the queued one (as a newer renewal would move it).
+			_, err := w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET current_certificate_id = $2 WHERE id = $1", c.ID, cert1)
+			require.NoError(w.t, err)
+		}, inventory.ReasonACMESuperseded},
+		{"the wave stopped", func(w *acmeWorld, c inventory.ACMECertificate, _, cert2 uuid.UUID) {
+			_, err := w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET deploy_stopped_certificate_id = $2 WHERE id = $1", c.ID, cert2)
+			require.NoError(w.t, err)
+		}, inventory.ReasonACMEDeployStopped},
+		{"the certificate is held", func(w *acmeWorld, c inventory.ACMECertificate, _, cert2 uuid.UUID) {
+			_, err := w.db.Owner.Exec(w.ctx, `UPDATE acme_certificates SET deploy_held_certificate_id = $2, deploy_held_reason = 'license'
+WHERE id = $1`, c.ID, cert2)
+			require.NoError(w.t, err)
+		}, inventory.ReasonACMEDeployHeld},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newACMEWorld(t)
+			c, fp1 := w.issueFirst()
+			cert1, _ := w.current(c.ID)
+			cert2, _ := w.renew(c)
+			ids := w.planDeploy(cert2)
+			require.Len(t, ids, 1)
+			cmds, writes := len(w.s.srv.Commands()), w.s.emu.DeployCount()
+			tc.change(w, c, cert1, cert2)
+			w.drain()
+			d := w.deployment(ids[0])
+			assert.Equal(t, inventory.DeployStatusFailed, d.Status)
+			assert.Equal(t, tc.reason, d.ErrorCode)
+			assert.Contains(t, inventory.NeutralDeploymentReasons(), tc.reason, "the planner counts it as no failure")
+			assert.Equal(t, cmds, len(w.s.srv.Commands()), "the server was not spoken to")
+			assert.Equal(t, writes, w.s.emu.DeployCount())
+			state, probe := w.served()
+			assert.Equal(t, fp1, state)
+			assert.Equal(t, fp1, probe)
+			assert.Zero(t, w.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.started' AND object_id = $1", ids[0].String()))
+		})
+	}
 }

@@ -137,10 +137,16 @@ func (w *acmeDeployWorld) get(id uuid.UUID) inventory.ACMECertificate {
 	return c
 }
 
+// bind binds the locations (an Administrator when automatic deployment is on: unattended deployment is theirs to
+// switch on, an Operator otherwise).
 func (w *acmeDeployWorld) bind(c inventory.ACMECertificate, auto bool, locs ...uuid.UUID) {
 	w.h.t.Helper()
+	a := w.operator
+	if auto {
+		a = w.admin
+	}
 	for _, l := range locs {
-		_, err := w.h.svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, l, auto)
+		_, err := w.h.svc.AddACMEBinding(w.h.ctx, a, c.ID, l, auto)
 		require.NoError(w.h.t, err)
 	}
 }
@@ -237,7 +243,7 @@ func (w *acmeDeployWorld) moreLocations(n int) []uuid.UUID {
 	return ids
 }
 
-// Bindings: added by an Operator without a licence, listed with their state, re-added (automatic deployment changed or
+// Bindings: added by an Operator without a licence (automatic deployment off), listed with their state, re-added (automatic deployment changed or
 // nothing), removed; every change is audited with the actor.
 func TestACMEBindingsAddListRemove(t *testing.T) {
 	w := newACMEDeployWorld(t)
@@ -246,29 +252,57 @@ func TestACMEBindingsAddListRemove(t *testing.T) {
 	lock.locked.Store(true)
 	svc := inventory.New(inventory.Config{Pool: w.h.db.App, Keyring: w.h.keyring, Audit: w.h.audit, Clock: w.h.clock, License: lock,
 		Registry: w.h.svc.Registry(), Jobs: w.h.jobs})
-	b, err := svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, w.loc1, true)
-	require.NoError(t, err, "editing bindings changes no server: no licence needed")
+	b, err := svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, w.loc1, false)
+	require.NoError(t, err, "a binding without unattended deployment changes no server: an Operator, no licence")
 	assert.Equal(t, w.loc1, b.LocationID)
 	assert.Equal(t, w.target1, b.TargetID)
 	assert.Equal(t, "web-01", b.TargetName)
 	assert.Equal(t, "/etc/nginx/ssl/www.crt", b.CertPath)
-	assert.True(t, b.AutoDeploy)
+	assert.False(t, b.AutoDeploy)
 	assert.Equal(t, inventory.ACMEBindingPending, b.State)
 	require.Len(t, w.h.auditDetails("acme.binding.added"), 1)
 	d := w.h.auditDetails("acme.binding.added")[0]
 	assert.Equal(t, c.ID.String(), d["acme_certificate_id"])
 	assert.Equal(t, w.loc1.String(), d["location_id"])
-	assert.Equal(t, "true", d["auto_deploy"])
+	assert.Equal(t, "false", d["auto_deploy"])
 	assert.Equal(t, 1, w.h.count("SELECT count(*) FROM audit_log WHERE action = 'acme.binding.added' AND actor_id = $1", w.operator.UserID))
 
+	// Ruling (fix round 1): switching unattended deployment on is an Administrator's act under the licence gate.
 	_, err = svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, w.loc1, true)
-	require.NoError(t, err)
-	assert.Equal(t, 1, w.h.audits("acme.binding.added"), "the same binding again changes nothing")
+	assert.ErrorIs(t, err, inventory.ErrAdminRequired, "an Operator cannot switch unattended deployment on")
+	_, err = svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, w.loc2, true)
+	assert.ErrorIs(t, err, inventory.ErrAdminRequired, "nor bind with it on")
+	_, err = svc.AddACMEBinding(w.h.ctx, w.admin, c.ID, w.loc1, true)
+	assert.ErrorIs(t, err, license.ErrLocked, "an Administrator in lock cannot either")
 	assert.Zero(t, w.h.audits("acme.binding.updated"))
-	b, err = svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, w.loc1, false)
+	b, err = w.h.svc.AddACMEBinding(w.h.ctx, w.admin, c.ID, w.loc1, true)
 	require.NoError(t, err)
-	assert.False(t, b.AutoDeploy)
+	assert.True(t, b.AutoDeploy)
 	assert.Equal(t, 1, w.h.audits("acme.binding.updated"))
+	_, err = svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, w.loc1, true)
+	require.NoError(t, err, "binding again as it is changes nothing and needs nobody")
+	assert.Equal(t, 1, w.h.audits("acme.binding.added"))
+	assert.Equal(t, 1, w.h.audits("acme.binding.updated"))
+	b, err = svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, w.loc1, false)
+	require.NoError(t, err, "switching off is a safety act: an Operator, in lock")
+	assert.False(t, b.AutoDeploy)
+	assert.Equal(t, 2, w.h.audits("acme.binding.updated"))
+
+	// The certificate's own switch: on is an Administrator's act under the licence gate too; off is not gated.
+	off, on := false, true
+	_, err = w.h.svc.UpdateACMECertificate(w.h.ctx, w.admin, c.ID, inventory.ACMECertificatePatch{AutoDeploy: &off})
+	require.NoError(t, err)
+	_, err = w.h.svc.UpdateACMECertificate(w.h.ctx, w.operator, c.ID, inventory.ACMECertificatePatch{AutoDeploy: &on})
+	assert.ErrorIs(t, err, inventory.ErrAdminRequired)
+	_, err = svc.UpdateACMECertificate(w.h.ctx, w.admin, c.ID, inventory.ACMECertificatePatch{AutoDeploy: &on})
+	assert.ErrorIs(t, err, license.ErrLocked)
+	_, err = w.h.svc.UpdateACMECertificate(w.h.ctx, w.admin, c.ID, inventory.ACMECertificatePatch{AutoDeploy: &on})
+	require.NoError(t, err)
+	hook := w.hook.ID
+	_, err = svc.CreateACMECertificate(w.h.ctx, w.admin, inventory.ACMECertificateInput{ProviderID: w.provider.ID, Names: []string{"x.example.test"},
+		Challenge: inventory.ACMEChallengeDNS01, HookID: &hook, AutoDeploy: true})
+	assert.ErrorIs(t, err, license.ErrLocked, "created with unattended deployment on: under the gate")
+
 	w.bind(c, true, w.loc2)
 	list, err := w.h.svc.ListACMEBindings(w.h.ctx, c.ID)
 	require.NoError(t, err)
@@ -303,7 +337,7 @@ func TestACMEBindingsAddListRemove(t *testing.T) {
 func TestACMEBindingRefusals(t *testing.T) {
 	w := newACMEDeployWorld(t)
 	add := func(c uuid.UUID, loc uuid.UUID) error {
-		_, err := w.h.svc.AddACMEBinding(w.h.ctx, w.operator, c, loc, true)
+		_, err := w.h.svc.AddACMEBinding(w.h.ctx, w.admin, c, loc, true)
 		return err
 	}
 	pending := w.define(w.provider, "api.example.test")
@@ -370,7 +404,7 @@ func TestACMEKeyTypeChangeAndBindingAreSerialized(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_, bindErr = w.h.svc.AddACMEBinding(w.h.ctx, w.operator, c.ID, loc, true)
+			_, bindErr = w.h.svc.AddACMEBinding(w.h.ctx, w.admin, c.ID, loc, true)
 		}()
 		go func() {
 			defer wg.Done()
@@ -407,8 +441,8 @@ func TestACMEBindingOneSourceUnderConcurrency(t *testing.T) {
 		var wg sync.WaitGroup
 		start := make(chan struct{})
 		for i, f := range []func() error{
-			func() error { _, err := w.h.svc.AddACMEBinding(w.h.ctx, w.operator, a.ID, loc, true); return err },
-			func() error { _, err := w.h.svc.AddACMEBinding(w.h.ctx, w.operator, b.ID, loc, true); return err },
+			func() error { _, err := w.h.svc.AddACMEBinding(w.h.ctx, w.admin, a.ID, loc, true); return err },
+			func() error { _, err := w.h.svc.AddACMEBinding(w.h.ctx, w.admin, b.ID, loc, true); return err },
 			func() error {
 				_, err := w.h.svc.CreateBinding(w.h.ctx, w.admin, inventory.BindingInput{KVCertificateID: kv, LocationIDs: []uuid.UUID{loc}})
 				return err
@@ -829,4 +863,57 @@ func TestACMEAutoDeployIgnoresDeletedThings(t *testing.T) {
 	assert.Equal(t, inventory.ACMEDeployRun{}, w.plan())
 	assert.Empty(t, w.deps(cur))
 	assert.Empty(t, w.deps(dcur))
+}
+
+// Fix round 1, I1, the case the engine test cannot build: the location of a queued automatic deployment was released and
+// now follows a vault certificate. DeploymentMaterial refuses before any key is opened (acme.binding_gone); a person's
+// manual deployment of the same certificate is not judged by the ACME rules.
+func TestACMEQueuedDeploymentOfALocationNowBoundToAVault(t *testing.T) {
+	w := newACMEDeployWorld(t)
+	c, cur := w.issued("www.example.test")
+	w.bind(c, true, w.loc1)
+	require.Equal(t, 1, w.plan().Created)
+	queued := w.deps(cur)[0].ID
+	require.NoError(t, w.h.svc.RemoveACMEBinding(w.h.ctx, w.operator, c.ID, w.loc1))
+	vault := w.h.vault("prod")
+	leaf := w.ca.Issue(pki.Opts{CommonName: "web.example.test", SANs: []string{"web.example.test"}}, w.h.clock.Now())
+	w.h.reconcile(vault, kvResult(w.h.kvc("web-cert", leaf, ver(1), w.h.clock.Now(), true)))
+	_, err := w.h.svc.CreateBinding(w.h.ctx, w.admin, inventory.BindingInput{KVCertificateID: w.h.certRow(vault, "web-cert").ID,
+		LocationIDs: []uuid.UUID{w.loc1}})
+	require.NoError(t, err)
+	_, err = w.h.svc.DeploymentMaterial(w.h.ctx, queued, true)
+	assert.ErrorIs(t, err, inventory.ErrACMEBindingGone)
+	_, err = w.h.svc.DeploymentMaterial(w.h.ctx, queued, false)
+	require.NoError(t, err, "only the first send (with the key) is judged again")
+
+	// Every refusal in turn, through the same read (the engine maps each to its neutral reason).
+	d, dcur := w.issued("api.example.test")
+	w.bind(d, true, w.loc5)
+	require.Equal(t, 1, w.plan().Created)
+	id := w.deps(dcur)[0].ID
+	mat := func() error { _, err := w.h.svc.DeploymentMaterial(w.h.ctx, id, true); return err }
+	require.NoError(t, mat())
+	exec := func(sql string, args ...any) {
+		_, err := w.h.db.Owner.Exec(w.h.ctx, sql, args...)
+		require.NoError(t, err)
+	}
+	exec("UPDATE acme_bindings SET auto_deploy = false WHERE location_id = $1", w.loc5)
+	assert.ErrorIs(t, mat(), inventory.ErrACMEAutoDeployOff)
+	exec("UPDATE acme_bindings SET auto_deploy = true WHERE location_id = $1", w.loc5)
+	exec("UPDATE acme_certificates SET deploy_held_certificate_id = $2, deploy_held_reason = 'license' WHERE id = $1", d.ID, dcur)
+	assert.ErrorIs(t, mat(), inventory.ErrACMEDeployHeld)
+	exec("UPDATE acme_certificates SET deploy_released_certificate_id = $2 WHERE id = $1", d.ID, dcur)
+	require.NoError(t, mat(), "released from the licence hold")
+	exec("UPDATE acme_certificates SET deploy_held_reason = 'chain_incomplete' WHERE id = $1", d.ID)
+	assert.ErrorIs(t, mat(), inventory.ErrACMEDeployHeld, "a chain hold is never released")
+	exec("UPDATE acme_certificates SET deploy_held_certificate_id = NULL, deploy_held_reason = '', deploy_stopped_certificate_id = $2 WHERE id = $1", d.ID, dcur)
+	assert.ErrorIs(t, mat(), inventory.ErrACMEDeployStopped)
+	exec("UPDATE acme_certificates SET deploy_stopped_certificate_id = NULL WHERE id = $1", d.ID)
+	require.NoError(t, mat())
+	w.h.clock.Advance(time.Hour)
+	newer := w.issue(d)
+	require.NotEqual(t, dcur, newer)
+	assert.ErrorIs(t, mat(), inventory.ErrACMESuperseded)
+	require.NoError(t, w.h.svc.DeleteACMECertificate(w.h.ctx, w.admin, d.ID))
+	assert.ErrorIs(t, mat(), inventory.ErrACMEBindingGone)
 }

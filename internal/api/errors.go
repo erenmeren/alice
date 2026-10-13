@@ -408,6 +408,13 @@ var (
 	ErrACMNotIssued        = ErrorCode{Code: "ALC-ACM-0027", Reason: "acme.not_issued", Status: http.StatusConflict}
 	ErrACMLocationBound    = ErrorCode{Code: "ALC-ACM-0028", Reason: "acme.location_bound", Status: http.StatusConflict}
 	ErrACMLocationNotBound = ErrorCode{Code: "ALC-ACM-0029", Reason: "acme.location_not_bound", Status: http.StatusUnprocessableEntity}
+	// A queued automatic deployment of an ACME certificate whose request no longer held when its job ran (Task 12, fix
+	// round 1): a deployment's result, nothing was sent.
+	ErrACMBindingGone           = ErrorCode{Code: "ALC-ACM-0030", Reason: "acme.binding_gone", Status: http.StatusConflict}
+	ErrACMAutoDeployOff         = ErrorCode{Code: "ALC-ACM-0031", Reason: "acme.auto_deploy_off", Status: http.StatusConflict}
+	ErrACMCertificateSuperseded = ErrorCode{Code: "ALC-ACM-0032", Reason: "acme.certificate_superseded", Status: http.StatusConflict}
+	ErrACMDeployStopped         = ErrorCode{Code: "ALC-ACM-0033", Reason: "acme.deploy_stopped", Status: http.StatusConflict}
+	ErrACMDeployHeld            = ErrorCode{Code: "ALC-ACM-0034", Reason: "acme.deploy_held", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -466,6 +473,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMTlsTrustFailed, ErrACMRolloverUnsupported, ErrACMNameNotAllowed, ErrACMOrderRunning, ErrACMChallengeUnavailable, ErrACMKeyTypeLocked,
 		ErrACMHookInUse, ErrACMNameTaken, ErrACMAccountExists, ErrACMDirectoryChangeUnconfirmed, ErrACMAccountState, ErrACMRolloverPending,
 		ErrACMSecretUnreadable, ErrACMOrderAbandoned, ErrACMNotIssued, ErrACMLocationBound, ErrACMLocationNotBound,
+		ErrACMBindingGone, ErrACMAutoDeployOff, ErrACMCertificateSuperseded, ErrACMDeployStopped, ErrACMDeployHeld,
 	}
 }
 
@@ -615,6 +623,11 @@ var errorMap = []struct {
 	{inventory.ErrACMENotIssued, ErrACMNotIssued, nil},
 	{inventory.ErrACMELocationBound, ErrACMLocationBound, nil},
 	{inventory.ErrACMELocationNotBound, ErrACMLocationNotBound, nil},
+	{inventory.ErrACMEBindingGone, ErrACMBindingGone, nil},
+	{inventory.ErrACMEAutoDeployOff, ErrACMAutoDeployOff, nil},
+	{inventory.ErrACMESuperseded, ErrACMCertificateSuperseded, nil},
+	{inventory.ErrACMEDeployStopped, ErrACMDeployStopped, nil},
+	{inventory.ErrACMEDeployHeld, ErrACMDeployHeld, nil},
 	// The inventory repeats the session check inside its transaction (a hold or a switch-on can appear after the
 	// API looked): what it refuses is a session without a fresh step-up.
 	{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired, nil},

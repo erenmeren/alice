@@ -150,7 +150,9 @@ const (
 // NeutralDeploymentReasons lists the reasons that are not counted as failures of a wave.
 func NeutralDeploymentReasons() []string {
 	return []string{ReasonChainUnconfirmed, ReasonBindingGone, ReasonAutoDeployOff, ReasonVaultUnavailable, ReasonVersionHeld,
-		ReasonVersionDisabled, ReasonCertificateMissing, ReasonCertificateExpired, ReasonNotYetValid, ReasonVersionSuperseded, ReasonWaveStopped}
+		ReasonVersionDisabled, ReasonCertificateMissing, ReasonCertificateExpired, ReasonNotYetValid, ReasonVersionSuperseded, ReasonWaveStopped,
+		// The ACME planner's queued deployments judged again at run time (acmeDeployPrecheck).
+		ReasonACMEBindingGone, ReasonACMEAutoDeployOff, ReasonACMESuperseded, ReasonACMEDeployStopped, ReasonACMEDeployHeld}
 }
 
 func neutralReason(code string) bool {

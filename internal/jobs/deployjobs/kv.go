@@ -120,6 +120,13 @@ var kvRefusals = []struct {
 	{inventory.ErrSecretUnreadable, reasonKVUnreadable},
 	{inventory.ErrChainUnconfirmed, reasonChainUnconfirmed},
 	{inventory.ErrNotFound, reasonNotFound},
+	// A queued automatic ACME deployment whose request no longer holds (DeploymentMaterial judges it again before the
+	// key is opened): the reasons speak of the certificate authority's certificate, not of a vault.
+	{inventory.ErrACMEBindingGone, inventory.ReasonACMEBindingGone},
+	{inventory.ErrACMEAutoDeployOff, inventory.ReasonACMEAutoDeployOff},
+	{inventory.ErrACMESuperseded, inventory.ReasonACMESuperseded},
+	{inventory.ErrACMEDeployStopped, inventory.ReasonACMEDeployStopped},
+	{inventory.ErrACMEDeployHeld, inventory.ReasonACMEDeployHeld},
 }
 
 // kvRefusal is the closed reason of an inventory refusal in kvRefusals.
