@@ -359,6 +359,11 @@ func (s *Service) CreateACMECertificate(ctx context.Context, a Actor, in ACMECer
 	if len(errs) > 0 {
 		return ACMECertificate{}, errs
 	}
+	if f.autoDeploy {
+		if err := s.unattendedAllowed(a); err != nil { // unattended deployment from the start (Task 12)
+			return ACMECertificate{}, err
+		}
+	}
 	id := uuid.Must(uuid.NewV7())
 	now := s.clock.Now().UTC()
 	var out ACMECertificate
@@ -477,6 +482,11 @@ func (s *Service) UpdateACMECertificate(ctx context.Context, a Actor, id uuid.UU
 		}
 		if slices.Contains(changed, "key_type") && cur.Bindings > 0 {
 			return ErrACMEKeyTypeLocked
+		}
+		if slices.Contains(changed, "auto_deploy") && f.autoDeploy {
+			if err := s.unattendedAllowed(a); err != nil { // switching unattended deployment on (Task 12)
+				return err
+			}
 		}
 		account := cur.AccountID
 		if usesOrder {

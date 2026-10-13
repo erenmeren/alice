@@ -11,7 +11,9 @@ package inventory
 // ACME binding of one location serialize, and each checks the other in a statement of its own after the lock.
 //
 // Editing bindings changes nothing on a server, so it needs no licence (the planner and Deploy now ask the gate); an
-// Operator may do it (A9: AcmeOperate; the service takes the Actor for the audit row and does not check roles).
+// Operator may do it (A9: AcmeOperate) — except switching UNATTENDED deployment on (a new binding with automatic
+// deployment on, or switching it on), which is an Administrator's act under the licence gate (unattendedAllowed; ruling
+// of Task 12 fix round 1, like the Key Vault ruling S6).
 // "Deploy now" is a thin wrapper of RequestDeployment (trigger manual): there is no second deploy path.
 
 import (
@@ -28,8 +30,10 @@ import (
 
 	"alice/internal/acme/keygen"
 	"alice/internal/audit"
+	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
+	"alice/internal/rbac"
 )
 
 // Refusals of the ACME bindings and Deploy now.
@@ -144,7 +148,10 @@ func policyAlgorithm(policy string) string {
 // for an unknown location or a deleted server); ErrACMELocationBound (the location follows a vault certificate or
 // another ACME certificate); ErrLocationUnsupported (missing at the last scan, unsupported, a path the helper cannot
 // take, not an Nginx server); *KeyTypeMismatchError (the location's certificate has another key type than the ACME
-// certificate's key policy or its current certificate: A13). No licence is needed (nothing changes on a server). Audit
+// certificate's key policy or its current certificate: A13); then, when the binding would newly deploy UNATTENDED
+// (autoDeploy true for a new binding or switched on), ErrAdminRequired for anyone but an Administrator and the licence
+// gate's refusal (unattendedAllowed). A binding with automatic deployment off needs no licence and may be an
+// Operator's (nothing changes on a server). Audit
 // acme.binding.added (or acme.binding.updated when only automatic deployment changed; nothing when nothing changed).
 func (s *Service) AddACMEBinding(ctx context.Context, a Actor, id, location uuid.UUID, autoDeploy bool) (ACMEBinding, error) {
 	if location == uuid.Nil {
@@ -200,6 +207,11 @@ func (s *Service) AddACMEBinding(ctx context.Context, a Actor, id, location uuid
 				return &LocationRefusalError{LocationID: location, Err: &KeyTypeMismatchError{Expected: l.keyType, Actual: alg}}
 			}
 		}
+		if autoDeploy && (acmeBound == nil || !autoBefore) {
+			if err := s.unattendedAllowed(a); err != nil {
+				return err
+			}
+		}
 		now := s.clock.Now().UTC()
 		action := "acme.binding.added"
 		switch {
@@ -237,6 +249,17 @@ VALUES ($1, $2, $3, $4, $5)`, id, location, autoDeploy, nullableUser(a.UserID), 
 		return ACMEBinding{}, err
 	}
 	return out, nil
+}
+
+// unattendedAllowed is the rule for switching UNATTENDED deployment on (ruling of Task 12 fix round 1, as the Key Vault
+// ruling S6): only an Administrator (ErrAdminRequired; the API also requires a fresh step-up) and only while the licence
+// gate allows changes (license.ErrLocked and its kin). Switching it off, removing a binding, a binding with automatic
+// deployment off and Deploy now are not gated by it.
+func (s *Service) unattendedAllowed(a Actor) error {
+	if a.Role != rbac.Admin {
+		return ErrAdminRequired
+	}
+	return s.license.Allow(license.ClassChange)
 }
 
 // RemoveACMEBinding removes the binding of a location from a live ACME certificate (ErrNotFound when there is none),
