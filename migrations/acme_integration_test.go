@@ -347,3 +347,43 @@ func TestMigration00013DownRemapsAndUpAgain(t *testing.T) {
 	}
 	assert.Empty(t, grantProblems(t, d))
 }
+
+// Task 12: a location follows one ACME certificate (the unique index), an attention mark has its reason, and a deployment
+// hold has its reason; the planner's marks are updatable by the application, nothing else of a binding is.
+func TestAcmeBindingsAndDeployMarks(t *testing.T) {
+	d := pgtest.New(t)
+	w := seedAcme(t, d)
+	ctx := context.Background()
+	other := uuid.New()
+	_, err := d.App.Exec(ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, hook_id, state, created_at, updated_at)
+VALUES ($1, $2, $3, '{api.corp.example}', 'ecdsa_p256', 'dns01', $4, 'active', now(), now())`, other, w.provider, w.account, w.hook)
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, `INSERT INTO acme_bindings (acme_certificate_id, location_id, created_at) VALUES ($1, $2, now())`, other, w.loc)
+	assert.Equal(t, uniqueViolation, sqlState(err), "a location follows one ACME certificate")
+
+	bad := func(name, sql string, args ...any) {
+		t.Helper()
+		_, err := d.App.Exec(ctx, sql, args...)
+		assert.Equal(t, checkViolation, sqlState(err), name)
+	}
+	bad("attention without its reason", "UPDATE acme_bindings SET attention_at = now() WHERE acme_certificate_id = $1", w.acmeCert)
+	bad("a reason without attention", "UPDATE acme_bindings SET attention_code = 'deployment.reload_failed' WHERE acme_certificate_id = $1", w.acmeCert)
+	bad("a reason that is not a code", "UPDATE acme_bindings SET attention_at = now(), attention_code = 'no spaces' WHERE acme_certificate_id = $1", w.acmeCert)
+	_, err = d.App.Exec(ctx, "UPDATE acme_bindings SET attention_at = now(), attention_code = 'deployment.reload_failed' WHERE acme_certificate_id = $1",
+		w.acmeCert)
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, "UPDATE acme_bindings SET created_at = now() WHERE acme_certificate_id = $1", w.acmeCert)
+	assert.Equal(t, privilegeDenied, sqlState(err))
+
+	cert := certRow()
+	cert["source"], cert["private_key_id"], cert["public_key_sha256"] = "acme", w.key, hex64("c")
+	require.NoError(t, insertRow(t, d.App, "certificates", cert))
+	bad("a hold without its reason", "UPDATE acme_certificates SET deploy_held_certificate_id = $2 WHERE id = $1", w.acmeCert, cert["id"])
+	bad("a reason without a hold", "UPDATE acme_certificates SET deploy_held_reason = 'license' WHERE id = $1", w.acmeCert)
+	bad("an unknown reason", "UPDATE acme_certificates SET deploy_held_certificate_id = $2, deploy_held_reason = 'later' WHERE id = $1", w.acmeCert, cert["id"])
+	_, err = d.App.Exec(ctx, `UPDATE acme_certificates SET deploy_held_certificate_id = $2, deploy_held_reason = 'chain_incomplete',
+deploy_released_certificate_id = $2, deploy_stopped_certificate_id = $2 WHERE id = $1`, w.acmeCert, cert["id"])
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, "UPDATE acme_certificates SET deploy_stopped_certificate_id = $2 WHERE id = $1", w.acmeCert, uuid.New())
+	assert.Equal(t, "23503", sqlState(err), "the marks name stored certificates")
+}

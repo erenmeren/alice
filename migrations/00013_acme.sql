@@ -150,6 +150,17 @@ CREATE TABLE acme_certificates (
     -- When the current series of the CA's rate-limit failures began (NULL when the last failure was not a rate limit): the
     -- planner holds the provider's other certificates for at most 24 hours of such a series.
     rate_limited_since     timestamptz,
+    -- Automatic deployment (Task 12; amendment A2). While deploy_held_certificate_id names the current certificate the
+    -- planner never deploys it on its own (deploy_held_reason: license = it was issued before the licence gate last
+    -- reopened and no deployment of it had begun, an Administrator releases it; chain_incomplete = its chain does not reach
+    -- a trusted root, only a person's Deploy now with the Administrator's confirmation deploys it). Setting the hold is
+    -- the once-only mark of its e-mail. deploy_released_certificate_id is the certificate an Administrator released from
+    -- the licence hold; deploy_stopped_certificate_id the certificate whose automatic deployments stopped after three
+    -- failures (the once-only mark of acme.auto_deploy.stopped and its e-mail).
+    deploy_held_certificate_id     uuid REFERENCES certificates (id),
+    deploy_held_reason             text NOT NULL DEFAULT '' CHECK (deploy_held_reason IN ('', 'license', 'chain_incomplete')),
+    deploy_released_certificate_id uuid REFERENCES certificates (id),
+    deploy_stopped_certificate_id  uuid REFERENCES certificates (id),
     created_by             uuid REFERENCES users (id),
     created_at             timestamptz NOT NULL,
     updated_at             timestamptz NOT NULL,
@@ -157,7 +168,8 @@ CREATE TABLE acme_certificates (
     CHECK (challenge <> 'dns01' OR hook_id IS NOT NULL),
     CHECK ((challenge = 'http01') = (http_target_id IS NOT NULL)),
     CHECK ((ari_window_start IS NULL) = (ari_window_end IS NULL) AND (ari_window_start IS NULL OR ari_window_start < ari_window_end)),
-    CHECK (ari_window_start IS NULL OR ari_window_start >= '2000-01-01T00:00:00Z')
+    CHECK (ari_window_start IS NULL OR ari_window_start >= '2000-01-01T00:00:00Z'),
+    CHECK ((deploy_held_certificate_id IS NULL) = (deploy_held_reason = ''))
 );
 CREATE INDEX acme_certificates_provider ON acme_certificates (provider_id);
 CREATE INDEX acme_certificates_account ON acme_certificates (account_id);
@@ -226,16 +238,23 @@ END $$;
 CREATE TRIGGER acme_orders_done_frozen BEFORE UPDATE ON acme_orders
     FOR EACH ROW EXECUTE FUNCTION acme_orders_protect_done();
 
--- The locations an ACME certificate is deployed to; auto_deploy per location. A binding is removed with DELETE.
+-- The locations an ACME certificate is deployed to; auto_deploy per location. A binding is removed with DELETE. A location
+-- follows one source only: one ACME certificate (the unique index below) and never a Key Vault binding as well
+-- (certificate_locations.binding_id; both writers hold the location's row lock while they check). attention_at and
+-- attention_code: an automatic deployment of the current certificate to this location failed (its closed reason); cleared
+-- when the location gets the current certificate.
 CREATE TABLE acme_bindings (
     acme_certificate_id uuid NOT NULL REFERENCES acme_certificates (id),
     location_id         uuid NOT NULL REFERENCES certificate_locations (id),
     auto_deploy         boolean NOT NULL DEFAULT false,
+    attention_at        timestamptz,
+    attention_code      text NOT NULL DEFAULT '' CHECK (attention_code ~ '^[A-Za-z0-9._-]{0,100}$'),
     created_by          uuid REFERENCES users (id),
     created_at          timestamptz NOT NULL,
-    PRIMARY KEY (acme_certificate_id, location_id)
+    PRIMARY KEY (acme_certificate_id, location_id),
+    CHECK ((attention_at IS NULL) = (attention_code = ''))
 );
-CREATE INDEX acme_bindings_location ON acme_bindings (location_id);
+CREATE UNIQUE INDEX acme_bindings_location ON acme_bindings (location_id);
 
 -- Certificates and deployments gain the ACME values. certificates_check_key (Z1001, Z1002, Z1004) already applies to an
 -- INSERT with source 'acme' and refuses any later change of the source.
@@ -258,10 +277,11 @@ GRANT UPDATE (name, url, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_
     propagation_wait_seconds, poll_timeout_seconds, updated_at, deleted_at) ON acme_hooks TO alice_app;
 GRANT UPDATE (provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew, auto_deploy, state, current_certificate_id,
     failures, next_attempt_at, last_attempt_at, last_error_code, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at,
-    failure_notified_at, rate_limited_since, updated_at, deleted_at) ON acme_certificates TO alice_app;
+    failure_notified_at, rate_limited_since, deploy_held_certificate_id, deploy_held_reason, deploy_released_certificate_id,
+    deploy_stopped_certificate_id, updated_at, deleted_at) ON acme_certificates TO alice_app;
 GRANT UPDATE (state, finished_at, error_code, order_url, certificate_id, pending_key_ct, pending_key_nonce, pending_key_wrapped_dek,
     pending_key_version, presented, cleanup_at, cleanup_error_code) ON acme_orders TO alice_app;
-GRANT UPDATE (auto_deploy) ON acme_bindings TO alice_app;
+GRANT UPDATE (auto_deploy, attention_at, attention_code) ON acme_bindings TO alice_app;
 
 -- +goose Down
 -- Re-map what the CHECKs of 00006 would refuse before they are restored (A4): an ACME certificate keeps its sealed key and

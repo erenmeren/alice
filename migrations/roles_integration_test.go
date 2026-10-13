@@ -208,11 +208,14 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.acme_accounts": {"UPDATE": {"account_url", "contact_email", "state", "tos_accepted_at", "tos_accepted_by", "tos_url", "updated_at"}},
 	"public.acme_hooks": {"UPDATE": {"allowed_suffixes", "ca_bundle_pem", "deleted_at", "name", "poll_timeout_seconds",
 		"propagation_wait_seconds", "secret_ct", "secret_key_version", "secret_nonce", "secret_wrapped_dek", "updated_at", "url"}},
-	"public.acme_certificates": {"UPDATE": {"account_id", "ari_checked_at", "ari_next_check_at", "ari_window_end", "ari_window_start", "auto_deploy",
-		"auto_renew", "challenge", "current_certificate_id", "deleted_at", "failure_notified_at", "failures", "hook_id", "http_target_id", "key_type", "last_attempt_at", "last_error_code", "names", "next_attempt_at", "provider_id", "rate_limited_since", "renew_before_days", "state", "updated_at"}},
+	"public.acme_certificates": {"UPDATE": {"account_id", "ari_checked_at", "ari_next_check_at", "ari_window_end", "ari_window_start", "auto_deploy", "auto_renew",
+		"challenge", "current_certificate_id", "deleted_at", "deploy_held_certificate_id", "deploy_held_reason",
+		"deploy_released_certificate_id", "deploy_stopped_certificate_id", "failure_notified_at", "failures", "hook_id",
+		"http_target_id", "key_type", "last_attempt_at", "last_error_code", "names", "next_attempt_at", "provider_id",
+		"rate_limited_since", "renew_before_days", "state", "updated_at"}},
 	"public.acme_orders": {"UPDATE": {"certificate_id", "cleanup_at", "cleanup_error_code", "error_code", "finished_at", "order_url",
 		"pending_key_ct", "pending_key_nonce", "pending_key_version", "pending_key_wrapped_dek", "presented", "state"}},
-	"public.acme_bindings": {"UPDATE": {"auto_deploy"}},
+	"public.acme_bindings": {"UPDATE": {"attention_at", "attention_code", "auto_deploy"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
