@@ -2204,9 +2204,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-AKV-0018: Website already connected
 
-**Meaning.** The website (certificate location) is already connected to a vault certificate. The parameter `location_id` names it. Nothing was connected. (HTTP 409, reason `kv.location_bound`.)
+**Meaning.** The website (certificate location) is already connected to another vault certificate, or follows a certificate from a certificate authority (ACME). The parameter `location_id` names it. Nothing was connected. (HTTP 409, reason `kv.location_bound`.)
 
-**Likely cause.** A website follows at most one vault certificate.
+**Likely cause.** A website follows at most one certificate, from a vault or from a certificate authority.
 
 **What to do.** Disconnect the website from its other certificate first, or leave it out of this selection.
 
@@ -2673,6 +2673,30 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** Alice was stopped or restarted, or lost its job, while the order ran.
 
 **What to do.** Request the certificate again. Proof records (DNS records, token files) that were still published are removed automatically by the cleanup job.
+
+## ALC-ACM-0027: This certificate has not been issued yet
+
+**Meaning.** The ACME certificate has no issued certificate yet, so a website cannot be connected to it and nothing can be deployed. Nothing was changed. (HTTP 409, reason `acme.not_issued`.)
+
+**Likely cause.** The first order of the certificate has not finished or did not succeed.
+
+**What to do.** Get the certificate first (Renew now on its page under Issued certificates), then connect the websites or deploy it.
+
+## ALC-ACM-0028: This website already follows another certificate
+
+**Meaning.** A website (a certificate file on a managed Nginx server) follows only one certificate: this one is already connected to another certificate from a certificate authority, or to a certificate in a Key Vault. Nothing was changed. (HTTP 409, reason `acme.location_bound`.)
+
+**Likely cause.** The website was connected earlier, possibly by another person.
+
+**What to do.** Disconnect the website from the other certificate first, or choose another website.
+
+## ALC-ACM-0029: This website is not connected to this certificate
+
+**Meaning.** Deploy now of a certificate from a certificate authority puts it only on the websites connected to it, and the request named a website that is not. Nothing was deployed. (HTTP 422, reason `acme.location_not_bound`.)
+
+**Likely cause.** The website was disconnected after the page was loaded, or it was never connected.
+
+**What to do.** Connect the website to the certificate first, or leave it out of the selection.
 
 ## Install and start problems
 

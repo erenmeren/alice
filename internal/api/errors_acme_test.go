@@ -36,6 +36,8 @@ var acmeTable = []struct {
 	{"ALC-ACM-0021", "acme.account_exists", 409, false}, {"ALC-ACM-0022", "acme.directory_change_unconfirmed", 409, false},
 	{"ALC-ACM-0023", "acme.account_state", 409, false}, {"ALC-ACM-0024", "acme.rollover_pending", 409, true},
 	{"ALC-ACM-0025", "acme.secret_unreadable", 409, false}, {"ALC-ACM-0026", "acme.order_abandoned", 409, true},
+	{"ALC-ACM-0027", "acme.not_issued", 409, false}, {"ALC-ACM-0028", "acme.location_bound", 409, false},
+	{"ALC-ACM-0029", "acme.location_not_bound", 422, false},
 }
 
 // Every ACME code is registered as the table says, translated in English and Turkish without placeholders, and has a
