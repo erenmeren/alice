@@ -32,7 +32,11 @@ import (
 // Rollover (A6): (1) the new key is committed as a pending_rollover row, (2) the CA is asked (keyChange), (3) the old
 // row becomes retired and the new one active in one transaction. A rollover the CA did not take deletes its pending
 // row (the only account row that is ever deleted, trigger Z1018). When the CA's answer is lost (RolloverUnknown) the
-// pending row stays and RecoverACMERollover settles it by asking the CA which key it knows.
+// pending row stays and RecoverACMERollover settles it by asking the CA which key it knows, once the pending key is
+// older (database time) than any CA call that may still switch to it (ACMERolloverSettleAge). A settled rollover also
+// moves the provider's ACME certificates to the new account row. Registration, rollover, recovery and deactivation of
+// one provider are serialized across processes by a PostgreSQL advisory lock held for the whole operation; while a
+// rollover is unsettled ACMEAccountSigner signs nothing (ErrACMERolloverPending).
 //
 // Secrets (A10): the PKCS#8 DER of an account key is plaintext only inside the function that seals or opens it and
 // is zeroed before it returns; the crypto.Signer (an *ecdsa.PrivateKey, which Go cannot zero) lives only for the CA
@@ -199,26 +203,39 @@ func (s *Service) ListACMEAccounts(ctx context.Context, providerID uuid.UUID) ([
 	return out, rows.Err()
 }
 
-// lockACMEProvider serializes the CA operations of one provider's account inside this process (a registration, a
-// rollover, its recovery, a deactivation); the database's unique indexes and state checks decide across processes.
-// release must be called.
+// acmeLockBudget bounds the release of a provider's lock (a stuck database closes the session instead).
+const acmeLockBudget = 10 * time.Second
+
+// lockACMEProvider serializes the CA operations of one provider's account (a registration, a rollover, its recovery, a
+// deactivation) ACROSS processes: a PostgreSQL session advisory lock, held on a dedicated connection for the whole
+// operation, CA calls included. It waits for the holder (or ctx). release must be called; a lock that cannot be
+// released cleanly closes its session, which releases it.
 func (s *Service) lockACMEProvider(ctx context.Context, id uuid.UUID) (release func(), err error) {
-	s.acmeMu.Lock()
-	if s.acmeLocks == nil {
-		s.acmeLocks = map[uuid.UUID]chan struct{}{}
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("inventory: database connection for the ACME provider lock: %w", err)
 	}
-	ch, ok := s.acmeLocks[id]
-	if !ok {
-		ch = make(chan struct{}, 1)
-		s.acmeLocks[id] = ch
+	key := "acme.provider." + id.String()
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(hashtextextended($1, 0))", key); err != nil {
+		// The lock may have been granted as the context ended: closing the session drops it either way.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acmeLockBudget)
+		_ = conn.Conn().Close(closeCtx)
+		cancel()
+		conn.Release()
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("inventory: take the ACME provider lock: %w", err)
 	}
-	s.acmeMu.Unlock()
-	select {
-	case ch <- struct{}{}:
-		return func() { <-ch }, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
+	return func() {
+		relCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), acmeLockBudget)
+		defer cancel()
+		var unlocked bool
+		if err := conn.QueryRow(relCtx, "SELECT pg_advisory_unlock(hashtextextended($1, 0))", key).Scan(&unlocked); err != nil || !unlocked {
+			_ = conn.Conn().Close(relCtx)
+		}
+		conn.Release()
+	}, nil
 }
 
 // acmeClientFor builds a client of the provider's directory through the guarded transport with the provider's CA
@@ -274,12 +291,13 @@ func (s *Service) openAccountKey(ctx context.Context, q db.Querier, id uuid.UUID
 
 // ACMEAccountSigner opens the key of an active account for an order (Task 10): the signer and the account URL (the
 // JWS kid). ErrNotFound, ErrACMEAccountState for an account that is not active or whose provider is deleted,
-// ErrACMESecretUnreadable. The DER is zeroed before it returns; the caller keeps the signer only for its CA calls.
+// ErrACMERolloverPending while a key rollover of the provider is unsettled, ErrACMESecretUnreadable. The DER is zeroed before it returns; the caller keeps the signer only for its CA calls.
 func (s *Service) ACMEAccountSigner(ctx context.Context, accountID uuid.UUID) (crypto.Signer, string, error) {
 	var state, url string
-	var live bool
-	err := s.pool.QueryRow(ctx, `SELECT a.state, a.account_url, p.deleted_at IS NULL FROM acme_accounts a JOIN acme_providers p ON p.id = a.provider_id
-WHERE a.id = $1`, accountID).Scan(&state, &url, &live)
+	var live, pending bool
+	err := s.pool.QueryRow(ctx, `SELECT a.state, a.account_url, p.deleted_at IS NULL,
+EXISTS (SELECT 1 FROM acme_accounts n WHERE n.provider_id = a.provider_id AND n.state = 'pending_rollover')
+FROM acme_accounts a JOIN acme_providers p ON p.id = a.provider_id WHERE a.id = $1`, accountID).Scan(&state, &url, &live, &pending)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, "", ErrNotFound
 	}
@@ -288,6 +306,9 @@ WHERE a.id = $1`, accountID).Scan(&state, &url, &live)
 	}
 	if state != ACMEAccountActive || !live || url == "" {
 		return nil, "", ErrACMEAccountState
+	}
+	if pending {
+		return nil, "", ErrACMERolloverPending // the CA may already hold the new key: sign nothing until it is settled
 	}
 	signer, err := s.openAccountKey(ctx, s.pool, accountID)
 	if err != nil {
@@ -480,8 +501,8 @@ func (s *Service) RolloverACMEAccount(ctx context.Context, a Actor, accountID uu
 			return ErrACMEAccountState
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO acme_accounts (id, provider_id, contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at,
-key_ct, key_nonce, key_wrapped_dek, key_version, state, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', $12, $13, $13)`,
+key_ct, key_nonce, key_wrapped_dek, key_version, state, pending_since, created_by, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', now(), $12, $13, $13)`,
 			pendingID, cur.ProviderID, cur.ContactEmail, cur.AccountURL, cur.TermsURL, cur.TermsAcceptedBy, cur.TermsAcceptedAt,
 			env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, actorRef(a), s.clock.Now().UTC())
 		if db.IsUniqueViolationOn(err, "acme_accounts_one_pending") {
@@ -499,11 +520,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', $12, $
 	// (2) The CA.
 	oldKey, err := s.openAccountKey(ctx, s.pool, accountID)
 	if err != nil {
-		return ACMEAccount{}, s.discardPending(ctx, pendingID, err)
+		return ACMEAccount{}, s.discardPendingOr(ctx, pendingID, err)
 	}
 	client, err := s.acmeClientFor(p, oldKey, acct.AccountURL)
 	if err != nil {
-		return ACMEAccount{}, s.discardPending(ctx, pendingID, err)
+		return ACMEAccount{}, s.discardPendingOr(ctx, pendingID, err)
 	}
 	outcome, cerr := client.Rollover(ctx, newKey)
 	if s.rolloverSeam != nil {
@@ -521,12 +542,12 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', $12, $
 		if cerr == nil {
 			cerr = &ACMEError{Reason: acme.ReasonAccountRejected}
 		}
-		return ACMEAccount{}, s.discardPending(ctx, pendingID, acmeFailure(cerr))
+		return ACMEAccount{}, s.discardPendingOr(ctx, pendingID, acmeFailure(cerr))
 	}
 }
 
-// settleRollover makes the pending row the active account and retires the old one, in one transaction, with the
-// audit row. accountURL is the account's URL at the CA (unchanged by a rollover).
+// settleRollover makes the pending row the active account, retires the old one and moves the ACME certificates of
+// the old row to the new one, in one transaction, with the audit row. accountURL is the account's URL at the CA (unchanged by a rollover).
 func (s *Service) settleRollover(ctx context.Context, a Actor, oldID, pendingID uuid.UUID, accountURL string, recovered bool) (ACMEAccount, error) {
 	var out ACMEAccount
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -548,6 +569,10 @@ func (s *Service) settleRollover(ctx context.Context, a Actor, oldID, pendingID 
 		if _, err := tx.Exec(ctx, "UPDATE acme_accounts SET state = 'active', account_url = $3, updated_at = $2 WHERE id = $1", pendingID, now, accountURL); err != nil {
 			return fmt.Errorf("inventory: activate the new ACME account key: %w", err)
 		}
+		// The certificates follow their account to its new key (they never name a retired or pending row).
+		if _, err := tx.Exec(ctx, "UPDATE acme_certificates SET account_id = $2, updated_at = $3 WHERE account_id = $1", oldID, pendingID, now); err != nil {
+			return fmt.Errorf("inventory: move the ACME certificates to the new account key: %w", err)
+		}
 		if out, err = getACMEAccount(ctx, tx, pendingID, false); err != nil {
 			return err
 		}
@@ -559,22 +584,38 @@ func (s *Service) settleRollover(ctx context.Context, a Actor, oldID, pendingID 
 	return out, err
 }
 
-// discardPending deletes a pending key the CA did not take (detached from the caller's context: the row must not
-// outlive a refusal because the request was cancelled) and returns cause.
-func (s *Service) discardPending(ctx context.Context, pendingID uuid.UUID, cause error) error {
+// discardPending deletes a pending key the CA did not take, detached from the caller's context (the row must not
+// outlive a refusal because the request was cancelled). Only a pending row is deleted (the database refuses any other,
+// Z1018).
+func (s *Service) discardPending(ctx context.Context, pendingID uuid.UUID) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
 	defer cancel()
 	if _, err := s.pool.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1 AND state = 'pending_rollover'", pendingID); err != nil {
-		s.log.Error("could not discard a pending ACME account key", "error_type", fmt.Sprintf("%T", err))
+		return fmt.Errorf("inventory: discard the pending ACME account key: %w", err)
+	}
+	return nil
+}
+
+// discardPendingOr discards a pending key after a refusal and returns the refusal (a failed delete is logged: the row
+// is then a stale pending key that RecoverACMERollover settles).
+func (s *Service) discardPendingOr(ctx context.Context, pendingID uuid.UUID, cause error) error {
+	if err := s.discardPending(ctx, pendingID); err != nil {
+		s.log.Error("could not discard a pending ACME account key", "account_id", pendingID.String(), "error_type", fmt.Sprintf("%T", err))
 	}
 	return cause
 }
+
+// ACMERolloverSettleAge is how old (by database time) a pending key must be before a recovery may touch it: longer than
+// the CA calls of the rollover that inserted it can run (its directory read and its keyChange, each bounded by the
+// client's call timeout), plus a margin. A younger pending key may still be switched to by a request in flight.
+const ACMERolloverSettleAge = 2*acme.DefaultCallTimeout + time.Minute
 
 // RecoverACMERollover settles an unsettled rollover of the provider of accountID (the active account or its pending
 // key). It asks the CA with the new key first: if the CA knows it, the new key becomes active (audit
 // acme.account.rolled_over, recovered true); if the CA does not know it but knows the old key, the pending key is
 // discarded and the active account returned unchanged. Any other answer leaves the pending key in place and is
-// returned as *ACMEError. ErrACMEAccountState when nothing is pending. License gate first.
+// returned as *ACMEError. ErrACMEAccountState when nothing is pending; ErrACMERolloverPending while the pending key is
+// younger than ACMERolloverSettleAge (database time). License gate first; under the provider's cross-process lock.
 func (s *Service) RecoverACMERollover(ctx context.Context, a Actor, accountID uuid.UUID) (ACMEAccount, error) {
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return ACMEAccount{}, err
@@ -590,13 +631,20 @@ func (s *Service) RecoverACMERollover(ctx context.Context, a Actor, accountID uu
 	defer release()
 	var activeID, pendingID uuid.UUID
 	var accountURL string
-	err = s.pool.QueryRow(ctx, `SELECT a.id, a.account_url, n.id FROM acme_accounts a JOIN acme_accounts n ON n.provider_id = a.provider_id
-WHERE a.provider_id = $1 AND a.state = 'active' AND n.state = 'pending_rollover'`, p.ID).Scan(&activeID, &accountURL, &pendingID)
+	var young bool
+	err = s.pool.QueryRow(ctx, `SELECT a.id, a.account_url, n.id, n.pending_since > now() - make_interval(secs => $2)
+FROM acme_accounts a JOIN acme_accounts n ON n.provider_id = a.provider_id
+WHERE a.provider_id = $1 AND a.state = 'active' AND n.state = 'pending_rollover'`, p.ID, ACMERolloverSettleAge.Seconds()).Scan(&activeID, &accountURL, &pendingID, &young)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ACMEAccount{}, ErrACMEAccountState
 	}
 	if err != nil {
 		return ACMEAccount{}, fmt.Errorf("inventory: read the pending ACME account key: %w", err)
+	}
+	if young {
+		// The keyChange that inserted it may still reach the CA: deciding now could discard the only key the CA will
+		// accept. Try again once ACMERolloverSettleAge has passed.
+		return ACMEAccount{}, ErrACMERolloverPending
 	}
 	newKey, err := s.openAccountKey(ctx, s.pool, pendingID)
 	if err != nil {
@@ -627,7 +675,7 @@ WHERE a.provider_id = $1 AND a.state = 'active' AND n.state = 'pending_rollover'
 	if _, oerr := withOld.Lookup(ctx); oerr != nil {
 		return ACMEAccount{}, acmeFailure(oerr)
 	}
-	if err := s.discardPending(ctx, pendingID, nil); err != nil {
+	if err := s.discardPending(ctx, pendingID); err != nil {
 		return ACMEAccount{}, err
 	}
 	return getACMEAccount(ctx, s.pool, activeID, false)
@@ -635,7 +683,9 @@ WHERE a.provider_id = $1 AND a.state = 'active' AND n.state = 'pending_rollover'
 
 // DeactivateACMEAccount deactivates an active account at the CA (RFC 8555 7.3.6; permanent) and marks it
 // deactivated, with the audit row acme.account.deactivated. License gate first; ErrACMEAccountState for an account
-// that is not active; ErrACMERolloverPending while a rollover is unsettled. A CA failure changes nothing.
+// that is not active; ErrACMERolloverPending while a rollover is unsettled (checked under the provider's cross-process
+// lock). A CA failure changes nothing, except an answer that the account is already gone (a retry after a lost answer):
+// then the record is finished (audit detail already_deactivated).
 func (s *Service) DeactivateACMEAccount(ctx context.Context, a Actor, accountID uuid.UUID) (ACMEAccount, error) {
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return ACMEAccount{}, err
@@ -669,8 +719,13 @@ func (s *Service) DeactivateACMEAccount(ctx context.Context, a Actor, accountID 
 	if err != nil {
 		return ACMEAccount{}, err
 	}
+	already := false
 	if err := client.Deactivate(ctx); err != nil {
-		return ACMEAccount{}, acmeFailure(err)
+		if !accountGone(err) {
+			return ACMEAccount{}, acmeFailure(err)
+		}
+		// A retry after a deactivation whose answer was lost: the CA no longer accepts the account. Finish the record.
+		already = true
 	}
 	var out ACMEAccount
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -686,8 +741,20 @@ func (s *Service) DeactivateACMEAccount(ctx context.Context, a Actor, accountID 
 			return err
 		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.account.deactivated", ObjectType: "acme_account",
-			ObjectID: accountID.String(), Result: audit.Success, Details: map[string]string{"provider_id": p.ID.String()}})
+			ObjectID: accountID.String(), Result: audit.Success, Details: map[string]string{"provider_id": p.ID.String(),
+				"already_deactivated": fmt.Sprint(already)}})
 		return err
 	})
 	return out, err
+}
+
+// accountGone reports a CA answer that says the account no longer exists or is no longer authorized (a deactivated
+// account): RFC 8555 unauthorized or accountDoesNotExist, or the library's no-account answer.
+func accountGone(err error) bool {
+	if errors.Is(err, acme.ErrNoAccount) {
+		return true
+	}
+	var ae *acme.Error
+	return errors.As(err, &ae) && ae.Reason == acme.ReasonAccountRejected &&
+		(ae.ProblemType == acme.ProblemPrefix+"unauthorized" || ae.ProblemType == acme.ProblemPrefix+"accountDoesNotExist")
 }

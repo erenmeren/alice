@@ -169,6 +169,8 @@ func TestNormSuffixesAndNameAllowed(t *testing.T) {
 		code string
 	}{
 		{[]string{"*.example.com"}, validate.Pattern},
+		{[]string{"com"}, validate.Pattern},
+		{[]string{".com"}, validate.Pattern},
 		{[]string{"example.com."}, validate.Pattern},
 		{[]string{"exa_mple.com"}, validate.Pattern},
 		{[]string{"-example.com"}, validate.Pattern},
@@ -233,14 +235,6 @@ func TestHookValidation(t *testing.T) {
 	} {
 		assert.Equal(t, c.code, feCode(validHookSecret([]byte(c.secret))), "%q", c.secret)
 	}
-	for in, want := range map[string]string{"": ACMEHookAuthBearer, "bearer": ACMEHookAuthBearer, " hmac_sha256 ": ACMEHookAuthHMAC} {
-		got, fe := validAuthMode(in)
-		assert.Nil(t, fe)
-		assert.Equal(t, want, got)
-	}
-	_, fe := validAuthMode("basic")
-	assert.Equal(t, validate.OneOf, feCode(fe))
-
 	for _, c := range []struct {
 		wait, poll int
 		fields     []string
@@ -295,7 +289,6 @@ func TestValidateProviderAndHookInputs(t *testing.T) {
 	require.Empty(t, errs)
 	assert.Equal(t, DefaultACMEPropagationWaitSeconds, hf.wait)
 	assert.Equal(t, DefaultACMEPollTimeoutSeconds, hf.poll)
-	assert.Equal(t, ACMEHookAuthBearer, hf.authMode)
 	zero := 0
 	hf, errs = validateACMEHook(ACMEHookInput{Name: "hook", URL: "https://dns.example/hook", Secret: secrets.NewPlaintext([]byte("0123456789abcdef")),
 		PropagationWaitSeconds: &zero, PollTimeoutSeconds: 100})
@@ -308,14 +301,14 @@ func TestValidateProviderAndHookInputs(t *testing.T) {
 	}
 	assert.Equal(t, []string{"name", "url", "secret"}, fields)
 
-	hcur := ACMEHook{Name: "h", URL: "https://dns.example/hook", AuthMode: ACMEHookAuthBearer, PropagationWaitSeconds: 25, PollTimeoutSeconds: 60}
+	hcur := ACMEHook{Name: "h", URL: "https://dns.example/hook", PropagationWaitSeconds: 25, PollTimeoutSeconds: 60}
 	poll := 100
 	_, _, errs = validateHookPatch(hcur, ACMEHookPatch{PollTimeoutSeconds: &poll})
 	require.Len(t, errs, 1, "25 + 100 is over the budget")
-	mode := ACMEHookAuthHMAC
-	hf, changed, errs = validateHookPatch(hcur, ACMEHookPatch{AuthMode: &mode, Secret: secrets.NewPlaintext([]byte("fedcba9876543210"))})
+	url := "https://dns2.example/hook"
+	hf, changed, errs = validateHookPatch(hcur, ACMEHookPatch{URL: &url, Secret: secrets.NewPlaintext([]byte("fedcba9876543210"))})
 	require.Empty(t, errs)
-	assert.Equal(t, []string{"auth_mode", "secret"}, changed)
+	assert.Equal(t, []string{"url", "secret"}, changed)
 	assert.Equal(t, "fedcba9876543210", string(hf.secret))
 }
 
@@ -448,30 +441,12 @@ func TestACMEViewsAreSecretFree(t *testing.T) {
 // The rest of the module's audit keys allowed by the denylist (audit.checkDetails) is tested by the integration
 // tests; here: the hook's detail keys never name the secret.
 func TestHookDetailsNameNoSecret(t *testing.T) {
-	d := hookDetails(hookFields{name: "h", url: "https://dns.example/hook?q", authMode: ACMEHookAuthHMAC, secret: []byte("0123456789abcdef")})
+	d := hookDetails(hookFields{name: "h", url: "https://dns.example/hook?q", secret: []byte("0123456789abcdef")})
 	for k, v := range d {
 		assert.False(t, secretWords.MatchString(k), k)
 		assert.NotContains(t, v, "0123456789abcdef")
 	}
 	assert.Equal(t, "dns.example", d["url_host"])
-}
-
-func TestLockACMEProvider(t *testing.T) {
-	s := &Service{}
-	id := uuid.New()
-	release, err := s.lockACMEProvider(context.Background(), id)
-	require.NoError(t, err)
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	_, err = s.lockACMEProvider(ctx, id)
-	assert.ErrorIs(t, err, context.DeadlineExceeded, "one operation per provider")
-	other, err := s.lockACMEProvider(context.Background(), uuid.New())
-	require.NoError(t, err, "another provider is not blocked")
-	other()
-	release()
-	again, err := s.lockACMEProvider(context.Background(), id)
-	require.NoError(t, err)
-	again()
 }
 
 func TestKeyLocations(t *testing.T) {
@@ -487,4 +462,16 @@ func TestKeyLocations(t *testing.T) {
 	assert.Nil(t, dek)
 	assert.Nil(t, v)
 	assert.Equal(t, []string{"letsencrypt", "letsencrypt_staging", "zerossl", "custom"}, ACMEPresets())
+}
+
+// M1: only an answer that the account is gone finishes a deactivation retry.
+func TestAccountGone(t *testing.T) {
+	assert.True(t, accountGone(fmt.Errorf("x: %w", acme.ErrNoAccount)))
+	for _, typ := range []string{"unauthorized", "accountDoesNotExist"} {
+		assert.True(t, accountGone(&acme.Error{Reason: acme.ReasonAccountRejected, ProblemType: acme.ProblemPrefix + typ, Status: 403}), typ)
+	}
+	assert.False(t, accountGone(&acme.Error{Reason: acme.ReasonAccountRejected, ProblemType: acme.ProblemPrefix + "invalidContact"}))
+	assert.False(t, accountGone(&acme.Error{Reason: acme.ReasonProviderUnreachable, ProblemType: acme.ProblemPrefix + "unauthorized"}))
+	assert.False(t, accountGone(errors.New("network")))
+	assert.Equal(t, 5*time.Minute, ACMERolloverSettleAge, "two CA calls and a margin")
 }

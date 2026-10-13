@@ -11,7 +11,8 @@
 //
 //	{"action":"present"|"cleanup","fqdn":"_acme-challenge.example.com","value":"<TXT value>","ttl":60}
 //
-// The secret is one value used both as the bearer token and as the HMAC key. The body is exactly the four
+// The secret is one value used both as the bearer token and as the HMAC key, and Alice always sends both headers:
+// there is no mode to choose, the hook checks whichever it prefers (or both). The body is exactly the four
 // fields in that order, with no whitespace. The fqdn is "_acme-challenge." + the validated domain, lower case,
 // without a trailing dot and without the "*." of a wildcard: a wildcard and its base name share one fqdn and
 // the hook must keep both values side by side. "cleanup" removes only the TXT record with that value, never

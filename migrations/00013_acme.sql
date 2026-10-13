@@ -35,7 +35,8 @@ CREATE UNIQUE INDEX acme_providers_name ON acme_providers (name) WHERE deleted_a
 
 -- The account at a provider. One active account per provider; a key rollover (RFC 8555 7.3.5) first commits the new key as a
 -- 'pending_rollover' row, then asks the CA, then flips active/retired in one transaction (A6). The sealed key is never
--- updated (AAD acme_accounts/<id>/key): a rollover is a new row.
+-- updated (AAD acme_accounts/<id>/key): a rollover is a new row. pending_since is the database time a pending key was
+-- inserted: a recovery leaves a pending key alone while the CA call that may switch to it can still be in flight.
 CREATE TABLE acme_accounts (
     id              uuid PRIMARY KEY,
     provider_id     uuid NOT NULL REFERENCES acme_providers (id),
@@ -49,9 +50,11 @@ CREATE TABLE acme_accounts (
     key_wrapped_dek bytea NOT NULL CHECK (octet_length(key_wrapped_dek) BETWEEN 1 AND 1024),
     key_version     integer NOT NULL CHECK (key_version >= 1),
     state           text NOT NULL CHECK (state IN ('active', 'pending_rollover', 'retired', 'deactivated')),
+    pending_since   timestamptz,
     created_by      uuid REFERENCES users (id),
     created_at      timestamptz NOT NULL,
-    updated_at      timestamptz NOT NULL
+    updated_at      timestamptz NOT NULL,
+    CHECK (state <> 'pending_rollover' OR pending_since IS NOT NULL)
 );
 CREATE UNIQUE INDEX acme_accounts_one_active ON acme_accounts (provider_id) WHERE state = 'active';
 CREATE UNIQUE INDEX acme_accounts_one_pending ON acme_accounts (provider_id) WHERE state = 'pending_rollover';
@@ -72,15 +75,32 @@ END $$;
 CREATE TRIGGER acme_accounts_delete_pending_only BEFORE DELETE ON acme_accounts
     FOR EACH ROW EXECUTE FUNCTION acme_accounts_protect_delete();
 
--- A DNS-01 hook: an HTTPS endpoint Alice calls to publish and remove a challenge record. The secret (bearer token or
--- HMAC key, by auth_mode) is sealed (AAD acme_hooks/<id>/secret). allowed_suffixes as the provider's (A9).
+-- The account states move one way: active -> retired | deactivated (a rollover, a directory change, a deactivation) and
+-- pending_rollover -> active (a settled rollover). A pending key is only ever INSERTED as pending (so no row can be made
+-- deletable by an UPDATE), and retired and deactivated are final. SQLSTATE Z1019.
+-- +goose StatementBegin
+CREATE FUNCTION acme_accounts_protect_state() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF NEW.state IS DISTINCT FROM OLD.state
+       AND NOT ((OLD.state = 'active' AND NEW.state IN ('retired', 'deactivated'))
+                OR (OLD.state = 'pending_rollover' AND NEW.state = 'active')) THEN
+        RAISE EXCEPTION 'this ACME account state change is not allowed' USING ERRCODE = 'Z1019';
+    END IF;
+    RETURN NEW;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER acme_accounts_state_forward_only BEFORE UPDATE ON acme_accounts
+    FOR EACH ROW EXECUTE FUNCTION acme_accounts_protect_state();
+
+-- A DNS-01 hook: an HTTPS endpoint Alice calls to publish and remove a challenge record. The secret (sent both as the bearer
+-- token and as the HMAC key of X-Alice-Signature; the endpoint checks either) is sealed (AAD acme_hooks/<id>/secret). allowed_suffixes as the provider's (A9).
 -- propagation_wait_seconds (0 = no wait) and poll_timeout_seconds bound the hook solver's waits (dns01 limits 120 s and
 -- 100 s); together they stay within the ACME client's 120 s call budget the challenge is published under.
 CREATE TABLE acme_hooks (
     id                 uuid PRIMARY KEY,
     name               citext NOT NULL CHECK (char_length(name::text) BETWEEN 1 AND 100),
     url                text NOT NULL CHECK (url ~ '^https://[^/@[:space:]]+(/|$)' AND char_length(url) <= 2048),
-    auth_mode          text NOT NULL DEFAULT 'bearer' CHECK (auth_mode IN ('bearer', 'hmac_sha256')),
     ca_bundle_pem      text NOT NULL DEFAULT '' CHECK (char_length(ca_bundle_pem) <= 262144),
     secret_ct          bytea NOT NULL CHECK (octet_length(secret_ct) BETWEEN 1 AND 4096),
     secret_nonce       bytea NOT NULL CHECK (octet_length(secret_nonce) = 12),
@@ -196,16 +216,17 @@ ALTER TABLE certificates ADD CONSTRAINT certificates_source_check CHECK (source 
 ALTER TABLE deployments DROP CONSTRAINT deployments_trigger_check;
 ALTER TABLE deployments ADD CONSTRAINT deployments_trigger_check CHECK (trigger IN ('manual', 'kv_renewal', 'retry', 'acme_renewal'));
 
--- Grants (pattern 00006): providers, hooks and certificates are soft-deleted and never removed; accounts are never
--- removed and their sealed key never changes (a rollover is a new row); orders are history (no DELETE; the freeze trigger
--- above); a binding is added and removed.
+-- Grants (pattern 00006): providers, hooks and certificates are soft-deleted and never removed; an account row is removed
+-- only while it is a pending rollover key the CA did not take (Z1018), its state only moves forward (Z1019), and its sealed
+-- key and pending_since never change (a rollover is a new row); orders are history (no DELETE; the freeze trigger above);
+-- a binding is added and removed.
 GRANT SELECT, INSERT ON acme_providers, acme_accounts, acme_hooks, acme_certificates, acme_orders TO alice_app;
 GRANT SELECT, INSERT, DELETE ON acme_bindings TO alice_app;
 GRANT DELETE ON acme_accounts TO alice_app; -- pending_rollover rows only (the trigger above, Z1018)
 GRANT UPDATE (name, directory_url, ca_bundle_pem, preset, eab_kid, eab_hmac_ct, eab_hmac_nonce, eab_hmac_wrapped_dek, eab_hmac_key_version,
     allowed_suffixes, updated_at, deleted_at) ON acme_providers TO alice_app;
 GRANT UPDATE (contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at, state, updated_at) ON acme_accounts TO alice_app;
-GRANT UPDATE (name, url, auth_mode, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, allowed_suffixes,
+GRANT UPDATE (name, url, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, allowed_suffixes,
     propagation_wait_seconds, poll_timeout_seconds, updated_at, deleted_at) ON acme_hooks TO alice_app;
 GRANT UPDATE (account_id, names, key_type, challenge, hook_id, renew_before_days, auto_renew, auto_deploy, state, current_certificate_id,
     failures, next_attempt_at, last_attempt_at, last_error_code, updated_at, deleted_at) ON acme_certificates TO alice_app;
@@ -235,4 +256,5 @@ DROP TABLE acme_certificates;
 DROP TABLE acme_hooks;
 DROP TABLE acme_accounts;
 DROP FUNCTION acme_accounts_protect_delete();
+DROP FUNCTION acme_accounts_protect_state();
 DROP TABLE acme_providers;

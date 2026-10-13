@@ -22,17 +22,11 @@ import (
 
 // DNS-01 hooks (plan 2026-10-13 Task 9; design row 1; amendments A9, A10). A hook is an HTTPS endpoint (no
 // credentials, query or fragment in the URL) with an optional CA bundle, a shared secret (sealed, AAD
-// acme_hooks/<id>/secret; write-only: views carry SecretConfigured only), the name allow-list of A9 and the two waits
-// of the solver. The waits are checked against the dns01 limits and, together, against the ACME client's call
+// acme_hooks/<id>/secret; write-only: views carry SecretConfigured only; the dns01 solver always sends it both as the
+// bearer token and as the HMAC key of X-Alice-Signature, so there is no auth mode to choose), the name allow-list of
+// A9 and the two waits of the solver. The waits are checked against the dns01 limits and, together, against the ACME client's call
 // budget the challenge is published under (ledger ruling, Task 6 item 7). Creating or changing a hook makes no
 // network call.
-
-// Auth modes of a hook (acme_hooks.auth_mode). The dns01 solver sends the secret both as the bearer token and as the
-// HMAC key of X-Alice-Signature; the mode records which one the endpoint checks.
-const (
-	ACMEHookAuthBearer = "bearer"
-	ACMEHookAuthHMAC   = "hmac_sha256"
-)
 
 // Limits of a hook's secret and waits.
 const (
@@ -52,7 +46,6 @@ type ACMEHook struct {
 	ID                     uuid.UUID  `json:"id"`
 	Name                   string     `json:"name"`
 	URL                    string     `json:"url"`
-	AuthMode               string     `json:"auth_mode"`
 	CABundlePEM            string     `json:"ca_bundle_pem"`
 	SecretConfigured       bool       `json:"secret_configured"`
 	AllowedSuffixes        []string   `json:"allowed_suffixes"`
@@ -68,7 +61,6 @@ type ACMEHook struct {
 type ACMEHookInput struct {
 	Name                   string
 	URL                    string
-	AuthMode               string // "" = bearer
 	CABundlePEM            string
 	Secret                 secrets.Plaintext
 	AllowedSuffixes        []string
@@ -81,7 +73,6 @@ type ACMEHookInput struct {
 type ACMEHookPatch struct {
 	Name                   *string
 	URL                    *string
-	AuthMode               *string
 	CABundlePEM            *string
 	Secret                 secrets.Plaintext
 	AllowedSuffixes        *[]string
@@ -113,18 +104,6 @@ func validHookSecret(b []byte) *validate.FieldError {
 	return nil
 }
 
-func validAuthMode(raw string) (string, *validate.FieldError) {
-	m := strings.TrimSpace(raw)
-	switch m {
-	case "":
-		return ACMEHookAuthBearer, nil
-	case ACMEHookAuthBearer, ACMEHookAuthHMAC:
-		return m, nil
-	}
-	return "", &validate.FieldError{Field: "auth_mode", Code: validate.OneOf,
-		Params: map[string]string{"values": ACMEHookAuthBearer + ", " + ACMEHookAuthHMAC}}
-}
-
 // validHookWaits checks the waits against the dns01 limits and their sum against the publication budget.
 func validHookWaits(wait, poll int) validate.Errors {
 	var errs validate.Errors
@@ -144,10 +123,10 @@ func validHookWaits(wait, poll int) validate.Errors {
 
 // hookFields are the stored values of a hook (secret as the plaintext about to be sealed; nil = unchanged).
 type hookFields struct {
-	name, url, authMode, bundle string
-	suffixes                    []string
-	wait, poll                  int
-	secret                      []byte
+	name, url, bundle string
+	suffixes          []string
+	wait, poll        int
+	secret            []byte
 }
 
 func validateACMEHook(in ACMEHookInput) (hookFields, validate.Errors) {
@@ -162,8 +141,6 @@ func validateACMEHook(in ACMEHookInput) (hookFields, validate.Errors) {
 	f.name, fe = validName("name", in.Name)
 	add(fe)
 	f.url, fe = normACMEURL("url", in.URL)
-	add(fe)
-	f.authMode, fe = validAuthMode(in.AuthMode)
 	add(fe)
 	f.bundle, fe = normCABundle("ca_bundle_pem", in.CABundlePEM)
 	add(fe)
@@ -184,12 +161,12 @@ func validateACMEHook(in ACMEHookInput) (hookFields, validate.Errors) {
 	return f, nil
 }
 
-const hookColumns = `id, name::text, url, auth_mode, ca_bundle_pem, allowed_suffixes, propagation_wait_seconds, poll_timeout_seconds,
+const hookColumns = `id, name::text, url, ca_bundle_pem, allowed_suffixes, propagation_wait_seconds, poll_timeout_seconds,
 created_by, created_at, updated_at`
 
 func scanHook(row pgx.Row) (ACMEHook, error) {
 	h := ACMEHook{SecretConfigured: true} // secret_ct is NOT NULL
-	err := row.Scan(&h.ID, &h.Name, &h.URL, &h.AuthMode, &h.CABundlePEM, &h.AllowedSuffixes, &h.PropagationWaitSeconds, &h.PollTimeoutSeconds,
+	err := row.Scan(&h.ID, &h.Name, &h.URL, &h.CABundlePEM, &h.AllowedSuffixes, &h.PropagationWaitSeconds, &h.PollTimeoutSeconds,
 		&h.CreatedBy, &h.CreatedAt, &h.UpdatedAt)
 	if h.AllowedSuffixes == nil {
 		h.AllowedSuffixes = []string{}
@@ -245,7 +222,7 @@ func (s *Service) sealHookSecret(id uuid.UUID, secret []byte) (secrets.Envelope,
 }
 
 func hookDetails(f hookFields) map[string]string {
-	return map[string]string{"name": f.name, "url_host": urlHost(f.url), "auth_mode": f.authMode, "allowed_suffixes": suffixesDetail(f.suffixes),
+	return map[string]string{"name": f.name, "url_host": urlHost(f.url), "allowed_suffixes": suffixesDetail(f.suffixes),
 		"propagation_wait_seconds": strconv.Itoa(f.wait), "poll_timeout_seconds": strconv.Itoa(f.poll)}
 }
 
@@ -266,10 +243,10 @@ func (s *Service) CreateACMEHook(ctx context.Context, a Actor, in ACMEHookInput)
 	now := s.clock.Now().UTC()
 	var out ACMEHook
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO acme_hooks (id, name, url, auth_mode, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_dek,
+		_, err := tx.Exec(ctx, `INSERT INTO acme_hooks (id, name, url, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_dek,
 secret_key_version, allowed_suffixes, propagation_wait_seconds, poll_timeout_seconds, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)`,
-			id, f.name, f.url, f.authMode, f.bundle, env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, f.suffixes, f.wait, f.poll, actorRef(a), now)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)`,
+			id, f.name, f.url, f.bundle, env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, f.suffixes, f.wait, f.poll, actorRef(a), now)
 		if err != nil {
 			return mapACMENameTaken(fmt.Errorf("inventory: store the DNS hook: %w", err))
 		}
@@ -291,7 +268,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)`,
 // validateHookPatch normalizes the fields a patch sets and lists the fields that change.
 func validateHookPatch(cur ACMEHook, p ACMEHookPatch) (hookFields, []string, validate.Errors) {
 	var errs validate.Errors
-	f := hookFields{name: cur.Name, url: cur.URL, authMode: cur.AuthMode, bundle: cur.CABundlePEM, suffixes: cur.AllowedSuffixes,
+	f := hookFields{name: cur.Name, url: cur.URL, bundle: cur.CABundlePEM, suffixes: cur.AllowedSuffixes,
 		wait: cur.PropagationWaitSeconds, poll: cur.PollTimeoutSeconds}
 	var changed []string
 	add := func(fe *validate.FieldError) {
@@ -311,13 +288,6 @@ func validateHookPatch(cur ACMEHook, p ACMEHookPatch) (hookFields, []string, val
 		var v string
 		if v, fe = normACMEURL("url", *p.URL); fe == nil && v != f.url {
 			f.url, changed = v, append(changed, "url")
-		}
-		add(fe)
-	}
-	if p.AuthMode != nil {
-		var v string
-		if v, fe = validAuthMode(*p.AuthMode); fe == nil && v != f.authMode {
-			f.authMode, changed = v, append(changed, "auth_mode")
 		}
 		add(fe)
 	}
@@ -385,10 +355,10 @@ func (s *Service) UpdateACMEHook(ctx context.Context, a Actor, id uuid.UUID, p A
 		if rotate {
 			version = &env.KeyVersion
 		}
-		_, err = tx.Exec(ctx, `UPDATE acme_hooks SET name = $2, url = $3, auth_mode = $4, ca_bundle_pem = $5, allowed_suffixes = $6,
-propagation_wait_seconds = $7, poll_timeout_seconds = $8, secret_ct = COALESCE($9, secret_ct), secret_nonce = COALESCE($10, secret_nonce),
-secret_wrapped_dek = COALESCE($11, secret_wrapped_dek), secret_key_version = COALESCE($12, secret_key_version), updated_at = $13 WHERE id = $1`,
-			id, f.name, f.url, f.authMode, f.bundle, f.suffixes, f.wait, f.poll, env.Ciphertext, env.Nonce, env.WrappedDEK, version, s.clock.Now().UTC())
+		_, err = tx.Exec(ctx, `UPDATE acme_hooks SET name = $2, url = $3, ca_bundle_pem = $4, allowed_suffixes = $5,
+propagation_wait_seconds = $6, poll_timeout_seconds = $7, secret_ct = COALESCE($8, secret_ct), secret_nonce = COALESCE($9, secret_nonce),
+secret_wrapped_dek = COALESCE($10, secret_wrapped_dek), secret_key_version = COALESCE($11, secret_key_version), updated_at = $12 WHERE id = $1`,
+			id, f.name, f.url, f.bundle, f.suffixes, f.wait, f.poll, env.Ciphertext, env.Nonce, env.WrappedDEK, version, s.clock.Now().UTC())
 		if err != nil {
 			return mapACMENameTaken(fmt.Errorf("inventory: update the DNS hook: %w", err))
 		}

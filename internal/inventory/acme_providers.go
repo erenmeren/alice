@@ -273,8 +273,10 @@ func normDNSSuffix(raw string) (string, bool) {
 	return string(d), true
 }
 
-// normSuffixes checks an allow-list (A9): at most 100 distinct suffixes. The result is never nil (an empty list is
-// stored as '{}' and refuses every name).
+// normSuffixes checks an allow-list (A9): at most 100 distinct suffixes of at least two labels each ("com" and ".com"
+// are refused: a whole top-level domain is never an allow-list). The result is never nil (an empty list is stored as
+// '{}' and refuses every name). Alice cannot tell who owns a domain: the Administrator is responsible for listing only
+// names the organisation owns.
 func normSuffixes(field string, in []string) ([]string, *validate.FieldError) {
 	if len(in) > maxACMEAllowedSuffix {
 		return nil, &validate.FieldError{Field: field, Code: validate.OutOfRange, Params: map[string]string{"min": "0", "max": strconv.Itoa(maxACMEAllowedSuffix)}}
@@ -282,7 +284,7 @@ func normSuffixes(field string, in []string) ([]string, *validate.FieldError) {
 	out := make([]string, 0, len(in))
 	for _, raw := range in {
 		s, ok := normDNSSuffix(raw)
-		if !ok {
+		if !ok || !strings.Contains(strings.TrimPrefix(s, "."), ".") {
 			return nil, &validate.FieldError{Field: field, Code: validate.Pattern}
 		}
 		if slices.Contains(out, s) {

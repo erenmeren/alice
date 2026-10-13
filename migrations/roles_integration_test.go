@@ -136,7 +136,8 @@ var explicitGrants = map[string][]string{
 	// Every operation id a rotation location used (G23): append-only, written by the location guard.
 	"public.rotation_op_ids": {"INSERT", "SELECT"},
 	// ACME (00013): authorities, accounts, hooks, certificates and orders are never deleted (soft delete, history); a
-	// binding is added and removed; an account row is deleted only while it is a pending rollover key (trigger, Z1018).
+	// binding is added and removed; an account row is deleted only while it is a pending rollover key (trigger, Z1018), and
+	// its state only moves forward (Z1019), so no row becomes deletable by an UPDATE.
 	"public.acme_providers":    {"INSERT", "SELECT"},
 	"public.acme_accounts":     {"DELETE", "INSERT", "SELECT"},
 	"public.acme_hooks":        {"INSERT", "SELECT"},
@@ -205,7 +206,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.acme_providers": {"UPDATE": {"allowed_suffixes", "ca_bundle_pem", "deleted_at", "directory_url", "eab_hmac_ct", "eab_hmac_key_version",
 		"eab_hmac_nonce", "eab_hmac_wrapped_dek", "eab_kid", "name", "preset", "updated_at"}},
 	"public.acme_accounts": {"UPDATE": {"account_url", "contact_email", "state", "tos_accepted_at", "tos_accepted_by", "tos_url", "updated_at"}},
-	"public.acme_hooks": {"UPDATE": {"allowed_suffixes", "auth_mode", "ca_bundle_pem", "deleted_at", "name", "poll_timeout_seconds",
+	"public.acme_hooks": {"UPDATE": {"allowed_suffixes", "ca_bundle_pem", "deleted_at", "name", "poll_timeout_seconds",
 		"propagation_wait_seconds", "secret_ct", "secret_key_version", "secret_nonce", "secret_wrapped_dek", "updated_at", "url"}},
 	"public.acme_certificates": {"UPDATE": {"account_id", "auto_deploy", "auto_renew", "challenge", "current_certificate_id", "deleted_at", "failures",
 		"hook_id", "key_type", "last_attempt_at", "last_error_code", "names", "next_attempt_at", "renew_before_days", "state", "updated_at"}},

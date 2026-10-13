@@ -23,6 +23,9 @@ const orderFrozen = "Z1017" // a finished ACME order is never rewritten
 // SQLSTATE of the ACME account delete trigger (00013).
 const accountKept = "Z1018" // only a pending rollover key is ever deleted
 
+// SQLSTATE of the ACME account state trigger (00013).
+const accountStateFrozen = "Z1019" // active -> retired|deactivated, pending_rollover -> active, nothing else
+
 var acmeTables = []string{"acme_providers", "acme_accounts", "acme_hooks", "acme_certificates", "acme_orders", "acme_bindings"}
 
 // envelope is the dummy sealed-secret column values (the migration checks shapes, not contents).
@@ -112,8 +115,8 @@ VALUES ($1, 'x3', 'https://ca.example/dir', 'custom', 'kid', now(), now())`, uui
 	_, err = d.App.Exec(ctx, provider, uuid.New(), "corp ca", "https://ca.example/dir", "custom")
 	assert.Equal(t, uniqueViolation, sqlState(err), "case-insensitively")
 
-	account := `INSERT INTO acme_accounts (id, provider_id, contact_email, key_ct, key_nonce, key_wrapped_dek, key_version, state, created_at, updated_at)
-VALUES ($1, $2, '', ` + envelope + `, $3, now(), now())`
+	account := `INSERT INTO acme_accounts (id, provider_id, contact_email, key_ct, key_nonce, key_wrapped_dek, key_version, state, pending_since,
+created_at, updated_at) VALUES ($1, $2, '', ` + envelope + `, $3, CASE WHEN $3 = 'pending_rollover' THEN now() END, now(), now())`
 	_, err = d.App.Exec(ctx, account, uuid.New(), w.provider, "active")
 	assert.Equal(t, uniqueViolation, sqlState(err), "one active account per provider")
 	_, err = d.App.Exec(ctx, account, uuid.New(), w.provider, "pending_rollover")
@@ -122,6 +125,8 @@ VALUES ($1, $2, '', ` + envelope + `, $3, now(), now())`
 	assert.Equal(t, uniqueViolation, sqlState(err), "one pending rollover per provider")
 	_, err = d.App.Exec(ctx, account, uuid.New(), w.provider, "retired")
 	require.NoError(t, err, "any number of retired keys")
+	bad("a pending key has its start time", `INSERT INTO acme_accounts (id, provider_id, key_ct, key_nonce, key_wrapped_dek, key_version, state,
+created_at, updated_at) VALUES ($1, $2, `+envelope+`, 'pending_rollover', now(), now())`, uuid.New(), uuid.New())
 	bad("unknown account state", account, uuid.New(), w.provider, "gone")
 
 	cert := `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, hook_id, state, renew_before_days, created_at, updated_at)
@@ -161,26 +166,58 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, now(), now())`
 	require.NoError(t, err, "120 s together is the budget")
 }
 
-// A rollover the CA did not take deletes its pending key row; every other account row is history.
+// A rollover the CA did not take deletes its pending key row; every other account row is history, and no state change
+// through the application role can make one deletable (Z1019: the state only moves forward, never into pending).
 func TestAcmeOnlyAPendingAccountKeyIsDeleted(t *testing.T) {
 	d := pgtest.New(t)
 	w := seedAcme(t, d)
 	ctx := context.Background()
-	pending := uuid.New()
-	_, err := d.App.Exec(ctx, `INSERT INTO acme_accounts (id, provider_id, key_ct, key_nonce, key_wrapped_dek, key_version, state, created_at, updated_at)
-VALUES ($1, $2, `+envelope+`, 'pending_rollover', now(), now())`, pending, w.provider)
-	require.NoError(t, err)
-	_, err = d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", w.account)
-	assert.Equal(t, accountKept, sqlState(err), "the active account is history")
-	for _, st := range []string{"retired", "deactivated"} {
-		_, err = d.App.Exec(ctx, "UPDATE acme_certificates SET deleted_at = now() WHERE account_id = $1", w.account)
-		require.NoError(t, err)
-		_, err = d.App.Exec(ctx, "UPDATE acme_accounts SET state = $2 WHERE id = $1", w.account, st)
-		require.NoError(t, err)
-		_, err = d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", w.account)
-		assert.Equal(t, accountKept, sqlState(err), st)
+	insert := func(state string) uuid.UUID {
+		id := uuid.New()
+		_, err := d.App.Exec(ctx, `INSERT INTO acme_accounts (id, provider_id, key_ct, key_nonce, key_wrapped_dek, key_version, state, pending_since,
+created_at, updated_at) VALUES ($1, $2, `+envelope+`, $3, CASE WHEN $3 = 'pending_rollover' THEN now() END, now(), now())`, id, w.provider, state)
+		require.NoError(t, err, state)
+		return id
 	}
-	tag, err := d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", pending)
+	setState := func(id uuid.UUID, state string) error {
+		_, err := d.App.Exec(ctx, "UPDATE acme_accounts SET state = $2, updated_at = now() WHERE id = $1", id, state)
+		return err
+	}
+	pending := insert("pending_rollover")
+	_, err := d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", w.account)
+	assert.Equal(t, accountKept, sqlState(err), "the active account is history")
+	assert.Equal(t, accountStateFrozen, sqlState(setState(w.account, "pending_rollover")), "active never becomes pending")
+	_, err = d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", w.account)
+	assert.Equal(t, accountKept, sqlState(err))
+
+	retired, deactivated := insert("retired"), insert("deactivated")
+	for _, id := range []uuid.UUID{retired, deactivated} {
+		for _, to := range []string{"pending_rollover", "active", "retired", "deactivated"} {
+			if err := setState(id, to); err != nil {
+				assert.Equal(t, accountStateFrozen, sqlState(err), to)
+			}
+		}
+		_, err = d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", id)
+		assert.Equal(t, accountKept, sqlState(err), "retired and deactivated are final and kept")
+	}
+	var st string
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT state FROM acme_accounts WHERE id = $1", retired).Scan(&st))
+	assert.Equal(t, "retired", st)
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT state FROM acme_accounts WHERE id = $1", deactivated).Scan(&st))
+	assert.Equal(t, "deactivated", st)
+	assert.Equal(t, accountStateFrozen, sqlState(setState(pending, "retired")), "a pending key is settled or deleted, never retired")
+	assert.Equal(t, accountStateFrozen, sqlState(setState(pending, "deactivated")))
+	_, err = d.App.Exec(ctx, "UPDATE acme_accounts SET pending_since = now() WHERE id = $1", pending)
+	assert.Equal(t, privilegeDenied, sqlState(err), "the start of a pending key is fixed")
+	_, err = d.App.Exec(ctx, "UPDATE acme_accounts SET contact_email = 'x@corp.example' WHERE id = $1", retired)
+	require.NoError(t, err, "other columns of a final row may change")
+
+	// The legitimate moves: active -> retired, pending -> active (settle), and the delete of a pending key.
+	require.NoError(t, setState(w.account, "retired"))
+	require.NoError(t, setState(pending, "active"))
+	other := insert("pending_rollover")
+	require.NoError(t, setState(pending, "deactivated"))
+	tag, err := d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", other)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), tag.RowsAffected())
 }

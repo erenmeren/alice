@@ -80,6 +80,22 @@ func (w *registryWorld) lookup(signer crypto.Signer) (string, error) {
 	return c.Lookup(w.ctx)
 }
 
+// agePending makes the provider's pending key older than ACMERolloverSettleAge (database time), as if the CA call
+// that inserted it ended long ago.
+func (w *registryWorld) agePending(provider uuid.UUID) {
+	w.t.Helper()
+	tag, err := w.db.Owner.Exec(w.ctx, `UPDATE acme_accounts SET pending_since = now() - make_interval(secs => $2)
+WHERE provider_id = $1 AND state = 'pending_rollover'`, provider, (inventory.ACMERolloverSettleAge + time.Minute).Seconds())
+	require.NoError(w.t, err)
+	require.Equal(w.t, int64(1), tag.RowsAffected())
+}
+
+// otherProcess is a second Service on the same database: another Alice process with its own memory.
+func (w *registryWorld) otherProcess() *inventory.Service {
+	return inventory.New(inventory.Config{Pool: w.db.App, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
+		Registry: w.reg, Jobs: w.jobs})
+}
+
 func reasonOf(err error) string {
 	var ae *inventory.ACMEError
 	if errors.As(err, &ae) {
@@ -402,9 +418,18 @@ func TestACMERolloverSwitched(t *testing.T) {
 	oldSigner, _, err := w.svc.ACMEAccountSigner(w.ctx, a.ID)
 	require.NoError(t, err)
 	w.clock.Advance(time.Hour)
+	certs := []uuid.UUID{uuid.New(), uuid.New()}
+	for i, id := range certs {
+		_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, deleted_at, created_at, updated_at)
+VALUES ($1, $2, $3, '{www.example.test}', 'ecdsa_p256', 'http01', CASE WHEN $4 THEN now() END, now(), now())`, id, p.ID, a.ID, i == 1)
+		require.NoError(t, err)
+	}
 
 	n, err := w.svc.RolloverACMEAccount(w.ctx, w.admin, a.ID)
 	require.NoError(t, err)
+	assert.Equal(t, 2, w.count("SELECT count(*) FROM acme_certificates WHERE account_id = $1", n.ID),
+		"the certificates (deleted ones too) follow the account to its new key (I3)")
+	assert.Equal(t, 0, w.count("SELECT count(*) FROM acme_certificates WHERE account_id = $1", a.ID))
 	assert.NotEqual(t, a.ID, n.ID, "a rollover is a new row")
 	assert.Equal(t, inventory.ACMEAccountActive, n.State)
 	assert.Equal(t, a.AccountURL, n.AccountURL)
@@ -475,10 +500,8 @@ func TestACMERolloverUnknownThenSwitched(t *testing.T) {
 	got, err := w.svc.GetACMEProvider(w.ctx, p.ID)
 	require.NoError(t, err)
 	assert.True(t, got.PendingRollover)
-	signer, _, err := w.svc.ACMEAccountSigner(w.ctx, a.ID)
-	require.NoError(t, err)
-	_, err = w.lookup(signer)
-	assert.ErrorIs(t, err, acme.ErrNoAccount, "the CA already holds the new key")
+	_, _, err = w.svc.ACMEAccountSigner(w.ctx, a.ID)
+	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending, "nothing is signed with a key the CA may no longer accept (M10)")
 
 	// Everything else waits for the settlement.
 	_, err = w.svc.RolloverACMEAccount(w.ctx, w.admin, a.ID)
@@ -494,10 +517,14 @@ func TestACMERolloverUnknownThenSwitched(t *testing.T) {
 	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending)
 	assert.ErrorIs(t, w.svc.DeleteACMEProvider(w.ctx, w.admin, p.ID), inventory.ErrACMEProviderInUse)
 
-	// A new Service (a restart) recovers it.
-	fresh := inventory.New(inventory.Config{Pool: w.db.App, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
-		Registry: w.reg, Jobs: w.jobs})
-	n, err := fresh.RecoverACMERollover(w.ctx, w.admin, pending)
+	// A recovery right away is refused: the pending key is young (its keyChange may still be in flight).
+	_, err = w.svc.RecoverACMERollover(w.ctx, w.admin, pending)
+	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending)
+	assert.Len(t, w.accountStates(p.ID), 2)
+
+	// Once it is old, a new Service (a restart) recovers it.
+	w.agePending(p.ID)
+	n, err := w.otherProcess().RecoverACMERollover(w.ctx, w.admin, pending)
 	require.NoError(t, err)
 	assert.Equal(t, pending, n.ID)
 	assert.Equal(t, inventory.ACMEAccountActive, n.State)
@@ -523,6 +550,7 @@ func TestACMERolloverUnknownThenNotSwitched(t *testing.T) {
 	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending, "a 5xx leaves the outcome unknown")
 	require.Len(t, w.accountStates(p.ID), 2)
 
+	w.agePending(p.ID)
 	// While the CA is unreachable the recovery changes nothing.
 	require.NoError(t, w.fake.AddFault(fakeacme.Fault{Endpoint: "*", Kind: fakeacme.FaultServerInternal, Times: 0}))
 	_, err = w.svc.RecoverACMERollover(w.ctx, w.admin, a.ID)
@@ -553,7 +581,7 @@ func TestACMEDeactivateAndProviderInUse(t *testing.T) {
 	d, err := w.svc.DeactivateACMEAccount(w.ctx, w.admin, a.ID)
 	require.NoError(t, err)
 	assert.Equal(t, inventory.ACMEAccountDeactivated, d.State)
-	assert.Equal(t, []map[string]string{{"provider_id": p.ID.String()}}, w.auditDetails("acme.account.deactivated"))
+	assert.Equal(t, []map[string]string{{"provider_id": p.ID.String(), "already_deactivated": "false"}}, w.auditDetails("acme.account.deactivated"))
 	hc, err := transport.New(string(w.fake.CAPEM()))
 	require.NoError(t, err)
 	c, err := acme.New(acme.Config{DirectoryURL: w.fake.DirectoryURL(), Key: signer, AccountURL: a.AccountURL, HTTPClient: hc})
@@ -624,12 +652,11 @@ func TestACMEHookLifecycle(t *testing.T) {
 	before := w.requests()
 	wait := 0
 	h, err := w.svc.CreateACMEHook(w.ctx, w.admin, inventory.ACMEHookInput{Name: "DNS hook", URL: w.fake.Credentials().HookURL,
-		AuthMode: inventory.ACMEHookAuthHMAC, CABundlePEM: string(w.fake.CAPEM()), Secret: secrets.NewPlaintext([]byte(secret)),
+		CABundlePEM: string(w.fake.CAPEM()), Secret: secrets.NewPlaintext([]byte(secret)),
 		AllowedSuffixes: []string{"Example.TEST"}, PropagationWaitSeconds: &wait, PollTimeoutSeconds: 30})
 	require.NoError(t, err)
 	assert.Equal(t, before, w.requests(), "creating a hook contacts nobody")
 	assert.True(t, h.SecretConfigured)
-	assert.Equal(t, inventory.ACMEHookAuthHMAC, h.AuthMode)
 	assert.Equal(t, []string{"example.test"}, h.AllowedSuffixes)
 	assert.Equal(t, 0, h.PropagationWaitSeconds)
 	assert.Equal(t, 30, h.PollTimeoutSeconds)
@@ -638,7 +665,7 @@ func TestACMEHookLifecycle(t *testing.T) {
 	assert.Equal(t, []inventory.ACMEHook{h}, list)
 	d := w.auditDetails("acme.hook.created")
 	require.Len(t, d, 1)
-	assert.Equal(t, []string{"allowed_suffixes", "auth_mode", "ca_bundle", "name", "poll_timeout_seconds", "propagation_wait_seconds", "url_host"},
+	assert.Equal(t, []string{"allowed_suffixes", "ca_bundle", "name", "poll_timeout_seconds", "propagation_wait_seconds", "url_host"},
 		detailKeys(d[0]))
 
 	// The sealed secret opens into a working dns01 configuration.
@@ -710,8 +737,7 @@ func TestACMEHookLifecycle(t *testing.T) {
 func TestACMEConcurrentRegistrations(t *testing.T) {
 	w := newRegistryWorld(t, fakeacme.Options{})
 	p := w.provider("Race CA", false)
-	second := inventory.New(inventory.Config{Pool: w.db.App, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
-		Registry: w.reg, Jobs: w.jobs}) // another process: its own in-process lock
+	second := w.otherProcess()
 	errs := make(chan error, 2)
 	for _, svc := range []*inventory.Service{w.svc, second} {
 		go func() {
@@ -734,4 +760,92 @@ func TestACMEConcurrentRegistrations(t *testing.T) {
 	assert.Equal(t, 1, exists)
 	assert.Len(t, w.accountStates(p.ID), 1)
 	assert.Equal(t, 1, w.audits("acme.account.registered"))
+}
+
+// I1: a second process can neither recover nor otherwise touch a provider's account while the first one is in the
+// middle of a rollover (the advisory lock is held across the CA call), and after the first one ended with an unknown
+// outcome it does not discard the young pending key; only an old pending key is settled.
+func TestACMERolloverIsSerializedAcrossProcesses(t *testing.T) {
+	w := newRegistryWorld(t, fakeacme.Options{})
+	p := w.provider("Two processes", false)
+	a := w.register(p)
+	b := w.otherProcess()
+
+	inCall, proceed := make(chan struct{}), make(chan struct{})
+	w.svc.SetACMERolloverSeam(func(o acme.RolloverOutcome) acme.RolloverOutcome {
+		close(inCall)
+		<-proceed
+		return acme.RolloverUnknown // the CA switched, process A never learned it
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.svc.RolloverACMEAccount(w.ctx, w.admin, a.ID)
+		done <- err
+	}()
+	<-inCall
+	// Process A holds the provider's lock with its pending key committed and the CA already switched.
+	for name, call := range map[string]func(ctx context.Context) error{
+		"recover":    func(ctx context.Context) error { _, err := b.RecoverACMERollover(ctx, w.admin, a.ID); return err },
+		"deactivate": func(ctx context.Context) error { _, err := b.DeactivateACMEAccount(ctx, w.admin, a.ID); return err },
+		"rollover":   func(ctx context.Context) error { _, err := b.RolloverACMEAccount(ctx, w.admin, a.ID); return err },
+		"register": func(ctx context.Context) error {
+			_, err := b.RegisterACMEAccount(ctx, w.admin, p.ID, "", true)
+			return err
+		},
+	} {
+		ctx, cancel := context.WithTimeout(w.ctx, 300*time.Millisecond)
+		err := call(ctx)
+		cancel()
+		assert.ErrorIs(t, err, context.DeadlineExceeded, "%s waits for process A's lock", name)
+	}
+	assert.Len(t, w.accountStates(p.ID), 2, "the pending key is untouched")
+	close(proceed)
+	require.ErrorIs(t, <-done, inventory.ErrACMERolloverPending)
+	w.svc.SetACMERolloverSeam(nil)
+
+	// Process A is done; its pending key is young: process B refuses to decide, whatever the CA says now.
+	_, err := b.RecoverACMERollover(w.ctx, w.admin, a.ID)
+	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending)
+	_, _, err = b.ACMEAccountSigner(w.ctx, a.ID)
+	assert.ErrorIs(t, err, inventory.ErrACMERolloverPending)
+	states := w.accountStates(p.ID)
+	require.Len(t, states, 2, "B never discards A's young pending key")
+
+	// Old enough: B settles it to the key the CA holds, and the account keeps working.
+	w.agePending(p.ID)
+	n, err := b.RecoverACMERollover(w.ctx, w.admin, a.ID)
+	require.NoError(t, err)
+	assert.NotEqual(t, a.ID, n.ID)
+	signer, _, err := b.ACMEAccountSigner(w.ctx, n.ID)
+	require.NoError(t, err)
+	u, err := w.lookup(signer)
+	require.NoError(t, err)
+	assert.Equal(t, a.AccountURL, u)
+}
+
+// M1: a deactivation whose answer was lost is finished by a retry (the CA says the account is gone).
+func TestACMEDeactivateRetryAfterLostAnswer(t *testing.T) {
+	w := newRegistryWorld(t, fakeacme.Options{})
+	p := w.provider("Retry CA", false)
+	a := w.register(p)
+	signer, _, err := w.svc.ACMEAccountSigner(w.ctx, a.ID)
+	require.NoError(t, err)
+	hc, err := transport.New(string(w.fake.CAPEM()))
+	require.NoError(t, err)
+	c, err := acme.New(acme.Config{DirectoryURL: w.fake.DirectoryURL(), Key: signer, AccountURL: a.AccountURL, HTTPClient: hc})
+	require.NoError(t, err)
+	require.NoError(t, c.Deactivate(w.ctx), "the CA deactivated it; Alice never heard")
+
+	d, err := w.svc.DeactivateACMEAccount(w.ctx, w.admin, a.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEAccountDeactivated, d.State)
+	assert.Equal(t, []map[string]string{{"provider_id": p.ID.String(), "already_deactivated": "true"}}, w.auditDetails("acme.account.deactivated"))
+
+	// Another failure is not taken for a deactivation.
+	q := w.provider("Retry CA 2", false)
+	b := w.register(q)
+	require.NoError(t, w.fake.AddFault(fakeacme.Fault{Endpoint: "account", Kind: fakeacme.FaultServerInternal, Times: 0}))
+	_, err = w.svc.DeactivateACMEAccount(w.ctx, w.admin, b.ID)
+	assert.Equal(t, acme.ReasonProviderUnreachable, reasonOf(err), "%v", err)
+	assert.Equal(t, map[uuid.UUID]string{b.ID: inventory.ACMEAccountActive}, w.accountStates(q.ID))
 }

@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -72,9 +71,7 @@ type Service struct {
 	roots    *x509.CertPool
 	kvSlots  chan struct{} // the slots of concurrent vault polls (AcquireKVPoll)
 
-	acmeMu       sync.Mutex
-	acmeLocks    map[uuid.UUID]chan struct{} // one CA account operation per provider at a time (lockACMEProvider)
-	rolloverSeam rolloverOutcome             // tests only: replaces the CA's rollover outcome (crash simulation)
+	rolloverSeam rolloverOutcome // tests only: replaces the CA's rollover outcome (crash simulation)
 }
 
 // New builds the service.
