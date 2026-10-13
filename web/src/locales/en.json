@@ -569,6 +569,7 @@
       "acme_order_test_succeeded": "Test run with a certificate authority (ACME) succeeded",
       "acme_order_cleaned_up": "Proof records of a certificate request removed",
       "acme_order_cleanup_failed": "Proof records of a certificate request could not be removed",
+      "acme_auto_renew_stopped": "Automatic renewal of a certificate from a certificate authority (ACME) stopped",
       "csr_completed": "Signed certificate added",
       "csr_cancelled": "Signing request cancelled",
       "location_updated": "Verification settings changed",

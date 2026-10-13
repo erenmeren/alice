@@ -210,3 +210,6 @@ func (s *Service) OpenACMEEAB(ctx context.Context, id uuid.UUID) (string, secret
 
 // SetKeygenSeam runs f inside a keygen slot before an ACME order's key is generated (tests only).
 func SetKeygenSeam(s *Service, f func()) { s.keygenSeam = f }
+
+// SetACMERenewHook sets the hook that runs between a candidate's read and its transaction (nil removes it).
+func SetACMERenewHook(f func(id uuid.UUID)) { acmeRenewHook = f }

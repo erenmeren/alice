@@ -14,6 +14,7 @@ import (
 
 	"alice/internal/acme"
 	"alice/internal/acme/keygen"
+	"alice/internal/acme/renew"
 	"alice/internal/acme/solver"
 	"alice/internal/audit"
 	"alice/internal/certs"
@@ -69,19 +70,17 @@ const (
 )
 
 // MaxACMEBackoff caps the wait after failed orders and a CA's Retry-After.
-const MaxACMEBackoff = 24 * time.Hour
+const MaxACMEBackoff = renew.MaxBackoff
+
+// Order triggers (acme_orders.trigger): a person's order, or the renewal planner's (acme.schedule).
+const (
+	ACMETriggerManual  = "manual"
+	ACMETriggerRenewal = "renewal"
+)
 
 // ACMEFailureBackoff is the wait before the next automatic order after failures consecutive failed orders: 1 h, 2 h,
 // 4 h, ... capped at 24 h (design row 6). failures < 1 is no wait.
-func ACMEFailureBackoff(failures int) time.Duration {
-	if failures < 1 {
-		return 0
-	}
-	if failures > 6 { // 1 h << 5 = 32 h is over the cap already
-		return MaxACMEBackoff
-	}
-	return min(time.Hour<<(failures-1), MaxACMEBackoff)
-}
+func ACMEFailureBackoff(failures int) time.Duration { return renew.Backoff(failures) }
 
 // ACMEOrder is the view of an order. It has no secret (nothing of the pending key, only how many records are still
 // published).
@@ -95,18 +94,19 @@ type ACMEOrder struct {
 	ErrorCode         string     `json:"error_code"`
 	CertificateID     *uuid.UUID `json:"certificate_id,omitempty"`
 	RequestedBy       *uuid.UUID `json:"requested_by,omitempty"`
+	Trigger           string     `json:"trigger"`
 	Presented         int        `json:"presented"`
 	CleanupAt         *time.Time `json:"cleanup_at,omitempty"`
 	CleanupErrorCode  string     `json:"cleanup_error_code"`
 }
 
 const acmeOrderColumns = `o.id, o.acme_certificate_id, o.kind, o.state, o.started_at, o.finished_at, o.error_code, o.certificate_id,
-o.requested_by, jsonb_array_length(o.presented), o.cleanup_at, o.cleanup_error_code`
+o.requested_by, o.trigger, jsonb_array_length(o.presented), o.cleanup_at, o.cleanup_error_code`
 
 func scanACMEOrder(row pgx.Row) (ACMEOrder, error) {
 	var o ACMEOrder
 	err := row.Scan(&o.ID, &o.ACMECertificateID, &o.Kind, &o.State, &o.StartedAt, &o.FinishedAt, &o.ErrorCode, &o.CertificateID,
-		&o.RequestedBy, &o.Presented, &o.CleanupAt, &o.CleanupErrorCode)
+		&o.RequestedBy, &o.Trigger, &o.Presented, &o.CleanupAt, &o.CleanupErrorCode)
 	o.StartedAt = o.StartedAt.UTC()
 	for _, t := range []**time.Time{&o.FinishedAt, &o.CleanupAt} {
 		if *t != nil {
@@ -176,58 +176,79 @@ func (s *Service) RequestOrder(ctx context.Context, a Actor, acmeCertificateID u
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return ACMEOrder{}, err
 	}
-	id := uuid.Must(uuid.NewV7())
-	now := s.clock.Now().UTC()
 	var out ACMEOrder
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		c, err := getACMECert(ctx, tx, acmeCertificateID, true)
 		if err != nil {
 			return err
 		}
-		if c.RunningOrderID != nil {
-			return ErrACMEOrderRunning
-		}
-		p, err := getACMEProvider(ctx, tx, c.ProviderID, false)
-		switch {
-		case errors.Is(err, ErrNotFound):
-			return ErrACMEAccountState
-		case err != nil:
-			return err
-		case p.ActiveAccountID == nil:
-			return ErrACMEAccountState
-		case p.PendingRollover:
-			return ErrACMERolloverPending
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, requested_by)
-VALUES ($1, $2, $3, 'running', $4, $5)`, id, acmeCertificateID, kind, now, actorRef(a)); err != nil {
-			if db.IsUniqueViolationOn(err, "acme_orders_one_running") {
-				return ErrACMEOrderRunning
-			}
-			return fmt.Errorf("inventory: store the ACME order: %w", err)
-		}
-		if kind == ACMEOrderIssue {
-			if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET state = CASE WHEN state = 'stopped' THEN state ELSE 'issuing' END, updated_at = $2
-WHERE id = $1`, acmeCertificateID, now); err != nil {
-				return fmt.Errorf("inventory: mark the ACME certificate as issuing: %w", err)
-			}
-		}
-		_, err = s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobACMEIssue,
-			Payload: map[string]string{"order_id": id.String(), "acme_certificate_id": acmeCertificateID.String()},
-			Kind:    a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role), DedupeKey: JobACMEIssue + ":" + acmeCertificateID.String()})
-		if errors.Is(err, ErrJobConflict) {
-			return ErrACMEOrderRunning // the job of the previous order is still finishing
-		}
-		if err != nil {
-			return err
-		}
-		if out, err = getACMEOrder(ctx, tx, id); err != nil {
-			return err
-		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.order.started", ObjectType: "acme_certificate",
-			ObjectID: acmeCertificateID.String(), Result: audit.Success, Details: map[string]string{
-				"order_id": id.String(), "acme_certificate_id": acmeCertificateID.String(), "kind": kind, "provider_id": c.ProviderID.String()}})
+		out, err = s.startOrderTx(ctx, tx, a, c, kind, ACMETriggerManual)
 		return err
 	})
+	if err != nil {
+		return ACMEOrder{}, err
+	}
+	return out, nil
+}
+
+// startOrderTx is the one way an order starts (RequestOrder and the renewal planner): c was read with its row lock
+// in tx (getACMECert forUpdate: a fresh view of its running order). The order, the job and the audit row
+// acme.order.started (with the trigger) are written in tx; the refusals are RequestOrder's.
+func (s *Service) startOrderTx(ctx context.Context, tx pgx.Tx, a Actor, c ACMECertificate, kind, trigger string) (ACMEOrder, error) {
+	if c.RunningOrderID != nil {
+		return ACMEOrder{}, ErrACMEOrderRunning
+	}
+	p, err := getACMEProvider(ctx, tx, c.ProviderID, false)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return ACMEOrder{}, ErrACMEAccountState
+	case err != nil:
+		return ACMEOrder{}, err
+	case p.ActiveAccountID == nil:
+		return ACMEOrder{}, ErrACMEAccountState
+	case p.PendingRollover:
+		return ACMEOrder{}, ErrACMERolloverPending
+	}
+	id := uuid.Must(uuid.NewV7())
+	now := s.clock.Now().UTC()
+	// A savepoint: a refused insert (the unique index, another process) must not abort the caller's transaction.
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return ACMEOrder{}, fmt.Errorf("inventory: open a savepoint: %w", err)
+	}
+	if _, err := sp.Exec(ctx, `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, requested_by, trigger)
+VALUES ($1, $2, $3, 'running', $4, $5, $6)`, id, c.ID, kind, now, actorRef(a), trigger); err != nil {
+		_ = sp.Rollback(ctx)
+		if db.IsUniqueViolationOn(err, "acme_orders_one_running") {
+			return ACMEOrder{}, ErrACMEOrderRunning
+		}
+		return ACMEOrder{}, fmt.Errorf("inventory: store the ACME order: %w", err)
+	}
+	if err := sp.Commit(ctx); err != nil {
+		return ACMEOrder{}, fmt.Errorf("inventory: release a savepoint: %w", err)
+	}
+	if kind == ACMEOrderIssue {
+		if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET state = CASE WHEN state = 'stopped' THEN state ELSE 'issuing' END, updated_at = $2
+WHERE id = $1`, c.ID, now); err != nil {
+			return ACMEOrder{}, fmt.Errorf("inventory: mark the ACME certificate as issuing: %w", err)
+		}
+	}
+	_, err = s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobACMEIssue,
+		Payload: map[string]string{"order_id": id.String(), "acme_certificate_id": c.ID.String()},
+		Kind:    a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role), DedupeKey: JobACMEIssue + ":" + c.ID.String()})
+	if errors.Is(err, ErrJobConflict) {
+		return ACMEOrder{}, ErrACMEOrderRunning // the job of the previous order is still finishing
+	}
+	if err != nil {
+		return ACMEOrder{}, err
+	}
+	out, err := getACMEOrder(ctx, tx, id)
+	if err != nil {
+		return ACMEOrder{}, err
+	}
+	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.order.started", ObjectType: "acme_certificate",
+		ObjectID: c.ID.String(), Result: audit.Success, Details: map[string]string{
+			"order_id": id.String(), "acme_certificate_id": c.ID.String(), "kind": kind, "provider_id": c.ProviderID.String(), "trigger": trigger}})
 	if err != nil {
 		return ACMEOrder{}, err
 	}
@@ -410,13 +431,19 @@ func (s *Service) SucceedACMETestOrder(ctx context.Context, orderID uuid.UUID) e
 // FailACMEOrder ends a running order as failed with code (AbortACMEOrder: the pending key is deleted, audit
 // acme.order.failed or acme.order.test_failed) and, in the same transaction, writes the ACME certificate's failure
 // state. An issue order: failures + 1, state failing (stopped stays), last_error_code, last_attempt_at and
-// next_attempt_at = now + max(ACMEFailureBackoff(failures), retryAfter capped at 24 h). A test run changes only
-// next_attempt_at, and only to honour a CA's Retry-After (never earlier than it was). When records are still
-// published, the acme.cleanup job is queued. An order that failed before only loses a leftover key (nothing else
-// changes); ErrACMEOrderNotRunning for a succeeded order; ErrACMEErrorCode; ErrNotFound.
+// next_attempt_at = now + max(ACMEFailureBackoff(failures), retryAfter capped at 24 h); from the third failure in a
+// row of an issued certificate with automatic renewal on, the "renewal failed" e-mail goes once, and the fifth stops
+// automatic renewal (state stopped, audit acme.auto_renew.stopped, one e-mail; renew.AfterFailure). A neutral code
+// (renew.Neutral: the licence lock, an interrupted job) counts nothing: the order ends as AbandonACMEOrder ends it. A
+// test run changes only next_attempt_at, and only to honour a CA's Retry-After (never earlier than it was). When
+// records are still published, the acme.cleanup job is queued. An order that failed before only loses a leftover key
+// (nothing else changes); ErrACMEOrderNotRunning for a succeeded order; ErrACMEErrorCode; ErrNotFound.
 func (s *Service) FailACMEOrder(ctx context.Context, orderID uuid.UUID, code string, retryAfter time.Duration) error {
 	if !errorCodeRE.MatchString(code) {
 		return ErrACMEErrorCode
+	}
+	if renew.Neutral(code) {
+		return s.AbandonACMEOrder(ctx, orderID, code)
 	}
 	retryAfter = min(max(retryAfter, 0), MaxACMEBackoff)
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -426,16 +453,8 @@ func (s *Service) FailACMEOrder(ctx context.Context, orderID uuid.UUID, code str
 		}
 		now := s.clock.Now().UTC()
 		if ab.kind == ACMEOrderIssue {
-			var failures int
-			if err := tx.QueryRow(ctx, "SELECT failures FROM acme_certificates WHERE id = $1 FOR UPDATE", ab.acmeCertificateID).Scan(&failures); err != nil {
-				return fmt.Errorf("inventory: read the ACME certificate's failures: %w", err)
-			}
-			failures++
-			next := now.Add(max(ACMEFailureBackoff(failures), retryAfter))
-			if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET failures = $2, state = CASE WHEN state = 'stopped' THEN state ELSE 'failing' END,
-last_error_code = $3, last_attempt_at = $4, next_attempt_at = $5, updated_at = $4 WHERE id = $1`,
-				ab.acmeCertificateID, failures, code, now, next); err != nil {
-				return fmt.Errorf("inventory: record the ACME certificate's failure: %w", err)
+			if err := s.countACMEFailure(ctx, tx, ab.acmeCertificateID, code, retryAfter, now); err != nil {
+				return err
 			}
 		} else if retryAfter > 0 {
 			next := now.Add(retryAfter)

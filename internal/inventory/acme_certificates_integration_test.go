@@ -323,7 +323,8 @@ func TestACMERequestOrder(t *testing.T) {
 	d := w.auditDetails("acme.order.started")
 	require.Len(t, d, 1)
 	assert.Equal(t, map[string]string{"order_id": o.ID.String(), "acme_certificate_id": c.ID.String(), "kind": "issue",
-		"provider_id": w.provider.ID.String()}, d[0])
+		"provider_id": w.provider.ID.String(), "trigger": "manual"}, d[0])
+	assert.Equal(t, inventory.ACMETriggerManual, o.Trigger)
 	got, err := w.svc.GetACMECertificate(w.ctx, c.ID)
 	require.NoError(t, err)
 	assert.Equal(t, inventory.ACMEStateIssuing, got.State)
@@ -833,14 +834,15 @@ func TestACMEWithoutADatabase(t *testing.T) {
 			_, err := svc.UpdateACMECertificate(ctx, w.admin, id, inventory.ACMECertificatePatch{AutoDeploy: ptr(true)})
 			return err
 		},
-		"delete":       func() error { return svc.DeleteACMECertificate(ctx, w.admin, id) },
-		"request":      func() error { _, err := svc.RequestOrder(ctx, w.operator, id, inventory.ACMEOrderIssue); return err },
-		"get order":    func() error { _, err := svc.GetACMEOrder(ctx, id); return err },
-		"list orders":  func() error { _, err := svc.ListACMEOrders(ctx, id, 5); return err },
-		"order work":   func() error { _, err := svc.ACMEOrderWork(ctx, id); return err },
-		"order client": func() error { _, err := svc.ACMEOrderClient(ctx, id); return err },
-		"order url":    func() error { return svc.RecordACMEOrderURL(ctx, id, "https://ca.example.test/o") },
-		"add record":   func() error { return svc.AddACMEPresented(ctx, id, inventory.ACMEPresented{HookID: &hook}) },
+		"delete":        func() error { return svc.DeleteACMECertificate(ctx, w.admin, id) },
+		"request":       func() error { _, err := svc.RequestOrder(ctx, w.operator, id, inventory.ACMEOrderIssue); return err },
+		"plan renewals": func() error { _, err := svc.PlanACMERenewals(ctx); return err },
+		"get order":     func() error { _, err := svc.GetACMEOrder(ctx, id); return err },
+		"list orders":   func() error { _, err := svc.ListACMEOrders(ctx, id, 5); return err },
+		"order work":    func() error { _, err := svc.ACMEOrderWork(ctx, id); return err },
+		"order client":  func() error { _, err := svc.ACMEOrderClient(ctx, id); return err },
+		"order url":     func() error { return svc.RecordACMEOrderURL(ctx, id, "https://ca.example.test/o") },
+		"add record":    func() error { return svc.AddACMEPresented(ctx, id, inventory.ACMEPresented{HookID: &hook}) },
 		"remove record": func() error {
 			return svc.RemoveACMEPresented(ctx, id, inventory.ACMEPresented{HookID: &hook})
 		},
