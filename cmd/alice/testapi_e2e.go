@@ -60,6 +60,11 @@ const (
 	kvAutoDeployEvery = 100 * 365 * 24 * time.Hour
 )
 
+// acmeSweepEvery is the ACME sweep's interval in the e2e build: in effect never, like the deployment sweep (the demo
+// clock would otherwise abandon orders and queue cleanups between two Playwright steps). The task stays scheduled
+// (checkWiring, RunNow): the journeys run it with POST /test/scheduler/run.
+const acmeSweepEvery = 100 * 365 * 24 * time.Hour
+
 // rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
 // rotation tasks in the e2e build: in effect never, like the sweep (the demo clock would otherwise
 // plan, advance or finish a run between two Playwright steps). The tasks stay scheduled (checkWiring,
@@ -148,7 +153,8 @@ const maxACMECAFile = 64 << 10
 // acmeRoots is the trust of the fake ACME CA's TLS certificate in the e2e build: ONLY the fake's CA
 // (same rules as azureRoots: one regular file, one CA certificate, nothing else, read at each call). The
 // release build has no such hook (testapi_release.go): it verifies a CA with the system roots and the
-// provider's own bundle only. The ACME client (internal/acme) calls this when it builds its TLS roots.
+// provider's own bundle only. The inventory calls it (inventory.Config.ACMERoots) whenever it builds the transport of
+// an ACME client or a DNS hook, for the API's account operations and the ACME jobs alike.
 func acmeRoots() (*x509.CertPool, error) {
 	return fakeCARoots(acmeCAFile, maxACMECAFile, "ACME")
 }

@@ -76,6 +76,10 @@ func TestJobDepsCarryEveryDependency(t *testing.T) {
 	requireEveryFieldSet(t, targetDeps(svc, clock.Real{}, log))
 	requireEveryFieldSet(t, kvDeps(svc, clock.Real{}, log))
 	requireEveryFieldSet(t, sshkeyDeps(svc, clock.Real{}, log))
+	requireEveryFieldSet(t, acmeDeps(svc, clock.Real{}, log))
+	assert.Same(t, svc.inventory, acmeDeps(svc, clock.Real{}, log).Inventory)
+	assert.Same(t, svc.registry, acmeDeps(svc, clock.Real{}, log).Registry)
+	assert.Same(t, svc.license, acmeDeps(svc, clock.Real{}, log).Gate, "an order asks the licence gate before each challenge it publishes")
 	assert.Same(t, svc.sshkeys, sshkeyDeps(svc, clock.Real{}, log).Keys)
 	assert.Same(t, svc.inventory, sshkeyDeps(svc, clock.Real{}, log).Targets)
 	assert.Same(t, svc.registry, sshkeyDeps(svc, clock.Real{}, log).Registry)
@@ -108,9 +112,10 @@ func TestServeWiringIsComplete(t *testing.T) {
 	}
 	for _, typ := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
 		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy,
-		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.ACMESchedule, jobs.ACMEAutoDeploy} {
+		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep} {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
+	assert.Positive(t, acmeSweepEvery, "the ACME sweep has an interval in every build")
 	assert.Positive(t, rotationPlanEvery, "the rotation planner has an interval in every build")
 	assert.Positive(t, rotationSweepEvery, "the rotation sweep has an interval in every build")
 	assert.Positive(t, destroyRetiredEvery, "the retired-key task has an interval in every build")
@@ -159,7 +164,7 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 	for _, typ := range []string{"acme.issue", "acme.cleanup"} {
 		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
 	}
-	for _, typ := range []string{"acme.schedule", "acme.auto_deploy"} {
+	for _, typ := range []string{"acme.schedule", "acme.auto_deploy", "acme.sweep"} {
 		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")
 	}
 	for _, typ := range []string{"kv.schedule", "kv.auto_deploy"} {

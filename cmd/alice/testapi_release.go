@@ -35,6 +35,9 @@ const (
 	kvAutoDeployEvery = time.Minute
 )
 
+// acmeSweepEvery is the interval of the ACME sweep (abandoned orders, leftover challenge records).
+const acmeSweepEvery = time.Minute
+
 // rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
 // rotation tasks (contract C1: rotation.plan and rotation.sweep every minute, sshkey.destroy_retired
 // every hour). The sweep's minute keeps a removal well inside the 15-minute bound of its re-check

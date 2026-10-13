@@ -20,6 +20,7 @@ import (
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/jobs/acmejobs"
 	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/kvjobs"
 	"alice/internal/jobs/sshkeyjobs"
@@ -130,6 +131,9 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		Jobs:     queue,
 		Notifier: notify.AdminNotifier{Clock: clk},
 		Log:      log,
+		// The trust of ACME CAs and DNS hooks: nil (the system roots) in a release build, only the fake CA in the e2e
+		// build (testapi_*.go); each provider's and hook's own bundle is added.
+		ACMERoots: acmeRoots,
 	})
 	sshPool := linuxssh.NewPool(&linuxssh.Dialer{Clock: clk, HostKeys: inv.HostKeyStore()},
 		linuxssh.MaxConnections, linuxssh.MaxConnectionsPerTarget, linuxssh.IdleTimeout)
@@ -278,7 +282,7 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 	deployjobs.Register(runner, deployDeps(svc, clk, log))
 	kvjobs.Register(runner, kvDeps(svc, clk, log))
 	sshkeyjobs.Register(runner, sshkeyDeps(svc, clk, log))
-	registerACMEPlaceholders(runner)
+	acmejobs.Register(runner, acmeDeps(svc, clk, log))
 	return runner
 }
 
@@ -296,6 +300,19 @@ func sshkeyDeps(svc *services, clk clock.Clock, log *slog.Logger) sshkeyjobs.Dep
 	if svc.license != nil {
 		// The licence gate the runner and the SSH key service use: a rotation's add or removal job asks it
 		// before opening a session, so a lock that begins after the sweep still reaches no server (L-29).
+		d.Gate = svc.license
+	}
+	return d
+}
+
+// acmeDeps are the dependencies of the ACME jobs and the ACME sweep, with the licence service as their gate (an order
+// asks it again before each challenge it publishes).
+func acmeDeps(svc *services, clk clock.Clock, log *slog.Logger) acmejobs.Deps {
+	d := acmejobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
+	if svc.inventory != nil { // a nil *inventory.Service must stay a nil interface, so Register refuses it
+		d.Inventory = svc.inventory
+	}
+	if svc.license != nil {
 		d.Gate = svc.license
 	}
 	return d
@@ -407,9 +424,11 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		jobs.Task{Type: jobs.JobsHeartbeat, Every: heartbeatEvery, Run: func(ctx context.Context) error {
 			return writeHeartbeat(ctx, svc.pool, clk)
 		}},
-		// ACME (placeholders until Task 11 supplies the renewal planner and Task 12 the auto-deploy planner).
+		// ACME (placeholders until Task 11 supplies the renewal planner and Task 12 the auto-deploy planner). The sweep
+		// (ClassAlways) ends crashed orders and queues leftover challenge cleanups in every license state.
 		jobs.Task{Type: jobs.ACMESchedule, Every: acmeScheduleEvery, Run: func(context.Context) error { return nil }},
 		jobs.Task{Type: jobs.ACMEAutoDeploy, Every: acmeAutoDeployEvery, Run: func(context.Context) error { return nil }},
+		acmejobs.SweepTask(acmeDeps(svc, clk, log), acmeSweepEvery),
 	)
 }
 
@@ -418,17 +437,6 @@ const (
 	acmeScheduleEvery   = time.Minute
 	acmeAutoDeployEvery = time.Minute
 )
-
-// registerACMEPlaceholders installs handlers that fail at once for the ACME queue job types so that checkWiring passes while the
-// feature is built up. TODO(Task 10): replace the acme.issue handler with the issue job; TODO(Task 11): replace the
-// acme.cleanup handler. Nothing enqueues these types before the API exists (Task 13).
-func registerACMEPlaceholders(r *jobs.Runner) {
-	noop := func(context.Context, jobs.Job, jobs.StepRecorder) (map[string]any, error) {
-		return nil, errors.New("acme: this job type has no implementation yet")
-	}
-	r.Handle(jobs.ACMEIssue, noop)
-	r.Handle(jobs.ACMECleanup, noop)
-}
 
 // The intervals of the Phase 8 tasks that are the same in every build (contract C1); backupScheduleEvery is per build.
 const (

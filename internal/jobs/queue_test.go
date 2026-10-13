@@ -331,10 +331,15 @@ func TestACMEJobTypes(t *testing.T) {
 	assert.Equal(t, "acme.schedule", ACMESchedule.Name)
 	assert.Equal(t, "acme.auto_deploy", ACMEAutoDeploy.Name)
 	assert.Equal(t, 1, MaxAttemptsFor(ACMEIssue))
-	assert.Equal(t, 3, MaxAttemptsFor(ACMECleanup))
+	assert.Equal(t, 5, MaxAttemptsFor(ACMECleanup), "a hook that is briefly down: five tries on the queue's backoff")
+	assert.False(t, AlertsWhenExhausted(ACMECleanup), "the order records the failure and the sweep queues the cleanup again hourly")
+	assert.True(t, AlertsWhenExhausted(ACMEIssue))
+	assert.Equal(t, license.ClassAlways, ACMESweep.Class, "the sweep ends crashed orders and queues cleanups in lock too")
+	assert.Equal(t, "acme.sweep", ACMESweep.Name)
 	assert.NotPanics(t, func() {
 		NewScheduler(nil, &fakeGate{}, quiet,
 			Task{Type: ACMESchedule, Every: time.Minute, Run: func(context.Context) error { return nil }},
-			Task{Type: ACMEAutoDeploy, Every: time.Minute, Run: func(context.Context) error { return nil }})
+			Task{Type: ACMEAutoDeploy, Every: time.Minute, Run: func(context.Context) error { return nil }},
+			Task{Type: ACMESweep, Every: time.Minute, Run: func(context.Context) error { return nil }})
 	})
 }

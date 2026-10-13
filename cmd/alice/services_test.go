@@ -54,6 +54,11 @@ func TestReleaseSchedulesKeyVaultWorkEveryMinute(t *testing.T) {
 	assert.Equal(t, time.Minute, kvAutoDeployEvery)
 }
 
+// The release build ends crashed ACME orders and queues leftover challenge cleanups every minute.
+func TestReleaseSweepsACMEOrdersEveryMinute(t *testing.T) {
+	assert.Equal(t, time.Minute, acmeSweepEvery)
+}
+
 // The release build plans due rotations and sweeps the live runs every minute (contract C1: the sweep
 // advances runs and checks the 15-minute re-check bound, so a coarser tick would delay a removal past
 // its re-check), and destroys retired private keys hourly (that task also reconciles ended deploys:

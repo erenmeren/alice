@@ -246,6 +246,11 @@ func TestE2EBuildNeverTicksTheKeyVaultTasks(t *testing.T) {
 	assert.GreaterOrEqual(t, kvAutoDeployEvery, 50*365*24*time.Hour)
 }
 
+// Nor does it tick the ACME sweep: the journeys run it with POST /test/scheduler/run.
+func TestE2EBuildNeverTicksTheACMESweep(t *testing.T) {
+	assert.GreaterOrEqual(t, acmeSweepEvery, 50*365*24*time.Hour)
+}
+
 type countingGate struct {
 	locked bool
 	calls  int

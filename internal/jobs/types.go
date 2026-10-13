@@ -139,11 +139,15 @@ var (
 // contacts a certificate authority and may change a DNS zone through a hook, so it is refused and held in lock; cleanup
 // of leftover challenge records runs in every state; the renewal planner and the auto-deploy planner are periodic and
 // ReadOnly (the scheduler refuses a ClassChange task; the planners call license.Allow(ClassChange) themselves).
+// The sweep (acme.sweep, periodic, every license state) ends the orders a crash left running and queues the cleanup of
+// leftover challenge records, so it runs in lock too (it contacts a CA only to finish an issued order, and only when
+// the gate allows changes).
 var (
 	ACMEIssue      = Register("acme.issue", license.ClassChange)
 	ACMECleanup    = Register("acme.cleanup", license.ClassAlways)
 	ACMESchedule   = Register("acme.schedule", license.ClassReadOnly)
 	ACMEAutoDeploy = Register("acme.auto_deploy", license.ClassReadOnly)
+	ACMESweep      = Register("acme.sweep", license.ClassAlways)
 )
 
 // Kind says who asks for a job (jobs.kind).
@@ -183,12 +187,14 @@ const (
 // the deployment's state and recovers). A recovery job runs once: the deployment sweep paces
 // recovery (a new job every inventory.RecoveryRetryInterval, at most inventory.MaxRecoveryAttempts),
 // so a failed attempt waits for the sweep instead of polling the server on the queue's backoff. An ACME order runs
-// once: a repeat would start a second order at the authority, so the planner (acme.schedule) paces retries.
+// once: a repeat would start a second order at the authority, so the planner (acme.schedule) paces retries. The
+// cleanup of an order's leftover challenge records is tried 5 times on the queue's backoff (a hook or a server that is
+// briefly down), then the sweep (acme.sweep) queues it again after an hour.
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
 	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name:
 		return 1
-	case inventory.JobDiscover:
+	case inventory.JobDiscover, ACMECleanup.Name:
 		return 5
 	default:
 		return 3
@@ -202,9 +208,12 @@ func MaxAttemptsFor(t Type) int {
 // unreachable server would send one job.dead email per recovery cycle (plan decision 15). A poll of a
 // vault is not either: its failure is on the vault (status, last error, its own email) and polls repeat
 // on the vault's interval, so a dead-job email per cycle would only repeat it. A rotation's location job
-// is not either: the rotation sweep re-queues it and the rotation's own emails carry its failures.
+// is not either: the rotation sweep re-queues it and the rotation's own emails carry its failures. The cleanup of an
+// ACME order is not either: its failure is recorded on the order (cleanup_error_code, audit acme.order.cleanup_failed)
+// and the ACME sweep queues it again every hour, so a dead-job email would repeat every hour while a hook is down.
 func AlertsWhenExhausted(t Type) bool {
-	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll && t.Name != RotationLocation.Name
+	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll && t.Name != RotationLocation.Name &&
+		t.Name != ACMECleanup.Name
 }
 
 // maxRunning is the concurrency cap of a job type: the runner claims no job of the type while that many
