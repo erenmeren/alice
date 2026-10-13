@@ -129,16 +129,32 @@ func FuzzCheckChain(f *testing.F) {
 			if !errors.As(err, &e) || e.Reason != ReasonDirectoryInvalid {
 				t.Fatalf("refusal %v is not %s", err, ReasonDirectoryInvalid)
 			}
+		}
+		// The expected verdict: a leaf that does not parse is a garbled answer; a parseable leaf of another key or
+		// other names is the wrong certificate; then any chain certificate that does not parse is a garbled answer.
+		var expect error
+		c, perr := x509.ParseCertificate(chain[0])
+		switch {
+		case perr != nil:
+			expect = ErrBadAnswer
+		case !key.PublicKey.Equal(c.PublicKey) || !sameNames(c.DNSNames, want):
+			expect = ErrChainKeyMismatch
+		default:
+			for _, der := range chain[1:] {
+				if _, perr := x509.ParseCertificate(der); perr != nil {
+					expect = ErrBadAnswer
+					break
+				}
+			}
+		}
+		if expect == nil {
+			if err != nil {
+				t.Fatalf("refused a good chain: %v", err)
+			}
 			return
 		}
-		c, perr := x509.ParseCertificate(chain[0])
-		if perr != nil || !key.PublicKey.Equal(c.PublicKey) || !sameNames(c.DNSNames, want) {
-			t.Fatalf("accepted a leaf that is not the ordered one")
-		}
-		for _, der := range chain[1:] {
-			if _, perr := x509.ParseCertificate(der); perr != nil {
-				t.Fatalf("accepted an unparseable chain certificate")
-			}
+		if !errors.Is(err, expect) {
+			t.Fatalf("got %v, want %v", err, expect)
 		}
 	})
 }

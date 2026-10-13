@@ -348,11 +348,13 @@ fuzz-backup: ## Fuzz the backup header, stream and payload decoder ($(FUZZTIME) 
 	go test -count=1 -run '^$$' -fuzz FuzzBackupStream -fuzztime $(FUZZTIME) ./internal/backup/format/
 	go test -count=1 -run '^$$' -fuzz FuzzDecoder -fuzztime $(FUZZTIME) ./internal/backup/dump/
 
-.PHONY: fuzz-acme
-fuzz-acme: ## Fuzz the ACME problem, renewal information, directory, issued chain, order name and DNS hook reply parsers ($(FUZZTIME) each)
+.PHONY: fuzz-acme fuzz-acme-docs fuzz-acme-order
+fuzz-acme: fuzz-acme-docs fuzz-acme-order ## Every ACME fuzz target (both groups below; local use)
+fuzz-acme-docs: ## Fuzz the ACME problem, renewal information and directory parsers ($(FUZZTIME) each)
 	go test -count=1 -run '^$$' -fuzz FuzzParseProblem -fuzztime $(FUZZTIME) ./internal/acme/
 	go test -count=1 -run '^$$' -fuzz FuzzParseARI -fuzztime $(FUZZTIME) ./internal/acme/
 	go test -count=1 -run '^$$' -fuzz FuzzParseDirectory -fuzztime $(FUZZTIME) ./internal/acme/
+fuzz-acme-order: ## Fuzz the ACME issued chain check, the order names and the DNS hook reply parser ($(FUZZTIME) each)
 	go test -count=1 -run '^$$' -fuzz FuzzCheckChain -fuzztime $(FUZZTIME) ./internal/acme/
 	go test -count=1 -run '^$$' -fuzz FuzzNormalizeNames -fuzztime $(FUZZTIME) ./internal/acme/
 	go test -count=1 -run '^$$' -fuzz FuzzParseHookReply -fuzztime $(FUZZTIME) ./internal/acme/solver/dns01/
@@ -363,11 +365,11 @@ fuzz-api: ## Fuzz every create/update body of the API (needs Docker; $(FUZZTIME)
 
 .PHONY: fuzz-nightly
 fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly)
-	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme fuzz-api FUZZTIME=10m
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-api FUZZTIME=10m
 
 .PHONY: fuzz-release
-fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 7 hours)
-	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme fuzz-api FUZZTIME=30m
+fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 9 hours)
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-api FUZZTIME=30m
 
 # Dynamic gates (Task 15; spec §22.7 stages 5 and 6, §25.7). zap-baseline, zap-full and testssl scan
 # the release image (alice:ci of make image) as compose project alice-zap on 127.0.0.1:9445

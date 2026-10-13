@@ -112,6 +112,7 @@ type stack struct {
 	clock    *clock.Fake
 	keysDir  string
 	logs     *syncBuffer
+	rawLogs  *syncBuffer // every record also BEFORE redaction (the ACME leak suite scans it: no secret is even handed to a logger)
 	trusted  []netip.Prefix
 	keyring  *secrets.Keyring
 	auth     *auth.Service
@@ -178,6 +179,7 @@ func newStackWith(t testing.TB, start time.Time, kv func(now func() time.Time) *
 		keysDir:  t.TempDir(),
 		stateDir: t.TempDir(),
 		logs:     &syncBuffer{},
+		rawLogs:  &syncBuffer{},
 		trusted:  trusted,
 		mailbox:  &mailbox{},
 	}
@@ -205,7 +207,7 @@ func (s *stack) start() {
 	s.license = license.New(license.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Uptime: s.clock,
 		Keys: licensetest.KeySet(), StateDir: s.stateDir, Notifier: notify.AdminNotifier{Clock: s.clock},
-		Log: logging.New(s.logs, slog.LevelDebug), Targets: inventory.Counter{},
+		Log: s.logger(), Targets: inventory.Counter{},
 		RowLockTimeout: 200 * time.Millisecond, // tests that hold the license row (AUD-02) do not wait 30 s
 	})
 	require.NoError(t, s.license.Start(ctx))
@@ -231,7 +233,7 @@ func (s *stack) start() {
 func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	t := s.t
 	t.Helper()
-	log := logging.New(s.logs, slog.LevelDebug)
+	log := s.logger()
 	s.queue = jobs.NewQueue(jobs.QueueConfig{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Gate: s.license})
 	s.registry = providers.NewRegistry()
 	roots := x509.NewCertPool()
@@ -278,7 +280,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 func (s *stack) startPhase8(keyring *secrets.Keyring, auditLog *audit.Log) {
 	t := s.t
 	t.Helper()
-	log := logging.New(s.logs, slog.LevelDebug)
+	log := s.logger()
 	if s.backupsDir == "" {
 		s.backupsDir = t.TempDir()
 	}
@@ -307,7 +309,7 @@ func (b stackBackup) Open(ctx context.Context, name string) (*os.File, backup.In
 // (the sweep of unfinished deployments is driven by the tests). A second runner with its own worker
 // name and a heartbeat that never beats on the fake clock stands for a process that dies.
 func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
-	log := logging.New(s.logs, slog.LevelDebug)
+	log := s.logger()
 	r := jobs.NewRunner(jobs.RunnerConfig{
 		Pool: s.db.App, Queue: s.queue, Gate: s.license, Audit: s.auditLog, Clock: s.clock, Log: log,
 		Jitter: func() float64 { return 0 }, WorkerID: worker, Heartbeat: heartbeat, Notifier: notify.AdminNotifier{Clock: s.clock},
@@ -338,7 +340,7 @@ func (s *stack) deps() Deps {
 		Catalog:        catalog,
 		Version:        version.Info{Version: "test", Commit: "test", BuildTime: "test"},
 		UI:             fstest.MapFS{"index.html": {Data: []byte(stackIndexHTML)}},
-		Log:            logging.New(s.logs, slog.LevelDebug),
+		Log:            s.logger(),
 		Clock:          s.clock,
 		Auth:           s.auth,
 		Setup:          s.setup,
@@ -355,9 +357,16 @@ func (s *stack) deps() Deps {
 		SSO:            s.sso,
 		Backup:         stackBackup{BackupService: s.backup, s: s},
 		Forward:        s.forward,
-		TLSStore:       setup.CertificateInstaller{Store: s.tlsStore, Setup: s.setup, Log: logging.New(s.logs, slog.LevelDebug)},
+		TLSStore:       setup.CertificateInstaller{Store: s.tlsStore, Setup: s.setup, Log: s.logger()},
 		TrustedProxies: s.trusted,
 	}
+}
+
+// logger is the services' logger: the redacting JSON logger of cmd/alice (logging.New) writing to s.logs, and the same
+// records unredacted to s.rawLogs.
+func (s *stack) logger() *slog.Logger {
+	opts := &slog.HandlerOptions{Level: slog.LevelDebug}
+	return slog.New(slog.NewMultiHandler(logging.NewRedactingHandler(slog.NewJSONHandler(s.logs, opts)), slog.NewJSONHandler(s.rawLogs, opts)))
 }
 
 func (s *stack) record(method, path string, rec *httptest.ResponseRecorder) {
@@ -706,7 +715,7 @@ func (s *stack) drainMail() int {
 	s.t.Helper()
 	catalog, err := i18n.Load(locales.FS)
 	require.NoError(s.t, err)
-	sender := notify.Sender{Pool: s.db.App, Source: s.mail, Catalog: catalog, Clock: s.clock, Log: logging.New(s.logs, slog.LevelDebug)}
+	sender := notify.Sender{Pool: s.db.App, Source: s.mail, Catalog: catalog, Clock: s.clock, Log: s.logger()}
 	n, err := sender.Drain(context.Background())
 	require.NoError(s.t, err)
 	return n

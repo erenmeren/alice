@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -22,7 +21,6 @@ import (
 	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/internal/platform/clock"
-	"alice/internal/platform/logging"
 	"alice/locales"
 )
 
@@ -81,7 +79,7 @@ func (s *stack) deliverMail() int {
 	s.t.Helper()
 	catalog, err := i18n.Load(locales.FS)
 	require.NoError(s.t, err)
-	sender := notify.Sender{Pool: s.db.App, Mailer: s.mailbox, Catalog: catalog, Clock: s.tick, Log: logging.New(s.logs, slog.LevelDebug)}
+	sender := notify.Sender{Pool: s.db.App, Mailer: s.mailbox, Catalog: catalog, Clock: s.tick, Log: s.logger()}
 	n, err := sender.Drain(context.Background())
 	require.NoError(s.t, err)
 	return n
@@ -89,7 +87,7 @@ func (s *stack) deliverMail() int {
 
 // rotationTasks are the Phase 6 periodic tasks as cmd/alice schedules them, on a real scheduler (its licence gate).
 func (s *stack) rotationTasks() *jobs.Scheduler {
-	return jobs.NewScheduler(s.tick, s.license, logging.New(s.logs, slog.LevelDebug),
+	return jobs.NewScheduler(s.tick, s.license, s.logger(),
 		jobs.Task{Type: jobs.RotationPlan, Every: time.Minute, Run: func(ctx context.Context) error {
 			_, err := s.sshKeys.PlanDue(ctx)
 			return err

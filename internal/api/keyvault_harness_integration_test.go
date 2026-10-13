@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,7 +21,6 @@ import (
 
 	"alice/internal/jobs"
 	"alice/internal/jobs/kvjobs"
-	"alice/internal/platform/logging"
 	"alice/internal/providers"
 	"alice/internal/providers/azurekv"
 	"alice/internal/providers/linuxssh/linuxsshtest"
@@ -250,7 +248,7 @@ func (s *stack) runKVDriven() int {
 // scheduler is the periodic work of serve for Key Vault: kv.schedule and kv.auto_deploy, run on demand through
 // the real scheduler (its gate included).
 func (s *stack) kvScheduler() *jobs.Scheduler {
-	log := logging.New(s.logs, slog.LevelDebug)
+	log := s.logger()
 	return jobs.NewScheduler(s.clock, s.license, log,
 		kvjobs.ScheduleTask(s.inv, time.Minute, log), kvjobs.AutoDeployTask(s.inv, time.Minute, log))
 }

@@ -17,12 +17,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/i18n"
+	"alice/internal/jobs/acmejobs"
 	"alice/internal/notify"
 	"alice/internal/secrets"
 	"alice/internal/testutil/fakeacme"
@@ -45,6 +47,8 @@ import (
 type acmeLeakWorld struct {
 	*acmeWorld
 	eabRaw []byte
+	// raw buffers of two canaries for the positive control's bytea plant
+	activeAccountDER, leafDER []byte
 }
 
 func newACMELeakWorld(t *testing.T) *acmeLeakWorld {
@@ -70,6 +74,39 @@ func (w *acmeLeakWorld) credentialCanaries() []secretValue {
 		textCanary("EAB HMAC key (base64url)", w.cred.EABHMAC),
 		textCanary("hook secret", w.cred.HookSecret),
 	}
+}
+
+// sealingKeys are the data-encryption keys sealing the EAB HMAC key and the hook secret (the rows are opened with the
+// keyring to prove the envelopes are the canaries').
+func (w *acmeLeakWorld) sealingKeys() []secretValue {
+	t := w.t
+	t.Helper()
+	ctx := context.Background()
+	var secs []secretValue
+	for _, q := range []struct{ name, table, column, sql, want string }{
+		{"EAB sealing DEK", "acme_providers", "eab_hmac", "SELECT id, eab_hmac_ct, eab_hmac_nonce, eab_hmac_wrapped_dek, eab_hmac_key_version FROM acme_providers WHERE eab_hmac_ct IS NOT NULL", w.cred.EABHMAC},
+		{"hook sealing DEK", "acme_hooks", "secret", "SELECT id, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version FROM acme_hooks", w.cred.HookSecret},
+	} {
+		rows, err := w.db.Owner.Query(ctx, q.sql)
+		require.NoError(t, err)
+		n := 0
+		for rows.Next() {
+			var id uuid.UUID
+			var env secrets.Envelope
+			require.NoError(t, rows.Scan(&id, &env.Ciphertext, &env.Nonce, &env.WrappedDEK, &env.KeyVersion))
+			loc := secrets.Location{Table: q.table, RowID: id.String(), Column: q.column}
+			pt, err := w.keyring.Open(loc, env)
+			require.NoError(t, err)
+			assert.Equal(t, q.want, string(pt.Bytes()), "%s seals the canary", q.table)
+			pt.Zero()
+			secs = append(secs, secretValue{name: q.name, forms: binaryForms(unwrapDEK(t, w.masterKey(), loc, env))})
+			n++
+		}
+		require.NoError(t, rows.Err())
+		rows.Close()
+		require.Positive(t, n, q.table)
+	}
+	return secs
 }
 
 // accountKeys opens every sealed ACME account key with the stack's keyring (test only) and returns its canaries: the
@@ -100,6 +137,9 @@ func (w *acmeLeakWorld) accountKeys() []secretValue {
 		kc := newKeyCanary(name, key)
 		secs = append(secs, kc.secrets()...)
 		secs = append(secs, keyPieces(name, kc, pub)...)
+		if state == "active" {
+			w.activeAccountDER = der
+		}
 		secs = append(secs, storedKeySecrets(name, der, unwrapDEK(t, w.masterKey(), loc, env))...)
 	}
 	require.NoError(t, rows.Err())
@@ -150,6 +190,9 @@ func (w *acmeLeakWorld) leafKeys() []secretValue {
 			secs = append(secs, withoutPublic(sec, cert))
 		}
 		secs = append(secs, keyPieces(kc.name, kc, cert.Raw)...)
+		if k.owner == "certificate" {
+			w.leafDER = k.der
+		}
 	}
 	return secs
 }
@@ -219,6 +262,7 @@ func (w *acmeLeakWorld) acmeLeaks(secs []secretValue, extra map[string]string) [
 	out := w.leaks(secs)
 	mail, _ := w.emails()
 	extra["emails"] = mail
+	extra["raw log"] = w.rawLogs.String()
 	for place, text := range extra {
 		for _, sec := range secs {
 			if _, found := sec.leakedIn(text); found {
@@ -259,6 +303,14 @@ func TestACMESecretsNeverLeak(t *testing.T) {
 	}](t, rec).Deployments
 	require.Len(t, deps, 1)
 	require.Equal(t, "succeeded", w.settle(w.op, deps[0].ID).Status)
+
+	// A renewal the planner starts (the CA's renewal information says now): the acme.schedule tick logs it, and the
+	// renewal order runs through the hook and seals a second managed key.
+	w.clock.Advance(16 * time.Minute) // past renew.MinSpacing since the order
+	require.NoError(t, w.fake.SetARIWindow(w.clock.Now().Add(-time.Hour), w.clock.Now().Add(time.Hour)))
+	require.NoError(t, acmejobs.ScheduleTask(w.inv, time.Minute, w.logger()).Run(context.Background()))
+	renewed := w.waitIssued(w.op, certID)
+	require.NotEqual(t, issued["current"].(map[string]any)["id"], renewed["current"].(map[string]any)["id"], "the planner renewed the certificate")
 
 	// Failed orders: the CA refuses the DNS-01 validation (an error, a failed job, a failed order row).
 	require.NoError(t, w.fake.FailValidation(fakeacme.DNS01, true))
@@ -307,6 +359,12 @@ func TestACMESecretsNeverLeak(t *testing.T) {
 	}
 	assert.Positive(t, hookCalls, "the hook was called with its secret")
 
+	// The log channels are not vacuous: the journey's ACME activity is in them (the planner's line), redacted and raw.
+	for name, text := range map[string]string{"log": w.logs.String(), "raw log": w.rawLogs.String()} {
+		assert.Contains(t, text, "planned ACME renewals", "%s holds the journey's ACME lines", name)
+	}
+	secs = append(secs, w.sealingKeys()...)
+
 	// The scan.
 	extra := map[string]string{"backup manifest": string(manifest)}
 	for _, l := range w.acmeLeaks(secs, extra) {
@@ -316,41 +374,73 @@ func TestACMESecretsNeverLeak(t *testing.T) {
 	assert.True(t, templates["acme.renewal_failed"], "the scan saw the renewal-failed e-mail: %v", templates)
 	assert.True(t, templates["acme.auto_renew_stopped"], "the scan saw the stop e-mail: %v", templates)
 
-	// Positive control: each kind of canary planted in each kind of place is found.
+	// Positive control: each kind of canary planted in each kind of place is found. A plant gets the canary's text (as a
+	// log value, a JSON string or an e-mail spells it) and its raw bytes (for a bytea column).
+	ctx := context.Background()
 	plants := []struct {
 		place string
-		plant func(text string)
+		plant func(text string, raw []byte)
 	}{
-		{"log", func(text string) { _, _ = w.logs.Write([]byte("level=DEBUG msg=planted value=" + text + "\n")) }},
-		{"responses", func(text string) {
+		{"log", func(text string, _ []byte) {
+			_, _ = w.logs.Write([]byte("level=DEBUG msg=planted value=" + text + "\n"))
+		}},
+		{"raw log", func(text string, _ []byte) {
+			_, _ = w.rawLogs.Write([]byte("level=DEBUG msg=planted value=" + text + "\n"))
+		}},
+		{"responses", func(text string, _ []byte) {
 			r := httptest.NewRecorder()
 			_, _ = r.WriteString(`{"planted":"` + text + `"}`)
 			w.record(http.MethodGet, "/planted", r)
 		}},
-		{"tables", func(text string) {
-			_, err := w.db.Owner.Exec(context.Background(), "UPDATE jobs SET result = jsonb_build_object('planted', $1::text) WHERE id = (SELECT id FROM jobs LIMIT 1)", text)
+		{"tables", func(text string, _ []byte) {
+			_, err := w.db.Owner.Exec(ctx, "UPDATE jobs SET result = jsonb_build_object('planted', $1::text) WHERE id = (SELECT id FROM jobs LIMIT 1)", text)
 			require.NoError(t, err)
 		}},
-		{"backup manifest", func(text string) { extra["backup manifest"] += text }},
+		{"bytea base64", func(_ string, raw []byte) {
+			_, err := w.db.Owner.Exec(ctx, "UPDATE acme_hooks SET secret_ct = $1", raw)
+			require.NoError(t, err)
+		}},
+		{"emails", func(text string, _ []byte) {
+			_, err := w.db.Owner.Exec(ctx, `UPDATE notifications_outbox SET params = params || jsonb_build_object('names', $1::text)
+WHERE template_key = 'acme.renewal_failed'`, text)
+			require.NoError(t, err)
+		}},
+		{"backup manifest", func(text string, _ []byte) { extra["backup manifest"] += text }},
 	}
-	samples := map[string]secretValue{}
+	type sample struct {
+		sec  secretValue
+		text string
+		raw  []byte
+	}
+	raws := map[string][]byte{"EAB HMAC key (base64url)": []byte(w.cred.EABHMAC), "hook secret": []byte(w.cred.HookSecret),
+		"ACME account key active (PKCS#8 PEM)": w.activeAccountDER, "managed key certificate (PKCS#8 DER pieces)": w.leafDER}
+	samples := map[string]sample{}
 	for _, sec := range secs {
-		for _, prefix := range []string{"EAB HMAC key (base64url)", "hook secret", "ACME account key active (PKCS#8 PEM)", "managed key certificate (PKCS#8 DER pieces)"} {
-			if strings.HasPrefix(sec.name, prefix) {
-				samples[prefix] = sec
-			}
+		raw, ok := raws[sec.name]
+		if !ok {
+			continue
 		}
+		require.NotEmpty(t, raw, sec.name)
+		text := sec.forms[len(sec.forms)-1]
+		if strings.HasSuffix(sec.name, "PEM)") {
+			text = strings.ReplaceAll(sec.forms[0], "\n", `\n`) // as a JSON string or a log value spells it
+		}
+		samples[sec.name] = sample{sec: sec, text: text, raw: raw}
 	}
 	require.Len(t, samples, 4)
 	for _, p := range plants {
-		for prefix, sec := range samples {
-			text := sec.forms[len(sec.forms)-1]
-			if strings.HasSuffix(prefix, "PEM)") {
-				text = strings.ReplaceAll(sec.forms[0], "\n", `\n`) // as a JSON string or a log value spells it
-			}
-			p.plant(text)
-			got := w.acmeLeaks([]secretValue{sec}, extra)
-			assert.Contains(t, strings.Join(got, "; "), sec.name+" in "+p.place, "a %s planted in %s is found", prefix, p.place)
+		for name, smp := range samples {
+			p.plant(smp.text, smp.raw)
+			got := w.acmeLeaks([]secretValue{smp.sec}, extra)
+			assert.Contains(t, strings.Join(got, "; "), smp.sec.name+" in "+p.place, "a %s planted in %s is found", name, p.place)
 		}
 	}
+
+	// The raw log sees what the redacting handler hides: a canary logged under a secret-looking key is in the raw log
+	// only (the redaction is the defence; the raw log proves no ACME code hands a secret to a logger at all).
+	hidden := textCanary("hidden", canary("hidden"))
+	w.logger().Debug("planted", "secret", hidden.forms[0])
+	got := strings.Join(w.acmeLeaks([]secretValue{hidden}, extra), "; ")
+	assert.Contains(t, got, "hidden in raw log")
+	assert.NotContains(t, got, "hidden in log")
 }

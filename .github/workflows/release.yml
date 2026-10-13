@@ -74,12 +74,13 @@ jobs:
 
   fuzz:
     runs-on: ubuntu-latest
-    # The largest make target fuzzes three functions for 30 minutes each (90 minutes).
+    # The largest make target fuzzes three functions for 30 minutes each (90 minutes); a target with more is split
+    # (fuzz-acme runs as fuzz-acme-docs and fuzz-acme-order).
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        target: [fuzz-license, fuzz-ssh, fuzz-oidc, fuzz-nginx, fuzz-certs, fuzz-backup, fuzz-acme, fuzz-api]
+        target: [fuzz-license, fuzz-ssh, fuzz-oidc, fuzz-nginx, fuzz-certs, fuzz-backup, fuzz-acme-docs, fuzz-acme-order, fuzz-api]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
