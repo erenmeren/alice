@@ -500,7 +500,7 @@ func TestACMEAutoDeployDeploysANewCertificate(t *testing.T) {
 	}
 	requested := w.h.auditDetails("deployment.requested")
 	require.Len(t, requested, 2)
-	assert.Equal(t, 3, w.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.requested' AND actor_type = 'system' AND actor_name = 'jobs'"))
+	assert.Equal(t, 2, w.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.requested' AND actor_type = 'system' AND actor_name = 'jobs'"))
 	assert.Equal(t, cur.String(), requested[0]["certificate_id"])
 
 	assert.Equal(t, inventory.ACMEDeployRun{}, w.plan(), "busy: nothing twice")
