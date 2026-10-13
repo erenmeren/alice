@@ -33,6 +33,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -94,6 +95,8 @@ type Config struct {
 	Secret secrets.Plaintext
 	// CABundlePEM adds CAs to the system roots for the hook's certificate.
 	CABundlePEM string
+	// BaseRoots replaces the system roots when set (the e2e build's trust of its fake CA; nil in a release build).
+	BaseRoots *x509.CertPool
 	// PropagationWait is how long to wait after a present that did not report readiness. 0 means the default
 	// (5 s); a negative value means no wait; the maximum is 120 s.
 	PropagationWait time.Duration
@@ -190,7 +193,7 @@ func New(cfg Config) (*Solver, error) {
 		}
 		s.suffixes = append(s.suffixes, n)
 	}
-	if s.client, err = transport.New(cfg.CABundlePEM); err != nil {
+	if s.client, err = transport.NewWithRoots(cfg.CABundlePEM, cfg.BaseRoots); err != nil {
 		return nil, ErrCABundle
 	}
 	return s, nil

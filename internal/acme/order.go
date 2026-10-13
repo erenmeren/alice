@@ -16,8 +16,17 @@ import (
 type OrderOption func(*orderOpts)
 
 type orderOpts struct {
+	onOrder   func(orderURL string) error
 	onPresent func(solver.Challenge) error
 	onCleanUp func(solver.Challenge, error)
+}
+
+// WithOnOrder is called with the order's URL as soon as the CA created the order, before any challenge is
+// presented, so the caller can persist it and resume the order after a crash (ResumeOrder). An error stops the
+// order before anything is presented; it is returned as an *Error with reason directory_invalid whose
+// errors.Is still finds the callback's error.
+func WithOnOrder(f func(orderURL string) error) OrderOption {
+	return func(o *orderOpts) { o.onOrder = f }
 }
 
 // WithOnPresent is called with every challenge right before it is presented, so the caller can persist it
@@ -83,6 +92,81 @@ func (c *Client) TestOrder(ctx context.Context, names []string, s solver.Solver,
 	return err
 }
 
+// ResumeOrder finishes an order an earlier process created (its URL came from WithOnOrder) and returns the
+// chain (leaf first, DER), as Order would have: an order the CA already issued is downloaded, an order that is
+// ready is finalized with csrDER (which must hold exactly names, as for Order), an order still processing is
+// waited for. An order that is still pending (its challenges were never validated) or invalid cannot be resumed:
+// *Error not_issued_in_time with ErrOrderNotResumable (the caller abandons it). Nothing is presented.
+func (c *Client) ResumeOrder(ctx context.Context, orderURL string, names []string, csrDER []byte) ([][]byte, error) {
+	norm, err := NormalizeNames(names)
+	if err != nil {
+		return nil, err
+	}
+	csr, err := checkCSR(csrDER, norm)
+	if err != nil {
+		return nil, err
+	}
+	if c.cfg.Key == nil {
+		return nil, newError(ReasonAccountRejected, ErrNoKey)
+	}
+	if orderURL == "" {
+		return nil, newError(ReasonNotIssuedInTime, ErrOrderNotResumable)
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.cfg.OrderTimeout)
+	defer cancel()
+	if _, err := c.Discover(ctx); err != nil {
+		return nil, c.orderTimeout(err)
+	}
+	var o *xacme.Order
+	if err := c.call(ctx, func(ctx context.Context) error {
+		var err error
+		o, err = c.lib.GetOrder(ctx, orderURL)
+		return err
+	}); err != nil {
+		return nil, c.classify(err, opOrder, "", "")
+	}
+	var chain [][]byte
+	err = c.call(ctx, func(ctx context.Context) error {
+		var err error
+		switch o.Status {
+		case xacme.StatusProcessing:
+			if o, err = c.lib.WaitOrder(ctx, orderURL); err != nil {
+				return err
+			}
+			if o.Status != xacme.StatusValid {
+				return errNotResumable
+			}
+			chain, err = c.lib.FetchCert(ctx, o.CertURL, true)
+		case xacme.StatusValid:
+			chain, err = c.lib.FetchCert(ctx, o.CertURL, true)
+		case xacme.StatusReady:
+			chain, _, err = c.lib.CreateOrderCert(ctx, o.FinalizeURL, csrDER, true)
+		default:
+			return errNotResumable
+		}
+		return err
+	})
+	if errors.Is(err, errNotResumable) {
+		return nil, newError(ReasonNotIssuedInTime, ErrOrderNotResumable)
+	}
+	if err != nil {
+		return nil, c.classify(err, opOrder, "", "")
+	}
+	if err := checkChain(chain, csr.PublicKey, norm); err != nil {
+		return nil, err
+	}
+	return chain, nil
+}
+
+// errNotResumable marks an order state ResumeOrder cannot finish (mapped to ErrOrderNotResumable).
+var errNotResumable = errors.New("acme: the order cannot be resumed")
+
+// callbackCause hides a WithOnOrder callback's error text behind ErrBadAnswer but keeps it for errors.Is/As.
+type callbackCause struct{ err error }
+
+func (c callbackCause) Error() string   { return "acme: the order's URL could not be recorded" }
+func (c callbackCause) Unwrap() []error { return []error{c.err} }
+
 // pendingChallenge is a challenge chosen for a pending authorization.
 type pendingChallenge struct {
 	authzURL string
@@ -125,6 +209,11 @@ func (c *Client) authorize(ctx context.Context, names []string, s solver.Solver,
 	}
 	if o.URI == "" || len(o.AuthzURLs) == 0 || len(o.AuthzURLs) > len(names) {
 		return nil, newError(ReasonDirectoryInvalid, ErrBadAnswer)
+	}
+	if oo.onOrder != nil {
+		if err := oo.onOrder(o.URI); err != nil {
+			return nil, &Error{Reason: ReasonDirectoryInvalid, cause: callbackCause{err: err}}
+		}
 	}
 
 	var presented []solver.Challenge

@@ -147,6 +147,8 @@ var (
 	ErrSolver = errors.New("acme: the challenge could not be published")
 	// ErrBadAnswer is a CA answer that does not follow RFC 8555 (unparsable, wrong certificate, bad token).
 	ErrBadAnswer = errors.New("acme: the CA's answer is not valid")
+	// ErrOrderNotResumable is an order ResumeOrder cannot finish: still pending (never validated) or invalid.
+	ErrOrderNotResumable = errors.New("acme: the order cannot be finished any more")
 	// ErrRolloverUnsupported is a CA without keyChange.
 	ErrRolloverUnsupported = errors.New("acme: the CA does not support account key rollover")
 )

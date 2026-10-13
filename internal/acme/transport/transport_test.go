@@ -67,7 +67,7 @@ func TestBadBundle(t *testing.T) {
 
 func TestHTTPRefusedBeforeDial(t *testing.T) {
 	var dials atomic.Int32
-	c, err := build("", func(context.Context, string, string) (net.Conn, error) { dials.Add(1); return nil, errors.New("x") }, 0)
+	c, err := build("", nil, func(context.Context, string, string) (net.Conn, error) { dials.Add(1); return nil, errors.New("x") }, 0)
 	require.NoError(t, err)
 	for _, u := range []string{"http://example.test/", "https://user:pw@example.test/", "https://user@example.test/", "ftp://example.test/"} {
 		err = getErr(t, c, u)
@@ -86,7 +86,7 @@ func TestRedirectNotFollowed(t *testing.T) {
 	defer s.Close()
 	var mu sync.Mutex
 	var dialed []string
-	c, err := build(serverPEM(t, s), func(ctx context.Context, network, addr string) (net.Conn, error) {
+	c, err := build(serverPEM(t, s), nil, func(ctx context.Context, network, addr string) (net.Conn, error) {
 		mu.Lock()
 		dialed = append(dialed, addr)
 		mu.Unlock()
@@ -142,7 +142,7 @@ func TestMetadataAddressRefused(t *testing.T) {
 
 func TestPrivateAddressAllowed(t *testing.T) {
 	var got atomic.Value
-	c, err := build("", func(_ context.Context, _, addr string) (net.Conn, error) {
+	c, err := build("", nil, func(_ context.Context, _, addr string) (net.Conn, error) {
 		got.Store(addr)
 		return nil, errors.New("fake dial")
 	}, 0)
@@ -177,7 +177,7 @@ func TestTimeout(t *testing.T) {
 	s := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
 	defer s.Close()
 	defer close(release)
-	c, err := build(serverPEM(t, s), nil, 150*time.Millisecond)
+	c, err := build(serverPEM(t, s), nil, nil, 150*time.Millisecond)
 	require.NoError(t, err)
 	start := time.Now()
 	err = getErr(t, c, s.URL)
@@ -210,7 +210,7 @@ func getErr(t *testing.T, c *http.Client, url string) error {
 
 func TestSchemeAndHostForms(t *testing.T) {
 	var got atomic.Value
-	c, err := build("", func(_ context.Context, _, addr string) (net.Conn, error) {
+	c, err := build("", nil, func(_ context.Context, _, addr string) (net.Conn, error) {
 		got.Store(addr)
 		return nil, errors.New("fake dial")
 	}, 0)
@@ -228,7 +228,8 @@ func TestSchemeAndHostForms(t *testing.T) {
 	require.Equal(t, "example.test.:443", got.Load())
 }
 
-// TestNoExportedDialSeam proves the exported API cannot replace the dialer: New takes only the CA bundle and no
+// TestNoExportedDialSeam proves the exported API cannot replace the dialer: New takes only the CA bundle (NewWithRoots
+// also a base pool of roots) and no
 // exported type of the package has a function-typed field or method parameter.
 func TestNoExportedDialSeam(t *testing.T) {
 	fset := token.NewFileSet()
@@ -240,8 +241,14 @@ func TestNoExportedDialSeam(t *testing.T) {
 				switch d := d.(type) {
 				case *ast.FuncDecl:
 					if d.Recv == nil && d.Name.IsExported() {
-						require.Equal(t, 1, d.Type.Params.NumFields(), d.Name.Name)
+						// The CA bundle, and for NewWithRoots the base pool: data, never a function.
 						require.Equal(t, "string", fmt.Sprint(d.Type.Params.List[0].Type), d.Name.Name)
+						for _, p := range d.Type.Params.List[1:] {
+							star, ok := p.Type.(*ast.StarExpr)
+							require.True(t, ok, d.Name.Name)
+							require.Equal(t, "&{x509 CertPool}", fmt.Sprint(star.X), d.Name.Name)
+						}
+						require.LessOrEqual(t, d.Type.Params.NumFields(), 2, d.Name.Name)
 					}
 				case *ast.GenDecl:
 					for _, sp := range d.Specs {
@@ -258,4 +265,36 @@ func TestNoExportedDialSeam(t *testing.T) {
 			}
 		}
 	}
+}
+
+// NewWithRoots trusts its base pool (and the bundle) instead of the system roots, and leaves the base unchanged.
+func TestNewWithRootsUsesTheBase(t *testing.T) {
+	s := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("ok")) }))
+	defer s.Close()
+	base := x509.NewCertPool()
+	base.AddCert(s.Certificate())
+	c, err := NewWithRoots("", base)
+	require.NoError(t, err)
+	res, err := get(t, c, s.URL)
+	require.NoError(t, err)
+	_ = res.Body.Close()
+
+	// The bundle is added to a copy: the base itself never learns it.
+	empty := x509.NewCertPool()
+	c, err = NewWithRoots(serverPEM(t, s), empty)
+	require.NoError(t, err)
+	res, err = get(t, c, s.URL)
+	require.NoError(t, err)
+	_ = res.Body.Close()
+	require.True(t, empty.Equal(x509.NewCertPool()), "the base pool is not changed")
+	c, err = NewWithRoots("", empty)
+	require.NoError(t, err)
+	var ua x509.UnknownAuthorityError
+	require.ErrorAs(t, getErr(t, c, s.URL), &ua, "an empty base trusts nothing, not even the system roots")
+
+	_, err = NewWithRoots("garbage", base)
+	require.ErrorIs(t, err, ErrCABundle)
+	c, err = NewWithRoots("", nil)
+	require.NoError(t, err)
+	require.ErrorAs(t, getErr(t, c, s.URL), &ua, "nil means the system roots")
 }

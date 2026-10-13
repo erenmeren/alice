@@ -39,12 +39,22 @@ type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // New builds the client. caPEM may be empty; otherwise its certificates are added to the system roots. There is
 // no exported way to replace the dialer or the budget: every connection goes through netaddr.
-func New(caPEM string) (*http.Client, error) { return build(caPEM, nil, 0) }
+func New(caPEM string) (*http.Client, error) { return build(caPEM, nil, nil, 0) }
+
+// NewWithRoots is New with base instead of the system roots (nil means the system roots): the e2e build's trust
+// of its fake CA (cmd/alice acmeRoots). base is not changed: caPEM is added to a copy.
+func NewWithRoots(caPEM string, base *x509.CertPool) (*http.Client, error) {
+	return build(caPEM, base, nil, 0)
+}
 
 // build is New with the test seams: dial (nil means netaddr) and budget (zero means Timeout).
-func build(caPEM string, dial dialFunc, budget time.Duration) (*http.Client, error) {
-	roots, err := x509.SystemCertPool()
-	if err != nil || roots == nil {
+func build(caPEM string, base *x509.CertPool, dial dialFunc, budget time.Duration) (*http.Client, error) {
+	var roots *x509.CertPool
+	if base != nil {
+		roots = base.Clone()
+	} else if sys, err := x509.SystemCertPool(); err == nil && sys != nil {
+		roots = sys
+	} else {
 		roots = x509.NewCertPool()
 	}
 	if caPEM != "" && !roots.AppendCertsFromPEM([]byte(caPEM)) {

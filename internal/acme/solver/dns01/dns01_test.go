@@ -366,6 +366,13 @@ func TestCABundleHonoured(t *testing.T) {
 	s, err := New(Config{URL: st.URL, Secret: secrets.NewPlaintext([]byte(testSecret)), PropagationWait: -1, AllowedSuffixes: []string{"example.test"}})
 	require.NoError(t, err)
 	assert.Equal(t, acme.ReasonHookRefused, reasonOf(s.Present(ctx5(t), chal("a.example.test", "v"))))
+	// BaseRoots (the e2e build's fake CA) is trusted instead of the system roots.
+	base := x509.NewCertPool()
+	base.AddCert(st.Certificate())
+	s, err = New(Config{URL: st.URL, Secret: secrets.NewPlaintext([]byte(testSecret)), PropagationWait: -1, AllowedSuffixes: []string{"example.test"},
+		BaseRoots: base})
+	require.NoError(t, err)
+	require.NoError(t, s.Present(ctx5(t), chal("a.example.test", "v")))
 }
 
 func TestContextDeadlineAndCleanupContext(t *testing.T) {
