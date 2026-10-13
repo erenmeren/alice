@@ -41,6 +41,7 @@
   "alice/internal/acme/transport": 92,
   "alice/internal/acme": 92,
   "alice/internal/acme/solver": 95,
+  "alice/internal/acme/solver/dns01": 90,
   "alice/internal/testutil/fakesmtp": 92,
   "alice/internal/testutil/fakeidp": 92,
   "alice/internal/testutil/fakeacme": 90,

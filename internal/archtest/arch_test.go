@@ -60,6 +60,9 @@ var rules = map[string][]string{
 	// the API or the inventory (they call it, not the other way round). The solver contract knows the platform only.
 	"alice/internal/acme":        {platform, "alice/internal/acme/transport", "alice/internal/acme/solver"},
 	"alice/internal/acme/solver": {platform},
+	// The DNS-01 hook solver implements the solver contract, goes out through the guarded transport, reports its
+	// failures as the client's *acme.Error and holds the hook secret as a secrets.Plaintext. No database.
+	"alice/internal/acme/solver/dns01": {platform, "alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/secrets"},
 	// Phase 8: the backup container is pure (io.Reader/io.Writer only, no file, socket or database); the dump
 	// knows no other Alice module; the backup module runs the dump, the container and the restore; the audit
 	// forwarder reads the audit log and nothing else.
@@ -92,6 +95,7 @@ var denied = map[string][]string{
 	"alice/internal/backup/format":                   {platform, "alice/internal/platform/db/..."},
 	"alice/internal/acme":                            {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver":                     {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver/dns01":               {"alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -303,6 +307,15 @@ func TestAllowed(t *testing.T) {
 		{"acme transport to secrets denied", "alice/internal/acme/transport", "alice/internal/secrets", false},
 		{"acme transport to platform/db denied", "alice/internal/acme/transport", "alice/internal/platform/db", false},
 		{"acme to transport allowed", "alice/internal/acme", "alice/internal/acme/transport", true},
+		{"dns01 to solver contract allowed", "alice/internal/acme/solver/dns01", "alice/internal/acme/solver", true},
+		{"dns01 to transport allowed", "alice/internal/acme/solver/dns01", "alice/internal/acme/transport", true},
+		{"dns01 to acme client allowed", "alice/internal/acme/solver/dns01", "alice/internal/acme", true},
+		{"dns01 to secrets allowed", "alice/internal/acme/solver/dns01", "alice/internal/secrets", true},
+		{"dns01 to platform/db denied", "alice/internal/acme/solver/dns01", "alice/internal/platform/db", false},
+		{"dns01 to inventory denied", "alice/internal/acme/solver/dns01", "alice/internal/inventory", false},
+		{"dns01 to fakeacme denied", "alice/internal/acme/solver/dns01", "alice/internal/testutil/fakeacme", false},
+		{"solver contract to dns01 denied", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", false},
+		{"acme to dns01 denied", "alice/internal/acme", "alice/internal/acme/solver/dns01", false},
 		{"acme to solver allowed", "alice/internal/acme", "alice/internal/acme/solver", true},
 		{"acme to netaddr allowed", "alice/internal/acme", "alice/internal/platform/netaddr", true},
 		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},
