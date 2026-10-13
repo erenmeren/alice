@@ -1,6 +1,8 @@
-import type { APIRequestContext, Page } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Page } from '@playwright/test';
 import {
   ADMIN,
+  acmeCA,
+  acmeReset,
   apiAs,
   azureReset,
   browserLocale,
@@ -14,6 +16,7 @@ import {
   signOut,
   test,
   translator,
+  type Api,
   type Lang,
 } from './helpers';
 
@@ -23,7 +26,7 @@ import {
 // list every finding of a run instead of stopping at the first.
 const WIDTHS = [390, 768, 1024, 1440] as const;
 const ROUTES = [
-  '/', '/?view=assurance', '/certificates', '/ssh-keys', '/servers', '/key-vaults', '/deployments', '/rotations',
+  '/', '/?view=assurance', '/certificates', '/acme', '/ssh-keys', '/servers', '/key-vaults', '/deployments', '/rotations',
   '/audit', '/users', '/license', '/account', '/tokens',
 ] as const;
 const SETTINGS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso'] as const;
@@ -177,8 +180,39 @@ async function install(page: Page, request: APIRequestContext, lang: Lang): Prom
   });
   expect(res.status(), await res.text()).toBe(201);
   await drainJobs(request);
+  await addAcmeCertificate(api, request);
   await page.reload();
   return totpSecret;
+}
+
+// addAcmeCertificate adds the fake certificate authority (account registered), its DNS hook and one issued certificate,
+// so the Issued certificates list, its status page and Settings → Certificate authorities have content too.
+async function addAcmeCertificate(api: Api, request: APIRequestContext): Promise<void> {
+  const creds = acmeReset();
+  const ok = async (res: APIResponse) => {
+    expect(res.ok(), await res.text()).toBe(true);
+    return (await res.json()) as { id: string; terms_of_service_url: string };
+  };
+  const provider = await ok(
+    await api.post('/api/v1/acme/providers', {
+      name: 'Phase 9 CA',
+      directory_url: creds.directory_url,
+      ca_bundle_pem: acmeCA(),
+      eab_kid: creds.eab_kid,
+      eab_hmac: creds.eab_hmac,
+      allowed_suffixes: ['example.test'],
+    }),
+  );
+  const preview = await ok(await api.post(`/api/v1/acme/providers/${provider.id}/preview`));
+  await ok(await api.post(`/api/v1/acme/providers/${provider.id}/account`, { tos_accepted: true, accepted_terms_url: preview.terms_of_service_url }));
+  const hook = await ok(
+    await api.post('/api/v1/acme/hooks', { name: 'Phase 9 hook', url: creds.hook_url, secret: creds.hook_secret, allowed_suffixes: ['example.test'], propagation_wait_seconds: 0 }),
+  );
+  const cert = await ok(
+    await api.post('/api/v1/acme/certificates', { provider_id: provider.id, names: ['www.phase9.example.test', '*.phase9.example.test'], challenge: 'dns01', hook_id: hook.id }),
+  );
+  await ok(await api.post(`/api/v1/acme/certificates/${cert.id}/order`));
+  await drainJobs(request);
 }
 
 for (const lang of ['en', 'tr'] as Lang[]) {
@@ -201,6 +235,9 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       details.push(vault!);
       const kvCertificate = await firstDetail(page, vault!, `${vault}/certificates/`);
       if (kvCertificate) details.push(kvCertificate);
+      const acme = await firstDetail(page, '/acme', '/acme/');
+      expect(acme, 'the issued certificate added by install').not.toBeNull();
+      details.push(acme!);
       test.info().annotations.push({ type: 'detail pages scanned', description: details.join(' ') });
       console.log(`detail pages scanned (${lang}): ${details.join(' ')}`);
       for (const scheme of ['light', 'dark'] as const) {

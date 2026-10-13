@@ -34,14 +34,19 @@ services:
   # shim. Playwright prepares it with the setup script Alice shows (alice-e2e-prepare), rotates its
   # host key (alice-e2e-rotate-hostkey) and drives Nginx (alice-e2e-newcert, -served, -reload-mode,
   # -test-mode, -nginx-reset) through "docker compose exec". Alice reaches it as sshtarget:22 and
-  # sshtarget:443 on the internal backend network; it publishes nothing.
+  # sshtarget:443 on the internal backend network; it publishes nothing. Docker's DNS also answers
+  # www.example.test with it on that network: the ACME HTTP-01 journey (web/e2e/phase10.spec.ts) needs the
+  # name to point at the server, for Alice's own check of the token file before the fake CA fetches it
+  # from port 80 (the webroot nginx-www.conf publishes).
   sshtarget:
     image: alice-e2e-sshtarget
     build:
       context: ..
       dockerfile: test/images/e2e-target/Dockerfile
     init: true
-    networks: [backend]
+    networks:
+      backend:
+        aliases: [www.example.test]
     healthcheck:
       test: ["CMD-SHELL", "pgrep -x sshd >/dev/null && pgrep -x nginx >/dev/null"]
       interval: 5s

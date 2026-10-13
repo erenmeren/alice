@@ -49,6 +49,7 @@ RUN set -eu; \
     dpkg-divert --quiet --local --rename --divert /usr/lib/alice-e2e/nginx --add /usr/sbin/nginx; \
     echo ok > /etc/alice-e2e/reload-mode; \
     echo ok > /etc/alice-e2e/test-mode; \
+    install -d -m 0755 -o root -g root /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge; \
     [ ! -e /usr/bin/systemctl ]
 COPY test/images/e2e-target/nginx-www.conf /etc/nginx/conf.d/www.conf
 COPY test/images/e2e-target/nginx-wrapper /usr/sbin/nginx

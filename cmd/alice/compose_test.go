@@ -129,6 +129,8 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 	require.True(t, ok)
 	assert.Empty(t, target.Ports, "the SSH target publishes no port on the host")
 	assert.Equal(t, []string{"backend"}, target.Networks.names())
+	// Only the test website's name points at the target (the HTTP-01 journey): never a real or another service's name.
+	assert.Equal(t, []string{"www.example.test"}, target.Networks["backend"].Aliases)
 	assert.True(t, target.Init, "an init process reaps sshd's children")
 	assert.Equal(t, "alice-e2e-sshtarget", target.Image)
 	assert.Equal(t, "..", target.Build.Context)

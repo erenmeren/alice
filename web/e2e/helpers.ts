@@ -1136,6 +1136,100 @@ export function azureAddCertificate(name: string, opts: { cn: string; root: bool
   return azureCtl<{ version: string }>('add-cert', name, '--cn', opts.cn, '--root', String(opts.root)).version;
 }
 
+// --- Phase 10: the fake ACME certificate authority (compose service fakeacme, alias acme.test.alice) ---
+
+// acmeCtl runs "alice-fakeacme ctl ..." in the e2e stack's service "fakeacme" (the same alice-e2e* project guard as
+// targetExec: never the owner stack) and parses the one JSON object it prints.
+export function acmeCtl<T = Record<string, unknown>>(...args: string[]): T {
+  return JSON.parse(composeExec('fakeacme', ['/alice-fakeacme', 'ctl', ...args])) as T;
+}
+
+export interface AcmeCredentials {
+  directory_url: string;
+  base_url: string;
+  terms_url: string;
+  eab_kid: string;
+  eab_hmac: string;
+  hook_url: string;
+  hook_secret: string;
+}
+
+// acmeCredentials are the fake CA's directory, terms, external account binding (kid + HMAC) and its built-in DNS
+// hook's address and secret, generated when the fake started (they survive acmeReset); nothing of it is committed.
+export function acmeCredentials(): AcmeCredentials {
+  return acmeCtl<AcmeCredentials>('credentials');
+}
+
+// acmeReset puts the fake back to its start state (no accounts, orders, DNS records, faults, HTTP-01 targets or
+// counters; default lifetime, ARI and challenges; real clock) and returns its credentials. POST /test/reset resets
+// only Alice, so every Phase 10 test calls this too. The CA certificates and the credentials stay.
+export function acmeReset(): AcmeCredentials {
+  const creds = acmeCtl<AcmeCredentials>('reset');
+  acmeCtl('clock', 'real');
+  return creds;
+}
+
+// acmeCA is what an Administrator of a private CA pastes as the authority's CA bundle: the fake's TLS CA (its
+// directory's certificate) and the root its issued certificates chain to (the chains it sends omit the root, so
+// without it Alice would call every issued chain incomplete and hold its automatic deployment).
+export function acmeCA(): string {
+  const ca = acmeCtl<{ ca_pem: string; issuer_root_pem: string }>('ca');
+  return `${ca.ca_pem.trim()}\n${ca.issuer_root_pem.trim()}\n`;
+}
+
+// acmeFault makes an endpoint of the fake fail (rateLimited answers 429 with Retry-After and the ACME rateLimited
+// problem) for times requests (0: until cleared), or clears every fault.
+export function acmeFault(change: { endpoint: string; kind: 'badNonce' | 'rateLimited' | 'serverInternal' | 'slow' | 'giant'; times?: number; retryAfter?: number } | 'clear'): void {
+  if (change === 'clear') {
+    acmeCtl('fault', 'clear');
+    return;
+  }
+  const args = ['fault', 'set', change.endpoint, change.kind];
+  if (change.times !== undefined) args.push('--times', String(change.times));
+  if (change.retryAfter !== undefined) args.push('--retry-after', String(change.retryAfter));
+  acmeCtl(...args);
+}
+
+// acmeCounters counts what the fake was sent since its last reset or clear-requests: "requests" counts every request
+// (unknown paths too), the endpoint names (new-order, finalize, certificate, hook, ...) theirs, "issued" the
+// certificates it issued, "hook-present"/"hook-cleanup" the calls of its DNS hook. A missing key is 0.
+export function acmeCounters(): Record<string, number> {
+  return acmeCtl<Record<string, number>>('counters');
+}
+
+// acmeClearRequests empties the request log and the counters (the CA state stays).
+export function acmeClearRequests(): void {
+  acmeCtl('clear-requests');
+}
+
+// acmeDns is the fake's DNS table (name -> TXT values): what the DNS hook published and has not removed yet.
+export function acmeDns(): Record<string, string[]> {
+  return acmeCtl<Record<string, string[]>>('dns', 'list');
+}
+
+// acmeLifetime sets the lifetime of the certificates the fake issues from now on (a Go duration: 30m, 720h).
+export function acmeLifetime(duration: string): void {
+  acmeCtl('lifetime', duration);
+}
+
+// acmeHttpTarget maps a name to the address the fake fetches its HTTP-01 proof from (host:port, or off). The fake
+// dials nothing that is not mapped.
+export function acmeHttpTarget(name: string, addr: string): void {
+  acmeCtl('http-target', name, addr);
+}
+
+// acmeAdvertise replaces an address of the fake's directory (termsOfService, keyChange, ...); no URL restores it,
+// "off" removes the field.
+export function acmeAdvertise(field: string, url?: string): void {
+  acmeCtl('advertise', field, ...(url ? [url] : []));
+}
+
+// acmeSyncClock puts the fake's clock on Alice's (the e2e clock the journeys move), so the certificates it issues are
+// valid in Alice's time: issued "now" there, due for renewal when Alice's clock says so.
+export async function acmeSyncClock(request: APIRequestContext): Promise<void> {
+  acmeCtl('clock', new Date(Math.floor((await serverNow(request)) / 1000) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z'));
+}
+
 // --- Shared screen helpers (moved here from phase6.spec.ts; Phase 7 uses them too) ---
 
 // answerStepUp confirms the step-up dialog with a fresh code if the server asks for one before done appears.

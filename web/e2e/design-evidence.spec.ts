@@ -11,7 +11,7 @@ test.skip(!process.env.ALICE_DESIGN_EVIDENCE, 'set ALICE_DESIGN_EVIDENCE=1 (make
 const OUT = resolve(process.cwd(), '../bin/design-evidence');
 const WIDTHS = [1440, 1024, 768, 390] as const;
 const ROUTES: [string, string][] = [
-  ['overview', '/'], ['assurance', '/?view=assurance'], ['certificates', '/certificates'], ['ssh-keys', '/ssh-keys'],
+  ['overview', '/'], ['assurance', '/?view=assurance'], ['certificates', '/certificates'], ['issued-certificates', '/acme'], ['ssh-keys', '/ssh-keys'],
   ['servers', '/servers'], ['key-vaults', '/key-vaults'], ['deployments', '/deployments'], ['rotations', '/rotations'],
   ['audit', '/audit'], ['people', '/users'], ['license', '/license'], ['account', '/account'], ['tokens', '/tokens'],
   ...(['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso'] as const).map((tab): [string, string] => [`settings-${tab}`, `/settings?tab=${tab}`]),

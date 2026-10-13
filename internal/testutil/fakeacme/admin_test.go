@@ -69,6 +69,9 @@ func TestAdminControlsTheFake(t *testing.T) {
 	cred := a.ok("GET", "/credentials")
 	assert.Equal(t, s.Credentials().HookSecret, cred["hook_secret"])
 	assert.Equal(t, s.DirectoryURL(), cred["directory_url"])
+	ca := a.ok("GET", "/ca")
+	assert.Equal(t, string(s.CAPEM()), ca["ca_pem"])
+	assert.Equal(t, string(s.IssuerRootPEM()), ca["issuer_root_pem"])
 
 	// DNS table.
 	a.ok("POST", "/dns", "name", "_acme-challenge.X.test.", "value", "v1")

@@ -147,6 +147,11 @@ func TestServeWritesTheCAAndServesTheDirectory(t *testing.T) {
 	creds := st.ctlJSON("credentials")
 	assert.NotContains(t, logs, creds["hook_secret"])
 	assert.NotContains(t, logs, creds["eab_hmac"])
+	// ctl ca prints the TLS CA the client above trusts (what a CA bundle field takes).
+	caDoc := st.ctlJSON("ca")
+	assert.Contains(t, caDoc["ca_pem"], "-----BEGIN CERTIFICATE-----")
+	assert.Contains(t, caDoc["issuer_root_pem"], "-----BEGIN CERTIFICATE-----")
+	assert.NotEqual(t, caDoc["ca_pem"], caDoc["issuer_root_pem"])
 }
 
 func TestAnOrderThroughTheTool(t *testing.T) {
@@ -223,7 +228,7 @@ func TestHookThroughTheTool(t *testing.T) {
 func TestEveryCtlCommandReachesTheFake(t *testing.T) {
 	st := startStack(t, func(c *serveConfig) { c.Alternates = 1; c.RequireEAB = true })
 	for _, args := range [][]string{
-		{"ping"}, {"credentials"}, {"counters"}, {"requests"}, {"clear-requests"},
+		{"ping"}, {"credentials"}, {"ca"}, {"counters"}, {"requests"}, {"clear-requests"},
 		{"fault", "set", "new-order", "rateLimited", "--times", "2", "--retry-after", "30"},
 		{"fault", "set", "*", "slow", "--delay", "10ms"},
 		{"fault", "clear"},

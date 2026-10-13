@@ -64,7 +64,7 @@ Commands:
         API on --admin (default 127.0.0.1:9091, loopback only), the TLS CA written to --ca-out.
   ctl [--admin ADDR] <command> [args]
         Drive a running fake (JSON on stdout, errors on stderr, exit 1 on failure):
-        ping | credentials | reset | counters | requests | clear-requests
+        ping | credentials | ca | reset | counters | requests | clear-requests
         fault set ENDPOINT KIND [--times N] [--retry-after SECONDS] [--delay DURATION] | fault clear
           kinds: badNonce rateLimited serverInternal slow giant; endpoint * = all
         dns set NAME VALUE | dns clear [NAME [VALUE]] | dns list
@@ -282,6 +282,7 @@ func onOff(v string) string { return map[string]string{"on": "true", "off": "fal
 var ctlCommands = map[string]ctlCommand{
 	"ping":           get("/ping"),
 	"credentials":    get("/credentials"),
+	"ca":             get("/ca"),
 	"reset":          post("/reset"),
 	"counters":       get("/counters"),
 	"requests":       get("/requests"),
