@@ -20,6 +20,9 @@ import (
 // SQLSTATE of the ACME order trigger (00013).
 const orderFrozen = "Z1017" // a finished ACME order is never rewritten
 
+// SQLSTATE of the ACME account delete trigger (00013).
+const accountKept = "Z1018" // only a pending rollover key is ever deleted
+
 var acmeTables = []string{"acme_providers", "acme_accounts", "acme_hooks", "acme_certificates", "acme_orders", "acme_bindings"}
 
 // envelope is the dummy sealed-secret column values (the migration checks shapes, not contents).
@@ -100,6 +103,7 @@ func TestAcmeConstraints(t *testing.T) {
 	}
 	provider := `INSERT INTO acme_providers (id, name, directory_url, preset, created_at, updated_at) VALUES ($1, $2, $3, $4, now(), now())`
 	bad("http directory", provider, uuid.New(), "x1", "http://ca.example/dir", "custom")
+	bad("directory with userinfo", provider, uuid.New(), "x1u", "https://user:pw@ca.example/dir", "custom")
 	bad("unknown preset", provider, uuid.New(), "x2", "https://ca.example/dir", "buypass")
 	bad("kid without secret", `INSERT INTO acme_providers (id, name, directory_url, preset, eab_kid, created_at, updated_at)
 VALUES ($1, 'x3', 'https://ca.example/dir', 'custom', 'kid', now(), now())`, uuid.New())
@@ -147,6 +151,38 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, now(), now())`
 	bad("half a pending key", `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, pending_key_ct) VALUES ($1, $2, 'test', 'running', now(), '\x01')`,
 		uuid.New(), w.acmeCert)
 	bad("presented is an array", `UPDATE acme_orders SET presented = '{}'::jsonb WHERE state = 'running'`)
+
+	hookWaits := `UPDATE acme_hooks SET propagation_wait_seconds = $2, poll_timeout_seconds = $3 WHERE id = $1`
+	bad("propagation wait over 120 s", hookWaits, w.hook, 121, 1)
+	bad("poll timeout 0", hookWaits, w.hook, 0, 0)
+	bad("poll timeout over 100 s", hookWaits, w.hook, 0, 101)
+	bad("waits over the 120 s call budget", hookWaits, w.hook, 30, 91)
+	_, err = d.App.Exec(ctx, hookWaits, w.hook, 20, 100)
+	require.NoError(t, err, "120 s together is the budget")
+}
+
+// A rollover the CA did not take deletes its pending key row; every other account row is history.
+func TestAcmeOnlyAPendingAccountKeyIsDeleted(t *testing.T) {
+	d := pgtest.New(t)
+	w := seedAcme(t, d)
+	ctx := context.Background()
+	pending := uuid.New()
+	_, err := d.App.Exec(ctx, `INSERT INTO acme_accounts (id, provider_id, key_ct, key_nonce, key_wrapped_dek, key_version, state, created_at, updated_at)
+VALUES ($1, $2, `+envelope+`, 'pending_rollover', now(), now())`, pending, w.provider)
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", w.account)
+	assert.Equal(t, accountKept, sqlState(err), "the active account is history")
+	for _, st := range []string{"retired", "deactivated"} {
+		_, err = d.App.Exec(ctx, "UPDATE acme_certificates SET deleted_at = now() WHERE account_id = $1", w.account)
+		require.NoError(t, err)
+		_, err = d.App.Exec(ctx, "UPDATE acme_accounts SET state = $2 WHERE id = $1", w.account, st)
+		require.NoError(t, err)
+		_, err = d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", w.account)
+		assert.Equal(t, accountKept, sqlState(err), st)
+	}
+	tag, err := d.App.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1", pending)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), tag.RowsAffected())
 }
 
 func TestAcmeOrdersAreFrozenOnceFinished(t *testing.T) {

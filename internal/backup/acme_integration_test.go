@@ -94,11 +94,10 @@ func TestACMEBackupCycle(t *testing.T) {
 		assert.Equal(t, want, m.Tables[table], table)
 	}
 
-	// The installation loses its ACME data after the backup.
-	for _, table := range []string{"acme_bindings", "acme_orders", "acme_certificates", "acme_hooks", "acme_accounts", "acme_providers"} {
-		_, err := e.db.Owner.Exec(e.ctx, "DELETE FROM "+table)
-		require.NoError(t, err, table)
-	}
+	// The installation loses its ACME data after the backup (TRUNCATE: an account row other than a pending rollover
+	// key refuses a DELETE, Z1018).
+	_, err = e.db.Owner.Exec(e.ctx, "TRUNCATE acme_bindings, acme_orders, acme_certificates, acme_hooks, acme_accounts, acme_providers")
+	require.NoError(t, err)
 	require.Zero(t, e.count("SELECT count(*) FROM acme_accounts"))
 
 	res, err := e.restore(info.Path, nil)

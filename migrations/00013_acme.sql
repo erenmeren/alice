@@ -13,7 +13,7 @@
 CREATE TABLE acme_providers (
     id                   uuid PRIMARY KEY,
     name                 citext NOT NULL CHECK (char_length(name::text) BETWEEN 1 AND 100),
-    directory_url        text NOT NULL CHECK (directory_url ~ '^https://[^/[:space:]]' AND char_length(directory_url) <= 2048),
+    directory_url        text NOT NULL CHECK (directory_url ~ '^https://[^/@[:space:]]+(/|$)' AND char_length(directory_url) <= 2048),
     ca_bundle_pem        text NOT NULL DEFAULT '' CHECK (char_length(ca_bundle_pem) <= 262144),
     preset               text NOT NULL DEFAULT 'custom' CHECK (preset IN ('letsencrypt', 'letsencrypt_staging', 'zerossl', 'custom')),
     eab_kid              text NOT NULL DEFAULT '' CHECK (char_length(eab_kid) <= 255),
@@ -57,8 +57,25 @@ CREATE UNIQUE INDEX acme_accounts_one_active ON acme_accounts (provider_id) WHER
 CREATE UNIQUE INDEX acme_accounts_one_pending ON acme_accounts (provider_id) WHERE state = 'pending_rollover';
 CREATE INDEX acme_accounts_provider ON acme_accounts (provider_id, created_at DESC, id DESC);
 
+-- A rollover the CA did not take discards its pending key: the pending_rollover row is deleted. Every other account row
+-- is history and is never deleted. SQLSTATE Z1018.
+-- +goose StatementBegin
+CREATE FUNCTION acme_accounts_protect_delete() RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
+BEGIN
+    IF OLD.state <> 'pending_rollover' THEN
+        RAISE EXCEPTION 'only a pending ACME account key can be deleted' USING ERRCODE = 'Z1018';
+    END IF;
+    RETURN OLD;
+END $$;
+-- +goose StatementEnd
+CREATE TRIGGER acme_accounts_delete_pending_only BEFORE DELETE ON acme_accounts
+    FOR EACH ROW EXECUTE FUNCTION acme_accounts_protect_delete();
+
 -- A DNS-01 hook: an HTTPS endpoint Alice calls to publish and remove a challenge record. The secret (bearer token or
 -- HMAC key, by auth_mode) is sealed (AAD acme_hooks/<id>/secret). allowed_suffixes as the provider's (A9).
+-- propagation_wait_seconds (0 = no wait) and poll_timeout_seconds bound the hook solver's waits (dns01 limits 120 s and
+-- 100 s); together they stay within the ACME client's 120 s call budget the challenge is published under.
 CREATE TABLE acme_hooks (
     id                 uuid PRIMARY KEY,
     name               citext NOT NULL CHECK (char_length(name::text) BETWEEN 1 AND 100),
@@ -70,10 +87,13 @@ CREATE TABLE acme_hooks (
     secret_wrapped_dek bytea NOT NULL CHECK (octet_length(secret_wrapped_dek) BETWEEN 1 AND 1024),
     secret_key_version integer NOT NULL CHECK (secret_key_version >= 1),
     allowed_suffixes   text[] NOT NULL DEFAULT '{}' CHECK (cardinality(allowed_suffixes) <= 100),
+    propagation_wait_seconds integer NOT NULL DEFAULT 5 CHECK (propagation_wait_seconds BETWEEN 0 AND 120),
+    poll_timeout_seconds     integer NOT NULL DEFAULT 60 CHECK (poll_timeout_seconds BETWEEN 1 AND 100),
     created_by         uuid REFERENCES users (id),
     created_at         timestamptz NOT NULL,
     updated_at         timestamptz NOT NULL,
-    deleted_at         timestamptz
+    deleted_at         timestamptz,
+    CHECK (propagation_wait_seconds + poll_timeout_seconds <= 120)
 );
 CREATE UNIQUE INDEX acme_hooks_name ON acme_hooks (name) WHERE deleted_at IS NULL;
 
@@ -181,11 +201,12 @@ ALTER TABLE deployments ADD CONSTRAINT deployments_trigger_check CHECK (trigger 
 -- above); a binding is added and removed.
 GRANT SELECT, INSERT ON acme_providers, acme_accounts, acme_hooks, acme_certificates, acme_orders TO alice_app;
 GRANT SELECT, INSERT, DELETE ON acme_bindings TO alice_app;
+GRANT DELETE ON acme_accounts TO alice_app; -- pending_rollover rows only (the trigger above, Z1018)
 GRANT UPDATE (name, directory_url, ca_bundle_pem, preset, eab_kid, eab_hmac_ct, eab_hmac_nonce, eab_hmac_wrapped_dek, eab_hmac_key_version,
     allowed_suffixes, updated_at, deleted_at) ON acme_providers TO alice_app;
 GRANT UPDATE (contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at, state, updated_at) ON acme_accounts TO alice_app;
 GRANT UPDATE (name, url, auth_mode, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, allowed_suffixes,
-    updated_at, deleted_at) ON acme_hooks TO alice_app;
+    propagation_wait_seconds, poll_timeout_seconds, updated_at, deleted_at) ON acme_hooks TO alice_app;
 GRANT UPDATE (account_id, names, key_type, challenge, hook_id, renew_before_days, auto_renew, auto_deploy, state, current_certificate_id,
     failures, next_attempt_at, last_attempt_at, last_error_code, updated_at, deleted_at) ON acme_certificates TO alice_app;
 GRANT UPDATE (state, finished_at, error_code, order_url, certificate_id, pending_key_ct, pending_key_nonce, pending_key_wrapped_dek,
@@ -213,4 +234,5 @@ DROP TABLE acme_orders;
 DROP TABLE acme_certificates;
 DROP TABLE acme_hooks;
 DROP TABLE acme_accounts;
+DROP FUNCTION acme_accounts_protect_delete();
 DROP TABLE acme_providers;
