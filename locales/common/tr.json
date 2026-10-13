@@ -337,6 +337,11 @@
         "cause": "Sunucudaki yardımcı program, Alice'in bu sürümünün beklediğinden daha eski.",
         "action": "Güncel Alice paketindeki alice-helper dosyasını sunucuya kopyalayın ve hazırlık komutlarını yeniden çalıştırın."
       },
+      "helper_outdated_http01": {
+        "title": "Bu doğrulama yöntemini kullanmak için bu sunucudaki yardımcı programı yeniden kurun.",
+        "cause": "Bu sunucudaki alice-helper veya sudoers dosyası, HTTP-01 doğrulama yönteminin gerektirdiğinden daha eski. Bu sunucudaki diğer her şey çalışmaya devam eder.",
+        "action": "Güncel Alice paketindeki alice-helper dosyasını sunucuya kopyalayın ve hazırlık komutlarını yeniden çalıştırın ya da bu sertifika için DNS doğrulama yöntemini kullanın."
+      },
       "helper_refused": {
         "title": "Sunucudaki yardımcı program isteği reddetti.",
         "cause": "Yardımcı program her isteği denetler ve bunu reddetti; örneğin bir dosya, okuyabileceği veya değiştirebileceği yerlerin dışında olabilir.",

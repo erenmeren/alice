@@ -91,16 +91,11 @@ func h01Conn(t *testing.T, e *provEnv) *Conn {
 func TestPublishAndRemoveHTTP01Token(t *testing.T) {
 	e := newProvEnv(t)
 	c := h01Conn(t, e)
-	res, err := c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
-	require.NoError(t, err)
-	assert.Equal(t, helperproto.ACMEChallengePath(h01Token), res.Path)
-	assert.False(t, res.Replaced)
+	require.NoError(t, c.PublishHTTP01Token(context.Background(), h01Token, h01Auth))
 	got, ok := e.emu.ACMEToken(h01Token)
 	require.True(t, ok)
 	assert.Equal(t, h01Auth, got)
-	res, err = c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
-	require.NoError(t, err)
-	assert.True(t, res.Replaced)
+	require.NoError(t, c.PublishHTTP01Token(context.Background(), h01Token, h01Auth), "replacing is success")
 	removed, err := c.RemoveHTTP01Token(context.Background(), h01Token)
 	require.NoError(t, err)
 	assert.True(t, removed)
@@ -127,7 +122,7 @@ func TestHTTP01TokenRefusalsCarryTheHelperCode(t *testing.T) {
 	e := newProvEnv(t)
 	c := h01Conn(t, e)
 	e.emu.SetACMEChallengeDir(false)
-	_, err := c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
+	err := c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
 	pe := providerCode(t, err)
 	assert.Equal(t, "ssh.helper_refused", pe.Code)
 	assert.Equal(t, helperproto.CodeNotFound, pe.Params["helper_code"])
@@ -137,13 +132,13 @@ func TestHTTP01TokenRefusalsCarryTheHelperCode(t *testing.T) {
 	assert.False(t, removed)
 	e.emu.SetACMEChallengeDir(true)
 	e.emu.FailACME(helperproto.ExitRefused, helperproto.CodePathNotAllowed)
-	_, err = c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
+	err = c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
 	assert.Equal(t, helperproto.CodePathNotAllowed, providerCode(t, err).Params["helper_code"])
 	_, err = c.RemoveHTTP01Token(context.Background(), h01Token)
 	assert.Equal(t, helperproto.CodePathNotAllowed, providerCode(t, err).Params["helper_code"])
 	// An invalid value never reaches the server.
 	before := len(e.srv.Commands())
-	_, err = c.PublishHTTP01Token(context.Background(), "../x", h01Auth)
+	err = c.PublishHTTP01Token(context.Background(), "../x", h01Auth)
 	assert.ErrorIs(t, err, ErrInvalidArgument)
 	_, err = c.RemoveHTTP01Token(context.Background(), "../x")
 	assert.ErrorIs(t, err, ErrInvalidArgument)
@@ -162,7 +157,7 @@ func TestProtocol6HelperIsRefusedOnlyForHTTP01(t *testing.T) {
 	require.NoError(t, err)
 	c := connOf(t, s)
 	before := len(e.srv.Commands())
-	_, err = c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
+	err = c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
 	pe := providerCode(t, err)
 	assert.Equal(t, ReasonHTTP01HelperOutdated, pe.Code)
 	assert.ErrorIs(t, err, ErrHTTP01HelperOutdated)
@@ -175,7 +170,7 @@ func TestProtocol6HelperIsRefusedOnlyForHTTP01(t *testing.T) {
 	e.emu.SetProtocol(helperproto.Protocol)
 	require.NoError(t, s.Close())
 	c2 := h01Conn(t, e)
-	_, err = c2.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
+	err = c2.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
 	require.NoError(t, err)
 }
 
@@ -190,7 +185,7 @@ func TestHTTP01OnAConnectionWithoutAVersion(t *testing.T) {
 		c, err := newDialer(hk).Dial(context.Background(), testTarget, cfg, cred)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = c.Close() })
-		_, err = c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
+		err = c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
 		if p == 6 {
 			assert.ErrorIs(t, err, ErrHTTP01HelperOutdated)
 		} else {
@@ -214,11 +209,19 @@ func TestHTTP01VersionFailurePropagates(t *testing.T) {
 }
 
 // The emulator mirrors sudo: without the nginx profile (or with the sudoers file of an older
-// setup) sudo refuses the line before the helper sees it.
+// setup) sudo refuses the line before the helper sees it. The helper answered its version, so what
+// is missing is the setup of this release: the same "reinstall" error as an old helper.
 func TestHTTP01WithoutTheNginxProfile(t *testing.T) {
 	e := newProvEnv(t)
 	e.emu.SetNginxProfile(false)
 	c := h01Conn(t, e)
-	_, err := c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
-	assert.Equal(t, "ssh.helper_missing", providerCode(t, err).Code)
+	err := c.PublishHTTP01Token(context.Background(), h01Token, h01Auth)
+	assert.Equal(t, ReasonHTTP01HelperOutdated, providerCode(t, err).Code)
+	assert.ErrorIs(t, err, ErrHTTP01HelperOutdated)
+	_, err = c.RemoveHTTP01Token(context.Background(), h01Token)
+	assert.ErrorIs(t, err, ErrHTTP01HelperOutdated)
+	var marked interface{ HTTP01HelperOutdated() bool }
+	require.ErrorAs(t, err, &marked, "recognizable without importing linuxssh")
+	assert.True(t, marked.HTTP01HelperOutdated())
+	assert.NotEmpty(t, ErrHTTP01HelperOutdated.Error())
 }

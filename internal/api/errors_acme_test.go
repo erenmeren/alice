@@ -93,3 +93,21 @@ func TestACMEClientReasonsAreRegistered(t *testing.T) {
 		assert.True(t, strings.HasPrefix(c.Code, "ALC-ACM-"), r)
 	}
 }
+
+// A1 of the ACME plan: a server whose helper (or sudoers file) predates the HTTP-01 commands gets a code of its
+// own with the plain "reinstall the helper" message; its params pass the API's allow-list.
+func TestHelperOutdatedHTTP01IsCatalogued(t *testing.T) {
+	c := codeForReason("ssh.helper_outdated_http01")
+	assert.Equal(t, ErrHelperOutdatedHTTP01, c)
+	assert.Equal(t, "ALC-SSH-0013", c.Code)
+	assert.Equal(t, 502, c.Status)
+	assert.False(t, c.Retryable)
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	assert.Equal(t, "Reinstall the helper on this server to use this proof method.", cat.T("en", "errors.ssh.helper_outdated_http01.title", nil))
+	assert.Contains(t, cat.T("tr", "errors.ssh.helper_outdated_http01.title", nil), "yeniden kurun")
+	doc, err := os.ReadFile("../../docs/troubleshooting.md")
+	require.NoError(t, err)
+	assert.Contains(t, string(doc), "\n## ALC-SSH-0013: Reinstall the helper on this server to use this proof method\n")
+	assert.True(t, providerParamKeys["helper_protocol"] && providerParamKeys["required_protocol"])
+}

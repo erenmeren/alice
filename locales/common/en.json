@@ -337,6 +337,11 @@
         "cause": "The helper on the server is older than this version of Alice expects.",
         "action": "Copy alice-helper from the current Alice bundle to the server and run the preparation commands again."
       },
+      "helper_outdated_http01": {
+        "title": "Reinstall the helper on this server to use this proof method.",
+        "cause": "The alice-helper or the sudoers file on this server is older than the HTTP-01 proof method needs. Everything else still works on this server.",
+        "action": "Copy alice-helper from the current Alice bundle to the server and run the preparation commands again, or use the DNS proof method for this certificate."
+      },
       "helper_refused": {
         "title": "The helper on the server refused the request.",
         "cause": "The helper checks every request and refused this one, for example because a file is outside the places it may read or change.",

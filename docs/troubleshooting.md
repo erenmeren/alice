@@ -977,6 +977,22 @@ name that resolves differently over time (DNS rebinding).
 add it again with its real address or a name that resolves to it. If you did not change the record, treat it as a
 possible attack on Alice's network position.
 
+## ALC-SSH-0013: Reinstall the helper on this server to use this proof method
+
+**Meaning.** Alice was asked to prove a name with the HTTP-01 method on this server, but the server cannot write the
+challenge file yet: its `alice-helper` is older than protocol 7 (`alice-helper` 1.6.0; `params.helper_protocol` and
+`params.required_protocol`), or its sudoers file does not have the two `acme-challenge` lines yet (sudo refused the
+command although the helper is new enough). Alice wrote nothing on the server. Everything else (scans, key changes,
+deployments) keeps working there: protocol 6 is still enough for those.
+
+**Likely cause.** Alice was updated but the server's helper and sudoers file were not, or the server was prepared with
+the **Linux server** type (the HTTP-01 lines are in the **Nginx server** profile only).
+
+**What to do.** Copy `alice-helper` from the current Alice bundle and run the preparation commands of the **Nginx server**
+type again (they install the helper and the sudoers file together), then choose **Test connection**. Or use the DNS
+proof method for this certificate. See
+[nginx-host-preparation.md](nginx-host-preparation.md#publishing-http-01-challenges-optional).
+
 ## ALC-KEY-0001: Alice's own key is protected
 
 **Meaning.** Alice refuses to remove its own connection key (HTTP 409), in any file and whatever its comment says, and

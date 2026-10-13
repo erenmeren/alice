@@ -118,6 +118,9 @@ var (
 	// ErrSSHAddressNotAllowed: the server's name resolved, when Alice connected, to an address the
 	// target rule refuses (AUD-25 a); not retryable.
 	ErrSSHAddressNotAllowed = ErrorCode{Code: "ALC-SSH-0012", Reason: "ssh.address_not_allowed", Status: http.StatusBadGateway}
+	// ErrHelperOutdatedHTTP01: the server's helper (or its sudoers file) predates the HTTP-01 challenge
+	// commands (protocol 7). Everything else keeps working on that server (A1 of the ACME plan).
+	ErrHelperOutdatedHTTP01 = ErrorCode{Code: "ALC-SSH-0013", Reason: "ssh.helper_outdated_http01", Status: http.StatusBadGateway}
 
 	ErrOwnKeyProtected = ErrorCode{Code: "ALC-KEY-0001", Reason: "sshkey.own_key_protected", Status: http.StatusConflict}
 	ErrLastRootKey     = ErrorCode{Code: "ALC-KEY-0002", Reason: "sshkey.last_root_key", Status: http.StatusConflict}
@@ -404,7 +407,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrLicenseUnsupportedFormat, ErrLicenseOlderThanInstalled, ErrLicenseTargetLimit, ErrLicenseUnverified,
 		ErrTargetDuplicate, ErrHostKeyUnconfirmed, ErrHostKeyStale, ErrHostKeyChanged, ErrHostKeyState, ErrTargetDisabled,
 		ErrSSHUnreachable, ErrSSHAuthFailed, ErrSSHTimeout, ErrHelperMissing, ErrHelperOutdated, ErrHelperRefused,
-		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums, ErrSSHAddressNotAllowed,
+		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums, ErrSSHAddressNotAllowed, ErrHelperOutdatedHTTP01,
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrKeyNotManaged, ErrKeyRetired, ErrKeyDestroyed, ErrKeyConnectionAccount, ErrKeyLoginFailed, ErrKeyGenerateBusy,
 		ErrKeyAddUndoFailed, ErrKeyNotAKeyFile, ErrKeyConnectionFilesUnknown, ErrKeyClockBehind, ErrKeyAddUncertain,
@@ -842,7 +845,7 @@ func loginErrorCode(e *oidc.LoginError) ErrorCode {
 var providerParamKeys = map[string]bool{
 	"helper_code": true, "subcommand": true, "exit_code": true, "reason": true, "field": true, "attempts": true,
 	"wait": true, "fingerprint": true, "old_fingerprint": true, "new_fingerprint": true,
-	"helper_protocol": true, "required_protocol": true, // ssh.helper_outdated
+	"helper_protocol": true, "required_protocol": true, // ssh.helper_outdated, ssh.helper_outdated_http01
 	"port": true, "failed_step": true, "profile": true, "phase": true, "directory": true, "backup_dir": true,
 	"expected": true, "actual": true, "mode": true,
 	"operation_id": true, // deployment.server_operation_pending
