@@ -16,11 +16,13 @@ import (
 // SweepTask is the periodic acme.sweep (ClassAlways: it runs in every license state, so leftover challenge records
 // are removed in lock too). It runs on the leader only (the scheduler's lock) and does two things each tick:
 //
-//  1. A running order that no job holds and that started more than StaleAfter ago (a crash, a lost worker, a
+//  1. A running order that no queued or running job holds and that started more than StaleAfter ago (a crash, a lost worker, a
 //     shutdown) is ended. An issue order with its key and its CA URL is resumed from the CA while the gate allows
 //     changes (acme.Client.ResumeOrder: an order the CA issued is downloaded, a ready one finalized; then
-//     FinishACMEOrder). It is abandoned (acme.order_abandoned: its key is deleted, its cleanup queued) only for good
-//     reasons (endStale); temporary failures are tried again on the next ticks for ResumeFor.
+//     FinishACMEOrder). It is ended only for good reasons (endStale) and temporary failures are tried again on the
+//     next ticks for ResumeFor. An interruption is not the certificate's failure: such an order is abandoned
+//     (acme.order_abandoned, key deleted, cleanup queued) without a failure counted; only a certificate the CA issued
+//     that cannot be stored counts (FailACMEOrder).
 //  2. Every ended order that still lists challenge records, never cleaned or last tried more than CleanupRetry ago,
 //     gets an acme.cleanup job, until CleanupGiveUp after the order ended.
 //
@@ -74,10 +76,10 @@ func (h *handlers) endStale(ctx context.Context, o inventory.ACMEStaleOrder) err
 	expired := h.d.Clock.Now().Sub(o.StartedAt) >= ResumeFor
 	switch {
 	case !resumable:
-		return h.abandon(ctx, o, "not_resumable")
+		return h.abandon(ctx, o, "not_resumable", nil)
 	case h.d.Gate.Allow(license.ClassChange) != nil:
 		if o.Presented > 0 || expired {
-			return h.abandon(ctx, o, "locked")
+			return h.abandon(ctx, o, "locked", nil)
 		}
 		return nil
 	}
@@ -89,7 +91,7 @@ func (h *handlers) endStale(ctx context.Context, o inventory.ACMEStaleOrder) err
 		return h.d.Inventory.EnqueueACMECleanup(ctx, o.ID)
 	case definitiveResumeFailure(err) || expired:
 		code, _ := inventory.ACMEOrderErrorCode(err)
-		return h.abandon(ctx, o, code)
+		return h.abandon(ctx, o, code, err)
 	}
 	code, _ := inventory.ACMEOrderErrorCode(err)
 	h.d.Log.Info("an interrupted ACME order could not be resumed yet; the sweep tries again", "order_id", o.ID.String(), "reason", code)
@@ -99,15 +101,19 @@ func (h *handlers) endStale(ctx context.Context, o inventory.ACMEStaleOrder) err
 	return nil
 }
 
-// definitiveResumeFailure reports whether a resume failed for good: the CA's order cannot be finished any more, its
-// certificate does not fit the order, the order's key is gone or unreadable, the order ended meanwhile or its definition
-// is gone, or the key or names cannot make a CSR. A database error, an unreachable or rate-limiting CA, a trust
-// problem, an account that is busy or settling a key change are temporary.
+// definitiveResumeFailure reports whether a resume failed for good: the CA's order cannot be finished any more, the
+// certificate the CA issued does not fit the order (refusedByCA), the order's key is gone or unreadable, the order ended
+// meanwhile or its definition is gone, or the key or names cannot make a CSR. A database error, a garbled or oversized
+// answer, an unreachable or rate-limiting CA, a trust problem, an account that is busy or settling a key change are
+// temporary.
 func definitiveResumeFailure(err error) bool {
 	if errors.Is(err, errStore) {
 		return false
 	}
-	for _, d := range []error{acme.ErrOrderNotResumable, acme.ErrCSRMismatch, acme.ErrBadAnswer, inventory.ErrACMEPendingKey,
+	if refusedByCA(err) {
+		return true
+	}
+	for _, d := range []error{acme.ErrOrderNotResumable, acme.ErrCSRMismatch, inventory.ErrACMEPendingKey,
 		inventory.ErrACMEOrderNotRunning, inventory.ErrNotFound, keygen.ErrKeyPolicy, keygen.ErrNames, keygen.ErrKey} {
 		if errors.Is(err, d) {
 			return true
@@ -116,11 +122,32 @@ func definitiveResumeFailure(err error) bool {
 	return inventory.ACMEFinishRefused(err)
 }
 
-// abandon fails an interrupted order with acme.order_abandoned (its key is deleted, its cleanup queued); an order its
-// job ended meanwhile is left as it is.
-func (h *handlers) abandon(ctx context.Context, o inventory.ACMEStaleOrder, why string) error {
-	h.d.Log.Info("an interrupted ACME order is abandoned", "order_id", o.ID.String(), "reason", why)
-	err := h.d.Inventory.FailACMEOrder(ctx, o.ID, inventory.ACMEOrderAbandoned, 0)
+// refusedByCA reports whether the CA issued a certificate that cannot be stored for this order (a leaf of another key
+// or other names, a certificate the upload rules refuse): the one outcome of a resume that is the certificate's
+// failure. Everything else that ends an interrupted order is the interruption's (no failure counted).
+func refusedByCA(err error) bool {
+	for _, r := range []error{acme.ErrChainKeyMismatch, inventory.ErrACMEChainMismatch, inventory.ErrCertificateInvalid,
+		inventory.ErrCertificateExpired, inventory.ErrWeakCertificate, inventory.ErrUnsupportedKey, inventory.ErrCertificateTooLarge} {
+		if errors.Is(err, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// abandon ends an interrupted order: an order the CA refused (refusedByCA) fails with its code and counts as the
+// certificate's failure (FailACMEOrder); any other is abandoned without counting (AbandonACMEOrder,
+// acme.order_abandoned: no failure, no backoff). Its key is deleted and its cleanup queued either way; an order its job
+// ended meanwhile is left as it is.
+func (h *handlers) abandon(ctx context.Context, o inventory.ACMEStaleOrder, why string, cause error) error {
+	h.d.Log.Info("an interrupted ACME order is ended", "order_id", o.ID.String(), "reason", why)
+	var err error
+	if cause != nil && refusedByCA(cause) {
+		code, after := inventory.ACMEOrderErrorCode(cause)
+		err = h.d.Inventory.FailACMEOrder(ctx, o.ID, code, after)
+	} else {
+		err = h.d.Inventory.AbandonACMEOrder(ctx, o.ID, inventory.ACMEOrderAbandoned)
+	}
 	if errors.Is(err, inventory.ErrACMEOrderNotRunning) {
 		return nil
 	}

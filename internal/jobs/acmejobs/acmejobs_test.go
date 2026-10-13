@@ -121,6 +121,7 @@ type stubInv struct {
 	finishErrs  []error
 	succeedErr  error
 	failErr     error
+	abandonErr  error
 	hookCfg     dns01.Config
 	hookErr     error
 	cleanupWork inventory.ACMECleanupWork
@@ -163,11 +164,11 @@ func (s *stubInv) LoadPendingKey(context.Context, uuid.UUID) (crypto.Signer, err
 	}
 	return s.key, s.keyErr
 }
-func (s *stubInv) AbortACMEOrder(_ context.Context, _ uuid.UUID, code string) error {
+func (s *stubInv) AbandonACMEOrder(_ context.Context, _ uuid.UUID, code string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.aborted = append(s.aborted, code)
-	return nil
+	return s.abandonErr
 }
 func (s *stubInv) GetACMEOrder(context.Context, uuid.UUID) (inventory.ACMEOrder, error) {
 	return s.order, s.orderErr
@@ -539,39 +540,44 @@ func TestSweepOutcomes(t *testing.T) {
 	// ended meanwhile is fine.
 	now := h.d.Clock.Now()
 	test := inventory.ACMEStaleOrder{ID: uuid.New(), Kind: inventory.ACMEOrderTest, StartedAt: now}
-	inv = &stubInv{stale: []inventory.ACMEStaleOrder{test}, failErr: errors.New("db")}
+	inv = &stubInv{stale: []inventory.ACMEStaleOrder{test}, abandonErr: errors.New("db")}
 	h = stubHandlers(t, inv, openGate{}, nil)
 	assert.ErrorIs(t, h.sweep(context.Background()), errSweepFailed)
-	inv.failErr = inventory.ErrACMEOrderNotRunning
+	inv.abandonErr = inventory.ErrACMEOrderNotRunning
 	require.NoError(t, h.sweep(context.Background()))
-	assert.Equal(t, []string{inventory.ACMEOrderAbandoned, inventory.ACMEOrderAbandoned}, inv.failed)
+	assert.Equal(t, []string{inventory.ACMEOrderAbandoned, inventory.ACMEOrderAbandoned}, inv.aborted, "abandoned without a failure")
+	assert.Empty(t, inv.failed)
 }
 
-// A resumable order is abandoned only for a definitive refusal or after ResumeFor; every temporary failure is tried
-// again on the next tick (I2).
+// A resumable order is ended only for a definitive refusal or after ResumeFor; every temporary failure (a garbled CA
+// answer included) is tried again on the next tick (I2, R2). Only a certificate the CA issued that cannot be stored
+// counts as the certificate's failure; an interruption is abandoned without counting (R1).
 func TestSweepAbandonsOnlyForGood(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
+	const temporary, abandoned, counted = 0, 1, 2
 	for _, tc := range []struct {
-		name    string
-		mut     func(*stubInv)
-		abandon bool
+		name string
+		mut  func(*stubInv)
+		want int
 	}{
-		{"database error loading the key", func(s *stubInv) { s.loadErrs = []error{errors.New("db")} }, false},
-		{"key change unsettled", func(s *stubInv) { s.clientErr = inventory.ErrACMERolloverPending }, false},
-		{"provider busy", func(s *stubInv) { s.clientErr = inventory.ErrACMEProviderBusy }, false},
-		{"account unreadable", func(s *stubInv) { s.clientErr = inventory.ErrACMESecretUnreadable }, false},
-		{"trust", func(s *stubInv) { s.clientErr = &inventory.ACMEError{Reason: acme.ReasonTLSTrustFailed} }, false},
-		{"CA unreachable", func(s *stubInv) { s.clientErr = &acme.Error{Reason: acme.ReasonProviderUnreachable} }, false},
-		{"CA rate limit", func(s *stubInv) { s.clientErr = &acme.Error{Reason: acme.ReasonCARateLimited} }, false},
-		{"database error reading the order", func(s *stubInv) { s.clientErr = errors.New("db") }, false},
-		{"pending key gone", func(s *stubInv) { s.loadErrs = []error{inventory.ErrACMEPendingKey} }, true},
-		{"order ended meanwhile", func(s *stubInv) { s.loadErrs = []error{inventory.ErrACMEOrderNotRunning} }, true},
-		{"definition deleted", func(s *stubInv) { s.clientErr = inventory.ErrNotFound }, true},
+		{"database error loading the key", func(s *stubInv) { s.loadErrs = []error{errors.New("db")} }, temporary},
+		{"key change unsettled", func(s *stubInv) { s.clientErr = inventory.ErrACMERolloverPending }, temporary},
+		{"provider busy", func(s *stubInv) { s.clientErr = inventory.ErrACMEProviderBusy }, temporary},
+		{"account unreadable", func(s *stubInv) { s.clientErr = inventory.ErrACMESecretUnreadable }, temporary},
+		{"trust", func(s *stubInv) { s.clientErr = &inventory.ACMEError{Reason: acme.ReasonTLSTrustFailed} }, temporary},
+		{"CA unreachable", func(s *stubInv) { s.clientErr = &acme.Error{Reason: acme.ReasonProviderUnreachable} }, temporary},
+		{"CA rate limit", func(s *stubInv) { s.clientErr = &acme.Error{Reason: acme.ReasonCARateLimited} }, temporary},
+		{"garbled CA answer", func(s *stubInv) { s.clientErr = fmt.Errorf("resume: %w", acme.ErrBadAnswer) }, temporary},
+		{"database error reading the order", func(s *stubInv) { s.clientErr = errors.New("db") }, temporary},
+		{"pending key gone", func(s *stubInv) { s.loadErrs = []error{inventory.ErrACMEPendingKey} }, abandoned},
+		{"order ended meanwhile", func(s *stubInv) { s.loadErrs = []error{inventory.ErrACMEOrderNotRunning} }, abandoned},
+		{"definition deleted", func(s *stubInv) { s.clientErr = inventory.ErrNotFound }, abandoned},
 		{"no longer resumable at the CA", func(s *stubInv) {
 			s.clientErr = fmt.Errorf("resume: %w", acme.ErrOrderNotResumable)
-		}, true},
-		{"certificate of another key", func(s *stubInv) { s.clientErr = fmt.Errorf("resume: %w", acme.ErrBadAnswer) }, true},
+		}, abandoned},
+		{"certificate of another key", func(s *stubInv) { s.clientErr = fmt.Errorf("resume: %w", acme.ErrChainKeyMismatch) }, counted},
+		{"certificate the upload rules refuse", func(s *stubInv) { s.clientErr = fmt.Errorf("finish: %w", inventory.ErrCertificateExpired) }, counted},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inv := &stubInv{key: key}
@@ -581,16 +587,24 @@ func TestSweepAbandonsOnlyForGood(t *testing.T) {
 			inv.stale = []inventory.ACMEStaleOrder{o}
 			tc.mut(inv)
 			_ = h.sweep(context.Background())
-			if tc.abandon {
-				assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.failed)
+			switch tc.want {
+			case abandoned:
+				assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.aborted)
+				assert.Empty(t, inv.failed, "an interruption is not the certificate's failure")
+				return
+			case counted:
+				assert.Equal(t, []string{acme.ReasonDirectoryInvalid}, inv.failed)
+				assert.Empty(t, inv.aborted)
 				return
 			}
 			assert.Empty(t, inv.failed, "tried again on the next tick")
-			// Past ResumeFor the same temporary failure abandons it.
+			assert.Empty(t, inv.aborted)
+			// Past ResumeFor the same temporary failure abandons it, without counting a failure.
 			inv.stale[0].StartedAt = h.d.Clock.Now().Add(-ResumeFor)
 			tc.mut(inv)
 			_ = h.sweep(context.Background())
-			assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.failed)
+			assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.aborted)
+			assert.Empty(t, inv.failed)
 		})
 	}
 
@@ -601,9 +615,9 @@ func TestSweepAbandonsOnlyForGood(t *testing.T) {
 		OrderURL: "https://ca.example.test/o/1", HasKey: true, StartedAt: h.d.Clock.Now().Add(-StaleAfter)}}
 	require.NoError(t, h.sweep(context.Background()))
 	require.NoError(t, h.sweep(context.Background()))
-	assert.Empty(t, inv.failed)
+	assert.Empty(t, inv.aborted)
 	require.NoError(t, h.sweep(context.Background()))
-	assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.failed)
+	assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.aborted)
 
 	// In lock: nothing published waits (no CA contact), something published or ResumeFor passed is abandoned.
 	inv = &stubInv{key: key, clientErr: errors.New("must not be asked")}
@@ -614,18 +628,19 @@ func TestSweepAbandonsOnlyForGood(t *testing.T) {
 	published.ID, published.Presented = uuid.New(), 1
 	inv.stale = []inventory.ACMEStaleOrder{waiting, published}
 	require.NoError(t, h.sweep(context.Background()))
-	assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.failed)
+	assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.aborted)
 	inv.stale = []inventory.ACMEStaleOrder{waiting}
 	inv.stale[0].StartedAt = h.d.Clock.Now().Add(-ResumeFor)
 	require.NoError(t, h.sweep(context.Background()))
-	assert.Len(t, inv.failed, 2)
+	assert.Len(t, inv.aborted, 2)
+	assert.Empty(t, inv.failed)
 	// A deleted definition is not resumed.
 	inv = &stubInv{key: key, clientErr: errors.New("must not be asked")}
 	h = stubHandlers(t, inv, openGate{}, nil)
 	waiting.Deleted = true
 	inv.stale = []inventory.ACMEStaleOrder{waiting}
 	require.NoError(t, h.sweep(context.Background()))
-	assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.failed)
+	assert.Equal(t, []string{inventory.ACMEOrderAbandoned}, inv.aborted)
 }
 
 // panicSolver panics when it should publish.

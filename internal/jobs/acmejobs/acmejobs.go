@@ -17,7 +17,7 @@
 //
 // Licence: acme.issue is ClassChange (the runner never claims it in lock); the handler asks the gate again before
 // each publication and once more right before finalize, so a lock that begins during an order publishes nothing more,
-// // sends no CSR and ends the order (license.locked; what was published is cleaned up). The sweep contacts a CA only to
+// sends no CSR and ends the order (license.locked; what was published is cleaned up). The sweep contacts a CA only to
 // resume an interrupted order, and only while the gate allows changes.
 package acmejobs
 
@@ -52,7 +52,7 @@ type Inventory interface {
 	FinishACMEOrder(ctx context.Context, orderID uuid.UUID, chainDER [][]byte) (inventory.ACMEIssued, error)
 	SucceedACMETestOrder(ctx context.Context, orderID uuid.UUID) error
 	FailACMEOrder(ctx context.Context, orderID uuid.UUID, code string, retryAfter time.Duration) error
-	AbortACMEOrder(ctx context.Context, orderID uuid.UUID, code string) error
+	AbandonACMEOrder(ctx context.Context, orderID uuid.UUID, code string) error
 	GetACMEOrder(ctx context.Context, id uuid.UUID) (inventory.ACMEOrder, error)
 	RecordACMEOrderURL(ctx context.Context, orderID uuid.UUID, url string) error
 	AddACMEPresented(ctx context.Context, orderID uuid.UUID, p inventory.ACMEPresented) error
@@ -91,8 +91,11 @@ type Deps struct {
 const (
 	recordTimeout = 30 * time.Second
 	openTimeout   = time.Minute
-	// StaleAfter is the age of a running order no job holds that the sweep ends: the order timeout plus a margin.
-	StaleAfter = acme.DefaultOrderTimeout + 10*time.Minute
+	// StaleAfter is the age from which the sweep ends a running order no queued or running job holds. Such an order
+	// has no worker any more except, at worst, one whose lease was lost and that has not noticed yet: the runner
+	// cancels a job within its lease (45 s) and the reaper takes it back within a minute, so 5 minutes is past both;
+	// a clean shutdown therefore blocks new requests for the certificate for about 5 minutes, not an order timeout.
+	StaleAfter = 5 * time.Minute
 	// CleanupRetry is how long the sweep waits after a failed cleanup before it queues the cleanup again, and
 	// CleanupGiveUp how long after the order ended it stops (the records stay listed with the last failure).
 	CleanupRetry  = time.Hour
@@ -197,7 +200,7 @@ var (
 // run does the order and ends it on every way out, a panic included (the order is ended, then the panic goes on to
 // the runner). Outcomes: success; a failure (FailACMEOrder: failure counted, backoff); left running for the sweep (the
 // issued certificate could not be stored, or the job's context ended after the CA created the order and its key was
-// persisted: a shutdown or a lost lease is not the certificate's failure); interrupted before that (AbortACMEOrder
+// persisted: a shutdown or a lost lease is not the certificate's failure); interrupted before that (AbandonACMEOrder
 // with job.lease_expired: nothing counted).
 func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 	inv := o.h.d.Inventory
@@ -229,7 +232,7 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 			o.h.d.Log.Warn("an ACME order was interrupted; the ACME sweep resumes it", "order_id", o.id.String(), "event", "acme_order_interrupted")
 			res, err = nil, jobs.Fail(reasonLeaseExpired, params, ctx.Err())
 		case interrupted:
-			if aerr := inv.AbortACMEOrder(dctx, o.id, reasonLeaseExpired); aerr != nil && !errors.Is(aerr, inventory.ErrACMEOrderNotRunning) {
+			if aerr := inv.AbandonACMEOrder(dctx, o.id, reasonLeaseExpired); aerr != nil && !errors.Is(aerr, inventory.ErrACMEOrderNotRunning) {
 				o.h.d.Log.Error("could not end an interrupted ACME order", "order_id", o.id.String(), "error_type", fmt.Sprintf("%T", aerr))
 			}
 			res, err = nil, jobs.Fail(reasonLeaseExpired, params, ctx.Err())

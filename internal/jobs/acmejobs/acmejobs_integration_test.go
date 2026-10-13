@@ -342,8 +342,8 @@ func TestCleanupRetriesThenTheSweepTriesAgain(t *testing.T) {
 }
 
 // A crash after a challenge was published (the process died: nothing more was sent, nothing recorded): the sweep
-// cannot finish the order at the CA (its authorizations were never validated), abandons it, deletes its key and the
-// cleanup job removes the published record.
+// cannot finish the order at the CA (its authorizations were never validated), abandons it without counting a failure,
+// deletes its key and the cleanup job removes the published record.
 func TestCrashAfterPresentIsAbandonedAndCleaned(t *testing.T) {
 	w := newWorld(t)
 	c := w.dnsCert("crash.example.test")
@@ -368,7 +368,11 @@ func TestCrashAfterPresentIsAbandonedAndCleaned(t *testing.T) {
 	w.drain()
 	assert.Zero(t, w.getOrder(o.ID).Presented)
 	assert.Zero(t, w.dnsLeft())
-	assert.Equal(t, inventory.ACMEStateFailing, w.getCert(c.ID).State)
+	got := w.getCert(c.ID)
+	assert.Equal(t, inventory.ACMEStatePending, got.State, "a crash is not the certificate's failure")
+	assert.Zero(t, got.Failures)
+	assert.Nil(t, got.NextAttemptAt, "no backoff")
+	assert.Equal(t, 1, w.audits("acme.order.failed"), "the abandoned order is still audited")
 }
 
 // A crash after the CA issued the certificate and before it was stored: the sweep resumes the order from the CA with
@@ -542,4 +546,45 @@ locked_until = $2 WHERE type = 'acme.issue'`, w.clock.Now(), w.clock.Now().Add(t
 	stale, err = w.inv.StaleACMEOrders(w.ctx, StaleAfter)
 	require.NoError(t, err)
 	assert.Len(t, stale, 1)
+}
+
+// A garbled (oversized) CA answer while the sweep resumes an issued order is temporary: the order is kept and the next
+// tick finishes it (R2).
+func TestResumeAfterAGarbledAnswer(t *testing.T) {
+	w := newWorld(t)
+	c := w.dnsCert("garbled.example.test")
+	w.h.crash = func(stage string) bool { return stage == "issued" }
+	o := w.order(c, inventory.ACMEOrderIssue)
+	w.drain()
+	w.h.crash = nil
+	w.clock.Advance(StaleAfter + time.Minute)
+	require.NoError(t, w.fake.AddFault(fakeacme.Fault{Endpoint: "order", Kind: fakeacme.FaultGiant, Times: 1}))
+	require.NoError(t, w.h.sweep(w.ctx))
+	assert.Equal(t, inventory.ACMEOrderRunning, w.getOrder(o.ID).State, "kept for the next tick")
+	assert.Equal(t, 4, w.keyColumns(o.ID))
+	require.NoError(t, w.h.sweep(w.ctx))
+	require.Equal(t, inventory.ACMEOrderSucceeded, w.getOrder(o.ID).State)
+	assert.Zero(t, w.getCert(c.ID).Failures)
+}
+
+// A queued acme.issue job still owns its order: the order is not stale until the job ended (R1: the sweep acts within
+// StaleAfter of a job that ended without ending its order).
+func TestStaleExcludesAQueuedJob(t *testing.T) {
+	w := newWorld(t)
+	c := w.dnsCert("queued.example.test")
+	o := w.order(c, inventory.ACMEOrderIssue)
+	w.clock.Advance(StaleAfter + time.Minute)
+	stale, err := w.inv.StaleACMEOrders(w.ctx, StaleAfter)
+	require.NoError(t, err)
+	assert.Empty(t, stale, "its job is queued")
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE jobs SET status = 'dead', finished_at = $1 WHERE type = 'acme.issue'", w.clock.Now())
+	require.NoError(t, err)
+	require.NoError(t, w.h.sweep(w.ctx))
+	o = w.getOrder(o.ID)
+	assert.Equal(t, inventory.ACMEOrderAbandoned, o.ErrorCode)
+	got := w.getCert(c.ID)
+	assert.Equal(t, inventory.ACMEStatePending, got.State)
+	assert.Zero(t, got.Failures)
+	_, err = w.inv.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderIssue)
+	require.NoError(t, err, "a new request is accepted once the interrupted order was ended")
 }
