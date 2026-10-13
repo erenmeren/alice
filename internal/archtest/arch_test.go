@@ -36,9 +36,12 @@ var rules = map[string][]string{
 	// The test world of the linuxssh provider runs the real nginx configuration parser, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
-	"alice/internal/inventory/...":                   {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen"},
-	"alice/internal/jobs/...":                        {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
-	"alice/internal/setup/...":                       {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
+	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
+	// a hook's dns01 configuration; the client and solvers never import it back.
+	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
+		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver/dns01"},
+	"alice/internal/jobs/...":  {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
+	"alice/internal/setup/...": {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
 		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/...",
@@ -343,7 +346,11 @@ func TestAllowed(t *testing.T) {
 		{"keygen to os denied", "alice/internal/acme/keygen", "os", false},
 		{"keygen to net/http denied", "alice/internal/acme/keygen", "net/http", false},
 		{"inventory to keygen allowed", "alice/internal/inventory", "alice/internal/acme/keygen", true},
-		{"inventory to acme client denied", "alice/internal/inventory", "alice/internal/acme", false},
+		{"inventory to acme client allowed", "alice/internal/inventory", "alice/internal/acme", true},
+		{"inventory to acme transport allowed", "alice/internal/inventory", "alice/internal/acme/transport", true},
+		{"inventory to dns01 allowed", "alice/internal/inventory", "alice/internal/acme/solver/dns01", true},
+		{"inventory to http01 denied", "alice/internal/inventory", "alice/internal/acme/solver/http01", false},
+		{"inventory to fakeacme denied", "alice/internal/inventory", "alice/internal/testutil/fakeacme", false},
 		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},
 		{"acme to api denied", "alice/internal/acme", "alice/internal/api", false},
 		{"acme to inventory denied", "alice/internal/acme", "alice/internal/inventory", false},

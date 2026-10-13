@@ -1,0 +1,693 @@
+package inventory
+
+import (
+	"context"
+	"crypto"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"alice/internal/acme"
+	"alice/internal/acme/keygen"
+	"alice/internal/acme/transport"
+	"alice/internal/audit"
+	"alice/internal/license"
+	"alice/internal/platform/db"
+	"alice/internal/platform/validate"
+	"alice/internal/secrets"
+)
+
+// ACME accounts (plan 2026-10-13 Task 9; design row 4; amendments A6, A10).
+//
+// One account per provider: an ECDSA P-256 key Alice generates, sealed in acme_accounts.key_* (AAD
+// acme_accounts/<id>/key) and never updated: a key rollover is a new row. Registration, rollover and deactivation
+// talk to the CA, so each first asks the license gate (Allow(ClassChange): in lock nothing is sent) and then goes
+// through the guarded transport built from the provider's own CA bundle.
+//
+// Rollover (A6): (1) the new key is committed as a pending_rollover row, (2) the CA is asked (keyChange), (3) the old
+// row becomes retired and the new one active in one transaction. A rollover the CA did not take deletes its pending
+// row (the only account row that is ever deleted, trigger Z1018). When the CA's answer is lost (RolloverUnknown) the
+// pending row stays and RecoverACMERollover settles it by asking the CA which key it knows.
+//
+// Secrets (A10): the PKCS#8 DER of an account key is plaintext only inside the function that seals or opens it and
+// is zeroed before it returns; the crypto.Signer (an *ecdsa.PrivateKey, which Go cannot zero) lives only for the CA
+// call. The EAB HMAC text is opened for the registration and zeroed after it. The contact address is personal data:
+// it is stored in the account row and never written to an audit row. CA errors reach callers only as *ACMEError (a
+// registered reason, never the CA's text).
+
+// Account states (acme_accounts.state).
+const (
+	ACMEAccountActive          = "active"
+	ACMEAccountPendingRollover = "pending_rollover"
+	ACMEAccountRetired         = "retired"
+	ACMEAccountDeactivated     = "deactivated"
+)
+
+const maxACMEContactLen = 254
+
+// Refusals of the account operations.
+var (
+	// ErrACMEAccountExists: the provider already has an active account (one per provider).
+	ErrACMEAccountExists = errors.New("inventory: the ACME provider already has an account")
+	// ErrACMEAccountState: the account is not active (retired, deactivated or a pending key), so the operation
+	// does not apply to it.
+	ErrACMEAccountState = errors.New("inventory: the ACME account is not in a state that allows this")
+	// ErrACMERolloverPending: a key rollover of the provider's account is unsettled (the CA's answer was lost, or a
+	// rollover is running); RecoverACMERollover settles it.
+	ErrACMERolloverPending = errors.New("inventory: a key change of the ACME account is not settled")
+)
+
+// ACMEError is a failure of a CA exchange: Reason is one of acme.Reasons() (the ALC-ACM reasons the API maps),
+// RetryAfter the CA's capped Retry-After of a rate limit. Its text never holds a CA body, URL or secret.
+type ACMEError struct {
+	Reason     string
+	RetryAfter time.Duration
+	cause      error // the *acme.Error (whose text is closed) or a transport sentinel
+}
+
+func (e *ACMEError) Error() string {
+	return "inventory: the certificate authority exchange failed: " + e.Reason
+}
+
+// Unwrap gives the *acme.Error (or transport sentinel) behind it.
+func (e *ACMEError) Unwrap() error { return e.cause }
+
+// acmeFailure is the single mapping of a CA exchange's error to an *ACMEError: an *acme.Error keeps its reason (one
+// outside acme.Reasons() becomes directory_invalid), an unusable CA bundle is tls_trust_failed, a dead context
+// stays the context's error, anything else (a client that cannot be built) is directory_invalid.
+func acmeFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	var ie *ACMEError
+	if errors.As(err, &ie) {
+		return ie
+	}
+	var ae *acme.Error
+	if errors.As(err, &ae) {
+		reason := ae.Reason
+		if !slices.Contains(acme.Reasons(), reason) {
+			reason = acme.ReasonDirectoryInvalid
+		}
+		return &ACMEError{Reason: reason, RetryAfter: ae.RetryAfter(), cause: ae}
+	}
+	if errors.Is(err, transport.ErrCABundle) {
+		return &ACMEError{Reason: acme.ReasonTLSTrustFailed, cause: transport.ErrCABundle}
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return &ACMEError{Reason: acme.ReasonDirectoryInvalid}
+}
+
+// ACMEAccount is the view of an account. It has no secret.
+type ACMEAccount struct {
+	ID              uuid.UUID  `json:"id"`
+	ProviderID      uuid.UUID  `json:"provider_id"`
+	ContactEmail    string     `json:"contact_email"`
+	AccountURL      string     `json:"account_url"`
+	TermsURL        string     `json:"tos_url"`
+	TermsAcceptedBy *uuid.UUID `json:"tos_accepted_by,omitempty"`
+	TermsAcceptedAt *time.Time `json:"tos_accepted_at,omitempty"`
+	State           string     `json:"state"`
+	CreatedBy       *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// accountKeyLocation binds a sealed account key to its row.
+func accountKeyLocation(id uuid.UUID) secrets.Location {
+	return secrets.Location{Table: "acme_accounts", RowID: id.String(), Column: "key"}
+}
+
+// normContact checks an optional contact address: a plain e-mail address (a "mailto:" prefix is dropped), the
+// domain in lower case. "" is allowed (some CAs need no contact).
+func normContact(raw string) (string, *validate.FieldError) {
+	s := strings.TrimPrefix(strings.TrimSpace(raw), "mailto:")
+	if s == "" {
+		return "", nil
+	}
+	at := strings.IndexByte(s, '@')
+	if len(s) > maxACMEContactLen || at <= 0 || at != strings.LastIndexByte(s, '@') || at == len(s)-1 ||
+		strings.ContainsFunc(s, func(r rune) bool { return r <= 0x20 || r >= 0x7f || strings.ContainsRune(",;<>?&%\"'\\()[]:", r) }) {
+		return "", &validate.FieldError{Field: "contact_email", Code: validate.Email}
+	}
+	domain, ok := normDNSSuffix(s[at+1:])
+	if !ok || strings.HasPrefix(domain, ".") || !strings.Contains(domain, ".") {
+		return "", &validate.FieldError{Field: "contact_email", Code: validate.Email}
+	}
+	return s[:at+1] + domain, nil
+}
+
+const accountColumns = `id, provider_id, contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at, state, created_by, created_at, updated_at`
+
+func scanAccount(row pgx.Row) (ACMEAccount, error) {
+	var a ACMEAccount
+	err := row.Scan(&a.ID, &a.ProviderID, &a.ContactEmail, &a.AccountURL, &a.TermsURL, &a.TermsAcceptedBy, &a.TermsAcceptedAt, &a.State,
+		&a.CreatedBy, &a.CreatedAt, &a.UpdatedAt)
+	a.CreatedAt, a.UpdatedAt = a.CreatedAt.UTC(), a.UpdatedAt.UTC()
+	if a.TermsAcceptedAt != nil {
+		t := a.TermsAcceptedAt.UTC()
+		a.TermsAcceptedAt = &t
+	}
+	return a, err
+}
+
+func getACMEAccount(ctx context.Context, q db.Querier, id uuid.UUID, forUpdate bool) (ACMEAccount, error) {
+	sql := "SELECT " + accountColumns + " FROM acme_accounts WHERE id = $1"
+	if forUpdate {
+		sql += " FOR UPDATE"
+	}
+	a, err := scanAccount(q.QueryRow(ctx, sql, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ACMEAccount{}, ErrNotFound
+	}
+	if err != nil {
+		return ACMEAccount{}, fmt.Errorf("inventory: read the ACME account: %w", err)
+	}
+	return a, nil
+}
+
+// GetACMEAccount returns an account (any state).
+func (s *Service) GetACMEAccount(ctx context.Context, id uuid.UUID) (ACMEAccount, error) {
+	return getACMEAccount(ctx, s.pool, id, false)
+}
+
+// ListACMEAccounts returns the accounts of a provider, newest first (ErrNotFound for a provider that is not live).
+func (s *Service) ListACMEAccounts(ctx context.Context, providerID uuid.UUID) ([]ACMEAccount, error) {
+	if _, err := getACMEProvider(ctx, s.pool, providerID, false); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, "SELECT "+accountColumns+" FROM acme_accounts WHERE provider_id = $1 ORDER BY created_at DESC, id DESC", providerID)
+	if err != nil {
+		return nil, fmt.Errorf("inventory: list the ACME accounts: %w", err)
+	}
+	defer rows.Close()
+	out := []ACMEAccount{}
+	for rows.Next() {
+		a, err := scanAccount(rows)
+		if err != nil {
+			return nil, fmt.Errorf("inventory: read an ACME account: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// lockACMEProvider serializes the CA operations of one provider's account inside this process (a registration, a
+// rollover, its recovery, a deactivation); the database's unique indexes and state checks decide across processes.
+// release must be called.
+func (s *Service) lockACMEProvider(ctx context.Context, id uuid.UUID) (release func(), err error) {
+	s.acmeMu.Lock()
+	if s.acmeLocks == nil {
+		s.acmeLocks = map[uuid.UUID]chan struct{}{}
+	}
+	ch, ok := s.acmeLocks[id]
+	if !ok {
+		ch = make(chan struct{}, 1)
+		s.acmeLocks[id] = ch
+	}
+	s.acmeMu.Unlock()
+	select {
+	case ch <- struct{}{}:
+		return func() { <-ch }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// acmeClientFor builds a client of the provider's directory through the guarded transport with the provider's CA
+// bundle. key may be nil (Discover only).
+func (s *Service) acmeClientFor(p ACMEProvider, key crypto.Signer, accountURL string) (*acme.Client, error) {
+	hc, err := transport.New(p.CABundlePEM)
+	if err != nil {
+		return nil, acmeFailure(err)
+	}
+	c, err := acme.New(acme.Config{DirectoryURL: p.DirectoryURL, Key: key, AccountURL: accountURL, HTTPClient: hc, Now: s.clock.Now})
+	if err != nil {
+		return nil, acmeFailure(err)
+	}
+	return c, nil
+}
+
+// newAccountKey generates an ECDSA P-256 account key and seals it for row id; the DER is zeroed before it returns.
+func (s *Service) newAccountKey(id uuid.UUID) (crypto.Signer, secrets.Envelope, error) {
+	k, err := keygen.Generate(keygen.ECDSAP256)
+	if err != nil {
+		return nil, secrets.Envelope{}, fmt.Errorf("inventory: generate the ACME account key: %w", err)
+	}
+	defer k.Zero()
+	env, err := s.keyring.Seal(accountKeyLocation(id), k.DER.Bytes())
+	if err != nil {
+		return nil, secrets.Envelope{}, fmt.Errorf("inventory: seal the ACME account key: %w", err)
+	}
+	return k.Signer, env, nil
+}
+
+// openAccountKey opens account id's sealed key; the DER is zeroed before it returns (the Signer outlives it, A10).
+func (s *Service) openAccountKey(ctx context.Context, q db.Querier, id uuid.UUID) (crypto.Signer, error) {
+	var env secrets.Envelope
+	err := q.QueryRow(ctx, "SELECT key_ct, key_nonce, key_wrapped_dek, key_version FROM acme_accounts WHERE id = $1", id).
+		Scan(&env.Ciphertext, &env.Nonce, &env.WrappedDEK, &env.KeyVersion)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inventory: read the ACME account key: %w", err)
+	}
+	der, err := s.keyring.Open(accountKeyLocation(id), env)
+	if err != nil {
+		return nil, ErrACMESecretUnreadable
+	}
+	defer der.Zero()
+	k, err := keygen.ParsePKCS8(der)
+	if err != nil {
+		return nil, ErrACMESecretUnreadable
+	}
+	return k.Signer, nil
+}
+
+// ACMEAccountSigner opens the key of an active account for an order (Task 10): the signer and the account URL (the
+// JWS kid). ErrNotFound, ErrACMEAccountState for an account that is not active or whose provider is deleted,
+// ErrACMESecretUnreadable. The DER is zeroed before it returns; the caller keeps the signer only for its CA calls.
+func (s *Service) ACMEAccountSigner(ctx context.Context, accountID uuid.UUID) (crypto.Signer, string, error) {
+	var state, url string
+	var live bool
+	err := s.pool.QueryRow(ctx, `SELECT a.state, a.account_url, p.deleted_at IS NULL FROM acme_accounts a JOIN acme_providers p ON p.id = a.provider_id
+WHERE a.id = $1`, accountID).Scan(&state, &url, &live)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", ErrNotFound
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("inventory: read the ACME account: %w", err)
+	}
+	if state != ACMEAccountActive || !live || url == "" {
+		return nil, "", ErrACMEAccountState
+	}
+	signer, err := s.openAccountKey(ctx, s.pool, accountID)
+	if err != nil {
+		return nil, "", err
+	}
+	return signer, url, nil
+}
+
+// checkNoAccount refuses a registration while the provider has an active account or an unsettled rollover.
+func checkNoAccount(p ACMEProvider) error {
+	switch {
+	case p.PendingRollover:
+		return ErrACMERolloverPending
+	case p.ActiveAccountID != nil:
+		return ErrACMEAccountExists
+	}
+	return nil
+}
+
+// RegisterACMEAccount creates the provider's account at the CA. Order: validation of the contact (validate.Errors),
+// the license gate (license.ErrLocked and the like: nothing is sent to the CA), the provider (ErrNotFound) without
+// an account (ErrACMEAccountExists, ErrACMERolloverPending), the CA's directory: when it has terms of service and
+// tosAccepted is false, ACMEError terms_not_accepted (nothing is registered); a new P-256 key, sealed; the
+// registration with the provider's EAB binding when it has one; then the active row and the audit row
+// acme.account.registered (provider id, ToS URL, whether a binding was used; never the contact) in one transaction.
+// A concurrent registration that won is ErrACMEAccountExists (the account this call made at the CA is deactivated,
+// best effort). CA failures are *ACMEError.
+func (s *Service) RegisterACMEAccount(ctx context.Context, a Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool) (ACMEAccount, error) {
+	contact, fe := normContact(contactEmail)
+	if fe != nil {
+		return ACMEAccount{}, validate.Errors{*fe}
+	}
+	if err := s.license.Allow(license.ClassChange); err != nil {
+		return ACMEAccount{}, err
+	}
+	release, err := s.lockACMEProvider(ctx, providerID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	defer release()
+	p, err := getACMEProvider(ctx, s.pool, providerID, false)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	if err := checkNoAccount(p); err != nil {
+		return ACMEAccount{}, err
+	}
+	id := uuid.Must(uuid.NewV7())
+	signer, env, err := s.newAccountKey(id)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	client, err := s.acmeClientFor(p, signer, "")
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	d, err := client.Discover(ctx)
+	if err != nil {
+		return ACMEAccount{}, acmeFailure(err)
+	}
+	if d.TermsOfService != "" && !tosAccepted {
+		return ACMEAccount{}, &ACMEError{Reason: acme.ReasonTermsNotAccepted, cause: acme.ErrTermsNotAccepted}
+	}
+	kid, hmac, err := s.openEAB(ctx, s.pool, providerID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	defer hmac.Zero()
+	var eab *acme.EAB
+	if kid != "" {
+		eab = &acme.EAB{KID: kid, HMACKey: hmac.Bytes()}
+	}
+	acct, err := client.RegisterAccount(ctx, contact, eab, tosAccepted)
+	if err != nil {
+		return ACMEAccount{}, acmeFailure(err)
+	}
+	now := s.clock.Now().UTC()
+	var by *uuid.UUID
+	var at *time.Time
+	if acct.TermsOfService != "" {
+		by, at = actorRef(a), &now
+	}
+	var out ACMEAccount
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// The provider must still be live and point at the CA the account was made at (FOR SHARE: a delete or an
+		// update of the provider waits for this transaction).
+		var dir string
+		err := tx.QueryRow(ctx, "SELECT directory_url FROM acme_providers WHERE id = $1 AND deleted_at IS NULL FOR SHARE", providerID).Scan(&dir)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("inventory: read the ACME provider: %w", err)
+		}
+		if dir != p.DirectoryURL {
+			return ErrACMEDirectoryChange
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO acme_accounts (id, provider_id, contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at,
+key_ct, key_nonce, key_wrapped_dek, key_version, state, created_by, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $13)`,
+			id, providerID, contact, acct.URL, acct.TermsOfService, by, at, env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, actorRef(a), now)
+		if db.IsUniqueViolationOn(err, "acme_accounts_one_active") {
+			return ErrACMEAccountExists
+		}
+		if err != nil {
+			return fmt.Errorf("inventory: store the ACME account: %w", err)
+		}
+		if out, err = getACMEAccount(ctx, tx, id, false); err != nil {
+			return err
+		}
+		details := map[string]string{"provider_id": providerID.String(), "eab_used": fmt.Sprint(acct.UsedEAB)}
+		if acct.TermsOfService != "" {
+			details["tos_url"] = acct.TermsOfService
+		}
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.account.registered", ObjectType: "acme_account",
+			ObjectID: id.String(), Result: audit.Success, Details: details})
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, ErrACMEAccountExists) || errors.Is(err, ErrACMEDirectoryChange) || errors.Is(err, ErrNotFound) {
+			s.deactivateOrphan(ctx, client)
+		}
+		return ACMEAccount{}, err
+	}
+	return out, nil
+}
+
+// orphanBudget bounds the best-effort deactivation of an account Alice made at a CA but could not store.
+const orphanBudget = 30 * time.Second
+
+// deactivateOrphan deactivates, best effort, an account this process registered and then could not keep.
+func (s *Service) deactivateOrphan(ctx context.Context, c *acme.Client) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), orphanBudget)
+	defer cancel()
+	if err := c.Deactivate(ctx); err != nil {
+		s.log.Warn("could not deactivate an ACME account that was not stored", "reason", acme.ReasonOf(err))
+	}
+}
+
+// accountProvider reads an account and its live provider, both unlocked.
+func (s *Service) accountProvider(ctx context.Context, accountID uuid.UUID) (ACMEAccount, ACMEProvider, error) {
+	acct, err := getACMEAccount(ctx, s.pool, accountID, false)
+	if err != nil {
+		return ACMEAccount{}, ACMEProvider{}, err
+	}
+	p, err := getACMEProvider(ctx, s.pool, acct.ProviderID, false)
+	if errors.Is(err, ErrNotFound) {
+		return ACMEAccount{}, ACMEProvider{}, ErrACMEAccountState
+	}
+	return acct, p, err
+}
+
+// rolloverOutcome is the seam of the integration tests' crash simulation (nil in production): it may replace the
+// outcome of the CA's keyChange, as a crash between the CA's answer and the commit would.
+type rolloverOutcome func(acme.RolloverOutcome) acme.RolloverOutcome
+
+// RolloverACMEAccount replaces the key of an active account (A6). It returns the new active account. The license
+// gate first; ErrACMEAccountState for an account that is not active; ErrACMERolloverPending when a rollover of the
+// provider is unsettled (also when this one's outcome is unknown: RecoverACMERollover settles it); a CA without
+// keyChange gives ACMEError rollover_unsupported (ALC-ACM-0014) and the pending key is discarded, as for any refusal.
+// Audit acme.account.rolled_over (provider id, previous account id).
+func (s *Service) RolloverACMEAccount(ctx context.Context, a Actor, accountID uuid.UUID) (ACMEAccount, error) {
+	if err := s.license.Allow(license.ClassChange); err != nil {
+		return ACMEAccount{}, err
+	}
+	acct, p, err := s.accountProvider(ctx, accountID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	release, err := s.lockACMEProvider(ctx, p.ID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	defer release()
+	// (1) The new key, committed as the pending row before the CA hears of it.
+	pendingID := uuid.Must(uuid.NewV7())
+	newKey, env, err := s.newAccountKey(pendingID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		cur, err := getACMEAccount(ctx, tx, accountID, true)
+		if err != nil {
+			return err
+		}
+		if cur.State == ACMEAccountPendingRollover {
+			return ErrACMERolloverPending
+		}
+		if cur.State != ACMEAccountActive || cur.AccountURL == "" {
+			return ErrACMEAccountState
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO acme_accounts (id, provider_id, contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at,
+key_ct, key_nonce, key_wrapped_dek, key_version, state, created_by, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', $12, $13, $13)`,
+			pendingID, cur.ProviderID, cur.ContactEmail, cur.AccountURL, cur.TermsURL, cur.TermsAcceptedBy, cur.TermsAcceptedAt,
+			env.Ciphertext, env.Nonce, env.WrappedDEK, env.KeyVersion, actorRef(a), s.clock.Now().UTC())
+		if db.IsUniqueViolationOn(err, "acme_accounts_one_pending") {
+			return ErrACMERolloverPending
+		}
+		if err != nil {
+			return fmt.Errorf("inventory: store the pending ACME account key: %w", err)
+		}
+		acct = cur
+		return nil
+	})
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	// (2) The CA.
+	oldKey, err := s.openAccountKey(ctx, s.pool, accountID)
+	if err != nil {
+		return ACMEAccount{}, s.discardPending(ctx, pendingID, err)
+	}
+	client, err := s.acmeClientFor(p, oldKey, acct.AccountURL)
+	if err != nil {
+		return ACMEAccount{}, s.discardPending(ctx, pendingID, err)
+	}
+	outcome, cerr := client.Rollover(ctx, newKey)
+	if s.rolloverSeam != nil {
+		outcome = s.rolloverSeam(outcome)
+	}
+	// (3) Settle.
+	switch outcome {
+	case acme.RolloverSwitched:
+		return s.settleRollover(ctx, a, accountID, pendingID, acct.AccountURL, false)
+	case acme.RolloverUnknown:
+		s.log.Warn("the outcome of an ACME account key change is unknown; the pending key is kept", "account_id", accountID.String(),
+			"reason", acme.ReasonOf(cerr))
+		return ACMEAccount{}, ErrACMERolloverPending
+	default:
+		if cerr == nil {
+			cerr = &ACMEError{Reason: acme.ReasonAccountRejected}
+		}
+		return ACMEAccount{}, s.discardPending(ctx, pendingID, acmeFailure(cerr))
+	}
+}
+
+// settleRollover makes the pending row the active account and retires the old one, in one transaction, with the
+// audit row. accountURL is the account's URL at the CA (unchanged by a rollover).
+func (s *Service) settleRollover(ctx context.Context, a Actor, oldID, pendingID uuid.UUID, accountURL string, recovered bool) (ACMEAccount, error) {
+	var out ACMEAccount
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		old, err := getACMEAccount(ctx, tx, oldID, true)
+		if err != nil {
+			return err
+		}
+		pending, err := getACMEAccount(ctx, tx, pendingID, true)
+		if err != nil {
+			return err
+		}
+		if old.State != ACMEAccountActive || pending.State != ACMEAccountPendingRollover {
+			return ErrACMEAccountState
+		}
+		now := s.clock.Now().UTC()
+		if _, err := tx.Exec(ctx, "UPDATE acme_accounts SET state = 'retired', updated_at = $2 WHERE id = $1", oldID, now); err != nil {
+			return fmt.Errorf("inventory: retire the old ACME account key: %w", err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE acme_accounts SET state = 'active', account_url = $3, updated_at = $2 WHERE id = $1", pendingID, now, accountURL); err != nil {
+			return fmt.Errorf("inventory: activate the new ACME account key: %w", err)
+		}
+		if out, err = getACMEAccount(ctx, tx, pendingID, false); err != nil {
+			return err
+		}
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.account.rolled_over", ObjectType: "acme_account",
+			ObjectID: pendingID.String(), Result: audit.Success, Details: map[string]string{"provider_id": old.ProviderID.String(),
+				"previous_account_id": oldID.String(), "recovered": fmt.Sprint(recovered)}})
+		return err
+	})
+	return out, err
+}
+
+// discardPending deletes a pending key the CA did not take (detached from the caller's context: the row must not
+// outlive a refusal because the request was cancelled) and returns cause.
+func (s *Service) discardPending(ctx context.Context, pendingID uuid.UUID, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
+	defer cancel()
+	if _, err := s.pool.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1 AND state = 'pending_rollover'", pendingID); err != nil {
+		s.log.Error("could not discard a pending ACME account key", "error_type", fmt.Sprintf("%T", err))
+	}
+	return cause
+}
+
+// RecoverACMERollover settles an unsettled rollover of the provider of accountID (the active account or its pending
+// key). It asks the CA with the new key first: if the CA knows it, the new key becomes active (audit
+// acme.account.rolled_over, recovered true); if the CA does not know it but knows the old key, the pending key is
+// discarded and the active account returned unchanged. Any other answer leaves the pending key in place and is
+// returned as *ACMEError. ErrACMEAccountState when nothing is pending. License gate first.
+func (s *Service) RecoverACMERollover(ctx context.Context, a Actor, accountID uuid.UUID) (ACMEAccount, error) {
+	if err := s.license.Allow(license.ClassChange); err != nil {
+		return ACMEAccount{}, err
+	}
+	_, p, err := s.accountProvider(ctx, accountID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	release, err := s.lockACMEProvider(ctx, p.ID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	defer release()
+	var activeID, pendingID uuid.UUID
+	var accountURL string
+	err = s.pool.QueryRow(ctx, `SELECT a.id, a.account_url, n.id FROM acme_accounts a JOIN acme_accounts n ON n.provider_id = a.provider_id
+WHERE a.provider_id = $1 AND a.state = 'active' AND n.state = 'pending_rollover'`, p.ID).Scan(&activeID, &accountURL, &pendingID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ACMEAccount{}, ErrACMEAccountState
+	}
+	if err != nil {
+		return ACMEAccount{}, fmt.Errorf("inventory: read the pending ACME account key: %w", err)
+	}
+	newKey, err := s.openAccountKey(ctx, s.pool, pendingID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	withNew, err := s.acmeClientFor(p, newKey, "")
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	u, nerr := withNew.Lookup(ctx)
+	if nerr == nil {
+		if u == "" {
+			u = accountURL
+		}
+		return s.settleRollover(ctx, a, activeID, pendingID, u, true)
+	}
+	if !errors.Is(nerr, acme.ErrNoAccount) {
+		return ACMEAccount{}, acmeFailure(nerr)
+	}
+	oldKey, err := s.openAccountKey(ctx, s.pool, activeID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	withOld, err := s.acmeClientFor(p, oldKey, "")
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	if _, oerr := withOld.Lookup(ctx); oerr != nil {
+		return ACMEAccount{}, acmeFailure(oerr)
+	}
+	if err := s.discardPending(ctx, pendingID, nil); err != nil {
+		return ACMEAccount{}, err
+	}
+	return getACMEAccount(ctx, s.pool, activeID, false)
+}
+
+// DeactivateACMEAccount deactivates an active account at the CA (RFC 8555 7.3.6; permanent) and marks it
+// deactivated, with the audit row acme.account.deactivated. License gate first; ErrACMEAccountState for an account
+// that is not active; ErrACMERolloverPending while a rollover is unsettled. A CA failure changes nothing.
+func (s *Service) DeactivateACMEAccount(ctx context.Context, a Actor, accountID uuid.UUID) (ACMEAccount, error) {
+	if err := s.license.Allow(license.ClassChange); err != nil {
+		return ACMEAccount{}, err
+	}
+	acct, p, err := s.accountProvider(ctx, accountID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	release, err := s.lockACMEProvider(ctx, p.ID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	defer release()
+	if p, err = getACMEProvider(ctx, s.pool, p.ID, false); err != nil {
+		return ACMEAccount{}, err
+	}
+	if acct, err = getACMEAccount(ctx, s.pool, accountID, false); err != nil {
+		return ACMEAccount{}, err
+	}
+	if acct.State != ACMEAccountActive || acct.AccountURL == "" {
+		return ACMEAccount{}, ErrACMEAccountState
+	}
+	if p.PendingRollover {
+		return ACMEAccount{}, ErrACMERolloverPending
+	}
+	key, err := s.openAccountKey(ctx, s.pool, accountID)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	client, err := s.acmeClientFor(p, key, acct.AccountURL)
+	if err != nil {
+		return ACMEAccount{}, err
+	}
+	if err := client.Deactivate(ctx); err != nil {
+		return ACMEAccount{}, acmeFailure(err)
+	}
+	var out ACMEAccount
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, "UPDATE acme_accounts SET state = 'deactivated', updated_at = $2 WHERE id = $1 AND state = 'active'",
+			accountID, s.clock.Now().UTC())
+		if err != nil {
+			return fmt.Errorf("inventory: mark the ACME account deactivated: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrACMEAccountState
+		}
+		if out, err = getACMEAccount(ctx, tx, accountID, false); err != nil {
+			return err
+		}
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.account.deactivated", ObjectType: "acme_account",
+			ObjectID: accountID.String(), Result: audit.Success, Details: map[string]string{"provider_id": p.ID.String()}})
+		return err
+	})
+	return out, err
+}

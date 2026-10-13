@@ -1361,6 +1361,41 @@
         "title": "The key type cannot be changed.",
         "cause": "This certificate is already deployed to servers with its current key type. Changing it would break those deployments. Nothing was changed.",
         "action": "Create a new certificate with the other key type and move the deployments to it."
+      },
+      "hook_in_use": {
+        "title": "The DNS hook is still in use.",
+        "cause": "Certificates still publish their DNS proof through this hook, so it cannot be removed. Nothing was changed.",
+        "action": "Delete these certificates or switch them to another hook first, then remove this one."
+      },
+      "name_taken": {
+        "title": "This name is already used.",
+        "cause": "Another certificate authority or DNS hook already has this name. Nothing was saved.",
+        "action": "Choose a different name."
+      },
+      "account_exists": {
+        "title": "This authority already has an account.",
+        "cause": "Alice keeps one account per certificate authority, and this one already has an active account. No new account was created.",
+        "action": "Use the existing account. To start over, deactivate it first and then register again."
+      },
+      "directory_change_unconfirmed": {
+        "title": "Changing the address needs your confirmation.",
+        "cause": "This certificate authority has an active account. A new directory address usually means a different authority, where that account does not exist. Nothing was changed.",
+        "action": "Check the address. If it is right, confirm the change: the current account is then retired and you register a new one."
+      },
+      "account_state": {
+        "title": "The account cannot do this now.",
+        "cause": "The account is retired, deactivated or still being changed, so this action does not apply to it. Nothing was changed.",
+        "action": "Refresh the page and use the authority's current active account."
+      },
+      "rollover_pending": {
+        "title": "The account key change is not finished.",
+        "cause": "Alice asked the certificate authority to change the account key, but the answer did not arrive, so it is not yet known which key the authority uses.",
+        "action": "Use \"Check key change\" to let Alice ask the authority again. Nothing else changes until it is settled."
+      },
+      "secret_unreadable": {
+        "title": "A stored secret cannot be read.",
+        "cause": "A secret Alice keeps for this authority or hook (an account key, an external account key or a hook secret) cannot be decrypted with the current master key, for example after a restore with another key.",
+        "action": "Restore the matching master key, or enter the secret again (for an account: register a new account)."
       }
     },
     "tls": {

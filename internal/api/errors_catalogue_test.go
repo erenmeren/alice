@@ -70,6 +70,13 @@ var inventorySentinels = map[string]error{
 	"ErrVaultCredentialUnreadable": inventory.ErrVaultCredentialUnreadable,
 	// Phase 6 (Task 6)
 	"ErrTargetDisabled": inventory.ErrTargetDisabled,
+	// ACME (Tasks 8 and 9)
+	"ErrACMEOrderNotRunning": inventory.ErrACMEOrderNotRunning, "ErrACMEPendingKey": inventory.ErrACMEPendingKey,
+	"ErrACMEChainMismatch": inventory.ErrACMEChainMismatch, "ErrACMEErrorCode": inventory.ErrACMEErrorCode,
+	"ErrACMEProviderInUse": inventory.ErrACMEProviderInUse, "ErrACMEHookInUse": inventory.ErrACMEHookInUse,
+	"ErrACMENameTaken": inventory.ErrACMENameTaken, "ErrACMEDirectoryChange": inventory.ErrACMEDirectoryChange,
+	"ErrACMESecretUnreadable": inventory.ErrACMESecretUnreadable, "ErrACMEAccountExists": inventory.ErrACMEAccountExists,
+	"ErrACMEAccountState": inventory.ErrACMEAccountState, "ErrACMERolloverPending": inventory.ErrACMERolloverPending,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,
@@ -81,8 +88,12 @@ var inventorySentinels = map[string]error{
 // ErrImportChanged are what an import job meets; ErrCredentialNotTheTargets is the database refusing what correct
 // code never sends (Z1006); ReplaceVaultCredentials can return it, and it answers ALC-SYS-0003 on purpose (a
 // programming error nobody can act on). A request that somehow met any of these is answered ALC-SYS-0003.
+//
+// ACME (Task 8): the order record's ErrACMEOrderNotRunning, ErrACMEPendingKey, ErrACMEChainMismatch and ErrACMEErrorCode
+// reach only the acme.issue job (Begin/Finish/Abort/LoadPendingKey), which records an order error code instead.
 var engineOnlySentinels = []string{"ErrDeploymentState", "ErrClaimLost", "ErrBindingGone", "ErrAutoDeployOff", "ErrVersionHeld",
-	"ErrImportState", "ErrImportChanged", "ErrCredentialNotTheTargets", "ErrVersionSuperseded", "ErrWaveStopped"}
+	"ErrImportState", "ErrImportChanged", "ErrCredentialNotTheTargets", "ErrVersionSuperseded", "ErrWaveStopped",
+	"ErrACMEOrderNotRunning", "ErrACMEPendingKey", "ErrACMEChainMismatch", "ErrACMEErrorCode"}
 
 // exportedErrorVars returns the names of the package-level exported variables of dir's non-test
 // sources whose value is errors.New(...) or a selector (a re-exported sentinel such as certs.ErrX).

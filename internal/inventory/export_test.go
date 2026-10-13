@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"alice/internal/acme"
 	"alice/internal/certs"
 	"alice/internal/platform/db"
 	"alice/internal/providers"
@@ -196,3 +197,13 @@ func SetPlanInsertHook(f func(location uuid.UUID)) (restore func()) {
 // CredentialLocation exposes credentialLocation to the integration tests, which seal a damaged
 // platform key at the place the real one lives.
 func CredentialLocation(id uuid.UUID) secrets.Location { return credentialLocation(id) }
+
+// SetACMERolloverSeam replaces the CA's answer to an account key change (the integration tests' crash simulation).
+func (s *Service) SetACMERolloverSeam(f func(acme.RolloverOutcome) acme.RolloverOutcome) {
+	s.rolloverSeam = f
+}
+
+// OpenACMEEAB exposes openEAB to the integration tests (the sealed EAB round trip).
+func (s *Service) OpenACMEEAB(ctx context.Context, id uuid.UUID) (string, secrets.Plaintext, error) {
+	return s.openEAB(ctx, s.pool, id)
+}

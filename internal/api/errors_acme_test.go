@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	"alice/internal/acme"
 	"alice/internal/i18n"
+	"alice/internal/inventory"
 	"alice/locales"
 )
 
@@ -30,6 +32,10 @@ var acmeTable = []struct {
 	{"ALC-ACM-0013", "acme.tls_trust_failed", 502, false}, {"ALC-ACM-0014", "acme.rollover_unsupported", 422, false},
 	{"ALC-ACM-0015", "acme.name_not_allowed", 422, false}, {"ALC-ACM-0016", "acme.order_running", 409, true},
 	{"ALC-ACM-0017", "acme.challenge_unavailable", 422, false}, {"ALC-ACM-0018", "acme.key_type_locked", 409, false},
+	{"ALC-ACM-0019", "acme.hook_in_use", 409, false}, {"ALC-ACM-0020", "acme.name_taken", 409, false},
+	{"ALC-ACM-0021", "acme.account_exists", 409, false}, {"ALC-ACM-0022", "acme.directory_change_unconfirmed", 409, false},
+	{"ALC-ACM-0023", "acme.account_state", 409, false}, {"ALC-ACM-0024", "acme.rollover_pending", 409, true},
+	{"ALC-ACM-0025", "acme.secret_unreadable", 409, false},
 }
 
 // Every ACME code is registered as the table says, translated in English and Turkish without placeholders, and has a
@@ -110,4 +116,20 @@ func TestHelperOutdatedHTTP01IsCatalogued(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(doc), "\n## ALC-SSH-0013: Reinstall the helper on this server to use this proof method\n")
 	assert.True(t, providerParamKeys["helper_protocol"] && providerParamKeys["required_protocol"])
+}
+
+// Every reason the inventory's single CA-failure mapping can give (*inventory.ACMEError carries one of acme.Reasons())
+// answers its own ALC-ACM code; a reason outside the registry, or one of another area, answers directory_invalid.
+func TestACMEInventoryErrorsMapToTheirCodes(t *testing.T) {
+	for _, r := range acme.Reasons() {
+		ec, params, ok := classify(fmt.Errorf("wrapped: %w", &inventory.ACMEError{Reason: r}))
+		require.True(t, ok, r)
+		assert.Equal(t, r, ec.Reason)
+		assert.Nil(t, params, r)
+	}
+	for _, r := range []string{"acme.made_up", "ssh.helper_outdated", ""} {
+		ec, _, ok := classify(&inventory.ACMEError{Reason: r})
+		require.True(t, ok, r)
+		assert.Equal(t, ErrACMDirectoryInvalid, ec, r)
+	}
 }

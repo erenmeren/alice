@@ -2610,6 +2610,62 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Create a second certificate with the new key type and bind it in place of this one.
 
+## ALC-ACM-0019: The DNS hook is still in use
+
+**Meaning.** At least one ACME certificate publishes its DNS-01 proof through the hook. The hook was not changed. (HTTP 409, reason `acme.hook_in_use`.)
+
+**Likely cause.** Certificates were created with this hook and still exist.
+
+**What to do.** Delete those certificates or switch them to another hook, then delete the hook.
+
+## ALC-ACM-0020: This name is already used
+
+**Meaning.** Another live certificate authority (or another DNS hook) has this name; names are compared without regard to letter case. Nothing was saved. (HTTP 409, reason `acme.name_taken`.)
+
+**Likely cause.** The name was used before, or two Administrators added the same authority at once.
+
+**What to do.** Choose another name, or edit the existing entry.
+
+## ALC-ACM-0021: This authority already has an account
+
+**Meaning.** The provider already has an active account (Alice keeps one per provider). No account was registered. If two registrations raced, the account the losing one created at the authority is deactivated again. (HTTP 409, reason `acme.account_exists`.)
+
+**Likely cause.** The account was registered before, or twice at the same time.
+
+**What to do.** Use the existing account, or deactivate it and register again.
+
+## ALC-ACM-0022: Changing the address needs your confirmation
+
+**Meaning.** The request changes the directory URL of a provider that has an active account, without the confirmation. Nothing was changed. (It is also returned when the address changed while an account was being registered.) (HTTP 409, reason `acme.directory_change_unconfirmed`.)
+
+**Likely cause.** A new directory URL usually is another authority, where the account does not exist.
+
+**What to do.** Confirm the change (the account is then retired and a new one must be registered), or keep the old address.
+
+## ALC-ACM-0023: The account cannot do this now
+
+**Meaning.** The account is retired, deactivated, a pending key or belongs to a deleted provider, so the rollover, deactivation or recovery does not apply. Nothing was changed. (HTTP 409, reason `acme.account_state`.)
+
+**Likely cause.** The page showed an older state, or another Administrator changed the account.
+
+**What to do.** Reload the page and act on the provider's current active account.
+
+## ALC-ACM-0024: The account key change is not finished
+
+**Meaning.** An account key rollover was sent to the authority but its answer was lost, or another rollover of the provider is running. The new key is kept as pending until it is settled. Registration, a second rollover, deactivation and a directory change wait for it. (HTTP 409, reason `acme.rollover_pending`; retryable.)
+
+**Likely cause.** A network failure or timeout during the key change.
+
+**What to do.** Run the key change check (recover): Alice asks the authority which key it knows and settles the account.
+
+## ALC-ACM-0025: A stored secret cannot be read
+
+**Meaning.** An ACME account key, an external account binding key or a DNS hook secret cannot be decrypted with the current master key. Nothing was sent. (HTTP 409, reason `acme.secret_unreadable`.)
+
+**Likely cause.** The database was restored with another master key, or the row was damaged.
+
+**What to do.** Restore the matching master key; otherwise enter the binding or hook secret again, or register a new account.
+
 ## Install and start problems
 
 The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.

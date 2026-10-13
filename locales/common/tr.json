@@ -1361,6 +1361,41 @@
         "title": "Anahtar türü değiştirilemez.",
         "cause": "Bu sertifika mevcut anahtar türüyle sunuculara zaten dağıtılmış. Türü değiştirmek bu dağıtımları bozar. Hiçbir şey değiştirilmedi.",
         "action": "Diğer anahtar türüyle yeni bir sertifika oluşturun ve dağıtımları ona taşıyın."
+      },
+      "hook_in_use": {
+        "title": "DNS kancası hâlâ kullanılıyor.",
+        "cause": "Bazı sertifikalar DNS kanıtlarını bu kanca üzerinden yayımlıyor, bu yüzden kanca kaldırılamaz. Hiçbir şey değiştirilmedi.",
+        "action": "Önce bu sertifikaları silin veya başka bir kancaya geçirin, ardından bu kancayı kaldırın."
+      },
+      "name_taken": {
+        "title": "Bu ad zaten kullanılıyor.",
+        "cause": "Başka bir sertifika yetkilisi veya DNS kancası bu adı kullanıyor. Hiçbir şey kaydedilmedi.",
+        "action": "Farklı bir ad seçin."
+      },
+      "account_exists": {
+        "title": "Bu yetkilinin zaten bir hesabı var.",
+        "cause": "Alice her sertifika yetkilisi için tek bir hesap tutar ve bu yetkilinin etkin bir hesabı zaten var. Yeni hesap oluşturulmadı.",
+        "action": "Mevcut hesabı kullanın. Baştan başlamak için önce hesabı devre dışı bırakın, sonra yeniden kaydolun."
+      },
+      "directory_change_unconfirmed": {
+        "title": "Adresi değiştirmek için onayınız gerekiyor.",
+        "cause": "Bu sertifika yetkilisinin etkin bir hesabı var. Yeni bir dizin adresi genellikle bu hesabın bulunmadığı farklı bir yetkili anlamına gelir. Hiçbir şey değiştirilmedi.",
+        "action": "Adresi kontrol edin. Doğruysa değişikliği onaylayın: mevcut hesap emekliye ayrılır ve yeni bir hesap kaydedersiniz."
+      },
+      "account_state": {
+        "title": "Hesap bu işlemi şu anda yapamaz.",
+        "cause": "Hesap emekliye ayrılmış, devre dışı bırakılmış veya hâlâ değiştiriliyor, bu yüzden bu işlem ona uygulanamaz. Hiçbir şey değiştirilmedi.",
+        "action": "Sayfayı yenileyin ve yetkilinin geçerli etkin hesabını kullanın."
+      },
+      "rollover_pending": {
+        "title": "Hesap anahtarı değişikliği tamamlanmadı.",
+        "cause": "Alice sertifika yetkilisinden hesap anahtarını değiştirmesini istedi, ancak yanıt gelmedi; bu nedenle yetkilinin hangi anahtarı kullandığı henüz bilinmiyor.",
+        "action": "Alice'in yetkiliye yeniden sorması için \"Anahtar değişikliğini denetle\" düğmesini kullanın. Bu durum netleşene kadar başka bir şey değişmez."
+      },
+      "secret_unreadable": {
+        "title": "Kayıtlı bir gizli bilgi okunamıyor.",
+        "cause": "Alice'in bu yetkili veya kanca için sakladığı bir gizli bilgi (hesap anahtarı, harici hesap anahtarı veya kanca gizli değeri) geçerli ana anahtarla çözülemiyor; örneğin başka bir anahtarla yapılan geri yüklemeden sonra.",
+        "action": "Eşleşen ana anahtarı geri yükleyin veya gizli bilgiyi yeniden girin (hesap için: yeni bir hesap kaydedin)."
       }
     },
     "tls": {

@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"alice/internal/alerts/expiry"
@@ -391,6 +392,14 @@ var (
 	ErrACMOrderRunning         = ErrorCode{Code: "ALC-ACM-0016", Reason: "acme.order_running", Status: http.StatusConflict, Retryable: true}
 	ErrACMChallengeUnavailable = ErrorCode{Code: "ALC-ACM-0017", Reason: "acme.challenge_unavailable", Status: http.StatusUnprocessableEntity}
 	ErrACMKeyTypeLocked        = ErrorCode{Code: "ALC-ACM-0018", Reason: "acme.key_type_locked", Status: http.StatusConflict}
+	// Providers, accounts and hooks (Task 9).
+	ErrACMHookInUse                  = ErrorCode{Code: "ALC-ACM-0019", Reason: "acme.hook_in_use", Status: http.StatusConflict}
+	ErrACMNameTaken                  = ErrorCode{Code: "ALC-ACM-0020", Reason: "acme.name_taken", Status: http.StatusConflict}
+	ErrACMAccountExists              = ErrorCode{Code: "ALC-ACM-0021", Reason: "acme.account_exists", Status: http.StatusConflict}
+	ErrACMDirectoryChangeUnconfirmed = ErrorCode{Code: "ALC-ACM-0022", Reason: "acme.directory_change_unconfirmed", Status: http.StatusConflict}
+	ErrACMAccountState               = ErrorCode{Code: "ALC-ACM-0023", Reason: "acme.account_state", Status: http.StatusConflict}
+	ErrACMRolloverPending            = ErrorCode{Code: "ALC-ACM-0024", Reason: "acme.rollover_pending", Status: http.StatusConflict, Retryable: true}
+	ErrACMSecretUnreadable           = ErrorCode{Code: "ALC-ACM-0025", Reason: "acme.secret_unreadable", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -447,6 +456,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMProviderUnreachable, ErrACMDirectoryInvalid, ErrACMTermsNotAccepted, ErrACMAccountRejected, ErrACMCaRateLimited, ErrACMValidationFailedDns,
 		ErrACMValidationFailedHttp, ErrACMHookRefused, ErrACMIdentifierRefused, ErrACMNotIssuedInTime, ErrACMKeyPolicyNotAllowed, ErrACMProviderInUse,
 		ErrACMTlsTrustFailed, ErrACMRolloverUnsupported, ErrACMNameNotAllowed, ErrACMOrderRunning, ErrACMChallengeUnavailable, ErrACMKeyTypeLocked,
+		ErrACMHookInUse, ErrACMNameTaken, ErrACMAccountExists, ErrACMDirectoryChangeUnconfirmed, ErrACMAccountState, ErrACMRolloverPending,
+		ErrACMSecretUnreadable,
 	}
 }
 
@@ -576,6 +587,15 @@ var errorMap = []struct {
 	{inventory.ErrVaultUnavailable, ErrKVVaultUnavailable, nil},
 	{inventory.ErrImportConfirmNeeded, ErrKVImportConfirmNeeded, nil},
 	{inventory.ErrImportInProgress, ErrKVImportInProgress, nil},
+	// ACME providers, accounts and hooks (Task 9). A CA exchange's failure is an *inventory.ACMEError (classify).
+	{inventory.ErrACMEProviderInUse, ErrACMProviderInUse, nil},
+	{inventory.ErrACMEHookInUse, ErrACMHookInUse, nil},
+	{inventory.ErrACMENameTaken, ErrACMNameTaken, nil},
+	{inventory.ErrACMEDirectoryChange, ErrACMDirectoryChangeUnconfirmed, nil},
+	{inventory.ErrACMESecretUnreadable, ErrACMSecretUnreadable, nil},
+	{inventory.ErrACMEAccountExists, ErrACMAccountExists, nil},
+	{inventory.ErrACMEAccountState, ErrACMAccountState, nil},
+	{inventory.ErrACMERolloverPending, ErrACMRolloverPending, nil},
 	// The inventory repeats the session check inside its transaction (a hold or a switch-on can appear after the
 	// API looked): what it refuses is a session without a fresh step-up.
 	{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired, nil},
@@ -793,6 +813,14 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 			params["certificate_name"] = confirm.CertificateName
 		}
 		return ErrKVImportConfirmNeeded, params, true
+	}
+	var acmeErr *inventory.ACMEError
+	if errors.As(err, &acmeErr) {
+		// One of the registered ALC-ACM reasons (inventory maps every CA failure to one); never the CA's text.
+		if ec := codeForReason(acmeErr.Reason); ec != ErrUnexpected && strings.HasPrefix(ec.Code, "ALC-ACM-") {
+			return ec, nil, true
+		}
+		return ErrACMDirectoryInvalid, nil, true
 	}
 	var disc *oidc.DiscoveryError
 	if errors.As(err, &disc) {
