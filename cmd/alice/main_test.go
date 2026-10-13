@@ -110,6 +110,7 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Same(t, svc.auth, d.Auth)
 	assert.Same(t, svc.audit, d.Audit)
 	assert.Same(t, svc.inventory, d.Inventory)
+	assert.Same(t, svc.inventory, d.ACME)
 	assert.Same(t, svc.queue, d.Jobs)
 	assert.Same(t, svc.registry, d.Providers)
 	assert.Same(t, svc.sshkeys, d.SSHKeys)
@@ -132,6 +133,9 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Nil(t, none.Backup)
 	assert.Nil(t, none.Forward)
 	assert.Nil(t, none.TLSStore, "a command has no certificate store")
+	svc.inventory = nil
+	assert.Nil(t, newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil).ACME,
+		"a nil inventory stays a nil interface")
 	assert.NotNil(t, d.Clock)
 	assert.NotNil(t, d.Log)
 }

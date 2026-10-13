@@ -216,6 +216,7 @@ var conditionalRules = []struct{ method, path string }{
 	{http.MethodDelete, "/api/v1/targets/{id}"},
 	{http.MethodPatch, "/api/v1/bindings/{id}"},
 	{http.MethodPost, "/api/v1/bindings/{id}/actions/deploy"},
+	{http.MethodPut, "/api/v1/acme/certificates/{id}/bindings/{location_id}"},
 }
 
 const authzNotes = `
@@ -232,6 +233,10 @@ API token (403 ALC-AUTH-0003 without the step-up, 403 ALC-AUTH-0002 for a token 
   change to a connection that does not deploy automatically, is ` + "`certificates.operate`" + ` as listed.
 - ` + "`POST /api/v1/bindings/{id}/actions/deploy`" + `: when the version is held (found while the license was not available, or with an
   incomplete certificate chain). An Operator is refused with ALC-AKV-0022.
+- ` + "`PUT /api/v1/acme/certificates/{id}/bindings/{location_id}`" + `: when it switches unattended deployment on (` + "`auto_deploy: true`" + ` for a
+  new binding, or for a binding whose automatic deployment is off). Then it needs what ` + "`acme.manage`" + ` needs (an Administrator's
+  browser session with a fresh step-up, never an API token); binding with automatic deployment off, keeping it on and switching it
+  off are ` + "`acme.operate`" + ` as listed. The inventory checks the role and the license again.
 
 **` + "`credentials.manage`" + `** is Administrator with step-up and no API token. Besides adding a Key Vault and replacing its credentials
 it gates switching automatic deployment on or off, releasing a held version and importing a certificate into a vault (a
@@ -241,6 +246,15 @@ private key leaves Alice).
 (switching automatic deployment off and removing a connection only reduce what Alice does); switching it on is refused then by
 the inventory with ALC-LIC-0001. ` + "`POST /api/v1/ssh-keys/{id}/actions/download-private-key`" + ` is open too: it changes nothing outside
 Alice, and a lock must not hold the keys of the customer's own servers hostage.
+
+**ACME certificates.** Every ` + "`/api/v1/acme/...`" + ` read is ` + "`acme.view`" + ` (every role, read tokens). Certificate authorities,
+their accounts, DNS hooks and the certificate definitions (with their name lists), re-arming automatic renewal and releasing a held
+certificate are ` + "`acme.manage`" + `: an Administrator's browser session with step-up, never an API token. Ordering a renewal, a test
+run, binding locations and Deploy now are ` + "`acme.operate`" + ` (Operators and operate tokens). The routes that contact a certificate
+authority or start work (account registration, key change and its check, deactivation, order, test run, re-arm, Deploy now) are
+limited to 10 a minute per user or token. In lock every ACME change is refused with ALC-LIC-0001 (no certificate authority is
+contacted) except ` + "`DELETE /api/v1/acme/certificates/{id}`" + ` and ` + "`DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}`" + `,
+which only reduce what Alice does (no renewal, no deployment), like removing a Key Vault connection.
 
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
@@ -391,6 +405,14 @@ func routeRuleViolations(routes []route) []string {
 			under(p, "/api/v1/certificates"), under(p, "/api/v1/locations"), under(p, "/api/v1/deployments"),
 			under(p, "/api/v1/bindings"), under(p, "/api/v1/certificate-locations"), under(p, "/api/v1/key-vaults"):
 			want = rbac.Read
+		// ACME (D6, A9): reads are acme.view; ordering, test runs, bindings and Deploy now acme.operate; everything else
+		// (providers, accounts, hooks, definitions, re-arm, release) acme.manage.
+		case under(p, "/api/v1/acme") && safeMethod(rt.method):
+			want = rbac.AcmeView
+		case under(p, "/api/v1/acme/certificates") && acmeOperateAction(rt.method, p):
+			want = rbac.AcmeOperate
+		case under(p, "/api/v1/acme"):
+			want = rbac.AcmeManage
 		case under(p, "/api/v1/users") && !safeMethod(rt.method):
 			want = rbac.UsersManage
 		case under(p, "/api/v1/users"):
@@ -425,6 +447,12 @@ func routeRuleViolations(routes []route) []string {
 		}
 	}
 	return out
+}
+
+// acmeOperateAction: the ACME actions an Operator may take on an existing certificate (A9).
+func acmeOperateAction(method, p string) bool {
+	return (method == http.MethodPost && (strings.HasSuffix(p, "/order") || strings.HasSuffix(p, "/test") || strings.HasSuffix(p, "/deploy"))) ||
+		strings.HasSuffix(p, "/bindings/{location_id}")
 }
 
 // rotationOperateAction: the rotation actions that start or decide changes on servers (rotation.operate).
@@ -572,6 +600,34 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"POST /api/v1/auth/oidc/{id}/start",
 		"GET /api/v1/auth/oidc/{id}/callback",
 		"POST /api/v1/auth/oidc/stepup",
+		"GET /api/v1/acme/providers",
+		"POST /api/v1/acme/providers",
+		"GET /api/v1/acme/providers/{id}",
+		"PATCH /api/v1/acme/providers/{id}",
+		"DELETE /api/v1/acme/providers/{id}",
+		"POST /api/v1/acme/providers/{id}/account",
+		"POST /api/v1/acme/accounts/{id}/rollover",
+		"POST /api/v1/acme/accounts/{id}/rollover/recover",
+		"POST /api/v1/acme/accounts/{id}/deactivate",
+		"GET /api/v1/acme/hooks",
+		"POST /api/v1/acme/hooks",
+		"GET /api/v1/acme/hooks/{id}",
+		"PATCH /api/v1/acme/hooks/{id}",
+		"DELETE /api/v1/acme/hooks/{id}",
+		"GET /api/v1/acme/certificates",
+		"POST /api/v1/acme/certificates",
+		"GET /api/v1/acme/certificates/{id}",
+		"PATCH /api/v1/acme/certificates/{id}",
+		"DELETE /api/v1/acme/certificates/{id}",
+		"POST /api/v1/acme/certificates/{id}/order",
+		"POST /api/v1/acme/certificates/{id}/test",
+		"GET /api/v1/acme/certificates/{id}/orders",
+		"POST /api/v1/acme/certificates/{id}/rearm",
+		"POST /api/v1/acme/certificates/{id}/release-hold",
+		"GET /api/v1/acme/certificates/{id}/bindings",
+		"PUT /api/v1/acme/certificates/{id}/bindings/{location_id}",
+		"DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}",
+		"POST /api/v1/acme/certificates/{id}/deploy",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -639,6 +695,15 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/sso/settings", perm: rbac.UsersRead},
 		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/stepup", perm: rbac.SessionStepUp},
 		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/{id}/callback", perm: rbac.Session},
+		// ACME: a definition, provider, hook or account behind acme.operate, an order behind acme.manage, a read behind more.
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates", perm: rbac.AcmeOperate},
+		{method: http.MethodPatch, pattern: "/api/v1/acme/certificates/{id}", perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/providers", perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/accounts/{id}/rollover", perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/rearm", perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/order", perm: rbac.AcmeManage},
+		{method: http.MethodPut, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/acme/certificates", perm: rbac.AcmeOperate},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -683,6 +748,10 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read},
 		{method: http.MethodDelete, pattern: "/api/v1/sso/group-mappings/{id}", perm: rbac.SSOManage},
 		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/{id}/start", perm: rbac.Public},
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/test", perm: rbac.AcmeOperate},
+		{method: http.MethodDelete, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", perm: rbac.AcmeOperate},
+		{method: http.MethodDelete, pattern: "/api/v1/acme/hooks/{id}", perm: rbac.AcmeManage},
+		{method: http.MethodGet, pattern: "/api/v1/acme/hooks/{id}", perm: rbac.AcmeView},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }
@@ -709,7 +778,10 @@ var (
 		"PUT /api/v1/bindings/{id}/auto-deploy": true, "DELETE /api/v1/bindings/{id}": true,
 		"POST /api/v1/ssh-keys/{id}/actions/download-private-key": true,
 		// Stop and undo takes back what a run added; its undo runs in lock (L-86).
-		"POST /api/v1/rotation/runs/{id}/actions/abort": true}
+		"POST /api/v1/rotation/runs/{id}/actions/abort": true,
+		// ACME: deleting a certificate definition (no more renewals, its bindings go) and removing a binding only reduce
+		// what Alice does, like removing a Key Vault connection; neither contacts a certificate authority or a server.
+		"DELETE /api/v1/acme/certificates/{id}": true, "DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}": true}
 )
 
 func underAny(pattern string, prefixes []string) bool {
@@ -858,7 +930,8 @@ func TestAuthzNotesNameRealRoutesAndTheirConditions(t *testing.T) {
 		assert.Contains(t, authzNotes, c.method+" "+c.path, "the notes must name "+c.path)
 	}
 	for _, phrase := range []string{"remove_bindings=true", "adds websites to a connection that deploys automatically", "the version is held",
-		"not a boundary", "gates switching automatic deployment", "releasing a held version", "importing a certificate"} {
+		"not a boundary", "gates switching automatic deployment", "releasing a held version", "importing a certificate",
+		"switches unattended deployment on", "only reduce what Alice does (no renewal, no deployment)", "10 a minute per user or token"} {
 		assert.Contains(t, authzNotes, phrase)
 	}
 }

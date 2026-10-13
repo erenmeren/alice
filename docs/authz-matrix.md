@@ -167,6 +167,34 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/settings/audit-forwarding` | `settings.manage` | no | yes | no | no | no | yes | yes |
 | PUT | `/api/v1/settings/audit-forwarding` | `settings.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/settings/audit-forwarding/test` | `settings.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/acme/providers` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/providers` | `acme.manage` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/providers/{id}` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/acme/providers/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
+| DELETE | `/api/v1/acme/providers/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/providers/{id}/account` | `acme.manage` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/accounts/{id}/rollover` | `acme.manage` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/accounts/{id}/rollover/recover` | `acme.manage` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/accounts/{id}/deactivate` | `acme.manage` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/hooks` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/hooks` | `acme.manage` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/hooks/{id}` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/acme/hooks/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
+| DELETE | `/api/v1/acme/hooks/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/certificates` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/certificates` | `acme.manage` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/certificates/{id}` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/acme/certificates/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
+| DELETE | `/api/v1/acme/certificates/{id}` | `acme.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/acme/certificates/{id}/order` | `acme.operate` | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/acme/certificates/{id}/test` | `acme.operate` | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/acme/certificates/{id}/orders` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/certificates/{id}/rearm` | `acme.manage` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/certificates/{id}/release-hold` | `acme.manage` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/certificates/{id}/bindings` | `acme.view` | no | yes | yes | yes | read | no | yes |
+| PUT | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | no |
+| DELETE | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | yes |
+| POST | `/api/v1/acme/certificates/{id}/deploy` | `acme.operate` | no | yes | yes | no | operate | no | no |
 
 ## Notes
 
@@ -181,6 +209,10 @@ API token (403 ALC-AUTH-0003 without the step-up, 403 ALC-AUTH-0002 for a token 
   change to a connection that does not deploy automatically, is `certificates.operate` as listed.
 - `POST /api/v1/bindings/{id}/actions/deploy`: when the version is held (found while the license was not available, or with an
   incomplete certificate chain). An Operator is refused with ALC-AKV-0022.
+- `PUT /api/v1/acme/certificates/{id}/bindings/{location_id}`: when it switches unattended deployment on (`auto_deploy: true` for a
+  new binding, or for a binding whose automatic deployment is off). Then it needs what `acme.manage` needs (an Administrator's
+  browser session with a fresh step-up, never an API token); binding with automatic deployment off, keeping it on and switching it
+  off are `acme.operate` as listed. The inventory checks the role and the license again.
 
 **`credentials.manage`** is Administrator with step-up and no API token. Besides adding a Key Vault and replacing its credentials
 it gates switching automatic deployment on or off, releasing a held version and importing a certificate into a vault (a
@@ -190,6 +222,15 @@ private key leaves Alice).
 (switching automatic deployment off and removing a connection only reduce what Alice does); switching it on is refused then by
 the inventory with ALC-LIC-0001. `POST /api/v1/ssh-keys/{id}/actions/download-private-key` is open too: it changes nothing outside
 Alice, and a lock must not hold the keys of the customer's own servers hostage.
+
+**ACME certificates.** Every `/api/v1/acme/...` read is `acme.view` (every role, read tokens). Certificate authorities,
+their accounts, DNS hooks and the certificate definitions (with their name lists), re-arming automatic renewal and releasing a held
+certificate are `acme.manage`: an Administrator's browser session with step-up, never an API token. Ordering a renewal, a test
+run, binding locations and Deploy now are `acme.operate` (Operators and operate tokens). The routes that contact a certificate
+authority or start work (account registration, key change and its check, deactivation, order, test run, re-arm, Deploy now) are
+limited to 10 a minute per user or token. In lock every ACME change is refused with ALC-LIC-0001 (no certificate authority is
+contacted) except `DELETE /api/v1/acme/certificates/{id}` and `DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}`,
+which only reduce what Alice does (no renewal, no deployment), like removing a Key Vault connection.
 
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy

@@ -805,6 +805,9 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case ErrExportBusy:
 		w.Header().Set("Retry-After", "5") // the user's other export holds the slot until its last row is written
 	}
+	if after := acmeRetryAfter(err, ec); after != "" {
+		w.Header().Set("Retry-After", after)
+	}
 	var refused *inventory.LocationRefusalError
 	if errors.As(err, &refused) {
 		// A deployment request is all or nothing: name the location that refused it.
@@ -815,6 +818,23 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		params["location_id"] = refused.LocationID.String()
 	}
 	s.writeErrorWith(w, r, ec, params, nil)
+}
+
+// acmeRetryAfter is the Retry-After of an ACME refusal in whole seconds ("" for none): the CA's own Retry-After of a
+// rate limit (*inventory.ACMEError, capped at 24 h by the client, Task 9 M7), a minute for a rate limit that named
+// none, and two seconds while another account operation of the provider holds its lock (it gives up after about two).
+func acmeRetryAfter(err error, ec ErrorCode) string {
+	var acmeErr *inventory.ACMEError
+	switch {
+	case errors.As(err, &acmeErr) && acmeErr.RetryAfter > 0:
+		secs := int((acmeErr.RetryAfter + time.Second - 1) / time.Second)
+		return strconv.Itoa(max(1, secs))
+	case ec == ErrACMCaRateLimited:
+		return "60"
+	case errors.Is(err, inventory.ErrACMEProviderBusy):
+		return "2"
+	}
+	return ""
 }
 
 // classify maps a domain error to its API code and params; ok is false for an error no table

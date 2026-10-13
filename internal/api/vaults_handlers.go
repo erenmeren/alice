@@ -199,9 +199,15 @@ func (s *server) replaceVaultCredentials(w http.ResponseWriter, r *http.Request)
 // refusal is written, audited like the guard's and false is returned. Inventory enforces the role again
 // (ErrAdminRequired, ErrHeldNeedsAdmin); step-up and the token rule are the API's alone.
 func (s *server) strictAction(w http.ResponseWriter, r *http.Request) bool {
+	return s.strictActionFor(w, r, rbac.CredentialsManage)
+}
+
+// strictActionFor is strictAction for another permission that is an Administrator's browser session with a fresh
+// step-up (acme.manage: switching unattended ACME deployment on through a binding, ruling of Task 12 I2).
+func (s *server) strictActionFor(w http.ResponseWriter, r *http.Request, perm rbac.Permission) bool {
 	p := principalFrom(r.Context())
-	rt := route{method: r.Method, pattern: strings.TrimPrefix(r.Pattern, r.Method+" "), perm: rbac.CredentialsManage}
-	switch rbac.Decide(rbac.CredentialsManage, p.Subject(s.deps.Clock.Now())) {
+	rt := route{method: r.Method, pattern: strings.TrimPrefix(r.Pattern, r.Method+" "), perm: perm}
+	switch rbac.Decide(perm, p.Subject(s.deps.Clock.Now())) {
 	case rbac.Allow:
 		return true
 	case rbac.DenyStepUp:

@@ -168,6 +168,40 @@ type InventoryService interface {
 	ListImportsPage(ctx context.Context, vault uuid.UUID, f inventory.ImportFilter) (inventory.ImportPage, error)
 }
 
+// ACMEService is the part of inventory.Service the ACME routes use (plan 2026-10-13 Task 13): certificate authorities
+// (providers) and their accounts, DNS hooks, ACME certificate definitions, their orders, bindings and Deploy now. Every
+// view it returns is secret-free (the EAB HMAC key, the account key and the hook secret are write-only).
+type ACMEService interface {
+	ListACMEProviders(ctx context.Context) ([]inventory.ACMEProvider, error)
+	GetACMEProvider(ctx context.Context, id uuid.UUID) (inventory.ACMEProvider, error)
+	CreateACMEProvider(ctx context.Context, a inventory.Actor, in inventory.ACMEProviderInput) (inventory.ACMEProvider, error)
+	UpdateACMEProvider(ctx context.Context, a inventory.Actor, id uuid.UUID, p inventory.ACMEProviderPatch) (inventory.ACMEProvider, error)
+	DeleteACMEProvider(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	ListACMEAccounts(ctx context.Context, providerID uuid.UUID) ([]inventory.ACMEAccount, error)
+	RegisterACMEAccount(ctx context.Context, a inventory.Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool) (inventory.ACMEAccount, error)
+	RolloverACMEAccount(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
+	RecoverACMERollover(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
+	DeactivateACMEAccount(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
+	ListACMEHooks(ctx context.Context) ([]inventory.ACMEHook, error)
+	GetACMEHook(ctx context.Context, id uuid.UUID) (inventory.ACMEHook, error)
+	CreateACMEHook(ctx context.Context, a inventory.Actor, in inventory.ACMEHookInput) (inventory.ACMEHook, error)
+	UpdateACMEHook(ctx context.Context, a inventory.Actor, id uuid.UUID, p inventory.ACMEHookPatch) (inventory.ACMEHook, error)
+	DeleteACMEHook(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	ListACMECertificates(ctx context.Context) ([]inventory.ACMECertificate, error)
+	GetACMECertificate(ctx context.Context, id uuid.UUID) (inventory.ACMECertificate, error)
+	CreateACMECertificate(ctx context.Context, a inventory.Actor, in inventory.ACMECertificateInput) (inventory.ACMECertificate, error)
+	UpdateACMECertificate(ctx context.Context, a inventory.Actor, id uuid.UUID, p inventory.ACMECertificatePatch) (inventory.ACMECertificate, error)
+	DeleteACMECertificate(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	RequestOrder(ctx context.Context, a inventory.Actor, acmeCertificateID uuid.UUID, kind string) (inventory.ACMEOrder, error)
+	ListACMEOrders(ctx context.Context, acmeCertificateID uuid.UUID, limit int) ([]inventory.ACMEOrder, error)
+	ReArmACMEAutoRenew(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.ACMECertificate, error)
+	ReleaseACMEDeployHold(ctx context.Context, a inventory.Actor, id uuid.UUID) error
+	ListACMEBindings(ctx context.Context, id uuid.UUID) ([]inventory.ACMEBinding, error)
+	AddACMEBinding(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy bool) (inventory.ACMEBinding, error)
+	RemoveACMEBinding(ctx context.Context, a inventory.Actor, id, location uuid.UUID) error
+	DeployACMENow(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error)
+}
+
 // JobsService is the part of jobs.Queue the HTTP layer uses.
 type JobsService interface {
 	Get(ctx context.Context, id uuid.UUID) (jobs.View, error)
@@ -308,6 +342,7 @@ type Deps struct {
 	SSO            SSOService
 	Backup         BackupService  // Phase 8: nil leaves the backup routes and the dashboard's backup section unavailable
 	Forward        ForwardService // Phase 8: audit forwarding
+	ACME           ACMEService    // ACME issuance (inventory.Service)
 	TLSStore       HTTPSService   // Phase 8: the HTTPS certificate
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
@@ -606,6 +641,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.backupRoutes()...)
 	routes = append(routes, s.httpsRoutes()...)
 	routes = append(routes, s.forwardingRoutes()...)
+	routes = append(routes, s.acmeRoutes()...)
 	return routes
 }
 

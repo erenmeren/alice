@@ -3393,6 +3393,601 @@ paths:
         "429": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/providers:
+    get:
+      operationId: listACMEProviders
+      summary: Certificate authorities (ACME providers), oldest first
+      description: >-
+        No secret is listed: the EAB HMAC key is write-only (eab_configured). The CA bundle holds public certificates only.
+      x-permission: acme.view
+      responses:
+        "200":
+          description: The providers
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEProviderList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createACMEProvider
+      summary: Add a certificate authority (no network call is made)
+      description: >-
+        directory_url must be https without user information. The first contact with the CA is the account registration.
+        allowed_suffixes is the name allow-list (A9): an empty list refuses every order. 409 ALC-ACM-0020 (name taken),
+        422 validation errors (directory URL, CA bundle, EAB key id or HMAC key). Needs an Administrator's browser session with a
+        fresh step-up (403 ALC-AUTH-0003 without it), never an API token (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001
+        while the license is locked.
+      x-permission: acme.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMEProviderCreate" }
+      responses:
+        "201":
+          description: The provider
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/providers/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getACMEProvider
+      summary: One certificate authority with its accounts (newest first)
+      x-permission: acme.view
+      responses:
+        "200":
+          description: The provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEProvider" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateACMEProvider
+      summary: Change a certificate authority (absent fields stay)
+      description: >-
+        eab_kid with eab_hmac replaces the external account binding, remove_eab drops it. A new directory_url while the provider
+        has an active account needs confirm_directory_change (409 ALC-ACM-0022 otherwise; the account is then retired). 409
+        ALC-ACM-0024 while a key change is unsettled. Administrator with a fresh step-up, never an API token. Refused with 403
+        ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMEProviderPatch" }
+      responses:
+        "200":
+          description: The provider
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEProvider" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteACMEProvider
+      summary: Remove a certificate authority
+      description: >-
+        409 ALC-ACM-0012 while it has an active or pending account or live ACME certificates (deactivate the account and delete
+        the certificates first). Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the
+        license is locked.
+      x-permission: acme.manage
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/providers/{id}/account:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: registerACMEAccount
+      summary: Register the provider's account at the certificate authority
+      description: >-
+        Contacts the CA. When the CA publishes terms of service, tos_accepted must be true (422 ALC-ACM-0003 otherwise; nothing
+        is registered). contact_email is optional, an e-mail address only (a mailto: prefix is accepted). 409 ALC-ACM-0021 (the
+        provider has an account), 409 ALC-ACM-0024 (another account operation is running; Retry-After), 422 ALC-ACM-0004
+        (account refused, e.g. EAB), 502 ALC-ACM-0001/0002/0013, 503 ALC-ACM-0005 with Retry-After (the CA's rate limit).
+        Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001
+        while the license is locked (the CA is not contacted).
+      x-permission: acme.manage
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMEAccountRegister" }
+      responses:
+        "201":
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEAccount" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/accounts/{id}/rollover:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: rolloverACMEAccount
+      summary: Change the account key at the certificate authority (answers the new active account)
+      description: >-
+        Contacts the CA. 422 ALC-ACM-0014 when the CA cannot change keys; 409 ALC-ACM-0024 when the outcome is not known yet
+        (check it with rollover/recover) or another account operation is running; 409 ALC-ACM-0023 (not an active account).
+        Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001
+        while the license is locked.
+      x-permission: acme.manage
+      responses:
+        "200":
+          description: The new active account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEAccount" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/accounts/{id}/rollover/recover:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: recoverACMERollover
+      summary: Check key change - settle a key change whose outcome Alice did not learn
+      description: >-
+        Asks the CA which key it knows (the active or the pending account's id). 409 ALC-ACM-0024 when it cannot be settled
+        yet. Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403
+        ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      responses:
+        "200":
+          description: The active account after settling
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEAccount" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/accounts/{id}/deactivate:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: deactivateACMEAccount
+      summary: Deactivate the account at the certificate authority
+      description: >-
+        Contacts the CA; the account cannot be used again (renewals of the provider's certificates fail with ALC-ACM-0023 until
+        a new account is registered). 409 ALC-ACM-0023 (not active), 409 ALC-ACM-0024 (key change unsettled or another account
+        operation running). Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with
+        403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      responses:
+        "200":
+          description: The deactivated account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEAccount" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/hooks:
+    get:
+      operationId: listACMEHooks
+      summary: DNS hooks (the webhooks that publish DNS-01 records), oldest first
+      description: The secret is write-only (secret_configured).
+      x-permission: acme.view
+      responses:
+        "200":
+          description: The hooks
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEHookList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createACMEHook
+      summary: Add a DNS hook (no network call is made)
+      description: >-
+        url must be https without user information; the secret (16 to 256 printable characters) signs every call. allowed_suffixes
+        is the hook's name allow-list. propagation_wait_seconds (0..120, default 5) plus poll_timeout_seconds (1..100, default
+        60) are at most 120. 409 ALC-ACM-0020 (name taken). Administrator with a fresh step-up, never an API token. Refused with
+        403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMEHookCreate" }
+      responses:
+        "201":
+          description: The hook
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEHook" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/hooks/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getACMEHook
+      summary: One DNS hook
+      x-permission: acme.view
+      responses:
+        "200":
+          description: The hook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEHook" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateACMEHook
+      summary: Change a DNS hook (absent fields stay; a secret replaces the stored one)
+      description: >-
+        Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMEHookPatch" }
+      responses:
+        "200":
+          description: The hook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEHook" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteACMEHook
+      summary: Remove a DNS hook
+      description: >-
+        409 ALC-ACM-0019 while live ACME certificates use it. Administrator with a fresh step-up, never an API token. Refused
+        with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates:
+    get:
+      operationId: listACMECertificates
+      summary: ACME certificates (Issued certificates), oldest first, in pages
+      x-permission: acme.view
+      parameters:
+        - { name: state, in: query, schema: { type: string, enum: [pending, issuing, active, failing, stopped] } }
+        - { name: provider_id, in: query, schema: { type: string, format: uuid } }
+        - { name: q, in: query, description: A part of one of the names, schema: { type: string, maxLength: 200 } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMECertificatePage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createACMECertificate
+      summary: Define an ACME certificate (nothing is ordered yet)
+      description: >-
+        names: 1 to 100 DNS names, a wildcard only as the whole first label (and only with dns01). Every name must be allowed by
+        the provider's list and, for dns01, by the hook's (422 ALC-ACM-0015). challenge dns01 needs hook_id, http01 needs
+        http_target_id (an Nginx server: 422 ALC-ACM-0017 otherwise). 409 ALC-ACM-0023 when the provider has no active account.
+        auto_deploy true switches unattended deployment on (the license must allow changes). Administrator with a fresh step-up,
+        never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMECertificateCreate" }
+      responses:
+        "201":
+          description: The certificate
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMECertificate" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getACMECertificate
+      summary: One ACME certificate with its bindings, its current certificate and its renewal and deployment marks
+      x-permission: acme.view
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMECertificate" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateACMECertificate
+      summary: Change an ACME certificate (absent fields stay)
+      description: >-
+        409 ALC-ACM-0016 when what an order uses changes while one runs; 409 ALC-ACM-0018 when the key type changes while
+        locations are bound. auto_renew false to true starts automatic renewal afresh; auto_deploy false to true needs the license.
+        Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMECertificatePatch" }
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMECertificate" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteACMECertificate
+      summary: Delete an ACME certificate (no more renewals; its bindings are removed, the websites keep what they serve)
+      description: >-
+        409 ALC-ACM-0016 while an order runs. Only reduces what Alice does: it also works while the license is locked.
+        Administrator with a fresh step-up, never an API token.
+      x-permission: acme.manage
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/order:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: orderACMECertificate
+      summary: Get the certificate / Renew now - start an order (the acme.issue job carries it on)
+      description: >-
+        409 ALC-ACM-0016 while an order runs (one at a time), 409 ALC-ACM-0023 (no active account), 409 ALC-ACM-0024 (key
+        change unsettled). Follow the order in GET /orders and the certificate's state. At most 10 a minute per user or token.
+        Refused with 403 ALC-LIC-0001 while the license is locked (nothing is recorded, the CA is not contacted).
+      x-permission: acme.operate
+      responses:
+        "202":
+          description: The order (running)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEOrder" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/test:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: testACMECertificate
+      summary: Test run - an order that stops once the names are validated (no certificate is issued, nothing is deployed)
+      description: >-
+        The refusals of an order. At most 10 a minute per user or token. Refused with 403 ALC-LIC-0001 while the license is
+        locked.
+      x-permission: acme.operate
+      responses:
+        "202":
+          description: The test order (running)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEOrder" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/orders:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listACMEOrders
+      summary: The newest orders of an ACME certificate
+      x-permission: acme.view
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+      responses:
+        "200":
+          description: The orders, newest first
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEOrderList" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/rearm:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: rearmACMECertificate
+      summary: Switch automatic renewal on again and start it afresh (after it stopped)
+      description: >-
+        Clears the failure count, the wait and the stopped state. Administrator with a fresh step-up, never an API token. At
+        most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMECertificate" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/release-hold:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: releaseACMEHold
+      summary: Release the current certificate from the license hold of automatic deployment
+      description: >-
+        A certificate issued before the license last allowed changes again is held for an Administrator (deploy_held_reason
+        license); after the release the planner deploys it under the normal rules. A certificate held for an incomplete chain
+        is not released (409 ALC-CRT-0011; Deploy now with confirm_incomplete_chain deploys it). Not held: nothing changes.
+        Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.manage
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMECertificate" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/bindings:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listACMEBindings
+      summary: The locations an ACME certificate is bound to, with their state and attention mark
+      x-permission: acme.view
+      responses:
+        "200":
+          description: The bindings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEBindingList" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/bindings/{location_id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+      - { $ref: "#/components/parameters/LocationID" }
+    put:
+      operationId: putACMEBinding
+      summary: Bind a location to the certificate, or change its automatic deployment
+      description: >-
+        The location then follows this certificate. 409 ALC-ACM-0027 (not issued yet), 409 ALC-ACM-0028 (the location follows a
+        Key Vault certificate or another ACME certificate), 409 ALC-CRT-0010 (key type), 409 ALC-NGX-0007 (location
+        unsupported). Switching unattended deployment on (auto_deploy true for a new binding or one whose automatic deployment
+        is off) needs an Administrator's browser session with a fresh step-up (403 ALC-AUTH-0003 without it; an API token or an
+        Operator: 403 ALC-AUTH-0002); binding with it off, keeping it on and switching it off need acme.operate. Refused with
+        403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.operate
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMEBindingPut" }
+      responses:
+        "200":
+          description: The binding
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEBinding" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteACMEBinding
+      summary: Remove a binding (the location keeps what it serves)
+      description: A safety action that only reduces what Alice does; it also works while the license is locked.
+      x-permission: acme.operate
+      responses:
+        "204": { description: Removed }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/certificates/{id}/deploy:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: deployACMECertificate
+      summary: Deploy now - deploy the current certificate to bound locations (one deployment and one job per location)
+      description: >-
+        location_ids absent means every bound location (at most 20). All or nothing; a refusal decided for one location carries
+        params.location_id: 422 ALC-ACM-0029 (not bound) and the Phase 4 refusals of a deployment. 409 ALC-ACM-0027 (not
+        issued yet), 409 ALC-CRT-0011 (an incomplete chain; an Administrator's confirm_incomplete_chain). At most 10 a minute per
+        user or token. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: acme.operate
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ACMEDeploy" }
+      responses:
+        "202":
+          description: Queued; follow each job (status_url) or deployment (deployment_url)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployAccepted" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
     ID:
@@ -3420,6 +4015,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    LocationID:
+      name: location_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     StatusOK:
       description: OK
@@ -3436,6 +4036,251 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    ACMEProviderCreate:
+      type: object
+      required: [name, directory_url]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100, examples: [Internal CA] }
+        directory_url: { type: string, maxLength: 2048, examples: ["https://ca.example.com/acme/directory"] }
+        preset: { type: string, enum: ["", letsencrypt, letsencrypt_staging, zerossl, custom], description: Only pre-fills the form }
+        ca_bundle_pem: { type: string, maxLength: 65536, description: 'Public CA certificates (PEM) added to the system roots' }
+        eab_kid: { type: string, maxLength: 255, description: External account binding key id (with eab_hmac) }
+        eab_hmac: { type: string, maxLength: 1024, writeOnly: true, description: 'External account binding HMAC key, base64url; never returned' }
+        allowed_suffixes: { type: array, maxItems: 100, items: { type: string, maxLength: 253 }, examples: [[example.com]] }
+    ACMEProviderPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100 }
+        directory_url: { type: string, maxLength: 2048 }
+        preset: { type: string, enum: ["", letsencrypt, letsencrypt_staging, zerossl, custom] }
+        ca_bundle_pem: { type: string, maxLength: 65536, description: '"" removes the bundle' }
+        eab_kid: { type: string, maxLength: 255 }
+        eab_hmac: { type: string, maxLength: 1024, writeOnly: true }
+        allowed_suffixes: { type: array, maxItems: 100, items: { type: string, maxLength: 253 } }
+        remove_eab: { type: boolean }
+        confirm_directory_change: { type: boolean, description: 'A new directory URL while an account is active retires the account' }
+    ACMEProvider:
+      type: object
+      required: [id, name, directory_url, preset, ca_bundle_pem, eab_kid, eab_configured, allowed_suffixes, active_account_id,
+        pending_rollover, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        directory_url: { type: string }
+        preset: { type: string }
+        ca_bundle_pem: { type: string }
+        eab_kid: { type: string }
+        eab_configured: { type: boolean, description: 'An external account binding key is stored (the key is write-only)' }
+        allowed_suffixes: { type: array, items: { type: string } }
+        active_account_id: { type: [string, "null"], format: uuid }
+        pending_rollover: { type: boolean, description: 'A key change is not settled yet (Check key change)' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        accounts: { type: array, description: GET of one provider only, items: { $ref: "#/components/schemas/ACMEAccount" } }
+    ACMEProviderList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ACMEProvider" } }
+    ACMEAccountRegister:
+      type: object
+      additionalProperties: false
+      properties:
+        contact_email: { type: string, maxLength: 254, examples: [ops@example.com] }
+        tos_accepted: { type: boolean, description: 'The Administrator accepted the terms of service the CA publishes' }
+    ACMEAccount:
+      type: object
+      required: [id, provider_id, contact_email, account_url, tos_url, tos_accepted_at, state, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider_id: { type: string, format: uuid }
+        contact_email: { type: string }
+        account_url: { type: string }
+        tos_url: { type: string }
+        tos_accepted_at: { type: [string, "null"], format: date-time }
+        state: { type: string, enum: [active, pending_rollover, retired, deactivated] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ACMEHookCreate:
+      type: object
+      required: [name, url, secret]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100, examples: [Internal DNS] }
+        url: { type: string, maxLength: 2048, examples: ["https://dns-hook.example.com/acme"] }
+        ca_bundle_pem: { type: string, maxLength: 65536 }
+        secret: { type: string, minLength: 16, maxLength: 256, writeOnly: true, examples: [example-hook-secret-0123456789], description: Never returned }
+        allowed_suffixes: { type: array, maxItems: 100, items: { type: string, maxLength: 253 }, examples: [[example.com]] }
+        propagation_wait_seconds: { type: integer, minimum: 0, maximum: 120, default: 5 }
+        poll_timeout_seconds: { type: integer, minimum: 1, maximum: 100, default: 60 }
+    ACMEHookPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100 }
+        url: { type: string, maxLength: 2048 }
+        ca_bundle_pem: { type: string, maxLength: 65536 }
+        secret: { type: string, maxLength: 256, writeOnly: true, description: 'Replaces the stored secret; absent keeps it' }
+        allowed_suffixes: { type: array, maxItems: 100, items: { type: string, maxLength: 253 } }
+        propagation_wait_seconds: { type: integer, minimum: 0, maximum: 120 }
+        poll_timeout_seconds: { type: integer, minimum: 1, maximum: 100 }
+    ACMEHook:
+      type: object
+      required: [id, name, url, ca_bundle_pem, secret_configured, allowed_suffixes, propagation_wait_seconds, poll_timeout_seconds,
+        created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string }
+        ca_bundle_pem: { type: string }
+        secret_configured: { type: boolean }
+        allowed_suffixes: { type: array, items: { type: string } }
+        propagation_wait_seconds: { type: integer }
+        poll_timeout_seconds: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ACMEHookList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ACMEHook" } }
+    ACMECertificateCreate:
+      type: object
+      required: [provider_id, names, challenge]
+      additionalProperties: false
+      properties:
+        provider_id: { type: string, format: uuid }
+        names: { type: array, minItems: 1, maxItems: 100, items: { type: string, maxLength: 253 }, examples: [[www.example.com]] }
+        key_type: { type: string, enum: [ecdsa_p256, ecdsa_p384, rsa_2048, rsa_3072, rsa_4096], default: ecdsa_p256 }
+        challenge: { type: string, enum: [dns01, http01] }
+        hook_id: { type: [string, "null"], format: uuid, description: 'dns01: the DNS hook' }
+        http_target_id: { type: [string, "null"], format: uuid, description: 'http01: the Nginx server the names point at' }
+        renew_before_days: { type: integer, minimum: 1, maximum: 60, default: 30 }
+        auto_renew: { type: boolean, default: true }
+        auto_deploy: { type: boolean, default: false }
+    ACMECertificatePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        provider_id: { type: string, format: uuid }
+        names: { type: array, minItems: 1, maxItems: 100, items: { type: string, maxLength: 253 } }
+        key_type: { type: string, enum: [ecdsa_p256, ecdsa_p384, rsa_2048, rsa_3072, rsa_4096] }
+        challenge: { type: string, enum: [dns01, http01] }
+        hook_id: { type: [string, "null"], format: uuid }
+        http_target_id: { type: [string, "null"], format: uuid }
+        renew_before_days: { type: integer, minimum: 1, maximum: 60 }
+        auto_renew: { type: boolean }
+        auto_deploy: { type: boolean }
+    ACMECertificate:
+      type: object
+      required: [id, provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew,
+        auto_deploy, state, stopped_reason, failures, next_attempt_at, last_attempt_at, last_error, running_order_id, current, ari_window,
+        deploy_held_reason, deploy_stopped, bindings_count, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        provider_id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        names: { type: array, items: { type: string } }
+        key_type: { type: string }
+        challenge: { type: string, enum: [dns01, http01] }
+        hook_id: { type: [string, "null"], format: uuid }
+        http_target_id: { type: [string, "null"], format: uuid }
+        renew_before_days: { type: integer }
+        auto_renew: { type: boolean }
+        auto_deploy: { type: boolean }
+        state: { type: string, enum: [pending, issuing, active, failing, stopped] }
+        stopped_reason: { type: string, enum: ["", renewal_failures], description: 'renewal_failures: automatic renewal stopped after repeated failures (Renew now or re-arm)' }
+        failures: { type: integer }
+        next_attempt_at: { type: [string, "null"], format: date-time }
+        last_attempt_at: { type: [string, "null"], format: date-time }
+        last_error: { $ref: "#/components/schemas/ErrorRef" }
+        running_order_id: { type: [string, "null"], format: uuid }
+        current:
+          type: [object, "null"]
+          description: The current certificate (null before the first issuance)
+          required: [id, fingerprint_sha256, not_before, not_after, chain_complete]
+          properties:
+            id: { type: string, format: uuid }
+            fingerprint_sha256: { type: string }
+            not_before: { type: string, format: date-time }
+            not_after: { type: string, format: date-time }
+            chain_complete: { type: boolean }
+        ari_window:
+          type: [object, "null"]
+          description: The renewal window the CA suggests (ARI), when known
+          required: [start, end]
+          properties:
+            start: { type: string, format: date-time }
+            end: { type: string, format: date-time }
+        deploy_held_reason: { type: string, enum: ["", license, chain_incomplete], description: 'Why automatic deployment holds the current certificate' }
+        deploy_stopped: { type: boolean, description: 'Automatic deployment of the current certificate stopped after repeated failures' }
+        bindings_count: { type: integer }
+        bindings: { type: array, description: GET of one certificate only, items: { $ref: "#/components/schemas/ACMEBinding" } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ACMECertificatePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ACMECertificate" } }
+        next_cursor: { type: [string, "null"] }
+    ACMEOrder:
+      type: object
+      required: [id, acme_certificate_id, kind, state, trigger, started_at, finished_at, error, certificate_id, requested_by, presented,
+        cleanup_at, cleanup_error]
+      properties:
+        id: { type: string, format: uuid }
+        acme_certificate_id: { type: string, format: uuid }
+        kind: { type: string, enum: [issue, test] }
+        state: { type: string, enum: [running, succeeded, failed] }
+        trigger: { type: string, enum: [manual, renewal] }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        error: { $ref: "#/components/schemas/ErrorRef" }
+        certificate_id: { type: [string, "null"], format: uuid }
+        requested_by: { type: [string, "null"], format: uuid }
+        presented: { type: integer, description: Challenge records still published }
+        cleanup_at: { type: [string, "null"], format: date-time }
+        cleanup_error: { $ref: "#/components/schemas/ErrorRef" }
+    ACMEOrderList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ACMEOrder" } }
+    ACMEBindingPut:
+      type: object
+      additionalProperties: false
+      properties:
+        auto_deploy: { type: boolean, default: false }
+    ACMEBinding:
+      type: object
+      required: [acme_certificate_id, location_id, target_id, target_name, cert_path, auto_deploy, state, attention_at, attention,
+        served_certificate_id, created_at]
+      properties:
+        acme_certificate_id: { type: string, format: uuid }
+        location_id: { type: string, format: uuid }
+        target_id: { type: string, format: uuid }
+        target_name: { type: string }
+        cert_path: { type: string }
+        auto_deploy: { type: boolean }
+        state: { type: string, enum: [current, pending, attention], description: 'attention: the last automatic deployment of the current certificate failed' }
+        attention_at: { type: [string, "null"], format: date-time }
+        attention: { $ref: "#/components/schemas/ErrorRef" }
+        served_certificate_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+    ACMEBindingList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ACMEBinding" } }
+    ACMEDeploy:
+      type: object
+      additionalProperties: false
+      properties:
+        location_ids: { type: array, minItems: 1, maxItems: 20, uniqueItems: true, items: { type: string, format: uuid } }
+        confirm_incomplete_chain: { type: boolean, description: Counts for an Administrator only (F-17) }
     HoldRule:
       type: string
       enum: [gate_closed, created_before_reopening, unconfirmed_since_reopening, detected_before_reopening]
