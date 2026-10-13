@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -156,7 +157,17 @@ func TestRegisterRefusesUnacceptedTerms(t *testing.T) {
 	_, err := newTestClient(t, s).RegisterAccount(testCtx(t), "", nil, false)
 	e := reasonErr(t, err, ReasonTermsNotAccepted)
 	assert.ErrorIs(t, e, ErrTermsNotAccepted)
-	assert.Zero(t, s.Counters()["requests"], "nothing is sent")
+	assert.Zero(t, s.Counters()["new-account"], "no registration request is sent")
+	assert.Zero(t, s.Counters()["new-nonce"])
+}
+
+func TestRegisterWithoutTermsNeedsNoAcceptance(t *testing.T) {
+	s := startFake(t, fakeacme.Options{NoTerms: true})
+	c := newTestClient(t, s)
+	a, err := c.RegisterAccount(testCtx(t), "", nil, false)
+	require.NoError(t, err)
+	assert.NotEmpty(t, a.URL)
+	assert.Empty(t, a.TermsOfService)
 }
 
 func TestRegisterWithEAB(t *testing.T) {
@@ -539,6 +550,7 @@ func TestPresentFailureCleansUp(t *testing.T) {
 	e := reasonErr(t, err, ReasonHookRefused)
 	assert.ErrorIs(t, e, ErrSolver)
 	assert.NotContains(t, err.Error(), "secret-token-123")
+	assert.NotContains(t, fmt.Sprintf("%v %+v %#v", err, err, err), "secret-token-123")
 	assert.Len(t, m.Presented(), 1, "stopped at the first failure")
 	assert.Equal(t, m.Presented(), m.CleanedUp(), "the failed Present is cleaned up too")
 
@@ -558,6 +570,10 @@ func TestPresentFailureCleansUp(t *testing.T) {
 	boom := errors.New("db down")
 	err = c.TestOrder(testCtx(t), []string{"e.example.test"}, m4, WithOnPresent(func(solver.Challenge) error { return boom }))
 	assert.ErrorIs(t, err, boom)
+	assert.ErrorIs(t, err, ErrSolver)
+	requireReason(t, err, ReasonHookRefused)
+	assert.NotContains(t, err.Error(), "db down")
+	assert.NotContains(t, fmt.Sprintf("%+v %#v", err, err), "db down")
 	assert.Empty(t, m4.Presented())
 	assert.Empty(t, m4.CleanedUp())
 }
@@ -591,6 +607,38 @@ func TestCancelMidOrderCleansUp(t *testing.T) {
 	require.NoError(t, cleanCtxErr, "cleanup runs on a live context")
 	assert.Empty(t, s.DNSRecords())
 	assert.Zero(t, s.Counters()["issued"])
+}
+
+// A hook that never answers costs one call's budget, not the order's.
+func TestHungPresentHitsCallDeadline(t *testing.T) {
+	s := startFake(t, fakeacme.Options{})
+	c := registered(t, s, func(cfg *Config) { cfg.CallTimeout = 300 * time.Millisecond })
+	m := solver.NewMemory(solver.DNS01)
+	m.AfterPresent = func(ctx context.Context, _ solver.Challenge) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	t0 := time.Now()
+	err := c.TestOrder(testCtx(t), []string{"hung.example.test"}, m)
+	assert.Less(t, time.Since(t0), 5*time.Second)
+	e := reasonErr(t, err, ReasonNotIssuedInTime)
+	assert.ErrorIs(t, e, context.DeadlineExceeded)
+	assert.Equal(t, m.Presented(), m.CleanedUp())
+}
+
+func TestConfigNeverPrintsTheKey(t *testing.T) {
+	k := p256(t)
+	cfg := Config{DirectoryURL: "https://ca.test/dir", Key: k, AccountURL: "https://ca.test/acct/1"}
+	raw, err := k.Bytes()
+	require.NoError(t, err)
+	d := hex.EncodeToString(raw)
+	for _, form := range []string{cfg.String(), fmt.Sprintf("%v", cfg), fmt.Sprintf("%+v", cfg), fmt.Sprintf("%#v", cfg),
+		fmt.Sprintf("%v", &cfg), fmt.Sprintf("%#v", &cfg)} {
+		assert.NotContains(t, form, d)
+		assert.NotContains(t, form, "D:")
+		assert.Contains(t, form, "redacted")
+	}
+	assert.Contains(t, Config{}.String(), "Key: none")
 }
 
 func TestCleanUpErrorIsReported(t *testing.T) {

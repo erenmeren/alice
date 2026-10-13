@@ -62,6 +62,18 @@ type Config struct {
 	Now func() time.Time
 }
 
+// String never shows the key (or anything but the directory and account URLs).
+func (cfg Config) String() string {
+	k := "none"
+	if cfg.Key != nil {
+		k = "redacted"
+	}
+	return "acme.Config{DirectoryURL: " + cfg.DirectoryURL + ", AccountURL: " + cfg.AccountURL + ", Key: " + k + "}"
+}
+
+// GoString never shows the key.
+func (cfg Config) GoString() string { return cfg.String() }
+
 // Client talks to one CA as one account. It is safe for concurrent use except Rollover, which must not run
 // beside another call of the same Client.
 type Client struct {
@@ -174,14 +186,13 @@ type Account struct {
 	Existing bool
 }
 
-// RegisterAccount creates the account of the client's key. tosAccepted must be true (an Admin ticked the box
-// showing Discover's TermsOfService); otherwise nothing is sent and the error has ReasonTermsNotAccepted. A
+// RegisterAccount creates the account of the client's key. When the directory has terms of service,
+// tosAccepted must be true (an Admin ticked the box showing Discover's TermsOfService); otherwise no
+// registration request is sent and the error has ReasonTermsNotAccepted. A CA without terms registers with
+// tosAccepted false (nothing is agreed to because nothing is offered). A
 // CA that requires a binding gets none sent without one (ReasonAccountRejected, ErrEABRequired); a malformed
 // binding is refused locally (ErrEABInvalid). A key the CA already knows returns its existing account.
 func (c *Client) RegisterAccount(ctx context.Context, contact string, eab *EAB, tosAccepted bool) (Account, error) {
-	if !tosAccepted {
-		return Account{}, newError(ReasonTermsNotAccepted, ErrTermsNotAccepted)
-	}
 	if c.cfg.Key == nil {
 		return Account{}, newError(ReasonAccountRejected, ErrNoKey)
 	}
@@ -205,6 +216,9 @@ func (c *Client) RegisterAccount(ctx context.Context, contact string, eab *EAB, 
 	if err != nil {
 		return Account{}, err
 	}
+	if d.TermsOfService != "" && !tosAccepted {
+		return Account{}, newError(ReasonTermsNotAccepted, ErrTermsNotAccepted)
+	}
 	if d.ExternalAccountRequired && bind == nil {
 		return Account{}, newError(ReasonAccountRejected, ErrEABRequired)
 	}
@@ -212,7 +226,7 @@ func (c *Client) RegisterAccount(ctx context.Context, contact string, eab *EAB, 
 	existing := false
 	err = c.call(ctx, func(ctx context.Context) error {
 		var err error
-		acct, err = c.lib.Register(ctx, &xacme.Account{Contact: contacts, ExternalAccountBinding: bind}, func(string) bool { return true })
+		acct, err = c.lib.Register(ctx, &xacme.Account{Contact: contacts, ExternalAccountBinding: bind}, func(string) bool { return tosAccepted })
 		if err == xacme.ErrAccountAlreadyExists { //nolint:errorlint // the library returns the sentinel itself
 			existing, err = true, nil
 		}
@@ -279,7 +293,9 @@ const (
 	RolloverNotSwitched RolloverOutcome = iota
 	// RolloverSwitched: the CA confirmed; the new key is the account key (and the client now signs with it).
 	RolloverSwitched
-	// RolloverUnknown: the request may have reached the CA but no answer came; settle it with Lookup.
+	// RolloverUnknown: the request may have reached the CA but no answer came. The Client still signs with the
+	// OLD key; settle it with Lookup on a second Client built with the new key (and, if that finds nothing,
+	// Lookup on this one).
 	RolloverUnknown
 )
 
@@ -295,7 +311,9 @@ func (o RolloverOutcome) String() string {
 
 // Rollover replaces the account key with newKey (RFC 8555 section 7.3.5), atomically at the CA. The caller
 // persists newKey as pending before calling (plan A6) and settles it by the outcome. A CA without keyChange
-// gives ReasonRolloverUnsupported without a request.
+// gives ReasonRolloverUnsupported without a request. Only RolloverSwitched changes the key this Client signs
+// with; after RolloverNotSwitched or RolloverUnknown it still holds the old key (recovery, plan A6 / Task 10,
+// builds a second Client with the new key and calls Lookup).
 func (c *Client) Rollover(ctx context.Context, newKey crypto.Signer) (RolloverOutcome, error) {
 	if c.cfg.Key == nil || newKey == nil {
 		return RolloverNotSwitched, newError(ReasonAccountRejected, ErrNoKey)

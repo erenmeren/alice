@@ -5,7 +5,12 @@
 //
 // The client calls Present once per challenge it chose and CleanUp exactly once for every Present it
 // started (successful or not), on success, on failure and after cancellation (with a fresh, bounded
-// context), so a solver must make CleanUp safe for a challenge whose Present failed half-way.
+// context), so a solver must make CleanUp safe for a challenge whose Present failed half-way. Present runs
+// under the client's per-call deadline.
+//
+// A wildcard and its base name ("*.example.com" and "example.com") are validated at the same record name,
+// "_acme-challenge.example.com", with two different values that must coexist. CleanUp must therefore remove
+// only the exact value it is given (DNSName plus DNSValue), never every record of the name.
 package solver
 
 import "context"

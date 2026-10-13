@@ -202,9 +202,9 @@ func shortType(t string) string { return strings.TrimPrefix(t, ProblemPrefix) }
 func parseRetryAfter(v string, now time.Time) time.Duration {
 	v = strings.TrimSpace(v)
 	var d time.Duration
-	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
 		if n <= 0 {
-			return 0
+			return 0 // also a negative overflow (ParseInt returns math.MinInt64)
 		}
 		if n > int64(MaxRetryAfter/time.Second) {
 			return MaxRetryAfter

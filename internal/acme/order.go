@@ -21,7 +21,9 @@ type orderOpts struct {
 }
 
 // WithOnPresent is called with every challenge right before it is presented, so the caller can persist it
-// (plan A12) and clean it up after a crash. An error stops the order before that challenge is presented.
+// (plan A12) and clean it up after a crash. An error stops the order before that challenge is presented; it
+// is returned as an *Error (reason of the proof method) whose text says only ErrSolver, while errors.Is still
+// finds both ErrSolver and the callback's error.
 func WithOnPresent(f func(solver.Challenge) error) OrderOption {
 	return func(o *orderOpts) { o.onPresent = f }
 }
@@ -67,7 +69,9 @@ func (c *Client) Order(ctx context.Context, names []string, csrDER []byte, s sol
 	return chain, nil
 }
 
-// TestOrder runs an order up to validated authorizations and stops: no CSR is sent and nothing is issued.
+// TestOrder runs an order up to validated authorizations and stops: no CSR is sent and nothing is issued. It
+// leaves the validated authorizations (a later Order may reuse them) and a pending, never-finalized order at
+// the CA, which expires there on its own.
 func (c *Client) TestOrder(ctx context.Context, names []string, s solver.Solver, opts ...OrderOption) error {
 	norm, err := NormalizeNames(names)
 	if err != nil {
@@ -170,11 +174,12 @@ func (c *Client) authorize(ctx context.Context, names []string, s solver.Solver,
 	for _, p := range pending {
 		if oo.onPresent != nil {
 			if err := oo.onPresent(p.ch); err != nil {
-				return nil, err
+				return nil, presentError(err, p)
 			}
 		}
 		presented = append(presented, p.ch)
-		if err := s.Present(ctx, p.ch); err != nil {
+		// A hung hook may take one call's budget, not the whole order's.
+		if err := c.call(ctx, func(ctx context.Context) error { return s.Present(ctx, p.ch) }); err != nil {
 			return nil, presentError(err, p)
 		}
 	}
@@ -254,6 +259,12 @@ func validToken(t string) bool {
 	return true
 }
 
+// solverCause hides a solver's (or OnPresent's) error text behind ErrSolver but keeps it for errors.Is/As.
+type solverCause struct{ err error }
+
+func (s solverCause) Error() string   { return ErrSolver.Error() }
+func (s solverCause) Unwrap() []error { return []error{ErrSolver, s.err} }
+
 // presentError keeps a solver's *Error and otherwise maps the failure to the proof method; the solver's own
 // text is dropped (it may quote a hook's answer).
 func presentError(err error, p pendingChallenge) error {
@@ -261,10 +272,14 @@ func presentError(err error, p pendingChallenge) error {
 	if errors.As(err, &e) {
 		return err
 	}
-	cause := ErrSolver
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-		return &Error{Reason: ReasonNotIssuedInTime, Identifier: p.name, cause: context.DeadlineExceeded}
+		ce := context.DeadlineExceeded
+		if errors.Is(err, context.Canceled) {
+			ce = context.Canceled
+		}
+		return &Error{Reason: ReasonNotIssuedInTime, Identifier: p.name, cause: ce}
 	}
+	cause := solverCause{err: err}
 	if p.ch.Type == solver.DNS01 {
 		return &Error{Reason: ReasonHookRefused, Identifier: p.name, cause: cause}
 	}

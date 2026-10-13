@@ -5,7 +5,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +111,10 @@ func TestParseRetryAfter(t *testing.T) {
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	assert.Equal(t, 120*time.Second, parseRetryAfter("120", now))
 	assert.Equal(t, MaxRetryAfter, parseRetryAfter("999999999999", now))
+	assert.Equal(t, MaxRetryAfter, parseRetryAfter("86401", now))
+	assert.Equal(t, MaxRetryAfter, parseRetryAfter("9223372036854775807", now))
+	assert.Equal(t, MaxRetryAfter, parseRetryAfter("99999999999999999999999999999", now), "int64 overflow is capped, not ignored")
+	assert.Zero(t, parseRetryAfter("-99999999999999999999999999999", now))
 	assert.Zero(t, parseRetryAfter("-5", now))
 	assert.Zero(t, parseRetryAfter("soon", now))
 	assert.Zero(t, parseRetryAfter("", now))
@@ -116,6 +124,32 @@ func TestParseRetryAfter(t *testing.T) {
 }
 
 const http1123 = "Mon, 02 Jan 2006 15:04:05 GMT"
+
+// Every Reason* constant of problem.go is in Reasons() and Reasons() holds nothing else, so the registry test
+// in internal/api sees every reason this package can return.
+func TestReasonsListsEveryConstant(t *testing.T) {
+	f, err := parser.ParseFile(token.NewFileSet(), "problem.go", nil, 0)
+	require.NoError(t, err)
+	var consts []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		for i, name := range vs.Names {
+			if strings.HasPrefix(name.Name, "Reason") && i < len(vs.Values) {
+				if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					v, err := strconv.Unquote(lit.Value)
+					require.NoError(t, err)
+					consts = append(consts, v)
+				}
+			}
+		}
+		return true
+	})
+	require.NotEmpty(t, consts)
+	assert.ElementsMatch(t, consts, Reasons())
+}
 
 func TestNormalizeNames(t *testing.T) {
 	got, err := NormalizeNames([]string{"WWW.Example.Test.", "*.example.test", "xn--bcher-kva.test", "a1.b-2.test"})
