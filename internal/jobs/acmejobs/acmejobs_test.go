@@ -733,3 +733,40 @@ func TestDeletedDefinitionEndsTheOrder(t *testing.T) {
 	assert.Equal(t, reasonNotFound, failureOf(t, err).Reason)
 	assert.Equal(t, []string{reasonNotFound}, inv.failed)
 }
+
+// Fix round 1 (carried from Task 5): the job's own context ending while the CA has not even created the order (the
+// newOrder call is slow) is an interruption, not a failure of the certificate; only the client's own CallTimeout expiring
+// with the job still alive counts.
+func TestShutdownBeforeTheOrderURLIsNeutral(t *testing.T) {
+	ok := job(map[string]string{"order_id": uuid.NewString()})
+	s, client := fakeCA(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	require.NoError(t, s.AddFault(fakeacme.Fault{Endpoint: "new-order", Kind: fakeacme.FaultSlow, Delay: 3 * time.Second}))
+
+	inv := &stubInv{work: runningWork(inventory.ACMEChallengeDNS01), client: client, key: key, hookCfg: hookConfig(s)}
+	jctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond) // a shutdown during newOrder
+	defer cancel()
+	_, err = stubHandlers(t, inv, openGate{}, nil).issue(jctx, ok, nil)
+	assert.Equal(t, reasonLeaseExpired, failureOf(t, err).Reason)
+	assert.Equal(t, []string{reasonLeaseExpired}, inv.aborted, "abandoned: no failure counted")
+	assert.Empty(t, inv.failed)
+
+	// The client's own call budget expires while the job is alive: a failure of the order (counted).
+	hc, err := transport.New(string(s.CAPEM()))
+	require.NoError(t, err)
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	short, err := acme.New(acme.Config{DirectoryURL: s.DirectoryURL(), Key: k, HTTPClient: hc, CallTimeout: 300 * time.Millisecond})
+	require.NoError(t, err)
+	s.ClearFaults()
+	_, err = short.RegisterAccount(context.Background(), "", nil, false)
+	require.NoError(t, err)
+	require.NoError(t, s.AddFault(fakeacme.Fault{Endpoint: "new-order", Kind: fakeacme.FaultSlow, Delay: 3 * time.Second}))
+	inv = &stubInv{work: runningWork(inventory.ACMEChallengeDNS01), client: short, key: key, hookCfg: hookConfig(s)}
+	_, err = stubHandlers(t, inv, openGate{}, nil).issue(context.Background(), ok, nil)
+	f := failureOf(t, err)
+	assert.NotEqual(t, reasonLeaseExpired, f.Reason)
+	assert.Equal(t, []string{f.Reason}, inv.failed, "counted")
+	assert.Empty(t, inv.aborted)
+}
