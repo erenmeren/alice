@@ -173,10 +173,11 @@ VALUES ($1, $2, 'issue', 'failed', now(), now(), 'renewal')`, uuid.New(), w.acme
 	bad("half an ARI window", ari, w.acmeCert, now, nil)
 	bad("an ARI window that ends before it starts", ari, w.acmeCert, now, now.Add(-time.Hour))
 	bad("an empty ARI window", ari, w.acmeCert, now, now)
+	bad("an ARI window before 2000", ari, w.acmeCert, time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), now)
 	_, err = d.App.Exec(ctx, ari, w.acmeCert, now, now.Add(time.Hour))
 	require.NoError(t, err)
 	_, err = d.App.Exec(ctx, `UPDATE acme_certificates SET ari_checked_at = now(), ari_next_check_at = now(), failure_notified_at = now(),
-    ari_window_start = NULL, ari_window_end = NULL WHERE id = $1`, w.acmeCert)
+    rate_limited_since = now(), ari_window_start = NULL, ari_window_end = NULL WHERE id = $1`, w.acmeCert)
 	require.NoError(t, err, "the planner's columns are the application's")
 
 	hookWaits := `UPDATE acme_hooks SET propagation_wait_seconds = $2, poll_timeout_seconds = $3 WHERE id = $1`

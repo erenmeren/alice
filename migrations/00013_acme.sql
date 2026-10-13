@@ -147,13 +147,17 @@ CREATE TABLE acme_certificates (
     ari_checked_at         timestamptz,
     ari_next_check_at      timestamptz,
     failure_notified_at    timestamptz,
+    -- When the current series of the CA's rate-limit failures began (NULL when the last failure was not a rate limit): the
+    -- planner holds the provider's other certificates for at most 24 hours of such a series.
+    rate_limited_since     timestamptz,
     created_by             uuid REFERENCES users (id),
     created_at             timestamptz NOT NULL,
     updated_at             timestamptz NOT NULL,
     deleted_at             timestamptz,
     CHECK (challenge <> 'dns01' OR hook_id IS NOT NULL),
     CHECK ((challenge = 'http01') = (http_target_id IS NOT NULL)),
-    CHECK ((ari_window_start IS NULL) = (ari_window_end IS NULL) AND (ari_window_start IS NULL OR ari_window_start < ari_window_end))
+    CHECK ((ari_window_start IS NULL) = (ari_window_end IS NULL) AND (ari_window_start IS NULL OR ari_window_start < ari_window_end)),
+    CHECK (ari_window_start IS NULL OR ari_window_start >= '2000-01-01T00:00:00Z')
 );
 CREATE INDEX acme_certificates_provider ON acme_certificates (provider_id);
 CREATE INDEX acme_certificates_account ON acme_certificates (account_id);
@@ -254,7 +258,7 @@ GRANT UPDATE (name, url, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_
     propagation_wait_seconds, poll_timeout_seconds, updated_at, deleted_at) ON acme_hooks TO alice_app;
 GRANT UPDATE (provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew, auto_deploy, state, current_certificate_id,
     failures, next_attempt_at, last_attempt_at, last_error_code, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at,
-    failure_notified_at, updated_at, deleted_at) ON acme_certificates TO alice_app;
+    failure_notified_at, rate_limited_since, updated_at, deleted_at) ON acme_certificates TO alice_app;
 GRANT UPDATE (state, finished_at, error_code, order_url, certificate_id, pending_key_ct, pending_key_nonce, pending_key_wrapped_dek,
     pending_key_version, presented, cleanup_at, cleanup_error_code) ON acme_orders TO alice_app;
 GRANT UPDATE (auto_deploy) ON acme_bindings TO alice_app;
