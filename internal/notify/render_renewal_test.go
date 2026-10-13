@@ -230,7 +230,8 @@ func TestACMEAutoDeployTemplatesRenderInBothLanguages(t *testing.T) {
 	}
 	en := s.Render("ada@example.com", inventory.TemplateACMEAutoDeployStopped, "en", params)
 	assert.Equal(t, "Automatic deployment stopped: certificate for www.örnek.example", en.Subject)
-	assert.Contains(t, en.Body, "keep the certificate they had before")
+	assert.Contains(t, en.Body, "the others keep their current certificate")
+	assert.NotContains(t, en.Body, "was undone", "a rollback that failed is counted too: no false reassurance")
 	assert.Contains(t, en.Body, "choose Deploy now")
 	tr := s.Render("ada@example.com", inventory.TemplateACMEAutoDeployHeldLicense, "tr", params)
 	assert.Contains(t, tr.Body, "Şimdi dağıt")

@@ -143,6 +143,17 @@ func TestACMEAutoDeployPlanTable(t *testing.T) {
 		}, deploy: none, hold: ACMEHoldLicense},
 		{name: "issued at the reopening: held", mutate: func(f *acmePlanFixture) { f.sn.reopened = tp(f.sn.current.issuedAt) },
 			deploy: none, hold: ACMEHoldLicense},
+		{name: "bound after the reopening: not held", mutate: func(f *acmePlanFixture) {
+			f.sn.reopened = tp(planNow.Add(-time.Hour))
+			for i := range f.sn.bindings {
+				f.sn.bindings[i].createdAt = planNow.Add(-time.Minute)
+			}
+		}, deploy: all, budget: AutoDeployWave},
+		{name: "one location bound before the reopening: held", mutate: func(f *acmePlanFixture) {
+			f.sn.reopened = tp(planNow.Add(-time.Hour))
+			f.binding(f.a).createdAt = planNow.Add(-time.Minute)
+			f.binding(f.b).createdAt = planNow.Add(-time.Minute)
+		}, deploy: none, hold: ACMEHoldLicense},
 		{name: "issued after the gate reopened: deployed", mutate: func(f *acmePlanFixture) { f.sn.reopened = tp(planNow.Add(-3 * time.Hour)) },
 			deploy: all, budget: AutoDeployWave},
 		{name: "a wave that began before the lock continues", mutate: func(f *acmePlanFixture) {

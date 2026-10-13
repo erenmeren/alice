@@ -1416,6 +1416,31 @@
         "title": "This website is not connected to this certificate.",
         "cause": "Deploy now puts the certificate only on the websites connected to it, and this website is not one of them.",
         "action": "Connect the website to the certificate first, or leave it out of the selection."
+      },
+      "binding_gone": {
+        "title": "The website no longer follows this certificate.",
+        "cause": "An automatic deployment of a certificate from a certificate authority was waiting to run, but the website was disconnected from the certificate (or the certificate was removed, or the website now follows another certificate). Nothing was sent to the server.",
+        "action": "Nothing to do if this was intended. Otherwise connect the website to the certificate again and choose Deploy now."
+      },
+      "auto_deploy_off": {
+        "title": "Automatic deployment was switched off.",
+        "cause": "An automatic deployment of a certificate from a certificate authority was waiting to run, but automatic deployment was switched off for the certificate or for this website. Nothing was sent to the server.",
+        "action": "Nothing to do if this was intended. To put the certificate on the website now, choose Deploy now."
+      },
+      "certificate_superseded": {
+        "title": "A newer certificate replaced this one.",
+        "cause": "An automatic deployment was waiting to run, but the certificate authority has issued a newer certificate for these names since. Nothing was sent to the server; Alice deploys the newer certificate instead.",
+        "action": "Nothing to do: the newer certificate is deployed automatically."
+      },
+      "deploy_stopped": {
+        "title": "Automatic deployment of this certificate stopped.",
+        "cause": "Three deployments of this certificate failed, so Alice stopped deploying it automatically. A deployment that was still waiting sent nothing to the server.",
+        "action": "Look at the failed deployments, remove the cause, then choose Deploy now."
+      },
+      "deploy_held": {
+        "title": "This certificate is waiting for an administrator.",
+        "cause": "Alice holds this certificate for an administrator before it is deployed automatically (it arrived before the license allowed changes again, or Alice cannot confirm the certificates that vouch for it). A deployment that was waiting sent nothing to the server.",
+        "action": "An administrator checks the certificate, then chooses Deploy now or releases it for automatic deployment."
       }
     },
     "tls": {
@@ -1719,11 +1744,11 @@
       },
       "auto_deploy_stopped": {
         "subject": "Automatic deployment stopped: certificate for {{name}}",
-        "body": "Alice stopped putting the new certificate for {{names}} on its websites by itself, because {{count}} deployments of it failed.\n\nReason of the last failed deployment: {{reason}}\n\nEach failed deployment was undone: the websites it was meant for keep the certificate they had before and keep working.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page lists the websites and the result of each deployment. Remove the cause, then choose Deploy now. The next certificate Alice gets for these names is deployed by itself again."
+        "body": "Alice stopped putting the new certificate for {{names}} on its websites by itself, because {{count}} deployments of it failed.\n\nReason of the last failed deployment: {{reason}}\n\nWebsites that already received the new certificate keep it; the others keep their current certificate. The deployment history in Alice shows the result of each deployment: where Alice could not confirm that the earlier certificate was put back, the history says so and the website needs a check.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page lists the websites and the result of each deployment. Remove the cause, then choose Deploy now. The next certificate Alice gets for these names is deployed by itself again."
       },
       "auto_deploy_held_license": {
         "subject": "New certificate for {{name}} is waiting for an administrator",
-        "body": "Alice got a new certificate for {{names}} before its license allowed changes again. Alice does not put such a certificate on the websites by itself, so that nobody is surprised by a change that happened while the license did not allow changes.\n\nThe websites keep the certificate they have now.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Check it, then choose Deploy now, or release it so that Alice deploys it by itself."
+        "body": "Alice got a new certificate for {{names}} before its license last started to allow changes again (after a time in which it did not), and the certificate has not been deployed anywhere yet. Alice does not put such a certificate on the websites by itself, so that a person looks at it first.\n\nThe websites keep the certificate they have now.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Check it, then choose Deploy now, or release it so that Alice deploys it by itself."
       },
       "auto_deploy_held_chain": {
         "subject": "New certificate for {{name}} needs a check before it is deployed",

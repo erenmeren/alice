@@ -106,8 +106,10 @@ type acmeDeployPlan struct {
 //     binding is the person's explicit statement that the location follows this ACME certificate;
 //   - an incomplete chain is held (chain_incomplete) with one notice, never deployed;
 //   - a current certificate issued before the licence gate last reopened, of which no deployment exists (any trigger,
-//     any status, any bound location), not released by an Administrator, is held (license) with one notice: without a
-//     person it would roll out the moment the licence returns;
+//     any status, any bound location), not released by an Administrator, is held (license) with one notice when a
+//     location it would go to was bound before the reopening: without a person it would roll out the moment the licence
+//     returns. A binding made after the reopening is an Administrator's act (automatic deployment on needs one) with the
+//     certificate in view, so it is not held for it;
 //   - otherwise at most min(AutoDeployWave - unfinished automatic deployments, remaining) are created.
 func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 	var p acmeDeployPlan
@@ -226,7 +228,8 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 		p.hold, p.candidate = ACMEHoldChainIncomplete, candidates
 		return p
 	}
-	if sn.reopened != nil && !sn.released && !cur.issuedAt.After(*sn.reopened) && !anyOfCurrent {
+	if sn.reopened != nil && !sn.released && !cur.issuedAt.After(*sn.reopened) && !anyOfCurrent &&
+		slices.ContainsFunc(candidates, func(l uuid.UUID) bool { return !created[l].After(*sn.reopened) }) {
 		p.hold, p.candidate = ACMEHoldLicense, candidates
 		return p
 	}
