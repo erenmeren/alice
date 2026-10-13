@@ -98,38 +98,59 @@ const maxAzureCAFile = 64 << 10
 // starts, because the fake is a separate container whose CA may change while Alice runs, and a
 // start-up failure would crash-loop it for a reason that is not Alice's.
 func azureRoots() (*x509.CertPool, error) {
-	f, err := os.OpenFile(azureCAFile, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // G304: the e2e build's fixed trust file (a variable only for unit tests)
+	return fakeCARoots(azureCAFile, maxAzureCAFile, "Azure")
+}
+
+// fakeCARoots reads the one-certificate CA file a fake service wrote (what names the service in the errors).
+func fakeCARoots(path string, limit int, what string) (*x509.CertPool, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) //nolint:gosec // G304: the e2e build's fixed trust file (a variable only for unit tests)
 	if err != nil {
-		return nil, fmt.Errorf("the fake Azure CA is not readable: %w", err)
+		return nil, fmt.Errorf("the fake %s CA is not readable: %w", what, err)
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() {
-		return nil, errors.New("the fake Azure CA is not a regular file")
+		return nil, fmt.Errorf("the fake %s CA is not a regular file", what)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, maxAzureCAFile+1))
+	raw, err := io.ReadAll(io.LimitReader(f, int64(limit)+1))
 	if err != nil {
-		return nil, fmt.Errorf("the fake Azure CA is not readable: %w", err)
+		return nil, fmt.Errorf("the fake %s CA is not readable: %w", what, err)
 	}
-	if len(raw) > maxAzureCAFile {
-		return nil, errors.New("the fake Azure CA file is too large")
+	if len(raw) > limit {
+		return nil, fmt.Errorf("the fake %s CA file is too large", what)
 	}
 	trimmed := bytes.TrimSpace(raw)
 	block, rest := pem.Decode(trimmed)
 	if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 || !bytes.HasPrefix(trimmed, []byte("-----BEGIN ")) ||
 		len(bytes.TrimSpace(rest)) != 0 {
-		return nil, errors.New("the fake Azure CA file must hold exactly one certificate and nothing else")
+		return nil, fmt.Errorf("the fake %s CA file must hold exactly one certificate and nothing else", what)
 	}
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, errors.New("the fake Azure CA file holds no valid certificate")
+		return nil, fmt.Errorf("the fake %s CA file holds no valid certificate", what)
 	}
 	if !cert.BasicConstraintsValid || !cert.IsCA {
-		return nil, errors.New("the fake Azure CA file holds a certificate that is not a CA")
+		return nil, fmt.Errorf("the fake %s CA file holds a certificate that is not a CA", what)
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
 	return pool, nil
+}
+
+// acmeCAFile is where the fake ACME CA (cmd/alice-fakeacme, compose service fakeacme) writes its TLS CA;
+// compose shares the volume read-only with alice. A variable only so the unit tests can point it at a file
+// of their own.
+var acmeCAFile = "/run/alice-e2e-acme/ca.pem"
+
+// maxACMECAFile bounds what acmeRoots accepts, like maxAzureCAFile.
+const maxACMECAFile = 64 << 10
+
+// acmeRoots is the trust of the fake ACME CA's TLS certificate in the e2e build: ONLY the fake's CA
+// (same rules as azureRoots: one regular file, one CA certificate, nothing else, read at each call). The
+// release build has no such hook (testapi_release.go): it verifies a CA with the system roots and the
+// provider's own bundle only. The ACME client (internal/acme) calls this when it builds its TLS roots.
+func acmeRoots() (*x509.CertPool, error) {
+	return fakeCARoots(acmeCAFile, maxACMECAFile, "ACME")
 }
 
 // maxTestBody is the request body limit of the API (SEC-023), applied to /test too.
@@ -448,6 +469,16 @@ func testHandler(d testDeps) http.Handler {
 		defer pool.Close()
 		return seed.Dashboard(ctx, pool, e2eClock.Now().UTC())
 	}, d.Log))
+	// GET /test/acme/ca tells a journey whether this build can trust the fake ACME CA yet (its CA file is
+	// there and valid), so it waits for the fake instead of sleeping. It answers 200 {"trusted":true} or
+	// 503 {"trusted":false}, never the certificate and never the file's content in an error.
+	mux.HandleFunc("GET /test/acme/ca", func(w http.ResponseWriter, _ *http.Request) {
+		if pool, err := acmeRoots(); err != nil || pool == nil {
+			writeTestJSON(w, http.StatusServiceUnavailable, map[string]bool{"trusted": false})
+			return
+		}
+		writeTestJSON(w, http.StatusOK, map[string]bool{"trusted": true})
+	})
 	mux.HandleFunc("/test/", func(w http.ResponseWriter, _ *http.Request) {
 		writeTestJSON(w, http.StatusNotFound, map[string]string{"error": "unknown test endpoint"})
 	})

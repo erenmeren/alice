@@ -97,6 +97,13 @@ func TestReleaseAzureRootsAreTheSystemRoots(t *testing.T) {
 	assert.Nil(t, pool, "a nil pool means the system roots")
 }
 
+// A release build has no fake ACME CA hook either: no roots, no file read.
+func TestReleaseACMERootsAreNone(t *testing.T) {
+	pool, err := acmeRoots()
+	require.NoError(t, err)
+	assert.Nil(t, pool)
+}
+
 // The release build has no rotation test endpoint: the e2e-only POST /test/rotation/overlap lives in a
 // file that requires the e2e tag (its handler symbol is in E2E_SYMBOLS, so make release-symcheck fails
 // if a release binary ever links it), and the release test handler is nil, so the API answers the

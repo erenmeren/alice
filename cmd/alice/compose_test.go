@@ -117,9 +117,11 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 		names = append(names, name)
 	}
 	// The overlay adds the SSH target and the fake Azure service, nothing else; the release file has neither.
-	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakesmtp", "fakeidp"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, SMTP and identity provider services")
-	_, fakeInBase := base.Services["fakeazure"]
-	assert.False(t, fakeInBase, "the release compose file has no fake Azure service")
+	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakeacme", "fakesmtp", "fakeidp"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, ACME, SMTP and identity provider services")
+	for _, fake := range []string{"fakeazure", "fakeacme"} {
+		_, fakeInBase := base.Services[fake]
+		assert.False(t, fakeInBase, "the release compose file has no %s service", fake)
+	}
 	// The e2e build answers the unauthenticated /test/* endpoints: it is published on loopback only (AUD-07).
 	assert.Equal(t, []any{"127.0.0.1:${ALICE_E2E_PORT:-9443}:8443"}, overlay.Services["alice"].Ports,
 		"the e2e Alice is published on 127.0.0.1 only")
@@ -260,6 +262,71 @@ func TestE2EFakeAzureIsTestOnlyHardenedAndSharesItsCA(t *testing.T) {
 	assert.Contains(t, string(src), `"`+marker+`/ca.pem"`)
 }
 
+// The fake ACME CA exists only in the test overlay, publishes nothing, sits only on the internal backend
+// network under acme.test.alice, is hardened like the other fakes and shares its TLS CA with alice read-only.
+func TestE2EFakeACMEIsTestOnlyHardenedAndSharesItsCA(t *testing.T) {
+	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
+	fake, ok := overlay.Services["fakeacme"]
+	require.True(t, ok)
+	marker := makeVarOf(t, "E2E_ACME_MARKER")
+	require.Equal(t, "/run/alice-e2e-acme", marker)
+
+	assert.Empty(t, fake.Ports, "the fake ACME CA publishes nothing")
+	assert.Equal(t, []string{"backend"}, fake.Networks.names(), "only the internal network")
+	assert.Equal(t, []string{"acme.test.alice"}, fake.Networks["backend"].Aliases)
+	assert.True(t, fake.ReadOnly)
+	assert.Equal(t, []string{"ALL"}, fake.CapDrop)
+	assert.Empty(t, fake.CapAdd, "port 443 is bound through the unprivileged port start sysctl, not a capability")
+	assert.Equal(t, map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, fake.Sysctls)
+	assert.Equal(t, []string{"no-new-privileges:true"}, fake.SecurityOpt)
+	assert.Regexp(t, `^[1-9][0-9]*:[1-9][0-9]*$`, fake.User, "non-root")
+	assert.NotEmpty(t, fake.MemLimit)
+	assert.Positive(t, fake.PidsLimit)
+	assert.Equal(t, "alice-e2e-fakeacme", fake.Image)
+	assert.Equal(t, "..", fake.Build.Context)
+	assert.Equal(t, "test/images/fakeacme/Dockerfile", fake.Build.Dockerfile)
+	_, err := os.Stat("../../" + fake.Build.Dockerfile)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"CMD", "/alice-fakeacme", "ctl", "ping"}, fake.Healthcheck.Test)
+	assert.Equal(t, []string{"serve", "--listen", ":443", "--admin", "127.0.0.1:9091", "--ca-out", marker + "/ca.pem"}, fake.Command,
+		"the admin API stays on loopback; the TLS CA goes to the shared volume")
+
+	assert.Equal(t, []string{"fakeacme-ca:" + marker}, fake.Volumes)
+	alice := overlay.Services["alice"]
+	assert.Contains(t, alice.Volumes, "fakeacme-ca:"+marker+":ro", "alice reads the CA, never writes it")
+	assert.Equal(t, "service_healthy", alice.DependsOn["fakeacme"].Condition, "alice starts after the fake wrote its CA")
+	raw, err := os.ReadFile("../../deploy/docker-compose.e2e.yml")
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "\n  fakeacme-ca: {}", "the CA volume is declared")
+
+	// The e2e build reads exactly the file the fake writes.
+	src, err := os.ReadFile("testapi_e2e.go")
+	require.NoError(t, err)
+	assert.Contains(t, string(src), `"`+marker+`/ca.pem"`)
+}
+
+// The release compose file and image never mention the fake ACME CA, its CA directory or its host name.
+func TestReleaseComposeAndImageNeverMentionTheFakeACME(t *testing.T) {
+	for _, path := range []string{"../../deploy/docker-compose.yml", "../../deploy/Dockerfile"} {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, s := range []string{"alice-e2e-acme", "fakeacme", "alice-fakeacme", "acme.test.alice"} {
+			assert.NotContains(t, string(raw), s, "%s", path)
+		}
+	}
+}
+
+// The fake ACME image builds on the same two pinned base images as the release image and the other fakes.
+func TestFakeACMEDockerfileReusesTheReleaseBaseImages(t *testing.T) {
+	release := dockerfileFroms(t, "../../deploy/Dockerfile")
+	fake := dockerfileFroms(t, "../../test/images/fakeacme/Dockerfile")
+	require.Len(t, fake, 2, "a builder and a runtime image")
+	for ref := range fake {
+		assert.Contains(t, ref, "@sha256:")
+		assert.True(t, release[ref], "%s is not a base image of deploy/Dockerfile", ref)
+	}
+}
+
 // The release compose file and image never mention the fake Azure service, its CA or its host names:
 // a release Alice has no way to trust it.
 func TestReleaseComposeAndImageNeverMentionTheFakeAzure(t *testing.T) {
@@ -294,7 +361,7 @@ func TestComposeAndImagesNeverSetTheSDKLoggingOrRegionVariables(t *testing.T) {
 	}
 	// Dockerfiles: an ENV or ARG line (comments may name the variables). The setup script that writes
 	// deploy/.env must not either.
-	for _, path := range []string{"../../deploy/Dockerfile", "../../test/images/fakeazure/Dockerfile", "../../test/images/e2e-target/Dockerfile"} {
+	for _, path := range []string{"../../deploy/Dockerfile", "../../test/images/fakeazure/Dockerfile", "../../test/images/fakeacme/Dockerfile", "../../test/images/e2e-target/Dockerfile"} {
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
 		for _, l := range dockerfileInstructions(string(raw)) {

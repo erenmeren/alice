@@ -53,6 +53,10 @@ const alertsScanEvery = alerts.ScanEvery
 // trusts anything else (testapi_e2e.go), and a release build reads no file for it.
 func azureRoots() (*x509.CertPool, error) { return nil, nil }
 
+// acmeRoots is the trust of the fake ACME CA in the e2e build; here there is none: nil means no extra roots,
+// so a release build knows no fake CA and no place to read one from.
+func acmeRoots() (*x509.CertPool, error) { return nil, nil }
+
 // testHandler returns nil: release builds have no /test endpoints.
 func testHandler(testDeps) http.Handler { return nil }
 

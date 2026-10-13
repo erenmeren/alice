@@ -20,8 +20,10 @@ services:
     # the Key Vault provider refuses to open a session with any of them (compose_test.go).
     volumes:
       - fakeazure-ca:/run/alice-e2e-azure:ro
+      - fakeacme-ca:/run/alice-e2e-acme:ro
     depends_on:
       fakeazure: { condition: service_healthy }
+      fakeacme: { condition: service_healthy }
       fakesmtp: { condition: service_healthy }
       fakeidp: { condition: service_healthy }
   # Test-only SSH target for the Phase 3 and Phase 4 journeys (web/e2e/phase3.spec.ts and later):
@@ -82,6 +84,39 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+  # Test-only ACME certificate authority for the ACME journeys (web/e2e/acme.spec.ts): the in-process fake of
+  # internal/testutil/fakeacme as a container. Docker's DNS answers acme.test.alice with it on the internal
+  # network; only the e2e build of Alice can trust its CA (the fakeacme-ca volume, cmd/alice/testapi_e2e.go).
+  # It validates HTTP-01 and DNS-01 for real (its DNS table is fed by "ctl dns set" and by its built-in DNS
+  # hook, POST https://acme.test.alice/hook) and issues from CAs it generates when it starts. Playwright drives
+  # it with "docker compose exec fakeacme /alice-fakeacme ctl ...", which talks to its loopback-only admin API.
+  # It publishes nothing and runs as a non-root user: port 443 is bindable because the container's
+  # unprivileged port start is 0 (a namespaced sysctl), not because of a capability.
+  fakeacme:
+    image: alice-e2e-fakeacme
+    build:
+      context: ..
+      dockerfile: test/images/fakeacme/Dockerfile
+    command: ["serve", "--listen", ":443", "--admin", "127.0.0.1:9091", "--ca-out", "/run/alice-e2e-acme/ca.pem"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    mem_limit: 256m
+    pids_limit: 128
+    ulimits: { core: 0 }
+    volumes:
+      - fakeacme-ca:/run/alice-e2e-acme
+    networks:
+      backend:
+        aliases: [acme.test.alice]
+    healthcheck:
+      test: ["CMD", "/alice-fakeacme", "ctl", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
   # Test-only SMTP server for the Phase 7 journeys (web/e2e/phase7.spec.ts): internal/testutil/fakesmtp as a
   # container. STARTTLS with a certificate it generates at start (the journey trusts it through Settings, F-62), AUTH
   # PLAIN with a password it generates (read with "ctl credentials"), a MailHog-compatible message API on loopback
@@ -135,3 +170,4 @@ services:
 
 volumes:
   fakeazure-ca: {}
+  fakeacme-ca: {}

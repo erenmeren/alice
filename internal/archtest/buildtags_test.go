@@ -47,9 +47,10 @@ var testOnlyImports = []string{
 // cmd/alice-fakeazure is a test tool, not a package of the product: it imports internal/testutil/fakekv, is
 // built into the e2e fake Azure image only and is no release binary (TestReleaseBinariesLinkNoTestPackages
 // lists the binaries that ship). cmd/alice-fakesmtp and cmd/alice-fakeidp are the same kind of tool for the
-// mail and OpenID Connect fakes (internal/testutil/fakesmtp and fakeidp).
+// mail and OpenID Connect fakes (internal/testutil/fakesmtp and fakeidp); cmd/alice-fakeacme is the one of
+// the fake ACME CA (internal/testutil/fakeacme).
 var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
-	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp"}
+	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
 var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense"}
@@ -373,6 +374,22 @@ func TestAzureMarkerIsE2EOnly(t *testing.T) {
 	assert.Positive(t, n, "no source file holds %s; E2E_AZURE_MARKER is stale", marker)
 }
 
+// The directory the e2e build reads the fake ACME CA's TLS CA from (the Makefile's E2E_ACME_MARKER) is named
+// only in files that require e2e, like the Azure one, and the e2e source does name it.
+func TestAcmeMarkerIsE2EOnly(t *testing.T) {
+	marker := makeVar(t, "E2E_ACME_MARKER")
+	require.NotEmpty(t, marker)
+	n := 0
+	for _, f := range sourceFiles(t) {
+		if f.test || inTestOnlyDir(f.rel) || !strings.Contains(f.src, marker) {
+			continue
+		}
+		n++
+		assert.True(t, requires(f.expr, "e2e"), "%s holds %s without requiring the e2e tag", f.rel, marker)
+	}
+	assert.Positive(t, n, "no source file holds %s; E2E_ACME_MARKER is stale", marker)
+}
+
 func TestReleaseFilesImportNoTestCode(t *testing.T) {
 	for _, f := range sourceFiles(t) {
 		if f.test || inTestOnlyDir(f.rel) || !inBuild(f.expr) {
@@ -422,9 +439,11 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 		deps := goListDeps(t, tags, "./cmd/alice")
 		assert.NotContains(t, deps, "alice/internal/testutil/fakesmtp", "tags %q", tags)
 		assert.NotContains(t, deps, "alice/internal/testutil/fakeidp", "tags %q", tags)
+		assert.NotContains(t, deps, "alice/internal/testutil/fakeacme", "tags %q", tags)
 	}
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakesmtp"), "alice/internal/testutil/fakesmtp")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeidp"), "alice/internal/testutil/fakeidp")
+	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeacme"), "alice/internal/testutil/fakeacme", "the fake ACME tool is where the fake is linked")
 }
 
 func TestRequires(t *testing.T) {

@@ -116,6 +116,10 @@ TEST_ROUTE_MARKER := /test/clock
 # refuses it in the image's binary. internal/archtest checks it appears only in e2e-tagged source.
 E2E_AZURE_MARKER := /run/alice-e2e-azure
 
+# The same for the fake ACME CA (cmd/alice-fakeacme, compose service fakeacme): the directory its TLS CA is
+# written to and the e2e build reads it from (cmd/alice/testapi_e2e.go). Only the e2e build holds this string.
+E2E_ACME_MARKER := /run/alice-e2e-acme
+
 .PHONY: release-symcheck
 release-symcheck: ## Fail if the release build of alice links e2e-only test code, has build tags or trusts the test license key
 	CGO_ENABLED=0 go build -trimpath -o bin/.symcheck-release ./cmd/alice
@@ -139,6 +143,8 @@ release-symcheck: ## Fail if the release build of alice links e2e-only test code
 	@! grep -aqF '$(TEST_ROUTE_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build serves the e2e /test routes"; exit 1; }
 	@grep -aqF '$(E2E_AZURE_MARKER)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see $(E2E_AZURE_MARKER) in the e2e build; update E2E_AZURE_MARKER"; exit 1; }
 	@! grep -aqF '$(E2E_AZURE_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build knows where the fake Azure CA lives"; exit 1; }
+	@grep -aqF '$(E2E_ACME_MARKER)' bin/.symcheck-e2e || { echo "release-symcheck: cannot see $(E2E_ACME_MARKER) in the e2e build; update E2E_ACME_MARKER"; exit 1; }
+	@! grep -aqF '$(E2E_ACME_MARKER)' bin/.symcheck-release || { echo "release-symcheck: the release build knows where the fake ACME CA lives"; exit 1; }
 	@rm -f bin/.symcheck-release bin/.symcheck-e2e bin/.symcheck-release.nm bin/.symcheck-e2e.nm bin/.symcheck-release.deps bin/.symcheck-e2e.deps
 	@echo "release-symcheck: ok"
 
@@ -173,7 +179,7 @@ image: ## Build the alice container image as alice:$(IMAGE_TAG) (default alice:c
 # The helper build is reproducible, so the image must hold the checksums make helper writes.
 .PHONY: image-check
 image-check: image helper ## Check the release image: non-root, no shell or test artefacts, a release binary without build tags, test key or /test routes (AUD-23)
-	TEST_LICENSE_LABEL='$(TEST_LICENSE_LABEL)' TEST_ROUTE_MARKER='$(TEST_ROUTE_MARKER)' E2E_AZURE_MARKER='$(E2E_AZURE_MARKER)' \
+	TEST_LICENSE_LABEL='$(TEST_LICENSE_LABEL)' TEST_ROUTE_MARKER='$(TEST_ROUTE_MARKER)' E2E_AZURE_MARKER='$(E2E_AZURE_MARKER)' E2E_ACME_MARKER='$(E2E_ACME_MARKER)' \
 	  HELPER_SHA256_AMD64='$(call HELPER_SUM,amd64)' HELPER_SHA256_ARM64='$(call HELPER_SUM,arm64)' \
 	  ./deploy/dev/check-image.sh $(IMAGE_TAG)
 

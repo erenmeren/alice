@@ -101,6 +101,30 @@ if "${compose[@]}" config --services | grep -qx fakeazure; then
       "$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$alice" | grep -Ec '^(AZURE_SDK_GO_LOGGING|MSAL_FORCE_REGION|AZURE_REGIONAL_AUTHORITY_NAME)=' || true)" "0"
   fi
 fi
+# The e2e overlay adds the fake ACME CA (certificate issuance journeys): the same hardening as the fake Azure
+# service, and alice reads its TLS CA through a read-only mount.
+if "${compose[@]}" config --services | grep -qx fakeacme; then
+  acme="$("${compose[@]}" ps -q fakeacme)"
+  if [[ -z "$acme" ]]; then
+    echo "FAIL: the e2e fake ACME service is not running"; fail=1
+  else
+    check "fakeacme publishes no ports" "$(docker port "$acme" | wc -l | tr -d ' ')" "0"
+    check "fakeacme is only on the internal backend network" \
+      "$(docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$acme")" "${project}_backend "
+    check "fakeacme root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$acme")" "true"
+    check "fakeacme drops all capabilities and adds none" \
+      "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$acme")" '["ALL"] null'
+    check "fakeacme has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$acme")" '["no-new-privileges:true"]'
+    check "fakeacme runs as a non-root user" \
+      "$(docker inspect -f '{{.Config.User}}' "$acme" | grep -Ec '^[1-9][0-9]*:[1-9][0-9]*$' || true)" "1"
+    check "fakeacme has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$acme")" "128"
+    check "fakeacme is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$acme")" "healthy"
+    check "alice mounts the fake ACME CA read-only" \
+      "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/run/alice-e2e-acme"}}{{.Type}} {{.RW}}{{end}}{{end}}' "$alice")" "volume false"
+    check "alice can read the fake ACME CA" \
+      "$(docker cp "$alice:/run/alice-e2e-acme/ca.pem" - 2>/dev/null | tar -xOf - 2>/dev/null | grep -c 'BEGIN CERTIFICATE' || true)" "1"
+  fi
+fi
 # The e2e overlay adds the fake SMTP server (Phase 7 journeys): it must publish nothing, sit only on the internal
 # backend network, be read-only, drop every capability, run as a non-root user, have a pids limit and be healthy.
 if "${compose[@]}" config --services | grep -qx fakesmtp; then

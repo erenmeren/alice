@@ -92,7 +92,7 @@ esac
 	cmd.Env = append(env,
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"FAKE_DIR="+dir, "FAKE_HOST_GO="+hostGo, "FAKE_BIN_GO="+binGo,
-		"TEST_LICENSE_LABEL=test-license-label", "TEST_ROUTE_MARKER=/test/clock", "E2E_AZURE_MARKER=/run/alice-e2e-azure",
+		"TEST_LICENSE_LABEL=test-license-label", "TEST_ROUTE_MARKER=/test/clock", "E2E_AZURE_MARKER=/run/alice-e2e-azure", "E2E_ACME_MARKER=/run/alice-e2e-acme",
 		"HELPER_SHA256_AMD64="+sumAMD, "HELPER_SHA256_ARM64="+sumARM,
 	)
 	out, err := cmd.CombinedOutput()

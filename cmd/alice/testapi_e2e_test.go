@@ -769,3 +769,68 @@ func TestResetRestoresTheTemporaryCertificate(t *testing.T) {
 	// Without a store (a unit test's dependencies) the reset does nothing.
 	require.NoError(t, resetTemporaryCertificate(nil, dir, hosts, now))
 }
+
+// The ACME hook reads the fake ACME CA's file by the same rules as the Azure one: only that CA is
+// trusted, never the system roots, and anything but one regular file with one CA certificate fails closed.
+func TestACMERootsTrustOnlyTheFakeCAAndFailClosed(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	fake := pki.NewCA("fake acme", pki.ECDSA256, now)
+	other := pki.NewCA("some other CA", pki.ECDSA256, now)
+	use := func(path string) {
+		old := acmeCAFile
+		acmeCAFile = path
+		t.Cleanup(func() { acmeCAFile = old })
+	}
+	good := filepath.Join(dir, "ca.pem")
+	require.NoError(t, os.WriteFile(good, fake.RootPEM, 0o600))
+	use(good)
+	pool, err := acmeRoots()
+	require.NoError(t, err)
+	want := x509.NewCertPool()
+	require.True(t, want.AppendCertsFromPEM(fake.RootPEM))
+	assert.True(t, pool.Equal(want), "the pool holds the fake CA and nothing else (no system roots)")
+	leaf := other.Issue(pki.Opts{CommonName: "acme.test.alice", SANs: []string{"acme.test.alice"}}, now)
+	inter := x509.NewCertPool()
+	inter.AddCert(other.Intermediate)
+	_, err = leaf.Cert.Verify(x509.VerifyOptions{DNSName: "acme.test.alice", Roots: pool, Intermediates: inter, CurrentTime: now.Add(time.Minute)})
+	assert.Error(t, err, "another CA's certificate does not verify")
+
+	link := filepath.Join(dir, "link.pem")
+	require.NoError(t, os.Symlink(good, link))
+	two := filepath.Join(dir, "two.pem")
+	require.NoError(t, os.WriteFile(two, append(append([]byte{}, fake.RootPEM...), other.RootPEM...), 0o600))
+	leafFile := filepath.Join(dir, "leaf.pem")
+	require.NoError(t, os.WriteFile(leafFile, leaf.CertPEM, 0o600))
+	big := filepath.Join(dir, "big.pem")
+	require.NoError(t, os.WriteFile(big, append(append([]byte{}, fake.RootPEM...), bytes.Repeat([]byte("x"), 2<<20)...), 0o600))
+	for name, file := range map[string]string{"missing": filepath.Join(dir, "missing.pem"), "a directory": dir, "a symlink": link,
+		"two certificates": two, "a leaf": leafFile, "too large": big} {
+		use(file)
+		roots, err := acmeRoots()
+		assert.Nil(t, roots, name)
+		assert.ErrorContains(t, err, "fake ACME CA", name)
+	}
+}
+
+// GET /test/acme/ca answers whether the e2e build trusts the fake ACME CA yet, without revealing anything.
+func TestTestAPIACMECATrustProbe(t *testing.T) {
+	old := acmeCAFile
+	t.Cleanup(func() { acmeCAFile = old })
+	h := testHandler(testDeps{})
+	ask := func() (int, string) {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/test/acme/ca", nil))
+		return rec.Code, strings.TrimSpace(rec.Body.String())
+	}
+	acmeCAFile = filepath.Join(t.TempDir(), "missing.pem")
+	code, body := ask()
+	assert.Equal(t, http.StatusServiceUnavailable, code)
+	assert.JSONEq(t, `{"trusted":false}`, body)
+	file := filepath.Join(t.TempDir(), "ca.pem")
+	require.NoError(t, os.WriteFile(file, pki.NewCA("fake acme", pki.ECDSA256, time.Now()).RootPEM, 0o600))
+	acmeCAFile = file
+	code, body = ask()
+	assert.Equal(t, http.StatusOK, code)
+	assert.JSONEq(t, `{"trusted":true}`, body)
+}
