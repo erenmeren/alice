@@ -349,10 +349,12 @@ fuzz-backup: ## Fuzz the backup header, stream and payload decoder ($(FUZZTIME) 
 	go test -count=1 -run '^$$' -fuzz FuzzDecoder -fuzztime $(FUZZTIME) ./internal/backup/dump/
 
 .PHONY: fuzz-acme
-fuzz-acme: ## Fuzz the ACME problem, renewal information, directory and DNS hook reply parsers ($(FUZZTIME) each)
+fuzz-acme: ## Fuzz the ACME problem, renewal information, directory, issued chain, order name and DNS hook reply parsers ($(FUZZTIME) each)
 	go test -count=1 -run '^$$' -fuzz FuzzParseProblem -fuzztime $(FUZZTIME) ./internal/acme/
 	go test -count=1 -run '^$$' -fuzz FuzzParseARI -fuzztime $(FUZZTIME) ./internal/acme/
 	go test -count=1 -run '^$$' -fuzz FuzzParseDirectory -fuzztime $(FUZZTIME) ./internal/acme/
+	go test -count=1 -run '^$$' -fuzz FuzzCheckChain -fuzztime $(FUZZTIME) ./internal/acme/
+	go test -count=1 -run '^$$' -fuzz FuzzNormalizeNames -fuzztime $(FUZZTIME) ./internal/acme/
 	go test -count=1 -run '^$$' -fuzz FuzzParseHookReply -fuzztime $(FUZZTIME) ./internal/acme/solver/dns01/
 
 .PHONY: fuzz-api
