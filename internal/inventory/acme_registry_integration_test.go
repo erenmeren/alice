@@ -420,9 +420,11 @@ func TestACMERolloverSwitched(t *testing.T) {
 	require.NoError(t, err)
 	w.clock.Advance(time.Hour)
 	certs := []uuid.UUID{uuid.New(), uuid.New()}
+	web := w.seedTarget("roll-web", "nginx", "web.example.test")
 	for i, id := range certs {
-		_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, deleted_at, created_at, updated_at)
-VALUES ($1, $2, $3, '{www.example.test}', 'ecdsa_p256', 'http01', CASE WHEN $4 THEN now() END, now(), now())`, id, p.ID, a.ID, i == 1)
+		_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, http_target_id, deleted_at,
+created_at, updated_at) VALUES ($1, $2, $3, '{www.example.test}', 'ecdsa_p256', 'http01', $5, CASE WHEN $4 THEN now() END, now(), now())`,
+			id, p.ID, a.ID, i == 1, web)
 		require.NoError(t, err)
 	}
 

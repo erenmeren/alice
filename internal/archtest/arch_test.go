@@ -39,8 +39,13 @@ var rules = map[string][]string{
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
 	// a hook's dns01 configuration; the client and solvers never import it back.
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
-		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver/dns01"},
-	"alice/internal/jobs/...":  {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
+		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01"},
+	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
+	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
+	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
+	"alice/internal/jobs/acmejobs": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
+		"alice/internal/providers", "alice/internal/jobs", "alice/internal/acme", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01",
+		"alice/internal/acme/solver/http01", "alice/internal/acme/keygen", "alice/internal/secrets"},
 	"alice/internal/setup/...": {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
@@ -350,6 +355,13 @@ func TestAllowed(t *testing.T) {
 		{"inventory to acme transport allowed", "alice/internal/inventory", "alice/internal/acme/transport", true},
 		{"inventory to dns01 allowed", "alice/internal/inventory", "alice/internal/acme/solver/dns01", true},
 		{"inventory to http01 denied", "alice/internal/inventory", "alice/internal/acme/solver/http01", false},
+		{"inventory to the solver contract allowed", "alice/internal/inventory", "alice/internal/acme/solver", true},
+		{"acmejobs to http01 allowed", "alice/internal/jobs/acmejobs", "alice/internal/acme/solver/http01", true},
+		{"acmejobs to dns01 allowed", "alice/internal/jobs/acmejobs", "alice/internal/acme/solver/dns01", true},
+		{"acmejobs to linuxssh denied", "alice/internal/jobs/acmejobs", "alice/internal/providers/linuxssh", false},
+		{"acmejobs to transport denied", "alice/internal/jobs/acmejobs", "alice/internal/acme/transport", false},
+		{"acmejobs to fakeacme denied", "alice/internal/jobs/acmejobs", "alice/internal/testutil/fakeacme", false},
+		{"kvjobs to acme denied", "alice/internal/jobs/kvjobs", "alice/internal/acme", false},
 		{"inventory to fakeacme denied", "alice/internal/inventory", "alice/internal/testutil/fakeacme", false},
 		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},
 		{"acme to api denied", "alice/internal/acme", "alice/internal/api", false},

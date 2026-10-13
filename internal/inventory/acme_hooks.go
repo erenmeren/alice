@@ -403,11 +403,34 @@ func (s *Service) DeleteACMEHook(ctx context.Context, a Actor, id uuid.UUID) err
 }
 
 // ACMEHookSolverConfig is the dns01 configuration of a live hook for an order (Task 10), with the opened secret: the
-// caller builds the solver and zeroes cfg.Secret at once. ErrNotFound, ErrACMESecretUnreadable.
+// caller builds the solver and zeroes cfg.Secret at once. ErrNotFound, ErrACMESecretUnreadable, *ACMEError
+// tls_trust_failed when the e2e trust file (Config.ACMERoots) cannot be read.
 func (s *Service) ACMEHookSolverConfig(ctx context.Context, hookID uuid.UUID) (dns01.Config, error) {
-	h, err := getACMEHook(ctx, s.pool, hookID, false)
+	return s.hookSolverConfig(ctx, hookID, true)
+}
+
+// ACMEHookCleanupConfig is ACMEHookSolverConfig for the cleanup of a record an order presented through the hook: the
+// hook may have been deleted since (its row and secret stay), and the caller sets AllowedSuffixes to the record's own
+// name (the record was published by Alice; removing it needs no allow-list).
+func (s *Service) ACMEHookCleanupConfig(ctx context.Context, hookID uuid.UUID) (dns01.Config, error) {
+	return s.hookSolverConfig(ctx, hookID, false)
+}
+
+func (s *Service) hookSolverConfig(ctx context.Context, hookID uuid.UUID, live bool) (dns01.Config, error) {
+	sql := "SELECT " + hookColumns + " FROM acme_hooks WHERE id = $1"
+	if live {
+		sql += " AND deleted_at IS NULL"
+	}
+	h, err := scanHook(s.pool.QueryRow(ctx, sql, hookID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return dns01.Config{}, ErrNotFound
+	}
 	if err != nil {
-		return dns01.Config{}, err
+		return dns01.Config{}, fmt.Errorf("inventory: read the DNS hook: %w", err)
+	}
+	base, err := s.acmeBaseRoots()
+	if err != nil {
+		return dns01.Config{}, acmeFailure(err)
 	}
 	var env secrets.Envelope
 	if err := s.pool.QueryRow(ctx, "SELECT secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version FROM acme_hooks WHERE id = $1", hookID).
@@ -422,6 +445,6 @@ func (s *Service) ACMEHookSolverConfig(ctx context.Context, hookID uuid.UUID) (d
 	if wait == 0 {
 		wait = -1 // dns01: a negative wait is none (0 would be its default)
 	}
-	return dns01.Config{URL: h.URL, Secret: pt, CABundlePEM: h.CABundlePEM, PropagationWait: wait,
+	return dns01.Config{URL: h.URL, Secret: pt, CABundlePEM: h.CABundlePEM, BaseRoots: base, PropagationWait: wait,
 		PollTimeout: time.Duration(h.PollTimeoutSeconds) * time.Second, AllowedSuffixes: slices.Clone(h.AllowedSuffixes)}, nil
 }

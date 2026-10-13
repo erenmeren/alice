@@ -1396,6 +1396,11 @@
         "title": "A stored secret cannot be read.",
         "cause": "A secret Alice keeps for this authority or hook (an account key, an external account key or a hook secret) cannot be decrypted with the current master key, for example after a restore with another key.",
         "action": "Restore the matching master key, or enter the secret again (for an account: register a new account)."
+      },
+      "order_abandoned": {
+        "title": "The interrupted certificate request was abandoned.",
+        "cause": "Alice was stopped (or lost its job) while it asked the certificate authority for this certificate, and the request could not be finished afterwards: the authority had not issued the certificate yet. Nothing was stored and the prepared private key was deleted.",
+        "action": "Request the certificate again. Any proof records that were still published are removed automatically."
       }
     },
     "tls": {

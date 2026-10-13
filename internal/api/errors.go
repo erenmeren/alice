@@ -400,6 +400,9 @@ var (
 	ErrACMAccountState               = ErrorCode{Code: "ALC-ACM-0023", Reason: "acme.account_state", Status: http.StatusConflict}
 	ErrACMRolloverPending            = ErrorCode{Code: "ALC-ACM-0024", Reason: "acme.rollover_pending", Status: http.StatusConflict, Retryable: true}
 	ErrACMSecretUnreadable           = ErrorCode{Code: "ALC-ACM-0025", Reason: "acme.secret_unreadable", Status: http.StatusConflict}
+	// An order a crash (or a lost worker) interrupted and that could not be finished from the authority (Task 10): the
+	// order's error code; nothing was stored, its key is deleted.
+	ErrACMOrderAbandoned = ErrorCode{Code: "ALC-ACM-0026", Reason: "acme.order_abandoned", Status: http.StatusConflict, Retryable: true}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -457,7 +460,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMValidationFailedHttp, ErrACMHookRefused, ErrACMIdentifierRefused, ErrACMNotIssuedInTime, ErrACMKeyPolicyNotAllowed, ErrACMProviderInUse,
 		ErrACMTlsTrustFailed, ErrACMRolloverUnsupported, ErrACMNameNotAllowed, ErrACMOrderRunning, ErrACMChallengeUnavailable, ErrACMKeyTypeLocked,
 		ErrACMHookInUse, ErrACMNameTaken, ErrACMAccountExists, ErrACMDirectoryChangeUnconfirmed, ErrACMAccountState, ErrACMRolloverPending,
-		ErrACMSecretUnreadable,
+		ErrACMSecretUnreadable, ErrACMOrderAbandoned,
 	}
 }
 
@@ -598,6 +601,11 @@ var errorMap = []struct {
 	{inventory.ErrACMERolloverPending, ErrACMRolloverPending, nil},
 	// Another account operation of the provider holds its lock: the same "not settled yet, try again" answer.
 	{inventory.ErrACMEProviderBusy, ErrACMRolloverPending, nil},
+	// ACME certificates and orders (Task 10).
+	{inventory.ErrACMENameNotAllowed, ErrACMNameNotAllowed, nil},
+	{inventory.ErrACMEOrderRunning, ErrACMOrderRunning, nil},
+	{inventory.ErrACMEChallengeUnavailable, ErrACMChallengeUnavailable, nil},
+	{inventory.ErrACMEKeyTypeLocked, ErrACMKeyTypeLocked, nil},
 	// The inventory repeats the session check inside its transaction (a hold or a switch-on can appear after the
 	// API looked): what it refuses is a session without a fresh step-up.
 	{inventory.ErrHeldNeedsStepUp, ErrStepUpRequired, nil},

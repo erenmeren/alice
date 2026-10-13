@@ -36,9 +36,10 @@ import (
 // acmeWorld is a harness with a running fake ACME CA, a registered client and the rows an order needs.
 type acmeWorld struct {
 	*harness
-	fake   *fakeacme.Server
-	client *acme.Client
-	ctx    context.Context
+	fake       *fakeacme.Server
+	client     *acme.Client
+	ctx        context.Context
+	httpTarget uuid.UUID // the Nginx server of the HTTP-01 certificates (seeded on first use)
 }
 
 func newACMEWorld(t *testing.T) *acmeWorld {
@@ -79,9 +80,13 @@ VALUES ($1, $2, '\x01', '\x000000000000000000000000', '\x01', 1, 'active', $3, $
 func (w *acmeWorld) certificate(provider, account uuid.UUID, policy keygen.KeyPolicy, names ...string) uuid.UUID {
 	w.t.Helper()
 	id := uuid.Must(uuid.NewV7())
-	_, err := w.db.Owner.Exec(w.ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, state, failures,
-    last_error_code, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, 'http01', 'issuing', 2, 'acme.hook_refused', $6, $6)`, id, provider, account, names, string(policy), w.clock.Now())
+	if w.httpTarget == uuid.Nil {
+		w.httpTarget = w.seedTarget("acme-web", "nginx", "web.example.test")
+	}
+	_, err := w.db.Owner.Exec(w.ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, http_target_id, state,
+    failures, last_error_code, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, 'http01', $7, 'issuing', 2, 'acme.hook_refused', $6, $6)`, id, provider, account, names, string(policy), w.clock.Now(),
+		w.httpTarget)
 	require.NoError(w.t, err)
 	return id
 }
@@ -100,14 +105,20 @@ VALUES ($1, $2, $3, 'running', $4, $5)`, id, acmeCertificate, kind, w.clock.Now(
 	return id
 }
 
-// begin runs BeginACMEOrderKey in its own committed transaction (as the job's insert transaction would).
+// begin runs BeginACMEOrderKey in its own committed transaction (as the job's NewACMEOrderKey does) and checks
+// that the key has the policy the test expects: the ACME certificate's key_type, read from the database.
 func (w *acmeWorld) begin(order uuid.UUID, policy keygen.KeyPolicy) (crypto.Signer, error) {
 	var signer crypto.Signer
 	err := db.InTx(w.ctx, w.db.App, func(tx pgx.Tx) error {
 		var err error
-		signer, err = w.svc.BeginACMEOrderKey(w.ctx, tx, order, policy)
+		signer, err = w.svc.BeginACMEOrderKey(w.ctx, tx, order)
 		return err
 	})
+	if err == nil {
+		got, perr := keygen.PolicyOf(signer.Public())
+		require.NoError(w.t, perr)
+		require.Equal(w.t, policy, got, "the key policy is the ACME certificate's")
+	}
 	return signer, err
 }
 
@@ -461,8 +472,6 @@ func TestACMEOrderKeyRefusals(t *testing.T) {
 
 	_, err := w.begin(uuid.New(), keygen.ECDSAP256)
 	require.ErrorIs(t, err, inventory.ErrNotFound)
-	_, err = w.begin(oid, "rsa_1024")
-	require.ErrorIs(t, err, keygen.ErrKeyPolicy)
 	assert.Zero(t, w.orderRow(oid).KeyColumns)
 
 	_, err = w.svc.LoadPendingKey(w.ctx, oid)
@@ -503,7 +512,7 @@ func TestACMEOrderKeyRefusals(t *testing.T) {
 	oid3 := w.order(cid3, "issue", uuid.Nil)
 	boom := errors.New("the job's transaction failed later")
 	err = db.InTx(w.ctx, w.db.App, func(tx pgx.Tx) error {
-		if _, err := w.svc.BeginACMEOrderKey(w.ctx, tx, oid3, keygen.ECDSAP256); err != nil {
+		if _, err := w.svc.BeginACMEOrderKey(w.ctx, tx, oid3); err != nil {
 			return err
 		}
 		return boom

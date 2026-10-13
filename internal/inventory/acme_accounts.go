@@ -3,8 +3,10 @@ package inventory
 import (
 	"context"
 	"crypto"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -277,7 +279,7 @@ func (s *Service) releaseACMEProviderLock(ctx context.Context, conn *pgxpool.Con
 // acmeClientFor builds a client of the provider's directory through the guarded transport with the provider's CA
 // bundle. key may be nil (Discover only).
 func (s *Service) acmeClientFor(p ACMEProvider, key crypto.Signer, accountURL string) (*acme.Client, error) {
-	hc, err := transport.New(p.CABundlePEM)
+	hc, err := s.acmeTransport(p.CABundlePEM)
 	if err != nil {
 		return nil, acmeFailure(err)
 	}
@@ -286,6 +288,28 @@ func (s *Service) acmeClientFor(p ACMEProvider, key crypto.Signer, accountURL st
 		return nil, acmeFailure(err)
 	}
 	return c, nil
+}
+
+// acmeBaseRoots is Config.ACMERoots' pool (nil: the system roots). A trust file that cannot be read fails closed
+// as an unusable CA bundle (tls_trust_failed).
+func (s *Service) acmeBaseRoots() (*x509.CertPool, error) {
+	if s.acmeRoots == nil {
+		return nil, nil
+	}
+	pool, err := s.acmeRoots()
+	if err != nil {
+		return nil, transport.ErrCABundle
+	}
+	return pool, nil
+}
+
+// acmeTransport is the guarded transport with bundle added to the CA trust (Config.ACMERoots or the system roots).
+func (s *Service) acmeTransport(bundle string) (*http.Client, error) {
+	base, err := s.acmeBaseRoots()
+	if err != nil {
+		return nil, err
+	}
+	return transport.NewWithRoots(bundle, base)
 }
 
 // newAccountKey generates an ECDSA P-256 account key and seals it for row id; the DER is zeroed before it returns.

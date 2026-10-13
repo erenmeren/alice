@@ -2666,6 +2666,14 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Restore the matching master key; otherwise enter the binding or hook secret again, or register a new account.
 
+## ALC-ACM-0026: The interrupted certificate request was abandoned
+
+**Meaning.** A certificate request (an ACME order) was interrupted and could not be finished afterwards: the certificate authority had not issued the certificate yet. Nothing was stored and the prepared private key was deleted. This is the order's result, not an answer to a request. (HTTP 409, reason `acme.order_abandoned`; retryable.)
+
+**Likely cause.** Alice was stopped or restarted, or lost its job, while the order ran.
+
+**What to do.** Request the certificate again. Proof records (DNS records, token files) that were still published are removed automatically by the cleanup job.
+
 ## Install and start problems
 
 The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.

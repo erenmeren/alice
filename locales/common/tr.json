@@ -1396,6 +1396,11 @@
         "title": "Kayıtlı bir gizli bilgi okunamıyor.",
         "cause": "Alice'in bu yetkili veya kanca için sakladığı bir gizli bilgi (hesap anahtarı, harici hesap anahtarı veya kanca gizli değeri) geçerli ana anahtarla çözülemiyor; örneğin başka bir anahtarla yapılan geri yüklemeden sonra.",
         "action": "Eşleşen ana anahtarı geri yükleyin veya gizli bilgiyi yeniden girin (hesap için: yeni bir hesap kaydedin)."
+      },
+      "order_abandoned": {
+        "title": "Yarım kalan sertifika isteğinden vazgeçildi.",
+        "cause": "Alice bu sertifikayı sertifika yetkilisinden isterken durduruldu (veya işini kaybetti) ve istek sonradan tamamlanamadı: yetkili sertifikayı henüz vermemişti. Hiçbir şey kaydedilmedi ve hazırlanan özel anahtar silindi.",
+        "action": "Sertifikayı yeniden isteyin. Hâlâ yayımlanan doğrulama kayıtları otomatik olarak kaldırılır."
       }
     },
     "tls": {

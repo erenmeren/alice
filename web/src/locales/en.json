@@ -562,6 +562,13 @@
       "acme_hook_created": "DNS hook for certificate requests added",
       "acme_hook_updated": "DNS hook for certificate requests changed",
       "acme_hook_deleted": "DNS hook for certificate requests removed",
+      "acme_certificate_created": "Certificate from a certificate authority (ACME) set up",
+      "acme_certificate_updated": "Certificate from a certificate authority (ACME) changed",
+      "acme_certificate_deleted": "Certificate from a certificate authority (ACME) removed",
+      "acme_order_started": "Certificate request to a certificate authority (ACME) started",
+      "acme_order_test_succeeded": "Test run with a certificate authority (ACME) succeeded",
+      "acme_order_cleaned_up": "Proof records of a certificate request removed",
+      "acme_order_cleanup_failed": "Proof records of a certificate request could not be removed",
       "csr_completed": "Signed certificate added",
       "csr_cancelled": "Signing request cancelled",
       "location_updated": "Verification settings changed",
@@ -1252,7 +1259,8 @@
         "issue": "Certificate order",
         "cleanup": "Clean up certificate challenges",
         "schedule": "Scheduled certificate renewals",
-        "auto_deploy": "Automatic deployment of renewed certificates"
+        "auto_deploy": "Automatic deployment of renewed certificates",
+        "sweep": "Clean up interrupted certificate orders"
       },
       "deployment": {
         "recovery_sweep": "Check for interrupted deployments"

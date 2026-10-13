@@ -562,6 +562,13 @@
       "acme_hook_created": "Sertifika istekleri için DNS kancası eklendi",
       "acme_hook_updated": "Sertifika istekleri için DNS kancası değiştirildi",
       "acme_hook_deleted": "Sertifika istekleri için DNS kancası kaldırıldı",
+      "acme_certificate_created": "Sertifika yetkilisinden (ACME) alınacak sertifika tanımlandı",
+      "acme_certificate_updated": "Sertifika yetkilisinden (ACME) alınan sertifika değiştirildi",
+      "acme_certificate_deleted": "Sertifika yetkilisinden (ACME) alınan sertifika kaldırıldı",
+      "acme_order_started": "Sertifika yetkilisine (ACME) sertifika isteği başlatıldı",
+      "acme_order_test_succeeded": "Sertifika yetkilisiyle (ACME) deneme çalıştırması başarılı oldu",
+      "acme_order_cleaned_up": "Sertifika isteğinin doğrulama kayıtları kaldırıldı",
+      "acme_order_cleanup_failed": "Sertifika isteğinin doğrulama kayıtları kaldırılamadı",
       "csr_completed": "İmzalı sertifika eklendi",
       "csr_cancelled": "İmzalama isteği iptal edildi",
       "location_updated": "Doğrulama ayarları değiştirildi",
@@ -1252,7 +1259,8 @@
         "issue": "Sertifika siparişi",
         "cleanup": "Sertifika doğrulama kalıntılarını temizleme",
         "schedule": "Zamanlanmış sertifika yenilemeleri",
-        "auto_deploy": "Yenilenen sertifikaların otomatik dağıtımı"
+        "auto_deploy": "Yenilenen sertifikaların otomatik dağıtımı",
+        "sweep": "Yarım kalan sertifika siparişlerini temizleme"
       },
       "deployment": {
         "recovery_sweep": "Yarım kalan dağıtımları denetleme"

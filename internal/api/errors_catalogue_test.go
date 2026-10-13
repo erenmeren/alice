@@ -78,6 +78,9 @@ var inventorySentinels = map[string]error{
 	"ErrACMESecretUnreadable": inventory.ErrACMESecretUnreadable, "ErrACMEAccountExists": inventory.ErrACMEAccountExists,
 	"ErrACMEAccountState": inventory.ErrACMEAccountState, "ErrACMERolloverPending": inventory.ErrACMERolloverPending,
 	"ErrACMEProviderBusy": inventory.ErrACMEProviderBusy,
+	// ACME (Task 10)
+	"ErrACMENameNotAllowed": inventory.ErrACMENameNotAllowed, "ErrACMEOrderRunning": inventory.ErrACMEOrderRunning,
+	"ErrACMEChallengeUnavailable": inventory.ErrACMEChallengeUnavailable, "ErrACMEKeyTypeLocked": inventory.ErrACMEKeyTypeLocked,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,

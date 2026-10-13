@@ -52,6 +52,10 @@ type Config struct {
 	// Roots are the trusted roots that decide whether a discovered chain is complete; nil = the
 	// operating system's (certs.SystemRoots).
 	Roots *x509.CertPool
+	// ACMERoots replaces the system roots of every connection to an ACME CA or DNS hook when it returns a pool
+	// (the provider's or hook's own bundle is still added). nil, or a nil pool, means the system roots. Only the
+	// e2e build sets it (cmd/alice acmeRoots: its fake CA); a release build's returns nil.
+	ACMERoots func() (*x509.CertPool, error)
 }
 
 // Service is the inventory module.
@@ -71,6 +75,9 @@ type Service struct {
 	roots    *x509.CertPool
 	kvSlots  chan struct{} // the slots of concurrent vault polls (AcquireKVPoll)
 
+	acmeRoots   func() (*x509.CertPool, error)
+	acmeKeygens chan struct{} // the slots of concurrent ACME order key generations (BeginACMEOrderKey)
+
 	rolloverSeam rolloverOutcome // tests only: replaces the CA's rollover outcome (crash simulation)
 }
 
@@ -78,7 +85,8 @@ type Service struct {
 func New(c Config) *Service {
 	s := &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, license: c.License,
 		registry: c.Registry, jobs: c.Jobs, notifier: c.Notifier, log: c.Log, rand: c.Rand, roots: c.Roots,
-		kvSlots: make(chan struct{}, MaxConcurrentKVPolls)}
+		kvSlots: make(chan struct{}, MaxConcurrentKVPolls), acmeRoots: c.ACMERoots,
+		acmeKeygens: make(chan struct{}, MaxConcurrentACMEKeygens)}
 	if s.log == nil {
 		s.log = slog.New(slog.DiscardHandler)
 	}

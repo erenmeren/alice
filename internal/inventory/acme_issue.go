@@ -25,7 +25,7 @@ import (
 //
 // The acme.issue job (Task 10) calls, for one acme_orders row it inserted with state running and kind issue:
 //
-//	signer, err := s.BeginACMEOrderKey(ctx, tx, orderID, policy) // in the transaction that inserts the order
+//	signer, err := s.BeginACMEOrderKey(ctx, tx, orderID)         // the key policy is the ACME certificate's
 //	csr, err := keygen.NewCSR(signer, names)
 //	chain, err := client.Order(ctx, names, csr, solver, ...)    // outside any transaction
 //	issued, err := s.FinishACMEOrder(ctx, orderID, chain)       // or, on any failure:
@@ -106,7 +106,11 @@ func openPendingKey(k *secrets.Keyring, orderID uuid.UUID, env secrets.Envelope,
 	return use(key)
 }
 
-// orderKeyState explains why an UPDATE of the order's pending key matched nothing.
+// errOrderKeyFree is orderKeyState's answer for a running issue order without a key (a key can be stored).
+var errOrderKeyFree = errors.New("inventory: the ACME order has no key yet")
+
+// orderKeyState explains why an UPDATE of the order's pending key matched nothing (errOrderKeyFree when nothing
+// stands in its way).
 func orderKeyState(ctx context.Context, q db.Querier, orderID uuid.UUID) error {
 	var state, kind string
 	var hasKey bool
@@ -121,16 +125,43 @@ func orderKeyState(ctx context.Context, q db.Querier, orderID uuid.UUID) error {
 	case hasKey:
 		return ErrACMEPendingKey
 	}
-	return errors.New("inventory: the ACME order changed while its key was stored")
+	return errOrderKeyFree
 }
 
-// BeginACMEOrderKey generates the private key of a running issue order with the policy (the ACME certificate's
-// key_type; keygen.ErrKeyPolicy for another value) and seals it into the order's pending_key_* columns, in tx
-// (the transaction that inserted the order, so an order never runs without its key). It returns the key's
-// signer for the CSR (keygen.NewCSR) and nothing else; the DER is zeroed before it returns. ErrNotFound,
-// ErrACMEOrderNotRunning, ErrACMEPendingKey (the order has a key already: use LoadPendingKey).
-func (s *Service) BeginACMEOrderKey(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, policy keygen.KeyPolicy) (crypto.Signer, error) {
+// MaxConcurrentACMEKeygens bounds the private keys generated for orders at once in this process (an RSA 4096 key
+// takes about a second of CPU): BeginACMEOrderKey waits for a slot (or its context).
+const MaxConcurrentACMEKeygens = 2
+
+// BeginACMEOrderKey generates the private key of a running issue order with the key policy of its ACME certificate
+// (read from the database in tx, never taken from the caller; keygen.ErrKeyPolicy for a value keygen does not know)
+// and seals it into the order's pending_key_* columns, in tx (the order is never left with a key that is not
+// committed with it). Generation waits for one of MaxConcurrentACMEKeygens slots. It returns the key's signer for the
+// CSR (keygen.NewCSR) and nothing else; the DER is zeroed before it returns. ErrNotFound, ErrACMEOrderNotRunning,
+// ErrACMEPendingKey (the order has a key already: use LoadPendingKey).
+func (s *Service) BeginACMEOrderKey(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) (crypto.Signer, error) {
+	var keyType string
+	err := tx.QueryRow(ctx, `SELECT c.key_type FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id WHERE o.id = $1`,
+		orderID).Scan(&keyType)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inventory: read the ACME order's key policy: %w", err)
+	}
+	if err := orderKeyState(ctx, tx, orderID); !errors.Is(err, errOrderKeyFree) {
+		return nil, err
+	}
+	policy, err := keygen.ParseKeyPolicy(keyType)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case s.acmeKeygens <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	key, err := keygen.Generate(policy)
+	<-s.acmeKeygens
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +179,21 @@ WHERE id = $1 AND state = 'running' AND kind = 'issue' AND pending_key_ct IS NUL
 		return nil, orderKeyState(ctx, tx, orderID)
 	}
 	return key.Signer, nil
+}
+
+// NewACMEOrderKey is BeginACMEOrderKey in its own transaction (the acme.issue job's: the order was inserted and
+// committed by RequestOrder, so a crash between the two leaves an order without a key, which the sweep abandons).
+func (s *Service) NewACMEOrderKey(ctx context.Context, orderID uuid.UUID) (crypto.Signer, error) {
+	var signer crypto.Signer
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var err error
+		signer, err = s.BeginACMEOrderKey(ctx, tx, orderID)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return signer, nil
 }
 
 // LoadPendingKey opens the pending key of a running issue order (crash recovery: the order was begun, the
@@ -353,45 +399,59 @@ func (s *Service) recordIssued(ctx context.Context, tx pgx.Tx, orderID uuid.UUID
 // transaction with the audit row acme.order.failed (acme.order.test_failed for a test run; details: ids, kind
 // and the code only). Aborting a failed order again only makes sure its key is gone (no second audit row); a
 // succeeded order is ErrACMEOrderNotRunning; ErrNotFound. The ACME certificate's failure count and next attempt
-// are the caller's (Task 10).
+// are FailACMEOrder's.
 func (s *Service) AbortACMEOrder(ctx context.Context, orderID uuid.UUID, errorCode string) error {
 	if !errorCodeRE.MatchString(errorCode) { // acme_orders.error_code's CHECK, without the empty code
 		return ErrACMEErrorCode
 	}
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var state, kind string
-		var acmeCertificateID uuid.UUID
-		err := tx.QueryRow(ctx, "SELECT state, kind, acme_certificate_id FROM acme_orders WHERE id = $1 FOR UPDATE", orderID).
-			Scan(&state, &kind, &acmeCertificateID)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			return ErrNotFound
-		case err != nil:
-			return fmt.Errorf("inventory: read the ACME order: %w", err)
-		case state == "succeeded":
-			return ErrACMEOrderNotRunning
-		case state == "failed":
-			// The freeze trigger (Z1017) allows exactly this change of a finished order.
-			_, err := tx.Exec(ctx, `UPDATE acme_orders SET pending_key_ct = NULL, pending_key_nonce = NULL, pending_key_wrapped_dek = NULL,
-    pending_key_version = NULL WHERE id = $1 AND pending_key_ct IS NOT NULL`, orderID)
-			if err != nil {
-				return fmt.Errorf("inventory: delete the pending key of the ACME order: %w", err)
-			}
-			return nil
-		}
-		if _, err := tx.Exec(ctx, `UPDATE acme_orders SET state = 'failed', finished_at = $2, error_code = $3, pending_key_ct = NULL,
-    pending_key_nonce = NULL, pending_key_wrapped_dek = NULL, pending_key_version = NULL WHERE id = $1`, orderID, s.clock.Now().UTC(), errorCode); err != nil {
-			return fmt.Errorf("inventory: fail the ACME order: %w", err)
-		}
-		// Literal actions: the web's label test reads them from this source (labels in web/src/locales).
-		action := "acme.order.failed"
-		if kind == "test" {
-			action = "acme.order.test_failed"
-		}
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: action, ObjectType: "acme_certificate",
-			ObjectID: acmeCertificateID.String(), Result: audit.Failure, Details: map[string]string{
-				"order_id": orderID.String(), "acme_certificate_id": acmeCertificateID.String(), "kind": kind, "error_code": errorCode,
-			}})
+		_, err := s.abortOrder(ctx, tx, orderID, errorCode)
 		return err
 	})
+}
+
+// abortedOrder is what abortOrder ended (ended false: the order had failed before; only a leftover key went).
+type abortedOrder struct {
+	kind              string
+	acmeCertificateID uuid.UUID
+	ended             bool
+}
+
+// abortOrder is AbortACMEOrder's work in tx (the code is checked by the caller).
+func (s *Service) abortOrder(ctx context.Context, tx pgx.Tx, orderID uuid.UUID, errorCode string) (abortedOrder, error) {
+	var state string
+	var out abortedOrder
+	err := tx.QueryRow(ctx, "SELECT state, kind, acme_certificate_id FROM acme_orders WHERE id = $1 FOR UPDATE", orderID).
+		Scan(&state, &out.kind, &out.acmeCertificateID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return out, ErrNotFound
+	case err != nil:
+		return out, fmt.Errorf("inventory: read the ACME order: %w", err)
+	case state == "succeeded":
+		return out, ErrACMEOrderNotRunning
+	case state == "failed":
+		// The freeze trigger (Z1017) allows exactly this change of a finished order.
+		_, err := tx.Exec(ctx, `UPDATE acme_orders SET pending_key_ct = NULL, pending_key_nonce = NULL, pending_key_wrapped_dek = NULL,
+    pending_key_version = NULL WHERE id = $1 AND pending_key_ct IS NOT NULL`, orderID)
+		if err != nil {
+			return out, fmt.Errorf("inventory: delete the pending key of the ACME order: %w", err)
+		}
+		return out, nil
+	}
+	if _, err := tx.Exec(ctx, `UPDATE acme_orders SET state = 'failed', finished_at = $2, error_code = $3, pending_key_ct = NULL,
+    pending_key_nonce = NULL, pending_key_wrapped_dek = NULL, pending_key_version = NULL WHERE id = $1`, orderID, s.clock.Now().UTC(), errorCode); err != nil {
+		return out, fmt.Errorf("inventory: fail the ACME order: %w", err)
+	}
+	// Literal actions: the web's label test reads them from this source (labels in web/src/locales).
+	action := "acme.order.failed"
+	if out.kind == "test" {
+		action = "acme.order.test_failed"
+	}
+	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: action, ObjectType: "acme_certificate",
+		ObjectID: out.acmeCertificateID.String(), Result: audit.Failure, Details: map[string]string{
+			"order_id": orderID.String(), "acme_certificate_id": out.acmeCertificateID.String(), "kind": out.kind, "error_code": errorCode,
+		}})
+	out.ended = err == nil
+	return out, err
 }
