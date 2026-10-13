@@ -36,7 +36,7 @@ var rules = map[string][]string{
 	// The test world of the linuxssh provider runs the real nginx configuration parser, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
-	"alice/internal/inventory/...":                   {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/..."},
+	"alice/internal/inventory/...":                   {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen"},
 	"alice/internal/jobs/...":                        {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
 	"alice/internal/setup/...":                       {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
@@ -66,6 +66,9 @@ var rules = map[string][]string{
 	// The HTTP-01 solver publishes through a Publisher interface of its own (the linuxssh connection satisfies it;
 	// the provider is never imported) and fetches the token URL through netaddr. No database, no secret.
 	"alice/internal/acme/solver/http01": {platform, "alice/internal/acme", "alice/internal/acme/solver"},
+	// Key generation and signing requests of ACME orders are pure: the key DER is a secrets.Plaintext; no database,
+	// file, network or clock. The inventory seals what it generates (the only Alice package that imports it).
+	"alice/internal/acme/keygen": {"alice/internal/secrets"},
 	// Phase 8: the backup container is pure (io.Reader/io.Writer only, no file, socket or database); the dump
 	// knows no other Alice module; the backup module runs the dump, the container and the restore; the audit
 	// forwarder reads the audit log and nothing else.
@@ -100,6 +103,7 @@ var denied = map[string][]string{
 	"alice/internal/acme/solver":                     {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver/dns01":               {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver/http01":              {"alice/internal/platform/db/..."},
+	"alice/internal/acme/keygen":                     {"alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -114,6 +118,8 @@ var deniedStd = map[string][]string{
 	"alice/internal/auth/oidc/claims": pureDeniedURL,
 	// Phase 8: the backup container works on io.Reader and io.Writer only.
 	"alice/internal/backup/format": pureDenied,
+	// ACME (plan 2026-10-13): key generation and signing requests.
+	"alice/internal/acme/keygen": pureDenied,
 }
 
 var pureDenied = []string{"os/...", "net", "net/http/...", "net/rpc/...", "net/smtp", "net/textproto", "net/url", "net/mail",
@@ -330,6 +336,14 @@ func TestAllowed(t *testing.T) {
 		{"acme to http01 denied", "alice/internal/acme", "alice/internal/acme/solver/http01", false},
 		{"acme to solver allowed", "alice/internal/acme", "alice/internal/acme/solver", true},
 		{"acme to netaddr allowed", "alice/internal/acme", "alice/internal/platform/netaddr", true},
+		{"keygen to secrets allowed", "alice/internal/acme/keygen", "alice/internal/secrets", true},
+		{"keygen to platform denied", "alice/internal/acme/keygen", "alice/internal/platform/clock", false},
+		{"keygen to platform/db denied", "alice/internal/acme/keygen", "alice/internal/platform/db", false},
+		{"keygen to acme client denied", "alice/internal/acme/keygen", "alice/internal/acme", false},
+		{"keygen to os denied", "alice/internal/acme/keygen", "os", false},
+		{"keygen to net/http denied", "alice/internal/acme/keygen", "net/http", false},
+		{"inventory to keygen allowed", "alice/internal/inventory", "alice/internal/acme/keygen", true},
+		{"inventory to acme client denied", "alice/internal/inventory", "alice/internal/acme", false},
 		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},
 		{"acme to api denied", "alice/internal/acme", "alice/internal/api", false},
 		{"acme to inventory denied", "alice/internal/acme", "alice/internal/inventory", false},
