@@ -100,11 +100,19 @@ func TestParseARI(t *testing.T) {
 	for _, bad := range []string{`{}`, `x`, `{"suggestedWindow":{"start":1,"end":2}}`,
 		`{"suggestedWindow":{"start":"2030-01-01T00:00:00Z","end":"2030-01-01T00:00:00Z"}}`,
 		`{"suggestedWindow":{"start":"tomorrow","end":"2030-01-01T00:00:00Z"}}`,
+		`{"suggestedWindow":{"start":"0001-01-01T00:00:00Z","end":"0001-01-02T00:00:00Z"}}`,
+		`{"suggestedWindow":{"start":"1999-12-31T23:00:00Z","end":"2030-01-01T00:00:00Z"}}`,
 		`{"suggestedWindow":{"start":"` + strings.Repeat("9", 65) + `","end":"2030-01-01T00:00:00Z"}}`,
 		`{"suggestedWindow":{"start":"2030-01-01T00:00:00Z","end":"2030-01-02T00:00:00Z"}}` + strings.Repeat(" ", maxARIBytes)} {
 		_, _, err := ParseARI([]byte(bad))
 		assert.Error(t, err, bad)
 	}
+}
+
+func TestParseARIAcceptsTheYear2000(t *testing.T) {
+	s, _, err := ParseARI([]byte(`{"suggestedWindow":{"start":"2000-01-01T00:00:00Z","end":"2000-01-02T00:00:00Z"}}`))
+	require.NoError(t, err)
+	assert.Equal(t, 2000, s.Year())
 }
 
 func TestParseRetryAfter(t *testing.T) {

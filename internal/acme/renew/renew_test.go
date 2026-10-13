@@ -92,6 +92,26 @@ func TestDecide(t *testing.T) {
 			i.ARIWindow = &Window{Start: t0.Add(10 * day), End: t0.Add(12 * day)}
 			return i
 		}(), Order, ReasonDue, nil},
+		{"ARI window ending before the certificate began is ignored", func() Input {
+			i := issued(t0.Add(-10*day), 90*day)
+			i.ARIWindow = &Window{Start: t0.Add(-30 * day), End: t0.Add(-10 * day)}
+			return i
+		}(), None, ReasonNotDue, nil},
+		{"ARI window ending exactly at not_before is ignored", func() Input {
+			i := issued(t0.Add(-10*day), 90*day)
+			i.ARIWindow = &Window{Start: t0.Add(-11 * day), End: t0.Add(-10 * day)}
+			return i
+		}(), None, ReasonNotDue, nil},
+		{"ARI window of year 1 is ignored", func() Input {
+			i := issued(t0.Add(-10*day), 90*day)
+			i.ARIWindow = &Window{Start: time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), End: time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)}
+			return i
+		}(), None, ReasonNotDue, nil},
+		{"ARI window that began before the certificate and ends after its start counts", func() Input {
+			i := issued(t0.Add(-10*day), 90*day)
+			i.ARIWindow = &Window{Start: t0.Add(-11 * day), End: t0.Add(-9 * day)}
+			return i
+		}(), Order, ReasonDueARI, nil},
 		{"ARI window in the future: not due", func() Input {
 			i := issued(t0.Add(-10*day), 90*day)
 			i.ARIWindow = &Window{Start: t0.Add(time.Hour), End: t0.Add(day)}

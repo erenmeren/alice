@@ -855,6 +855,13 @@ func TestRenewalInfoGarbage(t *testing.T) {
 		"reversed": func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"suggestedWindow":{"start":"2030-01-02T00:00:00Z","end":"2030-01-01T00:00:00Z"}}`))
 		},
+		"year 0001": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"suggestedWindow":{"start":"0001-01-01T00:00:00Z","end":"0001-01-02T00:00:00Z"}}`))
+		},
+		"over ten years ahead": func(w http.ResponseWriter, _ *http.Request) {
+			end := time.Now().Add(MaxARIAhead + 24*time.Hour).UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"suggestedWindow":{"start":"2030-01-01T00:00:00Z","end":"` + end + `"}}`))
+		},
 		"redirect": func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "https://example.test/", http.StatusFound)
 		},

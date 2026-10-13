@@ -17,7 +17,8 @@
 //     47-day one at two thirds of its life, a 6-day one two days before its end;
 //   - ARI (RFC 9773): the CA's suggested window start is used when it is EARLIER than the local rule, never when it
 //     is later. ARI can pull a renewal forward (a revocation or a mass-renewal event at the CA) but never push it past
-//     the local rule, so a wrong or hostile window cannot make a certificate expire. An ARI failure is never a
+//     the local rule, so a wrong or hostile window cannot make a certificate expire; a window that ends at or before
+//     the current certificate's not_before is not about it and is ignored (no renewal loop). An ARI failure is never a
 //     failure of the certificate and never blocks a renewal: without a window the local rule alone decides;
 //   - after failures, the next attempt waits Backoff(failures) (1 h, 2 h, 4 h, ... capped at 24 h) from the last
 //     attempt, or until next_attempt_at (a CA's Retry-After) when that is later;
@@ -181,7 +182,9 @@ func Decide(in Input) Decision {
 	now := in.Now
 	local := RenewAt(in.NotBefore, in.NotAfter, in.RenewBeforeDays)
 	d.RenewAt, d.Reason = local, ReasonDue
-	if in.ARIWindow != nil && in.ARIWindow.Start.Before(local) {
+	// A window that ends at or before the current certificate's start cannot be about it (a buggy or hostile CA):
+	// ignored, or every new certificate would be due at once.
+	if in.ARIWindow != nil && in.ARIWindow.Start.Before(local) && in.ARIWindow.End.After(in.NotBefore) {
 		d.RenewAt, d.Reason = in.ARIWindow.Start, ReasonDueARI
 	}
 	if now.Before(d.RenewAt) {

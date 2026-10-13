@@ -38,7 +38,7 @@ func FuzzParseARI(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, b []byte) {
 		start, end, err := ParseARI(b)
-		if err == nil && !start.Before(end) {
+		if err == nil && (!start.Before(end) || start.Year() < 2000) {
 			t.Fatalf("window %v..%v accepted", start, end)
 		}
 	})

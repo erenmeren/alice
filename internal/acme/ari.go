@@ -24,8 +24,15 @@ type RenewalWindow struct {
 
 var errARI = errors.New("acme: the renewal information is not valid")
 
+// minARIYear is the earliest year a suggested window may start in; a window before it is a CA's bug (or a hostile
+// answer that would make every certificate due at once), as is one ending more than MaxARIAhead after now.
+const minARIYear = 2000
+
+// MaxARIAhead bounds how far in the future a suggested window may end (RenewalInfo).
+const MaxARIAhead = 10 * 365 * 24 * time.Hour
+
 // ParseARI reads a renewal information document tolerantly: unknown fields are ignored; the window must have
-// RFC 3339 start and end, start before end.
+// RFC 3339 start and end, start before end, and start in the year 2000 or later.
 func ParseARI(b []byte) (start, end time.Time, err error) {
 	if len(b) > maxARIBytes {
 		return time.Time{}, time.Time{}, errARI
@@ -46,7 +53,7 @@ func ParseARI(b []byte) (start, end time.Time, err error) {
 	}
 	start, err1 := time.Parse(time.RFC3339, s)
 	end, err2 := time.Parse(time.RFC3339, e)
-	if err1 != nil || err2 != nil || !start.Before(end) {
+	if err1 != nil || err2 != nil || !start.Before(end) || start.UTC().Year() < minARIYear {
 		return time.Time{}, time.Time{}, errARI
 	}
 	return start.UTC(), end.UTC(), nil
@@ -66,7 +73,8 @@ func CertID(cert *x509.Certificate) (string, error) {
 	return enc.EncodeToString(cert.AuthorityKeyId) + "." + enc.EncodeToString(serial), nil
 }
 
-// RenewalInfo asks the CA for the suggested renewal window of a certificate it issued. It returns an error
+// RenewalInfo asks the CA for the suggested renewal window of a certificate it issued (a window that ends more than
+// MaxARIAhead after now is refused like a garbled one). It returns an error
 // matching ErrNoARI when the directory has no renewalInfo. The request is an unauthenticated GET bounded by
 // the call timeout and maxARIBytes.
 func (c *Client) RenewalInfo(ctx context.Context, certDER []byte) (RenewalWindow, error) {
@@ -104,6 +112,9 @@ func (c *Client) RenewalInfo(ctx context.Context, certDER []byte) (RenewalWindow
 		return RenewalWindow{}, c.classify(rerr, opAccount, "", "")
 	}
 	start, end, err := ParseARI(b)
+	if err == nil && end.After(c.now().Add(MaxARIAhead)) {
+		err = errARI
+	}
 	if err != nil {
 		return RenewalWindow{}, &Error{Reason: ReasonDirectoryInvalid, Status: res.StatusCode, cause: errARI}
 	}
