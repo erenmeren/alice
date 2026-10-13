@@ -43,8 +43,12 @@ import (
 const (
 	// ACMERenewWave is how many orders one run starts at most.
 	ACMERenewWave = 5
-	// acmeRenewPage is how many candidates one run reads.
-	acmeRenewPage = 50
+	// acmeRenewPage is the size of a page of candidates; one run reads at most acmeRenewPages pages.
+	acmeRenewPage  = 50
+	acmeRenewPages = 3
+	// acmeRateLimitHold is how long a series of rate limits of one certificate holds the provider's other
+	// certificates at most (see acmeRenewCandidates).
+	acmeRateLimitHold = 24 * time.Hour
 	// acmeARIPerRun is how many renewal information lookups one run makes at most; acmeARITimeout bounds one.
 	acmeARIPerRun  = 10
 	acmeARITimeout = 30 * time.Second
@@ -67,65 +71,109 @@ var acmeRenewHook func(id uuid.UUID)
 var errRenewSkip = errors.New("inventory: the certificate is planned at the next run")
 
 // PlanACMERenewals runs the renewal planner once (acme.schedule; see the file comment). While the licence gate refuses
-// changes it returns at once: no CA contact, no row written, no failure counted. The certificates whose planning failed
-// are skipped for this run and their errors returned together.
+// changes it returns at once: no CA contact, no row written, no failure counted. The candidates are read page by page
+// (at most acmeRenewPages pages of acmeRenewPage, most urgent first), so certificates that are skipped run after run
+// (a key change that does not settle, a job that is still finishing) do not hide the ones after them. The certificates
+// whose planning failed are skipped for this run and their errors returned together.
 func (s *Service) PlanACMERenewals(ctx context.Context) (ACMERenewRun, error) {
 	var run ACMERenewRun
 	if s.license.Allow(license.ClassChange) != nil {
 		return run, nil
 	}
-	ids, err := s.acmeRenewCandidates(ctx)
-	if err != nil {
-		return run, err
-	}
 	var errs []error
-	for _, id := range ids {
-		if run.Started >= ACMERenewWave {
+	var after *renewCursor
+	for page := 0; page < acmeRenewPages && run.Started < ACMERenewWave; page++ {
+		cands, err := s.acmeRenewCandidates(ctx, after)
+		if err != nil {
+			return run, errors.Join(append(errs, err)...)
+		}
+		for _, c := range cands {
+			if run.Started >= ACMERenewWave {
+				break
+			}
+			if ctx.Err() != nil {
+				return run, errors.Join(append(errs, ctx.Err())...)
+			}
+			if acmeRenewHook != nil {
+				acmeRenewHook(c.id)
+			}
+			if err := s.planACMERenewal(ctx, c.id, &run); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if len(cands) < acmeRenewPage {
 			break
 		}
-		if ctx.Err() != nil {
-			return run, errors.Join(append(errs, ctx.Err())...)
-		}
-		if acmeRenewHook != nil {
-			acmeRenewHook(id)
-		}
-		if err := s.planACMERenewal(ctx, id, &run); err != nil {
-			errs = append(errs, err)
-		}
+		after = &cands[len(cands)-1]
 	}
 	return run, errors.Join(errs...)
 }
 
-// acmeRenewCandidates lists the certificates that may have work now, most urgent first: auto renewal on, not stopped,
-// not deleted, issued, no running order, no order in the last renew.MinSpacing, not waiting for a backoff (a
-// next_attempt_at beyond the cap is a candidate: the planner repairs it), not held by a rate limit of its provider, and
-// either due by the local rule or an ARI window, or owing an ARI lookup, or past the failures that stop it.
-func (s *Service) acmeRenewCandidates(ctx context.Context) ([]uuid.UUID, error) {
+// renewCursor is a candidate and its place in the urgency order (the keyset of the next page).
+type renewCursor struct {
+	id       uuid.UUID
+	priority time.Time
+}
+
+// acmeRenewCandidates lists the certificates that may have work now, most urgent first, after the cursor (nil: from
+// the start): auto renewal on, not stopped, not deleted, issued, no running order, no order in the last
+// renew.MinSpacing, not waiting for a backoff (a next_attempt_at beyond the cap is a candidate: the planner repairs it),
+// not held by a rate limit of its provider, and either due by the local rule or an ARI window (one that ends after the
+// current certificate began), or owing an ARI lookup, or past the failures that stop it.
+//
+// The provider hold: while another certificate of the provider waits for the CA's rate limit (last_error_code
+// acme.ca_rate_limited, next_attempt_at in the future) and that series of rate limits began less than
+// acmeRateLimitHold ago, the candidate waits too (no storm against a limiting CA). The hold never applies to a
+// candidate past the middle of its renewal window (due + (not_after - due) / 2): that one is renewed regardless, so a
+// certificate the CA limits for days for its own names cannot make the provider's other certificates expire.
+func (s *Service) acmeRenewCandidates(ctx context.Context, after *renewCursor) ([]renewCursor, error) {
 	now := s.clock.Now().UTC()
+	afterID, afterPrio := uuid.Nil, time.Time{}
+	if after != nil {
+		afterID, afterPrio = after.id, after.priority
+	}
 	rows, err := s.pool.Query(ctx, `WITH c AS (
-    SELECT c.id, c.provider_id, c.failures, c.next_attempt_at, c.ari_window_start, c.ari_next_check_at,
+    SELECT c.id, c.provider_id, c.failures, c.next_attempt_at, c.ari_next_check_at, x.not_after,
+           CASE WHEN c.ari_window_end > x.not_before THEN c.ari_window_start END AS ari_start,
            x.not_after - LEAST(make_interval(days => c.renew_before_days), GREATEST(x.not_after - x.not_before, interval '0') / 3) AS due
     FROM acme_certificates c JOIN certificates x ON x.id = c.current_certificate_id
     WHERE c.deleted_at IS NULL AND c.auto_renew AND c.state <> 'stopped'
+), p AS (
+    SELECT c.*, LEAST(c.due, COALESCE(c.ari_start, c.due)) AS priority FROM c
 )
-SELECT c.id FROM c
+SELECT c.id, c.priority FROM p c
 WHERE NOT EXISTS (SELECT 1 FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.state = 'running')
   AND NOT EXISTS (SELECT 1 FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.kind = 'issue'
                   AND o.started_at > $1::timestamptz - make_interval(secs => $3) AND o.started_at <= $1::timestamptz + make_interval(secs => $4))
   AND (c.next_attempt_at IS NULL OR c.next_attempt_at <= $1 OR c.next_attempt_at > $1::timestamptz + make_interval(secs => $5))
-  AND NOT EXISTS (SELECT 1 FROM acme_certificates r WHERE r.provider_id = c.provider_id AND r.id <> c.id AND r.deleted_at IS NULL
-                  AND r.last_error_code = 'acme.ca_rate_limited' AND r.next_attempt_at > $1)
-  AND (c.due <= $1 OR c.ari_window_start <= $1 OR c.ari_next_check_at IS NULL OR c.ari_next_check_at <= $1 OR c.failures >= $6)
-ORDER BY LEAST(c.due, COALESCE(c.ari_window_start, c.due)), c.id LIMIT $2`, now, acmeRenewPage, renew.MinSpacing.Seconds(),
-		renew.SkewTolerance.Seconds(), renew.MaxBackoff.Seconds(), renew.StopAfter)
+  AND (c.due + (c.not_after - c.due) / 2 <= $1
+       OR NOT EXISTS (SELECT 1 FROM acme_certificates r WHERE r.provider_id = c.provider_id AND r.id <> c.id AND r.deleted_at IS NULL
+                      AND r.last_error_code = 'acme.ca_rate_limited' AND r.next_attempt_at > $1
+                      AND r.rate_limited_since > $1::timestamptz - make_interval(secs => $9)))
+  AND (c.due <= $1 OR c.ari_start <= $1 OR c.ari_next_check_at IS NULL OR c.ari_next_check_at <= $1 OR c.failures >= $6)
+  AND ($7::timestamptz IS NULL OR (c.priority, c.id) > ($7::timestamptz, $8::uuid))
+ORDER BY c.priority, c.id LIMIT $2`, now, acmeRenewPage, renew.MinSpacing.Seconds(), renew.SkewTolerance.Seconds(), renew.MaxBackoff.Seconds(),
+		renew.StopAfter, nullTime(afterPrio), afterID, acmeRateLimitHold.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("inventory: find the ACME certificates to renew: %w", err)
 	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (renewCursor, error) {
+		var c renewCursor
+		err := r.Scan(&c.id, &c.priority)
+		return c, err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory: find the ACME certificates to renew: %w", err)
 	}
-	return ids, nil
+	return out, nil
+}
+
+// nullTime is nil for the zero time (a SQL NULL).
+func nullTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 // ariTarget is a certificate whose renewal window the planner asks the CA for.
@@ -234,8 +282,9 @@ func renewInput(ctx context.Context, tx pgx.Tx, c ACMECertificate, now time.Time
 		Failures: c.Failures, NextAttemptAt: c.NextAttemptAt, LastAttemptAt: c.LastAttemptAt}
 	var nb, na, ws, we *time.Time
 	err := tx.QueryRow(ctx, `SELECT x.not_before, x.not_after, c.ari_window_start, c.ari_window_end, c.ari_checked_at, c.ari_next_check_at,
-    (SELECT max(o.started_at) FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.kind = 'issue')
-FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificate_id WHERE c.id = $1`, c.ID).
+    (SELECT max(o.started_at) FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.kind = 'issue'
+     AND o.started_at <= $2::timestamptz + make_interval(secs => $3))
+FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificate_id WHERE c.id = $1`, c.ID, now, renew.SkewTolerance.Seconds()).
 		Scan(&nb, &na, &ws, &we, &in.ARICheckedAt, &in.ARINextCheckAt, &in.LastOrderAt)
 	if err != nil {
 		return in, nil, fmt.Errorf("inventory: read the ACME certificate's renewal state: %w", err)
@@ -269,7 +318,10 @@ FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificat
 	}
 	failures++
 	next := now.Add(max(ACMEFailureBackoff(failures), retryAfter))
+	// rate_limited_since: when the current series of rate limits began (kept while the CA keeps limiting, NULL otherwise).
 	if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET failures = $2, state = CASE WHEN state = 'stopped' THEN state ELSE 'failing' END,
+rate_limited_since = CASE WHEN $3 <> 'acme.ca_rate_limited' THEN NULL
+    WHEN last_error_code = 'acme.ca_rate_limited' AND rate_limited_since IS NOT NULL THEN rate_limited_since ELSE $4 END,
 last_error_code = $3, last_attempt_at = $4, next_attempt_at = $5, updated_at = $4 WHERE id = $1`, id, failures, code, now, next); err != nil {
 		return fmt.Errorf("inventory: record the ACME certificate's failure: %w", err)
 	}

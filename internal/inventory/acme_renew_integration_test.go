@@ -388,7 +388,7 @@ func TestACMERateLimitAndWave(t *testing.T) {
 	for i := range certs {
 		certs[i] = w.issued(fmt.Sprintf("c%d.example.test", i))
 	}
-	w.setClock(w.notAfter(certs[0]).Add(-day))
+	w.setClock(w.notAfter(certs[0]).Add(-29 * day)) // due, before the middle of the window (the hold applies)
 
 	run := w.plan()
 	assert.Equal(t, inventory.ACMERenewWave, run.Started, "five orders per run")
@@ -652,4 +652,230 @@ func TestACMEPlannerStopsOnACancelledContext(t *testing.T) {
 	_, err := w.svc.PlanACMERenewals(ctx)
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Zero(t, w.renewals(c.ID))
+}
+
+// Fix round 1, I1: one certificate the CA limits for days (its own names: Retry-After a day, again and again) holds the
+// provider's other certificates for at most 24 hours of its series; a 6-day certificate of the same provider is
+// renewed in time.
+func TestACMERateLimitedNeighbourDoesNotStarveAShortCertificate(t *testing.T) {
+	w := newRenewWorld(t)
+	require.NoError(t, w.fake.Advertise("renewalInfo", "off"))
+	limited := w.issued("limited.example.test")
+	w.advance(85 * day) // limited is due (60 days) and keeps being limited by the CA
+	require.NoError(t, w.fake.SetLeafLifetime(6*day))
+	short := w.issued("short.example.test")
+	shortDue, shortEnd := w.shortWindow(short)
+	w.advance(12 * time.Hour) // the neighbour's daily retries do not line up with the short certificate's renewal time
+	renewedAt := time.Time{}
+	limits := 0
+	for range 5 * 24 {
+		w.advance(time.Hour)
+		w.plan()
+		if l := w.get(limited.ID); l.RunningOrderID != nil {
+			require.NoError(t, w.svc.FailACMEOrder(w.ctx, *l.RunningOrderID, acme.ReasonCARateLimited, 24*time.Hour))
+			limits++
+		}
+		if s := w.get(short.ID); s.RunningOrderID != nil && renewedAt.IsZero() {
+			w.complete(*s.RunningOrderID)
+			renewedAt = w.clock.Now()
+		}
+	}
+	assert.GreaterOrEqual(t, limits, 4, "the CA limited the neighbour again and again")
+	require.False(t, renewedAt.IsZero(), "the 6-day certificate was renewed")
+	assert.True(t, renewedAt.Before(shortEnd), "before it expired")
+	assert.LessOrEqual(t, renewedAt.Sub(shortDue), time.Hour, "at its renewal time, not at the neighbour's next retry")
+	var since time.Time
+	require.NoError(t, w.db.Owner.QueryRow(w.ctx, "SELECT rate_limited_since FROM acme_certificates WHERE id = $1", limited.ID).Scan(&since))
+	assert.True(t, since.Before(w.clock.Now().Add(-4*day)), "the series began at the first limit and is kept")
+}
+
+// shortWindow is the renewal time and the end of the certificate's current certificate.
+func (w *renewWorld) shortWindow(c inventory.ACMECertificate) (time.Time, time.Time) {
+	w.t.Helper()
+	na := w.notAfter(c)
+	var nb time.Time
+	require.NoError(w.t, w.db.Owner.QueryRow(w.ctx, "SELECT not_before FROM certificates WHERE id = $1", *c.CurrentCertificateID).Scan(&nb))
+	return renew.RenewAt(nb, na, c.RenewBeforeDays), na
+}
+
+// The hold lasts at most 24 hours of a series, and never holds a certificate past the middle of its renewal window.
+func TestACMERateLimitHoldBounds(t *testing.T) {
+	w := newRenewWorld(t)
+	require.NoError(t, w.fake.Advertise("renewalInfo", "off"))
+	limited := w.issued("limited.example.test")
+	other := w.issued("other.example.test")
+	due, end := w.shortWindow(other)
+	w.setClock(due)
+	// The CA limits the neighbour again now (Retry-After 24 h, the cap); its series began 23 hours ago.
+	limit := func(since time.Time) {
+		t.Helper()
+		_, err := w.db.Owner.Exec(w.ctx, `UPDATE acme_certificates SET failures = 2, state = 'failing', last_error_code = 'acme.ca_rate_limited',
+    last_attempt_at = $3, next_attempt_at = $4, rate_limited_since = $2 WHERE id = $1`, limited.ID, since, w.clock.Now(), w.clock.Now().Add(24*time.Hour))
+		require.NoError(t, err)
+	}
+	limit(w.clock.Now().Add(-23 * time.Hour))
+	assert.Equal(t, inventory.ACMERenewRun{}, w.plan(), "held: the series began 23 hours ago")
+	w.advance(59 * time.Minute)
+	assert.Equal(t, inventory.ACMERenewRun{}, w.plan(), "still held")
+	w.advance(time.Minute)
+	assert.Equal(t, 1, w.plan().Started, "24 hours after the series began the hold ends, though the CA's wait does not")
+	require.NoError(t, w.svc.AbandonACMEOrder(w.ctx, w.running(other.ID), "job.lease_expired"))
+
+	// A fresh series again: a certificate past the middle of its window is renewed regardless.
+	w.setClock(due.Add(end.Sub(due) / 2))
+	limit(w.clock.Now())
+	assert.Equal(t, 1, w.plan().Started, "past the middle of its window: never held")
+}
+
+// Fix round 1, I2: a CA that answers with a window before the current certificate began (here 2001) causes no renewal
+// loop: only the local rule applies; a window of year 1 is refused as garbled (no failure either).
+func TestACMEARIWindowInThePastIsIgnored(t *testing.T) {
+	w := newRenewWorld(t)
+	c := w.issued("past.example.test")
+	require.NoError(t, w.fake.SetARIWindow(time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2001, 1, 2, 0, 0, 0, 0, time.UTC)))
+	for range 4 * 8 { // four days in 3-hour steps
+		w.advance(3 * time.Hour)
+		w.plan()
+	}
+	assert.Zero(t, w.renewals(c.ID), "no renewal loop")
+	var start time.Time
+	require.NoError(t, w.db.Owner.QueryRow(w.ctx, "SELECT ari_window_start FROM acme_certificates WHERE id = $1", c.ID).Scan(&start))
+	assert.Equal(t, 2001, start.Year(), "the answer was stored, and ignored")
+
+	require.NoError(t, w.fake.SetARIWindow(time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(1, 1, 2, 0, 0, 0, 0, time.UTC)))
+	w.advance(7 * time.Hour)
+	run := w.plan()
+	assert.Equal(t, inventory.ACMERenewRun{ARIChecked: 1}, run, "year 1 is refused: no order")
+	assert.Zero(t, w.get(c.ID).Failures)
+
+	w.setClock(w.notAfter(c).Add(-30 * day))
+	assert.Equal(t, 1, w.plan().Started, "the local rule")
+}
+
+// Minor 1: many certificates fell due during a lock; the first run after the lock starts exactly five orders.
+func TestACMEReopenedLicenceStartsOneWave(t *testing.T) {
+	w := newRenewWorld(t)
+	require.NoError(t, w.fake.Advertise("renewalInfo", "off"))
+	var certs []inventory.ACMECertificate
+	for i := range 9 {
+		certs = append(certs, w.issued(fmt.Sprintf("herd%d.example.test", i)))
+	}
+	w.lic.locked.Store(true)
+	w.setClock(w.notAfter(certs[0]).Add(-day))
+	assert.Equal(t, inventory.ACMERenewRun{}, w.plan())
+	w.lic.locked.Store(false)
+	assert.Equal(t, inventory.ACMERenewRun{Started: 5}, w.plan(), "exactly one wave")
+	n := 0
+	for _, c := range certs {
+		n += w.renewals(c.ID)
+	}
+	assert.Equal(t, 5, n)
+}
+
+// Minor 2: an Administrator re-arms a stopped certificate; switching automatic renewal on after failures made while it
+// was off starts afresh (no immediate stop).
+func TestACMEReArm(t *testing.T) {
+	w := newRenewWorld(t)
+	require.NoError(t, w.fake.Advertise("renewalInfo", "off"))
+	c := w.issued("rearm.example.test")
+	w.setClock(w.notAfter(c).Add(-day))
+	_, err := w.db.Owner.Exec(w.ctx, `UPDATE acme_certificates SET state = 'stopped', failures = 5, failure_notified_at = now(),
+    next_attempt_at = $2, rate_limited_since = now(), last_error_code = 'acme.hook_refused' WHERE id = $1`, c.ID, w.clock.Now().Add(5*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMERenewRun{}, w.plan(), "stopped")
+	r, err := w.svc.ReArmACMEAutoRenew(w.ctx, w.admin, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEStateActive, r.State)
+	assert.Zero(t, r.Failures)
+	assert.Nil(t, r.NextAttemptAt)
+	assert.True(t, r.AutoRenew)
+	assert.Equal(t, "acme.hook_refused", r.LastErrorCode, "the last reason stays for the record")
+	assert.Zero(t, w.count(`SELECT count(*) FROM acme_certificates WHERE id = $1 AND (failure_notified_at IS NOT NULL OR rate_limited_since IS NOT NULL)`, c.ID))
+	d := w.auditDetails("acme.auto_renew.rearmed")
+	require.Len(t, d, 1)
+	assert.Equal(t, map[string]string{"acme_certificate_id": c.ID.String(), "names": "rearm.example.test", "previous_state": "stopped",
+		"previous_failures": "5"}, d[0])
+	assert.Equal(t, 1, w.plan().Started, "renewed again")
+	_, err = w.svc.ReArmACMEAutoRenew(w.ctx, w.admin, uuid.New())
+	assert.ErrorIs(t, err, inventory.ErrNotFound)
+	r, err = w.svc.ReArmACMEAutoRenew(w.ctx, w.admin, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEStateIssuing, r.State, "an order runs")
+
+	// Automatic renewal off, five failed orders of a person, then switched on: no stop, it is renewed.
+	off := w.issued("off.example.test")
+	_, err = w.svc.UpdateACMECertificate(w.ctx, w.admin, off.ID, inventory.ACMECertificatePatch{AutoRenew: ptr(false)})
+	require.NoError(t, err)
+	for range 5 {
+		o, err := w.svc.RequestOrder(w.ctx, w.operator, off.ID, inventory.ACMEOrderIssue)
+		require.NoError(t, err)
+		require.NoError(t, w.svc.FailACMEOrder(w.ctx, o.ID, acme.ReasonHookRefused, 0))
+	}
+	got := w.get(off.ID)
+	assert.Equal(t, 5, got.Failures)
+	assert.Equal(t, inventory.ACMEStateFailing, got.State, "off: never stopped")
+	assert.Empty(t, w.outbox(inventory.TemplateACMEAutoRenewStopped))
+	got, err = w.svc.UpdateACMECertificate(w.ctx, w.admin, off.ID, inventory.ACMECertificatePatch{AutoRenew: ptr(true)})
+	require.NoError(t, err)
+	assert.Zero(t, got.Failures)
+	assert.Equal(t, inventory.ACMEStateActive, got.State)
+	assert.Equal(t, 3, w.audits("acme.auto_renew.rearmed"), "switching on wrote a re-arm row too")
+	w.setClock(w.notAfter(off).Add(-day))
+	run := w.plan()
+	assert.Equal(t, 1, w.renewals(off.ID), "renewed, not stopped")
+	assert.Zero(t, run.Stopped)
+}
+
+// Minor 4: certificates skipped run after run (a key change that does not settle) do not hide a renewable one behind
+// them: the run reads further pages.
+func TestACMESkippedCandidatesDoNotStarveOthers(t *testing.T) {
+	w := newRenewWorld(t)
+	require.NoError(t, w.fake.Advertise("renewalInfo", "off"))
+	p2 := w.registryWorld.provider("Second CA", false)
+	w.register(p2)
+	hook := w.hook.ID
+	stuck, err := w.svc.CreateACMECertificate(w.ctx, w.admin, inventory.ACMECertificateInput{ProviderID: p2.ID, Names: []string{"stuck.example.test"},
+		Challenge: inventory.ACMEChallengeDNS01, HookID: &hook})
+	require.NoError(t, err)
+	o, err := w.svc.RequestOrder(w.ctx, w.operator, stuck.ID, inventory.ACMEOrderIssue)
+	require.NoError(t, err)
+	w.complete(o.ID)
+	stuck = w.get(stuck.ID)
+	// 59 more definitions of the second provider holding the same certificate: 60 candidates, all more urgent.
+	_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, hook_id, state,
+    current_certificate_id, created_at, updated_at)
+SELECT gen_random_uuid(), provider_id, account_id, names, key_type, challenge, hook_id, 'active', current_certificate_id, created_at, updated_at
+FROM acme_certificates, generate_series(1, 59) WHERE id = $1`, stuck.ID)
+	require.NoError(t, err)
+	w.advance(time.Hour)
+	fine := w.issued("fine.example.test")
+	// The second provider's key change never settles: every one of its certificates is skipped.
+	_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO acme_accounts (id, provider_id, key_ct, key_nonce, key_wrapped_dek, key_version, state,
+    pending_since, created_at, updated_at) VALUES (gen_random_uuid(), $1, '\x01', decode(repeat('00', 12), 'hex'), '\x01', 1, 'pending_rollover',
+    now(), now(), now())`, p2.ID)
+	require.NoError(t, err)
+	w.setClock(w.notAfter(fine).Add(-day))
+	run := w.plan()
+	assert.Equal(t, 1, run.Started)
+	assert.Equal(t, 1, w.renewals(fine.ID), "found behind 60 skipped candidates")
+	assert.Zero(t, w.count("SELECT count(*) FROM acme_orders WHERE trigger = 'renewal' AND acme_certificate_id <> $1", fine.ID))
+}
+
+// Minor 3: the spacing reads the newest order that is not in the future (a clock that moved back), as the candidates do.
+func TestACMESpacingIgnoresAFutureOrder(t *testing.T) {
+	w := newRenewWorld(t)
+	require.NoError(t, w.fake.Advertise("renewalInfo", "off"))
+	c := w.issued("future.example.test")
+	w.setClock(w.notAfter(c).Add(-day))
+	t.Cleanup(func() { inventory.SetACMERenewHook(nil) })
+	inventory.SetACMERenewHook(func(id uuid.UUID) {
+		// After the candidates were read: an order of ten minutes ago, and one "in two days" from before a clock change.
+		for _, at := range []time.Time{w.clock.Now().Add(-10 * time.Minute), w.clock.Now().Add(2 * day)} {
+			_, err := w.db.Owner.Exec(w.ctx, `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, finished_at, error_code)
+VALUES (gen_random_uuid(), $1, 'issue', 'failed', $2, $2, 'job.lease_expired')`, id, at)
+			require.NoError(t, err)
+		}
+	})
+	assert.Zero(t, w.plan().Started, "the order of ten minutes ago spaces it")
+	inventory.SetACMERenewHook(nil)
 }

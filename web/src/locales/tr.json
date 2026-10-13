@@ -570,6 +570,7 @@
       "acme_order_cleaned_up": "Sertifika isteğinin doğrulama kayıtları kaldırıldı",
       "acme_order_cleanup_failed": "Sertifika isteğinin doğrulama kayıtları kaldırılamadı",
       "acme_auto_renew_stopped": "Sertifika yetkilisinden (ACME) alınan sertifikanın otomatik yenilenmesi durdu",
+      "acme_auto_renew_rearmed": "Sertifika yetkilisinden (ACME) alınan sertifikanın otomatik yenilenmesi yeniden açıldı",
       "csr_completed": "İmzalı sertifika eklendi",
       "csr_cancelled": "İmzalama isteği iptal edildi",
       "location_updated": "Doğrulama ayarları değiştirildi",

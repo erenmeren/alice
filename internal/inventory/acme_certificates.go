@@ -490,13 +490,19 @@ hook_id = $7, http_target_id = $8, renew_before_days = $9, auto_renew = $10, aut
 			s.clock.Now().UTC()); err != nil {
 			return fmt.Errorf("inventory: update the ACME certificate: %w", err)
 		}
-		if out, err = getACMECert(ctx, tx, id, false); err != nil {
-			return err
-		}
 		d := acmeCertDetails(f)
 		d["fields"] = strings.Join(changed, ",")
-		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.certificate.updated", ObjectType: "acme_certificate",
-			ObjectID: id.String(), Result: audit.Success, Details: d})
+		if _, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.certificate.updated", ObjectType: "acme_certificate",
+			ObjectID: id.String(), Result: audit.Success, Details: d}); err != nil {
+			return err
+		}
+		if slices.Contains(changed, "auto_renew") && f.autoRenew {
+			// Switched on again: a fresh start (the failures of the time it was off do not stop it at once).
+			if err := s.rearmTx(ctx, tx, a, cur); err != nil {
+				return err
+			}
+		}
+		out, err = getACMECert(ctx, tx, id, false)
 		return err
 	})
 	if err != nil {
@@ -530,4 +536,43 @@ func (s *Service) DeleteACMECertificate(ctx context.Context, a Actor, id uuid.UU
 				"names": truncRunes(strings.Join(cur.Names, ","), maxAuditNames), "bindings_count": strconv.FormatInt(tag.RowsAffected(), 10)}})
 		return err
 	})
+}
+
+// ReArmACMEAutoRenew switches automatic renewal of a live ACME certificate on and starts it afresh (an Administrator's
+// act, e.g. after it stopped at five failures): state active with a current certificate (issuing while an order runs,
+// pending without a certificate), failures 0, no failure notice mark, no wait, no rate-limit series, in one statement
+// with the audit row acme.auto_renew.rearmed. Switching auto_renew from off to on through UpdateACMECertificate does
+// the same. A successful order re-arms as well (FinishACMEOrder). ErrNotFound.
+func (s *Service) ReArmACMEAutoRenew(ctx context.Context, a Actor, id uuid.UUID) (ACMECertificate, error) {
+	var out ACMECertificate
+	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		cur, err := getACMECert(ctx, tx, id, true)
+		if err != nil {
+			return err
+		}
+		if err := s.rearmTx(ctx, tx, a, cur); err != nil {
+			return err
+		}
+		out, err = getACMECert(ctx, tx, id, false)
+		return err
+	})
+	if err != nil {
+		return ACMECertificate{}, err
+	}
+	return out, nil
+}
+
+// rearmTx is the reset of ReArmACMEAutoRenew in tx; cur was read with the row lock.
+func (s *Service) rearmTx(ctx context.Context, tx pgx.Tx, a Actor, cur ACMECertificate) error {
+	if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET auto_renew = true,
+    state = CASE WHEN $2 THEN 'issuing' WHEN current_certificate_id IS NOT NULL THEN 'active' ELSE 'pending' END,
+    failures = 0, failure_notified_at = NULL, next_attempt_at = NULL, rate_limited_since = NULL, updated_at = $3 WHERE id = $1`,
+		cur.ID, cur.RunningOrderID != nil, s.clock.Now().UTC()); err != nil {
+		return fmt.Errorf("inventory: re-arm the automatic renewal: %w", err)
+	}
+	_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.auto_renew.rearmed", ObjectType: "acme_certificate",
+		ObjectID: cur.ID.String(), Result: audit.Success, Details: map[string]string{"acme_certificate_id": cur.ID.String(),
+			"names": truncRunes(strings.Join(cur.Names, ","), maxAuditNames), "previous_state": cur.State,
+			"previous_failures": strconv.Itoa(cur.Failures)}})
+	return err
 }
