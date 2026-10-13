@@ -437,6 +437,9 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	}
 	ids["/api/v1/sso/providers/"] = phase7Records(t, s, c, admin)
 	ids["/api/v1/auth/oidc/"] = ids["/api/v1/sso/providers/"]
+	for k, v := range acmeRecords(t, s, c, admin) {
+		ids[k] = v
+	}
 	// Phase 8: one backup, so its download answers 200 (its only write is the backup.downloaded row).
 	rec := c.do(http.MethodPost, "/api/v1/backups", nil)
 	requireStatus(t, rec, http.StatusCreated)

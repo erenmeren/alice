@@ -34,6 +34,7 @@ import (
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
+	"alice/internal/jobs/acmejobs"
 	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/kvjobs"
 	"alice/internal/jobs/sshkeyjobs"
@@ -318,6 +319,8 @@ func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
 	}
 	// Phase 6: sshkey.add and rotation.location, as cmd/alice wires them (the services' clock).
 	sshkeyjobs.Register(r, sshkeyjobs.Deps{Keys: s.sshKeys, Targets: s.inv, Registry: s.registry, Clock: s.tick, Gate: s.license, Log: log})
+	// ACME: acme.issue and acme.cleanup, as cmd/alice wires them.
+	acmejobs.Register(r, acmejobs.Deps{Inventory: s.inv, Registry: s.registry, Gate: s.license, Clock: s.clock, Log: log})
 	return r
 }
 
@@ -342,6 +345,7 @@ func (s *stack) deps() Deps {
 		Audit:          s.auditSvc,
 		License:        s.license,
 		Inventory:      s.inv,
+		ACME:           s.inv,
 		Jobs:           s.queue,
 		Providers:      s.registry,
 		SSHKeys:        s.sshKeys,
