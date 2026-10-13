@@ -36,11 +36,19 @@ const (
 	rnACMEHost = "acme-http01.example.test"
 )
 
-// rnACMESnippet is the guide's location block in a port-80 server block for the test's name.
+// rnACMESnippet is the guide's location block in a port-80 server block for the test's name, next to the two
+// things the guide warns about: a "deny dot files" pattern block (^~ must win over it) and the HTTPS redirect,
+// moved into location / as the guide says.
 const rnACMESnippet = `server {
     listen 80;
     server_name ` + rnACMEHost + `;
-    location /.well-known/acme-challenge/ {
+    location ~ /\. {
+        deny all;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+    location ^~ /.well-known/acme-challenge/ {
         root /var/www/alice-acme;
     }
 }
@@ -68,13 +76,19 @@ func rnKeyAuth(token string) []byte {
 // with the test name as Host (no proxy, no redirect).
 func (h *rnHost) fetchChallenge(token string) (int, string) {
 	h.t.Helper()
+	return h.fetchPath(helperproto.ACMEChallengeURLPath(token))
+}
+
+// fetchPath fetches a path of the test name on port 80 (no proxy, no redirect followed).
+func (h *rnHost) fetchPath(path string) (int, string) {
+	h.t.Helper()
 	client := &http.Client{
 		Timeout:       5 * time.Second,
 		Transport:     &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: 5 * time.Second}).DialContext},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet,
-		"http://"+net.JoinHostPort(h.ip, "80")+helperproto.ACMEChallengeURLPath(token), nil)
+		"http://"+net.JoinHostPort(h.ip, "80")+path, nil)
 	require.NoError(h.t, err)
 	req.Host = rnACMEHost
 	resp, err := client.Do(req)
@@ -109,7 +123,7 @@ func (h *rnHost) testACMEHTTP01(t *testing.T) {
 	// rm has nothing to remove.
 	code, _ := h.exec("test", "-e", "/var/www/alice-acme")
 	require.NotZero(t, code, "the host starts without the webroot")
-	_, err = conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok))
+	err = conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok))
 	assert.Equal(t, helperproto.CodeNotFound, helperCode(t, err))
 	removed, err := conn.RemoveHTTP01Token(ctx, tok)
 	require.NoError(t, err)
@@ -123,20 +137,17 @@ func (h *rnHost) testACMEHTTP01(t *testing.T) {
 	h.reloadNginx()
 	status, _ := h.fetchChallenge(tok)
 	assert.Equal(t, http.StatusNotFound, status, "nothing published yet")
+	status, _ = h.fetchPath("/index.html")
+	assert.Equal(t, http.StatusMovedPermanently, status, "everything else is still redirected")
 
 	// put -> fetched through Nginx -> replaced -> rm.
-	res, err := conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok))
-	require.NoError(t, err)
-	assert.Equal(t, helperproto.ACMEChallengePath(tok), res.Path)
-	assert.False(t, res.Replaced)
+	require.NoError(t, conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok)))
 	status, body := h.fetchChallenge(tok)
 	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, string(rnKeyAuth(tok)), body, "Nginx serves exactly the key authorization")
 	assert.Equal(t, "root:root 644", h.stat(helperproto.ACMEChallengePath(tok)))
 	other := []byte(tok + "." + strings.Repeat("Z", 43))
-	res, err = conn.PublishHTTP01Token(ctx, tok, other)
-	require.NoError(t, err)
-	assert.True(t, res.Replaced)
+	require.NoError(t, conn.PublishHTTP01Token(ctx, tok, other))
 	_, body = h.fetchChallenge(tok)
 	assert.Equal(t, string(other), body)
 	assert.Equal(t, tok, strings.TrimSpace(h.sh("ls -A "+helperproto.ACMEChallengeDir)), "one file in the directory, no temporary file left")
@@ -152,8 +163,7 @@ func (h *rnHost) testACMEHTTP01(t *testing.T) {
 
 	// A token that starts with "-" (base64url) goes through sudo and the helper as --token's value.
 	dash := "-" + tok[1:]
-	_, err = conn.PublishHTTP01Token(ctx, dash, rnKeyAuth(dash))
-	require.NoError(t, err)
+	require.NoError(t, conn.PublishHTTP01Token(ctx, dash, rnKeyAuth(dash)))
 	_, body = h.fetchChallenge(dash)
 	assert.Equal(t, string(rnKeyAuth(dash)), body)
 	removed, err = conn.RemoveHTTP01Token(ctx, dash)
@@ -163,7 +173,7 @@ func (h *rnHost) testACMEHTTP01(t *testing.T) {
 	// A link at the token name (to /etc/shadow): refused, the link and its target untouched.
 	shadow := h.fileSHA("/etc/shadow")
 	h.sh("ln -s /etc/shadow " + helperproto.ACMEChallengePath(tok))
-	_, err = conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok))
+	err = conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok))
 	assert.Equal(t, helperproto.CodeNotRegularFile, helperCode(t, err))
 	_, err = conn.RemoveHTTP01Token(ctx, tok)
 	assert.Equal(t, helperproto.CodeNotRegularFile, helperCode(t, err))
@@ -185,7 +195,7 @@ func (h *rnHost) testACMEHTTP01(t *testing.T) {
 		{"group-writable .well-known", "chmod 0775 /var/www/alice-acme/.well-known", "chmod 0755 /var/www/alice-acme/.well-known", helperproto.CodeInsecurePermissions},
 	} {
 		h.sh(c.breakIt)
-		_, err = conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok))
+		err = conn.PublishHTTP01Token(ctx, tok, rnKeyAuth(tok))
 		assert.Equal(t, c.code, helperCode(t, err), "put: %s", c.name)
 		_, err = conn.RemoveHTTP01Token(ctx, tok)
 		assert.Equal(t, c.code, helperCode(t, err), "rm: %s", c.name)

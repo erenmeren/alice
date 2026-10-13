@@ -3,20 +3,26 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
 	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/providers/linuxssh/linuxsshtest"
 )
 
 // The HTTP-01 webroot commands (protocol 7, ACME Task 7). The helper writes and removes one token
@@ -578,4 +584,69 @@ func TestACMEChallengeIOFailures(t *testing.T) {
 		assert.Equal(t, helperproto.ExitFailed, code, m)
 		assert.Equal(t, helperproto.CodeIOError, m["code"])
 	})
+}
+
+// A caller that never closes stdin cannot keep the helper: the read ends with the helper's budget.
+func TestACMEChallengePutStdinBoundedByTheBudget(t *testing.T) {
+	f := acmeFixture(t)
+	r, w := io.Pipe()
+	defer func() { _ = w.Close() }()
+	f.s.stdin = r
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := cmdACMEChallengePut(ctx, f.s, []string{"--token", acmeToken})
+	var he *helperError
+	require.ErrorAs(t, err, &he)
+	assert.Equal(t, helperproto.CodeIOError, he.code)
+	assert.Equal(t, helperproto.ExitFailed, he.exit)
+	assert.Empty(t, entries(t, f.host(acmeDir)))
+}
+
+// Fidelity: the emulator of the fake SSH server (linuxsshtest) answers the HTTP-01 commands as the helper
+// does: the same exit status, error code, path and replaced/removed flags for the same scenario.
+func TestEmulatorFidelityACMEChallenge(t *testing.T) {
+	type step struct {
+		sub, token, body string
+	}
+	long := strings.Repeat("a", 129)
+	scenarios := map[string][]step{
+		"put, replace, rm, rm again": {
+			{helperproto.SubACMEChallengePut, acmeToken, acmeBody},
+			{helperproto.SubACMEChallengePut, acmeToken, acmeToken + "." + strings.Repeat("Z", 43)},
+			{helperproto.SubACMEChallengeRm, acmeToken, ""},
+			{helperproto.SubACMEChallengeRm, acmeToken, ""},
+		},
+		"refusals": {
+			{helperproto.SubACMEChallengePut, long, long + "." + acmeThumb},
+			{helperproto.SubACMEChallengeRm, strings.Repeat("a", 22) + "/x", ""},
+			{helperproto.SubACMEChallengePut, acmeToken, acmeBody + strings.Repeat("A", helperproto.MaxACMEBody)},
+			{helperproto.SubACMEChallengePut, acmeToken, acmeBody + "\n"},
+			{helperproto.SubACMEChallengePut, acmeToken, ""},
+		},
+	}
+	for name, steps := range scenarios {
+		for _, prepared := range []bool{true, false} {
+			t.Run(name+"/prepared="+strconv.FormatBool(prepared), func(t *testing.T) {
+				f := newFixture(t)
+				emu := linuxsshtest.NewEmulator()
+				emu.SetACMEChallengeDir(prepared)
+				if prepared {
+					f.mkdir(acmeDir, 0o755)
+				}
+				h := emu.Handler()
+				for i, st := range steps {
+					f.s.stdin = strings.NewReader(st.body)
+					code, real := f.run(st.sub, "--token", st.token)
+					line := "sudo -n " + helperproto.HelperPath + " " + st.sub + " --token '" + st.token + "'"
+					r := h(line, []byte(st.body))
+					var emuAns map[string]any
+					require.NoError(t, json.Unmarshal(r.Stdout, &emuAns), "%d: %s", i, r.Stderr)
+					assert.Equal(t, code, r.Exit, "step %d exit", i)
+					delete(real, "message")
+					delete(emuAns, "message")
+					assert.Equal(t, real, emuAns, "step %d answer", i)
+				}
+			})
+		}
+	}
 }

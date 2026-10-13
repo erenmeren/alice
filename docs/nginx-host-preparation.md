@@ -109,25 +109,38 @@ method; the DNS method needs nothing on the server.
 **Alice never edits the Nginx configuration.** You publish one fixed directory yourself, and the helper only writes
 and removes one small file in it while a certificate is being requested.
 
-1. Create the directory, owned by root and writable by nobody else (every directory on the path must be root's and
-   not writable by its group or by others, and none may be a symbolic link; the helper refuses otherwise and never
-   creates a directory):
+1. Check `/var/www` first: `stat -c '%U:%G %a' / /var /var/www` (if `/var/www` does not exist yet, the next
+   command creates it as root's). The path is fixed: the file always goes to
+   `/var/www/alice-acme/.well-known/acme-challenge/`. The helper writes there only when every directory on that path,
+   from `/` down, belongs to root, cannot be written by its group or by other users (for example `root:root 755`;
+   modes such as `775` or `777` are refused), and is a real directory, not a symbolic link. It never creates a
+   directory and never changes an owner or a mode. If `/var/www` belongs to another user (for example the account a
+   website is deployed with) or its group can write it, HTTP-01 cannot be used on this server: use the DNS method
+   instead. Do not change the owner or mode of an existing website directory just for this unless you know what else
+   depends on it.
+
+   When `/var/www` is root's and not writable by others, create the folder Alice uses, owned by root:
 
    ```sh
    mkdir -p /var/www/alice-acme/.well-known/acme-challenge
-   chown root:root /var/www /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge
-   chmod 0755 /var/www /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge
+   chown root:root /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge
+   chmod 0755 /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge
    ```
 
    With SELinux (RHEL, Rocky, AlmaLinux) also run `restorecon -R /var/www/alice-acme`.
-2. Add these three lines to the `server` block that listens on port 80 for the names (inside the block, before any
-   `return 301` or other `location` that would answer `/.well-known/acme-challenge/` first):
+2. Add these three lines to the `server` block that listens on port 80 for the names:
 
    ```nginx
-   location /.well-known/acme-challenge/ {
+   location ^~ /.well-known/acme-challenge/ {
        root /var/www/alice-acme;
    }
    ```
+
+   The `^~` makes this block win over pattern blocks such as `location ~ /\. { deny all; }`, which would otherwise
+   refuse the `.well-known` path. A `return` written directly in the `server` block (for example
+   `return 301 https://$host$request_uri;`) answers every request before any `location` is looked at: move it into a
+   `location / { return 301 https://$host$request_uri; }` block, so only the challenge path is served over plain HTTP
+   and everything else is still redirected.
 
 3. Check and reload Nginx yourself: `nginx -t && systemctl reload nginx`.
 
@@ -396,7 +409,7 @@ server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `
 removal, no deployment, no recovery. A protocol 6 helper is enough for everything but the HTTP-01 challenge commands
 (protocol 7): only a certificate request that uses that method on the server asks you to reinstall the helper.
 
-**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.5.0, protocol 6) also works
+**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.6.0, protocol 7) also works
 with the previous Alice release, so you can update every server ahead of time. If you update Alice first, every
 server whose helper is older shows "The alice-helper on this server is outdated." and a deployment that was being
 finished waits (**Confirming the outcome**) until that server's helper is updated. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new

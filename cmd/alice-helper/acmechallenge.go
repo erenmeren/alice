@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
-	"io"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -59,14 +58,15 @@ func acmeTokenArg(sub string, args []string) (string, error) {
 	return args[1], nil
 }
 
-func cmdACMEChallengePut(_ context.Context, s *sys, args []string) (any, error) {
+func cmdACMEChallengePut(ctx context.Context, s *sys, args []string) (any, error) {
 	token, err := acmeTokenArg(helperproto.SubACMEChallengePut, args)
 	if err != nil {
 		return nil, err
 	}
 	path := helperproto.ACMEChallengePath(token)
 	s.syslog(helperproto.SubACMEChallengePut, path)
-	body, err := io.ReadAll(io.LimitReader(s.stdin, helperproto.MaxACMEBody+1))
+	// Bounded by the helper's budget too: a caller that never closes stdin cannot keep a root process.
+	body, err := readInput(ctx, s.stdin, helperproto.MaxACMEBody)
 	if err != nil {
 		return nil, failed(helperproto.CodeIOError, "the key authorization could not be read")
 	}
