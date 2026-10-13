@@ -1,3 +1,4 @@
+import { formatDateTime } from '../datetime';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
@@ -90,6 +91,8 @@ describe('Issued certificates list', () => {
     expect(within(second).getByText('Off')).toBeInTheDocument();
     expect(within(third).getByText('Renewal failing').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
     expect(within(third).getByText(/^Next attempt /)).toBeInTheDocument();
+    // The row keeps the time of the next attempt, not only its day.
+    expect(within(third).getByText(`Next attempt ${formatDateTime('2026-10-14T10:00:00Z', 'en-US')}`)).toBeInTheDocument();
     expect(within(fourth).getByText('Renewal stopped').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'danger');
     expect(within(fourth).getByText('Stopped')).toBeInTheDocument();
     expect(within(fifth).getByText('After the first certificate is issued')).toBeInTheDocument();

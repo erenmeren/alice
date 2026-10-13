@@ -98,6 +98,7 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
           <Text size="sm">{t(c.auto_deploy ? 'acme.issued.bindings.certAutoOn' : 'acme.issued.bindings.certAutoOff')}</Text>
           {!admin && <Text size="xs" c="dimmed">{t('acme.issued.adminOnly')}</Text>}
         </Stack>
+        {issued && bindings.isSuccess && items.length > 0 && <AutoSummary c={c} items={items} />}
         {bindings.isPending && <LoadingIndicator />}
         <ErrorAlert error={bindings.error} />
         {issued && bindings.isSuccess && items.length === 0 && <Text size="sm">{t('acme.issued.bindings.none')}</Text>}
@@ -241,6 +242,27 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
   );
 }
 
+// AutoSummary puts the two switches together: how many websites receive a new certificate by themselves (both the
+// certificate's and the website's automatic deployment on), with a warning when only one of the two is on.
+function AutoSummary({ c, items }: { c: ACMECertificate; items: ACMEBinding[] }) {
+  const { t } = useTranslation();
+  const sitesOn = items.filter((b) => b.auto_deploy).length;
+  const n = c.auto_deploy ? sitesOn : 0;
+  return (
+    <Stack gap={4} data-testid="auto-summary">
+      <Text size="sm" fw={600}>
+        {t('acme.issued.bindings.autoSummary', { n, count: items.length })}
+      </Text>
+      {c.auto_deploy && sitesOn === 0 && (
+        <Notice tone="warning" title={t('acme.issued.bindings.autoCertOnly')} testId="auto-cert-only" />
+      )}
+      {!c.auto_deploy && sitesOn > 0 && (
+        <Notice tone="warning" title={t('acme.issued.bindings.autoSitesOnly', { count: sitesOn })} testId="auto-sites-only" />
+      )}
+    </Stack>
+  );
+}
+
 // servedKey says what a website serves compared with the current certificate.
 function servedKey(b: ACMEBinding, c: ACMECertificate): string {
   if (b.served_certificate_id === null) return 'acme.issued.bindings.servedNone';
@@ -366,7 +388,8 @@ function AddWebsitesDialog({ c, bound, onClose, onDone, onChanged }: { c: ACMECe
       } catch (e) {
         setError(e);
         setRefused(isApiError(e) && e.params.location_id ? e.params.location_id : id);
-        setPicked((p) => p.filter((x) => !p.slice(0, done).includes(x)));
+        // The connected ones leave the choice; the refused one and the rest (not tried) stay chosen.
+        setPicked(picked.slice(done));
         setAdded((a) => a + done);
         setBusy(false);
         if (done > 0) onChanged();

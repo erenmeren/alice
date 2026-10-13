@@ -19,7 +19,7 @@ import {
   type ACMEOrder,
 } from '../api/acme';
 import { getCertificate } from '../api/endpoints';
-import { ACME_CERTIFICATES_KEY, acmeCertificateKey, acmeOrdersKey, CERTIFICATES_KEY, certificateKey } from '../api/queryKeys';
+import { ACME_CERTIFICATES_KEY, acmeCertificateKey, acmeOrdersKey, CERTIFICATES_KEY, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
 import { AcmeBindingsPanel } from '../components/acme/AcmeBindingsPanel';
@@ -69,7 +69,8 @@ export function AcmeCertificatePage() {
   const running = !!c?.running_order_id || (orders.data?.items.some((o) => o.state === 'running') ?? false);
 
   // When an order starts or ends, the other reads follow: the orders list, the certificate (its new current
-  // certificate and state), the websites and the certificate inventory.
+  // certificate and state), the websites and, when an order ended, the certificate inventory, the deployments (an
+  // automatic deployment may follow a new certificate) and the website lists.
   const lastRunning = useRef<string | null | undefined>(undefined);
   const runningId = c?.running_order_id;
   useEffect(() => {
@@ -79,7 +80,10 @@ export function AcmeCertificatePage() {
     if (before === undefined || before === runningId) return;
     void client.invalidateQueries({ queryKey: acmeCertificateKey(id) });
     void client.invalidateQueries({ queryKey: ACME_CERTIFICATES_KEY, predicate: (q) => q.queryKey[2] === 'list' });
-    if (before !== null) void client.invalidateQueries({ queryKey: CERTIFICATES_KEY });
+    if (before === null) return;
+    void client.invalidateQueries({ queryKey: CERTIFICATES_KEY });
+    void client.invalidateQueries({ queryKey: DEPLOYMENTS_KEY });
+    void client.invalidateQueries({ queryKey: ['locations'] });
   }, [runningId, client, id]);
 
   const [busy, setBusy] = useState<'test' | 'order' | 'rearm' | 'autoRenew' | null>(null);
@@ -203,12 +207,12 @@ export function AcmeCertificatePage() {
         )}
         <TestResult orderId={testId} orders={orders.data?.items} />
         <ErrorAlert error={actionError} />
-        {rearmed && <Notice tone="success" role="status" title={t('acme.issued.rearmed')} />}
+        {rearmed && <Notice tone="success" role="status" title={t('acme.issued.rearmed', { order: orderLabel })} />}
       </Stack>
 
       <div className={classes.grid}>
         <div className={classes.column}>
-          <RenewalPanel c={c} admin={admin} canOperate={canOperate} locked={locked} busy={busy} lockReason={lockReason}
+          <RenewalPanel c={c} admin={admin} canOperate={canOperate} locked={locked} busy={busy} lockReason={lockReason} orderLabel={orderLabel}
             onRearm={() => void act('rearm', () => run(() => rearmACMECertificate(id)))}
             onAutoRenew={(on) => void act('autoRenew', () => run(() => updateACMECertificate(id, { auto_renew: on })))}
           />
@@ -227,8 +231,10 @@ export function AcmeCertificatePage() {
           c={c}
           onClose={() => setDeleting(false)}
           onDeleted={() => {
-            void client.invalidateQueries({ queryKey: ACME_CERTIFICATES_KEY });
-            navigate('/acme');
+            // Leave first, then forget this certificate's reads (never read again: it is gone) and refresh the lists.
+            void navigate('/acme');
+            client.removeQueries({ queryKey: acmeCertificateKey(id) });
+            void client.invalidateQueries({ queryKey: ACME_CERTIFICATES_KEY, predicate: (q) => q.queryKey[2] === 'list' });
           }}
         />
       )}
@@ -267,6 +273,7 @@ function RenewalPanel({
   locked,
   busy,
   lockReason,
+  orderLabel,
   onRearm,
   onAutoRenew,
 }: {
@@ -276,6 +283,7 @@ function RenewalPanel({
   locked: boolean;
   busy: string | null;
   lockReason: string;
+  orderLabel: string;
   onRearm: () => void;
   onAutoRenew: (on: boolean) => void;
 }) {
@@ -348,7 +356,7 @@ function RenewalPanel({
             }
           >
             <Text size="sm">{t('acme.issued.renewal.stoppedText', { count: c.failures })}</Text>
-            <Text size="sm">{t(admin ? 'acme.issued.renewal.stoppedAdmin' : canOperate ? 'acme.issued.renewal.stoppedOperator' : 'acme.issued.renewal.stoppedAuditor')}</Text>
+            <Text size="sm">{t(admin ? 'acme.issued.renewal.stoppedAdmin' : canOperate ? 'acme.issued.renewal.stoppedOperator' : 'acme.issued.renewal.stoppedAuditor', { order: orderLabel })}</Text>
             {admin && lockReason && <Text size="xs">{lockReason}</Text>}
           </Notice>
         )}

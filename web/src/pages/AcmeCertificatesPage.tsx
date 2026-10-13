@@ -15,7 +15,7 @@ import { LoadingIndicator } from '../components/LoadingIndicator';
 import { CursorFooter, EmptyState, Notice, PageHeader, StatusBadge } from '../components/ui';
 import ui from '../components/ui/ui.module.css';
 import { WRAP } from '../components/wrap';
-import { formatDate } from '../datetime';
+import { formatDate, formatDateTime } from '../datetime';
 import { Icon } from '../design/Icon';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import classes from './KeyVaults.module.css';
@@ -159,7 +159,7 @@ function Row({ c, authority, lang }: { c: ACMECertificate; authority: string; la
   let next: ReactNode;
   switch (r.kind) {
     case 'attempt':
-      next = t('acme.issued.renewal.attemptAt', { time: formatDate(r.at, lang) });
+      next = t('acme.issued.renewal.attemptAt', { time: formatDateTime(r.at, lang) });
       break;
     case 'planned':
       next = (

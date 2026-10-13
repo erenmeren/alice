@@ -25,6 +25,7 @@ import {
 import { goErrorPairs } from '../test/goSources';
 import { expectNoRawKeys } from '../test/i18nAssert';
 import { renderApp, renderRoute } from '../test/render';
+import { CERTIFICATES_KEY, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import { server } from '../test/server';
 
 const ID = ACME_CERT_ID;
@@ -163,10 +164,12 @@ describe('Issued certificate status page', () => {
     expect(notice).toHaveTextContent('Automatic renewal stopped');
     expect(notice).toHaveTextContent(/after 5 failed attempts in a row/);
     expect(screen.getByTestId('renews')).toHaveTextContent('Stopped');
+    // Renew now switches renewal on again; it does not order at once: the text says how to renew right now.
+    expect(notice).toHaveTextContent('To renew right now, use Order now.');
     const before = counts.cert;
     await userEvent.click(within(notice).getByRole('button', { name: 'Renew now' }));
     await stepUpFlow();
-    expect(await screen.findByText(/Automatic renewal is on again/)).toBeInTheDocument();
+    expect(await screen.findByText(/Automatic renewal is on again\..*To renew right now, use Order now\./)).toBeInTheDocument();
     expect(rearms).toBe(2);
     await waitFor(() => expect(counts.cert).toBeGreaterThan(before));
     await waitFor(() => expect(screen.queryByTestId('stopped')).not.toBeInTheDocument());
@@ -178,7 +181,17 @@ describe('Issued certificate status page', () => {
     const notice = await screen.findByTestId('stopped');
     expect(within(notice).queryByRole('button', { name: 'Renew now' })).not.toBeInTheDocument();
     expect(notice).toHaveTextContent(/Only an administrator can switch automatic renewal on again \(Renew now\)/);
+    expect(notice).toHaveTextContent('use Test run or Order now.');
     expect(screen.getByRole('button', { name: 'Order now' })).toBeEnabled();
+  });
+
+  it('names the button an Operator really sees in the stopped text before the first issuance', async () => {
+    base({ session: sessionFor('operator'), cert: acmeCertificateFixture({ state: 'stopped', stopped_reason: 'renewal_failures', failures: 5 }) });
+    await open();
+    const notice = await screen.findByTestId('stopped');
+    expect(notice).toHaveTextContent('use Test run or Get certificate now.');
+    expect(notice).not.toHaveTextContent('Order now');
+    expect(screen.getByRole('button', { name: 'Get certificate now' })).toBeEnabled();
   });
 
   it('keeps the stopped state when the step-up is cancelled', async () => {
@@ -215,7 +228,8 @@ describe('Issued certificate status page', () => {
         cert: () => (runningNow ? acmeCertificateFixture({ state: 'issuing', running_order_id: 'o-run' }) : issued()),
         orders: () => [acmeOrderFixture({ id: 'o-run', state: runningNow ? 'running' : 'succeeded', finished_at: runningNow ? null : '2026-10-13T09:01:00Z' })],
       });
-      await open();
+      const view = await open();
+      const invalidate = vi.spyOn(view.client, 'invalidateQueries');
       expect(await screen.findByTestId('order-running')).toHaveTextContent('Alice is talking to the certificate authority');
       expect(screen.getByRole('button', { name: 'Test run' })).toBeDisabled();
       const first = counts.cert;
@@ -225,6 +239,9 @@ describe('Issued certificate status page', () => {
       await vi.advanceTimersByTimeAsync(3_100);
       await waitFor(() => expect(screen.queryByTestId('order-running')).not.toBeInTheDocument());
       expect(await screen.findByTestId('current-panel')).toHaveTextContent('0123456789abcdef');
+      // The end of an order refreshes the inventory, the deployments (automatic deployment may follow) and the websites.
+      const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
+      expect(keys).toEqual(expect.arrayContaining([JSON.stringify(CERTIFICATES_KEY), JSON.stringify(DEPLOYMENTS_KEY), JSON.stringify(['locations'])]));
       await vi.advanceTimersByTimeAsync(1_000);
       const settled = { cert: counts.cert, orders: counts.orders };
       await vi.advanceTimersByTimeAsync(30_000);
@@ -314,7 +331,7 @@ describe('Issued certificate status page', () => {
 
   it('deletes the definition after a confirmation and a step-up, then goes back to the list', async () => {
     let deletes = 0;
-    base({
+    const counts = base({
       cert: issued(),
       extra: [
         http.delete(BASE, () => {
@@ -326,12 +343,17 @@ describe('Issued certificate status page', () => {
     });
     const { router } = await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    const certReads = counts.cert;
     const dialog = await screen.findByRole('dialog', { name: 'Delete this certificate?' });
     expect(within(dialog).getByText(/The websites keep the certificate they serve now/)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Delete certificate' }));
     await stepUpFlow();
     await waitFor(() => expect(router.state.location.pathname).toBe('/acme'));
     expect(deletes).toBe(2);
+    // It leaves before the lists are read again: the deleted certificate is never read again (no "not found" flash).
+    await waitFor(() => expect(counts.list).toBeGreaterThan(0));
+    expect(counts.cert).toBe(certReads);
+    expect(screen.queryByText(/not found/i)).not.toBeInTheDocument();
   });
 
   it('shows the error of a certificate that does not exist, with the way back', async () => {
@@ -459,7 +481,10 @@ describe('websites using an issued certificate', () => {
     const before = counts.bindings;
     await userEvent.click(within(dialog).getByRole('button', { name: 'Add websites' }));
     expect(await within(dialog).findByText('This website already follows another certificate.')).toBeInTheDocument();
-    expect(within(dialog).getByText(/1 website was connected before Alice stopped/)).toBeInTheDocument();
+    expect(within(dialog).getByText('1 website was connected before Alice stopped at the marked one; the rest were not tried.')).toBeInTheDocument();
+    // The connected website leaves the choice; the refused one stays chosen.
+    expect(within(dialog).getByRole('checkbox', { name: /web-b/ })).toBeChecked();
+    expect(within(dialog).getByRole('checkbox', { name: /web-a/ })).not.toBeChecked();
     expect(dialog.querySelector('[data-refused="true"]')).toHaveTextContent('web-b');
     expect(puts).toEqual(['a1 {"auto_deploy":false}', 'a2 {"auto_deploy":false}']);
     await waitFor(() => expect(counts.bindings).toBeGreaterThan(before));
@@ -585,6 +610,35 @@ describe('websites using an issued certificate', () => {
     await userEvent.click(within(await screen.findByTestId('cert-auto-deploy')).getByRole('switch'));
     await userEvent.click(within(await screen.findByRole('dialog', { name: 'Switch on automatic deployment?' })).getByRole('button', { name: 'Switch on' }));
     await waitFor(() => expect(body).toEqual({ auto_deploy: true }));
+  });
+});
+
+describe('the two automatic deployment switches together', () => {
+  it.each([
+    { cert: true, sites: [true, false], summary: 'Will deploy automatically to 1 of 2 websites.', warn: null },
+    { cert: true, sites: [false], summary: 'Will deploy automatically to 0 of 1 website.', warn: 'auto-cert-only' },
+    { cert: false, sites: [true, true], summary: 'Will deploy automatically to 0 of 2 websites.', warn: 'auto-sites-only' },
+    { cert: false, sites: [false], summary: 'Will deploy automatically to 0 of 1 website.', warn: null },
+  ])('certificate $cert, websites $sites', async ({ cert, sites, summary, warn }) => {
+    base({
+      session: sessionFor('operator'),
+      cert: issued({ auto_deploy: cert }),
+      bindings: sites.map((on, i) => acmeBindingFixture({ location_id: `l${i}`, target_name: `web-${i}`, auto_deploy: on })),
+    });
+    await open();
+    const box = await screen.findByTestId('auto-summary');
+    expect(box).toHaveTextContent(summary);
+    expect(screen.queryByTestId('auto-cert-only') !== null).toBe(warn === 'auto-cert-only');
+    expect(screen.queryByTestId('auto-sites-only') !== null).toBe(warn === 'auto-sites-only');
+    if (warn === 'auto-sites-only') expect(screen.getByTestId('auto-sites-only')).toHaveTextContent("2 websites have their own automatic deployment on, but the certificate's automatic deployment is off");
+    expectNoRawKeys();
+  });
+
+  it('shows no summary before the first certificate or without websites', async () => {
+    base({ session: sessionFor('operator'), cert: issued(), bindings: [] });
+    await open();
+    expect(await screen.findByText('No website is connected to this certificate yet.')).toBeInTheDocument();
+    expect(screen.queryByTestId('auto-summary')).not.toBeInTheDocument();
   });
 });
 
