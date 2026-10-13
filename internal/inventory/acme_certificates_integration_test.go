@@ -916,3 +916,44 @@ func TestACMEOrderWithoutItsProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, work.Deleted)
 }
+
+// An interrupted order is abandoned without counting a failure: its key goes, the certificate's state returns to what
+// it was, failures and the next attempt are untouched, the cleanup is queued when records are left (R1).
+func TestACMEAbandonCountsNoFailure(t *testing.T) {
+	w := newCertWorld(t)
+	c := w.create(w.dnsInput("abandon.example.test"))
+	o, err := w.svc.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderIssue)
+	require.NoError(t, err)
+	_, err = w.svc.NewACMEOrderKey(w.ctx, o.ID)
+	require.NoError(t, err)
+	hook := w.hook.ID
+	require.NoError(t, w.svc.AddACMEPresented(w.ctx, o.ID, inventory.ACMEPresented{HookID: &hook,
+		Challenge: solver.Challenge{Type: solver.DNS01, Domain: "abandon.example.test", DNSValue: "v"}}))
+	require.ErrorIs(t, w.svc.AbandonACMEOrder(w.ctx, o.ID, "not a code"), inventory.ErrACMEErrorCode)
+	require.NoError(t, w.svc.AbandonACMEOrder(w.ctx, o.ID, inventory.ACMEOrderAbandoned))
+	g, err := w.svc.GetACMEOrder(w.ctx, o.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEOrderFailed, g.State)
+	assert.Equal(t, inventory.ACMEOrderAbandoned, g.ErrorCode)
+	assert.Zero(t, w.count("SELECT count(*) FROM acme_orders WHERE pending_key_ct IS NOT NULL"))
+	got, err := w.svc.GetACMECertificate(w.ctx, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEStatePending, got.State)
+	assert.Zero(t, got.Failures)
+	assert.Nil(t, got.NextAttemptAt)
+	assert.Empty(t, got.LastErrorCode)
+	reqs := w.jobs.requests()
+	assert.Equal(t, inventory.JobACMECleanup, reqs[len(reqs)-1].Type)
+	require.NoError(t, w.svc.AbandonACMEOrder(w.ctx, o.ID, inventory.ACMEOrderAbandoned), "again: nothing changes")
+
+	// A certificate with earlier failures goes back to failing; one with a current certificate to active.
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET failures = 2 WHERE id = $1", c.ID)
+	require.NoError(t, err)
+	o, err = w.svc.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderIssue)
+	require.NoError(t, err)
+	require.NoError(t, w.svc.AbandonACMEOrder(w.ctx, o.ID, "job.lease_expired"))
+	got, err = w.svc.GetACMECertificate(w.ctx, c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEStateFailing, got.State)
+	assert.Equal(t, 2, got.Failures)
+}

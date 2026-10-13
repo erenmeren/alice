@@ -50,6 +50,7 @@ func TestACMEOrderErrorCode(t *testing.T) {
 		{ErrACMEPendingKey, ACMEOrderAbandoned, 0},
 		{ErrNotFound, "system.not_found", 0},
 		{ErrACMEChainMismatch, acme.ReasonDirectoryInvalid, 0},
+		{fmt.Errorf("x: %w", acme.ErrChainKeyMismatch), acme.ReasonDirectoryInvalid, 0},
 		{certs.ErrExpired, acme.ReasonDirectoryInvalid, 0},
 		{context.DeadlineExceeded, acme.ReasonNotIssuedInTime, 0},
 		{providers.NewError("ssh.unreachable", true, nil, nil), "ssh.unreachable", 0},

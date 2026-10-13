@@ -448,6 +448,33 @@ WHERE id = $1`, ab.acmeCertificateID, next, now); err != nil {
 	})
 }
 
+// AbandonACMEOrder ends a running order that was interrupted (a shutdown, a lost worker, a lock, a deleted definition,
+// an order the CA never got far enough to finish) as failed with code, WITHOUT counting a failure: the pending key is
+// deleted and the audit row written as by AbortACMEOrder, the ACME certificate's failures and next_attempt_at are not
+// touched and an issue order's state goes back to what it says (stopped stays; failing with earlier failures; active
+// with a current certificate; pending otherwise); the cleanup job is queued when records are left. Only a refusal by
+// the CA or a failed validation is a failure (FailACMEOrder). ErrACMEOrderNotRunning for a succeeded order, ErrNotFound,
+// ErrACMEErrorCode.
+func (s *Service) AbandonACMEOrder(ctx context.Context, orderID uuid.UUID, code string) error {
+	if !errorCodeRE.MatchString(code) {
+		return ErrACMEErrorCode
+	}
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		ab, err := s.abortOrder(ctx, tx, orderID, code)
+		if err != nil || !ab.ended {
+			return err
+		}
+		if ab.kind == ACMEOrderIssue {
+			if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET state = CASE WHEN state = 'stopped' THEN 'stopped'
+    WHEN failures > 0 THEN 'failing' WHEN current_certificate_id IS NOT NULL THEN 'active' ELSE 'pending' END, updated_at = $2
+WHERE id = $1`, ab.acmeCertificateID, s.clock.Now().UTC()); err != nil {
+				return fmt.Errorf("inventory: restore the ACME certificate's state: %w", err)
+			}
+		}
+		return s.enqueueCleanupTx(ctx, tx, orderID)
+	})
+}
+
 // enqueueCleanupTx queues the acme.cleanup job of an ended order whose presented list is not empty (dedupe
 // acme.cleanup:<order>: a live job of the order answers again).
 func (s *Service) enqueueCleanupTx(ctx context.Context, tx pgx.Tx, orderID uuid.UUID) error {
@@ -549,14 +576,17 @@ type ACMEStaleOrder struct {
 // maxACMESweepBatch bounds one sweep step.
 const maxACMESweepBatch = 50
 
-// StaleACMEOrders lists running orders started more than olderThan ago that no running acme.issue job holds
-// (oldest first, at most 50).
+// StaleACMEOrders lists running orders started more than olderThan ago that no queued or running acme.issue job holds
+// (a queued job still runs the order, a running one owns it), oldest first, at most 50: their job ended without ending
+// them (a crash, a shutdown, a lost lease), or it is held in lock (blocked_license: an order is not kept waiting for an
+// Administrator's confirmation; a confirmed job finds its order ended and does nothing).
 func (s *Service) StaleACMEOrders(ctx context.Context, olderThan time.Duration) ([]ACMEStaleOrder, error) {
 	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, c.names, o.order_url, o.pending_key_ct IS NOT NULL, o.started_at,
     jsonb_array_length(o.presented), c.deleted_at IS NOT NULL
 FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id
 WHERE o.state = 'running' AND o.started_at < $1
-  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.type = 'acme.issue' AND j.status = 'running' AND j.payload->>'order_id' = o.id::text)
+  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.type = 'acme.issue' AND j.status IN ('queued', 'running')
+                  AND j.payload->>'order_id' = o.id::text)
 ORDER BY o.started_at, o.id LIMIT $2`, s.clock.Now().UTC().Add(-olderThan), maxACMESweepBatch)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: list the stale ACME orders: %w", err)
@@ -652,7 +682,7 @@ func ACMEOrderErrorCode(err error) (string, time.Duration) {
 		return ACMEOrderAbandoned, 0
 	case errors.Is(err, ErrNotFound):
 		return "system.not_found", 0
-	case ACMEFinishRefused(err):
+	case ACMEFinishRefused(err), errors.Is(err, acme.ErrChainKeyMismatch):
 		return acme.ReasonDirectoryInvalid, 0 // the CA's certificate does not fit the order
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return acme.ReasonNotIssuedInTime, 0
