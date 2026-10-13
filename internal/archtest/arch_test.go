@@ -66,6 +66,9 @@ var rules = map[string][]string{
 	"alice/internal/audit/forward": {platform, "alice/internal/audit"},
 	// Test helpers (build tag integration) start PostgreSQL and apply the embedded migrations.
 	"alice/internal/testutil/...": {platform, "alice/migrations"},
+	// The fake ACME CA is a stand-alone RFC 8555 server: it imports the clock and no other package of Alice, so
+	// it cannot drift towards the code it tests (golang.org/x/crypto/acme is outside the module's rules).
+	"alice/internal/testutil/fakeacme": {"alice/internal/platform/clock"},
 }
 
 const platform = "alice/internal/platform/..."
@@ -218,6 +221,10 @@ func TestAllowed(t *testing.T) {
 		{"azurekv to platform/db denied", azurekv, "alice/internal/platform/db", false},
 		{"fakekv to the interface package denied", "alice/internal/testutil/fakekv", "alice/internal/providers", false},
 		{"fakekv to azureid allowed", "alice/internal/testutil/fakekv", "alice/internal/platform/azureid", true},
+		{"fakeacme to the acme package denied", "alice/internal/testutil/fakeacme", "alice/internal/acme", false},
+		{"fakeacme to the clock allowed", "alice/internal/testutil/fakeacme", "alice/internal/platform/clock", true},
+		{"fakeacme to netaddr denied", "alice/internal/testutil/fakeacme", "alice/internal/platform/netaddr", false},
+		{"fakeacme to the interface package denied", "alice/internal/testutil/fakeacme", "alice/internal/providers", false},
 		{"azureid to anything of Alice denied", "alice/internal/platform/azureid", "alice/internal/providers", false},
 		{"provider to platform/db denied", nginx, "alice/internal/platform/db", false},
 		{"provider interface pkg to platform/db denied", "alice/internal/providers", "alice/internal/platform/db", false},
