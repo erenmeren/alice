@@ -213,3 +213,28 @@ func SetKeygenSeam(s *Service, f func()) { s.keygenSeam = f }
 
 // SetACMERenewHook sets the hook that runs between a candidate's read and its transaction (nil removes it).
 func SetACMERenewHook(f func(id uuid.UUID)) { acmeRenewHook = f }
+
+// SetACMEDeployHook installs a function that runs after an ACME certificate's candidate was read and before its
+// transaction (the automatic deployment planner); restore removes it.
+func SetACMEDeployHook(f func(id uuid.UUID)) (restore func()) {
+	old := acmeDeployHook
+	acmeDeployHook = f
+	return func() { acmeDeployHook = old }
+}
+
+// SetACMEDeployInsertHook installs a function that runs before the ACME planner inserts a location's deployment.
+func SetACMEDeployInsertHook(f func(location uuid.UUID)) (restore func()) {
+	old := acmeDeployInsertHook
+	acmeDeployInsertHook = f
+	return func() { acmeDeployInsertHook = old }
+}
+
+// SetACMEDeployPage sets the size of a page of the ACME planner's candidates; restore puts it back.
+func SetACMEDeployPage(n int) (restore func()) {
+	old := acmeDeployPage
+	acmeDeployPage = n
+	return func() { acmeDeployPage = old }
+}
+
+// Registry is the service's provider registry (tests build a second service on the same registry).
+func (s *Service) Registry() *providers.Registry { return s.registry }

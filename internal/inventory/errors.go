@@ -143,9 +143,10 @@ var (
 
 // Errors of bindings and Key Vault deployments (Task 12). The API maps each to its code (Task 17).
 var (
-	// ErrLocationBound: the website (certificate location) is already connected to a vault certificate.
+	// ErrLocationBound: the website (certificate location) is already connected to a vault certificate, or follows an ACME
+	// certificate (Task 12 of the ACME plan).
 	// A *LocationRefusalError names the location.
-	ErrLocationBound = errors.New("inventory: the website is already connected to a vault certificate")
+	ErrLocationBound = errors.New("inventory: the website is already connected to another certificate")
 	// ErrBindingExists: the vault certificate already has connected websites; change that binding.
 	ErrBindingExists = errors.New("inventory: the vault certificate already has connected websites")
 	// ErrVersionDisabled: the version is disabled in the vault.

@@ -196,3 +196,43 @@ func TestRenderTurnsAnErrorReasonIntoItsTitle(t *testing.T) {
 		}
 	}
 }
+
+// The ACME automatic deployment e-mails (plan 2026-10-13 Task 12): the certificate's names, for the stop the number of
+// failed deployments and the plain reason of the last one (never the code), that the websites keep their certificate and
+// what to do, in both languages; no URL.
+func TestACMEAutoDeployTemplatesRenderInBothLanguages(t *testing.T) {
+	cat, err := i18n.Load(locales.FS)
+	require.NoError(t, err)
+	s := &notify.Sender{Catalog: cat}
+	params := map[string]string{"name": "www.örnek.example", "names": "www.örnek.example, api.example.com", "count": "3",
+		"error_reason": "deployment.reload_failed"}
+	require.Equal(t, []string{"acme.auto_deploy_stopped", "acme.auto_deploy_held_license", "acme.auto_deploy_held_chain"},
+		inventory.ACMEDeployTemplates())
+	for _, tpl := range inventory.ACMEDeployTemplates() {
+		for _, lang := range []string{"en", "tr"} {
+			m := s.Render("ada@example.com", tpl, lang, params)
+			text := m.Subject + "\n" + m.Body
+			assert.NotContains(t, text, "{{", "%s %s", tpl, lang)
+			assert.NotContains(t, text, "email.", "%s %s: the key itself means a missing text", tpl, lang)
+			assert.NotContains(t, text, "errors.", "%s %s", tpl, lang)
+			assert.NotContains(t, text, "deployment.reload_failed", "%s %s: no raw code", tpl, lang)
+			assert.NotContains(t, text, "ALC-", "%s %s", tpl, lang)
+			assert.NotContains(t, text, "http", "%s %s: no URL", tpl, lang)
+			assert.Contains(t, m.Subject, "www.örnek.example", "%s %s", tpl, lang)
+			assert.Contains(t, m.Body, "www.örnek.example, api.example.com", "%s %s", tpl, lang)
+			assert.NotRegexp(t, `(?i)(: |\()(yes|no|true|false)(\.|\)|\n|$)`, text, "%s %s", tpl, lang)
+		}
+	}
+	for _, lang := range []string{"en", "tr"} {
+		m := s.Render("ada@example.com", inventory.TemplateACMEAutoDeployStopped, lang, params)
+		assert.Contains(t, m.Body, cat.T(lang, "errors.deployment.reload_failed.title", nil), "%s: the plain reason", lang)
+		assert.Contains(t, m.Body, "3", lang)
+	}
+	en := s.Render("ada@example.com", inventory.TemplateACMEAutoDeployStopped, "en", params)
+	assert.Equal(t, "Automatic deployment stopped: certificate for www.örnek.example", en.Subject)
+	assert.Contains(t, en.Body, "keep the certificate they had before")
+	assert.Contains(t, en.Body, "choose Deploy now")
+	tr := s.Render("ada@example.com", inventory.TemplateACMEAutoDeployHeldLicense, "tr", params)
+	assert.Contains(t, tr.Body, "Şimdi dağıt")
+	assert.Contains(t, tr.Body, "Lütfen yanıtlamayın.")
+}

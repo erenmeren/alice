@@ -1130,7 +1130,7 @@
       },
       "location_bound": {
         "title": "Web sitesi zaten bağlı",
-        "cause": "Bu web sitesi zaten bir kasadaki bir sertifikaya bağlı ve bir web sitesi yalnızca birini izleyebilir.",
+        "cause": "Bu web sitesi zaten başka bir sertifikaya (bir kasadaki ya da bir sertifika yetkilisinden alınan) bağlı ve bir web sitesi yalnızca birini izleyebilir.",
         "action": "Önce siteyi öteki sertifikadan ayırın ya da bu seçimin dışında bırakın."
       },
       "binding_exists": {
@@ -1401,6 +1401,21 @@
         "title": "Yarım kalan sertifika isteğinden vazgeçildi.",
         "cause": "Alice bu sertifikayı sertifika yetkilisinden isterken durduruldu (veya işini kaybetti) ve istek sonradan tamamlanamadı: yetkili sertifikayı henüz vermemişti. Hiçbir şey kaydedilmedi ve hazırlanan özel anahtar silindi.",
         "action": "Sertifikayı yeniden isteyin. Hâlâ yayımlanan doğrulama kayıtları otomatik olarak kaldırılır."
+      },
+      "not_issued": {
+        "title": "Bu sertifika henüz verilmedi.",
+        "cause": "Sertifika yetkilisi bu adlar için henüz bir sertifika vermedi; bu nedenle bir web sitesine bağlanacak ya da dağıtılacak bir şey yok.",
+        "action": "Önce sertifikayı alın (Şimdi yenile), ardından web sitelerini bağlayın ya da sertifikayı dağıtın."
+      },
+      "location_bound": {
+        "title": "Bu web sitesi zaten başka bir sertifikayı izliyor.",
+        "cause": "Bir web sitesi yalnızca bir sertifikayı izleyebilir: bu web sitesi zaten bir sertifika yetkilisinden alınan başka bir sertifikaya ya da bir kasadaki sertifikaya bağlı.",
+        "action": "Önce web sitesinin diğer sertifikayla bağlantısını kaldırın ya da başka bir web sitesi seçin."
+      },
+      "location_not_bound": {
+        "title": "Bu web sitesi bu sertifikaya bağlı değil.",
+        "cause": "Şimdi dağıt, sertifikayı yalnızca ona bağlı web sitelerine yerleştirir ve bu web sitesi bunlardan biri değil.",
+        "action": "Önce web sitesini sertifikaya bağlayın ya da seçimin dışında bırakın."
       }
     },
     "tls": {
@@ -1701,6 +1716,18 @@
       "auto_renew_stopped": {
         "subject": "Otomatik yenileme durdu: {{name}} sertifikası",
         "body": "Art arda {{count}} deneme başarısız olduğu için Alice, {{names}} için sertifikayı kendiliğinden yenilemeyi durdurdu.\n\nSon denemenin nedeni: {{reason}}\n\nŞu anki sertifika {{expires_at}} tarihine kadar kullanılmaya devam eder. Bu tarihten sonra sertifikayı kullanan web sitelerinin ziyaretçileri bir güvenlik uyarısı görür.\n\nYapmanız gerekenler: Alice'te Verilen sertifikalar sayfasını açın ve bu sertifikayı seçin. Sertifikanın sayfasında her denemenin nedeni yer alır. Nedeni giderin, ardından Şimdi yenile düğmesine tıklayın. Bu yenileme başarılı olunca Alice sertifikayı yeniden kendiliğinden yeniler."
+      },
+      "auto_deploy_stopped": {
+        "subject": "Otomatik dağıtım durdu: {{name}} sertifikası",
+        "body": "{{names}} için yeni sertifikanın {{count}} dağıtımı başarısız olduğu için Alice, bu sertifikayı web sitelerine kendiliğinden yerleştirmeyi durdurdu.\n\nSon başarısız dağıtımın nedeni: {{reason}}\n\nBaşarısız her dağıtım geri alındı: ilgili web siteleri önceki sertifikalarını korur ve çalışmaya devam eder.\n\nYapmanız gerekenler: Alice'te Verilen sertifikalar sayfasını açın ve bu sertifikayı seçin. Sertifikanın sayfasında web siteleri ve her dağıtımın sonucu yer alır. Nedeni giderin, ardından Şimdi dağıt düğmesine tıklayın. Alice'in bu adlar için alacağı bir sonraki sertifika yeniden kendiliğinden dağıtılır."
+      },
+      "auto_deploy_held_license": {
+        "subject": "{{name}} için yeni sertifika bir yöneticiyi bekliyor",
+        "body": "Alice, {{names}} için yeni bir sertifikayı lisansı değişikliklere yeniden izin vermeden önce aldı. Lisansın değişikliklere izin vermediği bir sırada olan bir değişiklik kimseyi şaşırtmasın diye Alice böyle bir sertifikayı web sitelerine kendiliğinden yerleştirmez.\n\nWeb siteleri şu anki sertifikalarını korur.\n\nYapmanız gerekenler: Alice'te Verilen sertifikalar sayfasını açın ve bu sertifikayı seçin. Sertifikayı denetleyin, ardından Şimdi dağıt düğmesine tıklayın ya da Alice'in kendiliğinden dağıtması için sertifikayı serbest bırakın."
+      },
+      "auto_deploy_held_chain": {
+        "subject": "{{name}} için yeni sertifika dağıtılmadan önce denetlenmeli",
+        "body": "Alice, {{names}} için yeni bir sertifika aldı; ancak bu sertifikaya kefil olan sertifikaların güvendiği bir sertifika yetkilisine ulaştığını doğrulayamıyor. Bazı ziyaretçiler bir güvenlik uyarısı görebileceği için Alice böyle bir sertifikayı web sitelerine kendiliğinden yerleştirmez.\n\nWeb siteleri şu anki sertifikalarını korur.\n\nYapmanız gerekenler: Bir yönetici Alice'te Verilen sertifikalar sayfasını açar ve bu sertifikayı seçer. Sertifika yetkilisinin kendi sertifikası eksikse onu sertifika yetkilisinin ayarlarına ekleyin. Değilse sertifikayı denetleyin ve onaylayarak Şimdi dağıt düğmesine tıklayın."
       }
     },
     "rotation": {

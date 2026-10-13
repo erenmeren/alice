@@ -1130,7 +1130,7 @@
       },
       "location_bound": {
         "title": "Website already connected",
-        "cause": "This website is already connected to a certificate in a vault, and a website can follow only one.",
+        "cause": "This website is already connected to another certificate (in a vault, or from a certificate authority), and a website can follow only one.",
         "action": "Disconnect it from the other certificate first, or leave it out of this selection."
       },
       "binding_exists": {
@@ -1401,6 +1401,21 @@
         "title": "The interrupted certificate request was abandoned.",
         "cause": "Alice was stopped (or lost its job) while it asked the certificate authority for this certificate, and the request could not be finished afterwards: the authority had not issued the certificate yet. Nothing was stored and the prepared private key was deleted.",
         "action": "Request the certificate again. Any proof records that were still published are removed automatically."
+      },
+      "not_issued": {
+        "title": "This certificate has not been issued yet.",
+        "cause": "The certificate authority has not issued a certificate for these names yet, so there is nothing to connect to a website or to deploy.",
+        "action": "Get the certificate first (Renew now), then connect the websites or deploy it."
+      },
+      "location_bound": {
+        "title": "This website already follows another certificate.",
+        "cause": "A website can follow only one certificate: this one is already connected to another certificate from a certificate authority or to a certificate in a vault.",
+        "action": "Disconnect the website from the other certificate first, or choose another website."
+      },
+      "location_not_bound": {
+        "title": "This website is not connected to this certificate.",
+        "cause": "Deploy now puts the certificate only on the websites connected to it, and this website is not one of them.",
+        "action": "Connect the website to the certificate first, or leave it out of the selection."
       }
     },
     "tls": {
@@ -1701,6 +1716,18 @@
       "auto_renew_stopped": {
         "subject": "Automatic renewal stopped: certificate for {{name}}",
         "body": "Alice stopped renewing the certificate for {{names}} by itself, because {{count}} attempts in a row failed.\n\nReason of the last attempt: {{reason}}\n\nThe current certificate stays in use until {{expires_at}}. After that time, visitors of the websites that use it see a security warning.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page shows the reason of each attempt. Remove the cause, then choose Renew now. When that renewal succeeds, Alice renews the certificate by itself again."
+      },
+      "auto_deploy_stopped": {
+        "subject": "Automatic deployment stopped: certificate for {{name}}",
+        "body": "Alice stopped putting the new certificate for {{names}} on its websites by itself, because {{count}} deployments of it failed.\n\nReason of the last failed deployment: {{reason}}\n\nEach failed deployment was undone: the websites it was meant for keep the certificate they had before and keep working.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page lists the websites and the result of each deployment. Remove the cause, then choose Deploy now. The next certificate Alice gets for these names is deployed by itself again."
+      },
+      "auto_deploy_held_license": {
+        "subject": "New certificate for {{name}} is waiting for an administrator",
+        "body": "Alice got a new certificate for {{names}} before its license allowed changes again. Alice does not put such a certificate on the websites by itself, so that nobody is surprised by a change that happened while the license did not allow changes.\n\nThe websites keep the certificate they have now.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Check it, then choose Deploy now, or release it so that Alice deploys it by itself."
+      },
+      "auto_deploy_held_chain": {
+        "subject": "New certificate for {{name}} needs a check before it is deployed",
+        "body": "Alice got a new certificate for {{names}}, but Alice cannot confirm that the certificates that vouch for it reach a certificate authority it trusts. Alice does not put such a certificate on the websites by itself, because some visitors might see a security warning.\n\nThe websites keep the certificate they have now.\n\nWhat to do: an administrator opens Issued certificates in Alice and chooses this certificate. If the certificate authority's own certificate is missing, add it to the certificate authority's settings. Otherwise check the certificate and choose Deploy now with the confirmation."
       }
     },
     "rotation": {

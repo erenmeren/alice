@@ -263,9 +263,16 @@ func certificateRefusal(c kvCertInfo) (string, error) {
 	return "", nil
 }
 
-// lockedLocations reads which binding each location belongs to (the locations are locked).
+// acmeBoundMark is what lockedBindingsOf reports for a location bound to an ACME certificate: an id no Key Vault binding
+// has, so checkBindable refuses the location (ErrLocationBound) like one bound to another vault certificate.
+var acmeBoundMark = uuid.Max
+
+// lockedLocations reads which binding each location belongs to (the locations are locked): its Key Vault binding, or
+// acmeBoundMark when it follows an ACME certificate (acme_bindings; a location follows one source only, and AddACMEBinding
+// holds the same location lock while it checks binding_id).
 func lockedBindingsOf(ctx context.Context, tx pgx.Tx, ids []uuid.UUID) (map[uuid.UUID]*uuid.UUID, error) {
-	rows, err := tx.Query(ctx, "SELECT id, binding_id FROM certificate_locations WHERE id = ANY($1)", ids)
+	rows, err := tx.Query(ctx, `SELECT l.id, CASE WHEN EXISTS (SELECT 1 FROM acme_bindings a WHERE a.location_id = l.id) THEN $2::uuid ELSE l.binding_id END
+FROM certificate_locations l WHERE l.id = ANY($1)`, ids, acmeBoundMark)
 	if err != nil {
 		return nil, fmt.Errorf("inventory: read the locations' bindings: %w", err)
 	}
