@@ -309,6 +309,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
 
       // The export holds exactly the rows the table shows, in order, with a byte order mark and the header row.
       const shown = await tableNames(page, 'certificates-table');
+      const firstExportAt = Date.now();
       const csv = await exportCsv(page, t);
       expect(csv.name).toMatch(/^alice-certificates-\d{4}-\d{2}-\d{2}\.csv$/);
       expect(csv.bom, 'UTF-8 byte order mark').toBe(true);
@@ -375,7 +376,11 @@ for (const lang of ['en', 'tr'] as Lang[]) {
         if (outcome === 'saved') saved++;
       }
       await expect(refused).toBeVisible();
-      expect(saved, 'exports saved before the limit').toBeLessThanOrEqual(8);
+      // The limiter is a token bucket (10 tokens, refilled at 10 a minute: one every 6 s), not a fixed window. The two
+      // exports above took two tokens; every 6 s since the first has given one back, which a slow browser (Firefox,
+      // WebKit) makes visible: the loop of clicks then saves more than 8 files.
+      const refilled = Math.ceil((Date.now() - firstExportAt) / 6_000);
+      expect(saved, 'exports saved before the limit').toBeLessThanOrEqual(8 + refilled);
 
       // Owner step 1 (F-62): the mail settings, the untrusted certificate, trust, the test e-mail.
       await page.goto('/');
