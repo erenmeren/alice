@@ -111,3 +111,25 @@ func TestResumeChecksTheChain(t *testing.T) {
 	_, err = c.ResumeOrder(testCtx(t), url, names, csr)
 	requireReason(t, err, ReasonProviderUnreachable)
 }
+
+// WithBeforeFinalize runs after the authorizations are valid and can stop the order before the CSR is sent.
+func TestBeforeFinalizeCanStopTheOrder(t *testing.T) {
+	s := startFake(t, fakeacme.Options{})
+	c := registered(t, s)
+	ws := newWebSolver(t, s, solver.DNS01)
+	names := []string{"fin.example.test"}
+	csr, _ := csrFor(t, names...)
+	stop := errors.New("locked")
+	validated := 0
+	_, err := c.Order(testCtx(t), names, csr, ws, WithBeforeFinalize(func() error {
+		validated = s.Counters()["validations-dns-01"]
+		return stop
+	}))
+	requireReason(t, err, ReasonDirectoryInvalid)
+	assert.ErrorIs(t, err, stop)
+	assert.Equal(t, 1, validated, "called after the authorization was validated")
+	assert.Zero(t, s.Counters()["finalize"])
+	_, err = c.Order(testCtx(t), names, csr, ws, WithBeforeFinalize(func() error { return nil }))
+	require.NoError(t, err)
+	assert.Equal(t, 1, s.Counters()["finalize"])
+}

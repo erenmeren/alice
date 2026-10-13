@@ -16,9 +16,10 @@ import (
 type OrderOption func(*orderOpts)
 
 type orderOpts struct {
-	onOrder   func(orderURL string) error
-	onPresent func(solver.Challenge) error
-	onCleanUp func(solver.Challenge, error)
+	onOrder    func(orderURL string) error
+	onFinalize func() error
+	onPresent  func(solver.Challenge) error
+	onCleanUp  func(solver.Challenge, error)
 }
 
 // WithOnOrder is called with the order's URL as soon as the CA created the order, before any challenge is
@@ -42,6 +43,13 @@ func WithOnCleanUp(f func(solver.Challenge, error)) OrderOption {
 	return func(o *orderOpts) { o.onCleanUp = f }
 }
 
+// WithBeforeFinalize is called by Order after every authorization is valid and right before the CSR is sent
+// (finalize), so the caller can ask once more whether it may still change anything (a licence lock). An error stops the
+// order before finalize, as an *Error with reason directory_invalid whose errors.Is finds the callback's error.
+func WithBeforeFinalize(f func() error) OrderOption {
+	return func(o *orderOpts) { o.onFinalize = f }
+}
+
 // Order orders a certificate for names with the CSR csrDER and returns the chain (leaf first, DER). The CSR
 // must hold exactly the names (checked before the CA is contacted). Every presented challenge is cleaned up
 // before Order returns, whatever happens.
@@ -59,6 +67,15 @@ func (c *Client) Order(ctx context.Context, names []string, csrDER []byte, s sol
 	o, err := c.authorize(ctx, norm, s, opts)
 	if err != nil {
 		return nil, err
+	}
+	var oo orderOpts
+	for _, f := range opts {
+		f(&oo)
+	}
+	if oo.onFinalize != nil {
+		if err := oo.onFinalize(); err != nil {
+			return nil, &Error{Reason: ReasonDirectoryInvalid, cause: callbackCause{err: err}}
+		}
 	}
 	var chain [][]byte
 	err = c.call(ctx, func(ctx context.Context) error {
