@@ -52,6 +52,7 @@
   background: var(--alice-surface-subtle);
   white-space: nowrap;
 }
+.table :global(.mantine-ActionIcon-root):focus-visible { outline-offset: -3px; }
 .table tbody td { padding: 13px 18px; height: var(--alice-row-height); vertical-align: middle; }
 
 .tabsList { gap: 24px; --tab-border-color: var(--alice-border); }

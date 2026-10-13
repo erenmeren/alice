@@ -240,6 +240,13 @@ describe('design rules', () => {
     expect(moduleCss).toMatch(/\.table \.badgeLabel\s*\{\s*white-space:\s*nowrap/);
   });
 
+  // Found by the Phase 9 focus scan on Firefox and WebKit (e2e/phase9.spec.ts, /servers at 1024 px, Turkish): the table is
+  // a few px wider than its scroll region there, so the open-row icon link of the last column sits 2 px from the region's
+  // clip and its 3 px ring plus 3 px offset was cut off. Inside a table the ring of an icon action is drawn inside it.
+  it('draws the focus ring of an icon action in a table inside the control, so no scroll region clips it', () => {
+    expect(moduleCss).toMatch(/\.table :global\(\.mantine-ActionIcon-root\):focus-visible\s*\{\s*outline-offset:\s*-3px/);
+  });
+
   it('draws checked Checkbox, Radio and Switch with the design classes in dark mode', async () => {
     await renderApp(
       createElement('div', null,
