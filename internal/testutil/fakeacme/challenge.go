@@ -3,6 +3,8 @@ package fakeacme
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -30,13 +32,16 @@ func (s *Server) newHTTPClient() *http.Client {
 				s.mu.Lock()
 				target, ok := s.st.targets[host]
 				s.mu.Unlock()
-				if ok {
-					if _, _, err := net.SplitHostPort(target); err != nil {
-						target = net.JoinHostPort(target, port)
-					}
-					addr = target
+				if !ok {
+					// Only names the admin mapped are ever dialled: an order for any other name (an address,
+					// a metadata host, a container) must not make the fake connect anywhere.
+					return nil, errors.New("fakeacme: the name is not mapped to a target")
 				}
-				return d.DialContext(ctx, network, addr)
+				if _, _, err := net.SplitHostPort(target); err != nil {
+					target = net.JoinHostPort(target, port)
+				}
+				s.count("http-01-dials")
+				return d.DialContext(ctx, network, target)
 			},
 			DisableKeepAlives: true,
 		},
@@ -88,6 +93,9 @@ func (s *Server) ownedAuthz(w http.ResponseWriter, r *http.Request, req *jwsReq)
 }
 
 func (s *Server) handleAuthz(w http.ResponseWriter, r *http.Request, req *jwsReq) {
+	if !s.requireEmpty(w, req) {
+		return
+	}
 	az, ok := s.ownedAuthz(w, r, req)
 	if !ok {
 		return
@@ -96,6 +104,11 @@ func (s *Server) handleAuthz(w http.ResponseWriter, r *http.Request, req *jwsReq
 }
 
 func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request, req *jwsReq) {
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(req.payload, &body); err != nil || len(body) != 0 {
+		s.writeProblem(w, malformed(http.StatusBadRequest, "a challenge request body must be {}"))
+		return
+	}
 	n, err := strconv.Atoi(r.PathValue("n"))
 	s.mu.Lock()
 	az := s.st.authzs[r.PathValue("id")]

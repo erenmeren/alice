@@ -61,7 +61,7 @@ func TestJWSIsVerified(t *testing.T) {
 	j["payload"] = base64.RawURLEncoding.EncodeToString([]byte(`{"identifiers":[{"type":"dns","value":"evil.example.test"}]}`))
 	tampered, _ := json.Marshal(j)
 	status, _ = rawPost(t, s, dir.OrderURL, "application/jose+json", tampered)
-	assert.Equal(t, 401, status)
+	assert.Equal(t, 400, status)
 
 	// The signed url must be the request url.
 	status, doc = rawPost(t, s, dir.OrderURL+"x", "application/jose+json", good())
@@ -69,7 +69,7 @@ func TestJWSIsVerified(t *testing.T) {
 	_ = doc
 	other := signedBody(t, c, s.BaseURL()+"/acme/other", nonceOf(t, s), `{}`)
 	status, doc = rawPost(t, s, dir.OrderURL, "application/jose+json", other)
-	assert.Equal(t, 401, status)
+	assert.Equal(t, 400, status)
 	assert.Contains(t, doc["detail"], "url")
 
 	// An unknown account key id.

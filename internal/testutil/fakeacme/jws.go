@@ -202,7 +202,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, mode jwsMo
 		return nil, prob
 	}
 	if h.URL != s.BaseURL()+r.URL.Path {
-		return nil, malformed(http.StatusUnauthorized, "the url in the JWS protected header does not match the request URL")
+		return nil, malformed(http.StatusBadRequest, "the url in the JWS protected header does not match the request URL")
 	}
 	if !s.takeNonce(h.Nonce) {
 		return nil, newProblem(http.StatusBadRequest, "badNonce", "the nonce is unknown or was already used")
@@ -221,14 +221,14 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, mode jwsMo
 			return nil, newProblem(http.StatusBadRequest, "accountDoesNotExist", "no account for this key id")
 		}
 		if a.status != "valid" {
-			return nil, newProblem(http.StatusUnauthorized, "unauthorized", "the account is "+a.status)
+			return nil, newProblem(http.StatusForbidden, "unauthorized", "the account is "+a.status)
 		}
 		out.key, out.acct = a.key, a
 	default:
 		return nil, malformed(http.StatusBadRequest, "the JWS must carry exactly one of jwk (newAccount) and kid (everything else)")
 	}
 	if err := verifyJWS(j, h, out.key); err != nil {
-		return nil, newProblem(http.StatusUnauthorized, "malformed", "the JWS signature failed: "+err.Error())
+		return nil, malformed(http.StatusBadRequest, "the JWS signature failed: "+err.Error())
 	}
 	if j.Payload != "" {
 		p, err := base64.RawURLEncoding.DecodeString(j.Payload)
@@ -283,4 +283,13 @@ func decodeJSON(payload []byte, v any) *problem {
 		return malformed(http.StatusBadRequest, fmt.Sprintf("the request payload is not valid: %v", err))
 	}
 	return nil
+}
+
+// requireEmpty enforces POST-as-GET (RFC 8555 section 6.3): the payload must be empty.
+func (s *Server) requireEmpty(w http.ResponseWriter, req *jwsReq) bool {
+	if len(req.payload) != 0 {
+		s.writeProblem(w, malformed(http.StatusBadRequest, "a POST-as-GET request must have an empty payload"))
+		return false
+	}
+	return true
 }

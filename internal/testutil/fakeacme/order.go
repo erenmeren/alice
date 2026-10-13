@@ -30,6 +30,9 @@ func checkName(v string) (base string, wildcard bool, err error) {
 	if base != asciiLower(base) || len(base) > 253 || strings.Count(base, ".") < 1 {
 		return "", false, fmt.Errorf("%q is not a fully qualified lower-case name", v)
 	}
+	if last := base[strings.LastIndex(base, ".")+1:]; strings.Trim(last, "0123456789") == "" {
+		return "", false, fmt.Errorf("%q looks like an IP address; the CA issues for DNS names only", v)
+	}
 	for _, l := range strings.Split(base, ".") {
 		if !labelRE.MatchString(l) {
 			return "", false, fmt.Errorf("%q is not a valid DNS name", v)
@@ -189,6 +192,9 @@ func (s *Server) ownedOrder(w http.ResponseWriter, r *http.Request, req *jwsReq,
 }
 
 func (s *Server) handleOrder(w http.ResponseWriter, r *http.Request, req *jwsReq) {
+	if !s.requireEmpty(w, req) {
+		return
+	}
 	o, ok := s.ownedOrder(w, r, req, true)
 	if !ok {
 		return
@@ -324,6 +330,9 @@ func (s *Server) handleFinalize(w http.ResponseWriter, r *http.Request, req *jws
 }
 
 func (s *Server) handleCertificate(w http.ResponseWriter, r *http.Request, req *jwsReq) {
+	if !s.requireEmpty(w, req) {
+		return
+	}
 	n := 0
 	if v := r.PathValue("n"); v != "" {
 		var err error

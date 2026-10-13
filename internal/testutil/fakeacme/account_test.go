@@ -129,7 +129,9 @@ func TestUpdateAndDeactivate(t *testing.T) {
 
 	require.NoError(t, c.DeactivateReg(ctx(t)))
 	_, err = c.AuthorizeOrder(ctx(t), idents("a.example.test"))
-	assert.Equal(t, "urn:ietf:params:acme:error:unauthorized", problemOf(t, err).ProblemType)
+	ae := problemOf(t, err)
+	assert.Equal(t, "urn:ietf:params:acme:error:unauthorized", ae.ProblemType)
+	assert.Equal(t, 403, ae.StatusCode)
 	// The key is still taken: it cannot register again.
 	got, err := c.GetReg(ctx(t), "")
 	require.NoError(t, err)
