@@ -141,8 +141,13 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, now(), now())`
 	bad("dns-01 needs a hook", cert, with(6, nil)...)
 	bad("renew window 0", cert, with(7, 0)...)
 	bad("renew window 61", cert, with(7, 61)...)
-	_, err = d.App.Exec(ctx, cert, uuid.New(), w.provider, w.account, []string{"b.corp.example"}, "ecdsa_p384", "http01", nil, 30)
-	require.NoError(t, err, "http-01 needs no hook")
+	bad("http-01 needs its server", cert, uuid.New(), w.provider, w.account, []string{"b.corp.example"}, "ecdsa_p384", "http01", nil, 30)
+	withTarget := `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, state,
+renew_before_days, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', 30, now(), now())`
+	_, err = d.App.Exec(ctx, withTarget, uuid.New(), w.provider, w.account, []string{"b.corp.example"}, "ecdsa_p384", "http01", nil, w.target)
+	require.NoError(t, err, "http-01 needs no hook, only the server the names point at")
+	bad("a dns-01 certificate has no HTTP-01 server", withTarget, uuid.New(), w.provider, w.account, []string{"c.corp.example"}, "ecdsa_p256",
+		"dns01", w.hook, w.target)
 
 	order := `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, finished_at) VALUES ($1, $2, $3, $4, now(), $5)`
 	now := time.Now()
@@ -233,7 +238,7 @@ func TestAcmeOrdersAreFrozenOnceFinished(t *testing.T) {
 	running := uuid.New()
 	_, err = d.App.Exec(ctx, `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, pending_key_ct, pending_key_nonce,
 pending_key_wrapped_dek, pending_key_version, presented) VALUES ($1, $2, 'issue', 'running', now(), `+`'\x01', decode(repeat('00', 12), 'hex'), '\x02', 1,
-'[{"kind":"dns","name":"_acme-challenge.www.corp.example"}]')`, running, w.acmeCert)
+'[{"kind":"dns","name":"_acme-challenge.www.corp.example"},{"kind":"dns","name":"_acme-challenge.corp.example"}]')`, running, w.acmeCert)
 	require.NoError(t, err)
 	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET order_url = 'https://ca.corp.example/order/2' WHERE id = $1", running)
 	require.NoError(t, err)
@@ -243,8 +248,17 @@ pending_key_wrapped_dek, pending_key_version, presented) VALUES ($1, $2, 'issue'
 	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET error_code = '' WHERE id = $1", running)
 	assert.Equal(t, orderFrozen, sqlState(err))
 	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET presented = '[{\"x\":1}]' WHERE id = $1", running)
-	assert.Equal(t, orderFrozen, sqlState(err), "presented may only be emptied")
-	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET presented = '[]' WHERE id = $1", running)
+	assert.Equal(t, orderFrozen, sqlState(err), "presented may only shrink")
+	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET presented = presented || '[{"kind":"dns","name":"_acme-challenge.api.corp.example"}]'
+WHERE id = $1`, running)
+	assert.Equal(t, orderFrozen, sqlState(err), "a finished order never gains a presented record")
+	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET presented = '[{"kind":"dns","name":"_acme-challenge.corp.example"}]' WHERE id = $1`, running)
+	require.NoError(t, err, "the cleanup job removes the records it cleaned one by one")
+	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET cleanup_at = now(), cleanup_error_code = 'acme.hook_refused' WHERE id = $1", running)
+	require.NoError(t, err, "the cleanup job records its attempt on a finished order")
+	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET cleanup_error_code = 'not a code!' WHERE id = $1", running)
+	assert.Equal(t, checkViolation, sqlState(err))
+	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET presented = '[]', cleanup_error_code = '' WHERE id = $1", running)
 	require.NoError(t, err)
 	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET pending_key_ct = NULL, pending_key_nonce = NULL, pending_key_wrapped_dek = NULL,
 pending_key_version = NULL WHERE id = $1`, running)

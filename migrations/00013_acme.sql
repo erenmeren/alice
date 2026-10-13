@@ -119,6 +119,8 @@ CREATE UNIQUE INDEX acme_hooks_name ON acme_hooks (name) WHERE deleted_at IS NUL
 
 -- The ordered identity: names, key policy, proof method and renewal window. current_certificate_id is the leaf of the
 -- last successful order (a normal certificates row with source 'acme'). Soft-deleted, never removed (orders refer to it).
+-- A DNS-01 certificate publishes through its hook; an HTTP-01 certificate through the managed Nginx server its names
+-- point at (http_target_id: that server's helper writes the token file), and only an HTTP-01 one has such a server.
 CREATE TABLE acme_certificates (
     id                     uuid PRIMARY KEY,
     provider_id            uuid NOT NULL REFERENCES acme_providers (id),
@@ -127,6 +129,7 @@ CREATE TABLE acme_certificates (
     key_type               text NOT NULL CHECK (key_type IN ('ecdsa_p256', 'ecdsa_p384', 'rsa_2048', 'rsa_3072', 'rsa_4096')),
     challenge              text NOT NULL CHECK (challenge IN ('dns01', 'http01')),
     hook_id                uuid REFERENCES acme_hooks (id),
+    http_target_id         uuid REFERENCES targets (id),
     renew_before_days      integer NOT NULL DEFAULT 30 CHECK (renew_before_days BETWEEN 1 AND 60),
     auto_renew             boolean NOT NULL DEFAULT true,
     auto_deploy            boolean NOT NULL DEFAULT false,
@@ -140,18 +143,21 @@ CREATE TABLE acme_certificates (
     created_at             timestamptz NOT NULL,
     updated_at             timestamptz NOT NULL,
     deleted_at             timestamptz,
-    CHECK (challenge <> 'dns01' OR hook_id IS NOT NULL)
+    CHECK (challenge <> 'dns01' OR hook_id IS NOT NULL),
+    CHECK ((challenge = 'http01') = (http_target_id IS NOT NULL))
 );
 CREATE INDEX acme_certificates_provider ON acme_certificates (provider_id);
 CREATE INDEX acme_certificates_account ON acme_certificates (account_id);
 CREATE INDEX acme_certificates_hook ON acme_certificates (hook_id) WHERE hook_id IS NOT NULL;
+CREATE INDEX acme_certificates_http_target ON acme_certificates (http_target_id) WHERE http_target_id IS NOT NULL;
 CREATE INDEX acme_certificates_current ON acme_certificates (current_certificate_id) WHERE current_certificate_id IS NOT NULL;
 CREATE INDEX acme_certificates_due ON acme_certificates (next_attempt_at, id) WHERE auto_renew AND deleted_at IS NULL;
 
 -- One order (an issue or a test run) of an ACME certificate. Append-only once finished. While it runs it holds, in
 -- deletable columns, the sealed private key of the certificate being ordered (pending_key_*, AAD
 -- acme_orders/<id>/pending_key; A8: moved to managed_private_keys with the certificates row in one transaction on success,
--- deleted on failure) and the challenge records it presented (presented, A12: DNS records and token files the cleanup job removes).
+-- deleted on failure) and the challenge records it presented (presented, A12: DNS records and token files the cleanup job removes;
+-- cleanup_at and cleanup_error_code are the last cleanup attempt and its failure, '' when it removed everything).
 CREATE TABLE acme_orders (
     id                      uuid PRIMARY KEY,
     acme_certificate_id     uuid NOT NULL REFERENCES acme_certificates (id),
@@ -168,6 +174,8 @@ CREATE TABLE acme_orders (
     pending_key_wrapped_dek bytea CHECK (octet_length(pending_key_wrapped_dek) BETWEEN 1 AND 1024),
     pending_key_version     integer CHECK (pending_key_version >= 1),
     presented               jsonb NOT NULL DEFAULT '[]' CHECK (jsonb_typeof(presented) = 'array' AND octet_length(presented::text) <= 65536),
+    cleanup_at              timestamptz,
+    cleanup_error_code      text NOT NULL DEFAULT '' CHECK (cleanup_error_code ~ '^[A-Za-z0-9._-]{0,100}$'),
     CHECK ((state = 'running') = (finished_at IS NULL)),
     CHECK ((pending_key_ct IS NULL) = (pending_key_nonce IS NULL) AND (pending_key_ct IS NULL) = (pending_key_wrapped_dek IS NULL)
            AND (pending_key_ct IS NULL) = (pending_key_version IS NULL))
@@ -178,17 +186,20 @@ CREATE INDEX acme_orders_certificate ON acme_orders (acme_certificate_id, starte
 CREATE INDEX acme_orders_issued ON acme_orders (certificate_id) WHERE certificate_id IS NOT NULL;
 CREATE INDEX acme_orders_presented ON acme_orders (finished_at) WHERE presented <> '[]'::jsonb; -- the cleanup sweep
 
--- A finished order is history: nothing changes except the pending key going to NULL (all four columns together by the CHECK)
--- and the presented list being emptied once the cleanup job removed the records. SQLSTATE Z1017.
+-- A finished order is history: nothing changes except the pending key going to NULL (all four columns together by the CHECK),
+-- the presented list shrinking as the cleanup job removes the records (never gaining one), and the cleanup job's last
+-- attempt (cleanup_at, cleanup_error_code). SQLSTATE Z1017.
 -- +goose StatementBegin
 CREATE FUNCTION acme_orders_protect_done() RETURNS trigger LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
     IF OLD.state <> 'running' THEN
-        IF (to_jsonb(NEW) - 'pending_key_ct' - 'pending_key_nonce' - 'pending_key_wrapped_dek' - 'pending_key_version' - 'presented')
-                IS DISTINCT FROM (to_jsonb(OLD) - 'pending_key_ct' - 'pending_key_nonce' - 'pending_key_wrapped_dek' - 'pending_key_version' - 'presented')
+        IF (to_jsonb(NEW) - 'pending_key_ct' - 'pending_key_nonce' - 'pending_key_wrapped_dek' - 'pending_key_version' - 'presented'
+                - 'cleanup_at' - 'cleanup_error_code')
+                IS DISTINCT FROM (to_jsonb(OLD) - 'pending_key_ct' - 'pending_key_nonce' - 'pending_key_wrapped_dek' - 'pending_key_version' - 'presented'
+                - 'cleanup_at' - 'cleanup_error_code')
            OR (NEW.pending_key_ct IS NOT NULL AND NEW.pending_key_ct IS DISTINCT FROM OLD.pending_key_ct)
-           OR (NEW.presented IS DISTINCT FROM OLD.presented AND NEW.presented <> '[]'::jsonb) THEN
+           OR NOT (OLD.presented @> NEW.presented) THEN
             RAISE EXCEPTION 'a finished ACME order cannot be changed' USING ERRCODE = 'Z1017';
         END IF;
     END IF;
@@ -228,10 +239,10 @@ GRANT UPDATE (name, directory_url, ca_bundle_pem, preset, eab_kid, eab_hmac_ct, 
 GRANT UPDATE (contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at, state, updated_at) ON acme_accounts TO alice_app;
 GRANT UPDATE (name, url, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, allowed_suffixes,
     propagation_wait_seconds, poll_timeout_seconds, updated_at, deleted_at) ON acme_hooks TO alice_app;
-GRANT UPDATE (account_id, names, key_type, challenge, hook_id, renew_before_days, auto_renew, auto_deploy, state, current_certificate_id,
+GRANT UPDATE (provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew, auto_deploy, state, current_certificate_id,
     failures, next_attempt_at, last_attempt_at, last_error_code, updated_at, deleted_at) ON acme_certificates TO alice_app;
 GRANT UPDATE (state, finished_at, error_code, order_url, certificate_id, pending_key_ct, pending_key_nonce, pending_key_wrapped_dek,
-    pending_key_version, presented) ON acme_orders TO alice_app;
+    pending_key_version, presented, cleanup_at, cleanup_error_code) ON acme_orders TO alice_app;
 GRANT UPDATE (auto_deploy) ON acme_bindings TO alice_app;
 
 -- +goose Down
