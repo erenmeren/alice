@@ -2,7 +2,7 @@ import { Anchor, Button, Code, Group, Loader, Stack, Switch, Table, Text } from 
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import {
   certificateStateKey,
   challengeKey,
@@ -88,7 +88,10 @@ export function AcmeCertificatePage() {
 
   const [busy, setBusy] = useState<'test' | 'order' | 'rearm' | 'autoRenew' | null>(null);
   const [actionError, setActionError] = useState<unknown>(null);
-  const [testId, setTestId] = useState<string | null>(null);
+  // A Test run started by the wizard's "Run a test first" arrives in the navigation state: its result is shown here too.
+  const location = useLocation();
+  const started = (location.state as { testOrderId?: unknown } | null)?.testOrderId;
+  const [testId, setTestId] = useState<string | null>(typeof started === 'string' ? started : null);
   const [deleting, setDeleting] = useState(false);
   const [rearmed, setRearmed] = useState(false);
 

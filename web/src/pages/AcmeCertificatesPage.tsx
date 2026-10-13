@@ -143,9 +143,9 @@ export function AcmeCertificatesPage() {
       {creating && (
         <GetCertificateDialog
           onClose={() => setCreating(false)}
-          onOpen={(id) => {
+          onOpen={(id, testOrderId) => {
             setCreating(false);
-            navigate(`/acme/${id}`);
+            void navigate(`/acme/${id}`, testOrderId ? { state: { testOrderId } } : undefined);
           }}
         />
       )}

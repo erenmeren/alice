@@ -39,7 +39,7 @@ const NGINX_SNIPPET = 'location ^~ /.well-known/acme-challenge/ {\n    root /var
 // for the code; a cancelled code keeps every answer). Saving orders nothing: the done step offers a Test run
 // (recommended) or the real order. Websites are connected on the certificate's page once it is issued (the server
 // binds a website only to an issued certificate).
-export function GetCertificateDialog({ onClose, onOpen }: { onClose: () => void; onOpen: (id: string) => void }) {
+export function GetCertificateDialog({ onClose, onOpen }: { onClose: () => void; onOpen: (id: string, testOrderId: string | null) => void }) {
   const { t, i18n } = useTranslation();
   const client = useQueryClient();
   const { run } = useStepUp();
@@ -168,9 +168,10 @@ export function GetCertificateDialog({ onClose, onOpen }: { onClose: () => void;
     setStarting(kind);
     setStartError(null);
     try {
-      await (kind === 'test' ? testACMECertificate(created.id) : orderACMECertificate(created.id));
+      const started = await (kind === 'test' ? testACMECertificate(created.id) : orderACMECertificate(created.id));
       void client.invalidateQueries({ queryKey: ACME_CERTIFICATES_KEY });
-      onOpen(created.id);
+      // The status page follows the Test run it opens with (its result panel), as after its own Test run button.
+      onOpen(created.id, kind === 'test' ? started.id : null);
     } catch (err) {
       setStartError(err);
       setStarting(null);
@@ -199,7 +200,7 @@ export function GetCertificateDialog({ onClose, onOpen }: { onClose: () => void;
           <Text size="sm">{t('acme.issued.wizard.testHelp')}</Text>
           <ErrorAlert error={startError} />
           <DialogActions>
-            <Button variant="default" disabled={busy} onClick={() => onOpen(created.id)}>
+            <Button variant="default" disabled={busy} onClick={() => onOpen(created.id, null)}>
               {t('acme.issued.wizard.later')}
             </Button>
             <Button variant="default" loading={starting === 'order'} disabled={busy} onClick={() => void start('order')}>

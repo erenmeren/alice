@@ -278,6 +278,24 @@ describe('Issued certificate status page', () => {
     });
   });
 
+  it('follows the Test run the wizard started ("Run a test first") with its result panel', async () => {
+    base({
+      session: sessionFor('admin'),
+      cert: acmeCertificateFixture({ state: 'pending' }),
+      orders: [acmeOrderFixture({ id: 'from-wizard', kind: 'test', state: 'succeeded', certificate_id: null })],
+    });
+    await renderRoute({ pathname: `/acme/${ID}`, state: { testOrderId: 'from-wizard' } });
+    expect(await screen.findByText('Test run succeeded: the authority verified every name')).toBeInTheDocument();
+    expect(screen.getByTestId('test-result')).toHaveTextContent('Nothing was issued or installed.');
+  });
+
+  it('ignores a navigation state that is not a Test run', async () => {
+    base({ session: sessionFor('admin'), cert: acmeCertificateFixture({ state: 'pending' }) });
+    await renderRoute({ pathname: `/acme/${ID}`, state: { testOrderId: 42 } });
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(screen.queryByTestId('test-result')).not.toBeInTheDocument();
+  });
+
   it('reports a failed Test run with the reason and what to do', async () => {
     base({
       session: sessionFor('operator'),

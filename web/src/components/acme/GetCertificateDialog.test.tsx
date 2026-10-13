@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ACMEProvider } from '../../api/acme';
-import { ACME_CERT_ID, ACME_HOOK_ID, ACME_PROVIDER_ID, acmeCertificateFixture, acmeHookFixture, acmeOrderFixture, acmeProviderFixture, adminSession, errorResponse, nginxTargetFixture, sessionFor, sessionHandlers } from '../../test/fixtures';
+import { ACME_CERT_ID, ACME_HOOK_ID, ACME_ORDER_ID, ACME_PROVIDER_ID, acmeCertificateFixture, acmeHookFixture, acmeOrderFixture, acmeProviderFixture, adminSession, errorResponse, nginxTargetFixture, sessionFor, sessionHandlers } from '../../test/fixtures';
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderWithStepUp } from '../../test/render';
 import { server } from '../../test/server';
@@ -123,7 +123,7 @@ describe('Get a certificate', () => {
     expect(creates).toBe(2);
     expect(client.getQueryState(['acme', 'certificates', 'list', {}])?.isInvalidated).toBe(true);
     await userEvent.click(within(d).getByRole('button', { name: 'Run a test first' }));
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(ACME_CERT_ID));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(ACME_CERT_ID, ACME_ORDER_ID));
     expect(tests).toBe(1);
   });
 
@@ -145,7 +145,7 @@ describe('Get a certificate', () => {
     await next();
     await userEvent.click(within(dialog()).getByRole('button', { name: 'Save certificate' }));
     await userEvent.click(await within(dialog()).findByRole('button', { name: 'Get certificate now' }));
-    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(ACME_CERT_ID));
+    await waitFor(() => expect(onOpen).toHaveBeenCalledWith(ACME_CERT_ID, null));
     expect(orders).toBe(1);
   });
 
@@ -169,7 +169,7 @@ describe('Get a certificate', () => {
     expect(await within(dialog()).findByRole('alert')).toHaveTextContent('ALC-LIC-0001');
     expect(onOpen).not.toHaveBeenCalled();
     await userEvent.click(within(dialog()).getByRole('button', { name: 'Open the certificate' }));
-    expect(onOpen).toHaveBeenCalledWith(ACME_CERT_ID);
+    expect(onOpen).toHaveBeenCalledWith(ACME_CERT_ID, null);
   });
 
   it('asks for an authority before going on', async () => {
