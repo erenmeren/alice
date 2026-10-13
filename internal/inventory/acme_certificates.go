@@ -88,9 +88,28 @@ type ACMECertificate struct {
 	LastErrorCode        string     `json:"last_error_code"`
 	RunningOrderID       *uuid.UUID `json:"running_order_id,omitempty"`
 	Bindings             int        `json:"bindings"`
-	CreatedBy            *uuid.UUID `json:"created_by,omitempty"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	// The current certificate's leaf (nil before the first issuance): what is served once it is deployed.
+	Current *ACMECurrentCertificate `json:"current,omitempty"`
+	// The CA's suggested renewal window (ARI, RFC 9773) when one is cached.
+	ARIWindowStart *time.Time `json:"ari_window_start,omitempty"`
+	ARIWindowEnd   *time.Time `json:"ari_window_end,omitempty"`
+	// DeployHeldReason is why automatic deployment holds the current certificate ('' when it does not: never held, or
+	// released from the licence hold): ACMEHoldLicense or ACMEHoldChainIncomplete. DeployStopped: automatic deployment of
+	// the current certificate stopped after repeated failures.
+	DeployHeldReason string     `json:"deploy_held_reason"`
+	DeployStopped    bool       `json:"deploy_stopped"`
+	CreatedBy        *uuid.UUID `json:"created_by,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+// ACMECurrentCertificate summarises the current certificate of an ACME certificate (no key, no PEM).
+type ACMECurrentCertificate struct {
+	ID            uuid.UUID `json:"id"`
+	Fingerprint   string    `json:"fingerprint_sha256"`
+	NotBefore     time.Time `json:"not_before"`
+	NotAfter      time.Time `json:"not_after"`
+	ChainComplete bool      `json:"chain_complete"`
 }
 
 // ACMECertificateInput is the input of CreateACMECertificate. KeyType "" is ecdsa_p256; RenewBeforeDays 0 is 30;
@@ -244,15 +263,34 @@ const acmeCertColumns = `c.id, c.provider_id, c.account_id, c.names, c.key_type,
 c.auto_renew, c.auto_deploy, c.state, c.current_certificate_id, c.failures, c.next_attempt_at, c.last_attempt_at, c.last_error_code,
 (SELECT o.id FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.state = 'running'),
 (SELECT count(*) FROM acme_bindings b WHERE b.acme_certificate_id = c.id),
+(SELECT cur.fingerprint_sha256 FROM certificates cur WHERE cur.id = c.current_certificate_id),
+(SELECT cur.not_before FROM certificates cur WHERE cur.id = c.current_certificate_id),
+(SELECT cur.not_after FROM certificates cur WHERE cur.id = c.current_certificate_id),
+(SELECT cur.chain_complete FROM certificates cur WHERE cur.id = c.current_certificate_id),
+c.ari_window_start, c.ari_window_end,
+CASE WHEN c.current_certificate_id IS NOT NULL AND c.deploy_held_certificate_id = c.current_certificate_id
+    AND NOT (c.deploy_held_reason = 'license' AND c.deploy_released_certificate_id IS NOT DISTINCT FROM c.current_certificate_id)
+    THEN c.deploy_held_reason ELSE '' END,
+c.current_certificate_id IS NOT NULL AND c.deploy_stopped_certificate_id IS NOT DISTINCT FROM c.current_certificate_id,
 c.created_by, c.created_at, c.updated_at`
 
 func scanACMECert(row pgx.Row) (ACMECertificate, error) {
-	var c ACMECertificate
+	var (
+		c           ACMECertificate
+		fingerprint *string
+		nb, na      *time.Time
+		chainOK     *bool
+	)
 	err := row.Scan(&c.ID, &c.ProviderID, &c.AccountID, &c.Names, &c.KeyType, &c.Challenge, &c.HookID, &c.HTTPTargetID, &c.RenewBeforeDays,
 		&c.AutoRenew, &c.AutoDeploy, &c.State, &c.CurrentCertificateID, &c.Failures, &c.NextAttemptAt, &c.LastAttemptAt, &c.LastErrorCode,
-		&c.RunningOrderID, &c.Bindings, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+		&c.RunningOrderID, &c.Bindings, &fingerprint, &nb, &na, &chainOK, &c.ARIWindowStart, &c.ARIWindowEnd, &c.DeployHeldReason,
+		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
-	for _, t := range []**time.Time{&c.NextAttemptAt, &c.LastAttemptAt} {
+	if c.CurrentCertificateID != nil && fingerprint != nil && nb != nil && na != nil && chainOK != nil {
+		c.Current = &ACMECurrentCertificate{ID: *c.CurrentCertificateID, Fingerprint: *fingerprint, NotBefore: nb.UTC(), NotAfter: na.UTC(),
+			ChainComplete: *chainOK}
+	}
+	for _, t := range []**time.Time{&c.NextAttemptAt, &c.LastAttemptAt, &c.ARIWindowStart, &c.ARIWindowEnd} {
 		if *t != nil {
 			u := (*t).UTC()
 			*t = &u
