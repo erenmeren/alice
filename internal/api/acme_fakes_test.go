@@ -17,7 +17,8 @@ type fakeACME struct {
 	UpdateACMEProviderFn    func(ctx context.Context, a inventory.Actor, id uuid.UUID, p inventory.ACMEProviderPatch) (inventory.ACMEProvider, error)
 	DeleteACMEProviderFn    func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	ListACMEAccountsFn      func(ctx context.Context, providerID uuid.UUID) ([]inventory.ACMEAccount, error)
-	RegisterACMEAccountFn   func(ctx context.Context, a inventory.Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool) (inventory.ACMEAccount, error)
+	RegisterACMEAccountFn   func(ctx context.Context, a inventory.Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool, acceptedTermsURL string) (inventory.ACMEAccount, error)
+	PreviewACMEProviderFn   func(ctx context.Context, providerID uuid.UUID) (inventory.ACMEProviderPreview, error)
 	RolloverACMEAccountFn   func(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
 	RecoverACMERolloverFn   func(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
 	DeactivateACMEAccountFn func(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
@@ -83,11 +84,19 @@ func (f *fakeACME) ListACMEAccounts(ctx context.Context, providerID uuid.UUID) (
 	return nil, errNotConfigured
 }
 
-func (f *fakeACME) RegisterACMEAccount(ctx context.Context, a inventory.Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool) (inventory.ACMEAccount, error) {
+func (f *fakeACME) RegisterACMEAccountTerms(ctx context.Context, a inventory.Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool,
+	acceptedTermsURL string) (inventory.ACMEAccount, error) {
 	if f.RegisterACMEAccountFn != nil {
-		return f.RegisterACMEAccountFn(ctx, a, providerID, contactEmail, tosAccepted)
+		return f.RegisterACMEAccountFn(ctx, a, providerID, contactEmail, tosAccepted, acceptedTermsURL)
 	}
 	return inventory.ACMEAccount{}, errNotConfigured
+}
+
+func (f *fakeACME) PreviewACMEProvider(ctx context.Context, providerID uuid.UUID) (inventory.ACMEProviderPreview, error) {
+	if f.PreviewACMEProviderFn != nil {
+		return f.PreviewACMEProviderFn(ctx, providerID)
+	}
+	return inventory.ACMEProviderPreview{}, errNotConfigured
 }
 
 func (f *fakeACME) RolloverACMEAccount(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error) {

@@ -3500,7 +3500,8 @@ paths:
       summary: Register the provider's account at the certificate authority
       description: >-
         Contacts the CA. When the CA publishes terms of service, tos_accepted must be true (422 ALC-ACM-0003 otherwise; nothing
-        is registered). contact_email is optional, an e-mail address only (a mailto: prefix is accepted). 409 ALC-ACM-0021 (the
+        is registered; also when accepted_terms_url is given and the CA's terms changed since the preview showed them).
+        contact_email is optional, an e-mail address only (a mailto: prefix is accepted). 409 ALC-ACM-0021 (the
         provider has an account), 409 ALC-ACM-0024 (another account operation is running; Retry-After), 422 ALC-ACM-0004
         (account refused, e.g. EAB), 502 ALC-ACM-0001/0002/0013, 503 ALC-ACM-0005 with Retry-After (the CA's rate limit).
         Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001
@@ -3522,6 +3523,34 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/acme/providers/{id}/preview:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: previewACMEProvider
+      summary: Read the certificate authority's directory before registering its account (for the registration form)
+      description: >-
+        Contacts the CA (its directory only: no key, no nonce, no account; nothing is stored, no secret is read). Answers the
+        terms of service URL to show with the acceptance box (only a safe https link: otherwise terms_url_unsafe is true and the
+        URL is empty, and the form should not offer the registration), whether an external account binding is required, and
+        the optional resources. Pass the URL shown as accepted_terms_url when registering. 404 for an unknown or deleted
+        provider; 502 ALC-ACM-0001 (unreachable), ALC-ACM-0002 (not an ACME directory), ALC-ACM-0013 (TLS trust); 503
+        ALC-ACM-0005 with Retry-After. An Administrator's browser session without a step-up (403 ALC-AUTH-0002 for anyone else
+        and for every API token). At most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is locked (the
+        CA is not contacted).
+      x-permission: acme.preview
+      responses:
+        "200":
+          description: What the directory says
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ACMEProviderPreview" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         "502": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
@@ -4093,6 +4122,17 @@ components:
       properties:
         contact_email: { type: string, maxLength: 254, examples: [ops@example.com] }
         tos_accepted: { type: boolean, description: 'The Administrator accepted the terms of service the CA publishes' }
+        accepted_terms_url: { type: string, maxLength: 2048, description: 'The terms URL the preview showed; when the CA''s terms differ now, 422 ALC-ACM-0003 (terms changed) and nothing is registered' }
+    ACMEProviderPreview:
+      type: object
+      required: [terms_of_service_url, terms_url_unsafe, external_account_required, key_change_supported, renewal_info_supported, website]
+      properties:
+        terms_of_service_url: { type: string, description: '"" when the CA publishes none or when it is not a safe https URL' }
+        terms_url_unsafe: { type: boolean, description: 'The CA publishes terms at a URL that is not a safe https link' }
+        external_account_required: { type: boolean }
+        key_change_supported: { type: boolean }
+        renewal_info_supported: { type: boolean }
+        website: { type: string, description: 'The CA''s website when it is a safe https URL, else ""' }
     ACMEAccount:
       type: object
       required: [id, provider_id, contact_email, account_url, tos_url, tos_accepted_at, state, created_at, updated_at]

@@ -178,7 +178,9 @@ type ACMEService interface {
 	UpdateACMEProvider(ctx context.Context, a inventory.Actor, id uuid.UUID, p inventory.ACMEProviderPatch) (inventory.ACMEProvider, error)
 	DeleteACMEProvider(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	ListACMEAccounts(ctx context.Context, providerID uuid.UUID) ([]inventory.ACMEAccount, error)
-	RegisterACMEAccount(ctx context.Context, a inventory.Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool) (inventory.ACMEAccount, error)
+	RegisterACMEAccountTerms(ctx context.Context, a inventory.Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool,
+		acceptedTermsURL string) (inventory.ACMEAccount, error)
+	PreviewACMEProvider(ctx context.Context, providerID uuid.UUID) (inventory.ACMEProviderPreview, error)
 	RolloverACMEAccount(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
 	RecoverACMERollover(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)
 	DeactivateACMEAccount(ctx context.Context, a inventory.Actor, accountID uuid.UUID) (inventory.ACMEAccount, error)

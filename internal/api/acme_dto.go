@@ -32,6 +32,16 @@ func acmeProviderJSON(p inventory.ACMEProvider) acmeProviderDTO {
 		PendingRollover: p.PendingRollover, CreatedAt: p.CreatedAt.UTC(), UpdatedAt: p.UpdatedAt.UTC()}
 }
 
+// acmePreviewDTO is what a CA's directory says before registration (POST /acme/providers/{id}/preview).
+type acmePreviewDTO struct {
+	TermsOfServiceURL       string `json:"terms_of_service_url"`
+	TermsURLUnsafe          bool   `json:"terms_url_unsafe"`
+	ExternalAccountRequired bool   `json:"external_account_required"`
+	KeyChangeSupported      bool   `json:"key_change_supported"`
+	RenewalInfoSupported    bool   `json:"renewal_info_supported"`
+	Website                 string `json:"website"`
+}
+
 type acmeAccountDTO struct {
 	ID              string     `json:"id"`
 	ProviderID      string     `json:"provider_id"`

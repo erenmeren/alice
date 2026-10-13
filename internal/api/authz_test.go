@@ -87,6 +87,8 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.AcmeView:    row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw),
 	rbac.AcmeOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
 	rbac.AcmeManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	// Reading a CA's directory before registration (fix round 2): an Administrator's browser session, no step-up, no token.
+	rbac.AcmePreview: row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -257,6 +259,10 @@ certificate definition (switching automatic renewal on re-arms it), Deploy now) 
 limited to 10 a minute per user or token. In lock every ACME change is refused with ALC-LIC-0001 (no certificate authority is
 contacted) except ` + "`DELETE /api/v1/acme/certificates/{id}`" + ` and ` + "`DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}`" + `,
 which only reduce what Alice does (no renewal, no deployment), like removing a Key Vault connection.
+` + "`POST /api/v1/acme/providers/{id}/preview`" + ` reads the certificate authority's directory before the account is registered (its
+terms of service, whether an external account binding is required) for the registration form: ` + "`acme.preview`" + `, an
+Administrator's browser session without a step-up (nothing is changed, no secret is read) and never an API token; it contacts the
+certificate authority, so it is refused in lock and limited to 10 a minute per user like the other ACME actions.
 
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
@@ -413,6 +419,8 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.AcmeView
 		case under(p, "/api/v1/acme/certificates") && acmeOperateAction(rt.method, p):
 			want = rbac.AcmeOperate
+		case under(p, "/api/v1/acme/providers") && strings.HasSuffix(p, "/preview"):
+			want = rbac.AcmePreview
 		case under(p, "/api/v1/acme"):
 			want = rbac.AcmeManage
 		case under(p, "/api/v1/users") && !safeMethod(rt.method):
@@ -608,6 +616,7 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"PATCH /api/v1/acme/providers/{id}",
 		"DELETE /api/v1/acme/providers/{id}",
 		"POST /api/v1/acme/providers/{id}/account",
+		"POST /api/v1/acme/providers/{id}/preview",
 		"POST /api/v1/acme/accounts/{id}/rollover",
 		"POST /api/v1/acme/accounts/{id}/rollover/recover",
 		"POST /api/v1/acme/accounts/{id}/deactivate",
@@ -706,6 +715,8 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/order", perm: rbac.AcmeManage},
 		{method: http.MethodPut, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", perm: rbac.Read},
 		{method: http.MethodGet, pattern: "/api/v1/acme/certificates", perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/preview", perm: rbac.AcmeView},
+		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/account", perm: rbac.AcmePreview},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{

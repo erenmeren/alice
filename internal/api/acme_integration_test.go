@@ -356,3 +356,75 @@ func acmeRecords(t *testing.T, s *stack, c *client, admin *account) map[string]s
 	return map[string]string{"/api/v1/acme/providers/": provider, "/api/v1/acme/hooks/": hook,
 		"/api/v1/acme/certificates/": decodeBody[map[string]any](t, rec)["id"].(string)}
 }
+
+// Task 13 fix round 2 over HTTP: the registration form previews the CA's directory (no step-up, no account, nothing
+// stored), the registration is bound to the terms that were shown, and a changed terms URL is refused (ALC-ACM-0003).
+func TestACMEPreviewAndShownTermsOverHTTP(t *testing.T) {
+	w := newACMEWorld(t)
+	w.stepUp(w.admin, w.adminAcct)
+	rec := w.admin.do(http.MethodPost, "/api/v1/acme/providers", w.providerBody())
+	requireStatus(t, rec, http.StatusCreated)
+	providerID := decodeBody[map[string]any](t, rec)["id"].(string)
+	preview := "/api/v1/acme/providers/" + providerID + "/preview"
+
+	w.clock.Advance(6 * time.Minute) // no step-up needed for the preview
+	rec = w.admin.do(http.MethodPost, preview, nil)
+	requireStatus(t, rec, http.StatusOK)
+	p := decodeBody[map[string]any](t, rec)
+	assert.Equal(t, map[string]any{"terms_of_service_url": w.cred.TermsURL, "terms_url_unsafe": false, "external_account_required": true,
+		"key_change_supported": true, "renewal_info_supported": true, "website": w.fake.BaseURL()}, p)
+	assert.Zero(t, w.fake.Counters()["new-account"]+w.fake.Counters()["new-nonce"])
+	requireStatus(t, w.admin.do(http.MethodGet, "/api/v1/acme/providers/"+providerID, nil), http.StatusOK)
+	assert.Equal(t, 0, w.count("acme_accounts"))
+	for _, c := range []*client{w.op} {
+		rec := c.do(http.MethodPost, preview, nil)
+		requireStatus(t, rec, http.StatusForbidden)
+		assert.Equal(t, "ALC-AUTH-0002", errCode(rec))
+	}
+	auditorAcct := w.createUser(w.admin, w.adminAcct, "aud", "auditor", "auditor-password-2026")
+	ac := w.freshClient()
+	w.firstSignIn(ac, auditorAcct)
+	requireStatus(t, ac.do(http.MethodPost, preview, nil), http.StatusForbidden)
+
+	// The CA's terms change after they were shown: refused, nothing registered; with the current terms it works.
+	shown := p["terms_of_service_url"].(string)
+	require.NoError(t, w.fake.Advertise("termsOfService", w.fake.BaseURL()+"/terms-2027"))
+	w.stepUp(w.admin, w.adminAcct)
+	rec = w.admin.do(http.MethodPost, "/api/v1/acme/providers/"+providerID+"/account", map[string]any{"tos_accepted": true, "accepted_terms_url": shown})
+	requireStatus(t, rec, http.StatusUnprocessableEntity)
+	assert.Equal(t, "ALC-ACM-0003", errCode(rec))
+	assert.Zero(t, w.fake.Counters()["new-account"])
+	rec = w.admin.do(http.MethodPost, preview, nil)
+	requireStatus(t, rec, http.StatusOK)
+	now := decodeBody[map[string]any](t, rec)["terms_of_service_url"].(string)
+	assert.Equal(t, w.fake.BaseURL()+"/terms-2027", now)
+	rec = w.admin.do(http.MethodPost, "/api/v1/acme/providers/"+providerID+"/account", map[string]any{"tos_accepted": true, "accepted_terms_url": now})
+	requireStatus(t, rec, http.StatusCreated)
+	assert.Equal(t, now, decodeBody[map[string]any](t, rec)["tos_url"])
+
+	// A provider whose CA publishes no terms, and a deleted provider (404, nothing sent).
+	noTerms, err := fakeacme.New(fakeacme.Options{Now: w.clock.Now, NoTerms: true})
+	require.NoError(t, err)
+	require.NoError(t, noTerms.Start())
+	t.Cleanup(noTerms.Close)
+	rec = w.admin.do(http.MethodPost, "/api/v1/acme/providers", map[string]any{"name": "No terms", "directory_url": noTerms.DirectoryURL(),
+		"ca_bundle_pem": string(noTerms.CAPEM())})
+	requireStatus(t, rec, http.StatusCreated)
+	second := decodeBody[map[string]any](t, rec)["id"].(string)
+	rec = w.admin.do(http.MethodPost, "/api/v1/acme/providers/"+second+"/preview", nil)
+	requireStatus(t, rec, http.StatusOK)
+	assert.Equal(t, "", decodeBody[map[string]any](t, rec)["terms_of_service_url"])
+	assert.Equal(t, false, decodeBody[map[string]any](t, rec)["external_account_required"])
+	requireStatus(t, w.admin.do(http.MethodDelete, "/api/v1/acme/providers/"+second, nil), http.StatusNoContent)
+	sent := noTerms.Counters()["requests"]
+	requireStatus(t, w.admin.do(http.MethodPost, "/api/v1/acme/providers/"+second+"/preview", nil), http.StatusNotFound)
+	assert.Equal(t, sent, noTerms.Counters()["requests"])
+
+	// In lock: 403 license.locked and the CA is not contacted.
+	w.lockNow()
+	w.fake.Reset()
+	rec = w.admin.do(http.MethodPost, preview, nil)
+	requireStatus(t, rec, http.StatusForbidden)
+	assert.Equal(t, "ALC-LIC-0001", errCode(rec))
+	assert.Zero(t, w.fake.Counters()["requests"])
+}

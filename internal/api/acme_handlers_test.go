@@ -221,7 +221,9 @@ func TestACMEAccountHandlers(t *testing.T) {
 	h, f, _ := acmeDeps(t)
 	var contact string
 	var tos bool
-	f.RegisterACMEAccountFn = func(_ context.Context, _ inventory.Actor, id uuid.UUID, c string, accepted bool) (inventory.ACMEAccount, error) {
+	var terms string
+	f.RegisterACMEAccountFn = func(_ context.Context, _ inventory.Actor, id uuid.UUID, c string, accepted bool, shown string) (inventory.ACMEAccount, error) {
+		terms = shown
 		assert.Equal(t, acmeProvID, id)
 		contact, tos = c, accepted
 		return inventory.ACMEAccount{ID: acmeAcctID, ProviderID: acmeProvID, ContactEmail: c, State: "active", CreatedAt: acmeAt, UpdatedAt: acmeAt}, nil
@@ -231,6 +233,12 @@ func TestACMEAccountHandlers(t *testing.T) {
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	assert.Equal(t, "mailto:ops@example.com", contact)
 	assert.True(t, tos)
+	assert.Empty(t, terms)
+	rec = call(h, http.MethodPost, path, "admin-stepup", `{"tos_accepted":true,"accepted_terms_url":"https://ca.example.com/terms"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, "https://ca.example.com/terms", terms, "the terms shown reach the inventory, which binds the registration to them")
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPost, path, "admin-stepup",
+		`{"accepted_terms_url":"https://ca.example.com/`+strings.Repeat("t", 2048)+`"}`).Code)
 	require.Equal(t, http.StatusCreated, call(h, http.MethodPost, path, "admin-stepup", "").Code, "the body is optional")
 	assert.False(t, tos)
 	for _, bad := range []string{`{"contact_email":"tel:+90555"}`, `{"contact_email":"` + strings.Repeat("a", 250) + `@example.com"}`} {
@@ -257,7 +265,7 @@ func TestACMEAccountHandlers(t *testing.T) {
 		{"locked", license.ErrLocked, 403, "ALC-LIC-0001", ""},
 		{"rejected", &inventory.ACMEError{Reason: "acme.account_rejected"}, 422, "ALC-ACM-0004", ""},
 	} {
-		f.RegisterACMEAccountFn = func(context.Context, inventory.Actor, uuid.UUID, string, bool) (inventory.ACMEAccount, error) {
+		f.RegisterACMEAccountFn = func(context.Context, inventory.Actor, uuid.UUID, string, bool, string) (inventory.ACMEAccount, error) {
 			return inventory.ACMEAccount{}, tc.err
 		}
 		rec := call(h, http.MethodPost, path, "admin-stepup", `{"tos_accepted":true}`)
@@ -754,7 +762,7 @@ func TestACMEInLock(t *testing.T) {
 		t.Fatal("an order reached the inventory in lock")
 		return inventory.ACMEOrder{}, nil
 	}
-	f.RegisterACMEAccountFn = func(context.Context, inventory.Actor, uuid.UUID, string, bool) (inventory.ACMEAccount, error) {
+	f.RegisterACMEAccountFn = func(context.Context, inventory.Actor, uuid.UUID, string, bool, string) (inventory.ACMEAccount, error) {
 		t.Fatal("a registration reached the inventory in lock")
 		return inventory.ACMEAccount{}, nil
 	}
@@ -922,14 +930,15 @@ func TestACMERoutesAnswerNotFound(t *testing.T) {
 		"POST /api/v1/acme/certificates":                            `{"provider_id":"` + acmeProvID.String() + `","names":["www.example.com"],"challenge":"dns01"}`,
 		"PUT /api/v1/acme/certificates/{id}/bindings/{location_id}": `{"auto_deploy":true}`,
 	}
-	who := map[rbac.Permission]string{rbac.AcmeView: "auditor", rbac.AcmeOperate: "operator", rbac.AcmeManage: "admin-stepup"}
+	who := map[rbac.Permission]string{rbac.AcmeView: "auditor", rbac.AcmeOperate: "operator", rbac.AcmeManage: "admin-stepup",
+		rbac.AcmePreview: "admin"}
 	for _, rt := range srv.s.acmeRoutes() {
 		key := rt.method + " " + rt.pattern
 		body, ok := bodies[key]
 		if !ok && !safeMethod(rt.method) {
 			body = "{}"
 		}
-		if strings.Contains(rt.pattern, "/{id}/account") || strings.HasSuffix(rt.pattern, "/order") || strings.HasSuffix(rt.pattern, "/test") ||
+		if strings.Contains(rt.pattern, "/{id}/account") || strings.HasSuffix(rt.pattern, "/preview") || strings.HasSuffix(rt.pattern, "/order") || strings.HasSuffix(rt.pattern, "/test") ||
 			strings.HasSuffix(rt.pattern, "/rearm") || strings.HasSuffix(rt.pattern, "/release-hold") || strings.Contains(rt.pattern, "/accounts/") {
 			body = ""
 		}
@@ -1102,4 +1111,84 @@ func TestACMEDeployNowWithoutNamedWebsites(t *testing.T) {
 		assert.Equal(t, tc.code, code)
 		assert.Empty(t, details, "no field error on a field the request did not send")
 	}
+}
+
+// Task 13 fix round 2: the registration form's preview of the CA's directory. An Administrator's browser session
+// without a step-up; never an Operator, an Auditor or a token; 10 a minute per user; refused in lock with no call.
+func TestACMEProviderPreviewHandler(t *testing.T) {
+	h, f, d := acmeDeps(t)
+	calls := 0
+	f.PreviewACMEProviderFn = func(_ context.Context, id uuid.UUID) (inventory.ACMEProviderPreview, error) {
+		calls++
+		assert.Equal(t, acmeProvID, id)
+		return inventory.ACMEProviderPreview{TermsOfServiceURL: "https://ca.example.com/terms", ExternalAccountRequired: true, KeyChangeSupported: true,
+			Website: "https://ca.example.com"}, nil
+	}
+	path := "/api/v1/acme/providers/" + acmeProvID.String() + "/preview"
+	rec := call(h, http.MethodPost, path, "admin", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"terms_of_service_url":"https://ca.example.com/terms","terms_url_unsafe":false,"external_account_required":true,
+		"key_change_supported":true,"renewal_info_supported":false,"website":"https://ca.example.com"}`, rec.Body.String())
+	for _, who := range []string{"operator", "operator-stepup", "auditor", "alice_operate_admin", "alice_read_admin", "alice_operate_operator"} {
+		rec := call(h, http.MethodPost, path, who, "")
+		require.Equal(t, http.StatusForbidden, rec.Code, who)
+		code, _, _ := errorField(t, rec)
+		assert.Equal(t, "ALC-AUTH-0002", code, who)
+	}
+	assert.Equal(t, 1, calls)
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+		after  string
+	}{
+		{&inventory.ACMEError{Reason: "acme.provider_unreachable"}, 502, "ALC-ACM-0001", ""},
+		{&inventory.ACMEError{Reason: "acme.directory_invalid"}, 502, "ALC-ACM-0002", ""},
+		{&inventory.ACMEError{Reason: "acme.tls_trust_failed"}, 502, "ALC-ACM-0013", ""},
+		{&inventory.ACMEError{Reason: "acme.ca_rate_limited", RetryAfter: 30 * time.Second}, 503, "ALC-ACM-0005", "30"},
+		{inventory.ErrNotFound, 404, "ALC-SYS-0001", ""},
+	} {
+		f.PreviewACMEProviderFn = func(context.Context, uuid.UUID) (inventory.ACMEProviderPreview, error) {
+			return inventory.ACMEProviderPreview{}, tc.err
+		}
+		rec := call(h, http.MethodPost, path, "admin", "")
+		assert.Equal(t, tc.status, rec.Code, tc.code)
+		code, _, _ := errorField(t, rec)
+		assert.Equal(t, tc.code, code)
+		assert.Equal(t, tc.after, rec.Header().Get("Retry-After"), tc.code)
+	}
+	assert.Equal(t, http.StatusNotFound, call(h, http.MethodPost, "/api/v1/acme/providers/nope/preview", "admin", "").Code)
+
+	// In lock: refused before the service, audited.
+	d.License.(*fakeLicense).set(license.ErrLocked)
+	calls = 0
+	f.PreviewACMEProviderFn = func(context.Context, uuid.UUID) (inventory.ACMEProviderPreview, error) {
+		calls++
+		return inventory.ACMEProviderPreview{}, nil
+	}
+	rec = call(h, http.MethodPost, path, "admin", "")
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	code, _, _ := errorField(t, rec)
+	assert.Equal(t, "ALC-LIC-0001", code)
+	assert.Zero(t, calls)
+}
+
+// The preview is an ACME action: 10 a minute per user (session); tokens never reach it (no token may preview).
+func TestACMEProviderPreviewIsRateLimited(t *testing.T) {
+	_, f, d := acmeDeps(t)
+	s := newServer(d)
+	h := s.handler(s.apiRoutes())
+	f.PreviewACMEProviderFn = func(context.Context, uuid.UUID) (inventory.ACMEProviderPreview, error) {
+		return inventory.ACMEProviderPreview{}, nil
+	}
+	path := "/api/v1/acme/providers/" + acmeProvID.String() + "/preview"
+	for i := range 10 {
+		require.Equal(t, http.StatusOK, call(h, http.MethodPost, path, "admin", "").Code, "#%d", i+1)
+	}
+	rec := call(h, http.MethodPost, path, "admin", "")
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+	assert.Equal(t, http.StatusOK, call(h, http.MethodPost, path, "admin2-stepup", "").Code, "another Administrator has their own budget")
+	rec = call(h, http.MethodPost, path, "alice_operate_admin", "")
+	assert.Equal(t, http.StatusForbidden, rec.Code, "a token is refused by the permission, never by the limit")
 }

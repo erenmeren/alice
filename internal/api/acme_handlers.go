@@ -48,6 +48,8 @@ func (s *server) acmeRoutes() []route {
 		{method: http.MethodPatch, pattern: providers + "/{id}", perm: manage, lic: change, handler: s.updateACMEProvider},
 		{method: http.MethodDelete, pattern: providers + "/{id}", perm: manage, lic: change, handler: s.deleteACMEProvider},
 		{method: http.MethodPost, pattern: providers + "/{id}/account", perm: manage, lic: change, limit: limitACME, handler: s.registerACMEAccount},
+		{method: http.MethodPost, pattern: providers + "/{id}/preview", perm: rbac.AcmePreview, lic: change, limit: limitACME,
+			handler: s.previewACMEProvider},
 		{method: http.MethodPost, pattern: accounts + "/{id}/rollover", perm: manage, lic: change, limit: limitACME, handler: s.rolloverACMEAccount},
 		{method: http.MethodPost, pattern: accounts + "/{id}/rollover/recover", perm: manage, lic: change, limit: limitACME,
 			handler: s.recoverACMERollover},
@@ -369,7 +371,8 @@ func (s *server) deleteACMEProvider(w http.ResponseWriter, r *http.Request) {
 // --- accounts ---
 
 // registerACMEAccount creates the provider's account at the CA: contact_email (optional; a plain address, a mailto:
-// prefix is accepted) and tos_accepted (required when the CA publishes terms of service: 422 ALC-ACM-0003 otherwise).
+// prefix is accepted), tos_accepted (required when the CA publishes terms of service: 422 ALC-ACM-0003 otherwise) and
+// accepted_terms_url (optional: the terms URL the preview showed; when the CA's terms differ now, 422 ALC-ACM-0003).
 func (s *server) registerACMEAccount(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(r, "id")
 	if !ok {
@@ -377,14 +380,16 @@ func (s *server) registerACMEAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		ContactEmail string `json:"contact_email"`
-		TOSAccepted  bool   `json:"tos_accepted"`
+		ContactEmail     string `json:"contact_email"`
+		TOSAccepted      bool   `json:"tos_accepted"`
+		AcceptedTermsURL string `json:"accepted_terms_url"`
 	}
-	if !s.decodeExactOptional(w, r, &req, maxACMEAccountBody, "contact_email", "tos_accepted") {
+	if !s.decodeExactOptional(w, r, &req, maxACMEAccountBody, "contact_email", "tos_accepted", "accepted_terms_url") {
 		return
 	}
 	var v validate.Errors
 	checkMaxBytes("contact_email", req.ContactEmail, maxACMEContactBytes, &v)
+	checkMaxBytes("accepted_terms_url", req.AcceptedTermsURL, maxACMEURLBytes, &v)
 	if c := strings.TrimSpace(req.ContactEmail); strings.Contains(c, ":") && !hasMailtoPrefix(c) {
 		v.Add("contact_email", validate.Email, nil) // only an e-mail contact (no tel: or other scheme)
 	}
@@ -392,12 +397,31 @@ func (s *server) registerACMEAccount(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	a, err := s.deps.ACME.RegisterACMEAccount(r.Context(), s.actor(r), id, req.ContactEmail, req.TOSAccepted)
+	a, err := s.deps.ACME.RegisterACMEAccountTerms(r.Context(), s.actor(r), id, req.ContactEmail, req.TOSAccepted, req.AcceptedTermsURL)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, acmeAccountJSON(a))
+}
+
+// previewACMEProvider reads the provider's CA directory for the registration form (no body): the terms of service URL
+// (only a safe https link; terms_url_unsafe otherwise), whether an external account binding is required, and the
+// optional resources. Nothing is stored and no secret is read.
+func (s *server) previewACMEProvider(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathUUID(r, "id")
+	if !ok {
+		s.writeError(w, r, ErrNotFound)
+		return
+	}
+	p, err := s.deps.ACME.PreviewACMEProvider(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, acmePreviewDTO{TermsOfServiceURL: p.TermsOfServiceURL, TermsURLUnsafe: p.TermsURLUnsafe,
+		ExternalAccountRequired: p.ExternalAccountRequired, KeyChangeSupported: p.KeyChangeSupported, RenewalInfoSupported: p.RenewalInfoSupported,
+		Website: p.Website})
 }
 
 // accountAction answers one of the account operations that contact the CA (no body): the account it returns.

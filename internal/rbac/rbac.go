@@ -130,6 +130,10 @@ const (
 	AcmeView    Permission = "acme.view"
 	AcmeOperate Permission = "acme.operate"
 	AcmeManage  Permission = "acme.manage"
+	// AcmePreview: read a certificate authority's directory before registering its account (terms of service, whether
+	// an external account binding is needed) — an Administrator's browser session, never an API token, no step-up:
+	// nothing is changed and no secret is read (Task 13 fix round 2).
+	AcmePreview Permission = "acme.preview"
 )
 
 // Policy describes who may use a permission.
@@ -179,6 +183,7 @@ var policies = map[Permission]Policy{
 	AcmeView:    {Roles: allRoles, TokenScope: ScopeRead},
 	AcmeOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
 	AcmeManage:  {Roles: []Role{Admin}, StepUp: true},
+	AcmePreview: {Roles: []Role{Admin}},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

@@ -173,6 +173,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | PATCH | `/api/v1/acme/providers/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
 | DELETE | `/api/v1/acme/providers/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/acme/providers/{id}/account` | `acme.manage` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/providers/{id}/preview` | `acme.preview` | no | yes | no | no | no | no | no |
 | POST | `/api/v1/acme/accounts/{id}/rollover` | `acme.manage` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/acme/accounts/{id}/rollover/recover` | `acme.manage` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/acme/accounts/{id}/deactivate` | `acme.manage` | no | yes | no | no | no | yes | no |
@@ -233,6 +234,10 @@ certificate definition (switching automatic renewal on re-arms it), Deploy now) 
 limited to 10 a minute per user or token. In lock every ACME change is refused with ALC-LIC-0001 (no certificate authority is
 contacted) except `DELETE /api/v1/acme/certificates/{id}` and `DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}`,
 which only reduce what Alice does (no renewal, no deployment), like removing a Key Vault connection.
+`POST /api/v1/acme/providers/{id}/preview` reads the certificate authority's directory before the account is registered (its
+terms of service, whether an external account binding is required) for the registration form: `acme.preview`, an
+Administrator's browser session without a step-up (nothing is changed, no secret is read) and never an API token; it contacts the
+certificate authority, so it is refused in lock and limited to 10 a minute per user like the other ACME actions.
 
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
