@@ -1266,6 +1266,98 @@
         "action": "Yedekler dizininde yer açın (Yedekler sekmesi boş alanı gösterir), ardından yeniden yedekleyin. Sorun sürerse Alice'in günlüğünü desteğe gönderin."
       }
     },
+    "acme": {
+      "provider_unreachable": {
+        "title": "Sertifika otoritesine ulaşılamadı.",
+        "cause": "Alice sertifika otoritesine bağlanamadı. Ağ, bir güvenlik duvarı ya da otoritenin kendisi kullanılamıyor olabilir. Hiçbir sertifika alınmadı.",
+        "action": "Bu sunucunun otoritenin adresine ulaşabildiğini kontrol edin, sonra daha sonra yeniden deneyin."
+      },
+      "directory_invalid": {
+        "title": "Adres bir sertifika otoritesi değil.",
+        "cause": "Adres yanıt verdi ancak bir ACME sertifika otoritesinin vermesi gereken biçimde değil; bu nedenle Alice bu adresi kullanamıyor.",
+        "action": "Sağlayıcı ayarlarında dizin adresini kontrol edin. Doğru adres otoritenizin belgelerinde yazar."
+      },
+      "terms_not_accepted": {
+        "title": "Hizmet şartları kabul edilmedi.",
+        "cause": "Sertifika otoritesi, hesap açılmadan önce hizmet şartlarının kabul edilmesini istiyor.",
+        "action": "Bu otorite için gösterilen şartları okuyun ve hesabı kaydederken onaylayın."
+      },
+      "account_rejected": {
+        "title": "Otorite hesabı reddetti.",
+        "cause": "Sertifika otoritesi hesap bilgilerini kabul etmedi; örneğin harici hesap bağlama bilgilerini (anahtar kimliği ve anahtar) ya da iletişim adresini.",
+        "action": "Otoritenizin verdiği anahtar kimliğini ve anahtarı ile iletişim adresini kontrol edip hesabı yeniden kaydedin."
+      },
+      "ca_rate_limited": {
+        "title": "Otorite istekleri sınırlıyor.",
+        "cause": "Sertifika otoritesi bu kurulumdan ya da bu adlar için gelen yeni istekleri geçici olarak reddetti. Alice daha sonra yeniden deneyecek.",
+        "action": "Bekleyin. Otorite isteklerin ne zaman yeniden kabul edileceğini bildirir; daha erken denemek beklemeyi yalnızca uzatır."
+      },
+      "validation_failed_dns": {
+        "title": "DNS doğrulaması başarısız oldu.",
+        "cause": "Otorite, DNS bölgesinde beklenen kanıt kaydını bulamadı; bu yüzden adın size ait olduğunu doğrulamadı.",
+        "action": "DNS kancasının kaydı doğru bölgeye eklediğini ve ad sunucularının yanıt verdiğini kontrol edip yeniden sipariş verin."
+      },
+      "validation_failed_http": {
+        "title": "Web doğrulaması başarısız oldu.",
+        "cause": "Otorite, bu ad için sunucudan kanıt dosyasını alamadı; bu yüzden adın size ait olduğunu doğrulamadı.",
+        "action": "Adın doğru sunucuyu gösterdiğini ve 80 numaralı bağlantı noktasının ona ulaştığını kontrol edip yeniden sipariş verin."
+      },
+      "hook_refused": {
+        "title": "DNS kancası isteği reddetti.",
+        "cause": "Kanıt kaydını ekleyen DNS kancası Alice'in isteğini kabul etmedi; bu yüzden otorite adı kontrol edemedi.",
+        "action": "Ayarlardaki kanca adresini ve sırrını ile kancanın kendi günlüğünü kontrol edip yeniden sipariş verin."
+      },
+      "identifier_refused": {
+        "title": "Otorite bu ad için sertifika vermeyecek.",
+        "cause": "Sertifika otoritesi adlardan birini reddetti; örneğin genel bir ad olmadığı ya da engellenenler listesinde olduğu için.",
+        "action": "Adı sertifikadan çıkarın ya da bu ad için sertifika veren bir otorite seçin."
+      },
+      "not_issued_in_time": {
+        "title": "Sertifika zamanında verilmedi.",
+        "cause": "Otorite siparişi Alice'in beklediği süre içinde tamamlamadı; bu yüzden sertifika alınamadı. Alice yeniden deneyebilir.",
+        "action": "Daha sonra yeniden sipariş verin. Sorun sürerse otoriteye bir sorunları olup olmadığını sorun."
+      },
+      "key_policy_not_allowed": {
+        "title": "Anahtar türüne izin verilmiyor.",
+        "cause": "Sertifika otoritesi bu sertifika için seçilen anahtar türünü kabul etmiyor.",
+        "action": "Otoritenizin desteklediği bir anahtar türü seçin; örneğin ECDSA P-256 ya da RSA 2048."
+      },
+      "provider_in_use": {
+        "title": "Otorite hâlâ kullanımda.",
+        "cause": "Sertifikalar hâlâ bu sertifika otoritesini kullanıyor; bu yüzden kaldırılamaz.",
+        "action": "Önce bu sertifikaları silin ya da başka bir otoriteye taşıyın, sonra bunu kaldırın."
+      },
+      "tls_trust_failed": {
+        "title": "Otoritenin bağlantısına güvenilmiyor.",
+        "cause": "Alice sertifika otoritesine ulaştı ancak güvenli bağlantısına güvenemedi. Hiçbir şey gönderilmedi.",
+        "action": "Otoriteniz kendi kök sertifikasını kullanıyorsa bunu sağlayıcı ayarlarına ekleyin. Denetimi asla kapatmayın."
+      },
+      "rollover_unsupported": {
+        "title": "Otorite hesap anahtarını değiştiremiyor.",
+        "cause": "Bu sertifika otoritesi hesap anahtarının değiştirilmesini desteklemiyor. Hesap değiştirilmedi.",
+        "action": "Bu otoritede yeni bir hesap kaydedin ve sertifikaları ona taşıyın."
+      },
+      "name_not_allowed": {
+        "title": "Bu ada izin verilmiyor.",
+        "cause": "Ad, bu sertifika otoritesinin ya da DNS kancasının sertifika verebileceği adlar listesinde yok. Hiçbir sipariş verilmedi.",
+        "action": "Bir Yönetici alan adı uzantısını sağlayıcının ve kancanın izin verilen adlarına ekleyebilir ya da farklı bir ad kullanabilirsiniz."
+      },
+      "order_running": {
+        "title": "Zaten bir sipariş sürüyor.",
+        "cause": "Bu sertifika için zaten sipariş veriliyor. Aynı anda ikinci bir sipariş başlatılmaz.",
+        "action": "Süren siparişin bitmesini bekleyin; sonucu sertifikanın üzerinde görünür."
+      },
+      "challenge_unavailable": {
+        "title": "Bu doğrulama yöntemi henüz kullanılamıyor.",
+        "cause": "Adı kanıtlamak için seçilen yöntem (web doğrulaması) bu sürümde ya da bu sunucuda kullanılamıyor. Hiçbir şey değiştirilmedi.",
+        "action": "DNS doğrulamasını seçin ya da destekliyorsa sunucudaki yardımcıyı güncelleyin."
+      },
+      "key_type_locked": {
+        "title": "Anahtar türü değiştirilemez.",
+        "cause": "Bu sertifika mevcut anahtar türüyle sunuculara zaten dağıtılmış. Türü değiştirmek bu dağıtımları bozar. Hiçbir şey değiştirilmedi.",
+        "action": "Diğer anahtar türüyle yeni bir sertifika oluşturun ve dağıtımları ona taşıyın."
+      }
+    },
     "tls": {
       "key_mismatch": {
         "title": "Özel anahtar bu sertifikaya ait değil.",

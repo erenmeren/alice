@@ -135,6 +135,17 @@ var (
 	JobsHeartbeat  = Register("jobs.heartbeat", license.ClassAlways)
 )
 
+// ACME certificate issuance (the names are literals: the web's label guard reads literal Register calls). An order
+// contacts a certificate authority and may change a DNS zone through a hook, so it is refused and held in lock; cleanup
+// of leftover challenge records runs in every state; the renewal planner and the auto-deploy planner are periodic and
+// ReadOnly (the scheduler refuses a ClassChange task; the planners call license.Allow(ClassChange) themselves).
+var (
+	ACMEIssue      = Register("acme.issue", license.ClassChange)
+	ACMECleanup    = Register("acme.cleanup", license.ClassAlways)
+	ACMESchedule   = Register("acme.schedule", license.ClassReadOnly)
+	ACMEAutoDeploy = Register("acme.auto_deploy", license.ClassReadOnly)
+)
+
 // Kind says who asks for a job (jobs.kind).
 type Kind string
 
@@ -171,10 +182,11 @@ const (
 // deployment's job runs at most 3 times (a run after the first send never sends again: it reads
 // the deployment's state and recovers). A recovery job runs once: the deployment sweep paces
 // recovery (a new job every inventory.RecoveryRetryInterval, at most inventory.MaxRecoveryAttempts),
-// so a failed attempt waits for the sweep instead of polling the server on the queue's backoff.
+// so a failed attempt waits for the sweep instead of polling the server on the queue's backoff. An ACME order runs
+// once: a repeat would start a second order at the authority, so the planner (acme.schedule) paces retries.
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
-	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll:
+	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name:
 		return 1
 	case inventory.JobDiscover:
 		return 5

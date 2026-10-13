@@ -1236,6 +1236,12 @@
         "schedule": "Zamanlanmış Key Vault denetimleri",
         "auto_deploy": "Yeni Key Vault sürümlerinin otomatik dağıtımı"
       },
+      "acme": {
+        "issue": "Sertifika siparişi",
+        "cleanup": "Sertifika doğrulama kalıntılarını temizleme",
+        "schedule": "Zamanlanmış sertifika yenilemeleri",
+        "auto_deploy": "Yenilenen sertifikaların otomatik dağıtımı"
+      },
       "deployment": {
         "recovery_sweep": "Yarım kalan dağıtımları denetleme"
       },

@@ -322,6 +322,19 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 		if key != "" {
 			checks = append(checks, func() (bool, time.Duration) { return s.export.Allow(key) })
 		}
+	case limitACME:
+		// Per user for a browser session, per token for a token, as limitExport (A5): each identity has its own 10 a minute.
+		var key string
+		switch {
+		case p.Kind == rbac.UserSession && p.UserID != uuid.Nil:
+			key = "u:" + p.UserID.String()
+		case p.Kind == rbac.APIToken:
+			key = "t:" + p.TokenID.String()
+		}
+		if key != "" {
+			l := s.actions[class]
+			checks = append(checks, func() (bool, time.Duration) { return l.Allow(key) })
+		}
 	case limitOIDCCallback:
 		// Per binding cookie (S-11): one browser's retries stop at 10 a minute. The anonymous per-address bucket below
 		// (60 a minute) still applies, so fresh cookies cannot buy unlimited callbacks (Task 15 review I-1); it is not

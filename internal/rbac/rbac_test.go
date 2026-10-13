@@ -74,6 +74,16 @@ var expected = map[rbac.Permission]map[string]rbac.Decision{
 	rbac.BackupManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	// ACME issuance (A9): written out by hand.
+	rbac.AcmeView: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": A, "operator+stepup": A,
+		"auditor": A, "auditor+stepup": A, "token-read-admin": A, "token-operate-admin": A, "token-read-operator": A,
+		"token-operate-operator": A, "token-read-auditor": A, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.AcmeOperate: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": A, "operator+stepup": A,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": A, "token-read-operator": F,
+		"token-operate-operator": A, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.AcmeManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
 	rbac.SSOManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
@@ -140,7 +150,7 @@ func TestUnknownPermissionIsDenied(t *testing.T) {
 
 func TestPermissionsAreSortedAndHavePolicies(t *testing.T) {
 	ps := rbac.Permissions()
-	assert.Len(t, ps, 24)
+	assert.Len(t, ps, 27)
 	assert.True(t, sort.SliceIsSorted(ps, func(i, j int) bool { return ps[i] < ps[j] }))
 	for _, p := range ps {
 		_, ok := rbac.PolicyFor(p)

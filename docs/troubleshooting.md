@@ -2450,6 +2450,150 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Upload the certificate and its unencrypted private key as PEM, or a PFX file with its password. To decrypt a key: `openssl pkey -in key.pem -out key-plain.pem`.
 
+## ALC-ACM-0001: The certificate authority could not be reached
+
+**Meaning.** Alice could not open a connection to the certificate authority, or the connection broke before the answer arrived. The order was not started. (HTTP 502, reason `acme.provider_unreachable`; retryable.)
+
+**Likely cause.** The network path is blocked or down, the address is wrong, or the authority is under maintenance.
+
+**What to do.** Check the provider's address in Settings and that this server may reach it, then order again later.
+
+## ALC-ACM-0002: The address is not a certificate authority
+
+**Meaning.** The provider's directory answered with something that is not a valid ACME directory (missing or unusable entries). Nothing was changed. (HTTP 502, reason `acme.directory_invalid`.)
+
+**Likely cause.** The directory address points to a web page, a different service or a different API version.
+
+**What to do.** Open the provider in Settings, correct the directory address and save it again.
+
+## ALC-ACM-0003: The terms of service have not been accepted
+
+**Meaning.** The authority requires its terms of service to be accepted and the registration did not confirm them. No account was created. (HTTP 422, reason `acme.terms_not_accepted`.)
+
+**Likely cause.** The terms box was not ticked, or the authority published new terms.
+
+**What to do.** Register the account again and accept the terms shown on the screen.
+
+## ALC-ACM-0004: The authority rejected the account
+
+**Meaning.** The authority refused to create or use the account (HTTP error from its account endpoint). The key and key identifier are never shown. (HTTP 422, reason `acme.account_rejected`.)
+
+**Likely cause.** The external account binding key identifier or key is wrong, expired or was already used, or the contact e-mail is refused.
+
+**What to do.** Get a fresh key identifier and key from the authority, enter them again and register the account.
+
+## ALC-ACM-0005: The authority is limiting requests
+
+**Meaning.** The authority answered that a request limit was reached (too many orders, failed validations or certificates for the same names). Nothing was issued. (HTTP 503, reason `acme.ca_rate_limited`; retryable.)
+
+**Likely cause.** Too many tests or orders in a short time, or the same names were issued often.
+
+**What to do.** Wait until the limit passes, and use the authority's staging service for tests.
+
+## ALC-ACM-0006: The DNS proof failed
+
+**Meaning.** The authority checked the DNS challenge record and did not find the value it expects, or it found no record at all. Nothing was issued. (HTTP 422, reason `acme.validation_failed_dns`.)
+
+**Likely cause.** The hook wrote the record to a different zone, the change was not yet published when the authority checked, or a wildcard or CNAME points elsewhere.
+
+**What to do.** Run the hook's test, check the zone and the record, allow the DNS change to spread, then order again.
+
+## ALC-ACM-0007: The web proof failed
+
+**Meaning.** The authority requested the HTTP-01 proof file and did not get the expected content. Nothing was issued. (HTTP 422, reason `acme.validation_failed_http`.)
+
+**Likely cause.** The name points to another server, port 80 is blocked, or a redirect or web server rule hides the proof file.
+
+**What to do.** Check the name's address and the firewall for port 80, then order again.
+
+## ALC-ACM-0008: The DNS hook refused the request
+
+**Meaning.** The hook answered with an error status, did not answer, or its answer could not be verified. The record was not added, or was not removed. (HTTP 502, reason `acme.hook_refused`.)
+
+**Likely cause.** The hook's secret is wrong or was changed, the hook is down, or it does not manage this zone.
+
+**What to do.** Correct the hook's address or secret, check that it serves the zone of the name, then order again.
+
+## ALC-ACM-0009: The authority will not issue for this name
+
+**Meaning.** The authority answered that a name in the order is not allowed (rejectedIdentifier or a policy refusal). Nothing was issued. (HTTP 422, reason `acme.identifier_refused`.)
+
+**Likely cause.** Public authorities do not issue for internal names, or the name or domain is blocked by the authority.
+
+**What to do.** Use names the authority supports, or use an authority that issues for internal names.
+
+## ALC-ACM-0010: The certificate was not issued in time
+
+**Meaning.** The order stayed pending or processing until the wait ended. Alice stopped waiting; a later attempt starts a new order. (HTTP 504, reason `acme.not_issued_in_time`; retryable.)
+
+**Likely cause.** The authority is slow or overloaded, or validation is still being processed.
+
+**What to do.** Wait a while and order again.
+
+## ALC-ACM-0011: The key type is not allowed
+
+**Meaning.** The authority refused the certificate request because of its key (type or size). Nothing was issued. (HTTP 422, reason `acme.key_policy_not_allowed`.)
+
+**Likely cause.** The authority accepts only some key types or sizes.
+
+**What to do.** Change the certificate's key type, or ask the authority which types it accepts.
+
+## ALC-ACM-0012: The authority is still in use
+
+**Meaning.** At least one ACME certificate refers to the provider. The provider was not changed. (HTTP 409, reason `acme.provider_in_use`.)
+
+**Likely cause.** Certificates were created for this provider and still exist.
+
+**What to do.** Remove or move those certificates, then delete the provider.
+
+## ALC-ACM-0013: The authority's connection is not trusted
+
+**Meaning.** The authority's TLS certificate is not signed by a root Alice trusts (the system roots and the provider's own bundle). No request was sent. (HTTP 502, reason `acme.tls_trust_failed`.)
+
+**Likely cause.** A private authority's root certificate is missing from the provider's bundle, or the connection is intercepted.
+
+**What to do.** Paste the authority's root certificate (PEM) in the provider settings, or contact whoever runs the authority.
+
+## ALC-ACM-0014: The authority cannot change the account key
+
+**Meaning.** The authority's directory has no key-change entry, so the account key cannot be rolled over. (HTTP 422, reason `acme.rollover_unsupported`.)
+
+**Likely cause.** Not every authority implements account key rollover.
+
+**What to do.** Register a new account instead, or ask the authority.
+
+## ALC-ACM-0015: This name is not allowed
+
+**Meaning.** A name does not end with any allowed domain suffix of the provider or of the hook (an empty list allows nothing). No order was made. (HTTP 422, reason `acme.name_not_allowed`.)
+
+**Likely cause.** The allowed names list is empty or does not contain the domain.
+
+**What to do.** Ask an Administrator to add the domain ending (for example .corp.example.com) to the provider and the hook.
+
+## ALC-ACM-0016: An order is already running
+
+**Meaning.** An order of this certificate is queued or running. The request was not queued again. (HTTP 409, reason `acme.order_running`; retryable.)
+
+**Likely cause.** The order or the test button was used twice, or the scheduler already started a renewal.
+
+**What to do.** Wait for the running order to finish, then check the certificate.
+
+## ALC-ACM-0017: This proof method is not available yet
+
+**Meaning.** The request asks for the HTTP-01 challenge, which is switched off in this build or needs a newer helper on the target. (HTTP 422, reason `acme.challenge_unavailable`.)
+
+**Likely cause.** The web proof needs a newer helper on the server, or is not enabled yet.
+
+**What to do.** Use the DNS proof, or reinstall the helper on this server to use the web proof.
+
+## ALC-ACM-0018: The key type cannot be changed
+
+**Meaning.** The certificate has an issued version bound to locations, and the requested key type differs from the bound one. (HTTP 409, reason `acme.key_type_locked`.)
+
+**Likely cause.** A key type edit was made on a certificate that is already in use on servers.
+
+**What to do.** Create a second certificate with the new key type and bind it in place of this one.
+
 ## Install and start problems
 
 The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.

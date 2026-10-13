@@ -1266,6 +1266,98 @@
         "action": "Free disk space in the backups directory (the Backups tab shows the free space), then back up again. If it keeps failing, send Alice's log to support."
       }
     },
+    "acme": {
+      "provider_unreachable": {
+        "title": "The certificate authority could not be reached.",
+        "cause": "Alice could not connect to the certificate authority. The network, a firewall or the authority itself may be unavailable. Nothing was issued.",
+        "action": "Check that this server can reach the authority's address, then try again later."
+      },
+      "directory_invalid": {
+        "title": "The address is not a certificate authority.",
+        "cause": "The address answered, but not in the way an ACME certificate authority does, so Alice cannot use it.",
+        "action": "Check the address of the directory in the provider settings. Your authority's documentation lists it."
+      },
+      "terms_not_accepted": {
+        "title": "The terms of service have not been accepted.",
+        "cause": "The certificate authority requires its terms of service to be accepted before an account can be created.",
+        "action": "Read the terms shown for this authority and confirm them when you register the account."
+      },
+      "account_rejected": {
+        "title": "The authority rejected the account.",
+        "cause": "The certificate authority did not accept the account details, for example the external account binding (key identifier and key) or the contact address.",
+        "action": "Check the key identifier and key that your authority gave you, and the contact address, then register again."
+      },
+      "ca_rate_limited": {
+        "title": "The authority is limiting requests.",
+        "cause": "The certificate authority has temporarily refused more requests from this installation, or for these names. Alice will try again later.",
+        "action": "Wait. The authority states when requests are accepted again; ordering sooner only makes the wait longer."
+      },
+      "validation_failed_dns": {
+        "title": "The DNS proof failed.",
+        "cause": "The authority could not find the expected proof record in the DNS zone, so it did not confirm that you control the name.",
+        "action": "Check that the DNS hook adds the record to the right zone and that the name servers answer, then order again."
+      },
+      "validation_failed_http": {
+        "title": "The web proof failed.",
+        "cause": "The authority could not fetch the proof file from the server for this name, so it did not confirm that you control the name.",
+        "action": "Check that the name points to the right server and that port 80 reaches it, then order again."
+      },
+      "hook_refused": {
+        "title": "The DNS hook refused the request.",
+        "cause": "The DNS hook that adds the proof record did not accept Alice's request, so the authority could not check the name.",
+        "action": "Check the hook's address and secret in Settings and its own log, then order again."
+      },
+      "identifier_refused": {
+        "title": "The authority will not issue for this name.",
+        "cause": "The certificate authority refused one of the names, for example because it is not a public name or it is on a block list.",
+        "action": "Remove the name from the certificate or choose an authority that issues for it."
+      },
+      "not_issued_in_time": {
+        "title": "The certificate was not issued in time.",
+        "cause": "The authority did not finish the order within the time Alice waits, so no certificate was received. Alice can try again.",
+        "action": "Order again later. If it keeps happening, ask the authority whether it is having problems."
+      },
+      "key_policy_not_allowed": {
+        "title": "The key type is not allowed.",
+        "cause": "The certificate authority does not accept the kind of key chosen for this certificate.",
+        "action": "Choose a key type that your authority supports, for example ECDSA P-256 or RSA 2048."
+      },
+      "provider_in_use": {
+        "title": "The authority is still in use.",
+        "cause": "Certificates still use this certificate authority, so it cannot be removed.",
+        "action": "Delete these certificates first, or move them to another authority, then remove this one."
+      },
+      "tls_trust_failed": {
+        "title": "The authority's connection is not trusted.",
+        "cause": "Alice reached the certificate authority but could not trust its secure connection. Nothing was sent.",
+        "action": "If your authority uses its own root certificate, add it to the provider settings. Never turn the check off."
+      },
+      "rollover_unsupported": {
+        "title": "The authority cannot change the account key.",
+        "cause": "This certificate authority does not support replacing an account key. The account was not changed.",
+        "action": "Register a new account at this authority and move the certificates to it."
+      },
+      "name_not_allowed": {
+        "title": "This name is not allowed.",
+        "cause": "The name is not on the list of names this certificate authority or DNS hook may issue for. Nothing was ordered.",
+        "action": "An Administrator can add the domain ending to the allowed names of the provider and the hook, or you can use a different name."
+      },
+      "order_running": {
+        "title": "An order is already running.",
+        "cause": "This certificate is already being ordered. A second order at the same time is not started.",
+        "action": "Wait until the running order finishes; its result appears on the certificate."
+      },
+      "challenge_unavailable": {
+        "title": "This proof method is not available yet.",
+        "cause": "The chosen way to prove the name (web proof) is not available in this version, or on this server. Nothing was changed.",
+        "action": "Choose the DNS proof, or update the helper on the server if it supports the web proof."
+      },
+      "key_type_locked": {
+        "title": "The key type cannot be changed.",
+        "cause": "This certificate is already deployed to servers with its current key type. Changing it would break those deployments. Nothing was changed.",
+        "action": "Create a new certificate with the other key type and move the deployments to it."
+      }
+    },
     "tls": {
       "key_mismatch": {
         "title": "The private key does not belong to the certificate.",

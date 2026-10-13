@@ -1236,6 +1236,12 @@
         "schedule": "Scheduled Key Vault checks",
         "auto_deploy": "Automatic deployment of new Key Vault versions"
       },
+      "acme": {
+        "issue": "Certificate order",
+        "cleanup": "Clean up certificate challenges",
+        "schedule": "Scheduled certificate renewals",
+        "auto_deploy": "Automatic deployment of renewed certificates"
+      },
       "deployment": {
         "recovery_sweep": "Check for interrupted deployments"
       },

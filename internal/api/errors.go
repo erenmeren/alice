@@ -368,6 +368,26 @@ var (
 	ErrForwardingUnreachable    = ErrorCode{Code: "ALC-AUD-0003", Reason: "audit.forwarding_unreachable", Status: http.StatusBadGateway, Retryable: true}
 	ErrForwardingUntrusted      = ErrorCode{Code: "ALC-AUD-0004", Reason: "audit.forwarding_untrusted", Status: http.StatusBadGateway}
 	ErrPassphraseTooWeak        = ErrorCode{Code: "ALC-SET-0010", Reason: "setup.passphrase_too_weak", Status: http.StatusUnprocessableEntity}
+
+	// ACME certificate issuance and renewal (area ACM).
+	ErrACMProviderUnreachable  = ErrorCode{Code: "ALC-ACM-0001", Reason: "acme.provider_unreachable", Status: http.StatusBadGateway, Retryable: true}
+	ErrACMDirectoryInvalid     = ErrorCode{Code: "ALC-ACM-0002", Reason: "acme.directory_invalid", Status: http.StatusBadGateway}
+	ErrACMTermsNotAccepted     = ErrorCode{Code: "ALC-ACM-0003", Reason: "acme.terms_not_accepted", Status: http.StatusUnprocessableEntity}
+	ErrACMAccountRejected      = ErrorCode{Code: "ALC-ACM-0004", Reason: "acme.account_rejected", Status: http.StatusUnprocessableEntity}
+	ErrACMCaRateLimited        = ErrorCode{Code: "ALC-ACM-0005", Reason: "acme.ca_rate_limited", Status: http.StatusServiceUnavailable, Retryable: true}
+	ErrACMValidationFailedDns  = ErrorCode{Code: "ALC-ACM-0006", Reason: "acme.validation_failed_dns", Status: http.StatusUnprocessableEntity}
+	ErrACMValidationFailedHttp = ErrorCode{Code: "ALC-ACM-0007", Reason: "acme.validation_failed_http", Status: http.StatusUnprocessableEntity}
+	ErrACMHookRefused          = ErrorCode{Code: "ALC-ACM-0008", Reason: "acme.hook_refused", Status: http.StatusBadGateway}
+	ErrACMIdentifierRefused    = ErrorCode{Code: "ALC-ACM-0009", Reason: "acme.identifier_refused", Status: http.StatusUnprocessableEntity}
+	ErrACMNotIssuedInTime      = ErrorCode{Code: "ALC-ACM-0010", Reason: "acme.not_issued_in_time", Status: http.StatusGatewayTimeout, Retryable: true}
+	ErrACMKeyPolicyNotAllowed  = ErrorCode{Code: "ALC-ACM-0011", Reason: "acme.key_policy_not_allowed", Status: http.StatusUnprocessableEntity}
+	ErrACMProviderInUse        = ErrorCode{Code: "ALC-ACM-0012", Reason: "acme.provider_in_use", Status: http.StatusConflict}
+	ErrACMTlsTrustFailed       = ErrorCode{Code: "ALC-ACM-0013", Reason: "acme.tls_trust_failed", Status: http.StatusBadGateway}
+	ErrACMRolloverUnsupported  = ErrorCode{Code: "ALC-ACM-0014", Reason: "acme.rollover_unsupported", Status: http.StatusUnprocessableEntity}
+	ErrACMNameNotAllowed       = ErrorCode{Code: "ALC-ACM-0015", Reason: "acme.name_not_allowed", Status: http.StatusUnprocessableEntity}
+	ErrACMOrderRunning         = ErrorCode{Code: "ALC-ACM-0016", Reason: "acme.order_running", Status: http.StatusConflict, Retryable: true}
+	ErrACMChallengeUnavailable = ErrorCode{Code: "ALC-ACM-0017", Reason: "acme.challenge_unavailable", Status: http.StatusUnprocessableEntity}
+	ErrACMKeyTypeLocked        = ErrorCode{Code: "ALC-ACM-0018", Reason: "acme.key_type_locked", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -421,6 +441,9 @@ func AllErrorCodes() []ErrorCode {
 		ErrBackupRunning, ErrBackupNotConfigured, ErrBackupNotFound, ErrBackupWriteFailed,
 		ErrTLSKeyMismatch, ErrTLSNotValidNow, ErrTLSWeakKey, ErrTLSPFXPassword, ErrTLSUnreadable,
 		ErrForwardingAddressRefused, ErrForwardingUnreachable, ErrForwardingUntrusted, ErrPassphraseTooWeak,
+		ErrACMProviderUnreachable, ErrACMDirectoryInvalid, ErrACMTermsNotAccepted, ErrACMAccountRejected, ErrACMCaRateLimited, ErrACMValidationFailedDns,
+		ErrACMValidationFailedHttp, ErrACMHookRefused, ErrACMIdentifierRefused, ErrACMNotIssuedInTime, ErrACMKeyPolicyNotAllowed, ErrACMProviderInUse,
+		ErrACMTlsTrustFailed, ErrACMRolloverUnsupported, ErrACMNameNotAllowed, ErrACMOrderRunning, ErrACMChallengeUnavailable, ErrACMKeyTypeLocked,
 	}
 }
 

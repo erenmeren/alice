@@ -103,12 +103,12 @@ func TestServeWiringIsComplete(t *testing.T) {
 	}
 	for _, typ := range []jobs.Type{jobs.TargetTestConnection, jobs.TargetDiscover, jobs.SSHKeyRemove,
 		jobs.CertificateDeploy, jobs.CertificateDeployRecover, jobs.KVTestConnection, jobs.KVPoll, jobs.KVImport,
-		jobs.SSHKeyAdd, jobs.RotationLocation} {
+		jobs.SSHKeyAdd, jobs.RotationLocation, jobs.ACMEIssue, jobs.ACMECleanup} {
 		assert.True(t, runner.Handles(typ), "the runner handles %s", typ.Name)
 	}
 	for _, typ := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
 		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy,
-		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired} {
+		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.ACMESchedule, jobs.ACMEAutoDeploy} {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
 	assert.Positive(t, rotationPlanEvery, "the rotation planner has an interval in every build")
@@ -155,6 +155,12 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 	assert.Contains(t, err.Error(), "periodic job type alerts.scan is not scheduled")
 	for _, typ := range []string{"kv.test_connection", "kv.poll", "kv.import"} {
 		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
+	}
+	for _, typ := range []string{"acme.issue", "acme.cleanup"} {
+		assert.Contains(t, err.Error(), "queue job type "+typ+" has no handler")
+	}
+	for _, typ := range []string{"acme.schedule", "acme.auto_deploy"} {
+		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")
 	}
 	for _, typ := range []string{"kv.schedule", "kv.auto_deploy"} {
 		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")

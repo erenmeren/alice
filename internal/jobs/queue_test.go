@@ -316,3 +316,25 @@ func TestClassifyNeverReturnsNil(t *testing.T) {
 	assert.Equal(t, "internal.unexpected", f.Reason)
 	assert.Equal(t, NeedsAttention, classify(Attention("x.y", nil, nil)).Class)
 }
+
+// ACME issuance: an order changes the world (a certificate authority and, through the hook, a DNS zone), so it is
+// refused and held in lock and runs once (a retry would start a second order and burn the authority's rate limit; the
+// planner paces repeats); cleanup of authorizations and leftover challenge records runs in every state; the renewal
+// planner and the auto-deploy planner are periodic and therefore ReadOnly like the Key Vault ones.
+func TestACMEJobTypes(t *testing.T) {
+	assert.Equal(t, license.ClassChange, ACMEIssue.Class)
+	assert.Equal(t, license.ClassAlways, ACMECleanup.Class)
+	assert.Equal(t, license.ClassReadOnly, ACMESchedule.Class, "a ClassChange periodic task would panic at start-up")
+	assert.Equal(t, license.ClassReadOnly, ACMEAutoDeploy.Class)
+	assert.Equal(t, "acme.issue", ACMEIssue.Name)
+	assert.Equal(t, "acme.cleanup", ACMECleanup.Name)
+	assert.Equal(t, "acme.schedule", ACMESchedule.Name)
+	assert.Equal(t, "acme.auto_deploy", ACMEAutoDeploy.Name)
+	assert.Equal(t, 1, MaxAttemptsFor(ACMEIssue))
+	assert.Equal(t, 3, MaxAttemptsFor(ACMECleanup))
+	assert.NotPanics(t, func() {
+		NewScheduler(nil, &fakeGate{}, quiet,
+			Task{Type: ACMESchedule, Every: time.Minute, Run: func(context.Context) error { return nil }},
+			Task{Type: ACMEAutoDeploy, Every: time.Minute, Run: func(context.Context) error { return nil }})
+	})
+}

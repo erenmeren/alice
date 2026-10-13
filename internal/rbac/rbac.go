@@ -122,6 +122,14 @@ const (
 	// Phase 8 (contract C1, C12): list, make and download backups — an Administrator in a browser session with
 	// step-up, never an API token. A backup holds every secret of the installation (encrypted).
 	BackupManage Permission = "backup.manage"
+
+	// ACME certificate issuance (decision D6, amendment A9). AcmeView: every role and read tokens. AcmeOperate: order a
+	// renewal, run a test run, request a deployment and edit bindings of existing ACME certificates (Admin, Operator;
+	// operate tokens). AcmeManage: create, edit and delete certificates, providers, accounts and hooks, with their name
+	// allow-lists (Admin in a browser session with step-up, never an API token).
+	AcmeView    Permission = "acme.view"
+	AcmeOperate Permission = "acme.operate"
+	AcmeManage  Permission = "acme.manage"
 )
 
 // Policy describes who may use a permission.
@@ -167,6 +175,10 @@ var policies = map[Permission]Policy{
 	SSOManage: {Roles: []Role{Admin}, StepUp: true},
 
 	BackupManage: {Roles: []Role{Admin}, StepUp: true},
+
+	AcmeView:    {Roles: allRoles, TokenScope: ScopeRead},
+	AcmeOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
+	AcmeManage:  {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

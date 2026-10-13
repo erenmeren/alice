@@ -81,6 +81,12 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.SSOManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 	// Phase 8: backups (C12).
 	rbac.BackupManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+
+	// ACME issuance (A9): everyone reads; Operators may order, test, deploy and bind existing certificates (operate
+	// tokens too); only an Administrator with step-up creates certificates, providers, accounts and hooks (no token).
+	rbac.AcmeView:    row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, allw, allw, allw, allw),
+	rbac.AcmeOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
+	rbac.AcmeManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -688,7 +694,9 @@ var (
 		// Phase 7 (C13): the Dashboard, its conditions and the delivery state are reads; saved views change nothing outside Alice.
 		"/api/v1/dashboard", "/api/v1/alerts", "/api/v1/views", "/api/v1/notifications", "/api/v1/sso"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
-		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings"}
+		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings",
+		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.
+		"/api/v1/acme"}
 	// lockAvailableRoutes are routes of a refused group that work in every license state because
 	// they only reduce what Alice will do (ClassAlways).
 	//

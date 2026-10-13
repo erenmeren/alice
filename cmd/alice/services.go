@@ -278,6 +278,7 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 	deployjobs.Register(runner, deployDeps(svc, clk, log))
 	kvjobs.Register(runner, kvDeps(svc, clk, log))
 	sshkeyjobs.Register(runner, sshkeyDeps(svc, clk, log))
+	registerACMEPlaceholders(runner)
 	return runner
 }
 
@@ -406,7 +407,27 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		jobs.Task{Type: jobs.JobsHeartbeat, Every: heartbeatEvery, Run: func(ctx context.Context) error {
 			return writeHeartbeat(ctx, svc.pool, clk)
 		}},
+		// ACME (placeholders until Task 11 supplies the renewal planner and Task 12 the auto-deploy planner).
+		jobs.Task{Type: jobs.ACMESchedule, Every: acmeScheduleEvery, Run: func(context.Context) error { return nil }},
+		jobs.Task{Type: jobs.ACMEAutoDeploy, Every: acmeAutoDeployEvery, Run: func(context.Context) error { return nil }},
 	)
+}
+
+// The intervals of the ACME planners (placeholders until Tasks 11 and 12; the same in every build).
+const (
+	acmeScheduleEvery   = time.Minute
+	acmeAutoDeployEvery = time.Minute
+)
+
+// registerACMEPlaceholders installs handlers that fail at once for the ACME queue job types so that checkWiring passes while the
+// feature is built up. TODO(Task 10): replace the acme.issue handler with the issue job; TODO(Task 11): replace the
+// acme.cleanup handler. Nothing enqueues these types before the API exists (Task 13).
+func registerACMEPlaceholders(r *jobs.Runner) {
+	noop := func(context.Context, jobs.Job, jobs.StepRecorder) (map[string]any, error) {
+		return nil, errors.New("acme: this job type has no implementation yet")
+	}
+	r.Handle(jobs.ACMEIssue, noop)
+	r.Handle(jobs.ACMECleanup, noop)
 }
 
 // The intervals of the Phase 8 tasks that are the same in every build (contract C1); backupScheduleEvery is per build.
