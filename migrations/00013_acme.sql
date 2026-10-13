@@ -139,12 +139,21 @@ CREATE TABLE acme_certificates (
     next_attempt_at        timestamptz,
     last_attempt_at        timestamptz,
     last_error_code        text NOT NULL DEFAULT '' CHECK (last_error_code ~ '^[A-Za-z0-9._-]{0,100}$'),
+    -- The renewal planner (Task 11): the CA's suggested renewal window of the current certificate (RFC 9773; cleared when
+    -- a new certificate is issued), when it was last asked for and when it may be asked for again (Retry-After), and when
+    -- the "renewal failed" e-mail of the current series of failures was sent (cleared by a success).
+    ari_window_start       timestamptz,
+    ari_window_end         timestamptz,
+    ari_checked_at         timestamptz,
+    ari_next_check_at      timestamptz,
+    failure_notified_at    timestamptz,
     created_by             uuid REFERENCES users (id),
     created_at             timestamptz NOT NULL,
     updated_at             timestamptz NOT NULL,
     deleted_at             timestamptz,
     CHECK (challenge <> 'dns01' OR hook_id IS NOT NULL),
-    CHECK ((challenge = 'http01') = (http_target_id IS NOT NULL))
+    CHECK ((challenge = 'http01') = (http_target_id IS NOT NULL)),
+    CHECK ((ari_window_start IS NULL) = (ari_window_end IS NULL) AND (ari_window_start IS NULL OR ari_window_start < ari_window_end))
 );
 CREATE INDEX acme_certificates_provider ON acme_certificates (provider_id);
 CREATE INDEX acme_certificates_account ON acme_certificates (account_id);
@@ -169,6 +178,8 @@ CREATE TABLE acme_orders (
     order_url               text NOT NULL DEFAULT '' CHECK (char_length(order_url) <= 2048),
     certificate_id          uuid REFERENCES certificates (id),
     requested_by            uuid REFERENCES users (id),
+    -- manual: a person's order (requested_by); renewal: the renewal planner's (acme.schedule).
+    trigger                 text NOT NULL DEFAULT 'manual' CHECK (trigger IN ('manual', 'renewal')),
     pending_key_ct          bytea CHECK (octet_length(pending_key_ct) BETWEEN 1 AND 300000),
     pending_key_nonce       bytea CHECK (octet_length(pending_key_nonce) = 12),
     pending_key_wrapped_dek bytea CHECK (octet_length(pending_key_wrapped_dek) BETWEEN 1 AND 1024),
@@ -242,7 +253,8 @@ GRANT UPDATE (contact_email, account_url, tos_url, tos_accepted_by, tos_accepted
 GRANT UPDATE (name, url, ca_bundle_pem, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, allowed_suffixes,
     propagation_wait_seconds, poll_timeout_seconds, updated_at, deleted_at) ON acme_hooks TO alice_app;
 GRANT UPDATE (provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew, auto_deploy, state, current_certificate_id,
-    failures, next_attempt_at, last_attempt_at, last_error_code, updated_at, deleted_at) ON acme_certificates TO alice_app;
+    failures, next_attempt_at, last_attempt_at, last_error_code, ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at,
+    failure_notified_at, updated_at, deleted_at) ON acme_certificates TO alice_app;
 GRANT UPDATE (state, finished_at, error_code, order_url, certificate_id, pending_key_ct, pending_key_nonce, pending_key_wrapped_dek,
     pending_key_version, presented, cleanup_at, cleanup_error_code) ON acme_orders TO alice_app;
 GRANT UPDATE (auto_deploy) ON acme_bindings TO alice_app;

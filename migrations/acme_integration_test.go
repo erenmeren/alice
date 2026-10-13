@@ -161,6 +161,23 @@ renew_before_days, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $
 	bad("half a pending key", `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, pending_key_ct) VALUES ($1, $2, 'test', 'running', now(), '\x01')`,
 		uuid.New(), w.acmeCert)
 	bad("presented is an array", `UPDATE acme_orders SET presented = '{}'::jsonb WHERE state = 'running'`)
+	bad("unknown order trigger", `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, finished_at, trigger)
+VALUES ($1, $2, 'issue', 'failed', now(), now(), 'cron')`, uuid.New(), w.acmeCert)
+	_, err = d.App.Exec(ctx, `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, finished_at, trigger)
+VALUES ($1, $2, 'issue', 'failed', now(), now(), 'renewal')`, uuid.New(), w.acmeCert)
+	require.NoError(t, err, "the renewal planner's order")
+	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET trigger = 'manual'`)
+	assert.Equal(t, privilegeDenied, sqlState(err), "an order's trigger never changes")
+
+	ari := `UPDATE acme_certificates SET ari_window_start = $2, ari_window_end = $3 WHERE id = $1`
+	bad("half an ARI window", ari, w.acmeCert, now, nil)
+	bad("an ARI window that ends before it starts", ari, w.acmeCert, now, now.Add(-time.Hour))
+	bad("an empty ARI window", ari, w.acmeCert, now, now)
+	_, err = d.App.Exec(ctx, ari, w.acmeCert, now, now.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = d.App.Exec(ctx, `UPDATE acme_certificates SET ari_checked_at = now(), ari_next_check_at = now(), failure_notified_at = now(),
+    ari_window_start = NULL, ari_window_end = NULL WHERE id = $1`, w.acmeCert)
+	require.NoError(t, err, "the planner's columns are the application's")
 
 	hookWaits := `UPDATE acme_hooks SET propagation_wait_seconds = $2, poll_timeout_seconds = $3 WHERE id = $1`
 	bad("propagation wait over 120 s", hookWaits, w.hook, 121, 1)
