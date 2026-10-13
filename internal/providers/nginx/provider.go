@@ -141,6 +141,24 @@ func (s *session) open() error {
 	return nil
 }
 
+// PublishHTTP01Token writes an HTTP-01 token file through the helper (linuxssh.Conn.PublishHTTP01Token: protocol 7,
+// the fixed challenge directory; an older helper or sudoers file is ssh.helper_outdated_http01, ALC-SSH-0013). With
+// RemoveHTTP01Token the session is the ACME HTTP-01 solver's publisher (http01.Publisher).
+func (s *session) PublishHTTP01Token(ctx context.Context, token string, keyAuthorization []byte) error {
+	if err := s.open(); err != nil {
+		return err
+	}
+	return s.conn.PublishHTTP01Token(ctx, token, keyAuthorization)
+}
+
+// RemoveHTTP01Token removes the token file again (removed is false when there was none).
+func (s *session) RemoveHTTP01Token(ctx context.Context, token string) (bool, error) {
+	if err := s.open(); err != nil {
+		return false, err
+	}
+	return s.conn.RemoveHTTP01Token(ctx, token)
+}
+
 // TestConnection is linuxssh's test plus nginx-test, which proves the nginx sudoers profile (F-14).
 // A missing Nginx or an invalid configuration is a warning, not a failure.
 func (s *session) TestConnection(ctx context.Context) (providers.ConnectionReport, error) {

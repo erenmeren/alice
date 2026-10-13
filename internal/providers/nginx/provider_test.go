@@ -227,3 +227,33 @@ func TestSudoRefusalMapsForEveryNginxSubcommand(t *testing.T) {
 	err := providers.NewError("ssh.helper_missing", false, nil, map[string]string{"subcommand": "sshd-dump", "exit_code": "1"})
 	assert.Equal(t, "ssh.helper_missing", providerErr(t, mapHelper(err, "sshd-dump")).Code, "only the nginx subcommands")
 }
+
+// The nginx session is the ACME HTTP-01 solver's publisher: it writes and removes the token file through the
+// helper, and a closed session sends nothing.
+func TestSessionPublishesHTTP01Tokens(t *testing.T) {
+	e := newEnv(t)
+	s := e.open(t)
+	pub, ok := s.(interface {
+		PublishHTTP01Token(ctx context.Context, token string, keyAuthorization []byte) error
+		RemoveHTTP01Token(ctx context.Context, token string) (bool, error)
+	})
+	require.True(t, ok, "the session has the publisher methods")
+	token := "abcdefghijklmnopqrstuvwxyz012345"
+	keyAuth := token + ".0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+	require.NoError(t, pub.PublishHTTP01Token(context.Background(), token, []byte(keyAuth)))
+	got, ok := e.emu.ACMEToken(token)
+	require.True(t, ok)
+	assert.Equal(t, keyAuth, string(got))
+	removed, err := pub.RemoveHTTP01Token(context.Background(), token)
+	require.NoError(t, err)
+	assert.True(t, removed)
+	_, ok = e.emu.ACMEToken(token)
+	assert.False(t, ok)
+
+	require.NoError(t, s.Close())
+	before := len(e.srv.Commands())
+	assert.Equal(t, "ssh.unreachable", providerErr(t, pub.PublishHTTP01Token(context.Background(), token, []byte(keyAuth))).Code)
+	_, err = pub.RemoveHTTP01Token(context.Background(), token)
+	assert.Equal(t, "ssh.unreachable", providerErr(t, err).Code)
+	assert.Len(t, e.srv.Commands(), before)
+}
