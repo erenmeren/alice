@@ -81,6 +81,12 @@ var inventorySentinels = map[string]error{
 	// ACME (Task 10)
 	"ErrACMENameNotAllowed": inventory.ErrACMENameNotAllowed, "ErrACMEOrderRunning": inventory.ErrACMEOrderRunning,
 	"ErrACMEChallengeUnavailable": inventory.ErrACMEChallengeUnavailable, "ErrACMEKeyTypeLocked": inventory.ErrACMEKeyTypeLocked,
+	// ACME (Task 12): bindings and Deploy now, and the refusals of a queued automatic deployment judged again (the
+	// engine ends it with their reasons; the API maps them too, so none can become a 500).
+	"ErrACMENotIssued": inventory.ErrACMENotIssued, "ErrACMELocationBound": inventory.ErrACMELocationBound,
+	"ErrACMELocationNotBound": inventory.ErrACMELocationNotBound, "ErrACMEBindingGone": inventory.ErrACMEBindingGone,
+	"ErrACMEAutoDeployOff": inventory.ErrACMEAutoDeployOff, "ErrACMESuperseded": inventory.ErrACMESuperseded,
+	"ErrACMEDeployStopped": inventory.ErrACMEDeployStopped, "ErrACMEDeployHeld": inventory.ErrACMEDeployHeld,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,
