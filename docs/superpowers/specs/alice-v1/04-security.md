@@ -30,6 +30,13 @@ Method: STRIDE per component, on the data-flow diagram below. Ratings are residu
 | Malicious customer | Owns the install and binary; wants to bypass the license |
 | Supply-chain attacker | Compromises a dependency, base image, CI, or update tarball |
 
+(Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`; review `docs/security/reviews/acme-issuance.md`.) Two further actors: a **hostile or compromised ACME certificate authority** (answers Alice's
+requests; may return hostile problem documents, renewal windows, chains and URLs) and a **hostile DNS hook** (the
+administrator-configured HTTPS endpoint that publishes DNS-01 records; may answer slowly, hugely or with redirects). The
+**Malicious or compromised Operator** can now also trigger an order, a Test run, a deployment and binding changes of an
+existing ACME certificate, i.e. the renewal of names an Admin pre-approved; it cannot add names, change a provider or a
+hook, or switch unattended deployment on.
+
 ### 14.3 Trust boundaries
 
 ```
@@ -125,6 +132,20 @@ Legend: S spoofing, T tampering, R repudiation, I information disclosure, D deni
 | AZ-2 | I | Over-privileged role lets Alice read all KV secrets | Roles documented; secret contents only fetched for cert-backing secrets bound to a deploy | Med |
 | AZ-3 | T | TLS interception to Azure | Go default verification against system roots, no `InsecureSkipVerify` (lint-enforced) | Low |
 | AZ-4 | D | Azure throttling (429) | Backoff, jitter, polling interval floor 5 min | Low |
+
+#### ACME connector (amendment, ACME issuance 2026-10-13)
+
+(Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`; review `docs/security/reviews/acme-issuance.md`.)
+
+| ID | STRIDE | Threat | Mitigation | Residual |
+|----|--------|--------|------------|----------|
+| AC-1 | I/E | SSRF through the directory URL, a CA-returned URL or the DNS hook URL | Admin-only configuration; one guarded client (`internal/acme/transport`): https only for every request URL incl. CA-returned ones, no userinfo, `netaddr` dial rule (no link-local/metadata), no redirects, no proxy, 1 MiB answers, 30 s per exchange; answer text never copied into errors, logs, audit or API | Low (an Admin can still aim at any reachable https service) |
+| AC-2 | I | Account key, EAB HMAC key or hook secret leaked | Sealed with the keyring (AAD per row), write-only in the API, `secrets.Plaintext` zeroed; leak suite over logs (raw and redacted), API answers, tables, bytea, e-mails and backup manifest | Low |
+| AC-3 | T/E | Operator obtains certificates for names of their choice | Admin-only definitions with per-provider and per-hook domain-suffix allow-lists (empty = refuse all), re-checked at job time | Low |
+| AC-4 | T | Hostile CA chain or renewal window (ARI) | Chain must match the order's key and names and is placed through the upload rules; ARI only pulls renewal earlier, windows before 2000, ending before the certificate's start or more than 10 years ahead are ignored | Low |
+| AC-5 | D | Rate-limit storms against the CA | One attempt per job; backoff 1 h→24 h and Retry-After (≤24 h); 15 min spacing; wave of 5; provider hold while a sibling is rate-limited (≤24 h); stop after 5 failures | Low |
+| AC-6 | T | A second deploy path or unattended deployment by an Operator | Deployments only through `RequestDeployment` / the checked `insertDeployment` path (AST test); switching unattended deployment on is Admin + fresh step-up inside the transaction | Low |
+| AC-7 | T | HTTP-01 token file abuse on a target | Helper writes one file under a fixed root-owned path, token charset and length fixed, body ≤512 bytes and exactly a key authorization, `O_NOFOLLOW` walk; Alice never edits Nginx config | Low |
 
 #### License module
 
@@ -230,6 +251,15 @@ OIDC SSO is delivered in Phase 7 ("Alerts, dashboard and SSO", R31); Phase 1 is 
 | View / export audit log | Yes | No | Yes |
 | Export inventory | Yes | Yes | Yes |
 
+(Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`; review `docs/security/reviews/acme-issuance.md`.) ACME rows: providers, accounts, DNS hooks, defining/editing/deleting ACME certificates, switching their
+automatic renewal on, re-arming (`Renew now`) and releasing a hold are **Admin** with step-up, never a token
+(`acme.manage`); reading a CA's directory before registration is Admin without step-up (`acme.preview`); ordering,
+Test run, Deploy now, binding locations (with automatic deployment off) and switching a binding's automatic deployment
+off are **Admin and Operator**, also `operate` tokens (`acme.operate`); everything is readable by every role and `read`
+tokens (`acme.view`), including the account's contact e-mail. **Switching unattended deployment on** (a certificate's or
+a binding's `auto_deploy`) is Admin with a fresh step-up, decided inside the inventory transaction (KV ruling S6 applied
+to ACME). All ACME actions of one person or token share a 10/min limit (`limitACME`).
+
 ### 15.5 Sessions, CSRF, rate limiting
 
 - **SEC-018** Session ID is 256-bit from `crypto/rand`; only its SHA-256 is stored server-side. Cookie: `__Host-alice_session`, HttpOnly, Secure, SameSite=Strict, Path=/, no Domain. [T]
@@ -252,6 +282,9 @@ OIDC SSO is delivered in Phase 7 ("Alerts, dashboard and SSO", R31); Phase 1 is 
 - **SEC-035** The React app never uses `dangerouslySetInnerHTML`; ESLint rule enforced; translation strings are plain text with interpolation only. The build emits no inline scripts. Styles come from the bundled CSS file and from Mantine's single runtime `<style>` element, which carries the per-request CSP nonce (SEC-033); component style props are applied by React through the CSSOM, which CSP does not restrict, so no `unsafe-inline` is needed. [T]
 - **SEC-036** Alice's own HTTPS certificate: wizard offers self-signed (ECDSA P-256, 90 days, marked temporary in UI) or upload; certificate replacement is Admin-only and audited. [T]
 - **SEC-037** Outbound TLS (Azure, OIDC, SMTP) uses system roots plus optional admin-provided CA bundle; `InsecureSkipVerify` is banned by a lint rule. SMTP requires STARTTLS or implicit TLS unless the admin explicitly acknowledges plaintext. [T, R]
+  (Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`; review `docs/security/reviews/acme-issuance.md`.) ACME CAs and DNS hooks are added to SEC-037: system roots plus the provider's or hook's CA bundle (the
+  bundle also completes the chain of issued certificates), TLS 1.2+, a source guard in `internal/acme` forbids
+  `InsecureSkipVerify`. The HTTP-01 self-check is plain HTTP on port 80 by design (the CA's own check is plain HTTP).
 
 ### 15.7 Secrets handling and cryptography
 
@@ -265,6 +298,13 @@ OIDC SSO is delivered in Phase 7 ("Alerts, dashboard and SSO", R31); Phase 1 is 
 - **SEC-047** Approved primitives only: AES-256-GCM, ChaCha20-Poly1305 (SSH), Ed25519, ECDSA P-256/P-384, RSA >= 2048 (verification) / 3072 (generation), SHA-256/384/512, HMAC-SHA256, Argon2id, HKDF. MD5, SHA-1 (except TOTP), 3DES, RC4 and DSA are forbidden and grep-checked in CI. [T]
 - **SEC-048** Backup encryption is hybrid (R4). The wizard generates an X25519 backup key pair; the public key is stored on the host; the private key is stored ONLY wrapped by the recovery passphrase (Argon2id m=64 MiB, t=3, p=4, 16-byte salt, AES-256-GCM) and embedded in each backup file, so the host never stores the passphrase or a passphrase-derived key. Each backup uses an ephemeral X25519 key agreement to the public key, HKDF-SHA256 to a file key, and encryption in 64 KiB chunks with AES-256-GCM, nonce = 4-byte random prefix || 8-byte counter, AAD includes header and final-chunk flag (prevents truncation/reorder). Header: magic `ALICEBK1`, version, ephemeral public key, wrapped private key + KDF params + salt. Restore = file + passphrase. [T]
 - **SEC-049** Constant-time comparison (`crypto/subtle`) for tokens, MACs and hashes. [R]
+
+(Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`; review `docs/security/reviews/acme-issuance.md`.) New sealed secrets under SEC-040/041: `acme_accounts/<id>/key` (ECDSA P-256 account key, generated by
+Alice), `acme_providers/<id>/eab_hmac`, `acme_hooks/<id>/secret`, and the pending order key
+`acme_orders/<id>/pending_key` (deleted when the order ends; on success moved into `managed_private_keys` in the same
+transaction as the `certificates` row). Only the DER `secrets.Plaintext` is zeroed; Go's `ecdsa`/`rsa` key objects
+cannot be, so their lifetime is kept to the order function. None of these values is returned by the API, written to a
+log, an audit row, a job payload or an error (SEC-051's suite covers them: `TestACMESecretsNeverLeak`).
 
 ### 15.8 Logging and redaction
 

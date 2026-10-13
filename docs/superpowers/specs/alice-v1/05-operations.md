@@ -43,6 +43,20 @@ alice/
 
 No inbound internet access and no outbound internet access are required for install, update, licensing or normal operation.
 
+(Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`.) ACME issuance adds outbound connections that exist only after an Admin configures them (no preset is
+contacted before; creating a provider or hook contacts nothing):
+
+| Direction | Destination | Protocol / port | When |
+|---|---|---|---|
+| Out | The ACME directory URL and every URL its answers name (account, nonce, order, authorization, challenge, finalize, certificate, ARI `renewalInfo`) | HTTPS (443 or the URL's port) | Terms preview, registration, key rollover, deactivation, Test run, order, renewal, ARI refresh |
+| Out | The DNS hook URL | HTTPS | Every DNS-01 present and cleanup |
+| Out | `http://<name>/.well-known/acme-challenge/<token>` | HTTP 80 | HTTP-01 self-check before the CA is asked to validate |
+| Out | The HTTP-01 Nginx target | SSH 22 | `alice-helper acme-challenge-put` / `-rm` (protocol 7) |
+
+All of them go through `netaddr` (no link-local/metadata), never through an environment proxy, never follow a
+redirect, cap answers at 1 MiB (4 KiB for a hook, 1 KiB for the HTTP-01 check) and are refused in licence lock (the
+cleanup of already published records excepted). Air-gapped customers use an internal ACME CA and an internal hook.
+
 ### 18.3 What `install.sh` does, step by step
 
 Command: `tar xzf alice-1.0.0.tar.gz && cd alice && sudo ./install.sh`
@@ -195,7 +209,7 @@ secrets:
 ```
 
 Notes:
-- The `alice` container needs outbound access (SSH, Azure, SMTP, OIDC), so it is on `frontend` (normal bridge) as well as `backend`. PostgreSQL is only on the internal `backend` network.
+- The `alice` container needs outbound access (SSH, Azure, SMTP, OIDC), so it is on `frontend` (normal bridge) as well as `backend`. PostgreSQL is only on the internal `backend` network. (Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`.) The same `frontend` network carries the optional ACME connections (CA, DNS hook, HTTP-01 check; see 18.2).
 - Compose is always run with the explicit project directory `/opt/alice`; systemd is not required because `restart: unless-stopped` plus the Docker service starting at boot brings Alice back after a reboot.
 - Log rotation: Docker `json-file` with size caps, so logs cannot fill the disk. Application logs are JSON on stdout, contain no secrets (guaranteed by the secret-leak-to-log tests). Audit log is in PostgreSQL, not in these logs.
 - Optional syslog/SIEM forwarding for audit events is configured in Settings, not in compose.
