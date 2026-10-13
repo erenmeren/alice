@@ -376,3 +376,15 @@ func (c *Client) fromProblem(e *Error, p *xacme.Error) {
 
 // newError is a locally decided error.
 func newError(reason string, cause error) *Error { return &Error{Reason: reason, cause: cause} }
+
+// SolverError is the *Error a solver returns from Present or CleanUp with a reason of this package for the
+// name identifier, keeping cause for errors.Is and errors.As (for example a publisher's "reinstall the helper"
+// error) while its text says only ErrSolver: a solver's cause may quote a remote answer, and the error text
+// reaches logs and job results.
+func SolverError(reason, identifier string, cause error) *Error {
+	c := ErrSolver
+	if cause != nil {
+		c = solverCause{err: cause}
+	}
+	return &Error{Reason: reason, Identifier: identifier, cause: c}
+}

@@ -63,6 +63,9 @@ var rules = map[string][]string{
 	// The DNS-01 hook solver implements the solver contract, goes out through the guarded transport, reports its
 	// failures as the client's *acme.Error and holds the hook secret as a secrets.Plaintext. No database.
 	"alice/internal/acme/solver/dns01": {platform, "alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/secrets"},
+	// The HTTP-01 solver publishes through a Publisher interface of its own (the linuxssh connection satisfies it;
+	// the provider is never imported) and fetches the token URL through netaddr. No database, no secret.
+	"alice/internal/acme/solver/http01": {platform, "alice/internal/acme", "alice/internal/acme/solver"},
 	// Phase 8: the backup container is pure (io.Reader/io.Writer only, no file, socket or database); the dump
 	// knows no other Alice module; the backup module runs the dump, the container and the restore; the audit
 	// forwarder reads the audit log and nothing else.
@@ -96,6 +99,7 @@ var denied = map[string][]string{
 	"alice/internal/acme":                            {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver":                     {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver/dns01":               {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver/http01":              {"alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -316,6 +320,14 @@ func TestAllowed(t *testing.T) {
 		{"dns01 to fakeacme denied", "alice/internal/acme/solver/dns01", "alice/internal/testutil/fakeacme", false},
 		{"solver contract to dns01 denied", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", false},
 		{"acme to dns01 denied", "alice/internal/acme", "alice/internal/acme/solver/dns01", false},
+		{"http01 to solver contract allowed", "alice/internal/acme/solver/http01", "alice/internal/acme/solver", true},
+		{"http01 to acme client allowed", "alice/internal/acme/solver/http01", "alice/internal/acme", true},
+		{"http01 to netaddr allowed", "alice/internal/acme/solver/http01", "alice/internal/platform/netaddr", true},
+		{"http01 to linuxssh denied", "alice/internal/acme/solver/http01", "alice/internal/providers/linuxssh", false},
+		{"http01 to providers denied", "alice/internal/acme/solver/http01", "alice/internal/providers", false},
+		{"http01 to secrets denied", "alice/internal/acme/solver/http01", "alice/internal/secrets", false},
+		{"http01 to platform/db denied", "alice/internal/acme/solver/http01", "alice/internal/platform/db", false},
+		{"acme to http01 denied", "alice/internal/acme", "alice/internal/acme/solver/http01", false},
 		{"acme to solver allowed", "alice/internal/acme", "alice/internal/acme/solver", true},
 		{"acme to netaddr allowed", "alice/internal/acme", "alice/internal/platform/netaddr", true},
 		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},

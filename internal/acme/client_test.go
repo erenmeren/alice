@@ -892,3 +892,16 @@ func TestRenewalInfoGarbage(t *testing.T) {
 		requireReason(t, err, ReasonProviderUnreachable)
 	})
 }
+
+func TestSolverErrorHidesTheCauseText(t *testing.T) {
+	secret := errors.New("remote said: token=abc secret body")
+	e := SolverError(ReasonValidationFailedHTTP, "a.example.test", secret)
+	assert.Equal(t, ReasonValidationFailedHTTP, ReasonOf(e))
+	assert.ErrorIs(t, e, secret)
+	assert.ErrorIs(t, e, ErrSolver)
+	assert.NotContains(t, e.Error(), "secret body")
+	assert.Contains(t, e.Error(), "a.example.test")
+	plain := SolverError(ReasonChallengeUnavailable, "", nil)
+	assert.ErrorIs(t, plain, ErrSolver)
+	assert.Equal(t, "acme: acme.challenge_unavailable: "+ErrSolver.Error(), plain.Error())
+}
