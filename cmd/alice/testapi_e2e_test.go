@@ -251,6 +251,11 @@ func TestE2EBuildNeverTicksTheACMESweep(t *testing.T) {
 	assert.GreaterOrEqual(t, acmeSweepEvery, 50*365*24*time.Hour)
 }
 
+// Nor the ACME renewal planner: the journeys move the demo clock and run acme.schedule with POST /test/scheduler/run.
+func TestE2EBuildNeverTicksTheACMERenewalPlanner(t *testing.T) {
+	assert.GreaterOrEqual(t, acmeScheduleEvery, 50*365*24*time.Hour)
+}
+
 type countingGate struct {
 	locked bool
 	calls  int

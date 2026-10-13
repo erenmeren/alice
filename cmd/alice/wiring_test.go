@@ -116,6 +116,7 @@ func TestServeWiringIsComplete(t *testing.T) {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
 	assert.Positive(t, acmeSweepEvery, "the ACME sweep has an interval in every build")
+	assert.Positive(t, acmeScheduleEvery, "the ACME renewal planner has an interval in every build")
 	assert.Positive(t, rotationPlanEvery, "the rotation planner has an interval in every build")
 	assert.Positive(t, rotationSweepEvery, "the rotation sweep has an interval in every build")
 	assert.Positive(t, destroyRetiredEvery, "the retired-key task has an interval in every build")

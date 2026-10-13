@@ -424,19 +424,18 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		jobs.Task{Type: jobs.JobsHeartbeat, Every: heartbeatEvery, Run: func(ctx context.Context) error {
 			return writeHeartbeat(ctx, svc.pool, clk)
 		}},
-		// ACME (placeholders until Task 11 supplies the renewal planner and Task 12 the auto-deploy planner). The sweep
-		// (ClassAlways) ends crashed orders and queues leftover challenge cleanups in every license state.
-		jobs.Task{Type: jobs.ACMESchedule, Every: acmeScheduleEvery, Run: func(context.Context) error { return nil }},
+		// ACME: the renewal planner (ReadOnly: paused in lock by the scheduler, and it asks the gate itself), the
+		// auto-deploy planner (a placeholder until Task 12) and the sweep (ClassAlways: ends crashed orders and queues
+		// leftover challenge cleanups in every license state).
+		acmejobs.ScheduleTask(svc.inventory, acmeScheduleEvery, log),
 		jobs.Task{Type: jobs.ACMEAutoDeploy, Every: acmeAutoDeployEvery, Run: func(context.Context) error { return nil }},
 		acmejobs.SweepTask(acmeDeps(svc, clk, log), acmeSweepEvery),
 	)
 }
 
-// The intervals of the ACME planners (placeholders until Tasks 11 and 12; the same in every build).
-const (
-	acmeScheduleEvery   = time.Minute
-	acmeAutoDeployEvery = time.Minute
-)
+// The interval of the ACME auto-deploy planner (a placeholder until Task 12, which moves it per build like
+// acmeScheduleEvery).
+const acmeAutoDeployEvery = time.Minute
 
 // The intervals of the Phase 8 tasks that are the same in every build (contract C1); backupScheduleEvery is per build.
 const (

@@ -65,6 +65,12 @@ const (
 // (checkWiring, RunNow): the journeys run it with POST /test/scheduler/run.
 const acmeSweepEvery = 100 * 365 * 24 * time.Hour
 
+// acmeScheduleEvery is the ACME renewal planner's interval in the e2e build: in effect never, like the Key Vault
+// planners (the demo clock would otherwise order renewals between two Playwright steps). The task stays scheduled
+// (checkWiring, RunNow): the journeys move the demo clock (POST /test/clock) and run it with POST /test/scheduler/run
+// {"task": "acme.schedule"}.
+const acmeScheduleEvery = 100 * 365 * 24 * time.Hour
+
 // rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
 // rotation tasks in the e2e build: in effect never, like the sweep (the demo clock would otherwise
 // plan, advance or finish a run between two Playwright steps). The tasks stay scheduled (checkWiring,

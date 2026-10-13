@@ -59,6 +59,11 @@ func TestReleaseSweepsACMEOrdersEveryMinute(t *testing.T) {
 	assert.Equal(t, time.Minute, acmeSweepEvery)
 }
 
+// The release build plans ACME renewals every minute (design row 6).
+func TestReleasePlansACMERenewalsEveryMinute(t *testing.T) {
+	assert.Equal(t, time.Minute, acmeScheduleEvery)
+}
+
 // The release build plans due rotations and sweeps the live runs every minute (contract C1: the sweep
 // advances runs and checks the 15-minute re-check bound, so a coarser tick would delay a removal past
 // its re-check), and destroys retired private keys hourly (that task also reconciles ended deploys:
