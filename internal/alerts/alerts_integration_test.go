@@ -610,3 +610,46 @@ servers = '[{"names": ["stale.example.com"], "listens": [], "file": "/etc/nginx/
 	assert.Equal(t, []uuid.UUID{live}, items[0].TargetIDs)
 	assert.Equal(t, []string{"mixed.example.com"}, items[0].Websites)
 }
+
+// An ACME certificate (plan 2026-10-13 Task 11, design row 6) is an ordinary certificates row (source acme, its key
+// sealed in managed_private_keys): once a live location holds it, the expiry scan monitors it like any other, so no
+// acme.certificate.expiring notice is needed. One that no location holds yet (issued, not deployed) is not monitored
+// (ruling: the renewal e-mails of the ACME planner cover it until it is deployed).
+func TestACMECertificatesAreMonitoredOnceDeployed(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	clk := clock.NewFake(t0)
+	r := &recorder{}
+	s := newService(t, d, clk, lic{}, r)
+	web := seedTarget(t, d, "web-01", "nginx", nil)
+	acmeCert := func(cn string, targets ...uuid.UUID) uuid.UUID {
+		t.Helper()
+		id, key, pk := uuid.New(), uuid.New(), seed.Hex("pk"+cn)
+		_, err := d.Owner.Exec(ctx, `INSERT INTO managed_private_keys (id, owner_type, algorithm, bits, public_key_sha256, ciphertext, nonce, wrapped_dek,
+    key_version, created_at) VALUES ($1, 'certificate', 'ecdsa', 256, $2, '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, now())`, key, pk)
+		require.NoError(t, err)
+		_, err = d.Owner.Exec(ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, not_before, not_after, key_algorithm,
+public_key_sha256, pem_chain, source, private_key_id, first_seen_at, last_seen_at, created_at)
+VALUES ($1, $2, $3, $4::timestamptz - interval '6 days', $4, 'ecdsa', $5, '', 'acme', $6, now(), now(), now())`,
+			id, seed.Hex(cn), cn, t0.Add(3*day), pk, key)
+		require.NoError(t, err)
+		for _, tg := range targets {
+			_, err = d.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
+servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'nginx_file', $3, $4, $5, true, '[{"names": ["`+cn+`"], "listens": [], "file": "/etc/nginx/conf.d/a.conf", "line": 1}]', now(), now())`,
+				uuid.New(), tg, "/etc/nginx/ssl/"+cn+".crt", "/etc/nginx/ssl/"+cn+".key", id)
+			require.NoError(t, err)
+		}
+		return id
+	}
+	deployed := acmeCert("deployed.example.test", web)
+	acmeCert("undeployed.example.test")
+	items, err := s.Items(ctx, []alerts.Kind{alerts.KindCertificate}, t0.Add(30*day), 0)
+	require.NoError(t, err)
+	require.Len(t, items, 1)
+	assert.Equal(t, deployed, items[0].ObjectID)
+	assert.Equal(t, "deployed.example.test", items[0].Name)
+	assert.Equal(t, []string{"deployed.example.test"}, items[0].Websites)
+	_, err = s.Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alert.certificate_expiring"}, r.templates(), "one notice, for the deployed one")
+}
