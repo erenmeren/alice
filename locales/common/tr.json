@@ -1693,6 +1693,16 @@
         "body": "Alice denetim kaydının günlük denetimi {{first_bad_seq}} numaralı kayıtta bir sorun buldu ({{problem}}). Denetim kaydındaki kayıtlar Alice dışında değiştirilmiş ya da silinmiş olabilir.\n\nVeritabanını olduğu gibi bırakın, kimlerin doğrudan erişimi olduğunu araştırın ve denetim kaydını en son yedeğiniz ve denetim dışa aktarımınızla karşılaştırın. Alice yeni kayıtları tutmaya devam eder ve kayıt yeniden bütün olana kadar her saat yeniden denetler."
       }
     },
+    "acme": {
+      "renewal_failed": {
+        "subject": "Alice, {{name}} sertifikasını yenileyemedi",
+        "body": "Alice, {{names}} için sertifikayı art arda {{count}} kez yenilemeyi denedi ve başaramadı.\n\nSon denemenin nedeni: {{reason}}\n\nŞu anki sertifika kullanılmaya devam eder ve {{expires_at}} tarihine kadar çalışır. Alice kendiliğinden denemeye devam eder ve denemeler arasında giderek daha uzun bekler. Art arda 5 deneme başarısız olursa denemeyi bırakır.\n\nYapmanız gerekenler: Alice'te Verilen sertifikalar sayfasını açın ve bu sertifikayı seçin. Sertifikanın sayfasında her denemenin nedeni yer alır. Nedeni giderin, ardından Şimdi yenile düğmesine tıklayın."
+      },
+      "auto_renew_stopped": {
+        "subject": "Otomatik yenileme durdu: {{name}} sertifikası",
+        "body": "Art arda {{count}} deneme başarısız olduğu için Alice, {{names}} için sertifikayı kendiliğinden yenilemeyi durdurdu.\n\nSon denemenin nedeni: {{reason}}\n\nŞu anki sertifika {{expires_at}} tarihine kadar kullanılmaya devam eder. Bu tarihten sonra sertifikayı kullanan web sitelerinin ziyaretçileri bir güvenlik uyarısı görür.\n\nYapmanız gerekenler: Alice'te Verilen sertifikalar sayfasını açın ve bu sertifikayı seçin. Sertifikanın sayfasında her denemenin nedeni yer alır. Nedeni giderin, ardından Şimdi yenile düğmesine tıklayın. Bu yenileme başarılı olunca Alice sertifikayı yeniden kendiliğinden yeniler."
+      }
+    },
     "rotation": {
       "nothing_to_rotate": {
         "subject": "Planlanan SSH anahtarı yenilemesi değiştirebileceği bir şey bulamadı: {{key_label}}",

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -206,11 +207,18 @@ func backoff(attempt int) time.Duration {
 }
 
 // Render builds the email for template in locale (falling back to English). Every
-// parameter is flattened to one line, so a value can never add a header or a paragraph.
+// parameter is flattened to one line, so a value can never add a header or a paragraph. A param
+// error_reason (a closed error code such as acme.ca_rate_limited) is rendered as param reason: the
+// plain title of that code in the reader's language (errors.<code>.title; an unknown code reads as
+// internal.unexpected's title), so no raw code reaches the reader.
 func (s *Sender) Render(to, template, locale string, params map[string]string) Message {
 	clean := make(map[string]string, len(params))
 	for k, v := range params {
 		clean[k] = oneLine(v)
+	}
+	if code, ok := params["error_reason"]; ok {
+		delete(clean, "error_reason")
+		clean["reason"] = s.reasonTitle(locale, code)
 	}
 	subject := oneLine(s.Catalog.T(locale, "email."+template+".subject", clean))
 	body := strings.TrimSpace(s.Catalog.T(locale, "email."+template+".body", clean))
@@ -223,4 +231,18 @@ func (s *Sender) Render(to, template, locale string, params map[string]string) M
 	}
 	body += "\n\n" + s.Catalog.T(locale, "email.footer", nil)
 	return Message{To: to, Subject: subject, Body: body}
+}
+
+// reasonCode is the form of a closed error code (internal/api errors.go reasons).
+var reasonCode = regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`)
+
+// reasonTitle is the plain title of an error code in locale (see Render).
+func (s *Sender) reasonTitle(locale, code string) string {
+	if reasonCode.MatchString(code) {
+		key := "errors." + code + ".title"
+		if t := s.Catalog.T(locale, key, nil); t != key {
+			return oneLine(t)
+		}
+	}
+	return oneLine(s.Catalog.T(locale, "errors.internal.unexpected.title", nil))
 }

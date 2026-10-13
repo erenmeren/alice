@@ -1693,6 +1693,16 @@
         "body": "The daily check of the Alice audit log found a problem at entry {{first_bad_seq}} ({{problem}}). Entries of the audit log may have been changed or deleted outside Alice.\n\nKeep the database as it is, find out who had direct access to it, and compare the audit log with your latest backup and audit export. Alice keeps recording new entries and checks the log again every hour until it is intact."
       }
     },
+    "acme": {
+      "renewal_failed": {
+        "subject": "Alice could not renew the certificate for {{name}}",
+        "body": "Alice tried to renew the certificate for {{names}} {{count}} times in a row and did not succeed.\n\nReason of the last attempt: {{reason}}\n\nThe current certificate stays in use and keeps working until {{expires_at}}. Alice keeps trying by itself and waits longer between the attempts. After 5 failed attempts in a row it stops trying.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page shows the reason of each attempt. Remove the cause, then choose Renew now."
+      },
+      "auto_renew_stopped": {
+        "subject": "Automatic renewal stopped: certificate for {{name}}",
+        "body": "Alice stopped renewing the certificate for {{names}} by itself, because {{count}} attempts in a row failed.\n\nReason of the last attempt: {{reason}}\n\nThe current certificate stays in use until {{expires_at}}. After that time, visitors of the websites that use it see a security warning.\n\nWhat to do: open Issued certificates in Alice and choose this certificate. Its page shows the reason of each attempt. Remove the cause, then choose Renew now. When that renewal succeeds, Alice renews the certificate by itself again."
+      }
+    },
     "rotation": {
       "nothing_to_rotate": {
         "subject": "Planned SSH key rotation found nothing it could change: {{key_label}}",
