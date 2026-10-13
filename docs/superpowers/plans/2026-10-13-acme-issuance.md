@@ -125,31 +125,31 @@ docs/superpowers/rulings/acme-issuance.md  docs/security/reviews/acme-issuance.m
 ### Task 6: DNS-01 hook solver
 - [ ] POST `{"action":"present|cleanup","fqdn","value","ttl"}` with `Authorization: Bearer <sealed secret>` and `X-Alice-Signature` HMAC; https only through the Task 3 transport; 200/204 = ok; cleanup always attempted (deferred) even on failure; propagation wait = hook-reported `ready` or bounded polling of the CA. Tests: refusal, timeout, secret never in error text.
 
-### Task 7: Keys, CSR, issuance record
+### Task 8: Keys, CSR, issuance record
 - [ ] Key generation per policy, CSR with SANs, seal into `managed_private_keys` (reuse `inventory/uploads.go` helper), insert `certificates` row `source='acme'` via the existing import normalisation (chain order, `chain_complete`, fingerprint). Tests: ECDSA/RSA, wildcard, IDN names, chain mismatch refused, key zeroed.
 
-### Task 8: Inventory service — providers, accounts, hooks
+### Task 9: Inventory service — providers, accounts, hooks
 - [ ] CRUD with audit, step-up on Admin changes, ToS gate (`ALC-ACM-0003`), provider-in-use refusal, EAB sealing, no secret in any response struct (reflection test that response types have no secret-bearing field names).
 
-### Task 9: Certificates, orders, issue job, test run
+### Task 10: Certificates, orders, issue job, test run
 - [ ] `acme_certificates` CRUD, `RequestOrder` (license `Allow(ClassChange)`, per-cert advisory lock, one active order), job handler `acme.issue`, dry-run kind `test`. Audit, state machine tests, restart recovery (order in `pending` after a crash resumes by `order_url` or fails cleanly).
 
-### Task 10: Renewal planner and alerts
+### Task 11: Renewal planner and alerts
 - [ ] `PlanACMERenewals` (pure decision function + SQL like `kv_autodeploy_plan.go`), ARI use, backoff table, CA rate-limit awareness, `acme.renewal_failed` e-mail templates en/tr, stop-after-5, `acme.schedule` task wired in `cmd/alice/services.go` (and **not** ticked in the e2e build, like KV), lock-mode test (no CA call, no deployment), leader-only test.
 
-### Task 11: Bindings and auto-deploy
+### Task 12: Bindings and auto-deploy
 - [ ] `acme_bindings` + `PlanACMEAutoDeploy`: creates deployments with trigger `acme_renewal` through `insertDeployment`, waves of 5, stop after 3 failed deploys, `deployment.*` audit rows come from the engine unchanged. **Rollback proof (integration):** forced `nginx -t` failure after the write ⇒ `deployment.rolled_back`, `certificates.deployed_fingerprint` unchanged, TLS probe still returns the old leaf; the ACME certificate stays `issued` and the binding is marked `attention`.
 
-### Task 12: API
+### Task 13: API
 - [ ] Routes, handlers, OpenAPI, authz notes, request validation (names: DNS labels, wildcard only first label, max 100 names; directory URL https only; contact `mailto:` only), unified error mapping, rate-limit and license tests, `TestEveryStateChangingRouteDeclaresALicenseClass` passes.
 
-### Task 13: UI — certificate authorities settings
+### Task 14: UI — certificate authorities settings
 - [ ] Page under Settings (Admin): provider list/form with presets, CA bundle textarea (PEM validated server-side), EAB fields (write-only), ToS checkbox with link, account status, rollover/deactivate with step-up; hooks form. Unit tests, en/tr, empty and error states, a11y tests.
 
-### Task 14: UI — Issued certificates, wizard, status, test run
+### Task 15: UI — Issued certificates, wizard, status, test run
 - [ ] List, detail (state, next renewal, ARI note, last orders with plain-language error text and "what to do"), `GetCertificateDialog`, **Test run** button, bindings editor. Role gates from server data. Unit tests + `design-gaps.md` rows.
 
-### Task 15: alice-helper HTTP-01 webroot (isolated, optional)
+### Task 7: alice-helper HTTP-01 webroot (isolated, optional)
 - [ ] Justification: the only way to publish an HTTP-01 token on the host the name points at without SSH file-write or config edits. `acme-challenge-put --token T` (stdin: key authorization) and `acme-challenge-rm --token T` write/remove `/var/www/alice-acme/.well-known/acme-challenge/<token>` (constant in `helperproto`): token `[A-Za-z0-9_-]{22,128}`, body ≤ 512 bytes, `O_NOFOLLOW`, directory must exist (the admin creates it; helper never creates the parent), mode 0644, no other path ever. Bump `Protocol` 7, `Version` 1.6.0; `linuxssh.Cmd*` constructors; setup script checksums; root-only suites; `make test-ssh` including a negative path test (traversal, symlink, oversize). Solver `solver/http01` calls it through the existing `linuxssh.Conn.Run`, and verifies the file with a probe from Alice before accepting the challenge. Docs: `docs/nginx-host-preparation.md` gets the snippet and port-80 requirement.
 - [ ] If any root-only suite or `test-ssh` cannot be run on this machine, **stop this task**, leave HTTP-01 as a documented carry, and say so in the final report.
 
@@ -199,4 +199,4 @@ Source: adversarial review against master `f369b83` (blocking B1–B5, important
 
 **A13 Registration checklist (I9, M4).** Task 2 also covers: job labels (literal `Register` calls, en/tr), `MaxAttemptsFor` → `acme.issue` returns 1, route groups in `lockAvailable`/`lockRuleViolations` (`authz_test.go:760-790`) and `tools/lockcheck`, `GRANT SELECT, INSERT` + column-level `UPDATE` to `alice_app` (pattern `00006:277-286`) with a non-superuser test, `05-operations.md` outbound table and `04-security.md` entries (specs are updated, listed as deviations), `fuzz-acme` Makefile target in `fuzz-nightly` and `fuzz-release`, EAB HMAC base64url decode with a bad-value test, concurrent `acme.issue` for one certificate yields one order (`DedupeKey`), concurrent writes to `failures`/`next_attempt_at`, `Location` has no UUID dependency that breaks restore. `key_type` of an issued certificate with bindings cannot be changed (M2; `KeyTypeMismatchError`); the UI says so. Per-task gates (M5): `make authz-doc`, `make i18n-check`, archtest, lint run in every task; `make ci` stays at the end.
 
-**A14 Task order.** 0 gate · 1 migration (+ source consumers, down re-map, backup test) · 2 errors/permissions/jobs/rate class/registrations · 3 transport · 4 fakeacme · 5 client + ARI · 6 DNS-01 hook solver · **7 helper HTTP-01 (old Task 15)** · 8 keys/CSR/issuance record · 9 inventory (providers, accounts, hooks) · 10 certificates/orders/issue/cleanup · 11 renewal planner/alerts · 12 bindings/auto-deploy · 13 API · 14 UI settings · 15 UI issued certificates · 16 e2e · 17 fuzz/security · 18 docs · 19 final. (The task bodies above keep their original headings; execute in this order.)
+**A14 Task order.** 0 gate · 1 migration (+ source consumers, down re-map, backup test) · 2 errors/permissions/jobs/rate class/registrations · 3 transport · 4 fakeacme · 5 client + ARI · 6 DNS-01 hook solver · **7 helper HTTP-01 (old Task 15)** · 8 keys/CSR/issuance record · 9 inventory (providers, accounts, hooks) · 10 certificates/orders/issue/cleanup · 11 renewal planner/alerts · 12 bindings/auto-deploy · 13 API · 14 UI settings · 15 UI issued certificates · 16 e2e · 17 fuzz/security · 18 docs · 19 final. (Task headings above were renumbered to this order; Task 7 is the helper HTTP-01 task, formerly 15. Cross-references inside bodies to "Task 15" mean Task 7.)
