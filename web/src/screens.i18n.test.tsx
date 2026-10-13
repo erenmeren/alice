@@ -39,6 +39,10 @@ import {
   kvVersionFixture,
   emptyDashboardSummary,
   backupStateFixture,
+  acmeAccountFixture,
+  acmeCertificateFixture,
+  acmeHookFixture,
+  acmeProviderFixture,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -154,6 +158,19 @@ const dataHandlers = [
   http.get(`/api/v1/targets/${VAULT_ID}/kv/certificates`, () => HttpResponse.json({ items: [kvCertificateFixture({ bound: true, exportable: false, missing_since: '2026-10-01T00:00:00Z' })], next_cursor: null })),
   http.get(`/api/v1/bindings/${BINDING_ID}`, () => HttpResponse.json(bindingFixture({ auto_deploy: true }))),
   http.get('/api/v1/audit', () => HttpResponse.json({ items: [auditEntry], next_cursor: null })),
+  // The ACME work: an authority with an unsettled key change and one without names or account, a hook without names.
+  http.get('/api/v1/acme/providers', () =>
+    HttpResponse.json({ items: [acmeProviderFixture({ eab_configured: true, pending_rollover: true }), acmeProviderFixture({ id: 'p2', name: 'Corp CA', preset: 'custom', active_account_id: null, allowed_suffixes: [] })] }),
+  ),
+  http.get('/api/v1/acme/providers/:id', ({ params }) =>
+    HttpResponse.json(
+      params.id === 'p2'
+        ? { ...acmeProviderFixture({ id: 'p2', active_account_id: null }), accounts: [acmeAccountFixture({ state: 'deactivated', tos_url: '', tos_accepted_at: null, contact_email: '' })] }
+        : { ...acmeProviderFixture({ pending_rollover: true }), accounts: [acmeAccountFixture({ state: 'pending_rollover' })] },
+    ),
+  ),
+  http.get('/api/v1/acme/hooks', () => HttpResponse.json({ items: [acmeHookFixture(), acmeHookFixture({ id: 'h2', name: 'Other DNS', allowed_suffixes: [], secret_configured: false })] })),
+  http.get('/api/v1/acme/certificates', () => HttpResponse.json({ items: [acmeCertificateFixture()], next_cursor: null })),
   // The dashboard with every widget filled, so the sweep covers their texts too.
   http.get('/api/v1/dashboard/summary', () =>
     HttpResponse.json({
@@ -327,5 +344,40 @@ describe.each(['en', 'tr'] as const)('the rotation panel and its dialogs in %s',
     await userEvent.click(await screen.findByRole('button', { name: lang === 'en' ? 'Create rotation policy' : 'Yenileme kuralı oluştur' }));
     await screen.findByRole('dialog', { name: lang === 'en' ? 'Create a rotation policy' : 'Yenileme kuralı oluştur' });
     expectNoRawKeys();
+  });
+});
+
+describe.each(['en', 'tr'] as const)('the certificate authority dialogs in %s', (lang) => {
+  it('open the provider, account, hook and removal dialogs with no untranslated keys', async () => {
+    const admin = sessionFor('admin');
+    server.use(
+      ...sessionHandlers({ ...admin, user: { ...admin.user, locale: lang }, stepup_until: '2099-01-01T00:00:00Z' }, installedStatus),
+      http.get('/api/v1/acme/providers', () => HttpResponse.json({ items: [acmeProviderFixture({ eab_configured: true }), acmeProviderFixture({ id: 'p2', name: 'Corp CA', active_account_id: null })] })),
+      http.get('/api/v1/acme/providers/:id', ({ params }) =>
+        HttpResponse.json(params.id === 'p2' ? { ...acmeProviderFixture({ id: 'p2', active_account_id: null }), accounts: [] } : { ...acmeProviderFixture(), accounts: [acmeAccountFixture()] }),
+      ),
+      ...dataHandlers,
+    );
+    const t = (en: string, tr: string) => (lang === 'en' ? en : tr);
+    await renderRoute('/settings?tab=acme', { languages: [lang] });
+    await screen.findByText(t('Authorities and accounts', 'Yetkililer ve hesaplar'));
+    const cancel = t('Cancel', 'İptal');
+    const openAndClose = async (button: HTMLElement) => {
+      await userEvent.click(button);
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(within(dialog).queryByRole('status', { name: t('Loading…', 'Yükleniyor…') })).not.toBeInTheDocument());
+      expectNoRawKeys();
+      await userEvent.click(within(dialog).getByRole('button', { name: cancel }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    };
+    await openAndClose(screen.getByRole('button', { name: t('Add certificate authority', 'Sertifika yetkilisi ekle') }));
+    await openAndClose(screen.getByRole('button', { name: t('Edit LE staging', 'LE staging öğesini düzenle') }));
+    await openAndClose(screen.getByRole('button', { name: t('Remove LE staging', 'LE staging öğesini kaldır') }));
+    await openAndClose(await screen.findByRole('button', { name: t('Rotate account key', 'Hesap anahtarını yenile') }));
+    await openAndClose(screen.getByRole('button', { name: t('Deactivate account', 'Hesabı devre dışı bırak') }));
+    await openAndClose(await screen.findByRole('button', { name: t('Register account', 'Hesap kaydet') }));
+    await openAndClose(screen.getByRole('button', { name: t('Add DNS hook', 'DNS kancası ekle') }));
+    await openAndClose(screen.getAllByRole('button', { name: t('Edit Internal DNS', 'Internal DNS öğesini düzenle') })[0]);
+    await openAndClose(screen.getAllByRole('button', { name: t('Remove Internal DNS', 'Internal DNS öğesini kaldır') })[0]);
   });
 });

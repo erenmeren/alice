@@ -1,4 +1,5 @@
 import { http, HttpResponse } from 'msw';
+import type { ACMEAccount, ACMECertificate, ACMEHook, ACMEProvider } from '../api/acme';
 import type { DashboardSummary } from '../api/phase7';
 import type { Provider } from '../api/sso';
 import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
@@ -946,3 +947,90 @@ export const smtpFixture = {
   version: 0,
   updated_at: null,
 };
+
+// ACME issuance: a certificate authority (Let's Encrypt staging, with an active account), its account, a DNS hook and an
+// ACME certificate. The ids are fixed UUIDs, so the tests can address them.
+export const ACME_PROVIDER_ID = '0192f000-0000-7000-8000-0000000000a1';
+export const ACME_ACCOUNT_ID = '0192f000-0000-7000-8000-0000000000a2';
+export const ACME_HOOK_ID = '0192f000-0000-7000-8000-0000000000a3';
+export const ACME_CERT_ID = '0192f000-0000-7000-8000-0000000000a4';
+
+export function acmeAccountFixture(o: Partial<ACMEAccount> = {}): ACMEAccount {
+  return {
+    id: ACME_ACCOUNT_ID,
+    provider_id: ACME_PROVIDER_ID,
+    contact_email: 'ops@example.com',
+    account_url: 'https://acme-staging-v02.api.letsencrypt.org/acme/acct/123',
+    tos_url: 'https://letsencrypt.org/documents/LE-SA-v1.5.pdf',
+    tos_accepted_at: '2026-10-13T09:00:00Z',
+    state: 'active',
+    created_at: '2026-10-13T09:00:00Z',
+    updated_at: '2026-10-13T09:00:00Z',
+    ...o,
+  };
+}
+
+export function acmeProviderFixture(o: Partial<ACMEProvider> = {}): ACMEProvider {
+  return {
+    id: ACME_PROVIDER_ID,
+    name: 'LE staging',
+    directory_url: 'https://acme-staging-v02.api.letsencrypt.org/directory',
+    preset: 'letsencrypt_staging',
+    ca_bundle_pem: '',
+    eab_kid: '',
+    eab_configured: false,
+    allowed_suffixes: ['example.com'],
+    active_account_id: ACME_ACCOUNT_ID,
+    pending_rollover: false,
+    created_at: '2026-10-13T08:00:00Z',
+    updated_at: '2026-10-13T08:00:00Z',
+    ...o,
+  };
+}
+
+export function acmeHookFixture(o: Partial<ACMEHook> = {}): ACMEHook {
+  return {
+    id: ACME_HOOK_ID,
+    name: 'Internal DNS',
+    url: 'https://dns-hook.example.com/acme',
+    ca_bundle_pem: '',
+    secret_configured: true,
+    allowed_suffixes: ['example.com'],
+    propagation_wait_seconds: 5,
+    poll_timeout_seconds: 60,
+    created_at: '2026-10-13T08:00:00Z',
+    updated_at: '2026-10-13T08:00:00Z',
+    ...o,
+  };
+}
+
+export function acmeCertificateFixture(o: Partial<ACMECertificate> = {}): ACMECertificate {
+  return {
+    id: ACME_CERT_ID,
+    provider_id: ACME_PROVIDER_ID,
+    account_id: ACME_ACCOUNT_ID,
+    names: ['www.example.com'],
+    key_type: 'ecdsa_p256',
+    challenge: 'dns01',
+    hook_id: ACME_HOOK_ID,
+    http_target_id: null,
+    renew_before_days: 30,
+    auto_renew: true,
+    auto_deploy: false,
+    state: 'active',
+    stopped_reason: '',
+    failures: 0,
+    next_attempt_at: null,
+    last_attempt_at: null,
+    last_error: null,
+    running_order_id: null,
+    current: null,
+    ari_window: null,
+    deploy_held_reason: '',
+    deploy_stopped: false,
+    bindings_count: 0,
+    created_at: '2026-10-13T08:00:00Z',
+    updated_at: '2026-10-13T08:00:00Z',
+    ...o,
+  };
+}

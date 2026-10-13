@@ -61,3 +61,18 @@ export const PUBLIC_PROVIDERS_KEY = ['auth', 'oidc', 'providers'] as const;
 // Phase 8. The backup list (with its state and schedule); the backup schedule, the HTTPS certificate's information and
 // the audit forwarding are settings (settingsKey). No key holds a secret: uploads and the CA PEM are mutation inputs only.
 export const BACKUPS_KEY = ['backups'] as const;
+
+// ACME issuance. ACME_KEY is the prefix of everything; the lists sit under 'list' segments, so no id (a UUID) can
+// address the same entry. No key holds a secret: the EAB HMAC key and the DNS hook secret are mutation inputs only.
+export const ACME_KEY = ['acme'] as const;
+export const ACME_PROVIDERS_KEY = ['acme', 'providers'] as const;
+export const ACME_PROVIDER_LIST_KEY = ['acme', 'providers', 'list'] as const;
+export const acmeProviderKey = (id: string) => ['acme', 'providers', id] as const;
+export const ACME_HOOKS_KEY = ['acme', 'hooks'] as const;
+export const ACME_HOOK_LIST_KEY = ['acme', 'hooks', 'list'] as const;
+export const ACME_CERTIFICATES_KEY = ['acme', 'certificates'] as const;
+export const acmeCertificateListKey = (filters: { state?: string; provider_id?: string; q?: string; cursor?: string; limit?: number }) =>
+  ['acme', 'certificates', 'list', filters] as const;
+export const acmeCertificateKey = (id: string) => ['acme', 'certificates', id] as const;
+export const acmeOrdersKey = (id: string) => ['acme', 'certificates', id, 'orders'] as const;
+export const acmeBindingsKey = (id: string) => ['acme', 'certificates', id, 'bindings'] as const;

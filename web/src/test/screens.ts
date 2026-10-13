@@ -47,6 +47,8 @@ export const SCREENS: Screen[] = [
   },
   { path: '/settings?tab=backups', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Save backup schedule', tr: 'Yedekleme zamanlamasını kaydet' } },
   { path: '/settings?tab=https', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Certificate in use', tr: 'Kullanılan sertifika' } },
+  // The ACME work: Settings → Certificate authorities.
+  { path: '/settings?tab=acme', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Authorities and accounts', tr: 'Yetkililer ve hesaplar' } },
   { path: '/settings?tab=forwarding', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Save forwarding settings', tr: 'İletim ayarlarını kaydet' } },
   { path: '/account', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Change password', tr: 'Parolayı değiştir' } },
   { path: '/users', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Sign-in method', tr: 'Giriş yöntemi' } },

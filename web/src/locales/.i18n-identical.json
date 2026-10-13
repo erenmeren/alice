@@ -1,4 +1,10 @@
 [
+  "acme.enum.keyType.ecdsa_p384",
+  "acme.enum.keyType.rsa_2048",
+  "acme.enum.keyType.rsa_3072",
+  "acme.enum.keyType.rsa_4096",
+  "acme.enum.preset.letsencrypt",
+  "acme.enum.preset.zerossl",
   "certificates.csr.keyRsa3072",
   "certificates.csr.keyRsa4096",
   "certificates.detail.keyValue",

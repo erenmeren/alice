@@ -203,8 +203,8 @@ describe('SettingsPage, mail', () => {
 });
 
 describe('SettingsPage, design', () => {
-  const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'forwarding', 'sso'] as const;
-  const LABELS = ['Email', 'Recipients', 'Alerts', 'General', 'Backups', 'HTTPS certificate', 'Audit forwarding', 'Single sign-on'];
+  const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso'] as const;
+  const LABELS = ['Email', 'Recipients', 'Alerts', 'General', 'Backups', 'HTTPS certificate', 'Certificate authorities', 'Audit forwarding', 'Single sign-on'];
   const DESCRIPTIONS: Record<(typeof TABS)[number], string> = {
     mail: 'The mail server Alice uses to send alerts.',
     recipients: 'The people who receive operational alerts.',
@@ -212,6 +212,7 @@ describe('SettingsPage, design', () => {
     general: 'Defaults for this Alice installation.',
     backups: 'Encrypted backups protect recovery data. Test your restore procedure separately.',
     https: 'The certificate presented by this Alice installation.',
+    acme: "Get and renew certificates automatically from a certificate authority that uses ACME, such as Let's Encrypt or your own internal CA.",
     forwarding: 'Send audit events to an independent syslog or SIEM destination.',
     sso: 'Connect an OpenID Connect provider and map groups to Alice roles.',
   };
@@ -233,17 +234,19 @@ describe('SettingsPage, design', () => {
       http.get('/api/v1/settings/general', () => HttpResponse.json({ public_url: 'https://alice.example.com', retired_key_retention_days: 30, version: 0 })),
       http.get('/api/v1/sso/settings', () => HttpResponse.json({ allow_admin_role: false, version: 0 })),
       http.get('/api/v1/sso/providers', () => HttpResponse.json({ items: [] })),
+      http.get('/api/v1/acme/providers', () => HttpResponse.json({ items: [] })),
+      http.get('/api/v1/acme/hooks', () => HttpResponse.json({ items: [] })),
     );
   }
 
-  it('has the design header and lists the eight sections in order, each with an icon', async () => {
+  it('has the design header and lists the nine sections in order, each with an icon', async () => {
     every();
     await renderRoute('/settings');
     expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
     expect(screen.getByText('Make Alice work the way your team does.')).toBeInTheDocument();
     const list = screen.getByRole('tablist', { name: 'Settings sections' });
     const tabs = within(list).getAllByRole('tab');
-    expect(tabs).toHaveLength(8);
+    expect(tabs).toHaveLength(9);
     tabs.forEach((tab, i) => {
       expect(tab).toHaveTextContent(LABELS[i]);
       expect(tab.textContent).toBe(LABELS[i]);

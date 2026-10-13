@@ -1,0 +1,91 @@
+/* The certificate authorities settings (ACME): the allowed-name chips, the account facts and the hook help. The
+   provider and hook heads reuse the identity provider's head of settings.module.css. Tokens only. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--alice-border);
+  border-radius: 6px;
+  background: var(--alice-surface-subtle);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.chipText {
+  font-family: var(--mantine-font-family-monospace);
+}
+.addRow {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+.addRow > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.namesLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--alice-text-secondary);
+}
+
+.account {
+  margin-top: 16px;
+}
+.accountTitle {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.accountActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.help {
+  margin-top: 16px;
+  border: 1px solid var(--alice-border);
+  border-radius: 8px;
+  padding: 0 15px;
+}
+.help > summary {
+  padding: 12px 0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.help > summary:focus-visible {
+  outline: 3px solid var(--alice-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.help[open] > summary {
+  border-bottom: 1px solid var(--alice-border);
+}
+.helpBody {
+  display: grid;
+  gap: 8px;
+  padding: 12px 0 15px;
+  font-size: 12px;
+  color: var(--alice-text-secondary);
+}
+.helpBody > p {
+  margin: 0;
+}
