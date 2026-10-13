@@ -12,7 +12,7 @@ One backup is one encrypted file. It holds everything needed to bring the instal
 
 | Part | What it is |
 |---|---|
-| The database | Every table: users with their (encrypted) authenticator secrets, API tokens, servers, certificates and their (encrypted) private keys, SSH keys, Key Vaults and their (encrypted) credentials, rotations, jobs, settings, the license and the installation record with its Installation ID, and the whole audit log. Alice's own SSH key is in the database too (encrypted). |
+| The database | Every table: users with their (encrypted) authenticator secrets, API tokens, servers, certificates and their (encrypted) private keys, SSH keys, Key Vaults and their (encrypted) credentials, certificate authorities with their (encrypted) account keys, external account keys and DNS hook secrets, rotations, jobs, settings, the license and the installation record with its Installation ID, and the whole audit log. Alice's own SSH key is in the database too (encrypted). |
 | `keys/master.key` | The master key that opens every encrypted value in the database. |
 | `keys/tls.crt`, `keys/tls.key` | The HTTPS certificate and its private key. |
 | `state/hwm.dat` | The license time record. |
@@ -196,6 +196,12 @@ nothing was changed. The refusals and what to do are in
   **Run now** or **Discard** for each ([admin-guide.md](admin-guide.md#servers)). Tasks that only read (scans,
   checks) and Alice's own maintenance run as usual, and work that falls due after the restore (renewals, rotation
   steps) starts as usual: check the rotations and deployments that were in progress.
+- Automatic renewal of certificates from certificate authorities is switched **off** on every one of them, so that a
+  restored copy never orders certificates behind the original installation's back. The restore prints
+  `Warning: Automatic renewal of <n> certificates ordered from certificate authorities is switched off: turn it on again under Issued certificates once this installation replaces the original.`
+  Switch **Automatic renewal** on again on each certificate's page when this installation is the one in use. A
+  restored copy uses the same accounts at the certificate authorities as the original: do not rotate or deactivate an
+  account on a test copy ([admin-guide.md](admin-guide.md#after-a-restore)).
 - If audit forwarding is on, the syslog server receives entries again from where the backup's forwarding stood:
   first identical copies of entries it already has (up to the backup's newest entry), then `system.restored` and the
   entries after it under sequence numbers it already holds with other content. From there the two chains differ.

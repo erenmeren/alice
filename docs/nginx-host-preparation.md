@@ -148,7 +148,8 @@ The helper writes the file `/var/www/alice-acme/.well-known/acme-challenge/<toke
 read it) under a new temporary name and renames it into place, and removes it when the challenge is over. The token
 is 22 to 128 letters, digits, `-` or `_`; the text must be exactly the token, a dot and 43 such characters. Anything
 else is refused, and no other path is ever written or removed. Alice checks the file itself by fetching the URL
-before it asks the authority to validate. A server whose helper is older than protocol 7 keeps working for
+before it asks the authority to validate, so the Alice server must reach port 80 of the name too (it never follows
+a redirect there). A server whose helper is older than protocol 7 keeps working for
 everything else; Alice asks you to reinstall the helper there (see "Updating the helper") before it uses this method.
 
 ### How the helper decides what it may change
@@ -438,7 +439,7 @@ rm -rf /var/lib/alice-svc /var/lib/alice-helper
 
 `/var/lib/alice-helper` also holds the backups of replaced certificate and key files (private keys included); the
 `rm -rf` removes them. Nginx and its certificate files stay as they are. If you prepared "Publishing HTTP-01
-challenges", remove the `location /.well-known/acme-challenge/` lines yourself, reload Nginx and
+challenges", remove the `location ^~ /.well-known/acme-challenge/` block yourself, reload Nginx and
 `rm -rf /var/www/alice-acme`.
 
 `userdel -r` is not used because the home directory belongs to root. If `userdel` reports that `alice-svc` is still

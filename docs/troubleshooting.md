@@ -263,6 +263,44 @@ in Alice is in [operator-guide.md](operator-guide.md#key-vaults).
   never deploys it. Add the intermediate certificates to the certificate in Key Vault (a new version) to avoid
   this.
 
+## Issued certificates (ACME)
+
+Setting up certificate authorities, accounts and DNS hooks is in
+[admin-guide.md](admin-guide.md#certificate-authorities-acme); using **Issued certificates** is in
+[operator-guide.md](operator-guide.md#issued-certificates-acme). The `ALC-ACM-…` codes are explained one by one
+below.
+
+- **Start with a Test run.** It shows whether the authority can verify every name without issuing anything. Use
+  **Let's Encrypt (staging, for tests)** while you try a new setup: the public service's request limits are low and
+  failed checks count against them (`ALC-ACM-0005`).
+- **"The certificate authority could not be reached" or "The authority's connection is not trusted".** Alice needs
+  a direct HTTPS route to the authority: proxy settings are ignored, and link-local or metadata addresses are never
+  contacted (`ALC-ACM-0001`). A company CA needs its root certificate in the authority's settings (`ALC-ACM-0013`).
+- **The DNS proof fails.** Check the hook's own log first: Alice sends `present` and `cleanup` with the bearer
+  secret and an `X-Alice-Signature` header (the contract is under **How does the hook work?**). A wrong secret or a
+  hook that answers with anything but 200 or 204 is `ALC-ACM-0008`; a record the authority cannot see yet is
+  `ALC-ACM-0006` (raise **Wait after adding the record**, or let the hook answer `{"ready":false}` until the record is
+  visible). A wildcard and its base name need two TXT values at the same name.
+- **The web proof fails.** The name must point to the chosen Nginx server, port 80 must be open to the authority and
+  to Alice, and the server needs the `location ^~ /.well-known/acme-challenge/` block and the root-owned directory of
+  [nginx-host-preparation.md](nginx-host-preparation.md) ("Publishing HTTP-01 challenges"). A redirect to HTTPS in
+  front of the block makes the proof fail (`ALC-ACM-0007`). An older helper gives `ALC-SSH-0013`.
+- **"This name is not allowed" (`ALC-ACM-0015`).** Every name must end in a domain ending allowed for the authority,
+  and for the DNS proof also for the hook. An empty list allows nothing.
+- **A certificate is "Renewal stopped".** Five renewals in a row failed. Fix the cause shown under **Last problem**,
+  then **Order now**, or an administrator chooses **Renew now** to switch automatic renewal on again.
+- **A website did not get the renewed certificate.** Both the certificate's **Automatic deployment of new
+  certificates** and the website's own switch must be on (the panel says "Will deploy automatically to N of M
+  websites"). A certificate with an incomplete chain, or one that arrived before the license allowed changes again,
+  is held for an administrator. After three failed deployments automatic deployment of that certificate stops; the
+  website shows **Needs attention** from about a minute after the failure. Use **Deploy now** after fixing the cause.
+- **After Deploy now the website still says "Waiting for deployment".** The page does not refresh the websites by
+  itself: reload it, or follow the deployment on **Deployments**.
+- **The e-mail says "choose Renew now" but there is no such button.** **Renew now** appears for administrators only
+  when automatic renewal stopped; otherwise use **Order now**.
+- **A restored installation does not renew.** A restore switches automatic renewal off on every certificate from a
+  certificate authority; switch it on again on each certificate's page.
+
 ## Alerts, e-mail and single sign-on
 
 - **No e-mails arrive.** Open **Settings → Email** and choose **Send test e-mail** (it uses the saved settings). Its
@@ -2512,7 +2550,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** The hook wrote the record to a different zone, the change was not yet published when the authority checked, or a wildcard or CNAME points elsewhere.
 
-**What to do.** Run the hook's test, check the zone and the record, allow the DNS change to spread, then order again.
+**What to do.** Check the hook's own log, the zone and the record, allow the DNS change to spread (a longer **Wait after adding the record**, or a hook that answers `{"ready":false}` until the record is visible), then use **Test run** and order again.
 
 ## ALC-ACM-0007: The web proof failed
 
@@ -2556,11 +2594,11 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-ACM-0012: The authority is still in use
 
-**Meaning.** At least one ACME certificate refers to the provider. The provider was not changed. (HTTP 409, reason `acme.provider_in_use`.)
+**Meaning.** The certificate authority still has an account (active, or a key change not settled), or at least one ACME certificate refers to it. The provider was not changed. (HTTP 409, reason `acme.provider_in_use`.)
 
-**Likely cause.** Certificates were created for this provider and still exist.
+**Likely cause.** Certificates were created for this provider and still exist, or its account was not deactivated.
 
-**What to do.** Remove or move those certificates, then delete the provider.
+**What to do.** Delete those certificates (or move them to another authority) and deactivate the account, then remove the provider.
 
 ## ALC-ACM-0013: The authority's connection is not trusted
 
@@ -2596,11 +2634,11 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-ACM-0017: This proof method is not available yet
 
-**Meaning.** The request asks for the HTTP-01 challenge, which is switched off in this build or needs a newer helper on the target. (HTTP 422, reason `acme.challenge_unavailable`.)
+**Meaning.** The web proof (HTTP-01) cannot be used for these names or this server. Nothing was changed. (HTTP 422, reason `acme.challenge_unavailable`.)
 
-**Likely cause.** The web proof needs a newer helper on the server, or is not enabled yet.
+**Likely cause.** A wildcard name (only the DNS proof can prove it), a server that is not an Nginx server in Alice or was removed, or a challenge the helper cannot publish. A server whose helper is too old answers `ALC-SSH-0013` instead.
 
-**What to do.** Use the DNS proof, or reinstall the helper on this server to use the web proof.
+**What to do.** Use the DNS proof, or choose an Nginx server that answers for the names on port 80.
 
 ## ALC-ACM-0018: The key type cannot be changed
 
@@ -2680,7 +2718,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Likely cause.** The first order of the certificate has not finished or did not succeed.
 
-**What to do.** Get the certificate first (Renew now on its page under Issued certificates), then connect the websites or deploy it.
+**What to do.** Get the certificate first (**Get certificate now** on its page under **Issued certificates**; the message's "Renew now" means that button), then connect the websites or deploy it.
 
 ## ALC-ACM-0028: This website already follows another certificate
 

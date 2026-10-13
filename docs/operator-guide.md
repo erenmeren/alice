@@ -403,7 +403,8 @@ In both cases the entry stays in Alice as last seen; this is a known limitation 
 
 **Certificates** lists every TLS certificate Alice knows, once per certificate: the ones it found on Nginx servers
 and the ones you added. Filter by **Search** (name, domain name or fingerprint), **Server**, **Source** (**Found on
-servers**, **Uploaded**, **From a signing request**) and **Expiry**. The **Private key** column says **In Alice** when
+servers**, **Uploaded**, **From a signing request**, **Issued by ACME**) and **Expiry**. **Issued by ACME** are the
+certificates Alice got from a certificate authority (see [Issued certificates (ACME)](#issued-certificates-acme)). The **Private key** column says **In Alice** when
 Alice holds the key (only then can it deploy the certificate) and **Not in Alice** otherwise: Alice never reads a
 private key from a server. Open a certificate to see its details, whether its chain is complete, **Where this
 certificate is used** and its deployments. Administrators and operators add and deploy certificates; auditors only
@@ -741,6 +742,145 @@ vault instead. Only one import per vault and name runs at a time (`ALC-AKV-0024`
 secrets, frees its license slot and changes nothing in Azure. A vault with connected websites is refused
 (`ALC-AKV-0020`) unless the administrator chooses **Remove the connections and the vault** (with a fresh code); the
 websites keep the certificate they serve. Imports of the vault that are still open end at once.
+
+## Issued certificates (ACME)
+
+**Issued certificates** lists the certificates Alice gets from a certificate authority (for example Let's Encrypt or
+your company's own CA) and renews by itself. An administrator first adds the authority, registers an account with it
+and sets up how names are proved (a DNS hook, or the web proof on an Nginx server); that setup is in
+[admin-guide.md](admin-guide.md#certificate-authorities-acme). Everyone can read these pages. Administrators and
+operators run tests, order and deploy; only administrators choose which certificates Alice gets, delete them and
+switch automatic renewal and automatic deployment on. Each certificate Alice receives is also listed under
+**Certificates** as **Issued by ACME**, with its private key in Alice.
+
+The list shows each certificate's names, authority, **Status**, proof method, expiry, **Next renewal** and whether it
+renews and deploys automatically. Filter by **Status** and **Certificate authority**.
+
+| Status | Meaning |
+|---|---|
+| **Not issued yet** | Saved, but no certificate was received yet. Nothing happens until someone chooses **Get certificate now**. |
+| **Being issued** | An order is running. |
+| **Active** | Alice holds a current certificate and renews it as planned. |
+| **Renewal failing** | The last renewal attempts failed; Alice tries again by itself with growing waits. The page says when. |
+| **Renewal stopped** | Five renewals in a row failed and Alice stopped trying by itself. See [Renewal](#renewal). |
+
+### Get a certificate
+
+**Get a certificate** (administrators) opens five steps; **Back** keeps every answer:
+
+1. **Authority**: only authorities with a registered account and allowed names can be chosen; the others say why.
+   Each shows the domain endings it may issue for.
+2. **Names**: up to 100 names, each with at least two parts (`www.example.com`). A wildcard is only allowed as the whole
+   first part (`*.example.com`). No IP addresses. Alice warns at once about a name outside the allowed endings.
+3. **Proof method**: **DNS proof (DNS hook)**, with the hook to use; or **Web proof (file on the web server)**, with
+   the Nginx server that answers for the names on port 80 (not for wildcard names). **Prepare the server once**
+   shows the three Nginx lines the server's administrator adds.
+4. **Websites and options**: **Key type** (ECDSA P-256 is recommended; ECDSA P-384, RSA 2048, 3072 or 4096),
+   **Renew how many days before it expires** (1 to 60, default 30), **Renew automatically** (on by default) and
+   **Deploy new certificates automatically**. Websites are connected later, on the certificate's page, once the first
+   certificate is issued.
+5. **Review**, then **Save certificate** (with a fresh code). Saving orders nothing.
+
+Then choose **Run a test first** (recommended), **Get certificate now**, or **Open the certificate**.
+
+### Test run
+
+**Test run** (administrators and operators) checks that the authority can verify every name, without getting a
+certificate: Alice publishes the proofs (the DNS record or the file), the authority checks them, and Alice removes
+them again. No key is made, nothing is issued or installed, and a failed Test run does not count as a failed
+renewal. The result appears at the top of the page ("Test run succeeded: the authority verified every name" or "Test
+run failed" with the reason). A Test run does contact the authority, and failed checks count against the authority's
+request limits: test with **Let's Encrypt (staging, for tests)** first when you try out a new setup.
+
+### Get certificate now and Order now
+
+**Get certificate now** (before the first certificate) and **Order now** (afterwards) ask the authority for a new
+certificate at once (administrators and operators, also with a **Read and operate** API token). While Alice talks to
+the authority the page says so and updates by itself every few seconds; Alice waits at most about ten minutes for
+the authority (`ALC-ACM-0010` after that). Only one order of a certificate runs at a time (`ALC-ACM-0016`). The new certificate
+becomes the **Current certificate** (fingerprint, issuer, validity, whether its chain is complete, **Open in the
+certificate list**). It is put on websites only by automatic deployment (both switches on, see
+[Websites](#websites-of-an-issued-certificate)) or by **Deploy now**.
+
+**Orders** lists the last orders, newest first: when, **Certificate** or **Test run**, the result, the problem in
+plain words, and **Started by** (**By a person** or **Automatic renewal**). A problem shows its title, "What to do"
+and its code; every code is explained in [troubleshooting.md](troubleshooting.md).
+
+### Renewal
+
+The **Renewal** panel shows when Alice renews the certificate (**Renews**), whether **Automatic renewal** is on (only
+an administrator changes it), **Failed attempts in a row**, **Last attempt**, **Next attempt**, the **Window suggested
+by the authority** when the authority publishes one, and the **Last problem**. Alice renews by itself when the time
+left falls below the chosen number of days, or below a third of the certificate's lifetime if that is shorter, or
+earlier when the authority suggests it. **Next renewal** in the list is calculated from the same rule in your browser
+and can differ from Alice's own plan by a few minutes.
+
+After a failed renewal Alice tries again after 1, 2, 4, 8 and 16 hours, then once a day, or later when the
+authority asks for a longer wait ("Renewal is failing … Alice tries again at <time>"). The alert recipients get an
+e-mail at the third failure in a row. After the fifth, the status is **Renewal stopped** and they get another
+e-mail; the current certificate keeps working until it expires. Fix the cause shown under **Last problem**, then:
+
+- an operator uses **Test run** to check, and **Order now** to renew at once: a successful order ends the stop;
+- an administrator can also choose **Renew now** (with a fresh code), which switches automatic renewal on again so
+  that Alice renews at the next planned time.
+
+The e-mails ask you to "choose Renew now": when the certificate is not stopped yet, or you are an operator, use
+**Order now**.
+
+### Websites of an issued certificate
+
+**Websites using this certificate** lists the websites (a certificate file on a managed Nginx server) that follow
+this certificate, with the server, the file, what the website serves now and its state:
+
+| State | Meaning |
+|---|---|
+| **Up to date** | The website serves the current certificate. |
+| **Waiting for deployment** | The website does not serve the current certificate yet: nothing was deployed yet, a deployment is waiting or running, or automatic deployment is off for it. |
+| **Needs attention** | The last automatic deployment of the current certificate to this website failed. The row shows the problem and since when. The website kept its previous certificate (a failed deployment is undone). |
+
+**Needs attention** appears at the next run of the automatic deployment planner, about a minute after the
+deployment failed, not at the moment it fails. **Deployments** has the details of each deployment at once.
+
+- **Add websites** (administrators and operators, after the first certificate is issued) lists the Nginx websites
+  whose key type fits the certificate. A website follows only one certificate: one already connected to another
+  certificate from an authority or to a Key Vault certificate is refused (`ALC-ACM-0028`). Websites are connected one
+  after another; if one is refused, the dialog says how many were connected and that the rest were not tried.
+  Connecting changes nothing on the server.
+- **Deploy now** (administrators and operators) puts the current certificate on the websites you tick, at most 20 at
+  a time, each as its own deployment (see [Deploying a certificate](#deploying-a-certificate) and
+  [Results and what to do](#results-and-what-to-do)). Follow it on **Deployments** with **Open this deployment**.
+  **This page does not refresh the websites' states by itself after Deploy now**: reload it to see **Up to date**.
+  A certificate whose chain is incomplete is deployed only by an administrator who confirms the chain.
+- **Remove** takes a website out: Alice no longer deploys this certificate to it, and the website keeps the
+  certificate it serves. It works also while the license is locked.
+- Before you change one of these websites' certificate by hand, remove the website here or switch off its automatic
+  deployment; otherwise Alice may put this certificate back at the next renewal.
+
+**Automatic deployment** needs two switches: **Automatic deployment of new certificates** for the certificate, and
+the switch of each website. The panel says "Will deploy automatically to N of M websites" and warns when only one
+kind of switch is on. Only an administrator, with a fresh code, can switch them on (Alice asks for a confirmation
+first); an operator can switch a website's automatic deployment off. After each renewal Alice deploys the new
+certificate to those websites within about a minute, at most 5 at a time, waits an hour before trying a failed
+website again, and stops after three failed deployments ("Automatic deployment stopped": fix the cause, then **Deploy
+now**). Two holds wait for a person: **Automatic deployment is waiting for an administrator** (the certificate
+arrived before the license allowed changes again: an administrator chooses **Release**, or anyone uses **Deploy
+now**) and **Automatic deployment is holding this certificate** (its chain is incomplete: an administrator uses
+**Deploy now** and confirms the chain).
+
+### Deleting an issued certificate
+
+**Delete** (administrators, with a fresh code) stops renewing the certificate and forgets which websites follow it.
+The websites keep the certificate they serve, and the certificates already issued stay under **Certificates**. It is
+refused while an order runs (`ALC-ACM-0016`) and works while the license is locked. The web interface changes only
+the switches of a saved certificate; to change its names, authority, proof method or key type, an administrator
+saves a new certificate (or uses `PATCH /api/v1/acme/certificates/{id}`). The key type cannot change while websites
+are connected (`ALC-ACM-0018`).
+
+### While the license is locked
+
+The page says "The license does not allow changes now": **Test run**, ordering, **Deploy now**, adding websites and
+switching automatic deployment (on or off) are refused (`ALC-LIC-0001`) and nothing is renewed or deployed
+automatically. **Remove** of a website and **Delete** of a certificate still work.
 
 ## SSH keys and rotation
 
@@ -1106,7 +1246,14 @@ one, queueing a scan of their server; not in lock). A key deploy gets up to 3 at
 queued again by the sweep and never sends the dead-job email (the rotation's own emails report its failures). A vault check (`kv.poll`) runs once, without a retry and without a dead-job email (its failure is
 shown on the vault, and the next check follows the vault's interval); an access check (`kv.test_connection`) runs
 once; an import (`kv.import`) gets up to 3 attempts and is retried only before it was sent, and when another path
-ended its import (the vault was removed) the job ends failed with the import's code, without an email. The alert
+ended its import (the vault was removed) the job ends failed with the import's code, without an email. For
+certificates from certificate authorities: the renewal planner (`acme.schedule`, every minute; not while the license
+does not allow changes), the automatic deployment planner (`acme.auto_deploy`, every minute; not in lock either) and
+the sweep (`acme.sweep`, every minute, also in lock: outside lock it finishes an order that a restart interrupted
+after the authority issued the certificate, ends one it cannot finish after 5 minutes without its task (`ALC-ACM-0026`), and
+queues the removal of proof records left behind). An order (`acme.issue`) runs once: its retries are the renewal
+planner's, never the queue's. The removal of proof records (`acme.cleanup`, also in lock) gets up to 5 attempts and
+no dead-job email; the sweep queues it again every hour for seven days. The alert
 recipients get an email when a job stops after its last attempt, when a job was changed in the
 database, and when the daily audit check finds a problem.
 

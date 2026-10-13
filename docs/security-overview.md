@@ -38,6 +38,10 @@ Data flows:
   program, allowed through a narrow sudoers rule, does the privileged file work
   ([nginx-host-preparation.md](nginx-host-preparation.md)).
 - Alice reads certificates from Azure Key Vault over HTTPS when vaults are configured ([azure-setup.md](azure-setup.md)).
+- When an administrator sets up a certificate authority (ACME), Alice talks to that authority over HTTPS, calls the
+  customer's DNS hook over HTTPS, and for the web proof checks `http://<name>/.well-known/acme-challenge/…` on port
+  80 itself; nothing is contacted before an administrator acts
+  ([admin-guide.md](admin-guide.md#certificate-authorities-acme)).
 - Alice sends e-mail through the customer's mail server and, when configured, the audit log to the customer's
   syslog server.
 - Nothing flows to the vendor. Alice has **no telemetry** and makes no outbound connection other than the ones
@@ -60,7 +64,7 @@ Data flows:
 | Data | Where | Protection |
 |---|---|---|
 | Users, roles, password hashes (Argon2id), authenticator secrets, recovery codes, sessions, API token hashes | Database | Authenticator secrets encrypted with envelope encryption; passwords and tokens stored only as hashes. |
-| Managed private keys (TLS keys, generated SSH keys), Alice's own SSH key, Key Vault credentials, SMTP password, identity-provider client secrets | Database | Envelope encryption under the master key. |
+| Managed private keys (TLS keys, generated SSH keys), Alice's own SSH key, Key Vault credentials, SMTP password, identity-provider client secrets, ACME account keys, external account binding keys, DNS hook secrets | Database | Envelope encryption under the master key, each value bound to its row. |
 | Inventory: servers, certificates, SSH public keys, deployments, rotations | Database | Database access control. |
 | Audit log | Database | Hash chain; insert and read only for the application. |
 | License, installation record, time record | Database and `/opt/alice/state/hwm.dat` | Vendor signature (license); MAC under a key derived from the master key (installation and time record). |
@@ -156,6 +160,8 @@ checks every route against every role and token). The full matrix is in [authz-m
 | Internal | TCP 8081 | Health endpoint inside the container (127.0.0.1), for Docker's health check |
 | Out | TCP 22 | Managed Linux and Nginx servers |
 | Out | TCP 443 | Azure (`login.microsoftonline.com`, `*.vault.azure.net`) when Key Vault is used; the identity provider when single sign-on is used |
+| Out | HTTPS (443 or the port in the address) | A certificate authority's ACME directory and the addresses its answers name, and the DNS hook, when an administrator set them up; never through a proxy, never following a redirect |
+| Out | TCP 80 (HTTP) | Each name proved by the ACME web proof (HTTP-01), to check the proof file before the authority does; only for certificates that use that proof |
 | Out | the mail server's port (25, 465 or 587) | E-mail, when configured |
 | Out | TCP 6514 by default (or the port chosen) | Audit forwarding, when configured |
 
@@ -196,7 +202,8 @@ The design follows a STRIDE analysis per component. The main scenarios:
 | Takeover of the Alice platform | MFA, roles, confirmation for sensitive actions, narrow helper on servers, audit log with external forwarding | Alice holds access to every managed server: a full compromise reaches them all (within the helper's command set). |
 | Theft of the database or a backup | Envelope encryption; backups sealed with the recovery passphrase | A thief with the database **and** the master key file, or a backup **and** the passphrase, reads the secrets. |
 | A forged or altered backup restored | Backups origin-authenticated against anyone without the passphrase, authenticated chunks, verification before the switch, the restore recorded in the audit chain | Anyone with the passphrase and one backup file can forge a backup that restores (KI-14); an administrator with the passphrase can restore an older genuine backup; the audit log shows both. |
-| Malicious operator | Operators cannot download private keys, read the audit log or change servers and policies; every action audited | Operators can deploy certificates and add or remove keys on existing servers. |
+| Malicious operator | Operators cannot download private keys, read the audit log or change servers and policies; they cannot add certificate authorities or names to be certified, or switch automatic deployment on; every action audited | Operators can deploy certificates, add or remove keys on existing servers, and order or renew certificates for names an administrator approved. |
+| Abuse of the certificate authority or hook settings (server-side request forgery) | Only administrators set the addresses; https only; the address rule refuses link-local and metadata addresses on every connection; no redirect, no proxy, 1 MiB answers; answer text never stored | An administrator can point Alice at any https address it can reach, private ones included. |
 | Man in the middle | TLS everywhere; SSH host key pinning; certificate verification | First contact with a new server relies on the administrator comparing its fingerprint (trust on first use). |
 | Tampered update | Signed packages verified with the installed keys; the package copied before use; automatic backup and rollback | Trust in the first installation rests on the operator comparing the published fingerprint. |
 | Supply-chain compromise | Pinned and scanned dependencies, SBOM, offline signing | A compromised dependency that no scanner knows. |
@@ -211,6 +218,10 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
 - **Keys on one host.** The master key is a file on the Alice server; disk encryption and root access control are
   the customer's protection. No hardware key storage in version 1.
 - **Blast radius.** Alice can reach every managed server through its key and helper.
+- **Certificate authorities.** Alice's ACME account can request certificates for the names an administrator allowed;
+  revocation is done at the authority, not in Alice. Behaviour against real public or company authorities, real DNS
+  and real renewal information was tested during development only against a simulated authority; check it with your
+  authority (for example its staging service) before relying on it.
 - **The recovery passphrase and the master key cannot be changed in version 1.** An exposed passphrase opens every
   backup copy made before and after; protect the copies.
 - **Audit log limits.** The chain proves that entries were not changed or removed in between; someone with control

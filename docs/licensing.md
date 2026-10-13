@@ -1,7 +1,8 @@
 # Licensing
 
 Alice is licensed per installation for a number of **managed targets** (Nginx servers, Linux hosts and Azure Key
-Vaults). Certificates and SSH keys are not counted. Licenses usually run for a year and are renewed by uploading a
+Vaults). Certificates and SSH keys are not counted, and neither are certificate authorities, their accounts, DNS
+hooks or the certificates Alice gets from them. Licenses usually run for a year and are renewed by uploading a
 new file; no internet connection is needed.
 
 Each Azure Key Vault added under **Key Vaults** is one target, however many certificates, keys and secrets it holds
@@ -82,6 +83,13 @@ created in Azure while the license was locked (or around the time it was renewed
 instead of being deployed automatically: see "Held versions after a lock" in
 [operator-guide.md](operator-guide.md#held-versions-after-a-lock). Certificate
 expiry alerts by email with a note that the license expired arrive with the release that adds alerts.
+
+For certificates from certificate authorities, lock mode stops every contact with an authority or a DNS hook:
+orders, **Test run**, renewals, account registration, **Deploy now**, connecting websites and switching their
+automatic deployment are refused or paused, and automatic deployment deploys nothing. Removing a website from a
+certificate and deleting a certificate stay possible. A certificate received before the license allowed changes
+again is held for an administrator instead of being deployed automatically
+([admin-guide.md](admin-guide.md#while-the-license-is-locked)).
 
 Alice checks the license when it starts, every hour, and after every upload. Between two checks it also counts the
 time itself, so a license that ends between two checks stops changes at the right minute; Alice then checks again at

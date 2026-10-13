@@ -42,7 +42,9 @@ Tokens have no idle timeout.
 person to confirm with a fresh code (**Confirm it's you**): user and role administration, creating API tokens,
 settings (mail, single sign-on, HTTPS certificate, audit forwarding, backup schedule), license upload, private-key
 download, re-pinning a server's host key, adding a Key Vault and its credentials, enabling a rotation policy and the
-decisions in a rotation run, and **backups** (list, back up now, download). A few other actions need a person too,
+decisions in a rotation run, **backups** (list, back up now, download), and for certificate authorities (ACME) adding
+authorities, accounts and DNS hooks, defining which certificates Alice gets and switching their automatic renewal or
+automatic deployment on. A few other actions need a person too,
 such as confirming a server's fingerprint and confirming or discarding a waiting job. The exact list, operation by
 operation, is the "API token" column of [authz-matrix.md](authz-matrix.md). Backups and restores are done by an
 administrator in the web interface or by the operator on the server ([backup-restore.md](backup-restore.md)).
@@ -125,6 +127,19 @@ curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api
 ```
 curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/targets?type=nginx"
 ```
+
+**Renew a certificate from a certificate authority now** (an administrator's or operator's **Read and operate**
+token), then follow the order:
+
+```
+curl -fsS -X POST -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/acme/certificates/<id>/order"
+curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/acme/certificates/<id>/orders?limit=5"
+```
+
+`POST …/test` runs a Test run instead and `POST …/deploy` with `{"location_ids": [...]}` (at most 20) deploys the
+current certificate. These ACME actions share one limit of 10 a minute per person or token (429 `ALC-SYS-0005`); an
+authority that limits Alice answers 503 `ALC-ACM-0005` with `Retry-After`. The ids and states are in
+`GET /api/v1/acme/certificates`.
 
 **Export the audit log** (administrators and auditors, a read-only token is enough):
 

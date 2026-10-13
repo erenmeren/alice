@@ -3959,7 +3959,8 @@ paths:
         is off) needs an Administrator's browser session with a fresh step-up (403 ALC-AUTH-0003 without it; an API token or an
         Operator: 403 ALC-AUTH-0002); binding with it off, keeping it on and switching it off need acme.operate. The rule is
         applied inside the change itself, so a binding switched off by another request in the meantime is not switched on again
-        without the step-up. Refused with 403 ALC-LIC-0001 while the license is locked, switching off included (carry).
+        without the step-up. Refused with 403 ALC-LIC-0001 while the license is locked, switching off included (in lock,
+        DELETE of the binding stops its automatic deployment).
       x-permission: acme.operate
       requestBody:
         required: false

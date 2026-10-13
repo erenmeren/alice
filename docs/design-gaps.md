@@ -395,3 +395,10 @@ Components (`web/src/components/ui` unless noted):
 - Whole-row clicks on the wizard's own choice rows, as in Settings.
 - A design for the ACME screens (Settings → Certificate authorities and the Issued certificates pages): they were built
   from the existing components and tokens, without a counterpart in `alice-design/`.
+- Issued certificate status page: refresh the websites' states while a deployment of the certificate is queued or
+  running (today only orders are polled; after **Deploy now** the page must be reloaded), and one combined automatic
+  deployment control instead of the certificate's and each website's switch.
+- Restored installations: a banner on **Issued certificates** while automatic renewal was switched off by a restore
+  (today only the restore's warning and the "Off" state say so).
+- Switching a website's automatic deployment off while the license is locked (the route is refused in lock; removing
+  the website is the way today).

@@ -9,8 +9,8 @@ Alice has three roles:
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs | — |
-| Operator | View inventory; test servers, run discovery and remove SSH keys; generate SSH keys and deploy them; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that, download a private key, manage rotations |
+| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs; certificate authorities: adding them, their accounts and DNS hooks, choosing which certificates Alice gets (**Get a certificate**), switching automatic renewal and automatic deployment on, **Renew now**, **Release** | — |
+| Operator | View inventory; test servers, run discovery and remove SSH keys; generate SSH keys and deploy them; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; for certificates from a certificate authority: **Test run**, **Order now**, **Deploy now**, connecting and removing websites, switching automatic deployment off; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that, download a private key, manage rotations, add certificate authorities or names to be certified, switch automatic deployment on |
 | Auditor | View inventory read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
 The full list of which role may call which API operation is in [authz-matrix.md](authz-matrix.md).
@@ -270,7 +270,9 @@ one; a notice skipped that way is never sent later. A renewed certificate (a new
 first threshold; a certificate replaced on its server is no longer in use and gets no further e-mails.
 
 **Not monitored** by this check: certificates you uploaded or completed from a signing request that are on no server
-(listed, counted on the Overview, but not e-mailed until deployed); certificates whose places all disappeared or
+(listed, counted on the Overview, but not e-mailed until deployed), which includes a certificate from a certificate
+authority until it is on a server (its renewal e-mails cover it, see
+[Certificate authorities (ACME)](#certificate-authorities-acme)); certificates whose places all disappeared or
 whose servers were removed; disabled Key Vault certificates and keys, keys without an expiry date, and vaults removed
 from Alice. Other conditions keep their own e-mails, each sent once when the condition starts: license warnings (60,
 30, 14, 7 and 1 days before the end, see [License](#license)), a changed server identity, a server that refuses
@@ -294,7 +296,7 @@ the link is Alice's address from **Settings → General** followed by `/license`
 
 **Settings → Recipients** decides who gets every e-mail Alice sends to administrators: the expiry e-mails above, the
 license warnings, the sign-in block e-mail, and the e-mails about deployments, Key Vaults, servers, stopped tasks,
-the audit chain and SSH key rotations.
+the audit chain, SSH key rotations and certificates from certificate authorities (renewal and automatic deployment).
 
 - **Send alerts to every administrator with an e-mail address** (on by default): every enabled administrator with an
   e-mail address on **People & access**, each in their own language.
@@ -939,6 +941,266 @@ there is no limit across vaults. No email is sent when the vault firewall refuse
 and client secrets that are about to expire are e-mailed by the expiry check ([Alerts and e-mail](#alerts-and-e-mail)).
 Everything a vault does is in the audit log (`vault.*`, `kv.*`, `binding.*`).
 
+## Certificate authorities (ACME)
+
+Alice can get certificates from a certificate authority that speaks ACME (the protocol of Let's Encrypt, RFC 8555):
+a public one such as Let's Encrypt or ZeroSSL, or your company's own (for example step-ca, EJBCA or an ACME
+gateway). Alice proves to the authority that you control each name, receives the certificate, renews it before it
+expires and, if you want, puts it on your Nginx websites. Putting it on a website is an ordinary deployment, with
+the same checks and the same automatic undo as when a person deploys a certificate. Day-to-day use (**Issued
+certificates**, Test run, ordering, deploying) is in [operator-guide.md](operator-guide.md#issued-certificates-acme).
+This section is the setup, which is for administrators.
+
+| Action | Who |
+|---|---|
+| Adding, changing and removing certificate authorities and DNS hooks; registering, rotating and deactivating an account | Administrator with a fresh authenticator code; never an API token |
+| **Get a certificate** (which names, which authority, how the names are proved), deleting it, its **Automatic renewal**, **Renew now**, **Release** of a held certificate | Administrator with a fresh authenticator code; never an API token |
+| Switching **Automatic deployment** on, for the certificate or for a website | Administrator with a fresh authenticator code; never an API token |
+| Reading the authority's terms before registering (done by the **Register account** dialog) | Administrator, no new code |
+| **Test run**, **Get certificate now** / **Order now**, **Deploy now**, connecting websites (with automatic deployment off), removing websites, switching automatic deployment off | Administrator or operator, also with a **Read and operate** API token |
+| Reading authorities, accounts (including their contact e-mail), hooks, certificates, orders and websites | Everyone |
+
+The full list per API route is in [authz-matrix.md](authz-matrix.md). Together, every person and token may start at
+most 10 of these actions a minute (orders, Test runs, Deploy now, **Renew now**, changes of a certificate, account
+operations, reading the terms); more are refused with `ALC-SYS-0005`.
+
+### What Alice connects to
+
+**Nothing is contacted until you act.** Adding a certificate authority or a DNS hook only stores settings. Alice has
+no list of authorities it contacts by itself, no telemetry and no update check. These connections exist only once an
+administrator has set up an authority, and they all start from the Alice server:
+
+| Connection | To | When |
+|---|---|---|
+| HTTPS | The authority's directory address, and the addresses its answers name (orders, proofs, the certificate, renewal information) | Reading the terms (**Register account**), registering, key change and deactivation of the account, every Test run and order, renewal checks |
+| HTTPS | The DNS hook's address | Each DNS proof: adding the record, then removing it |
+| HTTP, port 80 | `http://<name>/.well-known/acme-challenge/<token>` for each name proved by the web proof | Alice checks the proof file itself before it asks the authority to look |
+| SSH, port 22 | The Nginx server chosen for the web proof | Writing and removing the proof file through `alice-helper` |
+
+The authority itself connects to port 80 of each name (web proof) or reads your DNS (DNS proof); that is between the
+authority and your network. Every connection Alice makes uses the address rule of the rest of Alice (no link-local,
+cloud metadata, multicast or reserved address; private and loopback addresses are allowed) and is checked when it is
+opened. HTTPS is required for the authority and the hook, also for the addresses an authority's answer names; Alice
+never follows a redirect, reads at most 1 MiB of an answer and waits at most 30 seconds for one exchange. Proxy
+settings of the environment (`HTTPS_PROXY` and similar) are ignored: Alice needs a direct route to the authority and
+the hook, so a public authority behind a forward proxy cannot be used in this version. The authority's or the hook's
+answer text never reaches an error message, the log or the audit log; Alice keeps only its own `ALC-ACM` code.
+
+### Adding a certificate authority
+
+Open **Settings → Certificate authorities** and choose **Add certificate authority**:
+
+- **Certificate authority**: **Let's Encrypt**, **Let's Encrypt (staging, for tests)** (certificates browsers do not
+  trust, but much higher request limits), **ZeroSSL** or **My own CA**. The choice only fills in the directory
+  address.
+- **Name shown in Alice**.
+- **Directory address**: the authority's ACME directory, `https://…`, without a user name, password, query or `#`
+  part (at most 2048 characters). Let's Encrypt: `https://acme-v02.api.letsencrypt.org/directory`; ZeroSSL:
+  `https://acme.zerossl.com/v2/DV90`. Your own CA's documentation names its address.
+- **Root certificate of your CA (optional)**: one to ten certificates in PEM form (`-----BEGIN CERTIFICATE-----`),
+  at most 64 KiB, nothing else. Alice uses them for two things: it trusts the authority's HTTPS connection when it
+  is signed by one of them (besides the system's authorities), and it uses them to decide whether an issued
+  certificate's chain is complete. For a company CA paste its root certificate here (and the one that signed the
+  ACME server's own HTTPS certificate, if that is another). Without the root, every certificate from that CA counts as
+  having an incomplete chain: **Deploy now** then needs an administrator's confirmation and automatic deployment holds
+  it. Public authorities need nothing here.
+- **External account binding (optional)**: **Key ID** and **Secret key (HMAC)**, exactly as your authority gives them
+  (base64url text). ZeroSSL and many commercial or company authorities require one. The secret key is write-only: Alice
+  shows "A secret key is stored" afterwards and never shows it again; leave the field empty to keep it, or tick
+  **Remove the stored external account binding**.
+- **Allowed names (domain endings)**: the names this authority may issue for. `example.com` allows `example.com` and
+  every name below it; `.example.com` only the names below it. Each entry needs at least two parts. **An empty list
+  allows nothing.** List only domains your organisation owns: this list (and the hook's list, below) is what limits
+  operators, who can renew certificates but cannot add names.
+
+**Save certificate authority** contacts nothing ("Nothing was contacted"). Changing the directory address of an
+authority that has an account asks you to tick **Retire the current account**: the account is then no longer used by
+Alice (it is not deactivated at the authority) and you register a new one. **Remove** is refused while the
+authority has an account or certificates use it (`ALC-ACM-0012`): delete those certificates and deactivate the
+account first.
+
+### The account
+
+Alice keeps one account per certificate authority. Choose **Register account** on the authority:
+
+1. Alice reads the authority's directory ("Contacting <host> to read its terms of service…") and shows the address of
+   its terms of service as a link. Read them, then tick **I have read and accept the terms at this address**. An
+   authority without terms needs no tick. If the address is not a safe `https` address, Alice does not offer the
+   registration.
+2. **Contact e-mail (optional)**: the authority may write to it (for example about expiring certificates or policy
+   changes). It is stored with the account and visible to everyone who can read the certificate authorities (also
+   auditors and read-only API tokens); it is not written to the audit log.
+3. **Register account**. Alice creates the account key itself (ECDSA P-256), stores it encrypted and never shows it.
+   If the authority published other terms in the meantime, the registration is refused (`ALC-ACM-0003`), the dialog
+   shows the new terms and you tick again.
+
+The account panel shows the state, the contact, the terms' address and when they were accepted. The audit log
+records who registered the account, the terms' address and whether an external account binding was used.
+
+- **Rotate account key** replaces the account key at the authority (the authority must support key changes,
+  otherwise `ALC-ACM-0014`). If the authority's answer is lost, the authority shows **Key change not settled**:
+  certificates of that authority are not ordered until it is settled. Choose **Check key change** a few minutes later
+  (Alice keeps the new key at least 5 minutes before it may give it up); Alice asks the authority which key it knows
+  and settles the account.
+- **Deactivate account** ends the account at the authority for good. The dialog says how many certificates use the
+  authority: they are not renewed until you register a new account (each failed renewal counts, so the renewal
+  e-mails below follow). Register a new account afterwards; the certificates use it from their next order.
+- Only one account operation per authority runs at a time; a second one answers `ALC-ACM-0024` ("try again in a
+  moment").
+
+### DNS hooks (DNS proof)
+
+With the DNS proof (DNS-01) the authority looks up a TXT record `_acme-challenge.<name>` in your DNS. Alice does not
+talk to DNS servers or DNS providers itself: you run a small HTTPS service, the **DNS hook**, that adds and removes
+that record in your DNS, and Alice calls it. A hook can be a few lines in front of your DNS provider's API, your
+internal DNS automation or a dynamic-update (RFC 2136) script. The DNS proof is the only proof for wildcard names
+(`*.example.com`) and needs nothing on your web servers.
+
+Choose **Add DNS hook** under **Settings → Certificate authorities**:
+
+- **Name shown in Alice**; **Address of the hook**: `https://…`, without a user name, password, query or `#` part.
+- **Secret**: 16 to 256 printable characters, write-only like the external account key. Alice sends it as a bearer
+  token and uses it as the key of a signature over each request (below).
+- **Root certificate of the hook's CA (optional)**, as for an authority.
+- **Wait after adding the record (seconds)**: 0 to 120, default 5. **Time to wait for the record (seconds)**: 1 to
+  100, default 60. Together at most 120 seconds.
+- **Allowed names**, as for an authority. Alice calls the hook only for a name that both the authority's and the
+  hook's lists allow.
+
+What the hook receives (the same text is under **How does the hook work?** in Alice):
+
+```
+POST <address of the hook>
+Authorization: Bearer <secret>
+X-Alice-Signature: <lowercase hex of HMAC-SHA256(secret, the exact request body)>
+Content-Type: application/json
+User-Agent: alice-acme/1
+
+{"action":"present","fqdn":"_acme-challenge.www.example.com","value":"<TXT value>","ttl":60}
+```
+
+- `action` is `present` (add the TXT record with this value) or `cleanup` (remove the record with exactly this value,
+  never the other records of the name). Both must be safe to repeat.
+- A wildcard and its base name (`*.example.com` and `example.com`) use the same `fqdn`: keep both values side by side.
+- Answer 200 or 204 when done; anything else (a redirect too) is a refusal (`ALC-ACM-0008`). An optional answer body
+  `{"ready":true}` tells Alice the record is visible to the authority now; `{"ready":false}` makes Alice send the same
+  `present` again every 2 seconds until `true` or until **Time to wait for the record** has passed. Without such an
+  answer Alice waits **Wait after adding the record** and then asks the authority to look.
+- Alice reads at most 4 KiB of the answer and never stores or logs it.
+
+**Remove** is refused while certificates use the hook (`ALC-ACM-0019`). Records that a failed or interrupted order
+left behind are removed by a clean-up task, also while the license is locked; it tries again every hour for up to
+seven days.
+
+### The web proof (HTTP-01)
+
+With the web proof the authority fetches `http://<name>/.well-known/acme-challenge/<token>` on port 80. It is
+optional; use it when you cannot run a DNS hook. It needs:
+
+- An Nginx server in Alice (**Server type** **Nginx server**) that answers for every name of the certificate on port
+  80, reachable from the authority and from Alice. One server per certificate; wildcard names cannot use it.
+- `alice-helper` 1.6.0 (protocol 7) with the current sudoers lines on that server. Servers with an older helper keep
+  working for everything else; a web proof on them fails with `ALC-SSH-0013` until you reinstall the helper ("Updating
+  the helper" in [nginx-host-preparation.md](nginx-host-preparation.md)).
+- A one-time preparation by the server's administrator: a root-owned directory `/var/www/alice-acme/.well-known/acme-challenge`
+  and these three lines in the `server` block that listens on port 80, added and reloaded by you:
+
+  ```nginx
+  location ^~ /.well-known/acme-challenge/ {
+      root /var/www/alice-acme;
+  }
+  ```
+
+  The exact steps, the ownership rules and what to do with an existing redirect to HTTPS are in "Publishing HTTP-01
+  challenges" in [nginx-host-preparation.md](nginx-host-preparation.md). **Alice never edits the Nginx
+  configuration**: the helper only writes one small file in that directory while a certificate is ordered and
+  removes it afterwards.
+
+### Automatic renewal
+
+Automatic renewal is on for a new certificate. The first certificate is always ordered by a person (**Get certificate
+now**); after that Alice plans every minute:
+
+- A certificate is renewed when the time left falls below **Renew how many days before it expires** (1 to 60, default
+  30) or below a third of its lifetime, whichever is shorter, so a 90-day certificate renews 30 days before it expires
+  and a 6-day certificate 2 days before. When the authority publishes renewal information (ARI, RFC 9773) suggesting
+  an earlier time, Alice renews then; a later suggestion is ignored.
+- Each renewal gets a new private key, which Alice creates and stores encrypted; the certificate is added to
+  **Certificates** ("Issued by ACME") and becomes the current one.
+- After a failure Alice waits 1, 2, 4, 8, 16 and then 24 hours, or as long as the authority asks (at most 24 hours),
+  and never orders the same certificate twice within 15 minutes. While the authority limits the requests of one
+  certificate, the other certificates of that authority wait too (at most 24 hours, and never past the middle of
+  their renewal time). At most 5 renewals start per minute.
+- After **3** failed renewals in a row the alert recipients get "Alice could not renew the certificate for …"; after
+  **5** Alice stops renewing it (**Renewal stopped**, e-mail "Automatic renewal stopped: …"). The certificate in use
+  keeps working until it expires. Remove the cause; then **Renew now** (administrators, with a fresh code) switches
+  automatic renewal on again, and Alice renews at the next planned time. To renew at once, use **Order now**; a
+  successful order also ends the stop. These e-mails are only about renewals: when the first order fails, the page
+  says so and nobody is e-mailed.
+
+### Automatic deployment
+
+A certificate is put on a website automatically only when both switches are on: the certificate's **Automatic
+deployment of new certificates** and the website's own switch (its page says "Will deploy automatically to N of M
+websites"). **Only an administrator, with a fresh code and never with an API token, can switch either on.** Operators
+can connect websites with the switch off, switch it off, remove websites and use **Deploy now**. Alice then works
+like Key Vault's automatic deployment:
+
+- Only the certificate's current (newest) certificate, never one whose chain is incomplete (it is held: "needs a
+  check before it is deployed", e-mail; an administrator uses **Deploy now** with the chain confirmation).
+- At most 5 unfinished automatic deployments per certificate; one hour between attempts on a website after a failed
+  one; after **3** failed deployments of a certificate Alice stops deploying it automatically ("Automatic deployment
+  stopped", e-mail): remove the cause and use **Deploy now**; the next certificate Alice receives is deployed
+  automatically again.
+- A certificate Alice received before the license last started to allow changes again, deployed nowhere yet, is
+  held for an administrator ("waiting for an administrator", e-mail) when one of its websites was connected before
+  that moment: check it, then **Deploy now** or **Release** (Alice then deploys it by itself).
+- Unlike a Key Vault connection, a connected website gets the new certificate even when it serves a certificate that
+  ends later: connecting the website says that it follows this certificate.
+- A deployment that was waiting is checked again just before it runs: when the website was removed, automatic
+  deployment switched off, a newer certificate arrived, the round stopped or the certificate is held, nothing is sent
+  (`ALC-ACM-0030` to `ALC-ACM-0034`).
+- A failed deployment is undone like any deployment: the website keeps its previous certificate, and the recipients
+  get the usual "Certificate deployment failed on <server>". The website shows **Needs attention** from the planner's
+  next run, about a minute later.
+
+Each kind of e-mail is sent once per certificate Alice received; there is no limit per minute across certificates.
+
+### While the license is locked
+
+No authority, hook or server is contacted for certificates: orders, Test runs, registrations, reading the terms,
+**Deploy now**, adding authorities, hooks and certificates, connecting websites and switching automatic deployment
+(also off) are refused with `ALC-LIC-0001`, and renewal and automatic deployment plan nothing. **Remove** of a
+website and **Delete** of a certificate keep working; removing a website is how you stop its automatic deployment
+in lock. An order that is running when the lock starts publishes no further proof and does not send the request
+for the certificate; proof records already published are cleaned up. Certificate authorities, accounts, hooks and
+certificates do not count as targets of the license.
+
+### After a restore
+
+A restore switches automatic renewal off for every certificate from a certificate authority (the restore prints
+"Automatic renewal of N certificates ordered from certificate authorities is switched off…"), so that a copy of
+an installation never orders certificates behind the original's back. When the restored installation replaces the
+original, switch **Automatic renewal** on again on each certificate's page. Orders that were waiting in the backup are
+held like other changes ([backup-restore.md](backup-restore.md)). A restored copy uses the same accounts at the same
+authorities as the original: do not rotate or deactivate an account on a test copy, it would change the original's
+account too.
+
+### What Alice keeps, and the audit log
+
+The account keys, the external account keys and the hook secrets are stored encrypted with the master key, each
+bound to its own row, and are never returned by the API, written to a log, an audit entry, a task or an error
+message (a test plants them and searches every answer, log line, table, e-mail and the backup's manifest for them).
+The private key of each issued certificate is stored like an uploaded certificate's key. Everything is in the audit
+log: `acme.provider.*`, `acme.account.*`, `acme.hook.*`, `acme.certificate.*`, `acme.order.*`, `acme.binding.*`,
+`acme.auto_renew.*` and `acme.auto_deploy.*`; deployments keep their `deployment.*` entries, with the trigger
+`acme_renewal` for automatic ones.
+
+**Not in this version**: revoking a certificate (do it at the authority), an HTTPS proxy, built-in DNS providers
+(the hook is the adapter), the TLS-ALPN-01 proof, more than one account per authority, and ACME profiles. Renewals
+are not marked as replacements of the previous certificate (ARI's `replaces`), so Let's Encrypt counts them against
+its usual limits; use **Let's Encrypt (staging, for tests)** for trials.
+
 ## License
 
 **License** (administrators and auditors) shows the Installation ID with **Copy**, the state ("Evaluation",
@@ -956,7 +1218,7 @@ set up ([Mail server](#mail-server)).
 
 ## For auditors
 
-Auditors sign in like everyone else (password and authenticator app, or single sign-on). They see **Overview** (with its **Assurance** tab), **Certificates**, **SSH keys**, **Servers**, **Key Vaults**,
+Auditors sign in like everyone else (password and authenticator app, or single sign-on). They see **Overview** (with its **Assurance** tab), **Certificates**, **Issued certificates**, **SSH keys**, **Servers**, **Key Vaults**,
 **Deployments**, **Key rotations**, **Audit trail**, **License** (read only), **API tokens** and **Your account**, and
 no button that changes anything except their own password, recovery codes,
 language, read-only API tokens and their own saved views; they can export the certificate and SSH key lists. On
