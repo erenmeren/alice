@@ -252,6 +252,8 @@ pending_key_wrapped_dek, pending_key_version, presented) VALUES ($1, $2, 'issue'
 	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET presented = presented || '[{"kind":"dns","name":"_acme-challenge.api.corp.example"}]'
 WHERE id = $1`, running)
 	assert.Equal(t, orderFrozen, sqlState(err), "a finished order never gains a presented record")
+	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET presented = '[{"kind":"dns"}]' WHERE id = $1`, running)
+	assert.Equal(t, orderFrozen, sqlState(err), "a record is never cut down to a part of itself")
 	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET presented = '[{"kind":"dns","name":"_acme-challenge.corp.example"}]' WHERE id = $1`, running)
 	require.NoError(t, err, "the cleanup job removes the records it cleaned one by one")
 	_, err = d.App.Exec(ctx, "UPDATE acme_orders SET cleanup_at = now(), cleanup_error_code = 'acme.hook_refused' WHERE id = $1", running)

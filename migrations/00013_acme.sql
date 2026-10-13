@@ -187,7 +187,8 @@ CREATE INDEX acme_orders_issued ON acme_orders (certificate_id) WHERE certificat
 CREATE INDEX acme_orders_presented ON acme_orders (finished_at) WHERE presented <> '[]'::jsonb; -- the cleanup sweep
 
 -- A finished order is history: nothing changes except the pending key going to NULL (all four columns together by the CHECK),
--- the presented list shrinking as the cleanup job removes the records (never gaining one), and the cleanup job's last
+-- the presented list shrinking as the cleanup job removes the records (every element left is an element it had, whole;
+-- never a new or a changed one), and the cleanup job's last
 -- attempt (cleanup_at, cleanup_error_code). SQLSTATE Z1017.
 -- +goose StatementBegin
 CREATE FUNCTION acme_orders_protect_done() RETURNS trigger LANGUAGE plpgsql
@@ -199,7 +200,8 @@ BEGIN
                 IS DISTINCT FROM (to_jsonb(OLD) - 'pending_key_ct' - 'pending_key_nonce' - 'pending_key_wrapped_dek' - 'pending_key_version' - 'presented'
                 - 'cleanup_at' - 'cleanup_error_code')
            OR (NEW.pending_key_ct IS NOT NULL AND NEW.pending_key_ct IS DISTINCT FROM OLD.pending_key_ct)
-           OR NOT (OLD.presented @> NEW.presented) THEN
+           OR EXISTS (SELECT 1 FROM jsonb_array_elements(NEW.presented) AS n(e)
+                      WHERE NOT EXISTS (SELECT 1 FROM jsonb_array_elements(OLD.presented) AS o(e) WHERE o.e = n.e)) THEN
             RAISE EXCEPTION 'a finished ACME order cannot be changed' USING ERRCODE = 'Z1017';
         END IF;
     END IF;
