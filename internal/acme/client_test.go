@@ -118,8 +118,11 @@ func TestDiscoverUntrustedAndUnreachable(t *testing.T) {
 	_, err = dead.Discover(testCtx(t))
 	requireReason(t, err, ReasonProviderUnreachable)
 
+	// The fake holds the answer far past the call budget and, when the client gives up, aborts with no
+	// answer at all (no implicit empty 200 that could race the client's deadline), so the only outcome is
+	// the deadline whatever the load.
 	slow := newTestClient(t, s, func(c *Config) { c.CallTimeout = 100 * time.Millisecond })
-	require.NoError(t, s.AddFault(fakeacme.Fault{Endpoint: "directory", Kind: fakeacme.FaultSlow, Delay: 2 * time.Second, Times: 1}))
+	require.NoError(t, s.AddFault(fakeacme.Fault{Endpoint: "directory", Kind: fakeacme.FaultSlow, Delay: time.Minute, Times: 1}))
 	_, err = slow.Discover(testCtx(t))
 	e := reasonErr(t, err, ReasonProviderUnreachable)
 	assert.ErrorIs(t, e, context.DeadlineExceeded)

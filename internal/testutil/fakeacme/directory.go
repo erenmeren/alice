@@ -47,8 +47,12 @@ func (s *Server) route(endpoint string, auth bool, mode jwsMode, fn routeFn) htt
 			t := time.NewTimer(eff.delay)
 			select {
 			case <-r.Context().Done():
+				// The client gave up. Returning normally would make net/http send an implicit empty 200,
+				// and a client whose own deadline raced that answer could read it as a (broken) answer of
+				// the CA. Abort instead: the connection closes with no answer at all.
 				t.Stop()
-				return
+				rec.status = 0 // logged as "no answer"
+				panic(http.ErrAbortHandler)
 			case <-t.C:
 			}
 		}

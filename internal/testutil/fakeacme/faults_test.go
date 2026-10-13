@@ -1,8 +1,10 @@
 package fakeacme
 
 import (
+	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -87,9 +89,11 @@ func TestSlowAndGiantFaults(t *testing.T) {
 	begin := time.Now()
 	getJSON(t, s, s.DirectoryURL(), nil)
 	assert.GreaterOrEqual(t, time.Since(begin), 150*time.Millisecond)
-	begin = time.Now()
+	// Times 1: the fault is spent, so the next request is not delayed (checked on the state, not on a clock
+	// that a loaded machine can stretch).
+	assert.Empty(t, s.st.faults)
+	assert.Zero(t, s.takeFaults("directory", false).delay)
 	getJSON(t, s, s.DirectoryURL(), nil)
-	assert.Less(t, time.Since(begin), 150*time.Millisecond)
 
 	require.NoError(t, s.AddFault(Fault{Endpoint: "directory", Kind: FaultGiant, Times: 1}))
 	resp, err := s.HTTPClient().Get(s.DirectoryURL()) //nolint:noctx // test
@@ -98,6 +102,30 @@ func TestSlowAndGiantFaults(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Greater(t, n, int64(1<<20), "over the 1 MiB cap Alice's transport enforces")
+}
+
+// A client that gives up during a slow fault gets no answer at all: the handler aborts instead of returning,
+// which would make net/http send an implicit empty 200 that a client whose own deadline raced it could read as
+// a broken answer of the CA (the acme TestDiscoverUntrustedAndUnreachable flake under load).
+func TestSlowFaultAbortsWhenTheClientGoesAway(t *testing.T) {
+	s, err := New(Options{})
+	require.NoError(t, err)
+	require.NoError(t, s.AddFault(Fault{Endpoint: "directory", Kind: FaultSlow, Delay: time.Minute, Times: 1}))
+	gone, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := httptest.NewRequestWithContext(gone, http.MethodGet, "/directory", nil)
+	w := httptest.NewRecorder()
+	begin := time.Now()
+	assert.PanicsWithValue(t, http.ErrAbortHandler, func() { s.Handler().ServeHTTP(w, req) })
+	assert.Less(t, time.Since(begin), 30*time.Second, "the delay ends with the client")
+	assert.Zero(t, w.Body.Len(), "no answer body")
+	assert.False(t, w.Flushed)
+	assert.Empty(t, w.Result().Header.Get("Content-Type"), "no answer was started")
+	reqs := s.Requests()
+	require.Len(t, reqs, 1)
+	assert.Zero(t, reqs[0].Status, "logged as no answer")
+	assert.Equal(t, 1, s.Counters()["directory"])
+	assert.Empty(t, s.st.faults, "the fault is spent")
 }
 
 func TestFaultValidation(t *testing.T) {
