@@ -884,3 +884,130 @@ func TestACMEDTOFallbacks(t *testing.T) {
 	assert.Nil(t, acmeCertificateJSON(inventory.ACMECertificate{}).LastError)
 	assert.Equal(t, []string{}, acmeProviderJSON(inventory.ACMEProvider{}).AllowedSuffixes)
 }
+
+// notFoundACME is a fakeACME whose every operation answers inventory.ErrNotFound (an unknown or deleted record).
+func notFoundACME() *fakeACME {
+	f := &fakeACME{}
+	v := reflect.ValueOf(f).Elem()
+	errType := reflect.TypeOf((*error)(nil)).Elem()
+	for i := range v.NumField() {
+		fn := v.Field(i)
+		ft := fn.Type()
+		fn.Set(reflect.MakeFunc(ft, func([]reflect.Value) []reflect.Value {
+			out := make([]reflect.Value, ft.NumOut())
+			for j := range out {
+				if ft.Out(j) == errType {
+					out[j] = reflect.ValueOf(&inventory.ErrNotFound).Elem()
+				} else {
+					out[j] = reflect.Zero(ft.Out(j))
+				}
+			}
+			return out
+		}))
+	}
+	return f
+}
+
+// Every ACME route answers an unknown record with 404 (the service's ErrNotFound, never a 500), and a path id that is
+// not a UUID with 404 before any service is asked.
+func TestACMERoutesAnswerNotFound(t *testing.T) {
+	d := testDeps(t, nil)
+	d.ACME = notFoundACME()
+	srv := New(d)
+	bodies := map[string]string{
+		"POST /api/v1/acme/providers":                               `{"name":"x","directory_url":"https://ca.example.com/dir"}`,
+		"POST /api/v1/acme/hooks":                                   `{"name":"x","url":"https://dns.example.com/h","secret":"` + acmeHookSecret + `"}`,
+		"POST /api/v1/acme/certificates":                            `{"provider_id":"` + acmeProvID.String() + `","names":["www.example.com"],"challenge":"dns01"}`,
+		"PUT /api/v1/acme/certificates/{id}/bindings/{location_id}": `{"auto_deploy":true}`,
+	}
+	who := map[rbac.Permission]string{rbac.AcmeView: "auditor", rbac.AcmeOperate: "operator", rbac.AcmeManage: "admin-stepup"}
+	for _, rt := range srv.s.acmeRoutes() {
+		key := rt.method + " " + rt.pattern
+		body, ok := bodies[key]
+		if !ok && !safeMethod(rt.method) {
+			body = "{}"
+		}
+		if strings.Contains(rt.pattern, "/{id}/account") || strings.HasSuffix(rt.pattern, "/order") || strings.HasSuffix(rt.pattern, "/test") ||
+			strings.HasSuffix(rt.pattern, "/rearm") || strings.HasSuffix(rt.pattern, "/release-hold") || strings.Contains(rt.pattern, "/accounts/") {
+			body = ""
+		}
+		srv.ResetLimits()
+		rec := call(srv.Handler(), rt.method, pathParamRE.ReplaceAllString(rt.pattern, acmeCertID.String()), who[rt.perm], body)
+		if rt.method == http.MethodPost && (rt.pattern == "/api/v1/acme/providers" || rt.pattern == "/api/v1/acme/hooks" ||
+			rt.pattern == "/api/v1/acme/certificates") {
+			assert.Equal(t, http.StatusNotFound, rec.Code, "%s: %s", key, rec.Body.String())
+			continue
+		}
+		if rt.pattern == "/api/v1/acme/providers" || rt.pattern == "/api/v1/acme/hooks" || rt.pattern == "/api/v1/acme/certificates" {
+			assert.Equal(t, http.StatusNotFound, rec.Code, key) // the lists' service failure is answered like any other
+			continue
+		}
+		assert.Equal(t, http.StatusNotFound, rec.Code, "%s: %s", key, rec.Body.String())
+		if strings.Contains(rt.pattern, "{") {
+			srv.ResetLimits()
+			bad := strings.Replace(rt.pattern, "{id}", "not-a-uuid", 1)
+			bad = pathParamRE.ReplaceAllString(bad, acmeLocID.String())
+			assert.Equal(t, http.StatusNotFound, call(srv.Handler(), rt.method, bad, who[rt.perm], body).Code, key+" with a bad id")
+			if strings.Contains(rt.pattern, "{location_id}") {
+				bad = strings.Replace(rt.pattern, "{id}", acmeCertID.String(), 1)
+				bad = strings.Replace(bad, "{location_id}", "nope", 1)
+				assert.Equal(t, http.StatusNotFound, call(srv.Handler(), rt.method, bad, who[rt.perm], body).Code, key+" with a bad location")
+			}
+		}
+	}
+	// Boundary rules not met elsewhere: a long allow-list entry, a patch that empties the provider id, an unparsable PATCH.
+	h := srv.Handler()
+	srv.ResetLimits()
+	rec := call(h, http.MethodPost, "/api/v1/acme/hooks", "admin-stepup", `{"name":"x","url":"https://d.example.com/h","secret":"`+acmeHookSecret+
+		`","allowed_suffixes":["`+strings.Repeat("a", 254)+`"]}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	rec = call(h, http.MethodPatch, "/api/v1/acme/certificates/"+acmeCertID.String(), "admin-stepup", `{"provider_id":""}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	rec = call(h, http.MethodPost, "/api/v1/acme/certificates", "admin-stepup", `{"provider_id":"`+acmeProvID.String()+`","names":["`+
+		strings.Repeat("a", 254)+`"],"challenge":"dns01"}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	for _, p := range []string{"/api/v1/acme/providers/" + acmeProvID.String(), "/api/v1/acme/hooks/" + acmeHookID.String(),
+		"/api/v1/acme/certificates/" + acmeCertID.String()} {
+		assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPatch, p, "admin-stepup", `{"name":`).Code, p)
+		field := "name"
+		if strings.Contains(p, "/certificates/") {
+			field = "key_type"
+		}
+		assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPatch, p, "admin-stepup", `{"`+field+`":"`+strings.Repeat("n", 101)+`"}`).Code,
+			p)
+	}
+	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPost, "/api/v1/acme/providers/"+acmeProvID.String()+"/account", "admin-stepup",
+		`{"tos":true}`).Code)
+	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPost, "/api/v1/acme/certificates/"+acmeCertID.String()+"/deploy", "operator",
+		`[]`).Code)
+	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPost, "/api/v1/acme/certificates", "admin-stepup", `{"names":1}`).Code)
+	assert.Equal(t, http.StatusBadRequest, call(h, http.MethodPost, "/api/v1/acme/hooks", "admin-stepup", `{"secret":1}`).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPatch, "/api/v1/acme/providers/"+acmeProvID.String(), "admin-stepup",
+		`{"eab_kid":"`+strings.Repeat("k", 256)+`","eab_hmac":"`+acmeHMAC+`"}`).Code)
+	assert.Equal(t, http.StatusUnprocessableEntity, call(h, http.MethodPatch, "/api/v1/acme/providers/"+acmeProvID.String(), "admin-stepup",
+		`{"eab_kid":"k","eab_hmac":"`+strings.Repeat("A", 1025)+`"}`).Code)
+}
+
+func TestACMEBindingListAndFollowUpReads(t *testing.T) {
+	h, f, _ := acmeDeps(t)
+	f.ListACMEBindingsFn = func(context.Context, uuid.UUID) ([]inventory.ACMEBinding, error) {
+		return []inventory.ACMEBinding{sampleACMEBinding(true)}, nil
+	}
+	rec := call(h, http.MethodGet, "/api/v1/acme/certificates/"+acmeCertID.String()+"/bindings", "alice_read_auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, true, jsonObj(t, rec)["items"].([]any)[0].(map[string]any)["auto_deploy"])
+	// The detail and the release answer a failure of their second read like any other.
+	f.GetACMECertificateFn = func(context.Context, uuid.UUID) (inventory.ACMECertificate, error) { return sampleACMECert(), nil }
+	f.ListACMEBindingsFn = func(context.Context, uuid.UUID) ([]inventory.ACMEBinding, error) { return nil, inventory.ErrNotFound }
+	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/acme/certificates/"+acmeCertID.String(), "auditor", "").Code)
+	f.ReleaseACMEDeployHoldFn = func(context.Context, inventory.Actor, uuid.UUID) error { return nil }
+	f.GetACMECertificateFn = func(context.Context, uuid.UUID) (inventory.ACMECertificate, error) {
+		return inventory.ACMECertificate{}, inventory.ErrNotFound
+	}
+	assert.Equal(t, http.StatusNotFound, call(h, http.MethodPost, "/api/v1/acme/certificates/"+acmeCertID.String()+"/release-hold", "admin-stepup", "").Code)
+	f.GetACMEProviderFn = func(context.Context, uuid.UUID) (inventory.ACMEProvider, error) { return sampleACMEProvider(), nil }
+	f.ListACMEAccountsFn = func(context.Context, uuid.UUID) ([]inventory.ACMEAccount, error) { return nil, inventory.ErrNotFound }
+	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/acme/providers/"+acmeProvID.String(), "auditor", "").Code)
+	f.DeleteACMEHookFn = func(context.Context, inventory.Actor, uuid.UUID) error { return nil }
+	assert.Equal(t, http.StatusNoContent, call(h, http.MethodDelete, "/api/v1/acme/hooks/"+acmeHookID.String(), "admin-stepup", "").Code)
+}

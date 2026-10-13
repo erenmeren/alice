@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"alice/internal/acme"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -144,27 +143,17 @@ func checkSuffixes(field string, list []string, v *validate.Errors) {
 	}
 }
 
-// checkNames applies the name rules at the boundary: 1..100 names, each a DNS name with a wildcard only as the whole
-// first label (acme.NormalizeNames, the rule the inventory and the order use).
+// checkNames applies the name rules at the boundary (inventory.CheckACMENames, the rule the inventory and the order
+// use): 1..100 DNS names of at most 253 bytes, a wildcard only as the whole first label, no address, no duplicates.
 func checkNames(names []string, v *validate.Errors) {
-	switch {
-	case len(names) == 0:
-		v.Add("names", validate.Required, nil)
-		return
-	case len(names) > acme.MaxNames:
-		v.Add("names", validate.TooLong, map[string]string{"max": strconv.Itoa(acme.MaxNames)})
-		return
-	}
-	trimmed := make([]string, len(names))
-	for i, n := range names {
+	for _, n := range names {
 		if len(n) > maxACMENameBytes {
 			v.Add("names", validate.TooLong, map[string]string{"max": strconv.Itoa(maxACMENameBytes)})
 			return
 		}
-		trimmed[i] = strings.TrimSpace(n)
 	}
-	if _, err := acme.NormalizeNames(trimmed); err != nil {
-		v.Add("names", validate.Pattern, nil)
+	if fe := inventory.CheckACMENames(names); fe != nil {
+		*v = append(*v, *fe)
 	}
 }
 

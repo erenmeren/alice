@@ -173,6 +173,17 @@ func normACMENames(field string, in []string) ([]string, *validate.FieldError) {
 	return out, nil
 }
 
+// MaxACMENames is the most names one ACME certificate may hold.
+const MaxACMENames = acme.MaxNames
+
+// CheckACMENames applies the name rules of a definition to names without a database (the API checks them at its
+// boundary): 1..100 DNS names, a wildcard only as the whole first label, no IP address, no duplicates. A field error on
+// "names" or nil.
+func CheckACMENames(names []string) *validate.FieldError {
+	_, fe := normACMENames("names", names)
+	return fe
+}
+
 // validateACMECertFields checks the values that need no database: names, key policy, proof method and its id, the
 // renewal window, and a wildcard only over DNS-01.
 func validateACMECertFields(f acmeCertFields) validate.Errors {
