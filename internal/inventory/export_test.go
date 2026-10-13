@@ -238,3 +238,6 @@ func SetACMEDeployPage(n int) (restore func()) {
 
 // Registry is the service's provider registry (tests build a second service on the same registry).
 func (s *Service) Registry() *providers.Registry { return s.registry }
+
+// SafeACMEWebURL is safeACMEWebURL (the preview's rule for a URL shown as a link).
+var SafeACMEWebURL = safeACMEWebURL

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -397,6 +398,15 @@ func checkNoAccount(p ACMEProvider) error {
 // A concurrent registration that won is ErrACMEAccountExists (the account this call made at the CA is deactivated,
 // best effort). CA failures are *ACMEError.
 func (s *Service) RegisterACMEAccount(ctx context.Context, a Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool) (ACMEAccount, error) {
+	return s.RegisterACMEAccountTerms(ctx, a, providerID, contactEmail, tosAccepted, "")
+}
+
+// RegisterACMEAccountTerms is RegisterACMEAccount bound to the terms the Administrator was shown (PreviewACMEProvider):
+// when acceptedTermsURL is not empty and the CA's terms URL now differs from it (other terms, or none any more), the
+// registration is refused with ACMEError terms_not_accepted before anything is registered, so the acceptance recorded
+// (tos_url, the audit row) is always of the terms that were displayed. "" binds nothing (RegisterACMEAccount).
+func (s *Service) RegisterACMEAccountTerms(ctx context.Context, a Actor, providerID uuid.UUID, contactEmail string, tosAccepted bool,
+	acceptedTermsURL string) (ACMEAccount, error) {
 	contact, fe := normContact(contactEmail)
 	if fe != nil {
 		return ACMEAccount{}, validate.Errors{*fe}
@@ -429,7 +439,7 @@ func (s *Service) RegisterACMEAccount(ctx context.Context, a Actor, providerID u
 	if err != nil {
 		return ACMEAccount{}, acmeFailure(err)
 	}
-	if d.TermsOfService != "" && !tosAccepted {
+	if (d.TermsOfService != "" && !tosAccepted) || (acceptedTermsURL != "" && d.TermsOfService != acceptedTermsURL) {
 		return ACMEAccount{}, &ACMEError{Reason: acme.ReasonTermsNotAccepted, cause: acme.ErrTermsNotAccepted}
 	}
 	kid, hmac, err := s.openEAB(ctx, s.pool, providerID)
@@ -817,4 +827,70 @@ func accountGone(err error) bool {
 	var ae *acme.Error
 	return errors.As(err, &ae) && ae.Reason == acme.ReasonAccountRejected &&
 		(ae.ProblemType == acme.ProblemPrefix+"unauthorized" || ae.ProblemType == acme.ProblemPrefix+"accountDoesNotExist")
+}
+
+// ACMEProviderPreview is what a provider's CA directory says before an account exists (PreviewACMEProvider): the
+// terms of service the Administrator must accept, whether an external account binding is required, and the optional
+// resources. Only these closed fields of the directory are kept; no other text of the CA is passed on.
+type ACMEProviderPreview struct {
+	// TermsOfServiceURL is the CA's terms URL when it is a safe https URL ("" when the CA publishes none or when it is
+	// unsafe: TermsURLUnsafe then says so and the registration should not be offered).
+	TermsOfServiceURL       string `json:"terms_of_service_url"`
+	TermsURLUnsafe          bool   `json:"terms_url_unsafe"`
+	ExternalAccountRequired bool   `json:"external_account_required"`
+	KeyChangeSupported      bool   `json:"key_change_supported"`
+	RenewalInfoSupported    bool   `json:"renewal_info_supported"`
+	// Website is the CA's website when it is a safe https URL, else "".
+	Website string `json:"website"`
+}
+
+// safeACMEWebURL reports whether u, a URL the directory published to be shown to a person, is safe to show as a link:
+// https, a host, no user information, at most maxACMEURLLen, printable ASCII only (acme.ParseDirectory already
+// dropped anything that is not an http(s) URL).
+func safeACMEWebURL(u string) bool {
+	if u == "" || len(u) > maxACMEURLLen {
+		return false
+	}
+	for i := 0; i < len(u); i++ {
+		if u[i] <= ' ' || u[i] >= 0x7f {
+			return false
+		}
+	}
+	p, err := url.Parse(u)
+	return err == nil && p.Scheme == "https" && p.Host != "" && p.User == nil
+}
+
+// PreviewACMEProvider reads the live provider's CA directory (one GET through the guarded transport with the
+// provider's CA bundle; no key, no nonce, no account, no record written) for the registration form. The licence gate
+// is asked first (license.ErrLocked and its kin: the CA is not contacted). ErrNotFound for an unknown or deleted
+// provider. CA failures are *ACMEError (provider_unreachable, directory_invalid, tls_trust_failed, a rate limit with
+// its Retry-After). It takes no provider lock: it never contends with an account operation.
+func (s *Service) PreviewACMEProvider(ctx context.Context, providerID uuid.UUID) (ACMEProviderPreview, error) {
+	if err := s.license.Allow(license.ClassChange); err != nil {
+		return ACMEProviderPreview{}, err
+	}
+	p, err := getACMEProvider(ctx, s.pool, providerID, false)
+	if err != nil {
+		return ACMEProviderPreview{}, err
+	}
+	client, err := s.acmeClientFor(p, nil, "")
+	if err != nil {
+		return ACMEProviderPreview{}, err
+	}
+	d, err := client.Discover(ctx)
+	if err != nil {
+		return ACMEProviderPreview{}, acmeFailure(err)
+	}
+	out := ACMEProviderPreview{ExternalAccountRequired: d.ExternalAccountRequired, KeyChangeSupported: d.SupportsRollover(),
+		RenewalInfoSupported: d.SupportsARI()}
+	switch {
+	case safeACMEWebURL(d.TermsOfService):
+		out.TermsOfServiceURL = d.TermsOfService
+	case d.TermsOfService != "":
+		out.TermsURLUnsafe = true
+	}
+	if safeACMEWebURL(d.Website) {
+		out.Website = d.Website
+	}
+	return out, nil
 }

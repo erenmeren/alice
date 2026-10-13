@@ -194,7 +194,8 @@ func (s *Server) ClearRejected() {
 // AdvertiseFields are the URLs Advertise can replace: the directory's (newNonce, newAccount,
 // newOrder, keyChange, revokeCert, renewalInfo) and those inside answers (order is the order's
 // Location, authz, finalize and certificate the URLs in an order).
-var AdvertiseFields = []string{"newNonce", "newAccount", "newOrder", "keyChange", "revokeCert", "renewalInfo", "order", "authz", "finalize", "certificate"}
+var AdvertiseFields = []string{"newNonce", "newAccount", "newOrder", "keyChange", "revokeCert", "renewalInfo", "order", "authz", "finalize", "certificate",
+	"termsOfService"}
 
 // Advertise makes the fake hand out url for field (an http:// URL, 169.254.169.254, anything, to
 // test that a client refuses it). An empty url restores the real one; "off" removes a directory

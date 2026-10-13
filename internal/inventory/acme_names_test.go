@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,5 +30,17 @@ func TestCheckACMENames(t *testing.T) {
 			assert.Equal(t, "names", fe.Field)
 			assert.Equal(t, tc.code, fe.Code, "%v", tc.names)
 		}
+	}
+}
+
+// The preview passes on a CA's terms or website only as a plain https link.
+func TestSafeACMEWebURL(t *testing.T) {
+	for u, want := range map[string]bool{
+		"https://ca.example.com/terms": true, "https://ca.example.com:8443/t?v=2": true,
+		"": false, "http://ca.example.com/terms": false, "https://user@ca.example.com/terms": false, "https:///terms": false,
+		"https://ca.example.com/te rms": false, "https://ca.example.com/térms": false, "https://ca.example.com/\x7f": false,
+		"https://ca.example.com/" + strings.Repeat("a", 2048): false, "javascript:alert(1)": false,
+	} {
+		assert.Equal(t, want, inventory.SafeACMEWebURL(u), u)
 	}
 }

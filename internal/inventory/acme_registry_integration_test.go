@@ -918,3 +918,83 @@ func TestACMEProviderLockDoesNotStarveThePool(t *testing.T) {
 	assert.LessOrEqual(t, <-maxHeld, int32(3))
 	assert.Len(t, w.accountStates(p.ID), 1)
 }
+
+// Task 13 fix round 2: the registration form reads the CA's directory first (no account, no record, no lock) and shows
+// its terms; the registration is then bound to the terms that were shown.
+func TestACMEProviderPreview(t *testing.T) {
+	w := newRegistryWorld(t, fakeacme.Options{RequireEAB: true})
+	p := w.provider("Preview CA", true)
+	before := w.audits("acme.account.registered")
+	got, err := w.svc.PreviewACMEProvider(w.ctx, p.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEProviderPreview{TermsOfServiceURL: w.fake.Credentials().TermsURL, ExternalAccountRequired: true,
+		KeyChangeSupported: true, RenewalInfoSupported: true, Website: w.fake.BaseURL()}, got)
+	assert.Equal(t, 2, w.fake.Counters()["directory"], "Discover: its own GET (renewalInfo) and the library's")
+	assert.Equal(t, 2, w.requests(), "nothing but the directory")
+	assert.Zero(t, w.fake.Counters()["new-account"]+w.fake.Counters()["new-nonce"], "no nonce, no registration")
+	assert.Empty(t, w.accountStates(p.ID))
+	assert.Equal(t, before, w.audits("acme.account.registered"))
+
+	// Unsafe terms (http): not passed on, flagged; no terms at all: empty, not flagged.
+	require.NoError(t, w.fake.Advertise("termsOfService", "http://ca.example.test/terms"))
+	got, err = w.svc.PreviewACMEProvider(w.ctx, p.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.TermsOfServiceURL)
+	assert.True(t, got.TermsURLUnsafe)
+	require.NoError(t, w.fake.Advertise("termsOfService", "off"))
+	got, err = w.svc.PreviewACMEProvider(w.ctx, p.ID)
+	require.NoError(t, err)
+	assert.Empty(t, got.TermsOfServiceURL)
+	assert.False(t, got.TermsURLUnsafe)
+	require.NoError(t, w.fake.Advertise("termsOfService", ""))
+
+	// A provider that is unknown or deleted: ErrNotFound, nothing sent.
+	gone := w.provider("Gone", false)
+	require.NoError(t, w.svc.DeleteACMEProvider(w.ctx, w.admin, gone.ID))
+	sent := w.requests()
+	_, err = w.svc.PreviewACMEProvider(w.ctx, gone.ID)
+	assert.ErrorIs(t, err, inventory.ErrNotFound)
+	_, err = w.svc.PreviewACMEProvider(w.ctx, uuid.New())
+	assert.ErrorIs(t, err, inventory.ErrNotFound)
+	assert.Equal(t, sent, w.requests())
+
+	// The CA's failures keep their closed reasons.
+	down, err := w.svc.CreateACMEProvider(w.ctx, w.admin, inventory.ACMEProviderInput{Name: "Down", DirectoryURL: "https://127.0.0.1:1/directory"})
+	require.NoError(t, err)
+	_, err = w.svc.PreviewACMEProvider(w.ctx, down.ID)
+	assert.Equal(t, acme.ReasonProviderUnreachable, reasonOf(err), "%v", err)
+	untrusted, err := w.svc.CreateACMEProvider(w.ctx, w.admin, inventory.ACMEProviderInput{Name: "Untrusted", DirectoryURL: w.fake.DirectoryURL()})
+	require.NoError(t, err)
+	_, err = w.svc.PreviewACMEProvider(w.ctx, untrusted.ID)
+	assert.Equal(t, acme.ReasonTLSTrustFailed, reasonOf(err), "%v", err)
+
+	// In lock: the licence refusal, the CA is not contacted.
+	w.clock.Advance(31 * 24 * time.Hour)
+	require.NoError(t, w.lic.Tick(w.ctx))
+	w.fake.ClearRequests()
+	sent = w.requests()
+	_, err = w.svc.PreviewACMEProvider(w.ctx, p.ID)
+	assert.ErrorIs(t, err, license.ErrLocked)
+	assert.Equal(t, sent, w.requests())
+	assert.Empty(t, w.fake.Requests())
+}
+
+// The registration is refused when the CA's terms changed since they were shown (ALC-ACM-0003); the accepted URL is
+// the one recorded.
+func TestACMERegisterIsBoundToTheShownTerms(t *testing.T) {
+	w := newRegistryWorld(t, fakeacme.Options{})
+	p := w.provider("Terms CA", false)
+	shown := w.fake.Credentials().TermsURL
+	require.NoError(t, w.fake.Advertise("termsOfService", w.fake.BaseURL()+"/terms-v2"))
+	_, err := w.svc.RegisterACMEAccountTerms(w.ctx, w.admin, p.ID, "", true, shown)
+	assert.Equal(t, acme.ReasonTermsNotAccepted, reasonOf(err), "the terms changed after they were shown")
+	assert.Zero(t, w.fake.Counters()["new-account"])
+	require.NoError(t, w.fake.Advertise("termsOfService", "off"))
+	_, err = w.svc.RegisterACMEAccountTerms(w.ctx, w.admin, p.ID, "", true, shown)
+	assert.Equal(t, acme.ReasonTermsNotAccepted, reasonOf(err), "the CA has no terms any more: not what was shown")
+	require.NoError(t, w.fake.Advertise("termsOfService", ""))
+	a, err := w.svc.RegisterACMEAccountTerms(w.ctx, w.admin, p.ID, "", true, shown)
+	require.NoError(t, err)
+	assert.Equal(t, shown, a.TermsURL)
+	assert.Equal(t, shown, w.auditDetails("acme.account.registered")[0]["tos_url"])
+}

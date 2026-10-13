@@ -140,8 +140,8 @@ func (s *Server) handleDirectory(w http.ResponseWriter, _ *http.Request, _ *jwsR
 		d["renewalInfo"] = s.override("renewalInfo", base+"/acme/renewal-info")
 	}
 	meta := map[string]any{"externalAccountRequired": requireEAB, "website": base}
-	if !s.opts.NoTerms {
-		meta["termsOfService"] = base + "/terms"
+	if terms := s.override("termsOfService", base+"/terms"); !s.opts.NoTerms && terms != "" {
+		meta["termsOfService"] = terms // a test may advertise other terms (changed terms, an unsafe URL) or none ("off")
 	}
 	d["meta"] = meta
 	for k, v := range d {
