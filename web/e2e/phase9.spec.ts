@@ -213,6 +213,9 @@ async function addAcmeCertificate(api: Api, request: APIRequestContext): Promise
   );
   await ok(await api.post(`/api/v1/acme/certificates/${cert.id}/order`));
   await drainJobs(request);
+  const issued = await api.get(`/api/v1/acme/certificates/${cert.id}`);
+  expect(issued.ok(), await issued.text()).toBe(true);
+  expect(((await issued.json()) as { current: unknown }).current, 'the certificate was issued').not.toBeNull();
 }
 
 for (const lang of ['en', 'tr'] as Lang[]) {

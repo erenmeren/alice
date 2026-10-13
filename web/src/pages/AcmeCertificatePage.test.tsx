@@ -284,9 +284,22 @@ describe('Issued certificate status page', () => {
       cert: acmeCertificateFixture({ state: 'pending' }),
       orders: [acmeOrderFixture({ id: 'from-wizard', kind: 'test', state: 'succeeded', certificate_id: null })],
     });
-    await renderRoute({ pathname: `/acme/${ID}`, state: { testOrderId: 'from-wizard' } });
+    const { router } = await renderRoute({ pathname: `/acme/${ID}`, state: { testOrderId: 'from-wizard' } });
     expect(await screen.findByText('Test run succeeded: the authority verified every name')).toBeInTheDocument();
     expect(screen.getByTestId('test-result')).toHaveTextContent('Nothing was issued or installed.');
+    // Read once: the state is cleared from the history entry, so a reload or a way back never shows it again.
+    await waitFor(() => expect(router.state.location.state).toBeNull());
+    expect(router.state.location.pathname).toBe(`/acme/${ID}`);
+    expect(screen.getByTestId('test-result')).toBeInTheDocument();
+  });
+
+  it('shows nothing for a Test run of the navigation state that is not listed while no order runs', async () => {
+    const counts = base({ session: sessionFor('admin'), cert: acmeCertificateFixture({ state: 'pending', running_order_id: null }), orders: [acmeOrderFixture({ id: 'other', kind: 'issue', state: 'failed' })] });
+    await renderRoute({ pathname: `/acme/${ID}`, state: { testOrderId: 'gone' } });
+    expect(await screen.findByRole('table', { name: 'Orders' })).toBeInTheDocument();
+    await waitFor(() => expect(counts.orders).toBeGreaterThan(0));
+    expect(screen.queryByTestId('test-result')).not.toBeInTheDocument();
+    expect(screen.queryByText('Test run in progress')).not.toBeInTheDocument();
   });
 
   it('ignores a navigation state that is not a Test run', async () => {
@@ -359,7 +372,7 @@ describe('Issued certificate status page', () => {
         http.post('/api/v1/auth/stepup', () => HttpResponse.json(steppedUp())),
       ],
     });
-    const { router } = await open();
+    const { router, client } = await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Delete' }));
     const certReads = counts.cert;
     const dialog = await screen.findByRole('dialog', { name: 'Delete this certificate?' });
@@ -371,6 +384,8 @@ describe('Issued certificate status page', () => {
     // It leaves before the lists are read again: the deleted certificate is never read again (no "not found" flash).
     await waitFor(() => expect(counts.list).toBeGreaterThan(0));
     expect(counts.cert).toBe(certReads);
+    // Its reads are forgotten once the page has gone (not while it is still mounted).
+    await waitFor(() => expect(client.getQueryState(['acme', 'certificates', ID])).toBeUndefined());
     expect(screen.queryByText(/not found/i)).not.toBeInTheDocument();
   });
 

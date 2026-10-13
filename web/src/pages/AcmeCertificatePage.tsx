@@ -92,6 +92,21 @@ export function AcmeCertificatePage() {
   const location = useLocation();
   const started = (location.state as { testOrderId?: unknown } | null)?.testOrderId;
   const [testId, setTestId] = useState<string | null>(typeof started === 'string' ? started : null);
+  // Read once: the state leaves the history entry at once, so a reload or a way back never shows that result again.
+  const hadState = location.state !== null && location.state !== undefined;
+  const { pathname } = location;
+  useEffect(() => {
+    if (hadState) void navigate(pathname, { replace: true, state: null });
+  }, [hadState, pathname, navigate]);
+  // A deleted certificate's reads are forgotten once this page has gone (while it is mounted, its own queries would
+  // read the deleted certificate again).
+  const deleted = useRef(false);
+  useEffect(
+    () => () => {
+      if (deleted.current) client.removeQueries({ queryKey: acmeCertificateKey(id) });
+    },
+    [client, id],
+  );
   const [deleting, setDeleting] = useState(false);
   const [rearmed, setRearmed] = useState(false);
 
@@ -208,7 +223,7 @@ export function AcmeCertificatePage() {
             <Text size="sm">{t('acme.issued.orderRunning')}</Text>
           </Group>
         )}
-        <TestResult orderId={testId} orders={orders.data?.items} />
+        <TestResult orderId={testId} orders={orders.data?.items} running={running} />
         <ErrorAlert error={actionError} />
         {rearmed && <Notice tone="success" role="status" title={t('acme.issued.rearmed', { order: orderLabel })} />}
       </Stack>
@@ -234,9 +249,9 @@ export function AcmeCertificatePage() {
           c={c}
           onClose={() => setDeleting(false)}
           onDeleted={() => {
-            // Leave first, then forget this certificate's reads (never read again: it is gone) and refresh the lists.
+            // Leave and refresh the lists; this certificate's reads are forgotten when the page unmounts.
+            deleted.current = true;
             void navigate('/acme');
-            client.removeQueries({ queryKey: acmeCertificateKey(id) });
             void client.invalidateQueries({ queryKey: ACME_CERTIFICATES_KEY, predicate: (q) => q.queryKey[2] === 'list' });
           }}
         />
@@ -246,10 +261,12 @@ export function AcmeCertificatePage() {
 }
 
 // TestResult follows the Test run started from this page: still running, the names verified, or why not.
-function TestResult({ orderId, orders }: { orderId: string | null; orders: ACMEOrder[] | undefined }) {
+function TestResult({ orderId, orders, running }: { orderId: string | null; orders: ACMEOrder[] | undefined; running: boolean }) {
   const { t } = useTranslation();
   if (!orderId) return null;
   const o = orders?.find((x) => x.id === orderId);
+  // Not listed (yet): in progress while the orders are read or an order runs; otherwise nothing is known to show.
+  if (!o && orders !== undefined && !running) return null;
   if (!o || o.state === 'running')
     return (
       <Notice tone="info" role="status" title={t('acme.issued.test.running')} testId="test-result">

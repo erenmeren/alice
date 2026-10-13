@@ -67,6 +67,8 @@ const DAY_SECONDS = 24 * 3600;
 const SHORT_LIFETIME = '30m';
 const DUE_AFTER_SECONDS = 21 * 60;
 const JOURNEY_TIMEOUT = 10 * 60_000;
+// The licence lock's plain title (locales/common/en.json errors.license.locked.title), pinned.
+const LOCK_TITLE = 'Not available while the license is expired.';
 const OPERATOR: Account = { username: 'olcay', fullName: 'Olcay Öztürk', password: 'operator-password-2026' };
 const AUDITOR: Account = { username: 'deniz', fullName: 'Deniz Aksoy', password: 'auditor-password-2026' };
 
@@ -672,7 +674,15 @@ test.describe('Phase 10 ACME (en)', () => {
     await page.getByRole('button', { name: t('acme.issued.getNow'), exact: true }).click();
     await drainUntil(request, () => expect(page.getByTestId('acme-state')).toHaveText(t('acme.enum.certificateState.failing'), { timeout: 3_000 }));
     await expect(page.getByTestId('failing')).toContainText(t('acme.issued.renewal.failingTitle'));
-    await expect(page.getByTestId('next-attempt')).not.toBeEmpty();
+    // The next attempt as the page formats it (the browser's own date format and time zone, the page's language).
+    const nextAt = (await acmeCert(s.api, limited)).next_attempt_at;
+    expect(nextAt).not.toBeNull();
+    const formatted = await page.evaluate(
+      ([iso, locale]) => new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(iso)),
+      [nextAt!, await page.evaluate(() => document.documentElement.lang)] as const,
+    );
+    await expect(page.getByTestId('next-attempt')).toHaveText(formatted);
+    await expect(page.getByTestId('failing')).toContainText(t('acme.issued.renewal.failingNext', { count: 1, time: formatted }));
     const last = page.getByTestId('last-error');
     await expect(last).toContainText(t('errors.acme.ca_rate_limited.title'));
     await expect(last).toContainText(t('errors.acme.ca_rate_limited.action'));
@@ -701,10 +711,16 @@ test.describe('Phase 10 ACME (en)', () => {
     const midway = await createCertificateByApi(s.api, a, ['mid.example.test']);
     await json(await s.api.post(`/api/v1/acme/certificates/${midway}/order`), 202);
     const drain = drainJobs(request, { allowCutOff: false });
+    // Settled at once: a failure while the steps below run must not become an unhandled rejection; it is still
+    // reported where the drain is awaited.
+    const drained = drain.then(
+      () => null,
+      (e: unknown) => e,
+    );
     await expect.poll(() => acmeCounters()['hook-present'] ?? 0, { timeout: 20_000, intervals: [100] }).toBeGreaterThanOrEqual(1);
     acmeCtl('validation-fail', 'dns-01', 'on');
     acmeFault({ endpoint: 'hook', kind: 'serverInternal' });
-    await drain;
+    expect(await drained, 'the drain of the order').toBeNull();
     let order: OrderView | undefined;
     await drainUntil(request, async () => {
       order = (await acmeOrders(s.api, midway))[0];
@@ -740,11 +756,13 @@ test.describe('Phase 10 ACME (en)', () => {
     for (const path of ['order', 'test']) {
       const res = await api.post(`/api/v1/acme/certificates/${id}/${path}`);
       expect(res.status(), `${path} in lock`).toBe(403);
-      const body = (await res.json()) as { error: { code: string; reason: string } };
+      const body = (await res.json()) as { error: { code: string; reason: string; message: string } };
       expect(body.error.code).toBe('ALC-LIC-0001');
       expect(body.error.reason).toBe('license.locked');
+      // The plain licence text, in the account's language.
+      expect(body.error.message).toContain(LOCK_TITLE);
     }
-    expect(t('errors.license.locked.title')).not.toContain('errors.');
+    expect(t('errors.license.locked.title')).toBe(LOCK_TITLE);
     await page.goto('/acme');
     await expect(page.getByRole('button', { name: t('acme.issued.getCertificate'), exact: true })).toBeDisabled();
     // The scheduler pauses the planners in lock (the e2e run endpoint answers with the scheduler's gate).
