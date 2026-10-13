@@ -379,6 +379,9 @@ test-systemd: helper ## Real-systemd Nginx job (R38 item 16): privileged Ubuntu 
 	go test -count=1 -v -timeout 20m -tags systemd -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealSystemdNginx$$' ./internal/providers/nginx/
 e2e-browsers: ## Every Playwright spec on Chromium, Firefox and WebKit in EN and TR (make e2e-up first; nightly and release)
 	cd web && npx playwright install chromium firefox webkit && port="$${ALICE_E2E_PORT:-}" && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && { [ -z "$$port" ] || ALICE_E2E_PORT="$$port"; } && export ALICE_E2E_PORT && ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test --project=chromium --project=firefox --project=webkit
+.PHONY: e2e-design-evidence
+e2e-design-evidence: ## Screenshots of every primary route and wizard screen (light/dark, EN/TR, 1440/1024/768/390 px) into bin/design-evidence for review; never committed (make e2e-up first)
+	cd web && npx playwright install chromium && port="$${ALICE_E2E_PORT:-}" && set -a && { [ ! -f ../deploy/.env ] || . ../deploy/.env; } && set +a && { [ -z "$$port" ] || ALICE_E2E_PORT="$$port"; } && export ALICE_E2E_PORT && ALICE_DESIGN_EVIDENCE=1 ALICE_E2E_PROJECT=$(E2E_PROJECT) npx playwright test e2e/design-evidence.spec.ts --project=chromium
 mutation: ## Mutation testing of the security-critical pure packages (advisory; nightly)
 	gremlins unleash --tags '' ./internal/backup/format
 	gremlins unleash --tags '' ./internal/license

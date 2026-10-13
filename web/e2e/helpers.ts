@@ -508,10 +508,15 @@ export async function enrollTotp(
   request: APIRequestContext,
   c: Copy,
   a11y = false,
+  onScreen?: (name: string) => Promise<void>,
 ): Promise<{ totpSecret: string; recoveryCodes: string[] }> {
+  const screen = async (name: string) => {
+    if (a11y) await expectAccessible(page, name);
+    if (onScreen) await onScreen(name);
+  };
   await expect(page.getByRole('heading', { name: c.totpHeading })).toBeVisible();
   await expect(page.locator('img[src^="data:image/png;base64,"]')).toBeVisible();
-  if (a11y) await expectAccessible(page, 'authenticator setup');
+  await screen('authenticator setup');
   const totpSecret = ((await page.getByTestId('totp-secret').textContent()) ?? '').replace(/\s/g, '');
   expect(totpSecret).toMatch(/^[A-Z2-7]{32}$/);
   await field(page, c.code).fill(totp(totpSecret, await serverNow(request)));
@@ -520,7 +525,7 @@ export async function enrollTotp(
   const text = (await page.getByTestId('recovery-codes').textContent()) ?? '';
   const recoveryCodes = text.match(/[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}-[0-9A-Z]{4}/g) ?? [];
   expect(recoveryCodes).toHaveLength(10);
-  if (a11y) await expectAccessible(page, 'recovery codes');
+  await screen('recovery codes');
   await page.getByLabel(c.savedCodes).check();
   await page.getByRole('button', { name: c.continue }).click();
   return { totpSecret, recoveryCodes };
@@ -545,22 +550,27 @@ export async function runWizard(
   request: APIRequestContext,
   lang: Lang,
   admin: Account = ADMIN,
-  opts: { a11y?: boolean; license?: 'evaluation' | string } = {},
+  opts: { a11y?: boolean; license?: 'evaluation' | string; onScreen?: (name: string) => Promise<void> } = {},
 ): Promise<{ totpSecret: string; recoveryCodes: string[] }> {
   const c = COPY[lang];
+  const screen = async (name: string) => {
+    if (opts.a11y) await expectAccessible(page, name);
+    if (opts.onScreen) await opts.onScreen(name);
+  };
   const code = await setupCode(request);
   await page.goto('/');
   await expect(page).toHaveURL(/\/setup$/);
   await expect(page.getByRole('heading', { name: c.wizardHeading })).toBeVisible();
+  await screen('wizard setup code');
   await field(page, c.setupCode).fill(code);
   await page.getByRole('button', { name: c.continue }).click();
 
   await expect(page.getByRole('heading', { name: c.languageHeading })).toBeVisible();
-  if (opts.a11y) await expectAccessible(page, 'wizard language');
+  await screen('wizard language');
   await page.getByRole('button', { name: c.continue }).click(); // keeps the preselected (current) language
 
   await expect(page.getByRole('heading', { name: c.adminHeading })).toBeVisible();
-  if (opts.a11y) await expectAccessible(page, 'wizard administrator');
+  await screen('wizard administrator');
   await field(page, c.username).fill(admin.username);
   await field(page, c.fullName).fill(admin.fullName);
   if (admin.email) await field(page, c.email).fill(admin.email);
@@ -571,15 +581,15 @@ export async function runWizard(
   await expect(page.getByRole('alert').or(page.locator('input[aria-invalid="true"]')).first()).toBeVisible();
   await expect(page.getByText(/\b12\b/).first()).toBeVisible();
   await expect(page.getByRole('heading', { name: c.totpHeading })).toHaveCount(0);
-  if (opts.a11y) await expectAccessible(page, 'wizard administrator with error');
+  await screen('wizard administrator with error');
 
   await field(page, c.password).fill(admin.password);
   await field(page, c.repeatPassword).fill(admin.password);
   await page.getByRole('button', { name: c.continue }).click();
-  const enrolled = await enrollTotp(page, request, c, opts.a11y);
+  const enrolled = await enrollTotp(page, request, c, opts.a11y, opts.onScreen);
 
   await expect(page.getByRole('heading', { name: c.passphraseHeading })).toBeVisible();
-  if (opts.a11y) await expectAccessible(page, 'wizard passphrase');
+  await screen('wizard passphrase');
   await field(page, c.passphrase).fill(PASSPHRASE);
   await field(page, c.repeatPassphrase).fill(PASSPHRASE);
   await page.getByLabel(c.storedPassphrase).check();
@@ -587,12 +597,12 @@ export async function runWizard(
 
   // Phase 8 wizard steps (R43 row 16) with their default choices: keep the temporary HTTPS certificate, skip the mail
   // server. The dashboard's "Finish setting up" list keeps both open.
-  await keepTemporaryCertificateStep(page, lang, opts.a11y);
-  await skipMailStep(page, lang, opts.a11y);
+  await keepTemporaryCertificateStep(page, lang, opts.a11y, opts.onScreen);
+  await skipMailStep(page, lang, opts.a11y, opts.onScreen);
 
   await expect(page.getByRole('heading', { name: c.licenseHeading })).toBeVisible();
   await expect(page.getByTestId('installation-id')).toHaveText(/^ALICE(-[0-9A-Z]{4}){4}$/);
-  if (opts.a11y) await expectAccessible(page, 'wizard license');
+  await screen('wizard license');
   if (opts.license && opts.license !== 'evaluation') {
     await uploadLicense(page, c, opts.license);
   } else {
@@ -602,33 +612,35 @@ export async function runWizard(
   // Phase 3 wizard step 7: Alice's public key and the server preparation commands; adding a server is optional.
   await expect(page.getByRole('heading', { name: c.platformHeading })).toBeVisible();
   await expect(page.getByTestId('platform-public-key')).toContainText('ssh-ed25519 ');
-  if (opts.a11y) await expectAccessible(page, 'wizard platform key');
+  await screen('wizard platform key');
   await page.getByRole('button', { name: c.continue, exact: true }).click();
 
   await expect(page.getByRole('heading', { name: c.doneHeading })).toBeVisible();
-  if (opts.a11y) await expectAccessible(page, 'wizard done');
+  await screen('wizard done');
   await page.getByRole('button', { name: c.toDashboard }).click();
   await expectSignedInAs(page, admin.fullName);
   return enrolled;
 }
 
 // keepTemporaryCertificateStep answers the wizard's HTTPS step with "Keep the temporary certificate".
-export async function keepTemporaryCertificateStep(page: Page, lang: Lang, a11y = false): Promise<void> {
+export async function keepTemporaryCertificateStep(page: Page, lang: Lang, a11y = false, onScreen?: (name: string) => Promise<void>): Promise<void> {
   const t = translator(lang);
   await expect(page.getByRole('heading', { name: t('setup.https.title'), exact: true })).toBeVisible();
   const keep = page.getByTestId('https-keep-temporary');
   await expect(keep).toHaveText(t('https.keepTemporary'));
   if (a11y) await expectAccessible(page, 'wizard HTTPS certificate');
+  if (onScreen) await onScreen('wizard HTTPS certificate');
   await keep.click();
 }
 
 // skipMailStep answers the wizard's mail server step with Skip.
-export async function skipMailStep(page: Page, lang: Lang, a11y = false): Promise<void> {
+export async function skipMailStep(page: Page, lang: Lang, a11y = false, onScreen?: (name: string) => Promise<void>): Promise<void> {
   const t = translator(lang);
   await expect(page.getByRole('heading', { name: t('setup.mail.title'), exact: true })).toBeVisible();
   const skip = page.getByTestId('setup-skip');
   await expect(skip).toHaveText(t('setup.skip'));
   if (a11y) await expectAccessible(page, 'wizard mail server');
+  if (onScreen) await onScreen('wizard mail server');
   await skip.click();
 }
 
