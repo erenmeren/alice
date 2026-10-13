@@ -54,11 +54,15 @@ const (
 	DefaultPropagationWait = 5 * time.Second
 	MaxPropagationWait     = 120 * time.Second
 	DefaultPollTimeout     = 60 * time.Second
-	MaxPollTimeout         = 5 * time.Minute
-	DefaultPollInterval    = 2 * time.Second
-	MinPollInterval        = 10 * time.Millisecond
-	MaxPollInterval        = 30 * time.Second
-	DefaultTTL             = 60
+	// MaxPollTimeout stays below the ACME client's per-call deadline (acme.DefaultCallTimeout, 2 min), under which
+	// Present runs: a longer poll could never finish.
+	MaxPollTimeout = 100 * time.Second
+	// MaxPresentAttempts caps the present requests of one Present (the first plus the polls).
+	MaxPresentAttempts  = 100
+	DefaultPollInterval = 2 * time.Second
+	MinPollInterval     = 500 * time.Millisecond
+	MaxPollInterval     = 30 * time.Second
+	DefaultTTL          = 60
 	// MaxReplyBytes is how much of a hook answer is read.
 	MaxReplyBytes = 4 << 10
 	// UserAgent is sent with every hook call.
@@ -69,14 +73,10 @@ const (
 	labelPrefix    = "_acme-challenge."
 )
 
-// ReasonNameNotAllowed is the reason of a challenge whose domain is outside the allowed suffixes (the spelling
-// of the ALC-ACM-0015 registry entry). The other reasons are acme.ReasonHookRefused and acme.ReasonNotIssuedInTime.
-const ReasonNameNotAllowed = "acme.name_not_allowed"
-
 // Configuration errors (fixed text: never the URL or the secret).
 var (
 	ErrURL         = errors.New("dns01: the hook URL must be an https URL without credentials or fragment")
-	ErrSecret      = errors.New("dns01: the hook secret is empty")
+	ErrSecret      = errors.New("dns01: the hook secret is empty or has control or non-ASCII characters")
 	ErrCABundle    = errors.New("dns01: the CA bundle has no usable certificate")
 	ErrWait        = errors.New("dns01: a wait setting is out of range")
 	ErrSuffix      = errors.New("dns01: an allowed suffix is not a DNS suffix")
@@ -152,7 +152,7 @@ func New(cfg Config) (*Solver, error) {
 		return nil, ErrURL
 	}
 	key := cfg.Secret.Bytes()
-	if len(key) == 0 {
+	if len(key) == 0 || !validSecret(key) {
 		return nil, ErrSecret
 	}
 	s := &Solver{url: u.String(), host: u.Host, key: secrets.NewPlaintext(append([]byte(nil), key...)),
@@ -196,6 +196,16 @@ func New(cfg Config) (*Solver, error) {
 }
 
 // String shows the host only.
+// validSecret admits printable ASCII only: the value is an HTTP header value and an HMAC key.
+func validSecret(k []byte) bool {
+	for _, c := range k {
+		if c < 0x20 || c >= 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
 func (s Solver) String() string { return "dns01.Solver{host: " + s.host + ", secret: redacted}" }
 
 // GoString is String.
@@ -207,7 +217,7 @@ func (s Solver) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String(
 // Types implements solver.Solver.
 func (*Solver) Types() []string { return []string{solver.DNS01} }
 
-// Present publishes the TXT value. It returns an *acme.Error: ReasonNameNotAllowed (nothing was sent),
+// Present publishes the TXT value. It returns an *acme.Error: acme.ReasonNameNotAllowed (nothing was sent),
 // acme.ReasonHookRefused (the hook refused, failed or could not be reached) or acme.ReasonNotIssuedInTime
 // (the hook never reported ready in time); a cancelled or expired ctx returns ctx.Err().
 func (s *Solver) Present(ctx context.Context, ch solver.Challenge) error {
@@ -220,7 +230,7 @@ func (s *Solver) Present(ctx context.Context, ch solver.Challenge) error {
 		return err
 	}
 	deadline := s.now().Add(s.pollMax)
-	for polled := false; ; polled = true {
+	for attempt := 1; ; attempt++ {
 		reply, err := s.post(ctx, body, sig, ch.Domain)
 		if err != nil {
 			return err
@@ -230,12 +240,9 @@ func (s *Solver) Present(ctx context.Context, ch solver.Challenge) error {
 			return nil
 		}
 		if !known {
-			if polled {
-				return nil // it answered ready=false before, and now says nothing: take the wait below as done
-			}
-			return s.sleepFor(ctx, s.wait)
+			return s.sleepFor(ctx, s.wait) // no readiness information (also after an earlier ready=false)
 		}
-		if !s.now().Before(deadline) {
+		if attempt >= MaxPresentAttempts || !s.now().Before(deadline) {
 			return &acme.Error{Reason: acme.ReasonNotIssuedInTime, Identifier: ch.Domain}
 		}
 		if err := s.sleepFor(ctx, s.pollStep); err != nil {
@@ -290,7 +297,7 @@ func (s *Solver) prepare(ch solver.Challenge) (string, error) {
 	}
 	d, ok := normDomain(ch.Domain)
 	if !ok || !s.allowed(d) {
-		return "", &acme.Error{Reason: ReasonNameNotAllowed, Identifier: safeID(ch.Domain)}
+		return "", &acme.Error{Reason: acme.ReasonNameNotAllowed, Identifier: safeID(ch.Domain)}
 	}
 	fqdn := labelPrefix + d
 	if ch.DNSName != "" && !strings.EqualFold(strings.TrimSuffix(ch.DNSName, "."), fqdn) {

@@ -36,13 +36,15 @@ const (
 	ReasonTLSTrustFailed       = "acme.tls_trust_failed"
 	ReasonRolloverUnsupported  = "acme.rollover_unsupported"
 	ReasonChallengeUnavailable = "acme.challenge_unavailable"
+	ReasonNameNotAllowed       = "acme.name_not_allowed"
 )
 
 // Reasons lists every reason an *Error of this package can carry.
 func Reasons() []string {
 	return []string{ReasonProviderUnreachable, ReasonDirectoryInvalid, ReasonTermsNotAccepted, ReasonAccountRejected,
 		ReasonCARateLimited, ReasonValidationFailedDNS, ReasonValidationFailedHTTP, ReasonHookRefused, ReasonIdentifierRefused,
-		ReasonNotIssuedInTime, ReasonKeyPolicyNotAllowed, ReasonTLSTrustFailed, ReasonRolloverUnsupported, ReasonChallengeUnavailable}
+		ReasonNotIssuedInTime, ReasonKeyPolicyNotAllowed, ReasonTLSTrustFailed, ReasonRolloverUnsupported, ReasonChallengeUnavailable,
+		ReasonNameNotAllowed}
 }
 
 // ProblemPrefix is the namespace of RFC 8555 problem types; any other type is dropped.

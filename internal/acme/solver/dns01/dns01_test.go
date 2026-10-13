@@ -250,9 +250,9 @@ func TestDefaultsAndLimits(t *testing.T) {
 	assert.Equal(t, DefaultTTL, s.ttl)
 	for name, mut := range map[string]func(*Config){
 		"wait too long":  func(c *Config) { c.PropagationWait = 121 * time.Second },
-		"poll too long":  func(c *Config) { c.PollTimeout = 6 * time.Minute },
+		"poll too long":  func(c *Config) { c.PollTimeout = 101 * time.Second },
 		"poll negative":  func(c *Config) { c.PollTimeout = -1 },
-		"step too small": func(c *Config) { c.PollInterval = time.Millisecond },
+		"step too small": func(c *Config) { c.PollInterval = 499 * time.Millisecond },
 		"step too big":   func(c *Config) { c.PollInterval = time.Minute },
 		"ttl big":        func(c *Config) { c.TTL = 86401 },
 		"ttl negative":   func(c *Config) { c.TTL = -1 },
@@ -267,7 +267,7 @@ func TestDefaultsAndLimits(t *testing.T) {
 	}
 	c := base
 	c.PropagationWait = 120 * time.Second
-	c.PollTimeout = 5 * time.Minute
+	c.PollTimeout = MaxPollTimeout
 	_, err = New(c)
 	assert.NoError(t, err)
 }
@@ -293,7 +293,7 @@ func TestNameAllowListNeverDials(t *testing.T) {
 		for name, f := range map[string]func(context.Context, solver.Challenge) error{"present": s.Present, "cleanup": s.CleanUp} {
 			err := f(ctx5(t), solver.Challenge{Type: solver.DNS01, Domain: strings.TrimPrefix(d, "*."), DNSValue: "v"})
 			require.Error(t, err, "%s %q", name, d)
-			assert.Equal(t, ReasonNameNotAllowed, reasonOf(err), "%s %q", name, d)
+			assert.Equal(t, acme.ReasonNameNotAllowed, reasonOf(err), "%s %q", name, d)
 		}
 	}
 	assert.Zero(t, st.conns.Load(), "no connection was opened")
@@ -309,7 +309,7 @@ func TestEmptyAllowListRefusesAll(t *testing.T) {
 	st := newStub(t, ok)
 	s := st.solver(t, func(c *Config) { c.AllowedSuffixes = nil })
 	err := s.Present(ctx5(t), chal("example.test", "v"))
-	assert.Equal(t, ReasonNameNotAllowed, reasonOf(err))
+	assert.Equal(t, acme.ReasonNameNotAllowed, reasonOf(err))
 	assert.Zero(t, st.conns.Load())
 }
 
@@ -494,7 +494,7 @@ func TestEndToEndNameNotAllowedAndHookRefusal(t *testing.T) {
 	der, _ := csrFor(t, "example.test")
 	_, err := cl.Order(ctx5(t), []string{"example.test"}, der, fakeSolver(t, f, func(c *Config) { c.AllowedSuffixes = []string{"other.test"} }))
 	require.Error(t, err)
-	assert.Equal(t, ReasonNameNotAllowed, acme.ReasonOf(err))
+	assert.Equal(t, acme.ReasonNameNotAllowed, acme.ReasonOf(err))
 	assert.Zero(t, f.Counters()["hook-present"])
 
 	_, err = cl.Order(ctx5(t), []string{"example.test"}, der, fakeSolver(t, f, func(c *Config) { c.Secret = secrets.NewPlaintext([]byte("nope")) }))
@@ -524,4 +524,54 @@ func FuzzParseHookReply(f *testing.F) {
 		require.NoError(t, json.Unmarshal(b, &v), "known only for a JSON object")
 		require.Contains(t, []string{"true", "false"}, strings.TrimSpace(string(v["ready"])))
 	})
+}
+
+func TestSecretValidation(t *testing.T) {
+	for _, k := range []string{"a\nb", "a\rb", "a\x00b", "a\x7fb", "caf\xc3\xa9", "tab\tx"} {
+		_, err := New(Config{URL: "https://hook.example.test/x", Secret: secrets.NewPlaintext([]byte(k))})
+		assert.ErrorIs(t, err, ErrSecret, "%q", k)
+	}
+	_, err := New(Config{URL: "https://hook.example.test/x", Secret: secrets.NewPlaintext([]byte("a b~!"))})
+	assert.NoError(t, err)
+}
+
+func TestAttemptCap(t *testing.T) {
+	st := newStub(t, func(int, rec) (int, string) { return 200, `{"ready":false}` })
+	s := st.solver(t, func(c *Config) { c.PollInterval = MinPollInterval; c.PollTimeout = MaxPollTimeout })
+	err := s.Present(ctx5(t), chal("a.example.test", "v"))
+	assert.Equal(t, acme.ReasonNotIssuedInTime, reasonOf(err))
+	assert.Len(t, st.requests(), MaxPresentAttempts, "a hook cannot be hit more than the cap")
+}
+
+func TestNotReadyThenSilentStillWaits(t *testing.T) {
+	st := newStub(t, func(n int, _ rec) (int, string) {
+		if n == 1 {
+			return 200, `{"ready":false}`
+		}
+		return 204, ""
+	})
+	s := st.solver(t, func(c *Config) { c.PollInterval = time.Second; c.PropagationWait = 9 * time.Second })
+	fc := withClock(s)
+	require.NoError(t, s.Present(ctx5(t), chal("a.example.test", "v")))
+	assert.Equal(t, []time.Duration{time.Second, 9 * time.Second}, fc.slept)
+}
+
+func TestRedirectNotFollowed(t *testing.T) {
+	target := newStub(t, ok)
+	hook := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", target.URL+"/x")
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(hook.Close)
+	s, err := New(Config{URL: hook.URL, Secret: secrets.NewPlaintext([]byte(testSecret)), CABundlePEM: pemOf(hook), PropagationWait: -1,
+		AllowedSuffixes: []string{"example.test"}})
+	require.NoError(t, err)
+	err = s.Present(ctx5(t), chal("a.example.test", "v"))
+	assert.Equal(t, acme.ReasonHookRefused, reasonOf(err))
+	assert.Empty(t, target.requests())
+	assert.Zero(t, target.conns.Load())
+}
+
+func TestPollBoundBelowClientCallTimeout(t *testing.T) {
+	assert.Less(t, MaxPollTimeout, acme.DefaultCallTimeout)
 }
