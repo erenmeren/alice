@@ -709,7 +709,8 @@ func (r *restorer) verify(ctx context.Context) error {
 // at backup time) for an Administrator, as a confirmed license lock does (blocked_license, L-81): it would otherwise
 // start with serve against targets whose state has moved on since the backup (a superseded certificate version
 // redeployed, a rotation step on keys rotated later). A running job's cut-off attempt is closed as the reaper closes
-// it and its target lock released. Read-only and platform work runs as usual. The count goes into system.restored.
+// it and its target lock released. Read-only and platform work runs as usual. The count goes into system.restored. Automatic
+// renewal of ACME certificates is switched off (A11).
 func (r *restorer) holdChanges(ctx context.Context) error {
 	return db.InTx(ctx, r.staging, func(tx pgx.Tx) error {
 		now := r.s.c.Clock.Now().UTC()
@@ -730,6 +731,16 @@ WHERE class = 'change' AND status IN ('queued', 'running')`)
 		if r.held > 0 {
 			r.warn(strconv.FormatInt(r.held, 10) + " tasks of the backup that change servers or Key Vaults (queued or running when it" +
 				" was made) are held: review them under Waiting for an administrator on Servers, then run or discard each.")
+		}
+		// A clone of an installation must not order certificates behind the original's back (A11, as the license's
+		// reopened state): automatic renewal of every ACME certificate is off until an Administrator turns it on again.
+		tag, err = tx.Exec(ctx, "UPDATE acme_certificates SET auto_renew = false, updated_at = $1 WHERE auto_renew", now)
+		if err != nil {
+			return fmt.Errorf("backup: switch off automatic renewal: %w", err)
+		}
+		if n := tag.RowsAffected(); n > 0 {
+			r.warn("Automatic renewal of " + strconv.FormatInt(n, 10) + " certificates ordered from certificate authorities is switched off:" +
+				" turn it on again under Issued certificates once this installation replaces the original.")
 		}
 		return nil
 	})

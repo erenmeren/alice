@@ -45,7 +45,7 @@ type Certificate struct {
 	PEMChain      string // GetCertificate only (the list leaves it out)
 	ChainComplete bool
 	SelfSigned    bool
-	Source        string // discovered | uploaded | csr | azure_kv
+	Source        string // discovered | uploaded | csr | azure_kv | acme
 	Label         string
 	HasPrivateKey bool
 	LocationCount int // locations on live targets that are not missing
@@ -96,7 +96,7 @@ type CertificateLocation struct {
 // CertificateFilter selects certificates for the certificate screen.
 type CertificateFilter struct {
 	TargetID uuid.UUID // certificates with a location on this target that is not missing
-	Source   string    // "" | "discovered" | "uploaded" | "csr" | "azure_kv"
+	Source   string    // "" | "discovered" | "uploaded" | "csr" | "azure_kv" | "acme"
 	Query    string    // subject CN, SAN, label or fingerprint (case- and dotted-I-insensitive)
 	Expiry   string    // "" | "expired" | "7" | "14" | "30" | "60" | "90" (days; the window includes expired ones)
 	Cursor   string
@@ -123,7 +123,7 @@ const (
 )
 
 var (
-	certificateSources = []string{"discovered", "uploaded", "csr", "azure_kv"}
+	certificateSources = []string{"discovered", "uploaded", "csr", "azure_kv", "acme"}
 	expiryWindows      = []string{"expired", "7", "14", "30", "60", "90"}
 )
 

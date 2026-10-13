@@ -135,6 +135,14 @@ var explicitGrants = map[string][]string{
 	"public.rotation_steps":     {"INSERT", "SELECT"},
 	// Every operation id a rotation location used (G23): append-only, written by the location guard.
 	"public.rotation_op_ids": {"INSERT", "SELECT"},
+	// ACME (00013): authorities, accounts, hooks, certificates and orders are never deleted (soft delete, history); a
+	// binding is added and removed.
+	"public.acme_providers":    {"INSERT", "SELECT"},
+	"public.acme_accounts":     {"INSERT", "SELECT"},
+	"public.acme_hooks":        {"INSERT", "SELECT"},
+	"public.acme_certificates": {"INSERT", "SELECT"},
+	"public.acme_orders":       {"INSERT", "SELECT"},
+	"public.acme_bindings":     {"DELETE", "INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -192,6 +200,18 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.rotation_locations": {"UPDATE": {"add_op_id", "add_resend_count", "add_resent_at", "add_sent_at", "added_line_no", "backup", "error_code", "job_count", "new_location_id",
 		"remove_op_id", "remove_sent_at", "remove_verified_at", "removed_at", "reverified_at", "skip_reason", "state", "undo_op_id",
 		"undo_sent_at", "updated_at", "verified_at", "verify_note"}},
+	// ACME (00013): the sealed account key and every identity column (provider, ids, kind, started_at) are fixed at INSERT; the
+	// pending key of an order is deletable (A8) and its challenge records are cleared by the cleanup job (A12).
+	"public.acme_providers": {"UPDATE": {"allowed_suffixes", "ca_bundle_pem", "deleted_at", "directory_url", "eab_hmac_ct", "eab_hmac_key_version",
+		"eab_hmac_nonce", "eab_hmac_wrapped_dek", "eab_kid", "name", "preset", "updated_at"}},
+	"public.acme_accounts": {"UPDATE": {"account_url", "contact_email", "state", "tos_accepted_at", "tos_accepted_by", "tos_url", "updated_at"}},
+	"public.acme_hooks": {"UPDATE": {"allowed_suffixes", "auth_mode", "ca_bundle_pem", "deleted_at", "name", "secret_ct", "secret_key_version",
+		"secret_nonce", "secret_wrapped_dek", "updated_at", "url"}},
+	"public.acme_certificates": {"UPDATE": {"account_id", "auto_deploy", "auto_renew", "challenge", "current_certificate_id", "deleted_at", "failures",
+		"hook_id", "key_type", "last_attempt_at", "last_error_code", "names", "next_attempt_at", "renew_before_days", "state", "updated_at"}},
+	"public.acme_orders": {"UPDATE": {"certificate_id", "error_code", "finished_at", "order_url", "pending_key_ct", "pending_key_nonce",
+		"pending_key_version", "pending_key_wrapped_dek", "presented", "state"}},
+	"public.acme_bindings": {"UPDATE": {"auto_deploy"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}

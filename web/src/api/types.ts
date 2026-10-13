@@ -479,8 +479,8 @@ export interface JobQuery {
 // Shapes follow api/openapi.yaml (the source of truth); fields the API documents with "known
 // values" are typed as unions plus string where "a newer server may add others".
 
-// 'azure_kv' is a Key Vault certificate; the list and the export accept it as a filter since Phase 7.
-export type CertificateSource = 'discovered' | 'uploaded' | 'csr' | 'azure_kv';
+// 'azure_kv' is a Key Vault certificate and 'acme' one Alice ordered from a certificate authority; the list and the export accept it as a filter since Phase 7.
+export type CertificateSource = 'discovered' | 'uploaded' | 'csr' | 'azure_kv' | 'acme';
 // CertificateSourceFilter is what GET /certificates accepts for source: every source (Phase 7 added azure_kv).
 export type CertificateSourceFilter = CertificateSource;
 export type KeyAlgorithm = 'rsa' | 'ecdsa' | 'ed25519' | 'other';

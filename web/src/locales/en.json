@@ -1297,7 +1297,8 @@
       "discovered": "Found on servers",
       "uploaded": "Uploaded",
       "csr": "From a signing request",
-      "azure_kv": "Azure Key Vault"
+      "azure_kv": "Azure Key Vault",
+      "acme": "Issued by ACME"
     },
     "keyAlgorithm": {
       "rsa": "RSA",
@@ -1458,6 +1459,7 @@
     "expiry14": "Within 14 days",
     "expiry90": "Within 90 days",
     "sourceAzureKv": "Key Vault",
+    "sourceAcme": "Issued by ACME",
     "page": {
       "description": "Every certificate. Every location. One inventory.",
       "chips": "Expiry shortcuts",

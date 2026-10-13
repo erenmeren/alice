@@ -1297,7 +1297,8 @@
       "discovered": "Sunucularda bulunan",
       "uploaded": "Yüklenen",
       "csr": "İmzalama isteğinden",
-      "azure_kv": "Azure Key Vault"
+      "azure_kv": "Azure Key Vault",
+      "acme": "ACME ile alındı"
     },
     "keyAlgorithm": {
       "rsa": "RSA",
@@ -1458,6 +1459,7 @@
     "expiry14": "14 gün içinde",
     "expiry90": "90 gün içinde",
     "sourceAzureKv": "Key Vault",
+    "sourceAcme": "ACME ile alınan",
     "page": {
       "description": "Her sertifika ve kullanıldığı her konum. Tek envanter.",
       "chips": "Bitiş kısayolları",

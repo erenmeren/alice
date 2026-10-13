@@ -1583,7 +1583,7 @@ paths:
       x-permission: read
       parameters:
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid }, description: 'Certificates in use on this server' }
-        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv] } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv, acme] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 }, description: 'Part of the subject CN, a SAN, the label or the fingerprint' }
         - { name: expiry, in: query, required: false, schema: { type: string, enum: [expired, "7", "14", "30", "60", "90"] }, description: 'Expired (not_after at or before now), or expiring within 7, 14, 30, 60 or 90 days (before now + N days, expired ones included)' }
         - { name: cursor, in: query, required: false, schema: { type: string, maxLength: 512 } }
@@ -2346,7 +2346,7 @@ paths:
       x-permission: read
       parameters:
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
-        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv] } }
+        - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv, acme] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
         - { name: expiry, in: query, required: false, schema: { type: string, enum: [expired, "7", "14", "30", "60", "90"] } }
       responses:
@@ -4730,7 +4730,7 @@ components:
         not_after: { type: string, format: date-time }
         key_algorithm: { type: string, description: "Known values: rsa, ecdsa, ed25519, other" }
         key_bits: { type: integer }
-        source: { type: string, description: "Known values: discovered, uploaded, csr" }
+        source: { type: string, description: "Known values: discovered, uploaded, csr, azure_kv, acme" }
         label: { type: string }
         has_private_key: { type: boolean }
         chain_complete: { type: boolean }

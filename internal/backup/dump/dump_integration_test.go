@@ -295,6 +295,20 @@ FROM ssh_key_locations WHERE id = 'e0000000-0000-4000-8000-000000000001';
 INSERT INTO rotation_op_ids (op_id, location_id, kind) VALUES (gen_random_uuid(), 'f2000000-0000-4000-8000-000000000001', 'add');
 INSERT INTO rotation_steps (id, rotation_id, n, location_id, name, status, at)
 VALUES (gen_random_uuid(), 'f1000000-0000-4000-8000-000000000001', 1, 'f2000000-0000-4000-8000-000000000001', 'plan', 'ok', now());
+INSERT INTO acme_providers (id, name, directory_url, preset, created_at, updated_at)
+VALUES ('d1000000-0000-4000-8000-000000000001', 'CA', 'https://ca.example.test/directory', 'custom', now(), now());
+INSERT INTO acme_accounts (id, provider_id, key_ct, key_nonce, key_wrapped_dek, key_version, state, created_at, updated_at)
+VALUES ('d2000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', '\x01', '\x000000000000000000000002', '\x01', 1, 'active', now(), now());
+INSERT INTO acme_hooks (id, name, url, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, created_at, updated_at)
+VALUES ('d3000000-0000-4000-8000-000000000001', 'hook', 'https://dns.example.test/hook', '\x01', '\x000000000000000000000003', '\x01', 1, now(), now());
+INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, hook_id, created_at, updated_at)
+VALUES ('d4000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', 'd2000000-0000-4000-8000-000000000001',
+        '{www.example.test}', 'ecdsa_p256', 'dns01', 'd3000000-0000-4000-8000-000000000001', now(), now());
+INSERT INTO acme_orders (id, acme_certificate_id, kind, started_at, pending_key_ct, pending_key_nonce, pending_key_wrapped_dek, pending_key_version, presented)
+VALUES ('d5000000-0000-4000-8000-000000000001', 'd4000000-0000-4000-8000-000000000001', 'issue', now(), '\x01', '\x000000000000000000000004', '\x01', 1,
+        '[{"kind":"dns","name":"_acme-challenge.www.example.test"}]');
+INSERT INTO acme_bindings (acme_certificate_id, location_id, auto_deploy, created_at)
+SELECT 'd4000000-0000-4000-8000-000000000001', id, false, now() FROM certificate_locations LIMIT 1;
 INSERT INTO saved_views (id, user_id, page, name, query, created_at) SELECT gen_random_uuid(), id, 'certificates', 'view', '{}', now() FROM users LIMIT 1;
 INSERT INTO setup_sessions (id_hash, created_at, idle_expires_at) VALUES (sha256('setup'), now(), now() + interval '1 hour');
 INSERT INTO target_locks (target_id, job_id, operation, locked_by, heartbeat_at, lease_until)

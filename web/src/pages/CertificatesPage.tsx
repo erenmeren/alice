@@ -30,6 +30,7 @@ const SOURCES: { value: CertificateSourceFilter; key: string }[] = [
   { value: 'uploaded', key: 'sourceUploaded' },
   { value: 'csr', key: 'sourceCsr' },
   { value: 'azure_kv', key: 'sourceAzureKv' },
+  { value: 'acme', key: 'sourceAcme' },
 ];
 const EXPIRIES: { value: Exclude<ExpiryFilter, ''>; key: string }[] = [
   { value: 'expired', key: 'expiryExpired' },

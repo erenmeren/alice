@@ -63,7 +63,7 @@ const (
 // certificateSources and expiryWindows are the list filter's values, the same as the inventory's (Task 10: the Key
 // Vault source and the 7, 14 and 90 day windows; B5).
 var (
-	certificateSources = []string{"discovered", "uploaded", "csr", "azure_kv"}
+	certificateSources = []string{"discovered", "uploaded", "csr", "azure_kv", "acme"}
 	expiryWindows      = []string{"expired", "7", "14", "30", "60", "90"}
 )
 

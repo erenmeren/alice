@@ -4,7 +4,7 @@ import type { CertificateSource, CSRStatus, DeploymentState, DeploymentStatus, K
 // checked against api/openapi.yaml by enums.test.ts, which fails when the API gains a value that
 // has no label in both languages.
 
-export const CERTIFICATE_SOURCES: readonly CertificateSource[] = ['discovered', 'uploaded', 'csr', 'azure_kv'];
+export const CERTIFICATE_SOURCES: readonly CertificateSource[] = ['discovered', 'uploaded', 'csr', 'azure_kv', 'acme'];
 export const KEY_ALGORITHMS: readonly KeyAlgorithm[] = ['rsa', 'ecdsa', 'ed25519', 'other'];
 export const CSR_STATUSES: readonly CSRStatus[] = ['pending', 'completed', 'cancelled'];
 export const DEPLOYMENT_STATUSES: readonly DeploymentStatus[] = [
