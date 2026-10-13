@@ -45,6 +45,11 @@ var (
 	ErrACMELocationBound = errors.New("inventory: the location already follows another certificate")
 	// ErrACMELocationNotBound: Deploy now named a location that is not bound to the ACME certificate.
 	ErrACMELocationNotBound = errors.New("inventory: the location is not bound to the ACME certificate")
+	// ErrACMENoBindings: Deploy now named no location and the ACME certificate is bound to none.
+	ErrACMENoBindings = errors.New("inventory: the ACME certificate is bound to no location")
+	// ErrACMETooManyBindings: Deploy now named no location and the certificate is bound to more locations than one
+	// request may deploy to (MaxDeployLocations): the locations must be named.
+	ErrACMETooManyBindings = errors.New("inventory: the ACME certificate is bound to more locations than one deployment request takes")
 )
 
 // Binding states (ACMEBinding.State).
@@ -154,6 +159,16 @@ func policyAlgorithm(policy string) string {
 // Operator's (nothing changes on a server). Audit
 // acme.binding.added (or acme.binding.updated when only automatic deployment changed; nothing when nothing changed).
 func (s *Service) AddACMEBinding(ctx context.Context, a Actor, id, location uuid.UUID, autoDeploy bool) (ACMEBinding, error) {
+	return s.AddACMEBindingStrict(ctx, a, id, location, autoDeploy, true)
+}
+
+// AddACMEBindingStrict is AddACMEBinding with the strength of the caller's session stated (as the Key Vault's
+// UpdateBindingLocationsStrict): switching unattended deployment on is refused INSIDE the transaction, after the
+// binding's automatic state was read under the certificate's row lock, unless the actor is an Administrator
+// (ErrAdminRequired) AND strictSession is true (ErrAutoDeployNeedsStepUp: a browser session with a fresh step-up, never
+// an API token), so a switch-off between the API's own read and this call cannot let a request without the step-up
+// switch it on again. AddACMEBinding is this with strictSession true: its caller vouches for the step-up.
+func (s *Service) AddACMEBindingStrict(ctx context.Context, a Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (ACMEBinding, error) {
 	if location == uuid.Nil {
 		return ACMEBinding{}, validate.Errors{{Field: "location_id", Code: validate.Pattern}}
 	}
@@ -208,7 +223,7 @@ func (s *Service) AddACMEBinding(ctx context.Context, a Actor, id, location uuid
 			}
 		}
 		if autoDeploy && (acmeBound == nil || !autoBefore) {
-			if err := s.unattendedAllowed(a); err != nil {
+			if err := s.unattendedAllowed(a, strictSession); err != nil {
 				return err
 			}
 		}
@@ -255,9 +270,12 @@ VALUES ($1, $2, $3, $4, $5)`, id, location, autoDeploy, nullableUser(a.UserID), 
 // ruling S6): only an Administrator (ErrAdminRequired; the API also requires a fresh step-up) and only while the licence
 // gate allows changes (license.ErrLocked and its kin). Switching it off, removing a binding, a binding with automatic
 // deployment off and Deploy now are not gated by it.
-func (s *Service) unattendedAllowed(a Actor) error {
-	if a.Role != rbac.Admin {
+func (s *Service) unattendedAllowed(a Actor, strictSession bool) error {
+	switch {
+	case a.Role != rbac.Admin:
 		return ErrAdminRequired
+	case !strictSession:
+		return ErrAutoDeployNeedsStepUp
 	}
 	return s.license.Allow(license.ClassChange)
 }
@@ -290,7 +308,7 @@ func (s *Service) RemoveACMEBinding(ctx context.Context, a Actor, id, location u
 // named ones (each must be bound: *LocationRefusalError with ErrACMELocationNotBound) or, when none is named, every
 // bound location. It is RequestDeployment with trigger manual and nothing else (A2: the same checks, the licence lock,
 // deployment.requested / deployment.denied audit rows, ErrChainUnconfirmed unless an Administrator confirms an
-// incomplete chain). ErrNotFound, ErrACMENotIssued.
+// incomplete chain). ErrNotFound, ErrACMENotIssued; with no location named, ErrACMENoBindings (none bound) or ErrACMETooManyBindings (more than MaxDeployLocations bound: name them).
 func (s *Service) DeployACMENow(ctx context.Context, a Actor, id uuid.UUID, in ACMEDeployInput) ([]RequestedDeployment, error) {
 	c, err := getACMECert(ctx, s.pool, id, false)
 	if err != nil {
@@ -309,6 +327,12 @@ func (s *Service) DeployACMENow(ctx context.Context, a Actor, id uuid.UUID, in A
 	}
 	locations := in.LocationIDs
 	if len(locations) == 0 {
+		switch {
+		case len(bound) == 0:
+			return nil, ErrACMENoBindings
+		case len(bound) > MaxDeployLocations:
+			return nil, ErrACMETooManyBindings
+		}
 		locations = bound
 	}
 	isBound := map[uuid.UUID]bool{}

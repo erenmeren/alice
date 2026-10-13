@@ -500,7 +500,7 @@ func TestACMEAutoDeployDeploysANewCertificate(t *testing.T) {
 	}
 	requested := w.h.auditDetails("deployment.requested")
 	require.Len(t, requested, 2)
-	assert.Equal(t, 2, w.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.requested' AND actor_type = 'system' AND actor_name = 'jobs'"))
+	assert.Equal(t, 3, w.h.count("SELECT count(*) FROM audit_log WHERE action = 'deployment.requested' AND actor_type = 'system' AND actor_name = 'jobs'"))
 	assert.Equal(t, cur.String(), requested[0]["certificate_id"])
 
 	assert.Equal(t, inventory.ACMEDeployRun{}, w.plan(), "busy: nothing twice")
@@ -939,4 +939,61 @@ func TestACMEQueuedDeploymentOfALocationNowBoundToAVault(t *testing.T) {
 	assert.False(t, v.DeployStopped)
 	require.NoError(t, w.h.svc.DeleteACMECertificate(w.h.ctx, w.admin, d.ID))
 	assert.ErrorIs(t, mat(), inventory.ErrACMEBindingGone)
+}
+
+// Fix round 1 of Task 13 (I1): switching unattended deployment on is judged INSIDE the transaction with the strength of
+// the caller's session. The API reads the binding before it calls; when another request switches it off in between,
+// a request that skipped the step-up because it saw "already on" must not switch it on again.
+func TestACMESwitchOnNeedsAStrictSessionInsideTheTransaction(t *testing.T) {
+	w := newACMEDeployWorld(t)
+	svc, ctx := w.h.svc, w.h.ctx
+	c, _ := w.issued("www.example.test")
+	auto := func(loc uuid.UUID) (bool, bool) {
+		list, err := svc.ListACMEBindings(ctx, c.ID)
+		require.NoError(t, err)
+		for _, b := range list {
+			if b.LocationID == loc {
+				return true, b.AutoDeploy
+			}
+		}
+		return false, false
+	}
+	_, err := svc.AddACMEBindingStrict(ctx, w.admin, c.ID, w.loc1, true, true)
+	require.NoError(t, err, "an Administrator with a fresh step-up switches it on")
+	// The interleaving: the API saw "on" and skipped the step-up; meanwhile an Operator switches it off.
+	_, err = svc.AddACMEBindingStrict(ctx, w.operator, c.ID, w.loc1, false, false)
+	require.NoError(t, err, "switching off needs no step-up")
+	_, err = svc.AddACMEBindingStrict(ctx, w.admin, c.ID, w.loc1, true, false)
+	assert.ErrorIs(t, err, inventory.ErrAutoDeployNeedsStepUp)
+	_, on := auto(w.loc1)
+	assert.False(t, on, "still off")
+	_, err = svc.AddACMEBindingStrict(ctx, w.operator, c.ID, w.loc1, true, true)
+	assert.ErrorIs(t, err, inventory.ErrAdminRequired, "an Operator never switches it on, whatever the session")
+	// A new binding with automatic deployment on: the same rule; nothing is stored.
+	_, err = svc.AddACMEBindingStrict(ctx, w.admin, c.ID, w.loc2, true, false)
+	assert.ErrorIs(t, err, inventory.ErrAutoDeployNeedsStepUp)
+	bound, _ := auto(w.loc2)
+	assert.False(t, bound)
+	// Switched on again with the step-up; keeping it on is no switch-on: no step-up, also for an Operator.
+	_, err = svc.AddACMEBindingStrict(ctx, w.admin, c.ID, w.loc1, true, true)
+	require.NoError(t, err)
+	_, err = svc.AddACMEBindingStrict(ctx, w.operator, c.ID, w.loc1, true, false)
+	require.NoError(t, err)
+	_, on = auto(w.loc1)
+	assert.True(t, on)
+	assert.Equal(t, 3, w.h.count("SELECT count(*) FROM audit_log WHERE action IN ('acme.binding.added', 'acme.binding.updated') AND object_id = $1",
+		c.ID.String()), "added on, switched off, switched on with the step-up; the refused switch-ons and the keep-on wrote nothing")
+}
+
+// Fix round 1 of Task 13 (M2): Deploy now without named locations needs at least one and at most MaxDeployLocations
+// bound locations; otherwise a refusal of its own, not a validation error on a field the request did not send.
+func TestACMEDeployNowWithoutNamedLocations(t *testing.T) {
+	w := newACMEDeployWorld(t)
+	c, cur := w.issued("www.example.test")
+	_, err := w.h.svc.DeployACMENow(w.h.ctx, w.operator, c.ID, inventory.ACMEDeployInput{})
+	assert.ErrorIs(t, err, inventory.ErrACMENoBindings)
+	w.bind(c, false, w.moreLocations(inventory.MaxDeployLocations+1)...)
+	_, err = w.h.svc.DeployACMENow(w.h.ctx, w.operator, c.ID, inventory.ACMEDeployInput{})
+	assert.ErrorIs(t, err, inventory.ErrACMETooManyBindings)
+	assert.Empty(t, w.deps(cur))
 }

@@ -409,7 +409,9 @@ func (s *Service) CreateACMECertificate(ctx context.Context, a Actor, in ACMECer
 		return ACMECertificate{}, errs
 	}
 	if f.autoDeploy {
-		if err := s.unattendedAllowed(a); err != nil { // unattended deployment from the start (Task 12)
+		// unattended deployment from the start (Task 12). strictSession true: only the acme.manage routes (an Administrator
+		// with a fresh step-up, never a token) create and change definitions; the guard checks each request.
+		if err := s.unattendedAllowed(a, true); err != nil {
 			return ACMECertificate{}, err
 		}
 	}
@@ -533,7 +535,9 @@ func (s *Service) UpdateACMECertificate(ctx context.Context, a Actor, id uuid.UU
 			return ErrACMEKeyTypeLocked
 		}
 		if slices.Contains(changed, "auto_deploy") && f.autoDeploy {
-			if err := s.unattendedAllowed(a); err != nil { // switching unattended deployment on (Task 12)
+			// switching unattended deployment on (Task 12). strictSession true: only the acme.manage routes (an Administrator
+			// with a fresh step-up, never a token) create and change definitions; the guard checks each request.
+			if err := s.unattendedAllowed(a, true); err != nil {
 				return err
 			}
 		}
