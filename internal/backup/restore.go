@@ -711,8 +711,8 @@ func (r *restorer) verify(ctx context.Context) error {
 // start with serve against targets whose state has moved on since the backup (a superseded certificate version
 // redeployed, a rotation step on keys rotated later). A running job's cut-off attempt is closed as the reaper closes
 // it and its target lock released. Read-only and platform work runs as usual. The count goes into system.restored. Automatic
-// renewal of ACME certificates is switched off (A11), and the original's certificate orders and network discovery scans
-// in flight are ended.
+// renewal of ACME certificates is switched off (A11), the original's certificate orders and network discovery scans in
+// flight are ended, and the discovery scopes with a schedule are switched off.
 func (r *restorer) holdChanges(ctx context.Context) error {
 	return db.InTx(ctx, r.staging, func(tx pgx.Tx) error {
 		now := r.s.c.Clock.Now().UTC()
@@ -751,12 +751,21 @@ WHERE class = 'change' AND status IN ('queued', 'running')`)
 	})
 }
 
-// endDiscoveryScans ends the original's network discovery scans in the clone (the lesson of the ACME final review): a
-// scan queued or running at backup time is ended as failed with discovery.scan_interrupted (the counts and endpoints it
-// recorded are kept), and the backup's live netdisco.scan jobs are cancelled with their cut-off attempts closed, so
-// neither the queue nor the lease reaper starts a scan the clone was never asked for. Scopes and their schedules are
-// kept: a schedule starts a new scan of the clone's own.
+// endDiscoveryScans stops the clone from scanning the network on the original's behalf (the lesson of the ACME final
+// review): a scan queued or running at backup time is ended as failed with discovery.scan_interrupted (the counts and
+// endpoints it recorded are kept), the backup's live netdisco.scan jobs are cancelled with their cut-off attempts
+// closed, so neither the queue nor the lease reaper starts a scan the clone was never asked for, and every scope with a
+// schedule is switched off (enabled gates scheduled and manual scans alike; the schedule itself is kept), so no schedule
+// tick, however overdue, scans from the clone until an Administrator turns the scope on again.
 func (r *restorer) endDiscoveryScans(ctx context.Context, tx pgx.Tx, now time.Time) error {
+	sched, err := tx.Exec(ctx, "UPDATE discovery_scopes SET enabled = false, updated_at = $1 WHERE enabled AND schedule_hours IS NOT NULL", now)
+	if err != nil {
+		return fmt.Errorf("backup: switch off the network discovery schedules: %w", err)
+	}
+	if n := sched.RowsAffected(); n > 0 {
+		r.warn(strconv.FormatInt(n, 10) + " network discovery scan schedules are switched off: turn them on again under Network discovery" +
+			" once this installation replaces the original.")
+	}
 	tag, err := tx.Exec(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = 'discovery.scan_interrupted', finished_at = $1,
     cancel_requested = true WHERE state IN ('queued', 'running')`, now)
 	if err != nil {

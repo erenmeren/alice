@@ -122,6 +122,16 @@ VALUES ($1, 'x', '["10.0.0.1"]', '{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17}', 
 	bad("SNI with a newline", scope("sni_names", "$3"), uuid.New(), "x", []string{"a.example\r\nX: y"})
 	bad("upper-case SNI", scope("sni_names", "$3"), uuid.New(), "x", []string{"A.example"})
 	bad("long SNI", scope("sni_names", "$3"), uuid.New(), "x", []string{strings.Repeat("a", 254)})
+	bad("empty label", scope("sni_names", "$3"), uuid.New(), "x", []string{"a..b"})
+	bad("label starting with a hyphen", scope("sni_names", "$3"), uuid.New(), "x", []string{"a.-b"})
+	bad("label ending with a hyphen", scope("sni_names", "$3"), uuid.New(), "x", []string{"a-.b"})
+	bad("64-character label", scope("sni_names", "$3"), uuid.New(), "x", []string{strings.Repeat("a", 64) + ".example"})
+	bad("trailing dot", scope("sni_names", "$3"), uuid.New(), "x", []string{"a.example."})
+	bad("254 characters of labels", scope("sni_names", "$3"), uuid.New(), "x",
+		[]string{strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 62)})
+	_, err := d.App.Exec(ctx, scope("sni_names", "$3"), uuid.New(), "Longest", []string{strings.Repeat(strings.Repeat("a", 63)+".", 3) + strings.Repeat("a", 61),
+		strings.Repeat("a", 63) + ".example", "a-b.c"})
+	require.NoError(t, err, "253 characters and 63-character labels are names")
 	bad("exclusions not an array", scope("exclusions", `'"10.0.0.0/8"'`), uuid.New(), "x")
 	bad("rate 0", scope("rate_per_sec", "0"), uuid.New(), "x")
 	bad("rate 101", scope("rate_per_sec", "101"), uuid.New(), "x")
@@ -133,7 +143,7 @@ VALUES ($1, 'x', '["10.0.0.1"]', '{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17}', 
 	bad("window start only", scope("schedule_hours, window_start", "24, '01:00'"), uuid.New(), "x")
 	bad("empty window", scope("schedule_hours, window_start, window_end", "24, '01:00', '01:00'"), uuid.New(), "x")
 	bad("time zone with a space", scope("window_tz", "'Europe/ Istanbul'"), uuid.New(), "x")
-	_, err := d.App.Exec(ctx, scope("schedule_hours, window_start, window_end, window_tz, rate_per_sec, concurrency, sni_names",
+	_, err = d.App.Exec(ctx, scope("schedule_hours, window_start, window_end, window_tz, rate_per_sec, concurrency, sni_names",
 		"168, '22:00', '04:00', 'Europe/Istanbul', 100, 64, '{www.corp.example,xn--bcher-kva.example}'"), uuid.New(), "Full")
 	require.NoError(t, err, "the limits themselves are allowed")
 
@@ -169,6 +179,9 @@ endpoints_answered, endpoints_failed, endpoints_excluded, requested_by) VALUES (
 		"over 20000 endpoints":    {"manual", "done", now, now, "", 20001, 0, 0, 0, nil},
 		"negative count":          {"manual", "done", now, now, "", 1, -1, 0, 0, nil},
 		"ended before it started": {"manual", "done", now, "2026-10-14T09:00:00Z", "", 0, 0, 0, 0, nil},
+		"queued with a code":      {"manual", "queued", nil, nil, "discovery.scan_interrupted", 0, 0, 0, 0, nil},
+		"running with a code":     {"manual", "running", now, nil, "discovery.scan_interrupted", 0, 0, 0, 0, nil},
+		"done with a code":        {"manual", "done", now, now, "discovery.scan_timed_out", 0, 0, 0, 0, nil},
 	} {
 		bad(name, scan, uuid.New(), other, r.trigger, r.state, r.started, r.finished, r.code, r.total, r.ans, r.f, r.exc, r.by)
 	}
@@ -433,10 +446,20 @@ func TestMigration00014DownAndUpAgain(t *testing.T) {
 	assert.Zero(t, fn, "the Down drops the discovery functions")
 	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT count(*) FROM pg_constraint WHERE conname LIKE 'settings_discovery%'").Scan(&con))
 	assert.Zero(t, con, "the Down drops the settings CHECK")
-	require.NoError(t, exec(t, d.App, `UPDATE settings SET value = '1' WHERE key = 'discovery.retention_days'`), "no discovery rule is left")
+	var settingsLeft int
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT count(*) FROM settings WHERE key LIKE 'discovery.%'").Scan(&settingsLeft))
+	assert.Zero(t, settingsLeft, "the Down deletes the discovery settings with the data they governed")
+	require.NoError(t, exec(t, d.App, `INSERT INTO settings (key, value, updated_at) VALUES ('discovery.retention_days', '1', now())`),
+		"no discovery rule is left")
 	assert.Empty(t, grantProblems(t, d), "the Down leaves 00013's grants as they were")
+	require.NoError(t, exec(t, d.App, `DELETE FROM settings WHERE key = 'discovery.retention_days'`))
 
-	require.NoError(t, exec(t, d.App, `UPDATE settings SET value = '30' WHERE key = 'discovery.retention_days'`))
+	// Down, then Up again with a stored setting: the Down removes it, so the Up's CHECKs cannot meet an edited value.
+	require.NoError(t, exec(t, d.App, `INSERT INTO settings (key, value, updated_at) VALUES ('discovery.allowed_networks', '["10.0.0.0/24"]', now())`))
+	_, err = p.Up(ctx)
+	require.NoError(t, err)
+	_, err = p.DownTo(ctx, 13)
+	require.NoError(t, err)
 	_, err = p.Up(ctx)
 	require.NoError(t, err)
 	for _, tbl := range discoveryTables {

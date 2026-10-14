@@ -7,12 +7,13 @@
 -- (certificates): they never count toward the license and never enter the managed alerts or exports. No column default
 -- is a clock: the application passes the time it decided on.
 
--- discovery_name_ok: a host or SNI name as the scope validator stores it (A3): lower-case LDH labels and dots
--- (IDNA A-labels), at most 253 characters, no space, no CR/LF, no IP literal check here (the validator does it).
+-- discovery_name_ok: a host or SNI name as the scope validator stores it (A3): lower-case LDH labels (IDNA A-labels) of
+-- 1 to 63 characters that neither start nor end with a hyphen, joined by single dots, at most 253 characters in all; no
+-- space, no CR/LF, no trailing dot. Whether a name looks like an IP literal is the validator's check.
 -- +goose StatementBegin
 CREATE FUNCTION discovery_name_ok(n text) RETURNS boolean LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE
 SET search_path = pg_catalog, pg_temp AS $$
-    SELECT n ~ '^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$'
+    SELECT char_length(n) <= 253 AND n ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$'
 $$;
 -- +goose StatementEnd
 
@@ -77,7 +78,7 @@ CREATE UNIQUE INDEX discovery_scopes_name ON discovery_scopes (name) WHERE delet
 
 -- One scan of a scope (A5): queued, then running, then done, cancelled (a person, or the license lock), timed_out (the
 -- 60-minute cap; partial results kept) or failed (error_code: the reason, for example discovery.scan_interrupted).
--- cancel_requested is the flag the workers poll. The counts are of endpoints (address x port x SNI; at most 20,000 per
+-- Only cancelled, timed_out and failed scans carry an error_code. cancel_requested is the flag the workers poll. The counts are of endpoints (address x port x SNI; at most 20,000 per
 -- scan); certificates_new counts new fingerprints and cert_churn those beyond the per-scan and per-day caps that were
 -- only counted (A4). One scan per scope is queued or running at a time. A finished scan is history (Z1020); only the
 -- last 30 per scope are kept, so finished scans are deleted.
@@ -104,6 +105,7 @@ CREATE TABLE discovery_scans (
     CHECK ((state IN ('queued', 'running')) = (finished_at IS NULL)),
     CHECK (finished_at IS NULL OR started_at IS NULL OR finished_at >= started_at),
     CHECK (state <> 'failed' OR error_code <> ''),
+    CHECK (state NOT IN ('queued', 'running', 'done') OR error_code = ''),
     CHECK (trigger = 'manual' OR requested_by IS NULL)
 );
 CREATE UNIQUE INDEX discovery_scans_one_active ON discovery_scans (scope_id) WHERE state IN ('queued', 'running');
@@ -228,7 +230,9 @@ GRANT UPDATE (fingerprint_sha256, chain_fingerprints, chain_sha256, tls_version,
     previous_fingerprints, last_seen, last_scanned_at, last_scan_id, gone_since) ON discovery_endpoints TO alice_app;
 
 -- +goose Down
--- The discovery data is dropped; a stored discovery setting stays as a plain settings row.
+-- The discovery data is dropped, and so are the discovery settings it was governed by: an Up after the Down then never
+-- meets a value its CHECKs refuse.
+DELETE FROM settings WHERE key IN ('discovery.exclusions', 'discovery.retention_days', 'discovery.allowed_networks');
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_allowed_networks;
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_exclusions;
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_retention_days;

@@ -122,3 +122,35 @@ VALUES ($1, 'netdisco.scan', 'read_only', 'system', $2, $3, $4, 'queued', $5, 0,
 	assert.Zero(t, e.count("SELECT count(*) FROM job_attempts WHERE job_id = $1 AND finished_at IS NULL", runJob), "the cut-off attempt is closed")
 	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "2 network discovery scans") }), res.Warnings)
 }
+
+// A restored clone does not scan on its own either: every scope with a schedule is switched off (enabled gates both
+// scheduled and manual scans, so an Administrator turns it on again on the clone), even when its last scheduled scan is
+// long overdue; a scope without a schedule is left as it was. Review minor 1.
+func TestRestoreSwitchesOffDiscoverySchedules(t *testing.T) {
+	e := newRestoreEnv(t)
+	scheduled := seedDiscovery(e) // schedule_hours 24
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		_, err := e.db.Owner.Exec(e.ctx, sql, args...)
+		require.NoError(t, err, sql)
+	}
+	now := e.clk.Now()
+	manual, off := uuid.New(), uuid.New()
+	exec("UPDATE discovery_scopes SET last_scheduled_at = $2::timestamptz - interval '3 days' WHERE id = $1", scheduled, now)
+	exec(`INSERT INTO discovery_scopes (id, name, entries, ports, created_at, updated_at) VALUES ($1, 'Manual only', '["10.1.0.1"]', '{443}', $2, $2)`, manual, now)
+	exec(`INSERT INTO discovery_scopes (id, name, entries, ports, schedule_hours, enabled, created_at, updated_at)
+VALUES ($1, 'Already off', '["10.2.0.1"]', '{443}', 1, false, $2, $2)`, off, now)
+	info := e.create(backup.KindManual)
+	e.clk.Advance(time.Hour)
+
+	res, err := e.restore(info.Path, nil)
+	require.NoError(t, err)
+	e.reload()
+
+	assert.Zero(t, e.count("SELECT count(*) FROM discovery_scopes WHERE enabled AND schedule_hours IS NOT NULL"),
+		"no schedule can fire in the clone, not even an overdue one")
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM discovery_scopes WHERE id = $1 AND NOT enabled AND schedule_hours = 24 AND updated_at > created_at", scheduled),
+		"the schedule itself is kept for the Administrator to turn on again")
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM discovery_scopes WHERE id = $1 AND enabled", manual), "a scope without a schedule is untouched")
+	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "1 network discovery scan schedules") }), res.Warnings)
+}
