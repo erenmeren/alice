@@ -711,7 +711,8 @@ func (r *restorer) verify(ctx context.Context) error {
 // start with serve against targets whose state has moved on since the backup (a superseded certificate version
 // redeployed, a rotation step on keys rotated later). A running job's cut-off attempt is closed as the reaper closes
 // it and its target lock released. Read-only and platform work runs as usual. The count goes into system.restored. Automatic
-// renewal of ACME certificates is switched off (A11).
+// renewal of ACME certificates is switched off (A11), and the original's certificate orders and network discovery scans
+// in flight are ended.
 func (r *restorer) holdChanges(ctx context.Context) error {
 	return db.InTx(ctx, r.staging, func(tx pgx.Tx) error {
 		now := r.s.c.Clock.Now().UTC()
@@ -743,8 +744,38 @@ WHERE class = 'change' AND status IN ('queued', 'running')`)
 			r.warn("Automatic renewal of " + strconv.FormatInt(n, 10) + " certificates ordered from certificate authorities is switched off:" +
 				" turn it on again under Issued certificates once this installation replaces the original.")
 		}
-		return r.endACMEOrders(ctx, tx, now)
+		if err := r.endACMEOrders(ctx, tx, now); err != nil {
+			return err
+		}
+		return r.endDiscoveryScans(ctx, tx, now)
 	})
+}
+
+// endDiscoveryScans ends the original's network discovery scans in the clone (the lesson of the ACME final review): a
+// scan queued or running at backup time is ended as failed with discovery.scan_interrupted (the counts and endpoints it
+// recorded are kept), and the backup's live netdisco.scan jobs are cancelled with their cut-off attempts closed, so
+// neither the queue nor the lease reaper starts a scan the clone was never asked for. Scopes and their schedules are
+// kept: a schedule starts a new scan of the clone's own.
+func (r *restorer) endDiscoveryScans(ctx context.Context, tx pgx.Tx, now time.Time) error {
+	tag, err := tx.Exec(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = 'discovery.scan_interrupted', finished_at = $1,
+    cancel_requested = true WHERE state IN ('queued', 'running')`, now)
+	if err != nil {
+		return fmt.Errorf("backup: end the backup's network discovery scans: %w", err)
+	}
+	const scans = `SELECT id FROM jobs WHERE type = 'netdisco.scan' AND status IN ('queued', 'running', 'blocked_license')`
+	if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $1, error_code = 'discovery.scan_interrupted'
+WHERE finished_at IS NULL AND job_id IN (`+scans+`)`, now); err != nil {
+		return fmt.Errorf("backup: close the attempts of the backup's scan jobs: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'discovery.scan_interrupted', finished_at = $1,
+    locked_by = NULL, locked_until = NULL WHERE id IN (`+scans+`)`, now); err != nil {
+		return fmt.Errorf("backup: cancel the backup's scan jobs: %w", err)
+	}
+	if n := tag.RowsAffected(); n > 0 {
+		r.warn(strconv.FormatInt(n, 10) + " network discovery scans queued or running when the backup was made are ended; their results" +
+			" so far are kept. Start them again under Network discovery.")
+	}
+	return nil
 }
 
 // endACMEOrders ends the original's certificate orders in the clone (A11, final review finding 1): an order running at

@@ -309,6 +309,18 @@ VALUES ('d5000000-0000-4000-8000-000000000001', 'd4000000-0000-4000-8000-0000000
         '[{"kind":"dns","name":"_acme-challenge.www.example.test"}]');
 INSERT INTO acme_bindings (acme_certificate_id, location_id, auto_deploy, created_at)
 SELECT 'd4000000-0000-4000-8000-000000000001', id, false, now() FROM certificate_locations LIMIT 1;
+INSERT INTO discovery_scopes (id, name, entries, ports, sni_names, exclusions, schedule_hours, window_start, window_end, window_tz, created_at, updated_at)
+VALUES ('d6000000-0000-4000-8000-000000000001', 'LAN', '["10.0.0.0/30", "www.example.test"]', '{443,8443}', '{www.example.test}', '["10.0.0.3"]',
+        24, '22:00', '04:30', 'Europe/Istanbul', now(), now());
+INSERT INTO discovery_scans (id, scope_id, trigger, state, queued_at, started_at, endpoints_total, endpoints_answered)
+VALUES ('d7000000-0000-4000-8000-000000000001', 'd6000000-0000-4000-8000-000000000001', 'manual', 'running', now(), now(), 8, 1);
+INSERT INTO discovery_certificates (fingerprint_sha256, is_leaf, subject_cn, sans, issuer_cn, not_before, not_after, key_algorithm, pem, first_seen, last_seen)
+VALUES (repeat('e', 64), true, 'www.example.test', '{www.example.test}', 'CA', now(), now() + interval '30 days', 'ecdsa',
+        '-----BEGIN CERTIFICATE-----' || chr(10) || 'MIIB' || chr(10) || '-----END CERTIFICATE-----' || chr(10), now(), now());
+INSERT INTO discovery_endpoints (id, scope_id, address, port, sni, host, fingerprint_sha256, previous_fingerprints, tls_version, cipher, state, first_seen,
+        last_seen, last_scanned_at, last_scan_id)
+VALUES ('d8000000-0000-4000-8000-000000000001', 'd6000000-0000-4000-8000-000000000001', '2001:db8::5', 443, 'www.example.test', 'www.example.test',
+        repeat('e', 64), ARRAY[repeat('f', 64)], 'TLS 1.3', 'TLS_AES_128_GCM_SHA256', 'present', now(), now(), now(), 'd7000000-0000-4000-8000-000000000001');
 INSERT INTO saved_views (id, user_id, page, name, query, created_at) SELECT gen_random_uuid(), id, 'certificates', 'view', '{}', now() FROM users LIMIT 1;
 INSERT INTO setup_sessions (id_hash, created_at, idle_expires_at) VALUES (sha256('setup'), now(), now() + interval '1 hour');
 INSERT INTO target_locks (target_id, job_id, operation, locked_by, heartbeat_at, lease_until)

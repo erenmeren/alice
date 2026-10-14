@@ -219,10 +219,12 @@ var testMailer notify.Mailer = e2eMailbox
 // key file on the volume stays the same. Every table that references users (targets, host_keys,
 // jobs, the certificate tables) must be in the same TRUNCATE, and so must every table of the SSH key
 // rotation (migration 00010), which references ssh_keys, targets and users.  The ACME tables (00013) reference users, certificates and certificate_locations.
+// The network discovery tables (00014) reference users and each other.
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
 license, license_files, license_history, notifications_outbox,
 target_locks, job_attempts, jobs,
 acme_bindings, acme_orders, acme_certificates, acme_hooks, acme_accounts, acme_providers,
+discovery_endpoints, discovery_certificates, discovery_scans, discovery_scopes,
 rotation_op_ids, rotation_steps, rotation_locations, rotations, rotation_policies,
 ssh_key_locations, ssh_keys, host_keys,
 deployment_steps, deployments, certificate_locations, csr_requests, certificates, managed_private_keys,

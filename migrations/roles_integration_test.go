@@ -144,6 +144,12 @@ var explicitGrants = map[string][]string{
 	"public.acme_certificates": {"INSERT", "SELECT"},
 	"public.acme_orders":       {"INSERT", "SELECT"},
 	"public.acme_bindings":     {"DELETE", "INSERT", "SELECT"},
+	// Network discovery (00014): a scope is soft-deleted (its scans keep it); the last 30 scans per scope are kept and a
+	// finished scan is history (Z1020); certificates and endpoints are found, updated and removed by retention.
+	"public.discovery_scopes":       {"INSERT", "SELECT"},
+	"public.discovery_scans":        {"DELETE", "INSERT", "SELECT"},
+	"public.discovery_certificates": {"DELETE", "INSERT", "SELECT"},
+	"public.discovery_endpoints":    {"DELETE", "INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -216,6 +222,17 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.acme_orders": {"UPDATE": {"certificate_id", "cleanup_at", "cleanup_error_code", "error_code", "finished_at", "order_url",
 		"pending_key_ct", "pending_key_nonce", "pending_key_version", "pending_key_wrapped_dek", "presented", "state"}},
 	"public.acme_bindings": {"UPDATE": {"attention_at", "attention_code", "auto_deploy"}},
+	// Network discovery (00014): ids, a scope's creator and creation time, a scan's scope, trigger, requester and queue
+	// time, a certificate's body and parsed fields, an endpoint's key (scope, address, port, SNI), host and first sighting
+	// are fixed at INSERT.
+	"public.discovery_scopes": {"UPDATE": {"alert_on_expiry", "concurrency", "deleted_at", "enabled", "entries", "exclusions",
+		"last_scheduled_at", "name", "ports", "rate_per_sec", "schedule_hours", "sni_names", "updated_at", "version", "window_end",
+		"window_start", "window_tz"}},
+	"public.discovery_scans": {"UPDATE": {"cancel_requested", "cert_churn", "certificates_new", "endpoints_answered", "endpoints_excluded",
+		"endpoints_failed", "endpoints_total", "error_code", "finished_at", "started_at", "state"}},
+	"public.discovery_certificates": {"UPDATE": {"is_leaf", "last_seen"}},
+	"public.discovery_endpoints": {"UPDATE": {"chain_fingerprints", "chain_sha256", "cipher", "fingerprint_sha256", "gone_since",
+		"last_error_code", "last_scan_id", "last_scanned_at", "last_seen", "missed_scans", "previous_fingerprints", "state", "tls_version"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
