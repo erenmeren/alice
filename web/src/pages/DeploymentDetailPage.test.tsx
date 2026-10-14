@@ -457,6 +457,16 @@ describe('DeploymentDetailPage from Key Vault', () => {
     expect(within(plain).queryByText('Read the certificate from Key Vault')).not.toBeInTheDocument();
   });
 
+  it('names a certificate ordered from a certificate authority as its source, not an upload', async () => {
+    server.use(
+      ...sessionHandlers(sessionFor('auditor')),
+      http.get('/api/v1/deployments/da', () => HttpResponse.json(deploymentDetailFixture({ id: 'da', source: 'acme', steps: [stepFixture(1, 'backup')] }))),
+    );
+    await renderRoute('/deployments/da');
+    expect(await screen.findByText('From a certificate authority (ACME)')).toBeInTheDocument();
+    expect(screen.queryByText('Uploaded')).not.toBeInTheDocument();
+  });
+
   it('names the failed kv_secret step with the missing role in the error', async () => {
     server.use(
       ...sessionHandlers(sessionFor('auditor')),

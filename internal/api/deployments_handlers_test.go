@@ -216,4 +216,11 @@ func TestDeploymentSourceFields(t *testing.T) {
 	assert.Equal(t, "prod-vault", got.VaultName)
 	d.KVVersion = "not a version"
 	assert.Empty(t, deploymentJSON(d).KVVersion)
+
+	// A deployment of a certificate ordered from a certificate authority says acme, not upload (final review finding 3).
+	a := sampleDeployment()
+	a.Source = "acme"
+	assert.Equal(t, "acme", deploymentJSON(a).Source)
+	a.Source = "something else"
+	assert.Equal(t, "upload", deploymentJSON(a).Source)
 }

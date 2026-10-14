@@ -619,7 +619,8 @@ export interface Deployment {
   confirm_incomplete_chain: boolean;
   verified: '' | 'remote' | 'local' | 'skipped';
   // source key_vault: the certificate came from a vault version; binding_id, kv_version and vault_name are set.
-  source: 'upload' | 'key_vault';
+  // acme: the certificate was ordered from a certificate authority.
+  source: 'upload' | 'key_vault' | 'acme';
   binding_id: string | null;
   kv_version: string;
   vault_name: string;

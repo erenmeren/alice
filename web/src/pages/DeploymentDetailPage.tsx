@@ -17,6 +17,13 @@ import { WRAP } from '../components/wrap';
 import { formatDateTime } from '../datetime';
 import classes from './Deployments.module.css';
 
+// The label of a deployment's source (an unknown value reads as an upload).
+const SOURCE_LABEL: Record<DeploymentDetail['source'], string> = {
+  upload: 'deployments.source.upload',
+  key_vault: 'deployments.source.key_vault',
+  acme: 'deployments.source.acme',
+};
+
 // How often the page reads the deployment while it can still change: a running deployment moves in
 // seconds, one being recovered or held for the license only when Alice retries or an Administrator
 // acts. A settled deployment is read once.
@@ -96,7 +103,7 @@ export function DeploymentDetailPage() {
   const facts: Fact[] = [
     { key: 'certificate', label: t('deployments.certificateLabel'), value: link(`/certificates/${d.certificate_id}`, d.certificate_name) },
     { key: 'server', label: t('deployments.serverLabel'), value: link(`/servers/${d.target_id}`, d.target_name) },
-    { key: 'source', label: t('deployments.sourceLabel'), value: t(d.source === 'key_vault' ? 'deployments.source.key_vault' : 'deployments.source.upload') },
+    { key: 'source', label: t('deployments.sourceLabel'), value: t(SOURCE_LABEL[d.source] ?? 'deployments.source.upload') },
     ...(d.source === 'key_vault'
       ? [
           {

@@ -373,10 +373,12 @@ func deploymentJSON(d inventory.Deployment) deploymentDTO {
 	}
 }
 
-// deploymentSource is "key_vault" for a deployment of a vault version and "upload" for any other.
+// deploymentSource is "key_vault" for a deployment of a vault version, "acme" for one of a certificate ordered from a
+// certificate authority and "upload" for any other.
 func deploymentSource(d inventory.Deployment) string {
-	if d.Source == "key_vault" {
-		return "key_vault"
+	switch d.Source {
+	case "key_vault", "acme":
+		return d.Source
 	}
 	return "upload"
 }

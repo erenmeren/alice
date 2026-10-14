@@ -5867,7 +5867,7 @@ components:
         new_fingerprint: { type: string }
         previous_fingerprint: { type: string }
         confirm_incomplete_chain: { type: boolean }
-        source: { type: string, enum: [upload, key_vault], description: 'key_vault: the certificate came from a vault version (binding_id, kv_version and vault_name are set)' }
+        source: { type: string, enum: [upload, key_vault, acme], description: 'key_vault: the certificate came from a vault version (binding_id, kv_version and vault_name are set); acme: the certificate was ordered from a certificate authority' }
         binding_id: { type: [string, "null"], format: uuid }
         kv_version: { type: string, description: 'The vault version (32 hex digits); "" for an upload' }
         vault_name: { type: string, description: 'The vault''s name in Alice; "" for an upload' }

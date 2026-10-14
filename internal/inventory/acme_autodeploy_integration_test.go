@@ -491,6 +491,9 @@ func TestACMEAutoDeployDeploysANewCertificate(t *testing.T) {
 	for _, d := range ds {
 		assert.Equal(t, inventory.TriggerACMERenewal, d.Trigger)
 		assert.Equal(t, inventory.DeployStateQueued, d.State)
+		got, err := w.h.svc.Deployment(w.h.ctx, d.ID)
+		require.NoError(t, err)
+		assert.Equal(t, "acme", got.Source, "a deployment of an ACME certificate is not an upload (final review finding 3)")
 	}
 	reqs := w.h.jobs.requests()[before:]
 	require.Len(t, reqs, 2)
