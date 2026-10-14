@@ -1513,6 +1513,11 @@
         "title": "The scan was interrupted.",
         "cause": "Alice restarted, or this installation was restored from a backup, while the scan ran. The results found until then are kept.",
         "action": "Start the scan again."
+      },
+      "scope_disabled": {
+        "title": "This scan scope is switched off.",
+        "cause": "A scope that is switched off is not scanned, neither by its schedule nor by hand, so the scan was not started.",
+        "action": "Switch the scope on in its settings on the Scopes tab, then start the scan again."
       }
     },
     "tls": {

@@ -18,6 +18,8 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
 	"alice/internal/backup"
+	"alice/internal/discovery"
+	"alice/internal/discovery/discoverysvc"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
@@ -420,8 +422,9 @@ var (
 	ErrACMTooManyBindings = ErrorCode{Code: "ALC-ACM-0036", Reason: "acme.too_many_bindings", Status: http.StatusUnprocessableEntity}
 
 	// Network certificate discovery (area DSC). A scope's entries are refused at save time (0001-0003, 0009-0011); a
-	// scan start meets 0004 and 0007; 0005, 0006 and 0012 are the end of a scan (discovery_scans.error_code holds the
-	// reason). An export that finds another running answers ALC-RPT-0004 (export.busy), not a code of its own.
+	// scan start meets 0004, 0007 and 0013 (the scope is switched off: Task 9 ruling); 0005, 0006 and 0012 are the end of a
+	// scan (discovery_scans.error_code holds the reason). An export that finds another running answers ALC-RPT-0004
+	// (export.busy), not a code of its own.
 	ErrDSCScopeTooLarge   = ErrorCode{Code: "ALC-DSC-0001", Reason: "discovery.scope_too_large", Status: http.StatusUnprocessableEntity}
 	ErrDSCEntryNotAllowed = ErrorCode{Code: "ALC-DSC-0002", Reason: "discovery.entry_not_allowed", Status: http.StatusUnprocessableEntity}
 	ErrDSCEntryInvalid    = ErrorCode{Code: "ALC-DSC-0003", Reason: "discovery.entry_invalid", Status: http.StatusUnprocessableEntity}
@@ -434,6 +437,7 @@ var (
 	ErrDSCNameUnresolved  = ErrorCode{Code: "ALC-DSC-0010", Reason: "discovery.name_unresolved", Status: http.StatusUnprocessableEntity}
 	ErrDSCNameTaken       = ErrorCode{Code: "ALC-DSC-0011", Reason: "discovery.name_taken", Status: http.StatusConflict}
 	ErrDSCScanInterrupted = ErrorCode{Code: "ALC-DSC-0012", Reason: "discovery.scan_interrupted", Status: http.StatusConflict}
+	ErrDSCScopeDisabled   = ErrorCode{Code: "ALC-DSC-0013", Reason: "discovery.scope_disabled", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -496,6 +500,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMNoBindings, ErrACMTooManyBindings,
 		ErrDSCScopeTooLarge, ErrDSCEntryNotAllowed, ErrDSCEntryInvalid, ErrDSCScanRunning, ErrDSCScanCancelled, ErrDSCScanTimedOut,
 		ErrDSCTooManyScans, ErrDSCScopeNotFound, ErrDSCScheduleInvalid, ErrDSCNameUnresolved, ErrDSCNameTaken, ErrDSCScanInterrupted,
+		ErrDSCScopeDisabled,
 	}
 }
 
@@ -730,6 +735,15 @@ var errorMap = []struct {
 	{forward.ErrUntrusted, ErrForwardingUntrusted, nil},
 	{forward.ErrVersion, ErrPreconditionFailed, nil},
 	{setup.ErrPassphraseTooWeak, ErrPassphraseTooWeak, nil},
+	// Network discovery (Task 9). A *discovery.Error and a *discoverysvc.NameUnresolvedError are matched in classify with
+	// their field and index; discovery.ErrFilterNeedsNow is Alice's own mistake and has no entry (ALC-SYS-0003).
+	{discovery.ErrScanRunning, ErrDSCScanRunning, nil},
+	{discovery.ErrScopeNotFound, ErrDSCScopeNotFound, nil},
+	{discoverysvc.ErrTooManyScans, ErrDSCTooManyScans, nil},
+	{discoverysvc.ErrNameTaken, ErrDSCNameTaken, nil},
+	{discoverysvc.ErrScopeDisabled, ErrDSCScopeDisabled, nil},
+	{discoverysvc.ErrNotFound, ErrNotFound, nil},
+	{discoverysvc.ErrVersion, ErrPreconditionFailed, nil},
 }
 
 type errorPayload struct {
@@ -828,6 +842,8 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		w.Header().Set("Retry-After", "60") // the sweep runs every minute
 	case ErrExportBusy:
 		w.Header().Set("Retry-After", "5") // the user's other export holds the slot until its last row is written
+	case ErrDSCScanRunning, ErrDSCTooManyScans:
+		w.Header().Set("Retry-After", "30") // a scan ends within its 60-minute cap; most end within minutes
 	}
 	if after := acmeRetryAfter(err, ec); after != "" {
 		w.Header().Set("Retry-After", after)
@@ -898,6 +914,9 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 		}
 		return ErrACMDirectoryInvalid, nil, true
 	}
+	if ec, params, ok := discoveryCode(err); ok {
+		return ec, params, true
+	}
 	var disc *oidc.DiscoveryError
 	if errors.As(err, &disc) {
 		// The cause is one of Alice's closed labels (connect, tls, status, document, issuer_mismatch, not_https, jwks).
@@ -929,6 +948,41 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 		}
 	}
 	return ErrorCode{}, nil, false
+}
+
+// discoveryCode maps a scope validator refusal (*discovery.Error: ALC-DSC-0001/0002/0003/0009) and an unresolved host
+// name (ALC-DSC-0010) with the field and the element's index as params. The element's value is never a param: it is
+// the Administrator's own input, and the answer must never confirm what a name resolved to.
+func discoveryCode(err error) (ErrorCode, map[string]string, bool) {
+	var nu *discoverysvc.NameUnresolvedError
+	if errors.As(err, &nu) {
+		return ErrDSCNameUnresolved, map[string]string{"field": "entries", "index": strconv.Itoa(nu.Index)}, true
+	}
+	var de *discovery.Error
+	if !errors.As(err, &de) {
+		return ErrorCode{}, nil, false
+	}
+	var ec ErrorCode
+	switch {
+	case errors.Is(de.Kind, discovery.ErrTooLarge):
+		ec = ErrDSCScopeTooLarge
+	case errors.Is(de.Kind, discovery.ErrNotAllowed):
+		ec = ErrDSCEntryNotAllowed
+	case errors.Is(de.Kind, discovery.ErrInvalid):
+		ec = ErrDSCEntryInvalid
+	case errors.Is(de.Kind, discovery.ErrSchedule):
+		ec = ErrDSCScheduleInvalid
+	default:
+		return ErrUnexpected, nil, true
+	}
+	params := map[string]string{}
+	if paramCodeRE.MatchString(de.Field) {
+		params["field"] = de.Field
+	}
+	if de.Index >= 0 {
+		params["index"] = strconv.Itoa(de.Index)
+	}
+	return ec, params, true
 }
 
 // loginErrorCode is the code of a refused sign-in or step-up: one of ALC-SSO-0006..0015, ALC-SSO-0010 for a reason

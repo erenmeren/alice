@@ -1,6 +1,9 @@
 package api
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"regexp"
 	"strconv"
@@ -10,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/discovery"
+	"alice/internal/discovery/discoverysvc"
 	"alice/internal/i18n"
 	"alice/locales"
 )
@@ -33,6 +38,7 @@ var discoveryTable = []struct {
 	{"ALC-DSC-0010", "discovery.name_unresolved", 422, false},
 	{"ALC-DSC-0011", "discovery.name_taken", 409, false},
 	{"ALC-DSC-0012", "discovery.scan_interrupted", 409, false},
+	{"ALC-DSC-0013", "discovery.scope_disabled", 409, false},
 }
 
 // Every discovery code is registered as the table says, translated in English and Turkish without placeholders, and has
@@ -102,4 +108,52 @@ func TestDiscoveryTextsRevealNoAddresses(t *testing.T) {
 	}
 	assert.Contains(t, cat.T("en", "errors.discovery.entry_not_allowed.action", nil), "Allowed scan networks")
 	assert.Contains(t, cat.T("en", "errors.discovery.scan_running.action", nil), "Scans")
+}
+
+// The discovery service's and the validator's refusals map onto the DSC codes (Task 9). A validator refusal names the
+// field and the element's index (never its value); an unresolved name names only the entry's index; an unknown error is
+// a 500 without its text (an address in it never leaves); a stale If-Match is 412.
+func TestDiscoveryErrorsMapToTheirCodes(t *testing.T) {
+	for _, tc := range []struct {
+		err    error
+		code   string
+		params map[string]any
+		retry  string
+	}{
+		{&discovery.Error{Kind: discovery.ErrTooLarge, Field: "entries", Index: -1}, "ALC-DSC-0001", map[string]any{"field": "entries"}, ""},
+		{fmt.Errorf("wrapped: %w", &discovery.Error{Kind: discovery.ErrNotAllowed, Field: "entries", Index: 2, Value: "10.9.9.9"}), "ALC-DSC-0002",
+			map[string]any{"field": "entries", "index": "2"}, ""},
+		{&discovery.Error{Kind: discovery.ErrInvalid, Field: "ports", Index: 0, Value: "0"}, "ALC-DSC-0003", map[string]any{"field": "ports", "index": "0"}, ""},
+		{&discovery.Error{Kind: discovery.ErrSchedule, Field: "window_tz", Index: -1}, "ALC-DSC-0009", map[string]any{"field": "window_tz"}, ""},
+		{&discovery.Error{Kind: errors.New("odd"), Field: "x", Index: -1}, "ALC-SYS-0003", nil, ""},
+		{&discoverysvc.NameUnresolvedError{Index: 4}, "ALC-DSC-0010", map[string]any{"field": "entries", "index": "4"}, ""},
+		{discovery.ErrScanRunning, "ALC-DSC-0004", nil, "30"},
+		{discoverysvc.ErrTooManyScans, "ALC-DSC-0007", nil, "30"},
+		{discovery.ErrScopeNotFound, "ALC-DSC-0008", nil, ""},
+		{discoverysvc.ErrNameTaken, "ALC-DSC-0011", nil, ""},
+		{discoverysvc.ErrScopeDisabled, "ALC-DSC-0013", nil, ""},
+		{discoverysvc.ErrNotFound, "ALC-SYS-0001", nil, ""},
+		{discoverysvc.ErrVersion, ErrPreconditionFailed.Code, nil, ""},
+		{fmt.Errorf("dial 10.20.30.40:443: %w", errors.New("boom")), "ALC-SYS-0003", nil, ""},
+	} {
+		var logs strings.Builder
+		rec := failRecorder(t, tc.err, &logs)
+		var body struct {
+			Error map[string]any `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		e := body.Error
+		assert.Equal(t, tc.code, e["code"], "%v", tc.err)
+		if tc.params == nil {
+			assert.Nil(t, e["params"], "%v", tc.err)
+		} else {
+			assert.Equal(t, tc.params, e["params"], "%v", tc.err)
+		}
+		assert.Equal(t, tc.retry, rec.Header().Get("Retry-After"), "%v", tc.err)
+		for _, leak := range []string{"10.9.9.9", "10.20.30.40", "boom", "wrapped"} {
+			assert.NotContains(t, rec.Body.String(), leak, "%v", tc.err)
+			assert.NotContains(t, logs.String(), leak, "the log has fixed labels only: %v", tc.err)
+		}
+	}
+	assert.Equal(t, "ALC-SYS-0001", ErrNotFound.Code)
 }

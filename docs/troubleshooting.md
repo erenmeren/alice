@@ -2886,6 +2886,14 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Start the scan again.
 
+## ALC-DSC-0013: This scan scope is switched off
+
+**Meaning.** A scan of a scope that is switched off was asked for and not started. (HTTP 409, reason `discovery.scope_disabled`.)
+
+**Likely cause.** The scope was switched off, by an Administrator or by a restore from a backup (a restored copy switches off the scopes that have a schedule). A scope that is switched off is scanned neither by its schedule nor by hand.
+
+**What to do.** Switch the scope on in its settings on the Scopes tab, then start the scan again.
+
 ## Install and start problems
 
 The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.

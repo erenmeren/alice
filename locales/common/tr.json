@@ -1513,6 +1513,11 @@
         "title": "Tarama yarıda kesildi.",
         "cause": "Tarama çalışırken Alice yeniden başladı ya da bu kurulum bir yedekten geri yüklendi. O ana kadar bulunan sonuçlar saklanır.",
         "action": "Taramayı yeniden başlatın."
+      },
+      "scope_disabled": {
+        "title": "Bu tarama kapsamı kapalı.",
+        "cause": "Kapalı bir kapsam ne zamanlamasıyla ne de elle taranır; bu nedenle tarama başlatılmadı.",
+        "action": "Kapsamı Kapsamlar sekmesindeki ayarlarından açın, ardından taramayı yeniden başlatın."
       }
     },
     "tls": {
