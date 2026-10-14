@@ -97,8 +97,10 @@ var rules = map[string][]string{
 	// discovery code it tests.
 	"alice/internal/testutil/fakefleet": {"alice/internal/testutil/pki", "alice/internal/platform/clock"},
 	// Network certificate discovery (plan 2026-10-13-network-discovery): the scope model, its expansion and the
-	// scanner know the platform (netaddr's scan policy above all); later tasks of the plan widen this rule.
-	"alice/internal/discovery/...": {platform},
+	// scanner know the platform (netaddr's scan policy above all) and the license gate (the scanner asks it before every
+	// batch, amendment A5); the probe knows the platform only.
+	"alice/internal/discovery/...":      {platform, "alice/internal/license/..."},
+	"alice/internal/discovery/tlsprobe": {platform},
 }
 
 const platform = "alice/internal/platform/..."
@@ -268,6 +270,10 @@ func TestAllowed(t *testing.T) {
 		{"fakefleet to netaddr denied", "alice/internal/testutil/fakefleet", "alice/internal/platform/netaddr", false},
 		{"fakefleet to the scan policy helper denied", "alice/internal/testutil/fakefleet", "alice/internal/testutil/scanpolicy", false},
 		{"fakefleet to the clock allowed", "alice/internal/testutil/fakefleet", "alice/internal/platform/clock", true},
+		{"discovery to the license gate allowed", "alice/internal/discovery", "alice/internal/license", true},
+		{"discovery to the inventory denied", "alice/internal/discovery", "alice/internal/inventory", false},
+		{"discovery to the jobs denied", "alice/internal/discovery", "alice/internal/jobs", false},
+		{"tlsprobe to the license gate denied", "alice/internal/discovery/tlsprobe", "alice/internal/license", false},
 		{"azureid to anything of Alice denied", "alice/internal/platform/azureid", "alice/internal/providers", false},
 		{"provider to platform/db denied", nginx, "alice/internal/platform/db", false},
 		{"provider interface pkg to platform/db denied", "alice/internal/providers", "alice/internal/platform/db", false},
