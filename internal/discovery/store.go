@@ -118,9 +118,18 @@ type PGStore struct {
 	onFinish FinishHook
 }
 
-// FinishHook runs inside FinishScan's transaction for the scan it ended (not for one that was already over); an error
-// rolls the end back. The discovery jobs write the discovery.scan.finished audit row with it.
+// FinishHook runs inside the transaction of every end of a scan the store makes (FinishScan, BeginScan's crash recovery,
+// retention's sweep of stale scans), once per scan it ended (never for one that was already over); an error rolls the
+// end back. The discovery jobs write the discovery.scan.finished audit row with it.
 type FinishHook func(ctx context.Context, tx pgx.Tx, f Finish) error
+
+// finished runs the finish hook, if any, for a scan this transaction ended.
+func (s *PGStore) finished(ctx context.Context, tx pgx.Tx, f Finish) error {
+	if s.onFinish == nil {
+		return nil
+	}
+	return s.onFinish(ctx, tx, f)
+}
 
 // NewStore returns the store over pool (production: the alice_app pool).
 func NewStore(pool pgPool) *PGStore { return &PGStore{db: pool} }
@@ -201,9 +210,11 @@ func (s *PGStore) BeginScan(ctx context.Context, scanID uuid.UUID, now time.Time
 		case state == ScanRunning && started.After(now.Add(-lease)):
 			return ErrScanBusy
 		case state == ScanRunning:
-			_, err := tx.Exec(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = $2, finished_at = $3 WHERE id = $1`,
-				scanID, ReasonInterrupted, now)
-			return wrap("end an interrupted scan", err)
+			if _, err := tx.Exec(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = $2, finished_at = $3 WHERE id = $1`,
+				scanID, ReasonInterrupted, now); err != nil {
+				return wrap("end an interrupted scan", err)
+			}
+			return s.finished(ctx, tx, Finish{ScanID: scanID, ScopeID: st.ScopeID, Now: now, State: ScanFailed, ErrorCode: ReasonInterrupted})
 		case state != ScanQueued:
 			return nil // finished: nothing to do
 		}
@@ -315,8 +326,8 @@ WHERE last_scan_id = $1 AND state IN ('unreachable', 'no_tls') AND last_error_co
 		if err != nil {
 			return wrap("end the scan", err)
 		}
-		if tag.RowsAffected() == 1 && s.onFinish != nil {
-			if err := s.onFinish(ctx, tx, f); err != nil {
+		if tag.RowsAffected() == 1 {
+			if err := s.finished(ctx, tx, f); err != nil {
 				return err
 			}
 		}

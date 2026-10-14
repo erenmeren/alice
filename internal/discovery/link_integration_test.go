@@ -128,3 +128,46 @@ func TestFinishHookRunsInTheFinishTransaction(t *testing.T) {
 	require.NoError(t, NewStore(p.App).FinishScan(bg(), Finish{ScanID: other, ScopeID: uuid.Nil, Now: t0, State: ScanDone}))
 	require.Equal(t, ScanDone, p.scan(t, other).State)
 }
+
+// Every end of a scan inside the store runs the finish hook once in its transaction (Task 9 review 3): BeginScan's crash
+// recovery and retention's sweep of stale running scans, not only FinishScan.
+func TestFinishHookRunsOnEveryEndInTheStore(t *testing.T) {
+	p := newPG(t)
+	var seen []Finish
+	st := NewStore(p.App).OnFinish(func(ctx context.Context, tx pgx.Tx, f Finish) error {
+		var state string
+		require.NoError(t, tx.QueryRow(ctx, `SELECT state FROM discovery_scans WHERE id = $1`, f.ScanID).Scan(&state))
+		require.Equal(t, ScanFailed, state)
+		seen = append(seen, f)
+		return nil
+	})
+	scope := p.scope(t, "lab")
+	crashed := p.running(t, scope, t0)
+	start, err := st.BeginScan(bg(), crashed, t0.Add(2*time.Minute), 45*time.Second)
+	require.NoError(t, err)
+	require.False(t, start.Run)
+	require.Len(t, seen, 1)
+	require.Equal(t, Finish{ScanID: crashed, ScopeID: scope, Now: t0.Add(2 * time.Minute), State: ScanFailed, ErrorCode: ReasonInterrupted}, seen[0])
+	_, err = st.BeginScan(bg(), crashed, t0.Add(3*time.Minute), 45*time.Second)
+	require.NoError(t, err)
+	require.Len(t, seen, 1, "a finished scan is not ended twice")
+
+	other := p.scope(t, "other")
+	stale := p.running(t, other, t0)
+	stats, err := st.Retain(bg(), t0.Add(StaleScanAfter+time.Minute))
+	require.NoError(t, err)
+	require.EqualValues(t, 1, stats.Interrupted)
+	require.Len(t, seen, 2)
+	require.Equal(t, Finish{ScanID: stale, ScopeID: other, Now: t0.Add(StaleScanAfter + time.Minute), State: ScanFailed,
+		ErrorCode: ReasonInterrupted}, seen[1])
+
+	// A failing hook rolls the end back.
+	third := p.running(t, p.scope(t, "third"), t0)
+	bad := NewStore(p.App).OnFinish(func(context.Context, pgx.Tx, Finish) error { return errors.New("audit refused") })
+	_, err = bad.Retain(bg(), t0.Add(StaleScanAfter+time.Minute))
+	require.Error(t, err)
+	require.Equal(t, ScanRunning, p.scan(t, third).State)
+	_, err = bad.BeginScan(bg(), third, t0.Add(2*time.Minute), 45*time.Second)
+	require.Error(t, err)
+	require.Equal(t, ScanRunning, p.scan(t, third).State)
+}

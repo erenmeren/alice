@@ -766,10 +766,18 @@ func (r *restorer) endDiscoveryScans(ctx context.Context, tx pgx.Tx, now time.Ti
 		r.warn(strconv.FormatInt(n, 10) + " network discovery scan schedules are switched off: turn them on again under Network discovery" +
 			" once this installation replaces the original.")
 	}
-	tag, err := tx.Exec(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = 'discovery.scan_interrupted', finished_at = $1,
-    cancel_requested = true WHERE state IN ('queued', 'running')`, now)
+	rows, err := tx.Query(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = 'discovery.scan_interrupted', finished_at = $1,
+    cancel_requested = true WHERE state IN ('queued', 'running')
+RETURNING id, scope_id, trigger, endpoints_total, endpoints_answered, endpoints_failed, endpoints_excluded, certificates_new`, now)
 	if err != nil {
 		return fmt.Errorf("backup: end the backup's network discovery scans: %w", err)
+	}
+	ended, err := pgx.CollectRows(rows, pgx.RowToStructByPos[endedScan])
+	if err != nil {
+		return fmt.Errorf("backup: end the backup's network discovery scans: %w", err)
+	}
+	if err := r.auditEndedScans(ctx, tx, ended); err != nil {
+		return err
 	}
 	const scans = `SELECT id FROM jobs WHERE type = 'netdisco.scan' AND status IN ('queued', 'running', 'blocked_license')`
 	if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $1, error_code = 'discovery.scan_interrupted'
@@ -780,9 +788,39 @@ WHERE finished_at IS NULL AND job_id IN (`+scans+`)`, now); err != nil {
     locked_by = NULL, locked_until = NULL WHERE id IN (`+scans+`)`, now); err != nil {
 		return fmt.Errorf("backup: cancel the backup's scan jobs: %w", err)
 	}
-	if n := tag.RowsAffected(); n > 0 {
-		r.warn(strconv.FormatInt(n, 10) + " network discovery scans queued or running when the backup was made are ended; their results" +
+	if n := len(ended); n > 0 {
+		r.warn(strconv.Itoa(n) + " network discovery scans queued or running when the backup was made are ended; their results" +
 			" so far are kept. Start them again under Network discovery.")
+	}
+	return nil
+}
+
+// endedScan is a scan the restore ended, with what its discovery.scan.finished row records.
+type endedScan struct {
+	ID, ScopeID                       uuid.UUID
+	Trigger                           string
+	Total, Answered, Failed, Excluded int
+	CertificatesNew                   int
+}
+
+// auditEndedScans writes one discovery.scan.finished row per scan the restore ended, in the transaction that ended it
+// and in the shape the discovery jobs write (netdiscojobs.AuditFinished: ids and counts only), as the system actor
+// "restore": every end of a scan has exactly one such row (Task 9 review 3).
+func (r *restorer) auditEndedScans(ctx context.Context, tx pgx.Tx, ended []endedScan) error {
+	log := r.s.c.Audit
+	if log == nil {
+		log = audit.New(r.s.c.Clock)
+	}
+	for _, e := range ended {
+		_, err := log.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("restore"), Action: "discovery.scan.finished",
+			ObjectType: "discovery_scan", ObjectID: e.ID.String(), Result: audit.Failure, Details: map[string]string{
+				"scan_id": e.ID.String(), "scope_id": e.ScopeID.String(), "state": "failed", "trigger": e.Trigger,
+				"error_code": "discovery.scan_interrupted", "endpoints_total": strconv.Itoa(e.Total),
+				"endpoints_answered": strconv.Itoa(e.Answered), "endpoints_failed": strconv.Itoa(e.Failed),
+				"endpoints_excluded": strconv.Itoa(e.Excluded), "certificates_new": strconv.Itoa(e.CertificatesNew)}})
+		if err != nil {
+			return fmt.Errorf("backup: audit an ended network discovery scan: %w", err)
+		}
 	}
 	return nil
 }

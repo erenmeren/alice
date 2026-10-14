@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +30,8 @@ func TestMissingDependenciesPanic(t *testing.T) {
 	assert.Panics(t, func() { Register(r, Deps{Pool: &pgxpool.Pool{}, License: allow{}, Clock: clock.Real{}}) }, "no audit log")
 	assert.Panics(t, func() { ScheduleTask(Deps{Clock: clock.Real{}}, time.Minute) })
 	assert.Panics(t, func() { RetentionTask(Deps{}, time.Hour) })
+	assert.Panics(t, func() { RetentionTask(Deps{Pool: &pgxpool.Pool{}, Clock: clock.Real{}}, time.Hour) }, "no audit log")
+	assert.Panics(t, func() { ScheduleTask(Deps{Pool: &pgxpool.Pool{}, Queue: allQueue{}, Clock: clock.Real{}}, time.Minute) }, "no audit log")
 	assert.False(t, r.Handles(jobs.NetdiscoScan))
 }
 
@@ -82,4 +85,10 @@ func TestScanDepsCarryTheJobsDependencies(t *testing.T) {
 // A tampered job's payload is not trusted: the end hook ends nothing for it (the orphan sweep ends its real scan).
 func TestEndHookIgnoresATamperedJob(t *testing.T) {
 	assert.NoError(t, newHandlers(Deps{}).ended(context.Background(), nil, jobs.JobEnd{Status: jobs.StatusDead, Reason: "job.tampered"}))
+}
+
+type allQueue struct{}
+
+func (allQueue) Add(context.Context, pgx.Tx, jobs.Spec) (uuid.UUID, bool, error) {
+	return uuid.New(), false, nil
 }

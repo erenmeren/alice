@@ -45,14 +45,30 @@ func (s *PGStore) Retain(ctx context.Context, now time.Time) (RetentionStats, er
 			return wrap("read the retention", err)
 		}
 		days = min(max(days, MinRetentionDays), MaxRetentionDays)
+		rows, err := tx.Query(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = $2, finished_at = $1
+WHERE state = 'running' AND started_at < $3 RETURNING id, scope_id`, now, ReasonInterrupted, now.Add(-StaleScanAfter))
+		if err != nil {
+			return wrap("end the stale scans", err)
+		}
+		ended, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Finish, error) {
+			f := Finish{Now: now, State: ScanFailed, ErrorCode: ReasonInterrupted}
+			return f, r.Scan(&f.ScanID, &f.ScopeID)
+		})
+		if err != nil {
+			return wrap("end the stale scans", err)
+		}
+		for _, f := range ended {
+			if err := s.finished(ctx, tx, f); err != nil {
+				return err
+			}
+		}
+		st.Interrupted = int64(len(ended))
 		steps := []struct {
 			n    *int64
 			what string
 			sql  string
 			args []any
 		}{
-			{&st.Interrupted, "end the stale scans", `UPDATE discovery_scans SET state = 'failed', error_code = $2, finished_at = $1
-WHERE state = 'running' AND started_at < $3`, []any{now, ReasonInterrupted, now.Add(-StaleScanAfter)}},
 			{&st.Endpoints, "delete the old endpoints", `DELETE FROM discovery_endpoints e USING discovery_scopes s
 WHERE s.id = e.scope_id AND (s.deleted_at IS NOT NULL OR (e.state = 'gone' AND e.gone_since < $1))`, []any{now.AddDate(0, 0, -days)}},
 			{&st.Certificates, "delete the orphan certificates", `DELETE FROM discovery_certificates c WHERE c.last_seen < $1
@@ -66,7 +82,6 @@ AND NOT EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.chain_fingerprints @
 			}
 			*step.n = tag.RowsAffected()
 		}
-		var err error
 		st.Scans, err = pruneScans(ctx, tx, uuid.Nil, now)
 		return err
 	})

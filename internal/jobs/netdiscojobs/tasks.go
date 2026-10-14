@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"alice/internal/audit"
 	"alice/internal/discovery"
 	"alice/internal/jobs"
 	"alice/internal/platform/db"
@@ -35,8 +36,8 @@ func newTasks(d Deps) *tasks { return &tasks{d: d.withLog()} }
 // (Due), oldest schedule first, at most ScheduleWave and never beyond jobs.MaxConcurrentNetdiscoScans queued or
 // running scans (manual ones count); a scope with a scan queued or running is skipped.
 func ScheduleTask(d Deps, every time.Duration) jobs.Task {
-	if d.Pool == nil || d.Queue == nil || d.Clock == nil {
-		panic("netdiscojobs: ScheduleTask needs Deps.Pool, Deps.Queue and Deps.Clock")
+	if d.Pool == nil || d.Queue == nil || d.Clock == nil || d.Audit == nil {
+		panic("netdiscojobs: ScheduleTask needs Deps.Pool, Deps.Queue, Deps.Clock and Deps.Audit")
 	}
 	return jobs.Task{Type: jobs.NetdiscoSchedule, Every: every, Run: newTasks(d).schedule}
 }
@@ -45,8 +46,8 @@ func ScheduleTask(d Deps, every time.Duration) jobs.Task {
 // discovery rows). It runs on the leader only, every hour in a release build and never on the wall clock in the e2e
 // build. Each run ends the scans whose job is gone (EndOrphanScans), then runs discovery.PGStore.Retain.
 func RetentionTask(d Deps, every time.Duration) jobs.Task {
-	if d.Pool == nil || d.Clock == nil {
-		panic("netdiscojobs: RetentionTask needs Deps.Pool and Deps.Clock")
+	if d.Pool == nil || d.Clock == nil || d.Audit == nil {
+		panic("netdiscojobs: RetentionTask needs Deps.Pool, Deps.Clock and Deps.Audit")
 	}
 	return jobs.Task{Type: jobs.NetdiscoRetention, Every: every, Run: newTasks(d).retain}
 }
@@ -54,22 +55,39 @@ func RetentionTask(d Deps, every time.Duration) jobs.Task {
 // EndOrphanScans ends, as failed with discovery.scan_interrupted (ALC-DSC-0012), every scan that is queued or running
 // while no netdisco.scan job for it is queued or running: its job ended without ending it (a worker that died while the
 // end hook could not run, a job ended outside the runner). A scan and its job are written in one transaction
-// (StartTx), and no new job is ever queued for an existing scan, so such a scan can never run again. It returns how
-// many it ended.
-func EndOrphanScans(ctx context.Context, pool *pgxpool.Pool, now time.Time) (int64, error) {
-	tag, err := pool.Exec(ctx, `UPDATE discovery_scans s SET state = 'failed', error_code = $1, finished_at = greatest($2::timestamptz, s.started_at)
+// (StartTx), and no new job is ever queued for an existing scan, so such a scan can never run again. Each ended scan's
+// discovery.scan.finished row is written in the same transaction. It returns how many it ended.
+func EndOrphanScans(ctx context.Context, pool *pgxpool.Pool, log *audit.Log, now time.Time) (int64, error) {
+	var n int64
+	err := db.InTx(ctx, pool, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `UPDATE discovery_scans s SET state = 'failed', error_code = $1, finished_at = greatest($2::timestamptz, s.started_at)
 WHERE s.state IN ('queued', 'running')
   AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.dedupe_key = 'netdisco.scan:' || s.scope_id::text
-                  AND j.status IN ('queued', 'running', 'blocked_license') AND j.payload->>'scan_id' = s.id::text)`,
-		discovery.ReasonInterrupted, now)
+                  AND j.status IN ('queued', 'running', 'blocked_license') AND j.payload->>'scan_id' = s.id::text)
+RETURNING s.id`, discovery.ReasonInterrupted, now)
+		if err != nil {
+			return err
+		}
+		ended, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+		if err != nil {
+			return err
+		}
+		for _, id := range ended {
+			if err := AuditFinished(ctx, tx, log, id); err != nil {
+				return err
+			}
+		}
+		n = int64(len(ended))
+		return nil
+	})
 	if err != nil {
 		return 0, fmt.Errorf("netdiscojobs: end the orphan scans: %w", err)
 	}
-	return tag.RowsAffected(), nil
+	return n, nil
 }
 
 func (t *tasks) endOrphans(ctx context.Context, now time.Time) bool {
-	n, err := EndOrphanScans(ctx, t.d.Pool, now)
+	n, err := EndOrphanScans(ctx, t.d.Pool, t.d.Audit, now)
 	if err != nil {
 		t.d.Log.Error("ending discovery scans whose job ended failed", "error_type", fmt.Sprintf("%T", err))
 		return false
@@ -195,7 +213,7 @@ WHERE id = $1 AND last_scheduled_at IS NOT DISTINCT FROM $3 AND enabled AND dele
 func (t *tasks) retain(ctx context.Context) error {
 	now := t.d.Clock.Now()
 	ok := t.endOrphans(ctx, now)
-	st, err := discovery.NewStore(t.d.Pool).Retain(ctx, now)
+	st, err := storeOf(t.d).Retain(ctx, now)
 	switch {
 	case err != nil:
 		t.d.Log.Error("the discovery retention failed", "error_type", fmt.Sprintf("%T", err))

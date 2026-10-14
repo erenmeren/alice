@@ -42,7 +42,7 @@ func TestDatabaseFailuresAreReported(t *testing.T) {
 	tk := newTasks(broken)
 	assert.ErrorIs(t, tk.schedule(w.ctx), errScheduleFailed)
 	assert.ErrorIs(t, tk.retain(w.ctx), errRetentionFailed)
-	_, err := EndOrphanScans(w.ctx, broken.Pool, t0)
+	_, err := EndOrphanScans(w.ctx, broken.Pool, w.audit, t0)
 	assert.Error(t, err)
 	_, err = tk.startScheduled(w.ctx, candidate{id: scope}, t0)
 	assert.Error(t, err)

@@ -241,3 +241,12 @@ func (w *world) finished(scan uuid.UUID) []auditRow {
 	require.NoError(w.t, err)
 	return out
 }
+
+// requireOneFinishedPerEndedScan is the invariant of Task 9 review 3: every scan that is over has exactly one
+// discovery.scan.finished row, whichever path ended it, and a scan in flight has none.
+func (w *world) requireOneFinishedPerEndedScan() {
+	w.t.Helper()
+	bad := w.count(`SELECT count(*) FROM discovery_scans s WHERE (SELECT count(*) FROM audit_log a WHERE a.action = 'discovery.scan.finished'
+  AND a.object_id = s.id::text) <> CASE WHEN s.state IN ('queued', 'running') THEN 0 ELSE 1 END`)
+	require.Zero(w.t, bad, "every ended scan has exactly one discovery.scan.finished row")
+}

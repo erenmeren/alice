@@ -62,6 +62,7 @@ func TestAQueuedScanRunsThroughTheRealQueue(t *testing.T) {
 	// The scope is free again: a second scan can be started.
 	_, _, err = w.start(scope, TriggerManual)
 	require.NoError(t, err)
+	w.requireOneFinishedPerEndedScan()
 }
 
 // StartTx writes both rows or neither: a scope with a scan queued or running is ALC-DSC-0004, a deleted or unknown
@@ -207,6 +208,9 @@ func TestALostLeaseMidScanEndsTheScan(t *testing.T) {
 	assert.Len(t, w.finished(scan), 1, "and writes no second finished row")
 	assert.Equal(t, "dead", w.job(job).status)
 	assert.Equal(t, "queued", w.scan(next).state)
+	// The sweep after the hook ends nothing again: no second row.
+	require.NoError(t, w.sched.RunNow(w.ctx, jobs.NetdiscoRetention.Name))
+	w.requireOneFinishedPerEndedScan()
 }
 
 // The lock cancels queued read-only work: a queued scan's job is cancelled by the runner's lock sweep and its scan is
@@ -227,6 +231,7 @@ func TestTheLockCancelsAQueuedScan(t *testing.T) {
 	w.gate.locked.Store(false)
 	_, _, err = w.start(scope, TriggerManual)
 	require.NoError(t, err)
+	w.requireOneFinishedPerEndedScan()
 }
 
 // The backstop of the hook: a scan whose job is no longer queued or running (a hook that failed, a job ended outside
@@ -250,6 +255,10 @@ func TestOrphanScansAreEndedByTheSweep(t *testing.T) {
 			assert.Equal(t, "queued", w.scan(alive).state, "a scan whose job is queued is not an orphan")
 			_, _, err = w.start(scope, TriggerManual)
 			require.NoError(t, err)
+			fin := w.finished(orphan)
+			require.Len(t, fin, 1, "the sweep writes the finished row")
+			assert.Equal(t, "failed", fin[0].details["state"])
+			w.requireOneFinishedPerEndedScan()
 		})
 	}
 }
@@ -286,11 +295,42 @@ func TestTheSweepLeavesScansOfRunningJobsAlone(t *testing.T) {
 			for _, task := range []string{jobs.NetdiscoSchedule.Name, jobs.NetdiscoRetention.Name} {
 				require.NoError(t, w.sched.RunNow(w.ctx, task))
 			}
-			n, err := EndOrphanScans(w.ctx, w.db.App, w.clock.Now())
+			n, err := EndOrphanScans(w.ctx, w.db.App, w.audit, w.clock.Now())
 			require.NoError(t, err)
 			assert.Zero(t, n)
 			assert.Equal(t, "running", w.scan(scan).state)
 			assert.Equal(t, "running", w.job(job).status)
 		})
 	}
+}
+
+// The scanner's own crash recovery (BeginScan finds a scan left running more than one lease ago) and retention's sweep
+// of stale running scans write the finished row in their transaction, once (Task 9 review 3).
+func TestRecoveryAndRetentionWriteTheFinishedRow(t *testing.T) {
+	w := newWorld(t)
+	crashed, _, err := w.start(w.scope("lab", scopeOpts{}), TriggerManual)
+	require.NoError(t, err)
+	w.exec(`UPDATE discovery_scans SET state = 'running', started_at = $2 WHERE id = $1`, crashed, t0)
+	d := newHandlers(w.deps).scanDeps()
+	st, err := d.Store.BeginScan(w.ctx, crashed, t0.Add(10*time.Minute), d.Lease)
+	require.NoError(t, err)
+	require.False(t, st.Run)
+	fin := w.finished(crashed)
+	require.Len(t, fin, 1)
+	assert.Equal(t, discovery.ReasonInterrupted, fin[0].details["error_code"])
+
+	stale, _, err := w.start(w.scope("stale", scopeOpts{}), TriggerManual)
+	require.NoError(t, err)
+	w.exec(`UPDATE discovery_scans SET state = 'running', started_at = $2 WHERE id = $1`, stale, t0)
+	// Its job is running (not an orphan): only retention's stale sweep ends it.
+	w.exec(`UPDATE jobs SET status = 'running', attempts = 1, locked_by = 'gone/1', locked_until = $2, heartbeat_at = $2, started_at = $2
+WHERE payload->>'scan_id' = $1`, stale.String(), t0.Add(2*time.Hour))
+	w.clock.Advance(discovery.StaleScanAfter + time.Minute)
+	require.NoError(t, w.sched.RunNow(w.ctx, jobs.NetdiscoRetention.Name))
+	fin = w.finished(stale)
+	require.Len(t, fin, 1)
+	assert.Equal(t, "failed", fin[0].details["state"])
+	require.NoError(t, w.sched.RunNow(w.ctx, jobs.NetdiscoRetention.Name))
+	require.NoError(t, w.sched.RunNow(w.ctx, jobs.NetdiscoSchedule.Name))
+	w.requireOneFinishedPerEndedScan()
 }

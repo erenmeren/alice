@@ -4,6 +4,7 @@ package backup_test
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -121,6 +122,21 @@ VALUES ($1, 'netdisco.scan', 'read_only', 'system', $2, $3, $4, 'queued', $5, 0,
 	}
 	assert.Zero(t, e.count("SELECT count(*) FROM job_attempts WHERE job_id = $1 AND finished_at IS NULL", runJob), "the cut-off attempt is closed")
 	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "2 network discovery scans") }), res.Warnings)
+	// Task 9 review 3: each scan the restore ended has its one discovery.scan.finished row (actor restore, ids and counts
+	// only); the finished scan of the backup gets none.
+	for _, id := range []uuid.UUID{running, queued} {
+		var actor, actorType, result string
+		var details map[string]string
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT actor_name, actor_type, result, details FROM audit_log
+WHERE action = 'discovery.scan.finished' AND object_type = 'discovery_scan' AND object_id = $1`, id.String()).Scan(&actor, &actorType, &result, &details))
+		assert.Equal(t, [3]string{"restore", "system", "failure"}, [3]string{actor, actorType, result})
+		assert.Equal(t, "failed", details["state"])
+		assert.Equal(t, "discovery.scan_interrupted", details["error_code"])
+		assert.Equal(t, id.String(), details["scan_id"])
+	}
+	assert.Equal(t, "2", strconv.Itoa(e.count(`SELECT endpoints_answered FROM discovery_scans WHERE id = $1`, running)))
+	assert.Zero(t, e.count(`SELECT count(*) FROM discovery_scans s WHERE (SELECT count(*) FROM audit_log a WHERE a.action = 'discovery.scan.finished'
+  AND a.object_id = s.id::text) <> CASE WHEN s.state = 'done' THEN 0 ELSE 1 END`), "exactly one row per scan the restore ended")
 }
 
 // A restored clone does not scan on its own either: every scope with a schedule is switched off (enabled gates both

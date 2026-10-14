@@ -101,7 +101,7 @@ func (h *handlers) install(r *jobs.Runner) {
 }
 
 func (h *handlers) scanDeps() discovery.Deps {
-	return discovery.Deps{Store: discovery.NewStore(h.d.Pool).OnFinish(h.finishedRow), License: h.d.License, NewPolicy: h.d.NewPolicy,
+	return discovery.Deps{Store: storeOf(h.d), License: h.d.License, NewPolicy: h.d.NewPolicy,
 		DatabaseURL: h.d.DatabaseURL, Resolver: h.d.Resolver, Clock: h.d.Clock, Lease: h.d.Lease}
 }
 
@@ -186,21 +186,26 @@ RETURNING s.id`,
 		return fmt.Errorf("netdiscojobs: end the scan of an ended job: %w", err)
 	}
 	for _, id := range ended {
-		if err := h.auditFinished(ctx, tx, id); err != nil {
+		if err := AuditFinished(ctx, tx, h.d.Audit, id); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// finishedRow is the scan store's finish hook: the discovery.scan.finished row, in the transaction that ends the scan.
-func (h *handlers) finishedRow(ctx context.Context, tx pgx.Tx, f discovery.Finish) error {
-	return h.auditFinished(ctx, tx, f.ScanID)
+// storeOf is the scan store of the jobs, whose finish hook writes the discovery.scan.finished row of every end of a
+// scan the store makes (FinishScan, BeginScan's crash recovery, retention's sweep), in the transaction that ends it.
+func storeOf(d Deps) *discovery.PGStore {
+	return discovery.NewStore(d.Pool).OnFinish(func(ctx context.Context, tx pgx.Tx, f discovery.Finish) error {
+		return AuditFinished(ctx, tx, d.Audit, f.ScanID)
+	})
 }
 
-// auditFinished writes the discovery.scan.finished row of an ended scan (design decision 5: ids and counts only, never an
-// address or a certificate). A scan that ended done or cancelled is a success; failed or timed out a failure.
-func (h *handlers) auditFinished(ctx context.Context, tx pgx.Tx, scanID uuid.UUID) error {
+// AuditFinished writes the discovery.scan.finished row of a scan tx has just ended (design decision 5: ids and counts
+// only, never an address or a certificate). A scan that ended done or cancelled is a success; failed or timed out a
+// failure. Every path that ends a scan calls it once, in the transaction that ends it: the store's finish hook, the
+// runner's end hook and the orphan sweep (the restore writes its own rows of the same shape).
+func AuditFinished(ctx context.Context, tx pgx.Tx, log *audit.Log, scanID uuid.UUID) error {
 	var scope uuid.UUID
 	var state, code, trigger string
 	var total, answered, failed, excluded, certs int
@@ -220,7 +225,7 @@ func (h *handlers) auditFinished(ctx context.Context, tx pgx.Tx, scanID uuid.UUI
 	if state == discovery.ScanFailed || state == discovery.ScanTimedOut {
 		result = audit.Failure
 	}
-	_, err = h.d.Audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("jobs"), Action: "discovery.scan.finished",
+	_, err = log.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("jobs"), Action: "discovery.scan.finished",
 		ObjectType: "discovery_scan", ObjectID: scanID.String(), Result: result, Details: details})
 	if err != nil {
 		return fmt.Errorf("netdiscojobs: audit the ended scan: %w", err)
