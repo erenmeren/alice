@@ -75,17 +75,18 @@ type Summary struct {
 	LastScanAt           *time.Time
 }
 
-// Summary reads the metric with index-backed counts (the leaf expiry index, the endpoint fingerprint index and the
-// inventory's unique fingerprint).
+// Summary reads the metric in one pass over the leaves: one aggregate with a FILTER (no CTE materialized and scanned
+// twice), the leaves anti-joined to the inventory's unique fingerprint and semi-joined to the endpoints. It is linear in
+// the leaves by nature (a count of them all); Task 12 measured 9 ms at 5,000 and 22 ms at 50,000 (33 ms in the CTE
+// form), far inside the dashboard budget.
 func (s *Service) Summary(ctx context.Context) (Summary, error) {
 	now := s.now()
 	var out Summary
-	err := s.pool.QueryRow(ctx, `WITH u AS (
-    SELECT d.not_after FROM discovery_certificates d
-    WHERE d.is_leaf AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
-      AND EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'))
-SELECT (SELECT count(*) FROM u)::int, (SELECT count(*) FROM u WHERE not_after >= $1 AND not_after <= $2)::int,
-    (SELECT count(*) FROM discovery_scopes WHERE deleted_at IS NULL)::int, (SELECT max(finished_at) FROM discovery_scans)`,
+	err := s.pool.QueryRow(ctx, `SELECT count(*)::int, (count(*) FILTER (WHERE d.not_after >= $1 AND d.not_after <= $2))::int,
+    (SELECT count(*) FROM discovery_scopes WHERE deleted_at IS NULL)::int, (SELECT max(finished_at) FROM discovery_scans)
+FROM discovery_certificates d
+WHERE d.is_leaf AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
+  AND EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone')`,
 		now, now.AddDate(0, 0, 30)).Scan(&out.UnmanagedTotal, &out.UnmanagedExpiring30d, &out.Scopes, &out.LastScanAt)
 	if err != nil {
 		return Summary{}, fmt.Errorf("discoverysvc: read the summary: %w", err)

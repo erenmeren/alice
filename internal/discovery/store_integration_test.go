@@ -788,6 +788,27 @@ func TestLinking(t *testing.T) {
 	only, err := ListCertificates(bg(), p.App, CertificateFilter{Status: StatusKnown})
 	require.NoError(t, err)
 	require.Len(t, only, 2)
+	// The status filter (Task 12: conditions on the join, not on the computed status) is exactly the computed status,
+	// for every status, before the limit; another value matches nothing.
+	for _, st := range []string{StatusUnmanaged, StatusManaged, StatusKnown, "bogus"} {
+		var want []CertificateRow
+		for _, c := range all {
+			if c.Status == st {
+				want = append(want, c)
+			}
+		}
+		got, err := ListCertificates(bg(), p.App, CertificateFilter{Status: st})
+		require.NoError(t, err)
+		first, err2 := ListCertificates(bg(), p.App, CertificateFilter{Status: st, Limit: 1})
+		require.NoError(t, err2)
+		if len(want) == 0 {
+			require.Empty(t, got, st)
+			require.Empty(t, first, st)
+			continue
+		}
+		require.Equal(t, want, got, st)
+		require.Equal(t, want[:1], first, st)
+	}
 	one, err := ListCertificates(bg(), p.App, CertificateFilter{Fingerprint: fingerprint(managed), ScopeID: scope})
 	require.NoError(t, err)
 	require.Equal(t, all[1:2], one)

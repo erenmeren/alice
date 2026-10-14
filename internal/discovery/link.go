@@ -31,12 +31,29 @@ const (
 // MaxPage is the largest page a list returns.
 const MaxPage = 500
 
-// CertificateStatusSQL is the status of the discovered certificate d joined (LEFT JOIN certificates c ON
-// c.fingerprint_sha256 = d.fingerprint_sha256) to the inventory: the one definition every read uses.
-const CertificateStatusSQL = `CASE WHEN c.id IS NULL THEN 'unmanaged'
-     WHEN EXISTS (SELECT 1 FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
-                  WHERE l.certificate_id = c.id AND l.missing_since IS NULL) THEN 'managed'
-     ELSE 'known' END`
+// liveLocationSQL: the inventory certificate whose id is the expression id has a live location on a live target (it
+// is monitored).
+func liveLocationSQL(id string) string {
+	return `EXISTS (SELECT 1 FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
+                  WHERE l.certificate_id = ` + id + ` AND l.missing_since IS NULL)`
+}
+
+// certificateStatusSQL is the status of a discovered certificate whose inventory certificate's id (LEFT JOIN
+// certificates c ON c.fingerprint_sha256 = d.fingerprint_sha256: null when there is none) is the expression id: the one
+// definition every read uses.
+func certificateStatusSQL(id string) string {
+	return `CASE WHEN ` + id + ` IS NULL THEN 'unmanaged' WHEN ` + liveLocationSQL(id) + ` THEN 'managed' ELSE 'known' END`
+}
+
+// statusConditions are the conditions on d and c equivalent to certificateStatusSQL("c.id") = status. A list filters
+// on these, not on the CASE: the planner estimates them (unmanaged on the join column is an anti-join) and so walks the
+// expiry index instead of computing every leaf's status and sorting them all (Task 12: status=unmanaged took 16 ms at
+// 5,000 leaves and 160 ms at 50,000; now about 2 ms at both).
+var statusConditions = map[string]string{
+	StatusUnmanaged: "c.fingerprint_sha256 IS NULL",
+	StatusManaged:   "c.id IS NOT NULL AND " + liveLocationSQL("c.id"),
+	StatusKnown:     "c.id IS NOT NULL AND NOT " + liveLocationSQL("c.id"),
+}
 
 // CertificateRow is a discovered leaf certificate. Endpoints counts the endpoints presenting it now (state present),
 // SeenOn those whose last leaf seen it is and that are not gone (present, or unreachable since); both of the filter's
@@ -127,7 +144,7 @@ func ListCertificates(ctx context.Context, q db.Querier, f CertificateFilter) ([
 	if (f.Expired != nil || !f.ExpiringBy.IsZero()) && f.Now.IsZero() {
 		return nil, ErrFilterNeedsNow
 	}
-	var in, out query
+	var in query
 	in.and("d.is_leaf")
 	if f.Query != "" {
 		pat := in.arg(containsPattern(f.Query))
@@ -160,20 +177,27 @@ func ListCertificates(ctx context.Context, q db.Querier, f CertificateFilter) ([
 	if f.After != nil {
 		in.and("(d.not_after, d.fingerprint_sha256) > (" + in.arg(f.After.NotAfter) + "::timestamptz, " + in.arg(f.After.Fingerprint) + "::text)")
 	}
-	out.args = in.args
 	if f.Status != "" {
-		out.and("x.status = " + out.arg(f.Status))
+		cond, ok := statusConditions[f.Status]
+		if !ok {
+			cond = "false" // no certificate has another status
+		}
+		in.and("(" + cond + ")")
 	}
-	sql := `SELECT * FROM (
+	// The page is chosen first (filters, order, limit over the certificates and the inventory join only); the endpoint
+	// counts and the status are computed for its rows alone (Task 12: a plan that sorts no longer counts every leaf).
+	sql := `SELECT d.fingerprint_sha256, d.subject_cn, d.sans, d.issuer_cn, d.not_before, d.not_after, d.key_algorithm, d.self_signed,
+    d.first_seen, d.last_seen, n.present, n.seen, ` + certificateStatusSQL("d.cid") + ` AS status, d.cid
+FROM (
     SELECT d.fingerprint_sha256, d.subject_cn, d.sans, d.issuer_cn, d.not_before, d.not_after, d.key_algorithm, d.self_signed,
-        d.first_seen, d.last_seen, n.present, n.seen, ` + CertificateStatusSQL + ` AS status, c.id
-    FROM discovery_certificates d LEFT JOIN certificates c ON c.fingerprint_sha256 = d.fingerprint_sha256
-    CROSS JOIN LATERAL (SELECT (count(*) FILTER (WHERE e.state = 'present'))::int AS present, count(*)::int AS seen
-        FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'` + scope + `) n` +
-		in.whereSQL() + `
-) x` + out.whereSQL() + `
-ORDER BY x.not_after, x.fingerprint_sha256 LIMIT ` + out.arg(limit(f.Limit))
-	rows, err := q.Query(ctx, sql, out.args...)
+        d.first_seen, d.last_seen, c.id AS cid
+    FROM discovery_certificates d LEFT JOIN certificates c ON c.fingerprint_sha256 = d.fingerprint_sha256` + in.whereSQL() + `
+    ORDER BY d.not_after, d.fingerprint_sha256 LIMIT ` + in.arg(limit(f.Limit)) + `
+) d
+CROSS JOIN LATERAL (SELECT (count(*) FILTER (WHERE e.state = 'present'))::int AS present, count(*)::int AS seen
+    FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'` + scope + `) n
+ORDER BY d.not_after, d.fingerprint_sha256`
+	rows, err := q.Query(ctx, sql, in.args...)
 	if err != nil {
 		return nil, wrap("list the discovered certificates", err)
 	}
