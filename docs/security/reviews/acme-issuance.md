@@ -7,8 +7,8 @@ account key rollover, deactivation and the hand-written ARI lookup (`internal/ac
 (`solver/dns01`) and the HTTP-01 solver (`solver/http01`) with the helper's protocol 7 commands
 (`cmd/alice-helper/acmechallenge.go`); key and CSR generation (`acme/keygen`); the inventory services for providers,
 accounts, hooks, ACME certificates, orders, bindings, the renewal planner and the auto-deploy planner; the jobs
-`acme.issue`, `acme.cleanup`, `acme.sweep`, `acme.schedule`, `acme.auto_deploy`; 29 API routes with three permissions
-and a rate class; the Settings → Certificate authorities screens and the Issued certificates pages; the restore hook
+`acme.issue`, `acme.cleanup`, `acme.sweep`, `acme.schedule`, `acme.auto_deploy`; 29 API routes with four permissions
+(`acme.view`, `acme.operate`, `acme.manage`, `acme.preview`) and a rate class; the Settings → Certificate authorities screens and the Issued certificates pages; the restore hook
 that switches automatic renewal off.
 
 **Nothing in this work was run against a real certificate authority, real DNS, a real ARI endpoint or the public
@@ -31,32 +31,36 @@ fix rounds (up to two per task) that were reviewed in scope. Implementers and re
 (removing a gate, a lock, a check or a redaction) to see the named tests turn red, and recorded the red output in the
 task reports. Task 17 added fuzz targets for every parser of CA- or hook-controlled bytes and a secret-leak suite
 with positive controls; Task 16 drove the whole feature through the browser against the fake CA in three browsers.
-This review was written in Task 18, before Task 19's `make ci` and the whole-branch review; the controller adds their
-outcome to the rulings.
+This review was written in Task 18, before Task 19's `make ci` and the whole-branch review; their outcome is in the
+"Final run" column below, the Findings table and the rulings (Task 19).
 
 ## Evidence
 
 "Development runs" are the latest results the implementers recorded in their task reports, with the task named.
-"Final run" is Task 19's. `NOT RUN (owner)` and `NOT RUN (CI)` cells are never a pass.
+"Final run" is Task 19's: `make ci` exit 0 on its fifth run, after the fixes listed under Findings (T19); the full
+Playwright suite on Chromium, Firefox and WebKit with `make e2e-up` then `make e2e-browsers`: 399 passed, 0 failed, 12
+skipped (the opt-in design-evidence specs). The whole-branch review's fix wave (T19 W1–W8) came after that run and was
+verified with the focused unit, integration and web tests of every package it touched and `make lint`, not with a
+second `make ci` or e2e run. `NOT RUN (owner)` and `NOT RUN (CI)` cells are never a pass.
 
 | # | Check | Command | Expected | Development runs | Final run |
 |---|---|---|---|---|---|
-| 1 | Unit tests of the touched packages, race detector | `go test -race ./internal/acme/... ./internal/inventory/... ./internal/jobs/... ./internal/api/... ./cmd/alice/... ./internal/archtest` | ok | ok in every report (Tasks 1–17) | Task 19 (`make ci`) |
-| 2 | Integration tests (testcontainers PostgreSQL, fakeacme, the emulated and real Nginx target) | `go test -tags integration` per package | ok | migrations, backup, inventory, jobs/*, api, alerts, notify ok (Tasks 1–13, 17) | Task 19 (`make coverage`) |
-| 3 | Rollback proof of a renewal deployment | `TestACMERenewalDeployFailureRollsBack`, `TestACMERenewalStopsAfterThreeRolledBackDeployments` (`internal/jobs/deployjobs`) | `rolled_back`, previous leaf still served | PASS for `nginx -t`, reload and verify failures; deployed fingerprint, served and TLS-probe fingerprint all the previous leaf (Task 12) | Task 19 |
-| 4 | Helper root-only suite (whole suite, uid 0, no network) | `alice-helper.test` in `debian:12` | PASS | 274 PASS incl. `TestACMEChallengeAsRoot`, `TestEmulatorFidelityACMEChallenge` (Task 7 fix round) | not re-run unless the helper changes |
-| 5 | Real OpenSSH and Nginx matrix | `make test-ssh` | PASS | `TestRealOpenSSH`, `TestRealNginx` incl. `acme_http01_webroot` on ubuntu22, debian12, rocky9 (Task 7 fix round) | Task 19 (`make ci`) |
-| 6 | Playwright Phase 10, three browsers | `npx playwright test e2e/phase10.spec.ts --project=chromium --project=firefox --project=webkit` | all pass | 21/21 (7 tests × 3 browsers) on 9bd4e73; Phase 10 + Phase 9 chromium 11/11 after ed8a158 (Task 16) | Task 19 (`make e2e-browsers`) |
-| 7 | Phase 7 and Phase 9 specs (Settings tab list and the scans changed) | `npx playwright test e2e/phase9.spec.ts e2e/phase7.spec.ts` | all pass | chromium, firefox, webkit pass for the selection run (Task 16) | Task 19 (phases 1–8 re-run there) |
+| 1 | Unit tests of the touched packages, race detector | `go test -race ./internal/acme/... ./internal/inventory/... ./internal/jobs/... ./internal/api/... ./cmd/alice/... ./internal/archtest` | ok | ok in every report (Tasks 1–17) | ok (`make ci` `test`, fifth run) |
+| 2 | Integration tests (testcontainers PostgreSQL, fakeacme, the emulated and real Nginx target) | `go test -tags integration` per package | ok | migrations, backup, inventory, jobs/*, api, alerts, notify ok (Tasks 1–13, 17) | ok (`make ci` `coverage`, every package with `-tags integration`) |
+| 3 | Rollback proof of a renewal deployment | `TestACMERenewalDeployFailureRollsBack`, `TestACMERenewalStopsAfterThreeRolledBackDeployments` (`internal/jobs/deployjobs`) | `rolled_back`, previous leaf still served | PASS for `nginx -t`, reload and verify failures; deployed fingerprint, served and TLS-probe fingerprint all the previous leaf (Task 12) | ok (both tests in `make ci` `coverage`); the e2e rollback with `nginx -t` failing passed in all three browsers |
+| 4 | Helper root-only suite (whole suite, uid 0, no network) | `alice-helper.test` in `debian:12` | PASS | 274 PASS incl. `TestACMEChallengeAsRoot`, `TestEmulatorFidelityACMEChallenge` (Task 7 fix round) | not re-run: `cmd/alice-helper` unchanged since the Task 7 fix round (57e23d0) |
+| 5 | Real OpenSSH and Nginx matrix | `make test-ssh` | PASS | `TestRealOpenSSH`, `TestRealNginx` incl. `acme_http01_webroot` on ubuntu22, debian12, rocky9 (Task 7 fix round) | ok (`make ci` `test-ssh`) |
+| 6 | Playwright Phase 10, three browsers | `npx playwright test e2e/phase10.spec.ts --project=chromium --project=firefox --project=webkit` | all pass | 21/21 (7 tests × 3 browsers) on 9bd4e73; Phase 10 + Phase 9 chromium 11/11 after ed8a158 (Task 16) | pass in all three browsers (`make e2e-up`, `make e2e-browsers`: 399 passed, 0 failed, 12 skipped for the whole suite) |
+| 7 | Phase 7 and Phase 9 specs (Settings tab list and the scans changed) | `npx playwright test e2e/phase9.spec.ts e2e/phase7.spec.ts` | all pass | chromium, firefox, webkit pass for the selection run (Task 16) | pass: every spec (phases 1–10) in the same `make e2e-browsers` run; the Phase 4 helper expectation was corrected to protocol 7 first (6573e46) |
 | 8 | Fuzzing, six ACME targets | `make fuzz-acme FUZZTIME=15s` | no crash | 6/6 ok, about 50–90k execs/s (Task 17); earlier 20 s and 10 s runs per target (Tasks 5, 6, 11) | `make fuzz-release`: NOT RUN (owner) |
-| 9 | Secret-leak suite | `go test -tags integration -run TestACMESecretsNeverLeak ./internal/api/` | no canary found; every plant found | ok, `-count=3`; four mutation runs failed as intended (Task 17) | Task 19 |
-| 10 | Licence lock: no CA contact | lock tests in inventory, acmejobs, api and e2e | fakeacme `requests == 0` | ok (Tasks 9–13, 16) | Task 19 |
-| 11 | Authorization matrix and route rules | `go test ./internal/api -run 'Authz|OpenAPI|Spec'`; `make authz-doc` | ok; no diff | ok; no diff (Tasks 13, 18) | Task 19 |
-| 12 | Coverage floors of the new packages | `make coverage` | every floor holds | acme 94.0, transport 93.1, solver 100, dns01 94.6, http01 98.4, keygen 94.8, renew 100, acmejobs 96.4–96.8, fakeacme 92.6; inventory 89.2–89.5 against its floor of 89 (Tasks 3–17) | Task 19 |
-| 13 | Lint, lock check, docs check, matrix check, pin check | `make lint` | exit 0 | exit 0 in every task | Task 18, Task 19 |
+| 9 | Secret-leak suite | `go test -tags integration -run TestACMESecretsNeverLeak ./internal/api/` | no canary found; every plant found | ok, `-count=3`; four mutation runs failed as intended (Task 17) | ok (`make ci` `coverage`) |
+| 10 | Licence lock: no CA contact | lock tests in inventory, acmejobs, api and e2e | fakeacme `requests == 0` | ok (Tasks 9–13, 16) | ok (`make ci` and the three-browser e2e) |
+| 11 | Authorization matrix and route rules | `go test ./internal/api -run 'Authz|OpenAPI|Spec'`; `make authz-doc` | ok; no diff | ok; no diff (Tasks 13, 18) | ok; no diff (`make ci` `lint`) |
+| 12 | Coverage floors of the new packages | `make coverage` | every floor holds | acme 94.0, transport 93.1, solver 100, dns01 94.6, http01 98.4, keygen 94.8, renew 100, acmejobs 96.4–96.8, fakeacme 92.6; inventory 89.2–89.5 against its floor of 89 (Tasks 3–17) | every floor holds (`make ci` `coverage`); `internal/jobs` fell to 88.9 against 89 and is 90.3 after the queue error-path tests (2d750a7); no floor lowered |
+| 13 | Lint, lock check, docs check, matrix check, pin check | `make lint` | exit 0 | exit 0 in every task | exit 0 (Task 18; `make ci` `lint` in Task 19) |
 | 14 | No new Go module, notices unchanged | `make notices`; notices of master f369b83's binaries with the same tool | identical | `go.mod`, `go.sum`, the web lockfile unchanged since f369b83; `bin/THIRD_PARTY_NOTICES.md` byte-identical to the one built from f369b83's binaries (Task 18) | — |
-| 15 | Release symbol check (the e2e CA trust never in a release build) | `make release-symcheck` | ok | ok (Tasks 4, 10–13, 16) | Task 19 |
-| 16 | The whole local pipeline | `make ci` | exit 0 | not run in full before Task 19 | Task 19 |
+| 15 | Release symbol check (the e2e CA trust never in a release build) | `make release-symcheck` | ok | ok (Tasks 4, 10–13, 16) | ok (`make ci` `release-symcheck`) |
+| 16 | The whole local pipeline | `make ci` | exit 0 | not run in full before Task 19 | exit 0 on the fifth run; runs 1–4 failed on the serve migration-version test, `internal/jobs` coverage, the Phase 4 helper protocol expectation and a fakeacme slow-fault flake (fixed: 5e2b29f, 2d750a7, 6573e46, 4e18782) |
 | 17 | Behaviour against a real CA, real DNS, real ARI | — | — | — | NOT RUN (owner) |
 
 Other evidence recorded by the implementers and reviewers (their reports; not re-run here):
@@ -169,8 +173,11 @@ User routes that contact a CA or a server are `ClassChange` (403 `ALC-LIC-0001`)
 `license.Allow(ClassChange)` themselves and are paused by the scheduler; the issue job asks the gate again before each
 published challenge and before finalize, so a lock mid-order publishes nothing more and sends no CSR. Removing a
 binding and deleting a definition are `ClassAlways`. A certificate issued before the licence last reopened is held for
-an Administrator. A restore switches every ACME certificate's automatic renewal off (A11) and holds queued
-`acme.issue` jobs like every change job. Residual: a restored copy shares the CA accounts of the original, so a key
+an Administrator. A restore switches every ACME certificate's automatic renewal off (A11), holds queued
+`acme.issue` jobs like every change job, ends the orders that were running at backup time (failed, `job.lease_expired`,
+pending key deleted), clears every order's list of published challenge records and cancels the backup's `acme.cleanup`
+jobs, so a clone neither resumes an order with the original's account key nor removes records the original may still
+publish (T19 W1). Residual: a restored copy shares the CA accounts of the original, so a key
 rollover or deactivation there affects the original (carry M8).
 
 ### Fuzzing
@@ -187,7 +194,7 @@ reads, https-only URLs, ARI windows after 2000 and the closed error mapping. See
 - [x] Licence lock (Focus 4): no CA contact, no deployment, no planner work; user routes answer `license.locked`.
 - [x] Renewal safety (Focus 5): rollback proof in integration and e2e; backoff, spacing, wave, hold and stop.
 - [x] Helper change (Focus 6): path confinement, token charset, size cap, root-only suite and the real-Nginx matrix.
-- [ ] (Task 19) `make ci` green and the whole-branch review's findings closed.
+- [x] (Task 19) `make ci` green and the whole-branch review's findings closed (T19 rows under Findings).
 - [ ] (owner) A real CA, real DNS and ARI (see "Owner verification").
 
 ## Findings
@@ -219,6 +226,13 @@ Critical; the plan reviews' blocking findings were design changes made before an
 | T13 R2 / T14 | Terms | Important | Terms of service could not be shown before consent | Preview endpoint and `accepted_terms_url` (69660f9, 32723d8, 655deff) |
 | T16 | Web | Defect | "Run a test first" showed no result on the status page | Fixed 928b291 |
 | T17 | Tests | High (test) / Medium | Release fuzz job would exceed its timeout; the leak suite's log channel was almost empty and only redacted | Fixed 037419d |
+| T19 make ci | Tests | Defect (test) | `make ci` runs 1–4: the serve upgrade test expected the previous migration; `internal/jobs` coverage 88.9 under its floor; the Phase 4 e2e expected helper protocol 6; a fakeacme slow fault answered an empty 200 to a client that had left (flake) | Fixed 5e2b29f, 2d750a7 (queue error-path tests, 90.3), 6573e46, 4e18782 |
+| T19 W1 | Restore | Important | A restored clone's sweep resumed an order running at backup time with the original's account key; the backup's cleanup jobs removed records the original may still use | Fixed: the restore ends running orders, clears `presented`, cancels `acme.cleanup` jobs (`TestRestoreEndsInFlightACMEOrders`) |
+| T19 W2 | Accounts | Important | A discarded pending rollover key was deleted outside any audit transaction | Fixed: delete and `acme.account.rollover_discarded` in one transaction |
+| T19 W3 | API/Web | Minor | Deployments of ACME certificates were labelled "Uploaded" | Fixed: deployment source `acme` (API, OpenAPI, web, en/tr) |
+| T19 W4 | Accounts | Minor | A key rollover was not refused while an order of the provider ran | Fixed: `ALC-ACM-0016` (provider's certificates read FOR SHARE first) |
+| T19 W5 | Data | Minor | A certificate definition read its provider, hook and server unlocked (race with their deletion) | Fixed: FOR SHARE (`TestACMECertificateCreateSeesAConcurrentDelete`) |
+| T19 W6–W8 | Docs/Web/Data | Minor | This review said three permissions and had empty Final run cells; the usage view drew an ACME source as a file; the finished-order freeze compared only the key's ciphertext | Fixed: this document; `ShieldCheck` icon; 00013 compares all four key columns |
 
 ## Known limitations
 

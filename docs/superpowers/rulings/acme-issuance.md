@@ -259,6 +259,40 @@ Rulings recorded in the task report, adopted:
 - No new Go module: `go.mod`, `go.sum` and the web lockfile are unchanged since f369b83, and `make notices` produced a
   `THIRD_PARTY_NOTICES.md` byte-identical to the one built from f369b83's binaries.
 
+## Task 19: final run and whole-branch review
+
+- `make ci` exit 0 on the fifth run. Runs 1–4 failed on, and were fixed by: the serve upgrade test still expecting
+  migration 00012 (5e2b29f, it expects 00013 now); `internal/jobs` coverage 88.9 % against its floor of 89 on a full
+  run, from timing-dependent runner branches — eleven deterministic queue error-path tests bring it to 90.3 % (2d750a7;
+  no floor lowered); the Phase 4 e2e expecting helper protocol 6 where the HTTP-01 publisher installs 7 (6573e46); a
+  fakeacme slow fault that answered an implicit empty 200 to a client that had already left, so the directory check
+  read "not a directory" under load — the fake now aborts the connection (4e18782; a test double, not product).
+- The full Playwright suite ran on Chromium, Firefox and WebKit with `make e2e-up` then `make e2e-browsers` (so both
+  targets are exercised now; Task 16's carry): 399 passed, 0 failed, 12 skipped (the opt-in design-evidence specs).
+- Whole-branch review fix wave (after that run; focused tests and `make lint`):
+  - **W1 / M8 extended**: a restored clone no longer carries on the original's orders. In the restore transaction that
+    switches automatic renewal off, running orders end as failed with the neutral `job.lease_expired` and no pending key
+    (the abandon rules; their certificates leave `issuing`), every order's `presented` list is cleared (Z1017 allows a
+    finished order's list to shrink) and the backup's live `acme.cleanup` jobs are cancelled. Cost: if the original is
+    gone for good, leftover challenge records stay in DNS or the token directory (the restore warns; documented in
+    backup-restore). M8 itself (a clone's rollover or deactivation act on the shared CA account) stays a documented
+    carry.
+  - W2: a discarded pending rollover key (refusal or recovery) is deleted and audited (`acme.account.rollover_discarded`)
+    in one transaction.
+  - W3: deployments of ACME certificates have source `acme` (were "Uploaded").
+  - W4: a key rollover is refused with `ALC-ACM-0016` while an order of a certificate of the provider runs (it signs
+    with the key being replaced); the provider's certificate rows are read FOR SHARE first, so an order starting
+    meanwhile is either seen or finds the pending key. The existing code is reused; its text names the case.
+  - W5: a definition reads its provider, hook and HTTP-01 server FOR SHARE (race with their deletion).
+  - W7, W8: the usage view's ACME source icon; the finished-order freeze compares all four pending-key columns (00013
+    amended in place, unreleased).
+- **Contact e-mail (personal data)**: the account's contact e-mail stays visible to every `acme.view` caller, Auditors
+  and read tokens included (Tasks 9 and 13). It is personal data; the owner may want it Admin-only (a view that omits
+  it for non-Admins). Not changed on this branch — cost: an Auditor or a read token learns an operator's address.
+- **M3 confirmed**: switching a binding's automatic deployment off is refused in licence lock (the PUT also creates
+  bindings and is ClassChange); removing the binding is the lock-time way. A ClassAlways off-only route stays a
+  follow-up.
+
 ## Carries and deferred items (open after this branch)
 
 - HTTPS proxy support (environment proxies are ignored; "proxy/custom CA" carry of phase-5:170 and phase-7:336 is
@@ -271,7 +305,9 @@ Rulings recorded in the task report, adopted:
 - A ClassAlways route to switch a binding's automatic deployment off in lock (Task 13 M3).
 - Status page polling of deployments; one combined automatic deployment control; a restore banner (design gaps).
 - Expiry e-mails for ACME certificates not yet on a server (owner follow-up, Task 11 ruling 8).
-- Restored clones acting on the original's CA account (Task 9 M8); account ↔ provider database link (Task 10 M9).
+- Restored clones acting on the original's CA account (Task 9 M8; in-flight orders and challenge records closed by Task 19
+  W1); account ↔ provider database link (Task 10 M9).
+- The contact e-mail visible to Auditors and read tokens (personal data; owner decision: Admin-only?).
 - fakeacme fidelity gaps (Task 4); the Task 1, 3, 5, 6, 7, 8, 9, 13 deferred minors listed above.
 - Inventory coverage 89.2–89.5 % against its floor of 89 (thin margin, not lowered).
 - Behaviour against a real CA, real DNS and real ARI: owner verification in docs/security/reviews/acme-issuance.md.
