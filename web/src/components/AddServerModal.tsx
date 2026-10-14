@@ -35,16 +35,20 @@ export function AddServerModal({
   onClose,
   onAdded,
   onFailedClose,
+  initial,
 }: {
   onClose: () => void;
   onAdded: (target: Target) => void;
   onFailedClose?: (target: Target) => void;
+  // initial pre-fills the form (Network discovery's "Add as server": the address or host name found on the network).
+  // The port stays the SSH port: the port a certificate was found on is not how Alice signs in to the server.
+  initial?: { name?: string; host?: string };
 }) {
   const { t } = useTranslation();
   const client = useQueryClient();
   const [type, setType] = useState<ServerType>('linux');
-  const [name, setName] = useState('');
-  const [host, setHost] = useState('');
+  const [name, setName] = useState(initial?.name ?? '');
+  const [host, setHost] = useState(initial?.host ?? '');
   const [port, setPort] = useState<number | string>(22);
   const [username, setUsername] = useState('alice-svc');
   const [phase, setPhase] = useState<Phase>('form');
