@@ -607,11 +607,11 @@ func TestSummary(t *testing.T) {
 	// An excluded place is never dialed, and a place of a deleted scope is not scanned: neither is "still found".
 	cert(fp('f'), t0.AddDate(0, 0, 6))
 	endpoint("10.0.1.6", fp('f'), "excluded")
-	cert(fp('g'), t0.AddDate(0, 0, 7))
+	cert(fp('9'), t0.AddDate(0, 0, 7))
 	deleted := uuid.New()
 	w.exec(`INSERT INTO discovery_scopes (id, name, entries, ports, deleted_at, created_at, updated_at) VALUES ($1, 'old', '["10.0.9.0/24"]', '{443}', $2, $2, $2)`, deleted, t0)
 	w.exec(`INSERT INTO discovery_endpoints (id, scope_id, address, port, sni, fingerprint_sha256, state, first_seen, last_seen, last_scanned_at,
-    tls_version, cipher) VALUES ($1, $2, '10.0.9.1', 443, '', $3, 'present', $4, $4, $4, 'TLS 1.3', 'TLS_AES_128_GCM_SHA256')`, uuid.New(), deleted, fp('g'), t0)
+    tls_version, cipher) VALUES ($1, $2, '10.0.9.1', 443, '', $3, 'present', $4, $4, $4, 'TLS 1.3', 'TLS_AES_128_GCM_SHA256')`, uuid.New(), deleted, fp('9'), t0)
 	scan, err := w.svc.StartScan(w.ctx, w.op, v.ID)
 	require.NoError(t, err)
 	w.exec(`UPDATE discovery_scans SET state = 'running', started_at = $1 WHERE id = $2`, t0, scan.ID)
@@ -632,7 +632,7 @@ func TestSummary(t *testing.T) {
 	assert.Len(t, soon, s.UnmanagedExpiring30d)
 	every, _, err := w.svc.ListCertificates(w.ctx, discovery.CertificateFilter{Status: discovery.StatusUnmanaged, Limit: 200})
 	require.NoError(t, err)
-	assert.Len(t, every, 4, "without current the gone-only certificate stays listed until retention")
+	assert.Len(t, every, 6, "without current the gone-only, excluded-only and deleted-scope certificates stay listed until retention")
 }
 
 // insertCert and insertEndpoint put read-side rows in place (the scanner's work in production).
