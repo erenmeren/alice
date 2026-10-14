@@ -316,3 +316,38 @@ func TestControlHandler(t *testing.T) {
 	code, _ = get("/nope")
 	assert.Equal(t, http.StatusNotFound, code)
 }
+
+// The valid server's own certificate and key: an e2e journey stores exactly the certificate the fleet presents in
+// Alice's inventory, so a discovered certificate shows as known to Alice.
+func TestControlHandlerValidPair(t *testing.T) {
+	f := sharedFleet(t)
+	srv := httptest.NewServer(f.ControlHandler())
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/valid-pair") //nolint:gosec,noctx // a test server
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var pair struct {
+		CertificatePEM string `json:"certificate_pem"`
+		PrivateKeyPEM  string `json:"private_key_pem"`
+	}
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&pair))
+	_, err = tls.X509KeyPair([]byte(pair.CertificatePEM), []byte(pair.PrivateKeyPEM))
+	require.NoError(t, err, "the key belongs to the leaf")
+	var chain [][]byte
+	for rest := []byte(pair.CertificatePEM); ; {
+		var blk *pem.Block
+		if blk, rest = pem.Decode(rest); blk == nil {
+			break
+		}
+		chain = append(chain, blk.Bytes)
+	}
+	assert.Equal(t, f.Server(KindValid).Chain(), chain, "the chain the valid server presents, leaf first")
+
+	other, err := New(Options{Kinds: []Kind{KindPlainText}})
+	require.NoError(t, err)
+	defer func() { _ = other.Close() }()
+	rec := httptest.NewRecorder()
+	other.ControlHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/valid-pair", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code, "a fleet without the valid server has no pair")
+}

@@ -67,7 +67,7 @@ Commands:
         tls13 rsa-kex sha1 slow-loris giant-chain huge-chain reset plaintext many-sni malformed
   ctl [--ctl ADDR] <command>
         Drive a running fleet (JSON on stdout, errors on stderr, exit 1 on failure):
-        ping | fleet | ca | log [--settle] | clear-log | counters
+        ping | fleet | ca | log [--settle] | clear-log | counters | valid-pair
 `
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -286,6 +286,8 @@ var ctlCommands = map[string][2]string{
 	"log":       {http.MethodGet, "/log"},
 	"clear-log": {http.MethodPost, "/log/clear"},
 	"counters":  {http.MethodGet, "/counters"},
+	// The valid server's chain and its throw-away key: an e2e journey stores that certificate in Alice's inventory.
+	"valid-pair": {http.MethodGet, "/valid-pair"},
 }
 
 func runCtl(ctx context.Context, args []string, stdout, stderr io.Writer) int {

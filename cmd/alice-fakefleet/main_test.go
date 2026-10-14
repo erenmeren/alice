@@ -194,6 +194,17 @@ func TestServeAndCtl(t *testing.T) {
 	require.Equal(t, 0, code)
 	assert.Contains(t, out, `"valid":1`)
 
+	code, out, _ = ctl(t, st, "valid-pair")
+	require.Equal(t, 0, code)
+	var pair struct {
+		CertificatePEM string `json:"certificate_pem"`
+		PrivateKeyPEM  string `json:"private_key_pem"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &pair))
+	_, err = tls.X509KeyPair([]byte(pair.CertificatePEM), []byte(pair.PrivateKeyPEM))
+	require.NoError(t, err, "the valid server's certificate and its key")
+	assert.NotContains(t, st.logs.String(), "PRIVATE KEY", "the key goes to the ctl caller only, never to the log")
+
 	code, _, _ = ctl(t, st, "clear-log")
 	assert.Equal(t, 0, code)
 	_, out, _ = ctl(t, st, "log")
