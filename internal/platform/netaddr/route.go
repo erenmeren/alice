@@ -37,13 +37,23 @@ func readGateways(v4, v6 string) ([]netip.Addr, error) {
 	return append(out, parseIPv6Gateways(string(b))...), nil
 }
 
-// parseIPv4Gateways reads /proc/net/route: the gateway of every default route (destination and mask
-// 0), which the kernel prints as the hexadecimal of the in-memory network-order word.
+// rtfGateway is the kernel's RTF_GATEWAY route flag: the route goes through a gateway.
+const rtfGateway = 0x2
+
+// viaGateway reports whether a route is a default route or its hexadecimal flags field has RTF_GATEWAY.
+func viaGateway(field string, isDefault bool) bool {
+	flags, err := strconv.ParseUint(field, 16, 32)
+	return isDefault || (err == nil && flags&rtfGateway != 0)
+}
+
+// parseIPv4Gateways reads /proc/net/route: the non-zero gateway of every default route (destination
+// and mask 0) and of every other route through a gateway (RTF_GATEWAY). The kernel prints an address
+// as the hexadecimal of the in-memory network-order word.
 func parseIPv4Gateways(s string) []netip.Addr {
 	var out []netip.Addr
 	for line := range strings.SplitSeq(s, "\n") {
 		f := strings.Fields(line)
-		if len(f) < 8 || f[1] != "00000000" || f[7] != "00000000" || len(f[2]) != 8 {
+		if len(f) < 8 || len(f[2]) != 8 || !viaGateway(f[3], f[1] == "00000000" && f[7] == "00000000") {
 			continue
 		}
 		v, err := strconv.ParseUint(f[2], 16, 32)
@@ -57,13 +67,17 @@ func parseIPv4Gateways(s string) []netip.Addr {
 	return out
 }
 
-// parseIPv6Gateways reads /proc/net/ipv6_route: the next hop of every default route (destination
-// ::/0) that has one.
+// parseIPv6Gateways reads /proc/net/ipv6_route: the non-zero next hop of every default route
+// (destination ::/0) and of every other route through a gateway (RTF_GATEWAY, the ninth field).
 func parseIPv6Gateways(s string) []netip.Addr {
 	var out []netip.Addr
 	for line := range strings.SplitSeq(s, "\n") {
 		f := strings.Fields(line)
-		if len(f) < 5 || f[0] != "00000000000000000000000000000000" || f[1] != "00" || len(f[4]) != 32 {
+		if len(f) < 5 || len(f[4]) != 32 {
+			continue
+		}
+		isDefault := f[0] == "00000000000000000000000000000000" && f[1] == "00"
+		if !isDefault && (len(f) < 9 || !viaGateway(f[8], false)) {
 			continue
 		}
 		b, err := hex.DecodeString(f[4])

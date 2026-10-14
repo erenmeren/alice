@@ -94,7 +94,10 @@ func TestScanPolicyEverySpelling(t *testing.T) {
 		// Reserved: this network, 240/4, broadcast, IETF protocol assignments, the old 6to4 relay
 		// anycast, the IPv6 discard prefix and the IETF protocol range of 2001::/23.
 		"0.1.2.3": false, "240.0.0.1": false, "255.255.255.255": false, "192.0.0.8": false, "192.88.99.1": false,
-		"100::1": false, "2001:2::1": false, "2001:10::1": false,
+		"100::1": false, "2001:1::1": false, "2001:2::1": false, "2001:10::1": false,
+		// Cloud metadata services that are not link-local: GCP over IPv6, Azure WireServer.
+		"fd20:ce::254": false, "168.63.129.16": false, "::ffff:168.63.129.16": false, "64:ff9b::a83f:8110": false,
+		"168.63.129.17": true, "fd20:ce::255": true,
 		// CGNAT, benchmarking, documentation.
 		"100.64.0.1": false, "100.127.255.254": false, "::ffff:100.64.0.1": false, "64:ff9b::6440:1": false,
 		"198.18.0.1": false, "198.19.255.254": false, "2002:c612:1::1": false,
@@ -121,7 +124,7 @@ func TestScanPolicyEverySpelling(t *testing.T) {
 		"10.1.2.4": true, "10.1.2.2": true, "10.1.2.51": true, "10.8.1.7": true, "10.7.7.8": true, "10.10.0.1": true,
 		"172.16.0.1": true, "192.168.1.10": true, "8.8.8.8": true, "100.63.255.255": true, "100.128.0.0": true,
 		"198.17.255.255": true, "198.20.0.0": true, "::ffff:10.1.2.4": true, "64:ff9b::a01:204": true,
-		"2002:a01:204::1": true, "fd12::4": true, "2a00:1450:4001::1": true, "2001:1::1": false, "2001:200::1": true,
+		"2002:a01:204::1": true, "fd12::4": true, "2a00:1450:4001::1": true, "2001:200::1": true,
 	} {
 		err := p.CheckScan(netip.MustParseAddr(a))
 		if want {
@@ -158,10 +161,17 @@ func FuzzAllowedForScan(f *testing.F) {
 		a := netip.MustParseAddr(s).As16()
 		f.Add(a[:])
 	}
+	f.Add([]byte{127, 0, 0, 1})
+	f.Add([]byte{168, 63, 129, 16})
 	f.Fuzz(func(t *testing.T, b []byte) {
-		var a16 [16]byte
-		copy(a16[:], b)
-		a := netip.AddrFrom16(a16)
+		var a netip.Addr
+		if len(b) == 4 {
+			a = netip.AddrFrom4([4]byte(b))
+		} else {
+			var a16 [16]byte
+			copy(a16[:], b)
+			a = netip.AddrFrom16(a16)
+		}
 		if netaddr.AllowedForScan(a) && !netaddr.Allowed(a) {
 			t.Fatalf("%s allowed for scan but not Allowed", a)
 		}
@@ -194,6 +204,20 @@ func TestScanPolicyAllowedNetworks(t *testing.T) {
 			assert.ErrorIs(t, err, netaddr.ErrScanRefused, a)
 		}
 	}
+
+	// An allow-listed NAT64 or 6to4 prefix opens only the IPv4 addresses that are allow-listed too.
+	xlat := policy(t, []string{"64:ff9b::/96", "2002::/16", "10.0.0.0/8"})
+	for a, want := range map[string]bool{
+		"64:ff9b::a01:204": true, "2002:a01:204::1": true,
+		"64:ff9b::808:808": false, "2002:808:808::1": false, "64:ff9b::c0a8:101": false,
+	} {
+		err := xlat.CheckScan(netip.MustParseAddr(a))
+		if want {
+			assert.NoError(t, err, a)
+		} else {
+			assert.ErrorIs(t, err, netaddr.ErrScanRefused, a)
+		}
+	}
 }
 
 func TestNewScanPolicyRefusesBadInputs(t *testing.T) {
@@ -210,6 +234,15 @@ func TestNewScanPolicyRefusesBadInputs(t *testing.T) {
 	require.Error(t, bad(func(in *netaddr.ScanPolicyInputs) { in.DatabaseURL = "" }), "no database URL")
 	err := bad(func(in *netaddr.ScanPolicyInputs) { in.DatabaseURL = "postgres://u:hunter2@[::1" })
 	require.Error(t, err, "unparsable database URL")
+	for _, mapped := range []string{"::ffff:0:0/95", "::ffff:0:0/80", "::ffff:10.0.0.0/64"} {
+		pfx := netip.MustParsePrefix(mapped)
+		require.Error(t, bad(func(in *netaddr.ScanPolicyInputs) { in.AllowedNetworks = []netip.Prefix{pfx} }), "allowed %s", mapped)
+		require.Error(t, bad(func(in *netaddr.ScanPolicyInputs) { in.GlobalExclusions = []netip.Prefix{pfx} }), "global %s", mapped)
+		require.Error(t, bad(func(in *netaddr.ScanPolicyInputs) { in.ScopeExclusions = []netip.Prefix{pfx} }), "scope %s", mapped)
+	}
+	require.Error(t, bad(func(in *netaddr.ScanPolicyInputs) {
+		in.LookupHost = func(context.Context, string) ([]netip.Addr, error) { return nil, nil }
+	}), "a database host that resolves to no address: fail closed")
 	assert.NotContains(t, err.Error(), "hunter2", "the error never carries the DSN")
 	require.Error(t, bad(func(in *netaddr.ScanPolicyInputs) { in.DatabaseURL = "postgres://u@nowhere.alice.test/db" }),
 		"a database host that does not resolve: the policy cannot be built")

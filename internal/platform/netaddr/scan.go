@@ -36,7 +36,8 @@ const DefaultScanRefresh = 2 * time.Second
 
 // scanBuiltins never hold a host discovery may scan, whatever the settings: loopback, unspecified,
 // link-local (the cloud metadata address included), multicast, reserved and special-purpose ranges,
-// CGNAT, benchmarking and documentation ranges, the AWS IPv6 metadata address, and the IPv6 forms
+// CGNAT, benchmarking and documentation ranges, the cloud metadata services that are not link-local
+// (AWS fd00:ec2::254, GCP fd20:ce::254, Azure WireServer 168.63.129.16), and the IPv6 forms
 // whose embedded IPv4 address Alice cannot locate or check: the local-use NAT64 range (its prefix
 // length is the operator's choice), IPv4-compatible and IPv4-translated addresses, and the IETF
 // protocol range 2001::/23, Teredo included (refused as a whole: its embedded addresses are a
@@ -47,7 +48,7 @@ var scanBuiltins = func() []netip.Prefix {
 		"0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24",
 		"192.88.99.0/24", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
 		"::/128", "::1/128", "fe80::/10", "ff00::/8", "100::/64", "2001::/23", "2001:db8::/32", "3fff::/20",
-		"fd00:ec2::254/128", "64:ff9b:1::/48", "::/96", "::ffff:0:0:0/96",
+		"fd00:ec2::254/128", "fd20:ce::254/128", "168.63.129.16/32", "64:ff9b:1::/48", "::/96", "::ffff:0:0:0/96",
 	} {
 		out = append(out, netip.MustParsePrefix(s))
 	}
@@ -181,14 +182,18 @@ func NewScanPolicy(ctx context.Context, in ScanPolicyInputs) (ScanPolicy, error)
 	return p, nil
 }
 
-// canonicalPrefixes masks every prefix and turns an IPv4-mapped prefix into its IPv4 one.
+// canonicalPrefixes masks every prefix and turns an IPv4-mapped prefix into its IPv4 one. A mapped
+// prefix shorter than /96 mixes IPv4 and IPv6 space and is refused.
 func canonicalPrefixes(what string, in []netip.Prefix) ([]netip.Prefix, error) {
 	out := make([]netip.Prefix, 0, len(in))
 	for _, p := range in {
 		if !p.IsValid() || p.Addr().Zone() != "" {
 			return nil, fmt.Errorf("netaddr: invalid %s %q", what, p)
 		}
-		if p.Addr().Is4In6() && p.Bits() >= 96 {
+		if p.Addr().Is4In6() {
+			if p.Bits() < 96 {
+				return nil, fmt.Errorf("netaddr: invalid %s %q: an IPv4-mapped prefix needs at least 96 bits", what, p)
+			}
 			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
 		}
 		out = append(out, p.Masked())
@@ -232,8 +237,9 @@ func (p *scanPolicy) hostAddrs() (map[netip.Addr]bool, error) {
 func refuse(a netip.Addr, why string) error { return fmt.Errorf("%w: %s (%s)", ErrScanRefused, a, why) }
 
 // CheckScan applies the whole rule: built-ins, the database hosts, Alice's own addresses and
-// gateways, the Admin's and the scope's exclusions (each also against the IPv4 address a NAT64 or
-// 6to4 address embeds), then the Admin's allowlist (against the address connected).
+// gateways, the Admin's and the scope's exclusions, then the Admin's allowlist; each against the
+// address connected and the IPv4 address a NAT64 or 6to4 address embeds (an allow-listed NAT64 or
+// 6to4 prefix opens only the IPv4 addresses that are allow-listed too).
 func (p *scanPolicy) CheckScan(a netip.Addr) error {
 	if !a.IsValid() || a.Zone() != "" || !AllowedForScan(a) {
 		return refuse(a, "never scanned")
@@ -253,8 +259,10 @@ func (p *scanPolicy) CheckScan(a netip.Addr) error {
 			return refuse(a, "excluded")
 		}
 	}
-	if !inAny(u, p.allowed) {
-		return refuse(a, "outside the allowed scan networks")
+	for _, c := range scanCandidates(u) {
+		if !inAny(c, p.allowed) {
+			return refuse(a, "outside the allowed scan networks")
+		}
 	}
 	return nil
 }
@@ -293,6 +301,9 @@ func databaseAddrs(ctx context.Context, dsn string, lookup func(context.Context,
 		as, err := lookup(ctx, h)
 		if err != nil {
 			return nil, fmt.Errorf("netaddr: the database host %q does not resolve: %w", h, err)
+		}
+		if len(as) == 0 {
+			return nil, fmt.Errorf("netaddr: the database host %q resolves to no address", h)
 		}
 		out = append(out, as...)
 	}
