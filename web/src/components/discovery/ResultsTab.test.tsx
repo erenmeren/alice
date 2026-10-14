@@ -8,11 +8,13 @@ import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
 import { resultQuery } from './ResultsTab';
 
-const blank = { status: '', expiry: '', self_signed: '', scope_id: '', q: '', view: '' };
+const blank = { status: '', expiry: '', self_signed: '', scope_id: '', found: '', q: '', view: '' };
 
 describe('resultQuery', () => {
   it('reads the address, ignoring values that are not options', () => {
-    expect(resultQuery(blank)).toEqual({ status: 'all', query: { status: 'all', expired: undefined, expiring_within_days: undefined, self_signed: undefined, scope_id: undefined, q: undefined }, filtered: false });
+    expect(resultQuery(blank)).toEqual({ status: 'all', query: { status: 'all', current: true, expired: undefined, expiring_within_days: undefined, self_signed: undefined, scope_id: undefined, q: undefined }, filtered: false });
+    expect(resultQuery({ ...blank, found: 'all' })).toMatchObject({ query: { current: false }, filtered: true });
+    expect(resultQuery({ ...blank, found: 'bogus' }).query.current).toBe(true);
     expect(resultQuery({ ...blank, view: 'unmanaged' }).status).toBe('unmanaged');
     expect(resultQuery({ ...blank, view: 'unmanaged', status: 'all' }).status).toBe('all');
     expect(resultQuery({ ...blank, status: 'bogus', expiry: '13', self_signed: 'maybe' }).filtered).toBe(false);
@@ -26,8 +28,8 @@ describe('resultQuery', () => {
 describe('Network discovery results', () => {
   const certificates = [
     discoveredCertificateFixture(),
-    discoveredCertificateFixture({ fingerprint_sha256: 'b2'.repeat(32), subject_cn: '', sans: ['san-only.example.test', 'a.test', 'b.test', 'c.test', 'd.test'], status: 'managed', managed_certificate_id: 'mc1', endpoint_count: 1, expired: true, not_after: '2020-01-01T00:00:00Z', self_signed: true }),
-    discoveredCertificateFixture({ fingerprint_sha256: 'c3'.repeat(32), subject_cn: '', sans: [], status: 'known', issuer_cn: '' }),
+    discoveredCertificateFixture({ fingerprint_sha256: 'b2'.repeat(32), subject_cn: '', sans: ['san-only.example.test', 'a.test', 'b.test', 'c.test', 'd.test'], status: 'managed', managed_certificate_id: 'mc1', endpoint_count: 1, seen_on_count: 1, expired: true, not_after: '2020-01-01T00:00:00Z', self_signed: true }),
+    discoveredCertificateFixture({ fingerprint_sha256: 'c3'.repeat(32), subject_cn: '', sans: [], status: 'known', issuer_cn: '', endpoint_count: 0, seen_on_count: 0 }),
   ];
 
   it('lists each certificate with its names, issuer, expiry, places and status chips with text', async () => {
@@ -46,10 +48,14 @@ describe('Network discovery results', () => {
     expect(within(second).getByText('a.test, b.test, c.test …')).toBeInTheDocument();
     expect(within(second).getByText('1 endpoint')).toBeInTheDocument();
     expect(within(second).getByText('Managed')).toBeInTheDocument();
-    expect(within(second).getAllByText('Expired').length).toBeGreaterThan(0);
+    // The expiry badge says Expired; the status column has no second Expired chip.
+    expect(within(second).getAllByText('Expired')).toHaveLength(1);
     expect(within(second).getByText('Self-signed')).toBeInTheDocument();
     expect(within(third).getByRole('button', { name: '(no name)' })).toBeInTheDocument();
     expect(within(third).getByText('Known')).toBeInTheDocument();
+    expect(within(third).getByText('No longer found')).toBeInTheDocument();
+    expect(within(third).queryByText(/endpoint/)).not.toBeInTheDocument();
+    expect(within(first).queryByText('No longer found')).not.toBeInTheDocument();
     // The A10 explanation of "unmanaged".
     expect(screen.getByText(/Alice has no record of this exact certificate/)).toBeInTheDocument();
     expect(screen.getByText(/on a proxy or a load balancer, is still unmanaged/)).toBeInTheDocument();
@@ -63,6 +69,7 @@ describe('Network discovery results', () => {
     const last = () => requests(seen, 'GET', '/api/v1/discovery/certificates').at(-1)!.search;
     expect(last().get('status')).toBe('unmanaged');
     expect(last().get('expiring_within_days')).toBe('30');
+    expect(last().get('current')).toBe('true');
     expect(screen.getByRole('combobox', { name: 'Status' })).toHaveValue('unmanaged');
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Status' }), 'all');
     await waitFor(() => expect(last().get('status')).toBeNull());
@@ -76,6 +83,8 @@ describe('Network discovery results', () => {
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Expiry' }), 'expired');
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Signed by' }), 'true');
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Scope' }), 'Data centre');
+    expect(requests(seen, 'GET', '/api/v1/discovery/certificates').at(-1)!.search.get('current')).toBe('true');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Found' }), 'all');
     await userEvent.type(screen.getByRole('textbox', { name: 'Search' }), 'legacy');
     await waitFor(() => expect(router.state.location.search).toContain('q=legacy'), { timeout: 5000 });
     await waitFor(() => expect(requests(seen, 'GET', '/api/v1/discovery/certificates').at(-1)!.search.get('q')).toBe('legacy'), { timeout: 5000 });
@@ -84,6 +93,7 @@ describe('Network discovery results', () => {
     expect(last.get('self_signed')).toBe('true');
     expect(last.get('scope_id')).toBeTruthy();
     expect(last.get('q')).toBe('legacy');
+    expect(last.get('current')).toBeNull();
     await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
     expect(router.state.location.search).toBe('');
     expect(screen.getByRole('textbox', { name: 'Search' })).toHaveValue('');
@@ -130,7 +140,7 @@ describe('Network discovery results', () => {
     discoveryWorld({ certificates: [discoveredCertificateFixture({ endpoints, more_endpoints: true })] });
     await renderRoute('/discovery');
     await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
-    const drawer = await screen.findByRole('dialog', { name: 'Certificate found on the network' });
+    const drawer = await screen.findByRole('dialog', { name: 'Found on the network: legacy.example.test' });
     const items = await within(drawer).findAllByTestId('discovery-endpoint');
     expect(items).toHaveLength(2);
     expect(within(items[0]).getByText('10.0.1.20:443')).toBeInTheDocument();
@@ -153,7 +163,7 @@ describe('Network discovery results', () => {
     discoveryWorld({ certificates: [discoveredCertificateFixture({ status: 'managed', managed_certificate_id: 'mc1', endpoints: [] })] });
     await renderRoute('/discovery');
     await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
-    const drawer = await screen.findByRole('dialog', { name: 'Certificate found on the network' });
+    const drawer = await screen.findByRole('dialog', { name: /^Found on the network: / });
     expect(await within(drawer).findByRole('link', { name: 'Open this certificate in Alice' })).toHaveAttribute('href', '/certificates/mc1');
     expect(within(drawer).getByText('No endpoint presents this certificate now.')).toBeInTheDocument();
   });
@@ -164,7 +174,7 @@ describe('Network discovery results', () => {
     await renderRoute('/discovery');
     const name = await screen.findByRole('button', { name: 'legacy.example.test' });
     await userEvent.click(name);
-    const drawer = await screen.findByRole('dialog', { name: 'Certificate found on the network' });
+    const drawer = await screen.findByRole('dialog', { name: /^Found on the network: / });
     await userEvent.click(await within(drawer).findByRole('button', { name: 'Add as server: 10.0.1.20:443' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add server' });
     expect(within(dialog).getByRole('textbox', { name: /Address/ })).toHaveValue('legacy.example.test');
@@ -180,16 +190,27 @@ describe('Network discovery results', () => {
     discoveryWorld({ session: sessionFor(role) });
     await renderRoute('/discovery');
     await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
-    const drawer = await screen.findByRole('dialog', { name: 'Certificate found on the network' });
+    const drawer = await screen.findByRole('dialog', { name: /^Found on the network: / });
     expect(await within(drawer).findByText('An administrator can add this server to Alice.')).toBeInTheDocument();
     expect(within(drawer).queryByRole('button', { name: /Add as server/ })).not.toBeInTheDocument();
+  });
+
+  it('moves the focus to the name when a row is clicked, so the drawer gives it back there', async () => {
+    discoveryWorld({ certificates: [discoveredCertificateFixture({ seen_on_count: 0, endpoint_count: 0 })] });
+    await renderRoute('/discovery');
+    const name = await screen.findByRole('button', { name: 'legacy.example.test' });
+    await userEvent.click(within(screen.getByTestId('discovery-result-row')).getByText('Example Issuing CA'));
+    const drawer = await screen.findByRole('dialog', { name: 'Found on the network: legacy.example.test' });
+    expect(await within(drawer).findByText('No longer found')).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(name).toHaveFocus());
   });
 
   it('closes the detail when the person moves to another tab and back', async () => {
     discoveryWorld();
     await renderRoute('/discovery');
     await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
-    await screen.findByRole('dialog', { name: 'Certificate found on the network' });
+    await screen.findByRole('dialog', { name: /^Found on the network: / });
     await userEvent.keyboard('{Escape}');
     await userEvent.click(screen.getByRole('tab', { name: 'Scans' }));
     await userEvent.click(screen.getByRole('tab', { name: 'Results' }));

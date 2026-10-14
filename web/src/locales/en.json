@@ -3444,7 +3444,8 @@
     },
     "chips": {
       "expired": "Expired",
-      "selfSigned": "Self-signed"
+      "selfSigned": "Self-signed",
+      "gone": "No longer found"
     },
     "results": {
       "label": "Certificates found on the network",
@@ -3478,7 +3479,10 @@
       "noResultsText": "Start a scan of a scope on the Scans tab. The certificates it finds appear here.",
       "noResultsRead": "The certificates found by the scans of a scope appear here.",
       "noMatch": "No certificate matches these filters",
-      "noMatchText": "Change or clear the filters to see more."
+      "noMatchText": "Change or clear the filters to see more.",
+      "found": "Found",
+      "foundCurrent": "Still found",
+      "foundAll": "Include no longer found"
     },
     "drawer": {
       "title": "Certificate found on the network",
@@ -3509,7 +3513,8 @@
       "addServer": "Add as server",
       "addServerLabel": "Add as server: {{address}}",
       "addServerHelp": "Opens the Add server dialog with this address filled in. A new server counts toward your license; Alice checks the license when you add it.",
-      "adminAdds": "An administrator can add this server to Alice."
+      "adminAdds": "An administrator can add this server to Alice.",
+      "titleNamed": "Found on the network: {{name}}"
     },
     "scopes": {
       "title": "Scan scopes",

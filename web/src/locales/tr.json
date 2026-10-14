@@ -3444,7 +3444,8 @@
     },
     "chips": {
       "expired": "Süresi doldu",
-      "selfSigned": "Kendinden imzalı"
+      "selfSigned": "Kendinden imzalı",
+      "gone": "Artık bulunmuyor"
     },
     "results": {
       "label": "Ağda bulunan sertifikalar",
@@ -3478,7 +3479,10 @@
       "noResultsText": "Taramalar sekmesinde bir kapsamın taramasını başlatın. Bulunan sertifikalar burada görünür.",
       "noResultsRead": "Bir kapsamın taramalarında bulunan sertifikalar burada görünür.",
       "noMatch": "Bu filtrelere uyan sertifika yok",
-      "noMatchText": "Daha fazlasını görmek için filtreleri değiştirin ya da temizleyin."
+      "noMatchText": "Daha fazlasını görmek için filtreleri değiştirin ya da temizleyin.",
+      "found": "Bulunma",
+      "foundCurrent": "Hâlâ bulunanlar",
+      "foundAll": "Artık bulunmayanlar dahil"
     },
     "drawer": {
       "title": "Ağda bulunan sertifika",
@@ -3509,7 +3513,8 @@
       "addServer": "Sunucu olarak ekle",
       "addServerLabel": "Sunucu olarak ekle: {{address}}",
       "addServerHelp": "Sunucu ekleme penceresini bu adres doldurulmuş olarak açar. Yeni bir sunucu lisansınızdan sayılır; Alice lisansı sunucuyu eklediğinizde denetler.",
-      "adminAdds": "Bu sunucuyu Alice'e bir yönetici ekleyebilir."
+      "adminAdds": "Bu sunucuyu Alice'e bir yönetici ekleyebilir.",
+      "titleNamed": "Ağda bulunan: {{name}}"
     },
     "scopes": {
       "title": "Tarama kapsamları",

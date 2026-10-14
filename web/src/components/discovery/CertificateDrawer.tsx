@@ -7,13 +7,14 @@ import { keyAlgorithmKey } from '../../api/enums';
 import { discoveredCertificateKey } from '../../api/queryKeys';
 import { formatDateTime } from '../../datetime';
 import { Icon } from '../../design/Icon';
+import { CodeText } from '../CodeText';
 import { ErrorAlert } from '../ErrorAlert';
 import { Expiry } from '../Expiry';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { FactList, StatusBadge } from '../ui';
 import { WRAP } from '../wrap';
 import classes from './discovery.module.css';
-import { endpointIcon, endpointTone, StatusChip, useDiscoveryRole } from './shared';
+import { endpointIcon, endpointTone, GoneChip, StatusChip, useDiscoveryRole } from './shared';
 
 // The host a server would be added with: the name the scope listed, else the address.
 export const hostOf = (e: Pick<DiscoveredEndpoint, 'host' | 'address'>) => e.host || e.address;
@@ -21,7 +22,7 @@ export const hostOf = (e: Pick<DiscoveredEndpoint, 'host' | 'address'>) => e.hos
 // CertificateDrawer is one certificate found on the network: what it is, what Alice knows of it, and every place
 // (address, port and server name) that presents it, with the server in Alice it belongs to. An Administrator can add a
 // place that is not a server in Alice yet through the usual Add server dialog (the license decides there).
-export function CertificateDrawer({ fingerprint, onClose, onAddServer }: { fingerprint: string | null; onClose: () => void; onAddServer: (e: DiscoveredEndpoint) => void }) {
+export function CertificateDrawer({ fingerprint, name, onClose, onAddServer }: { fingerprint: string | null; name: string; onClose: () => void; onAddServer: (e: DiscoveredEndpoint) => void }) {
   const { t } = useTranslation();
   const detail = useQuery({
     queryKey: discoveredCertificateKey(fingerprint ?? ''),
@@ -34,7 +35,7 @@ export function CertificateDrawer({ fingerprint, onClose, onAddServer }: { finge
       onClose={onClose}
       position="right"
       size="lg"
-      title={t('discovery.drawer.title')}
+      title={name ? <CodeText i18nKey="discovery.drawer.titleNamed" param="name" value={name} /> : t('discovery.drawer.title')}
       closeButtonProps={{ 'aria-label': t('ui.close') }}
       data-testid="discovery-drawer"
     >
@@ -59,6 +60,7 @@ function Detail({ c, onAddServer }: { c: DiscoveredCertificate; onAddServer: (e:
               {t('discovery.chips.expired')}
             </StatusBadge>
           )}
+          {c.seen_on_count === 0 && <GoneChip />}
           {c.self_signed && (
             <StatusBadge tone="neutral" icon="Fingerprint" size="sm">
               {t('discovery.chips.selfSigned')}

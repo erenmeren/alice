@@ -192,9 +192,9 @@ describe('the discovery client', () => {
 
   it('sends the certificate filters to the list and the same ones to the export', async () => {
     const seen = capture();
-    const filters: d.CertificateQuery = { status: 'unmanaged', expiring_within_days: 30, self_signed: true, q: ' web ', scope_id: 's1' };
+    const filters: d.CertificateQuery = { status: 'unmanaged', expiring_within_days: 30, self_signed: true, current: true, q: ' web ', scope_id: 's1' };
     await d.listDiscoveredCertificates({ ...filters, cursor: 'k', limit: 50 });
-    await d.listDiscoveredCertificates({ status: 'all', expired: true });
+    await d.listDiscoveredCertificates({ status: 'all', expired: true, current: false });
     const blob = await d.exportDiscoveredCertificates(filters);
     await d.getDiscoveredCertificate('ab'.repeat(32));
     await d.listDiscoveredEndpoints({ scope_id: 's1', fingerprint: 'cd', cursor: 'e', limit: 20 });
@@ -202,9 +202,9 @@ describe('the discovery client', () => {
     await d.putDiscoverySettings({ allowed_networks: ['10.0.0.0/16'], global_exclusions: [], retention_days: 90 });
     await d.getDiscoverySummary();
     expect(seen.map((s) => `${s.method} ${s.path}`)).toEqual([
-      'GET /api/v1/discovery/certificates?status=unmanaged&expiring_within_days=30&self_signed=true&q=web&scope_id=s1&cursor=k&limit=50',
+      'GET /api/v1/discovery/certificates?status=unmanaged&expiring_within_days=30&self_signed=true&current=true&q=web&scope_id=s1&cursor=k&limit=50',
       'GET /api/v1/discovery/certificates?expired=true',
-      'GET /api/v1/discovery/certificates/export?status=unmanaged&expiring_within_days=30&self_signed=true&q=web&scope_id=s1',
+      'GET /api/v1/discovery/certificates/export?status=unmanaged&expiring_within_days=30&self_signed=true&current=true&q=web&scope_id=s1',
       `GET /api/v1/discovery/certificates/${'ab'.repeat(32)}`,
       'GET /api/v1/discovery/endpoints?scope_id=s1&fingerprint=cd&cursor=e&limit=20',
       'GET /api/v1/discovery/settings',

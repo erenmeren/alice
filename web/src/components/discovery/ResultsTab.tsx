@@ -27,11 +27,14 @@ import ui from '../ui/ui.module.css';
 import { WRAP } from '../wrap';
 import { CertificateDrawer, hostOf } from './CertificateDrawer';
 import classes from './discovery.module.css';
-import { StatusChip, useDiscoveryRole } from './shared';
+import { GoneChip, StatusChip, useDiscoveryRole } from './shared';
 
 // The Results filters live in the address, so a link (the Overview's, an alert e-mail's) and the export reproduce the
-// list. view=unmanaged is the link the Overview and the e-mails use: the status filter starts at Unmanaged.
-export const RESULT_FILTER_KEYS = ['status', 'expiry', 'self_signed', 'scope_id', 'q', 'view'] as const;
+// list. view=unmanaged is the link the Overview, the Certificates page and the e-mails use: the status filter starts at
+// Unmanaged. The list shows the certificates still found (an endpoint that is not gone presents or last presented them:
+// the definition of the summary's counts, so a link's number and its list agree); found=all includes the ones no longer
+// found, which stay until retention removes them.
+export const RESULT_FILTER_KEYS = ['status', 'expiry', 'self_signed', 'scope_id', 'found', 'q', 'view'] as const;
 const EXPIRY_DAYS = ['7', '14', '30', '60', '90'] as const;
 
 // resultQuery is what the address asks for, with values that are not options ignored (the selects never say "all"
@@ -40,15 +43,17 @@ export function resultQuery(f: Record<(typeof RESULT_FILTER_KEYS)[number], strin
   const status: DiscoveredStatusFilter = (STATUS_FILTERS as readonly string[]).includes(f.status) ? (f.status as DiscoveredStatusFilter) : f.view === 'unmanaged' ? 'unmanaged' : 'all';
   const expiry = f.expiry === 'expired' || (EXPIRY_DAYS as readonly string[]).includes(f.expiry) ? f.expiry : '';
   const selfSigned = f.self_signed === 'true' || f.self_signed === 'false' ? f.self_signed : '';
+  const includeGone = f.found === 'all';
   const query: CertificateQuery = {
     status,
+    current: !includeGone,
     expired: expiry === 'expired' ? true : undefined,
     expiring_within_days: expiry && expiry !== 'expired' ? Number(expiry) : undefined,
     self_signed: selfSigned === '' ? undefined : selfSigned === 'true',
     scope_id: f.scope_id || undefined,
     q: f.q.trim() || undefined,
   };
-  const filtered = status !== 'all' || expiry !== '' || selfSigned !== '' || !!query.scope_id || !!query.q;
+  const filtered = status !== 'all' || expiry !== '' || selfSigned !== '' || includeGone || !!query.scope_id || !!query.q;
   return { status, query, filtered };
 }
 
@@ -68,7 +73,7 @@ export function ResultsTab({ scopes, onAddScope }: { scopes: DiscoveryScope[] | 
     getNextPageParam: nextCursor,
   });
   const items = list.data?.pages.flatMap((p) => p.items) ?? [];
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<{ fingerprint: string; name: string } | null>(null);
   const [adding, setAdding] = useState<DiscoveredEndpoint | null>(null);
   // The row's name opened the drawer; it gets the focus back after the Add server dialog the drawer handed over to.
   const opener = useRef<HTMLButtonElement | null>(null);
@@ -146,6 +151,16 @@ export function ResultsTab({ scopes, onAddScope }: { scopes: DiscoveryScope[] | 
       />
       <NativeSelect
         className={classes.select}
+        label={t('discovery.results.found')}
+        value={query.current ? '' : 'all'}
+        onChange={(e) => setFilters({ found: e.currentTarget.value })}
+        data={[
+          { value: '', label: t('discovery.results.foundCurrent') },
+          { value: 'all', label: t('discovery.results.foundAll') },
+        ]}
+      />
+      <NativeSelect
+        className={classes.select}
         label={t('discovery.results.scope')}
         value={(scopes ?? []).some((s) => s.id === filters.scope_id) ? filters.scope_id : ''}
         onChange={(e) => setFilters({ scope_id: e.currentTarget.value })}
@@ -199,7 +214,7 @@ export function ResultsTab({ scopes, onAddScope }: { scopes: DiscoveryScope[] | 
                     c={c}
                     onOpen={(button) => {
                       opener.current = button;
-                      setSelected(c.fingerprint_sha256);
+                      setSelected({ fingerprint: c.fingerprint_sha256, name: displayName(c) });
                     }}
                   />
                 ))}
@@ -214,7 +229,8 @@ export function ResultsTab({ scopes, onAddScope }: { scopes: DiscoveryScope[] | 
         )}
       </div>
       <CertificateDrawer
-        fingerprint={selected}
+        fingerprint={selected?.fingerprint ?? null}
+        name={selected?.name ?? ''}
         onClose={() => setSelected(null)}
         onAddServer={(e) => {
           setSelected(null);
@@ -238,21 +254,33 @@ export function ResultsTab({ scopes, onAddScope }: { scopes: DiscoveryScope[] | 
   );
 }
 
+// displayName is how a certificate is named in the list and the drawer's title: its CN, else its first SAN.
+export const displayName = (c: Pick<DiscoveredCertificate, 'subject_cn' | 'sans'>) => c.subject_cn || c.sans[0] || '';
+
 function ResultRow({ c, onOpen }: { c: DiscoveredCertificate; onOpen: (button: HTMLButtonElement) => void }) {
   const { t } = useTranslation();
-  const name = c.subject_cn || c.sans[0] || '';
+  const name = displayName(c);
   const others = c.sans.filter((s) => s !== name);
+  const button = useRef<HTMLButtonElement>(null);
+  // The whole row opens the detail for a pointer; the name is the keyboard's (and the screen reader's) way in. A row
+  // click moves the focus to the name first, so the drawer gives it back there.
+  const open = () => {
+    if (!button.current) return;
+    button.current.focus();
+    onOpen(button.current);
+  };
+  const gone = c.seen_on_count === 0;
   return (
-    // The whole row opens the detail for a pointer; the name is the keyboard's (and the screen reader's) way in.
-    <Table.Tr data-testid="discovery-result-row" onClick={(e) => onOpen((e.currentTarget.querySelector('button') as HTMLButtonElement | null) ?? (e.target as HTMLButtonElement))} style={{ cursor: 'pointer' }}>
+    <Table.Tr data-testid="discovery-result-row" onClick={open} style={{ cursor: 'pointer' }}>
       <Table.Td>
         <button
+          ref={button}
           type="button"
           className={classes.nameButton}
           aria-haspopup="dialog"
           onClick={(e) => {
             e.stopPropagation();
-            onOpen(e.currentTarget);
+            open();
           }}
         >
           {name ? (
@@ -281,15 +309,11 @@ function ResultRow({ c, onOpen }: { c: DiscoveredCertificate; onOpen: (button: H
           </span>
         </Stack>
       </Table.Td>
-      <Table.Td className={classes.small}>{t('discovery.results.foundOn', { count: c.endpoint_count })}</Table.Td>
+      <Table.Td className={classes.small}>{gone ? '–' : t('discovery.results.foundOn', { count: c.seen_on_count })}</Table.Td>
       <Table.Td>
         <div className={classes.chips}>
           <StatusChip status={c.status} />
-          {c.expired && (
-            <StatusBadge tone="danger" icon="CircleX" size="sm">
-              {t('discovery.chips.expired')}
-            </StatusBadge>
-          )}
+          {gone && <GoneChip />}
           {c.self_signed && (
             <StatusBadge tone="neutral" icon="Fingerprint" size="sm">
               {t('discovery.chips.selfSigned')}

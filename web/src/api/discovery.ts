@@ -171,6 +171,9 @@ export interface CertificateQuery {
   expiring_within_days?: number;
   expired?: boolean;
   self_signed?: boolean;
+  // current: only certificates still found (an endpoint that is not gone presents or last presented it), the summary's
+  // definition; without it a certificate stays listed until retention removes it.
+  current?: boolean;
   q?: string;
   scope_id?: string;
 }
@@ -286,6 +289,7 @@ function certificateParams(q: CertificateQuery): Record<string, string | number 
     expiring_within_days: q.expiring_within_days,
     expired: q.expired,
     self_signed: q.self_signed,
+    current: q.current ? true : undefined,
     q: q.q?.trim() || undefined,
     scope_id: q.scope_id,
   };

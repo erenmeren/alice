@@ -524,7 +524,7 @@ describe.each(['en', 'tr'] as const)('the network discovery dialogs in %s', (lan
     const t = (en: string, tr: string) => (lang === 'en' ? en : tr);
     const { router } = await renderRoute('/discovery', { languages: [lang] });
     await userEvent.click((await screen.findAllByRole('button', { name: 'legacy.example.test' }))[0]);
-    const drawer = await screen.findByRole('dialog', { name: t('Certificate found on the network', 'Ağda bulunan sertifika') });
+    const drawer = await screen.findByRole('dialog', { name: t('Found on the network: legacy.example.test', 'Ağda bulunan: legacy.example.test') });
     await within(drawer).findByText(t('The server did not complete a TLS handshake.', 'Sunucu bir TLS el sıkışmasını tamamlamadı.'));
     expectNoRawKeys();
     await userEvent.keyboard('{Escape}');

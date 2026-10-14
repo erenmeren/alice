@@ -37,6 +37,16 @@ export function StatusChip({ status }: { status: DiscoveredStatus }) {
   );
 }
 
+// GoneChip: no endpoint that is not gone presents the certificate any more (it stays listed until retention).
+export function GoneChip() {
+  const { t } = useTranslation();
+  return (
+    <StatusBadge tone="neutral" icon="CircleOff" size="sm" data-status="gone">
+      {t('discovery.chips.gone')}
+    </StatusBadge>
+  );
+}
+
 const SCAN_TONE: Record<DiscoveryScanState, Tone> = { queued: 'neutral', running: 'info', done: 'success', cancelled: 'neutral', timed_out: 'warning', failed: 'danger' };
 const SCAN_ICON: Record<DiscoveryScanState, IconName> = { queued: 'Clock3', running: 'RefreshCw', done: 'CircleCheck', cancelled: 'CircleOff', timed_out: 'CircleAlert', failed: 'CircleX' };
 
