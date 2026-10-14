@@ -394,10 +394,16 @@ func triState(raw, field string, v *validate.Errors) *bool {
 	return &b
 }
 
+var (
+	minCursorMicro = time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC).UnixMicro()
+	maxCursorMicro = time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC).UnixMicro()
+)
+
 func parseCertificateCursor(raw string) (discovery.CertificateCursor, bool) {
 	ns, fp, ok := strings.Cut(raw, ".")
 	n, err := strconv.ParseInt(ns, 10, 64)
-	if !ok || err != nil || !fingerprintRE.MatchString(fp) {
+	// Years 1 to 9999: the dates PostgreSQL's timestamptz and the API's RFC 3339 carry; a position outside them was not issued.
+	if !ok || err != nil || !fingerprintRE.MatchString(fp) || n < minCursorMicro || n > maxCursorMicro {
 		return discovery.CertificateCursor{}, false
 	}
 	return discovery.CertificateCursor{NotAfter: time.UnixMicro(n).UTC(), Fingerprint: fp}, true
@@ -643,6 +649,11 @@ func (s *server) putDiscoverySettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.RetentionDays == nil {
 		v.Add("retention_days", validate.Required, nil)
+	}
+	for field, list := range map[string]*[]string{"allowed_networks": req.AllowedNetworks, "global_exclusions": req.GlobalExclusions} {
+		if list != nil && len(*list) > discovery.MaxExclusions {
+			v.Add(field, validate.TooLong, map[string]string{"max": strconv.Itoa(discovery.MaxExclusions)})
+		}
 	}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)

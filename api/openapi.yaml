@@ -4389,8 +4389,8 @@ paths:
       operationId: putDiscoverySettings
       summary: Replace the discovery settings
       description: >-
-        Every field is required. The lists hold IP addresses and CIDR ranges (no host names), at most 256 each, stored in
-        their canonical form; an element that does not parse is 422 ALC-DSC-0003 (params field allowed_networks or
+        Every field is required. The lists hold IP addresses and CIDR ranges (no host names), at most 256 each (more is 400 with the field's too_long
+        validation error), stored in their canonical form; an element that does not parse is 422 ALC-DSC-0003 (params field allowed_networks or
         global_exclusions and the element's index); retention_days is 7 to 730. An empty allowed_networks is valid and means
         nothing may be scanned. Recorded as discovery.exclusions.updated with both lists and their counts. An
         Administrator's browser session with a fresh step-up, never an API token. Works while the license is locked.

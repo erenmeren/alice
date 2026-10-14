@@ -335,7 +335,8 @@ func TestDiscoveryCertificateAndEndpointHandlers(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.False(t, filter.Current)
 	for _, q := range []string{"status=gone", "expiring_within_days=0", "expiring_within_days=3651", "expired=maybe", "self_signed=1", "current=yes",
-		"q=" + strings.Repeat("x", 201), "cursor=" + strings.Repeat("1", 600), "cursor=12.zz", "scope_id=nope"} {
+		"q=" + strings.Repeat("x", 201), "cursor=" + strings.Repeat("1", 600), "cursor=12.zz", "scope_id=nope",
+		"cursor=9223372036854775807." + dscFP, "cursor=-9223372036854775808." + dscFP, "cursor=253402300800000000." + dscFP} {
 		rec = call(h, http.MethodGet, "/api/v1/discovery/certificates?"+q, "auditor", "")
 		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, q)
 	}
@@ -506,6 +507,14 @@ func TestDiscoverySettingsAndSummaryHandlers(t *testing.T) {
 	}
 	rec = call(h, http.MethodPut, "/api/v1/discovery/settings", "admin-stepup", `{"allowed_networks":[],"global_exclusions":[],"retention_days":3}`)
 	assert.Equal(t, "ALC-DSC-0003", decodeErr(t, rec).Error.Code)
+	for _, field := range []string{"allowed_networks", "global_exclusions"} {
+		long := `["` + strings.Repeat(`10.0.0.1","`, 256) + `10.0.0.2"]`
+		body := `{"allowed_networks":[],"global_exclusions":[],"retention_days":30}`
+		rec = call(h, http.MethodPut, "/api/v1/discovery/settings", "admin-stepup", strings.Replace(body, `"`+field+`":[]`, `"`+field+`":`+long, 1))
+		require.Equal(t, http.StatusUnprocessableEntity, rec.Code, field)
+		_, _, details := errorField(t, rec)
+		assert.Equal(t, []string{field}, detailFields(details), "more than 256 entries is a validation error, not 'too large to scan'")
+	}
 	rec = call(h, http.MethodPut, "/api/v1/discovery/settings", "admin", `{"allowed_networks":[],"global_exclusions":[],"retention_days":30}`)
 	assert.Equal(t, "auth.stepup_required", decodeErr(t, rec).Error.Reason)
 
