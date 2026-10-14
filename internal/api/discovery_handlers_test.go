@@ -181,6 +181,16 @@ func TestDiscoveryScopeHandlers(t *testing.T) {
 	rec = call(h, http.MethodPatch, "/api/v1/discovery/scopes/"+dscScopeID.String(), "admin-stepup", `{"name":"y"}`)
 	assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
 
+	// An empty change is refused before the service (Task 9 review 8).
+	f.UpdateScopeFn = func(context.Context, uuid.UUID, *int, discoverysvc.ScopePatch) (discoverysvc.ScopeView, error) {
+		t.Fatal("an empty change reached the service")
+		return discoverysvc.ScopeView{}, nil
+	}
+	rec = call(h, http.MethodPatch, "/api/v1/discovery/scopes/"+dscScopeID.String(), "admin-stepup", `{}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	_, _, details := errorField(t, rec)
+	assert.Equal(t, []string{"body"}, detailFields(details))
+
 	// Delete.
 	f.DeleteScopeFn = func(_ context.Context, id uuid.UUID, v *int) error {
 		assert.Equal(t, dscScopeID, id)

@@ -134,6 +134,7 @@ func TestDiscoveryErrorsMapToTheirCodes(t *testing.T) {
 		{discoverysvc.ErrScopeDisabled, "ALC-DSC-0013", nil, ""},
 		{discoverysvc.ErrNotFound, "ALC-SYS-0001", nil, ""},
 		{discoverysvc.ErrVersion, ErrPreconditionFailed.Code, nil, ""},
+		{fmt.Errorf("x: %w", discoverysvc.ErrLookupBudget), "ALC-SYS-0002", nil, "30"},
 		{fmt.Errorf("dial 10.20.30.40:443: %w", errors.New("boom")), "ALC-SYS-0003", nil, ""},
 	} {
 		var logs strings.Builder

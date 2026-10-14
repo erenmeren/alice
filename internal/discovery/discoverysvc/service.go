@@ -27,6 +27,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/platform/settings"
+	"alice/internal/platform/validate"
 )
 
 // Errors of the service besides the discovery package's (discovery.ErrScopeNotFound ALC-DSC-0008,
@@ -42,6 +43,9 @@ var (
 	ErrTooManyScans = errors.New("discoverysvc: too many scans are active")
 	// ErrScopeDisabled is ALC-DSC-0013: the scope is switched off (it is scanned neither by its schedule nor by hand).
 	ErrScopeDisabled = errors.New("discoverysvc: the scope is switched off")
+	// ErrLookupBudget: the save-time look-ups of the scope's new host names did not all answer within the request's
+	// budget; nothing was decided or saved (503, retry later). Not ALC-DSC-0010: a slow name server is not a missing name.
+	ErrLookupBudget = errors.New("discoverysvc: the host name look-ups did not finish in time")
 	// ErrVersion: the If-Match version is not the scope's.
 	ErrVersion = errors.New("discoverysvc: the scope changed since it was read")
 )
@@ -65,10 +69,12 @@ const (
 // MaxActiveScans is how many scans may be queued or running at once (design decision 1; the runner's cap).
 const MaxActiveScans = 2
 
-// resolveBudget bounds the save-time look-ups of one request together; resolveWorkers how many run at once.
+// defaultResolveBudget bounds the save-time look-ups of one request together; resolveWorkers how many run at once
+// (MaxNewNames names at resolveWorkers at a time take two rounds of discovery.ResolveTimeout at most, so the budget is
+// spent only by a name server slower than that).
 const (
-	resolveBudget  = 15 * time.Second
-	resolveWorkers = 8
+	defaultResolveBudget = 15 * time.Second
+	resolveWorkers       = 8
 )
 
 // startLock is the transaction advisory lock that serialises manual scan starts, so two starts cannot both see one
@@ -107,6 +113,7 @@ type Service struct {
 	clock          clock.Clock
 	resolver       discovery.Resolver
 	resolveTimeout time.Duration
+	resolveBudget  time.Duration
 }
 
 // New builds the service.
@@ -115,7 +122,8 @@ func New(c Config) *Service {
 	if r == nil {
 		r = discovery.SystemResolver
 	}
-	return &Service{pool: c.Pool, audit: c.Audit, queue: c.Queue, clock: c.Clock, resolver: r, resolveTimeout: discovery.ResolveTimeout}
+	return &Service{pool: c.Pool, audit: c.Audit, queue: c.Queue, clock: c.Clock, resolver: r, resolveTimeout: discovery.ResolveTimeout,
+		resolveBudget: defaultResolveBudget}
 }
 
 func (s *Service) now() time.Time { return s.clock.Now().UTC() }
@@ -250,9 +258,21 @@ func (s *Service) SaveSettings(ctx context.Context, a Actor, in Settings) (Setti
 
 // --- the save-time look-up (ALC-DSC-0010) ---
 
+// MaxNewNames is how many host names one save may add (each is looked up at save time).
+const MaxNewNames = 16
+
+// lookup outcomes of one name.
+const (
+	lookupUndecided = iota // not answered before the budget was spent
+	lookupResolved
+	lookupUnresolved
+)
+
 // checkNames looks up each host name of canon that old does not have (every look-up its own 5-second deadline, all of
-// them within resolveBudget, resolveWorkers at a time) and returns a *NameUnresolvedError for the first that gives no
-// address, at its index in sent. The addresses are never kept, returned or logged.
+// them within the request's budget, resolveWorkers at a time). More than MaxNewNames new names is a validation error of
+// entries (nothing is looked up). It returns a *NameUnresolvedError (ALC-DSC-0010) for the first name that gives no
+// address, at its index in sent; when no name was refused but the budget was spent before every name was answered, it
+// returns ErrLookupBudget (retry later). The addresses are never kept, returned or logged.
 func (s *Service) checkNames(ctx context.Context, sent []string, canon, old []string) error {
 	var hosts []string
 	for _, e := range canon {
@@ -264,19 +284,32 @@ func (s *Service) checkNames(ctx context.Context, sent []string, canon, old []st
 	if len(hosts) == 0 {
 		return nil
 	}
+	if len(hosts) > MaxNewNames {
+		return validate.Errors{{Field: "entries", Code: validate.TooLong, Params: map[string]string{"max": strconv.Itoa(MaxNewNames)}}}
+	}
 	parent := ctx
-	ctx, cancel := context.WithTimeout(ctx, resolveBudget)
+	ctx, cancel := context.WithTimeout(ctx, s.resolveBudget)
 	defer cancel()
-	ok := make([]bool, len(hosts))
+	outcome := make([]int, len(hosts))
 	work := make(chan int)
 	var wg sync.WaitGroup
 	for range min(resolveWorkers, len(hosts)) {
 		wg.Go(func() {
 			for i := range work {
+				if ctx.Err() != nil {
+					continue // the budget is spent: undecided
+				}
 				lctx, lcancel := context.WithTimeout(ctx, s.resolveTimeout)
 				addrs, err := s.resolver.LookupNetIP(lctx, "ip", hosts[i])
 				lcancel()
-				ok[i] = err == nil && slices.ContainsFunc(addrs, netip.Addr.IsValid)
+				switch {
+				case err == nil && slices.ContainsFunc(addrs, netip.Addr.IsValid):
+					outcome[i] = lookupResolved
+				case ctx.Err() != nil:
+					// the budget, not the name's own deadline, ended it: undecided
+				default:
+					outcome[i] = lookupUnresolved
+				}
 			}
 		})
 	}
@@ -289,9 +322,12 @@ func (s *Service) checkNames(ctx context.Context, sent []string, canon, old []st
 		return err // the request ended: nothing is decided about the names
 	}
 	for i, h := range hosts {
-		if !ok[i] {
+		if outcome[i] == lookupUnresolved {
 			return &NameUnresolvedError{Index: sentIndex(sent, h)}
 		}
+	}
+	if slices.Contains(outcome, lookupUndecided) {
+		return ErrLookupBudget
 	}
 	return nil
 }

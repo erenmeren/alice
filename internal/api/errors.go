@@ -744,6 +744,8 @@ var errorMap = []struct {
 	{discoverysvc.ErrScopeDisabled, ErrDSCScopeDisabled, nil},
 	{discoverysvc.ErrNotFound, ErrNotFound, nil},
 	{discoverysvc.ErrVersion, ErrPreconditionFailed, nil},
+	// The save-time look-ups did not finish in the request's budget: a slow name server, not a missing name (ALC-DSC-0010).
+	{discoverysvc.ErrLookupBudget, ErrUnavailable, nil},
 }
 
 type errorPayload struct {
@@ -844,6 +846,9 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 		w.Header().Set("Retry-After", "5") // the user's other export holds the slot until its last row is written
 	case ErrDSCScanRunning, ErrDSCTooManyScans:
 		w.Header().Set("Retry-After", "30") // a scan ends within its 60-minute cap; most end within minutes
+	}
+	if errors.Is(err, discoverysvc.ErrLookupBudget) {
+		w.Header().Set("Retry-After", "30") // the name server was slow; the look-ups of the next save start afresh
 	}
 	if after := acmeRetryAfter(err, ec); after != "" {
 		w.Header().Set("Retry-After", after)

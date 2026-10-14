@@ -261,6 +261,11 @@ func (s *server) updateDiscoveryScope(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExact(w, r, &req, maxDiscoveryScopeBody, discoveryScopeKeys...) {
 		return
 	}
+	if req == (discoveryScopeBody{}) {
+		// An empty change would bump the version and write an audit row for nothing (Task 9 review 8).
+		s.fail(w, r, validate.Errors{{Field: "body", Code: validate.Required}})
+		return
+	}
 	v, err := s.deps.Discovery.UpdateScope(r.Context(), s.discoveryActor(r), id, version, req.patch())
 	if err != nil {
 		s.fail(w, r, err)

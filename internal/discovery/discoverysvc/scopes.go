@@ -15,6 +15,7 @@ import (
 
 	"alice/internal/discovery"
 	"alice/internal/platform/db"
+	"alice/internal/platform/validate"
 )
 
 // ScopeView is a live scope as stored, with its version (If-Match), its scan in flight (ActiveScanID) and its last
@@ -283,6 +284,9 @@ func (s *Service) UpdateScope(ctx context.Context, a Actor, id uuid.UUID, ifVers
 		return ScopeView{}, ErrVersion
 	}
 	next, changed := p.apply(cur.Scope)
+	if len(changed) == 0 {
+		return ScopeView{}, validate.Errors{{Field: "body", Code: validate.Required}} // nothing to change (Task 9 review 8)
+	}
 	sc, err := s.validate(ctx, next)
 	if err != nil {
 		return ScopeView{}, err
@@ -319,7 +323,7 @@ WHERE id = $1 AND version = $2 AND deleted_at IS NULL`, id, cur.Version, sc.Name
 			return err
 		}
 		var cancelled int64
-		if !sc.Enabled {
+		if !sc.Enabled || changesTargets(changed) {
 			if cancelled, err = cancelActive(ctx, tx, id); err != nil {
 				return err
 			}
@@ -334,6 +338,14 @@ WHERE id = $1 AND version = $2 AND deleted_at IS NULL`, id, cur.Version, sc.Name
 		return err
 	})
 	return v, err
+}
+
+// changesTargets reports whether a change touches what the scope's scans connect to: its scan in flight is then asked
+// to stop (it was expanded from the old scope), as when the scope is switched off (Task 9 review 5).
+func changesTargets(changed []string) bool {
+	return slices.ContainsFunc(changed, func(f string) bool {
+		return f == "entries" || f == "ports" || f == "sni_names" || f == "exclusions"
+	})
 }
 
 // shape is what a scope covers, as the endpoint rows key it: the ports, the address and range entries, the scope's own

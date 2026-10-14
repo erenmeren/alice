@@ -25,6 +25,7 @@ import (
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
+	"alice/internal/platform/validate"
 	"alice/internal/secrets"
 	"alice/internal/testutil/pgtest"
 )
@@ -760,4 +761,112 @@ func TestCancelledRequestIsNotAnUnresolvedName(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.NotErrorIs(t, err, ErrNameUnresolved)
 	assert.Equal(t, "discoverysvc: a host name of the scope does not resolve: entries[3]", (&NameUnresolvedError{Index: 3}).Error())
+}
+
+// Changing what a scope covers (entries, ports, SNI names, exclusions) asks its scan in flight to stop, in the same
+// transaction, as switching it off does; changing only its name does not (Task 9 review 5).
+func TestEditingTheShapeCancelsTheRunningScan(t *testing.T) {
+	w := newWorld(t)
+	v, err := w.svc.CreateScope(w.ctx, w.admin, lab())
+	require.NoError(t, err)
+	scan, err := w.svc.StartScan(w.ctx, w.op, v.ID)
+	require.NoError(t, err)
+	name := "Renamed"
+	_, err = w.svc.UpdateScope(w.ctx, w.admin, v.ID, nil, ScopePatch{Name: &name})
+	require.NoError(t, err)
+	assert.Zero(t, w.count(`SELECT count(*) FROM discovery_scans WHERE id = $1 AND cancel_requested`, scan.ID), "a new name changes no target")
+	for i, p := range []ScopePatch{
+		{Ports: &[]int{443}},
+		{Entries: &[]string{"10.0.1.0/24"}},
+		{SNINames: &[]string{"b.example"}},
+		{Exclusions: &[]string{"10.0.1.0/26"}},
+	} {
+		w.exec(`UPDATE discovery_scans SET cancel_requested = false WHERE id = $1`, scan.ID)
+		_, err := w.svc.UpdateScope(w.ctx, w.admin, v.ID, nil, p)
+		require.NoError(t, err, i)
+		assert.Equal(t, 1, w.count(`SELECT count(*) FROM discovery_scans WHERE id = $1 AND cancel_requested`, scan.ID), i)
+		upd := w.audits("discovery.scope.updated")
+		assert.Equal(t, "1", upd[len(upd)-1].details["scans_cancelled_count"], i)
+	}
+}
+
+// A start and a concurrent switch-off cannot both win (Task 9 review 6): the start reads the scope FOR SHARE, so it
+// waits for the uncommitted switch-off and then refuses with ALC-DSC-0013; nothing is queued.
+func TestStartWaitsForAConcurrentSwitchOff(t *testing.T) {
+	w := newWorld(t)
+	v, err := w.svc.CreateScope(w.ctx, w.admin, lab())
+	require.NoError(t, err)
+	tx, err := w.db.Owner.Begin(w.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(w.ctx) }()
+	_, err = tx.Exec(w.ctx, `UPDATE discovery_scopes SET enabled = false WHERE id = $1`, v.ID)
+	require.NoError(t, err)
+	done := make(chan error, 1)
+	go func() {
+		_, err := w.svc.StartScan(w.ctx, w.op, v.ID)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("the start did not wait for the switch-off: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.NoError(t, tx.Commit(w.ctx))
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrScopeDisabled)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the start never finished")
+	}
+	assert.Zero(t, w.count(`SELECT count(*) FROM discovery_scans`))
+}
+
+// The look-ups of one save have a budget: names it could not decide in time are not "does not resolve" (ALC-DSC-0010)
+// but ErrLookupBudget (503, retry later); and a save may add at most MaxNewNames host names (Task 9 review 7).
+func TestLookupBudgetAndNameCap(t *testing.T) {
+	w := newWorld(t)
+	w.res.block = true
+	w.svc.resolveTimeout = time.Hour
+	w.svc.resolveBudget = 30 * time.Millisecond
+	_, err := w.svc.CreateScope(w.ctx, w.admin, lab())
+	require.ErrorIs(t, err, ErrLookupBudget)
+	assert.NotErrorIs(t, err, ErrNameUnresolved)
+	assert.Zero(t, w.count(`SELECT count(*) FROM discovery_scopes`))
+
+	w.res.block = false
+	w.svc.resolveTimeout, w.svc.resolveBudget = discovery.ResolveTimeout, defaultResolveBudget
+	many := lab()
+	many.Entries = []string{"10.0.1.0/24"}
+	for i := range MaxNewNames + 1 {
+		host := "h" + strconv.Itoa(i) + ".example"
+		w.res.answers[host] = []netip.Addr{netip.MustParseAddr("10.0.0.90")}
+		many.Entries = append(many.Entries, host)
+	}
+	before := len(w.res.lookups())
+	_, err = w.svc.CreateScope(w.ctx, w.admin, many)
+	var ve validate.Errors
+	require.ErrorAs(t, err, &ve)
+	assert.Equal(t, "entries", ve[0].Field)
+	assert.Equal(t, before, len(w.res.lookups()), "nothing is looked up")
+	many.Entries = many.Entries[:MaxNewNames+1]
+	v, err := w.svc.CreateScope(w.ctx, w.admin, many)
+	require.NoError(t, err, "exactly MaxNewNames new names")
+	// On a change only the names it adds count.
+	more := append(slices.Clone(v.Scope.Entries), "h16.example")
+	_, err = w.svc.UpdateScope(w.ctx, w.admin, v.ID, nil, ScopePatch{Entries: &more})
+	require.NoError(t, err)
+}
+
+// An empty change is refused (422): it would bump the version and write an audit row for nothing (Task 9 review 8).
+func TestEmptyPatchIsRefused(t *testing.T) {
+	w := newWorld(t)
+	v, err := w.svc.CreateScope(w.ctx, w.admin, lab())
+	require.NoError(t, err)
+	_, err = w.svc.UpdateScope(w.ctx, w.admin, v.ID, nil, ScopePatch{})
+	var ve validate.Errors
+	require.ErrorAs(t, err, &ve)
+	got, err := w.svc.GetScope(w.ctx, v.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, got.Version)
+	assert.Empty(t, w.audits("discovery.scope.updated"))
 }

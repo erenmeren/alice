@@ -147,12 +147,14 @@ func (s *Service) StartScan(ctx context.Context, a Actor, scopeID uuid.UUID) (Sc
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, startLock); err != nil {
 			return fmt.Errorf("discoverysvc: serialise the start: %w", err)
 		}
+		// FOR SHARE: a concurrent change of the scope (switched off, deleted) commits first or waits for this start, so a
+		// start never reads a scope that is being switched off (Task 9 review 6).
 		var enabled, busy bool
 		var active int
 		err := tx.QueryRow(ctx, `SELECT s.enabled,
     EXISTS (SELECT 1 FROM discovery_scans WHERE scope_id = s.id AND state IN ('queued', 'running')),
     (SELECT count(*) FROM discovery_scans WHERE state IN ('queued', 'running'))
-FROM discovery_scopes s WHERE s.id = $1 AND s.deleted_at IS NULL`, scopeID).Scan(&enabled, &busy, &active)
+FROM discovery_scopes s WHERE s.id = $1 AND s.deleted_at IS NULL FOR SHARE OF s`, scopeID).Scan(&enabled, &busy, &active)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			return discovery.ErrScopeNotFound
