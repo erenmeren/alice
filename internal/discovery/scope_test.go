@@ -8,9 +8,10 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"alice/internal/platform/netaddr"
 )
 
 // everywhere allows every address the built-in rule lets through, so each refusal of a test stands
@@ -391,26 +392,32 @@ func TestCapsAreArithmetic(t *testing.T) {
 	}
 }
 
-// Review fix 1: a hostile port list is refused by its length, not walked; duplicates are found
-// without a quadratic scan.
+// Review fix 1: a hostile port list is refused by its length before any element is read, and the
+// loop stops at the 17th distinct port (shape, not wall clock: an invalid port placed after the
+// bound would be reported if the list were read that far).
 func TestPortsAreBounded(t *testing.T) {
 	huge := make([]int, 70000)
 	for i := range huge {
 		huge[i] = i%65535 + 1
 	}
+	huge[0] = 0 // invalid, but never read
 	s := scope("10.0.0.1")
 	s.Ports = huge
-	start := time.Now()
 	_, err := Validate(s, everywhere)
-	require.ErrorIs(t, err, ErrTooLarge)
+	require.ErrorIs(t, err, ErrTooLarge, "refused by its length, before element 0 is read")
 	var de *Error
 	require.ErrorAs(t, err, &de)
 	require.Equal(t, "ports", de.Field)
-	require.Less(t, time.Since(start), 100*time.Millisecond)
+	require.Equal(t, -1, de.Index)
 
-	s.Ports = huge[:MaxPortList]
+	distinct := make([]int, MaxPortList)
+	for i := range distinct {
+		distinct[i] = i + 1
+	}
+	distinct[MaxPorts+1] = 70000 // invalid, after the 17th distinct port: never read
+	s.Ports = distinct
 	_, err = Validate(s, everywhere)
-	require.ErrorIs(t, err, ErrTooLarge, "1,024 distinct ports: refused at the 17th")
+	require.ErrorIs(t, err, ErrTooLarge, "refused at the 17th distinct port")
 
 	dups := make([]int, MaxPortList)
 	for i := range dups {
@@ -420,57 +427,76 @@ func TestPortsAreBounded(t *testing.T) {
 	got, err := Validate(s, everywhere)
 	require.NoError(t, err)
 	require.Equal(t, []int{443, 444}, got.Ports)
-	s.Ports = append(dups, 443)
+	dups[MaxPortList-1] = 0
+	_, err = Validate(s, everywhere)
+	require.ErrorIs(t, err, ErrInvalid, "a list within the bound is read to the end")
+	s.Ports = append(dups[:MaxPortList:MaxPortList], 443)
 	_, err = Validate(s, everywhere)
 	require.ErrorIs(t, err, ErrTooLarge, "more than MaxPortList elements, even duplicates")
 }
 
-// Review fix 3: the allowed-networks and scannable checks do not test every address against every
-// prefix: 256 nested entries inside a /20, 4,096 one-address allowed networks and 4,095 one-address
-// exclusions finish quickly, and the verdicts stay right.
+// Review fix 3: the scannable walk jumps over whole excluded prefixes instead of visiting their
+// addresses, and "inside the allowed networks" is set arithmetic. Counted, not timed: a /20 whose
+// only free address is its last one, behind 12 exclusions, takes 13 steps (a per-address walk 4,096).
 func TestCheckAllowedIsNotQuadratic(t *testing.T) {
-	base := netip.MustParseAddr("10.0.0.0")
-	var allowed, excl []netip.Prefix
-	a := base
-	for i := range 4096 {
-		allowed = append(allowed, netip.PrefixFrom(a, 32))
-		if i < 4095 {
-			excl = append(excl, netip.PrefixFrom(a, 32))
-		}
+	var allowedList []netip.Prefix
+	a := netip.MustParseAddr("10.0.0.0")
+	for range 4096 {
+		allowedList = append(allowedList, netip.PrefixFrom(a, 32))
 		a = a.Next()
 	}
-	rand.New(rand.NewPCG(1, 2)).Shuffle(len(allowed), func(i, j int) { allowed[i], allowed[j] = allowed[j], allowed[i] })
+	rand.New(rand.NewPCG(1, 2)).Shuffle(len(allowedList), func(i, j int) {
+		allowedList[i], allowedList[j] = allowedList[j], allowedList[i]
+	})
+	var excl []netip.Prefix // 10.0.0.0/21, 10.0.8.0/22, ..., 10.0.15.254/32: all but 10.0.15.255
+	off := uint32(0)
+	for bits := 21; bits <= 32; bits++ {
+		excl = append(excl, netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 0, byte(off >> 8), byte(off)}), bits))
+		off += 1 << (32 - bits)
+	}
+	require.Len(t, excl, 12)
+	allowed := newPrefixSet(allowedList)
+	blocked := newPrefixSet(excl, netaddr.ScanBuiltins())
+
+	refusal, steps := checkAllowed(netip.MustParsePrefix("10.0.0.0/20"), allowed, blocked)
+	require.Empty(t, refusal)
+	require.Equal(t, 13, steps, "12 jumps and the free address")
+	refusal, steps = checkAllowed(netip.MustParsePrefix("10.0.0.0/21"), allowed, blocked)
+	require.NotEmpty(t, refusal)
+	require.Equal(t, 1, steps, "one jump over the whole entry")
+	refusal, steps = checkAllowed(netip.MustParsePrefix("10.0.16.0/24"), allowed, blocked)
+	require.Equal(t, "outside the allowed scan networks", refusal)
+	require.Zero(t, steps)
+	refusal, _ = checkAllowed(netip.MustParsePrefix("10.0.15.0/24"), newPrefixSet(allowedList[:100]), blocked)
+	require.Equal(t, "outside the allowed scan networks", refusal, "partly outside")
+
+	// 256 nested entries inside the /20: at most 13 steps each, and the verdicts through Validate.
 	var entries []string
 	for bits := 20; bits <= 27; bits++ {
 		for i := range 1 << (bits - 20) {
-			off := uint32(i) << (32 - bits)
-			entries = append(entries, netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 0, byte(off >> 8), byte(off)}), bits).String())
+			o := uint32(i) << (32 - bits)
+			entries = append(entries, netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 0, byte(o >> 8), byte(o)}), bits).String())
 		}
 	}
-	entries = append(entries[:255], "10.0.15.240/28")
+	entries = append(entries, "10.0.15.240/28")
 	require.Len(t, entries, 256)
-	rules := Rules{AllowedNetworks: allowed, GlobalExclusions: excl}
-	start := time.Now()
+	total, free := 0, 0
+	for _, e := range entries {
+		r, n := checkAllowed(netip.MustParsePrefix(e), allowed, blocked)
+		require.LessOrEqual(t, n, 13, e)
+		total += n
+		if r == "" {
+			free++
+		}
+	}
+	require.LessOrEqual(t, total, 256*13)
+	require.Equal(t, 9, free, "the entries holding 10.0.15.255")
+	rules := Rules{AllowedNetworks: allowedList, GlobalExclusions: excl}
 	_, err := Validate(scope(entries...), rules)
-	require.ErrorIs(t, err, ErrNotAllowed, "10.0.0.0/21 is entirely excluded")
+	require.ErrorIs(t, err, ErrNotAllowed)
 	var de *Error
 	require.ErrorAs(t, err, &de)
-	require.Equal(t, "10.0.0.0/21", de.Value)
-	// Only the entries that hold 10.0.15.255, the one address left: every one of them is accepted.
-	var ok []string
-	for _, e := range entries {
-		if netip.MustParsePrefix(e).Contains(netip.MustParseAddr("10.0.15.255")) {
-			ok = append(ok, e)
-		}
-	}
-	_, err = Validate(scope(ok...), rules)
-	require.NoError(t, err)
-	require.Less(t, time.Since(start), 2*time.Second)
-
-	_, err = Validate(scope("10.0.16.0/24"), rules)
-	require.ErrorIs(t, err, ErrNotAllowed, "outside the allowed networks")
-	_, err = Validate(scope("10.0.15.0/24"), Rules{AllowedNetworks: allowed[:100]})
-	require.ErrorIs(t, err, ErrNotAllowed, "partly outside")
+	require.Equal(t, "10.0.0.0/21", de.Value, "the first entirely excluded entry")
 }
 
 // Review fix 4: the length refusals say the limit they apply.

@@ -111,7 +111,6 @@ func TestExpandHostnames(t *testing.T) {
 	require.Len(t, r.budgets, 4, "every lookup has a deadline")
 	for _, b := range r.budgets {
 		require.LessOrEqual(t, b, ResolveTimeout)
-		require.Greater(t, b, ResolveTimeout-time.Second)
 	}
 }
 
@@ -277,19 +276,30 @@ func TestSystemResolverIsTheDefault(t *testing.T) {
 	require.Equal(t, net.DefaultResolver, SystemResolver)
 }
 
-// Review fix 6: the lookups of one expansion share an overall deadline; a name not resolved by then
-// is unresolved (never dialed) and the expansion still returns.
+// Review fix 6: the lookups of one expansion share an overall deadline. Shape, not wall clock: with
+// a per-lookup timeout of two hours and a budget of one hour, every lookup's deadline is within the
+// hour; and names still blocked when a (short) budget ends are unresolved, never dialed. Without
+// the budget the blocked lookups would wait their two hours.
 func TestExpandResolveBudget(t *testing.T) {
-	r := &stubResolver{block: true}
+	r := &stubResolver{answers: map[string][]netip.Addr{}}
 	s := scope("10.0.0.1")
 	for i := range 40 {
-		s.Entries = append(s.Entries, "slow"+strconv.Itoa(i)+".example")
+		name := "n" + strconv.Itoa(i) + ".example"
+		s.Entries = append(s.Entries, name)
+		r.answers[name] = addrs("10.0.1." + strconv.Itoa(i))
 	}
-	start := time.Now()
-	x, err := Expand(context.Background(), s, ExpandInputs{Rules: lab(), Policy: scanpolicy.Permissive(), Resolver: r,
-		ResolveBudget: 50 * time.Millisecond})
+	_, err := Expand(context.Background(), s, ExpandInputs{Rules: lab(), Policy: scanpolicy.Permissive(), Resolver: r,
+		ResolveTimeout: 2 * time.Hour, ResolveBudget: time.Hour})
 	require.NoError(t, err)
-	require.Less(t, time.Since(start), 2*time.Second, "40 names x 5 s each would take 25 s with 8 workers")
+	require.Len(t, r.budgets, 40)
+	for _, b := range r.budgets {
+		require.LessOrEqual(t, b, time.Hour, "the batch deadline, not the per-lookup one")
+	}
+
+	blocked := &stubResolver{block: true}
+	x, err := Expand(context.Background(), s, ExpandInputs{Rules: lab(), Policy: scanpolicy.Permissive(), Resolver: blocked,
+		ResolveTimeout: 2 * time.Hour, ResolveBudget: 50 * time.Millisecond})
+	require.NoError(t, err)
 	require.Len(t, x.Unresolved, 40)
 	require.Equal(t, []string{"10.0.0.1 443 sni= host="}, keys(x.Dial))
 	require.Empty(t, x.Excluded)

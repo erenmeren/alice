@@ -469,7 +469,7 @@ func compile(s Scope, r Rules) (*compiled, error) {
 	allowed := newPrefixSet(r.AllowedNetworks)
 	blocked := newPrefixSet(r.GlobalExclusions, c.exclusions, netaddr.ScanBuiltins())
 	for k, p := range prefixes {
-		if err := checkAllowed(p, allowed, blocked); err != "" {
+		if err, _ := checkAllowed(p, allowed, blocked); err != "" {
 			i := prefixIndex[k]
 			return nil, fail(ErrNotAllowed, "entries", i, s.Entries[i], err)
 		}
@@ -626,22 +626,23 @@ func (c *compiled) endpoints(literal, resolved int) int {
 // arithmetic), or whose every address the built-in rule or an exclusion refuses. blocked holds the
 // exclusions and the built-in exclusions: the walk jumps over each of its prefixes at once and stops
 // at the first scannable address. A range only partly refused stays: its refused addresses are
-// excluded at expansion (and listed in the preview).
-func checkAllowed(p netip.Prefix, allowed, blocked prefixSet) string {
+// excluded at expansion (and listed in the preview). steps counts the walk's iterations (each one a
+// binary search of blocked), for the tests of its shape.
+func checkAllowed(p netip.Prefix, allowed, blocked prefixSet) (refusal string, steps int) {
 	if !allowed.covers(p) {
-		return "outside the allowed scan networks"
+		return "outside the allowed scan networks", 0
 	}
-	for a := p.Addr(); a.IsValid() && p.Contains(a); {
+	for a := p.Addr(); a.IsValid() && p.Contains(a); steps++ {
 		if q, ok := blocked.find(a); ok {
 			a = lastAddr(q).Next()
 			continue
 		}
 		if netaddr.AllowedForScan(a) {
-			return ""
+			return "", steps + 1
 		}
 		a = a.Next()
 	}
-	return "an address Alice never scans, or excluded"
+	return "an address Alice never scans, or excluded", steps
 }
 
 func checkSchedule(s Schedule) (Schedule, error) {
