@@ -96,6 +96,9 @@ var rules = map[string][]string{
 	// with the test PKI, reads the real clock and imports nothing else of Alice: it cannot drift towards the
 	// discovery code it tests.
 	"alice/internal/testutil/fakefleet": {"alice/internal/testutil/pki", "alice/internal/platform/clock"},
+	// Network certificate discovery (plan 2026-10-13-network-discovery): the scope model, its expansion and the
+	// scanner know the platform (netaddr's scan policy above all); later tasks of the plan widen this rule.
+	"alice/internal/discovery/...": {platform},
 }
 
 const platform = "alice/internal/platform/..."

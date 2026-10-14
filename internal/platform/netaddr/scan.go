@@ -55,6 +55,10 @@ var scanBuiltins = func() []netip.Prefix {
 	return out
 }()
 
+// ScanBuiltins returns a copy of the built-in scan exclusions, for display (a scope's size preview
+// lists the ones its ranges overlap). AllowedForScan is the rule; this list alone is not.
+func ScanBuiltins() []netip.Prefix { return append([]netip.Prefix(nil), scanBuiltins...) }
+
 // scanCandidates returns the addresses a connection to u reaches or names: u itself and the IPv4
 // address the well-known NAT64 prefix or 6to4 embed. u is unmapped and valid.
 func scanCandidates(u netip.Addr) []netip.Addr {

@@ -154,6 +154,19 @@ func TestAllowedForScanIsStricterThanAllowed(t *testing.T) {
 	assert.False(t, netaddr.AllowedForScan(netip.Addr{}))
 }
 
+// ScanBuiltins is a copy of the built-in list: every address of it is refused, and changing the copy
+// changes nothing.
+func TestScanBuiltins(t *testing.T) {
+	bs := netaddr.ScanBuiltins()
+	require.Contains(t, bs, netip.MustParsePrefix("127.0.0.0/8"))
+	require.Contains(t, bs, netip.MustParsePrefix("fd00:ec2::254/128"))
+	for _, p := range bs {
+		assert.False(t, netaddr.AllowedForScan(p.Addr()), p)
+	}
+	bs[0] = netip.MustParsePrefix("10.0.0.0/8")
+	assert.NotEqual(t, bs[0], netaddr.ScanBuiltins()[0])
+}
+
 // FuzzAllowedForScan: no address is allowed for scanning that Allowed refuses, and the verdict of
 // the 4in6 form is that of the IPv4 address.
 func FuzzAllowedForScan(f *testing.F) {
