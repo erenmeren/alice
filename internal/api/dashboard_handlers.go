@@ -34,8 +34,16 @@ func viewer(r *http.Request) reports.Viewer {
 // Deps.TLSStore nil).
 type phase8SummaryDTO struct {
 	dashboardSummaryDTO
-	Backup         *backupStatusDTO   `json:"backup,omitempty"`
-	SetupChecklist []checklistItemDTO `json:"setup_checklist,omitempty"`
+	Backup         *backupStatusDTO       `json:"backup,omitempty"`
+	SetupChecklist []checklistItemDTO     `json:"setup_checklist,omitempty"`
+	Discovery      *dashboardDiscoveryDTO `json:"discovery,omitempty"`
+}
+
+// dashboardDiscoveryDTO is the Overview's quiet network discovery metric (decision D2): the unmanaged certificates found
+// on the network that expire within 30 days. It is never part of the managed counts. Present only while a scan scope
+// exists and only for a caller with DiscoveryView (D7: not for a read-scope API token).
+type dashboardDiscoveryDTO struct {
+	UnmanagedExpiring30d int `json:"unmanaged_expiring_30d"`
 }
 
 func (s *server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
@@ -73,7 +81,28 @@ func (s *server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if out.Discovery, err = s.dashboardDiscovery(r); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// dashboardDiscovery is the discovery metric for the caller, from the discovery summary (Task 9's query, not a second
+// one): nil without the discovery service, for a caller DiscoveryView refuses (its summary is then not read) and while
+// no scope exists.
+func (s *server) dashboardDiscovery(r *http.Request) (*dashboardDiscoveryDTO, error) {
+	if s.deps.Discovery == nil || rbac.Decide(rbac.DiscoveryView, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) != rbac.Allow {
+		return nil, nil //nolint:nilnil // no metric for this caller is a normal answer, the field is optional
+	}
+	v, err := s.deps.Discovery.Summary(r.Context())
+	if err != nil {
+		return nil, err
+	}
+	if v.Scopes == 0 {
+		return nil, nil //nolint:nilnil // no scope: no metric
+	}
+	return &dashboardDiscoveryDTO{UnmanagedExpiring30d: v.UnmanagedExpiring30d}, nil
 }
 
 // setupChecklist is "Finish setting up" (R43 row 18, §18.5): the recovery passphrase and the HTTPS certificate are

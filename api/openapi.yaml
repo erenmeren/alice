@@ -6598,6 +6598,17 @@ components:
               item: { type: string, enum: [passphrase, https, mail, license, target] }
               done: { type: boolean }
               required: { type: boolean }
+        discovery:
+          description: >-
+            Network discovery's quiet metric, separate from the managed counts above (which never include it): unmanaged
+            certificates found on the network that expire within the next 30 days (not expired yet), as in
+            GET /api/v1/discovery/summary. Present only while at least one scan scope exists, and only for a caller
+            with discovery.view (every role in a browser session, operate-scope API tokens); absent for read-scope API
+            tokens.
+          type: object
+          required: [unmanaged_expiring_30d]
+          properties:
+            unmanaged_expiring_30d: { type: integer }
     ExpiringItem:
       type: object
       required: [kind, object_id, name, expires_at, days_left, expired, fingerprint, websites, servers, target_ids, vault, vault_id]

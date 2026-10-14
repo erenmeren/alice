@@ -477,6 +477,26 @@ func TestDiscoveryTokensOverHTTP(t *testing.T) {
 	requireError(t, rec, http.StatusForbidden, "ALC-AUTH-0002")
 	rec = operate.do(http.MethodPost, "/api/v1/discovery/scopes/"+uuid.NewString()+"/scans", nil)
 	requireError(t, rec, http.StatusNotFound, "ALC-DSC-0008")
+
+	// The Overview's discovery metric (D2, D7): absent without a scope; with one, there for an operate token and a
+	// session, never for a read token.
+	overview := func(c *client) map[string]any {
+		t.Helper()
+		rec := c.do(http.MethodGet, "/api/v1/dashboard/summary", nil)
+		requireStatus(t, rec, http.StatusOK)
+		return decodeBody[map[string]any](t, rec)
+	}
+	assert.NotContains(t, overview(operate), "discovery", "no scope yet")
+	ctx := context.Background()
+	scope, err := seed.DiscoveryScope(ctx, s.db.Owner, "Lab", true)
+	require.NoError(t, err)
+	require.NoError(t, seed.DiscoveredCertificate(ctx, s.db.Owner, strings.Repeat("ab", 32), "soon.test", s.clock.Now().Add(72*time.Hour)))
+	_, err = seed.DiscoveredEndpoint(ctx, s.db.Owner, scope, "10.20.0.5", 443, "", strings.Repeat("ab", 32), "present")
+	require.NoError(t, err)
+	for _, c := range []*client{operate, admin} {
+		assert.Equal(t, map[string]any{"unmanaged_expiring_30d": 1.0}, overview(c)["discovery"])
+	}
+	assert.NotContains(t, overview(read), "discovery", "a read token never sees the network map")
 }
 
 // discoveryRecords stores the discovery records the GET routes read (TestA06GETRoutesNeverChangeState): the settings,

@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/discovery/discoverysvc"
 	"alice/internal/i18n"
 	"alice/internal/platform/clock"
 	"alice/internal/setup"
@@ -60,7 +61,8 @@ func testDeps(t *testing.T, health error) Deps {
 		License:   &fakeLicense{},
 		Inventory: &fakeInventory{},
 		ACME:      &fakeACME{},
-		Discovery: &fakeDiscovery{},
+		// The Overview reads the discovery summary: answer it with no scope (no metric) by default.
+		Discovery: &fakeDiscovery{SummaryFn: func(context.Context) (discoverysvc.Summary, error) { return discoverysvc.Summary{}, nil }},
 		Jobs:      &fakeJobs{},
 		Providers: fakeProviders{},
 		SSO:       newFakeSSO(), // the public OIDC routes answer as with no provider configured (C-s4-04)
