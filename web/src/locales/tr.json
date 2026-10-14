@@ -3540,7 +3540,6 @@
       "exclusions_other": "{{count}} hariç",
       "on": "Açık",
       "off": "Kapalı",
-      "toggle": "{{name}} kapsamı açık",
       "alertsOn": "E-posta gönderir",
       "alertsOff": "E-posta yok",
       "never": "Hiç taranmadı",

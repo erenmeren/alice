@@ -3540,7 +3540,6 @@
       "exclusions_other": "{{count}} left out",
       "on": "On",
       "off": "Off",
-      "toggle": "Scope {{name}} switched on",
       "alertsOn": "Sends e-mails",
       "alertsOff": "No e-mails",
       "never": "Never scanned",

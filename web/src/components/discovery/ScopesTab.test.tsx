@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { DiscoveryScope } from '../../api/discovery';
@@ -6,6 +6,7 @@ import { discoveryScanFixture, discoveryScopeFixture, discoverySettingsFixture, 
 import { discoveryWorld, requests, track } from '../../test/discovery';
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
+import { STARTED_MESSAGE_MS } from './StartScan';
 import { server } from '../../test/server';
 
 describe('Network discovery scopes', () => {
@@ -24,12 +25,15 @@ describe('Network discovery scopes', () => {
     expect(within(dc).getByText('443, 8443')).toBeInTheDocument();
     expect(within(dc).getByText('Every 2 days, between 01:00 and 05:00 (Europe/Istanbul)')).toBeInTheDocument();
     expect(within(dc).getByText('With a daily time window, 36 hours count as whole days: every 2 days.')).toBeInTheDocument();
-    expect(within(dc).getByRole('switch', { name: 'Scope Data centre switched on' })).toBeChecked();
+    // The switch is named by its scope alone; On/Off is the visible state beside it.
+    expect(within(dc).getByRole('switch', { name: 'Data centre' })).toBeChecked();
+    expect(within(dc).getByRole('switch', { name: 'Data centre' }).closest('td')).toHaveTextContent('On');
     expect(within(dc).getByText('Sends e-mails')).toBeInTheDocument();
     expect(within(dc).getByText('Finished')).toBeInTheDocument();
     expect(within(lab).getByText('Every 6 hours')).toBeInTheDocument();
     expect(within(lab).getByText('Never scanned')).toBeInTheDocument();
-    expect(within(lab).getByRole('switch', { name: 'Scope Lab switched on' })).not.toBeChecked();
+    expect(within(lab).getByRole('switch', { name: 'Lab' })).not.toBeChecked();
+    expect(within(lab).getByRole('switch', { name: 'Lab' }).closest('td')).toHaveTextContent('Off');
     expect(within(lab).getByRole('button', { name: 'Scan now: Lab' })).toBeDisabled();
     expect(within(lab).getByText('This scope is switched off.')).toBeInTheDocument();
     expect(within(busy).getByText('Running')).toBeInTheDocument();
@@ -59,12 +63,41 @@ describe('Network discovery scopes', () => {
     expect(await screen.findByText('Too many scans are running.')).toBeInTheDocument();
   });
 
+  it('clears the "scan started" line after a few seconds, or when the scan is over', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let active: string | null = null;
+      discoveryWorld({ scopes: () => [discoveryScopeFixture({ active_scan_id: active })] });
+      server.use(
+        http.post('/api/v1/discovery/scopes/:id/scans', () => {
+          active = 'n1';
+          return HttpResponse.json(discoveryScanFixture({ id: 'n1', state: 'queued', started_at: null, finished_at: null }), { status: 202 });
+        }),
+      );
+      await renderRoute('/discovery?tab=scopes');
+      await userEvent.click(await screen.findByRole('button', { name: 'Scan now: Data centre' }));
+      expect(await screen.findByText('The scan of Data centre has started.')).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Scan now: Data centre' })).toBeDisabled());
+      active = null;
+      await act(() => vi.advanceTimersByTimeAsync(3100));
+      await waitFor(() => expect(screen.queryByText('The scan of Data centre has started.')).not.toBeInTheDocument());
+      // A second start whose scan the list has not shown yet: the line goes after a few seconds.
+      server.use(http.post('/api/v1/discovery/scopes/:id/scans', () => HttpResponse.json(discoveryScanFixture({ state: 'queued', started_at: null, finished_at: null }), { status: 202 })));
+      await userEvent.click(screen.getByRole('button', { name: 'Scan now: Data centre' }));
+      expect(await screen.findByText('The scan of Data centre has started.')).toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(STARTED_MESSAGE_MS + 100));
+      await waitFor(() => expect(screen.queryByText('The scan of Data centre has started.')).not.toBeInTheDocument());
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('switches a scope off with its version', async () => {
     const seen = discoveryWorld();
     server.use(http.patch('/api/v1/discovery/scopes/:id', () => HttpResponse.json(discoveryScopeFixture({ enabled: false }))));
     track(seen);
     await renderRoute('/discovery?tab=scopes');
-    await userEvent.click(await screen.findByRole('switch', { name: 'Scope Data centre switched on' }));
+    await userEvent.click(await screen.findByRole('switch', { name: 'Data centre' }));
     await waitFor(() => expect(requests(seen, 'PATCH', /\/scopes\//)).toHaveLength(1));
     const [patch] = requests(seen, 'PATCH', /\/scopes\//);
     expect(patch.body).toEqual({ enabled: false });

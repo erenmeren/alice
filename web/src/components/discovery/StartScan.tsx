@@ -1,6 +1,6 @@
 import { Button, NativeSelect, Stack, Text } from '@mantine/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { startDiscoveryScan, type DiscoveryScan, type DiscoveryScope } from '../../api/discovery';
 import { DISCOVERY_SCANS_KEY, DISCOVERY_SCOPES_KEY } from '../../api/queryKeys';
@@ -37,12 +37,31 @@ export function useStartScan(onStarted?: (scan: DiscoveryScan) => void) {
 
 export const blockKey = (b: StartBlock) => `discovery.block.${b}`;
 
+// How long "The scan has started" stays.
+export const STARTED_MESSAGE_MS = 6000;
+
 // ScanNowButton starts a scan of one scope from its row. A scope that cannot be scanned now keeps a disabled button with
 // the reason as visible text it is described by (a tooltip on a disabled button reaches nobody).
 export function ScanNowButton({ scope, ctx }: { scope: DiscoveryScope; ctx: StartContext }) {
   const { t } = useTranslation();
   const start = useStartScan();
   const block = startBlock(scope, ctx);
+  // "The scan has started" is news for a few seconds, and never once the scan is over.
+  const { reset, isSuccess } = start;
+  useEffect(() => {
+    if (!isSuccess) return;
+    const timer = window.setTimeout(reset, STARTED_MESSAGE_MS);
+    return () => window.clearTimeout(timer);
+  }, [isSuccess, reset]);
+  const sawRunning = useRef(false);
+  useEffect(() => {
+    if (!isSuccess) {
+      sawRunning.current = false;
+      return;
+    }
+    if (scope.active_scan_id) sawRunning.current = true;
+    else if (sawRunning.current) reset();
+  }, [isSuccess, scope.active_scan_id, reset]);
   const reasonId = `scan-block-${scope.id}`;
   return (
     <div>

@@ -124,13 +124,14 @@ function ScopeTable({ scopes, ctx, onEdit, onDelete }: { scopes: DiscoveryScope[
                   </Table.Td>
                   <Table.Td>
                     {admin ? (
-                      <Switch
-                        checked={s.enabled}
-                        disabled={toggle.isPending}
-                        onChange={() => toggle.mutate(s)}
-                        aria-label={t('discovery.scopes.toggle', { name: s.name })}
-                        label={s.enabled ? t('discovery.scopes.on') : t('discovery.scopes.off')}
-                      />
+                      // The switch is named by the scope (its column header says what it switches); On/Off beside it is
+                      // the state in words, not part of its name.
+                      <Group gap={6} wrap="nowrap">
+                        <Switch checked={s.enabled} disabled={toggle.isPending} onChange={() => toggle.mutate(s)} aria-label={s.name} />
+                        <span className={classes.small} aria-hidden="true">
+                          {s.enabled ? t('discovery.scopes.on') : t('discovery.scopes.off')}
+                        </span>
+                      </Group>
                     ) : (
                       <StatusBadge tone={s.enabled ? 'success' : 'neutral'} icon={s.enabled ? 'CircleCheck' : 'Pause'} size="sm">
                         {s.enabled ? t('discovery.scopes.on') : t('discovery.scopes.off')}

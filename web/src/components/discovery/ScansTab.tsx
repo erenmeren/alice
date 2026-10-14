@@ -1,9 +1,10 @@
 import { Button, Stack, Table, Text } from '@mantine/core';
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MAX_ACTIVE_SCANS, cancelDiscoveryScan, isActiveScan, listDiscoveryScans, nextCursor, scanTriggerKey, type DiscoveryScan, type DiscoveryScope } from '../../api/discovery';
+import { MAX_ACTIVE_SCANS, cancelDiscoveryScan, isActiveScan, listDiscoveryScans, scanTriggerKey, type DiscoveryScan, type DiscoveryScope, type Page } from '../../api/discovery';
 import { DISCOVERY_SCANS_KEY, DISCOVERY_SCOPES_KEY, discoveryScanListKey } from '../../api/queryKeys';
+import { useAbort } from '../../api/useAbort';
 import { formatDateTime } from '../../datetime';
 import { Icon } from '../../design/Icon';
 import { ErrorAlert } from '../ErrorAlert';
@@ -12,25 +13,52 @@ import { CursorFooter, EmptyState, Panel } from '../ui';
 import ui from '../ui/ui.module.css';
 import classes from './discovery.module.css';
 import { durationText, SCAN_POLL_MS, ScanProblem, ScanStateBadge, startBlock, useDiscoveryRole, type StartBlock } from './shared';
-import { blockKey, StartScanDialog, type StartContext } from './StartScan';
+import { blockKey, STARTED_MESSAGE_MS, StartScanDialog, type StartContext } from './StartScan';
 
 // ScansTab is every scan, newest first: its scope, how it started, its state and counts, how long it ran and why it
-// ended early. The list reads itself again only while a scan on it is queued or running.
+// ended early. The first page reads itself again only while a scan on it is queued or running.
 export function ScansTab({ scopes, ctx }: { scopes: DiscoveryScope[] | undefined; ctx: StartContext }) {
   const { t, i18n } = useTranslation();
   const { canOperate, admin } = useDiscoveryRole();
   const client = useQueryClient();
-  const list = useInfiniteQuery({
+  // The first page is the one that changes (newest first; at most two scans run, and they are the newest): only it is
+  // read again, every few seconds while a scan on it is queued or running. Older pages are read once, on Load more.
+  const list = useQuery({
     queryKey: discoveryScanListKey({}),
-    queryFn: ({ pageParam, signal }) => listDiscoveryScans({ cursor: pageParam }, signal),
-    initialPageParam: null as string | null,
-    getNextPageParam: nextCursor,
-    refetchInterval: (q) => (q.state.data?.pages.some((p) => p.items.some((s) => isActiveScan(s.state))) ? SCAN_POLL_MS : false),
+    queryFn: ({ signal }) => listDiscoveryScans({}, signal),
+    refetchInterval: (q) => (q.state.data?.items.some((s) => isActiveScan(s.state)) ? SCAN_POLL_MS : false),
   });
-  const items = list.data?.pages.flatMap((p) => p.items) ?? [];
-  const polling = items.some((s) => isActiveScan(s.state));
+  const [older, setOlder] = useState<Page<DiscoveryScan>[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [moreError, setMoreError] = useState<unknown>(null);
+  const abort = useAbort();
+  const next = older.length > 0 ? older[older.length - 1].next_cursor : (list.data?.next_cursor ?? null);
+  const loadMore = async () => {
+    if (!next) return;
+    const signal = abort.signal();
+    setLoadingMore(true);
+    setMoreError(null);
+    try {
+      const page = await listDiscoveryScans({ cursor: next }, signal);
+      if (!signal.aborted) setOlder((o) => [...o, page]);
+    } catch (e) {
+      if (!signal.aborted) setMoreError(e);
+    }
+    if (!signal.aborted) setLoadingMore(false);
+  };
+  // A scan on both the first page and an older one (the first page moved on) is shown once, as the first page has it.
+  const firstIds = new Set((list.data?.items ?? []).map((s) => s.id));
+  const items = [...(list.data?.items ?? []), ...older.flatMap((p) => p.items).filter((s) => !firstIds.has(s.id))];
+  const polling = (list.data?.items ?? []).some((s) => isActiveScan(s.state));
   const [starting, setStarting] = useState(false);
-  const [message, setMessage] = useState('');
+  // "The scan has started" stays a few seconds, and goes when that scan is over.
+  const [message, setMessage] = useState<{ text: string; scanId: string } | null>(null);
+  useEffect(() => {
+    if (!message) return;
+    const timer = window.setTimeout(() => setMessage(null), STARTED_MESSAGE_MS);
+    return () => window.clearTimeout(timer);
+  }, [message]);
+  const startedOver = message !== null && items.some((s) => s.id === message.scanId && !isActiveScan(s.state));
   const cancel = useMutation({
     mutationFn: (id: string) => cancelDiscoveryScan(id),
     onSettled: () => {
@@ -64,13 +92,14 @@ export function ScansTab({ scopes, ctx }: { scopes: DiscoveryScope[] | undefined
       testId="discovery-scans"
     >
       <Stack gap="sm">
-        {message && (
+        {message && !startedOver && (
           <Text size="sm" role="status">
-            {message}
+            {message.text}
           </Text>
         )}
         <ErrorAlert error={cancel.error} />
         <ErrorAlert error={list.error} />
+        <ErrorAlert error={moreError} />
         {list.isPending && <LoadingIndicator />}
         {list.isSuccess && items.length === 0 && <EmptyState icon="ScanLine" title={t('discovery.scans.empty')} description={t('discovery.scans.emptyText')} />}
         {items.length > 0 && (
@@ -92,7 +121,7 @@ export function ScansTab({ scopes, ctx }: { scopes: DiscoveryScope[] | undefined
               </Table>
             </Table.ScrollContainer>
             <div className={ui.tableBottom}>
-              <CursorFooter shown={items.length} hasMore={list.hasNextPage} loading={list.isFetchingNextPage} onMore={() => void list.fetchNextPage()} moreLabel={t('discovery.scans.more')} />
+              <CursorFooter shown={items.length} hasMore={next !== null} loading={loadingMore} onMore={() => void loadMore()} moreLabel={t('discovery.scans.more')} />
             </div>
           </div>
         )}
@@ -105,7 +134,7 @@ export function ScansTab({ scopes, ctx }: { scopes: DiscoveryScope[] | undefined
           onClose={() => setStarting(false)}
           onStarted={(scan) => {
             setStarting(false);
-            setMessage(t('discovery.scans.started', { name: scan.scope_name }));
+            setMessage({ text: t('discovery.scans.started', { name: scan.scope_name }), scanId: scan.id });
           }}
         />
       )}
