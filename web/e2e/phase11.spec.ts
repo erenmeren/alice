@@ -217,7 +217,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       // Export: the file holds the rows the list shows.
       const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: t('filters.export'), exact: true }).click()]);
       try {
-        const csv = parseCsv((await readDownload(download)).replace(/^﻿/, ''));
+        const csv = parseCsv((await readDownload(download)).replace(/^\uFEFF/, ''));
         expect(download.suggestedFilename()).toMatch(/^alice-discovered-certificates-\d{4}-\d{2}-\d{2}\.csv$/);
         const text = csv.map((r) => r.join(',')).join('\n');
         for (const kind of ['valid', 'expired', 'self-signed'] as const) expect(text, `export has ${kind}`).toContain(fleetHost(kind));
