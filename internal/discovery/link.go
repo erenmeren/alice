@@ -7,6 +7,8 @@ package discovery
 import (
 	"context"
 	"net/netip"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,8 +37,9 @@ const CertificateStatusSQL = `CASE WHEN c.id IS NULL THEN 'unmanaged'
                   WHERE l.certificate_id = c.id AND l.missing_since IS NULL) THEN 'managed'
      ELSE 'known' END`
 
-// CertificateRow is a discovered leaf certificate. Endpoints counts the endpoints (not gone) presenting it (of the
-// filter's scope, when it has one); ManagedID is the managed certificate with the same fingerprint.
+// CertificateRow is a discovered leaf certificate. Endpoints counts the endpoints presenting it now (state present),
+// SeenOn those whose last leaf seen it is and that are not gone (present, or unreachable since); both of the filter's
+// scope when it has one. ManagedID is the managed certificate with the same fingerprint.
 type CertificateRow struct {
 	Fingerprint  string
 	SubjectCN    string
@@ -49,6 +52,7 @@ type CertificateRow struct {
 	FirstSeen    time.Time
 	LastSeen     time.Time
 	Endpoints    int
+	SeenOn       int
 	Status       string
 	ManagedID    uuid.NullUUID
 }
@@ -60,7 +64,7 @@ type CertificateCursor struct {
 }
 
 // CertificateFilter selects leaf certificates: of one status ("" any), presented by an endpoint of one scope (uuid.Nil:
-// any), one fingerprint ("" any); after a cursor (nil: from the start); at most Limit (1..MaxPage, else MaxPage).
+// any), one fingerprint ("" any); after a cursor (nil: the first page); at most Limit (1..MaxPage, else MaxPage).
 type CertificateFilter struct {
 	Status      string
 	ScopeID     uuid.UUID
@@ -76,34 +80,63 @@ func limit(n int) int {
 	return n
 }
 
+// query builds a statement from parts: each optional condition is added only when it applies (no "$n IS NULL OR"
+// forms, so the planner sees the exact keyset predicate of the page).
+type query struct {
+	where []string
+	args  []any
+}
+
+// arg adds a parameter and returns its placeholder.
+func (q *query) arg(v any) string {
+	q.args = append(q.args, v)
+	return "$" + strconv.Itoa(len(q.args))
+}
+
+func (q *query) and(cond string) { q.where = append(q.where, cond) }
+
+func (q *query) whereSQL() string {
+	if len(q.where) == 0 {
+		return ""
+	}
+	return " WHERE " + strings.Join(q.where, " AND ")
+}
+
 // ListCertificates lists discovered leaf certificates soonest expiry first (index discovery_certificates_expiry).
 func ListCertificates(ctx context.Context, q db.Querier, f CertificateFilter) ([]CertificateRow, error) {
-	var afterAt *time.Time
-	afterFP := ""
-	if f.After != nil {
-		afterAt, afterFP = &f.After.NotAfter, f.After.Fingerprint
+	var in, out query
+	in.and("d.is_leaf")
+	scope := ""
+	if f.ScopeID != uuid.Nil {
+		scope = " AND e.scope_id = " + in.arg(f.ScopeID)
+		in.and("EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256" + scope + ")")
 	}
-	rows, err := q.Query(ctx, `SELECT * FROM (
+	if f.Fingerprint != "" {
+		in.and("d.fingerprint_sha256 = " + in.arg(f.Fingerprint))
+	}
+	if f.After != nil {
+		in.and("(d.not_after, d.fingerprint_sha256) > (" + in.arg(f.After.NotAfter) + "::timestamptz, " + in.arg(f.After.Fingerprint) + "::text)")
+	}
+	out.args = in.args
+	if f.Status != "" {
+		out.and("x.status = " + out.arg(f.Status))
+	}
+	sql := `SELECT * FROM (
     SELECT d.fingerprint_sha256, d.subject_cn, d.sans, d.issuer_cn, d.not_before, d.not_after, d.key_algorithm, d.self_signed,
-        d.first_seen, d.last_seen,
-        (SELECT count(*)::int FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'
-            AND ($2::uuid IS NULL OR e.scope_id = $2)),
-        `+CertificateStatusSQL+` AS status, c.id
+        d.first_seen, d.last_seen, n.present, n.seen, ` + CertificateStatusSQL + ` AS status, c.id
     FROM discovery_certificates d LEFT JOIN certificates c ON c.fingerprint_sha256 = d.fingerprint_sha256
-    WHERE d.is_leaf AND ($3 = '' OR d.fingerprint_sha256 = $3)
-      AND ($4::timestamptz IS NULL OR (d.not_after, d.fingerprint_sha256) > ($4, $5))
-      AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.scope_id = $2))
-) x WHERE $1 = '' OR x.status = $1
-ORDER BY x.not_after, x.fingerprint_sha256 LIMIT $6`, f.Status, nullID(f.ScopeID), f.Fingerprint, afterAt, afterFP, limit(f.Limit))
+    CROSS JOIN LATERAL (SELECT (count(*) FILTER (WHERE e.state = 'present'))::int AS present, count(*)::int AS seen
+        FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'` + scope + `) n` +
+		in.whereSQL() + `
+) x` + out.whereSQL() + `
+ORDER BY x.not_after, x.fingerprint_sha256 LIMIT ` + out.arg(limit(f.Limit))
+	rows, err := q.Query(ctx, sql, out.args...)
 	if err != nil {
 		return nil, wrap("list the discovered certificates", err)
 	}
-	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[CertificateRow])
-	return out, wrap("list the discovered certificates", err)
+	list, err := pgx.CollectRows(rows, pgx.RowToStructByPos[CertificateRow])
+	return list, wrap("list the discovered certificates", err)
 }
-
-// nullID is NULL for uuid.Nil.
-func nullID(id uuid.UUID) uuid.NullUUID { return uuid.NullUUID{UUID: id, Valid: id != uuid.Nil} }
 
 // EndpointRow is a discovered endpoint, with the live target it belongs to when one has its address or host name as
 // its host (case-insensitively; TargetID null otherwise). ChainLen counts every certificate presented, the dropped
@@ -130,7 +163,8 @@ type EndpointRow struct {
 	TargetName    string
 }
 
-// EndpointCursor is the position after a row, in the order of the list (address, port, sni, id).
+// EndpointCursor is the position after a row: (address, port, sni) inside a scope (its unique key), with ID across
+// scopes.
 type EndpointCursor struct {
 	Address netip.Addr
 	Port    int
@@ -138,8 +172,8 @@ type EndpointCursor struct {
 	ID      uuid.UUID
 }
 
-// EndpointFilter selects endpoints: of one scope (uuid.Nil: any), presenting one leaf ("" any), after a cursor, at most
-// Limit.
+// EndpointFilter selects endpoints: of one scope (uuid.Nil: any), presenting one leaf ("" any), after a cursor (nil:
+// the first page), at most Limit.
 type EndpointFilter struct {
 	ScopeID     uuid.UUID
 	Fingerprint string
@@ -147,29 +181,39 @@ type EndpointFilter struct {
 	Limit       int
 }
 
-// ListEndpoints lists endpoints in (address, port, sni, id) order (index discovery_endpoints_list; inside a scope that is
-// the order of its unique key).
+// ListEndpoints lists endpoints. Inside a scope the order is the unique key (scope_id, address, port, sni)
+// (index discovery_endpoints_key); across scopes it is (address, port, sni, id) (index discovery_endpoints_list).
 func ListEndpoints(ctx context.Context, q db.Querier, f EndpointFilter) ([]EndpointRow, error) {
-	var after *netip.Addr
-	var c EndpointCursor
-	if f.After != nil {
-		c = *f.After
-		after = &c.Address
+	var w query
+	order := "e.address, e.port, e.sni, e.id"
+	if f.ScopeID != uuid.Nil {
+		w.and("e.scope_id = " + w.arg(f.ScopeID))
+		order = "e.scope_id, e.address, e.port, e.sni"
 	}
-	rows, err := q.Query(ctx, `SELECT e.id, e.scope_id, e.address, e.port, e.sni, e.host, coalesce(e.fingerprint_sha256, ''),
+	if f.Fingerprint != "" {
+		w.and("e.fingerprint_sha256 = " + w.arg(f.Fingerprint))
+	}
+	if c := f.After; c != nil {
+		key := "(" + w.arg(c.Address) + "::inet, " + w.arg(c.Port) + "::int, " + w.arg(c.SNI) + "::text"
+		if f.ScopeID != uuid.Nil {
+			w.and("(e.address, e.port, e.sni) > " + key + ")")
+		} else {
+			w.and("(e.address, e.port, e.sni, e.id) > " + key + ", " + w.arg(c.ID) + "::uuid)")
+		}
+	}
+	sql := `SELECT e.id, e.scope_id, e.address, e.port, e.sni, e.host, coalesce(e.fingerprint_sha256, ''),
     CASE WHEN e.fingerprint_sha256 IS NULL THEN 0 ELSE 1 + cardinality(e.chain_fingerprints) END,
     e.tls_version, e.cipher, e.state, e.last_error_code, e.missed_scans, e.first_seen, e.last_seen, e.last_scanned_at, e.gone_since,
     tg.id, coalesce(tg.name, '')
 FROM discovery_endpoints e
 LEFT JOIN LATERAL (SELECT t.id, t.name::text AS name FROM targets t
     WHERE t.deleted_at IS NULL AND (lower(t.config->>'host') = host(e.address) OR (e.host <> '' AND lower(t.config->>'host') = e.host))
-    ORDER BY t.name, t.id LIMIT 1) tg ON true
-WHERE ($1::uuid IS NULL OR e.scope_id = $1) AND ($2 = '' OR e.fingerprint_sha256 = $2)
-  AND ($3::inet IS NULL OR (e.address, e.port, e.sni, e.id) > ($3, $4, $5, $6))
-ORDER BY e.address, e.port, e.sni, e.id LIMIT $7`, nullID(f.ScopeID), f.Fingerprint, after, c.Port, c.SNI, c.ID, limit(f.Limit))
+    ORDER BY t.name, t.id LIMIT 1) tg ON true` + w.whereSQL() + `
+ORDER BY ` + order + ` LIMIT ` + w.arg(limit(f.Limit))
+	rows, err := q.Query(ctx, sql, w.args...)
 	if err != nil {
 		return nil, wrap("list the discovered endpoints", err)
 	}
-	out, err := pgx.CollectRows(rows, pgx.RowToStructByPos[EndpointRow])
-	return out, wrap("list the discovered endpoints", err)
+	list, err := pgx.CollectRows(rows, pgx.RowToStructByPos[EndpointRow])
+	return list, wrap("list the discovered endpoints", err)
 }

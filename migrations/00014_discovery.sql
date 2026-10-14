@@ -201,6 +201,9 @@ CREATE INDEX discovery_endpoints_fingerprint ON discovery_endpoints (fingerprint
 CREATE INDEX discovery_endpoints_chain ON discovery_endpoints USING gin (chain_fingerprints);
 CREATE INDEX discovery_endpoints_gone ON discovery_endpoints (gone_since) WHERE state = 'gone';
 CREATE INDEX discovery_endpoints_last_scan ON discovery_endpoints (last_scan_id) WHERE last_scan_id IS NOT NULL;
+-- The endpoint -> target link of the results (a live target whose host is the endpoint's address or host name, compared
+-- lower-cased) looks targets up by this expression. An index only: nothing about targets changes; the Down drops it.
+CREATE INDEX discovery_targets_host ON targets (lower(config->>'host')) WHERE deleted_at IS NULL;
 
 -- The discovery settings (A2, design decision 3). An absent row is the default: no global exclusions, 90 days of
 -- retention, and no allowed scan network (nothing may be scanned). A stored row has this shape.
@@ -236,6 +239,7 @@ DELETE FROM settings WHERE key IN ('discovery.exclusions', 'discovery.retention_
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_allowed_networks;
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_exclusions;
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_retention_days;
+DROP INDEX discovery_targets_host;
 DROP TABLE discovery_endpoints;
 DROP TABLE discovery_certificates;
 DROP TRIGGER discovery_scans_done_frozen ON discovery_scans;

@@ -408,6 +408,9 @@ func TestDiscoveryIndexes(t *testing.T) {
 	assert.Contains(t, defs["discovery_endpoints_chain"], "gin (chain_fingerprints)")
 	assert.Contains(t, defs["discovery_endpoints_gone"], "(gone_since) WHERE (state = 'gone'::text)")
 	assert.Contains(t, defs["discovery_endpoints_last_scan"], "(last_scan_id) WHERE (last_scan_id IS NOT NULL)")
+	var host string
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT indexdef FROM pg_indexes WHERE indexname = 'discovery_targets_host'`).Scan(&host))
+	assert.Contains(t, host, "ON public.targets USING btree (lower((config ->> 'host'::text))) WHERE (deleted_at IS NULL)")
 }
 
 func TestDiscoveryTablesHaveNoClockDefaults(t *testing.T) {
@@ -446,6 +449,9 @@ func TestMigration00014DownAndUpAgain(t *testing.T) {
 	assert.Zero(t, fn, "the Down drops the discovery functions")
 	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT count(*) FROM pg_constraint WHERE conname LIKE 'settings_discovery%'").Scan(&con))
 	assert.Zero(t, con, "the Down drops the settings CHECK")
+	var idx int
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE indexname LIKE 'discovery\\_%'").Scan(&idx))
+	assert.Zero(t, idx, "the Down drops every discovery index, the one on targets included")
 	var settingsLeft int
 	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT count(*) FROM settings WHERE key LIKE 'discovery.%'").Scan(&settingsLeft))
 	assert.Zero(t, settingsLeft, "the Down deletes the discovery settings with the data they governed")
