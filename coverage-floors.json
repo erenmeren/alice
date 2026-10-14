@@ -49,6 +49,8 @@
   "alice/internal/testutil/fakesmtp": 92,
   "alice/internal/testutil/fakeidp": 92,
   "alice/internal/testutil/fakeacme": 90,
+  "alice/internal/testutil/fakefleet": 90,
+  "alice/cmd/alice-fakefleet": 90,
   "alice/internal/backup/format": 95,
   "alice/internal/backup/dump": 90,
   "alice/internal/backup": 84,

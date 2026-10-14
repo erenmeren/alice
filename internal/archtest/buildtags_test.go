@@ -48,9 +48,11 @@ var testOnlyImports = []string{
 // built into the e2e fake Azure image only and is no release binary (TestReleaseBinariesLinkNoTestPackages
 // lists the binaries that ship). cmd/alice-fakesmtp and cmd/alice-fakeidp are the same kind of tool for the
 // mail and OpenID Connect fakes (internal/testutil/fakesmtp and fakeidp); cmd/alice-fakeacme is the one of
-// the fake ACME CA (internal/testutil/fakeacme).
+// the fake ACME CA (internal/testutil/fakeacme); cmd/alice-fakefleet is the one of the fake TLS fleet of the
+// network discovery journeys (internal/testutil/fakefleet, listed by name too: plan 2026-10-13-network-discovery A9).
 var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
-	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme"}
+	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme",
+	"internal/testutil/fakefleet", "cmd/alice-fakefleet"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
 var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense"}
@@ -440,7 +442,12 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 		assert.NotContains(t, deps, "alice/internal/testutil/fakesmtp", "tags %q", tags)
 		assert.NotContains(t, deps, "alice/internal/testutil/fakeidp", "tags %q", tags)
 		assert.NotContains(t, deps, "alice/internal/testutil/fakeacme", "tags %q", tags)
+		assert.NotContains(t, deps, "alice/internal/testutil/fakefleet", "tags %q", tags)
 	}
+	for _, bin := range []string{"./cmd/alice-helper", "./cmd/licensectl"} {
+		assert.NotContains(t, goListDeps(t, "", bin), "alice/internal/testutil/fakefleet", bin)
+	}
+	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakefleet"), "alice/internal/testutil/fakefleet", "the fake fleet tool is where the fleet is linked")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakesmtp"), "alice/internal/testutil/fakesmtp")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeidp"), "alice/internal/testutil/fakeidp")
 	assert.Contains(t, goListDeps(t, "", "./cmd/alice-fakeacme"), "alice/internal/testutil/fakeacme", "the fake ACME tool is where the fake is linked")

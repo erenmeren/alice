@@ -92,6 +92,10 @@ var rules = map[string][]string{
 	// The fake ACME CA is a stand-alone RFC 8555 server: it imports the clock and no other package of Alice, so
 	// it cannot drift towards the code it tests (golang.org/x/crypto/acme is outside the module's rules).
 	"alice/internal/testutil/fakeacme": {"alice/internal/platform/clock"},
+	// The fake TLS fleet of the network discovery tests (plan 2026-10-13-network-discovery) builds its certificates
+	// with the test PKI, reads the real clock and imports nothing else of Alice: it cannot drift towards the
+	// discovery code it tests.
+	"alice/internal/testutil/fakefleet": {"alice/internal/testutil/pki", "alice/internal/platform/clock"},
 }
 
 const platform = "alice/internal/platform/..."
@@ -257,6 +261,10 @@ func TestAllowed(t *testing.T) {
 		{"fakeacme to the clock allowed", "alice/internal/testutil/fakeacme", "alice/internal/platform/clock", true},
 		{"fakeacme to netaddr denied", "alice/internal/testutil/fakeacme", "alice/internal/platform/netaddr", false},
 		{"fakeacme to the interface package denied", "alice/internal/testutil/fakeacme", "alice/internal/providers", false},
+		{"fakefleet to the test PKI allowed", "alice/internal/testutil/fakefleet", "alice/internal/testutil/pki", true},
+		{"fakefleet to netaddr denied", "alice/internal/testutil/fakefleet", "alice/internal/platform/netaddr", false},
+		{"fakefleet to the scan policy helper denied", "alice/internal/testutil/fakefleet", "alice/internal/testutil/scanpolicy", false},
+		{"fakefleet to the clock allowed", "alice/internal/testutil/fakefleet", "alice/internal/platform/clock", true},
 		{"azureid to anything of Alice denied", "alice/internal/platform/azureid", "alice/internal/providers", false},
 		{"provider to platform/db denied", nginx, "alice/internal/platform/db", false},
 		{"provider interface pkg to platform/db denied", "alice/internal/providers", "alice/internal/platform/db", false},

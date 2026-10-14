@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"net/netip"
 	"os"
 	"regexp"
 	"sort"
@@ -11,6 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
+
+	"alice/internal/platform/netaddr"
+	"alice/internal/testutil/fakefleet"
 )
 
 type composeService struct {
@@ -44,9 +49,12 @@ type composeService struct {
 }
 
 // composeNetworks reads a service's networks as a list of names or as a map of names to their
-// options (aliases).
-type composeNetworks map[string]struct {
-	Aliases []string `yaml:"aliases"`
+// options (aliases, a fixed address).
+type composeNetworks map[string]composeNetwork
+
+type composeNetwork struct {
+	Aliases     []string `yaml:"aliases"`
+	IPv4Address string   `yaml:"ipv4_address"`
 }
 
 func (n *composeNetworks) UnmarshalYAML(node *yaml.Node) error {
@@ -58,15 +66,11 @@ func (n *composeNetworks) UnmarshalYAML(node *yaml.Node) error {
 			return err
 		}
 		for _, name := range names {
-			(*n)[name] = struct {
-				Aliases []string `yaml:"aliases"`
-			}{}
+			(*n)[name] = composeNetwork{}
 		}
 		return nil
 	case yaml.MappingNode:
-		var m map[string]struct {
-			Aliases []string `yaml:"aliases"`
-		}
+		var m map[string]composeNetwork
 		if err := node.Decode(&m); err != nil {
 			return err
 		}
@@ -89,6 +93,12 @@ type composeFile struct {
 	Services map[string]composeService `yaml:"services"`
 	Networks map[string]struct {
 		Internal bool `yaml:"internal"`
+		IPAM     struct {
+			Config []struct {
+				Subnet  string `yaml:"subnet"`
+				Gateway string `yaml:"gateway"`
+			} `yaml:"config"`
+		} `yaml:"ipam"`
 	} `yaml:"networks"`
 }
 
@@ -117,8 +127,8 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 		names = append(names, name)
 	}
 	// The overlay adds the SSH target and the fake Azure service, nothing else; the release file has neither.
-	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakeacme", "fakesmtp", "fakeidp"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, ACME, SMTP and identity provider services")
-	for _, fake := range []string{"fakeazure", "fakeacme"} {
+	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakeacme", "fakesmtp", "fakeidp", "fakefleet"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, ACME, SMTP, identity provider and TLS fleet services")
+	for _, fake := range []string{"fakeazure", "fakeacme", "fakefleet"} {
 		_, fakeInBase := base.Services[fake]
 		assert.False(t, fakeInBase, "the release compose file has no %s service", fake)
 	}
@@ -363,7 +373,7 @@ func TestComposeAndImagesNeverSetTheSDKLoggingOrRegionVariables(t *testing.T) {
 	}
 	// Dockerfiles: an ENV or ARG line (comments may name the variables). The setup script that writes
 	// deploy/.env must not either.
-	for _, path := range []string{"../../deploy/Dockerfile", "../../test/images/fakeazure/Dockerfile", "../../test/images/fakeacme/Dockerfile", "../../test/images/e2e-target/Dockerfile"} {
+	for _, path := range []string{"../../deploy/Dockerfile", "../../test/images/fakeazure/Dockerfile", "../../test/images/fakeacme/Dockerfile", "../../test/images/fakefleet/Dockerfile", "../../test/images/e2e-target/Dockerfile"} {
 		raw, err := os.ReadFile(path)
 		require.NoError(t, err)
 		for _, l := range dockerfileInstructions(string(raw)) {
@@ -555,4 +565,113 @@ func TestComposeMountsTheBackupVolume(t *testing.T) {
 	alice := readCompose(t, "../../deploy/docker-compose.yml").Services["alice"]
 	assert.Contains(t, alice.Volumes, "alice-backups:/opt/alice/backups")
 	assert.Equal(t, "/opt/alice/backups", alice.Environment["ALICE_BACKUP_DIR"])
+}
+
+// The fake TLS fleet exists only in the test overlay. It sits only on its own internal network "fleet" at a fixed
+// address, under a name per server kind, publishes nothing, is hardened like the other fakes and needs no volume:
+// discovery trusts nothing, so alice reads none of its CA. Alice joins the fleet network at a fixed address too.
+func TestE2EFakeFleetIsTestOnlyHardenedOnItsOwnNetwork(t *testing.T) {
+	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
+	fake, ok := overlay.Services["fakefleet"]
+	require.True(t, ok)
+	assert.Empty(t, fake.Ports, "the fleet publishes nothing")
+	assert.Equal(t, []string{"fleet"}, fake.Networks.names(), "only its own network")
+	assert.Equal(t, fleetIP, fake.Networks["fleet"].IPv4Address)
+	wantAliases := []string{fleetDomain}
+	for _, k := range fakefleet.AllKinds {
+		wantAliases = append(wantAliases, string(k)+"."+fleetDomain)
+	}
+	assert.Equal(t, wantAliases, fake.Networks["fleet"].Aliases, "a name per server kind, the names its certificates carry")
+	assert.True(t, fake.ReadOnly)
+	assert.Equal(t, []string{"ALL"}, fake.CapDrop)
+	assert.Empty(t, fake.CapAdd, "port 443 is bound through the unprivileged port start sysctl, not a capability")
+	assert.Equal(t, map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, fake.Sysctls)
+	assert.Equal(t, []string{"no-new-privileges:true"}, fake.SecurityOpt)
+	assert.Regexp(t, `^[1-9][0-9]*:[1-9][0-9]*$`, fake.User, "non-root")
+	assert.NotEmpty(t, fake.MemLimit)
+	assert.Positive(t, fake.PidsLimit)
+	assert.Empty(t, fake.Volumes, "no shared CA: discovery trusts nothing")
+	assert.Equal(t, "alice-e2e-fakefleet", fake.Image)
+	assert.Equal(t, "..", fake.Build.Context)
+	assert.Equal(t, "test/images/fakefleet/Dockerfile", fake.Build.Dockerfile)
+	_, err := os.Stat("../../" + fake.Build.Dockerfile)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"CMD", "/alice-fakefleet", "ctl", "ping"}, fake.Healthcheck.Test)
+	assert.Equal(t, []string{"serve", "--bind", "0.0.0.0", "--domain", fleetDomain, "--ctl", "127.0.0.1:9092"}, fake.Command,
+		"the control API stays on loopback; every kind on its default port")
+
+	fleetNet, ok := overlay.Networks["fleet"]
+	require.True(t, ok, "the overlay declares the fleet network")
+	assert.True(t, fleetNet.Internal, "no route out, and no default route for alice")
+	require.Len(t, fleetNet.IPAM.Config, 1)
+	assert.Equal(t, fleetSubnet, fleetNet.IPAM.Config[0].Subnet)
+	assert.Equal(t, "10.89.0.1", fleetNet.IPAM.Config[0].Gateway)
+
+	alice := overlay.Services["alice"]
+	assert.Equal(t, []string{"fleet"}, alice.Networks.names(), "the overlay adds only the fleet network to alice's base networks")
+	assert.Equal(t, aliceFleetIP, alice.Networks["fleet"].IPv4Address)
+	_, waits := alice.DependsOn["fakefleet"]
+	assert.False(t, waits, "alice does not need the fleet to start")
+	base := readCompose(t, "../../deploy/docker-compose.yml")
+	_, inBase := base.Networks["fleet"]
+	assert.False(t, inBase, "the release compose file has no fleet network")
+}
+
+const (
+	fleetDomain  = "fleet.alice-e2e.test"
+	fleetSubnet  = "10.89.0.0/24"
+	fleetIP      = "10.89.0.10"
+	aliceFleetIP = "10.89.0.2"
+)
+
+// The fleet's subnet is outside every range the scan policy refuses by itself: with 10.89.0.0/24 allowed, every
+// address of it may be scanned except alice's own address on it (the policy reads alice's interfaces) — and the
+// policy refuses alice's own address there, so the journeys can show that refusal too.
+func TestFleetSubnetIsScannableExceptAlicesOwnAddress(t *testing.T) {
+	subnet := netip.MustParsePrefix(fleetSubnet)
+	own := netip.MustParseAddr(aliceFleetIP)
+	policy, err := netaddr.NewScanPolicy(context.Background(), netaddr.ScanPolicyInputs{
+		AllowedNetworks: []netip.Prefix{subnet},
+		DatabaseURL:     "postgres://alice@postgres:5432/alice",
+		LookupHost: func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr("172.30.0.5")}, nil
+		},
+		InterfaceAddrs:  func() ([]netip.Addr, error) { return []netip.Addr{own, netip.MustParseAddr("172.30.0.4")}, nil },
+		DefaultGateways: func() ([]netip.Addr, error) { return []netip.Addr{netip.MustParseAddr("172.31.0.1")}, nil },
+	})
+	require.NoError(t, err)
+	assert.NoError(t, policy.CheckScan(netip.MustParseAddr(fleetIP)), "the fleet itself")
+	assert.ErrorIs(t, policy.CheckScan(own), netaddr.ErrScanRefused, "alice's own address on the fleet network")
+	for a := subnet.Addr().Next(); subnet.Contains(a); a = a.Next() {
+		if a != own {
+			assert.NoError(t, policy.CheckScan(a), "%s", a)
+		}
+	}
+	assert.ErrorIs(t, policy.CheckScan(netip.MustParseAddr("10.89.1.10")), netaddr.ErrScanRefused, "outside the allowed network")
+}
+
+// The release compose file and image never mention the fake fleet, its network or its names.
+func TestReleaseComposeAndImageNeverMentionTheFakeFleet(t *testing.T) {
+	for _, path := range []string{"../../deploy/docker-compose.yml", "../../deploy/Dockerfile"} {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, s := range []string{"fakefleet", "alice-fakefleet", fleetDomain, "10.89.0."} {
+			assert.NotContains(t, string(raw), s, "%s", path)
+		}
+	}
+}
+
+// The fake fleet image builds on the same two pinned base images as the release image and the other fakes.
+func TestFakeFleetDockerfileReusesTheReleaseBaseImages(t *testing.T) {
+	release := dockerfileFroms(t, "../../deploy/Dockerfile")
+	fake := dockerfileFroms(t, "../../test/images/fakefleet/Dockerfile")
+	require.Len(t, fake, 2, "a builder and a runtime image")
+	for ref := range fake {
+		assert.Contains(t, ref, "@sha256:")
+		assert.True(t, release[ref], "%s is not a base image of deploy/Dockerfile", ref)
+	}
+	raw, err := os.ReadFile("../../test/images/fakefleet/Dockerfile")
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "PRIVATE "+"KEY", "no key material in the image")
+	assert.Contains(t, string(raw), "USER 65532:65532")
 }

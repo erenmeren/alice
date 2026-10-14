@@ -26,6 +26,13 @@ services:
       fakeacme: { condition: service_healthy }
       fakesmtp: { condition: service_healthy }
       fakeidp: { condition: service_healthy }
+    # The network discovery journeys scan the fake fleet: alice joins the internal "fleet" network (added to the
+    # base file's frontend and backend) at a fixed address. The network is internal, so it gives alice no default
+    # route: the scan policy's built-in refusals (alice's own addresses, its default gateways) do not touch
+    # 10.89.0.0/24 except alice's own 10.89.0.2; the journeys allow 10.89.0.0/24 in the scan settings.
+    networks:
+      fleet:
+        ipv4_address: 10.89.0.2
   # Test-only SSH target for the Phase 3 and Phase 4 journeys (web/e2e/phase3.spec.ts and later):
   # Ubuntu 22.04 with OpenSSH, sudo, fixture users and keys generated at image build time, alice-helper
   # built from this repository in /opt/alice-bundle, and the distribution's Nginx with two TLS
@@ -172,6 +179,70 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+  # Test-only fleet of TLS servers for the network discovery journeys: internal/testutil/fakefleet as a container
+  # (cmd/alice-fakefleet). One server per kind (valid, expired, self-signed, wrong order, TLS 1.0 only, slow-loris,
+  # giant chain, reset, plain text, 256 SNI names, ...), each on its own fixed port of 10.89.0.10 (fakefleet.DefaultPorts;
+  # the valid server on 443), named <kind>.fleet.alice-e2e.test by Docker's DNS on the fleet network. Its CA and
+  # certificates are generated when it starts. Playwright reads its access log (which endpoints were dialed, whether
+  # any application byte arrived after a handshake) with "docker compose exec fakefleet /alice-fakefleet ctl log
+  # --settle", which talks to its loopback-only control API. It sits only on the internal fleet network, publishes
+  # nothing and runs as a non-root user: port 443 is bindable because the container's unprivileged port start is 0
+  # (a namespaced sysctl), not because of a capability.
+  fakefleet:
+    image: alice-e2e-fakefleet
+    build:
+      context: ..
+      dockerfile: test/images/fakefleet/Dockerfile
+    command: ["serve", "--bind", "0.0.0.0", "--domain", "fleet.alice-e2e.test", "--ctl", "127.0.0.1:9092"]
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    mem_limit: 256m
+    pids_limit: 128
+    ulimits: { core: 0 }
+    networks:
+      fleet:
+        ipv4_address: 10.89.0.10
+        aliases:
+          - fleet.alice-e2e.test
+          - valid.fleet.alice-e2e.test
+          - expired.fleet.alice-e2e.test
+          - not-yet-valid.fleet.alice-e2e.test
+          - self-signed.fleet.alice-e2e.test
+          - wrong-order.fleet.alice-e2e.test
+          - missing-intermediate.fleet.alice-e2e.test
+          - sni.fleet.alice-e2e.test
+          - tls10.fleet.alice-e2e.test
+          - tls12.fleet.alice-e2e.test
+          - tls13.fleet.alice-e2e.test
+          - rsa-kex.fleet.alice-e2e.test
+          - sha1.fleet.alice-e2e.test
+          - slow-loris.fleet.alice-e2e.test
+          - giant-chain.fleet.alice-e2e.test
+          - huge-chain.fleet.alice-e2e.test
+          - reset.fleet.alice-e2e.test
+          - plaintext.fleet.alice-e2e.test
+          - many-sni.fleet.alice-e2e.test
+          - malformed.fleet.alice-e2e.test
+    healthcheck:
+      test: ["CMD", "/alice-fakefleet", "ctl", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+# The discovery journeys' own network: internal (no route out, no default route for alice), fixed addresses.
+# 10.89.0.0/24 is outside every range the scan policy refuses by itself (internal/platform/netaddr scanBuiltins;
+# compose_test.go checks it).
+networks:
+  fleet:
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.89.0.0/24
+          gateway: 10.89.0.1
 
 volumes:
   fakeazure-ca: {}

@@ -166,6 +166,27 @@ if "${compose[@]}" config --services | grep -qx fakeidp; then
     check "fakeidp is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$idp")" "healthy"
   fi
 fi
+# The e2e overlay adds the fake TLS fleet (network discovery journeys): it sits only on the internal fleet network at
+# its fixed address, publishes nothing and is hardened like the other fakes; the fleet network is internal.
+if "${compose[@]}" config --services | grep -qx fakefleet; then
+  fleet="$("${compose[@]}" ps -q fakefleet)"
+  if [[ -z "$fleet" ]]; then
+    echo "FAIL: the e2e fake TLS fleet is not running"; fail=1
+  else
+    check "fakefleet publishes no ports" "$(docker port "$fleet" | wc -l | tr -d ' ')" "0"
+    check "fakefleet is only on the internal fleet network at 10.89.0.10" \
+      "$(docker inspect -f '{{range $n, $s := .NetworkSettings.Networks}}{{$n}} {{$s.IPAddress}} {{end}}' "$fleet")" "${project}_fleet 10.89.0.10 "
+    check "fleet network is internal" "$(docker network inspect -f '{{.Internal}}' "${project}_fleet")" "true"
+    check "fakefleet root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$fleet")" "true"
+    check "fakefleet drops all capabilities and adds none" \
+      "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$fleet")" '["ALL"] null'
+    check "fakefleet has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$fleet")" '["no-new-privileges:true"]'
+    check "fakefleet runs as a non-root user" \
+      "$(docker inspect -f '{{.Config.User}}' "$fleet" | grep -Ec '^[1-9][0-9]*:[1-9][0-9]*$' || true)" "1"
+    check "fakefleet has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$fleet")" "128"
+    check "fakefleet is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$fleet")" "healthy"
+  fi
+fi
 # The test shims and the test PKI exist only in the SSH target, never in the Alice image.
 check "alice image has no systemctl shim" \
   "$(docker cp "$alice:/usr/bin/systemctl" - >/dev/null 2>&1 && echo present || echo absent)" "absent"
