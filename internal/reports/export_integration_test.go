@@ -269,3 +269,71 @@ VALUES ($1, $2, $3, 'root', '/root/.ssh/authorized_keys', $4, '=evil', now(), no
 		return n
 	}())
 }
+
+// ExportRows is the export machinery for another module's list (network discovery, Task 9): the same count-first cap,
+// the same per-person slot (one export of any kind at a time), the audit row of the caller's action committed before
+// the first byte, csvx's formula guard, and the rows page by page.
+func TestExportRowsSharesTheMachinery(t *testing.T) {
+	svc, _, d, _ := exportWorld(t)
+	ctx := context.Background()
+	ada := audit.Actor{Type: audit.ActorUser, ID: uuid.New(), Name: "ada"}
+	pages := map[string]struct {
+		rows [][]string
+		next string
+	}{
+		"":   {[][]string{{"=cmd|' /C calc'!A0", "1"}}, "p2"},
+		"p2": {[][]string{{"plain", "2"}}, ""},
+	}
+	x := reports.RowExport{Action: "discovery.export", Details: map[string]string{"kind": "discovery_certificates", "format": "csv", "status": "unmanaged"},
+		Header: []string{"subject_cn", "n"}, Page: func(_ context.Context, cursor string) ([][]string, string, error) {
+			p := pages[cursor]
+			return p.rows, p.next, nil
+		}}
+	w := &actionCheckingWriter{t: t, d: d, action: "discovery.export"}
+	n, err := svc.ExportRows(ctx, ada, x, w)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	assert.Equal(t, 1, w.rowsAtFirstByte, "committed before the first byte")
+	assert.Equal(t, [][]string{{"subject_cn", "n"}, {"'=cmd|' /C calc'!A0", "1"}, {"plain", "2"}}, parse(t, w.b.Bytes()))
+	var details, objectType string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT details::text, object_type FROM audit_log WHERE action = 'discovery.export'`).Scan(&details, &objectType))
+	assert.Equal(t, "discovery_certificates", objectType)
+	assert.Contains(t, details, `"row_count": "2"`)
+	assert.Contains(t, details, `"status": "unmanaged"`)
+
+	block := &blockingWriter{started: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { _, err := svc.ExportCertificates(ctx, ada, inventory.CertificateFilter{}, block); done <- err }()
+	<-block.started
+	_, err = svc.ExportRows(ctx, ada, x, &bytes.Buffer{})
+	assert.ErrorIs(t, err, reports.ErrExportBusy, "one export of any kind per person")
+	close(block.release)
+	require.NoError(t, <-done)
+
+	x.Page = func(context.Context, string) ([][]string, string, error) { return nil, "", context.DeadlineExceeded }
+	var b bytes.Buffer
+	_, err = svc.ExportRows(ctx, ada, x, &b)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Zero(t, b.Len())
+	var rows int
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'discovery.export'`).Scan(&rows))
+	assert.Equal(t, 1, rows, "a failed count writes no audit row")
+}
+
+// actionCheckingWriter counts the committed rows of an action when the first byte arrives.
+type actionCheckingWriter struct {
+	t               *testing.T
+	d               *pgtest.DB
+	action          string
+	started         bool
+	rowsAtFirstByte int
+	b               bytes.Buffer
+}
+
+func (w *actionCheckingWriter) Write(p []byte) (int, error) {
+	if !w.started {
+		w.started = true
+		require.NoError(w.t, w.d.Owner.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE action = $1`, w.action).Scan(&w.rowsAtFirstByte))
+	}
+	return w.b.Write(p)
+}

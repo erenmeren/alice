@@ -74,7 +74,7 @@ func (s *Service) ExportCertificates(ctx context.Context, a audit.Actor, f inven
 		}
 		return rows, p.NextCursor, nil
 	}
-	return s.export(ctx, a, details, certificateColumns, page, w)
+	return s.export(ctx, a, "inventory.exported", details, certificateColumns, page, w)
 }
 
 // ExportSSHKeys is ExportCertificates for the SSH key list.
@@ -107,7 +107,29 @@ func (s *Service) ExportSSHKeys(ctx context.Context, a audit.Actor, f inventory.
 		}
 		return rows, p.NextCursor, nil
 	}
-	return s.export(ctx, a, details, sshKeyColumns, page, w)
+	return s.export(ctx, a, "inventory.exported", details, sshKeyColumns, page, w)
+}
+
+// RowExport is the export of a list another module owns (network discovery's certificates): the audit action, its
+// details (kind, which is also the audit object type, and the filters), the header row and the list read page by page
+// (cursor "" first; next "" on the last page).
+type RowExport struct {
+	Action  string
+	Details map[string]string
+	Header  []string
+	Page    func(ctx context.Context, cursor string) (rows [][]string, next string, err error)
+}
+
+// ExportRows writes x as CSV with the machinery of ExportCertificates: one export of any kind at a time per person
+// (ErrExportBusy), every page counted first and more than MaxExportRows refused before anything is written (ErrTooLarge),
+// the x.Action audit row (with row_count) committed before the first byte, csvx's formula guard on every cell.
+func (s *Service) ExportRows(ctx context.Context, a audit.Actor, x RowExport, w io.Writer) (int, error) {
+	details := make(map[string]string, len(x.Details)+1)
+	for k, v := range x.Details {
+		details[k] = v
+	}
+	page := func(cursor string) ([][]string, string, error) { return x.Page(ctx, cursor) }
+	return s.export(ctx, a, x.Action, details, x.Header, page, w)
 }
 
 // acquire takes the user's export slot (S-10); the returned function gives it back.
@@ -125,7 +147,7 @@ func (s *Service) acquire(user uuid.UUID) (func(), bool) {
 	}, true
 }
 
-func (s *Service) export(ctx context.Context, a audit.Actor, details map[string]string, header []string,
+func (s *Service) export(ctx context.Context, a audit.Actor, action string, details map[string]string, header []string,
 	page func(cursor string) ([][]string, string, error), w io.Writer) (int, error) {
 	release, ok := s.acquire(a.ID)
 	if !ok {
@@ -149,7 +171,7 @@ func (s *Service) export(ctx context.Context, a audit.Actor, details map[string]
 	}
 	details["row_count"] = strconv.Itoa(count) // what pass 1 counted; rows added since may be cut at the cap
 	if err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a, Action: "inventory.exported", ObjectType: details["kind"],
+		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: a, Action: action, ObjectType: details["kind"],
 			Result: audit.Success, Details: details})
 		return err
 	}); err != nil {
