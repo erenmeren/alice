@@ -10,7 +10,7 @@ import (
 
 func TestTemplateNamesAreValid(t *testing.T) {
 	pattern := regexp.MustCompile(`^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$`) // notify's templatePattern
-	assert.Len(t, Templates(), 11)
+	assert.Len(t, Templates(), 12)
 	for _, tpl := range Templates() {
 		assert.Regexp(t, pattern, tpl)
 	}

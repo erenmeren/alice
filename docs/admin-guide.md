@@ -257,7 +257,7 @@ expires and e-mails the recipients:
 | Key Vault certificate | It is enabled and still in the vault, unless its current version is a certificate in use on a server (the certificate e-mail covers it then) |
 | Key Vault key | It is enabled, still in the vault and has an expiry date |
 | Client secret of a vault | Alice signs in to the vault with a client secret; the date is the one typed when the vault was added or its credentials replaced |
-| Certificate found on the network, not managed by Alice | A network discovery scan scope with **alert on expiry** (off by default) found it on an address that has not gone, and Alice has no record of this exact certificate. Once Alice has it (for example after the server is added), only the managed e-mails apply. The Overview does not count it with the managed certificates; it shows it on its own line |
+| Certificate found on the network, not managed by Alice | A network discovery scan scope that is switched on and has **alert on expiry** (off by default) found it on an address that has not gone, and Alice has no record of this exact certificate. Once Alice has it (for example after the server is added), only the managed e-mails apply. The Overview does not count it with the managed certificates; it shows it on its own line |
 
 By default Alice e-mails 60, 30, 14, 7 and 1 days before the expiry, and once more when it has expired. **Settings →
 Alerts** changes the days (**Send an e-mail this many days before an expiry**): 1 to 10 different whole numbers from
@@ -282,8 +282,9 @@ under **Needs attention**.
 
 **The first check after the upgrade** e-mails every monitored item that has already reached a threshold (only its
 most urgent one). In one check Alice sends at most 20 e-mails of each kind; the rest are recorded the same way and
-summed up in one e-mail "More expiry notices: N" per kind. Every notice is in the audit log (**Expiry notice
-recorded**, `alert.sent`; the summary `alert.summarized`).
+summed up in one e-mail "More expiry notices: N" per kind (for certificates found on the network, with a link to the
+network discovery page). Every notice is in the audit log (**Expiry notice recorded**, `alert.sent`; the summary
+`alert.summarized`).
 
 **What an expiry e-mail says**: the certificate's name, its expiry time in UTC (for example `2026-10-17 09:00 UTC`;
 e-mails do not use the person's time zone), the days left, the websites and servers that use it (up to 10 each) and

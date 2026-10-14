@@ -313,7 +313,9 @@ func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 		"alert.discovered_certificate_expiring": with(found, "days", "7"),
 		"alert.discovered_certificate_expired":  found,
 		"alert.more":                            {"count": "5", "kind": "certificate_expiry"},
-		auth.TemplateLockout:                    {"username": "ada", "minutes": "15", "failed_logins": "10"},
+		"alert.more_discovered": {"count": "5", "kind": "discovered_certificate_expiry",
+			"discovery_url": "https://alice.example.com/discovery?view=unmanaged"},
+		auth.TemplateLockout: {"username": "ada", "minutes": "15", "failed_logins": "10"},
 	}
 	templates := append(alerts.Templates(), auth.Templates()...)
 	require.Len(t, params, len(templates), "one params set per template")
@@ -321,7 +323,7 @@ func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 		p, ok := params[tpl]
 		require.True(t, ok, tpl)
 		note := "kv"
-		if strings.HasPrefix(tpl, "alert.certificate") || strings.HasPrefix(tpl, "alert.discovered") {
+		if strings.HasPrefix(tpl, "alert.certificate") || strings.HasPrefix(tpl, "alert.discovered") || tpl == "alert.more_discovered" {
 			note = "true"
 		}
 		for _, ps := range []map[string]string{p, with(p, "license_note", note, "license_url", "https://alice.example.com/license")} {
@@ -355,6 +357,11 @@ func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 			assert.Contains(t, m.Body, "Data centre", tpl+" "+lang)
 			assert.Contains(t, m.Subject, "legacy.example.com", tpl+" "+lang)
 		}
+	}
+	for _, lang := range []string{"en", "tr"} {
+		m := s.Render("ada@example.com", "alert.more_discovered", lang, params["alert.more_discovered"])
+		assert.Contains(t, m.Body, "https://alice.example.com/discovery?view=unmanaged", "the summary of the discovered kind: "+lang)
+		assert.Contains(t, m.Subject, "5", lang)
 	}
 	found7 := s.Render("ada@example.com", "alert.discovered_certificate_expiring", "en", params["alert.discovered_certificate_expiring"])
 	assert.Equal(t, "Certificate not managed by Alice expiring: legacy.example.com (days left: 7)", found7.Subject)

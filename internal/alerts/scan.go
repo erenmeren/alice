@@ -211,8 +211,14 @@ func (s *Service) recordSuppressed(ctx context.Context, k Kind, due []dueItem, n
 			return nil
 		}
 		params := map[string]string{"count": strconv.Itoa(n), "kind": string(k)}
+		template := "alert.more"
+		if k == KindDiscoveredCertificate {
+			// The Overview does not list unmanaged certificates: this summary sends its reader to the discovery page.
+			template = "alert.more_discovered"
+			params["discovery_url"] = discoveryURL(note)
+		}
 		addNote(params, k, note)
-		if err := s.notifier.NotifyAdmins(ctx, tx, "alert.more", params); err != nil {
+		if err := s.notifier.NotifyAdmins(ctx, tx, template, params); err != nil {
 			return fmt.Errorf("alerts: queue the summary: %w", err)
 		}
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("alerts"), Action: "alert.summarized",
@@ -245,6 +251,9 @@ func templateFor(k Kind, level int) string {
 	}
 	return "alert." + base + "_expiring"
 }
+
+// discoveryURL is the discovery page's list of unmanaged certificates at Alice's public address.
+func discoveryURL(note licenseNote) string { return note.base + "/discovery?view=unmanaged" }
 
 func addNote(params map[string]string, k Kind, note licenseNote) {
 	if !note.locked {
@@ -285,7 +294,7 @@ func paramsOf(it Item, now time.Time, level int, note licenseNote) map[string]st
 		p["fingerprint"] = it.Fingerprint
 		p["endpoints"] = joined(it.Endpoints, it.moreWebsites)
 		p["scopes"] = joined(it.Scopes, it.moreServers)
-		p["discovery_url"] = note.base + "/discovery?view=unmanaged"
+		p["discovery_url"] = discoveryURL(note)
 	default:
 		p["vault"] = it.Vault
 	}

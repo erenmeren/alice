@@ -1630,6 +1630,10 @@
       "more": {
         "subject": "More expiry notices: {{count}}",
         "body": "In this check, {{count}} more items reached an expiry threshold. Alice did not send a separate e-mail for each of them.\n\nOpen the Dashboard in Alice to see them all."
+      },
+      "more_discovered": {
+        "subject": "More expiry notices for certificates found on the network: {{count}}",
+        "body": "In this check, {{count}} more certificates that Alice found on the network, and does not manage, reached an expiry threshold. Alice did not send a separate e-mail for each of them.\n\nSee them all on the network discovery page in Alice: {{discovery_url}}"
       }
     },
     "auth": {

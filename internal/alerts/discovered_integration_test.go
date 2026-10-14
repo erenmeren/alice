@@ -4,6 +4,7 @@ package alerts_test
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -122,7 +123,7 @@ AND object_type = 'discovered_certificate_expiry' AND details->>'threshold_days'
 }
 
 // A discovered certificate that becomes managed (its fingerprint enters certificates), whose scope turns
-// alert_on_expiry off, or whose scope is deleted stops alerting; the ledger keeps what was sent (append-only, like
+// alert_on_expiry off, is switched off (ruling: a disabled scope does not alert) or is deleted stops alerting; the ledger keeps what was sent (append-only, like
 // every kind) and nothing fails. Turning the flag on again resumes at the next level, never resending one.
 func TestDiscoveredAlertsStopWhenManagedOrTheScopeStopsAlerting(t *testing.T) {
 	d := pgtest.New(t)
@@ -130,20 +131,21 @@ func TestDiscoveredAlertsStopWhenManagedOrTheScopeStopsAlerting(t *testing.T) {
 	clk := clock.NewFake(t0)
 	r := &recorder{}
 	s := newService(t, d, clk, lic{}, r)
-	adopted, flagged, deleted := seed.Hex("adopted"), seed.Hex("flagged"), seed.Hex("deleted")
-	a, b, c := seedScope(t, d, "a", true), seedScope(t, d, "b", true), seedScope(t, d, "c", true)
+	adopted, flagged, deleted, disabled := seed.Hex("adopted"), seed.Hex("flagged"), seed.Hex("deleted"), seed.Hex("disabled")
+	a, b, c, e := seedScope(t, d, "a", true), seedScope(t, d, "b", true), seedScope(t, d, "c", true), seedScope(t, d, "e", true)
 	for i, x := range []struct {
 		scope uuid.UUID
 		fp    string
-	}{{a, adopted}, {b, flagged}, {c, deleted}} {
+	}{{a, adopted}, {b, flagged}, {c, deleted}, {e, disabled}} {
 		seedFound(t, d, x.fp, x.fp[:8]+".example.com", t0.Add(40*day))
 		seedEndpoint(t, d, x.scope, "10.0.0."+string(rune('1'+i)), 443, "", x.fp, "present")
 	}
 	_, err := s.Scan(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int{"discovered_certificate_expiry:60": 3}, ledger(t, d))
+	assert.Equal(t, map[string]int{"discovered_certificate_expiry:60": 4}, ledger(t, d))
 
-	// The adopted one is now in the inventory (uploaded, on no server yet: "known"); b's flag is off; c is deleted.
+	// The adopted one is now in the inventory (uploaded, on no server yet: "known"); b's flag is off; c is deleted; e is
+	// switched off.
 	_, err = d.Owner.Exec(ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, not_before, not_after, key_algorithm,
 public_key_sha256, pem_chain, source, first_seen_at, last_seen_at, created_at)
 VALUES ($1, $2, 'adopted', $3::timestamptz - interval '90 days', $3, 'ecdsa', $2, '', 'uploaded', now(), now(), now())`,
@@ -153,6 +155,8 @@ VALUES ($1, $2, 'adopted', $3::timestamptz - interval '90 days', $3, 'ecdsa', $2
 	require.NoError(t, err)
 	_, err = d.Owner.Exec(ctx, `UPDATE discovery_scopes SET deleted_at = now() WHERE id = $1`, c)
 	require.NoError(t, err)
+	_, err = d.Owner.Exec(ctx, `UPDATE discovery_scopes SET enabled = false WHERE id = $1`, e) // ruling: a disabled scope does not alert
+	require.NoError(t, err)
 	clk.Set(t0.Add(20 * day)) // 20 days left: the 30-day level is due for each, were they still alerting
 	items, err := s.Items(ctx, alerts.Kinds(), t0.Add(60*day), 0)
 	require.NoError(t, err)
@@ -160,15 +164,22 @@ VALUES ($1, $2, 'adopted', $3::timestamptz - interval '90 days', $3, 'ecdsa', $2
 	res, err := s.Scan(ctx)
 	require.NoError(t, err)
 	assert.Zero(t, res.Failed)
-	assert.Equal(t, map[string]int{"discovered_certificate_expiry:60": 3}, ledger(t, d), "nothing new, nothing removed")
+	assert.Equal(t, map[string]int{"discovered_certificate_expiry:60": 4}, ledger(t, d), "nothing new, nothing removed")
 
 	_, err = d.Owner.Exec(ctx, `UPDATE discovery_scopes SET alert_on_expiry = true WHERE id = $1`, b)
 	require.NoError(t, err)
 	_, err = s.Scan(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, map[string]int{"discovered_certificate_expiry:60": 3, "discovered_certificate_expiry:30": 1}, ledger(t, d))
+	assert.Equal(t, map[string]int{"discovered_certificate_expiry:60": 4, "discovered_certificate_expiry:30": 1}, ledger(t, d))
 	assert.Equal(t, "alert.discovered_certificate_expiring", r.got[len(r.got)-1].template)
 	assert.Equal(t, flagged, r.got[len(r.got)-1].params["fingerprint"])
+
+	_, err = d.Owner.Exec(ctx, `UPDATE discovery_scopes SET enabled = true WHERE id = $1`, e) // re-enabled: resumes
+	require.NoError(t, err)
+	_, err = s.Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int{"discovered_certificate_expiry:60": 4, "discovered_certificate_expiry:30": 2}, ledger(t, d))
+	assert.Equal(t, disabled, r.got[len(r.got)-1].params["fingerprint"])
 }
 
 // A7: the managed kinds' Items and the Overview counts are byte-identical with and without discovery rows, also when a
@@ -225,4 +236,29 @@ func TestManagedItemsAndCountsIgnoreDiscovery(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{seed.Hex("x1"), seed.Hex("x2")}, found)
+}
+
+// Review fix: over the cap, the discovered kind's summary e-mail sends its reader to the discovery page (the Overview
+// does not list unmanaged certificates), with Alice's public address.
+func TestDiscoveredSummaryLinksTheDiscoveryPage(t *testing.T) {
+	d := pgtest.New(t)
+	ctx := context.Background()
+	clk := clock.NewFake(t0)
+	r := &recorder{}
+	s := newService(t, d, clk, lic{}, r)
+	require.NoError(t, settings.Set(ctx, d.App, settings.GeneralKey,
+		settings.General{PublicURL: "https://alice.example.com", RetiredKeyRetentionDays: 30, Version: 1}, t0))
+	scope := seedScope(t, d, "dc", true)
+	for i := range 22 {
+		fp := seed.Hex("many" + string(rune('a'+i)))
+		seedFound(t, d, fp, "", t0.Add(time.Duration(i+1)*time.Hour))
+		seedEndpoint(t, d, scope, "10.0.1."+strconv.Itoa(i+1), 443, "", fp, "present")
+	}
+	res, err := s.Scan(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 20, res.Queued[alerts.KindDiscoveredCertificate])
+	assert.Equal(t, 2, res.Suppressed[alerts.KindDiscoveredCertificate])
+	require.Equal(t, "alert.more_discovered", r.got[0].template)
+	assert.Equal(t, map[string]string{"count": "2", "kind": "discovered_certificate_expiry",
+		"discovery_url": "https://alice.example.com/discovery?view=unmanaged"}, r.got[0].params)
 }
