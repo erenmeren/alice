@@ -34,7 +34,7 @@ func presented(t testing.TB, e Endpoint, der ...[]byte) Result {
 	t.Helper()
 	c, err := tlsprobe.ParsePresentedChain(der)
 	require.NoError(t, err)
-	return Result{Endpoint: e, Presented: der, Chain: c, TLSVersion: "TLS 1.3", CipherSuite: "TLS_AES_128_GCM_SHA256"}
+	return PresentedResult(e, der, c, "TLS 1.3", "TLS_AES_128_GCM_SHA256")
 }
 
 func ep(a string, port uint16, sni string) Endpoint {

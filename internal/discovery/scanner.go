@@ -9,6 +9,7 @@ package discovery
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -58,11 +59,13 @@ type Deps struct {
 	PollInterval time.Duration
 
 	// Test seams (in-package tests only): the expansion (default Expand), the batch size (default BatchSize), the
-	// token bucket (default newBucket) and a hook run once the dispatch has stopped.
+	// token bucket (default newBucket), a hook run once the dispatch has stopped and the chain parser (default
+	// tlsprobe.ParsePresentedChain).
 	expand    func(context.Context, Scope, ExpandInputs) (*Expansion, error)
 	batch     int
 	newBucket func(clock.Clock, int) waiter
 	onStop    func()
+	parse     func([][]byte) (tlsprobe.Chain, error)
 }
 
 func (d Deps) withDefaults() Deps {
@@ -89,6 +92,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.newBucket == nil {
 		d.newBucket = newBucket
+	}
+	if d.parse == nil {
+		d.parse = tlsprobe.ParsePresentedChain
 	}
 	if d.onStop == nil {
 		d.onStop = func() {}
@@ -315,20 +321,36 @@ func (s *scan) dialer() tlsprobe.DialFunc {
 	}
 }
 
-// probeOne captures the chain of one endpoint: it dials Endpoint.Address (never its host name) and parses what came.
-func (s *scan) probeOne(ctx context.Context, e Endpoint) (Result, bool) {
+// probeOne captures the chain of one endpoint: it dials Endpoint.Address (never its host name) and parses what came. A
+// panic while probing or parsing (hostile input reaching a bug) is the endpoint's result, malformed: the scan goes on.
+func (s *scan) probeOne(ctx context.Context, e Endpoint) (r Result, ok bool) {
+	defer func() {
+		if recover() != nil {
+			r, ok = Result{Endpoint: e, Code: tlsprobe.CodeMalformed}, true
+		}
+	}()
 	addr := netip.AddrPortFrom(e.Address, e.Port).String()
 	res, err := tlsprobe.CapturePresentedChain(ctx, s.dialer(), addr, e.SNI)
 	if err != nil {
 		code, ok := tlsprobe.CodeOf(err)
 		return Result{Endpoint: e, Code: code}, ok
 	}
-	chain, err := tlsprobe.ParsePresentedChain(res.Certificates)
+	chain, err := s.parse(res.Certificates)
 	if err != nil {
 		code, _ := tlsprobe.CodeOf(err) // ParsePresentedChain fails with an *Error only
 		return Result{Endpoint: e, Code: code}, true
 	}
-	return Result{Endpoint: e, Presented: res.Certificates, Chain: chain, TLSVersion: res.TLSVersion, CipherSuite: res.CipherSuite}, true
+	return PresentedResult(e, res.Certificates, chain, res.TLSVersion, res.CipherSuite), true
+}
+
+// store writes one batch; a panic in the store is returned as an error (the ingester goes on draining).
+func (s *scan) store(ctx context.Context, b Batch) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			err = fmt.Errorf("discovery: recording a batch panicked: %v", p)
+		}
+	}()
+	return s.Store.Ingest(ctx, b)
 }
 
 // ingest writes the results in batches. A failed batch stops the dispatch and is returned; the rest is drained
@@ -338,7 +360,7 @@ func (s *scan) ingest(ctx context.Context, results <-chan Result, stop context.C
 	var failed error
 	flush := func() {
 		if len(batch) > 0 && failed == nil {
-			failed = s.Store.Ingest(context.WithoutCancel(ctx), Batch{ScanID: s.id, ScopeID: s.scopeID, Now: s.Clock.Now(), Results: batch})
+			failed = s.store(context.WithoutCancel(ctx), Batch{ScanID: s.id, ScopeID: s.scopeID, Now: s.Clock.Now(), Results: batch})
 			if failed != nil {
 				stop(errIngestFailed)
 			}

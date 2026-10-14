@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net/netip"
+	"reflect"
 	"slices"
 	"strconv"
 	"sync"
@@ -26,20 +27,21 @@ import (
 
 // memStore is a Store in memory: it records what the scanner asked and wrote.
 type memStore struct {
-	mu         sync.Mutex
-	start      ScanStart
-	beginErr   error
-	rules      RuleSettings
-	rulesErr   error
-	rulesReads int
-	cancel     atomic.Bool
-	cancelSeen atomic.Bool
-	cancelErr  error
-	prepared   *Expansion
-	prepareErr error
-	ingestErr  error // returned from the first Ingest on
-	batches    []Batch
-	finished   []Finish
+	mu          sync.Mutex
+	start       ScanStart
+	beginErr    error
+	rules       RuleSettings
+	rulesErr    error
+	rulesReads  int
+	cancel      atomic.Bool
+	cancelSeen  atomic.Bool
+	cancelErr   error
+	prepared    *Expansion
+	prepareErr  error
+	ingestErr   error // returned from the first Ingest on
+	ingestPanic bool
+	batches     []Batch
+	finished    []Finish
 }
 
 func newMemStore(s Scope) *memStore {
@@ -78,6 +80,9 @@ func (m *memStore) PrepareScan(_ context.Context, _, _ uuid.UUID, x *Expansion, 
 func (m *memStore) Ingest(_ context.Context, b Batch) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.ingestPanic {
+		panic("store bug")
+	}
 	if m.ingestErr != nil {
 		return m.ingestErr
 	}
@@ -622,7 +627,7 @@ func TestTimeoutSeenByThePoll(t *testing.T) {
 	st.start.Scope.Concurrency = 1
 	release := make(chan struct{})
 	dialing := make(chan struct{})
-	p := counter()
+	p := counter("127.0.0.0/8") // refused on the socket: no local port is touched
 	p.hook = func(n int, _ netip.Addr) {
 		if n == 1 {
 			close(dialing)
@@ -686,8 +691,9 @@ func TestConcurrencyIsBounded(t *testing.T) {
 	st.start.Scope.Concurrency = 3
 	var inFlight, peak atomic.Int32
 	full := make(chan struct{})
+	var fullOnce sync.Once
 	release := make(chan struct{})
-	p := counter()
+	p := counter("127.0.0.0/8") // every connection is refused by the policy after the hook: nothing touches a local port
 	p.hook = func(int, netip.Addr) {
 		n := inFlight.Add(1)
 		for {
@@ -697,7 +703,7 @@ func TestConcurrencyIsBounded(t *testing.T) {
 			}
 		}
 		if n == 3 {
-			close(full)
+			fullOnce.Do(func() { close(full) })
 		}
 		<-release
 		inFlight.Add(-1)
@@ -718,7 +724,7 @@ func TestConcurrencyIsBounded(t *testing.T) {
 	require.Len(t, p.dialed(), 9)
 	require.Len(t, st.results(), 9)
 	for _, r := range st.results() {
-		require.Equal(t, tlsprobe.CodeRefused, r.Code, "nothing listens on these ports")
+		require.Equal(t, tlsprobe.CodePolicy, r.Code)
 	}
 }
 
@@ -780,7 +786,7 @@ func TestIngestFailureFailsTheScan(t *testing.T) {
 	st.ingestErr = errors.New("disk full")
 	st.start.Scope.Concurrency = 1
 	stopped := make(chan struct{})
-	p := counter()
+	p := counter("127.0.0.0/8") // refused on the socket: no local port is touched
 	p.hook = func(n int, _ netip.Addr) {
 		if n == 1 {
 			<-stopped
@@ -806,7 +812,7 @@ func TestParentContextEndsTheScan(t *testing.T) {
 	st := newMemStore(labScope())
 	st.start.Scope.Concurrency = 1
 	ctx, cancel := context.WithCancel(context.Background())
-	p := counter()
+	p := counter("127.0.0.0/8") // refused on the socket: no local port is touched
 	p.hook = func(n int, _ netip.Addr) {
 		if n == 2 {
 			cancel()
@@ -844,7 +850,7 @@ func TestCancelPollErrorsAreIgnored(t *testing.T) {
 	st.start.Scope.Concurrency = 1
 	release := make(chan struct{})
 	dialing := make(chan struct{})
-	p := counter()
+	p := counter("127.0.0.0/8") // refused on the socket: no local port is touched
 	p.hook = func(n int, _ netip.Addr) {
 		if n == 1 {
 			close(dialing)
@@ -898,5 +904,50 @@ func TestUnstorableLeafIsMalformed(t *testing.T) {
 	rs := st.results()
 	require.Len(t, rs, 1)
 	require.Equal(t, tlsprobe.CodeMalformed, rs[0].Code)
-	require.Empty(t, rs[0].Presented)
+	require.Empty(t, rs[0].Chain.Certificates)
+}
+
+// TestPanicsAreContained: a panic while parsing what a server sent is that endpoint's result (malformed) and the scan
+// goes on; a panic while recording a batch fails the scan (interrupted) with an error instead of crashing the process.
+func TestPanicsAreContained(t *testing.T) {
+	f := fleetOf(t, fakefleet.KindValid, fakefleet.KindSelfSigned)
+	st := newMemStore(labScope())
+	d := deps(st, counter())
+	d.parse = func(der [][]byte) (tlsprobe.Chain, error) {
+		if len(der) == 1 {
+			panic("hostile certificate")
+		}
+		return tlsprobe.ParsePresentedChain(der)
+	}
+	d.expand = fixed(&Expansion{Dial: fleetEndpoints(t, f, fakefleet.KindValid, fakefleet.KindSelfSigned)}, nil)
+	require.NoError(t, run(t, d))
+	settle(t, f)
+	got := map[uint16]tlsprobe.Code{}
+	for _, r := range st.results() {
+		got[r.Endpoint.Port] = r.Code
+	}
+	require.Equal(t, map[uint16]tlsprobe.Code{addrPort(t, f.Addr(fakefleet.KindValid)).Port(): "",
+		addrPort(t, f.Addr(fakefleet.KindSelfSigned)).Port(): tlsprobe.CodeMalformed}, got)
+	require.Equal(t, ScanDone, st.finish(t).State)
+
+	st = newMemStore(labScope())
+	st.ingestPanic = true
+	d = deps(st, counter("127.0.0.0/8"))
+	d.expand = fixed(&Expansion{Dial: []Endpoint{{Address: netip.MustParseAddr("127.0.0.1"), Port: 1}}}, nil)
+	require.ErrorContains(t, run(t, d), "panicked")
+	require.Equal(t, [2]string{ScanFailed, ReasonInterrupted}, [2]string{st.finish(t).State, st.finish(t).ErrorCode})
+}
+
+// TestResultHoldsOneCopyOfTheChain: a result keeps the parsed chain (whose Raw is the DER) and the fingerprints and
+// digest computed from what was presented, not the presented DER itself.
+func TestResultHoldsOneCopyOfTheChain(t *testing.T) {
+	typ := reflect.TypeFor[Result]()
+	for i := range typ.NumField() {
+		require.NotEqual(t, reflect.TypeFor[[][]byte](), typ.Field(i).Type, typ.Field(i).Name)
+	}
+	now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	leaf := testCert(t, "a.example", now.Add(-time.Hour), now.Add(time.Hour))
+	r := presented(t, ep("10.0.0.1", 443, ""), leaf)
+	require.Empty(t, r.ChainFingerprints)
+	require.Equal(t, chainDigest([][]byte{leaf}), r.ChainSHA256)
 }

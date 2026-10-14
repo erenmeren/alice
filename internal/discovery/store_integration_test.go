@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"strconv"
@@ -511,12 +512,105 @@ VALUES ($1, $2, 'schedule', 'done', $3, $3, $3, 5000)`, uuid.New(), scope, t0.Ad
 	require.Equal(t, [2]int{0, 1}, [2]int{r2.CertificatesNew, r2.CertChurn}, "the day's 5,000 are used up")
 	now := p.endpoint(t, scope, results[0].Endpoint)
 	require.Equal(t, old.Fingerprint, now.Fingerprint)
-	require.Equal(t, 1, p.count(t, `SELECT count(*) FROM discovery_endpoints WHERE last_scan_id = $1`, id2))
+	require.Zero(t, p.count(t, `SELECT count(*) FROM discovery_endpoints WHERE last_scan_id = $1`, id2), "no miss can be counted for it")
+	require.Equal(t, 1, p.count(t, `SELECT count(*) FROM discovery_endpoints WHERE last_scanned_at = $1`, t0.Add(2*time.Hour)), "it was scanned")
 
 	// A day later the window has moved on.
 	id3 := p.ingestScan(t, scope, t0.Add(26*time.Hour), presented(t, results[0].Endpoint, fresh))
 	require.Equal(t, 1, p.scan(t, id3).CertificatesNew)
 	require.Equal(t, fingerprint(fresh), p.endpoint(t, scope, results[0].Endpoint).Fingerprint)
+}
+
+// TestAnswerOverTheCapsIsAnAnswer (review fix 1): an endpoint that answers with a leaf the caps keep out answered: an
+// unreachable one has its misses cleared and is present again (with its stored leaf), a gone one comes back, and the
+// scan's end counts no miss for either.
+func TestAnswerOverTheCapsIsAnAnswer(t *testing.T) {
+	p := newPG(t)
+	scope := p.scope(t, "lab")
+	a, b, anchor := ep("10.0.0.1", 443, ""), ep("10.0.0.2", 443, ""), ep("10.0.0.3", 443, "")
+	leaf := testCert(t, "old.example", t0.AddDate(0, -1, 0), t0.AddDate(1, 0, 0))
+	refused := func(e Endpoint) Result { return Result{Endpoint: e, Code: tlsprobe.CodeRefused} }
+	at := func(i int) time.Time { return t0.Add(time.Duration(i) * time.Hour) }
+	p.ingestScan(t, scope, at(0), presented(t, a, leaf), presented(t, b, leaf), presented(t, anchor, leaf))
+	p.ingestScan(t, scope, at(1), refused(a), refused(b), presented(t, anchor, leaf))
+	p.ingestScan(t, scope, at(2), presented(t, a, leaf), refused(b), presented(t, anchor, leaf))
+	p.ingestScan(t, scope, at(3), refused(a), refused(b), presented(t, anchor, leaf))
+	require.Equal(t, [2]any{"unreachable", 1}, [2]any{p.endpoint(t, scope, a).State, p.endpoint(t, scope, a).Missed})
+	require.Equal(t, "gone", p.endpoint(t, scope, b).State)
+
+	// The day's budget is used up: the new leaves are only counted.
+	_, err := p.Owner.Exec(bg(), `INSERT INTO discovery_scans (id, scope_id, trigger, state, queued_at, started_at, finished_at, certificates_new)
+VALUES ($1, $2, 'schedule', 'done', $3, $3, $3, 5000)`, uuid.New(), scope, at(3).Add(time.Minute))
+	require.NoError(t, err)
+	over := func(cn string) []byte { return testCert(t, cn, t0.AddDate(0, -1, 0), t0.AddDate(1, 0, 0)) }
+	id := p.ingestScan(t, scope, at(4), presented(t, a, over("a-new.example")), presented(t, b, over("b-new.example")), presented(t, anchor, leaf))
+	require.Equal(t, 2, p.scan(t, id).CertChurn)
+	for _, e := range []Endpoint{a, b} {
+		got := p.endpoint(t, scope, e)
+		require.Equal(t, endpointState{State: "present", Fingerprint: fingerprint(leaf), Previous: []string{}, Chain: []string{}, LastSeen: got.LastSeen},
+			got, e.Address)
+	}
+}
+
+// TestConcurrentIngestsSharingCertificates (review fix 2): two scans storing the same new certificates in opposite
+// orders at the same time both succeed (certificates are written in fingerprint order; a deadlock is retried once).
+func TestConcurrentIngestsSharingCertificates(t *testing.T) {
+	p := newPG(t)
+	var shared [][]byte
+	for i := range 40 {
+		shared = append(shared, testCert(t, "shared"+strconv.Itoa(i)+".example", t0.AddDate(0, -1, 0), t0.AddDate(1, 0, 0)))
+	}
+	for round := range 5 {
+		_, err := p.Owner.Exec(bg(), `DELETE FROM discovery_endpoints`)
+		require.NoError(t, err)
+		_, err = p.Owner.Exec(bg(), `DELETE FROM discovery_certificates`)
+		require.NoError(t, err)
+		var batches [2]Batch
+		for k := range 2 {
+			scope := p.scope(t, "s"+strconv.Itoa(round)+"-"+strconv.Itoa(k))
+			id := p.running(t, scope, t0)
+			b := Batch{ScanID: id, ScopeID: scope, Now: t0}
+			for i := range shared {
+				j := i
+				if k == 1 {
+					j = len(shared) - 1 - i
+				}
+				b.Results = append(b.Results, presented(t, Endpoint{Address: netip.AddrFrom4([4]byte{10, 0, 0, byte(i + 1)}), Port: 443}, shared[j]))
+			}
+			require.NoError(t, p.st.PrepareScan(bg(), id, scope, &Expansion{Endpoints: len(b.Results)}, t0))
+			batches[k] = b
+		}
+		errs := make(chan error, 2)
+		start := make(chan struct{})
+		for _, b := range batches {
+			go func() {
+				<-start
+				errs <- p.st.Ingest(bg(), b)
+			}()
+		}
+		close(start)
+		require.NoError(t, <-errs)
+		require.NoError(t, <-errs)
+		require.Equal(t, len(shared), p.count(t, `SELECT count(*) FROM discovery_certificates`))
+	}
+	var pe pgconn.PgError
+	pe.Code = "40P01"
+	require.True(t, retryable(fmt.Errorf("wrapped: %w", &pe)))
+	pe.Code = "23505"
+	require.False(t, retryable(&pe))
+
+	// A batch that deadlocks is retried once: the second attempt stores it.
+	scope := p.scope(t, "retry")
+	id := p.running(t, scope, t0)
+	require.NoError(t, p.st.PrepareScan(bg(), id, scope, &Expansion{Endpoints: 2}, t0))
+	fp := &faultPool{pool: p.App, fail: 4, err: &pgconn.PgError{Code: "40P01"}} // begin, counters, existing, certificates
+	b := Batch{ScanID: id, ScopeID: scope, Now: t0, Results: []Result{presented(t, ep("10.9.0.1", 443, ""), shared[0])}}
+	require.NoError(t, NewStore(fp).Ingest(bg(), b))
+	require.Equal(t, 1, p.count(t, `SELECT endpoints_answered FROM discovery_scans WHERE id = $1`, id))
+	fp.fail, fp.calls, fp.err = 4, 0, &pgconn.PgError{Code: "40001"}
+	b.Results[0].Endpoint = ep("10.9.0.2", 443, "")
+	require.NoError(t, NewStore(fp).Ingest(bg(), b))
+	require.Equal(t, 2, p.count(t, `SELECT endpoints_answered FROM discovery_scans WHERE id = $1`, id))
 }
 
 // TestRetention deletes only what has expired, only discovery rows, with or without the license (class Always: Retain
@@ -643,6 +737,9 @@ func TestLinking(t *testing.T) {
 	p.ingestScan(t, scope, t0, presented(t, ep("10.0.0.5", 443, ""), unmanaged), presented(t, ep("10.0.0.6", 443, ""), managed),
 		presented(t, web, known), presented(t, ep("10.0.0.8", 443, ""), deadTarget), presented(t, ep("10.0.0.9", 443, ""), unmanaged))
 
+	// 10.0.0.9 stops answering: it still last presented the unmanaged leaf, but presents it no more.
+	_, err := p.Owner.Exec(bg(), `UPDATE discovery_endpoints SET state = 'unreachable', last_error_code = 'timeout' WHERE address = '10.0.0.9'`)
+	require.NoError(t, err)
 	byIP, err := seed.Target(bg(), p.Owner, "by-ip", "linux", "ok", nil)
 	require.NoError(t, err)
 	byName, err := seed.Target(bg(), p.Owner, "by-name", "nginx", "ok", nil)
@@ -663,20 +760,20 @@ func TestLinking(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all, 4)
 	type got struct {
-		FP, Status string
-		ID         uuid.NullUUID
-		Endpoints  int
+		FP, Status        string
+		ID                uuid.NullUUID
+		Endpoints, SeenOn int
 	}
 	var gs []got
 	for _, c := range all {
-		gs = append(gs, got{c.Fingerprint, c.Status, c.ManagedID, c.Endpoints})
+		gs = append(gs, got{c.Fingerprint, c.Status, c.ManagedID, c.Endpoints, c.SeenOn})
 	}
 	require.Equal(t, []got{
-		{fingerprint(unmanaged), StatusUnmanaged, uuid.NullUUID{}, 2},
-		{fingerprint(managed), StatusManaged, uuid.NullUUID{UUID: managedID, Valid: true}, 1},
-		{fingerprint(known), StatusKnown, uuid.NullUUID{UUID: knownID, Valid: true}, 1},
-		{fingerprint(deadTarget), StatusKnown, uuid.NullUUID{UUID: deadID, Valid: true}, 1},
-	}, gs, "soonest expiry first; a deleted target's location is not live")
+		{fingerprint(unmanaged), StatusUnmanaged, uuid.NullUUID{}, 1, 2},
+		{fingerprint(managed), StatusManaged, uuid.NullUUID{UUID: managedID, Valid: true}, 1, 1},
+		{fingerprint(known), StatusKnown, uuid.NullUUID{UUID: knownID, Valid: true}, 1, 1},
+		{fingerprint(deadTarget), StatusKnown, uuid.NullUUID{UUID: deadID, Valid: true}, 1, 1},
+	}, gs, "soonest expiry first; a deleted target's location is not live; presented now vs last seen on")
 
 	page, err := ListCertificates(bg(), p.App, CertificateFilter{Limit: 2})
 	require.NoError(t, err)
@@ -713,6 +810,19 @@ func TestLinking(t *testing.T) {
 	byFP, err := ListEndpoints(bg(), p.App, EndpointFilter{Fingerprint: fingerprint(unmanaged)})
 	require.NoError(t, err)
 	require.Len(t, byFP, 2)
+
+	// Inside a scope the keyset is the unique key: a second scope with the same address does not interleave.
+	other := p.scope(t, "other")
+	p.ingestScan(t, other, t0, presented(t, ep("10.0.0.5", 443, ""), unmanaged))
+	page1, err := ListEndpoints(bg(), p.App, EndpointFilter{ScopeID: scope, Limit: 2})
+	require.NoError(t, err)
+	c := page1[1]
+	page2, err := ListEndpoints(bg(), p.App, EndpointFilter{ScopeID: scope, After: &EndpointCursor{Address: c.Address, Port: c.Port, SNI: c.SNI}})
+	require.NoError(t, err)
+	require.Equal(t, eps, append(page1, page2...))
+	both, err := ListEndpoints(bg(), p.App, EndpointFilter{})
+	require.NoError(t, err)
+	require.Len(t, both, 6)
 }
 
 // inventoryCert inserts a managed certificate with der's fingerprint, on a live location of target when given.
@@ -742,6 +852,14 @@ type faultPool struct {
 	pool  *pgxpool.Pool
 	fail  int
 	calls int
+	err   error // the failure (nil: errFault)
+}
+
+func (f *faultPool) failure() error {
+	if f.err != nil {
+		return f.err
+	}
+	return errFault
 }
 
 func (f *faultPool) hit() bool { f.calls++; return f.calls == f.fail }
@@ -782,7 +900,7 @@ type faultTx struct {
 
 func (t *faultTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	if t.f.hit() {
-		return pgconn.CommandTag{}, errFault
+		return pgconn.CommandTag{}, t.f.failure()
 	}
 	return t.Tx.Exec(ctx, sql, args...)
 }

@@ -11,13 +11,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/discovery/tlsprobe"
 )
@@ -40,16 +43,29 @@ const (
 // ingestChunk is the most rows one statement writes.
 const ingestChunk = 500
 
-// Result is the outcome of one endpoint. Code is "" when the endpoint presented a chain: Presented is the DER as
-// presented (leaf first) and Chain its parse; otherwise Code says why not (tlsprobe's closed set; policy: the scan
-// policy refused it, never dialed).
+// Result is the outcome of one endpoint. Code is "" when the endpoint presented a chain: Chain is its parse (the only
+// copy of the DER a batch holds), ChainFingerprints the fingerprints of every certificate presented after the leaf
+// (dropped ones included: limitation L2b) and ChainSHA256 the digest of the whole presented chain; otherwise Code says
+// why not (tlsprobe's closed set; policy: the scan policy refused it, never dialed). PresentedResult builds one.
 type Result struct {
-	Endpoint    Endpoint
-	Code        tlsprobe.Code
-	Presented   [][]byte
-	Chain       tlsprobe.Chain
-	TLSVersion  string
-	CipherSuite string
+	Endpoint          Endpoint
+	Code              tlsprobe.Code
+	Chain             tlsprobe.Chain
+	ChainFingerprints []string
+	ChainSHA256       string
+	TLSVersion        string
+	CipherSuite       string
+}
+
+// PresentedResult is the result of an endpoint that presented der (leaf first), parsed as chain. The fingerprints and
+// the digest are computed here, so der itself need not be kept.
+func PresentedResult(e Endpoint, der [][]byte, chain tlsprobe.Chain, version, suite string) Result {
+	r := Result{Endpoint: e, Chain: chain, ChainFingerprints: make([]string, 0, max(0, len(der)-1)), ChainSHA256: chainDigest(der),
+		TLSVersion: version, CipherSuite: suite}
+	for _, d := range der[min(1, len(der)):] {
+		r.ChainFingerprints = append(r.ChainFingerprints, fingerprint(d))
+	}
+	return r
 }
 
 // Batch is one transaction's worth of results of a scan.
@@ -130,7 +146,23 @@ type endpointRow struct {
 // presented are de-duplicated, the new ones admitted while the per-scan and per-day caps allow (leaves first) and the
 // others only counted as churn; certificates and endpoints are upserted; an endpoint that answered with a leaf beyond the
 // caps keeps its stored state and only records that it answered; the scan's counters grow.
+// A batch that deadlocks or fails to serialize with another scan's (two scans storing the same new certificates) is
+// retried once; certificates are written in fingerprint order, so two batches lock them in the same order.
 func (s *PGStore) Ingest(ctx context.Context, b Batch) error {
+	err := s.ingest(ctx, b)
+	if retryable(err) {
+		err = s.ingest(ctx, b)
+	}
+	return err
+}
+
+// retryable reports a deadlock (40P01) or a serialization failure (40001).
+func retryable(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && (pe.Code == "40P01" || pe.Code == "40001")
+}
+
+func (s *PGStore) ingest(ctx context.Context, b Batch) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		var scanNew, dayNew int
 		err := tx.QueryRow(ctx, `SELECT certificates_new, (SELECT coalesce(sum(o.certificates_new), 0) FROM discovery_scans o
@@ -166,6 +198,7 @@ FROM discovery_scans s WHERE s.id = $1 AND s.state = 'running' FOR UPDATE`, b.Sc
 			}
 			rows = append(rows, row)
 		}
+		slices.SortFunc(admitted, func(a, b certRow) int { return strings.Compare(a.fp, b.fp) })
 		if err := upsertCertificates(ctx, tx, admitted, b.Now); err != nil {
 			return err
 		}
@@ -269,8 +302,7 @@ func admit(certs []certRow, existing map[string]bool, budget int) (admitted []ce
 	return admitted, refused
 }
 
-// endpointRowOf is the row of one result. chain lists the fingerprints of every certificate presented after the leaf
-// (dropped ones included, so its length is honest: limitation L2b), chainSHA the digest of the whole chain.
+// endpointRowOf is the row of one result (its chain as PresentedResult computed it).
 func endpointRowOf(r Result) endpointRow {
 	row := endpointRow{e: r.Endpoint, chain: []string{}}
 	row.state, row.code = StateFor(r.Code)
@@ -278,10 +310,8 @@ func endpointRowOf(r Result) endpointRow {
 		return row
 	}
 	row.fp = r.Chain.Certificates[0].FingerprintSHA256
-	for _, der := range r.Presented[1:] {
-		row.chain = append(row.chain, fingerprint(der))
-	}
-	row.chainSHA = chainDigest(r.Presented)
+	row.chain = append(row.chain, r.ChainFingerprints...)
+	row.chainSHA = r.ChainSHA256
 	if slices.Contains(tlsVersions, r.TLSVersion) {
 		row.tls = r.TLSVersion
 	}
@@ -384,16 +414,21 @@ ON CONFLICT (scope_id, address, port, sni) DO UPDATE SET
 }
 
 // touchEndpoints records that stored endpoints answered with a leaf the caps kept out: they were scanned and answered,
-// nothing else changes. An endpoint not stored yet is not created (it has no certificate to point at).
+// so their misses are cleared, and one that was unreachable, without TLS or gone and has a leaf on record is present
+// again (with that leaf: the new one is not stored). last_scan_id is left alone, so the scan's end counts no miss for
+// them. An endpoint not stored yet is not created (it has no certificate to point at).
 func touchEndpoints(ctx context.Context, tx pgx.Tx, b Batch, eps []Endpoint) error {
 	return chunks(eps, func(part []Endpoint) error {
 		addrs, ports, snis := make([]netip.Addr, len(part)), make([]int32, len(part)), make([]string, len(part))
 		for i, e := range part {
 			addrs[i], ports[i], snis[i] = e.Address, int32(e.Port), e.SNI
 		}
-		_, err := tx.Exec(ctx, `UPDATE discovery_endpoints e SET last_scanned_at = $2, last_scan_id = $3, missed_scans = 0
-FROM unnest($4::inet[], $5::int[], $6::text[]) AS k(a, p, s) WHERE e.scope_id = $1 AND e.address = k.a AND e.port = k.p AND e.sni = k.s`,
-			b.ScopeID, b.Now, b.ScanID, addrs, ports, snis)
+		_, err := tx.Exec(ctx, `UPDATE discovery_endpoints e SET last_scanned_at = $2, missed_scans = 0,
+    state = CASE WHEN e.fingerprint_sha256 IS NOT NULL AND e.state IN ('unreachable', 'no_tls', 'gone') THEN 'present' ELSE e.state END,
+    last_error_code = CASE WHEN e.fingerprint_sha256 IS NOT NULL AND e.state IN ('unreachable', 'no_tls', 'gone') THEN '' ELSE e.last_error_code END,
+    gone_since = CASE WHEN e.fingerprint_sha256 IS NOT NULL AND e.state = 'gone' THEN NULL ELSE e.gone_since END
+FROM unnest($3::inet[], $4::int[], $5::text[]) AS k(a, p, s) WHERE e.scope_id = $1 AND e.address = k.a AND e.port = k.p AND e.sni = k.s`,
+			b.ScopeID, b.Now, addrs, ports, snis)
 		return wrap("record the endpoints over the caps", err)
 	})
 }
