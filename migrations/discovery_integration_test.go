@@ -434,6 +434,12 @@ func TestMigration00014DownAndUpAgain(t *testing.T) {
 	ctx := context.Background()
 	seedDiscovery(t, d)
 	require.NoError(t, exec(t, d.App, `INSERT INTO settings (key, value, updated_at) VALUES ('discovery.retention_days', '30', now())`))
+	// A7: the ledger takes the discovered kind; the Down removes its rows and the kind, and keeps the managed kinds' rows.
+	ledgerRow := `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
+VALUES (gen_random_uuid(), $1, gen_random_uuid(), 'x', now(), 7, false, true, now())`
+	require.NoError(t, exec(t, d.App, ledgerRow, "discovered_certificate_expiry"))
+	require.NoError(t, exec(t, d.App, ledgerRow, "certificate_expiry"))
+	require.Error(t, exec(t, d.App, ledgerRow, "discovered_key_expiry"), "the kinds stay a closed list")
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
 	require.NoError(t, err)
 	_, err = p.DownTo(ctx, 13)
@@ -459,6 +465,10 @@ func TestMigration00014DownAndUpAgain(t *testing.T) {
 		"no discovery rule is left")
 	assert.Empty(t, grantProblems(t, d), "the Down leaves 00013's grants as they were")
 	require.NoError(t, exec(t, d.App, `DELETE FROM settings WHERE key = 'discovery.retention_days'`))
+	var kinds []string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT array_agg(kind) FROM alerts`).Scan(&kinds))
+	assert.Equal(t, []string{"certificate_expiry"}, kinds, "the Down deletes the discovered kind's ledger rows only")
+	require.Error(t, exec(t, d.App, ledgerRow, "discovered_certificate_expiry"), "the Down restores 00011's kinds")
 
 	// Down, then Up again with a stored setting: the Down removes it, so the Up's CHECKs cannot meet an edited value.
 	require.NoError(t, exec(t, d.App, `INSERT INTO settings (key, value, updated_at) VALUES ('discovery.allowed_networks', '["10.0.0.0/24"]', now())`))

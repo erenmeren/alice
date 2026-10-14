@@ -15,11 +15,22 @@ const maxListed = 10
 // certificate's notice; keys and the vault's client secret are monitored while their vault is. live is NOT
 // MATERIALIZED: it is read once per certificate by the correlated subqueries, which must use the index on
 // certificate_locations (certificate_id) instead of scanning every location each time (R32: 5,000 certificates).
+//
+// The last branch is not "monitored" and never enters Counts (decision D2): a discovered leaf certificate is alerted
+// while it is unmanaged (its fingerprint is not in certificates: neither managed nor known, the discovery ruling) and
+// an endpoint that is not gone, of a live scope with alert_on_expiry, presents it or last presented it (the definition
+// of the discovery summary). Its object id is DiscoveredObjectID, computed by Items (NULL here). alerting is NOT
+// MATERIALIZED for the same reason as live: the endpoint fingerprint index.
 const itemsSQL = `
 WITH live AS NOT MATERIALIZED (
     SELECT l.certificate_id, l.servers, t.id AS target_id, t.name::text AS target_name
     FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
     WHERE l.missing_since IS NULL AND l.certificate_id IS NOT NULL
+),
+alerting AS NOT MATERIALIZED (
+    SELECT e.fingerprint_sha256, e.host, e.address, e.port, sc.name::text AS scope_name
+    FROM discovery_endpoints e JOIN discovery_scopes sc ON sc.id = e.scope_id AND sc.deleted_at IS NULL AND sc.alert_on_expiry
+    WHERE e.state <> 'gone' AND e.fingerprint_sha256 IS NOT NULL
 )
 SELECT 'certificate_expiry'::text AS kind, c.id AS object_id,
        coalesce(nullif(c.subject_cn, ''), nullif(c.label, ''), left(c.fingerprint_sha256, 16)) AS name, c.not_after AS expires,
@@ -50,7 +61,19 @@ SELECT 'kv_credential_expiry', t.id, t.name::text, (cr.public_info->>'secret_exp
 FROM targets t JOIN credentials cr ON cr.id = t.credential_id
 WHERE 'kv_credential_expiry' = ANY ($1::text[]) AND t.type = 'azure_key_vault' AND t.deleted_at IS NULL
   AND cr.public_info ? 'secret_expires_on' AND (cr.public_info->>'secret_expires_on')::timestamptz <= $2::timestamptz
-ORDER BY 4, 2
+UNION ALL
+SELECT 'discovered_certificate_expiry', NULL::uuid,
+       coalesce(nullif(d.subject_cn, ''), d.sans[1], left(d.fingerprint_sha256, 16)), d.not_after, d.fingerprint_sha256,
+       array(SELECT DISTINCT coalesce(nullif(e.host, ''),
+                 CASE family(e.address) WHEN 6 THEN '[' || host(e.address) || ']' ELSE host(e.address) END) || ':' || e.port
+             FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 ORDER BY 1 LIMIT 11)::text[],
+       array(SELECT DISTINCT e.scope_name FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 ORDER BY 1 LIMIT 11)::text[],
+       '{}'::text[], '', NULL::uuid
+FROM discovery_certificates d
+WHERE 'discovered_certificate_expiry' = ANY ($1::text[]) AND d.is_leaf AND d.not_after <= $2::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
+  AND EXISTS (SELECT 1 FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256)
+ORDER BY 4, 2, 5
 LIMIT NULLIF($3::int, 0)`
 
 // Items lists the monitored items of kinds that expire before until, soonest first, expired ones included. limit 0
@@ -69,19 +92,29 @@ func (s *Service) Items(ctx context.Context, kinds []Kind, until time.Time, limi
 	for rows.Next() {
 		var (
 			it       Item
+			objectID *uuid.UUID
 			kind     string
 			targets  []string
 			vaultID  *uuid.UUID
 			websites []string
 			servers  []string
 		)
-		if err := rows.Scan(&kind, &it.ObjectID, &it.Name, &it.ExpiresAt, &it.Fingerprint, &websites, &servers, &targets,
+		if err := rows.Scan(&kind, &objectID, &it.Name, &it.ExpiresAt, &it.Fingerprint, &websites, &servers, &targets,
 			&it.Vault, &vaultID); err != nil {
 			return nil, fmt.Errorf("alerts: read the monitored items: %w", err)
 		}
 		it.Kind, it.ExpiresAt = Kind(kind), it.ExpiresAt.UTC()
-		it.Websites, it.moreWebsites = capList(websites)
-		it.Servers, it.moreServers = capList(servers)
+		if objectID != nil {
+			it.ObjectID = *objectID
+		}
+		if it.Kind == KindDiscoveredCertificate {
+			it.ObjectID = DiscoveredObjectID(it.Fingerprint)
+			it.Endpoints, it.moreWebsites = capList(websites)
+			it.Scopes, it.moreServers = capList(servers)
+		} else {
+			it.Websites, it.moreWebsites = capList(websites)
+			it.Servers, it.moreServers = capList(servers)
+		}
 		for _, t := range targets {
 			id, err := uuid.Parse(t)
 			if err != nil {

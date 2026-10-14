@@ -1619,6 +1619,14 @@
         "subject": "Süresi dolan Key Vault oturum açma parolası: {{vault}}",
         "body": "Alice'in {{vault}} Key Vault'unda oturum açmak için kullandığı istemci parolasının süresi şu zamanda doldu: {{expires_at}}.\n\nMicrosoft Entra ID'de yeni bir istemci parolası oluşturun ve Alice'te kasanın sayfasına girin."
       },
+      "discovered_certificate_expiring": {
+        "subject": "Alice'in yönetmediği sertifikanın süresi doluyor: {{name}} (kalan gün: {{days}})",
+        "body": "Alice'in yönetmediği bir sertifikanın süresi dolmak üzere: {{endpoints}}.\n\nSertifika: {{name}}\nSüresinin dolacağı zaman: {{expires_at}}. Kalan gün: {{days}}.\nBulunduğu tarama: {{scopes}}\nParmak izi (SHA-256): {{fingerprint}}\n\nAlice bu sertifikayı ağınızı tararken buldu. Alice bu sertifikayı yenilemez ve yerine yenisini koymaz. Bu sunucularla ilgilenen kişilerden sertifikayı bu zamandan önce yenilemelerini isteyin ya da sertifikasıyla Alice'in ilgilenmesi için sunucuyu Alice'e ekleyin.\n\nAlice'in ağda bulduğu ve yönetmediği tüm sertifikalar: {{discovery_url}}"
+      },
+      "discovered_certificate_expired": {
+        "subject": "Alice'in yönetmediği sertifikanın süresi doldu: {{name}}",
+        "body": "Alice'in yönetmediği bir sertifikanın süresi doldu: {{endpoints}}.\n\nSertifika: {{name}}\nSüresinin dolduğu zaman: {{expires_at}}.\nBulunduğu tarama: {{scopes}}\nParmak izi (SHA-256): {{fingerprint}}\n\nBu adreslere bağlanan kişiler ve programlar artık bir güvenlik uyarısı görebilir ya da bağlanamayabilir. Alice bu sertifikayı ağınızı tararken buldu, ancak onu yenilemez. Bu sunucularla ilgilenen kişilerden en kısa sürede geçerli bir sertifika koymalarını isteyin.\n\nAlice'in ağda bulduğu ve yönetmediği tüm sertifikalar: {{discovery_url}}"
+      },
       "more": {
         "subject": "Diğer süre dolumu bildirimleri: {{count}}",
         "body": "Bu denetimde {{count}} öğe daha bir süre dolumu eşiğine ulaştı. Alice bunların her biri için ayrı e-posta göndermedi.\n\nHepsini görmek için Alice'te Pano'yu açın."

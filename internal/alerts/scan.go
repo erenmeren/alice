@@ -22,14 +22,17 @@ const (
 	maxSubjectRune = 300
 )
 
-// licenseNote says whether the license is locked and where the license page is (L-28).
+// licenseNote says whether the license is locked and where the license page is (L-28); base is Alice's public address
+// without the trailing slash ("" when none is set), for the other links of a notice.
 type licenseNote struct {
 	locked bool
 	url    string
+	base   string
 }
 
 func noteFor(locked bool, publicURL string) licenseNote {
-	return licenseNote{locked: locked, url: strings.TrimSuffix(publicURL, "/") + "/license"}
+	base := strings.TrimSuffix(publicURL, "/")
+	return licenseNote{locked: locked, url: base + "/license", base: base}
 }
 
 // ledgerKey identifies one expiry instant of one object: a renewal (a new instant) starts a new series, and the
@@ -247,9 +250,9 @@ func addNote(params map[string]string, k Kind, note licenseNote) {
 	if !note.locked {
 		return
 	}
-	params["license_note"] = "kv"
-	if k == KindCertificate {
-		params["license_note"] = "true"
+	params["license_note"] = "true"
+	if k == KindKVCertificate || k == KindKVKey || k == KindKVCredential {
+		params["license_note"] = "kv"
 	}
 	params["license_url"] = note.url
 }
@@ -271,11 +274,19 @@ func paramsOf(it Item, now time.Time, level int, note licenseNote) map[string]st
 	if level != expiry.Expired {
 		p["days"] = strconv.Itoa(expiry.DaysLeft(it.ExpiresAt, now))
 	}
-	if it.Kind == KindCertificate {
+	switch it.Kind {
+	case KindCertificate:
 		p["fingerprint"] = it.Fingerprint
 		p["websites"] = joined(it.Websites, it.moreWebsites)
 		p["servers"] = joined(it.Servers, it.moreServers)
-	} else {
+	case KindDiscoveredCertificate:
+		// Public facts only (a certificate Alice does not manage has no secret of Alice's): where it was found, by which
+		// scope, its fingerprint and the page that lists it.
+		p["fingerprint"] = it.Fingerprint
+		p["endpoints"] = joined(it.Endpoints, it.moreWebsites)
+		p["scopes"] = joined(it.Scopes, it.moreServers)
+		p["discovery_url"] = note.base + "/discovery?view=unmanaged"
+	default:
 		p["vault"] = it.Vault
 	}
 	addNote(p, it.Kind, note)

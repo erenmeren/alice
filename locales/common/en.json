@@ -1619,6 +1619,14 @@
         "subject": "Key Vault sign-in secret expired: {{vault}}",
         "body": "The client secret Alice uses to sign in to the Key Vault {{vault}} expired at {{expires_at}}.\n\nCreate a new client secret in Microsoft Entra ID and enter it on the vault's page in Alice."
       },
+      "discovered_certificate_expiring": {
+        "subject": "Certificate not managed by Alice expiring: {{name}} (days left: {{days}})",
+        "body": "A certificate that Alice does not manage is about to expire on {{endpoints}}.\n\nCertificate: {{name}}\nExpires at: {{expires_at}}. Days left: {{days}}.\nFound while scanning: {{scopes}}\nFingerprint (SHA-256): {{fingerprint}}\n\nAlice found this certificate when it scanned your network. Alice does not renew it and does not put a new one in its place. Ask the people who look after these servers to renew it before then, or add the server to Alice so that Alice looks after its certificate.\n\nEvery certificate Alice found on the network and does not manage: {{discovery_url}}"
+      },
+      "discovered_certificate_expired": {
+        "subject": "Certificate not managed by Alice expired: {{name}}",
+        "body": "A certificate that Alice does not manage has expired on {{endpoints}}.\n\nCertificate: {{name}}\nExpired at: {{expires_at}}.\nFound while scanning: {{scopes}}\nFingerprint (SHA-256): {{fingerprint}}\n\nPeople and programs that connect to these addresses may now see a security warning or fail to connect. Alice found this certificate when it scanned your network, but Alice does not renew it. Ask the people who look after these servers to put a valid certificate in place as soon as possible.\n\nEvery certificate Alice found on the network and does not manage: {{discovery_url}}"
+      },
       "more": {
         "subject": "More expiry notices: {{count}}",
         "body": "In this check, {{count}} more items reached an expiry threshold. Alice did not send a separate e-mail for each of them.\n\nOpen the Dashboard in Alice to see them all."

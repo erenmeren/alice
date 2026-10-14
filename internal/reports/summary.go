@@ -284,7 +284,8 @@ func (s *Service) auditHead(ctx context.Context) (*AuditHead, error) {
 	return &AuditHead{HeadSeq: cp.Seq, HeadHash: cp.Hash, CheckedAt: cp.At, Intact: !auditBroken(st)}, nil
 }
 
-// Expiring lists the monitored items that expire within days (1..365), soonest first, expired ones included.
+// Expiring lists the monitored items that expire within days (1..365), soonest first, expired ones included. Only the
+// managed kinds: an unmanaged certificate a scan found is not in the Overview's list (decision D2).
 func (s *Service) Expiring(ctx context.Context, days, limit int) ([]alerts.Item, error) {
 	var v validate.Errors
 	if days < 1 || days > 365 {
@@ -296,7 +297,7 @@ func (s *Service) Expiring(ctx context.Context, days, limit int) ([]alerts.Item,
 	if err := v.Err(); err != nil {
 		return nil, err
 	}
-	items, err := s.alerts.Items(ctx, alerts.Kinds(), s.clock.Now().UTC().Add(time.Duration(days)*24*time.Hour), limit)
+	items, err := s.alerts.Items(ctx, alerts.ManagedKinds(), s.clock.Now().UTC().Add(time.Duration(days)*24*time.Hour), limit)
 	if err != nil {
 		return nil, fmt.Errorf("reports: %w", err)
 	}

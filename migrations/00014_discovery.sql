@@ -217,6 +217,12 @@ ALTER TABLE settings ADD CONSTRAINT settings_discovery_exclusions CHECK (CASE
 ALTER TABLE settings ADD CONSTRAINT settings_discovery_allowed_networks CHECK (CASE
     WHEN key <> 'discovery.allowed_networks' THEN true ELSE discovery_strings_ok(value, 256) END);
 
+-- The expiry ledger gains the discovered kind (decision 5, A7): an unmanaged certificate found on a scope with
+-- alert_on_expiry. Its object_id is the uuid v5 of the fingerprint (alerts.DiscoveredObjectID).
+ALTER TABLE alerts DROP CONSTRAINT alerts_kind_check;
+ALTER TABLE alerts ADD CONSTRAINT alerts_kind_check CHECK (kind IN ('certificate_expiry', 'kv_certificate_expiry', 'kv_key_expiry',
+    'kv_credential_expiry', 'discovered_certificate_expiry'));
+
 -- Grants (pattern 00013): a scope is soft-deleted and never removed, and its identity (id, creator, creation time) is
 -- fixed; a scan's scope, trigger, requester and queue time are fixed and a finished scan is frozen (Z1020); a
 -- certificate's body and parsed fields never change (its fingerprint is their hash), only when it was last seen and
@@ -236,6 +242,11 @@ GRANT UPDATE (fingerprint_sha256, chain_fingerprints, chain_sha256, tls_version,
 -- The discovery data is dropped, and so are the discovery settings it was governed by: an Up after the Down then never
 -- meets a value its CHECKs refuse.
 DELETE FROM settings WHERE key IN ('discovery.exclusions', 'discovery.retention_days', 'discovery.allowed_networks');
+-- The ledger rows of discovered certificates go with the data they were about; the kind leaves the closed list.
+DELETE FROM alerts WHERE kind = 'discovered_certificate_expiry';
+ALTER TABLE alerts DROP CONSTRAINT alerts_kind_check;
+ALTER TABLE alerts ADD CONSTRAINT alerts_kind_check CHECK (kind IN ('certificate_expiry', 'kv_certificate_expiry', 'kv_key_expiry',
+    'kv_credential_expiry'));
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_allowed_networks;
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_exclusions;
 ALTER TABLE settings DROP CONSTRAINT settings_discovery_retention_days;

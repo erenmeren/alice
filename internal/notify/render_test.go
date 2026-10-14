@@ -288,6 +288,9 @@ func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 	cert := map[string]string{"name": "www.example.com", "expires_at": "2026-12-01 09:00 UTC", "fingerprint": strings.Repeat("ab", 32),
 		"websites": "www.example.com, example.com", "servers": "web-01"}
 	kv := map[string]string{"name": "signing", "expires_at": "2026-12-01 09:00 UTC", "vault": "prod-vault"}
+	found := map[string]string{"name": "legacy.example.com", "expires_at": "2026-12-01 09:00 UTC", "fingerprint": strings.Repeat("cd", 32),
+		"endpoints": "10.0.0.5:443, legacy.example.com:8443", "scopes": "Data centre",
+		"discovery_url": "https://alice.example.com/discovery?view=unmanaged"}
 	with := func(base map[string]string, extra ...string) map[string]string {
 		out := map[string]string{}
 		for k, v := range base {
@@ -299,16 +302,18 @@ func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 		return out
 	}
 	params := map[string]map[string]string{
-		"alert.certificate_expiring":    with(cert, "days", "7"),
-		"alert.certificate_expired":     cert,
-		"alert.kv_certificate_expiring": with(kv, "days", "7"),
-		"alert.kv_certificate_expired":  kv,
-		"alert.kv_key_expiring":         with(kv, "days", "7"),
-		"alert.kv_key_expired":          kv,
-		"alert.kv_credential_expiring":  with(kv, "days", "7"),
-		"alert.kv_credential_expired":   kv,
-		"alert.more":                    {"count": "5", "kind": "certificate_expiry"},
-		auth.TemplateLockout:            {"username": "ada", "minutes": "15", "failed_logins": "10"},
+		"alert.certificate_expiring":            with(cert, "days", "7"),
+		"alert.certificate_expired":             cert,
+		"alert.kv_certificate_expiring":         with(kv, "days", "7"),
+		"alert.kv_certificate_expired":          kv,
+		"alert.kv_key_expiring":                 with(kv, "days", "7"),
+		"alert.kv_key_expired":                  kv,
+		"alert.kv_credential_expiring":          with(kv, "days", "7"),
+		"alert.kv_credential_expired":           kv,
+		"alert.discovered_certificate_expiring": with(found, "days", "7"),
+		"alert.discovered_certificate_expired":  found,
+		"alert.more":                            {"count": "5", "kind": "certificate_expiry"},
+		auth.TemplateLockout:                    {"username": "ada", "minutes": "15", "failed_logins": "10"},
 	}
 	templates := append(alerts.Templates(), auth.Templates()...)
 	require.Len(t, params, len(templates), "one params set per template")
@@ -316,7 +321,7 @@ func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 		p, ok := params[tpl]
 		require.True(t, ok, tpl)
 		note := "kv"
-		if strings.HasPrefix(tpl, "alert.certificate") {
+		if strings.HasPrefix(tpl, "alert.certificate") || strings.HasPrefix(tpl, "alert.discovered") {
 			note = "true"
 		}
 		for _, ps := range []map[string]string{p, with(p, "license_note", note, "license_url", "https://alice.example.com/license")} {
@@ -340,6 +345,21 @@ func TestAlertAndAuthTemplatesRenderInBothLanguages(t *testing.T) {
 	lock := s.Render("ada@example.com", auth.TemplateLockout, "en", params[auth.TemplateLockout])
 	assert.Equal(t, "Sign-in blocked: ada", lock.Subject)
 	assert.Contains(t, lock.Body, "After 10 failed sign-in attempts, Alice blocked sign-in for the account ada for 15 minutes.")
+	// Network discovery (decision 5): written for a reader who does not know Alice's words, with where it was found and
+	// the way to the discovery page; public facts only.
+	for _, lang := range []string{"en", "tr"} {
+		for _, tpl := range []string{"alert.discovered_certificate_expiring", "alert.discovered_certificate_expired"} {
+			m := s.Render("ada@example.com", tpl, lang, params[tpl])
+			assert.Contains(t, m.Body, "10.0.0.5:443, legacy.example.com:8443", tpl+" "+lang)
+			assert.Contains(t, m.Body, "https://alice.example.com/discovery?view=unmanaged", tpl+" "+lang)
+			assert.Contains(t, m.Body, "Data centre", tpl+" "+lang)
+			assert.Contains(t, m.Subject, "legacy.example.com", tpl+" "+lang)
+		}
+	}
+	found7 := s.Render("ada@example.com", "alert.discovered_certificate_expiring", "en", params["alert.discovered_certificate_expiring"])
+	assert.Equal(t, "Certificate not managed by Alice expiring: legacy.example.com (days left: 7)", found7.Subject)
+	assert.True(t, strings.HasPrefix(found7.Body, "A certificate that Alice does not manage is about to expire on 10.0.0.5:443, legacy.example.com:8443."),
+		found7.Body)
 	more := s.Render("ada@example.com", "alert.more", "tr", params["alert.more"])
 	assert.Equal(t, "Diğer süre dolumu bildirimleri: 5", more.Subject)
 }

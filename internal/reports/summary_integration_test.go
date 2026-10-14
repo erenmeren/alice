@@ -323,3 +323,31 @@ func TestNeedsAttentionDeploymentIsNeverAgedOut(t *testing.T) {
 	}
 	assert.True(t, found, "listed in the attention conditions")
 }
+
+// Decision D2, A7: unmanaged certificates found by a scan of an alerting scope never enter the Overview: the summary and
+// the expiring list are byte-identical with and without discovery rows (a discovered copy of a managed certificate
+// included).
+func TestOverviewIgnoresDiscoveredCertificates(t *testing.T) {
+	w := newWorld(t, false)
+	ctx := context.Background()
+	read := func() (reports.Summary, []alerts.Item) {
+		s, err := w.svc.Summary(ctx, reports.Viewer{Role: rbac.Admin})
+		require.NoError(t, err)
+		items, err := w.svc.Expiring(ctx, 365, 200)
+		require.NoError(t, err)
+		return s, items
+	}
+	s0, e0 := read()
+	scope, err := seed.DiscoveryScope(ctx, w.d.Owner, "dc", true)
+	require.NoError(t, err)
+	var managed string
+	require.NoError(t, w.d.Owner.QueryRow(ctx, `SELECT fingerprint_sha256 FROM certificates WHERE subject_cn = 'www.seed.test'`).Scan(&managed))
+	for i, fp := range []string{managed, seed.Hex("u1"), seed.Hex("u2")} {
+		require.NoError(t, seed.DiscoveredCertificate(ctx, w.d.Owner, fp, "found.seed.test", t0.Add(time.Duration(i-1)*day)))
+		_, err := seed.DiscoveredEndpoint(ctx, w.d.Owner, scope, "10.0.0."+string(rune('1'+i)), 443, "", fp, "present")
+		require.NoError(t, err)
+	}
+	s1, e1 := read()
+	assert.Equal(t, s0, s1, "the summary's managed counts")
+	assert.Equal(t, e0, e1, "the expiring list")
+}
