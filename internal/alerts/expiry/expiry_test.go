@@ -1,6 +1,7 @@
 package expiry
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -160,4 +161,35 @@ func TestHorizon(t *testing.T) {
 	assert.Equal(t, days(60), Horizon(DefaultThresholds))
 	assert.Equal(t, days(365), Horizon([]int{1, 365, 7}))
 	assert.Equal(t, time.Duration(0), Horizon(nil))
+}
+
+// Far-future expiries (Task 9 review 2): time.Time.Sub saturates at about 292 years and the rounding must not wrap, so
+// DaysLeft counts the real whole days (rounded up) for any date PostgreSQL and X.509 hold, up to 9999-12-31; the normal
+// table above is unchanged.
+func TestDaysLeftFarFuture(t *testing.T) {
+	now := time.Date(2026, 10, 14, 0, 0, 0, 0, time.UTC)
+	end := time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
+	exact := int((end.Unix() - now.Unix()) / 86400)
+	assert.Equal(t, exact, DaysLeft(end, now))
+	assert.Equal(t, exact+1, DaysLeft(end.Add(time.Nanosecond), now), "rounded up")
+	assert.Equal(t, exact, DaysLeft(end.Add(-time.Nanosecond), now))
+	assert.Equal(t, exact+1, DaysLeft(time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC), now))
+	assert.Equal(t, exact, DaysLeft(end, now.Add(time.Nanosecond)), "a later now with nanoseconds still rounds up")
+	// Around the saturation of a Duration (about 106,751 days) the count stays monotonic and positive.
+	prev := 0
+	for d := 106740; d <= 106760; d++ {
+		got := DaysLeft(now.AddDate(0, 0, d), now)
+		assert.Equal(t, d, got)
+		assert.Greater(t, got, prev)
+		prev = got
+	}
+	far := now.Add(time.Duration(math.MaxInt64))
+	assert.Positive(t, DaysLeft(far, now))
+	assert.Positive(t, DaysLeft(far.Add(-time.Nanosecond*5), now))
+	for _, tc := range []struct {
+		left time.Duration
+		want int
+	}{{days(7), 7}, {days(7) - time.Hour, 7}, {time.Second, 1}, {0, 0}, {-days(2), 0}, {days(365), 365}, {days(365) + 1, 366}} {
+		assert.Equal(t, tc.want, DaysLeft(now.Add(tc.left), now), tc.left)
+	}
 }

@@ -6,6 +6,7 @@ package expiry
 
 import (
 	"errors"
+	"math"
 	"slices"
 	"time"
 )
@@ -74,13 +75,24 @@ func Due(expiresAt, now time.Time, thresholds, sent []int) (int, bool) {
 	return level, true
 }
 
-// DaysLeft is the number of whole days left, rounded up (6 days and 1 hour is 7), and 0 once expired.
+// DaysLeft is the number of whole days left, rounded up (6 days and 1 hour is 7), and 0 once expired. It is exact for
+// any date up to 9999-12-31: time.Time.Sub saturates beyond about 292 years, so a span that long is counted from whole
+// seconds and the nanosecond rest, which cannot overflow.
 func DaysLeft(expiresAt, now time.Time) int {
-	left := expiresAt.Sub(now)
-	if left <= 0 {
+	if !expiresAt.After(now) {
 		return 0
 	}
-	return int((left + day - 1) / day)
+	if left := expiresAt.Sub(now); left < math.MaxInt64-day {
+		return int((left + day - 1) / day)
+	}
+	const secondsPerDay = int64(day / time.Second)
+	secs := expiresAt.Unix() - now.Unix()
+	days, rest := secs/secondsPerDay, time.Duration(secs%secondsPerDay)*time.Second+
+		time.Duration(expiresAt.Nanosecond()-now.Nanosecond())
+	if rest > 0 {
+		days++
+	}
+	return int(days)
 }
 
 // Horizon is how far ahead a scan must look: the largest threshold.
