@@ -758,7 +758,7 @@ WHERE class = 'change' AND status IN ('queued', 'running')`)
 // schedule is switched off (enabled gates scheduled and manual scans alike; the schedule itself is kept), so no schedule
 // tick, however overdue, scans from the clone until an Administrator turns the scope on again.
 func (r *restorer) endDiscoveryScans(ctx context.Context, tx pgx.Tx, now time.Time) error {
-	sched, err := tx.Exec(ctx, "UPDATE discovery_scopes SET enabled = false, updated_at = $1 WHERE enabled AND schedule_hours IS NOT NULL", now)
+	sched, err := tx.Exec(ctx, "UPDATE discovery_scopes SET enabled = false, version = version + 1, updated_at = $1 WHERE enabled AND schedule_hours IS NOT NULL", now)
 	if err != nil {
 		return fmt.Errorf("backup: switch off the network discovery schedules: %w", err)
 	}
@@ -766,7 +766,7 @@ func (r *restorer) endDiscoveryScans(ctx context.Context, tx pgx.Tx, now time.Ti
 		r.warn(strconv.FormatInt(n, 10) + " network discovery scan schedules are switched off: turn them on again under Network discovery" +
 			" once this installation replaces the original.")
 	}
-	rows, err := tx.Query(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = 'discovery.scan_interrupted', finished_at = $1,
+	rows, err := tx.Query(ctx, `UPDATE discovery_scans SET state = 'failed', error_code = 'discovery.scan_interrupted', finished_at = greatest($1::timestamptz, started_at),
     cancel_requested = true WHERE state IN ('queued', 'running')
 RETURNING id, scope_id, trigger, endpoints_total, endpoints_answered, endpoints_failed, endpoints_excluded, certificates_new`, now)
 	if err != nil {

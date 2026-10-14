@@ -165,8 +165,26 @@ VALUES ($1, 'Already off', '["10.2.0.1"]', '{443}', 1, false, $2, $2)`, off, now
 
 	assert.Zero(t, e.count("SELECT count(*) FROM discovery_scopes WHERE enabled AND schedule_hours IS NOT NULL"),
 		"no schedule can fire in the clone, not even an overdue one")
-	assert.Equal(t, 1, e.count("SELECT count(*) FROM discovery_scopes WHERE id = $1 AND NOT enabled AND schedule_hours = 24 AND updated_at > created_at", scheduled),
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM discovery_scopes WHERE id = $1 AND NOT enabled AND schedule_hours = 24 AND updated_at > created_at AND version = 2", scheduled),
 		"the schedule itself is kept for the Administrator to turn on again")
 	assert.Equal(t, 1, e.count("SELECT count(*) FROM discovery_scopes WHERE id = $1 AND enabled", manual), "a scope without a schedule is untouched")
 	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "1 network discovery scan schedules") }), res.Warnings)
+}
+
+// The scan the restore ends is finished no earlier than it started, even when the backup's clock ran ahead of the
+// clone's (the CHECK finished_at >= started_at would fail the whole restore).
+func TestRestoreEndsScanStartedAfterRestoreClock(t *testing.T) {
+	e := newRestoreEnv(t)
+	scope := seedDiscovery(e)
+	scan := uuid.New()
+	_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO discovery_scans (id, scope_id, trigger, state, queued_at, started_at)
+VALUES ($1, $2, 'manual', 'running', $3, $3::timestamptz + interval '2 days')`, scan, scope, e.clk.Now())
+	require.NoError(t, err)
+	info := e.create(backup.KindManual)
+	e.clk.Advance(time.Minute)
+
+	_, err = e.restore(info.Path, nil)
+	require.NoError(t, err)
+	e.reload()
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM discovery_scans WHERE id = $1 AND state = 'failed' AND finished_at >= started_at", scan))
 }
