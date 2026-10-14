@@ -5,10 +5,12 @@ import { Icon, type IconName } from '../../design/Icon';
 import { Panel } from '../ui';
 import classes from './UsageTopology.module.css';
 
-// The source tile of a certificate: a vault, a server where Alice found it, or a file (upload or signing request).
+// The source tile of a certificate: a vault, a server where Alice found it, a certificate authority Alice ordered it
+// from (the ACME navigation's icon), or a file (upload or signing request).
 export function sourceIcon(source: string): IconName {
   if (source === 'azure_kv') return 'Cloud';
   if (source === 'discovered') return 'Server';
+  if (source === 'acme') return 'ShieldCheck';
   return 'FileKey2';
 }
 

@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router';
 import type { CertificateDetail } from '../../api/types';
 import { certificateDetailFixture, locationFixture } from '../../test/fixtures';
 import { renderApp } from '../../test/render';
-import { UsageTopology } from './UsageTopology';
+import { UsageTopology, sourceIcon } from './UsageTopology';
 
 const show = (certificate: CertificateDetail) =>
   renderApp(
@@ -79,5 +79,13 @@ describe('UsageTopology', () => {
     expect(screen.getByText('This certificate is not used on any server that Alice knows.')).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Deployed locations' })).not.toBeInTheDocument();
     expect(screen.getByText('More locations exist than are shown here.')).toBeInTheDocument();
+  });
+
+  it('draws the source tile of each certificate source with its own icon; one ordered from a CA is not a file', () => {
+    expect(sourceIcon('azure_kv')).toBe('Cloud');
+    expect(sourceIcon('discovered')).toBe('Server');
+    expect(sourceIcon('acme')).toBe('ShieldCheck');
+    expect(sourceIcon('uploaded')).toBe('FileKey2');
+    expect(sourceIcon('csr')).toBe('FileKey2');
   });
 });
