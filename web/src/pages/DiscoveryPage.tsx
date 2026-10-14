@@ -66,6 +66,29 @@ export function DiscoveryPage() {
 
   const [editing, setEditing] = useState<{ scope: DiscoveryScope | null } | null>(null);
   const [editingSettings, setEditingSettings] = useState(false);
+  // The dialogs are mounted only while open, so Mantine cannot give focus back: the element that opened one is
+  // remembered, and when the dialog closes it gets focus again (or, when it left the page with a tab switch, the
+  // selected tab).
+  const opener = useRef<HTMLElement | null>(null);
+  const remember = () => {
+    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  };
+  const restoreFocus = () => {
+    const target = opener.current;
+    opener.current = null;
+    window.setTimeout(() => {
+      const el = target?.isConnected ? target : document.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      el?.focus();
+    }, 0);
+  };
+  const openScope = (scope: DiscoveryScope | null) => {
+    remember();
+    setEditing({ scope });
+  };
+  const closeScope = () => {
+    setEditing(null);
+    restoreFocus();
+  };
 
   const setTab = (v: string | null) =>
     setParams(
@@ -100,7 +123,7 @@ export function DiscoveryPage() {
             scopes={items}
             onAddScope={() => {
               setTab('scopes');
-              setEditing({ scope: null });
+              openScope(null);
             }}
           />
         </Tabs.Panel>
@@ -111,17 +134,28 @@ export function DiscoveryPage() {
             settings={settings.data}
             settingsError={settings.error}
             ctx={ctx}
-            onAdd={() => setEditing({ scope: null })}
-            onEdit={(scope) => setEditing({ scope })}
-            onEditSettings={() => setEditingSettings(true)}
+            onAdd={() => openScope(null)}
+            onEdit={(scope) => openScope(scope)}
+            onEditSettings={() => {
+              remember();
+              setEditingSettings(true);
+            }}
           />
         </Tabs.Panel>
         <Tabs.Panel value="scans" className={classes.tabPanel}>
           <ScansTab scopes={items} ctx={ctx} />
         </Tabs.Panel>
       </Tabs>
-      {admin && editing && <ScopeDialog scope={editing.scope} scanningEnabled={settings.data?.scanning_enabled !== false} onClose={() => setEditing(null)} />}
-      {admin && editingSettings && settings.data && <SettingsDialog settings={settings.data} onClose={() => setEditingSettings(false)} />}
+      {admin && editing && <ScopeDialog scope={editing.scope} scanningEnabled={settings.data?.scanning_enabled !== false} onClose={closeScope} />}
+      {admin && editingSettings && settings.data && (
+        <SettingsDialog
+          settings={settings.data}
+          onClose={() => {
+            setEditingSettings(false);
+            restoreFocus();
+          }}
+        />
+      )}
     </Stack>
   );
 }

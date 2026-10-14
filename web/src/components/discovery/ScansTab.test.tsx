@@ -114,6 +114,23 @@ describe('Network discovery scans', () => {
     expect(await screen.findByText('An administrator adds scopes first.')).toBeInTheDocument();
   });
 
+  it('shows a dash, not an empty cell, for a cancelled scan that carries no problem', async () => {
+    discoveryWorld({ scans: [discoveryScanFixture({ id: 'n1', state: 'cancelled', error_code: null, error_reason: null })] });
+    await renderRoute('/discovery?tab=scans');
+    const row = await screen.findByTestId('discovery-scan-row');
+    expect(within(row).queryByTestId('scan-problem')).not.toBeInTheDocument();
+    expect(within(row).getAllByRole('cell')[7]).toHaveTextContent('–');
+  });
+
+  it('does not say there are no scopes while the scopes are not loaded', async () => {
+    discoveryWorld({ scans: [] });
+    server.use(http.get('/api/v1/discovery/scopes', () => errorResponse(500, 'ALC-SYS-0003', 'internal.unexpected')));
+    await renderRoute('/discovery?tab=scans');
+    const button = await screen.findByRole('button', { name: 'Start a scan' });
+    await waitFor(() => expect(button).toHaveAccessibleDescription('Scopes are not loaded yet.'));
+    expect(screen.queryByText('Add a scope on the Scopes tab first.')).not.toBeInTheDocument();
+  });
+
   it('polls only while a scan is queued or running, and stops when it is over', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
@@ -171,6 +188,31 @@ describe('Network discovery scans (review round)', () => {
       await act(() => vi.advanceTimersByTimeAsync(3100 * 3));
       await waitFor(() => expect(firstReads()).toBeGreaterThan(before));
       expect(cursorReads()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('drops the older pages when the first page moves on, so no scans are skipped', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let firstCursor = 'p2';
+      discoveryWorld();
+      server.use(
+        http.get('/api/v1/discovery/scans', ({ request }) =>
+          new URL(request.url).searchParams.get('cursor')
+            ? HttpResponse.json({ items: [discoveryScanFixture({ id: 'old', scope_name: 'Old scope' })], next_cursor: null })
+            : HttpResponse.json({ items: [discoveryScanFixture({ id: 'n1', state: 'running', finished_at: null })], next_cursor: firstCursor }),
+        ),
+      );
+      await renderRoute('/discovery?tab=scans');
+      await screen.findByRole('table', { name: 'Scans' });
+      await userEvent.click(screen.getByRole('button', { name: 'Load more scans' }));
+      expect(await screen.findByText('Old scope')).toBeInTheDocument();
+      firstCursor = 'p3'; // a scan was queued: the first page now ends elsewhere
+      await act(() => vi.advanceTimersByTimeAsync(3100));
+      await waitFor(() => expect(screen.queryByText('Old scope')).not.toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Load more scans' })).toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

@@ -186,6 +186,17 @@ describe('Network discovery settings dialog', () => {
     expect(requests(seen, 'PUT', '/api/v1/discovery/settings')[0].body).toEqual({ allowed_networks: ['10.0.0.0/16', '10.1.0.0/16'], global_exclusions: ['10.0.9.0/24'], retention_days: 30 });
   });
 
+  it('gives focus back to the button that opened the dialog once it closes', async () => {
+    discoveryWorld();
+    await renderRoute('/discovery?tab=scopes');
+    const open = await screen.findByRole('button', { name: 'Change settings' });
+    await userEvent.click(open);
+    const dialog = await screen.findByRole('dialog', { name: 'Discovery settings' });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await waitFor(() => expect(open).toHaveFocus());
+  });
+
   it('checks the retention before sending and marks the line the server refuses', async () => {
     const seen = discoveryWorld();
     server.use(http.put('/api/v1/discovery/settings', () => errorResponse(422, 'ALC-DSC-0003', 'discovery.entry_invalid', { params: { field: 'allowed_networks', index: '1' } })));

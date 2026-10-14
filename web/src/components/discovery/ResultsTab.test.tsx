@@ -159,6 +159,16 @@ describe('Network discovery results', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
+  it('says "Unknown" for a status this version does not know, never a raw key', async () => {
+    discoveryWorld({ certificates: [discoveredCertificateFixture({ status: 'future' as never, endpoints: [] })] });
+    await renderRoute('/discovery');
+    await userEvent.click(await screen.findByRole('button', { name: 'legacy.example.test' }));
+    const drawer = await screen.findByRole('dialog', { name: /^Found on the network: / });
+    expect(await within(drawer).findAllByText('Unknown')).not.toHaveLength(0);
+    expect(within(drawer).queryByText(/statusText/)).not.toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
   it('links a managed certificate to its page in Alice', async () => {
     discoveryWorld({ certificates: [discoveredCertificateFixture({ status: 'managed', managed_certificate_id: 'mc1', endpoints: [] })] });
     await renderRoute('/discovery');

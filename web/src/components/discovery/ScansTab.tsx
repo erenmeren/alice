@@ -28,7 +28,11 @@ export function ScansTab({ scopes, ctx }: { scopes: DiscoveryScope[] | undefined
     queryFn: ({ signal }) => listDiscoveryScans({}, signal),
     refetchInterval: (q) => (q.state.data?.items.some((s) => isActiveScan(s.state)) ? SCAN_POLL_MS : false),
   });
-  const [older, setOlder] = useState<Page<DiscoveryScan>[]>([]);
+  // Older pages hang from the cursor the first page had when they were read: when the first page moves on (a scan was
+  // queued meanwhile) they no longer join it without a gap, so they are dropped and Load more starts again from it.
+  const [olderState, setOlder] = useState<{ base: string | null; pages: Page<DiscoveryScan>[] }>({ base: null, pages: [] });
+  const firstCursor = list.data?.next_cursor ?? null;
+  const older = olderState.base === firstCursor ? olderState.pages : [];
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState<unknown>(null);
   const abort = useAbort();
@@ -40,7 +44,7 @@ export function ScansTab({ scopes, ctx }: { scopes: DiscoveryScope[] | undefined
     setMoreError(null);
     try {
       const page = await listDiscoveryScans({ cursor: next }, signal);
-      if (!signal.aborted) setOlder((o) => [...o, page]);
+      if (!signal.aborted) setOlder((o) => ({ base: firstCursor, pages: o.base === firstCursor ? [...o.pages, page] : [page] }));
     } catch (e) {
       if (!signal.aborted) setMoreError(e);
     }
@@ -83,7 +87,7 @@ export function ScansTab({ scopes, ctx }: { scopes: DiscoveryScope[] | undefined
             </Button>
             {!anyFree && (
               <p className={classes.reason} id="start-scan-reason">
-                {all.length === 0 ? (admin ? t('discovery.scans.noScopes') : t('discovery.scans.noScopesOther')) : shared ? t(blockKey(shared)) : t('discovery.block.noneReady')}
+                {scopes === undefined ? t('discovery.scans.scopesUnavailable') : all.length === 0 ? (admin ? t('discovery.scans.noScopes') : t('discovery.scans.noScopesOther')) : shared ? t(blockKey(shared)) : t('discovery.block.noneReady')}
               </p>
             )}
           </Stack>
@@ -166,7 +170,7 @@ function ScanRow({ s, lang, canOperate, cancelling, onCancel }: { s: DiscoverySc
       <Table.Td className={classes.small}>{s.started_at ? formatDateTime(s.started_at, lang) : t('discovery.scans.notStarted')}</Table.Td>
       <Table.Td className={classes.small}>{s.finished_at ? formatDateTime(s.finished_at, lang) : active ? t('discovery.scans.stillRunning') : '–'}</Table.Td>
       <Table.Td className={classes.small}>{durationText(t, s.started_at, s.finished_at)}</Table.Td>
-      <Table.Td>{s.state === 'done' || active ? '–' : <ScanProblem scan={s} />}</Table.Td>
+      <Table.Td>{s.state === 'done' || active || (!s.error_reason && !s.error_code) ? '–' : <ScanProblem scan={s} />}</Table.Td>
       <Table.Td>
         {canOperate && active && !s.cancel_requested ? (
           <Button size="xs" variant="default" color="red" loading={cancelling} aria-label={t('discovery.scans.cancelLabel', { name: s.scope_name })} onClick={onCancel}>

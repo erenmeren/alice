@@ -3682,6 +3682,7 @@
       "noScopeReady": "Şu anda hiçbir kapsam taranamaz",
       "noScopes": "Önce Kapsamlar sekmesinde bir kapsam ekleyin.",
       "noScopesOther": "Önce bir yöneticinin kapsam eklemesi gerekir.",
+      "scopesUnavailable": "Kapsamlar henüz yüklenmedi.",
       "started": "{{name}} kapsamının taraması başladı.",
       "empty": "Henüz tarama yok",
       "emptyText": "Her kapsamın elle ya da zamanlamasıyla başlatılan taramaları burada görünür.",

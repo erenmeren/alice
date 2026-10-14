@@ -3682,6 +3682,7 @@
       "noScopeReady": "No scope can be scanned now",
       "noScopes": "Add a scope on the Scopes tab first.",
       "noScopesOther": "An administrator adds scopes first.",
+      "scopesUnavailable": "Scopes are not loaded yet.",
       "started": "The scan of {{name}} has started.",
       "empty": "No scans yet",
       "emptyText": "The scans of each scope appear here, started by hand or by the scope's schedule.",

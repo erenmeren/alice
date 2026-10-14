@@ -2,7 +2,7 @@ import { Anchor, Button, Code, Drawer, Stack, Text } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
-import { endpointAddress, endpointErrorKey, endpointStateKey, getDiscoveredCertificate, type DiscoveredCertificate, type DiscoveredEndpoint } from '../../api/discovery';
+import { endpointAddress, endpointErrorKey, endpointStateKey, getDiscoveredCertificate, statusKey, type DiscoveredCertificate, type DiscoveredEndpoint } from '../../api/discovery';
 import { keyAlgorithmKey } from '../../api/enums';
 import { discoveredCertificateKey } from '../../api/queryKeys';
 import { formatDateTime } from '../../datetime';
@@ -67,7 +67,7 @@ function Detail({ c, onAddServer }: { c: DiscoveredCertificate; onAddServer: (e:
             </StatusBadge>
           )}
         </div>
-        <Text size="sm">{t(`discovery.statusText.${c.status}`)}</Text>
+        <Text size="sm">{t(`discovery.statusText.${c.status}`, { defaultValue: t(statusKey(c.status)) })}</Text>
         {c.status === 'unmanaged' && <Text size="xs" c="dimmed">{t('discovery.unmanagedHelp.text')}</Text>}
         {c.managed_certificate_id && (
           <Anchor component={Link} to={`/certificates/${c.managed_certificate_id}`} size="sm">
