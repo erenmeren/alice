@@ -86,7 +86,7 @@ func (s *Service) Summary(ctx context.Context) (Summary, error) {
     (SELECT count(*) FROM discovery_scopes WHERE deleted_at IS NULL)::int, (SELECT max(finished_at) FROM discovery_scans)
 FROM discovery_certificates d
 WHERE d.is_leaf AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
-  AND EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone')`,
+  AND EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND `+discovery.CurrentEndpointSQL+`)`,
 		now, now.AddDate(0, 0, 30)).Scan(&out.UnmanagedTotal, &out.UnmanagedExpiring30d, &out.Scopes, &out.LastScanAt)
 	if err != nil {
 		return Summary{}, fmt.Errorf("discoverysvc: read the summary: %w", err)

@@ -30,12 +30,13 @@ VALUES ($1, true, $2, $3, 'Seed CA', $4::timestamptz - interval '90 days', $4, '
 }
 
 // DiscoveredEndpoint inserts an endpoint of scope at address:port that presents fp. host is the scope's host name the
-// address came from ("" for an address entry, also sent as SNI); state is "present" or "gone".
+// address came from ("" for an address entry, also sent as SNI); state is "present", "gone" or "excluded".
 func DiscoveredEndpoint(ctx context.Context, pool *pgxpool.Pool, scope uuid.UUID, address string, port int, host, fp, state string) (uuid.UUID, error) {
 	id := uuid.New()
 	_, err := pool.Exec(ctx, `INSERT INTO discovery_endpoints (id, scope_id, address, port, sni, host, fingerprint_sha256, state,
-    first_seen, last_seen, last_scanned_at, gone_since, tls_version, cipher)
-VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now(), now(), CASE WHEN $7 = 'gone' THEN now() END, 'TLS 1.3',
+    first_seen, last_seen, last_scanned_at, gone_since, last_error_code, tls_version, cipher)
+VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now(), now(), CASE WHEN $7 = 'gone' THEN now() END,
+    CASE WHEN $7 = 'excluded' THEN 'policy' ELSE '' END, 'TLS 1.3',
     'TLS_AES_128_GCM_SHA256')`,
 		id, scope, address, port, host, fp, state)
 	return id, err

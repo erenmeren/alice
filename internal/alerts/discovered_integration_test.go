@@ -67,6 +67,8 @@ func TestDiscoveredCertificatesAlertOnlyWhenUnmanagedOnAnAlertingScope(t *testin
 	seedFound(t, d, gone, "gone.example.com", t0.Add(5*day))
 	seedFound(t, d, far, "far.example.com", t0.Add(200*day))
 	seedFound(t, d, expired, "", t0.Add(-day), "old.example.com", "www.old.example.com")
+	excluded := seed.Hex("excluded")
+	seedFound(t, d, excluded, "excluded.example.com", t0.Add(5*day))
 	seedFound(t, d, fingerprintOf(t, d, managed), "www.example.com", t0.Add(5*day))
 	seedFound(t, d, fingerprintOf(t, d, known), "spare.example.com", t0.Add(5*day))
 	seedEndpoint(t, d, dc, "10.0.0.5", 443, "", legacy, "present")
@@ -76,6 +78,7 @@ func TestDiscoveredCertificatesAlertOnlyWhenUnmanagedOnAnAlertingScope(t *testin
 	seedEndpoint(t, d, lab, "10.0.1.1", 443, "", onlyLab, "present")
 	seedEndpoint(t, d, dc, "10.0.0.8", 443, "", gone, "gone")
 	seedEndpoint(t, d, dc, "10.0.0.9", 443, "", far, "present")
+	seedEndpoint(t, d, dc, "10.0.0.13", 443, "", excluded, "excluded") // never dialed now: what it presented is history
 	seedEndpoint(t, d, dc, "10.0.0.10", 443, "", expired, "present")
 	seedEndpoint(t, d, dc, "10.0.0.11", 443, "", fingerprintOf(t, d, managed), "present")
 	seedEndpoint(t, d, dc, "10.0.0.12", 443, "", fingerprintOf(t, d, known), "present")

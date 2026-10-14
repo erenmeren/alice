@@ -189,3 +189,55 @@ func TestFinishHookRunsOnEveryEndInTheStore(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, ScanRunning, p.scan(t, third).State)
 }
+
+// An excluded place is not "still found" (it is never dialed, so what it once presented is history), nor is a place of
+// a deleted scope: the list's Current filter and its endpoint counts leave both out, and retention purges a stale
+// excluded endpoint.
+func TestExcludedAndDeletedScopeEndpointsAreNotCurrent(t *testing.T) {
+	p := newPG(t)
+	now := t0
+	scope, doomed := p.scope(t, "lab"), p.scope(t, "doomed")
+	excluded := issuedCert(t, "ex.example", []string{"ex.example"}, now.AddDate(0, -1, 0), now.AddDate(0, 0, 10))
+	gonescope := issuedCert(t, "ds.example", []string{"ds.example"}, now.AddDate(0, -1, 0), now.AddDate(0, 0, 11))
+	live := issuedCert(t, "live.example", []string{"live.example"}, now.AddDate(0, -1, 0), now.AddDate(0, 0, 12))
+	p.ingestScan(t, scope, now, presented(t, ep("10.0.0.1", 443, ""), excluded), presented(t, ep("10.0.0.2", 443, ""), live))
+	p.ingestScan(t, doomed, now, presented(t, ep("10.0.1.1", 443, ""), gonescope))
+	_, err := p.Owner.Exec(bg(), `UPDATE discovery_endpoints SET state = 'excluded', last_error_code = 'policy', last_scanned_at = $2
+WHERE scope_id = $1 AND address = '10.0.0.1'`, scope, now.AddDate(0, 0, -100))
+	require.NoError(t, err)
+	_, err = p.Owner.Exec(bg(), `UPDATE discovery_scopes SET deleted_at = $2 WHERE id = $1`, doomed, now)
+	require.NoError(t, err)
+
+	rows, err := ListCertificates(bg(), p.App, CertificateFilter{Now: now, Current: true})
+	require.NoError(t, err)
+	require.Equal(t, []string{fingerprint(live)}, fps(rows))
+	rows, err = ListCertificates(bg(), p.App, CertificateFilter{Now: now})
+	require.NoError(t, err)
+	require.Len(t, rows, 3, "without Current every leaf is listed")
+	for _, r := range rows {
+		want := 0
+		if r.Fingerprint == fingerprint(live) {
+			want = 1
+		}
+		require.Equal(t, want, r.SeenOn, r.Fingerprint)
+	}
+
+	st, err := p.st.Retain(bg(), now)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, st.Endpoints, "the stale excluded endpoint and the deleted scope's")
+	require.Equal(t, 1, p.count(t, `SELECT count(*) FROM discovery_endpoints WHERE scope_id = $1`, scope))
+}
+
+// A scan asked to stop stores nothing more: the batch still in flight when a scope edit marked endpoints gone must not
+// bring them back.
+func TestIngestDropsBatchOfCancelledScan(t *testing.T) {
+	p := newPG(t)
+	scope := p.scope(t, "lab")
+	cert := issuedCert(t, "c.example", []string{"c.example"}, t0.AddDate(0, -1, 0), t0.AddDate(0, 0, 10))
+	id := p.running(t, scope, t0)
+	_, err := p.Owner.Exec(bg(), `UPDATE discovery_scans SET cancel_requested = true WHERE id = $1`, id)
+	require.NoError(t, err)
+	require.NoError(t, p.st.Ingest(bg(), Batch{ScanID: id, ScopeID: scope, Now: t0, Results: []Result{presented(t, ep("10.0.0.1", 443, ""), cert)}}))
+	require.Zero(t, p.count(t, `SELECT count(*) FROM discovery_endpoints WHERE scope_id = $1`, scope))
+	require.Zero(t, p.scan(t, id).Answered)
+}

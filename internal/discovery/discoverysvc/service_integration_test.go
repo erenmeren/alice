@@ -518,7 +518,7 @@ func TestSettings(t *testing.T) {
 	upd := w.audits("discovery.exclusions.updated")
 	last := upd[len(upd)-1]
 	assert.Equal(t, map[string]string{"allowed_networks": "10.0.0.0/16, 10.1.0.0/16", "allowed_networks_count": "2",
-		"global_exclusions": "10.0.9.9", "global_exclusions_count": "1", "retention_days": "30"}, last.details)
+		"global_exclusions": "10.0.9.9", "global_exclusions_count": "1", "retention_days": "30", "scans_cancelled_count": "0"}, last.details)
 
 	for _, bad := range []Settings{
 		{AllowedNetworks: []string{"intranet.example"}, RetentionDays: 30},
@@ -584,6 +584,9 @@ func TestSummary(t *testing.T) {
 		if state == "gone" {
 			code, gone = "", t0
 		}
+		if state == "excluded" {
+			code = "policy"
+		}
 		w.exec(`INSERT INTO discovery_endpoints (id, scope_id, address, port, sni, fingerprint_sha256, state, last_error_code, first_seen, last_seen,
     last_scanned_at, gone_since, tls_version, cipher) VALUES ($1, $2, $3, 443, '', $4, $5, $6, $7, $7, $7, $8, 'TLS 1.3', 'TLS_AES_128_GCM_SHA256')`,
 			uuid.New(), v.ID, addr, fp, state, code, t0, gone)
@@ -601,6 +604,14 @@ func TestSummary(t *testing.T) {
 	endpoint("10.0.1.5", fp('e'), "present")
 	w.exec(`INSERT INTO certificates (id, fingerprint_sha256, subject_cn, not_before, not_after, key_algorithm, public_key_sha256, pem_chain, source,
     first_seen_at, last_seen_at, created_at) VALUES ($1, $2, 'cn', $3, $3, 'ecdsa', $2, '', 'uploaded', $3, $3, $3)`, uuid.New(), fp('e'), t0)
+	// An excluded place is never dialed, and a place of a deleted scope is not scanned: neither is "still found".
+	cert(fp('f'), t0.AddDate(0, 0, 6))
+	endpoint("10.0.1.6", fp('f'), "excluded")
+	cert(fp('g'), t0.AddDate(0, 0, 7))
+	deleted := uuid.New()
+	w.exec(`INSERT INTO discovery_scopes (id, name, entries, ports, deleted_at, created_at, updated_at) VALUES ($1, 'old', '["10.0.9.0/24"]', '{443}', $2, $2, $2)`, deleted, t0)
+	w.exec(`INSERT INTO discovery_endpoints (id, scope_id, address, port, sni, fingerprint_sha256, state, first_seen, last_seen, last_scanned_at,
+    tls_version, cipher) VALUES ($1, $2, '10.0.9.1', 443, '', $3, 'present', $4, $4, $4, 'TLS 1.3', 'TLS_AES_128_GCM_SHA256')`, uuid.New(), deleted, fp('g'), t0)
 	scan, err := w.svc.StartScan(w.ctx, w.op, v.ID)
 	require.NoError(t, err)
 	w.exec(`UPDATE discovery_scans SET state = 'running', started_at = $1 WHERE id = $2`, t0, scan.ID)
@@ -882,4 +893,26 @@ func TestEmptyPatchIsRefused(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.Version)
 	assert.Empty(t, w.audits("discovery.scope.updated"))
+}
+
+// Changing the allowed networks or the exclusions asks the scans in flight to stop (the new rules must hold for what
+// they connect to next); changing the retention alone does not.
+func TestSaveSettingsCancelsScansInFlight(t *testing.T) {
+	w := newWorld(t)
+	w.allow("10.0.0.0/16")
+	v, err := w.svc.CreateScope(w.ctx, w.admin, lab())
+	require.NoError(t, err)
+	scan, err := w.svc.StartScan(w.ctx, w.op, v.ID)
+	require.NoError(t, err)
+	cancelled := func() int {
+		return w.count(`SELECT count(*) FROM discovery_scans WHERE id = $1 AND cancel_requested`, scan.ID)
+	}
+	_, err = w.svc.SaveSettings(w.ctx, w.admin, Settings{AllowedNetworks: []string{"10.0.0.0/16"}, RetentionDays: 30})
+	require.NoError(t, err)
+	assert.Zero(t, cancelled(), "the retention alone changes nothing a scan connects to")
+	_, err = w.svc.SaveSettings(w.ctx, w.admin, Settings{AllowedNetworks: []string{"10.0.0.0/16"}, GlobalExclusions: []string{"10.0.0.5"}, RetentionDays: 30})
+	require.NoError(t, err)
+	assert.Equal(t, 1, cancelled())
+	upd := w.audits("discovery.exclusions.updated")
+	assert.Equal(t, "1", upd[len(upd)-1].details["scans_cancelled_count"])
 }

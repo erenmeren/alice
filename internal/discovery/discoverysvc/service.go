@@ -237,7 +237,19 @@ func (s *Service) SaveSettings(ctx context.Context, a Actor, in Settings) (Setti
 			Detail: fmt.Sprintf("%d to %d days", MinRetentionDays, MaxRetentionDays)}
 	}
 	now := s.now()
+	var cancelled int64
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// A scan in flight was expanded under the old rules: when the networks or exclusions change it is asked to stop
+		// (its remaining batches are dropped), so the new rules hold for what it connects to next, not for the next scan.
+		old, err := readSettings(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if !slices.Equal(old.AllowedNetworks, allowed) || !slices.Equal(old.GlobalExclusions, excluded) {
+			if cancelled, err = cancelAllActive(ctx, tx); err != nil {
+				return err
+			}
+		}
 		for key, v := range map[string]any{discovery.SettingAllowedNetworks: allowed, discovery.SettingExclusions: excluded,
 			discovery.SettingRetentionDays: in.RetentionDays} {
 			if err := settings.Set(ctx, tx, key, v, now); err != nil {
@@ -247,7 +259,7 @@ func (s *Service) SaveSettings(ctx context.Context, a Actor, in Settings) (Setti
 		return s.appendAudit(ctx, tx, a, "discovery.exclusions.updated", "discovery_settings", "", map[string]string{
 			"allowed_networks": strings.Join(allowed, ", "), "allowed_networks_count": strconv.Itoa(len(allowed)),
 			"global_exclusions": strings.Join(excluded, ", "), "global_exclusions_count": strconv.Itoa(len(excluded)),
-			"retention_days": strconv.Itoa(in.RetentionDays)})
+			"retention_days": strconv.Itoa(in.RetentionDays), "scans_cancelled_count": strconv.FormatInt(cancelled, 10)})
 	})
 	if err != nil {
 		return SettingsView{}, err

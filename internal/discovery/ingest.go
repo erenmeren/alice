@@ -145,7 +145,8 @@ type endpointRow struct {
 // Ingest implements Store. In one transaction: the scan's counters are read (row locked); the certificates the batch
 // presented are de-duplicated, the new ones admitted while the per-scan and per-day caps allow (leaves first) and the
 // others only counted as churn; certificates and endpoints are upserted; an endpoint that answered with a leaf beyond the
-// caps keeps its stored state and only records that it answered; the scan's counters grow.
+// caps keeps its stored state and only records that it answered; the scan's counters grow. A scan whose cancel flag is
+// set (read under the row lock) drops the batch.
 // A batch that deadlocks or fails to serialize with another scan's (two scans storing the same new certificates) is
 // retried once; certificates are written in fingerprint order, so two batches lock them in the same order.
 func (s *PGStore) Ingest(ctx context.Context, b Batch) error {
@@ -165,11 +166,17 @@ func retryable(err error) bool {
 func (s *PGStore) ingest(ctx context.Context, b Batch) error {
 	return s.inTx(ctx, func(tx pgx.Tx) error {
 		var scanNew, dayNew int
-		err := tx.QueryRow(ctx, `SELECT certificates_new, (SELECT coalesce(sum(o.certificates_new), 0) FROM discovery_scans o
+		var cancelled bool
+		err := tx.QueryRow(ctx, `SELECT certificates_new, cancel_requested, (SELECT coalesce(sum(o.certificates_new), 0) FROM discovery_scans o
     WHERE o.scope_id = s.scope_id AND o.queued_at > $2)
-FROM discovery_scans s WHERE s.id = $1 AND s.state = 'running' FOR UPDATE`, b.ScanID, b.Now.Add(-KeepScansFor)).Scan(&scanNew, &dayNew)
+FROM discovery_scans s WHERE s.id = $1 AND s.state = 'running' FOR UPDATE`, b.ScanID, b.Now.Add(-KeepScansFor)).Scan(&scanNew, &cancelled, &dayNew)
 		if err != nil {
 			return fmt.Errorf("%w (%w)", ErrScanNotRunning, err)
+		}
+		if cancelled {
+			// A scan asked to stop stores nothing more: a scope edit or switch-off that asked (it marked endpoints gone
+			// in the same transaction that set the flag) must not be undone by the batch still in flight.
+			return nil
 		}
 		results := dedupeResults(b.Results)
 		certs := presentedCertificates(results)

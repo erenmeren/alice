@@ -18,7 +18,7 @@ const maxListed = 10
 //
 // The last branch is not "monitored" and never enters Counts (decision D2): a discovered leaf certificate is alerted
 // while it is unmanaged (its fingerprint is not in certificates: neither managed nor known, the discovery ruling) and
-// an endpoint that is not gone, of a live and enabled scope with alert_on_expiry (ruling: a switched-off scope does not
+// an endpoint that is neither gone nor excluded, of a live and enabled scope with alert_on_expiry (ruling: a switched-off scope does not
 // alert), presents it or last presented it (the definition
 // of the discovery summary). Its object id is DiscoveredObjectID, computed by Items (NULL here). alerting is NOT
 // MATERIALIZED for the same reason as live: the endpoint fingerprint index.
@@ -31,7 +31,7 @@ WITH live AS NOT MATERIALIZED (
 alerting AS NOT MATERIALIZED (
     SELECT e.fingerprint_sha256, e.host, e.address, e.port, sc.name::text AS scope_name
     FROM discovery_endpoints e JOIN discovery_scopes sc ON sc.id = e.scope_id AND sc.deleted_at IS NULL AND sc.enabled AND sc.alert_on_expiry
-    WHERE e.state <> 'gone' AND e.fingerprint_sha256 IS NOT NULL
+    WHERE e.state NOT IN ('gone', 'excluded') AND e.fingerprint_sha256 IS NOT NULL
 )
 SELECT 'certificate_expiry'::text AS kind, c.id AS object_id,
        coalesce(nullif(c.subject_cn, ''), nullif(c.label, ''), left(c.fingerprint_sha256, 16)) AS name, c.not_after AS expires,

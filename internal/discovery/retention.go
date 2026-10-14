@@ -70,7 +70,7 @@ WHERE state = 'running' AND started_at < $3 RETURNING id, scope_id`, now, Reason
 			args []any
 		}{
 			{&st.Endpoints, "delete the old endpoints", `DELETE FROM discovery_endpoints e USING discovery_scopes s
-WHERE s.id = e.scope_id AND (s.deleted_at IS NOT NULL OR (e.state = 'gone' AND e.gone_since < $1))`, []any{now.AddDate(0, 0, -days)}},
+WHERE s.id = e.scope_id AND (s.deleted_at IS NOT NULL OR (e.state = 'gone' AND e.gone_since < $1) OR (e.state = 'excluded' AND e.last_scanned_at < $1))`, []any{now.AddDate(0, 0, -days)}},
 			{&st.Certificates, "delete the orphan certificates", `DELETE FROM discovery_certificates c WHERE c.last_seen < $1
 AND NOT EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = c.fingerprint_sha256)
 AND NOT EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.chain_fingerprints @> ARRAY[c.fingerprint_sha256])`, []any{now.Add(-OrphanRetention)}},

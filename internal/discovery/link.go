@@ -31,6 +31,12 @@ const (
 // MaxPage is the largest page a list returns.
 const MaxPage = 500
 
+// CurrentEndpointSQL is the one definition of a "still found" endpoint (alias e): not gone, not excluded (an excluded
+// place is never dialed, so what it presented is history) and of a scope that is not deleted. The alerting query
+// (internal/alerts) applies the same rule.
+const CurrentEndpointSQL = `e.state NOT IN ('gone', 'excluded')
+  AND EXISTS (SELECT 1 FROM discovery_scopes sc WHERE sc.id = e.scope_id AND sc.deleted_at IS NULL)`
+
 // liveLocationSQL: the inventory certificate whose id is the expression id has a live location on a live target (it
 // is monitored).
 func liveLocationSQL(id string) string {
@@ -56,7 +62,7 @@ var statusConditions = map[string]string{
 }
 
 // CertificateRow is a discovered leaf certificate. Endpoints counts the endpoints presenting it now (state present),
-// SeenOn those whose last leaf seen it is and that are not gone (present, or unreachable since); both of the filter's
+// SeenOn those whose last leaf seen it is and that are neither gone nor excluded, of a scope not deleted (present, or unreachable since); both of the filter's
 // scope when it has one. ManagedID is the managed certificate with the same fingerprint.
 type CertificateRow struct {
 	Fingerprint  string
@@ -169,7 +175,7 @@ func ListCertificates(ctx context.Context, q db.Querier, f CertificateFilter) ([
 		in.and("EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256" + scope + ")")
 	}
 	if f.Current {
-		in.and("EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'" + scope + ")")
+		in.and("EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND " + CurrentEndpointSQL + scope + ")")
 	}
 	if f.Fingerprint != "" {
 		in.and("d.fingerprint_sha256 = " + in.arg(f.Fingerprint))
@@ -195,7 +201,7 @@ FROM (
     ORDER BY d.not_after, d.fingerprint_sha256 LIMIT ` + in.arg(limit(f.Limit)) + `
 ) d
 CROSS JOIN LATERAL (SELECT (count(*) FILTER (WHERE e.state = 'present'))::int AS present, count(*)::int AS seen
-    FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'` + scope + `) n
+    FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND ` + CurrentEndpointSQL + scope + `) n
 ORDER BY d.not_after, d.fingerprint_sha256`
 	rows, err := q.Query(ctx, sql, in.args...)
 	if err != nil {

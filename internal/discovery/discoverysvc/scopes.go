@@ -302,6 +302,11 @@ func (s *Service) UpdateScope(ctx context.Context, a Actor, id uuid.UUID, ifVers
 	hours, start, end := scheduleArgs(sc)
 	var v ScopeView
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// The scope's scan in flight is locked first, as Ingest locks it before the endpoints: the other order deadlocks,
+		// and a batch waiting here then finds the cancel flag this transaction sets.
+		if err := lockActiveScans(ctx, tx, id); err != nil {
+			return err
+		}
 		tag, err := tx.Exec(ctx, `UPDATE discovery_scopes SET name = $3, entries = $4, ports = $5, sni_names = $6, exclusions = $7, enabled = $8,
     schedule_hours = $9, window_start = $10::time, window_end = $11::time, window_tz = $12, alert_on_expiry = $13, rate_per_sec = $14,
     concurrency = $15, version = version + 1, updated_at = $16
@@ -413,6 +418,14 @@ WHERE e.scope_id = $1 AND e.state <> 'gone' AND (
 	return tag.RowsAffected(), nil
 }
 
+// lockActiveScans locks the scope's scans in flight (queued or running) in id order.
+func lockActiveScans(ctx context.Context, tx pgx.Tx, scope uuid.UUID) error {
+	if _, err := tx.Exec(ctx, `SELECT id FROM discovery_scans WHERE scope_id = $1 AND state IN ('queued', 'running') ORDER BY id FOR UPDATE`, scope); err != nil {
+		return fmt.Errorf("discoverysvc: lock the scope's scan: %w", err)
+	}
+	return nil
+}
+
 // cancelActive asks the scope's scan in flight to stop.
 func cancelActive(ctx context.Context, tx pgx.Tx, scope uuid.UUID) (int64, error) {
 	tag, err := tx.Exec(ctx, `UPDATE discovery_scans SET cancel_requested = true WHERE scope_id = $1 AND state IN ('queued', 'running')
@@ -458,4 +471,15 @@ func (s *Service) Preview(ctx context.Context, sc discovery.Scope) (discovery.Pr
 		return discovery.Preview{}, err
 	}
 	return discovery.PreviewScope(sc, rules)
+}
+
+// cancelAllActive asks every scan in flight to stop (the settings changed what a scan may connect to). The scans are
+// locked in id order first, as Ingest locks its scan before anything else.
+func cancelAllActive(ctx context.Context, tx pgx.Tx) (int64, error) {
+	tag, err := tx.Exec(ctx, `UPDATE discovery_scans SET cancel_requested = true WHERE id IN (
+    SELECT id FROM discovery_scans WHERE state IN ('queued', 'running') AND NOT cancel_requested ORDER BY id FOR UPDATE)`)
+	if err != nil {
+		return 0, fmt.Errorf("discoverysvc: cancel the scans in flight: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
