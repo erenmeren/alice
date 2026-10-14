@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
 import type { DashboardSummary } from '../api/phase7';
+import type { DiscoveredCertificate, DiscoveredEndpoint, DiscoveryPreview, DiscoveryScan, DiscoveryScope, DiscoverySettings } from '../api/discovery';
 import type { Provider } from '../api/sso';
 import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
 import type { ManagedKeyInfo } from '../api/sshkeys';
@@ -1082,4 +1083,122 @@ export function acmeBindingFixture(o: Partial<ACMEBinding> = {}): ACMEBinding {
     created_at: '2026-10-13T09:05:00Z',
     ...o,
   };
+}
+
+// Network discovery.
+export const SCOPE_ID = '0192f100-0000-7000-8000-0000000000d1';
+export const SCAN_ID = '0192f100-0000-7000-8000-0000000000e1';
+export const DISCOVERED_FP = 'a1'.repeat(32);
+
+export function discoveryScanFixture(o: Partial<DiscoveryScan> = {}): DiscoveryScan {
+  return {
+    id: SCAN_ID,
+    scope_id: SCOPE_ID,
+    scope_name: 'Data centre',
+    trigger: 'manual',
+    state: 'done',
+    cancel_requested: false,
+    endpoints_total: 512,
+    endpoints_answered: 40,
+    endpoints_failed: 472,
+    endpoints_excluded: 0,
+    certificates_new: 3,
+    cert_churn: 0,
+    requested_by: null,
+    queued_at: '2026-10-13T09:00:00Z',
+    started_at: '2026-10-13T09:00:01Z',
+    finished_at: '2026-10-13T09:03:13Z',
+    error_code: null,
+    error_reason: null,
+    ...o,
+  };
+}
+
+export function discoveryScopeFixture(o: Partial<DiscoveryScope> = {}): DiscoveryScope {
+  return {
+    id: SCOPE_ID,
+    name: 'Data centre',
+    entries: ['10.0.1.0/24', 'intranet.example.test'],
+    ports: [443, 8443],
+    sni_names: [],
+    exclusions: [],
+    enabled: true,
+    schedule_hours: 0,
+    window_start: '',
+    window_end: '',
+    window_tz: 'UTC',
+    alert_on_expiry: false,
+    rate_per_sec: 0,
+    concurrency: 0,
+    version: 3,
+    created_by: null,
+    created_at: '2026-10-12T09:00:00Z',
+    updated_at: '2026-10-12T09:00:00Z',
+    last_scheduled_at: null,
+    active_scan_id: null,
+    last_scan: discoveryScanFixture(),
+    ...o,
+  };
+}
+
+export function discoverySettingsFixture(o: Partial<DiscoverySettings> = {}): DiscoverySettings {
+  return {
+    allowed_networks: ['10.0.0.0/16'],
+    global_exclusions: ['10.0.9.0/24'],
+    retention_days: 90,
+    scanning_enabled: true,
+    builtin_exclusions: ['127.0.0.0/8', '169.254.0.0/16'],
+    ...o,
+  };
+}
+
+export function discoveredEndpointFixture(o: Partial<DiscoveredEndpoint> = {}): DiscoveredEndpoint {
+  return {
+    id: '0192f100-0000-7000-8000-0000000000f1',
+    scope_id: SCOPE_ID,
+    address: '10.0.1.20',
+    port: 443,
+    sni: '',
+    host: '',
+    fingerprint_sha256: DISCOVERED_FP,
+    previous_fingerprints: [],
+    chain_length: 2,
+    tls_version: 'TLS 1.3',
+    cipher: 'TLS_AES_128_GCM_SHA256',
+    state: 'present',
+    last_error_code: '',
+    missed_scans: 0,
+    first_seen: '2026-10-12T09:01:00Z',
+    last_seen: '2026-10-13T09:02:00Z',
+    last_scanned_at: '2026-10-13T09:02:00Z',
+    gone_since: null,
+    target: null,
+    ...o,
+  };
+}
+
+export function discoveredCertificateFixture(o: Partial<DiscoveredCertificate> = {}): DiscoveredCertificate {
+  return {
+    fingerprint_sha256: DISCOVERED_FP,
+    subject_cn: 'legacy.example.test',
+    sans: ['legacy.example.test', 'old.example.test'],
+    issuer_cn: 'Example Issuing CA',
+    not_before: '2026-01-01T00:00:00Z',
+    not_after: '2099-01-01T00:00:00Z',
+    days_left: 26000,
+    expired: false,
+    key_algorithm: 'rsa',
+    self_signed: false,
+    status: 'unmanaged',
+    managed_certificate_id: null,
+    endpoint_count: 2,
+    seen_on_count: 2,
+    first_seen: '2026-10-12T09:01:00Z',
+    last_seen: '2026-10-13T09:02:00Z',
+    ...o,
+  };
+}
+
+export function discoveryPreviewFixture(o: Partial<DiscoveryPreview> = {}): DiscoveryPreview {
+  return { addresses: 1024, excluded_addresses: 0, hostnames: 0, ports: 2, sni_names: 0, endpoints: 2048, builtin_exclusions: [], ...o };
 }

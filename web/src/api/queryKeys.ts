@@ -80,3 +80,16 @@ export const acmeCertificateListKey = (filters: { state?: string; provider_id?: 
 export const acmeCertificateKey = (id: string) => ['acme', 'certificates', id] as const;
 export const acmeOrdersKey = (id: string) => ['acme', 'certificates', id, 'orders'] as const;
 export const acmeBindingsKey = (id: string) => ['acme', 'certificates', id, 'bindings'] as const;
+
+// Network discovery. DISCOVERY_KEY is the prefix of everything; the lists sit under 'list' segments, so no id or
+// fingerprint can address the same entry. The scope preview is never cached (it is read with the form's own abort).
+export const DISCOVERY_KEY = ['discovery'] as const;
+export const DISCOVERY_SUMMARY_KEY = ['discovery', 'summary'] as const;
+export const DISCOVERY_SETTINGS_KEY = ['discovery', 'settings'] as const;
+export const DISCOVERY_SCOPES_KEY = ['discovery', 'scopes'] as const;
+export const DISCOVERY_SCOPE_LIST_KEY = ['discovery', 'scopes', 'list'] as const;
+export const DISCOVERY_SCANS_KEY = ['discovery', 'scans'] as const;
+export const discoveryScanListKey = (filters: { scope_id?: string; state?: string }) => ['discovery', 'scans', 'list', filters] as const;
+export const DISCOVERY_CERTIFICATES_KEY = ['discovery', 'certificates'] as const;
+export const discoveredCertificateListKey = (filters: Record<string, unknown>) => ['discovery', 'certificates', 'list', filters] as const;
+export const discoveredCertificateKey = (fingerprint: string) => ['discovery', 'certificates', fingerprint] as const;
