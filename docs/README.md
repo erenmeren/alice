@@ -10,6 +10,7 @@ with every release package (`docs/`) and are written in English.
 | IT administrator, infrastructure team | prepare a server and install Alice | [install-guide.md](install-guide.md) |
 | Administrator doing the first setup | go through the setup wizard | [first-run.md](first-run.md) |
 | Administrator | manage people, roles, single sign-on, settings, backups in the web interface, the HTTPS certificate, audit forwarding | [admin-guide.md](admin-guide.md) |
+| Administrator | allow Alice to scan networks for certificates, and read what it found | [admin-guide.md](admin-guide.md#network-discovery), [operator-guide.md](operator-guide.md#network-discovery) |
 | Operator or administrator | work with servers, certificates, deployments, Key Vaults and SSH key rotation | [operator-guide.md](operator-guide.md), [admin-guide.md](admin-guide.md) |
 | System operator, on-call staff | run the server: `alicectl`, logs, health, disk, monitoring, moving to a new server | [operator-guide.md](operator-guide.md) |
 | Operator, IT manager, auditor asking for continuity evidence | understand backups, copy them off the server, restore, run a recovery drill | [backup-restore.md](backup-restore.md) |

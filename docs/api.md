@@ -44,7 +44,8 @@ settings (mail, single sign-on, HTTPS certificate, audit forwarding, backup sche
 download, re-pinning a server's host key, adding a Key Vault and its credentials, enabling a rotation policy and the
 decisions in a rotation run, **backups** (list, back up now, download), and for certificate authorities (ACME) adding
 authorities, accounts and DNS hooks, defining which certificates Alice gets and switching their automatic renewal or
-automatic deployment on. A few other actions need a person too,
+automatic deployment on, and for network discovery defining scan scopes, the allowed scan networks, the exclusions and
+the retention. A few other actions need a person too,
 such as confirming a server's fingerprint and confirming or discarding a waiting job. The exact list, operation by
 operation, is the "API token" column of [authz-matrix.md](authz-matrix.md). Backups and restores are done by an
 administrator in the web interface or by the operator on the server ([backup-restore.md](backup-restore.md)).
@@ -140,6 +141,20 @@ curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api
 current certificate. These ACME actions share one limit of 10 a minute per person or token (429 `ALC-SYS-0005`); an
 authority that limits Alice answers 503 `ALC-ACM-0005` with `Retry-After`. The ids and states are in
 `GET /api/v1/acme/certificates`.
+
+**Scan a scope and list the unmanaged certificates found on the network** (an administrator's or operator's **Read and
+operate** token; a read-only token is refused, because the results are a map of your network):
+
+```
+curl -fsS -X POST -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/discovery/scopes/<scope id>/scans"
+curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/discovery/scans?limit=5"
+curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api/v1/discovery/certificates?status=unmanaged&current=true"
+```
+
+A scan is started only for a scope an administrator wrote in the web interface; the API never takes addresses.
+Starting and cancelling scans share a limit of 10 a minute per person or token. Scopes, the allowed scan networks and
+the exclusions cannot be changed with a token. In lock mode starting a scan is refused (`ALC-LIC-0001`); the rest
+works. `GET /api/v1/discovery/certificates/export` downloads the same list as CSV. Lists page by cursor like the others.
 
 **Export the audit log** (administrators and auditors, a read-only token is enough):
 

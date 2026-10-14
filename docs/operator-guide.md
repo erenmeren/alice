@@ -879,6 +879,65 @@ The page says "The license does not allow changes now": **Test run**, ordering, 
 switching automatic deployment (on or off) are refused (`ALC-LIC-0001`) and nothing is renewed or deployed
 automatically. **Remove** of a website and **Delete** of a certificate still work.
 
+## Network discovery
+
+**Network discovery** finds the certificates that servers on your network present, also the ones Alice does not
+manage. Everyone can read it (auditors read only); administrators and operators start and cancel scans; only
+administrators define what may be scanned (the **Scopes**, the **Allowed scan networks**, the exclusions and the
+retention). That setup, the limits and what Alice never scans are in
+[admin-guide.md](admin-guide.md#network-discovery). A scan opens a TLS connection to each address and port of a
+scope, reads the certificate the server presents and closes the connection. It sends nothing else and changes
+nothing on the scanned servers. **Nothing is scanned until an administrator adds a scope.**
+
+### Starting and following a scan
+
+On **Scopes**, choose **Scan now** on a scope, or **Start a scan** on **Scans** to pick one. A scope that cannot be
+scanned now says why next to the button: switched off, already being scanned (`ALC-DSC-0004`), two scans already
+running (`ALC-DSC-0007`), no allowed scan networks set, or the license does not allow it. Scopes with a schedule are
+also scanned by themselves. **Scans** lists the newest scans first, with **Answered**, **not answering** and the total
+of places tried, the start, the end and the duration; the list updates by itself while a scan on the first page
+runs. **Cancel scan** stops a running scan (administrators and operators, also while the license is locked); the
+places already tried keep their results. A scan ends **Finished**, **Cancelled**, **Took too long** (60 minutes;
+`ALC-DSC-0006`) or **Failed** (for example when Alice restarted during it; `ALC-DSC-0012`). Open scans started from
+outside the page (an API call) show up after you reload the page.
+
+An **Answered** place completed a TLS handshake; **not answering** places refused the connection, did not answer in
+time, closed it during the handshake, or **did not complete a TLS handshake** (a plain-text service, a TLS alert, no
+common protocol version or cipher suite). The last group is deliberately one state: Alice does not say "plain text",
+because it cannot tell.
+
+### Reading the results
+
+The **Results** tab shows the certificates still found (**Still found**; **Include no longer found** adds the rest),
+one row per certificate with the number of places it was found on. Filter by status, expiry, who signed it, scope,
+or search a name. A row opens a side panel with the places (address, port, the server name asked for, the last
+problem in words, TLS version and cipher, first and last found, earlier certificates there, and the server in Alice
+if one has that address or host name).
+
+- **Unmanaged**: Alice has no record of this exact certificate. This includes a certificate on a proxy or a load
+  balancer in front of servers Alice manages, unless Alice stores that same certificate.
+- **Managed**: Alice has it, and it is in use on a server it manages. **Known**: Alice has it in its inventory but not
+  on any server it manages now.
+- **Self-signed** and the expiry badge say what the certificate is, not whether to trust it: Alice checks nothing
+  about the chain or the name. Discovery has no **Wrong name?** warning.
+
+The count in **Found on the network, not managed (n)** on **Certificates** (shown only when a scope exists) and the
+Overview line count the unmanaged certificates a place still presents, so they can be lower than the **Unmanaged**
+list when **Include no longer found** is on.
+
+**Add as server** (administrators) opens the Add server dialog with the place's address filled in. A new server
+counts toward the license, which Alice checks when you add it; the SSH port stays 22. When the certificate then
+appears in the inventory, the next scan shows it as **Managed**.
+
+**Export** saves the filtered list as a CSV file. Discovery never changes the number of servers the license
+counts.
+
+### Before you scan
+
+Scans can trip intrusion detection and rate-based alarms: a /20 is thousands of TLS connections from the Alice
+server in minutes. Tell the people who run those systems first, and start with a small scope. A scan of a few
+addresses finishes in seconds; at the default 20 connections a second, 5,000 places take about 4 minutes.
+
 ## SSH keys and rotation
 
 Alice can generate SSH keys, put a key into a user's key file on a managed server (**Deploy**), hand the private key to
@@ -1250,7 +1309,13 @@ the sweep (`acme.sweep`, every minute, also in lock: outside lock it finishes an
 after the authority issued the certificate, ends one it cannot finish after 5 minutes without its task (`ALC-ACM-0026`), and
 queues the removal of proof records left behind). An order (`acme.issue`) runs once: its retries are the renewal
 planner's, never the queue's. The removal of proof records (`acme.cleanup`, also in lock) gets up to 5 attempts and
-no dead-job email; the sweep queues it again every hour for seven days. The alert
+no dead-job email; the sweep queues it again every hour for seven days. The network discovery jobs: a scan (`netdisco.scan`, one per scope and at most two at once; it
+runs once, with no retry, and stops as cancelled while the license is locked), the schedule check
+(`netdisco.schedule`, every minute, on the leader; not while the license does not allow changes) and the cleanup
+(`netdisco.retention`, every hour, also in lock; it touches only discovery data). A scan whose job died is ended as
+**Failed** (`ALC-DSC-0012`) by the next schedule check or cleanup; after a lost lease the old run may keep connecting for up to
+45 seconds, so three scans can briefly run. The alert recipients get the usual dead-job e-mail when a scan job dies;
+there is no other scan-failure e-mail. The alert
 recipients get an email when a job stops after its last attempt, when a job was changed in the
 database, and when the daily audit check finds a problem.
 
@@ -1439,8 +1504,41 @@ their containers, for example `docker compose -p alice-e2e exec fakesmtp /alice-
 provider signs with the real time, so a test that moves Alice's clock by more than about a minute must do its single
 sign-on steps first.
 
-`make perf` runs the R32 performance test (`TestR32DashboardAndListBudgets`, tags `integration perf`): a test database
-with 5,000 certificates on 500 servers, 500 deployments and 5,000 audit entries, then 10 warm-up and 100 measured
-requests per page through the whole HTTP stack, against the budgets of 500 ms (dashboard) and 300 ms (lists) at the
-95th percentile. It needs Docker (testcontainers) and nothing else using it, and takes about 20 seconds; never run it
-while Playwright runs.
+`make perf` runs two performance tests (tags `integration perf`, in `internal/api`; one command, about 40 seconds): R32
+(`TestR32DashboardAndListBudgets`): a test database with 5,000 certificates on 500 servers, 500 deployments and 5,000
+audit entries, then 10 warm-up and 100 measured requests per page through the whole HTTP stack, against the budgets of
+500 ms (dashboard) and 300 ms (lists) at the 95th percentile; and `TestPerfNetdiscoScan`: network discovery with
+5,000 places, 5,000 certificates and 1,000 shared intermediates written through the scanner's own storage path, 500
+servers and 5,000 inventory certificates for the managed, known and unmanaged links, then the same kind of requests
+against the discovery pages (lists and details 300 ms, the Overview metric 500 ms), the CSV export of 5,000 rows (3 s)
+and of 50,000 synthetic rows (30 s), the time to store a scan's results plus the connection time at the default rate
+(under 5 minutes in all), and a flat heap over a second round. It also checks that the place list uses the
+`discovery_targets_host` index. The numbers are in
+[docs/security/reviews/network-discovery.md](security/reviews/network-discovery.md). Both need Docker
+(testcontainers) and nothing else using it; never run them while Playwright runs.
+
+### The discovery fleet in tests
+
+The e2e stack also runs `fakefleet` (`cmd/alice-fakefleet`, `internal/testutil/fakefleet`; test-only and never in a
+release): about twenty TLS servers on `10.89.0.10` of the internal `fleet` network (`10.89.0.0/24`; Alice is
+`10.89.0.2`), each kind on its own port (the valid one on 443), also reachable as `<kind>.fleet.alice-e2e.test`:
+valid, expired, not yet valid, self-signed, certificates in the wrong order or without the intermediate, one that
+depends on the name asked for, TLS 1.0, 1.2 and 1.3 only, an RSA-key-exchange-only server, a SHA-1 signed leaf, a
+slow-loris, a giant and a huge chain, a reset, a plain-text server, 256 names on one address and a malformed
+certificate. Its certificates are made when it starts. The journeys (`web/e2e/phase11.spec.ts`) first set the
+**Allowed scan networks** to `10.89.0.0/24` through the API, because loopback and everything the scan policy refuses by
+itself are never scannable, and read what the fleet saw with `docker compose -p alice-e2e exec fakefleet
+/alice-fakefleet ctl log --settle` (which addresses were dialed and whether an application byte came after a
+handshake). The Go integration tests start the same fleet in-process on a private interface address of the machine
+(`ALICE_REQUIRE_FLEET=1` in `make test-integration` and `make coverage` makes the test fail instead of skip when the
+machine has none). The fleet is built with `docker build --network host` like the other test images; if
+`make e2e-up` fails at the fleet image on your machine, build `alice-e2e-fakefleet` that way and bring the stack up
+again.
+
+### Migration 00014 was edited in place
+
+Migration `00014` (the network discovery tables) was edited while the feature was being built: its check on
+`alerts.kind` gained `discovered_certificate_expiry`. **A development database that is already at version 14 does not
+get the change.** Migrate it down to version 13 and up again (the migrations are goose files: `goose down`, then `goose up`) or run `make reset` to start over, or
+discovery alerts fail with a constraint error. Databases of released installations are not affected: the migration
+was not part of a release before.

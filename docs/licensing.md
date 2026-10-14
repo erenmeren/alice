@@ -69,7 +69,8 @@ would change a server are refused with `ALC-LIC-0001` ("Not available while the 
 renewal ends lock mode at once.
 
 In lock mode adding or removing servers, confirming fingerprints, **Test connection**, **Scan for SSH keys**,
-**Discover**, key removals, certificate uploads, signing requests, deployments and verification settings are
+**Discover**, starting a network discovery scan (scheduled scans wait; **Cancel scan** and reading the results keep
+working), key removals, certificate uploads, signing requests, deployments and verification settings are
 refused, and the daily scans are not started. Key removals and deployments that were already waiting in the queue
 are paused; after the renewal they appear under **Waiting for an administrator** on **Servers**, and an
 administrator chooses **Run now** or **Discard** for each (nothing starts on its own; a discarded deployment ends

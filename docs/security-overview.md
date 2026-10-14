@@ -42,6 +42,10 @@ Data flows:
   customer's DNS hook over HTTPS, and for the web proof checks `http://<name>/.well-known/acme-challenge/…` on port
   80 itself; nothing is contacted before an administrator acts
   ([admin-guide.md](admin-guide.md#certificate-authorities-acme)).
+- When an administrator adds a network discovery scan scope and an operator or administrator (or the scope's
+  schedule) starts a scan, Alice opens TLS connections to the listed addresses and ports, reads the certificates the
+  servers present and closes the connections; nothing is scanned before that
+  ([admin-guide.md](admin-guide.md#network-discovery)).
 - Alice sends e-mail through the customer's mail server and, when configured, the audit log to the customer's
   syslog server.
 - Nothing flows to the vendor. Alice has **no telemetry** and makes no outbound connection other than the ones
@@ -66,6 +70,7 @@ Data flows:
 | Users, roles, password hashes (Argon2id), authenticator secrets, recovery codes, sessions, API token hashes | Database | Authenticator secrets encrypted with envelope encryption; passwords and tokens stored only as hashes. |
 | Managed private keys (TLS keys, generated SSH keys), Alice's own SSH key, Key Vault credentials, SMTP password, identity-provider client secrets, ACME account keys, external account binding keys, DNS hook secrets | Database | Envelope encryption under the master key, each value bound to its row. |
 | Inventory: servers, certificates, SSH public keys, deployments, rotations | Database | Database access control. |
+| Network discovery: scan scopes, and the public certificates and chains that scanned servers presented, with the address, port and TLS version where each was found | Database | Database access control. Public data only: no private key and no secret is read or stored. It is a map of the customer's network, so API tokens need the operate scope to read it. |
 | Audit log | Database | Hash chain; insert and read only for the application. |
 | License, installation record, time record | Database and `/opt/alice/state/hwm.dat` | Vendor signature (license); MAC under a key derived from the master key (installation and time record). |
 | Master key | `/opt/alice/keys/master.key` | Mode 0400, owned by the container user, in a 0700 directory; full-disk encryption of the host is required. |
@@ -162,6 +167,7 @@ checks every route against every role and token). The full matrix is in [authz-m
 | Out | TCP 443 | Azure (`login.microsoftonline.com`, `*.vault.azure.net`) when Key Vault is used; the identity provider when single sign-on is used |
 | Out | HTTPS (443 or the port in the address) | A certificate authority's ACME directory and the addresses its answers name, and the DNS hook, when an administrator set them up; never through a proxy, never following a redirect |
 | Out | TCP 80 (HTTP) | Each name proved by the ACME web proof (HTTP-01), to check the proof file before the authority does; only for certificates that use that proof |
+| Out | TCP, the ports of a scan scope (443 and the like) | Network discovery: a TLS handshake to each address and port of a scope an administrator wrote, inside the networks an administrator allowed; nothing before an administrator adds a scope; never through a proxy |
 | Out | the mail server's port (25, 465 or 587) | E-mail, when configured |
 | Out | TCP 6514 by default (or the port chosen) | Audit forwarding, when configured |
 
@@ -204,6 +210,7 @@ The design follows a STRIDE analysis per component. The main scenarios:
 | A forged or altered backup restored | Backups origin-authenticated against anyone without the passphrase, authenticated chunks, verification before the switch, the restore recorded in the audit chain | Anyone with the passphrase and one backup file can forge a backup that restores (KI-14); an administrator with the passphrase can restore an older genuine backup; the audit log shows both. |
 | Malicious operator | Operators cannot download private keys, read the audit log or change servers and policies; they cannot add certificate authorities or names to be certified, or switch automatic deployment on; every action audited | Operators can deploy certificates, add or remove keys on existing servers, and order or renew certificates for names an administrator approved. |
 | Abuse of the certificate authority or hook settings (server-side request forgery) | Only administrators set the addresses; https only; the address rule refuses link-local and metadata addresses on every connection; no redirect, no proxy, 1 MiB answers; answer text never stored | An administrator can point Alice at any https address it can reach, private ones included. |
+| Abuse of network discovery (server-side request forgery, scanning from Alice's position, a hostile server answering a scan) | Nothing is scanned without an administrator's scope; an empty list of allowed scan networks (the default) allows nothing, and changing it needs a fresh code and is audited; the policy is checked on the socket at connect time, so names that resolve to a refused address and DNS rebinding do not help; built-in refusals for loopback, link-local and cloud metadata, multicast, reserved, carrier-grade NAT, Alice's own addresses, the default gateway and the database; the global exclusions no scope can override; no proxy, no redirect; the probe sends no application byte; limits on addresses, rate, connections, time, chain size and new certificates; parsers fuzzed | An administrator can scan any network the allowed list holds, from the Alice server; Docker host addresses outside the container's view must be added to the exclusions by hand; scans can trip intrusion detection. |
 | Man in the middle | TLS everywhere; SSH host key pinning; certificate verification | First contact with a new server relies on the administrator comparing its fingerprint (trust on first use). |
 | Tampered update | Signed packages verified with the installed keys; the package copied before use; automatic backup and rollback | Trust in the first installation rests on the operator comparing the published fingerprint. |
 | Supply-chain compromise | Pinned and scanned dependencies, SBOM, offline signing | A compromised dependency that no scanner knows. |
@@ -222,6 +229,13 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
   revocation is done at the authority, not in Alice. Behaviour against real public or company authorities, real DNS
   and real renewal information was tested during development only against a simulated authority; check it with your
   authority (for example its staging service) before relying on it.
+- **Network discovery trusts nothing it finds.** To see expired, self-signed and wrongly chained certificates, the scan
+  probe does not verify the certificate a server presents: the server is exactly the thing being examined. This is
+  one function (`tlsprobe.CapturePresentedChain`); a source test fails if the setting appears anywhere else in Alice
+  besides the three older places that compare a served certificate with a pinned one. The probe sends nothing after
+  the handshake, returns only certificates and never a "valid" or "trusted" verdict, and no screen calls a found
+  certificate trusted. Scanning was tested only against simulated servers and on loopback, not on real networks; read
+  [the review](security/reviews/network-discovery.md).
 - **The recovery passphrase and the master key cannot be changed in version 1.** An exposed passphrase opens every
   backup copy made before and after; protect the copies.
 - **Audit log limits.** The chain proves that entries were not changed or removed in between; someone with control

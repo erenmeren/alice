@@ -9,9 +9,9 @@ Alice has three roles:
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs; certificate authorities: adding them, their accounts and DNS hooks, choosing which certificates Alice gets (**Get a certificate**), switching automatic renewal and automatic deployment on, **Renew now**, **Release** | — |
-| Operator | View inventory; test servers, run discovery and remove SSH keys; generate SSH keys and deploy them; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; for certificates from a certificate authority: **Test run**, **Order now**, **Deploy now**, connecting and removing websites, switching automatic deployment off; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that, download a private key, manage rotations, add certificate authorities or names to be certified, switch automatic deployment on |
-| Auditor | View inventory read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
+| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs; certificate authorities: adding them, their accounts and DNS hooks, choosing which certificates Alice gets (**Get a certificate**), switching automatic renewal and automatic deployment on, **Renew now**, **Release**; network discovery: scan scopes, allowed scan networks, exclusions and retention, and everything an operator does | — |
+| Operator | View inventory; test servers, run discovery and remove SSH keys; generate SSH keys and deploy them; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; for certificates from a certificate authority: **Test run**, **Order now**, **Deploy now**, connecting and removing websites, switching automatic deployment off; network discovery: start and cancel scans and read the results; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that, download a private key, manage rotations, add certificate authorities or names to be certified, switch automatic deployment on, define scan scopes or the discovery settings |
+| Auditor | View inventory and network discovery results read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
 The full list of which role may call which API operation is in [authz-matrix.md](authz-matrix.md).
 
@@ -1204,6 +1204,221 @@ log: `acme.provider.*`, `acme.account.*`, `acme.hook.*`, `acme.certificate.*`, `
 (the hook is the adapter), the TLS-ALPN-01 proof, more than one account per authority, and ACME profiles. Renewals
 are not marked as replacements of the previous certificate (ARI's `replaces`), so Let's Encrypt counts them against
 its usual limits; use **Let's Encrypt (staging, for tests)** for trials.
+
+## Network discovery
+
+Network discovery finds the certificates that servers on your network present, including the ones Alice does not
+manage: an old certificate on a forgotten test server, a self-signed certificate on a device, a certificate that
+someone bought and installed by hand. Alice connects to the addresses and ports an administrator listed, starts a
+TLS handshake, records the certificate chain the server presents, and closes the connection. It sends nothing else
+and changes nothing on the scanned servers. Results are under **Network discovery** (every role; auditors read only).
+Day-to-day use, scanning and reading the results, is in
+[operator-guide.md](operator-guide.md#network-discovery); this section is the setup, which is for administrators.
+
+**Nothing is scanned until you act.** There is no default scope and Alice never looks for "its own network". A scan
+starts only for a scope an administrator wrote, by an operator or administrator choosing **Scan now**, or by that
+scope's own schedule. No name is looked up except the host names you list, through the system's name server, and no
+service outside your network is asked about anything. Discovery adds no telemetry.
+
+| Action | Who |
+|---|---|
+| Adding, changing and deleting scopes, the **Allowed scan networks**, the global exclusions, the retention | Administrator with a fresh authenticator code; never an API token |
+| **Scan now**, **Cancel scan** | Administrator or operator, also with a **Read and operate** API token |
+| Reading scopes, scans, certificates, places, the settings, the CSV export | Administrator, operator and auditor in the web interface; an API token needs the **Read and operate** scope (a read-only token never reads the map of your network) |
+| **Add as server** from a result | Administrator (the existing Add server dialog) |
+
+The full list per API route is in [authz-matrix.md](authz-matrix.md). Starting and cancelling scans together are
+limited to 10 a minute per person or token.
+
+### Allowed scan networks and exclusions
+
+Open **Network discovery → Scopes**. **Change settings** (administrators) holds three lists:
+
+- **Allowed scan networks.** Alice scans only addresses inside these networks, one address or range per line, for
+  example `10.0.0.0/16`. **The list is empty at first, and an empty list means nothing can be scanned**: a scope with
+  an entry outside the list is refused when it is saved (`ALC-DSC-0002`) and again at the moment Alice connects. This
+  is the main control: a stolen administrator session that has not been allowed to widen the list cannot make Alice
+  connect anywhere else, and changing the list needs a fresh authenticator code and is recorded in the audit log.
+- **Never scan these** (global exclusions). Addresses and ranges that no scope may scan, whatever the scope says. No
+  scope can override them. Only addresses and ranges, not host names.
+- **Keep results for (days)**: 90 by default, from 7 to 730 (see [What discovery keeps](#what-discovery-keeps-and-for-how-long)).
+
+Each list takes at most 256 lines.
+
+**What Alice never scans**, whatever the settings (the page shows the list as **Always left out**): loopback,
+unspecified and multicast addresses, link-local addresses (this includes the cloud metadata address
+`169.254.169.254`), the metadata addresses of the large cloud providers, reserved and special-purpose ranges,
+documentation and benchmarking ranges, **carrier-grade NAT (`100.64.0.0/10`)**, and the IPv6 forms that hide an IPv4
+address in a way Alice cannot check (Teredo and similar are refused as a whole; NAT64, 6to4 and IPv4-mapped forms are
+unwrapped and the embedded IPv4 address is checked). On top of that, each scan reads, and re-reads while it runs, the
+addresses of **Alice's own network interfaces**, the **default gateways** and the **addresses of the database
+server**, and refuses them too. A host name that leads to any of these is refused at the moment of connecting
+(a name that resolves to a public and a refused address is scanned at the public one only).
+
+Two consequences you should plan for:
+
+- **The Docker host.** Alice runs in a container. It sees the container's own addresses and the gateway of its main
+  routing table, not every address of the Docker host (its LAN address and the addresses of other bridges). If the
+  host sits inside an allowed network, add its addresses to **Never scan these**, so that a scan does not connect to
+  the host's own services.
+- **Carrier-grade NAT.** Installations whose internal network uses `100.64.0.0/10` (for example with Tailscale-style
+  overlay networks) cannot scan it: those addresses are always left out and a scope that names them is refused.
+
+### Scopes
+
+Choose **Add a scope**. A scope is:
+
+| Field | Meaning and limits |
+|---|---|
+| **Name** | Up to 100 characters, unique (upper and lower case are the same). |
+| **Addresses, ranges and host names** | One per line, at most 256: an IP address (`10.0.0.5`), a range (`10.0.1.0/24`, bits after the prefix must be zero) or a host name. A host name is looked up once when the scan starts (at most 8 addresses per name, 5 seconds); each address is its own place and is checked like any other address. |
+| **Ports** | At most 16, from 1 to 65535. Only direct TLS (HTTPS, LDAPS, IMAPS, SMTPS and the like). |
+| **Server names to ask for (SNI)** | Optional, at most 256. Some servers present a different certificate for each name, so Alice asks for every name at every address. Without any, Alice asks once with no name for an address, and a host name from the list is asked for by itself. |
+| **Leave out** | Optional, at most 256 addresses and ranges inside the scope that must not be scanned. |
+| **New connections per second** and **Connections at the same time** | 20 and 32 if left empty; at most 100 and 64. |
+| **Scan every (hours)** and the daily time window | Optional. See [Discovery schedule](#discovery-schedule). |
+| **E-mail before certificates found by this scope expire** | Off by default (see [Discovery alerts](#discovery-alerts-and-the-overview-line)). |
+| **Switched on** | A scope that is switched off is scanned neither by its schedule nor by hand. |
+
+**Size limits.** A scope covers at most 4,096 addresses (a /20; the host names' addresses count), one scan at most
+20,000 combinations of address, port and server name, and an IPv6 range at most a /120. The limits are counted before
+the exclusions are subtracted, so they cannot be met by excluding most of a large range. The dialog shows the size
+as you type ("This scope covers 1,024 addresses × 2 ports") and which of the always-excluded ranges your ranges overlap.
+A refused line is marked with its number. A /20 on one port at the default 20 connections a second takes about
+3.4 minutes; raise the rate (up to 100) for large scopes, and read [the warning below](#what-a-scan-looks-like-to-the-scanned-servers).
+
+When you save, Alice looks up the host names the save adds (at most 16 new names per save; a name that does not
+resolve is `ALC-DSC-0010`, and the answer never shows the addresses). Changing the addresses, ports, server names
+or exclusions of a scope that is being scanned stops that scan; the results found until then are kept. Places that are
+no longer in the scope are marked **No longer found** at once.
+
+### Rates, limits and the scan itself
+
+One scan runs per scope at a time and at most two scans run at once (starting a third by hand is refused with
+`ALC-DSC-0007`, a scope's schedule waits). A connection waits 3 seconds to be made and 5 seconds for the handshake;
+a whole scan is stopped after 60 minutes (**Took too long**, results kept). **Cancel scan** stops it; the connections
+in flight finish within the timeouts. A scan records at most 10 certificates (16 KiB each, 64 KiB together) per place;
+a bigger chain is recorded as "too large to record", not stored. A scan stores at most 1,000 certificates Alice has not
+seen before, and a scope at most 5,000 a day; beyond that the scan only counts them. The last 30 scans of each scope
+are kept (plus every scan of the last 24 hours), with their numbers only.
+
+### Discovery schedule
+
+**Scan every (hours)** takes 1 to 168 hours (one week). Without a window the scans follow the clock: a scan starts
+when the last scheduled one is at least that many hours old. With **Only scan during a daily time window** (a start,
+an end and a time zone, for example 22:00 to 05:00 Europe/Istanbul; a window may cross midnight), a scan starts only
+inside the window: at its opening, then every given number of hours while it lasts. With a window, an interval of
+24 hours or more counts **whole days**: 36 hours means every 2 days. When the clocks change, the window still closes
+at its local end time, so on the day clocks go forward it can be an hour shorter. The schedule is checked once a
+minute by the leader; at most two scans are queued in a check. Scheduled scans stop while the license is locked
+(next section), and **Scan now** works at any time a scan may run.
+
+### While the license is locked
+
+Starting a scan, by hand or by schedule, is refused (`ALC-LIC-0001`; `ALC-LIC-0009` if the license cannot be checked)
+and a scan that is running stops as cancelled. Everything else keeps working: reading the results, **Cancel scan**,
+changing scopes and settings, the export, and the cleanup of old results. Discovery never counts toward the
+license: found places are not servers and are not counted as targets. A server counts only after you **Add as
+server**, and then Alice checks the license in the usual way.
+
+### Reading the results
+
+**Results** lists the certificates found (one row per distinct certificate, however many places present it).
+
+| Status | Meaning |
+|---|---|
+| **Unmanaged** | Alice has no record of this exact certificate (its SHA-256 fingerprint is not in the inventory). A certificate in front of servers that Alice manages, for example on a proxy or a load balancer, is also unmanaged unless Alice stores that same certificate. |
+| **Managed** | Alice has this certificate in its inventory, and it is in use on a server Alice manages. |
+| **Known** | Alice has this certificate in its inventory, but not on any server it manages now (for example an uploaded certificate that was never deployed, or one that was removed from its server). |
+
+The chips **Self-signed** and an expiry badge (**Expired**, or the days left) are separate from that status.
+Discovery does not check whether a certificate matches the name asked for: there is no **Wrong name?** chip, and a
+certificate for the wrong name looks like any other. Alice also does not check whether the chain is trusted, because
+it trusts nothing it finds there; the page never calls a found certificate "trusted" or "valid".
+
+A place (an address, a port and the server name asked for) has a state:
+
+| State | Meaning |
+|---|---|
+| **Answering** | The server completed a TLS handshake and presented a certificate. |
+| **Not answering** | It refused the connection, did not answer in time, or closed the connection during the handshake. |
+| **No TLS handshake** | **The server did not complete a TLS handshake.** This is one coarse state for several causes: a plain-text service (HTTP, SSH), a TLS alert from the server (it does not know the name asked for, or refuses clients), no TLS version or cipher suite in common, a key too large for Go to accept (RSA over 8192 bits). It does not mean "plain text". |
+| **Unreadable certificate** | The server completed a handshake but sent a certificate Alice cannot read (for example a negative serial number, or an end date before the start). No certificate is stored for this place; see the limitation below. |
+| **No longer found** | The place did not answer for 3 scans in a row, or it left the scope. |
+| **Not scanned** | The address was excluded or is outside the allowed scan networks, so Alice did not connect. |
+
+**When a place counts as gone.** A place that was not answering (refused, timeout, closed, no TLS handshake) in a
+scan that tried it has one more miss, and after 3 it is **No longer found**. Two exceptions protect you from false
+alarms: a scan in which no place answered at all, in a scope that had answers before, counts no misses (Alice's own
+network may be down); and places of host names that did not resolve in this scan are not marked. A place that
+answers again is found again, with its history.
+
+**Still found and the numbers.** **Results** shows the certificates still found by default (**Still found**); **Include
+no longer found** adds the ones whose places are all gone. The count in the chip **Found on the network, not managed (n)** on
+**Certificates**, and the line on the Overview, count unmanaged certificates that a place still presents, so
+they can be lower than the **Unmanaged** list when **Include no longer found** is on.
+
+**Unmanaged with the warning** is only the start: use **Add as server** (administrators) on a place to open the
+existing Add server dialog with its address filled in. The SSH port stays 22 and Alice checks the license when you
+add it. Once a server is added and its certificate is in the inventory, the next scan shows it as **Managed** or **Known**.
+
+**Export** downloads the filtered list as a CSV file (`alice-discovered-certificates-<date>.csv`), recorded in the
+audit log before the first byte is sent; only one export of any kind runs at a time per person.
+
+### Discovery alerts and the Overview line
+
+A scope's **E-mail before certificates found by this scope expire** is off by default, because unmanaged findings
+are noisy. When on, and the scope is switched on, the recipients of [Alerts and e-mail](#alerts-and-e-mail) get an
+e-mail at the usual days before the expiry, and once more when it has expired, for each unmanaged certificate a place
+of that scope still presents (with the usual limit per check and a summary beyond it), with the addresses and ports
+(up to 10), the scopes and a link to **Network discovery → Results** at **Unmanaged**. A scope that is switched off sends none, and nothing is sent about
+a certificate Alice manages (the managed e-mails cover those). A failed scan sends no e-mail of its own beyond the
+dead-job e-mail every background job sends.
+
+The **Overview** does not count these certificates with the managed ones (its numbers would then mean something
+different). Once at least one scope exists it shows a separate quiet line, "Found on the network, not managed by
+Alice, expiring within 30 days: n", which links to the list of those certificates; expired ones are not counted.
+
+### What discovery keeps, and for how long
+
+Alice keeps public certificates only: no private key and no secret is ever read or stored. Per place only its
+current state is kept, with its last 5 earlier fingerprints (to show that a certificate was replaced), not the
+history of every scan. Every hour the cleanup, which also runs while the license is locked and
+touches only discovery data, deletes: places that are **No longer found** for longer than the retention, all places of a
+deleted scope, certificates no place presents and not seen for 7 days, and old scans. Growth follows the number of
+places and certificates, not the number of scans. Discovery events are in the audit log: `discovery.scope.created`,
+`discovery.scope.updated`, `discovery.scope.deleted`, `discovery.exclusions.updated` (the settings), `discovery.scan.started`,
+`discovery.scan.cancelled`, `discovery.scan.finished` (counts only) and `discovery.export`. They never carry a
+certificate.
+
+### After a restore
+
+A restore ends the scans that were running in the backup (`ALC-DSC-0012`) and switches off every scope that has a
+schedule (the restore prints "N network discovery scan schedules are switched off…"), so that a copy of an
+installation does not scan behind the original's back. When the restored installation replaces the original, switch
+the scopes on again under **Network discovery → Scopes**.
+
+### What a scan looks like to the scanned servers
+
+Every connection is a TLS handshake that is closed at once; no byte of an application protocol follows. **Scanning
+can still trip intrusion detection and rate-based alarms**: a /20 is thousands of connections from one address.
+Tell the people who run those systems before the first scan, start with small scopes, and use the rate setting. Close
+right after a TLS 1.3 handshake can make a server log a reset. Alice's address is the address of the Alice server.
+
+### Limits of this version
+
+- Direct TLS only. STARTTLS (SMTP, IMAP, LDAP) is not supported, because it needs application bytes.
+- SSL 3.0, and servers that offer only cipher suites Go has removed, cannot be probed: they appear as **No TLS
+  handshake**. TLS 1.0 to 1.3 and the older suites Go still has (RSA key exchange, SHA-1 signed certificates) are recorded.
+- A certificate Go cannot parse is recorded only as **Unreadable certificate**, without the certificate. If a server
+  sends an intermediate certificate whose dates Alice cannot store, that intermediate is left out of the stored chain
+  (the leaf is kept).
+- No check of the name in the certificate (no **Wrong name?** chip), no check that a chain is trusted.
+- Scans run from the Alice server only (no scanning from other networks), IPv6 ranges are limited to a /120, there is
+  no history of past scans' results beyond the last 5 earlier fingerprints of a place, and no bulk **Add as server**.
+- Not verified here: real networks (middleboxes, intrusion detection, load balancers that route by name, IPv6 at
+  scale). Performance was measured on one machine with simulated servers on loopback
+  ([the security review](security/reviews/network-discovery.md)).
 
 ## License
 
