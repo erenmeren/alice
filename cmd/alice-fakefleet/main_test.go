@@ -8,6 +8,8 @@ import (
 	"encoding/pem"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -262,4 +264,23 @@ func TestServeFailsWhenAPortIsTaken(t *testing.T) {
 	assert.Equal(t, 1, run(context.Background(), []string{"serve", "--bind", "127.0.0.1", "--kinds", "valid", "--ports", "valid=" + strconv.Itoa(port)},
 		&bytes.Buffer{}, &errb))
 	assert.Contains(t, errb.String(), "alice-fakefleet stopped")
+}
+
+// An answer over the size limit fails instead of being cut silently.
+func TestCtlRefusesAnOversizedAnswer(t *testing.T) {
+	defer func(old int64) { maxCtlBody = old }(maxCtlBody)
+	maxCtlBody = 10
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(strings.Repeat("x", 11)))
+	}))
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "http://")
+	var out, errb bytes.Buffer
+	assert.Equal(t, 1, ctlRequest(context.Background(), addr, http.MethodGet, "/log", "log", &out, &errb))
+	assert.Empty(t, out.String())
+	assert.Contains(t, errb.String(), "larger than")
+	out.Reset()
+	maxCtlBody = 11
+	assert.Equal(t, 0, ctlRequest(context.Background(), addr, http.MethodGet, "/log", "log", &out, &errb))
+	assert.Equal(t, strings.Repeat("x", 11), out.String(), "exactly the limit passes")
 }

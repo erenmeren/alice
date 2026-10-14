@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,10 +88,10 @@ func TestWaitIdleOnUnspecifiedAndIPv6Binds(t *testing.T) {
 				host = "::1"
 			}
 		}
-		_, err = readAll(t, net.JoinHostPort(host, port), nil, 5*time.Second)
-		require.NoError(t, err)
+		readBanner(t, net.JoinHostPort(host, port))
 		require.NoError(t, f.WaitIdle(ctx(t)), bind)
-		assert.Len(t, f.Log(), 1, bind)
+		require.Len(t, f.Log(), 1, bind)
+		assert.Equal(t, net.JoinHostPort(host, port), f.Log()[0].Local, "the address the client reached, not the listen address")
 		require.NoError(t, f.Close())
 	}
 }

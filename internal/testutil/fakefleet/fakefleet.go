@@ -107,6 +107,7 @@ type Options struct {
 	HugeChainCerts    int           // default 10,000
 	ManySNINames      int           // default 256
 	MaxConns          int           // open connections per server, more are closed at once; default 128
+	MaxChainConns     int           // the same for giant-chain and huge-chain (megabytes per connection); default 8
 	MaxLog            int           // access log entries kept, later ones are counted in Dropped; default 100,000
 }
 
@@ -153,6 +154,7 @@ func (o *Options) defaults() error {
 	setDefault(&o.HugeChainCerts, 10000)
 	setDefault(&o.ManySNINames, 256)
 	setDefault(&o.MaxConns, 128)
+	setDefault(&o.MaxChainConns, 8)
 	setDefault(&o.MaxLog, 100000)
 	switch {
 	case o.GiantBytes < 0:
@@ -312,7 +314,8 @@ func (f *Fleet) Root() *x509.Certificate { return f.ca.Root }
 func (f *Fleet) RootPEM() []byte { return f.ca.RootPEM }
 
 // AppBytesAfterHandshake is the number of application bytes all clients sent after a completed
-// handshake. A discovery probe must keep it at zero.
+// handshake. A discovery probe must keep it at zero. Each connection is read for at most 1 MiB and then
+// closed, so above that the counter is a floor, not an exact count.
 func (f *Fleet) AppBytesAfterHandshake() int64 { return f.appBytes.Load() }
 
 // Dropped is the number of connections not kept in the log because it was full.

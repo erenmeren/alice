@@ -15,7 +15,7 @@ import (
 // Access is one access log entry: a connection a server accepted.
 type Access struct {
 	Kind         Kind      `json:"kind"`
-	Local        string    `json:"local"`  // the server's address
+	Local        string    `json:"local"`  // the server address the client reached (not the listen address)
 	Remote       string    `json:"remote"` // the client's address
 	SNI          string    `json:"sni"`    // the server name of the ClientHello ("" when none or not TLS)
 	Start        time.Time `json:"start"`
@@ -23,7 +23,7 @@ type Access struct {
 	BytesRead    int64     `json:"bytes_read"`
 	BytesWritten int64     `json:"bytes_written"`
 	Handshake    bool      `json:"handshake"` // the TLS handshake completed
-	AppBytes     int64     `json:"app_bytes"` // application bytes received after the handshake
+	AppBytes     int64     `json:"app_bytes"` // application bytes received after the handshake (at most 1 MiB is read: a floor above that)
 	Closed       bool      `json:"closed"`
 	Overflow     bool      `json:"overflow"` // closed at once: the server had MaxConns open connections
 }
@@ -104,8 +104,8 @@ func (s *Server) accept(c net.Conn) {
 		_ = c.Close()
 		return
 	}
-	a := &access{kind: s.kind, local: s.addr, remote: remote, start: wall.Now(),
-		overflow: s.open.Load() >= int64(f.o.MaxConns)}
+	a := &access{kind: s.kind, local: c.LocalAddr().String(), remote: remote, start: wall.Now(),
+		overflow: s.open.Load() >= int64(s.maxConns())}
 	s.accepted.Add(1)
 	if len(f.log) < f.o.MaxLog {
 		f.log = append(f.log, a)
@@ -126,6 +126,15 @@ func (s *Server) accept(c net.Conn) {
 	f.mu.Unlock()
 	f.wg.Add(1)
 	go s.serve(c, a)
+}
+
+// maxConns is the server's open connection limit: the chain servers, which send megabytes per
+// connection, have their own small one.
+func (s *Server) maxConns() int {
+	if s.kind == KindGiantChain || s.kind == KindHugeChain {
+		return s.f.o.MaxChainConns
+	}
+	return s.f.o.MaxConns
 }
 
 // finish closes the connection and marks the entry closed.
@@ -185,7 +194,7 @@ func (s *Server) serve(raw net.Conn, a *access) {
 	_ = raw.SetDeadline(wall.Now().Add(s.f.o.IdleTimeout))
 	c := &countConn{Conn: raw, a: a}
 	if s.kind == KindPlainText {
-		s.plainText(c)
+		s.plainText(c, &helpers)
 		return
 	}
 	first, hello := readHello(c)
@@ -221,6 +230,8 @@ func (w appCounter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// maxAppBytes is how much a TLS server reads after the handshake before it stops reading and closes:
+// an AppBytes of 1 MiB therefore means "at least 1 MiB" (the counter is a floor above it).
 const maxAppBytes = 1 << 20
 
 // serveTLS runs the handshake, then only reads (counting what arrives) until the client leaves. It
@@ -269,13 +280,17 @@ func (s *Server) slowLoris(c net.Conn, helpers *sync.WaitGroup) {
 	}
 }
 
-func (s *Server) plainText(c net.Conn) {
+// plainText writes its banner, then reads (for the log) until the client leaves, the connection's
+// IdleTimeout passes or the fleet closes. Closing only after the client did means no unread byte is
+// left behind, so the client never sees a reset.
+func (s *Server) plainText(c net.Conn, helpers *sync.WaitGroup) {
 	if _, err := io.WriteString(c, PlainTextBanner); err != nil {
 		return
 	}
-	// Read what the client sent (for the log), at most a little, without waiting for more.
-	_ = c.SetReadDeadline(wall.Now().Add(10 * time.Millisecond))
-	_, _ = io.Copy(io.Discard, io.LimitReader(c, 4096))
+	select {
+	case <-untilGone(c, helpers):
+	case <-s.f.closing:
+	}
 }
 
 const recordMax = 16384
@@ -300,8 +315,8 @@ func (s *Server) giantChain(c net.Conn, h clientHello, helpers *sync.WaitGroup) 
 	if _, err := c.Write(record(22, first)); err != nil {
 		return
 	}
-	left := s.f.o.GiantBytes - 3 // the certificate_list length counts in the body
-	zero := make([]byte, recordMax)
+	left := s.f.o.GiantBytes - 3               // the certificate_list length counts in the body
+	rec := record(22, make([]byte, recordMax)) // one full record of zeros, written again and again
 	for left > 0 {
 		select {
 		case <-gone:
@@ -311,7 +326,10 @@ func (s *Server) giantChain(c net.Conn, h clientHello, helpers *sync.WaitGroup) 
 		default:
 		}
 		n := min(int64(recordMax), left)
-		if _, err := c.Write(record(22, zero[:n])); err != nil {
+		if n < recordMax { // the last, partial record: only its length changes
+			binary.BigEndian.PutUint16(rec[3:5], uint16(n)) //nolint:gosec // G115: n < recordMax
+		}
+		if _, err := c.Write(rec[:5+n]); err != nil {
 			return
 		}
 		left -= n

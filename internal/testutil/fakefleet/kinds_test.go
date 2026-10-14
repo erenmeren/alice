@@ -289,9 +289,28 @@ func TestPlainTextServer(t *testing.T) {
 	f := sharedFleet(t)
 	r := handshake(t, f.Addr(KindPlainText), "", nil)
 	assert.ErrorContains(t, r.err, "does not look like a TLS handshake")
-	got, err := readAll(t, f.Addr(KindPlainText), nil, 5*time.Second)
+	assert.Equal(t, PlainTextBanner, readBanner(t, f.Addr(KindPlainText)))
+
+	// The server keeps the connection until the client leaves, then logs what it read; no reset.
+	c, err := net.Dial("tcp", f.Addr(KindPlainText))
 	require.NoError(t, err)
-	assert.Equal(t, PlainTextBanner, string(got))
+	_, err = c.Write([]byte("EHLO probe\r\n"))
+	require.NoError(t, err)
+	b := make([]byte, len(PlainTextBanner))
+	require.NoError(t, c.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = io.ReadFull(c, b)
+	require.NoError(t, err)
+	require.NoError(t, c.(*net.TCPConn).CloseWrite())
+	rest, err := io.ReadAll(c)
+	assert.NoError(t, err, "the fake closes cleanly after the client: no reset")
+	assert.Empty(t, rest)
+	_ = c.Close()
+	require.NoError(t, f.WaitIdle(ctx(t)))
+	log := f.Server(KindPlainText).Log()
+	require.NotEmpty(t, log)
+	last := log[len(log)-1]
+	assert.Equal(t, int64(len("EHLO probe\r\n")), last.BytesRead)
+	assert.Equal(t, int64(len(PlainTextBanner)), last.BytesWritten)
 }
 
 func TestEveryKindIsDistinctAndListed(t *testing.T) {

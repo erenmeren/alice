@@ -109,6 +109,25 @@ func leafOf(t *testing.T, r result) *x509.Certificate {
 	return r.state.PeerCertificates[0]
 }
 
+// readBanner reads the plaintext server's banner and closes the connection.
+func readBanner(t *testing.T, addr string) string {
+	t.Helper()
+	c, err := net.DialTimeout("tcp", addr, 5*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = c.Close() }()
+	require.NoError(t, c.SetDeadline(time.Now().Add(5*time.Second)))
+	b := make([]byte, len(PlainTextBanner))
+	_, err = io.ReadFull(c, b)
+	require.NoError(t, err)
+	return string(b)
+}
+
+func (o Options) withDefaults(t *testing.T) Options {
+	t.Helper()
+	require.NoError(t, o.defaults())
+	return o
+}
+
 // readAll reads a plain TCP connection to addr after writing first, until EOF or the deadline.
 func readAll(t *testing.T, addr string, first []byte, deadline time.Duration) ([]byte, error) {
 	t.Helper()

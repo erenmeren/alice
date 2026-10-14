@@ -44,8 +44,10 @@ const (
 	defaultBind   = "0.0.0.0"
 	defaultDomain = "fleet.alice-e2e.test"
 	defaultCtl    = "127.0.0.1:9092"
-	maxCtlBody    = 16 << 20
 )
+
+// maxCtlBody is the largest control answer ctl prints (a variable for tests).
+var maxCtlBody int64 = 16 << 20
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -335,9 +337,13 @@ func ctlRequest(ctx context.Context, addr, method, path, name string, stdout, st
 		return 1
 	}
 	defer func() { _ = resp.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCtlBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxCtlBody+1))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "alice-fakefleet ctl: %v\n", err)
+		return 1
+	}
+	if int64(len(body)) > maxCtlBody {
+		_, _ = fmt.Fprintf(stderr, "alice-fakefleet ctl %s: the answer is larger than %d bytes (clear the log first)\n", name, maxCtlBody)
 		return 1
 	}
 	if resp.StatusCode != http.StatusOK {

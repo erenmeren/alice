@@ -76,16 +76,23 @@ func TestApplicationBytesAfterTheHandshakeAreCounted(t *testing.T) {
 // The server never writes after the handshake: a client that waits to read gets nothing until it gives up.
 func TestTheFakeWritesNothingAfterTheHandshake(t *testing.T) {
 	f := sharedFleet(t)
-	c, err := tls.Dial("tcp", f.Addr(KindTLS12), probeConfig(""))
-	require.NoError(t, err)
-	require.NoError(t, c.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
-	n, err := c.Read(make([]byte, 1))
-	assert.Zero(t, n)
-	var ne net.Error
-	require.ErrorAs(t, err, &ne)
-	assert.True(t, ne.Timeout())
-	require.NoError(t, c.NetConn().Close()) // no close_notify either
+	for _, k := range []Kind{KindTLS12, KindTLS13, KindValid} {
+		c, err := tls.Dial("tcp", f.Addr(k), probeConfig(""))
+		require.NoError(t, err, k)
+		// TLS 1.3 would send session tickets after the handshake; the fake disables them.
+		require.NoError(t, c.SetReadDeadline(time.Now().Add(100*time.Millisecond)))
+		n, err := c.Read(make([]byte, 1))
+		assert.Zero(t, n, k)
+		var ne net.Error
+		require.ErrorAs(t, err, &ne, k)
+		assert.True(t, ne.Timeout(), k)
+		require.NoError(t, c.NetConn().Close()) // no close_notify either
+	}
 	require.NoError(t, f.WaitIdle(ctx(t)))
+	for _, a := range f.Log() {
+		assert.True(t, a.Handshake, a.Kind)
+		assert.Zero(t, a.AppBytes, a.Kind)
+	}
 }
 
 func TestWaitIdleSeesConnectionsNotYetAccepted(t *testing.T) {
@@ -149,8 +156,7 @@ func TestConnectionsOverTheLimitAreClosedAndLogged(t *testing.T) {
 	defer func() { _ = held.Close() }()
 	_, err = held.Write(goClientHello(t))
 	require.NoError(t, err)
-	// The held connection is being served once its hello was read; wait for that through the log.
-	require.Eventually(t, func() bool { return len(f.Log()) == 1 && f.Log()[0].SNI != "" }, 10*time.Second, 5*time.Millisecond)
+	// Connections are accepted in order and counted at accept, so the next one is over the limit.
 	over, err := net.Dial("tcp", f.Addr(KindSlowLoris))
 	require.NoError(t, err)
 	require.NoError(t, over.SetReadDeadline(time.Now().Add(5*time.Second)))
@@ -164,11 +170,41 @@ func TestConnectionsOverTheLimitAreClosedAndLogged(t *testing.T) {
 	assert.True(t, log[1].Overflow)
 }
 
+// The chain servers send megabytes per connection: they take at most MaxChainConns at a time each.
+func TestChainServersHaveTheirOwnSmallLimit(t *testing.T) {
+	f := newFleet(t, Options{Kinds: []Kind{KindGiantChain, KindHugeChain, KindValid}, Now: testNow, MaxChainConns: 1, MaxConns: 4})
+	for _, k := range []Kind{KindGiantChain, KindHugeChain} {
+		held, err := net.Dial("tcp", f.Addr(k))
+		require.NoError(t, err)
+		defer func() { _ = held.Close() }()
+		_, err = held.Write(goClientHello(t)) // the server writes into a client that does not read
+		require.NoError(t, err)
+		over, err := net.Dial("tcp", f.Addr(k))
+		require.NoError(t, err)
+		require.NoError(t, over.SetReadDeadline(time.Now().Add(5*time.Second)))
+		b, err := io.ReadAll(over)
+		assert.NoError(t, err, k)
+		assert.Empty(t, b, "%s: closed at once", k)
+		_ = over.Close()
+		log := f.Server(k).Log()
+		require.Len(t, log, 2, k)
+		assert.False(t, log[0].Overflow, k)
+		assert.True(t, log[1].Overflow, k)
+	}
+	// The other kinds keep MaxConns.
+	for i := 0; i < 2; i++ {
+		require.NoError(t, handshake(t, f.Addr(KindValid), "", nil).err)
+	}
+	for _, a := range f.Server(KindValid).Log() {
+		assert.False(t, a.Overflow)
+	}
+	assert.Equal(t, 8, Options{}.withDefaults(t).MaxChainConns, "the default")
+}
+
 func TestLogIsBounded(t *testing.T) {
 	f := newFleet(t, Options{Kinds: []Kind{KindPlainText}, Now: testNow, MaxLog: 2})
 	for i := 0; i < 4; i++ {
-		_, err := readAll(t, f.Addr(KindPlainText), nil, 5*time.Second)
-		require.NoError(t, err)
+		readBanner(t, f.Addr(KindPlainText))
 	}
 	require.NoError(t, f.WaitIdle(ctx(t)))
 	assert.Len(t, f.Log(), 2)
