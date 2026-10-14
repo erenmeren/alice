@@ -13,8 +13,9 @@ import (
 
 var fingerprintRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
-// FuzzParsePresentedChain (Review Focus 6): no input panics; an accepted chain keeps every
-// certificate in order with its exact DER, and everything it keeps fits the discovery_certificates
+// FuzzParsePresentedChain (Review Focus 6): no input panics; an accepted chain keeps the leaf and the
+// other certificates in order with their exact DER (a non-leaf with unstorable dates is dropped and
+// counted), and everything it keeps fits the discovery_certificates
 // CHECKs (fingerprint form, key algorithm set, valid UTF-8 without NUL, name and SAN bounds, ordered
 // validity dates inside the years 1 to 9999). A refusal is always one of the two parse codes.
 func FuzzParsePresentedChain(f *testing.F) {
@@ -56,13 +57,21 @@ func FuzzParsePresentedChain(f *testing.F) {
 			}
 			return
 		}
-		if len(c.Certificates) != len(der) || len(der) > MaxCertificates {
-			t.Fatalf("%d certificates kept of %d", len(c.Certificates), len(der))
+		if len(c.Certificates)+c.DroppedCerts != len(der) || len(der) > MaxCertificates || c.DroppedCerts < 0 {
+			t.Fatalf("%d certificates kept and %d dropped of %d", len(c.Certificates), c.DroppedCerts, len(der))
 		}
+		if leaf, ok := c.Leaf(); !ok || !bytes.Equal(leaf.Raw, der[0]) {
+			t.Fatal("the leaf is not the first certificate presented")
+		}
+		next := 0 // the kept certificates are a subsequence of der, in order
 		for i, cert := range c.Certificates {
-			if !bytes.Equal(cert.Raw, der[i]) {
-				t.Fatalf("certificate %d is not the DER presented", i)
+			for next < len(der) && !bytes.Equal(cert.Raw, der[next]) {
+				next++
 			}
+			if next == len(der) {
+				t.Fatalf("certificate %d is not a DER presented, in order", i)
+			}
+			next++
 			if !fingerprintRE.MatchString(cert.FingerprintSHA256) {
 				t.Fatalf("fingerprint %q", cert.FingerprintSHA256)
 			}

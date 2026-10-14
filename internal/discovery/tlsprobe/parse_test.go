@@ -47,6 +47,49 @@ func TestParseRefusesWhatItCannotRead(t *testing.T) {
 	requireParseCode(t, [][]byte{yearZero.Cert.Raw}, CodeMalformed)
 	reversed := ca.IssueRawValidity(pki.Opts{CommonName: "rev.test"}, pki.UTCTime("300101000000Z"), pki.UTCTime("250101000000Z"), testNow)
 	requireParseCode(t, [][]byte{reversed.Cert.Raw}, CodeMalformed)
+	requireParseCode(t, [][]byte{yearZero.Cert.Raw, good[0]}, CodeMalformed) // a bad leaf spoils the chain
+}
+
+// Ruling L2b: a non-leaf certificate Go parses but whose dates Alice cannot store is dropped from the
+// chain (counted); the leaf and the other certificates are kept, in their order.
+func TestBadDatesInANonLeafAreDropped(t *testing.T) {
+	f := sharedFleet(t)
+	good := f.Server(fakefleet.KindValid).Chain()
+	ca := pki.NewCA("Times", pki.ECDSA256, testNow)
+	yearZero := ca.IssueRawValidity(pki.Opts{CommonName: "y0.test"}, pki.GeneralizedTime("00000101000000Z"),
+		pki.GeneralizedTime("20300101000000Z"), testNow)
+	reversed := ca.IssueRawValidity(pki.Opts{CommonName: "rev.test"}, pki.UTCTime("300101000000Z"), pki.UTCTime("250101000000Z"), testNow)
+	c, err := ParsePresentedChain([][]byte{good[0], yearZero.Cert.Raw, good[1], reversed.Cert.Raw})
+	require.NoError(t, err)
+	require.Len(t, c.Certificates, 2)
+	assert.Equal(t, good[0], c.Certificates[0].Raw)
+	assert.Equal(t, good[1], c.Certificates[1].Raw)
+	assert.Equal(t, 2, c.DroppedCerts)
+	// An unparseable non-leaf is still malformed (Go's own client refuses such a chain anyway).
+	requireParseCode(t, [][]byte{good[0], {0x30, 0x03, 0x02, 0x01}}, CodeMalformed)
+}
+
+func TestLeafOfAnEmptyChain(t *testing.T) {
+	_, ok := Chain{}.Leaf()
+	assert.False(t, ok, "an empty chain has no leaf, and asking does not panic")
+	c, err := ParsePresentedChain(sharedFleetChain(t))
+	require.NoError(t, err)
+	l, ok := c.Leaf()
+	require.True(t, ok)
+	assert.Equal(t, c.Certificates[0], l)
+}
+
+func sharedFleetChain(t *testing.T) [][]byte {
+	t.Helper()
+	return sharedFleet(t).Server(fakefleet.KindValid).Chain()
+}
+
+// leafOf is the leaf of a chain that must have one.
+func leafOf(t *testing.T, c Chain) Certificate {
+	t.Helper()
+	l, ok := c.Leaf()
+	require.True(t, ok)
+	return l
 }
 
 func TestParseBoundsWhatItKeeps(t *testing.T) {
@@ -63,7 +106,7 @@ func TestParseBoundsWhatItKeeps(t *testing.T) {
 	require.NoError(t, err)
 	c, err := ParsePresentedChain([][]byte{der})
 	require.NoError(t, err)
-	leaf := c.Leaf()
+	leaf := leafOf(t, c)
 	assert.Equal(t, der, leaf.Raw)
 	assert.Equal(t, "FF", leaf.Serial)
 	assert.Equal(t, "ed25519", leaf.KeyAlgorithm)
@@ -85,8 +128,8 @@ func TestParseBoundsWhatItKeeps(t *testing.T) {
 	require.NoError(t, err)
 	c, err = ParsePresentedChain([][]byte{der})
 	require.NoError(t, err)
-	assert.Equal(t, []string{"2001:db8::1", "192.0.2.7"}, c.Leaf().IPAddresses)
-	assert.False(t, c.Leaf().SANsTruncated)
+	assert.Equal(t, []string{"2001:db8::1", "192.0.2.7"}, leafOf(t, c).IPAddresses)
+	assert.False(t, leafOf(t, c).SANsTruncated)
 }
 
 func TestCleanText(t *testing.T) {

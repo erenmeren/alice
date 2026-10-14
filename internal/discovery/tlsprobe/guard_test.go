@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -39,51 +40,160 @@ var allowedSkipVerify = map[string]int{
 	"cmd/alice/selfcheck.go":                                 1,
 }
 
-// skippedDirs are not this repository's sources: VCS data, dependencies, agent worktrees and
-// working files, fuzz corpora.
-var skippedDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, ".claude": true,
-	".superpowers": true, "worktrees": true, ".worktrees": true, "dist": true, "testdata": true}
+// rootSkips are the directories, by exact root-relative path, that hold other projects' Go files
+// (dependencies) rather than this module's. Everywhere else only what the go tool itself ignores is
+// skipped (skipDir), so a package Go compiles is never left out, whatever its directory is called.
+var rootSkips = map[string]bool{"web/node_modules": true, "docs/vendor": true, "alice-design/dist": true}
 
-func TestInsecureSkipVerifyOnlyInTheAllowedSites(t *testing.T) {
-	root := moduleRoot(t)
-	found := map[string]int{}
-	scanned := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// skipDir reports whether the walk leaves out the directory at rel (slash form, relative to the
+// module root): what the go tool ignores (a name starting with "." or "_", and testdata, which also
+// covers .git, .claude with its agent worktrees, and .superpowers) and the rootSkips.
+func skipDir(rel string) bool {
+	base := path.Base(rel)
+	return strings.HasPrefix(base, ".") || strings.HasPrefix(base, "_") || base == "testdata" || rootSkips[rel]
+}
+
+// skipVerifySites walks the tree at root and counts InsecureSkipVerify identifiers per non-test Go
+// file (root-relative slash path). It also returns how many files it read and every parse failure.
+func skipVerifySites(root string) (found map[string]int, scanned int, problems []string, err error) {
+	found = map[string]int{}
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
-			if skippedDirs[d.Name()] && path != root {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
+		rel, err := filepath.Rel(root, p)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		b, err := os.ReadFile(path) //nolint:gosec // G304: walking this repository's own sources
+		if d.IsDir() {
+			if rel != "." && skipDir(rel) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(p) //nolint:gosec // G304: walking this repository's own sources
 		if err != nil {
 			return err
 		}
 		scanned++
 		n, perr := countSkipVerify(rel, string(b))
 		if perr != nil {
-			t.Errorf("%s does not parse: %v", rel, perr)
+			problems = append(problems, rel+" does not parse: "+perr.Error())
 		}
 		if n > 0 {
 			found[rel] = n
 		}
 		return nil
 	})
+	return found, scanned, problems, err
+}
+
+func TestInsecureSkipVerifyOnlyInTheAllowedSites(t *testing.T) {
+	found, scanned, problems, err := skipVerifySites(moduleRoot(t))
 	require.NoError(t, err)
+	assert.Empty(t, problems)
 	assert.Greater(t, scanned, 300, "the walk saw the repository")
 	assert.Equal(t, allowedSkipVerify, found, "%s may appear only in %s (in %s) and the three pinned production sites, once each",
 		skipVerify, probeFile, probeFunc)
+}
+
+func TestSkipDir(t *testing.T) {
+	for rel, want := range map[string]bool{
+		".git": true, ".claude": true, ".claude/worktrees/agent-x/internal": true, ".superpowers": true, "_old": true,
+		"internal/x/_scratch": true, ".claude/worktrees": true, "web/node_modules/x/y": true, "internal/certs/testdata": true, "testdata": true,
+		"web/node_modules": true, "docs/vendor": true, "alice-design/dist": true,
+		"internal": false, "internal/a/dist": false, "dist": false, "vendor": false, "node_modules": false,
+		"web/src/node_modules": false, "internal/x/worktrees": false, "worktrees": false, "cmd/alice": false,
+	} {
+		assert.Equal(t, want, excluded(rel), rel)
+	}
+}
+
+// excluded reports whether the walk leaves out rel: it or one of its ancestors is skipped.
+func excluded(rel string) bool {
+	for p := rel; p != "." && p != "/"; p = path.Dir(p) {
+		if skipDir(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestTheWalkOnAFixtureTree runs the walk over a temporary tree: the allowed sites alone pass; a
+// violating file in another package, in a directory named dist, or a missing allowed site fails;
+// skipped directories and test files do not count.
+func TestTheWalkOnAFixtureTree(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, src string) {
+		t.Helper()
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o750))
+		require.NoError(t, os.WriteFile(p, []byte(src), 0o600))
+	}
+	site := `package p
+import "crypto/tls"
+var _ = &tls.Config{` + skipVerify + `: true}
+`
+	for rel := range allowedSkipVerify {
+		write(rel, site)
+	}
+	ignored := []string{".claude/worktrees/agent-x/internal/notify/pin.go", "web/node_modules/pkg/x.go", "docs/vendor/x/x.go",
+		"alice-design/dist/x.go", "internal/certs/testdata/x.go", "internal/_old/x.go", "internal/other/x_test.go"}
+	for _, rel := range ignored {
+		write(rel, site)
+	}
+	write("internal/other/clean.go", "package other\n")
+	found, scanned, problems, err := skipVerifySites(root)
+	require.NoError(t, err)
+	assert.Empty(t, problems)
+	assert.Equal(t, allowedSkipVerify, found, "the allowed sites alone pass; skipped trees and tests do not count")
+	assert.Equal(t, len(allowedSkipVerify)+1, scanned)
+
+	write("internal/a/dist/x.go", site) // Go compiles it: a directory called dist is not skipped
+	found, _, _, err = skipVerifySites(root)
+	require.NoError(t, err)
+	assert.NotEqual(t, allowedSkipVerify, found)
+	assert.Equal(t, 1, found["internal/a/dist/x.go"])
+	require.NoError(t, os.Remove(filepath.Join(root, "internal", "a", "dist", "x.go")))
+
+	write("internal/other/bad.go", site) // a violation in another package
+	found, _, _, err = skipVerifySites(root)
+	require.NoError(t, err)
+	assert.NotEqual(t, allowedSkipVerify, found)
+	require.NoError(t, os.Remove(filepath.Join(root, "internal", "other", "bad.go")))
+
+	write("internal/notify/pin.go", "package notify\n") // an allowed site gone: the list must shrink
+	found, _, _, err = skipVerifySites(root)
+	require.NoError(t, err)
+	assert.NotEqual(t, allowedSkipVerify, found)
+	assert.NotContains(t, found, "internal/notify/pin.go")
+
+	write("internal/notify/pin.go", site+"var _ = &tls.Config{"+skipVerify+": true}\n") // twice in one allowed file
+	write("internal/broken/x.go", "package")
+	found, _, problems, err = skipVerifySites(root)
+	require.NoError(t, err)
+	assert.Equal(t, 2, found["internal/notify/pin.go"])
+	assert.Len(t, problems, 1, "a file that does not parse is reported")
+}
+
+// TestCountSkipVerifyForms: every spelling of the field counts; comments and strings do not.
+func TestCountSkipVerifyForms(t *testing.T) {
+	for name, src := range map[string]string{
+		"struct-literal key": `package p; import "crypto/tls"; var _ = tls.Config{` + skipVerify + `: true}`,
+		"aliased import":     `package p; import t2 "crypto/tls"; var _ = &t2.Config{` + skipVerify + `: true}`,
+		"dot import":         `package p; import . "crypto/tls"; var _ = Config{` + skipVerify + `: true}`,
+		"assignment":         `package p; import "crypto/tls"; func f(c *tls.Config) { c.` + skipVerify + ` = true }`,
+		"read":               `package p; import "crypto/tls"; func f(c *tls.Config) bool { return c.` + skipVerify + ` }`,
+		"embedded struct":    `package p; import "crypto/tls"; type w struct{ *tls.Config }; func f(x w) { x.` + skipVerify + ` = true }`,
+	} {
+		n, err := countSkipVerify("x.go", src)
+		require.NoError(t, err, name)
+		assert.Equal(t, 1, n, name)
+	}
 }
 
 // countSkipVerify counts the identifiers named InsecureSkipVerify (a struct literal key, a selector,
@@ -265,38 +375,57 @@ func surfaceProblems(rel, src string) []string {
 			}
 		}
 	}
-	// Calls and selectors.
+	// The tls.Client(...) result: it may only be bound to one name (an assignment or a var
+	// declaration) or have HandshakeContext or ConnectionState called on it directly.
+	isTLSClient := func(e ast.Expr) bool {
+		call, ok := e.(*ast.CallExpr)
+		if !ok {
+			return false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		return ok && isPkg(sel.X, "crypto/tls") && sel.Sel.Name == "Client"
+	}
 	tlsConns := map[string]bool{}
+	allowedIdents := map[*ast.Ident]bool{}
+	bind := func(id *ast.Ident) {
+		tlsConns[id.Name] = true
+		allowedIdents[id] = true
+	}
+	const escapes = "the TLS connection escapes: tls.Client(...) is used other than by binding it to one name or calling HandshakeContext or ConnectionState"
+	var stack []ast.Node
 	ast.Inspect(f, func(n ast.Node) bool {
-		as, ok := n.(*ast.AssignStmt)
-		if !ok || len(as.Rhs) != 1 {
+		if n == nil {
+			stack = stack[:len(stack)-1]
 			return true
 		}
-		if call, ok := as.Rhs[0].(*ast.CallExpr); ok {
-			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && isPkg(sel.X, "crypto/tls") && sel.Sel.Name == "Client" {
-				for _, l := range as.Lhs {
-					if id, ok := l.(*ast.Ident); ok {
-						tlsConns[id.Name] = true
-					}
+		if e, ok := n.(ast.Expr); ok && isTLSClient(e) {
+			switch p := stack[len(stack)-1].(type) {
+			case *ast.AssignStmt:
+				if id, ok := p.Lhs[0].(*ast.Ident); ok && len(p.Lhs) == 1 && len(p.Rhs) == 1 {
+					bind(id)
+				} else {
+					add(escapes)
 				}
+			case *ast.ValueSpec:
+				if len(p.Names) == 1 && len(p.Values) == 1 {
+					bind(p.Names[0])
+				} else {
+					add(escapes)
+				}
+			case *ast.SelectorExpr:
+				if !tlsConnUses[p.Sel.Name] {
+					add("calls ." + p.Sel.Name + " on the TLS connection")
+				}
+			default:
+				add(escapes)
 			}
 		}
+		stack = append(stack, n)
 		return true
 	})
 	configLits := 0
-	allowedIdents := map[*ast.Ident]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
-		case *ast.AssignStmt:
-			if call, ok := x.Rhs[0].(*ast.CallExpr); ok && len(x.Rhs) == 1 {
-				if sel, ok := call.Fun.(*ast.SelectorExpr); ok && isPkg(sel.X, "crypto/tls") && sel.Sel.Name == "Client" {
-					for _, l := range x.Lhs {
-						if id, ok := l.(*ast.Ident); ok {
-							allowedIdents[id] = true
-						}
-					}
-				}
-			}
 		case *ast.CompositeLit:
 			if isTLSConfig(x.Type) {
 				configLits++
@@ -388,6 +517,38 @@ func TestGuardRulesCatchViolations(t *testing.T) {
 		got := strings.Join(surfaceProblems("internal/discovery/tlsprobe/x.go", src), "\n")
 		assert.Contains(t, got, want, "source %q", src)
 	}
+	// The same rules through aliased imports, and every way the TLS connection could be reached.
+	const conn = `package p; import ("crypto/tls"; "net"); func g(any) {}; `
+	for _, tc := range []struct{ want, src string }{
+		{"exported New has a tls.Config", `package p; import t2 "crypto/tls"; func New() *t2.Config { return nil }`},
+		{"a tls.Config is built in \"f\"", `package p; import t2 "crypto/tls"; func f() { _ = t2.Config{} }`},
+		{"uses net.Dial", `package p; import n "net"; func f() { _, _ = n.Dial("tcp", "x") }`},
+		{"imports net/http", `package p; import h "net/http"; var _ = h.Get`},
+		{"calls .Close on the TLS connection", `package p; import ("net"; t2 "crypto/tls"); func f(c net.Conn) { tc := t2.Client(c, nil); _ = tc.Close() }`},
+		{"calls .Close on the TLS connection", conn + `func f(c net.Conn) { var tc = tls.Client(c, nil); _ = tc.Close() }`},
+		{"calls .Close on the TLS connection", conn + `func f(c net.Conn) { _ = tls.Client(c, nil).Close() }`},
+		{"calls .Write on the TLS connection", conn + `func f(c net.Conn) { _, _ = tls.Client(c, nil).Write(nil) }`},
+		{"calls .Read on the TLS connection", conn + `func f(c net.Conn) { var tc *tls.Conn; tc = tls.Client(c, nil); _, _ = tc.Read(nil) }`},
+		{"the TLS connection escapes", conn + `func f(c net.Conn) { g(tls.Client(c, nil)) }`},
+		{"the TLS connection escapes", conn + `func f(c net.Conn) *tls.Conn { return tls.Client(c, nil) }`},
+		{"the TLS connection escapes", conn + `func f(c net.Conn) { a, b := tls.Client(c, nil), 1; _, _ = a, b }`},
+		{"the TLS connection escapes", conn + `type h struct{ c *tls.Conn }; func f(c net.Conn, x *h) { x.c = tls.Client(c, nil) }`},
+		{"the TLS connection escapes", conn + `func f(c net.Conn) { _ = (tls.Client(c, nil)).Close() }`},
+		{"the TLS connection is used other", conn + `func f(c net.Conn) { var tc = tls.Client(c, nil); g(tc) }`},
+	} {
+		got := strings.Join(surfaceProblems("internal/discovery/tlsprobe/x.go", tc.src), "\n")
+		assert.Contains(t, got, tc.want, "source %q", tc.src)
+	}
+	assert.Empty(t, surfaceProblems("internal/discovery/tlsprobe/x.go", `package p
+import ("context"; "crypto/tls"; "net")
+func f(ctx context.Context, c net.Conn) {
+	tc := tls.Client(c, nil)
+	_ = tc.HandshakeContext(ctx)
+	_ = tc.ConnectionState()
+	var tc2 = tls.Client(c, nil)
+	_ = tc2.ConnectionState()
+	_ = tls.Client(c, nil).HandshakeContext(ctx)
+}`), "the allowed uses pass")
 	assert.Empty(t, surfaceProblems("internal/discovery/tlsprobe/x.go", `package p
 import ("crypto/tls"; "net")
 // c.Write(nil), net.Dial, tls.Config, net/http: comments are not code
@@ -399,6 +560,7 @@ func capture(c net.Conn) { _ = c.Close(); _ = tls.VersionName(0) }`))
 		"literal true":                 `package p; import "crypto/tls"; var b = true; func CapturePresentedChain() { _ = &tls.Config{` + skipVerify + `: b, ` + nolintG402 + "\n" + `} }`,
 		"does not carry":               `package p; import "crypto/tls"; func CapturePresentedChain() { _ = &tls.Config{` + skipVerify + `: true, // G402` + "\n" + `} }`,
 		"0 times":                      `package p; func CapturePresentedChain() {}`,
+		"0 times as a literal key":     `package p; import "crypto/tls"; func CapturePresentedChain(c *tls.Config) { c.` + skipVerify + ` = true ` + nolintG402 + "\n" + `}`,
 		"2 times": `package p; import "crypto/tls"; func CapturePresentedChain() { _ = &tls.Config{` + skipVerify + `: true, ` + nolintG402 + "\n" +
 			`}; _ = &tls.Config{` + skipVerify + `: true, ` + nolintG402 + "\n" + `} }`,
 	}

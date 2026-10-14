@@ -26,9 +26,13 @@ const (
 	maxNameBytes = 1024
 )
 
-// maxSignatureCheckBits: the self-signed check verifies a signature only with an RSA key of at most
-// this many bits (the bound internal/certs applies before it checks any signature); a larger key is
-// never used and the certificate counts as not self-signed.
+// maxSignatureCheckBits bounds the self-signed check: it verifies a signature only with an RSA key of
+// at most this many bits (verification cost grows with the square of the modulus). internal/certs
+// refuses a certificate with a larger key outright (checkCertificateKeySize) before checking any
+// signature; here the certificate is kept and only the signature check is skipped, so such a
+// certificate reports SelfSigned false meaning "not checked", not "proven not self-signed". (Go's
+// TLS client refuses RSA keys over 8192 bits in a handshake, so only ParsePresentedChain's other
+// callers can meet one.)
 const maxSignatureCheckBits = 16384
 
 // Certificate is one parsed certificate of a presented chain. Nothing in it says the certificate is
@@ -51,18 +55,27 @@ type Certificate struct {
 	SignatureAlgorithm string    // Go's name, e.g. "SHA256-RSA", "SHA1-RSA", "ECDSA-SHA256"
 }
 
-// Chain is a parsed presented chain, leaf first, in the order presented.
+// Chain is a parsed presented chain, leaf first, in the order presented. DroppedCerts counts the
+// non-leaf certificates left out because their validity dates cannot be stored (limitation L2b).
 type Chain struct {
 	Certificates []Certificate
+	DroppedCerts int
 }
 
-// Leaf is the first certificate.
-func (c Chain) Leaf() Certificate { return c.Certificates[0] }
+// Leaf is the first certificate; false for an empty Chain (never a panic).
+func (c Chain) Leaf() (Certificate, bool) {
+	if len(c.Certificates) == 0 {
+		return Certificate{}, false
+	}
+	return c.Certificates[0], true
+}
 
 // ParsePresentedChain parses a chain CapturePresentedChain returned (or any untrusted DER list). An
-// empty chain or a certificate that cannot be parsed (or whose validity dates are outside the years
-// 1 to 9999 or reversed) is malformed; a chain over the limits is chain_too_large, checked before
-// anything is parsed. It never panics and keeps no more than the bounds above.
+// empty chain, a certificate that cannot be parsed, or a leaf whose validity dates are outside the
+// years 1 to 9999 or reversed is malformed; a non-leaf certificate with such dates is dropped and
+// counted in DroppedCerts (limitation L2b: it cannot be stored, and it must not cost the leaf). A
+// chain over the limits is chain_too_large, checked before anything is parsed. It never panics and
+// keeps no more than the bounds above.
 func ParsePresentedChain(der [][]byte) (Chain, error) {
 	if len(der) == 0 {
 		return Chain{}, &Error{Code: CodeMalformed}
@@ -71,13 +84,17 @@ func ParsePresentedChain(der [][]byte) (Chain, error) {
 		return Chain{}, &Error{Code: CodeChainTooLarge}
 	}
 	out := Chain{Certificates: make([]Certificate, 0, len(der))}
-	for _, d := range der {
+	for i, d := range der {
 		c, err := x509.ParseCertificate(d)
 		if err != nil {
 			return Chain{}, &Error{Code: CodeMalformed}
 		}
 		if !validate.CertificateTimes(c.NotBefore, c.NotAfter) || c.NotAfter.Before(c.NotBefore) {
-			return Chain{}, &Error{Code: CodeMalformed}
+			if i == 0 {
+				return Chain{}, &Error{Code: CodeMalformed}
+			}
+			out.DroppedCerts++
+			continue
 		}
 		out.Certificates = append(out.Certificates, describe(c))
 	}
@@ -140,7 +157,8 @@ func keyAlgorithm(pub any) (string, int) {
 
 // selfSigned is internal/certs' definition: the certificate names itself as issuer and carries a
 // valid signature of its own key (checked directly: CheckSignatureFrom would refuse a self-signed leaf
-// that is not marked as a CA). An RSA key over maxSignatureCheckBits is not used.
+// that is not marked as a CA). With an RSA key over maxSignatureCheckBits the signature is not
+// checked and the answer is false (see maxSignatureCheckBits).
 func selfSigned(c *x509.Certificate) bool {
 	if !bytes.Equal(c.RawIssuer, c.RawSubject) {
 		return false

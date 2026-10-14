@@ -166,16 +166,16 @@ func TestWhatTheChainsSay(t *testing.T) {
 	}
 	valid := parse(fakefleet.KindValid)
 	require.Len(t, valid.Certificates, 2)
-	assert.False(t, valid.Leaf().SelfSigned)
-	assert.False(t, valid.Leaf().IsCA)
+	assert.False(t, leafOf(t, valid).SelfSigned)
+	assert.False(t, leafOf(t, valid).IsCA)
 	assert.True(t, valid.Certificates[1].IsCA)
-	assert.Equal(t, f.CA().Intermediate.Subject.CommonName, valid.Leaf().IssuerCN)
+	assert.Equal(t, f.CA().Intermediate.Subject.CommonName, leafOf(t, valid).IssuerCN)
 
-	assert.True(t, parse(fakefleet.KindExpired).Leaf().NotAfter.Before(testNow))
-	assert.True(t, parse(fakefleet.KindNotYetValid).Leaf().NotBefore.After(testNow))
+	assert.True(t, leafOf(t, parse(fakefleet.KindExpired)).NotAfter.Before(testNow))
+	assert.True(t, leafOf(t, parse(fakefleet.KindNotYetValid)).NotBefore.After(testNow))
 	self := parse(fakefleet.KindSelfSigned)
 	require.Len(t, self.Certificates, 1)
-	assert.True(t, self.Leaf().SelfSigned)
+	assert.True(t, leafOf(t, self).SelfSigned)
 
 	wrong := parse(fakefleet.KindWrongOrder)
 	require.Len(t, wrong.Certificates, 3)
@@ -185,7 +185,7 @@ func TestWhatTheChainsSay(t *testing.T) {
 
 	assert.Len(t, parse(fakefleet.KindMissingIntermediate).Certificates, 1)
 	sha1 := parse(fakefleet.KindSHA1)
-	assert.Equal(t, "SHA1-RSA", sha1.Leaf().SignatureAlgorithm, "a SHA-1 signed leaf is captured")
+	assert.Equal(t, "SHA1-RSA", leafOf(t, sha1).SignatureAlgorithm, "a SHA-1 signed leaf is captured")
 	assert.Equal(t, "rsa", sha1.Certificates[1].KeyAlgorithm)
 }
 
@@ -282,13 +282,31 @@ func shortenHandshake(t *testing.T, d time.Duration) {
 
 func TestHandshakeDeadline(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	assert.Equal(t, now.Add(5*time.Second), handshakeDeadline(context.Background(), now, 5*time.Second))
+	d, fromCtx := handshakeDeadline(context.Background(), now, 5*time.Second)
+	assert.Equal(t, now.Add(5*time.Second), d)
+	assert.False(t, fromCtx)
 	ctx, cancel := context.WithDeadline(context.Background(), now.Add(time.Second))
 	defer cancel()
-	assert.Equal(t, now.Add(time.Second), handshakeDeadline(ctx, now, 5*time.Second), "an earlier context deadline wins")
+	d, fromCtx = handshakeDeadline(ctx, now, 5*time.Second)
+	assert.Equal(t, now.Add(time.Second), d, "an earlier context deadline wins")
+	assert.True(t, fromCtx)
 	ctx2, cancel2 := context.WithDeadline(context.Background(), now.Add(time.Minute))
 	defer cancel2()
-	assert.Equal(t, now.Add(5*time.Second), handshakeDeadline(ctx2, now, 5*time.Second))
+	d, fromCtx = handshakeDeadline(ctx2, now, 5*time.Second)
+	assert.Equal(t, now.Add(5*time.Second), d)
+	assert.False(t, fromCtx)
+}
+
+// A timeout under a deadline that came from the context is the context's deadline, decided without
+// reading any clock (the context's own timer may not have fired yet).
+func TestTimeoutUnderTheContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour) // not expired: ctx.Err() is nil
+	defer cancel()
+	timeout := &net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}
+	assert.ErrorIs(t, failure(ctx, timeout, true, true), context.DeadlineExceeded)
+	requireCode(t, failure(ctx, timeout, true, false), CodeTimeout)
+	requireCode(t, failure(ctx, io.EOF, true, true), CodeReset)
+	requireCode(t, failure(context.Background(), timeout, false, false), CodeTimeout)
 }
 
 func TestRefusedPort(t *testing.T) {
@@ -641,7 +659,7 @@ func TestDefinitionsMatchTheInventory(t *testing.T) {
 			require.NoError(t, err, k)
 			p, err := certs.ParseChainPEM(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 			require.NoError(t, err, k)
-			got := c.Leaf()
+			got := leafOf(t, c)
 			assert.Equal(t, p.Fingerprint, got.FingerprintSHA256, k)
 			assert.Equal(t, p.Serial, got.Serial, k)
 			assert.Equal(t, p.Algorithm, got.KeyAlgorithm, k)

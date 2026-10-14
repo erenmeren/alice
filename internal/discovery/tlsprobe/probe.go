@@ -119,12 +119,13 @@ func CapturePresentedChain(ctx context.Context, dial DialFunc, addr string, sni 
 	}
 	conn, err := dial(ctx, "tcp", addr)
 	if err != nil {
-		return Result{}, failure(ctx, err, false)
+		return Result{}, failure(ctx, err, false, false)
 	}
 	// Closing the TCP connection, never the TLS one: tls.Conn.Close would send a close_notify alert.
 	defer func() { _ = conn.Close() }()
-	if err := conn.SetDeadline(handshakeDeadline(ctx, wall.Now(), handshakeTimeout)); err != nil {
-		return Result{}, failure(ctx, err, true)
+	deadline, fromCtx := handshakeDeadline(ctx, wall.Now(), handshakeTimeout)
+	if err := conn.SetDeadline(deadline); err != nil {
+		return Result{}, failure(ctx, err, true, fromCtx)
 	}
 	serverName := serverNameFor(sni)
 	var presented [][]byte
@@ -153,7 +154,7 @@ func CapturePresentedChain(ctx context.Context, dial DialFunc, addr string, sni 
 	}
 	tc := tls.Client(&limitedConn{Conn: conn, left: MaxHandshakeBytes}, cfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
-		return Result{}, failure(ctx, err, true)
+		return Result{}, failure(ctx, err, true, fromCtx)
 	}
 	state := tc.ConnectionState()
 	if len(presented) == 0 {
@@ -163,13 +164,14 @@ func CapturePresentedChain(ctx context.Context, dial DialFunc, addr string, sni 
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite), SNI: serverName}, nil
 }
 
-// handshakeDeadline is the earlier of now+limit and the context's deadline.
-func handshakeDeadline(ctx context.Context, now time.Time, limit time.Duration) time.Time {
+// handshakeDeadline is the earlier of now+limit and the context's deadline; fromCtx says it is the
+// context's.
+func handshakeDeadline(ctx context.Context, now time.Time, limit time.Duration) (deadline time.Time, fromCtx bool) {
 	d := now.Add(limit)
-	if cd, ok := ctx.Deadline(); ok && cd.Before(d) {
-		return cd
+	if cd, ok := ctx.Deadline(); ok && !d.Before(cd) {
+		return cd, true
 	}
-	return d
+	return d, false
 }
 
 // serverNameFor is the SNI to send: none for an empty name or an IP literal (with or without
@@ -243,14 +245,15 @@ const (
 )
 
 // failure maps an error to the closed set. The context's own error wins: a cancelled or expired
-// context is returned as it is. A timeout at or after the context's deadline is that deadline (the
-// connection's deadline was the context's, and its timer may not have fired yet).
-func failure(ctx context.Context, err error, handshake bool) error {
+// context is returned as it is. When the connection's deadline was the context's (ctxDeadline), a
+// timeout is that context deadline even if the context's own timer has not fired yet; no clock is
+// read to decide it.
+func failure(ctx context.Context, err error, handshake, ctxDeadline bool) error {
 	if cerr := ctx.Err(); cerr != nil {
 		return cerr
 	}
 	code := codeFor(err, handshake)
-	if d, ok := ctx.Deadline(); ok && code == CodeTimeout && !wall.Now().Before(d) {
+	if code == CodeTimeout && ctxDeadline {
 		return context.DeadlineExceeded
 	}
 	return &Error{Code: code}
