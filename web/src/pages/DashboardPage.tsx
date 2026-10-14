@@ -207,7 +207,7 @@ export function DashboardPage() {
         {!waitingForView && (
           <Tabs.Panel value="operations">
             <div className={classes.grid} aria-busy={loading}>
-              {s && <ExpiryHorizon counts={s.certificates} />}
+              {s && <ExpiryHorizon counts={s.certificates} discovery={s.discovery} />}
               {alerts.data && <AttentionList items={alerts.data.items} />}
               {expiring.data && <ExpiringList items={expiring.data.items} />}
               {s && <TargetsByStatus targets={s.targets} />}

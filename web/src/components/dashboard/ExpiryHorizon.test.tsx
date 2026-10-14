@@ -56,4 +56,25 @@ describe('ExpiryHorizon', () => {
     expect(bars[0].style.height).toBe('3px');
     expect(bars[2].style.height).not.toBe('3px');
   });
+  it('shows the unmanaged certificates found on the network on their own line, apart from the managed counts (D2)', async () => {
+    const { unmount } = await renderApp(<MemoryRouter><ExpiryHorizon counts={counts} discovery={{ unmanaged_expiring_30d: 3 }} /></MemoryRouter>);
+    const box = screen.getByTestId('dashboard-counts');
+    const line = within(box).getByTestId('discovery-unmanaged');
+    expect(within(line).getByRole('link', { name: 'Found on the network, not managed by Alice, expiring within 30 days: 3' })).toHaveAttribute(
+      'href',
+      '/discovery?view=unmanaged',
+    );
+    // The managed numbers are the same as without it.
+    expect(within(box).getByRole('link', { name: /^Within 30 days\s*7$/ })).toBeVisible();
+    expect(screen.getByTestId('horizon-headline')).toHaveTextContent('7');
+    expect(screen.getByRole('img', { name: /1 expired, 3 within 7 days, 3 in 8 to 30 days, 1 in 31 to 60 days/ })).toBeVisible();
+    unmount();
+    await renderApp(<MemoryRouter><ExpiryHorizon counts={counts} discovery={{ unmanaged_expiring_30d: 0 }} /></MemoryRouter>);
+    expect(screen.getByRole('link', { name: 'Found on the network, not managed by Alice, expiring within 30 days: 0' })).toBeVisible();
+  });
+  it('draws no discovery line without the metric (no scope, or a caller who may not see the network map)', async () => {
+    await renderApp(<MemoryRouter><ExpiryHorizon counts={counts} discovery={null} /></MemoryRouter>);
+    expect(screen.queryByTestId('discovery-unmanaged')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /not managed by Alice/ })).not.toBeInTheDocument();
+  });
 });

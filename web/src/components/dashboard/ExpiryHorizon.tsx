@@ -7,6 +7,7 @@ import { Panel, StatusBadge } from '../ui';
 import classes from './dashboard.module.css';
 
 type Counts = DashboardSummary['certificates'];
+type Discovery = DashboardSummary['discovery'];
 export type BucketKey = 'expired' | 'd7' | 'd30' | 'd60';
 
 // exclusiveBuckets turns the summary's cumulative windows (each includes the expired certificates and every shorter
@@ -31,8 +32,10 @@ const BAR_MIN = 3;
 
 // ExpiryHorizon is the design's "Expiration horizon" (R12): the four exclusive buckets the summary allows as bars, the
 // chosen cumulative window as the headline number, and the cumulative links of the certificate list (each opens exactly
-// the certificates it counts, the expired included).
-export function ExpiryHorizon({ counts }: { counts: Counts }) {
+// the certificates it counts, the expired included). discovery, when the summary carries it (a scan scope exists and
+// the caller may see the network map), is a separate quiet line after the managed key (decision D2): the unmanaged
+// certificates found on the network never enter the bars, the headline or the links above it.
+export function ExpiryHorizon({ counts, discovery }: { counts: Counts; discovery?: Discovery }) {
   const { t } = useTranslation();
   const [days, setDays] = useState<Window>('30');
   const buckets = exclusiveBuckets(counts);
@@ -112,6 +115,13 @@ export function ExpiryHorizon({ counts }: { counts: Counts }) {
           </Anchor>
         )}
         <p className={classes.keyNote}>{t('dashboard.horizon.cumulative')}</p>
+        {discovery && (
+          <p className={classes.discoveryLine} data-testid="discovery-unmanaged">
+            <Anchor component={Link} to="/discovery?view=unmanaged" className={classes.countLink}>
+              {t('dashboard.unmanagedExpiring', { count: discovery.unmanaged_expiring_30d })}
+            </Anchor>
+          </p>
+        )}
       </div>
     </Panel>
   );

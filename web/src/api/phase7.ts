@@ -48,6 +48,9 @@ export interface DashboardSummary {
   // Phase 8: absent or null for the roles that do not get them (R43 row 18).
   backup?: BackupSummary | null;
   setup_checklist?: ChecklistItem[] | null;
+  // Network discovery (decision D2): unmanaged certificates found on the network that expire within 30 days, never part
+  // of certificates. Absent while no scan scope exists and for a caller without discovery.view (a read-scope token).
+  discovery?: { unmanaged_expiring_30d: number } | null;
 }
 
 export interface ExpiringItem {

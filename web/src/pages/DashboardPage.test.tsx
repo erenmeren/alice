@@ -88,6 +88,20 @@ describe('DashboardPage', () => {
     expect(within(counts).getByRole('link', { name: /Key Vault keys and secrets expiring within 30 days: 2/ })).toHaveAttribute('href', '/key-vaults');
   });
 
+  it('shows the unmanaged certificates expiring within 30 days only when the summary carries the metric (D2)', async () => {
+    server.use(...sessionHandlers(adminSession), ...dashboardHandlers({ discovery: { unmanaged_expiring_30d: 4 } }));
+    const { unmount } = await renderRoute('/');
+    const link = await screen.findByRole('link', { name: 'Found on the network, not managed by Alice, expiring within 30 days: 4' });
+    expect(link).toHaveAttribute('href', '/discovery?view=unmanaged');
+    const strip = screen.getByRole('group', { name: 'Summary' });
+    expect(within(strip).getByRole('link', { name: /Monitored certificates\s*8\s*6 expire within 30 days/ })).toBeVisible();
+    unmount();
+    server.use(...sessionHandlers(operatorSession), ...dashboardHandlers({ audit: null, backup: null, notifications: null }));
+    await renderRoute('/');
+    await screen.findByTestId('dashboard-counts');
+    expect(screen.queryByTestId('discovery-unmanaged')).not.toBeInTheDocument();
+  });
+
   it('lists what expires soon, the expired one marked', async () => {
     server.use(...sessionHandlers(adminSession), ...dashboardHandlers());
     await renderRoute('/');

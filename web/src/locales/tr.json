@@ -2485,6 +2485,7 @@
     "needsAttention": "İlgi bekleyenler",
     "auditHeadHelp": "Bu değeri düzenli olarak Alice dışında bir yere not edin: daha sonra hiçbir kaydın silinmediğini kanıtlamanızı sağlar.",
     "kvExpiring": "30 gün içinde süresi dolacak Key Vault anahtarları ve gizli değerleri: {{count}}",
+    "unmanagedExpiring": "Ağda bulunan, Alice'in yönetmediği ve 30 gün içinde süresi dolacak sertifikalar: {{count}}",
     "auditBroken": "Son denetim, denetim kaydında bir bütünlük sorunu buldu. Denetim kaydını açın ve doğrulayın.",
     "noFailed": "Son 7 günde başarısız olan bir dağıtım yok.",
     "failedCount": "Başarısız dağıtımlar: {{count}}",

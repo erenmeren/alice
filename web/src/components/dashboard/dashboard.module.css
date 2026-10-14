@@ -21,6 +21,8 @@
 .countLink b { font-variant-numeric: tabular-nums; }
 .keyText { color: var(--alice-text-secondary); }
 .keyNote { flex-basis: 100%; margin: 0; font-size: 10px; color: var(--alice-text-muted); }
+/* Network discovery's quiet line (decision D2): its own row under the managed key, set apart by a hairline. */
+.discoveryLine { flex-basis: 100%; margin: 0; padding-top: 8px; border-top: 1px solid var(--alice-border); }
 
 /* Needs attention: the design lays the list out in three columns when the grid is one column wide (1020 px), back to
    rows below 768 px. */

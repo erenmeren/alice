@@ -2485,6 +2485,7 @@
     "needsAttention": "Needs attention",
     "auditHeadHelp": "Write down this value regularly outside Alice: it lets you prove later that no entry was removed.",
     "kvExpiring": "Key Vault keys and secrets expiring within 30 days: {{count}}",
+    "unmanagedExpiring": "Found on the network, not managed by Alice, expiring within 30 days: {{count}}",
     "auditBroken": "The last check found an integrity problem in the audit log. Open the Audit trail and verify it.",
     "noFailed": "No deployment failed in the last 7 days.",
     "failedCount": "Failed deployments: {{count}}",
