@@ -223,9 +223,12 @@ func hasWildcard(names []string) bool {
 
 // checkACMECertRefs checks, in tx, what the definition refers to: a live provider with an active account (its id is
 // returned), a live hook (dns01) or a live Nginx server (http01), the allow-lists of the provider and the hook, and a
-// wildcard only over DNS-01. Missing rows are field errors (the request named something that is not there).
+// wildcard only over DNS-01. Missing rows are field errors (the request named something that is not there). The rows
+// are read FOR SHARE: a delete holding one (DeleteACMEProvider, DeleteACMEHook, DeleteTarget: FOR UPDATE) either
+// commits first, and the row is then not live here, or waits for this transaction and then sees the certificate that
+// uses the row.
 func checkACMECertRefs(ctx context.Context, tx pgx.Tx, f acmeCertFields) (uuid.UUID, error) {
-	p, err := getACMEProvider(ctx, tx, f.providerID, false)
+	p, err := readACMEProvider(ctx, tx, f.providerID, " FOR SHARE OF p")
 	if errors.Is(err, ErrNotFound) {
 		return uuid.Nil, validate.Errors{{Field: "provider_id", Code: validate.Required}}
 	}
@@ -238,7 +241,7 @@ func checkACMECertRefs(ctx context.Context, tx pgx.Tx, f acmeCertFields) (uuid.U
 	var hookSuffixes []string
 	switch f.challenge {
 	case ACMEChallengeDNS01:
-		h, err := getACMEHook(ctx, tx, *f.hookID, false)
+		h, err := readACMEHook(ctx, tx, *f.hookID, " FOR SHARE")
 		if errors.Is(err, ErrNotFound) {
 			return uuid.Nil, validate.Errors{{Field: "hook_id", Code: validate.Required}}
 		}
@@ -251,7 +254,7 @@ func checkACMECertRefs(ctx context.Context, tx pgx.Tx, f acmeCertFields) (uuid.U
 			return uuid.Nil, ErrACMEChallengeUnavailable
 		}
 		var typ string
-		err := tx.QueryRow(ctx, "SELECT type FROM targets WHERE id = $1 AND deleted_at IS NULL", *f.httpTargetID).Scan(&typ)
+		err := tx.QueryRow(ctx, "SELECT type FROM targets WHERE id = $1 AND deleted_at IS NULL FOR SHARE", *f.httpTargetID).Scan(&typ)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return uuid.Nil, validate.Errors{{Field: "http_target_id", Code: validate.Required}}
 		}

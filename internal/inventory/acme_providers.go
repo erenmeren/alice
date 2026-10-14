@@ -434,10 +434,16 @@ func scanProvider(row pgx.Row) (ACMEProvider, error) {
 
 // getACMEProvider reads a live provider; forUpdate locks its row.
 func getACMEProvider(ctx context.Context, q db.Querier, id uuid.UUID, forUpdate bool) (ACMEProvider, error) {
-	sql := "SELECT " + providerColumns + " FROM acme_providers p WHERE p.id = $1 AND p.deleted_at IS NULL"
+	lock := ""
 	if forUpdate {
-		sql += " FOR UPDATE OF p"
+		lock = " FOR UPDATE OF p"
 	}
+	return readACMEProvider(ctx, q, id, lock)
+}
+
+// readACMEProvider reads a live provider with the row lock clause lock ("", " FOR UPDATE OF p", " FOR SHARE OF p").
+func readACMEProvider(ctx context.Context, q db.Querier, id uuid.UUID, lock string) (ACMEProvider, error) {
+	sql := "SELECT " + providerColumns + " FROM acme_providers p WHERE p.id = $1 AND p.deleted_at IS NULL" + lock
 	p, err := scanProvider(q.QueryRow(ctx, sql, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ACMEProvider{}, ErrNotFound

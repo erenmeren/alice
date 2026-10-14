@@ -959,3 +959,52 @@ func TestACMEAbandonCountsNoFailure(t *testing.T) {
 	assert.Equal(t, inventory.ACMEStateFailing, got.State)
 	assert.Equal(t, 2, got.Failures)
 }
+
+// Final review finding 5: a definition being created reads its provider, hook and HTTP-01 server FOR SHARE, so a delete
+// that holds the row (DeleteACMEProvider, DeleteACMEHook: FOR UPDATE) and commits meanwhile is seen: the create is
+// refused, never a live certificate referring to a deleted row.
+func TestACMECertificateCreateSeesAConcurrentDelete(t *testing.T) {
+	w := newCertWorld(t)
+	for _, tc := range []struct {
+		name  string
+		table string
+		row   func() uuid.UUID
+		in    func(names string) inventory.ACMECertificateInput
+		want  []string
+	}{
+		{"server", "targets", func() uuid.UUID { return w.seedTarget("web-del", "nginx", "del.example.test") },
+			func(n string) inventory.ACMECertificateInput {
+				return inventory.ACMECertificateInput{ProviderID: w.provider.ID, Names: []string{n}, Challenge: inventory.ACMEChallengeHTTP01,
+					HTTPTargetID: ptr(w.seedTarget("unused", "nginx", "unused.example.test"))}
+			}, []string{"http_target_id:" + validate.Required}},
+		{"provider", "acme_providers", func() uuid.UUID { p := w.registryWorld.provider("Deleted CA", false); w.register(p); return p.ID },
+			func(n string) inventory.ACMECertificateInput { return w.dnsInput(n) }, []string{"provider_id:" + validate.Required}},
+		{"hook", "acme_hooks", func() uuid.UUID { return w.hook.ID }, func(n string) inventory.ACMECertificateInput { return w.dnsInput(n) },
+			[]string{"hook_id:" + validate.Required}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := tc.row()
+			in := tc.in(tc.name + "-race.example.test")
+			switch tc.table {
+			case "targets":
+				in.HTTPTargetID = &id
+			case "acme_providers":
+				in.ProviderID = id
+			}
+			tx, err := w.db.Owner.Begin(w.ctx)
+			require.NoError(t, err)
+			defer func() { _ = tx.Rollback(w.ctx) }()
+			_, err = tx.Exec(w.ctx, "SELECT 1 FROM "+tc.table+" WHERE id = $1 FOR UPDATE", id)
+			require.NoError(t, err)
+			_, err = tx.Exec(w.ctx, "UPDATE "+tc.table+" SET deleted_at = now() WHERE id = $1", id)
+			require.NoError(t, err)
+			done := make(chan error, 1)
+			go func() { _, err := w.svc.CreateACMECertificate(w.ctx, w.admin, in); done <- err }()
+			w.waitForLockWaiter()
+			require.NoError(t, tx.Commit(w.ctx))
+			err = <-done
+			assert.Equal(t, tc.want, fieldList(err), "%v", err)
+			assert.Zero(t, w.count("SELECT count(*) FROM acme_certificates WHERE $1 = ANY(names)", in.Names[0]))
+		})
+	}
+}

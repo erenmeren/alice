@@ -176,10 +176,16 @@ func scanHook(row pgx.Row) (ACMEHook, error) {
 }
 
 func getACMEHook(ctx context.Context, q db.Querier, id uuid.UUID, forUpdate bool) (ACMEHook, error) {
-	sql := "SELECT " + hookColumns + " FROM acme_hooks WHERE id = $1 AND deleted_at IS NULL"
+	lock := ""
 	if forUpdate {
-		sql += " FOR UPDATE"
+		lock = " FOR UPDATE"
 	}
+	return readACMEHook(ctx, q, id, lock)
+}
+
+// readACMEHook reads a live hook with the row lock clause lock ("", " FOR UPDATE", " FOR SHARE").
+func readACMEHook(ctx context.Context, q db.Querier, id uuid.UUID, lock string) (ACMEHook, error) {
+	sql := "SELECT " + hookColumns + " FROM acme_hooks WHERE id = $1 AND deleted_at IS NULL" + lock
 	h, err := scanHook(q.QueryRow(ctx, sql, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ACMEHook{}, ErrNotFound
