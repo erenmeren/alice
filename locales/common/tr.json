@@ -1453,6 +1453,68 @@
         "action": "Dağıtılacak web sitelerini bir seferde en fazla 20 olacak şekilde seçin ve yeniden Şimdi dağıt düğmesine tıklayın."
       }
     },
+    "discovery": {
+      "scope_too_large": {
+        "title": "Bu kapsam taranamayacak kadar büyük.",
+        "cause": "Bir kapsam en fazla 4.096 adresi, bir tarama ise en fazla 20.000 adres, bağlantı noktası ve sunucu adı birleşimini kapsayabilir. IPv6 aralıkları en fazla /120 olabilir. Hiçbir şey kaydedilmedi.",
+        "action": "Kapsamı daha küçük kapsamlara bölün ya da daha az bağlantı noktası veya sunucu adı yazın, ardından yeniden kaydedin."
+      },
+      "entry_not_allowed": {
+        "title": "Bu adres taranamaz.",
+        "cause": "Adres veya aralık İzin verilen tarama ağlarının dışında ya da Alice'in hiç taramadığı adreslerden biri: kendi adresleri, veritabanı, geri döngü, bağlantı yerel ve bulut meta veri adresleri veya hariç tutulanlardaki bir aralık. Hiçbir şey kaydedilmedi.",
+        "action": "Girdiyi kaldırın ya da bir Yöneticiden ağını keşif ayarlarındaki İzin verilen tarama ağlarına eklemesini isteyin."
+      },
+      "entry_invalid": {
+        "title": "Bu kapsamdaki bir girdi geçerli değil.",
+        "cause": "Bir girdi IP adresi, 10.0.0.0/24 gibi bir ağ aralığı veya bir ana bilgisayar adı olmalıdır. Bağlantı noktaları 1 ile 65535 arasında, sunucu adları ise düz ana bilgisayar adları olmalıdır. Hiçbir şey kaydedilmedi.",
+        "action": "İşaretli girdiyi düzeltin ve yeniden kaydedin."
+      },
+      "scan_running": {
+        "title": "Bu kapsamın bir taraması zaten çalışıyor.",
+        "cause": "Bir kapsamın aynı anda yalnızca bir taraması çalışır; bu nedenle ikincisi başlatılmadı.",
+        "action": "Çalışan taramayı Taramalar sekmesinden izleyin. Yeni taramayı o bittikten sonra başlatın."
+      },
+      "scan_cancelled": {
+        "title": "Tarama iptal edildi.",
+        "cause": "Taramayı biri iptal etti ya da lisans kilitli olduğu için Alice durdurdu. O ana kadar bulunan sonuçlar saklanır.",
+        "action": "Gerektiğinde taramayı yeniden başlatın. Lisans kilitliyse önce lisans sorununu çözün."
+      },
+      "scan_timed_out": {
+        "title": "Tarama çok uzun sürdü ve durduruldu.",
+        "cause": "Bir tarama en fazla 60 dakika sürebilir. O ana kadar bulunan sonuçlar saklanır.",
+        "action": "Kapsamı küçültün ya da saniyedeki bağlantı sayısını artırın, ardından yeniden tarayın."
+      },
+      "too_many_scans": {
+        "title": "Çok fazla tarama çalışıyor.",
+        "cause": "Aynı anda en fazla iki tarama çalışır; bu nedenle bu tarama başlatılmadı.",
+        "action": "Çalışan taramalardan biri bitene kadar bekleyin, ardından bu taramayı yeniden başlatın."
+      },
+      "scope_not_found": {
+        "title": "Bu tarama kapsamı bulunamadı.",
+        "cause": "Kapsam yok ya da silinmiş.",
+        "action": "Kapsam listesini yenileyin ve listede olan bir kapsam seçin."
+      },
+      "schedule_invalid": {
+        "title": "Bu kapsamın zamanlaması geçerli değil.",
+        "cause": "Bir zamanlama 1 ile 168 saatte bir yinelenir. Bir zaman aralığının birbirinden farklı bir başlangıcı ve bitişi ile Alice'in tanıdığı bir saat dilimi olmalıdır.",
+        "action": "Zamanlamayı düzeltin ve yeniden kaydedin."
+      },
+      "name_unresolved": {
+        "title": "Bu kapsamdaki bir ana bilgisayar adı bulunamadı.",
+        "cause": "Alice ana bilgisayar adını ad sunucusuna sordu ve hiçbir adres almadı. Hiçbir şey kaydedilmedi.",
+        "action": "Ana bilgisayar adının yazımını ve Alice'in çalıştığı sunucunun bu adı çözebildiğini denetleyin, ardından yeniden kaydedin."
+      },
+      "name_taken": {
+        "title": "Bu adda bir tarama kapsamı zaten var.",
+        "cause": "Her kapsamın kendine ait bir adı olmalıdır.",
+        "action": "Başka bir ad seçin ve yeniden kaydedin."
+      },
+      "scan_interrupted": {
+        "title": "Tarama yarıda kesildi.",
+        "cause": "Tarama çalışırken Alice yeniden başladı ya da bu kurulum bir yedekten geri yüklendi. O ana kadar bulunan sonuçlar saklanır.",
+        "action": "Taramayı yeniden başlatın."
+      }
+    },
     "tls": {
       "key_mismatch": {
         "title": "Özel anahtar bu sertifikaya ait değil.",

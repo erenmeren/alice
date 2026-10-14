@@ -418,6 +418,22 @@ var (
 	// Deploy now without named websites (Task 13 fix round 1): none is bound, or more than one request takes.
 	ErrACMNoBindings      = ErrorCode{Code: "ALC-ACM-0035", Reason: "acme.no_bindings", Status: http.StatusConflict}
 	ErrACMTooManyBindings = ErrorCode{Code: "ALC-ACM-0036", Reason: "acme.too_many_bindings", Status: http.StatusUnprocessableEntity}
+
+	// Network certificate discovery (area DSC). A scope's entries are refused at save time (0001-0003, 0009-0011); a
+	// scan start meets 0004 and 0007; 0005, 0006 and 0012 are the end of a scan (discovery_scans.error_code holds the
+	// reason). An export that finds another running answers ALC-RPT-0004 (export.busy), not a code of its own.
+	ErrDSCScopeTooLarge   = ErrorCode{Code: "ALC-DSC-0001", Reason: "discovery.scope_too_large", Status: http.StatusUnprocessableEntity}
+	ErrDSCEntryNotAllowed = ErrorCode{Code: "ALC-DSC-0002", Reason: "discovery.entry_not_allowed", Status: http.StatusUnprocessableEntity}
+	ErrDSCEntryInvalid    = ErrorCode{Code: "ALC-DSC-0003", Reason: "discovery.entry_invalid", Status: http.StatusUnprocessableEntity}
+	ErrDSCScanRunning     = ErrorCode{Code: "ALC-DSC-0004", Reason: "discovery.scan_running", Status: http.StatusConflict, Retryable: true}
+	ErrDSCScanCancelled   = ErrorCode{Code: "ALC-DSC-0005", Reason: "discovery.scan_cancelled", Status: http.StatusConflict}
+	ErrDSCScanTimedOut    = ErrorCode{Code: "ALC-DSC-0006", Reason: "discovery.scan_timed_out", Status: http.StatusGatewayTimeout}
+	ErrDSCTooManyScans    = ErrorCode{Code: "ALC-DSC-0007", Reason: "discovery.too_many_scans", Status: http.StatusConflict, Retryable: true}
+	ErrDSCScopeNotFound   = ErrorCode{Code: "ALC-DSC-0008", Reason: "discovery.scope_not_found", Status: http.StatusNotFound}
+	ErrDSCScheduleInvalid = ErrorCode{Code: "ALC-DSC-0009", Reason: "discovery.schedule_invalid", Status: http.StatusUnprocessableEntity}
+	ErrDSCNameUnresolved  = ErrorCode{Code: "ALC-DSC-0010", Reason: "discovery.name_unresolved", Status: http.StatusUnprocessableEntity}
+	ErrDSCNameTaken       = ErrorCode{Code: "ALC-DSC-0011", Reason: "discovery.name_taken", Status: http.StatusConflict}
+	ErrDSCScanInterrupted = ErrorCode{Code: "ALC-DSC-0012", Reason: "discovery.scan_interrupted", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -478,6 +494,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMSecretUnreadable, ErrACMOrderAbandoned, ErrACMNotIssued, ErrACMLocationBound, ErrACMLocationNotBound,
 		ErrACMBindingGone, ErrACMAutoDeployOff, ErrACMCertificateSuperseded, ErrACMDeployStopped, ErrACMDeployHeld,
 		ErrACMNoBindings, ErrACMTooManyBindings,
+		ErrDSCScopeTooLarge, ErrDSCEntryNotAllowed, ErrDSCEntryInvalid, ErrDSCScanRunning, ErrDSCScanCancelled, ErrDSCScanTimedOut,
+		ErrDSCTooManyScans, ErrDSCScopeNotFound, ErrDSCScheduleInvalid, ErrDSCNameUnresolved, ErrDSCNameTaken, ErrDSCScanInterrupted,
 	}
 }
 

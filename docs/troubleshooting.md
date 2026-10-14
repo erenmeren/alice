@@ -2790,6 +2790,102 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Select the websites to deploy to, at most 20 at a time, and choose Deploy now again.
 
+## ALC-DSC-0001: This scope is too large to scan
+
+**Meaning.** A scan scope (the list of addresses, ports and server names Alice looks at during network discovery) covers more than one scan may. Nothing was saved. (HTTP 422, reason `discovery.scope_too_large`.)
+
+**Likely cause.** A wide network range, such as a /16, or many ports or server names. A scope covers at most 4,096 addresses (a /20), one scan at most 20,000 combinations of address, port and server name, and an IPv6 range at most a /120.
+
+**What to do.** Split the network into several smaller scopes, or list fewer ports or server names, then save again.
+
+## ALC-DSC-0002: This address may not be scanned
+
+**Meaning.** An entry of the scope points at an address Alice refuses to scan. Nothing was saved. (HTTP 422, reason `discovery.entry_not_allowed`.)
+
+**Likely cause.** The address is outside the **Allowed scan networks** an Administrator set in the discovery settings (an empty list allows nothing), or it is one Alice never scans: its own addresses, the database server, loopback, link-local and cloud metadata addresses, or a range in the exclusions. A host name that leads to such an address is refused in the same way.
+
+**What to do.** Remove the entry. If the network should be scanned, ask an Administrator to add it to the Allowed scan networks, then save the scope again.
+
+## ALC-DSC-0003: An entry of this scope is not valid
+
+**Meaning.** Alice could not read an entry of the scope. Nothing was saved. (HTTP 422, reason `discovery.entry_invalid`.)
+
+**Likely cause.** A typing mistake: an entry must be an IP address (`10.0.0.5`), a network range (`10.0.0.0/24`) or a host name (`www.example.com`). Ports must be numbers between 1 and 65535, and server names must be plain host names without spaces.
+
+**What to do.** Correct the entry the form marks and save again.
+
+## ALC-DSC-0004: A scan of this scope is already running
+
+**Meaning.** A scan was started for a scope that is already being scanned, so no second scan was started. (HTTP 409, reason `discovery.scan_running`; retryable.)
+
+**Likely cause.** Someone else started the scan a moment earlier, or the scope's schedule started it.
+
+**What to do.** Follow the running scan on the **Scans** tab of Network discovery. Start a new scan after it has finished.
+
+## ALC-DSC-0005: The scan was cancelled
+
+**Meaning.** The scan ended before it had looked at every address. The results found until then are kept. (HTTP 409, reason `discovery.scan_cancelled`.)
+
+**Likely cause.** An Operator or Administrator cancelled the scan, or Alice stopped it because the license is locked.
+
+**What to do.** Start the scan again when you need it. If the license is locked, resolve that first (see License messages).
+
+## ALC-DSC-0006: The scan took too long and was stopped
+
+**Meaning.** The scan reached its time limit of 60 minutes and was stopped. The results found until then are kept. (HTTP 504, reason `discovery.scan_timed_out`.)
+
+**Likely cause.** The scope is large and its rate is low (at the default 20 connections per second a full /20 on one port takes about 3.4 minutes; many ports or server names multiply that), or many addresses do not answer and each one waits for its timeout.
+
+**What to do.** Make the scope smaller, or have an Administrator raise its connections per second (at most 100), then scan again.
+
+## ALC-DSC-0007: Too many scans are running
+
+**Meaning.** At most two scans run at the same time, and two already run, so this one was not started. (HTTP 409, reason `discovery.too_many_scans`; retryable.)
+
+**Likely cause.** Other scopes are being scanned at the moment, by a person or by their schedules.
+
+**What to do.** Wait until one of the running scans has finished (the **Scans** tab shows them), then start this one again.
+
+## ALC-DSC-0008: This scan scope was not found
+
+**Meaning.** The scan scope named in the request does not exist. (HTTP 404, reason `discovery.scope_not_found`.)
+
+**Likely cause.** The scope was deleted, possibly by another Administrator while the page was open.
+
+**What to do.** Reload the list of scopes and choose one that is listed.
+
+## ALC-DSC-0009: The schedule of this scope is not valid
+
+**Meaning.** The automatic schedule of the scope cannot be used. Nothing was saved. (HTTP 422, reason `discovery.schedule_invalid`.)
+
+**Likely cause.** The interval is outside 1 to 168 hours (one week), a time window has only a start or only an end, the start and the end are the same time, or the time zone is not one Alice knows.
+
+**What to do.** Correct the schedule and save again. Leave the window empty to allow scans at any time of day.
+
+## ALC-DSC-0010: A host name in this scope could not be found
+
+**Meaning.** Alice looked up a host name of the scope and got no address back. Nothing was saved. (HTTP 422, reason `discovery.name_unresolved`.)
+
+**Likely cause.** A typing mistake in the name, or the server Alice runs on uses a name server that does not know internal names. For safety, Alice does not show what a name resolves to.
+
+**What to do.** Check the spelling of the host name and that the server Alice runs on can look it up, then save again. You can also enter the IP address instead.
+
+## ALC-DSC-0011: A scan scope with this name already exists
+
+**Meaning.** Every scan scope needs its own name, and another scope already uses this one. Nothing was saved. (HTTP 409, reason `discovery.name_taken`.)
+
+**Likely cause.** The name is in use; names are compared without regard to upper and lower case.
+
+**What to do.** Choose a different name and save again.
+
+## ALC-DSC-0012: The scan was interrupted
+
+**Meaning.** The scan stopped before it finished. The results found until then are kept. (HTTP 409, reason `discovery.scan_interrupted`.)
+
+**Likely cause.** Alice restarted while the scan ran, or this installation was restored from a backup that was made during a scan. A restored copy never continues the original's scans.
+
+**What to do.** Start the scan again.
+
 ## Install and start problems
 
 The installer (`install.sh`) lists every failed check before it stops, and changes nothing until all checks pass.

@@ -1453,6 +1453,68 @@
         "action": "Select the websites to deploy to, at most 20 at a time, and choose Deploy now again."
       }
     },
+    "discovery": {
+      "scope_too_large": {
+        "title": "This scope is too large to scan.",
+        "cause": "A scope may cover at most 4,096 addresses, and one scan at most 20,000 combinations of address, port and server name. IPv6 ranges may be at most a /120. Nothing was saved.",
+        "action": "Split the scope into smaller ones, or list fewer ports or server names, then save again."
+      },
+      "entry_not_allowed": {
+        "title": "This address may not be scanned.",
+        "cause": "The address or range is outside the Allowed scan networks, or it is one Alice never scans: its own addresses, the database, loopback, link-local and cloud metadata addresses, or a range in the exclusions. Nothing was saved.",
+        "action": "Remove the entry, or ask an Administrator to add its network to the Allowed scan networks in the discovery settings."
+      },
+      "entry_invalid": {
+        "title": "An entry of this scope is not valid.",
+        "cause": "An entry must be an IP address, a network range such as 10.0.0.0/24, or a host name. Ports must be between 1 and 65535 and server names must be plain host names. Nothing was saved.",
+        "action": "Correct the marked entry and save again."
+      },
+      "scan_running": {
+        "title": "A scan of this scope is already running.",
+        "cause": "Only one scan of a scope runs at a time, so a second one was not started.",
+        "action": "Follow the running scan on the Scans tab. Start a new scan after it has finished."
+      },
+      "scan_cancelled": {
+        "title": "The scan was cancelled.",
+        "cause": "Someone cancelled the scan, or Alice stopped it because the license is locked. The results found until then are kept.",
+        "action": "Start the scan again when you need it. If the license is locked, resolve the license first."
+      },
+      "scan_timed_out": {
+        "title": "The scan took too long and was stopped.",
+        "cause": "A scan may run for at most 60 minutes. The results found until then are kept.",
+        "action": "Make the scope smaller, or raise its connections per second, then scan again."
+      },
+      "too_many_scans": {
+        "title": "Too many scans are running.",
+        "cause": "At most two scans run at the same time, so this one was not started.",
+        "action": "Wait until one of the running scans has finished, then start this one again."
+      },
+      "scope_not_found": {
+        "title": "This scan scope was not found.",
+        "cause": "The scope does not exist or it was deleted.",
+        "action": "Reload the list of scopes and choose one that is listed."
+      },
+      "schedule_invalid": {
+        "title": "The schedule of this scope is not valid.",
+        "cause": "A schedule repeats every 1 to 168 hours. A time window needs a start and an end that differ, and a time zone Alice knows.",
+        "action": "Correct the schedule and save again."
+      },
+      "name_unresolved": {
+        "title": "A host name in this scope could not be found.",
+        "cause": "Alice asked its name server for the host name and got no address back. Nothing was saved.",
+        "action": "Check the spelling of the host name, and check that the server Alice runs on can look it up, then save again."
+      },
+      "name_taken": {
+        "title": "A scan scope with this name already exists.",
+        "cause": "Every scope needs its own name.",
+        "action": "Choose a different name and save again."
+      },
+      "scan_interrupted": {
+        "title": "The scan was interrupted.",
+        "cause": "Alice restarted, or this installation was restored from a backup, while the scan ran. The results found until then are kept.",
+        "action": "Start the scan again."
+      }
+    },
     "tls": {
       "key_mismatch": {
         "title": "The private key does not belong to the certificate.",
