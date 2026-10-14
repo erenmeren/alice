@@ -539,6 +539,6 @@ coverage: ## Run all Go tests (with integration) under coverage and enforce cove
 	go run ./tools/covercheck -profile coverage.out -floors coverage-floors.json
 
 .PHONY: perf
-perf: ## Run the R32 performance test (5,000 certificates, 500 targets; needs Docker, nothing else using it)
+perf: ## Run the R32 and network discovery performance tests (5,000 certificates, 500 targets; 5,000 endpoints; needs Docker, nothing else using it)
 	go vet -tags 'integration perf' ./internal/api/
-	go test -count=1 -timeout 30m -tags 'integration perf' -run '^TestR32' -v ./internal/api/
+	go test -count=1 -timeout 30m -tags 'integration perf' -run '^(TestR32|TestPerfNetdiscoScan)' -v ./internal/api/
