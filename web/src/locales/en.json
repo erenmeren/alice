@@ -577,6 +577,7 @@
       "acme_provider_deleted": "Certificate authority (ACME) removed",
       "acme_account_registered": "Account registered with a certificate authority (ACME)",
       "acme_account_rolled_over": "Account key of a certificate authority (ACME) replaced",
+      "acme_account_rollover_discarded": "Unused new account key of a certificate authority (ACME) discarded",
       "acme_account_deactivated": "Account with a certificate authority (ACME) deactivated",
       "acme_hook_created": "DNS hook for certificate requests added",
       "acme_hook_updated": "DNS hook for certificate requests changed",

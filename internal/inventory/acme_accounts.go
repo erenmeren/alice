@@ -570,6 +570,9 @@ func (s *Service) RolloverACMEAccount(ctx context.Context, a Actor, accountID uu
 		if cur.State != ACMEAccountActive || cur.AccountURL == "" {
 			return ErrACMEAccountState
 		}
+		if err := refuseWhileOrdersRun(ctx, tx, cur.ProviderID); err != nil {
+			return err
+		}
 		_, err = tx.Exec(ctx, `INSERT INTO acme_accounts (id, provider_id, contact_email, account_url, tos_url, tos_accepted_by, tos_accepted_at,
 key_ct, key_nonce, key_wrapped_dek, key_version, state, pending_since, created_by, created_at, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', now(), $12, $13, $13)`,
@@ -590,11 +593,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', now(),
 	// (2) The CA.
 	oldKey, err := s.openAccountKey(ctx, s.pool, accountID)
 	if err != nil {
-		return ACMEAccount{}, s.discardPendingOr(ctx, pendingID, err)
+		return ACMEAccount{}, s.discardPendingOr(ctx, a, accountID, pendingID, err)
 	}
 	client, err := s.acmeClientFor(p, oldKey, acct.AccountURL)
 	if err != nil {
-		return ACMEAccount{}, s.discardPendingOr(ctx, pendingID, err)
+		return ACMEAccount{}, s.discardPendingOr(ctx, a, accountID, pendingID, err)
 	}
 	outcome, cerr := client.Rollover(ctx, newKey)
 	if s.rolloverSeam != nil {
@@ -612,8 +615,27 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending_rollover', now(),
 		if cerr == nil {
 			cerr = &ACMEError{Reason: acme.ReasonAccountRejected}
 		}
-		return ACMEAccount{}, s.discardPendingOr(ctx, pendingID, acmeFailure(cerr))
+		return ACMEAccount{}, s.discardPendingOr(ctx, a, accountID, pendingID, acmeFailure(cerr))
 	}
+}
+
+// refuseWhileOrdersRun returns ErrACMEOrderRunning when an order of a certificate of the provider runs: it signs with
+// the account key a rollover would replace (the CA then refuses it). The certificates' rows are read FOR SHARE first: an
+// order starting meanwhile (startOrderTx holds its certificate's row FOR UPDATE) is either committed and seen by the
+// check, or waits for this transaction and then finds the pending key (ErrACMERolloverPending).
+func refuseWhileOrdersRun(ctx context.Context, tx pgx.Tx, providerID uuid.UUID) error {
+	if _, err := tx.Exec(ctx, "SELECT 1 FROM acme_certificates WHERE provider_id = $1 FOR SHARE", providerID); err != nil {
+		return fmt.Errorf("inventory: hold the provider's ACME certificates: %w", err)
+	}
+	var running bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id
+WHERE c.provider_id = $1 AND o.state = 'running')`, providerID).Scan(&running); err != nil {
+		return fmt.Errorf("inventory: look for running ACME orders: %w", err)
+	}
+	if running {
+		return ErrACMEOrderRunning
+	}
+	return nil
 }
 
 // settleRollover makes the pending row the active account, retires the old one and moves the ACME certificates of
@@ -655,21 +677,41 @@ func (s *Service) settleRollover(ctx context.Context, a Actor, oldID, pendingID 
 }
 
 // discardPending deletes a pending key the CA did not take, detached from the caller's context (the row must not
-// outlive a refusal because the request was cancelled). Only a pending row is deleted (the database refuses any other,
-// Z1018).
-func (s *Service) discardPending(ctx context.Context, pendingID uuid.UUID) error {
+// outlive a refusal because the request was cancelled), and appends the audit row acme.account.rollover_discarded
+// (provider_id, account_id: the active account that keeps its key, pending_account_id, recovered, and reason: the CA's
+// refusal, when there is one) in the same transaction. Only a pending row is deleted (the database refuses any other,
+// Z1018); one already gone writes nothing.
+func (s *Service) discardPending(ctx context.Context, a Actor, activeID, pendingID uuid.UUID, recovered bool, reason string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedTimeout)
 	defer cancel()
-	if _, err := s.pool.Exec(ctx, "DELETE FROM acme_accounts WHERE id = $1 AND state = 'pending_rollover'", pendingID); err != nil {
-		return fmt.Errorf("inventory: discard the pending ACME account key: %w", err)
-	}
-	return nil
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		var providerID uuid.UUID
+		err := tx.QueryRow(ctx, "DELETE FROM acme_accounts WHERE id = $1 AND state = 'pending_rollover' RETURNING provider_id", pendingID).Scan(&providerID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inventory: discard the pending ACME account key: %w", err)
+		}
+		d := map[string]string{"provider_id": providerID.String(), "account_id": activeID.String(), "pending_account_id": pendingID.String(),
+			"recovered": fmt.Sprint(recovered)}
+		if reason != "" {
+			d["reason"] = reason
+		}
+		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "acme.account.rollover_discarded", ObjectType: "acme_account",
+			ObjectID: activeID.String(), Result: audit.Success, Details: d})
+		return err
+	})
 }
 
 // discardPendingOr discards a pending key after a refusal and returns the refusal (a failed delete is logged: the row
 // is then a stale pending key that RecoverACMERollover settles).
-func (s *Service) discardPendingOr(ctx context.Context, pendingID uuid.UUID, cause error) error {
-	if err := s.discardPending(ctx, pendingID); err != nil {
+func (s *Service) discardPendingOr(ctx context.Context, a Actor, activeID, pendingID uuid.UUID, cause error) error {
+	reason := ""
+	if ae := (*ACMEError)(nil); errors.As(cause, &ae) {
+		reason = ae.Reason
+	}
+	if err := s.discardPending(ctx, a, activeID, pendingID, false, reason); err != nil {
 		s.log.Error("could not discard a pending ACME account key", "account_id", pendingID.String(), "error_type", fmt.Sprintf("%T", err))
 	}
 	return cause
@@ -745,7 +787,7 @@ WHERE a.provider_id = $1 AND a.state = 'active' AND n.state = 'pending_rollover'
 	if _, oerr := withOld.Lookup(ctx); oerr != nil {
 		return ACMEAccount{}, acmeFailure(oerr)
 	}
-	if err := s.discardPending(ctx, pendingID); err != nil {
+	if err := s.discardPending(ctx, a, activeID, pendingID, true, ""); err != nil {
 		return ACMEAccount{}, err
 	}
 	return getACMEAccount(ctx, s.pool, activeID, false)

@@ -3563,7 +3563,8 @@ paths:
       summary: Change the account key at the certificate authority (answers the new active account)
       description: >-
         Contacts the CA. 422 ALC-ACM-0014 when the CA cannot change keys; 409 ALC-ACM-0024 when the outcome is not known yet
-        (check it with rollover/recover) or another account operation is running; 409 ALC-ACM-0023 (not an active account).
+        (check it with rollover/recover) or another account operation is running; 409 ALC-ACM-0023 (not an active account);
+        409 ALC-ACM-0016 while an order of a certificate of the provider runs (it signs with the key being replaced).
         Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001
         while the license is locked.
       x-permission: acme.manage

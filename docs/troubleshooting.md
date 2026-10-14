@@ -2624,7 +2624,7 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 ## ALC-ACM-0016: An order is already running
 
-**Meaning.** An order of this certificate is queued or running. The request was not queued again. (HTTP 409, reason `acme.order_running`; retryable.)
+**Meaning.** An order of this certificate is queued or running. The request was not queued again. An account key change (**Rotate account key**) answers this too while an order of any certificate of the authority runs: the order signs with the key the change would replace. Nothing was changed. (HTTP 409, reason `acme.order_running`; retryable.)
 
 **Likely cause.** The order or the test button was used twice, or the scheduler already started a renewal.
 

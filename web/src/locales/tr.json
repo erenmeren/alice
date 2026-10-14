@@ -577,6 +577,7 @@
       "acme_provider_deleted": "Sertifika yetkilisi (ACME) kaldırıldı",
       "acme_account_registered": "Sertifika yetkilisinde (ACME) hesap kaydedildi",
       "acme_account_rolled_over": "Sertifika yetkilisi (ACME) hesap anahtarı değiştirildi",
+      "acme_account_rollover_discarded": "Sertifika yetkilisinin (ACME) kullanılmayan yeni hesap anahtarı silindi",
       "acme_account_deactivated": "Sertifika yetkilisindeki (ACME) hesap devre dışı bırakıldı",
       "acme_hook_created": "Sertifika istekleri için DNS kancası eklendi",
       "acme_hook_updated": "Sertifika istekleri için DNS kancası değiştirildi",

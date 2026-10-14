@@ -1038,7 +1038,8 @@ The account panel shows the state, the contact, the terms' address and when they
 records who registered the account, the terms' address and whether an external account binding was used.
 
 - **Rotate account key** replaces the account key at the authority (the authority must support key changes,
-  otherwise `ALC-ACM-0014`). If the authority's answer is lost, the authority shows **Key change not settled**:
+  otherwise `ALC-ACM-0014`). It is refused with `ALC-ACM-0016` while an order of a certificate of that authority
+  runs (the order signs with the key being replaced): try again when it finished. If the authority's answer is lost, the authority shows **Key change not settled**:
   certificates of that authority are not ordered until it is settled. Choose **Check key change** a few minutes later
   (Alice keeps the new key at least 5 minutes before it may give it up); Alice asks the authority which key it knows
   and settles the account.

@@ -465,6 +465,10 @@ func TestACMERolloverUnsupportedAndRefused(t *testing.T) {
 	assert.Equal(t, acme.ReasonRolloverUnsupported, reasonOf(err), "ALC-ACM-0014: %v", err)
 	assert.Equal(t, map[uuid.UUID]string{a.ID: inventory.ACMEAccountActive}, w.accountStates(p.ID), "the pending key was discarded")
 	assert.Equal(t, 0, w.count("SELECT count(*) FROM acme_accounts WHERE state = 'pending_rollover'"))
+	d := w.auditDetails("acme.account.rollover_discarded")
+	require.Len(t, d, 1, "the discarded pending key is audited")
+	assert.Equal(t, map[string]string{"provider_id": p.ID.String(), "account_id": a.ID.String(), "pending_account_id": d[0]["pending_account_id"],
+		"recovered": "false", "reason": acme.ReasonRolloverUnsupported}, d[0])
 
 	w2 := newRegistryWorld(t, fakeacme.Options{})
 	p2 := w2.provider("Refusing", false)
@@ -566,6 +570,14 @@ func TestACMERolloverUnknownThenNotSwitched(t *testing.T) {
 	assert.Equal(t, a.ID, got.ID)
 	assert.Equal(t, map[uuid.UUID]string{a.ID: inventory.ACMEAccountActive}, w.accountStates(p.ID), "the pending key is gone")
 	assert.Equal(t, 0, w.audits("acme.account.rolled_over"))
+	// Final review finding 2: the discarded key is in the audit log, written with its delete in one transaction.
+	d := w.auditDetails("acme.account.rollover_discarded")
+	require.Len(t, d, 1)
+	assert.Equal(t, p.ID.String(), d[0]["provider_id"])
+	assert.Equal(t, a.ID.String(), d[0]["account_id"])
+	assert.NotEmpty(t, d[0]["pending_account_id"])
+	assert.NotEqual(t, a.ID.String(), d[0]["pending_account_id"])
+	assert.Equal(t, "true", d[0]["recovered"])
 
 	// And a normal rollover works afterwards.
 	n, err := w.svc.RolloverACMEAccount(w.ctx, w.admin, a.ID)
@@ -997,4 +1009,33 @@ func TestACMERegisterIsBoundToTheShownTerms(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, shown, a.TermsURL)
 	assert.Equal(t, shown, w.auditDetails("acme.account.registered")[0]["tos_url"])
+}
+
+// Final review finding 4: a key rollover is refused while an order of a certificate of the provider runs (the order signs
+// with the account key the rollover replaces); nothing is stored and the CA is not asked. Once the order ended, the
+// rollover works.
+func TestACMERolloverRefusedWhileAnOrderRuns(t *testing.T) {
+	w := newRegistryWorld(t, fakeacme.Options{})
+	p := w.provider("Busy CA", false)
+	a := w.register(p)
+	web := w.seedTarget("busy-web", "nginx", "web.example.test")
+	cert, order := uuid.New(), uuid.New()
+	_, err := w.db.Owner.Exec(w.ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, http_target_id, state,
+created_at, updated_at) VALUES ($1, $2, $3, '{www.example.test}', 'ecdsa_p256', 'http01', $4, 'issuing', now(), now())`, cert, p.ID, a.ID, web)
+	require.NoError(t, err)
+	_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at) VALUES ($1, $2, 'issue', 'running', now())`,
+		order, cert)
+	require.NoError(t, err)
+	w.fake.ClearRequests()
+
+	_, err = w.svc.RolloverACMEAccount(w.ctx, w.admin, a.ID)
+	assert.ErrorIs(t, err, inventory.ErrACMEOrderRunning)
+	assert.Equal(t, map[uuid.UUID]string{a.ID: inventory.ACMEAccountActive}, w.accountStates(p.ID), "no pending key is stored")
+	assert.Empty(t, w.fake.Requests(), "the CA is not asked")
+
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE acme_orders SET state = 'failed', finished_at = now(), error_code = 'job.lease_expired' WHERE id = $1", order)
+	require.NoError(t, err)
+	n, err := w.svc.RolloverACMEAccount(w.ctx, w.admin, a.ID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMEAccountActive, n.State)
 }

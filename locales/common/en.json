@@ -1349,8 +1349,8 @@
       },
       "order_running": {
         "title": "An order is already running.",
-        "cause": "This certificate is already being ordered. A second order at the same time is not started.",
-        "action": "Wait until the running order finishes; its result appears on the certificate."
+        "cause": "This certificate is already being ordered, so a second order is not started and what the order uses cannot change. A key change of a certificate authority's account also waits while any certificate of that authority is being ordered.",
+        "action": "Wait until the running order finishes (its result appears on the certificate), then try again."
       },
       "challenge_unavailable": {
         "title": "This proof method cannot be used here.",

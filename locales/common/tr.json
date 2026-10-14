@@ -1349,8 +1349,8 @@
       },
       "order_running": {
         "title": "Zaten bir sipariş sürüyor.",
-        "cause": "Bu sertifika için zaten sipariş veriliyor. Aynı anda ikinci bir sipariş başlatılmaz.",
-        "action": "Süren siparişin bitmesini bekleyin; sonucu sertifikanın üzerinde görünür."
+        "cause": "Bu sertifika için zaten sipariş veriliyor; ikinci bir sipariş başlatılmaz ve siparişin kullandıkları değiştirilemez. Bir sertifika yetkilisindeki hesabın anahtar değişikliği de o yetkilinin herhangi bir sertifikası için sipariş sürerken bekler.",
+        "action": "Süren siparişin bitmesini bekleyin (sonucu sertifikanın üzerinde görünür), sonra yeniden deneyin."
       },
       "challenge_unavailable": {
         "title": "Bu doğrulama yöntemi burada kullanılamaz.",
