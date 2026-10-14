@@ -5,9 +5,9 @@ package backup_test
 import (
 	"context"
 	"encoding/hex"
-	"sync"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
