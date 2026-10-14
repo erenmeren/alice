@@ -309,11 +309,11 @@ func TestDiscoveryCertificateAndEndpointHandlers(t *testing.T) {
 		filter = fl
 		return []discovery.CertificateRow{sampleCertRow()}, true, nil
 	}
-	rec := call(h, http.MethodGet, "/api/v1/discovery/certificates?status=unmanaged&expiring_within_days=30&expired=false&self_signed=true&q=%20Shop%20&scope_id="+
+	rec := call(h, http.MethodGet, "/api/v1/discovery/certificates?status=unmanaged&expiring_within_days=30&expired=false&self_signed=true&current=true&q=%20Shop%20&scope_id="+
 		dscScopeID.String(), "auditor", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	no, yes := false, true
-	assert.Equal(t, discovery.CertificateFilter{Status: "unmanaged", ScopeID: dscScopeID, Query: "Shop", Expired: &no, SelfSigned: &yes,
+	assert.Equal(t, discovery.CertificateFilter{Status: "unmanaged", ScopeID: dscScopeID, Query: "Shop", Expired: &no, SelfSigned: &yes, Current: true,
 		ExpiringBy: testNow.AddDate(0, 0, 30), Now: testNow, Limit: 50}, filter)
 	body := jsonObj(t, rec)
 	requireSnakeCase(t, body, "certificates")
@@ -329,8 +329,12 @@ func TestDiscoveryCertificateAndEndpointHandlers(t *testing.T) {
 	rec = call(h, http.MethodGet, "/api/v1/discovery/certificates?status=all&cursor="+next, "auditor", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "", filter.Status, "all is every status")
+	assert.False(t, filter.Current, "without current every leaf is listed, those no longer found too")
 	assert.Equal(t, &discovery.CertificateCursor{NotAfter: testNow.AddDate(0, 0, 10), Fingerprint: dscFP}, filter.After)
-	for _, q := range []string{"status=gone", "expiring_within_days=0", "expiring_within_days=3651", "expired=maybe", "self_signed=1",
+	rec = call(h, http.MethodGet, "/api/v1/discovery/certificates?current=false", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.False(t, filter.Current)
+	for _, q := range []string{"status=gone", "expiring_within_days=0", "expiring_within_days=3651", "expired=maybe", "self_signed=1", "current=yes",
 		"q=" + strings.Repeat("x", 201), "cursor=" + strings.Repeat("1", 600), "cursor=12.zz", "scope_id=nope"} {
 		rec = call(h, http.MethodGet, "/api/v1/discovery/certificates?"+q, "auditor", "")
 		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, q)
@@ -393,6 +397,7 @@ func TestDiscoveryExportHandler(t *testing.T) {
 		calls++
 		assert.Equal(t, 200, fl.Limit)
 		assert.Equal(t, "unmanaged", fl.Status)
+		assert.True(t, fl.Current, "the export takes the list's current filter")
 		if fl.After == nil {
 			return []discovery.CertificateRow{sampleCertRow()}, true, nil
 		}
@@ -424,12 +429,12 @@ func TestDiscoveryExportHandler(t *testing.T) {
 		}
 		return n, cw.Flush()
 	}
-	rec := call(h, http.MethodGet, "/api/v1/discovery/certificates/export?status=unmanaged&q=shop", "auditor", "")
+	rec := call(h, http.MethodGet, "/api/v1/discovery/certificates/export?status=unmanaged&q=shop&current=true", "auditor", "")
 	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 	assert.Equal(t, "text/csv; charset=utf-8", rec.Header().Get("Content-Type"))
 	assert.Equal(t, `attachment; filename="alice-discovered-certificates-2026-09-30.csv"`, rec.Header().Get("Content-Disposition"))
 	assert.Equal(t, "discovery.export", export.Action)
-	assert.Equal(t, map[string]string{"kind": "discovery_certificates", "format": "csv", "status": "unmanaged", "q": "shop"}, export.Details)
+	assert.Equal(t, map[string]string{"kind": "discovery_certificates", "format": "csv", "status": "unmanaged", "q": "shop", "current": "true"}, export.Details)
 	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(rec.Body.Bytes(), []byte("\xEF\xBB\xBF")))).ReadAll()
 	require.NoError(t, err)
 	require.Len(t, rows, 3)

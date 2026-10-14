@@ -418,8 +418,12 @@ func (s *server) discoveryCertificateFilter(w http.ResponseWriter, r *http.Reque
 	f := discovery.CertificateFilter{Now: now, ScopeID: optionalUUID(q.Get("scope_id"), "scope_id", &v),
 		Expired: triState(q.Get("expired"), "expired", &v), SelfSigned: triState(q.Get("self_signed"), "self_signed", &v),
 		Query: strings.TrimSpace(q.Get("q"))}
+	// current: only certificates some endpoint that is not gone presents or last presented (the summary's definition).
+	if c := triState(q.Get("current"), "current", &v); c != nil {
+		f.Current = *c
+	}
 	details := map[string]string{}
-	for _, k := range []string{"status", "q", "expired", "self_signed", "expiring_within_days", "scope_id"} {
+	for _, k := range []string{"status", "q", "expired", "self_signed", "current", "expiring_within_days", "scope_id"} {
 		if val := q.Get(k); val != "" {
 			details[k] = val
 		}

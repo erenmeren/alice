@@ -67,7 +67,8 @@ type CertificateCursor struct {
 // CertificateFilter selects leaf certificates: of one status ("" any), presented by an endpoint of one scope (uuid.Nil:
 // any), one fingerprint ("" any); whose subject CN or one of whose SANs contains Query (case-insensitive; "" any; LIKE
 // characters are literal); expired at Now or not (Expired; nil: either); not expired at Now and expiring by ExpiringBy
-// (zero: any); self-signed or not (SelfSigned; nil: either); after a cursor (nil: the first page); at most Limit
+// (zero: any); self-signed or not (SelfSigned; nil: either); still found (Current: some endpoint that is not gone, of
+// the scope when ScopeID is set, presents or last presented it: the summary's and the alerts' "still found"); after a cursor (nil: the first page); at most Limit
 // (1..MaxPage, else MaxPage). Now is required by Expired and ExpiringBy (ErrFilterNeedsNow).
 type CertificateFilter struct {
 	Status      string
@@ -77,6 +78,7 @@ type CertificateFilter struct {
 	Expired     *bool
 	ExpiringBy  time.Time
 	SelfSigned  *bool
+	Current     bool
 	Now         time.Time
 	After       *CertificateCursor
 	Limit       int
@@ -148,6 +150,9 @@ func ListCertificates(ctx context.Context, q db.Querier, f CertificateFilter) ([
 	if f.ScopeID != uuid.Nil {
 		scope = " AND e.scope_id = " + in.arg(f.ScopeID)
 		in.and("EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256" + scope + ")")
+	}
+	if f.Current {
+		in.and("EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND e.state <> 'gone'" + scope + ")")
 	}
 	if f.Fingerprint != "" {
 		in.and("d.fingerprint_sha256 = " + in.arg(f.Fingerprint))

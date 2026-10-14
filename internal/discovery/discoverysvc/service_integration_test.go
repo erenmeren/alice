@@ -609,6 +609,19 @@ func TestSummary(t *testing.T) {
 	require.NoError(t, err)
 	at := t0.Add(time.Minute)
 	assert.Equal(t, Summary{UnmanagedTotal: 3, UnmanagedExpiring30d: 1, Scopes: 1, LastScanAt: &at}, s)
+
+	// One definition of "unmanaged and still found": the summary's counts are the lengths of the lists the UI links to
+	// (status=unmanaged&current=true, with expiring_within_days=30 for the Overview's line).
+	all, _, err := w.svc.ListCertificates(w.ctx, discovery.CertificateFilter{Status: discovery.StatusUnmanaged, Current: true, Limit: 200})
+	require.NoError(t, err)
+	assert.Len(t, all, s.UnmanagedTotal)
+	soon, _, err := w.svc.ListCertificates(w.ctx, discovery.CertificateFilter{Status: discovery.StatusUnmanaged, Current: true, Limit: 200,
+		Now: t0, ExpiringBy: t0.AddDate(0, 0, 30)})
+	require.NoError(t, err)
+	assert.Len(t, soon, s.UnmanagedExpiring30d)
+	every, _, err := w.svc.ListCertificates(w.ctx, discovery.CertificateFilter{Status: discovery.StatusUnmanaged, Limit: 200})
+	require.NoError(t, err)
+	assert.Len(t, every, 4, "without current the gone-only certificate stays listed until retention")
 }
 
 // insertCert and insertEndpoint put read-side rows in place (the scanner's work in production).

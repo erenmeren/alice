@@ -4277,13 +4277,16 @@ paths:
         status unmanaged (Alice has no record of this exact certificate), managed (Alice has it on a live location of a
         live server), known (Alice has it, on no live location), or all (the default). q is a part of the subject CN or of a
         SAN (case-insensitive; % and _ are ordinary characters). expiring_within_days selects certificates that are not
-        expired and expire within that many days.
+        expired and expire within that many days. current=true keeps only the certificates still found (an endpoint that
+        is not gone presents or last presented it), the definition of the summary's unmanaged counts; without it a
+        certificate stays listed until retention removes it.
       x-permission: discovery.view
       parameters:
         - { name: status, in: query, schema: { type: string, enum: [all, unmanaged, managed, known] } }
         - { name: expiring_within_days, in: query, schema: { type: integer, minimum: 1, maximum: 3650 } }
         - { name: expired, in: query, schema: { type: boolean } }
         - { name: self_signed, in: query, schema: { type: boolean } }
+        - { name: current, in: query, schema: { type: boolean }, description: "true: only certificates that some endpoint which is not gone presents or last presented (still found; the summary's definition)" }
         - { name: q, in: query, schema: { type: string, maxLength: 200 } }
         - { name: scope_id, in: query, schema: { type: string, format: uuid } }
         - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
@@ -4314,6 +4317,7 @@ paths:
         - { name: expiring_within_days, in: query, schema: { type: integer, minimum: 1, maximum: 3650 } }
         - { name: expired, in: query, schema: { type: boolean } }
         - { name: self_signed, in: query, schema: { type: boolean } }
+        - { name: current, in: query, schema: { type: boolean }, description: "true: only certificates that some endpoint which is not gone presents or last presented (still found; the summary's definition)" }
         - { name: q, in: query, schema: { type: string, maxLength: 200 } }
         - { name: scope_id, in: query, schema: { type: string, format: uuid } }
       responses:

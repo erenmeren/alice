@@ -79,6 +79,24 @@ func TestCertificateFilters(t *testing.T) {
 	// Composed with each other, the status and the keyset.
 	require.Equal(t, []string{fp(soon)}, list(CertificateFilter{Query: "example", ExpiringBy: now.AddDate(0, 0, 30), SelfSigned: &no}))
 	require.Equal(t, []string{fp(soon), fp(selfSigned)}, list(CertificateFilter{Status: StatusUnmanaged, Expired: &no, Limit: 2}))
+	// Current: some endpoint that is not gone presents or last presented it (the summary's and the alerts' definition
+	// of "still found"); the scope narrows it to that scope's endpoints.
+	require.Equal(t, []string{fp(expired), fp(soon), fp(selfSigned), fp(later)}, list(CertificateFilter{Current: true}))
+	_, err := p.App.Exec(bg(), `UPDATE discovery_endpoints SET state = 'gone', gone_since = now() WHERE fingerprint_sha256 = $1`, fp(later))
+	require.NoError(t, err)
+	other := p.scope(t, "other")
+	p.ingestScan(t, other, now, presented(t, ep("10.0.1.1", 443, ""), soon))
+	_, err = p.App.Exec(bg(), `UPDATE discovery_endpoints SET state = 'gone', gone_since = now() WHERE scope_id = $1`, scope)
+	require.NoError(t, err)
+	_, err = p.App.Exec(bg(), `UPDATE discovery_endpoints SET state = 'unreachable', last_error_code = 'timeout', gone_since = NULL WHERE fingerprint_sha256 = $1`, fp(selfSigned))
+	require.NoError(t, err)
+	require.Equal(t, []string{fp(soon), fp(selfSigned)}, list(CertificateFilter{Current: true}), "an unreachable endpoint is not gone")
+	require.Equal(t, []string{fp(expired), fp(soon), fp(selfSigned), fp(later)}, list(CertificateFilter{}), "without Current every leaf stays listed")
+	require.Equal(t, []string{fp(selfSigned)}, list(CertificateFilter{Current: true, ScopeID: scope}))
+	require.Equal(t, []string{fp(soon)}, list(CertificateFilter{Current: true, ScopeID: other, Status: StatusUnmanaged}))
+	_, err = p.App.Exec(bg(), `UPDATE discovery_endpoints SET state = 'present', last_error_code = '', gone_since = NULL WHERE scope_id = $1`, scope)
+	require.NoError(t, err)
+
 	first, err := ListCertificates(bg(), p.App, CertificateFilter{Now: now, Expired: &no, Limit: 1})
 	require.NoError(t, err)
 	require.Equal(t, []string{fp(selfSigned), fp(later)}, list(CertificateFilter{Expired: &no,
