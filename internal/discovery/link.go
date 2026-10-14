@@ -6,6 +6,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -64,14 +65,31 @@ type CertificateCursor struct {
 }
 
 // CertificateFilter selects leaf certificates: of one status ("" any), presented by an endpoint of one scope (uuid.Nil:
-// any), one fingerprint ("" any); after a cursor (nil: the first page); at most Limit (1..MaxPage, else MaxPage).
+// any), one fingerprint ("" any); whose subject CN or one of whose SANs contains Query (case-insensitive; "" any; LIKE
+// characters are literal); expired at Now or not (Expired; nil: either); not expired at Now and expiring by ExpiringBy
+// (zero: any); self-signed or not (SelfSigned; nil: either); after a cursor (nil: the first page); at most Limit
+// (1..MaxPage, else MaxPage). Now is required by Expired and ExpiringBy (ErrFilterNeedsNow).
 type CertificateFilter struct {
 	Status      string
 	ScopeID     uuid.UUID
 	Fingerprint string
+	Query       string
+	Expired     *bool
+	ExpiringBy  time.Time
+	SelfSigned  *bool
+	Now         time.Time
 	After       *CertificateCursor
 	Limit       int
 }
+
+// ErrFilterNeedsNow: a time filter of a certificate list was given without its reference time.
+var ErrFilterNeedsNow = errors.New("discovery: a time filter needs the reference time")
+
+// likeEscaper makes a text match itself in a LIKE pattern with ESCAPE '\'.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// containsPattern is the ILIKE pattern of "contains q", q taken literally.
+func containsPattern(q string) string { return "%" + likeEscaper.Replace(q) + "%" }
 
 func limit(n int) int {
 	if n < 1 || n > MaxPage {
@@ -104,8 +122,28 @@ func (q *query) whereSQL() string {
 
 // ListCertificates lists discovered leaf certificates soonest expiry first (index discovery_certificates_expiry).
 func ListCertificates(ctx context.Context, q db.Querier, f CertificateFilter) ([]CertificateRow, error) {
+	if (f.Expired != nil || !f.ExpiringBy.IsZero()) && f.Now.IsZero() {
+		return nil, ErrFilterNeedsNow
+	}
 	var in, out query
 	in.and("d.is_leaf")
+	if f.Query != "" {
+		pat := in.arg(containsPattern(f.Query))
+		in.and("(d.subject_cn ILIKE " + pat + ` ESCAPE '\' OR EXISTS (SELECT 1 FROM unnest(d.sans) AS s(n) WHERE s.n ILIKE ` + pat + ` ESCAPE '\'))`)
+	}
+	switch {
+	case f.Expired == nil:
+	case *f.Expired:
+		in.and("d.not_after < " + in.arg(f.Now) + "::timestamptz")
+	default:
+		in.and("d.not_after >= " + in.arg(f.Now) + "::timestamptz")
+	}
+	if !f.ExpiringBy.IsZero() {
+		in.and("d.not_after >= " + in.arg(f.Now) + "::timestamptz AND d.not_after <= " + in.arg(f.ExpiringBy) + "::timestamptz")
+	}
+	if f.SelfSigned != nil {
+		in.and("d.self_signed = " + in.arg(*f.SelfSigned))
+	}
 	scope := ""
 	if f.ScopeID != uuid.Nil {
 		scope = " AND e.scope_id = " + in.arg(f.ScopeID)

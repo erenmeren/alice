@@ -113,10 +113,23 @@ type pgPool interface {
 }
 
 // PGStore is the PostgreSQL Store (and the read side, retention and the scan creation the API uses).
-type PGStore struct{ db pgPool }
+type PGStore struct {
+	db       pgPool
+	onFinish FinishHook
+}
+
+// FinishHook runs inside FinishScan's transaction for the scan it ended (not for one that was already over); an error
+// rolls the end back. The discovery jobs write the discovery.scan.finished audit row with it.
+type FinishHook func(ctx context.Context, tx pgx.Tx, f Finish) error
 
 // NewStore returns the store over pool (production: the alice_app pool).
 func NewStore(pool pgPool) *PGStore { return &PGStore{db: pool} }
+
+// OnFinish sets the store's finish hook and returns the store.
+func (s *PGStore) OnFinish(h FinishHook) *PGStore {
+	s.onFinish = h
+	return s
+}
 
 var _ Store = (*PGStore)(nil)
 
@@ -297,11 +310,17 @@ WHERE last_scan_id = $1 AND state IN ('unreachable', 'no_tls') AND last_error_co
 				return wrap("count the missed endpoints", err)
 			}
 		}
-		if _, err := tx.Exec(ctx, `UPDATE discovery_scans SET state = $2, error_code = $3, finished_at = $4 WHERE id = $1 AND state IN ('queued', 'running')`,
-			f.ScanID, f.State, f.ErrorCode, f.Now); err != nil {
+		tag, err := tx.Exec(ctx, `UPDATE discovery_scans SET state = $2, error_code = $3, finished_at = $4 WHERE id = $1 AND state IN ('queued', 'running')`,
+			f.ScanID, f.State, f.ErrorCode, f.Now)
+		if err != nil {
 			return wrap("end the scan", err)
 		}
-		_, err := pruneScans(ctx, tx, f.ScopeID, f.Now)
+		if tag.RowsAffected() == 1 && s.onFinish != nil {
+			if err := s.onFinish(ctx, tx, f); err != nil {
+				return err
+			}
+		}
+		_, err = pruneScans(ctx, tx, f.ScopeID, f.Now)
 		return err
 	})
 }
