@@ -6,7 +6,7 @@ import { discoveryWorld, requests, track } from '../../test/discovery';
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderRoute } from '../../test/render';
 import { server } from '../../test/server';
-import { browserTimeZone, PREVIEW_DEBOUNCE_MS, timeZones } from './ScopeDialog';
+import { browserTimeZone, PREVIEW_DEBOUNCE_MS, PREVIEW_MAX_CHARS, timeZones } from './ScopeDialog';
 
 async function openAdd() {
   await renderRoute('/discovery?tab=scopes');
@@ -261,5 +261,144 @@ describe('the scope dialog', () => {
     expect(await within(dialog).findByText('ALC-SYS-0002')).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+});
+
+describe('the scope dialog size check (review round)', () => {
+  it('aborts the request it replaces and ignores its late answer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const seen = discoveryWorld({ scopes: [] });
+      let releaseFirst: () => void = () => {};
+      const firstGate = new Promise<void>((r) => (releaseFirst = r));
+      let firstAborted = false;
+      let calls = 0;
+      server.use(
+        http.post('/api/v1/discovery/scopes/preview', async ({ request }) => {
+          calls++;
+          if (calls === 1) {
+            request.signal.addEventListener('abort', () => (firstAborted = true));
+            await firstGate;
+            return HttpResponse.json(discoveryPreviewFixture({ addresses: 1, ports: 1, endpoints: 1 }));
+          }
+          return HttpResponse.json(discoveryPreviewFixture());
+        }),
+      );
+      track(seen);
+      const dialog = await openAdd();
+      fireEvent.change(field(dialog, /Addresses, ranges and host names/), { target: { value: '10.0.0.1' } });
+      await act(() => vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS + 50));
+      await waitFor(() => expect(calls).toBe(1));
+      // The form changes while the first size is on its way: that request is cancelled.
+      fireEvent.change(field(dialog, /Addresses, ranges and host names/), { target: { value: '10.0.0.0/22' } });
+      await waitFor(() => expect(firstAborted).toBe(true));
+      await act(() => vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS + 50));
+      expect(await within(dialog).findByText('This scope covers 1,024 addresses × 2 ports.')).toBeInTheDocument();
+      releaseFirst();
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      expect(within(dialog).queryByText('This scope covers 1 address × 1 port.')).not.toBeInTheDocument();
+      expect(within(dialog).getByTestId('scope-preview-live')).toHaveTextContent('This scope covers 1,024 addresses × 2 ports.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is busy while it asks, and its one live line changes only on an answer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      discoveryWorld({ scopes: [] });
+      server.use(http.post('/api/v1/discovery/scopes/preview', () => HttpResponse.json(discoveryPreviewFixture())));
+      const dialog = await openAdd();
+      const box = within(dialog).getByTestId('scope-preview');
+      const live = within(dialog).getByTestId('scope-preview-live');
+      expect(box).not.toHaveAttribute('aria-live');
+      expect(live).toHaveAttribute('aria-live', 'polite');
+      expect(live).toHaveTextContent('');
+      fireEvent.change(field(dialog, /Addresses, ranges and host names/), { target: { value: '10.0.0.0/22' } });
+      expect(box).toHaveAttribute('aria-busy', 'true');
+      expect(live).toHaveTextContent('');
+      await act(() => vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS + 50));
+      await waitFor(() => expect(live).toHaveTextContent('This scope covers 1,024 addresses × 2 ports.'));
+      expect(box).toHaveAttribute('aria-busy', 'false');
+      // Typing again: busy, and the live line keeps the last answer until the next one.
+      fireEvent.change(field(dialog, /Addresses, ranges and host names/), { target: { value: '10.0.0.0/23' } });
+      expect(box).toHaveAttribute('aria-busy', 'true');
+      expect(live).toHaveTextContent('This scope covers 1,024 addresses × 2 ports.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says a refused size check (429) updates in a minute, and asks again then', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      discoveryWorld({ scopes: [] });
+      let calls = 0;
+      server.use(
+        http.post('/api/v1/discovery/scopes/preview', () => {
+          calls++;
+          if (calls === 1) {
+            const r = errorResponse(429, 'ALC-SYS-0005', 'rate.limited', { retryable: true });
+            r.headers.set('Retry-After', '60');
+            return r;
+          }
+          return HttpResponse.json(discoveryPreviewFixture());
+        }),
+      );
+      const dialog = await openAdd();
+      fireEvent.change(field(dialog, /Addresses, ranges and host names/), { target: { value: '10.0.0.0/22' } });
+      await act(() => vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS + 50));
+      expect(await within(dialog).findByText('Too many size checks; the size updates in a minute.')).toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(60_000 + PREVIEW_DEBOUNCE_MS + 50));
+      expect(await within(dialog).findByText('This scope covers 1,024 addresses × 2 ports.')).toBeInTheDocument();
+      expect(calls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('asks nothing for more than 256 lines and says so at once', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const seen = discoveryWorld({ scopes: [] });
+      const dialog = await openAdd();
+      fireEvent.change(field(dialog, /Addresses, ranges and host names/), { target: { value: Array.from({ length: 257 }, (_, i) => `10.0.${i >> 8}.${i & 255}`).join('\n') } });
+      expect(within(dialog).getByText('At most 256 lines.')).toBeInTheDocument();
+      fireEvent.change(field(dialog, /Leave out/), { target: { value: 'x'.repeat(PREVIEW_MAX_CHARS) } });
+      await act(() => vi.advanceTimersByTimeAsync(PREVIEW_DEBOUNCE_MS * 2));
+      expect(requests(seen, 'POST', '/api/v1/discovery/scopes/preview')).toHaveLength(0);
+      fireEvent.change(field(dialog, /Addresses, ranges and host names/), { target: { value: '10.0.0.1' } });
+      expect(within(dialog).getByText('At most 256 lines.')).toBeInTheDocument();
+      expect(within(dialog).getByText('Enter the addresses and ports to see the size.')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('puts a time zone refusal on the zone and the window rule on both times', async () => {
+    discoveryWorld({ scopes: [] });
+    server.use(
+      http.post('/api/v1/discovery/scopes/preview', () => HttpResponse.json(discoveryPreviewFixture())),
+      http.post('/api/v1/discovery/scopes', () => errorResponse(422, 'ALC-DSC-0009', 'discovery.schedule_invalid', { params: { field: 'window_tz' } })),
+    );
+    const dialog = await openAdd();
+    await userEvent.type(field(dialog, 'Name'), 'Lab');
+    await userEvent.type(field(dialog, /Addresses, ranges and host names/), '10.0.0.1');
+    fireEvent.change(field(dialog, 'Scan every (hours)'), { target: { value: '6' } });
+    await userEvent.click(within(dialog).getByRole('checkbox', { name: 'Only scan during a daily time window' }));
+    const start = within(dialog).getByLabelText('From');
+    const end = within(dialog).getByLabelText('Until');
+    fireEvent.change(end, { target: { value: '01:00' } });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save scope' }));
+    const group = within(dialog).getByRole('group', { name: 'Daily time window' });
+    expect(group).toHaveAccessibleDescription('Enter a start and an end time that differ.');
+    expect(start).toHaveAttribute('aria-invalid', 'true');
+    expect(end).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.change(end, { target: { value: '05:00' } });
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save scope' }));
+    const zone = within(dialog).getByRole('combobox', { name: 'Time zone' });
+    await waitFor(() => expect(zone).toHaveAccessibleDescription(/The schedule of this scope is not valid/));
+    expect(zone).toHaveAttribute('aria-invalid', 'true');
+    expect(start).not.toHaveAttribute('aria-invalid', 'true');
   });
 });

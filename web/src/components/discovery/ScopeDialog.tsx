@@ -1,6 +1,6 @@
 import { Button, Checkbox, NativeSelect, NumberInput, Stack, Switch, TextInput, Textarea } from '@mantine/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isApiError } from '../../api/client';
 import {
@@ -35,7 +35,11 @@ import classes from './discovery.module.css';
 import { formatNumber } from './shared';
 
 // How long the form waits after the last keystroke before it asks for the size again.
-export const PREVIEW_DEBOUNCE_MS = 500;
+export const PREVIEW_DEBOUNCE_MS = 800;
+// A form larger than this is not sent for its size (the server refuses it anyway); its own problem is shown at once.
+export const PREVIEW_MAX_CHARS = 70_000;
+// The wait after a refused size check (429) when the server sends no Retry-After.
+const PREVIEW_RETRY_S = 60;
 
 export function browserTimeZone(): string {
   try {
@@ -62,7 +66,7 @@ export function timeZones(current: string): string[] {
 const asInt = (v: number | string) => (typeof v === 'number' ? v : v.trim() === '' ? 0 : Number(v));
 const sameList = (a: readonly (string | number)[], b: readonly (string | number)[]) => a.length === b.length && a.every((x, i) => x === b[i]);
 
-type Preview = { kind: 'idle' } | { kind: 'checking' } | { kind: 'ok'; data: DiscoveryPreview } | { kind: 'error'; error: unknown } | { kind: 'stepup' };
+type Preview = { kind: 'idle' } | { kind: 'checking' } | { kind: 'ok'; data: DiscoveryPreview } | { kind: 'error'; error: unknown } | { kind: 'stepup' } | { kind: 'limited' };
 
 // ScopeDialog adds or changes a scan scope (an Administrator, with a fresh step-up). While the person types, the scope's
 // size is asked from the server (debounced, the previous request cancelled): no name is looked up and nothing is dialed
@@ -94,23 +98,44 @@ export function ScopeDialog({ scope, scanningEnabled, onClose, onSaved }: { scop
   const portParse = parsePorts(ports);
   const sniList = lines(sni);
   const exclusionList = lines(exclusions);
-  const sizeBody: DiscoveryScopePatch | null = entryList.length > 0 && portParse.problem === '' ? { entries: entryList, ports: portParse.ports, sni_names: sniList, exclusions: exclusionList } : null;
+  const tooLarge = entryList.length > MAX_ENTRIES || entries.length + sni.length + exclusions.length > PREVIEW_MAX_CHARS;
+  const sizeBody: DiscoveryScopePatch | null =
+    entryList.length > 0 && !tooLarge && portParse.problem === '' ? { entries: entryList, ports: portParse.ports, sni_names: sniList, exclusions: exclusionList } : null;
   const sizeKey = sizeBody ? JSON.stringify(sizeBody) : '';
 
   // The answer for the size now typed; while it is on its way (the pause after typing included) it is "checking".
+  // announced is the last real answer (never "checking"): the one live region reads it, so it changes only on an answer.
   const [answer, setAnswer] = useState<{ key: string; result: Preview }>({ key: '', result: { kind: 'idle' } });
+  const [announced, setAnnounced] = useState<Preview>({ kind: 'idle' });
+  const answered = (key: string, result: Preview) => {
+    setAnswer({ key, result });
+    setAnnounced(result);
+  };
   const preview: Preview = !sizeKey ? { kind: 'idle' } : answer.key === sizeKey ? answer.result : { kind: 'checking' };
+  // A refused size check (429) is asked again once the server's wait is over.
+  const [retry, setRetry] = useState(0);
+  const retryTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
   useEffect(() => {
     if (!sizeKey) return;
     const body = JSON.parse(sizeKey) as DiscoveryScopePatch;
     const ctl = new AbortController();
     const timer = window.setTimeout(() => {
       previewDiscoveryScope(body, ctl.signal).then(
-        (data) => setAnswer({ key: sizeKey, result: { kind: 'ok', data } }),
+        (data) => {
+          // An answer that arrives after the form changed is not this form's size.
+          if (!ctl.signal.aborted) answered(sizeKey, { kind: 'ok', data });
+        },
         (error: unknown) => {
           if (ctl.signal.aborted) return;
+          if (isApiError(error) && error.status === 429) {
+            answered(sizeKey, { kind: 'limited' });
+            window.clearTimeout(retryTimer.current);
+            retryTimer.current = window.setTimeout(() => setRetry((n) => n + 1), (error.retryAfter ?? PREVIEW_RETRY_S) * 1000);
+            return;
+          }
           // The size is never worth a code prompt while someone types: it waits for a click.
-          setAnswer({ key: sizeKey, result: isApiError(error, 'auth.stepup_required') ? { kind: 'stepup' } : { kind: 'error', error } });
+          answered(sizeKey, isApiError(error, 'auth.stepup_required') ? { kind: 'stepup' } : { kind: 'error', error });
         },
       );
     }, PREVIEW_DEBOUNCE_MS);
@@ -118,7 +143,7 @@ export function ScopeDialog({ scope, scanningEnabled, onClose, onSaved }: { scop
       window.clearTimeout(timer);
       ctl.abort();
     };
-  }, [sizeKey]);
+  }, [sizeKey, retry]);
 
   const previewWithStepUp = async () => {
     const key = sizeKey;
@@ -126,9 +151,9 @@ export function ScopeDialog({ scope, scanningEnabled, onClose, onSaved }: { scop
     setAnswer({ key, result: { kind: 'checking' } });
     try {
       const data = await run(() => previewDiscoveryScope(JSON.parse(key) as DiscoveryScopePatch));
-      setAnswer({ key, result: { kind: 'ok', data } });
+      answered(key, { kind: 'ok', data });
     } catch (error) {
-      setAnswer({ key, result: { kind: 'error', error } });
+      answered(key, { kind: 'error', error });
     }
   };
 
@@ -209,11 +234,11 @@ export function ScopeDialog({ scope, scanningEnabled, onClose, onSaved }: { scop
     const p = elementProblem(error);
     if (!p) return {};
     const title = reasonTitle(t, i18n, p.reason);
-    const field = p.field === 'window_tz' ? 'window' : p.field;
-    return { [field || 'entries']: p.index === null ? title : t('discovery.scope.line', { line: p.index + 1, problem: title }) };
+    return { [p.field || 'entries']: p.index === null ? title : t('discovery.scope.line', { line: p.index + 1, problem: title }) };
   };
   const previewError = preview.kind === 'error' ? preview.error : null;
-  const fieldErrors = { ...lineError(previewError), ...fieldErrorsOf(save.error, t, i18n), ...lineError(save.error), ...local };
+  const live: Record<string, string> = tooLarge ? { entries: t('discovery.scope.entriesTooMany', { max: MAX_ENTRIES }) } : {};
+  const fieldErrors = { ...lineError(previewError), ...fieldErrorsOf(save.error, t, i18n), ...lineError(save.error), ...live, ...local };
   const title = scope ? t('discovery.scope.editTitle', { name: scope.name }) : t('discovery.scope.addTitle');
 
   return (
@@ -265,7 +290,7 @@ export function ScopeDialog({ scope, scanningEnabled, onClose, onSaved }: { scop
             translate="no"
             error={fieldErrors.exclusions}
           />
-          <SizePreview preview={preview} onStepUp={() => void previewWithStepUp()} lang={i18n.language} />
+          <SizePreview preview={preview} announced={announced} onStepUp={() => void previewWithStepUp()} lang={i18n.language} />
           <div className={classes.windowRow}>
             <NumberInput
               label={t('discovery.scope.rate')}
@@ -303,12 +328,22 @@ export function ScopeDialog({ scope, scanningEnabled, onClose, onSaved }: { scop
           <Checkbox label={t('discovery.scope.useWindow')} checked={useWindow} onChange={(e) => setUseWindow(e.currentTarget.checked)} />
           {useWindow && (
             <Stack gap="xs">
-              <div className={classes.windowRow}>
-                <TextInput type="time" label={t('discovery.scope.windowStart')} value={windowStart} onChange={(e) => setWindowStart(e.currentTarget.value)} />
-                <TextInput type="time" label={t('discovery.scope.windowEnd')} value={windowEnd} onChange={(e) => setWindowEnd(e.currentTarget.value)} error={fieldErrors.window} />
-              </div>
-              <NativeSelect label={t('discovery.scope.windowTz')} value={tz} onChange={(e) => setTz(e.currentTarget.value)} data={zones} />
-              <p className={classes.help}>{t('discovery.scope.windowHelp')}</p>
+              <fieldset className={classes.fieldset} aria-describedby={fieldErrors.window ? 'scope-window-error' : 'scope-window-help'}>
+                <legend className={classes.legend}>{t('discovery.scope.windowLegend')}</legend>
+                <div className={classes.windowRow}>
+                  <TextInput type="time" label={t('discovery.scope.windowStart')} value={windowStart} onChange={(e) => setWindowStart(e.currentTarget.value)} error={!!fieldErrors.window} />
+                  <TextInput type="time" label={t('discovery.scope.windowEnd')} value={windowEnd} onChange={(e) => setWindowEnd(e.currentTarget.value)} error={!!fieldErrors.window} />
+                </div>
+                {fieldErrors.window && (
+                  <p className={classes.fieldError} id="scope-window-error">
+                    {fieldErrors.window}
+                  </p>
+                )}
+              </fieldset>
+              <NativeSelect label={t('discovery.scope.windowTz')} value={tz} onChange={(e) => setTz(e.currentTarget.value)} data={zones} error={fieldErrors.window_tz} />
+              <p className={classes.help} id="scope-window-help">
+                {t('discovery.scope.windowHelp')}
+              </p>
             </Stack>
           )}
           <Switch label={t('discovery.scope.alert')} description={t('discovery.scope.alertHelp')} checked={alert} onChange={(e) => setAlert(e.currentTarget.checked)} />
@@ -328,40 +363,53 @@ export function ScopeDialog({ scope, scanningEnabled, onClose, onSaved }: { scop
   );
 }
 
-// SizePreview is the scope's size as the server counts it, and the ranges Alice always leaves out of it.
-function SizePreview({ preview, onStepUp, lang }: { preview: Preview; onStepUp: () => void; lang: string }) {
+// SizePreview is the scope's size as the server counts it, and the ranges Alice always leaves out of it. The box is
+// aria-busy while a size is asked; one live line holds the last answer, so a screen reader hears each answer once and
+// nothing while the person types.
+function SizePreview({ preview, announced, onStepUp, lang }: { preview: Preview; announced: Preview; onStepUp: () => void; lang: string }) {
   const { t, i18n } = useTranslation();
   const n = (v: number) => formatNumber(v, lang);
+  const main = (p: Preview): string => {
+    switch (p.kind) {
+      case 'ok':
+        return t('discovery.scope.preview.covers', {
+          addresses:
+            p.data.hostnames > 0
+              ? t('discovery.scope.preview.withHosts', {
+                  addresses: t('discovery.scope.preview.addresses', { count: p.data.addresses, n: n(p.data.addresses) }),
+                  hostnames: t('discovery.scope.preview.hostnames', { count: p.data.hostnames, n: n(p.data.hostnames) }),
+                })
+              : t('discovery.scope.preview.addresses', { count: p.data.addresses, n: n(p.data.addresses) }),
+          ports: t('discovery.scope.preview.ports', { count: p.data.ports, n: n(p.data.ports) }),
+        });
+      case 'stepup':
+        return t('discovery.scope.preview.stepUp');
+      case 'limited':
+        return t('discovery.scope.preview.tooMany');
+      case 'error':
+        return isApiError(p.error) ? reasonTitle(t, i18n, p.error.reason) : t('ui.unexpectedError');
+      default:
+        return '';
+    }
+  };
   return (
-    <section className={classes.preview} aria-live="polite" aria-labelledby="scope-size-title" data-testid="scope-preview">
+    <section className={classes.preview} aria-busy={preview.kind === 'checking'} aria-labelledby="scope-size-title" data-testid="scope-preview">
       <h3 className={classes.previewTitle} id="scope-size-title">
         {t('discovery.scope.preview.title')}
       </h3>
       {preview.kind === 'idle' && <p className={classes.previewLine}>{t('discovery.scope.preview.waiting')}</p>}
       {preview.kind === 'checking' && <p className={classes.previewLine}>{t('discovery.scope.preview.checking')}</p>}
+      {/* The one live line: the last answer. It changes when an answer arrives, never while the person types. */}
+      <p aria-live="polite" data-testid="scope-preview-live" className={announced.kind === 'ok' ? classes.previewMain : classes.previewLine}>
+        {preview.kind === 'idle' ? '' : main(announced)}
+      </p>
       {preview.kind === 'stepup' && (
-        <>
-          <p className={classes.previewLine}>{t('discovery.scope.preview.stepUp')}</p>
-          <Button size="xs" variant="default" w="fit-content" onClick={onStepUp}>
-            {t('discovery.scope.preview.stepUpButton')}
-          </Button>
-        </>
+        <Button size="xs" variant="default" w="fit-content" onClick={onStepUp}>
+          {t('discovery.scope.preview.stepUpButton')}
+        </Button>
       )}
-      {preview.kind === 'error' && <p className={classes.previewLine}>{isApiError(preview.error) ? reasonTitle(t, i18n, preview.error.reason) : t('ui.unexpectedError')}</p>}
       {preview.kind === 'ok' && (
         <>
-          <p className={classes.previewMain}>
-            {t('discovery.scope.preview.covers', {
-              addresses:
-                preview.data.hostnames > 0
-                  ? t('discovery.scope.preview.withHosts', {
-                      addresses: t('discovery.scope.preview.addresses', { count: preview.data.addresses, n: n(preview.data.addresses) }),
-                      hostnames: t('discovery.scope.preview.hostnames', { count: preview.data.hostnames, n: n(preview.data.hostnames) }),
-                    })
-                  : t('discovery.scope.preview.addresses', { count: preview.data.addresses, n: n(preview.data.addresses) }),
-              ports: t('discovery.scope.preview.ports', { count: preview.data.ports, n: n(preview.data.ports) }),
-            })}
-          </p>
           <p className={classes.previewLine}>{t('discovery.scope.preview.endpoints', { count: preview.data.endpoints, n: n(preview.data.endpoints), max: n(MAX_ENDPOINTS) })}</p>
           {preview.data.excluded_addresses > 0 && <p className={classes.previewLine}>{t('discovery.scope.preview.excluded', { count: preview.data.excluded_addresses, n: n(preview.data.excluded_addresses) })}</p>}
           {preview.data.builtin_exclusions.length > 0 && (

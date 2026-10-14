@@ -3654,8 +3654,10 @@
         "excluded_other": "{{n}} addresses are left out by the exclusions.",
         "builtin": "Alice always leaves these out of the ranges here:",
         "stepUp": "Confirm it is you to see the size.",
-        "stepUpButton": "Show the size"
-      }
+        "stepUpButton": "Show the size",
+        "tooMany": "Too many size checks; the size updates in a minute."
+      },
+      "windowLegend": "Daily time window"
     },
     "delete": {
       "title": "Delete {{name}}?",

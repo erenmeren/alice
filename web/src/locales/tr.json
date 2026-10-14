@@ -3654,8 +3654,10 @@
         "excluded_other": "Hariç tutulanlar {{n}} adresi dışarıda bırakıyor.",
         "builtin": "Alice buradaki aralıklardan bunları her zaman dışarıda bırakır:",
         "stepUp": "Büyüklüğü görmek için kimliğinizi doğrulayın.",
-        "stepUpButton": "Büyüklüğü göster"
-      }
+        "stepUpButton": "Büyüklüğü göster",
+        "tooMany": "Çok fazla büyüklük denetimi yapıldı; büyüklük bir dakika içinde güncellenir."
+      },
+      "windowLegend": "Günlük zaman aralığı"
     },
     "delete": {
       "title": "{{name}} silinsin mi?",
