@@ -1316,3 +1316,208 @@ export async function seedDashboard(request: APIRequestContext): Promise<SeedAns
   expect(res.ok(), `POST /test/seed/dashboard: ${await res.text()}`).toBe(true);
   return (await res.json()) as SeedAnswer;
 }
+
+// --- Phase 11: network discovery against the fake TLS fleet (compose service fakefleet, cmd/alice-fakefleet) ---
+
+// FLEET is the fake fleet on its own internal compose network "fleet" (deploy/docker-compose.e2e.yml): Alice is at
+// 10.89.0.2 there, every server kind listens on 10.89.0.10 at its own port (fakefleet.DefaultPorts) and is named
+// <kind>.fleet.alice-e2e.test. The journeys allow exactly FLEET.network in the discovery settings.
+export const FLEET = {
+  network: '10.89.0.0/24',
+  address: '10.89.0.10',
+  alice: '10.89.0.2',
+  domain: 'fleet.alice-e2e.test',
+  ports: {
+    valid: 443,
+    expired: 9401,
+    'not-yet-valid': 9402,
+    'self-signed': 9403,
+    'wrong-order': 9404,
+    'missing-intermediate': 9405,
+    sni: 9406,
+    tls10: 9407,
+    tls12: 9408,
+    tls13: 9409,
+    'rsa-kex': 9410,
+    sha1: 9411,
+    'slow-loris': 9412,
+    'giant-chain': 9413,
+    'huge-chain': 9414,
+    reset: 9415,
+    plaintext: 9416,
+    'many-sni': 9417,
+    malformed: 9418,
+  },
+} as const;
+
+export type FleetKind = keyof typeof FLEET.ports;
+
+// fleetHost is the DNS name of a kind's server: the name its default certificate carries.
+export function fleetHost(kind: FleetKind): string {
+  return `${kind}.${FLEET.domain}`;
+}
+
+// fleetCtl runs "alice-fakefleet ctl ..." in the e2e stack's service "fakefleet" (the same alice-e2e* project guard as
+// targetExec: never the owner stack) and parses the one JSON value it prints.
+export function fleetCtl<T = unknown>(...args: string[]): T {
+  return JSON.parse(composeExec('fakefleet', ['/alice-fakefleet', 'ctl', ...args])) as T;
+}
+
+// FleetAccess is one connection the fleet accepted (fakefleet.Access).
+export interface FleetAccess {
+  kind: FleetKind;
+  local: string;
+  remote: string;
+  sni: string;
+  handshake: boolean;
+  app_bytes: number;
+  closed: boolean;
+}
+
+// fleetLog is the fleet's access log since its last clear, once every open connection has ended (--settle: the fleet
+// waits until it is idle, at most 10 s), so a count read after a scan is final.
+export function fleetLog(): FleetAccess[] {
+  return fleetCtl<FleetAccess[]>('log', '--settle');
+}
+
+// fleetCounters counts the connections each kind accepted since the last clear and the application bytes any client
+// sent after a completed handshake (a discovery probe must never send one).
+export function fleetCounters(): { accepted: Partial<Record<FleetKind, number>>; app_bytes_after_handshake: number; active: number } {
+  return fleetCtl('counters');
+}
+
+// fleetReset empties the fleet's log and counters. POST /test/reset resets only Alice, so every Phase 11 test calls
+// this too; the fleet's certificates stay those it generated when it started.
+export function fleetReset(): void {
+  fleetCtl('clear-log');
+}
+
+// fleetValidPair is the valid server's chain (leaf first) and the leaf's private key, generated when the fleet started:
+// what a journey stores in Alice's inventory so that the certificate the fleet presents is known to Alice.
+export function fleetValidPair(): { certificate_pem: string; private_key_pem: string } {
+  return fleetCtl('valid-pair');
+}
+
+// DiscoveryScopeBody is the body of POST /api/v1/discovery/scopes.
+export interface DiscoveryScopeBody {
+  name: string;
+  entries: string[];
+  ports: number[];
+  sni_names?: string[];
+  exclusions?: string[];
+  enabled?: boolean;
+  schedule_hours?: number;
+  window_start?: string;
+  window_end?: string;
+  window_tz?: string;
+  alert_on_expiry?: boolean;
+  rate_per_sec?: number;
+  concurrency?: number;
+}
+
+export interface DiscoveryScanView {
+  id: string;
+  scope_id: string;
+  scope_name: string;
+  trigger: 'manual' | 'schedule';
+  state: 'queued' | 'running' | 'done' | 'cancelled' | 'timed_out' | 'failed';
+  cancel_requested: boolean;
+  endpoints_total: number;
+  endpoints_answered: number;
+  endpoints_failed: number;
+  endpoints_excluded: number;
+  certificates_new: number;
+  error_code: string | null;
+  error_reason: string | null;
+}
+
+export interface DiscoveredEndpointView {
+  id: string;
+  address: string;
+  port: number;
+  sni: string;
+  host: string;
+  fingerprint_sha256: string | null;
+  tls_version: string;
+  cipher: string;
+  state: string;
+  last_error_code: string;
+}
+
+export interface DiscoveredCertificateView {
+  fingerprint_sha256: string;
+  subject_cn: string;
+  sans: string[];
+  not_after: string;
+  expired: boolean;
+  self_signed: boolean;
+  status: 'unmanaged' | 'managed' | 'known';
+  managed_certificate_id: string | null;
+  seen_on_count: number;
+  endpoints?: DiscoveredEndpointView[];
+}
+
+async function discoveryJson<T>(res: APIResponse, status?: number): Promise<T> {
+  const text = await res.text();
+  if (status !== undefined) expect(res.status(), text).toBe(status);
+  else expect(res.ok(), `${res.status()} ${text}`).toBe(true);
+  return (text ? JSON.parse(text) : {}) as T;
+}
+
+// discoverySettings sets the allowed scan networks (and the global exclusions) as an Administrator. The step-up must be
+// fresh (api.stepUp).
+export async function discoverySettings(api: Api, allowed: string[] = [FLEET.network], exclusions: string[] = []): Promise<void> {
+  await discoveryJson(await api.put('/api/v1/discovery/settings', { allowed_networks: allowed, global_exclusions: exclusions, retention_days: 90 }));
+}
+
+// discoveryScope creates a scope as an Administrator (fresh step-up) and returns its id.
+export async function discoveryScope(api: Api, body: DiscoveryScopeBody): Promise<string> {
+  return (await discoveryJson<{ id: string }>(await api.post('/api/v1/discovery/scopes', body), 201)).id;
+}
+
+// fleetScope is a scope of the fleet's address and the ports of kinds.
+export function fleetScope(name: string, kinds: FleetKind[], extra: Partial<DiscoveryScopeBody> = {}): DiscoveryScopeBody {
+  return { name, entries: [FLEET.address], ports: kinds.map((k) => FLEET.ports[k]), ...extra };
+}
+
+// discoveryStart starts a scan of the scope (Operator or Administrator) and returns it (queued: the e2e build runs jobs
+// only when a test drains them).
+export async function discoveryStart(api: Api, scopeId: string): Promise<DiscoveryScanView> {
+  return discoveryJson<DiscoveryScanView>(await api.post(`/api/v1/discovery/scopes/${scopeId}/scans`), 202);
+}
+
+export async function discoveryScan(api: Api, scanId: string): Promise<DiscoveryScanView> {
+  return discoveryJson<DiscoveryScanView>(await api.get(`/api/v1/discovery/scans/${scanId}`));
+}
+
+const SCAN_OVER = ['done', 'cancelled', 'timed_out', 'failed'];
+
+// discoveryWait runs due jobs until the scan has ended and returns it. The scan runs inside the drain (the e2e build
+// has no job workers), so this waits on the scan's state, never on time.
+export async function discoveryWait(api: Api, request: APIRequestContext, scanId: string): Promise<DiscoveryScanView> {
+  let scan: DiscoveryScanView | undefined;
+  await drainUntil(request, async () => {
+    scan = await discoveryScan(api, scanId);
+    expect(SCAN_OVER, `scan ${scanId} has ended`).toContain(scan.state);
+  });
+  return scan!;
+}
+
+// discoveryScanNow starts a scan of the scope and runs it to its end.
+export async function discoveryScanNow(api: Api, request: APIRequestContext, scopeId: string): Promise<DiscoveryScanView> {
+  const scan = await discoveryStart(api, scopeId);
+  return discoveryWait(api, request, scan.id);
+}
+
+// discoveredCertificates reads every discovered leaf for the query (one page of at most 200 is enough here).
+export async function discoveredCertificates(api: Api, query = ''): Promise<DiscoveredCertificateView[]> {
+  return (await discoveryJson<{ items: DiscoveredCertificateView[] }>(await api.get(`/api/v1/discovery/certificates?limit=200${query ? `&${query}` : ''}`))).items;
+}
+
+export async function discoveredEndpoints(api: Api, scopeId: string): Promise<DiscoveredEndpointView[]> {
+  return (await discoveryJson<{ items: DiscoveredEndpointView[] }>(await api.get(`/api/v1/discovery/endpoints?scope_id=${scopeId}&limit=200`))).items;
+}
+
+export async function discoverySummary(api: Api): Promise<{ unmanaged_total: number; unmanaged_expiring_30d: number; scopes: number }> {
+  return discoveryJson(await api.get('/api/v1/discovery/summary'));
+}
