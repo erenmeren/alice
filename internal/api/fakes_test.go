@@ -1305,6 +1305,7 @@ type fakeReports struct {
 	AttentionFn          func(ctx context.Context, v reports.Viewer) ([]reports.Condition, error)
 	ExportCertificatesFn func(ctx context.Context, a audit.Actor, f inventory.CertificateFilter, w io.Writer) (int, error)
 	ExportSSHKeysFn      func(ctx context.Context, a audit.Actor, f inventory.KeyFilter, w io.Writer) (int, error)
+	ExportRowsFn         func(ctx context.Context, a audit.Actor, x reports.RowExport, w io.Writer) (int, error)
 	ViewsFn              func(ctx context.Context, userID uuid.UUID, page string) ([]reports.View, error)
 	CreateViewFn         func(ctx context.Context, userID uuid.UUID, page, name string, query map[string]string) (reports.View, error)
 	DeleteViewFn         func(ctx context.Context, userID, id uuid.UUID) error
@@ -1371,6 +1372,14 @@ func (f *fakeReports) ExportSSHKeys(ctx context.Context, a audit.Actor, fl inven
 	f.record()
 	if f.ExportSSHKeysFn != nil {
 		return f.ExportSSHKeysFn(ctx, a, fl, w)
+	}
+	return 0, errNotConfigured
+}
+
+func (f *fakeReports) ExportRows(ctx context.Context, a audit.Actor, x reports.RowExport, w io.Writer) (int, error) {
+	f.record()
+	if f.ExportRowsFn != nil {
+		return f.ExportRowsFn(ctx, a, x, w)
 	}
 	return 0, errNotConfigured
 }

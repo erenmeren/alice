@@ -60,6 +60,7 @@ func testDeps(t *testing.T, health error) Deps {
 		License:   &fakeLicense{},
 		Inventory: &fakeInventory{},
 		ACME:      &fakeACME{},
+		Discovery: &fakeDiscovery{},
 		Jobs:      &fakeJobs{},
 		Providers: fakeProviders{},
 		SSO:       newFakeSSO(), // the public OIDC routes answer as with no provider configured (C-s4-04)

@@ -4022,6 +4022,385 @@ paths:
         "422": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/summary:
+    get:
+      operationId: getDiscoverySummary
+      summary: The network discovery metric of the Overview
+      description: >-
+        Unmanaged certificates (leaf certificates Alice has no record of) that an endpoint which is not gone presents or
+        last presented, how many of them expire within 30 days (not expired yet), the scan scopes and when a scan last
+        finished. Index-backed counts. discovery.view: every role in a browser; an API token needs the operate scope (read
+        tokens never read the network map).
+      x-permission: discovery.view
+      responses:
+        "200":
+          description: The summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoverySummary" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/scopes:
+    get:
+      operationId: listDiscoveryScopes
+      summary: Scan scopes, oldest first, in pages
+      description: discovery.view (an API token needs the operate scope).
+      x-permission: discovery.view
+      parameters:
+        - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScopePage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createDiscoveryScope
+      summary: Define a scan scope (nothing is scanned until a scan is started)
+      description: >-
+        Validated against the settings at save time: every address and range must lie inside the allowed scan networks
+        (none set: 422 ALC-DSC-0002), and is refused when every address of it is one Alice never scans or is excluded;
+        sizes (422 ALC-DSC-0001), entries, ports, SNI names, rate and concurrency (422 ALC-DSC-0003), the schedule (422
+        ALC-DSC-0009), the name (409 ALC-DSC-0011). Every host name is looked up once with the system resolver (5 seconds
+        each): a name with no address is 422 ALC-DSC-0010, which names the entry (params field and index) and never an
+        address. The answer's ETag is the scope's version. An Administrator's browser session with a fresh step-up, never an
+        API token; at most 30 a minute per user (with PATCH and the preview). Works while the license is locked.
+      x-permission: discovery.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiscoveryScopeCreate" }
+      responses:
+        "201":
+          description: The scope
+          headers:
+            Location: { schema: { type: string } }
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScope" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/scopes/preview:
+    post:
+      operationId: previewDiscoveryScope
+      summary: The size of a scope as typed (no name is looked up, nothing is dialed, nothing is stored)
+      description: >-
+        The body of a new scope (name optional). Answers the addresses of the address and range entries, those of them the
+        exclusions remove, the host names (each counted as one address), ports, SNI names, the endpoints of one scan and the
+        built-in exclusions the ranges overlap. The refusals of a save except ALC-DSC-0010 and ALC-DSC-0011. An
+        Administrator's browser session with a fresh step-up; at most 30 a minute per user.
+      x-permission: discovery.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiscoveryScopePatch" }
+      responses:
+        "200":
+          description: The size
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryPreview" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/scopes/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getDiscoveryScope
+      summary: One scan scope with its scan in flight and its last finished scan
+      description: The ETag is the scope's version. 404 ALC-DSC-0008 for a deleted or unknown scope.
+      x-permission: discovery.view
+      responses:
+        "200":
+          description: The scope
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScope" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateDiscoveryScope
+      summary: Change a scan scope (absent fields stay)
+      description: >-
+        If-Match (optional) must be the scope's version (412 otherwise). The four schedule fields are one group: sending any
+        of them replaces the whole schedule. The result is validated like a new scope; only the host names it adds are looked
+        up. Endpoints that the changed scope no longer covers are marked gone at once; switching the scope off asks its scan
+        in flight to stop. Recorded as discovery.scope.updated. An Administrator's browser session with a fresh step-up; at
+        most 30 a minute per user. Works while the license is locked.
+      x-permission: discovery.manage
+      parameters:
+        - { name: If-Match, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiscoveryScopePatch" }
+      responses:
+        "200":
+          description: The scope
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScope" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteDiscoveryScope
+      summary: Delete a scan scope (its name is free again; its scan in flight is asked to stop; retention removes its endpoints)
+      description: >-
+        If-Match (optional) must be the scope's version. Recorded as discovery.scope.deleted. An Administrator's browser
+        session with a fresh step-up. Works while the license is locked.
+      x-permission: discovery.manage
+      parameters:
+        - { name: If-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/scopes/{id}/scans:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: startDiscoveryScan
+      summary: Start a scan of the scope (the netdisco.scan job runs it)
+      description: >-
+        No body: a scan is only ever of a scope, never of addresses given here. The scan, its job and the
+        discovery.scan.started audit row are written together. 409 ALC-DSC-0004 while the scope has a scan queued or running,
+        409 ALC-DSC-0007 while two scans are queued or running anywhere (refused, not queued; retryable with Retry-After),
+        409 ALC-DSC-0013 for a scope that is switched off, 404 ALC-DSC-0008 for a deleted or unknown scope. At most 10 a
+        minute per user or token (with cancel). Refused with 403 ALC-LIC-0001 while the license is locked (nothing queued).
+      x-permission: discovery.operate
+      responses:
+        "202":
+          description: The scan (queued)
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScan" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/scans:
+    get:
+      operationId: listDiscoveryScans
+      summary: Scans, newest first, in pages
+      x-permission: discovery.view
+      parameters:
+        - { name: scope_id, in: query, schema: { type: string, format: uuid } }
+        - { name: state, in: query, schema: { type: string, enum: [queued, running, done, cancelled, timed_out, failed] } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScanPage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/scans/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getDiscoveryScan
+      summary: One scan
+      x-permission: discovery.view
+      responses:
+        "200":
+          description: The scan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScan" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/scans/{id}/cancel:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: cancelDiscoveryScan
+      summary: Ask a scan to stop
+      description: >-
+        No body. Sets the flag the scan's workers poll: the scan ends as cancelled (ALC-DSC-0005 as its error_code) with the
+        results found until then. Idempotent: a scan already asked to stop, or already over, is answered as it is and nothing
+        is recorded; the first request is recorded as discovery.scan.cancelled. At most 10 a minute per user or token (with
+        start). Works while the license is locked.
+      x-permission: discovery.operate
+      responses:
+        "200":
+          description: The scan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveryScan" }
+        "404": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/certificates:
+    get:
+      operationId: listDiscoveredCertificates
+      summary: Discovered leaf certificates, soonest expiry first, in pages
+      description: >-
+        status unmanaged (Alice has no record of this exact certificate), managed (Alice has it on a live location of a
+        live server), known (Alice has it, on no live location), or all (the default). q is a part of the subject CN or of a
+        SAN (case-insensitive; % and _ are ordinary characters). expiring_within_days selects certificates that are not
+        expired and expire within that many days.
+      x-permission: discovery.view
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [all, unmanaged, managed, known] } }
+        - { name: expiring_within_days, in: query, schema: { type: integer, minimum: 1, maximum: 3650 } }
+        - { name: expired, in: query, schema: { type: boolean } }
+        - { name: self_signed, in: query, schema: { type: boolean } }
+        - { name: q, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: scope_id, in: query, schema: { type: string, format: uuid } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveredCertificatePage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/certificates/export:
+    get:
+      operationId: exportDiscoveredCertificates
+      summary: The discovered certificate list as a CSV file, with the list's filters (no cursor, no limit)
+      description: >-
+        UTF-8 with a byte order mark, the header row
+        fingerprint_sha256,subject_cn,sans,issuer_cn,not_before,not_after,days_left,key_algorithm,self_signed,status,managed_certificate_id,endpoint_count,seen_on_count,first_seen,last_seen
+        (SANs separated by a space, times RFC 3339 UTC), then one row per certificate. Cells that start with =, +, -, @, a
+        tab, a carriage return or a line feed get a leading apostrophe. Recorded in the audit log (discovery.export with the
+        filters and the row count) before the first byte. At most 50,000 rows (409 ALC-RPT-0001, nothing written); one export
+        of any kind at a time per person (409 ALC-RPT-0004, retryable, Retry-After); at most 10 exports a minute per user or
+        token (429). cursor or limit is refused with 422; HEAD with 405. Works while the license is locked.
+      x-permission: discovery.view
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [all, unmanaged, managed, known] } }
+        - { name: expiring_within_days, in: query, schema: { type: integer, minimum: 1, maximum: 3650 } }
+        - { name: expired, in: query, schema: { type: boolean } }
+        - { name: self_signed, in: query, schema: { type: boolean } }
+        - { name: q, in: query, schema: { type: string, maxLength: 200 } }
+        - { name: scope_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: >-
+            The file, with Content-Disposition: attachment; filename="alice-discovered-certificates-<yyyy-mm-dd>.csv" and
+            Cache-Control: no-store.
+          content:
+            text/csv:
+              schema: { type: string }
+        "405": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/certificates/{fingerprint}:
+    parameters:
+      - { name: fingerprint, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+    get:
+      operationId: getDiscoveredCertificate
+      summary: One discovered leaf certificate with the endpoints presenting it (at most 200)
+      x-permission: discovery.view
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveredCertificate" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/endpoints:
+    get:
+      operationId: listDiscoveredEndpoints
+      summary: Discovered endpoints, in pages
+      description: >-
+        Inside a scope (scope_id) in the order of its unique key (address, port, SNI name); across scopes by address, port,
+        SNI name and id. fingerprint selects the endpoints presenting one leaf. target is the live server whose address or
+        host name is the endpoint's (null when none).
+      x-permission: discovery.view
+      parameters:
+        - { name: scope_id, in: query, schema: { type: string, format: uuid } }
+        - { name: fingerprint, in: query, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
+        - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoveredEndpointPage" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/discovery/settings:
+    get:
+      operationId: getDiscoverySettings
+      summary: The discovery settings
+      description: >-
+        scanning_enabled is false while no allowed scan network is set: nothing may be scanned then. builtin_exclusions are
+        the ranges Alice never scans whatever the settings say.
+      x-permission: discovery.view
+      responses:
+        "200":
+          description: The settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoverySettings" }
+        default: { $ref: "#/components/responses/Error" }
+    put:
+      operationId: putDiscoverySettings
+      summary: Replace the discovery settings
+      description: >-
+        Every field is required. The lists hold IP addresses and CIDR ranges (no host names), at most 256 each, stored in
+        their canonical form; an element that does not parse is 422 ALC-DSC-0003 (params field allowed_networks or
+        global_exclusions and the element's index); retention_days is 7 to 730. An empty allowed_networks is valid and means
+        nothing may be scanned. Recorded as discovery.exclusions.updated with both lists and their counts. An
+        Administrator's browser session with a fresh step-up, never an API token. Works while the license is locked.
+      x-permission: discovery.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DiscoverySettingsInput" }
+      responses:
+        "200":
+          description: The settings
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DiscoverySettings" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
     ID:
@@ -4070,6 +4449,208 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    DiscoveryScopeCreate:
+      type: object
+      required: [name, entries, ports]
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100, examples: [Data centre] }
+        entries:
+          type: array
+          maxItems: 256
+          description: IP addresses, CIDR ranges (IPv4 at most a /20, IPv6 at most a /120) and host names
+          items: { type: string, maxLength: 255 }
+          examples: [["10.0.1.0/24", "intranet.example"]]
+        ports: { type: array, maxItems: 16, items: { type: integer, minimum: 1, maximum: 65535 }, examples: [[443, 8443]] }
+        sni_names: { type: array, maxItems: 256, items: { type: string, maxLength: 253 }, examples: [[]] }
+        exclusions: { type: array, maxItems: 256, items: { type: string, maxLength: 255 }, description: Addresses and ranges never scanned, examples: [[]] }
+        enabled: { type: boolean, default: true }
+        schedule_hours: { type: integer, minimum: 0, maximum: 168, description: "Hours between scheduled scans; 0: no schedule" }
+        window_start: { type: string, description: '"HH:MM" or "" (no window)' }
+        window_end: { type: string, description: '"HH:MM" or "" (no window)' }
+        window_tz: { type: string, maxLength: 64, description: 'IANA time zone of the window ("": UTC)' }
+        alert_on_expiry: { type: boolean, default: false }
+        rate_per_sec: { type: integer, minimum: 0, maximum: 100, description: "New connections per second; 0: 20" }
+        concurrency: { type: integer, minimum: 0, maximum: 64, description: "Workers of a scan; 0: 32" }
+    DiscoveryScopePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 100 }
+        entries: { type: array, maxItems: 256, items: { type: string, maxLength: 255 } }
+        ports: { type: array, maxItems: 16, items: { type: integer, minimum: 1, maximum: 65535 } }
+        sni_names: { type: array, maxItems: 256, items: { type: string, maxLength: 253 } }
+        exclusions: { type: array, maxItems: 256, items: { type: string, maxLength: 255 } }
+        enabled: { type: boolean }
+        schedule_hours: { type: integer, minimum: 0, maximum: 168 }
+        window_start: { type: string }
+        window_end: { type: string }
+        window_tz: { type: string, maxLength: 64 }
+        alert_on_expiry: { type: boolean }
+        rate_per_sec: { type: integer, minimum: 0, maximum: 100 }
+        concurrency: { type: integer, minimum: 0, maximum: 64 }
+    DiscoveryScope:
+      type: object
+      required: [id, name, entries, ports, sni_names, exclusions, enabled, schedule_hours, window_start, window_end, window_tz, alert_on_expiry,
+        rate_per_sec, concurrency, version, created_by, created_at, updated_at, last_scheduled_at, active_scan_id, last_scan]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        entries: { type: array, items: { type: string } }
+        ports: { type: array, items: { type: integer } }
+        sni_names: { type: array, items: { type: string } }
+        exclusions: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+        schedule_hours: { type: integer }
+        window_start: { type: string }
+        window_end: { type: string }
+        window_tz: { type: string }
+        alert_on_expiry: { type: boolean }
+        rate_per_sec: { type: integer }
+        concurrency: { type: integer }
+        version: { type: integer }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_scheduled_at: { type: [string, "null"], format: date-time }
+        active_scan_id: { type: [string, "null"], format: uuid }
+        last_scan: { oneOf: [{ $ref: "#/components/schemas/DiscoveryScan" }, { type: "null" }] }
+    DiscoveryScopePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/DiscoveryScope" } }
+        next_cursor: { type: [string, "null"] }
+    DiscoveryPreview:
+      type: object
+      required: [addresses, excluded_addresses, hostnames, ports, sni_names, endpoints, builtin_exclusions]
+      properties:
+        addresses: { type: integer }
+        excluded_addresses: { type: integer }
+        hostnames: { type: integer }
+        ports: { type: integer }
+        sni_names: { type: integer }
+        endpoints: { type: integer }
+        builtin_exclusions: { type: array, items: { type: string } }
+    DiscoveryScan:
+      type: object
+      required: [id, scope_id, scope_name, trigger, state, cancel_requested, endpoints_total, endpoints_answered, endpoints_failed,
+        endpoints_excluded, certificates_new, cert_churn, requested_by, queued_at, started_at, finished_at, error_code, error_reason]
+      properties:
+        id: { type: string, format: uuid }
+        scope_id: { type: string, format: uuid }
+        scope_name: { type: string }
+        trigger: { type: string, enum: [manual, schedule] }
+        state: { type: string, enum: [queued, running, done, cancelled, timed_out, failed] }
+        cancel_requested: { type: boolean }
+        endpoints_total: { type: integer }
+        endpoints_answered: { type: integer }
+        endpoints_failed: { type: integer }
+        endpoints_excluded: { type: integer }
+        certificates_new: { type: integer }
+        cert_churn: { type: integer, description: "New certificates beyond the per-scan and per-day caps (counted, not stored)" }
+        requested_by: { type: [string, "null"], format: uuid }
+        queued_at: { type: string, format: date-time }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+        error_code: { type: [string, "null"], description: The ALC code of the reason the scan ended without finishing }
+        error_reason: { type: [string, "null"], description: "The reason (discovery.* or license.*)" }
+    DiscoveryScanPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/DiscoveryScan" } }
+        next_cursor: { type: [string, "null"] }
+    DiscoveredCertificate:
+      type: object
+      required: [fingerprint_sha256, subject_cn, sans, issuer_cn, not_before, not_after, days_left, expired, key_algorithm, self_signed, status,
+        managed_certificate_id, endpoint_count, seen_on_count, first_seen, last_seen]
+      properties:
+        fingerprint_sha256: { type: string }
+        subject_cn: { type: string }
+        sans: { type: array, items: { type: string } }
+        issuer_cn: { type: string }
+        not_before: { type: string, format: date-time }
+        not_after: { type: string, format: date-time }
+        days_left: { type: integer }
+        expired: { type: boolean }
+        key_algorithm: { type: string, enum: [rsa, ecdsa, ed25519, other] }
+        self_signed: { type: boolean }
+        status: { type: string, enum: [unmanaged, managed, known] }
+        managed_certificate_id: { type: [string, "null"], format: uuid }
+        endpoint_count: { type: integer, description: Endpoints presenting it now }
+        seen_on_count: { type: integer, description: Endpoints that are not gone whose last leaf it is }
+        first_seen: { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+        endpoints: { type: array, items: { $ref: "#/components/schemas/DiscoveredEndpoint" }, description: The detail only }
+        more_endpoints: { type: boolean, description: The detail only }
+    DiscoveredCertificatePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/DiscoveredCertificate" } }
+        next_cursor: { type: [string, "null"] }
+    DiscoveredEndpoint:
+      type: object
+      required: [id, scope_id, address, port, sni, host, fingerprint_sha256, chain_length, tls_version, cipher, state, last_error_code, missed_scans,
+        first_seen, last_seen, last_scanned_at, gone_since, target]
+      properties:
+        id: { type: string, format: uuid }
+        scope_id: { type: string, format: uuid }
+        address: { type: string }
+        port: { type: integer }
+        sni: { type: string }
+        host: { type: string }
+        fingerprint_sha256: { type: [string, "null"] }
+        chain_length: { type: integer }
+        tls_version: { type: string }
+        cipher: { type: string }
+        state: { type: string, enum: [present, unreachable, gone, no_tls, excluded, malformed] }
+        last_error_code: { type: string, enum: ["", refused, timeout, no_tls, reset, chain_too_large, policy, malformed] }
+        missed_scans: { type: integer }
+        first_seen: { type: string, format: date-time }
+        last_seen: { type: [string, "null"], format: date-time }
+        last_scanned_at: { type: string, format: date-time }
+        gone_since: { type: [string, "null"], format: date-time }
+        target:
+          oneOf:
+            - type: object
+              required: [id, name]
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+            - { type: "null" }
+    DiscoveredEndpointPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/DiscoveredEndpoint" } }
+        next_cursor: { type: [string, "null"] }
+    DiscoverySettings:
+      type: object
+      required: [allowed_networks, global_exclusions, retention_days, scanning_enabled, builtin_exclusions]
+      properties:
+        allowed_networks: { type: array, items: { type: string } }
+        global_exclusions: { type: array, items: { type: string } }
+        retention_days: { type: integer }
+        scanning_enabled: { type: boolean, description: False while no allowed scan network is set (nothing may be scanned) }
+        builtin_exclusions: { type: array, items: { type: string } }
+    DiscoverySettingsInput:
+      type: object
+      required: [allowed_networks, global_exclusions, retention_days]
+      additionalProperties: false
+      properties:
+        allowed_networks: { type: array, maxItems: 256, items: { type: string, maxLength: 255 }, examples: [["10.0.0.0/16"]] }
+        global_exclusions: { type: array, maxItems: 256, items: { type: string, maxLength: 255 }, examples: [[]] }
+        retention_days: { type: integer, minimum: 7, maximum: 730, examples: [90] }
+    DiscoverySummary:
+      type: object
+      required: [unmanaged_total, unmanaged_expiring_30d, scopes, last_scan_at]
+      properties:
+        unmanaged_total: { type: integer }
+        unmanaged_expiring_30d: { type: integer }
+        scopes: { type: integer }
+        last_scan_at: { type: [string, "null"], format: date-time }
     ACMEProviderCreate:
       type: object
       required: [name, directory_url]

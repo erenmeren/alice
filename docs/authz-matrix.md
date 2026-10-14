@@ -196,6 +196,23 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | PUT | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | no |
 | DELETE | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | yes |
 | POST | `/api/v1/acme/certificates/{id}/deploy` | `acme.operate` | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/discovery/summary` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/scopes` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| POST | `/api/v1/discovery/scopes` | `discovery.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/discovery/scopes/preview` | `discovery.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/discovery/scopes/{id}` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| PATCH | `/api/v1/discovery/scopes/{id}` | `discovery.manage` | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/discovery/scopes/{id}` | `discovery.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/discovery/scopes/{id}/scans` | `discovery.operate` | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/discovery/scans` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/scans/{id}` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| POST | `/api/v1/discovery/scans/{id}/cancel` | `discovery.operate` | no | yes | yes | no | operate | no | yes |
+| GET | `/api/v1/discovery/certificates` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/certificates/export` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/certificates/{fingerprint}` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/endpoints` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/settings` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
+| PUT | `/api/v1/discovery/settings` | `discovery.manage` | no | yes | no | no | no | yes | yes |
 
 ## Notes
 
@@ -238,6 +255,17 @@ which only reduce what Alice does (no renewal, no deployment), like removing a K
 terms of service, whether an external account binding is required) for the registration form: `acme.preview`, an
 Administrator's browser session without a step-up (nothing is changed, no secret is read) and never an API token; it contacts the
 certificate authority, so it is refused in lock and limited to 10 a minute per user like the other ACME actions.
+
+**Network discovery.** Every `/api/v1/discovery/...` read is `discovery.view`: every role in a browser, but an API token
+needs the operate scope (read tokens never read the internal network map; an Auditor holds read tokens only). Starting and
+cancelling a scan are `discovery.operate` (Administrators, Operators and operate tokens), together at most 10 a minute per user or
+token; a scan is started only for a scope, never for addresses given in the request. Scan scopes, the allowed scan networks,
+the global exclusions and the retention are `discovery.manage`: an Administrator's browser session with a fresh step-up, never an
+API token. Creating or changing a scope looks up the host names it adds (each at most 5 seconds; a refusal names the entry,
+never an address) and, with the size preview, is limited to 30 a minute per user. In lock only starting a scan is refused with
+ALC-LIC-0001; cancelling a scan and changing scopes and settings keep working. The CSV export is a read (it works in lock), at
+most 10 a minute per user or token and one export of any kind at a time per person; `discovery.export` is recorded in the
+audit log before the first byte.
 
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy

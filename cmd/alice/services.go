@@ -17,6 +17,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
 	"alice/internal/backup"
+	"alice/internal/discovery/discoverysvc"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -76,6 +77,9 @@ type services struct {
 	alerts         *alerts.Service  // expiry notices (alerts.scan) and thresholds
 	reports        *reports.Service // dashboard, saved views, exports
 	oidc           *oidc.Service    // identity providers, group mappings, SSO sign-in
+
+	// Network discovery (plan 2026-10-13-network-discovery, Task 9): scopes, settings, scans and results behind the API.
+	discovery *discoverysvc.Service
 
 	// Phase 8 (contract C8, C10, C11).
 	backup   *backup.Service    // backups, their schedule, state and alarm
@@ -177,6 +181,8 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 	svc.reports = reports.New(reports.Config{Pool: pool, Clock: clk, Audit: auditLog, License: lic, Alerts: svc.alerts,
 		Delivery: svc.notifySettings, Inventory: inv})
 	svc.oidc = oidc.New(oidcConfig(svc, clk, log))
+	// The system resolver only (nil Resolver): the save-time look-up of the names an Administrator listed (air-gap rule).
+	svc.discovery = discoverysvc.New(discoverysvc.Config{Pool: pool, Audit: auditLog, Queue: queue, Clock: clk})
 	svc.backup = backup.New(backupServiceConfig(cfg, svc, clk, log))
 	svc.forward = forward.New(forwardConfig(cfg, svc, clk, log))
 	return svc, nil

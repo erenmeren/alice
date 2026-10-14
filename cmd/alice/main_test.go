@@ -23,6 +23,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
 	"alice/internal/backup"
+	"alice/internal/discovery/discoverysvc"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/deployjobs"
@@ -99,7 +100,7 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	svc := &services{auth: &auth.Service{}, setup: &setup.Service{}, audit: &audit.Service{}, license: &license.Service{},
 		inventory: &inventory.Service{}, queue: &jobs.Queue{}, registry: providers.NewRegistry(), sshkeys: &sshkeys.Service{},
 		notifySettings: &notify.Settings{}, alerts: &alerts.Service{}, reports: &reports.Service{}, oidc: &oidc.Service{},
-		backup: &backup.Service{}, forward: &forward.Forwarder{}, tlsStore: &tlscert.Store{}}
+		backup: &backup.Service{}, forward: &forward.Forwarder{}, tlsStore: &tlscert.Store{}, discovery: &discoverysvc.Service{}}
 	d := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Same(t, svc.notifySettings, d.Mail)
 	assert.Same(t, svc.alerts, d.Alerts)
@@ -116,6 +117,7 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Same(t, svc.sshkeys, d.SSHKeys)
 	assert.Same(t, svc.backup, d.Backup)
 	assert.Same(t, svc.forward, d.Forward)
+	assert.Same(t, svc.discovery, d.Discovery)
 	require.IsType(t, setup.CertificateInstaller{}, d.TLSStore)
 	assert.Same(t, svc.tlsStore, d.TLSStore.(setup.CertificateInstaller).Store)
 	assert.Same(t, svc.setup, d.TLSStore.(setup.CertificateInstaller).Setup)
@@ -124,7 +126,7 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Nil(t, newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil).SSHKeys,
 		"a nil service stays a nil interface (the key detail then omits the generated-key fields)")
 	svc.notifySettings, svc.alerts, svc.reports, svc.oidc = nil, nil, nil, nil
-	svc.backup, svc.forward, svc.tlsStore = nil, nil, nil
+	svc.backup, svc.forward, svc.tlsStore, svc.discovery = nil, nil, nil, nil
 	none := newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil)
 	assert.Nil(t, none.Mail, "a nil *notify.Settings stays a nil interface")
 	assert.Nil(t, none.Alerts)
@@ -133,6 +135,7 @@ func TestAPIDepsCarryEveryService(t *testing.T) {
 	assert.Nil(t, none.Backup)
 	assert.Nil(t, none.Forward)
 	assert.Nil(t, none.TLSStore, "a command has no certificate store")
+	assert.Nil(t, none.Discovery, "a nil *discoverysvc.Service stays a nil interface")
 	svc.inventory = nil
 	assert.Nil(t, newAPIDeps(config.Config{}, svc, nil, nil, clock.Real{}, slog.New(slog.DiscardHandler), nil).ACME,
 		"a nil inventory stays a nil interface")

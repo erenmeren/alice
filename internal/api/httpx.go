@@ -149,6 +149,12 @@ func (s *server) issueSetupCookie(w http.ResponseWriter, token string) {
 	s.recent.Add(token)
 }
 
+// pathFingerprint reads a certificate's SHA-256 fingerprint path parameter: 64 lower-case hex digits.
+func pathFingerprint(r *http.Request, name string) (string, bool) {
+	fp := r.PathValue(name)
+	return fp, fingerprintRE.MatchString(fp)
+}
+
 // pathUUID parses a UUID path parameter.
 func pathUUID(r *http.Request, name string) (uuid.UUID, bool) {
 	id, err := uuid.Parse(r.PathValue(name))

@@ -272,6 +272,17 @@ terms of service, whether an external account binding is required) for the regis
 Administrator's browser session without a step-up (nothing is changed, no secret is read) and never an API token; it contacts the
 certificate authority, so it is refused in lock and limited to 10 a minute per user like the other ACME actions.
 
+**Network discovery.** Every ` + "`/api/v1/discovery/...`" + ` read is ` + "`discovery.view`" + `: every role in a browser, but an API token
+needs the operate scope (read tokens never read the internal network map; an Auditor holds read tokens only). Starting and
+cancelling a scan are ` + "`discovery.operate`" + ` (Administrators, Operators and operate tokens), together at most 10 a minute per user or
+token; a scan is started only for a scope, never for addresses given in the request. Scan scopes, the allowed scan networks,
+the global exclusions and the retention are ` + "`discovery.manage`" + `: an Administrator's browser session with a fresh step-up, never an
+API token. Creating or changing a scope looks up the host names it adds (each at most 5 seconds; a refusal names the entry,
+never an address) and, with the size preview, is limited to 30 a minute per user. In lock only starting a scan is refused with
+ALC-LIC-0001; cancelling a scan and changing scopes and settings keep working. The CSV export is a read (it works in lock), at
+most 10 a minute per user or token and one export of any kind at a time per person; ` + "`discovery.export`" + ` is recorded in the
+audit log before the first byte.
+
 **SSH keys and rotation (Phase 6).** The private key download is an Administrator's browser session with a fresh step-up,
 never an API token, at most 5 per minute per user; its audit row is written before the file is sent. A rotation policy
 is created switched off. ` + "`PATCH /api/v1/rotation/policies/{id}`" + ` is ` + "`rotation.manage`" + ` (operate tokens allowed), but a
@@ -431,6 +442,14 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.AcmePreview
 		case under(p, "/api/v1/acme"):
 			want = rbac.AcmeManage
+		// Network discovery (D1, D7, A5): reads are discovery.view; starting and cancelling a scan discovery.operate;
+		// scopes and the settings discovery.manage.
+		case under(p, "/api/v1/discovery") && safeMethod(rt.method):
+			want = rbac.DiscoveryView
+		case under(p, "/api/v1/discovery") && rt.method == http.MethodPost && (strings.HasSuffix(p, "/scans") || strings.HasSuffix(p, "/cancel")):
+			want = rbac.DiscoveryOperate
+		case under(p, "/api/v1/discovery"):
+			want = rbac.DiscoveryManage
 		case under(p, "/api/v1/users") && !safeMethod(rt.method):
 			want = rbac.UsersManage
 		case under(p, "/api/v1/users"):
@@ -647,6 +666,23 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"PUT /api/v1/acme/certificates/{id}/bindings/{location_id}",
 		"DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}",
 		"POST /api/v1/acme/certificates/{id}/deploy",
+		"GET /api/v1/discovery/summary",
+		"GET /api/v1/discovery/scopes",
+		"POST /api/v1/discovery/scopes",
+		"POST /api/v1/discovery/scopes/preview",
+		"GET /api/v1/discovery/scopes/{id}",
+		"PATCH /api/v1/discovery/scopes/{id}",
+		"DELETE /api/v1/discovery/scopes/{id}",
+		"POST /api/v1/discovery/scopes/{id}/scans",
+		"GET /api/v1/discovery/scans",
+		"GET /api/v1/discovery/scans/{id}",
+		"POST /api/v1/discovery/scans/{id}/cancel",
+		"GET /api/v1/discovery/certificates",
+		"GET /api/v1/discovery/certificates/export",
+		"GET /api/v1/discovery/certificates/{fingerprint}",
+		"GET /api/v1/discovery/endpoints",
+		"GET /api/v1/discovery/settings",
+		"PUT /api/v1/discovery/settings",
 	} {
 		assert.Contains(t, table, k)
 	}
@@ -725,6 +761,13 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/acme/certificates", perm: rbac.AcmeOperate},
 		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/preview", perm: rbac.AcmeView},
 		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/account", perm: rbac.AcmePreview},
+		// Network discovery: a scope behind operate, a scan start behind view, a read behind manage, the settings behind operate.
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", perm: rbac.DiscoveryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/{id}/scans", perm: rbac.DiscoveryView},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates", perm: rbac.DiscoveryManage},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/endpoints", perm: rbac.Read},
+		{method: http.MethodPut, pattern: "/api/v1/discovery/settings", perm: rbac.DiscoveryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", perm: rbac.DiscoveryManage},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
@@ -773,6 +816,9 @@ func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 		{method: http.MethodDelete, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", perm: rbac.AcmeOperate},
 		{method: http.MethodDelete, pattern: "/api/v1/acme/hooks/{id}", perm: rbac.AcmeManage},
 		{method: http.MethodGet, pattern: "/api/v1/acme/hooks/{id}", perm: rbac.AcmeView},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryManage},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", perm: rbac.DiscoveryOperate},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/settings", perm: rbac.DiscoveryView},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }
@@ -786,7 +832,9 @@ var (
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings",
 		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.
-		"/api/v1/acme"}
+		"/api/v1/acme",
+		// Network discovery (A5): starting a scan is ClassReadOnly (the scan itself is paused in lock).
+		"/api/v1/discovery"}
 	// lockAvailableRoutes are routes of a refused group that work in every license state because
 	// they only reduce what Alice will do (ClassAlways).
 	//
@@ -802,7 +850,11 @@ var (
 		"POST /api/v1/rotation/runs/{id}/actions/abort": true,
 		// ACME: deleting a certificate definition (no more renewals, its bindings go) and removing a binding only reduce
 		// what Alice does, like removing a Key Vault connection; neither contacts a certificate authority or a server.
-		"DELETE /api/v1/acme/certificates/{id}": true, "DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}": true}
+		"DELETE /api/v1/acme/certificates/{id}": true, "DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}": true,
+		// Network discovery (A5): a locked installation can still stop a scan, change or remove its scopes and the settings;
+		// none of them contacts a server (the preview resolves nothing; a scope's save looks its new names up only).
+		"POST /api/v1/discovery/scans/{id}/cancel": true, "POST /api/v1/discovery/scopes": true, "POST /api/v1/discovery/scopes/preview": true,
+		"PATCH /api/v1/discovery/scopes/{id}": true, "DELETE /api/v1/discovery/scopes/{id}": true, "PUT /api/v1/discovery/settings": true}
 )
 
 func underAny(pattern string, prefixes []string) bool {
@@ -952,7 +1004,9 @@ func TestAuthzNotesNameRealRoutesAndTheirConditions(t *testing.T) {
 	}
 	for _, phrase := range []string{"remove_bindings=true", "adds websites to a connection that deploys automatically", "the version is held",
 		"not a boundary", "gates switching automatic deployment", "releasing a held version", "importing a certificate",
-		"switches unattended deployment on", "only reduce what Alice does (no renewal, no deployment)", "10 a minute per user or token"} {
+		"switches unattended deployment on", "only reduce what Alice does (no renewal, no deployment)", "10 a minute per user or token",
+		"read tokens never read the internal network map", "never for addresses given in the request", "never an address",
+		"In lock only starting a scan is refused"} {
 		assert.Contains(t, authzNotes, phrase)
 	}
 }

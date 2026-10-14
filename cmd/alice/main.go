@@ -525,6 +525,7 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		License:        svc.license,
 		Inventory:      svc.inventory,
 		ACME:           acmeAPI(svc),
+		Discovery:      discoveryAPI(svc),
 		Jobs:           svc.queue,
 		Providers:      svc.registry,
 		SSHKeys:        sshKeysAPI(svc),
@@ -578,6 +579,14 @@ func acmeAPI(svc *services) api.ACMEService {
 		return nil
 	}
 	return svc.inventory
+}
+
+// discoveryAPI is the network discovery service; a nil service stays a nil interface, as acmeAPI does.
+func discoveryAPI(svc *services) api.DiscoveryService {
+	if svc.discovery == nil {
+		return nil
+	}
+	return svc.discovery
 }
 
 // mailAPI, alertsAPI and reportsAPI keep a nil service a nil interface (C-s4-06), as sshKeysAPI does.

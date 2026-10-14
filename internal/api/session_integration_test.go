@@ -440,6 +440,10 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	for k, v := range acmeRecords(t, s, c, admin) {
 		ids[k] = v
 	}
+	discoveryIDs, discoveredFP := discoveryRecords(t, s, c, admin)
+	for k, v := range discoveryIDs {
+		ids[k] = v
+	}
 	// Phase 8: one backup, so its download answers 200 (its only write is the backup.downloaded row).
 	rec := c.do(http.MethodPost, "/api/v1/backups", nil)
 	requireStatus(t, rec, http.StatusCreated)
@@ -470,6 +474,7 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 		}
 		gets++
 		path := op.path
+		path = strings.ReplaceAll(path, "{fingerprint}", discoveredFP)
 		if strings.HasPrefix(path, "/api/v1/targets/{id}/kv/") {
 			// The inventory of a vault is addressed through the vault.
 			path = strings.NewReplacer("{id}", p5["vault"], "{certificate_id}", p5["kv_certificate"], "{import_id}", p5["import"]).Replace(path)
@@ -491,6 +496,9 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 		case "/api/v1/certificates/export", "/api/v1/ssh-keys/export":
 			// Phase 7 (R42 row 16): an inventory export is audited before its first byte; that row is its only write.
 			wantAudit, wantAction = 1, "inventory.exported"
+		case "/api/v1/discovery/certificates/export":
+			// Network discovery (Task 9): the export's discovery.export row, before its first byte, is its only write.
+			wantAudit, wantAction = 1, "discovery.export"
 		case "/api/v1/views":
 			path += "?page=certificates"
 		case "/api/v1/backups/{name}/download":

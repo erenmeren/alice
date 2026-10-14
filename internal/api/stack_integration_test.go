@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -31,12 +32,14 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
 	"alice/internal/backup"
+	"alice/internal/discovery/discoverysvc"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/jobs/acmejobs"
 	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/kvjobs"
+	"alice/internal/jobs/netdiscojobs"
 	"alice/internal/jobs/sshkeyjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
@@ -45,6 +48,7 @@ import (
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
 	"alice/internal/platform/logging"
+	"alice/internal/platform/netaddr"
 	"alice/internal/platform/tlscert"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
@@ -59,6 +63,7 @@ import (
 	"alice/internal/testutil/fakesmtp"
 	"alice/internal/testutil/pgtest"
 	"alice/internal/testutil/pki"
+	"alice/internal/testutil/scanpolicy"
 	"alice/internal/version"
 	"alice/locales"
 	"alice/migrations"
@@ -151,6 +156,10 @@ type stack struct {
 	forward    *forward.Forwarder
 	tlsStore   *tlscert.Store
 	backupHook func(name string) // tests: sees every name the backup service is asked to open
+	// Network discovery (Task 9): the service as cmd/alice builds it, with the stack's name resolver (names maps a host
+	// name to its addresses; any other name does not resolve, so no test ever asks a real name server).
+	discovery *discoverysvc.Service
+	names     map[string][]netip.Addr
 
 	mu        sync.Mutex
 	nginxSrvs []*nginxFixture // the emulated Nginx hosts Alice's own TLS probe can reach
@@ -272,6 +281,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.reports = reports.New(reports.Config{Pool: s.db.App, Clock: s.clock, Audit: auditLog, License: s.license, Alerts: s.alerts,
 		Delivery: s.mail, Inventory: s.inv})
 	s.sso = oidc.New(oidc.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Auth: s.auth, Log: log})
+	s.discovery = discoverysvc.New(discoverysvc.Config{Pool: s.db.App, Audit: auditLog, Queue: s.queue, Clock: s.clock, Resolver: stackResolver{s}})
 	s.runner = s.newRunner("", 0)
 }
 
@@ -323,7 +333,27 @@ func (s *stack) newRunner(worker string, heartbeat time.Duration) *jobs.Runner {
 	sshkeyjobs.Register(r, sshkeyjobs.Deps{Keys: s.sshKeys, Targets: s.inv, Registry: s.registry, Clock: s.tick, Gate: s.license, Log: log})
 	// ACME: acme.issue and acme.cleanup, as cmd/alice wires them.
 	acmejobs.Register(r, acmejobs.Deps{Inventory: s.inv, Registry: s.registry, Gate: s.license, Clock: s.clock, Log: log})
+	// Network discovery: netdisco.scan as cmd/alice wires it, except the scan policy (the test one: Alice's own interface
+	// addresses may be dialed, so the fleet can listen on one of them; every other rule of the scan still applies) and
+	// the resolver. A scan paces its connections on the real clock.
+	netdiscojobs.Register(r, netdiscojobs.Deps{Pool: s.db.App, Queue: s.queue, License: s.license, Clock: clock.Real{}, Log: log,
+		DatabaseURL: s.db.AppURL, Audit: s.auditLog, Resolver: stackResolver{s},
+		NewPolicy: func(context.Context, netaddr.ScanPolicyInputs) (netaddr.ScanPolicy, error) {
+			return scanpolicy.Permissive(), nil
+		}})
 	return r
+}
+
+// stackResolver answers the stack's names map.
+type stackResolver struct{ s *stack }
+
+func (r stackResolver) LookupNetIP(_ context.Context, _, host string) ([]netip.Addr, error) {
+	r.s.mu.Lock()
+	defer r.s.mu.Unlock()
+	if a, ok := r.s.names[host]; ok {
+		return a, nil
+	}
+	return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
 }
 
 // deps are the handler dependencies of the current services. Tests that need
@@ -348,6 +378,7 @@ func (s *stack) deps() Deps {
 		License:        s.license,
 		Inventory:      s.inv,
 		ACME:           s.inv,
+		Discovery:      s.discovery,
 		Jobs:           s.queue,
 		Providers:      s.registry,
 		SSHKeys:        s.sshKeys,

@@ -25,6 +25,8 @@ import (
 	"alice/internal/auth/oidc"
 	"alice/internal/auth/ratelimit"
 	"alice/internal/backup"
+	"alice/internal/discovery"
+	"alice/internal/discovery/discoverysvc"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
@@ -265,6 +267,8 @@ type ReportsService interface {
 	Attention(ctx context.Context, v reports.Viewer) ([]reports.Condition, error)
 	ExportCertificates(ctx context.Context, a audit.Actor, f inventory.CertificateFilter, w io.Writer) (int, error)
 	ExportSSHKeys(ctx context.Context, a audit.Actor, f inventory.KeyFilter, w io.Writer) (int, error)
+	// ExportRows is the same machinery for another module's list (network discovery's certificates).
+	ExportRows(ctx context.Context, a audit.Actor, x reports.RowExport, w io.Writer) (int, error)
 	Views(ctx context.Context, userID uuid.UUID, page string) ([]reports.View, error)
 	CreateView(ctx context.Context, userID uuid.UUID, page, name string, query map[string]string) (reports.View, error)
 	DeleteView(ctx context.Context, userID, id uuid.UUID) error
@@ -317,6 +321,29 @@ type HTTPSService interface {
 	Install(ctx context.Context, p auth.Principal, m auth.Meta, u tlscert.Upload) (tlscert.Info, error)
 }
 
+// DiscoveryService is the part of *discoverysvc.Service the HTTP layer uses (network discovery, Task 9): scopes,
+// settings, scans and the read side. Every change writes its audit row in its own transaction.
+type DiscoveryService interface {
+	ListScopes(ctx context.Context, f discoverysvc.ScopeFilter) ([]discoverysvc.ScopeView, bool, error)
+	GetScope(ctx context.Context, id uuid.UUID) (discoverysvc.ScopeView, error)
+	CreateScope(ctx context.Context, a discoverysvc.Actor, in discovery.Scope) (discoverysvc.ScopeView, error)
+	UpdateScope(ctx context.Context, a discoverysvc.Actor, id uuid.UUID, ifVersion *int, p discoverysvc.ScopePatch) (discoverysvc.ScopeView, error)
+	DeleteScope(ctx context.Context, a discoverysvc.Actor, id uuid.UUID, ifVersion *int) error
+	Preview(ctx context.Context, sc discovery.Scope) (discovery.Preview, error)
+	StartScan(ctx context.Context, a discoverysvc.Actor, scopeID uuid.UUID) (discoverysvc.ScanView, error)
+	CancelScan(ctx context.Context, a discoverysvc.Actor, id uuid.UUID) (discoverysvc.ScanView, error)
+	GetScan(ctx context.Context, id uuid.UUID) (discoverysvc.ScanView, error)
+	ListScans(ctx context.Context, f discoverysvc.ScanFilter) ([]discoverysvc.ScanView, bool, error)
+	ListCertificates(ctx context.Context, f discovery.CertificateFilter) ([]discovery.CertificateRow, bool, error)
+	Certificate(ctx context.Context, fingerprint string) (discovery.CertificateRow, []discovery.EndpointRow, bool, error)
+	ListEndpoints(ctx context.Context, f discovery.EndpointFilter) ([]discovery.EndpointRow, bool, error)
+	Settings(ctx context.Context) (discoverysvc.SettingsView, error)
+	SaveSettings(ctx context.Context, a discoverysvc.Actor, in discoverysvc.Settings) (discoverysvc.SettingsView, error)
+	Summary(ctx context.Context) (discoverysvc.Summary, error)
+}
+
+var _ DiscoveryService = (*discoverysvc.Service)(nil)
+
 // ProviderCatalog lists the compiled-in providers (providers.Registry).
 type ProviderCatalog interface {
 	List() []providers.Descriptor
@@ -342,10 +369,11 @@ type Deps struct {
 	Alerts         AlertsService
 	Reports        ReportsService
 	SSO            SSOService
-	Backup         BackupService  // Phase 8: nil leaves the backup routes and the dashboard's backup section unavailable
-	Forward        ForwardService // Phase 8: audit forwarding
-	ACME           ACMEService    // ACME issuance (inventory.Service)
-	TLSStore       HTTPSService   // Phase 8: the HTTPS certificate
+	Backup         BackupService    // Phase 8: nil leaves the backup routes and the dashboard's backup section unavailable
+	Forward        ForwardService   // Phase 8: audit forwarding
+	ACME           ACMEService      // ACME issuance (inventory.Service)
+	Discovery      DiscoveryService // network certificate discovery (discoverysvc.Service)
+	TLSStore       HTTPSService     // Phase 8: the HTTPS certificate
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }
@@ -651,6 +679,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.httpsRoutes()...)
 	routes = append(routes, s.forwardingRoutes()...)
 	routes = append(routes, s.acmeRoutes()...)
+	routes = append(routes, s.discoveryRoutes()...)
 	return routes
 }
 
