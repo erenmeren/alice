@@ -22,7 +22,7 @@ var discoveryRouteTable = map[string]struct {
 	"GET /api/v1/discovery/summary":                    {rbac.DiscoveryView, license.ClassUnset, limitDefault},
 	"GET /api/v1/discovery/scopes":                     {rbac.DiscoveryView, license.ClassUnset, limitDefault},
 	"POST /api/v1/discovery/scopes":                    {rbac.DiscoveryManage, license.ClassAlways, limitDiscoveryResolve},
-	"POST /api/v1/discovery/scopes/preview":            {rbac.DiscoveryManage, license.ClassAlways, limitDiscoveryResolve},
+	"POST /api/v1/discovery/scopes/preview":            {rbac.DiscoveryManage, license.ClassAlways, limitDiscoveryPreview},
 	"GET /api/v1/discovery/scopes/{id}":                {rbac.DiscoveryView, license.ClassUnset, limitDefault},
 	"PATCH /api/v1/discovery/scopes/{id}":              {rbac.DiscoveryManage, license.ClassAlways, limitDiscoveryResolve},
 	"DELETE /api/v1/discovery/scopes/{id}":             {rbac.DiscoveryManage, license.ClassAlways, limitDefault},
@@ -68,10 +68,12 @@ func discoveryLimitViolations(routes []route) []string {
 		switch {
 		case rt.limit == limitDiscoveryResolve && rt.perm != rbac.DiscoveryManage:
 			out = append(out, key+": limitDiscoveryResolve only on discovery.manage routes")
+		case rt.limit == limitDiscoveryPreview && (rt.perm != rbac.DiscoveryManage || !strings.HasSuffix(rt.pattern, "/discovery/scopes/preview")):
+			out = append(out, key+": limitDiscoveryPreview only on the discovery.manage scope preview")
+		case strings.HasSuffix(rt.pattern, "/discovery/scopes/preview") && rt.limit != limitDiscoveryPreview:
+			out = append(out, key+": the scope preview has its own limiter (limitDiscoveryPreview)")
 		case rt.limit == limitDiscovery && rt.perm != rbac.DiscoveryOperate:
 			out = append(out, key+": limitDiscovery only on discovery.operate routes")
-		case strings.HasSuffix(rt.pattern, "/discovery/scopes/preview") && (rt.limit == limitDefault || rt.limit == limitNone):
-			out = append(out, key+": the scope preview must be rate limited")
 		case strings.HasSuffix(rt.pattern, "/discovery/certificates/export") && (rt.limit != limitExport || !rt.getOnly):
 			out = append(out, key+": the discovery export is limitExport and GET only")
 		case under(rt.pattern, "/api/v1/discovery") && rt.perm == rbac.DiscoveryOperate && rt.limit != limitDiscovery:
@@ -84,13 +86,17 @@ func discoveryLimitViolations(routes []route) []string {
 func TestDiscoveryLimitsFollowTheirPermissions(t *testing.T) {
 	routes := newServer(Deps{}).apiRoutes()
 	assert.Empty(t, discoveryLimitViolations(routes))
-	n := 0
+	n, p := 0, 0
 	for _, rt := range routes {
-		if rt.limit == limitDiscoveryResolve {
+		switch rt.limit {
+		case limitDiscoveryResolve:
 			n++
+		case limitDiscoveryPreview:
+			p++
 		}
 	}
-	assert.Equal(t, 3, n, "create, change and preview of a scope")
+	assert.Equal(t, 2, n, "create and change of a scope (the name look-ups)")
+	assert.Equal(t, 1, p, "the scope preview only")
 }
 
 func TestDiscoveryLimitViolationsCatchMistakes(t *testing.T) {
@@ -99,6 +105,9 @@ func TestDiscoveryLimitViolationsCatchMistakes(t *testing.T) {
 		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates", perm: rbac.DiscoveryView, limit: limitDiscoveryResolve},
 		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", perm: rbac.DiscoveryManage, limit: limitDiscovery},
 		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryManage},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryManage, limit: limitDiscoveryResolve},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", perm: rbac.DiscoveryManage, limit: limitDiscoveryPreview},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryOperate, limit: limitDiscoveryPreview},
 		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates/export", perm: rbac.DiscoveryView, getOnly: true},
 		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates/export", perm: rbac.DiscoveryView, limit: limitExport},
 		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", perm: rbac.DiscoveryOperate},

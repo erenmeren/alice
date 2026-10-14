@@ -4068,7 +4068,7 @@ paths:
         address. At most 16 host names per save (422 validation error of entries); when the name server does not answer all
         of them within the request's budget, 503 ALC-SYS-0002 with Retry-After (nothing saved: a slow name server is not a
         missing name). The answer's ETag is the scope's version. An Administrator's browser session with a fresh step-up,
-        never an API token; at most 30 a minute per user (with PATCH and the preview). Works while the license is locked.
+        never an API token; at most 30 a minute per user (with PATCH). Works while the license is locked.
       x-permission: discovery.manage
       requestBody:
         required: true
@@ -4100,7 +4100,7 @@ paths:
         The body of a new scope (name optional). Answers the addresses of the address and range entries, those of them the
         exclusions remove, the host names (each counted as one address), ports, SNI names, the endpoints of one scan and the
         built-in exclusions the ranges overlap. The refusals of a save except ALC-DSC-0010 and ALC-DSC-0011. An
-        Administrator's browser session with a fresh step-up; at most 30 a minute per user.
+        Administrator's browser session with a fresh step-up; at most 60 a minute per user, in a budget of its own.
       x-permission: discovery.manage
       requestBody:
         required: true

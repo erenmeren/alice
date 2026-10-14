@@ -58,13 +58,29 @@ func TestDiscoveryResolveLimitIs30PerIdentity(t *testing.T) {
 	assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/probe", "operator", "").Code, "another identity has its own budget")
 }
 
+// limitDiscoveryPreview: the live size check of the scope form (no look-up, nothing dialed) is asked while an
+// Administrator types, so it has its own bucket of 60 a minute per user or token and never spends the name look-ups'.
+func TestDiscoveryPreviewLimitIs60PerIdentity(t *testing.T) {
+	h, _ := guardedHandler(t, testDeps(t, nil), rbac.Session, limitDiscoveryPreview)
+	for i := range 60 {
+		require.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/probe", "admin", "").Code, "request %d", i+1)
+	}
+	rec := call(h, http.MethodGet, "/api/v1/probe", "admin", "")
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "the 61st size check in a minute")
+	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
+	assert.Equal(t, http.StatusOK, call(h, http.MethodGet, "/api/v1/probe", "operator", "").Code, "another identity has its own budget")
+}
+
 // Each class has a bucket of its own: discovery never spends the ACME, export or Phase 8 action budgets, the resolve
 // check never spends the start/cancel budget, and ResetLimits clears both.
 func TestDiscoveryLimitsHaveBucketsOfTheirOwn(t *testing.T) {
 	s := newServer(testDeps(t, nil))
-	disc, resolve := s.actions[limitDiscovery], s.actions[limitDiscoveryResolve]
+	disc, resolve, preview := s.actions[limitDiscovery], s.actions[limitDiscoveryResolve], s.actions[limitDiscoveryPreview]
 	require.NotNil(t, disc)
 	require.NotNil(t, resolve)
+	require.NotNil(t, preview)
+	assert.NotSame(t, preview, disc)
+	assert.NotSame(t, preview, resolve)
 	for _, other := range []limitClass{limitACME, limitBackupNow, limitHTTPSUpload, limitForwardTest} {
 		assert.NotSame(t, disc, s.actions[other])
 		assert.NotSame(t, resolve, s.actions[other])
@@ -77,6 +93,9 @@ func TestDiscoveryLimitsHaveBucketsOfTheirOwn(t *testing.T) {
 	for range 30 {
 		resolve.Allow("u:x")
 	}
+	for range 60 {
+		preview.Allow("u:x")
+	}
 	(&Server{s: s}).ResetLimits()
 	for range 10 {
 		ok, _ := disc.Allow("u:x")
@@ -85,5 +104,9 @@ func TestDiscoveryLimitsHaveBucketsOfTheirOwn(t *testing.T) {
 	for range 30 {
 		ok, _ := resolve.Allow("u:x")
 		require.True(t, ok, "ResetLimits clears the resolve bucket")
+	}
+	for range 60 {
+		ok, _ := preview.Allow("u:x")
+		require.True(t, ok, "ResetLimits clears the preview bucket")
 	}
 }

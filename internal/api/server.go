@@ -400,6 +400,7 @@ const (
 	// Network discovery (plan contract, A3), keyed like limitACME, each in a bucket of its own.
 	limitDiscovery        // 10 per minute per user or token: starting and cancelling scans, one budget for both
 	limitDiscoveryResolve // 30 per minute per user or token: the save-time check that a listed name resolves (ALC-DSC-0010)
+	limitDiscoveryPreview // 60 per minute per user or token: the scope form's live size check (no look-up, nothing dialed)
 )
 
 // route is one documented operation. The route table is the single source of
@@ -440,7 +441,8 @@ type server struct {
 	testMails *ratelimit.Limiter
 	export    *ratelimit.Limiter
 	// actions: the Phase 8 actions of C12's limitDownload that send no file (5/min per user each), limitACME and
-	// limitDiscovery (10/min per user or token) and limitDiscoveryResolve (30/min per user or token).
+	// limitDiscovery (10/min per user or token), limitDiscoveryResolve (30/min per user or token) and
+	// limitDiscoveryPreview (60/min per user or token).
 	actions map[limitClass]*ratelimit.Limiter
 	// oidcCallbacks: identity provider callbacks per binding cookie: 10/min (S-11: not per address, so a company
 	// behind one address is not limited to a few sign-ins a minute).
@@ -493,6 +495,7 @@ func newServer(d Deps) *server {
 
 			limitDiscovery:        ratelimit.New(d.Clock, 10, time.Minute),
 			limitDiscoveryResolve: ratelimit.New(d.Clock, 30, time.Minute),
+			limitDiscoveryPreview: ratelimit.New(d.Clock, 60, time.Minute),
 		},
 
 		denials:   newDenialCoalescer(d.Clock),

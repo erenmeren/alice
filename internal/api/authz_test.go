@@ -278,7 +278,8 @@ cancelling a scan are ` + "`discovery.operate`" + ` (Administrators, Operators a
 token; a scan is started only for a scope, never for addresses given in the request. Scan scopes, the allowed scan networks,
 the global exclusions and the retention are ` + "`discovery.manage`" + `: an Administrator's browser session with a fresh step-up, never an
 API token. Creating or changing a scope looks up the host names it adds (each at most 5 seconds; a refusal names the entry,
-never an address) and, with the size preview, is limited to 30 a minute per user. In lock only starting a scan is refused with
+never an address) and is limited to 30 a minute per user; the size preview of the scope form (no look-up, nothing dialed) has
+its own 60 a minute per user. In lock only starting a scan is refused with
 ALC-LIC-0001; cancelling a scan and changing scopes and settings keep working. The CSV export is a read (it works in lock), at
 most 10 a minute per user or token and one export of any kind at a time per person; ` + "`discovery.export`" + ` is recorded in the
 audit log before the first byte.

@@ -29,8 +29,8 @@ import (
 // but a token needs the operate scope (D7: the internal network map is never readable with a read token). Starting and
 // cancelling scans is discovery.operate (Admin, Operator; operate tokens), 10 a minute per user or token (one budget for
 // both). Defining scopes and the settings is discovery.manage (an Administrator's browser session with a fresh step-up,
-// never a token); the routes that may look a listed host name up (create, change) and the size preview share
-// limitDiscoveryResolve (30 a minute). The API never takes free-form targets for a scan: only a scope id.
+// never a token); the routes that may look a listed host name up (create, change) share limitDiscoveryResolve (30 a
+// minute); the size preview, asked while the form is typed in, has limitDiscoveryPreview (60 a minute). The API never takes free-form targets for a scan: only a scope id.
 //
 // Licence (A5): starting a scan is ClassReadOnly (403 license.locked in lock, nothing queued); every other change is
 // ClassAlways, so a locked installation can still stop a scan and change or remove its scopes.
@@ -42,7 +42,7 @@ func (s *server) discoveryRoutes() []route {
 		{method: http.MethodGet, pattern: base + "/summary", perm: view, handler: s.discoverySummary},
 		{method: http.MethodGet, pattern: base + "/scopes", perm: view, handler: s.listDiscoveryScopes},
 		{method: http.MethodPost, pattern: base + "/scopes", perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.createDiscoveryScope},
-		{method: http.MethodPost, pattern: base + "/scopes/preview", perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.previewDiscoveryScope},
+		{method: http.MethodPost, pattern: base + "/scopes/preview", perm: manage, lic: always, limit: limitDiscoveryPreview, handler: s.previewDiscoveryScope},
 		{method: http.MethodGet, pattern: base + "/scopes/{id}", perm: view, handler: s.getDiscoveryScope},
 		{method: http.MethodPatch, pattern: base + "/scopes/{id}", perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.updateDiscoveryScope},
 		{method: http.MethodDelete, pattern: base + "/scopes/{id}", perm: manage, lic: always, handler: s.deleteDiscoveryScope},
