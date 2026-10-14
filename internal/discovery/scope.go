@@ -664,8 +664,8 @@ func checkSchedule(s Schedule) (Schedule, error) {
 	if s.Hours == 0 {
 		return s, fail(ErrSchedule, "window", -1, "", "a window narrows a schedule; set the interval first")
 	}
-	start, ok1 := timeOfDay(s.WindowStart)
-	end, ok2 := timeOfDay(s.WindowEnd)
+	start, ok1 := ParseTimeOfDay(s.WindowStart)
+	end, ok2 := ParseTimeOfDay(s.WindowEnd)
 	if !ok1 || !ok2 {
 		return s, fail(ErrSchedule, "window", -1, "", "a window is two times of day, HH:MM")
 	}
@@ -685,8 +685,9 @@ func zoneName(z string) bool {
 	return err == nil
 }
 
-// timeOfDay parses "HH:MM" (two digits each, 00:00 to 23:59) into minutes after midnight.
-func timeOfDay(s string) (int, bool) {
+// ParseTimeOfDay parses "HH:MM" (two digits each, 00:00 to 23:59) into minutes after midnight: the one parser of a
+// scope's window (its validation here and the schedule in internal/jobs/netdiscojobs).
+func ParseTimeOfDay(s string) (int, bool) {
 	if len(s) != 5 || s[2] != ':' {
 		return 0, false
 	}

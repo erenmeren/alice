@@ -81,15 +81,3 @@ func TestScanDepsCarryTheJobsDependencies(t *testing.T) {
 func TestEndHookIgnoresATamperedJob(t *testing.T) {
 	assert.NoError(t, newHandlers(Deps{}).ended(context.Background(), nil, jobs.JobEnd{Status: jobs.StatusDead, Reason: "job.tampered"}))
 }
-
-func TestMinutes(t *testing.T) {
-	for in, want := range map[string]int{"00:00": 0, "23:59": 1439, "04:30": 270} {
-		got, ok := minutes(in)
-		assert.True(t, ok, in)
-		assert.Equal(t, want, got, in)
-	}
-	for _, in := range []string{"", "4:30", "24:00", "12:60", "ab:cd", "12-30", "+1:30", "12:3x", "123:00"} {
-		_, ok := minutes(in)
-		assert.False(t, ok, in)
-	}
-}

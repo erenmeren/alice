@@ -248,3 +248,33 @@ func scanHandler(w *world) *handlers {
 	h.install(w.runner)
 	return h
 }
+
+// The sweep never ends a scan whose job is running: neither within its lease nor after the lease expired while the
+// reaper has not taken the job back yet (the reaper's end hook decides then).
+func TestTheSweepLeavesScansOfRunningJobsAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lease time.Time
+	}{
+		{"valid lease", t0.Add(30 * time.Second)},
+		{"expired lease, not reaped yet", t0.Add(-time.Minute)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newWorld(t)
+			scan, job, err := w.start(w.scope("lab", scopeOpts{}), TriggerManual)
+			require.NoError(t, err)
+			w.exec(`UPDATE discovery_scans SET state = 'running', started_at = $2 WHERE id = $1`, scan, t0)
+			w.exec(`UPDATE jobs SET status = 'running', attempts = 1, locked_by = 'gone/1', locked_until = $2, heartbeat_at = $3,
+    started_at = $3 WHERE id = $1`, job, tc.lease, t0)
+			w.clock.Advance(time.Minute)
+			for _, task := range []string{jobs.NetdiscoSchedule.Name, jobs.NetdiscoRetention.Name} {
+				require.NoError(t, w.sched.RunNow(w.ctx, task))
+			}
+			n, err := EndOrphanScans(w.ctx, w.db.App, w.clock.Now())
+			require.NoError(t, err)
+			assert.Zero(t, n)
+			assert.Equal(t, "running", w.scan(scan).state)
+			assert.Equal(t, "running", w.job(job).status)
+		})
+	}
+}

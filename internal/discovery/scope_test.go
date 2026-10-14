@@ -556,3 +556,16 @@ func TestTrailingDotIPLiteralsAreNotNames(t *testing.T) {
 		require.Equal(t, [2]any{ErrInvalid, "entries"}, [2]any{e.Kind, e.Field}, in)
 	}
 }
+
+// ParseTimeOfDay is the one HH:MM parser of a scope's window (validation here, the schedule in netdiscojobs).
+func TestParseTimeOfDay(t *testing.T) {
+	for in, want := range map[string]int{"00:00": 0, "23:59": 1439, "04:30": 270} {
+		got, ok := ParseTimeOfDay(in)
+		require.True(t, ok, in)
+		require.Equal(t, want, got, in)
+	}
+	for _, in := range []string{"", "4:30", "24:00", "12:60", "ab:cd", "12-30", "+1:30", "-1:30", "12:+3", "12:3x", "123:00"} {
+		_, ok := ParseTimeOfDay(in)
+		require.False(t, ok, in)
+	}
+}

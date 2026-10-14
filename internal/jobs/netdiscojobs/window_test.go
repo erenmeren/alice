@@ -136,10 +136,21 @@ func TestDueOnTheSpringForwardDay(t *testing.T) {
 	assert.Equal(t, map[string]int{"2026-03-06": 1, "2026-03-07": 1, "2026-03-08": 1, "2026-03-09": 1, "2026-03-10": 1}, perDay(ny, inside))
 	assert.Equal(t, "2026-03-08 03:00 EDT", locals(ny, inside)[2])
 
-	// Hourly inside a window that starts in the missing hour: the slots start at the jump, as many as on any day.
+	// Hourly inside a window that starts in the missing hour: the slots start at the jump and stop at the local end
+	// (04:00 EDT), so the day has one scan, not none.
 	hourly := simulate(t, discovery.Schedule{Hours: 1, WindowStart: "02:30", WindowEnd: "04:00", TimeZone: "America/New_York"}, from, to)
-	assert.Equal(t, map[string]int{"2026-03-06": 2, "2026-03-07": 2, "2026-03-08": 2, "2026-03-09": 2, "2026-03-10": 2}, perDay(ny, hourly))
-	assert.Equal(t, []string{"2026-03-08 03:00 EDT", "2026-03-08 04:00 EDT"}, locals(ny, hourly)[4:6])
+	assert.Equal(t, map[string]int{"2026-03-06": 2, "2026-03-07": 2, "2026-03-08": 1, "2026-03-09": 2, "2026-03-10": 2}, perDay(ny, hourly))
+	assert.Equal(t, []string{"2026-03-08 03:00 EDT", "2026-03-09 02:30 EDT"}, locals(ny, hourly)[4:6])
+
+	// A window that spans the jump ends at its local end time (03:00 EDT), not two real hours after it opened: the
+	// hourly slots of the day are 01:00 EST only (02:00 does not exist), and the window never reaches 04:00 EDT.
+	across := simulate(t, discovery.Schedule{Hours: 1, WindowStart: "01:00", WindowEnd: "03:00", TimeZone: "America/New_York"}, from, to)
+	assert.Equal(t, map[string]int{"2026-03-06": 2, "2026-03-07": 2, "2026-03-08": 1, "2026-03-09": 2, "2026-03-10": 2}, perDay(ny, across))
+	assert.Equal(t, []string{"2026-03-08 01:00 EST"}, locals(ny, across)[4:5])
+	got, err := Due(discovery.Schedule{Hours: 1, WindowStart: "01:00", WindowEnd: "03:00", TimeZone: "America/New_York"},
+		time.Time{}, time.Date(2026, 3, 8, 3, 30, 0, 0, ny))
+	require.NoError(t, err)
+	assert.False(t, got, "03:30 EDT is after the window's local end")
 
 	// A daily scan right after the window opens on a 23-hour day is not refused for being 23 hours after the last one.
 	late := simulate(t, discovery.Schedule{Hours: 24, WindowStart: "01:00", WindowEnd: "01:20", TimeZone: "America/New_York"}, from, to)
@@ -160,6 +171,12 @@ func TestDueOnTheFallBackDay(t *testing.T) {
 	hourly := simulate(t, discovery.Schedule{Hours: 1, WindowStart: "00:30", WindowEnd: "02:30", TimeZone: "America/New_York"}, from, to)
 	assert.Equal(t, map[string]int{"2026-10-30": 2, "2026-10-31": 2, "2026-11-01": 2, "2026-11-02": 2, "2026-11-03": 2}, perDay(ny, hourly))
 	assert.Equal(t, []string{"2026-11-01 00:30 EDT", "2026-11-01 01:30 EDT"}, locals(ny, hourly)[4:6], "01:30 EST is not scanned again")
+
+	// A window that spans the repeated hour lasts its usual two real hours (it ends at 02:00 EST, before its local end
+	// 03:00 EST is reached a third hour later): two hourly scans, as on any day.
+	across := simulate(t, discovery.Schedule{Hours: 1, WindowStart: "01:00", WindowEnd: "03:00", TimeZone: "America/New_York"}, from, to)
+	assert.Equal(t, map[string]int{"2026-10-30": 2, "2026-10-31": 2, "2026-11-01": 2, "2026-11-02": 2, "2026-11-03": 2}, perDay(ny, across))
+	assert.Equal(t, []string{"2026-11-01 01:00 EDT", "2026-11-01 01:00 EST"}, locals(ny, across)[4:6])
 
 	// The repeated hour itself as a window: one scan, at its first occurrence.
 	repeated := simulate(t, discovery.Schedule{Hours: 1, WindowStart: "01:00", WindowEnd: "02:00", TimeZone: "America/New_York"}, from, to)
