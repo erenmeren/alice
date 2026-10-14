@@ -788,27 +788,9 @@ func TestLinking(t *testing.T) {
 	only, err := ListCertificates(bg(), p.App, CertificateFilter{Status: StatusKnown})
 	require.NoError(t, err)
 	require.Len(t, only, 2)
-	// The status filter (Task 12: conditions on the join, not on the computed status) is exactly the computed status,
-	// for every status, before the limit; another value matches nothing.
-	for _, st := range []string{StatusUnmanaged, StatusManaged, StatusKnown, "bogus"} {
-		var want []CertificateRow
-		for _, c := range all {
-			if c.Status == st {
-				want = append(want, c)
-			}
-		}
-		got, err := ListCertificates(bg(), p.App, CertificateFilter{Status: st})
-		require.NoError(t, err)
-		first, err2 := ListCertificates(bg(), p.App, CertificateFilter{Status: st, Limit: 1})
-		require.NoError(t, err2)
-		if len(want) == 0 {
-			require.Empty(t, got, st)
-			require.Empty(t, first, st)
-			continue
-		}
-		require.Equal(t, want, got, st)
-		require.Equal(t, want[:1], first, st)
-	}
+	// The status filter (Task 12: conditions on the join, not on the computed status) is exactly the computed status.
+	requireStatusFilterEquivalent(t, p, CertificateFilter{})
+	requireStatusFilterEquivalent(t, p, CertificateFilter{Limit: 1})
 	one, err := ListCertificates(bg(), p.App, CertificateFilter{Fingerprint: fingerprint(managed), ScopeID: scope})
 	require.NoError(t, err)
 	require.Equal(t, all[1:2], one)
@@ -848,6 +830,68 @@ func TestLinking(t *testing.T) {
 	both, err := ListEndpoints(bg(), p.App, EndpointFilter{})
 	require.NoError(t, err)
 	require.Len(t, both, 6)
+
+	// More status-filter equivalences (Task 12 review): a location missing since a time does not make a certificate
+	// managed (known), and the status composes with the keyset, the scope and "still found" (a gone endpoint).
+	third := p.scope(t, "third")
+	missingLoc, goneOnly := mk("missing-location", 5), mk("gone-only", 6)
+	p.ingestScan(t, third, t0, presented(t, ep("10.0.2.1", 443, ""), missingLoc), presented(t, ep("10.0.2.2", 443, ""), goneOnly),
+		presented(t, ep("10.0.2.3", 443, ""), managed))
+	missingID := inventoryCert(t, p, missingLoc, &byName)
+	_, err = p.Owner.Exec(bg(), `UPDATE certificate_locations SET missing_since = now() WHERE certificate_id = $1`, missingID)
+	require.NoError(t, err)
+	inventoryCert(t, p, goneOnly, &byIP)
+	_, err = p.App.Exec(bg(), `UPDATE discovery_endpoints SET state = 'gone', gone_since = now() WHERE address = '10.0.2.2'`)
+	require.NoError(t, err)
+	everything, err := ListCertificates(bg(), p.App, CertificateFilter{})
+	require.NoError(t, err)
+	status := map[string]string{}
+	for _, c := range everything {
+		status[c.Fingerprint] = c.Status
+	}
+	require.Equal(t, StatusKnown, status[fingerprint(missingLoc)], "a missing location is not live")
+	require.Equal(t, StatusManaged, status[fingerprint(goneOnly)])
+	cursor := &CertificateCursor{NotAfter: everything[1].NotAfter, Fingerprint: everything[1].Fingerprint}
+	for _, f := range []CertificateFilter{
+		{After: cursor},
+		{After: cursor, Limit: 1},
+		{ScopeID: third},
+		{ScopeID: scope},
+		{Current: true},
+		{Current: true, ScopeID: third},
+		{Current: true, After: cursor},
+	} {
+		requireStatusFilterEquivalent(t, p, f)
+	}
+	gone, err := ListCertificates(bg(), p.App, CertificateFilter{Current: true, Status: StatusManaged, ScopeID: third})
+	require.NoError(t, err)
+	require.Equal(t, []string{fingerprint(managed)}, fps(gone), "the managed leaf only a gone endpoint showed is not still found")
+}
+
+// requireStatusFilterEquivalent: for every status (and a value that is none), ListCertificates with f and the status is
+// exactly ListCertificates with f alone, its rows of that status (the limit applied after the status).
+func requireStatusFilterEquivalent(t *testing.T, p *pg, f CertificateFilter) {
+	t.Helper()
+	unlimited := f
+	unlimited.Limit = 0
+	all, err := ListCertificates(bg(), p.App, unlimited)
+	require.NoError(t, err)
+	for _, st := range []string{StatusUnmanaged, StatusManaged, StatusKnown, "bogus"} {
+		want := []string{}
+		for _, c := range all {
+			if c.Status == st && (f.Limit == 0 || len(want) < f.Limit) {
+				want = append(want, c.Fingerprint)
+			}
+		}
+		g := f
+		g.Status = st
+		got, err := ListCertificates(bg(), p.App, g)
+		require.NoError(t, err)
+		require.Equal(t, want, fps(got), "%s %+v", st, f)
+		for _, c := range got {
+			require.Equal(t, st, c.Status)
+		}
+	}
 }
 
 // inventoryCert inserts a managed certificate with der's fingerprint, on a live location of target when given.

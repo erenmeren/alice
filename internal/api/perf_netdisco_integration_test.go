@@ -42,8 +42,9 @@ import (
 //   - the CSV export of the 5,000 under 3 s and of a synthetic 50,000 (the export cap) under 30 s: half the server's
 //     60 s WriteTimeout, which an export must finish within (no export budget existed before; ruling in the task-12
 //     report);
-//   - the ingest of the 5,000 endpoints, which with the dial side (5,000 at the default 20 a second: 250 s, the token
-//     bucket's spacing pinned by TestBucketSpacesConnections) must fit the 5-minute scan budget;
+//   - the ingest of the 5,000 endpoints (measured), which with the dial side (computed from discovery.DefaultRate, never
+//     measured: 5,000 at 20 a second is 250 s, the token bucket's spacing pinned by TestBucketSpacesConnections) must
+//     fit the 5-minute scan budget;
 //   - memory flat: the live heap after a second identical round of scans is within a bound of the heap before it;
 //   - EXPLAIN (ANALYZE, BUFFERS) of every read query on the seeded data, logged (the report quotes them).
 func TestPerfNetdiscoScan(t *testing.T) {
@@ -65,10 +66,12 @@ FROM discovery_certificates`).Scan(&leaves, &intermediates, &endpoints, &churn))
 	require.Equal(t, perfIntermediates, intermediates)
 	require.Equal(t, perfLeaves, endpoints)
 	require.Zero(t, churn, "nothing was only counted as churn")
-	dial := time.Duration(perfLeaves) * (time.Second / 20) // the bucket at the default 20 a second (TestBucketSpacesConnections)
-	t.Logf("NETDISCO ingest of %d endpoints in %d scans: total %v, per scan p50 %.1f ms p95 %.1f ms; dial side at 20/s %v; "+
+	// The dial side is computed from the default rate, never measured: the token bucket lets one connection through every
+	// 1/DefaultRate s (pinned on a fake clock by TestBucketSpacesConnections); a real scan would only measure the wait.
+	dial := time.Duration(perfLeaves) * (time.Second / time.Duration(discovery.DefaultRate))
+	t.Logf("NETDISCO ingest of %d endpoints in %d scans: total %v, per scan p50 %.1f ms p95 %.1f ms; dial side at %d/s (computed) %v; "+
 		"serial bound %v (budget 5m0s)", perfLeaves, len(ingest), total.Round(time.Millisecond), ms(percentile(ingest, 0.5)),
-		ms(percentile(ingest, 0.95)), dial, (dial + total).Round(time.Millisecond))
+		ms(percentile(ingest, 0.95)), discovery.DefaultRate, dial, (dial + total).Round(time.Millisecond))
 	assert.Less(t, dial+total, 5*time.Minute, "5,000 endpoints in at most 5 minutes at the default rate")
 
 	// Round 2: the same scans again (every certificate known); the live heap must not grow with the data scanned.
@@ -176,8 +179,11 @@ const (
 	perfPerScope      = 250
 	perfLeaves        = perfScopes * perfPerScope
 	perfIntermediates = 1000
-	perfSelfSignedAt  = 4900     // leaves from here on are self-signed (no intermediate)
-	perfHeapBound     = 16 << 20 // measured growth: about 0 MiB; a round re-sends ~5 MiB of DER
+	perfSelfSignedAt  = 4900 // leaves from here on are self-signed (no intermediate)
+	// perfHeapBound: the live heap (after two collections) may grow this much across a second identical round. Measured
+	// growth is 0.00-0.01 MiB; one round writes ~7 MiB of PEM and statement arguments, so retaining a round's batches
+	// would exceed it.
+	perfHeapBound = 3 << 20
 )
 
 // perfFleet is what the fleet presents: per scope its endpoints and their results (built once; a round re-sends them).
