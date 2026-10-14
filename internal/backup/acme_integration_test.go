@@ -3,24 +3,31 @@
 package backup_test
 
 import (
+	"context"
 	"encoding/hex"
+	"sync"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/backup"
+	"alice/internal/inventory"
 	"alice/internal/secrets"
 )
 
 // acmeSeed is the ACME rows of TestACMEBackupCycle and what they hold.
 type acmeSeed struct {
-	account uuid.UUID
-	key     []byte // the plaintext account key
+	account  uuid.UUID
+	key      []byte // the plaintext account key
+	acmeCert uuid.UUID
+	order    uuid.UUID // the finished order
+	hook     uuid.UUID
 }
 
 // seedACME inserts a provider (with a sealed EAB key), an active account whose key is really sealed under the master key,
@@ -38,8 +45,8 @@ func seedACME(e *env) acmeSeed {
 		_, err := e.db.Owner.Exec(e.ctx, sql, args...)
 		require.NoError(e.t, err, sql)
 	}
-	s := acmeSeed{account: uuid.New(), key: []byte("account-key-canary-0123456789abcdef")}
-	provider, hook, acmeCert, order, cert, mkey := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	s := acmeSeed{account: uuid.New(), key: []byte("account-key-canary-0123456789abcdef"), acmeCert: uuid.New(), order: uuid.New(), hook: uuid.New()}
+	provider, hook, acmeCert, order, cert, mkey := uuid.New(), s.hook, s.acmeCert, s.order, uuid.New(), uuid.New()
 	cred, target, loc := uuid.New(), uuid.New(), uuid.New()
 	now := e.clk.Now()
 
@@ -130,4 +137,89 @@ func TestACMEBackupCycle(t *testing.T) {
 	m, err = e.svc.VerifyDeep(e.ctx, again.Path, []byte(passphrase))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), m.Tables["acme_accounts"])
+}
+
+// recordingJobs is the inventory's job queue of TestRestoreEndsInFlightACMEOrders: it records what the sweep would queue.
+type recordingJobs struct {
+	mu   sync.Mutex
+	reqs []inventory.JobRequest
+}
+
+func (j *recordingJobs) EnqueueTx(_ context.Context, _ pgx.Tx, r inventory.JobRequest) (uuid.UUID, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.reqs = append(j.reqs, r)
+	return uuid.New(), nil
+}
+
+// A backup taken while an order ran must not let the restored clone carry the original's order on: after Restore the
+// order is ended (failed, neutral code job.lease_expired, its pending key deleted and its presented list cleared), the
+// certificate leaves issuing, the stale-order sweep finds nothing to resume with the original's account key, and no
+// cleanup job removes the challenge records the original may still publish (the queued one is cancelled, the sweep queues
+// none). Final review finding 1 (A11).
+func TestRestoreEndsInFlightACMEOrders(t *testing.T) {
+	e := newRestoreEnv(t)
+	s := seedACME(e)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		_, err := e.db.Owner.Exec(e.ctx, sql, args...)
+		require.NoError(t, err, sql)
+	}
+	now := e.clk.Now()
+	running := uuid.New()
+	pk, err := e.keyring.Seal(secrets.Location{Table: "acme_orders", RowID: running.String(), Column: "pending_key"}, []byte("pending-leaf-key"))
+	require.NoError(t, err)
+	presented := `[{"challenge":{"type":"dns-01","domain":"www.corp.example","token":"tok1"},"hook_id":"` + s.hook.String() + `"}]`
+	exec("UPDATE acme_certificates SET state = 'issuing' WHERE id = $1", s.acmeCert)
+	exec(`INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, order_url, pending_key_ct, pending_key_nonce,
+pending_key_wrapped_dek, pending_key_version, presented) VALUES ($1, $2, 'issue', 'running', $3, 'https://ca.corp.example/order/2', $4, $5, $6, $7, $8)`,
+		running, s.acmeCert, now, pk.Ciphertext, pk.Nonce, pk.WrappedDEK, pk.KeyVersion, presented)
+	// An earlier order ended with a record left that its cleanup job (queued at backup time) was to remove.
+	ended := uuid.New()
+	exec(`INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, finished_at, error_code, presented)
+VALUES ($1, $2, 'test', 'failed', $3, $3, 'acme.validation_failed', $4)`, ended, s.acmeCert, now.Add(-time.Minute), presented)
+	mac := make([]byte, 32)
+	issueJob, cleanupJob := uuid.New(), uuid.New()
+	exec(`INSERT INTO jobs (id, type, class, kind, payload, payload_mac, dedupe_key, status, run_at, attempts, max_attempts, locked_by, locked_until, created_at)
+VALUES ($1, 'acme.issue', 'change', 'user', $2, $3, $4, 'running', $5, 1, 3, 'worker-1/1', $5::timestamptz + interval '1 hour', $5)`,
+		issueJob, `{"order_id":"`+running.String()+`","acme_certificate_id":"`+s.acmeCert.String()+`"}`, mac, "acme.issue:"+s.acmeCert.String(), now)
+	exec(`INSERT INTO jobs (id, type, class, kind, payload, payload_mac, dedupe_key, status, run_at, attempts, max_attempts, created_at)
+VALUES ($1, 'acme.cleanup', 'always', 'system', $2, $3, $4, 'queued', $5, 0, 3, $5)`,
+		cleanupJob, `{"order_id":"`+ended.String()+`"}`, mac, "acme.cleanup:"+ended.String(), now)
+	info := e.create(backup.KindManual)
+
+	res, err := e.restore(info.Path, nil)
+	require.NoError(t, err)
+	e.reload()
+
+	var state, code string
+	var hasKey bool
+	var left int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT state, error_code, pending_key_ct IS NOT NULL OR pending_key_nonce IS NOT NULL
+    OR pending_key_wrapped_dek IS NOT NULL OR pending_key_version IS NOT NULL, jsonb_array_length(presented) FROM acme_orders WHERE id = $1`, running).
+		Scan(&state, &code, &hasKey, &left))
+	assert.Equal(t, "failed", state, "the order of the original is not running in the clone")
+	assert.Equal(t, "job.lease_expired", code)
+	assert.False(t, hasKey, "the pending key is deleted")
+	assert.Zero(t, left, "the clone forgets the original's challenge records")
+	assert.Zero(t, e.count("SELECT count(*) FROM acme_orders WHERE presented <> '[]'::jsonb"), "no order lists records for a cleanup")
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM acme_certificates WHERE id = $1 AND state = 'active'", s.acmeCert),
+		"the certificate is no longer issuing")
+	var cleanupStatus string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, "SELECT status FROM jobs WHERE id = $1", cleanupJob).Scan(&cleanupStatus))
+	assert.Equal(t, "cancelled", cleanupStatus, "the backup's cleanup job does not run in the clone")
+	assert.Zero(t, e.count("SELECT count(*) FROM jobs WHERE type = 'acme.cleanup' AND status IN ('queued', 'running', 'blocked_license')"))
+	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "1 certificate order") }), res.Warnings)
+
+	// Five minutes and more later the sweep finds nothing to resume and queues no cleanup.
+	e.clk.Advance(10 * time.Minute)
+	jobs := &recordingJobs{}
+	inv := inventory.New(inventory.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clk, License: openGate{}, Jobs: jobs})
+	stale, err := inv.StaleACMEOrders(e.ctx, 5*time.Minute)
+	require.NoError(t, err)
+	assert.Empty(t, stale, "no order of the original is resumed")
+	n, err := inv.EnqueueACMECleanups(e.ctx, 0, 24*time.Hour)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	assert.Empty(t, jobs.reqs, "no cleanup of the original's records is queued")
 }

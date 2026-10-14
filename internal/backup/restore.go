@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -742,8 +743,64 @@ WHERE class = 'change' AND status IN ('queued', 'running')`)
 			r.warn("Automatic renewal of " + strconv.FormatInt(n, 10) + " certificates ordered from certificate authorities is switched off:" +
 				" turn it on again under Issued certificates once this installation replaces the original.")
 		}
-		return nil
+		return r.endACMEOrders(ctx, tx, now)
 	})
+}
+
+// endACMEOrders ends the original's certificate orders in the clone (A11, final review finding 1): an order running at
+// backup time is ended as failed with the neutral code job.lease_expired (an interrupted job: no failure is counted) and
+// its pending key deleted, as AbandonACMEOrder ends it, so the stale-order sweep does not resume it with the original's
+// account key; its certificate leaves issuing as there. The challenge records every order still lists (the running
+// one's, and leftovers of ended ones) belong to the original, which may still publish them: the lists are cleared (the
+// freeze trigger Z1017 allows a finished order's list to shrink) and the backup's live acme.cleanup jobs are cancelled,
+// so neither a queued job nor the cleanup sweep removes them from the clone.
+func (r *restorer) endACMEOrders(ctx context.Context, tx pgx.Tx, now time.Time) error {
+	rows, err := tx.Query(ctx, `UPDATE acme_orders SET state = 'failed', finished_at = $1, error_code = 'job.lease_expired',
+    pending_key_ct = NULL, pending_key_nonce = NULL, pending_key_wrapped_dek = NULL, pending_key_version = NULL, presented = '[]'
+WHERE state = 'running' RETURNING acme_certificate_id, kind`, now)
+	if err != nil {
+		return fmt.Errorf("backup: end the backup's running certificate orders: %w", err)
+	}
+	var issuing []uuid.UUID
+	ended := 0
+	for rows.Next() {
+		var id uuid.UUID
+		var kind string
+		if err := rows.Scan(&id, &kind); err != nil {
+			rows.Close()
+			return fmt.Errorf("backup: read an ended certificate order: %w", err)
+		}
+		ended++
+		if kind == "issue" {
+			issuing = append(issuing, id)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("backup: end the backup's running certificate orders: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET state = CASE WHEN state = 'stopped' THEN 'stopped'
+    WHEN failures > 0 THEN 'failing' WHEN current_certificate_id IS NOT NULL THEN 'active' ELSE 'pending' END, updated_at = $2
+WHERE id = ANY($1)`, issuing, now); err != nil {
+		return fmt.Errorf("backup: restore the state of the ordered certificates: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "UPDATE acme_orders SET presented = '[]' WHERE presented <> '[]'::jsonb"); err != nil {
+		return fmt.Errorf("backup: clear the challenge records of the backup's orders: %w", err)
+	}
+	const cleanups = `SELECT id FROM jobs WHERE type = 'acme.cleanup' AND status IN ('queued', 'running', 'blocked_license')`
+	if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $1, error_code = 'job.lease_expired'
+WHERE finished_at IS NULL AND job_id IN (`+cleanups+`)`, now); err != nil {
+		return fmt.Errorf("backup: close the attempts of the backup's cleanup jobs: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'job.lease_expired', finished_at = $1,
+    locked_by = NULL, locked_until = NULL WHERE id IN (`+cleanups+`)`, now); err != nil {
+		return fmt.Errorf("backup: cancel the backup's cleanup jobs: %w", err)
+	}
+	if ended > 0 {
+		r.warn(strconv.Itoa(ended) + " certificate orders running when the backup was made are ended without contacting the certificate" +
+			" authority; the challenge records they published are left to the original installation. Order again under Issued certificates.")
+	}
+	return nil
 }
 
 // installationSeal is the seal of license.(*Service).seal (internal/license/installation.go), which the license

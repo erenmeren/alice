@@ -202,6 +202,14 @@ nothing was changed. The refusals and what to do are in
   Switch **Automatic renewal** on again on each certificate's page when this installation is the one in use. A
   restored copy uses the same accounts at the certificate authorities as the original: do not rotate or deactivate an
   account on a test copy ([admin-guide.md](admin-guide.md#after-a-restore)).
+- Certificate orders that were running when the backup was made are ended (failed, `job.lease_expired`, their
+  pending private key deleted) without contacting the certificate authority, so the restored copy never carries on an
+  order of the original with its account. The challenge records (DNS records, token files) the backup's orders still
+  listed are left to the original: the restored copy forgets them and does not run the backup's cleanup tasks
+  (they are cancelled). The restore prints
+  `Warning: <n> certificate orders running when the backup was made are ended without contacting the certificate authority; the challenge records they published are left to the original installation. Order again under Issued certificates.`
+  If the original is gone for good, check the DNS zone and the token directories for leftover `_acme-challenge`
+  records and token files.
 - If audit forwarding is on, the syslog server receives entries again from where the backup's forwarding stood:
   first identical copies of entries it already has (up to the backup's newest entry), then `system.restored` and the
   entries after it under sequence numbers it already holds with other content. From there the two chains differ.
