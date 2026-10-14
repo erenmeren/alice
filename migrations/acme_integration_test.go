@@ -288,6 +288,22 @@ pending_key_wrapped_dek = '\x02', pending_key_version = 1 WHERE id = $1`, runnin
 	assert.Equal(t, orderFrozen, sqlState(err), "a finished order never gains a key")
 	_, err = d.App.Exec(ctx, "DELETE FROM acme_orders WHERE id = $1", running)
 	assert.Equal(t, privilegeDenied, sqlState(err))
+
+	// A finished order that still holds its key (a delete that failed) may only lose it: no column of the sealed key
+	// changes on its own, not only the ciphertext (final review finding 8).
+	kept := uuid.New()
+	_, err = d.App.Exec(ctx, `INSERT INTO acme_orders (id, acme_certificate_id, kind, state, started_at, finished_at, error_code, pending_key_ct,
+pending_key_nonce, pending_key_wrapped_dek, pending_key_version) VALUES ($1, $2, 'issue', 'failed', now(), now(), 'ALC-ACM-0006', '\x01',
+decode(repeat('00', 12), 'hex'), '\x02', 1)`, kept, w.acmeCert)
+	require.NoError(t, err)
+	for col, val := range map[string]string{"pending_key_ct": `'\x05'`, "pending_key_nonce": "decode(repeat('11', 12), 'hex')",
+		"pending_key_wrapped_dek": `'\x07'`, "pending_key_version": "2"} {
+		_, err = d.App.Exec(ctx, "UPDATE acme_orders SET "+col+" = "+val+" WHERE id = $1", kept)
+		assert.Equal(t, orderFrozen, sqlState(err), "%s of a finished order's key never changes", col)
+	}
+	_, err = d.App.Exec(ctx, `UPDATE acme_orders SET pending_key_ct = NULL, pending_key_nonce = NULL, pending_key_wrapped_dek = NULL,
+pending_key_version = NULL WHERE id = $1`, kept)
+	require.NoError(t, err, "the key may go")
 }
 
 func TestAcmeImmutableColumns(t *testing.T) {
