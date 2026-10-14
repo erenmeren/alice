@@ -245,8 +245,13 @@ func (s *scan) probe(ctx context.Context, x *Expansion) (state, code string, err
 		s.poll(pctx, stop)
 	}()
 
+excluded:
 	for _, e := range x.Excluded {
-		results <- Result{Endpoint: e, Code: tlsprobe.CodePolicy}
+		select {
+		case results <- Result{Endpoint: e, Code: tlsprobe.CodePolicy}:
+		case <-dctx.Done():
+			break excluded // cancelled, timed out or the ingest failed: the rest is not recorded
+		}
 	}
 	bucket := s.newBucket(s.Clock, rate)
 dispatch:
@@ -299,7 +304,7 @@ func outcome(cause error) (state, code string, err error) {
 	case errors.As(cause, &lock):
 		return ScanCancelled, lockReason(lock.err), nil
 	}
-	return ScanCancelled, ReasonInterrupted, nil // the job's context ended (shutdown, lost lease)
+	return ScanFailed, ReasonInterrupted, nil // the job's context ended (shutdown, lost lease): failed, as a crash is (ALC-DSC-0012)
 }
 
 // work probes the endpoints it receives (the dispatch hands none out once it has stopped). A probe ended by the job's

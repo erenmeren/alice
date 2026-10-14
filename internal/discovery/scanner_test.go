@@ -807,7 +807,7 @@ func TestIngestFailureFailsTheScan(t *testing.T) {
 }
 
 // TestParentContextEndsTheScan: the job's context ending (shutdown, lost lease) stops the dispatch; the scan is
-// cancelled as interrupted, recorded on a context that is not the job's.
+// failed as interrupted, recorded on a context that is not the job's.
 func TestParentContextEndsTheScan(t *testing.T) {
 	st := newMemStore(labScope())
 	st.start.Scope.Concurrency = 1
@@ -826,7 +826,7 @@ func TestParentContextEndsTheScan(t *testing.T) {
 	d.expand = fixed(&Expansion{Dial: eps}, nil)
 	require.NoError(t, Run(ctx, d, uuid.New()))
 	fin := st.finish(t)
-	require.Equal(t, [2]string{ScanCancelled, ReasonInterrupted}, [2]string{fin.State, fin.ErrorCode})
+	require.Equal(t, [2]string{ScanFailed, ReasonInterrupted}, [2]string{fin.State, fin.ErrorCode})
 	require.LessOrEqual(t, len(p.dialed()), 3)
 	for _, r := range st.results() {
 		require.NotEqual(t, tlsprobe.Code(""), r.Code)
@@ -840,7 +840,7 @@ func TestOutcomeAndReasons(t *testing.T) {
 	require.Contains(t, lockStop{license.ErrLocked}.Error(), "license")
 	state, code, err := outcome(context.Canceled)
 	require.NoError(t, err)
-	require.Equal(t, [2]string{ScanCancelled, ReasonInterrupted}, [2]string{state, code})
+	require.Equal(t, [2]string{ScanFailed, ReasonInterrupted}, [2]string{state, code})
 }
 
 // TestCancelPollErrorsAreIgnored: a failing read of the flag does not stop the scan.
