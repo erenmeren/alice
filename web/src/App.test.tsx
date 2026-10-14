@@ -33,14 +33,14 @@ describe('application shell', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
     expect(screen.getByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
     await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
-    expect(navLabels()).toEqual(['Overview', 'Certificates', 'Issued certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Settings', 'License', 'Your account', 'API tokens']);
+    expect(navLabels()).toEqual(['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Settings', 'License', 'Your account', 'API tokens']);
   });
 
   it('hides People & access and Audit trail from operators', async () => {
     server.use(...sessionHandlers(sessionFor('operator')));
     await renderRoute('/');
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
-    expect(navLabels()).toEqual(['Overview', 'Certificates', 'Issued certificates', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Your account', 'API tokens']);
+    expect(navLabels()).toEqual(['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Your account', 'API tokens']);
   });
 
   it('shows the audit trail but not People & access to auditors, in Turkish', async () => {
@@ -48,7 +48,7 @@ describe('application shell', () => {
     await renderRoute('/', { languages: ['tr-TR'] });
     expect(await screen.findByRole('heading', { level: 1, name: 'Genel bakış' })).toBeInTheDocument();
     expect(screen.getByTestId('current-user')).toHaveTextContent(/^Ilgın Işık$/);
-    expect(navLabels()).toEqual(['Genel bakış', 'Sertifikalar', 'Verilen sertifikalar', 'SSH anahtarları', 'Sunucular', 'Key Vault kasaları', 'Dağıtımlar', 'Anahtar rotasyonları', 'Denetim kaydı', 'Lisans', 'Hesabınız', 'API anahtarları']);
+    expect(navLabels()).toEqual(['Genel bakış', 'Sertifikalar', 'Verilen sertifikalar', 'Ağ keşfi', 'SSH anahtarları', 'Sunucular', 'Key Vault kasaları', 'Dağıtımlar', 'Anahtar rotasyonları', 'Denetim kaydı', 'Lisans', 'Hesabınız', 'API anahtarları']);
     expect(document.documentElement.lang).toBe('tr');
   });
 

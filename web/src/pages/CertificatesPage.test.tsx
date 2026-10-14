@@ -52,6 +52,41 @@ describe('CertificatesPage', () => {
     expect(screen.getByText('Expiry filters are cumulative: “Next 30 days” includes expired certificates.')).toBeVisible();
   });
 
+  it.each([
+    ['a scope exists', { unmanaged_total: 7, unmanaged_expiring_30d: 1, scopes: 2, last_scan_at: null }, 'Found on the network, not managed (7)'],
+    ['no scope exists', { unmanaged_total: 0, unmanaged_expiring_30d: 0, scopes: 0, last_scan_at: null }, null],
+  ])('links to the unmanaged certificates of Network discovery when %s', async (_case, summary, text) => {
+    server.use(...sessionHandlers(auditorSession), targets, noCsrs, oneCertificate, http.get('/api/v1/discovery/summary', () => HttpResponse.json(summary)));
+    await renderRoute('/certificates');
+    await screen.findByRole('heading', { level: 1, name: 'Certificates' });
+    if (text) {
+      const link = await screen.findByRole('link', { name: text });
+      expect(link).toHaveAttribute('href', '/discovery?view=unmanaged');
+      // A link, not one of the expiry filters.
+      expect(within(screen.getByRole('group', { name: 'Expiry shortcuts' })).queryByRole('link')).not.toBeInTheDocument();
+    } else {
+      await waitFor(() => expect(screen.queryByTestId('discovery-chip')).not.toBeInTheDocument());
+    }
+  });
+
+  it('shows no discovery link to someone who may not read the network map', async () => {
+    let asked = false;
+    server.use(
+      ...sessionHandlers(operatorSession),
+      targets,
+      noCsrs,
+      oneCertificate,
+      http.get('/api/v1/discovery/summary', () => {
+        asked = true;
+        return errorResponse(403, 'ALC-AUTH-0002', 'auth.forbidden');
+      }),
+    );
+    await renderRoute('/certificates');
+    await waitFor(() => expect(asked).toBe(true));
+    expect(screen.queryByTestId('discovery-chip')).not.toBeInTheDocument();
+    expect(screen.queryByText('ALC-AUTH-0002')).not.toBeInTheDocument();
+  });
+
   it('shows the whole-inventory counts only while no other filter narrows the list, and All pressed only when nothing is filtered', async () => {
     server.use(
       ...sessionHandlers(adminSession),

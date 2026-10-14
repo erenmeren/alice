@@ -5,8 +5,9 @@ import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 import { keyAlgorithmKey } from '../api/enums';
 import { listAllServers, listCertificates } from '../api/endpoints';
+import { getDiscoverySummary } from '../api/discovery';
 import { getDashboardSummary } from '../api/phase7';
-import { CERTIFICATES_KEY, CSRS_KEY, DASHBOARD_KEY, TARGETS_KEY } from '../api/queryKeys';
+import { CERTIFICATES_KEY, CSRS_KEY, DASHBOARD_KEY, DISCOVERY_SUMMARY_KEY, TARGETS_KEY } from '../api/queryKeys';
 import type { Certificate, CertificateQuery, CertificateSourceFilter, ExpiryFilter } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { sourceIcon } from '../components/certificates/UsageTopology';
@@ -95,6 +96,9 @@ export function CertificatesPage() {
 
   const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
   const summary = useQuery({ queryKey: DASHBOARD_KEY, queryFn: getDashboardSummary });
+  // Network discovery's unmanaged certificates are not part of this inventory (decision D2): a link says how many were
+  // found, once a scan scope exists. A role or token that may not read the network map gets an error and no link.
+  const discovery = useQuery({ queryKey: DISCOVERY_SUMMARY_KEY, queryFn: ({ signal }) => getDiscoverySummary(signal), retry: false });
   const filter: CertificateQuery = {
     target_id: filters.target_id,
     source: filters.source as CertificateSourceFilter | '',
@@ -199,6 +203,7 @@ export function CertificatesPage() {
           </>
         }
       />
+      <div className={classes.chipRow}>
       <div className={classes.chips} role="group" aria-label={t('certificates.page.chips')}>
         {CHIPS.map((c) => {
           // "All certificates" is pressed only when nothing at all is filtered: never "all" over a filtered list.
@@ -224,6 +229,12 @@ export function CertificatesPage() {
             </Button>
           );
         })}
+      </div>
+      {discovery.data && discovery.data.scopes > 0 && (
+        <Button component={Link} to="/discovery?view=unmanaged" size="xs" variant="default" className={classes.chip} leftSection={<Icon name="Network" size={14} />} data-testid="discovery-chip">
+          {t('certificates.page.discovered', { count: discovery.data.unmanaged_total })}
+        </Button>
+      )}
       </div>
       <PendingCSRs canOperate={canOperate} onCompleted={(id) => navigate(`/certificates/${id}`)} />
       <ErrorAlert error={certs.error} />

@@ -62,7 +62,7 @@ describe('ExpiryHorizon', () => {
     const line = within(box).getByTestId('discovery-unmanaged');
     expect(within(line).getByRole('link', { name: 'Found on the network, not managed by Alice, expiring within 30 days: 3' })).toHaveAttribute(
       'href',
-      '/discovery?view=unmanaged',
+      '/discovery?view=unmanaged&expiry=30',
     );
     // The managed numbers are the same as without it.
     expect(within(box).getByRole('link', { name: /^Within 30 days\s*7$/ })).toBeVisible();

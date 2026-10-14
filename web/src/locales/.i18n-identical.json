@@ -10,6 +10,8 @@
   "certificates.detail.keyValue",
   "certificates.sourceAzureKv",
   "dashboard.statusCount",
+  "discovery.scans.optionBlocked",
+  "discovery.scope.preview.ports_one",
   "enum.certificateSource.azure_kv",
   "enum.keyAlgorithm.ecdsa",
   "enum.keyAlgorithm.ed25519",

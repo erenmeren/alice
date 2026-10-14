@@ -46,6 +46,11 @@ import {
   acmeBindingFixture,
   acmeCurrentFixture,
   acmeOrderFixture,
+  discoveredCertificateFixture,
+  discoveredEndpointFixture,
+  discoveryScanFixture,
+  discoveryScopeFixture,
+  discoverySettingsFixture,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -240,6 +245,37 @@ const dataHandlers = [
         { kind: 'certificate_expiry', object_id: 'c1', name: 'www.seed.test', expires_at: '2026-10-14T08:00:00Z', days_left: 7, expired: false, fingerprint: 'f', websites: [], servers: ['seed-web-1'], target_ids: ['t1'], vault: '', vault_id: null },
         { kind: 'kv_key_expiry', object_id: 'k1', name: 'signing-key', expires_at: '2020-10-14T08:00:00Z', days_left: 0, expired: true, fingerprint: '', websites: [], servers: [], target_ids: [], vault: 'prod-vault', vault_id: 'v1' },
       ],
+    }),
+  ),
+  // Network discovery: a windowed scope, no allowed network yet (the banner), every status and a failed scan.
+  http.get('/api/v1/discovery/scopes', () =>
+    HttpResponse.json({
+      items: [
+        discoveryScopeFixture({ schedule_hours: 36, window_start: '01:00', window_end: '05:00', window_tz: 'Europe/Istanbul', sni_names: ['a.test'], exclusions: ['10.0.1.9'], alert_on_expiry: true }),
+        discoveryScopeFixture({ id: 's2', name: 'Lab', enabled: false, last_scan: null, active_scan_id: 'n1' }),
+      ],
+      next_cursor: null,
+    }),
+  ),
+  http.get('/api/v1/discovery/settings', () => HttpResponse.json(discoverySettingsFixture({ allowed_networks: [], scanning_enabled: false }))),
+  http.get('/api/v1/discovery/certificates', () =>
+    HttpResponse.json({
+      items: [
+        discoveredCertificateFixture(),
+        discoveredCertificateFixture({ fingerprint_sha256: 'b2'.repeat(32), status: 'managed', expired: true, self_signed: true, not_after: '2020-01-01T00:00:00Z' }),
+        discoveredCertificateFixture({ fingerprint_sha256: 'c3'.repeat(32), status: 'known', subject_cn: '', sans: [] }),
+      ],
+      next_cursor: 'more',
+    }),
+  ),
+  http.get('/api/v1/discovery/certificates/:fp', () => HttpResponse.json({ ...discoveredCertificateFixture(), endpoints: [discoveredEndpointFixture({ state: 'no_tls', last_error_code: 'no_tls' })], more_endpoints: false })),
+  http.get('/api/v1/discovery/scans', () =>
+    HttpResponse.json({
+      items: [
+        discoveryScanFixture({ id: 'n1', scope_name: 'Lab', state: 'running', finished_at: null }),
+        discoveryScanFixture({ id: 'n2', state: 'failed', trigger: 'schedule', error_code: 'ALC-DSC-0012', error_reason: 'discovery.scan_interrupted' }),
+      ],
+      next_cursor: null,
     }),
   ),
   http.get('/api/v1/alerts', () =>
@@ -473,5 +509,41 @@ describe.each(['en', 'tr'] as const)('the issued certificate dialogs in %s', (la
     await openAndClose(screen.getByRole('button', { name: t('Deploy now', 'Şimdi dağıt') }));
     await openAndClose(screen.getAllByRole('button', { name: new RegExp(t('^Remove ', ' öğesini kaldır$')) })[0]);
     await openAndClose(screen.getAllByRole('switch', { name: new RegExp(t('^Automatic deployment for', 'için otomatik dağıtım$')) })[1]);
+  });
+});
+
+describe.each(['en', 'tr'] as const)('the network discovery dialogs in %s', (lang) => {
+  it('open the scope, settings, delete and start dialogs and the certificate drawer with no untranslated keys', async () => {
+    const admin = sessionFor('admin');
+    server.use(
+      ...sessionHandlers({ ...admin, user: { ...admin.user, locale: lang } }, installedStatus),
+      http.get('/api/v1/discovery/settings', () => HttpResponse.json(discoverySettingsFixture())),
+      http.post('/api/v1/discovery/scopes/preview', () => HttpResponse.json({ addresses: 1024, excluded_addresses: 2, hostnames: 1, ports: 2, sni_names: 1, endpoints: 4100, builtin_exclusions: ['10.0.0.0/32'] })),
+      ...dataHandlers,
+    );
+    const t = (en: string, tr: string) => (lang === 'en' ? en : tr);
+    const { router } = await renderRoute('/discovery', { languages: [lang] });
+    await userEvent.click((await screen.findAllByRole('button', { name: 'legacy.example.test' }))[0]);
+    const drawer = await screen.findByRole('dialog', { name: t('Certificate found on the network', 'Ağda bulunan sertifika') });
+    await within(drawer).findByText(t('The server did not complete a TLS handshake.', 'Sunucu bir TLS el sıkışmasını tamamlamadı.'));
+    expectNoRawKeys();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await router.navigate('/discovery?tab=scopes');
+    const cancel = t('Cancel', 'İptal');
+    const openAndClose = async (button: HTMLElement, wait?: string) => {
+      await userEvent.click(button);
+      const dialog = await screen.findByRole('dialog');
+      if (wait) await within(dialog).findByText(wait, {}, { timeout: 3000 });
+      expectNoRawKeys();
+      await userEvent.click(within(dialog).getByRole('button', { name: cancel }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    };
+    await openAndClose(await screen.findByRole('button', { name: t('Edit Data centre', 'Düzenle: Data centre') }), t('This scope covers 1,024 addresses and 1 host name × 2 ports.', 'Bu kapsam 1.024 adres ve 1 ana bilgisayar adı × 2 port içerir.'));
+    await openAndClose(screen.getByRole('button', { name: t('Change settings', 'Ayarları değiştir') }));
+    await openAndClose(screen.getByRole('button', { name: t('Delete Data centre', 'Sil: Data centre') }));
+    await router.navigate('/discovery?tab=scans');
+    await openAndClose(await screen.findByRole('button', { name: t('Start a scan', 'Tarama başlat') }));
   });
 });

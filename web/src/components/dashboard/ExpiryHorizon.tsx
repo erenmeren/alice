@@ -117,7 +117,7 @@ export function ExpiryHorizon({ counts, discovery }: { counts: Counts; discovery
         <p className={classes.keyNote}>{t('dashboard.horizon.cumulative')}</p>
         {discovery && (
           <p className={classes.discoveryLine} data-testid="discovery-unmanaged">
-            <Anchor component={Link} to="/discovery?view=unmanaged" className={classes.countLink}>
+            <Anchor component={Link} to="/discovery?view=unmanaged&expiry=30" className={classes.countLink}>
               {t('dashboard.unmanagedExpiring', { count: discovery.unmanaged_expiring_30d })}
             </Anchor>
           </p>

@@ -92,7 +92,7 @@ describe('DashboardPage', () => {
     server.use(...sessionHandlers(adminSession), ...dashboardHandlers({ discovery: { unmanaged_expiring_30d: 4 } }));
     const { unmount } = await renderRoute('/');
     const link = await screen.findByRole('link', { name: 'Found on the network, not managed by Alice, expiring within 30 days: 4' });
-    expect(link).toHaveAttribute('href', '/discovery?view=unmanaged');
+    expect(link).toHaveAttribute('href', '/discovery?view=unmanaged&expiry=30');
     const strip = screen.getByRole('group', { name: 'Summary' });
     expect(within(strip).getByRole('link', { name: /Monitored certificates\s*8\s*6 expire within 30 days/ })).toBeVisible();
     unmount();

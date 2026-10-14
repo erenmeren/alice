@@ -105,6 +105,15 @@ export const SCREENS: Screen[] = [
   { path: '/acme', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Next renewal', tr: 'Sonraki yenileme' } },
   { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'Websites using this certificate', tr: 'Bu sertifikayı kullanan web siteleri' } },
   { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Automatic renewal stopped', tr: 'Otomatik yenileme durdu' } },
+  // Network discovery: the Results, the Scopes with the no-network banner, and the Scans with a failed scan.
+  { path: '/discovery', session: sessionFor('admin'), status: installedStatus, ready: { en: 'What “unmanaged” means', tr: '“Yönetilmiyor” ne demek?' } },
+  {
+    path: '/discovery?tab=scopes',
+    session: sessionFor('operator'),
+    status: installedStatus,
+    ready: { en: 'Nothing is scanned until you list the networks Alice may scan', tr: "Alice'in tarayabileceği ağları listeleyene kadar hiçbir şey taranmaz" },
+  },
+  { path: '/discovery?tab=scans', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'The scan was interrupted.', tr: 'Tarama yarıda kesildi.' } },
   {
     path: `/servers/${nginxTargetFixture.id}`,
     session: sessionFor('operator'),

@@ -31,6 +31,8 @@ export const handlers = [
   // Phase 9: the Key rotations page and the run page read every policy; the rotations page reads the runs.
   http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [], next_cursor: null })),
+  // Network discovery: the Certificates page reads the summary for its link (no scope by default: no link).
+  http.get('/api/v1/discovery/summary', () => HttpResponse.json({ unmanaged_total: 0, unmanaged_expiring_30d: 0, scopes: 0, last_scan_at: null })),
 ];
 
 export const server = setupServer(...handlers);

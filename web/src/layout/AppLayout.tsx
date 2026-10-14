@@ -38,6 +38,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/', labelKey: 'nav.dashboard', roles: ALL, icon: 'LayoutDashboard', group: 'none' },
   { to: '/certificates', labelKey: 'nav.certificates', roles: ALL, icon: 'FileKey2', group: 'inventory' },
   { to: '/acme', labelKey: 'nav.acme', roles: ALL, icon: 'ShieldCheck', group: 'inventory' },
+  { to: '/discovery', labelKey: 'nav.discovery', roles: ALL, icon: 'Network', group: 'inventory' },
   { to: '/ssh-keys', labelKey: 'nav.sshKeys', roles: ALL, icon: 'KeyRound', group: 'inventory' },
   { to: '/servers', labelKey: 'nav.servers', roles: ALL, icon: 'Server', group: 'inventory' },
   { to: '/key-vaults', labelKey: 'nav.keyVaults', roles: ALL, icon: 'Cloud', group: 'inventory' },
