@@ -18,8 +18,10 @@ test: ## Run Go unit tests with the race detector (release build, plus the e2e a
 	go test -race -count=1 -tags testlicense ./internal/license/...
 
 .PHONY: test-integration
+# ALICE_REQUIRE_FLEET=1: the network discovery fleet journey fails instead of skipping when this machine has no
+# container bridge address to run its fake TLS fleet on (internal/api/discovery_integration_test.go).
 test-integration: ## Run integration tests (needs Docker)
-	go test -race -count=1 -tags integration ./...
+	ALICE_REQUIRE_FLEET=1 go test -race -count=1 -tags integration ./...
 
 # The real-Nginx matrix installs the release-built helper (make helper) through the nginx profile's
 # setup script, which checks it against the checksums linked into the test binary exactly as make
@@ -533,7 +535,7 @@ release-keycheck: ## Release gate: fails until the vendor's production release a
 
 .PHONY: coverage
 coverage: ## Run all Go tests (with integration) under coverage and enforce coverage-floors.json (R36)
-	go test -race -count=1 -tags integration -coverprofile=coverage.out ./...
+	ALICE_REQUIRE_FLEET=1 go test -race -count=1 -tags integration -coverprofile=coverage.out ./...
 	go run ./tools/covercheck -profile coverage.out -floors coverage-floors.json
 
 .PHONY: perf
