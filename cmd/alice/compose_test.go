@@ -610,8 +610,8 @@ func TestE2EFakeFleetIsTestOnlyHardenedOnItsOwnNetwork(t *testing.T) {
 	alice := overlay.Services["alice"]
 	assert.Equal(t, []string{"fleet"}, alice.Networks.names(), "the overlay adds only the fleet network to alice's base networks")
 	assert.Equal(t, aliceFleetIP, alice.Networks["fleet"].IPv4Address)
-	_, waits := alice.DependsOn["fakefleet"]
-	assert.False(t, waits, "alice does not need the fleet to start")
+	assert.Equal(t, "service_healthy", alice.DependsOn["fakefleet"].Condition,
+		"the stack is up only with the fleet answering: a journey never scans a fleet that is still starting")
 	base := readCompose(t, "../../deploy/docker-compose.yml")
 	_, inBase := base.Networks["fleet"]
 	assert.False(t, inBase, "the release compose file has no fleet network")

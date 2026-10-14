@@ -26,6 +26,9 @@ services:
       fakeacme: { condition: service_healthy }
       fakesmtp: { condition: service_healthy }
       fakeidp: { condition: service_healthy }
+      # Not for a CA (discovery trusts nothing): the stack is up only once the fleet answers, so no journey scans a
+      # fleet that is still starting.
+      fakefleet: { condition: service_healthy }
     # The network discovery journeys scan the fake fleet: alice joins the internal "fleet" network (added to the
     # base file's frontend and backend) at a fixed address. The network is internal, so it gives alice no default
     # route: the scan policy's built-in refusals (alice's own addresses, its default gateways) do not touch
