@@ -134,6 +134,14 @@ describe.each([
     expect(lookup(bundle, 'jobs.types.target.discover')).not.toMatch(/SSH/);
   });
 
+  // Network discovery (A1): the netdisco.* job types are declared in internal/jobs/types.go and registered with their
+  // handlers later, so the guard above cannot see them yet; their labels exist already and stay apart from the SSH-key
+  // discovery task (discovery.schedule).
+  it('labels the network discovery job types before they are registered', () => {
+    expect(missingLabels(bundle, ['netdisco.scan', 'netdisco.schedule', 'netdisco.retention'], jobKey)).toEqual([]);
+    expect(lookup(bundle, 'jobs.types.netdisco.schedule')).not.toBe(lookup(bundle, 'jobs.types.discovery.schedule'));
+  });
+
   it('keeps the upload button and the upload dialog texts apart (D35)', () => {
     expect(typeof lookup(bundle, 'certificates.uploadButton')).toBe('string');
     expect(typeof lookup(bundle, 'certificates.upload.title')).toBe('string');

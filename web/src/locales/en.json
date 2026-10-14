@@ -1284,6 +1284,11 @@
       "discovery": {
         "schedule": "Scheduled server scan"
       },
+      "netdisco": {
+        "scan": "Network discovery scan",
+        "schedule": "Scheduled network discovery scans",
+        "retention": "Network discovery cleanup"
+      },
       "kv": {
         "test_connection": "Key Vault access check",
         "poll": "Key Vault check",

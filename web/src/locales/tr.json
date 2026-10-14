@@ -1284,6 +1284,11 @@
       "discovery": {
         "schedule": "Zamanlanmış sunucu taraması"
       },
+      "netdisco": {
+        "scan": "Ağ keşfi taraması",
+        "schedule": "Zamanlanmış ağ keşfi taramaları",
+        "retention": "Ağ keşfi temizliği"
+      },
       "kv": {
         "test_connection": "Key Vault erişim denetimi",
         "poll": "Key Vault denetimi",

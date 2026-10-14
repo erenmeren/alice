@@ -9,6 +9,8 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"alice/internal/inventory"
 	"alice/internal/license"
 )
@@ -150,6 +152,34 @@ var (
 	ACMESweep      = Register("acme.sweep", license.ClassAlways)
 )
 
+// Network certificate discovery (plan amendments A1, A5). The namespace is netdisco.*: discovery.schedule above is the
+// SSH-key target discovery task and is a different thing. netdisco.scan probes the endpoints of one scope: read-only work
+// (paused in lock; the scanner also asks license.Allow(ClassReadOnly) per batch), one attempt (MaxAttemptsFor), at most
+// MaxConcurrentNetdiscoScans running at once (maxRunning) and one per scope (dedupe key NetdiscoScanDedupeKey).
+// netdisco.schedule is the periodic task that queues the scans of scopes with a schedule (ReadOnly: no tick in lock).
+// netdisco.retention is the periodic cleanup of gone endpoints, orphan certificates and old scans (ClassAlways: it only
+// deletes Alice's own rows, so it runs in lock too).
+//
+// They are declared here but registered only together with their handlers (Task 8 of the network discovery plan): a
+// registered type without a handler makes checkWiring refuse to start the server, and an unregistered type cannot be
+// queued or scheduled (ErrUnknownType), so no scan can be queued before the scanner exists. Task 8 replaces each Type
+// literal below with a Register call of the same literal name and class (the web's label guard reads literal names).
+var (
+	NetdiscoScan      = Type{Name: "netdisco.scan", Class: license.ClassReadOnly}
+	NetdiscoSchedule  = Type{Name: "netdisco.schedule", Class: license.ClassReadOnly}
+	NetdiscoRetention = Type{Name: "netdisco.retention", Class: license.ClassAlways}
+)
+
+// MaxConcurrentNetdiscoScans is the number of netdisco.scan jobs that may run at once in the installation (design
+// decision 1: at most 2 scans at once). A third stays queued with its attempt unspent.
+const MaxConcurrentNetdiscoScans = 2
+
+// NetdiscoScanDedupeKey is the dedupe key of a scan job: "netdisco.scan:<scope id>". The queue keeps at most one live
+// job per key, so a scope has at most one queued or running scan; the backup restore matches the same type name.
+func NetdiscoScanDedupeKey(scopeID uuid.UUID) string {
+	return NetdiscoScan.Name + ":" + scopeID.String()
+}
+
 // Kind says who asks for a job (jobs.kind).
 type Kind string
 
@@ -189,10 +219,13 @@ const (
 // so a failed attempt waits for the sweep instead of polling the server on the queue's backoff. An ACME order runs
 // once: a repeat would start a second order at the authority, so the planner (acme.schedule) paces retries. The
 // cleanup of an order's leftover challenge records is tried 5 times on the queue's backoff (a hook or a server that is
-// briefly down), then the sweep (acme.sweep) queues it again after an hour.
+// briefly down), then the sweep (acme.sweep) queues it again after an hour. A network discovery scan runs once: a
+// failed or interrupted scan is started again by a person or by its scope's schedule, never by the queue's backoff (a
+// retry would probe the same hosts again within minutes).
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
-	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name:
+	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name,
+		NetdiscoScan.Name:
 		return 1
 	case inventory.JobDiscover, ACMECleanup.Name:
 		return 5
@@ -221,8 +254,11 @@ func AlertsWhenExhausted(t Type) bool {
 // cap. A poll of a vault is capped at inventory.MaxConcurrentKVPolls (ruling S12): a poll beyond the cap
 // stays queued, with its attempt unspent, instead of occupying a worker that waits for the poll slot while
 // deployments, imports and access checks wait behind it. The poll's own slot (inventory.AcquireKVPoll)
-// stays as the backstop.
-var maxRunning = map[string]int{inventory.JobKVPoll: inventory.MaxConcurrentKVPolls}
+// stays as the backstop. A network discovery scan is capped at MaxConcurrentNetdiscoScans (A5).
+var maxRunning = map[string]int{
+	inventory.JobKVPoll: inventory.MaxConcurrentKVPolls,
+	NetdiscoScan.Name:   MaxConcurrentNetdiscoScans,
+}
 
 // MaxRunningFor returns the concurrency cap of the job type (false: none).
 func MaxRunningFor(t Type) (int, bool) {
