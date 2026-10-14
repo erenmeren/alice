@@ -322,8 +322,9 @@ func (s *server) allowRate(w http.ResponseWriter, r *http.Request, class limitCl
 		if key != "" {
 			checks = append(checks, func() (bool, time.Duration) { return s.export.Allow(key) })
 		}
-	case limitACME:
-		// Per user for a browser session, per token for a token, as limitExport (A5): each identity has its own 10 a minute.
+	case limitACME, limitDiscovery, limitDiscoveryResolve:
+		// Per user for a browser session, per token for a token, as limitExport (A5): each identity has its own budget
+		// in the class's own bucket (ACME and discovery start/cancel 10 a minute, the name resolution check 30).
 		var key string
 		switch {
 		case p.Kind == rbac.UserSession && p.UserID != uuid.Nil:

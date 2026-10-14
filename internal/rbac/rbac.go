@@ -134,6 +134,17 @@ const (
 	// an external account binding is needed) — an Administrator's browser session, never an API token, no step-up:
 	// nothing is changed and no secret is read (Task 13 fix round 2).
 	AcmePreview Permission = "acme.preview"
+
+	// Network certificate discovery (plan contract, amendment A5, decisions D1 and D7). DiscoveryView: read the results,
+	// scopes and scans — the internal network map — every role in a browser session, but an API token needs the operate
+	// scope (D7: read tokens do not get it; an Auditor can hold read tokens only, so no Auditor token reads it).
+	// DiscoveryOperate: start and cancel a scan of an existing scope (Admin, Operator; operate tokens, like
+	// AcmeOperate). DiscoveryManage: create, edit and delete scopes, global exclusions, allowed scan networks and
+	// retention — what may be dialed is the SSRF-relevant act (D1), so an Administrator in a browser session with
+	// step-up, never an API token.
+	DiscoveryView    Permission = "discovery.view"
+	DiscoveryOperate Permission = "discovery.operate"
+	DiscoveryManage  Permission = "discovery.manage"
 )
 
 // Policy describes who may use a permission.
@@ -184,6 +195,10 @@ var policies = map[Permission]Policy{
 	AcmeOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
 	AcmeManage:  {Roles: []Role{Admin}, StepUp: true},
 	AcmePreview: {Roles: []Role{Admin}},
+
+	DiscoveryView:    {Roles: allRoles, TokenScope: ScopeOperate},
+	DiscoveryOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
+	DiscoveryManage:  {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

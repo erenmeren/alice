@@ -369,6 +369,9 @@ const (
 	limitHTTPSUpload // an HTTPS certificate upload
 	limitForwardTest // a test message to the audit forwarding server
 	limitACME        // 10 per minute per user or token: ACME orders and test runs (A5), keyed like limitExport
+	// Network discovery (plan contract, A3), keyed like limitACME, each in a bucket of its own.
+	limitDiscovery        // 10 per minute per user or token: starting and cancelling scans, one budget for both
+	limitDiscoveryResolve // 30 per minute per user or token: the save-time check that a listed name resolves (ALC-DSC-0010)
 )
 
 // route is one documented operation. The route table is the single source of
@@ -408,7 +411,8 @@ type server struct {
 	// testMails: test e-mails per user: 5/min; export: CSV exports per user or token: 10/min (C13).
 	testMails *ratelimit.Limiter
 	export    *ratelimit.Limiter
-	// actions: the Phase 8 actions of C12's limitDownload that send no file (5/min per user each) and limitACME (10/min per user or token).
+	// actions: the Phase 8 actions of C12's limitDownload that send no file (5/min per user each), limitACME and
+	// limitDiscovery (10/min per user or token) and limitDiscoveryResolve (30/min per user or token).
 	actions map[limitClass]*ratelimit.Limiter
 	// oidcCallbacks: identity provider callbacks per binding cookie: 10/min (S-11: not per address, so a company
 	// behind one address is not limited to a few sign-ins a minute).
@@ -458,6 +462,9 @@ func newServer(d Deps) *server {
 			limitHTTPSUpload: ratelimit.New(d.Clock, 5, time.Minute),
 			limitForwardTest: ratelimit.New(d.Clock, 5, time.Minute),
 			limitACME:        ratelimit.New(d.Clock, 10, time.Minute),
+
+			limitDiscovery:        ratelimit.New(d.Clock, 10, time.Minute),
+			limitDiscoveryResolve: ratelimit.New(d.Clock, 30, time.Minute),
 		},
 
 		denials:   newDenialCoalescer(d.Clock),

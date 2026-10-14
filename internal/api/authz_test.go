@@ -89,6 +89,14 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.AcmeManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 	// Reading a CA's directory before registration (fix round 2): an Administrator's browser session, no step-up, no token.
 	rbac.AcmePreview: row(unau, unau, unau, unau, unau, allw, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+
+	// Network discovery (A5, D7): every role reads the results in a browser, but a token needs the operate scope (read
+	// tokens never read the internal network map; an Auditor holds read tokens only); Admin and Operator start and cancel
+	// scans (operate tokens too); only an Administrator with step-up defines scopes, exclusions, allowed networks and
+	// retention (no token). No route uses them before Task 9; TestExpectedMatrixCoversEveryPermission needs the rows.
+	rbac.DiscoveryView:    row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, forb, allw, forb, allw),
+	rbac.DiscoveryOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
+	rbac.DiscoveryManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {

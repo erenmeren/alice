@@ -87,6 +87,19 @@ var expected = map[rbac.Permission]map[string]rbac.Decision{
 	rbac.AcmePreview: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	// Network discovery (plan contract, A5, D7): written out by hand. The results are the internal network map: every
+	// role reads them in a browser, but an API token needs the operate scope (read tokens do not get it, D7), so an
+	// Auditor's token (read only, AllowsScope) never does. Starting and cancelling a scan: Admin and Operator, operate
+	// tokens, like acme.operate. Scopes, global exclusions, allowed networks and retention: Admin with step-up, no token.
+	rbac.DiscoveryView: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": A, "operator+stepup": A,
+		"auditor": A, "auditor+stepup": A, "token-read-admin": F, "token-operate-admin": A, "token-read-operator": F,
+		"token-operate-operator": A, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.DiscoveryOperate: {"anon": U, "setup": U, "pending": U, "admin": A, "admin+stepup": A, "operator": A, "operator+stepup": A,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": A, "token-read-operator": F,
+		"token-operate-operator": A, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	rbac.DiscoveryManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
 	rbac.SSOManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
@@ -153,7 +166,7 @@ func TestUnknownPermissionIsDenied(t *testing.T) {
 
 func TestPermissionsAreSortedAndHavePolicies(t *testing.T) {
 	ps := rbac.Permissions()
-	assert.Len(t, ps, 28)
+	assert.Len(t, ps, 31)
 	assert.True(t, sort.SliceIsSorted(ps, func(i, j int) bool { return ps[i] < ps[j] }))
 	for _, p := range ps {
 		_, ok := rbac.PolicyFor(p)
@@ -264,4 +277,37 @@ func TestBackupManagePolicy(t *testing.T) {
 	pol, ok := rbac.PolicyFor(rbac.BackupManage)
 	require.True(t, ok)
 	assert.Empty(t, pol.TokenScope)
+}
+
+// Network discovery (A5, D7): the permission names are fixed (OpenAPI x-permission), a read token never reads the
+// network map, and the definitions of what may be scanned are never a token's.
+func TestDiscoveryPolicies(t *testing.T) {
+	assert.Equal(t, rbac.Permission("discovery.view"), rbac.DiscoveryView)
+	assert.Equal(t, rbac.Permission("discovery.operate"), rbac.DiscoveryOperate)
+	assert.Equal(t, rbac.Permission("discovery.manage"), rbac.DiscoveryManage)
+
+	view, ok := rbac.PolicyFor(rbac.DiscoveryView)
+	require.True(t, ok)
+	assert.Equal(t, rbac.ScopeOperate, view.TokenScope, "D7: read API tokens do not get the network map")
+	assert.False(t, view.StepUp)
+	for _, r := range rbac.Roles() {
+		assert.Equal(t, rbac.Allow, rbac.Decide(rbac.DiscoveryView, rbac.Subject{Kind: rbac.UserSession, Role: r}), r)
+		if r.AllowsScope(rbac.ScopeOperate) {
+			continue
+		}
+		assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.DiscoveryView, rbac.Subject{Kind: rbac.APIToken, Role: r, Scope: rbac.ScopeRead}),
+			"%s can only hold read tokens, so no token of theirs reads the network map", r)
+	}
+
+	op, ok := rbac.PolicyFor(rbac.DiscoveryOperate)
+	require.True(t, ok)
+	assert.Equal(t, []rbac.Role{rbac.Admin, rbac.Operator}, op.Roles, "D1: Operators start and cancel scans")
+	assert.Equal(t, rbac.ScopeOperate, op.TokenScope)
+	assert.False(t, op.StepUp)
+
+	manage, ok := rbac.PolicyFor(rbac.DiscoveryManage)
+	require.True(t, ok)
+	assert.Equal(t, []rbac.Role{rbac.Admin}, manage.Roles, "D1: defining what is scanned is the SSRF-relevant act")
+	assert.True(t, manage.StepUp)
+	assert.Empty(t, manage.TokenScope, "no token defines scopes, exclusions or allowed networks")
 }
