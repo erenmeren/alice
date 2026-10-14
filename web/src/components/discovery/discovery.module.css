@@ -1,0 +1,33 @@
+/* The Network discovery screens, built from the Clarity design's table, panel and fact styles (alice-design/dist/styles.css
+   .data-table td p, .resource-name, .facts). Colors come from the --alice-* tokens only. */
+.tabPanel { padding-top: 20px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+.name { font-size: 12px; font-weight: 550; overflow-wrap: anywhere; text-align: left; }
+/* The certificate's name opens its detail: a button that reads as the row's link. */
+.nameButton { padding: 0; border: 0; background: none; font: inherit; color: var(--alice-brand); cursor: pointer; text-align: left; }
+.nameButton:hover { text-decoration: underline; }
+.nameButton:focus-visible { outline: 3px solid var(--alice-focus); outline-offset: 2px; border-radius: 2px; }
+.secondary { margin: 4px 0 0; font-size: 10px; color: var(--alice-text-muted); overflow-wrap: anywhere; }
+.small { font-size: 11px; color: var(--alice-text-secondary); overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.codeList { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.grow { flex: 1 1 auto; }
+.search { min-width: 220px; flex: 1 1 220px; }
+.select { min-width: 150px; }
+.actionsCell { display: grid; gap: 4px; justify-items: start; }
+.reason { margin: 2px 0 0; font-size: 10px; color: var(--alice-text-secondary); max-width: 220px; }
+.help { font-size: 11px; color: var(--alice-text-secondary); margin: 0; }
+/* The live size of a scope in its dialog. */
+.preview { border: 1px solid var(--alice-border); border-radius: var(--alice-radius-sm); background: var(--alice-surface-subtle); padding: 12px 14px; display: grid; gap: 4px; font-size: 12px; }
+.previewTitle { font-weight: 600; font-size: 12px; margin: 0; }
+.previewLine { margin: 0; overflow-wrap: anywhere; }
+.previewMain { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.windowRow { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+/* One place a certificate was found, in the detail drawer. */
+.endpoint { border: 1px solid var(--alice-border); border-radius: var(--alice-radius-sm); padding: 14px; display: grid; gap: 10px; }
+.endpointHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.endpointList { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.section { margin: 0; font-size: 14px; font-weight: 600; }
+
+@media (max-width: 600px) {
+  .windowRow { grid-template-columns: minmax(0, 1fr); }
+}
