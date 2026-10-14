@@ -47,13 +47,17 @@ var rules = map[string][]string{
 		"alice/internal/providers", "alice/internal/jobs", "alice/internal/acme", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01",
 		"alice/internal/acme/solver/http01", "alice/internal/acme/keygen", "alice/internal/secrets"},
 	// The network discovery jobs run the scanner (the scan handler, the schedule and the retention tasks) and queue a scan
-	// with its job in one transaction: the scanner package and the job queue, never the probe or the inventory.
-	"alice/internal/jobs/netdiscojobs": {platform, "alice/internal/license/...", "alice/internal/jobs", "alice/internal/discovery"},
-	"alice/internal/setup/...":         {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
+	// with its job in one transaction: the scanner package and the job queue, never the probe or the inventory. The audit
+	// log takes the discovery.scan.finished row where a scan ends.
+	"alice/internal/jobs/netdiscojobs": {platform, "alice/internal/license/...", "alice/internal/jobs", "alice/internal/discovery",
+		"alice/internal/audit"},
+	"alice/internal/setup/...": {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
 		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/...",
-		"alice/internal/alerts/...", "alice/internal/reports/...", "alice/internal/backup/..."},
+		"alice/internal/alerts/...", "alice/internal/reports/...", "alice/internal/backup/...",
+		// Network discovery (Task 9): the scope model and its errors, and the discovery service; never the probe.
+		"alice/internal/discovery", "alice/internal/discovery/discoverysvc"},
 	// SSH key lifecycle (Phase 6). keymat and plan are pure: exact keys win over the subtree rule.
 	"alice/internal/sshkeys/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...",
 		"alice/internal/rbac/...", "alice/internal/providers", "alice/internal/inventory/..."},
@@ -104,6 +108,10 @@ var rules = map[string][]string{
 	// batch, amendment A5); the probe knows the platform only.
 	"alice/internal/discovery/...":      {platform, "alice/internal/license/..."},
 	"alice/internal/discovery/tlsprobe": {platform},
+	// The discovery service behind the API (Task 9): scopes, settings, scans (queued with their job and audit row in one
+	// transaction through netdiscojobs.StartTx) and the read side; never the probe, the inventory or the providers.
+	"alice/internal/discovery/discoverysvc": {platform, "alice/internal/license/...", "alice/internal/audit", "alice/internal/jobs",
+		"alice/internal/discovery", "alice/internal/jobs/netdiscojobs"},
 }
 
 const platform = "alice/internal/platform/..."
@@ -397,6 +405,16 @@ func TestAllowed(t *testing.T) {
 		{"netdiscojobs to tlsprobe denied", "alice/internal/jobs/netdiscojobs", "alice/internal/discovery/tlsprobe", false},
 		{"netdiscojobs to inventory denied", "alice/internal/jobs/netdiscojobs", "alice/internal/inventory", false},
 		{"netdiscojobs to providers denied", "alice/internal/jobs/netdiscojobs", "alice/internal/providers", false},
+		{"netdiscojobs to audit allowed", "alice/internal/jobs/netdiscojobs", "alice/internal/audit", true},
+		{"discoverysvc to netdiscojobs allowed", "alice/internal/discovery/discoverysvc", "alice/internal/jobs/netdiscojobs", true},
+		{"discoverysvc to discovery allowed", "alice/internal/discovery/discoverysvc", "alice/internal/discovery", true},
+		{"discoverysvc to audit allowed", "alice/internal/discovery/discoverysvc", "alice/internal/audit", true},
+		{"discoverysvc to tlsprobe denied", "alice/internal/discovery/discoverysvc", "alice/internal/discovery/tlsprobe", false},
+		{"discoverysvc to inventory denied", "alice/internal/discovery/discoverysvc", "alice/internal/inventory", false},
+		{"discoverysvc to api denied", "alice/internal/discovery/discoverysvc", "alice/internal/api", false},
+		{"api to discovery allowed", "alice/internal/api", "alice/internal/discovery", true},
+		{"api to discoverysvc allowed", "alice/internal/api", "alice/internal/discovery/discoverysvc", true},
+		{"api to tlsprobe denied", "alice/internal/api", "alice/internal/discovery/tlsprobe", false},
 		{"inventory to fakeacme denied", "alice/internal/inventory", "alice/internal/testutil/fakeacme", false},
 		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},
 		{"acme to api denied", "alice/internal/acme", "alice/internal/api", false},

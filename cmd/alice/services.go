@@ -294,12 +294,12 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 }
 
 // netdiscoDeps are the dependencies of the network discovery jobs and tasks: the application pool, the queue (a
-// scheduled scan is queued with its job), the licence service as the gate a scan asks before every batch, and the
-// database DSN whose hosts the scan policy refuses. NewPolicy and Resolver stay nil: the production scan policy
+// scheduled scan is queued with its job), the licence service as the gate a scan asks before every batch, the audit
+// log (the discovery.scan.finished row) and the database DSN whose hosts the scan policy refuses. NewPolicy and Resolver stay nil: the production scan policy
 // (netaddr.NewScanPolicy, built per scan) and the system resolver are the only ones a release build uses; Lease stays
 // zero, the runner's default lease (discovery.DefaultLease).
 func netdiscoDeps(svc *services, clk clock.Clock, log *slog.Logger) netdiscojobs.Deps {
-	d := netdiscojobs.Deps{Pool: svc.pool, Clock: clk, Log: log, DatabaseURL: svc.databaseURL}
+	d := netdiscojobs.Deps{Pool: svc.pool, Clock: clk, Log: log, DatabaseURL: svc.databaseURL, Audit: svc.auditLog}
 	if svc.queue != nil { // a nil *jobs.Queue must stay a nil interface, so ScheduleTask refuses it
 		d.Queue = svc.queue
 	}

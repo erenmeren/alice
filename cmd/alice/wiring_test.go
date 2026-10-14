@@ -88,6 +88,7 @@ func TestJobDepsCarryEveryDependency(t *testing.T) {
 	assert.Same(t, svc.pool, nd.Pool)
 	assert.Same(t, svc.queue, nd.Queue)
 	assert.Same(t, svc.license, nd.License, "a scan asks the licence gate before every batch")
+	assert.Same(t, svc.auditLog, nd.Audit, "the discovery.scan.finished row")
 	assert.Equal(t, svc.databaseURL, nd.DatabaseURL, "the scan policy refuses the database's hosts")
 	assert.Nil(t, nd.NewPolicy, "a release build scans with the production policy only")
 	assert.Nil(t, nd.Resolver, "the system resolver only (air-gap)")

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"alice/internal/audit"
 	"alice/internal/discovery"
 	"alice/internal/jobs"
 	"alice/internal/platform/clock"
@@ -40,8 +42,9 @@ type Enqueuer interface {
 
 var _ Enqueuer = (*jobs.Queue)(nil)
 
-// Deps are the dependencies of the discovery jobs. Pool, License and Clock are required by the scan handler; Pool, Queue
-// and Clock by the schedule; Pool and Clock by the retention. DatabaseURL is Alice's database DSN, whose hosts the scan
+// Deps are the dependencies of the discovery jobs. Pool, License, Clock and Audit are required by the scan handler (Audit
+// writes the discovery.scan.finished row where a scan ends); Pool, Queue and Clock by the schedule; Pool and Clock by the
+// retention. DatabaseURL is Alice's database DSN, whose hosts the scan
 // policy refuses. Lease is the runner's lease (0: discovery.DefaultLease, the runner's default). NewPolicy and Resolver
 // are the scanner's (nil: the production scan policy and the system resolver); tests inject them.
 type Deps struct {
@@ -54,6 +57,7 @@ type Deps struct {
 	Lease       time.Duration
 	NewPolicy   func(context.Context, netaddr.ScanPolicyInputs) (netaddr.ScanPolicy, error)
 	Resolver    discovery.Resolver
+	Audit       *audit.Log
 }
 
 func (d Deps) withLog() Deps {
@@ -75,8 +79,8 @@ const (
 // Register installs the netdisco.scan handler and its end hook on the runner; it panics on a missing dependency, so a
 // build that forgot one never starts.
 func Register(r *jobs.Runner, d Deps) {
-	if r == nil || d.Pool == nil || d.License == nil || d.Clock == nil {
-		panic("netdiscojobs: Register needs a runner, Deps.Pool, Deps.License and Deps.Clock")
+	if r == nil || d.Pool == nil || d.License == nil || d.Clock == nil || d.Audit == nil {
+		panic("netdiscojobs: Register needs a runner, Deps.Pool, Deps.License, Deps.Clock and Deps.Audit")
 	}
 	newHandlers(d).install(r)
 }
@@ -97,7 +101,7 @@ func (h *handlers) install(r *jobs.Runner) {
 }
 
 func (h *handlers) scanDeps() discovery.Deps {
-	return discovery.Deps{Store: discovery.NewStore(h.d.Pool), License: h.d.License, NewPolicy: h.d.NewPolicy,
+	return discovery.Deps{Store: discovery.NewStore(h.d.Pool).OnFinish(h.finishedRow), License: h.d.License, NewPolicy: h.d.NewPolicy,
 		DatabaseURL: h.d.DatabaseURL, Resolver: h.d.Resolver, Clock: h.d.Clock, Lease: h.d.Lease}
 }
 
@@ -167,14 +171,59 @@ func (h *handlers) ended(ctx context.Context, tx pgx.Tx, end jobs.JobEnd) error 
 	if end.Status == jobs.StatusCancelled && strings.HasPrefix(end.Reason, "license.") {
 		state, code = discovery.ScanCancelled, end.Reason
 	}
-	_, err := tx.Exec(ctx, `UPDATE discovery_scans s SET state = $2, error_code = $3, finished_at = greatest($4::timestamptz, s.started_at)
+	rows, err := tx.Query(ctx, `UPDATE discovery_scans s SET state = $2, error_code = $3, finished_at = greatest($4::timestamptz, s.started_at)
 FROM jobs j
 WHERE j.id = $1 AND j.type = 'netdisco.scan' AND s.id::text = j.payload->>'scan_id' AND s.state IN ('queued', 'running')
   AND NOT EXISTS (SELECT 1 FROM jobs o WHERE o.dedupe_key = j.dedupe_key AND o.id <> j.id
-                  AND o.status IN ('queued', 'running', 'blocked_license') AND o.payload->>'scan_id' = j.payload->>'scan_id')`,
+                  AND o.status IN ('queued', 'running', 'blocked_license') AND o.payload->>'scan_id' = j.payload->>'scan_id')
+RETURNING s.id`,
 		end.ID, state, code, h.d.Clock.Now())
 	if err != nil {
 		return fmt.Errorf("netdiscojobs: end the scan of an ended job: %w", err)
+	}
+	ended, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("netdiscojobs: end the scan of an ended job: %w", err)
+	}
+	for _, id := range ended {
+		if err := h.auditFinished(ctx, tx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finishedRow is the scan store's finish hook: the discovery.scan.finished row, in the transaction that ends the scan.
+func (h *handlers) finishedRow(ctx context.Context, tx pgx.Tx, f discovery.Finish) error {
+	return h.auditFinished(ctx, tx, f.ScanID)
+}
+
+// auditFinished writes the discovery.scan.finished row of an ended scan (design decision 5: ids and counts only, never an
+// address or a certificate). A scan that ended done or cancelled is a success; failed or timed out a failure.
+func (h *handlers) auditFinished(ctx context.Context, tx pgx.Tx, scanID uuid.UUID) error {
+	var scope uuid.UUID
+	var state, code, trigger string
+	var total, answered, failed, excluded, certs int
+	err := tx.QueryRow(ctx, `SELECT scope_id, state, error_code, trigger, endpoints_total, endpoints_answered, endpoints_failed,
+    endpoints_excluded, certificates_new FROM discovery_scans WHERE id = $1`, scanID).Scan(&scope, &state, &code, &trigger, &total, &answered,
+		&failed, &excluded, &certs)
+	if err != nil {
+		return fmt.Errorf("netdiscojobs: read the ended scan: %w", err)
+	}
+	details := map[string]string{"scan_id": scanID.String(), "scope_id": scope.String(), "state": state, "trigger": trigger,
+		"endpoints_total": strconv.Itoa(total), "endpoints_answered": strconv.Itoa(answered), "endpoints_failed": strconv.Itoa(failed),
+		"endpoints_excluded": strconv.Itoa(excluded), "certificates_new": strconv.Itoa(certs)}
+	if code != "" {
+		details["error_code"] = code
+	}
+	result := audit.Success
+	if state == discovery.ScanFailed || state == discovery.ScanTimedOut {
+		result = audit.Failure
+	}
+	_, err = h.d.Audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("jobs"), Action: "discovery.scan.finished",
+		ObjectType: "discovery_scan", ObjectID: scanID.String(), Result: result, Details: details})
+	if err != nil {
+		return fmt.Errorf("netdiscojobs: audit the ended scan: %w", err)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +26,7 @@ func TestMissingDependenciesPanic(t *testing.T) {
 	r := jobs.NewRunner(jobs.RunnerConfig{})
 	assert.Panics(t, func() { Register(nil, Deps{}) })
 	assert.Panics(t, func() { Register(r, Deps{License: allow{}, Clock: clock.Real{}}) }, "no pool")
+	assert.Panics(t, func() { Register(r, Deps{Pool: &pgxpool.Pool{}, License: allow{}, Clock: clock.Real{}}) }, "no audit log")
 	assert.Panics(t, func() { ScheduleTask(Deps{Clock: clock.Real{}}, time.Minute) })
 	assert.Panics(t, func() { RetentionTask(Deps{}, time.Hour) })
 	assert.False(t, r.Handles(jobs.NetdiscoScan))

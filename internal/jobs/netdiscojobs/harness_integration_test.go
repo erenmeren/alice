@@ -93,7 +93,7 @@ func newWorld(t *testing.T) *world {
 	w.audit = al
 	w.queue = jobs.NewQueue(jobs.QueueConfig{Pool: w.db.App, Keyring: keyring, Audit: al, Clock: w.clock, Gate: w.gate})
 	w.deps = Deps{Pool: w.db.App, Queue: w.queue, License: w.gate, Clock: w.clock, Log: log, DatabaseURL: w.db.AppURL,
-		NewPolicy: denyAll}
+		NewPolicy: denyAll, Audit: al}
 	w.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: w.db.App, Queue: w.queue, Gate: w.gate, Audit: al, Clock: w.clock, Log: log,
 		Workers: 1, WorkerID: "netdisco-test", Jitter: func() float64 { return 0 }})
 	Register(w.runner, w.deps)
@@ -220,4 +220,24 @@ func (w *world) drain() {
 // active is the number of scans queued or running.
 func (w *world) active() int {
 	return w.count(`SELECT count(*) FROM discovery_scans WHERE state IN ('queued', 'running')`)
+}
+
+// auditRow is one discovery.scan.finished row.
+type auditRow struct {
+	result  string
+	details map[string]string
+}
+
+// finished lists the discovery.scan.finished audit rows of a scan.
+func (w *world) finished(scan uuid.UUID) []auditRow {
+	w.t.Helper()
+	rows, err := w.db.Owner.Query(w.ctx, `SELECT result, details FROM audit_log WHERE action = 'discovery.scan.finished' AND object_id = $1
+  AND object_type = 'discovery_scan' AND actor_type = 'system' ORDER BY seq`, scan.String())
+	require.NoError(w.t, err)
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (auditRow, error) {
+		var a auditRow
+		return a, r.Scan(&a.result, &a.details)
+	})
+	require.NoError(w.t, err)
+	return out
 }

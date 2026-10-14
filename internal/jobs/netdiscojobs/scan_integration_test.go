@@ -52,6 +52,12 @@ func TestAQueuedScanRunsThroughTheRealQueue(t *testing.T) {
 	assert.Equal(t, "done", j.result["state"])
 	assert.EqualValues(t, 4, j.result["endpoints_excluded"])
 	assert.NotContains(t, j.result, "error_code")
+	fin := w.finished(scan)
+	require.Len(t, fin, 1, "one discovery.scan.finished row, written where the scan ends")
+	assert.Equal(t, map[string]string{"scan_id": scan.String(), "scope_id": scope.String(), "state": "done", "trigger": "manual",
+		"endpoints_total": "4", "endpoints_answered": "0", "endpoints_failed": "0", "endpoints_excluded": "4", "certificates_new": "0"},
+		fin[0].details, "ids and counts only: no address, no certificate")
+	assert.Equal(t, "success", fin[0].result)
 
 	// The scope is free again: a second scan can be started.
 	_, _, err = w.start(scope, TriggerManual)
@@ -186,6 +192,11 @@ func TestALostLeaseMidScanEndsTheScan(t *testing.T) {
 	assert.Equal(t, "dead", w.job(job).status)
 	assert.Equal(t, scanRow{state: "failed", code: discovery.ReasonInterrupted, trigger: "manual"}, w.scan(scan),
 		"the scan ended with the job, in the reaper's transaction")
+	fin := w.finished(scan)
+	require.Len(t, fin, 1, "the end hook writes the finished row in the reaper's transaction")
+	assert.Equal(t, "failed", fin[0].details["state"])
+	assert.Equal(t, discovery.ReasonInterrupted, fin[0].details["error_code"])
+	assert.Equal(t, "failure", fin[0].result)
 
 	next, _, err := w.start(scope, TriggerManual)
 	require.NoError(t, err, "the scope can start a new scan")
@@ -193,6 +204,7 @@ func TestALostLeaseMidScanEndsTheScan(t *testing.T) {
 	close(release)
 	<-done
 	assert.Equal(t, "failed", w.scan(scan).state, "the stale run's finish changes nothing")
+	assert.Len(t, w.finished(scan), 1, "and writes no second finished row")
 	assert.Equal(t, "dead", w.job(job).status)
 	assert.Equal(t, "queued", w.scan(next).state)
 }
@@ -208,6 +220,10 @@ func TestTheLockCancelsAQueuedScan(t *testing.T) {
 	w.drain()
 	assert.Equal(t, "cancelled", w.job(job).status)
 	assert.Equal(t, scanRow{state: "cancelled", code: "license.locked", trigger: "manual"}, w.scan(scan))
+	fin := w.finished(scan)
+	require.Len(t, fin, 1)
+	assert.Equal(t, "cancelled", fin[0].details["state"])
+	assert.Equal(t, "license.locked", fin[0].details["error_code"])
 	w.gate.locked.Store(false)
 	_, _, err = w.start(scope, TriggerManual)
 	require.NoError(t, err)
