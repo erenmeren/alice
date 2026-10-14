@@ -39,9 +39,9 @@ This review was written in Task 18, before Task 19's `make ci` and the whole-bra
 "Development runs" are the latest results the implementers recorded in their task reports, with the task named.
 "Final run" is Task 19's: `make ci` exit 0 on its fifth run, after the fixes listed under Findings (T19); the full
 Playwright suite on Chromium, Firefox and WebKit with `make e2e-up` then `make e2e-browsers`: 399 passed, 0 failed, 12
-skipped (the opt-in design-evidence specs). The whole-branch review's fix wave (T19 W1–W8) came after that run and was
-verified with the focused unit, integration and web tests of every package it touched and `make lint`, not with a
-second `make ci` or e2e run. `NOT RUN (owner)` and `NOT RUN (CI)` cells are never a pass.
+skipped (the opt-in design-evidence specs). The whole-branch review's fix wave (T19 W1–W8) came after that run; a sixth full `make ci` (including the Chromium
+Playwright suite: 133 passed, 0 failed, 4 skipped design-evidence) exited 0 on the final branch. Firefox and WebKit were
+not re-run after the wave (the wave changed one web label and one icon; covered by web unit tests). `NOT RUN (owner)` and `NOT RUN (CI)` cells are never a pass.
 
 | # | Check | Command | Expected | Development runs | Final run |
 |---|---|---|---|---|---|

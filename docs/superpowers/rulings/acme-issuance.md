@@ -269,7 +269,7 @@ Rulings recorded in the task report, adopted:
   read "not a directory" under load — the fake now aborts the connection (4e18782; a test double, not product).
 - The full Playwright suite ran on Chromium, Firefox and WebKit with `make e2e-up` then `make e2e-browsers` (so both
   targets are exercised now; Task 16's carry): 399 passed, 0 failed, 12 skipped (the opt-in design-evidence specs).
-- Whole-branch review fix wave (after that run; focused tests and `make lint`):
+- Whole-branch review fix wave (after that run; focused tests, `make lint`, then a sixth full `make ci` exit 0 with Chromium e2e 133 passed; Firefox/WebKit not re-run after the wave):
   - **W1 / M8 extended**: a restored clone no longer carries on the original's orders. In the restore transaction that
     switches automatic renewal off, running orders end as failed with the neutral `job.lease_expired` and no pending key
     (the abandon rules; their certificates leave `issuing`), every order's `presented` list is cleared (Z1017 allows a
