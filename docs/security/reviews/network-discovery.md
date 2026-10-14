@@ -244,7 +244,7 @@ only discovery data.
   Only the main routing table is read for gateways.
 - **L6 — Counts.** A scan in which no attempted place answered, in a scope that had answers, counts no misses; places of
   host names that did not resolve are not marked gone; a scope's edit marks places that left it gone at once. The
-  chip and Overview count only certificates a place still presents, so they can be lower than the **Unmanaged** list
+  chip and Overview count only certificates a place still presents (not gone, not excluded, in a scope that is not deleted), so they can be lower than the **Unmanaged** list
   when no-longer-found ones are included; the Overview metric also leaves out expired certificates.
 - **L7 — Schedule.** With a window, intervals of 24 hours or more count whole days (36 hours = every 2 days). A window
   across a clock change keeps its local end time (one hour shorter on the spring-forward day). The schedule is checked
@@ -261,6 +261,16 @@ only discovery data.
   /120, no history of past results beyond the last 5 fingerprints of a place, no bulk **Add as server** (carries).
 - **L14 — Add as server keeps SSH port 22.** The dialog is pre-filled with the host; a server on another SSH port is
   corrected by hand.
+- **L15 — Scope audit rows record counts only.** `discovery.scope.created`, `.updated` and `.deleted` carry the field
+  names that changed and the counts of entries, ports, server names and exclusions, not the entries themselves, so the
+  audit log shows that a scope was widened but not to which addresses (the scope itself is readable by whoever may view
+  it). Kept on purpose for this release; recording the values is a possible follow-up.
+- **L16 — The scan policy protects only the application database's hosts.** The policy built for each scan refuses the
+  addresses of Alice's own interfaces, the default gateways and the hosts of the application database URL. The hosts
+  of the migration database URL, S3 or other backup storage, SMTP, the identity provider, KMS and the audit syslog
+  receiver are not known to it. An administrator who lets a scope reach their network must add those hosts to **Never
+  scan these** (global exclusions); the administrator guide says so. Reading those hosts from the settings into the
+  policy is a possible follow-up.
 
 ## Not verified
 
@@ -283,4 +293,16 @@ Task 15 raises are listed under Findings.
 | F9 | Task 11 review | Two definitions of "unmanaged and still found"; accessibility gaps; a duplicate "Expired" chip | One `current` filter; fixed |
 | F10 | Task 12 | `status=unmanaged` read every leaf | Fixed (see Measured performance) |
 | F11 | Task 13 | `make e2e-up` fails here at image builds that lack `--network host` | Environment note in the operator guide |
-| F12 | Task 15 | Whole-branch review | PENDING (Task 15) |
+| F12 | Whole-branch review (M1) | An endpoint whose state became `excluded` kept its old fingerprint: it was still counted, still alerted and never purged | "Still found" is one definition (`discovery.CurrentEndpointSQL`, and the alert query): not `gone`, not `excluded`, of a scope that is not deleted; retention deletes an excluded endpoint not scanned for the retention period; tests |
+| F13 | Whole-branch review (M2) | A scope edit during a scan was partly undone by the scan's last batch (it revived endpoints the edit had marked gone) | `Ingest` reads `cancel_requested` under the scan row lock and drops the batch of a scan asked to stop; test |
+| F14 | Whole-branch review (L1) | Saving the settings did not ask running scans to stop, against the guide | A change of the allowed networks or the exclusions sets `cancel_requested` on scans in flight in the same transaction (count in the audit row); test |
+| F15 | Whole-branch review (L2) | `UpdateScope` locked the endpoints before the scan row, `Ingest` the other way round | `UpdateScope` locks the scope's scans in flight first |
+| F16 | Whole-branch review (L3, L4) | A restore could end a scan with `finished_at` before `started_at` (CHECK failure) and switched scopes off without a version bump | `greatest(now, started_at)`; `version = version + 1`; test |
+| F17 | Whole-branch review (L5) | A restart or lost lease ended the scan as cancelled, a crash as failed; the guide said failed | Both end as failed with `discovery.scan_interrupted` |
+| F18 | Whole-branch review (L6) | The summary and the list counted endpoints of deleted scopes | Both use `CurrentEndpointSQL`; tests |
+| F19 | Whole-branch review (L7) | A tampered certificate cursor outside years 1 to 9999 gave a 500 | A validation error (422, like any bad cursor); test |
+| F20 | Whole-branch review (L8) | More than 256 entries in the settings lists answered `ALC-DSC-0001` "too large to scan" | A `too_long` validation error naming the field; OpenAPI says so; test |
+| F21 | Whole-branch review (L11) | The excluded-endpoint loop of a scan ignored cancellation | It sends under the dispatch context |
+| F22 | Whole-branch review (L12) | Scans tab: older pages kept after the first page moved on, "no scopes" shown while scopes load or fail, an empty problem cell, a raw key for an unknown status, no focus return after the scope dialog | Fixed with vitest tests, English and Turkish |
+| F23 | Whole-branch review (L9, L10) | Scope audit rows record counts only; the scan policy protects only the application database's hosts | Not changed: Known limitations L15 and L16, and the administrator guide |
+| F24 | Whole-branch fix wave | Playwright journeys and the final full run after the fixes | PENDING (e2e and final run) |

@@ -1243,7 +1243,14 @@ Open **Network discovery → Scopes**. **Change settings** (administrators) hold
   scope can override them. Only addresses and ranges, not host names.
 - **Keep results for (days)**: 90 by default, from 7 to 730 (see [What discovery keeps](#what-discovery-keeps-and-for-how-long)).
 
-Each list takes at most 256 lines.
+Each list takes at most 256 lines (more is refused as too many lines). Saving a change to the allowed networks or to
+**Never scan these** stops the scans that are running, so that the new lists hold for what they connect to next.
+
+**Add the other servers Alice talks to.** On top of the always-left-out list, each scan refuses the addresses of
+Alice's own interfaces, the default gateways and the **application database** host. It does not know the hosts of the
+migration database connection, object storage for backups (S3), the mail server, the identity provider (single
+sign-on), the key management service or the audit log receiver. If a scope can reach the network where they are, add
+their addresses to **Never scan these**.
 
 **What Alice never scans**, whatever the settings (the page shows the list as **Always left out**): loopback,
 unspecified and multicast addresses, link-local addresses (this includes the cloud metadata address
@@ -1345,7 +1352,7 @@ A place (an address, a port and the server name asked for) has a state:
 | **No TLS handshake** | **The server did not complete a TLS handshake.** This is one coarse state for several causes: a plain-text service (HTTP, SSH), a TLS alert from the server (it does not know the name asked for, or refuses clients), no TLS version or cipher suite in common, a key too large for Go to accept (RSA over 8192 bits). It does not mean "plain text". |
 | **Unreadable certificate** | The server completed a handshake but sent a certificate Alice cannot read (for example a negative serial number, or an end date before the start). No certificate is stored for this place; see the limitation below. |
 | **No longer found** | The place did not answer for 3 scans in a row, or it left the scope. |
-| **Not scanned** | The address was excluded or is outside the allowed scan networks, so Alice did not connect. |
+| **Not scanned** | The address was excluded or is outside the allowed scan networks, so Alice did not connect. What it presented before is not counted as found any more, and the place is removed with the old results after the retention period. |
 
 **When a place counts as gone.** A place that was not answering (refused, timeout, closed, no TLS handshake) in a
 scan that tried it has one more miss, and after 3 it is **No longer found**. Two exceptions protect you from false
@@ -1354,9 +1361,11 @@ network may be down); and places of host names that did not resolve in this scan
 answers again is found again, with its history.
 
 **Still found and the numbers.** **Results** shows the certificates still found by default (**Still found**); **Include
-no longer found** adds the ones whose places are all gone. The count in the chip **Found on the network, not managed (n)** on
-**Certificates**, and the line on the Overview, count unmanaged certificates that a place still presents, so
-they can be lower than the **Unmanaged** list when **Include no longer found** is on.
+no longer found** adds the ones whose places are all gone. A place counts as still found unless it is **No longer
+found** or **Not scanned**, and it belongs to a scope that is not deleted; this one rule is used by the list, the
+chip **Found on the network, not managed (n)** on **Certificates**, the line on the Overview and the e-mails. They count
+unmanaged certificates that a place still presents, so they can be lower than the **Unmanaged** list when **Include no
+longer found** is on.
 
 **Unmanaged with the warning** is only the start: use **Add as server** (administrators) on a place to open the
 existing Add server dialog with its address filled in. The SSH port stays 22 and Alice checks the license when you
@@ -1384,12 +1393,13 @@ Alice, expiring within 30 days: n", which links to the list of those certificate
 Alice keeps public certificates only: no private key and no secret is ever read or stored. Per place only its
 current state is kept, with its last 5 earlier fingerprints (to show that a certificate was replaced), not the
 history of every scan. Every hour the cleanup, which also runs while the license is locked and
-touches only discovery data, deletes: places that are **No longer found** for longer than the retention, all places of a
+touches only discovery data, deletes: places that are **No longer found** or **Not scanned** for longer than the retention, all places of a
 deleted scope, certificates no place presents and not seen for 7 days, and old scans. Growth follows the number of
 places and certificates, not the number of scans. Discovery events are in the audit log: `discovery.scope.created`,
 `discovery.scope.updated`, `discovery.scope.deleted`, `discovery.exclusions.updated` (the settings), `discovery.scan.started`,
 `discovery.scan.cancelled`, `discovery.scan.finished` (counts only) and `discovery.export`. They never carry a
-certificate.
+certificate. The scope rows say which fields changed and how many addresses, ports, names and exclusions the scope has
+now, not the addresses themselves.
 
 ### After a restore
 
