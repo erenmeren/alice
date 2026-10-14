@@ -103,11 +103,28 @@ func (r *Runner) alert(ctx context.Context, tx pgx.Tx, template string, params m
 	return nil
 }
 
+// JobEnd is a job the runner ended without success: its new status (failed, dead or cancelled) and its reason
+// (last_error_code).
+type JobEnd struct {
+	ID     uuid.UUID
+	Status Status
+	Reason string
+}
+
+// EndHook is run by the runner inside the transaction that ends a job of its type without success: a failure, a job out
+// of attempts (on the handler's error, after a lost lease, at the shutdown, or found by the reaper after a crash), a
+// job that is never run (tampered, unknown) and a job the license lock cancels. It lets the work a job stood for be
+// closed together with the job, also when the handler never got to do it (the job's worker died). It runs in a
+// savepoint: an error or a panic is logged by type and rolled back alone, and the job ends anyway (the hook's own
+// backstop, for example a periodic sweep, must close what the hook could not).
+type EndHook func(ctx context.Context, tx pgx.Tx, end JobEnd) error
+
 // Runner claims and runs queued jobs (spec §8.1, §8.4, §8.5, §8.8).
 type Runner struct {
 	cfg      RunnerConfig
 	mu       sync.Mutex
 	handlers map[string]HandlerFunc
+	endHooks map[string]EndHook
 	stopping atomic.Bool // Run is shutting down: interrupted jobs are released, not failed
 
 	sweepMu   sync.Mutex
@@ -175,7 +192,7 @@ func NewRunner(c RunnerConfig) *Runner {
 	if c.Log == nil {
 		c.Log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Runner{cfg: c, handlers: map[string]HandlerFunc{}}
+	return &Runner{cfg: c, handlers: map[string]HandlerFunc{}, endHooks: map[string]EndHook{}}
 }
 
 // Handle installs the handler of a job type. It panics for a type that is not registered (with
@@ -191,6 +208,60 @@ func (r *Runner) Handle(t Type, h HandlerFunc) {
 		panic(fmt.Sprintf("jobs: job type %q has two handlers", t.Name))
 	}
 	r.handlers[t.Name] = h
+}
+
+// OnEnd installs the end hook of a job type (EndHook). It panics for a type that is not registered (with the same
+// class), a nil hook or a second hook.
+func (r *Runner) OnEnd(t Type, h EndHook) {
+	reg, ok := lookup(t.Name)
+	if !ok || reg != t || h == nil {
+		panic(fmt.Sprintf("jobs: end hook for unregistered job type %q", t.Name))
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, dup := r.endHooks[t.Name]; dup {
+		panic(fmt.Sprintf("jobs: job type %q has two end hooks", t.Name))
+	}
+	r.endHooks[t.Name] = h
+}
+
+// ended runs the end hook of typ, if any, in a savepoint of tx (EndHook).
+func (r *Runner) ended(ctx context.Context, tx pgx.Tx, typ string, end JobEnd) {
+	r.mu.Lock()
+	h := r.endHooks[typ]
+	r.mu.Unlock()
+	if h == nil {
+		return
+	}
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		r.cfg.Log.Error("job end hook failed", "job_id", end.ID.String(), "job_type", typ, "error_type", fmt.Sprintf("%T", err))
+		return
+	}
+	err = func() (err error) {
+		defer func() {
+			if p := recover(); p != nil { // the value is not logged: it may hold data from the job
+				err = errors.New("jobs: end hook panicked")
+			}
+		}()
+		return h(ctx, sp, end)
+	}()
+	if err == nil {
+		err = sp.Commit(ctx)
+	}
+	if err != nil {
+		_ = sp.Rollback(ctx)
+		r.cfg.Log.Error("job end hook failed", "job_id", end.ID.String(), "job_type", typ, "error_type", fmt.Sprintf("%T", err))
+	}
+}
+
+// endedBy runs the end hook after a settle statement that ended c with status and reason, when it matched c's row.
+func (r *Runner) endedBy(ctx context.Context, tx pgx.Tx, c *claimed, status Status, reason string, tag pgconn.CommandTag,
+	err error) (pgconn.CommandTag, error) {
+	if err == nil && tag.RowsAffected() == 1 {
+		r.ended(ctx, tx, c.typ, JobEnd{ID: c.id, Status: status, Reason: reason})
+	}
+	return tag, err
 }
 
 func (r *Runner) handler(name string) HandlerFunc {
@@ -422,6 +493,9 @@ WHERE status = 'queued' AND class = 'read_only' RETURNING id, type`, now)
 			return fmt.Errorf("jobs: hold changes in lock: %w", err)
 		}
 		for _, h := range cancelled {
+			r.ended(ctx, tx, h.typ, JobEnd{ID: h.id, Status: StatusCancelled, Reason: "license.locked"})
+		}
+		for _, h := range cancelled {
 			if _, err := r.cfg.Audit.Append(ctx, tx, r.jobEvent("job.cancelled_license", audit.Denied, h.id, map[string]string{"type": h.typ})); err != nil {
 				return err
 			}
@@ -521,8 +595,9 @@ func (r *Runner) settle(ctx context.Context, c *claimed, errorCode string,
 // terminate ends c without running it (unknown type, tampered payload, unclassified type).
 func (r *Runner) terminate(ctx context.Context, c *claimed, reason, action string) {
 	r.settle(ctx, c, reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-		return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $4, finished_at = $5, locked_by = NULL,
+		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $4, finished_at = $5, locked_by = NULL,
     locked_until = NULL `+mine, c.fence(reason, now)...)
+		return r.endedBy(ctx, tx, c, StatusDead, reason, tag, err)
 	}, r.jobEvent(action, audit.Failure, c.id, map[string]string{"type": c.typ, "reason": reason, "attempt": strconv.Itoa(c.attempts)}))
 }
 
@@ -550,7 +625,8 @@ func (r *Runner) revert(ctx context.Context, c *claimed, t Type) {
 	r.settle(ctx, c, "license.locked", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
 		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $4,
     attempts = attempts - 1, locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
-		return unclaim(tx, tag, err)
+		tag, err = unclaim(tx, tag, err)
+		return r.endedBy(ctx, tx, c, StatusCancelled, "license.locked", tag, err)
 	}, r.jobEvent("job.cancelled_license", audit.Denied, c.id, map[string]string{"type": c.typ}))
 }
 
@@ -782,13 +858,15 @@ func (r *Runner) finish(ctx, jobCtx context.Context, c *claimed, res map[string]
 		})
 	case f.Class == Retryable && AlertsWhenExhausted(t):
 		r.settle(ctx, c, f.Reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-			return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $4, result = $5::jsonb, finished_at = $6,
+			tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = $4, result = $5::jsonb, finished_at = $6,
     locked_by = NULL, locked_until = NULL `+mine, c.fence(f.Reason, result, now)...)
+			return r.endedBy(ctx, tx, c, StatusDead, f.Reason, tag, err)
 		}, r.jobEvent("job.dead", audit.Failure, c.id, map[string]string{"type": c.typ, "reason": f.Reason, "attempt": strconv.Itoa(c.attempts)}))
 	default:
 		r.settle(ctx, c, f.Reason, func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-			return tx.Exec(ctx, `UPDATE jobs SET status = 'failed', last_error_code = $4, result = $5::jsonb, finished_at = $6,
+			tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'failed', last_error_code = $4, result = $5::jsonb, finished_at = $6,
     locked_by = NULL, locked_until = NULL `+mine, c.fence(f.Reason, result, now)...)
+			return r.endedBy(ctx, tx, c, StatusFailed, f.Reason, tag, err)
 		})
 	}
 }
@@ -806,8 +884,9 @@ func (r *Runner) release(ctx context.Context, c *claimed, shutdown bool, after t
 			details["shutdown"] = "true"
 		}
 		r.settle(ctx, c, "job.lease_expired", func(tx pgx.Tx, now time.Time) (pgconn.CommandTag, error) {
-			return tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = 'job.lease_expired', finished_at = $4,
+			tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'dead', last_error_code = 'job.lease_expired', finished_at = $4,
     locked_by = NULL, locked_until = NULL `+mine, c.fence(now)...)
+			return r.endedBy(ctx, tx, c, StatusDead, "job.lease_expired", tag, err)
 		}, r.jobEvent("job.dead", audit.Failure, c.id, details))
 		return
 	}
@@ -879,6 +958,11 @@ WHERE job_id = ANY($1::uuid[]) AND finished_at IS NULL`, ids, now); err != nil {
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM target_locks WHERE job_id = ANY($1::uuid[])`, ids); err != nil {
 		return nil, err
+	}
+	for _, x := range all {
+		if x.status == string(StatusDead) {
+			r.ended(ctx, tx, x.typ, JobEnd{ID: x.id, Status: StatusDead, Reason: "job.lease_expired"})
+		}
 	}
 	for _, x := range all {
 		if x.status == string(StatusDead) && !shutdown && alertsWhenDead(x.typ) {
