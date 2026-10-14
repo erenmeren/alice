@@ -337,6 +337,11 @@ fuzz-oidc: ## Fuzz the ID token claim parser ($(FUZZTIME); spec §25.6, Phase 7)
 fuzz-nginx: ## Fuzz the nginx -T parser ($(FUZZTIME); spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseNginxConfig -fuzztime $(FUZZTIME) ./internal/providers/nginx/nginxconf/
 
+.PHONY: fuzz-netaddr
+fuzz-netaddr: ## Fuzz the scan address rule and the route table parsers ($(FUZZTIME) each; network discovery)
+	go test -count=1 -run '^$$' -fuzz FuzzAllowedForScan -fuzztime $(FUZZTIME) ./internal/platform/netaddr/
+	go test -count=1 -run '^$$' -fuzz FuzzParseRoutes -fuzztime $(FUZZTIME) ./internal/platform/netaddr/
+
 .PHONY: fuzz-certs
 fuzz-certs: ## Fuzz the certificate upload and Key Vault secret parsers ($(FUZZTIME) each; spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseCertificateUpload -fuzztime $(FUZZTIME) ./internal/certs/
@@ -365,11 +370,11 @@ fuzz-api: ## Fuzz every create/update body of the API (needs Docker; $(FUZZTIME)
 
 .PHONY: fuzz-nightly
 fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly)
-	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-api FUZZTIME=10m
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-api FUZZTIME=10m
 
 .PHONY: fuzz-release
-fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 9 hours)
-	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-api FUZZTIME=30m
+fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; about 10 hours)
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-api FUZZTIME=30m
 
 # Dynamic gates (Task 15; spec §22.7 stages 5 and 6, §25.7). zap-baseline, zap-full and testssl scan
 # the release image (alice:ci of make image) as compose project alice-zap on 127.0.0.1:9445

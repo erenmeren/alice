@@ -54,6 +54,7 @@
   "alice/internal/backup": 84,
   "alice/internal/audit/forward": 93,
   "alice/internal/testutil/fakesyslog": 94,
+  "alice/internal/testutil/scanpolicy": 100,
   "alice/internal/platform/config": 98,
   "alice/internal/platform/db": 90,
   "alice/cmd/licensectl": 79,

@@ -123,19 +123,27 @@ func Control(_, address string, _ syscall.RawConn) error {
 // order of the records and the failures of the others: the name resolves to an address Alice does
 // not connect to, which an allowed address that is down must not hide.
 func DialContext(ctx context.Context, d *net.Dialer, network, address string) (net.Conn, error) {
+	return guardedDial(ctx, d, network, address, Control, ErrNotAllowed)
+}
+
+// guardedDial dials through a copy of d whose only control hook is check; when the dial failed and
+// check refused a candidate, the error matches refusedErr.
+func guardedDial(ctx context.Context, d *net.Dialer, network, address string,
+	check func(network, address string, c syscall.RawConn) error, refusedErr error,
+) (net.Conn, error) {
 	var refused atomic.Bool
 	nd := *d
 	nd.ControlContext = nil
 	nd.Control = func(network, address string, c syscall.RawConn) error {
-		err := Control(network, address, c)
+		err := check(network, address, c)
 		if err != nil {
 			refused.Store(true)
 		}
 		return err
 	}
 	conn, err := nd.DialContext(ctx, network, address)
-	if err != nil && refused.Load() && !errors.Is(err, ErrNotAllowed) {
-		err = fmt.Errorf("%w (another address failed: %w)", ErrNotAllowed, err)
+	if err != nil && refused.Load() && !errors.Is(err, refusedErr) {
+		err = fmt.Errorf("%w (another address failed: %w)", refusedErr, err)
 	}
 	return conn, err
 }
