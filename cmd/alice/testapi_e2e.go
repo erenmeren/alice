@@ -76,6 +76,15 @@ const acmeScheduleEvery = 100 * 365 * 24 * time.Hour
 // (checkWiring, RunNow): the journeys run it with POST /test/scheduler/run {"task": "acme.auto_deploy"}.
 const acmeAutoDeployEvery = 100 * 365 * 24 * time.Hour
 
+// netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule and retention
+// in the e2e build: in effect never, like the ACME planners (the demo clock would otherwise queue scans or remove rows
+// between two Playwright steps). The tasks stay scheduled (checkWiring, RunNow): the journeys start scans by hand and
+// run netdisco.schedule and netdisco.retention with POST /test/scheduler/run.
+const (
+	netdiscoScheduleEvery  = 100 * 365 * 24 * time.Hour
+	netdiscoRetentionEvery = 100 * 365 * 24 * time.Hour
+)
+
 // rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
 // rotation tasks in the e2e build: in effect never, like the sweep (the demo clock would otherwise
 // plan, advance or finish a run between two Playwright steps). The tasks stay scheduled (checkWiring,

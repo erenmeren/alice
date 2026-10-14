@@ -44,6 +44,13 @@ const acmeScheduleEvery = time.Minute
 // acmeAutoDeployEvery is the interval of the ACME automatic deployment planner (acme.auto_deploy; design row 7).
 const acmeAutoDeployEvery = time.Minute
 
+// netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule (a scope's
+// window is minute-exact) and its retention.
+const (
+	netdiscoScheduleEvery  = time.Minute
+	netdiscoRetentionEvery = time.Hour
+)
+
 // rotationPlanEvery, rotationSweepEvery and destroyRetiredEvery are the intervals of the SSH key
 // rotation tasks (contract C1: rotation.plan and rotation.sweep every minute, sshkey.destroy_retired
 // every hour). The sweep's minute keeps a removal well inside the 15-minute bound of its re-check

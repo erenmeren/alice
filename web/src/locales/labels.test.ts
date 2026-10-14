@@ -134,10 +134,10 @@ describe.each([
     expect(lookup(bundle, 'jobs.types.target.discover')).not.toMatch(/SSH/);
   });
 
-  // Network discovery (A1): the netdisco.* job types are declared in internal/jobs/types.go and registered with their
-  // handlers later, so the guard above cannot see them yet; their labels exist already and stay apart from the SSH-key
-  // discovery task (discovery.schedule).
-  it('labels the network discovery job types before they are registered', () => {
+  // Network discovery (A1): the netdisco.* job types are registered in internal/jobs/types.go, so the guard above reads
+  // them; their labels stay apart from the SSH-key discovery task (discovery.schedule).
+  it('labels the network discovery job types', () => {
+    expect(backendJobTypes()).toEqual(expect.arrayContaining(['netdisco.scan', 'netdisco.schedule', 'netdisco.retention']));
     expect(missingLabels(bundle, ['netdisco.scan', 'netdisco.schedule', 'netdisco.retention'], jobKey)).toEqual([]);
     expect(lookup(bundle, 'jobs.types.netdisco.schedule')).not.toBe(lookup(bundle, 'jobs.types.discovery.schedule'));
   });

@@ -12,6 +12,7 @@
   "alice/internal/jobs/deployjobs": 99,
   "alice/internal/jobs/kvjobs": 100,
   "alice/internal/jobs/acmejobs": 90,
+  "alice/internal/jobs/netdiscojobs": 97,
   "alice/internal/inventory": 89,
   "alice/internal/providers": 100,
   "alice/internal/providers/azurekv": 98,

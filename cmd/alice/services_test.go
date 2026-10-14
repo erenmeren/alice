@@ -59,6 +59,13 @@ func TestReleaseSweepsACMEOrdersEveryMinute(t *testing.T) {
 	assert.Equal(t, time.Minute, acmeSweepEvery)
 }
 
+// The release build runs the network discovery schedule every minute (a scope's window is minute-exact) and its
+// retention hourly.
+func TestReleaseSchedulesNetworkDiscovery(t *testing.T) {
+	assert.Equal(t, time.Minute, netdiscoScheduleEvery)
+	assert.Equal(t, time.Hour, netdiscoRetentionEvery)
+}
+
 // The release build plans ACME renewals every minute (design row 6).
 func TestReleasePlansACMERenewalsEveryMinute(t *testing.T) {
 	assert.Equal(t, time.Minute, acmeScheduleEvery)

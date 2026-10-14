@@ -46,7 +46,10 @@ var rules = map[string][]string{
 	"alice/internal/jobs/acmejobs": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
 		"alice/internal/providers", "alice/internal/jobs", "alice/internal/acme", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01",
 		"alice/internal/acme/solver/http01", "alice/internal/acme/keygen", "alice/internal/secrets"},
-	"alice/internal/setup/...": {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
+	// The network discovery jobs run the scanner (the scan handler, the schedule and the retention tasks) and queue a scan
+	// with its job in one transaction: the scanner package and the job queue, never the probe or the inventory.
+	"alice/internal/jobs/netdiscojobs": {platform, "alice/internal/license/...", "alice/internal/jobs", "alice/internal/discovery"},
+	"alice/internal/setup/...":         {platform, "alice/internal/auth/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/rbac/...", "alice/internal/notify/..."},
 	"alice/internal/api/...": {platform, "alice/internal/i18n/...", "alice/internal/version/...", "alice/internal/rbac/...",
 		"alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...",
 		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/...",
@@ -389,6 +392,11 @@ func TestAllowed(t *testing.T) {
 		{"acmejobs to transport denied", "alice/internal/jobs/acmejobs", "alice/internal/acme/transport", false},
 		{"acmejobs to fakeacme denied", "alice/internal/jobs/acmejobs", "alice/internal/testutil/fakeacme", false},
 		{"kvjobs to acme denied", "alice/internal/jobs/kvjobs", "alice/internal/acme", false},
+		{"netdiscojobs to discovery allowed", "alice/internal/jobs/netdiscojobs", "alice/internal/discovery", true},
+		{"netdiscojobs to jobs allowed", "alice/internal/jobs/netdiscojobs", "alice/internal/jobs", true},
+		{"netdiscojobs to tlsprobe denied", "alice/internal/jobs/netdiscojobs", "alice/internal/discovery/tlsprobe", false},
+		{"netdiscojobs to inventory denied", "alice/internal/jobs/netdiscojobs", "alice/internal/inventory", false},
+		{"netdiscojobs to providers denied", "alice/internal/jobs/netdiscojobs", "alice/internal/providers", false},
 		{"inventory to fakeacme denied", "alice/internal/inventory", "alice/internal/testutil/fakeacme", false},
 		{"acme to clock allowed", "alice/internal/acme", "alice/internal/platform/clock", true},
 		{"acme to api denied", "alice/internal/acme", "alice/internal/api", false},

@@ -23,6 +23,7 @@ import (
 	"alice/internal/jobs/acmejobs"
 	"alice/internal/jobs/deployjobs"
 	"alice/internal/jobs/kvjobs"
+	"alice/internal/jobs/netdiscojobs"
 	"alice/internal/jobs/sshkeyjobs"
 	"alice/internal/jobs/targetjobs"
 	"alice/internal/license"
@@ -80,6 +81,10 @@ type services struct {
 	backup   *backup.Service    // backups, their schedule, state and alarm
 	forward  *forward.Forwarder // audit forwarding to syslog
 	tlsStore *tlscert.Store     // the HTTPS certificate; set by serve only (a command never touches tls.*)
+
+	// Network discovery: the application DSN (ALICE_DATABASE_URL). The scan policy refuses every host it names, so a
+	// scan never reaches Alice's own database.
+	databaseURL string
 }
 
 // buildServices loads (or, on a brand-new database, creates) the master key and wires the
@@ -165,6 +170,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 		sshPool:   sshPool,
 		sshkeys:   sshkeys.New(sshkeysConfig(pool, keyring, auditLog, clk, lic, inv, queue, log)),
 	}
+	svc.databaseURL = cfg.DatabaseURL
 	svc.notifySettings = notifySettings
 	svc.alerts = alerts.New(alerts.Config{Pool: pool, Audit: auditLog, Clock: clk, License: lic,
 		Notifier: notify.AdminNotifier{Clock: clk}, Log: log})
@@ -283,7 +289,24 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 	kvjobs.Register(runner, kvDeps(svc, clk, log))
 	sshkeyjobs.Register(runner, sshkeyDeps(svc, clk, log))
 	acmejobs.Register(runner, acmeDeps(svc, clk, log))
+	netdiscojobs.Register(runner, netdiscoDeps(svc, clk, log))
 	return runner
+}
+
+// netdiscoDeps are the dependencies of the network discovery jobs and tasks: the application pool, the queue (a
+// scheduled scan is queued with its job), the licence service as the gate a scan asks before every batch, and the
+// database DSN whose hosts the scan policy refuses. NewPolicy and Resolver stay nil: the production scan policy
+// (netaddr.NewScanPolicy, built per scan) and the system resolver are the only ones a release build uses; Lease stays
+// zero, the runner's default lease (discovery.DefaultLease).
+func netdiscoDeps(svc *services, clk clock.Clock, log *slog.Logger) netdiscojobs.Deps {
+	d := netdiscojobs.Deps{Pool: svc.pool, Clock: clk, Log: log, DatabaseURL: svc.databaseURL}
+	if svc.queue != nil { // a nil *jobs.Queue must stay a nil interface, so ScheduleTask refuses it
+		d.Queue = svc.queue
+	}
+	if svc.license != nil {
+		d.License = svc.license
+	}
+	return d
 }
 
 // sshkeyDeps are the dependencies of the SSH key jobs, with the licence service as their gate. The S3
@@ -430,6 +453,11 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		acmejobs.ScheduleTask(svc.inventory, acmeScheduleEvery, log),
 		acmejobs.AutoDeployTask(svc.inventory, acmeAutoDeployEvery, log),
 		acmejobs.SweepTask(acmeDeps(svc, clk, log), acmeSweepEvery),
+		// Network discovery: the schedule (ReadOnly: paused in lock; queues the scans of due scopes, at most two at a time)
+		// and the retention (ClassAlways: removes old discovery rows in every license state). Both end the scans whose job
+		// ended without them. The e2e build never ticks them: the journeys run them with POST /test/scheduler/run.
+		netdiscojobs.ScheduleTask(netdiscoDeps(svc, clk, log), netdiscoScheduleEvery),
+		netdiscojobs.RetentionTask(netdiscoDeps(svc, clk, log), netdiscoRetentionEvery),
 	)
 }
 

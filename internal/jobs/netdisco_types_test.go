@@ -51,12 +51,18 @@ func TestNetdiscoScanDedupeKey(t *testing.T) {
 	assert.NotEqual(t, NetdiscoScanDedupeKey(scope), NetdiscoScanDedupeKey(uuid.New()))
 }
 
-// The types are declared but not registered until their handlers exist (Task 8): a registered type without a handler
-// makes checkWiring refuse to start the server, and an unregistered one cannot be queued or scheduled (ErrUnknownType),
-// so nothing can enqueue a scan before the scanner exists. Task 8 registers them and turns this test around.
-func TestNetdiscoTypesAreNotRegisteredBeforeTheirHandlers(t *testing.T) {
+// The types are registered (Task 8 of the network discovery plan), each with its literal name and class, so they can be
+// queued and scheduled: the runner gets the scan's handler and the scheduler the two periodic tasks (internal/jobs/netdiscojobs,
+// wired in cmd/alice). The web's job labels are read from these literal Register calls.
+func TestNetdiscoTypesAreRegistered(t *testing.T) {
+	names := map[string]bool{}
+	for _, typ := range Types() {
+		names[typ.Name] = true
+	}
 	for _, typ := range []Type{NetdiscoScan, NetdiscoSchedule, NetdiscoRetention} {
-		_, ok := lookup(typ.Name)
-		assert.False(t, ok, "%s is registered: register its handler (Task 8) and update this test", typ.Name)
+		reg, ok := lookup(typ.Name)
+		assert.True(t, ok, "%s is registered", typ.Name)
+		assert.Equal(t, typ, reg, "%s is registered with its class", typ.Name)
+		assert.True(t, names[typ.Name], "jobs.Types() lists %s", typ.Name)
 	}
 }

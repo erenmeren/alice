@@ -261,6 +261,13 @@ func TestE2EBuildNeverTicksTheACMEAutoDeployPlanner(t *testing.T) {
 	assert.GreaterOrEqual(t, acmeAutoDeployEvery, 50*365*24*time.Hour)
 }
 
+// Nor the network discovery schedule or retention: the journeys start scans by hand and run netdisco.schedule and
+// netdisco.retention with POST /test/scheduler/run.
+func TestE2EBuildNeverTicksNetworkDiscovery(t *testing.T) {
+	assert.GreaterOrEqual(t, netdiscoScheduleEvery, 50*365*24*time.Hour)
+	assert.GreaterOrEqual(t, netdiscoRetentionEvery, 50*365*24*time.Hour)
+}
+
 type countingGate struct {
 	locked bool
 	calls  int

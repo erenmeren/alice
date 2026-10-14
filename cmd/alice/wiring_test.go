@@ -37,7 +37,11 @@ func wiringServices(t *testing.T) *services {
 	t.Cleanup(pool.Close)
 	reg := providers.NewRegistry()
 	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
-	return &services{license: &license.Service{}, inventory: &inventory.Service{}, queue: &jobs.Queue{},
+	// A pool that never connects (pgxpool connects lazily): the wiring functions only hand it on.
+	db, err := pgxpool.New(context.Background(), "postgres://wiring@127.0.0.1:1/alice")
+	require.NoError(t, err)
+	t.Cleanup(db.Close)
+	return &services{pool: db, databaseURL: "postgres://wiring@127.0.0.1:1/alice", license: &license.Service{}, inventory: &inventory.Service{}, queue: &jobs.Queue{},
 		registry: reg, sshPool: pool, auditLog: audit.New(clock.Real{}), audit: &audit.Service{},
 		sshkeys:        sshkeys.New(sshkeys.Config{HelperBudget: helperproto.HelperBudget}),
 		notifySettings: &notify.Settings{}, alerts: &alerts.Service{}, oidc: &oidc.Service{}}
@@ -77,6 +81,16 @@ func TestJobDepsCarryEveryDependency(t *testing.T) {
 	requireEveryFieldSet(t, kvDeps(svc, clock.Real{}, log))
 	requireEveryFieldSet(t, sshkeyDeps(svc, clock.Real{}, log))
 	requireEveryFieldSet(t, acmeDeps(svc, clock.Real{}, log))
+	// Lease: the runner's default (discovery.DefaultLease); NewPolicy and Resolver: the production scan policy and the
+	// system resolver.
+	nd := netdiscoDeps(svc, clock.Real{}, log)
+	requireEveryFieldSet(t, nd, "Lease", "NewPolicy", "Resolver")
+	assert.Same(t, svc.pool, nd.Pool)
+	assert.Same(t, svc.queue, nd.Queue)
+	assert.Same(t, svc.license, nd.License, "a scan asks the licence gate before every batch")
+	assert.Equal(t, svc.databaseURL, nd.DatabaseURL, "the scan policy refuses the database's hosts")
+	assert.Nil(t, nd.NewPolicy, "a release build scans with the production policy only")
+	assert.Nil(t, nd.Resolver, "the system resolver only (air-gap)")
 	assert.Same(t, svc.inventory, acmeDeps(svc, clock.Real{}, log).Inventory)
 	assert.Same(t, svc.registry, acmeDeps(svc, clock.Real{}, log).Registry)
 	assert.Same(t, svc.license, acmeDeps(svc, clock.Real{}, log).Gate, "an order asks the licence gate before each challenge it publishes")
@@ -107,14 +121,17 @@ func TestServeWiringIsComplete(t *testing.T) {
 	}
 	for _, typ := range []jobs.Type{jobs.TargetTestConnection, jobs.TargetDiscover, jobs.SSHKeyRemove,
 		jobs.CertificateDeploy, jobs.CertificateDeployRecover, jobs.KVTestConnection, jobs.KVPoll, jobs.KVImport,
-		jobs.SSHKeyAdd, jobs.RotationLocation, jobs.ACMEIssue, jobs.ACMECleanup} {
+		jobs.SSHKeyAdd, jobs.RotationLocation, jobs.ACMEIssue, jobs.ACMECleanup, jobs.NetdiscoScan} {
 		assert.True(t, runner.Handles(typ), "the runner handles %s", typ.Name)
 	}
 	for _, typ := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
 		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy,
-		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep} {
+		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep,
+		jobs.NetdiscoSchedule, jobs.NetdiscoRetention} {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
+	assert.Positive(t, netdiscoScheduleEvery, "the discovery schedule has an interval in every build")
+	assert.Positive(t, netdiscoRetentionEvery, "the discovery retention has an interval in every build")
 	assert.Positive(t, acmeSweepEvery, "the ACME sweep has an interval in every build")
 	assert.Positive(t, acmeScheduleEvery, "the ACME renewal planner has an interval in every build")
 	assert.Positive(t, acmeAutoDeployEvery, "the ACME automatic deployment planner has an interval in every build")
@@ -170,6 +187,10 @@ func TestCheckWiringRefusesAnIncompleteProduct(t *testing.T) {
 		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")
 	}
 	for _, typ := range []string{"kv.schedule", "kv.auto_deploy"} {
+		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")
+	}
+	assert.Contains(t, err.Error(), "queue job type netdisco.scan has no handler")
+	for _, typ := range []string{"netdisco.schedule", "netdisco.retention"} {
 		assert.Contains(t, err.Error(), "periodic job type "+typ+" is not scheduled")
 	}
 	assert.NotContains(t, err.Error(), "notify.send")

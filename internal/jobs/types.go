@@ -158,16 +158,12 @@ var (
 // MaxConcurrentNetdiscoScans running at once (maxRunning) and one per scope (dedupe key NetdiscoScanDedupeKey).
 // netdisco.schedule is the periodic task that queues the scans of scopes with a schedule (ReadOnly: no tick in lock).
 // netdisco.retention is the periodic cleanup of gone endpoints, orphan certificates and old scans (ClassAlways: it only
-// deletes Alice's own rows, so it runs in lock too).
-//
-// They are declared here but registered only together with their handlers (Task 8 of the network discovery plan): a
-// registered type without a handler makes checkWiring refuse to start the server, and an unregistered type cannot be
-// queued or scheduled (ErrUnknownType), so no scan can be queued before the scanner exists. Task 8 replaces each Type
-// literal below with a Register call of the same literal name and class (the web's label guard reads literal names).
+// deletes Alice's own rows, so it runs in lock too). The names are literals (the web's label guard reads literal Register
+// calls); the handler and the two tasks are in internal/jobs/netdiscojobs.
 var (
-	NetdiscoScan      = Type{Name: "netdisco.scan", Class: license.ClassReadOnly}
-	NetdiscoSchedule  = Type{Name: "netdisco.schedule", Class: license.ClassReadOnly}
-	NetdiscoRetention = Type{Name: "netdisco.retention", Class: license.ClassAlways}
+	NetdiscoScan      = Register("netdisco.scan", license.ClassReadOnly)
+	NetdiscoSchedule  = Register("netdisco.schedule", license.ClassReadOnly)
+	NetdiscoRetention = Register("netdisco.retention", license.ClassAlways)
 )
 
 // MaxConcurrentNetdiscoScans is the number of netdisco.scan jobs that may run at once in the installation (design

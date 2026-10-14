@@ -19,8 +19,11 @@ func TestMaxRunningFor(t *testing.T) {
 	n, ok := MaxRunningFor(KVPoll)
 	assert.True(t, ok)
 	assert.Equal(t, inventory.MaxConcurrentKVPolls, n)
+	n, ok = MaxRunningFor(NetdiscoScan)
+	assert.True(t, ok)
+	assert.Equal(t, MaxConcurrentNetdiscoScans, n, "at most two network discovery scans run at once")
 	for _, typ := range []Type{KVTestConnection, KVImport, CertificateDeploy, CertificateDeployRecover, TargetDiscover, TargetTestConnection, SSHKeyRemove,
-		LicenseEvaluate, NotifySend} {
+		LicenseEvaluate, NotifySend, NetdiscoSchedule, NetdiscoRetention, DiscoverySchedule} {
 		_, ok := MaxRunningFor(typ)
 		assert.False(t, ok, "%s has no cap: only the poll's behaviour changed", typ.Name)
 	}

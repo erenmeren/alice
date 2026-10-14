@@ -138,10 +138,16 @@ func (s *PGStore) inTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
 
 // CreateScan queues a scan of a live scope (trigger manual or schedule; requestedBy nil for a schedule).
 // ErrScanRunning when the scope has a scan queued or running (index discovery_scans_one_active), ErrScopeNotFound
-// when the scope is deleted or unknown.
+// when the scope is deleted or unknown. It writes the scan row only: production queues a scan together with its job
+// (netdiscojobs.StartTx calls CreateScanTx in the job's transaction).
 func (s *PGStore) CreateScan(ctx context.Context, scopeID uuid.UUID, trigger string, requestedBy *uuid.UUID, now time.Time) (uuid.UUID, error) {
+	return CreateScanTx(ctx, s.db, scopeID, trigger, requestedBy, now)
+}
+
+// CreateScanTx is CreateScan on q (a transaction: a refusal aborts it).
+func CreateScanTx(ctx context.Context, q db.Querier, scopeID uuid.UUID, trigger string, requestedBy *uuid.UUID, now time.Time) (uuid.UUID, error) {
 	id := uuid.New()
-	tag, err := s.db.Exec(ctx, `INSERT INTO discovery_scans (id, scope_id, trigger, requested_by, queued_at)
+	tag, err := q.Exec(ctx, `INSERT INTO discovery_scans (id, scope_id, trigger, requested_by, queued_at)
 SELECT $1, id, $3, $4, $5 FROM discovery_scopes WHERE id = $2 AND deleted_at IS NULL`, id, scopeID, trigger, requestedBy, now)
 	switch {
 	case db.IsUniqueViolationOn(err, "discovery_scans_one_active"):
