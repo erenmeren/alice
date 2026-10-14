@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -97,4 +98,44 @@ func TestEndHookReportsItsFailure(t *testing.T) {
 	require.NoError(t, tx.Rollback(w.ctx))
 	err = newHandlers(w.deps).ended(w.ctx, tx, jobs.JobEnd{ID: uuid.New(), Status: jobs.StatusDead, Reason: "job.lease_expired"})
 	assert.Error(t, err)
+}
+
+// holdAuditChain takes the audit chain's transaction lock in another session until the test ends, so every audit row
+// written meanwhile waits (and fails when its context ends).
+func (w *world) holdAuditChain() {
+	w.t.Helper()
+	tx, err := w.db.Owner.Begin(w.ctx)
+	require.NoError(w.t, err)
+	w.t.Cleanup(func() { _ = tx.Rollback(context.Background()) })
+	_, err = tx.Exec(w.ctx, `SELECT pg_advisory_xact_lock(7160927315633811300)`)
+	require.NoError(w.t, err)
+}
+
+// A scan's end and its finished row are one transaction on every path: when the row cannot be written, the scan is not
+// ended either (the next sweep or hook ends it with its row), and an unknown scan is an error, not a silent row.
+func TestAnEndWithoutItsFinishedRowRollsBack(t *testing.T) {
+	w := newWorld(t)
+	orphan, job, err := w.start(w.scope("lab", scopeOpts{}), TriggerManual)
+	require.NoError(t, err)
+	w.exec(`UPDATE jobs SET status = 'dead', last_error_code = 'job.lease_expired', finished_at = $2 WHERE id = $1`, job, t0)
+	w.holdAuditChain()
+
+	ctx, cancel := context.WithTimeout(w.ctx, 300*time.Millisecond)
+	defer cancel()
+	_, err = EndOrphanScans(ctx, w.db.App, w.audit, t0)
+	require.Error(t, err)
+	assert.Equal(t, "queued", w.scan(orphan).state, "no end without its row")
+
+	h := newHandlers(w.deps)
+	tx, err := w.db.App.Begin(w.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(w.ctx) }()
+	ctx2, cancel2 := context.WithTimeout(w.ctx, 300*time.Millisecond)
+	defer cancel2()
+	require.Error(t, h.ended(ctx2, tx, jobs.JobEnd{ID: job, Status: jobs.StatusDead, Reason: "job.lease_expired"}))
+
+	tx2, err := w.db.App.Begin(w.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx2.Rollback(w.ctx) }()
+	require.Error(t, AuditFinished(w.ctx, tx2, w.audit, uuid.New()), "an unknown scan")
 }
