@@ -15,6 +15,8 @@ import (
 const (
 	// ResolveTimeout bounds the lookup of one host name when a scan starts (amendment A3).
 	ResolveTimeout = 5 * time.Second
+	// ResolveBudget bounds the lookups of one expansion together.
+	ResolveBudget = 60 * time.Second
 	// MaxAddressesPerName is how many of a name's addresses a scan probes (the first ones the
 	// resolver returns, IPv4-mapped forms unmapped, duplicates once).
 	MaxAddressesPerName = 8
@@ -65,12 +67,14 @@ func (e Endpoint) ErrorCode() string {
 // ExpandInputs are what an expansion is checked against. Policy is the scan's netaddr.ScanPolicy
 // (production: netaddr.NewScanPolicy, built per scan; it also holds the rules, so every address is
 // checked twice, here and at connect time). Resolver looks up the host names (production:
-// SystemResolver). ResolveTimeout bounds each lookup (zero: ResolveTimeout).
+// SystemResolver). ResolveTimeout bounds each lookup (zero: ResolveTimeout), ResolveBudget all of
+// them together (zero: ResolveBudget).
 type ExpandInputs struct {
 	Rules
 	Policy         netaddr.ScanPolicy
 	Resolver       Resolver
 	ResolveTimeout time.Duration
+	ResolveBudget  time.Duration
 }
 
 // Expansion is a scope expanded for one scan. Dial holds the only endpoints a scan may connect to;
@@ -107,17 +111,22 @@ func Expand(ctx context.Context, s Scope, in ExpandInputs) (*Expansion, error) {
 	if timeout <= 0 {
 		timeout = ResolveTimeout
 	}
-	resolved := resolveAll(ctx, in.Resolver, c.hosts, timeout)
+	budget := in.ResolveBudget
+	if budget <= 0 {
+		budget = ResolveBudget
+	}
+	resolved := resolveAll(ctx, in.Resolver, c.hosts, timeout, budget)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	excluded := append(append([]netip.Prefix(nil), in.GlobalExclusions...), c.exclusions...)
+	excluded := newPrefixSet(in.GlobalExclusions, c.exclusions)
+	allowed := newPrefixSet(in.AllowedNetworks)
 	var literal []netip.Addr
 	for _, p := range c.ranges {
 		a := p.Addr()
 		for n := prefixSize(p); n > 0; n-- {
-			if !inPrefixes(a, excluded) {
+			if !excluded.contains(a) {
 				literal = append(literal, a)
 			}
 			a = a.Next()
@@ -150,7 +159,7 @@ func Expand(ctx context.Context, s Scope, in ExpandInputs) (*Expansion, error) {
 	dialable := func(a netip.Addr) bool {
 		ok, seen := verdicts[a]
 		if !seen {
-			ok = netaddr.AllowedForScan(a) && inPrefixes(a, in.AllowedNetworks) && !inPrefixes(a, excluded) && in.Policy.CheckScan(a) == nil
+			ok = netaddr.AllowedForScan(a) && allowed.contains(a) && !excluded.contains(a) && in.Policy.CheckScan(a) == nil
 			verdicts[a] = ok
 		}
 		return ok
@@ -196,10 +205,13 @@ func Expand(ctx context.Context, s Scope, in ExpandInputs) (*Expansion, error) {
 	return x, nil
 }
 
-// resolveAll looks every name up once, a few at a time, each with its own deadline. A name that does
-// not resolve has no addresses. Addresses are unmapped; zoned or invalid ones (no resolver returns
+// resolveAll looks every name up once, a few at a time, each with its own deadline and all within
+// budget. A name that does not resolve, or is not looked up before the budget runs out, has no
+// addresses. Addresses are unmapped; zoned or invalid ones (no resolver returns
 // them for a name) are dropped; at most MaxAddressesPerName are kept per name.
-func resolveAll(ctx context.Context, r Resolver, hosts []string, timeout time.Duration) [][]netip.Addr {
+func resolveAll(ctx context.Context, r Resolver, hosts []string, timeout, budget time.Duration) [][]netip.Addr {
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
 	out := make([][]netip.Addr, len(hosts))
 	next := make(chan int)
 	var wg sync.WaitGroup
@@ -212,8 +224,13 @@ func resolveAll(ctx context.Context, r Resolver, hosts []string, timeout time.Du
 			}
 		}()
 	}
+feed:
 	for i := range hosts {
-		next <- i
+		select {
+		case next <- i:
+		case <-ctx.Done():
+			break feed
+		}
 	}
 	close(next)
 	wg.Wait()

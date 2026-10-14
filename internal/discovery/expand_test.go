@@ -219,9 +219,9 @@ func TestExcludedAddressesAreNeverReturnedDialable(t *testing.T) {
 		dial[e.Address] = true
 		require.NoError(t, pol.CheckScan(e.Address))
 		require.True(t, netaddr.AllowedForScan(e.Address), e.Address)
-		require.True(t, inPrefixes(e.Address, rules.AllowedNetworks), e.Address)
-		require.False(t, inPrefixes(e.Address, excl), e.Address)
-		require.False(t, inPrefixes(e.Address, except), e.Address)
+		require.True(t, inAny(e.Address, rules.AllowedNetworks), e.Address)
+		require.False(t, inAny(e.Address, excl), e.Address)
+		require.False(t, inAny(e.Address, except), e.Address)
 	}
 	for _, e := range x.Excluded {
 		require.False(t, dial[e.Address], "excluded %s is also dialable", e.Address)
@@ -275,4 +275,23 @@ func TestExpandCapsCountResolvedAddresses(t *testing.T) {
 
 func TestSystemResolverIsTheDefault(t *testing.T) {
 	require.Equal(t, net.DefaultResolver, SystemResolver)
+}
+
+// Review fix 6: the lookups of one expansion share an overall deadline; a name not resolved by then
+// is unresolved (never dialed) and the expansion still returns.
+func TestExpandResolveBudget(t *testing.T) {
+	r := &stubResolver{block: true}
+	s := scope("10.0.0.1")
+	for i := range 40 {
+		s.Entries = append(s.Entries, "slow"+strconv.Itoa(i)+".example")
+	}
+	start := time.Now()
+	x, err := Expand(context.Background(), s, ExpandInputs{Rules: lab(), Policy: scanpolicy.Permissive(), Resolver: r,
+		ResolveBudget: 50 * time.Millisecond})
+	require.NoError(t, err)
+	require.Less(t, time.Since(start), 2*time.Second, "40 names x 5 s each would take 25 s with 8 workers")
+	require.Len(t, x.Unresolved, 40)
+	require.Equal(t, []string{"10.0.0.1 443 sni= host="}, keys(x.Dial))
+	require.Empty(t, x.Excluded)
+	require.Equal(t, 60*time.Second, ResolveBudget)
 }

@@ -343,9 +343,10 @@ fuzz-netaddr: ## Fuzz the scan address rule and the route table parsers ($(FUZZT
 	go test -count=1 -run '^$$' -fuzz FuzzParseRoutes -fuzztime $(FUZZTIME) ./internal/platform/netaddr/
 
 .PHONY: fuzz-discovery
-fuzz-discovery: ## Fuzz the discovery scope entry parser and the host and SNI name rule ($(FUZZTIME) each; network discovery)
+fuzz-discovery: ## Fuzz the discovery scope entry and exclusion parsers, the host and SNI name rule and the expansion ($(FUZZTIME) each; network discovery)
 	go test -count=1 -run '^$$' -fuzz FuzzParseEntry -fuzztime $(FUZZTIME) ./internal/discovery/
 	go test -count=1 -run '^$$' -fuzz FuzzCanonicalHostname -fuzztime $(FUZZTIME) ./internal/discovery/
+	go test -count=1 -run '^$$' -fuzz FuzzExpand -fuzztime $(FUZZTIME) ./internal/discovery/
 
 .PHONY: fuzz-certs
 fuzz-certs: ## Fuzz the certificate upload and Key Vault secret parsers ($(FUZZTIME) each; spec §25.6)
@@ -374,11 +375,11 @@ fuzz-api: ## Fuzz every create/update body of the API (needs Docker; $(FUZZTIME)
 	go test -count=1 -tags integration -run '^$$' -fuzz FuzzOpenAPIInputs -fuzztime $(FUZZTIME) ./internal/api/
 
 .PHONY: fuzz-nightly
-fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly; 22 targets, 220 minutes)
+fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly; 23 targets, 230 minutes)
 	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-api FUZZTIME=10m
 
 .PHONY: fuzz-release
-fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; 22 targets, about 11 hours)
+fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; 23 targets, about 11.5 hours)
 	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-nginx fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-api FUZZTIME=30m
 
 # Dynamic gates (Task 15; spec §22.7 stages 5 and 6, §25.7). zap-baseline, zap-full and testssl scan

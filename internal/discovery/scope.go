@@ -26,6 +26,7 @@ import (
 const (
 	MaxEntries     = 256   // entries of a scope
 	MaxPorts       = 16    // ports of a scope
+	MaxPortList    = 1024  // elements of a port list before de-duplication (a longer one is refused unread)
 	MaxSNINames    = 256   // SNI names of a scope
 	MaxExclusions  = 256   // exclusions of a scope, and entries of the allowed networks or global exclusions settings
 	MaxAddresses   = 4096  // addresses of a scope (a /20), host names' addresses included
@@ -207,9 +208,8 @@ func parseIPOrPrefix(field, s string) (p netip.Prefix, isIP bool, err error) {
 		return p, true, fail(ErrInvalid, field, 0, s, "the range has host bits set; did you mean "+pp.Masked().String()+"?")
 	}
 	if pp.Addr().Is4In6() {
-		if pp.Bits() < 96 {
-			return p, true, fail(ErrInvalid, field, 0, s, "an IPv4-mapped range needs at least 96 bits")
-		}
+		// At least /96 here: every ::ffff: address has bits 80-95 set, so a shorter mapped range has
+		// host bits set and was refused above (it would mix IPv4 and IPv6 space).
 		pp = netip.PrefixFrom(pp.Addr().Unmap(), pp.Bits()-96)
 	}
 	return pp, true, nil
@@ -227,8 +227,11 @@ func CanonicalHostname(s string) (string, error) { return hostname("sni_names", 
 
 func hostname(field, s string) (string, error) {
 	bad := func(detail string) (string, error) { return "", fail(ErrInvalid, field, 0, s, detail) }
-	if s == "" || len(s) > MaxEntryLen {
+	if s == "" {
 		return bad(fmt.Sprintf("a name has 1 to %d characters", MaxNameLen))
+	}
+	if len(s) > MaxEntryLen {
+		return bad(fmt.Sprintf("an entry has at most %d characters", MaxEntryLen))
 	}
 	if !utf8.ValidString(s) {
 		return bad("not valid UTF-8")
@@ -463,9 +466,10 @@ func compile(s Scope, r Rules) (*compiled, error) {
 	if len(r.AllowedNetworks) == 0 {
 		return nil, fail(ErrNotAllowed, "entries", 0, s.Entries[0], "no allowed scan networks are set: nothing may be scanned")
 	}
-	excluded := append(append([]netip.Prefix(nil), r.GlobalExclusions...), c.exclusions...)
+	allowed := newPrefixSet(r.AllowedNetworks)
+	blocked := newPrefixSet(r.GlobalExclusions, c.exclusions, netaddr.ScanBuiltins())
 	for k, p := range prefixes {
-		if err := checkAllowed(p, r.AllowedNetworks, excluded); err != "" {
+		if err := checkAllowed(p, allowed, blocked); err != "" {
 			i := prefixIndex[k]
 			return nil, fail(ErrNotAllowed, "entries", i, s.Entries[i], err)
 		}
@@ -487,41 +491,116 @@ func checkPorts(in []int) ([]uint16, error) {
 	if len(in) == 0 {
 		return nil, fail(ErrInvalid, "ports", -1, "", "a scope has at least one port")
 	}
+	tooMany := fail(ErrTooLarge, "ports", -1, "", fmt.Sprintf("at most %d ports", MaxPorts))
+	if len(in) > MaxPortList {
+		return nil, tooMany
+	}
+	var seen [65536 / 64]uint64
 	var out []uint16
 	for i, p := range in {
 		if p < 1 || p > 65535 {
 			return nil, fail(ErrInvalid, "ports", i, strconv.Itoa(p), "a port is a number from 1 to 65535")
 		}
-		if !slices.Contains(out, uint16(p)) {
-			out = append(out, uint16(p))
+		if seen[p/64]&(1<<(p%64)) != 0 {
+			continue
 		}
-	}
-	if len(out) > MaxPorts {
-		return nil, fail(ErrTooLarge, "ports", -1, "", fmt.Sprintf("at most %d ports", MaxPorts))
+		seen[p/64] |= 1 << (p % 64)
+		if out = append(out, uint16(p)); len(out) > MaxPorts {
+			return nil, tooMany
+		}
 	}
 	return out, nil
 }
 
-// outermost returns the prefixes that no other one contains (two CIDR ranges either nest or do not
-// overlap), so the result is disjoint and its sizes add up to the addresses the entries cover.
-func outermost(ps []netip.Prefix) []netip.Prefix {
+// outermost returns the prefixes that no other one contains, sorted by address (two CIDR ranges
+// either nest or do not overlap), so the result is disjoint and its sizes add up to the addresses
+// the prefixes cover. Sorted by address and then widest first, a prefix inside an earlier one is
+// inside the last one kept: one pass after the sort.
+func outermost(ps []netip.Prefix) prefixSet {
 	sorted := slices.Clone(ps)
-	slices.SortStableFunc(sorted, func(a, b netip.Prefix) int { return a.Bits() - b.Bits() })
-	var out []netip.Prefix
-	for _, p := range sorted {
-		inside := false
-		for _, o := range out {
-			if o.Contains(p.Addr()) && o.Bits() <= p.Bits() {
-				inside = true
-				break
-			}
+	slices.SortFunc(sorted, func(a, b netip.Prefix) int {
+		if c := a.Addr().Compare(b.Addr()); c != 0 {
+			return c
 		}
-		if !inside {
-			out = append(out, p)
+		return a.Bits() - b.Bits()
+	})
+	var out prefixSet
+	for _, p := range sorted {
+		if n := len(out); n > 0 && out[n-1].Bits() <= p.Bits() && out[n-1].Contains(p.Addr()) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// prefixSet is a set of disjoint prefixes sorted by address (outermost's result): membership is a
+// binary search, not a walk over every prefix.
+type prefixSet []netip.Prefix
+
+// newPrefixSet merges prefix lists into a set; each prefix is masked and an IPv4-mapped one of at
+// least 96 bits becomes its IPv4 form (the addresses checked are unmapped).
+func newPrefixSet(lists ...[]netip.Prefix) prefixSet {
+	var all []netip.Prefix
+	for _, l := range lists {
+		for _, p := range l {
+			if p.Addr().Is4In6() && p.Bits() >= 96 {
+				p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+			}
+			all = append(all, p.Masked())
 		}
 	}
-	slices.SortStableFunc(out, func(a, b netip.Prefix) int { return a.Addr().Compare(b.Addr()) })
-	return out
+	return outermost(all)
+}
+
+// find returns the prefix of the set that holds a.
+func (s prefixSet) find(a netip.Addr) (netip.Prefix, bool) {
+	i, _ := slices.BinarySearchFunc(s, a, func(p netip.Prefix, a netip.Addr) int {
+		if p.Addr().Compare(a) <= 0 {
+			return -1
+		}
+		return 1
+	}) // i: the first prefix starting after a
+	if i == 0 || !s[i-1].Contains(a) {
+		return netip.Prefix{}, false
+	}
+	return s[i-1], true
+}
+
+func (s prefixSet) contains(a netip.Addr) bool {
+	_, ok := s.find(a)
+	return ok
+}
+
+// covers reports whether every address of p is in the set: one prefix of the set holds p, or the
+// prefixes of the set inside p add up to it.
+func (s prefixSet) covers(p netip.Prefix) bool {
+	if q, ok := s.find(p.Addr()); ok && q.Bits() <= p.Bits() {
+		return true
+	}
+	i, _ := slices.BinarySearchFunc(s, p.Addr(), func(q netip.Prefix, a netip.Addr) int { return q.Addr().Compare(a) })
+	n := 0
+	for ; i < len(s) && p.Contains(s[i].Addr()); i++ {
+		n += prefixSize(s[i])
+	}
+	return n == prefixSize(p)
+}
+
+// lastAddr is the highest address of p.
+func lastAddr(p netip.Prefix) netip.Addr {
+	b := p.Masked().Addr().As16()
+	off := 0
+	if p.Addr().Is4() {
+		off = 96
+	}
+	for i := off + p.Bits(); i < 128; i++ {
+		b[i/8] |= 1 << (7 - i%8)
+	}
+	a := netip.AddrFrom16(b)
+	if p.Addr().Is4() {
+		return a.Unmap()
+	}
+	return a
 }
 
 // checkSize applies the scope limits to the counts alone: addresses (a host name counts as one, its
@@ -543,34 +622,26 @@ func (c *compiled) endpoints(literal, resolved int) int {
 	return literal*len(c.ports)*max(1, len(c.sni)) + resolved*len(c.ports)
 }
 
-// checkAllowed refuses an address or range that is not entirely inside the allowed networks, or
-// whose every address the built-in rule or an exclusion refuses. A range only partly refused stays:
-// its refused addresses are excluded at expansion (and listed in the preview).
-func checkAllowed(p netip.Prefix, allowed, excluded []netip.Prefix) string {
-	scannable := false
-	a := p.Addr()
-	for n := prefixSize(p); n > 0; n-- {
-		if !inPrefixes(a, allowed) {
-			return "outside the allowed scan networks"
+// checkAllowed refuses an address or range that is not entirely inside the allowed networks (set
+// arithmetic), or whose every address the built-in rule or an exclusion refuses. blocked holds the
+// exclusions and the built-in exclusions: the walk jumps over each of its prefixes at once and stops
+// at the first scannable address. A range only partly refused stays: its refused addresses are
+// excluded at expansion (and listed in the preview).
+func checkAllowed(p netip.Prefix, allowed, blocked prefixSet) string {
+	if !allowed.covers(p) {
+		return "outside the allowed scan networks"
+	}
+	for a := p.Addr(); a.IsValid() && p.Contains(a); {
+		if q, ok := blocked.find(a); ok {
+			a = lastAddr(q).Next()
+			continue
 		}
-		if !scannable && netaddr.AllowedForScan(a) && !inPrefixes(a, excluded) {
-			scannable = true
+		if netaddr.AllowedForScan(a) {
+			return ""
 		}
 		a = a.Next()
 	}
-	if !scannable {
-		return "an address Alice never scans, or excluded"
-	}
-	return ""
-}
-
-func inPrefixes(a netip.Addr, ps []netip.Prefix) bool {
-	for _, p := range ps {
-		if p.Contains(a) {
-			return true
-		}
-	}
-	return false
+	return "an address Alice never scans, or excluded"
 }
 
 func checkSchedule(s Schedule) (Schedule, error) {
