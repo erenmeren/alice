@@ -395,11 +395,13 @@ func parseCertificateCursor(raw string) (discovery.CertificateCursor, bool) {
 	if !ok || err != nil || !fingerprintRE.MatchString(fp) {
 		return discovery.CertificateCursor{}, false
 	}
-	return discovery.CertificateCursor{NotAfter: time.Unix(0, n).UTC(), Fingerprint: fp}, true
+	return discovery.CertificateCursor{NotAfter: time.UnixMicro(n).UTC(), Fingerprint: fp}, true
 }
 
+// certificateCursor is the certificate list's keyset position: "<not_after in Unix microseconds>.<fingerprint>".
+// Microseconds are PostgreSQL's precision and hold every date up to 9999-12-31 (Unix nanoseconds overflow after 2262).
 func certificateCursor(c discovery.CertificateRow) string {
-	return strconv.FormatInt(c.NotAfter.UnixNano(), 10) + "." + c.Fingerprint
+	return strconv.FormatInt(c.NotAfter.UnixMicro(), 10) + "." + c.Fingerprint
 }
 
 // discoveryCertificateFilter reads the certificate list's filters (paging only when paged; the export refuses it) and

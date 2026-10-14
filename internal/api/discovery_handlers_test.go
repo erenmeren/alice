@@ -531,3 +531,53 @@ func TestDiscoveryErrorsCarryNoInternals(t *testing.T) {
 type leakyError struct{ s string }
 
 func (e *leakyError) Error() string { return e.s }
+
+// A leaf valid until 9999-12-31 (the largest date X.509 and PostgreSQL hold) at a page boundary: the cursor is
+// microseconds (UnixNano overflows past 2262), so the next page continues after it, in the list and in the export's
+// paging alike (Task 9 review 1).
+func TestDiscoveryCertificateCursorHoldsYear9999(t *testing.T) {
+	h, f, fr := discoveryDeps(t)
+	last := time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)
+	far := sampleCertRow()
+	far.NotAfter = last
+	var afters []*discovery.CertificateCursor
+	f.ListCertificatesFn = func(_ context.Context, fl discovery.CertificateFilter) ([]discovery.CertificateRow, bool, error) {
+		afters = append(afters, fl.After)
+		if fl.After == nil {
+			return []discovery.CertificateRow{far}, true, nil
+		}
+		return nil, false, nil
+	}
+	rec := call(h, http.MethodGet, "/api/v1/discovery/certificates?limit=1", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	body := jsonObj(t, rec)
+	item := body["items"].([]any)[0].(map[string]any)
+	assert.Positive(t, item["days_left"], "no overflow of the days left")
+	rec = call(h, http.MethodGet, "/api/v1/discovery/certificates?cursor="+body["next_cursor"].(string), "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, afters, 2)
+	require.NotNil(t, afters[1])
+	assert.Equal(t, discovery.CertificateCursor{NotAfter: last, Fingerprint: dscFP}, *afters[1])
+
+	afters = nil
+	fr.ExportRowsFn = func(ctx context.Context, _ audit.Actor, x reports.RowExport, w io.Writer) (int, error) {
+		n := 0
+		for cursor := ""; ; {
+			rows, next, err := x.Page(ctx, cursor)
+			if err != nil {
+				return n, err
+			}
+			n += len(rows)
+			if next == "" {
+				break
+			}
+			cursor = next
+		}
+		_, err := w.Write([]byte("x\n"))
+		return n, err
+	}
+	rec = call(h, http.MethodGet, "/api/v1/discovery/certificates/export", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	require.Len(t, afters, 2, "the export counted both pages")
+	assert.Equal(t, discovery.CertificateCursor{NotAfter: last, Fingerprint: dscFP}, *afters[1])
+}
