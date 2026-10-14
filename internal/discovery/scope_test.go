@@ -86,6 +86,8 @@ func TestParseEntryRefuses(t *testing.T) {
 		"a\tb.com", "http://x.com", "x.com:443", "[::1]", "*.example.com", "user@example.com", "a/b.com",
 		strings.Repeat("a", 64) + ".com", strings.Repeat("a.", 126) + "ab", "xn--zz.example", "xn--.example", "\xff.com",
 		"①.com", "ex\u200bample.com", strings.Repeat("a", 256),
+		// IP literals with a trailing dot (tlsprobe trims dots after its IP check: carry 10)
+		"10.0.0.1.", "::1.", "127.0.0.1.", "[::1].",
 	}
 	for _, in := range invalid {
 		t.Run(strconv.Quote(in), func(t *testing.T) {
@@ -104,7 +106,8 @@ func TestParseEntryRefuses(t *testing.T) {
 }
 
 func TestCanonicalHostname(t *testing.T) {
-	for _, in := range []string{"10.0.0.1", "::1", "::ffff:127.0.0.1", "2130706433", "0x7f.1", "0177.0.0.1", "", "a b", "a\nb"} {
+	for _, in := range []string{"10.0.0.1", "::1", "::ffff:127.0.0.1", "2130706433", "0x7f.1", "0177.0.0.1", "", "a b", "a\nb",
+		"10.0.0.1.", "::1.", "127.0.0.1.", "10.0.0.1..", "[::1]."} {
 		_, err := CanonicalHostname(in)
 		require.ErrorIs(t, err, ErrInvalid, in)
 	}
@@ -535,4 +538,21 @@ func TestPrefixSet(t *testing.T) {
 	// A range at the very top of the address space ends the walk without wrapping.
 	_, err = Validate(scope("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ff00/120"), everywhere)
 	require.ErrorIs(t, err, ErrNotAllowed)
+}
+
+// TestTrailingDotIPLiteralsAreNotNames (Task 6 carry 10): an IP literal with a trailing dot is refused as an entry and
+// as an SNI name, so the SNI tlsprobe sends (dots trimmed) always passes discovery_name_ok.
+func TestTrailingDotIPLiteralsAreNotNames(t *testing.T) {
+	r := Rules{AllowedNetworks: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}}
+	for _, in := range []string{"10.0.0.1.", "::1.", "127.0.0.1.", "10.0.0.1.."} {
+		s := scope("10.0.0.1")
+		s.SNINames = []string{in}
+		_, err := Validate(s, r)
+		var e *Error
+		require.ErrorAs(t, err, &e, in)
+		require.Equal(t, [2]any{ErrInvalid, "sni_names"}, [2]any{e.Kind, e.Field}, in)
+		_, err = Validate(scope(in), r)
+		require.ErrorAs(t, err, &e, in)
+		require.Equal(t, [2]any{ErrInvalid, "entries"}, [2]any{e.Kind, e.Field}, in)
+	}
 }
