@@ -204,37 +204,37 @@ export function CertificatesPage() {
         }
       />
       <div className={classes.chipRow}>
-      <div className={classes.chips} role="group" aria-label={t('certificates.page.chips')}>
-        {CHIPS.map((c) => {
-          // "All certificates" is pressed only when nothing at all is filtered: never "all" over a filtered list.
-          const pressed = c.value === '' ? !filtered : filters.expiry === c.value;
-          const n = c.count && counts && !narrowed ? counts[c.count] : undefined;
-          return (
-            <Button
-              key={c.value || 'all'}
-              size="xs"
-              variant={pressed ? 'light' : 'default'}
-              className={classes.chip}
-              aria-pressed={pressed}
-              onClick={() => setFilters({ expiry: c.value })}
-            >
-              {t(c.key)}
-              {/* The space keeps the label and the count two words in the accessible name ("Next 7 days 4"). */}
-              {n !== undefined && (
-                <>
-                  {' '}
-                  <b className={classes.chipCount}>{n}</b>
-                </>
-              )}
-            </Button>
-          );
-        })}
-      </div>
-      {discovery.data && discovery.data.scopes > 0 && (
-        <Button component={Link} to="/discovery?view=unmanaged" size="xs" variant="default" className={classes.chip} leftSection={<Icon name="Network" size={14} />} data-testid="discovery-chip">
-          {t('certificates.page.discovered', { count: discovery.data.unmanaged_total })}
-        </Button>
-      )}
+        <div className={classes.chips} role="group" aria-label={t('certificates.page.chips')}>
+          {CHIPS.map((c) => {
+            // "All certificates" is pressed only when nothing at all is filtered: never "all" over a filtered list.
+            const pressed = c.value === '' ? !filtered : filters.expiry === c.value;
+            const n = c.count && counts && !narrowed ? counts[c.count] : undefined;
+            return (
+              <Button
+                key={c.value || 'all'}
+                size="xs"
+                variant={pressed ? 'light' : 'default'}
+                className={classes.chip}
+                aria-pressed={pressed}
+                onClick={() => setFilters({ expiry: c.value })}
+              >
+                {t(c.key)}
+                {/* The space keeps the label and the count two words in the accessible name ("Next 7 days 4"). */}
+                {n !== undefined && (
+                  <>
+                    {' '}
+                    <b className={classes.chipCount}>{n}</b>
+                  </>
+                )}
+              </Button>
+            );
+          })}
+        </div>
+        {discovery.data && discovery.data.scopes > 0 && (
+          <Button component={Link} to="/discovery?view=unmanaged" size="xs" variant="default" className={classes.chip} leftSection={<Icon name="Network" size={14} />} data-testid="discovery-chip">
+            {t('certificates.page.discovered', { count: discovery.data.unmanaged_total })}
+          </Button>
+        )}
       </div>
       <PendingCSRs canOperate={canOperate} onCompleted={(id) => navigate(`/certificates/${id}`)} />
       <ErrorAlert error={certs.error} />
