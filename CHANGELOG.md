@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased — Network certificate discovery
+
+**Added**
+- Alice finds the certificates that servers on your network present, including the ones it does not manage. An
+  administrator writes a **scan scope** (addresses, ranges and host names, ports, optional server names, exclusions, a
+  pace and an optional schedule with a daily time window); an operator or administrator chooses **Scan now**, or the
+  scope's schedule does. Alice opens a TLS connection to each place, records the certificate chain the server
+  presents and closes the connection. It sends nothing else and changes nothing on the scanned servers.
+- New page **Network discovery** (`/discovery`, every role; auditors read only) with **Results** (one row per
+  certificate: **Unmanaged**, **Managed** or **Known**, self-signed, expiry, the places it was found on, a detail
+  panel, **Add as server** for administrators, CSV export), **Scopes** (with a live size of the scope as you type, the
+  allowed scan networks, the global exclusions and the retention) and **Scans**.
+- **Certificates** gets the link "Found on the network, not managed (n)". The **Overview** shows, once a scope exists,
+  a separate line for unmanaged certificates expiring within 30 days (not counted with the managed ones).
+- Optional expiry e-mails for unmanaged certificates found by a scope (**E-mail before certificates found by this
+  scope expire**, off by default) at the usual thresholds.
+- Error codes `ALC-DSC-0001` to `ALC-DSC-0013` ([docs/troubleshooting.md](docs/troubleshooting.md)).
+- API: 17 routes under `/api/v1/discovery/` (permissions `discovery.view`, `discovery.operate`, `discovery.manage`; see
+  `docs/authz-matrix.md`).
+- Background jobs `netdisco.scan`, `netdisco.schedule` and `netdisco.retention`; `make fuzz-discovery` and
+  `make fuzz-tlsprobe` (part of the nightly and release fuzzing); `make perf` also runs `TestPerfNetdiscoScan`.
+- Test tool `alice-fakefleet` (test builds only): a fleet of TLS servers of every kind for the discovery journeys.
+
+**Security**
+- Nothing is scanned until an administrator adds a scope **and** lists the networks Alice may scan (**Allowed scan
+  networks**; empty by default, which allows nothing). Changing either needs a fresh authenticator code and is
+  recorded in the audit log; neither can be changed with an API token. Reading the results needs the operate scope for
+  a token (the results are a map of your network).
+- Alice never scans loopback, link-local and cloud metadata addresses, multicast and reserved ranges, carrier-grade
+  NAT (`100.64.0.0/10`), its own addresses, its default gateways or its database server, whatever the settings; the
+  rule is checked at the moment of connecting (names that resolve to a refused address and DNS rebinding do not help)
+  and uses no proxy.
+- To see expired and self-signed certificates the scan does not verify what a server presents. This is one function,
+  guarded by a source test; Alice never calls a found certificate trusted and does not check its name.
+- Discovery never counts toward the license. While the license is locked no scan starts; cancelling and reading work.
+
+**Upgrade notes**
+- Migration `00014` adds the discovery tables and the alert kind `discovered_certificate_expiry`. It was edited
+  while the feature was built: **a development database that is already at version 14 must be migrated down to 13 and
+  up again** (or `make reset`). Released installations are not affected.
+- A restore ends scans that were running and switches off every scan scope that has a schedule; switch them on again
+  when the restored installation replaces the original.
+- Add the addresses of the Docker host to **Never scan these** when it lies inside an allowed network: Alice sees
+  only its container's addresses. Scans can trip intrusion detection; tell the people who run it before the first
+  scan.
+- No new Go module or npm package; `THIRD_PARTY_NOTICES.md` is unchanged.
+- Not verified on a real network (middleboxes, intrusion detection, load balancers that route by name, IPv6 at
+  scale); performance was measured on one machine with simulated servers. Limits of this version (no STARTTLS, no SSL
+  3.0, no name check, a malformed certificate is shown as unreadable without the certificate):
+  [docs/admin-guide.md](docs/admin-guide.md#limits-of-this-version). Rulings:
+  `docs/superpowers/rulings/network-discovery.md`; review: `docs/security/reviews/network-discovery.md`.
+
 ## Unreleased — Certificates from certificate authorities (ACME)
 
 **Added**
