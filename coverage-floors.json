@@ -29,6 +29,7 @@
   "alice/internal/platform/netaddr": 97,
   "alice/internal/discovery": 98,
   "alice/internal/discovery/tlsprobe": 97,
+  "alice/internal/discovery/discoverysvc": 85,
   "alice/internal/platform/validate": 100,
   "alice/internal/platform/azureid": 100,
   "alice/cmd/alice": 91,
