@@ -136,29 +136,32 @@ type discoveryTargetDTO struct {
 // (target: null when no server has its address or host name). last_error_code is a closed set (refused, timeout,
 // no_tls, reset, chain_too_large, policy, malformed); a Go error text is never stored or answered.
 type discoveryEndpointDTO struct {
-	ID            string              `json:"id"`
-	ScopeID       string              `json:"scope_id"`
-	Address       string              `json:"address"`
-	Port          int                 `json:"port"`
-	SNI           string              `json:"sni"`
-	Host          string              `json:"host"`
-	Fingerprint   *string             `json:"fingerprint_sha256"`
-	ChainLength   int                 `json:"chain_length"`
-	TLSVersion    string              `json:"tls_version"`
-	Cipher        string              `json:"cipher"`
-	State         string              `json:"state"`
-	LastErrorCode string              `json:"last_error_code"`
-	MissedScans   int                 `json:"missed_scans"`
-	FirstSeen     time.Time           `json:"first_seen"`
-	LastSeen      *time.Time          `json:"last_seen"`
-	LastScannedAt time.Time           `json:"last_scanned_at"`
-	GoneSince     *time.Time          `json:"gone_since"`
-	Target        *discoveryTargetDTO `json:"target"`
+	ID          string  `json:"id"`
+	ScopeID     string  `json:"scope_id"`
+	Address     string  `json:"address"`
+	Port        int     `json:"port"`
+	SNI         string  `json:"sni"`
+	Host        string  `json:"host"`
+	Fingerprint *string `json:"fingerprint_sha256"`
+	// PreviousFingerprints are the leaves it presented before, newest first (at most 5): its rotations.
+	PreviousFingerprints []string            `json:"previous_fingerprints"`
+	ChainLength          int                 `json:"chain_length"`
+	TLSVersion           string              `json:"tls_version"`
+	Cipher               string              `json:"cipher"`
+	State                string              `json:"state"`
+	LastErrorCode        string              `json:"last_error_code"`
+	MissedScans          int                 `json:"missed_scans"`
+	FirstSeen            time.Time           `json:"first_seen"`
+	LastSeen             *time.Time          `json:"last_seen"`
+	LastScannedAt        time.Time           `json:"last_scanned_at"`
+	GoneSince            *time.Time          `json:"gone_since"`
+	Target               *discoveryTargetDTO `json:"target"`
 }
 
 func discoveryEndpointJSON(e discovery.EndpointRow) discoveryEndpointDTO {
 	d := discoveryEndpointDTO{ID: e.ID.String(), ScopeID: e.ScopeID.String(), Address: e.Address.String(), Port: e.Port, SNI: e.SNI, Host: e.Host,
-		ChainLength: e.ChainLen, TLSVersion: e.TLSVersion, Cipher: e.Cipher, State: e.State, LastErrorCode: e.LastErrorCode, MissedScans: e.MissedScans,
+		PreviousFingerprints: nonNil(e.PreviousFingerprints),
+		ChainLength:          e.ChainLen, TLSVersion: e.TLSVersion, Cipher: e.Cipher, State: e.State, LastErrorCode: e.LastErrorCode, MissedScans: e.MissedScans,
 		FirstSeen: e.FirstSeen.UTC(), LastSeen: utcPtr(e.LastSeen), LastScannedAt: e.LastScannedAt.UTC(), GoneSince: utcPtr(e.GoneSince)}
 	if e.Fingerprint != "" {
 		fp := e.Fingerprint

@@ -4065,8 +4065,10 @@ paths:
         sizes (422 ALC-DSC-0001), entries, ports, SNI names, rate and concurrency (422 ALC-DSC-0003), the schedule (422
         ALC-DSC-0009), the name (409 ALC-DSC-0011). Every host name is looked up once with the system resolver (5 seconds
         each): a name with no address is 422 ALC-DSC-0010, which names the entry (params field and index) and never an
-        address. The answer's ETag is the scope's version. An Administrator's browser session with a fresh step-up, never an
-        API token; at most 30 a minute per user (with PATCH and the preview). Works while the license is locked.
+        address. At most 16 host names per save (422 validation error of entries); when the name server does not answer all
+        of them within the request's budget, 503 ALC-SYS-0002 with Retry-After (nothing saved: a slow name server is not a
+        missing name). The answer's ETag is the scope's version. An Administrator's browser session with a fresh step-up,
+        never an API token; at most 30 a minute per user (with PATCH and the preview). Works while the license is locked.
       x-permission: discovery.manage
       requestBody:
         required: true
@@ -4087,6 +4089,7 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/discovery/scopes/preview:
@@ -4139,9 +4142,11 @@ paths:
       summary: Change a scan scope (absent fields stay)
       description: >-
         If-Match (optional) must be the scope's version (412 otherwise). The four schedule fields are one group: sending any
-        of them replaces the whole schedule. The result is validated like a new scope; only the host names it adds are looked
-        up. Endpoints that the changed scope no longer covers are marked gone at once; switching the scope off asks its scan
-        in flight to stop. Recorded as discovery.scope.updated. An Administrator's browser session with a fresh step-up; at
+        of them replaces the whole schedule (an absent one is 0 or "": no schedule, no window, UTC). An empty body ({}) is
+        refused with 422 (field body) and changes nothing. The result is validated like a new scope; only the host names it
+        adds are looked up (at most 16; 503 ALC-SYS-0002 as on create). Endpoints that the changed scope no longer covers
+        are marked gone at once; switching the scope off, or changing its entries, ports, SNI names or exclusions, asks its
+        scan in flight to stop. Recorded as discovery.scope.updated. An Administrator's browser session with a fresh step-up; at
         most 30 a minute per user. Works while the license is locked.
       x-permission: discovery.manage
       parameters:
@@ -4166,6 +4171,7 @@ paths:
         "412": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
     delete:
@@ -4501,10 +4507,10 @@ components:
         sni_names: { type: array, items: { type: string } }
         exclusions: { type: array, items: { type: string } }
         enabled: { type: boolean }
-        schedule_hours: { type: integer }
-        window_start: { type: string }
-        window_end: { type: string }
-        window_tz: { type: string }
+        schedule_hours: { type: integer, description: "Hours between scheduled scans; 0 when the scope has no schedule (never null)" }
+        window_start: { type: string, description: '"HH:MM", or "" when the schedule has no daily window (never null)' }
+        window_end: { type: string, description: '"HH:MM", or "" when the schedule has no daily window (never null)' }
+        window_tz: { type: string, description: The IANA time zone of the window; UTC when none was given }
         alert_on_expiry: { type: boolean }
         rate_per_sec: { type: integer }
         concurrency: { type: integer }
@@ -4592,8 +4598,8 @@ components:
         next_cursor: { type: [string, "null"] }
     DiscoveredEndpoint:
       type: object
-      required: [id, scope_id, address, port, sni, host, fingerprint_sha256, chain_length, tls_version, cipher, state, last_error_code, missed_scans,
-        first_seen, last_seen, last_scanned_at, gone_since, target]
+      required: [id, scope_id, address, port, sni, host, fingerprint_sha256, previous_fingerprints, chain_length, tls_version, cipher, state,
+        last_error_code, missed_scans, first_seen, last_seen, last_scanned_at, gone_since, target]
       properties:
         id: { type: string, format: uuid }
         scope_id: { type: string, format: uuid }
@@ -4602,6 +4608,11 @@ components:
         sni: { type: string }
         host: { type: string }
         fingerprint_sha256: { type: [string, "null"] }
+        previous_fingerprints:
+          type: array
+          maxItems: 5
+          items: { type: string }
+          description: "The leaves it presented before its current one, newest first (its rotations); [] when none"
         chain_length: { type: integer }
         tls_version: { type: string }
         cipher: { type: string }

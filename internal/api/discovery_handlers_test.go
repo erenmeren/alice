@@ -70,7 +70,7 @@ func sampleCertRow() discovery.CertificateRow {
 
 func sampleEndpointRow() discovery.EndpointRow {
 	return discovery.EndpointRow{ID: dscEndID, ScopeID: dscScopeID, Address: netip.MustParseAddr("10.0.1.7"), Port: 443, SNI: "a.example",
-		Fingerprint: dscFP, ChainLen: 2, TLSVersion: "TLS 1.3", Cipher: "TLS_AES_128_GCM_SHA256", State: "present", FirstSeen: testNow,
+		Fingerprint: dscFP, PreviousFingerprints: []string{strings.Repeat("cd", 32)}, ChainLen: 2, TLSVersion: "TLS 1.3", Cipher: "TLS_AES_128_GCM_SHA256", State: "present", FirstSeen: testNow,
 		LastScannedAt: testNow, TargetID: uuid.NullUUID{UUID: targetID, Valid: true}, TargetName: "web-01"}
 }
 
@@ -349,6 +349,7 @@ func TestDiscoveryCertificateAndEndpointHandlers(t *testing.T) {
 	ep := eps[0].(map[string]any)
 	assert.Equal(t, "10.0.1.7", ep["address"])
 	assert.Equal(t, map[string]any{"id": targetID.String(), "name": "web-01"}, ep["target"])
+	assert.Equal(t, []any{strings.Repeat("cd", 32)}, ep["previous_fingerprints"], "the rotation ring, newest first")
 	assert.Equal(t, false, d["more_endpoints"])
 	for _, bad := range []string{strings.Repeat("AB", 32), "abc", dscFP + "00"} {
 		rec = call(h, http.MethodGet, "/api/v1/discovery/certificates/"+bad, "auditor", "")
@@ -359,7 +360,7 @@ func TestDiscoveryCertificateAndEndpointHandlers(t *testing.T) {
 	f.ListEndpointsFn = func(_ context.Context, fl discovery.EndpointFilter) ([]discovery.EndpointRow, bool, error) {
 		ef = fl
 		e := sampleEndpointRow()
-		e.Fingerprint, e.TargetID = "", uuid.NullUUID{}
+		e.Fingerprint, e.TargetID, e.PreviousFingerprints = "", uuid.NullUUID{}, nil
 		return []discovery.EndpointRow{e}, true, nil
 	}
 	rec = call(h, http.MethodGet, "/api/v1/discovery/endpoints?scope_id="+dscScopeID.String()+"&fingerprint="+dscFP, "operator", "")
@@ -370,6 +371,7 @@ func TestDiscoveryCertificateAndEndpointHandlers(t *testing.T) {
 	item = body["items"].([]any)[0].(map[string]any)
 	assert.Nil(t, item["target"])
 	assert.Nil(t, item["fingerprint_sha256"])
+	assert.Equal(t, []any{}, item["previous_fingerprints"], "an empty ring is [], never null")
 	rec = call(h, http.MethodGet, "/api/v1/discovery/endpoints?cursor="+body["next_cursor"].(string), "operator", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, &discovery.EndpointCursor{Address: netip.MustParseAddr("10.0.1.7"), Port: 443, SNI: "a.example", ID: dscEndID}, ef.After)

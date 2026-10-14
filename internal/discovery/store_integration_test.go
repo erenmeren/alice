@@ -449,6 +449,10 @@ func TestMissesGoneAndRotation(t *testing.T) {
 	rot := p.endpoint(t, scope, a)
 	require.Equal(t, fingerprint(leaves[6]), rot.Fingerprint)
 	require.Equal(t, []string{fingerprint(leaves[5]), fingerprint(leaves[4]), fingerprint(leaves[3]), fingerprint(leaves[2]), fingerprint(leaves[1])}, rot.Previous)
+	listed, err := ListEndpoints(bg(), p.App, EndpointFilter{ScopeID: scope, Fingerprint: fingerprint(leaves[6])})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, rot.Previous, listed[0].PreviousFingerprints, "the list carries the rotation ring (Task 9 review 9)")
 
 	// A scope that never had an answer counts its misses.
 	lone := p.scope(t, "lone")

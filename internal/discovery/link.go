@@ -199,6 +199,8 @@ type EndpointRow struct {
 	GoneSince     *time.Time
 	TargetID      uuid.NullUUID
 	TargetName    string
+	// PreviousFingerprints are the last leaves it presented before its current one, newest first (at most 5).
+	PreviousFingerprints []string
 }
 
 // EndpointCursor is the position after a row: (address, port, sni) inside a scope (its unique key), with ID across
@@ -242,7 +244,7 @@ func ListEndpoints(ctx context.Context, q db.Querier, f EndpointFilter) ([]Endpo
 	sql := `SELECT e.id, e.scope_id, e.address, e.port, e.sni, e.host, coalesce(e.fingerprint_sha256, ''),
     CASE WHEN e.fingerprint_sha256 IS NULL THEN 0 ELSE 1 + cardinality(e.chain_fingerprints) END,
     e.tls_version, e.cipher, e.state, e.last_error_code, e.missed_scans, e.first_seen, e.last_seen, e.last_scanned_at, e.gone_since,
-    tg.id, coalesce(tg.name, '')
+    tg.id, coalesce(tg.name, ''), e.previous_fingerprints
 FROM discovery_endpoints e
 LEFT JOIN LATERAL (SELECT t.id, t.name::text AS name FROM targets t
     WHERE t.deleted_at IS NULL AND (lower(t.config->>'host') = host(e.address) OR (e.host <> '' AND lower(t.config->>'host') = e.host))
