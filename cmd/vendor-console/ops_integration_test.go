@@ -123,7 +123,7 @@ func TestAuditHeadAndVerifyHead(t *testing.T) {
 	assert.Equal(t, out, out2)
 	_, se, code = e.run("sales", "audit-head")
 	assert.Equal(t, 1, code)
-	assert.Contains(t, se, "permission denied")
+	assert.Contains(t, se, "permission denied: audit-head needs the owner login or a login in vendor_notifier")
 
 	// Later rows do not disturb an older checkpoint.
 	e.issue("Beta", license.NewInstallationID())
@@ -191,7 +191,7 @@ func TestAuditShow(t *testing.T) {
 	}
 	assert.NotContains(t, out, "\x1b")
 	assert.NotContains(t, out, "\u202e")
-	assert.Contains(t, rows[0], "test.evil x?[2Jy?z")
+	assert.Contains(t, rows[0], "test.evil x?[2Jyz", "ESC shown as ?, the bidi mark removed (format characters are stripped before the ID scan)")
 	assert.NotContains(t, out, inst, "no installation ID without --details")
 
 	// --actor filters.
@@ -224,11 +224,14 @@ func TestAuditShow(t *testing.T) {
 	out, _, _ = e.run("owner", "audit", "show", "--since", "2000-01-01")
 	assert.Len(t, lines(out), min(total, 50))
 
-	// --details shows the details with the installation ID shortened.
+	// --details shows the details with the installation ID as a fingerprint, no part of it.
 	out, se, code = e.run("owner", "audit", "show", "--action", "license.issue", "--details")
 	require.Equal(t, 0, code, se)
 	assert.NotContains(t, out, inst)
-	assert.Contains(t, out, `"installation":"`+inst[:15]+`…"`)
+	assert.Contains(t, out, `"installation":"`+installationFingerprint(inst)+`"`)
+	all, _, _ := e.run("owner", "audit", "show", "--details", "--limit", "1000")
+	assert.NotContains(t, all, inst[:9])
+	assert.NotContains(t, all, strings.TrimPrefix(inst, "ALICE-")[:9])
 	assert.Contains(t, out, `"targets":5`)
 
 	// Only the owner reads the audit.
@@ -255,13 +258,20 @@ func TestAuditShowCapsAtTheLimit(t *testing.T) {
 
 func TestVerifyLicensesCommand(t *testing.T) {
 	e := newOpsEnv(t, "vl")
+	// An empty database may be legitimate: exit 0, with a warning to compare with expectations.
+	out, se, code := e.run("owner", "verify-licenses", "--pub", e.pubPath)
+	require.Equal(t, 0, code, se+out)
+	assert.Equal(t, "checked 0, problems 0\n", out)
+	assert.Contains(t, se, "WARNING: no licenses found")
+
 	inst := license.NewInstallationID()
 	a := e.issue("Acme", inst)
 	e.issue("Beta", license.NewInstallationID())
 
-	out, se, code := e.run("owner", "verify-licenses", "--pub", e.pubPath)
+	out, se, code = e.run("owner", "verify-licenses", "--pub", e.pubPath)
 	require.Equal(t, 0, code, se+out)
 	assert.Equal(t, "checked 2, problems 0\n", out)
+	assert.Empty(t, se)
 
 	// The same keys as a key set file (production.json format).
 	pub, err := os.ReadFile(e.pubPath)
@@ -368,7 +378,7 @@ func TestNotifyFailedAndRetry(t *testing.T) {
 	for _, kind := range []string{"owner", "sales"} {
 		_, se, code = e.run(kind, "notify", "retry", strconv.FormatInt(failed, 10))
 		assert.Equal(t, 1, code, kind)
-		assert.Contains(t, se, "permission denied", kind)
+		assert.Contains(t, se, "permission denied: notify retry must be run with a login in vendor_notifier", kind)
 	}
 	before := e.outboxSnapshot()
 	_, se, code = e.run("notifier", "notify", "retry", strconv.FormatInt(pending, 10))

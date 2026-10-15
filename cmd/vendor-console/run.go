@@ -61,7 +61,7 @@ Commands:
         Print the newest audit row as SEQ:HASH ("empty" for an empty log), to keep elsewhere.
   audit show [--since YYYY-MM-DD] [--actor NAME] [--action PREFIX] [--limit 50] [--details]
         Print audit rows, newest first: sequence, time (UTC), actor, action, subject. --limit is
-        at most 1000. --details adds each row's details (installation IDs shortened). Owner login only.
+        at most 1000. --details adds each row's details (installation IDs replaced by inst#<fingerprint>). Owner login only.
   web-user add NAME
         Create a person for the sales web page and print their one-time enrollment code
         (valid 24 hours; shown only once). Owner login only.

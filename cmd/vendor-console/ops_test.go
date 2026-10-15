@@ -73,6 +73,16 @@ func TestOwnerCommandArgumentsAreCheckedBeforeTheDatabase(t *testing.T) {
 	}
 }
 
+func TestVerifyLicensesRefusesTwoPubFilesWithOneKeyID(t *testing.T) {
+	a, b := writePub(t), writePub(t) // two different keys, both "vk-2026-01"
+	code, out, stderr := runArgs("verify-licenses", "--pub", a, "--pub", b)
+	assert.Equal(t, 2, code)
+	assert.Empty(t, out)
+	assert.Contains(t, stderr, `"vk-2026-01"`)
+	assert.NotContains(t, stderr, "BEGIN")
+	assert.NotContains(t, stderr, "VENDOR_DATABASE_URL", "refused before connecting")
+}
+
 func TestUnknownOwnerSubcommandsAreRefused(t *testing.T) {
 	for _, args := range [][]string{{"audit"}, {"audit", "frob"}, {"license"}, {"license", "frob"}} {
 		code, _, stderr := runArgs(args...)
@@ -143,24 +153,63 @@ func TestTermSafeReplacesControlAndFormatCharacters(t *testing.T) {
 	}
 }
 
-func TestShortenDetailsShortensOnlyInstallationIDs(t *testing.T) {
-	id := license.NewInstallationID()
-	short := id[:15] + "…"
-	got := shortenDetails(`{"installation": "` + id + `", "targets": 5, "customer_id": 12345678901234567890,` +
-		`"name": "ALICE wonderland", "new": {"installation": "` + strings.Map(unicode.ToLower, id) + `"}, "list": ["` + id + `"]}`)
-	assert.NotContains(t, got, id)
-	assert.Equal(t, 3, strings.Count(got, short), got)
-	assert.Contains(t, got, `"targets":5`)
-	assert.Contains(t, got, `12345678901234567890`, "large numbers keep their digits")
-	assert.Contains(t, got, `"ALICE wonderland"`, "a value that is not an ID is kept")
+// noIDLeft asserts that neither id nor any 9-character prefix of it is in s (the rule: an
+// installation ID is never shown beyond 8 characters; here, no part of it at all).
+func noIDLeft(t *testing.T, s, id string) {
+	t.Helper()
+	assert.NotContains(t, s, id[:9], "%s", s)
+	body := strings.ReplaceAll(strings.TrimPrefix(id, "ALICE-"), "-", "")
+	assert.NotContains(t, s, body[:9], "%s", s)
+	assert.NotContains(t, s, strings.TrimPrefix(id, "ALICE-")[:9], "%s", s)
+}
 
-	// A string that is not a valid ID (wrong check symbol) is not touched.
+func TestRedactDetailsReplacesEveryInstallationID(t *testing.T) {
+	id, other := license.NewInstallationID(), license.NewInstallationID()
+	fp, fpOther := installationFingerprint(id), installationFingerprint(other)
+	require.Regexp(t, `^inst#[0-9a-f]{8}$`, fp)
+	require.NotEqual(t, fp, fpOther)
+	bare := strings.TrimPrefix(id, "ALICE-")
+	soft := strings.ReplaceAll(id, "-", "-\u00ad\u200b")
+	cases := map[string]struct{ in, want string }{
+		"alone":           {`{"installation":"` + id + `"}`, `{"installation":"` + fp + `"}`},
+		"lower case":      {`{"i":"` + strings.Map(unicode.ToLower, id) + `"}`, `{"i":"` + fp + `"}`},
+		"inside a string": {`{"note":"moved from ` + id + ` yesterday"}`, `{"note":"moved from ` + fp + ` yesterday"}`},
+		"in an array":     {`{"features":["a","` + id + `"]}`, `{"features":["a","` + fp + `"]}`},
+		"as a key":        {`{"` + id + `":{"x":1}}`, `{"` + fp + `":{"x":1}}`},
+		"deep":            {`{"new":{"old":[{"k":"` + id + `"}]}}`, `{"new":{"old":[{"k":"` + fp + `"}]}}`},
+		"without prefix":  {`{"i":"` + bare + `"}`, `{"i":"` + fp + `"}`},
+		"no separators":   {`{"i":"` + strings.ReplaceAll(bare, "-", "") + `"}`, `{"i":"` + fp + `"}`},
+		"soft hyphens":    {`{"i":"` + soft + `"}`, `{"i":"` + fp + `"}`},
+		"two in one":      {`{"i":"` + id + ` and ` + other + `"}`, `{"i":"` + fp + ` and ` + fpOther + `"}`},
+		// The ALICE prefix touches a letter, so only the ID's symbols match: "xALICE-" stays.
+		"glued to a word":  {`{"i":"x` + id + `"}`, `{"i":"xALICE-` + fp + `"}`},
+		"not JSON":         {`raw ` + id, `raw ` + fp},
+		"numbers and html": {`{"targets":5,"customer_id":12345678901234567890,"v":"a<b>&c"}`, `{"customer_id":12345678901234567890,"targets":5,"v":"a<b>&c"}`},
+	}
+	for name, c := range cases {
+		got := redactDetails(c.in)
+		assert.Equal(t, c.want, got, name)
+		noIDLeft(t, got, id)
+		noIDLeft(t, got, other)
+	}
+
+	// A string with a wrong check symbol is not an installation ID (the product refuses it), so it
+	// is left as it is.
 	bad := id[:len(id)-1] + string(flip(id[len(id)-1]))
-	assert.Contains(t, shortenDetails(`{"installation":"`+bad+`"}`), bad)
-	// Not JSON: returned as is (the caller still makes it terminal-safe).
-	assert.Equal(t, "not json", shortenDetails("not json"))
-	// HTML characters are not escaped.
-	assert.Equal(t, `{"value":"a<b>&c"}`, shortenDetails(`{"value": "a<b>&c"}`))
+	assert.Equal(t, `{"i":"`+bad+`"}`, redactDetails(`{"i":"`+bad+`"}`))
+	// A 16-symbol window inside a longer token (a sha256 hex) is not an ID.
+	hash := strings.Repeat("0123456789abcdef", 4)
+	assert.Equal(t, `{"file_sha256":"`+hash+`"}`, redactDetails(`{"file_sha256":"`+hash+`"}`))
+	assert.Equal(t, `{"name":"ALICE wonderland"}`, redactDetails(`{"name":"ALICE wonderland"}`))
+}
+
+func TestRedactInstallationsIsStableAcrossSpellings(t *testing.T) {
+	id := license.NewInstallationID()
+	fp := installationFingerprint(id)
+	for _, in := range []string{id, strings.Map(unicode.ToLower, id), strings.TrimPrefix(id, "ALICE-"),
+		strings.ReplaceAll(id, "-", " ")} {
+		assert.Equal(t, fp, redactInstallations(in), in)
+	}
 }
 
 // flip returns a different Crockford symbol.

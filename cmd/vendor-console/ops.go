@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -60,59 +63,94 @@ func firstRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// shortInstallation returns the installation ID cut to its first 8 symbols ("ALICE-ABCD-EFGH…")
-// when s is one, in any spelling license.ParseInstallationID accepts, and ok == false otherwise.
-// Only values that start with the ALICE prefix are considered: a customer name or note that
-// merely happens to decode is left alone.
-func shortInstallation(s string) (string, bool) {
-	t := strings.TrimSpace(s)
-	if len(t) < 5 || !strings.EqualFold(t[:5], "ALICE") {
-		return "", false
-	}
-	id, err := license.ParseInstallationID(t)
-	if err != nil {
-		return "", false
-	}
-	return id[:len("ALICE-ABCD-EFGH")] + "…", true
+// installationCandidate finds text shaped like an installation ID in any spelling
+// license.ParseInstallationID accepts: an optional ALICE prefix, then 16 Crockford symbols (any
+// case, with O, I and L as typing variants; never U) in groups of four, optionally separated by a
+// dash or a space. Every match is confirmed with ParseInstallationID (length and check symbol).
+var installationCandidate = regexp.MustCompile(
+	`(?i)(?:ALICE[- ]?)?[0-9A-TV-Z]{4}(?:[- ]?[0-9A-TV-Z]{4}){3}`)
+
+// installationFingerprint stands in for an installation ID in owner output: "inst#" and the first
+// 8 hex digits of sha256 of the canonical ID. The same ID always gives the same fingerprint, so
+// rows can be correlated, but no part of the ID is shown.
+func installationFingerprint(canonical string) string {
+	sum := sha256.Sum256([]byte(canonical))
+	return "inst#" + hex.EncodeToString(sum[:4])
 }
 
-// shortenDetails rewrites audit details JSON for display: every string value that is an
-// installation ID is shortened (keys are kept). Anything that does not parse is returned as is;
-// the caller makes it terminal-safe either way.
-func shortenDetails(raw string) string {
+// redactInstallations replaces every installation ID inside s with its fingerprint. Format
+// characters (soft hyphen, zero width, bidi) are removed first, so they cannot be used to split an
+// ID past the scan. A candidate must not touch a letter or digit on either side: a 16-symbol window
+// inside a longer token (a hex hash, for one) is not an ID. A candidate whose check symbol is wrong
+// is not an installation ID (the product refuses it) and is left as it is.
+func redactInstallations(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+	var b strings.Builder
+	last, pos := 0, 0
+	for pos < len(s) {
+		loc := installationCandidate.FindStringIndex(s[pos:])
+		if loc == nil {
+			break
+		}
+		start, end := pos+loc[0], pos+loc[1]
+		id, err := license.ParseInstallationID(s[start:end])
+		if err != nil || (start > 0 && isAlnum(s[start-1])) || (end < len(s) && isAlnum(s[end])) {
+			// Not an ID here; an ID may still start inside this candidate, so search again one
+			// byte on (a candidate always starts with an ASCII letter or digit).
+			pos = start + 1
+			continue
+		}
+		b.WriteString(s[last:start])
+		b.WriteString(installationFingerprint(id))
+		last, pos = end, end
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+func isAlnum(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+// redactDetails rewrites audit details JSON for display: every installation ID in any string value
+// or object key, at any depth, becomes its fingerprint. Text that does not parse as JSON is
+// redacted as plain text; the caller makes the result terminal-safe either way.
+func redactDetails(raw string) string {
 	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.UseNumber()
 	var v any
 	if err := dec.Decode(&v); err != nil {
-		return raw
+		return redactInstallations(raw)
 	}
-	v = shortenValue(v)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return raw
+	if err := enc.Encode(redactValue(v)); err != nil {
+		return redactInstallations(raw)
 	}
 	return strings.TrimSuffix(buf.String(), "\n")
 }
 
-func shortenValue(v any) any {
+func redactValue(v any) any {
 	switch x := v.(type) {
 	case string:
-		if s, ok := shortInstallation(x); ok {
-			return s
-		}
-		return x
+		return redactInstallations(x)
 	case []any:
 		for i := range x {
-			x[i] = shortenValue(x[i])
+			x[i] = redactValue(x[i])
 		}
 		return x
 	case map[string]any:
-		for k := range x {
-			x[k] = shortenValue(x[k])
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[redactInstallations(k)] = redactValue(val)
 		}
-		return x
+		return out
 	}
 	return v
 }
@@ -138,7 +176,7 @@ func (c *cli) auditHead(args []string) int {
 	defer pool.Close()
 	h, ok, err := audit.CurrentHead(ctx, pool)
 	if err != nil {
-		return c.permissionErr(err, "audit-head needs the owner login")
+		return c.permissionErr(err, "audit-head needs the owner login or a login in vendor_notifier")
 	}
 	if !ok {
 		_, _ = fmt.Fprintln(c.out, "empty")
@@ -217,7 +255,7 @@ func (c *cli) auditShow(args []string) int {
 	actor := fs.String("actor", "", "only rows by this login or web user")
 	action := fs.String("action", "", "only actions starting with this text (license., request.add, ...)")
 	limit := fs.Int("limit", auditShowDefault, "most rows to show (1..1000)")
-	details := fs.Bool("details", false, "add each row's details (installation IDs shortened)")
+	details := fs.Bool("details", false, "add each row's details (installation IDs as fingerprints)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -262,9 +300,9 @@ func (c *cli) auditShow(args []string) int {
 			return c.fail(fmt.Errorf("read the audit: %w", err))
 		}
 		line := fmt.Sprintf("%d %s %s %s %s", seq, at.UTC().Format("2006-01-02T15:04:05Z"), termSafe(who), termSafe(act),
-			termSafe(subject))
+			termSafe(redactInstallations(subject)))
 		if *details {
-			line += " " + termSafe(shortenDetails(detailsJSON))
+			line += " " + termSafe(redactDetails(detailsJSON))
 		}
 		_, _ = fmt.Fprintln(c.out, line)
 		n++
@@ -312,6 +350,7 @@ func loadKeySet(pubs []string, keysetPath string) (license.KeySet, error) {
 		return license.ParseKeySet(raw)
 	}
 	keys := make([]license.PublicKey, 0, len(pubs))
+	seen := map[string]bool{}
 	for _, p := range pubs {
 		raw, err := readKeyFile(p)
 		if err != nil {
@@ -321,6 +360,11 @@ func loadKeySet(pubs []string, keysetPath string) (license.KeySet, error) {
 		if err != nil {
 			return license.KeySet{}, fmt.Errorf("%s: %w", p, err)
 		}
+		// NewKeySet would let the later file silently replace the earlier one.
+		if seen[k.ID] {
+			return license.KeySet{}, fmt.Errorf("two --pub files hold key ID %q", k.ID)
+		}
+		seen[k.ID] = true
 		keys = append(keys, k)
 	}
 	return license.NewKeySet(keys...), nil
@@ -359,6 +403,10 @@ func (c *cli) verifyLicenses(args []string) int {
 		return c.permissionErr(err, "verify-licenses needs a login that can read the license files (owner, signer or sales)")
 	}
 	_, _ = fmt.Fprintf(c.out, "checked %d, problems %d\n", checked, len(problems))
+	if checked == 0 {
+		// An empty database may be legitimate; after a restore it is compared with the expected count.
+		_, _ = fmt.Fprintln(c.err, "WARNING: no licenses found")
+	}
 	for _, p := range problems {
 		_, _ = fmt.Fprintf(c.out, "%s: %s\n", termSafe(p.LicenseID), termSafe(p.Problem))
 	}
@@ -458,7 +506,7 @@ func (c *cli) notifyRetry(args []string) int {
 		return c.fail(fmt.Errorf("message %d is not a failed mail (unknown, pending or sent); nothing changed", id))
 	}
 	if err != nil {
-		return c.permissionErr(err, "notify retry needs a login in vendor_notifier")
+		return c.permissionErr(err, "notify retry must be run with a login in vendor_notifier (a retry is not an owner action)")
 	}
 	_, _ = fmt.Fprintf(c.out, "message %d will be sent by the next notify run\n", id)
 	return 0
