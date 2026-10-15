@@ -1,6 +1,7 @@
 package issuer_test
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -479,4 +480,26 @@ func TestBuildPayloadClampsTheTermToTheMonthEnd(t *testing.T) {
 		require.NoError(t, err, c.from)
 		assert.True(t, p.ValidUntil.Equal(c.want), "%s + %d months: got %s, want %s", c.from, c.months, p.ValidUntil, c.want)
 	}
+}
+
+// NormalizePayload is what Issue signs: a hardware signer (vendor console) signs the same bytes.
+func TestNormalizePayloadIsWhatIssueSigns(t *testing.T) {
+	priv, _, err := issuer.GenerateKey("vk-2026-01", []byte(testWords), fastKDF)
+	require.NoError(t, err)
+	k, err := issuer.OpenKey(priv, []byte(testWords))
+	require.NoError(t, err)
+	p := license.Payload{
+		LicenseID: "LIC-2026-000001", Customer: "Örnek", InstallationID: license.NewInstallationID(),
+		IssuedAt: now, ValidFrom: now, ValidUntil: now.AddDate(1, 0, 0), MaxTargets: 1,
+		Features: []string{}, Format: license.FormatVersion,
+	}
+	raw, err := k.Issue(p)
+	require.NoError(t, err)
+	f, err := license.ParseFile(raw)
+	require.NoError(t, err)
+
+	n := issuer.NormalizePayload(p)
+	assert.Equal(t, "Örnek", n.Customer)
+	assert.True(t, ed25519.Verify(k.Public(), license.SignedBytes(n), f.Signature))
+	assert.False(t, ed25519.Verify(k.Public(), license.SignedBytes(p), f.Signature), "the raw NFD form is not what was signed")
 }

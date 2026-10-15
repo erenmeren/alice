@@ -173,6 +173,11 @@ func (k *SigningKey) SignRelease(data []byte) ([]byte, error) {
 	return ed25519.Sign(k.priv, data), nil
 }
 
+// NormalizePayload returns p as Issue signs it (free text in NFC). A signer that holds its key
+// elsewhere (the vendor console's YubiKey signer) signs license.SignedBytes of this payload, so
+// it signs exactly the bytes this package would.
+func NormalizePayload(p license.Payload) license.Payload { return normalize(p) }
+
 // normalize returns p with every free-text string in Unicode NFC.
 func normalize(p license.Payload) license.Payload {
 	p.LicenseID = norm.NFC.String(p.LicenseID)

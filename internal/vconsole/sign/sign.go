@@ -1,6 +1,6 @@
 // Package sign is the seam between the vendor console and whatever holds the license signing key.
-// Phase 1 has the passphrase key file; a YubiKey implementation (PIV or OpenPGP) joins in Phase 2
-// behind the same interface.
+// Phase 1 has the passphrase key file; Phase 2 adds the YubiKey (OpenPGP card) signer behind the
+// same interface.
 package sign
 
 import (
