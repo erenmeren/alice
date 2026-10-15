@@ -8,6 +8,7 @@ the same inputs tomorrow (audit AUD-09, SEC-089, SEC-103):
 | GitHub Actions (`uses:`) | full 40-character commit SHA plus `# v1.2.3` comment | `.github/workflows/*.yml` |
 | Docker base images and the `# syntax=` frontend | `image:tag@sha256:<index digest>` | `deploy/Dockerfile`, `test/images/**` |
 | PostgreSQL | `postgres:16-alpine@sha256:...` | `deploy/docker-compose.yml`, `internal/testutil/pgtest/pgtest.go`, `internal/platform/db/db_integration_test.go` |
+| OpenLDAP (directory sign-in tests) | `osixia/openldap:1.5.0@sha256:...` | `internal/testutil/fakeldap/server.go` |
 | Tool images (gitleaks, trivy, ShellCheck) | `GITLEAKS_IMAGE`, `TRIVY_IMAGE`, `SHELLCHECK_IMAGE` with tag and digest; every `*_IMAGE` variable of the Makefile must be pinned that way | `Makefile` |
 
 The tag stays in the reference for readability; Docker verifies the digest, not the tag. Digests are
@@ -125,8 +126,9 @@ nothing until the repository has a GitHub remote. Dependabot's Docker updater ma
 `test/images/sshd/*.Dockerfile` (they are not named `Dockerfile`); update those three by hand.
 
 Updated by hand, always (Dependabot does not read them): the Makefile tool images
-`GITLEAKS_IMAGE` and `TRIVY_IMAGE`, and the `# syntax=docker/dockerfile:1@sha256:...` frontend
-line of every Dockerfile.
+`GITLEAKS_IMAGE` and `TRIVY_IMAGE`, the `# syntax=docker/dockerfile:1@sha256:...` frontend
+line of every Dockerfile, and the OpenLDAP test image of `internal/testutil/fakeldap` (a Go literal; its digest is
+the manifest list's, from `docker manifest inspect` or the `Digest:` line of `docker pull`).
 
 Reviewing a Dependabot pull request: read the release notes; for an image, compare
 `docker buildx imagetools inspect <tag>` with the digest in the diff; run `make ci`.

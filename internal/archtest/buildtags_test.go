@@ -408,6 +408,29 @@ func TestReleaseFilesImportNoTestCode(t *testing.T) {
 	}
 }
 
+// TestOnlyTheDirectoryPackageImportsTheLDAPClient: the LDAP client library (and its BER codec) is used by the
+// directory sign-in package alone; every other file that imports it is a test or a test helper (plan
+// 2026-10-15-ldap-directory-signin, "No LDAP code outside internal/auth/...").
+func TestOnlyTheDirectoryPackageImportsTheLDAPClient(t *testing.T) {
+	ldapImports := []string{"github.com/go-ldap/...", "github.com/go-asn1-ber/..."}
+	found := false
+	for _, f := range sourceFiles(t) {
+		for _, imp := range f.file.Imports {
+			path, _ := strconv.Unquote(imp.Path.Value)
+			if !covers(ldapImports[0], path) && !covers(ldapImports[1], path) {
+				continue
+			}
+			found = true
+			if f.test || inTestOnlyDir(f.rel) {
+				continue
+			}
+			dir := filepath.ToSlash(filepath.Dir(f.rel))
+			assert.Equal(t, "internal/auth/ldap", dir, "%s imports %s", f.rel, path)
+		}
+	}
+	assert.True(t, found, "positive control: the directory package imports the client")
+}
+
 func goListDeps(t *testing.T, tags string, pkgs ...string) []string {
 	t.Helper()
 	args := []string{"list", "-deps"}
@@ -445,6 +468,9 @@ func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
 		assert.NotContains(t, deps, "alice/internal/testutil/fakeidp", "tags %q", tags)
 		assert.NotContains(t, deps, "alice/internal/testutil/fakeacme", "tags %q", tags)
 		assert.NotContains(t, deps, "alice/internal/testutil/fakefleet", "tags %q", tags)
+		// The OpenLDAP container helper of the directory sign-in tests (integration builds only).
+		assert.NotContains(t, deps, "alice/internal/testutil/fakeldap", "tags %q", tags)
+		assert.NotContains(t, goListDeps(t, strings.TrimSpace(tags+" integration"), "./cmd/alice"), "alice/internal/testutil/fakeldap", "tags %q", tags)
 	}
 	for _, bin := range []string{"./cmd/alice-helper", "./cmd/licensectl"} {
 		assert.NotContains(t, goListDeps(t, "", bin), "alice/internal/testutil/fakefleet", bin)
