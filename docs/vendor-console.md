@@ -17,10 +17,12 @@ restore drill, tamper checks, monitoring, incidents, quarterly and yearly checks
 2. With the migration login in `VENDOR_DATABASE_URL`, run `vendor-console migrate`. Use that login
    for nothing else: it owns the tables and is not held back by the grants or the row rules. In
    particular it must not be used as the web service login (below).
-3. Create one login per person and add it to one group role:
-   `CREATE ROLE "<login>" LOGIN PASSWORD '<password>' IN ROLE vendor_sales;` (sales people),
-   `vendor_signer` (the people who sign) or `vendor_owner` (the owner). Each person puts their
-   own login in `VENDOR_DATABASE_URL`. The audit log records the login (`session_user`), also
+3. Create one login per person and add it to one group role, in `psql`:
+   `CREATE ROLE "<login>" LOGIN IN ROLE vendor_sales;` (sales people), `vendor_signer` (the people
+   who sign) or `vendor_owner` (the owner), then `\password "<login>"` to set its password (psql asks
+   for it and sends it hashed; a password typed inside an SQL statement lands in `~/.psql_history`).
+   The person can choose their own later with `\password` in their own session. Each person puts
+   their own login in `VENDOR_DATABASE_URL`. The audit log records the login (`session_user`), also
    when someone runs `SET ROLE` to their group.
 
 ## Daily use
@@ -67,8 +69,10 @@ As the owner login:
 - `audit show` prints audit rows newest first (sequence, UTC time, actor, action, subject), at most
   1000 (`--limit`, default 50). `--action` matches a prefix (`license.`). `--details` adds each
   row's details. Installation IDs are never printed; they appear as `inst#` and 8 hex digits (a
-  fingerprint, the same for the same ID). The audit log is readable only by the owner login, so
-  there is no audit page on the sales web service.
+  fingerprint, the same for the same ID). Only the owner login can run `audit show` and
+  `audit-verify`. The web service cannot read the audit log at all, so there is no audit page on the
+  sales web page. The notifier login has a narrow read: the time, actor, action and subject columns
+  (no details), for the weekly summary, and the head through `audit-head`.
 - `license revoke` marks the license revoked in the vendor records: reminders stop and the reason
   goes into the `license.revoke` audit row. The customer's installation is **not** affected:
   license files are checked offline. Revoking a signing key is a product release (runbook,
@@ -103,7 +107,8 @@ and it acts for the signed-in person inside each transaction. The audit log show
 
 Run once, as a role that may create roles:
 
-    CREATE ROLE vendor_web_svc LOGIN PASSWORD '<password>' IN ROLE vendor_web;
+    CREATE ROLE vendor_web_svc LOGIN IN ROLE vendor_web;
+    \password vendor_web_svc
 
 Give it no other membership. In particular it must never be a member of `vendor_signer` or
 `vendor_owner`. The role `vendor_web` is created by `vendor-console migrate`. It is a member of
@@ -213,8 +218,8 @@ as that person. After a suspected break-in of the server that runs `vendor-web`:
    table for passkeys that nobody registered.
 2. `vendor-console web-user disable NAME` for every affected person (create a new name for them
    later; see above).
-3. Rotate the service login's password (`ALTER ROLE vendor_web_svc PASSWORD '...'`) and update
-   `VENDOR_WEB_DATABASE_URL`.
+3. Rotate the service login's password (in `psql` as the migration login: `\password vendor_web_svc`)
+   and update `VENDOR_WEB_DATABASE_URL`.
 
 ## Mail and reminders
 
@@ -245,7 +250,8 @@ changed today. Nothing in logs, errors or mails contains the SMTP password or th
 
 Create the notifier login once, as a role that may create roles:
 
-    CREATE ROLE "<login>" LOGIN PASSWORD '<password>' IN ROLE vendor_notifier;
+    CREATE ROLE "<login>" LOGIN IN ROLE vendor_notifier;
+    \password "<login>"
 
 `vendor_notifier` is created by `vendor-console migrate`. It reads only the columns it needs:
 licenses without the license file, the ID and name of customers (no contact, no notes), the

@@ -10,6 +10,14 @@ key: [vendor-console-operations.md](../vendor-console-operations.md).
 
 ## Rules that never change
 
+> **Exception until the vendor console's YubiKey signer exists.** The vendor console's `issue` command
+> (`vendor-console issue --key FILE`) uses this passphrase key file on a machine that is online, because it needs
+> the console's database. The Phase 2 YubiKey signer removes the need for this. Until then the owner decides which
+> option is in force, either signing only offline with `licensectl` as this guide describes, or signing with the
+> console on a dedicated, patched signer computer, and records the decision and its date at the top of
+> [vendor-console-operations.md](../vendor-console-operations.md) (section 2 there). The rules below are unchanged
+> for every other use of the key.
+
 - The production license signing key is created and used **only on an offline machine** (a freshly installed
   laptop without network, or a live USB system). It is never on a computer connected to the internet, in CI, in
   cloud storage, in e-mail, in a password manager that syncs, or in this repository.

@@ -7,12 +7,20 @@ checks, monitoring and incidents. How each command works is in
 compromise, the release key) is in [vendor/licensing-vendor.md](vendor/licensing-vendor.md); this
 runbook links to it and does not repeat it.
 
+**Signing option in force until Phase 2:** option <1 or 2> (section 2), decided by the owner on
+<YYYY-MM-DD>.
+
 Rules for every step below:
 
 - No password, connection string, enrollment code or private key goes into a document, a ticket, a
   chat or this repository. Commands show placeholders such as `<login>` and `<password>`.
 - Each person uses their own database login in `VENDOR_DATABASE_URL`. Never share a login.
-- The connection string ends in `?sslmode=verify-full` unless the database is on the same computer.
+- The connection string has `sslmode=verify-full` (for example `...?sslmode=verify-full`, or
+  `...?sslmode=verify-full&sslrootcert=system` when libpq needs to be told to use the system's root
+  certificates) unless the database is on the same computer.
+- Passwords are set with `psql`'s `\password "<login>"`, which asks for the password and sends it
+  only in hashed form. A password typed inside an SQL statement (`ALTER ROLE ... PASSWORD '...'`)
+  lands in `~/.psql_history` and in the server log if statements are logged, so do not do that.
 
 **The ledger.** The hash-chained `audit` table and the `licenses` table together are the issuance
 ledger of the console. No CSV ledger is exported from the database: such a file would have to be
@@ -32,7 +40,9 @@ stays for the `issued.csv` files of licenses issued with `licensectl`.
 Group roles and what they may do (created by `vendor-console migrate`):
 
 - `vendor_sales`: read customers and licenses, add customers and requests, cancel own open requests.
-- `vendor_signer`: everything `vendor_sales` can, plus insert licenses (`issue`) and change customers.
+- `vendor_signer`: everything `vendor_sales` can, plus insert licenses (`issue`), change customers,
+  and update any request, not only their own (the `requests_update_signer` policy: a signer can
+  change or cancel anyone's request).
 - `vendor_owner`: everything `vendor_signer` can, plus read the audit log (`audit show`,
   `audit-verify`, `audit-head`), revoke licenses, manage web users, change settings, and read the
   mail outbox and reminder records.
@@ -51,19 +61,35 @@ third YubiKey is the spare.
 ## 2. Key ceremony
 
 **The YubiKey signer (Phase 2) is not built yet.** This release signs only with the passphrase key
-file: `vendor-console issue --key FILE` (or `licensectl issue`). Until Phase 2 lands:
+file. Until Phase 2 lands:
 
 - The key file, its passphrase, its backups and its yearly recovery test follow
   [licensing-vendor.md](vendor/licensing-vendor.md) sections 1, 2 and 6 exactly (two
   hardware-encrypted USB drives, a printout, the passphrase paper stored apart).
 - `internal/license/keys/production.json` lists no key today. Until it does, release builds accept
   no license. Embedding the first key is section 2 of licensing-vendor.md.
-- `vendor-console issue` needs the database, so the computer that runs it is online.
-  licensing-vendor.md says the production key is used only on an offline machine. These two do not
-  fit together. Until Phase 2, the owner decides which applies: either sign production licenses
-  only with `licensectl` on the offline machine (they are then not in the console's database), or
-  accept the online use of the key file on one dedicated signing computer, with the key on a
-  hardware-encrypted USB drive that is plugged in only while signing. Write the decision down.
+
+`vendor-console issue --key FILE` needs the database, so the computer that runs it is online, while
+licensing-vendor.md says the signing key is never on a computer connected to the internet. Until the
+YubiKey signer lands, two ways are supported. The owner decides which one is in force and records
+the decision and its date at the top of this runbook.
+
+**Option 1: `licensectl` offline, as today.** Sign on the offline machine exactly as
+licensing-vendor.md section 3 says. These licenses are not in the console's database: no issuance
+mail, no reminders, no line in the weekly summary, nothing for `verify-licenses` to check. Their
+record is the `issued.csv` ledger next to the key and the paper log, which the owner keeps
+(licensing-vendor.md section 5). The owner may add the customer to the console by hand
+(`vendor-console customer add --name "<customer>"`) so sales see it; the license itself is not
+entered.
+
+**Option 2: the file key on an online signer computer.** `vendor-console issue --key FILE` signs
+and records the license in the database (issuance mail, reminders, summary, audit). The passphrase
+is typed on a computer that is online, so malware on it (a keylogger) could take the passphrase and
+the key file together. The computer must therefore be a dedicated signer computer: used for nothing
+else, fully patched, the key on a hardware-encrypted USB drive plugged in only while signing.
+licensing-vendor.md records this exception in its "Rules that never change". If the signer computer
+may have been compromised, follow section 9 ("Signer machine compromise") and treat the key as
+leaked.
 
 ### YubiKey checklist (to follow once Phase 2 lands)
 
@@ -108,15 +134,15 @@ channel you trust. They open `/enroll` on the sales page and register a passkey.
 
 ### A new signer (or owner) login
 
-As the migration login (a role that may create roles), for example with `psql`:
+As the migration login (a role that may create roles), in `psql`:
 
-    CREATE ROLE "<login>" LOGIN PASSWORD '<password>' IN ROLE vendor_signer;
+    CREATE ROLE "<login>" LOGIN IN ROLE vendor_signer;
+    \password "<login>"
 
 Use `vendor_sales`, `vendor_signer`, `vendor_owner` or `vendor_notifier` as needed; the web
-service's login is `IN ROLE vendor_web` and nothing else. One group role per login. Let the person
-choose the password and type it themselves, or give a temporary one and have them change it:
-
-    ALTER ROLE "<login>" PASSWORD '<new password>';
+service's login is `IN ROLE vendor_web` and nothing else. One group role per login. Best is that
+the person types the password themselves: set a temporary one with `\password "<login>"`, then the
+person connects with it and runs `\password` in their own `psql` session to choose their own.
 
 A signer also needs a signing key: the key file today (section 2), a YubiKey after Phase 2.
 
@@ -150,6 +176,9 @@ the last condition leaves it out.)
        DROP ROLE "<login>";
 
    `REASSIGN OWNED` and `DROP OWNED` act on the current database only; the vendor console uses one.
+   `DROP ROLE` and `GRANT "<login>" TO CURRENT_USER` work this way because the migration login
+   created the login and so holds it with the admin option; a login created another way (for
+   example in the Neon console) may need the role that created it, or the Neon console.
    Do not give the same login name to another person later.
 3. If the person held a signing key, or knew a key's passphrase or PIN: treat the key as
    compromised (section 4), unless you are certain they never had the passphrase or the device.
@@ -189,9 +218,10 @@ After the new `production.json` is committed, check the database against it:
 Every license signed with the compromised key is then listed as "the file is signed by a key that is
 revoked for its issue date". Everything else must show no problem.
 
-What to tell customers: that a new license file is coming and why, that they must upload it before
-or together with the update, and the fingerprint of the new key to compare (licensing-vendor.md
-section 8 step 4).
+What to tell customers (licensing-vendor.md section 8, step 4, "Notify customers"): that a new
+license file is coming and why, and that they must upload it before or together with the update.
+Publish the new key's fingerprint so they can compare it (licensing-vendor.md section 2, "Put the
+public key into Alice builds", step 4).
 
 ## 5. Revoking a license
 
@@ -243,40 +273,59 @@ is about a customer's Alice installation and has nothing to do with this databas
    time between two checks of the weekly mail (a week or more).
 2. **An encrypted dump kept apart from Neon**, at least monthly and before every migration. Run it
    as the migration login: it owns the tables, and `pg_dump` with another login stops at the
-   row-level security on `license_requests`. Use a `pg_dump` of version 16 or later:
+   row-level security on `license_requests`. Use a `pg_dump` of at least the server's major
+   version (run `SELECT version();` to see it).
 
-       pg_dump -Fc -d "<migration-login connection string>" -f vendor-<YYYYMMDD>.dump
+   Never type the migration login's connection string on the command line, where it stays in the
+   shell history and is visible in the process list. Either export it for this one shell from the
+   password manager (`read -rs VENDOR_DATABASE_URL && export VENDOR_DATABASE_URL`, paste, Enter;
+   close the shell afterwards) or put the password in `~/.pgpass` with mode 0600.
 
-   Encrypt it with the tool you already use, for example
+   Immediately before the dump, record two values for the drill record (as the owner login, or with
+   `psql` as the migration login for the count):
+
+       vendor-console audit-head                  # prints <seq>:<hash>
+       SELECT count(*) FROM licenses;
+
+   Then, with the migration login in `VENDOR_DATABASE_URL`:
+
+       pg_dump -Fc -d "$VENDOR_DATABASE_URL" -f vendor-<YYYYMMDD>.dump
+
+   Write the head, the count and the time next to the file name in the operations log. Encrypt the
+   dump with the tool you already use, for example
    `gpg --symmetric --cipher-algo AES256 vendor-<YYYYMMDD>.dump` or
    `age -p -o vendor-<YYYYMMDD>.dump.age vendor-<YYYYMMDD>.dump`, then delete the plain file. Store
    the encrypted file away from Neon (an encrypted drive, a second cloud account). Keep its
    passphrase as you keep the other vendor passphrases.
 
-   If libpq complains about the server certificate with `sslmode=verify-full`, add
-   `sslrootcert=system` to the connection string (libpq 16 or later).
+   About TLS: the console accepts a remote connection string only with `sslmode=verify-full`. If
+   libpq (here `pg_dump`) cannot find the root certificates, add `sslrootcert=system` (libpq 16 or
+   later), for example `...?sslmode=verify-full&sslrootcert=system`.
 
 ### The restore drill (quarterly)
 
-Do it on a computer you trust, into a scratch database, never into production.
+Do it on a computer you trust, into a scratch database, never into production. You need the dump's
+record from the operations log: the head and the license count taken just before it.
 
-1. **Pick the checkpoint.** In the owner's mailbox, find the newest weekly summary that was sent
-   **before** the dump was taken. Copy its last line, `Audit head: <seq>:<hash>`. (A summary sent
-   after the dump names rows the dump does not have, and the check in step 6 then reports a
-   mismatch.)
+1. **Pick the checkpoints.** The first is the head recorded before the dump. The second is the
+   witness outside the database: in the owner's mailbox, find the newest weekly summary sent
+   **before** the dump was taken and copy its last line, `Audit head: <seq>:<hash>`. (A summary
+   sent after the dump names rows the dump does not have, and step 6 then reports a mismatch.)
 2. **Decrypt the dump** on the drill computer: `gpg -o vendor.dump -d vendor-<YYYYMMDD>.dump.gpg`
    or `age -d -o vendor.dump vendor-<YYYYMMDD>.dump.age`.
-3. **Start a scratch PostgreSQL 16** on this computer, for example:
+3. **Start a scratch PostgreSQL** of the production server's major version on this computer. It
+   listens on 127.0.0.1 only and needs no passwords (`trust`), because it holds nothing but this
+   drill:
 
-       docker run -d --rm --name vendor-drill -e POSTGRES_PASSWORD=<scratch-password> \
-           -p 127.0.0.1:55432:5432 postgres:16
+       docker run -d --rm --name vendor-drill -e POSTGRES_HOST_AUTH_METHOD=trust \
+           -p 127.0.0.1:55432:5432 postgres:<major version>
        docker cp vendor.dump vendor-drill:/tmp/vendor.dump
 
    Then create a restoring login, the database and the group roles (the dump holds grants to them,
    but not the roles themselves):
 
        docker exec -i vendor-drill psql -U postgres <<'EOF'
-       CREATE ROLE restorer LOGIN CREATEROLE PASSWORD '<scratch-password>';
+       CREATE ROLE restorer LOGIN CREATEROLE;
        CREATE DATABASE vendor_drill OWNER restorer;
        EOF
        docker exec -i vendor-drill psql -U restorer -d postgres <<'EOF'
@@ -287,20 +336,17 @@ Do it on a computer you trust, into a scratch database, never into production.
        CREATE ROLE vendor_notifier NOLOGIN;
        EOF
 
-   (To drill the Neon side instead, create a branch from a point in time in the Neon console; it
-   has the roles already. Use a drill login on the branch and continue at step 5.)
 4. **Restore:**
 
        docker exec vendor-drill pg_restore -U restorer -d vendor_drill --no-owner --exit-on-error /tmp/vendor.dump
 
    Expected: no output, exit code 0. Then create a drill owner login:
 
-       docker exec vendor-drill psql -U restorer -d vendor_drill \
-           -c "CREATE ROLE drill_owner LOGIN PASSWORD '<scratch-password>' IN ROLE vendor_owner;"
+       docker exec vendor-drill psql -U restorer -d vendor_drill -c "CREATE ROLE drill_owner LOGIN IN ROLE vendor_owner;"
 
 5. **Migrations find nothing to do.** A database on this computer needs no TLS:
 
-       export VENDOR_DATABASE_URL='postgres://restorer:<scratch-password>@127.0.0.1:55432/vendor_drill?sslmode=disable'
+       export VENDOR_DATABASE_URL='postgres://restorer@127.0.0.1:55432/vendor_drill?sslmode=disable'
        docker exec vendor-drill psql -U restorer -d vendor_drill -tc "SELECT max(version_id) FROM goose_db_version WHERE is_applied"
        vendor-console migrate
        docker exec vendor-drill psql -U restorer -d vendor_drill -tc "SELECT max(version_id) FROM goose_db_version WHERE is_applied"
@@ -308,21 +354,23 @@ Do it on a computer you trust, into a scratch database, never into production.
    Expected: `migrations applied`, and the same version before and after (the number of the newest
    file in `internal/vconsole/migrations`, `4` today). A higher number after means the dump was
    older than the code; note it.
-6. **The audit chain and the checkpoint:**
+6. **The audit chain and both checkpoints:**
 
-       export VENDOR_DATABASE_URL='postgres://drill_owner:<scratch-password>@127.0.0.1:55432/vendor_drill?sslmode=disable'
-       vendor-console audit-verify --head <seq>:<hash>
+       export VENDOR_DATABASE_URL='postgres://drill_owner@127.0.0.1:55432/vendor_drill?sslmode=disable'
+       vendor-console audit-verify --head <head recorded before the dump>
+       vendor-console audit-verify --head <seq>:<hash from the weekly summary>
 
-   Expected: `audit chain OK; checkpoint <seq> found`.
+   Expected, both times: `audit chain OK; checkpoint <seq> found`.
 7. **Every license file:**
 
        vendor-console verify-licenses --keyset internal/license/keys/production.json
 
-   Expected: `checked N, problems 0`, where N is the number of licenses in production at the time of
-   the dump (`SELECT count(*) FROM licenses;`). `WARNING: no licenses found` on a database that
-   should have licenses is a failed drill. While `production.json` lists no key, the command refuses
-   with `the key set has no keys`; then use the public key file instead:
-   `vendor-console verify-licenses --pub alice-license-public.pem` (repeat `--pub` for each key).
+   Expected: `checked N, problems 0`, where N is at least the license count recorded before the dump
+   (equal, unless someone issued a license between the count and the dump). `WARNING: no licenses
+   found` on a database that should have licenses is a failed drill. While `production.json` lists
+   no key, the command refuses with `the key set has no keys`; then use the public key file
+   instead: `vendor-console verify-licenses --pub alice-license-public.pem` (repeat `--pub` for each
+   key).
 8. **Spot-check one license file:**
 
        vendor-console license export --id <LICENSE-ID> --out drill-check.json
@@ -334,19 +382,29 @@ Do it on a computer you trust, into a scratch database, never into production.
 9. **Clean up:** `docker stop vendor-drill` (the `--rm` container is removed with its data), and
    delete `vendor.dump` and `drill-check.json`.
 
-**Success** means: the restore finished without errors, `migrate` changed nothing, the checkpoint
-was found, every license verified, and the counts match production. Anything else: find out why
+**Drilling the Neon side** (point-in-time restore) instead of the dump: create a branch from a
+point in time in the Neon console. The branch has the roles and logins already, so skip steps 2 to
+4. Connect with your own owner login to the branch's host, with `sslmode=verify-full` as for
+production, and run steps 6, 7 and 8 against it. For step 5 run `vendor-console migrate` with the
+migration login on the branch, and read `goose_db_version` with `psql` on the branch instead of
+`docker exec`. Use the head of the newest weekly summary sent before the chosen point in time. Delete
+the branch afterwards.
+
+**Success** means: the restore finished without errors, `migrate` changed nothing, both checkpoints
+were found, every license verified, and the count matches the record. Anything else: find out why
 before the next issue, and record it.
 
 **Record** each drill in the operations log (paper or a document outside the database):
 
     Restore drill <YYYY-MM-DD>, done by <name>
     Dump: vendor-<YYYYMMDD>.dump.<gpg|age>, taken <YYYY-MM-DD HH:MM UTC>, stored at <place>
-    Checkpoint used: <seq>:<first 12 hex of hash> from the summary of <YYYY-MM-DD>
+    Recorded before the dump: audit head <seq>:<first 12 hex of hash>, licenses <N>
+    Weekly summary checkpoint: <seq>:<first 12 hex of hash> from the summary of <YYYY-MM-DD>
     pg_restore: OK / errors: <...>
     Schema version before/after migrate: <n>/<n>
-    audit-verify --head: OK / <output>
-    verify-licenses: checked <N>, problems <M>; production count <N>
+    audit-verify --head (recorded head): OK / <output>
+    audit-verify --head (summary head): OK / <output>
+    verify-licenses: checked <N>, problems <M>
     Spot check: <LICENSE-ID>, hash equal yes/no, licensectl verify OK yes/no
     Neon history window checked: <days>
     Follow-up: <none / what and who>
@@ -460,9 +518,9 @@ The service cannot sign, so no license can be forged through it. Then:
 
 ### Database credential leak
 
-- [ ] Change the password, as the migration login:
+- [ ] Change the password, as the migration login, in `psql`:
 
-      ALTER ROLE "<login>" PASSWORD '<new password>';
+      \password "<login>"
 
 - [ ] A new password does not end open sessions. End them (PostgreSQL 16 needs the privileges of the
       role, so grant it to yourself for the moment):
@@ -481,8 +539,8 @@ The service cannot sign, so no license can be forged through it. Then:
 
 ### Lost owner login
 
-- [ ] Lost database password: reset it with the migration login
-      (`ALTER ROLE "<owner login>" PASSWORD '<new password>';`).
+- [ ] Lost database password: reset it with the migration login in `psql`
+      (`\password "<owner login>"`).
 - [ ] Lost migration login: reset it in the Neon console with the Neon account.
 - [ ] Lost access to the `owner_email` mailbox: the summaries (checkpoints) and issuance mails are
       there. Set a new address with `vendor-console settings set owner_email <address>` and note in
