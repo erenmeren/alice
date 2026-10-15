@@ -112,6 +112,9 @@ var rules = map[string][]string{
 	// transaction through netdiscojobs.StartTx) and the read side; never the probe, the inventory or the providers.
 	"alice/internal/discovery/discoverysvc": {platform, "alice/internal/license/...", "alice/internal/audit", "alice/internal/jobs",
 		"alice/internal/discovery", "alice/internal/jobs/netdiscojobs"},
+	// The vendor console (plan 2026-10-15-vendor-console-phase-1) is the vendor's own tooling and never ships to customers.
+	// It uses the platform (database, clock) and the license format; it must not reach into the product's services.
+	"alice/internal/vconsole/...": {platform, "alice/internal/license/..."},
 }
 
 const platform = "alice/internal/platform/..."
@@ -282,6 +285,11 @@ func TestAllowed(t *testing.T) {
 		{"fakefleet to the scan policy helper denied", "alice/internal/testutil/fakefleet", "alice/internal/testutil/scanpolicy", false},
 		{"fakefleet to the clock allowed", "alice/internal/testutil/fakefleet", "alice/internal/platform/clock", true},
 		{"discovery to the license gate allowed", "alice/internal/discovery", "alice/internal/license", true},
+		{"vconsole to the license format allowed", "alice/internal/vconsole/issue", "alice/internal/license/issuer", true},
+		{"vconsole to the platform allowed", "alice/internal/vconsole/store", "alice/internal/platform/db", true},
+		{"vconsole to its own subpackage allowed", "alice/internal/vconsole/issue", "alice/internal/vconsole/store", true},
+		{"vconsole to the product jobs denied", "alice/internal/vconsole/issue", "alice/internal/jobs", false},
+		{"vconsole to the product rbac denied", "alice/internal/vconsole/store", "alice/internal/rbac", false},
 		{"discovery to the inventory denied", "alice/internal/discovery", "alice/internal/inventory", false},
 		{"discovery to the jobs denied", "alice/internal/discovery", "alice/internal/jobs", false},
 		{"tlsprobe to the license gate denied", "alice/internal/discovery/tlsprobe", "alice/internal/license", false},

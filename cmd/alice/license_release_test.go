@@ -35,6 +35,8 @@ func TestReleaseBinaryLinksNoTestOrVendorCode(t *testing.T) {
 	require.Contains(t, deps, "alice/internal/license")
 	for _, forbidden := range []string{
 		"alice/internal/license/licensetest", "alice/internal/license/issuer",
+		"alice/internal/vconsole/audit", "alice/internal/vconsole/issue", "alice/internal/vconsole/sign",
+		"alice/internal/vconsole/store", "alice/internal/vconsole/migrations",
 		"github.com/stretchr/testify/assert", "golang.org/x/term",
 	} {
 		assert.NotContains(t, deps, forbidden)
