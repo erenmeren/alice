@@ -1,4 +1,4 @@
-# Vendor console (Phase 1)
+# Vendor console (Phases 1 and 3)
 
 The vendor console keeps the vendor's customers, license requests and issued licenses in a
 PostgreSQL database and issues licenses from requests. It is for the vendor only and is never
@@ -46,4 +46,104 @@ planned for Phase 5.
 
 ## Not yet there
 
-YubiKey signing (Phase 2), the sales web page (Phase 3), e-mail and reminders (Phase 4).
+YubiKey signing (Phase 2), e-mail and reminders (Phase 4). The owner's audit view is part of Phase 4.
+
+## Sales web service
+
+`vendor-web` is the web page for sales people: sign in with a passkey, add customers, make and
+cancel license requests, list licenses with their end dates, download signed license files. It has
+no signing key and its database login cannot write signed licenses, so a break-in cannot create a
+valid license. It is for the vendor only and never ships to customers.
+
+### Who does what
+
+The IT manager runs the service. The owner (login in `vendor_owner`) creates the sales people. A
+sales person is a row in the database, not a database login. The service is the one database login,
+and it acts for the signed-in person inside each transaction. The audit log shows `web:<name>`.
+
+### Database login for the service
+
+Run once, as a role that may create roles:
+
+    CREATE ROLE vendor_web_svc LOGIN PASSWORD '<password>' IN ROLE vendor_web;
+
+Give it no other membership. In particular it must never be a member of `vendor_signer` or
+`vendor_owner`. The role `vendor_web` is created by `vendor-console migrate`. It is a member of
+`vendor_sales` only. It cannot insert licenses, read the audit log or call the audit functions. The
+service reads the person's name from the session, so only members of `vendor_web` can act under a
+`web:` name; any other login still appears under its own name.
+
+### Start
+
+Environment:
+
+- `VENDOR_WEB_DATABASE_URL`: connection string of the service login. It must end in
+  `?sslmode=verify-full` unless the database is on the same computer.
+- `VENDOR_WEB_ORIGIN`: the public address, for example `https://licenses.example.com`. Plain http
+  is accepted for localhost only.
+- `VENDOR_WEB_RPID`: the passkey domain. Default: the host of the origin. Passkeys are bound to
+  it; changing it later makes every enrolled passkey useless.
+
+Flags: `--listen :8443` (default), `--tls-cert FILE --tls-key FILE` (both or neither).
+
+    vendor-web --listen :8443 --tls-cert cert.pem --tls-key key.pem
+
+Nothing is logged that contains the connection string, a code or a session cookie.
+
+### TLS and proxy
+
+Serve with your own certificate (`--tls-cert`, `--tls-key`) or put a reverse proxy that ends TLS in
+front and let `vendor-web` listen on a private address. The proxy must pass `Origin` and `Host`
+unchanged. A form post from another site is refused with 403, and the check compares `Origin` with
+`VENDOR_WEB_ORIGIN`.
+
+`X-Forwarded-For` is ignored in this phase. Behind a proxy the sign-in rate limit (10 attempts a
+minute for each address) sees the proxy's address, so all users share one counter. Set a rate limit
+at the proxy too.
+
+### Cookies and sessions
+
+The session cookie is `__Host-vsession` over https, `vsession` for the localhost http origin. It is
+`HttpOnly`, `Secure` (not on http localhost), `SameSite=Strict`. A session ends after 8 hours, or
+after 30 minutes without a request. The passkey ceremony uses a short cookie (`vceremony`, 5
+minutes). Every page carries a Content-Security-Policy that allows only files from the service
+itself: no inline script or style.
+
+### Pages
+
+`/login` and `/enroll` need no session. After sign-in: `/` (home), `/customers`, `/requests/new`,
+`/requests/ID`, `/licenses`, `/licenses/ID/download`. Any other path shows nothing to a signed-out
+visitor except the sign-in page. A person can cancel only their own open requests; everyone can read
+all requests.
+
+### Sales people
+
+As the owner login (`VENDOR_DATABASE_URL`):
+
+    vendor-console web-user add NAME       # prints a one-time enrollment code
+    vendor-console web-user invite NAME    # a new code, for a lost key
+    vendor-console web-user disable NAME   # leaves: no new sign-in, sessions end
+    vendor-console web-user enable NAME
+    vendor-console web-user list
+
+`NAME` has letters, digits, `.`, `_` and `-`, up to 64 characters. The code is valid for 24 hours,
+works once, and is shown once; only a hash is stored. Give it to the person over a channel you
+trust. The person opens `/enroll`, types the code and registers a passkey (a security key or the
+phone or computer's own). The authenticator must verify the person with a PIN or biometrics. Adding
+a passkey never removes the others, so a lost key is handled with `invite`. There is no command to
+remove one passkey in this phase. Keep a person who must lose all access `disabled` (this ends
+their sessions at once); a stolen key stays on the person's record, so do not `enable` that person
+again. Create a new name instead.
+
+### Development on one computer
+
+Use `VENDOR_WEB_ORIGIN=http://localhost:8443` and a database on the same computer. Passkeys work on
+`localhost` over http; use the name `localhost`, not `127.0.0.1`.
+
+### Operation notes
+
+- Run one instance. The passkey ceremony state is kept in memory, so a second instance behind a
+  load balancer would fail some sign-ins. Restarting loses only ceremonies in progress.
+- Backup of the database includes the `web_users`, `web_credentials`, `web_enrollments` and
+  `web_sessions` tables. A restore keeps passkeys working if `VENDOR_WEB_RPID` is unchanged.
+  Sessions are not worth restoring.

@@ -163,9 +163,9 @@ func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 			found = append(found, f)
 		}
 	}
-	// cmd/vendor-console/run.go (the vendor's own tool, not the product) only reads the field, to refuse a database
+	// internal/vconsole/store/tls.go (the vendor's own tool, not the product) only reads the field, to refuse a database
 	// connection that does not verify the server certificate; it skips nothing.
-	assert.Equal(t, []string{"cmd/alice/selfcheck.go", "cmd/vendor-console/run.go", "internal/discovery/tlsprobe/probe.go", "internal/notify/pin.go", "internal/providers/linuxssh/helperproto/helperproto.go"}, found)
+	assert.Equal(t, []string{"cmd/alice/selfcheck.go", "internal/discovery/tlsprobe/probe.go", "internal/notify/pin.go", "internal/providers/linuxssh/helperproto/helperproto.go", "internal/vconsole/store/tls.go"}, found)
 	self, err := os.ReadFile(filepath.Join(root, "cmd", "alice", "selfcheck.go")) //nolint:gosec // G304: a fixed source file of the repository
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(self), needle+":"), "selfcheck skips the chain check in one place only")

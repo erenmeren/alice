@@ -59,7 +59,7 @@ func TestWrongCodeIsRefused(t *testing.T) {
 	web := d.As(t, "vendor_web", "t_wu_web3")
 	_, err := webuser.LookupEnrollment(ctx, web, "not-a-code", now)
 	require.ErrorIs(t, err, webuser.ErrBadCode)
-	assert.NotContains(t, strings.ToLower(err.Error()), "sql")
+	assert.NotContains(t, strings.ToLower(err.Error()), "sql") //nolint:forbidigo // ASCII needle in a test
 	assert.ErrorIs(t, webuser.ConsumeEnrollment(ctx, web, "not-a-code", now), webuser.ErrBadCode)
 }
 

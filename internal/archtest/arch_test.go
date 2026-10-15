@@ -115,6 +115,10 @@ var rules = map[string][]string{
 	// The vendor console (plan 2026-10-15-vendor-console-phase-1) is the vendor's own tooling and never ships to customers.
 	// It uses the platform (database, clock) and the license format; it must not reach into the product's services.
 	"alice/internal/vconsole/...": {platform, "alice/internal/license/..."},
+	// The sales web service reads and writes through the store and the web users; it has no license-format access at all.
+	"alice/internal/vconsole/web/...": {platform, "alice/internal/vconsole/store", "alice/internal/vconsole/webuser", "alice/internal/vconsole/audit"},
+	// Web users (sessions, passkeys) know the database and the audit chain, not the license tables.
+	"alice/internal/vconsole/webuser": {platform, "alice/internal/vconsole/audit"},
 }
 
 const platform = "alice/internal/platform/..."
@@ -122,6 +126,10 @@ const platform = "alice/internal/platform/..."
 // denied lists imports that are forbidden even though a broader allow entry
 // covers them. Providers are pure adapters and have no database access (§5.4 rule 2).
 var denied = map[string][]string{
+	// The sales web service (plan 2026-10-15-vendor-console-phase-3) holds no signing key: it never reaches the signer
+	// or the issuing code. Web users (sessions, passkeys) share only the audit package with the license tables.
+	"alice/internal/vconsole/web/...":                {"alice/internal/vconsole/sign", "alice/internal/vconsole/issue"},
+	"alice/internal/vconsole/webuser":                {"alice/internal/vconsole/store"},
 	"alice/internal/certs/...":                       {"alice/internal/platform/db/..."},
 	"alice/internal/providers":                       {"alice/internal/platform/db/..."},
 	"alice/internal/providers/...":                   {"alice/internal/platform/db/..."},
@@ -288,6 +296,11 @@ func TestAllowed(t *testing.T) {
 		{"vconsole to the license format allowed", "alice/internal/vconsole/issue", "alice/internal/license/issuer", true},
 		{"vconsole to the platform allowed", "alice/internal/vconsole/store", "alice/internal/platform/db", true},
 		{"vconsole to its own subpackage allowed", "alice/internal/vconsole/issue", "alice/internal/vconsole/store", true},
+		{"web to the store allowed", "alice/internal/vconsole/web", "alice/internal/vconsole/store", true},
+		{"web to the web users allowed", "alice/internal/vconsole/web", "alice/internal/vconsole/webuser", true},
+		{"web to the signer denied", "alice/internal/vconsole/web", "alice/internal/vconsole/sign", false},
+		{"web to the issuing code denied", "alice/internal/vconsole/web", "alice/internal/vconsole/issue", false},
+		{"web users to the store denied", "alice/internal/vconsole/webuser", "alice/internal/vconsole/store", false},
 		{"vconsole to the product jobs denied", "alice/internal/vconsole/issue", "alice/internal/jobs", false},
 		{"vconsole to the product rbac denied", "alice/internal/vconsole/store", "alice/internal/rbac", false},
 		{"discovery to the inventory denied", "alice/internal/discovery", "alice/internal/inventory", false},

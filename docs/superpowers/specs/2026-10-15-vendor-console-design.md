@@ -49,7 +49,14 @@ embedded key set (section 8).
 - **Sales web service** (`cmd/vendor-web`, new). Small server. Customer and request forms, list
   of licenses with end dates, download of signed license files. It connects to Neon with a role
   that cannot write signed licenses. It has no signing key, so a break-in cannot create a valid
-  license.
+  license. Built in Phase 3. Sales people are rows in `web_users`, not database logins. The service
+  is one login (member of `vendor_web`, which is a member of `vendor_sales` only) and sets
+  `vendor.actor` for each transaction. The database function `vendor_actor()` honors that setting
+  only for members of `vendor_web`, so audit rows and row-level security name the real person
+  (`web:<name>`) and no other login can impersonate one. Enrollment: the owner runs
+  `vendor-console web-user add NAME` and gets a one-time code (24 hours, stored hashed); the person
+  opens `/enroll`, enters the code and registers a passkey. A lost key is handled with
+  `web-user invite`, a leaver with `web-user disable`. Sessions last 8 hours, 30 minutes idle.
 - **Shared code**. `internal/vconsole/...` for the data model, the audit chain and the signer
   interface. It reuses `internal/license` and `internal/license/issuer` for the license payload
   and the canonical signing bytes, so the console and the product cannot drift apart.
@@ -178,7 +185,7 @@ No change to the license format, the verifier or the license tests is planned.
    license from a request using the file key.
 2. **YubiKey signing.** PIV or OpenPGP implementation (decided by O1), PIN and touch flow,
    cross-platform builds and smoke tests on Linux, Windows and macOS.
-3. **Sales web page.** Login, customers, requests, license list with end dates, download.
+3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view stays in Phase 4.
 4. **Reminders and owner reports.** E-mail on issuance, weekly summary, expiry reminders, renewal
    drafts.
 5. **Operations.** Backup and restore drill, key ceremony checklist, key revocation procedure, docs.
@@ -190,7 +197,7 @@ No change to the license format, the verifier or the license tests is planned.
 | O1 | Firmware and enabled applications of the owner's three YubiKey 5C NFC (`ykman info`); new key for the IT manager must be firmware 5.7 or later for PIV | Phase 2 |
 | O2 | CSV ledger versus audit table (section 6) | Phase 1 |
 | O3 | Which Go library reads PIV/OpenPGP Ed25519 on all three platforms (PC/SC). To be checked with a spike, not assumed | Phase 2 |
-| O4 | Where the sales web service runs and who operates it | Phase 3 |
+| O4 | Where the sales web service runs and who operates it. Resolved: one static binary `vendor-web` behind any TLS-ending reverse proxy, or with its own certificate; operated by the IT manager (Istanbul); the owner holds the `vendor_owner` login that creates web users; single instance (ceremony state is in memory) | Phase 3 (done) |
 | O5 | E-mail sending (provider, sender address) | Phase 4 |
 | O6 | Whether the installation ID flow (customer gives it, vendor binds the license to it) stays as is | Phase 1 |
 

@@ -199,7 +199,7 @@ func TestDownloadOfUnknownOrOddIDsIs404(t *testing.T) {
 	for _, id := range []string{"nope", "..%2f..%2fetc%2fpasswd", "a%27b", strings.Repeat("a", 300), "a%20b", "%00"} {
 		w := e.do(http.MethodGet, "/licenses/"+id+"/download", "", ayse)
 		assert.Equal(t, http.StatusNotFound, w.Code, id)
-		b := strings.ToLower(w.Body.String())
+		b := strings.ToLower(w.Body.String()) //nolint:forbidigo // ASCII needles in a test body
 		for _, bad := range []string{"select", "sql", "/etc", "pgx", "licenses"} {
 			assert.NotContains(t, b, bad, id)
 		}
