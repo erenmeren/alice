@@ -12,6 +12,10 @@ import (
 	"alice/internal/vconsole/audit"
 )
 
+// clockSkew is how far a license's signed issued_at may lie after the check time before it is
+// reported: the signer machine's clock and the checking machine's clock may differ a little.
+const clockSkew = 5 * time.Minute
+
 // LicenseProblem is one finding of VerifyLicenses. Problem is a short fixed sentence: it never
 // carries file bytes, payload values or an installation ID, so the report can go to a terminal,
 // a ticket or a mail without leaking customer data.
@@ -34,13 +38,18 @@ type LicenseProblem struct {
 //     valid_from, valid_until, targets and replaces. The customer name is not compared: the
 //     payload holds the name at issue time and customer names may be corrected later.
 //
-// now is only used to report a license whose signed issued_at lies after the check time (a
-// clock error at issue, or a file that did not come from this console's normal path).
+// now is only used to report a license whose signed issued_at lies more than clockSkew after
+// the check time (a clock error at issue, or a file that did not come from this console's
+// normal path). An empty key set is an error: every file would be reported as signed by an
+// unknown key, which hides real findings.
 //
 // It returns every problem, never stopping at the first, and the number of licenses checked.
-// q must be allowed to read licenses.file (the owner and signer logins; the notifier is not,
-// on purpose). err is only a database error.
+// q must be allowed to read licenses.file (the owner, signer and sales logins and the web
+// service can read license files; the notifier cannot, on purpose). err is only a database error.
 func VerifyLicenses(ctx context.Context, q audit.Q, ks license.KeySet, now time.Time) (checked int, problems []LicenseProblem, err error) {
+	if ks.Len() == 0 {
+		return 0, nil, errors.New("store: verify licenses: the key set is empty")
+	}
 	rows, err := q.Query(ctx, `SELECT license_id, installation, key_id, issued_at, valid_from, valid_until,
 			targets, replaces, file, file_sha256
 		FROM licenses ORDER BY license_id`)
@@ -105,7 +114,7 @@ func (r storedLicense) problems(ks license.KeySet, now time.Time) []string {
 			out = append(out, "the row's "+m.column+" differs from the signed file")
 		}
 	}
-	if p.IssuedAt.After(now) {
+	if p.IssuedAt.After(now.Add(clockSkew)) {
 		out = append(out, "the signed issued_at is after the check time")
 	}
 	return out

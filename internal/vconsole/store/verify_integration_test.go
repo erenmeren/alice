@@ -287,6 +287,26 @@ func TestIssuedAfterTheCheckTimeIsReported(t *testing.T) {
 	assert.Contains(t, got[0], "after the check time")
 }
 
+func TestIssuedAheadWithinClockSkewIsFine(t *testing.T) {
+	e := newVerifyEnv(t, "k")
+	s := fileSigner(t, "vk-2026-01")
+	res := e.issueLicense(t, s, "LIC-2026-000001", license.NewInstallationID())
+	_, problems, err := store.VerifyLicenses(context.Background(), e.signer, activeSet(s), now.Add(-4*time.Minute))
+	require.NoError(t, err)
+	assert.Empty(t, problemsFor(problems, res.LicenseID), "4 minutes ahead is clock skew, not a problem")
+	_, problems, err = store.VerifyLicenses(context.Background(), e.signer, activeSet(s), now.Add(-6*time.Minute))
+	require.NoError(t, err)
+	got := problemsFor(problems, res.LicenseID)
+	require.Len(t, got, 1, "6 minutes ahead is a problem")
+	assert.Contains(t, got[0], "after the check time")
+}
+
+func TestEmptyKeySetIsAnError(t *testing.T) {
+	e := newVerifyEnv(t, "l")
+	_, _, err := store.VerifyLicenses(context.Background(), e.signer, license.NewKeySet(), now)
+	require.Error(t, err)
+}
+
 func TestProblemTextHasNoFileBytesOrInstallationID(t *testing.T) {
 	e := newVerifyEnv(t, "j")
 	s, other := fileSigner(t, "vk-2026-01"), fileSigner(t, "vk-2026-02")

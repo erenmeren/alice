@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -72,6 +73,54 @@ func TestRevokeSetsTimeAndAuditsTheReason(t *testing.T) {
 	assert.Equal(t, "t_rev_owner", as[0].actor)
 	assert.Contains(t, as[0].details, `"reason": "customer closed the account"`)
 	assert.NoError(t, audit.Check(ctx, d.Owner))
+}
+
+func TestRevokeOnASingleConnectionStillAuditsTheReason(t *testing.T) {
+	d := revokeEnv(t, "L-1")
+	owner := d.As(t, "vendor_owner", "t_rev_owner")
+	ctx := context.Background()
+	c, err := owner.Acquire(ctx)
+	require.NoError(t, err)
+	defer c.Release()
+	var q *pgx.Conn = c.Conn()
+	require.NoError(t, store.RevokeLicense(ctx, q, "L-1", "conn reason", now))
+	as := revokeAudits(t, d, "L-1")
+	require.Len(t, as, 1)
+	assert.Contains(t, as[0].details, `"reason": "conn reason"`)
+}
+
+func TestConcurrentRevokesOfOneLicenseSucceedOnce(t *testing.T) {
+	d := revokeEnv(t, "L-1")
+	owner := d.As(t, "vendor_owner", "t_rev_owner")
+	ctx := context.Background()
+	const n = 2
+	errs := make([]error, n)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs[i] = store.RevokeLicense(ctx, owner, "L-1", "race", now)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	var ok, already int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			ok++
+		case errors.Is(err, store.ErrAlreadyRevoked):
+			already++
+		default:
+			t.Errorf("unexpected error: %v", err)
+		}
+	}
+	assert.Equal(t, 1, ok)
+	assert.Equal(t, 1, already)
+	assert.Len(t, revokeAudits(t, d, "L-1"), 1)
 }
 
 func TestRevokeInsideACallerTransaction(t *testing.T) {
@@ -208,7 +257,7 @@ func TestDatabaseSanitizesTheReasonItself(t *testing.T) {
 	// A caller that skips the Go checks: the trigger still makes one short line.
 	require.NoError(t, db.InTx(ctx, owner, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT set_config('vendor.reason', $1, true)`,
-			"line1\nline2\u202e"+strings.Repeat("x", 300)); err != nil {
+			"line1\nline2\u202e\u061c\u180e"+strings.Repeat("x", 300)); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `UPDATE licenses SET revoked_at = $1 WHERE license_id = 'L-1'`, now)
@@ -222,6 +271,25 @@ func TestDatabaseSanitizesTheReasonItself(t *testing.T) {
 	assert.True(t, strings.HasPrefix(reason, "line1 line2 "), reason)
 	assert.NotContains(t, reason, "\n")
 	assert.NotContains(t, reason, "\u202e")
+	assert.NotContains(t, reason, "\u061c")
+	assert.NotContains(t, reason, "\u180e")
+}
+
+func TestDatabaseSanitizesInvisibleFormattingCharacters(t *testing.T) {
+	d := revokeEnv(t, "L-1")
+	owner := d.As(t, "vendor_owner", "t_rev_owner")
+	ctx := context.Background()
+	require.NoError(t, db.InTx(ctx, owner, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT set_config('vendor.reason', $1, true)`,
+			"a\u061cb\u180ec\u202ad\u206fe\ufff9f\ufffbg"); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `UPDATE licenses SET revoked_at = $1 WHERE license_id = 'L-1'`, now)
+		return err
+	}))
+	var reason string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT details->>'reason' FROM audit WHERE action = 'license.revoke'`).Scan(&reason))
+	assert.Equal(t, "a b c d e f g", reason)
 }
 
 func TestRevokeKeepsTheFileAndOtherColumns(t *testing.T) {

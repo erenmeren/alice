@@ -20,7 +20,7 @@ GRANT EXECUTE ON FUNCTION audit_head() TO vendor_owner, vendor_notifier;
 CREATE OR REPLACE FUNCTION vendor_audit_licenses() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     reason text := left(btrim(regexp_replace(coalesce(current_setting('vendor.reason', true), ''),
-        '[\u0001-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2069\ufeff]', ' ', 'g')), 200);
+        '[\u0001-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u2028-\u202e\u2060-\u2069\u061c\u180e\u206a-\u206f\ufeff\ufff9-\ufffb]', ' ', 'g')), 200);
 BEGIN
     IF TG_OP = 'INSERT' THEN
         PERFORM audit_append('license.issue', NEW.license_id, jsonb_build_object('request', NEW.request_id,
