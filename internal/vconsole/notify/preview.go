@@ -60,7 +60,6 @@ func PreviewRun(ctx context.Context, pool *pgxpool.Pool, now time.Time) (Preview
 	}
 	p.Reminders = len(cands)
 
-	last, haveLast := parseLastSummary(settings["last_summary_at"])
-	p.Summary = !haveLast || !last.After(now.Add(-summaryEvery))
+	p.Summary, _, _ = summaryDue(settings["last_summary_at"], now)
 	return p, nil
 }

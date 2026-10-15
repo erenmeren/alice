@@ -98,11 +98,8 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 	if err != nil {
 		return false, err
 	}
-	last, haveLast := parseLastSummary(settings["last_summary_at"])
-	if haveLast && last.After(now.Add(futureSkew)) {
-		haveLast = false
-	}
-	if haveLast && last.After(now.Add(-summaryEvery)) {
+	due, last, haveLast := summaryDue(settings["last_summary_at"], now)
+	if !due {
 		return false, nil
 	}
 	end := now.UTC().Truncate(time.Second)
@@ -186,6 +183,21 @@ func readSettings(ctx context.Context, tx pgx.Tx) (map[string]string, error) {
 		return nil, fmt.Errorf("notify: summary: read settings: %w", err)
 	}
 	return out, nil
+}
+
+// summaryDue decides from the raw last_summary_at value whether a summary is due at now. It is
+// the one place for that rule, shared by WeeklySummary and PreviewRun so a dry run can never
+// disagree with a real run. haveLast reports a usable mark (last is then the start of the next
+// period): a missing or unreadable mark, or one more than futureSkew after now, counts as never.
+func summaryDue(raw string, now time.Time) (due bool, last time.Time, haveLast bool) {
+	last, haveLast = parseLastSummary(raw)
+	if haveLast && last.After(now.Add(futureSkew)) {
+		haveLast = false
+	}
+	if haveLast && last.After(now.Add(-summaryEvery)) {
+		return false, last, true
+	}
+	return true, last, haveLast
 }
 
 // parseLastSummary reads the value notify_mark_summary writes. An unreadable value (the owner can

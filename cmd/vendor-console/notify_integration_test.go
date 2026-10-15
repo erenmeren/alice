@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -98,6 +99,26 @@ func (e *notifyEnv) issueOne(clk clock.Clock, customer string) string {
 	id := regexp.MustCompile(`LIC-\d+-\d+`).FindString(out)
 	require.NotEmpty(t, id, out)
 	return id
+}
+
+// settingsSnapshot returns every setting as "key=value", ordered by key.
+func (e *notifyEnv) settingsSnapshot() []string {
+	return e.strings(`SELECT key || '=' || value FROM vendor_settings ORDER BY key`)
+}
+
+// outboxSnapshot returns the state of every outbox row (recipients, attempts, timestamps), ordered by id.
+func (e *notifyEnv) outboxSnapshot() []string {
+	return e.strings(`SELECT concat_ws('|', id, array_to_string(to_addrs, ','), attempts, last_error, sent_at, failed_at,
+		next_attempt_at) FROM mail_outbox ORDER BY id`)
+}
+
+func (e *notifyEnv) strings(query string) []string {
+	e.t.Helper()
+	rows, err := e.d.Owner.Query(context.Background(), query)
+	require.NoError(e.t, err)
+	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	require.NoError(e.t, err)
+	return out
 }
 
 func subjects(msgs []mailtest.Message) []string {
@@ -191,6 +212,8 @@ func TestNotifyRunSendsIssuanceReminderAndSummaryOnce(t *testing.T) {
 	for _, tbl := range []string{"mail_outbox", "reminders", "vendor_settings", "audit"} {
 		before[tbl] = e.count(tbl)
 	}
+	settingsBefore := e.settingsSnapshot()
+	outboxBefore := e.outboxSnapshot()
 	out, se, code := e.do("notifier", fake, "notify", "run", "--dry-run", "--base-url", "https://licenses.example.com")
 	require.Equal(t, 0, code, se)
 	assert.Contains(t, out, "reminders to create: 1")
@@ -199,6 +222,8 @@ func TestNotifyRunSendsIssuanceReminderAndSummaryOnce(t *testing.T) {
 	for tbl, n := range before {
 		assert.Equal(t, n, e.count(tbl), "dry run wrote to %s", tbl)
 	}
+	assert.Equal(t, settingsBefore, e.settingsSnapshot(), "dry run changed a setting")
+	assert.Equal(t, outboxBefore, e.outboxSnapshot(), "dry run changed an outbox row")
 	assert.Empty(t, e.smtp.Messages())
 
 	out, se, code = e.do("notifier", fake, "notify", "run", "--base-url", "https://licenses.example.com")
@@ -275,14 +300,20 @@ func TestNotifyRunSendsEvenWhenRemindersFail(t *testing.T) {
 func TestNotifyRunExitsOneWhenAMessageFails(t *testing.T) {
 	e := newNotifyEnv(t, "t_cx")
 	ctx := context.Background()
-	_, err := e.d.Owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('last_summary_at', '2099-01-01T00:00:00Z')`)
+	// The run's clock is a little ahead of the database's, so the seeded message is due.
+	now := time.Now().UTC().Add(time.Minute)
+	// A summary went out yesterday, so this run sends none and the bad message is the only mail.
+	_, err := e.d.Owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('last_summary_at', $1)`,
+		now.Add(-24*time.Hour).Format(time.RFC3339))
 	require.NoError(t, err)
 	// An address the outbox stores but the sender can never use: it fails at once, not in 14 hours.
 	_, err = e.d.Owner.Exec(ctx, `INSERT INTO mail_outbox (kind, to_addrs, subject, body) VALUES ('test', '{not an address}', 's', 'b')`)
 	require.NoError(t, err)
-	out, se, code := e.do("notifier", clock.Real{}, "notify", "run")
+	out, se, code := e.do("notifier", clock.NewFake(now), "notify", "run")
 	assert.Equal(t, 1, code)
-	assert.Contains(t, out, "failed 1")
+	assert.Contains(t, out, "weekly summary: not due")
+	assert.Contains(t, out, "mail: sent 0, to retry 0, failed 1,")
+	assert.Equal(t, 1, e.count("mail_outbox"), "no summary was created")
 	assert.Contains(t, se, "marked failed")
 	var failed int
 	require.NoError(t, e.d.Owner.QueryRow(ctx, `SELECT count(*) FROM mail_outbox WHERE failed_at IS NOT NULL AND attempts = 1`).Scan(&failed))
