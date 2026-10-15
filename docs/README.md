@@ -31,6 +31,7 @@ with every release package (`docs/`) and are written in English.
 | Make a backup now | [admin-guide.md](admin-guide.md#backups), or `alicectl backup` ([operator-guide.md](operator-guide.md#alicectl-reference)) |
 | Restore after a mistake, or move to new hardware | [backup-restore.md](backup-restore.md#restore-on-the-same-server), [backup-restore.md](backup-restore.md#restore-on-a-new-server) |
 | Replace the HTTPS certificate | [admin-guide.md](admin-guide.md#https-certificate) |
+| Let Active Directory users sign in (single sign-on) | [admin-guide.md](admin-guide.md#active-directory) |
 | Forward the audit log to a SIEM | [admin-guide.md](admin-guide.md#audit-forwarding) |
 | Collect information for support | [troubleshooting.md](troubleshooting.md#how-to-create-a-support-bundle) |
 | An update failed | [troubleshooting.md](troubleshooting.md#update-rolled-back) |

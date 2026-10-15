@@ -601,6 +601,171 @@ Every change is in the audit log (**Identity provider added**, **changed**, **se
 - Add a **Group Membership** mapper with the token claim name `groups` to the client (or a client scope it uses).
   With **Full group path** on, the values are paths such as `/alice-operators`: map them that way.
 
+### Active Directory
+
+Alice talks only OpenID Connect today. It does not connect to Active Directory (AD) over LDAP and does not read AD
+by itself; direct AD (LDAP) sign-in is planned, without a date. Until then AD users sign in through an OpenID Connect
+provider in front of AD. Which one depends on what you already run:
+
+| Your situation | Use | Notes |
+|---|---|---|
+| AD is synchronised to Microsoft Entra ID (Entra Connect, hybrid) | [Microsoft Entra ID](#microsoft-entra-id) | Groups arrive as object IDs; the 200-group rule applies: choose **Groups assigned to the application**. |
+| AD with AD FS on premises | [AD FS](#ad-fs) and the AD FS details below | Groups arrive as names or SIDs, depending on the claim rule. |
+| AD with neither | [Active Directory through Keycloak](#active-directory-through-keycloak) | You deploy and run Keycloak (or another OpenID Connect server) with LDAP user federation to AD. Alice does not ship one. |
+
+**Entra ID with synchronised groups** (not run by the author: check in your tenant). For groups synchronised from AD,
+the groups claim in **Token configuration** can also send `sAMAccountName`, `NetBIOSDomain\sAMAccountName` or
+`DNSDomain\sAMAccountName` instead of the object ID. Map exactly what the token then carries. Groups that exist only
+in the cloud keep their object ID.
+
+**AD FS details** (not run by the author: check against your AD FS version and Microsoft's documentation).
+
+- OpenID Connect needs AD FS 2016 (Windows Server 2016) or later; AD FS on Windows Server 2012 R2 has no OpenID Connect.
+  Check your AD FS version.
+- Alice reads the groups from the **ID token** only, never from the user info endpoint or the access token. AD FS puts
+  custom claims into the ID token only in some set-ups (for example rules on a Web API in the same application group
+  whose identifier is the client ID). Decode one ID token (sign in once, then look at it in a JWT viewer you trust,
+  offline) and check that the group claim is there before you map anything.
+- **Which rule sends which value.** A rule "Send LDAP Attributes as Claims" with the attribute store **Active
+  Directory** and the LDAP attribute **Token-Groups** sends every security group of the person, nested groups
+  included (AD computes Token-Groups over the nesting; distribution groups are not in it). The variant decides the
+  value:
+
+  | LDAP attribute in the rule | Value in the token | What you enter as **Group** in Alice |
+  |---|---|---|
+  | Token-Groups - Qualified by Domain Name | `CORP\alice-operators` | `CORP\alice-operators` (one backslash) |
+  | Token-Groups - Qualified by Long Domain Name | `corp.example.com\alice-operators` | `corp.example.com\alice-operators` |
+  | Token-Groups - Unqualified Names | `alice-operators` | `alice-operators` |
+  | Token-Groups as SIDs | `S-1-5-21-…-1104` | the SID, as shown in the group's properties |
+
+  A rule "Send Group Membership as a Claim" checks one group (nested membership counts, because it reads the
+  person's group SIDs) and sends a fixed value that you choose, for example `alice-operators`: map that value.
+- **Groups claim** in Alice is the claim name as it appears in the ID token, for example `group` (see
+  [AD FS](#ad-fs)). A person in exactly one matching group may get a single text instead of a list; Alice accepts
+  both.
+- **Upper and lower case count** in Alice, also where AD does not care: `CORP\Alice-Operators` does not match
+  `CORP\alice-operators`. Copy the value from the token.
+- **Certificates.** When the AD FS certificate comes from your own certificate authority, paste that authority (PEM)
+  into **Certificate authority (optional, PEM)**. Without it, saving the provider fails with `ALC-SSO-0001` and the
+  cause `tls` (seen with Keycloak in the test below).
+- **Clocks.** Alice accepts 60 seconds of clock difference on the token's times. Keep Alice's server, the AD FS
+  servers and the domain controllers on the same time source (NTP). A larger difference refuses sign-ins with
+  `login_invalid` (`ALC-SSO-0010`).
+- **Confirm it's you.** Alice asks the provider for a fresh sign-in with `prompt=login` and `max_age=0` and then
+  checks `auth_time` in the ID token: it must be at most 5 minutes old. AD FS documents `prompt=login`; whether it
+  honours `max_age` and sends `auth_time` in your version is not verified here. **If the AD FS ID token has no
+  `auth_time`, every confirmation of an SSO user fails** with `ALC-SSO-0010`, and a sign-in never opens the 5-minute
+  window. Check `auth_time` in a decoded token. The lifetime of the AD FS sign-in (its single sign-on cookie) decides
+  how often people sign in silently; a silent sign-in leaves the window closed (see [MFA and confirming your
+  identity](#mfa-and-confirming-your-identity)). Alice keeps no AD FS tokens after the sign-in, so the token
+  lifetime does not extend an Alice session.
+- **MFA and Conditional Access** stay the customer's job, at AD FS or Entra ID. Alice does not check them.
+
+**Points that apply to every AD set-up:**
+
+- **User name.** Alice takes the user name from `preferred_username`, then `upn`, then `email`: the first one that
+  leaves something after cleaning. Cleaning folds A–Z to lower case and keeps only `a`–`z`, `0`–`9`, `.`, `_`, `-`
+  and `@`; every other character is dropped, so `CORP\ada` becomes `corpada` and `çiğdem` becomes `idem` (seen in
+  the Keycloak test below). The name has at most 64 characters; a taken name gets `-2`, `-3`, …. The user name is only
+  a label: Alice recognises the person by the provider's subject identifier, and the display name keeps every
+  character.
+- **Disabling a person in AD does not end an open Alice session.** A session that is already open keeps working (at
+  most 30 minutes idle, 12 hours in all). Whether the next single sign-on fails depends on the provider: a session the
+  person still has at AD FS, Entra ID or Keycloak may sign them in silently (not run by the author). To stop someone at
+  once, choose **Disable** on **People & access** as well.
+- **A person removed from every mapped group** is refused at their next single sign-on or confirmation, and Alice
+  then ends all their sessions (seen in the Keycloak test below).
+
+### Active Directory through Keycloak
+
+Use this when AD has neither Entra ID nor AD FS. You run Keycloak; it checks passwords against AD over LDAP and gives
+Alice an ID token with the AD groups. The steps were run by the author with Keycloak 26.4.2 and OpenLDAP in place of
+AD, and Alice's own sign-in code against that Keycloak (see the note at the end of this section). OpenLDAP is not
+AD: the attribute names for AD below are Keycloak's defaults for the vendor **Active Directory**, not run against
+a real AD (check against your installed version).
+
+1. **A read-only service account in AD** for the LDAP bind, for example
+   `CN=svc-keycloak,OU=Service Accounts,DC=corp,DC=example,DC=com`. It needs to read users and groups, nothing more.
+   Its password lives only in Keycloak.
+2. In Keycloak, **User federation → Add LDAP provider**:
+
+   | Setting | Value for AD | Value in the author's OpenLDAP test |
+   |---|---|---|
+   | Vendor | Active Directory | Other |
+   | Connection URL | `ldaps://dc1.corp.example.com:636` | `ldap://…:389` (test only) |
+   | Bind type, Bind DN, Bind credentials | simple, the service account, its password | simple, an admin DN |
+   | Edit mode | READ_ONLY | READ_ONLY |
+   | Users DN | the OU above all Alice users, for example `OU=Staff,DC=corp,DC=example,DC=com` | `ou=People,dc=example,dc=com` |
+   | Username LDAP attribute | `sAMAccountName` | `uid` |
+   | RDN LDAP attribute | `cn` | `uid` |
+   | UUID LDAP attribute | `objectGUID` | `entryUUID` |
+   | User object classes | `person, organizationalPerson, user` | `inetOrgPerson, organizationalPerson` |
+   | Search scope | Subtree when users sit in sub-OUs | One level |
+   | Cache policy | `NO_CACHE`, or `MAX_LIFESPAN` with a short lifespan | see below |
+
+   For `ldaps://` Keycloak must trust the domain controllers' certificate authority (Keycloak's truststore, for
+   example the `truststore-paths` option; not run by the author). Do not use `ldap://` to AD in production: the bind
+   password and every user password would cross the network in clear text.
+3. **Mappers → Add mapper**, type **group-ldap-mapper**:
+
+   | Setting | Value for AD | Value in the test |
+   |---|---|---|
+   | LDAP Groups DN | the OU holding the groups, for example `OU=Groups,DC=corp,DC=example,DC=com` | `ou=Groups,dc=example,dc=com` |
+   | Group Name LDAP Attribute | `cn` | `cn` |
+   | Group Object Classes | `group` | `groupOfNames` |
+   | Preserve Group Inheritance | off (recommended, see nested groups) | tested on and off |
+   | Membership LDAP Attribute, Membership Attribute Type | `member`, DN | `member`, DN |
+   | Member-Of LDAP Attribute | `memberOf` | `memberOf` |
+   | Mode | READ_ONLY | READ_ONLY |
+   | User Groups Retrieve Strategy | see nested groups | tested, see nested groups |
+
+   A group sync is not needed: in the test the groups appeared in the token at the first sign-in.
+4. **Clients → Create client**, OpenID Connect, **Client authentication** on, standard flow, **Valid redirect URIs** =
+   Alice's redirect address (see [Keycloak](#keycloak)). On the client's dedicated scope add a mapper **Group
+   Membership** with **Token Claim Name** `groups` and **Add to ID token** on (Alice reads only the ID token).
+5. In Alice, add the provider with the issuer `https://<Keycloak host>/realms/<realm>`, **Groups claim** `groups`, and
+   the Keycloak certificate's authority in **Certificate authority (optional, PEM)** when it is your own.
+
+**Values to map.** Group names keep spaces and non-ASCII characters; map them exactly. Observed in the test:
+
+| Group membership in LDAP | **Full group path** off | **Full group path** on |
+|---|---|---|
+| direct member of `alice-operators` | `alice-operators` | `/alice-operators` |
+| direct member of `Güvenlik Işığı Größe` | `Güvenlik Işığı Größe` | `/Güvenlik Işığı Größe` |
+| member of `team-sub`, which is a member of `alice-auditors`; Preserve Group Inheritance on | `team-sub` | `/alice-auditors/team-sub` |
+| the same, Preserve Group Inheritance off | `team-sub` | `/team-sub` |
+
+Alice signed these people in with the mappings `alice-operators` and `Güvenlik Işığı Größe` (claim `groups`). With
+the claim switched to the full-path claim, the mapping `alice-operators` no longer matched `/alice-operators` and the
+person was refused (`no_access`): change the mappings when you switch **Full group path**.
+
+**Nested AD groups.** Keycloak's **Group Membership** mapper sends only the groups a person is a direct member of
+(with full path on, the parents appear only inside the path). In the test, a member of `team-sub` (nested in
+`alice-auditors`) did not get `alice-auditors` in the token with the strategies **LOAD_GROUPS_BY_MEMBER_ATTRIBUTE**
+and **GET_GROUPS_FROM_USER_MEMBEROF_ATTRIBUTE**, and Alice refused them with the mapping `alice-auditors`
+(`no_access`, `ALC-SSO-0006`). Your options:
+
+- Put the people directly into the groups you map in Alice, or map the nested groups too (both run by the author).
+- Use the strategy **LOAD_GROUPS_BY_MEMBER_ATTRIBUTE_RECURSIVELY** with Preserve Group Inheritance off. It asks AD
+  for nested membership (AD's "in chain" search) and is meant to list the parent groups as well. This works only with
+  AD (not run by the author: check in your environment by decoding a token). OpenLDAP does not know that search: in
+  the test the token then carried no groups at all.
+
+**Group changes and the Keycloak cache.** With the default cache policy, Keycloak kept sending a group that had
+been removed in LDAP until its user cache was cleared. With **Cache policy** `NO_CACHE` the change was in the next
+token. Choose `NO_CACHE` (or a short `MAX_LIFESPAN`) so that a removal in AD takes effect at the person's next
+sign-in to Alice.
+
+**Disabled AD accounts.** With the vendor **Active Directory**, Keycloak reads AD's account flags (its "MSAD account
+controls" mapper) and refuses disabled accounts at sign-in (not run by the author: OpenLDAP has no such flag). An
+open Alice session still runs until it ends; use **Disable** in Alice.
+
+**What was tested.** Alice's own provider, sign-in and confirmation code ran against the real Keycloak 26.4.2 over
+HTTPS with a private certificate authority. Saving without the authority failed with the cause `tls`; with it, the
+provider was saved. Sign-ins returned the roles of the mapped groups, a person in no mapped group was refused with
+`no_access`, a second sign-in with an open Keycloak session was silent, and **Confirm at your identity provider**
+(`prompt=login`, `max_age=0`) showed Keycloak's password page again and succeeded. Keycloak sent `auth_time`.
+
 ### Roles, "SSO users may be Admin" and SSO users
 
 A person gets the highest role any of their groups is mapped to. Nobody gets a role by default: a person in no mapped
@@ -615,8 +780,9 @@ at their next single sign-on they get the role their groups map to. Switching th
 gives no role back.
 
 An **SSO user** is created at their first single sign-on ("User created by single sign-on"). Their user name comes
-from the provider (`preferred_username`, `upn` or e-mail, letters folded to lower case; a taken name gets `-2`,
-`-3`, …); without one it is `sso-` and 12 characters. Alice recognises them by the provider and the provider's subject
+from the provider (the first of `preferred_username`, `upn` and e-mail that leaves something after cleaning:
+A–Z folded to lower case, only `a`–`z`, `0`–`9`, `.`, `_`, `-` and `@` kept, at most 64 characters; a taken name gets
+`-2`, `-3`, …); without one it is `sso-` and 12 characters. Alice recognises them by the provider and the provider's subject
 identifier, never by e-mail, and never joins them to a local account: a first single sign-on whose e-mail belongs to
 a local user is refused (`ALC-SSO-0008`), and so is a later one whose e-mail changed to a local user's.
 

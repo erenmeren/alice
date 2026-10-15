@@ -325,7 +325,7 @@ below.
   `reason` names it: `no_access` (no group of the person is mapped, `ALC-SSO-0006`),
   `groups_overage` (Entra ID sent no groups, `ALC-SSO-0007`), `email_in_use` (a local account has the e-mail,
   `ALC-SSO-0008`), `idp_unreachable` (`ALC-SSO-0009`), `login_invalid` (the token failed a check: signature, issuer,
-  audience, times, nonce, `ALC-SSO-0010`), `login_expired` (started more than 10 minutes ago, in another browser, or
+  audience, times, nonce, or a groups claim that is not a list of names, `ALC-SSO-0010`), `login_expired` (started more than 10 minutes ago, in another browser, or
   used twice, `ALC-SSO-0011`), `user_disabled` (`ALC-SSO-0012`), `provider_disabled` (`ALC-SSO-0013`),
   `stepup_other_user` (`ALC-SSO-0014`), `idp_error` (the provider answered with an error, often a redirect address
   that is not registered, `ALC-SSO-0015`). Check the group values against what the provider sends (Entra ID: object
@@ -336,6 +336,36 @@ below.
   `tls` (enter the provider's certificate authority), `status`, `document`, `issuer_mismatch` (the issuer address must
   be exactly the one in the provider's discovery document, including a trailing `/v2.0` or `/adfs`), `not_https`
   (also for an endpoint whose address carries a query) or `jwks`.
+- **Active Directory: "Your account has no access to Alice" (`ALC-SSO-0006`, reason `no_access`) for everyone.**
+  The ID token carries no groups, or other values than the mappings. Alice reads only the claim named in **Groups
+  claim**, only from the ID token. A missing claim counts as "no groups". Decode one ID token and check:
+  - No group claim at all: AD FS has no rule that sends groups into the ID token; Keycloak has no **Group
+    Membership** mapper, or **Add to ID token** is off; Entra ID has no groups claim in **Token configuration**.
+  - A different claim name: AD FS often uses `group`, not `groups`. Enter the name from the token as **Groups claim**.
+  - Different values: upper and lower case count. `CORP\alice-operators` (AD FS, Token-Groups qualified by domain
+    name), `alice-operators` (unqualified names, or Keycloak with **Full group path** off), `/alice-operators`
+    (Keycloak with full path on), `S-1-5-21-…` (Token-Groups as SIDs) and an object ID (Entra ID) are all different
+    values. Map exactly what the token carries. See [admin-guide.md](admin-guide.md#active-directory).
+- **Active Directory: only people in nested groups are refused (`no_access`).** Keycloak's **Group Membership**
+  mapper sends only direct groups: a member of a group nested in the mapped group does not carry the mapped group.
+  Put the people directly into the mapped group, map the nested group too, or use the AD-only strategy described in
+  [admin-guide.md](admin-guide.md#active-directory-through-keycloak). AD FS Token-Groups and Entra ID include nested
+  groups (not run by the author).
+- **Entra ID: "Your identity provider did not send your groups" (`ALC-SSO-0007`, reason `groups_overage`).** The
+  person is in more than 200 groups, so Entra ID left the groups out. Choose **Groups assigned to the application**
+  (see [admin-guide.md](admin-guide.md#microsoft-entra-id)).
+- **"The sign-in answer of the identity provider was not accepted" (`ALC-SSO-0010`) for every confirmation of an
+  AD FS user.** Alice needs `auth_time` in the ID token, at most 5 minutes old. Check that the AD FS ID token
+  carries it and that the clocks of Alice and AD FS agree within 60 seconds.
+- **An SSO user name looks odd** (`corpada`, `idem`, `sso-…`). Alice keeps only `a`–`z`, `0`–`9`, `.`, `_`, `-` and `@`
+  from `preferred_username`, `upn` or e-mail; a backslash and non-ASCII letters are dropped. The user name is only a
+  label; the display name keeps every character. Send a `preferred_username` or `upn` in ASCII if you need readable
+  names.
+- **A person disabled in AD can still work in Alice.** An open session keeps working until it ends (at most 30
+  minutes idle, 12 hours in all), and a session the person still has at the identity provider may sign them in
+  again silently. Choose **Disable** on **People &
+  access** to stop it at once. With Keycloak in front of AD, also set the LDAP **Cache policy** to `NO_CACHE` or a
+  short lifespan, so that group removals reach the next token.
 - **An SSO user still has access after leaving a group.** The role is read again at every single sign-on and
   confirmation; an open session keeps working until it ends (at most 12 hours). Choose **Disable** on **People & access** to
   stop it at once.
