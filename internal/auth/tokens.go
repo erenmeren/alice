@@ -54,12 +54,13 @@ func tokenHash(secret string) []byte {
 // CreateToken issues a token for the caller. The secret is returned once. A single sign-on user
 // gets none (ErrSSOUser): the identity provider owns that identity (SEC-015), and a token would
 // outlive the user's de-provisioning there, which Alice learns of only at the next sign-in (I-2).
+// A directory user gets none either, for the same reason (ErrDirectoryUser).
 func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewToken) (string, Token, error) {
 	if p.Kind != rbac.UserSession {
 		return "", Token{}, ErrUnauthenticated
 	}
-	if p.AuthSource == AuthOIDC {
-		return "", Token{}, ErrSSOUser
+	if p.AuthSource != "" && p.AuthSource != AuthLocal {
+		return "", Token{}, sourceRefusal(p.AuthSource)
 	}
 	var v validate.Errors
 	switch {
@@ -99,7 +100,7 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 			return fmt.Errorf("read token owner: %w", err)
 		}
 		if source != AuthLocal {
-			return ErrSSOUser
+			return sourceRefusal(source)
 		}
 		// The caller's session is checked again under the row lock: a sign-out-everywhere or
 		// password reset that held the row (FOR UPDATE) and committed while this request waited

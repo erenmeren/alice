@@ -19,13 +19,13 @@ import (
 const userColumns = `u.id, u.username::text, u.display_name, u.email::text, u.role, u.locale,
 u.disabled_at IS NOT NULL,
 EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL),
-u.last_login_at, u.created_at, u.auth_source, u.oidc_provider_id`
+u.last_login_at, u.created_at, u.auth_source, u.oidc_provider_id, u.ldap_directory_id`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
 	var role string
 	err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Email, &role, &u.Locale,
-		&u.Disabled, &u.MFAEnrolled, &u.LastLoginAt, &u.CreatedAt, &u.AuthSource, &u.SSOProviderID)
+		&u.Disabled, &u.MFAEnrolled, &u.LastLoginAt, &u.CreatedAt, &u.AuthSource, &u.SSOProviderID, &u.LDAPDirectoryID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}

@@ -111,11 +111,12 @@ func (s *Service) AuthenticatePassive(ctx context.Context, sessionToken string) 
 		expires, idle     time.Time
 		stepUp            *time.Time
 		revoked, disabled bool
+		directory         *uuid.UUID
 	)
 	err := s.pool.QueryRow(ctx, `SELECT s.kind, s.expires_at, s.idle_expires_at, s.stepup_until, s.revoked_at IS NOT NULL,
-u.id, u.username::text, u.display_name, u.role, u.locale, u.disabled_at IS NOT NULL, u.auth_source
+u.id, u.username::text, u.display_name, u.role, u.locale, u.disabled_at IS NOT NULL, u.auth_source, u.ldap_directory_id
 FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1`, h).Scan(
-		&kind, &expires, &idle, &stepUp, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled, &p.AuthSource)
+		&kind, &expires, &idle, &stepUp, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled, &p.AuthSource, &directory)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Principal{}, ErrUnauthenticated
 	}
@@ -126,6 +127,9 @@ FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1`, h).Scan(
 		return Principal{}, ErrUnauthenticated
 	}
 	p.Role = rbac.Role(role)
+	if directory != nil {
+		p.LDAPDirectoryID = *directory
+	}
 	p.SessionHash = h
 	if stepUp != nil {
 		p.StepUpUntil = stepUp.UTC()

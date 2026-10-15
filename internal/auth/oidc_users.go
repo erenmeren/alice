@@ -35,6 +35,10 @@ var (
 	// ErrSSOUser: a manual role change, password or MFA operation on an SSO user, whose role,
 	// password and second factor belong to the identity provider (ALC-USR-0003).
 	ErrSSOUser = errors.New("auth: the identity provider manages this SSO user")
+	// ErrDirectoryUser: a password change or reset, a manual role change, an API token or a TOTP step-up of a
+	// directory (LDAP) user. The directory owns the password and the groups that give the role; the user's TOTP is
+	// Alice's (MFA reset and recovery codes stay allowed) and a step-up repeats the directory bind (StepUpLDAP).
+	ErrDirectoryUser = errors.New("auth: this change is not possible for a directory user")
 	// ErrOIDCIdentityInvalid: the caller passed an identity or role Alice cannot store (no provider or
 	// subject, a subject over 255 or an issuer over 500 characters, an unknown role).
 	ErrOIDCIdentityInvalid = errors.New("auth: the SSO identity or role is not valid")
@@ -239,7 +243,8 @@ func checkRole(role rbac.Role) error {
 	return nil
 }
 
-// capRole lowers Administrator to Operator while "SSO users may be Admin" is off. It reads the
+// capRole lowers Administrator to Operator while "SSO users may be Admin" is off; the switch covers SSO and directory
+// users alike (SignInOIDC, StepUpOIDC, SignInLDAP and StepUpLDAP call it). It reads the
 // switch FOR SHARE in the caller's transaction, so a switch-off (which locks the row FOR UPDATE and
 // demotes the SSO Administrators in its own transaction) and this sign-in are ordered: a role the
 // caller resolved before the switch went off never commits as Administrator after it (O-13).
@@ -496,26 +501,39 @@ func (s *Service) RefuseOIDC(ctx context.Context, id OIDCIdentity, reason string
 		events := []audit.Event{{Actor: actor, Action: "auth.oidc.denied", ObjectType: "user", ObjectID: objectID,
 			Result: audit.Failure, Details: map[string]string{"provider_id": id.ProviderID.String(), "reason": reason}}}
 		if found && slices.Contains(sessionEndingReasons, reason) {
-			now := s.clock.Now().UTC()
-			tag, err := tx.Exec(ctx, "UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", u.id, now)
+			ended, err := s.endAccess(ctx, tx, actor, u.id, reason)
 			if err != nil {
-				return fmt.Errorf("end sessions: %w", err)
-			}
-			details := map[string]string{"reason": reason, "ended_count": strconv.FormatInt(tag.RowsAffected(), 10)}
-			// Access ended at the identity provider ends every credential Alice issued on it: the
-			// API tokens too, each audited as token.revoked with the refusal's reason.
-			if err := s.revokeUserTokens(ctx, tx, actor, u.id, now, reason, details); err != nil {
 				return err
 			}
-			events = append(events, audit.Event{Actor: actor, Action: "user.sessions_ended", ObjectType: "user", ObjectID: objectID,
-				Result: audit.Success, Details: details})
+			events = append(events, ended)
 		}
 		return s.appendAll(ctx, tx, events)
 	})
 }
 
-// DemoteSSOAdmins makes every SSO Administrator an Auditor and ends their sessions, inside the
-// caller's transaction (switching "SSO users may be Admin" off, O-13, R42 row 24). Each
+// endAccess ends every session of a user whose access ended at the identity provider or the directory and revokes
+// every API token of the user, inside the caller's transaction, which holds the user's row lock. Each token is
+// audited as token.revoked with reason (appended here); the returned user.sessions_ended event (reason, ended_count,
+// revoked_tokens_count) is the caller's to append last (O-08, R42 row 21).
+func (s *Service) endAccess(ctx context.Context, tx pgx.Tx, actor audit.Actor, userID uuid.UUID, reason string) (audit.Event, error) {
+	now := s.clock.Now().UTC()
+	tag, err := tx.Exec(ctx, "UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL", userID, now)
+	if err != nil {
+		return audit.Event{}, fmt.Errorf("end sessions: %w", err)
+	}
+	details := map[string]string{"reason": reason, "ended_count": strconv.FormatInt(tag.RowsAffected(), 10)}
+	// Access ended at the identity provider ends every credential Alice issued on it: the
+	// API tokens too, each audited as token.revoked with the refusal's reason.
+	if err := s.revokeUserTokens(ctx, tx, actor, userID, now, reason, details); err != nil {
+		return audit.Event{}, err
+	}
+	return audit.Event{Actor: actor, Action: "user.sessions_ended", ObjectType: "user", ObjectID: userID.String(),
+		Result: audit.Success, Details: details}, nil
+}
+
+// DemoteSSOAdmins makes every SSO and directory Administrator an Auditor and ends their sessions, inside the
+// caller's transaction (switching "SSO users may be Admin" off, O-13, R42 row 24; the switch covers directory users,
+// plan ruling 8). Each
 // demotion is audited as user.demoted by a. API tokens stay: AuthenticateToken reads the
 // owner's current role on every request and refuses a scope that role no longer allows, so a
 // demoted user's tokens act as an Auditor's at once.
@@ -523,7 +541,7 @@ func (s *Service) DemoteSSOAdmins(ctx context.Context, tx pgx.Tx, a audit.Actor)
 	now := s.clock.Now().UTC()
 	// The rows are locked in ID order, so two demotions cannot deadlock each other.
 	rows, err := tx.Query(ctx, `UPDATE users SET role = 'auditor', updated_at = $1 WHERE id IN (
-SELECT id FROM users WHERE auth_source = 'oidc' AND role = 'admin' ORDER BY id FOR UPDATE) RETURNING id`, now)
+SELECT id FROM users WHERE auth_source IN ('oidc', 'ldap') AND role = 'admin' ORDER BY id FOR UPDATE) RETURNING id`, now)
 	if err != nil {
 		return 0, 0, fmt.Errorf("demote SSO administrators: %w", err)
 	}

@@ -38,7 +38,15 @@ type account struct {
 	disabled    bool
 	enrolled    bool
 	lockedUntil *time.Time
-	sso         bool // an SSO user: no password, no TOTP, never counted (C10)
+	// source is users.auth_source. An SSO user (AuthOIDC) has no password and no TOTP and is never counted (C10); a
+	// directory user (AuthLDAP) has no password but Alice's TOTP, counted like a local user's.
+	source string
+}
+
+// passwordRefusal is the refusal of a password operation (change, TOTP step-up) on an account without an Alice
+// password: ErrSSOUser for an SSO user, ErrDirectoryUser for a directory user, nil for a local user.
+func (a account) passwordRefusal() error {
+	return sourceRefusal(a.source)
 }
 
 // blocked reports whether the account is in a progressive delay or locked out at now.
@@ -49,10 +57,10 @@ func (a account) blocked(now time.Time) bool {
 // Account lock queries; both select the same columns for lockAccount.
 const (
 	lockAccountByNameSQL = `SELECT u.id, u.username::text, u.password_hash, u.disabled_at IS NOT NULL, u.locked_until,
-EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.auth_source = 'oidc'
+EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.auth_source
 FROM users u WHERE u.username = $1 AND u.auth_source = 'local' FOR UPDATE OF u`
 	lockAccountByIDSQL = `SELECT u.id, u.username::text, u.password_hash, u.disabled_at IS NOT NULL, u.locked_until,
-EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.auth_source = 'oidc'
+EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.auth_source
 FROM users u WHERE u.id = $1 FOR UPDATE OF u`
 )
 
@@ -65,7 +73,7 @@ FROM users u WHERE u.id = $1 FOR UPDATE OF u`
 func lockAccount(ctx context.Context, tx pgx.Tx, query string, arg any) (account, bool, error) {
 	var a account
 	err := tx.QueryRow(ctx, query, arg).Scan(
-		&a.id, &a.name, &a.hash, &a.disabled, &a.lockedUntil, &a.enrolled, &a.sso)
+		&a.id, &a.name, &a.hash, &a.disabled, &a.lockedUntil, &a.enrolled, &a.source)
 	if err == nil || errors.Is(err, pgx.ErrNoRows) {
 		if rerr := endLockWaitLimit(ctx, tx); rerr != nil {
 			return account{}, false, rerr

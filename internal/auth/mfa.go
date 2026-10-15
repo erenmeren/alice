@@ -287,9 +287,10 @@ func (s *Service) StepUp(ctx context.Context, p Principal, code string, m Meta) 
 			if err != nil {
 				return err
 			}
-			if a.sso {
-				// An SSO user steps up at the identity provider (StepUpOIDC); nothing is counted.
-				return ErrSSOUser
+			if err := a.passwordRefusal(); err != nil {
+				// An SSO user steps up at the identity provider (StepUpOIDC), a directory user with the directory
+				// password and, when the directory asks for it, the TOTP (StepUpLDAP); nothing is counted.
+				return err
 			}
 			if reason := blockReason(a, s.clock.Now()); reason != "" {
 				failed = true

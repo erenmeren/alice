@@ -139,14 +139,17 @@ type User struct {
 	MFAEnrolled   bool
 	LastLoginAt   *time.Time
 	CreatedAt     time.Time
-	AuthSource    string     // AuthLocal | AuthOIDC
+	AuthSource    string     // AuthLocal | AuthOIDC | AuthLDAP
 	SSOProviderID *uuid.UUID // the identity provider of an SSO user, nil for a local user
+	// LDAPDirectoryID is the directory of a directory user, nil for every other user.
+	LDAPDirectoryID *uuid.UUID
 }
 
 // Authentication sources of a user (users.auth_source).
 const (
 	AuthLocal = "local"
 	AuthOIDC  = "oidc"
+	AuthLDAP  = "ldap" // a directory user (LDAP or Active Directory sign-in)
 )
 
 // Principal is the authenticated caller of one request.
@@ -161,7 +164,10 @@ type Principal struct {
 	StepUpUntil time.Time
 	TokenID     uuid.UUID
 	Scope       rbac.Scope
-	AuthSource  string // AuthLocal | AuthOIDC
+	AuthSource  string // AuthLocal | AuthOIDC | AuthLDAP
+	// LDAPDirectoryID is the directory of a directory user's session (uuid.Nil for every other principal); the
+	// API runs a directory step-up against it.
+	LDAPDirectoryID uuid.UUID
 }
 
 // Subject converts the principal into the input of rbac.Decide.

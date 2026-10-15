@@ -184,9 +184,9 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 			return err
 		}
 		roleChanged := in.Role != nil && *in.Role != cur.Role
-		if roleChanged && cur.AuthSource == AuthOIDC {
-			// An SSO user's role follows the group mappings at every sign-in (SEC-014).
-			return ErrSSOUser
+		if roleChanged && cur.AuthSource != AuthLocal {
+			// An SSO or directory user's role follows the group mappings at every sign-in (SEC-014).
+			return sourceRefusal(cur.AuthSource)
 		}
 		disable := in.Disabled != nil && *in.Disabled && !cur.Disabled
 		if (roleChanged || disable) && slices.Contains(admins, id) && len(admins) <= 1 {
@@ -255,12 +255,35 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 	return getUser(ctx, s.pool, id)
 }
 
-// refuseSSOUser returns ErrSSOUser for an SSO user: their password and MFA live at the
-// identity provider. The caller holds the user's row lock (adminChange).
-func refuseSSOUser(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+// sourceRefusal is the refusal of a change that only a local user can have (a password, a manual role, an API
+// token, a TOTP step-up): nil for a local user, ErrDirectoryUser for a directory user and ErrSSOUser for an SSO user
+// (and for any other source, which no row can hold).
+func sourceRefusal(source string) error {
+	switch source {
+	case AuthLocal:
+		return nil
+	case AuthLDAP:
+		return ErrDirectoryUser
+	default:
+		return ErrSSOUser
+	}
+}
+
+// authSourceOf reads a user's users.auth_source. The caller holds the user's row lock (adminChange).
+func authSourceOf(ctx context.Context, tx pgx.Tx, id uuid.UUID) (string, error) {
 	var source string
 	if err := tx.QueryRow(ctx, "SELECT auth_source FROM users WHERE id = $1", id).Scan(&source); err != nil {
-		return fmt.Errorf("read user: %w", err)
+		return "", fmt.Errorf("read user: %w", err)
+	}
+	return source, nil
+}
+
+// refuseSSOUser returns ErrSSOUser for an SSO user: their MFA lives at the identity provider. A directory user's
+// TOTP is Alice's and passes. The caller holds the user's row lock (adminChange).
+func refuseSSOUser(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	source, err := authSourceOf(ctx, tx, id)
+	if err != nil {
+		return err
 	}
 	if source == AuthOIDC {
 		return ErrSSOUser
@@ -268,13 +291,30 @@ func refuseSSOUser(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 	return nil
 }
 
-// auditSSORefusal audits an ErrSSOUser refusal like the action's other refusals (reason
-// sso_user) and returns err unchanged.
+// refuseNonLocalUser returns sourceRefusal for a user without an Alice password: ErrSSOUser for an SSO user,
+// ErrDirectoryUser for a directory user. The caller holds the user's row lock (adminChange).
+func refuseNonLocalUser(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
+	source, err := authSourceOf(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	return sourceRefusal(source)
+}
+
+// auditSSORefusal audits an ErrSSOUser or ErrDirectoryUser refusal like the action's other refusals (reason sso_user
+// or directory_user) and returns err unchanged.
 func (s *Service) auditSSORefusal(ctx context.Context, p Principal, m Meta, err error, action string, id uuid.UUID) error {
-	if errors.Is(err, ErrSSOUser) {
-		if aerr := s.adminFailure(ctx, p, m, action, id.String(), "sso_user"); aerr != nil {
-			return aerr
-		}
+	reason := ""
+	switch {
+	case errors.Is(err, ErrSSOUser):
+		reason = "sso_user"
+	case errors.Is(err, ErrDirectoryUser):
+		reason = "directory_user"
+	default:
+		return err
+	}
+	if aerr := s.adminFailure(ctx, p, m, action, id.String(), reason); aerr != nil {
+		return aerr
 	}
 	return err
 }
@@ -316,7 +356,7 @@ func resetMFA(ctx context.Context, tx pgx.Tx, id uuid.UUID) error {
 }
 
 // ResetMFA removes a user's TOTP and recovery codes; they enroll again at next login.
-// An SSO user has no MFA here: ErrSSOUser.
+// An SSO user has no MFA here: ErrSSOUser. A directory user's TOTP is Alice's and is reset.
 func (s *Service) ResetMFA(ctx context.Context, p Principal, m Meta, id uuid.UUID) error {
 	err := s.adminChange(ctx, p.Actor(m), id, "user.mfa_reset", map[string]string{"via": "ui"}, func(tx pgx.Tx) error { return resetMFA(ctx, tx, id) })
 	return s.auditSSORefusal(ctx, p, m, err, "user.mfa_reset", id)
@@ -366,7 +406,7 @@ func (s *Service) UnlockByUsername(ctx context.Context, username string) error {
 // user's sessions and revokes every API token of the user, all in one transaction (AUD-12, R39):
 // it is the administrator's answer to a suspected takeover, and a token is another way in. A
 // user changing their own password (ChangePassword) keeps their tokens. An SSO user has no
-// password here: ErrSSOUser.
+// password here (ErrSSOUser), nor has a directory user (ErrDirectoryUser).
 func (s *Service) ResetPassword(ctx context.Context, p Principal, m Meta, id uuid.UUID, password string) error {
 	if err := CheckPasswordPolicy(password); err != nil {
 		return err
@@ -379,7 +419,7 @@ func (s *Service) ResetPassword(ctx context.Context, p Principal, m Meta, id uui
 	actor := p.Actor(m)
 	details := map[string]string{}
 	err = s.adminChange(ctx, actor, id, "user.password_reset", details, func(tx pgx.Tx) error {
-		if err := refuseSSOUser(ctx, tx, id); err != nil {
+		if err := refuseNonLocalUser(ctx, tx, id); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2, password_changed_at = $3, updated_at = $3,

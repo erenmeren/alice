@@ -41,8 +41,9 @@ func (s *Service) ChangePassword(ctx context.Context, p Principal, current, next
 			if err != nil {
 				return err
 			}
-			if a.sso {
-				return ErrSSOUser
+			if err := a.passwordRefusal(); err != nil {
+				// No Alice password: an SSO user's is the identity provider's, a directory user's the directory's.
+				return err
 			}
 			if a.hash == nil {
 				return ErrUnauthenticated
