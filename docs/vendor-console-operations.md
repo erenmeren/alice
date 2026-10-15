@@ -867,6 +867,24 @@ The service cannot sign, so no license can be forged through it. Then:
 - [ ] Rebuild the server from a clean image; new TLS certificate.
 - [ ] `audit-verify --head` with the newest head in the paper log.
 - [ ] Check the requests and customers added in the period with `audit show --since <date>`.
+- [ ] Review **all** owner notifications since the break-in, not only the unread ones: the service
+      can act as any web user, the owner included, and mark notifications read so the bell stays
+      empty. As the owner login in `psql`:
+
+          SELECT id, created_at, kind, severity, title, body FROM notifications
+           WHERE audience = 'owner' AND created_at >= '<break-in start, UTC>' ORDER BY id;
+
+- [ ] Look at when the owner's notifications were marked read in that window; reads the owner did
+      not make were made by the intruder (the owner login can read `notification_reads`):
+
+          SELECT r.read_at, n.id, n.kind, n.title FROM notification_reads r
+            JOIN notifications n ON n.id = r.notification_id
+           WHERE r.user_id = (SELECT id FROM web_users WHERE name = '<owner web user>')
+             AND r.read_at >= '<break-in start, UTC>' ORDER BY r.read_at;
+
+      Run it for every owner web user. The intruder also saw what those notifications contain
+      (customers, signer logins, issue times, the audit head); it could not create, change or delete
+      a notification, read the audit table or write a license.
 
 ### Signer machine compromise
 
@@ -904,6 +922,21 @@ The service cannot sign, so no license can be forged through it. Then:
 - [ ] Put the new password where the login is used (`notify.env`, `VENDOR_WEB_DATABASE_URL`, the
       person's own environment).
 - [ ] Review what the login could do (section 1) and check it with `audit show --actor <login>`.
+- [ ] The notifier login leaked: its holder could create look-alike notifications of other kinds
+      (the page does not show the kind, so a title `License issued: ...` looks real), take the next
+      `summary:<date>` or `unusual:<date>` key first so the real weekly summary or alert was
+      silently skipped (`last_summary_at` still moved on), read every notification body and flood
+      the list. It cannot forge `license.issued` rows, read audit details, or change or delete
+      notifications. As the owner login, list what the notifier wrote in the period and check the
+      kind of anything that looks like an issuance notice:
+
+          SELECT id, created_at, kind, severity, title, dedupe_key FROM notifications
+           WHERE kind <> 'license.issued' AND created_at >= '<leak start, UTC>' ORDER BY id;
+
+      Only rows of kind `license.issued` are issuance notices; compare them with the `licenses`
+      table and `audit show --action license.` (section 7). A missing weekly summary: run
+      `vendor-console audit-head` and copy the head into the paper log by hand. The issuance
+      notices, the audit and the paper log remain trustworthy.
 - [ ] The migration login leaked: change it in the Neon console, then run `audit-verify --head` and
       `verify-licenses`: that login can change any table.
 - [ ] The Neon account leaked: secure the account first (password, second factor), then rotate

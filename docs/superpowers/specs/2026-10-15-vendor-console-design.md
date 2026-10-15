@@ -163,7 +163,7 @@ Roles in Postgres (one login per person, no shared password):
 | `sales` | read customers and licenses; insert customers and requests; update only their own open requests |
 | `signer` | everything `sales` can, plus insert into `licenses`, update request status |
 | `owner` | everything; manage logins and web users; read (not change) the reminder records, `notifications` and `notification_reads` (writing them is the notifier's and the issuance trigger's). The owner is also a web user with the role `owner` (`web_users.role`; `web-user add NAME --owner`), which sees the owner notifications in the web page; the role is set at creation and cannot be changed through the web or a command |
-| `vendor_web` | the sales web service login: everything `sales` can (acting as `web:<name>`), plus its own web tables (sessions, adding passkeys and updating their sign counters, consuming enrollment codes) and `web_audit_login`; EXECUTE on four notification functions only (`web_notifications`, `web_unread_count`, `web_mark_read`, `web_mark_all_read`), which show and mark only the notifications of the person named by the transaction's actor (they must be called inside the actor transaction) and never another person's; no direct access to `notifications` or `notification_reads`, no INSERT of notifications; no signing, no audit read |
+| `vendor_web` | the sales web service login: everything `sales` can (acting as `web:<name>`), plus its own web tables (sessions, adding passkeys and updating their sign counters, consuming enrollment codes) and `web_audit_login`; EXECUTE on four notification functions only (`web_notifications`, `web_unread_count`, `web_mark_read`, `web_mark_all_read`), which show and mark only the notifications of the person named by the transaction's actor (they must be called inside the actor transaction); the service sets that actor itself, so this guards against bugs in its Go code, not against a compromised service (section 9); no direct access to `notifications` or `notification_reads`, no INSERT of notifications; no signing, no audit read |
 | `vendor_notifier` | the `notify run` login (Phase 4): read only the columns it needs: licenses (not the file), customers (`id`, `name`), requests (`id`, `customer_id`, `status`, `requested_by`, `requested_at`), web users (`name`, `disabled_at`, `role`), settings, audit (`at`, `actor`, `action`, `subject`; no details); insert notifications (content columns only; row-level security refuses the kind `license.issued` and `issued*` dedupe keys, which only the issuance trigger writes); insert reminder records; record the time of the last weekly summary and prune old read notifications through one function each; no updates or deletes, no signing |
 
 Row-level security enforces this in the database, so a bug in a client cannot widen it.
@@ -289,6 +289,22 @@ No change to the license format, the verifier or the license tests is planned.
   online signer machine). See the operations runbook, section 2.
 - A signer can sign any license. Limits (targets, term) are advice in the app, not enforced by the
   key. The owner's notification and the audit are the control. This is accepted.
+- Compromised web service (the `vendor-web` server or its database login): it sets
+  `vendor.actor` and passes the user id itself, so it can act as any enabled web user. It can read
+  and mark as read anyone's notifications, the owner's included (so the owner's bell can stay
+  empty), and through them it sees data derived from the audit log (signer logins, issue times, the
+  audit head in the weekly summary). It still cannot create, change or delete notifications, read
+  the audit table, sign or write licenses. The database's actor check on the notification functions
+  only protects against bugs in the Go code. After a break-in the owner reviews all owner
+  notifications since then, read or not, and the owner's `notification_reads.read_at` in that window
+  (runbook section 9).
+- Stolen notifier login: it can create look-alike notifications of other kinds (the page does not
+  show the kind, so a title `License issued: ...` looks real), take the next `summary:<date>` or
+  `unusual:<date>` dedupe key first so the real summary or alert is silently skipped (the
+  `last_summary_at` mark is still written), read every notification body and flood the list. It
+  cannot forge `license.issued` rows (row-level security), read audit details, or update or delete
+  notifications. The issuance notices (kind `license.issued`), the audit and the paper log remain
+  trustworthy (runbook section 9, "Database credential leak").
 - Sales login: WebAuthn (the owner's existing keys work), short sessions, rate limits.
 - Customer data in Neon is personal data: EU region, access only through the roles above.
 

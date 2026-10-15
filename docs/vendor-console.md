@@ -311,6 +311,8 @@ as that person. After a suspected break-in of the server that runs `vendor-web`:
    later; see above).
 3. Rotate the service login's password (in `psql` as the migration login: `\password vendor_web_svc`)
    and update `VENDOR_WEB_DATABASE_URL`.
+4. Review the owner notifications of the period, read or not: the intruder could mark them read so
+   the bell showed nothing (runbook, section 9, "Break-in of the web service", has the queries).
 
 ## Notifications
 
@@ -364,8 +366,17 @@ notification uses the audience `sales` today.
 Read state is kept per person: marking a notification read does not mark it for anybody else, and
 two owners each have their own unread count. The web service reads and marks notifications only
 through four database functions (`web_notifications`, `web_unread_count`, `web_mark_read`,
-`web_mark_all_read`); it cannot read the tables directly, write a notification or mark one for
-another person, and the functions show nothing unless the transaction acts for that same person.
+`web_mark_all_read`); it cannot read the tables directly or write a notification, and the
+functions show nothing unless the transaction acts for that same person.
+
+That check protects against bugs in the web service's Go code, not against a break-in: the service
+itself sets the acting person (`vendor.actor`) and passes the user id, so whoever controls the
+server that runs `vendor-web` (or holds its database login) can act as any enabled web user. They
+can read anyone's notifications, the owner's included, and mark them read, so the owner's bell can
+stay empty while new notifications arrive; and through the owner notifications they see data that
+comes from the audit log (signer logins, issue times, the audit head in the weekly summary). They
+still cannot create, change or delete a notification, read the audit table or write a license. See
+"After a break-in of the web service" below for what to check.
 
 ### The bell and the page
 
@@ -411,6 +422,13 @@ disabled time of web users, the settings, and the time, actor, action and subjec
 key) and reminder records, stores the time of the last summary and prunes through one database
 function. It cannot change or delete a notification otherwise, sign or change a license. `notify
 run` refuses a login that is not a member of it. Do not use the owner or migration login.
+
+If the notifier login is stolen, its holder can add notifications that look real (the page does not
+show the kind, so a title such as `License issued: ...` looks like an issuance notice), take the next
+weekly summary's or unusual-activity alert's key first so the real one is silently skipped, read every
+notification body and flood the list. They cannot write an issuance notification, read audit
+details, or change or delete notifications. The issuance notices, the audit log and the paper log
+stay trustworthy; see the runbook, section 9, "Database credential leak".
 
     vendor-console notify run
     vendor-console notify run --dry-run
