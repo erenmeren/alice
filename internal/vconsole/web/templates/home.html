@@ -1,6 +1,12 @@
 {{define "title"}}Home{{end}}
 {{define "content"}}
 {{template "nav" .}}
+{{with .Data.Unread}}
+<h1>Unread notifications</h1>
+<ul class="unread-list">
+{{range .}}<li><span class="badge sev-{{.Level}}">{{.Level}}</span> <a href="/notifications">{{.Title}}</a></li>
+{{end}}</ul>
+{{end}}
 <h1>Open requests</h1>
 {{with .Data.Requests}}
 <table>

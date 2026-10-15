@@ -632,7 +632,7 @@ func (c *cli) webUser(sub string, args []string) int {
 	var code string
 	switch sub {
 	case "add":
-		id, err := webuser.AddUser(ctx, tx, name)
+		id, err := webuser.AddUser(ctx, tx, name, webuser.RoleSales)
 		if err != nil {
 			return c.webUserErr(err)
 		}

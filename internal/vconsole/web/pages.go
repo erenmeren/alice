@@ -26,7 +26,9 @@ const (
 // database is asked, so odd input never reaches a query, a header or a file name.
 var licenseIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 
-// pages registers the signed-in pages: home, customers, requests, licenses and downloads. Every
+// pages registers the signed-in pages: home, customers, requests, licenses, downloads and
+// notifications. They are the same for both roles (the role only changes which notifications the
+// database shows). Every
 // handler goes through authed; the cross-origin check for POSTs wraps the whole mux.
 func (s *Server) pages(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{$}", s.authed(s.home))
@@ -38,6 +40,9 @@ func (s *Server) pages(mux *http.ServeMux) {
 	mux.HandleFunc("POST /requests/{id}/cancel", s.authed(s.requestCancel))
 	mux.HandleFunc("GET /licenses", s.authed(s.licensesPage))
 	mux.HandleFunc("GET /licenses/{id}/download", s.authed(s.licenseDownload))
+	mux.HandleFunc("GET /notifications", s.authed(s.notificationsPage))
+	mux.HandleFunc("POST /notifications/{id}/read", s.authed(s.notificationRead))
+	mux.HandleFunc("POST /notifications/read-all", s.authed(s.notificationsReadAll))
 }
 
 // serverError answers 500 with a generic page; the cause goes to the log only (never a request body
@@ -71,6 +76,7 @@ type homeData struct {
 	Requests []store.Request
 	Licenses []store.LicenseRow
 	Days     int
+	Unread   []notification // the newest few unread notifications
 }
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request, u webuser.User) {
@@ -79,14 +85,17 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request, u webuser.User) {
 		if d.Requests, err = store.ListRequests(r.Context(), tx, "open"); err != nil {
 			return err
 		}
-		d.Licenses, err = store.ListLicenses(r.Context(), tx, s.cfg.Clock.Now(), homeDays, false)
+		if d.Licenses, err = store.ListLicenses(r.Context(), tx, s.cfg.Clock.Now(), homeDays, false); err != nil {
+			return err
+		}
+		d.Unread, err = listNotifications(r.Context(), tx, u.ID, homeUnreadLimit, true)
 		return err
 	})
 	if err != nil {
 		s.serverError(w, "home", err)
 		return
 	}
-	s.render(w, http.StatusOK, "home", pageData{User: u, Data: d})
+	s.renderUser(w, r, http.StatusOK, "home", u, d)
 }
 
 type customerForm struct{ Name, Contact, Notes string }
@@ -107,7 +116,7 @@ func (s *Server) renderCustomers(w http.ResponseWriter, r *http.Request, u webus
 		s.serverError(w, "list customers", err)
 		return
 	}
-	s.render(w, status, "customers", pageData{User: u, Data: d})
+	s.renderUser(w, r, status, "customers", u, d)
 }
 
 func (s *Server) customersPage(w http.ResponseWriter, r *http.Request, u webuser.User) {
@@ -170,7 +179,7 @@ func (s *Server) renderRequestFormData(w http.ResponseWriter, r *http.Request, u
 		s.serverError(w, "list customers", err)
 		return
 	}
-	s.render(w, status, "request_new", pageData{User: u, Data: d})
+	s.renderUser(w, r, status, "request_new", u, d)
 }
 
 func (s *Server) requestNewPage(w http.ResponseWriter, r *http.Request, u webuser.User) {
@@ -299,9 +308,9 @@ func (s *Server) requestPage(w http.ResponseWriter, r *http.Request, u webuser.U
 		s.serverError(w, "get request", err)
 		return
 	}
-	s.render(w, http.StatusOK, "request", pageData{User: u, Data: requestData{
+	s.renderUser(w, r, http.StatusOK, "request", u, requestData{
 		Request: req, CanCancel: req.Status == "open" && req.RequestedBy == "web:"+u.Name,
-	}})
+	})
 }
 
 func (s *Server) requestCancel(w http.ResponseWriter, r *http.Request, u webuser.User) {
@@ -343,7 +352,7 @@ func (s *Server) licensesPage(w http.ResponseWriter, r *http.Request, u webuser.
 		s.serverError(w, "list licenses", err)
 		return
 	}
-	s.render(w, http.StatusOK, "licenses", pageData{User: u, Data: licensesData{Licenses: rows, Ending: ending}})
+	s.renderUser(w, r, http.StatusOK, "licenses", u, licensesData{Licenses: rows, Ending: ending})
 }
 
 func (s *Server) licenseDownload(w http.ResponseWriter, r *http.Request, u webuser.User) {

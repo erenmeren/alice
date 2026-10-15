@@ -240,10 +240,17 @@ func staticOnly(root fs.FS, next http.Handler) http.Handler {
 	})
 }
 
-// pageData is what every page template receives: the signed-in user and the page's own data.
+// pageData is what every page template receives: the signed-in user, the unread notification
+// count for the bell (0 shows no count) and the page's own data.
 type pageData struct {
-	User webuser.User
-	Data any
+	User   webuser.User
+	Unread int64
+	Data   any
+}
+
+// renderUser renders a signed-in page, with the bell's unread count read for this request.
+func (s *Server) renderUser(w http.ResponseWriter, r *http.Request, status int, page string, u webuser.User, data any) {
+	s.render(w, status, page, pageData{User: u, Unread: s.unreadCount(r.Context(), u), Data: data})
 }
 
 // render executes a page into a buffer first so a template error never leaves half a page.

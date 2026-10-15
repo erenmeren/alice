@@ -101,11 +101,17 @@ func cookieNamed(w *httptest.ResponseRecorder, name string) *http.Cookie {
 	return nil
 }
 
-// addUser creates a web user through the owner login and returns a fresh enrollment code.
+// addUser creates a sales web user through the owner login and returns a fresh enrollment code.
 func (e *testEnv) addUser(name string) (int64, string) {
 	e.t.Helper()
+	return e.addUserRole(name, webuser.RoleSales)
+}
+
+// addUserRole is addUser with a role (webuser.RoleSales or webuser.RoleOwner).
+func (e *testEnv) addUserRole(name, role string) (int64, string) {
+	e.t.Helper()
 	ctx := context.Background()
-	id, err := webuser.AddUser(ctx, e.owner, name)
+	id, err := webuser.AddUser(ctx, e.owner, name, role)
 	require.NoError(e.t, err)
 	code, err := webuser.NewEnrollment(ctx, e.owner, id, e.clk.Now(), 24*time.Hour)
 	require.NoError(e.t, err)
@@ -152,10 +158,16 @@ func (e *testEnv) login(pk *passkey) *httptest.ResponseRecorder {
 	return e.do(http.MethodPost, "/webauthn/login/finish", asr, cer)
 }
 
-// signIn enrolls a new web user called name and returns its session cookie. The page tests use it.
+// signIn enrolls a new sales web user called name and returns its session cookie. The page tests use it.
 func (e *testEnv) signIn(name string) *http.Cookie {
 	e.t.Helper()
-	_, code := e.addUser(name)
+	return e.signInRole(name, webuser.RoleSales)
+}
+
+// signInRole is signIn with a role.
+func (e *testEnv) signInRole(name, role string) *http.Cookie {
+	e.t.Helper()
+	_, code := e.addUserRole(name, role)
 	w := e.login(e.enroll(code))
 	require.Equal(e.t, http.StatusOK, w.Code, w.Body.String())
 	c := cookieNamed(w, e.srv.cfg.CookieName)

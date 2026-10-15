@@ -24,7 +24,7 @@ func TestEnrollmentCodeWorksOnce(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	owner, web := d.As(t, "vendor_owner", "t_wu_owner1"), d.As(t, "vendor_web", "t_wu_web1")
-	id, err := webuser.AddUser(ctx, owner, "ayse")
+	id, err := webuser.AddUser(ctx, owner, "ayse", "")
 	require.NoError(t, err)
 	code, err := webuser.NewEnrollment(ctx, owner, id, now, time.Hour)
 	require.NoError(t, err)
@@ -44,7 +44,7 @@ func TestEnrollmentCodeExpires(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	owner, web := d.As(t, "vendor_owner", "t_wu_owner2"), d.As(t, "vendor_web", "t_wu_web2")
-	id, err := webuser.AddUser(ctx, owner, "ayse")
+	id, err := webuser.AddUser(ctx, owner, "ayse", "")
 	require.NoError(t, err)
 	code, err := webuser.NewEnrollment(ctx, owner, id, now, time.Minute)
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func TestDisabledUserCannotEnrollOrKeepASession(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	owner, web := d.As(t, "vendor_owner", "t_wu_owner4"), d.As(t, "vendor_web", "t_wu_web4")
-	id, err := webuser.AddUser(ctx, owner, "ayse")
+	id, err := webuser.AddUser(ctx, owner, "ayse", "")
 	require.NoError(t, err)
 	tok, err := webuser.NewSession(ctx, web, id, now)
 	require.NoError(t, err)
@@ -94,7 +94,7 @@ func TestSessionIdleAndAbsoluteLimits(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	owner, web := d.As(t, "vendor_owner", "t_wu_owner5"), d.As(t, "vendor_web", "t_wu_web5")
-	id, err := webuser.AddUser(ctx, owner, "ayse")
+	id, err := webuser.AddUser(ctx, owner, "ayse", "")
 	require.NoError(t, err)
 
 	// Idle: ok just inside, moves last_seen, fails once idle too long.
@@ -137,7 +137,7 @@ func TestForgedAndUnknownSessionTokens(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	owner, web := d.As(t, "vendor_owner", "t_wu_owner6"), d.As(t, "vendor_web", "t_wu_web6")
-	id, err := webuser.AddUser(ctx, owner, "ayse")
+	id, err := webuser.AddUser(ctx, owner, "ayse", "")
 	require.NoError(t, err)
 	tok, err := webuser.NewSession(ctx, web, id, now)
 	require.NoError(t, err)
@@ -157,7 +157,7 @@ func TestEndSession(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	owner, web := d.As(t, "vendor_owner", "t_wu_owner7"), d.As(t, "vendor_web", "t_wu_web7")
-	id, err := webuser.AddUser(ctx, owner, "ayse")
+	id, err := webuser.AddUser(ctx, owner, "ayse", "")
 	require.NoError(t, err)
 	tok, err := webuser.NewSession(ctx, web, id, now)
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestCredentialsRoundTrip(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	owner, web := d.As(t, "vendor_owner", "t_wu_owner8"), d.As(t, "vendor_web", "t_wu_web8")
-	id, err := webuser.AddUser(ctx, owner, "ayse")
+	id, err := webuser.AddUser(ctx, owner, "ayse", "")
 	require.NoError(t, err)
 	cid := []byte{1, 2, 3, 4}
 	require.NoError(t, webuser.AddCredential(ctx, web, id, cid, []byte(`{"n":1}`)))
@@ -204,12 +204,12 @@ func TestAddUserNameRules(t *testing.T) {
 	ctx := context.Background()
 	owner := d.As(t, "vendor_owner", "t_wu_owner9")
 	for _, bad := range []string{"a b", "", strings.Repeat("a", 65)} {
-		_, err := webuser.AddUser(ctx, owner, bad)
+		_, err := webuser.AddUser(ctx, owner, bad, "")
 		assert.Error(t, err, bad)
 	}
-	_, err := webuser.AddUser(ctx, owner, "Ayse")
+	_, err := webuser.AddUser(ctx, owner, "Ayse", "")
 	require.NoError(t, err)
-	_, err = webuser.AddUser(ctx, owner, "ayse")
+	_, err = webuser.AddUser(ctx, owner, "ayse", "")
 	assert.ErrorIs(t, err, webuser.ErrDuplicateUser)
 
 	u, err := webuser.GetUserByName(ctx, owner, "AYSE")
@@ -228,6 +228,75 @@ func TestAddUserNameRules(t *testing.T) {
 func TestSalesLoginCannotCreateUsers(t *testing.T) {
 	d := vpgtest.New(t)
 	sales := d.As(t, "vendor_sales", "t_wu_sales10")
-	_, err := webuser.AddUser(context.Background(), sales, "mallory")
+	_, err := webuser.AddUser(context.Background(), sales, "mallory", webuser.RoleSales)
 	assert.Error(t, err)
+}
+
+func TestRoleRoundTrip(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	owner, web := d.As(t, "vendor_owner", "t_wu_owner11"), d.As(t, "vendor_web", "t_wu_web11")
+	bossID, err := webuser.AddUser(ctx, owner, "boss", webuser.RoleOwner)
+	require.NoError(t, err)
+	ayseID, err := webuser.AddUser(ctx, owner, "ayse", webuser.RoleSales)
+	require.NoError(t, err)
+	_, err = webuser.AddUser(ctx, owner, "mehmet", "") // "" means sales
+	require.NoError(t, err)
+
+	boss, err := webuser.GetUserByName(ctx, owner, "BOSS")
+	require.NoError(t, err)
+	assert.Equal(t, webuser.RoleOwner, boss.Role)
+	byID, err := webuser.GetUserByID(ctx, owner, ayseID)
+	require.NoError(t, err)
+	assert.Equal(t, webuser.RoleSales, byID.Role)
+
+	var stored string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT role FROM web_users WHERE name = 'mehmet'`).Scan(&stored))
+	assert.Equal(t, "sales", stored)
+
+	// ListUsers shows every role.
+	list, err := webuser.ListUsers(ctx, owner)
+	require.NoError(t, err)
+	roles := map[string]string{}
+	for _, u := range list {
+		roles[u.Name] = u.Role
+	}
+	assert.Equal(t, map[string]string{"ayse": "sales", "boss": "owner", "mehmet": "sales"}, roles)
+
+	// The session lookup reads the role from the database.
+	tok, err := webuser.NewSession(ctx, web, bossID, now)
+	require.NoError(t, err)
+	u, err := webuser.Session(ctx, web, tok, now)
+	require.NoError(t, err)
+	assert.Equal(t, webuser.User{ID: bossID, Name: "boss", Role: webuser.RoleOwner}, u)
+	tok, err = webuser.NewSession(ctx, web, ayseID, now)
+	require.NoError(t, err)
+	u, err = webuser.Session(ctx, web, tok, now)
+	require.NoError(t, err)
+	assert.Equal(t, webuser.RoleSales, u.Role)
+
+	// The passkey lookup too.
+	require.NoError(t, webuser.AddCredential(ctx, web, bossID, []byte{7}, []byte(`{}`)))
+	u, err = webuser.UserByCredential(ctx, web, []byte{7})
+	require.NoError(t, err)
+	assert.Equal(t, webuser.RoleOwner, u.Role)
+
+	// The audit row records the role.
+	var details string
+	require.NoError(t, d.Owner.QueryRow(ctx,
+		`SELECT details::text FROM audit WHERE action = 'webuser.add' AND subject = 'boss'`).Scan(&details))
+	assert.Contains(t, details, `"owner"`)
+}
+
+func TestInvalidRoleIsRefused(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	owner := d.As(t, "vendor_owner", "t_wu_owner12")
+	for _, bad := range []string{"admin", "Owner", "OWNER", " owner", "owner ", "sales\x00", "root"} {
+		_, err := webuser.AddUser(ctx, owner, "mallory", bad)
+		assert.ErrorIs(t, err, webuser.ErrBadRole, "%q", bad)
+	}
+	var n int
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM web_users`).Scan(&n))
+	assert.Zero(t, n)
 }

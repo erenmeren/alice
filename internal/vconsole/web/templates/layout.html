@@ -12,6 +12,7 @@
 <span class="brand">Alice licenses</span>
 {{if .User.Name}}
 <form method="post" action="/logout" class="logout">
+<a href="/notifications" class="bell">Notifications{{with .Unread}} ({{.}}){{end}}</a>
 <span class="who">{{.User.Name}}</span>
 <button type="submit">Sign out</button>
 </form>
@@ -24,6 +25,6 @@
 </html>
 {{define "nav"}}
 <nav>
-<a href="/">Home</a> · <a href="/customers">Customers</a> · <a href="/requests/new">New request</a> · <a href="/licenses">Licenses</a>
+<a href="/">Home</a> · <a href="/customers">Customers</a> · <a href="/requests/new">New request</a> · <a href="/licenses">Licenses</a> · <a href="/notifications">All notifications</a>
 </nav>
 {{end}}

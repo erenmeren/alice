@@ -27,3 +27,14 @@ th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(
 select, textarea { width: 100%; max-width: 28rem; padding: 0.5rem; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 4px; }
 dt { font-weight: 600; margin-top: 0.5rem; }
 dd { margin: 0; }
+.bell { text-decoration: none; }
+.notifications, .unread-list { list-style: none; padding: 0; margin: 0 0 1.5rem; }
+.notifications li { border-bottom: 1px solid var(--line); padding: 0.5rem 0; }
+.notifications li.unread { border-left: 3px solid var(--accent); padding-left: 0.5rem; }
+.notifications p { margin: 0.25rem 0; }
+.unread-list li { margin: 0.25rem 0; }
+.badge { display: inline-block; font-size: 0.8rem; padding: 0 0.4rem; border: 1px solid var(--line); border-radius: 3px; text-transform: uppercase; }
+.sev-warning { border-color: var(--accent); }
+.sev-alert { border-color: var(--alert); color: var(--alert); }
+.note-body { white-space: pre-wrap; margin: 0.25rem 0; }
+button.small { padding: 0.2rem 0.6rem; margin: 0.25rem 0; }

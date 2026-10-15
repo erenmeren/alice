@@ -25,6 +25,15 @@ var (
 	ErrBadCode       = errors.New("webuser: the enrollment code is wrong, used or expired")
 	ErrNoSession     = errors.New("webuser: no valid session")
 	ErrDuplicateUser = errors.New("webuser: a user with this name already exists")
+	ErrBadRole       = errors.New(`webuser: the role must be "sales" or "owner"`)
+)
+
+// Roles. The role decides which notifications a person sees (the database applies it); every
+// web page is open to both. It is set when the user is created and read from the database on
+// every request, never from the session cookie or a form.
+const (
+	RoleSales = "sales"
+	RoleOwner = "owner"
 )
 
 // Session limits.
@@ -38,6 +47,7 @@ type User struct {
 	ID       int64
 	Name     string
 	Disabled bool
+	Role     string // RoleSales or RoleOwner
 }
 
 // StoredCredential is a passkey: its ID and the library's credential as JSON.
@@ -56,11 +66,11 @@ func newToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-const userCols = `id, name, disabled_at IS NOT NULL`
+const userCols = `id, name, disabled_at IS NOT NULL, role`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Name, &u.Disabled)
+	err := row.Scan(&u.ID, &u.Name, &u.Disabled, &u.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNotFound
 	}
@@ -70,11 +80,18 @@ func scanUser(row pgx.Row) (User, error) {
 	return u, nil
 }
 
-// AddUser creates a web user (owner only). Names are 1-64 letters, digits, dot, underscore or
-// dash, compared without regard to case.
-func AddUser(ctx context.Context, q audit.Q, name string) (int64, error) {
+// AddUser creates a web user (owner only) with the role RoleSales or RoleOwner; "" means RoleSales.
+// Names are 1-64 letters, digits, dot, underscore or dash, compared without regard to case. The
+// role is checked here for a clear error and again by the database's CHECK constraint.
+func AddUser(ctx context.Context, q audit.Q, name, role string) (int64, error) {
+	if role == "" {
+		role = RoleSales
+	}
+	if role != RoleSales && role != RoleOwner {
+		return 0, ErrBadRole
+	}
 	var id int64
-	err := q.QueryRow(ctx, `INSERT INTO web_users (name) VALUES ($1) RETURNING id`, name).Scan(&id)
+	err := q.QueryRow(ctx, `INSERT INTO web_users (name, role) VALUES ($1, $2) RETURNING id`, name, role).Scan(&id)
 	if db.IsUniqueViolationOn(err, "web_users_name_key") {
 		return 0, ErrDuplicateUser
 	}
@@ -129,7 +146,7 @@ func ListUsers(ctx context.Context, q audit.Q) ([]User, error) {
 	var out []User
 	for rows.Next() {
 		var u User
-		if err := rows.Scan(&u.ID, &u.Name, &u.Disabled); err != nil {
+		if err := rows.Scan(&u.ID, &u.Name, &u.Disabled, &u.Role); err != nil {
 			return nil, fmt.Errorf("webuser: list users: %w", err)
 		}
 		out = append(out, u)
@@ -167,9 +184,9 @@ func NewEnrollment(ctx context.Context, q audit.Q, userID int64, now time.Time, 
 // LookupEnrollment returns the user of a valid, unused code without consuming it.
 func LookupEnrollment(ctx context.Context, q audit.Q, code string, now time.Time) (User, error) {
 	var u User
-	err := q.QueryRow(ctx, `SELECT u.id, u.name, false FROM web_enrollments e JOIN web_users u ON u.id = e.user_id
+	err := q.QueryRow(ctx, `SELECT u.id, u.name, false, u.role FROM web_enrollments e JOIN web_users u ON u.id = e.user_id
 		WHERE e.token_hash = $1 AND e.used_at IS NULL AND e.expires_at > $2 AND u.disabled_at IS NULL`,
-		hashToken(code), now).Scan(&u.ID, &u.Name, &u.Disabled)
+		hashToken(code), now).Scan(&u.ID, &u.Name, &u.Disabled, &u.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrBadCode
 	}
@@ -238,7 +255,7 @@ func UpdateCredential(ctx context.Context, q audit.Q, id, credentialJSON []byte,
 
 // UserByCredential finds the owner of a passkey.
 func UserByCredential(ctx context.Context, q audit.Q, id []byte) (User, error) {
-	return scanUser(q.QueryRow(ctx, `SELECT u.id, u.name, u.disabled_at IS NOT NULL FROM web_credentials c
+	return scanUser(q.QueryRow(ctx, `SELECT u.id, u.name, u.disabled_at IS NOT NULL, u.role FROM web_credentials c
 		JOIN web_users u ON u.id = c.user_id WHERE c.credential_id = $1`, id))
 }
 
@@ -262,7 +279,7 @@ func Session(ctx context.Context, q audit.Q, token string, now time.Time) (User,
 	err := q.QueryRow(ctx, `UPDATE web_sessions s SET last_seen = $2
 		FROM web_users u WHERE s.token_hash = $1 AND u.id = s.user_id AND u.disabled_at IS NULL
 		AND s.expires_at > $2 AND s.last_seen > $3
-		RETURNING u.id, u.name`, hashToken(token), now, now.Add(-SessionIdle)).Scan(&u.ID, &u.Name)
+		RETURNING u.id, u.name, u.role`, hashToken(token), now, now.Add(-SessionIdle)).Scan(&u.ID, &u.Name, &u.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return User{}, ErrNoSession
 	}
