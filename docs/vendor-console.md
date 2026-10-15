@@ -1,4 +1,4 @@
-# Vendor console (Phases 1, 3, 4 and 5)
+# Vendor console
 
 The vendor console keeps the vendor's customers, license requests and issued licenses in a
 PostgreSQL database and issues licenses from requests. It is for the vendor only and is never
@@ -37,7 +37,8 @@ restore drill, tamper checks, monitoring, incidents, quarterly and yearly checks
 
 `issue` refuses when the request changed after you looked at it (the hash no longer matches),
 when the request is no longer open, and when a correction would end earlier than the license it
-replaces. The key passphrase is asked on the terminal. The output file is created before anything
+replaces. The key passphrase is asked on the terminal (signing with a YubiKey instead: "Signing
+with a YubiKey" below). The output file is created before anything
 is signed and an existing file is never overwritten; if nothing was issued it is removed again.
 A request with a start date more than a day old can no longer be signed: cancel it and make a new
 one. If the file cannot be written after signing, `license export` writes it again.
@@ -85,10 +86,62 @@ As the owner login:
   problems; on an empty database it also prints `WARNING: no licenses found`. Any login that can
   read the license files may run it (owner, signer, sales).
 
-## Not yet there
+## Signing with a YubiKey
 
-YubiKey signing (Phase 2). Until it is built, licenses are signed with the passphrase key file; see
-the runbook, section 2.
+`issue --signer openpgp` signs with the Ed25519 key on a YubiKey's OpenPGP application instead of a
+key file. It is built and tested against a software card, but has not yet run against a real
+YubiKey: until the owner's hardware smoke test (runbook, section 11) has passed, the passphrase key
+file stays in use. The key ceremony (PINs, `forcesig`, touch policy, generating the key on the card,
+embedding the public key) is in the runbook, section 2.
+
+**Build.** The normal build (`make vendor-console`, no cgo) has no YubiKey support: `issue --signer
+openpgp`, `signer info` and `signer test` stop with `pcsc: this build has no YubiKey support (build
+with -tags yubikey)` and exit code 2. The YubiKey build is `make vendor-console-yubikey` (build tag
+`yubikey`, output `bin/vendor-console-yubikey`), run natively on each operating system: Linux needs
+cgo, `libpcsclite-dev` and a running `pcscd`; macOS needs cgo and uses the system's PC/SC. The
+customer-facing `alice` binary never contains this code.
+
+    vendor-console issue --request 1 --hash <hash> --out acme.json \
+        --signer openpgp --key-id vk-2026-02 --keyset internal/license/keys/production.json
+
+- `--key-id ID` and either `--pub FILE` (a public key file with that key ID) or `--keyset FILE`
+  (the active entry for that ID) name the key the card must hold. `--key` belongs to `--signer
+  file` and is refused here; the card flags are refused with `--signer file`.
+- Before any PIN prompt it refuses a card whose signature key is missing, not Ed25519 or not the
+  named key; a key ID that this build's key set lists with another key or as revoked; a blocked PIN;
+  a PIN with one try left (unless `--last-pin-try`); a card that signs without a touch (unless
+  `--allow-no-touch`); and a card that does not ask for the PIN for every signature (GnuPG's
+  `forcesig`). A key ID this build's key set does not list yet is refused unless `--not-in-key-set`
+  is given (customers' builds will not accept such a license until a release with the key ships).
+- `--reader NAME` picks the reader when more than one YubiKey is connected (default: the one reader
+  whose name contains "yubi").
+- It prints every field of the license and `SHA-256 of the signed bytes: <hex>`, the bytes the card
+  receives, then asks `Sign this license? [y/N]` (`--yes` skips only the question; the license is
+  still shown), then `PIN of the YubiKey <serial> (<n> tries left): ` and `Touch the YubiKey
+  now...`. A wrong PIN is never asked again: the command ends and says how many tries are left.
+- The signature is checked with the public key and with the product's own license check before
+  anything is recorded. The question, the PIN and the touch together have 2 minutes; Ctrl-C cancels.
+  The request row stays locked meanwhile (runbook, section 2, for the database setting this needs).
+- If the card signed but no license was recorded (a cancel just after the touch, for example), the
+  command says so: the card's signature counter and the number of licenses then differ by one.
+
+Two more commands, YubiKey build only:
+
+    vendor-console signer info [--reader NAME] [--key-id ID [--pub FILE | --keyset FILE]] [--out FILE]
+    vendor-console signer test --key-id ID (--pub FILE | --keyset FILE) [--reader NAME] [--max-size]
+        [--last-pin-try] [--allow-no-touch]
+
+- `signer info` needs no PIN. It prints the card serial, signature algorithm, PIN tries left, PIN
+  policy, touch policy, signature counter, maximum command length, command chaining, the public key
+  and its fingerprint; with `--key-id` and `--pub`/`--keyset` whether the card holds that key (exit
+  code 1 when it does not), and with `--key-id` whether this build's key set lists it. `--out FILE`
+  (needs `--key-id`) writes the card's public key as a public key file in the format `licensectl
+  keygen` writes, which `licensectl keyset --pub` and every `--pub` flag read; it never overwrites a
+  file.
+- `signer test` makes the same checks as `issue`, asks for the PIN and a touch, signs the fixed text
+  `alice-vendor-console smoke test: not a license` (with `--max-size` a 600-byte text starting with
+  it, longer than any license) and verifies the signature. This text is the one thing besides
+  licenses the license key ever signs; it is not a license and can never verify as one.
 
 ## Sales web service
 

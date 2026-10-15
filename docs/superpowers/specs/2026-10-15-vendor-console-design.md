@@ -1,7 +1,8 @@
 # Vendor console: design (draft)
 
-Status: phases 1, 3, 4 and 5 are built; phase 2 (YubiKey signing) waits for the hardware (O1, O3).
-See the status table in section 10.
+Status: all five phases are built in code. Phase 2 (YubiKey signing) has not yet run on a real
+YubiKey: the hardware smoke test is owner-pending (`docs/vendor-console-operations.md` section 11).
+O1 and O3 are resolved by the Phase 2 plan's rulings. See the status table in section 10.
 Date: 2026-10-15.
 
 ## 1. Purpose
@@ -24,12 +25,12 @@ embedded key set (section 8).
 
 | Decision | Choice |
 |---|---|
-| Signing | Only with a YubiKey (PIV or OpenPGP, Ed25519). No online key, no KMS. |
+| Signing | Only with a YubiKey (OpenPGP application, Ed25519; PIV is not built, Phase 2 ruling 1). No online key, no KMS. The passphrase key file stays until the hardware smoke test passes. |
 | Signers | The owner and the IT manager, each with their own YubiKey. A third key is a spare. |
 | Approval | No owner approval step. Every issuance notifies the owner. |
 | Sales | Separate people. They create requests and download signed licenses. They cannot sign. |
 | Database | PostgreSQL on Neon (EU region). SQLite is not used. |
-| Signing app | One Go program for Linux, Windows and macOS, serving a local browser UI on localhost. |
+| Signing app | One Go command line program for Linux, Windows and macOS. No local browser UI: the confirmation is shown on the terminal (Phase 2 ruling 3). |
 | Sales UI | A small web page, WebAuthn login. It holds no signing key. |
 | Code location | This repository, under `cmd/` and `internal/vconsole/`, never shipped to customers. |
 
@@ -44,9 +45,11 @@ embedded key set (section 8).
                             hash-chained audit       signed file back
 ```
 
-- **Signing app** (`cmd/vendor-console`, new). Local program, opens `http://127.0.0.1:<port>`.
-  Reads open requests from Neon, shows the exact license content, signs on the YubiKey, writes
-  the signed license and an audit entry back. Also usable by a signer to create a license directly.
+- **Signing app** (`cmd/vendor-console`, new). Local command line program. Reads open requests
+  from Neon, shows the exact license content on the terminal, signs on the YubiKey, writes the
+  signed license and an audit entry back. Also usable by a signer to create a license directly.
+  The YubiKey support is compiled only with the build tag `yubikey` (cgo and PC/SC on Linux and
+  macOS); the default build has none.
 - **Sales web service** (`cmd/vendor-web`, new). Small server. Customer and request forms, list
   of licenses with end dates, download of signed license files. It connects to Neon with a role
   that cannot write signed licenses. It has no signing key, so a break-in cannot create a valid
@@ -72,19 +75,25 @@ that checks this is extended to cover the new packages.
 ```go
 type Signer interface {
     KeyID() string
-    PublicKey() ed25519.PublicKey
+    Public() ed25519.PublicKey
     Issue(ctx context.Context, p license.Payload) ([]byte, error) // PIN and touch happen here
 }
 ```
 
 Implementations:
 
-1. **PIV Ed25519** (YubiKey firmware 5.7 or later).
-2. **OpenPGP Ed25519** (firmware 5.2.3 or later).
-3. **File key** (the existing passphrase key file), kept for tests and as an emergency path.
+1. **OpenPGP Ed25519** (`sign.OpenPGPSigner`, YubiKey firmware 5.2.3 or later): the OpenPGP card
+   protocol is implemented in this repository (`internal/vconsole/sign/openpgp`) over a PC/SC
+   transport built on `github.com/ebfe/scard` (`internal/vconsole/sign/pcsc`, build tag `yubikey`
+   only). Before any PIN prompt it requires an Ed25519 signature key equal to the key set's key, a
+   PIN that is not blocked and has more than one try left, a touch policy that requires a touch and
+   the PIN forced for every signature; it verifies the card's signature before returning.
+2. **File key** (the existing passphrase key file), kept for tests and as the path in use until the
+   hardware smoke test passes.
 
-Which of 1 and 2 ships first depends on the firmware of the owner's three keys. That is not known
-yet (open item O1). The rest of the design does not depend on the answer.
+PIV is not built (Phase 2 ruling 1): OpenPGP Ed25519 works from firmware 5.2.3, PIV Ed25519 only
+from 5.7, so the OpenPGP implementation covers every key PIV would and more. The rulings are in
+`docs/superpowers/plans/2026-10-15-vendor-console-phase-2.md`.
 
 ### 4.2 What is signed
 
@@ -93,20 +102,28 @@ payload, shows it, and signs it. Nothing else is signed by the license key.
 
 ### 4.3 What you see is what you sign
 
-The app builds the payload locally from the request fields, displays every field (customer,
-installation ID, targets, validity, features, replaces) and the SHA-256 of the signed bytes, then
-asks for PIN and touch. A request row in Neon that changed after a signer opened it is detected by
+The app builds the payload locally from the request fields, prints every field on the terminal
+(customer, installation ID, targets, validity, months, features, replaces, license ID, issue time,
+format, key ID, card serial) and the SHA-256 of the exact bytes the card receives, asks `Sign this
+license? [y/N]`, then asks for PIN and touch. There is no local browser UI (Phase 2 ruling 3): a
+local web server would add attack surface and show nothing more. A request row in Neon that changed after a signer opened it is detected by
 comparing a content hash taken at display time with the one at signing time.
 
 ### 4.4 YubiKey setup (done once per key, in the UK for the owner's keys)
 
-1. `ykman info`: record firmware and enabled applications.
-2. Generate the key pair on the device (non-exportable). Set PIN and PUK. Require touch.
-3. Record the public key and its fingerprint. Build the key set entry.
-4. Store spare keys in separate safe places.
+1. `ykman info`: firmware 5.2.3 or later and OpenPGP enabled; record the serial. One key ID
+   (`vk-YYYY-NN`) per YubiKey.
+2. Change the User PIN and Admin PIN from the factory defaults; decide on the Reset Code.
+3. Generate the Ed25519 signature key on the card (`gpg --card-edit`, `key-attr`, `generate`, no
+   off-card backup). Force the PIN for every signature (`forcesig`) and require touch
+   (`ykman openpgp keys set-touch sig on`, or `fixed`).
+4. Record the public key with `vendor-console signer info --out FILE` and its fingerprint; build the
+   key set entry (`licensectl keyset --pub FILE`); `signer test` and `signer test --max-size`.
+5. Embed the owner's, the IT manager's and the spare key in `production.json` and ship a release.
+6. Store spare keys in separate safe places.
 
-The checklist is in `docs/vendor-console-operations.md` section 2, marked as the procedure to
-follow once Phase 2 lands.
+The full ceremony, with commands marked as not yet run on hardware, is in
+`docs/vendor-console-operations.md` section 2; the owner's hardware smoke test is section 11.
 
 ## 5. Data model (PostgreSQL)
 
@@ -212,9 +229,10 @@ No change to the license format, the verifier or the license tests is planned.
   to a separate place are the recovery path.
 - Compromised signer machine: PIN and touch stop silent signing. The "what you see" screen and the
   content hash stop a swapped request. Revoke the key and ship a release if a key is lost.
-- Interim note: until the YubiKey signer lands, "PIN and touch stop silent signing" and "no private
-  key on any server" do not hold under signing option 2 (the file key on a dedicated online signer
-  machine). See the operations runbook, section 2.
+- Interim note: the YubiKey signer is built, but is used only once the owner's hardware smoke test
+  (runbook section 11) has passed on the platforms in use. Until then "PIN and touch stop silent
+  signing" and "no private key on any server" do not hold under signing option 2 (the file key on a
+  dedicated online signer machine). See the operations runbook, section 2.
 - A signer can sign any license. Limits (targets, term) are advice in the app, not enforced by the
   key. The owner's notification and the audit are the control. This is accepted.
 - Sales login: WebAuthn (the owner's existing keys work), short sessions, rate limits.
@@ -225,8 +243,12 @@ No change to the license format, the verifier or the license tests is planned.
 1. **Foundation.** Module layout, schema and migrations, roles with row-level security, audit
    chain, `Signer` interface with the file key implementation, tests. The signing app can issue a
    license from a request using the file key.
-2. **YubiKey signing.** PIV or OpenPGP implementation (decided by O1), PIN and touch flow,
-   cross-platform builds and smoke tests on Linux, Windows and macOS.
+2. **YubiKey signing (built in code; hardware verification owner-pending).** OpenPGP
+   implementation (rulings 1 and 2), PIN and touch flow, confirmation display on the command line,
+   `signer info` and `signer test`, the `yubikey` build tag and `make vendor-console-yubikey`. Tested
+   against a software card only; the smoke tests on Linux, Windows and macOS are the owner's
+   checklist (runbook section 11). The Windows build of `vendor-console` currently fails (Unix-only
+   calls in `internal/secrets`), with or without the tag.
 3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view is a command line view (`audit show`, Phase 5), not a page.
 4. **Reminders and owner reports (built).** E-mail on issuance, weekly summary, expiry reminders, renewal
    as a prefilled request (no stored draft).
@@ -234,24 +256,24 @@ No change to the license format, the verifier or the license tests is planned.
    weekly mail and `audit-verify --head`, `verify-licenses`, `license revoke`, `audit show` (a command
    line view instead of a web page), `notify failed` and `notify retry`, `vendor-web --trusted-proxy`,
    and the operations runbook `docs/vendor-console-operations.md` (backup and restore drill, key
-   revocation procedure, onboarding and offboarding, incidents). The YubiKey ceremony checklist is
-   written but can only be carried out once Phase 2 is built.
+   revocation procedure, onboarding and offboarding, incidents). The YubiKey ceremony (runbook
+   section 2) is written for the OpenPGP signer; it is carried out with the hardware smoke test.
 
 | Phase | Status |
 |---|---|
 | 1. Foundation | built |
-| 2. YubiKey signing | not built; waits for the hardware and open items O1 and O3 |
+| 2. YubiKey signing | built in code; hardware smoke test owner-pending (runbook section 11) |
 | 3. Sales web page | built |
 | 4. Reminders and owner reports | built |
-| 5. Operations | built, except the YubiKey ceremony (needs Phase 2) |
+| 5. Operations | built; the YubiKey ceremony is carried out with the hardware smoke test |
 
 ## 11. Open items
 
 | ID | Item | Needed before |
 |---|---|---|
-| O1 | Firmware and enabled applications of the owner's three YubiKey 5C NFC (`ykman info`); new key for the IT manager must be firmware 5.7 or later for PIV | Phase 2 |
+| O1 | Firmware and enabled applications of the owner's three YubiKey 5C NFC (`ykman info`). Resolved by Phase 2 ruling 1: OpenPGP only (Ed25519 from firmware 5.2.3), no PIV, so the firmware need not be 5.7; the ceremony checks 5.2.3 or later | Phase 2 (done) |
 | O2 | CSV ledger versus audit table (section 6). Resolved: the `audit` and `licenses` tables are the ledger; no CSV export; `licensectl ledger-verify` stays for old file ledgers | Phase 5 (done) |
-| O3 | Which Go library reads PIV/OpenPGP Ed25519 on all three platforms (PC/SC). To be checked with a spike, not assumed | Phase 2 |
+| O3 | Which Go library reads PIV/OpenPGP Ed25519 on all three platforms (PC/SC). Resolved by Phase 2 ruling 2: `github.com/ebfe/scard` for the PC/SC transport only, with the OpenPGP card protocol implemented in this repository; `piv-go` rejected (PIV only, firmware 5.7 and later). Working on real hardware is the owner's smoke test | Phase 2 (done) |
 | O4 | Where the sales web service runs and who operates it. Resolved: one static binary `vendor-web` behind any TLS-ending reverse proxy, or with its own certificate; operated by the IT manager (Istanbul); the owner holds the `vendor_owner` login that creates web users; single instance (ceremony state is in memory) | Phase 3 (done) |
 | O5 | E-mail sending (provider, sender address). Resolved: provider-neutral SMTP configured by `VENDOR_SMTP_ADDR`, `_USER`, `_PASSWORD`, `_FROM`; STARTTLS or port 465 required; the sender address is the operator's choice | Phase 4 (done) |
 | O6 | Whether the installation ID flow (customer gives it, vendor binds the license to it) stays as is | Phase 1 |

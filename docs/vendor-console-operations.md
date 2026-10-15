@@ -2,13 +2,15 @@
 
 This runbook is for the people who run the vendor console: the owner, the IT manager and the
 signers. It covers roles, keys, people joining and leaving, backups and the restore drill, tamper
-checks, monitoring and incidents. How each command works is in
-[vendor-console.md](vendor-console.md). The signing key itself (creation, backups, rotation,
-compromise, the release key) is in [vendor/licensing-vendor.md](vendor/licensing-vendor.md); this
-runbook links to it and does not repeat it.
+checks, monitoring, incidents, the YubiKey key ceremony (section 2) and the YubiKey hardware smoke
+test (section 11). How each command works is in [vendor-console.md](vendor-console.md). The
+passphrase key file (creation, backups, rotation, compromise, the release key) is in
+[vendor/licensing-vendor.md](vendor/licensing-vendor.md); this runbook links to it and does not
+repeat it.
 
-**Signing option in force until Phase 2:** option <1 or 2> (section 2), decided by the owner on
-<YYYY-MM-DD>.
+**Signing option in force:** option <1, 2 or 3> (section 2), decided by the owner on
+<YYYY-MM-DD>. Option 3 (the YubiKey) only after the hardware smoke test (section 11) has passed on
+every platform a signer uses.
 
 Rules for every step below:
 
@@ -54,25 +56,29 @@ The migration login owns the tables and is not held back by the grants. Use it o
 `vendor-console migrate`, for creating and dropping logins, for backups (`pg_dump`) and for the
 fixes this runbook names. The owner keeps it.
 
-Signing keys: until Phase 2 (YubiKey signing) is built, licenses are signed with the passphrase key
-file (section 2). After Phase 2, the owner and the IT manager each have their own YubiKey, and a
-third YubiKey is the spare.
+Signing keys: until the hardware smoke test (section 11) has passed, licenses are signed with the
+passphrase key file (section 2, options 1 and 2). With the YubiKey signer (option 3), the owner and
+the IT manager each have their own YubiKey with its own key ID, and a third YubiKey is the spare.
 
 ## 2. Key ceremony
 
-**The YubiKey signer (Phase 2) is not built yet.** This release signs only with the passphrase key
-file. Until Phase 2 lands:
+Licenses can be signed in three ways (below). The YubiKey signer (option 3,
+`vendor-console issue --signer openpgp`) is built and tested against a software card, but it has
+**not yet run against a real YubiKey**. Until the owner has run the hardware smoke test
+(section 11) on every operating system a signer uses, option 3 is not in force.
 
-- The key file, its passphrase, its backups and its yearly recovery test follow
-  [licensing-vendor.md](vendor/licensing-vendor.md) sections 1, 2 and 6 exactly (two
-  hardware-encrypted USB drives, a printout, the passphrase paper stored apart).
-- `internal/license/keys/production.json` lists no key today. Until it does, release builds accept
-  no license. Embedding the first key is section 2 of licensing-vendor.md.
+The passphrase key file, its backups and its yearly recovery test follow
+[licensing-vendor.md](vendor/licensing-vendor.md) sections 1, 2 and 6 exactly (two
+hardware-encrypted USB drives, a printout, the passphrase paper stored apart).
+`internal/license/keys/production.json` lists no key today. Until it does, release builds accept no
+license. Embedding a key is section 2 of licensing-vendor.md.
+
+### Signing options
 
 `vendor-console issue --key FILE` needs the database, so the computer that runs it is online, while
-licensing-vendor.md says the signing key is never on a computer connected to the internet. Until the
-YubiKey signer lands, two ways are supported. The owner decides which one is in force and records
-the decision and its date at the top of this runbook.
+licensing-vendor.md says the signing key file is never on a computer connected to the internet. The
+owner decides which option is in force and records the decision and its date at the top of this
+runbook.
 
 **Option 1: `licensectl` offline, as today.** Sign on the offline machine exactly as
 licensing-vendor.md section 3 says. These licenses are not in the console's database: no issuance
@@ -91,30 +97,229 @@ licensing-vendor.md records this exception in its "Rules that never change". If 
 may have been compromised, follow section 9 ("Signer machine compromise") and treat the key as
 leaked.
 
-### YubiKey checklist (to follow once Phase 2 lands)
+**Option 3: the YubiKey (preferred, once the owner has run the hardware smoke test of section 11 on
+every platform a signer uses).** `vendor-console issue --signer openpgp` signs with an Ed25519 key
+that was generated on the YubiKey and never leaves it, and records the license like option 2. Before
+the PIN prompt the console prints every field of the license and the SHA-256 of the exact bytes the
+card signs, and asks `Sign this license? [y/N]`. The card asks for the PIN for every signature and
+waits for a touch. Malware on the signer computer cannot copy the key; at worst it can get one
+signature per PIN entry and touch, and every license still sends the owner a mail (section 8). Each
+signer has their own YubiKey and key ID, and a third YubiKey is the spare.
 
-This is the checklist spec section 4.4 asks for. The exact commands (PIV or OpenPGP) come with
-Phase 2, which depends on open items O1 (firmware) and O3 (library). Do it once per YubiKey, the
-owner's keys in the UK.
+### The YubiKey key ceremony
 
-1. Run `ykman info`. Record the serial number, the firmware version and the enabled applications.
-   PIV Ed25519 needs firmware 5.7 or later; OpenPGP Ed25519 needs 5.2.3 or later.
-2. Change the default PIN and PUK (and the management key for PIV) to new values. Write the PUK on
-   paper and store it like a passphrase (apart from the key).
-3. Generate the Ed25519 key pair **on the device**, so the private key never exists outside it.
-   Require the PIN for every signature and require touch.
-4. Export the public key. Record the key ID (`vk-YYYY-NN`, a new ID for every key) and the
-   fingerprint on paper.
-5. Build the key set entry with `licensectl keyset --pub <public key file>` (or the Phase 2
-   equivalent) and compare the printed fingerprint with the paper.
-6. Add the entry to `internal/license/keys/production.json`: the owner's key, the IT manager's key
-   and the spare, all `"active"`, one entry per key ID (licensing-vendor.md section 7 shows how to
-   merge entries). Run `make release-keycheck`.
-7. Ship the release that embeds the keys. Sign with a new key only from the release after that, so
-   customers who update late already trust it. In the built image, run `alice license keys` and
-   compare every fingerprint with the paper.
-8. Store the spare YubiKey and the PUK papers in separate safe places, apart from the daily keys.
-9. Record the date, the serial numbers and the key IDs in the paper log.
+Do this once per YubiKey: the owner's key and the spare in the UK, the IT manager's in Istanbul.
+
+**Not run by the author.** The `ykman` and `gpg` commands below come from the tools'
+documentation; nobody has run them against a YubiKey for this runbook. On first use, check each one
+against your installed versions (`ykman --version`, `gpg --version`, and the command's `--help`),
+and write any difference into the paper log so that the next ceremony uses what worked.
+
+**Prerequisites**
+
+- One YubiKey per signer, plus the spare. Each one gets **its own key ID** of the form
+  `vk-YYYY-NN` (for example `vk-2026-02`, `vk-2026-03`, `vk-2026-04`). Never reuse a key ID,
+  including one a file key already has.
+- `ykman info` shows firmware **5.2.3 or later** (Ed25519 on the OpenPGP application needs it) and
+  **OpenPGP enabled** over USB. Use `ykman config usb --enable OPENPGP` if it is not.
+- YubiKey Manager (`ykman`), GnuPG 2.2 or later, and the YubiKey build of the console,
+  `bin/vendor-console-yubikey` (section 11, "Get the binary"). On Linux, `pcscd` must be running.
+- A computer you trust and that is patched. It need not be offline: the private key is made on
+  the YubiKey and never exists outside it.
+
+**Step 1. Look at the YubiKey.** *(Not run by the author; check against your installed ykman/gpg
+versions on first use.)*
+
+    ykman info
+    ykman openpgp info
+
+Write down the serial number, the firmware version, the OpenPGP version and the PIN tries. If
+`ykman openpgp info` shows that the card already holds OpenPGP keys and nothing on it is needed,
+`ykman openpgp reset` erases every OpenPGP key and sets the PINs back to the factory defaults.
+
+**Step 2. Change the PINs from the factory defaults.** *(Not run by the author; check against your
+installed ykman/gpg versions on first use.)* The OpenPGP application's factory defaults are User PIN
+`123456` and Admin PIN `12345678`.
+
+    ykman openpgp access change-pin
+    ykman openpgp access change-admin-pin
+
+- User PIN: at least 6 characters (the console refuses shorter ones). Use digits or plain ASCII
+  letters only: the PIN is sent byte for byte, so an accented letter typed on another keyboard or
+  operating system can produce other bytes.
+- Admin PIN: at least 8 characters. It changes the card's settings and unblocks the User PIN. Write
+  it on paper and store it like a passphrase, apart from the YubiKey.
+- **Reset Code decision.** A Reset Code unblocks the User PIN without the Admin PIN. Recommended:
+  set none, so only the Admin PIN can unblock. If the owner wants one (for a signer who should not
+  hold the Admin PIN), set it with `ykman openpgp access change-reset-code` and store it like the
+  Admin PIN. Record the decision in the paper log.
+- Do **not** set up a PIN key derivation function (`kdf-setup` in `gpg --card-edit`). The console
+  refuses such a card ("the card uses a PIN key derivation function (KDF-DO), which is not
+  supported").
+- The card allows 3 User PIN tries by default. The console never retries a wrong PIN by itself and
+  refuses to ask for the PIN when only one try is left unless `--last-pin-try` is given.
+
+**Step 3. Generate the Ed25519 signing key on the card.** *(Not run by the author; check against
+your installed ykman/gpg versions on first use.)*
+
+    gpg --card-edit
+    gpg/card> admin
+    gpg/card> key-attr
+
+`key-attr` asks about the signature key, the encryption key and the authentication key in turn.
+For the **signature key** choose `ECC` and then `Curve 25519`; give the others the same (the console
+uses only the signature key). It asks for the Admin PIN. Then:
+
+    gpg/card> generate
+
+- `Make off-card backup of encryption key?` Answer **no**. Nothing of this ceremony may exist
+  outside the card.
+- Expiry: `0` (does not expire) is fine; the console does not use the OpenPGP certificate gpg makes.
+- Name: something you will recognise, for example `Alice license key vk-2026-02`.
+- gpg asks for the PIN and signs its own certificate with the new key, so the signature counter
+  starts at a small number rather than 0.
+
+Then `quit`. The key on the card is the license key; the certificate gpg put into the local keyring
+is not used by the console.
+
+Alternative: if `ykman openpgp keys --help` on your installed version lists a command that generates
+a key on the card, it may be used instead, provided it makes an Ed25519 **signature** key on the
+card. The rest of the ceremony is the same.
+
+**Step 4. Ask for the PIN for every signature.** *(Not run by the author; check against your
+installed ykman/gpg versions on first use.)* The console refuses a card that keeps the PIN valid for
+several signatures (PIN policy `NOT forced` in `signer info`).
+
+    gpg --card-edit
+    gpg/card> admin
+    gpg/card> forcesig
+    gpg/card> quit
+    gpg --card-status
+
+`forcesig` **toggles** the setting. Run it again until `gpg --card-status` shows
+`Signature PIN ....: forced`.
+
+**Step 5. Require a touch for signatures.** *(Not run by the author; check against your installed
+ykman/gpg versions on first use.)*
+
+    ykman openpgp keys set-touch sig on
+
+It asks for the Admin PIN. Check with `ykman openpgp info` (touch policy of the signature key). The
+choices:
+
+- `on`: a touch for every signature. Recommended.
+- `fixed`: like `on`, but it **cannot be changed back**: only resetting the OpenPGP application,
+  which deletes the key, turns it off. It protects against someone who has the Admin PIN turning
+  touch off.
+- `cached`: one touch covers further signatures for about 15 seconds. The console signs one license
+  per run, so it gains nothing and weakens the protection; not recommended. (`cached-fixed` is
+  `cached` that cannot be changed back.)
+- `off`: the console refuses to sign unless `--allow-no-touch` is given. Do not use it.
+
+Record the choice in the paper log.
+
+**Step 6. Free the card for the console.** gpg's `scdaemon` keeps the card open, and the console
+needs it for itself:
+
+    gpgconf --kill scdaemon
+
+**Step 7. Record the public key.** No PIN is needed:
+
+    bin/vendor-console-yubikey signer info --key-id vk-2026-02 --out vk-2026-02-public.pem
+
+It prints the card (section 11 shows a good output) and `wrote vk-2026-02-public.pem`. The file is
+in the same format `licensectl keygen` writes for a file key (a PEM public key with the `Key-Id`
+header), so every command that takes `--pub` reads it. `in this build's key set: no` is expected
+until a release embeds the key. Write the card serial, the key ID and the fingerprint on paper. Then
+build the key set entry:
+
+    bin/licensectl keyset --pub vk-2026-02-public.pem
+
+It prints the JSON entry and `Fingerprint: SHA256:...`, which must equal the paper.
+
+**Step 8. Test the key before it is embedded.**
+
+    bin/vendor-console-yubikey signer test --key-id vk-2026-02 --pub vk-2026-02-public.pem
+    bin/vendor-console-yubikey signer test --key-id vk-2026-02 --pub vk-2026-02-public.pem --max-size
+
+Each prints the not-in-key-set warning (expected), the text it signs, asks for the PIN and a touch,
+and ends with `smoke test OK (signature verified with key ID vk-2026-02, SHA256:...)`. The license
+key signs nothing but licenses; the smoke-test text is the one documented exception and can never
+verify as a license. If `--max-size` fails, **stop** and follow section 11: do not embed the key.
+
+**Step 9. Embed the keys and ship a release.** Add the entries of the owner's key, the IT manager's
+key and the spare to `internal/license/keys/production.json`, all `"active"`, one entry per key ID
+(licensing-vendor.md section 7 shows how to merge entries), and run `make release-keycheck`. Then
+follow licensing-vendor.md section 2, steps 2 to 4 (commit, release, `alice license keys` in the
+built image, compare every fingerprint with the paper). Sign customer licenses with a new key only
+once a release that embeds it has shipped, so customers who update late already trust it. Rebuild
+the console's YubiKey build from that release commit: it then knows the keys, and `issue` no longer
+needs `--not-in-key-set`.
+
+**Step 10. Check against the embedded key set.**
+
+    bin/vendor-console-yubikey signer info --key-id vk-2026-02 --keyset internal/license/keys/production.json
+    bin/vendor-console-yubikey signer test --key-id vk-2026-02 --keyset internal/license/keys/production.json
+
+Expected: `matches key set      yes`, `in this build's key set: yes`, and `smoke test OK (...)`.
+
+**Step 11. Store and record.** Store the spare YubiKey and the Admin PIN papers in separate safe
+places, apart from the daily keys. Record in the paper log the date, each serial number, firmware
+version, key ID and fingerprint, the touch policy chosen, the Reset Code decision, and where each
+paper is.
+
+### Signing with the YubiKey
+
+    vendor-console request show <ID>        # note the hash on the last line
+    bin/vendor-console-yubikey issue --request <ID> --hash <hash> --out <customer>.json \
+        --signer openpgp --key-id vk-2026-02 --keyset internal/license/keys/production.json
+
+Before any PIN prompt, the console checks that the card holds an Ed25519 signature key equal to the
+key set's key for `--key-id`, that this build's key set lists that key as active (a key ID it does
+not list yet needs `--not-in-key-set`; one listed with another key, or revoked, is refused), that the
+PIN is not blocked and has more than one try left (unless `--last-pin-try`), that a touch is required
+(unless `--allow-no-touch`) and that the PIN is asked for every signature. Then it prints the license
+and `SHA-256 of the signed bytes: <hex>`, asks `Sign this license? [y/N]` (`--yes` skips only the
+question), asks `PIN of the YubiKey <serial> (<n> tries left): `, prints `Touch the YubiKey
+now...`, checks the card's signature with the public key and with the product's own license check,
+records the license and writes the file: `issued <LICENSE-ID> valid until <YYYY-MM-DD>`.
+
+- **Time limit.** From the display to the card's answer the operator has **2 minutes** (question,
+  PIN and touch together). After that nothing is signed and the command says so; run it again.
+  Ctrl-C at any point cancels, closes the card and records nothing.
+- **The request row is locked** during those 2 minutes: a sales change to that one request waits.
+  For the database: do not set `idle_in_transaction_session_timeout` below about **3 minutes** for
+  a signer (PostgreSQL's default is off, and nothing in the console sets it). If you want it as a
+  safety net, set it per signer login, for example `ALTER ROLE "<login>" SET
+  idle_in_transaction_session_timeout = '5min';` (a setting on the group role `vendor_signer` does
+  not apply to its members).
+- **Card busy.** `pcsc: another program holds the card (often gpg's scdaemon: run gpgconf --kill
+  scdaemon)`: run `gpgconf --kill scdaemon` and try again. The console holds the card exclusively
+  while it signs, so gpg cannot use it meanwhile. When the console closes the card it resets it, so
+  the verified PIN is gone for every program.
+- **Linux** needs `pcscd` running: `pcsc: the smart card service is not running (Linux: start
+  pcscd)` means it is not (for example `sudo systemctl enable --now pcscd.socket`).
+- **Wrong PIN**: `wrong PIN (<n> tries left). Nothing was signed; the PIN is never asked again
+  automatically: run the command again to retry`. A blocked PIN is unblocked with the Admin PIN (or
+  the Reset Code), with `gpg --card-edit`, `admin`, `passwd`, or `ykman openpgp access unblock-pin`
+  where your ykman has it (not run by the author).
+- **Not touched in time** (the YubiKey gives up after about 15 seconds): `the YubiKey was not touched
+  in time: nothing was signed; run the command again`.
+
+**The signature counter is not the number of licenses.** The card counts every signature it makes
+(`signature counter` in `signer info`). It also counts the smoke tests and gpg's own signature at
+key generation, and a signature the card made after which no license was recorded: the operator
+cancelled or the time ran out just after the touch, the signature failed its check, or the database
+did not take the license. The console then says so:
+
+    the card made a signature (its signature counter went up) but no license was recorded by this
+    command (...). Check: vendor-console request show <ID>; if the request shows as signed, use:
+    vendor-console license export --id <LICENSE-ID> --out FILE. The card's signature counter and the
+    number of licenses will differ by one
+
+A license is never recorded without a signature, so for each card the counter is always at least the
+number of licenses signed with it. If the database did not confirm the commit, the console says the
+outcome is unknown and names the same two commands; run them before signing again.
 
 ## 3. Onboarding and offboarding
 
@@ -144,7 +349,8 @@ service's login is `IN ROLE vendor_web` and nothing else. One group role per log
 the person types the password themselves: set a temporary one with `\password "<login>"`, then the
 person connects with it and runs `\password` in their own `psql` session to choose their own.
 
-A signer also needs a signing key: the key file today (section 2), a YubiKey after Phase 2.
+A signer also needs a signing key: the key file (section 2, options 1 and 2) or their own YubiKey
+(option 3, after the smoke test of section 11).
 
 To see every login and its group role:
 
@@ -520,7 +726,7 @@ The service cannot sign, so no license can be forged through it. Then:
 
 - [ ] Stop signing from that machine.
 - [ ] The key file was on it or plugged into it, or its passphrase was typed on it: treat the key as
-      compromised (section 4). With a YubiKey (after Phase 2), PIN and touch stop silent signing,
+      compromised (section 4). With a YubiKey (option 3), PIN and touch stop silent signing,
       but remove the key from that machine and change the PIN.
 - [ ] Rotate the signer's database password (below).
 - [ ] Check the licenses issued by that login: `audit show --actor <login> --action license.`, and
@@ -577,7 +783,8 @@ The service cannot sign, so no license can be forged through it. Then:
 ### Every year
 
 - [ ] The yearly recovery test of each signing key ([licensing-vendor.md](vendor/licensing-vendor.md)
-      section 6); after Phase 2, check each YubiKey's PIN works and the spare is where the log says.
+      section 6); with YubiKeys, run `signer test` with each one (its PIN works) and check the spare is
+      where the log says.
 - [ ] Decrypt the oldest dump you keep, to prove its passphrase still works.
 - [ ] Rotate the passwords of the web service login, the notifier login, the SMTP login and the
       migration login.
@@ -586,3 +793,163 @@ The service cannot sign, so no license can be forged through it. Then:
 - [ ] Renew the web service's TLS certificate if it is not renewed automatically.
 - [ ] Review this runbook against the current commands (`vendor-console` with no arguments prints
       them).
+
+## 11. Smoke test on real hardware (owner-pending)
+
+The YubiKey signer was written against the OpenPGP card specification and tested against a software
+card. No real YubiKey has been used yet. The owner runs this test once per operating system a signer
+will sign from (Linux, Windows, macOS), with a YubiKey prepared by the ceremony in section 2 (steps
+1 to 8; the key need not be embedded yet). Option 3 of section 2 comes into force only after the
+platforms in use have passed. Repeat it after a YubiKey firmware change or a new operating system
+version on a signer computer.
+
+### What is not proven yet
+
+These assumptions can only be checked on real hardware; the steps below are built to show each one:
+
+1. **Long chained input.** The console sends the license's signed bytes (a few hundred bytes) to the
+   card in 255-byte chained parts and assumes the YubiKey signs the whole input as the Ed25519
+   message. GnuPG never sends more than 64 bytes, so common tools do not exercise this. Step 4
+   (`signer test --max-size`, 600 bytes) is the decisive test.
+2. **The card's capability values.** What a YubiKey reports as its maximum command length (DO 7F66)
+   and its command chaining bit. If reading 7F66 fails with a card status, `signer info` stops with
+   an error naming `get data 7F66`.
+3. **The touch timeout status word.** A touch that never comes is assumed to end with status 6982 or
+   6985, shown as "the YubiKey was not touched in time". Any other text is a finding.
+4. **Reset on close versus scdaemon.** The console holds the card exclusively and resets it when it
+   closes it. Whether gpg and scdaemon cope with that afterwards (step 8).
+5. **The Windows and macOS builds.** The YubiKey build has been compiled only on Linux. On Windows
+   the console does not build at all today (see "Get the binary").
+
+### Get the binary
+
+The YubiKey build cannot be cross-compiled. Build it on each operating system from a checkout of the
+repository with Go installed:
+
+| OS | Needs | Build |
+|---|---|---|
+| Linux | a C compiler, `pkg-config`, `libpcsclite-dev` (Debian and Ubuntu; `pcsc-lite` on Fedora and Arch) and `pcscd` running (`sudo systemctl enable --now pcscd.socket`) | `make vendor-console-yubikey` |
+| macOS | the Xcode command line tools (`xcode-select --install`) for cgo; the system's PC/SC, nothing else | `make vendor-console-yubikey` |
+| Windows | the Smart Card service (`SCardSvr`) running (it starts when a reader is plugged in); no C compiler: the PC/SC library loads the system's `winscard.dll` | **blocked**: the console does not build for Windows today (below) |
+
+The result is `bin/vendor-console-yubikey`. `make vendor-console` builds the normal console, which
+has no YubiKey support and refuses every card command with `pcsc: this build has no YubiKey support
+(build with -tags yubikey)` (exit code 2).
+
+**Windows is blocked.** `GOOS=windows go build ./cmd/vendor-console` fails today, with or without
+the `yubikey` tag, in `internal/secrets` (which `internal/license` imports): it uses the Unix-only
+`syscall.O_NOFOLLOW` and `syscall.Stat_t`. Until that is fixed, sign from Linux or macOS and mark the
+Windows row "not run: no Windows build". Once it builds, the Windows command is, in PowerShell,
+`go build -trimpath -tags yubikey -o bin\vendor-console-yubikey.exe ./cmd/vendor-console`.
+
+### The steps
+
+Run them in a terminal (the PIN is read with no echo and is refused from a pipe). Use the YubiKey's
+key ID and the public key file from section 2 step 7. Below, `vc` stands for
+`bin/vendor-console-yubikey`, `KEY` for `--key-id vk-2026-02 --pub vk-2026-02-public.pem`. Before
+starting, run `gpgconf --kill scdaemon`.
+
+**Step 1. No card.** Unplug the YubiKey and run `vc signer info`. Expected: an error naming the
+missing reader or card, such as `pcsc: no smart card reader is connected`, or `pcsc: reader not
+found: no YubiKey reader; readers present: ...`; exit code 1. On Linux with `pcscd` stopped:
+`pcsc: the smart card service is not running (Linux: start pcscd) (during establish context)`.
+
+**Step 2. `vc signer info KEY`** (no PIN). A good output looks like this:
+
+    reader               (the one YubiKey connected)
+    card serial          <8 digits>
+    signature algorithm  ed25519
+    PIN tries left       3
+    PIN policy           forced (the PIN is asked for every signature)
+    touch policy         on
+    signature counter    <a small number>
+    max command length   <a number, or unknown>
+    command chaining     yes
+    public key           <base64>
+    fingerprint          SHA256:<64 hex digits>
+    matches key set      yes
+    in this build's key set: no
+
+Check: `signature algorithm` is `ed25519`; `PIN policy` is `forced`; `touch policy` is `on`,
+`fixed`, `cached` or `cached-fixed` (whatever section 2 step 5 chose); `card serial` equals the
+`Serial number` of `gpg --card-status` (and should equal the serial of `ykman info`); the fingerprint
+equals the paper; `matches key set yes`. Write down the `max command length`, `command chaining` and
+`signature counter` values for the report. `in this build's key set: no` is expected before the
+release that embeds the key (`yes` after it). Exit code 0; with `matches key set NO` it is 1.
+
+**Step 3. `vc signer test KEY`.** It prints the not-in-key-set warning, the text
+`alice-vendor-console smoke test: not a license` and that it is not a license, then
+`PIN of the YubiKey <serial> (3 tries left): `. Type the PIN; it prints `Touch the YubiKey now...`
+and the YubiKey blinks; touch it. Expected: `smoke test OK (signature verified with key ID
+vk-2026-02, SHA256:...)`, exit code 0. `signer info` afterwards shows the counter one higher.
+
+**Step 4. `vc signer test KEY --max-size`. This is the decisive test.** It signs a 600-byte text,
+longer than any license. Expected: `smoke test OK (...)` as in step 3.
+
+If it fails with a length refusal (`the card refused the signing input of 600 bytes at the ... part
+... status 6700`, `6A80` or `6884`, or `the message has 600 bytes and the card, which has no command
+chaining, accepts at most 255`), or with `the card's signature does not verify with the expected
+key`, or with any other card status: **STOP.** Do not sign licenses with the YubiKey, and do not try
+to work around it by changing the license format or the console. Report the output of `signer info`
+and the full error text (below). Option 1 or 2 of section 2 stays in force.
+
+**Step 5. One real license against a throwaway database.** Never against production. A scratch
+PostgreSQL on this computer (Docker; on Windows and macOS Docker Desktop):
+
+    docker run -d --rm --name vendor-smoke -e POSTGRES_HOST_AUTH_METHOD=trust \
+        -p 127.0.0.1:55433:5432 postgres:<major version>
+    export VENDOR_DATABASE_URL='postgres://postgres@127.0.0.1:55433/postgres?sslmode=disable'
+    vc migrate
+    docker exec -i vendor-smoke psql -U postgres -c 'CREATE ROLE smoke_signer LOGIN IN ROLE vendor_signer;'
+    export VENDOR_DATABASE_URL='postgres://smoke_signer@127.0.0.1:55433/postgres?sslmode=disable'
+    vc customer add --name "Smoke test"
+    vc request add --customer <ID> --installation ALICE-J9N1-MQN8-N17Z-E7FS --targets 5 --features alpha,beta
+    vc request show <request ID>            # the hash is the last line
+    vc issue --request <request ID> --hash <hash> --out smoke-license.json \
+        --signer openpgp KEY --not-in-key-set
+    vc verify-licenses --pub vk-2026-02-public.pem
+
+(`ALICE-J9N1-MQN8-N17Z-E7FS` is a made-up but well-formed installation ID. `--not-in-key-set` is
+needed until the key is embedded.) Expected: the display lists every field (customer, installation
+ID, targets, valid from, valid until, months, features, replaces, license ID, issued at, format, key
+ID, card serial) and `SHA-256 of the signed bytes: <64 hex digits>`; `Sign this license? [y/N]`,
+answer `y`; the PIN; the touch; `issued <LICENSE-ID> valid until <date>`, exit code 0. Then
+`verify-licenses` prints `checked 1, problems 0`. Optionally `licensectl verify --pub
+vk-2026-02-public.pem smoke-license.json` prints `OK`. Clean up with `docker stop vendor-smoke` and
+delete `smoke-license.json`.
+
+**Step 6. Wrong PIN.** Run `vc signer test KEY` and type a wrong PIN. Expected: `wrong PIN (2 tries
+left). Nothing was signed; the PIN is never asked again automatically: run the command again to
+retry`, exit code 1, and no second PIN prompt. Then run step 3 again with the right PIN: it succeeds,
+and `signer info` shows `PIN tries left 3` again. Never do this step with fewer than 3 tries left.
+
+**Step 7. Touch timeout.** Run `vc signer test KEY`, type the PIN and do **not** touch. Expected
+after about 15 seconds: `the YubiKey was not touched in time: nothing was signed; run the command
+again`, exit code 1. Write down the exact text if it differs (assumption 3).
+
+**Step 8. Cancel while the card waits for a touch.** Run `vc signer test KEY`, type the PIN, and
+press Ctrl-C at `Touch the YubiKey now...` (do not touch). Expected: `signing cancelled: nothing was
+signed or recorded and the card connection is closed` at once; the command may take up to about 15
+seconds more to exit (the card connection is released only when the card stops waiting for the
+touch; at most 20 seconds). Within about 20 seconds after that, `vc signer info KEY` and
+`gpg --card-status` both work again (then `gpgconf --kill scdaemon` before the next console
+command). Do the same with Ctrl-C at the `Sign this license? [y/N]` question of an `issue` in the
+throwaway database: `signing cancelled: ...`, the request stays open, `verify-licenses` still says
+`checked 1, problems 0`.
+
+### Results
+
+Fill in one row per run and keep the table in the paper log (or here, in a commit of your own):
+
+| Date | OS and version | YubiKey serial | Firmware | Touch policy | Steps passed | Result | Notes (max command length, chaining, any message that differed) |
+|---|---|---|---|---|---|---|---|
+| | Linux | | | | | not run | |
+| | Windows | | | | | not run: no Windows build | |
+| | macOS | | | | | not run | |
+
+### Reporting a problem
+
+Send the output of `vc signer info KEY`, the exact command line, the full error text, the OS and
+version, and the `ykman --version` and `gpg --version` output. **Never** include the PIN, the Admin
+PIN or the Reset Code, and no database connection string. The public key and fingerprint are not
+secret.

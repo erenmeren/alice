@@ -10,9 +10,12 @@ key: [vendor-console-operations.md](../vendor-console-operations.md).
 
 ## Rules that never change
 
-> **Exception until the vendor console's YubiKey signer exists.** The vendor console's `issue` command
+> **Exception until the vendor console's YubiKey signer is in force.** The vendor console's `issue` command
 > (`vendor-console issue --key FILE`) uses this passphrase key file on a machine that is online, because it needs
-> the console's database. The Phase 2 YubiKey signer removes the need for this. Until then the owner decides which
+> the console's database. The YubiKey signer (`vendor-console issue --signer openpgp`, a key generated on the
+> YubiKey that never leaves it) removes the need for this. It is built, but has not yet run on real hardware: its
+> key ceremony is section 2 and the owner's hardware smoke test section 11 of
+> [vendor-console-operations.md](../vendor-console-operations.md). Until then the owner decides which
 > option is in force, either signing only offline with `licensectl` as this guide describes, or signing with the
 > console on a dedicated, patched signer computer, and records the decision and its date at the top of
 > [vendor-console-operations.md](../vendor-console-operations.md) (section 2 there). The rules below are unchanged
