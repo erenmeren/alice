@@ -16,7 +16,6 @@ import (
 	"alice/internal/license/issuer"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/db"
-	"alice/internal/vconsole/audit"
 	"alice/internal/vconsole/issue"
 	"alice/internal/vconsole/migrations"
 	"alice/internal/vconsole/sign"
@@ -48,8 +47,21 @@ Commands:
   issue --request ID --hash HASH --key FILE --out FILE [--license-id ID] [--shorten]
         Sign the request. The hash must be the one "request show" printed; if the
         request changed since, nothing is signed. Asks for the key passphrase.
-  audit-verify
-        Check the audit chain.
+  license revoke --id LICENSE-ID --reason TEXT
+        Mark a license revoked in the vendor records (reminders and lists stop; the customer's
+        installation is not affected). The reason goes into the audit. Owner login only.
+  verify-licenses (--pub FILE [--pub FILE ...] | --keyset FILE)
+        Check every stored license file against the public keys (after a restore, or any time):
+        file hash, signature and that the row agrees with the signed file. Prints
+        "checked N, problems M" and one line per problem; exit 1 when there are problems.
+  audit-verify [--head SEQ:HASH]
+        Check the audit chain. With --head (the "Audit head" line of a weekly summary mail),
+        also check that the rows up to that checkpoint are still there.
+  audit-head
+        Print the newest audit row as SEQ:HASH ("empty" for an empty log), to keep elsewhere.
+  audit show [--since YYYY-MM-DD] [--actor NAME] [--action PREFIX] [--limit 50] [--details]
+        Print audit rows, newest first: sequence, time (UTC), actor, action, subject. --limit is
+        at most 1000. --details adds each row's details (installation IDs shortened). Owner login only.
   web-user add NAME
         Create a person for the sales web page and print their one-time enrollment code
         (valid 24 hours; shown only once). Owner login only.
@@ -71,6 +83,10 @@ Commands:
         VENDOR_SMTP_ADDR (host:port), VENDOR_SMTP_FROM, and VENDOR_SMTP_USER with
         VENDOR_SMTP_PASSWORD if it needs a login (STARTTLS or port 465 required). --base-url
         is the sales web page, for the Renew link. --dry-run prints the counts and changes nothing.
+  notify failed
+        List the mails that could not be sent (owner or notifier login).
+  notify retry ID
+        Send a failed mail again on the next notify run (fresh attempt count). Notifier login only.
 `
 
 const dbEnv = "VENDOR_DATABASE_URL"
@@ -102,13 +118,24 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, as
 			}
 		}
 	case "license":
-		if len(args) >= 2 && args[1] == "export" {
-			return c.licenseExport(args[2:])
+		if len(args) >= 2 {
+			switch args[1] {
+			case "export":
+				return c.licenseExport(args[2:])
+			case "revoke":
+				return c.licenseRevoke(args[2:])
+			}
 		}
+	case "verify-licenses":
+		return c.verifyLicenses(args[1:])
 	case "issue":
 		return c.issue(args[1:])
 	case "audit-verify":
-		return c.auditVerify()
+		return c.auditVerify(args[1:])
+	case "audit-head":
+		return c.auditHead(args[1:])
+	case "audit":
+		return c.auditCmd(args[1:])
 	case "web-user":
 		if len(args) >= 2 {
 			switch args[1] {
@@ -123,8 +150,15 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, as
 	case "settings":
 		return c.settings(args[1:])
 	case "notify":
-		if len(args) >= 2 && args[1] == "run" {
-			return c.notifyRun(args[2:])
+		if len(args) >= 2 {
+			switch args[1] {
+			case "run":
+				return c.notifyRun(args[2:])
+			case "failed":
+				return c.notifyFailed(args[2:])
+			case "retry":
+				return c.notifyRetry(args[2:])
+			}
 		}
 	}
 	return c.unknown(args)
@@ -372,25 +406,6 @@ func (c *cli) issue(args []string) int {
 	}
 	written = true
 	_, _ = fmt.Fprintf(c.out, "issued %s valid until %s\n", res.LicenseID, res.ValidUntil.Format("2006-01-02"))
-	return 0
-}
-
-func (c *cli) auditVerify() int {
-	ctx := context.Background()
-	pool, err := c.connect(ctx)
-	if err != nil {
-		return c.fail(err)
-	}
-	defer pool.Close()
-	n, err := audit.Verify(ctx, pool)
-	if err != nil {
-		return c.fail(err)
-	}
-	if n != 0 {
-		_, _ = fmt.Fprintf(c.out, "audit chain BROKEN at sequence %d\n", n)
-		return 1
-	}
-	_, _ = fmt.Fprintln(c.out, "audit chain OK")
 	return 0
 }
 
