@@ -4,7 +4,7 @@
 
 **Goal:** A vendor-side record in PostgreSQL (customers, license requests, issued licenses, hash-chained audit) with database-enforced roles, and a command line that issues a license from a request using the existing passphrase key file.
 
-**Architecture:** New packages under `internal/vendor/` and a new command `cmd/vendor-console`. The schema lives in its own goose migration directory, separate from Alice's `migrations/`, because it runs in a different database (Neon). Authorization is done by PostgreSQL roles, grants and row-level security; the audit chain is computed inside the database by a `SECURITY DEFINER` function so no client can write or forge audit rows. Signing goes through a `Signer` interface; Phase 1 ships only the file-key implementation (YubiKey is Phase 2).
+**Architecture:** New packages under `internal/vconsole/` and a new command `cmd/vendor-console`. The schema lives in its own goose migration directory, separate from Alice's `migrations/`, because it runs in a different database (Neon). Authorization is done by PostgreSQL roles, grants and row-level security; the audit chain is computed inside the database by a `SECURITY DEFINER` function so no client can write or forge audit rows. Signing goes through a `Signer` interface; Phase 1 ships only the file-key implementation (YubiKey is Phase 2).
 
 **Tech Stack:** Go 1.27, `pgx/v5`, `goose/v3` (already in `go.mod`), testcontainers PostgreSQL 16 for integration tests, `internal/license` and `internal/license/issuer` for the license format.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Branch `vendor-console`. Nothing here is merged into `master` or pushed without the owner saying so.
-- The `alice` binary must never link anything under `alice/internal/vendor/` or `alice/cmd/vendor-console` (extends `TestReleaseBinaryLinksNoTestOrVendorCode`).
+- The `alice` binary must never link anything under `alice/internal/vconsole/` or `alice/cmd/vendor-console` (extends `TestReleaseBinaryLinksNoTestOrVendorCode`).
 - No private key or database password in the repository, in logs or in error messages. Connection URLs contain passwords: never print them.
 - The license file format, `internal/license` and `internal/license/issuer` are not changed.
 - Roles are database roles: `vendor_sales`, `vendor_signer` (member of `vendor_sales`), `vendor_owner` (member of `vendor_signer`). One login per person is created by the operator as a member of one of them; Phase 1 never creates logins outside tests.
@@ -42,12 +42,12 @@
 
 | Path | Responsibility |
 |---|---|
-| `internal/vendor/migrations/embed.go`, `00001_vendor.sql` | Schema, roles, grants, RLS, audit functions |
-| `internal/vendor/vpgtest/vpgtest.go` (build tag `integration`) | Postgres container, template database, `As(role)` pools |
-| `internal/vendor/audit/audit.go` | Go wrappers: `Append`, `Verify` |
-| `internal/vendor/store/store.go` | Customers and requests; `RequestHash` |
-| `internal/vendor/sign/sign.go` | `Signer` interface, `FileSigner` |
-| `internal/vendor/issue/issue.go` | The issuing transaction |
+| `internal/vconsole/migrations/embed.go`, `00001_vendor.sql` | Schema, roles, grants, RLS, audit functions |
+| `internal/vconsole/vpgtest/vpgtest.go` (build tag `integration`) | Postgres container, template database, `As(role)` pools |
+| `internal/vconsole/audit/audit.go` | Go wrappers: `Append`, `Verify` |
+| `internal/vconsole/store/store.go` | Customers and requests; `RequestHash` |
+| `internal/vconsole/sign/sign.go` | `Signer` interface, `FileSigner` |
+| `internal/vconsole/issue/issue.go` | The issuing transaction |
 | `cmd/vendor-console/main.go`, `run.go` | Command line |
 | `docs/vendor-console.md` | Operator notes for Phase 1 |
 
@@ -58,10 +58,10 @@ Package dependency direction: `cmd/vendor-console` -> `issue` -> `store`, `sign`
 ### Task 1: Schema, migration package and test harness
 
 **Files:**
-- Create: `internal/vendor/migrations/embed.go`
-- Create: `internal/vendor/migrations/00001_vendor.sql`
-- Create: `internal/vendor/vpgtest/vpgtest.go`
-- Test: `internal/vendor/migrations/migrations_integration_test.go`
+- Create: `internal/vconsole/migrations/embed.go`
+- Create: `internal/vconsole/migrations/00001_vendor.sql`
+- Create: `internal/vconsole/vpgtest/vpgtest.go`
+- Test: `internal/vconsole/migrations/migrations_integration_test.go`
 
 **Interfaces:**
 - Produces: `migrations.FS embed.FS`; `vpgtest.Main(m *testing.M) int`; `vpgtest.New(t testing.TB) *DB` where `type DB struct{ Owner *pgxpool.Pool; OwnerURL string }`; `func (d *DB) As(t testing.TB, group, login string) *pgxpool.Pool` (creates `login` as a member of `group`, returns a pool whose every connection ran `SET ROLE login`; the role is dropped at test end).
@@ -81,7 +81,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"alice/internal/vendor/vpgtest"
+	"alice/internal/vconsole/vpgtest"
 )
 
 func TestMain(m *testing.M) { os.Exit(vpgtest.Main(m)) }
@@ -110,12 +110,12 @@ func TestSchemaHasTablesAndRoles(t *testing.T) {
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `go test -tags integration -count=1 ./internal/vendor/migrations/`
+Run: `go test -tags integration -count=1 ./internal/vconsole/migrations/`
 Expected: FAIL to compile (`vpgtest` does not exist).
 
 - [ ] **Step 3: Write the migration package**
 
-`internal/vendor/migrations/embed.go`:
+`internal/vconsole/migrations/embed.go`:
 
 ```go
 // Package migrations embeds the goose SQL migrations of the vendor console database. It is
@@ -130,7 +130,7 @@ import "embed"
 var FS embed.FS
 ```
 
-`internal/vendor/migrations/00001_vendor.sql`:
+`internal/vconsole/migrations/00001_vendor.sql`:
 
 ```sql
 -- +goose Up
@@ -341,7 +341,7 @@ Note for the implementer: `GRANT UPDATE (revoked_at) ON licenses TO vendor_owner
 
 - [ ] **Step 4: Write the harness**
 
-`internal/vendor/vpgtest/vpgtest.go`:
+`internal/vconsole/vpgtest/vpgtest.go`:
 
 ```go
 //go:build integration
@@ -366,7 +366,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"alice/internal/platform/db"
-	"alice/internal/vendor/migrations"
+	"alice/internal/vconsole/migrations"
 )
 
 const template = "vendor_template"
@@ -494,13 +494,13 @@ func withDatabase(base, name string) string {
 
 - [ ] **Step 5: Run the test**
 
-Run: `go test -tags integration -count=1 ./internal/vendor/migrations/`
+Run: `go test -tags integration -count=1 ./internal/vconsole/migrations/`
 Expected: PASS (needs Docker). If goose rejects `CREATE ROLE` inside the transaction, keep it as is: PostgreSQL allows it; if the failure is about `DO` blocks, check the `StatementBegin/End` markers.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/vendor/migrations internal/vendor/vpgtest
+git add internal/vconsole/migrations internal/vconsole/vpgtest
 git -c user.name="Eren Altan" -c user.email="erenaltan@gmail.com" commit -m "feat(vendor): schema, roles and integration test harness
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -511,8 +511,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 2: Roles, grants and row-level security
 
 **Files:**
-- Test: `internal/vendor/migrations/roles_integration_test.go`
-- Modify (only if a test fails): `internal/vendor/migrations/00001_vendor.sql`
+- Test: `internal/vconsole/migrations/roles_integration_test.go`
+- Modify (only if a test fails): `internal/vconsole/migrations/00001_vendor.sql`
 
 **Interfaces:**
 - Consumes: `vpgtest.New`, `(*DB).As` (Task 1).
@@ -533,7 +533,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"alice/internal/vendor/vpgtest"
+	"alice/internal/vconsole/vpgtest"
 )
 
 const goodInstallation = "ALICE-TESTX-AAAAA" // only length matters at this layer
@@ -671,13 +671,13 @@ func TestOnlyOwnersRevokeAndNothingElseChanges(t *testing.T) {
 
 - [ ] **Step 2: Run the tests**
 
-Run: `go test -tags integration -count=1 -run 'Sales|Owners' ./internal/vendor/migrations/`
+Run: `go test -tags integration -count=1 -run 'Sales|Owners' ./internal/vconsole/migrations/`
 Expected: PASS. If one fails, fix the SQL grant or policy named by the failing assertion (do not weaken the test). Likely candidates: `UPDATE ... WITH CHECK` on `status`, and `SELECT audit_verify()` privileges.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add internal/vendor/migrations
+git add internal/vconsole/migrations
 git -c user.name="Eren Altan" -c user.email="erenaltan@gmail.com" commit -m "test(vendor): roles, grants and row-level security
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -688,8 +688,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 3: Audit chain wrappers and tamper detection
 
 **Files:**
-- Create: `internal/vendor/audit/audit.go`
-- Test: `internal/vendor/audit/audit_integration_test.go`
+- Create: `internal/vconsole/audit/audit.go`
+- Test: `internal/vconsole/audit/audit_integration_test.go`
 
 **Interfaces:**
 - Consumes: SQL functions `audit_append`, `audit_verify` (Task 1), `vpgtest`.
@@ -714,8 +714,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"alice/internal/vendor/audit"
-	"alice/internal/vendor/vpgtest"
+	"alice/internal/vconsole/audit"
+	"alice/internal/vconsole/vpgtest"
 )
 
 func TestMain(m *testing.M) { os.Exit(vpgtest.Main(m)) }
@@ -816,7 +816,7 @@ Note: `t.Name()` in a role name contains only letters and underscores for these 
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `go test -tags integration -count=1 ./internal/vendor/audit/`
+Run: `go test -tags integration -count=1 ./internal/vconsole/audit/`
 Expected: FAIL to compile (`audit` package missing).
 
 - [ ] **Step 3: Implement**
@@ -889,13 +889,13 @@ func Check(ctx context.Context, q Q) error {
 
 - [ ] **Step 4: Run to see it pass**
 
-Run: `go test -tags integration -race -count=1 ./internal/vendor/audit/`
+Run: `go test -tags integration -race -count=1 ./internal/vconsole/audit/`
 Expected: PASS. If `TestAppendBuildsAVerifiableChain` shows the actor as the login instead of the role, `current_setting('role')` is not visible inside the `SECURITY DEFINER` function in this PostgreSQL version: change `audit_actor()` to read `current_setting('role')` in the wrapper query and pass it as a parameter only from the trusted Go wrapper is NOT acceptable (forgeable). Instead keep the function and report it; the production logins connect directly, where `session_user` is the right value, so the fallback branch is what runs in production.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/vendor/audit
+git add internal/vconsole/audit
 git -c user.name="Eren Altan" -c user.email="erenaltan@gmail.com" commit -m "feat(vendor): audit chain wrappers and tamper tests
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -906,9 +906,9 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 4: Customers and requests (the store)
 
 **Files:**
-- Create: `internal/vendor/store/store.go`
-- Test: `internal/vendor/store/store_test.go` (unit, no build tag: `RequestHash`, validation)
-- Test: `internal/vendor/store/store_integration_test.go`
+- Create: `internal/vconsole/store/store.go`
+- Test: `internal/vconsole/store/store_test.go` (unit, no build tag: `RequestHash`, validation)
+- Test: `internal/vconsole/store/store_integration_test.go`
 
 **Interfaces:**
 - Consumes: `audit.Q`, `audit.Append` (Task 3); `issuer.Request`, `issuer.BuildPayload` for validation; `license.ParseInstallationID`.
@@ -972,7 +972,7 @@ func TestRequestHashIgnoresStatusAndTimes(t *testing.T) {
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `go test -count=1 ./internal/vendor/store/`
+Run: `go test -count=1 ./internal/vconsole/store/`
 Expected: FAIL to compile.
 
 - [ ] **Step 3: Implement**
@@ -998,7 +998,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/license/issuer"
 	"alice/internal/platform/db"
-	"alice/internal/vendor/audit"
+	"alice/internal/vconsole/audit"
 )
 
 // Errors.
@@ -1165,7 +1165,7 @@ func RequestHash(r Request) string {
 
 - [ ] **Step 4: Run the unit test**
 
-Run: `go test -count=1 ./internal/vendor/store/`
+Run: `go test -count=1 ./internal/vconsole/store/`
 Expected: PASS.
 
 - [ ] **Step 5: Write the integration tests**
@@ -1185,9 +1185,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/license"
-	"alice/internal/vendor/audit"
-	"alice/internal/vendor/store"
-	"alice/internal/vendor/vpgtest"
+	"alice/internal/vconsole/audit"
+	"alice/internal/vconsole/store"
+	"alice/internal/vconsole/vpgtest"
 )
 
 func TestMain(m *testing.M) { os.Exit(vpgtest.Main(m)) }
@@ -1276,13 +1276,13 @@ Note on `"start long ago"`: `BuildPayload` refuses a start more than a day in th
 
 - [ ] **Step 6: Run the integration tests**
 
-Run: `go test -tags integration -race -count=1 ./internal/vendor/store/`
+Run: `go test -tags integration -race -count=1 ./internal/vconsole/store/`
 Expected: PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/vendor/store
+git add internal/vconsole/store
 git -c user.name="Eren Altan" -c user.email="erenaltan@gmail.com" commit -m "feat(vendor): customers and license requests with request hash
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -1293,8 +1293,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 5: The Signer interface and the file-key signer
 
 **Files:**
-- Create: `internal/vendor/sign/sign.go`
-- Test: `internal/vendor/sign/sign_test.go`
+- Create: `internal/vconsole/sign/sign.go`
+- Test: `internal/vconsole/sign/sign_test.go`
 
 **Interfaces:**
 - Consumes: `issuer.SigningKey` (`KeyID()`, `Public()`, `Issue(license.Payload)`), `license.Check`, `license.NewKeySet`.
@@ -1318,7 +1318,7 @@ import (
 
 	"alice/internal/license"
 	"alice/internal/license/issuer"
-	"alice/internal/vendor/sign"
+	"alice/internal/vconsole/sign"
 )
 
 var fastKDF = issuer.KDFParams{MemoryKiB: 64, Time: 1, Threads: 1}
@@ -1387,7 +1387,7 @@ The tamper test depends on the targets value `5` appearing in the encoded file b
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `go test -count=1 ./internal/vendor/sign/`
+Run: `go test -count=1 ./internal/vconsole/sign/`
 Expected: FAIL to compile.
 
 - [ ] **Step 3: Implement**
@@ -1444,13 +1444,13 @@ func Verify(raw []byte, s Signer) (license.File, error) {
 
 - [ ] **Step 4: Run to see it pass**
 
-Run: `go test -race -count=1 ./internal/vendor/sign/`
+Run: `go test -race -count=1 ./internal/vconsole/sign/`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/vendor/sign
+git add internal/vconsole/sign
 git -c user.name="Eren Altan" -c user.email="erenaltan@gmail.com" commit -m "feat(vendor): Signer interface and file-key signer
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -1461,8 +1461,8 @@ Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
 ### Task 6: The issuing transaction
 
 **Files:**
-- Create: `internal/vendor/issue/issue.go`
-- Test: `internal/vendor/issue/issue_integration_test.go`
+- Create: `internal/vconsole/issue/issue.go`
+- Test: `internal/vconsole/issue/issue_integration_test.go`
 
 **Interfaces:**
 - Consumes: `store.GetRequest`, `store.RequestHash`, `store.Request` (Task 4); `sign.Signer`, `sign.Verify` (Task 5); `audit.Append`; `issuer.BuildPayload`; `db.InTx(ctx, pool, func(pgx.Tx) error)` and `db.IsUniqueViolationOn`.
@@ -1492,11 +1492,11 @@ import (
 
 	"alice/internal/license"
 	"alice/internal/license/issuer"
-	"alice/internal/vendor/audit"
-	"alice/internal/vendor/issue"
-	"alice/internal/vendor/sign"
-	"alice/internal/vendor/store"
-	"alice/internal/vendor/vpgtest"
+	"alice/internal/vconsole/audit"
+	"alice/internal/vconsole/issue"
+	"alice/internal/vconsole/sign"
+	"alice/internal/vconsole/store"
+	"alice/internal/vconsole/vpgtest"
 )
 
 func TestMain(m *testing.M) { os.Exit(vpgtest.Main(m)) }
@@ -1681,7 +1681,7 @@ func TestCorrectionRules(t *testing.T) {
 
 - [ ] **Step 2: Run to see it fail**
 
-Run: `go test -tags integration -count=1 ./internal/vendor/issue/`
+Run: `go test -tags integration -count=1 ./internal/vconsole/issue/`
 Expected: FAIL to compile (`issue` package missing).
 
 - [ ] **Step 3: Implement**
@@ -1707,9 +1707,9 @@ import (
 	"alice/internal/license"
 	"alice/internal/license/issuer"
 	"alice/internal/platform/db"
-	"alice/internal/vendor/audit"
-	"alice/internal/vendor/sign"
-	"alice/internal/vendor/store"
+	"alice/internal/vconsole/audit"
+	"alice/internal/vconsole/sign"
+	"alice/internal/vconsole/store"
 )
 
 // Errors. They mirror the refusals of licensectl's ledger.
@@ -1838,13 +1838,13 @@ The sales-cannot-issue test relies on the grants: a sales login has no `INSERT` 
 
 - [ ] **Step 4: Run to see it pass**
 
-Run: `go test -tags integration -race -count=1 ./internal/vendor/issue/`
+Run: `go test -tags integration -race -count=1 ./internal/vconsole/issue/`
 Expected: PASS. Failure hints: if `TestIssueTwiceFromOneRequestYieldsOneLicense` flakes, check that `FOR UPDATE` is the first statement of the transaction and `db.InTx` uses the default isolation (READ COMMITTED), under which the second waiter re-reads the row after the first commits and sees `signed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/vendor/issue
+git add internal/vconsole/issue
 git -c user.name="Eren Altan" -c user.email="erenaltan@gmail.com" commit -m "feat(vendor): issue a license from a request in one transaction
 
 Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>"
@@ -1946,7 +1946,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/license/issuer"
 	"alice/internal/platform/clock"
-	"alice/internal/vendor/vpgtest"
+	"alice/internal/vconsole/vpgtest"
 )
 
 func TestMain(m *testing.M) { os.Exit(vpgtest.Main(m)) }
@@ -2032,7 +2032,7 @@ Expected: FAIL to compile (`run` missing).
 ```go
 // Command vendor-console is the vendor's license record and issuing tool (design spec
 // 2026-10-15-vendor-console-design.md). It never ships to customers; the alice binary must not
-// link it or anything under internal/vendor (checked by cmd/alice tests).
+// link it or anything under internal/vconsole (checked by cmd/alice tests).
 package main
 
 import (
@@ -2073,8 +2073,8 @@ In `cmd/alice/license_release_test.go`, change the forbidden list in `TestReleas
 ```go
 	for _, forbidden := range []string{
 		"alice/internal/license/licensetest", "alice/internal/license/issuer",
-		"alice/internal/vendor/audit", "alice/internal/vendor/issue", "alice/internal/vendor/sign",
-		"alice/internal/vendor/store", "alice/internal/vendor/migrations",
+		"alice/internal/vconsole/audit", "alice/internal/vconsole/issue", "alice/internal/vconsole/sign",
+		"alice/internal/vconsole/store", "alice/internal/vconsole/migrations",
 		"github.com/stretchr/testify/assert", "golang.org/x/term",
 	} {
 ```

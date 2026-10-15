@@ -30,7 +30,7 @@ embedded key set (section 8).
 | Database | PostgreSQL on Neon (EU region). SQLite is not used. |
 | Signing app | One Go program for Linux, Windows and macOS, serving a local browser UI on localhost. |
 | Sales UI | A small web page, WebAuthn login. It holds no signing key. |
-| Code location | This repository, under `cmd/` and `internal/vendor/`, never shipped to customers. |
+| Code location | This repository, under `cmd/` and `internal/vconsole/`, never shipped to customers. |
 
 ## 3. Components
 
@@ -50,11 +50,11 @@ embedded key set (section 8).
   of licenses with end dates, download of signed license files. It connects to Neon with a role
   that cannot write signed licenses. It has no signing key, so a break-in cannot create a valid
   license.
-- **Shared code**. `internal/vendor/...` for the data model, the audit chain and the signer
+- **Shared code**. `internal/vconsole/...` for the data model, the audit chain and the signer
   interface. It reuses `internal/license` and `internal/license/issuer` for the license payload
   and the canonical signing bytes, so the console and the product cannot drift apart.
 
-The `alice` binary must never link `internal/vendor` or `issuer`. The existing test in `cmd/alice`
+The `alice` binary must never link `internal/vconsole` or `issuer`. The existing test in `cmd/alice`
 that checks this is extended to cover the new packages.
 
 ## 4. Signing
