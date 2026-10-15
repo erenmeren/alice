@@ -40,7 +40,24 @@ END
 $$;
 -- +goose StatementEnd
 
+-- A retried failed mail (notify retry) is a decision someone made, so it is audited. The notifier
+-- login has no EXECUTE on audit_append; the trigger runs as its owner. Only the transition from
+-- failed to not failed is recorded, never the sender's own bookkeeping.
+-- +goose StatementBegin
+CREATE FUNCTION vendor_audit_outbox_retry() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    PERFORM audit_append('mail.retry', NEW.id::text, jsonb_build_object('kind', NEW.kind, 'attempts_before', OLD.attempts));
+    RETURN NULL;
+END
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER mail_outbox_retry_audit AFTER UPDATE OF failed_at ON mail_outbox
+    FOR EACH ROW WHEN (OLD.failed_at IS NOT NULL AND NEW.failed_at IS NULL) EXECUTE FUNCTION vendor_audit_outbox_retry();
+REVOKE ALL ON FUNCTION vendor_audit_outbox_retry() FROM PUBLIC;
+
 -- +goose Down
+DROP TRIGGER mail_outbox_retry_audit ON mail_outbox;
+DROP FUNCTION vendor_audit_outbox_retry();
 -- +goose StatementBegin
 CREATE OR REPLACE FUNCTION vendor_audit_licenses() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
