@@ -46,9 +46,9 @@ ON CONFLICT (key) DO NOTHING`, AllowAdminKey, s.clock.Now().UTC()); err != nil {
 	return v, nil
 }
 
-// SaveSettings sets "SSO users may be Admin" at the given version. Switching it off is refused while a group is
-// mapped to Administrator, and demotes every SSO Administrator to Auditor and ends their sessions in the same
-// transaction (O-13, R42 row 24).
+// SaveSettings sets "SSO users may be Admin" at the given version. Switching it off is refused while a group of an
+// identity provider or of a directory (internal/auth/ldap, which shares the switch) is mapped to Administrator, and
+// demotes every SSO Administrator to Auditor and ends their sessions in the same transaction (O-13, R42 row 24).
 func (s *Service) SaveSettings(ctx context.Context, a audit.Actor, version int, allowAdmin bool) (SSOSettings, error) {
 	var out SSOSettings
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -62,7 +62,8 @@ func (s *Service) SaveSettings(ctx context.Context, a audit.Actor, version int, 
 		action, details := "sso.admin_role_allowed", map[string]string{}
 		if !allowAdmin {
 			var exist bool
-			if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM oidc_group_mappings WHERE role = 'admin')").Scan(&exist); err != nil {
+			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM oidc_group_mappings WHERE role = 'admin')
+OR EXISTS (SELECT 1 FROM ldap_group_mappings WHERE role = 'admin')`).Scan(&exist); err != nil {
 				return fmt.Errorf("oidc: read the group mappings: %w", err)
 			}
 			if exist {

@@ -36,6 +36,7 @@ import (
 
 	"alice/internal/audit"
 	"alice/internal/auth"
+	"alice/internal/auth/ldap"
 	"alice/internal/backup"
 	"alice/internal/backup/dump"
 	"alice/internal/backup/format"
@@ -610,6 +611,14 @@ func TestF87NoPlaintextInTheFile(t *testing.T) {
 	oidcSecret := "oidc-canary-" + uuid.NewString()
 	require.NoError(t, e.keyring.PutSetting(ctx, e.db.App, "sso.provider."+uuid.NewString()+".client_secret",
 		secrets.NewPlaintext([]byte(oidcSecret)), e.clk.Now()))
+	// The directory service account password, written by the ldap service as the product does.
+	ldapPassword := "ldap-bind-canary-" + uuid.NewString()
+	_, err = ldap.New(ldap.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clk}).CreateDirectory(ctx, who,
+		ldap.DirectoryInput{Name: "Corp", Addresses: []string{"ldaps://dc1.corp.example"}, UserBaseDN: "dc=corp,dc=example",
+			UserFilter: "(sAMAccountName={login})", LoginAttribute: "sAMAccountName", UniqueIDAttribute: "objectGUID",
+			BindDN: "cn=alice-svc,dc=corp,dc=example", BindPassword: secrets.NewPlaintext([]byte(ldapPassword)),
+			GroupBaseDN: "dc=corp,dc=example", GroupFilter: ldap.ADGroupFilter})
+	require.NoError(t, err)
 	managedKey := uploadCertificate(t, e)
 
 	masterRaw, err := os.ReadFile(filepath.Join(e.keysDir, secrets.MasterKeyFile))
@@ -627,6 +636,7 @@ func TestF87NoPlaintextInTheFile(t *testing.T) {
 
 	canaries := map[string][]byte{
 		"totp secret": []byte(e.totpSecret), "smtp password": []byte(smtpPassword), "oidc secret": []byte(oidcSecret),
+		"ldap bind password":  []byte(ldapPassword),
 		"managed private key": managedKey, "master key": masterKey, "passphrase": []byte(passphrase), "sender key": sender,
 	}
 	for name, c := range canaries {
@@ -646,6 +656,7 @@ func TestF87NoPlaintextInTheFile(t *testing.T) {
 	// key file and the sealed SMTP password row.
 	assert.Equal(t, masterRaw, payloadFiles(t, info.Path)["keys/master.key"])
 	assert.Equal(t, 1, e.count("SELECT count(*) FROM setting_secrets WHERE key = 'notify.smtp.password'"))
+	assert.Equal(t, 1, e.count("SELECT count(*) FROM setting_secrets WHERE key LIKE 'ldap.directory.%.bind_password'"))
 }
 
 func headerLen(t *testing.T, file []byte) int {

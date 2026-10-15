@@ -1,0 +1,213 @@
+// Package ldap is Alice's directory (LDAP and Active Directory) sign-in: the directories an Administrator configures
+// (ldaps:// addresses, a read-only service account whose password is a settings secret, the user and group searches),
+// their group-to-role mappings under the "SSO users may be Admin" switch, the network client (TLS verified, every
+// connection through netaddr, no referrals, size and time limits) and Verify, which checks a sign-in name and password
+// against a directory. Users, sessions and refusals are internal/auth's. Pure helpers (escaping, templates, names)
+// live in ldapx. Spec: docs/superpowers/specs/2026-10-15-ldap-directory-signin-design.md.
+package ldap
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"alice/internal/audit"
+	"alice/internal/auth"
+	"alice/internal/auth/oidc/claims"
+	"alice/internal/auth/ratelimit"
+	"alice/internal/platform/clock"
+	"alice/internal/rbac"
+	"alice/internal/secrets"
+)
+
+// Limits (plan ruling 10 and 11).
+const (
+	MaxDirectories   = 3
+	MaxMappings      = 200
+	DialTimeout      = 10 * time.Second // one address: TCP connect and TLS handshake
+	OperationTimeout = 15 * time.Second // one LDAP request (bind, search); also the searches' server-side time limit
+	VerifyTimeout    = 30 * time.Second // a whole Verify, TestConnection or TestSignIn
+	UserSizeLimit    = 2                // the user search: exactly one entry is wanted, two proves it is not unique
+	GroupSizeLimit   = 1000             // the group search
+	MaxPasswordBytes = 1024             // a longer password is refused before any traffic
+	AllowAdminKey    = auth.SSOAllowAdminKey
+)
+
+// misconfiguredLogEvery is how often a failing service account bind is logged per directory.
+const misconfiguredLogEvery = 10 * time.Minute
+
+// Config holds the service's dependencies.
+type Config struct {
+	Pool    *pgxpool.Pool
+	Keyring *secrets.Keyring
+	Audit   *audit.Log
+	Clock   clock.Clock
+	Dial    func(ctx context.Context, network, addr string) (net.Conn, error) // nil: netaddr.DialContext
+	Log     *slog.Logger
+	// NewClient replaces the network client (tests of the callers); nil: the real client.
+	NewClient func() Client
+}
+
+// timeouts are the client's limits; tests shorten them through export_test.go.
+type timeouts struct{ dial, operation, verify time.Duration }
+
+// Service manages directories and checks directory passwords.
+type Service struct {
+	pool      *pgxpool.Pool
+	keyring   *secrets.Keyring
+	audit     *audit.Log
+	clock     clock.Clock
+	dial      func(ctx context.Context, network, addr string) (net.Conn, error)
+	log       *slog.Logger
+	newClient func() Client
+	limits    timeouts
+	logged    *ratelimit.Recent // directories whose failing service bind was logged in the last misconfiguredLogEvery
+}
+
+// New builds the service.
+func New(c Config) *Service {
+	log := c.Log
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, dial: c.Dial, log: log, newClient: c.NewClient,
+		limits: timeouts{dial: DialTimeout, operation: OperationTimeout, verify: VerifyTimeout},
+		logged: ratelimit.NewRecent(c.Clock, misconfiguredLogEvery, 100)}
+}
+
+// client is the network client: the real one unless Config.NewClient replaces it.
+func (s *Service) client() Client {
+	if s.newClient != nil {
+		return s.newClient()
+	}
+	return &netClient{dial: s.dial, limits: s.limits}
+}
+
+// secretKey is the setting_secrets key of a directory's service account password.
+func secretKey(id uuid.UUID) string { return "ldap.directory." + id.String() + ".bind_password" }
+
+// userID is the actor's user ID for created_by: a user actor's ID, else NULL.
+func userID(a audit.Actor) any {
+	if a.Type == audit.ActorUser && a.ID != uuid.Nil {
+		return a.ID
+	}
+	return nil
+}
+
+// Identity is a directory user whose password the directory just accepted.
+type Identity struct {
+	UniqueID    string // lower-case hex of the unique id attribute's bytes (ldapx.UniqueID)
+	Login       string // the sign-in name attribute's value as the directory holds it (the typed name if it has none)
+	DisplayName string
+	Email       string
+	Groups      []string // the group search's values: DNs or the group name attribute, exactly as returned
+}
+
+// Verify checks a sign-in name and password against a directory: it loads the directory and its service account
+// password, refuses a disabled directory, an invalid sign-in name and an empty password before any network traffic,
+// then binds as the service account, finds exactly one user entry, binds as that entry with the password and reads
+// its groups. Failures are *LoginError with the closed reasons of errors.go; a missing directory is ErrNotFound.
+// The whole call is bounded by VerifyTimeout. Verify zeroes password before it returns, and holds no database
+// transaction while it talks to the directory.
+func (s *Service) Verify(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext) (Identity, Directory, error) {
+	defer password.Zero()
+	d, err := s.Directory(ctx, directoryID)
+	if err != nil {
+		return Identity{}, Directory{}, err
+	}
+	if !d.Enabled {
+		return Identity{}, d, refuse(ReasonDisabled, "", nil)
+	}
+	if lerr := checkCredentials(login, password); lerr != nil {
+		return Identity{}, d, lerr
+	}
+	id, err := s.verify(ctx, d, login, password)
+	return id, d, err
+}
+
+// checkCredentials refuses, before any traffic, a sign-in name that cannot be sent (login_invalid) and an empty or
+// oversized password (bad_credentials: an LDAP bind with an empty password is an anonymous bind and usually
+// succeeds).
+func checkCredentials(login string, password secrets.Plaintext) *LoginError {
+	if !validLogin(login) {
+		return refuse(ReasonLoginInvalid, DetailLoginName, nil)
+	}
+	if n := len(password.Bytes()); n == 0 || n > MaxPasswordBytes {
+		return refuse(ReasonBadCredentials, DetailPassword, nil)
+	}
+	return nil
+}
+
+// verify runs the directory exchange for an enabled directory.
+func (s *Service) verify(ctx context.Context, d Directory, login string, password secrets.Plaintext) (Identity, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.limits.verify)
+	defer cancel()
+	bind, err := s.bindPassword(ctx, d.ID)
+	if err != nil {
+		return Identity{}, err
+	}
+	defer bind.Zero()
+	c := s.client()
+	entry, err := c.Authenticate(ctx, d, bind, login, password)
+	if err != nil {
+		s.noteMisconfigured(d, err)
+		return Identity{}, err
+	}
+	id, err := identityOf(d, entry, login)
+	if err != nil {
+		return Identity{}, err
+	}
+	groups, err := c.Groups(ctx, d, bind, entry, id.Login)
+	if err != nil {
+		s.noteMisconfigured(d, err)
+		return Identity{}, err
+	}
+	id.Groups = groups
+	return id, nil
+}
+
+// bindPassword unseals a directory's service account password; the caller zeroes it. A missing secret is
+// directory_misconfigured.
+func (s *Service) bindPassword(ctx context.Context, id uuid.UUID) (secrets.Plaintext, error) {
+	p, ok, err := s.keyring.GetSetting(ctx, s.pool, secretKey(id))
+	if err != nil {
+		return secrets.Plaintext{}, err
+	}
+	if !ok {
+		return secrets.Plaintext{}, refuse(ReasonMisconfigured, DetailNoSecret, nil)
+	}
+	return p, nil
+}
+
+// noteMisconfigured logs a refused service account bind once per misconfiguredLogEvery and directory: the person
+// signing in is never told, the Administrator finds it in the log and with Test connection.
+func (s *Service) noteMisconfigured(d Directory, err error) {
+	var le *LoginError
+	if !errors.As(err, &le) || le.Reason != ReasonMisconfigured || le.Detail != DetailServiceBind || s.logged.Contains(d.ID.String()) {
+		return
+	}
+	s.logged.Add(d.ID.String())
+	s.log.Warn("ldap: the directory refused its service account; check the bind DN and password with Test connection",
+		"directory_id", d.ID.String(), "directory", d.Name)
+}
+
+// ResolveRole is the role the directory's group mappings give these groups under the "SSO users may be Admin"
+// switch (claims.ResolveRole: the highest mapped role, Administrator capped at Operator while the switch is off).
+// ok is false when no group is mapped: nobody gets a role by default.
+func (s *Service) ResolveRole(ctx context.Context, directoryID uuid.UUID, groups []string) (rbac.Role, bool, error) {
+	mappings, err := mappingsFor(ctx, s.pool, directoryID)
+	if err != nil {
+		return "", false, err
+	}
+	allow, err := s.adminAllowed(ctx, s.pool)
+	if err != nil {
+		return "", false, err
+	}
+	role, ok := claims.ResolveRole(groups, mappings, allow)
+	return role, ok, nil
+}
