@@ -318,6 +318,9 @@ run; later ones start where the last one ended. All times are in the configured 
 - **Unusual**: a license issued from 22:00 up to 06:00 local time, or a signer who issued more than 5
   licenses on one local day, both judged by the audit time and login. If the `timezone` setting is
   not a known zone, times are shown in UTC and the section says so.
+  The section also counts every license, whatever its dates, that has no `license.issue` audit row,
+  which means it was inserted with the database triggers turned off or its audit row is gone
+  (`N license(s) have no issue audit row (possible tampering or disabled triggers)`).
 
 If `last_summary_at` (kept by the program in the settings) is missing, unreadable or more than an
 hour in the future, a summary is sent at the next run. Storing it writes a `settings.set` audit row

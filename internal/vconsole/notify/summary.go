@@ -127,6 +127,13 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 		return false, err
 	}
 	unusual := unusualLines(issued, loc)
+	unaudited, err := licensesWithoutIssueAudit(ctx, tx)
+	if err != nil {
+		return false, err
+	}
+	if unaudited > 0 {
+		unusual = append(unusual, fmt.Sprintf("%d license(s) have no issue audit row (possible tampering or disabled triggers)", unaudited))
+	}
 
 	issuedSec := section{title: "Issued since " + start.In(loc).Format(localTimeLayout), count: len(issued), empty: "Nothing issued."}
 	for _, r := range issued {
@@ -254,6 +261,20 @@ func issuedIn(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]issuedRow
 		return nil, fmt.Errorf("notify: summary: issued licenses: %w", err)
 	}
 	return out, nil
+}
+
+// licensesWithoutIssueAudit counts licenses that have no license.issue audit row: the trigger that
+// writes it always fires on insert, so a missing row means the triggers were off or the row is gone.
+// It looks at every license, not the period: issued_at is set by the inserting client and could put
+// such a license outside any period. Only license_id, action and subject are read (the notifier's
+// column grants).
+func licensesWithoutIssueAudit(ctx context.Context, tx pgx.Tx) (int, error) {
+	var n int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM licenses l
+		WHERE NOT EXISTS (SELECT 1 FROM audit a WHERE a.action = 'license.issue' AND a.subject = l.license_id)`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("notify: summary: licenses without audit: %w", err)
+	}
+	return n, nil
 }
 
 func openRequests(ctx context.Context, tx pgx.Tx, now time.Time) (section, error) {

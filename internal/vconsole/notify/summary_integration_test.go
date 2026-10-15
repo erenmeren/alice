@@ -634,3 +634,37 @@ func TestRenewedLicenseIsNotListedAsEnding(t *testing.T) {
 	assert.True(t, strings.HasPrefix(lines[0], "LIC-SOLO |"), lines[0])
 	assert.True(t, strings.HasPrefix(lines[1], "LIC-NEW |"), lines[1])
 }
+
+// A license without its license.issue audit row was inserted with the triggers off (or the row was
+// removed); that is reported whatever its client-set issued_at says.
+func TestLicenseWithoutIssueAuditRowIsUnusual(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_s22_notifier")
+	seedIssued(t, d, "LIC-NORMAL", "Normal", "web:ayse", summaryNow.Add(-2*day))
+	var cid, rid int64
+	require.NoError(t, d.Owner.QueryRow(ctx, `INSERT INTO customers (name) VALUES ('Hidden') RETURNING id`).Scan(&cid))
+	require.NoError(t, d.Owner.QueryRow(ctx, `INSERT INTO license_requests (customer_id, installation, targets, status, requested_by)
+		VALUES ($1, $2, 7, 'signed', 'web:ayse') RETURNING id`, cid, installation).Scan(&rid))
+	tx, err := d.Owner.Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+	// Back-dated years before any period: the check must not filter by issued_at.
+	_, err = tx.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
+		valid_from, valid_until, targets, file, file_sha256) VALUES ('LIC-HIDDEN', $1, $2, $3, 'vk-1',
+		'2020-01-01', '2020-01-01', '2030-01-01', 7, '\xdeadbeef', 'x')`, rid, cid, installation)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	ok, err := notify.WeeklySummary(ctx, p, summaryNow)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ms := summaryMails(t, d)
+	require.Len(t, ms, 1)
+	head, lines := section(t, ms[0].Body, "Unusual")
+	assert.Equal(t, "== Unusual (1) ==", head)
+	assert.Equal(t, []string{"1 license(s) have no issue audit row (possible tampering or disabled triggers)"}, lines)
+	assert.Equal(t, "Weekly summary: 1 issued, 0 open requests, 1 unusual", ms[0].Subject)
+	assert.NotContains(t, ms[0].Body, "LIC-HIDDEN", "only the count, from the notifier's column grants")
+}
