@@ -1,0 +1,197 @@
+//go:build integration
+
+package migrations_test
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"alice/internal/vconsole/vpgtest"
+)
+
+func pgCode(t *testing.T, err error) string {
+	t.Helper()
+	var pe *pgconn.PgError
+	require.True(t, errors.As(err, &pe), "want a PgError, got %v", err)
+	return pe.Code
+}
+
+// issue inserts a license by raw SQL as p (the path a client could take without vendor-console).
+func issue(t *testing.T, p *pgxpool.Pool, id, customer string) {
+	t.Helper()
+	c := addCustomer(t, p, customer)
+	rid, err := addRequest(t, p, c)
+	require.NoError(t, err)
+	_, err = p.Exec(context.Background(), `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
+		valid_from, valid_until, targets, file, file_sha256) VALUES ($1, $2, $3, 'x', 'vk-77', now(), now(), now() + interval '1 year', 3, '\xdeadbeef', 'x')`, id, rid, c)
+	require.NoError(t, err)
+}
+
+func TestIssuingALicenseEnqueuesTheOwnerMail(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	owner := d.As(t, "vendor_owner", "t_n1_owner")
+	signer := d.As(t, "vendor_signer", "t_n1_signer")
+	_, err := owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('owner_email', 'boss@example.com')`)
+	require.NoError(t, err)
+	issue(t, signer, "LIC-N1", "Acme Corp")
+
+	var n int
+	var kind, subject, body string
+	var to []string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM mail_outbox`).Scan(&n))
+	assert.Equal(t, 1, n)
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT kind, to_addrs, subject, body FROM mail_outbox`).Scan(&kind, &to, &subject, &body))
+	assert.Equal(t, "issued", kind)
+	assert.Equal(t, []string{"boss@example.com"}, to)
+	assert.Contains(t, subject, "Acme Corp")
+	assert.Contains(t, subject, "LIC-N1")
+	assert.Contains(t, body, "t_n1_signer")
+	assert.Contains(t, body, "vk-77")
+	assert.NotContains(t, body, "deadbeef")
+}
+
+func TestIssuedMailWaitsWhenNoOwnerAddressIsSet(t *testing.T) {
+	d := vpgtest.New(t)
+	signer := d.As(t, "vendor_signer", "t_n2_signer")
+	issue(t, signer, "LIC-N2", "Beta Ltd")
+	var to []string
+	var sent *string
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT to_addrs, sent_at::text FROM mail_outbox`).Scan(&to, &sent))
+	assert.Empty(t, to)
+	assert.Nil(t, sent)
+}
+
+func TestSalesAndWebCannotTouchTheOutbox(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	for _, g := range []string{"vendor_sales", "vendor_web"} {
+		p := d.As(t, g, "t_n3_"+g)
+		for _, q := range []string{
+			`SELECT * FROM mail_outbox`,
+			`INSERT INTO mail_outbox (to_addrs, subject, body) VALUES ('{}', 's', 'b')`,
+			`UPDATE mail_outbox SET attempts = 1`,
+			`DELETE FROM mail_outbox`,
+			`SELECT * FROM reminders`,
+			`INSERT INTO reminders (license_id, days_before) VALUES ('x', 90)`,
+			`UPDATE reminders SET days_before = 60`,
+			`DELETE FROM reminders`,
+			`INSERT INTO vendor_settings (key, value) VALUES ('owner_email', 'a@b.co')`,
+		} {
+			_, err := p.Exec(ctx, q)
+			require.Error(t, err, "%s: %s", g, q)
+			assert.Equal(t, "42501", pgCode(t, err), "%s: %s", g, q)
+		}
+	}
+}
+
+func TestOnlyTheOwnerChangesSettingsAndWebUserEmail(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	owner := d.As(t, "vendor_owner", "t_n4_owner")
+	signer := d.As(t, "vendor_signer", "t_n4_signer")
+
+	_, err := signer.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('owner_email', 'a@b.co')`)
+	require.Error(t, err)
+	assert.Equal(t, "42501", pgCode(t, err))
+	_, err = owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('owner_email', 'a@b.co')`)
+	require.NoError(t, err)
+	_, err = signer.Exec(ctx, `UPDATE vendor_settings SET value = 'x@y.co'`)
+	require.Error(t, err)
+	assert.Equal(t, "42501", pgCode(t, err))
+	_, err = owner.Exec(ctx, `UPDATE vendor_settings SET value = 'c@d.co' WHERE key = 'owner_email'`)
+	require.NoError(t, err)
+	_, err = owner.Exec(ctx, `UPDATE vendor_settings SET value = 'bad' WHERE key = 'owner_email'`)
+	require.Error(t, err, "a malformed owner address would block issuing")
+
+	_, err = owner.Exec(ctx, `INSERT INTO web_users (name) VALUES ('ayse')`)
+	require.NoError(t, err)
+	_, err = signer.Exec(ctx, `UPDATE web_users SET email = 'ayse@example.com' WHERE name = 'ayse'`)
+	require.Error(t, err)
+	assert.Equal(t, "42501", pgCode(t, err))
+	_, err = owner.Exec(ctx, `UPDATE web_users SET email = 'ayse@example.com' WHERE name = 'ayse'`)
+	require.NoError(t, err)
+	_, err = owner.Exec(ctx, `UPDATE web_users SET email = 'no at sign' WHERE name = 'ayse'`)
+	require.Error(t, err)
+
+	var n int
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM audit WHERE action = 'settings.set' AND subject = 'owner_email'
+		AND actor = 't_n4_owner' AND details ? 'value'`).Scan(&n))
+	assert.Equal(t, 2, n)
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM audit WHERE action = 'webuser.email' AND subject = 'ayse'
+		AND details->>'email' = 'ayse@example.com'`).Scan(&n))
+	assert.Equal(t, 1, n)
+	var v int64
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT audit_verify()`).Scan(&v))
+	assert.Zero(t, v)
+}
+
+func TestNotifierCannotReadLicenseFilesOrWrite(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	signer := d.As(t, "vendor_signer", "t_n5_signer")
+	nt := d.As(t, "vendor_notifier", "t_n5_notifier")
+	issue(t, signer, "LIC-N5", "Gamma")
+
+	for _, q := range []string{
+		`SELECT file FROM licenses`,
+		`SELECT * FROM licenses`,
+		`INSERT INTO licenses (license_id) VALUES ('z')`,
+		`UPDATE customers SET notes = 'x'`,
+		`DELETE FROM mail_outbox`,
+		`INSERT INTO vendor_settings (key, value) VALUES ('owner_email', 'a@b.co')`,
+		`UPDATE vendor_settings SET value = 'a@b.co'`,
+	} {
+		_, err := nt.Exec(ctx, q)
+		require.Error(t, err, q)
+		assert.Equal(t, "42501", pgCode(t, err), q)
+	}
+	var id string
+	require.NoError(t, nt.QueryRow(ctx, `SELECT license_id FROM licenses`).Scan(&id))
+	assert.Equal(t, "LIC-N5", id)
+	_, err := nt.Exec(ctx, `UPDATE mail_outbox SET attempts = attempts + 1`)
+	require.NoError(t, err)
+	_, err = nt.Exec(ctx, `INSERT INTO reminders (license_id, days_before) VALUES ('LIC-N5', 90)`)
+	require.NoError(t, err)
+	_, err = nt.Exec(ctx, `SELECT notify_mark_summary(now())`)
+	require.NoError(t, err)
+	var v string
+	require.NoError(t, nt.QueryRow(ctx, `SELECT value FROM vendor_settings WHERE key = 'last_summary_at'`).Scan(&v))
+	assert.NotEmpty(t, v)
+}
+
+func TestOutboxRejectsHeaderInjection(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	for _, c := range []struct{ to, subject string }{
+		{"a@b.co", "hi\nBcc: x@y.co"},
+		{"a@b.co", "hi\rthere"},
+		{"a@b.co\nBcc: x@y.co", "ok"},
+		{"a@b.co\r", "ok"},
+	} {
+		_, err := d.Owner.Exec(ctx, `INSERT INTO mail_outbox (to_addrs, subject, body) VALUES (ARRAY[$1::text], $2, 'b')`, c.to, c.subject)
+		require.Error(t, err, "%q %q", c.to, c.subject)
+		assert.Equal(t, "23514", pgCode(t, err))
+	}
+}
+
+func TestReminderRowsAreUniquePerThreshold(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	signer := d.As(t, "vendor_signer", "t_n7_signer")
+	issue(t, signer, "LIC-N7", "Eta")
+	_, err := d.Owner.Exec(ctx, `INSERT INTO reminders (license_id, days_before) VALUES ('LIC-N7', 90)`)
+	require.NoError(t, err)
+	_, err = d.Owner.Exec(ctx, `INSERT INTO reminders (license_id, days_before) VALUES ('LIC-N7', 90)`)
+	require.Error(t, err)
+	assert.Equal(t, "23505", pgCode(t, err))
+	_, err = d.Owner.Exec(ctx, `INSERT INTO reminders (license_id, days_before) VALUES ('LIC-N7', 45)`)
+	require.Error(t, err)
+	assert.Equal(t, "23514", pgCode(t, err))
+}
