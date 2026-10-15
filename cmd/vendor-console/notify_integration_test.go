@@ -5,8 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"io"
-	"mime/quotedprintable"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -22,24 +20,20 @@ import (
 	"alice/internal/license"
 	"alice/internal/license/issuer"
 	"alice/internal/platform/clock"
-	"alice/internal/vconsole/mail/mailtest"
 	"alice/internal/vconsole/vpgtest"
 )
 
-const smtpPassword = "smtp-pw-never-printed" //nolint:gosec // G101: a throw-away test password
-
-// notifyEnv is one fresh database, an SMTP server and logins for each role the commands care about.
+// notifyEnv is one fresh database and logins for each role the commands care about.
 type notifyEnv struct {
 	t    *testing.T
 	d    *vpgtest.DB
-	smtp *mailtest.Server
 	urls map[string]string // login kind -> database URL
 }
 
 func newNotifyEnv(t *testing.T, prefix string) *notifyEnv {
 	t.Helper()
 	d := vpgtest.New(t)
-	e := &notifyEnv{t: t, d: d, smtp: mailtest.Start(t, mailtest.Options{}), urls: map[string]string{"super": d.OwnerURL}}
+	e := &notifyEnv{t: t, d: d, urls: map[string]string{"super": d.OwnerURL}}
 	for kind, group := range map[string]string{"owner": "vendor_owner", "sales": "vendor_sales", "notifier": "vendor_notifier"} {
 		login := prefix + "_" + kind
 		_ = d.As(t, group, login)
@@ -48,25 +42,20 @@ func newNotifyEnv(t *testing.T, prefix string) *notifyEnv {
 		u.User = url.UserPassword(login, vpgtest.AsPassword)
 		e.urls[kind] = u.String()
 	}
-	old := smtpRootCAs
-	smtpRootCAs = e.smtp.CertPool()
-	t.Cleanup(func() { smtpRootCAs = old })
 	return e
 }
 
-// do runs the CLI as the given login kind, with the SMTP settings of the test server.
+// do runs the CLI as the given login kind and checks that no output names a database URL or the
+// test logins' password.
 func (e *notifyEnv) do(kind string, clk clock.Clock, args ...string) (string, string, int) {
-	env := map[string]string{
-		"VENDOR_DATABASE_URL":  e.urls[kind],
-		"VENDOR_SMTP_ADDR":     e.smtp.Addr(),
-		"VENDOR_SMTP_FROM":     "Vendor Console <console@vendor.example>",
-		"VENDOR_SMTP_USER":     "console",
-		"VENDOR_SMTP_PASSWORD": smtpPassword,
-	}
+	env := map[string]string{"VENDOR_DATABASE_URL": e.urls[kind]}
 	ask := func(string) ([]byte, error) { return []byte(words), nil }
 	var out, errOut bytes.Buffer
 	code := run(args, func(k string) string { return env[k] }, &out, &errOut, ask, clk)
-	assert.NotContains(e.t, out.String()+errOut.String(), smtpPassword)
+	all := out.String() + errOut.String()
+	assert.NotContains(e.t, all, vpgtest.AsPassword, "%q", args)
+	assert.NotContains(e.t, all, "postgres://", "%q", args)
+	assert.NotContains(e.t, all, "postgresql://", "%q", args)
 	return out.String(), errOut.String(), code
 }
 
@@ -74,6 +63,12 @@ func (e *notifyEnv) count(table string) int {
 	var n int
 	require.NoError(e.t, e.d.Owner.QueryRow(context.Background(), `SELECT count(*) FROM `+table).Scan(&n))
 	return n
+}
+
+func (e *notifyEnv) exec(sql string, args ...any) {
+	e.t.Helper()
+	_, err := e.d.Owner.Exec(context.Background(), sql, args...)
+	require.NoError(e.t, err)
 }
 
 // issueOne issues a 12-month license as the superuser login at clk's time and returns its ID.
@@ -106,10 +101,9 @@ func (e *notifyEnv) settingsSnapshot() []string {
 	return e.strings(`SELECT key || '=' || value FROM vendor_settings ORDER BY key`)
 }
 
-// outboxSnapshot returns the state of every outbox row (recipients, attempts, timestamps), ordered by id.
-func (e *notifyEnv) outboxSnapshot() []string {
-	return e.strings(`SELECT concat_ws('|', id, array_to_string(to_addrs, ','), attempts, last_error, sent_at, failed_at,
-		next_attempt_at) FROM mail_outbox ORDER BY id`)
+// notifications returns every notification as "kind|audience|target|dedupe key", ordered by id.
+func (e *notifyEnv) notifications() []string {
+	return e.strings(`SELECT concat_ws('|', kind, audience, coalesce(target_user, ''), dedupe_key) FROM notifications ORDER BY id`)
 }
 
 func (e *notifyEnv) strings(query string) []string {
@@ -121,51 +115,30 @@ func (e *notifyEnv) strings(query string) []string {
 	return out
 }
 
-func subjects(msgs []mailtest.Message) []string {
-	var out []string
-	for _, m := range msgs {
-		for _, l := range strings.Split(string(m.Data), "\r\n") {
-			if s, ok := strings.CutPrefix(l, "Subject: "); ok {
-				out = append(out, s)
-			}
-		}
-	}
-	return out
-}
-
-// bodies decodes the quoted-printable bodies of msgs and joins them.
-func bodies(t *testing.T, msgs []mailtest.Message) string {
-	t.Helper()
-	var b strings.Builder
-	for _, m := range msgs {
-		_, body, ok := strings.Cut(string(m.Data), "\r\n\r\n")
-		require.True(t, ok)
-		dec, err := io.ReadAll(quotedprintable.NewReader(strings.NewReader(body)))
-		require.NoError(t, err)
-		b.Write(dec)
-	}
-	return b.String()
-}
-
 func TestSettingsAsOwnerAndNotAsSales(t *testing.T) {
 	e := newNotifyEnv(t, "t_cs")
 	clk := clock.Real{}
-	_, se, code := e.do("owner", clk, "settings", "set", "owner_email", "boss@example.com")
-	require.Equal(t, 0, code, se)
-	_, se, code = e.do("owner", clk, "settings", "set", "timezone", "Europe/Berlin")
-	require.Equal(t, 0, code, se)
-	_, se, code = e.do("owner", clk, "settings", "set", "owner_email", "new.boss@example.com")
-	require.Equal(t, 0, code, se)
 	out, se, code := e.do("owner", clk, "settings", "show")
 	require.Equal(t, 0, code, se)
-	assert.Regexp(t, `owner_email\s+new\.boss@example\.com`, out)
-	assert.Regexp(t, `timezone\s+Europe/Berlin`, out)
+	assert.Equal(t, "timezone         (not set)\nlast_summary_at  (not set)\n", out)
+
+	_, se, code = e.do("owner", clk, "settings", "set", "timezone", "Europe/Berlin")
+	require.Equal(t, 0, code, se)
+	_, se, code = e.do("owner", clk, "settings", "set", "timezone", "Asia/Tokyo")
+	require.Equal(t, 0, code, se)
+	e.exec(`INSERT INTO vendor_settings (key, value) VALUES ('last_summary_at', '2026-10-12T06:00:00Z')`)
+	out, se, code = e.do("owner", clk, "settings", "show")
+	require.Equal(t, 0, code, se)
+	assert.Equal(t, "timezone         Asia/Tokyo\nlast_summary_at  2026-10-12T06:00:00Z\n", out)
+
+	// The removed key is refused before the database, as any unknown key.
+	_, se, code = e.do("owner", clk, "settings", "set", "owner_email", "boss@example.com")
+	assert.Equal(t, 2, code)
+	assert.Contains(t, se, "allowed keys: timezone")
 
 	for _, args := range [][]string{
-		{"settings", "set", "owner_email", "sales@example.com"},
 		{"settings", "set", "timezone", "UTC"},
 		{"settings", "show"},
-		{"web-user", "set-email", "ayse", "ayse@example.com"},
 	} {
 		out, se, code := e.do("sales", clk, args...)
 		assert.Equal(t, 1, code, args)
@@ -176,85 +149,129 @@ func TestSettingsAsOwnerAndNotAsSales(t *testing.T) {
 	var n int
 	require.NoError(t, e.d.Owner.QueryRow(context.Background(), `SELECT count(*) FROM audit WHERE action = 'settings.set'
 		AND actor = 't_cs_owner'`).Scan(&n))
-	assert.Equal(t, 3, n, "every settings change is audited")
+	assert.Equal(t, 2, n, "every settings change is audited")
 }
 
-func TestWebUserSetEmail(t *testing.T) {
-	e := newNotifyEnv(t, "t_ce")
-	clk := clock.Real{}
-	_, se, code := e.do("owner", clk, "web-user", "add", "ayse")
-	require.Equal(t, 0, code, se)
-	_, se, code = e.do("owner", clk, "web-user", "set-email", "AYSE", "ayse@example.com")
-	require.Equal(t, 0, code, se)
-	var email string
-	require.NoError(t, e.d.Owner.QueryRow(context.Background(), `SELECT email FROM web_users WHERE name = 'ayse'`).Scan(&email))
-	assert.Equal(t, "ayse@example.com", email)
-	_, se, code = e.do("owner", clk, "web-user", "set-email", "nobody", "x@example.com")
-	assert.Equal(t, 1, code)
-	assert.Contains(t, se, "not found")
-	_, se, code = e.do("owner", clk, "web-user", "set-email", "ayse", "")
-	require.Equal(t, 0, code, se)
-	require.NoError(t, e.d.Owner.QueryRow(context.Background(), `SELECT email FROM web_users WHERE name = 'ayse'`).Scan(&email))
-	assert.Empty(t, email)
-}
-
-func TestNotifyRunSendsIssuanceReminderAndSummaryOnce(t *testing.T) {
+func TestNotifyRunCreatesTheNotificationsOnce(t *testing.T) {
 	e := newNotifyEnv(t, "t_cn")
 	t0 := time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)
 	fake := clock.NewFake(t0)
-	_, se, code := e.do("owner", fake, "settings", "set", "owner_email", "boss@example.com")
+	_, se, code := e.do("owner", fake, "web-user", "add", "boss", "--owner")
 	require.Equal(t, 0, code, se)
 	id := e.issueOne(fake, "Acme Ltd")
+	require.Equal(t, []string{"license.issued|owner||issued:" + id}, e.notifications(), "the database wrote the issuance notice")
 	fake.Advance(345 * 24 * time.Hour) // 20 days before the 12-month license ends
 
-	// A dry run changes nothing and sends nothing.
+	// A dry run changes nothing.
+	tables := []string{"notifications", "notification_reads", "reminders", "vendor_settings", "audit"}
 	before := map[string]int{}
-	for _, tbl := range []string{"mail_outbox", "reminders", "vendor_settings", "audit"} {
+	for _, tbl := range tables {
 		before[tbl] = e.count(tbl)
 	}
-	settingsBefore := e.settingsSnapshot()
-	outboxBefore := e.outboxSnapshot()
-	out, se, code := e.do("notifier", fake, "notify", "run", "--dry-run", "--base-url", "https://licenses.example.com")
+	settingsBefore, notesBefore := e.settingsSnapshot(), e.notifications()
+	out, se, code := e.do("notifier", fake, "notify", "run", "--dry-run")
 	require.Equal(t, 0, code, se)
-	assert.Contains(t, out, "reminders to create: 1")
-	assert.Contains(t, out, "weekly summary: due")
-	assert.Contains(t, out, "mail to send: 1 already queued")
+	assert.Empty(t, se, "an owner exists: no warning")
+	assert.Equal(t, "dry run, nothing changed\nreminders: 1 to create\nweekly summary: due\npruned: not run (dry run)\n", out)
 	for tbl, n := range before {
 		assert.Equal(t, n, e.count(tbl), "dry run wrote to %s", tbl)
 	}
 	assert.Equal(t, settingsBefore, e.settingsSnapshot(), "dry run changed a setting")
-	assert.Equal(t, outboxBefore, e.outboxSnapshot(), "dry run changed an outbox row")
-	assert.Empty(t, e.smtp.Messages())
+	assert.Equal(t, notesBefore, e.notifications(), "dry run changed a notification")
 
-	out, se, code = e.do("notifier", fake, "notify", "run", "--base-url", "https://licenses.example.com")
+	// The real run agrees with the dry run.
+	out, se, code = e.do("notifier", fake, "notify", "run")
 	require.Equal(t, 0, code, se)
-	assert.Contains(t, out, "reminders created: 1")
-	assert.Contains(t, out, "weekly summary: created")
-	assert.Contains(t, out, "mail: sent 3,")
-	msgs := e.smtp.Messages()
-	require.Len(t, msgs, 3)
-	subj := strings.Join(subjects(msgs), "\n")
-	assert.Contains(t, subj, "License issued: Acme Ltd ("+id+")")
-	assert.Contains(t, subj, "License ending in 30 days: Acme Ltd")
-	assert.Contains(t, subj, "Weekly summary:")
-	for _, m := range msgs {
-		assert.Equal(t, []string{"boss@example.com"}, m.To)
-		assert.Equal(t, "console@vendor.example", m.From)
-	}
-	assert.Contains(t, bodies(t, msgs), "https://licenses.example.com/requests/new?renew="+id)
-	auths := e.smtp.Auths()
-	require.NotEmpty(t, auths)
-	for _, a := range auths {
-		assert.True(t, a.TLS, "credentials only over TLS")
-	}
+	assert.Empty(t, se)
+	assert.Equal(t, "reminders: 1 created\nweekly summary: created\npruned: 0\n", out)
+	notes := e.notifications()
+	require.Len(t, notes, 3, notes)
+	assert.Equal(t, "license.ending|owner||ending:"+id+":30", notes[1])
+	assert.Equal(t, "summary.weekly|owner||summary:"+fake.Now().UTC().Format("2006-01-02"), notes[2])
+	assert.Equal(t, []string{"30", "60", "90"}, e.strings(`SELECT days_before::text FROM reminders ORDER BY days_before`),
+		"the passed thresholds are recorded, only the nearest one notifies")
+	var mark string
+	require.NoError(t, e.d.Owner.QueryRow(context.Background(), `SELECT value FROM vendor_settings WHERE key = 'last_summary_at'`).Scan(&mark))
+	assert.Equal(t, fake.Now().UTC().Format("2006-01-02T15:04:05Z"), mark)
 
-	// The second run finds nothing to do.
-	out, se, code = e.do("notifier", fake, "notify", "run", "--base-url", "https://licenses.example.com")
+	// The second run, and its dry run, find nothing to do.
+	out, se, code = e.do("notifier", fake, "notify", "run", "--dry-run")
 	require.Equal(t, 0, code, se)
-	assert.Contains(t, out, "reminders created: 0")
-	assert.Contains(t, out, "weekly summary: not due")
-	assert.Contains(t, out, "mail: sent 0,")
-	assert.Len(t, e.smtp.Messages(), 3)
+	assert.Contains(t, out, "reminders: 0 to create\nweekly summary: not due\n")
+	out, se, code = e.do("notifier", fake, "notify", "run")
+	require.Equal(t, 0, code, se)
+	assert.Equal(t, "reminders: 0 created\nweekly summary: not due\npruned: 0\n", out)
+	assert.Len(t, e.notifications(), 3)
+}
+
+func TestNotifyRunPrunesOldReadNotifications(t *testing.T) {
+	e := newNotifyEnv(t, "t_cp")
+	_, se, code := e.do("owner", clock.Real{}, "web-user", "add", "boss", "--owner")
+	require.Equal(t, 0, code, se)
+	// A summary was made yesterday, so the run creates nothing and only prunes.
+	e.exec(`INSERT INTO vendor_settings (key, value) VALUES ('last_summary_at', $1)`,
+		time.Now().UTC().Add(-24*time.Hour).Format(time.RFC3339))
+	for i, key := range []string{"old-read", "old-unread", "new-read"} {
+		age := "200 days"
+		if i == 2 {
+			age = "10 days"
+		}
+		e.exec(`INSERT INTO notifications (kind, title, audience, dedupe_key, created_at)
+			VALUES ('test', 't', 'owner', $1, now() - $2::interval)`, key, age)
+	}
+	e.exec(`INSERT INTO notification_reads (notification_id, user_id)
+		SELECT n.id, w.id FROM notifications n, web_users w WHERE n.dedupe_key IN ('old-read', 'new-read')`)
+
+	out, se, code := e.do("notifier", clock.Real{}, "notify", "run")
+	require.Equal(t, 0, code, se)
+	assert.Equal(t, "reminders: 0 created\nweekly summary: not due\npruned: 1\n", out)
+	assert.Equal(t, []string{"test|owner||old-unread", "test|owner||new-read"}, e.notifications())
+}
+
+func TestNotifyRunWarnsWhenNoOwnerCanReadTheNotifications(t *testing.T) {
+	e := newNotifyEnv(t, "t_cw")
+	clk := clock.Real{}
+	check := func(wantWarning bool, why string) {
+		t.Helper()
+		for _, args := range [][]string{{"notify", "run"}, {"notify", "run", "--dry-run"}} {
+			out, se, code := e.do("notifier", clk, args...)
+			assert.Equal(t, 0, code, "%s %q: %s", why, args, se)
+			assert.NotEmpty(t, out, why)
+			if wantWarning {
+				assert.Equal(t, noOwnerWarning+"\n", se, "%s %q", why, args)
+			} else {
+				assert.Empty(t, se, "%s %q", why, args)
+			}
+		}
+	}
+	check(true, "no web user")
+	_, se, code := e.do("owner", clk, "web-user", "add", "ayse")
+	require.Equal(t, 0, code, se)
+	check(true, "only a sales user")
+	_, se, code = e.do("owner", clk, "web-user", "add", "boss", "--owner")
+	require.Equal(t, 0, code, se)
+	check(false, "an enabled owner")
+	_, se, code = e.do("owner", clk, "web-user", "disable", "boss")
+	require.Equal(t, 0, code, se)
+	check(true, "the owner is disabled")
+}
+
+// The owner check is advice: when it cannot read web_users it says so and the run goes on.
+func TestTheOwnerCheckNeverFailsTheRun(t *testing.T) {
+	e := newNotifyEnv(t, "t_co")
+	ctx := context.Background()
+	for _, kind := range []string{"sales", "notifier"} {
+		pool := e.d.As(t, map[string]string{"sales": "vendor_sales", "notifier": "vendor_notifier"}[kind], "t_co_check_"+kind)
+		if kind == "notifier" {
+			e.exec(`REVOKE SELECT (role) ON web_users FROM vendor_notifier`)
+		}
+		var out, errOut bytes.Buffer
+		c := &cli{out: &out, err: &errOut}
+		c.warnIfNoOwner(ctx, pool)
+		assert.Empty(t, out.String(), kind)
+		assert.True(t, strings.HasPrefix(errOut.String(), "warning: could not check for an owner web user: "), "%s: %s", kind, errOut.String())
+		assert.Contains(t, errOut.String(), "permission denied", kind)
+	}
 }
 
 func TestNotifyRunNeedsANotifierLogin(t *testing.T) {
@@ -264,58 +281,39 @@ func TestNotifyRunNeedsANotifierLogin(t *testing.T) {
 			out, se, code := e.do(kind, clock.Real{}, args...)
 			assert.Equal(t, 1, code, kind, args)
 			assert.Contains(t, se, "vendor_notifier", kind)
+			assert.NotContains(t, se, "warning", kind)
 			assert.Empty(t, out, kind)
 		}
 	}
-	assert.Zero(t, e.count("mail_outbox"))
+	assert.Zero(t, e.count("notifications"))
+	assert.Zero(t, e.count("vendor_settings"))
 }
 
-// A reminder step that fails must not keep the issuance mail from going out; the run still ends
-// with exit 1 so the timer shows the failure.
-func TestNotifyRunSendsEvenWhenRemindersFail(t *testing.T) {
-	e := newNotifyEnv(t, "t_cf")
-	t0 := time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)
-	fake := clock.NewFake(t0)
-	id := e.issueOne(fake, "Beta Ltd") // before the owner address exists: the mail waits
-	_, se, code := e.do("owner", fake, "settings", "set", "owner_email", "boss@example.com")
-	require.Equal(t, 0, code, se)
-	ctx := context.Background()
-	_, err := e.d.Owner.Exec(ctx, `CREATE FUNCTION t_break() RETURNS trigger LANGUAGE plpgsql AS $$
-		BEGIN RAISE EXCEPTION 'reminders are broken'; END $$`)
-	require.NoError(t, err)
-	_, err = e.d.Owner.Exec(ctx, `CREATE TRIGGER t_break BEFORE INSERT ON reminders FOR EACH ROW EXECUTE FUNCTION t_break()`)
-	require.NoError(t, err)
-	fake.Advance(345 * 24 * time.Hour)
+// A step that fails must not keep the others from running; the run ends with exit 1 so the
+// timer shows the failure. The failure is a privilege taken from the notifier in this database.
+func TestNotifyRunGoesOnWhenAStepFails(t *testing.T) {
+	t.Run("reminders", func(t *testing.T) {
+		e := newNotifyEnv(t, "t_cf")
+		fake := clock.NewFake(time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC))
+		id := e.issueOne(fake, "Beta Ltd")
+		e.exec(`REVOKE INSERT ON reminders FROM vendor_notifier`)
+		fake.Advance(345 * 24 * time.Hour)
 
-	out, se, code := e.do("notifier", fake, "notify", "run")
-	assert.Equal(t, 1, code)
-	assert.Contains(t, se, "reminders are broken")
-	assert.Contains(t, se, id)
-	assert.Contains(t, out, "recipients filled: 1")
-	assert.Contains(t, out, "reminders created: 0")
-	assert.Contains(t, out, "mail: sent 2,", "the issuance mail and the summary still go out")
-	assert.Contains(t, strings.Join(subjects(e.smtp.Messages()), "\n"), "License issued: Beta Ltd")
-}
-
-func TestNotifyRunExitsOneWhenAMessageFails(t *testing.T) {
-	e := newNotifyEnv(t, "t_cx")
-	ctx := context.Background()
-	// The run's clock is a little ahead of the database's, so the seeded message is due.
-	now := time.Now().UTC().Add(time.Minute)
-	// A summary went out yesterday, so this run sends none and the bad message is the only mail.
-	_, err := e.d.Owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('last_summary_at', $1)`,
-		now.Add(-24*time.Hour).Format(time.RFC3339))
-	require.NoError(t, err)
-	// An address the outbox stores but the sender can never use: it fails at once, not in 14 hours.
-	_, err = e.d.Owner.Exec(ctx, `INSERT INTO mail_outbox (kind, to_addrs, subject, body) VALUES ('test', '{not an address}', 's', 'b')`)
-	require.NoError(t, err)
-	out, se, code := e.do("notifier", clock.NewFake(now), "notify", "run")
-	assert.Equal(t, 1, code)
-	assert.Contains(t, out, "weekly summary: not due")
-	assert.Contains(t, out, "mail: sent 0, to retry 0, failed 1,")
-	assert.Equal(t, 1, e.count("mail_outbox"), "no summary was created")
-	assert.Contains(t, se, "marked failed")
-	var failed int
-	require.NoError(t, e.d.Owner.QueryRow(ctx, `SELECT count(*) FROM mail_outbox WHERE failed_at IS NOT NULL AND attempts = 1`).Scan(&failed))
-	assert.Equal(t, 1, failed)
+		out, se, code := e.do("notifier", fake, "notify", "run")
+		assert.Equal(t, 1, code)
+		assert.Contains(t, se, "permission denied")
+		assert.Contains(t, se, id)
+		assert.Equal(t, "reminders: 0 created\nweekly summary: created\npruned: 0\n", out, "the summary and the prune still ran")
+		assert.Zero(t, e.count("reminders"))
+		assert.Len(t, e.strings(`SELECT kind FROM notifications WHERE kind = 'summary.weekly'`), 1)
+	})
+	t.Run("prune", func(t *testing.T) {
+		e := newNotifyEnv(t, "t_cg")
+		e.exec(`REVOKE EXECUTE ON FUNCTION notify_prune(timestamptz) FROM vendor_notifier`)
+		out, se, code := e.do("notifier", clock.Real{}, "notify", "run")
+		assert.Equal(t, 1, code)
+		assert.Contains(t, se, "notify: prune")
+		assert.Equal(t, "reminders: 0 created\nweekly summary: created\npruned: 0\n", out)
+		assert.Len(t, e.strings(`SELECT kind FROM notifications WHERE kind = 'summary.weekly'`), 1)
+	})
 }

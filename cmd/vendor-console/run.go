@@ -109,38 +109,35 @@ Commands:
         file hash, signature and that the row agrees with the signed file. Prints
         "checked N, problems M" and one line per problem; exit 1 when there are problems.
   audit-verify [--head SEQ:HASH]
-        Check the audit chain. With --head (the "Audit head" line of a weekly summary mail),
+        Check the audit chain. With --head (the "Audit head" line of a weekly summary),
         also check that the rows up to that checkpoint are still there.
   audit-head
         Print the newest audit row as SEQ:HASH ("empty" for an empty log), to keep elsewhere.
   audit show [--since YYYY-MM-DD] [--actor NAME] [--action PREFIX] [--limit 50] [--details]
         Print audit rows, newest first: sequence, time (UTC), actor, action, subject. --limit is
         at most 1000. --details adds each row's details (installation IDs replaced by inst#<fingerprint>). Owner login only.
-  web-user add NAME
-        Create a person for the sales web page and print their one-time enrollment code
-        (valid 24 hours; shown only once). Owner login only.
+  web-user add NAME [--owner]
+        Create a person for the web page and print their one-time enrollment code (valid 24
+        hours; shown only once). The role is sales, or owner with --owner (an owner also sees
+        the issuance notices, the weekly summary and every reminder). A role cannot be changed:
+        disable the person and add a new one. Owner login only.
   web-user invite NAME
         Print a new enrollment code (a new passkey for someone who lost theirs).
   web-user disable NAME
         Lock the person out and end their sessions.
   web-user enable NAME
   web-user list
-  web-user set-email NAME EMAIL
-        The address reminders for this person's requests go to ("" removes it). Owner login only.
+        Print every person with their role, and whether they are disabled.
   settings set KEY VALUE
-        Owner login only. Keys: owner_email (where issuance mails, reminders and the weekly
-        summary go) and timezone (IANA name for the summary, default Europe/Istanbul).
+        Owner login only. The only key is timezone (IANA name for the weekly summary, default
+        Europe/Istanbul).
   settings show
-  notify run [--base-url URL] [--dry-run]
-        Create due expiry reminders and the weekly summary, then send every pending mail.
-        Meant for a timer; needs a login in vendor_notifier. The SMTP server is named by
-        VENDOR_SMTP_ADDR (host:port), VENDOR_SMTP_FROM, and VENDOR_SMTP_USER with
-        VENDOR_SMTP_PASSWORD if it needs a login (STARTTLS or port 465 required). --base-url
-        is the sales web page, for the Renew link. --dry-run prints the counts and changes nothing.
-  notify failed
-        List the mails that could not be sent (owner or notifier login).
-  notify retry ID
-        Send a failed mail again on the next notify run (fresh attempt count). Notifier login only.
+        Print the timezone and when the last weekly summary was made.
+  notify run [--dry-run]
+        Create the due expiry reminders and the weekly summary as notifications in the web
+        page, and remove read notifications older than 180 days. Meant for a timer; needs a
+        login in vendor_notifier. Exit 1 when a step failed (the other steps still run).
+        --dry-run prints the counts and changes nothing.
 `
 
 const dbEnv = "VENDOR_DATABASE_URL"
@@ -212,8 +209,6 @@ func runWith(args []string, getenv func(string) string, stdout, stderr io.Writer
 				return c.webUser(args[1], args[2:])
 			case "list":
 				return c.webUserList()
-			case "set-email":
-				return c.webUserSetEmail(args[2:])
 			}
 		}
 	case "settings":
@@ -223,10 +218,6 @@ func runWith(args []string, getenv func(string) string, stdout, stderr io.Writer
 			switch args[1] {
 			case "run":
 				return c.notifyRun(args[2:])
-			case "failed":
-				return c.notifyFailed(args[2:])
-			case "retry":
-				return c.notifyRetry(args[2:])
 			}
 		}
 	}
@@ -610,12 +601,35 @@ func (c *cli) webUserErr(err error) int {
 	return c.fail(err)
 }
 
-func (c *cli) webUser(sub string, args []string) int {
-	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
-		_, _ = fmt.Fprintf(c.err, "vendor-console: web-user %s needs one NAME\n", sub)
-		return 2
+// webUserArgs splits the arguments of "web-user SUB": one NAME and, for add only, an optional
+// --owner on either side of it. Anything else is a usage error.
+func webUserArgs(sub string, args []string) (name, role string, ok bool) {
+	role = webuser.RoleSales
+	var names []string
+	for _, a := range args {
+		switch {
+		case sub == "add" && (a == "--owner" || a == "-owner") && role == webuser.RoleSales:
+			role = webuser.RoleOwner
+		case strings.HasPrefix(a, "-"):
+			return "", "", false
+		default:
+			names = append(names, a)
+		}
 	}
-	name := args[0]
+	if len(names) != 1 || strings.TrimSpace(names[0]) == "" {
+		return "", "", false
+	}
+	return names[0], role, true
+}
+
+func (c *cli) webUser(sub string, args []string) int {
+	name, role, ok := webUserArgs(sub, args)
+	if !ok {
+		if sub == "add" {
+			return c.usageErr("web-user add needs one NAME and takes only --owner")
+		}
+		return c.usageErr("web-user %s needs one NAME", sub)
+	}
 	ctx := context.Background()
 	pool, err := c.connect(ctx)
 	if err != nil {
@@ -632,7 +646,7 @@ func (c *cli) webUser(sub string, args []string) int {
 	var code string
 	switch sub {
 	case "add":
-		id, err := webuser.AddUser(ctx, tx, name, webuser.RoleSales)
+		id, err := webuser.AddUser(ctx, tx, name, role)
 		if err != nil {
 			return c.webUserErr(err)
 		}
@@ -661,7 +675,11 @@ func (c *cli) webUser(sub string, args []string) int {
 		return c.webUserErr(err)
 	}
 	if code != "" {
-		_, _ = fmt.Fprintf(c.out, "enrollment code for %s (shown once, expires %s):\n%s\n", name,
+		who := name
+		if sub == "add" {
+			who = name + " (role " + role + ")"
+		}
+		_, _ = fmt.Fprintf(c.out, "enrollment code for %s (shown once, expires %s):\n%s\n", who,
 			now.Add(enrollmentTTL).UTC().Format("2006-01-02 15:04 MST"), code)
 	} else {
 		_, _ = fmt.Fprintf(c.out, "%s %sd\n", name, sub)
@@ -682,9 +700,9 @@ func (c *cli) webUserList() int {
 	}
 	for _, u := range users {
 		if u.Disabled {
-			_, _ = fmt.Fprintf(c.out, "%s  disabled\n", u.Name)
+			_, _ = fmt.Fprintf(c.out, "%s  %s  disabled\n", u.Name, u.Role)
 		} else {
-			_, _ = fmt.Fprintf(c.out, "%s\n", u.Name)
+			_, _ = fmt.Fprintf(c.out, "%s  %s\n", u.Name, u.Role)
 		}
 	}
 	return 0

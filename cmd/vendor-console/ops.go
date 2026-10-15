@@ -20,7 +20,6 @@ import (
 	"alice/internal/license"
 	"alice/internal/license/issuer"
 	"alice/internal/vconsole/audit"
-	"alice/internal/vconsole/notify"
 	"alice/internal/vconsole/store"
 )
 
@@ -28,11 +27,6 @@ import (
 const (
 	auditShowDefault = 50
 	auditShowMax     = 1000
-	// failedListMax caps "notify failed"; more than this many failed mails is an outage to fix
-	// at the mail server, not a list to read.
-	failedListMax = 200
-	// failedFieldRunes is how much of a failed mail's subject and error is shown.
-	failedFieldRunes = 80
 	// keyFileMax bounds a public key or key set file read from disk.
 	keyFileMax = 1 << 20
 )
@@ -53,14 +47,6 @@ func termSafe(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
-}
-
-// firstRunes keeps the first n runes of s.
-func firstRunes(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	return string([]rune(s)[:n])
 }
 
 // installationSymbols is the number of symbols in an installation ID (15 random and one check
@@ -417,7 +403,7 @@ func (c *cli) auditHead(args []string) int {
 // headLinePrefix is the label the weekly summary puts before the checkpoint.
 const headLinePrefix = "Audit head:"
 
-// parseHeadArg reads a checkpoint given as <seq>:<hash> or as the whole mail line
+// parseHeadArg reads a checkpoint given as <seq>:<hash> or as the whole summary line
 // "Audit head: <seq>:<hash>" (the label is matched without regard to case; spaces around the
 // label and the value are ignored).
 func parseHeadArg(s string) (audit.Head, error) {
@@ -692,64 +678,4 @@ func (c *cli) licenseRevoke(args []string) int {
 		return c.fail(fmt.Errorf("license %s is already revoked; nothing changed", shown))
 	}
 	return c.permissionErr(err, "license revoke needs the owner login")
-}
-
-// notifyFailed is "notify failed": the mails SendPending gave up on.
-func (c *cli) notifyFailed(args []string) int {
-	if len(args) != 0 {
-		return c.usageErr("notify failed takes no arguments")
-	}
-	ctx := context.Background()
-	pool, err := c.connect(ctx)
-	if err != nil {
-		return c.fail(err)
-	}
-	defer pool.Close()
-	list, err := notify.ListFailed(ctx, pool, failedListMax+1)
-	if err != nil {
-		return c.permissionErr(err, "notify failed needs the owner login or a login in vendor_notifier")
-	}
-	if len(list) == 0 {
-		_, _ = fmt.Fprintln(c.out, "no failed mail")
-		return 0
-	}
-	more := len(list) > failedListMax
-	if more {
-		list = list[:failedListMax]
-	}
-	for _, r := range list {
-		_, _ = fmt.Fprintf(c.out, "%d  %s  created %s  attempts %d  subject: %s  error: %s\n", r.ID, termSafe(r.Kind),
-			r.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"), r.Attempts,
-			termSafe(firstRunes(r.Subject, failedFieldRunes)), termSafe(firstRunes(r.LastError, failedFieldRunes)))
-	}
-	if more {
-		_, _ = fmt.Fprintf(c.out, "(only the first %d are shown)\n", failedListMax)
-	}
-	return 0
-}
-
-// notifyRetry is "notify retry ID" (notifier login): the next notify run sends the mail again.
-func (c *cli) notifyRetry(args []string) int {
-	if len(args) != 1 {
-		return c.usageErr("notify retry needs one message ID (from notify failed)")
-	}
-	id, err := strconv.ParseInt(args[0], 10, 64)
-	if err != nil || id < 1 {
-		return c.usageErr("%q is not a message ID", args[0])
-	}
-	ctx := context.Background()
-	pool, err := c.connect(ctx)
-	if err != nil {
-		return c.fail(err)
-	}
-	defer pool.Close()
-	err = notify.RetryFailed(ctx, pool, id, c.clk.Now())
-	if errors.Is(err, notify.ErrNotFailed) {
-		return c.fail(fmt.Errorf("message %d is not a failed mail (unknown, pending or sent); nothing changed", id))
-	}
-	if err != nil {
-		return c.permissionErr(err, "notify retry must be run with a login in vendor_notifier (a retry is not an owner action)")
-	}
-	_, _ = fmt.Fprintf(c.out, "message %d will be sent by the next notify run\n", id)
-	return 0
 }

@@ -121,13 +121,9 @@ var rules = map[string][]string{
 	"alice/internal/vconsole/web/...": {platform, "alice/internal/vconsole/store", "alice/internal/vconsole/webuser", "alice/internal/vconsole/audit"},
 	// Web users (sessions, passkeys) know the database and the audit chain, not the license tables.
 	"alice/internal/vconsole/webuser": {platform, "alice/internal/vconsole/audit"},
-	// Phase 4 (plan 2026-10-15-vendor-console-phase-4): the notifier (outbox, reminders, weekly summary) talks to the
-	// database through the store and the audit chain and sends through the mail package. The mail package is a leaf: it
-	// knows no vconsole code and no product code. Its test SMTP server imports the mail package only, and may itself be
-	// imported from tests only (listed in testOnlyImports and testOnlyDirs, buildtags_test.go).
-	"alice/internal/vconsole/notify":        {platform, "alice/internal/vconsole/mail", "alice/internal/vconsole/audit", "alice/internal/vconsole/store"},
-	"alice/internal/vconsole/mail":          {},
-	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/mail"},
+	// Phase 4 (plan 2026-10-15-vendor-console-phase-4, in-app since plan 2026-10-15-vendor-console-notifications): the
+	// notifier (reminders, weekly summary, pruning) writes notifications through the database and the audit chain only.
+	"alice/internal/vconsole/notify": {platform, "alice/internal/vconsole/audit", "alice/internal/vconsole/store"},
 	// Phase 2 (plan 2026-10-15-vendor-console-phase-2): the OpenPGP card protocol is a leaf that knows no Alice code (the
 	// transport is behind its Card interface); its software card simulator knows nothing either and may itself be imported
 	// from tests only (testOnlyImports and testOnlyDirs, buildtags_test.go).
@@ -152,13 +148,10 @@ var denied = map[string][]string{
 	"alice/internal/vconsole/...": {pcscPkg},
 	// The sales web service (plan 2026-10-15-vendor-console-phase-3) holds no signing key: it never reaches the signer
 	// or the issuing code. Web users (sessions, passkeys) share only the audit package with the license tables.
-	"alice/internal/vconsole/web/...": {"alice/internal/vconsole/sign/...", "alice/internal/vconsole/issue", "alice/internal/vconsole/notify", "alice/internal/vconsole/mail/..."},
+	"alice/internal/vconsole/web/...": {"alice/internal/vconsole/sign/...", "alice/internal/vconsole/issue", "alice/internal/vconsole/notify"},
 	"alice/internal/vconsole/webuser": {"alice/internal/vconsole/store", "alice/internal/vconsole/sign/..."},
-	// The notifier never signs, issues or serves web pages; the mail package and its test server reach no other
-	// vconsole code (mailtest only the mail package) and no product code.
-	"alice/internal/vconsole/notify":        {"alice/internal/vconsole/sign/...", "alice/internal/vconsole/issue", "alice/internal/vconsole/web/...", "alice/internal/vconsole/webuser", "alice/internal/license/..."},
-	"alice/internal/vconsole/mail":          {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
-	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/store", "alice/internal/vconsole/audit", "alice/internal/vconsole/notify", pcscPkg, platform},
+	// The notifier never signs, issues or serves web pages.
+	"alice/internal/vconsole/notify": {"alice/internal/vconsole/sign/...", "alice/internal/vconsole/issue", "alice/internal/vconsole/web/...", "alice/internal/vconsole/webuser", "alice/internal/license/..."},
 	// The card protocol and its simulator reach no other vconsole code (the simulator not even the protocol) and no
 	// product code.
 	"alice/internal/vconsole/sign/openpgp":             {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
@@ -377,7 +370,6 @@ func TestAllowed(t *testing.T) {
 		{"web to the signer denied", "alice/internal/vconsole/web", "alice/internal/vconsole/sign", false},
 		{"web to the issuing code denied", "alice/internal/vconsole/web", "alice/internal/vconsole/issue", false},
 		{"web users to the store denied", "alice/internal/vconsole/webuser", "alice/internal/vconsole/store", false},
-		{"notify to the mail sender allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/mail", true},
 		{"notify to the audit chain allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/audit", true},
 		{"notify to the store allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/store", true},
 		{"notify to the platform allowed", "alice/internal/vconsole/notify", "alice/internal/platform/db", true},
@@ -387,15 +379,6 @@ func TestAllowed(t *testing.T) {
 		{"notify to the web users denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/webuser", false},
 		{"notify to the license format denied", "alice/internal/vconsole/notify", "alice/internal/license", false},
 		{"notify to the product notifier denied", "alice/internal/vconsole/notify", "alice/internal/notify", false},
-		{"mail to the store denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/store", false},
-		{"mail to the audit chain denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/audit", false},
-		{"mail to the notifier denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/notify", false},
-		{"mail to the license format denied", "alice/internal/vconsole/mail", "alice/internal/license", false},
-		{"mail to the product mail denied", "alice/internal/vconsole/mail", "alice/internal/notify", false},
-		{"mail to the platform denied", "alice/internal/vconsole/mail", "alice/internal/platform/db", false},
-		{"mailtest to the mail package allowed", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/mail", true},
-		{"mailtest to the store denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/store", false},
-		{"mailtest to the platform denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/platform/db", false},
 		{"openpgp to the signer seam denied", "alice/internal/vconsole/sign/openpgp", "alice/internal/vconsole/sign", false},
 		{"openpgp to the license format denied", "alice/internal/vconsole/sign/openpgp", "alice/internal/license", false},
 		{"openpgp to the platform denied", "alice/internal/vconsole/sign/openpgp", "alice/internal/platform/clock", false},
@@ -406,7 +389,6 @@ func TestAllowed(t *testing.T) {
 		{"issue to the PC/SC transport denied", "alice/internal/vconsole/issue", "alice/internal/vconsole/sign/pcsc", false},
 		{"audit to the PC/SC transport denied", "alice/internal/vconsole/audit", "alice/internal/vconsole/sign/pcsc", false},
 		{"migrations to the PC/SC transport denied", "alice/internal/vconsole/migrations", "alice/internal/vconsole/sign/pcsc", false},
-		{"mailtest to the PC/SC transport denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/sign/pcsc", false},
 		{"openpgptest to the PC/SC transport denied", "alice/internal/vconsole/sign/openpgp/openpgptest", "alice/internal/vconsole/sign/pcsc", false},
 		{"the console command to the PC/SC transport allowed", "alice/cmd/vendor-console", "alice/internal/vconsole/sign/pcsc", true},
 		{"pcsc to the card protocol allowed", "alice/internal/vconsole/sign/pcsc", "alice/internal/vconsole/sign/openpgp", true},
@@ -420,8 +402,6 @@ func TestAllowed(t *testing.T) {
 		{"web to the PC/SC transport denied", "alice/internal/vconsole/web", "alice/internal/vconsole/sign/pcsc", false},
 		{"notify to the card protocol denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/sign/openpgp", false},
 		{"notify to the PC/SC transport denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/sign/pcsc", false},
-		{"mail to the card protocol denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/sign/openpgp", false},
-		{"mail to the PC/SC transport denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/sign/pcsc", false},
 		{"store to the audit chain allowed", "alice/internal/vconsole/store", "alice/internal/vconsole/audit", true},
 		{"store to the license format allowed", "alice/internal/vconsole/store", "alice/internal/license/issuer", true},
 		{"store to the signer denied", "alice/internal/vconsole/store", "alice/internal/vconsole/sign", false},
@@ -430,7 +410,6 @@ func TestAllowed(t *testing.T) {
 		{"web users to the card protocol denied", "alice/internal/vconsole/webuser", "alice/internal/vconsole/sign/openpgp", false},
 		{"web users to the PC/SC transport denied", "alice/internal/vconsole/webuser", "alice/internal/vconsole/sign/pcsc", false},
 		{"web to the notifier denied", "alice/internal/vconsole/web", "alice/internal/vconsole/notify", false},
-		{"web to the mail sender denied", "alice/internal/vconsole/web", "alice/internal/vconsole/mail", false},
 		{"vconsole to the product jobs denied", "alice/internal/vconsole/issue", "alice/internal/jobs", false},
 		{"vconsole to the product rbac denied", "alice/internal/vconsole/store", "alice/internal/rbac", false},
 		{"discovery to the inventory denied", "alice/internal/discovery", "alice/internal/inventory", false},

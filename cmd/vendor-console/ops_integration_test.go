@@ -46,7 +46,7 @@ func newOpsEnv(t *testing.T, prefix string) *opsEnv {
 
 func (e *opsEnv) login(kind string) string { return e.prefix + "_" + kind }
 
-// run is do with the secret checks: no URL, no database password, no SMTP password in any output.
+// run is do with the secret checks: no URL and no database password in any output.
 func (e *opsEnv) run(kind string, args ...string) (string, string, int) {
 	e.t.Helper()
 	out, errOut, code := e.do(kind, clock.Real{}, args...)
@@ -117,7 +117,7 @@ func TestAuditHeadAndVerifyHead(t *testing.T) {
 	old, err := audit.ParseHead(strings.TrimSpace(out))
 	require.NoError(t, err, out)
 
-	// The notifier may read the head too (it mails it); a sales login may not.
+	// The notifier may read the head too (it puts it in the weekly summary); a sales login may not.
 	out2, se, code := e.run("notifier", "audit-head")
 	require.Equal(t, 0, code, se)
 	assert.Equal(t, out, out2)
@@ -358,64 +358,4 @@ func (e *opsEnv) revoked(id string) int {
 	require.NoError(e.t, e.d.Owner.QueryRow(context.Background(),
 		`SELECT count(*) FROM licenses WHERE license_id = $1 AND revoked_at IS NOT NULL`, id).Scan(&n))
 	return n
-}
-
-func TestNotifyFailedAndRetry(t *testing.T) {
-	e := newOpsEnv(t, "nf")
-	ctx := context.Background()
-	subject := "Subject " + strings.Repeat("s", 120)
-	var failed, pending int64
-	require.NoError(t, e.d.Owner.QueryRow(ctx, `INSERT INTO mail_outbox (kind, to_addrs, subject, body, attempts, last_error, failed_at)
-		VALUES ('reminder', ARRAY['a@example.com'], $1, 'b', 10, $2, now()) RETURNING id`,
-		subject, "smtp: 550 \x1b[31mred\x1b[0m "+strings.Repeat("e", 120)).Scan(&failed))
-	require.NoError(t, e.d.Owner.QueryRow(ctx, `INSERT INTO mail_outbox (kind, to_addrs, subject, body, attempts, next_attempt_at)
-		VALUES ('reminder', ARRAY['a@example.com'], 'pending', 'b', 2, now() + interval '1 hour') RETURNING id`).Scan(&pending))
-
-	for _, kind := range []string{"owner", "notifier"} {
-		out, se, code := e.run(kind, "notify", "failed")
-		require.Equal(t, 0, code, kind+se)
-		require.Len(t, lines(out), 1, out)
-		assert.True(t, strings.HasPrefix(out, strconv.FormatInt(failed, 10)+"  reminder  created "), out)
-		assert.Contains(t, out, "attempts 10")
-		assert.Contains(t, out, "subject: "+subject[:80]+"  error:")
-		assert.NotContains(t, out, subject[:81])
-		assert.NotContains(t, out, "\x1b")
-		assert.Contains(t, out, "smtp: 550 ?[31mred?[0m")
-		assert.NotContains(t, out, "pending")
-	}
-	_, se, code := e.run("sales", "notify", "failed")
-	assert.Equal(t, 1, code)
-	assert.Contains(t, se, "permission denied")
-
-	// Only the notifier retries, and only failed rows.
-	for _, kind := range []string{"owner", "sales"} {
-		_, se, code = e.run(kind, "notify", "retry", strconv.FormatInt(failed, 10))
-		assert.Equal(t, 1, code, kind)
-		assert.Contains(t, se, "permission denied: notify retry must be run with a login in vendor_notifier", kind)
-	}
-	before := e.outboxSnapshot()
-	_, se, code = e.run("notifier", "notify", "retry", strconv.FormatInt(pending, 10))
-	assert.Equal(t, 1, code)
-	assert.Contains(t, se, "not a failed mail")
-	assert.Equal(t, before, e.outboxSnapshot(), "a refused retry changes nothing")
-
-	out, se, code := e.run("notifier", "notify", "retry", strconv.FormatInt(failed, 10))
-	require.Equal(t, 0, code, se)
-	assert.Contains(t, out, "next notify run")
-	var attempts int
-	var lastErr string
-	var failedAt *time.Time
-	var dueNow bool
-	require.NoError(t, e.d.Owner.QueryRow(ctx, `SELECT attempts, last_error, failed_at, next_attempt_at <= now() FROM mail_outbox WHERE id = $1`,
-		failed).Scan(&attempts, &lastErr, &failedAt, &dueNow))
-	assert.Zero(t, attempts)
-	assert.Empty(t, lastErr)
-	assert.Nil(t, failedAt)
-	assert.True(t, dueNow)
-
-	out, _, code = e.run("owner", "notify", "failed")
-	assert.Equal(t, 0, code)
-	assert.Equal(t, "no failed mail\n", out)
-	out, _, _ = e.run("owner", "audit", "show", "--action", "mail.retry")
-	assert.Contains(t, out, e.login("notifier")+" mail.retry "+strconv.FormatInt(failed, 10))
 }

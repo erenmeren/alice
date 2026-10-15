@@ -18,7 +18,7 @@ const clockSkew = 5 * time.Minute
 
 // LicenseProblem is one finding of VerifyLicenses. Problem is a short fixed sentence: it never
 // carries file bytes, payload values or an installation ID, so the report can go to a terminal,
-// a ticket or a mail without leaking customer data.
+// a ticket or a message without leaking customer data.
 type LicenseProblem struct {
 	LicenseID string
 	Problem   string

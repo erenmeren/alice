@@ -77,7 +77,7 @@ type Head struct {
 func (h Head) String() string { return fmt.Sprintf("%d:%s", h.Seq, h.Hash) }
 
 // ParseHead reads String's form. It accepts nothing but digits, ':' and 64 hex digits (upper case
-// is normalised to lower case): the value comes from a mailbox or a command line.
+// is normalised to lower case): the value comes from the paper log or a command line.
 func ParseHead(s string) (Head, error) {
 	seq, hash, ok := strings.Cut(s, ":")
 	if !ok || len(seq) == 0 || len(seq) > 18 || len(hash) != 64 {

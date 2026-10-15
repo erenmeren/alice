@@ -186,7 +186,7 @@ func TestHostileCustomerNameCannotBreakOrForgeLines(t *testing.T) {
 	ctx := context.Background()
 	signer := d.As(t, "vendor_signer", "t_nt3_signer")
 	// customers.name is at most 200 characters; the license and key ids carry the oversize values.
-	name := "Acme\nSigned by: mallory‮⁦gro.live⁩\x1b[31m " + strings.Repeat("n", 150)
+	name := "Acme\nSigned by: mallory\u202e\u2066gro.live\u2069\x1b[31m\u2028" + strings.Repeat("n", 150)
 	require.LessOrEqual(t, utf8.RuneCountInString(name), 200)
 	c := addCustomer(t, signer, name)
 	rid, err := addRequest(t, signer, c)
@@ -195,7 +195,7 @@ func TestHostileCustomerNameCannotBreakOrForgeLines(t *testing.T) {
 	longID := "LIC-" + strings.Repeat("a\n", 1000)
 	_, err = signer.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
 		valid_from, valid_until, targets, file, file_sha256) VALUES ($1, $2, $3, 'ALICE-SECRET-INSTALL', $4, now(), now(), now(), 1, '\x00', 'x')`,
-		longID, rid, c, strings.Repeat("k‮", 150000))
+		longID, rid, c, strings.Repeat("k\u202e", 150000))
 	require.NoError(t, err, "issuing must never fail because of the notification")
 
 	var title, body, subject, key string
@@ -213,7 +213,7 @@ func TestHostileCustomerNameCannotBreakOrForgeLines(t *testing.T) {
 		assert.NotContains(t, s, "\r")
 	}
 	for _, s := range []string{title, body, subject} {
-		for _, bad := range []string{"‮", "⁦", "⁩", " ", "\x1b"} {
+		for _, bad := range []string{"\u202e", "\u2066", "\u2069", "\u2028", "\x1b"} {
 			assert.NotContains(t, s, bad)
 		}
 		assert.NotContains(t, s, "ALICE-SECR")

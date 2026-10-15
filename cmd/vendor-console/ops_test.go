@@ -20,7 +20,7 @@ func TestUsageListsTheOwnerCommands(t *testing.T) {
 	_, _, stderr := runArgs()
 	for _, want := range []string{"audit-head", "audit-verify [--head SEQ:HASH]", "audit show [--since YYYY-MM-DD]",
 		"--actor NAME", "--action PREFIX", "--details", "verify-licenses (--pub FILE", "--keyset FILE",
-		"license revoke --id LICENSE-ID --reason TEXT", "notify failed", "notify retry ID"} {
+		"license revoke --id LICENSE-ID --reason TEXT"} {
 		assert.Contains(t, stderr, want)
 	}
 }
@@ -65,11 +65,6 @@ func TestOwnerCommandArgumentsAreCheckedBeforeTheDatabase(t *testing.T) {
 		{"license", "revoke", "--id", "LIC-1-1"},
 		{"license", "revoke", "--id", "LIC-1-1", "--reason", "  "},
 		{"license", "revoke", "--reason", "customer left"},
-		{"notify", "failed", "extra"},
-		{"notify", "retry"},
-		{"notify", "retry", "0"},
-		{"notify", "retry", "x"},
-		{"notify", "retry", "1", "2"},
 	} {
 		code, _, stderr := runArgs(args...)
 		assert.Equal(t, 2, code, "%q", args)
@@ -103,8 +98,6 @@ func TestValidOwnerCommandsGoOnToTheDatabase(t *testing.T) {
 		{"audit", "show", "--limit", "1000", "--since", "2026-10-01", "--actor", "x", "--action", "license.", "--details"},
 		{"verify-licenses", "--pub", pub},
 		{"license", "revoke", "--id", "LIC-1-1", "--reason", "customer left"},
-		{"notify", "failed"},
-		{"notify", "retry", "3"},
 	} {
 		code, _, stderr := runArgs(args...)
 		assert.Equal(t, 1, code, "%q", args)
@@ -127,8 +120,10 @@ func TestOwnerCommandsNeverPrintTheDatabaseURLOrPassword(t *testing.T) {
 		{"audit", "show", "--details"},
 		{"verify-licenses", "--pub", pub},
 		{"license", "revoke", "--id", "LIC-1-1", "--reason", "customer left"},
-		{"notify", "failed"},
-		{"notify", "retry", "3"},
+		{"notify", "run"},
+		{"notify", "run", "--dry-run"},
+		{"settings", "show"},
+		{"web-user", "add", "ayse", "--owner"},
 	} {
 		code, out, stderr := runEnv(map[string]string{"VENDOR_DATABASE_URL": dbURL}, args...)
 		assert.Equal(t, 1, code, "%q", args)
@@ -453,12 +448,7 @@ func flip(c byte) byte {
 	return '0'
 }
 
-func TestFirstRunesCutsByCharacter(t *testing.T) {
-	assert.Equal(t, "ab", firstRunes("ab", 80))
-	assert.Equal(t, "şş", firstRunes("şşş", 2))
-}
-
-func TestParseHeadArgAcceptsTheWholeMailLine(t *testing.T) {
+func TestParseHeadArgAcceptsTheWholeSummaryLine(t *testing.T) {
 	hash := strings.Repeat("ab", 32)
 	for _, in := range []string{
 		"12:" + hash,

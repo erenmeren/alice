@@ -10,7 +10,7 @@ import (
 // Setting is one row of vendor_settings.
 type Setting struct{ Key, Value, UpdatedBy string }
 
-// SetSetting writes a setting (owner only; the database checks the key and an owner address, stamps
+// SetSetting writes a setting (owner only; the database checks the key, stamps
 // who changed it and audits the change). Callers validate the value first, so a refusal here is a
 // permission problem or a race, not a typo.
 func SetSetting(ctx context.Context, q audit.Q, key, value string) error {

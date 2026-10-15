@@ -191,10 +191,6 @@ func TestRevokedLicenseDisappearsFromEndingList(t *testing.T) {
 	owner := d.As(t, "vendor_owner", "t_rev_owner")
 	notifier := d.As(t, "vendor_notifier", "t_rev_notifier")
 	ctx := context.Background()
-	_, err := d.Owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('owner_email', 'boss@example.com')
-		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
-	require.NoError(t, err)
-
 	require.NoError(t, store.RevokeLicense(ctx, owner, "L-1", "refund", now))
 
 	rows, err := store.ListLicenses(ctx, owner, now, 60, false)
@@ -208,12 +204,16 @@ func TestRevokedLicenseDisappearsFromEndingList(t *testing.T) {
 		assert.Equal(t, r.LicenseID == "L-1", r.RevokedAt != nil)
 	}
 
-	n, err := notify.CreateReminders(ctx, notifier, now, "https://console.example.com")
+	n, err := notify.CreateReminders(ctx, notifier, now)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n, "only the license that is still valid gets a reminder")
 	var c int
 	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM reminders WHERE license_id = 'L-1'`).Scan(&c))
 	assert.Zero(t, c)
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE kind = 'license.ending' AND subject = 'L-1'`).Scan(&c))
+	assert.Zero(t, c, "no reminder notification for the revoked license")
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE kind = 'license.ending' AND subject = 'L-2'`).Scan(&c))
+	assert.Equal(t, 1, c)
 }
 
 func TestReasonRules(t *testing.T) {

@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -221,10 +222,23 @@ func TestWebUserJourney(t *testing.T) {
 	require.NotEmpty(t, first, out)
 	assert.Contains(t, out, "expires")
 
+	assert.Contains(t, out, "enrollment code for ayse (role sales)")
+
+	out, e, code = j.do(clk, "web-user", "add", "boss", "--owner")
+	require.Equal(t, 0, code, e)
+	assert.Contains(t, out, "enrollment code for boss (role owner)")
+	assert.Regexp(t, `[A-Za-z0-9_-]{40,}`, out)
+
 	out, e, code = j.do(clk, "web-user", "list")
 	require.Equal(t, 0, code, e)
-	assert.Contains(t, out, "ayse")
-	assert.NotContains(t, out, "disabled")
+	assert.Equal(t, "ayse  sales\nboss  owner\n", out)
+	var role string
+	require.NoError(t, j.d.Owner.QueryRow(context.Background(), `SELECT role FROM web_users WHERE name = 'boss'`).Scan(&role))
+	assert.Equal(t, "owner", role)
+	var details string
+	require.NoError(t, j.d.Owner.QueryRow(context.Background(),
+		`SELECT details::text FROM audit WHERE action = 'webuser.add' AND subject = 'boss'`).Scan(&details))
+	assert.Contains(t, details, `"role": "owner"`, "the audit records the role")
 
 	_, e, code = j.do(clk, "web-user", "add", "AYSE")
 	assert.Equal(t, 1, code)
@@ -243,7 +257,7 @@ func TestWebUserJourney(t *testing.T) {
 	_, e, code = j.do(clk, "web-user", "disable", "ayse")
 	require.Equal(t, 0, code, e)
 	out, _, _ = j.do(clk, "web-user", "list")
-	assert.Contains(t, out, "ayse  disabled")
+	assert.Contains(t, out, "ayse  sales  disabled")
 	out, e, code = j.do(clk, "web-user", "invite", "ayse")
 	assert.Equal(t, 1, code)
 	assert.Contains(t, e, "ayse is disabled; enable it first")

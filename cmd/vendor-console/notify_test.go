@@ -2,9 +2,13 @@ package main
 
 import (
 	"bytes"
+	"os/exec"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"alice/internal/platform/clock"
 )
@@ -17,32 +21,55 @@ func runEnv(env map[string]string, args ...string) (int, string, string) {
 
 func TestUsageListsTheNotifyAndSettingsCommands(t *testing.T) {
 	_, _, stderr := runArgs()
-	for _, want := range []string{"notify run", "settings set KEY VALUE", "settings show", "web-user set-email NAME EMAIL",
-		"VENDOR_SMTP_ADDR"} {
+	for _, want := range []string{"notify run [--dry-run]", "settings set KEY VALUE", "settings show",
+		"web-user add NAME [--owner]"} {
 		assert.Contains(t, stderr, want)
+	}
+}
+
+// Nothing of the e-mail machinery is left in the command line: no command, no variable, no flag.
+func TestUsageNamesNoMailCommand(t *testing.T) {
+	_, _, stderr := runArgs()
+	for _, gone := range []string{"smtp", "mail", "owner_email", "set-email", "notify failed", "notify retry", "--base-url"} {
+		assert.NotRegexp(t, "(?i)"+regexp.QuoteMeta(gone), stderr)
 	}
 }
 
 func TestSettingsValuesAreCheckedBeforeTheDatabase(t *testing.T) {
 	for _, args := range [][]string{
-		{"settings", "set", "owner_email", "not-an-address"},
-		{"settings", "set", "owner_email", "Boss <boss@example.com>"},
-		{"settings", "set", "owner_email", "boss@localhost"},
-		{"settings", "set", "owner_email", ""},
 		{"settings", "set", "timezone", "Nowhere/City"},
 		{"settings", "set", "timezone", "Local"},
 		{"settings", "set", "timezone", ""},
 		{"settings", "set", "last_summary_at", "2026-10-01T00:00:00Z"},
-		{"settings", "set", "owner_email"},
+		{"settings", "set", "owner_email", "boss@example.com"},
+		{"settings", "set", "timezone"},
 		{"settings", "set"},
 		{"settings", "show", "extra"},
-		{"web-user", "set-email", "ayse", "ayşe@example.com"},
-		{"web-user", "set-email", "ayse"},
-		{"web-user", "set-email", "", "a@b.co"},
 	} {
 		code, _, stderr := runArgs(args...)
 		assert.Equal(t, 2, code, "%q", args)
 		assert.NotContains(t, stderr, "VENDOR_DATABASE_URL", "%q is refused before connecting", args)
+	}
+}
+
+func TestAnUnknownSettingNamesTheAllowedKeys(t *testing.T) {
+	for _, key := range []string{"owner_email", "last_summary_at", "frob"} {
+		code, _, stderr := runArgs("settings", "set", key, "x")
+		assert.Equal(t, 2, code, key)
+		assert.Contains(t, stderr, `unknown setting "`+key+`"`)
+		assert.Contains(t, stderr, "(allowed keys: timezone)", key)
+	}
+}
+
+func TestRemovedCommandsAreUnknown(t *testing.T) {
+	for _, args := range [][]string{
+		{"web-user", "set-email", "ayse", "ayse@example.com"},
+		{"notify", "failed"},
+		{"notify", "retry", "3"},
+	} {
+		code, _, stderr := runArgs(args...)
+		assert.Equal(t, 2, code, "%q", args)
+		assert.Contains(t, stderr, "unknown command", "%q", args)
 	}
 }
 
@@ -53,49 +80,54 @@ func TestUnknownSettingsCommandsAreRefused(t *testing.T) {
 	}
 }
 
-func TestNotifyRunNeedsTheSMTPSettingsBeforeTheDatabase(t *testing.T) {
-	for _, env := range []map[string]string{
-		{},
-		{"VENDOR_SMTP_ADDR": "smtp.example.com:587"},
-		{"VENDOR_SMTP_FROM": "console@example.com"},
-		{"VENDOR_SMTP_ADDR": "smtp.example.com", "VENDOR_SMTP_FROM": "console@example.com"},
-		{"VENDOR_SMTP_ADDR": "smtp.example.com:587", "VENDOR_SMTP_FROM": "console@example.com", "VENDOR_SMTP_USER": "u"},
-	} {
-		code, _, stderr := runEnv(env, "notify", "run")
-		assert.Equal(t, 2, code, env)
-		assert.Contains(t, stderr, "VENDOR_SMTP", env)
-		assert.NotContains(t, stderr, "VENDOR_DATABASE_URL", env)
+// notify run needs only the database: the SMTP variables are gone and are ignored when set.
+func TestNotifyRunGoesStraightToTheDatabase(t *testing.T) {
+	for _, args := range [][]string{{"notify", "run"}, {"notify", "run", "--dry-run"}} {
+		code, _, stderr := runEnv(map[string]string{"VENDOR_SMTP_ADDR": "smtp.example.com:587"}, args...)
+		assert.Equal(t, 1, code, args)
+		assert.Contains(t, stderr, "VENDOR_DATABASE_URL", args)
+		assert.NotRegexp(t, "(?i)smtp", stderr, args)
 	}
-	// A dry run sends nothing and so needs no SMTP settings: it goes on to the database.
-	code, _, stderr := runEnv(map[string]string{}, "notify", "run", "--dry-run")
-	assert.Equal(t, 1, code)
-	assert.Contains(t, stderr, "VENDOR_DATABASE_URL")
 }
 
-func TestNotifyRunRefusesABadBaseURL(t *testing.T) {
-	env := map[string]string{"VENDOR_SMTP_ADDR": "smtp.example.com:587", "VENDOR_SMTP_FROM": "console@example.com"}
-	for _, u := range []string{"ftp://x.example", "https://user:pw@x.example", "not a url", "https://x.example/?q=1"} {
-		code, _, stderr := runEnv(env, "notify", "run", "--base-url", u)
-		assert.Equal(t, 2, code, u)
-		assert.NotContains(t, stderr, "pw@", u)
+func TestNotifyRunRefusesExtraArgumentsAndTheOldFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"notify", "run", "extra"},
+		{"notify", "run", "--base-url", "https://licenses.example.com"},
+		{"notify", "run", "--dry-run", "extra"},
+	} {
+		code, _, stderr := runArgs(args...)
+		assert.Equal(t, 2, code, "%q", args)
+		assert.NotContains(t, stderr, "VENDOR_DATABASE_URL", "%q is refused before connecting", args)
 	}
-	code, _, _ := runEnv(env, "notify", "run", "extra")
-	assert.Equal(t, 2, code)
-	code, _, _ = runEnv(env, "notify")
-	assert.Equal(t, 2, code)
 }
 
-func TestTheSMTPPasswordIsNeverPrinted(t *testing.T) {
-	const pw = "hunter2-very-secret"
-	for _, env := range []map[string]string{
-		{"VENDOR_SMTP_ADDR": "smtp.example.com:587", "VENDOR_SMTP_FROM": "console@example.com", "VENDOR_SMTP_PASSWORD": pw},
-		{"VENDOR_SMTP_ADDR": "smtp.example.com:587", "VENDOR_SMTP_FROM": "console@example.com", "VENDOR_SMTP_USER": "u",
-			"VENDOR_SMTP_PASSWORD": pw + "\n"},
-		{"VENDOR_SMTP_ADDR": "smtp.example.com:587", "VENDOR_SMTP_FROM": "bad from", "VENDOR_SMTP_USER": "u", "VENDOR_SMTP_PASSWORD": pw},
-		{"VENDOR_SMTP_ADDR": "smtp.example.com:587", "VENDOR_SMTP_FROM": "console@example.com", "VENDOR_SMTP_USER": "u",
-			"VENDOR_SMTP_PASSWORD": pw},
+func TestWebUserAddTakesOnlyTheOwnerFlag(t *testing.T) {
+	for _, args := range [][]string{
+		{"web-user", "add", "--owner"},
+		{"web-user", "add", "--role", "owner", "ayse"},
+		{"web-user", "add", "ayse", "bo"},
+		{"web-user", "add", "ayse", "--owner", "--owner"},
+		{"web-user", "add", "ayse", "--owner=false"},
+		{"web-user", "invite", "--owner", "ayse"},
 	} {
-		_, out, stderr := runEnv(env, "notify", "run")
-		assert.NotContains(t, out+stderr, pw)
+		code, _, stderr := runArgs(args...)
+		assert.Equal(t, 2, code, "%q", args)
+		assert.NotContains(t, stderr, "VENDOR_DATABASE_URL", "%q is refused before connecting", args)
+	}
+	for _, args := range [][]string{{"web-user", "add", "ayse", "--owner"}, {"web-user", "add", "--owner", "ayse"},
+		{"web-user", "add", "ayse"}} {
+		code, _, stderr := runArgs(args...)
+		assert.Equal(t, 1, code, "%q", args)
+		assert.Contains(t, stderr, "VENDOR_DATABASE_URL", "%q", args)
+	}
+}
+
+func TestTheConsoleLinksNoSMTPClient(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "alice/cmd/vendor-console").CombinedOutput()
+	require.NoError(t, err, string(out))
+	for _, dep := range strings.Fields(string(out)) {
+		assert.NotEqual(t, "net/smtp", dep)
+		assert.NotContains(t, dep, "alice/internal/vconsole/mail")
 	}
 }

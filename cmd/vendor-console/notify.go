@@ -2,35 +2,31 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"alice/internal/vconsole/mail"
+	"alice/internal/vconsole/audit"
 	"alice/internal/vconsole/notify"
 	"alice/internal/vconsole/store"
 	"alice/internal/vconsole/webuser"
 )
 
-// The SMTP server is configured by environment, like the database (ruling 1).
-const (
-	smtpAddrEnv     = "VENDOR_SMTP_ADDR"
-	smtpUserEnv     = "VENDOR_SMTP_USER"
-	smtpPasswordEnv = "VENDOR_SMTP_PASSWORD" //nolint:gosec // G101: the name of a variable, not a secret
-	smtpFromEnv     = "VENDOR_SMTP_FROM"
+// shownSettings are the settings "settings show" always lists, in this order; settableSettings
+// are the ones "settings set" accepts (last_summary_at is the notifier's mark, not an owner choice).
+var (
+	shownSettings    = []string{"timezone", "last_summary_at"}
+	settableSettings = "timezone"
 )
 
-// smtpRootCAs is nil (the system pool) in production; tests point it at the throw-away certificate
-// of their in-process SMTP server.
-var smtpRootCAs *x509.CertPool
+// noOwnerWarning is printed by notify run when no web user could see the owner notifications.
+const noOwnerWarning = "warning: no enabled owner web user exists; owner notifications will wait until one is created"
 
 // isPermissionDenied reports a database refusal for lack of privilege.
 func isPermissionDenied(err error) bool {
@@ -51,22 +47,15 @@ func (c *cli) settings(args []string) int {
 			return c.usageErr("settings set needs a KEY and a VALUE")
 		}
 		key, value := args[1], args[2]
-		switch key {
-		case "owner_email":
-			// The sender's own rule: an address stored here is one that can be mailed.
-			if err := mail.ValidateAddress(value); err != nil {
-				return c.usageErr("owner_email: %v", err)
-			}
-		case "timezone":
-			// "Local" would mean the zone of whichever host runs the notifier, not a configured one.
-			if value == "" || value == "Local" {
-				return c.usageErr("timezone: give an IANA zone name such as Europe/Istanbul")
-			}
-			if _, err := time.LoadLocation(value); err != nil {
-				return c.usageErr("timezone: unknown zone %q (use an IANA name such as Europe/Istanbul)", value)
-			}
-		default:
-			return c.usageErr("unknown setting %q (owner_email, timezone)", key)
+		if key != "timezone" {
+			return c.usageErr("unknown setting %q (allowed keys: %s)", key, settableSettings)
+		}
+		// "Local" would mean the zone of whichever host runs the notifier, not a configured one.
+		if value == "" || value == "Local" {
+			return c.usageErr("timezone: give an IANA zone name such as Europe/Istanbul")
+		}
+		if _, err := time.LoadLocation(value); err != nil {
+			return c.usageErr("timezone: unknown zone %q (use an IANA name such as Europe/Istanbul)", value)
 		}
 		ctx := context.Background()
 		pool, err := c.connect(ctx)
@@ -93,8 +82,16 @@ func (c *cli) settings(args []string) int {
 		if err != nil {
 			return c.settingsErr(err)
 		}
+		stored := map[string]string{}
 		for _, s := range list {
-			_, _ = fmt.Fprintf(c.out, "%-16s %s\n", s.Key, s.Value)
+			stored[s.Key] = s.Value
+		}
+		for _, k := range shownSettings {
+			v, ok := stored[k]
+			if !ok {
+				v = "(not set)"
+			}
+			_, _ = fmt.Fprintf(c.out, "%-16s %s\n", k, termSafe(v))
 		}
 		return 0
 	}
@@ -106,50 +103,6 @@ func (c *cli) settingsErr(err error) int {
 		return c.fail(errors.New("permission denied: the settings commands need the owner login"))
 	}
 	return c.fail(err)
-}
-
-// webUserSetEmail handles "web-user set-email NAME EMAIL"; an empty EMAIL removes the address.
-func (c *cli) webUserSetEmail(args []string) int {
-	if len(args) != 2 || strings.TrimSpace(args[0]) == "" {
-		return c.usageErr("web-user set-email needs a NAME and an EMAIL (\"\" removes the address)")
-	}
-	name, email := args[0], args[1]
-	if email != "" {
-		if err := mail.ValidateAddress(email); err != nil {
-			return c.usageErr("email: %v", err)
-		}
-	}
-	ctx := context.Background()
-	pool, err := c.connect(ctx)
-	if err != nil {
-		return c.fail(err)
-	}
-	defer pool.Close()
-	if err := webuser.SetEmail(ctx, pool, name, email); err != nil {
-		return c.webUserErr(err)
-	}
-	if email == "" {
-		_, _ = fmt.Fprintf(c.out, "%s: e-mail address removed\n", name)
-	} else {
-		_, _ = fmt.Fprintf(c.out, "%s: e-mail address set\n", name)
-	}
-	return 0
-}
-
-// smtpSender builds the sender from the environment. It never connects, and its errors never
-// contain the password (mail.NewSMTP only names what is wrong).
-func (c *cli) smtpSender() (mail.Sender, error) {
-	addr, from := c.getenv(smtpAddrEnv), c.getenv(smtpFromEnv)
-	if addr == "" || from == "" {
-		return nil, fmt.Errorf("set %s (host:port) and %s (the sender address); %s and %s if the server needs a login",
-			smtpAddrEnv, smtpFromEnv, smtpUserEnv, smtpPasswordEnv)
-	}
-	s, err := mail.NewSMTP(mail.SMTPConfig{Addr: addr, User: c.getenv(smtpUserEnv), Password: c.getenv(smtpPasswordEnv),
-		From: from, RootCAs: smtpRootCAs})
-	if err != nil {
-		return nil, fmt.Errorf("check %s, %s, %s and %s: %w", smtpAddrEnv, smtpFromEnv, smtpUserEnv, smtpPasswordEnv, err)
-	}
-	return s, nil
 }
 
 // requireNotifier refuses a login that is not in vendor_notifier before anything is done, so an
@@ -165,29 +118,43 @@ func requireNotifier(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
-// notifyRun is "notify run [--base-url URL] [--dry-run]", meant for cron or a systemd timer.
+// hasEnabledOwner reports whether an enabled web user with the role owner exists. It reads only
+// the web_users columns the notifier is granted (name, disabled_at, role).
+func hasEnabledOwner(ctx context.Context, q audit.Q) (bool, error) {
+	var ok bool
+	err := q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM web_users WHERE role = $1 AND disabled_at IS NULL)`,
+		webuser.RoleOwner).Scan(&ok)
+	if err != nil {
+		return false, fmt.Errorf("check for an owner web user: %w", err)
+	}
+	return ok, nil
+}
+
+// warnIfNoOwner tells the operator that owner notifications have no reader yet. It is advice
+// only: a failure to check is reported as a warning and never fails the run.
+func (c *cli) warnIfNoOwner(ctx context.Context, q audit.Q) {
+	ok, err := hasEnabledOwner(ctx, q)
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintf(c.err, "warning: could not %v\n", err)
+	case !ok:
+		_, _ = fmt.Fprintln(c.err, noOwnerWarning)
+	}
+}
+
+// notifyRun is "notify run [--dry-run]", meant for cron or a systemd timer. It creates the due
+// expiry reminders and the weekly summary as in-app notifications and prunes old read ones;
+// nothing is sent anywhere.
 func (c *cli) notifyRun(args []string) int {
 	fs := c.flags("notify run")
-	baseURL := fs.String("base-url", "", "address of the sales web page, for the Renew link in reminders")
-	dry := fs.Bool("dry-run", false, "print what would be created and sent; change nothing")
+	dry := fs.Bool("dry-run", false, "print what would be created; change nothing")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 0 {
 		return c.usageErr("notify run takes no arguments besides its flags")
 	}
-	if err := notify.ValidateBaseURL(*baseURL); err != nil {
-		return c.usageErr("--base-url: %v", err)
-	}
-	var sender mail.Sender
-	if !*dry {
-		var err error
-		if sender, err = c.smtpSender(); err != nil {
-			return c.usageErr("%v", err)
-		}
-	}
-	// A SIGTERM from the timer stops the run between messages; a message the server already accepted
-	// is still recorded as sent (notify.SendPending).
+	// A SIGTERM from the timer stops the run between licenses; what was committed stays.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	pool, err := c.connect(ctx)
@@ -198,20 +165,18 @@ func (c *cli) notifyRun(args []string) int {
 	if err := requireNotifier(ctx, pool); err != nil {
 		return c.fail(err)
 	}
+	c.warnIfNoOwner(ctx, pool)
 	now := c.clk.Now()
 	if *dry {
 		return c.notifyPreview(ctx, pool, now)
 	}
 
-	// Every step runs even when an earlier one failed: a broken reminder must not keep the issuance
-	// mails from going out. The errors are reported at the end.
+	// Every step runs even when an earlier one failed: a broken reminder must not keep the weekly
+	// summary from being written. The errors are reported at the end and make the exit code 1.
 	var errs []error
-	resolved, err := notify.ResolveEmptyRecipients(ctx, pool)
+	reminders, err := notify.CreateReminders(ctx, pool, now)
 	errs = append(errs, err)
-	_, _ = fmt.Fprintf(c.out, "recipients filled: %d\n", resolved)
-	reminders, err := notify.CreateReminders(ctx, pool, now, *baseURL)
-	errs = append(errs, err)
-	_, _ = fmt.Fprintf(c.out, "reminders created: %d\n", reminders)
+	_, _ = fmt.Fprintf(c.out, "reminders: %d created\n", reminders)
 	summary, err := notify.WeeklySummary(ctx, pool, now)
 	errs = append(errs, err)
 	if summary {
@@ -219,22 +184,17 @@ func (c *cli) notifyRun(args []string) int {
 	} else {
 		_, _ = fmt.Fprintln(c.out, "weekly summary: not due")
 	}
-	res, err := notify.SendPending(ctx, pool, sender, "", now)
+	pruned, err := notify.Prune(ctx, pool, now)
 	errs = append(errs, err)
-	_, _ = fmt.Fprintf(c.out, "mail: sent %d, to retry %d, failed %d, waiting for the owner address %d\n",
-		res.Sent, res.Retry, res.Failed, res.Waiting)
+	_, _ = fmt.Fprintf(c.out, "pruned: %d\n", pruned)
 
-	code := 0
 	if err := errors.Join(errs...); err != nil {
-		code = c.fail(err)
+		return c.fail(err)
 	}
-	if res.Failed > 0 {
-		_, _ = fmt.Fprintf(c.err, "vendor-console: %d message(s) could not be sent and were marked failed\n", res.Failed)
-		code = 1
-	}
-	return code
+	return 0
 }
 
+// notifyPreview is the dry run: the same selection as a real run, in a read-only transaction.
 func (c *cli) notifyPreview(ctx context.Context, pool *pgxpool.Pool, now time.Time) int {
 	p, err := notify.PreviewRun(ctx, pool, now)
 	if err != nil {
@@ -244,8 +204,7 @@ func (c *cli) notifyPreview(ctx context.Context, pool *pgxpool.Pool, now time.Ti
 	if p.Summary {
 		summary = "due"
 	}
-	_, _ = fmt.Fprintf(c.out, "dry run, nothing changed\nrecipients to fill: %d\nreminders to create: %d\nweekly summary: %s\n"+
-		"mail to send: %d already queued, plus the new ones above; waiting for the owner address %d\n",
-		p.Resolved, p.Reminders, summary, p.Due, p.Waiting)
+	_, _ = fmt.Fprintf(c.out, "dry run, nothing changed\nreminders: %d to create\nweekly summary: %s\npruned: not run (dry run)\n",
+		p.Reminders, summary)
 	return 0
 }
