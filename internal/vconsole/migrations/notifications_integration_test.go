@@ -530,3 +530,30 @@ func TestNotifyAndOpsMigrationsGoDownAndUpAgain(t *testing.T) {
 	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT role FROM web_users WHERE name = 'down'`).Scan(&details))
 	assert.Equal(t, "sales", details)
 }
+
+// The notifier reads a web user's role (reminders skip a duplicate user notice for owners) and
+// nothing else beyond name and disabled_at; it has no access to credentials or sessions.
+func TestNotifierReadsWebUserRoleButNoOtherWebColumns(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	nt := d.As(t, "vendor_notifier", "t_nt12_notifier")
+	webUser(t, d, "boss", "owner", false)
+
+	var name, role string
+	require.NoError(t, nt.QueryRow(ctx, `SELECT name, role FROM web_users WHERE disabled_at IS NULL`).Scan(&name, &role))
+	assert.Equal(t, "boss", name)
+	assert.Equal(t, "owner", role)
+	for _, q := range []string{
+		`SELECT id FROM web_users`,
+		`SELECT created_by FROM web_users`,
+		`SELECT created_at FROM web_users`,
+		`SELECT * FROM web_users`,
+		`SELECT * FROM web_credentials`,
+		`SELECT * FROM web_sessions`,
+		`UPDATE web_users SET role = 'sales'`,
+	} {
+		_, err := nt.Exec(ctx, q)
+		require.Error(t, err, q)
+		assert.Equal(t, "42501", pgCode(t, err), q)
+	}
+}

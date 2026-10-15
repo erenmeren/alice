@@ -284,7 +284,7 @@ GRANT SELECT (license_id, request_id, customer_id, installation, key_id, issued_
               targets, replaces, file_sha256, signed_by, revoked_at) ON licenses TO vendor_notifier;
 GRANT SELECT (id, name) ON customers TO vendor_notifier;
 GRANT SELECT (id, customer_id, status, requested_by, requested_at) ON license_requests TO vendor_notifier;
-GRANT SELECT (name, disabled_at) ON web_users TO vendor_notifier;
+GRANT SELECT (name, disabled_at, role) ON web_users TO vendor_notifier;
 GRANT SELECT (at, actor, action, subject) ON audit TO vendor_notifier;
 GRANT SELECT ON vendor_settings TO vendor_notifier;
 GRANT SELECT, INSERT ON reminders TO vendor_notifier;
@@ -300,7 +300,7 @@ CREATE POLICY requests_read_notifier ON license_requests FOR SELECT TO vendor_no
 DROP POLICY requests_read_notifier ON license_requests;
 REVOKE SELECT (id, name) ON customers FROM vendor_notifier;
 REVOKE SELECT (id, customer_id, status, requested_by, requested_at) ON license_requests FROM vendor_notifier;
-REVOKE SELECT (name, disabled_at) ON web_users FROM vendor_notifier;
+REVOKE SELECT (name, disabled_at, role) ON web_users FROM vendor_notifier;
 REVOKE SELECT (at, actor, action, subject) ON audit FROM vendor_notifier;
 REVOKE ALL ON customers, license_requests, web_users, audit FROM vendor_notifier;
 REVOKE ALL ON licenses FROM vendor_notifier;
