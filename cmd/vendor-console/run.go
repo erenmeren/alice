@@ -26,6 +26,43 @@ import (
 // prompter asks for a passphrase (no echo on a terminal; injected by tests).
 type prompter func(prompt string) ([]byte, error)
 
+// secretPrompter is a prompter that gives up when ctx ends (the YubiKey PIN, inside the signer's
+// time limit).
+type secretPrompter func(ctx context.Context, prompt string) ([]byte, error)
+
+// console is the interactive side of a command: the answers to questions (standard input) and
+// the PIN prompt.
+type console struct {
+	in     io.Reader
+	secret secretPrompter
+}
+
+// withContext makes a secretPrompter of ask: ask runs in a goroutine and, when ctx ends first,
+// is left to finish on its own (its answer is zeroed and dropped) while ctx.Err() is returned.
+func withContext(ask prompter) secretPrompter {
+	return func(ctx context.Context, prompt string) ([]byte, error) {
+		if ask == nil {
+			return nil, errors.New("no way to ask for the PIN")
+		}
+		type answer struct {
+			p   []byte
+			err error
+		}
+		read := make(chan answer, 1)
+		go func() {
+			p, err := ask(prompt)
+			read <- answer{p, err}
+		}()
+		select {
+		case a := <-read:
+			return a.p, a.err
+		case <-ctx.Done():
+			go func() { a := <-read; clear(a.p) }()
+			return nil, ctx.Err()
+		}
+	}
+}
+
 const usage = `Usage: vendor-console <command> [flags]
 
 The database is named by the environment variable VENDOR_DATABASE_URL. Use your own login, and
@@ -44,9 +81,25 @@ Commands:
         Close an open request (a sales login may cancel only its own).
   license export --id LICENSE-ID --out FILE
         Write an issued license file again, byte for byte.
-  issue --request ID --hash HASH --key FILE --out FILE [--license-id ID] [--shorten]
+  issue --request ID --hash HASH --out FILE [--license-id ID] [--shorten] [--signer file|openpgp] ...
         Sign the request. The hash must be the one "request show" printed; if the
-        request changed since, nothing is signed. Asks for the key passphrase.
+        request changed since, nothing is signed.
+        --signer file (default): --key FILE; asks for the key passphrase.
+        --signer openpgp (a YubiKey; builds with -tags yubikey only): --key-id ID and
+        (--pub FILE | --keyset FILE) name the key the card must hold; [--reader NAME]
+        [--last-pin-try] [--allow-no-touch] [--yes] [--not-in-key-set]. Prints every field of the
+        license and the SHA-256 of the signed bytes, asks "Sign this license? [y/N]" (--yes skips
+        only the question), then the PIN (never retried) and a touch. --not-in-key-set is needed
+        while this build's key set does not list the key ID (customers' builds will not accept
+        the license until a release with the key ships).
+  signer info [--reader NAME] [--key-id ID [--pub FILE | --keyset FILE]] [--out FILE]
+        Show the YubiKey: serial, algorithm, PIN tries and policy, touch policy, signature
+        counter, public key and fingerprint; with --key-id whether it matches. --out writes the
+        card's public key as a public key file (needs --key-id). No PIN.
+  signer test --key-id ID (--pub FILE | --keyset FILE) [--reader NAME] [--max-size]
+        Sign the fixed text "alice-vendor-console smoke test: not a license" (with --max-size a
+        600-byte text starting with it) after the PIN and a touch, and verify the signature.
+        The text is not a license and the product cannot accept it.
   license revoke --id LICENSE-ID --reason TEXT
         Mark a license revoked in the vendor records (reminders and lists stop; the customer's
         installation is not affected). The reason goes into the audit. Owner login only.
@@ -91,12 +144,18 @@ Commands:
 
 const dbEnv = "VENDOR_DATABASE_URL"
 
+// run is runWith with no standard input (every question is answered no) and ask as the PIN
+// prompt.
 func run(args []string, getenv func(string) string, stdout, stderr io.Writer, ask prompter, clk clock.Clock) int {
+	return runWith(args, getenv, stdout, stderr, ask, clk, console{in: strings.NewReader(""), secret: withContext(ask)})
+}
+
+func runWith(args []string, getenv func(string) string, stdout, stderr io.Writer, ask prompter, clk clock.Clock, con console) int {
 	if len(args) == 0 {
 		_, _ = fmt.Fprint(stderr, usage)
 		return 2
 	}
-	c := &cli{getenv: getenv, out: stdout, err: stderr, ask: ask, clk: clk}
+	c := &cli{getenv: getenv, out: stdout, err: stderr, ask: ask, clk: clk, con: con}
 	switch args[0] {
 	case "migrate":
 		return c.migrate()
@@ -130,6 +189,15 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, as
 		return c.verifyLicenses(args[1:])
 	case "issue":
 		return c.issue(args[1:])
+	case "signer":
+		if len(args) >= 2 {
+			switch args[1] {
+			case "info":
+				return c.signerInfo(args[2:])
+			case "test":
+				return c.signerTest(args[2:])
+			}
+		}
 	case "audit-verify":
 		return c.auditVerify(args[1:])
 	case "audit-head":
@@ -174,6 +242,7 @@ type cli struct {
 	out, err io.Writer
 	ask      prompter
 	clk      clock.Clock
+	con      console
 }
 
 func (c *cli) fail(err error) int {
@@ -342,42 +411,121 @@ func (c *cli) issue(args []string) int {
 	fs := c.flags("issue")
 	request := fs.Int64("request", 0, "request ID")
 	hash := fs.String("hash", "", "request hash from request show")
-	keyPath := fs.String("key", "", "license signing key file")
+	keyPath := fs.String("key", "", "license signing key file (--signer file)")
 	outPath := fs.String("out", "", "where to write the license file")
 	licenseID := fs.String("license-id", "", "license ID (default: generated)")
 	shorten := fs.Bool("shorten", false, "allow a correction to end earlier than the license it replaces")
+	signer := fs.String("signer", "file", "file or openpgp (a YubiKey)")
+	var o openPGPIssue
+	fs.StringVar(&o.keyID, "key-id", "", "key ID of the card's key (--signer openpgp)")
+	fs.StringVar(&o.pub, "pub", "", "public key file of that key ID (--signer openpgp)")
+	fs.StringVar(&o.keyset, "keyset", "", "key set file holding that key ID (--signer openpgp)")
+	fs.StringVar(&o.reader, "reader", "", "smart card reader name (--signer openpgp; default: the one YubiKey)")
+	fs.BoolVar(&o.lastTry, "last-pin-try", false, "allow the PIN prompt when the card has one try left")
+	fs.BoolVar(&o.allowNoTouch, "allow-no-touch", false, "allow a card that signs without a touch")
+	fs.BoolVar(&o.yes, "yes", false, "do not ask before signing (the license is still shown)")
+	fs.BoolVar(&o.notInKeySet, "not-in-key-set", false, "sign although this build's key set does not list the key ID")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if fs.NArg() != 0 {
+		return c.usageErr("issue takes no arguments besides its flags")
 	}
 	for _, f := range []struct {
 		name    string
 		missing bool
-	}{{"--request", *request == 0}, {"--hash", *hash == ""}, {"--key", *keyPath == ""}, {"--out", *outPath == ""}} {
+	}{{"--request", *request == 0}, {"--hash", *hash == ""}, {"--out", *outPath == ""}} {
 		if f.missing {
-			_, _ = fmt.Fprintf(c.err, "vendor-console: %s is required\n", f.name)
-			return 2
+			return c.usageErr("%s is required", f.name)
 		}
 	}
-	// Reserve the output file first: a path that cannot be written is found before anything is signed, and an
-	// existing file is never overwritten. The reservation is removed unless the license was written.
-	outFile, err := os.OpenFile(*outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: the operator names the file
+	p := issue.Params{RequestID: *request, ExpectedHash: *hash, LicenseID: *licenseID, Shorten: *shorten}
+	switch *signer {
+	case "file":
+		var cardFlags []string
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "key-id", "pub", "keyset", "reader", "last-pin-try", "allow-no-touch", "yes", "not-in-key-set":
+				cardFlags = append(cardFlags, "--"+f.Name)
+			}
+		})
+		if len(cardFlags) > 0 {
+			return c.usageErr("%s belong to --signer openpgp", strings.Join(cardFlags, ", "))
+		}
+		if *keyPath == "" {
+			return c.usageErr("--key is required")
+		}
+		return c.issueFile(p, *keyPath, *outPath)
+	case "openpgp":
+		if *keyPath != "" {
+			return c.usageErr("--key belongs to --signer file; a YubiKey is named by --key-id and --pub or --keyset")
+		}
+		if o.keyID == "" {
+			return c.usageErr("--signer openpgp needs --key-id")
+		}
+		if (o.pub == "") == (o.keyset == "") {
+			return c.usageErr("--signer openpgp needs --pub FILE or --keyset FILE (one of them) for the key ID")
+		}
+		o.params, o.out = p, *outPath
+		return c.issueOpenPGP(o)
+	default:
+		return c.usageErr("--signer is file or openpgp, not %q", *signer)
+	}
+}
+
+// output is the reserved license output file: created first, so a path that cannot be written is
+// found before anything is signed and an existing file is never overwritten. discard removes the
+// reservation unless the license was written.
+type output struct {
+	f       *os.File
+	path    string
+	written bool
+}
+
+func reserveOutput(path string) (*output, error) {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: the operator names the file
 	if err != nil {
-		return c.fail(fmt.Errorf("cannot create the output file: %w", err))
+		return nil, fmt.Errorf("cannot create the output file: %w", err)
 	}
-	written := false
-	defer func() {
-		_ = outFile.Close()
-		if !written {
-			_ = os.Remove(*outPath)
-		}
-	}()
+	return &output{f: f, path: path}, nil
+}
+
+func (o *output) discard() {
+	_ = o.f.Close()
+	if !o.written {
+		_ = os.Remove(o.path)
+	}
+}
+
+// deliver writes the issued license to the reserved file and reports it.
+func (c *cli) deliver(o *output, res issue.Result) int {
+	if _, err := o.f.Write(res.File); err != nil {
+		return c.fail(fmt.Errorf("license %s is recorded but its file could not be written (%w); get it again with: license export --id %s --out FILE",
+			res.LicenseID, err, res.LicenseID))
+	}
+	if err := o.f.Close(); err != nil {
+		return c.fail(fmt.Errorf("license %s is recorded but its file could not be written (%w); get it again with: license export --id %s --out FILE",
+			res.LicenseID, err, res.LicenseID))
+	}
+	o.written = true
+	_, _ = fmt.Fprintf(c.out, "issued %s valid until %s\n", res.LicenseID, res.ValidUntil.Format("2006-01-02"))
+	return 0
+}
+
+// issueFile signs with the passphrase-protected key file.
+func (c *cli) issueFile(p issue.Params, keyPath, outPath string) int {
+	out, err := reserveOutput(outPath)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer out.discard()
 	ctx := context.Background()
 	pool, err := c.connect(ctx)
 	if err != nil {
 		return c.fail(err)
 	}
 	defer pool.Close()
-	pem, err := os.ReadFile(*keyPath)
+	pem, err := os.ReadFile(keyPath)
 	if err != nil {
 		return c.fail(fmt.Errorf("read the key file: %w", err))
 	}
@@ -391,22 +539,11 @@ func (c *cli) issue(args []string) int {
 		return c.fail(err)
 	}
 	defer key.Zero()
-	res, err := issue.Issue(ctx, pool, sign.NewFileSigner(key),
-		issue.Params{RequestID: *request, ExpectedHash: *hash, LicenseID: *licenseID, Shorten: *shorten}, c.clk.Now())
+	res, err := issue.Issue(ctx, pool, sign.NewFileSigner(key), p, c.clk.Now())
 	if err != nil {
 		return c.fail(err)
 	}
-	if _, err := outFile.Write(res.File); err != nil {
-		return c.fail(fmt.Errorf("license %s is recorded but its file could not be written (%w); get it again with: license export --id %s --out FILE",
-			res.LicenseID, err, res.LicenseID))
-	}
-	if err := outFile.Close(); err != nil {
-		return c.fail(fmt.Errorf("license %s is recorded but its file could not be written (%w); get it again with: license export --id %s --out FILE",
-			res.LicenseID, err, res.LicenseID))
-	}
-	written = true
-	_, _ = fmt.Fprintf(c.out, "issued %s valid until %s\n", res.LicenseID, res.ValidUntil.Format("2006-01-02"))
-	return 0
+	return c.deliver(out, res)
 }
 
 func (c *cli) requestCancel(args []string) int {

@@ -10,5 +10,6 @@ import (
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Getenv, os.Stdout, os.Stderr, terminalPassphrase, clock.Real{}))
+	os.Exit(runWith(os.Args[1:], os.Getenv, os.Stdout, os.Stderr, terminalPassphrase, clock.Real{},
+		console{in: os.Stdin, secret: terminalSecret}))
 }
