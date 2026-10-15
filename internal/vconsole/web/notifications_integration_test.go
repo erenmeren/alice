@@ -213,7 +213,7 @@ func TestNotificationTextIsEscaped(t *testing.T) {
 	// The title CHECK refuses C0/C1 controls and U+2028/2029 but not bidi controls, so both carry them.
 	title := "<script>alert(1)</script> \"q\" & \u202Eevil\u2066x"
 	body := "<script>alert(2)</script>\nsecond line \u202Egnp.exe\u200F\u2067"
-	e.seedNote("sales", "", "alert", title, body, "<b>subj</b>", time.Minute)
+	e.seedNote("sales", "", "alert", title, body, "<b>subj</b>\u202Eq", time.Minute)
 
 	for _, p := range []string{"/notifications", "/"} {
 		page := e.page(p, ayse)
@@ -227,7 +227,7 @@ func TestNotificationTextIsEscaped(t *testing.T) {
 	page := e.page("/notifications", ayse)
 	assert.Contains(t, page, "&lt;script&gt;alert(2)&lt;/script&gt;")
 	assert.Contains(t, page, "second line")
-	assert.Contains(t, page, "&lt;b&gt;subj&lt;/b&gt;")
+	assert.Contains(t, page, "&lt;b&gt;subj&lt;/b&gt; q", "the bidi mark in the subject became a space")
 	assert.Contains(t, page, ">alert<")
 	assert.NotContains(t, page, " style=")
 }
@@ -334,4 +334,41 @@ func TestDisabledUserSeesNothing(t *testing.T) {
 	l, u = counts()
 	assert.Zero(t, l)
 	assert.Zero(t, u)
+}
+
+func TestHomeWithoutTheUnreadListStillRenders(t *testing.T) {
+	e := newEnv(t, "https://licenses.example.test")
+	ayse := e.signIn("ayse")
+	e.seedNote("sales", "", "info", "Hidden on failure", "", "", time.Minute)
+	assert.Contains(t, e.page("/", ayse), "Hidden on failure")
+
+	_, err := e.d.Owner.Exec(context.Background(), `REVOKE EXECUTE ON FUNCTION web_notifications(bigint, integer, boolean) FROM vendor_web`)
+	require.NoError(t, err)
+	home := e.page("/", ayse)
+	assert.NotContains(t, home, "Hidden on failure")
+	assert.Contains(t, home, "Open requests")
+	assert.Contains(t, home, "Notifications (1)", "the bell uses its own function and still works")
+	// The notifications page itself cannot list without the function: an honest error, not a blank list.
+	assert.Equal(t, http.StatusInternalServerError, e.do(http.MethodGet, "/notifications", "", ayse).Code)
+}
+
+func TestListsStopAtTheirLimits(t *testing.T) {
+	e := newEnv(t, "https://licenses.example.test")
+	ayse := e.signIn("ayse")
+	_, err := e.d.Owner.Exec(context.Background(), `INSERT INTO notifications (kind, title, audience, dedupe_key, created_at)
+		SELECT 'test', 'Bulk note ' || g, 'sales', 'bulk:' || g, now() - g * interval '1 minute' FROM generate_series(1, 105) g`)
+	require.NoError(t, err)
+
+	page := e.page("/notifications", ayse)
+	assert.Equal(t, 100, strings.Count(page, `<span class="note-title">`))
+	assert.Contains(t, page, ">Bulk note 1<")
+	assert.Contains(t, page, ">Bulk note 100<")
+	assert.NotContains(t, page, ">Bulk note 101<")
+	assert.Contains(t, page, "Notifications (105)")
+
+	home := e.page("/", ayse)
+	assert.Equal(t, 3, strings.Count(home, "Bulk note "))
+	for _, want := range []string{">Bulk note 1<", ">Bulk note 2<", ">Bulk note 3<"} {
+		assert.Contains(t, home, want)
+	}
 }

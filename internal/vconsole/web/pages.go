@@ -85,15 +85,22 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request, u webuser.User) {
 		if d.Requests, err = store.ListRequests(r.Context(), tx, "open"); err != nil {
 			return err
 		}
-		if d.Licenses, err = store.ListLicenses(r.Context(), tx, s.cfg.Clock.Now(), homeDays, false); err != nil {
-			return err
-		}
-		d.Unread, err = listNotifications(r.Context(), tx, u.ID, homeUnreadLimit, true)
+		d.Licenses, err = store.ListLicenses(r.Context(), tx, s.cfg.Clock.Now(), homeDays, false)
 		return err
 	})
 	if err != nil {
 		s.serverError(w, "home", err)
 		return
+	}
+	// Its own transaction: a failed statement would abort the one above, and the list, like the
+	// bell, must never take the home page down. On error the page shows no list.
+	err = s.inActorTx(r.Context(), u, func(tx pgx.Tx) (err error) {
+		d.Unread, err = listNotifications(r.Context(), tx, u.ID, homeUnreadLimit, true)
+		return err
+	})
+	if err != nil {
+		s.log.Warn("web: home unread notifications", "err", err)
+		d.Unread = nil
 	}
 	s.renderUser(w, r, http.StatusOK, "home", u, d)
 }
