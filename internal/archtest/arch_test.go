@@ -127,6 +127,11 @@ var rules = map[string][]string{
 	"alice/internal/vconsole/notify":        {platform, "alice/internal/vconsole/mail", "alice/internal/vconsole/audit", "alice/internal/vconsole/store"},
 	"alice/internal/vconsole/mail":          {},
 	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/mail"},
+	// Phase 2 (plan 2026-10-15-vendor-console-phase-2): the OpenPGP card protocol is a leaf that knows no Alice code (the
+	// transport is behind its Card interface); its software card simulator knows nothing either and may itself be imported
+	// from tests only (testOnlyImports and testOnlyDirs, buildtags_test.go).
+	"alice/internal/vconsole/sign/openpgp":             {},
+	"alice/internal/vconsole/sign/openpgp/openpgptest": {},
 }
 
 const platform = "alice/internal/platform/..."
@@ -140,25 +145,29 @@ var denied = map[string][]string{
 	"alice/internal/vconsole/webuser": {"alice/internal/vconsole/store"},
 	// The notifier never signs, issues or serves web pages; the mail package and its test server reach no other
 	// vconsole code (mailtest only the mail package) and no product code.
-	"alice/internal/vconsole/notify":                 {"alice/internal/vconsole/sign", "alice/internal/vconsole/issue", "alice/internal/vconsole/web/...", "alice/internal/vconsole/webuser", "alice/internal/license/..."},
-	"alice/internal/vconsole/mail":                   {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
-	"alice/internal/vconsole/mail/mailtest":          {"alice/internal/vconsole/store", "alice/internal/vconsole/audit", "alice/internal/vconsole/notify", platform},
-	"alice/internal/certs/...":                       {"alice/internal/platform/db/..."},
-	"alice/internal/providers":                       {"alice/internal/platform/db/..."},
-	"alice/internal/providers/...":                   {"alice/internal/platform/db/..."},
-	"alice/internal/providers/linuxssh/linuxsshtest": {"alice/internal/platform/db/..."},
-	"alice/internal/sshkeys/keymat":                  {"alice/internal/platform/db/..."},
-	"alice/internal/sshkeys/plan":                    {"alice/internal/platform/db/..."},
-	"alice/internal/alerts/expiry":                   {"alice/internal/platform/db/..."},
-	"alice/internal/auth/oidc/claims":                {"alice/internal/platform/db/..."},
-	"alice/internal/platform/csvx":                   {"alice/internal/platform/db/..."},
-	"alice/internal/backup/format":                   {platform, "alice/internal/platform/db/..."},
-	"alice/internal/acme":                            {"alice/internal/platform/db/..."},
-	"alice/internal/acme/solver":                     {"alice/internal/platform/db/..."},
-	"alice/internal/acme/solver/dns01":               {"alice/internal/platform/db/..."},
-	"alice/internal/acme/solver/http01":              {"alice/internal/platform/db/..."},
-	"alice/internal/acme/keygen":                     {"alice/internal/platform/db/..."},
-	"alice/internal/acme/renew":                      {"alice/internal/platform/db/..."},
+	"alice/internal/vconsole/notify":        {"alice/internal/vconsole/sign", "alice/internal/vconsole/issue", "alice/internal/vconsole/web/...", "alice/internal/vconsole/webuser", "alice/internal/license/..."},
+	"alice/internal/vconsole/mail":          {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
+	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/store", "alice/internal/vconsole/audit", "alice/internal/vconsole/notify", platform},
+	// The card protocol and its simulator reach no other vconsole code (the simulator not even the protocol) and no
+	// product code.
+	"alice/internal/vconsole/sign/openpgp":             {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
+	"alice/internal/vconsole/sign/openpgp/openpgptest": {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
+	"alice/internal/certs/...":                         {"alice/internal/platform/db/..."},
+	"alice/internal/providers":                         {"alice/internal/platform/db/..."},
+	"alice/internal/providers/...":                     {"alice/internal/platform/db/..."},
+	"alice/internal/providers/linuxssh/linuxsshtest":   {"alice/internal/platform/db/..."},
+	"alice/internal/sshkeys/keymat":                    {"alice/internal/platform/db/..."},
+	"alice/internal/sshkeys/plan":                      {"alice/internal/platform/db/..."},
+	"alice/internal/alerts/expiry":                     {"alice/internal/platform/db/..."},
+	"alice/internal/auth/oidc/claims":                  {"alice/internal/platform/db/..."},
+	"alice/internal/platform/csvx":                     {"alice/internal/platform/db/..."},
+	"alice/internal/backup/format":                     {platform, "alice/internal/platform/db/..."},
+	"alice/internal/acme":                              {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver":                       {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver/dns01":                 {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver/http01":                {"alice/internal/platform/db/..."},
+	"alice/internal/acme/keygen":                       {"alice/internal/platform/db/..."},
+	"alice/internal/acme/renew":                        {"alice/internal/platform/db/..."},
 }
 
 // deniedStd lists standard-library imports the pure packages must not use: no file, process, socket,
@@ -333,6 +342,12 @@ func TestAllowed(t *testing.T) {
 		{"mailtest to the mail package allowed", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/mail", true},
 		{"mailtest to the store denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/store", false},
 		{"mailtest to the platform denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/platform/db", false},
+		{"openpgp to the signer seam denied", "alice/internal/vconsole/sign/openpgp", "alice/internal/vconsole/sign", false},
+		{"openpgp to the license format denied", "alice/internal/vconsole/sign/openpgp", "alice/internal/license", false},
+		{"openpgp to the platform denied", "alice/internal/vconsole/sign/openpgp", "alice/internal/platform/clock", false},
+		{"openpgptest to the card protocol denied", "alice/internal/vconsole/sign/openpgp/openpgptest", "alice/internal/vconsole/sign/openpgp", false},
+		{"openpgptest to the platform denied", "alice/internal/vconsole/sign/openpgp/openpgptest", "alice/internal/platform/db", false},
+		{"the signer seam to the card protocol allowed", "alice/internal/vconsole/sign", "alice/internal/vconsole/sign/openpgp", true},
 		{"web to the notifier denied", "alice/internal/vconsole/web", "alice/internal/vconsole/notify", false},
 		{"web to the mail sender denied", "alice/internal/vconsole/web", "alice/internal/vconsole/mail", false},
 		{"vconsole to the product jobs denied", "alice/internal/vconsole/issue", "alice/internal/jobs", false},

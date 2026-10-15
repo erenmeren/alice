@@ -39,6 +39,7 @@ func TestReleaseBinaryLinksNoTestOrVendorCode(t *testing.T) {
 		"alice/internal/vconsole/store", "alice/internal/vconsole/migrations",
 		"alice/internal/vconsole/web", "alice/internal/vconsole/webuser", "alice/cmd/vendor-console", "alice/cmd/vendor-web",
 		"alice/internal/vconsole/mail", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/notify",
+		"alice/internal/vconsole/sign/openpgp", "alice/internal/vconsole/sign/openpgp/openpgptest",
 		"github.com/stretchr/testify/assert", "golang.org/x/term",
 	} {
 		assert.NotContains(t, deps, forbidden)

@@ -40,6 +40,7 @@ var testOnlyImports = []string{
 	"alice/internal/providers/linuxssh/linuxsshtest",
 	"alice/internal/providers/providertest",
 	"alice/internal/vconsole/mail/mailtest",
+	"alice/internal/vconsole/sign/openpgp/openpgptest",
 }
 
 // testOnlyDirs are test helper packages: their own files are untagged on purpose and reach no
@@ -53,7 +54,8 @@ var testOnlyImports = []string{
 // network discovery journeys (internal/testutil/fakefleet, listed by name too: plan 2026-10-13-network-discovery A9).
 var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
 	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme",
-	"internal/testutil/fakefleet", "cmd/alice-fakefleet", "internal/vconsole/mail/mailtest"}
+	"internal/testutil/fakefleet", "cmd/alice-fakefleet", "internal/vconsole/mail/mailtest",
+	"internal/vconsole/sign/openpgp/openpgptest"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
 var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense"}
