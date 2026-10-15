@@ -31,14 +31,16 @@ var interactiveLimit = 2 * time.Minute
 // cardTimeout bounds `signer info` and the card checks before a PIN prompt.
 const cardTimeout = 30 * time.Second
 
-// smokeText is the only message other than a license the license key ever signs (plan, global
-// constraints). It is not JSON and does not start with the product's signing prefix, so its
-// signature can never verify as a license.
+// smokeText is, with its --max-size form, the only message other than a license that the
+// vendor console signs with the license key (gpg's self-certification when the key is generated
+// with gpg is the other exception, outside this program). It is not JSON and does not start with
+// the product's signing prefix, so its signature can never verify as a license.
 const smokeText = "alice-vendor-console smoke test: not a license"
 
-// smokeMaxSize is the --max-size message length: above the largest realistic license (signed
-// bytes of a few hundred bytes), so a card that cannot take long chained input shows it here.
-const smokeMaxSize = 600
+// smokeMaxSize is the --max-size message length: sign.MaxSignedBytes, the longest signed bytes
+// `issue` sends to the card. A passing --max-size test proves that size on the real card; a
+// license above it is refused until the constant is raised after a larger smoke test.
+const smokeMaxSize = sign.MaxSignedBytes
 
 func smokeMessage(maxSize bool) []byte {
 	if !maxSize {
@@ -188,19 +190,24 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 	}
 	defer out.discard()
 	var s *sign.OpenPGPSigner
+	touchShown := false // the touch notice was printed: from then on the card may have signed
 	cctx, ccancel := context.WithTimeout(ctx, cardTimeout)
 	s, err = sign.NewOpenPGPSigner(cctx, card, sign.OpenPGPOptions{
 		KeyID: key.ID, Expected: key.Key,
 		AskPIN: func(ctx context.Context, tries int) ([]byte, error) {
 			return c.con.secret(ctx, fmt.Sprintf("PIN of the YubiKey %s (%d tries left): ", s.Serial(), tries))
 		},
-		NotifyTouch:  func() { _, _ = fmt.Fprintln(c.err, "Touch the YubiKey now...") },
+		NotifyTouch: func() {
+			touchShown = true
+			_, _ = fmt.Fprintln(c.err, "Touch the YubiKey now...")
+		},
 		LastPINTry:   o.lastTry,
 		AllowNoTouch: o.allowNoTouch,
+		MaxMessage:   sign.MaxSignedBytes,
 	})
 	ccancel()
 	if err != nil { // the card checks before any PIN prompt; the card is closed
-		return c.signErr(err)
+		return c.signErr(err, false)
 	}
 	defer func() { _ = s.Close() }()
 	pool, err := c.connect(ctx)
@@ -222,7 +229,7 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 		// From here the request row is locked.
 		step.start(tctx)
 		licenseID = pl.LicenseID
-		writeConfirmation(c.err, pl, sum, key.ID, s.Serial())
+		writeConfirmation(c.err, pl, len(license.SignedBytes(pl)), sum, key.ID, s.Serial())
 		if o.yes {
 			return nil
 		}
@@ -252,7 +259,7 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 		return c.fail(fmt.Errorf("the license was not confirmed and signed within %s; nothing was signed or recorded and the card "+
 			"connection is closed; run the command again", interactiveLimit))
 	}
-	return c.signErr(err)
+	return c.signErr(err, touchShown)
 }
 
 // dbAllowance is the time the issue transaction may take beyond the interactive step.
@@ -309,8 +316,10 @@ func (b stepSigner) Issue(ctx context.Context, p license.Payload) ([]byte, error
 	return raw, err
 }
 
-// signErr words the failures of a card signing.
-func (c *cli) signErr(err error) int {
+// signErr words the failures of a card signing. afterTouch is true once the touch notice was
+// shown: from then on a cancel may have come after the card signed (a touch and a lost answer),
+// so it is not worded as "nothing was signed".
+func (c *cli) signErr(err error, afterTouch bool) int {
 	var pinErr *openpgp.PINError
 	switch {
 	case errors.As(err, &pinErr):
@@ -321,6 +330,8 @@ func (c *cli) signErr(err error) int {
 		return c.fail(fmt.Errorf("wrong PIN (%s). Nothing was signed; the PIN is never asked again automatically: run the command again to retry", left))
 	case errors.Is(err, issue.ErrNotConfirmed):
 		return c.fail(errors.New("not confirmed: nothing was signed and the request stays open"))
+	case (errors.Is(err, context.Canceled) || errors.Is(err, sign.ErrSignerClosed)) && afterTouch:
+		return c.fail(errors.New("signing cancelled: no license was recorded; if the key was touched its signature counter may have gone up"))
 	case errors.Is(err, context.Canceled), errors.Is(err, sign.ErrSignerClosed):
 		return c.fail(errors.New("signing cancelled: nothing was signed or recorded and the card connection is closed"))
 	case errors.Is(err, context.DeadlineExceeded):
@@ -334,8 +345,8 @@ func (c *cli) signErr(err error) int {
 }
 
 // writeConfirmation prints every field of the payload exactly as it will be signed, the key ID
-// and card, and the SHA-256 of the signed bytes.
-func writeConfirmation(w io.Writer, p license.Payload, sum, keyID, serial string) {
+// and card, the length of the signed bytes and their SHA-256.
+func writeConfirmation(w io.Writer, p license.Payload, size int, sum, keyID, serial string) {
 	none := func(s string) string {
 		if s == "" {
 			return "(none)"
@@ -350,10 +361,10 @@ func writeConfirmation(w io.Writer, p license.Payload, sum, keyID, serial string
 		"  customer         %s\n  installation ID  %s\n  targets          %d\n  valid from       %s\n  valid until      %s\n"+
 		"  months           %d\n  features         %s\n  replaces         %s\n  license ID       %s\n  issued at        %s\n"+
 		"  format           %d\n  key ID           %s\n  card serial      %s\n"+
-		"SHA-256 of the signed bytes: %s\n",
+		"signed bytes: %d bytes\nSHA-256 of the signed bytes: %s\n",
 		termSafe(p.Customer), termSafe(p.InstallationID), p.MaxTargets, p.ValidFrom.UTC().Format(time.RFC3339),
 		p.ValidUntil.UTC().Format(time.RFC3339), termMonths(p.ValidFrom, p.ValidUntil), none(strings.Join(features, ",")),
-		none(p.Replaces), termSafe(p.LicenseID), p.IssuedAt.UTC().Format(time.RFC3339), p.Format, termSafe(keyID), termSafe(serial), sum)
+		none(p.Replaces), termSafe(p.LicenseID), p.IssuedAt.UTC().Format(time.RFC3339), p.Format, termSafe(keyID), termSafe(serial), size, sum)
 }
 
 // termMonths is the term in calendar months between the dates (the request's months; the
@@ -470,7 +481,11 @@ func (c *cli) signerInfo(args []string) int {
 		policy = "NOT forced: signing will be refused (turn on forcesig with gpg --card-edit, admin)"
 	}
 	touch := info.SigUIF
-	if !info.TouchRequired() {
+	switch {
+	case info.TouchRequired():
+	case info.MayWaitForTouch():
+		touch += " (signing will be refused unless --allow-no-touch: a cached touch lets a second signature through without a touch for about 15 seconds)"
+	default:
 		touch += " (signing will be refused unless --allow-no-touch)"
 	}
 	maxLen := "unknown"
@@ -536,9 +551,9 @@ func (c *cli) signerTest(args []string) int {
 	keyID := fs.String("key-id", "", "key ID of the card's key")
 	pubPath := fs.String("pub", "", "public key file of that key ID")
 	keysetPath := fs.String("keyset", "", "key set file holding that key ID")
-	maxSize := fs.Bool("max-size", false, fmt.Sprintf("sign a %d-byte text (longer than any license) instead", smokeMaxSize))
+	maxSize := fs.Bool("max-size", false, fmt.Sprintf("sign a %d-byte text instead, the longest signed bytes issue sends to the card", smokeMaxSize))
 	lastTry := fs.Bool("last-pin-try", false, "allow the PIN prompt when the card has one try left")
-	allowNoTouch := fs.Bool("allow-no-touch", false, "allow a card that signs without a touch")
+	allowNoTouch := fs.Bool("allow-no-touch", false, "allow a card whose touch policy is not on or fixed (off, cached, cached-fixed)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -565,8 +580,8 @@ func (c *cli) signerTest(args []string) int {
 	} else {
 		_, _ = fmt.Fprintf(c.err, "The smoke test signs this text:\n  %s\n", smokeText)
 	}
-	_, _ = fmt.Fprintln(c.err, "The license key signs nothing but licenses; this text is the one exception. It is not a license "+
-		"and the product cannot accept it (its signature can never verify as a license).")
+	_, _ = fmt.Fprintln(c.err, "The license key signs nothing but licenses; the smoke-test texts are the vendor console's one exception. "+
+		"This text is not a license and the product cannot accept it (its signature can never verify as a license).")
 
 	ctx, stop := interruptContext(context.Background())
 	defer stop()
@@ -579,11 +594,12 @@ func (c *cli) signerTest(args []string) int {
 	// Closing the card on cancel or the limit ends a pending touch wait.
 	defer context.AfterFunc(ctx, func() { _ = card.Close() })()
 	defer func() { _ = card.Close() }()
-	if err := smokeTest(ctx, c, card, key, msg, *lastTry, *allowNoTouch); err != nil {
+	touchShown := false
+	if err := smokeTest(ctx, c, card, key, msg, *lastTry, *allowNoTouch, &touchShown); err != nil {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		return c.signErr(err)
+		return c.signErr(err, touchShown)
 	}
 	_, _ = fmt.Fprintf(c.out, "smoke test OK (signature verified with key ID %s, %s)\n", key.ID, license.Fingerprint(key.Key))
 	return 0
@@ -592,7 +608,7 @@ func (c *cli) signerTest(args []string) int {
 // smokeTest runs the signer's checks before the PIN (the right key, PIN not blocked and not on
 // its last try, PIN forced, touch required, input deliverable), then asks the PIN once, signs msg
 // with the applet directly and verifies the signature.
-func smokeTest(ctx context.Context, c *cli, card openpgp.Card, key license.PublicKey, msg []byte, lastTry, allowNoTouch bool) error {
+func smokeTest(ctx context.Context, c *cli, card openpgp.Card, key license.PublicKey, msg []byte, lastTry, allowNoTouch bool, touchShown *bool) error {
 	a, err := openpgp.Open(ctx, card)
 	if err != nil {
 		return err
@@ -615,7 +631,7 @@ func smokeTest(ctx context.Context, c *cli, card openpgp.Card, key license.Publi
 	case info.PW1Retries <= 1 && !lastTry:
 		return sign.ErrLastPINTry
 	case !info.TouchRequired() && !allowNoTouch:
-		return fmt.Errorf("%w (touch policy: %s)", sign.ErrNoTouch, info.SigUIF)
+		return sign.NoTouchError(info.SigUIF)
 	case info.CommandChaining == "no" && len(msg) > 255:
 		return &openpgp.MessageTooLongError{Length: len(msg), Limit: 255}
 	}
@@ -627,10 +643,14 @@ func smokeTest(ctx context.Context, c *cli, card openpgp.Card, key license.Publi
 		clear(pin)
 		return err
 	}
-	if err := a.VerifyPIN(ctx, pin); err != nil { // VerifyPIN zeroes pin
+	if err := a.VerifyPIN(ctx, pin); err != nil { // VerifyPIN zeroes our copy of the PIN
 		return err
 	}
-	if info.TouchRequired() {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if info.MayWaitForTouch() {
+		*touchShown = true
 		_, _ = fmt.Fprintln(c.err, "Touch the YubiKey now...")
 	}
 	sig, err := a.Sign(ctx, msg)

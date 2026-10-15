@@ -26,7 +26,29 @@ var (
 	ErrNoTouch          = errors.New("sign: the card does not require a touch to sign; signing is refused unless that is allowed explicitly")
 	ErrBadCardSignature = errors.New("sign: the card's signature does not verify with the expected key; no license was produced")
 	ErrSignerClosed     = errors.New("sign: the card signer is closed")
+	// ErrOverProvenSize: the signed bytes are longer than OpenPGPOptions.MaxMessage, the size the
+	// smoke test proved the card takes. A *SizeLimitError wraps it with the numbers.
+	ErrOverProvenSize = errors.New("sign: the license is longer than the size the smoke test proved")
 )
+
+// MaxSignedBytes is the longest signing input the vendor console sends to a card: the length of
+// the `signer test --max-size` text, the size the hardware smoke test proves. Licenses whose
+// signed bytes are longer are refused before the PIN prompt. Raise it only after a smoke test
+// with the larger size passed on the real card.
+const MaxSignedBytes = 1024
+
+// SizeLimitError is a license refused before the PIN prompt because its signed bytes are longer
+// than the proven size.
+type SizeLimitError struct{ Length, Limit int }
+
+func (e *SizeLimitError) Error() string {
+	return fmt.Sprintf("sign: the license's signed bytes are %d bytes, more than the limit of %d bytes (the smoke test proved %d bytes); "+
+		"nothing was sent to the card. Shorten the license (customer name, features) or raise the limit after a smoke test with a larger size",
+		e.Length, e.Limit, e.Limit)
+}
+
+// Unwrap makes errors.Is(err, ErrOverProvenSize) hold.
+func (e *SizeLimitError) Unwrap() error { return ErrOverProvenSize }
 
 // openPGPTimeout bounds one Issue from the PIN prompt to the verified file (spec: the signing
 // step has a 2 minute limit).
@@ -41,12 +63,20 @@ type OpenPGPOptions struct {
 	KeyID    string            // key ID written into licenses; must exist in the key set
 	Expected ed25519.PublicKey // public key from the key set for KeyID
 	// AskPIN reads the PIN; tries is the number of tries the card has left. The returned buffer
-	// is handed to the card and zeroed after use.
+	// is handed to the card and zeroed after use, also when AskPIN returns an error with it. Only
+	// our own buffers are cleared: the terminal library, pcscd or WinSCard may keep copies.
 	AskPIN func(ctx context.Context, tries int) ([]byte, error)
-	// NotifyTouch is called right before the signature command when the card requires a touch.
-	NotifyTouch  func()
-	LastPINTry   bool // allow VERIFY when one try is left
-	AllowNoTouch bool // allow signing when touch is not required
+	// NotifyTouch is called right before the signature command when the card may wait for a
+	// touch (touch policy on, fixed, cached or cached-fixed).
+	NotifyTouch func()
+	LastPINTry  bool // allow VERIFY when one try is left
+	// AllowNoTouch allows a card whose touch policy is not on or fixed: off, unsupported, cached
+	// or cached-fixed (cached lets a second signature through without a touch for about 15
+	// seconds after one).
+	AllowNoTouch bool
+	// MaxMessage is the longest signed bytes Issue sends to the card (0 is no limit); the command
+	// line sets it to MaxSignedBytes. Longer licenses are refused before the PIN prompt.
+	MaxMessage int
 }
 
 // OpenPGPSigner signs licenses with the Ed25519 signature key of an OpenPGP card (a YubiKey).
@@ -115,12 +145,22 @@ func (s *OpenPGPSigner) preflight(ctx context.Context) (openpgp.Info, error) {
 	case info.PW1Retries <= 1 && !s.o.LastPINTry:
 		return openpgp.Info{}, ErrLastPINTry
 	case !info.TouchRequired() && !s.o.AllowNoTouch:
-		return openpgp.Info{}, fmt.Errorf("%w (touch policy: %s)", ErrNoTouch, info.SigUIF)
+		return openpgp.Info{}, NoTouchError(info.SigUIF)
 	}
 	if err := s.applet.RequireForcedPIN(ctx); err != nil {
 		return openpgp.Info{}, err
 	}
 	return info, nil
+}
+
+// NoTouchError is ErrNoTouch with the card's touch policy, and for a cached policy what it lets
+// through.
+func NoTouchError(uif string) error {
+	if uif == "cached" || uif == "cached-fixed" {
+		return fmt.Errorf("%w (touch policy: %s: after one touched signature the card signs again without a touch "+
+			"for about 15 seconds, so a second signature could go through untouched)", ErrNoTouch, uif)
+	}
+	return fmt.Errorf("%w (touch policy: %s)", ErrNoTouch, uif)
 }
 
 // KeyID returns the key ID written into every license.
@@ -231,16 +271,24 @@ func (s *OpenPGPSigner) issue(ctx context.Context, p license.Payload) ([]byte, e
 	if info.CommandChaining == "no" && len(signed) > shortAPDUData {
 		return nil, &openpgp.MessageTooLongError{Length: len(signed), Limit: shortAPDUData}
 	}
+	// Longer than the smoke test proved the card takes: refused before the PIN as well.
+	if s.o.MaxMessage > 0 && len(signed) > s.o.MaxMessage {
+		return nil, &SizeLimitError{Length: len(signed), Limit: s.o.MaxMessage}
+	}
 
 	pin, err := s.o.AskPIN(ctx, info.PW1Retries)
 	if err != nil {
 		clear(pin)
 		return nil, err
 	}
-	if err := s.applet.VerifyPIN(ctx, pin); err != nil { // VerifyPIN zeroes pin
+	if err := s.applet.VerifyPIN(ctx, pin); err != nil { // VerifyPIN zeroes our copy of the PIN
 		return nil, err
 	}
-	if info.TouchRequired() && s.o.NotifyTouch != nil {
+	// A cancel that came during VERIFY ends here, before the touch notice: nothing was signed.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if info.MayWaitForTouch() && s.o.NotifyTouch != nil {
 		s.o.NotifyTouch()
 	}
 	sig, err := s.applet.Sign(ctx, signed)

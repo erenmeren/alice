@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 
 	"alice/internal/license"
 	"alice/internal/platform/clock"
+	"alice/internal/vconsole/sign"
 	"alice/internal/vconsole/sign/openpgp"
 	"alice/internal/vconsole/sign/openpgp/openpgptest"
 )
@@ -171,7 +173,7 @@ func TestTheInteractiveStepHasOneTimeLimit(t *testing.T) {
 		assert.True(t, cj.card.sim.Closed(), "the card connection is closed")
 		assert.Equal(t, "open", cj.requestStatus(t), "the row lock was released and nothing recorded")
 	})
-	t.Run("a touch that never comes", func(t *testing.T) {
+	t.Run("a late touch after the limit", func(t *testing.T) {
 		cj := newCardJourney(t, func(o *openpgptest.Options) {
 			o.Touch = func() bool { time.Sleep(time.Second); return true }
 		})
@@ -186,6 +188,75 @@ func TestTheInteractiveStepHasOneTimeLimit(t *testing.T) {
 		out, _, _ := cj.do(clock.Real{}, "verify-licenses", "--pub", cj.card.pubPath)
 		assert.Contains(t, out, "checked 0", "no license was recorded")
 	})
+	t.Run("no touch at all", func(t *testing.T) {
+		cj := newCardJourney(t, func(o *openpgptest.Options) {
+			o.Touch = func() bool { return false } // the card gives up waiting (its own touch timeout)
+		})
+		before := cj.card.sim.SigCount()
+		s := cj.issue(strings.NewReader("y\n"), goodPIN)
+		assert.Equal(t, 1, s.code)
+		assert.Contains(t, s.errOut, "Touch the YubiKey now")
+		assert.Contains(t, s.errOut, "not touched in time")
+		assert.NotContains(t, s.errOut, "the card made a signature")
+		assert.Equal(t, before, cj.card.sim.SigCount(), "the signature counter is unchanged")
+		assert.Empty(t, cj.card.sim.LastSigned())
+		assert.Equal(t, "open", cj.requestStatus(t))
+		assert.NoFileExists(t, cj.licenseOut)
+		assert.Equal(t, "checked 0", cj.licenseCount(t))
+	})
+}
+
+// A license whose signed bytes are longer than the size the smoke test proved is refused after
+// the confirmation display (which shows the size) and before the PIN prompt.
+func TestIssueRefusesALicenseLongerThanTheProvenSize(t *testing.T) {
+	cj := newCardJourney(t, nil)
+	features := make([]string, 20)
+	for i := range features {
+		features[i] = fmt.Sprintf("feature-%02d-%s", i, strings.Repeat("x", 50))
+	}
+	clk := clock.Real{}
+	out, e, code := cj.do(clk, "request", "add", "--customer", "1", "--installation", license.NewInstallationID(), "--targets", "5",
+		"--months", "6", "--features", strings.Join(features, ","))
+	require.Equal(t, 0, code, e)
+	reqID := regexp.MustCompile(`\d+`).FindString(out)
+	out, e, code = cj.do(clk, "request", "show", reqID)
+	require.Equal(t, 0, code, e)
+	hash := regexp.MustCompile(`[0-9a-f]{64}`).FindString(out)
+	s := runSession(cj.getenv, strings.NewReader("y\n"), goodPIN, "issue", "--signer", "openpgp", "--key-id", testKeyID,
+		"--pub", cj.card.pubPath, "--not-in-key-set", "--request", reqID, "--hash", hash, "--out", cj.licenseOut)
+	assert.Equal(t, 1, s.code)
+	size := regexp.MustCompile(`signed bytes: (\d+) bytes`).FindStringSubmatch(s.errOut)
+	require.Len(t, size, 2, s.errOut)
+	assert.Contains(t, s.errOut, "the license's signed bytes are "+size[1]+" bytes")
+	assert.Contains(t, s.errOut, fmt.Sprintf("the smoke test proved %d bytes", sign.MaxSignedBytes))
+	assert.Zero(t, s.prompts, "no PIN prompt")
+	assert.Zero(t, cj.card.sim.Count(0x20))
+	assert.NoFileExists(t, cj.licenseOut)
+	out, e, code = cj.do(clk, "request", "show", reqID)
+	require.Equal(t, 0, code, e)
+	assert.Regexp(t, `status\s+open`, out)
+}
+
+// Ctrl-C after the touch notice: the card may have signed if the key was touched, so the message
+// does not claim that nothing was signed.
+func TestCancelAfterTheTouchNoticeDoesNotClaimNothingWasSigned(t *testing.T) {
+	var cancel context.CancelFunc
+	oldCtx := interruptContext
+	interruptContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel = context.WithCancel(ctx)
+		return ctx, cancel
+	}
+	t.Cleanup(func() { interruptContext = oldCtx })
+	cj := newCardJourney(t, func(o *openpgptest.Options) {
+		o.Touch = func() bool { cancel(); time.Sleep(50 * time.Millisecond); return false }
+	})
+	s := cj.issue(strings.NewReader("y\n"), goodPIN)
+	assert.Equal(t, 1, s.code)
+	assert.Contains(t, s.errOut, "Touch the YubiKey now")
+	assert.Contains(t, s.errOut, "signing cancelled: no license was recorded; if the key was touched its signature counter may have gone up")
+	assert.NotContains(t, s.errOut, "nothing was signed")
+	assert.Equal(t, "open", cj.requestStatus(t))
+	assert.NoFileExists(t, cj.licenseOut)
 }
 
 func TestIssueWithTheSimulatedCardRecordsALicenseThatVerifiesAgainstTheKeySet(t *testing.T) {

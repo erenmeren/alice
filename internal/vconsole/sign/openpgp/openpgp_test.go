@@ -63,6 +63,14 @@ func TestInfoUIFValuesAndUnsupported(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, want, info.SigUIF, "uif %d", uif)
 	}
+	// Only on and fixed make the card wait for a touch before every signature; cached policies
+	// may wait, but let a second signature through untouched for about 15 seconds.
+	for uif, want := range map[string][2]bool{"off": {false, false}, "on": {true, true}, "fixed": {true, true},
+		"cached": {false, true}, "cached-fixed": {false, true}, "unsupported": {false, false}, "unknown:09": {false, false}} {
+		i := openpgp.Info{SigUIF: uif}
+		assert.Equal(t, want[0], i.TouchRequired(), uif)
+		assert.Equal(t, want[1], i.MayWaitForTouch(), uif)
+	}
 	// Not in DO 6E and GET DATA 00D6 answers 6A88: an older card without touch support.
 	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), NoUIF: true})
 	info, err := open(t, sim).Info(context.Background())
@@ -422,6 +430,18 @@ func TestMaxCommandLengthByGetData(t *testing.T) {
 	_, err = open(t, sim).Info(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, sim.CountGetData(0x7F66))
+}
+
+// Any status other than 9000 for GET DATA 7F66 means the card does not say: unknown, not an
+// error that would stop `signer info` or a signing.
+func TestMaxCommandLengthUnreadableIsUnknown(t *testing.T) {
+	for _, sw := range []uint16{0x6A86, 0x6D00, 0x6A88, 0x6982} {
+		sim := openpgptest.New(openpgptest.Options{Key: newKey(t), ExtLenSW: sw})
+		info, err := open(t, sim).Info(context.Background())
+		require.NoError(t, err, "sw %04X", sw)
+		assert.Zero(t, info.MaxCommandLength, "sw %04X", sw)
+		assert.Equal(t, 1, sim.CountGetData(0x7F66), "sw %04X", sw)
+	}
 }
 
 func TestCardRefusingLengthSaysWhichPart(t *testing.T) {

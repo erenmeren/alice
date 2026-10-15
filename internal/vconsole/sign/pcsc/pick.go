@@ -4,9 +4,11 @@
 // ErrNoPCSC and the binary carries no PC/SC code.
 //
 // The signing connection holds the card exclusively (SCARD_SHARE_EXCLUSIVE, the constant
-// shareMode of the tagged build). The OpenPGP applet's default PW1 policy unlocks one signature per
-// VERIFY; on a shared connection another PC/SC client (scdaemon, a browser's smart card stack)
-// could send its own PSO:CDS in the window between our VERIFY and our signature. The trade-off:
+// shareMode of the tagged build). A YubiKey's factory PW1 policy is "signature PIN not forced"
+// (one VERIFY unlocks signatures until the card is reset); the signer refuses such a card and
+// needs forcesig, where one VERIFY unlocks one signature. Even then, on a shared connection
+// another PC/SC client (scdaemon, a browser's smart card stack) could send its own PSO:CDS in the
+// window between our VERIFY and our signature: exclusive access closes that gap. The trade-off:
 // while any other program has the card open, Connect fails with ErrSharingViolation, whose text
 // tells the operator to run `gpgconf --kill scdaemon`; and while vendor-console holds the card,
 // gpg cannot use it. Both are acceptable for a short-lived signing tool that closes the card as
@@ -28,7 +30,7 @@ var ErrNoPCSC = errors.New("pcsc: this build has no YubiKey support (build with 
 // both builds so that callers can test for them without the tag.
 var (
 	ErrNoService         = errors.New("pcsc: the smart card service is not running (Linux: start pcscd)")
-	ErrNoReaders         = errors.New("pcsc: no smart card reader is connected")
+	ErrNoReaders         = errors.New("pcsc: no smart card reader is connected (is the YubiKey plugged in? on Windows, is the Smart Card service running?)")
 	ErrNoCard            = errors.New("pcsc: no card in the reader")
 	ErrCardRemoved       = errors.New("pcsc: the card was removed or reset")
 	ErrReaderUnavailable = errors.New("pcsc: the reader is not available (unplugged?)")
@@ -42,9 +44,13 @@ var (
 )
 
 // pick chooses the reader to open: want itself when it names a connected reader exactly, or,
-// when want is empty, the only reader whose name contains "yubi" in any letter case. Errors list
-// reader names only (quoted, so a hostile name cannot drive the terminal).
+// when want is empty, the only reader whose name contains "yubi" in any letter case. No reader
+// at all is ErrNoReaders. Errors list reader names only (quoted, so a hostile name cannot drive
+// the terminal).
 func pick(names []string, want string) (string, error) {
+	if len(names) == 0 {
+		return "", ErrNoReaders
+	}
 	if want != "" {
 		for _, n := range names {
 			if n == want {

@@ -316,8 +316,9 @@ func (a *Applet) RequireForcedPIN(ctx context.Context) error {
 }
 
 // maxCommandLength reads DO 7F66 (specification 3.x): 02 02 <max command length> 02 02 <max
-// response length>, from DO 6E when it is there and with GET DATA 7F66 otherwise. An absent
-// object (6A88, 6A82, 6B00) is 0, unknown; a present but malformed one is an error.
+// response length>, from DO 6E when it is there and with GET DATA 7F66 otherwise. Any status
+// other than 9000 for that GET DATA (absent object, unknown tag or instruction, ...) is 0,
+// unknown; a 9000 answer or a DO 6E object that is malformed is an error.
 func (a *Applet) maxCommandLength(ctx context.Context, d appData) (int, error) {
 	var objs []tlv
 	var err error
@@ -328,12 +329,8 @@ func (a *Applet) maxCommandLength(ctx context.Context, d appData) (int, error) {
 		if gerr != nil {
 			return 0, gerr
 		}
-		switch sw {
-		case swOK:
-		case swDataNotFound, swNotFound, 0x6B00:
-			return 0, nil
-		default:
-			return 0, &StatusError{Op: "get data 7F66", SW: sw}
+		if sw != swOK {
+			return 0, nil // the value is only reported: any refusal means the card does not say
 		}
 		objs, err = unwrap(raw, 0x7F66)
 	}
@@ -426,10 +423,15 @@ func (a *Applet) sigUIF(ctx context.Context, d appData) (string, error) {
 }
 
 // TouchRequired reports whether the signature key's touch policy makes the card wait for a touch
-// before it signs.
-func (i Info) TouchRequired() bool { return touchRequired(i.SigUIF) }
+// before every signature: on or fixed. Cached and cached-fixed are not enough: after one touched
+// signature the card signs again without a touch for about 15 seconds.
+func (i Info) TouchRequired() bool { return i.SigUIF == "on" || i.SigUIF == "fixed" }
 
-func touchRequired(uif string) bool {
+// MayWaitForTouch reports whether the card may wait for a touch before it signs: TouchRequired or
+// a cached policy (whose cache may have run out).
+func (i Info) MayWaitForTouch() bool { return mayWaitForTouch(i.SigUIF) }
+
+func mayWaitForTouch(uif string) bool {
 	switch uif {
 	case "on", "fixed", "cached", "cached-fixed":
 		return true
@@ -516,7 +518,8 @@ func (a *Applet) PublicKey(ctx context.Context) (ed25519.PublicKey, error) {
 
 // VerifyPIN verifies PW1 for signing (VERIFY 00 20 00 81). It reads the retry counter first and
 // refuses a blocked PIN without sending anything; it sends exactly one VERIFY and never retries.
-// pin is the raw PIN bytes (UTF-8); it is zeroed before VerifyPIN returns, on every path.
+// pin is the raw PIN bytes (UTF-8); this buffer is zeroed before VerifyPIN returns, on every path
+// (only our own buffer: the PC/SC layer, pcscd or WinSCard, may keep its own copy of the command).
 func (a *Applet) VerifyPIN(ctx context.Context, pin []byte) error {
 	defer clear(pin)
 	a.mu.Lock()
@@ -661,7 +664,7 @@ func (a *Applet) Sign(ctx context.Context, message []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("openpgp: the card refused to sign (status %04X) and its touch policy could not be read: %w", sw, err)
 		}
-		if touchRequired(uif) {
+		if mayWaitForTouch(uif) {
 			return nil, ErrTouchNeeded
 		}
 		if sw == swSecurity {

@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -158,6 +159,8 @@ func TestCardChecksBeforeThePINPrompt(t *testing.T) {
 	}{
 		{"PIN not forced", func(o *openpgptest.Options) { o.PW1SingleUse = false }, nil, "not forced"},
 		{"no touch", func(o *openpgptest.Options) { o.UIF = openpgptest.UIFOff }, nil, "touch"},
+		{"cached touch", func(o *openpgptest.Options) { o.UIF = openpgptest.UIFCached }, nil, "about 15 seconds"},
+		{"cached-fixed touch", func(o *openpgptest.Options) { o.UIF = openpgptest.UIFCachedFixed }, nil, "about 15 seconds"},
 		{"last try", nil, func(s *openpgptest.Sim) { s.SetRetries(1) }, "one PIN try left"},
 		{"blocked", nil, func(s *openpgptest.Sim) { s.SetRetries(0) }, "blocked"},
 	} {
@@ -244,9 +247,9 @@ func TestConfirmationShowsEveryFieldOfThePayload(t *testing.T) {
 		ValidUntil: time.Date(2027, 4, 15, 0, 0, 0, 0, time.UTC), MaxTargets: 25, Features: []string{"alpha", "beta"},
 		Format: 1, Replaces: "LIC-2026-000001"}
 	var w bytes.Buffer
-	writeConfirmation(&w, p, strings.Repeat("ab", 32), testKeyID, "12345678")
+	writeConfirmation(&w, p, 437, strings.Repeat("ab", 32), testKeyID, "12345678")
 	got := w.String()
-	for _, want := range []string{"Acme Ltd", p.InstallationID, "targets          25", "2026-10-15T00:00:00Z", "2027-04-15T00:00:00Z",
+	for _, want := range []string{"signed bytes: 437 bytes", "Acme Ltd", p.InstallationID, "targets          25", "2026-10-15T00:00:00Z", "2027-04-15T00:00:00Z",
 		"months           6", "alpha,beta", "LIC-2026-000001", "LIC-2026-123456", "2026-10-15T09:01:02Z", "format           1",
 		testKeyID, "12345678", "SHA-256 of the signed bytes: " + strings.Repeat("ab", 32)} {
 		assert.Contains(t, got, want)
@@ -332,6 +335,40 @@ func TestSignerInfoReportsAWeakCard(t *testing.T) {
 	assert.Contains(t, s.out, "command chaining     unknown")
 }
 
+func TestSignerInfoSaysACachedTouchIsRefused(t *testing.T) {
+	newTestCard(t, func(o *openpgptest.Options) { o.UIF = openpgptest.UIFCached })
+	s := runSession(nil, nil, goodPIN, "signer", "info")
+	require.Equal(t, 0, s.code, s.errOut)
+	assert.Contains(t, s.out, "touch policy         cached (signing will be refused unless --allow-no-touch")
+	assert.Contains(t, s.out, "15 seconds")
+}
+
+func TestSignerTestRefusesACachedTouchUnlessAllowed(t *testing.T) {
+	c := newTestCard(t, func(o *openpgptest.Options) { o.UIF = openpgptest.UIFCachedFixed })
+	s := runSession(nil, nil, goodPIN, "signer", "test", "--key-id", testKeyID, "--pub", c.pubPath)
+	assert.Equal(t, 1, s.code)
+	assert.Contains(t, s.errOut, "about 15 seconds")
+	assert.Zero(t, s.prompts)
+
+	s = runSession(nil, nil, goodPIN, "signer", "test", "--key-id", testKeyID, "--pub", c.pubPath, "--allow-no-touch")
+	require.Equal(t, 0, s.code, s.errOut)
+	assert.Contains(t, s.errOut, "Touch the YubiKey now", "the card may still wait for a touch")
+}
+
+// The PIN buffer the prompt returned with an error is cleared (our own buffer only).
+func TestSmokeTestClearsThePINBufferWhenThePromptFails(t *testing.T) {
+	c := newTestCard(t, nil)
+	var buf []byte
+	cl := &cli{out: io.Discard, err: io.Discard, con: console{secret: func(context.Context, string) ([]byte, error) {
+		buf = []byte("4829")
+		return buf, errors.New("terminal gone")
+	}}}
+	err := smokeTest(context.Background(), cl, c.sim, license.PublicKey{ID: testKeyID, Key: c.pub}, smokeMessage(false), false, false, new(bool))
+	require.ErrorContains(t, err, "terminal gone")
+	assert.Equal(t, make([]byte, 4), buf)
+	assert.Zero(t, c.sim.Count(0x20))
+}
+
 func TestSignerInfoWritesAPublicKeyFileLicensectlReads(t *testing.T) {
 	c := newTestCard(t, nil)
 	out := filepath.Join(c.dir, "vk-2026-01.pub")
@@ -397,7 +434,8 @@ func TestSignerTestSignsOnlyTheFixedText(t *testing.T) {
 	s = runSession(nil, nil, goodPIN, "signer", "test", "--key-id", testKeyID, "--pub", c.pubPath, "--max-size")
 	require.Equal(t, 0, s.code, s.errOut)
 	signed := c.sim.LastSigned()
-	assert.Len(t, signed, smokeMaxSize)
+	assert.Len(t, signed, sign.MaxSignedBytes, "--max-size proves the size issue allows")
+	assert.Contains(t, s.errOut, fmt.Sprintf("%d-byte text", sign.MaxSignedBytes))
 	assert.True(t, bytes.HasPrefix(signed, []byte(smokeText)))
 }
 

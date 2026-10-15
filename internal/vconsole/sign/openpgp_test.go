@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -299,12 +300,130 @@ func TestNoTouchPolicyIsRefusedUnlessAllowed(t *testing.T) {
 		require.NoError(t, err)
 		assert.Zero(t, f.rec.count("touch"), "no touch notice when the card does not want one")
 	}
-	for _, uif := range []byte{openpgptest.UIFFixed, openpgptest.UIFCached, openpgptest.UIFCachedFixed} {
+	for _, uif := range []byte{openpgptest.UIFOn, openpgptest.UIFFixed} {
 		f := newFixture(t, func(o *openpgptest.Options) { o.UIF = uif })
 		_, err := f.signer(t).Issue(context.Background(), payload())
 		require.NoError(t, err, "touch policy %d", uif)
 		assert.Equal(t, 1, f.rec.count("touch"))
 	}
+}
+
+// A cached touch policy lets a second signature through without a touch for about 15 seconds:
+// refused unless --allow-no-touch, and with it the card may still wait for a touch, so the
+// notice is shown.
+func TestCachedTouchPolicyIsRefusedUnlessAllowed(t *testing.T) {
+	for _, uif := range []byte{openpgptest.UIFCached, openpgptest.UIFCachedFixed} {
+		f := newFixture(t, func(o *openpgptest.Options) { o.UIF = uif })
+		msg := refusedBeforePrompt(t, f, sign.ErrNoTouch)
+		assert.Contains(t, msg, "cached")
+		assert.Contains(t, msg, "15 seconds")
+
+		f = newFixture(t, func(o *openpgptest.Options) { o.UIF = uif })
+		f.opts.AllowNoTouch = true
+		_, err := f.signer(t).Issue(context.Background(), payload())
+		require.NoError(t, err, "touch policy %d", uif)
+		assert.Equal(t, 1, f.rec.count("touch"), "the card may still wait for a touch")
+	}
+}
+
+// Signed bytes over MaxMessage (the size the smoke test proved) are refused before the PIN.
+func TestSignedBytesOverTheProvenSizeAreRefusedBeforeThePrompt(t *testing.T) {
+	p := payload()
+	signed, _, err := sign.PayloadDigest(p)
+	require.NoError(t, err)
+
+	f := newFixture(t, nil)
+	f.opts.MaxMessage = len(signed) - 1
+	_, err = f.signer(t).Issue(context.Background(), p)
+	require.ErrorIs(t, err, sign.ErrOverProvenSize)
+	var se *sign.SizeLimitError
+	require.ErrorAs(t, err, &se)
+	assert.Equal(t, len(signed), se.Length)
+	assert.Equal(t, len(signed)-1, se.Limit)
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d bytes", len(signed)))
+	assert.Contains(t, err.Error(), fmt.Sprintf("the smoke test proved %d bytes", len(signed)-1))
+	assert.Zero(t, f.pins.asks(), "no PIN prompt")
+	assert.Zero(t, f.rec.count("verify"))
+	assert.Zero(t, f.sim.Count(0x2A))
+
+	f = newFixture(t, nil)
+	f.opts.MaxMessage = len(signed)
+	_, err = f.signer(t).Issue(context.Background(), p)
+	require.NoError(t, err, "exactly the limit is allowed")
+
+	f = newFixture(t, nil) // 0 is no limit
+	_, err = f.signer(t).Issue(context.Background(), p)
+	require.NoError(t, err)
+	assert.Equal(t, 1024, sign.MaxSignedBytes)
+}
+
+func TestThePINBufferIsZeroedWhenAskPINFails(t *testing.T) {
+	f := newFixture(t, nil)
+	var buf []byte
+	f.opts.AskPIN = func(context.Context, int) ([]byte, error) {
+		buf = []byte("4829") // a partly typed PIN
+		return buf, errors.New("terminal gone")
+	}
+	_, err := f.signer(t).Issue(context.Background(), payload())
+	require.ErrorContains(t, err, "terminal gone")
+	assert.Equal(t, make([]byte, 4), buf)
+	assert.Zero(t, f.rec.count("verify"))
+}
+
+// Times with fractions of a second and other time zones: both signers sign the same bytes and the
+// product accepts both files with the same payload.
+func TestFractionalAndNonUTCTimesAgreeWithTheFileSigner(t *testing.T) {
+	zone := time.FixedZone("UTC+3", 3*3600)
+	p := payload()
+	p.IssuedAt = time.Date(2026, 10, 15, 12, 30, 45, 987654321, zone)
+	p.ValidFrom = time.Date(2026, 10, 15, 3, 0, 0, 500, zone)
+	p.ValidUntil = time.Date(2027, 10, 15, 3, 0, 0, 999999999, zone)
+	f := newFixture(t, nil)
+	raw1, err := f.signer(t).Issue(context.Background(), p)
+	require.NoError(t, err)
+	fs := newSigner(t, "vk-2026-01")
+	raw2, err := fs.Issue(context.Background(), p)
+	require.NoError(t, err)
+
+	f1, err := license.Check(raw1, license.NewKeySet(license.PublicKey{ID: cardKeyID, Key: pub(f.key), Status: license.KeyActive}))
+	require.NoError(t, err)
+	f2, err := sign.Verify(raw2, fs)
+	require.NoError(t, err)
+	assert.Equal(t, license.SignedBytes(f2.Payload), license.SignedBytes(f1.Payload))
+	assert.Equal(t, license.SignedBytes(f1.Payload), f.sim.LastSigned())
+	signed, _, err := sign.PayloadDigest(p)
+	require.NoError(t, err)
+	assert.Equal(t, signed, f.sim.LastSigned(), "the digest shown before the PIN is over the bytes the card signs")
+}
+
+// A cancel that lands after VERIFY and before the signature command: no touch notice is shown
+// (the command line words a cancel before the notice as "nothing was signed").
+func TestCancelAfterVerifyShowsNoTouchNotice(t *testing.T) {
+	f := newFixture(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	card := &cancelAfterVerify{hookCard: f.card, cancel: cancel}
+	s, err := sign.NewOpenPGPSigner(context.Background(), card, f.opts)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	_, err = s.Issue(ctx, payload())
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Zero(t, f.rec.count("touch"))
+	assert.Zero(t, f.sim.Count(0x2A))
+}
+
+// cancelAfterVerify cancels right after the card answers VERIFY with a PIN.
+type cancelAfterVerify struct {
+	*hookCard
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfterVerify) Transmit(ctx context.Context, apdu []byte) ([]byte, error) {
+	resp, err := c.hookCard.Transmit(ctx, apdu)
+	if len(apdu) > 5 && apdu[1] == 0x20 {
+		c.cancel()
+	}
+	return resp, err
 }
 
 func TestUnforcedPINIsRefusedBeforeThePrompt(t *testing.T) {

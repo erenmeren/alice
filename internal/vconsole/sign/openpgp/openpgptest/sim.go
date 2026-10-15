@@ -72,6 +72,9 @@ type Options struct {
 	MaxCommandLength    int
 	NoExtLenInfo        bool
 	ExtLenOnlyByGetData bool
+	// ExtLenSW, when not 0, leaves 7F66 out of DO 6E and answers GET DATA 7F66 with this status
+	// word (for example 6A86 or 6D00 from a card that does not know the object).
+	ExtLenSW uint16
 	// NoChaining clears the command chaining bit in the card capabilities (historical bytes) and
 	// answers a chained part with 6884; NoHistorical leaves the historical bytes out (chaining
 	// unknown).
@@ -178,6 +181,13 @@ func (s *Sim) CountGetData(tag uint16) int {
 		}
 	}
 	return n
+}
+
+// SigCount returns the digital signature counter (DO 93).
+func (s *Sim) SigCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sigCount
 }
 
 // LastSigned returns the message of the last successful PSO:CDS, as reassembled from its parts.
@@ -343,6 +353,9 @@ func (s *Sim) getData(c Command) []byte {
 		}
 		v = []byte{s.o.UIF, 0x20}
 	case 0x7F66:
+		if s.o.ExtLenSW != 0 {
+			return sw(s.o.ExtLenSW)
+		}
 		if s.o.NoExtLenInfo {
 			return sw(0x6A88)
 		}
@@ -407,7 +420,7 @@ func (s *Sim) appData() []byte {
 		}
 		app = append(app, tlv(0x5F52, []byte{0x00, 0x73, 0x00, 0x00, caps, 0x05, 0x90, 0x00})...)
 	}
-	if !s.o.NoExtLenInfo && !s.o.ExtLenOnlyByGetData {
+	if !s.o.NoExtLenInfo && !s.o.ExtLenOnlyByGetData && s.o.ExtLenSW == 0 {
 		app = append(app, s.extLen()...)
 	}
 	app = append(app, tlv(0x73, d)...)

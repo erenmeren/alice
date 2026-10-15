@@ -35,7 +35,9 @@ func TestSelectionRules(t *testing.T) {
 		{name: "matching is case-insensitive", readers: []string{other, "acme YUBIkey 00"}, got: "acme YUBIkey 00"},
 		{name: "two yubikeys are ambiguous", readers: []string{yk, other, yk2}, err: ErrAmbiguousReader, mention: []string{yk, yk2}},
 		{name: "no yubikey lists the readers present", readers: []string{other}, err: ErrReaderNotFound, mention: []string{other}},
-		{name: "no reader at all", readers: nil, err: ErrReaderNotFound, mention: []string{"(none)"}},
+		{name: "no reader at all", readers: nil, err: ErrNoReaders, mention: []string{"no smart card reader is connected", "Smart Card service"}},
+		{name: "empty list", readers: []string{}, err: ErrNoReaders},
+		{name: "named reader with no reader at all", readers: []string{}, want: yk, err: ErrNoReaders},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := pick(tc.readers, tc.want)

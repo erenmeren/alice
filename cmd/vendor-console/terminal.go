@@ -24,7 +24,9 @@ func terminalPassphrase(prompt string) ([]byte, error) {
 //
 // A terminal read cannot be interrupted, so on ctx's end or Ctrl-C the terminal is restored (echo
 // on) and the read is left behind in its goroutine: the process exits soon after, and whatever
-// that read still returns is zeroed and dropped.
+// that read still returns is zeroed and dropped. Zeroing covers our own buffers only:
+// golang.org/x/term, the terminal driver, pcscd or WinSCard may keep copies of the PIN that this
+// program cannot clear.
 func terminalSecret(ctx context.Context, prompt string) ([]byte, error) {
 	return readHidden(ctx, prompt, false)
 }
