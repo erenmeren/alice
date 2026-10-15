@@ -1,5 +1,26 @@
 {{define "title"}}Home{{end}}
 {{define "content"}}
-<h1>Signed in</h1>
-<p>You are signed in as {{.User.Name}}.</p>
+{{template "nav" .}}
+<h1>Open requests</h1>
+{{with .Data.Requests}}
+<table>
+<thead><tr><th>Request</th><th>Customer</th><th>Targets</th><th>Requested by</th></tr></thead>
+<tbody>
+{{range .}}<tr><td><a href="/requests/{{.ID}}">#{{.ID}}</a></td><td>{{.Customer}}</td><td>{{.Targets}}</td><td>{{.RequestedBy}}</td></tr>
+{{end}}</tbody>
+</table>
+{{else}}
+<p class="hint">No open requests.</p>
+{{end}}
+<h1>Licenses ending within {{.Data.Days}} days</h1>
+{{with .Data.Licenses}}
+<table>
+<thead><tr><th>License</th><th>Customer</th><th>Ends</th></tr></thead>
+<tbody>
+{{range .}}<tr><td>{{.LicenseID}}</td><td>{{.Customer}}</td><td>{{.ValidUntil.Format "2006-01-02"}}</td></tr>
+{{end}}</tbody>
+</table>
+{{else}}
+<p class="hint">None.</p>
+{{end}}
 {{end}}

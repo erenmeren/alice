@@ -1,0 +1,20 @@
+{{define "title"}}Request #{{.Data.Request.ID}}{{end}}
+{{define "content"}}
+{{template "nav" .}}
+<h1>Request #{{.Data.Request.ID}}</h1>
+<dl>
+<dt>Customer</dt><dd>{{.Data.Request.Customer}}</dd>
+<dt>Installation</dt><dd>{{.Data.Request.Installation}}</dd>
+<dt>Targets</dt><dd>{{.Data.Request.Targets}}</dd>
+<dt>Months</dt><dd>{{.Data.Request.Months}}</dd>
+<dt>Starts on</dt><dd>{{if .Data.Request.From}}{{.Data.Request.From}}{{else}}on signing{{end}}</dd>
+<dt>Features</dt><dd>{{range $i, $f := .Data.Request.Features}}{{if $i}}, {{end}}{{$f}}{{else}}none{{end}}</dd>
+{{if .Data.Request.Replaces}}<dt>Replaces</dt><dd>{{.Data.Request.Replaces}}</dd>{{end}}
+<dt>Status</dt><dd>{{.Data.Request.Status}}</dd>
+<dt>Requested by</dt><dd>{{.Data.Request.RequestedBy}}</dd>
+<dt>Requested at</dt><dd>{{.Data.Request.RequestedAt.Format "2006-01-02 15:04 MST"}}</dd>
+</dl>
+{{if .Data.CanCancel}}
+<form method="post" action="/requests/{{.Data.Request.ID}}/cancel"><button type="submit">Cancel this request</button></form>
+{{end}}
+{{end}}

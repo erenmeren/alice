@@ -27,6 +27,15 @@ var (
 	ErrNotFound          = errors.New("store: not found")
 )
 
+// InvalidError means the request itself is wrong (not the database): the message is meant for the person
+// who typed it.
+type InvalidError struct{ Err error }
+
+func (e *InvalidError) Error() string {
+	return "store: the request cannot become a license: " + e.Err.Error()
+}
+func (e *InvalidError) Unwrap() error { return e.Err }
+
 // Customer is a company that buys licenses.
 type Customer struct {
 	ID        int64
@@ -101,7 +110,7 @@ func AddRequest(ctx context.Context, q audit.Q, r NewRequest, now time.Time) (in
 		Installation: r.Installation, Customer: name, Targets: r.Targets, From: r.From,
 		Months: r.Months, Features: r.Features, Replaces: r.Replaces,
 	}, now); err != nil {
-		return 0, fmt.Errorf("store: the request cannot become a license: %w", err)
+		return 0, &InvalidError{Err: err}
 	}
 	inst, err := license.ParseInstallationID(r.Installation)
 	if err != nil {

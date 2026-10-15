@@ -1,0 +1,23 @@
+{{define "title"}}Customers{{end}}
+{{define "content"}}
+{{template "nav" .}}
+<h1>Customers</h1>
+{{with .Data.Customers}}
+<table>
+<thead><tr><th>Name</th><th>Contact</th><th>Notes</th><th></th></tr></thead>
+<tbody>
+{{range .}}<tr><td>{{.Name}}</td><td>{{.Contact}}</td><td>{{.Notes}}</td><td><a href="/requests/new?customer={{.ID}}">New request</a></td></tr>
+{{end}}</tbody>
+</table>
+{{else}}
+<p class="hint">No customers yet.</p>
+{{end}}
+<h2>Add a customer</h2>
+{{if .Data.Error}}<p role="alert" class="alert">{{.Data.Error}}</p>{{end}}
+<form method="post" action="/customers">
+<p><label for="name">Name</label><input type="text" id="name" name="name" value="{{.Data.Form.Name}}" maxlength="200" required></p>
+<p><label for="contact">Contact</label><input type="text" id="contact" name="contact" value="{{.Data.Form.Contact}}" maxlength="500"></p>
+<p><label for="notes">Notes</label><textarea id="notes" name="notes" rows="3" maxlength="4000">{{.Data.Form.Notes}}</textarea></p>
+<button type="submit">Add customer</button>
+</form>
+{{end}}

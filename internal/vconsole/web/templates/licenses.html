@@ -1,0 +1,21 @@
+{{define "title"}}Licenses{{end}}
+{{define "content"}}
+{{template "nav" .}}
+<h1>Licenses</h1>
+<p>Ending within:
+<a href="/licenses?ending=30">30 days</a> ·
+<a href="/licenses?ending=60">60 days</a> ·
+<a href="/licenses?ending=90">90 days</a> ·
+<a href="/licenses?ending=all">all</a>
+(showing: {{.Data.Ending}})</p>
+{{with .Data.Licenses}}
+<table>
+<thead><tr><th>License</th><th>Customer</th><th>Targets</th><th>Valid from</th><th>Ends</th><th>Status</th><th></th></tr></thead>
+<tbody>
+{{range .}}<tr><td>{{.LicenseID}}</td><td>{{.Customer}}</td><td>{{.Targets}}</td><td>{{.ValidFrom.Format "2006-01-02"}}</td><td>{{.ValidUntil.Format "2006-01-02"}}</td><td>{{if .RevokedAt}}revoked {{.RevokedAt.Format "2006-01-02"}}{{else}}active{{end}}</td><td><a href="/licenses/{{.LicenseID}}/download">Download</a></td></tr>
+{{end}}</tbody>
+</table>
+{{else}}
+<p class="hint">No licenses.</p>
+{{end}}
+{{end}}

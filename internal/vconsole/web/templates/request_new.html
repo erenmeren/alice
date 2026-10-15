@@ -1,0 +1,21 @@
+{{define "title"}}New request{{end}}
+{{define "content"}}
+{{template "nav" .}}
+<h1>New license request</h1>
+{{if .Data.Error}}<p role="alert" class="alert">{{.Data.Error}}</p>{{end}}
+<form method="post" action="/requests">
+<p><label for="customer_id">Customer</label>
+<select id="customer_id" name="customer_id" required>
+<option value="">Choose a customer</option>
+{{$sel := .Data.Form.CustomerID}}
+{{range .Data.Customers}}<option value="{{.ID}}"{{if eq (printf "%d" .ID) $sel}} selected{{end}}>{{.Name}}</option>
+{{end}}</select></p>
+<p><label for="installation">Installation ID</label><input type="text" id="installation" name="installation" value="{{.Data.Form.Installation}}" maxlength="64" required></p>
+<p><label for="targets">Targets</label><input type="text" id="targets" name="targets" value="{{.Data.Form.Targets}}" inputmode="numeric" required></p>
+<p><label for="months">Months (1 to 60)</label><input type="text" id="months" name="months" value="{{.Data.Form.Months}}" inputmode="numeric"></p>
+<p><label for="from">Starts on (optional, 2026-10-01)</label><input type="text" id="from" name="from" value="{{.Data.Form.From}}" maxlength="40"></p>
+<p><label for="features">Features (optional, comma separated)</label><input type="text" id="features" name="features" value="{{.Data.Form.Features}}"></p>
+<p><label for="replaces">Replaces license (optional)</label><input type="text" id="replaces" name="replaces" value="{{.Data.Form.Replaces}}" maxlength="64"></p>
+<button type="submit">Send request</button>
+</form>
+{{end}}

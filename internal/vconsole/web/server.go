@@ -176,10 +176,9 @@ func (s *Server) routes() (http.Handler, error) {
 	mux.HandleFunc("POST /webauthn/login/begin", s.limited(s.loginBegin))
 	mux.HandleFunc("POST /webauthn/login/finish", s.loginFinish)
 	mux.HandleFunc("POST /logout", s.authed(s.logout))
-	// Everything else needs a session first, so an unknown path tells a signed-out visitor nothing
-	// and a page Task 4 has not registered yet still redirects to /login. Signed in, "/" shows a
-	// minimal home page until Task 4 registers "GET /{$}" (more specific, so it wins) and the rest
-	// is 404.
+	// Everything else needs a session first, so an unknown path tells a signed-out visitor nothing:
+	// signed out it redirects to /login, signed in it is 404. The pages (including "GET /{$}") are
+	// more specific and win.
 	mux.HandleFunc("/", s.authed(s.fallback))
 	s.pages(mux)
 
@@ -256,11 +255,7 @@ func (s *Server) enrollPage(w http.ResponseWriter, _ *http.Request) {
 	s.render(w, http.StatusOK, "enroll", pageData{})
 }
 
-func (s *Server) fallback(w http.ResponseWriter, r *http.Request, u webuser.User) {
-	if r.Method == http.MethodGet && r.URL.Path == "/" {
-		s.render(w, http.StatusOK, "home", pageData{User: u})
-		return
-	}
+func (s *Server) fallback(w http.ResponseWriter, r *http.Request, _ webuser.User) {
 	http.NotFound(w, r)
 }
 

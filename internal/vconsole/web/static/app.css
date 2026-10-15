@@ -19,3 +19,10 @@ button { font: inherit; padding: 0.5rem 1rem; margin: 0.75rem 0; border: 1px sol
 button:disabled { opacity: 0.6; cursor: progress; }
 .alert { color: var(--alert); min-height: 1.5em; }
 .hint { color: var(--muted); }
+nav { margin: 0 0 1rem; }
+h2 { font-size: 1.2rem; margin: 1.5rem 0 0.5rem; }
+table { border-collapse: collapse; width: 100%; margin: 0 0 1.5rem; }
+th, td { text-align: left; padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+select, textarea { width: 100%; max-width: 28rem; padding: 0.5rem; font: inherit; color: inherit; background: transparent; border: 1px solid var(--line); border-radius: 4px; }
+dt { font-weight: 600; margin-top: 0.5rem; }
+dd { margin: 0; }
