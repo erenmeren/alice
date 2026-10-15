@@ -1,0 +1,12 @@
+{{define "title"}}Register a passkey{{end}}
+{{define "content"}}
+<h1>Register a passkey</h1>
+<p>Enter the one-time enrollment code the owner gave you, then follow your browser's prompt.</p>
+<form id="enroll-form" method="post" action="/enroll" autocomplete="off">
+<label for="enroll-code">Enrollment code</label>
+<input id="enroll-code" name="code" type="text" required maxlength="128" autocomplete="one-time-code" spellcheck="false">
+<button type="submit" id="enroll-button">Register passkey</button>
+</form>
+<p role="alert" id="message" class="alert"></p>
+<p class="hint">Already registered? <a href="/login">Sign in</a>.</p>
+{{end}}

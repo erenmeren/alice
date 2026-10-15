@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{template "title" .}} · Alice licenses</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/passkey.js" defer></script>
+</head>
+<body>
+<header class="top">
+<span class="brand">Alice licenses</span>
+{{if .User.Name}}
+<form method="post" action="/logout" class="logout">
+<span class="who">{{.User.Name}}</span>
+<button type="submit">Sign out</button>
+</form>
+{{end}}
+</header>
+<main>
+{{template "content" .}}
+</main>
+</body>
+</html>
