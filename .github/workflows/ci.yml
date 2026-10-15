@@ -1,7 +1,7 @@
 name: ci
 
 on:
-  # Every branch (AUD-08): the project works on master, phase-* and task branches, never on main.
+  # Every branch (AUD-08): the project works on main, phase-* and task branches.
   push:
   pull_request:
 
