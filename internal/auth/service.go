@@ -191,14 +191,17 @@ func (p Principal) Actor(m Meta) audit.Actor {
 
 // LoginResult is the outcome of the password step.
 type LoginResult struct {
-	Status       string // "mfa_required" | "mfa_enrollment_required"
-	SessionToken string // pending session cookie value
+	Status       string // "mfa_required" | "mfa_enrollment_required" | "signed_in" (SignInLDAP without MFA only)
+	SessionToken string // pending session cookie value; the full session's for StatusSignedIn
+	// Session is the full session of StatusSignedIn (a directory without mfa_required), nil otherwise.
+	Session *SessionResult
 }
 
 // Login status values.
 const (
 	StatusMFARequired           = "mfa_required"
 	StatusMFAEnrollmentRequired = "mfa_enrollment_required"
+	StatusSignedIn              = "signed_in"
 )
 
 // MFAInput carries either a TOTP code or a recovery code.

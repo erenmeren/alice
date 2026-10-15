@@ -160,42 +160,50 @@ func freeUsername(ctx context.Context, tx pgx.Tx, name string) (string, error) {
 	return "", ErrUsernameTaken
 }
 
-// maxProvisionAttempts bounds how often provisionSSOUser picks another name after its pick was taken meanwhile; each
+// maxProvisionAttempts bounds how often provisionUser picks another name after its pick was taken meanwhile; each
 // retry means another sign-in or user creation took that name in the meantime.
 const maxProvisionAttempts = 20
 
-// provisionSSOUser inserts a new SSO user under the first free user name. The per-identity lock does not cover the name:
-// another identity's first sign-in, or a local user created at the same moment, can take the name between
-// freeUsername's check and the INSERT. The INSERT runs in a savepoint, so that violation of the user-name constraint
-// rolls back only the INSERT and the next free name is tried; read committed lets the next check see the committed
-// name (review M-2).
-func provisionSSOUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id OIDCIdentity, role rbac.Role, locale string, now time.Time) (string, error) {
+// provisionUser inserts a new SSO or directory user under the first free user name based on base; insert runs the
+// INSERT with the name it is given. The per-identity lock does not cover the name: another identity's first sign-in,
+// or a local user created at the same moment, can take the name between freeUsername's check and the INSERT. The
+// INSERT runs in a savepoint, so that violation of the user-name constraint rolls back only the INSERT and the next
+// free name is tried; read committed lets the next check see the committed name (review M-2).
+func provisionUser(ctx context.Context, tx pgx.Tx, base string, insert func(q pgx.Tx, name string) error) (string, error) {
 	for attempt := 1; ; attempt++ {
-		name, err := freeUsername(ctx, tx, id.Username)
+		name, err := freeUsername(ctx, tx, base)
 		if err != nil {
 			return "", err
 		}
 		sp, err := tx.Begin(ctx)
 		if err != nil {
-			return "", fmt.Errorf("provision SSO user: %w", err)
+			return "", fmt.Errorf("provision user: %w", err)
 		}
-		_, err = sp.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, role_source,
-locale, oidc_provider_id, oidc_issuer, oidc_subject, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'oidc', NULL, $5, 'oidc_mapping', $6, $7, $8, $9, $10, $10, $10)`,
-			userID, name, id.Email, displayName(id, name), string(role), locale, id.ProviderID, id.Issuer, id.Subject, now)
+		err = insert(sp, name)
 		if err == nil {
 			if err := sp.Commit(ctx); err != nil {
-				return "", fmt.Errorf("provision SSO user: %w", err)
+				return "", fmt.Errorf("provision user: %w", err)
 			}
 			return name, nil
 		}
 		if rerr := sp.Rollback(ctx); rerr != nil {
-			return "", fmt.Errorf("provision SSO user: %w", rerr)
+			return "", fmt.Errorf("provision user: %w", rerr)
 		}
 		if !db.IsUniqueViolationOn(err, UsernameConstraint) || attempt >= maxProvisionAttempts {
-			return "", fmt.Errorf("provision SSO user: %w", err)
+			return "", fmt.Errorf("provision user: %w", err)
 		}
 	}
+}
+
+// provisionSSOUser inserts a new SSO user (provisionUser).
+func provisionSSOUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id OIDCIdentity, role rbac.Role, locale string, now time.Time) (string, error) {
+	return provisionUser(ctx, tx, id.Username, func(q pgx.Tx, name string) error {
+		_, err := q.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, role_source,
+locale, oidc_provider_id, oidc_issuer, oidc_subject, last_login_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'oidc', NULL, $5, 'oidc_mapping', $6, $7, $8, $9, $10, $10, $10)`,
+			userID, name, id.Email, displayName(id, name), string(role), locale, id.ProviderID, id.Issuer, id.Subject, now)
+		return err
+	})
 }
 
 // defaultLocale is the locale.default setting for a new SSO user, English when unset.

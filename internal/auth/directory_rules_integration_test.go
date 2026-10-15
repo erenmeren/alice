@@ -28,7 +28,7 @@ unique_id_attribute, display_name_attribute, email_attribute, bind_dn, group_bas
 created_at, updated_at)
 VALUES ($1, $2, '{ldaps://dc1.example.test}', 'dc=example,dc=test', '(sAMAccountName={login})', 'sAMAccountName', 'objectGUID',
 'displayName', 'mail', 'cn=alice,dc=example,dc=test', 'dc=example,dc=test', '(member={dn})', 'cn', true, now(), now())`,
-		id, "Corp "+id.String()[:8])
+		id, "Corp "+id.String())
 	require.NoError(t, err)
 	return id
 }

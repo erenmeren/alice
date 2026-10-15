@@ -677,6 +677,7 @@
       "sso_admin_role_allowed": "SSO kullanıcıları Yönetici olabilir açıldı",
       "sso_admin_role_disallowed": "SSO kullanıcıları Yönetici olabilir kapatıldı",
       "auth_oidc_denied": "Çoklu oturum açma reddedildi",
+      "auth_ldap_denied": "Dizin ile oturum açma reddedildi",
       "user_provisioned": "Kullanıcı çoklu oturum açmayla oluşturuldu",
       "user_role_synced": "Rol kimlik sağlayıcıdan güncellendi",
       "user_sessions_ended": "Oturumlar sonlandırıldı",

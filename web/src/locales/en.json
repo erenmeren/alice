@@ -677,6 +677,7 @@
       "sso_admin_role_allowed": "SSO users may be Admin switched on",
       "sso_admin_role_disallowed": "SSO users may be Admin switched off",
       "auth_oidc_denied": "Single sign-on refused",
+      "auth_ldap_denied": "Directory sign-in refused",
       "user_provisioned": "User created by single sign-on",
       "user_role_synced": "Role updated from the identity provider",
       "user_sessions_ended": "Sessions ended",
