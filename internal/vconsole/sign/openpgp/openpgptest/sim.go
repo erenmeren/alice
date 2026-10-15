@@ -67,9 +67,16 @@ type Options struct {
 	ExtraAppData int
 	SigCount     int
 	// MaxCommandLength is the maximum command length reported in DO 7F66 (0 is 2048);
-	// NoExtLenInfo leaves 7F66 out.
-	MaxCommandLength int
-	NoExtLenInfo     bool
+	// NoExtLenInfo leaves 7F66 out (GET DATA 7F66 answers 6A88); ExtLenOnlyByGetData leaves it
+	// out of DO 6E but answers GET DATA 7F66.
+	MaxCommandLength    int
+	NoExtLenInfo        bool
+	ExtLenOnlyByGetData bool
+	// NoChaining clears the command chaining bit in the card capabilities (historical bytes) and
+	// answers a chained part with 6884; NoHistorical leaves the historical bytes out (chaining
+	// unknown).
+	NoChaining   bool
+	NoHistorical bool
 	// MaxMessage is the longest PSO:CDS input the card takes (0 is 4096); the part that goes
 	// past it is answered 6700.
 	MaxMessage int
@@ -335,6 +342,11 @@ func (s *Sim) getData(c Command) []byte {
 			return sw(0x6A88)
 		}
 		v = []byte{s.o.UIF, 0x20}
+	case 0x7F66:
+		if s.o.NoExtLenInfo {
+			return sw(0x6A88)
+		}
+		v = s.extLen()
 	case 0x00F9:
 		alg := byte(0x00)
 		if s.o.KDF {
@@ -388,17 +400,27 @@ func (s *Sim) appData() []byte {
 	}
 	var app []byte
 	app = append(app, tlv(0x4F, s.aid)...)
-	app = append(app, tlv(0x5F52, []byte{0x00, 0x73, 0x00, 0x00, 0xE0, 0x05, 0x90, 0x00})...)
-	if !s.o.NoExtLenInfo {
-		maxCmd := s.o.MaxCommandLength
-		if maxCmd == 0 {
-			maxCmd = 2048
+	if !s.o.NoHistorical {
+		caps := byte(0xE0) // command chaining, extended Lc/Le, extended length information
+		if s.o.NoChaining {
+			caps = 0x60
 		}
-		ext := append(tlv(0x02, binary.BigEndian.AppendUint16(nil, uint16(maxCmd&0xFFFF))), tlv(0x02, []byte{0x08, 0x00})...)
-		app = append(app, tlv(0x7F66, ext)...)
+		app = append(app, tlv(0x5F52, []byte{0x00, 0x73, 0x00, 0x00, caps, 0x05, 0x90, 0x00})...)
+	}
+	if !s.o.NoExtLenInfo && !s.o.ExtLenOnlyByGetData {
+		app = append(app, s.extLen()...)
 	}
 	app = append(app, tlv(0x73, d)...)
 	return tlv(0x6E, app)
+}
+
+func (s *Sim) extLen() []byte {
+	maxCmd := s.o.MaxCommandLength
+	if maxCmd == 0 {
+		maxCmd = 2048
+	}
+	ext := append(tlv(0x02, binary.BigEndian.AppendUint16(nil, uint16(maxCmd&0xFFFF))), tlv(0x02, []byte{0x08, 0x00})...)
+	return tlv(0x7F66, ext)
 }
 
 func (s *Sim) verify(c Command, data []byte) []byte {
@@ -447,7 +469,7 @@ func (s *Sim) pso(c Command, data []byte) []byte {
 		s.chain, s.chaining = nil, false
 		return sw(0x6A86)
 	}
-	if c.CLA == 0x10 && s.o.RefuseChaining {
+	if c.CLA == 0x10 && (s.o.RefuseChaining || s.o.NoChaining) {
 		s.chain, s.chaining = nil, false
 		return sw(0x6884)
 	}

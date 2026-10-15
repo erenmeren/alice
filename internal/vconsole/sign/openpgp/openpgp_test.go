@@ -347,32 +347,81 @@ func TestInfoReportsLengthLimitAndChaining(t *testing.T) {
 	assert.Equal(t, 2048, info.MaxCommandLength)
 	assert.Equal(t, "yes", info.CommandChaining)
 
-	info, err = open(t, openpgptest.New(openpgptest.Options{Key: newKey(t), NoExtLenInfo: true})).Info(context.Background())
+	info, err = open(t, openpgptest.New(openpgptest.Options{Key: newKey(t), NoExtLenInfo: true, NoHistorical: true})).Info(context.Background())
 	require.NoError(t, err)
 	assert.Zero(t, info.MaxCommandLength, "unknown")
+	assert.Equal(t, "unknown", info.CommandChaining)
 }
 
-func TestSignTooLongIsRefusedBeforeSending(t *testing.T) {
-	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), MaxCommandLength: 256})
+// Only a message that cannot be delivered at all is refused locally: it needs chaining and the
+// card says it has none.
+func TestSignWithoutChainingTooLongIsRefusedBeforeSending(t *testing.T) {
+	k := newKey(t)
+	sim := openpgptest.New(openpgptest.Options{Key: k, NoChaining: true})
 	a := open(t, sim)
+	info, err := a.Info(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "no", info.CommandChaining)
 	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
-	_, err := a.Sign(context.Background(), bytes.Repeat([]byte{1}, 300))
+	_, err = a.Sign(context.Background(), bytes.Repeat([]byte{1}, 300))
 	require.ErrorIs(t, err, openpgp.ErrMessageTooLong)
 	var te *openpgp.MessageTooLongError
 	require.ErrorAs(t, err, &te)
-	assert.Equal(t, 256, te.Limit)
+	assert.Equal(t, 255, te.Limit)
 	assert.Equal(t, 300, te.Length)
 	assert.Zero(t, sim.Count(0x2A), "nothing sent")
 
-	// Unknown limit: no refusal, the card decides.
-	k := newKey(t)
-	sim = openpgptest.New(openpgptest.Options{Key: k, NoExtLenInfo: true})
-	a = open(t, sim)
+	// A message that fits one APDU is signed.
 	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
-	msg := bytes.Repeat([]byte{1}, 3000)
+	msg := bytes.Repeat([]byte{2}, 255)
 	sig, err := a.Sign(context.Background(), msg)
 	require.NoError(t, err)
 	assert.True(t, ed25519.Verify(k.Public().(ed25519.PublicKey), msg, sig))
+}
+
+// With chaining supported (whatever 7F66 says about one command) or not stated, a long message
+// goes out chained and is signed.
+func TestSignChainsWhenChainingIsSupportedOrUnknown(t *testing.T) {
+	for name, o := range map[string]openpgptest.Options{
+		"chaining yes, max command 255": {MaxCommandLength: 255},
+		"chaining unknown":              {NoHistorical: true},
+		"chaining unknown, no 7F66":     {NoHistorical: true, NoExtLenInfo: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			k := newKey(t)
+			o.Key = k
+			sim := openpgptest.New(o)
+			a := open(t, sim)
+			require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+			msg := bytes.Repeat([]byte("0123456789"), 70)
+			sig, err := a.Sign(context.Background(), msg)
+			require.NoError(t, err)
+			assert.True(t, ed25519.Verify(k.Public().(ed25519.PublicKey), msg, sig))
+			assert.Equal(t, 3, sim.Count(0x2A), "sent chained")
+			assert.Equal(t, msg, sim.LastReceived())
+		})
+	}
+}
+
+// DO 7F66 outside DO 6E is read with its own GET DATA; 6A88 there means unknown.
+func TestMaxCommandLengthByGetData(t *testing.T) {
+	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), ExtLenOnlyByGetData: true, MaxCommandLength: 1024})
+	info, err := open(t, sim).Info(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1024, info.MaxCommandLength)
+	assert.Equal(t, 1, sim.CountGetData(0x7F66))
+
+	sim = openpgptest.New(openpgptest.Options{Key: newKey(t), NoExtLenInfo: true})
+	info, err = open(t, sim).Info(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, info.MaxCommandLength)
+	assert.Equal(t, 1, sim.CountGetData(0x7F66))
+
+	// Inside DO 6E: no extra GET DATA.
+	sim = openpgptest.New(openpgptest.Options{Key: newKey(t)})
+	_, err = open(t, sim).Info(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, sim.CountGetData(0x7F66))
 }
 
 func TestCardRefusingLengthSaysWhichPart(t *testing.T) {
