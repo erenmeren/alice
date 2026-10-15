@@ -53,11 +53,12 @@ CREATE TABLE ldap_directories (
 CREATE UNIQUE INDEX ldap_directories_name ON ldap_directories (lower(name));
 
 -- Group-to-role mappings (ruling 8): the group exactly as the group search returns it (its DN or the configured name
--- attribute; case-sensitive), a non-empty value, no "all users" mapping.
+-- attribute; case-sensitive), a non-empty value of at most 1024 characters (a group DN, as long as the DN columns), no
+-- "all users" mapping.
 CREATE TABLE ldap_group_mappings (
     id           uuid PRIMARY KEY,
     directory_id uuid NOT NULL REFERENCES ldap_directories (id) ON DELETE CASCADE,
-    group_value  text NOT NULL CHECK (char_length(group_value) BETWEEN 1 AND 256
+    group_value  text NOT NULL CHECK (char_length(group_value) BETWEEN 1 AND 1024
                                       AND group_value = btrim(group_value)
                                       AND group_value !~ '[[:cntrl:]]'),
     role         text NOT NULL CHECK (role IN ('admin', 'operator', 'auditor')),

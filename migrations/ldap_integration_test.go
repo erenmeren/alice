@@ -210,8 +210,8 @@ VALUES ($1, $2, $3, $4, now())`, uuid.New(), dir, group, role)
 	for _, bad := range []string{"", " ops", "ops ", "o\tps", "o\nps", "x\x7f"} {
 		assert.Equal(t, "23514", sqlState(put(bad, "auditor")), "%q", bad)
 	}
-	assert.Equal(t, "23514", sqlState(put(strings.Repeat("ç", 257), "auditor")))
-	require.NoError(t, put(strings.Repeat("ç", 256), "auditor"), "256 characters")
+	assert.Equal(t, "23514", sqlState(put(strings.Repeat("ç", 1025), "auditor")))
+	require.NoError(t, put(strings.Repeat("ç", 1024), "auditor"), "1024 characters: a group DN, as long as the DN columns")
 	assert.Equal(t, "23514", sqlState(put("x", "owner")))
 
 	other := seedLDAPDirectory(t, d, "Other")
