@@ -11,7 +11,8 @@ part of a customer build. Design: `docs/superpowers/specs/2026-10-15-vendor-cons
    TLS mode unless the database is on the same computer. Never put the string in a file in this
    repository.
 2. With the migration login in `VENDOR_DATABASE_URL`, run `vendor-console migrate`. Use that login
-   for nothing else: it owns the tables and is not held back by the grants or the row rules.
+   for nothing else: it owns the tables and is not held back by the grants or the row rules. In
+   particular it must not be used as the web service login (below).
 3. Create one login per person and add it to one group role:
    `CREATE ROLE "<login>" LOGIN PASSWORD '<password>' IN ROLE vendor_sales;` (sales people),
    `vendor_signer` (the people who sign) or `vendor_owner` (the owner). Each person puts their
@@ -69,9 +70,11 @@ Run once, as a role that may create roles:
 
 Give it no other membership. In particular it must never be a member of `vendor_signer` or
 `vendor_owner`. The role `vendor_web` is created by `vendor-console migrate`. It is a member of
-`vendor_sales` only. It cannot insert licenses, read the audit log or call the audit functions. The
-service reads the person's name from the session, so only members of `vendor_web` can act under a
-`web:` name; any other login still appears under its own name.
+`vendor_sales` only. It cannot insert licenses, read the audit log or call the audit functions,
+except `web_audit_login`, which records a sign-in for an enabled user. The service reads the
+person's name from the session, so only logins that inherit `vendor_web` can act under a `web:`
+name; any other login (including a superuser and the migration login) still appears under its own
+name. Do not use the migration login as the service login.
 
 ### Start
 
@@ -97,16 +100,18 @@ front and let `vendor-web` listen on a private address. The proxy must pass `Ori
 unchanged. A form post from another site is refused with 403, and the check compares `Origin` with
 `VENDOR_WEB_ORIGIN`.
 
-`X-Forwarded-For` is ignored in this phase. Behind a proxy the sign-in rate limit (10 attempts a
-minute for each address) sees the proxy's address, so all users share one counter. Set a rate limit
-at the proxy too.
+`X-Forwarded-For` is ignored in this phase. The sign-in rate limit is 10 attempts a minute for each
+address (for IPv6, for each /64 network). Behind a reverse proxy it sees only the proxy's address,
+so all clients share one counter: anyone can block every sign-in by sending 11 requests a minute.
+Until a trusted-proxy option exists, prefer running with `--tls-cert`/`--tls-key` and a firewall in
+front instead of a proxy. If you do use a proxy, set a rate limit there too.
 
 ### Cookies and sessions
 
 The session cookie is `__Host-vsession` over https, `vsession` for the localhost http origin. It is
 `HttpOnly`, `Secure` (not on http localhost), `SameSite=Strict`. A session ends after 8 hours, or
-after 30 minutes without a request. The passkey ceremony uses a short cookie (`vceremony`, 5
-minutes). Every page carries a Content-Security-Policy that allows only files from the service
+after 30 minutes without a request. The passkey ceremony uses a short cookie (`__Host-vceremony`
+over https, `vceremony` for the localhost http origin; `Path=/`, 5 minutes). Every page carries a Content-Security-Policy that allows only files from the service
 itself: no inline script or style.
 
 ### Pages
@@ -147,3 +152,15 @@ Use `VENDOR_WEB_ORIGIN=http://localhost:8443` and a database on the same compute
 - Backup of the database includes the `web_users`, `web_credentials`, `web_enrollments` and
   `web_sessions` tables. A restore keeps passkeys working if `VENDOR_WEB_RPID` is unchanged.
   Sessions are not worth restoring.
+
+### After a break-in of the web service
+
+The service login cannot sign licenses, but it can add a passkey to any web user and then sign in
+as that person. After a suspected break-in of the server that runs `vendor-web`:
+
+1. Review the audit rows with action `webuser.passkey_add` and the `web_credentials` table for
+   passkeys that nobody registered.
+2. `vendor-console web-user disable NAME` for every affected person (create a new name for them
+   later; see above).
+3. Rotate the service login's password (`ALTER ROLE vendor_web_svc PASSWORD '...'`) and update
+   `VENDOR_WEB_DATABASE_URL`.

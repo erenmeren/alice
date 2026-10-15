@@ -52,7 +52,7 @@ embedded key set (section 8).
   license. Built in Phase 3. Sales people are rows in `web_users`, not database logins. The service
   is one login (member of `vendor_web`, which is a member of `vendor_sales` only) and sets
   `vendor.actor` for each transaction. The database function `vendor_actor()` honors that setting
-  only for members of `vendor_web`, so audit rows and row-level security name the real person
+  only for logins that inherit `vendor_web` (not superusers or admin-only grantors), so audit rows and row-level security name the real person
   (`web:<name>`) and no other login can impersonate one. Enrollment: the owner runs
   `vendor-console web-user add NAME` and gets a one-time code (24 hours, stored hashed); the person
   opens `/enroll`, enters the code and registers a passkey. A lost key is handled with
@@ -115,8 +115,9 @@ A checklist for this goes into the operator documentation of the console.
 - `licenses(license_id, request_id, customer_id, installation_id, key_id, issued_at, valid_from,
   valid_until, targets, file, file_sha256, signed_by, replaces, revoked_at)`
 - `audit(seq, at, actor, action, subject, details, prev_hash, hash)`: hash chain, same idea as the
-  product's audit log. Written by triggers in the same statement as the change, with the login
-  (`session_user`) as actor; no login may write it by hand.
+  product's audit log. Written by triggers in the same statement as the change, with
+  `vendor_actor()` as actor: the login (`session_user`), or `web:<name>` for the web service acting
+  for a signed-in person; no login may write it by hand.
 - `reminders(license_id, days_before, sent_at)`
 
 Licenses are never updated after signing, except for `revoked_at`. A correction is a new license
@@ -129,6 +130,7 @@ Roles in Postgres (one login per person, no shared password):
 | `sales` | read customers and licenses; insert customers and requests; update only their own open requests |
 | `signer` | everything `sales` can, plus insert into `licenses`, update request status |
 | `owner` | everything; manage logins |
+| `vendor_web` | the sales web service login: everything `sales` can (acting as `web:<name>`), plus its own web tables (sessions, adding passkeys and updating their sign counters, consuming enrollment codes) and `web_audit_login`; no signing, no audit read |
 
 Row-level security enforces this in the database, so a bug in a client cannot widen it.
 Connections require TLS with certificate verification. Credentials come from the environment or
