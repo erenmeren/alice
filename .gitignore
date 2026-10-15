@@ -1,5 +1,9 @@
 # Go
 /bin/
+# Stray vendor-console builds at the repository root (go build -o bin/... is the usual place)
+/vendor-console
+/vendor-console.exe
+/vendor-console-yubikey*
 /coverage.out
 # Web
 /web/node_modules/
