@@ -122,7 +122,8 @@ var rules = map[string][]string{
 	"alice/internal/vconsole/webuser": {platform, "alice/internal/vconsole/audit"},
 	// Phase 4 (plan 2026-10-15-vendor-console-phase-4): the notifier (outbox, reminders, weekly summary) talks to the
 	// database through the store and the audit chain and sends through the mail package. The mail package is a leaf: it
-	// knows no vconsole code and no product code. Its test SMTP server imports the mail package only.
+	// knows no vconsole code and no product code. Its test SMTP server imports the mail package only, and may itself be
+	// imported from tests only (listed in testOnlyImports and testOnlyDirs, buildtags_test.go).
 	"alice/internal/vconsole/notify":        {platform, "alice/internal/vconsole/mail", "alice/internal/vconsole/audit", "alice/internal/vconsole/store"},
 	"alice/internal/vconsole/mail":          {},
 	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/mail"},

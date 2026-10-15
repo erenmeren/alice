@@ -177,12 +177,16 @@ The SMTP server is any provider (a transactional service or your own mail server
 the run:
 
 - `VENDOR_SMTP_ADDR`: `host:port`. Port 465 means TLS from the first byte; any other port must
-  offer STARTTLS. The certificate is verified against the system roots.
+  offer STARTTLS. The certificate is verified against the system roots, also on a local relay: a
+  relay on the same computer that offers STARTTLS with a self-signed certificate fails that check
+  and every mail is retried and finally marked failed. Give such a relay a certificate from a trusted CA, or turn its
+  STARTTLS off (see below).
 - `VENDOR_SMTP_FROM`: the sender address, for example `licenses@example.com`. It is the envelope
   sender and the `From:` header; the provider usually has to allow it.
 - `VENDOR_SMTP_USER` and `VENDOR_SMTP_PASSWORD`: the login, both or neither. A login is sent only
   over an encrypted connection.
-- `VENDOR_DATABASE_URL`: the notifier login (below), with `?sslmode=verify-full`.
+- `VENDOR_DATABASE_URL`: the notifier login (below), with `?sslmode=verify-full`. Also needed
+  for `--dry-run`, which connects with the same notifier login.
 
 If the server offers no STARTTLS the message is not sent, except to a server on the same computer
 (a local relay), where no login is sent either. The program announces itself with `EHLO localhost`;
@@ -193,9 +197,13 @@ Create the notifier login once, as a role that may create roles:
 
     CREATE ROLE "<login>" LOGIN PASSWORD '<password>' IN ROLE vendor_notifier;
 
-`vendor_notifier` is created by `vendor-console migrate`. It can read licenses (not the license
-file), customers, requests, web users, settings and the audit log, and write only the mail outbox,
-the reminder records and the time of the last summary. It cannot sign or change a license.
+`vendor_notifier` is created by `vendor-console migrate`. It reads only the columns it needs:
+licenses without the license file, the ID and name of customers (no contact, no notes), the
+number, customer, status, requester and time of requests (not their contents), the name, address
+and disabled time of web users, the settings, and the time, actor, action and subject of audit
+rows (not their details). It adds mail to the outbox and may change only its delivery columns
+(recipients, sent, attempts, last error, failed, next attempt), never a subject or body; it adds
+reminder records and stores the time of the last summary. It cannot sign or change a license.
 `notify run` refuses a login that is not a member of it. Do not use the owner or migration login.
 
 Then, as the owner login:
@@ -208,7 +216,9 @@ Then, as the owner login:
 `timezone` is an IANA name; it decides what counts as night and as a day in the summary. `owner_email`
 and `timezone` are audited (`settings.set`), the web user's address too (`webuser.email`). Until
 `owner_email` is set, mails for the owner wait in the outbox with no recipient and go out on the
-first run after it is set. Nothing is lost.
+first run after it is set. Nothing is lost, but nothing is merged either: a weekly summary is still
+created every week while no address is set, and all the waiting summaries go out together on that
+first run.
 
 ### Run it
 
@@ -226,17 +236,24 @@ printed at the end and the exit code is 1; it is also 1 when a message was marke
 It prints one line for each step with counts. `--base-url` is the public address of `vendor-web`;
 it is used for the Renew link in reminders and without it reminders have no link. `--dry-run`
 prints how many recipients, reminders and mails there would be, whether a summary is due, and
-changes nothing and sends nothing; it needs no SMTP settings. A SIGTERM stops the run between
-mails; a mail the server already accepted is still recorded as sent.
+changes nothing and sends nothing; it needs no SMTP settings, but it does need
+`VENDOR_DATABASE_URL` with a notifier login. A SIGTERM stops the run between mails; a mail the
+server already accepted is still recorded as sent.
+
+A mail is due when its next-attempt time, set by the database clock when the mail is created, is
+not after the run's own time, taken from the host clock. If the host clock is behind the database
+clock, a mail created during a run (an issuance mail, a reminder, the summary) may wait until the
+next run. Keep both clocks synchronised (NTP).
 
 Example systemd units that run it every hour (`/etc/systemd/system/vendor-notify.service` and
-`.timer`; keep the environment file readable by root only):
+`.timer`). Run it as an unprivileged system user, not root (`useradd --system vendor-notify`):
 
     [Unit]
     Description=Vendor console mail and reminders
 
     [Service]
     Type=oneshot
+    User=vendor-notify
     EnvironmentFile=/etc/vendor-console/notify.env
     ExecStart=/usr/local/bin/vendor-console notify run --base-url https://licenses.example.com
 
@@ -248,7 +265,18 @@ Example systemd units that run it every hour (`/etc/systemd/system/vendor-notify
     WantedBy=timers.target
 
 `notify.env` holds `VENDOR_DATABASE_URL`, `VENDOR_SMTP_ADDR`, `VENDOR_SMTP_FROM`,
-`VENDOR_SMTP_USER` and `VENDOR_SMTP_PASSWORD`. Enable it with `systemctl enable --now vendor-notify.timer`.
+`VENDOR_SMTP_USER` and `VENDOR_SMTP_PASSWORD`, one `NAME=value` per line. systemd reads it before
+switching to `User=`, so it can stay readable by root only:
+
+    chown root:root /etc/vendor-console/notify.env
+    chmod 0600 /etc/vendor-console/notify.env
+
+systemd does not read the file like a shell: a backslash is an escape character even outside
+quotes, and a value that starts with a quote is a quoted value. So write every value that contains
+a backslash, a quote, a space or `$` (common in passwords and in a `From` with a display name) in
+double quotes, and inside them put a backslash before each `"` and `\`, for example
+`VENDOR_SMTP_FROM="Licenses <licenses@example.com>"`. A line that starts with `#` is a comment.
+Enable it with `systemctl enable --now vendor-notify.timer`.
 Two runs at the same time are safe: each mail is claimed by one of them. The schedule is the timer's
 job: the program sends the weekly summary when more than 7 days passed since the last one, so an hourly
 timer gives a summary about every 7 days, a few hours late at most when the timer was off.
@@ -257,15 +285,19 @@ timer gives a summary about every 7 days, a few hours late at most when the time
 
 - **Issued license** (written by the database in the same statement that inserts the license, so
   it exists even when someone issues with plain SQL): customer, license ID, targets, valid from and
-  until, who signed (the login), key ID and request number. Sent to the owner.
+  until, who signed, key ID and request number. Sent to the owner. "Signed by" is the login that
+  inserted the license (the same name the audit log records), not the `signed_by` column, which
+  the inserting client can fill in itself. When that column holds a different name the mail adds a
+  line `Recorded signer: NAME (differs from the login)`.
 - **Reminder** (subject `License ending in N days: CUSTOMER`): customer, license ID, valid until,
   days left, targets, who requested it, and the Renew link when `--base-url` is given.
 - **Weekly summary**: see below.
 
 No mail contains the installation ID, the license file or its content, a customer contact or a
-customer e-mail address. Names and license IDs are cut to a bounded length and line breaks are
-removed; a customer name with a line break inside is shown on one line in the subject (the body of the
-issuance mail keeps the name as stored).
+customer e-mail address. Names and license IDs are cut to a bounded length, and control characters
+(line breaks, escape sequences) and invisible formatting characters (such as bidi overrides) are
+removed or turned into a space, in the subject and the body, so a customer name with a line break
+inside is shown on one line and cannot add a line of its own.
 
 ### Weekly summary
 
@@ -274,28 +306,37 @@ even on a quiet week, which shows the system is alive. The first one covers the 
 run; later ones start where the last one ended. All times are in the configured time zone. Sections
 (at most 20 lines each, then `... and N more`):
 
-- **Issued since ...**: license, customer, targets, signer, time.
+- **Issued since ...**: license, customer, targets, signer, time. Signer and time are the login and
+  time of the license's audit row (`license.issue`), written by the database when the license was
+  inserted, not the `signed_by` and `issued_at` columns the inserting client can set: a back-dated
+  license is listed in the week it was really issued.
 - **Open requests**: number, customer, age in days, who requested.
-- **Ending in the next 90 days**: licenses that are not revoked and not replaced by a later one.
+- **Ending in the next 90 days**: licenses that are not revoked, not replaced and not renewed (the
+  same rule as the reminders, below).
 - **Failed e-mails**: every mail that was given up on in the last 28 days (kind, created, subject,
   error). A failure stays listed in four summaries in a row.
 - **Unusual**: a license issued from 22:00 up to 06:00 local time, or a signer who issued more than 5
-  licenses on one local day. If the `timezone` setting is not a known zone, times are shown in UTC
-  and the section says so.
+  licenses on one local day, both judged by the audit time and login. If the `timezone` setting is
+  not a known zone, times are shown in UTC and the section says so.
 
 If `last_summary_at` (kept by the program in the settings) is missing, unreadable or more than an
-hour in the future, a summary is sent at the next run.
+hour in the future, a summary is sent at the next run. Storing it writes a `settings.set` audit row
+for `last_summary_at` with the notifier login as the actor, one per summary.
 
 ### Reminders
 
-A license that is not revoked and not replaced by a later license gets a reminder when it ends
-within 90, 60 and 30 days, each threshold once. Recipients: the owner, and the person who requested
-the license when that is a web user with an e-mail address who is not disabled (a database login
-has no address, so only the owner is told). Catch-up: if a license is found already inside a
-threshold that was never sent (the timer was off, or the license was issued 20 days before its
+A license that is not revoked, not replaced and not renewed gets a reminder when it ends within
+90, 60 and 30 days, each threshold once. Renewed means a later license, not revoked, for the same
+customer and installation that ends after it, whether or not it names the old one as replaced; so
+issuing the renewal stops the reminders for the old license, and the new one gets its own in time.
+Recipients: the owner, and the person who requested the license when that is a web user with an
+e-mail address who is not disabled (a database login has no address, so only the owner is told).
+Each recipient gets a separate mail, so a requester's mailbox that refuses mail does not stop the
+owner's copy; the owner's copy waits for `owner_email` like other owner mail. Catch-up: if a
+license is found already inside a threshold that was never sent (the timer was off, or the license was issued 20 days before its
 end), only the most urgent unsent threshold is mailed and the less urgent ones are recorded as sent,
-so nothing arrives late. A license revoked or replaced before its reminder gets none; one revoked
-at the same moment as a run can still produce one reminder.
+so nothing arrives late. A license revoked, replaced or renewed before its reminder gets none; one
+revoked at the same moment as a run can still produce one reminder.
 
 The **Renew** link in a reminder (and the Renew link on the license list) opens
 `/requests/new?renew=<license-id>`: a new request prefilled with the customer, installation,
@@ -307,23 +348,28 @@ submit. Nothing is stored before that.
 A mail that cannot be sent is tried again with a growing delay of 2^n minutes (2, 4, 8, ... up to 6
 hours) after the n-th failure, and is marked failed after 10 failures (about 14 hours of trying). A
 message the sender refuses before connecting (a malformed address) is marked failed at once, since a
-retry cannot help. Failed mails are listed in the weekly summary. The owner login has no read access
-to the outbox; look with the migration login or the notifier login:
+retry cannot help. Failed mails are listed in the weekly summary. The owner login can read the
+outbox (and the reminder records) but not change them:
 
-    select id, kind, created_at, attempts, last_error from mail_outbox where failed_at is not null order by id desc;
+    select id, kind, to_addrs, created_at, attempts, last_error from mail_outbox where failed_at is not null order by id desc;
 
-A failed mail is not sent again by itself. Fix the cause (an address, the SMTP login) and let the
-next event create a new mail, or ask a developer to reset `failed_at` of that row.
+A failed mail is not sent again by itself. Fix the cause (an address, the SMTP login) and either let
+the next event create a new mail or put the row back in the queue. The owner login cannot do that;
+run it with the notifier login (it may change exactly these columns) or the migration login:
+
+    UPDATE mail_outbox SET failed_at = NULL, attempts = 0, last_error = '', next_attempt_at = now() WHERE id = N;
 
 ### Address rules
 
-Only plain ASCII addresses `local@domain` are accepted by `settings set owner_email` and
-`web-user set-email` (no display names, no quotes), and the address inside `VENDOR_SMTP_FROM` must
-follow the same character rules (a display name there is allowed and goes into the header only). No
-internationalized (non-ASCII) names, a domain with at least one dot, at most 254 characters. The
-sender does not speak SMTPUTF8, and one rule for the program and the database keeps a stored
-address from being one that can never be mailed. An address that breaks the rule is refused when you
-set it.
+`settings set owner_email` and `web-user set-email` accept only a plain ASCII address
+`local@domain` (no display name, no quotes, no internationalized characters) whose domain has at
+least one dot, at most 254 characters; the database enforces the same rule, so a stored address is
+always one the sender can mail. An address that breaks the rule is refused when you set it.
+
+`VENDOR_SMTP_FROM` must be a plain ASCII `local@domain` too, but it may carry a display name
+(`Licenses <licenses@example.com>`), which goes into the header only. The dot and length rules
+above are for the stored addresses; they do not apply to `VENDOR_SMTP_FROM`. The sender does not
+speak SMTPUTF8.
 
 ### Delivery guarantees
 

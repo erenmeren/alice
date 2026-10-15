@@ -129,9 +129,9 @@ Roles in Postgres (one login per person, no shared password):
 |---|---|
 | `sales` | read customers and licenses; insert customers and requests; update only their own open requests |
 | `signer` | everything `sales` can, plus insert into `licenses`, update request status |
-| `owner` | everything; manage logins |
+| `owner` | everything; manage logins; read the mail outbox and the reminder records (Phase 4; changing them is the notifier's) |
 | `vendor_web` | the sales web service login: everything `sales` can (acting as `web:<name>`), plus its own web tables (sessions, adding passkeys and updating their sign counters, consuming enrollment codes) and `web_audit_login`; no signing, no audit read |
-| `vendor_notifier` | the `notify run` login (Phase 4): read licenses (not the file), customers, requests, web users, settings and the audit log; write the mail outbox and the reminder records; record the time of the last weekly summary through one function; no other writes, no signing |
+| `vendor_notifier` | the `notify run` login (Phase 4): read only the columns it needs: licenses (not the file), customers (`id`, `name`), requests (`id`, `customer_id`, `status`, `requested_by`, `requested_at`), web users (`name`, `email`, `disabled_at`), settings, audit (`at`, `actor`, `action`, `subject`; no details); insert into the mail outbox and update only its delivery columns (`to_addrs`, `sent_at`, `attempts`, `last_error`, `failed_at`, `next_attempt_at`); insert reminder records; record the time of the last weekly summary through one function; no other writes, no signing |
 
 Row-level security enforces this in the database, so a bug in a client cannot widen it.
 Connections require TLS with certificate verification. Credentials come from the environment or
@@ -148,8 +148,8 @@ verification with `licensectl ledger-verify` keeps working.
 
 ## 7. Owner visibility (built in Phase 4)
 
-- E-mail to the owner on every signed license: customer, targets, term, signer, key ID, request
-  number. A database trigger on `licenses` writes the message into the outbox (`mail_outbox`) in
+- E-mail to the owner on every signed license: customer, targets, term, signer (the inserting
+  login; a differing `signed_by` value is shown as "Recorded signer"), key ID, request number. A database trigger on `licenses` writes the message into the outbox (`mail_outbox`) in
   the same statement that inserts the license, so no client can issue without the owner being
   notified, and a mail server that is down never blocks issuing. `vendor-console notify run` sends
   the outbox over SMTP (STARTTLS or implicit TLS required, retry with backoff, at-least-once). While
@@ -158,11 +158,14 @@ verification with `licensectl ledger-verify` keeps working.
   issued in the period, open requests, licenses ending in the next 90 days, failed e-mails of the
   last 28 days, and unusual activity. Unusual means a license issued between 22:00 and 06:00 in the
   configured time zone (default `Europe/Istanbul`), or more than 5 licenses by one signer in one
-  local day. A quiet week still produces a summary.
+  local day. Issue time and signer come from the license's audit row, not from the client-writable
+  `issued_at` and `signed_by`. A quiet week still produces a summary.
 - Expiry reminders at 90, 60 and 30 days to the owner and to the person who made the request (when
   a web user with an e-mail address; disabled users are not mailed). Catch-up rule: a license found
   already inside a threshold that was never sent gets only the most urgent unsent reminder, and the
-  less urgent ones are recorded as sent. Revoked or replaced licenses get none.
+  less urgent ones are recorded as sent. Revoked, replaced or renewed licenses get none (renewed: a
+  later, unrevoked license for the same customer and installation ending after it). Each recipient
+  gets a separate outbox row.
 - Renewal is not a stored draft. The license list has a "Renew" link and every reminder carries one
   (`/requests/new?renew=<license-id>`): it prefills a new request from the old license (customer,
   installation, targets, features, start date = old end date) for the person to review and submit.
