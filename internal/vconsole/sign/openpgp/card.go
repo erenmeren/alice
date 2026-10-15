@@ -177,22 +177,26 @@ func exchange(ctx context.Context, card Card, c command, wipe bool) ([]byte, uin
 
 // exchangeChained sends data that may be longer than one APDU with command chaining (CLA bit
 // 0x10 on every part but the last; only the last part carries Le). Every intermediate part must
-// be answered 9000.
-func exchangeChained(ctx context.Context, card Card, c command) ([]byte, uint16, error) {
-	data := c.data
-	for len(data) > chunkSize {
-		part := command{cla: c.cla | 0x10, ins: c.ins, p1: c.p1, p2: c.p2, data: data[:chunkSize], le: -1}
-		_, sw, err := transmit(ctx, card, part.encode())
+// be answered 9000; the first other answer ends the exchange and is returned with the 1-based
+// number of the part that got it and the number of parts, so a refusal can say where it happened.
+// Nothing is retried.
+func exchangeChained(ctx context.Context, card Card, c command) (data []byte, sw uint16, part, parts int, err error) {
+	rest := c.data
+	parts = max(1, (len(rest)+chunkSize-1)/chunkSize)
+	for part = 1; len(rest) > chunkSize; part++ {
+		p := command{cla: c.cla | 0x10, ins: c.ins, p1: c.p1, p2: c.p2, data: rest[:chunkSize], le: -1}
+		_, sw, err = transmit(ctx, card, p.encode())
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, part, parts, err
 		}
 		if sw != swOK {
-			return nil, sw, nil
+			return nil, sw, part, parts, nil
 		}
-		data = data[chunkSize:]
+		rest = rest[chunkSize:]
 	}
-	c.data = data
-	return exchange(ctx, card, c, false)
+	c.data = rest
+	data, sw, err = exchange(ctx, card, c, false)
+	return data, sw, part, parts, err
 }
 
 // tlv is one BER-TLV data object.

@@ -32,16 +32,17 @@ const DefaultPIN = "123456"
 
 const maxRetries = 3
 
-// Options configure a card. The zero value is a card with the Ed25519 algorithm set, no key,
-// PIN 123456 with 3 tries, touch off and no response chunking.
+// Options configure a card. The zero value behaves like a YubiKey 5 with the Ed25519 algorithm
+// set and no key: PIN 123456 with 3 tries, PW1 valid for several signatures (the factory
+// "signature PIN not forced"), a wrong PIN answered 6982, extended length information saying
+// 2048 bytes, command chaining, touch off and no response chunking. Other behaviour is opt-in.
 type Options struct {
 	Key     ed25519.PrivateKey // the signature key; nil is an empty slot
 	AlgAttr []byte             // DO C1 value; nil is Ed25519 (0x16 + OID), empty is an empty object
 	PIN     string             // PW1; "" is DefaultPIN
 	Serial  uint32             // AID serial number bytes; 0 is 0x12345678
-	// PW1Multi makes PW1 valid for several signatures (PW status byte 01); by default a VERIFY
-	// is good for one PSO:CDS.
-	PW1Multi bool
+	// PW1SingleUse makes a VERIFY good for one PSO:CDS (PW status byte 00, "forcesig" on).
+	PW1SingleUse bool
 	// UIF is the touch policy of the signature key. NoUIF removes DO D6 altogether (GET DATA
 	// answers 6A88); UIFOnlyByGetData leaves it out of DO 6E but answers GET DATA 00D6.
 	UIF              byte
@@ -51,8 +52,8 @@ type Options struct {
 	// always. TouchTimeoutSW is the status word for a missed touch (0 is 6982).
 	Touch          func() bool
 	TouchTimeoutSW uint16
-	// WrongPINSW6982 answers a wrong PIN with 6982 like a YubiKey, instead of 63Cx.
-	WrongPINSW6982 bool
+	// WrongPIN63Cx answers a wrong PIN with 63Cx (tries left) instead of the YubiKey's 6982.
+	WrongPIN63Cx bool
 	// KDF sets up a KDF-DO (F9) with iterated and salted S2K.
 	KDF bool
 	// WrongApplet answers SELECT of the OpenPGP AID with 6A82.
@@ -65,6 +66,19 @@ type Options struct {
 	// ExtraAppData adds a filler object of that many bytes to DO 6E, to make it long.
 	ExtraAppData int
 	SigCount     int
+	// MaxCommandLength is the maximum command length reported in DO 7F66 (0 is 2048);
+	// NoExtLenInfo leaves 7F66 out.
+	MaxCommandLength int
+	NoExtLenInfo     bool
+	// MaxMessage is the longest PSO:CDS input the card takes (0 is 4096); the part that goes
+	// past it is answered 6700.
+	MaxMessage int
+	// RefuseChaining answers a chained PSO:CDS part with 6884.
+	RefuseChaining bool
+	// TruncateAt makes the card silently sign only the first TruncateAt bytes of a longer input.
+	TruncateAt int
+	// ZeroFingerprint leaves the signature key fingerprint in C5 all zero even with a key.
+	ZeroFingerprint bool
 }
 
 // Command is one recorded command APDU without its data. Lc is 0 and Le -1 when absent; Le 256
@@ -90,6 +104,7 @@ type Sim struct {
 	pending  []byte
 	log      []Command
 	signed   []byte
+	received []byte
 }
 
 // New makes a card.
@@ -163,6 +178,14 @@ func (s *Sim) LastSigned() []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]byte(nil), s.signed...)
+}
+
+// LastReceived returns the last complete PSO:CDS input as reassembled from its parts, whether
+// or not it was signed (in full).
+func (s *Sim) LastReceived() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]byte(nil), s.received...)
 }
 
 // Closed reports whether Close was called.
@@ -330,9 +353,9 @@ func (s *Sim) counter() []byte {
 }
 
 func (s *Sim) pwStatus() []byte {
-	multi := byte(0)
-	if s.o.PW1Multi {
-		multi = 1
+	multi := byte(1)
+	if s.o.PW1SingleUse {
+		multi = 0
 	}
 	return []byte{multi, 0x7F, 0x7F, 0x7F, byte(s.retries & 0xFF), 0x00, maxRetries}
 }
@@ -340,7 +363,7 @@ func (s *Sim) pwStatus() []byte {
 // appData builds DO 6E as a YubiKey 5 lays it out.
 func (s *Sim) appData() []byte {
 	fpr := make([]byte, 60)
-	if s.o.Key != nil {
+	if s.o.Key != nil && !s.o.ZeroFingerprint {
 		for i := range 20 {
 			fpr[i] = byte(i + 1)
 		}
@@ -366,6 +389,14 @@ func (s *Sim) appData() []byte {
 	var app []byte
 	app = append(app, tlv(0x4F, s.aid)...)
 	app = append(app, tlv(0x5F52, []byte{0x00, 0x73, 0x00, 0x00, 0xE0, 0x05, 0x90, 0x00})...)
+	if !s.o.NoExtLenInfo {
+		maxCmd := s.o.MaxCommandLength
+		if maxCmd == 0 {
+			maxCmd = 2048
+		}
+		ext := append(tlv(0x02, binary.BigEndian.AppendUint16(nil, uint16(maxCmd&0xFFFF))), tlv(0x02, []byte{0x08, 0x00})...)
+		app = append(app, tlv(0x7F66, ext)...)
+	}
 	app = append(app, tlv(0x73, d)...)
 	return tlv(0x6E, app)
 }
@@ -389,10 +420,10 @@ func (s *Sim) verify(c Command, data []byte) []byte {
 	}
 	s.retries--
 	s.verified = false
-	if s.o.WrongPINSW6982 {
-		return sw(0x6982)
+	if s.o.WrongPIN63Cx {
+		return sw(0x63C0 | uint16(s.retries&0x0F))
 	}
-	return sw(0x63C0 | uint16(s.retries&0x0F))
+	return sw(0x6982)
 }
 
 func (s *Sim) readKey(c Command, data []byte) []byte {
@@ -416,7 +447,15 @@ func (s *Sim) pso(c Command, data []byte) []byte {
 		s.chain, s.chaining = nil, false
 		return sw(0x6A86)
 	}
-	if len(s.chain)+len(data) > maxChain {
+	if c.CLA == 0x10 && s.o.RefuseChaining {
+		s.chain, s.chaining = nil, false
+		return sw(0x6884)
+	}
+	limit := s.o.MaxMessage
+	if limit <= 0 || limit > maxChain {
+		limit = maxChain
+	}
+	if len(s.chain)+len(data) > limit {
 		s.chain, s.chaining = nil, false
 		return sw(0x6700)
 	}
@@ -427,17 +466,21 @@ func (s *Sim) pso(c Command, data []byte) []byte {
 	}
 	msg := s.chain
 	s.chain, s.chaining = nil, false
+	s.received = append([]byte(nil), msg...)
 	if s.o.Key == nil {
 		return sw(0x6A88)
 	}
 	if !s.verified {
 		return sw(0x6982)
 	}
-	if !s.o.PW1Multi {
+	if s.o.PW1SingleUse {
 		s.verified = false
 	}
 	if !s.o.NoUIF && s.o.UIF != UIFOff && s.o.Touch != nil && !s.o.Touch() {
 		return sw(s.o.TouchTimeoutSW)
+	}
+	if s.o.TruncateAt > 0 && len(msg) > s.o.TruncateAt {
+		msg = msg[:s.o.TruncateAt]
 	}
 	sig := ed25519.Sign(s.o.Key, msg)
 	s.sigCount++

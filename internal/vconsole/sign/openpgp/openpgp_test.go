@@ -131,6 +131,15 @@ func TestEmptySlotGivesErrNoKey(t *testing.T) {
 	require.ErrorIs(t, err, openpgp.ErrNoKey)
 }
 
+// An all-zero fingerprint is not an empty slot: the key read decides.
+func TestZeroFingerprintStillReadsTheKey(t *testing.T) {
+	k := newKey(t)
+	sim := openpgptest.New(openpgptest.Options{Key: k, ZeroFingerprint: true})
+	pub, err := open(t, sim).PublicKey(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, k.Public(), pub)
+}
+
 func TestNonEd25519SlotGivesErrNotEd25519(t *testing.T) {
 	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), AlgAttr: []byte{0x01, 0x08, 0x00, 0x00, 0x20, 0x00}})
 	_, err := open(t, sim).PublicKey(context.Background())
@@ -141,7 +150,7 @@ func TestNonEd25519SlotGivesErrNotEd25519(t *testing.T) {
 func TestVerifyPINRightAndWrong(t *testing.T) {
 	for _, yubi := range []bool{false, true} {
 		t.Run(fmt.Sprintf("wrong pin answers 6982=%v", yubi), func(t *testing.T) {
-			sim := openpgptest.New(openpgptest.Options{Key: newKey(t), WrongPINSW6982: yubi})
+			sim := openpgptest.New(openpgptest.Options{Key: newKey(t), WrongPIN63Cx: !yubi})
 			a := open(t, sim)
 			require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
 
@@ -266,26 +275,167 @@ func TestWrongLeIsReissued(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// Without a VERIFY in this session, Sign is refused locally: nothing is sent to the card.
 func TestSignRefusedBeforeVerify(t *testing.T) {
-	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), UIF: openpgptest.UIFOff})
-	_, err := open(t, sim).Sign(context.Background(), []byte("m"))
-	require.ErrorIs(t, err, openpgp.ErrNotVerified)
-	assert.NotErrorIs(t, err, openpgp.ErrTouchNeeded)
-
-	// With touch on but no VERIFY, the refusal is still about the PIN.
-	sim = openpgptest.New(openpgptest.Options{Key: newKey(t), UIF: openpgptest.UIFOn})
-	_, err = open(t, sim).Sign(context.Background(), []byte("m"))
-	require.ErrorIs(t, err, openpgp.ErrNotVerified)
+	for _, uif := range []byte{openpgptest.UIFOff, openpgptest.UIFOn} {
+		sim := openpgptest.New(openpgptest.Options{Key: newKey(t), UIF: uif})
+		a := open(t, sim)
+		n := len(sim.Commands())
+		_, err := a.Sign(context.Background(), []byte("m"))
+		require.ErrorIs(t, err, openpgp.ErrNotVerified)
+		assert.NotErrorIs(t, err, openpgp.ErrTouchNeeded)
+		assert.Len(t, sim.Commands(), n, "nothing sent")
+	}
 }
 
+// In single-use mode one VERIFY covers one Sign; the second Sign is refused locally.
 func TestPINIsValidForOneSignature(t *testing.T) {
-	sim := openpgptest.New(openpgptest.Options{Key: newKey(t)})
+	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), PW1SingleUse: true})
 	a := open(t, sim)
 	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
 	_, err := a.Sign(context.Background(), []byte("one"))
 	require.NoError(t, err)
+	n := len(sim.Commands())
 	_, err = a.Sign(context.Background(), []byte("two"))
 	require.ErrorIs(t, err, openpgp.ErrNotVerified)
+	assert.Len(t, sim.Commands(), n, "refused without sending")
+}
+
+// The YubiKey factory setting keeps PW1 valid for several signatures: Info reports it and
+// RequireForcedPIN refuses it with instructions.
+func TestPINNotForcedIsReported(t *testing.T) {
+	sim := openpgptest.New(openpgptest.Options{Key: newKey(t)})
+	a := open(t, sim)
+	info, err := a.Info(context.Background())
+	require.NoError(t, err)
+	assert.True(t, info.PW1ValidForSeveral)
+	err = a.RequireForcedPIN(context.Background())
+	require.ErrorIs(t, err, openpgp.ErrPINNotForced)
+	assert.Contains(t, err.Error(), "forcesig")
+	assert.Contains(t, err.Error(), "gpg --card-edit")
+
+	// The card signs again without a VERIFY, and the applet mirrors that.
+	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+	_, err = a.Sign(context.Background(), []byte("one"))
+	require.NoError(t, err)
+	_, err = a.Sign(context.Background(), []byte("two"))
+	require.NoError(t, err)
+
+	single := open(t, openpgptest.New(openpgptest.Options{Key: newKey(t), PW1SingleUse: true}))
+	info, err = single.Info(context.Background())
+	require.NoError(t, err)
+	assert.False(t, info.PW1ValidForSeveral)
+	require.NoError(t, single.RequireForcedPIN(context.Background()))
+}
+
+// Any Sign failure asks for a new VERIFY, even in multi mode.
+func TestSignErrorResetsVerification(t *testing.T) {
+	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), UIF: openpgptest.UIFOn, Touch: func() bool { return false }})
+	a := open(t, sim)
+	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+	_, err := a.Sign(context.Background(), []byte("m"))
+	require.ErrorIs(t, err, openpgp.ErrTouchNeeded)
+	n := sim.Count(0x2A)
+	_, err = a.Sign(context.Background(), []byte("m"))
+	require.ErrorIs(t, err, openpgp.ErrNotVerified)
+	assert.Equal(t, n, sim.Count(0x2A))
+}
+
+func TestInfoReportsLengthLimitAndChaining(t *testing.T) {
+	info, err := open(t, openpgptest.New(openpgptest.Options{Key: newKey(t)})).Info(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2048, info.MaxCommandLength)
+	assert.Equal(t, "yes", info.CommandChaining)
+
+	info, err = open(t, openpgptest.New(openpgptest.Options{Key: newKey(t), NoExtLenInfo: true})).Info(context.Background())
+	require.NoError(t, err)
+	assert.Zero(t, info.MaxCommandLength, "unknown")
+}
+
+func TestSignTooLongIsRefusedBeforeSending(t *testing.T) {
+	sim := openpgptest.New(openpgptest.Options{Key: newKey(t), MaxCommandLength: 256})
+	a := open(t, sim)
+	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+	_, err := a.Sign(context.Background(), bytes.Repeat([]byte{1}, 300))
+	require.ErrorIs(t, err, openpgp.ErrMessageTooLong)
+	var te *openpgp.MessageTooLongError
+	require.ErrorAs(t, err, &te)
+	assert.Equal(t, 256, te.Limit)
+	assert.Equal(t, 300, te.Length)
+	assert.Zero(t, sim.Count(0x2A), "nothing sent")
+
+	// Unknown limit: no refusal, the card decides.
+	k := newKey(t)
+	sim = openpgptest.New(openpgptest.Options{Key: k, NoExtLenInfo: true})
+	a = open(t, sim)
+	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+	msg := bytes.Repeat([]byte{1}, 3000)
+	sig, err := a.Sign(context.Background(), msg)
+	require.NoError(t, err)
+	assert.True(t, ed25519.Verify(k.Public().(ed25519.PublicKey), msg, sig))
+}
+
+func TestCardRefusingLengthSaysWhichPart(t *testing.T) {
+	cases := []struct {
+		name        string
+		o           openpgptest.Options
+		part, parts int
+		sw          uint16
+		where       string
+	}{
+		{"buffer full in the middle", openpgptest.Options{MaxMessage: 400}, 2, 3, 0x6700, "middle part (2 of 3)"},
+		{"no chaining", openpgptest.Options{RefuseChaining: true}, 1, 3, 0x6884, "first part (1 of 3)"},
+		{"buffer full at the end", openpgptest.Options{MaxMessage: 600}, 3, 3, 0x6700, "last part (3 of 3)"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			c.o.Key = newKey(t)
+			sim := openpgptest.New(c.o)
+			a := open(t, sim)
+			require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+			_, err := a.Sign(context.Background(), bytes.Repeat([]byte{1}, 700))
+			require.ErrorIs(t, err, openpgp.ErrCardRefusedLength)
+			var le *openpgp.LengthRefusedError
+			require.ErrorAs(t, err, &le)
+			assert.Equal(t, c.part, le.Part)
+			assert.Equal(t, c.parts, le.Parts)
+			assert.Equal(t, c.sw, le.SW)
+			assert.Contains(t, err.Error(), c.where)
+			assert.Equal(t, c.part, sim.Count(0x2A), "never retried")
+		})
+	}
+	a, _ := verifiedApplet(t, []byte{0x6A, 0x80})
+	_, err := a.Sign(context.Background(), []byte("short"))
+	require.ErrorIs(t, err, openpgp.ErrCardRefusedLength)
+	assert.Contains(t, err.Error(), "only part (1 of 1)")
+}
+
+// A card that silently signs a truncated input returns a signature; Sign passes it on (checking
+// it is the signer's job) and it does not verify over the full message.
+func TestTruncatingCardSignatureDoesNotVerify(t *testing.T) {
+	k := newKey(t)
+	sim := openpgptest.New(openpgptest.Options{Key: k, TruncateAt: 255})
+	a := open(t, sim)
+	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+	msg := bytes.Repeat([]byte("license "), 60)
+	sig, err := a.Sign(context.Background(), msg)
+	require.NoError(t, err)
+	assert.Equal(t, msg, sim.LastReceived(), "the full message reached the card")
+	pub := k.Public().(ed25519.PublicKey)
+	assert.False(t, ed25519.Verify(pub, msg, sig))
+	assert.True(t, ed25519.Verify(pub, msg[:255], sig))
+}
+
+// verifiedApplet is an applet on a scripted card that has passed VerifyPIN; resp follows.
+func verifiedApplet(t *testing.T, resp ...[]byte) (*openpgp.Applet, *scripted) {
+	t.Helper()
+	c4 := []byte{0xC4, 0x07, 0x00, 0x7F, 0x7F, 0x7F, 0x03, 0x00, 0x03}
+	app := append([]byte{0x6E, byte(len(c4) + 2), 0x73, byte(len(c4))}, c4...)
+	card := &scripted{resp: append([][]byte{append(app, 0x90, 0x00), {0x90, 0x00}}, resp...)}
+	a := openpgp.NewApplet(card, nil)
+	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
+	card.sent = nil
+	return a, card
 }
 
 func TestTouchNotGivenGivesErrTouchNeeded(t *testing.T) {
@@ -356,8 +506,10 @@ func TestContextCancelStopsBeforeTransmit(t *testing.T) {
 	require.NoError(t, a.VerifyPIN(context.Background(), pin(goodPIN)))
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
-	cc := &cancelCard{inner: sim, n: 1, cancel: cancel2}
+	cc := &cancelCard{inner: sim, n: 1 << 30, cancel: cancel2}
 	a3 := openpgp.NewApplet(cc, mustAID(t, a))
+	require.NoError(t, a3.VerifyPIN(context.Background(), pin(goodPIN)))
+	cc.sent, cc.n = 0, 1
 	_, err = a3.Sign(ctx2, bytes.Repeat([]byte{1}, 600))
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 1, cc.sent)
@@ -416,9 +568,9 @@ func TestErrorsNeverContainThePIN(t *testing.T) {
 		}
 	}
 	paths := []openpgptest.Options{
-		{Key: newKey(t)},                       // wrong PIN, 63Cx
-		{Key: newKey(t), WrongPINSW6982: true}, // wrong PIN, 6982
-		{Key: newKey(t), KDF: true},            // KDF refused
+		{Key: newKey(t)},                     // wrong PIN, 6982 (YubiKey)
+		{Key: newKey(t), WrongPIN63Cx: true}, // wrong PIN, 63Cx
+		{Key: newKey(t), KDF: true},          // KDF refused
 	}
 	for _, o := range paths {
 		a := open(t, openpgptest.New(o))
@@ -499,6 +651,7 @@ func TestMalformedResponsesAreRejected(t *testing.T) {
 			"multi-byte tag unbounded": {0x5F, 0xFF, 0xFF, 0xFF, 0xFF},
 			"short C4":                 appData(with(ed, []byte{0xC4, 0x03, 0x00, 0x7F, 0x7F})),
 			"missing C4":               appData(ed),
+			"7F66 not two integers":    appData(with(ed, []byte{0xC4, 0x07, 0, 0x7F, 0x7F, 0x7F, 3, 0, 3}, []byte{0x7F, 0x66, 0x03, 0x02, 0x01, 0x08})),
 		} {
 			t.Run(name, func(t *testing.T) {
 				card := &scripted{resp: [][]byte{with(data, ok), with([]byte{0x7A, 0x05, 0x93, 0x03, 0, 0, 1}, ok), {0x6A, 0x88}}}
@@ -548,8 +701,8 @@ func TestMalformedResponsesAreRejected(t *testing.T) {
 			"class not served": {0x6E, 0x00},
 		} {
 			t.Run(name, func(t *testing.T) {
-				card := &scripted{resp: [][]byte{resp}}
-				_, err := openpgp.NewApplet(card, aid).Sign(context.Background(), []byte("m"))
+				a, _ := verifiedApplet(t, resp)
+				_, err := a.Sign(context.Background(), []byte("m"))
 				require.Error(t, err)
 			})
 		}
@@ -561,11 +714,11 @@ func TestStatusErrorsAreReadable(t *testing.T) {
 	_, err := openpgp.Open(context.Background(), card)
 	require.ErrorIs(t, err, openpgp.ErrNoApplet)
 	var se *openpgp.StatusError
-	card = &scripted{resp: [][]byte{{0x67, 0x00}}}
-	_, err = openpgp.NewApplet(card, nil).Sign(context.Background(), []byte("m"))
+	a, _ := verifiedApplet(t, []byte{0x6D, 0x00})
+	_, err = a.Sign(context.Background(), []byte("m"))
 	require.ErrorAs(t, err, &se)
-	assert.Equal(t, uint16(0x6700), se.SW)
-	assert.True(t, strings.Contains(err.Error(), "6700"))
+	assert.Equal(t, uint16(0x6D00), se.SW)
+	assert.True(t, strings.Contains(err.Error(), "6D00"))
 }
 
 func TestCloseClosesTheCard(t *testing.T) {
@@ -594,8 +747,8 @@ func TestSimulatorRejectsMalformedCommands(t *testing.T) {
 
 // A 6Cxx answer to PSO:CDS is not answered by signing again (that would spend a single-use PIN).
 func TestSignIsNotReissuedOn6C(t *testing.T) {
-	card := &scripted{resp: [][]byte{{0x6C, 0x40}, bytes.Repeat([]byte{1}, 66)}}
-	_, err := openpgp.NewApplet(card, nil).Sign(context.Background(), []byte("m"))
+	a, card := verifiedApplet(t, []byte{0x6C, 0x40}, bytes.Repeat([]byte{1}, 66))
+	_, err := a.Sign(context.Background(), []byte("m"))
 	var se *openpgp.StatusError
 	require.ErrorAs(t, err, &se)
 	assert.Equal(t, uint16(0x6C40), se.SW)

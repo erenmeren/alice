@@ -16,9 +16,19 @@ var (
 	ErrPINBlocked  = errors.New("openpgp: the PIN is blocked")
 	ErrTouchNeeded = errors.New("openpgp: the card wants a touch that did not happen")
 	ErrNotEd25519  = errors.New("openpgp: the signature key is not Ed25519")
-	// ErrNotVerified is the card refusing PSO:CDS because PW1 (mode 81) is not verified, for
-	// example a second signature after a PIN that is valid for one signature only.
-	ErrNotVerified = errors.New("openpgp: the card wants the PIN verified before signing")
+	// ErrNotVerified: PW1 (mode 81) is not verified for this signature. Sign returns it without
+	// sending anything when this session has no unused VERIFY, and for a card answering 6982.
+	ErrNotVerified = errors.New("openpgp: the PIN must be verified before signing")
+	// ErrPINNotForced: the card keeps PW1 verified for several signatures (PW status byte 01), so
+	// a program on the same machine could sign again without the PIN until the card is removed.
+	ErrPINNotForced = errors.New("openpgp: the card does not ask for the PIN for every signature (signature PIN not forced); " +
+		"turn it on with gpg --card-edit, then admin and forcesig (the usual GnuPG commands; check them for the installed version)")
+	// ErrMessageTooLong: the input is longer than the card says one command may be (DO 7F66). A
+	// *MessageTooLongError wraps it with the numbers.
+	ErrMessageTooLong = errors.New("openpgp: the message is longer than the card accepts")
+	// ErrCardRefusedLength: the card refused the signing input or one of its chained parts as too
+	// long, malformed or not chainable (6700, 6A80, 6884). A *LengthRefusedError wraps it.
+	ErrCardRefusedLength = errors.New("openpgp: the card refused the signing input")
 	// ErrKDFUnsupported: the card has a KDF-DO (F9) set up, so it expects a hash of the PIN rather
 	// than the PIN itself. Sending the raw PIN would only spend a try, so it is refused.
 	ErrKDFUnsupported = errors.New("openpgp: the card uses a PIN key derivation function (KDF-DO), which is not supported")
@@ -39,6 +49,40 @@ func (e *PINError) Error() string {
 
 // Unwrap makes errors.Is(err, ErrWrongPIN) hold.
 func (e *PINError) Unwrap() error { return ErrWrongPIN }
+
+// MessageTooLongError is a message refused before anything was sent.
+type MessageTooLongError struct{ Length, Limit int }
+
+func (e *MessageTooLongError) Error() string {
+	return fmt.Sprintf("openpgp: the message has %d bytes and the card accepts at most %d in one command", e.Length, e.Limit)
+}
+
+// Unwrap makes errors.Is(err, ErrMessageTooLong) hold.
+func (e *MessageTooLongError) Unwrap() error { return ErrMessageTooLong }
+
+// LengthRefusedError says which part of a (possibly chained) PSO:CDS the card refused.
+type LengthRefusedError struct {
+	SW          uint16
+	Part, Parts int // 1-based part number and number of parts
+	Length      int // message length in bytes
+}
+
+func (e *LengthRefusedError) Error() string {
+	where := "last"
+	switch {
+	case e.Parts == 1:
+		where = "only"
+	case e.Part == 1:
+		where = "first"
+	case e.Part < e.Parts:
+		where = "middle"
+	}
+	return fmt.Sprintf("openpgp: the card refused the signing input of %d bytes at the %s part (%d of %d): status %04X (%s)",
+		e.Length, where, e.Part, e.Parts, e.SW, swText(e.SW))
+}
+
+// Unwrap makes errors.Is(err, ErrCardRefusedLength) hold.
+func (e *LengthRefusedError) Unwrap() error { return ErrCardRefusedLength }
 
 // aidPrefix is the RID D276000124 plus the application byte 01 (OpenPGP); the version bytes
 // that follow in the full AID differ from card to card, so SELECT uses this partial AID.
@@ -64,7 +108,8 @@ type Applet struct {
 	card     Card
 	aid      []byte
 	verified bool // PW1 mode 81 verified in this session and not yet used up
-	pw1Multi bool // PW status byte 1 was 01: PW1 stays valid for several signatures
+	pw1Multi bool // PW status byte 1 was 01 at the last VERIFY: PW1 stays valid for several signatures
+	maxCmd   int  // maximum command length from DO 7F66 at the last VERIFY; 0 is unknown
 }
 
 // NewApplet wraps a card on which the OpenPGP application is already selected. aid may be nil;
@@ -136,8 +181,9 @@ type appData struct {
 	extCap []byte // C0 extended capabilities
 	sigAlg []byte // C1 algorithm attributes of the signature key
 	pw     []byte // C4 PW status bytes
-	fpr    []byte // C5 fingerprints (signature key first)
 	uif    []byte // D6 user interaction flag for PSO:CDS (YubiKey, specification 3.4)
+	hist   []byte // 5F52 historical bytes
+	extLen []byte // 7F66 extended length information
 	hasAlg bool
 	hasUIF bool
 }
@@ -169,8 +215,9 @@ func (a *Applet) readAppData(ctx context.Context) (appData, error) {
 	d.aid, _ = get(0x4F)
 	d.extCap, _ = get(0xC0)
 	d.sigAlg, d.hasAlg = get(0xC1)
-	d.fpr, _ = get(0xC5)
 	d.uif, d.hasUIF = get(0xD6)
+	d.hist, _ = get(0x5F52)
+	d.extLen, _ = get(0x7F66)
 	pw, ok := get(0xC4)
 	if !ok || len(pw) < 7 {
 		return appData{}, fmt.Errorf("%w: DO 6E has no complete PW status (C4)", ErrMalformed)
@@ -202,6 +249,15 @@ type Info struct {
 	PW1Blocked bool
 	SigUIF     string // "off", "on", "fixed", "cached", "cached-fixed", "unsupported" or "unknown:<hex>"
 	SigCount   int    // digital signature counter (DO 93 inside DO 7A)
+	// PW1ValidForSeveral is PW status byte 01: after one VERIFY the card signs again without the
+	// PIN until it is reset or removed ("signature PIN not forced"). See RequireForcedPIN.
+	PW1ValidForSeveral bool
+	// MaxCommandLength is the maximum command length from the extended length information (DO
+	// 7F66); 0 when the card does not say.
+	MaxCommandLength int
+	// CommandChaining is "yes" or "no" from the card capabilities in the historical bytes, or
+	// "unknown" when they are absent or not in the compact-TLV format.
+	CommandChaining string
 }
 
 // Info reads DO 6E, the signature counter and the touch policy of the signature key.
@@ -226,6 +282,12 @@ func (a *Applet) Info(ctx context.Context) (Info, error) {
 		SigAlg:     algName(d.sigAlg, d.hasAlg),
 		PW1Retries: pw.retries,
 		PW1Blocked: pw.retries == 0,
+
+		PW1ValidForSeveral: pw.multi,
+		CommandChaining:    chaining(d.hist),
+	}
+	if info.MaxCommandLength, err = maxCommandLength(d.extLen); err != nil {
+		return Info{}, err
 	}
 	if info.SigCount, err = a.sigCounter(ctx); err != nil {
 		return Info{}, err
@@ -234,6 +296,61 @@ func (a *Applet) Info(ctx context.Context) (Info, error) {
 		return Info{}, err
 	}
 	return info, nil
+}
+
+// RequireForcedPIN returns ErrPINNotForced when the card keeps PW1 verified for several
+// signatures. The signer refuses such a card: the license key must ask for the PIN every time.
+func (a *Applet) RequireForcedPIN(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	d, err := a.readAppData(ctx)
+	if err != nil {
+		return err
+	}
+	if decodePW(d.pw).multi {
+		return ErrPINNotForced
+	}
+	return nil
+}
+
+// maxCommandLength reads DO 7F66 (specification 3.x): 02 02 <max command length> 02 02 <max
+// response length>. A missing object is 0 (unknown); a present but malformed one is an error.
+func maxCommandLength(v []byte) (int, error) {
+	if v == nil {
+		return 0, nil
+	}
+	objs, err := parseTLVs(v)
+	if err != nil {
+		return 0, err
+	}
+	if len(objs) < 1 || objs[0].tag != 0x02 || len(objs[0].value) != 2 {
+		return 0, fmt.Errorf("%w: extended length information (7F66) is not two 2-byte integers", ErrMalformed)
+	}
+	return int(objs[0].value[0])<<8 | int(objs[0].value[1]), nil
+}
+
+// chaining reads the command chaining bit from the card capabilities in the historical bytes
+// (ISO 7816-4 compact-TLV after a category indicator 00, whose last three bytes are the status
+// indicator; tag 7 length 3, third byte bit 8).
+func chaining(hist []byte) string {
+	if len(hist) < 4 || hist[0] != 0x00 {
+		return "unknown"
+	}
+	b := hist[1 : len(hist)-3]
+	for len(b) > 0 {
+		tag, n := b[0]>>4, int(b[0]&0x0F)
+		if 1+n > len(b) {
+			return "unknown"
+		}
+		if tag == 0x7 && n == 3 {
+			if b[3]&0x80 != 0 {
+				return "yes"
+			}
+			return "no"
+		}
+		b = b[1+n:]
+	}
+	return "unknown"
 }
 
 // sigCounter reads the digital signature counter, DO 93 (3 bytes) inside the security support
@@ -336,10 +453,8 @@ func (a *Applet) PublicKey(ctx context.Context) (ed25519.PublicKey, error) {
 	if !isEd25519(d.sigAlg) {
 		return nil, ErrNotEd25519
 	}
-	// An all-zero signature fingerprint (first 20 bytes of C5) is the specification's empty slot.
-	if len(d.fpr) >= 20 && bytes.Equal(d.fpr[:20], make([]byte, 20)) {
-		return nil, ErrNoKey
-	}
+	// An all-zero fingerprint (C5) is not proof of an empty slot: keys generated without GnuPG may
+	// leave it unset. The key read decides.
 	data, sw, err := exchange(ctx, a.card, command{ins: 0x47, p1: 0x81, p2: 0x00, data: []byte{0xB6, 0x00}, le: 256}, false)
 	if err != nil {
 		return nil, err
@@ -418,6 +533,10 @@ func (a *Applet) VerifyPIN(ctx context.Context, pin []byte) error {
 	switch {
 	case sw == swOK:
 		a.verified, a.pw1Multi = true, pw.multi
+		if a.maxCmd, err = maxCommandLength(d.extLen); err != nil {
+			a.verified = false
+			return err
+		}
 		return nil
 	case sw&0xFFF0 == 0x63C0:
 		return wrongPIN(int(sw & 0x0F))
@@ -474,8 +593,12 @@ func (a *Applet) checkKDF(ctx context.Context, d appData) error {
 
 // Sign computes an Ed25519 signature over message with PSO:COMPUTE DIGITAL SIGNATURE (00 2A 9E
 // 9A). For EdDSA the card signs its input as the message (PureEdDSA), so message is sent as is,
-// chained in 255-byte parts when it is longer. VerifyPIN must have succeeded first; a card with a
-// touch policy also waits for a touch.
+// chained in 255-byte parts when it is longer. A successful VerifyPIN in this session must come
+// first, and in single-use mode one VerifyPIN covers one Sign: otherwise Sign returns
+// ErrNotVerified without sending anything. When the card states a maximum command length (DO
+// 7F66) and message is longer, Sign returns a *MessageTooLongError without sending anything; when
+// it does not, the card is left to refuse. Sign returns the card's signature unverified:
+// checking it against the public key is the caller's job.
 func (a *Applet) Sign(ctx context.Context, message []byte) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -485,10 +608,16 @@ func (a *Applet) Sign(ctx context.Context, message []byte) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	wasVerified := a.verified
-	// PW1 is spent by a PSO:CDS unless the card keeps it valid for several signatures.
-	a.verified = a.verified && a.pw1Multi
-	data, sw, err := exchangeChained(ctx, a.card, command{ins: 0x2A, p1: 0x9E, p2: 0x9A, data: message, le: 256, noReissue: true})
+	if !a.verified {
+		return nil, ErrNotVerified
+	}
+	// Whatever happens next, a single-use PW1 is spent and any failure asks for a new VERIFY.
+	keep := a.pw1Multi
+	a.verified = false
+	if a.maxCmd > 0 && len(message) > a.maxCmd {
+		return nil, &MessageTooLongError{Length: len(message), Limit: a.maxCmd}
+	}
+	data, sw, part, parts, err := exchangeChained(ctx, a.card, command{ins: 0x2A, p1: 0x9E, p2: 0x9A, data: message, le: 256, noReissue: true})
 	if err != nil {
 		return nil, err
 	}
@@ -497,15 +626,11 @@ func (a *Applet) Sign(ctx context.Context, message []byte) ([]byte, error) {
 		if len(data) != ed25519.SignatureSize {
 			return nil, fmt.Errorf("%w: signature of %d bytes", ErrMalformed, len(data))
 		}
+		a.verified = keep
 		return data, nil
+	case 0x6700, 0x6A80, 0x6884:
+		return nil, &LengthRefusedError{SW: sw, Part: part, Parts: parts, Length: len(message)}
 	case swSecurity, swConditions:
-		a.verified = false
-		if !wasVerified {
-			if sw == swSecurity {
-				return nil, ErrNotVerified
-			}
-			return nil, &StatusError{Op: "sign", SW: sw}
-		}
 		// PW1 was verified, so a refusal now is the touch timing out, if the key wants one.
 		d, err := a.readAppData(ctx)
 		if err != nil {
@@ -519,7 +644,7 @@ func (a *Applet) Sign(ctx context.Context, message []byte) ([]byte, error) {
 			return nil, ErrTouchNeeded
 		}
 		if sw == swSecurity {
-			return nil, ErrNotVerified
+			return nil, ErrNotVerified // the card forgot the VERIFY (reset, another program)
 		}
 	}
 	return nil, &StatusError{Op: "sign", SW: sw}
