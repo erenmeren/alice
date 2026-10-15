@@ -316,11 +316,83 @@ func TestSignInLDAPTOTPFailuresCount(t *testing.T) {
 	}
 	assert.Equal(t, auth.LockThreshold, e.failedLogins(t, "ada"))
 	assert.Equal(t, 1, e.countAction(t, "auth.lockout", "failure"))
+	assert.Equal(t, map[string]int{"bad_totp": auth.LockThreshold}, e.reasons(t, "auth.mfa_verify"))
+
+	// Locked: refused at the sign-in in both MFA modes, no new session of any kind.
+	before := e.sessionKinds(t, p.UserID)
+	for _, mfa := range []bool{true, false} {
+		_, err = e.svc.SignInLDAP(e.ctx, id, rbac.Operator, mfa, meta)
+		assert.ErrorIs(t, err, auth.ErrLDAPUserLocked, "mfa %v", mfa)
+	}
+	assert.Equal(t, before, e.sessionKinds(t, p.UserID))
+	assert.Equal(t, auth.LockThreshold, e.failedLogins(t, "ada"), "a refused sign-in changes nothing")
+	// The lock expires with the clock; a good code then clears the counter.
+	e.clk.Advance(auth.LockDuration)
 	lr, err = e.svc.SignInLDAP(e.ctx, id, rbac.Operator, true, meta)
 	require.NoError(t, err)
 	_, err = e.svc.VerifyMFA(e.ctx, e.principal(t, lr.SessionToken), auth.MFAInput{Code: code(t, enr.Secret, e.clk.Now())}, meta)
-	assert.ErrorIs(t, err, auth.ErrMFAInvalid, "locked: even the right code is refused")
-	assert.Equal(t, map[string]int{"bad_totp": auth.LockThreshold, "locked": 1}, e.reasons(t, "auth.mfa_verify"))
+	require.NoError(t, err)
+	assert.Zero(t, e.failedLogins(t, "ada"))
+}
+
+// A delay after a few failed codes refuses the sign-in too (MFA off as well), until it passes; a successful sign-in
+// without MFA clears the failure count.
+func TestSignInLDAPDelayAndResetWithoutMFA(t *testing.T) {
+	e := newEnv(t)
+	dir := e.directory(t)
+	id := ldapIdentity(dir, "19", "ada", "")
+	pr := e.signInLDAP(t, id, rbac.Operator)
+	_, err := e.db.Owner.Exec(e.ctx, `UPDATE users SET failed_logins = $2, locked_until = $3 WHERE id = $1`,
+		pr.UserID, auth.DelayThreshold, e.clk.Now().Add(2*time.Second))
+	require.NoError(t, err)
+	_, err = e.svc.SignInLDAP(e.ctx, id, rbac.Operator, false, meta)
+	assert.ErrorIs(t, err, auth.ErrLDAPUserLocked)
+	e.clk.Advance(2 * time.Second)
+	e.signInLDAP(t, id, rbac.Operator)
+	var failed int
+	var locked *time.Time
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT failed_logins, locked_until FROM users WHERE id = $1`, pr.UserID).Scan(&failed, &locked))
+	assert.Zero(t, failed, "a full session clears the count")
+	assert.Nil(t, locked)
+
+	// With MFA, the password step alone clears nothing: the code has not been checked yet.
+	e.setFailures(t, "ada", 3)
+	_, err = e.svc.SignInLDAP(e.ctx, id, rbac.Operator, true, meta)
+	require.NoError(t, err)
+	assert.Equal(t, 3, e.failedLogins(t, "ada"))
+}
+
+// last_login_at moves when a full session opens: at once without MFA, in VerifyMFA with it (never at the pending step).
+func TestSignInLDAPLastLoginOnlyForAFullSession(t *testing.T) {
+	e := newEnv(t)
+	dir := e.directory(t)
+	id := ldapIdentity(dir, "1a", "ada", "")
+	lastLogin := func(uid uuid.UUID) *time.Time {
+		var at *time.Time
+		require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT last_login_at FROM users WHERE id = $1`, uid).Scan(&at))
+		return at
+	}
+	lr, err := e.svc.SignInLDAP(e.ctx, id, rbac.Operator, true, meta)
+	require.NoError(t, err)
+	p := e.principal(t, lr.SessionToken)
+	assert.Nil(t, lastLogin(p.UserID), "a new user waiting for MFA has not signed in yet")
+	enr, err := e.svc.EnrollMFA(e.ctx, p, meta)
+	require.NoError(t, err)
+	e.clk.Advance(time.Minute)
+	_, err = e.svc.VerifyMFA(e.ctx, p, auth.MFAInput{Code: code(t, enr.Secret, e.clk.Now())}, meta)
+	require.NoError(t, err)
+	verified := e.clk.Now()
+	require.NotNil(t, lastLogin(p.UserID))
+	assert.True(t, verified.Equal(*lastLogin(p.UserID)))
+	e.clk.Advance(time.Minute)
+	_, err = e.svc.SignInLDAP(e.ctx, id, rbac.Operator, true, meta)
+	require.NoError(t, err)
+	assert.True(t, verified.Equal(*lastLogin(p.UserID)), "the pending step does not move it")
+	e.clk.Advance(time.Minute)
+	e.signInLDAP(t, id, rbac.Operator)
+	assert.True(t, e.clk.Now().Equal(*lastLogin(p.UserID)), "a full session without MFA does")
+	other := e.signInLDAP(t, ldapIdentity(dir, "1b", "bob", ""), rbac.Operator)
+	assert.True(t, e.clk.Now().Equal(*lastLogin(other.UserID)), "a new user without MFA has signed in")
 }
 
 // The directory step-up (plan ruling 6): the same identity, the role read again, the TOTP when the directory asks for
@@ -420,9 +492,12 @@ func TestStepUpLDAPWithTOTP(t *testing.T) {
 	// A user without a TOTP while the directory asks for one (the setting was switched on during the session).
 	other := ldapIdentity(dir, "14", "bob", "")
 	bob := e.signInLDAP(t, other, rbac.Operator)
-	_, err = e.svc.StepUpLDAP(e.ctx, bob, other, rbac.Operator, "123456", true, meta)
-	assert.ErrorIs(t, err, auth.ErrMFAInvalid)
-	assert.Equal(t, 1, e.failedLogins(t, "bob"))
+	for range auth.LockThreshold + 1 {
+		_, err = e.svc.StepUpLDAP(e.ctx, bob, other, rbac.Operator, "123456", true, meta)
+		assert.ErrorIs(t, err, auth.ErrLDAPEnrolmentRequired)
+	}
+	assert.Zero(t, e.failedLogins(t, "bob"), "no TOTP to guess: nothing counted, no lock risk")
+	e.principal(t, tokenOfSession(t, e, bob))
 }
 
 // RefuseLDAP audits auth.ldap.denied with the reason, the directory and the sign-in name; a known user is the actor,
@@ -437,7 +512,8 @@ func TestRefuseLDAP(t *testing.T) {
 
 	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, Login: "nobody"}, "bad_credentials", meta))
 	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, Login: "x\x00y"}, "login_invalid", meta))
-	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, Login: strings.Repeat("ş", 200)}, "directory_unreachable", meta))
+	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, Login: "Ada"}, "directory_unreachable", meta))
+	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, Login: strings.Repeat("ş", 200)}, "ambiguous_user", meta))
 	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, UniqueID: "99", Login: "ghost"}, "no_access", meta),
 		"an unknown identity is only audited")
 	require.NoError(t, e.svc.RefuseLDAP(e.ctx, id, "user_disabled", meta))
@@ -461,13 +537,15 @@ FROM audit_log WHERE action = 'auth.ldap.denied' ORDER BY seq`)
 	}
 	d := dir.String()
 	assert.Equal(t, []row{
-		{"system", "(unknown user)", "", d, "nobody"},
+		{"system", "(unknown user)", "", d, "-"},
+		{"system", "(unknown user)", "", d, "-"},
 		{"system", "(unknown user)", "", d, "-"},
 		{"system", "(unknown user)", "", d, strings.Repeat("ş", 128)},
 		{"system", "(unknown user)", "", d, "ghost"},
 		{"user", "ada", pr.UserID.String(), d, "ada"},
 	}, read())
-	assert.Equal(t, map[string]int{"bad_credentials": 1, "login_invalid": 1, "directory_unreachable": 1, "no_access": 1, "user_disabled": 1},
+	assert.Equal(t, map[string]int{"bad_credentials": 1, "login_invalid": 1, "directory_unreachable": 1, "ambiguous_user": 1, "no_access": 1,
+		"user_disabled": 1},
 		e.reasons(t, "auth.ldap.denied"))
 	assert.Zero(t, e.countAction(t, "user.sessions_ended", "success"))
 
@@ -617,4 +695,49 @@ VALUES ($1, 'jsmith', 'J. Smith', 'x', 'operator', now(), now())`, uuid.Must(uui
 	r := <-done
 	require.NoError(t, r.err)
 	assert.Equal(t, "jsmith-2", e.principal(t, r.token).Username)
+}
+
+// The ruling on typed names: a name the directory did not resolve to an entry is never stored, whatever the reason
+// and whatever the caller passes; a resolved name (unique id known) or an ambiguous one is.
+func TestRefuseLDAPNeverStoresAnUnresolvedName(t *testing.T) {
+	e := newEnv(t)
+	dir := e.directory(t)
+	const pasted = "Corr3ct-Horse-Battery-Staple!7"
+	for _, reason := range []string{"bad_credentials", "login_invalid", "directory_unreachable", "directory_misconfigured", "provider_disabled", "no_access"} {
+		require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, Login: pasted}, reason, meta))
+	}
+	var rows int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT count(*) FROM audit_log WHERE action = 'auth.ldap.denied' AND details ? 'login_name'`).Scan(&rows))
+	assert.Zero(t, rows)
+	var leaks int
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT count(*) FROM audit_log a WHERE to_jsonb(a)::text LIKE '%' || $1 || '%'`, pasted).Scan(&leaks))
+	assert.Zero(t, leaks, "the pasted string is in no column of any audit row")
+	assert.Equal(t, 6, e.countAction(t, "auth.ldap.denied", "failure"), "the refusals are still audited, with reason and directory")
+
+	// Resolved: recorded (an unknown unique id still means the directory found an entry for the name).
+	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, UniqueID: "ab", Login: "ada.resolved"}, "no_access", meta))
+	require.NoError(t, e.svc.RefuseLDAP(e.ctx, auth.LDAPIdentity{DirectoryID: dir, Login: "ada.ambiguous"}, "ambiguous_user", meta))
+	assert.Equal(t, "ada.ambiguous", *e.lastDetail(t, "auth.ldap.denied", "login_name"))
+	var resolved string
+	require.NoError(t, e.db.Owner.QueryRow(e.ctx, `SELECT details->>'login_name' FROM audit_log WHERE action = 'auth.ldap.denied'
+AND details->>'reason' = 'no_access' AND details ? 'login_name'`).Scan(&resolved))
+	assert.Equal(t, "ada.resolved", resolved)
+}
+
+// Local Login filters auth_source = 'local' in its locking query: a directory user's row, even locked by another
+// transaction, is never touched, so Login answers at once like for an unknown name (it does not wait for the row and
+// time out with ErrTryAgain).
+func TestLocalLoginDoesNotLockADirectoryUsersRow(t *testing.T) {
+	e := newEnv(t)
+	dir := e.directory(t)
+	uid := e.directoryUser(t, dir, "cc01", "ada", rbac.Operator)
+	auth.SetLockTimeout(e.svc, 300*time.Millisecond)
+	tx, err := e.db.Owner.Begin(e.ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(e.ctx) }()
+	_, err = tx.Exec(e.ctx, `SELECT id FROM users WHERE id = $1 FOR UPDATE`, uid)
+	require.NoError(t, err)
+	_, err = e.svc.Login(e.ctx, "ada", adminPassword, meta)
+	assert.ErrorIs(t, err, auth.ErrInvalidCredentials)
+	assert.NotErrorIs(t, err, auth.ErrTryAgain)
 }

@@ -31,6 +31,12 @@ var (
 	// ErrLDAPIdentityInvalid: the caller passed an identity or role Alice cannot store (no directory, a unique id that
 	// is not 2 to 254 lower-case hex digits of whole bytes, an unknown role).
 	ErrLDAPIdentityInvalid = errors.New("auth: the directory identity or role is not valid")
+	// ErrLDAPUserLocked: the directory user is in a delay or lockout after failed TOTP codes; the sign-in is refused
+	// whether or not the directory asks for MFA (audit reason locked).
+	ErrLDAPUserLocked = errors.New("auth: the directory user is locked")
+	// ErrLDAPEnrolmentRequired: a directory step-up needs the TOTP (mfa_required) but the user has none enrolled (the
+	// setting was switched on during the session); nothing is counted, and the person signs in again to enrol.
+	ErrLDAPEnrolmentRequired = errors.New("auth: the directory user must enrol a TOTP first")
 )
 
 // ldapIdentityLockNamespace is the first key of the per-identity advisory lock SignInLDAP takes, so two first
@@ -97,7 +103,8 @@ func checkLDAPRole(role rbac.Role) error {
 // ldapUser is a directory user's row, read under its row lock.
 type ldapUser struct {
 	ssoUser
-	enrolled bool // a TOTP is enrolled
+	enrolled    bool       // a TOTP is enrolled
+	lockedUntil *time.Time // the delay or lockout of failed TOTP codes
 }
 
 // lockLDAPUser reads the user of a directory identity with FOR UPDATE; found is false when there is none.
@@ -105,9 +112,9 @@ func lockLDAPUser(ctx context.Context, tx pgx.Tx, directoryID uuid.UUID, uniqueI
 	var u ldapUser
 	var role string
 	err := tx.QueryRow(ctx, `SELECT u.id, u.username::text, u.role, u.email::text, u.disabled_at IS NOT NULL,
-EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL)
+EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.locked_until
 FROM users u WHERE u.ldap_directory_id = $1 AND u.ldap_unique_id = $2 FOR UPDATE OF u`, directoryID, uniqueID).
-		Scan(&u.id, &u.username, &role, &u.email, &u.disabled, &u.enrolled)
+		Scan(&u.id, &u.username, &role, &u.email, &u.disabled, &u.enrolled, &u.lockedUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ldapUser{}, false, nil
 	}
@@ -119,12 +126,13 @@ FROM users u WHERE u.ldap_directory_id = $1 AND u.ldap_unique_id = $2 FOR UPDATE
 }
 
 // provisionLDAPUser inserts a new directory user (provisionUser): no password, the role from the group mappings.
-func provisionLDAPUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id LDAPIdentity, role rbac.Role, locale string, now time.Time) (string, error) {
+// lastLogin is set only when the sign-in opens a full session (nil while MFA is pending; VerifyMFA sets it).
+func provisionLDAPUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id LDAPIdentity, role rbac.Role, locale string, now time.Time, lastLogin *time.Time) (string, error) {
 	return provisionUser(ctx, tx, ldapx.Username(id.Login, id.UniqueID), func(q pgx.Tx, name string) error {
 		_, err := q.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, role_source,
 locale, ldap_directory_id, ldap_unique_id, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'ldap', NULL, $5, 'ldap_mapping', $6, $7, $8, $9, $9, $9)`,
-			userID, name, id.Email, id.displayNameOr(name), string(role), locale, id.DirectoryID, id.UniqueID, now)
+VALUES ($1, $2, $3, $4, 'ldap', NULL, $5, 'ldap_mapping', $6, $7, $8, $10, $9, $9)`,
+			userID, name, id.Email, id.displayNameOr(name), string(role), locale, id.DirectoryID, id.UniqueID, now, lastLogin)
 		return err
 	})
 }
@@ -137,7 +145,8 @@ func ldapRoleSynced(u ssoUser, role rbac.Role, m Meta) audit.Event {
 // SignInLDAP signs in the user of an identity the directory just authenticated, with the role its group mappings
 // resolved. The caller talks to the directory first: this function holds a transaction and never calls out. In one
 // transaction it finds the user by directory and unique id or provisions one (user name by ldapx.Username, -2, -3 on
-// a clash; never linking a local account: ErrLDAPEmailInUse), refuses a disabled user (ErrLDAPUserDisabled), follows
+// a clash; never linking a local account: ErrLDAPEmailInUse), refuses a disabled user (ErrLDAPUserDisabled) and a user
+// in a delay or lockout after failed TOTP codes (ErrLDAPUserLocked, in both MFA modes), follows
 // the directory's role (capped by "SSO users may be Admin"), display name and e-mail (under the same collision rule),
 // and opens a session: when mfaRequired, a pending session that the existing EnrollMFA and VerifyMFA complete
 // (StatusMFAEnrollmentRequired or StatusMFARequired, by whether the user has a TOTP); otherwise a full session at once
@@ -167,6 +176,11 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 		if err != nil {
 			return err
 		}
+		// last_login_at moves when a full session opens: here without MFA, in VerifyMFA with it (as for local users).
+		var lastLogin *time.Time
+		if !mfaRequired {
+			lastLogin = &now
+		}
 		var events []audit.Event
 		if !found {
 			if inUse, err := localEmailInUse(ctx, tx, id.Email); err != nil || inUse {
@@ -177,7 +191,7 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 				return err
 			}
 			u = ldapUser{ssoUser: ssoUser{id: uuid.Must(uuid.NewV7()), role: role}}
-			if u.username, err = provisionLDAPUser(ctx, tx, u.id, id, role, locale, now); err != nil {
+			if u.username, err = provisionLDAPUser(ctx, tx, u.id, id, role, locale, now, lastLogin); err != nil {
 				return err
 			}
 			events = append(events, audit.Event{Actor: userActor(u.id, u.username, m), Action: "user.provisioned", ObjectType: "user",
@@ -187,13 +201,22 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 			if u.disabled {
 				return ErrLDAPUserDisabled
 			}
+			if u.lockedUntil != nil && now.Before(*u.lockedUntil) {
+				// Failed TOTP codes put the account in a delay or lockout: refused in both MFA modes, so switching the
+				// directory's MFA off is no way around it.
+				return ErrLDAPUserLocked
+			}
 			if !strings.EqualFold(id.Email, u.email) {
 				if inUse, err := localEmailInUse(ctx, tx, id.Email); err != nil || inUse {
 					return cmpErr(err, ErrLDAPEmailInUse)
 				}
 			}
-			if _, err := tx.Exec(ctx, `UPDATE users SET role = $2, email = $3, display_name = $4, last_login_at = $5, updated_at = $5 WHERE id = $1`,
-				u.id, string(role), id.Email, id.displayNameOr(u.username), now); err != nil {
+			// A full session (no MFA) also clears the failure count, as VerifyMFA does after a good code.
+			if _, err := tx.Exec(ctx, `UPDATE users SET role = $2, email = $3, display_name = $4, updated_at = $5,
+last_login_at = coalesce($6, last_login_at),
+failed_logins = CASE WHEN $6::timestamptz IS NULL THEN failed_logins ELSE 0 END,
+locked_until = CASE WHEN $6::timestamptz IS NULL THEN locked_until ELSE NULL END WHERE id = $1`,
+				u.id, string(role), id.Email, id.displayNameOr(u.username), now, lastLogin); err != nil {
 				return fmt.Errorf("update directory user: %w", err)
 			}
 			if role != u.role {
@@ -294,19 +317,21 @@ func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, 
 				return ErrUnauthenticated
 			}
 			if mfaRequired {
-				if a.blocked(now) {
-					failed = true
-					return s.auditFailure(ctx, tx, actor, "auth.stepup", p.UserID.String(), "locked")
-				}
 				row, found, err := loadMFA(ctx, tx, p.UserID)
 				if err != nil {
 					return err
 				}
-				ok := false
-				if found && row.enrolled {
-					if ok, err = s.checkTOTP(ctx, tx, p.UserID, row, mfaCode, false); err != nil {
-						return err
-					}
+				if !found || !row.enrolled {
+					// No TOTP to check: not a guess, so nothing is counted; the person signs in again to enrol.
+					return ErrLDAPEnrolmentRequired
+				}
+				if a.blocked(now) {
+					failed = true
+					return s.auditFailure(ctx, tx, actor, "auth.stepup", p.UserID.String(), "locked")
+				}
+				ok, err := s.checkTOTP(ctx, tx, p.UserID, row, mfaCode, false)
+				if err != nil {
+					return err
 				}
 				if !ok {
 					failed = true
@@ -342,8 +367,8 @@ func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, 
 }
 
 // RefuseLDAP records a refused directory sign-in or step-up (auth.ldap.denied, result failure) with the closed reason,
-// the directory and the sign-in name (cut to 128 characters; left out for login_invalid, a name that could not be sent
-// to the directory). id.DirectoryID is required; id.UniqueID is known only once the directory accepted the password,
+// the directory and, only when the directory resolved the name to an entry or to several (deniedLoginName), the
+// sign-in name. id.DirectoryID is required; id.UniqueID is known only once the directory accepted the password,
 // and with it the user, when one exists, is the actor and the object (audit.ActorUser); an unknown user is recorded
 // with audit.ActorSystem. For a known user and a reason that says the user no longer has access (no_access,
 // provider_disabled) it also ends all of the user's sessions and revokes all of the user's API tokens in the same
@@ -361,7 +386,7 @@ func (s *Service) RefuseLDAP(ctx context.Context, id LDAPIdentity, reason string
 			}
 		}
 		details := map[string]string{"directory_id": id.DirectoryID.String(), "reason": reason}
-		if login := deniedLoginName(id.Login, reason); login != "" {
+		if login := deniedLoginName(id, reason); login != "" {
 			details["login_name"] = login
 		}
 		actor := audit.Actor{Type: audit.ActorSystem, Name: unknownUserName, IP: m.IP, RequestID: m.RequestID}
@@ -382,14 +407,21 @@ func (s *Service) RefuseLDAP(ctx context.Context, id LDAPIdentity, reason string
 	})
 }
 
-// deniedLoginName is the sign-in name an auth.ldap.denied row records: none for login_invalid or a name PostgreSQL
-// cannot store, otherwise the name cut to maxDeniedLoginRunes.
-func deniedLoginName(login, reason string) string {
-	if reason == "login_invalid" || !validate.StorableText(login) {
+// deniedLoginName is the sign-in name an auth.ldap.denied row records. It is recorded only when the directory
+// resolved the name to an entry (the identity has a unique id) or to more than one (ambiguous_user), cut to
+// maxDeniedLoginRunes; for every other refusal (an unknown name, login_invalid, an unreachable or misconfigured or
+// disabled directory) it is left out. People paste passwords into the name field, the audit log is append-only and
+// every Auditor reads it, so a name nothing in the directory matched is never stored (local Login records "(unknown
+// user)" for the same reason). The rule lives here so that no caller can get it wrong.
+func deniedLoginName(id LDAPIdentity, reason string) string {
+	if id.UniqueID == "" && reason != "ambiguous_user" {
 		return ""
 	}
-	if r := []rune(login); len(r) > maxDeniedLoginRunes {
+	if reason == "login_invalid" || !validate.StorableText(id.Login) {
+		return ""
+	}
+	if r := []rune(id.Login); len(r) > maxDeniedLoginRunes {
 		return string(r[:maxDeniedLoginRunes])
 	}
-	return login
+	return id.Login
 }
