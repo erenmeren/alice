@@ -296,6 +296,84 @@ func TestRedactLeavesHashesAlone(t *testing.T) {
 	assert.NotContains(t, redactInstallations(short), w)
 }
 
+func TestRedactFindsAnIDBetweenLongHexRunsAndInsideLongSymbolRuns(t *testing.T) {
+	rng := rand.New(rand.NewPCG(3, 4))
+	w := hexWindow(t, rng)
+	fp := installationFingerprint(mustCanonical(t, w))
+	pad := strings.Repeat("a", 40)
+	// A 'Z' (not hex) breaks the hex runs: the all-hex ID is its own 16-byte run and is redacted.
+	got := redactInstallations(pad + "Z" + w + "Z" + pad)
+	assert.NotContains(t, got, w)
+	assert.Contains(t, got, fp)
+
+	// Inside a long run of symbols that is not hex-only.
+	id := license.NewInstallationID()
+	long := strings.Repeat("ZXY", 50) + id + strings.Repeat("QZ", 70)
+	got = redactInstallations(long)
+	assert.Contains(t, got, installationFingerprint(id))
+	assert.NotContains(t, got, bodyOf(id)[:9])
+	assert.NotContains(t, got, id[:9])
+}
+
+func mustCanonical(t *testing.T, s string) string {
+	t.Helper()
+	id, err := license.ParseInstallationID(s)
+	require.NoError(t, err)
+	return id
+}
+
+// TestLuhnPreCheckAgreesWithTheParser pins that the pre-check never refuses a window the product
+// parser accepts (and accepts nothing it refuses), over random IDs, random windows and variants.
+func TestLuhnPreCheckAgreesWithTheParser(t *testing.T) {
+	rng := rand.New(rand.NewPCG(8, 9))
+	const all = "0123456789ABCDEFGHJKMNPQRSTVWXYZabcdefghjkmnpqrstvwxyzOoIiLl"
+	idx := make([]int, 16)
+	for i := range idx {
+		idx[i] = i
+	}
+	check := func(w string) {
+		_, err := license.ParseInstallationID("ALICE-" + w)
+		assert.Equal(t, err == nil, luhn32Valid(w, idx), "%q", w)
+	}
+	for range 20000 {
+		b := make([]byte, 16)
+		for i := range b {
+			b[i] = all[rng.IntN(len(all))]
+		}
+		check(string(b))
+	}
+	for range 2000 {
+		check(strings.Map(unicode.ToLower, bodyOf(license.NewInstallationID())))
+		check(bodyOf(license.NewInstallationID()))
+	}
+}
+
+// TestRedactIsLinearOnHugeInput guards against a quadratic scan: one long value in an audit row
+// must not hang the CLI (before the fix, 1 MB of 'a' took minutes). The bound is generous: each
+// input takes about 0.2 s here, about 1.3 s at most under the race detector.
+func TestRedactIsLinearOnHugeInput(t *testing.T) {
+	const size = 1 << 20
+	rng := rand.New(rand.NewPCG(5, 6))
+	random := make([]byte, size)
+	const symbols = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+	for i := range random {
+		random[i] = symbols[rng.IntN(len(symbols))]
+	}
+	for name, in := range map[string]string{
+		"all a":          strings.Repeat("a", size),
+		"0-":             strings.Repeat("0-", size/2),
+		"ALICE ":         strings.Repeat("ALICE ", size/6),
+		"random symbols": string(random),
+	} {
+		start := time.Now()
+		got := redactInstallations(in)
+		elapsed := time.Since(start)
+		assert.Less(t, elapsed, 5*time.Second, "%s took %s", name, elapsed)
+		assert.NotEmpty(t, got, name)
+		t.Logf("%s: %s", name, elapsed)
+	}
+}
+
 func TestRedactNeverLeaksARandomlySpelledID(t *testing.T) {
 	rng := rand.New(rand.NewPCG(42, 7))
 	const glue = "0123456789ABCDEFGHJKMNPQRSTVWXYZabcdefxyzu.,:;/_()[]{}#"

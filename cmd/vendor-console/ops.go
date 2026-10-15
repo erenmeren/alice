@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,8 +88,41 @@ func isIDSeparator(c byte) bool { return c == '-' || c == ' ' }
 func isHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' }
 
 // hexRunMin is the shortest unbroken hex run treated as a hash (a sha256 is 64): a window inside
-// one is not taken for an installation ID, which it matches by chance once in 32.
+// one is not taken for an installation ID, which it matches by chance once in 32. Accepted
+// residual: a real ID whose 16 symbols are all hex digits, written without separators and padded
+// with hex to an unbroken run of 32 or more, is not redacted (half the symbols of a random ID are
+// hex, so all 16 being hex happens about once in 65 000 IDs, and the padding has to be deliberate).
 const hexRunMin = 32
+
+// longHexRuns numbers the unbroken hex runs of at least hexRunMin bytes in one pass: the result
+// holds, per byte, the run's number (from 1), or 0 outside such runs; nil when there is none. A
+// window lies inside one run exactly when its first and last byte carry the same non-zero
+// number, so the check per window is O(1) and the scan stays linear in len(s).
+func longHexRuns(s string) []int32 {
+	var ids []int32
+	var n int32
+	for p := 0; p < len(s); {
+		if !isHex(s[p]) {
+			p++
+			continue
+		}
+		q := p
+		for q < len(s) && isHex(s[q]) {
+			q++
+		}
+		if q-p >= hexRunMin {
+			if ids == nil {
+				ids = make([]int32, len(s))
+			}
+			n++
+			for i := p; i < q; i++ {
+				ids[i] = n
+			}
+		}
+		p = q
+	}
+	return ids
+}
 
 // idSpan is the bytes [start, end) that one installation ID found by redactInstallations covers.
 type idSpan struct {
@@ -109,11 +141,15 @@ type idSpan struct {
 func findInstallations(s string) []idSpan {
 	var spans []idSpan
 	var run []int // byte positions of the symbols of the current run
+	hexRuns := longHexRuns(s)
 	flush := func() {
 		for i := 0; i+installationSymbols <= len(run); i++ {
 			w := run[i : i+installationSymbols]
-			if inHexRun(s, w[0], w[len(w)-1]) {
+			if hexRuns != nil && hexRuns[w[0]] != 0 && hexRuns[w[0]] == hexRuns[w[len(w)-1]] {
 				continue
+			}
+			if !luhn32Valid(s, w) {
+				continue // cheap pre-check; ParseInstallationID below stays the deciding step
 			}
 			sym := make([]byte, 0, len("ALICE-")+installationSymbols)
 			sym = append(sym, "ALICE-"...) // so a window that itself starts with ALICE is not read as a prefix
@@ -142,21 +178,40 @@ func findInstallations(s string) []idSpan {
 	return spans
 }
 
-// inHexRun reports whether the bytes first..last lie inside an unbroken hex run of at least hexRunMin.
-func inHexRun(s string, first, last int) bool {
-	for p := first; p <= last; p++ {
-		if !isHex(s[p]) {
-			return false
+// symbolValues maps a byte to its Crockford base32 value the way license.ParseInstallationID
+// decodes it (any case; O as 0, I and L as 1), or -1.
+var symbolValues = func() (t [256]int8) {
+	for i := range t {
+		t[i] = -1
+	}
+	const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+	for v := 0; v < len(crockford); v++ {
+		c := crockford[v]
+		t[c] = int8(v) //nolint:gosec // G115: v < 32
+		if c >= 'A' && c <= 'Z' {
+			t[c+('a'-'A')] = int8(v) //nolint:gosec // G115: v < 32
 		}
 	}
-	a, b := first, last
-	for a > 0 && isHex(s[a-1]) {
-		a--
+	for _, c := range "Oo" {
+		t[c] = 0
 	}
-	for b+1 < len(s) && isHex(s[b+1]) {
-		b++
+	for _, c := range "IiLl" {
+		t[c] = 1
 	}
-	return b-a+1 >= hexRunMin
+	return t
+}()
+
+// luhn32Valid is the product's Luhn mod 32 check over the symbols at positions w of s, without
+// allocating. It only filters: a window it accepts is confirmed with ParseInstallationID, and a test
+// pins that it agrees with the parser, so it can never hide an ID the parser would accept.
+func luhn32Valid(s string, w []int) bool {
+	factor, sum := 1, 0
+	for i := len(w) - 1; i >= 0; i-- {
+		addend := factor * int(symbolValues[s[w[i]]])
+		sum += addend/32 + addend%32
+		factor = 3 - factor
+	}
+	return sum%32 == 0
 }
 
 // prefixStart returns where a literal "ALICE" before the symbol at p starts (only separators may
@@ -178,21 +233,31 @@ func prefixStart(s string, p int) int {
 // span does not already hide; without this, about one ID in six would print as two fingerprints.
 // A canonical ID never contains L or I, so no real ID starts inside the prefix word.
 func preferAnchored(s string, spans []idSpan) []idSpan {
+	// Anchored spans sorted by start, with the running maximum of their ends: an unanchored span
+	// overlaps one of them exactly when, among those starting before its end, the furthest end lies
+	// past its start. A binary search keeps the check O(log n) per span.
 	var anchored []idSpan
 	for _, sp := range spans {
 		if sp.anchored {
 			anchored = append(anchored, sp)
 		}
 	}
+	sort.Slice(anchored, func(i, j int) bool { return anchored[i].start < anchored[j].start })
+	maxEnd := make([]int, len(anchored))
+	for i, a := range anchored {
+		maxEnd[i] = a.end
+		if i > 0 {
+			maxEnd[i] = max(maxEnd[i], maxEnd[i-1])
+		}
+	}
+	overlapsAnchored := func(sp idSpan) bool {
+		n := sort.Search(len(anchored), func(i int) bool { return anchored[i].start >= sp.end })
+		return n > 0 && maxEnd[n-1] > sp.start
+	}
 	out := spans[:0:0]
 	for _, sp := range spans {
-		if !sp.anchored {
-			if insidePrefixWord(s, sp.first) {
-				continue
-			}
-			if slices.ContainsFunc(anchored, func(a idSpan) bool { return sp.start < a.end && a.start < sp.end }) {
-				continue
-			}
+		if !sp.anchored && (insidePrefixWord(s, sp.first) || overlapsAnchored(sp)) {
+			continue
 		}
 		out = append(out, sp)
 	}
@@ -248,10 +313,12 @@ func redactInstallations(s string) string {
 	for i := 0; i < len(spans); {
 		start, end := spans[i].start, spans[i].end
 		var fps []string
+		seen := map[string]bool{}
 		for ; i < len(spans) && spans[i].start < end; i++ {
 			end = max(end, spans[i].end)
-			if fp := installationFingerprint(spans[i].canonical); !slices.Contains(fps, fp) {
-				fps = append(fps, fp)
+			if c := spans[i].canonical; !seen[c] {
+				seen[c] = true
+				fps = append(fps, installationFingerprint(c))
 			}
 		}
 		b.WriteString(s[last:start])
