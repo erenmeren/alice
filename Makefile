@@ -154,6 +154,17 @@ release-symcheck: ## Fail if the release build of alice links e2e-only test code
 licensectl: ## Build the vendor's offline license tool into bin/ (never shipped to customers)
 	CGO_ENABLED=0 go build -trimpath -o bin/licensectl ./cmd/licensectl
 
+.PHONY: vendor-console
+vendor-console: ## Build the vendor console into bin/ (no YubiKey support, no cgo; never shipped to customers)
+	CGO_ENABLED=0 go build -trimpath -o bin/vendor-console ./cmd/vendor-console
+
+# The YubiKey build links the PC/SC library through cgo on Linux (libpcsclite-dev, pcscd) and macOS,
+# and the system winscard on Windows: it cannot be cross-compiled, so run this target natively on
+# each OS the vendor signs from.
+.PHONY: vendor-console-yubikey
+vendor-console-yubikey: ## Build the vendor console with YubiKey signing (native build on each OS; needs cgo and PC/SC)
+	CGO_ENABLED=1 go build -trimpath -tags yubikey -o bin/vendor-console-yubikey ./cmd/vendor-console
+
 .PHONY: helper
 helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ with SHA-256 checksums (reproducible: no VCS stamp)
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 go build -trimpath -buildvcs=false -ldflags "-s -w" -o bin/alice-helper-linux-amd64 ./cmd/alice-helper

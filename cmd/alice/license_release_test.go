@@ -40,9 +40,27 @@ func TestReleaseBinaryLinksNoTestOrVendorCode(t *testing.T) {
 		"alice/internal/vconsole/web", "alice/internal/vconsole/webuser", "alice/cmd/vendor-console", "alice/cmd/vendor-web",
 		"alice/internal/vconsole/mail", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/notify",
 		"alice/internal/vconsole/sign/openpgp", "alice/internal/vconsole/sign/openpgp/openpgptest",
+		"alice/internal/vconsole/sign/pcsc", "github.com/ebfe/scard",
 		"github.com/stretchr/testify/assert", "golang.org/x/term",
 	} {
 		assert.NotContains(t, deps, forbidden)
+	}
+}
+
+// The YubiKey build tag belongs to the vendor console: setting it on alice links no PC/SC library
+// and no vendor console code either (the tagged transport lives under internal/vconsole only).
+func TestYubikeyTagLinksNoPCSCIntoAlice(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go is not on PATH")
+	}
+	out, err := exec.Command("go", "list", "-deps", "-tags", "yubikey", ".").Output()
+	require.NoError(t, err)
+	deps := strings.Fields(string(out))
+	require.Contains(t, deps, "alice/internal/license", "positive control: the list holds alice's own packages")
+	for _, dep := range deps {
+		assert.NotEqual(t, "github.com/ebfe/scard", dep)
+		assert.False(t, strings.HasPrefix(dep, "github.com/ebfe/scard/"), "alice links %s", dep)
+		assert.False(t, dep == "alice/internal/vconsole" || strings.HasPrefix(dep, "alice/internal/vconsole/"), "alice links %s", dep)
 	}
 }
 
