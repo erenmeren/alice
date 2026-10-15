@@ -131,6 +131,7 @@ Roles in Postgres (one login per person, no shared password):
 | `signer` | everything `sales` can, plus insert into `licenses`, update request status |
 | `owner` | everything; manage logins |
 | `vendor_web` | the sales web service login: everything `sales` can (acting as `web:<name>`), plus its own web tables (sessions, adding passkeys and updating their sign counters, consuming enrollment codes) and `web_audit_login`; no signing, no audit read |
+| `vendor_notifier` | the `notify run` login (Phase 4): read licenses (not the file), customers, requests, web users, settings and the audit log; write the mail outbox and the reminder records; record the time of the last weekly summary through one function; no other writes, no signing |
 
 Row-level security enforces this in the database, so a bug in a client cannot widen it.
 Connections require TLS with certificate verification. Credentials come from the environment or
@@ -145,14 +146,28 @@ the CSV ledger stays as an offline copy that is exported from Neon, or is replac
 `audit` table. Proposed: export a signed ledger file from the database on demand, so offline
 verification with `licensectl ledger-verify` keeps working.
 
-## 7. Owner visibility
+## 7. Owner visibility (built in Phase 4)
 
-- E-mail to the owner on every signed license: customer, targets, term, signer, key ID.
-- Weekly summary: new licenses, open requests, licenses ending in the next 90 days, odd activity
-  (outside usual hours, many licenses in a day).
-- Expiry reminders at 90, 60 and 30 days to the customer's sales owner and the owner. A renewal
-  draft is created from the old license.
-- The web page shows the audit trail to the owner role.
+- E-mail to the owner on every signed license: customer, targets, term, signer, key ID, request
+  number. A database trigger on `licenses` writes the message into the outbox (`mail_outbox`) in
+  the same statement that inserts the license, so no client can issue without the owner being
+  notified, and a mail server that is down never blocks issuing. `vendor-console notify run` sends
+  the outbox over SMTP (STARTTLS or implicit TLS required, retry with backoff, at-least-once). While
+  no owner address is set, messages wait and go out when it is.
+- Weekly summary, created by the same run when the last one is more than 7 days old: licenses
+  issued in the period, open requests, licenses ending in the next 90 days, failed e-mails of the
+  last 28 days, and unusual activity. Unusual means a license issued between 22:00 and 06:00 in the
+  configured time zone (default `Europe/Istanbul`), or more than 5 licenses by one signer in one
+  local day. A quiet week still produces a summary.
+- Expiry reminders at 90, 60 and 30 days to the owner and to the person who made the request (when
+  a web user with an e-mail address; disabled users are not mailed). Catch-up rule: a license found
+  already inside a threshold that was never sent gets only the most urgent unsent reminder, and the
+  less urgent ones are recorded as sent. Revoked or replaced licenses get none.
+- Renewal is not a stored draft. The license list has a "Renew" link and every reminder carries one
+  (`/requests/new?renew=<license-id>`): it prefills a new request from the old license (customer,
+  installation, targets, features, start date = old end date) for the person to review and submit.
+- Not built: the owner's audit view on the web page. Moved to Phase 5; until then the owner reads
+  the audit log with SQL and `vendor-console audit-verify`.
 
 ## 8. Product-side changes
 
@@ -187,10 +202,11 @@ No change to the license format, the verifier or the license tests is planned.
    license from a request using the file key.
 2. **YubiKey signing.** PIV or OpenPGP implementation (decided by O1), PIN and touch flow,
    cross-platform builds and smoke tests on Linux, Windows and macOS.
-3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view stays in Phase 4.
-4. **Reminders and owner reports.** E-mail on issuance, weekly summary, expiry reminders, renewal
-   drafts.
-5. **Operations.** Backup and restore drill, key ceremony checklist, key revocation procedure, docs.
+3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view was not built in Phase 4 and moves to Phase 5.
+4. **Reminders and owner reports (built).** E-mail on issuance, weekly summary, expiry reminders, renewal
+   as a prefilled request (no stored draft).
+5. **Operations.** Backup and restore drill, key ceremony checklist, key revocation procedure, docs,
+   the owner's audit view on the web page.
 
 ## 11. Open items
 
@@ -200,7 +216,7 @@ No change to the license format, the verifier or the license tests is planned.
 | O2 | CSV ledger versus audit table (section 6) | Phase 1 |
 | O3 | Which Go library reads PIV/OpenPGP Ed25519 on all three platforms (PC/SC). To be checked with a spike, not assumed | Phase 2 |
 | O4 | Where the sales web service runs and who operates it. Resolved: one static binary `vendor-web` behind any TLS-ending reverse proxy, or with its own certificate; operated by the IT manager (Istanbul); the owner holds the `vendor_owner` login that creates web users; single instance (ceremony state is in memory) | Phase 3 (done) |
-| O5 | E-mail sending (provider, sender address) | Phase 4 |
+| O5 | E-mail sending (provider, sender address). Resolved: provider-neutral SMTP configured by `VENDOR_SMTP_ADDR`, `_USER`, `_PASSWORD`, `_FROM`; STARTTLS or port 465 required; the sender address is the operator's choice | Phase 4 (done) |
 | O6 | Whether the installation ID flow (customer gives it, vendor binds the license to it) stays as is | Phase 1 |
 
 ## 12. Not in scope

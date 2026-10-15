@@ -39,6 +39,7 @@ var testOnlyImports = []string{
 	"alice/internal/testutil/...",
 	"alice/internal/providers/linuxssh/linuxsshtest",
 	"alice/internal/providers/providertest",
+	"alice/internal/vconsole/mail/mailtest",
 }
 
 // testOnlyDirs are test helper packages: their own files are untagged on purpose and reach no
@@ -52,7 +53,7 @@ var testOnlyImports = []string{
 // network discovery journeys (internal/testutil/fakefleet, listed by name too: plan 2026-10-13-network-discovery A9).
 var testOnlyDirs = []string{"internal/license/licensetest", "internal/testutil", "internal/providers/linuxssh/linuxsshtest",
 	"internal/providers/providertest", "cmd/alice-fakeazure", "cmd/alice-fakesmtp", "cmd/alice-fakeidp", "cmd/alice-fakeacme",
-	"internal/testutil/fakefleet", "cmd/alice-fakefleet"}
+	"internal/testutil/fakefleet", "cmd/alice-fakefleet", "internal/vconsole/mail/mailtest"}
 
 // testTags maps the file-name marker of test-only code to the build tag it must require.
 var testTags = map[string]string{"_e2e": "e2e", "_testlicense": "testlicense"}
@@ -423,7 +424,7 @@ func goListDeps(t *testing.T, tags string, pkgs ...string) []string {
 }
 
 func TestReleaseBinariesLinkNoTestPackages(t *testing.T) {
-	for _, dep := range goListDeps(t, "", "./cmd/alice", "./cmd/alice-helper", "./cmd/licensectl") {
+	for _, dep := range goListDeps(t, "", "./cmd/alice", "./cmd/alice-helper", "./cmd/licensectl", "./cmd/vendor-console", "./cmd/vendor-web") {
 		for _, bad := range testOnlyImports {
 			assert.False(t, covers(bad, dep), "a release binary links %s", dep)
 		}

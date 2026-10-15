@@ -120,6 +120,12 @@ var rules = map[string][]string{
 	"alice/internal/vconsole/web/...": {platform, "alice/internal/vconsole/store", "alice/internal/vconsole/webuser", "alice/internal/vconsole/audit"},
 	// Web users (sessions, passkeys) know the database and the audit chain, not the license tables.
 	"alice/internal/vconsole/webuser": {platform, "alice/internal/vconsole/audit"},
+	// Phase 4 (plan 2026-10-15-vendor-console-phase-4): the notifier (outbox, reminders, weekly summary) talks to the
+	// database through the store and the audit chain and sends through the mail package. The mail package is a leaf: it
+	// knows no vconsole code and no product code. Its test SMTP server imports the mail package only.
+	"alice/internal/vconsole/notify":        {platform, "alice/internal/vconsole/mail", "alice/internal/vconsole/audit", "alice/internal/vconsole/store"},
+	"alice/internal/vconsole/mail":          {},
+	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/mail"},
 }
 
 const platform = "alice/internal/platform/..."
@@ -129,8 +135,13 @@ const platform = "alice/internal/platform/..."
 var denied = map[string][]string{
 	// The sales web service (plan 2026-10-15-vendor-console-phase-3) holds no signing key: it never reaches the signer
 	// or the issuing code. Web users (sessions, passkeys) share only the audit package with the license tables.
-	"alice/internal/vconsole/web/...":                {"alice/internal/vconsole/sign", "alice/internal/vconsole/issue"},
-	"alice/internal/vconsole/webuser":                {"alice/internal/vconsole/store"},
+	"alice/internal/vconsole/web/...": {"alice/internal/vconsole/sign", "alice/internal/vconsole/issue", "alice/internal/vconsole/notify", "alice/internal/vconsole/mail/..."},
+	"alice/internal/vconsole/webuser": {"alice/internal/vconsole/store"},
+	// The notifier never signs, issues or serves web pages; the mail package and its test server reach no other
+	// vconsole code (mailtest only the mail package) and no product code.
+	"alice/internal/vconsole/notify":                 {"alice/internal/vconsole/sign", "alice/internal/vconsole/issue", "alice/internal/vconsole/web/...", "alice/internal/vconsole/webuser", "alice/internal/license/..."},
+	"alice/internal/vconsole/mail":                   {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
+	"alice/internal/vconsole/mail/mailtest":          {"alice/internal/vconsole/store", "alice/internal/vconsole/audit", "alice/internal/vconsole/notify", platform},
 	"alice/internal/certs/...":                       {"alice/internal/platform/db/..."},
 	"alice/internal/providers":                       {"alice/internal/platform/db/..."},
 	"alice/internal/providers/...":                   {"alice/internal/platform/db/..."},
@@ -302,6 +313,27 @@ func TestAllowed(t *testing.T) {
 		{"web to the signer denied", "alice/internal/vconsole/web", "alice/internal/vconsole/sign", false},
 		{"web to the issuing code denied", "alice/internal/vconsole/web", "alice/internal/vconsole/issue", false},
 		{"web users to the store denied", "alice/internal/vconsole/webuser", "alice/internal/vconsole/store", false},
+		{"notify to the mail sender allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/mail", true},
+		{"notify to the audit chain allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/audit", true},
+		{"notify to the store allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/store", true},
+		{"notify to the platform allowed", "alice/internal/vconsole/notify", "alice/internal/platform/db", true},
+		{"notify to the signer denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/sign", false},
+		{"notify to the issuing code denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/issue", false},
+		{"notify to the web service denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/web", false},
+		{"notify to the web users denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/webuser", false},
+		{"notify to the license format denied", "alice/internal/vconsole/notify", "alice/internal/license", false},
+		{"notify to the product notifier denied", "alice/internal/vconsole/notify", "alice/internal/notify", false},
+		{"mail to the store denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/store", false},
+		{"mail to the audit chain denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/audit", false},
+		{"mail to the notifier denied", "alice/internal/vconsole/mail", "alice/internal/vconsole/notify", false},
+		{"mail to the license format denied", "alice/internal/vconsole/mail", "alice/internal/license", false},
+		{"mail to the product mail denied", "alice/internal/vconsole/mail", "alice/internal/notify", false},
+		{"mail to the platform denied", "alice/internal/vconsole/mail", "alice/internal/platform/db", false},
+		{"mailtest to the mail package allowed", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/mail", true},
+		{"mailtest to the store denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/store", false},
+		{"mailtest to the platform denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/platform/db", false},
+		{"web to the notifier denied", "alice/internal/vconsole/web", "alice/internal/vconsole/notify", false},
+		{"web to the mail sender denied", "alice/internal/vconsole/web", "alice/internal/vconsole/mail", false},
 		{"vconsole to the product jobs denied", "alice/internal/vconsole/issue", "alice/internal/jobs", false},
 		{"vconsole to the product rbac denied", "alice/internal/vconsole/store", "alice/internal/rbac", false},
 		{"discovery to the inventory denied", "alice/internal/discovery", "alice/internal/inventory", false},
