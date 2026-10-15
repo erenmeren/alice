@@ -819,7 +819,7 @@ These assumptions can only be checked on real hardware; the steps below are buil
 4. **Reset on close versus scdaemon.** The console holds the card exclusively and resets it when it
    closes it. Whether gpg and scdaemon cope with that afterwards (step 8).
 5. **The Windows and macOS builds.** The YubiKey build has been compiled only on Linux. On Windows
-   the console does not build at all today (see "Get the binary").
+   the console builds without cgo (see "Get the binary") but has not been run there.
 
 ### Get the binary
 
@@ -830,17 +830,15 @@ repository with Go installed:
 |---|---|---|
 | Linux | a C compiler, `pkg-config`, `libpcsclite-dev` (Debian and Ubuntu; `pcsc-lite` on Fedora and Arch) and `pcscd` running (`sudo systemctl enable --now pcscd.socket`) | `make vendor-console-yubikey` |
 | macOS | the Xcode command line tools (`xcode-select --install`) for cgo; the system's PC/SC, nothing else | `make vendor-console-yubikey` |
-| Windows | the Smart Card service (`SCardSvr`) running (it starts when a reader is plugged in); no C compiler: the PC/SC library loads the system's `winscard.dll` | **blocked**: the console does not build for Windows today (below) |
+| Windows | the Smart Card service (`SCardSvr`) running (it starts when a reader is plugged in); no C compiler: the PC/SC library loads the system's `winscard.dll` | `go build -trimpath -tags yubikey -o bin\vendor-console-yubikey.exe ./cmd/vendor-console` in PowerShell (no cgo needed, `CGO_ENABLED=0` works) |
 
 The result is `bin/vendor-console-yubikey`. `make vendor-console` builds the normal console, which
 has no YubiKey support and refuses every card command with `pcsc: this build has no YubiKey support
 (build with -tags yubikey)` (exit code 2).
 
-**Windows is blocked.** `GOOS=windows go build ./cmd/vendor-console` fails today, with or without
-the `yubikey` tag, in `internal/secrets` (which `internal/license` imports): it uses the Unix-only
-`syscall.O_NOFOLLOW` and `syscall.Stat_t`. Until that is fixed, sign from Linux or macOS and mark the
-Windows row "not run: no Windows build". Once it builds, the Windows command is, in PowerShell,
-`go build -trimpath -tags yubikey -o bin\vendor-console-yubikey.exe ./cmd/vendor-console`.
+**Windows.** `go build -tags yubikey ./cmd/vendor-console` builds on Windows (and cross-compiles from
+Linux with `GOOS=windows CGO_ENABLED=0`); no C compiler is needed, but the Smart Card service must be
+running. It has not been run on a Windows machine yet: the owner's smoke test fills the Windows row.
 
 ### The steps
 
@@ -944,7 +942,7 @@ Fill in one row per run and keep the table in the paper log (or here, in a commi
 | Date | OS and version | YubiKey serial | Firmware | Touch policy | Steps passed | Result | Notes (max command length, chaining, any message that differed) |
 |---|---|---|---|---|---|---|---|
 | | Linux | | | | | not run | |
-| | Windows | | | | | not run: no Windows build | |
+| | Windows | | | | | not run | |
 | | macOS | | | | | not run | |
 
 ### Reporting a problem

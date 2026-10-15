@@ -247,8 +247,8 @@ No change to the license format, the verifier or the license tests is planned.
    implementation (rulings 1 and 2), PIN and touch flow, confirmation display on the command line,
    `signer info` and `signer test`, the `yubikey` build tag and `make vendor-console-yubikey`. Tested
    against a software card only; the smoke tests on Linux, Windows and macOS are the owner's
-   checklist (runbook section 11). The Windows build of `vendor-console` currently fails (Unix-only
-   calls in `internal/secrets`), with or without the tag.
+   checklist (runbook section 11). `vendor-console` builds for Windows and macOS (cross-compile tested
+   without cgo; the YubiKey build for macOS needs cgo and is built on a Mac).
 3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view is a command line view (`audit show`, Phase 5), not a page.
 4. **Reminders and owner reports (built).** E-mail on issuance, weekly summary, expiry reminders, renewal
    as a prefilled request (no stored draft).

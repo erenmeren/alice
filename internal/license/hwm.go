@@ -15,7 +15,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"alice/internal/platform/clock"
@@ -157,7 +156,7 @@ func (FileHWMStore) Name() string { return "file" }
 // FIFO or device is not waited on. It reads at most one byte more than a valid record
 // can have, so an oversized file is rejected by Decode without being read into memory.
 func (f FileHWMStore) Load(context.Context) ([]byte, error) {
-	file, err := os.OpenFile(f.Path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: the path comes from ALICE_STATE_DIR, not from a request
+	file, err := os.OpenFile(f.Path, os.O_RDONLY|oNoFollow|oNonBlock, 0) //nolint:gosec // G304: the path comes from ALICE_STATE_DIR, not from a request
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

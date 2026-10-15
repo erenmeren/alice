@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -35,9 +34,6 @@ var (
 )
 
 const masterKeyVersion = 1
-
-// geteuid is the effective-UID lookup for the owner check; tests replace it.
-var geteuid = os.Geteuid
 
 // LoadOrCreateMasterKey returns the keyring for the master key in dir.
 //
@@ -180,7 +176,7 @@ func createKeyFile(dir, path string) error {
 	enc := []byte(base64.StdEncoding.EncodeToString(key) + "\n")
 	defer clear(enc)
 
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o400) //nolint:gosec // G304: path is dir from configuration + fixed file name
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|oNoFollow, 0o400) //nolint:gosec // G304: path is dir from configuration + fixed file name
 	if errors.Is(err, fs.ErrExist) {
 		// Another process created it first; it is loaded and verified next. Its directory entry may not
 		// be durable yet, so this start syncs it too.
@@ -229,8 +225,8 @@ func checkKeyFileInfo(path string, info fs.FileInfo) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("%w: %s is not a regular file", ErrMasterKeyInvalid, path)
 	}
-	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != geteuid() {
-		return fmt.Errorf("%w: %s is owned by uid %d, not the running user (uid %d); run: chown %d %s", ErrMasterKeyPermissions, path, st.Uid, geteuid(), geteuid(), path)
+	if err := checkKeyFileOwner(path, info); err != nil {
+		return err
 	}
 	if perm := info.Mode().Perm(); perm&^0o400 != 0 {
 		return fmt.Errorf("%w: %s has mode %04o; run: chmod 0400 %s", ErrMasterKeyPermissions, path, perm, path)
@@ -247,7 +243,7 @@ func loadKeyFile(path string) (*Keyring, error) {
 		return nil, err
 	}
 	// O_NOFOLLOW and O_NONBLOCK guard against the path being swapped after the Lstat.
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: path is dir from configuration + fixed file name
+	f, err := os.OpenFile(path, os.O_RDONLY|oNoFollow|oNonBlock, 0) //nolint:gosec // G304: path is dir from configuration + fixed file name
 	if err != nil {
 		return nil, fmt.Errorf("read master key file %s: %w", path, err)
 	}

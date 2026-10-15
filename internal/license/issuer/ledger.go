@@ -12,7 +12,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"syscall"
 	"time"
 
 	"alice/internal/license"
@@ -201,12 +200,7 @@ func LockLedger(path string) (*Ledger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lock the ledger: %w", err)
 	}
-	for {
-		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX) //nolint:gosec // G115: a file descriptor always fits in int
-		if !errors.Is(err, syscall.EINTR) {
-			break
-		}
-	}
+	err = lockFile(f)
 	if err != nil {
 		_ = f.Close()
 		return nil, fmt.Errorf("lock the ledger: %w", err)
