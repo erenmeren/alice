@@ -22,10 +22,9 @@ import (
 // Ceremony state lives in memory: the service runs as a single instance (plan ruling 1) and a
 // lost ceremony only means pressing the button again.
 const (
-	ceremonyTTL    = 5 * time.Minute
-	ceremonyCookie = "vceremony"
-	kindRegister   = "register"
-	kindLogin      = "login"
+	ceremonyTTL  = 5 * time.Minute
+	kindRegister = "register"
+	kindLogin    = "login"
 )
 
 var errBusy = errors.New("web: too many ceremonies in progress")
@@ -95,16 +94,18 @@ func (cs *ceremonies) take(id, kind string) (ceremony, bool) {
 	return c, true
 }
 
+// setCeremonyCookie sets the ceremony cookie (s.ceremonyCookie: "__Host-vceremony" for https
+// origins, "vceremony" otherwise). The __Host- prefix requires Path=/.
 func (s *Server) setCeremonyCookie(w http.ResponseWriter, id string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: Secure is false only for the http://localhost origin, where browsers would drop it
-		Name: ceremonyCookie, Value: id, Path: "/webauthn/", MaxAge: maxAge,
+		Name: s.ceremonyCookie, Value: id, Path: "/", MaxAge: maxAge,
 		HttpOnly: true, Secure: s.secure, SameSite: http.SameSiteStrictMode,
 	})
 }
 
 // takeCeremony consumes the ceremony named by the request's cookie and clears the cookie.
 func (s *Server) takeCeremony(w http.ResponseWriter, r *http.Request, kind string) (ceremony, bool) {
-	c, err := r.Cookie(ceremonyCookie)
+	c, err := r.Cookie(s.ceremonyCookie)
 	if err != nil {
 		return ceremony{}, false
 	}

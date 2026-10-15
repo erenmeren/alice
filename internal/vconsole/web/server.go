@@ -1,5 +1,5 @@
-// Package web is the sales web page of the vendor console: passkey sign-in and, from Task 4, the
-// customer, request and license pages. It holds no signing key and connects to PostgreSQL as the
+// Package web is the sales web page of the vendor console: passkey sign-in and the customer,
+// request and license pages. It holds no signing key and connects to PostgreSQL as the
 // vendor_web login; it acts for the signed-in person by setting vendor.actor inside each
 // transaction (inActorTx), which the database honors only for vendor_web members.
 package web
@@ -57,14 +57,15 @@ const (
 
 // Server is the web service.
 type Server struct {
-	cfg        Config
-	secure     bool // the origin is https: cookies get Secure
-	log        *slog.Logger
-	wa         *webauthn.WebAuthn
-	ceremonies *ceremonies
-	limiter    *limiter
-	tmpl       map[string]*template.Template
-	handler    http.Handler
+	cfg            Config
+	secure         bool   // the origin is https: cookies get Secure
+	ceremonyCookie string // "__Host-vceremony" for https origins, "vceremony" otherwise
+	log            *slog.Logger
+	wa             *webauthn.WebAuthn
+	ceremonies     *ceremonies
+	limiter        *limiter
+	tmpl           map[string]*template.Template
+	handler        http.Handler
 }
 
 // New validates cfg and builds the server. The pool may be nil for routes that do not reach the
@@ -117,7 +118,7 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		cfg: cfg, secure: secure, log: cfg.Logger, wa: wa,
+		cfg: cfg, secure: secure, ceremonyCookie: ceremonyCookieName(secure), log: cfg.Logger, wa: wa,
 		ceremonies: newCeremonies(cfg.Clock, maxCeremonies),
 		limiter:    newLimiter(cfg.Clock, cfg.limitN, cfg.limitWindow),
 		tmpl:       pages,
@@ -126,6 +127,15 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// ceremonyCookieName is the name of the passkey ceremony cookie. Like the session cookie it uses
+// the __Host- prefix when the origin is https.
+func ceremonyCookieName(secure bool) string {
+	if secure {
+		return "__Host-vceremony"
+	}
+	return "vceremony"
 }
 
 // checkOrigin requires an https origin (http only for localhost, where browsers allow WebAuthn)
@@ -222,7 +232,7 @@ func staticOnly(root fs.FS, next http.Handler) http.Handler {
 	})
 }
 
-// pageData is what every page template receives; Task 4 pages add their own fields via Data.
+// pageData is what every page template receives: the signed-in user and the page's own data.
 type pageData struct {
 	User webuser.User
 	Data any
@@ -385,19 +395,27 @@ func (l *limiter) allow(a netip.Addr) bool {
 	return b.count <= l.n
 }
 
-// clientAddr is the connection's address; an unparsable RemoteAddr shares the zero-address bucket.
+// clientAddr is the limiter key of the connection's address. An IPv6 client is keyed by its /64
+// prefix, since one host usually holds a whole /64; an unparsable RemoteAddr shares the
+// zero-address bucket.
 func clientAddr(r *http.Request) netip.Addr {
+	var a netip.Addr
 	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-		return ap.Addr().Unmap()
+		a = ap.Addr()
+	} else {
+		host := r.RemoteAddr
+		if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			host = h
+		}
+		if a, err = netip.ParseAddr(host); err != nil {
+			return netip.Addr{}
+		}
 	}
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		host = h
+	a = a.Unmap().WithZone("")
+	if a.Is6() {
+		return netip.PrefixFrom(a, 64).Masked().Addr()
 	}
-	if a, err := netip.ParseAddr(host); err == nil {
-		return a.Unmap()
-	}
-	return netip.Addr{}
+	return a
 }
 
 func (s *Server) limited(next http.HandlerFunc) http.HandlerFunc {

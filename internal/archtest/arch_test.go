@@ -115,7 +115,8 @@ var rules = map[string][]string{
 	// The vendor console (plan 2026-10-15-vendor-console-phase-1) is the vendor's own tooling and never ships to customers.
 	// It uses the platform (database, clock) and the license format; it must not reach into the product's services.
 	"alice/internal/vconsole/...": {platform, "alice/internal/license/..."},
-	// The sales web service reads and writes through the store and the web users; it has no license-format access at all.
+	// The sales web service reads and writes through the store and the web users; no direct license-format access; store
+	// uses the issuer for request validation only.
 	"alice/internal/vconsole/web/...": {platform, "alice/internal/vconsole/store", "alice/internal/vconsole/webuser", "alice/internal/vconsole/audit"},
 	// Web users (sessions, passkeys) know the database and the audit chain, not the license tables.
 	"alice/internal/vconsole/webuser": {platform, "alice/internal/vconsole/audit"},

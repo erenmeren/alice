@@ -5,10 +5,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -42,6 +44,7 @@ type config struct {
 	dbURL, origin, rpid string
 	listen              string
 	certFile, keyFile   string
+	cert                *tls.Certificate // loaded from certFile and keyFile; nil for plain http
 }
 
 func main() {
@@ -62,6 +65,9 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	certFile := fs.String("tls-cert", "", "TLS certificate file (with --tls-key)")
 	keyFile := fs.String("tls-key", "", "TLS key file (with --tls-cert)")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if fs.NArg() != 0 {
@@ -95,11 +101,18 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	if _, err := web.New(web.Config{RPID: c.rpid, Origin: c.origin}); err != nil {
 		return fail("%v", err)
 	}
-	if c.certFile == "" && !httpOrigin(c.origin) {
+	if c.certFile != "" {
+		// Load the pair now so a bad file is a configuration error. The library's error names
+		// the problem, never the file contents.
+		cert, err := tls.LoadX509KeyPair(c.certFile, c.keyFile)
+		if err != nil {
+			return fail("cannot load the TLS certificate and key (--tls-cert %s, --tls-key %s): %v", c.certFile, c.keyFile, err)
+		}
+		c.cert = &cert
+	} else if !httpOrigin(c.origin) {
 		_, _ = fmt.Fprintln(stderr, "vendor-web: note: serving plain http; the https origin must be terminated by a proxy in front")
 	}
-	_ = stdout
-	return serve(c)
+	return serve(c, stdout, stderr)
 }
 
 func httpOrigin(origin string) bool {
@@ -110,8 +123,7 @@ func httpOrigin(origin string) bool {
 // serve is replaced in tests.
 var serve = serveReal
 
-func serveReal(c config) int {
-	stderr := os.Stderr
+func serveReal(c config, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -137,13 +149,23 @@ func serveReal(c config) int {
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    16 << 10,
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "vendor-web: listening on %s for %s\n", c.listen, c.origin)
+	if c.cert != nil {
+		hs.TLSConfig = &tls.Config{Certificates: []tls.Certificate{*c.cert}, MinVersion: tls.VersionTLS12}
+	}
+	// Listen first, so "listening on" is printed only once the port is ours.
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", c.listen)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "vendor-web: %v\n", err)
+		return 1
+	}
+	_, _ = fmt.Fprintf(stdout, "vendor-web: listening on %s for %s\n", ln.Addr(), c.origin)
 	errc := make(chan error, 1)
 	go func() {
-		if c.certFile != "" {
-			errc <- hs.ListenAndServeTLS(c.certFile, c.keyFile)
+		if c.cert != nil {
+			errc <- hs.ServeTLS(ln, "", "") // the certificate is in TLSConfig
 		} else {
-			errc <- hs.ListenAndServe()
+			errc <- hs.Serve(ln)
 		}
 	}()
 	select {
@@ -152,6 +174,7 @@ func serveReal(c config) int {
 		return 1
 	case <-ctx.Done():
 	}
+	stop() // restore default signal handling: a second Ctrl-C ends the process at once
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := hs.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -123,7 +123,7 @@ func (e *testEnv) enroll(code string) *passkey {
 	e.t.Helper()
 	w := e.do(http.MethodPost, "/webauthn/register/begin", `{"code":"`+code+`"}`)
 	require.Equal(e.t, http.StatusOK, w.Code, w.Body.String())
-	cer := cookieNamed(w, ceremonyCookie)
+	cer := cookieNamed(w, e.srv.ceremonyCookie)
 	require.NotNil(e.t, cer)
 	opts, err := virtualwebauthn.ParseAttestationOptions(w.Body.String())
 	require.NoError(e.t, err)
@@ -143,7 +143,7 @@ func (e *testEnv) login(pk *passkey) *httptest.ResponseRecorder {
 	e.t.Helper()
 	w := e.do(http.MethodPost, "/webauthn/login/begin", "")
 	require.Equal(e.t, http.StatusOK, w.Code, w.Body.String())
-	cer := cookieNamed(w, ceremonyCookie)
+	cer := cookieNamed(w, e.srv.ceremonyCookie)
 	require.NotNil(e.t, cer)
 	opts, err := virtualwebauthn.ParseAssertionOptions(w.Body.String())
 	require.NoError(e.t, err)
@@ -152,7 +152,7 @@ func (e *testEnv) login(pk *passkey) *httptest.ResponseRecorder {
 	return e.do(http.MethodPost, "/webauthn/login/finish", asr, cer)
 }
 
-// signIn enrolls a new web user called name and returns its session cookie. Task 4's page tests use it.
+// signIn enrolls a new web user called name and returns its session cookie. The page tests use it.
 func (e *testEnv) signIn(name string) *http.Cookie {
 	e.t.Helper()
 	_, code := e.addUser(name)
@@ -229,7 +229,7 @@ func TestFailedRegistrationDoesNotBurnTheCode(t *testing.T) {
 
 	w := e.do(http.MethodPost, "/webauthn/register/begin", `{"code":"`+code+`"}`)
 	require.Equal(t, http.StatusOK, w.Code)
-	cer := cookieNamed(w, ceremonyCookie)
+	cer := cookieNamed(w, e.srv.ceremonyCookie)
 	opts, err := virtualwebauthn.ParseAttestationOptions(w.Body.String())
 	require.NoError(t, err)
 	// An attestation for the wrong origin fails verification.
@@ -254,14 +254,14 @@ func TestRegisterFinishWithoutBeginIsRefused(t *testing.T) {
 	opts, err := virtualwebauthn.ParseAttestationOptions(w.Body.String())
 	require.NoError(t, err)
 	att := virtualwebauthn.CreateAttestationResponse(e.rp, virtualwebauthn.NewAuthenticator(), virtualwebauthn.NewCredential(virtualwebauthn.KeyTypeEC2), *opts)
-	for _, cer := range []*http.Cookie{nil, {Name: ceremonyCookie, Value: "forged"}} {
+	for _, cer := range []*http.Cookie{nil, {Name: e.srv.ceremonyCookie, Value: "forged"}} {
 		w = e.do(http.MethodPost, "/webauthn/register/finish", att, cer)
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.JSONEq(t, `{"error":"enrollment failed"}`, w.Body.String())
 	}
 	// Garbage with a real ceremony.
 	w = e.do(http.MethodPost, "/webauthn/register/begin", `{"code":"`+code+`"}`)
-	cer := cookieNamed(w, ceremonyCookie)
+	cer := cookieNamed(w, e.srv.ceremonyCookie)
 	w = e.do(http.MethodPost, "/webauthn/register/finish", `{"id":"x"}`, cer)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.JSONEq(t, `{"error":"enrollment failed"}`, w.Body.String())
@@ -306,7 +306,7 @@ func TestCeremonyIsSingleUse(t *testing.T) {
 	_, code := e.addUser("ayse")
 	pk := e.enroll(code)
 	w := e.do(http.MethodPost, "/webauthn/login/begin", "")
-	cer := cookieNamed(w, ceremonyCookie)
+	cer := cookieNamed(w, e.srv.ceremonyCookie)
 	opts, err := virtualwebauthn.ParseAssertionOptions(w.Body.String())
 	require.NoError(t, err)
 	pk.cred.Counter++
@@ -321,7 +321,7 @@ func TestCeremonyExpiresAfterFiveMinutes(t *testing.T) {
 	_, code := e.addUser("ayse")
 	pk := e.enroll(code)
 	w := e.do(http.MethodPost, "/webauthn/login/begin", "")
-	cer := cookieNamed(w, ceremonyCookie)
+	cer := cookieNamed(w, e.srv.ceremonyCookie)
 	opts, err := virtualwebauthn.ParseAssertionOptions(w.Body.String())
 	require.NoError(t, err)
 	e.clk.Advance(5*time.Minute + time.Second)
@@ -403,7 +403,7 @@ func TestSessionCookieAttributes(t *testing.T) {
 
 	// The ceremony cookie is HttpOnly, Strict, Secure over https.
 	w = e.do(http.MethodPost, "/webauthn/login/begin", "")
-	cer := cookieNamed(w, ceremonyCookie)
+	cer := cookieNamed(w, e.srv.ceremonyCookie)
 	require.NotNil(t, cer)
 	assert.True(t, cer.HttpOnly)
 	assert.True(t, cer.Secure)

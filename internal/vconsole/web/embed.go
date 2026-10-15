@@ -28,7 +28,7 @@ func staticFS() (fs.FS, error) {
 
 // parsePages parses every template except layout.html as a page set together with layout.html,
 // keyed by file name without extension ("login", "enroll", ...). Each page defines "title" and
-// "content"; pages added later (Task 4) are picked up without changes here.
+// "content"; a new page file is picked up without changes here.
 func parsePages() (map[string]*template.Template, error) {
 	names, err := fs.Glob(templateFiles, "templates/*.html")
 	if err != nil {

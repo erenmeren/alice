@@ -3,6 +3,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -216,4 +217,54 @@ func TestUserHandleIsEightBigEndianBytes(t *testing.T) {
 	assert.Equal(t, int64(258), id)
 	_, ok = userIDFromHandle([]byte{1, 2})
 	assert.False(t, ok)
+}
+
+func TestCeremonyCookieUsesHostPrefixOnHTTPS(t *testing.T) {
+	for _, c := range []struct {
+		rpid, origin, name string
+		secure             bool
+	}{
+		{"licenses.example.test", "https://licenses.example.test", "__Host-vceremony", true},
+		{"localhost", "http://localhost:8443", "vceremony", false},
+	} {
+		s, err := New(Config{RPID: c.rpid, Origin: c.origin})
+		require.NoError(t, err)
+		assert.Equal(t, c.name, s.ceremonyCookie, c.origin)
+		r := httptest.NewRequest(http.MethodPost, "/webauthn/login/begin", nil)
+		w := serve(s.Handler(), r)
+		require.Equal(t, http.StatusOK, w.Code, c.origin)
+		var got *http.Cookie
+		for _, ck := range w.Result().Cookies() {
+			if ck.Name == c.name {
+				got = ck
+			}
+		}
+		require.NotNil(t, got, c.origin)
+		assert.Equal(t, "/", got.Path, c.origin)
+		assert.Equal(t, c.secure, got.Secure, c.origin)
+		assert.True(t, got.HttpOnly, c.origin)
+		assert.Empty(t, got.Domain, c.origin)
+	}
+}
+
+func TestIPv6ClientsAreLimitedPerSlash64(t *testing.T) {
+	s, err := New(Config{RPID: "localhost", Origin: "http://localhost:8443", limitN: 2, limitWindow: time.Minute})
+	require.NoError(t, err)
+	h := s.Handler()
+	post := func(addr string) int {
+		r := httptest.NewRequest(http.MethodPost, "/webauthn/login/begin", nil)
+		r.RemoteAddr = addr
+		return serve(h, r).Code
+	}
+	require.Equal(t, http.StatusOK, post("[2001:db8:1:2::1]:443"))
+	require.Equal(t, http.StatusOK, post("[2001:db8:1:2:ffff:ffff:ffff:ffff]:443"))
+	assert.Equal(t, http.StatusTooManyRequests, post("[2001:db8:1:2:abcd::9]:443"), "same /64 shares one bucket")
+	assert.Equal(t, http.StatusOK, post("[2001:db8:1:3::1]:443"), "another /64 has its own bucket")
+	// IPv4-mapped addresses are keyed as IPv4, one address each.
+	require.Equal(t, http.StatusOK, post("[::ffff:192.0.2.7]:1"))
+	require.Equal(t, http.StatusOK, post("192.0.2.7:2"))
+	assert.Equal(t, http.StatusTooManyRequests, post("192.0.2.7:3"))
+	assert.Equal(t, http.StatusOK, post("192.0.2.8:3"))
+
+	assert.Equal(t, netip.MustParseAddr("2001:db8:1:2::"), clientAddr(&http.Request{RemoteAddr: "[2001:db8:1:2::5%eth0]:80"}))
 }
