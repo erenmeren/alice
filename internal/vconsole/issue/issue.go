@@ -33,6 +33,9 @@ var (
 	ErrDuplicateLicenseID = errors.New("issue: a license with this ID was already issued")
 	// ErrNotConfirmed is what a Confirm hook returns when the operator answers no.
 	ErrNotConfirmed = errors.New("issue: the signer did not confirm the license; nothing was signed")
+	// ErrOutcomeUnknown: every write succeeded but the commit did not report back (a lost
+	// connection, a cancel during COMMIT). The license may or may not be recorded.
+	ErrOutcomeUnknown = errors.New("issue: the database did not confirm the commit; the license may or may not be recorded")
 )
 
 // Params selects the request and what the signer saw.
@@ -61,6 +64,7 @@ type Result struct {
 // Issue signs the request with s. pool must act as a signer login.
 func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now time.Time) (Result, error) {
 	var res Result
+	written := false
 	err := db.InTx(ctx, pool, func(tx pgx.Tx) error {
 		// Lock the row so two signers cannot both issue from one request.
 		var status string
@@ -130,8 +134,12 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 		if _, err := tx.Exec(ctx, `UPDATE license_requests SET status = 'signed' WHERE id = $1`, req.ID); err != nil {
 			return fmt.Errorf("issue: close request: %w", err)
 		}
+		written = true
 		return nil
 	})
+	if err != nil && written {
+		return Result{}, fmt.Errorf("%w: %w", ErrOutcomeUnknown, err)
+	}
 	if err != nil {
 		return Result{}, err
 	}

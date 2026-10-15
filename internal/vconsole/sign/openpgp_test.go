@@ -522,3 +522,43 @@ func TestNewRefusesIncompleteOptions(t *testing.T) {
 		assert.Zero(t, f.sim.Count(0xA4), "%s: the card is not even selected", name)
 	}
 }
+
+func TestSerialComesFromTheCardChecks(t *testing.T) {
+	f := newFixture(t, nil)
+	assert.Equal(t, "12345678", f.signer(t).Serial())
+}
+
+func TestSignedSaysWhetherTheCardMadeASignature(t *testing.T) {
+	f := newFixture(t, nil)
+	s := f.signer(t)
+	assert.False(t, s.Signed())
+	_, err := s.Issue(context.Background(), payload())
+	require.NoError(t, err)
+	assert.True(t, s.Signed())
+
+	// A wrong PIN: the card signed nothing.
+	f = newFixture(t, nil)
+	f.opts = options(pub(f.key), f.rec, f.pins, "999999")
+	s = f.signer(t)
+	_, err = s.Issue(context.Background(), payload())
+	require.Error(t, err)
+	assert.False(t, s.Signed())
+
+	// A garbage signature gives no file, but the card did sign (its counter went up).
+	f = newFixture(t, nil)
+	f.card.replace = func([]byte) []byte { return make([]byte, ed25519.SignatureSize) }
+	s = f.signer(t)
+	_, err = s.Issue(context.Background(), payload())
+	require.ErrorIs(t, err, sign.ErrBadCardSignature)
+	assert.True(t, s.Signed())
+
+	// A cancel during the touch wait: nothing signed.
+	f = newFixture(t, nil)
+	f.card.block = true
+	ctx, cancel := context.WithCancel(context.Background())
+	f.opts.NotifyTouch = func() { go func() { time.Sleep(20 * time.Millisecond); cancel() }() }
+	s = f.signer(t)
+	_, err = s.Issue(ctx, payload())
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, s.Signed())
+}

@@ -94,8 +94,9 @@ Commands:
         the license until a release with the key ships).
   signer info [--reader NAME] [--key-id ID [--pub FILE | --keyset FILE]] [--out FILE]
         Show the YubiKey: serial, algorithm, PIN tries and policy, touch policy, signature
-        counter, public key and fingerprint; with --key-id whether it matches. --out writes the
-        card's public key as a public key file (needs --key-id). No PIN.
+        counter, public key and fingerprint; with --key-id whether it matches (exit 1 when the
+        card does not hold that key). --out writes the card's public key as a public key file
+        (needs --key-id). No PIN.
   signer test --key-id ID (--pub FILE | --keyset FILE) [--reader NAME] [--max-size]
         Sign the fixed text "alice-vendor-console smoke test: not a license" (with --max-size a
         600-byte text starting with it) after the PIN and a touch, and verify the signature.

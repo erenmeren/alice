@@ -103,12 +103,13 @@ type journey struct {
 	getenv  func(string) string
 	keyPath string
 	dir     string
+	d       *vpgtest.DB
 }
 
 func newJourney(t *testing.T) *journey {
 	t.Helper()
 	d := vpgtest.New(t)
-	j := &journey{t: t, dir: t.TempDir(), getenv: func(k string) string {
+	j := &journey{t: t, d: d, dir: t.TempDir(), getenv: func(k string) string {
 		if k == "VENDOR_DATABASE_URL" {
 			return d.OwnerURL
 		}

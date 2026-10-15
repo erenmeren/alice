@@ -21,6 +21,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/license/issuer"
 	"alice/internal/platform/clock"
+	"alice/internal/vconsole/sign"
 	"alice/internal/vconsole/sign/openpgp"
 	"alice/internal/vconsole/sign/openpgp/openpgptest"
 )
@@ -51,9 +52,10 @@ func newTestCard(t *testing.T, change func(*openpgptest.Options)) *testCard {
 	}
 	c := &testCard{sim: openpgptest.New(o), priv: priv, pub: pub, dir: t.TempDir()}
 	c.pubPath = writeCardPub(t, c.dir, "card.pub", testKeyID, pub)
-	old := openCard
+	old, oldBuilt := openCard, pcscBuilt
 	openCard = func(string) (openpgp.Card, error) { c.opened++; return c.sim, nil }
-	t.Cleanup(func() { openCard = old })
+	pcscBuilt = true
+	t.Cleanup(func() { openCard, pcscBuilt = old, oldBuilt })
 	return c
 }
 
@@ -304,7 +306,7 @@ func TestSignerInfoPrintsFingerprintAndMatch(t *testing.T) {
 	other, _, _ := ed25519.GenerateKey(rand.Reader)
 	otherPub := writeCardPub(t, c.dir, "other.pub", testKeyID, other)
 	s = runSession(nil, nil, goodPIN, "signer", "info", "--key-id", testKeyID, "--pub", otherPub)
-	require.Equal(t, 0, s.code, s.errOut)
+	assert.Equal(t, 1, s.code, "a card without the named key exits 1 (scriptable)")
 	assert.Contains(t, s.out, "matches key set      NO")
 
 	setProductKeys(t, license.PublicKey{ID: testKeyID, Key: other, Status: license.KeyActive})
@@ -347,6 +349,17 @@ func TestSignerInfoWritesAPublicKeyFileLicensectlReads(t *testing.T) {
 
 	s = runSession(nil, nil, goodPIN, "signer", "info", "--key-id", testKeyID, "--out", out)
 	assert.Equal(t, 1, s.code, "an existing file is never overwritten")
+	assert.Contains(t, s.errOut, out+" already exists: refusing to overwrite")
+
+	other, _, _ := ed25519.GenerateKey(rand.Reader)
+	for _, k := range []license.PublicKey{{ID: testKeyID, Key: other, Status: license.KeyActive}, {ID: testKeyID, Key: c.pub, Status: license.KeyRevoked}} {
+		setProductKeys(t, k)
+		p := filepath.Join(c.dir, "refused.pub")
+		s = runSession(nil, nil, goodPIN, "signer", "info", "--key-id", testKeyID, "--out", p)
+		assert.Equal(t, 1, s.code)
+		assert.Contains(t, s.errOut, "not writing the public key file")
+		assert.NoFileExists(t, p)
+	}
 
 	s = runSession(nil, nil, goodPIN, "signer", "info", "--out", filepath.Join(c.dir, "x.pub"))
 	assert.Equal(t, 2, s.code, "--out needs --key-id")
@@ -447,9 +460,10 @@ func TestPINNeverAppearsInOutput(t *testing.T) {
 }
 
 func TestCardRemovedOrMissingIsAPlainError(t *testing.T) {
-	old := openCard
+	old, oldBuilt := openCard, pcscBuilt
 	openCard = func(string) (openpgp.Card, error) { return nil, errors.New("pcsc: no card in the reader") }
-	t.Cleanup(func() { openCard = old })
+	pcscBuilt = true
+	t.Cleanup(func() { openCard, pcscBuilt = old, oldBuilt })
 	s := runSession(nil, nil, goodPIN, "signer", "info")
 	assert.Equal(t, 1, s.code)
 	assert.Contains(t, s.errOut, "no card in the reader")
@@ -477,4 +491,67 @@ func TestNoPCSCBuildMessageIsAUsageError(t *testing.T) {
 		assert.NotContains(t, s.errOut, "database", args)
 		assert.NoFileExists(t, filepath.Join(c.dir, "lic.json"))
 	}
+}
+
+func TestWaitHiddenEndsOnReadInterruptOrContext(t *testing.T) {
+	read := make(chan hiddenAnswer, 1)
+	read <- hiddenAnswer{p: []byte(goodPIN)}
+	a, how := waitHidden(context.Background(), read, make(chan os.Signal))
+	assert.Equal(t, endRead, how)
+	assert.Equal(t, goodPIN, string(a.p))
+
+	// Ctrl-C wins over a read still pending; the late answer is zeroed.
+	read = make(chan hiddenAnswer, 1)
+	sig := make(chan os.Signal, 1)
+	sig <- os.Interrupt
+	_, how = waitHidden(context.Background(), read, sig)
+	assert.Equal(t, endInterrupt, how)
+	late := []byte(goodPIN)
+	read <- hiddenAnswer{p: late}
+	assert.Eventually(t, func() bool { return bytes.Equal(late, make([]byte, len(goodPIN))) }, time.Second, time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, how = waitHidden(ctx, make(chan hiddenAnswer, 1), make(chan os.Signal))
+	assert.Equal(t, endContext, how)
+
+	assert.ErrorIs(t, errInterrupted, context.Canceled, "Ctrl-C at the PIN prompt is a cancel: cleanup runs, exit 1")
+}
+
+func TestTheInteractiveStepEndsWhenTheCardIsDone(t *testing.T) {
+	old := interactiveLimit
+	interactiveLimit = 50 * time.Millisecond
+	t.Cleanup(func() { interactiveLimit = old })
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st := &interactiveStep{}
+	st.start(parent)
+	st.end() // the card answered
+	time.Sleep(100 * time.Millisecond)
+	assert.False(t, st.expired(), "the limit stops counting when the card is done")
+	assert.NoError(t, parent.Err(), "the transaction's context lives on for the writes")
+
+	st = &interactiveStep{}
+	st.start(parent)
+	time.Sleep(100 * time.Millisecond)
+	assert.True(t, st.expired())
+	st.end()
+	assert.True(t, st.expired())
+	assert.NoError(t, parent.Err())
+}
+
+func TestStepSignerEndsTheStepWhenTheCardReturns(t *testing.T) {
+	c := newTestCard(t, nil)
+	s, err := sign.NewOpenPGPSigner(context.Background(), c.sim, sign.OpenPGPOptions{KeyID: testKeyID, Expected: c.pub,
+		AskPIN: func(context.Context, int) ([]byte, error) { return []byte(goodPIN), nil }})
+	require.NoError(t, err)
+	defer func() { _ = s.Close() }()
+	p, err := issuer.BuildPayload(issuer.Request{Installation: license.NewInstallationID(), Customer: "Acme Ltd", Targets: 3}, time.Now())
+	require.NoError(t, err)
+	st := &interactiveStep{}
+	st.start(context.Background())
+	_, err = stepSigner{OpenPGPSigner: s, step: st}.Issue(context.Background(), p)
+	require.NoError(t, err)
+	assert.True(t, st.ended, "the interactive limit stops when the card is done, before the database writes")
+	assert.True(t, s.Signed())
 }

@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"alice/internal/license"
@@ -156,15 +155,6 @@ func (c *cli) openTheCard(reader string) (openpgp.Card, int, bool) {
 	return card, 0, true
 }
 
-// cardTouchRequired mirrors the signer's rule: these touch policies make the card wait for a touch.
-func cardTouchRequired(uif string) bool {
-	switch uif {
-	case "on", "fixed", "cached", "cached-fixed":
-		return true
-	}
-	return false
-}
-
 // openPGPIssue is `issue --signer openpgp`.
 type openPGPIssue struct {
 	params                                  issue.Params
@@ -174,6 +164,9 @@ type openPGPIssue struct {
 }
 
 func (c *cli) issueOpenPGP(o openPGPIssue) int {
+	if !pcscBuilt {
+		return c.usageErr("%v", errNoPCSC)
+	}
 	key, err := loadCardKey(o.keyID, o.pub, o.keyset)
 	if err != nil {
 		return c.usageErr("%v", err)
@@ -182,7 +175,7 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 		return code
 	}
 	// Ctrl-C cancels: the signer closes the card (ending a touch wait) and the transaction rolls back.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := interruptContext(context.Background())
 	defer stop()
 	card, code, ok := c.openTheCard(o.reader)
 	if !ok {
@@ -194,20 +187,18 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 		return c.fail(err)
 	}
 	defer out.discard()
-	serial, err := cardSerial(ctx, card)
-	if err != nil {
-		_ = card.Close()
-		return c.signErr(err)
-	}
-	s, err := sign.NewOpenPGPSigner(ctx, card, sign.OpenPGPOptions{
+	var s *sign.OpenPGPSigner
+	cctx, ccancel := context.WithTimeout(ctx, cardTimeout)
+	s, err = sign.NewOpenPGPSigner(cctx, card, sign.OpenPGPOptions{
 		KeyID: key.ID, Expected: key.Key,
 		AskPIN: func(ctx context.Context, tries int) ([]byte, error) {
-			return c.con.secret(ctx, fmt.Sprintf("PIN of the YubiKey %s (%d tries left): ", serial, tries))
+			return c.con.secret(ctx, fmt.Sprintf("PIN of the YubiKey %s (%d tries left): ", s.Serial(), tries))
 		},
 		NotifyTouch:  func() { _, _ = fmt.Fprintln(c.err, "Touch the YubiKey now...") },
 		LastPINTry:   o.lastTry,
 		AllowNoTouch: o.allowNoTouch,
 	})
+	ccancel()
 	if err != nil { // the card checks before any PIN prompt; the card is closed
 		return c.signErr(err)
 	}
@@ -218,25 +209,25 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 	}
 	defer pool.Close()
 
-	ictx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	var timedOut atomic.Bool
-	var limit *time.Timer
-	defer func() {
-		if limit != nil {
-			limit.Stop()
-		}
-	}()
+	// The transaction gets the interactive limit plus generous time for its database work; the
+	// interactive step (question, PIN, touch) has its own limit, which ends when the card is done
+	// so that it never cancels the writes that record a signature the card already made.
+	tctx, tcancel := context.WithTimeout(ctx, interactiveLimit+dbAllowance)
+	defer tcancel()
+	step := &interactiveStep{}
+	defer step.end()
+	licenseID := o.params.LicenseID
 	p := o.params
 	p.Confirm = func(pl license.Payload, sum string) error {
-		// From here the request row is locked: the whole interactive step gets one limit.
-		limit = time.AfterFunc(interactiveLimit, func() { timedOut.Store(true); cancel() })
-		writeConfirmation(c.err, pl, sum, key.ID, serial)
+		// From here the request row is locked.
+		step.start(tctx)
+		licenseID = pl.LicenseID
+		writeConfirmation(c.err, pl, sum, key.ID, s.Serial())
 		if o.yes {
 			return nil
 		}
 		_, _ = fmt.Fprint(c.err, "Sign this license? [y/N] ")
-		ans, err := readAnswer(ictx, c.con.in)
+		ans, err := readAnswer(step.ctx, c.con.in)
 		if err != nil {
 			return err
 		}
@@ -245,31 +236,77 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 		}
 		return issue.ErrNotConfirmed
 	}
-	res, err := issue.Issue(ictx, pool, s, p, c.clk.Now())
-	if err != nil {
-		if timedOut.Load() {
-			return c.fail(fmt.Errorf("the license was not confirmed and signed within %s; nothing was signed or recorded and the card "+
-				"connection is closed; run the command again", interactiveLimit))
-		}
-		return c.signErr(err)
+	res, err := issue.Issue(tctx, pool, stepSigner{OpenPGPSigner: s, step: step}, p, c.clk.Now())
+	switch {
+	case err == nil:
+		return c.deliver(out, res)
+	case errors.Is(err, issue.ErrOutcomeUnknown):
+		return c.fail(fmt.Errorf("the card signed and the license was written, but the database did not confirm the commit (%w): "+
+			"the license may or may not be recorded. Before retrying, run: vendor-console request show %d; if it shows as signed, "+
+			"get the file with: vendor-console license export --id %s --out FILE", err, p.RequestID, licenseID))
+	case s.Signed():
+		return c.fail(fmt.Errorf("the card made a signature (its signature counter went up) but no license was recorded by this command (%w). "+
+			"Check: vendor-console request show %d; if the request shows as signed, use: vendor-console license export --id %s --out FILE. "+
+			"The card's signature counter and the number of licenses will differ by one", err, p.RequestID, licenseID))
+	case step.expired():
+		return c.fail(fmt.Errorf("the license was not confirmed and signed within %s; nothing was signed or recorded and the card "+
+			"connection is closed; run the command again", interactiveLimit))
 	}
-	return c.deliver(out, res)
+	return c.signErr(err)
 }
 
-// cardSerial reads the card's serial for the display and the PIN prompt. The applet is not
-// closed: the signer opens the application again on the same card and owns it.
-func cardSerial(ctx context.Context, card openpgp.Card) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, cardTimeout)
-	defer cancel()
-	a, err := openpgp.Open(ctx, card)
-	if err != nil {
-		return "", err
+// dbAllowance is the time the issue transaction may take beyond the interactive step.
+const dbAllowance = time.Minute
+
+// interruptContext is canceled by Ctrl-C; tests replace it to cancel at a chosen moment.
+var interruptContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(ctx, os.Interrupt)
+}
+
+// interactiveStep is the limit of the interactive part of an issue: from the confirmation
+// display to the card's answer. It starts in Confirm and ends when the signer returns.
+type interactiveStep struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	ended    bool
+	deadline bool
+}
+
+func (st *interactiveStep) start(parent context.Context) {
+	st.ctx, st.cancel = context.WithTimeout(parent, interactiveLimit)
+}
+
+func (st *interactiveStep) end() {
+	if st.cancel == nil || st.ended {
+		return
 	}
-	info, err := a.Info(ctx)
-	if err != nil {
-		return "", err
+	st.deadline = errors.Is(st.ctx.Err(), context.DeadlineExceeded)
+	st.ended = true
+	st.cancel()
+}
+
+// expired reports whether the interactive limit ran out.
+func (st *interactiveStep) expired() bool {
+	if st.ended {
+		return st.deadline
 	}
-	return info.Serial, nil
+	return st.ctx != nil && errors.Is(st.ctx.Err(), context.DeadlineExceeded)
+}
+
+// stepSigner runs the card signer under the interactive step's limit and ends the step when the
+// card is done; the transaction goes on under its own context.
+type stepSigner struct {
+	*sign.OpenPGPSigner
+	step *interactiveStep
+}
+
+func (b stepSigner) Issue(ctx context.Context, p license.Payload) ([]byte, error) {
+	if b.step.ctx != nil {
+		ctx = b.step.ctx
+	}
+	raw, err := b.OpenPGPSigner.Issue(ctx, p)
+	b.step.end()
+	return raw, err
 }
 
 // signErr words the failures of a card signing.
@@ -388,6 +425,8 @@ func (c *cli) signerInfo(args []string) int {
 		return c.usageErr("signer info takes --pub or --keyset, not both")
 	case (*pubPath != "" || *keysetPath != "" || *outPath != "") && *keyID == "":
 		return c.usageErr("--pub, --keyset and --out need --key-id")
+	case !pcscBuilt:
+		return c.usageErr("%v", errNoPCSC)
 	}
 	var want *license.PublicKey
 	if *pubPath != "" || *keysetPath != "" {
@@ -431,7 +470,7 @@ func (c *cli) signerInfo(args []string) int {
 		policy = "NOT forced: signing will be refused (turn on forcesig with gpg --card-edit, admin)"
 	}
 	touch := info.SigUIF
-	if !cardTouchRequired(info.SigUIF) {
+	if !info.TouchRequired() {
 		touch += " (signing will be refused unless --allow-no-touch)"
 	}
 	maxLen := "unknown"
@@ -456,8 +495,10 @@ func (c *cli) signerInfo(args []string) int {
 		}
 		_, _ = fmt.Fprintf(w, "matches key set      %s\n", answer)
 	}
+	state := ""
 	if *keyID != "" && pub != nil {
-		_, _ = fmt.Fprintf(w, "in this build's key set: %s\n", productKeyState(*keyID, pub))
+		state = productKeyState(*keyID, pub)
+		_, _ = fmt.Fprintf(w, "in this build's key set: %s\n", state)
 	}
 	if *outPath != "" {
 		switch {
@@ -465,15 +506,25 @@ func (c *cli) signerInfo(args []string) int {
 			return c.fail(errors.New("the card has no signature key to write"))
 		case !matches:
 			return c.fail(errors.New("not writing the public key file: the card's key does not match the key set"))
+		case state == keySetDifferent:
+			return c.fail(fmt.Errorf("not writing the public key file: this build's key set lists key ID %s with a different key", *keyID))
+		case state == keySetRevoked:
+			return c.fail(fmt.Errorf("not writing the public key file: key ID %s is revoked in this build's key set", *keyID))
 		}
 		raw, err := encodePublicKey(*keyID, pub)
 		if err != nil {
 			return c.usageErr("%v", err)
 		}
 		if err := issuer.WriteNew(*outPath, raw, 0o644); err != nil {
+			if errors.Is(err, issuer.ErrKeyExists) {
+				return c.fail(fmt.Errorf("%s already exists: refusing to overwrite", *outPath))
+			}
 			return c.fail(fmt.Errorf("write %s: %w", *outPath, err))
 		}
 		_, _ = fmt.Fprintf(w, "wrote %s\n", *outPath)
+	}
+	if !matches {
+		return 1 // scriptable: the card does not hold the named key
 	}
 	return 0
 }
@@ -498,6 +549,8 @@ func (c *cli) signerTest(args []string) int {
 		return c.usageErr("signer test needs --key-id")
 	case (*pubPath == "") == (*keysetPath == ""):
 		return c.usageErr("signer test needs --pub FILE or --keyset FILE (one of them) for the key ID")
+	case !pcscBuilt:
+		return c.usageErr("%v", errNoPCSC)
 	}
 	key, err := loadCardKey(*keyID, *pubPath, *keysetPath)
 	if err != nil {
@@ -515,7 +568,7 @@ func (c *cli) signerTest(args []string) int {
 	_, _ = fmt.Fprintln(c.err, "The license key signs nothing but licenses; this text is the one exception. It is not a license "+
 		"and the product cannot accept it (its signature can never verify as a license).")
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := interruptContext(context.Background())
 	defer stop()
 	card, code, ok := c.openTheCard(*reader)
 	if !ok {
@@ -561,7 +614,7 @@ func smokeTest(ctx context.Context, c *cli, card openpgp.Card, key license.Publi
 		return openpgp.ErrPINBlocked
 	case info.PW1Retries <= 1 && !lastTry:
 		return sign.ErrLastPINTry
-	case !cardTouchRequired(info.SigUIF) && !allowNoTouch:
+	case !info.TouchRequired() && !allowNoTouch:
 		return fmt.Errorf("%w (touch policy: %s)", sign.ErrNoTouch, info.SigUIF)
 	case info.CommandChaining == "no" && len(msg) > 255:
 		return &openpgp.MessageTooLongError{Length: len(msg), Limit: 255}
@@ -577,7 +630,7 @@ func smokeTest(ctx context.Context, c *cli, card openpgp.Card, key license.Publi
 	if err := a.VerifyPIN(ctx, pin); err != nil { // VerifyPIN zeroes pin
 		return err
 	}
-	if cardTouchRequired(info.SigUIF) {
+	if info.TouchRequired() {
 		_, _ = fmt.Fprintln(c.err, "Touch the YubiKey now...")
 	}
 	sig, err := a.Sign(ctx, msg)

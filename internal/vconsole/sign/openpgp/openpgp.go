@@ -425,6 +425,10 @@ func (a *Applet) sigUIF(ctx context.Context, d appData) (string, error) {
 	return fmt.Sprintf("unknown:%02x", v[0]), nil
 }
 
+// TouchRequired reports whether the signature key's touch policy makes the card wait for a touch
+// before it signs.
+func (i Info) TouchRequired() bool { return touchRequired(i.SigUIF) }
+
 func touchRequired(uif string) bool {
 	switch uif {
 	case "on", "fixed", "cached", "cached-fixed":

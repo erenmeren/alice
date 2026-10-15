@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"alice/internal/license"
@@ -55,6 +56,9 @@ type OpenPGPSigner struct {
 	applet  *openpgp.Applet
 	timeout time.Duration
 
+	serial string      // card serial from the checks in NewOpenPGPSigner
+	signed atomic.Bool // the card has returned a signature in some Issue
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -81,10 +85,12 @@ func NewOpenPGPSigner(ctx context.Context, card openpgp.Card, o OpenPGPOptions) 
 		return nil, err
 	}
 	s := &OpenPGPSigner{o: o, applet: applet, timeout: openPGPTimeout}
-	if _, err := s.preflight(ctx); err != nil {
+	info, err := s.preflight(ctx)
+	if err != nil {
 		_ = s.Close()
 		return nil, err
 	}
+	s.serial = info.Serial
 	return s, nil
 }
 
@@ -108,7 +114,7 @@ func (s *OpenPGPSigner) preflight(ctx context.Context) (openpgp.Info, error) {
 		return openpgp.Info{}, openpgp.ErrPINBlocked
 	case info.PW1Retries <= 1 && !s.o.LastPINTry:
 		return openpgp.Info{}, ErrLastPINTry
-	case !touchRequired(info.SigUIF) && !s.o.AllowNoTouch:
+	case !info.TouchRequired() && !s.o.AllowNoTouch:
 		return openpgp.Info{}, fmt.Errorf("%w (touch policy: %s)", ErrNoTouch, info.SigUIF)
 	}
 	if err := s.applet.RequireForcedPIN(ctx); err != nil {
@@ -117,16 +123,17 @@ func (s *OpenPGPSigner) preflight(ctx context.Context) (openpgp.Info, error) {
 	return info, nil
 }
 
-func touchRequired(uif string) bool {
-	switch uif {
-	case "on", "fixed", "cached", "cached-fixed":
-		return true
-	}
-	return false
-}
-
 // KeyID returns the key ID written into every license.
 func (s *OpenPGPSigner) KeyID() string { return s.o.KeyID }
+
+// Serial returns the card's serial number (8 hex digits), for the confirmation display and the
+// PIN prompt.
+func (s *OpenPGPSigner) Serial() string { return s.serial }
+
+// Signed reports whether the card has returned a signature in an Issue call, even one that then
+// failed (a bad signature, a cancel, the time limit). The card's signature counter went up then,
+// so a caller that records nothing must say so.
+func (s *OpenPGPSigner) Signed() bool { return s.signed.Load() }
 
 // Public returns the verification key (the one checked against the card).
 func (s *OpenPGPSigner) Public() ed25519.PublicKey { return s.o.Expected }
@@ -233,13 +240,14 @@ func (s *OpenPGPSigner) issue(ctx context.Context, p license.Payload) ([]byte, e
 	if err := s.applet.VerifyPIN(ctx, pin); err != nil { // VerifyPIN zeroes pin
 		return nil, err
 	}
-	if touchRequired(info.SigUIF) && s.o.NotifyTouch != nil {
+	if info.TouchRequired() && s.o.NotifyTouch != nil {
 		s.o.NotifyTouch()
 	}
 	sig, err := s.applet.Sign(ctx, signed)
 	if err != nil {
 		return nil, err
 	}
+	s.signed.Store(true)
 	// The card is not trusted to have signed what it was sent with the key it showed: a
 	// truncating or substituted signature ends here.
 	if !ed25519.Verify(s.o.Expected, signed, sig) {

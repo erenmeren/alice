@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -18,6 +19,7 @@ import (
 
 	"alice/internal/license"
 	"alice/internal/platform/clock"
+	"alice/internal/vconsole/sign/openpgp"
 	"alice/internal/vconsole/sign/openpgp/openpgptest"
 )
 
@@ -175,7 +177,8 @@ func TestTheInteractiveStepHasOneTimeLimit(t *testing.T) {
 		})
 		s := cj.issue(strings.NewReader("y\n"), goodPIN)
 		assert.Equal(t, 1, s.code)
-		assert.Contains(t, s.errOut, "not confirmed and signed within")
+		// The simulated card signs once the late touch comes, after the limit: it made a signature.
+		assert.Contains(t, s.errOut, "the card made a signature (its signature counter went up) but no license was recorded")
 		assert.Contains(t, s.errOut, "Touch the YubiKey now")
 		assert.True(t, cj.card.sim.Closed())
 		assert.Equal(t, "open", cj.requestStatus(t))
@@ -220,4 +223,91 @@ func TestIssueWithTheSimulatedCardRecordsALicenseThatVerifiesAgainstTheKeySet(t 
 	out, e, code = cj.do(clock.Real{}, "audit-verify")
 	require.Equal(t, 0, code, e)
 	assert.Contains(t, out, "OK")
+}
+
+// hookedCard calls after with every command and the card's answer.
+type hookedCard struct {
+	*openpgptest.Sim
+	after func(apdu, resp []byte)
+}
+
+func (h hookedCard) Transmit(ctx context.Context, apdu []byte) ([]byte, error) {
+	resp, err := h.Sim.Transmit(ctx, apdu)
+	if err == nil && h.after != nil {
+		h.after(apdu, resp)
+	}
+	return resp, err
+}
+
+// cancelWhen makes the command's interrupt context cancel right after the card answers a command
+// for which when is true with 9000 (as if the operator pressed Ctrl-C at that moment).
+func (cj *cardJourney) cancelWhen(t *testing.T, when func(apdu []byte) bool) {
+	t.Helper()
+	var cancel context.CancelFunc
+	oldCtx, oldOpen := interruptContext, openCard
+	interruptContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel = context.WithCancel(ctx)
+		return ctx, cancel
+	}
+	openCard = func(string) (openpgp.Card, error) {
+		return hookedCard{Sim: cj.card.sim, after: func(apdu, resp []byte) {
+			if when(apdu) && len(resp) >= 2 && resp[len(resp)-2] == 0x90 && resp[len(resp)-1] == 0x00 {
+				cancel()
+			}
+		}}, nil
+	}
+	t.Cleanup(func() { interruptContext, openCard = oldCtx, oldOpen })
+}
+
+func (cj *cardJourney) licenseCount(t *testing.T) string {
+	t.Helper()
+	out, e, code := cj.do(clock.Real{}, "verify-licenses", "--pub", cj.card.pubPath)
+	require.Contains(t, []int{0, 1}, code, e)
+	return regexp.MustCompile(`checked \d+`).FindString(out)
+}
+
+func TestCancelAfterTheCardSignedSaysTheCounterWentUp(t *testing.T) {
+	cj := newCardJourney(t, nil)
+	// The last part of PSO:CDS (CLA 00, INS 2A) answered with the signature.
+	cj.cancelWhen(t, func(apdu []byte) bool { return apdu[0] == 0x00 && apdu[1] == 0x2A })
+	s := cj.issue(strings.NewReader("y\n"), goodPIN, "--license-id", "LIC-2026-424242")
+	assert.Equal(t, 1, s.code)
+	assert.NotEmpty(t, cj.card.sim.LastSigned(), "the card did sign")
+	assert.Contains(t, s.errOut, "the card made a signature (its signature counter went up) but no license was recorded by this command")
+	assert.Contains(t, s.errOut, "vendor-console request show "+cj.reqID)
+	assert.Contains(t, s.errOut, "license export --id LIC-2026-424242")
+	assert.Contains(t, s.errOut, "differ by one")
+	assert.NotContains(t, s.errOut, "nothing was signed")
+	assert.Equal(t, "checked 0", cj.licenseCount(t))
+	assert.Equal(t, "open", cj.requestStatus(t))
+	assert.NoFileExists(t, cj.licenseOut)
+}
+
+func TestCancelBeforeTheCardSignedKeepsTheOldWording(t *testing.T) {
+	cj := newCardJourney(t, nil)
+	cj.cancelWhen(t, func(apdu []byte) bool { return apdu[1] == 0x20 }) // right after VERIFY
+	s := cj.issue(strings.NewReader("y\n"), goodPIN)
+	assert.Equal(t, 1, s.code)
+	assert.Empty(t, cj.card.sim.LastSigned())
+	assert.Contains(t, s.errOut, "signing cancelled: nothing was signed or recorded")
+	assert.NotContains(t, s.errOut, "signature counter")
+	assert.Equal(t, "checked 0", cj.licenseCount(t))
+	assert.Equal(t, "open", cj.requestStatus(t))
+	assert.NoFileExists(t, cj.licenseOut)
+}
+
+func TestCommitOutcomeUnknownTellsTheOperatorToCheck(t *testing.T) {
+	cj := newCardJourney(t, nil)
+	_, err := cj.d.Owner.Exec(context.Background(), `
+		CREATE FUNCTION t_fail_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'commit refused'; END $$;
+		CREATE CONSTRAINT TRIGGER t_fail_commit AFTER UPDATE ON license_requests DEFERRABLE INITIALLY DEFERRED
+			FOR EACH ROW EXECUTE FUNCTION t_fail_commit();`)
+	require.NoError(t, err)
+	s := cj.issue(strings.NewReader("y\n"), goodPIN, "--license-id", "LIC-2026-515151")
+	assert.Equal(t, 1, s.code)
+	assert.Contains(t, s.errOut, "did not confirm the commit")
+	assert.Contains(t, s.errOut, "may or may not be recorded")
+	assert.Contains(t, s.errOut, "vendor-console request show "+cj.reqID)
+	assert.Contains(t, s.errOut, "license export --id LIC-2026-515151")
+	assert.NoFileExists(t, cj.licenseOut)
 }

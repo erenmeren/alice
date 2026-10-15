@@ -265,3 +265,23 @@ func TestConfirmSeesTheExactSignedBytesDigest(t *testing.T) {
 	assert.Equal(t, f.Payload, seen, "the confirmed payload is the signed payload")
 	assert.Equal(t, inst, seen.InstallationID)
 }
+
+func TestAFailedCommitAfterTheWritesIsReportedAsUnknown(t *testing.T) {
+	e := setup(t, "k")
+	ctx := context.Background()
+	// A deferred constraint trigger fails at COMMIT, after every statement of Issue succeeded:
+	// from the caller's side that is a commit whose outcome it cannot know.
+	_, err := e.d.Owner.Exec(ctx, `
+		CREATE FUNCTION t_fail_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'commit refused'; END $$;
+		CREATE CONSTRAINT TRIGGER t_fail_commit AFTER UPDATE ON license_requests DEFERRABLE INITIALLY DEFERRED
+			FOR EACH ROW EXECUTE FUNCTION t_fail_commit();`)
+	require.NoError(t, err)
+	id, hash := e.request(t, license.NewInstallationID(), 5, "")
+	_, err = issue.Issue(ctx, e.signer, e.key, issue.Params{RequestID: id, ExpectedHash: hash}, now)
+	require.ErrorIs(t, err, issue.ErrOutcomeUnknown)
+
+	// A failure before the writes is not "unknown".
+	_, err = issue.Issue(ctx, e.signer, e.key, issue.Params{RequestID: id, ExpectedHash: "x"}, now)
+	require.ErrorIs(t, err, issue.ErrRequestChanged)
+	assert.NotErrorIs(t, err, issue.ErrOutcomeUnknown)
+}
