@@ -44,8 +44,8 @@ type rawCard interface {
 // the card answers. The goroutine always ends with the card's answer: nothing outlives it.
 type conn struct {
 	raw       rawCard
-	cancel    func()            // PC/SC context cancel; may be nil
-	mapErr    func(error) error // turns transmit failures into readable errors
+	cancel    func()                           // PC/SC context cancel; may be nil
+	mapErr    func(op string, err error) error // turns PC/SC failures into readable errors
 	closeWait time.Duration
 
 	mu        sync.Mutex
@@ -55,9 +55,13 @@ type conn struct {
 	releasing bool          // Disconnect has been started (exactly once)
 	gone      chan struct{} // closed when Disconnect has returned
 	closeErr  error         // the result of Disconnect; read after gone is closed
+
+	// abandonHook, when set (tests only), runs in Transmit's cancel path after the last look at
+	// the card's answer and before the connection is marked abandoned.
+	abandonHook func()
 }
 
-func newConn(raw rawCard, cancel func(), mapErr func(error) error) *conn {
+func newConn(raw rawCard, cancel func(), mapErr func(op string, err error) error) *conn {
 	return &conn{raw: raw, cancel: cancel, mapErr: mapErr, closeWait: defaultCloseWait, gone: make(chan struct{})}
 }
 
@@ -114,20 +118,34 @@ func (c *conn) Transmit(ctx context.Context, apdu []byte) ([]byte, error) {
 		return c.answer(r)
 	default:
 	}
+	if c.abandonHook != nil {
+		c.abandonHook()
+	}
 	c.mu.Lock()
-	c.abandoned = true
-	c.mu.Unlock()
-	if c.cancel != nil {
-		// Ends any blocking PC/SC call that can be cancelled; a pending transmit is not one of
-		// them (see conn), so the abandoned state above is what actually protects the card.
+	// Cancel ends any blocking PC/SC call that can be cancelled; a pending transmit is not one of
+	// them (see conn), so the abandoned state is what actually protects the card. It is skipped
+	// once the release has started: the context may already be gone.
+	if c.cancel != nil && !c.releasing {
 		c.cancel()
+	}
+	c.abandoned = true
+	// The card may have answered after the last look above: the goroutine has then finished
+	// without releasing (it saw no abandon), so release here instead of holding the handle
+	// until Close.
+	rel := !c.busy && !c.releasing
+	if rel {
+		c.releasing = true
+	}
+	c.mu.Unlock()
+	if rel {
+		c.release()
 	}
 	return nil, fmt.Errorf("%w: %w", ErrAbandoned, ctx.Err())
 }
 
 func (c *conn) answer(r result) ([]byte, error) {
 	if r.err != nil {
-		return nil, c.mapErr(r.err)
+		return nil, c.mapErr("transmit", r.err)
 	}
 	return r.rsp, nil
 }
@@ -150,7 +168,7 @@ func (c *conn) finish() {
 func (c *conn) release() {
 	c.closeErr = c.raw.Disconnect()
 	if c.closeErr != nil {
-		c.closeErr = c.mapErr(c.closeErr)
+		c.closeErr = c.mapErr("disconnect", c.closeErr)
 	}
 	close(c.gone)
 }

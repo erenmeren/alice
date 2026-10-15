@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -140,9 +141,15 @@ var rules = map[string][]string{
 
 const platform = "alice/internal/platform/..."
 
+const pcscPkg = "alice/internal/vconsole/sign/pcsc"
+
 // denied lists imports that are forbidden even though a broader allow entry
 // covers them. Providers are pure adapters and have no database access (§5.4 rule 2).
 var denied = map[string][]string{
+	// The PC/SC transport is wired by cmd/vendor-console only: the signer stays transport-agnostic (it works on
+	// openpgp.Card), so no vconsole package reaches sign/pcsc. The specific vconsole keys deny it below (most through
+	// sign/... or vconsole/...); TestOnlyTheConsoleCommandImportsPCSC walks every vconsole package as well.
+	"alice/internal/vconsole/...": {pcscPkg},
 	// The sales web service (plan 2026-10-15-vendor-console-phase-3) holds no signing key: it never reaches the signer
 	// or the issuing code. Web users (sessions, passkeys) share only the audit package with the license tables.
 	"alice/internal/vconsole/web/...": {"alice/internal/vconsole/sign/...", "alice/internal/vconsole/issue", "alice/internal/vconsole/notify", "alice/internal/vconsole/mail/..."},
@@ -151,7 +158,7 @@ var denied = map[string][]string{
 	// vconsole code (mailtest only the mail package) and no product code.
 	"alice/internal/vconsole/notify":        {"alice/internal/vconsole/sign/...", "alice/internal/vconsole/issue", "alice/internal/vconsole/web/...", "alice/internal/vconsole/webuser", "alice/internal/license/..."},
 	"alice/internal/vconsole/mail":          {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
-	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/store", "alice/internal/vconsole/audit", "alice/internal/vconsole/notify", platform},
+	"alice/internal/vconsole/mail/mailtest": {"alice/internal/vconsole/store", "alice/internal/vconsole/audit", "alice/internal/vconsole/notify", pcscPkg, platform},
 	// The card protocol and its simulator reach no other vconsole code (the simulator not even the protocol) and no
 	// product code.
 	"alice/internal/vconsole/sign/openpgp":             {"alice/internal/vconsole/...", "alice/internal/license/...", platform},
@@ -291,6 +298,47 @@ func TestImportRules(t *testing.T) {
 	}
 }
 
+// TestOnlyTheConsoleCommandImportsPCSC: no vconsole package other than the transport itself may import
+// sign/pcsc, by the rules (whatever rule key a future package falls under) or in fact (its own, test and
+// external test imports, with and without the yubikey tag).
+func TestOnlyTheConsoleCommandImportsPCSC(t *testing.T) {
+	root := moduleRoot(t)
+	for _, tags := range []string{"", "yubikey"} {
+		args := []string{"list", "-json"}
+		if tags != "" {
+			args = append(args, "-tags", tags)
+		}
+		cmd := exec.Command("go", append(args, "./internal/vconsole/...")...)
+		cmd.Dir = root
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		require.NoError(t, err, stderr.String())
+		dec := json.NewDecoder(bytes.NewReader(out))
+		seen := 0
+		for {
+			var p struct {
+				ImportPath                         string
+				Imports, TestImports, XTestImports []string
+			}
+			if err := dec.Decode(&p); errors.Is(err, io.EOF) {
+				break
+			} else {
+				require.NoError(t, err)
+			}
+			seen++
+			if p.ImportPath == pcscPkg {
+				continue
+			}
+			assert.Error(t, allowed(p.ImportPath, pcscPkg), "the rules let %s import the PC/SC transport", p.ImportPath)
+			for _, imps := range [][]string{p.Imports, p.TestImports, p.XTestImports} {
+				assert.NotContains(t, imps, pcscPkg, "%s imports the PC/SC transport (tags %q)", p.ImportPath, tags)
+			}
+		}
+		require.Greater(t, seen, 5, "positive control: go list saw the vconsole packages")
+	}
+}
+
 func TestAllowed(t *testing.T) {
 	const (
 		nginx   = "alice/internal/providers/nginx"
@@ -354,7 +402,13 @@ func TestAllowed(t *testing.T) {
 		{"openpgptest to the card protocol denied", "alice/internal/vconsole/sign/openpgp/openpgptest", "alice/internal/vconsole/sign/openpgp", false},
 		{"openpgptest to the platform denied", "alice/internal/vconsole/sign/openpgp/openpgptest", "alice/internal/platform/db", false},
 		{"the signer seam to the card protocol allowed", "alice/internal/vconsole/sign", "alice/internal/vconsole/sign/openpgp", true},
-		{"the signer seam to the PC/SC transport allowed", "alice/internal/vconsole/sign", "alice/internal/vconsole/sign/pcsc", true},
+		{"the signer seam to the PC/SC transport denied", "alice/internal/vconsole/sign", "alice/internal/vconsole/sign/pcsc", false},
+		{"issue to the PC/SC transport denied", "alice/internal/vconsole/issue", "alice/internal/vconsole/sign/pcsc", false},
+		{"audit to the PC/SC transport denied", "alice/internal/vconsole/audit", "alice/internal/vconsole/sign/pcsc", false},
+		{"migrations to the PC/SC transport denied", "alice/internal/vconsole/migrations", "alice/internal/vconsole/sign/pcsc", false},
+		{"mailtest to the PC/SC transport denied", "alice/internal/vconsole/mail/mailtest", "alice/internal/vconsole/sign/pcsc", false},
+		{"openpgptest to the PC/SC transport denied", "alice/internal/vconsole/sign/openpgp/openpgptest", "alice/internal/vconsole/sign/pcsc", false},
+		{"the console command to the PC/SC transport allowed", "alice/cmd/vendor-console", "alice/internal/vconsole/sign/pcsc", true},
 		{"pcsc to the card protocol allowed", "alice/internal/vconsole/sign/pcsc", "alice/internal/vconsole/sign/openpgp", true},
 		{"pcsc to the card simulator denied", "alice/internal/vconsole/sign/pcsc", "alice/internal/vconsole/sign/openpgp/openpgptest", false},
 		{"pcsc to the signer seam denied", "alice/internal/vconsole/sign/pcsc", "alice/internal/vconsole/sign", false},

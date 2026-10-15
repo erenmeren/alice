@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -76,6 +77,7 @@ type fakeRaw struct {
 	seenData [][]byte // copies of what they held at the time
 	discs    int
 	disc     chan struct{}
+	discErr  error
 }
 
 func newFakeRaw() *fakeRaw {
@@ -99,7 +101,7 @@ func (f *fakeRaw) Disconnect() error {
 	f.discs++
 	f.mu.Unlock()
 	f.disc <- struct{}{}
-	return nil
+	return f.discErr
 }
 
 func (f *fakeRaw) disconnects() int {
@@ -108,7 +110,7 @@ func (f *fakeRaw) disconnects() int {
 	return f.discs
 }
 
-func identity(err error) error { return err }
+func identity(_ string, err error) error { return err }
 
 func TestTransmitPassesTheResponseThrough(t *testing.T) {
 	raw := newFakeRaw()
@@ -124,7 +126,7 @@ func TestTransmitPassesTheResponseThrough(t *testing.T) {
 func TestTransmitMapsErrors(t *testing.T) {
 	raw := newFakeRaw()
 	raw.err = errors.New("raw failure")
-	c := newConn(raw, nil, func(error) error { return ErrCardRemoved })
+	c := newConn(raw, nil, func(string, error) error { return ErrCardRemoved })
 	_, err := c.Transmit(context.Background(), []byte{0x00})
 	require.ErrorIs(t, err, ErrCardRemoved)
 	require.NoError(t, c.Close())
@@ -288,4 +290,83 @@ func TestConcurrentTransmitIsRefused(t *testing.T) {
 	close(raw.hold)
 	require.NoError(t, <-done)
 	require.NoError(t, c.Close())
+}
+
+// Close reports a failed release under its own operation, not as a transmit failure.
+func TestDisconnectErrorsAreLabelledDisconnect(t *testing.T) {
+	raw := newFakeRaw()
+	raw.discErr = errors.New("raw disconnect failure")
+	var ops []string
+	c := newConn(raw, nil, func(op string, err error) error {
+		ops = append(ops, op)
+		return fmt.Errorf("%s: %w", op, err)
+	})
+	_, err := c.Transmit(context.Background(), []byte{0x00})
+	require.NoError(t, err)
+	err = c.Close()
+	require.ErrorIs(t, err, raw.discErr)
+	assert.Equal(t, []string{"disconnect"}, ops)
+}
+
+// waitIdle waits until the transmit goroutine has finished (the card answered and the connection
+// is free again).
+func waitIdle(t *testing.T, c *conn) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return !c.busy
+	}, 2*time.Second, time.Millisecond)
+}
+
+// The card answers in the instant between the last look at its answer and the abandon: the
+// goroutine finished without releasing (it saw no abandon), so the cancel path releases the handle
+// itself instead of holding it until Close.
+func TestCancelRacingTheAnswerStillReleasesTheHandle(t *testing.T) {
+	raw := newFakeRaw()
+	raw.hold = make(chan struct{})
+	cancels := 0
+	c := newConn(raw, func() { cancels++ }, identity)
+	c.abandonHook = func() {
+		close(raw.hold)
+		waitIdle(t, c)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Transmit(ctx, []byte{0x00})
+		done <- err
+	}()
+	<-raw.started
+	cancel()
+	require.ErrorIs(t, <-done, ErrAbandoned)
+	assert.Equal(t, 1, raw.disconnects(), "released without Close")
+	assert.Equal(t, 1, cancels, "the context was still live: cancel was called")
+	require.NoError(t, c.Close())
+	assert.Equal(t, 1, raw.disconnects())
+}
+
+// When the release has already started (here: Close after the card answered), the cancel path
+// must not call the PC/SC cancel on a context that may be gone.
+func TestCancelAfterReleaseDoesNotTouchTheContext(t *testing.T) {
+	raw := newFakeRaw()
+	raw.hold = make(chan struct{})
+	cancels := 0
+	c := newConn(raw, func() { cancels++ }, identity)
+	c.abandonHook = func() {
+		close(raw.hold)
+		waitIdle(t, c)
+		assert.NoError(t, c.Close())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Transmit(ctx, []byte{0x00})
+		done <- err
+	}()
+	<-raw.started
+	cancel()
+	require.ErrorIs(t, <-done, ErrAbandoned)
+	assert.Equal(t, 0, cancels, "no cancel on a released context")
+	assert.Equal(t, 1, raw.disconnects())
 }

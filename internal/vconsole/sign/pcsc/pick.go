@@ -3,9 +3,14 @@
 // it needs cgo and libpcsclite on Linux and macOS; without the tag Readers and Connect return
 // ErrNoPCSC and the binary carries no PC/SC code.
 //
-// Connections are opened shared (SCARD_SHARE_SHARED) so that gpg-agent's scdaemon is not locked
-// out for good; while scdaemon itself holds the card exclusively, Connect fails with
-// ErrSharingViolation and the operator runs `gpgconf --kill scdaemon`.
+// The signing connection holds the card exclusively (SCARD_SHARE_EXCLUSIVE, the constant
+// shareMode of the tagged build). The OpenPGP applet's default PW1 policy unlocks one signature per
+// VERIFY; on a shared connection another PC/SC client (scdaemon, a browser's smart card stack)
+// could send its own PSO:CDS in the window between our VERIFY and our signature. The trade-off:
+// while any other program has the card open, Connect fails with ErrSharingViolation, whose text
+// tells the operator to run `gpgconf --kill scdaemon`; and while vendor-console holds the card,
+// gpg cannot use it. Both are acceptable for a short-lived signing tool that closes the card as
+// soon as the license is signed.
 //
 // No error of this package quotes APDU bytes: a command may hold the PIN.
 package pcsc

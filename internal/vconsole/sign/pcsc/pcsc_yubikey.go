@@ -11,6 +11,11 @@ import (
 	"alice/internal/vconsole/sign/openpgp"
 )
 
+// shareMode is how the signing connection holds the card: exclusively, so that no other PC/SC
+// client can send a command between our VERIFY and the signature it unlocks (see the package
+// documentation for the trade-off). Change it here only.
+const shareMode = scard.ShareExclusive
+
 // Readers lists the names of the connected PC/SC readers; none connected is an empty list.
 func Readers() ([]string, error) {
 	sc, err := scard.EstablishContext()
@@ -49,9 +54,7 @@ func Connect(name string) (openpgp.Card, error) {
 		_ = sc.Release()
 		return nil, err
 	}
-	// Shared, not exclusive: an exclusive hold would lock scdaemon out until we exit, and a
-	// crash would leave the operator guessing. The signing sequence (VERIFY then PSO) is short.
-	card, err := sc.Connect(reader, scard.ShareShared, scard.ProtocolAny)
+	card, err := sc.Connect(reader, shareMode, scard.ProtocolAny)
 	if err != nil {
 		_ = sc.Release()
 		return nil, mapErr("connect", err)
@@ -62,8 +65,7 @@ func Connect(name string) (openpgp.Card, error) {
 		_ = sc.Release()
 		return nil, fmt.Errorf("pcsc: connect: the card speaks no supported protocol (%d)", p)
 	}
-	return newConn(&scardRaw{ctx: sc, card: card}, func() { _ = sc.Cancel() },
-		func(err error) error { return mapErr("transmit", err) }), nil
+	return newConn(&scardRaw{ctx: sc, card: card}, func() { _ = sc.Cancel() }, mapErr), nil
 }
 
 // scardRaw is the real handle behind a conn.

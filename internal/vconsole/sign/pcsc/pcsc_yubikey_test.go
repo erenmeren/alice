@@ -60,4 +60,11 @@ func TestPCSCErrorsAreMappedToReadableMessages(t *testing.T) {
 	require.Error(t, other)
 	assert.Contains(t, other.Error(), "connect")
 	assert.NoError(t, mapErr("connect", nil))
+	assert.Contains(t, mapErr("disconnect", scard.ErrRemovedCard).Error(), "disconnect")
+}
+
+// The signing connection holds the card exclusively: no other PC/SC client may slip a command in
+// between VERIFY and the signature (package documentation).
+func TestSigningConnectionIsExclusive(t *testing.T) {
+	assert.Equal(t, scard.ShareExclusive, shareMode)
 }
