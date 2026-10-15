@@ -55,13 +55,14 @@ type issuedRow struct {
 	issuedAt                    time.Time
 }
 
-// section is one block of the summary body. count may exceed len(lines) when the query listed
-// only the first maxSectionLines rows.
+// section is one block of the summary body. count may exceed len(keep)+len(lines) when the query
+// listed only the first maxSectionLines rows.
 type section struct {
 	title string
 	count int
-	note  string // printed first, not counted (the time-zone fallback)
-	empty string // printed when count is zero
+	note  string   // printed first, not counted (the time-zone fallback)
+	empty string   // printed when count is zero
+	keep  []string // the most important lines: printed first and trimmed only as a last resort
 	lines []string
 }
 
@@ -154,14 +155,19 @@ func composeSummary(ctx context.Context, tx pgx.Tx, settings map[string]string, 
 	if err != nil {
 		return false, nil, err
 	}
-	unusual := unusualLines(issued, loc)
+	busy, night := unusualLines(issued, loc)
 	unaudited, err := licensesWithoutIssueAudit(ctx, tx)
 	if err != nil {
 		return false, nil, err
 	}
+	// The order is by weight: possible tampering first, then signers above the daily limit, then
+	// night issuance, which is the most frequent and the first to be trimmed.
+	var keep []string
 	if unaudited > 0 {
-		unusual = append(unusual, fmt.Sprintf("%d license(s) have no issue audit row (possible tampering or disabled triggers)", unaudited))
+		keep = append(keep, fmt.Sprintf("%d license(s) have no issue audit row (possible tampering or disabled triggers)", unaudited))
 	}
+	keep = append(keep, busy...)
+	unusual := len(keep) + len(night)
 
 	issuedSec := section{title: "Issued since " + start.In(loc).Format(localTimeLayout), count: len(issued), empty: "Nothing issued."}
 	for _, r := range issued {
@@ -169,7 +175,7 @@ func composeSummary(ctx context.Context, tx pgx.Tx, settings map[string]string, 
 			clean(r.licenseID, maxIDRunes), clean(r.customer, maxNameRunes), r.targets,
 			clean(r.signer, maxNameRunes), r.issuedAt.In(loc).Format(localTimeLayout)))
 	}
-	unusualSec := section{title: "Unusual", count: len(unusual), note: zoneNote, empty: "None.", lines: unusual}
+	unusualSec := section{title: "Unusual", count: unusual, note: zoneNote, empty: "None.", keep: keep, lines: night}
 
 	// The head is read in this transaction, before the mark (which itself adds an audit row): the
 	// owner copies it into the paper log, and `vendor-console audit-verify --head` compares
@@ -194,19 +200,19 @@ func composeSummary(ctx context.Context, tx pgx.Tx, settings map[string]string, 
 	out := []Notice{{
 		Kind:      "summary.weekly",
 		Severity:  SeverityInfo,
-		Title:     fmt.Sprintf("Weekly summary: %d issued, %d open requests, %d unusual", len(issued), open.count, len(unusual)),
+		Title:     fmt.Sprintf("Weekly summary: %d issued, %d open requests, %d unusual", len(issued), open.count, unusual),
 		Body:      body,
 		Audience:  AudienceOwner,
 		DedupeKey: "summary:" + date,
 	}}
-	if len(unusual) > 0 {
+	if unusual > 0 {
 		alertSec := unusualSec
 		alertSec.title = "Unusual activity"
 		alertTop := "Unusual activity was found for the weekly summary.\n\n" + period + zone
 		out = append(out, Notice{
 			Kind:      "activity.unusual",
 			Severity:  SeverityAlert,
-			Title:     fmt.Sprintf("Unusual activity: %s in the weekly summary", plural(len(unusual), "item")),
+			Title:     fmt.Sprintf("Unusual activity: %s in the weekly summary", plural(unusual, "item")),
 			Body:      fitSections(alertTop, []section{alertSec}, "The weekly summary covers the whole period.\n"),
 			Audience:  AudienceOwner,
 			DedupeKey: "unusual:" + date,
@@ -225,41 +231,47 @@ func plural(n int, word string) string {
 // fitSections renders top, the sections and tail, listing at most maxSectionLines lines per
 // section and fewer when the body would not fit the notifications body limit. The sections before
 // the last one (the long lists) give up lines first, the largest first; the last one (Unusual)
-// only after they list nothing. Headers, counts, the "... and N more" lines and the tail (the
-// audit head) are always kept, so the body never needs the generic truncation of Notify.
+// then gives up its ordinary lines (night issuance), and only then, as a last resort, its keep
+// lines from the end, so the first of them (possible tampering) is the last to go. Headers, counts,
+// the "... and N more" lines and the tail (the audit head) are always kept.
 func fitSections(top string, secs []section, tail string) string {
 	caps := make([]int, len(secs))
-	for i := range caps {
-		caps[i] = maxSectionLines
+	keepCaps := make([]int, len(secs))
+	for i, s := range secs {
+		keepCaps[i] = len(s.keep)
+		caps[i] = max(maxSectionLines-len(s.keep), 0)
 	}
 	render := func() string {
 		var b strings.Builder
 		b.WriteString(top)
 		for i, s := range secs {
-			writeSection(&b, s, caps[i])
+			writeSection(&b, s, keepCaps[i], caps[i])
 		}
 		b.WriteString(tail)
 		return b.String()
 	}
+	last := len(secs) - 1
 	for {
 		body := render()
 		if utf8.RuneCountInString(body) <= maxBodyRunes {
 			return body
 		}
-		// Reduce the largest cap among the lists first, the last section only after them.
 		pick := -1
-		for i := range len(secs) - 1 {
+		for i := range last {
 			if caps[i] > 0 && (pick < 0 || caps[i] > caps[pick]) {
 				pick = i
 			}
 		}
-		if pick < 0 {
-			pick = len(secs) - 1
-			if caps[pick] == 0 {
-				return body // cannot shrink further; Notify cuts it (not reached with bounded lines)
-			}
+		switch {
+		case pick >= 0:
+			caps[pick]--
+		case caps[last] > 0:
+			caps[last]--
+		case keepCaps[last] > 1:
+			keepCaps[last]--
+		default:
+			return body // cannot shrink further; Notify cuts it (not reached with bounded lines)
 		}
-		caps[pick]--
 	}
 }
 
@@ -426,43 +438,42 @@ func endingSoon(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Locatio
 	return s, nil
 }
 
-// unusualLines applies ruling 4 to the licenses of the period: night issuance first (in issue
-// order), then signers above the daily limit (by day, then signer).
-func unusualLines(issued []issuedRow, loc *time.Location) []string {
-	var out []string
+// unusualLines applies ruling 4 to the licenses of the period. busy lists the signers above the
+// daily limit (by day, then signer), night the licenses issued at night (in issue order).
+func unusualLines(issued []issuedRow, loc *time.Location) (busy, night []string) {
 	type signerDay struct{ signer, day string }
 	perDay := map[signerDay]int{}
 	for _, r := range issued {
 		local := r.issuedAt.In(loc)
 		if h := local.Hour(); h >= nightStartHour || h < nightEndHour {
-			out = append(out, fmt.Sprintf("Issued at night: %s | %s | signed by %s | %s",
+			night = append(night, fmt.Sprintf("Issued at night: %s | %s | signed by %s | %s",
 				clean(r.licenseID, maxIDRunes), clean(r.customer, maxNameRunes),
 				clean(r.signer, maxNameRunes), local.Format(localTimeLayout)))
 		}
 		perDay[signerDay{r.signer, local.Format("2006-01-02")}]++
 	}
-	var busy []signerDay
+	var days []signerDay
 	for k, n := range perDay {
 		if n > maxPerSignerDay {
-			busy = append(busy, k)
+			days = append(days, k)
 		}
 	}
-	slices.SortFunc(busy, func(a, b signerDay) int {
+	slices.SortFunc(days, func(a, b signerDay) int {
 		if c := strings.Compare(a.day, b.day); c != 0 {
 			return c
 		}
 		return strings.Compare(a.signer, b.signer)
 	})
-	for _, k := range busy {
-		out = append(out, fmt.Sprintf("%s issued %d licenses on %s (more than %d in one day)",
+	for _, k := range days {
+		busy = append(busy, fmt.Sprintf("%s issued %d licenses on %s (more than %d in one day)",
 			clean(k.signer, maxNameRunes), perDay[k], k.day, maxPerSignerDay))
 	}
-	return out
+	return busy, night
 }
 
-// writeSection writes the section header, its note, and at most limit of its lines; the rest is
-// counted in a "... and N more" line.
-func writeSection(b *strings.Builder, s section, limit int) {
+// writeSection writes the section header, its note, at most keepLimit of its keep lines and at
+// most limit of its other lines; the rest is counted in a "... and N more" line.
+func writeSection(b *strings.Builder, s section, keepLimit, limit int) {
 	fmt.Fprintf(b, "== %s (%d) ==\n", s.title, s.count)
 	if s.note != "" {
 		b.WriteString(s.note + "\n")
@@ -470,11 +481,16 @@ func writeSection(b *strings.Builder, s section, limit int) {
 	if s.count == 0 {
 		b.WriteString(s.empty + "\n")
 	}
-	shown := s.lines[:min(len(s.lines), limit)]
-	for _, l := range shown {
+	shown := 0
+	for _, l := range s.keep[:min(len(s.keep), keepLimit)] {
 		b.WriteString(l + "\n")
+		shown++
 	}
-	if more := s.count - len(shown); more > 0 {
+	for _, l := range s.lines[:min(len(s.lines), limit)] {
+		b.WriteString(l + "\n")
+		shown++
+	}
+	if more := s.count - shown; more > 0 {
 		fmt.Fprintf(b, "... and %d more\n", more)
 	}
 	b.WriteString("\n")

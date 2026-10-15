@@ -49,9 +49,6 @@ const (
 	maxBodyRunes    = 4000
 	maxSubjectRunes = 64
 	maxDedupeRunes  = 200
-	// maxKeyIDRunes is the longest license id used verbatim in a dedupe key, the same rule as the
-	// issuance trigger (vendor_notify_license); a longer one is keyed by its SHA-256.
-	maxKeyIDRunes = 180
 
 	// truncatedMarker ends a body that had to be cut to fit maxBodyRunes.
 	truncatedMarker = "... (truncated)"
@@ -60,8 +57,12 @@ const (
 	pruneAfter = 180 * day
 )
 
-// targetRe is the notifications.target_user CHECK (the web_users.name rule).
-var targetRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+var (
+	// targetRe is the notifications.target_user CHECK (the web_users.name rule).
+	targetRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	// keyIDRe is a license id that may appear verbatim in a dedupe key (see licenseKey).
+	keyIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,180}$`)
+)
 
 // Notice is one notification to create.
 type Notice struct {
@@ -76,7 +77,11 @@ type Notice struct {
 }
 
 // Notify inserts the notice unless a notification with its DedupeKey exists, and reports whether
-// a row was created. The notice is checked and cleaned here first, so a bad value fails with a
+// a row was created.
+//
+// Callers must clean free text (customer and user names, ids) themselves before putting it into
+// the body: Notify makes the title and subject one line, but the body is multi-line by design and
+// gets only UTF-8, NUL and length handling, so an uncleaned value could forge a line of its own. The notice is checked and cleaned here first, so a bad value fails with a
 // clear error instead of a CHECK violation: the title becomes one line of at most 200 characters,
 // a body over 4000 characters is cut at a character boundary and ends with "... (truncated)", and
 // the subject is cleaned and cut to 64 characters. Kind, severity, audience, target and dedupe key
@@ -163,30 +168,36 @@ func Prune(ctx context.Context, q audit.Q, now time.Time) (int64, error) {
 	return n, nil
 }
 
-// licenseKey builds the dedupe key prefix:<license>[:suffix...] with the rule of the issuance
-// trigger (vendor_notify_license): the license id verbatim when it has at most 180 characters,
-// otherwise prefix-sha256:<hex of its UTF-8 bytes>[:suffix...]. The hashed form has its own
-// prefix, so it can never equal a verbatim key. A key that would still pass the column's
-// 200-character limit with the id verbatim (an id near 180 characters plus a user name) uses the
-// hashed form too.
+// licenseKey builds the dedupe key prefix:<license>[:suffix...]. The license id is used verbatim
+// only when it matches keyIDRe (no ':' and at most 180 characters, the issuance trigger's length
+// rule) and the whole key fits the column's 200 characters; otherwise the key is
+// prefix-sha256:<hex of its UTF-8 bytes>[:suffix...]. Without ':' in a verbatim id the parts can
+// always be told apart (license "X:30" can never produce the key of license "X" for a user "30"),
+// and the hashed form has its own prefix, so it can never equal a verbatim key.
 func licenseKey(prefix, licenseID string, suffix ...string) string {
 	tail := ""
 	if len(suffix) > 0 {
 		tail = ":" + strings.Join(suffix, ":")
 	}
 	k := prefix + ":" + licenseID + tail
-	if utf8.RuneCountInString(licenseID) <= maxKeyIDRunes && utf8.RuneCountInString(k) <= maxDedupeRunes {
+	if keyIDRe.MatchString(licenseID) && utf8.RuneCountInString(k) <= maxDedupeRunes {
 		return k
 	}
 	sum := sha256.Sum256([]byte(licenseID))
 	return prefix + "-sha256:" + hex.EncodeToString(sum[:]) + tail
 }
 
-// oneLine turns every run of control, format and line/paragraph separator characters (line
-// breaks, escape sequences, bidi overrides, zero-width marks) and invalid UTF-8 into one space and
-// keeps the first 200 runes, like vendor_clean_line in the database. A cleaned value can never
-// start a new line, read differently than it is, or fail the notifications title CHECK.
-func oneLine(s string) string {
+// oneLine is clean with the title limit of 200 characters.
+func oneLine(s string) string { return clean(s, maxTitleRunes) }
+
+// clean is the one cleaning rule for every free-text value shown in a title or a line (customer
+// and user names, license ids, signers): every run of control, format and line/paragraph
+// separator characters (line breaks, escape sequences, bidi overrides, zero-width marks) and
+// invalid UTF-8 becomes one space, as vendor_clean_line does in the database, so "Acme\nCorp"
+// reads "Acme Corp" everywhere. Spaces at either end are trimmed and the first n runes kept. A
+// cleaned value can never start a new line, read differently than it is, or fail the
+// notifications title CHECK.
+func clean(s string, n int) string {
 	var b strings.Builder
 	gap := false
 	for _, r := range strings.ToValidUTF8(s, string(utf8.RuneError)) {
@@ -200,7 +211,7 @@ func oneLine(s string) string {
 		gap = false
 		b.WriteRune(r)
 	}
-	return cut(b.String(), maxTitleRunes)
+	return cut(strings.TrimSpace(b.String()), n)
 }
 
 // dropRune reports the runes no line may contain: control characters, format characters (bidi
@@ -208,17 +219,6 @@ func oneLine(s string) string {
 // character left by invalid UTF-8.
 func dropRune(r rune) bool {
 	return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) || r == utf8.RuneError
-}
-
-// clean drops the runes dropRune reports and keeps the first n runes.
-func clean(s string, n int) string {
-	s = strings.Map(func(r rune) rune {
-		if dropRune(r) {
-			return -1
-		}
-		return r
-	}, strings.ToValidUTF8(s, ""))
-	return cut(s, n)
 }
 
 // cut keeps the first n runes of s.

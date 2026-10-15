@@ -66,6 +66,27 @@ func seedIssuedRecorded(t *testing.T, d *vpgtest.DB, id, customer, actor string,
 	require.NoError(t, tx.Commit(ctx))
 }
 
+// seedUnaudited inserts a license with the triggers off, so it has no license.issue audit row. It
+// is back-dated years before any period: the check must not filter by issued_at.
+func seedUnaudited(t *testing.T, d *vpgtest.DB, id, customer string) {
+	t.Helper()
+	ctx := context.Background()
+	var cid, rid int64
+	require.NoError(t, d.Owner.QueryRow(ctx, `INSERT INTO customers (name) VALUES ($1) RETURNING id`, customer).Scan(&cid))
+	require.NoError(t, d.Owner.QueryRow(ctx, `INSERT INTO license_requests (customer_id, installation, targets, status, requested_by)
+		VALUES ($1, $2, 7, 'signed', 'web:ayse') RETURNING id`, cid, installation).Scan(&rid))
+	tx, err := d.Owner.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
+		valid_from, valid_until, targets, file, file_sha256) VALUES ($1, $2, $3, $4, 'vk-1',
+		'2020-01-01', '2020-01-01', '2030-01-01', 7, '\xdeadbeef', 'x')`, id, rid, cid, installation)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+}
+
 // seedOpenRequest inserts an open request made at requestedAt.
 func seedOpenRequest(t *testing.T, d *vpgtest.DB, customer, requestedBy string, requestedAt time.Time) int64 {
 	t.Helper()
@@ -378,10 +399,10 @@ func TestSummaryLinesAreCleanAndLeakNothing(t *testing.T) {
 	body := onlySummary(t, d, p, summaryNow)
 	_, lines := section(t, body, "Issued since")
 	require.Len(t, lines, 1)
-	assert.Equal(t, "LIC-EVIL | EvilBcc: x@example.com[2J | 7 targets | signed by web:"+strings.Repeat("ş", 56)+" | 2026-10-14 12:00 +03", lines[0])
+	assert.Equal(t, "LIC-EVIL | Evil Bcc: x@example.com [2J | 7 targets | signed by web:"+strings.Repeat("ş", 56)+" | 2026-10-14 12:00 +03", lines[0])
 	_, lines = section(t, body, "Open requests")
 	require.Len(t, lines, 1)
-	assert.Regexp(t, `^#\d+ \| `+strings.Repeat("ş", 60)+` \| 3 days old \| requested by web:ab$`, lines[0])
+	assert.Regexp(t, `^#\d+ \| `+strings.Repeat("ş", 60)+` \| 3 days old \| requested by web:a b$`, lines[0])
 
 	assert.NotContains(t, body, installation[:9])
 	assert.NotContains(t, body, "buyer@customer.example")
@@ -510,9 +531,9 @@ func TestIssuedAndUnusualUseTheAuditTimeAndActor(t *testing.T) {
 	head, lines = section(t, body, "Unusual")
 	assert.Equal(t, "== Unusual (2) ==", head)
 	assert.Equal(t, []string{
-		"Issued at night: LIC-BACK | Backdate | signed by t_real | 2026-10-13 23:30 +03",
 		"t_busy issued 6 licenses on 2026-10-14 (more than 5 in one day)",
-	}, lines)
+		"Issued at night: LIC-BACK | Backdate | signed by t_real | 2026-10-13 23:30 +03",
+	}, lines, "busy signers before night issuance")
 }
 
 // A renewal (a later license for the same customer and installation) ends the old license's place
@@ -539,20 +560,7 @@ func TestLicenseWithoutIssueAuditRowIsUnusual(t *testing.T) {
 	ctx := context.Background()
 	p := notifier(t, d, "t_s22_notifier")
 	seedIssued(t, d, "LIC-NORMAL", "Normal", "web:ayse", summaryNow.Add(-2*day))
-	var cid, rid int64
-	require.NoError(t, d.Owner.QueryRow(ctx, `INSERT INTO customers (name) VALUES ('Hidden') RETURNING id`).Scan(&cid))
-	require.NoError(t, d.Owner.QueryRow(ctx, `INSERT INTO license_requests (customer_id, installation, targets, status, requested_by)
-		VALUES ($1, $2, 7, 'signed', 'web:ayse') RETURNING id`, cid, installation).Scan(&rid))
-	tx, err := d.Owner.Begin(ctx)
-	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`)
-	require.NoError(t, err)
-	// Back-dated years before any period: the check must not filter by issued_at.
-	_, err = tx.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
-		valid_from, valid_until, targets, file, file_sha256) VALUES ('LIC-HIDDEN', $1, $2, $3, 'vk-1',
-		'2020-01-01', '2020-01-01', '2030-01-01', 7, '\xdeadbeef', 'x')`, rid, cid, installation)
-	require.NoError(t, err)
-	require.NoError(t, tx.Commit(ctx))
+	seedUnaudited(t, d, "LIC-HIDDEN", "Hidden")
 
 	ok, err := notify.WeeklySummary(ctx, p, summaryNow)
 	require.NoError(t, err)
@@ -661,6 +669,9 @@ func TestSummaryBodyFitsTheLimitWithManyRows(t *testing.T) {
 	for i := range 100 {
 		seedOpenRequest(t, d, fmt.Sprintf("%s R%03d", long, i), "web:"+long, summaryNow.Add(-time.Duration(i+1)*time.Hour))
 	}
+	seedUnaudited(t, d, "LIC-HIDDEN", "Hidden")
+	tamper := "1 license(s) have no issue audit row (possible tampering or disabled triggers)"
+	busy := "web:" + strings.Repeat("ş", 56) + " issued 200 licenses on 2026-10-13 (more than 5 in one day)"
 
 	// The head is read before the run: the mark itself appends an audit row after it.
 	var seq int64
@@ -670,20 +681,32 @@ func TestSummaryBodyFitsTheLimitWithManyRows(t *testing.T) {
 	body := onlySummary(t, d, p, summaryNow)
 	assert.LessOrEqual(t, utf8.RuneCountInString(body), 4000)
 	assert.NotContains(t, body, "(truncated)", "budgeted, not cut")
-	head, lines := section(t, body, "Issued since")
+	head, issuedLines := section(t, body, "Issued since")
 	assert.Equal(t, "== Issued since 2026-10-08 12:00 +03 (200) ==", head)
-	require.NotEmpty(t, lines)
-	assert.Regexp(t, `^\.\.\. and \d+ more$`, lines[len(lines)-1])
-	head, lines = section(t, body, "Open requests")
+	require.NotEmpty(t, issuedLines)
+	assert.Regexp(t, `^\.\.\. and \d+ more$`, issuedLines[len(issuedLines)-1])
+	head, openLines := section(t, body, "Open requests")
 	assert.Equal(t, "== Open requests (100) ==", head)
+	assert.Regexp(t, `^\.\.\. and \d+ more$`, openLines[len(openLines)-1])
+	head, lines := section(t, body, "Unusual")
+	assert.Equal(t, "== Unusual (202) ==", head)
+	require.GreaterOrEqual(t, len(lines), 3)
+	assert.Equal(t, tamper, lines[0], "possible tampering first")
+	assert.Equal(t, busy, lines[1], "then the busy signer")
+	assert.True(t, strings.HasPrefix(lines[2], "Issued at night: "), lines[2])
 	assert.Regexp(t, `^\.\.\. and \d+ more$`, lines[len(lines)-1])
-	head, lines = section(t, body, "Unusual")
-	assert.Equal(t, "== Unusual (201) ==", head)
-	assert.Regexp(t, `^\.\.\. and \d+ more$`, lines[len(lines)-1])
+	assert.Greater(t, len(lines), len(issuedLines), "the long lists are trimmed before Unusual")
+	assert.Greater(t, len(lines), len(openLines), "the long lists are trimmed before Unusual")
 	assert.True(t, strings.HasSuffix(body, fmt.Sprintf("\nAudit head: %d:%s\n", seq, hash)), "ends with the head line")
 
 	as := alertNotices(t, d)
 	require.Len(t, as, 1)
 	assert.LessOrEqual(t, utf8.RuneCountInString(as[0].Body), 4000)
-	assert.Equal(t, "Unusual activity: 201 items in the weekly summary", as[0].Title)
+	assert.NotContains(t, as[0].Body, "(truncated)")
+	assert.Equal(t, "Unusual activity: 202 items in the weekly summary", as[0].Title)
+	_, alertLines := section(t, as[0].Body, "Unusual activity")
+	require.GreaterOrEqual(t, len(alertLines), 3)
+	assert.Equal(t, tamper, alertLines[0])
+	assert.Equal(t, busy, alertLines[1])
+	assert.Regexp(t, `^\.\.\. and \d+ more$`, alertLines[len(alertLines)-1])
 }

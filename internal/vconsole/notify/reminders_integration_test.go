@@ -490,7 +490,7 @@ func TestLongLicenseIDsGetASafeDedupeKey(t *testing.T) {
 		"ending-sha256:" + hash(edge) + ":30:" + user,
 	}, keys)
 
-	// The issuance trigger applied the same rule to the same id.
+	// The issuance trigger keys by length alone (its own rule; it has no suffix to confuse).
 	var issued []string
 	rows, err := d.Owner.Query(ctx, `SELECT dedupe_key FROM notifications WHERE kind = 'license.issued' ORDER BY id`)
 	require.NoError(t, err)
@@ -549,4 +549,26 @@ func TestTwoConcurrentReminderRunsCreateEachOnce(t *testing.T) {
 		  AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.kind = 'license.ending' AND n.audience = 'owner'
 		      AND n.subject = l.license_id)`).Scan(&orphans))
 	assert.Zero(t, orphans, "every reminded license has its notice")
+}
+
+// A verbatim id never contains ':', so license "X:30" cannot take the key of license "X"'s
+// reminder for a web user named "30".
+func TestDedupeKeysOfDifferentLicensesNeverCollide(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_r19_notifier")
+	now := testNow()
+	addWebUser(t, d, "30", "sales")
+	seedLicense(t, d, lic{id: "X", customer: "A", requestedBy: "web:30", validUntil: now.Add(25 * day)})
+	seedLicense(t, d, lic{id: "X:30", customer: "B", validUntil: now.Add(26 * day)})
+
+	n, err := notify.CreateReminders(ctx, p, now)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	sum := sha256.Sum256([]byte("X:30"))
+	var keys []string
+	for _, x := range reminderNotices(t, d) {
+		keys = append(keys, x.DedupeKey)
+	}
+	assert.ElementsMatch(t, []string{"ending:X:30", "ending:X:30:30", "ending-sha256:" + hex.EncodeToString(sum[:]) + ":30"}, keys)
 }
