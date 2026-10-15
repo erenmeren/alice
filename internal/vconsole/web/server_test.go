@@ -266,5 +266,5 @@ func TestIPv6ClientsAreLimitedPerSlash64(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, post("192.0.2.7:3"))
 	assert.Equal(t, http.StatusOK, post("192.0.2.8:3"))
 
-	assert.Equal(t, netip.MustParseAddr("2001:db8:1:2::"), clientAddr(&http.Request{RemoteAddr: "[2001:db8:1:2::5%eth0]:80"}))
+	assert.Equal(t, netip.MustParseAddr("2001:db8:1:2::"), s.limiterKey(&http.Request{RemoteAddr: "[2001:db8:1:2::5%eth0]:80"}))
 }

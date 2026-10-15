@@ -12,9 +12,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +33,10 @@ const (
 )
 
 const usage = `Usage: vendor-web [--listen :8443] [--tls-cert FILE --tls-key FILE]
+                  [--trusted-proxy CIDR]...
+
+--trusted-proxy CIDR (repeatable): reverse proxy range whose X-Forwarded-For is believed for the
+rate limit; without it every client behind a proxy shares the proxy's limit.
 
 Environment:
   VENDOR_WEB_DATABASE_URL  PostgreSQL connection string of the vendor_web login (sslmode=verify-full
@@ -39,12 +45,19 @@ Environment:
   VENDOR_WEB_RPID          passkey domain (default: the host of the origin)
 `
 
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
+
 // config is a validated configuration.
 type config struct {
 	dbURL, origin, rpid string
 	listen              string
 	certFile, keyFile   string
 	cert                *tls.Certificate // loaded from certFile and keyFile; nil for plain http
+	trustedProxies      []netip.Prefix
 }
 
 func main() {
@@ -64,6 +77,8 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 	listen := fs.String("listen", ":8443", "address to listen on")
 	certFile := fs.String("tls-cert", "", "TLS certificate file (with --tls-key)")
 	keyFile := fs.String("tls-key", "", "TLS key file (with --tls-cert)")
+	var proxies stringList
+	fs.Var(&proxies, "trusted-proxy", "reverse proxy CIDR whose X-Forwarded-For is trusted for the rate limit (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -79,7 +94,11 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		}
 		return fail("--tls-cert needs --tls-key too")
 	}
-	c := config{dbURL: getenv(dbEnv), origin: getenv(originEnv), rpid: getenv(rpidEnv),
+	trusted, err := web.ParseTrustedProxies(proxies)
+	if err != nil {
+		return fail("--trusted-proxy: %v", err)
+	}
+	c := config{trustedProxies: trusted, dbURL: getenv(dbEnv), origin: getenv(originEnv), rpid: getenv(rpidEnv),
 		listen: *listen, certFile: *certFile, keyFile: *keyFile}
 	if c.dbURL == "" {
 		return fail("set %s to the PostgreSQL connection string", dbEnv)
@@ -98,7 +117,7 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer) in
 		c.rpid = u.Hostname()
 	}
 	// Validate origin and RP ID now; the pool is not needed for that.
-	if _, err := web.New(web.Config{RPID: c.rpid, Origin: c.origin}); err != nil {
+	if _, err := web.New(web.Config{RPID: c.rpid, Origin: c.origin, TrustedProxies: c.trustedProxies}); err != nil {
 		return fail("%v", err)
 	}
 	if c.certFile != "" {
@@ -135,7 +154,7 @@ func serveReal(c config, stdout, stderr io.Writer) int {
 		return 1
 	}
 	defer pool.Close()
-	srv, err := web.New(web.Config{Pool: pool, RPID: c.rpid, Origin: c.origin, Clock: clock.Real{}})
+	srv, err := web.New(web.Config{Pool: pool, RPID: c.rpid, Origin: c.origin, Clock: clock.Real{}, TrustedProxies: c.trustedProxies})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "vendor-web: %v\n", err)
 		return 2

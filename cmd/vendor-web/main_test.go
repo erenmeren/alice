@@ -58,6 +58,10 @@ func TestConfigurationErrorsExitTwoWithoutLeakingThePassword(t *testing.T) {
 		"only cert":        {good, []string{"--tls-cert", "c.pem"}, "--tls-key"},
 		"only key":         {good, []string{"--tls-key", "k.pem"}, "--tls-cert"},
 		"insecure db":      {with("VENDOR_WEB_DATABASE_URL", "postgres://web:s3cretpw@db.example.com/vendor?sslmode=disable"), nil, "verify-full"},
+		"proxy everyone":   {good, []string{"--trusted-proxy", "0.0.0.0/0"}, "trusted-proxy"},
+		"proxy everyone 6": {good, []string{"--trusted-proxy", "::/0"}, "trusted-proxy"},
+		"proxy bad":        {good, []string{"--trusted-proxy", "bad"}, "trusted-proxy"},
+		"proxy empty":      {good, []string{"--trusted-proxy", ""}, "trusted-proxy"},
 		"unknown flag":     {good, []string{"--nope"}, "nope"},
 		"stray argument":   {good, []string{"extra"}, "extra"},
 		"unparsable dburl": {with("VENDOR_WEB_DATABASE_URL", "postgres://web:s3cretpw@db.example.com:xx/vendor"), nil, "VENDOR_WEB_DATABASE_URL"},
@@ -158,4 +162,18 @@ func TestTheBinaryCannotSign(t *testing.T) {
 	for _, forbidden := range []string{"alice/internal/vconsole/sign", "alice/internal/vconsole/issue", "alice/internal/vconsole/migrations"} {
 		assert.False(t, deps[forbidden], "vendor-web depends on %s", forbidden)
 	}
+}
+
+func TestTrustedProxyFlagIsRepeatableAndReachesServe(t *testing.T) {
+	var got config
+	old := serve
+	serve = func(c config, _, _ io.Writer) int { got = c; return 0 }
+	defer func() { serve = old }()
+	env := map[string]string{"VENDOR_WEB_DATABASE_URL": goodDB, "VENDOR_WEB_ORIGIN": "https://licenses.example.com"}
+	var out, errOut bytes.Buffer
+	code := run([]string{"--trusted-proxy", "10.0.0.0/8", "--trusted-proxy", "2001:db8::1"}, func(k string) string { return env[k] }, &out, &errOut)
+	require.Equal(t, 0, code, errOut.String())
+	require.Len(t, got.trustedProxies, 2)
+	assert.Equal(t, "10.0.0.0/8", got.trustedProxies[0].String())
+	assert.Equal(t, "2001:db8::1/128", got.trustedProxies[1].String())
 }

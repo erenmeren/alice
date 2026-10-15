@@ -12,7 +12,6 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -37,6 +36,10 @@ type Config struct {
 	Clock      clock.Clock
 	CookieName string       // set by New: "__Host-vsession" for https origins, "vsession" otherwise
 	Logger     *slog.Logger // optional; slog.Default() when nil
+
+	// TrustedProxies are the ranges whose X-Forwarded-For is believed, for the rate limiter only.
+	// Empty: the header is ignored.
+	TrustedProxies []netip.Prefix
 
 	// Rate limit of the begin endpoints per client address; tests shorten them. Zero means the
 	// defaults (10 per minute).
@@ -354,8 +357,8 @@ func (s *Server) inActorTx(ctx context.Context, u webuser.User, fn func(tx pgx.T
 }
 
 // limiter is a fixed-window request counter per client address. It keys on the connection's
-// address only: behind a reverse proxy every client shares the proxy's address. Trusting
-// X-Forwarded-For would need a configured trusted proxy, which this phase does not support.
+// address, unless the peer is a configured trusted proxy (Config.TrustedProxies): then the
+// client from X-Forwarded-For is used. Nothing else in the service reads that header.
 type limiter struct {
 	mu        sync.Mutex
 	clk       clock.Clock
@@ -395,32 +398,9 @@ func (l *limiter) allow(a netip.Addr) bool {
 	return b.count <= l.n
 }
 
-// clientAddr is the limiter key of the connection's address. An IPv6 client is keyed by its /64
-// prefix, since one host usually holds a whole /64; an unparsable RemoteAddr shares the
-// zero-address bucket.
-func clientAddr(r *http.Request) netip.Addr {
-	var a netip.Addr
-	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
-		a = ap.Addr()
-	} else {
-		host := r.RemoteAddr
-		if h, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			host = h
-		}
-		if a, err = netip.ParseAddr(host); err != nil {
-			return netip.Addr{}
-		}
-	}
-	a = a.Unmap().WithZone("")
-	if a.Is6() {
-		return netip.PrefixFrom(a, 64).Masked().Addr()
-	}
-	return a
-}
-
 func (s *Server) limited(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !s.limiter.allow(clientAddr(r)) {
+		if !s.limiter.allow(s.limiterKey(r)) {
 			w.Header().Set("Retry-After", fmt.Sprint(int(s.cfg.limitWindow.Seconds())))
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, try again in a minute"})
 			return
