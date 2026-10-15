@@ -35,10 +35,10 @@ stays for the `issued.csv` files of licenses issued with `licensectl`.
 
 | Person | Database login | Other credentials | Where they live |
 |---|---|---|---|
-| Owner (UK) | one login in `vendor_owner` | the migration login; the Neon account; the mailbox that gets `owner_email` | the owner's own computer and password manager |
+| Owner (UK) | one login in `vendor_owner` (command line work) | a web user with the role `owner` and its passkey (reads the owner notifications); the migration login; the Neon account | the owner's own computer and password manager; the passkey on the owner's security key or device |
 | IT manager (Istanbul), signer | one login in `vendor_signer` | the `vendor-web` service login and TLS certificate; the server that runs `notify run` | the servers' environment files, readable by root only |
 | Sales people | none needed | a web user name and a passkey for the sales page | the passkey on their security key or device |
-| `notify run` timer | one login in `vendor_notifier` | the SMTP login | `/etc/vendor-console/notify.env` (mode 0600, root) |
+| `notify run` timer | one login in `vendor_notifier` | none | `/etc/vendor-console/notify.env` (only `VENDOR_DATABASE_URL`; mode 0600, root) |
 | Sales web service | one login in `vendor_web` (for example `vendor_web_svc`) | none | `VENDOR_WEB_DATABASE_URL` on the web server |
 
 Group roles and what they may do (created by `vendor-console migrate`):
@@ -48,11 +48,18 @@ Group roles and what they may do (created by `vendor-console migrate`):
   and update any request, not only their own (the `requests_update_signer` policy: a signer can
   change or cancel anyone's request).
 - `vendor_owner`: everything `vendor_signer` can, plus read the audit log (`audit show`,
-  `audit-verify`, `audit-head`), revoke licenses, manage web users, change settings, and read the
-  mail outbox and reminder records.
-- `vendor_notifier`: only what `notify run` needs. It may also run `audit-head`, `notify failed`
-  and `notify retry`.
-- `vendor_web`: only the sales web service. It cannot sign or read the audit log.
+  `audit-verify`, `audit-head`), revoke licenses, manage web users, change settings, and read
+  (not change) the notifications, their read marks and the reminder records.
+- `vendor_notifier`: only what `notify run` needs: create reminders and notifications, record the
+  last summary, prune old read notifications. It may also run `audit-head`.
+- `vendor_web`: only the sales web service. It cannot sign or read the audit log. It reads and
+  marks notifications only through four database functions, for the signed-in person.
+
+The owner is two things: a database login in `vendor_owner` for the command line, and a web user
+with the role `owner` (`vendor-console web-user add <name> --owner`, then a passkey at `/enroll`
+like every sales person) that sees the owner notifications in the web page: every issued license,
+every reminder, the weekly summary and unusual activity. A web user's role is set when it is created
+and cannot be changed (disable it and add a new name); it gives no database rights.
 
 The migration login owns the tables and is not held back by the grants. Use it only for
 `vendor-console migrate`, for creating and dropping logins, for backups (`pg_dump`) and for the
@@ -84,14 +91,14 @@ runbook.
 
 **Option 1: `licensectl` offline, as today.** Sign on the offline machine exactly as
 licensing-vendor.md section 3 says. These licenses are not in the console's database: no issuance
-mail, no reminders, no line in the weekly summary, nothing for `verify-licenses` to check. Their
+notification, no reminders, no line in the weekly summary, nothing for `verify-licenses` to check. Their
 record is the `issued.csv` ledger next to the key and the paper log, which the owner keeps
 (licensing-vendor.md section 5). The owner may add the customer to the console by hand
 (`vendor-console customer add --name "<customer>"`) so sales see it; the license itself is not
 entered.
 
 **Option 2: the file key on an online signer computer.** `vendor-console issue --key FILE` signs
-and records the license in the database (issuance mail, reminders, summary, audit). The passphrase
+and records the license in the database (issuance notification, reminders, summary, audit). The passphrase
 is typed on a computer that is online, so malware on it (a keylogger) could take the passphrase and
 the key file together. The computer must therefore be a dedicated signer computer: used for nothing
 else, fully patched, the key on a hardware-encrypted USB drive plugged in only while signing.
@@ -115,7 +122,7 @@ What option 3 does and does not protect against:
   computer: the display is drawn by the same computer, so malware can show the real license and
   send a payload of its own to the card while the operator types the PIN and touches the key. It
   gets one signature per PIN entry and touch.
-- A license made that way is **never recorded**: there is no issuance mail, no audit row, and
+- A license made that way is **never recorded**: there is no issuance notification, no audit row, and
   `verify-licenses` never sees it. The one trace is the card's signature counter, which the
   counter reconciliation below checks after every session and every quarter. An unexplained
   increase is treated as a compromise of the signer computer (section 9).
@@ -401,7 +408,8 @@ key on the card sets it back, so each key ID has its own history.
   included).
 - Any unexplained increase means the key signed something that is not in the database: treat it as
   a compromise of the signer computer (section 9) and the key as compromised (section 4), because
-  such a signature can be a valid license that no mail and no `verify-licenses` run will show.
+  such a signature can be a valid license that no notification and no `verify-licenses` run will
+  show.
 
 ## 3. Onboarding and offboarding
 
@@ -410,14 +418,30 @@ key on the card sets it back, so each key ID has its own history.
 A sales person needs no database login. As the owner login:
 
     vendor-console web-user add <name>
-    vendor-console web-user set-email <name> <address>     # for reminders of their requests
 
 `add` prints a one-time enrollment code (24 hours, shown once). Give it to the person over a
-channel you trust. They open `/enroll` on the sales page and register a passkey.
+channel you trust. They open `/enroll` on the sales page and register a passkey. Reminders of the
+licenses they requested on the web page appear under their own bell; nothing else is needed.
 
 - Lost or new device: `vendor-console web-user invite <name>` prints a new code. The old passkeys
   stay.
-- Check who exists: `vendor-console web-user list`.
+- Check who exists and their role: `vendor-console web-user list`.
+
+### The owner on the web page
+
+The owner reads the owner notifications (issued licenses, reminders, the weekly summary with the
+audit head, unusual activity) on the web page, so the owner needs a web user with the role `owner`
+besides the `vendor_owner` database login. Once, as the owner login:
+
+    vendor-console web-user add <name> --owner
+
+and enroll a passkey at `/enroll` with the printed code, exactly like a sales person. Until an
+enabled owner web user exists, `notify run` warns on every run (`warning: no enabled owner web user
+exists; owner notifications will wait until one is created`); the notifications are kept and appear
+once the owner web user exists. A second owner (a deputy) is a second `--owner` web user; each has
+their own unread count. The role cannot be changed later: to turn an owner web user into a sales one
+or back, disable it and add a new name. The owner keeps the `vendor_owner` database login for the
+command line (`audit show`, `audit-verify`, `license revoke`, `web-user`, `settings`).
 
 ### A new signer (or owner) login
 
@@ -470,8 +494,8 @@ the last condition leaves it out.)
    Do not give the same login name to another person later.
 3. If the person held a signing key, or knew a key's passphrase or PIN: treat the key as
    compromised (section 4), unless you are certain they never had the passphrase or the device.
-4. If the person knew a shared credential (the web service login, the notifier login, the SMTP
-   login, the migration login): rotate it (section 9, "Database credential leak").
+4. If the person knew a shared credential (the web service login, the notifier login, the
+   migration login): rotate it (section 9, "Database credential leak").
 
 ## 4. A lost or compromised signing key
 
@@ -543,7 +567,8 @@ is about a customer's Alice installation and has nothing to do with this databas
 - Customers, license requests, issued licenses with their signed files.
 - The audit chain (every change, with who and when).
 - Web users, their passkeys (`web_credentials`, public keys only) and enrollment code hashes.
-- Settings (`owner_email`, `timezone`), the mail outbox and the reminder records.
+- Settings (`timezone`, `last_summary_at`), the reminder records, the notifications and their
+  per-person read marks.
 - Web sessions. They are disposable; after a restore people simply sign in again.
 
 ### What is not in it
@@ -553,12 +578,13 @@ is about a customer's Alice installation and has nothing to do with this databas
 - The database logins and their passwords (they belong to the PostgreSQL server, not to the
   database; `pg_dump` of one database does not include them).
 - `notify.env`, the web service environment, its TLS certificate.
-- The weekly summary mails. They stay in the owner's mailbox, which is the point (section 7).
+- The paper log of audit heads (section 7). The weekly summary notifications are in the database
+  and restored with it, so they are no witness for it; the paper log is.
 
 ### How to back up
 
 1. **Neon point-in-time restore.** Check that the project's history window covers at least the
-   time between two checks of the weekly mail (a week or more).
+   time between two audit heads in the paper log (a week or more).
 2. **An encrypted dump kept apart from Neon**, at least monthly and before every migration. Run it
    as the migration login: it owns the tables, and `pg_dump` with another login stops at the
    row-level security on `license_requests`. Use a `pg_dump` of at least the server's major
@@ -596,9 +622,11 @@ Do it on a computer you trust, into a scratch database, never into production. Y
 record from the operations log: the head and the license count taken just before it.
 
 1. **Pick the checkpoints.** The first is the head recorded before the dump. The second is the
-   witness outside the database: in the owner's mailbox, find the newest weekly summary sent
-   **before** the dump was taken and copy its last line, `Audit head: <seq>:<hash>`. (A summary
-   sent after the dump names rows the dump does not have, and step 6 then reports a mismatch.)
+   witness outside the database: in the paper log (section 7), find the newest weekly audit head
+   copied **before** the dump was taken, `<seq>:<hash>` with all 64 hex digits. (A head taken after
+   the dump names rows the dump does not have, and step 6 then reports a mismatch.) Do not take it
+   from a weekly summary notification: that is in the database being checked, so it proves nothing
+   about it.
 2. **Decrypt the dump** on the drill computer: `gpg -o vendor.dump -d vendor-<YYYYMMDD>.dump.gpg`
    or `age -d -o vendor.dump vendor-<YYYYMMDD>.dump.age`.
 3. **Start a scratch PostgreSQL** of the production server's major version on this computer. It
@@ -657,10 +685,11 @@ record from the operations log: the head and the license count taken just before
 
        export VENDOR_DATABASE_URL='postgres://drill_owner@127.0.0.1:55432/vendor_drill?sslmode=disable'
        vendor-console audit-verify --head <head recorded before the dump>
-       vendor-console audit-verify --head <seq>:<hash from the weekly summary>
+       vendor-console audit-verify --head <seq>:<hash from the paper log>
 
-   Paste the `<seq>:<hash>` part of the mailed line, or the whole `Audit head: <seq>:<hash>` line
-   in quotes: both are accepted.
+   Type the `<seq>:<hash>` from the paper log; the form `"Audit head: <seq>:<hash>"` (in quotes) is
+   accepted too. A typing mistake in the hash gives a mismatch: compare it with the paper again
+   before you treat a mismatch as tampering.
 
    Expected, both times: `audit chain OK; checkpoint <seq> found`.
 7. **Every license file:**
@@ -689,8 +718,8 @@ point in time in the Neon console. The branch has the roles and logins already, 
 4. Connect with your own owner login to the branch's host, with `sslmode=verify-full` as for
 production, and run steps 6, 7 and 8 against it. For step 5 run `vendor-console migrate` with the
 migration login on the branch, and read `goose_db_version` with `psql` on the branch instead of
-`docker exec`. Use the head of the newest weekly summary sent before the chosen point in time. Delete
-the branch afterwards.
+`docker exec`. Use the newest audit head in the paper log taken before the chosen point in time.
+Delete the branch afterwards.
 
 **Success** means: the restore finished without errors, `migrate` changed nothing, both checkpoints
 were found, every license verified, and the count matches the record. Anything else: find out why
@@ -701,11 +730,11 @@ before the next issue, and record it.
     Restore drill <YYYY-MM-DD>, done by <name>
     Dump: vendor-<YYYYMMDD>.dump.<gpg|age>, taken <YYYY-MM-DD HH:MM UTC>, stored at <place>
     Recorded before the dump: audit head <seq>:<first 12 hex of hash>, licenses <N>
-    Weekly summary checkpoint: <seq>:<first 12 hex of hash> from the summary of <YYYY-MM-DD>
+    Paper log checkpoint: <seq>:<first 12 hex of hash>, copied on <YYYY-MM-DD>
     pg_restore: OK / errors: <...>
     Schema version before/after migrate: <n>/<n>
     audit-verify --head (recorded head): OK / <output>
-    audit-verify --head (summary head): OK / <output>
+    audit-verify --head (paper log head): OK / <output>
     verify-licenses: checked <N>, problems <M>
     Spot check: <LICENSE-ID>, hash equal yes/no, licensectl verify OK yes/no
     Neon history window checked: <days>
@@ -714,27 +743,42 @@ before the next issue, and record it.
 ## 7. Tamper evidence
 
 `audit-verify` shows that no audit row was edited or removed from the middle of the chain. It
-cannot see newest rows that were cut from the end. The weekly summary closes that gap: its last line
-is
+cannot see newest rows that were cut from the end. A checkpoint kept outside the database closes
+that gap: the head `<seq>:<hash>`, the newest audit row at some moment.
+
+**The witness is the paper log, not the notification.** The weekly summary notification ends with
 
     Audit head: <seq>:<hash>
 
-the newest audit row at the time the summary was written. The owner's mailbox is the witness outside
-the database. Keep every summary mail; do not delete them.
+the newest audit row when the summary was made. But notifications live in the same database as the
+audit log: whoever can remove audit rows (the migration login, a superuser, the Neon account) can
+change or delete the notification too. An in-app notification is therefore **not** an external
+witness. (Before, the weekly summary was an e-mail kept in the owner's mailbox outside the
+database; that channel is gone.) The witness is the paper log:
+
+- **Every week**, the owner copies the head into the paper log: the date and the whole
+  `<seq>:<hash>` (all 64 hex digits), read back once. Take it from the newest weekly summary
+  notification or, better, print it directly as the owner login with `vendor-console audit-head`;
+  either is fine, as long as it is written down outside the database the same week.
+- A head from the paper log is what `audit-verify --head` checks against, here, in the restore drill
+  (section 6) and in the incident checklists (section 9). Never use a head read back from a
+  notification for these checks.
+- Keep the paper log with the counter readings (section 2). Do not throw old pages away.
 
 To check now, as the owner login:
 
-    vendor-console audit-verify --head <seq>:<hash>
+    vendor-console audit-verify --head <seq>:<hash from the paper log>
 
 - `audit chain OK; checkpoint <seq> found`: the chain is intact and the rows up to the checkpoint are
   still there.
 - `audit chain BROKEN at sequence <n>`: a row was edited or removed in the middle.
 - `audit checkpoint MISMATCH: row <seq> is missing or is not the row of checkpoint ...`: rows up to
-  the checkpoint were removed or replaced after the summary was written. On a production database
-  this means tampering, or that someone restored an older backup without telling you.
+  the checkpoint were removed or replaced after the head was taken (or the head was copied wrong:
+  compare with the paper first). On a production database this means tampering, or that someone
+  restored an older backup without telling you.
 
-`vendor-console audit-head` prints the current head (owner or notifier login), for a checkpoint
-between two summaries, for example before and after a migration.
+`vendor-console audit-head` prints the current head (owner or notifier login): for the weekly paper
+log entry, and for extra checkpoints, for example before and after a migration.
 
 The owner reads the audit with `audit show` (owner login only):
 
@@ -751,48 +795,56 @@ Rows come newest first: sequence, time (UTC), actor, action, subject. `--limit` 
 1. **Stop issuing.** Tell every signer not to sign until you say so. If the web service may be
    involved, stop it.
 2. **Keep the evidence.** Change nothing in the database. Take an encrypted dump now (section 6).
-   Save the `audit-verify` output, the time, and the summary mails.
+   Save the `audit-verify` output, the time, and the paper log page with the head used.
 3. **Compare with a Neon restore point.** Create a branch from a time before the suspected change
-   (at or just after the checkpoint's summary). On the branch, run `audit-verify --head` with the
-   same checkpoint and `audit show` for the rows from that time. Compare with production to see
-   which rows are missing or changed. Compare the `licenses` table with the issuance mails in the
-   owner's mailbox (there is one mail for every license inserted).
+   (at or just after the time the paper log head was taken). On the branch, run `audit-verify
+   --head` with the same checkpoint and `audit show` for the rows from that time. Compare with
+   production to see which rows are missing or changed. There is no trail of mails outside the
+   database: the issuance notifications are in the same database (one for every license inserted,
+   kind `license.issued`, except read ones older than 180 days, which `notify run` prunes), so
+   compare on the branch and in production, as the owner login, the `licenses` table with the
+   notifications and with the audit rows:
+
+       SELECT license_id, issued_at FROM licenses ORDER BY issued_at;
+       SELECT created_at, subject, title FROM notifications WHERE kind = 'license.issued' ORDER BY id;
+       vendor-console audit show --action license. --limit 1000
+
+   A difference that also shows on the branch happened before the branch's time. Whoever removed
+   audit rows could also have removed notifications, so agreement between the two proves nothing on
+   its own; the paper log heads and the Neon history are the outside evidence.
 4. Find out which login could have done it (section 9, "Database credential leak"). Only the
    migration login, or a superuser, can remove audit rows.
 5. Decide with what you found whether to restore from the branch. Record what happened.
 
 ## 8. Monitoring
 
-`notify run` runs from a timer (hourly in the example of vendor-console.md). Each run sends due
-mails and, when more than 7 days passed since the last one, the weekly summary.
+`notify run` runs from a timer (hourly in the example of vendor-console.md). Each run creates the
+due expiry reminders, the weekly summary when 7 days or more passed since the last one, and prunes
+read notifications older than 180 days. Nothing sends mail: everything appears under the bell of the
+web page, and only there.
 
-- **A dead timer.** No weekly summary for 8 days means the timer, the server, the database
-  connection or the mail is down. The owner notices because the summary stops arriving: put a
-  weekly reminder in the owner's calendar ("summary arrived?"). On the timer server:
-  `systemctl list-timers vendor-notify.timer` and `journalctl -u vendor-notify.service`. A run that
-  had errors exits with 1, so `systemctl --failed` shows it.
-- **Failed mail.** The summary's "Failed e-mails" section lists mails given up on in the last 28
-  days. To list them now (owner or notifier login):
+- **Look at the bell every week.** Nobody is told anything outside the web page, so a notification
+  is seen only when someone signs in and looks. The owner signs in at least once a week, reads the
+  new owner notifications and copies the audit head into the paper log (section 7). Put a weekly
+  reminder in the owner's calendar ("bell read, audit head copied?").
+- **A dead timer.** No weekly summary notification for 8 days means the timer, the server or the
+  database connection is down. There is no mail whose absence anybody would notice: the only sign
+  is a missing summary under the bell, so the weekly calendar reminder above is what catches it.
+  On the timer server: `systemctl list-timers vendor-notify.timer` and
+  `journalctl -u vendor-notify.service`. A run that had errors exits with 1, so `systemctl --failed`
+  shows it. As the owner login, the newest summary:
 
-      vendor-console notify failed
+      SELECT created_at, title FROM notifications WHERE kind = 'summary.weekly' ORDER BY id DESC LIMIT 1;
 
-  Fix the cause (an address, the SMTP login), then, **with the notifier login**:
-
-      vendor-console notify retry <ID>
-
-  The next `notify run` sends it, with a fresh attempt count. Only a failed, unsent mail is touched.
-  The owner login is refused: a retry is the notifier's job. Each retry writes a `mail.retry` audit
-  row. That row is a trail, not a control: the notifier login may add mail to the outbox, so it
-  could also queue a new mail without a retry row. The owner can read the outbox directly:
-
-      SELECT id, kind, to_addrs, created_at, attempts, last_error FROM mail_outbox
-      WHERE failed_at IS NOT NULL ORDER BY id DESC;
-
-- **Unusual.** Read the summary's "Unusual" section every week: licenses issued at night, a signer
-  with more than 5 licenses in a day, and licenses without an issue audit row. The last one means
-  triggers were turned off or audit rows are gone: follow section 7, "When a check fails".
-- **Issued licenses.** Every license sends the owner a mail. A license you did not expect is an
-  incident (section 9).
+- **No owner web user.** `notify run` warns in its journal (`warning: no enabled owner web user
+  exists; ...`) while no enabled web user has the role `owner`. The notifications are kept, but
+  nobody sees them: create one (section 3, "The owner on the web page").
+- **Unusual.** Read the summary's "Unusual" section every week, and every `activity.unusual`
+  notification (severity alert) at once: licenses without an issue audit row, a signer with more than
+  5 licenses in a day, licenses issued at night. The first one means triggers were turned off or
+  audit rows are gone: follow section 7, "When a check fails".
+- **Issued licenses.** Every license creates an owner notification (`License issued: ...`). A license
+  you did not expect is an incident (section 9).
 
 ## 9. Incident checklists
 
@@ -804,7 +856,7 @@ review `webuser.passkey_add` rows (`vendor-console audit show --action webuser.p
 The service cannot sign, so no license can be forged through it. Then:
 
 - [ ] Rebuild the server from a clean image; new TLS certificate.
-- [ ] `audit-verify --head` with the newest summary's line.
+- [ ] `audit-verify --head` with the newest head in the paper log.
 - [ ] Check the requests and customers added in the period with `audit show --since <date>`.
 
 ### Signer machine compromise
@@ -814,15 +866,18 @@ The service cannot sign, so no license can be forged through it. Then:
       compromised (section 4).
 - [ ] With a YubiKey (option 3): the key cannot have been copied, but every PIN entry and touch on
       that machine may have signed a license of the malware's choosing instead of the one shown.
-      Such a license is never recorded (no issuance mail, no audit row, `verify-licenses` never sees
+      Such a license is never recorded (no issuance notification, no audit row, `verify-licenses` never sees
       it). Run the counter reconciliation (section 2) for every key used on that machine. If the
       counter is higher than the paper log and the database explain, treat the key as compromised
       (section 4). Either way remove the YubiKey from that machine and change its PIN on a clean
       computer.
 - [ ] Rotate the signer's database password (below).
 - [ ] Check the licenses issued by that login: `audit show --actor <login> --action license.`, and
-      compare with the issuance mails.
-- [ ] `audit-verify --head` with the newest summary's line.
+      compare with the `license.issued` notifications (owner login:
+      `SELECT created_at, subject, body FROM notifications WHERE kind = 'license.issued' ORDER BY id;`;
+      the body's "Signed by" line is the login; read ones older than 180 days are pruned). There
+      is no mail trail outside the database.
+- [ ] `audit-verify --head` with the newest head in the paper log.
 
 ### Database credential leak
 
@@ -850,26 +905,32 @@ The service cannot sign, so no license can be forged through it. Then:
 - [ ] Lost database password: reset it with the migration login in `psql`
       (`\password "<owner login>"`).
 - [ ] Lost migration login: reset it in the Neon console with the Neon account.
-- [ ] Lost access to the `owner_email` mailbox: the summaries (checkpoints) and issuance mails are
-      there. Set a new address with `vendor-console settings set owner_email <address>` and note in
-      the operations log from which date the checkpoints are in the new mailbox.
-- [ ] The owner leaves the company: the next owner gets a new login in `vendor_owner` and the
-      migration login; then offboard the old owner (section 3) and rotate every shared credential.
+- [ ] Lost owner passkey: as the owner login, `vendor-console web-user invite <owner web user>` and
+      enroll a new passkey. If the passkey may be in someone else's hands, `web-user disable` that
+      name and `web-user add <new name> --owner` instead. The notifications are not lost: the new
+      web user sees every owner notification still in the database (only read marks are per person).
+- [ ] The owner leaves the company: the next owner gets a new login in `vendor_owner`, the migration
+      login, a new owner web user (`web-user add <name> --owner`) and the paper log; then offboard
+      the old owner (section 3: disable the old owner web user, drop the login) and rotate every
+      shared credential.
 
 ## 10. Quarterly and yearly checklists
 
 ### Every quarter
 
 - [ ] Restore drill (section 6), recorded.
-- [ ] `vendor-console audit-verify --head <newest summary's line>` on production.
+- [ ] `vendor-console audit-verify --head <newest head in the paper log>` on production.
 - [ ] `vendor-console verify-licenses --keyset internal/license/keys/production.json` on production.
-- [ ] `vendor-console notify failed`: nothing old left.
-- [ ] `vendor-console web-user list`: disable people who left.
+- [ ] Every week of the quarter has an audit head in the paper log (the weekly calendar reminder
+      did its job).
+- [ ] `vendor-console web-user list`: disable people who left; only the people you expect have the
+      role `owner`.
 - [ ] The login list (section 3): drop logins of people who left.
 - [ ] `vendor-console audit show --action webuser.passkey_add --since <date of last check>`: every
       new passkey belongs to an enrollment you know about.
 - [ ] The encrypted dumps exist where they should, and the newest is less than a month old.
-- [ ] Every weekly summary of the quarter arrived (no gap of more than 8 days).
+- [ ] Every week of the quarter has a weekly summary notification (no gap of more than 8 days;
+      `SELECT created_at FROM notifications WHERE kind = 'summary.weekly' ORDER BY id;`).
 - [ ] With YubiKeys: the counter reconciliation (section 2) for every key ID, the spare included.
 
 ### Every year
@@ -878,8 +939,7 @@ The service cannot sign, so no license can be forged through it. Then:
       section 6); with YubiKeys, run `signer test` with each one (its PIN works) and check the spare is
       where the log says.
 - [ ] Decrypt the oldest dump you keep, to prove its passphrase still works.
-- [ ] Rotate the passwords of the web service login, the notifier login, the SMTP login and the
-      migration login.
+- [ ] Rotate the passwords of the web service login, the notifier login and the migration login.
 - [ ] Plan key rotation: a new key is added at least one release before it is used
       (licensing-vendor.md section 7).
 - [ ] Renew the web service's TLS certificate if it is not renewed automatically.
@@ -1109,7 +1169,7 @@ updating first.
    `licensectl`, keeps the key off any online machine; option 2 is the dedicated online signer
    computer. A later improvement could add an offline round trip: the console exports the payload,
    the offline `licensectl` signs it, and the console imports and verifies the signed file. That
-   would put option 1 licenses in the database, with mails and reminders, without hardware.
+   would put option 1 licenses in the database, with notifications and reminders, without hardware.
 
 (A YubiHSM 2 also signs full Ed25519 messages, but has no per-signature touch and needs its own
 connector. Consider it only if 2 to 5 fail.)

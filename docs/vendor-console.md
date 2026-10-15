@@ -49,12 +49,15 @@ tool made the change.
 ## What the audit check proves
 
 `audit-verify` proves that no audit row was edited or removed from the middle of the log. On its
-own it does not prove that the newest rows were not removed. The weekly summary mail closes that
-gap: its last line is `Audit head: <seq>:<hash>`, the newest audit row when it was written, and the
-owner's mailbox keeps it outside the database. As the owner login:
+own it does not prove that the newest rows were not removed. A checkpoint kept outside the database
+closes that gap: the head `<seq>:<hash>`, the newest audit row at some moment. The weekly summary
+notification ends with `Audit head: <seq>:<hash>`, and `vendor-console audit-head` prints the
+current one. The notification lives in the same database as the audit log, so it is **not** an
+outside witness: someone who can remove audit rows could change it too. The owner copies the head
+into the paper log every week (runbook, section 7), and the checks use the head from the paper log:
 
-    vendor-console audit-verify --head <seq>:<hash>   # chain intact and rows up to the checkpoint still there
-    vendor-console audit-head                         # the current head, to keep elsewhere (owner or notifier login)
+    vendor-console audit-verify --head <seq>:<hash>   # chain intact and rows up to the checkpoint still there (owner login)
+    vendor-console audit-head                         # the current head, for the paper log (owner or notifier login)
 
 A mismatch means rows up to the checkpoint were removed or replaced after it was taken; see the
 runbook, section 7, for what to do.
@@ -168,15 +171,17 @@ Two more commands, YubiKey build only:
 
 ## Sales web service
 
-`vendor-web` is the web page for sales people: sign in with a passkey, add customers, make and
-cancel license requests, list licenses with their end dates, download signed license files. It has
+`vendor-web` is the web page for sales people and the owner: sign in with a passkey, add customers,
+make and cancel license requests, list licenses with their end dates, download signed license files,
+read notifications ("Notifications" below). It has
 no signing key and its database login cannot write signed licenses, so a break-in cannot create a
 valid license. It is for the vendor only and never ships to customers.
 
 ### Who does what
 
-The IT manager runs the service. The owner (login in `vendor_owner`) creates the sales people. A
-sales person is a row in the database, not a database login. The service is the one database login,
+The IT manager runs the service. The owner (login in `vendor_owner`) creates the web users: the
+sales people (role `sales`) and the owner's own web user (role `owner`, which also sees the owner
+notifications). A web user is a row in the database, not a database login. The service is the one database login,
 and it acts for the signed-in person inside each transaction. The audit log shows `web:<name>`.
 
 ### Database login for the service
@@ -248,7 +253,8 @@ itself: no inline script or style.
 ### Pages
 
 `/login` and `/enroll` need no session. After sign-in: `/` (home), `/customers`, `/requests/new`,
-`/requests/ID`, `/licenses`, `/licenses/ID/download`. Any other path shows nothing to a signed-out
+`/requests/ID`, `/licenses`, `/licenses/ID/download`, `/notifications`. The pages are the same for
+both roles; the role only decides which notifications a person sees. Any other path shows nothing to a signed-out
 visitor except the sign-in page. A person can cancel only their own open requests; everyone can read
 all requests.
 
@@ -256,13 +262,17 @@ all requests.
 
 As the owner login (`VENDOR_DATABASE_URL`):
 
-    vendor-console web-user add NAME       # prints a one-time enrollment code
-    vendor-console web-user invite NAME    # a new code, for a lost key
-    vendor-console web-user disable NAME   # leaves: no new sign-in, sessions end
+    vendor-console web-user add NAME           # role sales; prints a one-time enrollment code
+    vendor-console web-user add NAME --owner   # role owner (the owner's own web user)
+    vendor-console web-user invite NAME        # a new code, for a lost key
+    vendor-console web-user disable NAME       # leaves: no new sign-in, sessions end
     vendor-console web-user enable NAME
-    vendor-console web-user list
+    vendor-console web-user list               # NAME  ROLE, and "disabled" when disabled
 
-`NAME` has letters, digits, `.`, `_` and `-`, up to 64 characters. The code is valid for 24 hours,
+`NAME` has letters, digits, `.`, `_` and `-`, up to 64 characters. The role is set when the person
+is added (`add` prints `enrollment code for NAME (role R) ...`) and is recorded in the
+`webuser.add` audit row. It cannot be changed afterwards, not from the web page and not with a
+command: disable the person and add a new name. The code is valid for 24 hours,
 works once, and is shown once; only a hash is stored. Give it to the person over a channel you
 trust. The person opens `/enroll`, types the code and registers a passkey (a security key or the
 phone or computer's own). The authenticator must verify the person with a PIN or biometrics. Adding
@@ -280,8 +290,8 @@ Use `VENDOR_WEB_ORIGIN=http://localhost:8443` and a database on the same compute
 
 - Run one instance. The passkey ceremony state is kept in memory, so a second instance behind a
   load balancer would fail some sign-ins. Restarting loses only ceremonies in progress.
-- Backup of the database includes the `web_users`, `web_credentials`, `web_enrollments` and
-  `web_sessions` tables. A restore keeps passkeys working if `VENDOR_WEB_RPID` is unchanged.
+- Backup of the database includes the `web_users`, `web_credentials`, `web_enrollments`,
+  `web_sessions`, `notifications` and `notification_reads` tables. A restore keeps passkeys working if `VENDOR_WEB_RPID` is unchanged.
   Sessions are not worth restoring. Backups and the restore drill: runbook, section 6.
 
 ### After a break-in of the web service
@@ -297,32 +307,91 @@ as that person. After a suspected break-in of the server that runs `vendor-web`:
 3. Rotate the service login's password (in `psql` as the migration login: `\password vendor_web_svc`)
    and update `VENDOR_WEB_DATABASE_URL`.
 
-## Mail and reminders
+## Notifications
 
-`vendor-console notify run` sends the owner an e-mail for every issued license, a weekly summary,
-and expiry reminders. It is meant for cron or a systemd timer and does one pass, then exits.
+The owner and the sales people see their notifications inside the sales web page: a bell with the
+number of unread notifications and a notifications page. Nothing is sent anywhere: there is no
+e-mail, no browser push and no desktop notification. The commands print their own results on the
+terminal as usual.
 
-### What you need
+### What creates a notification
 
-The SMTP server is any provider (a transactional service or your own mail server). Environment of
-the run:
+- **Issued license** (kind `license.issued`, for the owner). A database trigger writes it in the
+  same statement that inserts the license, so it exists even when someone issues with plain SQL,
+  and a hostile customer name cannot make the insert fail. Title `License issued: CUSTOMER
+  (LICENSE)`; body: customer, license ID, targets, valid from and until, who signed, key ID and
+  request number. "Signed by" is the login that inserted the license (the same name the audit log
+  records), not the `signed_by` column, which the inserting client can fill in itself; when that
+  column holds a different name the body adds `Recorded signer: NAME (differs from the login)`.
+  The notifier login cannot write a notification of this kind (row-level security), so it cannot
+  pre-empt the real one.
+- **Expiry reminder** (kind `license.ending`), created by `notify run` (below) when a license ends
+  within 90, 60 and 30 days. Title `License ending in N days: CUSTOMER`; body: customer, license
+  ID, valid until, days left, targets, who requested it and `Renew: /requests/new?renew=<license-id>`.
+  Severity `warning` at 30 days, `info` before.
+- **Weekly summary** (kind `summary.weekly`, for the owner), created by `notify run` once every 7
+  days (below).
+- **Unusual activity** (kind `activity.unusual`, severity `alert`, for the owner), created together
+  with a weekly summary whose Unusual section is not empty. It repeats that section, so it stands out
+  in the list instead of hiding inside a routine summary.
 
-- `VENDOR_SMTP_ADDR`: `host:port`. Port 465 means TLS from the first byte; any other port must
-  offer STARTTLS. The certificate is verified against the system roots, also on a local relay: a
-  relay on the same computer that offers STARTTLS with a self-signed certificate fails that check
-  and every mail is retried and finally marked failed. Give such a relay a certificate from a trusted CA, or turn its
-  STARTTLS off (see below).
-- `VENDOR_SMTP_FROM`: the sender address, for example `licenses@example.com`. It is the envelope
-  sender and the `From:` header; the provider usually has to allow it.
-- `VENDOR_SMTP_USER` and `VENDOR_SMTP_PASSWORD`: the login, both or neither. A login is sent only
-  over an encrypted connection.
-- `VENDOR_DATABASE_URL`: the notifier login (below), with `?sslmode=verify-full`. Also needed
-  for `--dry-run`, which connects with the same notifier login.
+No notification contains the installation ID, the license file or its content, or a customer
+contact. Names and license IDs are cut to a bounded length, and control characters (line breaks,
+escape sequences) and invisible formatting characters (such as bidi overrides) become a space, in
+the title and the body, so a customer name with a line break inside is shown on one line and cannot
+add a line of its own. The page shows every text escaped.
 
-If the server offers no STARTTLS the message is not sent, except to a server on the same computer
-(a local relay), where no login is sent either. The program announces itself with `EHLO localhost`;
-a strict provider that insists on a real host name in EHLO may refuse it, and this cannot be
-changed today. Nothing in logs, errors or mails contains the SMTP password or the database URL.
+### Who sees what
+
+Each notification has an audience: `owner`, `sales` or one named web user.
+
+- A web user with the role **owner** sees the owner notifications, the sales notifications and the
+  ones addressed to them.
+- A web user with the role **sales** sees the sales notifications and the ones addressed to them;
+  never an owner notification or another person's.
+- A **disabled** web user sees nothing (and cannot sign in).
+
+Issuance, the weekly summary and unusual activity go to the owner. A reminder goes to the owner
+and, when the license was requested on the web page by a web user who is enabled and is not an
+owner, also to that person. A request made with a database login gets the owner's copy only. No
+notification uses the audience `sales` today.
+
+Read state is kept per person: marking a notification read does not mark it for anybody else, and
+two owners each have their own unread count. The web service reads and marks notifications only
+through four database functions (`web_notifications`, `web_unread_count`, `web_mark_read`,
+`web_mark_all_read`); it cannot read the tables directly, write a notification or mark one for
+another person, and the functions show nothing unless the transaction acts for that same person.
+
+### The bell and the page
+
+Every signed-in page shows `Notifications (N)` at the top, N being the unread count (no number when
+there is nothing unread); it links to `/notifications`. The home page lists the 3 newest unread
+notifications. `/notifications` lists the newest 100 (all, or unread only with the filter), each
+with its severity (`info`, `warning`, `alert`), its time in UTC, a link to the request or the
+license list when it is about one, and the body behind a "details" toggle. "Mark as read" marks one
+and "Mark all as read" marks every notification the person can see. Notifications are never deleted
+from the web page.
+
+### The owner on the web page
+
+The owner reads the owner notifications as a web user with the role `owner`. Create it once, as the
+owner login (`VENDOR_DATABASE_URL`):
+
+    vendor-console web-user add NAME --owner
+
+and enroll a passkey at `/enroll` with the printed code, like every sales person (see "Sales
+people"). The owner web user can also use every sales page. The owner keeps the `vendor_owner`
+database login for the command line work (`audit show`, `license revoke`, the `web-user` and
+`settings` commands); the web role gives no database rights. A role cannot be changed: disable the
+person and add a new name. As the owner login, the notifications can also be read with SQL (the
+owner may read `notifications`, `notification_reads` and `reminders`, but not change them):
+
+    select id, created_at, kind, audience, title from notifications order by id desc limit 20;
+
+### The periodic job: notify run
+
+`vendor-console notify run` creates the due expiry reminders and the weekly summary, and prunes old
+read notifications. It does one pass and exits; run it from a systemd timer (or cron) every hour.
 
 Create the notifier login once, as a role that may create roles:
 
@@ -331,63 +400,56 @@ Create the notifier login once, as a role that may create roles:
 
 `vendor_notifier` is created by `vendor-console migrate`. It reads only the columns it needs:
 licenses without the license file, the ID and name of customers (no contact, no notes), the
-number, customer, status, requester and time of requests (not their contents), the name, address
-and disabled time of web users, the settings, and the time, actor, action and subject of audit
-rows (not their details). It adds mail to the outbox and may change only its delivery columns
-(recipients, sent, attempts, last error, failed, next attempt), never a subject or body; it adds
-reminder records and stores the time of the last summary. It cannot sign or change a license.
-`notify run` refuses a login that is not a member of it. Do not use the owner or migration login.
+number, customer, status, requester and time of requests (not their contents), the name, role and
+disabled time of web users, the settings, and the time, actor, action and subject of audit rows
+(not their details). It adds notifications (never one of kind `license.issued` or with an `issued`
+key) and reminder records, stores the time of the last summary and prunes through one database
+function. It cannot change or delete a notification otherwise, sign or change a license. `notify
+run` refuses a login that is not a member of it. Do not use the owner or migration login.
 
-Then, as the owner login:
-
-    vendor-console settings set owner_email owner@example.com
-    vendor-console settings set timezone Europe/Istanbul     # default when not set
-    vendor-console settings show
-    vendor-console web-user set-email NAME sales.person@example.com   # "" removes the address
-
-`timezone` is an IANA name; it decides what counts as night and as a day in the summary. `owner_email`
-and `timezone` are audited (`settings.set`), the web user's address too (`webuser.email`). Until
-`owner_email` is set, mails for the owner wait in the outbox with no recipient and go out on the
-first run after it is set. Nothing is lost, but nothing is merged either: a weekly summary is still
-created every week while no address is set, and all the waiting summaries go out together on that
-first run.
-
-### Run it
-
-    vendor-console notify run --base-url https://licenses.example.com
+    vendor-console notify run
     vendor-console notify run --dry-run
 
 One run does these steps in order, and a failing step does not stop the next ones (the errors are
-printed at the end and the exit code is 1; it is also 1 when a message was marked failed):
+printed at the end and the exit code is 1):
 
-1. Fill the recipient of waiting mails from `owner_email`.
-2. Create expiry reminders (below).
-3. Create the weekly summary when one is due (below).
-4. Send every due mail in the outbox, oldest first.
+1. Create expiry reminders (below). Prints `reminders: N created`.
+2. Create the weekly summary when one is due (below). Prints `weekly summary: created` or
+   `weekly summary: not due`.
+3. Prune old notifications (below). Prints `pruned: N`.
 
-It prints one line for each step with counts. `--base-url` is the public address of `vendor-web`;
-it is used for the Renew link in reminders and without it reminders have no link. `--dry-run`
-prints how many recipients, reminders and mails there would be, whether a summary is due, and
-changes nothing and sends nothing; it needs no SMTP settings, but it does need
-`VENDOR_DATABASE_URL` with a notifier login. A SIGTERM stops the run between mails; a mail the
-server already accepted is still recorded as sent.
+Before the steps it warns on standard error when no enabled web user has the role owner
+(`warning: no enabled owner web user exists; owner notifications will wait until one is created`);
+the notifications are still created and the owner sees them once an owner web user exists. The
+warning never fails the run.
 
-A mail is due when its next-attempt time, set by the database clock when the mail is created, is
-not after the run's own time, taken from the host clock. If the host clock is behind the database
-clock, a mail created during a run (an issuance mail, a reminder, the summary) may wait until the
-next run. Keep both clocks synchronised (NTP).
+`--dry-run` makes the same selection in a read-only transaction and changes nothing. It prints
+`dry run, nothing changed`, `reminders: N to create`, `weekly summary: due` or `not due`, and
+`pruned: not run (dry run)`. It needs `VENDOR_DATABASE_URL` with the notifier login too. A SIGTERM
+stops a run between licenses; what was committed stays.
+
+Two runs at the same time are safe: every notification has a unique key, so each reminder and each
+weekly summary is created once. The schedule is the timer's job: the program creates the weekly
+summary when 7 days or more passed since the last one, so an hourly timer gives a summary about every
+7 days, a few hours late at most when the timer was off.
 
 Example systemd units that run it every hour (`/etc/systemd/system/vendor-notify.service` and
-`.timer`). Run it as an unprivileged system user, not root (`useradd --system vendor-notify`):
+`/etc/systemd/system/vendor-notify.timer`). Run it as an unprivileged system user, not root
+(`useradd --system vendor-notify`):
 
+    # vendor-notify.service
     [Unit]
-    Description=Vendor console mail and reminders
+    Description=Vendor console reminders and weekly summary
 
     [Service]
     Type=oneshot
     User=vendor-notify
     EnvironmentFile=/etc/vendor-console/notify.env
-    ExecStart=/usr/local/bin/vendor-console notify run --base-url https://licenses.example.com
+    ExecStart=/usr/local/bin/vendor-console notify run
+
+    # vendor-notify.timer
+    [Unit]
+    Description=Run vendor-notify.service every hour
 
     [Timer]
     OnCalendar=hourly
@@ -396,47 +458,26 @@ Example systemd units that run it every hour (`/etc/systemd/system/vendor-notify
     [Install]
     WantedBy=timers.target
 
-`notify.env` holds `VENDOR_DATABASE_URL`, `VENDOR_SMTP_ADDR`, `VENDOR_SMTP_FROM`,
-`VENDOR_SMTP_USER` and `VENDOR_SMTP_PASSWORD`, one `NAME=value` per line. systemd reads it before
-switching to `User=`, so it can stay readable by root only:
+`notify.env` holds one line, `VENDOR_DATABASE_URL=...`, the connection string of the notifier login
+with `?sslmode=verify-full`. systemd reads it before switching to `User=`, so it can stay readable
+by root only:
 
     chown root:root /etc/vendor-console/notify.env
     chmod 0600 /etc/vendor-console/notify.env
 
 systemd does not read the file like a shell: a backslash is an escape character even outside
-quotes, and a value that starts with a quote is a quoted value. So write every value that contains
-a backslash, a quote, a space or `$` (common in passwords and in a `From` with a display name) in
-double quotes, and inside them put a backslash before each `"` and `\`, for example
-`VENDOR_SMTP_FROM="Licenses <licenses@example.com>"`. A line that starts with `#` is a comment.
-Enable it with `systemctl enable --now vendor-notify.timer`.
-Two runs at the same time are safe: each mail is claimed by one of them. The schedule is the timer's
-job: the program sends the weekly summary when more than 7 days passed since the last one, so an hourly
-timer gives a summary about every 7 days, a few hours late at most when the timer was off.
-
-### What each mail contains
-
-- **Issued license** (written by the database in the same statement that inserts the license, so
-  it exists even when someone issues with plain SQL): customer, license ID, targets, valid from and
-  until, who signed, key ID and request number. Sent to the owner. "Signed by" is the login that
-  inserted the license (the same name the audit log records), not the `signed_by` column, which
-  the inserting client can fill in itself. When that column holds a different name the mail adds a
-  line `Recorded signer: NAME (differs from the login)`.
-- **Reminder** (subject `License ending in N days: CUSTOMER`): customer, license ID, valid until,
-  days left, targets, who requested it, and the Renew link when `--base-url` is given.
-- **Weekly summary**: see below.
-
-No mail contains the installation ID, the license file or its content, a customer contact or a
-customer e-mail address. Names and license IDs are cut to a bounded length, and control characters
-(line breaks, escape sequences) and invisible formatting characters (such as bidi overrides) are
-removed or turned into a space, in the subject and the body, so a customer name with a line break
-inside is shown on one line and cannot add a line of its own.
+quotes, and a value that starts with a quote is a quoted value. If the password contains a
+backslash, a quote, a space or `$`, write the value in double quotes and put a backslash before
+each `"` and `\` inside them. Enable it with `systemctl enable --now vendor-notify.timer`. Nothing in
+logs or errors contains the database URL.
 
 ### Weekly summary
 
-Sent to `owner_email`, subject `Weekly summary: N issued, N open requests, N unusual`. It goes out
-even on a quiet week, which shows the system is alive. The first one covers the 7 days before the
-run; later ones start where the last one ended. All times are in the configured time zone. Sections
-(at most 20 lines each, then `... and N more`):
+Title `Weekly summary: N issued, N open requests, N unusual`, for the owner. It is created even on a
+quiet week, which shows the system is alive. The first one covers the 7 days before the run; later
+ones start where the last one ended. All times are in the configured time zone. Sections (at most
+20 lines each, then `... and N more`; fewer when the body would pass 4000 characters, the long lists
+giving up lines first):
 
 - **Issued since ...**: license, customer, targets, signer, time. Signer and time are the login and
   time of the license's audit row (`license.issue`), written by the database when the license was
@@ -445,18 +486,27 @@ run; later ones start where the last one ended. All times are in the configured 
 - **Open requests**: number, customer, age in days, who requested.
 - **Ending in the next 90 days**: licenses that are not revoked, not replaced and not renewed (the
   same rule as the reminders, below).
-- **Failed e-mails**: every mail that was given up on in the last 28 days (kind, created, subject,
-  error). A failure stays listed in four summaries in a row.
-- **Unusual**: a license issued from 22:00 up to 06:00 local time, or a signer who issued more than 5
-  licenses on one local day, both judged by the audit time and login. If the `timezone` setting is
-  not a known zone, times are shown in UTC and the section says so.
-  The section also counts every license, whatever its dates, that has no `license.issue` audit row,
-  which means it was inserted with the database triggers turned off or its audit row is gone
-  (`N license(s) have no issue audit row (possible tampering or disabled triggers)`).
+- **Unusual**, in this order: every license, whatever its dates, that has no `license.issue` audit
+  row, which means it was inserted with the database triggers turned off or its audit row is gone
+  (`N license(s) have no issue audit row (possible tampering or disabled triggers)`); a signer who
+  issued more than 5 licenses on one local day; a license issued from 22:00 up to 06:00 local time.
+  Both of the last two are judged by the audit time and login. When lines must be dropped to fit,
+  the night lines go first and the tampering line last. If the `timezone` setting is not a known
+  zone, times are shown in UTC and the section says so.
 
-If `last_summary_at` (kept by the program in the settings) is missing, unreadable or more than an
-hour in the future, a summary is sent at the next run. Storing it writes a `settings.set` audit row
-for `last_summary_at` with the notifier login as the actor, one per summary.
+The last line is `Audit head: <seq>:<hash>`, the newest audit row when the summary was made (see
+"What the audit check proves"; it is missing only while the audit log is empty).
+
+The time zone is a setting, as the owner login:
+
+    vendor-console settings set timezone Europe/Istanbul     # default when not set
+    vendor-console settings show
+
+`timezone` is an IANA name; it decides what counts as night and as a day in the summary, and its
+changes are audited (`settings.set`). It is the only setting. `settings show` also prints
+`last_summary_at`, which the program keeps: if it is missing, unreadable or more than an hour in the
+future, a summary is created at the next run. Storing it writes a `settings.set` audit row for
+`last_summary_at` with the notifier login as the actor, one per summary.
 
 ### Reminders
 
@@ -464,57 +514,20 @@ A license that is not revoked, not replaced and not renewed gets a reminder when
 90, 60 and 30 days, each threshold once. Renewed means a later license, not revoked, for the same
 customer and installation that ends after it, whether or not it names the old one as replaced; so
 issuing the renewal stops the reminders for the old license, and the new one gets its own in time.
-Recipients: the owner, and the person who requested the license when that is a web user with an
-e-mail address who is not disabled (a database login has no address, so only the owner is told).
-Each recipient gets a separate mail, so a requester's mailbox that refuses mail does not stop the
-owner's copy; the owner's copy waits for `owner_email` like other owner mail. Catch-up: if a
-license is found already inside a threshold that was never sent (the timer was off, or the license was issued 20 days before its
-end), only the most urgent unsent threshold is mailed and the less urgent ones are recorded as sent,
-so nothing arrives late. A license revoked, replaced or renewed before its reminder gets none; one
-revoked at the same moment as a run can still produce one reminder.
+Catch-up: if a license is found already inside a threshold that never fired (the timer was off, or
+the license was issued 20 days before its end), only the most urgent threshold creates a
+notification and the less urgent ones are recorded as done, so nothing arrives late. A license
+revoked, replaced or renewed before its reminder gets none; one revoked at the same moment as a run
+can still produce one reminder.
 
-The **Renew** link in a reminder (and the Renew link on the license list) opens
+The **Renew** path in a reminder (and the Renew link on the license list) opens
 `/requests/new?renew=<license-id>`: a new request prefilled with the customer, installation,
 targets and features of the old license, starting on its end date, for the person to check and
 submit. Nothing is stored before that.
 
-### Failed mails
+### Pruning
 
-A mail that cannot be sent is tried again with a growing delay of 2^n minutes (2, 4, 8, ... up to 6
-hours) after the n-th failure, and is marked failed after 10 failures (about 14 hours of trying). A
-message the sender refuses before connecting (a malformed address) is marked failed at once, since a
-retry cannot help. Failed mails are listed in the weekly summary, and at any time with
-
-    vendor-console notify failed      # owner or notifier login
-
-The owner login can also read the outbox (and the reminder records) with SQL, but not change them:
-
-    select id, kind, to_addrs, created_at, attempts, last_error from mail_outbox where failed_at is not null order by id desc;
-
-A failed mail is not sent again by itself. Fix the cause (an address, the SMTP login) and either let
-the next event create a new mail or put the mail back in the queue, with the notifier login:
-
-    vendor-console notify retry ID
-
-The next `notify run` sends it with a fresh attempt count. Only a failed, unsent mail is changed;
-the owner login is refused. Each retry writes a `mail.retry` audit row. That row is an audit trail,
-not a tamper-proof control: the notifier login may add mail to the outbox, so it can also queue a
-mail without a retry row.
-
-### Address rules
-
-`settings set owner_email` and `web-user set-email` accept only a plain ASCII address
-`local@domain` (no display name, no quotes, no internationalized characters) whose domain has at
-least one dot, at most 254 characters; the database enforces the same rule, so a stored address is
-always one the sender can mail. An address that breaks the rule is refused when you set it.
-
-`VENDOR_SMTP_FROM` must be a plain ASCII `local@domain` too, but it may carry a display name
-(`Licenses <licenses@example.com>`), which goes into the header only. The dot and length rules
-above are for the stored addresses; they do not apply to `VENDOR_SMTP_FROM`. The sender does not
-speak SMTPUTF8.
-
-### Delivery guarantees
-
-Mail is delivered at least once. If the server accepts a message and the program dies before it can
-write that down (a power cut, a lost database connection), the next run sends it again. A message is
-never dropped silently: it is sent, waiting, retrying, or marked failed.
+Each run removes notifications older than 180 days that at least one web user has read (their read
+marks go with them). An unread notification stays whatever its age, so nothing disappears unseen.
+With two owners, one owner's read is enough. The 180 days are enforced by the database: no caller
+can prune younger ones. The reminder records are not pruned.

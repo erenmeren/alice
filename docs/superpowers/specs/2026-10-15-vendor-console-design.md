@@ -162,9 +162,9 @@ Roles in Postgres (one login per person, no shared password):
 |---|---|
 | `sales` | read customers and licenses; insert customers and requests; update only their own open requests |
 | `signer` | everything `sales` can, plus insert into `licenses`, update request status |
-| `owner` | everything; manage logins; read the mail outbox and the reminder records (Phase 4; changing them is the notifier's) |
-| `vendor_web` | the sales web service login: everything `sales` can (acting as `web:<name>`), plus its own web tables (sessions, adding passkeys and updating their sign counters, consuming enrollment codes) and `web_audit_login`; no signing, no audit read |
-| `vendor_notifier` | the `notify run` login (Phase 4): read only the columns it needs: licenses (not the file), customers (`id`, `name`), requests (`id`, `customer_id`, `status`, `requested_by`, `requested_at`), web users (`name`, `email`, `disabled_at`), settings, audit (`at`, `actor`, `action`, `subject`; no details); insert into the mail outbox and update only its delivery columns (`to_addrs`, `sent_at`, `attempts`, `last_error`, `failed_at`, `next_attempt_at`); insert reminder records; record the time of the last weekly summary through one function; no other writes, no signing |
+| `owner` | everything; manage logins and web users; read (not change) the reminder records, `notifications` and `notification_reads` (writing them is the notifier's and the issuance trigger's). The owner is also a web user with the role `owner` (`web_users.role`; `web-user add NAME --owner`), which sees the owner notifications in the web page; the role is set at creation and cannot be changed through the web or a command |
+| `vendor_web` | the sales web service login: everything `sales` can (acting as `web:<name>`), plus its own web tables (sessions, adding passkeys and updating their sign counters, consuming enrollment codes) and `web_audit_login`; EXECUTE on four notification functions only (`web_notifications`, `web_unread_count`, `web_mark_read`, `web_mark_all_read`), which show and mark only the notifications of the person named by the transaction's actor (they must be called inside the actor transaction) and never another person's; no direct access to `notifications` or `notification_reads`, no INSERT of notifications; no signing, no audit read |
+| `vendor_notifier` | the `notify run` login (Phase 4): read only the columns it needs: licenses (not the file), customers (`id`, `name`), requests (`id`, `customer_id`, `status`, `requested_by`, `requested_at`), web users (`name`, `disabled_at`, `role`), settings, audit (`at`, `actor`, `action`, `subject`; no details); insert notifications (content columns only; row-level security refuses the kind `license.issued` and `issued*` dedupe keys, which only the issuance trigger writes); insert reminder records; record the time of the last weekly summary and prune old read notifications through one function each; no updates or deletes, no signing |
 
 Row-level security enforces this in the database, so a bug in a client cannot widen it.
 Connections require TLS with certificate verification. Credentials come from the environment or
@@ -181,8 +181,11 @@ the two exceptions, neither of which is a ledger).
 `licensectl ledger-verify` stays for the `issued.csv` files of licenses issued with `licensectl`.
 
 The chain alone cannot show that the newest audit rows were cut from the end. Instead of a signed
-head, the weekly summary mail ends with `Audit head: <seq>:<hash>` (the newest row when the summary
-was written); the owner's mailbox is the witness outside the database.
+head, the weekly summary notification ends with `Audit head: <seq>:<hash>` (the newest row when the
+summary was made). The notification lives in the same database, so it is not a witness outside it:
+the owner copies the head into the paper log every week (`vendor-console audit-head` prints it on
+demand), and the paper log is the witness. (E-mail, which used to carry the head outside the
+database, was dropped before deployment; this is a loss of an external channel, accepted.)
 `vendor-console audit-verify --head SEQ:HASH` checks that the chain is intact and that row `SEQ`
 still exists with that hash; `vendor-console audit-head` prints the current head. After a restore,
 `vendor-console verify-licenses` re-checks every stored license file against the key set (file
@@ -190,38 +193,56 @@ hash, signature, and that the row agrees with the signed payload).
 
 ## 7. Owner visibility (built in Phases 4 and 5)
 
-- E-mail to the owner on every signed license: customer, targets, term, signer (the inserting
-  login; a differing `signed_by` value is shown as "Recorded signer"), key ID, request number. A database trigger on `licenses` writes the message into the outbox (`mail_outbox`) in
-  the same statement that inserts the license, so no client can issue without the owner being
-  notified, and a mail server that is down never blocks issuing. `vendor-console notify run` sends
-  the outbox over SMTP (STARTTLS or implicit TLS required, retry with backoff, at-least-once). While
-  no owner address is set, messages wait and go out when it is.
-- Weekly summary, created by the same run when the last one is more than 7 days old: licenses
-  issued in the period, open requests, licenses ending in the next 90 days, failed e-mails of the
-  last 28 days, and unusual activity. Unusual means a license issued between 22:00 and 06:00 in the
-  configured time zone (default `Europe/Istanbul`), or more than 5 licenses by one signer in one
-  local day. Issue time and signer come from the license's audit row, not from the client-writable
-  `issued_at` and `signed_by`. A quiet week still produces a summary.
-- Expiry reminders at 90, 60 and 30 days to the owner and to the person who made the request (when
-  a web user with an e-mail address; disabled users are not mailed). Catch-up rule: a license found
-  already inside a threshold that was never sent gets only the most urgent unsent reminder, and the
-  less urgent ones are recorded as sent. Revoked, replaced or renewed licenses get none (renewed: a
-  later, unrevoked license for the same customer and installation ending after it). Each recipient
-  gets a separate outbox row.
-- Renewal is not a stored draft. The license list has a "Renew" link and every reminder carries one
-  (`/requests/new?renew=<license-id>`): it prefills a new request from the old license (customer,
-  installation, targets, features, start date = old end date) for the person to review and submit.
+Notifications are in-app only: they appear in the vendor web page (a bell with the unread count on
+every signed-in page, the newest unread on the home page, and `/notifications` with mark read and
+mark all read). There is no e-mail, no browser push and no desktop notification. Each notification
+(`notifications` table) has a kind, a severity (`info`, `warning`, `alert`), a one-line title, a
+body of at most 4000 characters, an audience (`owner`, `sales` or one named web user) and a unique
+dedupe key, so concurrent writers create it once. A web user with the role `owner` sees owner and
+sales notifications and their own; a sales user sees sales notifications and their own; a disabled
+user sees nothing. Read state is per person (`notification_reads`). The web service reads and marks
+only through four database functions (section 5); the database enforces who sees what.
+
+- Issuance: a database trigger on `licenses` writes an owner notification (kind `license.issued`,
+  key `issued:<license-id>`, hashed for very long IDs) in the same statement that inserts the
+  license, so no client can issue without the owner being notified, and hostile text cannot make
+  the insert fail. Body: customer,
+  license, targets, term, signer (the inserting login; a differing `signed_by` value is shown as
+  "Recorded signer"), key ID, request number. The notifier cannot pre-empt it (row-level security).
+- `vendor-console notify run` (hourly timer, notifier login) creates the reminders and the weekly
+  summary and prunes, then exits; `--dry-run` reports what it would create and changes nothing. It
+  warns when no enabled owner web user exists.
+- Weekly summary (kind `summary.weekly`, owner), created when the last one is 7 days old or older
+  (the first covers the 7 days before the run): licenses issued in the period, open requests,
+  licenses ending in the next 90 days and unusual activity, then the `Audit head` line (section 6).
+  Unusual, in this order of weight: licenses with no issue audit row (possible tampering), more than
+  5 licenses by one signer in one local day, a license issued between 22:00 and 06:00 in the
+  configured time zone (default `Europe/Istanbul`); when the body must shrink, night lines go first.
+  Issue time and signer come from the license's audit row, not from the client-writable `issued_at`
+  and `signed_by`. A quiet week still produces a summary. When Unusual is not empty, a separate
+  alert notification (kind `activity.unusual`) repeats it.
+- Expiry reminders at 90, 60 and 30 days (kind `license.ending`) to the owner and to the person who
+  made the request, when that is an enabled web user who is not an owner (the owner copy already
+  reaches an owner). Catch-up rule: a license found already inside a threshold that never fired gets
+  only the most urgent reminder, and the less urgent ones are recorded as done. Revoked, replaced or
+  renewed licenses get none (renewed: a later, unrevoked license for the same customer and
+  installation ending after it).
+- Renewal is not a stored draft. The license list has a "Renew" link and every reminder carries the
+  path (`/requests/new?renew=<license-id>`): it prefills a new request from the old license
+  (customer, installation, targets, features, start date = old end date) for the person to review
+  and submit.
+- Pruning: each `notify run` deletes notifications older than 180 days that at least one person has
+  read; unread ones stay. The database enforces the 180-day floor.
+- No notification contains an installation ID, a license file or a customer contact; free text is
+  cleaned of control and bidi characters in SQL and Go and rendered escaped.
 - The owner reads the audit log on the command line, not on a web page: `vendor-console audit show`
   (owner login only; newest first, filters by date, actor and action prefix, at most 1000 rows;
   installation IDs shown only as `inst#<8 hex>` fingerprints). The web service must not be able to
   read the audit log, and a web page would need that (Phase 5 ruling).
-- The weekly summary's last line is the audit head checkpoint (section 6).
 - `vendor-console license revoke --id ID --reason TEXT` (owner login) marks a license revoked in the
   vendor records: reminders stop and the reason is audited. The customer's installation is not
   affected, because license files are checked offline. Revoking a signing key stays a product release
   (section 8).
-- `vendor-console notify failed` lists failed mail (owner or notifier login); `notify retry ID`
-  (notifier login only) queues one again and writes a `mail.retry` audit row.
 
 ## 8. Product-side changes
 
@@ -247,7 +268,7 @@ No change to the license format, the verifier or the license tests is planned.
   bytes against the confirmed SHA-256 stop a swapped database request and catch operator mistakes;
   they do **not** stop malware on the signer computer, which can show the real license and send its
   own payload to the card, getting one signature per PIN entry and touch. That license is never
-  recorded (no issuance mail, no audit row, `verify-licenses` never sees it). The control is the
+  recorded (no issuance notification, no audit row, `verify-licenses` never sees it). The control is the
   counter reconciliation: each key's signature counter is written into the paper log after every
   ceremony, smoke test and signing session, and each quarter it must equal the licenses issued with
   that key ID plus the logged tests and failed signings plus gpg's certifications at key
@@ -280,11 +301,14 @@ No change to the license format, the verifier or the license tests is planned.
    without cgo, the Windows YubiKey build included; the YubiKey build for Linux and macOS needs cgo
    and is built natively).
 3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view is a command line view (`audit show`, Phase 5), not a page.
-4. **Reminders and owner reports (built).** E-mail on issuance, weekly summary, expiry reminders, renewal
-   as a prefilled request (no stored draft).
+4. **Reminders and owner reports (built).** In-app notifications in the web page (bell and
+   notifications page; the owner is a web user with the role `owner`) on issuance, the weekly
+   summary with unusual activity, expiry reminders, renewal as a prefilled request (no stored
+   draft). First built with e-mail; the e-mail sending was replaced by in-app notifications before
+   any deployment.
 5. **Operations (built, except the YubiKey-dependent ceremony steps).** Audit head checkpoint in the
-   weekly mail and `audit-verify --head`, `verify-licenses`, `license revoke`, `audit show` (a command
-   line view instead of a web page), `notify failed` and `notify retry`, `vendor-web --trusted-proxy`,
+   weekly summary (copied into the paper log) and `audit-verify --head`, `verify-licenses`,
+   `license revoke`, `audit show` (a command line view instead of a web page), `vendor-web --trusted-proxy`,
    and the operations runbook `docs/vendor-console-operations.md` (backup and restore drill, key
    revocation procedure, onboarding and offboarding, incidents). The YubiKey ceremony (runbook
    section 2) is written for the OpenPGP signer; it is carried out with the hardware smoke test.
@@ -294,7 +318,7 @@ No change to the license format, the verifier or the license tests is planned.
 | 1. Foundation | built |
 | 2. YubiKey signing | built in code; hardware smoke test owner-pending (runbook section 11) |
 | 3. Sales web page | built |
-| 4. Reminders and owner reports | built |
+| 4. Reminders and owner reports | built (in-app notifications; no e-mail) |
 | 5. Operations | built; the YubiKey ceremony is carried out with the hardware smoke test |
 
 ## 11. Open items
@@ -305,7 +329,7 @@ No change to the license format, the verifier or the license tests is planned.
 | O2 | CSV ledger versus audit table (section 6). Resolved: the `audit` and `licenses` tables are the ledger; no CSV export; `licensectl ledger-verify` stays for old file ledgers | Phase 5 (done) |
 | O3 | Which Go library reads PIV/OpenPGP Ed25519 on all three platforms (PC/SC). Resolved by Phase 2 ruling 2: `github.com/ebfe/scard` for the PC/SC transport only, with the OpenPGP card protocol implemented in this repository; `piv-go` rejected (PIV only, firmware 5.7 and later). Working on real hardware is the owner's smoke test | Phase 2 (done) |
 | O4 | Where the sales web service runs and who operates it. Resolved: one static binary `vendor-web` behind any TLS-ending reverse proxy, or with its own certificate; operated by the IT manager (Istanbul); the owner holds the `vendor_owner` login that creates web users; single instance (ceremony state is in memory) | Phase 3 (done) |
-| O5 | E-mail sending (provider, sender address). Resolved: provider-neutral SMTP configured by `VENDOR_SMTP_ADDR`, `_USER`, `_PASSWORD`, `_FROM`; STARTTLS or port 465 required; the sender address is the operator's choice | Phase 4 (done) |
+| O5 | E-mail sending (provider, sender address). Closed: not needed; in-app notifications replace e-mail | Phase 4 (closed) |
 | O6 | Whether the installation ID flow (customer gives it, vendor binds the license to it) stays as is | Phase 1 |
 | O7 | What if the card cannot sign the full message (smoke test step 4 fails). Options, in order: find out whether the card or the console's chaining fails (yubikit test); extended-length commands in the console; a smaller `sign.MaxSignedBytes` the card meets; another OpenPGP card with Ed25519; PIV Ed25519 (firmware 5.7+); keep the file key. Prehashing or another algorithm is not an option (new verifier). Details: runbook section 11, "If the YubiKey cannot sign the full license message" | Option 3 coming into force |
 

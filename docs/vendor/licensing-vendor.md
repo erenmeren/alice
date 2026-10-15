@@ -5,7 +5,7 @@ key, the issuance ledger, correction licenses, key rotation and the separate rel
 §19.2, SEC-107, R8, R36). Customers never see this guide
 and never get `licensectl`. `licensectl` never uses the network.
 
-The vendor console (database, sales web page, mail) has its own operations runbook, which links back here for the
+The vendor console (database, sales web page, in-app notifications) has its own operations runbook, which links back here for the
 key: [vendor-console-operations.md](../vendor-console-operations.md).
 
 ## Rules that never change
