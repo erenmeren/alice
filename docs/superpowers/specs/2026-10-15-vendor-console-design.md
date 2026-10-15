@@ -86,8 +86,11 @@ Implementations:
    protocol is implemented in this repository (`internal/vconsole/sign/openpgp`) over a PC/SC
    transport built on `github.com/ebfe/scard` (`internal/vconsole/sign/pcsc`, build tag `yubikey`
    only). Before any PIN prompt it requires an Ed25519 signature key equal to the key set's key, a
-   PIN that is not blocked and has more than one try left, a touch policy that requires a touch and
-   the PIN forced for every signature; it verifies the card's signature before returning.
+   PIN that is not blocked and has more than one try left, a touch policy of `on` or `fixed`
+   (`cached` lets a second signature through untouched for about 15 seconds and, like `off`, needs
+   `--allow-no-touch`), the PIN forced for every signature, and signed bytes no longer than the size
+   the hardware smoke test proves (`sign.MaxSignedBytes`, 1024 bytes); it verifies the card's
+   signature before returning.
 2. **File key** (the existing passphrase key file), kept for tests and as the path in use until the
    hardware smoke test passes.
 
@@ -98,7 +101,11 @@ from 5.7, so the OpenPGP implementation covers every key PIV would and more. The
 ### 4.2 What is signed
 
 The same bytes the product already verifies: `license.SignedBytes(payload)`. The console builds the
-payload, shows it, and signs it. Nothing else is signed by the license key.
+payload, shows it, and signs it. The license key signs nothing else, with two documented exceptions:
+the smoke-test texts of `signer test` (and its `--max-size` form), which are not JSON and do not
+start with the signing prefix, and gpg's certification of the key when it is generated on the card
+with gpg. Neither can verify as a license. The key is never used for git or mail signing, and the
+gpg keyring entry is removed after the ceremony (runbook section 2).
 
 ### 4.3 What you see is what you sign
 
@@ -107,7 +114,12 @@ The app builds the payload locally from the request fields, prints every field o
 format, key ID, card serial) and the SHA-256 of the exact bytes the card receives, asks `Sign this
 license? [y/N]`, then asks for PIN and touch. There is no local browser UI (Phase 2 ruling 3): a
 local web server would add attack surface and show nothing more. A request row in Neon that changed after a signer opened it is detected by
-comparing a content hash taken at display time with the one at signing time.
+comparing a content hash taken at display time with the one at signing time, and the signed file is
+recorded only if the SHA-256 of its signed bytes equals the one shown.
+
+This protects against a changed database request and against operator mistakes. It does not protect
+against malware on the signer computer, which draws the display itself and can show the real license
+while it sends its own payload to the card (section 9).
 
 ### 4.4 YubiKey setup (done once per key, in the UK for the owner's keys)
 
@@ -115,12 +127,14 @@ comparing a content hash taken at display time with the one at signing time.
    (`vk-YYYY-NN`) per YubiKey.
 2. Change the User PIN and Admin PIN from the factory defaults; decide on the Reset Code.
 3. Generate the Ed25519 signature key on the card (`gpg --card-edit`, `key-attr`, `generate`, no
-   off-card backup). Force the PIN for every signature (`forcesig`) and require touch
-   (`ykman openpgp keys set-touch sig on`, or `fixed`).
+   off-card backup). Force the PIN for every signature (`forcesig`, or `ykman openpgp access
+   set-signature-policy always`) and require touch (`ykman openpgp keys set-touch sig on`, or
+   `fixed`). Remove the gpg keyring entry afterwards and never use the key for anything else.
 4. Record the public key with `vendor-console signer info --out FILE` and its fingerprint; build the
    key set entry (`licensectl keyset --pub FILE`); `signer test` and `signer test --max-size`.
 5. Embed the owner's, the IT manager's and the spare key in `production.json` and ship a release.
-6. Store spare keys in separate safe places.
+6. Store spare keys in separate safe places. Write each key's signature counter into the paper log
+   (the counter reconciliation in section 9 starts from it).
 
 The full ceremony, with commands marked as not yet run on hardware, is in
 `docs/vendor-console-operations.md` section 2; the owner's hardware smoke test is section 11.
@@ -162,7 +176,8 @@ the OS keychain, never from the repository.
 IDs and conflicting corrections. The console must keep these rules (duplicate license ID, replace
 cycle, shortened term only with explicit confirmation, same installation). O2 is resolved (Phase 5):
 the hash-chained `audit` table plus the `licenses` table are the ledger. No CSV ledger is exported:
-it would have to be signed with the license key, which signs nothing but licenses.
+it would have to be signed with the license key, which signs nothing but licenses (section 4.2 lists
+the two exceptions, neither of which is a ledger).
 `licensectl ledger-verify` stays for the `issued.csv` files of licenses issued with `licensectl`.
 
 The chain alone cannot show that the newest audit rows were cut from the end. Instead of a signed
@@ -227,12 +242,26 @@ No change to the license format, the verifier or the license tests is planned.
 - Neon breach: records can be read or damaged, licenses cannot be forged. The audit chain and the
   signed license files let damage be detected. Neon point-in-time restore plus an encrypted dump
   to a separate place are the recovery path.
-- Compromised signer machine: PIN and touch stop silent signing. The "what you see" screen and the
-  content hash stop a swapped request. Revoke the key and ship a release if a key is lost.
+- Compromised signer machine (YubiKey signer): the key cannot be copied, and without the PIN and a
+  touch nothing is signed. The "what you see" screen, the content hash and the check of the signed
+  bytes against the confirmed SHA-256 stop a swapped database request and catch operator mistakes;
+  they do **not** stop malware on the signer computer, which can show the real license and send its
+  own payload to the card, getting one signature per PIN entry and touch. That license is never
+  recorded (no issuance mail, no audit row, `verify-licenses` never sees it). The control is the
+  counter reconciliation: each key's signature counter is written into the paper log after every
+  ceremony, smoke test and signing session, and each quarter it must equal the licenses issued with
+  that key ID plus the logged tests and failed signings plus gpg's certifications at key
+  generation; any unexplained increase is treated as a compromise of the signer machine and of the
+  key (runbook sections 2 and 9). The counter is per key and starts again with a new key. Revoke the
+  key and ship a release if a key is lost or compromised.
+- A malicious virtual PC/SC reader whose name contains "Yubi" could be picked by default and capture
+  the PIN at VERIFY. It cannot forge a signature (every signature is verified against the expected
+  key before anything is recorded), and a second matching reader makes `--reader` mandatory. The
+  touch on the real key is the control that matters.
 - Interim note: the YubiKey signer is built, but is used only once the owner's hardware smoke test
-  (runbook section 11) has passed on the platforms in use. Until then "PIN and touch stop silent
-  signing" and "no private key on any server" do not hold under signing option 2 (the file key on a
-  dedicated online signer machine). See the operations runbook, section 2.
+  (runbook section 11) has passed on the platforms in use. Until then "the key cannot be copied" and
+  "no private key on any server" do not hold under signing option 2 (the file key on a dedicated
+  online signer machine). See the operations runbook, section 2.
 - A signer can sign any license. Limits (targets, term) are advice in the app, not enforced by the
   key. The owner's notification and the audit are the control. This is accepted.
 - Sales login: WebAuthn (the owner's existing keys work), short sessions, rate limits.
@@ -248,7 +277,8 @@ No change to the license format, the verifier or the license tests is planned.
    `signer info` and `signer test`, the `yubikey` build tag and `make vendor-console-yubikey`. Tested
    against a software card only; the smoke tests on Linux, Windows and macOS are the owner's
    checklist (runbook section 11). `vendor-console` builds for Windows and macOS (cross-compile tested
-   without cgo; the YubiKey build for macOS needs cgo and is built on a Mac).
+   without cgo, the Windows YubiKey build included; the YubiKey build for Linux and macOS needs cgo
+   and is built natively).
 3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view is a command line view (`audit show`, Phase 5), not a page.
 4. **Reminders and owner reports (built).** E-mail on issuance, weekly summary, expiry reminders, renewal
    as a prefilled request (no stored draft).
@@ -277,6 +307,7 @@ No change to the license format, the verifier or the license tests is planned.
 | O4 | Where the sales web service runs and who operates it. Resolved: one static binary `vendor-web` behind any TLS-ending reverse proxy, or with its own certificate; operated by the IT manager (Istanbul); the owner holds the `vendor_owner` login that creates web users; single instance (ceremony state is in memory) | Phase 3 (done) |
 | O5 | E-mail sending (provider, sender address). Resolved: provider-neutral SMTP configured by `VENDOR_SMTP_ADDR`, `_USER`, `_PASSWORD`, `_FROM`; STARTTLS or port 465 required; the sender address is the operator's choice | Phase 4 (done) |
 | O6 | Whether the installation ID flow (customer gives it, vendor binds the license to it) stays as is | Phase 1 |
+| O7 | What if the card cannot sign the full message (smoke test step 4 fails). Options, in order: find out whether the card or the console's chaining fails (yubikit test); extended-length commands in the console; a smaller `sign.MaxSignedBytes` the card meets; another OpenPGP card with Ed25519; PIV Ed25519 (firmware 5.7+); keep the file key. Prehashing or another algorithm is not an option (new verifier). Details: runbook section 11, "If the YubiKey cannot sign the full license message" | Option 3 coming into force |
 
 ## 12. Not in scope
 

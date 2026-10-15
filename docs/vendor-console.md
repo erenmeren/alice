@@ -96,10 +96,13 @@ embedding the public key) is in the runbook, section 2.
 
 **Build.** The normal build (`make vendor-console`, no cgo) has no YubiKey support: `issue --signer
 openpgp`, `signer info` and `signer test` stop with `pcsc: this build has no YubiKey support (build
-with -tags yubikey)` and exit code 2. The YubiKey build is `make vendor-console-yubikey` (build tag
-`yubikey`, output `bin/vendor-console-yubikey`), run natively on each operating system: Linux needs
-cgo, `libpcsclite-dev` and a running `pcscd`; macOS needs cgo and uses the system's PC/SC. The
-customer-facing `alice` binary never contains this code.
+with -tags yubikey)` and exit code 2. The YubiKey build uses the build tag `yubikey`. On Linux and
+macOS it needs cgo and is built natively with `make vendor-console-yubikey` (output
+`bin/vendor-console-yubikey`): Linux needs `libpcsclite-dev` and a running `pcscd`; macOS uses the
+system's PC/SC. On Windows it needs no cgo: `go build -trimpath -tags yubikey -o
+bin\vendor-console-yubikey.exe ./cmd/vendor-console` on Windows, or `make
+vendor-console-yubikey-windows` from Linux or macOS (output `bin/vendor-console-yubikey.exe`); the
+Smart Card service must be running. The customer-facing `alice` binary never contains this code.
 
     vendor-console issue --request 1 --hash <hash> --out acme.json \
         --signer openpgp --key-id vk-2026-02 --keyset internal/license/keys/production.json
@@ -109,21 +112,37 @@ customer-facing `alice` binary never contains this code.
   file` and is refused here; the card flags are refused with `--signer file`.
 - Before any PIN prompt it refuses a card whose signature key is missing, not Ed25519 or not the
   named key; a key ID that this build's key set lists with another key or as revoked; a blocked PIN;
-  a PIN with one try left (unless `--last-pin-try`); a card that signs without a touch (unless
-  `--allow-no-touch`); and a card that does not ask for the PIN for every signature (GnuPG's
-  `forcesig`). A key ID this build's key set does not list yet is refused unless `--not-in-key-set`
-  is given (customers' builds will not accept such a license until a release with the key ships).
+  a PIN with one try left (unless `--last-pin-try`); a card whose touch policy is not `on` or
+  `fixed` (unless `--allow-no-touch`: `off` signs without a touch, and `cached` or `cached-fixed`
+  let a second signature through without a touch for about 15 seconds); and a card that does not
+  ask for the PIN for every signature (GnuPG's `forcesig`). A key ID this build's key set does not
+  list yet is refused unless `--not-in-key-set` is given (customers' builds will not accept such a
+  license until a release with the key ships).
 - `--reader NAME` picks the reader when more than one YubiKey is connected (default: the one reader
   whose name contains "yubi").
-- It prints every field of the license and `SHA-256 of the signed bytes: <hex>`, the bytes the card
-  receives, then asks `Sign this license? [y/N]` (`--yes` skips only the question; the license is
-  still shown), then `PIN of the YubiKey <serial> (<n> tries left): ` and `Touch the YubiKey
-  now...`. A wrong PIN is never asked again: the command ends and says how many tries are left.
-- The signature is checked with the public key and with the product's own license check before
-  anything is recorded. The question, the PIN and the touch together have 2 minutes; Ctrl-C cancels.
-  The request row stays locked meanwhile (runbook, section 2, for the database setting this needs).
+- It prints every field of the license, `signed bytes: <N> bytes` and `SHA-256 of the signed bytes:
+  <hex>`, the bytes the card receives, then asks `Sign this license? [y/N]` (`--yes` skips only the
+  question; the license is still shown), then `PIN of the YubiKey <serial> (<n> tries left): ` and
+  `Touch the YubiKey now...`. A wrong PIN is never asked again: the command ends and says how many
+  tries are left.
+- It sends at most 1024 signed bytes to the card, the size `signer test --max-size` proves. A
+  longer license (possible with a long customer name and many long feature names; the largest is
+  about 3.3 KB) is refused after the display and before the PIN prompt, until the owner raises the
+  limit (`sign.MaxSignedBytes`) after a smoke test with the larger size.
+- The signature is checked with the public key and with the product's own license check, and the
+  signed license must be the one whose SHA-256 was shown, before anything is recorded. The
+  question, the PIN and the touch together have 2 minutes; Ctrl-C cancels. The request row stays
+  locked meanwhile (runbook, section 2, for the database setting this needs).
+- The display and the SHA-256 protect against a request changed in the database and against
+  mistakes; they do not protect against malware on the signer computer, which can show the real
+  license and send its own to the card. Such a license is never recorded; the card's signature
+  counter is the check (runbook, section 2, "Counter reconciliation").
 - If the card signed but no license was recorded (a cancel just after the touch, for example), the
-  command says so: the card's signature counter and the number of licenses then differ by one.
+  command says so: the card's signature counter and the number of licenses then differ by one. A
+  Ctrl-C after `Touch the YubiKey now...` says `signing cancelled: no license was recorded; if the
+  key was touched its signature counter may have gone up`.
+- The PIN buffers of the console are cleared after use. Only the console's own buffers: the terminal
+  library, pcscd or WinSCard may keep copies it cannot clear.
 
 Two more commands, YubiKey build only:
 
@@ -138,10 +157,14 @@ Two more commands, YubiKey build only:
   (needs `--key-id`) writes the card's public key as a public key file in the format `licensectl
   keygen` writes, which `licensectl keyset --pub` and every `--pub` flag read; it never overwrites a
   file.
-- `signer test` makes the same checks as `issue`, asks for the PIN and a touch, signs the fixed text
-  `alice-vendor-console smoke test: not a license` (with `--max-size` a 600-byte text starting with
-  it, longer than any license) and verifies the signature. This text is the one thing besides
-  licenses the license key ever signs; it is not a license and can never verify as one.
+- `signer test` makes the card checks `issue` makes (the named key, PIN tries, touch policy, PIN
+  forced), asks for the PIN and a touch, signs the fixed text `alice-vendor-console smoke test: not
+  a license` (with `--max-size` a 1024-byte text starting with it, the longest signed bytes `issue`
+  sends) and verifies the signature. For a key ID this build's key set does not list yet it only
+  warns (no `--not-in-key-set` needed); a key ID listed with another key or as revoked is refused.
+  The vendor console signs nothing but licenses with the license key, except these smoke-test texts;
+  gpg also certifies the key once when it is generated on the card with gpg (runbook, section 2).
+  None of them is a license or can verify as one.
 
 ## Sales web service
 

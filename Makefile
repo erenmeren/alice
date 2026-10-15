@@ -158,12 +158,17 @@ licensectl: ## Build the vendor's offline license tool into bin/ (never shipped 
 vendor-console: ## Build the vendor console into bin/ (no YubiKey support, no cgo; never shipped to customers)
 	CGO_ENABLED=0 go build -trimpath -o bin/vendor-console ./cmd/vendor-console
 
-# The YubiKey build links the PC/SC library through cgo on Linux (libpcsclite-dev, pcscd) and macOS,
-# and the system winscard on Windows: it cannot be cross-compiled, so run this target natively on
-# each OS the vendor signs from.
+# The YubiKey build links the PC/SC library through cgo on Linux (libpcsclite-dev, pcscd) and macOS:
+# run vendor-console-yubikey natively there. On Windows the PC/SC library loads the system's
+# winscard.dll without cgo, so the Windows build is a plain cross build (vendor-console-yubikey-windows,
+# or `go build -trimpath -tags yubikey -o bin\vendor-console-yubikey.exe ./cmd/vendor-console` on Windows).
 .PHONY: vendor-console-yubikey
-vendor-console-yubikey: ## Build the vendor console with YubiKey signing (native build on each OS; needs cgo and PC/SC)
+vendor-console-yubikey: ## Build the vendor console with YubiKey signing for this Linux or macOS machine (needs cgo and PC/SC)
 	CGO_ENABLED=1 go build -trimpath -tags yubikey -o bin/vendor-console-yubikey ./cmd/vendor-console
+
+.PHONY: vendor-console-yubikey-windows
+vendor-console-yubikey-windows: ## Build the vendor console with YubiKey signing for Windows amd64 (no cgo) into bin/vendor-console-yubikey.exe
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -tags yubikey -o bin/vendor-console-yubikey.exe ./cmd/vendor-console
 
 .PHONY: helper
 helper: ## Build the static alice-helper for Linux amd64 and arm64 into bin/ with SHA-256 checksums (reproducible: no VCS stamp)

@@ -26,7 +26,9 @@ Rules for every step below:
 
 **The ledger.** The hash-chained `audit` table and the `licenses` table together are the issuance
 ledger of the console. No CSV ledger is exported from the database: such a file would have to be
-signed with the license key, and that key signs nothing but licenses. `licensectl ledger-verify`
+signed with the license key, and that key signs nothing but licenses. (The only exceptions are the
+smoke-test texts of `signer test` and, for a YubiKey key generated with gpg, gpg's certification of
+its own key at generation; section 2. Neither can verify as a license.) `licensectl ledger-verify`
 stays for the `issued.csv` files of licenses issued with `licensectl`.
 
 ## 1. Roles and who does what
@@ -102,9 +104,21 @@ every platform a signer uses).** `vendor-console issue --signer openpgp` signs w
 that was generated on the YubiKey and never leaves it, and records the license like option 2. Before
 the PIN prompt the console prints every field of the license and the SHA-256 of the exact bytes the
 card signs, and asks `Sign this license? [y/N]`. The card asks for the PIN for every signature and
-waits for a touch. Malware on the signer computer cannot copy the key; at worst it can get one
-signature per PIN entry and touch, and every license still sends the owner a mail (section 8). Each
-signer has their own YubiKey and key ID, and a third YubiKey is the spare.
+waits for a touch. Each signer has their own YubiKey and key ID, and a third YubiKey is the spare.
+
+What option 3 does and does not protect against:
+
+- Malware on the signer computer cannot copy the key. Without the PIN and a touch it gets no
+  signature at all.
+- The display and the SHA-256 protect against a request that was changed in the database and
+  against the operator's own mistakes. They do **not** protect against malware on the signer
+  computer: the display is drawn by the same computer, so malware can show the real license and
+  send a payload of its own to the card while the operator types the PIN and touches the key. It
+  gets one signature per PIN entry and touch.
+- A license made that way is **never recorded**: there is no issuance mail, no audit row, and
+  `verify-licenses` never sees it. The one trace is the card's signature counter, which the
+  counter reconciliation below checks after every session and every quarter. An unexplained
+  increase is treated as a compromise of the signer computer (section 9).
 
 ### The YubiKey key ceremony
 
@@ -176,19 +190,31 @@ uses only the signature key). It asks for the Admin PIN. Then:
   outside the card.
 - Expiry: `0` (does not expire) is fine; the console does not use the OpenPGP certificate gpg makes.
 - Name: something you will recognise, for example `Alice license key vk-2026-02`.
-- gpg asks for the PIN and signs its own certificate with the new key, so the signature counter
-  starts at a small number rather than 0.
+- gpg asks for the PIN and certifies its own key with the new signature key (the self-signature,
+  and the bindings of the other two keys), so the signature counter starts at a small number
+  rather than 0. These certifications are, with the smoke-test texts, the only things the license
+  key signs that are not licenses; none of them can verify as a license.
 
 Then `quit`. The key on the card is the license key; the certificate gpg put into the local keyring
-is not used by the console.
+is not used by the console. Write the `signature counter` that `signer info` shows (step 7) into the
+paper log as this key's starting value.
+
+**gpg keyring hygiene.** The key on the card is now also an OpenPGP key in the local gpg keyring
+(the certificate and a stub that points to the card). Never use it for anything else: no git commit
+signing, no mail signing, no `gpg --sign`. Every such signature is one more signature by the license
+key and breaks the counter reconciliation. After the ceremony, remove the certificate and the stub
+from this computer's keyring (`gpg --delete-secret-and-public-keys <fingerprint>` removes the stub
+and the certificate, not the key on the card; check this on your gpg version first, not run by the
+author), and do not set it as a default key in `gpg.conf` or git's `user.signingkey`.
 
 Alternative: if `ykman openpgp keys --help` on your installed version lists a command that generates
 a key on the card, it may be used instead, provided it makes an Ed25519 **signature** key on the
 card. The rest of the ceremony is the same.
 
 **Step 4. Ask for the PIN for every signature.** *(Not run by the author; check against your
-installed ykman/gpg versions on first use.)* The console refuses a card that keeps the PIN valid for
-several signatures (PIN policy `NOT forced` in `signer info`).
+installed ykman/gpg versions on first use.)* The YubiKey's factory setting is "signature PIN not
+forced": one PIN entry allows further signatures until the key is unplugged. The console refuses
+such a card (PIN policy `NOT forced` in `signer info`).
 
     gpg --card-edit
     gpg/card> admin
@@ -199,9 +225,18 @@ several signatures (PIN policy `NOT forced` in `signer info`).
 `forcesig` **toggles** the setting. Run it again until `gpg --card-status` shows
 `Signature PIN ....: forced`.
 
+Alternative with ykman (not run by the author; check `ykman openpgp access --help` first):
+
+    gpgconf --kill scdaemon
+    ykman openpgp access set-signature-policy always
+
+**Before every `ykman` command that follows a gpg step, run `gpgconf --kill scdaemon`:** gpg's
+scdaemon keeps the card open and ykman then cannot reach it.
+
 **Step 5. Require a touch for signatures.** *(Not run by the author; check against your installed
 ykman/gpg versions on first use.)*
 
+    gpgconf --kill scdaemon
     ykman openpgp keys set-touch sig on
 
 It asks for the Admin PIN. Check with `ykman openpgp info` (touch policy of the signature key). The
@@ -211,9 +246,10 @@ choices:
 - `fixed`: like `on`, but it **cannot be changed back**: only resetting the OpenPGP application,
   which deletes the key, turns it off. It protects against someone who has the Admin PIN turning
   touch off.
-- `cached`: one touch covers further signatures for about 15 seconds. The console signs one license
-  per run, so it gains nothing and weakens the protection; not recommended. (`cached-fixed` is
-  `cached` that cannot be changed back.)
+- `cached`: one touch covers further signatures for about 15 seconds, so a second signature (one
+  that malware asks for right after yours) could go through without a touch. The console refuses
+  `cached` and `cached-fixed` (`cached` that cannot be changed back) unless `--allow-no-touch` is
+  given, and says why. Do not use them.
 - `off`: the console refuses to sign unless `--allow-no-touch` is given. Do not use it.
 
 Record the choice in the paper log.
@@ -244,8 +280,10 @@ It prints the JSON entry and `Fingerprint: SHA256:...`, which must equal the pap
 
 Each prints the not-in-key-set warning (expected), the text it signs, asks for the PIN and a touch,
 and ends with `smoke test OK (signature verified with key ID vk-2026-02, SHA256:...)`. The license
-key signs nothing but licenses; the smoke-test text is the one documented exception and can never
-verify as a license. If `--max-size` fails, **stop** and follow section 11: do not embed the key.
+key signs nothing but licenses; the smoke-test texts (and gpg's certifications from step 3) are the
+documented exceptions and can never verify as a license. `--max-size` signs 1024 bytes, the longest
+signed bytes `issue` sends to the card. If it fails, **stop** and follow section 11: do not embed the
+key. Write the two tests and the new `signature counter` into the paper log.
 
 **Step 9. Embed the keys and ship a release.** Add the entries of the owner's key, the IT manager's
 key and the spare to `internal/license/keys/production.json`, all `"active"`, one entry per key ID
@@ -265,8 +303,8 @@ Expected: `matches key set      yes`, `in this build's key set: yes`, and `smoke
 
 **Step 11. Store and record.** Store the spare YubiKey and the Admin PIN papers in separate safe
 places, apart from the daily keys. Record in the paper log the date, each serial number, firmware
-version, key ID and fingerprint, the touch policy chosen, the Reset Code decision, and where each
-paper is.
+version, key ID and fingerprint, the touch policy chosen, the Reset Code decision, where each paper
+is, and each key's `signature counter` at the end of the ceremony.
 
 ### Signing with the YubiKey
 
@@ -277,20 +315,36 @@ paper is.
 Before any PIN prompt, the console checks that the card holds an Ed25519 signature key equal to the
 key set's key for `--key-id`, that this build's key set lists that key as active (a key ID it does
 not list yet needs `--not-in-key-set`; one listed with another key, or revoked, is refused), that the
-PIN is not blocked and has more than one try left (unless `--last-pin-try`), that a touch is required
-(unless `--allow-no-touch`) and that the PIN is asked for every signature. Then it prints the license
-and `SHA-256 of the signed bytes: <hex>`, asks `Sign this license? [y/N]` (`--yes` skips only the
-question), asks `PIN of the YubiKey <serial> (<n> tries left): `, prints `Touch the YubiKey
-now...`, checks the card's signature with the public key and with the product's own license check,
-records the license and writes the file: `issued <LICENSE-ID> valid until <YYYY-MM-DD>`.
+PIN is not blocked and has more than one try left (unless `--last-pin-try`), that the touch policy
+is `on` or `fixed` (`off`, `cached` and `cached-fixed` need `--allow-no-touch`) and that the PIN is
+asked for every signature. Then it prints the license, `signed bytes: <N> bytes` and `SHA-256 of
+the signed bytes: <hex>`, asks `Sign this license? [y/N]` (`--yes` skips only the question), asks
+`PIN of the YubiKey <serial> (<n> tries left): `, prints `Touch the YubiKey now...`, checks the
+card's signature with the public key and with the product's own license check, checks that the
+signed license is the one whose SHA-256 was shown, records the license and writes the file: `issued
+<LICENSE-ID> valid until <YYYY-MM-DD>`.
+
+- **License too long.** The console sends at most 1024 signed bytes to the card, the size the
+  smoke test (`signer test --max-size`) proved. A license whose signed bytes are longer (a long
+  customer name and many long feature names; the largest possible license is about 3.3 KB) is
+  refused after the display and before the PIN prompt: `the license's signed bytes are <N> bytes,
+  more than the limit of 1024 bytes (the smoke test proved 1024 bytes)`. Nothing is signed. Shorten
+  the request, or have the owner raise the limit (`sign.MaxSignedBytes` in the code) after a smoke
+  test with the larger size passed on every platform in use.
 
 - **Time limit.** From the display to the card's answer the operator has **2 minutes** (question,
   PIN and touch together). After that nothing is signed and the command says so; run it again.
-  Ctrl-C at any point cancels, closes the card and records nothing.
+  Ctrl-C at any point cancels, closes the card and records nothing. Before the touch notice the
+  command says `signing cancelled: nothing was signed or recorded and the card connection is
+  closed`; after it, `signing cancelled: no license was recorded; if the key was touched its
+  signature counter may have gone up` (log it for the counter reconciliation).
 - **The request row is locked** during those 2 minutes: a sales change to that one request waits.
-  For the database: do not set `idle_in_transaction_session_timeout` below about **3 minutes** for
-  a signer (PostgreSQL's default is off, and nothing in the console sets it). If you want it as a
-  safety net, set it per signer login, for example `ALTER ROLE "<login>" SET
+  For the database: `idle_in_transaction_session_timeout` must not cut a signer off while the
+  operator reads, types the PIN and touches. PostgreSQL's default is off, and nothing in the
+  console sets it. A database-wide setting (`ALTER DATABASE ... SET`, `postgresql.conf`, or a
+  setting in the Neon project) applies to the signer logins too, so if one exists it must be at
+  least about **3 minutes**. If you want it as a safety net for the signers, set it per signer
+  login, not below about 3 minutes, for example `ALTER ROLE "<login>" SET
   idle_in_transaction_session_timeout = '5min';` (a setting on the group role `vendor_signer` does
   not apply to its members).
 - **Card busy.** `pcsc: another program holds the card (often gpg's scdaemon: run gpgconf --kill
@@ -307,10 +361,10 @@ records the license and writes the file: `issued <LICENSE-ID> valid until <YYYY-
   in time: nothing was signed; run the command again`.
 
 **The signature counter is not the number of licenses.** The card counts every signature it makes
-(`signature counter` in `signer info`). It also counts the smoke tests and gpg's own signature at
-key generation, and a signature the card made after which no license was recorded: the operator
-cancelled or the time ran out just after the touch, the signature failed its check, or the database
-did not take the license. The console then says so:
+(`signature counter` in `signer info`). It also counts the smoke tests and gpg's own certifications
+at key generation, and a signature the card made after which no license was recorded: the operator
+cancelled or the time ran out just after the touch, the signature failed its check, the signed
+license was not the one shown, or the database did not take the license. The console then says so:
 
     the card made a signature (its signature counter went up) but no license was recorded by this
     command (...). Check: vendor-console request show <ID>; if the request shows as signed, use:
@@ -320,6 +374,34 @@ did not take the license. The console then says so:
 A license is never recorded without a signature, so for each card the counter is always at least the
 number of licenses signed with it. If the database did not confirm the commit, the console says the
 outcome is unknown and names the same two commands; run them before signing again.
+
+The message `the card made a signature ... no license was recorded` is also a reason to check the
+signer computer: on a healthy computer it follows only a cancel or a time-out right after the touch,
+or a database failure the operator saw. If none of these happened, follow section 9, "Signer machine
+compromise".
+
+### Counter reconciliation
+
+The signature counter is the only trace of a signature that never reached the database (see
+"What option 3 does and does not protect against" above). It counts per **key**: generating a new
+key on the card sets it back, so each key ID has its own history.
+
+- After the ceremony, every smoke test and every signing session, run `signer info --key-id <ID>`
+  and write the `signature counter` into the paper log with the date and what was done (for
+  example "3 licenses", "signer test", "signer test --max-size", "cancelled after touch").
+- Every quarter (section 10), for each key ID compare:
+
+      counter now = starting value after gpg's certifications at key generation (ceremony step 3)
+                    + smoke tests in the paper log
+                    + logged signatures without a license (cancel after touch, "the card made a
+                      signature ... no license was recorded")
+                    + licenses issued with that key ID
+
+  The last number is `SELECT count(*) FROM licenses WHERE key_id = '<key-id>';` (revoked licenses
+  included).
+- Any unexplained increase means the key signed something that is not in the database: treat it as
+  a compromise of the signer computer (section 9) and the key as compromised (section 4), because
+  such a signature can be a valid license that no mail and no `verify-licenses` run will show.
 
 ## 3. Onboarding and offboarding
 
@@ -527,6 +609,9 @@ record from the operations log: the head and the license count taken just before
            -p 127.0.0.1:55432:5432 postgres:<major version>
        docker cp vendor.dump vendor-drill:/tmp/vendor.dump
 
+   `<major version>` is the major version of the production database server: `SELECT version();`
+   on production prints for example `PostgreSQL 16.4 ...`, so the image is `postgres:16`.
+
    Then create a restoring login, the database and the group roles (the dump holds grants to them,
    but not the roles themselves):
 
@@ -726,8 +811,14 @@ The service cannot sign, so no license can be forged through it. Then:
 
 - [ ] Stop signing from that machine.
 - [ ] The key file was on it or plugged into it, or its passphrase was typed on it: treat the key as
-      compromised (section 4). With a YubiKey (option 3), PIN and touch stop silent signing,
-      but remove the key from that machine and change the PIN.
+      compromised (section 4).
+- [ ] With a YubiKey (option 3): the key cannot have been copied, but every PIN entry and touch on
+      that machine may have signed a license of the malware's choosing instead of the one shown.
+      Such a license is never recorded (no issuance mail, no audit row, `verify-licenses` never sees
+      it). Run the counter reconciliation (section 2) for every key used on that machine. If the
+      counter is higher than the paper log and the database explain, treat the key as compromised
+      (section 4). Either way remove the YubiKey from that machine and change its PIN on a clean
+      computer.
 - [ ] Rotate the signer's database password (below).
 - [ ] Check the licenses issued by that login: `audit show --actor <login> --action license.`, and
       compare with the issuance mails.
@@ -779,6 +870,7 @@ The service cannot sign, so no license can be forged through it. Then:
       new passkey belongs to an enrollment you know about.
 - [ ] The encrypted dumps exist where they should, and the newest is less than a month old.
 - [ ] Every weekly summary of the quarter arrived (no gap of more than 8 days).
+- [ ] With YubiKeys: the counter reconciliation (section 2) for every key ID, the spare included.
 
 ### Every year
 
@@ -807,50 +899,71 @@ version on a signer computer.
 
 These assumptions can only be checked on real hardware; the steps below are built to show each one:
 
-1. **Long chained input.** The console sends the license's signed bytes (a few hundred bytes) to the
-   card in 255-byte chained parts and assumes the YubiKey signs the whole input as the Ed25519
-   message. GnuPG never sends more than 64 bytes, so common tools do not exercise this. Step 4
-   (`signer test --max-size`, 600 bytes) is the decisive test.
-2. **The card's capability values.** What a YubiKey reports as its maximum command length (DO 7F66)
-   and its command chaining bit. If reading 7F66 fails with a card status, `signer info` stops with
-   an error naming `get data 7F66`.
-3. **The touch timeout status word.** A touch that never comes is assumed to end with status 6982 or
+1. **Long chained input.** The console sends the license's signed bytes (usually a few hundred
+   bytes) to the card in 255-byte chained parts and assumes the YubiKey signs the whole input as the
+   Ed25519 message. GnuPG never sends more than 64 bytes, so common tools do not exercise this.
+   Step 4 (`signer test --max-size`, 1024 bytes) is the decisive test. The largest license the
+   product accepts is about 3.3 KB (a 200-character customer name, 32 features of 64 characters, a
+   replaced license ID): the console refuses, before the PIN, any license whose signed bytes exceed
+   the 1024 bytes the smoke test proves, until the owner raises the limit after a larger smoke test.
+2. **Command chaining versus extended-length commands.** The console uses chained short commands
+   only, never one extended-length command. Whether the YubiKey takes chaining for PSO:COMPUTE
+   DIGITAL SIGNATURE is what step 4 shows; if it does not, see "If the YubiKey cannot sign the full
+   license message" below.
+3. **The card's capability values.** What a YubiKey reports as its maximum command length (DO 7F66)
+   and its command chaining bit. These values are only reported, never used to refuse: a card that
+   does not answer 7F66 shows `max command length   unknown`.
+4. **The default PIN policy.** The YubiKey's factory setting is assumed to be "signature PIN not
+   forced" (the console refuses it until ceremony step 4 has turned `forcesig` on). `signer info`
+   before step 4 should show `NOT forced`.
+5. **The wrong-PIN status word.** A wrong PIN is assumed to be answered with status 6982 (YubiKey) or
+   63Cx (other OpenPGP cards); both are shown as `wrong PIN (<n> tries left)`. Any other text in step
+   6 is a finding.
+6. **The touch timeout status word.** A touch that never comes is assumed to end with status 6982 or
    6985, shown as "the YubiKey was not touched in time". Any other text is a finding.
-4. **Reset on close versus scdaemon.** The console holds the card exclusively and resets it when it
-   closes it. Whether gpg and scdaemon cope with that afterwards (step 8).
-5. **The Windows and macOS builds.** The YubiKey build has been compiled only on Linux. On Windows
-   the console builds without cgo (see "Get the binary") but has not been run there.
+7. **Exclusive access.** The console opens the card exclusively and resets it when it closes it.
+   Whether gpg and scdaemon cope with that afterwards (step 8). On macOS (CryptoTokenKit) and on
+   Windows, system services may open the card for a moment after it is plugged in: a brief
+   `another program holds the card` is then possible; wait a few seconds and run the command again,
+   and note it.
+8. **No reader on Windows.** Windows stops the Smart Card service when no reader is plugged in. With
+   no YubiKey, the console may say `the smart card service is not running` rather than `no smart
+   card reader is connected` (step 1). Either is fine; note which.
+9. **The Windows and macOS builds.** The YubiKey build has been compiled for Windows (without cgo)
+   and natively on Linux only; it has not been run on Windows or macOS.
 
 ### Get the binary
 
-The YubiKey build cannot be cross-compiled. Build it on each operating system from a checkout of the
-repository with Go installed:
+On Linux and macOS the YubiKey build needs cgo and is built natively on each operating system, from a
+checkout of the repository with Go installed. On Windows it needs no cgo: build it on Windows, or
+cross-compile it from Linux or macOS.
 
 | OS | Needs | Build |
 |---|---|---|
-| Linux | a C compiler, `pkg-config`, `libpcsclite-dev` (Debian and Ubuntu; `pcsc-lite` on Fedora and Arch) and `pcscd` running (`sudo systemctl enable --now pcscd.socket`) | `make vendor-console-yubikey` |
-| macOS | the Xcode command line tools (`xcode-select --install`) for cgo; the system's PC/SC, nothing else | `make vendor-console-yubikey` |
-| Windows | the Smart Card service (`SCardSvr`) running (it starts when a reader is plugged in); no C compiler: the PC/SC library loads the system's `winscard.dll` | `go build -trimpath -tags yubikey -o bin\vendor-console-yubikey.exe ./cmd/vendor-console` in PowerShell (no cgo needed, `CGO_ENABLED=0` works) |
+| Linux | a C compiler, `pkg-config`, `libpcsclite-dev` (Debian and Ubuntu; `pcsc-lite` on Fedora and Arch) and `pcscd` running (`sudo systemctl enable --now pcscd.socket`) | `make vendor-console-yubikey` (output `bin/vendor-console-yubikey`) |
+| macOS | the Xcode command line tools (`xcode-select --install`) for cgo; the system's PC/SC, nothing else | `make vendor-console-yubikey` (output `bin/vendor-console-yubikey`) |
+| Windows | the Smart Card service (`SCardSvr`) running (it starts when a reader is plugged in); no C compiler: the PC/SC library loads the system's `winscard.dll` | on Windows, in PowerShell: `go build -trimpath -tags yubikey -o bin\vendor-console-yubikey.exe ./cmd/vendor-console`; from Linux or macOS: `make vendor-console-yubikey-windows` (both give `bin/vendor-console-yubikey.exe`) |
 
-The result is `bin/vendor-console-yubikey`. `make vendor-console` builds the normal console, which
-has no YubiKey support and refuses every card command with `pcsc: this build has no YubiKey support
-(build with -tags yubikey)` (exit code 2).
-
-**Windows.** `go build -tags yubikey ./cmd/vendor-console` builds on Windows (and cross-compiles from
-Linux with `GOOS=windows CGO_ENABLED=0`); no C compiler is needed, but the Smart Card service must be
-running. It has not been run on a Windows machine yet: the owner's smoke test fills the Windows row.
+`make vendor-console` builds the normal console, which has no YubiKey support and refuses every card
+command with `pcsc: this build has no YubiKey support (build with -tags yubikey)` (exit code 2).
 
 ### The steps
 
 Run them in a terminal (the PIN is read with no echo and is refused from a pipe). Use the YubiKey's
 key ID and the public key file from section 2 step 7. Below, `vc` stands for
-`bin/vendor-console-yubikey`, `KEY` for `--key-id vk-2026-02 --pub vk-2026-02-public.pem`. Before
-starting, run `gpgconf --kill scdaemon`.
+`bin/vendor-console-yubikey` (`bin\vendor-console-yubikey.exe` on Windows), `KEY` for `--key-id
+vk-2026-02 --pub vk-2026-02-public.pem`. Before starting, run `gpgconf --kill scdaemon`, and again
+after every gpg command before the next `vc` or `ykman` command.
 
-**Step 1. No card.** Unplug the YubiKey and run `vc signer info`. Expected: an error naming the
-missing reader or card, such as `pcsc: no smart card reader is connected`, or `pcsc: reader not
-found: no YubiKey reader; readers present: ...`; exit code 1. On Linux with `pcscd` stopped:
-`pcsc: the smart card service is not running (Linux: start pcscd) (during establish context)`.
+**Step 1. No card.** Unplug the YubiKey and run `vc signer info`. Expected, exit code 1, one of:
+
+- with no reader at all: `pcsc: no smart card reader is connected (is the YubiKey plugged in? on
+  Windows, is the Smart Card service running?)`;
+- with another reader but no YubiKey: `pcsc: reader not found: no YubiKey reader; readers present:
+  "<name>"`;
+- on Linux with `pcscd` stopped: `pcsc: the smart card service is not running (Linux: start pcscd)
+  (during establish context)`; on Windows with no reader the same text can appear, because Windows
+  stops the Smart Card service when no reader is plugged in (assumption 8).
 
 **Step 2. `vc signer info KEY`** (no PIN). A good output looks like this:
 
@@ -868,10 +981,11 @@ found: no YubiKey reader; readers present: ...`; exit code 1. On Linux with `pcs
     matches key set      yes
     in this build's key set: no
 
-Check: `signature algorithm` is `ed25519`; `PIN policy` is `forced`; `touch policy` is `on`,
-`fixed`, `cached` or `cached-fixed` (whatever section 2 step 5 chose); `card serial` equals the
-`Serial number` of `gpg --card-status` (and should equal the serial of `ykman info`); the fingerprint
-equals the paper; `matches key set yes`. Write down the `max command length`, `command chaining` and
+Check: `signature algorithm` is `ed25519`; `PIN policy` is `forced`; `touch policy` is `on` or
+`fixed` (whatever section 2 step 5 chose; `cached` and `cached-fixed` are shown with `signing will be
+refused unless --allow-no-touch`); `card serial` equals the `Serial number` of `gpg --card-status`
+(and should equal the serial of `ykman info`: run `gpgconf --kill scdaemon` between the two); the
+fingerprint equals the paper; `matches key set yes`. Write down the `max command length`, `command chaining` and
 `signature counter` values for the report. `in this build's key set: no` is expected before the
 release that embeds the key (`yes` after it). Exit code 0; with `matches key set NO` it is 1.
 
@@ -881,18 +995,24 @@ release that embeds the key (`yes` after it). Exit code 0; with `matches key set
 and the YubiKey blinks; touch it. Expected: `smoke test OK (signature verified with key ID
 vk-2026-02, SHA256:...)`, exit code 0. `signer info` afterwards shows the counter one higher.
 
-**Step 4. `vc signer test KEY --max-size`. This is the decisive test.** It signs a 600-byte text,
-longer than any license. Expected: `smoke test OK (...)` as in step 3.
+**Step 4. `vc signer test KEY --max-size`. This is the decisive test.** It signs a 1024-byte text,
+the longest signed bytes `issue` sends to the card. Licenses are usually a few hundred bytes; the
+console refuses, before the PIN, any license whose signed bytes are longer than these 1024 bytes,
+until the owner raises the limit after a larger smoke test. Expected: `smoke test OK (...)` as in
+step 3.
 
-If it fails with a length refusal (`the card refused the signing input of 600 bytes at the ... part
-... status 6700`, `6A80` or `6884`, or `the message has 600 bytes and the card, which has no command
+If it fails with a length refusal (`the card refused the signing input of 1024 bytes at the ... part
+... status 6700`, `6A80` or `6884`, or `the message has 1024 bytes and the card, which has no command
 chaining, accepts at most 255`), or with `the card's signature does not verify with the expected
 key`, or with any other card status: **STOP.** Do not sign licenses with the YubiKey, and do not try
-to work around it by changing the license format or the console. Report the output of `signer info`
-and the full error text (below). Option 1 or 2 of section 2 stays in force.
+to work around it by changing the license format. Report the output of `signer info` and the full
+error text (below). Option 1 or 2 of section 2 stays in force, and "If the YubiKey cannot sign the
+full license message" (after the steps) lists what can be done.
 
 **Step 5. One real license against a throwaway database.** Never against production. A scratch
-PostgreSQL on this computer (Docker; on Windows and macOS Docker Desktop):
+PostgreSQL on this computer (Docker; on Windows and macOS Docker Desktop). `<major version>` is the
+major version of your production database server (`SELECT version();` there prints for example
+`PostgreSQL 16.4 ...`: use `postgres:16`):
 
     docker run -d --rm --name vendor-smoke -e POSTGRES_HOST_AUTH_METHOD=trust \
         -p 127.0.0.1:55433:5432 postgres:<major version>
@@ -910,11 +1030,11 @@ PostgreSQL on this computer (Docker; on Windows and macOS Docker Desktop):
 (`ALICE-J9N1-MQN8-N17Z-E7FS` is a made-up but well-formed installation ID. `--not-in-key-set` is
 needed until the key is embedded.) Expected: the display lists every field (customer, installation
 ID, targets, valid from, valid until, months, features, replaces, license ID, issued at, format, key
-ID, card serial) and `SHA-256 of the signed bytes: <64 hex digits>`; `Sign this license? [y/N]`,
-answer `y`; the PIN; the touch; `issued <LICENSE-ID> valid until <date>`, exit code 0. Then
-`verify-licenses` prints `checked 1, problems 0`. Optionally `licensectl verify --pub
-vk-2026-02-public.pem smoke-license.json` prints `OK`. Clean up with `docker stop vendor-smoke` and
-delete `smoke-license.json`.
+ID, card serial), `signed bytes: <N> bytes` (a few hundred) and `SHA-256 of the signed bytes: <64
+hex digits>`; `Sign this license? [y/N]`, answer `y`; the PIN; the touch; `issued <LICENSE-ID> valid
+until <date>`, exit code 0. Then `verify-licenses` prints `checked 1, problems 0`. Optionally
+`licensectl verify --pub vk-2026-02-public.pem smoke-license.json` prints `OK`. Keep the throwaway
+database running: step 8 uses it.
 
 **Step 6. Wrong PIN.** Run `vc signer test KEY` and type a wrong PIN. Expected: `wrong PIN (2 tries
 left). Nothing was signed; the PIN is never asked again automatically: run the command again to
@@ -926,14 +1046,75 @@ after about 15 seconds: `the YubiKey was not touched in time: nothing was signed
 again`, exit code 1. Write down the exact text if it differs (assumption 3).
 
 **Step 8. Cancel while the card waits for a touch.** Run `vc signer test KEY`, type the PIN, and
-press Ctrl-C at `Touch the YubiKey now...` (do not touch). Expected: `signing cancelled: nothing was
-signed or recorded and the card connection is closed` at once; the command may take up to about 15
-seconds more to exit (the card connection is released only when the card stops waiting for the
-touch; at most 20 seconds). Within about 20 seconds after that, `vc signer info KEY` and
-`gpg --card-status` both work again (then `gpgconf --kill scdaemon` before the next console
-command). Do the same with Ctrl-C at the `Sign this license? [y/N]` question of an `issue` in the
-throwaway database: `signing cancelled: ...`, the request stays open, `verify-licenses` still says
+press Ctrl-C at `Touch the YubiKey now...` (do not touch). Expected: `signing cancelled: no license
+was recorded; if the key was touched its signature counter may have gone up` at once (the console
+cannot know whether a touch came just before the Ctrl-C); the command may take up to about 15 seconds
+more to exit (the card connection is released only when the card stops waiting for the touch; at
+most 20 seconds). Within about 20 seconds after that, `vc signer info KEY` shows the same signature
+counter as before (no touch, no signature), and `gpg --card-status` works again (then `gpgconf
+--kill scdaemon` before the next console command).
+
+Then, in the throwaway database of step 5 (still running, `VENDOR_DATABASE_URL` still the
+`smoke_signer` login), make a fresh request, because the first one is signed:
+
+    vc request add --customer <ID> --installation ALICE-J9N1-MQN8-N17Z-E7FS --targets 5
+    vc request show <new request ID>        # the hash is the last line
+    vc issue --request <new request ID> --hash <hash> --out smoke-license-2.json \
+        --signer openpgp KEY --not-in-key-set
+
+and press Ctrl-C at the `Sign this license? [y/N]` question. Expected: `signing cancelled: nothing was
+signed or recorded and the card connection is closed`, exit code 1, no PIN prompt; `vc request show
+<new request ID>` still shows `open`; `vc verify-licenses --pub vk-2026-02-public.pem` still says
 `checked 1, problems 0`.
+
+Clean up: `docker stop vendor-smoke` (the `--rm` container is removed with its data), and delete
+`smoke-license.json`. Write the final `signature counter` into the paper log (section 2, "Counter
+reconciliation"): each `signer test` and the license of step 5 count one.
+
+### If the YubiKey cannot sign the full license message
+
+*(Step 4 fails with a length refusal, or with "the card's signature does not verify with the expected
+key".)*
+
+The product verifies a plain Ed25519 signature (PureEdDSA) over `ALICE-LICENSE-v1\n` plus the
+canonical payload, usually a few hundred bytes (about 270 to 500). Any fix must produce exactly that
+signature. Signing a hash of the payload instead (Ed25519ph, or any prehash), or switching to another
+algorithm, is NOT an option: it would need a new product verifier, a release, and every customer
+updating first.
+
+1. Find out who fails: the card or the console's way of sending the data. Note `max command length`
+   and `command chaining` from `signer info`. With YubiKey Manager's Python library (yubikit), sign a
+   1024-byte message with the OpenPGP signature key, then verify it with the public key from `signer
+   info --out`. yubikit sends long input as one extended-length command rather than in chained
+   parts. (Not run by the author: check the yubikit API for your installed version.) If yubikit
+   succeeds where the console fails, the card can do it and only the console's way of sending it is
+   wrong (go to 2). If both fail, the card cannot (go to 3 to 6). A yubikit test signature counts on
+   the signature counter like any other: log it.
+2. Extended-length commands in the console (code change, same card, same verifier): send the
+   signing input as one extended-length APDU, up to the card's `max command length`, instead of
+   chained parts. A change in `internal/vconsole/sign/openpgp` only. Repeat smoke steps 3 and 4.
+3. A smaller size limit the card can meet: the console already refuses, before the PIN, any license
+   whose signed bytes exceed the size the smoke test proves (`sign.MaxSignedBytes`, 1024 bytes
+   today, which is also the `--max-size` length). If the card signs N bytes but not 1024, the limit
+   can be lowered to N in the code (a code change; the `--max-size` test then signs N bytes and must
+   pass). Only licenses with long customer names or many features would then need option 6. No
+   verifier change.
+4. Another OpenPGP card with Ed25519 (for example a Nitrokey 3, or another OpenPGP 3.4 card): same
+   console code and ceremony; name the reader with `--reader`, because the default picks only
+   readers named "yubi". The smoke test must pass on it.
+5. PIV Ed25519 on YubiKey firmware 5.7 or later: needs new YubiKeys if the current ones are older,
+   and a new signer implementation behind the same `Signer` interface (Phase 2 ruling 1 revisited).
+   Whether PIV accepts the full message is unproven too: it needs its own smoke test.
+6. Keep the file key (options 1 and 2 of section 2), which is the state today. Option 1, offline
+   `licensectl`, keeps the key off any online machine; option 2 is the dedicated online signer
+   computer. A later improvement could add an offline round trip: the console exports the payload,
+   the offline `licensectl` signs it, and the console imports and verifies the signed file. That
+   would put option 1 licenses in the database, with mails and reminders, without hardware.
+
+(A YubiHSM 2 also signs full Ed25519 messages, but has no per-signature touch and needs its own
+connector. Consider it only if 2 to 5 fail.)
+
+Until one of these has passed its smoke test on every platform in use, option 3 stays out of force.
 
 ### Results
 
