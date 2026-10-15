@@ -122,8 +122,9 @@ var rules = map[string][]string{
 	// Web users (sessions, passkeys) know the database and the audit chain, not the license tables.
 	"alice/internal/vconsole/webuser": {platform, "alice/internal/vconsole/audit"},
 	// Phase 4 (plan 2026-10-15-vendor-console-phase-4, in-app since plan 2026-10-15-vendor-console-notifications): the
-	// notifier (reminders, weekly summary, pruning) writes notifications through the database and the audit chain only.
-	"alice/internal/vconsole/notify": {platform, "alice/internal/vconsole/audit", "alice/internal/vconsole/store"},
+	// notifier (reminders, weekly summary, pruning) writes notifications through the database and the audit chain only:
+	// it imports the audit package and no other Alice code (pgx directly, not the platform or the store).
+	"alice/internal/vconsole/notify": {"alice/internal/vconsole/audit"},
 	// Phase 2 (plan 2026-10-15-vendor-console-phase-2): the OpenPGP card protocol is a leaf that knows no Alice code (the
 	// transport is behind its Card interface); its software card simulator knows nothing either and may itself be imported
 	// from tests only (testOnlyImports and testOnlyDirs, buildtags_test.go).
@@ -371,8 +372,10 @@ func TestAllowed(t *testing.T) {
 		{"web to the issuing code denied", "alice/internal/vconsole/web", "alice/internal/vconsole/issue", false},
 		{"web users to the store denied", "alice/internal/vconsole/webuser", "alice/internal/vconsole/store", false},
 		{"notify to the audit chain allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/audit", true},
-		{"notify to the store allowed", "alice/internal/vconsole/notify", "alice/internal/vconsole/store", true},
-		{"notify to the platform allowed", "alice/internal/vconsole/notify", "alice/internal/platform/db", true},
+		{"notify to the store denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/store", false},
+		{"notify to the platform denied", "alice/internal/vconsole/notify", "alice/internal/platform/db", false},
+		{"notify to the clock denied", "alice/internal/vconsole/notify", "alice/internal/platform/clock", false},
+		{"notify to the test database denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/vpgtest", false},
 		{"notify to the signer denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/sign", false},
 		{"notify to the issuing code denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/issue", false},
 		{"notify to the web service denied", "alice/internal/vconsole/notify", "alice/internal/vconsole/web", false},

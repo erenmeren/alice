@@ -79,14 +79,16 @@ type Notice struct {
 // Notify inserts the notice unless a notification with its DedupeKey exists, and reports whether
 // a row was created.
 //
+// The notice is checked and cleaned here first, so a bad value fails with a clear error instead of
+// a CHECK violation: the title becomes one line of at most 200 characters, a body over 4000
+// characters is cut at a character boundary and ends with "... (truncated)", and the subject is
+// cleaned and cut to 64 characters. Kind, severity, audience, target and dedupe key are refused,
+// not repaired, when invalid: guessing them could show a notice to the wrong person or make two
+// notices share a key.
+//
 // Callers must clean free text (customer and user names, ids) themselves before putting it into
 // the body: Notify makes the title and subject one line, but the body is multi-line by design and
-// gets only UTF-8, NUL and length handling, so an uncleaned value could forge a line of its own. The notice is checked and cleaned here first, so a bad value fails with a
-// clear error instead of a CHECK violation: the title becomes one line of at most 200 characters,
-// a body over 4000 characters is cut at a character boundary and ends with "... (truncated)", and
-// the subject is cleaned and cut to 64 characters. Kind, severity, audience, target and dedupe key
-// are refused, not repaired, when invalid: guessing them could show a notice to the wrong person
-// or make two notices share a key.
+// gets only UTF-8, NUL and length handling, so an uncleaned value could forge a line of its own.
 //
 // ON CONFLICT DO NOTHING makes concurrent writers of the same key create one row: the second
 // insert waits for the first transaction and then inserts nothing (or inserts if it rolled back).

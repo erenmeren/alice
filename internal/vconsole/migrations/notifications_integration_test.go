@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"strconv"
 	"strings"
@@ -464,6 +465,23 @@ func TestDedupeKeyIsUnique(t *testing.T) {
 		require.Error(t, err, name)
 		assert.Equal(t, "23514", pgCode(t, err), name)
 	}
+}
+
+// The title CHECK refuses Unicode line breaks too, not only the C0 controls: a notifier row with
+// U+2028 (line separator) or U+0085 (next line) in its title would show as two lines.
+func TestTitleCheckRefusesUnicodeLineBreaks(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	nt := d.As(t, "vendor_notifier", "t_nt_ul_notifier")
+	const ins = `INSERT INTO notifications (kind, title, audience, dedupe_key) VALUES ('k', $1, 'owner', $2)`
+	for i, title := range []string{"License issued: Acme Second line", "License issued: Acme\u0085Second line",
+		"License issued: Acme Second line"} {
+		_, err := nt.Exec(ctx, ins, title, fmt.Sprintf("ul:%d", i))
+		require.Error(t, err, "%q", title)
+		assert.Equal(t, "23514", pgCode(t, err), "%q", title)
+	}
+	_, err := nt.Exec(ctx, ins, "License issued: Acme ç one line", "ul:ok")
+	require.NoError(t, err, "other non-ASCII text is allowed")
 }
 
 func TestOwnerRoleOnlyThroughTheDatabase(t *testing.T) {
