@@ -14,6 +14,7 @@ import (
 
 	"alice/internal/license"
 	"alice/internal/license/issuer"
+	"alice/internal/vconsole/audit"
 )
 
 func TestUsageListsTheOwnerCommands(t *testing.T) {
@@ -45,10 +46,12 @@ func TestOwnerCommandArgumentsAreCheckedBeforeTheDatabase(t *testing.T) {
 		{"audit-verify", "--head", "bad"},
 		{"audit-verify", "--head", "0:" + strings.Repeat("a", 64)},
 		{"audit-verify", "--head", "5:" + strings.Repeat("g", 64)},
-		{"audit-verify", "--head", "5:" + strings.Repeat("a", 63)},
+		{"audit-verify", "--head", "5:" + strings.Repeat("a", 15)},
+		{"audit-verify", "--head", "5:" + strings.Repeat("a", 65)},
+		{"audit-verify", "--head", "5:" + strings.Repeat("a", 15) + "g"},
 		{"audit-verify", "--head", "Audit head:"},
 		{"audit-verify", "--head", "Audit head: bad"},
-		{"audit-verify", "--head", "Audit head: 12:" + strings.Repeat("a", 63)},
+		{"audit-verify", "--head", "Audit head: 12:" + strings.Repeat("a", 15)},
 		{"audit-verify", "extra"},
 		{"audit-head", "extra"},
 		{"audit", "show", "--limit", "0"},
@@ -95,6 +98,8 @@ func TestValidOwnerCommandsGoOnToTheDatabase(t *testing.T) {
 	for _, args := range [][]string{
 		{"audit-head"},
 		{"audit-verify", "--head", "7:" + strings.Repeat("A", 64)},
+		{"audit-verify", "--head", "7:" + strings.Repeat("a", 16)},
+		{"audit-verify", "--head", "Audit head: 7:" + strings.Repeat("a", 63)},
 		{"audit", "show", "--limit", "1000", "--since", "2026-10-01", "--actor", "x", "--action", "license.", "--details"},
 		{"verify-licenses", "--pub", pub},
 		{"license", "revoke", "--id", "LIC-1-1", "--reason", "customer left"},
@@ -459,10 +464,36 @@ func TestParseHeadArgAcceptsTheWholeSummaryLine(t *testing.T) {
 	} {
 		h, err := parseHeadArg(in)
 		require.NoError(t, err, "%q", in)
-		assert.Equal(t, int64(12), h.Seq, "%q", in)
-		assert.Equal(t, hash, h.Hash, "%q", in)
+		require.NotNil(t, h.full, "%q", in)
+		assert.Nil(t, h.prefix, "%q", in)
+		assert.Equal(t, int64(12), h.full.Seq, "%q", in)
+		assert.Equal(t, hash, h.full.Hash, "%q", in)
 	}
 	for _, in := range []string{"", "Audit head:", "Audit head: bad", "Audit head: Audit head: 12:" + hash, "Audit heads: 12:" + hash} {
+		_, err := parseHeadArg(in)
+		assert.Error(t, err, "%q", in)
+	}
+}
+
+func TestParseHeadArgFallsBackToAPrefix(t *testing.T) {
+	hash := strings.Repeat("0123456789abcdef", 4)
+	for _, n := range []int{16, 63} {
+		for _, in := range []string{"12:" + hash[:n], "Audit head: 12:" + hash[:n], "  0012:" + hash[:n] + " "} {
+			h, err := parseHeadArg(in)
+			require.NoError(t, err, "%q", in)
+			assert.Nil(t, h.full, "%q", in)
+			require.NotNil(t, h.prefix, "%q", in)
+			assert.Equal(t, audit.HeadPrefix{Seq: 12, Prefix: hash[:n]}, *h.prefix, "%q", in)
+		}
+	}
+	h, err := parseHeadArg("12:" + strings.Repeat("ABCDEF", 3))
+	require.NoError(t, err)
+	assert.Equal(t, strings.Repeat("abcdef", 3), h.prefix.Prefix, "upper case is lower-cased")
+
+	_, err = parseHeadArg("12:" + hash[:15])
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "at least 16 hex digits")
+	for _, in := range []string{"12:" + hash[:19] + "g", "0:" + hash[:20], "12:" + hash + "0"} {
 		_, err := parseHeadArg(in)
 		assert.Error(t, err, "%q", in)
 	}

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -129,7 +130,24 @@ func TestAuditHeadAndVerifyHead(t *testing.T) {
 	e.issue("Beta", license.NewInstallationID())
 	out, se, code = e.run("owner", "audit-verify", "--head", old.String())
 	require.Equal(t, 0, code, se+out)
-	assert.Contains(t, out, "OK")
+	assert.Equal(t, fmt.Sprintf("audit chain OK; checkpoint %d found\n", old.Seq), out, "the full hash keeps its line")
+	// The sequence with the first 16 or more hex digits passes too and says how many were checked.
+	for _, n := range []int{16, 40} {
+		out, se, code = e.run("owner", "audit-verify", "--head", fmt.Sprintf("Audit head: %d:%s", old.Seq, old.Hash[:n]))
+		require.Equal(t, 0, code, se+out)
+		assert.Equal(t, fmt.Sprintf("audit chain OK; checkpoint %d found (first %d hex digits only; the full hash is a stronger check)\n",
+			old.Seq, n), out)
+	}
+	// A prefix that differs is a mismatch, with the same output as a full hash.
+	wrong := old.Hash[:15] + map[bool]string{true: "1", false: "0"}[old.Hash[15] == '0']
+	out, _, code = e.run("owner", "audit-verify", "--head", fmt.Sprintf("%d:%s", old.Seq, wrong))
+	assert.Equal(t, 1, code)
+	assert.Equal(t, fmt.Sprintf("audit checkpoint MISMATCH: row %d is missing or is not the row of checkpoint %d:%s; "+
+		"audit rows were removed or replaced after the checkpoint was taken\n", old.Seq, old.Seq, wrong), out)
+	// Fewer than 16 hex digits are refused before the database.
+	_, se, code = e.run("owner", "audit-verify", "--head", fmt.Sprintf("%d:%s", old.Seq, old.Hash[:15]))
+	assert.Equal(t, 2, code)
+	assert.Contains(t, se, "at least 16 hex digits")
 	// Upper case hex is accepted.
 	upper := strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'f' {
@@ -159,6 +177,9 @@ func TestAuditHeadAndVerifyHead(t *testing.T) {
 	// A head with a seq the chain never reached is a mismatch too.
 	_, _, code = e.run("owner", "audit-verify", "--head", "999999:"+old.Hash)
 	assert.Equal(t, 1, code)
+	out, _, code = e.run("owner", "audit-verify", "--head", fmt.Sprintf("%d:%s", old.Seq, old.Hash[:16]))
+	assert.Equal(t, 1, code, "a prefix of a removed row is a mismatch")
+	assert.Contains(t, out, "MISMATCH")
 	// A malformed head is a usage error.
 	_, _, code = e.run("owner", "audit-verify", "--head", "1:xyz")
 	assert.Equal(t, 2, code)

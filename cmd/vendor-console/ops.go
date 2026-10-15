@@ -403,29 +403,64 @@ func (c *cli) auditHead(args []string) int {
 // headLinePrefix is the label the weekly summary puts before the checkpoint.
 const headLinePrefix = "Audit head:"
 
+// checkpointArg is a parsed --head: the full hash (full) or, copied by hand, the sequence with
+// only the first 16 to 63 hex digits (prefix). Exactly one is set.
+type checkpointArg struct {
+	full   *audit.Head
+	prefix *audit.HeadPrefix
+}
+
+func (a checkpointArg) seq() int64 {
+	if a.full != nil {
+		return a.full.Seq
+	}
+	return a.prefix.Seq
+}
+
+func (a checkpointArg) String() string {
+	if a.full != nil {
+		return a.full.String()
+	}
+	return a.prefix.String()
+}
+
 // parseHeadArg reads a checkpoint given as <seq>:<hash> or as the whole summary line
 // "Audit head: <seq>:<hash>" (the label is matched without regard to case; spaces around the
-// label and the value are ignored).
-func parseHeadArg(s string) (audit.Head, error) {
+// label and the value are ignored). The full 64-digit hash is preferred; a hash part shorter than
+// that is read as a prefix, which needs at least 16 hex digits.
+func parseHeadArg(s string) (checkpointArg, error) {
 	s = strings.TrimSpace(s)
 	if len(s) >= len(headLinePrefix) && strings.EqualFold(s[:len(headLinePrefix)], headLinePrefix) {
 		s = strings.TrimSpace(s[len(headLinePrefix):])
 	}
-	return audit.ParseHead(s)
+	h, err := audit.ParseHead(s)
+	if err == nil {
+		return checkpointArg{full: &h}, nil
+	}
+	// A short hash part goes to ParseHeadPrefix, whose error names the 16-digit minimum.
+	if _, hash, ok := strings.Cut(s, ":"); ok && len(hash) > 0 && len(hash) < 64 {
+		p, perr := audit.ParseHeadPrefix(s)
+		if perr != nil {
+			return checkpointArg{}, perr
+		}
+		return checkpointArg{prefix: &p}, nil
+	}
+	return checkpointArg{}, err
 }
 
 // auditVerify is "audit-verify [--head SEQ:HASH]". With a head it also proves that the rows up
 // to that checkpoint are still there; it never prints a hash the caller did not give.
 func (c *cli) auditVerify(args []string) int {
 	fs := c.flags("audit-verify")
-	headStr := fs.String("head", "", "checkpoint <seq>:<hash> kept outside the database (the weekly summary's Audit head line, with or without its label)")
+	headStr := fs.String("head", "", "checkpoint <seq>:<hash> kept outside the database (the weekly summary's Audit head line, with or "+
+		"without its label); the full 64 hex digits are best, the sequence with the first 16 or more is accepted")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if fs.NArg() != 0 {
 		return c.usageErr("audit-verify takes no arguments besides --head")
 	}
-	var head *audit.Head
+	var head *checkpointArg
 	if *headStr != "" {
 		h, err := parseHeadArg(*headStr)
 		if err != nil {
@@ -451,11 +486,15 @@ func (c *cli) auditVerify(args []string) int {
 		_, _ = fmt.Fprintln(c.out, "audit chain OK")
 		return 0
 	}
-	err = audit.VerifyHead(ctx, pool, *head)
+	if head.full != nil {
+		err = audit.VerifyHead(ctx, pool, *head.full)
+	} else {
+		err = audit.VerifyHeadPrefix(ctx, pool, *head.prefix)
+	}
 	switch {
 	case errors.Is(err, audit.ErrHeadMismatch):
 		_, _ = fmt.Fprintf(c.out, "audit checkpoint MISMATCH: row %d is missing or is not the row of checkpoint %s; "+
-			"audit rows were removed or replaced after the checkpoint was taken\n", head.Seq, head.String())
+			"audit rows were removed or replaced after the checkpoint was taken\n", head.seq(), head.String())
 		return 1
 	case errors.Is(err, audit.ErrBroken):
 		// The chain changed between the two checks.
@@ -464,7 +503,12 @@ func (c *cli) auditVerify(args []string) int {
 	case err != nil:
 		return c.permissionErr(err, "audit-verify --head needs the owner login")
 	}
-	_, _ = fmt.Fprintf(c.out, "audit chain OK; checkpoint %d found\n", head.Seq)
+	if head.prefix != nil {
+		_, _ = fmt.Fprintf(c.out, "audit chain OK; checkpoint %d found (first %d hex digits only; the full hash is a stronger check)\n",
+			head.prefix.Seq, len(head.prefix.Prefix))
+		return 0
+	}
+	_, _ = fmt.Fprintf(c.out, "audit chain OK; checkpoint %d found\n", head.full.Seq)
 	return 0
 }
 

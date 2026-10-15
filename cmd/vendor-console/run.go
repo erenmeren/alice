@@ -110,7 +110,8 @@ Commands:
         "checked N, problems M" and one line per problem; exit 1 when there are problems.
   audit-verify [--head SEQ:HASH]
         Check the audit chain. With --head (the "Audit head" line of a weekly summary),
-        also check that the rows up to that checkpoint are still there.
+        also check that the rows up to that checkpoint are still there. Give all 64 hex digits
+        of HASH if you can; SEQ with the first 16 or more is accepted (a weaker check).
   audit-head
         Print the newest audit row as SEQ:HASH ("empty" for an empty log), to keep elsewhere.
   audit show [--since YYYY-MM-DD] [--actor NAME] [--action PREFIX] [--limit 50] [--details]

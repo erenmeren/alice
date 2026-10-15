@@ -187,7 +187,11 @@ the owner copies the head into the paper log every week (`vendor-console audit-h
 demand), and the paper log is the witness. (E-mail, which used to carry the head outside the
 database, was dropped before deployment; this is a loss of an external channel, accepted.)
 `vendor-console audit-verify --head SEQ:HASH` checks that the chain is intact and that row `SEQ`
-still exists with that hash; `vendor-console audit-head` prints the current head. After a restore,
+still exists with that hash; `vendor-console audit-head` prints the current head (always the full
+hash). Because the head is copied by hand, `--head` also accepts `SEQ` with only the first 16 to 63
+hex digits and then checks that the row's hash starts with them (about 2^64 work for an insider to
+forge with 16 digits; fewer are refused); the full hash is preferred and the output says when only a
+prefix was checked. After a restore,
 `vendor-console verify-licenses` re-checks every stored license file against the key set (file
 hash, signature, and that the row agrees with the signed payload).
 

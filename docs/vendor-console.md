@@ -59,6 +59,11 @@ into the paper log every week (runbook, section 7), and the checks use the head 
     vendor-console audit-verify --head <seq>:<hash>   # chain intact and rows up to the checkpoint still there (owner login)
     vendor-console audit-head                         # the current head, for the paper log (owner or notifier login)
 
+`audit-head` always prints the full hash, and the full 64 hex digits are the best check. Because the
+head is copied by hand, `--head` also accepts the sequence with only the first 16 or more hex digits
+(never fewer); it then checks that the row's hash starts with them and says so: `audit chain OK;
+checkpoint <seq> found (first N hex digits only; the full hash is a stronger check)`.
+
 A mismatch means rows up to the checkpoint were removed or replaced after it was taken; see the
 runbook, section 7, for what to do.
 

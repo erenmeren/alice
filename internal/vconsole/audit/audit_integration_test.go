@@ -203,6 +203,51 @@ func TestVerifyHeadFailsWhenTheHashDiffers(t *testing.T) {
 	assert.ErrorIs(t, audit.VerifyHead(ctx, d.Owner, h), audit.ErrHeadMismatch)
 }
 
+func TestVerifyHeadPrefix(t *testing.T) {
+	d, ctx := seed(t, 3)
+	h, _, err := audit.CurrentHead(ctx, d.Owner)
+	require.NoError(t, err)
+	for _, n := range []int{16, 40, 63} {
+		require.NoError(t, audit.VerifyHeadPrefix(ctx, d.Owner, audit.HeadPrefix{Seq: h.Seq, Prefix: h.Hash[:n]}), n)
+	}
+	// A later row does not disturb an older checkpoint.
+	_, err = audit.Append(ctx, d.Owner, "test.later", "x", nil)
+	require.NoError(t, err)
+	require.NoError(t, audit.VerifyHeadPrefix(ctx, d.Owner, audit.HeadPrefix{Seq: h.Seq, Prefix: h.Hash[:16]}))
+
+	// A prefix that differs in its last digit.
+	other := h.Hash[:15] + string(flipHex(h.Hash[15]))
+	err = audit.VerifyHeadPrefix(ctx, d.Owner, audit.HeadPrefix{Seq: h.Seq, Prefix: other})
+	assert.ErrorIs(t, err, audit.ErrHeadMismatch)
+	assert.Contains(t, err.Error(), fmt.Sprintf("row %d differs", h.Seq))
+
+	// A row the chain never reached.
+	err = audit.VerifyHeadPrefix(ctx, d.Owner, audit.HeadPrefix{Seq: 9999, Prefix: h.Hash[:16]})
+	assert.ErrorIs(t, err, audit.ErrHeadMismatch)
+	assert.Contains(t, err.Error(), "no row 9999")
+
+	// The checkpoint row removed from the end: the chain verifies, the prefix does not.
+	withoutTriggers(t, d, fmt.Sprintf(`DELETE FROM audit WHERE seq >= %d`, h.Seq))
+	require.NoError(t, audit.Check(ctx, d.Owner))
+	assert.ErrorIs(t, audit.VerifyHeadPrefix(ctx, d.Owner, audit.HeadPrefix{Seq: h.Seq, Prefix: h.Hash[:16]}), audit.ErrHeadMismatch)
+}
+
+func TestVerifyHeadPrefixChecksTheWholeChainFirst(t *testing.T) {
+	d, ctx := seed(t, 4)
+	h, _, err := audit.CurrentHead(ctx, d.Owner)
+	require.NoError(t, err)
+	withoutTriggers(t, d, `UPDATE audit SET details = '{"i": 99}' WHERE seq = 2`)
+	assert.ErrorIs(t, audit.VerifyHeadPrefix(ctx, d.Owner, audit.HeadPrefix{Seq: h.Seq, Prefix: h.Hash[:16]}), audit.ErrBroken)
+}
+
+// flipHex returns a different hex digit.
+func flipHex(c byte) byte {
+	if c == '0' {
+		return '1'
+	}
+	return '0'
+}
+
 func TestParseHeadRefusesJunk(t *testing.T) {
 	hex64 := strings.Repeat("ab", 32)
 	for _, bad := range []string{"", "5", "5:zz", "-1:" + hex64, "+5:" + hex64, "0:" + hex64, "5:" + hex64[:63],

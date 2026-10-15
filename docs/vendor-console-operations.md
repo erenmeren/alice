@@ -623,7 +623,8 @@ record from the operations log: the head and the license count taken just before
 
 1. **Pick the checkpoints.** The first is the head recorded before the dump. The second is the
    witness outside the database: in the paper log (section 7), find the newest weekly audit head
-   copied **before** the dump was taken, `<seq>:<hash>` with all 64 hex digits. (A head taken after
+   copied **before** the dump was taken, `<seq>:<hash>` as written down (all 64 hex digits, or the
+   sequence with at least the first 16; see section 7). (A head taken after
    the dump names rows the dump does not have, and step 6 then reports a mismatch.) Do not take it
    from a weekly summary notification: that is in the database being checked, so it proves nothing
    about it.
@@ -688,10 +689,11 @@ record from the operations log: the head and the license count taken just before
        vendor-console audit-verify --head <seq>:<hash from the paper log>
 
    Type the `<seq>:<hash>` from the paper log; the form `"Audit head: <seq>:<hash>"` (in quotes) is
-   accepted too. A typing mistake in the hash gives a mismatch: compare it with the paper again
-   before you treat a mismatch as tampering.
+   accepted too, and so is a hash with only its first 16 or more hex digits. A typing mistake in the
+   hash gives a mismatch: compare it with the paper again before you treat a mismatch as tampering.
 
-   Expected, both times: `audit chain OK; checkpoint <seq> found`.
+   Expected, both times: `audit chain OK; checkpoint <seq> found`, followed by `(first N hex digits
+   only; the full hash is a stronger check)` when you typed only the start of the hash.
 7. **Every license file:**
 
        vendor-console verify-licenses --keyset internal/license/keys/production.json
@@ -729,8 +731,8 @@ before the next issue, and record it.
 
     Restore drill <YYYY-MM-DD>, done by <name>
     Dump: vendor-<YYYYMMDD>.dump.<gpg|age>, taken <YYYY-MM-DD HH:MM UTC>, stored at <place>
-    Recorded before the dump: audit head <seq>:<first 12 hex of hash>, licenses <N>
-    Paper log checkpoint: <seq>:<first 12 hex of hash>, copied on <YYYY-MM-DD>
+    Recorded before the dump: audit head <seq>:<first 16+ hex digits of hash>, licenses <N>
+    Paper log checkpoint: <seq>:<first 16+ hex digits of hash>, copied on <YYYY-MM-DD>
     pg_restore: OK / errors: <...>
     Schema version before/after migrate: <n>/<n>
     audit-verify --head (recorded head): OK / <output>
@@ -756,10 +758,16 @@ change or delete the notification too. An in-app notification is therefore **not
 witness. (Before, the weekly summary was an e-mail kept in the owner's mailbox outside the
 database; that channel is gone.) The witness is the paper log:
 
-- **Every week**, the owner copies the head into the paper log: the date and the whole
-  `<seq>:<hash>` (all 64 hex digits), read back once. Take it from the newest weekly summary
-  notification or, better, print it directly as the owner login with `vendor-console audit-head`;
-  either is fine, as long as it is written down outside the database the same week.
+- **Every week**, the owner copies the head into the paper log: the date and `<seq>:<hash>`, read
+  back once. The whole hash (all 64 hex digits) is preferred. The sequence with at least the first
+  16 hex digits is acceptable, never fewer: `audit-verify --head` then checks that row `<seq>` still
+  exists and that its hash starts with those digits. Why 16: an insider who rewrites the end of the
+  log must make a new row whose hash starts with the same digits; 16 hex digits are 64 bits, about
+  2^64 attempts, far more than an insider can spend, while 8 or 12 digits take hours on one
+  graphics card. Each digit fewer than 64 makes the check weaker, so copy more when you can. Take
+  it from the newest weekly summary notification or, better, print it directly as the owner login
+  with `vendor-console audit-head` (it always prints the full hash); either is fine, as long as it
+  is written down outside the database the same week.
 - A head from the paper log is what `audit-verify --head` checks against, here, in the restore drill
   (section 6) and in the incident checklists (section 9). Never use a head read back from a
   notification for these checks.
@@ -770,7 +778,8 @@ To check now, as the owner login:
     vendor-console audit-verify --head <seq>:<hash from the paper log>
 
 - `audit chain OK; checkpoint <seq> found`: the chain is intact and the rows up to the checkpoint are
-  still there.
+  still there. With only the start of the hash the line goes on `(first N hex digits only; the full
+  hash is a stronger check)`; fewer than 16 hex digits are refused.
 - `audit chain BROKEN at sequence <n>`: a row was edited or removed in the middle.
 - `audit checkpoint MISMATCH: row <seq> is missing or is not the row of checkpoint ...`: rows up to
   the checkpoint were removed or replaced after the head was taken (or the head was copied wrong:
