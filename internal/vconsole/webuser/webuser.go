@@ -105,6 +105,20 @@ func SetDisabled(ctx context.Context, q audit.Q, name string, disabled bool, now
 	return nil
 }
 
+// SetEmail sets the address reminders for this person's requests go to ("" removes it). The
+// database checks the address syntax and audits the change; the name is matched without regard
+// to case, like everywhere else.
+func SetEmail(ctx context.Context, q audit.Q, name, email string) error {
+	tag, err := q.Exec(ctx, `UPDATE web_users SET email = $2 WHERE lower(name) = lower($1)`, name, email)
+	if err != nil {
+		return fmt.Errorf("webuser: set email: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // ListUsers returns all users by name.
 func ListUsers(ctx context.Context, q audit.Q) ([]User, error) {
 	rows, err := q.Query(ctx, `SELECT `+userCols+` FROM web_users ORDER BY lower(name)`)

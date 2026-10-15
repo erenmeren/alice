@@ -14,6 +14,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"alice/internal/vconsole/audit"
 )
 
 const (
@@ -35,7 +37,8 @@ type candidate struct {
 	targets                                          int
 }
 
-// CreateReminders enqueues expiry reminders due at now and returns how many e-mails it enqueued.
+// CreateReminders enqueues expiry reminders due at now and returns how many reminders it created
+// (one per license and threshold, however many outbox rows that took).
 //
 // A license qualifies when it is not revoked, not replaced by a later license, and ends within
 // (now, now+90 days]. Its threshold T is the smallest of 30, 60, 90 with valid_until <= now+T days.
@@ -98,6 +101,13 @@ func CreateReminders(ctx context.Context, pool *pgxpool.Pool, now time.Time, bas
 	return n, errors.Join(errs...)
 }
 
+// ValidateBaseURL checks a --base-url value the way CreateReminders will, so a command can refuse
+// it before doing anything else.
+func ValidateBaseURL(baseURL string) error {
+	_, err := renewBase(baseURL)
+	return err
+}
+
 // renewBase validates baseURL and returns it without a trailing slash ("" for no link).
 func renewBase(baseURL string) (string, error) {
 	if baseURL == "" {
@@ -119,7 +129,7 @@ func renewBase(baseURL string) (string, error) {
 	return strings.TrimRight(baseURL, "/"), nil
 }
 
-func reminderCandidates(ctx context.Context, q *pgxpool.Pool, now time.Time) ([]candidate, error) {
+func reminderCandidates(ctx context.Context, q audit.Q, now time.Time) ([]candidate, error) {
 	// The threshold CASE must agree with threshold() below; both use the same instants.
 	rows, err := q.Query(ctx, `SELECT l.license_id, c.name, l.valid_until, l.targets, r.requested_by, coalesce(w.email, '')
 		FROM licenses l

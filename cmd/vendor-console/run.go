@@ -59,6 +59,18 @@ Commands:
         Lock the person out and end their sessions.
   web-user enable NAME
   web-user list
+  web-user set-email NAME EMAIL
+        The address reminders for this person's requests go to ("" removes it). Owner login only.
+  settings set KEY VALUE
+        Owner login only. Keys: owner_email (where issuance mails, reminders and the weekly
+        summary go) and timezone (IANA name for the summary, default Europe/Istanbul).
+  settings show
+  notify run [--base-url URL] [--dry-run]
+        Create due expiry reminders and the weekly summary, then send every pending mail.
+        Meant for a timer; needs a login in vendor_notifier. The SMTP server is named by
+        VENDOR_SMTP_ADDR (host:port), VENDOR_SMTP_FROM, and VENDOR_SMTP_USER with
+        VENDOR_SMTP_PASSWORD if it needs a login (STARTTLS or port 465 required). --base-url
+        is the sales web page, for the Renew link. --dry-run prints the counts and changes nothing.
 `
 
 const dbEnv = "VENDOR_DATABASE_URL"
@@ -104,10 +116,22 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, as
 				return c.webUser(args[1], args[2:])
 			case "list":
 				return c.webUserList()
+			case "set-email":
+				return c.webUserSetEmail(args[2:])
 			}
 		}
+	case "settings":
+		return c.settings(args[1:])
+	case "notify":
+		if len(args) >= 2 && args[1] == "run" {
+			return c.notifyRun(args[2:])
+		}
 	}
-	_, _ = fmt.Fprintf(stderr, "vendor-console: unknown command %q\n\n%s", strings.Join(args, " "), usage)
+	return c.unknown(args)
+}
+
+func (c *cli) unknown(args []string) int {
+	_, _ = fmt.Fprintf(c.err, "vendor-console: unknown command %q\n\n%s", strings.Join(args, " "), usage)
 	return 2
 }
 
