@@ -467,6 +467,11 @@ func (c *cli) webUser(sub string, args []string) int {
 		if err != nil {
 			return c.webUserErr(err)
 		}
+		// A disabled user could not use the code: LookupEnrollment refuses disabled users.
+		if u.Disabled {
+			_, _ = fmt.Fprintf(c.err, "vendor-console: %s is disabled; enable it first\n", u.Name)
+			return 1
+		}
 		if code, err = webuser.NewEnrollment(ctx, tx, u.ID, now, enrollmentTTL); err != nil {
 			return c.webUserErr(err)
 		}

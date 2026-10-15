@@ -119,6 +119,19 @@ func (d *DB) As(t testing.TB, group, login string) *pgxpool.Pool {
 	if _, err := d.Owner.Exec(ctx, "CREATE ROLE "+role+" LOGIN PASSWORD '"+AsPassword+"' IN ROLE "+pgx.Identifier{group}.Sanitize()); err != nil {
 		t.Fatalf("vpgtest: create role %s: %v", login, err)
 	}
+	return d.Connect(t, login)
+}
+
+// Connect returns a pool connected as login, an existing role whose password is AsPassword (for a
+// role the test created itself with special grants). The role is dropped when the test ends.
+func (d *DB) Connect(t testing.TB, login string) *pgxpool.Pool {
+	t.Helper()
+	ctx := context.Background()
+	role := pgx.Identifier{login}.Sanitize()
+	t.Cleanup(func() {
+		_, _ = d.Owner.Exec(context.Background(), "DROP OWNED BY "+role)
+		_, _ = d.Owner.Exec(context.Background(), "DROP ROLE IF EXISTS "+role)
+	})
 	u, err := url.Parse(d.OwnerURL)
 	if err != nil {
 		t.Fatalf("vpgtest: parse url: %v", err)
@@ -128,11 +141,7 @@ func (d *DB) As(t testing.TB, group, login string) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("vpgtest: open pool as %s: %v", login, err)
 	}
-	t.Cleanup(func() {
-		pool.Close()
-		_, _ = d.Owner.Exec(context.Background(), "DROP OWNED BY "+role)
-		_, _ = d.Owner.Exec(context.Background(), "DROP ROLE IF EXISTS "+role)
-	})
+	t.Cleanup(pool.Close) // cleanups run last-in first-out: the pool closes before the role is dropped
 	return pool
 }
 

@@ -10,18 +10,22 @@ $$;
 -- +goose StatementEnd
 
 -- Who is acting. The web service is one login that acts for a signed-in person by setting
--- vendor.actor for the transaction. The setting counts only for members of vendor_web, so any
--- other login that sets it still appears under its own name.
+-- vendor.actor for the transaction. The setting counts only for members that inherit vendor_web;
+-- not superusers or admin-only grantors (on PostgreSQL 16 the CREATEROLE login that runs this
+-- migration holds vendor_web with ADMIN but without INHERIT). Any other login that sets it still
+-- appears under its own name.
 -- +goose StatementBegin
 CREATE FUNCTION vendor_actor() RETURNS text LANGUAGE sql STABLE AS $$
     SELECT CASE
-        WHEN pg_has_role(session_user, 'vendor_web', 'member')
+        WHEN pg_has_role(session_user, 'vendor_web', 'USAGE')
+             AND NOT (SELECT rolsuper FROM pg_roles WHERE rolname = session_user)
              AND coalesce(current_setting('vendor.actor', true), '') ~ '^[A-Za-z0-9._-]{1,64}$'
         THEN 'web:' || current_setting('vendor.actor', true)
         ELSE session_user::text
     END
 $$;
 -- +goose StatementEnd
+REVOKE ALL ON FUNCTION vendor_actor() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION vendor_actor() TO vendor_sales;
 
 CREATE OR REPLACE FUNCTION audit_actor() RETURNS text LANGUAGE sql STABLE AS $$ SELECT vendor_actor() $$;
@@ -73,11 +77,15 @@ CREATE TABLE web_sessions (
 
 REVOKE ALL ON web_users, web_credentials, web_enrollments, web_sessions FROM PUBLIC;
 GRANT SELECT ON web_users TO vendor_web;
-GRANT SELECT, INSERT, UPDATE ON web_credentials TO vendor_web;
-GRANT SELECT, UPDATE ON web_enrollments TO vendor_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON web_sessions TO vendor_web;
+GRANT SELECT, INSERT ON web_credentials TO vendor_web;
+GRANT UPDATE (credential, last_used_at) ON web_credentials TO vendor_web;
+GRANT SELECT ON web_enrollments TO vendor_web;
+GRANT UPDATE (used_at) ON web_enrollments TO vendor_web;
+GRANT SELECT, INSERT, DELETE ON web_sessions TO vendor_web;
+GRANT UPDATE (last_seen) ON web_sessions TO vendor_web;
 -- The owner creates and disables web users and issues enrollment codes.
-GRANT SELECT, INSERT, UPDATE ON web_users TO vendor_owner;
+GRANT SELECT, INSERT ON web_users TO vendor_owner;
+GRANT UPDATE (disabled_at) ON web_users TO vendor_owner;
 GRANT SELECT, INSERT ON web_enrollments TO vendor_owner;
 GRANT SELECT ON web_credentials TO vendor_owner;
 GRANT DELETE ON web_sessions TO vendor_owner;
@@ -93,9 +101,11 @@ BEGIN
             PERFORM audit_append(CASE WHEN NEW.disabled_at IS NULL THEN 'webuser.enable' ELSE 'webuser.disable' END, NEW.name, '{}'::jsonb);
         END IF;
     ELSIF TG_TABLE_NAME = 'web_credentials' AND TG_OP = 'INSERT' THEN
-        PERFORM audit_append('webuser.passkey_add', NEW.user_id::text, '{}'::jsonb);
+        PERFORM audit_append('webuser.passkey_add', (SELECT name FROM web_users WHERE id = NEW.user_id),
+                            jsonb_build_object('user_id', NEW.user_id));
     ELSIF TG_TABLE_NAME = 'web_enrollments' AND TG_OP = 'INSERT' THEN
-        PERFORM audit_append('webuser.invite', NEW.user_id::text, jsonb_build_object('expires_at', NEW.expires_at));
+        PERFORM audit_append('webuser.invite', (SELECT name FROM web_users WHERE id = NEW.user_id),
+                            jsonb_build_object('user_id', NEW.user_id, 'expires_at', NEW.expires_at));
     END IF;
     RETURN NULL;
 END
