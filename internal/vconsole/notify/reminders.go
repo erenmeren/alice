@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -50,10 +51,13 @@ type candidate struct {
 //
 // Recipients are the owner_email setting and the requester's web_users.email (requested_by
 // "web:<name>", name matched case-insensitively like the unique index, user not disabled, address
-// not empty), each address once. A mail with at least one recipient is enqueued as it is, so a
-// requester is told even before the owner address is configured (ResolveEmptyRecipients only
-// fills fully empty rows, so the owner is not added to that mail later). With no address at all
-// the row is enqueued with an empty list and waits for the owner address.
+// not empty), each address once. While the owner address is not set, the owner's copy is a
+// separate outbox row with an empty recipient list that ResolveEmptyRecipients fills once the
+// address exists; the requester (if any) gets a row of their own that is sent now. With no
+// address at all there is just the one waiting row. The count is of reminders, not outbox rows.
+//
+// A license whose transaction fails is skipped and retried on the next run; the errors are joined
+// and returned together with the number of reminders that did go out.
 //
 // baseURL, when not empty, must be an absolute http(s) URL with a host and without user info,
 // query or fragment; the body then links to <baseURL>/requests/new?renew=<license-id>. An invalid
@@ -74,25 +78,35 @@ func CreateReminders(ctx context.Context, pool *pgxpool.Pool, now time.Time, bas
 		return 0, err
 	}
 	n := 0
+	var errs []error
 	for _, c := range cands {
 		if err := ctx.Err(); err != nil {
-			return n, fmt.Errorf("notify: create reminders: %w", err)
+			errs = append(errs, fmt.Errorf("notify: create reminders: %w", err))
+			break
 		}
 		sent, err := remindOne(ctx, pool, c, now, owner, base)
 		if err != nil {
-			return n, err
+			// One bad license must not keep the others from being reminded; its transaction
+			// rolled back, so the next run retries it.
+			errs = append(errs, fmt.Errorf("notify: reminder for %s: %w", oneLine(c.licenseID), err))
+			continue
 		}
 		if sent {
 			n++
 		}
 	}
-	return n, nil
+	return n, errors.Join(errs...)
 }
 
 // renewBase validates baseURL and returns it without a trailing slash ("" for no link).
 func renewBase(baseURL string) (string, error) {
 	if baseURL == "" {
 		return "", nil
+	}
+	// url.Parse accepts spaces and some other characters that would make the link break or wrap
+	// in a plain-text mail; refuse them instead of guessing an encoding.
+	if strings.ContainsFunc(baseURL, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		return "", errors.New("notify: base url: contains whitespace or control characters")
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
@@ -188,8 +202,16 @@ func remindOne(ctx context.Context, pool *pgxpool.Pool, c candidate, now time.Ti
 	}
 
 	subject, body := reminderMessage(c, t, now, base)
-	if _, err := Enqueue(ctx, tx, "reminder", recipients(owner, c.requesterEmail), subject, body); err != nil {
+	to := recipients(owner, c.requesterEmail)
+	if _, err := Enqueue(ctx, tx, "reminder", to, subject, body); err != nil {
 		return false, err
+	}
+	if owner == "" && len(to) > 0 {
+		// The requester's row goes out now; the owner's copy waits for the owner address, since
+		// the reminder rows keep this threshold from ever being enqueued again.
+		if _, err := Enqueue(ctx, tx, "reminder", nil, subject, body); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("notify: commit reminder: %w", err)

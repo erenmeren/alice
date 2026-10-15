@@ -173,13 +173,26 @@ func TestBoundariesOfTheThresholds(t *testing.T) {
 	seedLicense(t, d, lic{id: "LIC-EXACT90", customer: "A", validUntil: now.Add(90 * day)})
 	seedLicense(t, d, lic{id: "LIC-OVER90", customer: "B", validUntil: now.Add(90*day + time.Second)})
 	seedLicense(t, d, lic{id: "LIC-EXACT60", customer: "C", validUntil: now.Add(60 * day)})
+	seedLicense(t, d, lic{id: "LIC-EXACT30", customer: "D", validUntil: now.Add(30 * day)})
+	seedLicense(t, d, lic{id: "LIC-OVER30", customer: "E", validUntil: now.Add(30*day + time.Second)})
+	seedLicense(t, d, lic{id: "LIC-UNDER30", customer: "F", validUntil: now.Add(29*day + 23*time.Hour)})
 
 	n, err := notify.CreateReminders(ctx, p, now, baseURL)
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
+	assert.Equal(t, 5, n)
 	assert.Equal(t, []int{90}, reminderRows(t, d, "LIC-EXACT90"))
 	assert.Empty(t, reminderRows(t, d, "LIC-OVER90"))
 	assert.Equal(t, []int{60, 90}, reminderRows(t, d, "LIC-EXACT60"))
+	assert.Equal(t, []int{30, 60, 90}, reminderRows(t, d, "LIC-EXACT30"))
+	assert.Equal(t, []int{60, 90}, reminderRows(t, d, "LIC-OVER30"))
+	assert.Equal(t, []int{30, 60, 90}, reminderRows(t, d, "LIC-UNDER30"))
+	subjects := map[string]bool{}
+	for _, m := range reminderMails(t, d) {
+		subjects[m.Subject] = true
+	}
+	assert.True(t, subjects["License ending in 30 days: D"])
+	assert.True(t, subjects["License ending in 60 days: E"])
+	assert.True(t, subjects["License ending in 30 days: F"])
 }
 
 func TestLateDiscoveryFiresOnlyTheMostUrgentThreshold(t *testing.T) {
@@ -297,24 +310,89 @@ func TestOwnerAddressMissingLeavesWaitingRow(t *testing.T) {
 	ctx := context.Background()
 	p := notifier(t, d, "t_r8_notifier")
 	now := testNow()
-	addWebUser(t, d, "ayse", "ayse@example.com")
 	seedLicense(t, d, lic{id: "LIC-NOBODY", customer: "A", validUntil: now.Add(25 * day)})
-	seedLicense(t, d, lic{id: "LIC-REQ", customer: "B", requestedBy: "web:ayse", validUntil: now.Add(26 * day)})
 
 	n, err := notify.CreateReminders(ctx, p, now, baseURL)
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
+	assert.Equal(t, 1, n)
 	ms := reminderMails(t, d)
-	require.Len(t, ms, 2)
-	assert.Empty(t, ms[0].To, "no address at all: the row waits for the owner address")
-	assert.Equal(t, []string{"ayse@example.com"}, ms[1].To, "a mail with a recipient is not held back")
+	require.Len(t, ms, 1, "no address at all: one waiting row, not two")
+	assert.Empty(t, ms[0].To)
 
 	setOwner(t, d, "boss@example.com")
 	_, err = notify.ResolveEmptyRecipients(ctx, p)
 	require.NoError(t, err)
 	ms = reminderMails(t, d)
+	require.Len(t, ms, 1)
 	assert.Equal(t, []string{"boss@example.com"}, ms[0].To)
-	assert.Equal(t, []string{"ayse@example.com"}, ms[1].To)
+}
+
+func TestOwnerAddressMissingRequesterIsToldNowOwnerLater(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_r8b_notifier")
+	now := testNow()
+	addWebUser(t, d, "ayse", "ayse@example.com")
+	seedLicense(t, d, lic{id: "LIC-REQ", customer: "B", requestedBy: "web:ayse", validUntil: now.Add(26 * day)})
+
+	n, err := notify.CreateReminders(ctx, p, now, baseURL)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "one reminder, even though it takes two outbox rows")
+	ms := reminderMails(t, d)
+	require.Len(t, ms, 2)
+	assert.Equal(t, []string{"ayse@example.com"}, ms[0].To, "a mail with a recipient is not held back")
+	assert.Empty(t, ms[1].To, "the owner's copy waits for the owner address")
+	assert.Equal(t, ms[0].Subject, ms[1].Subject)
+	assert.Equal(t, ms[0].Body, ms[1].Body)
+
+	n, err = notify.CreateReminders(ctx, p, now, baseURL)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	assert.Len(t, reminderMails(t, d), 2)
+
+	setOwner(t, d, "boss@example.com")
+	r, err := notify.ResolveEmptyRecipients(ctx, p)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), r, "the waiting issuance mail and the owner's reminder copy")
+	ms = reminderMails(t, d)
+	require.Len(t, ms, 2)
+	assert.Equal(t, []string{"ayse@example.com"}, ms[0].To)
+	assert.Equal(t, []string{"boss@example.com"}, ms[1].To)
+}
+
+func TestOneFailingLicenseDoesNotStopTheRun(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_r15_notifier")
+	now := testNow()
+	setOwner(t, d, "boss@example.com")
+	seedLicense(t, d, lic{id: "LIC-A1", customer: "A", validUntil: now.Add(20 * day)})
+	seedLicense(t, d, lic{id: "LIC-BAD", customer: "B", validUntil: now.Add(21 * day)})
+	seedLicense(t, d, lic{id: "LIC-C1", customer: "C", validUntil: now.Add(22 * day)})
+	// A test-only trigger makes the reminder transaction of one license fail deterministically.
+	_, err := d.Owner.Exec(ctx, `CREATE FUNCTION t_fail_reminder() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			IF NEW.license_id = 'LIC-BAD' THEN RAISE EXCEPTION 'injected failure'; END IF;
+			RETURN NEW;
+		END $$;
+		CREATE TRIGGER t_fail_reminder BEFORE INSERT ON reminders FOR EACH ROW EXECUTE FUNCTION t_fail_reminder()`)
+	require.NoError(t, err)
+
+	n, err := notify.CreateReminders(ctx, p, now, baseURL)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "injected failure")
+	assert.Equal(t, 2, n)
+	ms := reminderMails(t, d)
+	require.Len(t, ms, 2)
+	assert.Contains(t, ms[0].Body, "License: LIC-A1\n")
+	assert.Contains(t, ms[1].Body, "License: LIC-C1\n", "the license after the failing one still gets its reminder")
+	assert.Empty(t, reminderRows(t, d, "LIC-BAD"), "the failed transaction left nothing behind")
+
+	_, err = d.Owner.Exec(ctx, `DROP TRIGGER t_fail_reminder ON reminders`)
+	require.NoError(t, err)
+	n, err = notify.CreateReminders(ctx, p, now, baseURL)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "the failed license is retried on the next run")
 }
 
 func TestRenewLinkUsesTheBaseURLAndEscapesTheID(t *testing.T) {
@@ -362,6 +440,8 @@ func TestInvalidBaseURLIsRefusedBeforeAnything(t *testing.T) {
 		"console.example.com", "ftp://console.example.com", "https://", "javascript:alert(1)",
 		"https://console.example.com/?x=1", "https://console.example.com/#top", "https://user:pw@console.example.com",
 		"https://console.example.com/\r\nx", "/requests",
+		"https://console.example.com/a b", "https://console.example.com/\t", "https://console.example.com/\x7f",
+		" https://console.example.com", "https://console.example.com/\u00a0",
 	} {
 		n, err := notify.CreateReminders(ctx, p, now, u)
 		require.Error(t, err, u)
