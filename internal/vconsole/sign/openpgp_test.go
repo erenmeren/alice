@@ -312,20 +312,30 @@ func TestUnforcedPINIsRefusedBeforeThePrompt(t *testing.T) {
 	assert.Contains(t, refusedBeforePrompt(t, f, openpgp.ErrPINNotForced), "forcesig")
 }
 
+// A card that says it has no command chaining cannot take a license (longer than one short
+// APDU): refused before the PIN, by the same rule the applet's Sign applies.
 func TestMessageLongerThanTheCardLimitIsRefusedBeforeThePrompt(t *testing.T) {
 	p := payload()
-	f := newFixture(t, func(o *openpgptest.Options) { o.MaxCommandLength = 100 })
+	f := newFixture(t, func(o *openpgptest.Options) { o.NoChaining = true })
 	s := f.signer(t)
 	_, err := s.Issue(context.Background(), p)
 	var tl *openpgp.MessageTooLongError
 	require.ErrorAs(t, err, &tl)
-	assert.Equal(t, 100, tl.Limit)
+	assert.Equal(t, 255, tl.Limit)
 	signed, _, err := sign.PayloadDigest(p)
 	require.NoError(t, err)
 	assert.Equal(t, len(signed), tl.Length)
 	assert.Zero(t, f.pins.asks())
 	assert.Zero(t, f.rec.count("verify"))
 	assert.Zero(t, f.sim.Count(0x2A))
+}
+
+// DO 7F66 bounds one extended-length command, not a chained message: a small stated limit alone
+// is no reason to refuse (the applet chains and the card decides).
+func TestStatedCommandLengthAloneDoesNotRefuse(t *testing.T) {
+	f := newFixture(t, func(o *openpgptest.Options) { o.MaxCommandLength = 100 })
+	_, err := f.signer(t).Issue(context.Background(), payload())
+	require.NoError(t, err)
 }
 
 func TestInvalidPayloadIsRefusedBeforeThePrompt(t *testing.T) {

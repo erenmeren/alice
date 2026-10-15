@@ -31,6 +31,10 @@ var (
 // step has a 2 minute limit).
 const openPGPTimeout = 2 * time.Minute
 
+// shortAPDUData is the data field of one short command APDU: a longer message needs command
+// chaining (the applet's rule in Sign; extended-length APDUs are not used).
+const shortAPDUData = 255
+
 // OpenPGPOptions configure an OpenPGPSigner.
 type OpenPGPOptions struct {
 	KeyID    string            // key ID written into licenses; must exist in the key set
@@ -214,8 +218,11 @@ func (s *OpenPGPSigner) issue(ctx context.Context, p license.Payload) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	if info.MaxCommandLength > 0 && len(signed) > info.MaxCommandLength {
-		return nil, &openpgp.MessageTooLongError{Length: len(signed), Limit: info.MaxCommandLength}
+	// The applet's Sign would refuse this without sending anything; finding out after the PIN
+	// would spend a VERIFY for nothing. Info.MaxCommandLength (DO 7F66) bounds one extended-length
+	// command, not a chained message, so it is not a reason to refuse.
+	if info.CommandChaining == "no" && len(signed) > shortAPDUData {
+		return nil, &openpgp.MessageTooLongError{Length: len(signed), Limit: shortAPDUData}
 	}
 
 	pin, err := s.o.AskPIN(ctx, info.PW1Retries)
