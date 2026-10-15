@@ -4,11 +4,16 @@ package migrations_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io/fs"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
@@ -62,27 +67,53 @@ func notice(t *testing.T, d *vpgtest.DB, audience, target, key string) int64 {
 	return id
 }
 
-// visible returns the ids web_notifications gives the user, newest first.
-func visible(t *testing.T, web *pgxpool.Pool, uid int64, unreadOnly bool) []int64 {
+// actorTx runs fn in a transaction of the web service in which vendor.actor is actor ("" sets
+// none), the way the web service calls the notification functions (inside its actor transaction).
+func actorTx(t *testing.T, web *pgxpool.Pool, actor string, fn func(pgx.Tx)) {
 	t.Helper()
-	rows, err := web.Query(context.Background(), `SELECT id FROM web_notifications($1, 100, $2)`, uid, unreadOnly)
+	ctx := context.Background()
+	tx, err := web.Begin(ctx)
 	require.NoError(t, err)
-	defer rows.Close()
-	var ids []int64
-	for rows.Next() {
-		var id int64
-		require.NoError(t, rows.Scan(&id))
-		ids = append(ids, id)
+	defer func() { _ = tx.Rollback(ctx) }()
+	if actor != "" {
+		_, err = tx.Exec(ctx, `SELECT set_config('vendor.actor', $1, true)`, actor)
+		require.NoError(t, err)
 	}
-	require.NoError(t, rows.Err())
+	fn(tx)
+	require.NoError(t, tx.Commit(ctx))
+}
+
+// visible returns the ids web_notifications gives user uid when called acting as actor.
+func visible(t *testing.T, web *pgxpool.Pool, actor string, uid int64, unreadOnly bool) []int64 {
+	t.Helper()
+	var ids []int64
+	actorTx(t, web, actor, func(tx pgx.Tx) {
+		rows, err := tx.Query(context.Background(), `SELECT id FROM web_notifications($1, 100, $2)`, uid, unreadOnly)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			require.NoError(t, rows.Scan(&id))
+			ids = append(ids, id)
+		}
+		require.NoError(t, rows.Err())
+	})
 	return ids
 }
 
-func unread(t *testing.T, web *pgxpool.Pool, uid int64) int64 {
+// webScalar returns the single value of query, run by the web service acting as actor.
+func webScalar[T any](t *testing.T, web *pgxpool.Pool, actor, query string, args ...any) T {
 	t.Helper()
-	var n int64
-	require.NoError(t, web.QueryRow(context.Background(), `SELECT web_unread_count($1)`, uid).Scan(&n))
-	return n
+	var v T
+	actorTx(t, web, actor, func(tx pgx.Tx) {
+		require.NoError(t, tx.QueryRow(context.Background(), query, args...).Scan(&v))
+	})
+	return v
+}
+
+func unread(t *testing.T, web *pgxpool.Pool, actor string, uid int64) int64 {
+	t.Helper()
+	return webScalar[int64](t, web, actor, `SELECT web_unread_count($1)`, uid)
 }
 
 func TestIssuingALicenseCreatesAnOwnerNotification(t *testing.T) {
@@ -172,7 +203,7 @@ func TestHostileCustomerNameCannotBreakOrForgeLines(t *testing.T) {
 	assert.LessOrEqual(t, utf8.RuneCountInString(title), 200)
 	assert.LessOrEqual(t, utf8.RuneCountInString(body), 4000)
 	assert.LessOrEqual(t, utf8.RuneCountInString(subject), 64)
-	assert.True(t, strings.HasPrefix(key, "issued:"), key)
+	assert.True(t, strings.HasPrefix(key, "issued-sha256:"), key)
 	assert.True(t, strings.HasPrefix(title, "License issued: Acme Signed by: mallory gro.live [31m n"), title)
 	assert.Equal(t, []string{"Signed by: t_nt3_signer"}, linesWithPrefix(body, "Signed by:"),
 		"a name with line breaks must not add a line")
@@ -203,31 +234,41 @@ func TestWebSeesOnlyItsOwnAudience(t *testing.T) {
 	nMehmet := notice(t, d, "user", "mehmet", "k:mehmet")
 	nBoss := notice(t, d, "user", "boss", "k:boss")
 
-	assert.ElementsMatch(t, []int64{nOwner, nSales, nBoss}, visible(t, web, boss, false))
-	assert.ElementsMatch(t, []int64{nSales, nAyse}, visible(t, web, ayse, false))
-	assert.ElementsMatch(t, []int64{nSales, nMehmet}, visible(t, web, mehmet, false))
-	assert.Empty(t, visible(t, web, gone, false), "a disabled user sees nothing")
-	assert.Empty(t, visible(t, web, 999999, false), "an unknown id sees nothing")
-	assert.EqualValues(t, 3, unread(t, web, boss))
-	assert.EqualValues(t, 2, unread(t, web, ayse))
-	assert.EqualValues(t, 0, unread(t, web, gone))
-	assert.EqualValues(t, 0, unread(t, web, 999999))
+	assert.ElementsMatch(t, []int64{nOwner, nSales, nBoss}, visible(t, web, "boss", boss, false))
+	assert.ElementsMatch(t, []int64{nSales, nAyse}, visible(t, web, "ayse", ayse, false))
+	assert.ElementsMatch(t, []int64{nSales, nMehmet}, visible(t, web, "mehmet", mehmet, false))
+	assert.Empty(t, visible(t, web, "gone", gone, false), "a disabled user sees nothing")
+	assert.Empty(t, visible(t, web, "ayse", 999999, false), "an unknown id sees nothing")
+	assert.EqualValues(t, 3, unread(t, web, "boss", boss))
+	assert.EqualValues(t, 2, unread(t, web, "ayse", ayse))
+	assert.EqualValues(t, 0, unread(t, web, "gone", gone))
+	assert.EqualValues(t, 0, unread(t, web, "ayse", 999999))
 
 	// Newest first, the limit is applied, and the columns the page needs are there.
-	rows, err := web.Query(context.Background(),
-		`SELECT id, kind, severity, title, body, audience, subject, created_at, read_at FROM web_notifications($1, 1, false)`, boss)
-	require.NoError(t, err)
 	var got []int64
-	for rows.Next() {
-		var id int64
-		var kind, severity, title, body, audience, subject string
-		var created, read any
-		require.NoError(t, rows.Scan(&id, &kind, &severity, &title, &body, &audience, &subject, &created, &read))
-		assert.Nil(t, read)
-		got = append(got, id)
-	}
-	require.NoError(t, rows.Err())
+	actorTx(t, web, "boss", func(tx pgx.Tx) {
+		rows, err := tx.Query(context.Background(),
+			`SELECT id, kind, severity, title, body, audience, subject, created_at, read_at FROM web_notifications($1, 1, false)`, boss)
+		require.NoError(t, err)
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			var kind, severity, title, body, audience, subject string
+			var created, read any
+			require.NoError(t, rows.Scan(&id, &kind, &severity, &title, &body, &audience, &subject, &created, &read))
+			assert.Nil(t, read)
+			got = append(got, id)
+		}
+		require.NoError(t, rows.Err())
+	})
 	assert.Equal(t, []int64{nBoss}, got)
+
+	// The database refuses another user's id: the acting person must be the user asked about.
+	assert.Empty(t, visible(t, web, "ayse", boss, false), "ayse asking for boss's notifications")
+	assert.EqualValues(t, 0, unread(t, web, "ayse", boss))
+	assert.Empty(t, visible(t, web, "", ayse, false), "no vendor.actor")
+	assert.EqualValues(t, 0, unread(t, web, "", ayse))
+	assert.Empty(t, visible(t, web, "AYSE", ayse, false), "the actor names the stored user exactly")
 }
 
 func TestUnreadCountAndMarkRead(t *testing.T) {
@@ -243,11 +284,13 @@ func TestUnreadCountAndMarkRead(t *testing.T) {
 	nAyse := notice(t, d, "user", "ayse", "k:ayse")
 	nMehmet := notice(t, d, "user", "mehmet", "k:mehmet")
 
-	mark := func(uid, nid int64) bool {
+	mark := func(actor string, uid, nid int64) bool {
 		t.Helper()
-		var ok bool
-		require.NoError(t, web.QueryRow(ctx, `SELECT web_mark_read($1, $2)`, uid, nid).Scan(&ok))
-		return ok
+		return webScalar[bool](t, web, actor, `SELECT web_mark_read($1, $2)`, uid, nid)
+	}
+	markAll := func(actor string, uid int64) int64 {
+		t.Helper()
+		return webScalar[int64](t, web, actor, `SELECT web_mark_all_read($1)`, uid)
 	}
 	readsOf := func(uid int64) []int64 {
 		t.Helper()
@@ -264,35 +307,37 @@ func TestUnreadCountAndMarkRead(t *testing.T) {
 		return ids
 	}
 
-	assert.True(t, mark(ayse, nAyse))
-	assert.True(t, mark(ayse, nAyse), "marking twice is not an error")
-	assert.EqualValues(t, 1, unread(t, web, ayse))
-	assert.EqualValues(t, 2, unread(t, web, mehmet), "another user's count is unchanged")
-	assert.Equal(t, []int64{nSales}, visible(t, web, ayse, true))
+	assert.True(t, mark("ayse", ayse, nAyse))
+	assert.True(t, mark("ayse", ayse, nAyse), "marking twice is not an error")
+	assert.EqualValues(t, 1, unread(t, web, "ayse", ayse))
+	assert.EqualValues(t, 2, unread(t, web, "mehmet", mehmet), "another user's count is unchanged")
+	assert.Equal(t, []int64{nSales}, visible(t, web, "ayse", ayse, true))
 
 	// An invisible notification answers exactly like an unknown one and records nothing.
-	assert.False(t, mark(ayse, nOwner))
-	assert.False(t, mark(ayse, nMehmet))
-	assert.False(t, mark(ayse, 999999))
-	assert.False(t, mark(gone, nSales), "a disabled user marks nothing")
+	assert.False(t, mark("ayse", ayse, nOwner))
+	assert.False(t, mark("ayse", ayse, nMehmet))
+	assert.False(t, mark("ayse", ayse, 999999))
+	assert.False(t, mark("gone", gone, nSales), "a disabled user marks nothing")
 	assert.ElementsMatch(t, []int64{nAyse}, readsOf(ayse))
 	assert.Empty(t, readsOf(gone))
 
-	var n int64
-	require.NoError(t, web.QueryRow(ctx, `SELECT web_mark_all_read($1)`, ayse).Scan(&n))
-	assert.EqualValues(t, 1, n)
-	assert.EqualValues(t, 0, unread(t, web, ayse))
-	assert.ElementsMatch(t, []int64{nAyse, nSales}, readsOf(ayse), "mark-all-read touches only visible ones")
-	assert.EqualValues(t, 2, unread(t, web, boss))
-	assert.EqualValues(t, 2, unread(t, web, mehmet))
-	require.NoError(t, web.QueryRow(ctx, `SELECT web_mark_all_read($1)`, gone).Scan(&n))
-	assert.Zero(t, n)
+	// Acting as someone else, or as nobody, marks nothing.
+	assert.False(t, mark("mehmet", ayse, nSales))
+	assert.False(t, mark("", ayse, nSales))
+	assert.Zero(t, markAll("mehmet", ayse))
+	assert.Zero(t, markAll("", ayse))
+	assert.ElementsMatch(t, []int64{nAyse}, readsOf(ayse))
 
-	require.NoError(t, web.QueryRow(ctx, `SELECT web_mark_all_read($1)`, boss).Scan(&n))
-	assert.EqualValues(t, 2, n)
+	assert.EqualValues(t, 1, markAll("ayse", ayse))
+	assert.EqualValues(t, 0, unread(t, web, "ayse", ayse))
+	assert.ElementsMatch(t, []int64{nAyse, nSales}, readsOf(ayse), "mark-all-read touches only visible ones")
+	assert.EqualValues(t, 2, unread(t, web, "boss", boss))
+	assert.EqualValues(t, 2, unread(t, web, "mehmet", mehmet))
+	assert.Zero(t, markAll("gone", gone))
+
+	assert.EqualValues(t, 2, markAll("boss", boss))
 	assert.ElementsMatch(t, []int64{nOwner, nSales}, readsOf(boss))
-	var readAt any
-	require.NoError(t, web.QueryRow(ctx, `SELECT read_at FROM web_notifications($1, 100, false) WHERE id = $2`, boss, nOwner).Scan(&readAt))
+	readAt := webScalar[any](t, web, "boss", `SELECT read_at FROM web_notifications($1, 100, false) WHERE id = $2`, boss, nOwner)
 	assert.NotNil(t, readAt)
 }
 
@@ -555,5 +600,168 @@ func TestNotifierReadsWebUserRoleButNoOtherWebColumns(t *testing.T) {
 		_, err := nt.Exec(ctx, q)
 		require.Error(t, err, q)
 		assert.Equal(t, "42501", pgCode(t, err), q)
+	}
+}
+
+// A long license id is keyed by its hash under a prefix of its own, so a license whose id is
+// literally "sha256:<hash of the long id>" cannot take the long id's key and silence it.
+func TestLongLicenseIDKeyCannotBeSilencedByAShortOne(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	signer := d.As(t, "vendor_signer", "t_nt13_signer")
+	long := "LIC-" + strings.Repeat("L", 300)
+	sum := sha256.Sum256([]byte(long))
+	h := hex.EncodeToString(sum[:])
+	issue(t, signer, "sha256:"+h, "Forger Ltd")
+	issue(t, signer, long, "Victim Ltd")
+
+	rows, err := d.Owner.Query(ctx, `SELECT dedupe_key FROM notifications WHERE kind = 'license.issued' ORDER BY id`)
+	require.NoError(t, err)
+	var keys []string
+	for rows.Next() {
+		var k string
+		require.NoError(t, rows.Scan(&k))
+		keys = append(keys, k)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"issued:sha256:" + h, "issued-sha256:" + h}, keys)
+}
+
+// The notifier cannot insert an issuance notification (or take an issued* key) ahead of the
+// trigger, which would make the real one disappear through ON CONFLICT DO NOTHING.
+func TestNotifierCannotPreemptIssuanceNotifications(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	nt := d.As(t, "vendor_notifier", "t_nt14_notifier")
+	owner := d.As(t, "vendor_owner", "t_nt14_owner")
+	signer := d.As(t, "vendor_signer", "t_nt14_signer")
+	for _, q := range []string{
+		`INSERT INTO notifications (kind, title, audience, dedupe_key) VALUES ('license.issued', 't', 'owner', 'x:1')`,
+		`INSERT INTO notifications (kind, title, audience, dedupe_key) VALUES ('license.ending', 't', 'owner', 'issued:LIC-1')`,
+		`INSERT INTO notifications (kind, title, audience, dedupe_key) VALUES ('license.ending', 't', 'owner', 'issued-sha256:ab')`,
+		`INSERT INTO notifications (kind, title, audience, dedupe_key) VALUES ('license.ending', 't', 'owner', 'issued:LIC-1') ON CONFLICT (dedupe_key) DO NOTHING`,
+	} {
+		_, err := nt.Exec(ctx, q)
+		require.Error(t, err, q)
+		assert.Equal(t, "42501", pgCode(t, err), q)
+	}
+	for _, key := range []string{"ending:LIC-1:90", "summary:2026-10-12", "unusual:2026-10-12"} {
+		_, err := nt.Exec(ctx, `INSERT INTO notifications (kind, title, audience, dedupe_key) VALUES ('k', 't', 'owner', $1)
+			ON CONFLICT (dedupe_key) DO NOTHING`, key)
+		require.NoError(t, err, key)
+	}
+	issue(t, signer, "LIC-1", "Real Ltd")
+	var n int
+	require.NoError(t, nt.QueryRow(ctx, `SELECT count(*) FROM notifications`).Scan(&n))
+	assert.Equal(t, 4, n, "the notifier still reads every row")
+	require.NoError(t, owner.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE dedupe_key = 'issued:LIC-1' AND kind = 'license.issued'`).Scan(&n))
+	assert.Equal(t, 1, n, "the trigger still writes, and the owner reads it")
+}
+
+func TestPruneNeverGoesBelowTheFloor(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	nt := d.As(t, "vendor_notifier", "t_nt15_notifier")
+	uid := webUser(t, d, "boss", "owner", false)
+	ages := map[string]string{"k:200": "200 days", "k:100": "100 days", "k:1": "1 day"}
+	for key, age := range ages {
+		id := notice(t, d, "owner", "", key)
+		_, err := d.Owner.Exec(ctx, `UPDATE notifications SET created_at = now() - $2::interval WHERE id = $1`, id, age)
+		require.NoError(t, err)
+		_, err = d.Owner.Exec(ctx, `INSERT INTO notification_reads (notification_id, user_id) VALUES ($1, $2)`, id, uid)
+		require.NoError(t, err)
+	}
+	var n int64
+	require.NoError(t, nt.QueryRow(ctx, `SELECT notify_prune(NULL)`).Scan(&n))
+	assert.Zero(t, n, "a NULL cutoff removes nothing")
+	require.NoError(t, nt.QueryRow(ctx, `SELECT notify_prune('infinity')`).Scan(&n))
+	assert.EqualValues(t, 1, n)
+	var left []string
+	rows, err := d.Owner.Query(ctx, `SELECT dedupe_key FROM notifications ORDER BY dedupe_key`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var k string
+		require.NoError(t, rows.Scan(&k))
+		left = append(left, k)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{"k:1", "k:100"}, left)
+}
+
+// Invisible characters must not sit literally in the migrations, where a reader cannot see them:
+// the SQL spells them as escapes. Comments are skipped; no exceptions exist today.
+func TestMigrationSQLIsASCIIOutsideComments(t *testing.T) {
+	allowed := map[string]bool{} // "file:line" of a deliberate exception
+	files, err := fs.Glob(migrations.FS, "*.sql")
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	for _, f := range files {
+		b, err := fs.ReadFile(migrations.FS, f)
+		require.NoError(t, err)
+		for i, line := range strings.Split(string(b), "\n") {
+			if c := strings.Index(line, "--"); c >= 0 {
+				line = line[:c]
+			}
+			for _, r := range line {
+				if r > 0x7f {
+					where := f + ":" + strconv.Itoa(i+1)
+					assert.True(t, allowed[where], "non-ASCII %U at %s", r, where)
+				}
+			}
+		}
+	}
+}
+
+// A notification pruned while web_mark_read or web_mark_all_read runs is skipped: no foreign key
+// error reaches the web service, and the answer is the one for an unknown notification.
+func TestMarkReadSurvivesAConcurrentPrune(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	web := d.As(t, "vendor_web", "t_nt16_web")
+	uid := webUser(t, d, "ayse", "sales", false)
+
+	gone := notice(t, d, "sales", "", "k:gone")
+	_, err := d.Owner.Exec(ctx, `DELETE FROM notifications WHERE id = $1`, gone)
+	require.NoError(t, err)
+	assert.False(t, webScalar[bool](t, web, "ayse", `SELECT web_mark_read($1, $2)`, uid, gone))
+
+	for i, q := range []string{`SELECT web_mark_read($1, $2)::int`, `SELECT web_mark_all_read($1)::int + 0 * $2`} {
+		nid := notice(t, d, "sales", "", "k:race:"+strconv.Itoa(i))
+		del, err := d.Owner.Begin(ctx)
+		require.NoError(t, err)
+		_, err = del.Exec(ctx, `DELETE FROM notifications WHERE id = $1`, nid)
+		require.NoError(t, err)
+
+		type result struct {
+			v   int
+			err error
+		}
+		done := make(chan result, 1)
+		go func() {
+			tx, err := web.Begin(ctx)
+			if err != nil {
+				done <- result{err: err}
+				return
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			var v int
+			if _, err = tx.Exec(ctx, `SELECT set_config('vendor.actor', 'ayse', true)`); err == nil {
+				err = tx.QueryRow(ctx, q, uid, nid).Scan(&v)
+			}
+			if err == nil {
+				err = tx.Commit(ctx)
+			}
+			done <- result{v, err}
+		}()
+		require.Eventually(t, func() bool {
+			var waiting int
+			err := d.Owner.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+				WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting)
+			return err == nil && waiting > 0
+		}, 10*time.Second, 10*time.Millisecond, "the mark call waits for the delete")
+		require.NoError(t, del.Commit(ctx))
+		r := <-done
+		require.NoError(t, r.err, q)
+		assert.Zero(t, r.v, q)
 	}
 }

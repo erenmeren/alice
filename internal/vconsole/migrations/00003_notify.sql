@@ -49,7 +49,7 @@ CREATE TABLE notifications (
     id          bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     kind        text NOT NULL CHECK (length(kind) BETWEEN 1 AND 40),
     severity    text NOT NULL DEFAULT 'info' CHECK (severity IN ('info', 'warning', 'alert')),
-    title       text NOT NULL CHECK (length(title) BETWEEN 1 AND 200 AND title !~ '[\u0001-\u001f\u007f-\u009f  ]'),
+    title       text NOT NULL CHECK (length(title) BETWEEN 1 AND 200 AND title !~ '[\u0001-\u001f\u007f-\u009f\u2028\u2029]'),
     body        text NOT NULL DEFAULT '' CHECK (length(body) <= 4000),
     audience    text NOT NULL CHECK (audience IN ('owner', 'sales', 'user')),
     target_user text CHECK (target_user ~ '^[A-Za-z0-9._-]{1,64}$'),
@@ -59,6 +59,17 @@ CREATE TABLE notifications (
     CONSTRAINT notifications_target_check CHECK ((audience = 'user') = (target_user IS NOT NULL))
 );
 CREATE INDEX notifications_created_idx ON notifications (created_at);
+
+-- Row-level security keeps the notifier from pre-empting issuance notifications: it may not insert
+-- one of kind license.issued or with an issued* dedupe key (which would make the trigger's
+-- ON CONFLICT DO NOTHING drop the real one). Only the issuance trigger writes those. The table owner
+-- (the migration login, which owns the trigger and the SECURITY DEFINER functions) bypasses RLS, so
+-- it is deliberately not FORCEd.
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+CREATE POLICY notifications_notifier_insert ON notifications FOR INSERT TO vendor_notifier
+    WITH CHECK (kind <> 'license.issued' AND dedupe_key NOT LIKE 'issued%');
+CREATE POLICY notifications_notifier_read ON notifications FOR SELECT TO vendor_notifier USING (true);
+CREATE POLICY notifications_owner_read ON notifications FOR SELECT TO vendor_owner USING (true);
 
 -- Per-user read state. Rows are written only by web_mark_read and web_mark_all_read.
 CREATE TABLE notification_reads (
@@ -119,7 +130,7 @@ $$;
 -- +goose StatementBegin
 CREATE FUNCTION vendor_clean_line(s text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
     SELECT left(regexp_replace(s,
-        '[[:cntrl:]\u0001-\u001f\u007f-\u009f­؜᠎​-‏ -‮⁠-⁯﻿￹-￻]+', ' ', 'g'), 200)
+        '[[:cntrl:]\u0001-\u001f\u007f-\u009f\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb]+', ' ', 'g'), 200)
 $$;
 -- +goose StatementEnd
 
@@ -129,7 +140,8 @@ $$;
 -- and the result fits every check of notifications. "Signed by" is the acting login
 -- (vendor_actor(), as in the audit row): signed_by is only a column default the inserting client
 -- can override, so a different value is shown as "Recorded signer". No installation ID, no file.
--- A license id too long for the dedupe key (real ones are short) is keyed by its hash instead.
+-- A license id too long for the dedupe key (real ones are short) is keyed by its hash instead,
+-- under its own prefix 'issued-sha256:' that no 'issued:' || id key can ever equal.
 -- +goose StatementBegin
 CREATE FUNCTION vendor_notify_license() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -152,7 +164,7 @@ BEGIN
             'owner',
             left(vendor_clean_line(NEW.license_id), 64),
             CASE WHEN length(NEW.license_id) <= 180 THEN 'issued:' || NEW.license_id
-                 ELSE 'issued:sha256:' || encode(sha256(convert_to(NEW.license_id, 'UTF8')), 'hex') END)
+                 ELSE 'issued-sha256:' || encode(sha256(convert_to(NEW.license_id, 'UTF8')), 'hex') END)
     ON CONFLICT (dedupe_key) DO NOTHING;
     RETURN NULL;
 END
@@ -171,14 +183,18 @@ $$;
 
 -- Pruning: a notification older than the cutoff that at least one web user has read is removed
 -- (its read rows go with it). Unread ones stay whatever their age, so nothing disappears unseen.
--- The rule is deliberately simple: with several owners, one owner's read is enough.
+-- The rule is deliberately simple: with several owners, one owner's read is enough. The cutoff is
+-- never later than 180 days ago, whatever the caller passes; a NULL cutoff removes nothing.
 -- +goose StatementBegin
 CREATE FUNCTION notify_prune(p_before timestamptz) RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     removed bigint;
 BEGIN
+    IF p_before IS NULL THEN
+        RETURN 0;
+    END IF;
     DELETE FROM notifications n
-     WHERE n.created_at < p_before
+     WHERE n.created_at < least(p_before, now() - interval '180 days')
        AND EXISTS (SELECT 1 FROM notification_reads r WHERE r.notification_id = n.id);
     GET DIAGNOSTICS removed = ROW_COUNT;
     RETURN removed;
@@ -187,7 +203,10 @@ $$;
 -- +goose StatementEnd
 
 -- The visibility rule, in one place. The user's role and name are read from web_users by id; a
--- disabled or unknown user sees nothing. The owner sees owner and sales notifications and their own
+-- disabled or unknown user sees nothing, and neither does a call whose acting person
+-- (vendor_actor(), from the transaction-local vendor.actor the web service sets) is not that user,
+-- so the database itself refuses to show anyone another user's notifications. vendor_actor() reads
+-- session_user, which SECURITY DEFINER does not change. The owner sees owner and sales notifications and their own
 -- user ones, a sales user sees sales notifications and their own. Names compare case-insensitively,
 -- as web_users.name is unique case-insensitively. Nobody gets EXECUTE on this helper: only the
 -- web_* functions below (running as their owner) call it.
@@ -196,7 +215,7 @@ CREATE FUNCTION vendor_notifications_for(p_user_id bigint) RETURNS SETOF notific
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
     SELECT n.*
       FROM notifications n
-      JOIN web_users u ON u.id = p_user_id AND u.disabled_at IS NULL
+      JOIN web_users u ON u.id = p_user_id AND u.disabled_at IS NULL AND vendor_actor() = 'web:' || u.name
      WHERE n.audience = 'sales'
         OR (n.audience = 'owner' AND u.role = 'owner')
         OR (n.audience = 'user' AND lower(n.target_user) = lower(u.name))
@@ -205,8 +224,9 @@ $$;
 
 -- The web service reads and marks notifications only through these four functions; it has no
 -- direct access to notifications or notification_reads, so a bug in the Go code cannot widen what
--- a person sees. The service passes the signed-in user's id, and is trusted to pass the right one
--- exactly as it is trusted to set vendor.actor.
+-- a person sees. The service passes the signed-in user's id and MUST call them inside its actor
+-- transaction (inActorTx, vendor.actor set to the same user): a call whose vendor.actor does not
+-- name the user of p_user_id, or that has none, sees nothing and marks nothing.
 -- +goose StatementBegin
 CREATE FUNCTION web_notifications(p_user_id bigint, p_limit integer, p_unread_only boolean)
 RETURNS TABLE (id bigint, kind text, severity text, title text, body text, audience text, subject text,
@@ -236,10 +256,18 @@ $$;
 CREATE FUNCTION web_mark_read(p_user_id bigint, p_notification_id bigint) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 BEGIN
+    -- FOR SHARE holds the notification until commit: a concurrent prune either waits for us or has
+    -- already removed the row (which is then skipped), so the foreign key cannot fail. The handler is
+    -- a second guard: a vanished notification answers like an unknown one.
     INSERT INTO notification_reads (notification_id, user_id)
-    SELECT v.id, p_user_id FROM vendor_notifications_for(p_user_id) v WHERE v.id = p_notification_id
+    SELECT n.id, p_user_id FROM notifications n
+     WHERE n.id = p_notification_id
+       AND n.id IN (SELECT v.id FROM vendor_notifications_for(p_user_id) v)
+       FOR SHARE OF n
     ON CONFLICT DO NOTHING;
     RETURN EXISTS (SELECT 1 FROM vendor_notifications_for(p_user_id) v WHERE v.id = p_notification_id);
+EXCEPTION WHEN foreign_key_violation THEN
+    RETURN false;
 END
 $$;
 -- +goose StatementEnd
@@ -251,11 +279,16 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     marked bigint;
 BEGIN
+    -- As web_mark_read: rows pruned meanwhile are skipped, never a foreign key error.
     INSERT INTO notification_reads (notification_id, user_id)
-    SELECT v.id, p_user_id FROM vendor_notifications_for(p_user_id) v
+    SELECT n.id, p_user_id FROM notifications n
+     WHERE n.id IN (SELECT v.id FROM vendor_notifications_for(p_user_id) v)
+       FOR SHARE OF n
     ON CONFLICT DO NOTHING;
     GET DIAGNOSTICS marked = ROW_COUNT;
     RETURN marked;
+EXCEPTION WHEN foreign_key_violation THEN
+    RETURN 0;
 END
 $$;
 -- +goose StatementEnd
