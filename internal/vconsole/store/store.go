@@ -25,6 +25,8 @@ import (
 var (
 	ErrDuplicateCustomer = errors.New("store: a customer with this name already exists")
 	ErrNotFound          = errors.New("store: not found")
+	ErrAlreadyRevoked    = errors.New("store: the license is already revoked")
+	ErrInvalidReason     = errors.New("store: invalid revoke reason")
 )
 
 // InvalidError means the request itself is wrong (not the database): the message is meant for the person

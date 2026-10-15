@@ -4,10 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"alice/internal/platform/db"
 	"alice/internal/vconsole/audit"
 )
 
@@ -97,4 +102,67 @@ func GetLicenseForRenewal(ctx context.Context, q audit.Q, licenseID string) (Ren
 		return Renewal{}, fmt.Errorf("store: read license for renewal: %w", err)
 	}
 	return r, nil
+}
+
+// MaxReasonLen is the longest revoke reason, in characters.
+const MaxReasonLen = 200
+
+// checkReason refuses an empty reason, one over MaxReasonLen characters, invalid UTF-8, and any
+// control (line breaks included), format (bidi, zero width) or line/paragraph separator character:
+// the reason ends up in the audit log and in terminal output, so it must be one honest line.
+func checkReason(reason string) error {
+	if !utf8.ValidString(reason) {
+		return fmt.Errorf("%w: not valid UTF-8", ErrInvalidReason)
+	}
+	if strings.TrimSpace(reason) == "" {
+		return fmt.Errorf("%w: a reason is required", ErrInvalidReason)
+	}
+	if utf8.RuneCountInString(reason) > MaxReasonLen {
+		return fmt.Errorf("%w: longer than %d characters", ErrInvalidReason, MaxReasonLen)
+	}
+	for _, r := range reason {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
+			return fmt.Errorf("%w: control or formatting characters are not allowed", ErrInvalidReason)
+		}
+	}
+	return nil
+}
+
+// RevokeLicense marks a license revoked at now and records the reason in the license.revoke audit
+// row. The reason travels to the audit trigger in the transaction-local setting vendor.reason, so
+// the setting and the UPDATE must share one transaction: when q is a pool this function opens its
+// own; when q is a transaction (pgx.Tx) the caller owns it and the setting lasts until it ends.
+// ErrNotFound for an unknown license, ErrAlreadyRevoked when revoked_at is already set; a
+// permission error (42501) passes through, only vendor_owner may revoke.
+func RevokeLicense(ctx context.Context, q audit.Q, licenseID, reason string, now time.Time) error {
+	if err := checkReason(reason); err != nil {
+		return err
+	}
+	if pool, ok := q.(*pgxpool.Pool); ok {
+		return db.InTx(ctx, pool, func(tx pgx.Tx) error { return revokeIn(ctx, tx, licenseID, reason, now) })
+	}
+	return revokeIn(ctx, q, licenseID, reason, now)
+}
+
+func revokeIn(ctx context.Context, q audit.Q, licenseID, reason string, now time.Time) error {
+	if _, err := q.Exec(ctx, `SELECT set_config('vendor.reason', $1, true)`, reason); err != nil {
+		return fmt.Errorf("store: revoke license: %w", err)
+	}
+	tag, err := q.Exec(ctx, `UPDATE licenses SET revoked_at = $2 WHERE license_id = $1 AND revoked_at IS NULL`,
+		licenseID, now)
+	if err != nil {
+		return fmt.Errorf("store: revoke license: %w", err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	var revoked *time.Time
+	err = q.QueryRow(ctx, `SELECT revoked_at FROM licenses WHERE license_id = $1`, licenseID).Scan(&revoked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: license %s", ErrNotFound, licenseID)
+	}
+	if err != nil {
+		return fmt.Errorf("store: revoke license: %w", err)
+	}
+	return fmt.Errorf("%w: %s", ErrAlreadyRevoked, licenseID)
 }
