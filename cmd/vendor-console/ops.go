@@ -414,11 +414,25 @@ func (c *cli) auditHead(args []string) int {
 	return 0
 }
 
+// headLinePrefix is the label the weekly summary puts before the checkpoint.
+const headLinePrefix = "Audit head:"
+
+// parseHeadArg reads a checkpoint given as <seq>:<hash> or as the whole mail line
+// "Audit head: <seq>:<hash>" (the label is matched without regard to case; spaces around the
+// label and the value are ignored).
+func parseHeadArg(s string) (audit.Head, error) {
+	s = strings.TrimSpace(s)
+	if len(s) >= len(headLinePrefix) && strings.EqualFold(s[:len(headLinePrefix)], headLinePrefix) {
+		s = strings.TrimSpace(s[len(headLinePrefix):])
+	}
+	return audit.ParseHead(s)
+}
+
 // auditVerify is "audit-verify [--head SEQ:HASH]". With a head it also proves that the rows up
 // to that checkpoint are still there; it never prints a hash the caller did not give.
 func (c *cli) auditVerify(args []string) int {
 	fs := c.flags("audit-verify")
-	headStr := fs.String("head", "", "checkpoint <seq>:<hash> kept outside the database (the weekly summary's Audit head line)")
+	headStr := fs.String("head", "", "checkpoint <seq>:<hash> kept outside the database (the weekly summary's Audit head line, with or without its label)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -427,7 +441,7 @@ func (c *cli) auditVerify(args []string) int {
 	}
 	var head *audit.Head
 	if *headStr != "" {
-		h, err := audit.ParseHead(strings.TrimSpace(*headStr))
+		h, err := parseHeadArg(*headStr)
 		if err != nil {
 			return c.usageErr("--head: %v", err)
 		}

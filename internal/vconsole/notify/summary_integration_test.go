@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/vconsole/audit"
 	"alice/internal/vconsole/notify"
 	"alice/internal/vconsole/vpgtest"
 )
@@ -680,6 +681,31 @@ func TestSummaryEndsWithTheAuditHead(t *testing.T) {
 	body := onlySummary(t, d, p, summaryNow)
 	assert.True(t, strings.HasSuffix(body, fmt.Sprintf("\nAudit head: %d:%s\n", seq, hash)), body)
 	assert.Equal(t, 1, strings.Count(body, "Audit head:"))
+}
+
+func TestMailedHeadLineVerifiesAfterLaterRows(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_compose_notifier")
+	ctx := context.Background()
+	sales := d.As(t, "vendor_sales", "t_compose_sales")
+	_, err := sales.Exec(ctx, `INSERT INTO customers (name) VALUES ('Compose Co')`)
+	require.NoError(t, err)
+
+	body := onlySummary(t, d, p, summaryNow)
+	var line string
+	for _, l := range strings.Split(body, "\n") {
+		if strings.HasPrefix(l, "Audit head:") {
+			line = l
+		}
+	}
+	require.NotEmpty(t, line, body)
+
+	_, err = audit.Append(ctx, d.Owner, "test.later", "x", nil)
+	require.NoError(t, err)
+
+	h, err := audit.ParseHead(strings.TrimSpace(strings.TrimPrefix(line, "Audit head:")))
+	require.NoError(t, err, line)
+	require.NoError(t, audit.VerifyHead(ctx, d.Owner, h))
 }
 
 func TestSummaryHasNoHeadLineOnAnEmptyChain(t *testing.T) {

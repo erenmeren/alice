@@ -164,6 +164,19 @@ func TestAuditHeadAndVerifyHead(t *testing.T) {
 	assert.Equal(t, 2, code)
 }
 
+func TestAuditHeadPrintsEmptyOnAnEmptyAuditTable(t *testing.T) {
+	e := newOpsEnv(t, "ae")
+	e.issue("Acme", license.NewInstallationID())
+	require.NotZero(t, e.count("audit"))
+	e.replica(`DELETE FROM audit`)
+	require.Zero(t, e.count("audit"))
+	for _, kind := range []string{"owner", "notifier"} {
+		out, se, code := e.run(kind, "audit-head")
+		require.Equal(t, 0, code, se)
+		assert.Equal(t, "empty\n", out)
+	}
+}
+
 func TestAuditShow(t *testing.T) {
 	e := newOpsEnv(t, "as")
 	inst := license.NewInstallationID()

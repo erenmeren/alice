@@ -46,6 +46,9 @@ func TestOwnerCommandArgumentsAreCheckedBeforeTheDatabase(t *testing.T) {
 		{"audit-verify", "--head", "0:" + strings.Repeat("a", 64)},
 		{"audit-verify", "--head", "5:" + strings.Repeat("g", 64)},
 		{"audit-verify", "--head", "5:" + strings.Repeat("a", 63)},
+		{"audit-verify", "--head", "Audit head:"},
+		{"audit-verify", "--head", "Audit head: bad"},
+		{"audit-verify", "--head", "Audit head: 12:" + strings.Repeat("a", 63)},
 		{"audit-verify", "extra"},
 		{"audit-head", "extra"},
 		{"audit", "show", "--limit", "0"},
@@ -453,4 +456,24 @@ func flip(c byte) byte {
 func TestFirstRunesCutsByCharacter(t *testing.T) {
 	assert.Equal(t, "ab", firstRunes("ab", 80))
 	assert.Equal(t, "şş", firstRunes("şşş", 2))
+}
+
+func TestParseHeadArgAcceptsTheWholeMailLine(t *testing.T) {
+	hash := strings.Repeat("ab", 32)
+	for _, in := range []string{
+		"12:" + hash,
+		"  12:" + hash + "  ",
+		"Audit head: 12:" + hash,
+		"audit head:12:" + hash,
+		"  AUDIT HEAD:   12:" + hash + "\n",
+	} {
+		h, err := parseHeadArg(in)
+		require.NoError(t, err, "%q", in)
+		assert.Equal(t, int64(12), h.Seq, "%q", in)
+		assert.Equal(t, hash, h.Hash, "%q", in)
+	}
+	for _, in := range []string{"", "Audit head:", "Audit head: bad", "Audit head: Audit head: 12:" + hash, "Audit heads: 12:" + hash} {
+		_, err := parseHeadArg(in)
+		assert.Error(t, err, "%q", in)
+	}
 }

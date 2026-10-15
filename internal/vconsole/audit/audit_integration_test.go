@@ -238,3 +238,11 @@ func TestNotifierAndOwnerCanReadHeadButSalesCannot(t *testing.T) {
 		}
 	}
 }
+
+func TestParseHeadNormalisesLeadingZeros(t *testing.T) {
+	hash := strings.Repeat("0123456789abcdef", 4)
+	h, err := audit.ParseHead("0005:" + hash)
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), h.Seq)
+	assert.Equal(t, "5:"+hash, h.String())
+}
