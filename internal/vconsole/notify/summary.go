@@ -12,6 +12,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"alice/internal/vconsole/audit"
 )
 
 const (
@@ -143,12 +145,22 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 	}
 	unusualSec := section{title: "Unusual", count: len(unusual), note: zoneNote, empty: "None.", lines: unusual}
 
+	// The head is read in this transaction, before the mark (which itself adds an audit row): the
+	// owner keeps it as the checkpoint `vendor-console audit-verify --head` compares against.
+	head, haveHead, err := audit.CurrentHead(ctx, tx)
+	if err != nil {
+		return false, fmt.Errorf("notify: summary: %w", err)
+	}
+
 	var b strings.Builder
 	b.WriteString("Weekly summary of the vendor console.\n\n")
 	fmt.Fprintf(&b, "Period: %s to %s\n", start.In(loc).Format(localTimeLayout), end.In(loc).Format(localTimeLayout))
 	fmt.Fprintf(&b, "Time zone: %s\n\n", loc.String())
 	for _, s := range []section{issuedSec, open, ending, failed, unusualSec} {
 		writeSection(&b, s)
+	}
+	if haveHead {
+		fmt.Fprintf(&b, "Audit head: %s\n", head)
 	}
 	subject := fmt.Sprintf("Weekly summary: %d issued, %d open requests, %d unusual", len(issued), open.count, len(unusual))
 

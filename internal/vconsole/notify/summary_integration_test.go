@@ -668,3 +668,23 @@ func TestLicenseWithoutIssueAuditRowIsUnusual(t *testing.T) {
 	assert.Equal(t, "Weekly summary: 1 issued, 0 open requests, 1 unusual", ms[0].Subject)
 	assert.NotContains(t, ms[0].Body, "LIC-HIDDEN", "only the count, from the notifier's column grants")
 }
+
+func TestSummaryEndsWithTheAuditHead(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_head_notifier")
+	seedIssued(t, d, "LIC-HEAD", "Head Co", "alice", summaryNow.Add(-48*time.Hour))
+	var seq int64
+	var hash string
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT seq, hash FROM audit ORDER BY seq DESC LIMIT 1`).Scan(&seq, &hash))
+
+	body := onlySummary(t, d, p, summaryNow)
+	assert.True(t, strings.HasSuffix(body, fmt.Sprintf("\nAudit head: %d:%s\n", seq, hash)), body)
+	assert.Equal(t, 1, strings.Count(body, "Audit head:"))
+}
+
+func TestSummaryHasNoHeadLineOnAnEmptyChain(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_nohead_notifier")
+	body := onlySummary(t, d, p, summaryNow)
+	assert.NotContains(t, body, "Audit head")
+}
