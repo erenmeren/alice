@@ -2,6 +2,7 @@
 {{define "content"}}
 {{template "nav" .}}
 <h1>New license request</h1>
+{{if .Data.Renewing}}<p class="notice">Renewing {{.Data.Renewing}}. Check the values, then send the request.</p>{{end}}
 {{if .Data.Error}}<p role="alert" class="alert">{{.Data.Error}}</p>{{end}}
 <form method="post" action="/requests">
 <p><label for="customer_id">Customer</label>

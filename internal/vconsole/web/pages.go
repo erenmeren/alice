@@ -154,10 +154,14 @@ type requestNewData struct {
 	Customers []store.Customer
 	Form      requestForm
 	Error     string
+	Renewing  string // the license being renewed, for the banner
 }
 
 func (s *Server) renderRequestForm(w http.ResponseWriter, r *http.Request, u webuser.User, status int, f requestForm, msg string) {
-	d := requestNewData{Form: f, Error: msg}
+	s.renderRequestFormData(w, r, u, status, requestNewData{Form: f, Error: msg})
+}
+
+func (s *Server) renderRequestFormData(w http.ResponseWriter, r *http.Request, u webuser.User, status int, d requestNewData) {
 	err := s.inActorTx(r.Context(), u, func(tx pgx.Tx) (err error) {
 		d.Customers, err = store.ListCustomers(r.Context(), tx)
 		return err
@@ -170,7 +174,48 @@ func (s *Server) renderRequestForm(w http.ResponseWriter, r *http.Request, u web
 }
 
 func (s *Server) requestNewPage(w http.ResponseWriter, r *http.Request, u webuser.User) {
-	s.renderRequestForm(w, r, u, http.StatusOK, requestForm{CustomerID: r.URL.Query().Get("customer"), Months: "12"}, "")
+	q := r.URL.Query()
+	if q.Has("renew") {
+		s.renewPage(w, r, u, q.Get("renew"))
+		return
+	}
+	s.renderRequestForm(w, r, u, http.StatusOK, requestForm{CustomerID: q.Get("customer"), Months: "12"}, "")
+}
+
+// renewMonths is the term a renewal form starts with (ruling 5); the person can change it.
+const renewMonths = "12"
+
+// renewPage is /requests/new?renew=<license-id> (ruling 5): the form prefilled from an old license
+// for the person to review and submit. Nothing is stored until they do, and the submit goes through
+// the same validation as any request. An odd, unknown or revoked ID is 404, so no data of one
+// license can end up in a form opened for another.
+func (s *Server) renewPage(w http.ResponseWriter, r *http.Request, u webuser.User, id string) {
+	if !licenseIDPattern.MatchString(id) {
+		http.NotFound(w, r)
+		return
+	}
+	var old store.Renewal
+	err := s.inActorTx(r.Context(), u, func(tx pgx.Tx) (err error) {
+		old, err = store.GetLicenseForRenewal(r.Context(), tx, id)
+		return err
+	})
+	if errors.Is(err, store.ErrNotFound) || (err == nil && old.RevokedAt != nil) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.serverError(w, "read license for renewal", err)
+		return
+	}
+	s.renderRequestFormData(w, r, u, http.StatusOK, requestNewData{Renewing: old.LicenseID, Form: requestForm{
+		CustomerID:   strconv.FormatInt(old.CustomerID, 10),
+		Installation: old.Installation,
+		Targets:      strconv.Itoa(old.Targets),
+		// The new license starts on the day the old one ends (UTC, like every date the console shows).
+		From:     old.ValidUntil.UTC().Format("2006-01-02"),
+		Months:   renewMonths,
+		Features: strings.Join(old.Features, ","),
+	}})
 }
 
 // splitFeatures accepts commas or line breaks between features.

@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"alice/internal/vconsole/audit"
 )
@@ -60,4 +63,38 @@ func ListCustomers(ctx context.Context, q audit.Q) ([]Customer, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+// Renewal is what the "Renew" form is prefilled with: the old license's customer and installation,
+// and the targets and features of the request it was issued from.
+type Renewal struct {
+	LicenseID    string
+	CustomerID   int64
+	Customer     string
+	Installation string
+	Targets      int
+	Features     []string
+	ValidUntil   time.Time
+	RevokedAt    *time.Time
+}
+
+// GetLicenseForRenewal reads one license for the renew form. Features come from the original
+// request (licenses.request_id), not from the signed file, so nothing is parsed here. An unknown ID
+// is ErrNotFound; a revoked license is returned with RevokedAt set, for the caller to refuse.
+func GetLicenseForRenewal(ctx context.Context, q audit.Q, licenseID string) (Renewal, error) {
+	var r Renewal
+	err := q.QueryRow(ctx, `SELECT l.license_id, l.customer_id, c.name, l.installation, r.targets, r.features,
+			l.valid_until, l.revoked_at
+		FROM licenses l
+		JOIN customers c ON c.id = l.customer_id
+		JOIN license_requests r ON r.id = l.request_id
+		WHERE l.license_id = $1`, licenseID).Scan(&r.LicenseID, &r.CustomerID, &r.Customer, &r.Installation,
+		&r.Targets, &r.Features, &r.ValidUntil, &r.RevokedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Renewal{}, fmt.Errorf("%w: license %s", ErrNotFound, licenseID)
+	}
+	if err != nil {
+		return Renewal{}, fmt.Errorf("store: read license for renewal: %w", err)
+	}
+	return r, nil
 }

@@ -18,6 +18,7 @@ button { font: inherit; padding: 0.5rem 1rem; margin: 0.75rem 0; border: 1px sol
 .logout button { margin: 0; padding: 0.25rem 0.75rem; background: transparent; color: var(--accent); }
 button:disabled { opacity: 0.6; cursor: progress; }
 .alert { color: var(--alert); min-height: 1.5em; }
+.notice { border-left: 3px solid var(--accent); padding-left: 0.5em; }
 .hint { color: var(--muted); }
 nav { margin: 0 0 1rem; }
 h2 { font-size: 1.2rem; margin: 1.5rem 0 0.5rem; }

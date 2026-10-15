@@ -12,7 +12,7 @@
 <table>
 <thead><tr><th>License</th><th>Customer</th><th>Targets</th><th>Valid from</th><th>Ends</th><th>Status</th><th></th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.LicenseID}}</td><td>{{.Customer}}</td><td>{{.Targets}}</td><td>{{.ValidFrom.Format "2006-01-02"}}</td><td>{{.ValidUntil.Format "2006-01-02"}}</td><td>{{if .RevokedAt}}revoked {{.RevokedAt.Format "2006-01-02"}}{{else}}active{{end}}</td><td><a href="/licenses/{{.LicenseID}}/download">Download</a></td></tr>
+{{range .}}<tr><td>{{.LicenseID}}</td><td>{{.Customer}}</td><td>{{.Targets}}</td><td>{{.ValidFrom.Format "2006-01-02"}}</td><td>{{.ValidUntil.Format "2006-01-02"}}</td><td>{{if .RevokedAt}}revoked {{.RevokedAt.Format "2006-01-02"}}{{else}}active{{end}}</td><td><a href="/licenses/{{.LicenseID}}/download">Download</a>{{if not .RevokedAt}} · <a href="/requests/new?renew={{.LicenseID}}">Renew</a>{{end}}</td></tr>
 {{end}}</tbody>
 </table>
 {{else}}
