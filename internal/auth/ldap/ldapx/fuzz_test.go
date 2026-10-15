@@ -13,7 +13,7 @@ var usernameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._@-]{1,63}$`)
 // FuzzEscapeFilter: the escaped value contains no unescaped special byte, is valid UTF-8, and go-ldap compiles it
 // to one equality condition holding the original bytes.
 func FuzzEscapeFilter(f *testing.F) {
-	for _, s := range []string{"", "ada", "*)(uid=*))(|(uid=*", "\x00", "a\xffb", "�", "\\2a", "Çiğdem"} {
+	for _, s := range []string{"", "ada", "*)(uid=*))(|(uid=*", "\x00", "a\xffb", "\ufffd", "\\2a", "Çiğdem"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -69,6 +69,8 @@ func FuzzExpandFilter(f *testing.F) {
 		f.Add(tmpl, "*)(uid=*))(|(uid=*", "cn=x,dc=y")
 	}
 	f.Add("(uid={login}", "a", "b")
+	f.Add("(cn={login}*)", " ", "\u200b")
+	f.Add("(cn=**)", "a", "b")
 	f.Add("(&(a=b)(|(c=d)))", "", "")
 	f.Fuzz(func(t *testing.T, tmpl, login, dn string) {
 		got, err := ExpandFilter(tmpl, map[string]string{"login": login, "dn": dn})

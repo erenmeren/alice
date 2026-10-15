@@ -3,6 +3,7 @@ package ldapx
 import (
 	"errors"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -10,9 +11,10 @@ import (
 // {login} and {dn}, or names one without a value. Its text never carries a template or a value.
 var ErrFilterTemplate = errors.New("ldapx: the filter template is not valid")
 
-// ErrFilterValue is an empty value for a placeholder: next to "*" it would turn a substring filter into a presence
-// filter that matches every entry.
-var ErrFilterValue = errors.New("ldapx: a filter value is empty")
+// ErrFilterValue is a placeholder value without a letter or digit (empty, spaces, characters string preparation
+// removes, punctuation only): next to "*" it could turn a substring filter into one that matches every entry. For a
+// sign-in name it means a bad name.
+var ErrFilterValue = errors.New("ldapx: a filter value has no letter or digit")
 
 // Placeholder names a filter template may contain.
 const (
@@ -36,7 +38,8 @@ type segment struct {
 // ExpandFilter replaces {login} and {dn} in an RFC 4515 filter template with the values of vals, each escaped with
 // EscapeFilter. The template must be one balanced filter; a placeholder may stand only inside an assertion value; a
 // placeholder other than {login} and {dn}, a placeholder without a value, a value name that is not a placeholder and
-// any other brace are refused with ErrFilterTemplate; an empty value is refused with ErrFilterValue. A value can never
+// any other brace are refused with ErrFilterTemplate; a value without a letter or digit is refused with
+// ErrFilterValue (see the package documentation). A value can never
 // change the structure of the filter.
 func ExpandFilter(tmpl string, vals map[string]string) (string, error) {
 	for name := range vals {
@@ -62,8 +65,9 @@ func ExpandFilter(tmpl string, vals map[string]string) (string, error) {
 		if !ok {
 			return "", ErrFilterTemplate
 		}
-		if v == "" {
-			// An empty value next to "*" turns (cn={login}*) into the presence filter (cn=*): refused.
+		if !hasLetterOrDigit(v) {
+			// An empty value next to "*" turns (cn={login}*) into the presence filter (cn=*); a value of spaces or of
+			// characters RFC 4518 maps to nothing does the same on the server after string preparation: refused.
 			return "", ErrFilterValue
 		}
 		probe.WriteString(placeholderProbe)
@@ -107,8 +111,8 @@ func splitTemplate(tmpl string) ([]segment, error) {
 }
 
 // validFilter reports whether f is exactly one RFC 4515 filter, read strictly: no surrounding space, no raw control
-// characters, valid UTF-8, at least one element in & and |, a dnattrs part only as the lower-case ":dn" (go-ldap
-// reads no other spelling) and at most maxFilterDepth levels.
+// characters, valid UTF-8, at least one element in & and |, at most maxFilterDepth levels. A dnattrs part is
+// recognised only as the lower-case ":dn", as go-ldap does; another spelling is read as a matching rule name.
 func validFilter(f string) bool {
 	p := &filterParser{s: f}
 	return p.filter(0) && p.i == len(f)
@@ -260,7 +264,8 @@ func (p *filterParser) number() bool {
 }
 
 // value reads an assertion value up to the closing ")": no raw NUL, "(", control character or U+FFFD; "\" only
-// before two hex digits; "*" only where a substring or presence filter allows it.
+// before two hex digits; "*" only where a substring or presence filter allows it, never two in a row (RFC 4515:
+// a substring between two asterisks is not empty).
 func (p *filterParser) value(starOK bool) bool {
 	for p.i < len(p.s) {
 		c := p.s[p.i]
@@ -270,7 +275,7 @@ func (p *filterParser) value(starOK bool) bool {
 		case c == '(' || c < 0x20 || c == 0x7f:
 			return false
 		case c == '*':
-			if !starOK {
+			if !starOK || (p.i > 0 && p.s[p.i-1] == '*') {
 				return false
 			}
 		case c == '\\':
@@ -286,6 +291,17 @@ func (p *filterParser) value(starOK bool) bool {
 			p.i += size - 1
 		}
 		p.i++
+	}
+	return false
+}
+
+// hasLetterOrDigit reports whether v holds a letter or a digit. RFC 4518 never maps those to nothing or to a space,
+// so such a value stays non-empty after the server's string preparation.
+func hasLetterOrDigit(v string) bool {
+	for _, r := range v {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			return true
+		}
 	}
 	return false
 }

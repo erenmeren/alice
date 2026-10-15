@@ -46,6 +46,16 @@ func TestUsernameFallback(t *testing.T) {
 	assert.Regexp(t, usernameRE, Username("", "zz"))
 }
 
+// The policy of the package documentation: characters outside the table and non-ASCII are dropped, look-alike
+// letters of other scripts are not mapped, a collapsed name falls back, the same name can come out twice.
+func TestUsernamePolicy(t *testing.T) {
+	assert.Equal(t, "dmin", Username("аdmin", guid), "Cyrillic а is dropped, not mapped to a")
+	assert.Equal(t, "pen", Username("οpen", guid), "Greek ο is dropped, not mapped to o")
+	assert.Equal(t, "mega", Username("Ωmega", guid))
+	assert.Equal(t, "ldap-0123456789ab", Username("админ", guid), "all Cyrillic collapses and falls back")
+	assert.Equal(t, Username("Öztürk", guid), Username("oztürk", "ffff"), "a clash is the caller's to resolve")
+}
+
 func TestUniqueID(t *testing.T) {
 	// objectGUID: 16 raw bytes.
 	raw := []byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef}
@@ -70,10 +80,12 @@ func TestUniqueID(t *testing.T) {
 }
 
 func TestValidLoginName(t *testing.T) {
-	for _, s := range []string{"a", "ada", "Çiğdem Öztürk", "CORP\\ada", "ada@corp.example.com", strings.Repeat("ş", 256), "*)(uid=*"} {
+	for _, s := range []string{"a", "-", "a b", "a\u00a0b", "ada", "Çiğdem Öztürk", "CORP\\ada", "ada@corp.example.com", strings.Repeat("ş", 256), "*)(uid=*"} {
 		assert.True(t, ValidLoginName(s), "%q", s)
 	}
-	for _, s := range []string{"", "a\x00b", "\x00", "a\nb", "a\tb", "a\x7fb", "a\u0085b", "\xff", "a\xc3", strings.Repeat("a", 257)} {
+	for _, s := range []string{"", "a\x00b", "\x00", "a\nb", "a\tb", "a\x7fb", "a\u0085b", "\xff", "a\xc3", strings.Repeat("a", 257),
+		" ", "   ", " ada", "ada ", "\u00a0ada", "ada\u3000", "\u200b", "a\u200bb", "a\u00adb", "a\u202eb", "a\u2028b", "a\u2029b",
+		"\ufeffada", "a\u200fb", "a\u200cb", "a\u2066b"} {
 		assert.False(t, ValidLoginName(s), "%q", s)
 	}
 }

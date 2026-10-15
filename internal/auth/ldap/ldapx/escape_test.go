@@ -57,27 +57,28 @@ func TestEscapeFilterRoundTripsThroughGoLDAP(t *testing.T) {
 // \00. = is escaped too (allowed by the "special" production) so that a lax parser cannot read a new type.
 func TestEscapeDNRFCCases(t *testing.T) {
 	cases := map[string]string{
-		"":             "",
-		"Sales":        "Sales",
-		"Smith, John":  `Smith\, John`,
-		"a+b":          `a\+b`,
-		`say "hi"`:     `say \"hi\"`,
-		`back\slash`:   `back\\slash`,
-		"<tag>":        `\<tag\>`,
-		"a;b":          `a\;b`,
-		"a=b":          `a\=b`,
-		"#hash":        `\#hash`,
-		"mid#hash":     "mid#hash",
-		" lead":        `\ lead`,
-		"trail ":       `trail\ `,
-		"in side":      "in side",
-		" ":            `\ `,
-		"  ":           `\ \ `,
-		"a\x00b":       `a\00b`,
-		"Çiğdem":       "Çiğdem",
-		"a\xffb":       `a\ffb`,
-		",+\"\\<>;=":   `\,\+\"\\\<\>\;\=`,
-		"cn=x,dc=evil": `cn\=x\,dc\=evil`,
+		"":                   "",
+		"Sales":              "Sales",
+		"Smith, John":        `Smith\, John`,
+		"a+b":                `a\+b`,
+		`say "hi"`:           `say \"hi\"`,
+		`back\slash`:         `back\\slash`,
+		"<tag>":              `\<tag\>`,
+		"a;b":                `a\;b`,
+		"a=b":                `a\=b`,
+		"#hash":              `\#hash`,
+		"mid#hash":           "mid#hash",
+		" lead":              `\ lead`,
+		"trail ":             `trail\ `,
+		"in side":            "in side",
+		" ":                  `\ `,
+		"  ":                 `\ \ `,
+		"a\x00b":             `a\00b`,
+		"Çiğdem":             "Çiğdem",
+		"a\xffb":             `a\ffb`,
+		",+\"\\<>;=":         `\,\+\"\\\<\>\;\=`,
+		"a\tb\x01c\x1fd\x7f": `a\09b\01c\1fd\7f`,
+		"cn=x,dc=evil":       `cn\=x\,dc\=evil`,
 	}
 	for in, want := range cases {
 		assert.Equal(t, want, EscapeDN(in), "%q", in)
@@ -87,7 +88,7 @@ func TestEscapeDNRFCCases(t *testing.T) {
 // An escaped value parses back, with go-ldap, to one RDN of one attribute holding the original value.
 func TestEscapeDNRoundTripsThroughGoLDAP(t *testing.T) {
 	for _, s := range []string{"Smith, John", " lead", "trail ", "  two  ", "#x", "a\x00b", "cn=x,dc=evil", `\`, "x+y=z",
-		"Çiğdem Öztürk", "a\xffb", "\"quoted\""} {
+		"Çiğdem Öztürk", "a\xffb", "\"quoted\"", "tab\there", "\x01\x1f\x7f", "line\nfeed"} {
 		dn, err := ldap.ParseDN("cn=" + EscapeDN(s) + ",dc=example,dc=com")
 		require.NoError(t, err, "%q", s)
 		require.Len(t, dn.RDNs, 3, "%q", s)

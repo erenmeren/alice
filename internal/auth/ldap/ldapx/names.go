@@ -32,13 +32,20 @@ func UniqueID(raw []byte) (string, error) {
 }
 
 // ValidLoginName reports whether s may be sent to the directory as a sign-in name: valid UTF-8, 1 to MaxLoginRunes
-// runes, no control character (which includes NUL).
+// runes, no control character (which includes NUL), no format character (Cf: soft hyphen, zero-width characters,
+// bidi overrides, BOM) or line and paragraph separator, and no white space at either end (so not all white space).
+// A directory server's string preparation (RFC 4518) maps such characters to nothing or to a space.
 func ValidLoginName(s string) bool {
 	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxLoginRunes {
 		return false
 	}
+	first, _ := utf8.DecodeRuneInString(s)
+	last, _ := utf8.DecodeLastRuneInString(s)
+	if unicode.IsSpace(first) || unicode.IsSpace(last) {
+		return false
+	}
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return false
 		}
 	}

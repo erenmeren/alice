@@ -1,6 +1,3 @@
-// Package ldapx holds the pure helpers of directory (LDAP and Active Directory) sign-in: filter and DN escaping,
-// filter template expansion, the transliteration table and the derivation of user names and unique ids. It does no
-// I/O and does not import an LDAP client; the network code in internal/auth/ldap builds on it.
 package ldapx
 
 import (
@@ -45,15 +42,15 @@ func EscapeFilter(s string) string {
 
 // EscapeDN escapes s for use as an attribute value in an RFC 4514 distinguished name. The characters RFC 4514
 // section 2.4 requires (" + , ; < > \) get a backslash, as do = (allowed by the "special" production; a lax parser
-// cannot then read a new attribute type), a leading # or space and a trailing space. NUL and bytes that are not part
-// of valid UTF-8 become \xx.
+// cannot then read a new attribute type), a leading # or space and a trailing space. NUL, the other ASCII control
+// characters, DEL and bytes that are not part of valid UTF-8 become \xx.
 func EscapeDN(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		switch {
-		case r == utf8.RuneError && size == 1, r == 0:
+		case r == utf8.RuneError && size == 1, r < 0x20, r == 0x7f:
 			writeHex(&b, s[i])
 		case r == '"', r == '+', r == ',', r == ';', r == '<', r == '>', r == '\\', r == '=',
 			r == '#' && i == 0, r == ' ' && (i == 0 || i == len(s)-1):

@@ -70,19 +70,39 @@ var templates = []string{
 	"(uidNumber>={login})",
 }
 
-var hostile = []string{"ada", "*", "*)(uid=*))(|(uid=*", "admin)(&", "x)(objectClass=*", "\x00", "a\xffb", "�",
-	"\\", "\\2a", "(", ")", "))))))", "((((", "{login}", "{dn}", "cn=admin,dc=example,dc=com", "|", "&", "!", "=", ":=", "Çiğdem",
-	strings.Repeat("*)(", 300)}
+// prepHostile are values a directory server's string preparation (RFC 4518) empties or turns into spaces; with no
+// letter or digit they are refused (Fix round 1).
+var prepHostile = []string{" ", "\u200b", "\u00a0", "\u00ad", "\u3000", "   ", "-", "\u2028", "\ufeff", "\u200b \u00ad", "*", "",
+	"(", ")", "\\", "|", "&", "!", "=", ":=", "))))))", "((((", "\x00", "\uFFFD"}
+
+var hostile = []string{"ada", " ada", "ada ", "a\u202eb", "a\u200bb", "a\u00a0b", "a b", "-a-", "*)(uid=*))(|(uid=*",
+	"admin)(&", "x)(objectClass=*", "a\x00", "a\xffb", "a\ufffd", "a\\", "\\2a", "{login}", "{dn}", "cn=admin,dc=example,dc=com",
+	"Çiğdem", strings.Repeat("*)(", 300) + "x"}
 
 // Review Focus: no value can change the structure of a filter. Each expansion compiles with go-ldap and has the same
-// shape (and the same number of top-level conditions) as the expansion with a harmless value.
+// shape (and the same number of top-level conditions) as the expansion with a harmless value. Values without a
+// letter or digit are refused; with one added they must keep the structure too.
 func TestExpandFilterValuesNeverChangeTheStructure(t *testing.T) {
 	for _, tmpl := range templates {
 		base, err := ExpandFilter(tmpl, map[string]string{"login": "x", "dn": "x"})
 		require.NoError(t, err, tmpl)
 		bp, err := ldap.CompileFilter(base)
 		require.NoError(t, err, base)
-		for _, v := range hostile {
+		for _, v := range prepHostile {
+			_, err := ExpandFilter(tmpl, map[string]string{"login": v, "dn": "x"})
+			if strings.Contains(tmpl, "{login}") {
+				assert.ErrorIs(t, err, ErrFilterValue, "%s %q", tmpl, v)
+			}
+			_, err = ExpandFilter(tmpl, map[string]string{"login": "x", "dn": v})
+			if strings.Contains(tmpl, "{dn}") {
+				assert.ErrorIs(t, err, ErrFilterValue, "%s %q", tmpl, v)
+			}
+		}
+		values := append([]string{}, hostile...)
+		for _, v := range prepHostile {
+			values = append(values, "x"+v, v+"1")
+		}
+		for _, v := range values {
 			for _, w := range []string{"x", v} {
 				got, err := ExpandFilter(tmpl, map[string]string{"login": v, "dn": w})
 				require.NoError(t, err, "%s %q", tmpl, v)
@@ -127,7 +147,7 @@ func TestExpandFilterRefusesInvalidTemplates(t *testing.T) {
 		"(&)", "(|)", "(!)", "(&(uid={login})", "(!(a=b)(c=d))", "()", "(=x)", "(uid)", "(uid=a(b)", "(uid=a\\zz)",
 		"(uid=a\\4)", "(uid=a\\)", "(ui d=x)", "(1uid=x)", "(uid~=*)", "(uid>=a*)", "(uid:=a*)", "(:=x)", "(:DN:2.5.13.5:=x)", "(uid:dn)",
 		"(uid:1.2.:=x)", "(uid:x y:=x)", "({login}=x)", "(uid:{login}:=x)", "(uid;{login}=x)", "(uid=\x00)",
-		"(uid=\xff)", "(uid=x) ", " (uid=x)", "(uid=x\n)", "(uid=x�)", "(uid=\x01)", "(uid;=x)", "(-uid=x)", "(&(a=b)(c))", "(~=x)", "(01=x)", "(1.=x)", "(uid=)" + ")",
+		"(uid=\xff)", "(uid=x) ", " (uid=x)", "(uid=x\n)", "(uid=x\ufffd)", "(uid=\x01)", "(uid;=x)", "(-uid=x)", "(&(a=b)(c))", "(~=x)", "(uid=**)", "(uid=a**b)", "(uid=***)", "(01=x)", "(1.=x)", "(uid=)" + ")",
 		strings.Repeat("(!", 100) + "(a=b)" + strings.Repeat(")", 100),
 		"(uid=" + strings.Repeat("a", maxTemplate) + ")",
 	}
@@ -135,8 +155,8 @@ func TestExpandFilterRefusesInvalidTemplates(t *testing.T) {
 		_, err := ExpandFilter(tmpl, map[string]string{"login": "a", "dn": "b"})
 		assert.ErrorIs(t, err, ErrFilterTemplate, "%q", tmpl)
 	}
-	good := []string{"(uid=)", "(uid=*)", "(uid=a*b*c)", "(uid=**)", "(cn;lang-de=x)", "(2.5.4.3=x)", "(uid=\\2a)",
-		"(uid:dn:=x)", "(uid:caseExactMatch:=x)", "(:caseExactMatch:=x)", "(:dn:2.5.13.5:=x)", "(uid:dn:dn:=x)", "(uid:Dn:=x)", "(uid=Çiğdem)", "(&(a=b)(c=d)(e=f))",
+	good := []string{"(uid=)", "(uid=*)", "(uid=a*b*c)", "(uid=*\\2a*)", "(cn;lang-de=x)", "(2.5.4.3=x)", "(uid=\\2a)",
+		"(uid:dn:=x)", "(uid:caseExactMatch:=x)", "(:caseExactMatch:=x)", "(:dn:2.5.13.5:=x)", "(uid:dn:dn:=x)", "(uid:Dn:=x)", "(uid:DN:=x)", "(uid=Çiğdem)", "(&(a=b)(c=d)(e=f))",
 		"(!(&(a=b)(|(c=d)(!(e=*)))))", "(uid<=x)", "(uid=x=y)", "(uid=a:=b)", "(uid=\\2A)", "(0.1.20=x)"}
 	for _, tmpl := range good {
 		got, err := ExpandFilter(tmpl, nil)
@@ -147,15 +167,24 @@ func TestExpandFilterRefusesInvalidTemplates(t *testing.T) {
 	}
 }
 
-// Review finding: an empty value next to "*" would turn (cn={login}*) into the presence filter (cn=*), so an empty
-// value is refused for every placeholder.
-func TestExpandFilterRefusesEmptyValues(t *testing.T) {
+// Review finding: an empty value next to "*" would turn (cn={login}*) into the presence filter (cn=*); a value of
+// spaces or of characters RFC 4518 maps to nothing does the same on the server ((cn= *) matches every entry). A
+// value needs a letter or digit, for every placeholder.
+func TestExpandFilterRefusesValuesWithoutLetterOrDigit(t *testing.T) {
 	for _, tmpl := range []string{"(cn={login}*)", "(cn=*{login}*)", "(uid={login})"} {
-		_, err := ExpandFilter(tmpl, map[string]string{"login": ""})
-		assert.ErrorIs(t, err, ErrFilterValue, tmpl)
+		for _, v := range []string{"", " ", "\u200b", "\u00a0", "\u00ad", "\u3000", "   ", "-", ".", "@"} {
+			_, err := ExpandFilter(tmpl, map[string]string{"login": v})
+			assert.ErrorIs(t, err, ErrFilterValue, "%s %q", tmpl, v)
+		}
+		for _, v := range []string{"ada", "a.b", "1", "Ş", "٣", "-a-"} {
+			_, err := ExpandFilter(tmpl, map[string]string{"login": v})
+			assert.NoError(t, err, "%s %q", tmpl, v)
+		}
 	}
 	_, err := ExpandFilter("(member={dn})", map[string]string{"dn": ""})
 	assert.ErrorIs(t, err, ErrFilterValue)
+	_, err = ExpandFilter("(member={dn})", map[string]string{"dn": "cn=+,dc=x"})
+	assert.NoError(t, err, "a DN always holds an attribute type, so it has letters")
 }
 
 func TestExpandFilterErrorNamesNoValue(t *testing.T) {
