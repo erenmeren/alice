@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -208,4 +209,82 @@ func TestAStaleStartDateTellsTheSignerWhatToDoAndACancelClosesIt(t *testing.T) {
 	require.Equal(t, 0, code, e)
 	list, _, _ := j.do(fake, "request", "list", "--status", "cancelled")
 	assert.Contains(t, list, reqID+"  cancelled")
+}
+
+func TestWebUserJourney(t *testing.T) {
+	j := newJourney(t)
+	clk := clock.Real{}
+	out, e, code := j.do(clk, "web-user", "add", "ayse")
+	require.Equal(t, 0, code, e)
+	first := regexp.MustCompile(`[A-Za-z0-9_-]{40,}`).FindString(out)
+	require.NotEmpty(t, first, out)
+	assert.Contains(t, out, "expires")
+
+	out, e, code = j.do(clk, "web-user", "list")
+	require.Equal(t, 0, code, e)
+	assert.Contains(t, out, "ayse")
+	assert.NotContains(t, out, "disabled")
+
+	_, e, code = j.do(clk, "web-user", "add", "AYSE")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, e, "already exists")
+
+	out, e, code = j.do(clk, "web-user", "invite", "ayse")
+	require.Equal(t, 0, code, e)
+	second := regexp.MustCompile(`[A-Za-z0-9_-]{40,}`).FindString(out)
+	require.NotEmpty(t, second)
+	assert.NotEqual(t, first, second)
+
+	_, e, code = j.do(clk, "web-user", "invite", "nobody")
+	assert.Equal(t, 1, code)
+	assert.Contains(t, e, "not found")
+
+	_, e, code = j.do(clk, "web-user", "disable", "ayse")
+	require.Equal(t, 0, code, e)
+	out, _, _ = j.do(clk, "web-user", "list")
+	assert.Contains(t, out, "ayse  disabled")
+	_, e, code = j.do(clk, "web-user", "enable", "ayse")
+	require.Equal(t, 0, code, e)
+	out, _, _ = j.do(clk, "web-user", "list")
+	assert.NotContains(t, out, "disabled")
+}
+
+func TestAFailedCodeIssueLeavesNoUser(t *testing.T) {
+	j := newJourney(t)
+	// A name the schema refuses is rejected whole: no user and no code.
+	_, _, code := j.do(clock.Real{}, "web-user", "add", "bad name!")
+	assert.Equal(t, 1, code)
+	out, _, _ := j.do(clock.Real{}, "web-user", "list")
+	assert.Empty(t, strings.TrimSpace(out))
+}
+
+func TestSalesLoginCannotUseWebUserCommands(t *testing.T) {
+	d := vpgtest.New(t)
+	_ = d.As(t, "vendor_sales", "t_cli_sales") // creates the login; the CLI connects with its own URL
+	u, err := url.Parse(d.OwnerURL)
+	require.NoError(t, err)
+	u.User = url.UserPassword("t_cli_sales", vpgtest.AsPassword)
+	owner := func(k string) string {
+		if k == "VENDOR_DATABASE_URL" {
+			return d.OwnerURL
+		}
+		return ""
+	}
+	sales := func(k string) string {
+		if k == "VENDOR_DATABASE_URL" {
+			return u.String()
+		}
+		return ""
+	}
+	var o, e bytes.Buffer
+	require.Equal(t, 0, run([]string{"migrate"}, owner, &o, &e, nil, clock.Real{}), e.String())
+	require.Equal(t, 0, run([]string{"web-user", "add", "ayse"}, owner, &o, &e, nil, clock.Real{}), e.String())
+	for _, args := range [][]string{{"add", "bo"}, {"invite", "ayse"}, {"disable", "ayse"}, {"enable", "ayse"}, {"list"}} {
+		o.Reset()
+		e.Reset()
+		code := run(append([]string{"web-user"}, args...), sales, &o, &e, nil, clock.Real{})
+		assert.Equal(t, 1, code, args)
+		assert.Contains(t, e.String(), "permission", args)
+		assert.Empty(t, o.String(), args)
+	}
 }

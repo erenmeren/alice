@@ -2,17 +2,15 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/license/issuer"
@@ -23,6 +21,7 @@ import (
 	"alice/internal/vconsole/migrations"
 	"alice/internal/vconsole/sign"
 	"alice/internal/vconsole/store"
+	"alice/internal/vconsole/webuser"
 )
 
 // prompter asks for a passphrase (no echo on a terminal; injected by tests).
@@ -51,6 +50,15 @@ Commands:
         request changed since, nothing is signed. Asks for the key passphrase.
   audit-verify
         Check the audit chain.
+  web-user add NAME
+        Create a person for the sales web page and print their one-time enrollment code
+        (valid 24 hours; shown only once). Owner login only.
+  web-user invite NAME
+        Print a new enrollment code (a new passkey for someone who lost theirs).
+  web-user disable NAME
+        Lock the person out and end their sessions.
+  web-user enable NAME
+  web-user list
 `
 
 const dbEnv = "VENDOR_DATABASE_URL"
@@ -89,6 +97,15 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, as
 		return c.issue(args[1:])
 	case "audit-verify":
 		return c.auditVerify()
+	case "web-user":
+		if len(args) >= 2 {
+			switch args[1] {
+			case "add", "invite", "disable", "enable":
+				return c.webUser(args[1], args[2:])
+			case "list":
+				return c.webUserList()
+			}
+		}
 	}
 	_, _ = fmt.Fprintf(stderr, "vendor-console: unknown command %q\n\n%s", strings.Join(args, " "), usage)
 	return 2
@@ -109,42 +126,13 @@ func (c *cli) fail(err error) int {
 // connectTimeout bounds how long a command waits for the database.
 var connectTimeout = 20 * time.Second
 
-// checkTLS refuses a database URL that would not verify the server's certificate. Only a database on
-// this computer may skip TLS. The URL is never echoed: it holds the password.
-func checkTLS(url string) error {
-	cfg, err := pgx.ParseConfig(url)
-	if err != nil {
-		return errors.New("the database URL is not valid; check " + dbEnv)
-	}
-	verified := func(host string, conf *tls.Config) bool {
-		return conf != nil && !conf.InsecureSkipVerify || loopback(host)
-	}
-	ok := verified(cfg.Host, cfg.TLSConfig)
-	for _, f := range cfg.Fallbacks {
-		ok = ok && verified(f.Host, f.TLSConfig)
-	}
-	if !ok {
-		return errors.New("the database connection must verify the server certificate: add sslmode=verify-full to " + dbEnv +
-			" (only a database on this computer may skip TLS)")
-	}
-	return nil
-}
-
-func loopback(host string) bool {
-	if host == "localhost" || strings.HasPrefix(host, "/") { // a unix socket is local too
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 // connect opens the pool. Errors never include the connection string (db.Open guarantees it).
 func (c *cli) connect(ctx context.Context) (*pgxpool.Pool, error) {
 	url := c.getenv(dbEnv)
 	if url == "" {
 		return nil, errors.New("set " + dbEnv + " to the PostgreSQL connection string")
 	}
-	if err := checkTLS(url); err != nil {
+	if err := store.RequireTLSVerification(url, dbEnv); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
@@ -430,5 +418,92 @@ func (c *cli) licenseExport(args []string) int {
 		return c.fail(err)
 	}
 	_, _ = fmt.Fprintf(c.out, "wrote %s\n", *outPath)
+	return 0
+}
+
+// enrollmentTTL is how long a web-user enrollment code stays valid.
+const enrollmentTTL = 24 * time.Hour
+
+// webUserErr words a database refusal for the web-user commands, which are for the owner login only.
+func (c *cli) webUserErr(err error) int {
+	var pe *pgconn.PgError
+	if errors.As(err, &pe) && pe.Code == "42501" { // insufficient_privilege
+		return c.fail(errors.New("permission denied: the web-user commands need the owner login"))
+	}
+	return c.fail(err)
+}
+
+func (c *cli) webUser(sub string, args []string) int {
+	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+		_, _ = fmt.Fprintf(c.err, "vendor-console: web-user %s needs one NAME\n", sub)
+		return 2
+	}
+	name := args[0]
+	ctx := context.Background()
+	pool, err := c.connect(ctx)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer pool.Close()
+	now := c.clk.Now()
+	// One transaction each: a user without their code, or a disabled user whose sessions live on, never persists.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var code string
+	switch sub {
+	case "add":
+		id, err := webuser.AddUser(ctx, tx, name)
+		if err != nil {
+			return c.webUserErr(err)
+		}
+		if code, err = webuser.NewEnrollment(ctx, tx, id, now, enrollmentTTL); err != nil {
+			return c.webUserErr(err)
+		}
+	case "invite":
+		u, err := webuser.GetUserByName(ctx, tx, name)
+		if err != nil {
+			return c.webUserErr(err)
+		}
+		if code, err = webuser.NewEnrollment(ctx, tx, u.ID, now, enrollmentTTL); err != nil {
+			return c.webUserErr(err)
+		}
+	case "disable", "enable":
+		if err := webuser.SetDisabled(ctx, tx, name, sub == "disable", now); err != nil {
+			return c.webUserErr(err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return c.webUserErr(err)
+	}
+	if code != "" {
+		_, _ = fmt.Fprintf(c.out, "enrollment code for %s (shown once, expires %s):\n%s\n", name,
+			now.Add(enrollmentTTL).UTC().Format("2006-01-02 15:04 MST"), code)
+	} else {
+		_, _ = fmt.Fprintf(c.out, "%s %sd\n", name, sub)
+	}
+	return 0
+}
+
+func (c *cli) webUserList() int {
+	ctx := context.Background()
+	pool, err := c.connect(ctx)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer pool.Close()
+	users, err := webuser.ListUsers(ctx, pool)
+	if err != nil {
+		return c.webUserErr(err)
+	}
+	for _, u := range users {
+		if u.Disabled {
+			_, _ = fmt.Fprintf(c.out, "%s  disabled\n", u.Name)
+		} else {
+			_, _ = fmt.Fprintf(c.out, "%s\n", u.Name)
+		}
+	}
 	return 0
 }

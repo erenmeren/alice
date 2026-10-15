@@ -40,3 +40,21 @@ func TestIssueNeedsItsFlags(t *testing.T) {
 	assert.Equal(t, 2, code)
 	assert.Contains(t, stderr, "--hash")
 }
+
+func TestUsageListsTheWebUserCommands(t *testing.T) {
+	_, _, stderr := runArgs()
+	assert.Contains(t, stderr, "web-user add NAME")
+	assert.Contains(t, stderr, "web-user list")
+}
+
+func TestWebUserCommandsNeedAName(t *testing.T) {
+	for _, sub := range []string{"add", "invite", "disable", "enable"} {
+		code, _, stderr := runArgs("web-user", sub)
+		assert.Equal(t, 2, code, sub)
+		assert.Contains(t, stderr, "NAME", sub)
+	}
+	code, _, _ := runArgs("web-user")
+	assert.Equal(t, 2, code)
+	code, _, _ = runArgs("web-user", "frob")
+	assert.Equal(t, 2, code)
+}

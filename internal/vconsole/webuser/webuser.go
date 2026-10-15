@@ -85,6 +85,8 @@ func AddUser(ctx context.Context, q audit.Q, name string) (int64, error) {
 }
 
 // SetDisabled disables or enables a user (owner only). Disabling also deletes the user's sessions.
+// It runs an UPDATE and then a DELETE: the caller should pass a transaction (a pgx.Tx), so a
+// failure of the second leaves the user enabled instead of disabled with live sessions.
 func SetDisabled(ctx context.Context, q audit.Q, name string, disabled bool, now time.Time) error {
 	var id int64
 	err := q.QueryRow(ctx, `UPDATE web_users SET disabled_at = CASE WHEN $2::boolean THEN $3::timestamptz END
