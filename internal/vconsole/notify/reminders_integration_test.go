@@ -4,7 +4,9 @@ package notify_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/vconsole/mail"
 	"alice/internal/vconsole/notify"
 	"alice/internal/vconsole/vpgtest"
 )
@@ -285,7 +288,7 @@ func TestRequesterWithoutEmailOnlyOwnerIsTold(t *testing.T) {
 	assert.Contains(t, ms[1].Body, "Requested by: t_sales_login\n")
 }
 
-func TestRequesterWithEmailIsAddedOnce(t *testing.T) {
+func TestRequesterWithEmailGetsTheirOwnRow(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	p := notifier(t, d, "t_r7_notifier")
@@ -298,11 +301,55 @@ func TestRequesterWithEmailIsAddedOnce(t *testing.T) {
 
 	n, err := notify.CreateReminders(ctx, p, now, baseURL)
 	require.NoError(t, err)
-	assert.Equal(t, 2, n)
+	assert.Equal(t, 2, n, "reminders, not outbox rows")
 	ms := reminderMails(t, d)
-	require.Len(t, ms, 2)
-	assert.Equal(t, []string{"boss@example.com", "ayse@example.com"}, ms[0].To, "name matched case-insensitively")
-	assert.Equal(t, []string{"boss@example.com"}, ms[1].To, "the same address is not listed twice")
+	require.Len(t, ms, 3)
+	assert.Equal(t, []string{"boss@example.com"}, ms[0].To, "the owner's row")
+	assert.Equal(t, []string{"ayse@example.com"}, ms[1].To, "the requester's own row, name matched case-insensitively")
+	assert.Equal(t, ms[0].Body, ms[1].Body)
+	assert.Equal(t, []string{"boss@example.com"}, ms[2].To, "the same address does not get a second row")
+}
+
+// Each recipient has a row of its own, so a mailbox that refuses mail fails only its own row.
+func TestOneBadRequesterMailboxDoesNotBlockTheOwner(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_r7b_notifier")
+	now := testNow()
+	setOwner(t, d, "boss@example.com")
+	addWebUser(t, d, "ayse", "ayse@example.com")
+	seedLicense(t, d, lic{id: "LIC-A", customer: "A", requestedBy: "web:ayse", validUntil: now.Add(25 * day)})
+	_, err := notify.CreateReminders(ctx, p, now, baseURL)
+	require.NoError(t, err)
+
+	s := &fakeSender{fail: func(m mail.Message) error {
+		if slices.Contains(m.To, "ayse@example.com") {
+			return errors.New("550 mailbox unavailable")
+		}
+		return nil
+	}}
+	for i := range notify.MaxAttempts {
+		_, err := notify.SendPending(ctx, p, s, "", now.Add(time.Duration(i)*7*time.Hour))
+		require.NoError(t, err)
+	}
+	var sentTo, failedTo [][]string
+	rows, err := d.Owner.Query(ctx, `SELECT to_addrs, sent_at IS NOT NULL FROM mail_outbox WHERE kind = 'reminder' ORDER BY id`)
+	require.NoError(t, err)
+	for rows.Next() {
+		var to []string
+		var sent bool
+		require.NoError(t, rows.Scan(&to, &sent))
+		if sent {
+			sentTo = append(sentTo, to)
+		} else {
+			failedTo = append(failedTo, to)
+		}
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, [][]string{{"boss@example.com"}}, sentTo)
+	assert.Equal(t, [][]string{{"ayse@example.com"}}, failedTo)
+	require.Len(t, s.messages(), 2, "the issuance mail and the owner's reminder")
+	assert.Equal(t, []string{"boss@example.com"}, s.messages()[0].To)
 }
 
 func TestOwnerAddressMissingLeavesWaitingRow(t *testing.T) {
@@ -340,8 +387,8 @@ func TestOwnerAddressMissingRequesterIsToldNowOwnerLater(t *testing.T) {
 	assert.Equal(t, 1, n, "one reminder, even though it takes two outbox rows")
 	ms := reminderMails(t, d)
 	require.Len(t, ms, 2)
-	assert.Equal(t, []string{"ayse@example.com"}, ms[0].To, "a mail with a recipient is not held back")
-	assert.Empty(t, ms[1].To, "the owner's copy waits for the owner address")
+	assert.Empty(t, ms[0].To, "the owner's row waits for the owner address")
+	assert.Equal(t, []string{"ayse@example.com"}, ms[1].To, "the requester's row is not held back")
 	assert.Equal(t, ms[0].Subject, ms[1].Subject)
 	assert.Equal(t, ms[0].Body, ms[1].Body)
 
@@ -353,11 +400,36 @@ func TestOwnerAddressMissingRequesterIsToldNowOwnerLater(t *testing.T) {
 	setOwner(t, d, "boss@example.com")
 	r, err := notify.ResolveEmptyRecipients(ctx, p)
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), r, "the waiting issuance mail and the owner's reminder copy")
+	assert.Equal(t, int64(2), r, "the waiting issuance mail and the owner's reminder row")
 	ms = reminderMails(t, d)
 	require.Len(t, ms, 2)
-	assert.Equal(t, []string{"ayse@example.com"}, ms[0].To)
-	assert.Equal(t, []string{"boss@example.com"}, ms[1].To)
+	assert.Equal(t, []string{"boss@example.com"}, ms[0].To)
+	assert.Equal(t, []string{"ayse@example.com"}, ms[1].To)
+}
+
+// A renewal is a later license for the same customer and installation; it need not name the old
+// one in replaces (a renewal requested from scratch does not). The old one then gets no reminder.
+func TestRenewedLicenseGetsNoReminderButTheNewOneDoes(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_r16_notifier")
+	now := testNow()
+	setOwner(t, d, "boss@example.com")
+	seedLicense(t, d, lic{id: "LIC-OLD", customer: "Renew Co", validUntil: now.Add(20 * day)})
+	seedLicense(t, d, lic{id: "LIC-NEW", customer: "Renew Co", validUntil: now.Add(80 * day)})
+	// A later license for the same customer that is revoked does not count as a renewal.
+	seedLicense(t, d, lic{id: "LIC-KEEP", customer: "Other Co", validUntil: now.Add(21 * day)})
+	seedLicense(t, d, lic{id: "LIC-KEEP-REV", customer: "Other Co", validUntil: now.Add(300 * day), revoked: true})
+
+	n, err := notify.CreateReminders(ctx, p, now, baseURL)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	assert.Empty(t, reminderRows(t, d, "LIC-OLD"))
+	assert.Equal(t, []int{90}, reminderRows(t, d, "LIC-NEW"))
+	assert.Equal(t, []int{30, 60, 90}, reminderRows(t, d, "LIC-KEEP"))
+	for _, m := range reminderMails(t, d) {
+		assert.NotContains(t, m.Body, "License: LIC-OLD\n")
+	}
 }
 
 func TestOneFailingLicenseDoesNotStopTheRun(t *testing.T) {
@@ -466,7 +538,8 @@ func TestReminderBodyHasTheFactsAndNoInstallation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	ms := reminderMails(t, d)
-	require.Len(t, ms, 1)
+	require.Len(t, ms, 2, "one row for the owner, one for the requester")
+	assert.Equal(t, ms[0].Body, ms[1].Body)
 	b := ms[0].Body
 	for _, want := range []string{
 		"Customer: Acme Corp\n", "License: LIC-R12\n", "Valid until: 2026-11-25\n", "Days left: 42\n",
@@ -499,6 +572,28 @@ func TestCustomerNameIsOneLineInTheSubject(t *testing.T) {
 	assert.True(t, utf8.ValidString(ms[1].Subject))
 	assert.Equal(t, 200, utf8.RuneCountInString(ms[1].Subject))
 	assert.True(t, strings.HasPrefix(ms[1].Subject, "License ending in 30 days: şş"))
+}
+
+func TestReminderDropsControlAndFormatCharacters(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_r17_notifier")
+	now := testNow()
+	setOwner(t, d, "boss@example.com")
+	seedLicense(t, d, lic{id: "LIC-BIDI", customer: "Acme\u202e\u2066moc.live\u2069\x1b[31m\u200bX",
+		requestedBy: "t_sales\x07login", validUntil: now.Add(25 * day)})
+
+	_, err := notify.CreateReminders(ctx, p, now, baseURL)
+	require.NoError(t, err)
+	ms := reminderMails(t, d)
+	require.Len(t, ms, 1)
+	for _, s := range []string{ms[0].Subject, ms[0].Body} {
+		for _, bad := range []string{"\u202e", "\u2066", "\u2069", "\x1b", "\u200b", "\x07"} {
+			assert.NotContains(t, s, bad)
+		}
+	}
+	assert.Equal(t, "License ending in 30 days: Acme moc.live [31m X", ms[0].Subject)
+	assert.Contains(t, ms[0].Body, "Requested by: t_sales login\n")
 }
 
 func TestTwoConcurrentReminderRunsEnqueueEachOnce(t *testing.T) {

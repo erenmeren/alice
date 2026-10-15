@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -28,7 +27,15 @@ const (
 // thresholds are the reminder points in days before the end, most urgent first.
 var thresholds = []int{30, 60, 90}
 
-var lineBreaks = regexp.MustCompile(`[\r\n]+`)
+// liveLicense is the one rule for "this license still needs reminding", shared by the reminder
+// candidates, the re-check inside the reminder transaction and the summary's ending-soon section.
+// It applies to the alias l: not revoked, not named in a later license's replaces, and not renewed
+// (a later license, not revoked, for the same customer and installation that ends after it; a
+// renewal requested from scratch does not fill replaces).
+const liveLicense = `l.revoked_at IS NULL
+	AND NOT EXISTS (SELECT 1 FROM licenses n WHERE n.replaces = l.license_id)
+	AND NOT EXISTS (SELECT 1 FROM licenses n WHERE n.customer_id = l.customer_id AND n.installation = l.installation
+	    AND n.revoked_at IS NULL AND n.valid_until > l.valid_until)`
 
 // candidate is a license inside the 90-day window whose current threshold has no reminder row yet.
 type candidate struct {
@@ -40,7 +47,7 @@ type candidate struct {
 // CreateReminders enqueues expiry reminders due at now and returns how many reminders it created
 // (one per license and threshold, however many outbox rows that took).
 //
-// A license qualifies when it is not revoked, not replaced by a later license, and ends within
+// A license qualifies when it is live (see liveLicense: not revoked, not replaced, not renewed) and ends within
 // (now, now+90 days]. Its threshold T is the smallest of 30, 60, 90 with valid_until <= now+T days.
 // If (license, T) has no reminders row, rows for T and every larger threshold are inserted (ruling
 // 6: a threshold that was skipped never fires late) and one e-mail for T is enqueued.
@@ -52,12 +59,13 @@ type candidate struct {
 // run that races on the same row waits on the primary key until the first commits, then sees the
 // conflict and inserts nothing (or inserts it itself if the first rolled back).
 //
-// Recipients are the owner_email setting and the requester's web_users.email (requested_by
-// "web:<name>", name matched case-insensitively like the unique index, user not disabled, address
-// not empty), each address once. While the owner address is not set, the owner's copy is a
-// separate outbox row with an empty recipient list that ResolveEmptyRecipients fills once the
-// address exists; the requester (if any) gets a row of their own that is sent now. With no
-// address at all there is just the one waiting row. The count is of reminders, not outbox rows.
+// Every recipient gets an outbox row of their own, so one mailbox that refuses the mail fails only
+// its own row. The owner's row goes to the owner_email setting; while that is not set its
+// recipient list is empty and ResolveEmptyRecipients fills it once the address exists. The
+// requester's row goes to their web_users.email (requested_by "web:<name>", name matched
+// case-insensitively like the unique index, user not disabled, address not empty) and is written
+// only when they have one that differs from the owner's (compared case-insensitively). The count
+// is of reminders, not outbox rows.
 //
 // A license whose transaction fails is skipped and retried on the next run; the errors are joined
 // and returned together with the number of reminders that did go out.
@@ -137,8 +145,7 @@ func reminderCandidates(ctx context.Context, q audit.Q, now time.Time) ([]candid
 		JOIN license_requests r ON r.id = l.request_id
 		LEFT JOIN web_users w ON r.requested_by LIKE 'web:%' AND lower(w.name) = lower(substr(r.requested_by, 5))
 		     AND w.email <> '' AND w.disabled_at IS NULL
-		WHERE l.revoked_at IS NULL AND l.valid_until > $1 AND l.valid_until <= $4
-		  AND NOT EXISTS (SELECT 1 FROM licenses n WHERE n.replaces = l.license_id)
+		WHERE `+liveLicense+` AND l.valid_until > $1 AND l.valid_until <= $4
 		  AND NOT EXISTS (SELECT 1 FROM reminders m WHERE m.license_id = l.license_id
 		      AND m.days_before = CASE WHEN l.valid_until <= $2 THEN 30 WHEN l.valid_until <= $3 THEN 60 ELSE 90 END)
 		ORDER BY l.valid_until, l.license_id`,
@@ -188,12 +195,11 @@ func remindOne(ctx context.Context, pool *pgxpool.Pool, c candidate, now time.Ti
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	// The license is checked again here: it may have been revoked or replaced since the candidate
-	// query, and then nothing is recorded.
+	// The license is checked again here: it may have been revoked, replaced or renewed since the
+	// candidate query, and then nothing is recorded.
 	rows, err := tx.Query(ctx, `INSERT INTO reminders (license_id, days_before)
 		SELECT $1, th FROM unnest($2::int[]) th
-		WHERE EXISTS (SELECT 1 FROM licenses l WHERE l.license_id = $1 AND l.revoked_at IS NULL
-		      AND NOT EXISTS (SELECT 1 FROM licenses n WHERE n.replaces = $1))
+		WHERE EXISTS (SELECT 1 FROM licenses l WHERE l.license_id = $1 AND `+liveLicense+`)
 		ON CONFLICT DO NOTHING RETURNING days_before`, c.licenseID, record)
 	if err != nil {
 		return false, fmt.Errorf("notify: record reminder: %w", err)
@@ -212,14 +218,15 @@ func remindOne(ctx context.Context, pool *pgxpool.Pool, c candidate, now time.Ti
 	}
 
 	subject, body := reminderMessage(c, t, now, base)
-	to := recipients(owner, c.requesterEmail)
-	if _, err := Enqueue(ctx, tx, "reminder", to, subject, body); err != nil {
+	var ownerTo []string // empty: the row waits for the owner address
+	if owner != "" {
+		ownerTo = []string{owner}
+	}
+	if _, err := Enqueue(ctx, tx, "reminder", ownerTo, subject, body); err != nil {
 		return false, err
 	}
-	if owner == "" && len(to) > 0 {
-		// The requester's row goes out now; the owner's copy waits for the owner address, since
-		// the reminder rows keep this threshold from ever being enqueued again.
-		if _, err := Enqueue(ctx, tx, "reminder", nil, subject, body); err != nil {
+	if c.requesterEmail != "" && !strings.EqualFold(c.requesterEmail, owner) {
+		if _, err := Enqueue(ctx, tx, "reminder", []string{c.requesterEmail}, subject, body); err != nil {
 			return false, err
 		}
 	}
@@ -227,19 +234,6 @@ func remindOne(ctx context.Context, pool *pgxpool.Pool, c candidate, now time.Ti
 		return false, fmt.Errorf("notify: commit reminder: %w", err)
 	}
 	return true, nil
-}
-
-// recipients lists the owner and the requester, each non-empty address once (addresses compared
-// case-insensitively, as mail servers treat them in practice).
-func recipients(owner, requester string) []string {
-	to := []string{}
-	if owner != "" {
-		to = append(to, owner)
-	}
-	if requester != "" && !strings.EqualFold(requester, owner) {
-		to = append(to, requester)
-	}
-	return to
 }
 
 func reminderMessage(c candidate, t int, now time.Time, base string) (subject, body string) {
@@ -260,10 +254,25 @@ func reminderMessage(c candidate, t int, now time.Time, base string) (subject, b
 	return subject, b.String()
 }
 
-// oneLine replaces line breaks with a space and keeps the first 200 runes, like the issuance
-// trigger does, so a value from the database can never start a new header or body line.
+// oneLine turns every run of control and format characters (line breaks, escape sequences, bidi
+// overrides) and invalid UTF-8 into one space and keeps the first 200 runes, like the issuance
+// trigger does, so a value from the database can never start a new header or body line or make a
+// line read differently than it is.
 func oneLine(s string) string {
-	s = lineBreaks.ReplaceAllString(s, " ")
+	var b strings.Builder
+	gap := false
+	for _, r := range strings.ToValidUTF8(s, string(utf8.RuneError)) {
+		if dropRune(r) {
+			if !gap {
+				b.WriteByte(' ')
+			}
+			gap = true
+			continue
+		}
+		gap = false
+		b.WriteRune(r)
+	}
+	s = b.String()
 	if utf8.RuneCountInString(s) > maxLineRunes {
 		s = string([]rune(s)[:maxLineRunes])
 	}

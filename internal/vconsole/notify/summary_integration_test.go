@@ -29,9 +29,18 @@ func ist(t *testing.T, y int, m time.Month, d, hh, mm, ss int) time.Time {
 	return time.Date(y, m, d, hh, mm, ss, 0, loc)
 }
 
-// seedIssued inserts a license issued at issuedAt by signer (seedLicense cannot set either, and
-// licenses cannot be updated afterwards). It ends a year later, outside the 90-day section.
+// seedIssued inserts a license issued at issuedAt by signer: the license columns and its audit
+// row agree. It ends a year later, outside the 90-day section.
 func seedIssued(t *testing.T, d *vpgtest.DB, id, customer, signer string, issuedAt time.Time) {
+	t.Helper()
+	seedIssuedRecorded(t, d, id, customer, signer, issuedAt, signer, issuedAt)
+}
+
+// seedIssuedRecorded inserts a license whose audit row says actor issued it at at, while the
+// client-writable columns say signed_by and issued_at. The audit row is written by the trigger at
+// the real clock time; the test rewrites it with triggers off (the owner pool is a superuser), so
+// the hash chain of this test database no longer verifies.
+func seedIssuedRecorded(t *testing.T, d *vpgtest.DB, id, customer, actor string, at time.Time, signedBy string, issuedAt time.Time) {
 	t.Helper()
 	ctx := context.Background()
 	var cid, rid int64
@@ -42,8 +51,17 @@ func seedIssued(t *testing.T, d *vpgtest.DB, id, customer, signer string, issued
 	_, err := d.Owner.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
 		valid_from, valid_until, targets, file, file_sha256, signed_by)
 		VALUES ($1, $2, $3, $4, 'vk-1', $5, $5, $6, 7, '\xdeadbeef', 'x', $7)`,
-		id, rid, cid, installation, issuedAt, issuedAt.Add(365*day), signer)
+		id, rid, cid, installation, issuedAt, issuedAt.Add(365*day), signedBy)
 	require.NoError(t, err)
+	tx, err := d.Owner.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `SET LOCAL session_replication_role = replica`)
+	require.NoError(t, err)
+	tag, err := tx.Exec(ctx, `UPDATE audit SET at = $2, actor = $3 WHERE action = 'license.issue' AND subject = $1`, id, at, actor)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), tag.RowsAffected())
+	require.NoError(t, tx.Commit(ctx))
 }
 
 // seedOpenRequest inserts an open request made at requestedAt.
@@ -563,4 +581,56 @@ func TestTwoConcurrentSummariesSendOne(t *testing.T) {
 		assert.Equal(t, 1, sent, "round %d", round)
 	}
 	assert.Len(t, summaryMails(t, d), rounds)
+}
+
+// The period, the order, the unusual rules and the signer come from the audit row, which no
+// client can write; issued_at and signed_by are client-supplied columns.
+func TestIssuedAndUnusualUseTheAuditTimeAndActor(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s20_notifier")
+	// Back-dated a month and with a forged signer, but really issued at 23:30 this week by t_real.
+	seedIssuedRecorded(t, d, "LIC-BACK", "Backdate", "t_real", ist(t, 2026, 10, 13, 23, 30, 0),
+		"web:boss", summaryNow.Add(-30*day))
+	// Claims to be from this week, really issued before the period.
+	seedIssuedRecorded(t, d, "LIC-OLDREAL", "Old Real", "t_real", summaryNow.Add(-8*day),
+		"t_real", summaryNow.Add(-day))
+	// Six in one day by one real login, spread over six recorded signers and back-dated.
+	for i := range 6 {
+		seedIssuedRecorded(t, d, fmt.Sprintf("LIC-B%d", i), "Busy", "t_busy", ist(t, 2026, 10, 14, 9+i, 0, 0),
+			fmt.Sprintf("web:alias%d", i), summaryNow.Add(-time.Duration(20+i)*day))
+	}
+
+	body := onlySummary(t, d, p, summaryNow)
+	head, lines := section(t, body, "Issued since")
+	assert.Equal(t, "== Issued since 2026-10-08 12:00 +03 (7) ==", head)
+	require.Len(t, lines, 7)
+	assert.Equal(t, "LIC-BACK | Backdate | 7 targets | signed by t_real | 2026-10-13 23:30 +03", lines[0])
+	assert.Equal(t, "LIC-B0 | Busy | 7 targets | signed by t_busy | 2026-10-14 09:00 +03", lines[1])
+	assert.NotContains(t, body, "LIC-OLDREAL")
+	assert.NotContains(t, body, "web:boss")
+	assert.NotContains(t, body, "web:alias")
+
+	head, lines = section(t, body, "Unusual")
+	assert.Equal(t, "== Unusual (2) ==", head)
+	assert.Equal(t, []string{
+		"Issued at night: LIC-BACK | Backdate | signed by t_real | 2026-10-13 23:30 +03",
+		"t_busy issued 6 licenses on 2026-10-14 (more than 5 in one day)",
+	}, lines)
+}
+
+// A renewal (a later license for the same customer and installation) ends the old license's place
+// in the ending-soon list, even when it does not name the old one in replaces.
+func TestRenewedLicenseIsNotListedAsEnding(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s21_notifier")
+	seedLicense(t, d, lic{id: "LIC-OLD", customer: "Renew Co", validUntil: summaryNow.Add(20 * day)})
+	seedLicense(t, d, lic{id: "LIC-NEW", customer: "Renew Co", validUntil: summaryNow.Add(80 * day)})
+	seedLicense(t, d, lic{id: "LIC-SOLO", customer: "Solo", validUntil: summaryNow.Add(30 * day)})
+
+	body := onlySummary(t, d, p, summaryNow)
+	head, lines := section(t, body, "Ending in the next 90 days")
+	assert.Equal(t, "== Ending in the next 90 days (2) ==", head)
+	require.Len(t, lines, 2)
+	assert.True(t, strings.HasPrefix(lines[0], "LIC-SOLO |"), lines[0])
+	assert.True(t, strings.HasPrefix(lines[1], "LIC-NEW |"), lines[1])
 }

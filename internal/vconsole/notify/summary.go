@@ -50,7 +50,8 @@ const (
 	summaryLockKey int64 = 0x7663_7375_6d61_7279
 )
 
-// issuedRow is one license issued in the covered period.
+// issuedRow is one license issued in the covered period; signer and issuedAt are the actor and
+// time of its audit row.
 type issuedRow struct {
 	licenseID, customer, signer string
 	targets                     int
@@ -228,12 +229,19 @@ func summaryZone(name string) (*time.Location, string) {
 	return time.UTC, fmt.Sprintf("Time zone \"%s\" is unknown; times are shown in UTC.", clean(name, maxNameRunes))
 }
 
+// issuedIn lists the licenses whose license.issue audit row falls in [start, end). The time and
+// the signer come from that audit row (written by the database at insert time with the acting
+// login), not from issued_at and signed_by, which the inserting client can set to anything: a
+// back-dated or mis-attributed license is still listed, at the time and under the login that
+// really issued it.
 func issuedIn(ctx context.Context, tx pgx.Tx, start, end time.Time) ([]issuedRow, error) {
 	// All rows, not the first 20: the unusual rules look at every license of the period.
-	rows, err := tx.Query(ctx, `SELECT l.license_id, c.name, l.signed_by, l.targets, l.issued_at
-		FROM licenses l JOIN customers c ON c.id = l.customer_id
-		WHERE l.issued_at >= $1 AND l.issued_at < $2
-		ORDER BY l.issued_at, l.license_id`, start, end)
+	rows, err := tx.Query(ctx, `SELECT l.license_id, c.name, a.actor, l.targets, a.at
+		FROM licenses l
+		JOIN customers c ON c.id = l.customer_id
+		JOIN audit a ON a.action = 'license.issue' AND a.subject = l.license_id
+		WHERE a.at >= $1 AND a.at < $2
+		ORDER BY a.at, l.license_id`, start, end)
 	if err != nil {
 		return nil, fmt.Errorf("notify: summary: issued licenses: %w", err)
 	}
@@ -277,13 +285,12 @@ func openRequests(ctx context.Context, tx pgx.Tx, now time.Time) (section, error
 	return s, nil
 }
 
-// endingSoon uses the same rule as the reminders: not revoked, not replaced, ends in (now, now+90d].
+// endingSoon uses the same rule as the reminders: live (liveLicense), ends in (now, now+90d].
 func endingSoon(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Location) (section, error) {
 	s := section{title: "Ending in the next 90 days", empty: "None."}
 	rows, err := tx.Query(ctx, `SELECT l.license_id, c.name, l.valid_until, count(*) OVER ()
 		FROM licenses l JOIN customers c ON c.id = l.customer_id
-		WHERE l.revoked_at IS NULL AND l.valid_until > $1 AND l.valid_until <= $2
-		  AND NOT EXISTS (SELECT 1 FROM licenses n WHERE n.replaces = l.license_id)
+		WHERE `+liveLicense+` AND l.valid_until > $1 AND l.valid_until <= $2
 		ORDER BY l.valid_until, l.license_id LIMIT $3`, now, now.Add(endingWithin), maxSectionLines)
 	if err != nil {
 		return s, fmt.Errorf("notify: summary: ending licenses: %w", err)
@@ -389,11 +396,17 @@ func writeSection(b *strings.Builder, s section) {
 	b.WriteString("\n")
 }
 
-// clean drops control and format characters (line breaks, escape sequences, bidi overrides that
-// could make a line read differently than it is) and keeps the first n runes.
+// dropRune reports the runes no mail line may contain: control characters (line breaks, escape
+// sequences), format characters (bidi overrides and zero-width marks that could make a line read
+// differently than it is) and the replacement character left by invalid UTF-8.
+func dropRune(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
+}
+
+// clean drops the runes dropRune reports and keeps the first n runes.
 func clean(s string, n int) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError {
+		if dropRune(r) {
 			return -1
 		}
 		return r
