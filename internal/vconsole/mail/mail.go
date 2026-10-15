@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mime"
 	"mime/quotedprintable"
 	"net"
 	"net/mail"
@@ -64,12 +63,14 @@ func (m Message) Bytes(now time.Time, rnd io.Reader) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		to = append(to, a.String())
+		to = append(to, a.header())
 	}
 	subject, err := headerText("subject", m.Subject)
 	if err != nil {
 		return nil, err
 	}
+	// Trailing blanks carry nothing and could end up alone on a folded line.
+	subject = strings.TrimRight(subject, " ")
 	if utf8.RuneCountInString(subject) > maxSubjectRunes {
 		subject = string([]rune(subject)[:maxSubjectRunes-1]) + "…"
 	}
@@ -77,12 +78,12 @@ func (m Message) Bytes(now time.Time, rnd io.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(rnd, id); err != nil {
 		return nil, fmt.Errorf("mail: message id: %w", err)
 	}
-	domain := from.Address[strings.LastIndexByte(from.Address, '@')+1:]
+	domain := from.addr[strings.LastIndexByte(from.addr, '@')+1:]
 
 	var b bytes.Buffer
-	writeHeader(&b, "From", from.String())
+	writeHeader(&b, "From", from.header())
 	writeHeader(&b, "To", strings.Join(to, ", "))
-	writeHeader(&b, "Subject", mime.QEncoding.Encode("utf-8", subject))
+	writeHeader(&b, "Subject", encodeText(subject, isSubjectLiteral))
 	writeHeader(&b, "Date", now.Format(time.RFC1123Z))
 	writeHeader(&b, "Message-ID", "<"+hex.EncodeToString(id)+"@"+domain+">")
 	writeHeader(&b, "MIME-Version", "1.0")
@@ -121,17 +122,133 @@ func headerText(field, s string) (string, error) {
 	}, s), nil
 }
 
+// address is a parsed and validated mailbox. The same plain addr-spec goes into the header and
+// the SMTP envelope, so the two can never disagree.
+type address struct {
+	name string // display name, header text (no line breaks)
+	addr string // plain addr-spec, conservative ASCII only
+}
+
+// header renders the mailbox for From/To. The address is never quoted because addrSpecOK only
+// lets through characters that need no quoting; the name is literal only when it is made of
+// characters that are safe in a phrase, otherwise it becomes Q-encoded words.
+func (a address) header() string {
+	if a.name == "" {
+		return "<" + a.addr + ">"
+	}
+	return encodeText(a.name, isPhraseLiteral) + " <" + a.addr + ">"
+}
+
 // parseAddress accepts exactly one address; a comma-separated list would let one field carry
-// recipients the caller did not mean to add.
-func parseAddress(field, s string) (*mail.Address, error) {
+// recipients the caller did not mean to add. net/mail accepts quoted local parts and strips
+// the quotes, so its result is checked again against a conservative addr-spec: otherwise
+// `"x@evil.example> NOTIFY=NEVER"@vendor.example` would put ESMTP parameters into RCPT TO.
+func parseAddress(field, s string) (address, error) {
 	if _, err := headerText(field, s); err != nil {
-		return nil, err
+		return address{}, err
 	}
 	a, err := mail.ParseAddress(s)
 	if err != nil {
-		return nil, fmt.Errorf("mail: %s address: %w", field, err)
+		return address{}, fmt.Errorf("mail: %s address: %w", field, err)
 	}
-	return a, nil
+	if !addrSpecOK(a.Address) {
+		return address{}, fmt.Errorf("mail: %s address: only plain ASCII addresses (local@domain) are supported", field)
+	}
+	name, err := headerText(field, a.Name)
+	if err != nil {
+		return address{}, err
+	}
+	return address{name: strings.TrimSpace(name), addr: a.Address}, nil
+}
+
+// addrSpecOK accepts local@domain where the local part is a dot-atom (RFC 5322 atext, no
+// quoting) and the domain is letters, digits, '-' and '.'. Non-ASCII is refused: the sender
+// does not speak SMTPUTF8.
+func addrSpecOK(s string) bool {
+	local, domain, ok := strings.Cut(s, "@")
+	if !ok || strings.Contains(domain, "@") {
+		return false
+	}
+	return dotted(local, func(r byte) bool {
+		return isAlnum(r) || strings.IndexByte("!#$%&'*+-/=?^_`{|}~", r) >= 0
+	}) && dotted(domain, func(r byte) bool { return isAlnum(r) || r == '-' })
+}
+
+// dotted reports whether s is non-empty labels of allowed bytes joined by single dots.
+func dotted(s string, allowed func(byte) bool) bool {
+	for _, label := range strings.Split(s, ".") {
+		if label == "" {
+			return false
+		}
+		for i := 0; i < len(label); i++ {
+			if !allowed(label[i]) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isAlnum(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9'
+}
+
+// isSubjectLiteral: printable ASCII may go into Subject as is, except "=?", which a client
+// would decode as an encoded word (a subject of "=?utf-8?b?SGVsbG8=?=" must not show "Hello").
+func isSubjectLiteral(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < ' ' || s[i] > '~' {
+			return false
+		}
+	}
+	return !strings.Contains(s, "=?")
+}
+
+// isPhraseLiteral: a display name stays literal only with letters, digits, spaces and a few
+// harmless marks; anything else (quotes, commas, angle brackets, "=?", non-ASCII) is encoded.
+func isPhraseLiteral(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if !isAlnum(s[i]) && strings.IndexByte(" -_'", s[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// encodeText returns s as is when literal(s), otherwise as RFC 2047 Q-encoded words. The
+// encoding is done here rather than with mime.QEncoding because that one leaves pure ASCII
+// alone, "=?" included. Only letters and digits stay unencoded, which is safe in both a
+// Subject and a phrase; words stay within 75 characters and never split a UTF-8 sequence.
+func encodeText(s string, literal func(string) bool) string {
+	if literal(s) {
+		return s
+	}
+	const prefix, suffix, maxWord = "=?utf-8?q?", "?=", 75
+	var words []string
+	var cur strings.Builder
+	for _, r := range s {
+		var enc strings.Builder
+		var buf [utf8.UTFMax]byte
+		for _, c := range buf[:utf8.EncodeRune(buf[:], r)] {
+			switch {
+			case c == ' ':
+				enc.WriteByte('_')
+			case isAlnum(c):
+				enc.WriteByte(c)
+			default:
+				fmt.Fprintf(&enc, "=%02X", c)
+			}
+		}
+		if cur.Len() > 0 && len(prefix)+cur.Len()+enc.Len()+len(suffix) > maxWord {
+			words = append(words, prefix+cur.String()+suffix)
+			cur.Reset()
+		}
+		cur.WriteString(enc.String())
+	}
+	if cur.Len() > 0 {
+		words = append(words, prefix+cur.String()+suffix)
+	}
+	return strings.Join(words, " ")
 }
 
 // writeHeader writes "Name: value" folded at spaces (RFC 5322 section 2.2.3), so encoded words
@@ -140,7 +257,9 @@ func parseAddress(field, s string) (*mail.Address, error) {
 func writeHeader(b *bytes.Buffer, name, value string) {
 	line := name + ":"
 	for i, w := range strings.Split(value, " ") {
-		if i > 0 && len(line)+1+len(w) > foldAt {
+		// Never fold before an empty word: the continuation line would be whitespace only,
+		// which RFC 5322 forbids.
+		if i > 0 && w != "" && len(line)+1+len(w) > foldAt {
 			b.WriteString(line + "\r\n")
 			line = ""
 		}
@@ -173,7 +292,7 @@ type smtpSender struct {
 	c        SMTPConfig
 	host     string
 	implicit bool
-	from     *mail.Address
+	from     address
 }
 
 // NewSMTP checks the configuration and returns a sender. It does not connect.
@@ -220,11 +339,11 @@ func (s *smtpSender) Send(ctx context.Context, m Message, now time.Time) error {
 	}
 	rcpts := make([]string, 0, len(m.To))
 	for _, t := range m.To {
-		a, err := mail.ParseAddress(t) // already validated by Bytes
+		a, err := parseAddress("to", t) // the same validation Bytes did
 		if err != nil {
-			return fmt.Errorf("mail: to address: %w", err)
+			return err
 		}
-		rcpts = append(rcpts, a.Address)
+		rcpts = append(rcpts, a.addr)
 	}
 	return s.scrub(s.deliver(ctx, rcpts, data))
 }
@@ -233,19 +352,22 @@ func (s *smtpSender) deliver(ctx context.Context, rcpts []string, data []byte) e
 	ctx, cancel := context.WithTimeout(ctx, orDefault(s.c.messageTimeout, messageTimeout))
 	defer cancel()
 	d := net.Dialer{Timeout: orDefault(s.c.dialTimeout, dialTimeout)}
-	conn, err := d.DialContext(ctx, "tcp", s.c.Addr)
+	raw, err := d.DialContext(ctx, "tcp", s.c.Addr)
 	if err != nil {
 		return fmt.Errorf("mail: connect to smtp server: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
+	// raw is never reassigned, so the AfterFunc goroutine can close it while conn below is
+	// replaced by the TLS wrapper.
+	defer func() { _ = raw.Close() }()
+	conn := raw
 	// The deadline bounds every read and write of the exchange; closing on cancel also covers a
 	// caller cancelling early.
 	if dl, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(dl); err != nil {
+		if err := raw.SetDeadline(dl); err != nil {
 			return fmt.Errorf("mail: set deadline: %w", err)
 		}
 	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
 
 	remote := remoteHost(conn, s.host)
@@ -287,7 +409,7 @@ func (s *smtpSender) deliver(ctx context.Context, rcpts []string, data []byte) e
 			return fmt.Errorf("mail: smtp authentication: %w", err)
 		}
 	}
-	if err := cl.Mail(s.from.Address); err != nil {
+	if err := cl.Mail(s.from.addr); err != nil {
 		return fmt.Errorf("mail: smtp MAIL FROM: %w", err)
 	}
 	for _, r := range rcpts {

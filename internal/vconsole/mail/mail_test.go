@@ -381,3 +381,87 @@ func TestNewSMTPValidates(t *testing.T) {
 		assert.Error(t, err, name)
 	}
 }
+
+func TestAddressesRefuseQuotedAndNonASCIILocalParts(t *testing.T) {
+	bad := []string{
+		`"x@evil.example> NOTIFY=NEVER"@vendor.example`,
+		`Eve <"x@evil.example> NOTIFY=NEVER"@vendor.example>`,
+		`"a>b"@c.dd`,
+		`"a b"@c.dd`,
+		`a@b.cc,x@y.zz`,
+		`jöhn@example.com`,
+		`john@exämple.com`,
+		`a\b@c.dd`,
+		`.a@c.dd`,
+		`a..b@c.dd`,
+		`a@-c..dd`,
+		`a@c_d.dd`,
+	}
+	for _, a := range bad {
+		m := Message{From: "a@vendor.example", To: []string{a}, Subject: "s", Body: "b"}
+		_, err := m.Bytes(testNow, bytes.NewReader(make([]byte, 16)))
+		assert.Error(t, err, "to %s", a)
+		m = Message{From: a, To: []string{"b@vendor.example"}, Subject: "s", Body: "b"}
+		_, err = m.Bytes(testNow, bytes.NewReader(make([]byte, 16)))
+		assert.Error(t, err, "from %s", a)
+		_, err = NewSMTP(SMTPConfig{Addr: "h:25", From: a})
+		assert.Error(t, err, "config from %s", a)
+	}
+
+	// A refused recipient never reaches the server.
+	srv := mailtest.Start(t, mailtest.Options{})
+	s := newTestSender(t, srv, nil)
+	err := s.Send(context.Background(), Message{To: []string{bad[0]}, Subject: "s", Body: "b"}, testNow)
+	require.Error(t, err)
+	assert.Empty(t, srv.Messages())
+
+	// A display name still works; envelope and header carry the same plain address.
+	m := Message{To: []string{"Eren <eren@example.com>", `"Altan, Eren" <e.altan+x@sub.example.com>`, "Çağrı Işık <c@example.com>"}, Subject: "s", Body: "b"}
+	require.NoError(t, s.Send(context.Background(), m, testNow))
+	msgs := srv.Messages()
+	require.Len(t, msgs, 1)
+	assert.Equal(t, []string{"eren@example.com", "e.altan+x@sub.example.com", "c@example.com"}, msgs[0].To)
+	_, _, h := parse(t, msgs[0].Data)
+	to, err := h.AddressList("To")
+	require.NoError(t, err)
+	require.Len(t, to, 3)
+	assert.Equal(t, mail.Address{Name: "Eren", Address: "eren@example.com"}, *to[0])
+	assert.Equal(t, mail.Address{Name: "Altan, Eren", Address: "e.altan+x@sub.example.com"}, *to[1])
+	assert.Equal(t, mail.Address{Name: "Çağrı Işık", Address: "c@example.com"}, *to[2])
+}
+
+func TestBytesEncodesEncodedWordLookalikes(t *testing.T) {
+	for _, s := range []string{"=?utf-8?b?SGVsbG8=?=", "Renew =?utf-8?q?Hi?= now", "a=?b"} {
+		m := Message{From: "a@vendor.example", To: []string{"b@vendor.example"}, Subject: s, Body: "b"}
+		raw := render(t, m)
+		subject, _, _ := parse(t, raw)
+		assert.Equal(t, s, subject)
+
+		// The same for a display name. (net/mail decodes encoded words in its input, so the
+		// rendering is tested directly.)
+		got, err := mail.ParseAddress(address{name: s, addr: "b@vendor.example"}.header())
+		require.NoError(t, err)
+		assert.Equal(t, s, got.Name)
+	}
+}
+
+func TestHeaderFoldingHasNoBlankContinuation(t *testing.T) {
+	// "Subject:" + 35 one-letter words ends exactly at column 78; then a trailing space.
+	words := strings.TrimSpace(strings.Repeat("a ", 35))
+	for _, s := range []string{words + " ", words + "  x", words + "   ", strings.Repeat("ab ", 60)} {
+		m := Message{From: "a@vendor.example", To: []string{"b@vendor.example"}, Subject: s, Body: "b"}
+		raw := render(t, m)
+		head, _, _ := strings.Cut(string(raw), "\r\n\r\n")
+		for _, l := range strings.Split(head, "\r\n") {
+			assert.NotEmpty(t, strings.TrimSpace(l), "whitespace-only header line in %q", head)
+		}
+		subject, _, _ := parse(t, raw)
+		// net/textproto collapses the whitespace around a fold, so compare words.
+		assert.Equal(t, strings.Fields(s), strings.Fields(subject))
+	}
+	var b bytes.Buffer
+	writeHeader(&b, "Subject", strings.Repeat("x", 69)+" ")
+	for _, l := range strings.Split(strings.TrimSuffix(b.String(), "\r\n"), "\r\n") {
+		assert.NotEmpty(t, strings.TrimSpace(l), "%q", b.String())
+	}
+}

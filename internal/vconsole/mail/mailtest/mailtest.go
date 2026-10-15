@@ -64,11 +64,12 @@ type Server struct {
 	tls  *tls.Config
 	pool *x509.CertPool
 
-	mu    sync.Mutex
-	msgs  []Message
-	auths []Credentials
-	conns map[net.Conn]struct{}
-	wg    sync.WaitGroup
+	mu     sync.Mutex
+	msgs   []Message
+	auths  []Credentials
+	conns  map[net.Conn]struct{}
+	closed bool // set by Close; later connections are dropped at once
+	wg     sync.WaitGroup
 }
 
 // TB is the part of testing.TB that Start uses. The package does not import testing so that
@@ -127,6 +128,7 @@ func (s *Server) Auths() []Credentials {
 func (s *Server) Close() {
 	_ = s.ln.Close()
 	s.mu.Lock()
+	s.closed = true
 	for c := range s.conns {
 		_ = c.Close()
 	}
@@ -142,9 +144,16 @@ func (s *Server) serve() {
 			return
 		}
 		s.mu.Lock()
+		if s.closed {
+			// Accepted in the window before the listener closed: Close has already swept the
+			// open connections, so this one must not be served (a silent session would hang it).
+			s.mu.Unlock()
+			_ = c.Close()
+			continue
+		}
 		s.conns[c] = struct{}{}
-		s.mu.Unlock()
 		s.wg.Add(1)
+		s.mu.Unlock()
 		go func() {
 			defer s.wg.Done()
 			defer func() {
