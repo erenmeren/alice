@@ -4,6 +4,8 @@ package issue_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"sync"
 	"testing"
@@ -199,4 +201,67 @@ func TestCorrectionRules(t *testing.T) {
 	assert.ErrorIs(t, err, issue.ErrShortensTerm)
 	_, err = issue.Issue(ctx, e.signer, e.key, issue.Params{RequestID: idS, ExpectedHash: store.RequestHash(rS), Shorten: true}, now)
 	assert.NoError(t, err)
+}
+
+// countingSigner records whether the signer was reached.
+type countingSigner struct {
+	sign.Signer
+	calls int
+}
+
+func (c *countingSigner) Issue(ctx context.Context, p license.Payload) ([]byte, error) {
+	c.calls++
+	return c.Signer.Issue(ctx, p)
+}
+
+func TestConfirmIsCalledBeforeSigningAndCanAbort(t *testing.T) {
+	e := setup(t, "h")
+	ctx := context.Background()
+	id, hash := e.request(t, license.NewInstallationID(), 5, "")
+	s := &countingSigner{Signer: e.key}
+	confirmed := 0
+	_, err := issue.Issue(ctx, e.signer, s, issue.Params{RequestID: id, ExpectedHash: hash,
+		Confirm: func(license.Payload, string) error { confirmed++; return issue.ErrNotConfirmed }}, now)
+	require.ErrorIs(t, err, issue.ErrNotConfirmed)
+	assert.Equal(t, 1, confirmed)
+	assert.Zero(t, s.calls, "the signer is never reached when the operator says no")
+	var status string
+	require.NoError(t, e.d.Owner.QueryRow(ctx, `SELECT status FROM license_requests WHERE id = $1`, id).Scan(&status))
+	assert.Equal(t, "open", status)
+	var n int
+	require.NoError(t, e.d.Owner.QueryRow(ctx, `SELECT count(*) FROM licenses`).Scan(&n))
+	assert.Zero(t, n)
+
+	// The same request then issues normally.
+	_, err = issue.Issue(ctx, e.signer, s, issue.Params{RequestID: id, ExpectedHash: hash,
+		Confirm: func(license.Payload, string) error { return nil }}, now)
+	require.NoError(t, err)
+	assert.Equal(t, 1, s.calls)
+}
+
+func TestConfirmIsNotCalledWhenTheCorrectionRulesRefuse(t *testing.T) {
+	e := setup(t, "i")
+	id, hash := e.request(t, license.NewInstallationID(), 5, "LIC-2026-000000")
+	called := false
+	_, err := issue.Issue(context.Background(), e.signer, e.key, issue.Params{RequestID: id, ExpectedHash: hash,
+		Confirm: func(license.Payload, string) error { called = true; return nil }}, now)
+	require.ErrorIs(t, err, issue.ErrUnknownReplaced)
+	assert.False(t, called)
+}
+
+func TestConfirmSeesTheExactSignedBytesDigest(t *testing.T) {
+	e := setup(t, "j")
+	inst := license.NewInstallationID()
+	id, hash := e.request(t, inst, 7, "")
+	var seen license.Payload
+	var digest string
+	res, err := issue.Issue(context.Background(), e.signer, e.key, issue.Params{RequestID: id, ExpectedHash: hash,
+		Confirm: func(p license.Payload, sum string) error { seen, digest = p, sum; return nil }}, now)
+	require.NoError(t, err)
+	f, err := license.ParseFile(res.File)
+	require.NoError(t, err)
+	sum := sha256.Sum256(license.SignedBytes(f.Payload))
+	assert.Equal(t, hex.EncodeToString(sum[:]), digest, "the confirmed digest is of the bytes in the signed file")
+	assert.Equal(t, f.Payload, seen, "the confirmed payload is the signed payload")
+	assert.Equal(t, inst, seen.InstallationID)
 }

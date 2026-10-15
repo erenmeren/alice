@@ -31,6 +31,8 @@ var (
 	ErrOtherInstallation  = errors.New("issue: the replaced license is for another installation")
 	ErrShortensTerm       = errors.New("issue: the correction ends earlier than the license it replaces; set Shorten if that is intended")
 	ErrDuplicateLicenseID = errors.New("issue: a license with this ID was already issued")
+	// ErrNotConfirmed is what a Confirm hook returns when the operator answers no.
+	ErrNotConfirmed = errors.New("issue: the signer did not confirm the license; nothing was signed")
 )
 
 // Params selects the request and what the signer saw.
@@ -39,6 +41,12 @@ type Params struct {
 	ExpectedHash string // store.RequestHash of the request as the signer saw it
 	LicenseID    string // "" = LIC-<year>-<6 random digits>
 	Shorten      bool   // allow a correction to end earlier than the license it replaces
+	// Confirm, when set, is shown the payload exactly as it will be signed and the SHA-256 (hex)
+	// of the bytes the signer receives, after the correction rules passed and before the signer
+	// is called (so before any PIN prompt). A non-nil error aborts the issue and nothing is
+	// recorded; the request stays open. It runs inside the transaction: the request row stays
+	// locked while the operator reads, so the caller must bound how long it waits.
+	Confirm func(p license.Payload, signedSHA256 string) error
 }
 
 // Result is the issued license.
@@ -82,6 +90,20 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 		}
 		if err := checkCorrection(ctx, tx, payload, p.Shorten); err != nil {
 			return err
+		}
+		if p.Confirm != nil {
+			// The signers sign the normalized payload; the operator confirms exactly that.
+			payload = issuer.NormalizePayload(payload)
+			_, sum, err := sign.PayloadDigest(payload)
+			if err != nil {
+				return fmt.Errorf("issue: the request can no longer become a license (%w); cancel it and make a new request", err)
+			}
+			if err := p.Confirm(payload, sum); err != nil {
+				if errors.Is(err, ErrNotConfirmed) {
+					return err
+				}
+				return fmt.Errorf("issue: confirm: %w", err)
+			}
 		}
 		raw, err := s.Issue(ctx, payload)
 		if err != nil {
