@@ -272,7 +272,7 @@ func TestQuietWeekStillSends(t *testing.T) {
 		"== Issued since 2026-10-08 12:00 +03 (0) ==\nNothing issued.\n\n" +
 		"== Open requests (0) ==\nNone.\n\n" +
 		"== Ending in the next 90 days (0) ==\nNone.\n\n" +
-		"== Failed e-mails (0) ==\nNone.\n\n" +
+		"== Failed e-mails (0) ==\nFailures stay listed for 28 days.\nNone.\n\n" +
 		"== Unusual (0) ==\nNone.\n\n"
 	assert.Equal(t, want, ms[0].Body)
 	for _, r := range ms[0].Body {
@@ -313,30 +313,148 @@ func TestKnownTimezoneSettingIsUsed(t *testing.T) {
 	assert.Equal(t, []string{"None."}, lines, "no fallback note for a valid zone")
 }
 
+// insertOutbox inserts an outbox row that gave up at failed (or, with sent set, one that went out).
+func insertOutbox(t *testing.T, d *vpgtest.DB, kind, subject, lastErr string, created time.Time, failed, sent *time.Time) {
+	t.Helper()
+	_, err := d.Owner.Exec(context.Background(), `INSERT INTO mail_outbox (kind, to_addrs, subject, body, created_at, attempts, last_error, failed_at, sent_at)
+		VALUES ($1, '{boss@example.com}', $2, 'b', $3, 10, $4, $5, $6)`, kind, subject, created, lastErr, failed, sent)
+	require.NoError(t, err)
+}
+
 func TestFailedMailsAreListed(t *testing.T) {
 	d := vpgtest.New(t)
-	ctx := context.Background()
 	p := notifier(t, d, "t_s8_notifier")
 	longSubject := "License issued: " + strings.Repeat("x", 150)
 	longErr := "smtp: 550 mailbox unavailable\r\n" + strings.Repeat("y", 300)
-	insert := func(kind, subject, lastErr string, created time.Time, failed *time.Time, sent *time.Time) {
-		_, err := d.Owner.Exec(ctx, `INSERT INTO mail_outbox (kind, to_addrs, subject, body, created_at, attempts, last_error, failed_at, sent_at)
-			VALUES ($1, '{boss@example.com}', $2, 'b', $3, 10, $4, $5, $6)`, kind, subject, created, lastErr, failed, sent)
-		require.NoError(t, err)
-	}
 	f1 := summaryNow.Add(-2 * day)
-	old := summaryNow.Add(-8 * day)
-	insert("issued", longSubject, longErr, ist(t, 2026, 10, 12, 10, 15, 0), &f1, nil)
-	insert("reminder", "License ending in 30 days: Old", "smtp: old", old, &old, nil) // failed before the period
-	insert("reminder", "Sent fine", "", f1, nil, &f1)
-	insert("reminder", "Still retrying", "smtp: 451", f1, nil, nil)
+	f20 := summaryNow.Add(-20 * day)
+	old := summaryNow.Add(-28*day - time.Second)
+	insertOutbox(t, d, "issued", longSubject, longErr, ist(t, 2026, 10, 12, 10, 15, 0), &f1, nil)
+	insertOutbox(t, d, "reminder", "Twenty days ago", "smtp: 554", f20, &f20, nil)
+	insertOutbox(t, d, "reminder", "License ending in 30 days: Old", "smtp: old", old, &old, nil) // older than 28 days
+	insertOutbox(t, d, "reminder", "Sent fine", "", f1, nil, &f1)
+	insertOutbox(t, d, "reminder", "Still retrying", "smtp: 451", f1, nil, nil)
+
+	body := onlySummary(t, d, p, summaryNow)
+	head, lines := section(t, body, "Failed e-mails")
+	assert.Equal(t, "== Failed e-mails (2) ==", head)
+	wantErr := ("smtp: 550 mailbox unavailable" + strings.Repeat("y", 300))[:80]
+	assert.Equal(t, []string{
+		"Failures stay listed for 28 days.",
+		"issued | 2026-10-12 10:15 +03 | " + longSubject[:80] + " | " + wantErr, // most recent first
+		"reminder | 2026-09-25 12:00 +03 | Twenty days ago | smtp: 554",
+	}, lines)
+}
+
+func TestFailureStaysListedInLaterSummaries(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_s8b_notifier")
+	f := summaryNow.Add(-6 * day)
+	insertOutbox(t, d, "issued", "Failed once", "smtp: 550", f, &f, nil)
+
+	for i, at := range []time.Time{summaryNow, summaryNow.Add(7 * day), summaryNow.Add(14 * day), summaryNow.Add(21 * day)} {
+		ok, err := notify.WeeklySummary(ctx, p, at)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ms := summaryMails(t, d)
+		require.Len(t, ms, i+1)
+		head, _ := section(t, ms[i].Body, "Failed e-mails")
+		assert.Equal(t, "== Failed e-mails (1) ==", head, "summary %d (failure %v old)", i, at.Sub(f))
+	}
+	ok, err := notify.WeeklySummary(ctx, p, summaryNow.Add(28*day))
+	require.NoError(t, err)
+	require.True(t, ok)
+	ms := summaryMails(t, d)
+	head, _ := section(t, ms[len(ms)-1].Body, "Failed e-mails")
+	assert.Equal(t, "== Failed e-mails (0) ==", head, "34 days old: no longer listed")
+}
+
+// SendPending stamps failed_at with its own now while holding the row, so a failure can carry a
+// time after the summary's now; it must be listed, not fall between two summary periods.
+func TestFailureStampedAfterNowIsListed(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s8c_notifier")
+	late := summaryNow.Add(30 * time.Second)
+	insertOutbox(t, d, "reminder", "Failed during the summary", "smtp: 421", summaryNow.Add(-time.Hour), &late, nil)
 
 	body := onlySummary(t, d, p, summaryNow)
 	head, lines := section(t, body, "Failed e-mails")
 	assert.Equal(t, "== Failed e-mails (1) ==", head)
-	require.Len(t, lines, 1)
-	wantErr := ("smtp: 550 mailbox unavailable" + strings.Repeat("y", 300))[:80]
-	assert.Equal(t, "issued | 2026-10-12 10:15 +03 | "+longSubject[:80]+" | "+wantErr, lines[0])
+	require.Len(t, lines, 2)
+	assert.Contains(t, lines[1], "Failed during the summary")
+}
+
+func TestFailedMailsAreCappedAtTwentyLines(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s8d_notifier")
+	for i := range 25 {
+		f := summaryNow.Add(-time.Duration(i+1) * time.Hour)
+		insertOutbox(t, d, "reminder", fmt.Sprintf("Failed %02d", i), "smtp: 550", f, &f, nil)
+	}
+
+	body := onlySummary(t, d, p, summaryNow)
+	head, lines := section(t, body, "Failed e-mails")
+	assert.Equal(t, "== Failed e-mails (25) ==", head)
+	require.Len(t, lines, 22) // note + 20 lines + "and 5 more"
+	assert.Contains(t, lines[1], "Failed 00")
+	assert.Equal(t, "... and 5 more", lines[21])
+}
+
+func TestWaitingSummaryGetsTheOwnerOnceSet(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_s13_notifier")
+	ok, err := notify.WeeklySummary(ctx, p, summaryNow)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Empty(t, summaryMails(t, d)[0].To)
+
+	setOwner(t, d, "boss@example.com")
+	_, err = notify.ResolveEmptyRecipients(ctx, p)
+	require.NoError(t, err)
+	ms := summaryMails(t, d)
+	require.Len(t, ms, 1)
+	assert.Equal(t, []string{"boss@example.com"}, ms[0].To)
+}
+
+func TestFutureLastSummaryCountsAsNever(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := notifier(t, d, "t_s14_notifier")
+	setSetting(t, d, "last_summary_at", "2027-01-01T00:00:00Z")
+
+	body := onlySummary(t, d, p, summaryNow)
+	head, _ := section(t, body, "Issued since")
+	assert.Equal(t, "== Issued since 2026-10-08 12:00 +03 (0) ==", head, "a fresh 7-day summary")
+	assert.Equal(t, "2026-10-15T09:00:00Z", lastSummaryAt(t, d))
+
+	// A mark a few seconds ahead is clock skew between two concurrent runs, not a broken value:
+	// the second run must not send another summary.
+	ok, err := notify.WeeklySummary(ctx, p, summaryNow.Add(-5*time.Second))
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Len(t, summaryMails(t, d), 1)
+}
+
+// Europe/London changes between BST (UTC+1) and GMT (UTC+0); the night rule follows local time.
+func TestNightRuleFollowsDaylightSavingTime(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s15_notifier")
+	setSetting(t, d, "timezone", "Europe/London")
+	setSetting(t, d, "last_summary_at", "2026-07-01T00:00:00Z")
+	seedIssued(t, d, "LIC-BST-2330", "A", "sig_a", time.Date(2026, 7, 10, 22, 30, 0, 0, time.UTC))
+	seedIssued(t, d, "LIC-BST-2130", "B", "sig_b", time.Date(2026, 7, 11, 20, 30, 0, 0, time.UTC))
+	seedIssued(t, d, "LIC-GMT-2330", "C", "sig_c", time.Date(2026, 11, 2, 23, 30, 0, 0, time.UTC))
+
+	body := onlySummary(t, d, p, time.Date(2026, 11, 5, 9, 0, 0, 0, time.UTC))
+	assert.Contains(t, body, "Time zone: Europe/London\n")
+	head, lines := section(t, body, "Unusual")
+	assert.Equal(t, "== Unusual (2) ==", head)
+	assert.Equal(t, []string{
+		"Issued at night: LIC-BST-2330 | A | signed by sig_a | 2026-07-10 23:30 BST",
+		"Issued at night: LIC-GMT-2330 | C | signed by sig_c | 2026-11-02 23:30 GMT",
+	}, lines)
 }
 
 func TestSummaryLinesAreCleanAndLeakNothing(t *testing.T) {

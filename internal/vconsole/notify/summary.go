@@ -29,6 +29,13 @@ const (
 	maxFailedRunes = 80
 	// endingWithin is the look-ahead of the "Ending in the next 90 days" section.
 	endingWithin = 90 * day
+	// failedListedFor keeps a failed mail in four weekly summaries, so one lost or unread summary
+	// does not hide it, and a failure stamped while a summary ran is still caught by the next one.
+	failedListedFor = 28 * day
+	// futureSkew is how far last_summary_at may lie after now and still count: concurrent runs
+	// whose clocks differ by seconds must not each send a summary. A mark further in the future
+	// (a hand-written or clock-jumped value) counts as never, so it cannot stop the summaries.
+	futureSkew = time.Hour
 
 	// Ruling 4, unusual activity: issuing between nightStartHour:00 and nightEndHour:00 local time
 	// (06:00 itself is day), or more than maxPerSignerDay licenses by one signer in one local day.
@@ -63,9 +70,9 @@ type section struct {
 // WeeklySummary enqueues the owner's weekly summary when none went out in the last 7 days, and
 // reports whether it did.
 //
-// It runs when the last_summary_at setting is missing (or unreadable) or at most now-7 days. The
-// first summary covers the 7 days before now, later ones cover [last_summary_at, now). The mail goes
-// to owner_email (an empty recipient list waits for that address, see ResolveEmptyRecipients).
+// It runs when the last_summary_at setting is missing, unreadable, more than an hour after now
+// (see futureSkew) or at most now-7 days. The first summary covers the 7 days before now, later
+// ones cover [last_summary_at, now). The mail goes to owner_email (an empty recipient list waits for that address, see ResolveEmptyRecipients).
 //
 // Everything happens in one transaction: an advisory lock is taken first and the condition is
 // checked after it, so two concurrent runs send one summary; notify_mark_summary(now) and the
@@ -92,6 +99,9 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 		return false, err
 	}
 	last, haveLast := parseLastSummary(settings["last_summary_at"])
+	if haveLast && last.After(now.Add(futureSkew)) {
+		haveLast = false
+	}
 	if haveLast && last.After(now.Add(-summaryEvery)) {
 		return false, nil
 	}
@@ -114,7 +124,7 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 	if err != nil {
 		return false, err
 	}
-	failed, err := failedMails(ctx, tx, start, end, loc)
+	failed, err := failedMails(ctx, tx, end, loc)
 	if err != nil {
 		return false, err
 	}
@@ -137,6 +147,8 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 	}
 	subject := fmt.Sprintf("Weekly summary: %d issued, %d open requests, %d unusual", len(issued), open.count, len(unusual))
 
+	// With no owner address the row waits with an empty recipient list; a waiting summary is
+	// created each week and all of them go out once the address exists (tolerated: few, and late).
 	var to []string
 	if owner := settings["owner_email"]; owner != "" {
 		to = []string{owner}
@@ -283,15 +295,15 @@ func endingSoon(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Locatio
 	return s, nil
 }
 
-// failedMails lists messages that gave up in the covered period. Failed rows are never retried, so
-// listing every failed row ever would repeat the same lines each week; each failure is reported
-// once, in the summary whose period contains its failed_at.
-func failedMails(ctx context.Context, tx pgx.Tx, start, end time.Time, loc *time.Location) (section, error) {
-	s := section{title: "Failed e-mails", empty: "None."}
+// failedMails lists every message that gave up in the last 28 days before end, most recent first.
+// There is no upper bound: SendPending stamps failed_at with its own now while it holds the row,
+// so a failure may carry a time after this summary's end and must not fall between two summaries.
+func failedMails(ctx context.Context, tx pgx.Tx, end time.Time, loc *time.Location) (section, error) {
+	s := section{title: "Failed e-mails", empty: "None.", note: "Failures stay listed for 28 days."}
 	rows, err := tx.Query(ctx, `SELECT kind, created_at, subject, last_error, count(*) OVER ()
 		FROM mail_outbox
-		WHERE failed_at IS NOT NULL AND failed_at >= $1 AND failed_at < $2
-		ORDER BY failed_at, id LIMIT $3`, start, end, maxSectionLines)
+		WHERE failed_at IS NOT NULL AND failed_at >= $1
+		ORDER BY failed_at DESC, id DESC LIMIT $2`, end.Add(-failedListedFor), maxSectionLines)
 	if err != nil {
 		return s, fmt.Errorf("notify: summary: failed mails: %w", err)
 	}
