@@ -82,7 +82,7 @@ func TestRevokeOnASingleConnectionStillAuditsTheReason(t *testing.T) {
 	c, err := owner.Acquire(ctx)
 	require.NoError(t, err)
 	defer c.Release()
-	var q *pgx.Conn = c.Conn()
+	q := c.Conn()
 	require.NoError(t, store.RevokeLicense(ctx, q, "L-1", "conn reason", now))
 	as := revokeAudits(t, d, "L-1")
 	require.Len(t, as, 1)

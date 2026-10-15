@@ -212,6 +212,9 @@ No change to the license format, the verifier or the license tests is planned.
   to a separate place are the recovery path.
 - Compromised signer machine: PIN and touch stop silent signing. The "what you see" screen and the
   content hash stop a swapped request. Revoke the key and ship a release if a key is lost.
+- Interim note: until the YubiKey signer lands, "PIN and touch stop silent signing" and "no private
+  key on any server" do not hold under signing option 2 (the file key on a dedicated online signer
+  machine). See the operations runbook, section 2.
 - A signer can sign any license. Limits (targets, term) are advice in the app, not enforced by the
   key. The owner's notification and the audit are the control. This is accepted.
 - Sales login: WebAuthn (the owner's existing keys work), short sessions, rate limits.

@@ -336,6 +336,14 @@ record from the operations log: the head and the license count taken just before
        CREATE ROLE vendor_notifier NOLOGIN;
        EOF
 
+   For a dump taken from Neon, also create `neon_superuser` and the migration login's role name
+   (the login the dump was taken with, for example `vendor_migrator`) as `NOLOGIN` roles in the
+   same way (`CREATE ROLE neon_superuser NOLOGIN;`, `CREATE ROLE <migration login> NOLOGIN;`). The
+   dump holds grants to them. If `pg_restore` stops with `role "X" does not exist`, create `X`
+   `NOLOGIN` on a fresh scratch database (drop the container and start again from this step) and
+   run it again. Keep `--exit-on-error` and the grants: do not switch to `--no-acl`, because it
+   drops the `vendor_*` grants and breaks steps 6 to 8.
+
 4. **Restore:**
 
        docker exec vendor-drill pg_restore -U restorer -d vendor_drill --no-owner --exit-on-error /tmp/vendor.dump
@@ -359,6 +367,9 @@ record from the operations log: the head and the license count taken just before
        export VENDOR_DATABASE_URL='postgres://drill_owner@127.0.0.1:55432/vendor_drill?sslmode=disable'
        vendor-console audit-verify --head <head recorded before the dump>
        vendor-console audit-verify --head <seq>:<hash from the weekly summary>
+
+   Paste the `<seq>:<hash>` part of the mailed line, or the whole `Audit head: <seq>:<hash>` line
+   in quotes: both are accepted.
 
    Expected, both times: `audit chain OK; checkpoint <seq> found`.
 7. **Every license file:**
