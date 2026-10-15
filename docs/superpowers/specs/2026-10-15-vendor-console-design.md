@@ -1,6 +1,7 @@
 # Vendor console: design (draft)
 
-Status: draft. Phase 1 (foundation) is built on the branch vendor-console; later phases are not.
+Status: phases 1, 3, 4 and 5 are built; phase 2 (YubiKey signing) waits for the hardware (O1, O3).
+See the status table in section 10.
 Date: 2026-10-15.
 
 ## 1. Purpose
@@ -104,7 +105,8 @@ comparing a content hash taken at display time with the one at signing time.
 3. Record the public key and its fingerprint. Build the key set entry.
 4. Store spare keys in separate safe places.
 
-A checklist for this goes into the operator documentation of the console.
+The checklist is in `docs/vendor-console-operations.md` section 2, marked as the procedure to
+follow once Phase 2 lands.
 
 ## 5. Data model (PostgreSQL)
 
@@ -141,12 +143,20 @@ the OS keychain, never from the repository.
 
 `licensectl` keeps a signed CSV ledger (`issued.csv`) that detects tampering and rejects duplicate
 IDs and conflicting corrections. The console must keep these rules (duplicate license ID, replace
-cycle, shortened term only with explicit confirmation, same installation). Open item O2: whether
-the CSV ledger stays as an offline copy that is exported from Neon, or is replaced by the hash-chained
-`audit` table. Proposed: export a signed ledger file from the database on demand, so offline
-verification with `licensectl ledger-verify` keeps working.
+cycle, shortened term only with explicit confirmation, same installation). O2 is resolved (Phase 5):
+the hash-chained `audit` table plus the `licenses` table are the ledger. No CSV ledger is exported:
+it would have to be signed with the license key, which signs nothing but licenses.
+`licensectl ledger-verify` stays for the `issued.csv` files of licenses issued with `licensectl`.
 
-## 7. Owner visibility (built in Phase 4)
+The chain alone cannot show that the newest audit rows were cut from the end. Instead of a signed
+head, the weekly summary mail ends with `Audit head: <seq>:<hash>` (the newest row when the summary
+was written); the owner's mailbox is the witness outside the database.
+`vendor-console audit-verify --head SEQ:HASH` checks that the chain is intact and that row `SEQ`
+still exists with that hash; `vendor-console audit-head` prints the current head. After a restore,
+`vendor-console verify-licenses` re-checks every stored license file against the key set (file
+hash, signature, and that the row agrees with the signed payload).
+
+## 7. Owner visibility (built in Phases 4 and 5)
 
 - E-mail to the owner on every signed license: customer, targets, term, signer (the inserting
   login; a differing `signed_by` value is shown as "Recorded signer"), key ID, request number. A database trigger on `licenses` writes the message into the outbox (`mail_outbox`) in
@@ -169,8 +179,17 @@ verification with `licensectl ledger-verify` keeps working.
 - Renewal is not a stored draft. The license list has a "Renew" link and every reminder carries one
   (`/requests/new?renew=<license-id>`): it prefills a new request from the old license (customer,
   installation, targets, features, start date = old end date) for the person to review and submit.
-- Not built: the owner's audit view on the web page. Moved to Phase 5; until then the owner reads
-  the audit log with SQL and `vendor-console audit-verify`.
+- The owner reads the audit log on the command line, not on a web page: `vendor-console audit show`
+  (owner login only; newest first, filters by date, actor and action prefix, at most 1000 rows;
+  installation IDs shown only as `inst#<8 hex>` fingerprints). The web service must not be able to
+  read the audit log, and a web page would need that (Phase 5 ruling).
+- The weekly summary's last line is the audit head checkpoint (section 6).
+- `vendor-console license revoke --id ID --reason TEXT` (owner login) marks a license revoked in the
+  vendor records: reminders stop and the reason is audited. The customer's installation is not
+  affected, because license files are checked offline. Revoking a signing key stays a product release
+  (section 8).
+- `vendor-console notify failed` lists failed mail (owner or notifier login); `notify retry ID`
+  (notifier login only) queues one again and writes a `mail.retry` audit row.
 
 ## 8. Product-side changes
 
@@ -205,18 +224,30 @@ No change to the license format, the verifier or the license tests is planned.
    license from a request using the file key.
 2. **YubiKey signing.** PIV or OpenPGP implementation (decided by O1), PIN and touch flow,
    cross-platform builds and smoke tests on Linux, Windows and macOS.
-3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view was not built in Phase 4 and moves to Phase 5.
+3. **Sales web page (built).** Login, customers, requests, license list with end dates, download. The owner's audit view is a command line view (`audit show`, Phase 5), not a page.
 4. **Reminders and owner reports (built).** E-mail on issuance, weekly summary, expiry reminders, renewal
    as a prefilled request (no stored draft).
-5. **Operations.** Backup and restore drill, key ceremony checklist, key revocation procedure, docs,
-   the owner's audit view on the web page.
+5. **Operations (built, except the YubiKey-dependent ceremony steps).** Audit head checkpoint in the
+   weekly mail and `audit-verify --head`, `verify-licenses`, `license revoke`, `audit show` (a command
+   line view instead of a web page), `notify failed` and `notify retry`, `vendor-web --trusted-proxy`,
+   and the operations runbook `docs/vendor-console-operations.md` (backup and restore drill, key
+   revocation procedure, onboarding and offboarding, incidents). The YubiKey ceremony checklist is
+   written but can only be carried out once Phase 2 is built.
+
+| Phase | Status |
+|---|---|
+| 1. Foundation | built |
+| 2. YubiKey signing | not built; waits for the hardware and open items O1 and O3 |
+| 3. Sales web page | built |
+| 4. Reminders and owner reports | built |
+| 5. Operations | built, except the YubiKey ceremony (needs Phase 2) |
 
 ## 11. Open items
 
 | ID | Item | Needed before |
 |---|---|---|
 | O1 | Firmware and enabled applications of the owner's three YubiKey 5C NFC (`ykman info`); new key for the IT manager must be firmware 5.7 or later for PIV | Phase 2 |
-| O2 | CSV ledger versus audit table (section 6) | Phase 1 |
+| O2 | CSV ledger versus audit table (section 6). Resolved: the `audit` and `licenses` tables are the ledger; no CSV export; `licensectl ledger-verify` stays for old file ledgers | Phase 5 (done) |
 | O3 | Which Go library reads PIV/OpenPGP Ed25519 on all three platforms (PC/SC). To be checked with a spike, not assumed | Phase 2 |
 | O4 | Where the sales web service runs and who operates it. Resolved: one static binary `vendor-web` behind any TLS-ending reverse proxy, or with its own certificate; operated by the IT manager (Istanbul); the owner holds the `vendor_owner` login that creates web users; single instance (ceremony state is in memory) | Phase 3 (done) |
 | O5 | E-mail sending (provider, sender address). Resolved: provider-neutral SMTP configured by `VENDOR_SMTP_ADDR`, `_USER`, `_PASSWORD`, `_FROM`; STARTTLS or port 465 required; the sender address is the operator's choice | Phase 4 (done) |

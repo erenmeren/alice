@@ -1,8 +1,12 @@
-# Vendor console (Phases 1, 3 and 4)
+# Vendor console (Phases 1, 3, 4 and 5)
 
 The vendor console keeps the vendor's customers, license requests and issued licenses in a
 PostgreSQL database and issues licenses from requests. It is for the vendor only and is never
 part of a customer build. Design: `docs/superpowers/specs/2026-10-15-vendor-console-design.md`.
+
+Operations (roles, key ceremony, onboarding and offboarding, a lost signing key, backups and the
+restore drill, tamper checks, monitoring, incidents, quarterly and yearly checks):
+[vendor-console-operations.md](vendor-console-operations.md).
 
 ## Set up the database
 
@@ -41,14 +45,46 @@ tool made the change.
 
 ## What the audit check proves
 
-`audit-verify` proves that no audit row was edited or removed from the middle of the log. It does
-not prove that the newest rows were not removed. A signed checkpoint that closes this gap is
-planned for Phase 5.
+`audit-verify` proves that no audit row was edited or removed from the middle of the log. On its
+own it does not prove that the newest rows were not removed. The weekly summary mail closes that
+gap: its last line is `Audit head: <seq>:<hash>`, the newest audit row when it was written, and the
+owner's mailbox keeps it outside the database. As the owner login:
+
+    vendor-console audit-verify --head <seq>:<hash>   # chain intact and rows up to the checkpoint still there
+    vendor-console audit-head                         # the current head, to keep elsewhere (owner or notifier login)
+
+A mismatch means rows up to the checkpoint were removed or replaced after it was taken; see the
+runbook, section 7, for what to do.
+
+## Owner commands
+
+As the owner login:
+
+    vendor-console audit show [--since YYYY-MM-DD] [--actor NAME] [--action PREFIX] [--limit 50] [--details]
+    vendor-console license revoke --id LIC-... --reason "customer cancelled"
+    vendor-console verify-licenses --keyset internal/license/keys/production.json   # or --pub FILE (repeatable)
+
+- `audit show` prints audit rows newest first (sequence, UTC time, actor, action, subject), at most
+  1000 (`--limit`, default 50). `--action` matches a prefix (`license.`). `--details` adds each
+  row's details. Installation IDs are never printed; they appear as `inst#` and 8 hex digits (a
+  fingerprint, the same for the same ID). The audit log is readable only by the owner login, so
+  there is no audit page on the sales web service.
+- `license revoke` marks the license revoked in the vendor records: reminders stop and the reason
+  goes into the `license.revoke` audit row. The customer's installation is **not** affected:
+  license files are checked offline. Revoking a signing key is a product release (runbook,
+  section 4).
+- `verify-licenses` re-checks every stored license (after a restore, or any time): the file hash,
+  the signature against the given keys (a revoked key judged at the license's own issue date) and
+  that the row's license ID, installation, key ID, dates, targets and replaced license agree with
+  the signed file. It does not compare the customer name (names may be corrected after issue) or
+  the features. It prints `checked N, problems M`, one line per problem, and exits 1 when there are
+  problems; on an empty database it also prints `WARNING: no licenses found`. Any login that can
+  read the license files may run it (owner, signer, sales).
 
 ## Not yet there
 
-YubiKey signing (Phase 2). The owner's audit view on the web page was not built in Phase 4 and
-is planned for Phase 5; until then read the `audit` table with SQL and run `audit-verify`.
+YubiKey signing (Phase 2). Until it is built, licenses are signed with the passphrase key file; see
+the runbook, section 2.
 
 ## Sales web service
 
@@ -88,7 +124,8 @@ Environment:
 - `VENDOR_WEB_RPID`: the passkey domain. Default: the host of the origin. Passkeys are bound to
   it; changing it later makes every enrolled passkey useless.
 
-Flags: `--listen :8443` (default), `--tls-cert FILE --tls-key FILE` (both or neither).
+Flags: `--listen :8443` (default), `--tls-cert FILE --tls-key FILE` (both or neither),
+`--trusted-proxy CIDR` (repeatable, see below).
 
     vendor-web --listen :8443 --tls-cert cert.pem --tls-key key.pem
 
@@ -101,11 +138,23 @@ front and let `vendor-web` listen on a private address. The proxy must pass `Ori
 unchanged. A form post from another site is refused with 403, and the check compares `Origin` with
 `VENDOR_WEB_ORIGIN`.
 
-`X-Forwarded-For` is ignored in this phase. The sign-in rate limit is 10 attempts a minute for each
-address (for IPv6, for each /64 network). Behind a reverse proxy it sees only the proxy's address,
-so all clients share one counter: anyone can block every sign-in by sending 11 requests a minute.
-Until a trusted-proxy option exists, prefer running with `--tls-cert`/`--tls-key` and a firewall in
-front instead of a proxy. If you do use a proxy, set a rate limit there too.
+The sign-in rate limit is 10 attempts a minute for each client address (for IPv6, for each /64
+network). Behind a reverse proxy, name the proxy with `--trusted-proxy`:
+
+    vendor-web --listen 127.0.0.1:8443 --trusted-proxy 127.0.0.1/32
+    vendor-web --listen 10.0.0.5:8443 --trusted-proxy 10.0.0.0/24 --trusted-proxy fd00::/64
+
+A value is a CIDR range or a single address; a range that covers every address (`0.0.0.0/0`,
+`::/0`) is refused. Only when the connection comes from a trusted range is `X-Forwarded-For` read,
+and then the client is the right-most address in it that is not itself in a trusted range (entries
+further left are written by the client and never chosen over it). An entry that cannot be read ends
+the walk and the request counts against the proxy's own address. The proxy must append the
+client's address to `X-Forwarded-For`. The header is used for the rate limit only.
+
+Without `--trusted-proxy`, `X-Forwarded-For` is ignored. Behind a proxy the limiter then sees only
+the proxy's address, so all clients share one counter: anyone can block every sign-in by sending 11
+requests a minute. Either set `--trusted-proxy`, or run with `--tls-cert`/`--tls-key` and a
+firewall in front instead of a proxy. Setting a rate limit on the proxy too does no harm.
 
 ### Cookies and sessions
 
@@ -152,15 +201,16 @@ Use `VENDOR_WEB_ORIGIN=http://localhost:8443` and a database on the same compute
   load balancer would fail some sign-ins. Restarting loses only ceremonies in progress.
 - Backup of the database includes the `web_users`, `web_credentials`, `web_enrollments` and
   `web_sessions` tables. A restore keeps passkeys working if `VENDOR_WEB_RPID` is unchanged.
-  Sessions are not worth restoring.
+  Sessions are not worth restoring. Backups and the restore drill: runbook, section 6.
 
 ### After a break-in of the web service
 
 The service login cannot sign licenses, but it can add a passkey to any web user and then sign in
 as that person. After a suspected break-in of the server that runs `vendor-web`:
 
-1. Review the audit rows with action `webuser.passkey_add` and the `web_credentials` table for
-   passkeys that nobody registered.
+1. Review the audit rows with action `webuser.passkey_add`
+   (`vendor-console audit show --action webuser.passkey_add --details`) and the `web_credentials`
+   table for passkeys that nobody registered.
 2. `vendor-console web-user disable NAME` for every affected person (create a new name for them
    later; see above).
 3. Rotate the service login's password (`ALTER ROLE vendor_web_svc PASSWORD '...'`) and update
@@ -351,16 +401,23 @@ submit. Nothing is stored before that.
 A mail that cannot be sent is tried again with a growing delay of 2^n minutes (2, 4, 8, ... up to 6
 hours) after the n-th failure, and is marked failed after 10 failures (about 14 hours of trying). A
 message the sender refuses before connecting (a malformed address) is marked failed at once, since a
-retry cannot help. Failed mails are listed in the weekly summary. The owner login can read the
-outbox (and the reminder records) but not change them:
+retry cannot help. Failed mails are listed in the weekly summary, and at any time with
+
+    vendor-console notify failed      # owner or notifier login
+
+The owner login can also read the outbox (and the reminder records) with SQL, but not change them:
 
     select id, kind, to_addrs, created_at, attempts, last_error from mail_outbox where failed_at is not null order by id desc;
 
 A failed mail is not sent again by itself. Fix the cause (an address, the SMTP login) and either let
-the next event create a new mail or put the row back in the queue. The owner login cannot do that;
-run it with the notifier login (it may change exactly these columns) or the migration login:
+the next event create a new mail or put the mail back in the queue, with the notifier login:
 
-    UPDATE mail_outbox SET failed_at = NULL, attempts = 0, last_error = '', next_attempt_at = now() WHERE id = N;
+    vendor-console notify retry ID
+
+The next `notify run` sends it with a fresh attempt count. Only a failed, unsent mail is changed;
+the owner login is refused. Each retry writes a `mail.retry` audit row. That row is an audit trail,
+not a tamper-proof control: the notifier login may add mail to the outbox, so it can also queue a
+mail without a retry row.
 
 ### Address rules
 
