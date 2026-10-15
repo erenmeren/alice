@@ -1,10 +1,7 @@
 package oidc
 
 import (
-	"bytes"
 	"context"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"regexp"
@@ -21,6 +18,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth/oidc/claims"
 	"alice/internal/platform/db"
+	"alice/internal/platform/pemca"
 	"alice/internal/platform/settings"
 	"alice/internal/platform/validate"
 	"alice/internal/secrets"
@@ -32,8 +30,6 @@ const (
 	maxClientID    = 255
 	maxSecretBytes = 1024
 	maxScopes      = 10
-	maxCAPEMBytes  = 64 << 10
-	maxCACerts     = 20
 )
 
 var (
@@ -179,7 +175,7 @@ func (f fields) validate() error {
 	if !groupsClaimRE.MatchString(f.groupsClaim) {
 		v.Add("groups_claim", validate.Pattern, nil)
 	}
-	if !validCAPEM(f.caPEM) {
+	if !pemca.Valid(f.caPEM) {
 		v.Add("ca_pem", validate.Pattern, nil)
 	}
 	return v.Err()
@@ -206,32 +202,6 @@ func validateScopes(v *validate.Errors, scopes []string) {
 		}
 		seen[sc] = true
 	}
-}
-
-// validCAPEM accepts "" or 1 to 20 PEM CERTIFICATE blocks that parse, within 64 KiB, and nothing else.
-func validCAPEM(s string) bool {
-	if s == "" {
-		return true
-	}
-	if len(s) > maxCAPEMBytes {
-		return false
-	}
-	rest, n := []byte(s), 0
-	for {
-		var b *pem.Block
-		b, rest = pem.Decode(rest)
-		if b == nil {
-			break
-		}
-		if b.Type != "CERTIFICATE" || n == maxCACerts {
-			return false
-		}
-		if _, err := x509.ParseCertificate(b.Bytes); err != nil {
-			return false
-		}
-		n++
-	}
-	return n > 0 && len(bytes.TrimSpace(rest)) == 0
 }
 
 // uniqueError turns a violated unique index into the field it names.
