@@ -1,0 +1,145 @@
+// Package issue turns an open license request into a signed license in one database transaction:
+// lock the request, check it is still what the signer saw, apply the correction rules, sign,
+// record the license, close the request and write the audit row. If any step fails nothing is
+// recorded.
+package issue
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"alice/internal/license"
+	"alice/internal/license/issuer"
+	"alice/internal/platform/db"
+	"alice/internal/vconsole/audit"
+	"alice/internal/vconsole/sign"
+	"alice/internal/vconsole/store"
+)
+
+// Errors. They mirror the refusals of licensectl's ledger.
+var (
+	ErrNotOpen            = errors.New("issue: the request is not open")
+	ErrRequestChanged     = errors.New("issue: the request changed after it was shown; look at it again")
+	ErrUnknownReplaced    = errors.New("issue: the license named by the request is not recorded")
+	ErrOtherInstallation  = errors.New("issue: the replaced license is for another installation")
+	ErrShortensTerm       = errors.New("issue: the correction ends earlier than the license it replaces; set Shorten if that is intended")
+	ErrDuplicateLicenseID = errors.New("issue: a license with this ID was already issued")
+)
+
+// Params selects the request and what the signer saw.
+type Params struct {
+	RequestID    int64
+	ExpectedHash string // store.RequestHash of the request as the signer saw it
+	LicenseID    string // "" = LIC-<year>-<6 random digits>
+	Shorten      bool   // allow a correction to end earlier than the license it replaces
+}
+
+// Result is the issued license.
+type Result struct {
+	LicenseID  string
+	File       []byte
+	KeyID      string
+	FileSHA256 string
+	ValidUntil time.Time
+}
+
+// Issue signs the request with s. pool must act as a signer login.
+func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now time.Time) (Result, error) {
+	var res Result
+	err := db.InTx(ctx, pool, func(tx pgx.Tx) error {
+		// Lock the row so two signers cannot both issue from one request.
+		var status string
+		err := tx.QueryRow(ctx, `SELECT status FROM license_requests WHERE id = $1 FOR UPDATE`, p.RequestID).Scan(&status)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return store.ErrNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("issue: lock request: %w", err)
+		}
+		if status != "open" {
+			return ErrNotOpen
+		}
+		req, err := store.GetRequest(ctx, tx, p.RequestID)
+		if err != nil {
+			return err
+		}
+		if store.RequestHash(req) != p.ExpectedHash {
+			return ErrRequestChanged
+		}
+		payload, err := issuer.BuildPayload(issuer.Request{
+			Installation: req.Installation, Customer: req.Customer, Targets: req.Targets, From: req.From,
+			Months: req.Months, Features: req.Features, Replaces: req.Replaces, LicenseID: p.LicenseID,
+		}, now)
+		if err != nil {
+			return err
+		}
+		if err := checkCorrection(ctx, tx, payload, p.Shorten); err != nil {
+			return err
+		}
+		raw, err := s.Issue(ctx, payload)
+		if err != nil {
+			return fmt.Errorf("issue: sign: %w", err)
+		}
+		// Never record a file the product would not accept.
+		if _, err := sign.Verify(raw, s); err != nil {
+			return fmt.Errorf("issue: the signed file does not verify: %w", err)
+		}
+		sum := sha256.Sum256(raw)
+		res = Result{LicenseID: payload.LicenseID, File: raw, KeyID: s.KeyID(), FileSHA256: hex.EncodeToString(sum[:]),
+			ValidUntil: payload.ValidUntil}
+		_, err = tx.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
+			valid_from, valid_until, targets, replaces, file, file_sha256)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			payload.LicenseID, req.ID, req.CustomerID, payload.InstallationID, s.KeyID(), payload.IssuedAt,
+			payload.ValidFrom, payload.ValidUntil, payload.MaxTargets, payload.Replaces, raw, res.FileSHA256)
+		if db.IsUniqueViolationOn(err, "licenses_pkey") {
+			return ErrDuplicateLicenseID
+		}
+		if err != nil {
+			return fmt.Errorf("issue: record license: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE license_requests SET status = 'signed' WHERE id = $1`, req.ID); err != nil {
+			return fmt.Errorf("issue: close request: %w", err)
+		}
+		_, err = audit.Append(ctx, tx, "license.issue", payload.LicenseID, map[string]any{
+			"request": req.ID, "customer": req.Customer, "installation": payload.InstallationID,
+			"targets": payload.MaxTargets, "valid_until": payload.ValidUntil.Format(time.RFC3339),
+			"key_id": s.KeyID(), "file_sha256": res.FileSHA256, "replaces": payload.Replaces,
+		})
+		return err
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	return res, nil
+}
+
+// checkCorrection applies the rules licensectl's ledger applies to a license that replaces another.
+func checkCorrection(ctx context.Context, q audit.Q, p license.Payload, shorten bool) error {
+	if p.Replaces == "" {
+		return nil
+	}
+	var inst string
+	var until time.Time
+	err := q.QueryRow(ctx, `SELECT installation, valid_until FROM licenses WHERE license_id = $1`, p.Replaces).Scan(&inst, &until)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrUnknownReplaced
+	}
+	if err != nil {
+		return fmt.Errorf("issue: read replaced license: %w", err)
+	}
+	if inst != p.InstallationID {
+		return ErrOtherInstallation
+	}
+	if p.ValidUntil.Before(until) && !shorten {
+		return ErrShortensTerm
+	}
+	return nil
+}
