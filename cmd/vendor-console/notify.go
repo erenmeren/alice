@@ -88,7 +88,10 @@ func (c *cli) settings(args []string) int {
 		}
 		for _, k := range shownSettings {
 			v, ok := stored[k]
-			if !ok {
+			switch {
+			case !ok && k == "timezone":
+				v = "(not set; " + notify.DefaultTimezone + " is used)"
+			case !ok:
 				v = "(not set)"
 			}
 			_, _ = fmt.Fprintf(c.out, "%-16s %s\n", k, termSafe(v))
@@ -179,9 +182,12 @@ func (c *cli) notifyRun(args []string) int {
 	_, _ = fmt.Fprintf(c.out, "reminders: %d created\n", reminders)
 	summary, err := notify.WeeklySummary(ctx, pool, now)
 	errs = append(errs, err)
-	if summary {
+	switch {
+	case err != nil:
+		_, _ = fmt.Fprintln(c.out, "weekly summary: failed")
+	case summary:
 		_, _ = fmt.Fprintln(c.out, "weekly summary: created")
-	} else {
+	default:
 		_, _ = fmt.Fprintln(c.out, "weekly summary: not due")
 	}
 	pruned, err := notify.Prune(ctx, pool, now)

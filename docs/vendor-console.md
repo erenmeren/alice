@@ -419,8 +419,9 @@ One run does these steps in order, and a failing step does not stop the next one
 printed at the end and the exit code is 1):
 
 1. Create expiry reminders (below). Prints `reminders: N created`.
-2. Create the weekly summary when one is due (below). Prints `weekly summary: created` or
-   `weekly summary: not due`.
+2. Create the weekly summary when one is due (below). Prints `weekly summary: created`,
+   `weekly summary: not due`, or `weekly summary: failed` when the step ended with an error (then
+   nothing of it was kept: no summary and no new `last_summary_at`, so the next run tries again).
 3. Prune old notifications (below). Prints `pruned: N`.
 
 Before the steps it warns on standard error when no enabled web user has the role owner
@@ -508,7 +509,8 @@ The time zone is a setting, as the owner login:
     vendor-console settings show
 
 `timezone` is an IANA name; it decides what counts as night and as a day in the summary, and its
-changes are audited (`settings.set`). It is the only setting. `settings show` also prints
+changes are audited (`settings.set`). It is the only setting; when it is not set, `settings show`
+prints `timezone (not set; Europe/Istanbul is used)`. `settings show` also prints
 `last_summary_at`, which the program keeps: if it is missing, unreadable or more than an hour in the
 future, a summary is created at the next run. Storing it writes a `settings.set` audit row for
 `last_summary_at` with the notifier login as the actor, one per summary.

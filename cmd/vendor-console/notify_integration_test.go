@@ -120,7 +120,7 @@ func TestSettingsAsOwnerAndNotAsSales(t *testing.T) {
 	clk := clock.Real{}
 	out, se, code := e.do("owner", clk, "settings", "show")
 	require.Equal(t, 0, code, se)
-	assert.Equal(t, "timezone         (not set)\nlast_summary_at  (not set)\n", out)
+	assert.Equal(t, "timezone         (not set; Europe/Istanbul is used)\nlast_summary_at  (not set)\n", out)
 
 	_, se, code = e.do("owner", clk, "settings", "set", "timezone", "Europe/Berlin")
 	require.Equal(t, 0, code, se)
@@ -306,6 +306,27 @@ func TestNotifyRunGoesOnWhenAStepFails(t *testing.T) {
 		assert.Equal(t, "reminders: 0 created\nweekly summary: created\npruned: 0\n", out, "the summary and the prune still ran")
 		assert.Zero(t, e.count("reminders"))
 		assert.Len(t, e.strings(`SELECT kind FROM notifications WHERE kind = 'summary.weekly'`), 1)
+	})
+	t.Run("summary", func(t *testing.T) {
+		e := newNotifyEnv(t, "t_ch")
+		fake := clock.NewFake(time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC))
+		e.issueOne(fake, "Gamma Ltd")
+		e.exec(`REVOKE EXECUTE ON FUNCTION notify_mark_summary(timestamptz) FROM vendor_notifier`)
+		fake.Advance(345 * 24 * time.Hour)
+		// One read notification old enough to be pruned, so the prune shows that it ran.
+		_, se, code := e.do("owner", clock.Real{}, "web-user", "add", "boss", "--owner")
+		require.Equal(t, 0, code, se)
+		e.exec(`INSERT INTO notifications (kind, title, audience, dedupe_key, created_at)
+			VALUES ('test', 't', 'owner', 'old-read', now() - interval '200 days')`)
+		e.exec(`INSERT INTO notification_reads (notification_id, user_id)
+			SELECT n.id, w.id FROM notifications n, web_users w WHERE n.dedupe_key = 'old-read'`)
+
+		out, se, code := e.do("notifier", fake, "notify", "run")
+		assert.Equal(t, 1, code)
+		assert.Contains(t, se, "notify: summary: mark")
+		assert.Equal(t, "reminders: 1 created\nweekly summary: failed\npruned: 1\n", out, "the reminders and the prune still ran")
+		assert.NotZero(t, e.count("reminders"))
+		assert.Empty(t, e.strings(`SELECT kind FROM notifications WHERE kind = 'summary.weekly'`), "a failed mark leaves no summary")
 	})
 	t.Run("prune", func(t *testing.T) {
 		e := newNotifyEnv(t, "t_cg")

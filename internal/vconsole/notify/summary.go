@@ -18,8 +18,9 @@ import (
 const (
 	// summaryEvery is the minimum gap between two summaries and the period of the first one.
 	summaryEvery = 7 * day
-	// defaultTimezone is used when the timezone setting is missing or empty (the company's zone).
-	defaultTimezone = "Europe/Istanbul"
+	// DefaultTimezone is used when the timezone setting is missing or empty (the company's zone);
+	// exported so "settings show" can name it.
+	DefaultTimezone = "Europe/Istanbul"
 	// maxSectionLines keeps the notice readable; the rest of a section is counted, not listed.
 	// When the body would not fit the 4000-character column, sections list fewer lines.
 	maxSectionLines = 20
@@ -329,7 +330,7 @@ func parseLastSummary(v string) (time.Time, bool) {
 // visible warning. "Local" is refused: it means the host's zone, not a configured one.
 func summaryZone(name string) (*time.Location, string) {
 	if name == "" {
-		name = defaultTimezone
+		name = DefaultTimezone
 	}
 	if name != "Local" {
 		if loc, err := time.LoadLocation(name); err == nil {
