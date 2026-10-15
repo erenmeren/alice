@@ -102,25 +102,41 @@ END
 $$;
 -- +goose StatementEnd
 
+-- One line of mail text from a free-text value: every run of control characters (line breaks,
+-- escape sequences) and bidi or zero-width format characters becomes one space, then the first 200
+-- characters are kept. The \u escapes are read by the regex engine (standard_conforming_strings).
+-- +goose StatementBegin
+CREATE FUNCTION vendor_mail_line(s text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+    SELECT left(regexp_replace(s, '[[:cntrl:]\u00AD\u061C\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]+', ' ', 'g'), 200)
+$$;
+-- +goose StatementEnd
+
 -- The owner mail is written by the same statement that inserts the license, whatever client does it.
 -- With no owner address the row is kept with an empty recipient list; the sender waits for one.
+-- "Signed by" is the acting login (vendor_actor(), as in the audit row): signed_by is only a column
+-- default the inserting client can override, so a different value is shown as "Recorded signer".
 -- +goose StatementBegin
 CREATE FUNCTION vendor_notify_license() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
     cust  text;
     owner text;
+    actor text := vendor_actor();
 BEGIN
     SELECT name INTO cust FROM customers WHERE id = NEW.customer_id;
     SELECT value INTO owner FROM vendor_settings WHERE key = 'owner_email';
     INSERT INTO mail_outbox (kind, to_addrs, subject, body)
     VALUES ('issued',
             CASE WHEN coalesce(owner, '') = '' THEN '{}'::text[] ELSE ARRAY[owner] END,
-            left(regexp_replace(format('License issued: %s (%s)', cust, NEW.license_id), '[\r\n]+', ' ', 'g'), 200),
-            format(E'A license was issued.\n\nCustomer: %s\nLicense: %s\nTargets: %s\nValid from: %s\nValid until: %s\nSigned by: %s\nKey id: %s\nRequest: %s\n',
-                   left(cust, 200), left(NEW.license_id, 200), NEW.targets,
+            vendor_mail_line(format('License issued: %s (%s)', cust, NEW.license_id)),
+            format(E'A license was issued.\n\nCustomer: %s\nLicense: %s\nTargets: %s\nValid from: %s\nValid until: %s\nSigned by: %s\n%sKey id: %s\nRequest: %s\n',
+                   vendor_mail_line(cust), vendor_mail_line(NEW.license_id), NEW.targets,
                    to_char(NEW.valid_from AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                    to_char(NEW.valid_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-                   left(NEW.signed_by, 200), left(NEW.key_id, 200), NEW.request_id));
+                   vendor_mail_line(actor),
+                   CASE WHEN NEW.signed_by IS DISTINCT FROM actor
+                        THEN format(E'Recorded signer: %s (differs from the login)\n', vendor_mail_line(NEW.signed_by))
+                        ELSE '' END,
+                   vendor_mail_line(NEW.key_id), NEW.request_id));
     RETURN NULL;
 END
 $$;
@@ -138,24 +154,38 @@ $$;
 
 -- Privileges. Nothing is granted to PUBLIC.
 REVOKE ALL ON vendor_settings, mail_outbox, reminders FROM PUBLIC;
-REVOKE ALL ON FUNCTION vendor_settings_stamp(), vendor_audit_settings(), vendor_notify_license(), notify_mark_summary(timestamptz) FROM PUBLIC;
+REVOKE ALL ON FUNCTION vendor_settings_stamp(), vendor_audit_settings(), vendor_mail_line(text), vendor_notify_license(),
+    notify_mark_summary(timestamptz) FROM PUBLIC;
 
 GRANT SELECT, INSERT ON vendor_settings TO vendor_owner;
 GRANT UPDATE (value) ON vendor_settings TO vendor_owner;
 GRANT UPDATE (email) ON web_users TO vendor_owner;
+-- The owner reads the outbox (failed mails) and the reminder record; only the notifier changes them.
+GRANT SELECT ON mail_outbox, reminders TO vendor_owner;
 
+-- The notifier reads only the columns the notify code uses: no customer contacts or notes, no
+-- audit details, no license files, no request contents.
 GRANT USAGE ON SCHEMA public TO vendor_notifier;
 GRANT SELECT (license_id, request_id, customer_id, installation, key_id, issued_at, valid_from, valid_until,
               targets, replaces, file_sha256, signed_by, revoked_at) ON licenses TO vendor_notifier;
-GRANT SELECT ON customers, license_requests, web_users, vendor_settings, audit TO vendor_notifier;
+GRANT SELECT (id, name) ON customers TO vendor_notifier;
+GRANT SELECT (id, customer_id, status, requested_by, requested_at) ON license_requests TO vendor_notifier;
+GRANT SELECT (name, email, disabled_at) ON web_users TO vendor_notifier;
+GRANT SELECT (at, actor, action, subject) ON audit TO vendor_notifier;
+GRANT SELECT ON vendor_settings TO vendor_notifier;
 GRANT SELECT, INSERT ON reminders TO vendor_notifier;
-GRANT SELECT, INSERT, UPDATE ON mail_outbox TO vendor_notifier;
+GRANT SELECT, INSERT ON mail_outbox TO vendor_notifier;
+GRANT UPDATE (to_addrs, sent_at, attempts, last_error, failed_at, next_attempt_at) ON mail_outbox TO vendor_notifier;
 GRANT EXECUTE ON FUNCTION notify_mark_summary(timestamptz) TO vendor_notifier;
 -- license_requests has row-level security; the notifier is not a sales member, so it needs its own read policy.
 CREATE POLICY requests_read_notifier ON license_requests FOR SELECT TO vendor_notifier USING (true);
 
 -- +goose Down
 DROP POLICY requests_read_notifier ON license_requests;
+REVOKE SELECT (id, name) ON customers FROM vendor_notifier;
+REVOKE SELECT (id, customer_id, status, requested_by, requested_at) ON license_requests FROM vendor_notifier;
+REVOKE SELECT (name, email, disabled_at) ON web_users FROM vendor_notifier;
+REVOKE SELECT (at, actor, action, subject) ON audit FROM vendor_notifier;
 REVOKE ALL ON customers, license_requests, web_users, audit FROM vendor_notifier;
 REVOKE ALL ON licenses FROM vendor_notifier;
 REVOKE SELECT (license_id, request_id, customer_id, installation, key_id, issued_at, valid_from, valid_until,
@@ -163,6 +193,8 @@ REVOKE SELECT (license_id, request_id, customer_id, installation, key_id, issued
 DROP FUNCTION notify_mark_summary(timestamptz);
 DROP TRIGGER licenses_notify ON licenses;
 DROP FUNCTION vendor_notify_license();
+DROP FUNCTION vendor_mail_line(text);
+REVOKE SELECT ON mail_outbox, reminders FROM vendor_owner;
 DROP TABLE reminders, mail_outbox;
 DROP TABLE vendor_settings;
 DROP FUNCTION vendor_audit_settings();

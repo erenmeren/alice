@@ -268,6 +268,10 @@ func TestMarkSummarySetsOnlyLastSummaryAndOnlyForTheNotifier(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 	assert.Equal(t, map[string]string{"owner_email": "a@b.co", "last_summary_at": "2026-10-08T00:00:00Z"}, got)
+	var marks int
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM audit WHERE action = 'settings.set'
+		AND subject = 'last_summary_at' AND actor = 't_n10_notifier'`).Scan(&marks))
+	assert.Equal(t, 2, marks, "each mark is audited under the notifier login")
 
 	for name, p := range map[string]*pgxpool.Pool{
 		"sales":  d.As(t, "vendor_sales", "t_n10_sales"),
@@ -300,5 +304,125 @@ func TestAddressChecksAgreeWithTheSender(t *testing.T) {
 		assert.Equal(t, want, err == nil, "owner_email %q: sender ok=%v, database err=%v", addr, want, err)
 		_, err = d.Owner.Exec(ctx, `UPDATE web_users SET email = $1 WHERE name = 'ayse'`, addr)
 		assert.Equal(t, want, err == nil, "web_users.email %q: sender ok=%v, database err=%v", addr, want, err)
+	}
+}
+
+// issuedMail returns the subject and body of the one issuance mail.
+func issuedMail(t *testing.T, d *vpgtest.DB) (string, string) {
+	t.Helper()
+	var subject, body string
+	require.NoError(t, d.Owner.QueryRow(context.Background(),
+		`SELECT subject, body FROM mail_outbox WHERE kind = 'issued'`).Scan(&subject, &body))
+	return subject, body
+}
+
+func linesWithPrefix(body, prefix string) []string {
+	var out []string
+	for _, l := range strings.Split(body, "\n") {
+		if strings.HasPrefix(l, prefix) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func TestIssuanceMailCleansControlAndBidiCharacters(t *testing.T) {
+	d := vpgtest.New(t)
+	signer := d.As(t, "vendor_signer", "t_n11_signer")
+	issue(t, signer, "LIC-N11", "Acme\nSigned by: mallory\u202e\u2066gro.live\u2069\x1b[31m")
+
+	subject, body := issuedMail(t, d)
+	assert.Equal(t, []string{"Signed by: t_n11_signer"}, linesWithPrefix(body, "Signed by:"),
+		"a name with line breaks must not add a line")
+	for _, s := range []string{subject, body} {
+		assert.NotContains(t, s, "\u202e")
+		assert.NotContains(t, s, "\u2066")
+		assert.NotContains(t, s, "\u2069")
+		assert.NotContains(t, s, "\x1b")
+	}
+	assert.Contains(t, body, "Customer: Acme Signed by: mallory gro.live [31m\n")
+	assert.Contains(t, subject, "Acme Signed by: mallory gro.live [31m (LIC-N11)")
+}
+
+func TestIssuanceMailNamesTheLoginNotAForgedSigner(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	signer := d.As(t, "vendor_signer", "t_n12_signer")
+	c := addCustomer(t, signer, "Forge Inc")
+	rid, err := addRequest(t, signer, c)
+	require.NoError(t, err)
+	_, err = signer.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
+		valid_from, valid_until, targets, file, file_sha256, signed_by) VALUES ('LIC-N12', $1, $2, 'x', 'vk-1', now(), now(),
+		now() + interval '1 year', 1, '\x00', 'x', E'web:boss\nSigned by: x')`, rid, c)
+	require.NoError(t, err)
+
+	_, body := issuedMail(t, d)
+	assert.Equal(t, []string{"Signed by: t_n12_signer"}, linesWithPrefix(body, "Signed by:"))
+	assert.Equal(t, []string{"Recorded signer: web:boss Signed by: x (differs from the login)"},
+		linesWithPrefix(body, "Recorded signer:"))
+
+	// The default signed_by is the login: no Recorded signer line then.
+	issue(t, signer, "LIC-N12B", "Plain Ltd")
+	var body2 string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT body FROM mail_outbox WHERE subject LIKE '%LIC-N12B%'`).Scan(&body2))
+	assert.Empty(t, linesWithPrefix(body2, "Recorded signer:"))
+}
+
+func TestOwnerReadsTheOutboxAndReminders(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	owner := d.As(t, "vendor_owner", "t_n13_owner")
+	signer := d.As(t, "vendor_signer", "t_n13_signer")
+	issue(t, signer, "LIC-N13", "Iota")
+	_, err := d.Owner.Exec(ctx, `INSERT INTO reminders (license_id, days_before) VALUES ('LIC-N13', 90)`)
+	require.NoError(t, err)
+
+	var n int
+	require.NoError(t, owner.QueryRow(ctx, `SELECT count(*) FROM mail_outbox WHERE failed_at IS NULL`).Scan(&n))
+	assert.Equal(t, 1, n)
+	require.NoError(t, owner.QueryRow(ctx, `SELECT count(*) FROM reminders`).Scan(&n))
+	assert.Equal(t, 1, n)
+	for _, q := range []string{
+		`UPDATE mail_outbox SET failed_at = NULL`,
+		`DELETE FROM mail_outbox`,
+		`INSERT INTO reminders (license_id, days_before) VALUES ('LIC-N13', 60)`,
+	} {
+		_, err := owner.Exec(ctx, q)
+		require.Error(t, err, q)
+		assert.Equal(t, "42501", pgCode(t, err), q)
+	}
+}
+
+func TestNotifierReadsOnlyTheColumnsItNeeds(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	signer := d.As(t, "vendor_signer", "t_n14_signer")
+	nt := d.As(t, "vendor_notifier", "t_n14_notifier")
+	issue(t, signer, "LIC-N14", "Kappa")
+
+	for _, q := range []string{
+		`SELECT contact FROM customers`,
+		`SELECT notes FROM customers`,
+		`SELECT details FROM audit`,
+		`SELECT * FROM audit`,
+		`SELECT installation FROM license_requests`,
+		`SELECT created_by FROM web_users`,
+		`UPDATE mail_outbox SET body = 'x'`,
+		`UPDATE mail_outbox SET subject = 'x'`,
+		`UPDATE mail_outbox SET kind = 'x'`,
+	} {
+		_, err := nt.Exec(ctx, q)
+		require.Error(t, err, q)
+		assert.Equal(t, "42501", pgCode(t, err), q)
+	}
+	for _, q := range []string{
+		`SELECT id, name FROM customers`,
+		`SELECT at, actor, action, subject FROM audit`,
+		`SELECT id, customer_id, status, requested_by, requested_at FROM license_requests`,
+		`SELECT name, email, disabled_at FROM web_users`,
+		`UPDATE mail_outbox SET failed_at = NULL, attempts = 0, last_error = '', next_attempt_at = now() WHERE id = 1`,
+	} {
+		_, err := nt.Exec(ctx, q)
+		require.NoError(t, err, q)
 	}
 }
