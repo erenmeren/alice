@@ -465,3 +465,48 @@ func TestHeaderFoldingHasNoBlankContinuation(t *testing.T) {
 		assert.NotEmpty(t, strings.TrimSpace(l), "%q", b.String())
 	}
 }
+
+func TestValidateAddress(t *testing.T) {
+	for _, ok := range []string{"a@b.co", "e.altan+x@sub.example.com", "o'brien@example.com", "x_y@a-b.example",
+		"!#$%&'*+/=?^_`{|}~-@example.com"} {
+		assert.NoError(t, ValidateAddress(ok), ok)
+	}
+	for _, bad := range []string{"", "a", "a@b", "a@localhost", "@b.co", "a@", "a@@b.co", "a b@c.co", "a@b .co",
+		".a@b.co", "a.@b.co", "a..b@c.co", "a@-b.co", "a@b-.co", "a@b..co", "a@.b.co", "a@b.co.", "a@b_c.co",
+		"ayşe@example.com", "a@exämple.com", `"a"@b.co`, "Boss <boss@example.com>", "a@b.co\r", "a@b.co\nBcc: x@y.co",
+		"a@b.co,c@d.co", strings.Repeat("a", 250) + "@b.co"} {
+		err := ValidateAddress(bad)
+		assert.Error(t, err, "%q", bad)
+		assert.ErrorIs(t, err, ErrInvalidMessage, "%q", bad)
+	}
+}
+
+func TestLocalValidationErrorsAreInvalidMessage(t *testing.T) {
+	rnd := func() io.Reader { return bytes.NewReader(bytes.Repeat([]byte{1}, 16)) }
+	for name, m := range map[string]Message{
+		"bad to":        {From: "a@b.co", To: []string{"not an address"}, Subject: "s"},
+		"no recipients": {From: "a@b.co", Subject: "s"},
+		"bad from":      {From: "x", To: []string{"a@b.co"}, Subject: "s"},
+		"quoted local":  {From: "a@b.co", To: []string{`"x y"@b.co`}, Subject: "s"},
+	} {
+		_, err := m.Bytes(testNow, rnd())
+		assert.ErrorIs(t, err, ErrInvalidMessage, name)
+	}
+	_, err := Message{From: "a@b.co", To: []string{"a@b.co"}, Subject: "hi\r\nBcc: x@y.co"}.Bytes(testNow, rnd())
+	assert.ErrorIs(t, err, ErrInvalidMessage)
+	assert.ErrorIs(t, err, ErrHeaderInjection, "the older sentinel still matches")
+
+	srv := mailtest.Start(t, mailtest.Options{})
+	s := newTestSender(t, srv, nil)
+	err = s.Send(context.Background(), Message{To: []string{"no at sign"}, Subject: "s", Body: "b"}, testNow)
+	assert.ErrorIs(t, err, ErrInvalidMessage)
+	assert.Empty(t, srv.Messages())
+}
+
+func TestDeliveryErrorsAreNotInvalidMessage(t *testing.T) {
+	srv := mailtest.Start(t, mailtest.Options{RejectRCPT: true})
+	s := newTestSender(t, srv, nil)
+	err := s.Send(context.Background(), Message{To: []string{"a@b.co"}, Subject: "s", Body: "b"}, testNow)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrInvalidMessage, "a refusal by the server may be temporary and is retried")
+}

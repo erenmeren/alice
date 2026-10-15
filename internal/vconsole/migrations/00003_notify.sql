@@ -10,13 +10,17 @@ $$;
 -- +goose StatementEnd
 
 -- Settings. Only keys the code knows; a bad owner address would make the issuance trigger fail and
--- block issuing, so it is validated here.
+-- block issuing, so it is validated here. The address pattern (also on web_users.email) is the
+-- sender's own rule, mail.ValidateAddress: a dot-atom local part of RFC 5322 atext and a domain of
+-- letters, digits and inner hyphens with at least one dot, plain ASCII only. Anything looser would
+-- store addresses the sender always refuses. The strings rely on standard_conforming_strings (on
+-- since PostgreSQL 9.1): the backslash reaches the regex engine as is.
 CREATE TABLE vendor_settings (
     key        text PRIMARY KEY CHECK (key IN ('owner_email', 'timezone', 'last_summary_at')),
     value      text NOT NULL CHECK (length(value) <= 254),
     updated_by text,
     updated_at timestamptz,
-    CHECK (key <> 'owner_email' OR value = '' OR (value ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'))
+    CHECK (key <> 'owner_email' OR value = '' OR value ~ '^[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+)*@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$')
 );
 
 -- +goose StatementBegin
@@ -32,7 +36,7 @@ CREATE TRIGGER vendor_settings_stamp BEFORE INSERT OR UPDATE ON vendor_settings
     FOR EACH ROW EXECUTE FUNCTION vendor_settings_stamp();
 
 ALTER TABLE web_users ADD COLUMN email text NOT NULL DEFAULT ''
-    CONSTRAINT web_users_email_check CHECK (email = '' OR (email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' AND length(email) <= 254));
+    CONSTRAINT web_users_email_check CHECK (email = '' OR (email ~ '^[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+(\.[A-Za-z0-9!#$%&''*+/=?^_`{|}~-]+)*@[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$' AND length(email) <= 254));
 
 CREATE TABLE mail_outbox (
     id              bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

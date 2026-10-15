@@ -39,6 +39,48 @@ const (
 // are refused, never stripped: a CR or LF in an address or subject means the input is wrong.
 var ErrHeaderInjection = errors.New("mail: header value contains a line break")
 
+// ErrInvalidMessage marks a message that can never be sent as it is (a malformed address, no
+// recipients, a line break in a header): retrying cannot help, so the outbox marks it failed at
+// once. Errors from the server or the network do not match it.
+var ErrInvalidMessage = errors.New("mail: invalid message")
+
+// invalidError wraps a local validation failure so that errors.Is matches ErrInvalidMessage as
+// well as whatever the wrapped error matches (ErrHeaderInjection), without changing its text.
+type invalidError struct{ err error }
+
+func (e invalidError) Error() string        { return e.err.Error() }
+func (e invalidError) Unwrap() error        { return e.err }
+func (e invalidError) Is(target error) bool { return target == ErrInvalidMessage }
+
+func invalid(err error) error { return invalidError{err: err} }
+
+// maxAddressLen is the longest address the database accepts (RFC 5321 path limit).
+const maxAddressLen = 254
+
+// ValidateAddress checks a plain address (local@domain, no display name) as configured by the
+// owner: an owner or web-user address. It accepts exactly what both the sender and the database
+// accept: the sender's dot-atom rule, plus the database's stricter domain (at least one dot, labels
+// of letters, digits and inner hyphens) and length (at most 254 characters). The error does not
+// repeat the input, which may contain control characters.
+func ValidateAddress(addr string) error {
+	if len(addr) > maxAddressLen {
+		return invalid(fmt.Errorf("mail: address is longer than %d characters", maxAddressLen))
+	}
+	if !addrSpecOK(addr) {
+		return invalid(errors.New("mail: not a plain ASCII address (local@domain)"))
+	}
+	domain := addr[strings.LastIndexByte(addr, '@')+1:]
+	if !strings.Contains(domain, ".") {
+		return invalid(errors.New("mail: the domain needs at least one dot"))
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return invalid(errors.New("mail: a domain label cannot start or end with '-'"))
+		}
+	}
+	return nil
+}
+
 // Message is one plain-text e-mail.
 type Message struct {
 	From    string // RFC 5322 address; empty means the sender's configured From
@@ -49,25 +91,26 @@ type Message struct {
 
 // Bytes renders the message as RFC 5322 bytes with CRLF line endings, a Date taken from now and
 // a Message-ID drawn from rnd. The body is quoted-printable; a non-ASCII subject is Q-encoded.
+// Validation failures match ErrInvalidMessage.
 func (m Message) Bytes(now time.Time, rnd io.Reader) ([]byte, error) {
 	from, err := parseAddress("from", m.From)
 	if err != nil {
-		return nil, err
+		return nil, invalid(err)
 	}
 	if len(m.To) == 0 {
-		return nil, errors.New("mail: no recipients")
+		return nil, invalid(errors.New("mail: no recipients"))
 	}
 	to := make([]string, 0, len(m.To))
 	for _, t := range m.To {
 		a, err := parseAddress("to", t)
 		if err != nil {
-			return nil, err
+			return nil, invalid(err)
 		}
 		to = append(to, a.header())
 	}
 	subject, err := headerText("subject", m.Subject)
 	if err != nil {
-		return nil, err
+		return nil, invalid(err)
 	}
 	// Trailing blanks carry nothing and could end up alone on a folded line.
 	subject = strings.TrimRight(subject, " ")
@@ -341,7 +384,7 @@ func (s *smtpSender) Send(ctx context.Context, m Message, now time.Time) error {
 	for _, t := range m.To {
 		a, err := parseAddress("to", t) // the same validation Bytes did
 		if err != nil {
-			return err
+			return invalid(err)
 		}
 		rcpts = append(rcpts, a.addr)
 	}

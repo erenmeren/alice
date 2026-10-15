@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/vconsole/mail"
 	"alice/internal/vconsole/vpgtest"
 )
 
@@ -277,5 +278,27 @@ func TestMarkSummarySetsOnlyLastSummaryAndOnlyForTheNotifier(t *testing.T) {
 		_, err := p.Exec(ctx, `SELECT notify_mark_summary(now())`)
 		require.Error(t, err, name)
 		assert.Equal(t, "42501", pgCode(t, err), name)
+	}
+}
+
+// The database must never store an owner or web-user address that the sender would refuse to
+// send to: such an address would only show up as a failed mail, long after it was typed.
+func TestAddressChecksAgreeWithTheSender(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	_, err := d.Owner.Exec(ctx, `INSERT INTO web_users (name) VALUES ('ayse')`)
+	require.NoError(t, err)
+	for _, addr := range []string{
+		"a@b.co", "e.altan+x@sub.example.com", "o'brien@example.com", "x_y@a-b.example", "!#$%&'*+/=?^_`{|}~-@example.com",
+		"a@b", "a@localhost", "@b.co", "a@", "a@@b.co", "a b@c.co", ".a@b.co", "a.@b.co", "a..b@c.co", "a@-b.co",
+		"a@b-.co", "a@b..co", "a@.b.co", "a@b.co.", "a@b_c.co", "ayşe@example.com", "a@exämple.com", `"a"@b.co`,
+		"Boss <boss@example.com>", "a@b.co,c@d.co", "a\\b@c.co", "a@b.co\t", "a@b.co\n", "a\n@b.co", strings.Repeat("a", 250) + "@b.co",
+	} {
+		want := mail.ValidateAddress(addr) == nil
+		_, err := d.Owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('owner_email', $1)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, addr)
+		assert.Equal(t, want, err == nil, "owner_email %q: sender ok=%v, database err=%v", addr, want, err)
+		_, err = d.Owner.Exec(ctx, `UPDATE web_users SET email = $1 WHERE name = 'ayse'`, addr)
+		assert.Equal(t, want, err == nil, "web_users.email %q: sender ok=%v, database err=%v", addr, want, err)
 	}
 }
