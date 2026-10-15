@@ -26,19 +26,20 @@ const (
 
 // Details of a LoginError: where the attempt stopped. They never carry the server's text.
 const (
-	DetailConnect     = "connect"      // no address could be connected (refused, unreachable, refused by netaddr)
-	DetailTimeout     = "timeout"      // an address or an operation took too long
-	DetailTLS         = "tls"          // the certificate or the host name was not trusted
-	DetailServiceBind = "service_bind" // the service account was refused
-	DetailUserSearch  = "user_search"  // the user search failed (base DN, filter, permissions)
-	DetailUserBind    = "user_bind"    // the user's bind failed other than with wrong credentials
-	DetailGroupSearch = "group_search" // the group search failed
-	DetailSizeLimit   = "size_limit"   // the group search returned more entries than allowed
-	DetailUniqueID    = "unique_id"    // the entry has no usable unique id attribute
-	DetailNoSecret    = "bind_unset"   // no service account password is stored
-	DetailNotFound    = "not_found"    // the user search found no entry
-	DetailPassword    = "password"     // the password was refused before any traffic (empty or too long)
-	DetailLoginName   = "login_name"   // the sign-in name was refused before any traffic
+	DetailConnect      = "connect"       // no address could be connected (refused, unreachable, refused by netaddr)
+	DetailTimeout      = "timeout"       // an address or an operation took too long
+	DetailTLS          = "tls"           // the certificate or the host name was not trusted
+	DetailServiceBind  = "service_bind"  // the service account was refused
+	DetailUserSearch   = "user_search"   // the user search failed (base DN, filter, permissions)
+	DetailUserBind     = "user_bind"     // the user's bind failed other than with wrong credentials
+	DetailGroupSearch  = "group_search"  // the group search failed
+	DetailSizeLimit    = "size_limit"    // the group search returned more entries, or an attribute more values, than allowed
+	DetailResponseSize = "response_size" // the directory sent more than MaxResponseBytes on one connection
+	DetailUniqueID     = "unique_id"     // the entry has no usable unique id attribute
+	DetailNoSecret     = "bind_unset"    // no service account password is stored
+	DetailNotFound     = "not_found"     // the user search found no entry
+	DetailPassword     = "password"      // the password was refused before any traffic (empty or too long)
+	DetailLoginName    = "login_name"    // the sign-in name was refused before any traffic
 )
 
 // LoginError is a refused directory sign-in, connection test or sign-in test with its closed Reason and a Detail

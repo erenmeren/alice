@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/auth/ldap/ldapx"
 	"alice/internal/platform/db"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
@@ -93,7 +94,11 @@ func (s *Service) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, l
 		out.Identity, testErr = s.verify(ctx, d, login, password)
 	}
 	details, result := resultDetails(d, testErr)
-	details["login"] = login
+	if details["reason"] != ReasonLoginInvalid {
+		// The name as typed, cut to the longest valid sign-in name; a refused name (control characters, a huge
+		// value) is not recorded.
+		details["login"] = cutRunes(login, ldapx.MaxLoginRunes)
+	}
 	if testErr == nil {
 		role, ok, err := s.ResolveRole(ctx, d.ID, out.Identity.Groups)
 		if err != nil {
@@ -122,4 +127,12 @@ func (e *LoginError) orNil() error {
 		return nil
 	}
 	return e
+}
+
+// cutRunes cuts s to at most n runes.
+func cutRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }

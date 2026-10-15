@@ -36,8 +36,10 @@ type miniServer struct {
 	entries    func(base, filter string) []miniEntry
 	references []string
 	doneCode   uint16
-	binds      []string // bind DNs seen
-	filters    []string // search filters seen
+	endless    bool         // answer a search with an entry whose value never ends
+	sent       atomic.Int64 // bytes written by endless
+	binds      []string     // bind DNs seen
+	filters    []string     // search filters seen
 	sizeLimits []int64
 }
 
@@ -116,8 +118,12 @@ func (m *miniServer) serve(raw net.Conn, cfg *tls.Config) {
 			m.mu.Lock()
 			m.filters = append(m.filters, f)
 			m.sizeLimits = append(m.sizeLimits, size)
-			entries, refs, done := m.entries(base, f), m.references, m.doneCode
+			entries, refs, done, endless := m.entries(base, f), m.references, m.doneCode, m.endless
 			m.mu.Unlock()
+			if endless {
+				m.stream(c, id)
+				return
+			}
 			for _, ref := range refs {
 				r := ber.Encode(ber.ClassApplication, ber.TypeConstructed, goldap.ApplicationSearchResultReference, nil, "ref")
 				r.AppendChild(ber.NewString(ber.ClassUniversal, ber.TypePrimitive, ber.TagOctetString, ref, "uri"))
@@ -128,6 +134,27 @@ func (m *miniServer) serve(raw net.Conn, cfg *tls.Config) {
 			}
 			m.write(c, id, result(goldap.ApplicationSearchResultDone, done))
 		case goldap.ApplicationUnbindRequest:
+			return
+		}
+	}
+}
+
+// stream starts an entry that announces a value of almost 1 GiB and sends zeros until the client goes away.
+func (m *miniServer) stream(c net.Conn, id int64) {
+	const value = 0x3f000000
+	be := func(n int) []byte { return []byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)} }
+	head := append([]byte{0x30, 0x84}, be(3+6+6+value)...)
+	head = append(head, 0x02, 0x01, byte(id))
+	head = append(append(head, 0x64, 0x84), be(6+value)...)
+	head = append(append(head, 0x04, 0x84), be(value)...)
+	if _, err := c.Write(head); err != nil {
+		return
+	}
+	chunk := make([]byte, 64<<10)
+	for {
+		n, err := c.Write(chunk)
+		m.sent.Add(int64(n))
+		if err != nil {
 			return
 		}
 	}

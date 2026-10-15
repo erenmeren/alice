@@ -12,6 +12,7 @@ import (
 	"time"
 
 	goldap "github.com/go-ldap/ldap/v3"
+	"github.com/google/uuid"
 
 	"alice/internal/auth/ldap/ldapx"
 	"alice/internal/platform/netaddr"
@@ -49,6 +50,9 @@ type ConnectionChecker interface {
 type netClient struct {
 	dial   func(ctx context.Context, network, addr string) (net.Conn, error)
 	limits timeouts
+	// Test seams: responseLimit replaces MaxResponseBytes when positive; seen gets every counting connection.
+	responseLimit int64
+	seen          func(*countingConn)
 }
 
 var (
@@ -65,9 +69,46 @@ func (c *netClient) dialer() func(ctx context.Context, network, addr string) (ne
 	}
 }
 
+// Response limits: a directory's answers are small (one user entry, at most GroupSizeLimit group entries). A hostile
+// or broken directory could otherwise stream gigabytes within the operation timeout, or one attribute with millions of
+// values that go-ldap would hold in memory.
+const (
+	// MaxResponseBytes is the most a connection reads from a directory (TLS records included), counted below TLS.
+	MaxResponseBytes = 8 << 20
+	// MaxAttributeValues is the most values of one attribute Alice reads from an entry.
+	MaxAttributeValues = 5000
+)
+
+var errResponseTooLarge = errors.New("ldap: the directory's response exceeds the size limit")
+
+// countingConn counts the bytes read from the network and fails every read once MaxResponseBytes (limit) have been
+// read: go-ldap's reader then ends the connection and the pending request fails.
+type countingConn struct {
+	net.Conn
+	limit int64
+	read  atomic.Int64
+}
+
+func (c *countingConn) Read(p []byte) (int, error) {
+	left := c.limit - c.read.Load()
+	if left <= 0 {
+		return 0, errResponseTooLarge
+	}
+	if int64(len(p)) > left {
+		p = p[:left]
+	}
+	n, err := c.Conn.Read(p)
+	c.read.Add(int64(n))
+	return n, err
+}
+
+// exhausted reports whether the connection read its whole budget.
+func (c *countingConn) exhausted() bool { return c.read.Load() >= c.limit }
+
 // conn is an open, started LDAP connection; close it exactly once.
 type conn struct {
 	l    *goldap.Conn
+	raw  *countingConn
 	stop func() bool
 }
 
@@ -90,7 +131,7 @@ func (c *netClient) connect(ctx context.Context, d Directory) (conn, error) {
 			last = refuse(ReasonMisconfigured, DetailConnect, nil)
 			continue
 		}
-		l, err := c.open(ctx, host, port, roots)
+		l, raw, err := c.open(ctx, host, port, roots)
 		if err != nil {
 			last = err
 			continue
@@ -98,27 +139,38 @@ func (c *netClient) connect(ctx context.Context, d Directory) (conn, error) {
 		l.SetTimeout(c.limits.operation)
 		// The context bounds the whole exchange: when it ends, the connection is closed and the pending request fails.
 		stop := context.AfterFunc(ctx, func() { _ = l.Close() })
-		return conn{l: l, stop: stop}, nil
+		return conn{l: l, raw: raw, stop: stop}, nil
 	}
 	return conn{}, last
 }
 
 // open dials one address and completes the TLS handshake within the dial timeout.
-func (c *netClient) open(ctx context.Context, host string, port int, roots *x509.CertPool) (*goldap.Conn, *LoginError) {
+func (c *netClient) open(ctx context.Context, host string, port int, roots *x509.CertPool) (*goldap.Conn, *countingConn, *LoginError) {
 	dctx, cancel := context.WithTimeout(ctx, c.limits.dial)
 	defer cancel()
-	raw, err := c.dialer()(dctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	nc, err := c.dialer()(dctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
-		return nil, dialError(dctx, err)
+		return nil, nil, dialError(dctx, err)
+	}
+	raw := &countingConn{Conn: nc, limit: c.maxResponse()}
+	if c.seen != nil {
+		c.seen(raw)
 	}
 	tc := tls.Client(raw, &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots, ServerName: host})
 	if err := tc.HandshakeContext(dctx); err != nil {
-		_ = raw.Close()
-		return nil, tlsError(dctx, err)
+		_ = nc.Close()
+		return nil, nil, tlsError(dctx, err)
 	}
 	l := goldap.NewConn(tc, true)
 	l.Start()
-	return l, nil
+	return l, raw, nil
+}
+
+func (c *netClient) maxResponse() int64 {
+	if c.responseLimit > 0 {
+		return c.responseLimit
+	}
+	return MaxResponseBytes
 }
 
 func dialError(ctx context.Context, err error) *LoginError {
@@ -179,13 +231,18 @@ func opError(ctx context.Context, err error, detail string, late bool) *LoginErr
 // do runs one LDAP request and classifies its failure: first by special (the results that mean something else for
 // this request; nil: none), then by opError. late is set when the request ran into (nearly) the operation timeout, so
 // that go-ldap's network error for a timed-out request reads as a timeout.
-func (c *netClient) do(ctx context.Context, detail string, f func() error, special func(error) *LoginError) error {
+func (c *netClient) do(ctx context.Context, cn conn, detail string, f func() error, special func(error) *LoginError) error {
 	var late atomic.Bool
 	timer := time.AfterFunc(c.limits.operation*9/10, func() { late.Store(true) })
 	err := f()
 	timer.Stop()
 	if err == nil {
 		return nil
+	}
+	if cn.raw != nil && cn.raw.exhausted() {
+		// The directory sent more than MaxResponseBytes: a setting (a base DN or filter that returns far too much) or
+		// a hostile server; either way the Administrator's to look at.
+		return refuse(ReasonMisconfigured, DetailResponseSize, err)
 	}
 	if special != nil {
 		if le := special(err); le != nil {
@@ -197,12 +254,12 @@ func (c *netClient) do(ctx context.Context, detail string, f func() error, speci
 
 // serviceBind binds as the directory's service account. Any refusal is directory_misconfigured: the person signing
 // in is never told the service account failed.
-func (c *netClient) serviceBind(ctx context.Context, l *goldap.Conn, d Directory, bindPassword secrets.Plaintext) error {
+func (c *netClient) serviceBind(ctx context.Context, cn conn, d Directory, bindPassword secrets.Plaintext) error {
 	if len(bindPassword.Bytes()) == 0 {
 		return refuse(ReasonMisconfigured, DetailNoSecret, nil)
 	}
-	return c.do(ctx, DetailServiceBind, func() error {
-		_, err := l.SimpleBind(&goldap.SimpleBindRequest{Username: d.BindDN, Password: string(bindPassword.Bytes())})
+	return c.do(ctx, cn, DetailServiceBind, func() error {
+		_, err := cn.l.SimpleBind(&goldap.SimpleBindRequest{Username: d.BindDN, Password: string(bindPassword.Bytes())})
 		return err
 	}, nil)
 }
@@ -245,11 +302,11 @@ func (c *netClient) Authenticate(ctx context.Context, d Directory, bindPassword 
 		return Entry{}, err
 	}
 	defer cn.close()
-	if err := c.serviceBind(ctx, cn.l, d, bindPassword); err != nil {
+	if err := c.serviceBind(ctx, cn, d, bindPassword); err != nil {
 		return Entry{}, err
 	}
 	var res *goldap.SearchResult
-	err = c.do(ctx, DetailUserSearch, func() (err error) {
+	err = c.do(ctx, cn, DetailUserSearch, func() (err error) {
 		res, err = cn.l.Search(&goldap.SearchRequest{BaseDN: d.UserBaseDN, Scope: goldap.ScopeWholeSubtree,
 			DerefAliases: goldap.NeverDerefAliases, SizeLimit: UserSizeLimit, TimeLimit: c.timeLimit(), Filter: filter,
 			Attributes: userAttributes(d), EnforceSizeLimit: true})
@@ -264,7 +321,15 @@ func (c *netClient) Authenticate(ctx context.Context, d Directory, bindPassword 
 	case err != nil:
 		return Entry{}, err
 	case len(res.Entries) == 0:
-		// The same answer as a wrong password.
+		// The same answer as a wrong password, after the same work: a bind with the typed password to a DN that does
+		// not exist, on this connection (the same verified TLS session to the same directory), so an unknown name
+		// takes as long as a wrong password (on AD including the forwarding to the PDC). Its result is ignored; no
+		// account exists that it could lock.
+		absent := "cn=alice-absent-" + uuid.NewString() + "," + d.UserBaseDN
+		_ = c.do(ctx, cn, DetailUserBind, func() error {
+			_, err := cn.l.SimpleBind(&goldap.SimpleBindRequest{Username: absent, Password: string(password.Bytes())})
+			return err
+		}, nil)
 		return Entry{}, refuse(ReasonBadCredentials, DetailNotFound, nil)
 	case len(res.Entries) > 1:
 		return Entry{}, refuse(ReasonAmbiguousUser, DetailUserSearch, nil)
@@ -274,7 +339,7 @@ func (c *netClient) Authenticate(ctx context.Context, d Directory, bindPassword 
 		// A bind with an empty DN and a password is an unauthenticated bind on some servers: never.
 		return Entry{}, refuse(ReasonMisconfigured, DetailUserSearch, nil)
 	}
-	if err := c.do(ctx, DetailUserBind, func() error {
+	if err := c.do(ctx, cn, DetailUserBind, func() error {
 		_, err := cn.l.SimpleBind(&goldap.SimpleBindRequest{Username: e.DN, Password: string(password.Bytes())})
 		return err
 	}, func(err error) *LoginError {
@@ -287,7 +352,11 @@ func (c *netClient) Authenticate(ctx context.Context, d Directory, bindPassword 
 	}
 	out := Entry{DN: e.DN, Attrs: map[string][][]byte{}}
 	for _, a := range userAttributes(d) {
-		if v := e.GetEqualFoldRawAttributeValues(a); len(v) > 0 {
+		v := e.GetEqualFoldRawAttributeValues(a)
+		if len(v) > MaxAttributeValues {
+			return Entry{}, refuse(ReasonMisconfigured, DetailSizeLimit, nil)
+		}
+		if len(v) > 0 {
 			out.Attrs[a] = v
 		}
 	}
@@ -307,7 +376,7 @@ func (c *netClient) Groups(ctx context.Context, d Directory, bindPassword secret
 		return nil, err
 	}
 	defer cn.close()
-	if err := c.serviceBind(ctx, cn.l, d, bindPassword); err != nil {
+	if err := c.serviceBind(ctx, cn, d, bindPassword); err != nil {
 		return nil, err
 	}
 	attrs := []string{"1.1"} // RFC 4511: no attributes
@@ -315,7 +384,7 @@ func (c *netClient) Groups(ctx context.Context, d Directory, bindPassword secret
 		attrs = []string{d.GroupNameAttribute}
 	}
 	var res *goldap.SearchResult
-	if err := c.do(ctx, DetailGroupSearch, func() (err error) {
+	if err := c.do(ctx, cn, DetailGroupSearch, func() (err error) {
 		res, err = cn.l.Search(&goldap.SearchRequest{BaseDN: d.GroupBaseDN, Scope: goldap.ScopeWholeSubtree,
 			DerefAliases: goldap.NeverDerefAliases, SizeLimit: GroupSizeLimit, TimeLimit: c.timeLimit(), Filter: filter,
 			Attributes: attrs, EnforceSizeLimit: true})
@@ -328,9 +397,10 @@ func (c *netClient) Groups(ctx context.Context, d Directory, bindPassword secret
 	}); err != nil {
 		return nil, err
 	}
-	groups := []string{}
+	groups, seen := []string{}, map[string]bool{}
 	add := func(v string) {
-		if v != "" && !slices.Contains(groups, v) {
+		if v != "" && !seen[v] {
+			seen[v] = true
 			groups = append(groups, v)
 		}
 	}
@@ -339,7 +409,11 @@ func (c *netClient) Groups(ctx context.Context, d Directory, bindPassword secret
 			add(e.DN)
 			continue
 		}
-		for _, v := range e.GetEqualFoldAttributeValues(d.GroupNameAttribute) {
+		vals := e.GetEqualFoldAttributeValues(d.GroupNameAttribute)
+		if len(vals) > MaxAttributeValues {
+			return nil, refuse(ReasonMisconfigured, DetailSizeLimit, nil)
+		}
+		for _, v := range vals {
 			add(v)
 		}
 	}
@@ -353,10 +427,10 @@ func (c *netClient) CheckConnection(ctx context.Context, d Directory, bindPasswo
 		return err
 	}
 	defer cn.close()
-	if err := c.serviceBind(ctx, cn.l, d, bindPassword); err != nil {
+	if err := c.serviceBind(ctx, cn, d, bindPassword); err != nil {
 		return err
 	}
-	return c.do(ctx, DetailUserSearch, func() error {
+	return c.do(ctx, cn, DetailUserSearch, func() error {
 		_, err := cn.l.Search(&goldap.SearchRequest{BaseDN: d.UserBaseDN, Scope: goldap.ScopeBaseObject,
 			DerefAliases: goldap.NeverDerefAliases, SizeLimit: 1, TimeLimit: c.timeLimit(), Filter: "(objectClass=*)",
 			Attributes: []string{"1.1"}, EnforceSizeLimit: true})

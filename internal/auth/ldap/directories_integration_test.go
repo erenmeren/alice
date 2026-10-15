@@ -124,7 +124,7 @@ func TestUpdateDirectoryVersionsAndPassword(t *testing.T) {
 	_, err = x.svc.UpdateDirectory(x.ctx, x.admin, d.ID, d.Version, ldap.DirectoryPatch{UserBaseDN: ptr("not a dn")})
 	assert.Equal(t, []string{"user_base_dn"}, fieldNames(t, err))
 	// Other fields keep the stored password.
-	d = x.update(t, ldap.DirectoryPatch{UserBaseDN: ptr(fakeldap.BaseDN), CAPEM: ptr(string(x.srv.CAPEM) + "\n")})
+	d = x.update(t, ldap.DirectoryPatch{UserBaseDN: ptr(fakeldap.BaseDN), MFARequired: ptr(true)})
 	assert.Equal(t, 3, d.Version)
 	assert.True(t, d.BindPasswordSet)
 }
@@ -138,6 +138,8 @@ func TestChangesThatNeedTheBindPasswordAgain(t *testing.T) {
 		"address replaced": {Addresses: &[]string{"ldaps://evil.example.test"}},
 		"bind dn":          {BindDN: ptr("cn=other," + fakeldap.ServicesDN)},
 		"unique id":        {UniqueIDAttribute: ptr("uid")},
+		"ca changed":       {CAPEM: ptr(string(x.srv.CAPEM) + "\n")},
+		"ca cleared":       {CAPEM: ptr("")},
 		"given but empty":  {BindPassword: &secrets.Plaintext{}},
 	} {
 		_, err := x.svc.UpdateDirectory(x.ctx, x.admin, x.dir.ID, x.dir.Version, p)

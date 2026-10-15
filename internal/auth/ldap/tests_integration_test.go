@@ -71,6 +71,8 @@ AND details->>'reason' = 'no_access'`))
 	_, err = x.svc.TestSignIn(x.ctx, x.admin, x.dir.ID, " ada", secrets.NewPlaintext([]byte("wrong")))
 	assert.Equal(t, ldap.ReasonLoginInvalid, reasonOf(err)[0])
 	assert.Equal(t, 2, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested' AND result = 'failure'`))
+	assert.Equal(t, 1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested' AND details->>'reason' = 'login_invalid'
+AND NOT details ? 'login'`), "a refused name is not recorded")
 	_, err = x.svc.TestSignIn(x.ctx, x.admin, uuid.New(), "ada", secrets.NewPlaintext([]byte("p")))
 	assert.ErrorIs(t, err, ldap.ErrNotFound)
 	assert.Equal(t, users, x.count(t, "SELECT count(*) FROM users"), "nothing is stored")

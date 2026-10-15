@@ -168,10 +168,10 @@ func TestGroupSearchTemplateWithDNAndNested(t *testing.T) {
 func TestTLSWrongAuthorityIsRefused(t *testing.T) {
 	x := newHarness(t)
 	other := string(pki.NewCA("other", pki.RSA2048, time.Now()).RootPEM)
-	x.update(t, ldap.DirectoryPatch{CAPEM: &other})
+	x.update(t, ldap.DirectoryPatch{CAPEM: &other, BindPassword: secretPtr(x.srv.ServicePassword())})
 	_, err := x.verify("ada", fakeldap.Ada.Password)
 	assert.Equal(t, [2]string{ldap.ReasonMisconfigured, ldap.DetailTLS}, reasonOf(err))
-	x.update(t, ldap.DirectoryPatch{CAPEM: ptr("")})
+	x.update(t, ldap.DirectoryPatch{CAPEM: ptr(""), BindPassword: secretPtr(x.srv.ServicePassword())})
 	_, err = x.verify("ada", fakeldap.Ada.Password)
 	assert.Equal(t, [2]string{ldap.ReasonMisconfigured, ldap.DetailTLS}, reasonOf(err), "the system roots do not trust the test CA")
 }

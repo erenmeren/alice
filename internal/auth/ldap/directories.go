@@ -98,8 +98,8 @@ type DirectoryInput struct {
 }
 
 // DirectoryPatch changes selected fields; nil fields stay. The caller owns and zeroes BindPassword. A patch that adds
-// an address or changes the bind DN or the unique id attribute needs BindPassword again, so the stored password is
-// never sent to another server or account.
+// an address or changes the bind DN, the unique id attribute or the PEM authority needs BindPassword again, so the
+// stored password is never sent to another server or account.
 type DirectoryPatch struct {
 	Name                 *string
 	Addresses            *[]string
@@ -496,9 +496,9 @@ func hasUsers(ctx context.Context, q db.Querier, id uuid.UUID) (bool, error) {
 }
 
 // UpdateDirectory changes a directory at the given version, audited as ldap.directory_changed. A given
-// BindPassword replaces the stored one. Adding an address or changing the bind DN or the unique id attribute needs
-// the password again (a 422 on bind_password), so the stored one is never sent to another server or account. While
-// the directory has users, its addresses and its unique id attribute cannot change (ErrDirectoryInUse): its users
+// BindPassword replaces the stored one. Adding an address or changing the bind DN, the unique id attribute or the
+// PEM authority needs the password again (a 422 on bind_password), so the stored one is never sent to another server
+// or account. While the directory has users, its addresses and its unique id attribute cannot change (ErrDirectoryInUse): its users
 // are matched by that attribute's value on that server.
 func (s *Service) UpdateDirectory(ctx context.Context, a audit.Actor, id uuid.UUID, version int, p DirectoryPatch) (Directory, error) {
 	cur, err := loadDirectory(ctx, s.pool, id)
@@ -538,7 +538,9 @@ func (s *Service) UpdateDirectory(ctx context.Context, a audit.Actor, id uuid.UU
 	newServer := addedAddress(cur.Addresses, d.Addresses)
 	uniqueChanged := d.UniqueIDAttribute != cur.UniqueIDAttribute
 	inUseCheck := uniqueChanged || !slices.Equal(cur.Addresses, d.Addresses)
-	f := fields{d: d, bindNeeded: newServer || d.BindDN != cur.BindDN || uniqueChanged}
+	// A changed authority (also cleared: the system roots then decide) could make another server trusted: the
+	// stored password is not sent to it without being given again.
+	f := fields{d: d, bindNeeded: newServer || d.BindDN != cur.BindDN || uniqueChanged || d.CAPEM != cur.CAPEM}
 	if p.BindPassword != nil {
 		f.bind, f.bindGiven = p.BindPassword.Bytes(), true
 	}

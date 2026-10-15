@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -374,4 +376,111 @@ func TestLoginErrorText(t *testing.T) {
 	assert.Equal(t, "ldap: the directory sign-in was refused (directory_unreachable)", err.Error())
 	assert.ErrorIs(t, err, cause)
 	assert.Nil(t, (*LoginError)(nil).orNil())
+}
+
+// Review fix: an unknown name does the same work as a wrong password: a bind with the typed password, here to a DN
+// that does not exist, on the same connection; both end in the same reason.
+func TestUnknownUserBindsLikeAWrongPassword(t *testing.T) {
+	m := startMini(t)
+	d := miniDirectory(m)
+	c := fastClient(nil)
+	_, errUnknown := c.Authenticate(context.Background(), d, pw("svc"), "nobody", pw("typed"))
+	m.set(func(m *miniServer) {
+		m.entries = func(string, string) []miniEntry { return []miniEntry{adaEntry} }
+		m.bindCode[adaEntry.dn] = goldap.LDAPResultInvalidCredentials
+	})
+	_, errWrong := c.Authenticate(context.Background(), d, pw("svc"), "ada", pw("typed"))
+	r1, _ := reasonOf(errUnknown)
+	r2, _ := reasonOf(errWrong)
+	assert.Equal(t, ReasonBadCredentials, r1)
+	assert.Equal(t, r1, r2)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	require.Len(t, m.binds, 4)
+	assert.Equal(t, d.BindDN, m.binds[0])
+	assert.True(t, strings.HasPrefix(m.binds[1], "cn=alice-absent-") && strings.HasSuffix(m.binds[1], ","+d.UserBaseDN), m.binds[1])
+	assert.Equal(t, []string{d.BindDN, adaEntry.dn}, m.binds[2:])
+	assert.Equal(t, 2, len(m.filters), "one search each")
+}
+
+// Review fix: a directory cannot make Alice read more than MaxResponseBytes per connection, nor keep more than
+// MaxAttributeValues values of an attribute.
+func TestResponseByteAndValueLimits(t *testing.T) {
+	m := startMini(t)
+	d := miniDirectory(m)
+	var conns []*countingConn
+	var mu sync.Mutex
+	c := fastClient(nil)
+	c.limits.operation = 10 * time.Second
+	c.seen = func(cc *countingConn) { mu.Lock(); conns = append(conns, cc); mu.Unlock() }
+	check := func(name string, err error, reason, detail string) {
+		t.Helper()
+		r, det := reasonOf(err)
+		assert.Equal(t, [2]string{reason, detail}, [2]string{r, det}, "%s: %v", name, err)
+		mu.Lock()
+		defer mu.Unlock()
+		last := conns[len(conns)-1]
+		assert.LessOrEqual(t, last.read.Load(), int64(MaxResponseBytes), name)
+	}
+
+	// An endless value: the read budget ends it long before the operation timeout.
+	m.set(func(m *miniServer) { m.endless = true })
+	start := time.Now()
+	_, err := c.Authenticate(context.Background(), d, pw("svc"), "ada", pw("p"))
+	check("endless", err, ReasonMisconfigured, DetailResponseSize)
+	assert.Less(t, time.Since(start), 5*time.Second)
+	assert.Greater(t, m.sent.Load(), int64(MaxResponseBytes)/2, "the server really streamed")
+
+	// One oversized attribute value.
+	big := strings.Repeat("x", MaxResponseBytes+1024)
+	m.set(func(m *miniServer) {
+		m.endless = false
+		m.entries = func(string, string) []miniEntry {
+			return []miniEntry{{dn: adaEntry.dn, attrs: map[string][]string{"uid": {"ada"}, "cn": {big}}}}
+		}
+	})
+	_, err = c.Authenticate(context.Background(), d, pw("svc"), "ada", pw("p"))
+	check("oversized value", err, ReasonMisconfigured, DetailResponseSize)
+
+	// Too many values of one attribute: in the user entry and in a group entry.
+	many := make([]string, MaxAttributeValues+1)
+	for i := range many {
+		many[i] = "g" + strconv.Itoa(i)
+	}
+	m.set(func(m *miniServer) {
+		m.entries = func(base, _ string) []miniEntry {
+			if strings.HasPrefix(base, "ou=groups") {
+				return []miniEntry{{dn: "cn=g,ou=groups", attrs: map[string][]string{"cn": many}}}
+			}
+			return []miniEntry{{dn: adaEntry.dn, attrs: map[string][]string{"uid": {"ada"}, "mail": many, "entryUUID": {"x"}}}}
+		}
+	})
+	_, err = c.Authenticate(context.Background(), d, pw("svc"), "ada", pw("p"))
+	check("user values", err, ReasonMisconfigured, DetailSizeLimit)
+	_, err = c.Groups(context.Background(), d, pw("svc"), Entry{DN: adaEntry.dn}, "ada")
+	check("group values", err, ReasonMisconfigured, DetailSizeLimit)
+	// At the limit: accepted, deduplicated in order.
+	m.set(func(m *miniServer) {
+		m.entries = func(string, string) []miniEntry {
+			return []miniEntry{{dn: "cn=g,ou=groups", attrs: map[string][]string{"cn": many[:MaxAttributeValues]}},
+				{dn: "cn=h,ou=groups", attrs: map[string][]string{"cn": many[:2]}}}
+		}
+	})
+	groups, err := c.Groups(context.Background(), d, pw("svc"), Entry{DN: adaEntry.dn}, "ada")
+	require.NoError(t, err)
+	assert.Equal(t, many[:MaxAttributeValues], groups)
+}
+
+func TestCountingConnStopsAtTheLimit(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	go func() { _, _ = b.Write(make([]byte, 100)); _ = b.Close() }()
+	cc := &countingConn{Conn: a, limit: 10}
+	buf := make([]byte, 64)
+	n, err := cc.Read(buf)
+	require.NoError(t, err)
+	assert.Equal(t, 10, n, "never more than the budget")
+	assert.True(t, cc.exhausted())
+	_, err = cc.Read(buf)
+	assert.ErrorIs(t, err, errResponseTooLarge)
 }
