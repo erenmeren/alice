@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
@@ -92,29 +93,25 @@ func lastSummaryAt(t *testing.T, d *vpgtest.DB) string {
 	return v
 }
 
-func summaryMails(t *testing.T, d *vpgtest.DB) []reminderMail {
+// summaryNotices returns the weekly summary notifications, oldest first.
+func summaryNotices(t *testing.T, d *vpgtest.DB) []notice {
 	t.Helper()
-	rows, err := d.Owner.Query(context.Background(),
-		`SELECT id, to_addrs, subject, body FROM mail_outbox WHERE kind = 'summary' ORDER BY id`)
-	require.NoError(t, err)
-	defer rows.Close()
-	var out []reminderMail
-	for rows.Next() {
-		var m reminderMail
-		require.NoError(t, rows.Scan(&m.ID, &m.To, &m.Subject, &m.Body))
-		out = append(out, m)
-	}
-	require.NoError(t, rows.Err())
-	return out
+	return notices(t, d, "summary.weekly")
 }
 
-// onlySummary runs WeeklySummary expecting it to enqueue, and returns the body of the one summary.
+// alertNotices returns the unusual-activity notifications, oldest first.
+func alertNotices(t *testing.T, d *vpgtest.DB) []notice {
+	t.Helper()
+	return notices(t, d, "activity.unusual")
+}
+
+// onlySummary runs WeeklySummary expecting it to create a notice, and returns the body of the one summary.
 func onlySummary(t *testing.T, d *vpgtest.DB, p *pgxpool.Pool, now time.Time) string {
 	t.Helper()
 	ok, err := notify.WeeklySummary(context.Background(), p, now)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ms := summaryMails(t, d)
+	ms := summaryNotices(t, d)
 	require.Len(t, ms, 1)
 	return ms[0].Body
 }
@@ -142,7 +139,6 @@ func section(t *testing.T, body, title string) (string, []string) {
 func TestFirstSummaryCoversTheLastSevenDays(t *testing.T) {
 	d := vpgtest.New(t)
 	p := notifier(t, d, "t_s1_notifier")
-	setOwner(t, d, "boss@example.com")
 	seedIssued(t, d, "LIC-IN", "Acme Corp", "web:ayse", summaryNow.Add(-7*day))             // first instant of the period
 	seedIssued(t, d, "LIC-OUT", "Beta Ltd", "web:ayse", summaryNow.Add(-7*day-time.Second)) // just before it
 	seedIssued(t, d, "LIC-LATE", "Gamma", "web:ayse", summaryNow.Add(time.Second))          // after now
@@ -150,10 +146,13 @@ func TestFirstSummaryCoversTheLastSevenDays(t *testing.T) {
 	ok, err := notify.WeeklySummary(context.Background(), p, summaryNow)
 	require.NoError(t, err)
 	assert.True(t, ok)
-	ms := summaryMails(t, d)
+	ms := summaryNotices(t, d)
 	require.Len(t, ms, 1)
-	assert.Equal(t, []string{"boss@example.com"}, ms[0].To)
-	assert.Equal(t, "Weekly summary: 1 issued, 0 open requests, 0 unusual", ms[0].Subject)
+	assert.Equal(t, "owner", ms[0].Audience)
+	assert.Nil(t, ms[0].Target)
+	assert.Equal(t, "info", ms[0].Severity)
+	assert.Equal(t, "summary:2026-10-15", ms[0].DedupeKey, "the period end date in UTC")
+	assert.Equal(t, "Weekly summary: 1 issued, 0 open requests, 0 unusual", ms[0].Title)
 	head, lines := section(t, ms[0].Body, "Issued since")
 	assert.Equal(t, "== Issued since 2026-10-08 12:00 +03 (1) ==", head)
 	require.Len(t, lines, 1)
@@ -162,7 +161,7 @@ func TestFirstSummaryCoversTheLastSevenDays(t *testing.T) {
 	assert.Equal(t, "2026-10-15T09:00:00Z", lastSummaryAt(t, d))
 }
 
-func TestSecondRunWithinSevenDaysSendsNothing(t *testing.T) {
+func TestSecondRunWithinSevenDaysCreatesNothing(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	p := notifier(t, d, "t_s2_notifier")
@@ -180,12 +179,12 @@ func TestSecondRunWithinSevenDaysSendsNothing(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, ok, "at %v", at)
 	}
-	require.Len(t, summaryMails(t, d), 1)
+	require.Len(t, summaryNotices(t, d), 1)
 
 	ok, err = notify.WeeklySummary(ctx, p, summaryNow.Add(7*day))
 	require.NoError(t, err)
 	require.True(t, ok)
-	ms := summaryMails(t, d)
+	ms := summaryNotices(t, d)
 	require.Len(t, ms, 2)
 	_, firstLines := section(t, ms[0].Body, "Issued since")
 	head, lines := section(t, ms[1].Body, "Issued since")
@@ -210,7 +209,7 @@ func TestSummaryListsSectionsInOrderAndCapsLines(t *testing.T) {
 
 	body := onlySummary(t, d, p, summaryNow)
 	var at []int
-	for _, h := range []string{"== Issued since ", "== Open requests (", "== Ending in the next 90 days (", "== Failed e-mails (", "== Unusual ("} {
+	for _, h := range []string{"== Issued since ", "== Open requests (", "== Ending in the next 90 days (", "== Unusual ("} {
 		i := strings.Index(body, h)
 		require.GreaterOrEqual(t, i, 0, h)
 		at = append(at, i)
@@ -274,24 +273,22 @@ func TestSixthLicenseInADayBySameSignerIsUnusual(t *testing.T) {
 	assert.Equal(t, "== Issued since 2026-10-08 12:00 +03 (17) ==", head)
 }
 
-func TestQuietWeekStillSends(t *testing.T) {
+func TestQuietWeekStillCreatesASummary(t *testing.T) {
 	d := vpgtest.New(t)
 	p := notifier(t, d, "t_s6_notifier")
 
 	ok, err := notify.WeeklySummary(context.Background(), p, summaryNow)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ms := summaryMails(t, d)
+	ms := summaryNotices(t, d)
 	require.Len(t, ms, 1)
-	assert.Empty(t, ms[0].To, "no owner address yet: the row waits for it")
-	assert.Equal(t, "Weekly summary: 0 issued, 0 open requests, 0 unusual", ms[0].Subject)
+	assert.Equal(t, "Weekly summary: 0 issued, 0 open requests, 0 unusual", ms[0].Title)
 	want := "Weekly summary of the vendor console.\n\n" +
 		"Period: 2026-10-08 12:00 +03 to 2026-10-15 12:00 +03\n" +
 		"Time zone: Europe/Istanbul\n\n" +
 		"== Issued since 2026-10-08 12:00 +03 (0) ==\nNothing issued.\n\n" +
 		"== Open requests (0) ==\nNone.\n\n" +
 		"== Ending in the next 90 days (0) ==\nNone.\n\n" +
-		"== Failed e-mails (0) ==\nFailures stay listed for 28 days.\nNone.\n\n" +
 		"== Unusual (0) ==\nNone.\n\n"
 	assert.Equal(t, want, ms[0].Body)
 	for _, r := range ms[0].Body {
@@ -332,111 +329,6 @@ func TestKnownTimezoneSettingIsUsed(t *testing.T) {
 	assert.Equal(t, []string{"None."}, lines, "no fallback note for a valid zone")
 }
 
-// insertOutbox inserts an outbox row that gave up at failed (or, with sent set, one that went out).
-func insertOutbox(t *testing.T, d *vpgtest.DB, kind, subject, lastErr string, created time.Time, failed, sent *time.Time) {
-	t.Helper()
-	_, err := d.Owner.Exec(context.Background(), `INSERT INTO mail_outbox (kind, to_addrs, subject, body, created_at, attempts, last_error, failed_at, sent_at)
-		VALUES ($1, '{boss@example.com}', $2, 'b', $3, 10, $4, $5, $6)`, kind, subject, created, lastErr, failed, sent)
-	require.NoError(t, err)
-}
-
-func TestFailedMailsAreListed(t *testing.T) {
-	d := vpgtest.New(t)
-	p := notifier(t, d, "t_s8_notifier")
-	longSubject := "License issued: " + strings.Repeat("x", 150)
-	longErr := "smtp: 550 mailbox unavailable\r\n" + strings.Repeat("y", 300)
-	f1 := summaryNow.Add(-2 * day)
-	f20 := summaryNow.Add(-20 * day)
-	old := summaryNow.Add(-28*day - time.Second)
-	insertOutbox(t, d, "issued", longSubject, longErr, ist(t, 2026, 10, 12, 10, 15, 0), &f1, nil)
-	insertOutbox(t, d, "reminder", "Twenty days ago", "smtp: 554", f20, &f20, nil)
-	insertOutbox(t, d, "reminder", "License ending in 30 days: Old", "smtp: old", old, &old, nil) // older than 28 days
-	insertOutbox(t, d, "reminder", "Sent fine", "", f1, nil, &f1)
-	insertOutbox(t, d, "reminder", "Still retrying", "smtp: 451", f1, nil, nil)
-
-	body := onlySummary(t, d, p, summaryNow)
-	head, lines := section(t, body, "Failed e-mails")
-	assert.Equal(t, "== Failed e-mails (2) ==", head)
-	wantErr := ("smtp: 550 mailbox unavailable" + strings.Repeat("y", 300))[:80]
-	assert.Equal(t, []string{
-		"Failures stay listed for 28 days.",
-		"issued | 2026-10-12 10:15 +03 | " + longSubject[:80] + " | " + wantErr, // most recent first
-		"reminder | 2026-09-25 12:00 +03 | Twenty days ago | smtp: 554",
-	}, lines)
-}
-
-func TestFailureStaysListedInLaterSummaries(t *testing.T) {
-	d := vpgtest.New(t)
-	ctx := context.Background()
-	p := notifier(t, d, "t_s8b_notifier")
-	f := summaryNow.Add(-6 * day)
-	insertOutbox(t, d, "issued", "Failed once", "smtp: 550", f, &f, nil)
-
-	for i, at := range []time.Time{summaryNow, summaryNow.Add(7 * day), summaryNow.Add(14 * day), summaryNow.Add(21 * day)} {
-		ok, err := notify.WeeklySummary(ctx, p, at)
-		require.NoError(t, err)
-		require.True(t, ok)
-		ms := summaryMails(t, d)
-		require.Len(t, ms, i+1)
-		head, _ := section(t, ms[i].Body, "Failed e-mails")
-		assert.Equal(t, "== Failed e-mails (1) ==", head, "summary %d (failure %v old)", i, at.Sub(f))
-	}
-	ok, err := notify.WeeklySummary(ctx, p, summaryNow.Add(28*day))
-	require.NoError(t, err)
-	require.True(t, ok)
-	ms := summaryMails(t, d)
-	head, _ := section(t, ms[len(ms)-1].Body, "Failed e-mails")
-	assert.Equal(t, "== Failed e-mails (0) ==", head, "34 days old: no longer listed")
-}
-
-// SendPending stamps failed_at with its own now while holding the row, so a failure can carry a
-// time after the summary's now; it must be listed, not fall between two summary periods.
-func TestFailureStampedAfterNowIsListed(t *testing.T) {
-	d := vpgtest.New(t)
-	p := notifier(t, d, "t_s8c_notifier")
-	late := summaryNow.Add(30 * time.Second)
-	insertOutbox(t, d, "reminder", "Failed during the summary", "smtp: 421", summaryNow.Add(-time.Hour), &late, nil)
-
-	body := onlySummary(t, d, p, summaryNow)
-	head, lines := section(t, body, "Failed e-mails")
-	assert.Equal(t, "== Failed e-mails (1) ==", head)
-	require.Len(t, lines, 2)
-	assert.Contains(t, lines[1], "Failed during the summary")
-}
-
-func TestFailedMailsAreCappedAtTwentyLines(t *testing.T) {
-	d := vpgtest.New(t)
-	p := notifier(t, d, "t_s8d_notifier")
-	for i := range 25 {
-		f := summaryNow.Add(-time.Duration(i+1) * time.Hour)
-		insertOutbox(t, d, "reminder", fmt.Sprintf("Failed %02d", i), "smtp: 550", f, &f, nil)
-	}
-
-	body := onlySummary(t, d, p, summaryNow)
-	head, lines := section(t, body, "Failed e-mails")
-	assert.Equal(t, "== Failed e-mails (25) ==", head)
-	require.Len(t, lines, 22) // note + 20 lines + "and 5 more"
-	assert.Contains(t, lines[1], "Failed 00")
-	assert.Equal(t, "... and 5 more", lines[21])
-}
-
-func TestWaitingSummaryGetsTheOwnerOnceSet(t *testing.T) {
-	d := vpgtest.New(t)
-	ctx := context.Background()
-	p := notifier(t, d, "t_s13_notifier")
-	ok, err := notify.WeeklySummary(ctx, p, summaryNow)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Empty(t, summaryMails(t, d)[0].To)
-
-	setOwner(t, d, "boss@example.com")
-	_, err = notify.ResolveEmptyRecipients(ctx, p)
-	require.NoError(t, err)
-	ms := summaryMails(t, d)
-	require.Len(t, ms, 1)
-	assert.Equal(t, []string{"boss@example.com"}, ms[0].To)
-}
-
 func TestFutureLastSummaryCountsAsNever(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
@@ -453,7 +345,7 @@ func TestFutureLastSummaryCountsAsNever(t *testing.T) {
 	ok, err := notify.WeeklySummary(ctx, p, summaryNow.Add(-5*time.Second))
 	require.NoError(t, err)
 	assert.False(t, ok)
-	assert.Len(t, summaryMails(t, d), 1)
+	assert.Len(t, summaryNotices(t, d), 1)
 }
 
 // Europe/London changes between BST (UTC+1) and GMT (UTC+0); the night rule follows local time.
@@ -498,7 +390,7 @@ func TestSummaryLinesAreCleanAndLeakNothing(t *testing.T) {
 	assert.NotContains(t, body, "\x1b")
 }
 
-// A failing outbox insert must leave last_summary_at unchanged, and a failing mark must leave no
+// A failing notice insert must leave last_summary_at unchanged, and a failing mark must leave no
 // summary row. Both failures are injected through the owner pool with schema objects that only
 // this test's database has, so the production code needs no test hook: a CHECK that refuses
 // summary rows (NOT VALID so it ignores existing rows), and a trigger that refuses the mark.
@@ -508,15 +400,15 @@ func TestSummaryAndMarkAreOneTransaction(t *testing.T) {
 	p := notifier(t, d, "t_s10_notifier")
 	setSetting(t, d, "last_summary_at", "2026-10-01T09:00:00Z")
 
-	_, err := d.Owner.Exec(ctx, `ALTER TABLE mail_outbox ADD CONSTRAINT test_no_summary CHECK (kind <> 'summary') NOT VALID`)
+	_, err := d.Owner.Exec(ctx, `ALTER TABLE notifications ADD CONSTRAINT test_no_summary CHECK (kind <> 'summary.weekly') NOT VALID`)
 	require.NoError(t, err)
 	ok, err := notify.WeeklySummary(ctx, p, summaryNow)
 	require.Error(t, err)
 	assert.False(t, ok)
 	assert.Equal(t, "2026-10-01T09:00:00Z", lastSummaryAt(t, d), "insert failed: the mark was rolled back")
-	assert.Empty(t, summaryMails(t, d))
+	assert.Empty(t, summaryNotices(t, d))
 
-	_, err = d.Owner.Exec(ctx, `ALTER TABLE mail_outbox DROP CONSTRAINT test_no_summary`)
+	_, err = d.Owner.Exec(ctx, `ALTER TABLE notifications DROP CONSTRAINT test_no_summary`)
 	require.NoError(t, err)
 	_, err = d.Owner.Exec(ctx, `CREATE FUNCTION test_refuse_mark() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN RAISE EXCEPTION 'mark refused'; END $$`)
@@ -527,7 +419,7 @@ func TestSummaryAndMarkAreOneTransaction(t *testing.T) {
 	ok, err = notify.WeeklySummary(ctx, p, summaryNow)
 	require.Error(t, err)
 	assert.False(t, ok)
-	assert.Empty(t, summaryMails(t, d), "mark failed: no summary row")
+	assert.Empty(t, summaryNotices(t, d), "mark failed: no summary row")
 	assert.Equal(t, "2026-10-01T09:00:00Z", lastSummaryAt(t, d))
 
 	_, err = d.Owner.Exec(ctx, `DROP TRIGGER test_refuse_mark ON vendor_settings`)
@@ -548,7 +440,7 @@ func TestUnreadableLastSummaryCountsAsNever(t *testing.T) {
 	assert.Equal(t, "== Issued since 2026-10-08 12:00 +03 (0) ==", head)
 }
 
-func TestTwoConcurrentSummariesSendOne(t *testing.T) {
+func TestTwoConcurrentSummariesCreateOne(t *testing.T) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	p1 := notifier(t, d, "t_s12_notifier_a")
@@ -557,6 +449,9 @@ func TestTwoConcurrentSummariesSendOne(t *testing.T) {
 	const rounds = 5
 	for round := range rounds {
 		at := summaryNow.Add(time.Duration(round) * 7 * day)
+		// 02:00 in Istanbul three days before: every week has unusual activity, so its alert
+		// notice must be created once too.
+		seedIssued(t, d, fmt.Sprintf("LIC-NIGHT%d", round), "Night", "sig_n", at.Add(-3*day+14*time.Hour))
 		var wg sync.WaitGroup
 		oks := make([]bool, 4)
 		errs := make([]error, 4)
@@ -581,7 +476,8 @@ func TestTwoConcurrentSummariesSendOne(t *testing.T) {
 		}
 		assert.Equal(t, 1, sent, "round %d", round)
 	}
-	assert.Len(t, summaryMails(t, d), rounds)
+	assert.Len(t, summaryNotices(t, d), rounds)
+	assert.Len(t, alertNotices(t, d), rounds)
 }
 
 // The period, the order, the unusual rules and the signer come from the audit row, which no
@@ -661,12 +557,12 @@ func TestLicenseWithoutIssueAuditRowIsUnusual(t *testing.T) {
 	ok, err := notify.WeeklySummary(ctx, p, summaryNow)
 	require.NoError(t, err)
 	require.True(t, ok)
-	ms := summaryMails(t, d)
+	ms := summaryNotices(t, d)
 	require.Len(t, ms, 1)
 	head, lines := section(t, ms[0].Body, "Unusual")
 	assert.Equal(t, "== Unusual (1) ==", head)
 	assert.Equal(t, []string{"1 license(s) have no issue audit row (possible tampering or disabled triggers)"}, lines)
-	assert.Equal(t, "Weekly summary: 1 issued, 0 open requests, 1 unusual", ms[0].Subject)
+	assert.Equal(t, "Weekly summary: 1 issued, 0 open requests, 1 unusual", ms[0].Title)
 	assert.NotContains(t, ms[0].Body, "LIC-HIDDEN", "only the count, from the notifier's column grants")
 }
 
@@ -683,7 +579,7 @@ func TestSummaryEndsWithTheAuditHead(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(body, "Audit head:"))
 }
 
-func TestMailedHeadLineVerifiesAfterLaterRows(t *testing.T) {
+func TestSummaryHeadLineVerifiesAfterLaterRows(t *testing.T) {
 	d := vpgtest.New(t)
 	p := notifier(t, d, "t_compose_notifier")
 	ctx := context.Background()
@@ -713,4 +609,81 @@ func TestSummaryHasNoHeadLineOnAnEmptyChain(t *testing.T) {
 	p := notifier(t, d, "t_nohead_notifier")
 	body := onlySummary(t, d, p, summaryNow)
 	assert.NotContains(t, body, "Audit head")
+}
+
+func TestUnusualActivityGetsAnAlertNotice(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s30_notifier")
+	seedIssued(t, d, "LIC-2330", "Night Co", "sig_a", ist(t, 2026, 10, 12, 23, 30, 0))
+	seedIssued(t, d, "LIC-DAY", "Day Co", "sig_b", ist(t, 2026, 10, 12, 12, 0, 0))
+
+	body := onlySummary(t, d, p, summaryNow)
+	_, lines := section(t, body, "Unusual")
+	want := "Issued at night: LIC-2330 | Night Co | signed by sig_a | 2026-10-12 23:30 +03"
+	assert.Equal(t, []string{want}, lines, "the summary still lists it")
+
+	as := alertNotices(t, d)
+	require.Len(t, as, 1)
+	a := as[0]
+	assert.Equal(t, "alert", a.Severity)
+	assert.Equal(t, "owner", a.Audience)
+	assert.Nil(t, a.Target)
+	assert.Equal(t, "unusual:2026-10-15", a.DedupeKey)
+	assert.Equal(t, "Unusual activity: 1 item in the weekly summary", a.Title)
+	assert.Contains(t, a.Body, "\n"+want+"\n")
+	assert.Contains(t, a.Body, "Period: 2026-10-08 12:00 +03 to 2026-10-15 12:00 +03\n")
+	assert.NotContains(t, a.Body, "LIC-DAY")
+	assert.NotContains(t, a.Body, installation[:9])
+}
+
+func TestQuietWeekHasNoAlertNotice(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s31_notifier")
+	seedIssued(t, d, "LIC-DAY", "Day Co", "sig_b", ist(t, 2026, 10, 12, 12, 0, 0))
+	// The time-zone fallback note is printed in the Unusual section but is not unusual activity.
+	setSetting(t, d, "timezone", "Mars/Olympus_Mons")
+
+	body := onlySummary(t, d, p, summaryNow)
+	head, _ := section(t, body, "Unusual")
+	assert.Equal(t, "== Unusual (0) ==", head)
+	assert.Empty(t, alertNotices(t, d))
+}
+
+func TestSummaryBodyFitsTheLimitWithManyRows(t *testing.T) {
+	d := vpgtest.New(t)
+	p := notifier(t, d, "t_s32_notifier")
+	long := strings.Repeat("ş", 80)
+	// 200 licenses, all at night by one signer (unusual on both rules), with long names.
+	for i := range 200 {
+		seedIssued(t, d, fmt.Sprintf("LIC-MANY-%03d-%s", i, strings.Repeat("x", 50)), fmt.Sprintf("%s %03d", long, i),
+			"web:"+long, ist(t, 2026, 10, 13, 0, 0, 0).Add(time.Duration(i)*time.Minute))
+	}
+	for i := range 100 {
+		seedOpenRequest(t, d, fmt.Sprintf("%s R%03d", long, i), "web:"+long, summaryNow.Add(-time.Duration(i+1)*time.Hour))
+	}
+
+	// The head is read before the run: the mark itself appends an audit row after it.
+	var seq int64
+	var hash string
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT seq, hash FROM audit ORDER BY seq DESC LIMIT 1`).Scan(&seq, &hash))
+
+	body := onlySummary(t, d, p, summaryNow)
+	assert.LessOrEqual(t, utf8.RuneCountInString(body), 4000)
+	assert.NotContains(t, body, "(truncated)", "budgeted, not cut")
+	head, lines := section(t, body, "Issued since")
+	assert.Equal(t, "== Issued since 2026-10-08 12:00 +03 (200) ==", head)
+	require.NotEmpty(t, lines)
+	assert.Regexp(t, `^\.\.\. and \d+ more$`, lines[len(lines)-1])
+	head, lines = section(t, body, "Open requests")
+	assert.Equal(t, "== Open requests (100) ==", head)
+	assert.Regexp(t, `^\.\.\. and \d+ more$`, lines[len(lines)-1])
+	head, lines = section(t, body, "Unusual")
+	assert.Equal(t, "== Unusual (201) ==", head)
+	assert.Regexp(t, `^\.\.\. and \d+ more$`, lines[len(lines)-1])
+	assert.True(t, strings.HasSuffix(body, fmt.Sprintf("\nAudit head: %d:%s\n", seq, hash)), "ends with the head line")
+
+	as := alertNotices(t, d)
+	require.Len(t, as, 1)
+	assert.LessOrEqual(t, utf8.RuneCountInString(as[0].Body), 4000)
+	assert.Equal(t, "Unusual activity: 201 items in the weekly summary", as[0].Title)
 }

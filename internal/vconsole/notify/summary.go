@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata" // embedded zone database: Europe/Istanbul must load on a host without one
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
@@ -21,21 +20,17 @@ const (
 	summaryEvery = 7 * day
 	// defaultTimezone is used when the timezone setting is missing or empty (the company's zone).
 	defaultTimezone = "Europe/Istanbul"
-	// maxSectionLines keeps the mail readable; the rest of a section is counted, not listed.
+	// maxSectionLines keeps the notice readable; the rest of a section is counted, not listed.
+	// When the body would not fit the 4000-character column, sections list fewer lines.
 	maxSectionLines = 20
-	// maxNameRunes bounds customer and user names in a line, so one odd name cannot fill the mail.
+	// maxNameRunes bounds customer and user names in a line, so one odd name cannot fill the notice.
 	maxNameRunes = 60
 	// maxIDRunes bounds a license ID; IDs are short, this only guards against a strange row.
 	maxIDRunes = 64
-	// maxFailedRunes bounds the subject and error of a failed mail in its line.
-	maxFailedRunes = 80
 	// endingWithin is the look-ahead of the "Ending in the next 90 days" section.
 	endingWithin = 90 * day
-	// failedListedFor keeps a failed mail in four weekly summaries, so one lost or unread summary
-	// does not hide it, and a failure stamped while a summary ran is still caught by the next one.
-	failedListedFor = 28 * day
 	// futureSkew is how far last_summary_at may lie after now and still count: concurrent runs
-	// whose clocks differ by seconds must not each send a summary. A mark further in the future
+	// whose clocks differ by seconds must not each create a summary. A mark further in the future
 	// (a hand-written or clock-jumped value) counts as never, so it cannot stop the summaries.
 	futureSkew = time.Hour
 
@@ -70,18 +65,24 @@ type section struct {
 	lines []string
 }
 
-// WeeklySummary enqueues the owner's weekly summary when none went out in the last 7 days, and
-// reports whether it did.
+// WeeklySummary creates the owner's weekly summary notice when none was made in the last 7 days,
+// and reports whether it did.
 //
 // It runs when the last_summary_at setting is missing, unreadable, more than an hour after now
 // (see futureSkew) or at most now-7 days. The first summary covers the 7 days before now, later
-// ones cover [last_summary_at, now). The mail goes to owner_email (an empty recipient list waits for that address, see ResolveEmptyRecipients).
+// ones cover [last_summary_at, now). The notice (kind summary.weekly, audience owner, dedupe key
+// summary:<period end date in UTC>) lists what was issued, the open requests, the licenses ending
+// in the next 90 days and unusual activity, and ends with the audit head. When the Unusual section
+// is not empty, a second notice (kind activity.unusual, severity alert, unusual:<date>) repeats it,
+// so it stands out in the list instead of hiding inside a routine summary.
 //
 // Everything happens in one transaction: an advisory lock is taken first and the condition is
-// checked after it, so two concurrent runs send one summary; notify_mark_summary(now) and the
-// outbox insert share the transaction, so a failed insert leaves last_summary_at unchanged and a
-// failed mark leaves no mail behind. notify_mark_summary stores whole seconds, so the period ends
-// at now truncated to the second: the next period starts exactly where this one ended.
+// checked after it, so two concurrent runs create one summary; notify_mark_summary(now) and the
+// notices share the transaction, so a failed insert leaves last_summary_at unchanged and a failed
+// mark leaves no notice behind. notify_mark_summary stores whole seconds, so the period ends at now
+// truncated to the second: the next period starts exactly where this one ended. The result is
+// false when a summary was due but its dedupe key already existed (a mark moved back by hand
+// within the same day); the mark is still written.
 //
 // The body lists names and IDs only. It never contains installation IDs, license files, customer
 // contacts or other customer data beyond the name.
@@ -101,9 +102,38 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 	if err != nil {
 		return false, err
 	}
+	due, ns, err := composeSummary(ctx, tx, settings, now)
+	if err != nil || !due {
+		return false, err
+	}
+	// The mark comes before the inserts on purpose: if an insert then fails, the rollback is what
+	// keeps last_summary_at unchanged, which is the property the transaction exists for.
+	if _, err := tx.Exec(ctx, `SELECT notify_mark_summary($1)`, now); err != nil {
+		return false, fmt.Errorf("notify: summary: mark: %w", err)
+	}
+	created := false
+	for i, n := range ns {
+		c, err := Notify(ctx, tx, n)
+		if err != nil {
+			return false, err
+		}
+		if i == 0 { // the summary itself; the alert follows it
+			created = c
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("notify: summary: commit: %w", err)
+	}
+	return created, nil
+}
+
+// composeSummary decides whether a summary is due at now and, if so, builds its notices: the
+// summary first, then the unusual-activity alert when there is any. It only reads, so the dry run
+// uses it too and shows exactly what the real run would create.
+func composeSummary(ctx context.Context, tx pgx.Tx, settings map[string]string, now time.Time) (bool, []Notice, error) {
 	due, last, haveLast := summaryDue(settings["last_summary_at"], now)
 	if !due {
-		return false, nil
+		return false, nil, nil
 	}
 	end := now.UTC().Truncate(time.Second)
 	start := end.Add(-summaryEvery)
@@ -114,24 +144,20 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 
 	issued, err := issuedIn(ctx, tx, start, end)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	open, err := openRequests(ctx, tx, now)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	ending, err := endingSoon(ctx, tx, now, loc)
 	if err != nil {
-		return false, err
-	}
-	failed, err := failedMails(ctx, tx, end, loc)
-	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	unusual := unusualLines(issued, loc)
 	unaudited, err := licensesWithoutIssueAudit(ctx, tx)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if unaudited > 0 {
 		unusual = append(unusual, fmt.Sprintf("%d license(s) have no issue audit row (possible tampering or disabled triggers)", unaudited))
@@ -146,47 +172,100 @@ func WeeklySummary(ctx context.Context, pool *pgxpool.Pool, now time.Time) (bool
 	unusualSec := section{title: "Unusual", count: len(unusual), note: zoneNote, empty: "None.", lines: unusual}
 
 	// The head is read in this transaction, before the mark (which itself adds an audit row): the
-	// owner keeps it as the checkpoint `vendor-console audit-verify --head` compares against.
+	// owner copies it into the paper log, and `vendor-console audit-verify --head` compares
+	// against it.
 	head, haveHead, err := audit.CurrentHead(ctx, tx)
 	if err != nil {
-		return false, fmt.Errorf("notify: summary: %w", err)
+		return false, nil, fmt.Errorf("notify: summary: %w", err)
 	}
 
-	var b strings.Builder
-	b.WriteString("Weekly summary of the vendor console.\n\n")
-	fmt.Fprintf(&b, "Period: %s to %s\n", start.In(loc).Format(localTimeLayout), end.In(loc).Format(localTimeLayout))
-	fmt.Fprintf(&b, "Time zone: %s\n\n", loc.String())
-	for _, s := range []section{issuedSec, open, ending, failed, unusualSec} {
-		writeSection(&b, s)
-	}
+	var top strings.Builder
+	period := fmt.Sprintf("Period: %s to %s\n", start.In(loc).Format(localTimeLayout), end.In(loc).Format(localTimeLayout))
+	zone := fmt.Sprintf("Time zone: %s\n\n", loc.String())
+	top.WriteString("Weekly summary of the vendor console.\n\n")
+	top.WriteString(period)
+	top.WriteString(zone)
+	tail := ""
 	if haveHead {
-		fmt.Fprintf(&b, "Audit head: %s\n", head)
+		tail = fmt.Sprintf("Audit head: %s\n", head)
 	}
-	subject := fmt.Sprintf("Weekly summary: %d issued, %d open requests, %d unusual", len(issued), open.count, len(unusual))
+	body := fitSections(top.String(), []section{issuedSec, open, ending, unusualSec}, tail)
+	date := end.Format("2006-01-02")
+	out := []Notice{{
+		Kind:      "summary.weekly",
+		Severity:  SeverityInfo,
+		Title:     fmt.Sprintf("Weekly summary: %d issued, %d open requests, %d unusual", len(issued), open.count, len(unusual)),
+		Body:      body,
+		Audience:  AudienceOwner,
+		DedupeKey: "summary:" + date,
+	}}
+	if len(unusual) > 0 {
+		alertSec := unusualSec
+		alertSec.title = "Unusual activity"
+		alertTop := "Unusual activity was found for the weekly summary.\n\n" + period + zone
+		out = append(out, Notice{
+			Kind:      "activity.unusual",
+			Severity:  SeverityAlert,
+			Title:     fmt.Sprintf("Unusual activity: %s in the weekly summary", plural(len(unusual), "item")),
+			Body:      fitSections(alertTop, []section{alertSec}, "The weekly summary covers the whole period.\n"),
+			Audience:  AudienceOwner,
+			DedupeKey: "unusual:" + date,
+		})
+	}
+	return true, out, nil
+}
 
-	// With no owner address the row waits with an empty recipient list; a waiting summary is
-	// created each week and all of them go out once the address exists (tolerated: few, and late).
-	var to []string
-	if owner := settings["owner_email"]; owner != "" {
-		to = []string{owner}
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
 	}
-	// The mark comes before the insert on purpose: if the insert then fails, the rollback is what
-	// keeps last_summary_at unchanged, which is the property the transaction exists for.
-	if _, err := tx.Exec(ctx, `SELECT notify_mark_summary($1)`, now); err != nil {
-		return false, fmt.Errorf("notify: summary: mark: %w", err)
+	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// fitSections renders top, the sections and tail, listing at most maxSectionLines lines per
+// section and fewer when the body would not fit the notifications body limit. The sections before
+// the last one (the long lists) give up lines first, the largest first; the last one (Unusual)
+// only after they list nothing. Headers, counts, the "... and N more" lines and the tail (the
+// audit head) are always kept, so the body never needs the generic truncation of Notify.
+func fitSections(top string, secs []section, tail string) string {
+	caps := make([]int, len(secs))
+	for i := range caps {
+		caps[i] = maxSectionLines
 	}
-	if _, err := Enqueue(ctx, tx, "summary", to, subject, b.String()); err != nil {
-		return false, err
+	render := func() string {
+		var b strings.Builder
+		b.WriteString(top)
+		for i, s := range secs {
+			writeSection(&b, s, caps[i])
+		}
+		b.WriteString(tail)
+		return b.String()
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("notify: summary: commit: %w", err)
+	for {
+		body := render()
+		if utf8.RuneCountInString(body) <= maxBodyRunes {
+			return body
+		}
+		// Reduce the largest cap among the lists first, the last section only after them.
+		pick := -1
+		for i := range len(secs) - 1 {
+			if caps[i] > 0 && (pick < 0 || caps[i] > caps[pick]) {
+				pick = i
+			}
+		}
+		if pick < 0 {
+			pick = len(secs) - 1
+			if caps[pick] == 0 {
+				return body // cannot shrink further; Notify cuts it (not reached with bounded lines)
+			}
+		}
+		caps[pick]--
 	}
-	return true, nil
 }
 
 func readSettings(ctx context.Context, tx pgx.Tx) (map[string]string, error) {
 	rows, err := tx.Query(ctx, `SELECT key, value FROM vendor_settings
-		WHERE key IN ('owner_email', 'timezone', 'last_summary_at')`)
+		WHERE key IN ('timezone', 'last_summary_at')`)
 	if err != nil {
 		return nil, fmt.Errorf("notify: summary: read settings: %w", err)
 	}
@@ -347,36 +426,6 @@ func endingSoon(ctx context.Context, tx pgx.Tx, now time.Time, loc *time.Locatio
 	return s, nil
 }
 
-// failedMails lists every message that gave up in the last 28 days before end, most recent first.
-// There is no upper bound: SendPending stamps failed_at with its own now while it holds the row,
-// so a failure may carry a time after this summary's end and must not fall between two summaries.
-func failedMails(ctx context.Context, tx pgx.Tx, end time.Time, loc *time.Location) (section, error) {
-	s := section{title: "Failed e-mails", empty: "None.", note: "Failures stay listed for 28 days."}
-	rows, err := tx.Query(ctx, `SELECT kind, created_at, subject, last_error, count(*) OVER ()
-		FROM mail_outbox
-		WHERE failed_at IS NOT NULL AND failed_at >= $1
-		ORDER BY failed_at DESC, id DESC LIMIT $2`, end.Add(-failedListedFor), maxSectionLines)
-	if err != nil {
-		return s, fmt.Errorf("notify: summary: failed mails: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var (
-			kind, subject, lastErr string
-			created                time.Time
-		)
-		if err := rows.Scan(&kind, &created, &subject, &lastErr, &s.count); err != nil {
-			return s, fmt.Errorf("notify: summary: failed mails: %w", err)
-		}
-		s.lines = append(s.lines, fmt.Sprintf("%s | %s | %s | %s", clean(kind, maxNameRunes),
-			created.In(loc).Format(localTimeLayout), clean(subject, maxFailedRunes), clean(lastErr, maxFailedRunes)))
-	}
-	if err := rows.Err(); err != nil {
-		return s, fmt.Errorf("notify: summary: failed mails: %w", err)
-	}
-	return s, nil
-}
-
 // unusualLines applies ruling 4 to the licenses of the period: night issuance first (in issue
 // order), then signers above the daily limit (by day, then signer).
 func unusualLines(issued []issuedRow, loc *time.Location) []string {
@@ -411,7 +460,9 @@ func unusualLines(issued []issuedRow, loc *time.Location) []string {
 	return out
 }
 
-func writeSection(b *strings.Builder, s section) {
+// writeSection writes the section header, its note, and at most limit of its lines; the rest is
+// counted in a "... and N more" line.
+func writeSection(b *strings.Builder, s section, limit int) {
 	fmt.Fprintf(b, "== %s (%d) ==\n", s.title, s.count)
 	if s.note != "" {
 		b.WriteString(s.note + "\n")
@@ -419,7 +470,7 @@ func writeSection(b *strings.Builder, s section) {
 	if s.count == 0 {
 		b.WriteString(s.empty + "\n")
 	}
-	shown := s.lines[:min(len(s.lines), maxSectionLines)]
+	shown := s.lines[:min(len(s.lines), limit)]
 	for _, l := range shown {
 		b.WriteString(l + "\n")
 	}
@@ -427,25 +478,4 @@ func writeSection(b *strings.Builder, s section) {
 		fmt.Fprintf(b, "... and %d more\n", more)
 	}
 	b.WriteString("\n")
-}
-
-// dropRune reports the runes no mail line may contain: control characters (line breaks, escape
-// sequences), format characters (bidi overrides and zero-width marks that could make a line read
-// differently than it is) and the replacement character left by invalid UTF-8.
-func dropRune(r rune) bool {
-	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
-}
-
-// clean drops the runes dropRune reports and keeps the first n runes.
-func clean(s string, n int) string {
-	s = strings.Map(func(r rune) rune {
-		if dropRune(r) {
-			return -1
-		}
-		return r
-	}, strings.ToValidUTF8(s, ""))
-	if utf8.RuneCountInString(s) > n {
-		s = string([]rune(s)[:n])
-	}
-	return s
 }
