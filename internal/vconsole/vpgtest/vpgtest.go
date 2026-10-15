@@ -106,25 +106,25 @@ func New(t testing.TB) *DB {
 	return d
 }
 
-// As creates login (NOLOGIN, a member of group) and returns a pool whose every connection acts as
-// that role, so grants, row-level security and current_user behave as for a real login. The role
-// is dropped when the test ends. login must be unique per test run (roles are cluster-wide).
+// AsPassword is the password of every role As creates (a throw-away test container).
+const AsPassword = "login-test-pw" //nolint:gosec // G101: fixed password of a throw-away test container
+
+// As creates login as a real LOGIN role that is a member of group and returns a pool connected as
+// it, so grants, row-level security, session_user and current_user behave as for a real person.
+// The role is dropped when the test ends. login must be unique per test run (roles are cluster-wide).
 func (d *DB) As(t testing.TB, group, login string) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
 	role := pgx.Identifier{login}.Sanitize()
-	if _, err := d.Owner.Exec(ctx, "CREATE ROLE "+role+" NOLOGIN IN ROLE "+pgx.Identifier{group}.Sanitize()); err != nil {
+	if _, err := d.Owner.Exec(ctx, "CREATE ROLE "+role+" LOGIN PASSWORD '"+AsPassword+"' IN ROLE "+pgx.Identifier{group}.Sanitize()); err != nil {
 		t.Fatalf("vpgtest: create role %s: %v", login, err)
 	}
-	cfg, err := pgxpool.ParseConfig(d.OwnerURL)
+	u, err := url.Parse(d.OwnerURL)
 	if err != nil {
 		t.Fatalf("vpgtest: parse url: %v", err)
 	}
-	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
-		_, err := c.Exec(ctx, "SET ROLE "+role)
-		return err
-	}
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	u.User = url.UserPassword(login, AsPassword)
+	pool, err := db.Open(ctx, u.String())
 	if err != nil {
 		t.Fatalf("vpgtest: open pool as %s: %v", login, err)
 	}

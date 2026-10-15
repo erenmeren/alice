@@ -1,6 +1,6 @@
 # Vendor console: design (draft)
 
-Status: draft for the owner's review. Nothing here is built yet.
+Status: draft. Phase 1 (foundation) is built on the branch vendor-console; later phases are not.
 Date: 2026-10-15.
 
 ## 1. Purpose
@@ -65,7 +65,7 @@ that checks this is extended to cover the new packages.
 type Signer interface {
     KeyID() string
     PublicKey() ed25519.PublicKey
-    Sign(ctx context.Context, msg []byte) ([]byte, error) // PIN and touch happen here
+    Issue(ctx context.Context, p license.Payload) ([]byte, error) // PIN and touch happen here
 }
 ```
 
@@ -103,12 +103,13 @@ A checklist for this goes into the operator documentation of the console.
 
 - `customers(id, name, contact, notes, created_by, created_at)`
 - `license_requests(id, customer_id, installation_id, targets, valid_from, months, features,
-  replaces, status, requested_by, requested_at, content_hash)`. Status: `open`, `signed`,
+  replaces, status, requested_by, requested_at)`. There is no stored hash: the request hash is recomputed from the row at signing time (section 4.3). Status: `open`, `signed`,
   `rejected`, `cancelled`.
 - `licenses(license_id, request_id, customer_id, installation_id, key_id, issued_at, valid_from,
   valid_until, targets, file, file_sha256, signed_by, replaces, revoked_at)`
 - `audit(seq, at, actor, action, subject, details, prev_hash, hash)`: hash chain, same idea as the
-  product's audit log. Written in the same transaction as the change.
+  product's audit log. Written by triggers in the same statement as the change, with the login
+  (`session_user`) as actor; no login may write it by hand.
 - `reminders(license_id, days_before, sent_at)`
 
 Licenses are never updated after signing, except for `revoked_at`. A correction is a new license

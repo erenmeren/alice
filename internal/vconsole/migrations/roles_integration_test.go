@@ -144,3 +144,74 @@ func TestOnlyOwnersRevokeAndNothingElseChanges(t *testing.T) {
 	_, err = d.Owner.Exec(ctx, `DELETE FROM licenses WHERE license_id = 'LIC-F'`)
 	assert.Error(t, err)
 }
+
+// A person cannot hide behind a group role: SET ROLE to the group they belong to changes
+// current_user, but the record names the login.
+func TestTheLoginIsRecordedEvenAfterSetRoleToTheGroup(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	pool := d.As(t, "vendor_signer", "t_signer_h")
+	conn, err := pool.Acquire(ctx)
+	require.NoError(t, err)
+	defer conn.Release()
+	_, err = conn.Exec(ctx, `SET ROLE vendor_signer`)
+	require.NoError(t, err)
+
+	var by string
+	require.NoError(t, conn.QueryRow(ctx, `INSERT INTO customers (name) VALUES ('Hidden Ltd') RETURNING created_by`).Scan(&by))
+	assert.Equal(t, "t_signer_h", by)
+	var actor string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT actor FROM audit WHERE action = 'customer.add'`).Scan(&actor))
+	assert.Equal(t, "t_signer_h", actor)
+}
+
+// Every change to customers, requests and licenses leaves an audit row in the same statement, whatever
+// client made it; no client has to remember to write one.
+func TestEveryWriteIsAudited(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	sales := d.As(t, "vendor_sales", "t_sales_i")
+	signer := d.As(t, "vendor_signer", "t_signer_i")
+	owner := d.As(t, "vendor_owner", "t_owner_i")
+
+	c := addCustomer(t, sales, "Audited Ltd")
+	rid, err := addRequest(t, sales, c)
+	require.NoError(t, err)
+	_, err = sales.Exec(ctx, `UPDATE license_requests SET targets = 9 WHERE id = $1`, rid)
+	require.NoError(t, err)
+	_, err = signer.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
+		valid_from, valid_until, targets, file, file_sha256) VALUES ('LIC-I', $1, $2, 'x', 'vk-1', now(), now(), now(), 1, '\x00', 'x')`, rid, c)
+	require.NoError(t, err)
+	_, err = signer.Exec(ctx, `UPDATE license_requests SET status = 'signed' WHERE id = $1`, rid)
+	require.NoError(t, err)
+	_, err = owner.Exec(ctx, `UPDATE licenses SET revoked_at = now() WHERE license_id = 'LIC-I'`)
+	require.NoError(t, err)
+
+	rows, err := d.Owner.Query(ctx, `SELECT action, actor FROM audit ORDER BY seq`)
+	require.NoError(t, err)
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var action, actor string
+		require.NoError(t, rows.Scan(&action, &actor))
+		got = append(got, action+":"+actor)
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, []string{
+		"customer.add:t_sales_i", "request.add:t_sales_i", "request.edit:t_sales_i",
+		"license.issue:t_signer_i", "request.signed:t_signer_i", "license.revoke:t_owner_i",
+	}, got)
+	var bad int64
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT audit_verify()`).Scan(&bad))
+	assert.EqualValues(t, 0, bad)
+}
+
+func TestNoLoginCanWriteAuditRowsByHand(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	for i, group := range []string{"vendor_sales", "vendor_signer", "vendor_owner"} {
+		p := d.As(t, group, "t_hand_"+group)
+		_, err := p.Exec(ctx, `SELECT audit_append('license.issue', 'LIC-FAKE', '{}')`)
+		assert.Error(t, err, "%d %s", i, group)
+	}
+}

@@ -22,7 +22,7 @@ CREATE TABLE customers (
     name       text NOT NULL CHECK (length(name) BETWEEN 1 AND 200 AND name = btrim(name)),
     contact    text NOT NULL DEFAULT '' CHECK (length(contact) <= 500),
     notes      text NOT NULL DEFAULT '' CHECK (length(notes) <= 4000),
-    created_by text NOT NULL DEFAULT current_user,
+    created_by text NOT NULL DEFAULT session_user,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE UNIQUE INDEX customers_name_key ON customers (lower(name));
@@ -37,7 +37,7 @@ CREATE TABLE license_requests (
     features     text[] NOT NULL DEFAULT '{}',
     replaces     text NOT NULL DEFAULT '' CHECK (length(replaces) <= 64),
     status       text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'signed', 'rejected', 'cancelled')),
-    requested_by text NOT NULL DEFAULT current_user,
+    requested_by text NOT NULL DEFAULT session_user,
     requested_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX license_requests_status_idx ON license_requests (status, requested_at);
@@ -55,7 +55,7 @@ CREATE TABLE licenses (
     replaces     text NOT NULL DEFAULT '',
     file         bytea NOT NULL,
     file_sha256  text NOT NULL,
-    signed_by    text NOT NULL DEFAULT current_user,
+    signed_by    text NOT NULL DEFAULT session_user,
     revoked_at   timestamptz
 );
 CREATE INDEX licenses_valid_until_idx ON licenses (valid_until);
@@ -109,10 +109,11 @@ RETURNS text LANGUAGE sql STABLE AS $$
 $$;
 -- +goose StatementEnd
 
--- The actor is the role the caller acts as (SET ROLE), or the login when there is none.
+-- The actor is the login (session_user), never the role it acts as: SET ROLE to a group the login
+-- belongs to must not hide who did it.
 -- +goose StatementBegin
 CREATE FUNCTION audit_actor() RETURNS text LANGUAGE sql STABLE AS $$
-    SELECT CASE WHEN current_setting('role') = 'none' THEN session_user::text ELSE current_setting('role') END
+    SELECT session_user::text
 $$;
 -- +goose StatementEnd
 
@@ -161,10 +162,59 @@ END
 $$;
 -- +goose StatementEnd
 
+-- Every change to customers, requests and licenses writes its audit row in the same statement, whatever
+-- client made it. The trigger functions run as their owner, so no login needs (or gets) EXECUTE on audit_append.
+-- +goose StatementBegin
+CREATE FUNCTION vendor_audit_customers() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    PERFORM audit_append('customer.add', NEW.id::text, jsonb_build_object('name', NEW.name));
+    RETURN NULL;
+END
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER customers_audit AFTER INSERT ON customers
+    FOR EACH ROW EXECUTE FUNCTION vendor_audit_customers();
+
+-- +goose StatementBegin
+CREATE FUNCTION vendor_audit_requests() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM audit_append('request.add', NEW.id::text, jsonb_build_object('customer_id', NEW.customer_id,
+            'installation', NEW.installation, 'targets', NEW.targets));
+    ELSIF NEW.status IS DISTINCT FROM OLD.status THEN
+        PERFORM audit_append('request.' || NEW.status, NEW.id::text, jsonb_build_object('from', OLD.status));
+    ELSE
+        PERFORM audit_append('request.edit', NEW.id::text, jsonb_build_object('old', to_jsonb(OLD), 'new', to_jsonb(NEW)));
+    END IF;
+    RETURN NULL;
+END
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER requests_audit AFTER INSERT OR UPDATE ON license_requests
+    FOR EACH ROW EXECUTE FUNCTION vendor_audit_requests();
+
+-- +goose StatementBegin
+CREATE FUNCTION vendor_audit_licenses() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM audit_append('license.issue', NEW.license_id, jsonb_build_object('request', NEW.request_id,
+            'customer_id', NEW.customer_id, 'installation', NEW.installation, 'targets', NEW.targets,
+            'valid_until', NEW.valid_until, 'key_id', NEW.key_id, 'file_sha256', NEW.file_sha256,
+            'replaces', NEW.replaces));
+    ELSIF NEW.revoked_at IS DISTINCT FROM OLD.revoked_at THEN
+        PERFORM audit_append('license.revoke', NEW.license_id, jsonb_build_object('revoked_at', NEW.revoked_at));
+    END IF;
+    RETURN NULL;
+END
+$$;
+-- +goose StatementEnd
+CREATE TRIGGER licenses_audit AFTER INSERT OR UPDATE ON licenses
+    FOR EACH ROW EXECUTE FUNCTION vendor_audit_licenses();
+
 -- Privileges. Nothing is granted to PUBLIC.
 REVOKE ALL ON customers, license_requests, licenses, audit FROM PUBLIC;
 REVOKE ALL ON FUNCTION audit_append(text, text, jsonb), audit_verify(), audit_hash(text, bigint, timestamptz, text, text, text, jsonb),
-    audit_actor() FROM PUBLIC;
+    audit_actor(), vendor_audit_customers(), vendor_audit_requests(), vendor_audit_licenses() FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO vendor_sales;
 
 GRANT SELECT, INSERT ON customers TO vendor_sales;
@@ -174,7 +224,6 @@ GRANT SELECT ON licenses TO vendor_sales;
 GRANT INSERT ON licenses TO vendor_signer;
 GRANT UPDATE (revoked_at) ON licenses TO vendor_owner;
 GRANT SELECT ON audit TO vendor_owner;
-GRANT EXECUTE ON FUNCTION audit_append(text, text, jsonb), audit_actor() TO vendor_sales;
 GRANT EXECUTE ON FUNCTION audit_verify() TO vendor_owner;
 
 -- Row-level security on requests: everybody who may read can read all; a sales login changes only
@@ -182,10 +231,10 @@ GRANT EXECUTE ON FUNCTION audit_verify() TO vendor_owner;
 ALTER TABLE license_requests ENABLE ROW LEVEL SECURITY;
 CREATE POLICY requests_read ON license_requests FOR SELECT TO vendor_sales USING (true);
 CREATE POLICY requests_insert ON license_requests FOR INSERT TO vendor_sales
-    WITH CHECK (requested_by = current_user AND status = 'open');
+    WITH CHECK (requested_by = session_user AND status = 'open');
 CREATE POLICY requests_update_own ON license_requests FOR UPDATE TO vendor_sales
-    USING (requested_by = current_user AND status = 'open')
-    WITH CHECK (requested_by = current_user AND status IN ('open', 'cancelled'));
+    USING (requested_by = session_user AND status = 'open')
+    WITH CHECK (requested_by = session_user AND status IN ('open', 'cancelled'));
 CREATE POLICY requests_update_signer ON license_requests FOR UPDATE TO vendor_signer
     USING (true) WITH CHECK (true);
 
@@ -198,5 +247,8 @@ DROP TABLE audit;
 DROP TABLE licenses;
 DROP TABLE license_requests;
 DROP TABLE customers;
+DROP FUNCTION vendor_audit_licenses();
+DROP FUNCTION vendor_audit_requests();
+DROP FUNCTION vendor_audit_customers();
 DROP FUNCTION vendor_license_update_guard();
 DROP FUNCTION vendor_forbid_change();

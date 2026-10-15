@@ -1,6 +1,6 @@
 // Package issue turns an open license request into a signed license in one database transaction:
 // lock the request, check it is still what the signer saw, apply the correction rules, sign,
-// record the license, close the request and write the audit row. If any step fails nothing is
+// record the license and close the request (the database writes the audit rows). If any step fails nothing is
 // recorded.
 package issue
 
@@ -78,7 +78,7 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 			Months: req.Months, Features: req.Features, Replaces: req.Replaces, LicenseID: p.LicenseID,
 		}, now)
 		if err != nil {
-			return err
+			return fmt.Errorf("issue: the request can no longer become a license (%w); cancel it and make a new request", err)
 		}
 		if err := checkCorrection(ctx, tx, payload, p.Shorten); err != nil {
 			return err
@@ -108,12 +108,7 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 		if _, err := tx.Exec(ctx, `UPDATE license_requests SET status = 'signed' WHERE id = $1`, req.ID); err != nil {
 			return fmt.Errorf("issue: close request: %w", err)
 		}
-		_, err = audit.Append(ctx, tx, "license.issue", payload.LicenseID, map[string]any{
-			"request": req.ID, "customer": req.Customer, "installation": payload.InstallationID,
-			"targets": payload.MaxTargets, "valid_until": payload.ValidUntil.Format(time.RFC3339),
-			"key_id": s.KeyID(), "file_sha256": res.FileSHA256, "replaces": payload.Replaces,
-		})
-		return err
+		return nil
 	})
 	if err != nil {
 		return Result{}, err

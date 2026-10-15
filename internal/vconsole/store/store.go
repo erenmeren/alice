@@ -1,5 +1,5 @@
-// Package store reads and writes vendor customers and license requests. Every write is one audit
-// row in the same transaction when the caller passes a pgx.Tx.
+// Package store reads and writes vendor customers and license requests. The database writes the audit
+// row of every change itself (triggers), so nothing here has to remember to.
 package store
 
 import (
@@ -52,9 +52,6 @@ func AddCustomer(ctx context.Context, q audit.Q, c NewCustomer) (int64, error) {
 	}
 	if err != nil {
 		return 0, fmt.Errorf("store: add customer: %w", err)
-	}
-	if _, err := audit.Append(ctx, q, "customer.add", fmt.Sprint(id), map[string]any{"name": name}); err != nil {
-		return 0, err
 	}
 	return id, nil
 }
@@ -122,10 +119,6 @@ func AddRequest(ctx context.Context, q audit.Q, r NewRequest, now time.Time) (in
 	if err != nil {
 		return 0, fmt.Errorf("store: add request: %w", err)
 	}
-	if _, err := audit.Append(ctx, q, "request.add", fmt.Sprint(id),
-		map[string]any{"customer": name, "installation": inst, "targets": r.Targets}); err != nil {
-		return 0, err
-	}
 	return id, nil
 }
 
@@ -180,4 +173,30 @@ func RequestHash(r Request) string {
 	raw, _ := json.Marshal([]any{r.Customer, r.Installation, r.Targets, r.From, r.Months, feats, r.Replaces})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+// CancelRequest closes an open request. A sales login may cancel only its own (row-level security);
+// ErrNotFound covers a missing, already closed or someone else's request.
+func CancelRequest(ctx context.Context, q audit.Q, id int64) error {
+	tag, err := q.Exec(ctx, `UPDATE license_requests SET status = 'cancelled' WHERE id = $1 AND status = 'open'`, id)
+	if err != nil {
+		return fmt.Errorf("store: cancel request: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("%w: no open request %d that you may cancel", ErrNotFound, id)
+	}
+	return nil
+}
+
+// LicenseFile returns the signed file of an issued license, byte for byte as it was issued.
+func LicenseFile(ctx context.Context, q audit.Q, licenseID string) ([]byte, error) {
+	var raw []byte
+	err := q.QueryRow(ctx, `SELECT file FROM licenses WHERE license_id = $1`, licenseID).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: license %s", ErrNotFound, licenseID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: read license: %w", err)
+	}
+	return raw, nil
 }

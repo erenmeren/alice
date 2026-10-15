@@ -2,13 +2,17 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/license/issuer"
@@ -26,7 +30,8 @@ type prompter func(prompt string) ([]byte, error)
 
 const usage = `Usage: vendor-console <command> [flags]
 
-The database is named by the environment variable VENDOR_DATABASE_URL.
+The database is named by the environment variable VENDOR_DATABASE_URL. Use your own login, and
+sslmode=verify-full unless the database is on this computer.
 
 Commands:
   migrate
@@ -37,6 +42,10 @@ Commands:
   request list [--status open]
   request show ID
         Print a request and its hash (the last line).
+  request cancel ID
+        Close an open request (a sales login may cancel only its own).
+  license export --id LICENSE-ID --out FILE
+        Write an issued license file again, byte for byte.
   issue --request ID --hash HASH --key FILE --out FILE [--license-id ID] [--shorten]
         Sign the request. The hash must be the one "request show" printed; if the
         request changed since, nothing is signed. Asks for the key passphrase.
@@ -68,7 +77,13 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, as
 				return c.requestList(args[2:])
 			case "show":
 				return c.requestShow(args[2:])
+			case "cancel":
+				return c.requestCancel(args[2:])
 			}
+		}
+	case "license":
+		if len(args) >= 2 && args[1] == "export" {
+			return c.licenseExport(args[2:])
 		}
 	case "issue":
 		return c.issue(args[1:])
@@ -91,13 +106,57 @@ func (c *cli) fail(err error) int {
 	return 1
 }
 
+// connectTimeout bounds how long a command waits for the database.
+var connectTimeout = 20 * time.Second
+
+// checkTLS refuses a database URL that would not verify the server's certificate. Only a database on
+// this computer may skip TLS. The URL is never echoed: it holds the password.
+func checkTLS(url string) error {
+	cfg, err := pgx.ParseConfig(url)
+	if err != nil {
+		return errors.New("the database URL is not valid; check " + dbEnv)
+	}
+	verified := func(host string, conf *tls.Config) bool {
+		return conf != nil && !conf.InsecureSkipVerify || loopback(host)
+	}
+	ok := verified(cfg.Host, cfg.TLSConfig)
+	for _, f := range cfg.Fallbacks {
+		ok = ok && verified(f.Host, f.TLSConfig)
+	}
+	if !ok {
+		return errors.New("the database connection must verify the server certificate: add sslmode=verify-full to " + dbEnv +
+			" (only a database on this computer may skip TLS)")
+	}
+	return nil
+}
+
+func loopback(host string) bool {
+	if host == "localhost" || strings.HasPrefix(host, "/") { // a unix socket is local too
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // connect opens the pool. Errors never include the connection string (db.Open guarantees it).
 func (c *cli) connect(ctx context.Context) (*pgxpool.Pool, error) {
 	url := c.getenv(dbEnv)
 	if url == "" {
 		return nil, errors.New("set " + dbEnv + " to the PostgreSQL connection string")
 	}
-	return db.Open(ctx, url)
+	if err := checkTLS(url); err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	pool, err := db.Open(ctx, url)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("could not reach the database within %s", connectTimeout)
+		}
+		return nil, err
+	}
+	return pool, nil
 }
 
 func (c *cli) flags(name string) *flag.FlagSet {
@@ -253,10 +312,19 @@ func (c *cli) issue(args []string) int {
 			return 2
 		}
 	}
-	// Refuse before issuing: a recorded license whose file cannot be written would be awkward to hand over.
-	if _, err := os.Lstat(*outPath); err == nil {
-		return c.fail(fmt.Errorf("%s exists; choose another --out", *outPath))
+	// Reserve the output file first: a path that cannot be written is found before anything is signed, and an
+	// existing file is never overwritten. The reservation is removed unless the license was written.
+	outFile, err := os.OpenFile(*outPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // G304: the operator names the file
+	if err != nil {
+		return c.fail(fmt.Errorf("cannot create the output file: %w", err))
 	}
+	written := false
+	defer func() {
+		_ = outFile.Close()
+		if !written {
+			_ = os.Remove(*outPath)
+		}
+	}()
 	ctx := context.Background()
 	pool, err := c.connect(ctx)
 	if err != nil {
@@ -282,9 +350,15 @@ func (c *cli) issue(args []string) int {
 	if err != nil {
 		return c.fail(err)
 	}
-	if err := issuer.WriteNew(*outPath, res.File, 0o600); err != nil {
-		return c.fail(fmt.Errorf("license %s is recorded but its file could not be written: %w", res.LicenseID, err))
+	if _, err := outFile.Write(res.File); err != nil {
+		return c.fail(fmt.Errorf("license %s is recorded but its file could not be written (%w); get it again with: license export --id %s --out FILE",
+			res.LicenseID, err, res.LicenseID))
 	}
+	if err := outFile.Close(); err != nil {
+		return c.fail(fmt.Errorf("license %s is recorded but its file could not be written (%w); get it again with: license export --id %s --out FILE",
+			res.LicenseID, err, res.LicenseID))
+	}
+	written = true
 	_, _ = fmt.Fprintf(c.out, "issued %s valid until %s\n", res.LicenseID, res.ValidUntil.Format("2006-01-02"))
 	return 0
 }
@@ -305,5 +379,56 @@ func (c *cli) auditVerify() int {
 		return 1
 	}
 	_, _ = fmt.Fprintln(c.out, "audit chain OK")
+	return 0
+}
+
+func (c *cli) requestCancel(args []string) int {
+	var id int64
+	if len(args) != 1 {
+		_, _ = fmt.Fprintln(c.err, "vendor-console: request cancel needs one request ID")
+		return 2
+	}
+	if _, err := fmt.Sscanf(args[0], "%d", &id); err != nil {
+		_, _ = fmt.Fprintf(c.err, "vendor-console: %q is not a request ID\n", args[0])
+		return 2
+	}
+	ctx := context.Background()
+	pool, err := c.connect(ctx)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer pool.Close()
+	if err := store.CancelRequest(ctx, pool, id); err != nil {
+		return c.fail(err)
+	}
+	_, _ = fmt.Fprintf(c.out, "request %d cancelled\n", id)
+	return 0
+}
+
+func (c *cli) licenseExport(args []string) int {
+	fs := c.flags("license export")
+	id := fs.String("id", "", "license ID")
+	outPath := fs.String("out", "", "where to write the license file")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *id == "" || *outPath == "" {
+		_, _ = fmt.Fprintln(c.err, "vendor-console: --id and --out are required")
+		return 2
+	}
+	ctx := context.Background()
+	pool, err := c.connect(ctx)
+	if err != nil {
+		return c.fail(err)
+	}
+	defer pool.Close()
+	raw, err := store.LicenseFile(ctx, pool, *id)
+	if err != nil {
+		return c.fail(err)
+	}
+	if err := issuer.WriteNew(*outPath, raw, 0o600); err != nil {
+		return c.fail(err)
+	}
+	_, _ = fmt.Fprintf(c.out, "wrote %s\n", *outPath)
 	return 0
 }

@@ -38,6 +38,9 @@ var allowedSkipVerify = map[string]int{
 	"internal/notify/pin.go": 1,
 	"internal/providers/linuxssh/helperproto/helperproto.go": 1,
 	"cmd/alice/selfcheck.go":                                 1,
+	// The vendor console (not part of the product) only reads the field, to refuse a database connection that
+	// would not verify the server certificate; it skips nothing.
+	"cmd/vendor-console/run.go": 1,
 }
 
 // rootSkips are the directories, by exact root-relative path, that hold other projects' Go files

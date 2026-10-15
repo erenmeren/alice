@@ -4,6 +4,7 @@ package audit_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -21,8 +22,9 @@ func seed(t *testing.T, n int) (*vpgtest.DB, context.Context) {
 	d := vpgtest.New(t)
 	ctx := context.Background()
 	sales := d.As(t, "vendor_sales", "t_audit_"+t.Name())
+	// Audit rows come from the triggers on the tables, so a customer insert is one audit row.
 	for i := 0; i < n; i++ {
-		_, err := audit.Append(ctx, sales, "customer.add", "c", map[string]any{"i": i})
+		_, err := sales.Exec(ctx, `INSERT INTO customers (name) VALUES ($1)`, fmt.Sprintf("Customer %d", i))
 		require.NoError(t, err)
 	}
 	return d, ctx
@@ -96,7 +98,8 @@ func TestConcurrentAppendsKeepASingleChain(t *testing.T) {
 	pool := d.As(t, "vendor_sales", "t_audit_conc")
 	errs := make(chan error, 20)
 	for i := 0; i < 20; i++ {
-		go func() { _, err := audit.Append(ctx, pool, "x", "y", nil); errs <- err }()
+		name := fmt.Sprintf("Concurrent %d", i)
+		go func() { _, err := pool.Exec(ctx, `INSERT INTO customers (name) VALUES ($1)`, name); errs <- err }()
 	}
 	for i := 0; i < 20; i++ {
 		require.NoError(t, <-errs)
@@ -105,4 +108,15 @@ func TestConcurrentAppendsKeepASingleChain(t *testing.T) {
 	var n int
 	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT count(*) FROM audit`).Scan(&n))
 	assert.Equal(t, 20, n)
+}
+
+func TestAppendIsForTheOwnerOnly(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	_, err := audit.Append(ctx, d.Owner, "tool.run", "x", map[string]any{"k": "v"})
+	require.NoError(t, err)
+	require.NoError(t, audit.Check(ctx, d.Owner))
+	sales := d.As(t, "vendor_sales", "t_audit_append")
+	_, err = audit.Append(ctx, sales, "customer.add", "forged", nil)
+	assert.Error(t, err, "a sales login cannot write audit rows by hand")
 }
