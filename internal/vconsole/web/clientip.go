@@ -62,7 +62,8 @@ func inAny(a netip.Addr, ps []netip.Prefix) bool {
 
 // clientAddr is the address of the client of a request: the TCP peer, unless the peer is a
 // trusted proxy, in which case the right-most X-Forwarded-For entry that is not itself trusted.
-// Entries further left are client-controlled and never chosen over it. An unparsable remote
+// Entries further left are client-controlled and never chosen over it; an entry that cannot be
+// read ends the walk with the peer. An unparsable remote
 // gives the zero address. The result has no zone and no IPv4-mapping.
 func clientAddr(remote string, xff []string, trusted []netip.Prefix) netip.Addr {
 	peer := parseRemote(remote)
@@ -74,16 +75,32 @@ func clientAddr(remote string, xff []string, trusted []netip.Prefix) netip.Addr 
 		entries = append(entries, strings.Split(line, ",")...)
 	}
 	for i := len(entries) - 1; i >= 0; i-- {
-		a, err := netip.ParseAddr(strings.TrimSpace(entries[i]))
-		if err != nil {
-			continue
+		a, ok := parseEntry(strings.TrimSpace(entries[i]))
+		if !ok {
+			// A proxy may append a form we cannot read; skipping it would let a client-written
+			// entry further left choose the bucket. Fail closed: the proxy's own bucket.
+			return peer
 		}
-		a = a.Unmap().WithZone("")
 		if !inAny(a, trusted) {
 			return a
 		}
 	}
 	return peer
+}
+
+// parseEntry reads an X-Forwarded-For entry: IP, ip:port, [v6] or [v6]:port.
+func parseEntry(e string) (netip.Addr, bool) {
+	if ap, err := netip.ParseAddrPort(e); err == nil {
+		return ap.Addr().Unmap().WithZone(""), true
+	}
+	if len(e) > 2 && e[0] == '[' && e[len(e)-1] == ']' {
+		e = e[1 : len(e)-1]
+	}
+	a, err := netip.ParseAddr(e)
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return a.Unmap().WithZone(""), true
 }
 
 func parseRemote(remote string) netip.Addr {

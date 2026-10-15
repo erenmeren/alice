@@ -26,7 +26,13 @@ func TestClientAddr(t *testing.T) {
 		{"chain, both proxies trusted", "10.0.0.1:1", []string{"198.51.100.7, 10.0.0.2"}, "198.51.100.7"},
 		{"chain over several header lines", "10.0.0.1:1", []string{"198.51.100.7", "10.0.0.2"}, "198.51.100.7"},
 		{"spoofed left entry", "10.0.0.1:1", []string{"1.2.3.4, 198.51.100.7"}, "198.51.100.7"},
-		{"garbage skipped", "10.0.0.1:1", []string{"198.51.100.7, nonsense, , 10.0.0.2"}, "198.51.100.7"},
+		{"garbage in the middle does not matter", "10.0.0.1:1", []string{"1.2.3.4, nonsense, , 198.51.100.7, 10.0.0.2"}, "198.51.100.7"},
+		{"ip:port entry", "10.0.0.1:1", []string{"1.2.3.4, 198.51.100.7:5678"}, "198.51.100.7"},
+		{"bracketed v6", "10.0.0.1:1", []string{"1.2.3.4, [2001:db8::7]"}, "2001:db8::7"},
+		{"bracketed v6 with port", "10.0.0.1:1", []string{"1.2.3.4, [2001:db8::7]:443"}, "2001:db8::7"},
+		{"unknown right-most fails closed", "10.0.0.1:1", []string{"1.2.3.4, unknown"}, "10.0.0.1"},
+		{"empty right-most fails closed", "10.0.0.1:1", []string{"1.2.3.4, "}, "10.0.0.1"},
+		{"garbage right of trusted fails closed", "10.0.0.1:1", []string{"1.2.3.4, nonsense, 10.0.0.2"}, "10.0.0.1"},
 		{"only garbage falls back to peer", "10.0.0.1:1", []string{"nonsense"}, "10.0.0.1"},
 		{"ipv6 peer and client", "[2001:db8:ffff::1]:1", []string{"2001:db8:1::5"}, "2001:db8:1::5"},
 		{"ipv6 client zone stripped", "[2001:db8:ffff::1]:1", []string{"fe80::1%eth0"}, "fe80::1"},
@@ -84,4 +90,11 @@ func TestLimiterUsesTheClientBehindATrustedProxy(t *testing.T) {
 	require.Equal(t, 200, post("192.0.2.9:1", "1.1.1.1"))
 	require.Equal(t, 200, post("192.0.2.9:2", "2.2.2.2"))
 	assert.Equal(t, 429, post("192.0.2.9:3", "3.3.3.3"))
+}
+
+func TestNewRejectsAWildcardTrustedProxy(t *testing.T) {
+	for _, p := range []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0"), {}} {
+		_, err := New(Config{RPID: "localhost", Origin: "http://localhost:8443", TrustedProxies: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), p}})
+		assert.Error(t, err, p.String())
+	}
 }

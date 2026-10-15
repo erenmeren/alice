@@ -78,6 +78,11 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	for _, p := range cfg.TrustedProxies {
+		if !p.IsValid() || p.Bits() == 0 {
+			return nil, errors.New("web: a trusted proxy range must not cover every address")
+		}
+	}
 	if cfg.Clock == nil {
 		cfg.Clock = clock.Real{}
 	}
