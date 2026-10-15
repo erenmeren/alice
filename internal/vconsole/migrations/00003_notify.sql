@@ -113,10 +113,10 @@ BEGIN
             CASE WHEN coalesce(owner, '') = '' THEN '{}'::text[] ELSE ARRAY[owner] END,
             left(regexp_replace(format('License issued: %s (%s)', cust, NEW.license_id), '[\r\n]+', ' ', 'g'), 200),
             format(E'A license was issued.\n\nCustomer: %s\nLicense: %s\nTargets: %s\nValid from: %s\nValid until: %s\nSigned by: %s\nKey id: %s\nRequest: %s\n',
-                   cust, NEW.license_id, NEW.targets,
+                   left(cust, 200), left(NEW.license_id, 200), NEW.targets,
                    to_char(NEW.valid_from AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                    to_char(NEW.valid_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
-                   NEW.signed_by, NEW.key_id, NEW.request_id));
+                   left(NEW.signed_by, 200), left(NEW.key_id, 200), NEW.request_id));
     RETURN NULL;
 END
 $$;
@@ -147,8 +147,15 @@ GRANT SELECT ON customers, license_requests, web_users, vendor_settings, audit T
 GRANT SELECT, INSERT ON reminders TO vendor_notifier;
 GRANT SELECT, INSERT, UPDATE ON mail_outbox TO vendor_notifier;
 GRANT EXECUTE ON FUNCTION notify_mark_summary(timestamptz) TO vendor_notifier;
+-- license_requests has row-level security; the notifier is not a sales member, so it needs its own read policy.
+CREATE POLICY requests_read_notifier ON license_requests FOR SELECT TO vendor_notifier USING (true);
 
 -- +goose Down
+DROP POLICY requests_read_notifier ON license_requests;
+REVOKE ALL ON customers, license_requests, web_users, audit FROM vendor_notifier;
+REVOKE ALL ON licenses FROM vendor_notifier;
+REVOKE SELECT (license_id, request_id, customer_id, installation, key_id, issued_at, valid_from, valid_until,
+               targets, replaces, file_sha256, signed_by, revoked_at) ON licenses FROM vendor_notifier;
 DROP FUNCTION notify_mark_summary(timestamptz);
 DROP TRIGGER licenses_notify ON licenses;
 DROP FUNCTION vendor_notify_license();

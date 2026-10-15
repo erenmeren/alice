@@ -5,6 +5,7 @@ package migrations_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -194,4 +195,87 @@ func TestReminderRowsAreUniquePerThreshold(t *testing.T) {
 	_, err = d.Owner.Exec(ctx, `INSERT INTO reminders (license_id, days_before) VALUES ('LIC-N7', 45)`)
 	require.Error(t, err)
 	assert.Equal(t, "23514", pgCode(t, err))
+}
+
+func TestNotifierSeesRequestsDespiteRowLevelSecurity(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	signer := d.As(t, "vendor_signer", "t_n8_signer")
+	nt := d.As(t, "vendor_notifier", "t_n8_notifier")
+	c := addCustomer(t, signer, "Theta")
+	rid, err := addRequest(t, signer, c)
+	require.NoError(t, err)
+
+	var id int64
+	require.NoError(t, nt.QueryRow(ctx, `SELECT id FROM license_requests`).Scan(&id))
+	assert.Equal(t, rid, id)
+	for _, q := range []string{
+		`UPDATE license_requests SET targets = 9`,
+		`INSERT INTO license_requests (customer_id, installation, targets) VALUES (1, 'ALICE-TESTX-AAAAA', 1)`,
+	} {
+		_, err := nt.Exec(ctx, q)
+		require.Error(t, err, q)
+		assert.Equal(t, "42501", pgCode(t, err), q)
+	}
+}
+
+func TestIssuanceMailSurvivesHostileValues(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	signer := d.As(t, "vendor_signer", "t_n9_signer")
+	name := "Line1\nBcc: x@y.co\r\n" + strings.Repeat("n", 180)
+	c := addCustomer(t, signer, name)
+	rid, err := addRequest(t, signer, c)
+	require.NoError(t, err)
+	// license_id is the primary key, so the btree limit (~2700 bytes) caps it; key_id is unindexed and can be huge.
+	huge := strings.Repeat("a", 2000)
+	_, err = signer.Exec(ctx, `INSERT INTO licenses (license_id, request_id, customer_id, installation, key_id, issued_at,
+		valid_from, valid_until, targets, file, file_sha256) VALUES ($1, $2, $3, 'ALICE-SECRET-INSTALL', $4, now(), now(), now(), 1, '\x00', 'x')`,
+		huge, rid, c, strings.Repeat("k", 300000))
+	require.NoError(t, err, "issuing must never fail because of the mail")
+
+	var subject, body string
+	require.NoError(t, d.Owner.QueryRow(ctx, `SELECT subject, body FROM mail_outbox`).Scan(&subject, &body))
+	assert.NotContains(t, subject, "\n")
+	assert.NotContains(t, subject, "\r")
+	assert.LessOrEqual(t, len(subject), 200)
+	assert.Contains(t, subject, "Line1 Bcc: x@y.co")
+	assert.LessOrEqual(t, len(body), 200000)
+	assert.NotContains(t, body, "ALICE-SECRET-INSTALL")
+	assert.NotContains(t, body, "ALICE-SECR")
+}
+
+func TestMarkSummarySetsOnlyLastSummaryAndOnlyForTheNotifier(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	owner := d.As(t, "vendor_owner", "t_n10_owner")
+	nt := d.As(t, "vendor_notifier", "t_n10_notifier")
+	_, err := owner.Exec(ctx, `INSERT INTO vendor_settings (key, value) VALUES ('owner_email', 'a@b.co')`)
+	require.NoError(t, err)
+
+	_, err = nt.Exec(ctx, `SELECT notify_mark_summary('2026-10-01T00:00:00Z')`)
+	require.NoError(t, err)
+	_, err = nt.Exec(ctx, `SELECT notify_mark_summary('2026-10-08T00:00:00Z')`)
+	require.NoError(t, err)
+	rows, err := d.Owner.Query(ctx, `SELECT key, value FROM vendor_settings ORDER BY key`)
+	require.NoError(t, err)
+	got := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		require.NoError(t, rows.Scan(&k, &v))
+		got[k] = v
+	}
+	require.NoError(t, rows.Err())
+	assert.Equal(t, map[string]string{"owner_email": "a@b.co", "last_summary_at": "2026-10-08T00:00:00Z"}, got)
+
+	for name, p := range map[string]*pgxpool.Pool{
+		"sales":  d.As(t, "vendor_sales", "t_n10_sales"),
+		"web":    d.As(t, "vendor_web", "t_n10_web"),
+		"signer": d.As(t, "vendor_signer", "t_n10_signer"),
+		"owner":  owner,
+	} {
+		_, err := p.Exec(ctx, `SELECT notify_mark_summary(now())`)
+		require.Error(t, err, name)
+		assert.Equal(t, "42501", pgCode(t, err), name)
+	}
 }
