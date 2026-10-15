@@ -285,3 +285,28 @@ func TestAFailedCommitAfterTheWritesIsReportedAsUnknown(t *testing.T) {
 	require.ErrorIs(t, err, issue.ErrRequestChanged)
 	assert.NotErrorIs(t, err, issue.ErrOutcomeUnknown)
 }
+
+// swappingSigner signs another payload than the one it is handed (malware between the display
+// and the signer, or a bug): the file is valid and signed by the right key.
+type swappingSigner struct{ sign.Signer }
+
+func (s swappingSigner) Issue(ctx context.Context, p license.Payload) ([]byte, error) {
+	p.MaxTargets = 500
+	return s.Signer.Issue(ctx, p)
+}
+
+func TestASignedPayloadOtherThanTheConfirmedOneIsNotRecorded(t *testing.T) {
+	e := setup(t, "l")
+	ctx := context.Background()
+	id, hash := e.request(t, license.NewInstallationID(), 5, "")
+	_, err := issue.Issue(ctx, e.signer, swappingSigner{e.key}, issue.Params{RequestID: id, ExpectedHash: hash,
+		Confirm: func(license.Payload, string) error { return nil }}, now)
+	require.ErrorIs(t, err, issue.ErrSignedBytesChanged)
+	assert.NotErrorIs(t, err, issue.ErrOutcomeUnknown)
+	var status string
+	require.NoError(t, e.d.Owner.QueryRow(ctx, `SELECT status FROM license_requests WHERE id = $1`, id).Scan(&status))
+	assert.Equal(t, "open", status)
+	var n int
+	require.NoError(t, e.d.Owner.QueryRow(ctx, `SELECT count(*) FROM licenses`).Scan(&n))
+	assert.Zero(t, n, "nothing recorded")
+}

@@ -36,6 +36,9 @@ var (
 	// ErrOutcomeUnknown: every write succeeded but the commit did not report back (a lost
 	// connection, a cancel during COMMIT). The license may or may not be recorded.
 	ErrOutcomeUnknown = errors.New("issue: the database did not confirm the commit; the license may or may not be recorded")
+	// ErrSignedBytesChanged: the signed file's payload is not the one whose signed-bytes digest
+	// the operator confirmed. Nothing is recorded.
+	ErrSignedBytesChanged = errors.New("issue: the signed license is not the one that was confirmed (its signed bytes differ); nothing was recorded")
 )
 
 // Params selects the request and what the signer saw.
@@ -47,7 +50,8 @@ type Params struct {
 	// Confirm, when set, is shown the payload exactly as it will be signed and the SHA-256 (hex)
 	// of the bytes the signer receives, after the correction rules passed and before the signer
 	// is called (so before any PIN prompt). A non-nil error aborts the issue and nothing is
-	// recorded; the request stays open. It runs inside the transaction: the request row stays
+	// recorded; the request stays open. After signing, the signed file's signed bytes must have
+	// this digest (ErrSignedBytesChanged otherwise, nothing recorded). It runs inside the transaction: the request row stays
 	// locked while the operator reads, so the caller must bound how long it waits.
 	Confirm func(p license.Payload, signedSHA256 string) error
 }
@@ -95,6 +99,7 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 		if err := checkCorrection(ctx, tx, payload, p.Shorten); err != nil {
 			return err
 		}
+		confirmed := ""
 		if p.Confirm != nil {
 			// The signers sign the normalized payload; the operator confirms exactly that.
 			payload = issuer.NormalizePayload(payload)
@@ -108,14 +113,25 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 				}
 				return fmt.Errorf("issue: confirm: %w", err)
 			}
+			confirmed = sum
 		}
 		raw, err := s.Issue(ctx, payload)
 		if err != nil {
 			return fmt.Errorf("issue: sign: %w", err)
 		}
 		// Never record a file the product would not accept.
-		if _, err := sign.Verify(raw, s); err != nil {
+		signedFile, err := sign.Verify(raw, s)
+		if err != nil {
 			return fmt.Errorf("issue: the signed file does not verify: %w", err)
+		}
+		// Never record a license other than the one the operator confirmed. This catches a signer
+		// that signed another payload than it was handed; it cannot catch malware that controls
+		// the signer computer, which can show one license and send its own to the card.
+		if confirmed != "" {
+			got := sha256.Sum256(license.SignedBytes(signedFile.Payload))
+			if hex.EncodeToString(got[:]) != confirmed {
+				return ErrSignedBytesChanged
+			}
 		}
 		sum := sha256.Sum256(raw)
 		res = Result{LicenseID: payload.LicenseID, File: raw, KeyID: s.KeyID(), FileSHA256: hex.EncodeToString(sum[:]),
