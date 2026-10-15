@@ -20,9 +20,9 @@ concurrency:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
-    # make fuzz-nightly runs 24 targets for 10 minutes each (240 minutes) plus one test build per target and the
-    # PostgreSQL container of fuzz-api: 310 leaves over an hour of margin (the hosted runner's limit is 360).
-    timeout-minutes: 310
+    # make fuzz-nightly runs 28 targets for 10 minutes each (280 minutes) plus one test build per target and the
+    # PostgreSQL container of fuzz-api: 350 leaves about an hour of margin (the hosted runner's limit is 360).
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }

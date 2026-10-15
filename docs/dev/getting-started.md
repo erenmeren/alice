@@ -57,6 +57,7 @@ creates when its data volume is new. Run `make reset` once (this deletes the dev
 | `make helper` | Build the static `alice-helper` for linux/amd64 and linux/arm64 into `bin/` with `bin/alice-helper.sha256` |
 | `make fuzz-ssh` | Fuzz the `authorized_keys` and `sshd -T` parsers for 60 s each |
 | `make fuzz-oidc` | Fuzz the OIDC ID token claim parser for 60 s |
+| `make fuzz-ldap` | Fuzz the directory sign-in filter and DN escaping, filter template expansion and user name rule for 60 s each |
 | `make test-ssh` | Run the real-OpenSSH suite (`TestRealOpenSSH`) and the real-Nginx suite (`TestRealNginx`: discovery, deployment, rollback and recovery through Alice's Nginx provider against each distribution's real Nginx) on Ubuntu 22.04, Debian 12 and Rocky 9 (needs Docker and a host that can reach containers at their bridge addresses, as Linux Docker can; builds three images on first run). It first runs `make helper`: the Nginx suite installs that release-built helper through the setup script, which checks it against the checksums linked into the test. `TestRealNginx` runs only with `ALICE_REAL_MATRIX=1`, which this target sets (`make coverage` skips it). Each line fails unless its test passed (no match or a skip fails it). `ALICE_SSH_IMAGES=ubuntu22 make test-ssh` limits it to one distribution |
 | `make coverage` | Every Go test with the integration tag under coverage; enforces `coverage-floors.json` |
 | `make lint` / `make web-lint` | Linters |

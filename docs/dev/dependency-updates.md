@@ -89,6 +89,34 @@ fake's version check (`fakekv.APIVersion`) and the reference answers in `test/te
 updated first; MSAL's changes to the assertion header or the token request need the fake's token
 endpoint checked.
 
+## go-ldap (directory sign-in)
+
+Directory sign-in (plan 2026-10-15, LDAP and Active Directory) adds two direct modules, pinned by `go.mod` and
+`go.sum`: `github.com/go-ldap/ldap/v3` v3.4.15 (MIT; the newest tag when it was added) and
+`github.com/go-asn1-ber/asn1-ber` v1.5.8 (MIT; direct because a test reads the compiled filter packets). Why:
+go-ldap is the established pure-Go LDAP v3 client (no cgo, so `CGO_ENABLED=0` builds keep working); writing the
+protocol, the BER encoding and the filter compiler by hand would carry more risk. The first user is the filter and
+DN property tests of `internal/auth/ldap/ldapx` (`ldap.CompileFilter`, `ldap.ParseDN`); the production helpers in
+that package import neither module. The network client in `internal/auth/ldap` imports go-ldap from Task 3 on.
+
+One new indirect module is compiled in: `github.com/Azure/go-ntlmssp` v0.1.1 (MIT; NTLM bind, linked by go-ldap but
+never called: Alice binds with a simple bind over `ldaps://` only). `github.com/google/uuid` v1.6.0 (BSD-3-Clause)
+and `golang.org/x/crypto` v0.57.0 (BSD-3-Clause, `md4` for NTLM) were already in the graph at these or newer
+versions; go-ldap asks for x/crypto v0.54.0, so nothing moved. The module graph (and `go.sum`) also gains modules of
+go-ldap's GSSAPI and Windows SSPI packages, which Alice does not import and does not compile:
+`github.com/jcmturner/gokrb5/v8` v8.4.4, `aescts/v2` v2.0.0, `dnsutils/v2` v2.0.0, `goidentity/v6` v6.0.1 and
+`rpc/v2` v2.0.3 (Apache-2.0), `github.com/jcmturner/gofork` v1.7.6 and `github.com/alexbrainman/sspi`
+(BSD-3-Clause), and `github.com/hashicorp/go-uuid` v1.0.3 (MPL-2.0). If a later change imports
+`github.com/go-ldap/ldap/v3/gssapi`, the MPL-2.0 module becomes part of the binary: decide that on purpose.
+
+Update procedure: `go list -m -versions github.com/go-ldap/ldap/v3` (take the newest tag without a pre-release
+suffix), `go get github.com/go-ldap/ldap/v3@vX.Y.Z`, `go mod tidy`, `go mod verify`, check with
+`go list -m all` that no other module moved backwards, read the LICENSE of every new module in the module cache,
+`CGO_ENABLED=0 go build ./cmd/...`, `go run ./tools/pincheck`, `make lockcheck`, then
+`go test ./internal/auth/ldap/...`, `make fuzz-ldap` and `make test-integration` (the real OpenLDAP suite). Read the
+release notes for changes to `CompileFilter`, `ParseDN`, `EscapeFilter` or the TLS dial: the property tests of
+`ldapx` compare Alice's escaping with go-ldap's parser and fail when go-ldap reads a filter differently.
+
 ## Dependabot
 
 `.github/dependabot.yml` proposes weekly updates for Actions, the Dockerfile and Compose images,

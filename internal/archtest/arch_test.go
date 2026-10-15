@@ -70,6 +70,8 @@ var rules = map[string][]string{
 	"alice/internal/reports/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
 		"alice/internal/notify/...", "alice/internal/alerts/...", "alice/internal/jobs/...", "alice/internal/rbac/..."},
 	"alice/internal/auth/oidc/claims": {platform, "alice/internal/rbac/..."},
+	// Directory sign-in (plan 2026-10-15): the pure helpers (escaping, filter templates, names, unique ids).
+	"alice/internal/auth/ldap/ldapx": {platform, "alice/internal/rbac/..."},
 	// ACME (plan 2026-10-13): the guarded outbound transport knows the platform and nothing else.
 	"alice/internal/acme/transport": {"alice/internal/platform/netaddr"},
 	// The ACME client wraps golang.org/x/crypto/acme: the transport, the solver contract and the platform, never
@@ -167,6 +169,7 @@ var denied = map[string][]string{
 	"alice/internal/sshkeys/plan":                      {"alice/internal/platform/db/..."},
 	"alice/internal/alerts/expiry":                     {"alice/internal/platform/db/..."},
 	"alice/internal/auth/oidc/claims":                  {"alice/internal/platform/db/..."},
+	"alice/internal/auth/ldap/ldapx":                   {"alice/internal/platform/db/..."},
 	"alice/internal/platform/csvx":                     {"alice/internal/platform/db/..."},
 	"alice/internal/backup/format":                     {platform, "alice/internal/platform/db/..."},
 	"alice/internal/acme":                              {"alice/internal/platform/db/..."},
@@ -187,6 +190,7 @@ var deniedStd = map[string][]string{
 	"alice/internal/alerts/expiry":    pureDenied,
 	"alice/internal/platform/csvx":    pureDenied,
 	"alice/internal/auth/oidc/claims": pureDeniedURL,
+	"alice/internal/auth/ldap/ldapx":  pureDeniedURL,
 	// Phase 8: the backup container works on io.Reader and io.Writer only.
 	"alice/internal/backup/format": pureDenied,
 	// ACME (plan 2026-10-13): key generation and signing requests.
@@ -484,6 +488,12 @@ func TestAllowed(t *testing.T) {
 		{"claims to net/url allowed", "alice/internal/auth/oidc/claims", "net/url", true},
 		{"claims to net/http denied", "alice/internal/auth/oidc/claims", "net/http", false},
 		{"claims to secrets denied", "alice/internal/auth/oidc/claims", "alice/internal/secrets", false},
+		{"ldapx to rbac allowed", "alice/internal/auth/ldap/ldapx", "alice/internal/rbac", true},
+		{"ldapx to net denied", "alice/internal/auth/ldap/ldapx", "net", false},
+		{"ldapx to os denied", "alice/internal/auth/ldap/ldapx", "os", false},
+		{"ldapx to secrets denied", "alice/internal/auth/ldap/ldapx", "alice/internal/secrets", false},
+		{"ldapx to auth denied", "alice/internal/auth/ldap/ldapx", "alice/internal/auth", false},
+		{"ldapx to platform/db denied", "alice/internal/auth/ldap/ldapx", "alice/internal/platform/db", false},
 		{"oidc to auth allowed", "alice/internal/auth/oidc", "alice/internal/auth", true},
 		{"oidc to inventory denied", "alice/internal/auth/oidc", "alice/internal/inventory", false},
 		{"acme transport to platform allowed", "alice/internal/acme/transport", "alice/internal/platform/netaddr", true},

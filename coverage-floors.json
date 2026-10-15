@@ -39,6 +39,7 @@
   "alice/internal/jobs/sshkeyjobs": 86,
   "alice/internal/alerts/expiry": 100,
   "alice/internal/auth/oidc/claims": 100,
+  "alice/internal/auth/ldap/ldapx": 100,
   "alice/internal/platform/csvx": 100,
   "alice/internal/alerts": 91,
   "alice/internal/reports": 81,
