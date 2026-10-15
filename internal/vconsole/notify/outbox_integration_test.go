@@ -349,3 +349,91 @@ func TestNotDueMessageIsLeftAlone(t *testing.T) {
 	assert.Equal(t, notify.SendResult{}, res)
 	assert.Zero(t, f.attempts())
 }
+
+func TestInvalidMessageIsMarkedFailedAtOnce(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := d.As(t, "vendor_notifier", "t_o9_notifier")
+	now := testNow()
+	// The outbox only refuses line breaks in addresses; anything else is the sender's to judge.
+	bad := seed(t, d, []string{"not an address"}, "bad", now.Add(-time.Minute))
+	good := seed(t, d, []string{"boss@example.com"}, "good", now.Add(-time.Minute))
+	// The fake renders the message like the real sender does, so the validation error is the real one.
+	f := &fakeSender{fail: func(m mail.Message) error {
+		_, err := m.Bytes(now, strings.NewReader(strings.Repeat("x", 16)))
+		return err
+	}}
+
+	res, err := notify.SendPending(ctx, p, f, from, now)
+	require.NoError(t, err)
+	assert.Equal(t, notify.SendResult{Sent: 1, Failed: 1}, res)
+	r := load(t, d.Owner, bad)
+	require.NotNil(t, r.FailedAt, "a message that can never be sent is not retried for hours")
+	assert.True(t, r.FailedAt.Equal(now))
+	assert.Nil(t, r.SentAt)
+	assert.Equal(t, 1, r.Attempts)
+	assert.Contains(t, r.LastError, "address")
+	assert.NotNil(t, load(t, d.Owner, good).SentAt)
+
+	tries := f.attempts()
+	res, err = notify.SendPending(ctx, p, f, from, now.Add(24*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, notify.SendResult{}, res)
+	assert.Equal(t, tries, f.attempts(), "a failed message is never tried again")
+}
+
+func TestHeaderInjectionIsMarkedFailedAtOnce(t *testing.T) {
+	d := vpgtest.New(t)
+	ctx := context.Background()
+	p := d.As(t, "vendor_notifier", "t_o10_notifier")
+	now := testNow()
+	id := seed(t, d, []string{"boss@example.com"}, "fine", now.Add(-time.Minute))
+	// A subject the database stores but the renderer refuses (the outbox CHECK makes this hard to
+	// reach for real; the sender's verdict is what counts).
+	f := &fakeSender{fail: func(mail.Message) error {
+		_, err := mail.Message{From: from, To: []string{"a@b.co"}, Subject: "x\r\nBcc: y@z.co"}.Bytes(now, strings.NewReader(strings.Repeat("x", 16)))
+		return err
+	}}
+	res, err := notify.SendPending(ctx, p, f, from, now)
+	require.NoError(t, err)
+	assert.Equal(t, notify.SendResult{Failed: 1}, res)
+	r := load(t, d.Owner, id)
+	require.NotNil(t, r.FailedAt)
+	assert.Equal(t, 1, r.Attempts)
+	assert.Contains(t, r.LastError, "line break")
+}
+
+// cancelOnSuccess accepts the message and then cancels the run, like a SIGTERM arriving right
+// after the SMTP server said 250.
+type cancelOnSuccess struct {
+	cancel func()
+	sent   int
+}
+
+func (c *cancelOnSuccess) Send(context.Context, mail.Message, time.Time) error {
+	c.sent++
+	c.cancel()
+	return nil
+}
+
+func TestCancelRightAfterASuccessfulSendStillMarksTheMessage(t *testing.T) {
+	d := vpgtest.New(t)
+	p := d.As(t, "vendor_notifier", "t_o11_notifier")
+	now := testNow()
+	id := seed(t, d, []string{"boss@example.com"}, "once", now.Add(-time.Minute))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &cancelOnSuccess{cancel: cancel}
+
+	_, err := notify.SendPending(ctx, p, s, from, now)
+	require.ErrorIs(t, err, context.Canceled, "the run stops after the cancel")
+	r := load(t, d.Owner, id)
+	require.NotNil(t, r.SentAt, "the accepted message is recorded as sent, so the next run does not send it again")
+
+	f := &fakeSender{}
+	res, err := notify.SendPending(context.Background(), p, f, from, now)
+	require.NoError(t, err)
+	assert.Equal(t, notify.SendResult{}, res)
+	assert.Empty(t, f.messages())
+	assert.Equal(t, 1, s.sent)
+}

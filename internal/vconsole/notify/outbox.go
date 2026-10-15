@@ -32,6 +32,8 @@ const (
 	// maxErrorRunes keeps last_error short enough to show in a list; SMTP replies that matter
 	// fit easily.
 	maxErrorRunes = 300
+	// markTimeout bounds recording the outcome of a send, which runs even after a cancel.
+	markTimeout = 5 * time.Second
 )
 
 // SendResult counts what one SendPending call did. Waiting is the number of unsent messages that
@@ -81,7 +83,9 @@ func ResolveEmptyRecipients(ctx context.Context, q audit.Q) (int64, error) {
 // Rows with an empty recipient list are counted as Waiting and left untouched. A send error
 // records attempts+1, last_error (the first 300 characters; the SMTP password never reaches this
 // package, so it cannot be in it) and next_attempt_at = now + min(2^attempts minutes, 6 hours);
-// the MaxAttempts-th failure sets failed_at instead. One failing message does not stop the others.
+// the MaxAttempts-th failure sets failed_at instead. A message the sender refuses locally
+// (mail.ErrInvalidMessage: a malformed address or header) is marked failed at once, since no retry
+// can fix it. One failing message does not stop the others.
 // A database error or a cancelled ctx stops the run; the result counts what was done until then.
 func SendPending(ctx context.Context, pool *pgxpool.Pool, s mail.Sender, from string, now time.Time) (SendResult, error) {
 	var res SendResult
@@ -145,10 +149,22 @@ func sendOne(ctx context.Context, pool *pgxpool.Pool, s mail.Sender, from string
 	sendErr := s.Send(sctx, m, now)
 	cancel()
 
+	// The send is the point of no return: once the server accepted the message, the mark and the
+	// commit must happen even if the run is cancelled now (a SIGTERM right after the 250 reply),
+	// otherwise the row stays pending and the next run sends the mail again. So they use a context
+	// that ignores the run's cancellation but is still bounded.
+	mctx, mcancel := context.WithTimeout(context.WithoutCancel(ctx), markTimeout)
+	defer mcancel()
 	o := outcomeSent
 	switch {
 	case sendErr == nil:
-		_, err = tx.Exec(ctx, `UPDATE mail_outbox SET sent_at = $2 WHERE id = $1`, id, now)
+		_, err = tx.Exec(mctx, `UPDATE mail_outbox SET sent_at = $2 WHERE id = $1`, id, now)
+	case errors.Is(sendErr, mail.ErrInvalidMessage):
+		// Checked before ctx: the message was refused locally, a cancel cannot have caused it, and
+		// no retry can fix a malformed address or header.
+		o = outcomeFailed
+		_, err = tx.Exec(mctx, `UPDATE mail_outbox SET attempts = attempts + 1, last_error = $2, failed_at = $3 WHERE id = $1`,
+			id, truncateError(sendErr.Error()), now)
 	case ctx.Err() != nil:
 		// The run was cancelled, not the message: leave the row as it was.
 		return outcomeNone, fmt.Errorf("notify: send message %d: %w", id, ctx.Err())
@@ -157,18 +173,18 @@ func sendOne(ctx context.Context, pool *pgxpool.Pool, s mail.Sender, from string
 		msg := truncateError(sendErr.Error())
 		if attempts >= MaxAttempts {
 			o = outcomeFailed
-			_, err = tx.Exec(ctx, `UPDATE mail_outbox SET attempts = $2, last_error = $3, failed_at = $4 WHERE id = $1`,
+			_, err = tx.Exec(mctx, `UPDATE mail_outbox SET attempts = $2, last_error = $3, failed_at = $4 WHERE id = $1`,
 				id, attempts, msg, now)
 		} else {
 			o = outcomeRetry
-			_, err = tx.Exec(ctx, `UPDATE mail_outbox SET attempts = $2, last_error = $3, next_attempt_at = $4 WHERE id = $1`,
+			_, err = tx.Exec(mctx, `UPDATE mail_outbox SET attempts = $2, last_error = $3, next_attempt_at = $4 WHERE id = $1`,
 				id, attempts, msg, now.Add(backoff(attempts)))
 		}
 	}
 	if err != nil {
 		return outcomeNone, fmt.Errorf("notify: mark message %d: %w", id, err)
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(mctx); err != nil {
 		return outcomeNone, fmt.Errorf("notify: commit message %d: %w", id, err)
 	}
 	return o, nil
