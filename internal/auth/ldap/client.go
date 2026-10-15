@@ -31,7 +31,9 @@ type Entry struct {
 // caller's: the client never keeps or zeroes them.
 type Client interface {
 	// Authenticate binds as the service account, finds exactly one entry with the user filter and binds as it with
-	// password. An empty password never reaches the directory.
+	// password. An empty password never reaches the directory. When the entry was found but its bind failed with
+	// wrong credentials, the entry is returned together with the bad_credentials error; every other failure returns
+	// no entry.
 	Authenticate(ctx context.Context, d Directory, bindPassword secrets.Plaintext, login string, password secrets.Plaintext) (Entry, error)
 	// Groups binds as the service account and runs the group search for user.
 	Groups(ctx context.Context, d Directory, bindPassword secrets.Plaintext, user Entry, login string) ([]string, error)
@@ -339,17 +341,6 @@ func (c *netClient) Authenticate(ctx context.Context, d Directory, bindPassword 
 		// A bind with an empty DN and a password is an unauthenticated bind on some servers: never.
 		return Entry{}, refuse(ReasonMisconfigured, DetailUserSearch, nil)
 	}
-	if err := c.do(ctx, cn, DetailUserBind, func() error {
-		_, err := cn.l.SimpleBind(&goldap.SimpleBindRequest{Username: e.DN, Password: string(password.Bytes())})
-		return err
-	}, func(err error) *LoginError {
-		if goldap.IsErrorWithCode(err, goldap.LDAPResultInvalidCredentials) {
-			return refuse(ReasonBadCredentials, DetailUserBind, nil)
-		}
-		return nil
-	}); err != nil {
-		return Entry{}, err
-	}
 	out := Entry{DN: e.DN, Attrs: map[string][][]byte{}}
 	for _, a := range userAttributes(d) {
 		v := e.GetEqualFoldRawAttributeValues(a)
@@ -359,6 +350,23 @@ func (c *netClient) Authenticate(ctx context.Context, d Directory, bindPassword 
 		if len(v) > 0 {
 			out.Attrs[a] = v
 		}
+	}
+	if err := c.do(ctx, cn, DetailUserBind, func() error {
+		_, err := cn.l.SimpleBind(&goldap.SimpleBindRequest{Username: e.DN, Password: string(password.Bytes())})
+		return err
+	}, func(err error) *LoginError {
+		if goldap.IsErrorWithCode(err, goldap.LDAPResultInvalidCredentials) {
+			return refuse(ReasonBadCredentials, DetailUserBind, nil)
+		}
+		return nil
+	}); err != nil {
+		var le *LoginError
+		if errors.As(err, &le) && le.Reason == ReasonBadCredentials {
+			// A wrong password for the one entry the search found: the entry comes back with the refusal, so that
+			// the caller can record whose sign-in was refused (the visible answer stays the same).
+			return out, err
+		}
+		return Entry{}, err
 	}
 	return out, nil
 }

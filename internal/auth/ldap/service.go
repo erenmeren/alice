@@ -112,6 +112,8 @@ type Identity struct {
 // password, refuses a disabled directory, an invalid sign-in name and an empty password before any network traffic,
 // then binds as the service account, finds exactly one user entry, binds as that entry with the password and reads
 // its groups. Failures are *LoginError with the closed reasons of errors.go; a missing directory is ErrNotFound.
+// A wrong password for an entry the directory found also returns that entry's UniqueID and Login (nothing else),
+// so that the caller can record the refusal against the person; every other failure returns an empty Identity.
 // The whole call is bounded by VerifyTimeout. Verify zeroes password before it returns, and holds no database
 // transaction while it talks to the directory.
 func (s *Service) Verify(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext) (Identity, Directory, error) {
@@ -156,7 +158,7 @@ func (s *Service) verify(ctx context.Context, d Directory, login string, passwor
 	entry, err := c.Authenticate(ctx, d, bind, login, password)
 	if err != nil {
 		s.noteMisconfigured(d, err)
-		return Identity{}, err
+		return refusedIdentity(d, entry, login, err), err
 	}
 	id, err := identityOf(d, entry, login)
 	if err != nil {
@@ -169,6 +171,21 @@ func (s *Service) verify(ctx context.Context, d Directory, login string, passwor
 	}
 	id.Groups = groups
 	return id, nil
+}
+
+// refusedIdentity is what a refused Verify returns of the entry: its unique id and sign-in name when the directory
+// found exactly one entry and refused its password (bad_credentials with an entry), so that the refusal can be
+// recorded against that person; nothing for every other failure (an unknown name, several entries, the network).
+func refusedIdentity(d Directory, entry Entry, login string, err error) Identity {
+	var le *LoginError
+	if entry.DN == "" || !errors.As(err, &le) || le.Reason != ReasonBadCredentials {
+		return Identity{}
+	}
+	id, idErr := identityOf(d, entry, login)
+	if idErr != nil {
+		return Identity{}
+	}
+	return Identity{UniqueID: id.UniqueID, Login: id.Login}
 }
 
 // bindPassword unseals a directory's service account password; the caller zeroes it. A missing secret is

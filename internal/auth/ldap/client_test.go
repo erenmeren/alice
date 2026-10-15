@@ -384,12 +384,17 @@ func TestUnknownUserBindsLikeAWrongPassword(t *testing.T) {
 	m := startMini(t)
 	d := miniDirectory(m)
 	c := fastClient(nil)
-	_, errUnknown := c.Authenticate(context.Background(), d, pw("svc"), "nobody", pw("typed"))
+	unknown, errUnknown := c.Authenticate(context.Background(), d, pw("svc"), "nobody", pw("typed"))
 	m.set(func(m *miniServer) {
 		m.entries = func(string, string) []miniEntry { return []miniEntry{adaEntry} }
 		m.bindCode[adaEntry.dn] = goldap.LDAPResultInvalidCredentials
 	})
-	_, errWrong := c.Authenticate(context.Background(), d, pw("svc"), "ada", pw("typed"))
+	wrong, errWrong := c.Authenticate(context.Background(), d, pw("svc"), "ada", pw("typed"))
+	// Task 5: the entry a wrong password was typed for comes back with the error (Verify records its unique id and
+	// sign-in name for the audit); an unknown name returns no entry.
+	assert.Equal(t, Entry{}, unknown)
+	assert.Equal(t, adaEntry.dn, wrong.DN)
+	assert.NotEmpty(t, wrong.Attrs[d.UniqueIDAttribute])
 	r1, _ := reasonOf(errUnknown)
 	r2, _ := reasonOf(errWrong)
 	assert.Equal(t, ReasonBadCredentials, r1)

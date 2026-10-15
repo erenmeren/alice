@@ -89,6 +89,16 @@ func TestWrongPasswordAndUnknownUserLookTheSame(t *testing.T) {
 		_, err := x.verify(login, password)
 		return reasonOf(err)[0], time.Since(start)
 	}
+	// Task 5: a wrong password for an entry the directory found returns its unique id and sign-in name with the
+	// refusal (the audit records the name only for a resolved entry); an unknown name returns nothing.
+	id, err := x.verify("ada", "not-her-password")
+	assert.Equal(t, [2]string{ldap.ReasonBadCredentials, ldap.DetailUserBind}, reasonOf(err))
+	assert.Regexp(t, `^[0-9a-f]{2,}$`, id.UniqueID)
+	assert.Equal(t, "ada", id.Login)
+	assert.Empty(t, id.Groups, "no group search after a refused bind")
+	id, err = x.verify("nobody-here", "not-her-password")
+	assert.Equal(t, [2]string{ldap.ReasonBadCredentials, ldap.DetailNotFound}, reasonOf(err))
+	assert.Equal(t, ldap.Identity{}, id)
 	var wrong, unknown time.Duration
 	for range 5 {
 		r1, d1 := timed("ada", "not-her-password")
