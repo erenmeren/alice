@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,8 +182,8 @@ func TestRedactDetailsReplacesEveryInstallationID(t *testing.T) {
 		"no separators":   {`{"i":"` + strings.ReplaceAll(bare, "-", "") + `"}`, `{"i":"` + fp + `"}`},
 		"soft hyphens":    {`{"i":"` + soft + `"}`, `{"i":"` + fp + `"}`},
 		"two in one":      {`{"i":"` + id + ` and ` + other + `"}`, `{"i":"` + fp + ` and ` + fpOther + `"}`},
-		// The ALICE prefix touches a letter, so only the ID's symbols match: "xALICE-" stays.
-		"glued to a word":  {`{"i":"x` + id + `"}`, `{"i":"xALICE-` + fp + `"}`},
+		// Glue is no shield: the prefix is part of the ID's span wherever it stands.
+		"glued to a word":  {`{"i":"x` + id + `"}`, `{"i":"x` + fp + `"}`},
 		"not JSON":         {`raw ` + id, `raw ` + fp},
 		"numbers and html": {`{"targets":5,"customer_id":12345678901234567890,"v":"a<b>&c"}`, `{"customer_id":12345678901234567890,"targets":5,"v":"a<b>&c"}`},
 	}
@@ -201,6 +202,157 @@ func TestRedactDetailsReplacesEveryInstallationID(t *testing.T) {
 	hash := strings.Repeat("0123456789abcdef", 4)
 	assert.Equal(t, `{"file_sha256":"`+hash+`"}`, redactDetails(`{"file_sha256":"`+hash+`"}`))
 	assert.Equal(t, `{"name":"ALICE wonderland"}`, redactDetails(`{"name":"ALICE wonderland"}`))
+}
+
+// bodyOf returns the 16 symbols of a canonical ID.
+func bodyOf(id string) string { return strings.ReplaceAll(strings.TrimPrefix(id, "ALICE-"), "-", "") }
+
+func TestRedactFollowsTheParsersSeparatorRules(t *testing.T) {
+	id := license.NewInstallationID()
+	fp := installationFingerprint(id)
+	b := bodyOf(id)
+	for _, in := range []string{
+		"ALICE-" + b[0:3] + "-" + b[3:7] + "-" + b[7:11] + "-" + b[11:15] + "-" + b[15:], // regrouped
+		"ALICE-" + b[0:4] + "--" + b[4:8] + "-" + b[8:12] + "-" + b[12:],                 // double dash
+		"ALICE-" + b[0:4] + "  " + b[4:8] + "  " + b[8:12] + "  " + b[12:],               // double spaces
+		b[0:2] + " " + b[2:4] + " " + b[4:8] + " " + b[8:12] + " " + b[12:],              // odd grouping, no prefix
+		"ALICE--" + b[0:4] + "-" + b[4:8] + "-" + b[8:12] + "-" + b[12:],                 // separators after the prefix
+		"alice " + strings.Join(strings.Split(b, ""), "-"),                               // a dash after every symbol
+	} {
+		got := redactInstallations(in)
+		assert.Equal(t, fp, got, in)
+		got = redactInstallations("see: " + in + ".")
+		assert.Equal(t, "see: "+fp+".", got, in)
+	}
+	// A tab is not a separator for the parser, so "ID" split by a tab is not an installation ID the
+	// product would read; following the parser exactly, it is left as is (termSafe then shows the
+	// tab as '?').
+	split := "ALICE-" + b[0:8] + "\t" + b[8:]
+	assert.Equal(t, split, redactInstallations(split))
+}
+
+func TestRedactFindsGluedIDs(t *testing.T) {
+	id := license.NewInstallationID()
+	fp := installationFingerprint(id)
+	bare := strings.TrimPrefix(id, "ALICE-")
+	for in, want := range map[string]string{
+		id + "x":             fp + "x",
+		id + "7":             fp + "7",
+		id + "word":          fp + "word",
+		"x" + id:             "x" + fp,
+		"7" + id:             "7" + fp,
+		"x" + id + "y":       "x" + fp + "y",
+		"word" + id + "word": "word" + fp + "word",
+		"#" + bare + "#":     "#" + fp + "#",
+	} {
+		got := redactInstallations(in)
+		assert.NotContains(t, got, bodyOf(id)[:9], in)
+		assert.NotContains(t, got, id[:9], in)
+		assert.Equal(t, want, got, in)
+	}
+	// Bare and glued on both sides: found, perhaps with chance windows next to it (shown as more
+	// fingerprints), but no symbol of the ID survives.
+	for _, in := range []string{"xy" + bare + "z9", "Q" + bodyOf(id) + "R"} {
+		got := redactInstallations(in)
+		assert.Contains(t, got, fp, in)
+		assert.NotContains(t, strings.ReplaceAll(got, "-", ""), bodyOf(id)[:9], in)
+	}
+}
+
+// hexWindow returns 16 lower-case hex symbols that form a valid installation ID body.
+func hexWindow(t *testing.T, rng *rand.Rand) string {
+	t.Helper()
+	const hexdigits = "0123456789abcdef"
+	for {
+		w := make([]byte, 16)
+		for i := range 15 {
+			w[i] = hexdigits[rng.IntN(16)]
+		}
+		for _, c := range []byte(hexdigits) {
+			w[15] = c
+			if _, err := license.ParseInstallationID(string(w)); err == nil {
+				return string(w)
+			}
+		}
+	}
+}
+
+func TestRedactLeavesHashesAlone(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2))
+	w := hexWindow(t, rng)
+	pad := func(n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = "0123456789abcdef"[rng.IntN(16)]
+		}
+		return string(b)
+	}
+	// A window that parses by chance inside a 64-hex sha256 is not an ID: the hash stays whole.
+	sha := pad(24) + w + pad(24)
+	require.Len(t, sha, 64)
+	assert.Equal(t, `{"file_sha256":"`+sha+`"}`, redactDetails(`{"file_sha256":"`+sha+`"}`))
+	// In a hex run shorter than 32 the same window is redacted.
+	short := pad(4) + w + pad(4)
+	assert.NotContains(t, redactInstallations(short), w)
+}
+
+func TestRedactNeverLeaksARandomlySpelledID(t *testing.T) {
+	rng := rand.New(rand.NewPCG(42, 7))
+	const glue = "0123456789ABCDEFGHJKMNPQRSTVWXYZabcdefxyzu.,:;/_()[]{}#"
+	pick := func(set string, n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = set[rng.IntN(len(set))]
+		}
+		return string(b)
+	}
+	randCase := func(s string) string {
+		b := []byte(s)
+		for i, c := range b {
+			if c >= 'A' && c <= 'Z' && rng.IntN(2) == 0 {
+				b[i] = c + ('a' - 'A')
+			}
+		}
+		return string(b)
+	}
+	seps := []string{"", "", "-", " ", "--", "  ", "- "}
+	for range 200 {
+		id := license.NewInstallationID()
+		body := bodyOf(id)
+		var sp strings.Builder
+		if rng.IntN(3) > 0 {
+			sp.WriteString(randCase("ALICE") + seps[rng.IntN(len(seps))])
+		}
+		for i := range 16 {
+			if i > 0 && (i%4 == 0 || rng.IntN(6) == 0) {
+				sp.WriteString(seps[rng.IntN(len(seps))])
+			}
+			sp.WriteByte(body[i])
+		}
+		spelled := randCase(sp.String())
+		in := pick(glue, rng.IntN(4)) + spelled + pick(glue, rng.IntN(4))
+		if rng.IntN(2) == 0 {
+			in = "reason: moved " + in + " to new hardware"
+		}
+		got := redactInstallations(in)
+		normalized := strings.Map(func(r rune) rune {
+			if r == '-' || r == ' ' {
+				return -1
+			}
+			return unicode.ToUpper(r)
+		}, got)
+		assert.NotContains(t, normalized, body[:9], "%q -> %q", in, got)
+		assert.NotContains(t, got, id[:9], "%q -> %q", in, got)
+		assert.Contains(t, got, installationFingerprint(id), "%q -> %q", in, got)
+	}
+}
+
+func TestRedactKeepsKeysThatRedactToTheSameText(t *testing.T) {
+	id := license.NewInstallationID()
+	fp := installationFingerprint(id)
+	got := redactDetails(`{"` + id + `":1,"` + strings.Map(unicode.ToLower, id) + `":2}`)
+	// Sorted keys: the upper-case spelling sorts first and keeps the plain fingerprint.
+	assert.Equal(t, `{"`+fp+`":1,"`+fp+`#2":2}`, got)
 }
 
 func TestRedactInstallationsIsStableAcrossSpellings(t *testing.T) {

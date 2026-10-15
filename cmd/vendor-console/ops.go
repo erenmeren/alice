@@ -10,7 +10,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -63,12 +64,158 @@ func firstRunes(s string, n int) string {
 	return string([]rune(s)[:n])
 }
 
-// installationCandidate finds text shaped like an installation ID in any spelling
-// license.ParseInstallationID accepts: an optional ALICE prefix, then 16 Crockford symbols (any
-// case, with O, I and L as typing variants; never U) in groups of four, optionally separated by a
-// dash or a space. Every match is confirmed with ParseInstallationID (length and check symbol).
-var installationCandidate = regexp.MustCompile(
-	`(?i)(?:ALICE[- ]?)?[0-9A-TV-Z]{4}(?:[- ]?[0-9A-TV-Z]{4}){3}`)
+// installationSymbols is the number of symbols in an installation ID (15 random and one check
+// symbol, internal/license installationIDLen).
+const installationSymbols = 16
+
+// isIDSymbol reports a byte license.ParseInstallationID reads as a symbol: a digit or an ASCII
+// letter in either case, except U (Crockford base32 with O, I and L as typing variants).
+func isIDSymbol(c byte) bool {
+	switch {
+	case c >= '0' && c <= '9':
+		return true
+	case c >= 'a' && c <= 'z':
+		return c != 'u'
+	case c >= 'A' && c <= 'Z':
+		return c != 'U'
+	}
+	return false
+}
+
+// isIDSeparator reports a byte ParseInstallationID skips between symbols, anywhere and any number
+// of times: only '-' and ' '.
+func isIDSeparator(c byte) bool { return c == '-' || c == ' ' }
+
+func isHex(c byte) bool { return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' }
+
+// hexRunMin is the shortest unbroken hex run treated as a hash (a sha256 is 64): a window inside
+// one is not taken for an installation ID, which it matches by chance once in 32.
+const hexRunMin = 32
+
+// idSpan is the bytes [start, end) that one installation ID found by redactInstallations covers.
+type idSpan struct {
+	start, end int
+	first      int  // byte of the window's first symbol
+	anchored   bool // a literal ALICE prefix is part of the span
+	canonical  string
+}
+
+// findInstallations returns every window of s that ParseInstallationID would accept: 16 symbols
+// with only separators between them (any number, any grouping), whose check symbol is right. All
+// windows are found, overlapping ones included, so no glue, grouping or neighbouring text can
+// hide an ID: in a run of more than 16 symbols every 16-symbol window is tried. A literal "ALICE"
+// (any case) directly before a window, with only separators after it, is part of its span, as the
+// parser reads it. Windows inside an unbroken hex run of at least hexRunMin are skipped (hashes).
+func findInstallations(s string) []idSpan {
+	var spans []idSpan
+	var run []int // byte positions of the symbols of the current run
+	flush := func() {
+		for i := 0; i+installationSymbols <= len(run); i++ {
+			w := run[i : i+installationSymbols]
+			if inHexRun(s, w[0], w[len(w)-1]) {
+				continue
+			}
+			sym := make([]byte, 0, len("ALICE-")+installationSymbols)
+			sym = append(sym, "ALICE-"...) // so a window that itself starts with ALICE is not read as a prefix
+			for _, p := range w {
+				sym = append(sym, s[p])
+			}
+			id, err := license.ParseInstallationID(string(sym))
+			if err != nil {
+				continue
+			}
+			start := prefixStart(s, w[0])
+			spans = append(spans, idSpan{start: start, end: w[len(w)-1] + 1, first: w[0], anchored: start != w[0], canonical: id})
+		}
+		run = run[:0]
+	}
+	for p := 0; p < len(s); p++ {
+		switch c := s[p]; {
+		case isIDSymbol(c):
+			run = append(run, p)
+		case isIDSeparator(c):
+		default:
+			flush()
+		}
+	}
+	flush()
+	return spans
+}
+
+// inHexRun reports whether the bytes first..last lie inside an unbroken hex run of at least hexRunMin.
+func inHexRun(s string, first, last int) bool {
+	for p := first; p <= last; p++ {
+		if !isHex(s[p]) {
+			return false
+		}
+	}
+	a, b := first, last
+	for a > 0 && isHex(s[a-1]) {
+		a--
+	}
+	for b+1 < len(s) && isHex(s[b+1]) {
+		b++
+	}
+	return b-a+1 >= hexRunMin
+}
+
+// prefixStart returns where a literal "ALICE" before the symbol at p starts (only separators may
+// lie between), or p when there is none.
+func prefixStart(s string, p int) int {
+	q := p
+	for q > 0 && isIDSeparator(s[q-1]) {
+		q--
+	}
+	if q >= 5 && strings.EqualFold(s[q-5:q], "ALICE") {
+		return q - 5
+	}
+	return p
+}
+
+// preferAnchored drops the chance windows around an ALICE-prefixed ID: a window that starts inside
+// a literal "ALICE" prefix word (the letters A, L, I, C, E are symbols too), and an unprefixed window
+// that overlaps a prefixed ID's span. Those windows hold no symbol of the prefixed ID that its own
+// span does not already hide; without this, about one ID in six would print as two fingerprints.
+// A canonical ID never contains L or I, so no real ID starts inside the prefix word.
+func preferAnchored(s string, spans []idSpan) []idSpan {
+	var anchored []idSpan
+	for _, sp := range spans {
+		if sp.anchored {
+			anchored = append(anchored, sp)
+		}
+	}
+	out := spans[:0:0]
+	for _, sp := range spans {
+		if !sp.anchored {
+			if insidePrefixWord(s, sp.first) {
+				continue
+			}
+			if slices.ContainsFunc(anchored, func(a idSpan) bool { return sp.start < a.end && a.start < sp.end }) {
+				continue
+			}
+		}
+		out = append(out, sp)
+	}
+	return out
+}
+
+// insidePrefixWord reports whether byte p is one of the letters of a literal "ALICE" (any case)
+// that is followed, after separators only, by a symbol: the way the prefix of an ID is written.
+func insidePrefixWord(s string, p int) bool {
+	for q := max(0, p-4); q <= p; q++ {
+		if q+5 > len(s) || !strings.EqualFold(s[q:q+5], "ALICE") {
+			continue
+		}
+		r := q + 5
+		for r < len(s) && isIDSeparator(s[r]) {
+			r++
+		}
+		if r < len(s) && isIDSymbol(s[r]) {
+			return true
+		}
+	}
+	return false
+}
 
 // installationFingerprint stands in for an installation ID in owner output: "inst#" and the first
 // 8 hex digits of sha256 of the canonical ID. The same ID always gives the same fingerprint, so
@@ -79,10 +226,11 @@ func installationFingerprint(canonical string) string {
 }
 
 // redactInstallations replaces every installation ID inside s with its fingerprint. Format
-// characters (soft hyphen, zero width, bidi) are removed first, so they cannot be used to split an
-// ID past the scan. A candidate must not touch a letter or digit on either side: a 16-symbol window
-// inside a longer token (a hex hash, for one) is not an ID. A candidate whose check symbol is wrong
-// is not an installation ID (the product refuses it) and is left as it is.
+// characters (soft hyphen, zero width, bidi) are removed first, so they cannot split an ID past
+// the scan. Overlapping finds are merged into one span that shows the fingerprints of all of them
+// joined by '+', so no symbol of any accepted window survives. The price is that ordinary text
+// which happens to contain a 16-symbol window with a right check symbol (once in 32 windows) is
+// redacted too: in owner output, hiding too much is the safe side.
 func redactInstallations(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.Cf, r) {
@@ -90,31 +238,28 @@ func redactInstallations(s string) string {
 		}
 		return r
 	}, s)
+	spans := preferAnchored(s, findInstallations(s))
+	if len(spans) == 0 {
+		return s
+	}
+	sort.SliceStable(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
 	var b strings.Builder
-	last, pos := 0, 0
-	for pos < len(s) {
-		loc := installationCandidate.FindStringIndex(s[pos:])
-		if loc == nil {
-			break
-		}
-		start, end := pos+loc[0], pos+loc[1]
-		id, err := license.ParseInstallationID(s[start:end])
-		if err != nil || (start > 0 && isAlnum(s[start-1])) || (end < len(s) && isAlnum(s[end])) {
-			// Not an ID here; an ID may still start inside this candidate, so search again one
-			// byte on (a candidate always starts with an ASCII letter or digit).
-			pos = start + 1
-			continue
+	last := 0
+	for i := 0; i < len(spans); {
+		start, end := spans[i].start, spans[i].end
+		var fps []string
+		for ; i < len(spans) && spans[i].start < end; i++ {
+			end = max(end, spans[i].end)
+			if fp := installationFingerprint(spans[i].canonical); !slices.Contains(fps, fp) {
+				fps = append(fps, fp)
+			}
 		}
 		b.WriteString(s[last:start])
-		b.WriteString(installationFingerprint(id))
-		last, pos = end, end
+		b.WriteString(strings.Join(fps, "+"))
+		last = end
 	}
 	b.WriteString(s[last:])
 	return b.String()
-}
-
-func isAlnum(c byte) bool {
-	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // redactDetails rewrites audit details JSON for display: every installation ID in any string value
@@ -146,9 +291,25 @@ func redactValue(v any) any {
 		}
 		return x
 	case map[string]any:
+		// Keys in sorted order, so when two keys redact to the same text the later one is always the
+		// same and gets the suffix (#2, #3, ...) instead of overwriting the first.
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
 		out := make(map[string]any, len(x))
-		for k, val := range x {
-			out[redactInstallations(k)] = redactValue(val)
+		for _, k := range keys {
+			nk := redactInstallations(k)
+			if _, dup := out[nk]; dup {
+				for n := 2; ; n++ {
+					if _, taken := out[nk+"#"+strconv.Itoa(n)]; !taken {
+						nk += "#" + strconv.Itoa(n)
+						break
+					}
+				}
+			}
+			out[nk] = redactValue(x[k])
 		}
 		return out
 	}
