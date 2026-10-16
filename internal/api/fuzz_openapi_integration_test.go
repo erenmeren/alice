@@ -30,7 +30,8 @@ import (
 // Not fuzzed, by design: the setup routes (the wizard is finished), the four sign-in routes whose
 // failures would lock the fuzzing account or change its password (login, mfa/verify, stepup,
 // password), and the routes that would dial a host named in the body from the test machine (Key
-// Vault registration, the SMTP test and trust, the identity provider routes and the OIDC start).
+// Vault registration, the SMTP test and trust, the identity provider routes and the OIDC start), and the directory
+// sign-in, step-up and tests (see fuzzExcluded).
 // Those are covered by their own negative suites (A-14, F-62, O-12).
 const fuzzRefreshEvery = 100
 
@@ -40,6 +41,10 @@ var fuzzExcluded = map[string]bool{
 	"POST /api/v1/settings/smtp/actions/test": true, "POST /api/v1/settings/smtp/actions/trust": true,
 	"POST /api/v1/auth/oidc/{id}/start": true, "POST /api/v1/auth/oidc/stepup": true,
 	"POST /api/v1/sso/providers": true, "PATCH /api/v1/sso/providers/{id}": true,
+	// Directory sign-in (Task 5): the sign-in and the step-up would spend the per-name limits and wait on the stack's
+	// clock (a refusal is held to ldapRefusalFloor); the tests contact the directory. TestDirectory* cover them.
+	"POST /api/v1/auth/ldap/{id}/login": true, "POST /api/v1/auth/ldap/stepup": true,
+	"POST /api/v1/ldap/directories/{id}/actions/test-connection": true, "POST /api/v1/ldap/directories/{id}/actions/test-signin": true,
 }
 
 type fuzzRoute struct {

@@ -30,6 +30,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/audit/forward"
 	"alice/internal/auth"
+	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
 	"alice/internal/backup"
 	"alice/internal/discovery/discoverysvc"
@@ -132,6 +133,8 @@ type stack struct {
 	alerts      *alerts.Service
 	reports     *reports.Service
 	sso         *oidc.Service    // Phase 7: identity providers and the OIDC sign-in
+	ldap        *ldap.Service    // directory sign-in, with the fake directory dir as its client (ldap_integration_test.go)
+	dir         *fakeDirectory   // the directory every LDAP connection of the stack reaches; kept across restarts
 	smtp        *fakesmtp.Server // Phase 7: the fake mail server (user "mailer", stackSMTPPassword); nil until startFakes
 	idp         *fakeidp.Server  // Phase 7: the fake identity provider (token clock: s.clock); nil until startFakes
 	tick        *tickClock       // the Phase 6 services' clock: s.clock, moving 1 ms on every read while switched on
@@ -281,6 +284,11 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.reports = reports.New(reports.Config{Pool: s.db.App, Clock: s.clock, Audit: auditLog, License: s.license, Alerts: s.alerts,
 		Delivery: s.mail, Inventory: s.inv})
 	s.sso = oidc.New(oidc.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Auth: s.auth, Log: log})
+	if s.dir == nil {
+		s.dir = newFakeDirectory(s.clock)
+	}
+	s.ldap = ldap.New(ldap.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Log: log,
+		NewClient: func() ldap.Client { return s.dir }})
 	s.discovery = discoverysvc.New(discoverysvc.Config{Pool: s.db.App, Audit: auditLog, Queue: s.queue, Clock: s.clock, Resolver: stackResolver{s}})
 	s.runner = s.newRunner("", 0)
 }
@@ -386,6 +394,7 @@ func (s *stack) deps() Deps {
 		Alerts:         s.alerts,
 		Reports:        s.reports,
 		SSO:            s.sso,
+		LDAP:           s.ldap,
 		Backup:         stackBackup{BackupService: s.backup, s: s},
 		Forward:        s.forward,
 		TLSStore:       setup.CertificateInstaller{Store: s.tlsStore, Setup: s.setup, Log: s.logger()},

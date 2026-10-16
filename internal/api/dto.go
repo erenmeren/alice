@@ -23,9 +23,11 @@ type userDTO struct {
 	MFAEnrolled bool       `json:"mfa_enrolled"`
 	LastLoginAt *time.Time `json:"last_login_at"`
 	CreatedAt   time.Time  `json:"created_at"`
-	// AuthSource is how the person signs in (local or oidc); SSOProviderID is the identity provider of an SSO user (C10).
-	AuthSource    string     `json:"auth_source"`
-	SSOProviderID *uuid.UUID `json:"sso_provider_id"`
+	// AuthSource is how the person signs in (local, oidc or ldap); SSOProviderID is the identity provider of an SSO user
+	// (C10), LDAPDirectoryID the directory of a directory user.
+	AuthSource      string     `json:"auth_source"`
+	SSOProviderID   *uuid.UUID `json:"sso_provider_id"`
+	LDAPDirectoryID *uuid.UUID `json:"ldap_directory_id"`
 }
 
 func userJSON(u auth.User) userDTO {
@@ -46,8 +48,9 @@ func userJSON(u auth.User) userDTO {
 		LastLoginAt: last,
 		CreatedAt:   u.CreatedAt.UTC(),
 
-		AuthSource:    authSource(u.AuthSource),
-		SSOProviderID: u.SSOProviderID,
+		AuthSource:      authSource(u.AuthSource),
+		SSOProviderID:   u.SSOProviderID,
+		LDAPDirectoryID: u.LDAPDirectoryID,
 	}
 }
 

@@ -146,9 +146,9 @@
         "action": "Önce başka birine Yönetici rolü verin, sonra tekrar deneyin."
       },
       "sso_user": {
-        "title": "Bu değişiklik çoklu oturum açma kullanıcısı için yapılamaz.",
-        "cause": "Çoklu oturum açma kullanıcısının rolü gruplarından gelir. Bu kullanıcının Alice parolası ya da doğrulayıcısı yoktur ve API anahtarı oluşturamaz.",
-        "action": "Kullanıcının gruplarını kimlik sağlayıcıda değiştirin; hemen durması gerekiyorsa kullanıcıyı burada devre dışı bırakın."
+        "title": "Bu değişiklik çoklu oturum açma ya da dizin kullanıcısı için yapılamaz.",
+        "cause": "Çoklu oturum açma ya da dizin kullanıcısının rolü gruplarından gelir. Bu kullanıcının Alice parolası yoktur, API anahtarı oluşturamaz ve kimliğini kimlik sağlayıcıda ya da dizin parolasıyla doğrular.",
+        "action": "Kullanıcının gruplarını kimlik sağlayıcıda ya da dizinde değiştirin; hemen durması gerekiyorsa kullanıcıyı burada devre dışı bırakın."
       }
     },
     "token": {
@@ -676,12 +676,12 @@
       },
       "admin_mapping_disabled": {
         "title": "Bir grup Yönetici rolüne eşlenemez.",
-        "cause": "SSO kullanıcıları Yönetici olabilir ayarı kapalı; bu nedenle çoklu oturum açma kullanıcıları en çok Operatör olabilir.",
+        "cause": "SSO kullanıcıları Yönetici olabilir ayarı kapalı; bu nedenle çoklu oturum açma ve dizin kullanıcıları en çok Operatör olabilir.",
         "action": "Önce SSO kullanıcıları Yönetici olabilir ayarını açın ya da grubu başka bir role eşleyin."
       },
       "admin_mappings_exist": {
         "title": "SSO kullanıcıları Yönetici olabilir ayarı henüz kapatılamaz.",
-        "cause": "Bazı gruplar hâlâ Yönetici rolüne eşli.",
+        "cause": "Bir kimlik sağlayıcının ya da dizinin bazı grupları hâlâ Yönetici rolüne eşli.",
         "action": "Bu eşlemeleri kaldırın, ardından ayarı kapatın."
       },
       "public_url_missing": {
@@ -747,6 +747,48 @@
       "not_sso_user": {
         "title": "Hesabınız çoklu oturum açma kullanmıyor.",
         "cause": "Yalnızca çoklu oturum açma kullanıcıları kimlik sağlayıcıda onay verir.",
+        "action": "Bunun yerine doğrulama kodunuzla onaylayın."
+      }
+    },
+    "ldap": {
+      "signin_refused": {
+        "title": "Kullanıcı adı ya da parola yanlış veya erişiminiz yok.",
+        "cause": "Dizin bu kullanıcı adını ve parolayı kabul etmedi, gruplarınızdan hiçbirine Alice'te bir rol verilmemiş ya da hesabınız şu anda oturum açamıyor.",
+        "action": "Kullanıcı adını ve parolayı denetleyip yeniden deneyin. Sorun sürerse yöneticinize başvurun."
+      },
+      "directory_unavailable": {
+        "title": "Dizin şu anda oturum açmak için kullanılamıyor.",
+        "cause": "Alice dizine ulaşamadı, dizinin ayarları çalışmıyor ya da bu dizinle oturum açma kapalı.",
+        "action": "Daha sonra yeniden deneyin ya da başka bir oturum açma seçeneği seçin. Yöneticiler yerel hesaplarıyla ve doğrulama kodlarıyla oturum açmaya devam edebilir."
+      },
+      "directory_in_use": {
+        "title": "Bu dizinin kullanıcıları var.",
+        "cause": "Bu dizinle oturum açmış kişiler olduğundan dizin silinemez; adresleri ve benzersiz kimlik özniteliği değiştirilemez.",
+        "action": "Bunun yerine bu dizinle oturum açmayı kapatın."
+      },
+      "connection_test_failed": {
+        "title": "Bağlantı testi başarısız oldu.",
+        "cause": "Alice hizmet hesabıyla bağlanamadı ya da kullanıcı temel DN'sinde arama yapamadı (neden: {{reason}}, adım: {{detail}}).",
+        "action": "Adresleri, sertifika yetkilisini, hizmet hesabını ve kullanıcı temel DN'sini denetleyip yeniden test edin."
+      },
+      "too_many_directories": {
+        "title": "Daha fazla dizin eklenemez.",
+        "cause": "Alice en çok {{max}} dizinle çalışır.",
+        "action": "Artık kullanmadığınız bir dizini silin ya da var olan birini değiştirin."
+      },
+      "signin_test_failed": {
+        "title": "Oturum açma testi başarısız oldu.",
+        "cause": "Dizin test oturum açmasını reddetti (neden: {{reason}}, adım: {{detail}}). Kimse oturum açmadı.",
+        "action": "Kullanıcı adını ve parolayı, kullanıcı filtresini ve oturum açma adı özniteliğini denetleyip yeniden test edin."
+      },
+      "enrolment_required": {
+        "title": "Önce doğrulayıcınızı kurun.",
+        "cause": "Bu dizin doğrulama kodu istiyor ve hesabınızda henüz doğrulayıcı yok.",
+        "action": "Oturumu kapatıp yeniden açın: Alice doğrulayıcınızı o zaman kurar."
+      },
+      "not_directory_user": {
+        "title": "Hesabınız dizinle oturum açmıyor.",
+        "cause": "Yalnızca dizin kullanıcıları dizin parolalarıyla onay verir.",
         "action": "Bunun yerine doğrulama kodunuzla onaylayın."
       }
     },

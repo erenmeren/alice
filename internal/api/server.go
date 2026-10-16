@@ -22,6 +22,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/audit/forward"
 	"alice/internal/auth"
+	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
 	"alice/internal/auth/ratelimit"
 	"alice/internal/backup"
@@ -39,6 +40,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/rbac"
 	"alice/internal/reports"
+	"alice/internal/secrets"
 	"alice/internal/setup"
 	"alice/internal/sshkeys"
 	"alice/internal/version"
@@ -77,6 +79,12 @@ type AuthService interface {
 	CreateToken(ctx context.Context, p auth.Principal, m auth.Meta, in auth.NewToken) (string, auth.Token, error)
 	ListTokens(ctx context.Context, p auth.Principal, m auth.Meta, userID uuid.UUID) ([]auth.Token, error)
 	RevokeToken(ctx context.Context, p auth.Principal, m auth.Meta, id uuid.UUID) error
+	// Directory sign-in (LDAP, Task 5): the handlers talk to the directory first (LDAPService.Verify), then these hold
+	// the transaction.
+	SignInLDAP(ctx context.Context, id auth.LDAPIdentity, role rbac.Role, mfaRequired bool, m auth.Meta) (auth.LoginResult, error)
+	StepUpLDAP(ctx context.Context, p auth.Principal, id auth.LDAPIdentity, role rbac.Role, mfaCode string, mfaRequired bool,
+		m auth.Meta) (auth.SessionResult, error)
+	RefuseLDAP(ctx context.Context, id auth.LDAPIdentity, reason string, m auth.Meta) error
 }
 
 // SetupService is the part of setup.Service the HTTP layer uses.
@@ -293,6 +301,27 @@ type SSOService interface {
 	Complete(ctx context.Context, providerID uuid.UUID, q url.Values, binding string, m auth.Meta) (oidc.Completion, error)
 }
 
+// LDAPService is the part of *ldap.Service the HTTP layer uses (directory sign-in, Task 5): directories, their group
+// mappings, Test connection and Test sign-in, the sign-in page's list and the password check of a sign-in or step-up.
+// A Directory never carries the service account password.
+type LDAPService interface {
+	Directories(ctx context.Context) ([]ldap.Directory, error)
+	Directory(ctx context.Context, id uuid.UUID) (ldap.Directory, error)
+	PublicDirectories(ctx context.Context) ([]ldap.PublicDirectory, error)
+	CreateDirectory(ctx context.Context, a audit.Actor, in ldap.DirectoryInput) (ldap.Directory, error)
+	UpdateDirectory(ctx context.Context, a audit.Actor, id uuid.UUID, version int, p ldap.DirectoryPatch) (ldap.Directory, error)
+	DeleteDirectory(ctx context.Context, a audit.Actor, id uuid.UUID, version int) error
+	Mappings(ctx context.Context, directoryID uuid.UUID) ([]ldap.Mapping, error)
+	CreateMapping(ctx context.Context, a audit.Actor, directoryID uuid.UUID, group string, role rbac.Role) (ldap.Mapping, error)
+	DeleteMapping(ctx context.Context, a audit.Actor, id uuid.UUID) error
+	TestConnection(ctx context.Context, a audit.Actor, id uuid.UUID) error
+	TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext) (ldap.TestResult, error)
+	Verify(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext) (ldap.Identity, ldap.Directory, error)
+	ResolveRole(ctx context.Context, directoryID uuid.UUID, groups []string) (rbac.Role, bool, error)
+}
+
+var _ LDAPService = (*ldap.Service)(nil)
+
 // BackupService is the part of *backup.Service the HTTP layer uses (C8, Phase 8): the list, a backup made now, the
 // download, the free space, the schedule and the state.
 type BackupService interface {
@@ -369,6 +398,7 @@ type Deps struct {
 	Alerts         AlertsService
 	Reports        ReportsService
 	SSO            SSOService
+	LDAP           LDAPService      // directory (LDAP and Active Directory) sign-in
 	Backup         BackupService    // Phase 8: nil leaves the backup routes and the dashboard's backup section unavailable
 	Forward        ForwardService   // Phase 8: audit forwarding
 	ACME           ACMEService      // ACME issuance (inventory.Service)
@@ -401,6 +431,16 @@ const (
 	limitDiscovery        // 10 per minute per user or token: starting and cancelling scans, one budget for both
 	limitDiscoveryResolve // 30 per minute per user or token: the save-time check that a listed name resolves (ALC-DSC-0010)
 	limitDiscoveryPreview // 60 per minute per user or token: the scope form's live size check (no look-up, nothing dialed)
+	limitDirectoryTest    // 5 per minute per user: a directory's Test connection and Test sign-in, one budget for both
+)
+
+// Directory sign-in limits (plan ruling 5). ldapLoginLimit attempts per ldapLoginWindow for one sign-in name at one
+// directory, counted before any directory traffic, for unknown names too, and given back after a successful sign-in:
+// Alice can never be the means of locking a directory account (a typical Active Directory lockout threshold is 5 to
+// 10 failures in 30 minutes). The per-address limit of the sign-in form (limitLogin) applies as well.
+const (
+	ldapLoginLimit  = 5
+	ldapLoginWindow = 15 * time.Minute
 )
 
 // route is one documented operation. The route table is the single source of
@@ -447,6 +487,11 @@ type server struct {
 	// oidcCallbacks: identity provider callbacks per binding cookie: 10/min (S-11: not per address, so a company
 	// behind one address is not limited to a few sign-ins a minute).
 	oidcCallbacks *ratelimit.Limiter
+	// ldapLogins: directory sign-in and step-up attempts per (directory, case-folded sign-in name): ldapLoginLimit per
+	// ldapLoginWindow.
+	ldapLogins *ratelimit.Limiter
+	// ldapRefusalFloor: the least time a refused directory sign-in takes (ldapRefusalFloor const).
+	ldapRefusalFloor time.Duration
 	// denials coalesces the guard's denial audit rows (AUD-06).
 	denials *denialCoalescer
 	// chainScan is the one slot for reading the whole audit chain (verification, export) in this
@@ -486,7 +531,9 @@ func newServer(d Deps) *server {
 		testMails: ratelimit.New(d.Clock, 5, time.Minute),
 		export:    ratelimit.New(d.Clock, 10, time.Minute),
 
-		oidcCallbacks: ratelimit.New(d.Clock, 10, time.Minute),
+		oidcCallbacks:    ratelimit.New(d.Clock, 10, time.Minute),
+		ldapLogins:       ratelimit.New(d.Clock, ldapLoginLimit, ldapLoginWindow),
+		ldapRefusalFloor: ldapRefusalFloor,
 		actions: map[limitClass]*ratelimit.Limiter{
 			limitBackupNow:   ratelimit.New(d.Clock, 5, time.Minute),
 			limitHTTPSUpload: ratelimit.New(d.Clock, 5, time.Minute),
@@ -496,6 +543,7 @@ func newServer(d Deps) *server {
 			limitDiscovery:        ratelimit.New(d.Clock, 10, time.Minute),
 			limitDiscoveryResolve: ratelimit.New(d.Clock, 30, time.Minute),
 			limitDiscoveryPreview: ratelimit.New(d.Clock, 60, time.Minute),
+			limitDirectoryTest:    ratelimit.New(d.Clock, 5, time.Minute),
 		},
 
 		denials:   newDenialCoalescer(d.Clock),
@@ -537,6 +585,7 @@ func (s *Server) ResetLimits() {
 	s.s.testMails.Reset()
 	s.s.export.Reset()
 	s.s.oidcCallbacks.Reset()
+	s.s.ldapLogins.Reset()
 	for _, l := range s.s.actions {
 		l.Reset()
 	}
@@ -659,6 +708,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.setupRoutes()...)
 	routes = append(routes, s.authRoutes()...)
 	routes = append(routes, s.oidcRoutes()...)
+	routes = append(routes, s.ldapSignInRoutes()...)
 	routes = append(routes, s.userRoutes()...)
 	routes = append(routes, s.tokenRoutes()...)
 	routes = append(routes, s.auditRoutes()...)
@@ -678,6 +728,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.dashboardRoutes()...)
 	routes = append(routes, s.viewRoutes()...)
 	routes = append(routes, s.ssoRoutes()...)
+	routes = append(routes, s.ldapRoutes()...)
 	routes = append(routes, s.backupRoutes()...)
 	routes = append(routes, s.httpsRoutes()...)
 	routes = append(routes, s.forwardingRoutes()...)

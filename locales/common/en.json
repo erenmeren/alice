@@ -146,9 +146,9 @@
         "action": "Give another person the Administrator role first, then try again."
       },
       "sso_user": {
-        "title": "This change is not possible for a single sign-on user.",
-        "cause": "The role of a single sign-on user comes from their groups. They have no Alice password or authenticator, and they cannot create API tokens.",
-        "action": "Change the user's groups at the identity provider; disable the user here if they must stop at once."
+        "title": "This change is not possible for a single sign-on or directory user.",
+        "cause": "The role of a single sign-on or directory user comes from their groups. They have no Alice password and cannot create API tokens, and they confirm it's them at their identity provider or with their directory password.",
+        "action": "Change the user's groups at the identity provider or in the directory; disable the user here if they must stop at once."
       }
     },
     "token": {
@@ -676,12 +676,12 @@
       },
       "admin_mapping_disabled": {
         "title": "A group cannot be mapped to Administrator.",
-        "cause": "SSO users may be Admin is switched off, so single sign-on users can be at most Operators.",
+        "cause": "SSO users may be Admin is switched off, so single sign-on and directory users can be at most Operators.",
         "action": "Switch on SSO users may be Admin first, or map the group to another role."
       },
       "admin_mappings_exist": {
         "title": "SSO users may be Admin cannot be switched off yet.",
-        "cause": "Some groups are still mapped to Administrator.",
+        "cause": "Some groups of an identity provider or a directory are still mapped to Administrator.",
         "action": "Remove those mappings, then switch the setting off."
       },
       "public_url_missing": {
@@ -747,6 +747,48 @@
       "not_sso_user": {
         "title": "Your account does not use single sign-on.",
         "cause": "Only single sign-on users confirm at the identity provider.",
+        "action": "Confirm with your authenticator code instead."
+      }
+    },
+    "ldap": {
+      "signin_refused": {
+        "title": "The user name or password is wrong, or you have no access.",
+        "cause": "The directory did not accept this user name and password, none of your groups is given a role in Alice, or your account cannot sign in at the moment.",
+        "action": "Check the user name and password and try again. If it keeps failing, ask your administrator."
+      },
+      "directory_unavailable": {
+        "title": "The directory cannot be used for sign-in right now.",
+        "cause": "Alice could not reach the directory, its settings do not work, or sign-in through it is switched off.",
+        "action": "Try again later or choose another sign-in option. Administrators can still sign in with their local account and authenticator code."
+      },
+      "directory_in_use": {
+        "title": "This directory has users.",
+        "cause": "People have signed in through this directory, so it cannot be deleted, and its addresses and unique ID attribute cannot be changed.",
+        "action": "Switch sign-in through the directory off instead."
+      },
+      "connection_test_failed": {
+        "title": "The connection test failed.",
+        "cause": "Alice could not bind as the service account or search the user base DN (reason: {{reason}}, step: {{detail}}).",
+        "action": "Check the addresses, the certificate authority, the service account and the user base DN, then test again."
+      },
+      "too_many_directories": {
+        "title": "No more directories can be added.",
+        "cause": "Alice works with at most {{max}} directories.",
+        "action": "Delete a directory you no longer use, or change an existing one."
+      },
+      "signin_test_failed": {
+        "title": "The sign-in test failed.",
+        "cause": "The directory refused the test sign-in (reason: {{reason}}, step: {{detail}}). Nobody was signed in.",
+        "action": "Check the user name and password, the user filter and the sign-in name attribute, then test again."
+      },
+      "enrolment_required": {
+        "title": "Set up your authenticator first.",
+        "cause": "This directory asks for an authenticator code, and your account has none yet.",
+        "action": "Sign out and sign in again: Alice then sets up your authenticator."
+      },
+      "not_directory_user": {
+        "title": "Your account does not sign in through a directory.",
+        "cause": "Only directory users confirm with their directory password.",
         "action": "Confirm with your authenticator code instead."
       }
     },

@@ -28,8 +28,8 @@ func TestListUsers(t *testing.T) {
 	rec := call(NewHandler(d), http.MethodGet, "/api/v1/users", "admin", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.JSONEq(t, `{"items":[
-	  {"id":"0190f5a0-0000-7000-8000-000000000001","username":"admin","display_name":"Çağla admin","email":"admin@example.com","role":"admin","locale":"tr","disabled":false,"mfa_enrolled":true,"last_login_at":"2026-09-30T11:00:00Z","created_at":"2026-09-29T12:00:00Z","auth_source":"local","sso_provider_id":null},
-	  {"id":"0190f5a0-0000-7000-8000-000000000002","username":"operator","display_name":"Çağla operator","email":"operator@example.com","role":"operator","locale":"tr","disabled":false,"mfa_enrolled":true,"last_login_at":"2026-09-30T11:00:00Z","created_at":"2026-09-29T12:00:00Z","auth_source":"local","sso_provider_id":null}]}`, rec.Body.String())
+	  {"id":"0190f5a0-0000-7000-8000-000000000001","username":"admin","display_name":"Çağla admin","email":"admin@example.com","role":"admin","locale":"tr","disabled":false,"mfa_enrolled":true,"last_login_at":"2026-09-30T11:00:00Z","created_at":"2026-09-29T12:00:00Z","auth_source":"local","sso_provider_id":null,"ldap_directory_id":null},
+	  {"id":"0190f5a0-0000-7000-8000-000000000002","username":"operator","display_name":"Çağla operator","email":"operator@example.com","role":"operator","locale":"tr","disabled":false,"mfa_enrolled":true,"last_login_at":"2026-09-30T11:00:00Z","created_at":"2026-09-29T12:00:00Z","auth_source":"local","sso_provider_id":null,"ldap_directory_id":null}]}`, rec.Body.String())
 }
 
 func TestListUsersIsEmptyArrayNotNull(t *testing.T) {

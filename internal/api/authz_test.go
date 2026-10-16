@@ -306,6 +306,14 @@ minute per address); ` + "`GET /api/v1/auth/oidc/{id}/callback`" + ` is the only
 state and creates or steps up a session), is always answered with a 303 redirect (HEAD is 405) and is limited per binding
 cookie (10 a minute) and per address (the anonymous 60 a minute). An SSO
 user's step-up (` + "`POST /api/v1/auth/oidc/stepup`" + `) needs the user's own session.
+
+**Directory sign-in (LDAP and Active Directory).** Every ` + "`/api/v1/ldap/...`" + ` route is ` + "`sso.manage`" + ` like single sign-on's;
+Test connection and Test sign-in (` + "`POST /api/v1/ldap/directories/{id}/actions/test-connection`" + ` and ` + "`.../test-signin`" + `) share a
+limit of 5 a minute per user. The sign-in (` + "`POST /api/v1/auth/ldap/{id}/login`" + `) is public and limited like the sign-in form
+(10 a minute per address) and, before any traffic to the directory, to 5 attempts in 15 minutes per directory and sign-in name,
+unknown names included (a successful sign-in gives its attempt back). A directory user's step-up
+(` + "`POST /api/v1/auth/ldap/stepup`" + `) needs the user's own session and repeats the directory password (and the authenticator code
+when the directory asks for MFA).
 `
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {
@@ -473,6 +481,14 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.Public
 		case p == "/api/v1/auth/oidc/stepup":
 			want = rbac.Session
+		// Directory sign-in (LDAP, Task 5): the administration is sso.manage like single sign-on's; the sign-in is
+		// public, a directory user's step-up a session's.
+		case under(p, "/api/v1/ldap"):
+			want = rbac.SSOManage
+		case p == "/api/v1/auth/ldap/directories", p == "/api/v1/auth/ldap/{id}/login":
+			want = rbac.Public
+		case p == "/api/v1/auth/ldap/stepup":
+			want = rbac.Session
 		case under(p, "/api/v1/audit"):
 			want = rbac.AuditRead
 		}
@@ -638,6 +654,19 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 		"POST /api/v1/auth/oidc/{id}/start",
 		"GET /api/v1/auth/oidc/{id}/callback",
 		"POST /api/v1/auth/oidc/stepup",
+		"GET /api/v1/ldap/directories",
+		"POST /api/v1/ldap/directories",
+		"GET /api/v1/ldap/directories/{id}",
+		"PATCH /api/v1/ldap/directories/{id}",
+		"DELETE /api/v1/ldap/directories/{id}",
+		"POST /api/v1/ldap/directories/{id}/actions/test-connection",
+		"POST /api/v1/ldap/directories/{id}/actions/test-signin",
+		"GET /api/v1/ldap/group-mappings",
+		"POST /api/v1/ldap/group-mappings",
+		"DELETE /api/v1/ldap/group-mappings/{id}",
+		"GET /api/v1/auth/ldap/directories",
+		"POST /api/v1/auth/ldap/{id}/login",
+		"POST /api/v1/auth/ldap/stepup",
 		"GET /api/v1/acme/providers",
 		"POST /api/v1/acme/providers",
 		"GET /api/v1/acme/providers/{id}",
@@ -829,7 +858,9 @@ var (
 	lockAvailable = []string{"/api/v1/auth", "/api/v1/setup", "/api/v1/license", "/api/v1/users", "/api/v1/tokens",
 		"/api/v1/audit", "/api/v1/backup", "/api/v1/backups", "/api/v1/settings",
 		// Phase 7 (C13): the Dashboard, its conditions and the delivery state are reads; saved views change nothing outside Alice.
-		"/api/v1/dashboard", "/api/v1/alerts", "/api/v1/views", "/api/v1/notifications", "/api/v1/sso"}
+		"/api/v1/dashboard", "/api/v1/alerts", "/api/v1/views", "/api/v1/notifications", "/api/v1/sso",
+		// Directory sign-in (Task 5): platform administration like single sign-on's.
+		"/api/v1/ldap"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings",
 		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.

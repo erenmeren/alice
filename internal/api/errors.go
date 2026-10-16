@@ -16,6 +16,7 @@ import (
 	"alice/internal/alerts/expiry"
 	"alice/internal/audit/forward"
 	"alice/internal/auth"
+	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
 	"alice/internal/backup"
 	"alice/internal/discovery"
@@ -70,7 +71,8 @@ var (
 	ErrUsernameTaken = ErrorCode{Code: "ALC-USR-0001", Reason: "user.username_taken", Status: http.StatusConflict}
 	ErrLastAdmin     = ErrorCode{Code: "ALC-USR-0002", Reason: "user.last_admin", Status: http.StatusConflict}
 	// ErrSSOUser: a role, password or authenticator change of a single sign-on user (Phase 7, C15; reason user.* as the
-	// other USR codes, cosmetic ruling C-s4-07).
+	// other USR codes, cosmetic ruling C-s4-07). It also answers auth.ErrDirectoryUser (LDAP sign-in, Task 5 decision:
+	// one code for both kinds of users whose role comes from their groups; the texts name both).
 	ErrSSOUser              = ErrorCode{Code: "ALC-USR-0003", Reason: "user.sso_user", Status: http.StatusConflict}
 	ErrTokenScopeNotAllowed = ErrorCode{Code: "ALC-TOK-0001", Reason: "token.scope_not_allowed", Status: http.StatusUnprocessableEntity}
 	// ErrAuditBusy: another verification or export of the audit log is running in this process (AUD-06).
@@ -191,6 +193,20 @@ var (
 	ErrSSOStepUpOtherUser      = ErrorCode{Code: "ALC-SSO-0014", Reason: "sso.stepup_other_user", Status: http.StatusForbidden}
 	ErrSSOIdPError             = ErrorCode{Code: "ALC-SSO-0015", Reason: "sso.idp_error", Status: http.StatusUnauthorized}
 	ErrSSONotSSOUser           = ErrorCode{Code: "ALC-SSO-0016", Reason: "sso.not_sso_user", Status: http.StatusConflict}
+
+	// Directory (LDAP and Active Directory) sign-in. 0001 is the one answer of every refused directory sign-in that could
+	// tell something about a user (unknown name, wrong password, no mapped group, a disabled or locked user, an e-mail
+	// in use, several entries, an unusable name): same status, same body; the audit row carries the reason. 0002 is a
+	// directory that is unreachable, misconfigured or switched off: it says nothing about users. A group mapped to
+	// Administrator while "SSO users may be Admin" is off is ALC-SSO-0002 (the same switch).
+	ErrLDAPSignInRefused        = ErrorCode{Code: "ALC-LDAP-0001", Reason: "ldap.signin_refused", Status: http.StatusUnauthorized}
+	ErrLDAPDirectoryUnavailable = ErrorCode{Code: "ALC-LDAP-0002", Reason: "ldap.directory_unavailable", Status: http.StatusServiceUnavailable, Retryable: true}
+	ErrLDAPDirectoryInUse       = ErrorCode{Code: "ALC-LDAP-0003", Reason: "ldap.directory_in_use", Status: http.StatusConflict}
+	ErrLDAPConnectionTestFailed = ErrorCode{Code: "ALC-LDAP-0004", Reason: "ldap.connection_test_failed", Status: http.StatusUnprocessableEntity}
+	ErrLDAPTooManyDirectories   = ErrorCode{Code: "ALC-LDAP-0005", Reason: "ldap.too_many_directories", Status: http.StatusConflict}
+	ErrLDAPSignInTestFailed     = ErrorCode{Code: "ALC-LDAP-0006", Reason: "ldap.signin_test_failed", Status: http.StatusUnprocessableEntity}
+	ErrLDAPEnrolmentRequired    = ErrorCode{Code: "ALC-LDAP-0007", Reason: "ldap.enrolment_required", Status: http.StatusConflict}
+	ErrLDAPNotDirectoryUser     = ErrorCode{Code: "ALC-LDAP-0008", Reason: "ldap.not_directory_user", Status: http.StatusConflict}
 
 	// Phase 6: rotation policies and runs (R41, C11). The run results (rotations.result_code) and the location
 	// errors (rotation_locations.error_code) are stored reasons; the API also answers the request refusals with them.
@@ -464,6 +480,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrSSODiscoveryFailed, ErrSSOAdminMappingDisabled, ErrSSOAdminMappingsExist, ErrSSOPublicURLMissing, ErrSSOProviderInUse,
 		ErrSSONoAccess, ErrSSOGroupsOverage, ErrSSOEmailInUse, ErrSSOIdPUnreachable, ErrSSOLoginInvalid, ErrSSOLoginExpired,
 		ErrSSOUserDisabled, ErrSSOProviderDisabled, ErrSSOStepUpOtherUser, ErrSSOIdPError, ErrSSONotSSOUser,
+		ErrLDAPSignInRefused, ErrLDAPDirectoryUnavailable, ErrLDAPDirectoryInUse, ErrLDAPConnectionTestFailed,
+		ErrLDAPTooManyDirectories, ErrLDAPSignInTestFailed, ErrLDAPEnrolmentRequired, ErrLDAPNotDirectoryUser,
 		ErrRotPolicyExists, ErrRotInProgress, ErrRotPlanChanged, ErrRotNothingToRotate, ErrRotNotWaiting, ErrRotAddFailed,
 		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
 		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
@@ -719,6 +737,22 @@ var errorMap = []struct {
 	{auth.ErrOIDCUserDisabled, ErrSSOUserDisabled, nil},
 	{auth.ErrOIDCOtherUser, ErrSSOStepUpOtherUser, nil},
 	{auth.ErrOIDCIdentityInvalid, ErrSSOLoginInvalid, nil},
+	// Directory sign-in (Task 5). *ldap.LoginError is matched in classify. ldap.ErrTooMany of a group mapping is a field
+	// error (failLDAP); here it is the directory limit. The auth sentinels of a directory sign-in are answered by the
+	// sign-in handlers with the generic refusal after RefuseLDAP; they are mapped here too so that none can become a 500.
+	{auth.ErrDirectoryUser, ErrSSOUser, nil},
+	{ldap.ErrAdminMappingDisabled, ErrSSOAdminMappingDisabled, nil},
+	{ldap.ErrDirectoryInUse, ErrLDAPDirectoryInUse, nil},
+	{ldap.ErrTooMany, ErrLDAPTooManyDirectories, map[string]string{"max": strconv.Itoa(ldap.MaxDirectories)}},
+	{ldap.ErrNotFound, ErrNotFound, nil},
+	{ldap.ErrVersion, ErrPreconditionFailed, nil},
+	{ldap.ErrNoConnectionTest, ErrLDAPConnectionTestFailed, nil},
+	{auth.ErrLDAPEnrolmentRequired, ErrLDAPEnrolmentRequired, nil},
+	{auth.ErrLDAPEmailInUse, ErrLDAPSignInRefused, nil},
+	{auth.ErrLDAPUserDisabled, ErrLDAPSignInRefused, nil},
+	{auth.ErrLDAPUserLocked, ErrLDAPSignInRefused, nil},
+	{auth.ErrLDAPOtherUser, ErrLDAPSignInRefused, nil},
+	{auth.ErrLDAPIdentityInvalid, ErrLDAPSignInRefused, nil},
 	// Phase 8 (C12).
 	{backup.ErrRunning, ErrBackupRunning, nil},
 	{backup.ErrNotConfigured, ErrBackupNotConfigured, nil},
@@ -934,6 +968,10 @@ func classify(err error) (ErrorCode, map[string]string, bool) {
 	if errors.As(err, &login) {
 		return loginErrorCode(login), nil, true
 	}
+	var ldapErr *ldap.LoginError
+	if errors.As(err, &ldapErr) {
+		return ldapLoginCode(ldapErr), nil, true
+	}
 	var perr *providers.Error
 	if errors.As(err, &perr) {
 		// Only the stable reason and its allowlisted primitive params reach the client; the
@@ -988,6 +1026,16 @@ func discoveryCode(err error) (ErrorCode, map[string]string, bool) {
 		params["index"] = strconv.Itoa(de.Index)
 	}
 	return ec, params, true
+}
+
+// ldapLoginCode is the answer to a refused directory sign-in: ALC-LDAP-0002 for a directory that is unreachable,
+// misconfigured or switched off (nothing about the person), the generic ALC-LDAP-0001 for every other reason.
+func ldapLoginCode(e *ldap.LoginError) ErrorCode {
+	switch e.Reason {
+	case ldap.ReasonUnreachable, ldap.ReasonMisconfigured, ldap.ReasonDisabled:
+		return ErrLDAPDirectoryUnavailable
+	}
+	return ErrLDAPSignInRefused
 }
 
 // loginErrorCode is the code of a refused sign-in or step-up: one of ALC-SSO-0006..0015, ALC-SSO-0010 for a reason

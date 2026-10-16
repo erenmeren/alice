@@ -322,7 +322,7 @@ describe('UsersPage access and step-up', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Manage ayse@corp.example' }));
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Edit' }));
     await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Save changes' }));
-    expect(await screen.findByText('This change is not possible for a single sign-on user.')).toBeInTheDocument();
+    expect(await screen.findByText('This change is not possible for a single sign-on or directory user.')).toBeInTheDocument();
     expect(body).not.toHaveProperty('role');
   });
 

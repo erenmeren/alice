@@ -592,13 +592,13 @@ is told to delete it.
 
 **What to do.** Give the Administrator role to another person first, then repeat the change.
 
-## ALC-USR-0003: This change is not possible for a single sign-on user
+## ALC-USR-0003: This change is not possible for a single sign-on or directory user
 
-**Meaning.** A role change, a password reset, an authenticator reset or a new API token was refused for a user who signs in through an identity provider. (HTTP 409, reason `user.sso_user`.)
+**Meaning.** A role change, a password change or reset, an authenticator reset or a new API token was refused for a user who signs in through an identity provider, or a role change, a password change or reset, a new API token or a confirmation with the authenticator code alone was refused for a user who signs in through a directory (LDAP or Active Directory). (HTTP 409, reason `user.sso_user`.)
 
-**Likely cause.** The role of a single sign-on user comes from their groups. They have no Alice password or authenticator, and they cannot create API tokens.
+**Likely cause.** The role of a single sign-on or directory user comes from their groups. They have no Alice password and cannot create API tokens, and they confirm it's them at their identity provider or with their directory password.
 
-**What to do.** Change the user's groups at the identity provider; disable the user here if they must stop at once.
+**What to do.** Change the user's groups at the identity provider or in the directory; disable the user here if they must stop at once.
 
 ## ALC-TOK-0001: Token access not allowed
 
@@ -1329,7 +1329,7 @@ server again.
 
 **Meaning.** A group mapping to Administrator was refused and recorded in the audit log. (HTTP 409, reason `sso.admin_mapping_disabled`.)
 
-**Likely cause.** SSO users may be Admin is switched off, so single sign-on users can be at most Operators.
+**Likely cause.** SSO users may be Admin is switched off, so single sign-on and directory users can be at most Operators. The switch covers the group mappings of identity providers and of directories.
 
 **What to do.** Switch on SSO users may be Admin first, or map the group to another role.
 
@@ -1337,7 +1337,7 @@ server again.
 
 **Meaning.** Switching off "SSO users may be Admin" was refused. (HTTP 409, reason `sso.admin_mappings_exist`.)
 
-**Likely cause.** Some groups are still mapped to Administrator.
+**Likely cause.** Some groups of an identity provider or a directory are still mapped to Administrator.
 
 **What to do.** Remove those mappings, then switch the setting off.
 
@@ -1442,6 +1442,70 @@ server again.
 **Meaning.** A confirmation at an identity provider was asked for a local account. (HTTP 409, reason `sso.not_sso_user`.)
 
 **Likely cause.** Only single sign-on users confirm at the identity provider.
+
+**What to do.** Confirm with your authenticator code instead.
+
+## ALC-LDAP-0001: The user name or password is wrong, or you have no access
+
+**Meaning.** A sign-in through a directory (LDAP or Active Directory) was refused. Every refusal that could tell something about a person gets this one answer: an unknown user name, a wrong password, no group mapped to a role, a user disabled or locked in Alice, an e-mail address that belongs to a local account, a name that matches several entries or that cannot be sent to a directory. The answer always takes at least 1.5 seconds. (HTTP 401, reason `ldap.signin_refused`.)
+
+**Likely cause.** The user name or password is wrong, or none of the person's groups is given a role in Alice. The audit log records the reason of each refusal as `auth.ldap.denied`; the sign-in name is recorded only when the directory found the entry.
+
+**What to do.** Check the user name and password and try again. Administrators: find the `auth.ldap.denied` row of the attempt (its `reason` says why) and run **Test sign-in** on the directory to see the groups the directory returns.
+
+## ALC-LDAP-0002: The directory cannot be used for sign-in right now
+
+**Meaning.** A directory sign-in or confirmation could not be checked, because the directory could not be reached, its settings do not work (certificate, service account, base DN, filter, attribute) or sign-in through it is switched off. (HTTP 503, reason `ldap.directory_unavailable`.)
+
+**Likely cause.** The directory server is down or the network path to port 636 is blocked, the service account's password changed, or an Administrator switched the directory off.
+
+**What to do.** Try again later or choose another sign-in option. Administrators can still sign in with their local account and authenticator code; run **Test connection** on the directory to see where it stops.
+
+## ALC-LDAP-0003: This directory has users
+
+**Meaning.** Deleting a directory, or changing its addresses or unique ID attribute, was refused. (HTTP 409, reason `ldap.directory_in_use`.)
+
+**Likely cause.** People have signed in through this directory. Their accounts are tied to it and to the unique ID attribute.
+
+**What to do.** Switch sign-in through the directory off instead.
+
+## ALC-LDAP-0004: The connection test failed
+
+**Meaning.** Test connection could not bind as the service account or search the user base DN. The answer names the reason and the step where it stopped, never the server's own text. (HTTP 422, reason `ldap.connection_test_failed`.)
+
+**Likely cause.** A wrong address or port, a certificate the authority field does not trust (`tls`), a wrong service account DN or password (`service_bind`), a user base DN that does not exist (`user_search`), or a firewall (`connect`, `timeout`).
+
+**What to do.** Check the addresses, the certificate authority, the service account and the user base DN, then test again.
+
+## ALC-LDAP-0005: No more directories can be added
+
+**Meaning.** Adding a directory was refused. (HTTP 409, reason `ldap.too_many_directories`.)
+
+**Likely cause.** Alice works with at most 3 directories.
+
+**What to do.** Delete a directory you no longer use, or change an existing one.
+
+## ALC-LDAP-0006: The sign-in test failed
+
+**Meaning.** Test sign-in was refused by the directory. Nobody was signed in and nothing was stored; the answer names the reason and the step where it stopped. (HTTP 422, reason `ldap.signin_test_failed`.)
+
+**Likely cause.** A wrong user name or password (`bad_credentials`), a user filter that finds nobody (`not_found`) or several entries (`ambiguous_user`), or an entry without the unique ID attribute (`unique_id`).
+
+**What to do.** Check the user name and password, the user filter and the sign-in name attribute, then test again.
+
+## ALC-LDAP-0007: Set up your authenticator first
+
+**Meaning.** A directory user's confirmation ("Confirm it's you") was refused after the directory accepted the password: no authenticator code could be checked. Nothing was counted as a failed attempt. (HTTP 409, reason `ldap.enrolment_required`.)
+
+**Likely cause.** The directory asks for an authenticator code, and the user has none yet (for example after an Administrator reset it).
+
+**What to do.** Sign out and sign in again: Alice then sets up the authenticator.
+
+## ALC-LDAP-0008: Your account does not sign in through a directory
+
+**Meaning.** A confirmation with a directory password was asked for an account that does not sign in through a directory. (HTTP 409, reason `ldap.not_directory_user`.)
+
+**Likely cause.** Only directory users confirm with their directory password.
 
 **What to do.** Confirm with your authenticator code instead.
 

@@ -39,6 +39,9 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/auth/oidc/{id}/start` | `public` | yes | yes | yes | yes | yes | no | yes |
 | GET | `/api/v1/auth/oidc/{id}/callback` | `public` | yes | yes | yes | yes | yes | no | yes |
 | POST | `/api/v1/auth/oidc/stepup` | `session` | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/auth/ldap/directories` | `public` | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/ldap/{id}/login` | `public` | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/ldap/stepup` | `session` | no | yes | yes | yes | no | no | yes |
 | GET | `/api/v1/users` | `users.read` | no | yes | no | no | read | no | yes |
 | POST | `/api/v1/users` | `users.manage` | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/users/{id}` | `users.read` | no | yes | no | no | read | no | yes |
@@ -157,6 +160,16 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | DELETE | `/api/v1/sso/group-mappings/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
 | PUT | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/ldap/directories` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/directories` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/ldap/directories/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| PATCH | `/api/v1/ldap/directories/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/ldap/directories/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/directories/{id}/actions/test-connection` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/directories/{id}/actions/test-signin` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/ldap/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/ldap/group-mappings/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/backups` | `backup.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/backups` | `backup.manage` | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/backups/{name}/download` | `backup.manage` | no | yes | no | no | no | yes | yes |
@@ -290,3 +303,11 @@ minute per address); `GET /api/v1/auth/oidc/{id}/callback` is the only GET that 
 state and creates or steps up a session), is always answered with a 303 redirect (HEAD is 405) and is limited per binding
 cookie (10 a minute) and per address (the anonymous 60 a minute). An SSO
 user's step-up (`POST /api/v1/auth/oidc/stepup`) needs the user's own session.
+
+**Directory sign-in (LDAP and Active Directory).** Every `/api/v1/ldap/...` route is `sso.manage` like single sign-on's;
+Test connection and Test sign-in (`POST /api/v1/ldap/directories/{id}/actions/test-connection` and `.../test-signin`) share a
+limit of 5 a minute per user. The sign-in (`POST /api/v1/auth/ldap/{id}/login`) is public and limited like the sign-in form
+(10 a minute per address) and, before any traffic to the directory, to 5 attempts in 15 minutes per directory and sign-in name,
+unknown names included (a successful sign-in gives its attempt back). A directory user's step-up
+(`POST /api/v1/auth/ldap/stepup`) needs the user's own session and repeats the directory password (and the authenticator code
+when the directory asks for MFA).

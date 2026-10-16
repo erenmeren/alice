@@ -309,6 +309,9 @@ paths:
     post:
       operationId: stepUp
       summary: Confirm a TOTP code to allow sensitive actions for 5 minutes (session ID is regenerated)
+      description: >-
+        For local users. A single sign-on user confirms at the identity provider (/auth/oidc/stepup), a directory user
+        with the directory password (/auth/ldap/stepup); a directory user is refused here with 409 ALC-USR-0003.
       x-permission: session
       requestBody:
         required: true
@@ -2916,6 +2919,106 @@ paths:
         "409": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/ldap/directories:
+    get:
+      operationId: listPublicDirectories
+      summary: The directories the sign-in page offers under "Sign in to" (switched on; ID and name only, never an address)
+      x-permission: public
+      responses:
+        "200":
+          description: The directories, by name
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/PublicDirectory" } }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/ldap/{id}/login:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: directoryLogin
+      summary: Sign in with a directory (LDAP or Active Directory) password
+      description: >-
+        The answer and the cookies are the sign-in form's: a pending session cookie for the MFA step (status
+        mfa_required or mfa_enrollment_required, then /auth/mfa/enroll and /auth/mfa/verify), or, when the directory
+        does not ask for MFA, a full session cookie at once (status signed_in). Limits come first: 10 per minute per
+        address, as the sign-in form, and 5 attempts in 15 minutes per directory and sign-in name (case-folded), counted
+        before any traffic to the directory and for unknown names too; a successful sign-in gives its attempt back (429
+        ALC-SYS-0005 with Retry-After). Every refusal that could tell something about the person (unknown name, wrong
+        password, no mapped group, a disabled or locked user, an e-mail of a local account, several entries, a name that
+        cannot be sent) is the same 401 ALC-LDAP-0001, written to the audit log as auth.ldap.denied with its reason, and
+        takes at least 1.5 seconds. A directory that is unreachable, misconfigured, switched off or unknown is 503
+        ALC-LDAP-0002. The password is never stored, logged or returned.
+      x-permission: public
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string, maxLength: 64 }
+                password: { type: string, maxLength: 1024, writeOnly: true }
+      responses:
+        "200":
+          description: Password accepted; MFA is next, or the person is signed in
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, csrf_token]
+                properties:
+                  status: { type: string, enum: [mfa_required, mfa_enrollment_required, signed_in] }
+                  csrf_token: { type: string, description: Send as X-CSRF-Token on the next requests }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/auth/ldap/stepup:
+    post:
+      operationId: directoryStepUp
+      summary: Confirm a directory user's identity with the directory password (and the authenticator code) for 5 minutes
+      description: >-
+        The directory checks the password again for the same directory entry, the groups give the role again, and, when
+        the directory asks for MFA, code must be a valid authenticator code (401 ALC-AUTH-0006 when it is not; 409
+        ALC-LDAP-0007 when the user has no authenticator yet). username is the directory sign-in name; it defaults to the
+        Alice user name. A wrong password, another entry's password or no mapped group is 401 ALC-LDAP-0001 (no mapped
+        group also ends the user's sessions). A user who does not sign in through a directory is refused with 409
+        ALC-LDAP-0008. 5 per minute per address, and the sign-in's 5 attempts in 15 minutes per directory and name. The
+        session ID is regenerated.
+      x-permission: session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [password]
+              properties:
+                username: { type: string, maxLength: 64 }
+                password: { type: string, maxLength: 1024, writeOnly: true }
+                code: { type: string, maxLength: 16 }
+      responses:
+        "200":
+          description: Step-up active
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionInfo" }
+        "400": { $ref: "#/components/responses/Error" }
+        "401": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/sso/providers:
     get:
       operationId: listIdentityProviders
@@ -3122,7 +3225,8 @@ paths:
       operationId: putSSOSettings
       summary: Switch "SSO users may be Admin" (If-Match required; "0" for the first save)
       description: >-
-        Switching it off is refused while groups are mapped to Administrator (409 ALC-SSO-0003); it then demotes SSO
+        The switch covers single sign-on and directory users alike. Switching it off is refused while groups of an
+        identity provider or a directory are mapped to Administrator (409 ALC-SSO-0003); it then demotes SSO and directory
         Administrators to Operator and ends their sessions. allow_admin_role is required (422 validation.required when it
         is missing; null is 400): the switch is never turned off by an omitted key.
       x-permission: sso.manage
@@ -3149,6 +3253,233 @@ paths:
         "400": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
         "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ldap/directories:
+    get:
+      operationId: listDirectories
+      summary: The configured directories, by name (never the service account password)
+      x-permission: sso.manage
+      responses:
+        "200":
+          description: The directories
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Directory" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createDirectory
+      summary: Add a directory (LDAP or Active Directory); nothing is dialled (Test connection checks the settings)
+      description: >-
+        Keys are matched exactly; null is not a value (400). At most 3 directories (409 ALC-LDAP-0005). The service
+        account password is stored sealed and is never returned or logged. A directory is created switched off unless
+        enabled is true, and with MFA on unless mfa_required is false. Field errors are 422 ALC-SYS-0006. Works while the
+        license is expired.
+      x-permission: sso.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DirectoryCreate" }
+      responses:
+        "201":
+          description: The directory
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Directory" }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ldap/directories/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getDirectory
+      summary: One directory
+      x-permission: sso.manage
+      responses:
+        "200":
+          description: The directory
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Directory" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateDirectory
+      summary: Change a directory (If-Match required; only the keys given change)
+      description: >-
+        An omitted bind_password keeps the stored one. A change that would send the stored password to another server or
+        account (a new address, bind DN, unique ID attribute or certificate authority) needs bind_password again (422).
+        While people have signed in through the directory its addresses and unique ID attribute cannot change (409
+        ALC-LDAP-0003). null is not a value (400). 412 ALC-SYS-0008 when If-Match is missing or names another version.
+      x-permission: sso.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DirectoryPatch" }
+      responses:
+        "200":
+          description: The changed directory
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Directory" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteDirectory
+      summary: Delete a directory, its group mappings and its stored password (If-Match required)
+      description: 409 ALC-LDAP-0003 while people have signed in through it (switch it off instead).
+      x-permission: sso.manage
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ldap/directories/{id}/actions/test-connection:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: testDirectoryConnection
+      summary: Bind as the service account and search the user base DN once (the body is empty or {})
+      description: >-
+        Uses the stored settings, also of a directory that is switched off. A failure is 422 ALC-LDAP-0004 with params
+        reason and detail (closed labels, never the server's text). Every run is recorded in the audit log. 5 per minute
+        per user, shared with Test sign-in.
+      x-permission: sso.manage
+      responses:
+        "200":
+          description: The connection works
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [result]
+                properties:
+                  result: { type: string, enum: [ok] }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ldap/directories/{id}/actions/test-signin:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: testDirectorySignIn
+      summary: Run a directory sign-in without signing anyone in; shows the groups found and the role they would give
+      description: >-
+        Uses the stored settings, also of a directory that is switched off. The password is never stored. A refused
+        attempt is 422 ALC-LDAP-0006 with params reason and detail. Every run is recorded in the audit log with the
+        sign-in name and the result. 5 per minute per user, shared with Test connection.
+      x-permission: sso.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, password]
+              properties:
+                username: { type: string, maxLength: 64 }
+                password: { type: string, maxLength: 1024, writeOnly: true }
+      responses:
+        "200":
+          description: Who the directory says the person is, and the role (null when no group is mapped)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DirectoryTestResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ldap/group-mappings:
+    get:
+      operationId: listDirectoryGroupMappings
+      summary: A directory's group mappings, by group
+      x-permission: sso.manage
+      parameters:
+        - { name: directory_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The mappings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/DirectoryMapping" } }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createDirectoryGroupMapping
+      summary: Give the members of a directory group a role
+      description: >-
+        group is the value exactly as the group search returns it (a DN or the group name attribute; matched exactly and
+        case-sensitively: copy it from Test sign-in). At most 200 mappings per directory (422 validation.out_of_range on
+        group). A group can be mapped to Administrator only while "SSO users may be Admin" is on (409 ALC-SSO-0002,
+        recorded in the audit log). A person with several mapped groups gets the highest role.
+      x-permission: sso.manage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [directory_id, group, role]
+              additionalProperties: false
+              properties:
+                directory_id: { type: string, format: uuid }
+                group: { type: string, minLength: 1, maxLength: 1024 }
+                role: { type: string, enum: [admin, operator, auditor] }
+      responses:
+        "201":
+          description: The mapping
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DirectoryMapping" }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/ldap/group-mappings/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    delete:
+      operationId: deleteDirectoryGroupMapping
+      summary: Remove a group mapping of the directory named by directory_id
+      description: 404 when that directory has no mapping with this ID. The role of people it gave changes at their next sign-in or step-up.
+      x-permission: sso.manage
+      parameters:
+        - { name: directory_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "204": { description: Removed }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/backups:
     get:
@@ -5459,7 +5790,7 @@ components:
         qr_png: { type: string, contentEncoding: base64, description: PNG image of otpauth_uri }
     User:
       type: object
-      required: [id, username, display_name, email, role, locale, disabled, mfa_enrolled, last_login_at, created_at, auth_source, sso_provider_id]
+      required: [id, username, display_name, email, role, locale, disabled, mfa_enrolled, last_login_at, created_at, auth_source, sso_provider_id, ldap_directory_id]
       properties:
         id: { type: string, format: uuid }
         username: { type: string }
@@ -5471,8 +5802,9 @@ components:
         mfa_enrolled: { type: boolean }
         last_login_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }
-        auth_source: { type: string, enum: [local, oidc], description: 'How the person signs in: a local account or single sign-on (SSO users have no Alice password or authenticator; their role comes from their groups)' }
-        sso_provider_id: { type: [string, "null"], format: uuid, description: The identity provider of an SSO user; null for a local user }
+        auth_source: { type: string, enum: [local, oidc, ldap], description: 'How the person signs in: a local account, single sign-on or a directory (LDAP or Active Directory). SSO and directory users have no Alice password and their role comes from their groups; SSO users have no Alice authenticator, directory users do' }
+        sso_provider_id: { type: [string, "null"], format: uuid, description: The identity provider of an SSO user; null for every other user }
+        ldap_directory_id: { type: [string, "null"], format: uuid, description: The directory of a directory user; null for every other user }
     SessionInfo:
       type: object
       required: [user, csrf_token, expires_at, idle_expires_at, stepup_until]
@@ -6821,6 +7153,96 @@ components:
       properties:
         allow_admin_role: { type: boolean }
         version: { type: integer }
+    PublicDirectory:
+      type: object
+      required: [id, name]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+    Directory:
+      type: object
+      required: [id, name, addresses, user_base_dn, user_filter, login_attribute, unique_id_attribute, display_name_attribute, email_attribute, bind_dn, bind_password_set, group_base_dn, group_filter, group_name_attribute, ca_pem, mfa_required, enabled, version, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        addresses: { type: array, items: { type: string }, description: '1 to 3 ldaps://host[:port] addresses, tried in order' }
+        user_base_dn: { type: string }
+        user_filter: { type: string, description: 'Holds {login} once' }
+        login_attribute: { type: string }
+        unique_id_attribute: { type: string }
+        display_name_attribute: { type: string }
+        email_attribute: { type: string }
+        bind_dn: { type: string, description: The read-only service account }
+        bind_password_set: { type: boolean, description: Whether a service account password is stored; the password itself is never returned }
+        group_base_dn: { type: string }
+        group_filter: { type: string, description: 'Holds {dn} or {login}' }
+        group_name_attribute: { type: string, description: '"" means the group entry''s DN is the group value' }
+        ca_pem: { type: string }
+        mfa_required: { type: boolean }
+        enabled: { type: boolean }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DirectoryCreate:
+      type: object
+      required: [name, addresses, user_base_dn, user_filter, login_attribute, unique_id_attribute, bind_dn, bind_password, group_base_dn]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60, example: Corp AD }
+        addresses: { type: array, minItems: 1, maxItems: 3, items: { type: string, maxLength: 255 }, example: ['ldaps://dc1.corp.example:636'] }
+        user_base_dn: { type: string, maxLength: 1024, example: 'ou=people,dc=corp,dc=example' }
+        user_filter: { type: string, maxLength: 1024, example: '(uid={login})' }
+        login_attribute: { type: string, example: uid }
+        unique_id_attribute: { type: string, example: entryUUID }
+        display_name_attribute: { type: string, example: cn }
+        email_attribute: { type: string, example: mail }
+        bind_dn: { type: string, maxLength: 1024, example: 'cn=alice-svc,ou=services,dc=corp,dc=example' }
+        bind_password: { type: string, writeOnly: true, minLength: 1, maxLength: 1024, description: Request only; never returned or logged }
+        group_base_dn: { type: string, maxLength: 1024, example: 'ou=groups,dc=corp,dc=example' }
+        group_filter: { type: string, maxLength: 1024, description: 'Default (member={dn})' }
+        group_name_attribute: { type: string, example: cn }
+        ca_pem: { type: string, maxLength: 65536 }
+        mfa_required: { type: boolean, default: true }
+        enabled: { type: boolean, default: false }
+    DirectoryPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        addresses: { type: array, minItems: 1, maxItems: 3, items: { type: string, maxLength: 255 } }
+        user_base_dn: { type: string, maxLength: 1024 }
+        user_filter: { type: string, maxLength: 1024 }
+        login_attribute: { type: string }
+        unique_id_attribute: { type: string }
+        display_name_attribute: { type: string }
+        email_attribute: { type: string }
+        bind_dn: { type: string, maxLength: 1024 }
+        bind_password: { type: string, writeOnly: true, minLength: 1, maxLength: 1024, description: Request only; replaces the stored password }
+        group_base_dn: { type: string, maxLength: 1024 }
+        group_filter: { type: string, maxLength: 1024 }
+        group_name_attribute: { type: string }
+        ca_pem: { type: string, maxLength: 65536 }
+        mfa_required: { type: boolean }
+        enabled: { type: boolean }
+    DirectoryMapping:
+      type: object
+      required: [id, directory_id, group, role, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        directory_id: { type: string, format: uuid }
+        group: { type: string }
+        role: { type: string, enum: [admin, operator, auditor] }
+        created_at: { type: string, format: date-time }
+    DirectoryTestResult:
+      type: object
+      required: [login, display_name, email, unique_id, groups, role]
+      properties:
+        login: { type: string }
+        display_name: { type: string }
+        email: { type: string }
+        unique_id: { type: string, description: Lower-case hex of the unique ID attribute's bytes }
+        groups: { type: array, items: { type: string }, description: The group values exactly as the group search returned them }
+        role: { type: [string, "null"], enum: [admin, operator, auditor, null] }
     Backup:
       type: object
       required: [name, kind, size, created_at, alice_version, check, code]
