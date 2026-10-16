@@ -96,15 +96,15 @@ The final verification of Task 7 (2026-10-16) on branch `ldap-signin`; exact out
 
 | # | Check | Command | Result |
 |---|---|---|---|
-| 1 | Format and vet | `gofmt -l cmd internal`; `go vet ./...` | FILLED-IN-BELOW |
-| 2 | Lint | `golangci-lint run ./...` and the tag sets of `make lint` | FILLED-IN-BELOW |
-| 3 | Unit tests, race detector | `go test -race ./...` | FILLED-IN-BELOW |
-| 4 | Integration tests and coverage floors (real PostgreSQL and OpenLDAP) | `make coverage` | FILLED-IN-BELOW |
-| 5 | Web | `make web-lint web-coverage i18n-check` | FILLED-IN-BELOW |
-| 6 | Documents and matrix | `make docs-check matrix-check` | FILLED-IN-BELOW |
-| 7 | End to end (Chromium) and container hardening | `make e2e-up e2e-hardening-check e2e`, `make e2e-down` | FILLED-IN-BELOW |
-| 8 | Known vulnerabilities (go-ldap, asn1-ber, go-ntlmssp included) | `make vuln` | FILLED-IN-BELOW |
-| 9 | Release build | `make release-symcheck`; `make build` (CGO off, no testify); `go list -deps ./cmd/alice` has no `fakeldap` or `testify` | FILLED-IN-BELOW |
+| 1 | Format and vet | `gofmt -l cmd internal`; `go vet ./...` | no file listed; vet clean |
+| 2 | Lint | `golangci-lint run ./...`, with `--build-tags integration`, and the eight tag sets of `make lint`; `pincheck`, `shellcheck`, `lockcheck`, `actionlint` | 0 issues in every run; the other checks clean |
+| 3 | Unit tests, race detector | `go test -race ./...` and the tagged lines of `make test` | 103 packages ok; the `e2e testlicense` and `testlicense` runs ok |
+| 4 | Integration tests and coverage floors (real PostgreSQL and OpenLDAP) | `make coverage` | every package ok except an unrelated timing test (`cmd/vendor-console` `TestRedactIsLinearOnHugeInput`, 8.3 s against a 5 s bound while lint ran beside it; ok when run again, also with `-tags integration`); every floor holds: `auth/ldap` 92.1 (92), `ldapx` 100 (100), `auth` 85.3 (84), `ratelimit` 98.0 (96), `api` 95.6 (95), `pemca` 95.5 (95), `cmd/alice` 91.4 (91), `fakeldap` 67.9 (67) |
+| 5 | Web | `make web-lint web-coverage i18n-check` | lint clean; 144 files, 2,326 tests passed, statements 96.38, branches 92.67, functions 96.04, lines 97.47 (thresholds 96/91/95/97); catalogs consistent |
+| 6 | Documents and matrix | `make docs-check matrix-check` (and `-strict`) | ok (six new pinned sentences); 202 IDs, 193 by tests, 7 partial, 0 pending, 0 owner, 2 deferred, 0 gaps |
+| 7 | End to end (Chromium) and container hardening | `make e2e-up e2e-hardening-check e2e`, `make e2e-down` | hardening: no FAIL (the fakeldap block included); `make e2e`: 139 passed, 4 skipped (design evidence), 2 failed: Phase 7 "owner step 5" (en, tr) still expected Single sign-on to be the last settings tab, which the new Directories tab changed; `web/e2e/phase7.spec.ts` fixed (End, then ArrowUp), both passed when run again; `web/e2e/ldap.spec.ts` 2 of 2 passed in the full run |
+| 8 | Known vulnerabilities (go-ldap, asn1-ber, go-ntlmssp included) | `make vuln` | `go mod verify` ok; govulncheck: no vulnerability in called code or imported packages; one module-level finding GO-2026-5932 (`golang.org/x/crypto/openpgp` unmaintained; not imported by Alice or go-ldap; no fix exists); nothing for go-ldap, asn1-ber or go-ntlmssp; npm audit 0; osv-scanner 0 |
+| 9 | Release build | `make release-symcheck`; `make build` (CGO off, no testify); `go list -deps ./cmd/alice` has no `fakeldap` or `testify` | symcheck ok; build ok (`CGO_ENABLED=0`, the testify guard passed; the binary lists go-ldap v3.4.15, asn1-ber v1.5.8, go-ntlmssp v0.1.1); count 0 |
 | 10 | Fuzzing | `make fuzz-ldap` (4 targets) | 20 s per target in Task 2 (hundreds of thousands to two million executions each, no crash); `make fuzz-release`: NOT RUN (owner) |
 
 ## Findings
