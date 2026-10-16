@@ -316,7 +316,7 @@ type LDAPService interface {
 	CreateMapping(ctx context.Context, a audit.Actor, directoryID uuid.UUID, group string, role rbac.Role) (ldap.Mapping, error)
 	DeleteMapping(ctx context.Context, a audit.Actor, id uuid.UUID) error
 	TestConnection(ctx context.Context, a audit.Actor, id uuid.UUID) error
-	TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext) (ldap.TestResult, error)
+	TestSignInGated(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext, gate ldap.Gate) (ldap.TestResult, error)
 	VerifyGated(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext, gate ldap.Gate) (ldap.Identity, ldap.Directory, error)
 	ResolveRole(ctx context.Context, directoryID uuid.UUID, groups []string) (rbac.Role, bool, error)
 }
@@ -502,9 +502,10 @@ type server struct {
 	// ldapLockout: failed directory passwords per (directory, normalised sign-in name), sign-in and step-up alike.
 	ldapLockout        *ratelimit.BoundedLockout
 	ldapAccountLockout *ratelimit.BoundedLockout // per (directory, unique id)
-	// ldapFullLogged: when a full lockout table was last logged (at most once per ldapFullLogEvery).
+	// ldapFullLogged: when each full lockout table ("name", "account") was last logged (each at most once per
+	// ldapFullLogEvery).
 	ldapFullMu     sync.Mutex
-	ldapFullLogged time.Time
+	ldapFullLogged map[string]time.Time
 	// ldapRefusalFloor: the least time a refused directory sign-in takes (ldapRefusalFloor const).
 	ldapRefusalFloor time.Duration
 	// denials coalesces the guard's denial audit rows (AUD-06).
@@ -576,15 +577,19 @@ func newServer(d Deps) *server {
 const ldapFullLogEvery = 10 * time.Minute
 
 // logLockoutFull warns, at most once per ldapFullLogEvery, that a directory lockout table refused a new key because
-// it is full of live keys (ratelimit.BoundedLockout fails closed). Nothing of the key is logged.
+// it is full of live keys (ratelimit.BoundedLockout fails closed), once per table per interval. Nothing of the key is
+// logged.
 func (s *server) logLockoutFull(table string) {
 	now := s.deps.Clock.Now()
 	s.ldapFullMu.Lock()
-	if !s.ldapFullLogged.IsZero() && now.Sub(s.ldapFullLogged) < ldapFullLogEvery {
+	if last, ok := s.ldapFullLogged[table]; ok && now.Sub(last) < ldapFullLogEvery {
 		s.ldapFullMu.Unlock()
 		return
 	}
-	s.ldapFullLogged = now
+	if s.ldapFullLogged == nil {
+		s.ldapFullLogged = map[string]time.Time{}
+	}
+	s.ldapFullLogged[table] = now
 	s.ldapFullMu.Unlock()
 	if s.deps.Log != nil {
 		s.deps.Log.Warn("directory sign-in lockout table is full; new sign-in names are refused until entries expire",

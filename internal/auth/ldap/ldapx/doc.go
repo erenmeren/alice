@@ -18,7 +18,8 @@
 //     matching rules).
 //
 // For callers: a sign-in name must pass ValidLoginName before ExpandFilter (it refuses control and format characters and
-// the code points RFC 3454 table B.1 maps to nothing, so one account has no invisible extra spellings). ErrFilterValue then means a bad sign-in
+// the code points RFC 3454 table B.1 and RFC 4518 map to nothing, U+FFFC included, and U+FFFD, so one account has no
+// invisible extra spellings). ErrFilterValue then means a bad sign-in
 // name (treat it like an unknown user), ErrFilterTemplate a bad setting. A value must contain at least one letter
 // or digit: logins are user names, e-mail addresses or UPNs, and a DN always holds an attribute type, so this
 // refuses only values that a directory server could prepare (RFC 4518) into an empty or all-space string, which in

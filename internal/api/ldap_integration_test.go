@@ -897,6 +897,36 @@ func TestDirectoryLockoutReservesParallelAttempts(t *testing.T) {
 	requireStatus(t, rec, http.StatusOK)
 }
 
+// The lockout's answers never tell an alias of a locked account from a name nobody has: both get the same statuses, in
+// the same order, after the same time.
+func TestDirectoryLockoutIsNoAliasOracle(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	dir := s.directoryReady(t, admin, adminAcct, true)
+	s.dir.set(func(f *fakeDirectory) {
+		for i := range f.users {
+			if f.users[i].login == "berk" {
+				f.users[i].alias = "berk@corp.example"
+			}
+		}
+	})
+	for range 3 {
+		rec, _ := s.dirLogin(s.freshClient(), dir, "berk", "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	run := func(name, password string) []string {
+		var out []string
+		for range 5 {
+			rec, took := s.dirLogin(s.freshClient(), dir, name, password)
+			out = append(out, strconv.Itoa(rec.Code)+"/"+took.String())
+		}
+		return out
+	}
+	alias := run("berk@corp.example", dirUserPassword)
+	unknown := run("nobody@corp.example", dirUserPassword)
+	assert.Equal(t, unknown, alias)
+	assert.Equal(t, []string{"401/1.5s", "401/1.5s", "401/1.5s", "429/0s", "429/0s"}, alias)
+}
+
 // Spellings a directory treats alike share the name key; aliases of one account share the account key, whose lock
 // stops the bind itself.
 func TestDirectoryLockoutSpellingsAndAccounts(t *testing.T) {
@@ -934,8 +964,36 @@ func TestDirectoryLockoutSpellingsAndAccounts(t *testing.T) {
 	rec, _ = s.dirLogin(s.freshClient(), dir, "DENIZ", dirUserPassword)
 	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
 	assert.Equal(t, binds, s.dir.userBindCount())
-	s.clock.Advance(ldapLockoutFor)
+	// A refusal at the account gate counts against the name: "deniz" (two failures and this refusal) is now locked, and
+	// the alias (one failure, one refusal) is answered 429 at its next refusal, like any unknown name.
+	assert.True(t, s.api.s.ldapLockout.Locked(ldapLoginKey(dirID, "deniz")))
+	rec, _ = s.dirLogin(s.freshClient(), dir, "Deniz@Corp.Example", dirUserPassword)
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
 	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz@corp.example", dirUserPassword)
+	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
+	assert.Equal(t, binds, s.dir.userBindCount(), "the account itself is still never bound to")
+
+	// An Administrator's Test sign-in passes the same gate: through another alias it never binds to the locked account,
+	// and its failures count like a sign-in's (no fresh budget).
+	s.dir.set(func(f *fakeDirectory) {
+		for i := range f.users {
+			if f.users[i].login == "deniz" {
+				f.users[i].alias = "d.yilmaz@corp.example"
+			}
+		}
+	})
+	s.stepUp(admin, adminAcct)
+	test := "/api/v1/ldap/directories/" + dir + "/actions/test-signin"
+	for range 3 {
+		rec = admin.do(http.MethodPost, test, map[string]string{"username": "d.yilmaz@corp.example", "password": dirUserPassword})
+		requireError(t, rec, http.StatusUnprocessableEntity, "ALC-LDAP-0006")
+		assert.Equal(t, map[string]string{"reason": "bad_credentials", "detail": "account_locked"}, decodeBody[apiError](t, rec).Error.Params)
+	}
+	requireError(t, admin.do(http.MethodPost, test, map[string]string{"username": "d.yilmaz@corp.example", "password": dirUserPassword}),
+		http.StatusTooManyRequests, "ALC-SYS-0005")
+	assert.Equal(t, binds, s.dir.userBindCount(), "no test bound to the locked account")
+	s.clock.Advance(ldapLockoutFor)
+	rec, _ = s.dirLogin(s.freshClient(), dir, "d.yilmaz@corp.example", dirUserPassword)
 	requireStatus(t, rec, http.StatusOK)
 
 	// A success clears both keys.

@@ -98,9 +98,10 @@ func FuzzExpandFilter(f *testing.F) {
 }
 
 // FuzzValidLoginName: an accepted name is valid UTF-8 of 1 to MaxLoginRunes runes with no white space at its ends and
-// no control, format, line or paragraph separator, or RFC 3454 B.1 (mapped to nothing) code point anywhere.
+// no control, format, line or paragraph separator, RFC 3454 B.1 (mapped to nothing) code point, U+FFFC or U+FFFD
+// anywhere.
 func FuzzValidLoginName(f *testing.F) {
-	for _, s := range []string{"ada", " ada", "a\u00adb", "a\ufe0fb", "a\U000e0100b", "Çiğdem", "a\u034fb", "\xff", strings.Repeat("ş", 257)} {
+	for _, s := range []string{"ada", " ada", "a\u00adb", "a\ufe0fb", "a\U000e0100b", "Çiğdem", "a\u034fb", "a\ufffcb", "a\ufffdb", "\xff", strings.Repeat("ş", 257)} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -111,7 +112,7 @@ func FuzzValidLoginName(f *testing.F) {
 			t.Fatalf("ValidLoginName(%q) accepted a malformed name", s)
 		}
 		for _, r := range s {
-			if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp, mappedToNothing) {
+			if unicode.IsControl(r) || r == utf8.RuneError || r == '\ufffc' || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp, mappedToNothing) {
 				t.Fatalf("ValidLoginName(%q) accepted %U", s, r)
 			}
 		}

@@ -83,6 +83,14 @@ func (s *Service) TestConnection(ctx context.Context, a audit.Actor, id uuid.UUI
 // ldap.signin_tested with the result, the reason, the role and, only for a name the directory resolved (or found
 // several times), the sign-in name.
 func (s *Service) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext) (TestResult, error) {
+	return s.TestSignInGated(ctx, a, id, login, password, nil)
+}
+
+// TestSignInGated is TestSignIn with the Gate of VerifyGated between the user search and the user bind (the API's
+// per-account lockout applies to a test as to a sign-in).
+func (s *Service) TestSignInGated(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext,
+	gate Gate,
+) (TestResult, error) {
 	defer password.Zero()
 	d, err := s.Directory(ctx, id)
 	if err != nil {
@@ -91,7 +99,7 @@ func (s *Service) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, l
 	var out TestResult
 	testErr := checkCredentials(login, password).orNil()
 	if testErr == nil {
-		out.Identity, testErr = s.verify(ctx, d, login, password)
+		out.Identity, testErr = s.verify(withGate(ctx, d, login, gate), d, login, password)
 	}
 	details, result := resultDetails(d, testErr)
 	if out.Identity.UniqueID != "" || details["reason"] == ReasonAmbiguousUser {

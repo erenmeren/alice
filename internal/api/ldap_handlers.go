@@ -125,12 +125,19 @@ func (a *directoryAttempt) gate(uniqueID string) error {
 }
 
 // settle settles both reservations for the attempt's outcome: nil succeeds (clears both keys), a failed guess
-// (countsAsFailure) fails both, anything else (the directory could not be used, a locked account, a refusal after a
-// correct password) releases both.
+// (countsAsFailure) fails both, a locked account (the gate refused: account_locked) fails the name and releases the
+// account, anything else (the directory could not be used, a refusal after a correct password) releases both. Failing
+// the name for a locked account makes another name of that account behave exactly like an unknown name (429 after
+// three tries), so the lockout's answers do not tell an alias of a locked account from a name nobody has.
 func (a *directoryAttempt) settle(err error) {
 	a.mu.Lock()
 	account := a.account
 	a.mu.Unlock()
+	if gateRefused(err) {
+		a.name.Fail()
+		account.Release()
+		return
+	}
 	for _, r := range []*ratelimit.Reservation{a.name, account} {
 		switch {
 		case err == nil:
@@ -141,6 +148,12 @@ func (a *directoryAttempt) settle(err error) {
 			r.Release()
 		}
 	}
+}
+
+// gateRefused reports whether err is the gate's refusal of a locked account.
+func gateRefused(err error) bool {
+	var le *ldap.LoginError
+	return errors.As(err, &le) && le.Detail == ldap.DetailLocked
 }
 
 // release settles, without counting, whatever is still reserved.
@@ -576,9 +589,10 @@ func (s *server) testDirectorySignIn(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	// The sign-in's lockout applies to a test too (the same key): a test sends the name and password to the directory
-	// like a sign-in, so a locked name is not tested (429), a failed test counts, and a test that gives a role clears
-	// the count. Allow adds no key, so a made-up directory ID or name leaves nothing behind.
+	// The sign-in's lockouts apply to a test too (the same keys and settle rules): a test sends the name and password to
+	// the directory like a sign-in, so a locked name is not tested (429), a locked account is never bound to, a failed
+	// test counts, a test that gives a role clears the counts, and one without a role is neutral. Reserve makes a key
+	// only for the attempt; a released attempt of a made-up directory ID or name leaves nothing behind.
 	att := &directoryAttempt{s: s, directoryID: id}
 	defer att.release()
 	if ldapx.ValidLoginName(req.Username) {
@@ -589,7 +603,8 @@ func (s *server) testDirectorySignIn(w http.ResponseWriter, r *http.Request) {
 		}
 		att.name = res
 	}
-	res, err := s.deps.LDAP.TestSignIn(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), id, req.Username, secrets.NewPlaintext(req.Password))
+	res, err := s.deps.LDAP.TestSignInGated(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), id, req.Username,
+		secrets.NewPlaintext(req.Password), att.gate)
 	req.zero()
 	var le *ldap.LoginError
 	switch {

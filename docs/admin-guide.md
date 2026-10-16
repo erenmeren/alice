@@ -972,8 +972,9 @@ Every typed name and every DN is escaped before it goes into a filter, so a name
 Alice refuses before contacting the directory: an empty password (an LDAP bind with an empty password is usually
 accepted anonymously), a password over 1,024 bytes, a sign-in name with control or invisible format characters or with
 white space at its start or end, a sign-in name with a character a directory ignores when it compares names (RFC 3454
-table B.1: soft hyphen, zero-width characters, variation selectors, the combining grapheme joiner, Mongolian
-variation selectors), and a sign-in name without a letter or digit.
+table B.1 and RFC 4518: soft hyphen, zero-width characters, variation selectors, the combining grapheme joiner,
+Mongolian variation selectors, the object replacement character U+FFFC) or with the replacement character U+FFFD, and a
+sign-in name without a letter or digit.
 
 ### User names
 
@@ -1042,8 +1043,9 @@ person (password, groups, role) without signing anybody in or creating anyone (`
 refuses it); the password field is emptied after each run. Together they are limited to 5 a minute per Administrator,
 and both are recorded in the audit log, never with a password; Test sign-in records the test name only when the
 directory found the entry (or several entries). Test sign-in sends the name and password to the directory like a
-sign-in, so it counts toward the same lockout (below): three failed tests lock the name, a locked name is not tested
-("Too many requests"), and a test that gives a role clears the count.
+sign-in, so it counts toward the same lockout (below): three failed tests lock the name and the account, a locked name
+is not tested ("Too many requests"), a locked account is never bound to (the test fails with `account_locked`), and a
+test that gives a role clears the counts.
 
 ### Directory users on People & access
 
@@ -1105,8 +1107,11 @@ has three attempts failed or in progress, the next one waits, so many parallel a
 - Spellings that a directory compares alike count as one name: upper and lower case, compatibility forms (full-width
   letters), composed and decomposed accents, and repeated spaces inside the name. Characters a directory ignores are
   refused (see above). Other spellings that find the same entry are caught by the account count, not the name count.
-- A successful sign-in clears both counts. **Confirm it's you** and **Test sign-in** share the name count (the
-  confirmation also the account count), so three wrong directory passwords there lock the name for sign-in as well. Why: AD locks an account after a number of wrong passwords within its own observation window
+- A successful sign-in clears both counts. **Confirm it's you** and **Test sign-in** share both counts, so three wrong
+  directory passwords there lock the name and the account for sign-in as well, and a locked account is never bound to
+  by a test either.
+- When the account is locked, the attempt counts against the name used, like a failed attempt with an unknown name:
+  another name of a locked account is answered exactly like a name nobody has. Why: AD locks an account after a number of wrong passwords within its own observation window
 (30 minutes by default), and Alice must never be the tool that locks your directory accounts; with at most 3 attempts
 per name and a 45-minute pause, a stream of guesses through Alice cannot keep an AD failure counter climbing. The same
 limit of 10 sign-in attempts a minute per address as on the local form applies as well; there is no overall limit on

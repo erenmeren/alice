@@ -152,20 +152,25 @@ func (s *Service) VerifyGated(ctx context.Context, directoryID uuid.UUID, login 
 	if lerr := checkCredentials(login, password); lerr != nil {
 		return Identity{}, d, lerr
 	}
-	if gate != nil {
-		ctx = context.WithValue(ctx, gateKey{}, func(e Entry) error {
-			id, err := identityOf(d, e, login)
-			if err != nil {
-				return err
-			}
-			if err := gate(id.UniqueID); err != nil {
-				return refuse(ReasonBadCredentials, DetailLocked, err)
-			}
-			return nil
-		})
-	}
-	id, err := s.verify(ctx, d, login, password)
+	id, err := s.verify(withGate(ctx, d, login, gate), d, login, password)
 	return id, d, err
+}
+
+// withGate puts gate (nil: none) into ctx for RunGate, turning the entry into its unique id first.
+func withGate(ctx context.Context, d Directory, login string, gate Gate) context.Context {
+	if gate == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, gateKey{}, func(e Entry) error {
+		id, err := identityOf(d, e, login)
+		if err != nil {
+			return err
+		}
+		if err := gate(id.UniqueID); err != nil {
+			return refuse(ReasonBadCredentials, DetailLocked, err)
+		}
+		return nil
+	})
 }
 
 // checkCredentials refuses, before any traffic, a sign-in name that cannot be sent (login_invalid) and an empty or

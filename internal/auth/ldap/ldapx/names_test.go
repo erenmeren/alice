@@ -87,7 +87,9 @@ func TestValidLoginName(t *testing.T) {
 		" ", "   ", " ada", "ada ", "\u00a0ada", "ada\u3000", "\u200b", "a\u200bb", "a\u00adb", "a\u202eb", "a\u2028b", "a\u2029b",
 		"\ufeffada", "a\u200fb", "a\u200cb", "a\u2066b",
 		// RFC 3454 B.1 (mapped to nothing) beyond the format characters.
-		"a\u034fb", "a\u1806b", "a\u180bb", "a\u180cb", "a\u180db", "a\u2060b", "a\ufe00b", "a\ufe0fb", "a\U000e0100b", "a\U000e01efb", "a\u200db"} {
+		"a\u034fb", "a\u1806b", "a\u180bb", "a\u180cb", "a\u180db", "a\u2060b", "a\ufe00b", "a\ufe0fb", "a\U000e0100b", "a\U000e01efb", "a\u200db",
+		// U+FFFC (RFC 4518 maps it to nothing) and U+FFFD (a damaged name).
+		"a\ufffcb", "a\ufffdb", "\ufffd"} {
 		assert.False(t, ValidLoginName(s), "%q", s)
 	}
 }

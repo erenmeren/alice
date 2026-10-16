@@ -460,8 +460,9 @@ Other directory problems:
   access** to stop it at once.
 - **Saving says the service account password is required.** A new address, service account DN, unique ID attribute
   or certificate authority needs the password again: Alice never sends a stored password to a new destination.
-- **"This directory has users" (`ALC-LDAP-0003`).** Addresses and the unique ID attribute cannot change, and the
-  directory cannot be deleted, once people have signed in: switch it off and add a new directory.
+- **"This directory has users" (`ALC-LDAP-0003`).** Once people have signed in, the unique ID attribute cannot change
+  and the directory cannot be deleted: switch it off, or add a new directory for another unique ID attribute. The
+  addresses can still change (removing or reordering needs nothing; adding one needs the service account password).
 - **A user name looks odd** (`cagla-2`, `ldap-…`). Letters are transliterated by a table, other characters dropped,
   taken names get `-2`; the user name is only a label (see [admin-guide.md](admin-guide.md#user-names)).
 

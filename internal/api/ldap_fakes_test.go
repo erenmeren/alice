@@ -140,7 +140,7 @@ func (f *fakeLDAP) TestConnection(ctx context.Context, a audit.Actor, id uuid.UU
 	return errNotConfigured
 }
 
-func (f *fakeLDAP) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext) (ldap.TestResult, error) {
+func (f *fakeLDAP) TestSignInGated(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext, _ ldap.Gate) (ldap.TestResult, error) {
 	f.record()
 	if f.TestSignInFn != nil {
 		return f.TestSignInFn(ctx, a, id, login, password)

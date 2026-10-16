@@ -206,8 +206,12 @@ func TestDirectoryLockoutFullIsLoggedRarely(t *testing.T) {
 	_, _, _ = s.ldapLockout.Reserve("other")
 	assert.Equal(t, 2, strings.Count(logs.String(), "lockout table is full"))
 	r.Release()
-	s.logLockoutFull("account") // within the interval again: not logged
+	s.logLockoutFull("name") // within the interval again: not logged
 	assert.Equal(t, 2, strings.Count(logs.String(), "lockout table is full"))
+	s.logLockoutFull("account") // the other table has its own interval
+	s.logLockoutFull("account")
+	assert.Equal(t, 3, strings.Count(logs.String(), "lockout table is full"))
+	assert.Equal(t, 1, strings.Count(logs.String(), "table=account"))
 }
 
 // syncLog is a log buffer safe for the handler's goroutines.
