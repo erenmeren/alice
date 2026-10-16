@@ -509,15 +509,30 @@ func (s *server) testDirectorySignIn(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// The sign-in's lockout applies to a test too (the same key): a test sends the name and password to the directory
+	// like a sign-in, so a locked name is not tested (429), a failed test counts, and a test that gives a role clears
+	// the count. Allow adds no key, so a made-up directory ID or name leaves nothing behind.
+	key := ""
+	if ldapx.ValidLoginName(req.Username) {
+		key = ldapLoginKey(id, req.Username)
+		if ok, retry := s.ldapLockout.Allow(key); !ok {
+			s.writeRateLimited(w, r, retry)
+			return
+		}
+	}
 	res, err := s.deps.LDAP.TestSignIn(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), id, req.Username, secrets.NewPlaintext(req.Password))
 	req.zero()
 	var le *ldap.LoginError
 	switch {
 	case errors.As(err, &le):
+		s.failLockout(key, err)
 		s.writeErrorWith(w, r, ErrLDAPSignInTestFailed, testParams(le), nil)
 	case err != nil:
 		s.fail(w, r, err)
 	default:
+		if key != "" && res.Role != "" {
+			s.ldapLockout.Succeed(key)
+		}
 		writeJSON(w, http.StatusOK, directoryTestJSON(res))
 	}
 }

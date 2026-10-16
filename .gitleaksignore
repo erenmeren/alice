@@ -45,3 +45,8 @@ d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-
 11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:1028
 11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:1086
 11c2bef4b53d77b56841ecc06d36a6715075cf1e:test/matrix/traceability.json:generic-api-key:1540
+# Throw-away passwords of the test directory (OpenLDAP fixture tree: the integration tests' fakeldap, the e2e fake
+# directory's bootstrap.ldif and the directory sign-in journey that types them). Test containers only, never real.
+f57194fbd2070b393c0e80966782c3405197cfca:internal/testutil/fakeldap/server.go:generic-api-key:68
+5c361e9648ef72656adcdda8a1d7e0926b54ecc4:test/images/openldap/bootstrap.ldif:generic-api-key:59
+5c361e9648ef72656adcdda8a1d7e0926b54ecc4:web/e2e/ldap.spec.ts:generic-api-key:53

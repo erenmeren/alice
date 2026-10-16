@@ -193,6 +193,56 @@ func TestDirectoryLoginKeyFoldsTheName(t *testing.T) {
 	assert.NotEqual(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(testDirectoryID, "deniz2"))
 }
 
+// Test sign-in goes through the sign-in's lockout with the same key: three failed tests lock the name (for the test and
+// for the sign-in, answered 429 without contacting the directory); a test that gives a role clears the count, one
+// that gives none does not.
+func TestDirectoryTestSignInSharesTheLockout(t *testing.T) {
+	d, fl, _ := ldapDeps(t)
+	s := newServer(d)
+	s.ldapRefusalFloor = 0
+	h := s.handler(s.apiRoutes())
+	test := "/api/v1/ldap/directories/" + testDirectoryID.String() + "/actions/test-signin"
+	login := "/api/v1/auth/ldap/" + testDirectoryID.String() + "/login"
+	calls, role := 0, rbac.Operator
+	fl.TestSignInFn = func(_ context.Context, _ audit.Actor, _ uuid.UUID, _ string, password secrets.Plaintext) (ldap.TestResult, error) {
+		defer password.Zero()
+		calls++
+		if string(password.Bytes()) != "pw-1" {
+			return ldap.TestResult{}, &ldap.LoginError{Reason: ldap.ReasonBadCredentials, Detail: ldap.DetailUserBind}
+		}
+		return ldap.TestResult{Identity: ldap.Identity{UniqueID: "0a0b", Login: "deniz"}, Role: role}, nil
+	}
+	run := func(password string) int {
+		s.actions[limitDirectoryTest].Reset() // the 5-a-minute test limit is not what this test is about
+		return call(h, http.MethodPost, test, "admin-stepup", `{"username":"DENIZ","password":"`+password+`"}`).Code
+	}
+	for range 3 {
+		assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"))
+	}
+	assert.Equal(t, 3, calls)
+	assert.Equal(t, http.StatusTooManyRequests, run("pw-1"), "locked: the right password is not tested")
+	assert.Equal(t, 3, calls, "the directory was not contacted")
+	rec := call(h, http.MethodPost, login, "", `{"username":"deniz","password":"pw-1"}`)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code, "the sign-in shares the key")
+
+	s.ldapLockout.Reset()
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"))
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"))
+	assert.Equal(t, http.StatusOK, run("pw-1"), "a test that gives a role clears the count")
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"))
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"))
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"), "the count started again after the success")
+	assert.Equal(t, http.StatusTooManyRequests, run("pw-2"))
+
+	s.ldapLockout.Reset()
+	role = ""
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"))
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"))
+	assert.Equal(t, http.StatusOK, run("pw-1"), "a test without a role")
+	assert.Equal(t, http.StatusUnprocessableEntity, run("pw-2"), "did not clear the count: this is the third failure")
+	assert.Equal(t, http.StatusTooManyRequests, run("pw-1"))
+}
+
 // The service and auth sentinels of the directory routes have their documented answers; none is a 500.
 func TestDirectoryErrorsAreMapped(t *testing.T) {
 	s := newServer(testDeps(t, nil))

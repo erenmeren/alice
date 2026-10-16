@@ -960,7 +960,9 @@ places:
   `(uid={login})` and `(cn={login}*)` work, `({login}=x)` does not.
 - A literal brace is written `\7b` or `\7d`; a backslash must be followed by two hexadecimal digits.
 - No raw control characters (tab, line break): write them escaped, for example `\09`.
-- One balanced filter of at most 1,024 bytes and 16 levels, no text around it, no `**`.
+- One balanced filter of at most 1,024 bytes and 16 levels, no text around it; `&` and `|` need at least one element
+  inside.
+- `*` only inside an equality value, never two in a row (`**`).
 - The extensible-match flag is written as lower-case `:dn`.
 
 Every typed name and every DN is escaped before it goes into a filter, so a name like `ada)(uid=*` finds nobody.
@@ -972,7 +974,8 @@ white space at its start or end, and a sign-in name without a letter or digit.
 
 Alice derives the user name from the sign-in name attribute: Turkish letters and common Latin accents are replaced by
 an explicit table (`ç→c`, `ğ→g`, `ı→i`, `İ→I`, `ö→o`, `ş→s`, `ü→u`, also `ß→ss`, `æ→ae` and others), the result is
-folded to lower case, and only `a`–`z`, `0`–`9`, `.`, `_`, `-` and `@` are kept (at most 64 characters). So `çağla`
+folded to lower case, and only `a`–`z`, `0`–`9`, `.`, `_`, `-` and `@` are kept, without a `.`, `-`, `_` or `@` at the
+start or end (at most 64 characters). So `çağla`
 becomes `cagla`, `Işıl.Çağlar` becomes `isil.caglar` and `Şeref Üstün` becomes `serefustun`. Letters of other scripts
 are dropped, not mapped (a name that keeps fewer than 2 characters becomes `ldap-` and 12 characters of the unique ID).
 A taken user name gets `-2`, `-3`, …: a directory user `cagla` next to a local `cagla` becomes `cagla-2`. The user name
@@ -1019,11 +1022,15 @@ service account and searches the user base DN; it names the reason and the step 
 `timeout`, `tls`, `service_bind`, `user_search`, …; `ALC-LDAP-0004`). **Test sign-in** runs the whole check for one
 person (password, groups, role) without signing anybody in or creating anyone (`ALC-LDAP-0006` when the directory
 refuses it); the password field is emptied after each run. Together they are limited to 5 a minute per Administrator,
-and both are recorded in the audit log (with the typed test name, never the password).
+and both are recorded in the audit log, never with a password; Test sign-in records the test name only when the
+directory found the entry (or several entries). Test sign-in sends the name and password to the directory like a
+sign-in, so it counts toward the same lockout (below): three failed tests lock the name, a locked name is not tested
+("Too many requests"), and a test that gives a role clears the count.
 
 ### Directory users on People & access
 
-Directory users carry the badge **Directory** in the **Sign-in method** column, with the directory's name. There is
+Directory users carry the badge **Directory** in the **Sign-in method** column, with the directory's name (shown
+once the page could read the directory list, which needs a fresh confirmation). There is
 no **Set a new password** (the directory owns the password) and no role choice: the role comes from the groups at every
 sign-in and confirmation ("Role updated from the identity provider"), and a change by hand is refused (`ALC-USR-0003`).
 **Reset two-factor sign-in** exists, because the authenticator is Alice's: the person sets up a new one at their next
@@ -1038,7 +1045,8 @@ later one whose e-mail changed to a local account's; Alice never joins a directo
   person's sessions and revokes their tokens.
 - **Disabled, locked or with an expired password in the directory:** the directory refuses the bind (AD answers such
   binds as invalid credentials), so the next sign-in is refused. An open session keeps working until it ends (30
-  minutes idle, 12 hours in all) or until a confirmation is needed.
+  minutes idle, 12 hours in all); a confirmation is refused as well (`bad_credentials`), but that refusal ends no
+  session.
 - **Disable on People & access** ends the person's sessions at once and refuses their directory sign-in from then on.
   Use it to stop someone immediately.
 - **The directory switched off (Allow sign-in off):** nobody signs in through it, and each directory user's next
@@ -1061,15 +1069,15 @@ settings do not work, or that is switched off gets "The directory cannot be used
 the reason: `bad_credentials`, `ambiguous_user`, `no_access`, `email_in_use`, `user_disabled`, `locked`,
 `login_invalid`, `identity_invalid`, `directory_unreachable`, `directory_misconfigured`, `provider_disabled` or, for a
 confirmation that found another entry, `stepup_other_user`. The typed name is recorded only when the directory found
-the entry (people type passwords into the name field by mistake). See "Directory sign-in refused" in
+the entry, or several entries (`ambiguous_user`): people type passwords into the name field by mistake. See "Directory sign-in refused" in
 [troubleshooting.md](troubleshooting.md#directory-sign-in-ldap-and-active-directory).
 
 **The lockout.** Three failed attempts (a wrong password, an unknown name, several entries or no mapped group) for one
 sign-in name at one directory within 30 minutes lock that name in Alice for 45 minutes: Alice then answers "Too many
 requests" (HTTP 429, `ALC-SYS-0005`, with the time to wait) without contacting the directory, even for the right
 password and from any address. Upper and lower case and the Unicode spelling of the name do not matter. A successful
-sign-in clears the count. **Confirm it's you** shares the count, so three wrong directory passwords there lock the name
-for sign-in as well. Why: AD locks an account after a number of wrong passwords within its own observation window
+sign-in clears the count. **Confirm it's you** and **Test sign-in** share the count, so three wrong directory passwords
+there lock the name for sign-in as well. Why: AD locks an account after a number of wrong passwords within its own observation window
 (30 minutes by default), and Alice must never be the tool that locks your directory accounts; with at most 3 attempts
 per name and a 45-minute pause, a stream of guesses through Alice cannot keep an AD failure counter climbing. The same
 limit of 10 sign-in attempts a minute per address as on the local form applies as well; there is no overall limit on
@@ -1080,8 +1088,8 @@ by typing three wrong passwords for their name; this is the same trade-off as AD
 directory account is not locked). There is no way for an Administrator to end this lockout: it is kept in memory, and
 only a restart of Alice clears it (`alice admin unlock` does not touch it). The local administrator is never affected.
 The lockout table holds 100,000 names; when it is full of names that are still counting or locked, names that are not
-in it yet are refused until entries expire (each entry lasts at most 30 minutes, 45 when locked), while the names
-already in it are answered as usual.
+in it yet are refused until entries expire (an entry lives for the 30-minute window after its first failure, or until
+its lock ends: up to about 75 minutes after the first failure), while the names already in it are answered as usual.
 
 ### Break-glass with directories
 
@@ -1105,6 +1113,8 @@ recovery codes safe. A directory user can never take that place.
 - A directory administrator controls group membership and therefore roles in Alice, and can reset a person's password;
   with MFA on, Alice's authenticator code still stands in the way.
 - The lockout and the 1.5-second delay are kept in memory per Alice process.
+
+## Saved views and export
 
 **Certificates** and **SSH keys** keep their filters in the page's address: a bookmark or a link reproduces the list
 exactly. **Clear filters** removes them. On **Certificates**, **Expiry** offers **Any date**, **Expired** and

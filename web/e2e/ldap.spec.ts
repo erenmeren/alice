@@ -38,6 +38,10 @@ import {
 // Journey 2 (break-glass): with the directory switched off, and then with the directory unreachable, the local
 // Administrator still signs in.
 //
+// Preset: the journey uses the OpenLDAP preset (uid, entryUUID, (member={dn})). OpenLDAP has neither AD's binary
+// objectGUID nor the in-chain rule 1.2.840.113556.1.4.1941, so the Active Directory preset is covered only by unit
+// tests of its values (web/src/api/ldap.test.ts, DirectoriesSettings.test.tsx); it was not run against a real AD.
+//
 // Clock: the directory checks no time, the certificate is checked against the real time, Alice's sign-in limits and TOTP
 // codes run on the e2e clock (advanced in small steps only; POST /test/reset puts it back and clears the lockout). Every
 // refused directory sign-in takes at least 1.5 s (Alice's minimum delay on refusals).

@@ -612,6 +612,57 @@ ORDER BY seq DESC LIMIT 1`).Scan(&actorID))
 	s.requireNoDirectoryCanary(t)
 }
 
+// A refused step-up ends the session user's sessions when the refusal says they have no access any more: removed from
+// every mapped group (no_access), or the directory switched off (provider_disabled, answered ALC-LDAP-0002). MFA is
+// off here, so the sign-in opens a full session at once and the step-up needs the password only.
+func TestDirectoryStepUpRefusalEndsTheSessions(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	dir := s.directoryReady(t, admin, adminAcct, false)
+	stepup := "/api/v1/auth/ldap/stepup"
+	signedIn := func(login string) *client {
+		c := s.freshClient()
+		rec, _ := s.dirLogin(c, dir, login, dirUserPassword)
+		requireStatus(t, rec, http.StatusOK)
+		require.Equal(t, "signed_in", decodeBody[map[string]string](t, rec)["status"])
+		requireStatus(t, c.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
+		return c
+	}
+	selin, ayse := signedIn("selin"), signedIn("ayse")
+	other := signedIn("selin") // a second session of the same person
+
+	// Selin leaves every mapped group: her confirmation is refused and every session of hers ends.
+	s.dir.set(func(f *fakeDirectory) {
+		for i := range f.users {
+			if f.users[i].login == "selin" {
+				f.users[i].groups = []string{"cn=other"}
+			}
+		}
+	})
+	rec, took := s.timedDo(selin, http.MethodPost, stepup, map[string]string{"password": dirUserPassword})
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	assert.Equal(t, ldapRefusalFloor, took)
+	reason, login, actor := s.lastDenial(t)
+	assert.Equal(t, [3]string{"no_access", "selin", "user"}, [3]string{reason, login, actor})
+	requireError(t, selin.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+	requireError(t, other.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+	requireStatus(t, ayse.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
+
+	// The directory is switched off: Ayşe's confirmation is refused and her session ends.
+	s.stepUp(admin, adminAcct)
+	rec = admin.do(http.MethodGet, "/api/v1/ldap/directories/"+dir, nil)
+	requireStatus(t, admin.do(http.MethodPatch, "/api/v1/ldap/directories/"+dir, map[string]any{"enabled": false},
+		ifMatchOf(etagVersion(t, rec))), http.StatusOK)
+	requireStatus(t, ayse.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK) // switching off ends nothing by itself
+	rec, _ = s.timedDo(ayse, http.MethodPost, stepup, map[string]string{"password": dirUserPassword})
+	requireError(t, rec, http.StatusServiceUnavailable, "ALC-LDAP-0002")
+	reason, _, actor = s.lastDenial(t)
+	assert.Equal(t, [2]string{"provider_disabled", "user"}, [2]string{reason, actor})
+	requireError(t, ayse.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
+	assert.Equal(t, 2, s.countWhere("audit_log", "action = 'user.sessions_ended'"))
+
+	s.requireNoDirectoryCanary(t)
+}
+
 func TestDirectoryAdministration(t *testing.T) {
 	s, admin, adminAcct := installed(t)
 	dir := s.directoryReady(t, admin, adminAcct, true)

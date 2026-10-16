@@ -139,8 +139,8 @@ entry, a job parameter or an error message, and the test suite checks this with 
   directory asks for Alice's authenticator code after the password unless an administrator switches that off for the
   directory. The service account (read-only by requirement) has its password stored with envelope encryption under the
   master key. Every refused sign-in gets the same answer after at least 1.5 seconds; three failed attempts for one
-  name at one directory within 30 minutes lock that name in Alice for 45 minutes (in memory, so Alice cannot be used to
-  lock directory accounts), on top of the sign-in limit of 10 a minute per address. The "SSO users may be Admin"
+  name at one directory within 30 minutes lock that name in Alice for 45 minutes (so Alice cannot be used to lock
+  directory accounts), on top of the sign-in limit of 10 a minute per address. The "SSO users may be Admin"
   setting applies to directory users, and the local break-glass administrator always remains.
 - API tokens are personal, scoped (`read` or `operate`), valid for at most 365 days and stored as hashes. They never
   reach the actions that need a confirmation (above), and single sign-on and directory users cannot create them.

@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
-	"alice/internal/auth/ldap/ldapx"
 	"alice/internal/platform/db"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
@@ -81,7 +80,8 @@ func (s *Service) TestConnection(ctx context.Context, a audit.Actor, id uuid.UUI
 // TestSignIn runs a directory sign-in with the stored settings (also of a directory that is switched off) without
 // signing anyone in: it returns the identity, the groups found and the role the mappings would give. Nothing is
 // stored; the password is zeroed before it returns. A refused attempt is a *LoginError. Every call is audited as
-// ldap.signin_tested with the sign-in name, the result, the reason and the role.
+// ldap.signin_tested with the result, the reason, the role and, only for a name the directory resolved (or found
+// several times), the sign-in name.
 func (s *Service) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext) (TestResult, error) {
 	defer password.Zero()
 	d, err := s.Directory(ctx, id)
@@ -94,10 +94,15 @@ func (s *Service) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, l
 		out.Identity, testErr = s.verify(ctx, d, login, password)
 	}
 	details, result := resultDetails(d, testErr)
-	if details["reason"] != ReasonLoginInvalid {
-		// The name as typed, cut to the longest valid sign-in name; a refused name (control characters, a huge
-		// value) is not recorded.
-		details["login"] = cutRunes(login, ldapx.MaxLoginRunes)
+	if out.Identity.UniqueID != "" || details["reason"] == ReasonAmbiguousUser {
+		// The name only when the directory resolved it (an entry was found, also with a wrong password) or several
+		// entries carry it, cut to 128 runes, as for a refused sign-in (auth.RefuseLDAP): a typed name that matched
+		// nothing may be a password pasted into the wrong field, and the audit log is append-only.
+		name := login
+		if out.Identity.Login != "" {
+			name = out.Identity.Login
+		}
+		details["login"] = cutRunes(name, maxAuditLoginRunes)
 	}
 	if testErr == nil {
 		role, ok, err := s.ResolveRole(ctx, d.ID, out.Identity.Groups)
@@ -128,6 +133,9 @@ func (e *LoginError) orNil() error {
 	}
 	return e
 }
+
+// maxAuditLoginRunes is the longest sign-in name an audit row records (the same cut as auth.RefuseLDAP).
+const maxAuditLoginRunes = 128
 
 // cutRunes cuts s to at most n runes.
 func cutRunes(s string, n int) string {

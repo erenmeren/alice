@@ -78,6 +78,31 @@ AND NOT details ? 'login'`), "a refused name is not recorded")
 	assert.Equal(t, users, x.count(t, "SELECT count(*) FROM users"), "nothing is stored")
 }
 
+// An Administrator who pastes a password into Test sign-in's name field leaves it in no audit column: the typed name
+// is recorded only when the directory resolved an entry (also with a wrong password) or found several, as for a
+// refused sign-in.
+func TestTestSignInRecordsOnlyAResolvedName(t *testing.T) {
+	x := newHarness(t)
+	pasted := "Pw-pasted-" + uuid.NewString() // looks like a password, matches no entry
+	_, err := x.svc.TestSignIn(x.ctx, x.admin, x.dir.ID, pasted, secrets.NewPlaintext([]byte("whatever-1")))
+	assert.Equal(t, ldap.ReasonBadCredentials, reasonOf(err)[0])
+	assert.Zero(t, x.count(t, `SELECT count(*) FROM audit_log WHERE strpos(to_jsonb(audit_log)::text, $1) > 0`, pasted),
+		"the unresolved name is in no column of any audit row")
+	assert.Equal(t, 1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested'
+AND details->>'reason' = 'bad_credentials' AND NOT details ? 'login'`), "the refusal itself is recorded")
+
+	// A known user with a wrong password: the directory found the entry, so the name is recorded.
+	_, err = x.svc.TestSignIn(x.ctx, x.admin, x.dir.ID, "ada", secrets.NewPlaintext([]byte("wrong")))
+	assert.Equal(t, ldap.ReasonBadCredentials, reasonOf(err)[0])
+	assert.Equal(t, 1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested'
+AND details->>'reason' = 'bad_credentials' AND details->>'login' = 'ada'`))
+	// Several entries carry the name: recorded, as for a refused sign-in.
+	_, err = x.svc.TestSignIn(x.ctx, x.admin, x.dir.ID, "dup", secrets.NewPlaintext([]byte("whatever-1")))
+	assert.Equal(t, ldap.ReasonAmbiguousUser, reasonOf(err)[0])
+	assert.Equal(t, 1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested'
+AND details->>'reason' = 'ambiguous_user' AND details->>'login' = 'dup'`))
+}
+
 // Review focus: the service account password and the user's password appear in no audit record, error or log line,
 // whatever the path.
 func TestPasswordNeverInAuditOrErrors(t *testing.T) {
