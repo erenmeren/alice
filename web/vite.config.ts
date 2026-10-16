@@ -20,15 +20,15 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
     // make web-coverage (npm run coverage) enforces the thresholds (AUD-23). Spec §22.7 asks for
-    // 70 %; they are the values measured when they were set (2026-10-04: statements 93.99, branches
-    // 90.98-91.03, functions 93.96, lines 95.55), rounded down; branches one point lower, because
+    // 70 %; they are the values measured when they were set (2026-10-16: statements 96.21, branches
+    // 92.61, functions 95.82, lines 97.33), rounded down; branches one point lower, because
     // one timing-dependent branch is not taken in every run. Raise them, never lower them.
     coverage: {
       provider: 'v8',
       include: ['src/**/*.{ts,tsx}'],
       exclude: ['src/**/*.test.{ts,tsx}', 'src/test/**'],
       reporter: ['text-summary'],
-      thresholds: { statements: 93, branches: 90, functions: 93, lines: 95 },
+      thresholds: { statements: 96, branches: 91, functions: 95, lines: 97 },
     },
   },
 });

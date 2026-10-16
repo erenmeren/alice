@@ -19,6 +19,8 @@ function ErrorCodeLine({ code }: { code: string }) {
   );
 }
 
+const CAUSE_REASONS = new Set(['sso.discovery_failed', 'ldap.connection_test_failed', 'ldap.signin_test_failed']);
+
 // ErrorAlert shows an error in the user's language: what happened, what to do, and the request ID.
 export function ErrorAlert({ error }: { error: unknown }) {
   const { t, i18n } = useTranslation();
@@ -61,12 +63,13 @@ export function ErrorAlert({ error }: { error: unknown }) {
       ? error.message
       : t('ui.unexpectedError');
   const action = known && i18n.exists(`${base}.action`) ? t(`${base}.action`, params) : '';
+  // The cause names the closed reason of a failed check when the person needs it to act: the two key types, an identity
+  // provider that could not be read (params.cause), a directory's connection or sign-in test (params reason and detail).
+  const showCause = keyTypeMismatch || CAUSE_REASONS.has(error.reason);
 
   return (
     <Alert color="red" role="alert" title={withRoleCode(title, params.role)}>
-      {/* The cause names the two key types, which is what the person needs to choose again; for an identity provider that
-          could not be read it names the closed reason (params.cause). */}
-      {known && (keyTypeMismatch || error.reason === 'sso.discovery_failed') && i18n.exists(`${base}.cause`) && <Text size="sm">{withRoleCode(t(`${base}.cause`, params), params.role)}</Text>}
+      {known && showCause && i18n.exists(`${base}.cause`) && <Text size="sm">{withRoleCode(t(`${base}.cause`, params), params.role)}</Text>}
       {action && <Text size="sm">{withRoleCode(action, params.role)}</Text>}
       {error.details.length > 0 && (
         <List size="sm" mt="xs">

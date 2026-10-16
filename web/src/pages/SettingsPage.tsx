@@ -11,12 +11,13 @@ import { GeneralSettings } from '../components/settings/GeneralSettings';
 import { MailSettings } from '../components/settings/MailSettings';
 import { RecipientsSettings } from '../components/settings/RecipientsSettings';
 import { SSOSettings } from '../components/sso/SSOSettings';
+import { DirectoriesSettings } from '../components/directories/DirectoriesSettings';
 import { PageHeader, Panel } from '../components/ui';
 import { Icon, type IconName } from '../design/Icon';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import classes from './SettingsPage.module.css';
 
-const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso'] as const;
+const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
@@ -30,6 +31,7 @@ const ICONS: Record<Tab, IconName> = {
   acme: 'Globe',
   forwarding: 'Network',
   sso: 'ShieldCheck',
+  directories: 'Server',
 };
 
 const BODIES: Record<Tab, () => ReactNode> = {
@@ -42,10 +44,11 @@ const BODIES: Record<Tab, () => ReactNode> = {
   acme: () => <AcmeSettings />,
   forwarding: () => <ForwardingTab />,
   sso: () => <SSOSettings />,
+  directories: () => <DirectoriesSettings />,
 };
 
 // SettingsPage holds the Administrator's settings: mail, recipients, alert thresholds, general, backups, the HTTPS
-// certificate, the certificate authorities (ACME), audit forwarding and single sign-on, in the design's settings layout
+// certificate, the certificate authorities (ACME), audit forwarding, single sign-on and the directories (LDAP and Active Directory), in the design's settings layout
 // (R16): the sections as a vertical tab list from 768 px (a scrolling row on a phone) and the open section in a panel
 // with its heading and description.
 // The tab is in the address (?tab=), so a link opens it. Only the open tab is drawn, and each reads its own setting
