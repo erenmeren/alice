@@ -132,7 +132,10 @@ func prepareLocation(d providers.DiscoveredCertificate, now time.Time) (prepared
 
 	p := preparedLocation{}
 	switch {
-	case l.Problem == providers.CertProblemMissing || l.Problem == providers.CertProblemNotACertificate:
+	case l.Problem == providers.CertProblemMissing || l.Problem == providers.CertProblemNotACertificate ||
+		l.Problem == providers.CertProblemLeafUnreadable:
+		// No certificate, or none Alice can tell is the one served: the stored link goes. For
+		// leaf_unreadable (REM-4) an older helper may have linked the intermediate after the leaf.
 		p.gone = true
 	case l.Problem == "" && len(d.PEMChain) > 0:
 		// The leaf the server serves and the ordered path to its root only (B1-I1): what Alice

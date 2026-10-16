@@ -265,6 +265,20 @@ func TestReconcileMissingChangedOutsideAndInvalidConfiguration(t *testing.T) {
 	assert.False(t, paths["/etc/nginx/ssl/b.crt"].Supported)
 	assert.Equal(t, providers.CertProblemUnreadable, paths["/etc/nginx/ssl/b.crt"].Problem)
 	assert.Equal(t, 1, h.audits("location.changed_outside"))
+
+	// REM-4: a file whose first certificate the helper cannot read drops the link it had (an older
+	// helper may have linked the intermediate after that certificate): no certificate, the problem shown.
+	leafBad := locB
+	leafBad.Supported, leafBad.Unsupported, leafBad.Problem = false, providers.UnsupportedFile, providers.CertProblemLeafUnreadable
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		{Location: gone}, {Location: leafBad}}})
+	require.NoError(t, err)
+	paths = byPath(t, h, web.ID, false)
+	assert.Nil(t, paths["/etc/nginx/ssl/b.crt"].Certificate, "the stored link is dropped")
+	assert.Empty(t, paths["/etc/nginx/ssl/b.crt"].CertFileSHA256)
+	assert.False(t, paths["/etc/nginx/ssl/b.crt"].Supported)
+	assert.Equal(t, []string{providers.UnsupportedFile, providers.CertProblemLeafUnreadable},
+		[]string{paths["/etc/nginx/ssl/b.crt"].UnsupportedReason, paths["/etc/nginx/ssl/b.crt"].Problem})
 }
 
 // Requirement: a result without a usable Nginx configuration (SSH only, a configuration error

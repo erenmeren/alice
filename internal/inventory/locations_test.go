@@ -115,6 +115,15 @@ func TestPrepareLocation(t *testing.T) {
 	assert.False(t, p.gone)
 	assert.Equal(t, providers.UnsupportedFile, p.loc.Unsupported)
 
+	// REM-4: an unreadable first certificate is no known certificate: the stored link goes, as for
+	// not_a_certificate.
+	leafBad := d
+	leafBad.Location.Problem = providers.CertProblemLeafUnreadable
+	p, _ = prepareLocation(leafBad, unitNow)
+	assert.Nil(t, p.cert)
+	assert.True(t, p.gone)
+	assert.Equal(t, providers.UnsupportedFile, p.loc.Unsupported)
+
 	// Locations that cannot be stored.
 	for _, path := range []string{"", "/" + strings.Repeat("p", maxLocationPath)} {
 		bad := d
