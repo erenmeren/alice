@@ -142,10 +142,12 @@ func parseKeyLine(l *Line) {
 // hostile file cannot fill the database. Raw (used to rewrite the file) and Options stay complete.
 // The options cap is higher because a rotation builds the new key's line from the stored options
 // text: an option list longer than the cap is stored cut (ending in "…"), and the planner skips that
-// place (options_truncated) rather than write a shortened list.
+// place (options_truncated) rather than write a shortened list. 4095 bytes because a rotation copies
+// the stored text into rotation_locations.options, CHECK (char_length(options) <= 4096): a cut value
+// is at most 4095 characters of the original plus the one-character "…".
 const (
 	maxCommentBytes     = 1024
-	maxOptionsTextBytes = 8192
+	maxOptionsTextBytes = 4095
 )
 
 // capText returns s unchanged when it fits in max bytes; otherwise its longest prefix of at most max

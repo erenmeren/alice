@@ -446,21 +446,41 @@ func TestKeyCommentAndOptionsAreCapped(t *testing.T) {
 			opts = append(opts, `environment="K`+string(rune('1'+i))+`=`+strings.Repeat("v", 1000)+`"`)
 		}
 		raw := strings.Join(opts, ",") + " " + line
-		l := check(t, raw, 8192, func(l Line) string { return l.OptionsText })
-		assert.LessOrEqual(t, len(strings.TrimSuffix(l.OptionsText, "…")), 8192)
+		l := check(t, raw, 4095, func(l Line) string { return l.OptionsText })
+		assert.LessOrEqual(t, len(strings.TrimSuffix(l.OptionsText, "…")), 4095)
 		assert.Equal(t, opts, l.Options)
 	})
+	// rotation_locations.options is CHECK (char_length(options) <= 4096): a cut list (at most 4095
+	// bytes of the original plus "…") must fit in 4096 characters, even when every rune is multi-byte.
+	t.Run("cut options fit the rotation_locations column", func(t *testing.T) {
+		raw := `environment="K=` + strings.Repeat("é", 3000) + `" ` + line
+		l := check(t, raw, 4095, func(l Line) string { return l.OptionsText })
+		assert.LessOrEqual(t, utf8.RuneCountInString(l.OptionsText), 4096)
+		raw = `environment="K=` + strings.Repeat("v", 5000) + `" ` + line
+		l = check(t, raw, 4095, func(l Line) string { return l.OptionsText })
+		assert.Equal(t, 4096, utf8.RuneCountInString(l.OptionsText))
+	})
 	// A rotation builds the new key's line from the stored options text, so an option list of a few KiB
-	// (longer than the comment cap) must be stored whole.
+	// (longer than the comment cap) must be stored whole up to the cap, and cut one byte past it.
 	t.Run("options of a few KiB are stored whole", func(t *testing.T) {
 		var opts []string
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 3; i++ {
 			opts = append(opts, `environment="K`+string(rune('1'+i))+`=`+strings.Repeat("v", 1000)+`"`)
 		}
 		text := strings.Join(opts, ",")
 		l := mustParse(t, text+" "+line).Lines[0]
 		require.Equal(t, LineKey, l.Kind)
 		assert.Equal(t, text, l.OptionsText)
+
+		atCap := `environment="K=` + strings.Repeat("v", 4095-len(`environment="K="`)) + `"`
+		require.Len(t, atCap, 4095)
+		l = mustParse(t, atCap+" "+line).Lines[0]
+		assert.Equal(t, atCap, l.OptionsText)
+
+		overCap := `environment="K=` + strings.Repeat("v", 4096-len(`environment="K="`)) + `"`
+		require.Len(t, overCap, 4096)
+		l = mustParse(t, overCap+" "+line).Lines[0]
+		assert.Equal(t, overCap[:4095]+"…", l.OptionsText)
 	})
 	t.Run("short text is untouched", func(t *testing.T) {
 		l := mustParse(t, `no-pty `+line+` me@host`).Lines[0]

@@ -128,7 +128,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   - **Alice does not know all key files of the account it connects with on this server; scan the server again** (`connection_files_unknown`). Choose **Scan for SSH keys** on the server's page (on an Nginx server, **Discover**), then preview again (`ALC-KEY-0014`).
   - **This place belongs to the account Alice connects with or to one of its files; Alice never changes those** (`connection_account_file`). Nothing: the setup commands own those files (`ALC-KEY-0017`).
   - **Alice could not read this line's options exactly** (`options_unreadable`). Check the line's options on the server (they are not valid UTF-8), fix them, then scan again.
-  - **This line's options are longer than Alice stores, so Alice cannot copy them to the new key** (`options_truncated`). The line's option list is longer than 8 KiB. Shorten it on the server (for example move long `environment=` values into the forced command's own configuration), scan again, then preview again; or rotate the key at that place by hand.
+  - **This line's options are longer than Alice stores, so Alice cannot copy them to the new key** (`options_truncated`). The line's option list is longer than 4 KiB (4095 bytes). Shorten it on the server (for example move long `environment=` values into the forced command's own configuration), scan again, then preview again; or rotate the key at that place by hand.
 
 ## Certificates
 

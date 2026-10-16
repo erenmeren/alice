@@ -36,19 +36,21 @@ Accepted and deferred items are also KI-39 (and KI-38 for AUTH-2) of `SECURITY-R
   estate shows some websites as "list cut" and their servers are missing from the location's list until the
   configuration is split.
 - REM-2 (= RA-03, unbounded key comments and options in the inventory) — the inventory keeps at most 1024 bytes of a
-  key's comment and 8192 bytes of its options text, cut on a rune boundary, followed by `…` (so a stored value is at
+  key's comment and 4095 bytes of its options text, cut on a rune boundary, followed by `…` (so a stored value is at
   most the cap plus the 3-byte ellipsis); the raw line used to rewrite `authorized_keys` and the parsed options stay
   complete (`internal/providers/linuxssh:TestKeyCommentAndOptionsAreCapped`) — why: the inventory is for people to
   read; the file itself must never be rewritten from a shortened copy — cost if wrong: two keys whose comments differ
   only after 1 KiB look alike in the list (their fingerprints still differ). Whole-branch review fix: a rotation
   builds the new key's line from the stored options text, so a cut list (ending in `…`, which no valid option list
-  does) made the place fail during the run (`internal.unexpected`); the options cap was raised from 1 KiB to 8 KiB and
-  the planner skips such a place in the preview and at send time (`options_truncated`,
+  does) made the place fail during the run (`internal.unexpected`); the options cap was raised from 1 KiB to 4 KiB (4095 bytes, so a cut value of 4095 characters plus `…` fits
+  `rotation_locations.options`, `CHECK (char_length(options) <= 4096)`, which a run inserts for every place, skipped
+  ones included; F1 re-review: an 8 KiB cap made that insert fail and the whole run with it,
+  `internal/sshkeys:TestRunStartsWithACutOptionsLocationSkipped`) and the planner skips such a place in the preview and at send time (`options_truncated`,
   `internal/sshkeys/plan:TestCutOptionsAreSkippedBeforeTheLineIsBuilt`) — cost: a key whose option list is longer
-  than 8 KiB is not rotated at that place until the list is shortened.
+  than 4 KiB is not rotated at that place until the list is shortened.
 - REM-2, second half (inventory rows of keys that vanished from a server are never pruned) — by design, not changed:
   a row keeps `missing_since` and `removed_by_alice_at`, the history of where a key was and when it went, which a
-  rotation or a revocation is checked against. The caps (1 KiB comment, 8 KiB options) bound each row — cost if wrong: the table grows by the
+  rotation or a revocation is checked against. The caps (1 KiB comment, 4 KiB options) bound each row — cost if wrong: the table grows by the
   number of distinct keys ever seen per account, not by the number of scans.
 - REM-4 (= RA-02, an unreadable first certificate made the intermediate look like the website's certificate and
   silenced its expiry alarm) — `alice-helper` 1.6.1 reports such a file as `leaf_unreadable` (protocol 7
