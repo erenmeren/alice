@@ -119,8 +119,10 @@ Accepted and deferred items are also KI-39 (and KI-38 for AUTH-2) of `SECURITY-R
   scope for v1, so there is no second process competing for leases, and only Alice's own sessions and the host
   operator hold locks in its database. With one process, a clock jump of more than a lease can still run one
   target's job twice, and a stuck lock still makes the workers that need it wait without limit — cost if wrong:
-  those two effects on a host whose clock is stepped (customers keep it on NTP, KI-39) or whose database hangs a
-  lock (a restart clears it); both become likely with a second process, so both must be fixed before any
+  those two effects on a host whose clock is stepped (customers keep it on NTP, KI-39, KI-07) or whose database
+  hangs a lock (a restart of Alice releases only the locks its own sessions hold; a lock held by another session,
+  such as an operator's `psql` or a backup tool, must be ended in PostgreSQL; a restart does nothing for the
+  clock-jump double run); both become likely with a second process, so both must be fixed before any
   multi-process or HA support.
 - CRY-3 (= C-1, SEC-043 claimed an audit HMAC key) — the spec text is corrected, not the code: the audit chain is an
   unkeyed SHA-256 chain in v1 (KI-05); `alice/audit-hmac/v1` and `secrets.LabelAuditHMAC` are reserved for v2 and
