@@ -38,7 +38,8 @@ func ldapDeps(t *testing.T) (Deps, *fakeLDAP, *fakeAuth) {
 	fa.AuthenticateFn = func(ctx context.Context, tok string) (auth.Principal, error) {
 		if tok == "ldap-user" {
 			return auth.Principal{Kind: rbac.UserSession, UserID: operatorID, Username: "deniz", Role: rbac.Operator, Locale: "en",
-				SessionHash: []byte("ldap-user"), AuthSource: auth.AuthLDAP, LDAPDirectoryID: testDirectoryID}, nil
+				SessionHash: []byte("ldap-user"), AuthSource: auth.AuthLDAP, LDAPDirectoryID: testDirectoryID, LDAPUniqueID: "0a0b",
+				LDAPLogin: "deniz"}, nil
 		}
 		return base(ctx, tok)
 	}
@@ -53,6 +54,12 @@ func ldapDeps(t *testing.T) (Deps, *fakeLDAP, *fakeAuth) {
 			return ldap.Identity{UniqueID: "0a0b", Login: "deniz"}, dir, &ldap.LoginError{Reason: ldap.ReasonBadCredentials, Detail: ldap.DetailUserBind}
 		}
 		return ldap.Identity{UniqueID: "0a0b", Login: "deniz", Groups: []string{"ops"}}, dir, nil
+	}
+	fl.DirectoryFn = func(_ context.Context, id uuid.UUID) (ldap.Directory, error) {
+		if id != testDirectoryID {
+			return ldap.Directory{}, ldap.ErrNotFound
+		}
+		return dir, nil
 	}
 	fl.ResolveRoleFn = func(context.Context, uuid.UUID, []string) (rbac.Role, bool, error) { return rbac.Operator, true, nil }
 	fl.TestSignInFn = func(_ context.Context, _ audit.Actor, _ uuid.UUID, _ string, password secrets.Plaintext) (ldap.TestResult, error) {
@@ -105,7 +112,7 @@ func TestDirectoryPasswordsAreZeroedOnEveryPath(t *testing.T) {
 		{"change refused", http.MethodPatch, one, "admin-stepup", `{"bind_password":"bind-1"}`, ifm, http.StatusPreconditionFailed, 1},
 	}
 	for _, c := range cases {
-		s.ldapLogins.Reset()
+		s.ldapLockout.Reset()
 		s.login.Reset()
 		rec, body := callObserved(h, c.method, c.path, c.id, c.body, c.hdr)
 		assert.Equal(t, c.status, rec.Code, "%s: %s", c.name, rec.Body.String())
@@ -124,7 +131,7 @@ func TestDirectoryRefusalIsHeldToTheFloor(t *testing.T) {
 	login := "/api/v1/auth/ldap/" + testDirectoryID.String() + "/login"
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- call(h, http.MethodPost, login, "", `{"username":"ghost","password":"pw-1"}`) }()
-	clk.BlockUntil(1, 0)
+	waitForTimer(t, clk, done)
 	clk.Advance(ldapRefusalFloor - time.Millisecond)
 	select {
 	case <-done:
@@ -132,7 +139,12 @@ func TestDirectoryRefusalIsHeldToTheFloor(t *testing.T) {
 	case <-time.After(20 * time.Millisecond):
 	}
 	clk.Advance(time.Millisecond)
-	rec := <-done
+	var rec *httptest.ResponseRecorder
+	select {
+	case rec = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("not answered once the floor passed")
+	}
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Equal(t, "ALC-LDAP-0001", decodeErr(t, rec).Error.Code)
 
@@ -146,7 +158,7 @@ func TestDirectoryRefusalIsHeldToTheFloor(t *testing.T) {
 		h.ServeHTTP(r, req)
 		done <- r
 	}()
-	clk.BlockUntil(1, 0) // the first wait's timer fired and is no longer pending
+	waitForTimer(t, clk, done) // the first wait's timer fired and is no longer pending
 	cancel()
 	select {
 	case rec := <-done:
@@ -156,10 +168,27 @@ func TestDirectoryRefusalIsHeldToTheFloor(t *testing.T) {
 	}
 }
 
+// waitForTimer waits (bounded) until the handler waits on clk; a handler that answers without waiting fails the test
+// instead of hanging it.
+func waitForTimer(t *testing.T, clk *clock.Fake, done <-chan *httptest.ResponseRecorder) {
+	t.Helper()
+	blocked := make(chan struct{})
+	go func() { clk.BlockUntil(1, 0); close(blocked) }()
+	select {
+	case <-blocked:
+	case rec := <-done:
+		t.Fatalf("answered %d without waiting for the floor", rec.Code)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler never waited on the clock")
+	}
+}
+
 func TestDirectoryLoginKeyFoldsTheName(t *testing.T) {
 	other := uuid.New()
 	assert.Equal(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(testDirectoryID, "DENIZ"))
 	assert.Equal(t, ldapLoginKey(testDirectoryID, "çağla"), ldapLoginKey(testDirectoryID, "ÇAĞLA"))
+	assert.Equal(t, ldapLoginKey(testDirectoryID, "\u00e7a\u011fla"), ldapLoginKey(testDirectoryID, "c\u0327ag\u0306la"), "NFC and NFD share one budget")
+	assert.Len(t, []rune(ldapLoginKey(testDirectoryID, strings.Repeat("ß", 256))), 36+1+256, "cut to 256 runes after folding")
 	assert.NotEqual(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(other, "deniz"), "each directory has its own budget")
 	assert.NotEqual(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(testDirectoryID, "deniz2"))
 }

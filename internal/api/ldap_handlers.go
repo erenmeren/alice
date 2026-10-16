@@ -11,9 +11,11 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 
 	"alice/internal/auth"
 	"alice/internal/auth/ldap"
+	"alice/internal/auth/ldap/ldapx"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
@@ -37,7 +39,7 @@ const (
 )
 
 // ldapSignInRoutes are the directory sign-in (LDAP and Active Directory, Task 5): the sign-in page's list, the sign-in
-// (the sign-in form's limit per address plus ldapLogins per directory and name) and a directory user's step-up.
+// (the sign-in form's limit per address plus ldapLockout per directory and name) and a directory user's step-up.
 func (s *server) ldapSignInRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/auth/ldap/directories", perm: rbac.Public, handler: s.ldapPublicDirectories},
@@ -69,10 +71,25 @@ func (s *server) ldapRoutes() []route {
 	}
 }
 
-// ldapLoginKey is the ldapLogins key of a sign-in name at a directory: the name case-folded (Unicode simple folding,
-// so "ADA", "ada" and "Ada" share one budget, as a directory's case-insensitive match would).
+// ldapLoginKey is the ldapLockout key of a sign-in name at a directory: the name in NFC, then case-folded (Unicode
+// folding, so "ADA", "ada", "Ada" and the decomposed spelling of "Çağla" share one budget, as a directory's
+// case-insensitive match would), cut to ldapx.MaxLoginRunes. Callers pass only names ldapx.ValidLoginName accepts.
 func ldapLoginKey(directoryID uuid.UUID, login string) string {
-	return directoryID.String() + "\x00" + cases.Fold().String(login)
+	folded := []rune(cases.Fold().String(norm.NFC.String(login)))
+	if len(folded) > ldapx.MaxLoginRunes {
+		folded = folded[:ldapx.MaxLoginRunes]
+	}
+	return directoryID.String() + "\x00" + string(folded)
+}
+
+// countsAsFailure reports whether a refusal is a failed guess for ldapLockout: the directory (or the password check
+// before it) refused the name and password, found several entries, or accepted a password whose groups give no role.
+func countsAsFailure(err error) bool {
+	var le *ldap.LoginError
+	if errors.As(err, &le) {
+		return le.Reason == ldap.ReasonBadCredentials || le.Reason == ldap.ReasonAmbiguousUser
+	}
+	return errors.Is(err, errNoAccess)
 }
 
 // passwordBodyErrors checks a sign-in name and password against the sign-in form's limits.
@@ -100,9 +117,10 @@ func (s *server) ldapPublicDirectories(w http.ResponseWriter, r *http.Request) {
 }
 
 // ldapLogin signs a person in with a directory password. The limits come first (the sign-in form's per address in the
-// guard, then ldapLogins per directory and sign-in name, counted before any directory traffic and for unknown names
-// too); then the directory checks the password (no transaction is open), the group mappings give the role, and
-// auth.SignInLDAP opens the session. The answer and the cookies are the sign-in form's: {status, csrf_token} with a
+// guard, then ldapLockout per directory and sign-in name, before any directory traffic and for unknown names too; a
+// locked name is answered at once with 429); then the directory checks the password (no transaction is open), the
+// group mappings give the role, and auth.SignInLDAP opens the session. A lockout key is made only for an existing,
+// enabled directory and a name ldapx.ValidLoginName accepts, so made-up directory IDs or names cannot fill the table. The answer and the cookies are the sign-in form's: {status, csrf_token} with a
 // pending session for MFA, or a full session when the directory does not ask for MFA (status signed_in). Every
 // refusal that could say something about the person is the one ALC-LDAP-0001, recorded by RefuseLDAP with its reason
 // and held to ldapRefusalFloor.
@@ -124,15 +142,28 @@ func (s *server) ldapLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	key := ldapLoginKey(id, req.Username)
-	if ok, retry := s.ldapLogins.Allow(key); !ok {
-		s.writeRateLimited(w, r, retry)
+	known, err := s.deps.LDAP.Directory(r.Context(), id)
+	switch {
+	case errors.Is(err, ldap.ErrNotFound):
+		s.refuseDirectorySignIn(w, r, start, auth.LDAPIdentity{DirectoryID: id}, err)
 		return
+	case err != nil:
+		s.fail(w, r, err)
+		return
+	}
+	key := ""
+	if known.Enabled && ldapx.ValidLoginName(req.Username) {
+		key = ldapLoginKey(id, req.Username)
+		if ok, retry := s.ldapLockout.Allow(key); !ok {
+			s.writeRateLimited(w, r, retry)
+			return
+		}
 	}
 	m := s.meta(r)
 	ident, dir, err := s.deps.LDAP.Verify(r.Context(), id, req.Username, secrets.NewPlaintext(req.Password))
 	req.zero()
 	if err != nil {
+		s.failLockout(key, err)
 		s.refuseDirectorySignIn(w, r, start, auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: loginOf(ident, req.Username)}, err)
 		return
 	}
@@ -143,6 +174,7 @@ func (s *server) ldapLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	case !mapped:
+		s.failLockout(key, errNoAccess)
 		s.refuseDirectorySignIn(w, r, start, full, errNoAccess)
 		return
 	}
@@ -151,9 +183,18 @@ func (s *server) ldapLogin(w http.ResponseWriter, r *http.Request) {
 		s.refuseDirectorySignIn(w, r, start, full, err)
 		return
 	}
-	s.ldapLogins.Refund(key)
+	if key != "" {
+		s.ldapLockout.Succeed(key)
+	}
 	s.issueSessionCookie(w, res.SessionToken) // a pending session (MFA routes only) or, with status signed_in, a full one
 	writeJSON(w, http.StatusOK, map[string]string{"status": res.Status, "csrf_token": s.deps.Auth.CSRFToken(res.SessionToken)})
+}
+
+// failLockout records a failed guess for key ("" when no key was made).
+func (s *server) failLockout(key string, err error) {
+	if key != "" && countsAsFailure(err) {
+		s.ldapLockout.Fail(key)
+	}
 }
 
 // errNoAccess: the directory accepted the password, but none of the person's groups is mapped to a role.
@@ -229,20 +270,19 @@ func (s *server) holdRefusal(ctx context.Context, start time.Time) {
 	}
 }
 
-// ldapStepUp is a directory user's step-up ("Confirm it's you"): the directory checks the password again (and the
-// person must still be the same entry), the groups give the role again, and, when the directory asks for MFA, the
-// authenticator code is checked too. username is the person's directory sign-in name (Alice does not store it); it
-// defaults to their Alice user name. ldapLogins applies as at the sign-in. A user who does not sign in through a
-// directory is refused with 409 ALC-LDAP-0008. A wrong directory password is ALC-LDAP-0001; a wrong code ALC-AUTH-0006.
+// ldapStepUp is a directory user's step-up ("Confirm it's you"): the directory checks the password again for the
+// sign-in name Alice stored at the last sign-in (the caller cannot name another), the answer must be the session
+// user's own entry, the groups give the role again, and, when the directory asks for MFA, the authenticator code is
+// checked too. ldapLockout applies as at the sign-in. A user who does not sign in through a directory is refused with
+// 409 ALC-LDAP-0008. Every refusal of the password, the entry or the user is recorded by RefuseLDAP with the session
+// user as the actor (and never another entry's identity), held to ldapRefusalFloor and answered ALC-LDAP-0001 (or
+// ALC-LDAP-0002 for a directory that cannot be used); a wrong code is ALC-AUTH-0006, recorded by StepUpLDAP.
 func (s *server) ldapStepUp(w http.ResponseWriter, r *http.Request) {
+	start := s.deps.Clock.Now()
 	var req directoryPasswordBody
 	defer req.zero()
-	if !s.decodeExact(w, r, &req, maxDirectoryPasswordBody, "username", "password", "code") {
+	if !s.decodeExact(w, r, &req, maxDirectoryPasswordBody, "password", "code") {
 		return
-	}
-	p := principalFrom(r.Context())
-	if req.Username == "" {
-		req.Username = p.Username
 	}
 	var v validate.Errors
 	passwordBodyErrors(&req, &v)
@@ -253,20 +293,28 @@ func (s *server) ldapStepUp(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if p.AuthSource != auth.AuthLDAP || p.LDAPDirectoryID == uuid.Nil {
+	p := principalFrom(r.Context())
+	if p.AuthSource != auth.AuthLDAP || p.LDAPDirectoryID == uuid.Nil || p.LDAPUniqueID == "" || !ldapx.ValidLoginName(p.LDAPLogin) {
 		s.writeError(w, r, ErrLDAPNotDirectoryUser)
 		return
 	}
 	id := p.LDAPDirectoryID
-	key := ldapLoginKey(id, req.Username)
-	if ok, retry := s.ldapLogins.Allow(key); !ok {
+	self := auth.LDAPIdentity{DirectoryID: id, UniqueID: p.LDAPUniqueID, Login: p.LDAPLogin}
+	key := ldapLoginKey(id, p.LDAPLogin)
+	if ok, retry := s.ldapLockout.Allow(key); !ok {
 		s.writeRateLimited(w, r, retry)
 		return
 	}
-	ident, dir, err := s.deps.LDAP.Verify(r.Context(), id, req.Username, secrets.NewPlaintext(req.Password))
+	ident, dir, err := s.deps.LDAP.Verify(r.Context(), id, p.LDAPLogin, secrets.NewPlaintext(req.Password))
 	req.zero()
 	if err != nil {
-		s.refuseDirectoryStepUp(w, r, auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: loginOf(ident, req.Username)}, err)
+		s.failLockout(key, err)
+		s.refuseDirectorySignIn(w, r, start, self, err)
+		return
+	}
+	if ident.UniqueID != p.LDAPUniqueID {
+		// The stored name now finds another entry (renamed or reused in the directory): not this person.
+		s.refuseDirectorySignIn(w, r, start, self, auth.ErrLDAPOtherUser)
 		return
 	}
 	full := auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: ident.Login, DisplayName: ident.DisplayName, Email: ident.Email}
@@ -276,39 +324,23 @@ func (s *server) ldapStepUp(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	case !mapped:
-		s.refuseDirectoryStepUp(w, r, full, errNoAccess)
+		s.failLockout(key, errNoAccess)
+		s.refuseDirectorySignIn(w, r, start, self, errNoAccess)
 		return
 	}
 	res, err := s.deps.Auth.StepUpLDAP(r.Context(), p, full, role, req.Code, dir.MFARequired, s.meta(r))
-	if errors.Is(err, auth.ErrLDAPOtherUser) {
-		// Another directory entry's password: recorded without that entry (it is not the person signed in).
-		s.refuseDirectoryStepUp(w, r, auth.LDAPIdentity{DirectoryID: id}, err)
+	if _, _, refusal := directoryRefusal(err); refusal {
+		s.refuseDirectorySignIn(w, r, start, self, err)
 		return
 	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	s.ldapLogins.Refund(key)
+	s.ldapLockout.Succeed(key)
 	s.rotated.Add(sessionTokenFrom(r)) // a late 401 for the old cookie must not delete the new one
 	s.issueSessionCookie(w, res.Token) // session ID is regenerated on step-up (SEC-019)
 	writeJSON(w, http.StatusOK, sessionJSON(res.Info, nil))
-}
-
-// refuseDirectoryStepUp answers a refused step-up as refuseDirectorySignIn does, without the floor: the person is
-// signed in, so the answer tells nobody whether a name exists.
-func (s *server) refuseDirectoryStepUp(w http.ResponseWriter, r *http.Request, id auth.LDAPIdentity, err error) {
-	reason, ec, ok := directoryRefusal(err)
-	switch {
-	case errors.Is(err, ldap.ErrNotFound):
-		s.writeError(w, r, ErrLDAPDirectoryUnavailable)
-		return
-	case !ok:
-		s.fail(w, r, err)
-		return
-	}
-	s.recordDirectoryRefusal(r, id, reason)
-	s.writeError(w, r, ec)
 }
 
 func (s *server) writeDirectory(w http.ResponseWriter, status int, d ldap.Directory) {

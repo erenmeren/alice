@@ -7,15 +7,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/auth/ldap"
+	"alice/internal/auth/ratelimit"
 	"alice/internal/platform/clock"
 	"alice/internal/secrets"
 )
@@ -165,6 +168,7 @@ func (s *stack) directoryReady(t *testing.T, admin *client, adminAcct *account, 
 		{login: "selin", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000003", name: "Selin", groups: []string{dirOperators}},
 		{login: "ayse", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000004", name: "Ayşe", email: "ayse@corp.example", groups: []string{dirOperators}},
 		{login: "nogroup", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000005", name: "No Group", groups: []string{"cn=other"}},
+		{login: "Çağla", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000008", name: "Çağla Demir", groups: []string{dirOperators}},
 		{login: "dup", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000006"},
 		{login: "dup", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000007"},
 	} {
@@ -393,10 +397,11 @@ func TestDirectorySignInRefusalsLookTheSame(t *testing.T) {
 	s.requireNoDirectoryCanary(t)
 }
 
-func TestDirectorySignInRateLimits(t *testing.T) {
+func TestDirectorySignInLockout(t *testing.T) {
 	s, admin, adminAcct := installed(t)
 	dir := s.directoryReady(t, admin, adminAcct, true)
 	path := "/api/v1/auth/ldap/" + dir + "/login"
+	lockout := func() int { return s.api.s.ldapLockout.Len() }
 
 	// The sign-in form's limit per address: the 11th request in a minute is refused, whatever its body.
 	c := s.freshClient()
@@ -409,42 +414,100 @@ func TestDirectorySignInRateLimits(t *testing.T) {
 	assert.NotEmpty(t, rec.Header().Get("Retry-After"))
 	assert.Zero(t, took, "a rate limit is answered at once")
 
-	// 5 attempts in 15 minutes per directory and sign-in name, from any address, counted before the directory is
-	// contacted: the 6th is refused even with the right password, for an unknown name too, whatever its case.
-	for _, name := range [][2]string{{"deniz", "Deniz"}, {"ghost", "GHOST"}} {
-		for range 5 {
+	// 3 failed passwords lock the name for 45 minutes, from any address, before any directory traffic: the right
+	// password is refused too, in any case, and an unknown name is counted exactly the same.
+	for _, name := range [][2]string{{"deniz", "DENIZ"}, {"ghost", "Ghost"}} {
+		for range 3 {
 			rec, _ := s.dirLogin(s.freshClient(), dir, name[0], "wrong-password")
 			requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
 		}
 		calls := s.dir.calls()
 		rec, took := s.dirLogin(s.freshClient(), dir, name[0], dirUserPassword)
 		requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
-		assert.Zero(t, took)
+		assert.Zero(t, took, "a locked name is answered at once")
+		retry, err := strconv.Atoi(rec.Header().Get("Retry-After"))
+		require.NoError(t, err)
+		assert.InDelta(t, ldapLockoutFor.Seconds(), retry, 10)
 		rec, _ = s.dirLogin(s.freshClient(), dir, name[1], dirUserPassword)
 		requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
-		assert.Equal(t, calls, s.dir.calls(), "%s: the refused attempts never reached the directory", name[0])
+		assert.Equal(t, calls, s.dir.calls(), "%s: a locked name never reaches the directory", name[0])
 	}
-	// After the window the right password works again.
-	s.clock.Advance(ldapLoginWindow)
+	// NFC and NFD spellings of one name share one budget.
+	for _, spelling := range []string{"çağla", "çağla", "ÇAĞLA"} {
+		rec, _ := s.dirLogin(s.freshClient(), dir, spelling, "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	rec, _ = s.dirLogin(s.freshClient(), dir, "çağla", dirUserPassword)
+	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
+	// The lock ends after 45 minutes, not before.
+	s.clock.Advance(ldapLockoutFor - time.Minute)
+	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz", dirUserPassword)
+	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
+	s.clock.Advance(time.Minute)
 	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz", dirUserPassword)
 	requireStatus(t, rec, http.StatusOK)
 
-	// A successful sign-in gives its attempt back.
-	for range 4 {
+	// A successful sign-in clears the failures.
+	for range 2 {
 		rec, _ := s.dirLogin(s.freshClient(), dir, "berk", "wrong-password")
 		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
 	}
 	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
 	requireStatus(t, rec, http.StatusOK)
-	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", "wrong-password")
+	for range 2 {
+		rec, _ := s.dirLogin(s.freshClient(), dir, "berk", "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+
+	// Made-up directories and unusable names make no key.
+	keys := lockout()
+	for range 20 {
+		rec, _ := s.dirLogin(s.freshClient(), dir[:24]+uuidSuffix(), "deniz", "wrong-password")
+		requireError(t, rec, http.StatusServiceUnavailable, "ALC-LDAP-0002")
+	}
+	rec, _ = s.dirLogin(s.freshClient(), dir, "bad\tname", "wrong-password")
 	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	assert.Equal(t, keys, lockout())
+
+	// ResetLimits clears the lockout (and the per-address limit).
+	s.api.ResetLimits()
+	assert.Zero(t, lockout())
+	rec, _ = s.dirLogin(c, dir, "çağla", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+}
+
+// uuidSuffix is the last 12 hex digits of a fresh UUID (a made-up directory ID with a real one's prefix).
+func uuidSuffix() string { u := uuid.NewString(); return u[24:] }
+
+// A full lockout table never drops a locked name; it refuses new names until one expires (fail closed).
+func TestDirectoryLockoutTableFailsClosed(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	dir := s.directoryReady(t, admin, adminAcct, true)
+	s.api.s.ldapLockout = ratelimit.NewBoundedLockout(s.clock, ldapLockoutFailures, ldapLockoutWindow, ldapLockoutFor, 2)
+	for range 3 {
+		rec, _ := s.dirLogin(s.freshClient(), dir, "deniz", "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	rec, _ := s.dirLogin(s.freshClient(), dir, "ghost", "wrong-password")
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	calls := s.dir.calls()
 	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
 	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
-
-	// ResetLimits clears the per-name limiter (and the per-address one).
-	s.api.ResetLimits()
-	rec, _ = s.dirLogin(c, dir, "berk", dirUserPassword)
+	for _, name := range []string{"x1", "x2", "x3"} {
+		rec, _ = s.dirLogin(s.freshClient(), dir, name, "wrong-password")
+		requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
+	}
+	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz", dirUserPassword)
+	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
+	assert.Equal(t, calls, s.dir.calls())
+	// Once ghost's window is over it makes room; deniz stays locked until its 45 minutes end.
+	s.clock.Advance(ldapLockoutWindow + time.Minute)
+	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
 	requireStatus(t, rec, http.StatusOK)
+	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz", dirUserPassword)
+	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
 }
 
 func TestDirectoryStepUp(t *testing.T) {
@@ -454,44 +517,85 @@ func TestDirectoryStepUp(t *testing.T) {
 	rec, _ := s.dirLogin(browser, dir, "deniz", dirUserPassword)
 	requireStatus(t, rec, http.StatusOK)
 	deniz := s.enrolDirectoryUser(t, browser, "deniz")
-	other := s.freshClient()
-	rec, _ = s.dirLogin(other, dir, "berk", dirUserPassword)
-	requireStatus(t, rec, http.StatusOK)
-	s.enrolDirectoryUser(t, other, "berk")
 
 	stepup := "/api/v1/auth/ldap/stepup"
-	// The password and the code (MFA on); the user name defaults to the Alice user name.
+	// The password and the code (MFA on), for the sign-in name Alice stored.
 	s.clock.Advance(31 * time.Second)
-	rec = browser.do(http.MethodPost, stepup, map[string]string{"password": dirUserPassword, "code": s.totpNow(deniz.secret)})
+	rec, took := s.timedDo(browser, http.MethodPost, stepup, map[string]string{"password": dirUserPassword, "code": s.totpNow(deniz.secret)})
 	requireStatus(t, rec, http.StatusOK)
+	assert.Zero(t, took)
 	assert.NotNil(t, decodeBody[sessionUserBody](t, rec).StepUpUntil)
 	assert.Equal(t, 1, s.countWhere("audit_log", "action = 'auth.stepup' AND details->>'method' = 'ldap'"))
 
-	// A wrong password; a wrong code; another directory user's password: refused, recorded.
-	requireError(t, browser.do(http.MethodPost, stepup, map[string]string{"password": "wrong", "code": s.totpNow(deniz.secret)}),
-		http.StatusUnauthorized, "ALC-LDAP-0001")
+	// The caller cannot name another sign-in name.
+	requireStatus(t, browser.do(http.MethodPost, stepup, map[string]string{"username": "berk", "password": dirUserPassword}), http.StatusBadRequest)
+
+	// A wrong password: the generic answer, held to the floor, recorded with the session user as the actor.
+	rec, took = s.timedDo(browser, http.MethodPost, stepup, map[string]string{"password": "wrong", "code": s.totpNow(deniz.secret)})
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	assert.Equal(t, ldapRefusalFloor, took)
 	reason, login, actor := s.lastDenial(t)
 	assert.Equal(t, [3]string{"bad_credentials", "deniz", "user"}, [3]string{reason, login, actor})
+	var actorID string
+	require.NoError(t, s.db.Owner.QueryRow(context.Background(), `SELECT actor_id::text FROM audit_log WHERE action = 'auth.ldap.denied'
+ORDER BY seq DESC LIMIT 1`).Scan(&actorID))
+	assert.Equal(t, deniz.id, actorID)
 	s.clock.Advance(31 * time.Second)
 	requireError(t, browser.do(http.MethodPost, stepup, map[string]string{"password": dirUserPassword, "code": "000000"}),
 		http.StatusUnauthorized, "ALC-AUTH-0006")
-	requireError(t, browser.do(http.MethodPost, stepup, map[string]string{"username": "berk", "password": dirUserPassword,
-		"code": s.totpNow(deniz.secret)}), http.StatusUnauthorized, "ALC-LDAP-0001")
-	reason, login, _ = s.lastDenial(t)
-	assert.Equal(t, [2]string{"stepup_other_user", ""}, [2]string{reason, login})
+
+	// The stored name now finds another entry: not this person; recorded with the session user, never the other entry.
+	s.dir.set(func(f *fakeDirectory) {
+		for i := range f.users {
+			if f.users[i].login == "deniz" {
+				f.users[i].uid = "6f1c5b7e-0d3a-4c1e-9a55-0000000000ff"
+			}
+		}
+	})
+	s.clock.Advance(31 * time.Second)
+	rec, took = s.timedDo(browser, http.MethodPost, stepup, map[string]string{"password": dirUserPassword, "code": s.totpNow(deniz.secret)})
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	assert.Equal(t, ldapRefusalFloor, took)
+	reason, login, actor = s.lastDenial(t)
+	assert.Equal(t, [3]string{"stepup_other_user", "deniz", "user"}, [3]string{reason, login, actor})
+	assert.Zero(t, s.countWhere("users", "ldap_unique_id = encode('6f1c5b7e-0d3a-4c1e-9a55-0000000000ff', 'hex')"), "no user for the other entry")
+
+	// A user whose Alice name was transliterated and suffixed (çağla -> cagla-2) steps up with the stored name.
+	s.stepUp(admin, adminAcct)
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/users", map[string]string{"username": "cagla", "display_name": "Local Cagla",
+		"email": "", "role": "auditor", "password": operatorPassword}), http.StatusCreated)
+	cb := s.freshClient()
+	rec, _ = s.dirLogin(cb, dir, "Çağla", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+	cagla := s.enrolDirectoryUser(t, cb, "cagla-2")
+	rec = cb.do(http.MethodGet, "/api/v1/auth/session", nil)
+	assert.Equal(t, "cagla-2", decodeBody[sessionUserBody](t, rec).User.Username)
+	s.clock.Advance(31 * time.Second)
+	rec = cb.do(http.MethodPost, stepup, map[string]string{"password": dirUserPassword, "code": s.totpNow(cagla.secret)})
+	requireStatus(t, rec, http.StatusOK)
 
 	// A local user confirms with the authenticator code; a directory user cannot use that route.
 	s.clock.Advance(31 * time.Second)
 	requireError(t, admin.do(http.MethodPost, stepup, map[string]string{"password": adminPassword}), http.StatusConflict, "ALC-LDAP-0008")
-	requireError(t, browser.do(http.MethodPost, "/api/v1/auth/stepup", map[string]string{"code": s.totpNow(deniz.secret)}),
+	requireError(t, cb.do(http.MethodPost, "/api/v1/auth/stepup", map[string]string{"code": s.totpNow(cagla.secret)}),
 		http.StatusConflict, "ALC-USR-0003")
 	requireError(t, s.freshClient().do(http.MethodPost, stepup, map[string]string{"password": dirUserPassword}),
 		http.StatusUnauthorized, "ALC-AUTH-0001")
 
+	// The step-up shares the sign-in's lockout: 3 wrong passwords lock the stored name for the sign-in too.
+	for range 3 {
+		rec, _ := s.timedDo(cb, http.MethodPost, stepup, map[string]string{"password": "wrong"})
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	requireError(t, cb.do(http.MethodPost, stepup, map[string]string{"password": dirUserPassword}), http.StatusTooManyRequests, "ALC-SYS-0005")
+	rec, _ = s.dirLogin(s.freshClient(), dir, "çağla", dirUserPassword)
+	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
+	s.api.ResetLimits()
+
 	// No authenticator while the directory asks for MFA (an Administrator reset it while MFA was off): the person signs
 	// in again to enrol (409 ALC-LDAP-0007, nothing counted).
 	s.stepUp(admin, adminAcct)
-	requireStatus(t, admin.do(http.MethodPost, "/api/v1/users/"+deniz.id+"/actions/reset-mfa", nil), http.StatusNoContent)
+	requireStatus(t, admin.do(http.MethodPost, "/api/v1/users/"+cagla.id+"/actions/reset-mfa", nil), http.StatusNoContent)
 	setMFA := func(on bool) {
 		rec := admin.do(http.MethodGet, "/api/v1/ldap/directories/"+dir, nil)
 		requireStatus(t, admin.do(http.MethodPatch, "/api/v1/ldap/directories/"+dir, map[string]any{"mfa_required": on},
@@ -499,7 +603,7 @@ func TestDirectoryStepUp(t *testing.T) {
 	}
 	setMFA(false)
 	fresh := s.freshClient()
-	rec, _ = s.dirLogin(fresh, dir, "deniz", dirUserPassword)
+	rec, _ = s.dirLogin(fresh, dir, "Çağla", dirUserPassword)
 	requireStatus(t, rec, http.StatusOK)
 	require.Equal(t, "signed_in", decodeBody[map[string]string](t, rec)["status"])
 	setMFA(true)

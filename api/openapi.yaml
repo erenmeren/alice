@@ -2945,9 +2945,10 @@ paths:
         The answer and the cookies are the sign-in form's: a pending session cookie for the MFA step (status
         mfa_required or mfa_enrollment_required, then /auth/mfa/enroll and /auth/mfa/verify), or, when the directory
         does not ask for MFA, a full session cookie at once (status signed_in). Limits come first: 10 per minute per
-        address, as the sign-in form, and 5 attempts in 15 minutes per directory and sign-in name (case-folded), counted
-        before any traffic to the directory and for unknown names too; a successful sign-in gives its attempt back (429
-        ALC-SYS-0005 with Retry-After). Every refusal that could tell something about the person (unknown name, wrong
+        address, as the sign-in form, and a lockout per directory and sign-in name (NFC, case-folded): after 3 failed
+        passwords within 30 minutes the name is not sent to the directory for 45 minutes, even with the right password,
+        for unknown names too; a successful sign-in clears the failures (429 ALC-SYS-0005 with Retry-After, answered at
+        once). Every refusal that could tell something about the person (unknown name, wrong
         password, no mapped group, a disabled or locked user, an e-mail of a local account, several entries, a name that
         cannot be sent) is the same 401 ALC-LDAP-0001, written to the audit log as auth.ldap.denied with its reason, and
         takes at least 1.5 seconds. A directory that is unreachable, misconfigured, switched off or unknown is 503
@@ -2986,13 +2987,14 @@ paths:
       operationId: directoryStepUp
       summary: Confirm a directory user's identity with the directory password (and the authenticator code) for 5 minutes
       description: >-
-        The directory checks the password again for the same directory entry, the groups give the role again, and, when
-        the directory asks for MFA, code must be a valid authenticator code (401 ALC-AUTH-0006 when it is not; 409
-        ALC-LDAP-0007 when the user has no authenticator yet). username is the directory sign-in name; it defaults to the
-        Alice user name. A wrong password, another entry's password or no mapped group is 401 ALC-LDAP-0001 (no mapped
+        The directory checks the password again for the sign-in name Alice stored at the user's last sign-in (the caller
+        cannot name another) and must answer for the user's own entry; the groups give the role again, and, when the
+        directory asks for MFA, code must be a valid authenticator code (401 ALC-AUTH-0006 when it is not; 409
+        ALC-LDAP-0007 when the user has no authenticator yet). A wrong password, another entry, a disabled user or no
+        mapped group is 401 ALC-LDAP-0001, recorded with the user as the actor and taking at least 1.5 seconds (no mapped
         group also ends the user's sessions). A user who does not sign in through a directory is refused with 409
-        ALC-LDAP-0008. 5 per minute per address, and the sign-in's 5 attempts in 15 minutes per directory and name. The
-        session ID is regenerated.
+        ALC-LDAP-0008. 5 per minute per address, and the sign-in's lockout per directory and name. The session ID is
+        regenerated.
       x-permission: session
       requestBody:
         required: true
@@ -3003,7 +3005,6 @@ paths:
               additionalProperties: false
               required: [password]
               properties:
-                username: { type: string, maxLength: 64 }
                 password: { type: string, maxLength: 1024, writeOnly: true }
                 code: { type: string, maxLength: 16 }
       responses:

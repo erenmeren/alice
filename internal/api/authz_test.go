@@ -310,10 +310,10 @@ user's step-up (` + "`POST /api/v1/auth/oidc/stepup`" + `) needs the user's own 
 **Directory sign-in (LDAP and Active Directory).** Every ` + "`/api/v1/ldap/...`" + ` route is ` + "`sso.manage`" + ` like single sign-on's;
 Test connection and Test sign-in (` + "`POST /api/v1/ldap/directories/{id}/actions/test-connection`" + ` and ` + "`.../test-signin`" + `) share a
 limit of 5 a minute per user. The sign-in (` + "`POST /api/v1/auth/ldap/{id}/login`" + `) is public and limited like the sign-in form
-(10 a minute per address) and, before any traffic to the directory, to 5 attempts in 15 minutes per directory and sign-in name,
-unknown names included (a successful sign-in gives its attempt back). A directory user's step-up
-(` + "`POST /api/v1/auth/ldap/stepup`" + `) needs the user's own session and repeats the directory password (and the authenticator code
-when the directory asks for MFA).
+(10 a minute per address) and, before any traffic to the directory, locked per directory and sign-in name for 45 minutes after 3
+failed passwords within 30 minutes, unknown names included (a successful sign-in clears the failures). A directory user's step-up
+(` + "`POST /api/v1/auth/ldap/stepup`" + `) needs the user's own session and repeats the directory password for the stored sign-in
+name (and the authenticator code when the directory asks for MFA).
 `
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {

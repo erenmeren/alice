@@ -434,13 +434,21 @@ const (
 	limitDirectoryTest    // 5 per minute per user: a directory's Test connection and Test sign-in, one budget for both
 )
 
-// Directory sign-in limits (plan ruling 5). ldapLoginLimit attempts per ldapLoginWindow for one sign-in name at one
-// directory, counted before any directory traffic, for unknown names too, and given back after a successful sign-in:
-// Alice can never be the means of locking a directory account (a typical Active Directory lockout threshold is 5 to
-// 10 failures in 30 minutes). The per-address limit of the sign-in form (limitLogin) applies as well.
+// Directory sign-in lockout (replaces plan ruling 5, Task 5 fix round). After ldapLockoutFailures failed directory
+// passwords for one sign-in name at one directory within ldapLockoutWindow, Alice stops sending that name to the
+// directory for ldapLockoutFor, whatever the address and even with the right password; it is checked before any
+// directory traffic and counts unknown names exactly like known ones. Active Directory's default lockout policy
+// counts failures in a 30-minute observation window, so a lock longer than that window lets the directory's own
+// counter reset before Alice sends the name again: a stream of guesses through Alice can never keep a directory
+// account's failure counter climbing (a token bucket that refills every few minutes could). A successful sign-in clears
+// the name's failures. The table holds ldapLockoutKeys names and never forgets one that is locked or still counting
+// (ratelimit.BoundedLockout: when it is full of such names, new names are refused until one expires; the DoS trade-off
+// is documented there). The per-address limit of the sign-in form (limitLogin) applies as well.
 const (
-	ldapLoginLimit  = 5
-	ldapLoginWindow = 15 * time.Minute
+	ldapLockoutFailures = 3
+	ldapLockoutWindow   = 30 * time.Minute
+	ldapLockoutFor      = 45 * time.Minute
+	ldapLockoutKeys     = 100_000
 )
 
 // route is one documented operation. The route table is the single source of
@@ -487,9 +495,8 @@ type server struct {
 	// oidcCallbacks: identity provider callbacks per binding cookie: 10/min (S-11: not per address, so a company
 	// behind one address is not limited to a few sign-ins a minute).
 	oidcCallbacks *ratelimit.Limiter
-	// ldapLogins: directory sign-in and step-up attempts per (directory, case-folded sign-in name): ldapLoginLimit per
-	// ldapLoginWindow.
-	ldapLogins *ratelimit.Limiter
+	// ldapLockout: failed directory passwords per (directory, normalised sign-in name), sign-in and step-up alike.
+	ldapLockout *ratelimit.BoundedLockout
 	// ldapRefusalFloor: the least time a refused directory sign-in takes (ldapRefusalFloor const).
 	ldapRefusalFloor time.Duration
 	// denials coalesces the guard's denial audit rows (AUD-06).
@@ -532,7 +539,7 @@ func newServer(d Deps) *server {
 		export:    ratelimit.New(d.Clock, 10, time.Minute),
 
 		oidcCallbacks:    ratelimit.New(d.Clock, 10, time.Minute),
-		ldapLogins:       ratelimit.New(d.Clock, ldapLoginLimit, ldapLoginWindow),
+		ldapLockout:      ratelimit.NewBoundedLockout(d.Clock, ldapLockoutFailures, ldapLockoutWindow, ldapLockoutFor, ldapLockoutKeys),
 		ldapRefusalFloor: ldapRefusalFloor,
 		actions: map[limitClass]*ratelimit.Limiter{
 			limitBackupNow:   ratelimit.New(d.Clock, 5, time.Minute),
@@ -585,7 +592,7 @@ func (s *Server) ResetLimits() {
 	s.s.testMails.Reset()
 	s.s.export.Reset()
 	s.s.oidcCallbacks.Reset()
-	s.s.ldapLogins.Reset()
+	s.s.ldapLockout.Reset()
 	for _, l := range s.s.actions {
 		l.Reset()
 	}
