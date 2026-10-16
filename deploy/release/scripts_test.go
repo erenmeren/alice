@@ -1361,6 +1361,18 @@ func TestUpdateRefusesTamperedAndDowngrade(t *testing.T) {
 			shWrite(t, filepath.Join(e.inst, ".env"), strings.Replace(string(b), "ALICE_PORT=19443", "ALICE_PORT=1$(id)", 1), 0o640)
 			return shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
 		}, "holds a value that is not valid"},
+		{"invalid ALICE_MIGRATE_TIMEOUT in .env", func(e *shEnv) string {
+			b, err := os.ReadFile(filepath.Join(e.inst, ".env"))
+			require.NoError(t, err)
+			shWrite(t, filepath.Join(e.inst, ".env"), string(b)+"ALICE_MIGRATE_TIMEOUT=2h$(id)\n", 0o640)
+			return shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
+		}, "ALICE_MIGRATE_TIMEOUT in {inst}/.env is not a duration such as 30m or 2h: 2h$(id). Nothing was changed."},
+		{"invalid ALICE_TRUSTED_PROXIES in .env", func(e *shEnv) string {
+			b, err := os.ReadFile(filepath.Join(e.inst, ".env"))
+			require.NoError(t, err)
+			shWrite(t, filepath.Join(e.inst, ".env"), string(b)+"ALICE_TRUSTED_PROXIES=10.0.0.5 #x\n", 0o640)
+			return shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
+		}, "ALICE_TRUSTED_PROXIES in {inst}/.env is not a comma-separated list of IP addresses or CIDRs: 10.0.0.5 #x. Nothing was changed."},
 		{"missing signature file", func(e *shEnv) string {
 			tb := shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
 			require.NoError(t, os.Remove(tb+".sha256.sig"))
@@ -1507,6 +1519,9 @@ func TestUpdateHappyPathOrder(t *testing.T) {
 }
 
 // OPS-6, OPS-4: an update keeps the customer's reverse-proxy list and migration time limit.
+// shNewInstalled copies this tree's alice-update.sh and lib (shCopyScripts) as the installed ones, so
+// these two tests prove the carry-over only from this release on: the update script of the INSTALLED
+// version rewrites .env, and one that does not know the keys drops them on that one update.
 func TestUpdateKeepsTheProxyAndMigrateKeys(t *testing.T) {
 	t.Parallel()
 	e := shNewInstalled(t, "1.0.0-rc.2")

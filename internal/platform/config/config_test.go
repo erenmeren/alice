@@ -479,6 +479,12 @@ func TestMigrateTimeout(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2*time.Hour, c.MigrateTimeout)
 
+	for v, want := range map[string]time.Duration{"1m": time.Minute, "24h": 24 * time.Hour} {
+		c, err = config.Load(env(map[string]string{"ALICE_MIGRATE_TIMEOUT": v}))
+		require.NoError(t, err, v)
+		assert.Equal(t, want, c.MigrateTimeout, "the bounds are accepted")
+	}
+
 	for _, v := range []string{"30s", "25h", "soon"} {
 		_, err = config.Load(env(map[string]string{"ALICE_MIGRATE_TIMEOUT": v}))
 		require.Error(t, err, v)

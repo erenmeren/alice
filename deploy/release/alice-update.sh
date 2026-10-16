@@ -38,6 +38,8 @@ env_hosts=""
 env_bind=""
 env_port=""
 env_zone=""
+env_proxies=""
+env_migrate_timeout=""
 
 usage() {
   cat <<'USAGE'
@@ -315,6 +317,15 @@ preflight() {
     exit 1
   fi
   alice_valid_zone "$env_zone" || env_zone=UTC
+  # The binary checks both values again at start; this refuses what .env could not carry safely.
+  if [[ ! "$env_migrate_timeout" =~ ^([0-9]+h)?([0-9]+m)?([0-9]+s)?$ ]]; then
+    alice_fail "ALICE_MIGRATE_TIMEOUT in $dir/.env is not a duration such as 30m or 2h: $env_migrate_timeout. Nothing was changed."
+    exit 1
+  fi
+  if [[ ! "$env_proxies" =~ ^[0-9A-Fa-f.:/,]*$ ]]; then
+    alice_fail "ALICE_TRUSTED_PROXIES in $dir/.env is not a comma-separated list of IP addresses or CIDRs: $env_proxies. Nothing was changed."
+    exit 1
+  fi
   recover_release_keys
 
   package_dir

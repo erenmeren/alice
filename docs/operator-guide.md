@@ -1456,8 +1456,10 @@ restarts everyone from that address waits until they sign in again. This happens
 
 - behind a reverse proxy: set `ALICE_TRUSTED_PROXIES=<proxy address or CIDR, comma-separated>` in
   `/opt/alice/.env`, then run `cd /opt/alice && sudo docker compose up -d alice`. Alice then takes the client
-  address from the proxy's `X-Forwarded-For` header. An update keeps the value. Without it everyone has the proxy's
-  address. List only your proxies, never a client network: Alice believes the `X-Forwarded-For`
+  address from the proxy's `X-Forwarded-For` header. An update keeps the value, with one exception: the update
+  script of the installed version rewrites `.env`, so an installed version that does not know the key (a release
+  before this setting) drops it on that one update. Check `/opt/alice/.env` after the update and add the key again
+  if needed. Without this setting everyone has the proxy's address. List only your proxies, never a client network: Alice believes the `X-Forwarded-For`
   header of every address in these ranges, so a client inside them can claim any address. It could then escape the
   per-address limits (sign-in attempts, bad credentials, `/healthz`) and write a false address into the audit log;
 - when the published port is forwarded by a proxy process instead of the kernel (rootless Docker's default port
