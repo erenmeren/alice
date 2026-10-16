@@ -52,6 +52,38 @@ func TestParallelWrongPasswordsStopAtTheThreshold(t *testing.T) {
 	assert.ErrorIs(t, err, auth.ErrInvalidCredentials, "the right password is refused while locked")
 }
 
+// AUTH-1: the lockout is a ceiling of LockThreshold evaluated guesses per LockDuration, not a
+// permanent state. A failure after the block ended starts a new count instead of a new block,
+// and the right password works as soon as the block is over.
+func TestAFailureAfterTheBlockEndedStartsANewCount(t *testing.T) {
+	e := newEnv(t)
+	e.bootstrap(t)
+	wrong := func() error {
+		_, err := e.svc.Login(e.ctx, "admin", "definitely not it", meta)
+		return err
+	}
+
+	e.setFailures(t, "admin", auth.LockThreshold-1)
+	require.ErrorIs(t, wrong(), auth.ErrInvalidCredentials)
+	require.Equal(t, auth.LockThreshold, e.failedLogins(t, "admin"))
+	require.Equal(t, 1, e.countAction(t, "auth.lockout", "failure"))
+
+	e.clk.Advance(auth.LockDuration - time.Second)
+	require.ErrorIs(t, wrong(), auth.ErrInvalidCredentials)
+	assert.Equal(t, 1, e.reasons(t, "auth.login")["locked"], "a guess during the block is not evaluated")
+	assert.Equal(t, auth.LockThreshold, e.failedLogins(t, "admin"), "a guess during the block is not counted")
+
+	e.clk.Advance(2 * time.Second)
+	require.ErrorIs(t, wrong(), auth.ErrInvalidCredentials)
+	assert.Equal(t, 1, e.failedLogins(t, "admin"), "the first failure after the block starts a new count")
+	assert.Equal(t, 1, e.countAction(t, "auth.lockout", "failure"), "no second lockout")
+	assert.Equal(t, 2, e.reasons(t, "auth.login")["bad_password"])
+
+	lr, err := e.svc.Login(e.ctx, "admin", adminPassword, meta)
+	require.NoError(t, err, "the right password is accepted once the block has ended")
+	assert.Equal(t, auth.StatusMFARequired, lr.Status)
+}
+
 func TestParallelWrongTOTPCodesStopAtTheThreshold(t *testing.T) {
 	e := newEnv(t)
 	secret, _ := e.bootstrap(t)

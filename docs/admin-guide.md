@@ -86,9 +86,10 @@ lost both the authenticator and the recovery codes, the server operator runs `al
 After 5 wrong attempts (password or code) in a row, Alice makes the account wait a little longer before each new
 attempt (1, 2, 4, 8 and 16 seconds). After 10, the account is blocked for 15 minutes. During the wait the
 message stays "Incorrect username or password." even for the right password, so an attacker learns nothing.
-The count starts again only after a complete sign-in (password and code); a correct password on its own does not
-reset it. Because the count is still 10 or more when a block ends, one more wrong attempt starts a new 15-minute
-block. **Set a new password** on **People & access** clears the block at once (not for single sign-on users, who sign in at their
+The count starts again after a complete sign-in (password and code); a correct password on its own does not
+reset it. When a block ends, the count starts again: the next wrong attempt is the first of a new series, so someone
+who keeps guessing gets at most 10 attempts per 15 minutes and the right password is accepted as soon as the block
+has ended. **Set a new password** on **People & access** clears the block at once (not for single sign-on users, who sign in at their
 identity provider and are never blocked by Alice). If the blocked account is the only
 administrator (so nobody can open **People & access**), the server operator runs `alice admin unlock <username>` (see
 [operator-guide.md](operator-guide.md)): it sets the count back to zero and ends the block, and is recorded in the
@@ -98,7 +99,8 @@ blocked: <username>", to the alert recipients ([Recipients](#recipients)).
 
 The same failure count also covers **Confirm it's you** codes and the current password on **Change password**: while
 an account is blocked, its owner cannot confirm their identity for administrator actions either, even in a session
-that is still open, and someone who keeps guessing an administrator's password can keep it that way. `alice admin
+that is still open, and someone who keeps guessing an administrator's password can block it again and again (with at
+most 10 evaluated guesses per 15 minutes; the right password works as soon as each block has ended). `alice admin
 unlock` ends one block, but the next wrong attempts start a new one; check the audit log for where they come from.
 
 ## Staying signed in

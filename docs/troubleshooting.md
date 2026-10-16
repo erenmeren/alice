@@ -5,8 +5,9 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 ## Cannot sign in
 
 - **"Incorrect username or password." although the password is right.** After 5 wrong attempts Alice makes the
-  account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait and try again with care: until a
-  complete sign-in, one more wrong attempt starts a new 15-minute block. An administrator can see `auth.lockout`
+  account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait and try again with care: when a
+  block ends the count starts again, so the right password is accepted at once and someone who keeps guessing gets at
+  most 10 attempts per 15 minutes. An administrator can see `auth.lockout`
   in the audit log, and **Set a new password** on **People & access** lifts the block at once. If you are the only
   administrator, the server operator runs `alice admin unlock <username>` ([operator-guide.md](operator-guide.md));
   `alice admin reset-mfa` does not end a block.
@@ -600,7 +601,7 @@ is told to delete it.
 
 **Meaning.** Sign-in failed (HTTP 401). The message is the same whether the user exists, the password is wrong, or the account is temporarily blocked, so attackers learn nothing.
 
-**Likely cause.** A typo, a wrong password, a disabled account, or too many failed attempts: after 5 failures Alice waits 1, 2, 4, ... seconds between attempts, after 10 it blocks the account for 15 minutes.
+**Likely cause.** A typo, a wrong password, a disabled account, or too many failed attempts: after 5 failures Alice waits 1, 2, 4, ... seconds between attempts, after 10 it blocks the account for 15 minutes. When a block ends, the count starts again: the next wrong attempt is the first of a new series, so the limit is 10 attempts per 15 minutes and the right password is accepted as soon as the block has ended.
 
 **What to do.** Wait 15 minutes and try again carefully. An administrator can reset the password in Users. Failed attempts are listed in the audit log (`auth.login`, `auth.lockout`).
 

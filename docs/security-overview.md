@@ -122,7 +122,7 @@ entry, a job parameter or an error message, and the test suite checks this with 
 - Local accounts sign in with a password (at least 12 characters, checked against a list of 100,000 leaked passwords)
   and a time-based authenticator code (TOTP); MFA cannot be switched off. Ten single-use recovery codes replace a
   lost phone.
-- Wrong passwords slow the account down after 5 attempts and block it for 15 minutes after 10.
+- Wrong passwords slow the account down after 5 attempts and block it for 15 minutes after 10; a block ends with a fresh count, so the limit is 10 evaluated guesses per 15 minutes.
 - Sessions end after 30 minutes without activity and always after 12 hours.
 - Sensitive actions (user and settings administration, license upload, private-key download, backups, re-pinning a
   server's host key, credentials) need a confirmation within the last 5 minutes: a fresh authenticator code, or for

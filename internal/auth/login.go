@@ -137,13 +137,19 @@ func lockAccountByID(ctx context.Context, tx pgx.Tx, id uuid.UUID) (account, err
 
 // recordFailure counts a failed password or code for an account locked by lockAccount,
 // applies the progressive delay or lockout, and audits the failure (and the lockout).
+// A failure after a lockout has ended starts a new count at 1 (AUTH-1): the lockout caps
+// guessing at LockThreshold evaluated guesses per LockDuration and is never permanent.
+// The reset is part of the same UPDATE, so it is atomic under the row lock; a failure
+// during a block never gets here (blocked answers locked first).
 // The audit rows are appended last, after the row locks, so the chain lock is never
 // held while waiting for a user row.
 func (s *Service) recordFailure(ctx context.Context, tx pgx.Tx, actor audit.Actor, userID uuid.UUID, action, reason string) error {
 	now := s.clock.Now().UTC()
 	var n int
-	if err := tx.QueryRow(ctx, "UPDATE users SET failed_logins = failed_logins + 1, updated_at = $2 WHERE id = $1 RETURNING failed_logins",
-		userID, now).Scan(&n); err != nil {
+	if err := tx.QueryRow(ctx, `UPDATE users SET failed_logins = CASE
+WHEN locked_until IS NOT NULL AND locked_until <= $2 AND failed_logins >= $3 THEN 1 ELSE failed_logins + 1 END,
+updated_at = $2 WHERE id = $1 RETURNING failed_logins`,
+		userID, now, LockThreshold).Scan(&n); err != nil {
 		return fmt.Errorf("count failure: %w", err)
 	}
 	d, locked := failureDelay(n)
