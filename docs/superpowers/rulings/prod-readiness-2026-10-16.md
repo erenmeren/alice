@@ -83,7 +83,7 @@ Accepted and deferred items are also KI-39 (and KI-38 for AUTH-2) of `SECURITY-R
   is slow — cost if wrong: a remote run has not been recorded since the change; if the coverage job still exceeds 75
   minutes, coverage floors are again unproven in CI (release checklist row 1.1 needs a green run).
 - OPS-2 (ZAP 10062 "PII Disclosure" failed the nightly baseline) — ignored by a policy line in `.zap/rules.tsv` with
-  its reason and the expiry 2027-04-10 (within the file's 180-day rule): the rule matched Luhn-valid digit runs
+  its reason and the expiry 2027-04-01 (within the file's 180-day rule): the rule matched Luhn-valid digit runs
   inside the 64-hex `hash` and `prev_hash` fields of `GET /api/v1/audit` (nightly of 2026-10-15); the audit log
   carries no card or personal numbers — why: a false positive of a pattern rule on hex; ignoring only this rule ID
   keeps every other High alert failing — cost if wrong: a real personal number in another answer would not fail the
@@ -114,11 +114,14 @@ Accepted and deferred items are also KI-39 (and KI-38 for AUTH-2) of `SECURITY-R
   no attacker that does not already have the host (KI-01, KI-10) — cost if wrong: someone able to sniff the Docker
   bridge on the host reads queries; that person is root or in the `docker` group, which is root-equivalent (KI-17).
 - CORE-1 and CORE-3 (job leases follow the application's wall clock; database sessions have no statement, lock or
-  idle-in-transaction timeout) — accepted for v1: one `alice` process per installation is the supported deployment
-  (the production compose runs one), so there is no second process to run a job twice, and only Alice's own
-  sessions and the host operator hold locks in its database; high availability and several processes are out of scope for v1 — cost if wrong: an installation
-  that runs a second process against the same database, or a host whose clock jumps by more than a lease, can run one
-  target's job twice; both must be fixed before any multi-process or HA support.
+  idle-in-transaction timeout) — accepted for v1 as low risk, not absent: one `alice` process per installation is the
+  supported deployment (the production compose runs one) and high availability and several processes are out of
+  scope for v1, so there is no second process competing for leases, and only Alice's own sessions and the host
+  operator hold locks in its database. With one process, a clock jump of more than a lease can still run one
+  target's job twice, and a stuck lock still makes the workers that need it wait without limit — cost if wrong:
+  those two effects on a host whose clock is stepped (customers keep it on NTP, KI-39) or whose database hangs a
+  lock (a restart clears it); both become likely with a second process, so both must be fixed before any
+  multi-process or HA support.
 - CRY-3 (= C-1, SEC-043 claimed an audit HMAC key) — the spec text is corrected, not the code: the audit chain is an
   unkeyed SHA-256 chain in v1 (KI-05); `alice/audit-hmac/v1` and `secrets.LabelAuditHMAC` are reserved for v2 and
   unused — cost if wrong: none; the label stays reserved so a keyed chain later cannot collide with another sub-key.
