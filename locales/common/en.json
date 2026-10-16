@@ -763,7 +763,7 @@
       },
       "directory_in_use": {
         "title": "This directory has users.",
-        "cause": "People have signed in through this directory, so it cannot be deleted, and its addresses and unique ID attribute cannot be changed.",
+        "cause": "People have signed in through this directory, so it cannot be deleted and its unique ID attribute cannot be changed.",
         "action": "Switch sign-in through the directory off instead."
       },
       "connection_test_failed": {

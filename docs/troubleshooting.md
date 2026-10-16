@@ -1546,7 +1546,7 @@ server again.
 
 ## ALC-LDAP-0003: This directory has users
 
-**Meaning.** Deleting a directory, or changing its addresses or unique ID attribute, was refused. (HTTP 409, reason `ldap.directory_in_use`.)
+**Meaning.** Deleting a directory, or changing its unique ID attribute, was refused. Addresses can be changed at any time (adding one needs the service account password again). (HTTP 409, reason `ldap.directory_in_use`.)
 
 **Likely cause.** People have signed in through this directory. Their accounts are tied to it and to the unique ID attribute.
 

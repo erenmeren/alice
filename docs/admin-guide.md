@@ -942,7 +942,7 @@ one connection and at most 5,000 values of one attribute; more is treated as a b
   The AD template `(member:1.2.840.113556.1.4.1941:={dn})` asks AD for nested membership as well ("in chain"); only
   AD knows this rule (OpenLDAP answers it with no groups). A `posixGroup` directory uses `(memberUid={login})`.
 - **Group name attribute** is the value a mapping is compared with, `cn` by default. Leave it empty to use the group's
-  DN. A person in more than 1,000 groups (of those the group filter finds) is refused as a broken setting, because a
+  DN (recommended for the Administrator and Operator mappings, see [Group mappings and roles](#group-mappings-and-roles)). A person in more than 1,000 groups (of those the group filter finds) is refused as a broken setting, because a
   cut list would hand out a role by chance: narrow the group base DN or the group filter.
 - **Sign-in name attribute** is the directory's name for the person (`sAMAccountName`, `uid`); Alice derives the user
   name from it (below). **Display name attribute** and **E-mail attribute** may be empty. The display name is cut to
@@ -951,7 +951,10 @@ one connection and at most 5,000 values of one attribute; more is treated as a b
   AD, `entryUUID` in OpenLDAP. Alice keeps it as the hexadecimal form of its bytes. Alice recognises a person **only**
   by the directory and this value, never by name or e-mail: a renamed person keeps their Alice account, and a new
   person who gets an old name does not get the old account. It cannot be changed once people have signed in through
-  the directory, and neither can the addresses (`ALC-LDAP-0003`); add a new directory instead.
+  the directory (`ALC-LDAP-0003`); add a new directory instead. The attribute must be one that people cannot edit
+  themselves (a writable attribute would let a person take on another person's identity in Alice). The addresses can
+  change at any time: removing or reordering needs nothing, adding one needs the service account password again and is
+  recorded (`addresses_added_count`).
 
 **Filter template rules.** Alice checks the filters when you save; they are stricter than the LDAP standard in a few
 places:
@@ -968,7 +971,9 @@ places:
 Every typed name and every DN is escaped before it goes into a filter, so a name like `ada)(uid=*` finds nobody.
 Alice refuses before contacting the directory: an empty password (an LDAP bind with an empty password is usually
 accepted anonymously), a password over 1,024 bytes, a sign-in name with control or invisible format characters or with
-white space at its start or end, and a sign-in name without a letter or digit.
+white space at its start or end, a sign-in name with a character a directory ignores when it compares names (RFC 3454
+table B.1: soft hyphen, zero-width characters, variation selectors, the combining grapheme joiner, Mongolian
+variation selectors), and a sign-in name without a letter or digit.
 
 ### User names
 
@@ -995,7 +1000,10 @@ and is asked for again when it is switched back on. Changing the setting needs a
 is recorded (**Directory changed**, `mfa_required`).
 
 **Confirm it's you** asks a directory user for their **Directory password** again (Alice repeats the bind with the
-sign-in name it stored at the last sign-in) and, when they have an authenticator, its code. The confirmation also reads
+sign-in name it stored at the last sign-in) and, when the directory asks for MFA and they have an authenticator set
+up, its code. The code is required then: a person who lost their authenticator cannot confirm with the password alone;
+an Administrator resets their two-factor sign-in on **People & access**, and they set up a new authenticator at their
+next sign-in. The confirmation also reads
 the groups again: the role may change, and a person no longer in a mapped group is refused and signed out. A sign-in
 opens the 5-minute confirmation window like a local sign-in.
 
@@ -1014,6 +1022,16 @@ cannot be mapped to Administrator (`ALC-SSO-0002`) and directory users can be at
 turns directory Administrators into Auditors and signs them out, as for SSO users, and is refused while a directory
 group is still mapped to Administrator (`ALC-SSO-0003`). A directory administrator can change group membership and
 thereby roles in Alice: treat the groups you map as part of Alice's access control.
+
+> **Warning: map Administrator and Operator by DN.** With the group name attribute `cn` (the AD preset's default), a
+> mapping matches every group of that name below the group base DN. Someone who was delegated the right to create
+> groups in any OU below it can create a group with the same `cn`, add themselves and get the role. For the
+> Administrator and Operator mappings, leave **Group name attribute** empty and map the group's full DN, or narrow the
+> group base DN to an OU only trusted administrators can write to.
+
+> **Warning: the unique ID attribute must not be editable by users.** Alice recognises a person only by it; an
+> attribute a person (or a delegated helpdesk) can write lets them present another person's value. `objectGUID` and
+> `entryUUID` are set by the directory and cannot be written.
 
 ### Test connection and Test sign-in
 
@@ -1072,23 +1090,35 @@ confirmation that found another entry, `stepup_other_user`. The typed name is re
 the entry, or several entries (`ambiguous_user`): people type passwords into the name field by mistake. See "Directory sign-in refused" in
 [troubleshooting.md](troubleshooting.md#directory-sign-in-ldap-and-active-directory).
 
-**The lockout.** Three failed attempts (a wrong password, an unknown name, several entries or no mapped group) for one
-sign-in name at one directory within 30 minutes lock that name in Alice for 45 minutes: Alice then answers "Too many
-requests" (HTTP 429, `ALC-SYS-0005`, with the time to wait) without contacting the directory, even for the right
-password and from any address. Upper and lower case and the Unicode spelling of the name do not matter. A successful
-sign-in clears the count. **Confirm it's you** and **Test sign-in** share the count, so three wrong directory passwords
-there lock the name for sign-in as well. Why: AD locks an account after a number of wrong passwords within its own observation window
+**The lockout.** Alice keeps two counts with the same rule: one per sign-in name at a directory and one per directory
+account (its unique ID). Three failed attempts (a wrong password, an unknown name, several entries or no mapped group)
+within 30 minutes lock the key for 45 minutes. Attempts that are still running count as well: once a name or an account
+has three attempts failed or in progress, the next one waits, so many parallel attempts cannot get past the limit.
+
+- A **locked name** is answered "Too many requests" (HTTP 429, `ALC-SYS-0005`, with the time to wait) without contacting
+  the directory, even for the right password and from any address.
+- A **locked account** is checked after the directory found the entry and before Alice binds as it: Alice never binds
+  to it, even with the right password, and answers with the usual refusal (`ALC-LDAP-0001`, audit reason
+  `bad_credentials`). So other names of the same account (a UPN beside the `sAMAccountName`, another alias the user
+  filter finds) share the account's three attempts: per name and per account, Alice tries at most three wrong
+  passwords before it pauses.
+- Spellings that a directory compares alike count as one name: upper and lower case, compatibility forms (full-width
+  letters), composed and decomposed accents, and repeated spaces inside the name. Characters a directory ignores are
+  refused (see above). Other spellings that find the same entry are caught by the account count, not the name count.
+- A successful sign-in clears both counts. **Confirm it's you** and **Test sign-in** share the name count (the
+  confirmation also the account count), so three wrong directory passwords there lock the name for sign-in as well. Why: AD locks an account after a number of wrong passwords within its own observation window
 (30 minutes by default), and Alice must never be the tool that locks your directory accounts; with at most 3 attempts
 per name and a 45-minute pause, a stream of guesses through Alice cannot keep an AD failure counter climbing. The same
 limit of 10 sign-in attempts a minute per address as on the local form applies as well; there is no overall limit on
 how many directory sign-ins run at once.
 
 **The trade-off.** Anyone who can reach the sign-in page can lock a person's directory sign-in in Alice for 45 minutes
-by typing three wrong passwords for their name; this is the same trade-off as AD's own lockout, but in Alice only (the
-directory account is not locked). There is no way for an Administrator to end this lockout: it is kept in memory, and
+by typing three wrong passwords for their name (or any name of their account); this is the same trade-off as AD's own
+lockout, but in Alice only. Alice stops after three failed attempts per name and per account, so the guesses it sends
+stay below a typical directory lockout threshold; it cannot stop guesses sent to the directory by other means. There is no way for an Administrator to end this lockout: it is kept in memory, and
 only a restart of Alice clears it (`alice admin unlock` does not touch it). The local administrator is never affected.
-The lockout table holds 100,000 names; when it is full of names that are still counting or locked, names that are not
-in it yet are refused until entries expire (an entry lives for the 30-minute window after its first failure, or until
+Each lockout table holds 100,000 keys; when it is full of keys that are still counting, locked or in use, keys that
+are not in it yet are refused (and Alice logs a warning, at most once every 10 minutes) until entries expire (an entry lives for the 30-minute window after its first failure, or until
 its lock ends: up to about 75 minutes after the first failure), while the names already in it are answered as usual.
 
 ### Break-glass with directories

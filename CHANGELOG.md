@@ -33,9 +33,10 @@
   referrals). The service account password is stored encrypted with the master key and never returned.
 - Every refused directory sign-in gets the same answer and takes at least 1.5 seconds; the audit log records the
   reason, and the typed name only when the directory found the entry.
-- Three failed attempts for one name at one directory within 30 minutes lock that name in Alice for 45 minutes
-  (answered "Too many requests" without contacting the directory), so Alice cannot be used to lock directory accounts.
-  The price: anyone can lock a person's directory sign-in in Alice for 45 minutes; only a restart clears it.
+- Alice stops after three failed attempts per sign-in name and per directory account (its unique ID) within 30
+  minutes and pauses that name or account for 45 minutes; attempts still running count, and a locked account is never
+  bound to. So the guesses Alice sends stay below a typical directory lockout threshold. The price: anyone can lock a
+  person's directory sign-in in Alice for 45 minutes; only a restart clears it.
 - "SSO users may be Admin" applies to directory users. The local break-glass administrator is unchanged.
 
 **Upgrade notes**

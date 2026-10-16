@@ -763,7 +763,7 @@
       },
       "directory_in_use": {
         "title": "Bu dizinin kullanıcıları var.",
-        "cause": "Bu dizinle oturum açmış kişiler olduğundan dizin silinemez; adresleri ve benzersiz kimlik özniteliği değiştirilemez.",
+        "cause": "Bu dizinle oturum açmış kişiler olduğundan dizin silinemez ve benzersiz kimlik özniteliği değiştirilemez.",
         "action": "Bunun yerine bu dizinle oturum açmayı kapatın."
       },
       "connection_test_failed": {
