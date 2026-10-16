@@ -188,9 +188,10 @@ alice_version_cmp() {
 alice_release_keys=" VERSION MIN_UPGRADE_FROM SCHEMA_VERSION ALICE_IMAGE ALICE_IMAGE_ID ALICE_IMAGE_DIGEST POSTGRES_IMAGE POSTGRES_IMAGE_ID POSTGRES_IMAGE_DIGEST BUILD_COMMIT BUILD_TIME RELEASE_KEY_ID TEST_SIGNED "
 alice_env_keys=" COMPOSE_PROJECT_NAME ALICE_IMAGE POSTGRES_IMAGE ALICE_BIND ALICE_PORT ALICE_TLS_HOSTS ALICE_TZ ALICE_TRUSTED_PROXIES ALICE_MIGRATE_TIMEOUT "
 
-# alice_kv_get KEY FILE prints the value of the first KEY= line (KEY is allowlisted by the callers).
+# alice_kv_get KEY FILE prints the value of the last KEY= line, the one Docker Compose uses when a
+# key is written twice (KEY is allowlisted by the callers); nothing when there is none.
 alice_kv_get() {
-  sed -n "/^$1=/{s/^$1=//;p;q;}" -- "$2"
+  awk -v k="$1=" 'index($0, k) == 1 { v = substr($0, length(k) + 1); found = 1 } END { if (found) print v }' "$2"
 }
 
 # alice_release_get KEY FILE reads one value of a RELEASE file (C5).
@@ -275,6 +276,76 @@ alice_valid_project() {
 
 alice_valid_zone() {
   [[ "$1" =~ ^[A-Za-z0-9/_+-]{1,64}$ ]]
+}
+
+# alice_valid_migrate_timeout VALUE: a duration of whole hours, minutes and seconds in that order
+# (30m, 2h, 1h30m) from 1m to 24h, the range the binary accepts for ALICE_MIGRATE_TIMEOUT.
+alice_valid_migrate_timeout() {
+  [[ -n "$1" && "$1" =~ ^([0-9]{1,6}h)?([0-9]{1,6}m)?([0-9]{1,6}s)?$ ]] || return 1
+  local h=${BASH_REMATCH[1]%h} m=${BASH_REMATCH[2]%m} s=${BASH_REMATCH[3]%s}
+  local secs=$((10#${h:-0} * 3600 + 10#${m:-0} * 60 + 10#${s:-0}))
+  ((secs >= 60 && secs <= 86400))
+}
+
+alice_ipv4_re='^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$'
+
+# alice_valid_ipv6 ADDR: hex groups of 1 to 4 digits separated by colons (at least two colons), at
+# most one "::", eight groups without it and at most seven with it; the last 32 bits may be dotted IPv4.
+alice_valid_ipv6() {
+  local a=$1 rest g n=0
+  [[ "$a" == *:*:* && "$a" =~ ^[0-9A-Fa-f:.]+$ && "$a" != *:::* ]] || return 1
+  if [[ "$a" == *.* ]]; then
+    [[ "${a##*:}" =~ $alice_ipv4_re ]] || return 1
+    a=${a%:*}:0:0
+  fi
+  [[ "$a" != :[!:]* && "$a" != *[!:]: ]] || return 1
+  [[ "$a" != *::* || "${a#*::}" != *::* ]] || return 1
+  rest=${a/::/:}
+  rest=${rest#:}
+  rest=${rest%:}
+  while [[ -n "$rest" ]]; do
+    g=${rest%%:*}
+    [[ "$g" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+    n=$((n + 1))
+    [[ "$rest" == *:* ]] || break
+    rest=${rest#*:}
+  done
+  if [[ "$a" == *::* ]]; then
+    ((n <= 7))
+  else
+    ((n == 8))
+  fi
+}
+
+# alice_valid_proxies VALUE: the ALICE_TRUSTED_PROXIES list as the binary reads it: entries separated
+# by commas, spaces and tabs around each trimmed, empty entries ignored; each an IPv4 address with an
+# optional /0 to /32 or an IPv6 address with an optional /0 to /128 (or a zone, such as %eth0, instead).
+alice_valid_proxies() {
+  local rest=$1 e addr max
+  while :; do
+    e=${rest%%,*}
+    e=${e#"${e%%[![:blank:]]*}"}
+    e=${e%"${e##*[![:blank:]]}"}
+    if [[ -n "$e" ]]; then
+      addr=${e%%/*}
+      if [[ "$e" =~ ^[^%/]+%[0-9A-Za-z_.-]+$ ]]; then
+        alice_valid_ipv6 "${e%%%*}" || return 1
+        max=128
+      elif [[ "$addr" =~ $alice_ipv4_re ]]; then
+        max=32
+      elif alice_valid_ipv6 "$addr"; then
+        max=128
+      else
+        return 1
+      fi
+      if [[ "$e" == */* ]]; then
+        [[ "${e#*/}" =~ ^(0|[1-9][0-9]{0,2})$ ]] || return 1
+        ((10#${e#*/} <= max)) || return 1
+      fi
+    fi
+    [[ "$rest" == *,* ]] || return 0
+    rest=${rest#*,}
+  done
 }
 
 # alice_validate_env_values HOSTS BIND PORT PROJECT prints the first bad value and returns 2.

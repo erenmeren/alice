@@ -317,8 +317,9 @@ final release run re-checks every row against the release commit.
 | `COMPOSE_PROJECT_NAME` | all | `alice` | The installer refuses a project already in use. |
 
 Variables not set by the production compose keep their defaults: `ALICE_LISTEN_ADDR` `:8443` inside the container,
-`ALICE_LOG_LEVEL` `info`. The update checks `ALICE_TRUSTED_PROXIES` and `ALICE_MIGRATE_TIMEOUT` before it changes
-anything; an installed version from before these keys drops them on its one update (`docs/upgrade.md`).
+`ALICE_LOG_LEVEL` `info`. The update checks the format and range of `ALICE_TRUSTED_PROXIES` and
+`ALICE_MIGRATE_TIMEOUT` before it changes anything (the binary applies the final check at start) and, like Docker
+Compose, reads the last line of a key written twice; an installed version from before these keys drops them on its one update (`docs/upgrade.md`).
 
 **Settings stored by Phase 8** (C1 of the Phase 8 plan) and their defaults:
 

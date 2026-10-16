@@ -24,8 +24,9 @@
 **Added**
 - Two settings in `/opt/alice/.env`, written by the installer and kept by the update: `ALICE_TRUSTED_PROXIES` (the
   reverse proxies whose `X-Forwarded-For` Alice believes; empty by default) and `ALICE_MIGRATE_TIMEOUT` (the time
-  limit of a database update, `30m` by default, from `1m` to `24h`; it was a fixed 2 minutes). The update checks both
-  before it changes anything (OPS-6, OPS-4).
+  limit of a database update, `30m` by default, from `1m` to `24h`; it was a fixed 2 minutes). The update checks the
+  format and range of both before it changes anything (Alice applies the final check when it starts) and, like Docker
+  Compose, uses the last line of a key written twice (OPS-6, OPS-4).
 
 **Release and process**
 - Migrations `00001` to `00015` are frozen by SHA-256 (`migrations/frozen_test.go`); a schema change is a new

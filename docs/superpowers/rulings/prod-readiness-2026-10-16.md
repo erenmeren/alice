@@ -61,8 +61,12 @@ Accepted and deferred items are also KI-39 (and KI-38 for AUTH-2) of `SECURITY-R
   reinstall the helper).
 - OPS-6 (`ALICE_TRUSTED_PROXIES` could not be set by a customer) and OPS-4 (the migration limit was a fixed 2
   minutes) — both are keys of `/opt/alice/.env` (`ALICE_MIGRATE_TIMEOUT` default `30m`, from `1m` to `24h`),
-  written by the installer, carried over by the update and checked in the update's preflight before anything
-  changes. First-update caveat, accepted: the update script that runs is the installed version's, which rewrites
+  written by the installer, carried over by the update, and checked for format and range in the update's preflight
+  before anything changes (the binary applies the final check at start). Whole-branch review fix: the preflight's
+  character-class checks accepted values the binary refuses (`25h`, `999.1.1.1`, `10.0.0.1/33`); it now parses the
+  duration (60 s to 24 h) and each proxy entry (IPv4 with `/0`-`/32`, IPv6 with `/0`-`/128`); and `.env` is read
+  like Docker Compose reads it, the last line of a key winning, so a proxy list appended after the installer's empty
+  `ALICE_TRUSTED_PROXIES=` is kept (`deploy/release:TestUpdateKeepsTheLastLineOfAKeyWrittenTwice`). First-update caveat, accepted: the update script that runs is the installed version's, which rewrites
   `.env` from the keys it knows, so an installed version from before this change drops both keys on that one update
   (and its database update uses the default limit). `docs/upgrade.md` and `docs/operator-guide.md` say to check
   `.env` after that update — why: an old script cannot be changed after it shipped; no customer has a release

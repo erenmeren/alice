@@ -1366,19 +1366,39 @@ func TestUpdateRefusesTamperedAndDowngrade(t *testing.T) {
 			require.NoError(t, err)
 			shWrite(t, filepath.Join(e.inst, ".env"), string(b)+"ALICE_MIGRATE_TIMEOUT=2h$(id)\n", 0o640)
 			return shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
-		}, "ALICE_MIGRATE_TIMEOUT in {inst}/.env is not a duration such as 30m or 2h: 2h$(id). Nothing was changed."},
+		}, "ALICE_MIGRATE_TIMEOUT in {inst}/.env is not a duration from 1m to 24h such as 30m or 2h: 2h$(id). Nothing was changed."},
 		{"invalid ALICE_TRUSTED_PROXIES in .env", func(e *shEnv) string {
 			b, err := os.ReadFile(filepath.Join(e.inst, ".env"))
 			require.NoError(t, err)
 			shWrite(t, filepath.Join(e.inst, ".env"), string(b)+"ALICE_TRUSTED_PROXIES=10.0.0.5 #x\n", 0o640)
 			return shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
 		}, "ALICE_TRUSTED_PROXIES in {inst}/.env is not a comma-separated list of IP addresses or CIDRs: 10.0.0.5 #x. Nothing was changed."},
+	}
+	// Whole-branch review F2: values of the right characters that the binary refuses at start (a
+	// duration outside 1m..24h, an address or prefix length out of range) are refused before anything.
+	for _, v := range []string{"25h", "0m"} {
+		cases = append(cases, tc{"ALICE_MIGRATE_TIMEOUT=" + v, func(e *shEnv) string {
+			b, err := os.ReadFile(filepath.Join(e.inst, ".env"))
+			require.NoError(t, err)
+			shWrite(t, filepath.Join(e.inst, ".env"), string(b)+"ALICE_MIGRATE_TIMEOUT="+v+"\n", 0o640)
+			return shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
+		}, "ALICE_MIGRATE_TIMEOUT in {inst}/.env is not a duration from 1m to 24h such as 30m or 2h: " + v + ". Nothing was changed."})
+	}
+	for _, v := range []string{"999.1.1.1", "10.0.0.1/33"} {
+		cases = append(cases, tc{"ALICE_TRUSTED_PROXIES=" + v, func(e *shEnv) string {
+			b, err := os.ReadFile(filepath.Join(e.inst, ".env"))
+			require.NoError(t, err)
+			shWrite(t, filepath.Join(e.inst, ".env"), string(b)+"ALICE_TRUSTED_PROXIES="+v+"\n", 0o640)
+			return shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
+		}, "ALICE_TRUSTED_PROXIES in {inst}/.env is not a comma-separated list of IP addresses or CIDRs: " + v + ". Nothing was changed."})
+	}
+	cases = append(cases, []tc{
 		{"missing signature file", func(e *shEnv) string {
 			tb := shTarball(t, e.pkg(shPkgOpts{version: "1.0.0"}), filepath.Join(e.root, "dl"), "1.0.0", e.key)
 			require.NoError(t, os.Remove(tb+".sha256.sig"))
 			return tb
 		}, shBadUpdSig},
-	}
+	}...)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -1525,24 +1545,49 @@ func TestUpdateHappyPathOrder(t *testing.T) {
 func TestUpdateKeepsTheProxyAndMigrateKeys(t *testing.T) {
 	t.Parallel()
 	// The binary trims spaces and tabs around each entry, so the update accepts them too.
-	for _, proxies := range []string{"10.0.0.5/32", "10.0.0.1, 10.0.0.2", "10.0.0.1,\t2001:db8::/32"} {
-		t.Run(proxies, func(t *testing.T) {
+	cases := []struct{ proxies, timeout string }{
+		{"10.0.0.5/32", "2h"}, {"10.0.0.1, 10.0.0.2", "2h"}, {"10.0.0.1,\t2001:db8::/32", "2h"},
+		// Whole-branch review F2: the format and range check accepts what the binary accepts.
+		{"10.0.0.5/32, 2001:db8::/32", "1h30m"}, {"10.0.0.5/32", "24h"},
+	}
+	for _, c := range cases {
+		t.Run(c.proxies+" "+c.timeout, func(t *testing.T) {
 			t.Parallel()
 			e := shNewInstalled(t, "1.0.0-rc.2")
 			f := filepath.Join(e.inst, ".env")
 			old, err := os.ReadFile(f)
 			require.NoError(t, err)
-			shWrite(t, f, string(old)+"ALICE_TRUSTED_PROXIES="+proxies+"\nALICE_MIGRATE_TIMEOUT=2h\n", 0o640)
+			shWrite(t, f, string(old)+"ALICE_TRUSTED_PROXIES="+c.proxies+"\nALICE_MIGRATE_TIMEOUT="+c.timeout+"\n", 0o640)
 			pkg := e.pkg(shPkgOpts{version: "1.0.0"})
 			r := e.update(shTarball(t, pkg, filepath.Join(e.root, "dl"), "1.0.0", e.key))
 			require.Equal(t, 0, r.code, r.out)
 			env, err := os.ReadFile(f)
 			require.NoError(t, err)
 			assert.Contains(t, string(env), "ALICE_IMAGE=alice:1.0.0\n", "the .env was rewritten")
-			assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES="+proxies+"\n")
-			assert.Contains(t, string(env), "\nALICE_MIGRATE_TIMEOUT=2h\n")
+			assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES="+c.proxies+"\n")
+			assert.Contains(t, string(env), "\nALICE_MIGRATE_TIMEOUT="+c.timeout+"\n")
 		})
 	}
+}
+
+// Whole-branch review F3: Docker Compose uses the last line of a key written twice, so the update
+// must too. The installer writes an empty ALICE_TRUSTED_PROXIES=; an operator who appends a second
+// line (tee -a) keeps that list across the update, which then writes the key once.
+func TestUpdateKeepsTheLastLineOfAKeyWrittenTwice(t *testing.T) {
+	t.Parallel()
+	e := shNewInstalled(t, "1.0.0-rc.2")
+	f := filepath.Join(e.inst, ".env")
+	old, err := os.ReadFile(f)
+	require.NoError(t, err)
+	shWrite(t, f, string(old)+"ALICE_TRUSTED_PROXIES=\nALICE_MIGRATE_TIMEOUT=30m\nALICE_TRUSTED_PROXIES=10.0.0.5/32\n", 0o640)
+	pkg := e.pkg(shPkgOpts{version: "1.0.0"})
+	r := e.update(shTarball(t, pkg, filepath.Join(e.root, "dl"), "1.0.0", e.key))
+	require.Equal(t, 0, r.code, r.out)
+	env, err := os.ReadFile(f)
+	require.NoError(t, err)
+	assert.Contains(t, string(env), "ALICE_IMAGE=alice:1.0.0\n", "the .env was rewritten")
+	assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES=10.0.0.5/32\n")
+	assert.Equal(t, 1, strings.Count(string(env), "ALICE_TRUSTED_PROXIES="), string(env))
 }
 
 // An installation from before OPS-6/OPS-4 has neither key; the update adds both with their defaults.

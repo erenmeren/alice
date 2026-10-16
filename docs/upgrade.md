@@ -17,7 +17,9 @@ returns to the installed version by itself when the new one does not start.
       after the database update. Running jobs get up to 60 seconds to finish.
 - [ ] A large database may need more time for its update than the default limit of 30 minutes. Set
       `ALICE_MIGRATE_TIMEOUT` in `/opt/alice/.env` to a Go duration such as `2h` (from `1m` to `24h`); the update
-      keeps the value. The update script of the installed version rewrites `.env`, so an installed version that
+      keeps the value. Before it changes anything, the update checks the format and range of this value and of
+      `ALICE_TRUSTED_PROXIES` and stops if one is wrong; Alice applies the final check when it starts. If a key is in
+      `.env` twice, the update and Docker Compose both use the last line. The update script of the installed version rewrites `.env`, so an installed version that
       does not know `ALICE_MIGRATE_TIMEOUT` or `ALICE_TRUSTED_PROXIES` (a release before these settings) drops
       them on that one update and the database update uses the default. Check `/opt/alice/.env` after the update
       and add the keys again if needed.

@@ -317,14 +317,12 @@ preflight() {
     exit 1
   fi
   alice_valid_zone "$env_zone" || env_zone=UTC
-  # The binary checks both values again at start; this refuses what .env could not carry safely.
-  if [[ ! "$env_migrate_timeout" =~ ^([0-9]+h)?([0-9]+m)?([0-9]+s)?$ ]]; then
-    alice_fail "ALICE_MIGRATE_TIMEOUT in $dir/.env is not a duration such as 30m or 2h: $env_migrate_timeout. Nothing was changed."
+  # This checks the two values' format and range; the binary applies the final check at start.
+  if ! alice_valid_migrate_timeout "$env_migrate_timeout"; then
+    alice_fail "ALICE_MIGRATE_TIMEOUT in $dir/.env is not a duration from 1m to 24h such as 30m or 2h: $env_migrate_timeout. Nothing was changed."
     exit 1
   fi
-  # Spaces and tabs around an entry are allowed: the binary trims them.
-  local proxies_re=$'^[0-9A-Fa-f.:/, \t]*$'
-  if [[ ! "$env_proxies" =~ $proxies_re ]]; then
+  if ! alice_valid_proxies "$env_proxies"; then
     alice_fail "ALICE_TRUSTED_PROXIES in $dir/.env is not a comma-separated list of IP addresses or CIDRs: $env_proxies. Nothing was changed."
     exit 1
   fi
