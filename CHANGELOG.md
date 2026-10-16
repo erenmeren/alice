@@ -6,6 +6,46 @@
 - `alice-helper` 1.6.1 (protocol 7 unchanged): a certificate file whose first certificate cannot be read is
   reported as `leaf_unreadable` instead of Alice taking the intermediate after it as the website's certificate
   (REM-4). Reinstall the helper on Nginx servers ("Updating the helper").
+- Alice lists a website whose certificate file reports `leaf_unreadable` as **Not supported** with that reason and
+  drops the certificate an older helper had linked to it, so a wrong expiry date no longer stays on screen (REM-4).
+- Sign-in: when a 15-minute block has ended, the next wrong password starts a new count instead of a new block, so the
+  right password is accepted at once and guessing is capped at 10 attempts per 15 minutes (AUTH-1; spec SEC-020).
+- Recovery passphrase: the meter, on the server and in the browser, no longer counts repeated words, repeated
+  patterns, runs of 3 or more identical characters or runs such as `abcdef` and `123456` toward the length; a
+  passphrase with fewer than 16 characters left after that is rated fair and refused (CRY-1). The hint and
+  `ALC-SET-0010` say so.
+- Nginx discovery: one `nginx-dump` answer may list at most 20,000 server blocks across all certificate locations and
+  100,000 server names; the rest is left out and the location says the list was cut (`list_truncated`), so a
+  hostile dump can no longer exhaust Alice's memory (REM-1).
+- SSH key inventory: a key's comment and options text are stored up to 1 KiB each, then cut with `…`; the
+  `authorized_keys` file itself is never rewritten from the shortened text (REM-2).
+
+**Added**
+- Two settings in `/opt/alice/.env`, written by the installer and kept by the update: `ALICE_TRUSTED_PROXIES` (the
+  reverse proxies whose `X-Forwarded-For` Alice believes; empty by default) and `ALICE_MIGRATE_TIMEOUT` (the time
+  limit of a database update, `30m` by default, from `1m` to `24h`; it was a fixed 2 minutes). The update checks both
+  before it changes anything (OPS-6, OPS-4).
+
+**Release and process**
+- Migrations `00001` to `00015` are frozen by SHA-256 (`migrations/frozen_test.go`); a schema change is a new
+  migration (OPS-5).
+- `make release` refuses a working tree with uncommitted changes; `RELEASE_ALLOW_DIRTY=1` is for
+  `make release-test` only (OPS-3).
+- ZAP rule 10062 ("PII Disclosure") is ignored on the audit log's hash fields by a policy line in `.zap/rules.tsv`
+  that expires on 2027-04-10 (a false positive on hex digits; OPS-2).
+- Dependabot ignores PostgreSQL major versions: a major needs a planned data-directory upgrade (OPS-7).
+- CI: coverage runs in its own job with a 75-minute limit, so the `go` job no longer times out (OPS-1).
+- `SECURITY-REPORT.md` gains KI-36 to KI-39 (ACME, network discovery, directory sign-in, prod-readiness items
+  accepted or deferred) and the review's local gate results; the release checklist gains owner rows 1.41 to 1.43 for
+  ACME, discovery and a real Active Directory, and its duplicate row 1.31 is renumbered; spec SEC-043 no longer lists
+  the unused audit HMAC label; rulings in `docs/superpowers/rulings/prod-readiness-2026-10-16.md` (OPS-8).
+
+**Upgrade notes**
+- After updating from a version that does not know `ALICE_TRUSTED_PROXIES` and `ALICE_MIGRATE_TIMEOUT`, check
+  `/opt/alice/.env`: the installed version's update script rewrites the file and drops keys it does not know on that
+  one update. Add the keys again if you had set them ([docs/upgrade.md](docs/upgrade.md)).
+- Reinstall `alice-helper` 1.6.1 on Nginx servers; with an older helper an unreadable first certificate still shows
+  the intermediate as the website's certificate.
 
 ## Unreleased — LDAP and Active Directory sign-in
 

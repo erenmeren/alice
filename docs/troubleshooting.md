@@ -5,7 +5,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 ## Cannot sign in
 
 - **"Incorrect username or password." although the password is right.** After 5 wrong attempts Alice makes the
-  account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait and try again with care: when a
+  account wait a few seconds; after 10 it blocks the account for 15 minutes. Wait 15 minutes and try again: when a
   block ends the count starts again, so the right password is accepted at once and someone who keeps guessing gets at
   most 10 attempts per 15 minutes. An administrator can see `auth.lockout`
   in the audit log, and **Set a new password** on **People & access** lifts the block at once. If you are the only
@@ -813,7 +813,7 @@ choose **Go to the dashboard**. The evaluation has been running since Alice was 
 
 **Likely cause.** The passphrase is one word repeated, uses only one kind of character, or follows a pattern (for example `aaaaaaaaaaaaaaaa` or `1234567890123456`).
 
-**What to do.** Use several unrelated words, or mix letters, digits and symbols without repeating them, until the meter shows good or strong. Repeated characters, repeated words and runs such as `abcdef` or `123456` count almost nothing. Write the passphrase down and keep it away from the server: every backup needs it, and it cannot be changed in this version.
+**What to do.** Use several unrelated words, or mix letters, digits and symbols without repeating the same characters or words, until the meter shows good or strong. Repeated characters, repeated words and runs such as `abcdef` or `123456` count almost nothing. Write the passphrase down and keep it away from the server: every backup needs it, and it cannot be changed in this version.
 
 ## ALC-LIC-0001: Not available while the license is expired
 

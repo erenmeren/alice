@@ -229,7 +229,7 @@
       "passphrase_too_weak": {
         "title": "The recovery passphrase is too easy to guess.",
         "cause": "The passphrase is long enough but rated fair: it uses too few different words or kinds of characters, or repeats and runs such as abcdef or 123456 make up most of it. It protects every backup, so Alice asks for a stronger one.",
-        "action": "Use several unrelated words, or mix letters, digits and symbols without repeating them, until the meter shows good or strong."
+        "action": "Use several unrelated words, or mix letters, digits and symbols without repeating the same characters or words, until the meter shows good or strong."
       }
     },
     "license": {

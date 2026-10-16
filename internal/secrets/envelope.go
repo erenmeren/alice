@@ -30,7 +30,7 @@ var ErrMasterKeyMismatch = errors.New("the master key does not match this databa
 const (
 	LabelHWM       = "alice/hwm/v1"
 	LabelJob       = "alice/job/v1"
-	LabelAuditHMAC = "alice/audit-hmac/v1"
+	LabelAuditHMAC = "alice/audit-hmac/v1" // reserved for v2; unused (KI-05)
 	LabelCSRF      = "alice/csrf/v1"
 	// LabelHWMEnc encrypts the time high-water mark record; its integrity comes from a MAC
 	// under LabelHWM (spec §16.5, R36).
