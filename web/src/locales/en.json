@@ -199,7 +199,8 @@
       "control": "Built for control"
     },
     "signInTo": "Sign in to",
-    "local": "Local account"
+    "local": "Local account",
+    "finishFailed": "Alice could not finish signing you in. Try again."
   },
   "account": {
     "title": "Your account",
@@ -2788,7 +2789,7 @@
     "ssoFallbackName": "your identity provider",
     "directoryHelp": "Enter your directory password again.",
     "directoryPassword": "Directory password",
-    "directoryCodeHelp": "Needed when your directory asks for an authenticator code.",
+    "directoryCodeHelp": "Enter the current code from your authenticator app.",
     "signOut": "Sign out"
   },
   "backups": {

@@ -36,12 +36,14 @@ function PasswordForm({
   onSession,
   onError,
   onReason,
+  onFinishFailed,
 }: {
   directories: PublicDirectory[];
   onDone: (p: Phase, e?: MfaEnrollment) => void;
   onSession: (s: SessionInfo) => void;
   onError: (e: unknown) => void;
   onReason: (r: string | null) => void;
+  onFinishFailed: (failed: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [target, setTarget] = useState(LOCAL);
@@ -56,12 +58,23 @@ function PasswordForm({
     setBusy(true);
     onError(null);
     onReason(null);
+    onFinishFailed(false);
     const secret = password;
     setPassword(''); // the password is not kept in the page once it is sent
     try {
       const res = directory ? await directoryLogin(directory.id, username.trim(), secret) : await login(username.trim(), secret);
-      if (res.status === 'signed_in') onSession(await getSession());
-      else if (res.status === 'mfa_required') onDone('mfa');
+      if (res.status === 'signed_in') {
+        // The password was accepted: a failure to read the new session is not a refusal, the person simply tries again.
+        let session: SessionInfo;
+        try {
+          session = await getSession();
+        } catch {
+          onFinishFailed(true);
+          setBusy(false);
+          return;
+        }
+        onSession(session);
+      } else if (res.status === 'mfa_required') onDone('mfa');
       else onDone('enroll', await enrollMfa());
     } catch (e) {
       const reason = directory && isApiError(e) ? directorySignInReason(e.status) : null;
@@ -215,6 +228,7 @@ export function LoginPage() {
   const [withCodes, setWithCodes] = useState<SessionWithCodes | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [dirReason, setDirReason] = useState<string | null>(null);
+  const [finishFailed, setFinishFailed] = useState(false);
   // The switched-on directories offered under "Sign in to". The list failing only hides the choice (Local stays).
   const directories = useQuery({ queryKey: PUBLIC_DIRECTORIES_KEY, queryFn: listPublicDirectories, enabled: phase === 'password' });
 
@@ -279,17 +293,23 @@ export function LoginPage() {
       </Title>
       {phase === 'password' ? <p className={classes.subtitle}>{t('login.subtitle')}</p> : <div className={classes.subtitle} />}
       <Stack ref={phaseArea}>
-        {phase === 'password' && params.get('ended') === '1' && !error && (
+        {phase === 'password' && params.get('ended') === '1' && !error && !dirReason && !finishFailed && (
           <Alert color="yellow">{t('login.sessionEnded')}</Alert>
         )}
         {phase === 'password' && ssoReason && <SSOErrorAlert reason={ssoReason} />}
         {phase === 'password' && dirReason && <SSOErrorAlert reason={dirReason} testId="directory-error" />}
+        {phase === 'password' && finishFailed && (
+          <Alert color="yellow" role="alert">
+            {t('login.finishFailed')}
+          </Alert>
+        )}
         {phase !== 'enroll' && <ErrorAlert error={error} />}
         {phase === 'password' && (
           <PasswordForm
             directories={directories.data?.items ?? []}
             onSession={finish}
             onReason={setDirReason}
+            onFinishFailed={setFinishFailed}
             onError={setError}
             onDone={(next, e) => {
               setEnrollment(e ?? null);

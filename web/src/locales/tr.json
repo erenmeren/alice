@@ -199,7 +199,8 @@
       "control": "Kontrol için tasarlandı"
     },
     "signInTo": "Oturum açılacak yer",
-    "local": "Yerel hesap"
+    "local": "Yerel hesap",
+    "finishFailed": "Alice oturum açma işlemini tamamlayamadı. Yeniden deneyin."
   },
   "account": {
     "title": "Hesabınız",
@@ -2788,7 +2789,7 @@
     "ssoFallbackName": "kimlik sağlayıcınız",
     "directoryHelp": "Dizin parolanızı yeniden girin.",
     "directoryPassword": "Dizin parolası",
-    "directoryCodeHelp": "Dizininiz doğrulama kodu istiyorsa gereklidir.",
+    "directoryCodeHelp": "Doğrulama uygulamanızdaki güncel kodu girin.",
     "signOut": "Oturumu kapat"
   },
   "backups": {

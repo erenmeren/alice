@@ -1,6 +1,7 @@
 import { Button, Code, Group, Stack, Table, Text, Title, VisuallyHidden } from '@mantine/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { isApiError } from '../../api/client';
 import { useTranslation } from 'react-i18next';
 import { LDAP_DIRECTORIES_KEY } from '../../api/queryKeys';
 import { deleteDirectory, listDirectories, testDirectoryConnection, type Directory } from '../../api/ldap';
@@ -173,11 +174,21 @@ function DeleteDialog({ directory, onClose }: { directory: Directory; onClose: (
   const { t } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
+  // The version sent as If-Match; after a 412 (somebody else changed the directory) the list is read again and the newer
+  // version is used by the next attempt.
+  const [version, setVersion] = useState(directory.version);
   const remove = useMutation({
-    mutationFn: () => run(() => deleteDirectory(directory.id, directory.version)),
+    mutationFn: () => run(() => deleteDirectory(directory.id, version)),
     onSuccess: async () => {
       await client.invalidateQueries({ queryKey: LDAP_DIRECTORIES_KEY });
       onClose();
+    },
+    onError: async (e) => {
+      if (!isApiError(e) || e.status !== 412) return;
+      await client.invalidateQueries({ queryKey: LDAP_DIRECTORIES_KEY });
+      const list = await client.fetchQuery({ queryKey: LDAP_DIRECTORIES_KEY, queryFn: () => run(listDirectories) });
+      const fresh = list.items.find((d) => d.id === directory.id);
+      if (fresh) setVersion(fresh.version);
     },
   });
   return (

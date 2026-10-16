@@ -136,15 +136,20 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     pending.current = null;
   }, []);
 
+  // A directory user with an authenticator must give the code: an empty code would be checked as a wrong one and counted
+  // towards the lockout of the person's own account. Without an authenticator no code is sent (the server answers
+  // ALC-LDAP-0007 when the directory needs one).
+  const directoryReady = !directory || (password !== '' && (!askCode || code.trim() !== ''));
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
+    if (!directoryReady) return;
     setBusy(true);
     setError(null);
     const secret = password;
     setPassword('');
     try {
       const c = code.trim();
-      setSession(await (directory ? directoryStepUp(c ? { password: secret, code: c } : { password: secret }) : stepUp(c)));
+      setSession(await (directory ? directoryStepUp(askCode ? { password: secret, code: c } : { password: secret }) : stepUp(c)));
       setOpened(false);
       setCode('');
       pending.current?.resolve();
@@ -198,6 +203,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
               )}
               {directory && (
                 <PasswordInput
+                  required
                   label={t('stepUp.directoryPassword')}
                   value={password}
                   onChange={(e) => setPassword(e.currentTarget.value)}
@@ -209,6 +215,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
                 <TextInput
                   label={t('ui.codeLabel')}
                   description={directory ? t('stepUp.directoryCodeHelp') : undefined}
+                  required={directory}
                   value={code}
                   onChange={(e) => setCode(e.currentTarget.value)}
                   inputMode="numeric"
@@ -222,7 +229,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
               <Button variant="default" onClick={cancel}>
                 {t('ui.cancel')}
               </Button>
-              <Button type="submit" loading={busy} leftSection={<Icon name="ShieldCheck" size={15} />}>
+              <Button type="submit" loading={busy} disabled={!directoryReady} leftSection={<Icon name="ShieldCheck" size={15} />}>
                 {t('ui.stepUp.confirm')}
               </Button>
             </DialogActions>

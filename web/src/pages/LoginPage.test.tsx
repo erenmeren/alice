@@ -545,4 +545,69 @@ describe('directory sign-in', () => {
     expect(within(select).getByRole('option', { name: 'Yerel hesap' })).toBeInTheDocument();
     expectNoRawKeys();
   });
+
+  it('says signing in could not be finished, not refused, when the session cannot be read after signed_in', async () => {
+    server.use(
+      ...sessionHandlers(null),
+      directories(),
+      http.post(`/api/v1/auth/ldap/${DIR}/login`, () => HttpResponse.json({ status: 'signed_in', csrf_token: 'c' })),
+    );
+    const { router } = await renderRoute('/login');
+    await chooseDirectory();
+    await signIn('deniz', 'pw');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Alice could not finish signing you in. Try again.');
+    expect(screen.queryByText(/The user name or password is wrong/)).not.toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/login');
+  });
+
+  it('does not show the session-ended notice together with a directory refusal', async () => {
+    server.use(...sessionHandlers(null), directories(), http.post(`/api/v1/auth/ldap/${DIR}/login`, () => errorResponse(401, 'ALC-LDAP-0001', 'ldap.signin_refused')));
+    await renderRoute('/login?ended=1');
+    expect(await screen.findByText('Your session ended. Please sign in again.')).toBeInTheDocument();
+    await chooseDirectory();
+    await signIn('deniz', 'pw');
+    expect(await screen.findByText('The user name or password is wrong, or you have no access.')).toBeInTheDocument();
+    expect(screen.queryByText('Your session ended. Please sign in again.')).not.toBeInTheDocument();
+  });
+
+  it('hides the choice when the directory list cannot be read, and Local sign-in still works', async () => {
+    let local = 0;
+    server.use(
+      http.get('/api/v1/auth/ldap/directories', () => errorResponse(503, 'ALC-SYS-0002', 'system.unavailable')),
+      http.post('/api/v1/auth/login', () => {
+        local++;
+        return HttpResponse.json({ status: 'mfa_required', csrf_token: 'p' });
+      }),
+      ...loginHandlers('mfa_required', () => HttpResponse.json(sessionFor('operator'))),
+    );
+    await renderRoute('/login');
+    await signIn();
+    expect(await screen.findByRole('heading', { name: 'Enter your verification code' })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Sign in to' })).not.toBeInTheDocument();
+    expect(local).toBe(1);
+  });
+
+  it('falls back to Local when the chosen directory is no longer offered', async () => {
+    let offered = [{ id: DIR, name: 'Corp AD' }];
+    let local = 0;
+    server.use(
+      ...sessionHandlers(null),
+      http.get('/api/v1/auth/ldap/directories', () => HttpResponse.json({ items: offered })),
+      http.post('/api/v1/auth/login', () => {
+        local++;
+        return errorResponse(401, 'ALC-AUTH-0005', 'auth.invalid_credentials');
+      }),
+    );
+    const { client } = await renderRoute('/login');
+    await chooseDirectory();
+    offered = [{ id: 'd2', name: 'Lab LDAP' }];
+    await client.invalidateQueries({ queryKey: ['auth', 'ldap', 'directories'] });
+    const select = screen.getByRole('combobox', { name: 'Sign in to' });
+    await waitFor(() => expect(within(select).queryByRole('option', { name: 'Corp AD' })).not.toBeInTheDocument());
+    expect(select).toHaveValue('local');
+    await signIn('ada', 'pw');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Incorrect username or password.');
+    expect(local).toBe(1);
+  });
 });
+

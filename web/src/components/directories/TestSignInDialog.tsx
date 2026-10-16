@@ -2,7 +2,7 @@ import { Button, Code, PasswordInput, Stack, Text, TextInput } from '@mantine/co
 import { useMutation } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { testDirectorySignIn, type Directory } from '../../api/ldap';
+import { testDirectorySignIn, type Directory, type DirectoryTestResult } from '../../api/ldap';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
 import { useStepUp } from '../StepUpProvider';
@@ -17,27 +17,37 @@ export function TestSignInDialog({ directory, onClose }: { directory: Directory;
   const { run } = useStepUp();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [result, setResult] = useState<DirectoryTestResult | null>(null);
+  const [error, setError] = useState<unknown>(null);
   const test = useMutation({
     gcTime: 0, // the password is a mutation variable: do not keep it in the mutation cache
     mutationFn: (secret: string) => run(() => testDirectorySignIn(directory.id, username.trim(), secret)),
   });
-  const submit = (ev: FormEvent) => {
+  const submit = async (ev: FormEvent) => {
     ev.preventDefault();
+    if (!username.trim() || !password) return;
     const secret = password;
     setPassword('');
-    if (!username.trim() || !secret) return;
-    test.mutate(secret);
+    setResult(null);
+    setError(null);
+    try {
+      setResult(await test.mutateAsync(secret));
+    } catch (e) {
+      setError(e);
+    } finally {
+      test.reset(); // the password leaves the mutation's variables
+    }
   };
-  const r = test.data;
+  const r = result;
 
   return (
     <AppModal opened onClose={onClose} title={t('directories.testSignInTitle', { name: directory.name })}>
-      <form onSubmit={submit}>
+      <form onSubmit={(e) => void submit(e)}>
         <Stack gap="sm">
           <Text size="sm">{t('directories.testSignInText')}</Text>
           <TextInput label={t('directories.testUsername')} value={username} onChange={(e) => setUsername(e.currentTarget.value)} autoComplete="off" spellCheck={false} required data-autofocus />
-          <PasswordInput label={t('directories.testPassword')} value={password} onChange={(e) => setPassword(e.currentTarget.value)} autoComplete="off" required />
-          <ErrorAlert error={test.error} />
+          <PasswordInput label={t('directories.testPassword')} value={password} onChange={(e) => setPassword(e.currentTarget.value)} autoComplete="new-password" required />
+          <ErrorAlert error={error} />
           {r && (
             <Stack gap="xs" role="status">
               <Text size="sm" fw={600} c="var(--alice-success)">

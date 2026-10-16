@@ -309,7 +309,7 @@ describe('StepUpProvider', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
     const dialog = await screen.findByRole('dialog', { name: "Confirm it's you" });
     expect(within(dialog).getByText('Fresh identity verification is required for this operation.')).toBeInTheDocument();
-    const field = within(dialog).getByLabelText('6-digit code');
+    const field = within(dialog).getByLabelText(/6-digit code/);
     await waitFor(() => expect(field).toHaveFocus());
     const confirm = within(dialog).getByRole('button', { name: 'Confirm' });
     const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
@@ -359,9 +359,9 @@ describe('StepUpProvider for a directory user', () => {
     expect(within(dialog).getByText('Enter your directory password again.')).toBeInTheDocument();
     expect(within(dialog).queryByLabelText(/sign-in name/i)).not.toBeInTheDocument();
     expect(within(dialog).getAllByRole('textbox')).toHaveLength(1); // the code; the password is not a textbox
-    expect(within(dialog).getByLabelText('6-digit code')).toHaveAccessibleDescription('Needed when your directory asks for an authenticator code.');
+    expect(within(dialog).getByLabelText(/6-digit code/)).toHaveAccessibleDescription('Enter the current code from your authenticator app.');
     await userEvent.type(within(dialog).getByLabelText(/^Directory password/), PW);
-    await userEvent.type(within(dialog).getByLabelText('6-digit code'), '123456');
+    await userEvent.type(within(dialog).getByLabelText(/6-digit code/), '123456');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
     await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('done'));
     expect(body).toEqual({ password: PW, code: '123456' });
@@ -414,4 +414,32 @@ describe('StepUpProvider for a directory user', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Sign out' }));
     await waitFor(() => expect(loggedOut).toBe(true));
   });
+
+  it('never sends a step-up without the code when the user has an authenticator (an empty code would count towards the lockout)', async () => {
+    let posts = 0;
+    server.use(
+      ...sessionHandlers(ldapSessionFor('admin')),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+      http.post('/api/v1/auth/ldap/stepup', () => {
+        posts++;
+        return HttpResponse.json(ldapSessionFor('admin'));
+      }),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: "Confirm it's you" });
+    const confirm = within(dialog).getByRole('button', { name: 'Confirm' });
+    expect(within(dialog).getByLabelText(/6-digit code/)).toBeRequired();
+    await userEvent.type(within(dialog).getByLabelText(/^Directory password/), PW);
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(dialog).getByLabelText(/^Directory password/), '{enter}');
+    await userEvent.type(within(dialog).getByLabelText(/6-digit code/), '   ');
+    expect(confirm).toBeDisabled();
+    expect(posts).toBe(0);
+    // Nothing typed was lost by the refused submit.
+    expect(within(dialog).getByLabelText(/^Directory password/)).toHaveValue(PW);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(document.body.innerHTML).not.toContain(PW);
+  });
 });
+

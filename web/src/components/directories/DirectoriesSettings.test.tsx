@@ -234,7 +234,7 @@ describe('Directories settings', () => {
     base([
       http.patch(dirURL, async ({ request }) => {
         patch = (await request.json()) as Record<string, unknown>;
-        return errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'bind_password', code: 'validation.required' }] });
+        return errorResponse(422, 'ALC-SYS-0006', 'validation.failed', { details: [{ field: 'bind_password', code: 'validation.too_long', params: { max: '1024' } }] });
       }),
     ]);
     await renderRoute('/settings?tab=directories');
@@ -246,13 +246,74 @@ describe('Directories settings', () => {
     const password = within(dialog).getByLabelText(/^Service account password/);
     expect(password).toHaveAccessibleDescription(/enter the service account password again/);
     expect(password).toBeRequired();
-    // The server has the last word (here it is sent without the password, as a stale form would).
+    // Without the password nothing is sent, even when the browser's own check is bypassed.
     password.removeAttribute('required');
+    await save(dialog);
+    expect(patch).toBeUndefined();
+    // With it, the server has the last word and its field error lands on the field.
+    await userEvent.type(password, CANARY);
     await save(dialog);
     await waitFor(() => expect(patch).toBeDefined());
     // Mantine marks a PasswordInput's error with data-invalid (a TextInput uses aria-invalid).
     await waitFor(() => expect(password).toHaveAttribute('data-invalid', 'true'));
-    expect(patch).toEqual({ bind_dn: 'cn=other,dc=corp,dc=example' });
+    expect(patch).toEqual({ bind_dn: 'cn=other,dc=corp,dc=example', bind_password: CANARY });
+    expect(password).toHaveValue('');
+    expect(document.body.innerHTML).not.toContain(CANARY);
+  });
+
+  it('keeps the typed password when the form stops before sending (a required field is empty)', async () => {
+    base();
+    await renderRoute('/settings?tab=directories');
+    await userEvent.click(await screen.findByRole('button', { name: 'Add directory' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/^Service account password/), CANARY);
+    for (const el of dialog.querySelectorAll('[required]')) el.removeAttribute('required');
+    await save(dialog);
+    expect(within(dialog).getByLabelText(/^Service account password/)).toHaveValue(CANARY);
+  });
+
+  it('reads the directory again after a 412 and saves the same change against the newer version', async () => {
+    const ifMatch: (string | null)[] = [];
+    let listed = 0;
+    base([
+      http.get('/api/v1/ldap/directories', () => HttpResponse.json({ items: [directoryFixture(++listed > 1 ? { version: 5 } : {})] })),
+      http.patch(dirURL, ({ request }) => {
+        ifMatch.push(request.headers.get('If-Match'));
+        return ifMatch.length === 1 ? errorResponse(412, 'ALC-SYS-0008', 'system.precondition_failed') : HttpResponse.json(directoryFixture({ version: 6, name: 'Renamed' }));
+      }),
+    ]);
+    await renderRoute('/settings?tab=directories');
+    await userEvent.click(await screen.findByRole('button', { name: 'Edit Corp AD' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.clear(within(dialog).getByLabelText(/^Name shown/));
+    await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Renamed');
+    await save(dialog);
+    expect(await within(dialog).findByText('Someone changed this item while you were editing it.')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/^Name shown/)).toHaveValue('Renamed');
+    await save(dialog);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(ifMatch).toEqual(['"3"', '"5"']);
+  });
+
+  it('deletes with the newer version after a 412', async () => {
+    const ifMatch: (string | null)[] = [];
+    let listed = 0;
+    base([
+      http.get('/api/v1/ldap/directories', () => HttpResponse.json({ items: [directoryFixture(++listed > 1 ? { version: 7 } : {})] })),
+      http.delete(dirURL, ({ request }) => {
+        ifMatch.push(request.headers.get('If-Match'));
+        return ifMatch.length === 1 ? errorResponse(412, 'ALC-SYS-0008', 'system.precondition_failed') : new HttpResponse(null, { status: 204 });
+      }),
+    ]);
+    await renderRoute('/settings?tab=directories');
+    await userEvent.click(await screen.findByRole('button', { name: 'Delete Corp AD' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete directory' }));
+    expect(await within(dialog).findByText('Someone changed this item while you were editing it.')).toBeInTheDocument();
+    await waitFor(() => expect(listed).toBeGreaterThan(1));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Delete directory' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(ifMatch).toEqual(['"3"', '"7"']);
   });
 
   it('marks the other protected fields too: addresses, unique ID attribute and certificate authority', async () => {
@@ -415,6 +476,49 @@ describe('Directories settings', () => {
     await userEvent.click(within(stepUp).getByRole('button', { name: 'Confirm' }));
     expect(await screen.findByText(/The connection works/)).toBeInTheDocument();
     expect(calls).toBe(2);
+  });
+
+  it('says at most 3 once three directories exist, switches MFA off with a PATCH, and keeps a mapping when its removal is cancelled', async () => {
+    let patch: unknown;
+    base([
+      http.get('/api/v1/ldap/directories', () =>
+        HttpResponse.json({ items: [directoryFixture(), directoryFixture({ id: 'd2', name: 'B' }), directoryFixture({ id: 'd3', name: 'C' })] }),
+      ),
+      http.get('/api/v1/ldap/group-mappings', ({ request }) =>
+        HttpResponse.json({
+          items: new URL(request.url).searchParams.get('directory_id') === DIRECTORY_ID ? [{ id: 'm1', directory_id: DIRECTORY_ID, group: 'ops', role: 'auditor', created_at: '2026-10-15T09:00:00Z' }] : [],
+        }),
+      ),
+      http.patch(dirURL, async ({ request }) => {
+        patch = await request.json();
+        return HttpResponse.json(directoryFixture({ mfa_required: false, version: 4 }));
+      }),
+    ]);
+    await renderRoute('/settings?tab=directories');
+    expect(await screen.findByText('Alice works with at most 3 directories.')).toBeInTheDocument();
+    const section = screen.getByRole('region', { name: 'Corp AD' });
+    await userEvent.click(await within(section).findByRole('button', { name: 'Remove mapping for ops' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(within(section).getByText('ops')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Edit Corp AD' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('switch', { name: "Ask for Alice's authenticator code after the directory password" }));
+    await save(dialog);
+    await waitFor(() => expect(patch).toEqual({ mfa_required: false }));
+  });
+
+  it('sends no test sign-in without a name and a password', async () => {
+    base();
+    await renderRoute('/settings?tab=directories');
+    await userEvent.click(await screen.findByRole('button', { name: 'Test a sign-in with Corp AD' }));
+    const dialog = await screen.findByRole('dialog');
+    for (const el of dialog.querySelectorAll('[required]')) el.removeAttribute('required');
+    await userEvent.type(within(dialog).getByLabelText(/^Password/), TEST_CANARY);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Run test' }));
+    // msw would fail the test on the unhandled request; the typed password stays for the person to complete the form.
+    expect(within(dialog).getByLabelText(/^Password/)).toHaveValue(TEST_CANARY);
+    expect(within(dialog).queryByRole('status')).not.toBeInTheDocument();
   });
 
   it('is fully translated in Turkish', async () => {

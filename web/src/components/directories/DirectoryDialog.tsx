@@ -1,8 +1,9 @@
 import { Button, Group, PasswordInput, Stack, Switch, Text, TextInput, Textarea } from '@mantine/core';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
+import { isApiError } from '../../api/client';
 import { useTranslation } from 'react-i18next';
-import { createDirectory, DIRECTORY_PRESETS, updateDirectory, type Directory, type DirectoryInput, type DirectoryPreset } from '../../api/ldap';
+import { createDirectory, DIRECTORY_PRESETS, listDirectories, updateDirectory, type Directory, type DirectoryInput, type DirectoryPreset } from '../../api/ldap';
 import { LDAP_DIRECTORIES_KEY } from '../../api/queryKeys';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
@@ -106,14 +107,18 @@ function needsPassword(d: Directory | null, next: Omit<DirectoryInput, 'bind_pas
 const REQUIRED: (keyof Form)[] = ['name', 'addresses', 'user_base_dn', 'user_filter', 'login_attribute', 'unique_id_attribute', 'bind_dn', 'group_base_dn'];
 
 // DirectoryDialog adds or edits a directory. The service account password lives only in this form's state: it is sent when
-// typed, never read back (the server answers bind_password_set only), cleared when the request is sent (also when it is
-// refused) and gone with the form when it closes. The presets fill the attribute and filter fields and nothing else.
+// typed, never read back (the server answers bind_password_set only), cleared once the request is built (also when it is
+// refused; a form stopped before that keeps it), reset out of the mutation afterwards and gone with the form when it closes. The presets fill the attribute and filter fields and nothing else.
 export function DirectoryDialog({ directory, onClose }: { directory: Directory | null; onClose: () => void }) {
   const { t, i18n } = useTranslation();
   const { run } = useStepUp();
   const client = useQueryClient();
+  // base is the stored copy the change is made against (its version goes into If-Match). After a 412 it is read again, so
+  // the form (kept as typed) can be saved once more against the newer version.
+  const [base, setBase] = useState<Directory | null>(directory);
   const [form, setForm] = useState<Form>(() => initial(directory));
   const [password, setPassword] = useState('');
+  const [error, setError] = useState<unknown>(null);
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }));
   const text = (k: TextField | 'addresses') => ({ value: form[k], onChange: (e: { currentTarget: { value: string } }) => set(k, e.currentTarget.value) });
 
@@ -122,32 +127,45 @@ export function DirectoryDialog({ directory, onClose }: { directory: Directory |
     mutationFn: (secret: string) => {
       const next = toInput(form);
       const extra = secret ? { bind_password: secret } : {};
-      return run(() => (directory ? updateDirectory(directory.id, directory.version, { ...changedKeys(directory, next), ...extra }) : createDirectory({ ...next, ...extra })));
-    },
-    onSuccess: async () => {
-      await client.invalidateQueries({ queryKey: LDAP_DIRECTORIES_KEY });
-      onClose();
+      return run(() => (base ? updateDirectory(base.id, base.version, { ...changedKeys(base, next), ...extra }) : createDirectory({ ...next, ...extra })));
     },
   });
 
-  const reenter = needsPassword(directory, toInput(form));
-  const passwordRequired = !directory || reenter;
-  const submit = (ev: FormEvent) => {
+  const reenter = needsPassword(base, toInput(form));
+  const passwordRequired = !base || reenter;
+  const submit = async (ev: FormEvent) => {
     ev.preventDefault();
+    // A form the browser would not send keeps everything as typed, the password included.
+    if (REQUIRED.some((k) => String(form[k]).trim() === '') || (passwordRequired && password === '')) return;
     const secret = password;
     setPassword(''); // not kept in the page once the request is built, whatever the answer
-    if (REQUIRED.some((k) => String(form[k]).trim() === '')) return;
-    save.mutate(secret);
+    setError(null);
+    try {
+      await save.mutateAsync(secret);
+      await client.invalidateQueries({ queryKey: LDAP_DIRECTORIES_KEY });
+      onClose();
+    } catch (e) {
+      setError(e);
+      if (base && isApiError(e) && e.status === 412) setBase((await freshCopy(base.id)) ?? base);
+    } finally {
+      save.reset(); // the password leaves the mutation's variables
+    }
+  };
+  // freshCopy reads the list again after a 412 (somebody else changed the directory) and returns the newer copy.
+  const freshCopy = async (id: string) => {
+    await client.invalidateQueries({ queryKey: LDAP_DIRECTORIES_KEY });
+    const list = await client.fetchQuery({ queryKey: LDAP_DIRECTORIES_KEY, queryFn: () => run(listDirectories) });
+    return list.items.find((d) => d.id === id);
   };
   const preset = (p: DirectoryPreset) => setForm((f) => ({ ...f, ...DIRECTORY_PRESETS[p] }));
-  const fe = fieldErrorsOf(save.error, t, i18n);
+  const fe = fieldErrorsOf(error, t, i18n);
   let passwordHelp: string | undefined;
   if (reenter) passwordHelp = t('directories.fields.bindPasswordReenter');
-  else if (directory?.bind_password_set) passwordHelp = t('directories.fields.bindPasswordStored');
+  else if (base?.bind_password_set) passwordHelp = t('directories.fields.bindPasswordStored');
 
   return (
-    <AppModal opened onClose={onClose} title={directory ? t('directories.editTitle') : t('directories.add')} size="lg">
-      <form onSubmit={submit}>
+    <AppModal opened onClose={onClose} title={base ? t('directories.editTitle') : t('directories.add')} size="lg">
+      <form onSubmit={(e) => void submit(e)}>
         <Stack gap="sm">
           <Stack gap={4}>
             <Text size="sm" fw={500}>
@@ -244,7 +262,7 @@ export function DirectoryDialog({ directory, onClose }: { directory: Directory |
           <Textarea label={t('directories.fields.caPem')} {...text('ca_pem')} error={fe.ca_pem} autosize minRows={3} maxRows={8} spellCheck={false} styles={MONO} />
           <Switch role="switch" label={t('directories.fields.mfaRequired')} checked={form.mfa_required} onChange={(e) => set('mfa_required', e.currentTarget.checked)} />
           <Switch role="switch" label={t('directories.fields.enabled')} checked={form.enabled} onChange={(e) => set('enabled', e.currentTarget.checked)} />
-          <ErrorAlert error={save.error} />
+          <ErrorAlert error={error} />
           <DialogActions>
             <Button variant="default" onClick={onClose}>
               {t('ui.cancel')}
