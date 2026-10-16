@@ -1524,19 +1524,25 @@ func TestUpdateHappyPathOrder(t *testing.T) {
 // version rewrites .env, and one that does not know the keys drops them on that one update.
 func TestUpdateKeepsTheProxyAndMigrateKeys(t *testing.T) {
 	t.Parallel()
-	e := shNewInstalled(t, "1.0.0-rc.2")
-	f := filepath.Join(e.inst, ".env")
-	old, err := os.ReadFile(f)
-	require.NoError(t, err)
-	shWrite(t, f, string(old)+"ALICE_TRUSTED_PROXIES=10.0.0.5/32\nALICE_MIGRATE_TIMEOUT=2h\n", 0o640)
-	pkg := e.pkg(shPkgOpts{version: "1.0.0"})
-	r := e.update(shTarball(t, pkg, filepath.Join(e.root, "dl"), "1.0.0", e.key))
-	require.Equal(t, 0, r.code, r.out)
-	env, err := os.ReadFile(f)
-	require.NoError(t, err)
-	assert.Contains(t, string(env), "ALICE_IMAGE=alice:1.0.0\n", "the .env was rewritten")
-	assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES=10.0.0.5/32\n")
-	assert.Contains(t, string(env), "\nALICE_MIGRATE_TIMEOUT=2h\n")
+	// The binary trims spaces and tabs around each entry, so the update accepts them too.
+	for _, proxies := range []string{"10.0.0.5/32", "10.0.0.1, 10.0.0.2", "10.0.0.1,\t2001:db8::/32"} {
+		t.Run(proxies, func(t *testing.T) {
+			t.Parallel()
+			e := shNewInstalled(t, "1.0.0-rc.2")
+			f := filepath.Join(e.inst, ".env")
+			old, err := os.ReadFile(f)
+			require.NoError(t, err)
+			shWrite(t, f, string(old)+"ALICE_TRUSTED_PROXIES="+proxies+"\nALICE_MIGRATE_TIMEOUT=2h\n", 0o640)
+			pkg := e.pkg(shPkgOpts{version: "1.0.0"})
+			r := e.update(shTarball(t, pkg, filepath.Join(e.root, "dl"), "1.0.0", e.key))
+			require.Equal(t, 0, r.code, r.out)
+			env, err := os.ReadFile(f)
+			require.NoError(t, err)
+			assert.Contains(t, string(env), "ALICE_IMAGE=alice:1.0.0\n", "the .env was rewritten")
+			assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES="+proxies+"\n")
+			assert.Contains(t, string(env), "\nALICE_MIGRATE_TIMEOUT=2h\n")
+		})
+	}
 }
 
 // An installation from before OPS-6/OPS-4 has neither key; the update adds both with their defaults.

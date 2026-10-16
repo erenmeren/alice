@@ -322,7 +322,9 @@ preflight() {
     alice_fail "ALICE_MIGRATE_TIMEOUT in $dir/.env is not a duration such as 30m or 2h: $env_migrate_timeout. Nothing was changed."
     exit 1
   fi
-  if [[ ! "$env_proxies" =~ ^[0-9A-Fa-f.:/,]*$ ]]; then
+  # Spaces and tabs around an entry are allowed: the binary trims them.
+  local proxies_re=$'^[0-9A-Fa-f.:/, \t]*$'
+  if [[ ! "$env_proxies" =~ $proxies_re ]]; then
     alice_fail "ALICE_TRUSTED_PROXIES in $dir/.env is not a comma-separated list of IP addresses or CIDRs: $env_proxies. Nothing was changed."
     exit 1
   fi
