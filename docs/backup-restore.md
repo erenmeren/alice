@@ -67,7 +67,8 @@ Backups start only once the recovery passphrase is set in the setup wizard. Unti
 The administrator chooses it in the setup wizard ([first-run.md](first-run.md)). Rules:
 
 - At least 16 characters, and the strength meter must say **Good** or **Strong**: a passphrase rated **Fair** is
-  refused (`ALC-SET-0010`).
+  refused (`ALC-SET-0010`). Repeated characters, repeated words and runs such as `abcdef` or `123456` count almost
+  nothing: `aaaaaaaaaaaaaaaaaaaa` is refused; several unrelated words are the easiest way to a **Strong** rating.
 - Alice normalises the passphrase to Unicode NFKC before it uses it: the same text typed as one composed character
   or as a letter plus a combining mark (for example `ş`), or with full-width letters, opens the same backups. Upper
   and lower case still differ.

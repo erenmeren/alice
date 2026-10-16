@@ -616,7 +616,7 @@ describe('setup wizard steps of Phase 8', () => {
     expect(screen.getByRole('button', { name: 'Save passphrase' })).toBeDisabled();
 
     await userEvent.clear(screen.getByLabelText('Recovery passphrase'));
-    await userEvent.type(screen.getByLabelText('Recovery passphrase'), 'abcdefghijklmnopqrst');
+    await userEvent.type(screen.getByLabelText('Recovery passphrase'), 'one two three fo');
     expect(screen.getByTestId('passphrase-strength')).toHaveTextContent('Good');
     expect(screen.queryByText(/This passphrase is too easy to guess/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save passphrase' })).toBeEnabled();

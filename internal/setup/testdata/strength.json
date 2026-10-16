@@ -27,176 +27,226 @@
   {
     "passphrase": "ığdırığdırığdırı",
     "strength": "fair",
-    "note": "16 letters, counted as runes, not bytes"
+    "note": "unchanged: 16 letters, counted as runes, not bytes; one class"
   },
   {
     "passphrase": "aaaaaaaaaaaaaaaa",
     "strength": "fair",
-    "note": "16 characters, one class"
+    "note": "run of a"
   },
   {
     "passphrase": "AAAAAAAAAAAAAAAA",
     "strength": "fair",
-    "note": "upper case only"
+    "note": "run of A"
   },
   {
     "passphrase": "1234567890123456",
     "strength": "fair",
-    "note": "digits only"
+    "note": "sequence 123…9 and 0123…6"
   },
   {
     "passphrase": "!!!!!!!!!!!!!!!!",
     "strength": "fair",
-    "note": "symbols only"
+    "note": "run of !"
   },
   {
     "passphrase": "                ",
     "strength": "fair",
-    "note": "16 spaces: no class, one (empty) word"
+    "note": "16 spaces: no words, empty core"
   },
   {
     "passphrase": "ğüşöçıİğüşöçıİğü",
     "strength": "fair",
-    "note": "Turkish letters are one rune each and count as 'other'"
+    "note": "unchanged: 16 runes, one class ('other'), one word"
   },
   {
     "passphrase": "ğüşöçıİğüşöçıİğüşöçıİ",
-    "strength": "good",
-    "note": "21 Turkish letters"
+    "strength": "fair",
+    "note": "rune period 7 (was good)"
   },
   {
     "passphrase": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
     "strength": "fair",
-    "note": "16 emoji runes"
+    "note": "run of 😀"
   },
   {
     "passphrase": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
-    "strength": "good",
-    "note": "20 emoji runes"
+    "strength": "fair",
+    "note": "run of 😀 (was good)"
   },
   {
     "passphrase": "éééééééé",
     "strength": "fair",
-    "note": "a combining accent is its own rune"
+    "note": "rune period 2: a combining accent is its own rune"
   },
   {
     "passphrase": "ÄÖÜäöüßÄÖÜäöüßÄÖ",
     "strength": "fair",
-    "note": "non-ASCII letters are not [a-zA-Z]"
+    "note": "unchanged: 16 runes; non-ASCII letters are not [a-zA-Z], one class"
   },
   {
     "passphrase": "  aaaaaaaaaaaaaa  ",
     "strength": "fair",
-    "note": "leading and trailing spaces count as characters, not as word breaks"
+    "note": "run of a; the leading and trailing spaces are trimmed"
   },
   {
     "passphrase": "    a b c d     ",
-    "strength": "good",
-    "note": "four words after trimming"
+    "strength": "fair",
+    "note": "core 'a b c d' is 7 runes (was good)"
   },
   {
     "passphrase": "one two three fo",
     "strength": "good",
-    "note": "16 characters, four words"
+    "note": "unchanged: 16 runes, four distinct words"
   },
   {
     "passphrase": "one two threeeee",
     "strength": "fair",
-    "note": "three words"
+    "note": "run of e: three words, 13 runes"
   },
   {
     "passphrase": "Abcdefgh12345678",
-    "strength": "good",
-    "note": "16 characters, three classes"
+    "strength": "fair",
+    "note": "sequence bcdefgh and 12345678: A+bc+12 is 5 (was good)"
   },
   {
     "passphrase": "Aa1!Aa1!Aa1!Aa1!",
-    "strength": "good",
-    "note": "16 characters, four classes"
+    "strength": "fair",
+    "note": "rune period 4 (was good)"
   },
   {
     "passphrase": "Aa1!Aa1!Aa1!Aa1!Aa1!",
-    "strength": "strong",
-    "note": "20 characters, four classes"
+    "strength": "fair",
+    "note": "rune period 4 (was strong)"
   },
   {
     "passphrase": "abcdefghijklmnopqrst",
-    "strength": "good",
-    "note": "20 characters, one class"
+    "strength": "fair",
+    "note": "sequence abc…t (was good)"
   },
   {
     "passphrase": "aaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "strength": "good",
-    "note": "27 characters, one class"
+    "strength": "fair",
+    "note": "run of a (was good)"
   },
   {
     "passphrase": "abcdefghijklmnopqrstuvwxyzab",
-    "strength": "strong",
-    "note": "28 characters, one class"
+    "strength": "fair",
+    "note": "sequence abc…z (was strong)"
   },
   {
     "passphrase": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "strength": "strong",
-    "note": "30 characters"
+    "strength": "fair",
+    "note": "run of a (was strong)"
   },
   {
     "passphrase": "correct horse battery staple",
     "strength": "strong",
-    "note": "four words, 28 characters"
+    "note": "unchanged: effective 28, four distinct words"
   },
   {
     "passphrase": "Tr0ub4dor&3-Tr0ub4dor",
     "strength": "strong",
-    "note": "21 characters, four classes"
+    "note": "unchanged: 21 runes, four classes"
   },
   {
     "passphrase": "kırmızı-kedi-mavi-deniz-2026",
     "strength": "strong",
-    "note": "the e2e fixture"
+    "note": "unchanged: 28 runes, three classes (the e2e fixture)"
   },
   {
     "passphrase": "uzun ve güvenli bir kurtarma parolası",
     "strength": "strong",
-    "note": "the setup test fixture"
+    "note": "unchanged: six distinct words (the setup test fixture)"
   },
   {
     "passphrase": "Şifre Çözme 2026",
     "strength": "good",
-    "note": "Ş and Ç are 'other', not upper case"
+    "note": "unchanged: 16 runes; Ş and Ç are 'other', not upper case"
   },
   {
     "passphrase": "a\tb\tc\tddddddddddd",
-    "strength": "good",
-    "note": "tabs separate words"
+    "strength": "fair",
+    "note": "run of d: tabs separate words, core 'a b c d' (was good)"
   },
   {
     "passphrase": "a\nb\nc\nddddddddddddd",
-    "strength": "good",
-    "note": "line feeds separate words"
+    "strength": "fair",
+    "note": "run of d: line feeds separate words (was good)"
   },
   {
     "passphrase": "a b c dddddddddddddd",
-    "strength": "strong",
-    "note": "no-break spaces separate words and are no class"
+    "strength": "fair",
+    "note": "run of d: no-break spaces separate words (was strong)"
   },
   {
     "passphrase": "abcdddddddddddddd",
-    "strength": "good",
-    "note": "U+0085 is not white space in JavaScript: no word break, class 'other'"
+    "strength": "fair",
+    "note": "run of d: U+0085 is no word break in JavaScript (was good)"
   },
   {
     "passphrase": "a﻿b﻿c﻿dddddddddddddd",
-    "strength": "strong",
-    "note": "U+FEFF is white space in JavaScript"
+    "strength": "fair",
+    "note": "run of d: U+FEFF is white space in JavaScript (was strong)"
   },
   {
     "passphrase": "a　b　c　dddddddddddddd",
-    "strength": "strong",
-    "note": "ideographic spaces separate words"
+    "strength": "fair",
+    "note": "run of d: ideographic spaces separate words (was strong)"
   },
   {
     "passphrase": "a b c dddddddddddddd",
-    "strength": "strong",
-    "note": "line and paragraph separators and the narrow no-break space"
+    "strength": "fair",
+    "note": "run of d: line and paragraph separators and the narrow no-break space (was strong)"
+  },
+  {
+    "passphrase": "aaaaaaaaaaaaaaaaaaaa",
+    "strength": "fair",
+    "note": "run of a: 20 identical characters"
+  },
+  {
+    "passphrase": "Password12345678",
+    "strength": "fair",
+    "note": "sequence 12345678: P+assword+12 is 10"
+  },
+  {
+    "passphrase": "1111111111111111111111111111",
+    "strength": "fair",
+    "note": "run of 1"
+  },
+  {
+    "passphrase": "password password password password",
+    "strength": "fair",
+    "note": "word cycle: password ×4"
+  },
+  {
+    "passphrase": "abcabcabcabcabcabcabc",
+    "strength": "fair",
+    "note": "rune period 3, then sequence abc"
+  },
+  {
+    "passphrase": "one two three four",
+    "strength": "good",
+    "note": "no-break spaces separate words: four distinct words (white-space parity)"
+  },
+  {
+    "passphrase": "onetwothreefour",
+    "strength": "fair",
+    "note": "U+0085 is no word break in JavaScript: one word, 18 runes (white-space parity)"
+  },
+  {
+    "passphrase": "one﻿two﻿three﻿four",
+    "strength": "good",
+    "note": "U+FEFF separates words: four distinct words (white-space parity)"
+  },
+  {
+    "passphrase": "one　two three four",
+    "strength": "good",
+    "note": "ideographic space, line separator and narrow no-break space separate words (white-space parity)"
+  },
+  {
+    "passphrase": "Şifre Çöz 2 babc",
+    "strength": "fair",
+    "note": "sequence abc inside babc: a sequence may start one rune after a shorter step run; 15 runes remain"
   }
 ]

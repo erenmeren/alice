@@ -267,7 +267,7 @@ func TestServerRefusesAFairPassphrase(t *testing.T) {
 	assert.Empty(t, e.settingRaw(t, "backup.key"))
 	assert.Zero(t, e.auditCount(t, "setup.recovery_passphrase_set"))
 
-	good := "Abcdefgh12345678"
+	good := "Şifre Çözme 2026"
 	require.Equal(t, setup.StrengthGood, setup.PassphraseStrength(good))
 	require.NoError(t, e.setup.SetRecoveryPassphrase(e.ctx, p, ip1, good, good), "good is enough")
 }

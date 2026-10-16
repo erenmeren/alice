@@ -10,9 +10,10 @@ Have these ready:
       "time-based codes").
 - [ ] **A place to store 10 recovery codes** (a password manager or a printed sheet in a safe).
 - [ ] **A recovery passphrase** of at least 16 characters that the strength meter rates **Good** or **Strong**
-      (several unrelated words work well), written on paper and stored somewhere safe, away from the server. It
-      protects your backups: if you lose it, nobody (including the vendor) can open them, and it cannot be changed
-      later in this version ([backup-restore.md](backup-restore.md#the-recovery-passphrase)).
+      (several unrelated words work well; repeats and runs such as `abcdef` count almost nothing), written on paper
+      and stored somewhere safe, away from the server. It protects your backups: if you lose it, nobody (including
+      the vendor) can open them, and it cannot be changed later in this version
+      ([backup-restore.md](backup-restore.md#the-recovery-passphrase)).
 - [ ] **Your HTTPS certificate** for Alice's DNS name, with its private key: a certificate file (PEM, followed by the
       intermediate certificates) and an unencrypted key file (PEM), or one PFX file with its password. Without it you
       can keep Alice's temporary certificate for now; browsers then warn until you upload yours.
@@ -53,7 +54,9 @@ Have these ready:
    Expected: **Choose a recovery passphrase**.
 7. Type the recovery passphrase twice. The meter shows **Too short**, **Fair**, **Good** or **Strong**; Alice accepts
    only **Good** or **Strong** (a **Fair** one shows "This passphrase is too easy to guess. …" and is refused with
-   `ALC-SET-0010`). Tick **I stored the passphrase safely** and choose **Save passphrase**.
+   `ALC-SET-0010`). Repeated characters, repeated words and runs such as `abcdef` or `123456` count almost nothing:
+   `aaaaaaaaaaaaaaaaaaaa` is refused; several unrelated words are the easiest way to a **Strong** rating. Tick
+   **I stored the passphrase safely** and choose **Save passphrase**.
    If more than five minutes passed since you last typed a code, Alice first asks for a new 6-digit code
    (**Confirm it's you**).
    Expected: **HTTPS certificate**.

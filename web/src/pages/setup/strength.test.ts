@@ -10,7 +10,7 @@ describe('passphraseStrength', () => {
     expect(passphraseStrength('ığdırığdırığdırı')).toBe('fair'); // 16 letters
   });
   it('rates longer and more varied passphrases higher', () => {
-    expect(passphraseStrength('abcdefghijklmnopqrst')).toBe('good');
+    expect(passphraseStrength('abcdefghijklmnopqrst')).toBe('fair');
     expect(passphraseStrength('correct horse battery staple')).toBe('strong');
     expect(passphraseStrength('Tr0ub4dor&3-Tr0ub4dor')).toBe('strong');
   });

@@ -26,10 +26,10 @@ func TestCheckPassphraseRatesTheNormalisedText(t *testing.T) {
 		{"Turkish dotless i alone is fair", strings.Repeat("ı", 16), setup.ErrPassphraseTooWeak},
 		{"Turkish dotted capital I alone is fair", strings.Repeat("İ", 16), setup.ErrPassphraseTooWeak},
 		{"Turkish words are good", "ılık İstanbul akşamı ıhlamur", nil},
-		{"Turkish mixed classes are good", "İıİı1234abcdABCD", nil},
-		{"square MHz lengthens to a good passphrase", strings.Repeat("㎒", 8), nil},
+		{"Turkish mixed classes are good", "İıİı1357acegACEG", nil},
+		{"square Hz units lengthen to a good passphrase", "㎒㎓㎔㎑2026", nil},
 		{"plain fair", "aaaaaaaaaaaaaaaa", setup.ErrPassphraseTooWeak},
-		{"plain good", "Abcdefgh12345678", nil},
+		{"plain good", "one two three fo", nil},
 		{"short after NFKC", "ﬃﬃﬃﬃﬃ", setup.ErrPassphraseTooShort},
 	}
 	for _, c := range cases {
@@ -45,9 +45,9 @@ func TestCheckPassphraseRatesTheNormalisedText(t *testing.T) {
 }
 
 func TestCheckPassphraseLimitsAndConfirmation(t *testing.T) {
-	require.ErrorIs(t, setup.CheckPassphrase("Abcdefgh12345678", "Abcdefgh12345679"), setup.ErrPassphraseMismatch)
-	require.NoError(t, setup.CheckPassphrase("Abcdefgh12345678", "Abcdefgh12345678"))
-	require.NoError(t, setup.CheckPassphrase("ｱbcdefgh12345678", "アbcdefgh12345678"), "compared after NFKC")
+	require.ErrorIs(t, setup.CheckPassphrase("one two three fo", "one two three fx"), setup.ErrPassphraseMismatch)
+	require.NoError(t, setup.CheckPassphrase("one two three fo", "one two three fo"))
+	require.NoError(t, setup.CheckPassphrase("ｱkedi Elma 2026 x", "アkedi Elma 2026 x"), "compared after NFKC")
 	var v validate.Errors
 	assert.ErrorAs(t, setup.CheckPassphrase(strings.Repeat("Ab1 ", 257), strings.Repeat("Ab1 ", 257)), &v)
 }
