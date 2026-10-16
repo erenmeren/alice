@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { SessionInfo, User } from '../api/types';
-import { adminSession, errorResponse, providerFixture, sessionFor } from '../test/fixtures';
+import { adminSession, DIRECTORY_ID, directoryFixture, errorResponse, providerFixture, sessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -19,6 +19,7 @@ const operator: User = {
   created_at: '2026-09-30T08:00:00Z',
   auth_source: 'local',
   sso_provider_id: null,
+  ldap_directory_id: null,
 };
 
 function signedInAs(session: SessionInfo) {
@@ -304,6 +305,54 @@ describe('UsersPage access and step-up', () => {
     await userEvent.click(within(manage).getByRole('button', { name: 'Edit' }));
     const edit = await screen.findByRole('dialog');
     expect(within(edit).queryByLabelText('Role')).not.toBeInTheDocument();
+  });
+
+  it('marks directory users with the directory, offers Reset two-factor sign-in but no password or role change', async () => {
+    signedInAs(adminSession);
+    const dir: User = { ...operator, id: 'u-dir', username: 'deniz', display_name: 'Deniz Kaya', auth_source: 'ldap', ldap_directory_id: DIRECTORY_ID, mfa_enrolled: true };
+    withUsers([operator, dir]);
+    let body: Record<string, unknown> | undefined;
+    server.use(
+      http.get('/api/v1/ldap/directories', () => HttpResponse.json({ items: [directoryFixture()] })),
+      http.patch('/api/v1/users/u-dir', async ({ request }) => {
+        body = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(dir);
+      }),
+    );
+    await renderRoute('/users');
+    const row = (await screen.findByText('deniz')).closest('tr')!;
+    expect(within(row).getByText('Directory')).toBeInTheDocument();
+    expect(await within(row).findByText('Corp AD')).toBeInTheDocument();
+    expect(within(row).getByText('Authenticator app set up')).toBeInTheDocument();
+    expect(within(row).queryByText('Local account')).not.toBeInTheDocument();
+    expect(within(row).queryByText('Single sign-on')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Manage deniz' }));
+    const manage = await screen.findByRole('dialog');
+    expect(within(manage).queryByRole('button', { name: 'Set a new password' })).not.toBeInTheDocument();
+    expect(within(manage).getByRole('button', { name: 'Reset two-factor sign-in' })).toBeInTheDocument();
+    await userEvent.click(within(manage).getByRole('button', { name: 'Edit' }));
+    const edit = await screen.findByRole('dialog');
+    expect(within(edit).queryByLabelText('Role')).not.toBeInTheDocument();
+    await userEvent.click(within(edit).getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(body).toBeDefined());
+    expect(body).not.toHaveProperty('role');
+  });
+
+  it('leaves the directory name out when the directories cannot be read without a fresh verification', async () => {
+    signedInAs(adminSession);
+    withUsers([{ ...operator, id: 'u-dir', username: 'deniz', auth_source: 'ldap', ldap_directory_id: DIRECTORY_ID }]);
+    let reads = 0;
+    server.use(
+      http.get('/api/v1/ldap/directories', () => {
+        reads++;
+        return errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required');
+      }),
+    );
+    await renderRoute('/users');
+    const row = (await screen.findByText('deniz')).closest('tr')!;
+    expect(within(row).getByText('Directory')).toBeInTheDocument();
+    await waitFor(() => expect(reads).toBe(1));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument(); // no step-up prompt for a name
   });
 
   it('sends no role when an SSO user is edited, and shows ALC-USR-0003 when the server refuses', async () => {

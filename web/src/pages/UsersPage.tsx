@@ -3,7 +3,8 @@ import { Button, NativeSelect, PasswordInput, Stack, Table, Text, TextInput, Vis
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { listProviders } from '../api/sso';
-import { SSO_PROVIDERS_KEY } from '../api/queryKeys';
+import { listDirectories } from '../api/ldap';
+import { LDAP_DIRECTORIES_KEY, SSO_PROVIDERS_KEY } from '../api/queryKeys';
 import {
   createUser,
   listUsers,
@@ -43,6 +44,10 @@ export function UsersPage() {
   const hasSSO = users.data?.items.some((u) => u.auth_source === 'oidc') ?? false;
   const providers = useQuery({ queryKey: SSO_PROVIDERS_KEY, queryFn: listProviders, enabled: hasSSO, retry: false });
   const providerName = (id: string | null) => providers.data?.items.find((p) => p.id === id)?.name;
+  // The directories name the directory users' directory, read the same way (no prompt; left out when refused).
+  const hasDirectory = users.data?.items.some((u) => u.auth_source === 'ldap') ?? false;
+  const directories = useQuery({ queryKey: LDAP_DIRECTORIES_KEY, queryFn: listDirectories, enabled: hasDirectory, retry: false });
+  const directoryName = (id: string | null) => directories.data?.items.find((d) => d.id === id)?.name;
   const close = () => setDialog(null);
 
   return (
@@ -105,7 +110,7 @@ export function UsersPage() {
                   <span className={classes.userRole}>{t(`enum.role.${u.role}`)}</span>
                 </Table.Td>
                 <Table.Td>
-                  <SignInMethod user={u} provider={providerName(u.sso_provider_id)} />
+                  <SignInMethod user={u} provider={u.auth_source === 'ldap' ? directoryName(u.ldap_directory_id) : providerName(u.sso_provider_id)} />
                 </Table.Td>
                 <Table.Td>
                   <StatusBadge tone={u.disabled ? 'neutral' : 'success'}>{u.disabled ? t('users.status.disabled') : t('users.status.active')}</StatusBadge>
@@ -138,10 +143,26 @@ export function UsersPage() {
   );
 }
 
-// SignInMethod is the design's sign-in method badge: a local account (toned by whether the authenticator app is set up)
-// or single sign-on with its provider, whose second factor is the identity provider's.
+// SignInMethod is the design's sign-in method badge: a local account (toned by whether the authenticator app is set up),
+// single sign-on with its provider, whose second factor is the identity provider's, or a directory with its name, whose
+// second factor is Alice's authenticator (provider is then the directory's name).
 function SignInMethod({ user, provider }: { user: User; provider: string | undefined }) {
   const { t } = useTranslation();
+  if (user.auth_source === 'ldap') {
+    return (
+      <div className={classes.method}>
+        <StatusBadge tone={user.mfa_enrolled ? 'info' : 'warning'} icon="Server">
+          {t('users.directory')}
+        </StatusBadge>
+        {provider && (
+          <Text size="xs" translate="no">
+            {provider}
+          </Text>
+        )}
+        <p className={classes.secondary}>{user.mfa_enrolled ? t('users.page.mfaEnrolled') : t('users.page.mfaPending')}</p>
+      </div>
+    );
+  }
   if (user.auth_source === 'oidc') {
     return (
       <div className={classes.method}>
@@ -175,16 +196,17 @@ function ManageModal({ user, onChoose, onClose }: { user: User; onChoose: (d: Di
         <Button variant="default" onClick={() => onChoose({ kind: 'edit', user })}>
           {t('users.actions.edit')}
         </Button>
-        {/* An SSO user has no Alice password or authenticator (the server refuses with ALC-USR-0003 anyway). */}
+        {/* An SSO user has no Alice password or authenticator, a directory user has Alice's authenticator but no Alice
+            password (the server refuses with ALC-USR-0003 anyway). */}
         {user.auth_source !== 'oidc' && (
-          <>
-            <Button variant="default" onClick={() => onChoose({ kind: 'resetMfa', user })}>
-              {t('users.actions.resetMfa')}
-            </Button>
-            <Button variant="default" onClick={() => onChoose({ kind: 'resetPassword', user })}>
-              {t('users.actions.resetPassword')}
-            </Button>
-          </>
+          <Button variant="default" onClick={() => onChoose({ kind: 'resetMfa', user })}>
+            {t('users.actions.resetMfa')}
+          </Button>
+        )}
+        {user.auth_source === 'local' && (
+          <Button variant="default" onClick={() => onChoose({ kind: 'resetPassword', user })}>
+            {t('users.actions.resetPassword')}
+          </Button>
         )}
         <Button variant="default" onClick={() => onChoose({ kind: 'revoke', user })}>
           {t('users.actions.revokeSessions')}
@@ -283,11 +305,11 @@ function EditUserModal({ user, onClose }: { user: User; onClose: () => void }) {
   const [displayName, setDisplayName] = useState(user.display_name);
   const [email, setEmail] = useState(user.email);
   const [role, setRole] = useState<Role>(user.role);
-  const sso = user.auth_source === 'oidc';
+  // The role of an SSO or directory user comes from their groups: it is neither offered nor sent.
+  const sso = user.auth_source !== 'local';
   const { perform, error, busy } = useUserAction(onClose);
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    // The role of an SSO user comes from their groups: it is neither offered nor sent.
     void perform(() => updateUser(user.id, sso ? { display_name: displayName, email } : { display_name: displayName, email, role }));
   };
   return (

@@ -1,12 +1,13 @@
-import { Alert, Button, PasswordInput, Stack, TextInput, Title } from '@mantine/core';
+import { Alert, Button, NativeSelect, PasswordInput, Stack, TextInput, Title } from '@mantine/core';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { isApiError } from '../api/client';
-import { enrollMfa, login, verifyMfa } from '../api/endpoints';
+import { enrollMfa, getSession, login, verifyMfa } from '../api/endpoints';
+import { directoryLogin, directorySignInReason, listPublicDirectories, type PublicDirectory } from '../api/ldap';
 import { listPublicProviders, ssoErrorReason, startSSO } from '../api/sso';
-import { PUBLIC_PROVIDERS_KEY } from '../api/queryKeys';
+import { PUBLIC_DIRECTORIES_KEY, PUBLIC_PROVIDERS_KEY } from '../api/queryKeys';
 import { goTo } from '../navigation';
 import { SSOErrorAlert } from '../components/SSOErrorAlert';
 import type { MfaEnrollment, SessionInfo, SessionWithCodes } from '../api/types';
@@ -23,24 +24,49 @@ import { Icon } from '../design/Icon';
 
 type Phase = 'password' | 'mfa' | 'enroll' | 'codes';
 
-function PasswordForm({ onDone, onError }: { onDone: (p: Phase, e?: MfaEnrollment) => void; onError: (e: unknown) => void }) {
+// LOCAL is the "Sign in to" value of Alice's own accounts; every other value is a directory's ID.
+const LOCAL = 'local';
+
+// PasswordForm is the user name and password form, for a local account or, when chosen under "Sign in to", a directory.
+// Both answers lead into the same phases (the code, the enrolment); a directory that asks for no code signs in at once
+// (onSession). A refused directory sign-in is shown as one generic text (onReason), never the server's variation.
+function PasswordForm({
+  directories,
+  onDone,
+  onSession,
+  onError,
+  onReason,
+}: {
+  directories: PublicDirectory[];
+  onDone: (p: Phase, e?: MfaEnrollment) => void;
+  onSession: (s: SessionInfo) => void;
+  onError: (e: unknown) => void;
+  onReason: (r: string | null) => void;
+}) {
   const { t } = useTranslation();
+  const [target, setTarget] = useState(LOCAL);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
+  // A directory that is no longer offered falls back to Local.
+  const directory = directories.find((d) => d.id === target) ?? null;
 
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
     setBusy(true);
     onError(null);
+    onReason(null);
     const secret = password;
     setPassword(''); // the password is not kept in the page once it is sent
     try {
-      const res = await login(username.trim(), secret);
-      if (res.status === 'mfa_required') onDone('mfa');
+      const res = directory ? await directoryLogin(directory.id, username.trim(), secret) : await login(username.trim(), secret);
+      if (res.status === 'signed_in') onSession(await getSession());
+      else if (res.status === 'mfa_required') onDone('mfa');
       else onDone('enroll', await enrollMfa());
     } catch (e) {
-      onError(e);
+      const reason = directory && isApiError(e) ? directorySignInReason(e.status) : null;
+      if (reason) onReason(reason);
+      else onError(e);
       setBusy(false);
     }
   };
@@ -48,6 +74,14 @@ function PasswordForm({ onDone, onError }: { onDone: (p: Phase, e?: MfaEnrollmen
   return (
     <form onSubmit={submit}>
       <Stack>
+        {directories.length > 0 && (
+          <NativeSelect
+            label={t('login.signInTo')}
+            value={directory ? directory.id : LOCAL}
+            onChange={(e) => setTarget(e.currentTarget.value)}
+            data={[{ value: LOCAL, label: t('login.local') }, ...directories.map((d) => ({ value: d.id, label: d.name }))]}
+          />
+        )}
         <TextInput
           label={t('login.username')}
           value={username}
@@ -180,6 +214,9 @@ export function LoginPage() {
   const [enrollment, setEnrollment] = useState<MfaEnrollment | null>(null);
   const [withCodes, setWithCodes] = useState<SessionWithCodes | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [dirReason, setDirReason] = useState<string | null>(null);
+  // The switched-on directories offered under "Sign in to". The list failing only hides the choice (Local stays).
+  const directories = useQuery({ queryKey: PUBLIC_DIRECTORIES_KEY, queryFn: listPublicDirectories, enabled: phase === 'password' });
 
   // The enrollment and recovery-code phases replace the form the person was in: focus moves to the new phase's title
   // (the code phase focuses its own field).
@@ -246,9 +283,13 @@ export function LoginPage() {
           <Alert color="yellow">{t('login.sessionEnded')}</Alert>
         )}
         {phase === 'password' && ssoReason && <SSOErrorAlert reason={ssoReason} />}
+        {phase === 'password' && dirReason && <SSOErrorAlert reason={dirReason} testId="directory-error" />}
         {phase !== 'enroll' && <ErrorAlert error={error} />}
         {phase === 'password' && (
           <PasswordForm
+            directories={directories.data?.items ?? []}
+            onSession={finish}
+            onReason={setDirReason}
             onError={setError}
             onDone={(next, e) => {
               setEnrollment(e ?? null);

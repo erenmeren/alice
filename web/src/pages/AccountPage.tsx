@@ -1,7 +1,10 @@
 import { Alert, Button, PasswordInput, Stack, Text, Title } from '@mantine/core';
+import { useQuery } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { changePassword, regenerateRecoveryCodes } from '../api/endpoints';
+import { listPublicDirectories } from '../api/ldap';
+import { PUBLIC_DIRECTORIES_KEY } from '../api/queryKeys';
 import { useAuth } from '../auth/AuthProvider';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { RecoveryCodes } from '../components/RecoveryCodes';
@@ -133,10 +136,17 @@ function NewRecoveryCodes() {
 export function AccountPage() {
   const { t, i18n } = useTranslation();
   const { session } = useAuth();
+  // The directory's name comes from the public list of the sign-in page (switched-on directories only); without it the
+  // fact says "Directory".
+  const isDirectory = session?.user.auth_source === 'ldap';
+  const directories = useQuery({ queryKey: PUBLIC_DIRECTORIES_KEY, queryFn: listPublicDirectories, enabled: isDirectory, retry: false });
+  const directoryName = directories.data?.items.find((d) => d.id === session?.user.ldap_directory_id)?.name;
   if (!session) return null;
   const user = session.user;
   // A single sign-on account has no Alice password or authenticator: the server refuses both changes (ALC-USR-0003).
   const sso = user.auth_source === 'oidc';
+  // A directory account has no Alice password (the directory owns it) but keeps Alice's authenticator and recovery codes.
+  const directory = user.auth_source === 'ldap';
   const role = t(`enum.role.${user.role}`, { ns: 'common' });
   let mfa;
   if (sso) {
@@ -158,6 +168,10 @@ export function AccountPage() {
       </StatusBadge>
     );
   }
+  let signInValue: string;
+  if (sso) signInValue = t('account.page.sso');
+  else if (directory) signInValue = directoryName ? t('account.page.directoryNamed', { name: directoryName }) : t('account.page.directory');
+  else signInValue = user.mfa_enrolled ? t('account.page.local') : t('users.page.local');
   return (
     <Stack gap={0}>
       <PageHeader title={t('account.title')} description={t('account.page.description')} />
@@ -181,15 +195,24 @@ export function AccountPage() {
           {/* The Sign-in fact names the authenticator app only when it is set up, as the MFA badge beside it says. */}
           <FactList
             facts={[
-              { key: 'signIn', label: t('account.page.signIn'), value: sso ? t('account.page.sso') : user.mfa_enrolled ? t('account.page.local') : t('users.page.local') },
+              { key: 'signIn', label: t('account.page.signIn'), value: signInValue },
               { key: 'mfa', label: t('account.page.mfa'), value: mfa },
             ]}
           />
-          {sso ? (
+          {sso && (
             <div className={classes.section}>
               <p className={classes.help}>{t('account.page.ssoNote')}</p>
             </div>
-          ) : (
+          )}
+          {directory && (
+            <>
+              <div className={classes.section}>
+                <p className={classes.help}>{t('account.page.directoryNote')}</p>
+              </div>
+              <NewRecoveryCodes />
+            </>
+          )}
+          {!sso && !directory && (
             <>
               <NewRecoveryCodes />
               <ChangePassword />

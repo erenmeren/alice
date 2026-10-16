@@ -21,9 +21,10 @@ export function TokensPage() {
   const [revoking, setRevoking] = useState<ApiToken | null>(null);
   // The new token's secret lives only in this component's state: shown once, never in a URL, the query cache or storage.
   const [created, setCreated] = useState<string | null>(null);
-  // A single sign-on user gets no API token (the server answers ALC-USR-0003): no create control, a note instead.
+  // A single sign-on or directory user gets no API token (the server answers ALC-USR-0003): no create control, a note instead.
   const { session } = useAuth();
-  const sso = session?.user.auth_source === 'oidc';
+  const source = session?.user.auth_source;
+  const sso = source === 'oidc' || source === 'ldap';
 
   return (
     <Stack gap="md">
@@ -42,8 +43,8 @@ export function TokensPage() {
         {t('tokens.page.boundText')}
       </Notice>
       {sso && (
-        <Notice tone="info" title={t('users.sso')} testId="tokens-sso-note">
-          {t('tokens.ssoNoCreate')}
+        <Notice tone="info" title={source === 'ldap' ? t('users.directory') : t('users.sso')} testId="tokens-sso-note">
+          {source === 'ldap' ? t('tokens.directoryNoCreate') : t('tokens.ssoNoCreate')}
         </Notice>
       )}
       {created && (

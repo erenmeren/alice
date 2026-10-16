@@ -6,7 +6,7 @@ import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router';
 import { apiFetch, ApiError, getCsrfToken, isApiError } from '../api/client';
 import { AuthProvider } from '../auth/AuthProvider';
 import * as navigation from '../navigation';
-import { errorResponse, sessionFor, sessionHandlers, ssoSessionFor } from '../test/fixtures';
+import { errorResponse, ldapSessionFor, sessionFor, sessionHandlers, ssoSessionFor } from '../test/fixtures';
 import { renderApp } from '../test/render';
 import { server } from '../test/server';
 import { StepUpProvider, useStepUp } from './StepUpProvider';
@@ -336,5 +336,82 @@ describe('StepUpProvider', () => {
     const go = await within(dialog).findByRole('button', { name: 'Continue to Corp IdP' });
     await waitFor(() => expect(go).toHaveFocus());
     expect(go.parentElement).toHaveClass(ui.dialogActions);
+  });
+});
+
+describe('StepUpProvider for a directory user', () => {
+  const PW = 'canary-directory-pw-4K';
+
+  it('asks for the directory password and the code, never a sign-in name, and repeats the call', async () => {
+    let attempts = 0;
+    let body: unknown;
+    server.use(
+      ...sessionHandlers(ldapSessionFor('admin')),
+      http.post('/api/v1/sensitive', () => (++attempts === 1 ? errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required') : HttpResponse.json({}))),
+      http.post('/api/v1/auth/ldap/stepup', async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json({ ...ldapSessionFor('admin'), stepup_until: '2099-01-01T00:00:00Z' });
+      }),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: "Confirm it's you" });
+    expect(within(dialog).getByText('Enter your directory password again.')).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText(/sign-in name/i)).not.toBeInTheDocument();
+    expect(within(dialog).getAllByRole('textbox')).toHaveLength(1); // the code; the password is not a textbox
+    expect(within(dialog).getByLabelText('6-digit code')).toHaveAccessibleDescription('Needed when your directory asks for an authenticator code.');
+    await userEvent.type(within(dialog).getByLabelText(/^Directory password/), PW);
+    await userEvent.type(within(dialog).getByLabelText('6-digit code'), '123456');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('done'));
+    expect(body).toEqual({ password: PW, code: '123456' });
+    expect(attempts).toBe(2);
+    expect(document.body.innerHTML).not.toContain(PW);
+  });
+
+  it('sends the password alone when the user has no authenticator, and clears it after a refusal', async () => {
+    const bodies: unknown[] = [];
+    server.use(
+      ...sessionHandlers(ldapSessionFor('admin', 'en', false)),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+      http.post('/api/v1/auth/ldap/stepup', async ({ request }) => {
+        bodies.push(await request.json());
+        return errorResponse(401, 'ALC-LDAP-0001', 'ldap.signin_refused');
+      }),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: "Confirm it's you" });
+    expect(within(dialog).queryByLabelText('6-digit code')).not.toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/^Directory password/), PW);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(await within(dialog).findByText('The user name or password is wrong, or you have no access.')).toBeInTheDocument();
+    expect(bodies).toEqual([{ password: PW }]);
+    expect(within(dialog).getByLabelText(/^Directory password/)).toHaveValue('');
+    expect(document.body.innerHTML).not.toContain(PW);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.getByTestId('result')).toHaveTextContent('failed: auth.stepup_required'));
+  });
+
+  it('tells the person to sign out and in again when the directory asks for an authenticator they do not have (ALC-LDAP-0007)', async () => {
+    let loggedOut = false;
+    server.use(
+      ...sessionHandlers(ldapSessionFor('admin', 'en', false)),
+      http.post('/api/v1/sensitive', () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required')),
+      http.post('/api/v1/auth/ldap/stepup', () => errorResponse(409, 'ALC-LDAP-0007', 'ldap.enrolment_required')),
+      http.post('/api/v1/auth/logout', () => {
+        loggedOut = true;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await renderHarness();
+    await userEvent.click(await screen.findByRole('button', { name: 'Do it' }));
+    const dialog = await screen.findByRole('dialog', { name: "Confirm it's you" });
+    await userEvent.type(within(dialog).getByLabelText(/^Directory password/), PW);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Confirm' }));
+    expect(await within(dialog).findByText('Set up your authenticator first.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Sign out and sign in again: Alice then sets up your authenticator.')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(loggedOut).toBe(true));
   });
 });

@@ -1,4 +1,4 @@
-import { Button, Stack, Text, TextInput } from '@mantine/core';
+import { Button, PasswordInput, Stack, Text, TextInput } from '@mantine/core';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -6,6 +6,7 @@ import { isApiError, onUnauthorized } from '../api/client';
 import { stepUp } from '../api/endpoints';
 import { PUBLIC_PROVIDERS_KEY } from '../api/queryKeys';
 import { listPublicProviders, startSSOStepUp } from '../api/sso';
+import { directoryStepUp } from '../api/ldap';
 import { goTo } from '../navigation';
 import { useAuth } from '../auth/AuthProvider';
 import { Icon } from '../design/Icon';
@@ -53,12 +54,18 @@ interface Pending {
 // with the session (AUD-25 d): when the session ends (expired or revoked elsewhere), the dialog
 // closes and the waiting call gives up with its original error. The typed code is cleared whenever
 // the dialog closes, and with the provider when it unmounts.
+// A directory user confirms with the directory password (the server repeats the directory sign-in with the name it stored)
+// and, when the user has an authenticator, its code (the directory decides whether it is needed). The password is cleared
+// as soon as the request is built and whenever the dialog closes.
 export function StepUpProvider({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
-  const { session, setSession } = useAuth();
+  const { session, setSession, signOut } = useAuth();
   const sso = session?.user.auth_source === 'oidc';
+  const directory = session?.user.auth_source === 'ldap';
+  const askCode = !directory || (session?.user.mfa_enrolled ?? false);
   const [opened, setOpened] = useState(false);
   const [code, setCode] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const pending = useRef<Pending | null>(null);
@@ -80,6 +87,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
       });
       pending.current = { promise, resolve, reject, original };
       setCode('');
+      setPassword('');
       setError(null);
       resetSsoStart();
       setOpened(true);
@@ -111,6 +119,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
   const giveUp = useCallback(() => {
     setOpened(false);
     setCode('');
+    setPassword('');
     setError(null);
     pending.current?.reject(pending.current.original);
     pending.current = null;
@@ -131,8 +140,11 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
     ev.preventDefault();
     setBusy(true);
     setError(null);
+    const secret = password;
+    setPassword('');
     try {
-      setSession(await stepUp(code.trim()));
+      const c = code.trim();
+      setSession(await (directory ? directoryStepUp(c ? { password: secret, code: c } : { password: secret }) : stepUp(c)));
       setOpened(false);
       setCode('');
       pending.current?.resolve();
@@ -176,18 +188,35 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
             <Stack>
               <Text size="sm">{t('ui.stepUp.subtitle')}</Text>
               <Text size="sm" c="dimmed">
-                {t('ui.stepUp.help')}
+                {directory ? t('stepUp.directoryHelp') : t('ui.stepUp.help')}
               </Text>
               <ErrorAlert error={error} />
-              <TextInput
-                label={t('ui.codeLabel')}
-                value={code}
-                onChange={(e) => setCode(e.currentTarget.value)}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                data-autofocus
-              />
+              {directory && isApiError(error, 'ldap.enrolment_required') && (
+                <Button variant="default" leftSection={<Icon name="LogOut" size={15} />} onClick={() => void signOut()} w="fit-content">
+                  {t('stepUp.signOut')}
+                </Button>
+              )}
+              {directory && (
+                <PasswordInput
+                  label={t('stepUp.directoryPassword')}
+                  value={password}
+                  onChange={(e) => setPassword(e.currentTarget.value)}
+                  autoComplete="current-password"
+                  data-autofocus
+                />
+              )}
+              {askCode && (
+                <TextInput
+                  label={t('ui.codeLabel')}
+                  description={directory ? t('stepUp.directoryCodeHelp') : undefined}
+                  value={code}
+                  onChange={(e) => setCode(e.currentTarget.value)}
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  data-autofocus={!directory || undefined}
+                />
+              )}
             </Stack>
             <DialogActions>
               <Button variant="default" onClick={cancel}>

@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { errorResponse, sessionFor, sessionHandlers, ssoSessionFor } from '../test/fixtures';
+import { errorResponse, ldapSessionFor, sessionFor, sessionHandlers, ssoSessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -79,6 +79,20 @@ describe('account page', () => {
     expect(screen.queryByRole('button', { name: 'Change password' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Create new recovery codes' })).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: 'A workspace that feels right' })).toBeInTheDocument();
+  });
+
+  it('shows a directory account: the directory manages the password, Alice\'s authenticator controls stay', async () => {
+    server.use(
+      ...sessionHandlers(ldapSessionFor('operator')),
+      http.get('/api/v1/auth/ldap/directories', () => HttpResponse.json({ items: [{ id: '0192f100-0000-7000-8000-0000000000d1', name: 'Corp AD' }] })),
+    );
+    await renderRoute('/account');
+    expect(await screen.findByTestId('account-summary')).toHaveTextContent('Signed in as deniz (Operator)');
+    expect(await screen.findByText('Directory: Corp AD')).toBeInTheDocument();
+    expect(screen.getByText(/Your directory manages your password/)).toBeInTheDocument();
+    expect(screen.getByText('Enabled').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
+    expect(screen.queryByLabelText('Current password')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Create new recovery codes' })).toBeInTheDocument();
   });
 
   it('changes the password and keeps the user signed in with the new session', async () => {

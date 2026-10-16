@@ -401,3 +401,148 @@ describe('sign-in buttons on phones', () => {
     }
   });
 });
+
+describe('directory sign-in', () => {
+  const DIR = '0192f100-0000-7000-8000-0000000000d1';
+  const directories = (items = [{ id: DIR, name: 'Corp AD' }]) => http.get('/api/v1/auth/ldap/directories', () => HttpResponse.json({ items }));
+
+  // dirHandlers answers the directory sign-in with status and makes GET /auth/session answer once a session exists.
+  function dirHandlers(status: 'mfa_required' | 'mfa_enrollment_required' | 'signed_in', onLogin: (body: unknown) => void = () => {}) {
+    let session: SessionInfo | null = null;
+    const signedIn = { ...sessionFor('operator'), user: { ...sessionFor('operator').user, username: 'deniz', auth_source: 'ldap' as const, ldap_directory_id: DIR } };
+    return [
+      directories(),
+      http.get('/api/v1/setup/status', () => HttpResponse.json(installedStatus)),
+      http.get('/api/v1/auth/session', () => (session ? HttpResponse.json(session) : errorResponse(401, 'ALC-AUTH-0001', 'auth.unauthenticated'))),
+      http.post(`/api/v1/auth/ldap/${DIR}/login`, async ({ request }) => {
+        onLogin(await request.json());
+        if (status === 'signed_in') session = signedIn;
+        return HttpResponse.json({ status, csrf_token: 'dir-csrf' });
+      }),
+      http.post('/api/v1/auth/mfa/enroll', () => HttpResponse.json(enrollment)),
+      http.post('/api/v1/auth/mfa/verify', () => {
+        session = signedIn;
+        return HttpResponse.json({ ...signedIn, recovery_codes: [] });
+      }),
+    ];
+  }
+
+  async function chooseDirectory(name = 'Corp AD') {
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'Sign in to' }), name);
+  }
+
+  it('offers no "Sign in to" choice while no directory is switched on', async () => {
+    server.use(...sessionHandlers(null));
+    await renderRoute('/login');
+    expect(await screen.findByLabelText('Username')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Sign in to' })).not.toBeInTheDocument();
+  });
+
+  it('offers Local first (chosen) and each switched-on directory by name', async () => {
+    server.use(...sessionHandlers(null), directories([{ id: DIR, name: 'Corp AD' }, { id: 'd2', name: 'Lab LDAP' }]));
+    await renderRoute('/login');
+    const select = await screen.findByRole('combobox', { name: 'Sign in to' });
+    expect(select).toHaveValue('local');
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Local account', 'Corp AD', 'Lab LDAP']);
+  });
+
+  it('keeps the local form on /auth/login while Local is chosen', async () => {
+    let local = 0;
+    server.use(
+      ...sessionHandlers(null),
+      directories(),
+      http.post('/api/v1/auth/login', () => {
+        local++;
+        return errorResponse(401, 'ALC-AUTH-0005', 'auth.invalid_credentials');
+      }),
+    );
+    await renderRoute('/login');
+    await screen.findByRole('combobox', { name: 'Sign in to' });
+    await signIn('ada', 'wrong password!');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Incorrect username or password.');
+    expect(local).toBe(1);
+  });
+
+  it('posts to the chosen directory and goes through the code step', async () => {
+    let body: unknown;
+    server.use(...dirHandlers('mfa_required', (b) => (body = b)));
+    const { router } = await renderRoute('/login');
+    await chooseDirectory();
+    await signIn('deniz', 'directory secret 1');
+    expect(await screen.findByRole('heading', { name: 'Enter your verification code' })).toBeInTheDocument();
+    expect(body).toEqual({ username: 'deniz', password: 'directory secret 1' });
+    expect(document.body.innerHTML).not.toContain('directory secret 1');
+    await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+  });
+
+  it('sets up the authenticator on a first directory sign-in', async () => {
+    server.use(...dirHandlers('mfa_enrollment_required'));
+    const { router } = await renderRoute('/login');
+    await chooseDirectory();
+    await signIn('deniz', 'directory secret 1');
+    expect(await screen.findByRole('heading', { name: 'Set up your authenticator app' })).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('6-digit code'), '123456');
+    await userEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+  });
+
+  it('goes straight into the app when the directory does not ask for a code (signed_in)', async () => {
+    server.use(...dirHandlers('signed_in'));
+    const { router } = await renderRoute('/login');
+    await chooseDirectory();
+    await signIn('deniz', 'directory secret 1');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/'));
+    expect(await screen.findByTestId('current-user')).toHaveTextContent(/^Olcay Öztürk$/);
+  });
+
+  it('shows one generic text for every refused directory sign-in, whatever the 401 says', async () => {
+    const answers = [
+      errorResponse(401, 'ALC-LDAP-0001', 'ldap.signin_refused'),
+      errorResponse(401, 'ALC-AUTH-0005', 'auth.invalid_credentials'),
+      HttpResponse.json({ error: { code: 'X', reason: 'ldap.no_access', message_key: 'errors.ldap.no_access', message: 'no group', request_id: 'r9', retryable: false } }, { status: 401 }),
+    ];
+    let i = 0;
+    server.use(...sessionHandlers(null), directories(), http.post(`/api/v1/auth/ldap/${DIR}/login`, () => answers[i++]));
+    await renderRoute('/login');
+    await chooseDirectory();
+    const texts: string[] = [];
+    for (let n = 0; n < answers.length; n++) {
+      await signIn('deniz', 'wrong');
+      const alert = await screen.findByRole('alert');
+      texts.push(alert.textContent ?? '');
+      await userEvent.clear(screen.getByLabelText('Username'));
+    }
+    expect(texts[0]).toContain('The user name or password is wrong, or you have no access.');
+    expect(texts[0]).toContain('Check the user name and password and try again.');
+    expect(new Set(texts).size).toBe(1);
+    expect(texts[0]).not.toMatch(/req-1|r9|ALC-/);
+  });
+
+  it('says when the directory cannot be used (503) and shows the rate limit as it is (429)', async () => {
+    let i = 0;
+    server.use(
+      ...sessionHandlers(null),
+      directories(),
+      http.post(`/api/v1/auth/ldap/${DIR}/login`, () =>
+        i++ === 0 ? errorResponse(503, 'ALC-LDAP-0002', 'ldap.directory_unavailable', { retryable: true }) : errorResponse(429, 'ALC-SYS-0005', 'rate.limited'),
+      ),
+    );
+    await renderRoute('/login');
+    await chooseDirectory();
+    await signIn('deniz', 'pw');
+    expect(await screen.findByRole('alert')).toHaveTextContent('The directory cannot be used for sign-in right now.');
+    await userEvent.clear(screen.getByLabelText('Username'));
+    await signIn('deniz', 'pw');
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Too many requests in a short time.'));
+  });
+
+  it('is translated in Turkish', async () => {
+    server.use(...sessionHandlers(null), directories());
+    await renderRoute('/login', { languages: ['tr-TR'] });
+    const select = await screen.findByRole('combobox', { name: 'Oturum açılacak yer' });
+    expect(within(select).getByRole('option', { name: 'Yerel hesap' })).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+});

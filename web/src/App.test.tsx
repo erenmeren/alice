@@ -181,8 +181,11 @@ describe('application shell', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Sign out' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
     expect(client.getQueryData(['version'])).toBeUndefined();
-    // Only the public provider list of the sign-in page the person landed on is cached now.
-    expect(client.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([['auth', 'oidc', 'providers']]);
+    // Only the public provider and directory lists of the sign-in page the person landed on are cached now.
+    expect(client.getQueryCache().getAll().map((q) => q.queryKey)).toEqual([
+      ['auth', 'oidc', 'providers'],
+      ['auth', 'ldap', 'directories'],
+    ]);
   });
 
   it('drops cached data when the session ends', async () => {

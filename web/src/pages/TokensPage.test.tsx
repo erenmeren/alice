@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ApiToken, SessionInfo } from '../api/types';
-import { errorResponse, operatorSession, sessionFor, ssoSessionFor } from '../test/fixtures';
+import { errorResponse, ldapSessionFor, operatorSession, sessionFor, ssoSessionFor } from '../test/fixtures';
 import { renderRoute } from '../test/render';
 import { server } from '../test/server';
 
@@ -140,6 +140,16 @@ describe('TokensPage', () => {
     expect(screen.getByTestId('tokens-sso-note')).toHaveAttribute('role', 'note');
     expect(await screen.findByRole('button', { name: 'Revoke token backup script' })).toBeInTheDocument();
     expect(posted).toBe(false);
+  });
+
+  it('offers no token creation to a directory user, with the same kind of note', async () => {
+    signedInAs(ldapSessionFor('operator'), []);
+    await renderRoute('/tokens');
+    expect(
+      await screen.findByText('You sign in through a directory, so you cannot create API tokens. Ask an Administrator if a script needs one.'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('tokens-sso-note')).toHaveAttribute('role', 'note');
+    expect(screen.queryByRole('button', { name: 'Create token' })).not.toBeInTheDocument();
   });
 
   it('tells a single sign-on user in Turkish that tokens are not available', async () => {
