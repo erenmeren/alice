@@ -145,9 +145,9 @@ shows the latest run recorded during Phase 8 development, for context only; it i
 | Lockfile shape check | `make lockcheck` | clean (da728cb) | 2026-10-12 | 2026-10-11, Task 14: clean |
 | ShellCheck (every tracked script) | `make shellcheck` | clean (da728cb) | 2026-10-12 | 2026-10-11, Task 14: clean |
 | ZAP baseline, unauthenticated | `make zap-baseline` | 0 / 0 / 0 / 1 (Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
-| ZAP baseline and API scan as Administrator | `make zap-baseline` | 0 / 0 / 0 / 2 baseline (90004 COEP missing, Private IP Disclosure); API scan 0 / 0 / 0 / 3 (also 100001 Unexpected Content-Type) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
-| ZAP baseline and API scan as Operator | `make zap-baseline` | 0 / 0 / 0 / 2 (90004, Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
-| ZAP baseline and API scan as Auditor | `make zap-baseline` | 0 / 0 / 0 / 2 (90004, Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium |
+| ZAP baseline and API scan as Administrator | `make zap-baseline` | 0 / 0 / 0 / 2 baseline (90004 COEP missing, Private IP Disclosure); API scan 0 / 0 / 0 / 3 (also 100001 Unexpected Content-Type) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium; 10062 PII Disclosure on `GET /api/v1/audit` ignored by policy: Luhn-valid digit runs inside SHA-256 hex `hash`/`prev_hash` fields; see `.zap/rules.tsv` |
+| ZAP baseline and API scan as Operator | `make zap-baseline` | 0 / 0 / 0 / 2 (90004, Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium; 10062 PII Disclosure on `GET /api/v1/audit` ignored by policy: Luhn-valid digit runs inside SHA-256 hex `hash`/`prev_hash` fields; see `.zap/rules.tsv` |
+| ZAP baseline and API scan as Auditor | `make zap-baseline` | 0 / 0 / 0 / 2 (90004, Private IP Disclosure) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: 0 High, 0 Medium; 10062 PII Disclosure on `GET /api/v1/audit` ignored by policy: Luhn-valid digit runs inside SHA-256 hex `hash`/`prev_hash` fields; see `.zap/rules.tsv` |
 | ZAP full active scan | `make zap-full` | NOT RUN (owner) | | |
 | testssl.sh grade, release image (test-CA certificate) | `make testssl` | A+ (score 96) (da728cb) | 2026-10-12 | 2026-10-11, Task 15: A+ (score 96) |
 | testssl.sh grade, release candidate on a real host | `make testssl TESTSSL_TARGET=… TESTSSL_CA=…` | NOT RUN (owner) | | |

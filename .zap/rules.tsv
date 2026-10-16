@@ -4,3 +4,4 @@
 # fails at any level. Every line needs a written reason and an expiry at most 180 days ahead;
 # an expired line fails the check. Informational and Low alerts are listed in the summary and
 # reviewed at each release (docs/release-checklist.md).
+10062	IGNORE	PII Disclosure fires on Luhn-valid digit runs inside the 64-hex audit hash and prev_hash fields of GET /api/v1/audit (nightly 2026-10-15, evidence 5806971502941005); the audit log carries no personal numbers	2027-04-10
