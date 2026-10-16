@@ -1542,3 +1542,5 @@ Migration `00014` (the network discovery tables) was edited while the feature wa
 get the change.** Migrate it down to version 13 and up again (the migrations are goose files: `goose down`, then `goose up`) or run `make reset` to start over, or
 discovery alerts fail with a constraint error. Databases of released installations are not affected: the migration
 was not part of a release before.
+
+From the commit that added `migrations/frozen_test.go` on, migrations `00001` to `00015` are frozen by a checksum test; every later change to the schema is a new numbered migration.
