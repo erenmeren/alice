@@ -488,11 +488,17 @@ func TestStepUpLDAPWithTOTP(t *testing.T) {
 	_, err = e.svc.StepUpLDAP(e.ctx, pr, id, rbac.Operator, "111111", true, meta)
 	assert.ErrorIs(t, err, auth.ErrMFAInvalid)
 	assert.Equal(t, 1, e.countAction(t, "auth.lockout", "failure"))
-	_, err = e.svc.StepUpLDAP(e.ctx, pr, id, rbac.Operator, code(t, enr.Secret, e.clk.Now()), true, meta)
-	assert.ErrorIs(t, err, auth.ErrMFAInvalid)
-	assert.Equal(t, 1, e.reasons(t, "auth.stepup")["locked"])
+	// Fix wave M1: a locked user is refused in both MFA modes (ErrLDAPUserLocked; the API records it), without
+	// checking or counting the code.
+	failures := e.failedLogins(t, "ada")
+	for _, mfa := range []bool{true, false} {
+		_, err = e.svc.StepUpLDAP(e.ctx, pr, id, rbac.Operator, code(t, enr.Secret, e.clk.Now()), mfa, meta)
+		assert.ErrorIs(t, err, auth.ErrLDAPUserLocked, "mfa %v", mfa)
+	}
+	assert.Equal(t, failures, e.failedLogins(t, "ada"), "nothing counted")
 
-	// The directory's MFA off: the bind alone; the lockout is the TOTP's and does not apply.
+	// Once the lock is over, the directory's MFA off: the bind alone.
+	e.clk.Advance(auth.LockDuration)
 	up, err = e.svc.StepUpLDAP(e.ctx, pr, id, rbac.Operator, "", false, meta)
 	require.NoError(t, err)
 	assert.True(t, e.principal(t, up.Token).Subject(e.clk.Now()).StepUp)

@@ -317,6 +317,11 @@ func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, 
 			if !live {
 				return ErrUnauthenticated
 			}
+			if a.blocked(now) {
+				// A delay or lockout after failed TOTP codes refuses the step-up in both MFA modes, as SignInLDAP
+				// refuses the sign-in: switching the directory's MFA off is no way around it. The caller records it.
+				return ErrLDAPUserLocked
+			}
 			if mfaRequired {
 				row, found, err := loadMFA(ctx, tx, p.UserID)
 				if err != nil {
@@ -325,10 +330,6 @@ func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, 
 				if !found || !row.enrolled {
 					// No TOTP to check: not a guess, so nothing is counted; the person signs in again to enrol.
 					return ErrLDAPEnrolmentRequired
-				}
-				if a.blocked(now) {
-					failed = true
-					return s.auditFailure(ctx, tx, actor, "auth.stepup", p.UserID.String(), "locked")
 				}
 				ok, err := s.checkTOTP(ctx, tx, p.UserID, row, mfaCode, false)
 				if err != nil {
