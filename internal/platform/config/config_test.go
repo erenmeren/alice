@@ -469,3 +469,19 @@ func TestBackupDirDefault(t *testing.T) {
 	assert.Equal(t, "/srv/backups", c.BackupDir)
 	assert.Contains(t, c.String(), "/srv/backups")
 }
+
+func TestMigrateTimeout(t *testing.T) {
+	c, err := config.Load(env(nil))
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Minute, c.MigrateTimeout, "the default leaves room for a large database")
+
+	c, err = config.Load(env(map[string]string{"ALICE_MIGRATE_TIMEOUT": "2h"}))
+	require.NoError(t, err)
+	assert.Equal(t, 2*time.Hour, c.MigrateTimeout)
+
+	for _, v := range []string{"30s", "25h", "soon"} {
+		_, err = config.Load(env(map[string]string{"ALICE_MIGRATE_TIMEOUT": v}))
+		require.Error(t, err, v)
+		assert.Contains(t, err.Error(), "ALICE_MIGRATE_TIMEOUT")
+	}
+}

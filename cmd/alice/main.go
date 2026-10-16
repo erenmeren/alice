@@ -176,7 +176,7 @@ func migrate(cfg config.Config) error {
 			return err
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), cfg.MigrateTimeout)
 	defer cancel()
 	return migrateWith(ctx, cfg.MigrationURL(), time.Minute)
 }

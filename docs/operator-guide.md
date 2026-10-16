@@ -20,7 +20,7 @@ targets.
 | `alice admin unlock <username>` | Ends the person's sign-in delay or 15-minute block and sets their failed sign-in count back to zero; nothing else changes. Use it when the only administrator is blocked after too many wrong attempts. Recorded in the audit log as `user.unlocked`, done by `cli`. Development: `make unlock ACCOUNT=<username>`. |
 | `alice license status` | Prints the Installation ID, the license state (`evaluation`, `evaluation_expired`, `active`, `grace`, `locked`) and the license in force or the end of the evaluation, and warns when the server clock is behind. Changes nothing. |
 | `alice license keys` | Lists the vendor license keys built into this binary with their status and SHA-256 fingerprints; compare them with the fingerprint your vendor publishes. A build without the vendor key says so and accepts no license (evaluation only). |
-| `alice migrate` | Applies database migrations and exits. `alice serve` also applies them at startup. |
+| `alice migrate` | Applies database migrations and exits. The whole run must finish within `ALICE_MIGRATE_TIMEOUT` (default 30m). `alice serve` also applies them at startup. |
 | `make helper` (development checkout) | Builds the static `alice-helper` for Linux amd64 and arm64 into `bin/` with `bin/alice-helper.sha256`. See [nginx-host-preparation.md](nginx-host-preparation.md). |
 
 `alice audit verify` does not need the master key, so it works even when Alice refuses to start because of a

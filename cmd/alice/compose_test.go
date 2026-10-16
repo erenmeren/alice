@@ -196,6 +196,7 @@ func TestComposePassesEveryConfigurationVariable(t *testing.T) {
 		"ALICE_KEYS_DIR":                       "the default /opt/alice/keys is the alice-keys volume",
 		"ALICE_LISTEN_ADDR":                    "the default :8443 is the published container port",
 		"ALICE_MIGRATE":                        "the default on-start is the development behaviour (the production compose sets external)",
+		"ALICE_MIGRATE_TIMEOUT":                "only alice migrate reads it; the development alice service migrates on start, which it does not bound",
 		"ALICE_DATABASE_PASSWORD_FILE":         "the development URLs carry their passwords from deploy/.env",
 		"ALICE_MIGRATE_DATABASE_PASSWORD_FILE": "the development URLs carry their passwords from deploy/.env",
 	}

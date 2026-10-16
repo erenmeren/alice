@@ -37,10 +37,12 @@ type Config struct {
 	DatabasePasswordFile string
 	MigratePasswordFile  string
 	// Migrate is MigrateOnStart or MigrateExternal.
-	Migrate    string
-	ListenAddr string
-	HealthAddr string
-	KeysDir    string
+	Migrate string
+	// MigrateTimeout bounds a whole migration run (ALICE_MIGRATE_TIMEOUT; 30 minutes by default).
+	MigrateTimeout time.Duration
+	ListenAddr     string
+	HealthAddr     string
+	KeysDir        string
 	// StateDir holds state that must survive restarts outside the database: the license
 	// time record (spec §16.5). It is a separate volume in the container.
 	StateDir string
@@ -86,6 +88,7 @@ func LoadWith(getenv func(string) string, readFile func(string) ([]byte, error))
 		DatabasePasswordFile: strings.TrimSpace(getenv("ALICE_DATABASE_PASSWORD_FILE")),
 		MigratePasswordFile:  strings.TrimSpace(getenv("ALICE_MIGRATE_DATABASE_PASSWORD_FILE")),
 		Migrate:              withDefault(getenv("ALICE_MIGRATE"), MigrateOnStart),
+		MigrateTimeout:       30 * time.Minute,
 		ListenAddr:           withDefault(getenv("ALICE_LISTEN_ADDR"), ":8443"),
 		HealthAddr:           withDefault(getenv("ALICE_HEALTH_ADDR"), "127.0.0.1:8081"),
 		KeysDir:              withDefault(getenv("ALICE_KEYS_DIR"), "/opt/alice/keys"),
@@ -104,6 +107,13 @@ func LoadWith(getenv func(string) string, readFile func(string) ([]byte, error))
 	}
 	if c.Migrate != MigrateOnStart && c.Migrate != MigrateExternal {
 		return Config{}, fmt.Errorf(`ALICE_MIGRATE must be "on-start" or "external" (got %q)`, c.Migrate)
+	}
+	if v := strings.TrimSpace(getenv("ALICE_MIGRATE_TIMEOUT")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d < time.Minute || d > 24*time.Hour {
+			return Config{}, fmt.Errorf("ALICE_MIGRATE_TIMEOUT must be a duration between 1m and 24h (got %q)", v)
+		}
+		c.MigrateTimeout = d
 	}
 	if c.TZ, err = loadZone(withDefault(getenv("ALICE_TZ"), "UTC")); err != nil {
 		return Config{}, err
