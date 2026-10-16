@@ -37,6 +37,7 @@ const (
 
 type fakeDirUser struct {
 	login, password, uid, name, email string
+	alias                             string // a second sign-in name of the same entry (a UPN beside the sAMAccountName)
 	groups                            []string
 }
 
@@ -49,7 +50,10 @@ type fakeDirectory struct {
 	down      bool          // every connection fails as unreachable
 	slow      time.Duration // each Authenticate moves the clock this much (a slow directory)
 	authCalls int           // Authenticate calls: traffic to the directory
+	userBinds int           // binds with a user's password to an entry the search found
 	binds     []string      // the service account passwords the client was handed
+	hold      chan struct{} // when set, Authenticate waits for it to close (or the request to end) before answering
+	panicNext bool          // the next Authenticate panics
 }
 
 var (
@@ -77,11 +81,17 @@ func (f *fakeDirectory) calls() int {
 	return f.authCalls
 }
 
+func (f *fakeDirectory) userBindCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.userBinds
+}
+
 // find matches the sign-in name as a directory does: case-insensitively. The caller holds f.mu.
 func (f *fakeDirectory) find(login string) []fakeDirUser {
 	var out []fakeDirUser
 	for _, u := range f.users {
-		if strings.EqualFold(u.login, login) {
+		if strings.EqualFold(u.login, login) || (u.alias != "" && strings.EqualFold(u.alias, login)) {
 			out = append(out, u)
 		}
 	}
@@ -99,10 +109,24 @@ func dirEntry(d ldap.Directory, u fakeDirUser) ldap.Entry {
 	return ldap.Entry{DN: "uid=" + u.login + "," + d.UserBaseDN, Attrs: attrs}
 }
 
-func (f *fakeDirectory) Authenticate(_ context.Context, d ldap.Directory, bind secrets.Plaintext, login string, password secrets.Plaintext) (ldap.Entry, error) {
+func (f *fakeDirectory) Authenticate(ctx context.Context, d ldap.Directory, bind secrets.Plaintext, login string, password secrets.Plaintext) (ldap.Entry, error) {
+	f.mu.Lock()
+	f.authCalls++
+	hold, boom := f.hold, f.panicNext
+	f.panicNext = false
+	f.mu.Unlock()
+	if boom {
+		panic("fake directory: panic in Authenticate")
+	}
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return ldap.Entry{}, &ldap.LoginError{Reason: ldap.ReasonUnreachable, Detail: ldap.DetailTimeout}
+		}
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.authCalls++
 	f.binds = append(f.binds, string(bind.Bytes()))
 	if f.slow > 0 {
 		f.clk.Advance(f.slow)
@@ -118,6 +142,10 @@ func (f *fakeDirectory) Authenticate(_ context.Context, d ldap.Directory, bind s
 		return ldap.Entry{}, &ldap.LoginError{Reason: ldap.ReasonAmbiguousUser, Detail: ldap.DetailUserSearch}
 	}
 	e := dirEntry(d, found[0])
+	if err := ldap.RunGate(ctx, e); err != nil {
+		return e, err
+	}
+	f.userBinds++
 	if string(password.Bytes()) != found[0].password {
 		return e, &ldap.LoginError{Reason: ldap.ReasonBadCredentials, Detail: ldap.DetailUserBind}
 	}
@@ -163,7 +191,9 @@ func (s *stack) directoryReady(t *testing.T, admin *client, adminAcct *account, 
 	requireStatus(t, admin.do(http.MethodPost, "/api/v1/ldap/group-mappings",
 		map[string]string{"directory_id": id, "group": dirOperators, "role": "operator"}), http.StatusCreated)
 	for _, u := range []fakeDirUser{
-		{login: "deniz", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000001", name: "Deniz Yılmaz", email: "deniz@corp.example", groups: []string{dirOperators}},
+		{login: "deniz", alias: "deniz@corp.example", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000001", name: "Deniz Yılmaz", email: "deniz@corp.example",
+			groups: []string{dirOperators}},
+		{login: "John Smith", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000009", name: "John Smith", groups: []string{dirOperators}},
 		{login: "berk", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000002", name: "Berk Kaya", email: "berk@corp.example", groups: []string{dirOperators}},
 		{login: "selin", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000003", name: "Selin", groups: []string{dirOperators}},
 		{login: "ayse", uid: "6f1c5b7e-0d3a-4c1e-9a55-000000000004", name: "Ayşe", email: "ayse@corp.example", groups: []string{dirOperators}},
@@ -698,13 +728,16 @@ func TestDirectoryAdministration(t *testing.T) {
 	assert.Equal(t, `"2"`, rec.Header().Get("ETag"))
 	requireStatus(t, admin.do(http.MethodPatch, base, map[string]any{"name": nil}, ifMatchOf("2")), http.StatusBadRequest)
 	requireStatus(t, admin.do(http.MethodPatch, base, map[string]any{"extra": 1}, ifMatchOf("2")), http.StatusBadRequest)
-	// A new address needs the password again; with users, the address list cannot change at all.
-	requireError(t, admin.do(http.MethodPatch, base, map[string]any{"addresses": []string{"ldaps://other.corp.example"}}, ifMatchOf("2")),
-		http.StatusUnprocessableEntity, "ALC-SYS-0006")
-	requireError(t, admin.do(http.MethodPatch, base, map[string]any{"addresses": []string{"ldaps://other.corp.example"},
-		"bind_password": dirBindPassword}, ifMatchOf("2")), http.StatusConflict, "ALC-LDAP-0003")
+	// A new address needs the password again; with users, addresses still change, the unique id attribute does not.
+	requireError(t, admin.do(http.MethodPatch, base, map[string]any{"addresses": []string{"ldaps://ldap.corp.example:636", "ldaps://other.corp.example"}},
+		ifMatchOf("2")), http.StatusUnprocessableEntity, "ALC-SYS-0006")
+	requireStatus(t, admin.do(http.MethodPatch, base, map[string]any{"addresses": []string{"ldaps://ldap.corp.example:636", "ldaps://other.corp.example"},
+		"bind_password": dirBindPassword}, ifMatchOf("2")), http.StatusOK)
+	requireStatus(t, admin.do(http.MethodPatch, base, map[string]any{"addresses": []string{"ldaps://other.corp.example"}}, ifMatchOf("3")), http.StatusOK)
+	requireError(t, admin.do(http.MethodPatch, base, map[string]any{"unique_id_attribute": "uid", "bind_password": dirBindPassword},
+		ifMatchOf("4")), http.StatusConflict, "ALC-LDAP-0003")
 	requireError(t, admin.do(http.MethodDelete, base, nil), http.StatusPreconditionFailed, "ALC-SYS-0008")
-	requireError(t, admin.do(http.MethodDelete, base, nil, ifMatchOf("2")), http.StatusConflict, "ALC-LDAP-0003")
+	requireError(t, admin.do(http.MethodDelete, base, nil, ifMatchOf("4")), http.StatusConflict, "ALC-LDAP-0003")
 
 	// At most 3 directories; an unused one is deleted.
 	rec = admin.do(http.MethodPost, "/api/v1/ldap/directories", directoryBodyFor("Second", true, false))
@@ -789,4 +822,133 @@ func (s *stack) requireNoDirectoryCanary(t *testing.T) {
 		assert.NotContains(t, s.logs.String(), canary)
 		assert.NotContains(t, s.rawLogs.String(), canary)
 	}
+}
+
+// Parallel attempts reserve their slots: with the directory holding every answer, at most 3 attempts for one name reach
+// it; every slot is released on every outcome (an unreachable directory, a cancelled request, a panic).
+func TestDirectoryLockoutReservesParallelAttempts(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	dir := s.directoryReady(t, admin, adminAcct, true)
+	path := "/api/v1/auth/ldap/" + dir + "/login"
+	hold := make(chan struct{})
+	s.dir.set(func(f *fakeDirectory) { f.hold = hold })
+	const n = 10
+	codes := make(chan int, n)
+	for range n {
+		c := s.freshClient()
+		go func() {
+			codes <- c.do(http.MethodPost, path, map[string]string{"username": "deniz", "password": "wrong-password"}).Code
+		}()
+	}
+	// The 7 refused attempts answer at once (429); 3 are inside the directory.
+	var refused int
+	for refused < n-3 {
+		select {
+		case code := <-codes:
+			require.Equal(t, http.StatusTooManyRequests, code)
+			refused++
+		case <-time.After(10 * time.Second):
+			t.Fatalf("only %d attempts were refused", refused)
+		}
+	}
+	assert.Equal(t, 3, s.dir.calls(), "at most 3 attempts reached the directory")
+	close(hold)
+	// The held attempts now fail and wait for the refusal floor on the stack clock.
+	deadline := time.After(20 * time.Second)
+	for got := 0; got < 3; {
+		select {
+		case code := <-codes:
+			assert.Equal(t, http.StatusUnauthorized, code)
+			got++
+		case <-time.After(2 * time.Millisecond):
+			s.clock.AdvanceToNextTimer()
+		case <-deadline:
+			t.Fatal("the held attempts did not answer")
+		}
+	}
+	assert.True(t, s.api.s.ldapLockout.Locked(ldapLoginKey(uuid.MustParse(dir), "deniz")), "the 3 failures locked the name")
+	s.dir.set(func(f *fakeDirectory) { f.hold = nil })
+
+	// Neutral outcomes release their slots: an unreachable directory, a cancelled request, a panic.
+	s.api.ResetLimits()
+	s.dir.set(func(f *fakeDirectory) { f.down = true })
+	for range 5 {
+		rec, _ := s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
+		requireError(t, rec, http.StatusServiceUnavailable, "ALC-LDAP-0002")
+	}
+	s.dir.set(func(f *fakeDirectory) { f.down = false })
+	ctx, cancel := context.WithCancel(context.Background())
+	s.dir.set(func(f *fakeDirectory) { f.hold = make(chan struct{}) })
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.freshClient().do(http.MethodPost, path, map[string]string{"username": "berk", "password": dirUserPassword},
+			func(r *http.Request) { *r = *r.WithContext(ctx) })
+	}()
+	require.Eventually(t, func() bool { return s.dir.calls() > 0 && s.api.s.ldapLockout.Len() == 1 }, 5*time.Second, time.Millisecond)
+	cancel()
+	<-done
+	s.dir.set(func(f *fakeDirectory) { f.hold = nil; f.panicNext = true })
+	rec := s.freshClient().do(http.MethodPost, path, map[string]string{"username": "berk", "password": dirUserPassword})
+	assert.Equal(t, http.StatusInternalServerError, rec.Code, "the fake panicked")
+	assert.Zero(t, s.api.s.ldapLockout.Len(), "every slot was released")
+	assert.Zero(t, s.api.s.ldapAccountLockout.Len())
+	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+}
+
+// Spellings a directory treats alike share the name key; aliases of one account share the account key, whose lock
+// stops the bind itself.
+func TestDirectoryLockoutSpellingsAndAccounts(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	dir := s.directoryReady(t, admin, adminAcct, true)
+	dirID := uuid.MustParse(dir)
+
+	// Full-width, upper-case and double-space spellings of "John Smith" share one name key.
+	for _, spelling := range []string{"John Smith", "ＪＯＨＮ ＳＭＩＴＨ", "john  smith"} {
+		rec, _ := s.dirLogin(s.freshClient(), dir, spelling, "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	assert.True(t, s.api.s.ldapLockout.Locked(ldapLoginKey(dirID, "John Smith")))
+	// A variation selector makes no new spelling: it is refused before any traffic and makes no key.
+	calls, keys := s.dir.calls(), s.api.s.ldapLockout.Len()
+	rec, _ := s.dirLogin(s.freshClient(), dir, "deniz\ufe0f", dirUserPassword)
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	assert.Equal(t, calls, s.dir.calls())
+	assert.Equal(t, keys, s.api.s.ldapLockout.Len())
+
+	// Three failures through two names of one account lock the account: the 4th attempt, through either name and even
+	// with the right password, is never bound to.
+	for _, name := range []string{"deniz", "deniz@corp.example", "deniz"} {
+		rec, _ := s.dirLogin(s.freshClient(), dir, name, "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	assert.False(t, s.api.s.ldapLockout.Locked(ldapLoginKey(dirID, "deniz")), "neither name reached 3 failures")
+	binds := s.dir.userBindCount()
+	rec, took := s.dirLogin(s.freshClient(), dir, "deniz@corp.example", dirUserPassword)
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	assert.Equal(t, ldapRefusalFloor, took, "the generic answer, held to the floor")
+	assert.Equal(t, binds, s.dir.userBindCount(), "a locked account is never bound to")
+	reason, login, actor := s.lastDenial(t)
+	assert.Equal(t, [3]string{"bad_credentials", "deniz", "system"}, [3]string{reason, login, actor})
+	rec, _ = s.dirLogin(s.freshClient(), dir, "DENIZ", dirUserPassword)
+	requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	assert.Equal(t, binds, s.dir.userBindCount())
+	s.clock.Advance(ldapLockoutFor)
+	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz@corp.example", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+
+	// A success clears both keys.
+	for _, name := range []string{"berk", "berk"} {
+		rec, _ := s.dirLogin(s.freshClient(), dir, name, "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+	for range 2 {
+		rec, _ := s.dirLogin(s.freshClient(), dir, "berk", "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	rec, _ = s.dirLogin(s.freshClient(), dir, "berk", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK) // two failures after the success: neither key is locked
 }

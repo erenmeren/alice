@@ -148,10 +148,16 @@ func (f *fakeLDAP) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, 
 	return ldap.TestResult{}, errNotConfigured
 }
 
-func (f *fakeLDAP) Verify(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext) (ldap.Identity, ldap.Directory, error) {
+func (f *fakeLDAP) VerifyGated(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext, gate ldap.Gate) (ldap.Identity, ldap.Directory, error) {
 	f.record()
 	if f.VerifyFn != nil {
-		return f.VerifyFn(ctx, directoryID, login, password)
+		id, d, err := f.VerifyFn(ctx, directoryID, login, password)
+		if gate != nil && id.UniqueID != "" {
+			if gerr := gate(id.UniqueID); gerr != nil {
+				return ldap.Identity{UniqueID: id.UniqueID, Login: id.Login}, d, &ldap.LoginError{Reason: ldap.ReasonBadCredentials, Detail: ldap.DetailLocked}
+			}
+		}
+		return id, d, err
 	}
 	return ldap.Identity{}, ldap.Directory{}, errNotConfigured
 }

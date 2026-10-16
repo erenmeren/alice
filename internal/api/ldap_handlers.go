@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -16,6 +19,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/ldap"
 	"alice/internal/auth/ldap/ldapx"
+	"alice/internal/auth/ratelimit"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
@@ -71,22 +75,85 @@ func (s *server) ldapRoutes() []route {
 	}
 }
 
-// ldapLoginKey is the ldapLockout key of a sign-in name at a directory: the name in NFC, then case-folded (Unicode
-// folding, so "ADA", "ada", "Ada" and the decomposed spelling of "Çağla" share one budget, as a directory's
-// case-insensitive match would), cut to ldapx.MaxLoginRunes. Callers pass only names ldapx.ValidLoginName accepts.
+// ldapLoginKey is the ldapLockout key of a sign-in name at a directory: NFKC, Unicode case folding, NFKC again, every
+// run of white space inside the name made one space and the ends trimmed, cut to ldapx.MaxLoginRunes. So "ADA", "ada",
+// the full-width "ＡＤＡ", the decomposed "Çağla" and "John  Smith" with two spaces share one budget, close to how a
+// directory's string preparation compares names (RFC 4518); spellings that still differ (aliases such as a UPN and
+// the sAMAccountName) are caught by the per-account key. Callers pass only names ldapx.ValidLoginName accepts (which
+// refuses the code points a directory maps to nothing).
 func ldapLoginKey(directoryID uuid.UUID, login string) string {
-	folded := []rune(cases.Fold().String(norm.NFC.String(login)))
-	if len(folded) > ldapx.MaxLoginRunes {
-		folded = folded[:ldapx.MaxLoginRunes]
+	folded := norm.NFKC.String(cases.Fold().String(norm.NFKC.String(login)))
+	runes := []rune(strings.Join(strings.FieldsFunc(folded, unicode.IsSpace), " "))
+	if len(runes) > ldapx.MaxLoginRunes {
+		runes = runes[:ldapx.MaxLoginRunes]
 	}
-	return directoryID.String() + "\x00" + string(folded)
+	return directoryID.String() + "\x00" + string(runes)
 }
+
+// ldapAccountKey is the ldapAccountLockout key of a directory entry: its unique id at its directory.
+func ldapAccountKey(directoryID uuid.UUID, uniqueID string) string {
+	return directoryID.String() + "\x00" + uniqueID
+}
+
+// directoryAttempt holds the lockout reservations of one directory password attempt: the name key, reserved before
+// any traffic, and the account key, reserved by gate between the user search and the user bind. Each reservation is
+// settled exactly once by settle; the handlers defer release, which settles (neutrally) whatever no other path did,
+// also on a panic or a cancelled request.
+type directoryAttempt struct {
+	s           *server
+	directoryID uuid.UUID
+	name        *ratelimit.Reservation
+	mu          sync.Mutex
+	account     *ratelimit.Reservation
+}
+
+// errAccountLocked: the gate refused an entry whose account key is locked (or has its attempts in flight).
+var errAccountLocked = errors.New("api: the directory account is locked for sign-in")
+
+// gate is the ldap.Gate of the attempt: it reserves the account key of the entry the user search found.
+func (a *directoryAttempt) gate(uniqueID string) error {
+	res, ok, _ := a.s.ldapAccountLockout.Reserve(ldapAccountKey(a.directoryID, uniqueID))
+	if !ok {
+		return errAccountLocked
+	}
+	a.mu.Lock()
+	prev := a.account
+	a.account = res
+	a.mu.Unlock()
+	prev.Release() // a client that asked twice: the earlier slot never reached a bind
+	return nil
+}
+
+// settle settles both reservations for the attempt's outcome: nil succeeds (clears both keys), a failed guess
+// (countsAsFailure) fails both, anything else (the directory could not be used, a locked account, a refusal after a
+// correct password) releases both.
+func (a *directoryAttempt) settle(err error) {
+	a.mu.Lock()
+	account := a.account
+	a.mu.Unlock()
+	for _, r := range []*ratelimit.Reservation{a.name, account} {
+		switch {
+		case err == nil:
+			r.Succeed()
+		case countsAsFailure(err):
+			r.Fail()
+		default:
+			r.Release()
+		}
+	}
+}
+
+// release settles, without counting, whatever is still reserved.
+func (a *directoryAttempt) release() { a.settle(errors.New("api: attempt ended")) }
 
 // countsAsFailure reports whether a refusal is a failed guess for ldapLockout: the directory (or the password check
 // before it) refused the name and password, found several entries, or accepted a password whose groups give no role.
 func countsAsFailure(err error) bool {
 	var le *ldap.LoginError
 	if errors.As(err, &le) {
+		if le.Detail == ldap.DetailLocked {
+			return false // refused before the bind: no guess was made
+		}
 		return le.Reason == ldap.ReasonBadCredentials || le.Reason == ldap.ReasonAmbiguousUser
 	}
 	return errors.Is(err, errNoAccess)
@@ -151,19 +218,21 @@ func (s *server) ldapLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	key := ""
+	att := &directoryAttempt{s: s, directoryID: id}
+	defer att.release()
 	if known.Enabled && ldapx.ValidLoginName(req.Username) {
-		key = ldapLoginKey(id, req.Username)
-		if ok, retry := s.ldapLockout.Allow(key); !ok {
+		res, ok, retry := s.ldapLockout.Reserve(ldapLoginKey(id, req.Username))
+		if !ok {
 			s.writeRateLimited(w, r, retry)
 			return
 		}
+		att.name = res
 	}
 	m := s.meta(r)
-	ident, dir, err := s.deps.LDAP.Verify(r.Context(), id, req.Username, secrets.NewPlaintext(req.Password))
+	ident, dir, err := s.deps.LDAP.VerifyGated(r.Context(), id, req.Username, secrets.NewPlaintext(req.Password), att.gate)
 	req.zero()
 	if err != nil {
-		s.failLockout(key, err)
+		att.settle(err)
 		s.refuseDirectorySignIn(w, r, start, auth.LDAPIdentity{DirectoryID: id, UniqueID: ident.UniqueID, Login: loginOf(ident, req.Username)}, err)
 		return
 	}
@@ -174,27 +243,19 @@ func (s *server) ldapLogin(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	case !mapped:
-		s.failLockout(key, errNoAccess)
+		att.settle(errNoAccess)
 		s.refuseDirectorySignIn(w, r, start, full, errNoAccess)
 		return
 	}
 	res, err := s.deps.Auth.SignInLDAP(r.Context(), full, role, dir.MFARequired, m)
 	if err != nil {
+		att.settle(err)
 		s.refuseDirectorySignIn(w, r, start, full, err)
 		return
 	}
-	if key != "" {
-		s.ldapLockout.Succeed(key)
-	}
+	att.settle(nil)
 	s.issueSessionCookie(w, res.SessionToken) // a pending session (MFA routes only) or, with status signed_in, a full one
 	writeJSON(w, http.StatusOK, map[string]string{"status": res.Status, "csrf_token": s.deps.Auth.CSRFToken(res.SessionToken)})
-}
-
-// failLockout records a failed guess for key ("" when no key was made).
-func (s *server) failLockout(key string, err error) {
-	if key != "" && countsAsFailure(err) {
-		s.ldapLockout.Fail(key)
-	}
 }
 
 // errNoAccess: the directory accepted the password, but none of the person's groups is mapped to a role.
@@ -300,20 +361,24 @@ func (s *server) ldapStepUp(w http.ResponseWriter, r *http.Request) {
 	}
 	id := p.LDAPDirectoryID
 	self := auth.LDAPIdentity{DirectoryID: id, UniqueID: p.LDAPUniqueID, Login: p.LDAPLogin}
-	key := ldapLoginKey(id, p.LDAPLogin)
-	if ok, retry := s.ldapLockout.Allow(key); !ok {
+	att := &directoryAttempt{s: s, directoryID: id}
+	defer att.release()
+	res, ok, retry := s.ldapLockout.Reserve(ldapLoginKey(id, p.LDAPLogin))
+	if !ok {
 		s.writeRateLimited(w, r, retry)
 		return
 	}
-	ident, dir, err := s.deps.LDAP.Verify(r.Context(), id, p.LDAPLogin, secrets.NewPlaintext(req.Password))
+	att.name = res
+	ident, dir, err := s.deps.LDAP.VerifyGated(r.Context(), id, p.LDAPLogin, secrets.NewPlaintext(req.Password), att.gate)
 	req.zero()
 	if err != nil {
-		s.failLockout(key, err)
+		att.settle(err)
 		s.refuseDirectorySignIn(w, r, start, self, err)
 		return
 	}
 	if ident.UniqueID != p.LDAPUniqueID {
 		// The stored name now finds another entry (renamed or reused in the directory): not this person.
+		att.settle(auth.ErrLDAPOtherUser)
 		s.refuseDirectorySignIn(w, r, start, self, auth.ErrLDAPOtherUser)
 		return
 	}
@@ -324,23 +389,25 @@ func (s *server) ldapStepUp(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	case !mapped:
-		s.failLockout(key, errNoAccess)
+		att.settle(errNoAccess)
 		s.refuseDirectorySignIn(w, r, start, self, errNoAccess)
 		return
 	}
-	res, err := s.deps.Auth.StepUpLDAP(r.Context(), p, full, role, req.Code, dir.MFARequired, s.meta(r))
+	stepped, err := s.deps.Auth.StepUpLDAP(r.Context(), p, full, role, req.Code, dir.MFARequired, s.meta(r))
 	if _, _, refusal := directoryRefusal(err); refusal {
+		att.settle(err)
 		s.refuseDirectorySignIn(w, r, start, self, err)
 		return
 	}
 	if err != nil {
+		// A wrong code (counted by StepUpLDAP) or a failure: the password was right, so neither key counts it.
 		s.fail(w, r, err)
 		return
 	}
-	s.ldapLockout.Succeed(key)
-	s.rotated.Add(sessionTokenFrom(r)) // a late 401 for the old cookie must not delete the new one
-	s.issueSessionCookie(w, res.Token) // session ID is regenerated on step-up (SEC-019)
-	writeJSON(w, http.StatusOK, sessionJSON(res.Info, nil))
+	att.settle(nil)
+	s.rotated.Add(sessionTokenFrom(r))     // a late 401 for the old cookie must not delete the new one
+	s.issueSessionCookie(w, stepped.Token) // session ID is regenerated on step-up (SEC-019)
+	writeJSON(w, http.StatusOK, sessionJSON(stepped.Info, nil))
 }
 
 func (s *server) writeDirectory(w http.ResponseWriter, status int, d ldap.Directory) {
@@ -512,27 +579,30 @@ func (s *server) testDirectorySignIn(w http.ResponseWriter, r *http.Request) {
 	// The sign-in's lockout applies to a test too (the same key): a test sends the name and password to the directory
 	// like a sign-in, so a locked name is not tested (429), a failed test counts, and a test that gives a role clears
 	// the count. Allow adds no key, so a made-up directory ID or name leaves nothing behind.
-	key := ""
+	att := &directoryAttempt{s: s, directoryID: id}
+	defer att.release()
 	if ldapx.ValidLoginName(req.Username) {
-		key = ldapLoginKey(id, req.Username)
-		if ok, retry := s.ldapLockout.Allow(key); !ok {
+		res, ok, retry := s.ldapLockout.Reserve(ldapLoginKey(id, req.Username))
+		if !ok {
 			s.writeRateLimited(w, r, retry)
 			return
 		}
+		att.name = res
 	}
 	res, err := s.deps.LDAP.TestSignIn(r.Context(), principalFrom(r.Context()).Actor(s.meta(r)), id, req.Username, secrets.NewPlaintext(req.Password))
 	req.zero()
 	var le *ldap.LoginError
 	switch {
 	case errors.As(err, &le):
-		s.failLockout(key, err)
+		att.settle(err)
 		s.writeErrorWith(w, r, ErrLDAPSignInTestFailed, testParams(le), nil)
 	case err != nil:
 		s.fail(w, r, err)
+	case res.Role == "":
+		att.release() // the password was right; no role is neither a guess nor a success
+		writeJSON(w, http.StatusOK, directoryTestJSON(res))
 	default:
-		if key != "" && res.Role != "" {
-			s.ldapLockout.Succeed(key)
-		}
+		att.settle(nil)
 		writeJSON(w, http.StatusOK, directoryTestJSON(res))
 	}
 }

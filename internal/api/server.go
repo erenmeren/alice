@@ -14,6 +14,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -316,7 +317,7 @@ type LDAPService interface {
 	DeleteMapping(ctx context.Context, a audit.Actor, id uuid.UUID) error
 	TestConnection(ctx context.Context, a audit.Actor, id uuid.UUID) error
 	TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, login string, password secrets.Plaintext) (ldap.TestResult, error)
-	Verify(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext) (ldap.Identity, ldap.Directory, error)
+	VerifyGated(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext, gate ldap.Gate) (ldap.Identity, ldap.Directory, error)
 	ResolveRole(ctx context.Context, directoryID uuid.UUID, groups []string) (rbac.Role, bool, error)
 }
 
@@ -434,10 +435,13 @@ const (
 	limitDirectoryTest    // 5 per minute per user: a directory's Test connection and Test sign-in, one budget for both
 )
 
-// Directory sign-in lockout (replaces plan ruling 5, Task 5 fix round). After ldapLockoutFailures failed directory
-// passwords for one sign-in name at one directory within ldapLockoutWindow, Alice stops sending that name to the
-// directory for ldapLockoutFor, whatever the address and even with the right password; it is checked before any
-// directory traffic and counts unknown names exactly like known ones. Active Directory's default lockout policy
+// Directory sign-in lockout (replaces plan ruling 5, Task 5 fix rounds). Two lockouts with the same numbers: one per
+// sign-in name at a directory (ldapLockout, checked before any directory traffic, unknown names counted exactly like
+// known ones) and one per account, the entry's unique id at a directory (ldapAccountLockout, checked by a gate between
+// the user search and the user bind, so aliases and spellings of one account share it). After ldapLockoutFailures
+// failed directory passwords within ldapLockoutWindow the key is locked for ldapLockoutFor, whatever the address and
+// even with the right password; attempts in flight count (each reserves a slot), so parallel attempts cannot pass
+// the limit. Active Directory's default lockout policy
 // counts failures in a 30-minute observation window, so a lock longer than that window lets the directory's own
 // counter reset before Alice sends the name again: a stream of guesses through Alice can never keep a directory
 // account's failure counter climbing (a token bucket that refills every few minutes could). A successful sign-in clears
@@ -496,7 +500,11 @@ type server struct {
 	// behind one address is not limited to a few sign-ins a minute).
 	oidcCallbacks *ratelimit.Limiter
 	// ldapLockout: failed directory passwords per (directory, normalised sign-in name), sign-in and step-up alike.
-	ldapLockout *ratelimit.BoundedLockout
+	ldapLockout        *ratelimit.BoundedLockout
+	ldapAccountLockout *ratelimit.BoundedLockout // per (directory, unique id)
+	// ldapFullLogged: when a full lockout table was last logged (at most once per ldapFullLogEvery).
+	ldapFullMu     sync.Mutex
+	ldapFullLogged time.Time
 	// ldapRefusalFloor: the least time a refused directory sign-in takes (ldapRefusalFloor const).
 	ldapRefusalFloor time.Duration
 	// denials coalesces the guard's denial audit rows (AUD-06).
@@ -523,7 +531,7 @@ func newServer(d Deps) *server {
 		d.Clock = clock.Real{}
 	}
 	scanCtx, stopScans := context.WithCancel(context.Background())
-	return &server{
+	s := &server{
 		deps:    d,
 		general: ratelimit.New(d.Clock, 300, time.Minute),
 		anon:    ratelimit.New(d.Clock, 60, time.Minute),
@@ -538,9 +546,10 @@ func newServer(d Deps) *server {
 		testMails: ratelimit.New(d.Clock, 5, time.Minute),
 		export:    ratelimit.New(d.Clock, 10, time.Minute),
 
-		oidcCallbacks:    ratelimit.New(d.Clock, 10, time.Minute),
-		ldapLockout:      ratelimit.NewBoundedLockout(d.Clock, ldapLockoutFailures, ldapLockoutWindow, ldapLockoutFor, ldapLockoutKeys),
-		ldapRefusalFloor: ldapRefusalFloor,
+		oidcCallbacks:      ratelimit.New(d.Clock, 10, time.Minute),
+		ldapLockout:        ratelimit.NewBoundedLockout(d.Clock, ldapLockoutFailures, ldapLockoutWindow, ldapLockoutFor, ldapLockoutKeys),
+		ldapAccountLockout: ratelimit.NewBoundedLockout(d.Clock, ldapLockoutFailures, ldapLockoutWindow, ldapLockoutFor, ldapLockoutKeys),
+		ldapRefusalFloor:   ldapRefusalFloor,
 		actions: map[limitClass]*ratelimit.Limiter{
 			limitBackupNow:   ratelimit.New(d.Clock, 5, time.Minute),
 			limitHTTPSUpload: ratelimit.New(d.Clock, 5, time.Minute),
@@ -557,6 +566,29 @@ func newServer(d Deps) *server {
 		chainScan: make(chan struct{}, 1),
 		scanCtx:   scanCtx,
 		stopScans: stopScans,
+	}
+	s.ldapLockout.OnFull = func() { s.logLockoutFull("name") }
+	s.ldapAccountLockout.OnFull = func() { s.logLockoutFull("account") }
+	return s
+}
+
+// ldapFullLogEvery is how often a full directory lockout table is logged.
+const ldapFullLogEvery = 10 * time.Minute
+
+// logLockoutFull warns, at most once per ldapFullLogEvery, that a directory lockout table refused a new key because
+// it is full of live keys (ratelimit.BoundedLockout fails closed). Nothing of the key is logged.
+func (s *server) logLockoutFull(table string) {
+	now := s.deps.Clock.Now()
+	s.ldapFullMu.Lock()
+	if !s.ldapFullLogged.IsZero() && now.Sub(s.ldapFullLogged) < ldapFullLogEvery {
+		s.ldapFullMu.Unlock()
+		return
+	}
+	s.ldapFullLogged = now
+	s.ldapFullMu.Unlock()
+	if s.deps.Log != nil {
+		s.deps.Log.Warn("directory sign-in lockout table is full; new sign-in names are refused until entries expire",
+			"table", table, "capacity", ldapLockoutKeys)
 	}
 }
 
@@ -593,6 +625,7 @@ func (s *Server) ResetLimits() {
 	s.s.export.Reset()
 	s.s.oidcCallbacks.Reset()
 	s.s.ldapLockout.Reset()
+	s.s.ldapAccountLockout.Reset()
 	for _, l := range s.s.actions {
 		l.Reset()
 	}

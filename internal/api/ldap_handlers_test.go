@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/auth/ldap"
+	"alice/internal/auth/ratelimit"
 	"alice/internal/i18n"
 	"alice/internal/platform/clock"
 	"alice/internal/rbac"
@@ -183,12 +186,49 @@ func waitForTimer(t *testing.T, clk *clock.Fake, done <-chan *httptest.ResponseR
 	}
 }
 
+// A full lockout table is logged once per 10 minutes, without the key.
+func TestDirectoryLockoutFullIsLoggedRarely(t *testing.T) {
+	d := testDeps(t, nil)
+	var logs syncLog
+	d.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	s := newServer(d)
+	s.ldapLockout = ratelimit.NewBoundedLockout(d.Clock, ldapLockoutFailures, ldapLockoutWindow, ldapLockoutFor, 1)
+	s.ldapLockout.OnFull = func() { s.logLockoutFull("name") }
+	r, ok, _ := s.ldapLockout.Reserve("held")
+	require.True(t, ok)
+	for range 3 {
+		_, ok, _ = s.ldapLockout.Reserve("secret-name")
+		assert.False(t, ok)
+	}
+	assert.Equal(t, 1, strings.Count(logs.String(), "lockout table is full"))
+	assert.NotContains(t, logs.String(), "secret-name")
+	d.Clock.(*clock.Fake).Advance(ldapFullLogEvery)
+	_, _, _ = s.ldapLockout.Reserve("other")
+	assert.Equal(t, 2, strings.Count(logs.String(), "lockout table is full"))
+	r.Release()
+	s.logLockoutFull("account") // within the interval again: not logged
+	assert.Equal(t, 2, strings.Count(logs.String(), "lockout table is full"))
+}
+
+// syncLog is a log buffer safe for the handler's goroutines.
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) { l.mu.Lock(); defer l.mu.Unlock(); return l.b.Write(p) }
+func (l *syncLog) String() string              { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
+
 func TestDirectoryLoginKeyFoldsTheName(t *testing.T) {
 	other := uuid.New()
 	assert.Equal(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(testDirectoryID, "DENIZ"))
 	assert.Equal(t, ldapLoginKey(testDirectoryID, "çağla"), ldapLoginKey(testDirectoryID, "ÇAĞLA"))
 	assert.Equal(t, ldapLoginKey(testDirectoryID, "\u00e7a\u011fla"), ldapLoginKey(testDirectoryID, "c\u0327ag\u0306la"), "NFC and NFD share one budget")
 	assert.Len(t, []rune(ldapLoginKey(testDirectoryID, strings.Repeat("ß", 256))), 36+1+256, "cut to 256 runes after folding")
+	assert.Equal(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(testDirectoryID, "ｄｅｎｉｚ"), "full-width letters (NFKC)")
+	assert.Equal(t, ldapLoginKey(testDirectoryID, "John Smith"), ldapLoginKey(testDirectoryID, "john \u00a0 smith"), "white space runs collapsed")
+	assert.Equal(t, ldapLoginKey(testDirectoryID, "ﬁle"), ldapLoginKey(testDirectoryID, "FILE"), "a ligature folds and normalises")
+	assert.Equal(t, ldapAccountKey(testDirectoryID, "0a0b"), testDirectoryID.String()+"\x00"+"0a0b")
 	assert.NotEqual(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(other, "deniz"), "each directory has its own budget")
 	assert.NotEqual(t, ldapLoginKey(testDirectoryID, "deniz"), ldapLoginKey(testDirectoryID, "deniz2"))
 }
