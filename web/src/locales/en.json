@@ -1719,6 +1719,7 @@
       "hard_linked": "The file has more than one name (hard link).",
       "too_large": "The file is larger than 256 KiB.",
       "not_a_certificate": "The file does not contain a certificate.",
+      "leaf_unreadable": "The first certificate in the file cannot be read, so Alice does not know which certificate this website serves.",
       "unreadable": "Alice could not read the file.",
       "bad_name": "The file name does not end in .pem, .crt, .cer, .cert, .key, .chained or .fullchain.",
       "special_filesystem": "The file is on a special file system.",

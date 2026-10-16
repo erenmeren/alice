@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — Prod-readiness fixes
+
+**Fixes**
+- `alice-helper` 1.6.1 (protocol 7 unchanged): a certificate file whose first certificate cannot be read is
+  reported as `leaf_unreadable` instead of Alice taking the intermediate after it as the website's certificate
+  (REM-4). Reinstall the helper on Nginx servers ("Updating the helper").
+
 ## Unreleased — LDAP and Active Directory sign-in
 
 **Added**

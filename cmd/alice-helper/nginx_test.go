@@ -227,13 +227,55 @@ func TestCertBlocksNeverReturnAKey(t *testing.T) {
 		"unterminated certificate, key, certificate": "-----BEGIN CERTIFICATE-----\nAAAA\n" + string(leaf.KeyPEM) +
 			string(leaf.CertPEM),
 	} {
-		blocks, dropped := certBlocks([]byte(in))
+		blocks, dropped, _ := certBlocks([]byte(in))
 		assert.Equal(t, "", blocks, name)
 		assert.True(t, dropped, name)
 	}
-	blocks, dropped := certBlocks(append(append([]byte("\xef\xbb\xbf"), leaf.CertPEM...), leaf.KeyPEM...))
+	blocks, dropped, firstDropped := certBlocks(append(append([]byte("\xef\xbb\xbf"), leaf.CertPEM...), leaf.KeyPEM...))
 	assert.Equal(t, string(leaf.CertPEM), blocks, "a BOM and a key after the certificate are ignored")
 	assert.False(t, dropped)
+	assert.False(t, firstDropped)
+}
+
+// unreadableCertPEM is a block labelled CERTIFICATE whose content Go's X.509 parser refuses (as it
+// refuses a negative serial number, which OpenSSL and so Nginx accept).
+var unreadableCertPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{0x30, 0x03, 0x02, 0x01, 0x01}}))
+
+// REM-4 (RA-02): an unreadable first block is reported, so the next certificate never becomes the
+// leaf; an unreadable later block is only dropped.
+func TestCertBlocksReportsAnUnreadableFirstBlock(t *testing.T) {
+	leaf := newNginxWorld(t).leaf
+	for name, in := range map[string]string{
+		"not X.509":    unreadableCertPEM + string(leaf.CertPEM),
+		"unterminated": "-----BEGIN CERTIFICATE-----\nAAAA\n",
+		"with headers": strings.Replace(string(leaf.CertPEM), "-----\n", "-----\nProc-Type: 4,ENCRYPTED\n\n", 1) + string(leaf.CertPEM),
+		"not base64":   "-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n" + string(leaf.CertPEM),
+	} {
+		_, dropped, firstDropped := certBlocks([]byte(in))
+		assert.True(t, dropped, name)
+		assert.True(t, firstDropped, name)
+	}
+	blocks, dropped, firstDropped := certBlocks([]byte(string(leaf.CertPEM) + unreadableCertPEM))
+	assert.Equal(t, string(leaf.CertPEM), blocks)
+	assert.True(t, dropped)
+	assert.False(t, firstDropped, "the leaf is read; only the second block is dropped")
+}
+
+// REM-4 (RA-02): nginx-dump reports leaf_unreadable with no certificates, and still warns.
+func TestDescribeCertMarksLeafUnreadable(t *testing.T) {
+	w := newNginxWorld(t)
+	w.f.write("/etc/nginx/ssl/www.crt", unreadableCertPEM+string(w.leaf.FullchainPEM[len(w.leaf.CertPEM):]), 0o644)
+	_, m := w.f.run("nginx-dump")
+	cert := fileOf(t, m, "cert", "/etc/nginx/ssl/www.crt")
+	assert.Equal(t, helperproto.FileLeafUnreadable, cert["problem"])
+	assert.Equal(t, "leaf_unreadable", cert["problem"])
+	assert.Equal(t, "", cert["pem"], "the intermediate is never handed over as the leaf")
+	assert.Contains(t, m["warnings"], helperproto.WarnCertificateBlockDropped)
+
+	w.f.write("/etc/nginx/ssl/www.crt", unreadableCertPEM, 0o644)
+	_, m = w.f.run("nginx-dump")
+	assert.Equal(t, helperproto.FileNotACertificate, fileOf(t, m, "cert", "/etc/nginx/ssl/www.crt")["problem"],
+		"a file with no readable certificate stays not_a_certificate")
 }
 
 // S9: blocks labelled CERTIFICATE that are not X.509 certificates are dropped with a warning.

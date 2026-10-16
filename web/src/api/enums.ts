@@ -104,6 +104,7 @@ export const FILE_PROBLEMS: readonly string[] = [
   'hard_linked',
   'too_large',
   'not_a_certificate',
+  'leaf_unreadable',
   'unreadable',
   'bad_name',
   'name_not_allowed',

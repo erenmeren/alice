@@ -221,7 +221,10 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **"The certificate file contains a block that is not a certificate. Alice ignored it."** A certificate file holds a
   block that Alice cannot read as a certificate. The note does not name the file: check the files of the server's
   websites with `openssl crl2pkcs7 -nocrl -certfile <file> | openssl pkcs7 -print_certs -noout`. If it was the first
-  block of a file, Alice shows the next certificate of that file.
+  block of a file, that website is **Not supported** with "The first certificate in the file cannot be read, so Alice
+  does not know which certificate this website serves." (`leaf_unreadable`): replace the certificate (for example one
+  with a negative serial number, which Nginx loads but Alice cannot read) and choose **Discover**. A server whose
+  `alice-helper` is older than 1.6.1 instead shows the next certificate of that file, usually the intermediate.
 - **"These websites may be out of date".** The last scan could not read the websites (the reason is shown); the list
   is the one Alice read at the time shown. Fix the reason and choose **Discover**.
 - **A website shows "The certificate changed outside Alice."** Its file holds a certificate Alice did not deploy (for

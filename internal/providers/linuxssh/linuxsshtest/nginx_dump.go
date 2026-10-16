@@ -682,9 +682,12 @@ func (h *nginxHost) describeCert(p string) (fi helperproto.NginxFile, dropped bo
 		return fi, false
 	}
 	fi.SHA256 = sum(data)
-	blocks, dropped := certPEMBlocks(data)
-	if blocks == "" {
+	blocks, dropped, firstDropped := certPEMBlocks(data)
+	switch {
+	case blocks == "":
 		fi.Problem = helperproto.FileNotACertificate
+	case firstDropped:
+		fi.Problem, blocks = helperproto.FileLeafUnreadable, ""
 	}
 	fi.PEM = blocks
 	return fi, dropped
@@ -734,11 +737,15 @@ var (
 )
 
 // certPEMBlocks is the helper's certBlocks: the X.509 certificates of data re-encoded as
-// CERTIFICATE blocks, and whether a block was dropped. A private key is never returned.
-func certPEMBlocks(data []byte) (string, bool) {
+// CERTIFICATE blocks, whether a block was dropped, and whether it was the first one. A private key
+// is never returned.
+func certPEMBlocks(data []byte) (blocks string, dropped, firstDropped bool) {
 	var b bytes.Buffer
-	dropped := false
-	for rest := data; ; {
+	drop := func(first bool) {
+		dropped = true
+		firstDropped = firstDropped || first
+	}
+	for rest, first := data, true; ; first = false {
 		i := bytes.Index(rest, pemCertBegin)
 		if i < 0 {
 			break
@@ -746,22 +753,22 @@ func certPEMBlocks(data []byte) (string, bool) {
 		rest = rest[i:]
 		end := bytes.Index(rest, pemCertEnd)
 		if end < 0 {
-			dropped = true
+			drop(first)
 			break
 		}
 		blk, _ := pem.Decode(rest[:end+len(pemCertEnd)])
 		rest = rest[end+len(pemCertEnd):]
 		if blk == nil {
-			dropped = true
+			drop(first)
 			continue
 		}
 		if _, err := x509.ParseCertificate(blk.Bytes); err != nil || blk.Type != "CERTIFICATE" || len(blk.Headers) != 0 {
-			dropped = true
+			drop(first)
 			continue
 		}
 		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: blk.Bytes})
 	}
-	return b.String(), dropped
+	return b.String(), dropped, firstDropped
 }
 
 func (e *Emulator) nginxTest(args []string) Response {

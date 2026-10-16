@@ -364,6 +364,7 @@ const (
 	CertProblemHardLinked        = "hard_linked"
 	CertProblemTooLarge          = "too_large"
 	CertProblemNotACertificate   = "not_a_certificate"
+	CertProblemLeafUnreadable    = "leaf_unreadable" // the first certificate (the one Nginx serves) cannot be read (REM-4)
 	CertProblemUnreadable        = "unreadable"
 	CertProblemBadName           = "bad_name"
 	CertProblemSpecialFS         = "special_filesystem" // on FUSE or a pseudo file system

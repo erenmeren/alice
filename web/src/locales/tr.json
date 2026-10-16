@@ -1719,6 +1719,7 @@
       "hard_linked": "Dosyanın birden fazla adı var (sabit bağlantı).",
       "too_large": "Dosya 256 KiB'tan büyük.",
       "not_a_certificate": "Dosya bir sertifika içermiyor.",
+      "leaf_unreadable": "Dosyadaki ilk sertifika okunamıyor; Alice bu web sitesinin hangi sertifikayı sunduğunu bilmiyor.",
       "unreadable": "Alice dosyayı okuyamadı.",
       "bad_name": "Dosya adı .pem, .crt, .cer, .cert, .key, .chained veya .fullchain ile bitmiyor.",
       "special_filesystem": "Dosya özel bir dosya sisteminde.",

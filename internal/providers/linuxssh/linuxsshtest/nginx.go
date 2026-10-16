@@ -304,10 +304,10 @@ func (e *Emulator) SetNginxFileMode(p, owner, group string, mode uint32) {
 // SetFileProblem makes the helper's root-controlled walk refuse (or see) a file: problem is
 // not_root_controlled and special_filesystem (a directory on the path: the walk fails), not_regular
 // or hard_linked (the file itself); "" clears it. nginx-dump reports the problem and
-// nginx-deploy refuses the file. missing, too_large, not_a_certificate and bad_name follow from
-// the file's absence, size, content and name: RemoveNginxFile, a content over
-// helperproto.MaxCertFileSize, a file without CERTIFICATE blocks, a name without a certificate
-// extension.
+// nginx-deploy refuses the file. missing, too_large, not_a_certificate, leaf_unreadable and
+// bad_name follow from the file's absence, size, content and name: RemoveNginxFile, a content over
+// helperproto.MaxCertFileSize, a file without CERTIFICATE blocks, a file whose first CERTIFICATE
+// block is not a certificate, a name without a certificate extension.
 func (e *Emulator) SetFileProblem(p, problem string) {
 	if !slices.Contains([]string{"", helperproto.FileNotRootControlled, helperproto.FileSpecialFS, helperproto.FileNotRegular, helperproto.FileHardLinked}, problem) {
 		panic("linuxsshtest: SetFileProblem: unsupported problem " + problem)

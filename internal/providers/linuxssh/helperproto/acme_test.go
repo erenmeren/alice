@@ -9,11 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Protocol 7 (ACME Task 7, A1): the helper reports 7 / 1.6.0, Alice still opens a protocol 6 helper
+// Protocol 7 (ACME Task 7, A1): the helper reports 7 / 1.6.x (1.6.1: REM-4), Alice still opens a protocol 6 helper
 // for every existing operation and needs 7 only for an HTTP-01 challenge.
 func TestProtocol7(t *testing.T) {
 	assert.Equal(t, 7, Protocol)
-	assert.Equal(t, "1.6.0", Version)
+	assert.Equal(t, "1.6.1", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 7, HTTP01MinProtocol)
 	assert.LessOrEqual(t, MinProtocol, HTTP01MinProtocol)

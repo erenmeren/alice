@@ -31,8 +31,10 @@ const (
 	// Protocol 7 (ACME, Task 7): acme-challenge-put and acme-challenge-rm write and remove one
 	// HTTP-01 token file in ACMEChallengeDir. Nothing else changed: a protocol 6 helper serves every
 	// other operation (MinProtocol); only an HTTP-01 challenge needs 7 (HTTP01MinProtocol).
+	// 1.6.1 (protocol 7 unchanged): nginx-dump reports `leaf_unreadable` for a certificate file
+	// whose first block cannot be read.
 	Protocol   = 7
-	Version    = "1.6.0"
+	Version    = "1.6.1"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -260,6 +262,7 @@ const (
 	FileHardLinked        = "hard_linked"
 	FileTooLarge          = "too_large"
 	FileNotACertificate   = "not_a_certificate"
+	FileLeafUnreadable    = "leaf_unreadable" // the first CERTIFICATE block (the leaf) cannot be read: no certificates are returned
 	FileUnreadable        = "unreadable"
 	FileBadName           = "bad_name" // the resolved name has no certificate or key extension
 	// FileSpecialFS: the file or a directory on its path is on FUSE or a pseudo file system

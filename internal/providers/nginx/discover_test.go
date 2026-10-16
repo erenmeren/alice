@@ -3,6 +3,7 @@ package nginx
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"testing"
@@ -323,6 +324,39 @@ func TestDiscoverCertificateFileProblems(t *testing.T) {
 			assert.Empty(t, c.Location.KeyProblem)
 		})
 	}
+}
+
+// REM-4 (RA-02): a certificate file whose first block the helper cannot read is leaf_unreadable,
+// with no certificate: the intermediate after it never becomes the website's certificate.
+func TestDiscoverLeafUnreadableHasNoCertificate(t *testing.T) {
+	check := func(t *testing.T, c providers.DiscoveredCertificate) {
+		t.Helper()
+		assert.Equal(t, providers.CertProblemLeafUnreadable, c.Location.Problem)
+		assert.Equal(t, "leaf_unreadable", c.Location.Problem)
+		assert.False(t, c.Location.Supported)
+		assert.Equal(t, providers.UnsupportedFile, c.Location.Unsupported)
+		assert.Empty(t, c.PEMChain)
+		assert.Empty(t, c.FileSHA256)
+	}
+	t.Run("a dump file with the problem", func(t *testing.T) {
+		u := newUnitCerts(t)
+		const c, k = "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
+		cf := certFile(c, u.chain) // a helper that names the problem and still sends blocks: Alice uses none
+		cf.Problem = helperproto.FileLeafUnreadable
+		got, _ := convert(validDump([]helperproto.NginxServer{server([]string{"a"}, 443, pair(c, k))}, cf, keyFile(k)))
+		require.Len(t, got, 1)
+		check(t, got[0])
+	})
+	t.Run("an unreadable first block (emulated helper)", func(t *testing.T) {
+		e := newEnv(t)
+		forge(e)
+		unreadable := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte{0x30, 0x03, 0x02, 0x01, 0x01}})
+		e.emu.SetNginxFile(wwwCert, append(unreadable, e.leaf.FullchainPEM[len(e.leaf.CertPEM):]...))
+		res := discover(t, e, providers.DiscoverRequest{Certificates: true})
+		require.Len(t, res.Certificates, 1)
+		check(t, res.Certificates[0])
+		assert.Equal(t, []string{providers.WarnCertificateBlockDropped}, warningCodes(res.Warnings))
+	})
 }
 
 func TestDiscoverKeyFileProblems(t *testing.T) {

@@ -56,7 +56,7 @@ var (
 		providers.UnsupportedConfigFileWritable}
 	fileProblems = []string{providers.CertProblemMissing, providers.CertProblemNotRootControlled, providers.CertProblemNotRegular,
 		providers.CertProblemHardLinked, providers.CertProblemTooLarge, providers.CertProblemNotACertificate, providers.CertProblemUnreadable,
-		providers.CertProblemBadName, providers.CertProblemSpecialFS, providers.CertProblemNameNotAllowed}
+		providers.CertProblemBadName, providers.CertProblemSpecialFS, providers.CertProblemNameNotAllowed, providers.CertProblemLeafUnreadable}
 	usualFolders = []string{"/etc/ssl/", "/etc/nginx/", "/etc/pki/", "/etc/letsencrypt/"}
 )
 

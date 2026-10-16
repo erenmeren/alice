@@ -6668,7 +6668,8 @@ components:
       type: string
       description: >-
         A certificate or key file Alice cannot use; "" when none. Known values: missing, not_root_controlled,
-        not_regular, hard_linked, too_large, not_a_certificate, unreadable, bad_name, name_not_allowed (the file's real
+        not_regular, hard_linked, too_large, not_a_certificate, leaf_unreadable (the file's first certificate, the one
+        Nginx serves, cannot be read), unreadable, bad_name, name_not_allowed (the file's real
         name, after links, has a character outside the helper's vocabulary), special_filesystem, unknown; a
         newer server may add others.
     CertificateLocationList:

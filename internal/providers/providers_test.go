@@ -409,6 +409,7 @@ func TestMirroredReasonsProblemsAndWarningsEqualTheirSources(t *testing.T) {
 	assert.Equal(t, helperproto.FileHardLinked, providers.CertProblemHardLinked)
 	assert.Equal(t, helperproto.FileTooLarge, providers.CertProblemTooLarge)
 	assert.Equal(t, helperproto.FileNotACertificate, providers.CertProblemNotACertificate)
+	assert.Equal(t, helperproto.FileLeafUnreadable, providers.CertProblemLeafUnreadable)
 	assert.Equal(t, helperproto.FileUnreadable, providers.CertProblemUnreadable)
 	assert.Equal(t, helperproto.FileBadName, providers.CertProblemBadName)
 	assert.Equal(t, helperproto.FileSpecialFS, providers.CertProblemSpecialFS)
@@ -527,6 +528,7 @@ func TestMirroredSetsAreCompleteAgainstTheirSources(t *testing.T) {
 		providers.CertProblemMissing, providers.CertProblemNotRootControlled, providers.CertProblemNotRegular,
 		providers.CertProblemHardLinked, providers.CertProblemTooLarge, providers.CertProblemNotACertificate,
 		providers.CertProblemUnreadable, providers.CertProblemBadName, providers.CertProblemSpecialFS, providers.CertProblemNameNotAllowed,
+		providers.CertProblemLeafUnreadable,
 	}), valueSet(stringConsts(t, hp, "File")), "file problems")
 	assert.Equal(t, sortedCopy([]string{
 		providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,

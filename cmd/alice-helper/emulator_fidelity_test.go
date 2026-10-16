@@ -558,6 +558,14 @@ func TestEmulatorFidelityDump(t *testing.T) {
 			tw.put(fidCrt, []byte("hello"))
 			assert.Equal(t, helperproto.FileNotACertificate, asList(tw.dump().m["files"])[0]["problem"])
 		}},
+		{"certificate file problems: an unreadable first block (forged dump)", true, func(t *testing.T, tw *twin) {
+			forge(tw, func(s string, _ bool) string { return s })
+			tw.put(fidCrt, append([]byte(unreadableCertPEM), tw.w.leaf.FullchainPEM[len(tw.w.leaf.CertPEM):]...))
+			d := tw.dump().m
+			assert.Equal(t, helperproto.FileLeafUnreadable, asList(d["files"])[0]["problem"])
+			assert.Equal(t, "", asList(d["files"])[0]["pem"])
+			assert.Equal(t, []any{helperproto.WarnCertificateBlockDropped}, d["warnings"])
+		}},
 		{"certificate file problems: the directory is not root controlled", true, func(t *testing.T, tw *twin) {
 			tw.dirNotRootControlled()
 			assert.Equal(t, helperproto.FileNotRootControlled, asList(tw.dump().m["files"])[0]["problem"])

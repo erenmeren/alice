@@ -471,7 +471,8 @@ func cleanRunes(s string, maxRunes int) string {
 }
 
 // describeCert reads a certificate file through resolveRoot and returns its certificate blocks.
-// dropped reports blocks labelled CERTIFICATE that are not X.509 certificates (S9).
+// dropped reports blocks labelled CERTIFICATE that are not X.509 certificates (S9). A file whose
+// first such block is dropped is leaf_unreadable, with no blocks (REM-4).
 func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperproto.NginxFile, dropped bool) {
 	fi = helperproto.NginxFile{Path: p, Kind: "cert"}
 	rf, err := s.resolveRoot(p)
@@ -518,9 +519,13 @@ func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperpro
 	}
 	data := buf[:n]
 	fi.SHA256 = hexSHA(data)
-	blocks, dropped := certBlocks(data)
-	if blocks == "" {
+	blocks, dropped, firstDropped := certBlocks(data)
+	switch {
+	case blocks == "":
 		fi.Problem = helperproto.FileNotACertificate
+	case firstDropped:
+		// REM-4: the next certificate (an intermediate) must not reach Alice as the leaf.
+		fi.Problem, blocks = helperproto.FileLeafUnreadable, ""
 	}
 	fi.PEM = blocks
 	return fi, dropped
@@ -531,16 +536,20 @@ var (
 	pemCertEnd   = []byte("-----END CERTIFICATE-----")
 )
 
-// certBlocks returns the X.509 certificates of data, re-encoded as CERTIFICATE blocks, and whether
-// a block was dropped (not a certificate, or with PEM headers). Only the text from a CERTIFICATE
-// begin line to the next CERTIFICATE end line is handed to pem.Decode. A private key elsewhere in
-// the file is never decoded; one inside that span (an unterminated CERTIFICATE block, then a key,
-// then a certificate) can be decoded by pem.Decode's retry, and is then dropped by the type and
-// X.509 checks and its bytes cleared. A private key is never returned.
-func certBlocks(data []byte) (string, bool) {
+// certBlocks returns the X.509 certificates of data, re-encoded as CERTIFICATE blocks, whether
+// a block was dropped (not a certificate, or with PEM headers), and whether the first CERTIFICATE
+// block (the leaf Nginx serves) was among them (firstDropped, REM-4). Only the text from a
+// CERTIFICATE begin line to the next CERTIFICATE end line is handed to pem.Decode. A private key
+// elsewhere in the file is never decoded; one inside that span (an unterminated CERTIFICATE block,
+// then a key, then a certificate) can be decoded by pem.Decode's retry, and is then dropped by the
+// type and X.509 checks and its bytes cleared. A private key is never returned.
+func certBlocks(data []byte) (blocks string, dropped, firstDropped bool) {
 	var b bytes.Buffer
-	dropped := false
-	for rest := data; ; {
+	drop := func(first bool) {
+		dropped = true
+		firstDropped = firstDropped || first
+	}
+	for rest, first := data, true; ; first = false {
 		i := bytes.Index(rest, pemCertBegin)
 		if i < 0 {
 			break
@@ -548,23 +557,23 @@ func certBlocks(data []byte) (string, bool) {
 		rest = rest[i:]
 		end := bytes.Index(rest, pemCertEnd)
 		if end < 0 {
-			dropped = true
+			drop(first)
 			break
 		}
 		blk, _ := pem.Decode(rest[:end+len(pemCertEnd)])
 		rest = rest[end+len(pemCertEnd):]
 		if blk == nil {
-			dropped = true
+			drop(first)
 			continue
 		}
 		if _, err := x509.ParseCertificate(blk.Bytes); err != nil || blk.Type != "CERTIFICATE" || len(blk.Headers) != 0 {
 			clear(blk.Bytes) // whatever it was (a key labelled CERTIFICATE), it does not stay in memory
-			dropped = true
+			drop(first)
 			continue
 		}
 		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: blk.Bytes})
 	}
-	return b.String(), dropped
+	return b.String(), dropped, firstDropped
 }
 
 // describeKey stats a key file through resolveRoot. Its content is never opened or read: only
