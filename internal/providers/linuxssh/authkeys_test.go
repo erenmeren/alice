@@ -423,12 +423,12 @@ func TestLineOfFindsTheFirstLineOfAKey(t *testing.T) {
 
 func TestKeyCommentAndOptionsAreCapped(t *testing.T) {
 	line, _ := edKey(t)
-	check := func(t *testing.T, raw string, get func(Line) string) Line {
+	check := func(t *testing.T, raw string, max int, get func(Line) string) Line {
 		t.Helper()
 		l := mustParse(t, raw).Lines[0]
 		require.Equal(t, LineKey, l.Kind)
 		got := get(l)
-		assert.LessOrEqual(t, len(got), 1024+len("…"))
+		assert.LessOrEqual(t, len(got), max+len("…"))
 		assert.True(t, utf8.ValidString(got))
 		assert.True(t, strings.HasSuffix(got, "…"))
 		assert.Equal(t, raw, l.Raw)
@@ -437,18 +437,30 @@ func TestKeyCommentAndOptionsAreCapped(t *testing.T) {
 	t.Run("comment", func(t *testing.T) {
 		// "é" is two bytes, so a cut at byte 1024 would fall inside a rune only if mishandled.
 		raw := line + " x" + strings.Repeat("é", 2500)
-		l := check(t, raw, func(l Line) string { return l.Comment })
+		l := check(t, raw, 1024, func(l Line) string { return l.Comment })
 		assert.LessOrEqual(t, len(strings.TrimSuffix(l.Comment, "…")), 1024)
 	})
 	t.Run("options", func(t *testing.T) {
 		var opts []string
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 9; i++ {
 			opts = append(opts, `environment="K`+string(rune('1'+i))+`=`+strings.Repeat("v", 1000)+`"`)
 		}
 		raw := strings.Join(opts, ",") + " " + line
-		l := check(t, raw, func(l Line) string { return l.OptionsText })
-		assert.LessOrEqual(t, len(strings.TrimSuffix(l.OptionsText, "…")), 1024)
+		l := check(t, raw, 8192, func(l Line) string { return l.OptionsText })
+		assert.LessOrEqual(t, len(strings.TrimSuffix(l.OptionsText, "…")), 8192)
 		assert.Equal(t, opts, l.Options)
+	})
+	// A rotation builds the new key's line from the stored options text, so an option list of a few KiB
+	// (longer than the comment cap) must be stored whole.
+	t.Run("options of a few KiB are stored whole", func(t *testing.T) {
+		var opts []string
+		for i := 0; i < 5; i++ {
+			opts = append(opts, `environment="K`+string(rune('1'+i))+`=`+strings.Repeat("v", 1000)+`"`)
+		}
+		text := strings.Join(opts, ",")
+		l := mustParse(t, text+" "+line).Lines[0]
+		require.Equal(t, LineKey, l.Kind)
+		assert.Equal(t, text, l.OptionsText)
 	})
 	t.Run("short text is untouched", func(t *testing.T) {
 		l := mustParse(t, `no-pty `+line+` me@host`).Lines[0]

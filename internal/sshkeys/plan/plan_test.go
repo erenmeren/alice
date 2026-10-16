@@ -4,6 +4,7 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/providers"
+	"alice/internal/sshkeys/keymat"
 )
 
 var (
@@ -91,6 +93,7 @@ func TestSkipReasons(t *testing.T) {
 		{"cert authority", nil, func(l *Location) { l.Flags = []string{"cert_authority"} }, SkipCertAuthority},
 		{"duplicate lines", nil, func(l *Location) { l.Flags = []string{"duplicate"} }, SkipDuplicateLines},
 		{"altered options", nil, func(l *Location) { l.Options = "command=\"a\ufffdb\"" }, SkipOptionsUnreadable},
+		{"options cut in the inventory", nil, func(l *Location) { l.Options = "no-pty,environment=\"K=vvvv…" }, SkipOptionsTruncated},
 		{"connection account", nil, func(l *Location) { l.OSUser = "alice-svc" }, SkipConnectionAccount},
 		// Task 9 re-review N1: what BeginAdd refuses at send time is skipped at plan time.
 		{"connection files unknown", func(t *Target) { t.ConnectionFilesKnown = false }, nil, SkipConnectionFilesUnknown},
@@ -499,6 +502,7 @@ func TestSkipAtSendReevaluatesTheDurableReasonsOnly(t *testing.T) {
 		{"cert authority", nil, func(l *Location) { l.Flags = []string{"cert_authority"} }, SkipCertAuthority},
 		{"duplicate lines", nil, func(l *Location) { l.Flags = []string{"duplicate"} }, SkipDuplicateLines},
 		{"options unreadable", nil, func(l *Location) { l.Options = "command=\"a�b\"" }, SkipOptionsUnreadable},
+		{"options truncated", nil, func(l *Location) { l.Options = "no-pty,environment=\"K=vvvv…" }, SkipOptionsTruncated},
 		{"connection account", nil, func(l *Location) { l.OSUser = "alice-svc" }, SkipConnectionAccount},
 		{"connection files unknown", func(t *Target) { t.ConnectionFilesKnown = false }, nil, SkipConnectionFilesUnknown},
 		{"connection account's file", func(t *Target) { t.ConnectionFiles = []string{"/home/deploy/.ssh/authorized_keys"} }, nil,
@@ -540,4 +544,29 @@ func TestSkipAtSendReevaluatesTheDurableReasonsOnly(t *testing.T) {
 		tg.KeysManagedElsewhere = false
 	}
 	assert.ElementsMatch(t, []string{"unreachable", "checking", "auth_failed"}, ConnectionStates)
+}
+
+// A location whose options the inventory stored cut (longer than the cap, so the text ends in "…") is
+// skipped in the preview: the new key's line is built from the stored options (keymat.Line), which
+// refuses a cut list, so without the skip the place would fail after the run started.
+func TestCutOptionsAreSkippedBeforeTheLineIsBuilt(t *testing.T) {
+	cut := `environment="K1=` + strings.Repeat("v", 8180) + "…"
+	_, err := keymat.Line(cut, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl", "c")
+	require.Error(t, err, "keymat.Line refuses a cut option list, which is why the planner must skip it")
+
+	l := loc(t1, "deploy", "/home/deploy/.ssh/authorized_keys", cut)
+	p, err := Build(input(l, loc(t2, "deploy", "/home/deploy/.ssh/authorized_keys", "no-pty")))
+	require.NoError(t, err)
+	i := slices.IndexFunc(p.Actions, func(a Action) bool { return a.LocationID == l.ID })
+	assert.Equal(t, SkipOptionsTruncated, p.Actions[i].Skip)
+	assert.Equal(t, 1, p.Changes)
+	assert.Equal(t, 1, p.Skips)
+	assert.Equal(t, SkipOptionsTruncated, SkipAtSend(okTarget(t1, "web-01"), true, l, 1), "the send-time rule skips it too")
+
+	_, err = Build(input(l))
+	assert.ErrorIs(t, err, ErrNothingToRotate, "a key whose only place has cut options has nothing to rotate")
+
+	// An option list that merely contains "…" inside a quoted value is not cut.
+	l.Options = `environment="K=a…b"`
+	assert.Empty(t, SkipFor(okTarget(t1, "web-01"), true, l))
 }

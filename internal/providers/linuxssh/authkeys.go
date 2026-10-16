@@ -140,9 +140,12 @@ func parseKeyLine(l *Line) {
 
 // The inventory keeps at most this many bytes of a key's comment and of its options text, so a
 // hostile file cannot fill the database. Raw (used to rewrite the file) and Options stay complete.
+// The options cap is higher because a rotation builds the new key's line from the stored options
+// text: an option list longer than the cap is stored cut (ending in "…"), and the planner skips that
+// place (options_truncated) rather than write a shortened list.
 const (
 	maxCommentBytes     = 1024
-	maxOptionsTextBytes = 1024
+	maxOptionsTextBytes = 8192
 )
 
 // capText returns s unchanged when it fits in max bytes; otherwise its longest prefix of at most max

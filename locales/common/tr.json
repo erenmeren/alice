@@ -1954,7 +1954,8 @@
       "pubkey_disabled": "SSH sunucusu anahtar kabul etmiyor.",
       "root_forced_commands_only": "root burada yalnızca sabit bir komutla oturum açabilir ve bu satırda böyle bir komut yok.",
       "duplicate_lines": "Anahtar bu dosyada birden fazla kez listeleniyor.",
-      "options_unreadable": "Alice bu satırın seçeneklerini tam olarak okuyamadı."
+      "options_unreadable": "Alice bu satırın seçeneklerini tam olarak okuyamadı.",
+      "options_truncated": "Bu satırın seçenekleri Alice'in sakladığından uzun; bu nedenle Alice onları yeni anahtara kopyalayamaz."
     }
   }
 }

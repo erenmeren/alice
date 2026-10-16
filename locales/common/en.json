@@ -1954,7 +1954,8 @@
       "pubkey_disabled": "The SSH server does not accept keys.",
       "root_forced_commands_only": "root may sign in here only with a fixed command, and this line has none.",
       "duplicate_lines": "The key is listed more than once in this file.",
-      "options_unreadable": "Alice could not read this line's options exactly."
+      "options_unreadable": "Alice could not read this line's options exactly.",
+      "options_truncated": "This line's options are longer than Alice stores, so Alice cannot copy them to the new key."
     }
   }
 }

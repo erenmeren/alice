@@ -17,8 +17,9 @@
 - Nginx discovery: one `nginx-dump` answer may list at most 20,000 server-block entries (one block under one
   certificate location) and 100,000 server names; the rest is left out and the location says the list was cut (`list_truncated`), so a
   hostile dump can no longer exhaust Alice's memory (REM-1).
-- SSH key inventory: a key's comment and options text are stored up to 1 KiB each, then cut with `…`; the
-  `authorized_keys` file itself is never rewritten from the shortened text (REM-2).
+- SSH key inventory: a key's comment is stored up to 1 KiB and its options text up to 8 KiB, then cut with `…`; the
+  `authorized_keys` file itself is never rewritten from the shortened text, and a rotation skips a place whose options
+  were cut (`options_truncated`) instead of failing during the run (REM-2).
 
 **Added**
 - Two settings in `/opt/alice/.env`, written by the installer and kept by the update: `ALICE_TRUSTED_PROXIES` (the

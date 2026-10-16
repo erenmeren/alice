@@ -1249,7 +1249,8 @@ not list an account (for example a name with characters Alice does not support):
 `getent passwd <user ID>` on the server shows the account. While such a warning is shown, Alice does not mark keys of
 deleted accounts **No longer found** on that server. Key options such as `command=` or
 `environment=` are shown exactly as they are in the file, to everyone who can see the key, auditors included.
-Comments and option lists are shown up to 1 KiB each; longer ones are cut in the inventory, never in the file.
+Comments are shown up to 1 KiB and option lists up to 8 KiB; longer ones are cut in the inventory, never in the file. A
+rotation skips a place whose option list was cut (`options_truncated`), because it cannot copy the options to the new key.
 
 ### Generated keys and rotation
 

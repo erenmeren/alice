@@ -39,6 +39,9 @@ const (
 	SkipRootForcedCommands   = "root_forced_commands_only" // PermitRootLogin forced-commands-only and no command= on the line
 	SkipDuplicateLines       = "duplicate_lines"           // S8: the file holds the key twice; sshd applies the first line
 	SkipOptionsUnreadable    = "options_unreadable"        // S8: the stored options were altered when read (U+FFFD)
+	// The stored options text was cut by the inventory's cap (it ends in "…", which no valid option
+	// list does), so the new key's line cannot be built from it.
+	SkipOptionsTruncated = "options_truncated"
 	// The connection account's key files of the target are not known completely: scan the server again.
 	SkipConnectionFilesUnknown = "connection_files_unknown"
 	// The location's file is one of the connection account's key files (S7).
@@ -230,6 +233,8 @@ func skipReason(t Target, known bool, l Location) string {
 		return SkipDuplicateLines
 	case strings.ContainsRune(l.Options, '\uFFFD'):
 		return SkipOptionsUnreadable
+	case strings.HasSuffix(l.Options, "…"):
+		return SkipOptionsTruncated
 	case l.OSUser == t.ConnectionUser:
 		return SkipConnectionAccount
 	case !t.ConnectionFilesKnown:
@@ -285,7 +290,7 @@ var ConnectionStates = []string{"unreachable", "checking", "auth_failed"}
 // accounts and the line (target_not_connected only for a disabled server). Every planner reason is one,
 // except a target_not_connected that comes from a ConnectionStates status.
 var SkipsAtSend = []string{SkipTargetDeleted, SkipHostKeyUnconfirmed, SkipHostKeyChanged, SkipTargetNotConnected, SkipMissing,
-	SkipCertAuthority, SkipDuplicateLines, SkipOptionsUnreadable, SkipConnectionAccount, SkipConnectionFilesUnknown,
+	SkipCertAuthority, SkipDuplicateLines, SkipOptionsUnreadable, SkipOptionsTruncated, SkipConnectionAccount, SkipConnectionFilesUnknown,
 	SkipConnectionAccountFile, SkipKeysManagedElsewhere, SkipSSHDUnreadable, SkipPubkeyDisabled, SkipRootForcedCommands, SkipSharedFile}
 
 // SkipAtSend is the planner's rule for one location right before its add is sent, on the same facts

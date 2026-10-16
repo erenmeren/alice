@@ -6220,7 +6220,8 @@ components:
           description: Empty when this place changes; otherwise why it is skipped (texts rotation.skip.<reason>)
           enum: ["", target_deleted, host_key_unconfirmed, host_key_changed, target_not_connected, keys_managed_elsewhere,
             sshd_unreadable, connection_account, missing, cert_authority, shared_file_skipped, pubkey_disabled,
-            root_forced_commands_only, duplicate_lines, options_unreadable]
+            root_forced_commands_only, duplicate_lines, options_unreadable, options_truncated, connection_files_unknown,
+            connection_account_file]
         verify: { type: boolean, description: A test login with the new key will be tried here }
         verify_note: { type: string, enum: ["", root_login_disabled, from_option] }
         remove_line: { type: string, description: The old key's line (public) }
