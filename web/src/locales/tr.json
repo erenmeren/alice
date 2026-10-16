@@ -143,7 +143,19 @@
       "provider_id": "Sertifika yetkilisi",
       "hook_id": "DNS kancası",
       "http_target_id": "Web sunucusu",
-      "renew_before_days": "Süre bitiminden kaç gün önce yenilensin"
+      "renew_before_days": "Süre bitiminden kaç gün önce yenilensin",
+      "user_base_dn": "Kullanıcı temel DN'si",
+      "user_filter": "Kullanıcı filtresi",
+      "login_attribute": "Oturum açma adı özniteliği",
+      "unique_id_attribute": "Benzersiz kimlik özniteliği",
+      "display_name_attribute": "Görünen ad özniteliği",
+      "email_attribute": "E-posta özniteliği",
+      "bind_dn": "Hizmet hesabı DN'si",
+      "bind_password": "Hizmet hesabı parolası",
+      "group_base_dn": "Grup temel DN'si",
+      "group_filter": "Grup filtresi",
+      "group_name_attribute": "Grup adı özniteliği",
+      "directory_id": "Dizin"
     },
     "continue": "Devam",
     "verify": "Doğrula",
@@ -185,7 +197,9 @@
       "selfHosted": "Kendi sunucunuzda",
       "offline": "Çevrimdışı çalışır",
       "control": "Kontrol için tasarlandı"
-    }
+    },
+    "signInTo": "Oturum açılacak yer",
+    "local": "Yerel hesap"
   },
   "account": {
     "title": "Hesabınız",
@@ -215,7 +229,10 @@
       "mfa": "Çok faktörlü doğrulama",
       "mfaOn": "Etkin",
       "mfaOff": "Kurulmadı",
-      "ssoNote": "Parolanız ve ikinci doğrulama adımınız kimlik sağlayıcınız tarafından yönetilir; bu nedenle burada değiştirilmez."
+      "ssoNote": "Parolanız ve ikinci doğrulama adımınız kimlik sağlayıcınız tarafından yönetilir; bu nedenle burada değiştirilmez.",
+      "directory": "Dizin",
+      "directoryNote": "Parolanız dizininiz tarafından yönetilir; bu nedenle burada değiştirilmez. Doğrulama uygulamanız ve kurtarma kodlarınız Alice'e aittir ve burada yönetilir.",
+      "directoryNamed": "Dizin: {{name}}"
     }
   },
   "setup": {
@@ -383,7 +400,8 @@
       "local": "Yerel hesap",
       "mfaEnrolled": "Doğrulama uygulaması kurulu",
       "mfaPending": "Doğrulama uygulaması henüz kurulmadı"
-    }
+    },
+    "directory": "Dizin"
   },
   "tokens": {
     "title": "API anahtarları",
@@ -426,7 +444,8 @@
       "boundTitle": "Bir API anahtarı, sahibinin yetkilerini aşamaz",
       "boundText": "Denetçi yalnızca okuma yetkili API anahtarı oluşturabilir. Özel anahtar indirme gibi tarayıcı gerektiren hassas işlemler API anahtarıyla yapılamaz.",
       "table": "API anahtarlarınız"
-    }
+    },
+    "directoryNoCreate": "Dizin ile oturum açtığınız için API anahtarı oluşturamazsınız. Bir betik için anahtar gerekiyorsa bir Yöneticiye başvurun."
   },
   "audit": {
     "page": {
@@ -693,7 +712,15 @@
       "https_certificate_recovered": "Yarım kalan değişiklikten sonra HTTPS sertifikası onarıldı",
       "audit_forwarding_changed": "Denetim kaydı iletim ayarları değiştirildi",
       "setup_https_kept_temporary": "Kurulumda geçici HTTPS sertifikası korundu",
-      "setup_mail_skipped": "Kurulumda e-posta sunucusu atlandı"
+      "setup_mail_skipped": "Kurulumda e-posta sunucusu atlandı",
+      "ldap_directory_created": "Dizin eklendi",
+      "ldap_directory_changed": "Dizin değiştirildi",
+      "ldap_directory_deleted": "Dizin silindi",
+      "ldap_directory_tested": "Dizin bağlantısı test edildi",
+      "ldap_signin_tested": "Dizin ile oturum açma test edildi",
+      "ldap_mapping_created": "Dizin grup eşlemesi eklendi",
+      "ldap_mapping_deleted": "Dizin grup eşlemesi kaldırıldı",
+      "ldap_mapping_denied": "Dizin grup eşlemesi reddedildi"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -2632,7 +2659,8 @@
       "backups": "Yedekler",
       "https": "HTTPS sertifikası",
       "acme": "Sertifika yetkilileri",
-      "forwarding": "Denetim kaydı iletimi"
+      "forwarding": "Denetim kaydı iletimi",
+      "directories": "Dizinler"
     },
     "tabsLabel": "Ayar bölümleri",
     "mail": {
@@ -2699,7 +2727,8 @@
       "validUntil": "Geçerlilik bitişi",
       "fingerprint": "Parmak izi (SHA-256)",
       "lastBackup": "Son yedek",
-      "schedule": "Zamanlama"
+      "schedule": "Zamanlama",
+      "directories": "Kişilerin LDAP ya da Active Directory parolalarıyla oturum açmasına izin verin ve dizin gruplarını Alice rolleriyle eşleştirin."
     }
   },
   "sso": {
@@ -2756,7 +2785,11 @@
   "stepUp": {
     "ssoTitle": "Kimlik sağlayıcınızda onaylayın",
     "ssoAction": "{{name}} sayfasına devam et",
-    "ssoFallbackName": "kimlik sağlayıcınız"
+    "ssoFallbackName": "kimlik sağlayıcınız",
+    "directoryHelp": "Dizin parolanızı yeniden girin.",
+    "directoryPassword": "Dizin parolası",
+    "directoryCodeHelp": "Dizininiz doğrulama kodu istiyorsa gereklidir.",
+    "signOut": "Oturumu kapat"
   },
   "backups": {
     "backUpNow": "Şimdi yedekle",
@@ -3709,5 +3742,102 @@
       "cancelLabel": "Taramayı iptal et: {{name}}",
       "more": "Daha fazla tarama yükle"
     }
+  },
+  "directories": {
+    "list": "Dizinler",
+    "table": "Dizinler",
+    "add": "Dizin ekle",
+    "editTitle": "Dizini düzenle",
+    "none": "Henüz bir dizin kurulmadı.",
+    "max": "Alice en çok 3 dizinle çalışır.",
+    "columns": {
+      "name": "Ad",
+      "addresses": "Adresler",
+      "mfa": "Çok adımlı doğrulama",
+      "enabled": "Oturum açma",
+      "version": "Sürüm",
+      "actions": "İşlemler"
+    },
+    "mfa": {
+      "on": "Kod istenir",
+      "off": "Yalnızca parola"
+    },
+    "status": {
+      "enabled": "Açık",
+      "disabled": "Kapalı"
+    },
+    "adminNote": "SSO kullanıcıları Yönetici olabilir ayarı (Çoklu oturum açma bölümünde) dizin kullanıcıları için de geçerlidir: ayar kapalıyken dizin kullanıcıları en çok Operatör olabilir.",
+    "passwordNote": "Dizin parolaları doğrulanmış bir ldaps:// bağlantısı üzerinden Alice'ten geçer. Hiçbir zaman saklanmaz ve günlüğe yazılmaz.",
+    "presets": {
+      "label": "Yaygın değerleri doldur",
+      "ad": "Active Directory",
+      "openldap": "OpenLDAP",
+      "help": "Hazır ayar yalnızca öznitelik ve filtre alanlarını doldurur. Dizini kaydedene kadar hiçbir şey kaydedilmez."
+    },
+    "fields": {
+      "name": "Oturum açma sayfasında gösterilen ad",
+      "addresses": "Adresler",
+      "addressesHelp": "Her satıra bir ldaps:// adresi, en çok 3 adres; sırayla denenir. Örnek: ldaps://dc1.corp.example:636",
+      "userBaseDn": "Kullanıcı temel DN'si",
+      "userFilter": "Kullanıcı filtresi",
+      "userFilterHelp": "{login} değerini bir kez içerir.",
+      "loginAttribute": "Oturum açma adı özniteliği",
+      "uniqueIdAttribute": "Benzersiz kimlik özniteliği",
+      "uniqueIdHelp": "Bir kişi için hiç değişmeyen bir değer: Active Directory'de objectGUID, OpenLDAP'ta entryUUID. Kişiler oturum açtıktan sonra değiştirilemez.",
+      "displayNameAttribute": "Görünen ad özniteliği",
+      "emailAttribute": "E-posta özniteliği",
+      "bindDn": "Hizmet hesabı DN'si",
+      "bindDnHelp": "Alice'in kullanıcıları ve gruplarını bulmak için kullandığı salt okunur bir hesap.",
+      "bindPassword": "Hizmet hesabı parolası",
+      "bindPasswordStored": "Bir parola kayıtlı. Korumak için alanı boş bırakın.",
+      "bindPasswordReenter": "Adresleri, hizmet hesabını, benzersiz kimlik özniteliğini ya da sertifika yetkilisini değiştirdiniz: hizmet hesabı parolasını yeniden girin.",
+      "groupBaseDn": "Grup temel DN'si",
+      "groupFilter": "Grup filtresi",
+      "groupFilterHelp": "{dn} ya da {login} değerini içerir.",
+      "groupNameAttribute": "Grup adı özniteliği",
+      "groupNameHelp": "Grup değeri olarak grubun DN'sini kullanmak için boş bırakın.",
+      "caPem": "Sertifika yetkilisi (isteğe bağlı, PEM)",
+      "mfaRequired": "Dizin parolasından sonra Alice doğrulama kodunu iste",
+      "enabled": "Bu dizinle oturum açmaya izin ver"
+    },
+    "templateRules": "Filtre kuralları: {login} ve {dn} yalnızca değer yerinde durur, örneğin (uid={login}). Süslü parantezin kendisini \\7b ya da \\7d olarak yazın. Denetim karakterlerine izin verilmez.",
+    "save": "Dizini kaydet",
+    "edit": "{{name}} dizinini düzenle",
+    "delete": "{{name}} dizinini sil",
+    "deleteShort": "Sil",
+    "deleteTitle": "{{name}} silinsin mi?",
+    "deleteText": "Dizin, grup eşlemeleri ve kayıtlı parolası kaldırılır. Kişilerin oturum açtığı bir dizin silinemez: bunun yerine bu dizinle oturum açmayı kapatın.",
+    "deleteConfirm": "Dizini sil",
+    "testConnection": "Bağlantıyı test et",
+    "testConnectionNamed": "{{name}} bağlantısını test et",
+    "connectionOk": "Bağlantı çalışıyor: Alice hizmet hesabıyla bağlanıp kullanıcı temel DN'sinde arama yapabildi.",
+    "testSignIn": "Oturum açmayı test et",
+    "testSignInNamed": "{{name}} ile oturum açmayı test et",
+    "testSignInTitle": "{{name}} ile oturum açmayı test et",
+    "testSignInText": "Hiç kimsenin oturumu açılmaz ve parola saklanmaz. Sonuç, dizinin döndürdüğü grupları ve bunların verdiği rolü gösterir.",
+    "testUsername": "Oturum açma adı",
+    "testPassword": "Parola",
+    "runTest": "Testi çalıştır",
+    "result": {
+      "title": "Dizin oturum açmayı kabul etti.",
+      "login": "Oturum açma adı",
+      "displayName": "Görünen ad",
+      "email": "E-posta",
+      "uniqueId": "Benzersiz kimlik",
+      "groups": "Bulunan gruplar",
+      "noGroups": "Hiç grup bulunamadı.",
+      "role": "Alice'teki rol",
+      "noRole": "Yok: hiçbir grup eşlenmemiş, bu nedenle bu kişi oturum açamaz."
+    },
+    "mappings": "Grup eşlemeleri",
+    "noMappings": "Henüz eşlenmiş bir grup yok. Eşleme olmadan hiç kimse bu dizinle oturum açamaz.",
+    "group": "Grup",
+    "groupHelp": "Değeri Oturum açmayı test et sonucunda listelendiği gibi yazın: büyük-küçük harf dahil tam olarak eşleştirilir.",
+    "role": "Alice'teki rol",
+    "addMapping": "Grubu eşle",
+    "removeMapping": "{{group}} eşlemesini kaldır",
+    "removeMappingTitle": "{{group}} eşlemesi kaldırılsın mı?",
+    "removeMappingText": "Bu grubun üyeleri bir sonraki oturum açmada ya da kimlik onayında artık bu rolü almaz.",
+    "removeMappingConfirm": "Eşlemeyi kaldır"
   }
 }

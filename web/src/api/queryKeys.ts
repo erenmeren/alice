@@ -58,6 +58,13 @@ export const SSO_SETTINGS_KEY = ['sso', 'settings'] as const;
 export const ssoMappingsKey = (providerId: string) => ['sso', 'mappings', providerId] as const;
 export const PUBLIC_PROVIDERS_KEY = ['auth', 'oidc', 'providers'] as const;
 
+// Directories (LDAP or Active Directory). No key holds a password: the service account, sign-in and test passwords are
+// mutation inputs only.
+export const LDAP_KEY = ['ldap'] as const;
+export const LDAP_DIRECTORIES_KEY = ['ldap', 'directories'] as const;
+export const ldapMappingsKey = (directoryId: string) => ['ldap', 'mappings', directoryId] as const;
+export const PUBLIC_DIRECTORIES_KEY = ['auth', 'ldap', 'directories'] as const;
+
 // Phase 8. The backup list (with its state and schedule); the backup schedule, the HTTPS certificate's information and
 // the audit forwarding are settings (settingsKey). No key holds a secret: uploads and the CA PEM are mutation inputs only.
 export const BACKUPS_KEY = ['backups'] as const;

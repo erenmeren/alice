@@ -22,10 +22,15 @@ export interface User {
   mfa_enrolled: boolean;
   last_login_at: string | null;
   created_at: string;
-  // How the person signs in: a local account, or single sign-on (no Alice password or authenticator; the role comes from groups).
-  auth_source: 'local' | 'oidc';
+  // How the person signs in: a local account, single sign-on (no Alice password or authenticator; the role comes from groups)
+  // or a directory (LDAP or Active Directory: no Alice password, the role comes from groups, Alice's authenticator stays).
+  auth_source: AuthSource;
   sso_provider_id: string | null;
+  // The directory of a directory user; null for every other user.
+  ldap_directory_id: string | null;
 }
+
+export type AuthSource = 'local' | 'oidc' | 'ldap';
 
 export interface SessionInfo {
   user: User;
@@ -39,8 +44,9 @@ export interface SessionWithCodes extends SessionInfo {
   recovery_codes?: string[];
 }
 
+// signed_in comes only from a directory that does not ask for MFA: the session is full at once.
 export interface LoginResponse {
-  status: 'mfa_required' | 'mfa_enrollment_required';
+  status: 'mfa_required' | 'mfa_enrollment_required' | 'signed_in';
   csrf_token: string;
 }
 

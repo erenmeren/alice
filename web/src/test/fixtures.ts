@@ -3,6 +3,7 @@ import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, AC
 import type { DashboardSummary } from '../api/phase7';
 import type { DiscoveredCertificate, DiscoveredEndpoint, DiscoveryPreview, DiscoveryScan, DiscoveryScope, DiscoverySettings } from '../api/discovery';
 import type { Provider } from '../api/sso';
+import type { Directory } from '../api/ldap';
 import type { Policy, Preview, PreviewAction, Run, RunLocation } from '../api/rotation';
 import type { ManagedKeyInfo } from '../api/sshkeys';
 import type { Backup, BackupList, BackupSchedule, BackupState, Forwarding, HTTPSInfo } from '../api/types';
@@ -58,6 +59,7 @@ export function userFor(role: Role, locale = 'en'): User {
     created_at: '2026-09-30T08:00:00Z',
     auth_source: 'local',
     sso_provider_id: null,
+    ldap_directory_id: null,
   };
 }
 
@@ -75,6 +77,12 @@ export function sessionFor(role: Role, locale = 'en'): SessionInfo {
 export function ssoSessionFor(role: Role, locale = 'en'): SessionInfo {
   const s = sessionFor(role, locale);
   return { ...s, user: { ...s.user, username: 'ayse@corp.example', auth_source: 'oidc', sso_provider_id: 'p1' } };
+}
+
+// ldapSessionFor is a session of a directory user of the directory directoryFixture (Alice user name deniz).
+export function ldapSessionFor(role: Role, locale = 'en', mfaEnrolled = true): SessionInfo {
+  const s = sessionFor(role, locale);
+  return { ...s, user: { ...s.user, username: 'deniz', auth_source: 'ldap', ldap_directory_id: DIRECTORY_ID, mfa_enrolled: mfaEnrolled } };
 }
 
 export const adminSession = sessionFor('admin');
@@ -873,6 +881,34 @@ export function providerFixture(o: Partial<Provider> = {}): Provider {
     version: 1,
     created_at: '2026-10-07T09:00:00Z',
     updated_at: '2026-10-07T09:00:00Z',
+    ...o,
+  };
+}
+
+// directoryFixture is a configured directory (named Corp AD).
+export const DIRECTORY_ID = '0192f100-0000-7000-8000-0000000000d1';
+export function directoryFixture(o: Partial<Directory> = {}): Directory {
+  return {
+    id: DIRECTORY_ID,
+    name: 'Corp AD',
+    addresses: ['ldaps://dc1.corp.example:636', 'ldaps://dc2.corp.example'],
+    user_base_dn: 'ou=people,dc=corp,dc=example',
+    user_filter: '(&(objectClass=user)(sAMAccountName={login}))',
+    login_attribute: 'sAMAccountName',
+    unique_id_attribute: 'objectGUID',
+    display_name_attribute: 'displayName',
+    email_attribute: 'mail',
+    bind_dn: 'cn=alice-svc,ou=services,dc=corp,dc=example',
+    bind_password_set: true,
+    group_base_dn: 'ou=groups,dc=corp,dc=example',
+    group_filter: '(member:1.2.840.113556.1.4.1941:={dn})',
+    group_name_attribute: 'cn',
+    ca_pem: '',
+    mfa_required: true,
+    enabled: true,
+    version: 3,
+    created_at: '2026-10-15T09:00:00Z',
+    updated_at: '2026-10-15T09:00:00Z',
     ...o,
   };
 }

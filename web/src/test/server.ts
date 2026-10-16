@@ -20,6 +20,8 @@ export const handlers = [
   http.get('/api/v1/views', () => HttpResponse.json({ items: [] })),
   // Phase 7 single sign-on: the sign-in page lists the public providers (none by default).
   http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [] })),
+  // Directory sign-in: the sign-in page lists the switched-on directories (none by default: no "Sign in to" select).
+  http.get('/api/v1/auth/ldap/directories', () => HttpResponse.json({ items: [] })),
   http.post('/api/v1/auth/logout', () => new HttpResponse(null, { status: 204 })),
   // Phase 8: the Backups, HTTPS certificate and Audit forwarding tabs and the wizard's HTTPS step.
   http.get('/api/v1/backups', () => HttpResponse.json(backupListFixture())),

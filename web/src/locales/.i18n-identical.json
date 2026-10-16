@@ -10,6 +10,8 @@
   "certificates.detail.keyValue",
   "certificates.sourceAzureKv",
   "dashboard.statusCount",
+  "directories.presets.ad",
+  "directories.presets.openldap",
   "discovery.scans.optionBlocked",
   "discovery.scope.preview.ports_one",
   "enum.certificateSource.azure_kv",
