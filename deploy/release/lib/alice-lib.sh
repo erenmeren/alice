@@ -186,7 +186,7 @@ alice_version_cmp() {
 # ---- key=value files (RELEASE, .env) ----
 
 alice_release_keys=" VERSION MIN_UPGRADE_FROM SCHEMA_VERSION ALICE_IMAGE ALICE_IMAGE_ID ALICE_IMAGE_DIGEST POSTGRES_IMAGE POSTGRES_IMAGE_ID POSTGRES_IMAGE_DIGEST BUILD_COMMIT BUILD_TIME RELEASE_KEY_ID TEST_SIGNED "
-alice_env_keys=" COMPOSE_PROJECT_NAME ALICE_IMAGE POSTGRES_IMAGE ALICE_BIND ALICE_PORT ALICE_TLS_HOSTS ALICE_TZ "
+alice_env_keys=" COMPOSE_PROJECT_NAME ALICE_IMAGE POSTGRES_IMAGE ALICE_BIND ALICE_PORT ALICE_TLS_HOSTS ALICE_TZ ALICE_TRUSTED_PROXIES ALICE_MIGRATE_TIMEOUT "
 
 # alice_kv_get KEY FILE prints the value of the first KEY= line (KEY is allowlisted by the callers).
 alice_kv_get() {
@@ -297,7 +297,9 @@ alice_validate_env_values() {
   fi
 }
 
-# alice_write_env FILE PROJECT ALICE_IMAGE POSTGRES_IMAGE BIND PORT HOSTS ZONE writes .env (0640).
+# alice_write_env FILE PROJECT ALICE_IMAGE POSTGRES_IMAGE BIND PORT HOSTS ZONE PROXIES MIGRATE_TIMEOUT
+# writes .env (0640). PROXIES and MIGRATE_TIMEOUT are the customer's own settings (OPS-6, OPS-4); an
+# empty MIGRATE_TIMEOUT writes the default 30m.
 alice_write_env() {
   local f=$1
   {
@@ -309,6 +311,8 @@ alice_write_env() {
     printf 'ALICE_PORT=%s\n' "$6"
     printf 'ALICE_TLS_HOSTS=%s\n' "$7"
     printf 'ALICE_TZ=%s\n' "$8"
+    printf 'ALICE_TRUSTED_PROXIES=%s\n' "${9-}"
+    printf 'ALICE_MIGRATE_TIMEOUT=%s\n' "${10:-30m}"
   } >"$f.new" || return 1
   chmod 0640 -- "$f.new" || return 1
   mv -f -- "$f.new" "$f"

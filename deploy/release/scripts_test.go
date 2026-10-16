@@ -971,6 +971,18 @@ func TestInstallValidatesEnvValues(t *testing.T) {
 	})
 }
 
+// OPS-6, OPS-4: the reverse-proxy list and the migration time limit are customer settings of .env.
+func TestInstallWritesTheProxyAndMigrateKeys(t *testing.T) {
+	t.Parallel()
+	e := shNew(t)
+	r := e.install(e.pkg(shPkgOpts{}))
+	require.Equal(t, 0, r.code, r.out)
+	env, err := os.ReadFile(filepath.Join(e.inst, ".env"))
+	require.NoError(t, err)
+	assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES=\n")
+	assert.Contains(t, string(env), "\nALICE_MIGRATE_TIMEOUT=30m\n")
+}
+
 func TestInstallRefusesAnUnsafeDir(t *testing.T) {
 	t.Parallel()
 	t.Run("world-writable parent", func(t *testing.T) {
@@ -1492,6 +1504,43 @@ func TestUpdateHappyPathOrder(t *testing.T) {
 	logs, _ := filepath.Glob(filepath.Join(e.inst, "update-*.log"))
 	require.Len(t, logs, 1)
 	shMode(t, logs[0], 0o600)
+}
+
+// OPS-6, OPS-4: an update keeps the customer's reverse-proxy list and migration time limit.
+func TestUpdateKeepsTheProxyAndMigrateKeys(t *testing.T) {
+	t.Parallel()
+	e := shNewInstalled(t, "1.0.0-rc.2")
+	f := filepath.Join(e.inst, ".env")
+	old, err := os.ReadFile(f)
+	require.NoError(t, err)
+	shWrite(t, f, string(old)+"ALICE_TRUSTED_PROXIES=10.0.0.5/32\nALICE_MIGRATE_TIMEOUT=2h\n", 0o640)
+	pkg := e.pkg(shPkgOpts{version: "1.0.0"})
+	r := e.update(shTarball(t, pkg, filepath.Join(e.root, "dl"), "1.0.0", e.key))
+	require.Equal(t, 0, r.code, r.out)
+	env, err := os.ReadFile(f)
+	require.NoError(t, err)
+	assert.Contains(t, string(env), "ALICE_IMAGE=alice:1.0.0\n", "the .env was rewritten")
+	assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES=10.0.0.5/32\n")
+	assert.Contains(t, string(env), "\nALICE_MIGRATE_TIMEOUT=2h\n")
+}
+
+// An installation from before OPS-6/OPS-4 has neither key; the update adds both with their defaults.
+func TestUpdateAddsTheProxyAndMigrateKeysWhenMissing(t *testing.T) {
+	t.Parallel()
+	e := shNewInstalled(t, "1.0.0-rc.2")
+	f := filepath.Join(e.inst, ".env")
+	old, err := os.ReadFile(f)
+	require.NoError(t, err)
+	require.NotContains(t, string(old), "ALICE_TRUSTED_PROXIES")
+	require.NotContains(t, string(old), "ALICE_MIGRATE_TIMEOUT")
+	pkg := e.pkg(shPkgOpts{version: "1.0.0"})
+	r := e.update(shTarball(t, pkg, filepath.Join(e.root, "dl"), "1.0.0", e.key))
+	require.Equal(t, 0, r.code, r.out)
+	env, err := os.ReadFile(f)
+	require.NoError(t, err)
+	assert.Contains(t, string(env), "ALICE_IMAGE=alice:1.0.0\n", "the .env was rewritten")
+	assert.Contains(t, string(env), "\nALICE_TRUSTED_PROXIES=\n")
+	assert.Contains(t, string(env), "\nALICE_MIGRATE_TIMEOUT=30m\n")
 }
 
 // I-1: the update accepts the image ID a containerd store reports (the manifest digest) and

@@ -546,7 +546,7 @@ confirmations are `auth.login` and `auth.stepup` with `method` `ldap` (with MFA,
 
 **Likely cause.** More than 300 requests per minute for one session or token, more than 60 per minute from one address without signing in, more than 60 calls of `/healthz` on the public port per minute from one address, more than 60 per minute from one address with a session cookie or API token Alice does not accept (sessions and tokens Alice accepted in the last 30 minutes are exempt), more than 10 sign-in attempts or 5 verification codes per minute from one address.
 
-**What to do.** Wait for the time in `Retry-After`. If many people share one address through a proxy, ask the administrator to set `ALICE_TRUSTED_PROXIES` so Alice sees real client addresses; when Docker forwards the port through a proxy process (rootless Docker), all clients also share one address (see [operator-guide.md](operator-guide.md#health-endpoints-and-request-limits)). After Alice restarts, people behind an address that sends many bad credentials may have to sign in again.
+**What to do.** Wait for the time in `Retry-After`. If many people share one address through a proxy, ask the administrator to set `ALICE_TRUSTED_PROXIES=<proxy address or CIDR, comma-separated>` in `/opt/alice/.env` and run `cd /opt/alice && sudo docker compose up -d alice`, so Alice sees real client addresses (an update keeps the value); when Docker forwards the port through a proxy process (rootless Docker), all clients also share one address (see [operator-guide.md](operator-guide.md#health-endpoints-and-request-limits)). After Alice restarts, people behind an address that sends many bad credentials may have to sign in again.
 
 ## ALC-SYS-0006: Some fields need attention
 

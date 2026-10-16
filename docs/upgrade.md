@@ -15,6 +15,9 @@ returns to the installed version by itself when the new one does not start.
       before it changes anything, and needs it to return to the installed version.
 - [ ] Choose a quiet period. Alice is unavailable for a few minutes: it stops before the backup and starts again
       after the database update. Running jobs get up to 60 seconds to finish.
+- [ ] A large database may need more time for its update than the default limit of 30 minutes. Set
+      `ALICE_MIGRATE_TIMEOUT` in `/opt/alice/.env` to a Go duration such as `2h` (from `1m` to `24h`); the update
+      keeps the value.
 - [ ] Announce the outage to the people who use Alice. Alice shows no "update in progress" message of its own.
 - [ ] Check the package as in [install-guide.md](install-guide.md#3-check-the-package-before-you-extract-it): the
       vendor's signature of the `.sha256` file and the checksum.

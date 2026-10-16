@@ -223,6 +223,9 @@ func TestReleaseComposeMountsMatchTheLayout(t *testing.T) {
 	assert.Equal(t, "/opt/alice/backups", env["ALICE_BACKUP_DIR"])
 	assert.Equal(t, "${ALICE_TZ:-UTC}", env["ALICE_TZ"])
 	assert.Equal(t, "${ALICE_TLS_HOSTS:-}", env["ALICE_TLS_HOSTS"])
+	// OPS-6, OPS-4: the customer's reverse-proxy list and migration time limit come from .env.
+	assert.Equal(t, "${ALICE_TRUSTED_PROXIES:-}", env["ALICE_TRUSTED_PROXIES"])
+	assert.Equal(t, "${ALICE_MIGRATE_TIMEOUT:-30m}", c.Services["migrate"].Environment["ALICE_MIGRATE_TIMEOUT"])
 	admin := c.Services["alice-admin"].Environment
 	for _, k := range []string{"ALICE_KEYS_DIR", "ALICE_STATE_DIR", "ALICE_BACKUP_DIR", "ALICE_TZ"} {
 		assert.NotEmpty(t, admin[k], "alice-admin %s", k)
@@ -248,7 +251,7 @@ func TestEnvTemplateHasNoSecret(t *testing.T) {
 	}
 	require.NoError(t, sc.Err())
 	assert.Equal(t, []string{"COMPOSE_PROJECT_NAME", "ALICE_IMAGE", "POSTGRES_IMAGE", "ALICE_BIND", "ALICE_PORT",
-		"ALICE_TLS_HOSTS", "ALICE_TZ"}, got)
+		"ALICE_TLS_HOSTS", "ALICE_TZ", "ALICE_TRUSTED_PROXIES", "ALICE_MIGRATE_TIMEOUT"}, got)
 }
 
 // S-20: the role script never puts a password in an argument list; psql reads the secret files.

@@ -1454,9 +1454,10 @@ one of them sends many bad credentials, the others wait (`ALC-SYS-0005`, `Retry-
 their own session or token in the last 30 minutes, for example a nightly script's API token, and after Alice
 restarts everyone from that address waits until they sign in again. This happens:
 
-- behind a reverse proxy: set `ALICE_TRUSTED_PROXIES` in `deploy/.env` to the proxy's address or network (comma-
-  separated); Alice then takes the client address from the proxy's `X-Forwarded-For` header. Without it everyone
-  has the proxy's address. List only your proxies, never a client network: Alice believes the `X-Forwarded-For`
+- behind a reverse proxy: set `ALICE_TRUSTED_PROXIES=<proxy address or CIDR, comma-separated>` in
+  `/opt/alice/.env`, then run `cd /opt/alice && sudo docker compose up -d alice`. Alice then takes the client
+  address from the proxy's `X-Forwarded-For` header. An update keeps the value. Without it everyone has the proxy's
+  address. List only your proxies, never a client network: Alice believes the `X-Forwarded-For`
   header of every address in these ranges, so a client inside them can claim any address. It could then escape the
   per-address limits (sign-in attempts, bad credentials, `/healthz`) and write a false address into the audit log;
 - when the published port is forwarded by a proxy process instead of the kernel (rootless Docker's default port

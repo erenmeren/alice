@@ -306,6 +306,10 @@ preflight() {
   env_bind=$(alice_env_get ALICE_BIND "$dir/.env")
   env_port=$(alice_env_get ALICE_PORT "$dir/.env")
   env_zone=$(alice_env_get ALICE_TZ "$dir/.env")
+  # The customer's own settings (OPS-6, OPS-4); an installation from before them has neither key.
+  env_proxies=$(alice_env_get ALICE_TRUSTED_PROXIES "$dir/.env")
+  env_migrate_timeout=$(alice_env_get ALICE_MIGRATE_TIMEOUT "$dir/.env")
+  [[ -n "$env_migrate_timeout" ]] || env_migrate_timeout=30m
   if ! alice_validate_env_values "$env_hosts" "$env_bind" "$env_port" "$env_project" 2>&1 | alice_log_stream; then
     alice_fail "The file $dir/.env holds a value that is not valid (see above)."
     exit 1
@@ -422,7 +426,8 @@ load_images() {
 # other values kept and checked again, S-9).
 new_configuration() {
   install -m 0644 -- "$pkg/docker-compose.yml" "$dir/docker-compose.yml" || return 1
-  alice_write_env "$dir/.env" "$alice_project" "$rel_alice_image" "$rel_pg_image" "$env_bind" "$env_port" "$env_hosts" "$env_zone"
+  alice_write_env "$dir/.env" "$alice_project" "$rel_alice_image" "$rel_pg_image" "$env_bind" "$env_port" "$env_hosts" "$env_zone" \
+    "$env_proxies" "$env_migrate_timeout"
 }
 
 migrate_and_start() {

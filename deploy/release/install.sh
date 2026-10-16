@@ -432,7 +432,7 @@ layout() {
     if [[ -f "$f" ]]; then install -m 0644 -- "$f" "$dir/release-keys/"; fi
   done
   alice_copy_extras "$pkg" "$dir"
-  alice_write_env "$dir/.env" "$project" "$rel_alice_image" "$rel_pg_image" "$bind" "$port" "$hostname_arg" "$zone"
+  alice_write_env "$dir/.env" "$project" "$rel_alice_image" "$rel_pg_image" "$bind" "$port" "$hostname_arg" "$zone" "" 30m
   install -m 0644 -- "$pkg/docker-compose.yml" "$dir/docker-compose.yml"
   # Last: VERSION marks a complete layout. Until it exists a new install completes the layout and
   # --uninstall --purge deletes it (final review B M-5).

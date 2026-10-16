@@ -62,6 +62,8 @@ services:
       # sslmode=disable: the connection never leaves the internal backend network.
       ALICE_MIGRATE_DATABASE_URL: postgres://alice_owner@postgres:5432/alice?sslmode=disable
       ALICE_MIGRATE_DATABASE_PASSWORD_FILE: /run/secrets/db_owner_password
+      # The whole run must finish within this Go duration (1m to 24h); set it in .env (OPS-4).
+      ALICE_MIGRATE_TIMEOUT: ${ALICE_MIGRATE_TIMEOUT:-30m}
     secrets: [db_owner_password]
     networks: [backend]
     read_only: true
@@ -89,6 +91,9 @@ services:
       ALICE_TZ: ${ALICE_TZ:-UTC}
       ALICE_STATE_DIR: /opt/alice/state
       ALICE_BACKUP_DIR: /opt/alice/backups
+      # Behind a reverse proxy, set it in .env (address or CIDR, comma-separated); empty trusts no
+      # proxy, so X-Forwarded-For is ignored (OPS-6).
+      ALICE_TRUSTED_PROXIES: ${ALICE_TRUSTED_PROXIES:-}
     secrets: [db_app_password]
     ports:
       - "${ALICE_BIND:-0.0.0.0}:${ALICE_PORT:-443}:8443"
