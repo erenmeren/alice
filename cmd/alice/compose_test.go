@@ -24,6 +24,8 @@ type composeService struct {
 	Ports           []any             `yaml:"ports"`
 	Networks        composeNetworks   `yaml:"networks"`
 	Init            bool              `yaml:"init"`
+	Hostname        string            `yaml:"hostname"`
+	Tmpfs           []string          `yaml:"tmpfs"`
 	StopGracePeriod string            `yaml:"stop_grace_period"`
 	Healthcheck     struct {
 		Test []string `yaml:"test"`
@@ -127,8 +129,8 @@ func TestE2ETargetIsTestOnlyAndUnpublished(t *testing.T) {
 		names = append(names, name)
 	}
 	// The overlay adds the SSH target and the fake Azure service, nothing else; the release file has neither.
-	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakeacme", "fakesmtp", "fakeidp", "fakefleet"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, ACME, SMTP, identity provider and TLS fleet services")
-	for _, fake := range []string{"fakeazure", "fakeacme", "fakefleet"} {
+	assert.ElementsMatch(t, []string{"alice", "sshtarget", "fakeazure", "fakeacme", "fakesmtp", "fakeidp", "fakefleet", "fakeldap"}, names, "the overlay adds only the SSH target (which also runs Nginx) and the fake Azure, ACME, SMTP, identity provider, TLS fleet and directory services")
+	for _, fake := range []string{"fakeazure", "fakeacme", "fakefleet", "fakeldap"} {
 		_, fakeInBase := base.Services[fake]
 		assert.False(t, fakeInBase, "the release compose file has no %s service", fake)
 	}
@@ -674,4 +676,62 @@ func TestFakeFleetDockerfileReusesTheReleaseBaseImages(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "PRIVATE "+"KEY", "no key material in the image")
 	assert.Contains(t, string(raw), "USER 65532:65532")
+}
+
+// The fake directory exists only in the test overlay: it publishes nothing, sits only on the internal backend network
+// under the name its certificate carries, is read-only with its database and TLS material in a tmpfs, runs as the
+// image's non-root openldap user and binds port 636 through the unprivileged port start sysctl, not a capability.
+func TestE2EFakeDirectoryIsTestOnlyAndHardened(t *testing.T) {
+	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
+	fake, ok := overlay.Services["fakeldap"]
+	require.True(t, ok)
+	assert.Empty(t, fake.Ports, "the fake directory publishes nothing: only Alice talks to it")
+	assert.Equal(t, []string{"backend"}, fake.Networks.names())
+	assert.Equal(t, []string{"ldap.alice-e2e.test"}, fake.Networks["backend"].Aliases)
+	assert.Equal(t, "ldap.alice-e2e.test", fake.Hostname, "the health check verifies the name Alice verifies")
+	assert.True(t, fake.ReadOnly)
+	assert.Equal(t, []string{"/run/alice-fakeldap:uid=911,gid=911,mode=0700,size=32m"}, fake.Tmpfs)
+	assert.Equal(t, []string{"ALL"}, fake.CapDrop)
+	assert.Empty(t, fake.CapAdd, "port 636 is bound through the unprivileged port start sysctl, not a capability")
+	assert.Equal(t, map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"}, fake.Sysctls)
+	assert.Equal(t, []string{"no-new-privileges:true"}, fake.SecurityOpt)
+	assert.Equal(t, "911:911", fake.User, "the image's openldap user")
+	assert.NotEmpty(t, fake.MemLimit)
+	assert.Positive(t, fake.PidsLimit)
+	assert.Empty(t, fake.Volumes, "no shared CA: the journey pastes the directory's CA into its form")
+	assert.Equal(t, "alice-e2e-fakeldap", fake.Image)
+	assert.Equal(t, "..", fake.Build.Context)
+	assert.Equal(t, "test/images/openldap/Dockerfile", fake.Build.Dockerfile)
+	assert.Equal(t, []string{"CMD", "/usr/local/bin/alice-fakeldap-ctl", "ping"}, fake.Healthcheck.Test)
+	assert.Equal(t, "service_healthy", overlay.Services["alice"].DependsOn["fakeldap"].Condition)
+
+	for _, path := range []string{"../../deploy/docker-compose.yml", "../../deploy/Dockerfile"} {
+		raw, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, s := range []string{"fakeldap", "alice-fakeldap", "ldap.alice-e2e.test", "openldap"} {
+			assert.NotContains(t, string(raw), s, "%s", path)
+		}
+	}
+}
+
+// The fake directory's image is the OpenLDAP image of the integration tests, by the same tag and index digest, and
+// holds no key material and no root user at run time.
+func TestFakeDirectoryDockerfileReusesTheIntegrationTestImage(t *testing.T) {
+	froms := dockerfileFroms(t, "../../test/images/openldap/Dockerfile")
+	require.Len(t, froms, 1)
+	helper, err := os.ReadFile("../../internal/testutil/fakeldap/server.go")
+	require.NoError(t, err)
+	for ref := range froms {
+		assert.Contains(t, ref, "@sha256:")
+		assert.Contains(t, string(helper), `"`+ref+`"`, "internal/testutil/fakeldap pins the same image")
+	}
+	raw, err := os.ReadFile("../../test/images/openldap/Dockerfile")
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "PRIVATE "+"KEY", "no key material in the image")
+	assert.Contains(t, string(raw), "USER 911:911")
+	for _, f := range []string{"alice-fakeldap-start", "alice-fakeldap-ctl"} {
+		st, err := os.Stat("../../test/images/openldap/" + f)
+		require.NoError(t, err)
+		assert.Equal(t, os.FileMode(0o755), st.Mode().Perm(), "%s keeps its mode in the image (COPY without BuildKit)", f)
+	}
 }

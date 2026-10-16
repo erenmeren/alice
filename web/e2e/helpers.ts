@@ -1300,6 +1300,40 @@ export function idpCA(): string {
   return composeExec('fakeidp', ['/alice-fakeidp', 'ctl', 'ca']);
 }
 
+// --- The fake directory (compose service fakeldap, test/images/openldap) for the directory sign-in journey ---
+
+// ldapCtl runs "alice-fakeldap-ctl ..." in the e2e stack (the same alice-e2e* project guard as targetExec) and returns
+// its standard output: ping, ca, member add|remove UID GROUP.
+export function ldapCtl(...args: string[]): string {
+  return composeExec('fakeldap', ['/usr/local/bin/alice-fakeldap-ctl', ...args]);
+}
+
+// ldapCA is the fake directory's CA certificate (PEM), generated when it started; pasted into the directory form.
+export function ldapCA(): string {
+  return ldapCtl('ca');
+}
+
+// ldapService stops or starts the fake directory container (a stopped directory is unreachable for Alice: its name no
+// longer resolves). A start waits until it answers again; it starts with its CA and tree generated anew.
+export async function ldapService(action: 'stop' | 'start'): Promise<void> {
+  if (!E2E_PROJECT.startsWith('alice-e2e')) {
+    throw new Error(`fakeldap ${action} refuses the compose project "${E2E_PROJECT}": only projects named alice-e2e* are e2e stacks`);
+  }
+  execFileSync('docker', [...COMPOSE, action, 'fakeldap'], { encoding: 'utf8', timeout: 120_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  if (action === 'start') {
+    await expect(async () => expect(ldapCtl('ping')).toContain('"ok":true')).toPass({ timeout: 60_000 });
+  }
+}
+
+// ldapRunning says whether the fake directory answers (a journey that stopped it and failed may have left it stopped).
+export function ldapRunning(): boolean {
+  try {
+    return ldapCtl('ping').includes('"ok":true');
+  } catch {
+    return false;
+  }
+}
+
 // SeedAnswer is what the seeded data set must show (C17; internal/testutil/seed.DashboardAnswer). The certificate counts
 // are cumulative windows: each equals the rows its link opens.
 export interface SeedAnswer {

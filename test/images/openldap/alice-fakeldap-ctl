@@ -1,0 +1,37 @@
+#!/bin/bash
+# Test-only control tool of the e2e fake directory (compose service fakeldap), run by Playwright through
+# "docker compose exec -T fakeldap alice-fakeldap-ctl ..." (web/e2e/helpers.ts) and by the compose health check:
+#   ping                        bind over ldaps://ldap.alice-e2e.test (the container's own host name) as the service account, verifying the server certificate
+#   ca                          print the CA certificate generated at start (pasted into the directory's CA field)
+#   member add|remove UID GROUP add or remove uid=UID,ou=people from cn=GROUP,ou=groups (already done counts as done)
+# It works only inside the container: the administrator binds over the local ldapi socket, which is not on the network.
+set -euo pipefail
+run=/run/alice-fakeldap
+base="dc=example,dc=test"
+ldapi="ldapi://%2Frun%2Falice-fakeldap%2Fldapi"
+admin_dn="cn=admin,$base"
+admin_pw="admin-Pa55-container" # throw-away password of a test container (slapd.conf rootpw)
+svc_dn="cn=alice-svc,ou=services,$base"
+svc_pw="svc-Pa55-0f-the-service" # throw-away password of a test container (bootstrap.ldif)
+usage() { echo "usage: alice-fakeldap-ctl ping | ca | member add|remove UID GROUP" >&2; exit 2; }
+case "${1:-}" in
+  ping)
+    LDAPTLS_CACERT="$run/ca.crt" LDAPTLS_REQCERT=demand ldapwhoami -x -H ldaps://ldap.alice-e2e.test:636 -D "$svc_dn" -w "$svc_pw" >/dev/null
+    echo '{"ok":true}'
+    ;;
+  ca)
+    cat "$run/ca.crt"
+    ;;
+  member)
+    [[ $# -eq 4 && ( "$2" == add || "$2" == remove ) ]] || usage
+    [[ "$3" =~ ^[a-z0-9-]+$ && "$4" =~ ^[a-z0-9-]+$ ]] || { echo "alice-fakeldap-ctl: UID and GROUP are lower-case letters, digits and -" >&2; exit 2; }
+    if [[ "$2" == add ]]; then op=add; done_code=20; else op=delete; done_code=16; fi
+    status=0
+    printf 'dn: cn=%s,ou=groups,%s\nchangetype: modify\n%s: member\nmember: uid=%s,ou=people,%s\n' "$4" "$base" "$op" "$3" "$base" |
+      ldapmodify -x -H "$ldapi" -D "$admin_dn" -w "$admin_pw" >/dev/null 2>&1 || status=$?
+    # 20 (the value exists) on add and 16 (no such value) on remove mean the membership is already as asked.
+    [[ $status -eq 0 || $status -eq $done_code ]] || { echo "alice-fakeldap-ctl: ldapmodify failed with $status" >&2; exit 1; }
+    echo '{"ok":true}'
+    ;;
+  *) usage ;;
+esac

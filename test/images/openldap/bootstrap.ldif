@@ -1,0 +1,92 @@
+# Test-only directory tree of the e2e fake directory (compose service fakeldap of deploy/docker-compose.e2e.yml).
+# The same tree, names and throw-away passwords as internal/testutil/fakeldap (the integration tests' OpenLDAP):
+# ada (in alice-ops), çiğdem (in alice-auditors, which is nested in alice-ops), grace (in no group), the login "dup"
+# shared by two entries, the read-only service account and a posixGroup. slapadd loads it into a tmpfs at every
+# container start, so a restart brings back exactly this tree (the directory journey changes group membership).
+# Non-ASCII values are base64 ("attr:: value") as LDIF requires.
+
+dn: dc=example,dc=test
+objectClass: dcObject
+objectClass: organization
+o: Example
+dc: example
+
+dn: ou=people,dc=example,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=contractors,ou=people,dc=example,dc=test
+objectClass: organizationalUnit
+ou: contractors
+
+dn: ou=groups,dc=example,dc=test
+objectClass: organizationalUnit
+ou: groups
+
+dn: ou=services,dc=example,dc=test
+objectClass: organizationalUnit
+ou: services
+
+dn: cn=alice-svc,ou=services,dc=example,dc=test
+objectClass: organizationalRole
+objectClass: simpleSecurityObject
+cn: alice-svc
+userPassword: svc-Pa55-0f-the-service
+
+dn: uid=ada,ou=people,dc=example,dc=test
+objectClass: inetOrgPerson
+uid: ada
+cn: Ada Lovelace
+sn: Lovelace
+mail: ada@example.test
+userPassword: ada-Analytical-1843
+
+# uid=çiğdem,ou=people,dc=example,dc=test (password çiğ-Şifre-2026)
+dn:: dWlkPcOnacSfZGVtLG91PXBlb3BsZSxkYz1leGFtcGxlLGRjPXRlc3Q=
+objectClass: inetOrgPerson
+uid:: w6dpxJ9kZW0=
+cn:: w4dpxJ9kZW0gw5Z6dMO8cms=
+sn:: w5Z6dMO8cms=
+mail: cigdem@example.test
+userPassword:: w6dpxJ8txZ5pZnJlLTIwMjY=
+
+dn: uid=grace,ou=people,dc=example,dc=test
+objectClass: inetOrgPerson
+uid: grace
+cn: Grace Hopper
+sn: Hopper
+mail: grace@example.test
+userPassword: grace-COBOL-1959
+
+dn: uid=dup,ou=people,dc=example,dc=test
+objectClass: inetOrgPerson
+uid: dup
+cn: Dup One
+sn: One
+mail: dup@example.test
+userPassword: dup-Twice-1
+
+dn: uid=dup,ou=contractors,ou=people,dc=example,dc=test
+objectClass: inetOrgPerson
+uid: dup
+cn: Dup Two
+sn: Two
+mail: dup2@example.test
+userPassword: dup-Twice-2
+
+dn: cn=alice-auditors,ou=groups,dc=example,dc=test
+objectClass: groupOfNames
+cn: alice-auditors
+member:: dWlkPcOnacSfZGVtLG91PXBlb3BsZSxkYz1leGFtcGxlLGRjPXRlc3Q=
+
+dn: cn=alice-ops,ou=groups,dc=example,dc=test
+objectClass: groupOfNames
+cn: alice-ops
+member: uid=ada,ou=people,dc=example,dc=test
+member: cn=alice-auditors,ou=groups,dc=example,dc=test
+
+dn: cn=alice-posix,ou=groups,dc=example,dc=test
+objectClass: posixGroup
+cn: alice-posix
+gidNumber: 5000
+memberUid: ada

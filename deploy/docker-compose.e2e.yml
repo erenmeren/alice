@@ -29,6 +29,9 @@ services:
       # Not for a CA (discovery trusts nothing): the stack is up only once the fleet answers, so no journey scans a
       # fleet that is still starting.
       fakefleet: { condition: service_healthy }
+      # The directory sign-in journey (web/e2e/ldap.spec.ts): no CA is shared (the journey pastes the fake directory's CA
+      # into the directory's own CA field, as a customer does with an internal CA).
+      fakeldap: { condition: service_healthy }
     # The network discovery journeys scan the fake fleet: alice joins the internal "fleet" network (added to the
     # base file's frontend and backend) at a fixed address. The network is internal, so it gives alice no default
     # route: the scan policy's built-in refusals (alice's own addresses, its default gateways) do not touch
@@ -232,6 +235,43 @@ services:
           - malformed.fleet.alice-e2e.test
     healthcheck:
       test: ["CMD", "/alice-fakefleet", "ctl", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  # Test-only directory for the directory sign-in journey (web/e2e/ldap.spec.ts): the OpenLDAP image of the integration
+  # tests (internal/testutil/fakeldap; test/images/openldap, the same pinned tag and digest and the same tree) with slapd
+  # started directly as the image's openldap user (911) from a static configuration. Alice reaches it as
+  # ldaps://ldap.alice-e2e.test:636 on the internal backend network (a network alias; the browser never talks to it, so
+  # it is not published and Chromium needs no resolver rule). Its CA and its certificate for ldap.alice-e2e.test are
+  # generated when it starts, in the tmpfs that also holds the database (loaded from the image's bootstrap.ldif at every
+  # start, so a restart restores the tree); the journey reads the CA with "ctl ca" and pastes it into the directory form.
+  # The container's own host name is ldap.alice-e2e.test so that its health check (an ldaps:// bind as the service
+  # account, certificate verified) checks the same name Alice does. Playwright changes group membership with "docker
+  # compose exec fakeldap alice-fakeldap-ctl member add|remove", which binds over a local ldapi socket. It publishes
+  # nothing and runs as a non-root user: port 636 is bindable because the container's unprivileged port start is 0 (a
+  # namespaced sysctl), not because of a capability.
+  fakeldap:
+    image: alice-e2e-fakeldap
+    build:
+      context: ..
+      dockerfile: test/images/openldap/Dockerfile
+    hostname: ldap.alice-e2e.test
+    user: "911:911"
+    read_only: true
+    tmpfs:
+      - /run/alice-fakeldap:uid=911,gid=911,mode=0700,size=32m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+    mem_limit: 256m
+    pids_limit: 128
+    ulimits: { core: 0 }
+    networks:
+      backend:
+        aliases: [ldap.alice-e2e.test]
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/alice-fakeldap-ctl", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10

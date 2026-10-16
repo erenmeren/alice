@@ -265,7 +265,7 @@ GITLEAKS_IMAGE        ?= ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb307
 TRIVY_IMAGE           ?= aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969
 SHELLCHECK_IMAGE      ?= koalaman/shellcheck:v0.11.0@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
 # Every shell script of the repository that is not named *.sh as well (tracked files only).
-SHELL_SCRIPTS         := $(shell git ls-files -- '*.sh' deploy/release/alicectl 'deploy/release/testdata/stubs/*' deploy/release/testdata/swap-openssl/openssl test/images/e2e-target/systemctl test/images/e2e-target/nginx-wrapper)
+SHELL_SCRIPTS         := $(shell git ls-files -- '*.sh' deploy/release/alicectl 'deploy/release/testdata/stubs/*' deploy/release/testdata/swap-openssl/openssl test/images/e2e-target/systemctl test/images/e2e-target/nginx-wrapper test/images/openldap/alice-fakeldap-start test/images/openldap/alice-fakeldap-ctl)
 # How long each fuzz target runs; fuzz-nightly and fuzz-release raise it.
 FUZZTIME              ?= 60s
 # Extra flags of matrix-check ("-strict" in lint and release-gates: a gap, a missing named test or a partial row without a ruling fails).

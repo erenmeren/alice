@@ -1,0 +1,29 @@
+#!/bin/bash
+# Test-only start script of the e2e fake directory (compose service fakeldap). Runs as the image's openldap user
+# (911), never as root, on a read-only root filesystem: everything it writes goes to the tmpfs /run/alice-fakeldap,
+# which is empty at every start. It generates a CA and a server certificate for ldap.alice-e2e.test (and localhost,
+# for the health check) that live only as long as the container, deletes the CA's private key once the certificate
+# is issued, loads the fixed tree (bootstrap.ldif) and runs slapd in the foreground on ldaps:// (port 636) and a
+# local ldapi socket (alice-fakeldap-ctl's administration). No key or certificate is ever in an image layer.
+set -euo pipefail
+umask 077
+run=/run/alice-fakeldap
+conf=/etc/alice-fakeldap
+[[ -d "$run" && -w "$run" ]] || { echo "alice-fakeldap-start: $run must be a writable tmpfs" >&2; exit 1; }
+rm -rf "${run:?}/db" "$run"/*.crt "$run"/*.key "$run"/*.csr "$run"/*.srl
+mkdir -p "$run/db"
+
+# Its own request configuration: the system one would add a second basicConstraints extension, which Go refuses.
+printf '%s\n' "[req]" "distinguished_name=dn" "prompt=no" "x509_extensions=ca" "[dn]" "CN=Alice e2e fake directory CA" \
+  "[ca]" "basicConstraints=critical,CA:TRUE" "keyUsage=critical,keyCertSign,cRLSign" "subjectKeyIdentifier=hash" > "$run/ca.cnf"
+openssl req -x509 -config "$run/ca.cnf" -newkey rsa:2048 -nodes -sha256 -days 30 -keyout "$run/ca.key" -out "$run/ca.crt" 2>/dev/null
+openssl req -newkey rsa:2048 -nodes -sha256 -keyout "$run/ldap.key" -out "$run/ldap.csr" -subj "/CN=ldap.alice-e2e.test" 2>/dev/null
+printf '%s\n' "basicConstraints=critical,CA:FALSE" "keyUsage=critical,digitalSignature,keyEncipherment" \
+  "extendedKeyUsage=serverAuth" "subjectAltName=DNS:ldap.alice-e2e.test,DNS:localhost" > "$run/leaf.ext"
+openssl x509 -req -sha256 -days 30 -in "$run/ldap.csr" -CA "$run/ca.crt" -CAkey "$run/ca.key" -CAcreateserial \
+  -extfile "$run/leaf.ext" -out "$run/ldap.crt" 2>/dev/null
+rm -f "$run/ca.key" "$run/ca.cnf" "$run/ldap.csr" "$run/leaf.ext" "$run/ca.srl"
+chmod 0644 "$run/ca.crt" "$run/ldap.crt"
+
+slapadd -f "$conf/slapd.conf" -l "$conf/bootstrap.ldif"
+exec slapd -d stats -f "$conf/slapd.conf" -h "ldaps:/// ldapi://%2Frun%2Falice-fakeldap%2Fldapi"

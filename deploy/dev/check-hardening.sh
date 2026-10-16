@@ -187,6 +187,33 @@ if "${compose[@]}" config --services | grep -qx fakefleet; then
     check "fakefleet is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$fleet")" "healthy"
   fi
 fi
+# The e2e overlay adds the fake directory (directory sign-in journey): the OpenLDAP image, with slapd started directly as
+# a non-root user; it publishes nothing, sits only on the internal backend network, is read-only with its database and
+# TLS material in a tmpfs, drops every capability and is healthy. Its image holds no key or certificate (generated at
+# start into the tmpfs): a fresh container of the image without the tmpfs has none.
+if "${compose[@]}" config --services | grep -qx fakeldap; then
+  ldap="$("${compose[@]}" ps -q fakeldap)"
+  if [[ -z "$ldap" ]]; then
+    echo "FAIL: the e2e fake directory is not running"; fail=1
+  else
+    check "fakeldap publishes no ports" "$(docker port "$ldap" | wc -l | tr -d ' ')" "0"
+    check "fakeldap is only on the internal backend network" \
+      "$(docker inspect -f '{{range $n, $_ := .NetworkSettings.Networks}}{{$n}} {{end}}' "$ldap")" "${project}_backend "
+    check "fakeldap root filesystem is read-only" "$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$ldap")" "true"
+    check "fakeldap writes only to its tmpfs" "$(docker inspect -f '{{json .HostConfig.Tmpfs}}' "$ldap")" \
+      '{"/run/alice-fakeldap":"uid=911,gid=911,mode=0700,size=32m"}'
+    check "fakeldap drops all capabilities and adds none" \
+      "$(docker inspect -f '{{json .HostConfig.CapDrop}} {{json .HostConfig.CapAdd}}' "$ldap")" '["ALL"] null'
+    check "fakeldap has no-new-privileges" "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' "$ldap")" '["no-new-privileges:true"]'
+    check "fakeldap runs as a non-root user" \
+      "$(docker inspect -f '{{.Config.User}}' "$ldap" | grep -Ec '^[1-9][0-9]*:[1-9][0-9]*$' || true)" "1"
+    check "fakeldap has a pids limit" "$(docker inspect -f '{{.HostConfig.PidsLimit}}' "$ldap")" "128"
+    check "fakeldap is healthy" "$(docker inspect -f '{{.State.Health.Status}}' "$ldap")" "healthy"
+    check "fakeldap's image holds no key or certificate" \
+      "$(docker run --rm --network none --entrypoint /bin/sh "$(docker inspect -f '{{.Config.Image}}' "$ldap")" \
+        -c 'ls /run/alice-fakeldap 2>/dev/null | wc -l')" "0"
+  fi
+fi
 # The test shims and the test PKI exist only in the SSH target, never in the Alice image.
 check "alice image has no systemctl shim" \
   "$(docker cp "$alice:/usr/bin/systemctl" - >/dev/null 2>&1 && echo present || echo absent)" "absent"
