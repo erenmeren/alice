@@ -130,9 +130,10 @@ func (x *harness) count(t *testing.T, sql string, args ...any) int {
 // seedUser inserts a directory user of the test directory, as a first sign-in will (Task 4).
 func (x *harness) seedUser(t *testing.T, dirID uuid.UUID) {
 	t.Helper()
+	name := "dir-" + uuid.NewString()[:8]
 	_, err := x.d.Owner.Exec(x.ctx, `INSERT INTO users (id, username, display_name, auth_source, role, role_source, ldap_directory_id,
-ldap_unique_id, created_at, updated_at) VALUES ($1, $2, 'Dir User', 'ldap', 'operator', 'ldap_mapping', $3, $4, now(), now())`,
-		uuid.New(), "dir-"+uuid.NewString()[:8], dirID, hex.EncodeToString([]byte(uuid.NewString())))
+ldap_unique_id, ldap_login, created_at, updated_at) VALUES ($1, $2, 'Dir User', 'ldap', 'operator', 'ldap_mapping', $3, $4, $5, now(), now())`,
+		uuid.New(), name, dirID, hex.EncodeToString([]byte(uuid.NewString())), name)
 	require.NoError(t, err)
 }
 

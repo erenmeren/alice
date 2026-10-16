@@ -59,7 +59,7 @@ var uniqueIDRE = regexp.MustCompile(`^(?:[0-9a-f]{2}){1,127}$`)
 type LDAPIdentity struct {
 	DirectoryID uuid.UUID
 	UniqueID    string // ldapx.UniqueID: the lower-case hex of the unique id attribute's bytes
-	Login       string // the sign-in name as the directory holds it: the base of the user name (ldapx.Username)
+	Login       string // the sign-in name as the directory holds it: the base of the user name (ldapx.Username), stored as ldap_login
 	DisplayName string
 	Email       string
 }
@@ -68,7 +68,8 @@ type LDAPIdentity struct {
 // dropped, a blank display name is dropped (the user name stands in) and the display name is cut to its maximum
 // length.
 func (id LDAPIdentity) normalized() (LDAPIdentity, error) {
-	if id.DirectoryID == uuid.Nil || !uniqueIDRE.MatchString(id.UniqueID) {
+	// The sign-in name is stored (ldap_login) and sent to the directory at a step-up: it must be one Verify accepts.
+	if id.DirectoryID == uuid.Nil || !uniqueIDRE.MatchString(id.UniqueID) || !ldapx.ValidLoginName(id.Login) {
 		return LDAPIdentity{}, ErrLDAPIdentityInvalid
 	}
 	var v validate.Errors
@@ -130,9 +131,9 @@ FROM users u WHERE u.ldap_directory_id = $1 AND u.ldap_unique_id = $2 FOR UPDATE
 func provisionLDAPUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id LDAPIdentity, role rbac.Role, locale string, now time.Time, lastLogin *time.Time) (string, error) {
 	return provisionUser(ctx, tx, ldapx.Username(id.Login, id.UniqueID), func(q pgx.Tx, name string) error {
 		_, err := q.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, role_source,
-locale, ldap_directory_id, ldap_unique_id, last_login_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'ldap', NULL, $5, 'ldap_mapping', $6, $7, $8, $10, $9, $9)`,
-			userID, name, id.Email, id.displayNameOr(name), string(role), locale, id.DirectoryID, id.UniqueID, now, lastLogin)
+locale, ldap_directory_id, ldap_unique_id, ldap_login, last_login_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'ldap', NULL, $5, 'ldap_mapping', $6, $7, $8, $11, $10, $9, $9)`,
+			userID, name, id.Email, id.displayNameOr(name), string(role), locale, id.DirectoryID, id.UniqueID, now, lastLogin, id.Login)
 		return err
 	})
 }
@@ -215,8 +216,8 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 			if _, err := tx.Exec(ctx, `UPDATE users SET role = $2, email = $3, display_name = $4, updated_at = $5,
 last_login_at = coalesce($6, last_login_at),
 failed_logins = CASE WHEN $6::timestamptz IS NULL THEN failed_logins ELSE 0 END,
-locked_until = CASE WHEN $6::timestamptz IS NULL THEN locked_until ELSE NULL END WHERE id = $1`,
-				u.id, string(role), id.Email, id.displayNameOr(u.username), now, lastLogin); err != nil {
+locked_until = CASE WHEN $6::timestamptz IS NULL THEN locked_until ELSE NULL END, ldap_login = $7 WHERE id = $1`,
+				u.id, string(role), id.Email, id.displayNameOr(u.username), now, lastLogin, id.Login); err != nil {
 				return fmt.Errorf("update directory user: %w", err)
 			}
 			if role != u.role {

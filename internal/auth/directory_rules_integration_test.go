@@ -38,8 +38,8 @@ func (e *env) directoryUser(t *testing.T, dir uuid.UUID, uniqueID, username stri
 	t.Helper()
 	id := uuid.Must(uuid.NewV7())
 	_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO users (id, username, display_name, auth_source, password_hash, role, role_source,
-ldap_directory_id, ldap_unique_id, created_at, updated_at) VALUES ($1, $2, $7, 'ldap', NULL, $3, 'ldap_mapping', $4, $5, $6, $6)`,
-		id, username, string(role), dir, uniqueID, e.clk.Now(), username)
+ldap_directory_id, ldap_unique_id, ldap_login, created_at, updated_at) VALUES ($1, $2, $7, 'ldap', NULL, $3, 'ldap_mapping', $4, $5, $8, $6, $6)`,
+		id, username, string(role), dir, uniqueID, e.clk.Now(), username, username)
 	require.NoError(t, err)
 	return id
 }

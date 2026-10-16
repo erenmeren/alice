@@ -166,8 +166,11 @@ type Principal struct {
 	Scope       rbac.Scope
 	AuthSource  string // AuthLocal | AuthOIDC | AuthLDAP
 	// LDAPDirectoryID is the directory of a directory user's session (uuid.Nil for every other principal); the
-	// API runs a directory step-up against it.
+	// API runs a directory step-up against it, with the stored sign-in name LDAPLogin, and checks that the directory
+	// answers for the same entry LDAPUniqueID ("" for every other principal).
 	LDAPDirectoryID uuid.UUID
+	LDAPUniqueID    string
+	LDAPLogin       string
 }
 
 // Subject converts the principal into the input of rbac.Decide.

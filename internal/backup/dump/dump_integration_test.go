@@ -281,9 +281,9 @@ VALUES ('b1000000-0000-4000-8000-000000000001', 'Corp AD', '{ldaps://dc1.example
         '(member:1.2.840.113556.1.4.1941:={dn})', 'cn', (SELECT id FROM users LIMIT 1), now(), now());
 INSERT INTO ldap_group_mappings (id, directory_id, group_value, role, created_at)
 VALUES (gen_random_uuid(), 'b1000000-0000-4000-8000-000000000001', 'CN=Alice Ops,DC=example,DC=test', 'operator', now());
-INSERT INTO users (id, username, display_name, email, auth_source, role, role_source, ldap_directory_id, ldap_unique_id, created_at, updated_at)
+INSERT INTO users (id, username, display_name, email, auth_source, role, role_source, ldap_directory_id, ldap_unique_id, ldap_login, created_at, updated_at)
 VALUES ('b1000000-0000-4000-8000-000000000002', 'cigdem', 'Çiğdem', 'cigdem@example.test', 'ldap', 'operator', 'ldap_mapping',
-        'b1000000-0000-4000-8000-000000000001', '00112233445566778899aabbccddeeff', now(), now());
+        'b1000000-0000-4000-8000-000000000001', '00112233445566778899aabbccddeeff', 'Çiğdem', now(), now());
 INSERT INTO setting_secrets (key, ciphertext, nonce, wrapped_dek, key_version, updated_at)
 VALUES ('ldap.directory.b1000000-0000-4000-8000-000000000001.bind_password', '\x01', '\x000000000000000000000005', '\x01', 1, now());
 INSERT INTO oidc_login_states (state_hash, provider_id, binding_hash, nonce, code_verifier, purpose, next_path, created_at, expires_at)

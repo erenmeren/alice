@@ -186,7 +186,7 @@ func TestAddressChangeRefusedOnceAUserArrives(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = tx.Rollback(x.ctx) }()
 	_, err = tx.Exec(x.ctx, `INSERT INTO users (id, username, display_name, auth_source, role, role_source, ldap_directory_id,
-ldap_unique_id, created_at, updated_at) VALUES ($1, 'late', 'Late', 'ldap', 'auditor', 'ldap_mapping', $2, 'abcd', now(), now())`,
+ldap_unique_id, ldap_login, created_at, updated_at) VALUES ($1, 'late', 'Late', 'ldap', 'auditor', 'ldap_mapping', $2, 'abcd', 'late', now(), now())`,
 		uuid.New(), x.dir.ID)
 	require.NoError(t, err)
 	done := make(chan error, 1)

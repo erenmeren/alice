@@ -69,7 +69,10 @@ CREATE TABLE ldap_group_mappings (
 
 -- Directory users (rulings 3 and 9): matched by (ldap_directory_id, ldap_unique_id) only; the unique id is the
 -- lower-case hex of the unique id attribute's bytes. No password, never the break-glass account, role always from the
--- mapping. A local or SSO user has neither column; a directory with users cannot be deleted (no cascade).
+-- mapping. A local or SSO user has none of these columns; a directory with users cannot be deleted (no cascade).
+-- ldap_login is the sign-in name as the directory last returned it (rewritten at every sign-in): the step-up searches
+-- the directory with it, so the person never types (and can never choose) another name; 1 to 256 characters, no
+-- control characters. It is never used to match a user.
 ALTER TABLE users DROP CONSTRAINT users_auth_source_check;
 ALTER TABLE users ADD CONSTRAINT users_auth_source_check CHECK (auth_source IN ('local', 'oidc', 'ldap'));
 ALTER TABLE users DROP CONSTRAINT users_role_source_check;
@@ -78,9 +81,11 @@ ALTER TABLE users ADD COLUMN ldap_directory_id uuid REFERENCES ldap_directories 
 ALTER TABLE users ADD COLUMN ldap_unique_id text CHECK (char_length(ldap_unique_id) BETWEEN 2 AND 254
                                                         AND char_length(ldap_unique_id) % 2 = 0
                                                         AND ldap_unique_id ~ '^[0-9a-f]+$');
+ALTER TABLE users ADD COLUMN ldap_login text CHECK (char_length(ldap_login) BETWEEN 1 AND 256 AND ldap_login !~ '[[:cntrl:]]');
 ALTER TABLE users ADD CONSTRAINT users_ldap_identity CHECK (
     (auth_source = 'ldap') = (ldap_directory_id IS NOT NULL)
-    AND (auth_source = 'ldap') = (ldap_unique_id IS NOT NULL));
+    AND (auth_source = 'ldap') = (ldap_unique_id IS NOT NULL)
+    AND (auth_source = 'ldap') = (ldap_login IS NOT NULL));
 ALTER TABLE users ADD CONSTRAINT users_ldap_not_local CHECK (auth_source <> 'ldap'
     OR (password_hash IS NULL AND NOT is_break_glass AND role_source = 'ldap_mapping'));
 CREATE UNIQUE INDEX users_ldap_identity_unique ON users (ldap_directory_id, ldap_unique_id) WHERE ldap_directory_id IS NOT NULL;
@@ -109,6 +114,7 @@ ALTER TABLE setting_secrets ADD CONSTRAINT setting_secrets_key_check CHECK (key 
 DROP INDEX users_ldap_identity_unique;
 ALTER TABLE users DROP CONSTRAINT users_ldap_not_local;
 ALTER TABLE users DROP CONSTRAINT users_ldap_identity;
+ALTER TABLE users DROP COLUMN ldap_login;
 ALTER TABLE users DROP COLUMN ldap_unique_id;
 ALTER TABLE users DROP COLUMN ldap_directory_id;
 ALTER TABLE users DROP CONSTRAINT users_role_source_check;

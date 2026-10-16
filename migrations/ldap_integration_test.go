@@ -55,14 +55,28 @@ func seedLDAPDirectory(t *testing.T, d *pgtest.DB, name string) uuid.UUID {
 	return id
 }
 
-// insertLDAPUser inserts a directory user with the given fields (nil for NULL).
+// insertLDAPUser inserts a directory user with the given fields (nil for NULL); its stored sign-in name is its name.
 func insertLDAPUser(t *testing.T, d *pgtest.DB, name string, directory, uniqueID, password any, breakGlass bool, roleSource string) error {
 	t.Helper()
-	return exec(t, d.App, `INSERT INTO users (id, username, display_name, auth_source, password_hash, role, role_source, is_break_glass,
-ldap_directory_id, ldap_unique_id, created_at, updated_at)
-VALUES ($1, $2::text, $2::text, 'ldap', $3, 'operator', $4, $5, $6, $7, now(), now())`,
-		uuid.New(), name, password, roleSource, breakGlass, directory, uniqueID)
+	return insertLDAPUserWith(t, d, name, directory, uniqueID, password, breakGlass, roleSource, name)
 }
+
+// insertLDAPUserLogin is insertLDAPUser with an explicit ldap_login (nil for NULL) and the plain fields.
+func insertLDAPUserLogin(t *testing.T, d *pgtest.DB, name string, directory, uniqueID, login any) error {
+	t.Helper()
+	return insertLDAPUserWith(t, d, name, directory, uniqueID, nil, false, "ldap_mapping", login)
+}
+
+func insertLDAPUserWith(t *testing.T, d *pgtest.DB, name string, directory, uniqueID, password any, breakGlass bool, roleSource string, login any) error {
+	t.Helper()
+	return exec(t, d.App, `INSERT INTO users (id, username, display_name, auth_source, password_hash, role, role_source, is_break_glass,
+ldap_directory_id, ldap_unique_id, ldap_login, created_at, updated_at)
+VALUES ($1, $2::text, $2::text, 'ldap', $3, 'operator', $4, $5, $6, $7, $8, now(), now())`,
+		uuid.New(), name, password, roleSource, breakGlass, directory, uniqueID, login)
+}
+
+// hex8 is a fresh unique id value.
+func hex8() string { return strings.ReplaceAll(uuid.NewString(), "-", "")[:8] }
 
 func TestLDAPDirectoryDefaultsAndName(t *testing.T) {
 	d := pgtest.New(t)
@@ -245,6 +259,14 @@ func TestLDAPUsersAreNeverLocal(t *testing.T) {
 		assert.Equal(t, "23514", sqlState(insertLDAPUser(t, d, "bad-"+uuid.NewString()[:8], dir, bad, nil, false, "ldap_mapping")), "%q", bad)
 	}
 	require.NoError(t, insertLDAPUser(t, d, "longest", dir, strings.Repeat("f", 254), nil, false, "ldap_mapping"))
+
+	// The stored sign-in name: required for a directory user, 1 to 256 characters, no control characters.
+	for _, bad := range []any{nil, "", strings.Repeat("ş", 257), "ada\nx", "ada\tx"} {
+		assert.Equal(t, "23514", sqlState(insertLDAPUserLogin(t, d, "login-"+uuid.NewString()[:8], dir, hex8(), bad)), "%q", bad)
+	}
+	require.NoError(t, insertLDAPUserLogin(t, d, "login-longest", dir, hex8(), strings.Repeat("ş", 256)))
+	require.NoError(t, insertLDAPUserLogin(t, d, "login-turkish", dir, hex8(), "Çiğdem.Öztürk"))
+	assert.Equal(t, "23514", sqlState(exec(t, d.App, `UPDATE users SET ldap_login = 'x' WHERE id = $1`, local)), "a local user has no sign-in name")
 
 	// A local user can carry no directory identity, and an OIDC column is no LDAP identity.
 	assert.Equal(t, "23514", sqlState(exec(t, d.App, `UPDATE users SET ldap_directory_id = $2 WHERE id = $1`, local, dir)),

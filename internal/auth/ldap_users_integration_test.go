@@ -67,6 +67,8 @@ func TestSignInLDAPProvisionsAndFollowsTheDirectory(t *testing.T) {
 	assert.Equal(t, auth.AuthLDAP, pr.AuthSource)
 	assert.Equal(t, dir, pr.LDAPDirectoryID)
 	assert.Equal(t, "sukru.ozturk", pr.Username)
+	assert.Equal(t, "0a1b2c3d4e5f", pr.LDAPUniqueID)
+	assert.Equal(t, "Şükrü.Öztürk", pr.LDAPLogin, "the stored sign-in name, as the directory returned it")
 	assert.True(t, pr.Subject(e.clk.Now()).StepUp, "the directory password was just typed: the step-up window is open")
 	assert.False(t, pr.Subject(e.clk.Now().Add(auth.StepUpWindow)).StepUp)
 	var source, roleSource, uniqueID, locale, display string
@@ -96,6 +98,7 @@ WHERE action = 'auth.login' AND details->>'method' = 'ldap'`).
 	id2.DisplayName = "  "
 	pr2 := e.signInLDAP(t, id2, rbac.Auditor)
 	assert.Equal(t, pr.UserID, pr2.UserID, "same directory and unique id: same user")
+	assert.Equal(t, "sozturk", pr2.LDAPLogin, "the stored sign-in name follows the directory")
 	assert.Equal(t, rbac.Auditor, pr2.Role)
 	assert.Equal(t, rbac.Auditor, e.principal(t, res.SessionToken).Role, "an open session reads the new role at once")
 	u, err := e.svc.GetUser(e.ctx, pr.UserID)
@@ -204,6 +207,11 @@ func TestSignInLDAPRefusals(t *testing.T) {
 		"not hex":        ldapIdentity(dir, "zz", "x", ""),
 		"over 254":       ldapIdentity(dir, strings.Repeat("ab", 128), "x", ""),
 		"with a newline": ldapIdentity(dir, "0c\n", "x", ""),
+		// Task 5 fix round: the sign-in name is stored and sent at a step-up, so it must be one Verify accepts.
+		"no login":          ldapIdentity(dir, "0d", "", ""),
+		"login with a tab":  ldapIdentity(dir, "0d", "a\tb", ""),
+		"login over 256":    ldapIdentity(dir, "0d", strings.Repeat("ş", 257), ""),
+		"login with spaces": ldapIdentity(dir, "0d", " ada", ""),
 	} {
 		_, err = e.svc.SignInLDAP(e.ctx, id, rbac.Operator, false, meta)
 		assert.ErrorIs(t, err, auth.ErrLDAPIdentityInvalid, name)
