@@ -275,7 +275,7 @@
         "good": "Good",
         "strong": "Strong"
       },
-      "tooWeak": "This passphrase is too easy to guess. Make it at least 20 characters long, or mix in capital letters, digits and symbols.",
+      "tooWeak": "This passphrase is too easy to guess. Make it longer and more varied: repeated characters, repeated words and runs such as abcdef or 123456 count almost nothing. Several unrelated words work best.",
       "doneState": "The recovery passphrase is set. It cannot be changed here."
     },
     "done": {

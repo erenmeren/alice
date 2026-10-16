@@ -228,8 +228,8 @@
       },
       "passphrase_too_weak": {
         "title": "Kurtarma parolası kolay tahmin edilebilir.",
-        "cause": "Parola yeterince uzun ama orta düzeyde: çok az farklı sözcük veya karakter türü kullanıyor. Tüm yedekleri koruduğu için Alice daha güçlü bir parola istiyor.",
-        "action": "Birbiriyle ilgisiz birkaç sözcük kullanın ya da harf, rakam ve sembolleri karıştırın; gösterge iyi veya güçlü olana kadar devam edin."
+        "cause": "Parola yeterince uzun ama orta düzeyde: çok az farklı sözcük veya karakter türü kullanıyor ya da büyük kısmı abcdef veya 123456 gibi tekrarlar ve dizilerden oluşuyor. Tüm yedekleri koruduğu için Alice daha güçlü bir parola istiyor.",
+        "action": "Birbiriyle ilgisiz birkaç sözcük kullanın ya da harf, rakam ve sembolleri tekrarlamadan karıştırın; gösterge iyi veya güçlü olana kadar devam edin."
       }
     },
     "license": {

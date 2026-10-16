@@ -810,7 +810,7 @@ choose **Go to the dashboard**. The evaluation has been running since Alice was 
 
 **Likely cause.** The passphrase is one word repeated, uses only one kind of character, or follows a pattern (for example `aaaaaaaaaaaaaaaa` or `1234567890123456`).
 
-**What to do.** Use several unrelated words, or mix letters, digits and symbols, until the meter shows good or strong. Write the passphrase down and keep it away from the server: every backup needs it, and it cannot be changed in this version.
+**What to do.** Use several unrelated words, or mix letters, digits and symbols without repeating them, until the meter shows good or strong. Repeated characters, repeated words and runs such as `abcdef` or `123456` count almost nothing. Write the passphrase down and keep it away from the server: every backup needs it, and it cannot be changed in this version.
 
 ## ALC-LIC-0001: Not available while the license is expired
 

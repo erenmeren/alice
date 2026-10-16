@@ -275,7 +275,7 @@
         "good": "İyi",
         "strong": "Güçlü"
       },
-      "tooWeak": "Bu parolanın tahmin edilmesi çok kolay. En az 20 karakter uzunluğunda yapın ya da büyük harf, rakam ve simge ekleyin.",
+      "tooWeak": "Bu parolanın tahmin edilmesi çok kolay. Daha uzun ve çeşitli yapın: tekrarlanan karakterler, tekrarlanan sözcükler ve abcdef ya da 123456 gibi diziler neredeyse hiç sayılmaz. En iyisi birbiriyle ilgisiz birkaç sözcüktür.",
       "doneState": "Kurtarma parolası belirlendi. Burada değiştirilemez."
     },
     "done": {
