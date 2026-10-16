@@ -139,7 +139,9 @@ release key never leaves the offline machine.
 
 1. **Stage on the release build machine, from the signed tag.** Check out the signed release tag, run the release
    gates (their output goes to `bin/release-gates.log`), then `make release VERSION=1.0.0`. Never sign a stage built
-   by CI.
+   by CI. The stage is built only from a clean checkout of the release commit: `make release` refuses uncommitted
+   changes to tracked files, and `RELEASE_ALLOW_DIRTY=1` exists for `make release-test` experiments and is never used
+   for a customer package.
 2. **Compare with CI.** A CI-built stage is used only to compare: its `alice` and helper binaries must have the same
    SHA-256 as the local build (`sha256sum` of both stages' binaries), and `make reproducible-check` on the release
    build machine must print `reproducible-check: ok` (S-26, R43 row 52). The CI stage is then discarded.

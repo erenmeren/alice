@@ -487,6 +487,7 @@ release-preflight: # make release's first prerequisite: refuse before anything i
 	@echo "$(VERSION)" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?' || { echo "make release needs VERSION=x.y.z or x.y.z-rc.N"; exit 2; }
 	@test -n "$(RELEASE_COMMIT)" || { echo "make release needs RELEASE_COMMIT (no .git here)"; exit 2; }
 	@for f in $(RELEASE_OUTPUTS); do if [ -e "$$f" ]; then echo "make release: outputs of $(VERSION) already exist in $(abspath $(RELEASE_DIR)); it never replaces them (make release-test removes those of a test package)"; exit 2; fi; done
+	@if [ -z "$(RELEASE_ALLOW_DIRTY)" ] && [ -n "$$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then echo "make release: the working tree has uncommitted changes; the package must be built from the release commit (RELEASE_ALLOW_DIRTY=1 only for make release-test)"; exit 2; fi
 
 .PHONY: release
 # One build time for the image and RELEASE (BUILD_TIME is a recursive ?= and would be re-evaluated per use).
