@@ -16,7 +16,7 @@ concurrency:
 jobs:
   go:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -28,13 +28,24 @@ jobs:
       - run: go mod verify
       - run: make lint
       - run: make test
-      - run: make coverage
       - run: make i18n-check
       - run: govulncheck ./...
       # build embeds the web UI and fails if testify is linked into the binary
       - run: make web-install
       - run: make build
       - run: make release-symcheck
+
+  # Coverage runs in its own job: the 20-minute go job was cancelled inside make coverage on every
+  # remote run (prod-readiness OPS-1). It needs no node.
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - run: make tools
+      - run: make coverage
 
   ssh-matrix:
     # The real OpenSSH and Nginx matrices (spec §22.3) on Ubuntu 22.04, Debian 12 and Rocky 9 in
