@@ -19,6 +19,10 @@ export default defineConfig({
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    // A few page tests render a long form and take about 5 s under `make coverage` with 144 test
+    // files running in parallel (AcmeCertificatePage 'deploys now' took 5.1-6.8 s): the default
+    // 5 s test timeout made `make ci` flaky. Passing tests are not slower; only hangs wait longer.
+    testTimeout: 20_000,
     // make web-coverage (npm run coverage) enforces the thresholds (AUD-23). Spec §22.7 asks for
     // 70 %; they are the values measured when they were set (2026-10-16: statements 96.21, branches
     // 92.61, functions 95.82, lines 97.33), rounded down; branches one point lower, because

@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { setCsrfToken } from '../api/client';
 import { server } from './server';
 
@@ -24,6 +24,10 @@ class ResizeObserverStub {
 }
 window.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 window.HTMLElement.prototype.scrollIntoView = () => {};
+
+// findBy*/waitFor wait up to 1 s by default; under the full parallel suite a busy machine needs more
+// (shell attention bell, network discovery dialogs). Failing waits only take longer to fail.
+configure({ asyncUtilTimeout: 5000 });
 
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 beforeEach(() => {
