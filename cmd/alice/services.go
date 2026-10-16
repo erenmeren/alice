@@ -15,6 +15,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/audit/forward"
 	"alice/internal/auth"
+	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
 	"alice/internal/backup"
 	"alice/internal/discovery/discoverysvc"
@@ -77,6 +78,7 @@ type services struct {
 	alerts         *alerts.Service  // expiry notices (alerts.scan) and thresholds
 	reports        *reports.Service // dashboard, saved views, exports
 	oidc           *oidc.Service    // identity providers, group mappings, SSO sign-in
+	ldap           *ldap.Service    // directories (LDAP and Active Directory), their group mappings, directory sign-in
 
 	// Network discovery (plan 2026-10-13-network-discovery, Task 9): scopes, settings, scans and results behind the API.
 	discovery *discoverysvc.Service
@@ -181,6 +183,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 	svc.reports = reports.New(reports.Config{Pool: pool, Clock: clk, Audit: auditLog, License: lic, Alerts: svc.alerts,
 		Delivery: svc.notifySettings, Inventory: inv})
 	svc.oidc = oidc.New(oidcConfig(svc, clk, log))
+	svc.ldap = ldap.New(ldapConfig(svc, clk, log))
 	// The system resolver only (nil Resolver): the save-time look-up of the names an Administrator listed (air-gap rule).
 	svc.discovery = discoverysvc.New(discoverysvc.Config{Pool: pool, Audit: auditLog, Queue: queue, Clock: clk})
 	svc.backup = backup.New(backupServiceConfig(cfg, svc, clk, log))
@@ -251,6 +254,19 @@ func oidcConfig(svc *services, clk clock.Clock, log *slog.Logger) oidc.Config {
 		Audit:   svc.auditLog,
 		Clock:   clk,
 		Auth:    svc.auth,
+		Log:     log,
+	}
+}
+
+// ldapConfig is the directory service's configuration. Dial stays nil, so every connection to a directory goes through
+// netaddr.DialContext (SEC-065), and NewClient stays nil (the real ldaps:// client); service account passwords are
+// sealed with serve's keyring.
+func ldapConfig(svc *services, clk clock.Clock, log *slog.Logger) ldap.Config {
+	return ldap.Config{
+		Pool:    svc.pool,
+		Keyring: svc.keyring,
+		Audit:   svc.auditLog,
+		Clock:   clk,
 		Log:     log,
 	}
 }

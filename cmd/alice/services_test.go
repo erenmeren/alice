@@ -127,4 +127,14 @@ func TestReleaseMailSettingsHaveNoDialerOverrideOrFallback(t *testing.T) {
 	assert.Same(t, svc.auditLog, oc.Audit)
 	assert.Same(t, clk, oc.Clock)
 	assert.Same(t, log, oc.Log)
+
+	// Directory connections pass the same rule, through the real client.
+	lc := ldapConfig(svc, clk, log)
+	assert.Nil(t, lc.Dial, "the release build dials directories through netaddr.DialContext")
+	assert.Nil(t, lc.NewClient, "the release build uses the real ldaps:// client")
+	assert.Same(t, pool, lc.Pool)
+	assert.Same(t, keyring, lc.Keyring, "service account passwords are sealed with serve's keyring")
+	assert.Same(t, svc.auditLog, lc.Audit)
+	assert.Same(t, clk, lc.Clock)
+	assert.Same(t, log, lc.Log)
 }

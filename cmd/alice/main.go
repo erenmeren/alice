@@ -535,6 +535,7 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		Alerts:         alertsAPI(svc),
 		Reports:        reportsAPI(svc),
 		SSO:            ssoAPI(svc),
+		LDAP:           ldapAPI(svc),
 		Backup:         backupAPI(svc),
 		Forward:        forwardAPI(svc),
 		TLSStore:       httpsAPI(svc, log),
@@ -609,6 +610,13 @@ func ssoAPI(svc *services) api.SSOService {
 		return nil
 	}
 	return svc.oidc
+}
+
+func ldapAPI(svc *services) api.LDAPService {
+	if svc.ldap == nil {
+		return nil
+	}
+	return svc.ldap
 }
 
 func reportsAPI(svc *services) api.ReportsService {
