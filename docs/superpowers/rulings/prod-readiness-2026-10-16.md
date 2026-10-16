@@ -58,7 +58,10 @@ Accepted and deferred items are also KI-39 (and KI-38 for AUTH-2) of `SECURITY-R
   intermediate; keeping it would keep the wrong expiry date on screen; no link is better than a wrong one — cost if
   wrong: until the file is fixed, that website has no certificate in Alice and no expiry e-mail; the location's
   problem is shown instead. A server with a helper older than 1.6.1 still shows the intermediate (the guides say to
-  reinstall the helper).
+  reinstall the helper). Follow-up for 1.0.x (whole-branch review): `certBlocks` in `cmd/alice-helper/nginx.go`
+  matches only `-----BEGIN CERTIFICATE-----`, so a leaf labelled `TRUSTED CERTIFICATE` or `X509 CERTIFICATE`
+  (OpenSSL's `PEM_read_bio_X509_AUX` reads both, so Nginx serves it) followed by a normal intermediate still hands
+  the intermediate to Alice as the leaf, with no warning; KI-39 tells customers to use the `CERTIFICATE` label.
 - OPS-6 (`ALICE_TRUSTED_PROXIES` could not be set by a customer) and OPS-4 (the migration limit was a fixed 2
   minutes) — both are keys of `/opt/alice/.env` (`ALICE_MIGRATE_TIMEOUT` default `30m`, from `1m` to `24h`),
   written by the installer, carried over by the update, and checked for format and range in the update's preflight
