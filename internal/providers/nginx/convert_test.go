@@ -628,3 +628,69 @@ func TestDumpWarningsAreBounded(t *testing.T) {
 	_, warns := convert(d)
 	assert.Equal(t, providers.WarnListTruncated, warns[len(warns)-1].Code, "the cut is reported")
 }
+
+// manyServers lists servers server blocks, each with names names, each using every one of paths
+// certificate paths (the shape of the RA-01 hostile dump).
+func manyServers(paths, servers, names int) []helperproto.NginxServer {
+	pairs := make([]helperproto.NginxPair, 0, paths)
+	for p := range paths {
+		pairs = append(pairs, pair(fmt.Sprintf("/etc/nginx/ssl/c%d.crt", p), fmt.Sprintf("/etc/nginx/ssl/c%d.key", p)))
+	}
+	out := make([]helperproto.NginxServer, 0, servers)
+	for s := range servers {
+		ns := make([]string, 0, names)
+		for n := range names {
+			ns = append(ns, fmt.Sprintf("s%d-n%d.example.test", s, n))
+		}
+		srv := server(ns, 443, pairs...)
+		srv.Line = s + 1
+		out = append(out, srv)
+	}
+	return out
+}
+
+func membershipTotals(locs []providers.DiscoveredCertificate) (memberships, names int) {
+	for _, l := range locs {
+		memberships += len(l.Location.Servers)
+		for _, s := range l.Location.Servers {
+			names += len(s.Names)
+		}
+	}
+	return memberships, names
+}
+
+// RA-01 (REM-1): one dump within its 16 MiB cap could list every server block under every
+// certificate path, 500 x 1000 copies. The dump as a whole has a budget.
+func TestConvertBoundsMembershipsAcrossTheDump(t *testing.T) {
+	t.Run("memberships", func(t *testing.T) {
+		// 200 paths x 500 servers = 100000 memberships asked for; servers come first in the dump,
+		// so the first 100 server blocks fill every location and the budget is met exactly.
+		locs, w := convert(validDump(manyServers(200, maxServersPerLocation, 1)))
+		require.Len(t, locs, 200, "every location is still listed")
+		m, n := membershipTotals(locs)
+		assert.Equal(t, maxMembershipsPerDump, m)
+		assert.Equal(t, maxMembershipsPerDump, n)
+		assert.Equal(t, []string{providers.WarnListTruncated}, warningCodes(w))
+	})
+	t.Run("names", func(t *testing.T) {
+		// 100 paths x 50 servers x 100 names = 500000 names asked for in 5000 memberships.
+		locs, w := convert(validDump(manyServers(100, 50, maxNames)))
+		require.Len(t, locs, 100)
+		m, n := membershipTotals(locs)
+		assert.Equal(t, maxNamesPerDump, n)
+		assert.Equal(t, maxNamesPerDump/maxNames, m)
+		assert.Equal(t, []string{providers.WarnListTruncated}, warningCodes(w))
+	})
+}
+
+func TestConvertKeepsARealisticLargeConfiguration(t *testing.T) {
+	locs, w := convert(validDump(manyServers(helperproto.MaxNginxFiles, 10, 1)))
+	require.Len(t, locs, helperproto.MaxNginxFiles)
+	for _, l := range locs {
+		require.Len(t, l.Location.Servers, 10)
+	}
+	m, n := membershipTotals(locs)
+	assert.Equal(t, 10000, m)
+	assert.Equal(t, 10000, n)
+	assert.NotContains(t, warningCodes(w), providers.WarnListTruncated)
+}

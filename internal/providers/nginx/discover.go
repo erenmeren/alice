@@ -23,6 +23,12 @@ const (
 	maxNames              = 100
 	maxListens            = 100
 	maxServersPerLocation = 500
+	// maxMembershipsPerDump and maxNamesPerDump bound the whole dump (RA-01): the per-location and
+	// per-file bounds alone let one 16 MiB nginx-dump answer list 500 server blocks under each of
+	// 1000 certificate paths, 500,000 server copies (~7 GiB) in memory and in the stored facts. A
+	// membership is one server block listed under one location; names counts their server names.
+	maxMembershipsPerDump = 20000
+	maxNamesPerDump       = 100000
 	maxChainCerts         = 20
 	maxWritable           = 50
 	maxVersionLength      = 64
@@ -246,6 +252,7 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 	builds := map[string]*build{}
 	var order []*build
 	tooMany, truncated := false, false
+	memberships, names := 0, 0 // across the dump, bounded by maxMembershipsPerDump and maxNamesPerDump
 	for _, s := range d.Servers {
 		cs, cut := certServer(s)
 		truncated = truncated || cut
@@ -268,10 +275,15 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 				order = append(order, b)
 			}
 			if !slices.ContainsFunc(b.loc.Servers, func(o providers.CertServer) bool { return sameServer(o, cs) }) {
-				if len(b.loc.Servers) >= maxServersPerLocation {
+				// A server already listed costs nothing; a new one must fit the location's bound and
+				// the dump's budget, else it is left out and the list said to be cut.
+				if len(b.loc.Servers) >= maxServersPerLocation || memberships >= maxMembershipsPerDump ||
+					names+len(cs.Names) > maxNamesPerDump {
 					truncated = true
 				} else {
 					b.loc.Servers = append(b.loc.Servers, cs)
+					memberships++
+					names += len(cs.Names)
 				}
 			}
 			b.loc.Inherited = b.loc.Inherited || p.Inherited
