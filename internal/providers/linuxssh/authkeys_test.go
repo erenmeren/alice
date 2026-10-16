@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -418,4 +419,40 @@ func TestLineOfFindsTheFirstLineOfAKey(t *testing.T) {
 	assert.Equal(t, 4, lineOf(ak, bfp))
 	assert.Equal(t, 0, lineOf(ak, "SHA256:none"))
 	assert.Equal(t, 0, lineOf(ak, ""))
+}
+
+func TestKeyCommentAndOptionsAreCapped(t *testing.T) {
+	line, _ := edKey(t)
+	check := func(t *testing.T, raw string, get func(Line) string) Line {
+		t.Helper()
+		l := mustParse(t, raw).Lines[0]
+		require.Equal(t, LineKey, l.Kind)
+		got := get(l)
+		assert.LessOrEqual(t, len(got), 1024+len("…"))
+		assert.True(t, utf8.ValidString(got))
+		assert.True(t, strings.HasSuffix(got, "…"))
+		assert.Equal(t, raw, l.Raw)
+		return l
+	}
+	t.Run("comment", func(t *testing.T) {
+		// "é" is two bytes, so a cut at byte 1024 would fall inside a rune only if mishandled.
+		raw := line + " x" + strings.Repeat("é", 2500)
+		l := check(t, raw, func(l Line) string { return l.Comment })
+		assert.LessOrEqual(t, len(strings.TrimSuffix(l.Comment, "…")), 1024)
+	})
+	t.Run("options", func(t *testing.T) {
+		var opts []string
+		for i := 0; i < 5; i++ {
+			opts = append(opts, `environment="K`+string(rune('1'+i))+`=`+strings.Repeat("v", 1000)+`"`)
+		}
+		raw := strings.Join(opts, ",") + " " + line
+		l := check(t, raw, func(l Line) string { return l.OptionsText })
+		assert.LessOrEqual(t, len(strings.TrimSuffix(l.OptionsText, "…")), 1024)
+		assert.Equal(t, opts, l.Options)
+	})
+	t.Run("short text is untouched", func(t *testing.T) {
+		l := mustParse(t, `no-pty `+line+` me@host`).Lines[0]
+		assert.Equal(t, "me@host", l.Comment)
+		assert.Equal(t, "no-pty", l.OptionsText)
+	})
 }

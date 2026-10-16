@@ -134,8 +134,28 @@ func parseKeyLine(l *Line) {
 	l.PublicKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
 	l.Fingerprint = ssh.FingerprintSHA256(key)
 	l.Bits = keyBits(key)
-	l.Comment = comment
-	l.OptionsText = optText
+	l.Comment = capText(comment, maxCommentBytes)
+	l.OptionsText = capText(optText, maxOptionsTextBytes)
+}
+
+// The inventory keeps at most this many bytes of a key's comment and of its options text, so a
+// hostile file cannot fill the database. Raw (used to rewrite the file) and Options stay complete.
+const (
+	maxCommentBytes     = 1024
+	maxOptionsTextBytes = 1024
+)
+
+// capText returns s unchanged when it fits in max bytes; otherwise its longest prefix of at most max
+// bytes that ends on a rune boundary, followed by "…".
+func capText(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	n := max
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n] + "…"
 }
 
 // splitOptions returns the verbatim options field (the left-trimmed line up to the first unquoted
