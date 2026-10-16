@@ -352,8 +352,10 @@ func TestLuhnPreCheckAgreesWithTheParser(t *testing.T) {
 }
 
 // TestRedactIsLinearOnHugeInput guards against a quadratic scan: one long value in an audit row
-// must not hang the CLI (before the fix, 1 MB of 'a' took minutes). The bound is generous: each
-// input takes about 0.2 s here, about 1.3 s at most under the race detector.
+// must not hang the CLI (before the fix, 1 MB of 'a' took about 7 minutes). The bound is a
+// wall-clock ceiling, not a benchmark: each input takes about 0.2 s on a quiet machine, 1.3 s
+// under the race detector, and over 8 s when `make coverage` runs every package in parallel with
+// the race detector. A quadratic scan needs minutes, so 90 s still fails it without flaking.
 func TestRedactIsLinearOnHugeInput(t *testing.T) {
 	const size = 1 << 20
 	rng := rand.New(rand.NewPCG(5, 6))
@@ -371,7 +373,7 @@ func TestRedactIsLinearOnHugeInput(t *testing.T) {
 		start := time.Now()
 		got := redactInstallations(in)
 		elapsed := time.Since(start)
-		assert.Less(t, elapsed, 5*time.Second, "%s took %s", name, elapsed)
+		assert.Less(t, elapsed, 90*time.Second, "%s took %s", name, elapsed)
 		assert.NotEmpty(t, got, name)
 		t.Logf("%s: %s", name, elapsed)
 	}
