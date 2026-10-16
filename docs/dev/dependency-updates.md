@@ -58,6 +58,12 @@ so a Dependabot PostgreSQL update fails `make lint` until the two Go files are e
 The distroless base is `gcr.io/distroless/static-debian12:latest@sha256:...`. The `# syntax=` line
 of a Dockerfile uses `docker/dockerfile:1@sha256:...` (resolve it the same way).
 
+PostgreSQL majors: Dependabot is told to ignore them (`ignore` entries for `postgres` in
+`.github/dependabot.yml`). A new major changes the format of the data directory, and
+`alice-update.sh` has no `pg_upgrade` step, so the update would fail and roll back on every
+customer. A major is a planned release with its own migration path. The open pull request #5
+(PostgreSQL 16 to 18) must be closed, not merged, by the owner.
+
 GitHub Action:
 
     git ls-remote https://github.com/actions/checkout 'refs/tags/v7*'
