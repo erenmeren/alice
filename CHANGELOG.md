@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased — LDAP and Active Directory sign-in
+
+**Added**
+- People can sign in with the password of an LDAP directory or of Active Directory: the sign-in page gains **Sign in
+  to** (**Local account** stays the default, then each directory that allows sign-in). Alice finds the person with a
+  read-only service account, checks the password by binding as the person over `ldaps://`, reads their groups and
+  gives the highest mapped role. People are created at their first sign-in; their identity is the directory's unique
+  ID (`objectGUID`, `entryUUID`), never the name or the e-mail. User names come from the sign-in name through a
+  transliteration table (`çağla` becomes `cagla`; a taken name gets `-2`).
+- Alice's own authenticator code is asked after the directory password, per directory and **on by default**; the
+  first sign-in sets up the authenticator and recovery codes. **Confirm it's you** asks a directory user for the
+  directory password again and the code.
+- **Settings → Directories** (Administrators, with a fresh confirmation): up to 3 directories with the presets
+  **Active Directory** and **OpenLDAP**, addresses, base DNs, filters (the AD template for nested groups),
+  attributes, the service account, an optional certificate authority, **Test connection**, **Test sign-in** (groups
+  found and the role they give, nothing stored), group mappings and **Allow sign-in with this directory**.
+- **People & access** shows directory users with the badge **Directory** and the directory's name; **Reset two-factor
+  sign-in** works for them; no password, no API tokens, no role change by hand (`ALC-USR-0003`).
+- Error codes `ALC-LDAP-0001` to `ALC-LDAP-0008` ([docs/troubleshooting.md](docs/troubleshooting.md)); `ALC-SSO-0002`,
+  `ALC-SSO-0003` and `ALC-USR-0003` now also name directory users.
+- API: `GET /api/v1/auth/ldap/directories`, `POST /api/v1/auth/ldap/{id}/login`, `POST /api/v1/auth/ldap/stepup`, and
+  10 routes under `/api/v1/ldap/` (permission `sso.manage`; see `docs/authz-matrix.md`). New audit actions
+  `ldap.directory_created|changed|deleted|tested`, `ldap.signin_tested`, `ldap.mapping_created|deleted`,
+  `ldap.mapping.denied` and `auth.ldap.denied`.
+- `make fuzz-ldap` (part of the nightly and release fuzzing); an OpenLDAP service in the e2e stack (test builds only)
+  and `web/e2e/ldap.spec.ts`.
+
+**Security**
+- The directory password passes through Alice (unlike single sign-on). It is used for one bind, never stored, logged
+  or audited, and Alice clears its own copies; TLS is mandatory and verified (`ldaps://` only, no StartTLS, no
+  referrals). The service account password is stored encrypted with the master key and never returned.
+- Every refused directory sign-in gets the same answer and takes at least 1.5 seconds; the audit log records the
+  reason, and the typed name only when the directory found the entry.
+- Three failed attempts for one name at one directory within 30 minutes lock that name in Alice for 45 minutes
+  (answered "Too many requests" without contacting the directory), so Alice cannot be used to lock directory accounts.
+  The price: anyone can lock a person's directory sign-in in Alice for 45 minutes; only a restart clears it.
+- "SSO users may be Admin" applies to directory users. The local break-glass administrator is unchanged.
+
+**Upgrade notes**
+- Migration `00015` adds `ldap_directories`, `ldap_group_mappings` and the directory columns of `users`. It was edited
+  while the feature was built: **a development database already at version 15 must be migrated down to 14 and up
+  again** (or `make reset`). Released installations are not affected.
+- New Go modules `github.com/go-ldap/ldap/v3` v3.4.15 and `github.com/go-asn1-ber/asn1-ber` v1.5.8, and the indirect
+  `github.com/Azure/go-ntlmssp` v0.1.1 (all MIT) ([docs/dev/dependency-updates.md](docs/dev/dependency-updates.md)).
+- Firewalls: Alice needs outbound TCP 636 (or the port in the address) to the domain controllers or directory servers.
+- **Not run against a real Active Directory or Samba AD**: everything was tested against OpenLDAP. The AD preset, the
+  nested-group template and AD's answers for disabled and locked accounts follow AD's documentation. Guide:
+  [docs/admin-guide.md](docs/admin-guide.md#ldap-and-active-directory); review:
+  `docs/security/reviews/ldap-signin.md`; design: `docs/superpowers/specs/2026-10-15-ldap-directory-signin-design.md`.
+
 ## Unreleased — Network certificate discovery
 
 **Added**

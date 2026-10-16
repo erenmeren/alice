@@ -180,7 +180,7 @@ As an Admin, I upgrade with confidence that a failed update rolls itself back.
 | Item | Target | Reason for deferral |
 |---|---|---|
 | ACME / Let's Encrypt | v2 | Needs inbound challenges or DNS integrations; air-gapped customers cannot use it; Key Vault and CSR paths cover v1 sourcing |
-| LDAP authentication | v2 | Local + MFA and OIDC SSO cover the target IdPs; LDAP adds a separate auth path to secure and test |
+| LDAP authentication | v2 (delivered 2026-10-16) | Local + MFA and OIDC SSO cover the target IdPs; LDAP adds a separate auth path to secure and test. **Update:** LDAP and Active Directory sign-in was delivered on 2026-10-16 (`docs/superpowers/specs/2026-10-15-ldap-directory-signin-design.md`). |
 | License server | v2 | Offline signed files suit air-gapped customers and a solo vendor; file format is already designed to be distributed by a server later |
 | Editions | v2 | `features` field is present in the license but unused; one product tier keeps pricing and support simple |
 | Azure Managed HSM | Later | Different API and permission model; small share of v1 customers |
@@ -222,7 +222,7 @@ As an Admin, I upgrade with confidence that a failed update rolls itself back.
 
 - License server distributing the same signed license files; unreachability never locks.
 - ACME / Let's Encrypt as a certificate source.
-- LDAP authentication.
+- LDAP authentication (delivered 2026-10-16: `docs/superpowers/specs/2026-10-15-ldap-directory-signin-design.md`).
 - Editions using the license `features` field.
 - High availability and external database.
 - Providers for containers/k8s nginx, Apache, IIS, HAProxy; Managed HSM; Key Vault key rotation; App Gateway/Front Door/App Service; Gov/China clouds; subscription-wide vault discovery (prioritized by customer demand).

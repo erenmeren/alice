@@ -9,7 +9,7 @@ with every release package (`docs/`) and are written in English.
 |---|---|---|
 | IT administrator, infrastructure team | prepare a server and install Alice | [install-guide.md](install-guide.md) |
 | Administrator doing the first setup | go through the setup wizard | [first-run.md](first-run.md) |
-| Administrator | manage people, roles, single sign-on, settings, backups in the web interface, the HTTPS certificate, audit forwarding | [admin-guide.md](admin-guide.md) |
+| Administrator | manage people, roles, single sign-on, directory sign-in (LDAP, Active Directory), settings, backups in the web interface, the HTTPS certificate, audit forwarding | [admin-guide.md](admin-guide.md) |
 | Administrator | allow Alice to scan networks for certificates, and read what it found | [admin-guide.md](admin-guide.md#network-discovery), [operator-guide.md](operator-guide.md#network-discovery) |
 | Operator or administrator | work with servers, certificates, deployments, Key Vaults and SSH key rotation | [operator-guide.md](operator-guide.md), [admin-guide.md](admin-guide.md) |
 | System operator, on-call staff | run the server: `alicectl`, logs, health, disk, monitoring, moving to a new server | [operator-guide.md](operator-guide.md) |
@@ -32,6 +32,8 @@ with every release package (`docs/`) and are written in English.
 | Restore after a mistake, or move to new hardware | [backup-restore.md](backup-restore.md#restore-on-the-same-server), [backup-restore.md](backup-restore.md#restore-on-a-new-server) |
 | Replace the HTTPS certificate | [admin-guide.md](admin-guide.md#https-certificate) |
 | Let Active Directory users sign in (single sign-on) | [admin-guide.md](admin-guide.md#active-directory) |
+| Let LDAP or Active Directory users sign in with their directory password | [admin-guide.md](admin-guide.md#ldap-and-active-directory) |
+| A directory sign-in is refused | [troubleshooting.md](troubleshooting.md#directory-sign-in-ldap-and-active-directory) |
 | Forward the audit log to a SIEM | [admin-guide.md](admin-guide.md#audit-forwarding) |
 | Collect information for support | [troubleshooting.md](troubleshooting.md#how-to-create-a-support-bundle) |
 | An update failed | [troubleshooting.md](troubleshooting.md#update-rolled-back) |

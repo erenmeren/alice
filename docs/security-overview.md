@@ -46,6 +46,10 @@ Data flows:
   schedule) starts a scan, Alice opens TLS connections to the listed addresses and ports, reads the certificates the
   servers present and closes the connections; nothing is scanned before that
   ([admin-guide.md](admin-guide.md#network-discovery)).
+- When an administrator sets up directory sign-in (LDAP or Active Directory), Alice connects to the directory over
+  `ldaps://` (port 636 by default) to find the person with a read-only service account, to check the person's password
+  by binding as them and to read their groups; nothing is contacted before an administrator adds a directory and tests
+  it or switches its sign-in on ([admin-guide.md](admin-guide.md#ldap-and-active-directory)).
 - Alice sends e-mail through the customer's mail server and, when configured, the audit log to the customer's
   syslog server.
 - Nothing flows to the vendor. Alice has **no telemetry** and makes no outbound connection other than the ones
@@ -68,7 +72,7 @@ Data flows:
 | Data | Where | Protection |
 |---|---|---|
 | Users, roles, password hashes (Argon2id), authenticator secrets, recovery codes, sessions, API token hashes | Database | Authenticator secrets encrypted with envelope encryption; passwords and tokens stored only as hashes. |
-| Managed private keys (TLS keys, generated SSH keys), Alice's own SSH key, Key Vault credentials, SMTP password, identity-provider client secrets, ACME account keys, external account binding keys, DNS hook secrets | Database | Envelope encryption under the master key, each value bound to its row. |
+| Managed private keys (TLS keys, generated SSH keys), Alice's own SSH key, Key Vault credentials, SMTP password, identity-provider client secrets, directory service account passwords, ACME account keys, external account binding keys, DNS hook secrets | Database | Envelope encryption under the master key, each value bound to its row. |
 | Inventory: servers, certificates, SSH public keys, deployments, rotations | Database | Database access control. |
 | Network discovery: scan scopes, and the public certificates and chains that scanned servers presented, with the address, port and TLS version where each was found | Database | Database access control. Public data only: no private key and no secret is read or stored. It is a map of the customer's network, so API tokens need the operate scope to read it. |
 | Audit log | Database | Hash chain; insert and read only for the application. |
@@ -122,12 +126,24 @@ entry, a job parameter or an error message, and the test suite checks this with 
 - Sessions end after 30 minutes without activity and always after 12 hours.
 - Sensitive actions (user and settings administration, license upload, private-key download, backups, re-pinning a
   server's host key, credentials) need a confirmation within the last 5 minutes: a fresh authenticator code, or for
-  single sign-on users a fresh sign-in at the identity provider.
+  single sign-on users a fresh sign-in at the identity provider, and for directory users the directory password again
+  (plus the authenticator code when they have one).
 - Single sign-on (OpenID Connect: Entra ID, AD FS, Keycloak and others): MFA is then the identity provider's
   responsibility; the "SSO users may be Admin" setting is off by default; a local break-glass administrator always
   remains.
+- Directory sign-in (LDAP or Active Directory over `ldaps://`): **the directory password passes through Alice**,
+  unlike single sign-on. Alice uses it for one bind as the person, never stores, logs or audits it, and clears its own
+  copies after use (a copy inside the LDAP library cannot be cleared). TLS is mandatory and verified (system
+  authorities or the directory's own authority, host name checked), referrals are not followed, responses are size
+  limited, and every typed name is escaped before it goes into a filter. **MFA stays Alice's job by default**: each
+  directory asks for Alice's authenticator code after the password unless an administrator switches that off for the
+  directory. The service account (read-only by requirement) has its password stored with envelope encryption under the
+  master key. Every refused sign-in gets the same answer after at least 1.5 seconds; three failed attempts for one
+  name at one directory within 30 minutes lock that name in Alice for 45 minutes (in memory, so Alice cannot be used to
+  lock directory accounts), on top of the sign-in limit of 10 a minute per address. The "SSO users may be Admin"
+  setting applies to directory users, and the local break-glass administrator always remains.
 - API tokens are personal, scoped (`read` or `operate`), valid for at most 365 days and stored as hashes. They never
-  reach the actions that need a confirmation (above), and single sign-on users cannot create them.
+  reach the actions that need a confirmation (above), and single sign-on and directory users cannot create them.
 
 The full description is in [admin-guide.md](admin-guide.md#users-and-roles).
 
@@ -168,6 +184,7 @@ checks every route against every role and token). The full matrix is in [authz-m
 | Out | HTTPS (443 or the port in the address) | A certificate authority's ACME directory and the addresses its answers name, and the DNS hook, when an administrator set them up; never through a proxy, never following a redirect |
 | Out | TCP 80 (HTTP) | Each name proved by the ACME web proof (HTTP-01), to check the proof file before the authority does; only for certificates that use that proof |
 | Out | TCP, the ports of a scan scope (443 and the like) | Network discovery: a TLS handshake to each address and port of a scope an administrator wrote, inside the networks an administrator allowed; nothing before an administrator adds a scope; never through a proxy |
+| Out | TCP 636 by default (or the port in the address) | The LDAP directory or Active Directory domain controllers over `ldaps://`, when directory sign-in is set up; TLS verified, no plain `ldap://`, no StartTLS, no referrals |
 | Out | the mail server's port (25, 465 or 587) | E-mail, when configured |
 | Out | TCP 6514 by default (or the port chosen) | Audit forwarding, when configured |
 
@@ -211,6 +228,7 @@ The design follows a STRIDE analysis per component. The main scenarios:
 | Malicious operator | Operators cannot download private keys, read the audit log or change servers and policies; they cannot add certificate authorities or names to be certified, or switch automatic deployment on; every action audited | Operators can deploy certificates, add or remove keys on existing servers, and order or renew certificates for names an administrator approved. |
 | Abuse of the certificate authority or hook settings (server-side request forgery) | Only administrators set the addresses; https only; the address rule refuses link-local and metadata addresses on every connection; no redirect, no proxy, 1 MiB answers; answer text never stored | An administrator can point Alice at any https address it can reach, private ones included. |
 | Abuse of network discovery (server-side request forgery, scanning from Alice's position, a hostile server answering a scan) | Nothing is scanned without an administrator's scope; an empty list of allowed scan networks (the default) allows nothing, and changing it needs a fresh code and is audited; the policy is checked on the socket at connect time, so names that resolve to a refused address and DNS rebinding do not help; built-in refusals for loopback, link-local and cloud metadata, multicast, reserved, carrier-grade NAT, Alice's own addresses, the default gateway and the database; the global exclusions no scope can override; no proxy, no redirect; the probe sends no application byte; limits on addresses, rate, connections, time, chain size and new certificates; parsers fuzzed | An administrator can scan any network the allowed list holds, from the Alice server; Docker host addresses outside the container's view must be added to the exclusions by hand; scans can trip intrusion detection. |
+| Abuse of directory sign-in (password guessing through Alice, LDAP injection, a spoofed directory, a hostile directory answer) | Limits before any directory traffic (10 sign-ins a minute per address; 3 failures per name and directory lock the name in Alice for 45 minutes); one generic answer held to at least 1.5 seconds; empty passwords refused before a bind; every typed value escaped and filter templates checked when saved; `ldaps://` only with the certificate and host name verified; exactly one entry required; identity by the directory's unique ID, never by name or e-mail; no referrals, response and value limits, timeouts; Alice's authenticator code by default | The password passes through Alice; anyone can lock a person's directory sign-in in Alice for 45 minutes; a directory administrator controls roles through groups; an administrator who switches MFA off for a directory leaves its users with one factor. |
 | Man in the middle | TLS everywhere; SSH host key pinning; certificate verification | First contact with a new server relies on the administrator comparing its fingerprint (trust on first use). |
 | Tampered update | Signed packages verified with the installed keys; the package copied before use; automatic backup and rollback | Trust in the first installation rests on the operator comparing the published fingerprint. |
 | Supply-chain compromise | Pinned and scanned dependencies, SBOM, offline signing | A compromised dependency that no scanner knows. |
@@ -242,6 +260,12 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
   of the whole server can cut the newest entries or replace the database with an older copy. Forwarding to a syslog
   server and recording the Overview's head hash outside Alice make this visible. Forwarding is at most once.
 - **License clock heuristics** can be bypassed by someone in full control of the host; this harms no paying customer.
+- **Directory sign-in.** The directory password passes through Alice, and a directory administrator controls group
+  membership and so roles in Alice. Anyone who reaches the sign-in page can lock a person's directory sign-in in Alice
+  for 45 minutes with three wrong passwords (the same trade-off as Active Directory's own lockout; only a restart of
+  Alice clears it); there is no overall limit on parallel directory sign-ins. Directory sign-in was tested against
+  OpenLDAP only, not against a real Active Directory or Samba AD; read
+  [the review](security/reviews/ldap-signin.md).
 - **Trust on first use** for new servers' host keys and for the first package's release key, mitigated by the
   administrator's fingerprint comparison.
 - **Results that need the vendor or a customer environment** (installation on each supported operating system,
@@ -257,7 +281,7 @@ assessment, not a legal opinion or a certification.
 | Control area | Alice feature | Evidence |
 |---|---|---|
 | Access control and least privilege | Three roles, per-route permissions, scoped API tokens | [authz-matrix.md](authz-matrix.md); **People & access** page; audit entries of role changes |
-| Strong authentication | Mandatory MFA for local accounts, MFA at the identity provider for single sign-on, confirmation for sensitive actions | Admin settings; audit entries of sign-ins and confirmations |
+| Strong authentication | Mandatory MFA for local accounts, MFA at the identity provider for single sign-on, Alice's authenticator code for directory users unless switched off per directory, confirmation for sensitive actions | Admin settings; audit entries of sign-ins and confirmations |
 | Session management | 30-minute idle and 12-hour absolute limits; sessions ended on disable | [admin-guide.md](admin-guide.md#staying-signed-in) |
 | Logging and monitoring | Hash-chained audit log, daily verification, syslog/SIEM forwarding | Audit export with verification result; SIEM records; the Overview's head hash |
 | Integrity of records | Hash chain, insert-only database role, triggers | `alicectl audit verify` output; export re-checked outside Alice |

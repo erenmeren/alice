@@ -11,7 +11,7 @@ Working product name: **Alice** (self-hosted SSH key & TLS certificate managemen
 - SSH key lifecycle: inventory + generate + deploy public key + remove + **scheduled automatic rotation** (v1). Rotation rules: only platform-managed keys; add-new-verify-then-remove-old with configurable overlap (default 7 days); policies disabled by default, admin-only; dry-run preview + notification before each run; paused in license lock; incomplete rotation never removes old key.
 - Generic (non-Nginx) Linux hosts can be added as SSH targets; they count toward the license limit.
 - Certificate sourcing: manual upload + in-platform CSR generation + **Azure Key Vault as source of truth** (KV self-renews self-signed / DigiCert / GlobalSign integrated CA certs); platform detects new KV cert versions and auto-deploys to bound Nginx servers. ACME/Let's Encrypt deferred to v2.
-- Authentication: local accounts with **mandatory TOTP** + **OIDC SSO** (Entra ID, AD FS, Keycloak) with group→role mapping. Wizard-created admin is always local + MFA (break-glass). LDAP deferred to v2.
+- Authentication: local accounts with **mandatory TOTP** + **OIDC SSO** (Entra ID, AD FS, Keycloak) with group→role mapping. Wizard-created admin is always local + MFA (break-glass). LDAP was deferred to v2; **update 2026-10-16: LDAP and Active Directory sign-in (directory password over `ldaps://`, Alice TOTP on by default) was delivered**, see `docs/superpowers/specs/2026-10-15-ldap-directory-signin-design.md`.
 - UI languages: English + Turkish from v1, JSON translation files (`locales/en.json`, `locales/tr.json`), new languages by adding a file. UI and errors written for non-technical users.
 
 ## Architecture (approved)

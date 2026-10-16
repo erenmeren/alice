@@ -6,3 +6,9 @@ docs/operator-guide.md	Users and API tokens are as they were when the backup was
 docs/operator-guide.md	Once a month, run `sudo /opt/alice/alicectl backup verify <newest file> --deep`
 docs/admin-guide.md	Delivery is at most once.
 docs/release-checklist.md	make reproducible-check
+docs/admin-guide.md	Every refused directory sign-in that could say something about a person gets the same answer
+docs/admin-guide.md	Three failed attempts (a wrong password, an unknown name, several entries or no mapped group) for one sign-in name at one directory within 30 minutes lock that name in Alice for 45 minutes
+docs/admin-guide.md	Anyone who can reach the sign-in page can lock a person's directory sign-in in Alice for 45 minutes by typing three wrong passwords for their name; this is the same trade-off as AD's own lockout
+docs/admin-guide.md	Unlike single sign-on, where the password goes only to the identity provider, a directory sign-in sends the person's password to Alice, which checks it against the directory.
+docs/admin-guide.md	Alice talks to a directory only over `ldaps://` (TLS from the first byte, port 636 by default). Plain `ldap://` and StartTLS are refused
+docs/security-overview.md	Directory sign-in (LDAP or Active Directory over `ldaps://`): **the directory password passes through Alice**, unlike single sign-on.

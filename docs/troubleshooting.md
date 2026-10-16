@@ -388,6 +388,89 @@ The audit actions of these features: `settings.smtp_changed`, `settings.smtp_imp
 `sso.admin_role_disallowed`, `auth.oidc.denied`, `user.provisioned`, `user.role_synced`, `user.demoted`,
 `user.sessions_ended`; single sign-ons and confirmations are `auth.login` and `auth.stepup` with `method` `oidc`.
 
+## Directory sign-in (LDAP and Active Directory)
+
+**Directory sign-in refused.** The person sees one of two texts: "The user name or password is wrong, or you have no
+access." (`ALC-LDAP-0001`) or "The directory cannot be used for sign-in right now." (`ALC-LDAP-0002`), or "Too many
+requests" (see the lockout below). The page never says more, on purpose. Work through it as an Administrator:
+
+1. **Read the audit entry.** **Audit trail**, action `auth.ldap.denied` (**Directory sign-in refused**): the `reason`
+   says why; the sign-in name is there only when the directory found the entry. `bad_credentials` (unknown name, wrong
+   or empty password; also a person disabled, locked or with an expired password in AD, which AD answers as a wrong
+   password), `ambiguous_user` (the user filter found several entries), `no_access` (no group mapped), `email_in_use`
+   (a local account has the e-mail), `user_disabled` (disabled in Alice), `locked` (blocked in Alice after wrong
+   authenticator codes: `alice admin unlock <username>` or wait 15 minutes), `login_invalid` (a name Alice cannot send,
+   for example with a control character), `identity_invalid` (a value of the entry cannot be stored, for example its
+   sign-in name), `directory_unreachable`, `directory_misconfigured`, `provider_disabled` (sign-in through the
+   directory is off). "AD answers as a wrong password" is from AD's documentation, not run by the author.
+2. **Run Test connection** on **Settings → Directories**. Its message names the step:
+   - `connect`: no address could be connected. Check the address and port (636 by default), DNS, and the firewall
+     between the Alice server and the directory: TCP 636 must be open outbound from the Alice host (and its Docker
+     network). An address that resolves to a link-local or cloud metadata address is refused by Alice on purpose.
+   - `timeout`: an address or a request took too long (10 seconds to connect, 15 per request). A firewall that drops
+     packets instead of refusing them looks like this.
+   - `tls`: the certificate was not trusted. Paste the authority that issued the directory's certificate (root and
+     intermediate, PEM) into **Certificate authority (optional, PEM)**, and check that the host name in the address
+     is in the certificate (an address by IP needs the IP in the certificate). Check the clocks: a certificate that is
+     not yet valid or expired for Alice's server clock is refused (keep Alice and the domain controllers on NTP). Plain
+     `ldap://` or StartTLS on port 389 does not work: Alice talks only `ldaps://`.
+   - `service_bind`: the directory refused the service account. Check the **Service account DN** (the full DN, not a
+     user name) and enter its password again (it may have expired or been changed in the directory).
+   - `user_search`: the **User base DN** does not exist or the service account may not read it.
+   - `response_size`, `size_limit`: the directory sent more than Alice accepts (8 MiB per connection, 5,000 values
+     of one attribute, 1,000 groups for one person). Narrow the base DNs or the filters.
+3. **Run Test sign-in** with the person's name and password. It shows the reason and the step, or the groups found
+   and the role:
+   - `not_found` (`bad_credentials`): the user filter matches nothing. Check the filter (for example AD's
+     `(&(objectClass=user)(sAMAccountName={login}))`, OpenLDAP's `(&(objectClass=inetOrgPerson)(uid={login}))`), the
+     user base DN (people in another OU are not found) and that the person types the name the filter expects
+     (`sAMAccountName` is `ada`, not `CORP\ada` or `ada@corp.example.com`).
+   - `ambiguous_user`: two or more entries match (for example the same `uid` in two OUs). Make the filter or the base
+     DN narrower; Alice never picks one.
+   - `unique_id`: the entry has no single value of the **Unique ID attribute** (`objectGUID` in AD, `entryUUID` in
+     OpenLDAP). Check the spelling, and that the service account may read it.
+   - **No group was found**: the group filter matches nothing. Check the **Group base DN**, that the groups use the
+     attribute of the filter (`member` holding DNs for `(member={dn})`; `memberUid` holding names for
+     `(memberUid={login})`), and that the service account may read the groups.
+   - **Nested groups are missing**: `(member={dn})` finds direct memberships only. In AD use the template
+     `(member:1.2.840.113556.1.4.1941:={dn})` (the Active Directory preset); other directories have no such rule, so
+     put the people directly into the mapped group or map the nested group too.
+   - **Groups are listed but the role is "None"**: a mapping must equal the value exactly, upper and lower case
+     included. Copy the value from the **Groups found** list (with an empty **Group name attribute** the value is the
+     group's full DN).
+4. **Too many requests** (HTTP 429, `ALC-SYS-0005`) for one name: three failed attempts for that name at that
+   directory within 30 minutes lock it in Alice for 45 minutes, also for the right password and from every address.
+   Wait (the answer says how long). An Administrator cannot end it; a restart of Alice clears it. If it happens again,
+   check the audit log for `auth.ldap.denied` entries of that name: someone may be guessing. The general limit of 10
+   sign-in attempts a minute per address also answers "Too many requests"; wait a minute.
+5. **Everyone gets "The directory cannot be used"** although Test connection works: check whether **Allow sign-in with
+   this directory** is on, whether the service account's password changed (Alice's log has a warning at most every 10
+   minutes per directory), and whether a person is in more than 1,000 groups.
+
+Other directory problems:
+
+- **Confirm it's you always fails for directory users** although sign-in works. Alice confirms with the sign-in name
+  the directory holds in the **Sign-in name attribute**; a user filter on another attribute (for example `mail`) does
+  not find that name. Make the user filter use the sign-in name attribute. A confirmation that found another entry
+  for the stored name (the name was given to someone else) is refused as `stepup_other_user`.
+- **"Set up your authenticator first" (`ALC-LDAP-0007`) at Confirm it's you.** The person has no authenticator yet
+  (for example after **Reset two-factor sign-in**); they sign out and in again to set it up.
+- **A person removed from the group can still work.** The role is read again at every sign-in and confirmation; an
+  open session keeps working until then (at most 30 minutes idle, 12 hours in all). Choose **Disable** on **People &
+  access** to stop it at once.
+- **Saving says the service account password is required.** A new address, service account DN, unique ID attribute
+  or certificate authority needs the password again: Alice never sends a stored password to a new destination.
+- **"This directory has users" (`ALC-LDAP-0003`).** Addresses and the unique ID attribute cannot change, and the
+  directory cannot be deleted, once people have signed in: switch it off and add a new directory.
+- **A user name looks odd** (`cagla-2`, `ldap-…`). Letters are transliterated by a table, other characters dropped,
+  taken names get `-2`; the user name is only a label (see [admin-guide.md](admin-guide.md#user-names)).
+
+The audit actions of directory sign-in: `ldap.directory_created`, `ldap.directory_changed`, `ldap.directory_deleted`,
+`ldap.directory_tested`, `ldap.signin_tested`, `ldap.mapping_created`, `ldap.mapping_deleted`, `ldap.mapping.denied`,
+`auth.ldap.denied`, `user.provisioned`, `user.role_synced`, `user.sessions_ended`; directory sign-ins without MFA and
+confirmations are `auth.login` and `auth.stepup` with `method` `ldap` (with MFA, the sign-in is `auth.login` with
+`method` `totp`).
+
 ## License messages
 
 - **"The server clock changed unexpectedly …"** The server's clock is behind the latest time Alice has seen. Alice

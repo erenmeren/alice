@@ -8,7 +8,7 @@ the same inputs tomorrow (audit AUD-09, SEC-089, SEC-103):
 | GitHub Actions (`uses:`) | full 40-character commit SHA plus `# v1.2.3` comment | `.github/workflows/*.yml` |
 | Docker base images and the `# syntax=` frontend | `image:tag@sha256:<index digest>` | `deploy/Dockerfile`, `test/images/**` |
 | PostgreSQL | `postgres:16-alpine@sha256:...` | `deploy/docker-compose.yml`, `internal/testutil/pgtest/pgtest.go`, `internal/platform/db/db_integration_test.go` |
-| OpenLDAP (directory sign-in tests) | `osixia/openldap:1.5.0@sha256:...` | `internal/testutil/fakeldap/server.go` |
+| OpenLDAP (directory sign-in tests) | `osixia/openldap:1.5.0@sha256:...` | `internal/testutil/fakeldap/server.go` and `test/images/openldap/Dockerfile` (the same reference in both) |
 | Tool images (gitleaks, trivy, ShellCheck) | `GITLEAKS_IMAGE`, `TRIVY_IMAGE`, `SHELLCHECK_IMAGE` with tag and digest; every `*_IMAGE` variable of the Makefile must be pinned that way | `Makefile` |
 
 The tag stays in the reference for readability; Docker verifies the digest, not the tag. Digests are
@@ -98,7 +98,8 @@ Directory sign-in (plan 2026-10-15, LDAP and Active Directory) adds two direct m
 go-ldap is the established pure-Go LDAP v3 client (no cgo, so `CGO_ENABLED=0` builds keep working); writing the
 protocol, the BER encoding and the filter compiler by hand would carry more risk. The first user is the filter and
 DN property tests of `internal/auth/ldap/ldapx` (`ldap.CompileFilter`, `ldap.ParseDN`); the production helpers in
-that package import neither module. The network client in `internal/auth/ldap` imports go-ldap from Task 3 on.
+that package import neither module. The network client in `internal/auth/ldap` imports go-ldap; no other package
+may (`TestOnlyTheDirectoryPackageImportsTheLDAPClient`).
 
 One new indirect module is compiled in: `github.com/Azure/go-ntlmssp` v0.1.1 (MIT; NTLM bind, linked by go-ldap but
 never called: Alice binds with a simple bind over `ldaps://` only). `github.com/google/uuid` v1.6.0 (BSD-3-Clause)
@@ -128,7 +129,10 @@ nothing until the repository has a GitHub remote. Dependabot's Docker updater ma
 Updated by hand, always (Dependabot does not read them): the Makefile tool images
 `GITLEAKS_IMAGE` and `TRIVY_IMAGE`, the `# syntax=docker/dockerfile:1@sha256:...` frontend
 line of every Dockerfile, and the OpenLDAP test image of `internal/testutil/fakeldap` (a Go literal; its digest is
-the manifest list's, from `docker manifest inspect` or the `Digest:` line of `docker pull`).
+the manifest list's, from `docker manifest inspect` or the `Digest:` line of `docker pull`). The e2e fake directory
+(`test/images/openldap/Dockerfile`) uses the same reference: change both together (a Dependabot pull request for that
+Dockerfile alone fails `TestFakeDirectoryDockerfileReusesTheIntegrationTestImage`), then run the integration suite and
+`web/e2e/ldap.spec.ts`. `osixia/openldap` 1.5.0 is from 2021 and no longer maintained; it is a test image only.
 
 Reviewing a Dependabot pull request: read the release notes; for an image, compare
 `docker buildx imagetools inspect <tag>` with the digest in the diff; run `make ci`.

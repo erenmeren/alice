@@ -9,7 +9,7 @@ Alice has three roles:
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs; certificate authorities: adding them, their accounts and DNS hooks, choosing which certificates Alice gets (**Get a certificate**), switching automatic renewal and automatic deployment on, **Renew now**, **Release**; network discovery: scan scopes, allowed scan networks, exclusions and retention, and everything an operator does | — |
+| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on, directories), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs; certificate authorities: adding them, their accounts and DNS hooks, choosing which certificates Alice gets (**Get a certificate**), switching automatic renewal and automatic deployment on, **Renew now**, **Release**; network discovery: scan scopes, allowed scan networks, exclusions and retention, and everything an operator does | — |
 | Operator | View inventory; test servers, run discovery and remove SSH keys; generate SSH keys and deploy them; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; for certificates from a certificate authority: **Test run**, **Order now**, **Deploy now**, connecting and removing websites, switching automatic deployment off; network discovery: start and cancel scans and read the results; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that, download a private key, manage rotations, add certificate authorities or names to be certified, switch automatic deployment on, define scan scopes or the discovery settings |
 | Auditor | View inventory and network discovery results read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
@@ -131,8 +131,8 @@ is different: it belongs to the account and follows the person to every browser.
 365). Creating a token asks for a fresh 6-digit code if you have not confirmed your identity in the last five
 minutes. The token is shown once; copy it immediately. Scripts send it as `Authorization: Bearer alice_…`.
 A token never has more rights than its owner's current role, and tokens cannot manage users, settings or tokens.
-Revoking a token stops it at once. People who sign in through single sign-on cannot create tokens
-([Single sign-on](#roles-sso-users-may-be-admin-and-sso-users)).
+Revoking a token stops it at once. People who sign in through single sign-on or a directory cannot create tokens
+([Single sign-on](#roles-sso-users-may-be-admin-and-sso-users), [directory users](#directory-users-on-people--access)).
 
 Administrators can list and revoke anyone's tokens through the API: `GET /api/v1/tokens?user_id=<id>` and
 `DELETE /api/v1/tokens/<token id>`, from a signed-in browser session. The **API tokens** page shows your own
@@ -603,9 +603,10 @@ Every change is in the audit log (**Identity provider added**, **changed**, **se
 
 ### Active Directory
 
-Alice talks only OpenID Connect today. It does not connect to Active Directory (AD) over LDAP and does not read AD
-by itself; direct AD (LDAP) sign-in is planned, without a date. Until then AD users sign in through an OpenID Connect
-provider in front of AD. Which one depends on what you already run:
+AD users can sign in to Alice in two ways. **Directly**, with their AD password checked by Alice over `ldaps://`: see
+[LDAP and Active Directory](#ldap-and-active-directory) (the password then passes through Alice, and Alice asks for its
+own authenticator code). Or **through an OpenID Connect provider in front of AD**, which keeps passwords away from
+Alice and leaves MFA to the provider. For the OpenID Connect route, which provider depends on what you already run:
 
 | Your situation | Use | Notes |
 |---|---|---|
@@ -838,7 +839,272 @@ A refused single sign-on brings the person back to the sign-in page with a messa
 of forged returns cannot fill the audit log. A sign-in must be finished within 10 minutes in the
 browser that started it. See "SSO sign-in refused" in [troubleshooting.md](troubleshooting.md#alerts-e-mail-and-single-sign-on).
 
-## Saved views and export
+## LDAP and Active Directory
+
+People can sign in with the password of an LDAP directory or of Active Directory (AD): on the sign-in page they choose
+the directory under **Sign in to** (the default stays **Local account**) and type their directory user name and
+password. Alice finds the person with a read-only service account, checks the password by binding as the person over
+`ldaps://`, reads the person's groups, gives the role of the mapped groups and, by default, asks for Alice's own
+authenticator code. People are created in Alice at their first sign-in. Local accounts, single sign-on and adding
+people by hand stay exactly as they are.
+
+**Not run by the author:** a real Active Directory and Samba AD. Everything below was run against OpenLDAP (the
+integration tests and the end-to-end tests). The Active Directory preset, the nested-group template, AD's binary
+`objectGUID` (only a unit test) and AD's answers for disabled, locked and expired accounts follow the documentation of
+AD; test them with your directory (**Test connection**, **Test sign-in**) before you rely on them.
+
+### Setting up a directory
+
+You need an Administrator session; every step asks for **Confirm it's you** if you have not confirmed in the last 5
+minutes.
+
+1. Create the service account in the directory (see [The service account](#the-service-account)).
+2. **Settings → Directories → Add directory**. Choose a preset under **Fill in typical values**: **Active Directory**
+   or **OpenLDAP**. A preset fills only the attribute and filter fields; nothing is saved until you save:
+
+   | Field | Active Directory preset | OpenLDAP preset |
+   |---|---|---|
+   | **User filter** | `(&(objectClass=user)(sAMAccountName={login}))` | `(&(objectClass=inetOrgPerson)(uid={login}))` |
+   | **Sign-in name attribute** | `sAMAccountName` | `uid` |
+   | **Unique ID attribute** | `objectGUID` | `entryUUID` |
+   | **Display name attribute** | `displayName` | `cn` |
+   | **E-mail attribute** | `mail` | `mail` |
+   | **Group filter** | `(member:1.2.840.113556.1.4.1941:={dn})` (nested groups) | `(member={dn})` |
+   | **Group name attribute** | `cn` | `cn` |
+
+3. Fill in the rest: **Name shown on the sign-in page**; **Addresses** (one `ldaps://` address per line, at most 3,
+   for example `ldaps://dc1.corp.example.com:636`); **User base DN** (the subtree that holds the people, for example
+   `OU=Staff,DC=corp,DC=example,DC=com`); **Service account DN** and **Service account password**; **Group base DN**
+   (the subtree that holds the groups); **Certificate authority (optional, PEM)** when the directory's certificate
+   comes from your own authority.
+4. **Ask for Alice's authenticator code after the directory password** is on and **Allow sign-in with this
+   directory** is off for a new directory. Choose **Save directory**. Alice does not contact the directory when it
+   saves; the next steps do.
+5. **Test connection** on the directory: Alice binds as the service account and searches the user base DN once.
+6. **Test sign-in** with a real person's name and password: the result shows the sign-in name, display name,
+   e-mail, unique ID, the **Groups found** and the **Role in Alice**. Nobody is signed in and nothing is stored.
+7. **Map group**: copy a group value exactly as **Test sign-in** lists it, choose its **Role in Alice** and add it.
+   Without a mapping nobody can sign in through the directory. Run **Test sign-in** again: it now shows the role.
+8. **Edit <name>**, switch **Allow sign-in with this directory** on and save. Sign in through it in a private browser
+   window to check.
+
+At most 3 directories, with a unique name (upper and lower case do not count), and at most 200 mappings per directory.
+Every change is in the audit log (**Directory added**, **changed**, **deleted**, **Directory connection tested**,
+**Directory sign-in tested**, **Directory group mapping added**, **removed**, **refused**).
+
+### The service account
+
+Alice binds with the service account to search for the person who signs in and for their groups. It needs:
+
+- read access to the user entries under the user base DN: the attributes of the user filter, the sign-in name, the
+  unique ID, the display name and the e-mail attribute;
+- read access to the group entries under the group base DN: the attribute of the group filter (`member`) and the
+  group name attribute;
+- nothing else. **Make it read-only**: Alice never writes to the directory, never changes a password and never reads
+  a password attribute. In AD an ordinary domain user can usually read all of this (check your delegation).
+
+Its password is stored only encrypted with the master key, like the other secrets, and no API answer returns it. An
+empty password field when you edit the directory keeps the stored password. A change that would send the stored
+password to another server or account (an added address, another service account DN, another unique ID attribute, or
+another or no certificate authority) needs the password again: the form says so, and Alice refuses the change without
+it. When the service account is refused at a sign-in, every directory sign-in is answered "The directory cannot be used
+for sign-in right now" and Alice's log says so at most once every 10 minutes per directory (without any password).
+
+### Addresses, TLS and the certificate authority
+
+Alice talks to a directory only over `ldaps://` (TLS from the first byte, port 636 by default). Plain `ldap://` and
+StartTLS are refused, and so is `LDAPS://` written in capitals. The host is a DNS name, an IPv4 address or an IPv6
+address in brackets; a port is optional. Alice tries the addresses in order and moves to the next one only when it
+cannot connect or the TLS handshake fails; once a directory answered, a refused bind or search is never tried at
+another address (so a password is never tried twice).
+
+The certificate is always verified: TLS 1.2 or newer, a chain to the system authorities or to the authority you paste
+into **Certificate authority (optional, PEM)** (at most 20 certificates, 64 KiB), and the host name of the address
+must be in the certificate (an IP address must be in it as an IP address). AD domain controllers often have
+certificates of an internal AD Certificate Services authority: paste that root (and intermediate) certificate.
+
+Connections go through the same address rule as Alice's other outbound connections: link-local and cloud metadata
+addresses (for example `169.254.169.254`) are refused, private and loopback addresses are allowed on purpose (your
+domain controllers are usually on a private network). Alice follows no LDAP referral. Timeouts: 10 seconds to connect
+(with the TLS handshake), 15 seconds per LDAP request, 30 seconds for a whole sign-in. Alice reads at most 8 MiB from
+one connection and at most 5,000 values of one attribute; more is treated as a broken setting.
+
+### Filters and attributes
+
+- **User filter** finds the person. It holds `{login}` exactly once, where the typed sign-in name goes. The search
+  covers the whole subtree below the user base DN and must find **exactly one** entry: none is an unknown user, two
+  or more are refused (`ambiguous_user`). Keep the filter on the same attribute as **Sign-in name attribute**: Alice
+  stores the sign-in name the directory returns in that attribute and uses it at **Confirm it's you**; a filter on
+  another attribute (for example `mail` while the sign-in name attribute is `uid`) lets people sign in but makes every
+  confirmation fail.
+- **Group filter** finds the person's groups below the group base DN. It holds `{dn}` (the person's DN), `{login}`
+  (their sign-in name as the directory holds it) or both. The default `(member={dn})` finds direct memberships only.
+  The AD template `(member:1.2.840.113556.1.4.1941:={dn})` asks AD for nested membership as well ("in chain"); only
+  AD knows this rule (OpenLDAP answers it with no groups). A `posixGroup` directory uses `(memberUid={login})`.
+- **Group name attribute** is the value a mapping is compared with, `cn` by default. Leave it empty to use the group's
+  DN. A person in more than 1,000 groups (of those the group filter finds) is refused as a broken setting, because a
+  cut list would hand out a role by chance: narrow the group base DN or the group filter.
+- **Sign-in name attribute** is the directory's name for the person (`sAMAccountName`, `uid`); Alice derives the user
+  name from it (below). **Display name attribute** and **E-mail attribute** may be empty. The display name is cut to
+  100 characters; an e-mail value that is not a plain address is ignored.
+- **Unique ID attribute** is the person's identity in Alice: an attribute whose value never changes, `objectGUID` in
+  AD, `entryUUID` in OpenLDAP. Alice keeps it as the hexadecimal form of its bytes. Alice recognises a person **only**
+  by the directory and this value, never by name or e-mail: a renamed person keeps their Alice account, and a new
+  person who gets an old name does not get the old account. It cannot be changed once people have signed in through
+  the directory, and neither can the addresses (`ALC-LDAP-0003`); add a new directory instead.
+
+**Filter template rules.** Alice checks the filters when you save; they are stricter than the LDAP standard in a few
+places:
+
+- `{login}` and `{dn}`, written in lower case, are the only placeholders, and they stand only where a value stands:
+  `(uid={login})` and `(cn={login}*)` work, `({login}=x)` does not.
+- A literal brace is written `\7b` or `\7d`; a backslash must be followed by two hexadecimal digits.
+- No raw control characters (tab, line break): write them escaped, for example `\09`.
+- One balanced filter of at most 1,024 bytes and 16 levels, no text around it, no `**`.
+- The extensible-match flag is written as lower-case `:dn`.
+
+Every typed name and every DN is escaped before it goes into a filter, so a name like `ada)(uid=*` finds nobody.
+Alice refuses before contacting the directory: an empty password (an LDAP bind with an empty password is usually
+accepted anonymously), a password over 1,024 bytes, a sign-in name with control or invisible format characters or with
+white space at its start or end, and a sign-in name without a letter or digit.
+
+### User names
+
+Alice derives the user name from the sign-in name attribute: Turkish letters and common Latin accents are replaced by
+an explicit table (`ç→c`, `ğ→g`, `ı→i`, `İ→I`, `ö→o`, `ş→s`, `ü→u`, also `ß→ss`, `æ→ae` and others), the result is
+folded to lower case, and only `a`–`z`, `0`–`9`, `.`, `_`, `-` and `@` are kept (at most 64 characters). So `çağla`
+becomes `cagla`, `Işıl.Çağlar` becomes `isil.caglar` and `Şeref Üstün` becomes `serefustun`. Letters of other scripts
+are dropped, not mapped (a name that keeps fewer than 2 characters becomes `ldap-` and 12 characters of the unique ID).
+A taken user name gets `-2`, `-3`, …: a directory user `cagla` next to a local `cagla` becomes `cagla-2`. The user name
+is only a label; the display name keeps every character, and the identity is the unique ID.
+
+### MFA for directory users
+
+**Ask for Alice's authenticator code after the directory password** is set per directory and **on by default**. With
+it on, the first directory sign-in sets up an authenticator app with recovery codes (as for a new local account), and
+every later sign-in asks for the code after the password.
+
+With it off, the directory password alone opens a session. Alice then has no second factor for these people, and
+your directory has none either: a password that was phished, guessed or reused elsewhere is enough to get in with the
+person's role. Switch it off only if your directory enforces something equivalent before a password is usable, and
+know that Alice does not check that. An authenticator a person already set up stays stored while the setting is off
+and is asked for again when it is switched back on. Changing the setting needs a confirmed Administrator session and
+is recorded (**Directory changed**, `mfa_required`).
+
+**Confirm it's you** asks a directory user for their **Directory password** again (Alice repeats the bind with the
+sign-in name it stored at the last sign-in) and, when they have an authenticator, its code. The confirmation also reads
+the groups again: the role may change, and a person no longer in a mapped group is refused and signed out. A sign-in
+opens the 5-minute confirmation window like a local sign-in.
+
+Wrong authenticator codes count like a local user's (wait after 5, blocked for 15 minutes after 10, see
+[Sign-in protection](#sign-in-protection)); while blocked, the directory sign-in is refused too, with or without MFA.
+`alice admin unlock <username>` ends that block (it does not end the directory lockout below).
+
+### Group mappings and roles
+
+A person gets the highest role any of their groups is mapped to; nobody gets a role by default, and a person in no
+mapped group is refused. Group values are compared **exactly, including upper and lower case**, also where your
+directory does not care: copy them from **Test sign-in**. A group value may be a DN of up to 1,024 characters.
+
+**SSO users may be Admin** (on the **Single sign-on** tab) applies to directory users too: while it is off, a group
+cannot be mapped to Administrator (`ALC-SSO-0002`) and directory users can be at most Operators; switching it off
+turns directory Administrators into Auditors and signs them out, as for SSO users, and is refused while a directory
+group is still mapped to Administrator (`ALC-SSO-0003`). A directory administrator can change group membership and
+thereby roles in Alice: treat the groups you map as part of Alice's access control.
+
+### Test connection and Test sign-in
+
+Both work while sign-in is switched off and use the stored settings (save first). **Test connection** binds as the
+service account and searches the user base DN; it names the reason and the step where it stopped (`connect`,
+`timeout`, `tls`, `service_bind`, `user_search`, …; `ALC-LDAP-0004`). **Test sign-in** runs the whole check for one
+person (password, groups, role) without signing anybody in or creating anyone (`ALC-LDAP-0006` when the directory
+refuses it); the password field is emptied after each run. Together they are limited to 5 a minute per Administrator,
+and both are recorded in the audit log (with the typed test name, never the password).
+
+### Directory users on People & access
+
+Directory users carry the badge **Directory** in the **Sign-in method** column, with the directory's name. There is
+no **Set a new password** (the directory owns the password) and no role choice: the role comes from the groups at every
+sign-in and confirmation ("Role updated from the identity provider"), and a change by hand is refused (`ALC-USR-0003`).
+**Reset two-factor sign-in** exists, because the authenticator is Alice's: the person sets up a new one at their next
+sign-in. **Disable**, **Enable** and **Sign out everywhere** work as for everyone. Directory users cannot create API
+tokens, cannot be the break-glass account, and their **Your account** page has no password form (but has **Create
+new recovery codes**). A first sign-in whose e-mail belongs to a local account is refused (`email_in_use`), and so is a
+later one whose e-mail changed to a local account's; Alice never joins a directory user to a local account.
+
+### When the directory changes
+
+- **Removed from every mapped group:** the next sign-in or confirmation is refused, and Alice then ends all the
+  person's sessions and revokes their tokens.
+- **Disabled, locked or with an expired password in the directory:** the directory refuses the bind (AD answers such
+  binds as invalid credentials), so the next sign-in is refused. An open session keeps working until it ends (30
+  minutes idle, 12 hours in all) or until a confirmation is needed.
+- **Disable on People & access** ends the person's sessions at once and refuses their directory sign-in from then on.
+  Use it to stop someone immediately.
+- **The directory switched off (Allow sign-in off):** nobody signs in through it, and each directory user's next
+  confirmation is refused and ends their sessions; open sessions are not ended by the switch itself.
+- **Renamed in the directory:** the person keeps their account (the unique ID decides); the stored sign-in name follows
+  at their next sign-in.
+- **Deleting a directory** removes its mappings and its stored password. A directory through which people have signed
+  in cannot be deleted (`ALC-LDAP-0003`): switch it off.
+
+### Refused directory sign-ins and the lockout
+
+Every refused directory sign-in that could say something about a person gets the same answer: "The user name or
+password is wrong, or you have no access." (`ALC-LDAP-0001`), with no code or reason on the page. That covers an unknown
+name, a wrong or empty password, no mapped group, a name that matches several entries, a person disabled or blocked in
+Alice and an e-mail that belongs to a local account. Every refusal takes at least 1.5 seconds: an unknown name and a
+wrong password would otherwise take measurably different times (Alice already binds once for an unknown name; AD can
+still be slower for a real account), and the delay hides the difference. A directory that cannot be reached, whose
+settings do not work, or that is switched off gets "The directory cannot be used for sign-in right now."
+(`ALC-LDAP-0002`) instead. Each refusal writes one audit entry **Directory sign-in refused** (`auth.ldap.denied`) with
+the reason: `bad_credentials`, `ambiguous_user`, `no_access`, `email_in_use`, `user_disabled`, `locked`,
+`login_invalid`, `identity_invalid`, `directory_unreachable`, `directory_misconfigured`, `provider_disabled` or, for a
+confirmation that found another entry, `stepup_other_user`. The typed name is recorded only when the directory found
+the entry (people type passwords into the name field by mistake). See "Directory sign-in refused" in
+[troubleshooting.md](troubleshooting.md#directory-sign-in-ldap-and-active-directory).
+
+**The lockout.** Three failed attempts (a wrong password, an unknown name, several entries or no mapped group) for one
+sign-in name at one directory within 30 minutes lock that name in Alice for 45 minutes: Alice then answers "Too many
+requests" (HTTP 429, `ALC-SYS-0005`, with the time to wait) without contacting the directory, even for the right
+password and from any address. Upper and lower case and the Unicode spelling of the name do not matter. A successful
+sign-in clears the count. **Confirm it's you** shares the count, so three wrong directory passwords there lock the name
+for sign-in as well. Why: AD locks an account after a number of wrong passwords within its own observation window
+(30 minutes by default), and Alice must never be the tool that locks your directory accounts; with at most 3 attempts
+per name and a 45-minute pause, a stream of guesses through Alice cannot keep an AD failure counter climbing. The same
+limit of 10 sign-in attempts a minute per address as on the local form applies as well; there is no overall limit on
+how many directory sign-ins run at once.
+
+**The trade-off.** Anyone who can reach the sign-in page can lock a person's directory sign-in in Alice for 45 minutes
+by typing three wrong passwords for their name; this is the same trade-off as AD's own lockout, but in Alice only (the
+directory account is not locked). There is no way for an Administrator to end this lockout: it is kept in memory, and
+only a restart of Alice clears it (`alice admin unlock` does not touch it). The local administrator is never affected.
+The lockout table holds 100,000 names; when it is full of names that are still counting or locked, names that are not
+in it yet are refused until entries expire (each entry lasts at most 30 minutes, 45 when locked), while the names
+already in it are answered as usual.
+
+### Break-glass with directories
+
+The local administrator created in the setup wizard always signs in with **Local account**, password and
+authenticator code, also when every directory is down, wrongly configured or switched off. Keep its password and
+recovery codes safe. A directory user can never take that place.
+
+### Limits and security of directory sign-in
+
+- **The directory password passes through Alice.** Unlike single sign-on, where the password goes only to the identity
+  provider, a directory sign-in sends the person's password to Alice, which checks it against the directory. Alice
+  keeps it only for the sign-in: it is never stored, logged or written to the audit log, and Alice clears its own
+  copies after use (the LDAP library keeps a copy in memory that cannot be cleared until it is freed). If you do not
+  want passwords to pass through Alice, use an OpenID Connect provider in front of AD ([Active
+  Directory](#active-directory)).
+- The service account password is stored encrypted with the master key; whoever reads the database and the master key
+  file can read it. Keep the account read-only.
+- TLS is mandatory and verified; no `ldap://`, no StartTLS, no unverified certificate, no referrals.
+- Responses are limited (8 MiB per connection, 5,000 values per attribute, 2 entries for the person, 1,000 groups) and
+  every exchange has a timeout.
+- A directory administrator controls group membership and therefore roles in Alice, and can reset a person's password;
+  with MFA on, Alice's authenticator code still stands in the way.
+- The lockout and the 1.5-second delay are kept in memory per Alice process.
 
 **Certificates** and **SSH keys** keep their filters in the page's address: a bookmark or a link reproduces the list
 exactly. **Clear filters** removes them. On **Certificates**, **Expiry** offers **Any date**, **Expired** and
