@@ -113,7 +113,8 @@ func (s *Service) TestSignIn(ctx context.Context, a audit.Actor, id uuid.UUID, l
 		if ok {
 			out.Role, details["role"] = role, string(role)
 		} else {
-			details["reason"] = "no_access"
+			// The password was right, but nobody with these groups may sign in: a failed test.
+			details["reason"], details["result"], result = "no_access", "failed", audit.Failure
 		}
 	}
 	if err := s.record(ctx, audit.Event{Actor: a, Action: "ldap.signin_tested", ObjectType: "ldap_directory", ObjectID: id.String(),

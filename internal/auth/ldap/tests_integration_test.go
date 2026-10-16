@@ -64,13 +64,13 @@ AND details->>'role' = 'operator' AND details->>'login' = 'ada' AND details->>'g
 	require.NoError(t, err)
 	assert.Equal(t, rbac.Role(""), res.Role, "no mapped group: no role")
 	assert.Equal(t, 1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested' AND details->>'role' = 'none'
-AND details->>'reason' = 'no_access'`))
+AND details->>'reason' = 'no_access' AND result = 'failure' AND details->>'result' = 'failed'`), "no role is a failed test")
 
 	_, err = x.svc.TestSignIn(x.ctx, x.admin, x.dir.ID, "ada", secrets.NewPlaintext([]byte("wrong")))
 	assert.Equal(t, ldap.ReasonBadCredentials, reasonOf(err)[0])
 	_, err = x.svc.TestSignIn(x.ctx, x.admin, x.dir.ID, " ada", secrets.NewPlaintext([]byte("wrong")))
 	assert.Equal(t, ldap.ReasonLoginInvalid, reasonOf(err)[0])
-	assert.Equal(t, 2, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested' AND result = 'failure'`))
+	assert.Equal(t, 3, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested' AND result = 'failure'`))
 	assert.Equal(t, 1, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.signin_tested' AND details->>'reason' = 'login_invalid'
 AND NOT details ? 'login'`), "a refused name is not recorded")
 	_, err = x.svc.TestSignIn(x.ctx, x.admin, uuid.New(), "ada", secrets.NewPlaintext([]byte("p")))

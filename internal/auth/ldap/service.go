@@ -117,6 +117,30 @@ type Identity struct {
 // The whole call is bounded by VerifyTimeout. Verify zeroes password before it returns, and holds no database
 // transaction while it talks to the directory.
 func (s *Service) Verify(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext) (Identity, Directory, error) {
+	return s.VerifyGated(ctx, directoryID, login, password, nil)
+}
+
+// Gate is asked, after the user search found exactly one entry and before Alice binds as it, whether that entry (named
+// by its unique id) may be tried. A non-nil error refuses the attempt without the bind, as bad_credentials with the
+// detail account_locked (and the entry's identity, like a wrong password).
+type Gate func(uniqueID string) error
+
+type gateKey struct{}
+
+// RunGate is what a Client calls after its user search found the one entry and before it binds as it with the user's
+// password: it runs the gate of the VerifyGated call (none: nil). On an error the Client must not bind, and returns
+// the entry together with the error.
+func RunGate(ctx context.Context, e Entry) error {
+	g, _ := ctx.Value(gateKey{}).(func(Entry) error)
+	if g == nil {
+		return nil
+	}
+	return g(e)
+}
+
+// VerifyGated is Verify with a Gate between the user search and the user bind (the API's per-account lockout): a
+// locked account is never bound to, whichever spelling of its name found it.
+func (s *Service) VerifyGated(ctx context.Context, directoryID uuid.UUID, login string, password secrets.Plaintext, gate Gate) (Identity, Directory, error) {
 	defer password.Zero()
 	d, err := s.Directory(ctx, directoryID)
 	if err != nil {
@@ -127,6 +151,18 @@ func (s *Service) Verify(ctx context.Context, directoryID uuid.UUID, login strin
 	}
 	if lerr := checkCredentials(login, password); lerr != nil {
 		return Identity{}, d, lerr
+	}
+	if gate != nil {
+		ctx = context.WithValue(ctx, gateKey{}, func(e Entry) error {
+			id, err := identityOf(d, e, login)
+			if err != nil {
+				return err
+			}
+			if err := gate(id.UniqueID); err != nil {
+				return refuse(ReasonBadCredentials, DetailLocked, err)
+			}
+			return nil
+		})
 	}
 	id, err := s.verify(ctx, d, login, password)
 	return id, d, err

@@ -489,3 +489,36 @@ func TestCountingConnStopsAtTheLimit(t *testing.T) {
 	_, err = cc.Read(buf)
 	assert.ErrorIs(t, err, errResponseTooLarge)
 }
+
+// Fix wave I2: the caller's gate runs after the user search found the one entry and before the user bind; a refusal
+// means no bind at all.
+func TestGateRunsBetweenSearchAndBind(t *testing.T) {
+	m := startMini(t)
+	d := miniDirectory(m)
+	m.set(func(m *miniServer) { m.entries = func(string, string) []miniEntry { return []miniEntry{adaEntry} } })
+	c := fastClient(nil)
+	var seen []string
+	gated := func(err error) context.Context {
+		return context.WithValue(context.Background(), gateKey{}, func(e Entry) error {
+			seen = append(seen, e.DN)
+			return err
+		})
+	}
+	e, err := c.Authenticate(gated(refuse(ReasonBadCredentials, DetailLocked, nil)), d, pw("svc"), "ada", pw("p"))
+	assert.Equal(t, [2]string{ReasonBadCredentials, DetailLocked}, func() [2]string { r, det := reasonOf(err); return [2]string{r, det} }())
+	assert.Equal(t, adaEntry.dn, e.DN, "the refused entry comes back with the refusal")
+	m.mu.Lock()
+	assert.Equal(t, []string{d.BindDN}, m.binds, "no user bind after the gate refused")
+	m.binds = nil
+	m.mu.Unlock()
+	e, err = c.Authenticate(gated(refuse(ReasonMisconfigured, DetailUniqueID, nil)), d, pw("svc"), "ada", pw("p"))
+	assert.Error(t, err)
+	assert.Empty(t, e.DN, "another refusal returns no entry")
+	_, err = c.Authenticate(gated(nil), d, pw("svc"), "ada", pw("p"))
+	require.NoError(t, err)
+	m.mu.Lock()
+	assert.Equal(t, []string{d.BindDN, d.BindDN, adaEntry.dn}, m.binds, "an open gate lets the bind through")
+	m.mu.Unlock()
+	assert.Equal(t, []string{adaEntry.dn, adaEntry.dn, adaEntry.dn}, seen)
+	assert.NoError(t, RunGate(context.Background(), Entry{}), "no gate: nothing to ask")
+}

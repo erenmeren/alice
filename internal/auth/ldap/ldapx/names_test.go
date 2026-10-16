@@ -85,7 +85,9 @@ func TestValidLoginName(t *testing.T) {
 	}
 	for _, s := range []string{"", "a\x00b", "\x00", "a\nb", "a\tb", "a\x7fb", "a\u0085b", "\xff", "a\xc3", strings.Repeat("a", 257),
 		" ", "   ", " ada", "ada ", "\u00a0ada", "ada\u3000", "\u200b", "a\u200bb", "a\u00adb", "a\u202eb", "a\u2028b", "a\u2029b",
-		"\ufeffada", "a\u200fb", "a\u200cb", "a\u2066b"} {
+		"\ufeffada", "a\u200fb", "a\u200cb", "a\u2066b",
+		// RFC 3454 B.1 (mapped to nothing) beyond the format characters.
+		"a\u034fb", "a\u1806b", "a\u180bb", "a\u180cb", "a\u180db", "a\u2060b", "a\ufe00b", "a\ufe0fb", "a\U000e0100b", "a\U000e01efb", "a\u200db"} {
 		assert.False(t, ValidLoginName(s), "%q", s)
 	}
 }

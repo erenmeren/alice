@@ -31,10 +31,24 @@ func UniqueID(raw []byte) (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
+// mappedToNothing are the code points RFC 3454 table B.1 maps to nothing (string preparation, also RFC 4518 2.2): a
+// directory ignores them when it compares names, so a name carrying one would be another spelling of the same
+// account. Some are format characters (Cf) and refused anyway; the others are combining or Mongolian marks.
+var mappedToNothing = &unicode.RangeTable{
+	R16: []unicode.Range16{
+		{Lo: 0x00ad, Hi: 0x00ad, Stride: 1}, {Lo: 0x034f, Hi: 0x034f, Stride: 1}, {Lo: 0x1806, Hi: 0x1806, Stride: 1},
+		{Lo: 0x180b, Hi: 0x180d, Stride: 1}, {Lo: 0x200b, Hi: 0x200d, Stride: 1}, {Lo: 0x2060, Hi: 0x2060, Stride: 1},
+		{Lo: 0xfe00, Hi: 0xfe0f, Stride: 1}, {Lo: 0xfeff, Hi: 0xfeff, Stride: 1},
+	},
+	R32: []unicode.Range32{{Lo: 0xe0100, Hi: 0xe01ef, Stride: 1}},
+}
+
 // ValidLoginName reports whether s may be sent to the directory as a sign-in name: valid UTF-8, 1 to MaxLoginRunes
 // runes, no control character (which includes NUL), no format character (Cf: soft hyphen, zero-width characters,
-// bidi overrides, BOM) or line and paragraph separator, and no white space at either end (so not all white space).
-// A directory server's string preparation (RFC 4518) maps such characters to nothing or to a space.
+// bidi overrides, BOM), no code point RFC 3454 table B.1 maps to nothing (variation selectors, the combining
+// grapheme joiner, Mongolian free variation selectors and vowel separator), no line or paragraph separator, and no
+// white space at either end (so not all white space). A directory server's string preparation (RFC 4518) maps such
+// characters to nothing or to a space, so they would only make another spelling of the same name.
 func ValidLoginName(s string) bool {
 	if s == "" || !utf8.ValidString(s) || utf8.RuneCountInString(s) > MaxLoginRunes {
 		return false
@@ -45,7 +59,7 @@ func ValidLoginName(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp, mappedToNothing) {
 			return false
 		}
 	}

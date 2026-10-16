@@ -163,24 +163,37 @@ func TestDirectoryInUse(t *testing.T) {
 	x := newHarness(t)
 	x.seedUser(t, x.dir.ID)
 	assert.ErrorIs(t, x.svc.DeleteDirectory(x.ctx, x.admin, x.dir.ID, x.dir.Version), ldap.ErrDirectoryInUse)
-	for name, p := range map[string]ldap.DirectoryPatch{
-		"addresses": {Addresses: &[]string{x.srv.Address, "ldaps://dc2.example.test"}, BindPassword: secretPtr("pw")},
-		"removed":   {Addresses: &[]string{"ldaps://dc2.example.test"}, BindPassword: secretPtr("pw")},
-		"unique id": {UniqueIDAttribute: ptr("uid"), BindPassword: secretPtr("pw")},
-	} {
-		_, err := x.svc.UpdateDirectory(x.ctx, x.admin, x.dir.ID, x.dir.Version, p)
-		assert.ErrorIs(t, err, ldap.ErrDirectoryInUse, name)
-	}
-	d := x.update(t, ldap.DirectoryPatch{Enabled: ptr(false), Name: ptr("Old LDAP"), BindDN: ptr(fakeldap.ServiceDN)})
+	// Only the unique id attribute is frozen while the directory has users: its users are matched by its value.
+	_, err := x.svc.UpdateDirectory(x.ctx, x.admin, x.dir.ID, x.dir.Version, ldap.DirectoryPatch{UniqueIDAttribute: ptr("uid"),
+		BindPassword: secretPtr("pw")})
+	assert.ErrorIs(t, err, ldap.ErrDirectoryInUse)
+
+	// Addresses: adding one needs the password and is audited with the count; removing and reordering need nothing.
+	_, err = x.svc.UpdateDirectory(x.ctx, x.admin, x.dir.ID, x.dir.Version, ldap.DirectoryPatch{
+		Addresses: &[]string{x.srv.Address, "ldaps://dc2.example.test", "ldaps://dc3.example.test"}})
+	assert.Equal(t, []string{"bind_password"}, fieldNames(t, err), "a new address needs the password again")
+	d := x.update(t, ldap.DirectoryPatch{Addresses: &[]string{x.srv.Address, "ldaps://dc2.example.test", "ldaps://dc3.example.test"},
+		BindPassword: secretPtr(x.srv.ServicePassword())})
+	assert.Len(t, d.Addresses, 3)
+	var added string
+	require.NoError(t, x.d.Owner.QueryRow(x.ctx, `SELECT details->>'addresses_added_count' FROM audit_log
+WHERE action = 'ldap.directory_changed' ORDER BY seq DESC LIMIT 1`).Scan(&added))
+	assert.Equal(t, "2", added)
+	d = x.update(t, ldap.DirectoryPatch{Addresses: &[]string{"ldaps://dc3.example.test", x.srv.Address}})
+	assert.Equal(t, []string{"ldaps://dc3.example.test", x.srv.Address}, d.Addresses, "removed and reordered without the password")
+	assert.Equal(t, 0, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'ldap.directory_changed' AND seq = (SELECT max(seq) FROM audit_log)
+AND details ? 'addresses_added_count'`))
+
+	d = x.update(t, ldap.DirectoryPatch{Enabled: ptr(false), Name: ptr("Old LDAP"), BindDN: ptr(fakeldap.ServiceDN)})
 	assert.False(t, d.Enabled, "switch it off instead")
 	public, err := x.svc.PublicDirectories(x.ctx)
 	require.NoError(t, err)
 	assert.Empty(t, public)
 }
 
-// A first sign-in that inserts its user while an address change waits for the directory's row lock is seen, and the
-// change is refused.
-func TestAddressChangeRefusedOnceAUserArrives(t *testing.T) {
+// A first sign-in that inserts its user while a unique id attribute change waits for the directory's row lock is seen,
+// and the change is refused.
+func TestUniqueIDChangeRefusedOnceAUserArrives(t *testing.T) {
 	x := newHarness(t)
 	tx, err := x.d.Owner.Begin(x.ctx)
 	require.NoError(t, err)
@@ -192,7 +205,7 @@ ldap_unique_id, ldap_login, created_at, updated_at) VALUES ($1, 'late', 'Late', 
 	done := make(chan error, 1)
 	go func() {
 		_, err := x.svc.UpdateDirectory(x.ctx, x.admin, x.dir.ID, x.dir.Version, ldap.DirectoryPatch{
-			Addresses: &[]string{"ldaps://dc2.example.test"}, BindPassword: secretPtr("pw")})
+			UniqueIDAttribute: ptr("uid"), BindPassword: secretPtr("pw")})
 		done <- err
 	}()
 	require.Eventually(t, func() bool { return x.count(t, `SELECT count(*) FROM pg_locks WHERE NOT granted`) > 0 },

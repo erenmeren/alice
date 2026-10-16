@@ -5,6 +5,7 @@ package ldap_test
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"net"
 	"strconv"
 	"strings"
@@ -308,4 +309,30 @@ func TestUnreachableDirectory(t *testing.T) {
 	cancel()
 	_, _, err = x.svc.Verify(ctx, x.dir.ID, "ada", secrets.NewPlaintext([]byte(fakeldap.Ada.Password)))
 	assert.Error(t, err)
+}
+
+// Fix wave I2: VerifyGated asks the gate with the found entry's unique id before the user bind; a refusal is
+// bad_credentials/account_locked with the entry's identity and no bind (even the right password is not tried); an
+// unknown name never reaches the gate.
+func TestVerifyGatedRefusesALockedAccountBeforeTheBind(t *testing.T) {
+	x := newHarness(t)
+	uid := hex.EncodeToString([]byte(x.srv.EntryUUID(t, fakeldap.Ada.DN)))
+	var asked []string
+	locked := func(u string) error { asked = append(asked, u); return errors.New("locked") }
+	id, _, err := x.svc.VerifyGated(x.ctx, x.dir.ID, "ada", secrets.NewPlaintext([]byte(fakeldap.Ada.Password)), locked)
+	assert.Equal(t, [2]string{ldap.ReasonBadCredentials, ldap.DetailLocked}, reasonOf(err))
+	assert.Equal(t, ldap.Identity{UniqueID: uid, Login: "ada"}, id)
+	assert.Equal(t, []string{uid}, asked)
+	_, _, err = x.svc.VerifyGated(x.ctx, x.dir.ID, "nobody-here", secrets.NewPlaintext([]byte("p")), locked)
+	assert.Equal(t, [2]string{ldap.ReasonBadCredentials, ldap.DetailNotFound}, reasonOf(err))
+	assert.Len(t, asked, 1, "no entry: no gate")
+	open := func(u string) error { asked = append(asked, u); return nil }
+	id, _, err = x.svc.VerifyGated(x.ctx, x.dir.ID, "ada", secrets.NewPlaintext([]byte(fakeldap.Ada.Password)), open)
+	require.NoError(t, err)
+	assert.Equal(t, uid, id.UniqueID)
+	// An entry without the unique id attribute is refused at the gate as a setting problem, before any bind.
+	x.update(t, ldap.DirectoryPatch{UniqueIDAttribute: ptr("employeeNumber"), BindPassword: secretPtr(x.srv.ServicePassword())})
+	_, _, err = x.svc.VerifyGated(x.ctx, x.dir.ID, "ada", secrets.NewPlaintext([]byte(fakeldap.Ada.Password)), open)
+	assert.Equal(t, [2]string{ldap.ReasonMisconfigured, ldap.DetailUniqueID}, reasonOf(err))
+	assert.Len(t, asked, 2)
 }

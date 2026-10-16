@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 
 	ldap "github.com/go-ldap/ldap/v3"
 )
@@ -91,6 +93,27 @@ func FuzzExpandFilter(f *testing.F) {
 		}
 		if shape(p) != shape(bp) {
 			t.Fatalf("ExpandFilter(%q) with %q, %q changed the shape: %s vs %s", tmpl, login, dn, shape(p), shape(bp))
+		}
+	})
+}
+
+// FuzzValidLoginName: an accepted name is valid UTF-8 of 1 to MaxLoginRunes runes with no white space at its ends and
+// no control, format, line or paragraph separator, or RFC 3454 B.1 (mapped to nothing) code point anywhere.
+func FuzzValidLoginName(f *testing.F) {
+	for _, s := range []string{"ada", " ada", "a\u00adb", "a\ufe0fb", "a\U000e0100b", "Çiğdem", "a\u034fb", "\xff", strings.Repeat("ş", 257)} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) {
+		if !ValidLoginName(s) {
+			return
+		}
+		if !utf8.ValidString(s) || s == "" || utf8.RuneCountInString(s) > MaxLoginRunes || strings.TrimSpace(s) != s {
+			t.Fatalf("ValidLoginName(%q) accepted a malformed name", s)
+		}
+		for _, r := range s {
+			if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp, mappedToNothing) {
+				t.Fatalf("ValidLoginName(%q) accepted %U", s, r)
+			}
 		}
 	})
 }

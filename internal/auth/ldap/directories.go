@@ -477,13 +477,17 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1
 
 // addedAddress reports whether next names an address cur does not: removing or reordering addresses sends nothing
 // to a new server.
-func addedAddress(cur, next []string) bool {
+func addedAddress(cur, next []string) bool { return addedAddresses(cur, next) > 0 }
+
+// addedAddresses counts the addresses of next that cur does not name.
+func addedAddresses(cur, next []string) int {
+	n := 0
 	for _, a := range next {
 		if !slices.Contains(cur, a) {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 // hasUsers reports whether a directory has users.
@@ -498,8 +502,9 @@ func hasUsers(ctx context.Context, q db.Querier, id uuid.UUID) (bool, error) {
 // UpdateDirectory changes a directory at the given version, audited as ldap.directory_changed. A given
 // BindPassword replaces the stored one. Adding an address or changing the bind DN, the unique id attribute or the
 // PEM authority needs the password again (a 422 on bind_password), so the stored one is never sent to another server
-// or account. While the directory has users, its addresses and its unique id attribute cannot change (ErrDirectoryInUse): its users
-// are matched by that attribute's value on that server.
+// or account. While the directory has users, its unique id attribute cannot change (ErrDirectoryInUse): its users are
+// matched by that attribute's value. Its addresses can (servers of one directory hold the same entries): removing and
+// reordering need nothing, adding needs the password and is audited with addresses_added_count.
 func (s *Service) UpdateDirectory(ctx context.Context, a audit.Actor, id uuid.UUID, version int, p DirectoryPatch) (Directory, error) {
 	cur, err := loadDirectory(ctx, s.pool, id)
 	if err != nil {
@@ -537,7 +542,7 @@ func (s *Service) UpdateDirectory(ctx context.Context, a audit.Actor, id uuid.UU
 	}
 	newServer := addedAddress(cur.Addresses, d.Addresses)
 	uniqueChanged := d.UniqueIDAttribute != cur.UniqueIDAttribute
-	inUseCheck := uniqueChanged || !slices.Equal(cur.Addresses, d.Addresses)
+	inUseCheck := uniqueChanged
 	// A changed authority (also cleared: the system roots then decide) could make another server trusted: the
 	// stored password is not sent to it without being given again.
 	f := fields{d: d, bindNeeded: newServer || d.BindDN != cur.BindDN || uniqueChanged || d.CAPEM != cur.CAPEM}
@@ -592,6 +597,9 @@ WHERE id = $1 AND version = $2`, id, version, d.Name, d.Addresses, d.UserBaseDN,
 		}
 		details := directoryDetails(d)
 		details["bind_replaced"] = strconv.FormatBool(p.BindPassword != nil)
+		if n := addedAddresses(cur.Addresses, d.Addresses); n > 0 {
+			details["addresses_added_count"] = strconv.Itoa(n)
+		}
 		_, err = s.audit.Append(ctx, tx, audit.Event{Actor: a, Action: "ldap.directory_changed", ObjectType: "ldap_directory",
 			ObjectID: id.String(), Result: audit.Success, Details: details})
 		return err

@@ -352,11 +352,12 @@ fuzz-oidc: ## Fuzz the ID token claim parser ($(FUZZTIME); spec §25.6, Phase 7)
 	go test -count=1 -run '^$$' -fuzz FuzzParse -fuzztime $(FUZZTIME) ./internal/auth/oidc/claims/
 
 .PHONY: fuzz-ldap
-fuzz-ldap: ## Fuzz the directory sign-in filter and DN escaping, the filter template expansion and the user name rule ($(FUZZTIME) each)
+fuzz-ldap: ## Fuzz the directory sign-in filter and DN escaping, the filter template expansion, the user name and sign-in name rules ($(FUZZTIME) each)
 	go test -count=1 -run '^$$' -fuzz FuzzEscapeFilter -fuzztime $(FUZZTIME) ./internal/auth/ldap/ldapx/
 	go test -count=1 -run '^$$' -fuzz FuzzEscapeDN -fuzztime $(FUZZTIME) ./internal/auth/ldap/ldapx/
 	go test -count=1 -run '^$$' -fuzz FuzzUsername -fuzztime $(FUZZTIME) ./internal/auth/ldap/ldapx/
 	go test -count=1 -run '^$$' -fuzz FuzzExpandFilter -fuzztime $(FUZZTIME) ./internal/auth/ldap/ldapx/
+	go test -count=1 -run '^$$' -fuzz FuzzValidLoginName -fuzztime $(FUZZTIME) ./internal/auth/ldap/ldapx/
 
 .PHONY: fuzz-nginx
 fuzz-nginx: ## Fuzz the nginx -T parser ($(FUZZTIME); spec §25.6)

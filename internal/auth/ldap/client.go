@@ -33,7 +33,8 @@ type Client interface {
 	// Authenticate binds as the service account, finds exactly one entry with the user filter and binds as it with
 	// password. An empty password never reaches the directory. When the entry was found but its bind failed with
 	// wrong credentials, the entry is returned together with the bad_credentials error; every other failure returns
-	// no entry.
+	// no entry. After the search and before the user bind it calls RunGate; a refusal ends the attempt without the
+	// bind.
 	Authenticate(ctx context.Context, d Directory, bindPassword secrets.Plaintext, login string, password secrets.Plaintext) (Entry, error)
 	// Groups binds as the service account and runs the group search for user.
 	Groups(ctx context.Context, d Directory, bindPassword secrets.Plaintext, user Entry, login string) ([]string, error)
@@ -350,6 +351,14 @@ func (c *netClient) Authenticate(ctx context.Context, d Directory, bindPassword 
 		if len(v) > 0 {
 			out.Attrs[a] = v
 		}
+	}
+	if err := RunGate(ctx, out); err != nil {
+		// The caller refused this entry (a locked account): never bound to.
+		var le *LoginError
+		if errors.As(err, &le) && le.Reason == ReasonBadCredentials {
+			return out, err
+		}
+		return Entry{}, err
 	}
 	if err := c.do(ctx, cn, DetailUserBind, func() error {
 		_, err := cn.l.SimpleBind(&goldap.SimpleBindRequest{Username: e.DN, Password: string(password.Bytes())})
