@@ -96,7 +96,8 @@ var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|ce
 var notReasons = map[string]bool{
 	// audit actions
 	"target.created": true, "target.updated": true, "target.deleted": true, "target.status_changed": true,
-	"target.discovered": true, "hostkey.pinned": true, "hostkey.changed": true, "hostkey.repinned": true,
+	"target.capabilities_synced": true, // the startup capability sync (spec §8.1), an audit action
+	"target.discovered":          true, "hostkey.pinned": true, "hostkey.changed": true, "hostkey.repinned": true,
 	"hostkey.change_dismissed": true, "hostkey.observed": true, "sshkey.remove_requested": true, "sshkey.removed": true, "sshkey.remove_failed": true,
 	"job.recovered": true, "job.dead": true, "job.blocked_license": true, "job.cancelled_license": true, "job.confirmed": true, "job.discarded": true,
 	// job types
