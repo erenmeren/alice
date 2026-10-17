@@ -12,7 +12,7 @@
 # apache2 is the distribution's Apache httpd with its default configuration: installed, never
 # started (discovery only reads its configuration; Nginx owns ports 80 and 443); mod_ssl is enabled
 # by the test (a2enmod ssl), not in a layer.
-FROM debian:12@sha256:f37a335e82bca302e955fa39f9dfe28f1be618f016f8a2b56318e5a5111afc26
+FROM debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx libnginx-mod-stream libnginx-mod-mail apache2 openssl ssl-cert \
  && rm -rf /var/lib/apt/lists/* \
