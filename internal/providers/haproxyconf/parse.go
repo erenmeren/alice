@@ -74,9 +74,14 @@ type Server struct {
 // set only when Unsupported is "" (or config_file_writable, set by MarkWritable). CertRaw is the
 // path as written (a directory entry: the crt argument, "/" and the entry name), cleaned and cut
 // to 200 runes as the wire's Raw shows it.
+//
+// When the key settings are not stable (see Parse), KeyBeside is "" and the pair is supported
+// only if its certificate file holds the key: ResolveKeys, which the caller must run before
+// using the pairs, makes it conditional otherwise.
 type Pair struct {
 	Cert, Key, CertRaw, KeyBeside string
 	Unsupported                   string
+	keyUnsure                     bool
 }
 
 // Parse evaluates haproxy.cfg the way HAProxy reads it (Rulings 6-14):
@@ -88,12 +93,15 @@ type Pair struct {
 //   - each bind with ssl gives one server for its crt pairs and one per line of each crt-list
 //     it names; a crt naming a directory gives one pair per certificate entry.
 //
-// HAProxy loads each certificate once, with the settings in effect where it is first loaded.
-// The companion key of a certificate is therefore taken from its first certain naming. A load
-// Alice does not follow (a crt in an uncertain region, of a bind without ssl or after an unknown
-// bind keyword, a server's crt, a crt in another section) makes a later change of
-// ssl-load-extra-files or ssl-load-extra-del-ext uncertain: the pairs that depend on it are
-// conditional (review I2 of Task 5).
+// HAProxy loads each certificate once, with the key settings (ssl-load-extra-files,
+// ssl-load-extra-del-ext) in effect where it is first loaded, which Alice cannot always tell
+// (a load in an uncertain region, a variable path, a server's crt). So the settings are used
+// only when they are stable: every such directive is in a global section, outside any .if
+// block, and before the first line that may load a certificate (a bind, or any line with a crt
+// or crt-list word), as configurations set them. Then every load used them, and each pair's
+// companion follows from them and the path as HAProxy builds it. Otherwise only a key in the
+// certificate file itself is known: ResolveKeys makes the other pairs conditional (controller
+// ruling for Task 5, fix round 2).
 //
 // The walk is iterative. MaxTokens counts the words of haproxy.cfg and of every crt-list
 // together; MaxCrtLists, MaxDirs, MaxDirEntries, MaxPairs, MaxServers, MaxNames and MaxWire
@@ -102,7 +110,8 @@ type Pair struct {
 // On error the Config is empty.
 func Parse(in Input) (Config, error) {
 	p := &parser{in: in, keyLookup: true, lists: map[string][]listEntry{}, listFiles: map[string][]listLine{},
-		dirs: map[string]dirInfo{}, keys: map[string]keyInfo{}}
+		dirs: map[string]dirInfo{}}
+	p.skipDots, p.versionKnown = minorAtLeast(in.Version, 2, 6)
 	if err := lexEach(in.Data, &p.tokens, MaxTokens, p.line); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", in.Path, err)
 	}
@@ -110,6 +119,15 @@ func Parse(in Input) (Config, error) {
 		return Config{}, fmt.Errorf("%s: %w (an .if block is not closed)", in.Path, ErrSyntax)
 	}
 	p.closeSection()
+	if p.unstable {
+		for i := range p.out {
+			for j := range p.out[i].Pairs {
+				if pair := &p.out[i].Pairs[j]; pair.Unsupported == "" {
+					pair.KeyBeside, pair.keyUnsure = "", true
+				}
+			}
+		}
+	}
 	c := Config{Servers: p.out, wire: p.wire}
 	if p.truncated {
 		c.Warnings = []string{WarnListTruncated}
@@ -175,11 +193,15 @@ type setting struct {
 // the names cleaned and cut as on the wire with their wire size.
 type listLine struct {
 	path, raw string
+	dollar    bool
 	names     []string
 	namesWire int
 }
 
-// listEntry is one line of a crt-list, evaluated where the file was first named for certain.
+// listEntry is one line of a crt-list, evaluated where the file was first named. HAProxy loads
+// a crt-list once too, with the crt-base of its first load; a naming in an uncertain region
+// that HAProxy skipped can only make a later one unsupported, never wrongly supported (crt-base
+// is set once).
 type listEntry struct {
 	line *listLine
 	pair Pair
@@ -192,31 +214,23 @@ type dirInfo struct {
 	names []string
 }
 
-// keyInfo is the companion key file of a certificate, from its first certain naming.
-type keyInfo struct {
-	beside    string
-	bad       bool // the companion is not a helper path
-	uncertain bool // a setting it depends on was set in an uncertain place
-}
-
 type parser struct {
 	in    Input
 	conds []cond
 	sec   section
 	out   []Server
 
-	crtBase                 setting
-	keyLookup, keyLookupUnc bool
-	delExt, delExtUnc       bool
-	defaultsTouched         bool
-	// unfollowed: a certificate may have been loaded where Alice does not follow it, so a later
-	// change of the key settings is uncertain (review I2).
-	unfollowed bool
+	crtBase           setting
+	keyLookup, delExt bool
+	defaultsTouched   bool
+	// loaded: a line that may load a certificate was read; unstable: a key setting was read
+	// after one, outside global or inside an .if block (see Parse).
+	loaded, unstable       bool
+	skipDots, versionKnown bool // minorAtLeast(Version, 2, 6)
 
-	lists     map[string][]listEntry // evaluated at the first certain naming
+	lists     map[string][]listEntry // evaluated at the first naming
 	listFiles map[string][]listLine  // as read
 	dirs      map[string]dirInfo
-	keys      map[string]keyInfo // from the first certain naming
 	nDirs     int
 
 	tokens, pairs, servers, names, listens, wire int
@@ -237,9 +251,15 @@ func (p *parser) line(l line) error {
 	if strings.HasPrefix(kw, ".") {
 		return p.directive(l)
 	}
+	if kw == "ssl-load-extra-files" || kw == "ssl-load-extra-del-ext" {
+		p.unstable = p.unstable || len(p.conds) > 0 || p.loaded || p.sec.kinds != kindGlobal || p.sec.uncertain
+	}
 	eff := p.eff()
 	if eff == inactive {
 		return nil
+	}
+	if kw == "bind" || slices.ContainsFunc(l.words[1:], func(w word) bool { return w.text == "crt" || w.text == "crt-list" }) {
+		p.loaded = true
 	}
 	if kind, ok := sectionKinds[kw]; ok {
 		p.header(kind, l, eff)
@@ -252,11 +272,6 @@ func (p *parser) line(l line) error {
 			return lineErr(err, l.n) // review M3: every error names its line
 		}
 		return nil
-	}
-	// Any other line naming a certificate (a server's crt, a bind of peers or log-forward, a
-	// crt-store) loads it where Alice does not follow.
-	if slices.ContainsFunc(args, func(w word) bool { return w.text == "crt" || w.text == "crt-list" }) {
-		p.unfollowed = true
 	}
 	switch {
 	case kw == "disabled" || kw == "enabled":
@@ -274,13 +289,8 @@ func (p *parser) line(l line) error {
 	case kw == "crt-base" && len(args) > 0:
 		p.crtBase = setting{value: args[0].text, set: true, dollar: args[0].dollar, uncertain: maybe}
 	case kw == "ssl-load-extra-files" && len(args) > 0:
-		on := slices.ContainsFunc(args, func(w word) bool { return w.text == "all" || w.text == "key" })
-		// A certain setting is certain from here on, unless a load Alice does not follow may
-		// have used an earlier, other or uncertain, value (review I2).
-		p.keyLookupUnc = maybe || p.unfollowed && (on != p.keyLookup || p.keyLookupUnc)
-		p.keyLookup = on
+		p.keyLookup = slices.ContainsFunc(args, func(w word) bool { return w.text == "all" || w.text == "key" })
 	case kw == "ssl-load-extra-del-ext":
-		p.delExtUnc = maybe || p.unfollowed && (!p.delExt || p.delExtUnc)
 		p.delExt = true
 	}
 	return nil
@@ -453,11 +463,6 @@ func (p *parser) bind(l line, maybe bool) error {
 	if len(args) == 0 {
 		return nil
 	}
-	if !ssl || maybe || unknown {
-		// HAProxy loads these certificates (a bind without ssl too, Ruling 8) where Alice
-		// does not follow the load for certain.
-		p.unfollowed = true
-	}
 	if !ssl {
 		return nil
 	}
@@ -478,11 +483,11 @@ func (p *parser) bind(l line, maybe bool) error {
 				return err
 			}
 		case !a.list:
-			if err := p.crt(a.w, maybe, &bindServer.Pairs); err != nil {
+			if err := p.crt(a.w, &bindServer.Pairs); err != nil {
 				return err
 			}
 		default:
-			entries, pair, err := p.crtList(a.w, maybe, len(lists))
+			entries, pair, err := p.crtList(a.w, len(lists))
 			if err != nil {
 				return err
 			}
@@ -571,9 +576,9 @@ func (p *parser) addPair(to *[]Pair, pair Pair) error {
 }
 
 // crt reads one crt argument into pairs: a file, or the certificate entries of a directory.
-func (p *parser) crt(w word, maybe bool, pairs *[]Pair) error {
+func (p *parser) crt(w word, pairs *[]Pair) error {
 	raw := shown(w.text)
-	path, reason := p.resolve(w.text, w.dollar)
+	path, joined, reason := p.resolve(w.text, w.dollar)
 	if path == "" {
 		return p.addPair(pairs, Pair{CertRaw: raw, Unsupported: reason})
 	}
@@ -582,19 +587,12 @@ func (p *parser) crt(w word, maybe bool, pairs *[]Pair) error {
 		return err
 	}
 	if !d.isDir {
-		return p.addPair(pairs, p.filePair(path, raw, reason, maybe))
+		return p.addPair(pairs, p.filePair(path, joined, raw, reason))
 	}
-	// Dotfiles are loaded below 2.6 and skipped from 2.6 on (Ruling 10).
-	skipDots, known := minorAtLeast(p.in.Version, 2, 6)
 	for _, name := range d.names {
 		r := reason
-		if name[0] == '.' {
-			if skipDots {
-				continue
-			}
-			if !known {
-				r = ReasonConditional
-			}
+		if name[0] == '.' && !p.versionKnown {
+			r = ReasonConditional // dotfiles are loaded below 2.6 only (Ruling 10)
 		}
 		// The size is counted before the path is built: a long directory path repeated for
 		// every entry is what MaxWire bounds.
@@ -604,7 +602,7 @@ func (p *parser) crt(w word, maybe bool, pairs *[]Pair) error {
 		entryRaw := shown(raw + "/" + name)
 		pair := Pair{CertRaw: entryRaw, Unsupported: ReasonPathNotAllowed}
 		if full := path + "/" + name; helperproto.ValidPath(full) {
-			pair = p.filePair(full, entryRaw, r, maybe)
+			pair = p.filePair(full, joined+"/"+name, entryRaw, r)
 		}
 		if err := p.addPair(pairs, pair); err != nil {
 			return err
@@ -618,44 +616,53 @@ func (p *parser) crt(w word, maybe bool, pairs *[]Pair) error {
 // (in the path or the crt-base it needs), path_not_allowed for a path the helper may not use
 // (no crt-base or a relative one, a "." or ".." segment, a final "/", not helperproto.ValidPath,
 // or "/"), conditional when the crt-base it needs was set in an uncertain place. A path with a
-// reason conditional is returned too: the files it names are still described.
-func (p *parser) resolve(raw string, dollar bool) (string, string) {
+// reason conditional is returned too: the files it names are still described. joined is the
+// path as HAProxy builds it (the argument, or crt-base, "/" and the argument, uncleaned), from
+// which it derives the companion key's name.
+//
+// A path longer than twice a helper path is refused before it is scanned: a crt-list line of
+// 1 MiB costs the same as a short one however often it is named (review N1).
+func (p *parser) resolve(raw string, dollar bool) (path, joined, reason string) {
 	if dollar {
-		return "", ReasonVariable
+		return "", "", ReasonVariable
 	}
-	if !cleanSegments(raw) {
-		return "", ReasonPathNotAllowed
+	if len(raw) > 2*maxPath || !cleanSegments(raw) {
+		return "", "", ReasonPathNotAllowed
 	}
-	path, reason := raw, ""
+	path = raw
 	if !strings.HasPrefix(raw, "/") {
 		base := p.crtBase
 		baseOK := strings.HasPrefix(base.value, "/") && cleanSegments(strings.TrimRight(base.value, "/")+"/x")
 		switch {
 		case base.uncertain && (!base.set || base.dollar || !baseOK):
-			return "", ReasonConditional
+			return "", "", ReasonConditional
 		case !base.set:
-			return "", ReasonPathNotAllowed
+			return "", "", ReasonPathNotAllowed
 		case base.dollar:
-			return "", ReasonVariable
+			return "", "", ReasonVariable
 		case !baseOK:
-			return "", ReasonPathNotAllowed
+			return "", "", ReasonPathNotAllowed
 		case base.uncertain:
 			reason = ReasonConditional
 		}
-		if len(base.value)+1+len(raw) > 2*4096 {
-			return "", ReasonPathNotAllowed // never a helper path; not built
+		if len(base.value)+1+len(raw) > 2*maxPath {
+			return "", "", ReasonPathNotAllowed // never a helper path; not built
 		}
 		path = base.value + "/" + raw
 	}
+	joined = path
 	path = filepath.Clean(path)
 	if !helperproto.ValidPath(path) || path == "/" {
 		if reason == "" {
 			reason = ReasonPathNotAllowed
 		}
-		return "", reason
+		return "", "", reason
 	}
-	return path, reason
+	return path, joined, reason
 }
+
+// maxPath is the longest helper path (helperproto's argument limit).
+const maxPath = 4096
 
 // cleanSegments is nginx's resolvePath rule on the raw text: no "." or ".." segment and no
 // final "/" (folding them textually could name a different file than the kernel opens).
@@ -671,34 +678,27 @@ func cleanSegments(raw string) bool {
 	return true
 }
 
-// filePair is the pair of a certificate file with its companion key (Ruling 12). reason is ""
-// or conditional (from the crt-base or the version). The first certain naming of a path decides
-// its companion, as HAProxy's first load does; an uncertain naming (maybe) uses it when it is
-// known and never decides it (review I2).
-func (p *parser) filePair(path, raw, reason string, maybe bool) Pair {
-	k, ok := p.keys[path]
-	if !ok {
-		if p.keyLookup {
-			k.beside = path + ".key"
-			if p.delExt {
-				if stem, crt := strings.CutSuffix(path, ".crt"); crt {
-					k.beside = stem + ".key"
-				}
-			}
-			k.bad = !helperproto.ValidPath(k.beside)
+// filePair is the pair of a certificate file with its companion key (Ruling 12): the key
+// settings in effect (they are used only when stable, see Parse) applied to joined, the path as
+// HAProxy builds it. With ssl-load-extra-del-ext, HAProxy cuts a ".crt" ending of that string
+// before adding ".key" (review N4: "/c//a.crt" gives "/c//a.key"). The companion is returned
+// cleaned; resolve refused "." and ".." segments, so cleaning only folds repeated "/", which
+// names the same file. reason is "" or conditional (from the crt-base or the version).
+func (p *parser) filePair(path, joined, raw, reason string) Pair {
+	if reason != "" {
+		return Pair{CertRaw: raw, Unsupported: reason}
+	}
+	beside := ""
+	if p.keyLookup {
+		stem := joined
+		if p.delExt {
+			stem = strings.TrimSuffix(stem, ".crt")
 		}
-		k.uncertain = p.keyLookupUnc || p.keyLookup && p.delExtUnc && strings.HasSuffix(path, ".crt")
-		if !maybe {
-			p.keys[path] = k
+		if beside = filepath.Clean(stem + ".key"); !helperproto.ValidPath(beside) {
+			return Pair{CertRaw: raw, Unsupported: ReasonPathNotAllowed}
 		}
 	}
-	switch {
-	case k.bad:
-		return Pair{CertRaw: raw, Unsupported: ReasonPathNotAllowed}
-	case reason != "" || k.uncertain:
-		return Pair{CertRaw: raw, Unsupported: ReasonConditional}
-	}
-	return Pair{Cert: path, Key: path, CertRaw: raw, KeyBeside: k.beside}
+	return Pair{Cert: path, Key: path, CertRaw: raw, KeyBeside: beside}
 }
 
 // readDir asks ReadDir once per path and keeps the certificate entries of a directory: not a
@@ -723,6 +723,7 @@ func (p *parser) readDir(path string) (dirInfo, error) {
 			switch {
 			case n == "" || n == "." || n == ".." || strings.Contains(n, "/"):
 			case strings.HasSuffix(n, ".key"), strings.HasSuffix(n, ".ocsp"), strings.HasSuffix(n, ".issuer"), strings.HasSuffix(n, ".sctl"):
+			case n[0] == '.' && p.skipDots: // a dotfile from 2.6 on (Ruling 10); not kept (review N6)
 			default:
 				d.names = append(d.names, n)
 			}
@@ -736,9 +737,9 @@ func (p *parser) readDir(path string) (dirInfo, error) {
 // crtList reads one crt-list argument; pending is the number of servers the bind already
 // gives. A path that cannot be read (a "$", relative, not a helper path; never joined to
 // crt-base) gives the one unsupported pair for the bind's server; else the entries. The file is
-// read once; its entries are evaluated once at its first certain naming, and afresh (without
-// deciding any companion key) at an uncertain one (review I2).
-func (p *parser) crtList(w word, maybe bool, pending int) ([]listEntry, *Pair, error) {
+// read, and its entries evaluated, once per path whatever the region of the naming (review N1);
+// the bind applies its own region to the copies.
+func (p *parser) crtList(w word, pending int) ([]listEntry, *Pair, error) {
 	raw := w.text
 	switch {
 	case w.dollar:
@@ -762,7 +763,7 @@ func (p *parser) crtList(w word, maybe bool, pending int) ([]listEntry, *Pair, e
 	for i := range lines {
 		l := &lines[i]
 		e := listEntry{line: l}
-		path, reason := p.resolve(l.path, strings.Contains(l.path, "$"))
+		path, joined, reason := p.resolve(l.path, l.dollar)
 		if path == "" {
 			e.pair = Pair{CertRaw: l.raw, Unsupported: reason}
 		} else {
@@ -774,14 +775,12 @@ func (p *parser) crtList(w word, maybe bool, pending int) ([]listEntry, *Pair, e
 				// HAProxy refuses a directory in a crt-list (Ruling 10).
 				e.pair = Pair{CertRaw: l.raw, Unsupported: ReasonPathNotAllowed}
 			} else {
-				e.pair = p.filePair(path, l.raw, reason, maybe)
+				e.pair = p.filePair(path, joined, l.raw, reason)
 			}
 		}
 		entries = append(entries, e)
 	}
-	if !maybe {
-		p.lists[raw] = entries
-	}
+	p.lists[raw] = entries
 	return entries, nil, nil
 }
 
@@ -816,7 +815,7 @@ func (p *parser) readList(path string) ([]listLine, error) {
 	p.tokens += used
 	lines := make([]listLine, len(parsed))
 	for i, l := range parsed {
-		lines[i] = listLine{path: l.path, raw: shown(l.path)}
+		lines[i] = listLine{path: l.path, raw: shown(l.path), dollar: strings.Contains(l.path, "$")}
 		if len(l.names) > 0 {
 			lines[i].names = make([]string, len(l.names))
 			for j, n := range l.names {

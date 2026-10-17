@@ -35,6 +35,18 @@ func TestResolveKeys(t *testing.T) {
 		"each certificate is read once, and none without a companion or unsupported")
 }
 
+// TestResolveKeysUnstable: with unstable key settings, a pair is kept only when its certificate
+// holds the key, and is conditional otherwise.
+func TestResolveKeysUnstable(t *testing.T) {
+	c := Config{Servers: []Server{{Pairs: []Pair{unsure("/c/in.pem"), unsure("/c/out.pem"), unsure("/c/in.pem")}}}}
+	ResolveKeys(&c, func(cert string) bool { return cert == "/c/in.pem" })
+	assert.Equal(t, []Pair{
+		{Cert: "/c/in.pem", Key: "/c/in.pem", CertRaw: "/c/in.pem"},
+		uns("/c/out.pem", ReasonConditional),
+		{Cert: "/c/in.pem", Key: "/c/in.pem", CertRaw: "/c/in.pem"},
+	}, c.Servers[0].Pairs)
+}
+
 func TestMarkWritable(t *testing.T) {
 	c := Config{Servers: []Server{{Pairs: []Pair{plain("/c/a.pem"), uns("$X", ReasonVariable)}}}}
 	MarkWritable(&c)

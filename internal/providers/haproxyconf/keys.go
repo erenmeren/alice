@@ -11,24 +11,36 @@ import (
 // ResolveKeys sets the key file of every supported pair (Ruling 12): HAProxy takes the key from
 // the certificate PEM first and looks for the companion file only when the PEM has none. So Key
 // is Cert when keyInCert(Cert) says the PEM holds a private key, or when key lookup is off
-// (KeyBeside ""); otherwise it is KeyBeside. keyInCert is asked once per distinct certificate,
-// and never for an unsupported pair.
+// (KeyBeside ""); otherwise it is KeyBeside. When Parse found the key settings unstable, only a
+// key in the PEM is known, and a pair without one becomes conditional. keyInCert is asked once
+// per distinct certificate, and never for an unsupported pair. The caller runs it before using
+// the pairs.
 func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
 	known := map[string]bool{}
+	inCert := func(cert string) bool {
+		v, ok := known[cert]
+		if !ok {
+			v = keyInCert(cert)
+			known[cert] = v
+		}
+		return v
+	}
 	for i := range c.Servers {
 		for j := range c.Servers[i].Pairs {
 			p := &c.Servers[i].Pairs[j]
-			if p.Unsupported != "" || p.KeyBeside == "" {
-				continue
-			}
-			inCert, ok := known[p.Cert]
-			if !ok {
-				inCert = keyInCert(p.Cert)
-				known[p.Cert] = inCert
-			}
-			if inCert {
+			switch {
+			case p.Unsupported != "":
+			case p.keyUnsure:
+				if inCert(p.Cert) {
+					p.Key, p.keyUnsure = p.Cert, false
+				} else {
+					*p = Pair{CertRaw: p.CertRaw, Unsupported: ReasonConditional}
+				}
+			case p.KeyBeside == "":
 				p.Key = p.Cert
-			} else {
+			case inCert(p.Cert):
+				p.Key = p.Cert
+			default:
 				p.Key = p.KeyBeside
 			}
 		}

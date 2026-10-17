@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -75,6 +76,10 @@ func sup(cert, raw, beside string) Pair {
 func plain(cert string) Pair { return sup(cert, cert, cert+".key") }
 
 func uns(raw, reason string) Pair { return Pair{CertRaw: raw, Unsupported: reason} }
+
+// unsure is a pair whose key settings were not stable: no companion, the key in the file or
+// conditional after ResolveKeys.
+func unsure(cert string) Pair { return Pair{Cert: cert, Key: cert, CertRaw: cert, keyUnsure: true} }
 
 func srv(line int, section string, listens []Listen, pairs ...Pair) Server {
 	return Server{File: cfgPath, Line: line, Section: section, Listens: listens, Pairs: pairs}
@@ -192,38 +197,51 @@ func TestParse(t *testing.T) {
 			cfg:  fe("  bind :9443 ssl crt /" + strings.Repeat("a", 4093)),
 			want: feA(uns("/"+strings.Repeat("a", maxRaw-1), ReasonPathNotAllowed)),
 		},
-		// Review I2: an uncertain naming never decides a certificate's companion key (probe k4,
-		// HAProxy 2.4, 2.6 and 2.8: f2 loads a.pem with "all", key a.pem.key). The change of the
-		// setting after it is uncertain, so f2's pair is conditional, never a wrong key.
-		"uncertain naming does not decide the key": {
+		// Fix round 2 (controller ruling): the key settings are used only when stable: in
+		// global, outside .if, before the first load. Otherwise every supported pair is "unsure":
+		// ResolveKeys keeps it only when its certificate file holds the key (TestParseUnstableKeys).
+		"key setting after a load (k4)": {
 			cfg: "global\n  ssl-load-extra-files none\nfrontend f1\n.if defined(X)\n  bind :9443 ssl crt /c/a.pem\n.endif\n" +
 				"global\n  ssl-load-extra-files all\nfrontend f2\n  bind :9444 ssl crt /c/a.pem crt /c/b.pem\n",
 			want: []Server{srv(5, "f1", any9443, uns("/c/a.pem", ReasonConditional)),
-				srv(10, "f2", []Listen{{"", 9444}}, uns("/c/a.pem", ReasonConditional), uns("/c/b.pem", ReasonConditional))},
+				srv(10, "f2", []Listen{{"", 9444}}, unsure("/c/a.pem"), unsure("/c/b.pem"))},
 		},
-		"a certain naming decides before an uncertain one": {
+		"stable settings and an uncertain naming": {
 			cfg: "global\n  ssl-load-extra-files none\n" + fe(bindA, ".if X", "  bind :9444 ssl crt /c/a.pem", ".endif") +
 				"frontend g\n  bind :9445 ssl crt /c/a.pem\n",
 			want: []Server{srv(4, "f", any9443, sup("/c/a.pem", "/c/a.pem", "")), srv(6, "f", []Listen{{"", 9444}}, uns("/c/a.pem", ReasonConditional)),
 				srv(9, "g", []Listen{{"", 9445}}, sup("/c/a.pem", "/c/a.pem", ""))},
 		},
-		"a server's crt is a load Alice does not follow": {
+		"key setting after a server's crt": {
 			cfg: "global\n  ssl-load-extra-files none\nbackend be\n  server s 10.0.0.1:443 ssl crt /c/a.pem\n" +
 				"global\n  ssl-load-extra-files all\n" + fe(bindA),
-			want: []Server{srv(8, "f", any9443, uns("/c/a.pem", ReasonConditional))},
+			want: []Server{srv(8, "f", any9443, unsure("/c/a.pem"))},
 		},
-		"a bind without ssl loads its crt": {
+		"key setting after a bind without ssl": {
 			cfg: "global\n  ssl-load-extra-del-ext\n" + "frontend e\n  bind :80 crt /c/x.crt\n" +
 				"global\n  ssl-load-extra-files none\n" + "frontend f\n  bind :9443 ssl crt /c/x.crt\n",
-			want: []Server{srv(8, "f", any9443, uns("/c/x.crt", ReasonConditional))},
+			want: []Server{srv(8, "f", any9443, unsure("/c/x.crt"))},
 		},
-		"a certain setting ends an uncertain one": {
+		"key setting inside .if": {
 			cfg:  "global\n.if X\n  ssl-load-extra-files none\n.endif\n  ssl-load-extra-files all\n" + fe(bindA),
-			want: []Server{srv(7, "f", any9443, plain("/c/a.pem"))},
+			want: []Server{srv(7, "f", any9443, unsure("/c/a.pem"))},
 		},
-		"no unfollowed load before the change": {
+		"key setting inside .if 0": {
+			cfg:  "global\n.if 0\n  ssl-load-extra-files none\n.endif\n" + fe(bindA),
+			want: []Server{srv(6, "f", any9443, unsure("/c/a.pem"))},
+		},
+		"key setting outside global": {
+			cfg:  fe("  ssl-load-extra-files none", bindA),
+			want: []Server{srv(3, "f", any9443, unsure("/c/a.pem"))},
+		},
+		"stable settings": {
 			cfg:  "global\n  ssl-load-extra-files none\n  ssl-load-extra-files all\n  ssl-load-extra-del-ext\n" + fe("  bind :9443 ssl crt /c/x.crt"),
 			want: []Server{srv(6, "f", any9443, sup("/c/x.crt", "/c/x.crt", "/c/x.key"))},
+		},
+		// Review N4 (probe P5): HAProxy derives the companion from the path as it builds it.
+		"stable del-ext on a doubled slash": {
+			cfg:  "global\n  crt-base /c/\n  ssl-load-extra-del-ext\n" + fe("  bind :9443 ssl crt a.crt crt /c//b.crt"),
+			want: []Server{srv(5, "f", any9443, sup("/c/a.crt", "a.crt", "/c/a.key"), sup("/c/b.crt", "/c//b.crt", "/c/b.key"))},
 		},
 		"uncertain crt-list naming first": {
 			cfg:  fe(".if X", "  bind :9443 ssl crt-list /l/short.txt", ".endif", "  bind :9444 ssl crt-list /l/short.txt"),
@@ -306,11 +324,11 @@ func TestParse(t *testing.T) {
 			cfg:  "global\n  ssl-load-extra-del-ext\n" + fe("  bind :9443 ssl crt /c/x.crt crt /c/x.pem"),
 			want: []Server{srv(4, "f", any9443, sup("/c/x.crt", "/c/x.crt", "/c/x.key"), plain("/c/x.pem"))},
 		},
-		"first load wins": {
+		"key setting between two loads": {
 			cfg: "global\n  ssl-load-extra-files none\n" + fe(bindA) + "global\n  ssl-load-extra-files all\n" +
 				"frontend g\n  bind :9444 ssl crt /c/a.pem crt /c/b.pem\n",
-			want: []Server{srv(4, "f", any9443, sup("/c/a.pem", "/c/a.pem", "")),
-				srv(8, "g", []Listen{{"", 9444}}, sup("/c/a.pem", "/c/a.pem", ""), plain("/c/b.pem"))},
+			want: []Server{srv(4, "f", any9443, unsure("/c/a.pem")),
+				srv(8, "g", []Listen{{"", 9444}}, unsure("/c/a.pem"), unsure("/c/b.pem"))},
 		},
 		// Variables (Ruling 5, D4).
 		"variables": {
@@ -383,11 +401,11 @@ func TestParse(t *testing.T) {
 		},
 		"extra files in uncertain region": {
 			cfg:  "global\n.if X\n  ssl-load-extra-files none\n.endif\n" + fe(bindA),
-			want: []Server{srv(6, "f", any9443, uns("/c/a.pem", ReasonConditional))},
+			want: []Server{srv(6, "f", any9443, unsure("/c/a.pem"))},
 		},
 		"del-ext in uncertain region": {
 			cfg:  "global\n.if X\n  ssl-load-extra-del-ext\n.endif\n" + fe("  bind :9443 ssl crt /c/x.crt crt /c/x.pem"),
-			want: []Server{srv(6, "f", any9443, uns("/c/x.crt", ReasonConditional), plain("/c/x.pem"))},
+			want: []Server{srv(6, "f", any9443, unsure("/c/x.crt"), unsure("/c/x.pem"))},
 		},
 		"crt-list in uncertain region": {
 			cfg:  fe(".if X", "  bind :9443 ssl crt-list /l/short.txt", ".endif"),
@@ -439,6 +457,64 @@ func TestParse(t *testing.T) {
 	}
 }
 
+// TestParseUnstableKeys: the re-review's probes P2, P3, P5 and P6, each valid on HAProxy 2.4,
+// 2.6 and 2.8, where a per-load key cache gave a supported pair with the wrong key. With the
+// key settings unstable, a pair is supported only when its certificate holds the key (Key ==
+// Cert, as HAProxy reads it first), and conditional otherwise; never a wrong companion.
+func TestParseUnstableKeys(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg  string
+		want Pair // f2's pair after ResolveKeys with no key in any certificate
+	}{
+		// P2: f1 loads ${D}/a.pem (= /c/a.pem) with "all"; HAProxy reads f2's key from /c/a.pem.key.
+		"P2 variable crt": {cfg: "global\n  ssl-load-extra-files all\nfrontend f1\n  bind :9441 ssl crt \"${D}/a.pem\"\n" +
+			"global\n  ssl-load-extra-files none\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
+		// P6: the same through a crt-list with a variable path.
+		"P6 variable crt-list": {cfg: "global\n  ssl-load-extra-files all\nfrontend f1\n  bind :9441 ssl crt-list \"${D}/l.txt\"\n" +
+			"global\n  ssl-load-extra-files none\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
+		// P3: f1's crt is conditional (uncertain crt-base); HAProxy first loads /c/a.pem at f2 with "all".
+		"P3 uncertain crt-base": {cfg: "global\n  ssl-load-extra-files none\n.if defined(X)\n  crt-base /c\n.endif\n" +
+			"frontend f1\n  bind :9441 ssl crt a.pem\nglobal\n  ssl-load-extra-files all\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
+		// P5: /c//a.crt is a separate load from /c/a.crt, after del-ext: HAProxy reads /c//a.key.
+		"P5 doubled slash": {cfg: "global\n  ssl-load-extra-files all\nfrontend f1\n  bind :9441 ssl crt /c/a.crt\n" +
+			"global\n  ssl-load-extra-del-ext\nfrontend f2\n  bind :9442 ssl crt /c//a.crt\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := Parse(newFS().input(tc.cfg, "2.6.12"))
+			require.NoError(t, err)
+			f2 := got.Servers[len(got.Servers)-1]
+			require.Equal(t, "f2", f2.Section)
+			f2.Pairs = slices.Clone(f2.Pairs)
+			c := Config{Servers: []Server{f2}}
+			ResolveKeys(&c, func(string) bool { return false })
+			assert.Equal(t, ReasonConditional, c.Servers[0].Pairs[0].Unsupported, "no key in the PEM: conditional, never a guessed companion")
+
+			f2 = got.Servers[len(got.Servers)-1]
+			c = Config{Servers: []Server{f2}}
+			ResolveKeys(&c, func(string) bool { return true })
+			p := c.Servers[0].Pairs[0]
+			assert.Empty(t, p.Unsupported, "a key in the PEM is the one HAProxy reads first")
+			assert.Equal(t, p.Cert, p.Key)
+		})
+	}
+}
+
+// TestParseUncertainListNamingsAreCheap (review N1): a crt-list is evaluated once per path,
+// whatever the region of its namings, so 65,535 uncertain namings of a list with a 1 MiB line
+// take what certain ones take (they took about 46 s).
+func TestParseUncertainListNamingsAreCheap(t *testing.T) {
+	fs := newFS()
+	fs.files["/l/big.txt"] = "/" + strings.Repeat("a", MaxLine-10) + "\n"
+	cfg := fe(".if defined(X)", strings.Repeat("  bind :1 ssl crt-list /l/big.txt\n", MaxServers-1)+".endif")
+	start := time.Now()
+	got, err := Parse(fs.input(cfg, ""))
+	require.NoError(t, err)
+	require.Len(t, got.Servers, MaxServers-1)
+	assert.Equal(t, ReasonPathNotAllowed, got.Servers[0].Pairs[0].Unsupported, "longer than a helper path; refused unscanned")
+	assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+	assert.Equal(t, 1, fs.fileCalls["/l/big.txt"])
+}
+
 func TestParseReadsFilesOnce(t *testing.T) {
 	fs := newFS()
 	fs.files["/l/list.txt"] = listSample
@@ -481,6 +557,24 @@ func TestParseErrors(t *testing.T) {
 			assert.Empty(t, got.Servers)
 		})
 	}
+	t.Run("errors name the file and line", func(t *testing.T) {
+		// Review N5: the bounds checked while a bind is read name its line.
+		fs := newFS()
+		fs.files["/l/big.txt"] = strings.Repeat("/c/a.pem\n", MaxServers+1)
+		fs.dirs["/d/big"] = make([]string, MaxDirEntries+1)
+		for _, tc := range []struct{ cfg, want string }{
+			{fe("  bind :1 ssl crt /c/a.pem", "  bind :2 ssl crt-list /l/big.txt"), cfgPath + ": haproxyconf: the configuration has too many"},
+			{fe("  bind :1 ssl crt-list /l/big.txt"), "(line 2)"},
+			{fe("", "  bind :1 ssl crt /d/big"), "(line 3)"},
+			{fe("  bind :1 ssl crt-list /l/big.txt"), cfgPath + ": "},
+			{fe(strings.Repeat("  bind :1 ssl crt /c/a.pem\n", MaxServers) + "  bind :1 ssl crt /c/b.pem"), fmt.Sprintf("(line %d)", MaxServers+2)},
+			{fe(".if 1", ".else", ".else"), "(line 4)"},
+		} {
+			_, err := Parse(fs.input(tc.cfg, ""))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		}
+	})
 	t.Run("100 levels", func(t *testing.T) {
 		_, err := Parse(newFS().input(strings.Repeat(".if 1\n", MaxDepth)+strings.Repeat(".endif\n", MaxDepth), ""))
 		assert.NoError(t, err)

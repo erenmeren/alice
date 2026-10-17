@@ -163,5 +163,16 @@ func FuzzParseHAProxyConfig(f *testing.F) {
 				t.Fatalf("wire %+v", w)
 			}
 		}
+		// After ResolveKeys every supported pair has a key Parse named: its certificate, or the
+		// companion from stable settings; nothing is left unsure.
+		n := 0
+		ResolveKeys(&got, func(string) bool { n++; return n%2 == 0 })
+		for _, s := range got.Servers {
+			for _, p := range s.Pairs {
+				if p.keyUnsure || p.Unsupported == "" && p.Key != p.Cert && p.Key != p.KeyBeside {
+					t.Fatalf("resolved pair %+v", p)
+				}
+			}
+		}
 	})
 }
