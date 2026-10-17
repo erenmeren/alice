@@ -22,7 +22,7 @@
 - Warning `web_server_helper_too_old`: a web server whose helper is older than its software needs still passes
   **Test connection** and still has its SSH keys read; its websites are not read until the helper is updated.
 - Unsupported reason `conditional`: a certificate or key set inside `<If>` or another condition Alice cannot
-  evaluate.
+  evaluate, or a website whose `ServerName` or `ServerAlias` is set inside one.
 - `SECURITY-REPORT.md` KI-40 (Apache discovery items); Phase B rulings in
   `docs/superpowers/rulings/apache-provider.md`.
 
