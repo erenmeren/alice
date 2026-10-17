@@ -602,8 +602,11 @@ describe('TargetDetailPage', () => {
         expect(screen.queryByText(lang === 'en' ? '(no server name)' : '(sunucu adı yok)')).not.toBeInTheDocument();
         expect(screen.getByText(warn)).toBeInTheDocument();
         expect(screen.getByText(lang === 'en' ? en.locations.unsupported.unknown_keyword : tr.locations.unsupported.unknown_keyword)).toBeInTheDocument();
-        const buttons = [...screen.getAllByRole('button', { name: lang === 'en' ? /^Deploy certificate:/ : /^Sertifika dağıt/ }), ...screen.getAllByRole('button', { name: lang === 'en' ? /^Verification settings:/ : /^Doğrulama ayarları/ })];
-        expect(buttons.length).toBeGreaterThanOrEqual(3);
+        const deploy = screen.getAllByRole('button', { name: lang === 'en' ? /^Deploy certificate:/ : /^Sertifika dağıt/ });
+        const settings = screen.getAllByRole('button', { name: lang === 'en' ? /^Verification settings:/ : /^Doğrulama ayarları/ });
+        expect(deploy).toHaveLength(1);
+        expect(settings).toHaveLength(2);
+        const buttons = [...deploy, ...settings];
         for (const b of buttons) {
           expect(b).toHaveAttribute('aria-disabled', 'true');
           expect(b).not.toHaveAttribute('disabled');

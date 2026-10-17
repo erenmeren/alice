@@ -165,6 +165,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   const webServerWarnings = ['internal/providers/nginx', 'internal/providers/apache', 'internal/providers/haproxy', 'internal/providers/webserver']
     .flatMap((dir) => goFiles(dir))
     .flatMap((f) => callArgsIn(readRepoFile(f), 'warning'));
+  // haproxyconf's own warning constants (WarnConfigFileNotRead), passed through the dump as server warnings.
+  const haproxyconfWarnings = goFiles('internal/providers/haproxyconf').flatMap((f) => goConsts(f, /^Warn/));
   const openapiTargetWarnings = [...topLevelTargetWarningText().matchAll(/\b(web_server_[a-z_]+|[a-z]+_[a-z_]+)\b/g)].map((m) => m[1]);
 
   function topLevelTargetWarningText(): string {
@@ -210,7 +212,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   it('has no location warning, and no server-level Nginx warning, that no source reports', () => {
     const sources = new Set([...knownValues('CertificateLocation', 'warnings'), ...inventoryWarnings, ...typesWarnings]);
     for (const w of Object.keys(LOCATION_WARNINGS)) expect(sources.has(w), `location warning ${w} has no source`).toBe(true);
-    const server = new Set([...typesWarnings, ...webServerWarnings, ...openapiTargetWarnings]);
+    const server = new Set([...typesWarnings, ...webServerWarnings, ...haproxyconfWarnings, ...openapiTargetWarnings]);
+    expect(haproxyconfWarnings).toContain('config_file_not_read');
     const webServerOnly = ['web_server_not_found', 'web_server_profile_missing', 'web_server_helper_too_old', 'web_server_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'config_dir_not_read', 'config_file_not_read', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
     for (const w of webServerOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
     // every Nginx entry of the table is one of those (the rest are the SSH warnings of Phase 3)
