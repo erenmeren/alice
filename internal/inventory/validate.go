@@ -24,7 +24,9 @@ const (
 )
 
 // typeValues are the parameters of a refused target type.
-func typeValues() map[string]string { return map[string]string{"values": TypeLinux + ", " + TypeNginx} }
+func typeValues() map[string]string {
+	return map[string]string{"values": strings.Join(append([]string{TypeLinux}, webServerTypes...), ", ")}
+}
 
 const (
 	maxNameRunes = 100
@@ -154,7 +156,7 @@ func validateNewTarget(in NewTarget) (NewTarget, validate.Errors) {
 	} else {
 		out.Name = name
 	}
-	if in.Type != TypeLinux && in.Type != TypeNginx {
+	if !IsServer(in.Type) {
 		errs.Add("type", validate.OneOf, typeValues())
 	}
 	if host, fe := NormalizeHost(in.Host); fe != nil {

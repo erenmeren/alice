@@ -15,7 +15,7 @@ import (
 )
 
 // The websites a binding may be given (the binding dialog's list, carry 6): certificate locations
-// of Nginx servers that are live and whose provider deploys, that the last scan found and that Alice
+// of web servers that are live and whose provider deploys, that the last scan found and that Alice
 // can deploy to (supported, a path the helper takes). Servers that are not connected right now are
 // listed too: readiness is checked by every deployment.
 
@@ -121,7 +121,7 @@ func (s *Service) ListDeployableLocations(ctx context.Context, f LocationFilter)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT l.id, l.target_id, t.name::text, lower(t.name::text COLLATE "C"), l.cert_path, l.key_path, l.key_type, l.servers, l.binding_id
 FROM certificate_locations l
-JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL AND t.type = 'nginx'
+JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL AND t.type = ANY($9::text[])
 WHERE l.supported AND l.missing_since IS NULL
   AND length(l.cert_path) <= 4096 AND length(l.key_path) <= 4096
   AND l.cert_path COLLATE "C" ~ $1 AND l.key_path COLLATE "C" ~ $1
@@ -133,7 +133,7 @@ WHERE l.supported AND l.missing_since IS NULL
                   WHERE lower(n COLLATE "C") LIKE $4 ESCAPE '\'))
   AND ($5::text IS NULL OR (lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id) > ($5::text COLLATE "C", $6::text COLLATE "C", $7::uuid))
 ORDER BY lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id
-LIMIT $8`, deployPathSQL, f.KeyType, f.Unbound, pattern, cName, cPath, cID, limit+1)
+LIMIT $8`, deployPathSQL, f.KeyType, f.Unbound, pattern, cName, cPath, cID, limit+1, s.deployTypes())
 	if err != nil {
 		return DeployableLocationPage{}, fmt.Errorf("inventory: list deployable locations: %w", err)
 	}

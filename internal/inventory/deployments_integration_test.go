@@ -22,6 +22,7 @@ import (
 	"alice/internal/license"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
+	"alice/internal/providers/fake"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
@@ -1190,4 +1191,37 @@ func TestEngineWritesAreFencedToTheJobClaim(t *testing.T) {
 	require.NoError(t, f.h.svc.CheckClaim(ctx))
 	require.NoError(t, f.h.svc.FinishDeployment(ctx, id, inventory.DeploymentFinish{Status: inventory.DeployStatusFailed, ErrorCode: "x.y",
 		NothingWritten: true}))
+}
+
+// A web server whose provider does not deploy is refused and its websites are not offered.
+func TestAWebServerWhoseProviderDoesNotDeployIsRefused(t *testing.T) {
+	ca := pki.NewCA("NoDep", pki.ECDSA256, start)
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.Root)
+	noDeploy := func(c *inventory.Config) {
+		ssh, _ := c.Registry.Get(providers.KindLinuxSSH)
+		reg := providers.NewRegistry()
+		reg.Register(ssh)
+		reg.Register(fake.New(providers.KindNginx, providers.CapTestConnection, providers.CapDiscoverSSHKeys,
+			providers.CapAuthorizedKeys, providers.CapDiscoverCerts))
+		reg.Freeze()
+		c.Registry = reg
+	}
+	h := newHarness(t, noDeploy, withRoots(roots))
+	admin := h.user("ada", rbac.Admin, "ada@example.com")
+	tg := nginxTarget(t, h, admin, "web-01")
+	now := h.clock.Now()
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, now)
+	_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), leaf)}})
+	require.NoError(t, err)
+	loc := byPath(t, h, tg.ID, false)["/etc/nginx/ssl/www.crt"].ID
+	cert, _, err := h.svc.UploadCertificate(h.ctx, admin, pemUpload(ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, now)))
+	require.NoError(t, err)
+
+	_, err = h.svc.RequestDeployment(h.ctx, admin, inventory.DeployRequestInput{CertificateID: cert.ID, LocationIDs: []uuid.UUID{loc}})
+	assert.ErrorIs(t, err, inventory.ErrLocationUnsupported)
+	page, err := h.svc.ListDeployableLocations(h.ctx, inventory.LocationFilter{})
+	require.NoError(t, err)
+	assert.Empty(t, page.Items)
 }

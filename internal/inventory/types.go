@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,30 @@ const (
 	TypeNginx         = "nginx"
 	TypeAzureKeyVault = "azure_key_vault"
 )
+
+// webServerTypes is the one list of web-server target types (the only place that names TypeNginx);
+// every other check asks IsWebServer, or a provider capability when the question is what a server can do.
+var webServerTypes = []string{TypeNginx}
+
+// IsWebServer reports whether typ is a web-server target type.
+func IsWebServer(typ string) bool { return slices.Contains(webServerTypes, typ) }
+
+// IsServer reports whether typ is a server (SSH keys): a Linux server or a web server.
+func IsServer(typ string) bool { return typ == TypeLinux || IsWebServer(typ) }
+
+// WebServerTypes returns a copy of the web-server target types.
+func WebServerTypes() []string { return slices.Clone(webServerTypes) }
+
+// deployTypes are the web-server types whose registered provider deploys certificates.
+func (s *Service) deployTypes() []string {
+	out := []string{}
+	for _, typ := range webServerTypes {
+		if s.canDeploy(typ) {
+			out = append(out, typ)
+		}
+	}
+	return out
+}
 
 // Target statuses (targets.status, R37 item 6).
 const (
@@ -136,7 +161,7 @@ type VaultInfo struct {
 // NewTarget is the input of CreateTarget.
 type NewTarget struct {
 	Name     string
-	Type     string // TypeLinux or TypeNginx
+	Type     string // TypeLinux or a web-server type
 	Host     string
 	Port     int    // 0 = 22
 	Username string // "" = alice-svc

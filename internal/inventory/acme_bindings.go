@@ -214,7 +214,7 @@ func (s *Service) AddACMEBindingStrict(ctx context.Context, a Actor, id, locatio
 		switch {
 		case kvBound || (acmeBound != nil && *acmeBound != id):
 			return &LocationRefusalError{LocationID: location, Err: ErrACMELocationBound}
-		case l.missing || !l.supported || !deployablePath(l.certPath) || !deployablePath(l.keyPath), t.Type != TypeNginx || !s.canDeploy(t.Type):
+		case l.missing || !l.supported || !deployablePath(l.certPath) || !deployablePath(l.keyPath), !s.canDeploy(t.Type):
 			return &LocationRefusalError{LocationID: location, Err: ErrLocationUnsupported}
 		}
 		for _, alg := range []string{policyAlgorithm(c.KeyType), cur.algorithm} {

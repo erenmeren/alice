@@ -212,7 +212,7 @@ func (s *Service) checkDeploy(ctx context.Context, tx pgx.Tx, keyID, targetID uu
 	if c.target, err = s.inv.TargetTx(ctx, tx, targetID, lock); err != nil {
 		return c, err
 	}
-	if c.target.Type != inventory.TypeLinux && c.target.Type != inventory.TypeNginx {
+	if !inventory.IsServer(c.target.Type) {
 		return c, inventory.ErrNotAServer
 	}
 	conn := connectionUser(c.target)

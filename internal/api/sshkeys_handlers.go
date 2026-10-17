@@ -373,7 +373,7 @@ func (s *server) keyFiles(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	if t.Type != inventory.TypeLinux && t.Type != inventory.TypeNginx {
+	if !inventory.IsServer(t.Type) {
 		s.writeError(w, r, ErrNotFound) // a Key Vault has no key files
 		return
 	}

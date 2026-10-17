@@ -469,7 +469,7 @@ func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCe
 	switch {
 	case l.missing || !l.supported || !deployablePath(l.certPath) || !deployablePath(l.keyPath):
 		return "location_unsupported", ErrLocationUnsupported
-	case t.Type != TypeNginx || !s.canDeploy(t.Type):
+	case !s.canDeploy(t.Type):
 		return "location_unsupported", ErrLocationUnsupported
 	case !slices.Contains(targetReady, t.Status):
 		return "target_not_ready", ErrTargetNotReady

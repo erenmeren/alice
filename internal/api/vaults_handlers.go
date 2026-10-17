@@ -366,7 +366,7 @@ func (s *server) releaseVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // vaultTypes are the values of GET /targets?type=.
-var vaultTypes = []string{inventory.TypeLinux, inventory.TypeNginx, inventory.TypeAzureKeyVault}
+var vaultTypes = append(append([]string{inventory.TypeLinux}, inventory.WebServerTypes()...), inventory.TypeAzureKeyVault)
 
 // accessCheckRequest is the optional body of POST /targets/{id}/actions/test.
 type accessCheckRequest struct {
