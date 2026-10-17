@@ -165,7 +165,8 @@ func knownOrDefault(v string, set []string, def string) string {
 // certServer is a server block as Alice shows it, cleaned and bounded. The helper lists SSL listens
 // only (nginxconf.SSLListens), so none is filtered here; truncated reports a list cut at its bound.
 func certServer(s helperproto.DumpServer) (cs providers.CertServer, truncated bool) {
-	cs = providers.CertServer{Names: []string{}, Listens: []providers.CertListen{}, File: clean(s.File, maxPathLength), Line: max(s.Line, 0)}
+	cs = providers.CertServer{Names: []string{}, Listens: []providers.CertListen{}, File: clean(s.File, maxPathLength), Line: max(s.Line, 0),
+		Section: clean(s.Section, maxNameLength)}
 	for _, n := range s.Names {
 		if n = clean(n, maxNameLength); n != "" {
 			if len(cs.Names) >= maxNames {
@@ -187,8 +188,16 @@ func certServer(s helperproto.DumpServer) (cs providers.CertServer, truncated bo
 	return cs, truncated
 }
 
+// nameCost is what a server adds to the dump's name budget: its names, and one for a section.
+func nameCost(s providers.CertServer) int {
+	if s.Section != "" {
+		return len(s.Names) + 1
+	}
+	return len(s.Names)
+}
+
 func sameServer(a, b providers.CertServer) bool {
-	return a.File == b.File && a.Line == b.Line && slices.Equal(a.Names, b.Names) && slices.Equal(a.Listens, b.Listens)
+	return a.File == b.File && a.Line == b.Line && a.Section == b.Section && slices.Equal(a.Names, b.Names) && slices.Equal(a.Listens, b.Listens)
 }
 
 // convert turns a valid dump into locations: one per certificate path (the raw value of an
@@ -233,12 +242,12 @@ func convert(d helperproto.ServerDumpResponse, folders []string) ([]providers.Di
 				// A server already listed costs nothing; a new one must fit the location's bound and
 				// the dump's budget, else it is left out and the list said to be cut.
 				if len(b.loc.Servers) >= maxServersPerLocation || memberships >= maxMembershipsPerDump ||
-					names+len(cs.Names) > maxNamesPerDump {
+					names+nameCost(cs) > maxNamesPerDump {
 					truncated = true
 				} else {
 					b.loc.Servers = append(b.loc.Servers, cs)
 					memberships++
-					names += len(cs.Names)
+					names += nameCost(cs)
 				}
 			}
 			b.loc.Inherited = b.loc.Inherited || p.Inherited

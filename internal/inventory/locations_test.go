@@ -259,3 +259,13 @@ func TestChangedOutside(t *testing.T) {
 	// More finished deployments than a scan consults: nothing is flagged.
 	assert.False(t, (&existingLocation{fingerprint: "old", finishedCut: true}).changedOutside("x"))
 }
+
+func TestServerTextSizeCountsTheSection(t *testing.T) {
+	s := providers.CertServer{Names: []string{"a"}, Listens: []providers.CertListen{{Port: 443}}, File: "/f", Line: 1}
+	base := serverTextSize(s)
+	s.Section = "fe"
+	// `,"section":"fe"` is 15 bytes in Go's encoding, plus the two spaces PostgreSQL adds.
+	assert.Equal(t, base+15+2, serverTextSize(s))
+	got := cleanServers([]providers.CertServer{{Section: "fe\x00x"}})
+	assert.NotContains(t, got[0].Section, "\x00", "text is cleaned")
+}

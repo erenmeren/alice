@@ -330,6 +330,8 @@ type CertServer struct {
 	Listens []CertListen `json:"listens"`
 	File    string       `json:"file"`
 	Line    int          `json:"line"`
+	// Section is the HAProxy frontend or listen name, "" for the other web servers.
+	Section string `json:"section,omitempty"`
 }
 
 // CertListen is one SSL listen of a server block.

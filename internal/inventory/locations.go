@@ -215,7 +215,7 @@ func cleanServers(in []providers.CertServer) []providers.CertServer {
 	out := make([]providers.CertServer, 0, len(in))
 	for _, s := range in {
 		c := providers.CertServer{Names: make([]string, 0, len(s.Names)), Listens: make([]providers.CertListen, 0, len(s.Listens)),
-			File: clean(s.File), Line: s.Line}
+			File: clean(s.File), Line: s.Line, Section: clean(s.Section)}
 		for _, n := range s.Names {
 			c.Names = append(c.Names, clean(n))
 		}
@@ -255,7 +255,15 @@ func serverTextSize(s providers.CertServer) int {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	_ = enc.Encode(s) // strings and integers: cannot fail
-	return buf.Len() - 1 + 7 + max(len(s.Names)-1, 0) + max(len(s.Listens)-1, 0) + 5*len(s.Listens)
+	return buf.Len() - 1 + 7 + max(len(s.Names)-1, 0) + max(len(s.Listens)-1, 0) + 5*len(s.Listens) + sectionExtra(s)
+}
+
+// sectionExtra is the two spaces PostgreSQL adds for the section key's ':' and the ',' before it.
+func sectionExtra(s providers.CertServer) int {
+	if s.Section == "" {
+		return 0
+	}
+	return 2
 }
 
 // sanMismatch reports whether a server name is not covered by the certificate's SANs, in Nginx's

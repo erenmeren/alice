@@ -494,3 +494,14 @@ func TestProtocol9(t *testing.T) {
 	assert.Equal(t, "haproxy-dump", SubHAProxyDump)
 	assert.Equal(t, "config_dir_not_read", WarnConfigDirNotRead)
 }
+
+func TestDumpServerSectionIsOmittedWhenEmpty(t *testing.T) {
+	s := DumpServer{Names: []string{}, Listens: []DumpListen{}, Pairs: []DumpPair{}}
+	b, err := json.Marshal(s)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), `"section"`)
+	s.Section = "fe_https"
+	b, err = json.Marshal(s)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"section":"fe_https"`)
+}

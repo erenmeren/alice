@@ -715,3 +715,22 @@ func TestConvertLeafUnreadableHasNoCertificate(t *testing.T) {
 	assert.Empty(t, got[0].PEMChain)
 	assert.Empty(t, got[0].FileSHA256)
 }
+
+func TestConvertKeepsTheSection(t *testing.T) {
+	u := newUnitCerts(t)
+	const c, k = "/etc/haproxy/ssl/a.pem", "/etc/haproxy/ssl/a.pem"
+	a, b := server([]string{"a"}, 443, pair(c, k)), server([]string{"a"}, 443, pair(c, k))
+	a.Section, b.Section = "fe_a", "fe_b"
+	got, _ := convert(validDump([]helperproto.DumpServer{a, b}, certFile(c, u.chain), keyFile(k)), nginxFolders)
+	require.Len(t, got, 1)
+	require.Len(t, got[0].Location.Servers, 2, "the same file, line, names and listens in two sections are two servers")
+	assert.Equal(t, "fe_a", got[0].Location.Servers[0].Section)
+	assert.Equal(t, "fe_b", got[0].Location.Servers[1].Section)
+
+	a.Section = strings.Repeat("s", 300)
+	got, _ = convert(validDump([]helperproto.DumpServer{a}, certFile(c, u.chain), keyFile(k)), nginxFolders)
+	assert.Len(t, got[0].Location.Servers[0].Section, 253)
+	a.Section = "fe\x1b[31m_x"
+	got, _ = convert(validDump([]helperproto.DumpServer{a}, certFile(c, u.chain), keyFile(k)), nginxFolders)
+	assert.Equal(t, "fe[31m_x", got[0].Location.Servers[0].Section)
+}

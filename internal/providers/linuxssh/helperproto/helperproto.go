@@ -488,7 +488,9 @@ type DumpServer struct {
 	Names   []string     `json:"names"`
 	Listens []DumpListen `json:"listens"` // SSL listens only
 	Pairs   []DumpPair   `json:"pairs"`
-	Stream  bool         `json:"stream"`
+	// Section is the HAProxy frontend or listen name; empty (and absent) for Nginx and Apache.
+	Section string `json:"section,omitempty"`
+	Stream  bool   `json:"stream"`
 }
 
 // DumpFile describes one certificate or key file a supported pair references. Key files are

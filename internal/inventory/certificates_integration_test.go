@@ -1207,3 +1207,32 @@ func TestCertificateLocationsSayWhetherTheServerDeploys(t *testing.T) {
 	require.Len(t, al.Items, 1)
 	assert.False(t, al.Items[0].Deployable)
 }
+
+// The frontend name of a server (HAProxy) is stored and listed; a server without one has no section.
+func TestLocationServersKeepTheSection(t *testing.T) {
+	h := newHarness(t)
+	web := nginxTarget(t, h, h.user("ada", rbac.Admin, ""), "web-01")
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	with := cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key", "www.example.test")
+	with.Servers[0].Section = "fe_https"
+	without := cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "www.example.test")
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{dc(with, leaf), dc(without, leaf)}})
+	require.NoError(t, err)
+	locs := byPath(t, h, web.ID, true)
+	assert.Equal(t, "fe_https", locs["/etc/nginx/ssl/a.crt"].Servers[0].Section)
+	assert.Empty(t, locs["/etc/nginx/ssl/b.crt"].Servers[0].Section)
+	var stored string
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, `SELECT servers::text FROM certificate_locations WHERE cert_path = '/etc/nginx/ssl/b.crt'`).Scan(&stored))
+	assert.NotContains(t, stored, "section")
+}
+
+func TestServersSizeBoundCoversTheSection(t *testing.T) {
+	h := newHarness(t)
+	servers := []providers.CertServer{{Names: []string{"a"}, Section: "fe_https", Listens: []providers.CertListen{{Port: 443}}}, {Names: []string{}, Section: "é<>"}}
+	raw, err := json.Marshal(servers)
+	require.NoError(t, err)
+	var rendered int
+	require.NoError(t, h.db.Owner.QueryRow(h.ctx, "SELECT octet_length($1::jsonb::text)", raw).Scan(&rendered))
+	assert.GreaterOrEqual(t, inventory.ServersTextBound(servers), rendered)
+}

@@ -6617,6 +6617,10 @@ components:
               default_server: { type: boolean }
         file: { type: string }
         line: { type: integer }
+        section:
+          type: string
+          description: >-
+            HAProxy: the frontend or listen section; absent for Nginx and Apache.
     CertificateLocation:
       type: object
       description: >-

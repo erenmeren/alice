@@ -545,6 +545,7 @@ export interface CertServer {
   listens: CertListen[];
   file: string;
   line: number;
+  section?: string;
 }
 
 export interface CertificateLocation {

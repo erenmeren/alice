@@ -85,6 +85,7 @@ type serverBlockDTO struct {
 	Listens []listenDTO `json:"listens"`
 	File    string      `json:"file"`
 	Line    int         `json:"line"`
+	Section string      `json:"section,omitempty"`
 }
 
 type locationDTO struct {
@@ -134,7 +135,7 @@ func idPtr(id *uuid.UUID) *string {
 func serversJSON(in []providers.CertServer) []serverBlockDTO {
 	out := make([]serverBlockDTO, 0, len(in))
 	for _, sv := range in {
-		b := serverBlockDTO{Names: nonNil(sv.Names), Listens: make([]listenDTO, 0, len(sv.Listens)), File: sv.File, Line: sv.Line}
+		b := serverBlockDTO{Names: nonNil(sv.Names), Listens: make([]listenDTO, 0, len(sv.Listens)), File: sv.File, Line: sv.Line, Section: sv.Section}
 		for _, l := range sv.Listens {
 			b.Listens = append(b.Listens, listenDTO{Addr: l.Addr, Port: l.Port, DefaultServer: l.DefaultServer})
 		}
