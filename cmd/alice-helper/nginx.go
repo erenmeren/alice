@@ -94,10 +94,11 @@ func classifyNginxError(stderr []byte) string {
 	}
 }
 
-// nginxMeta is what nginxConfig learned besides the parse. valid is false (with class) when
-// nginx -T failed, or the dump cannot be trusted or parsed; writable lists the configuration files
-// a user other than root can change (their pairs are unsupported, S1).
-type nginxMeta struct {
+// dumpMeta is what nginxConfig (apacheConfig) learned besides the parse. valid is false (with
+// class) when nginx -T (Apache's DUMP_* runs) failed, or the configuration cannot be trusted or
+// parsed; writable lists the configuration files a user other than root can change (their pairs
+// are unsupported, S1).
+type dumpMeta struct {
 	version  string
 	confPath string
 	valid    bool
@@ -158,9 +159,9 @@ var errNginxMissing = errors.New("nginx is not installed")
 // configuration is not an error: meta.valid is false and the Config is empty, never partial.
 // Every pair that a configuration file writable by a user other than root holds (its server
 // block, a file spliced into it, or one of its directives) is marked unsupported (S1).
-func (s *sys) nginxConfig(ctx context.Context) (nginxconf.Config, nginxMeta, error) {
-	var meta nginxMeta
-	invalid := func(e *configError) (nginxconf.Config, nginxMeta, error) {
+func (s *sys) nginxConfig(ctx context.Context) (nginxconf.Config, dumpMeta, error) {
+	var meta dumpMeta
+	invalid := func(e *configError) (nginxconf.Config, dumpMeta, error) {
 		meta.valid, meta.class, meta.reason, meta.file, meta.writable = false, e.class, e.reason, e.file, nil
 		return nginxconf.Config{}, meta, nil
 	}
@@ -352,7 +353,7 @@ func parseNginxV(b []byte) (version, confPath string) {
 	return version, confPath
 }
 
-// dumpBudget is the largest nginx-dump answer (S11); tests lower it.
+// dumpBudget is the largest nginx-dump or apache-dump answer (S11); tests lower it.
 var dumpBudget = helperproto.ServerDumpOutput
 
 func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
@@ -373,6 +374,17 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 	if !meta.valid {
 		return resp, nil
 	}
+	for _, sv := range cfg.Servers {
+		resp.Servers = append(resp.Servers, toWire(sv))
+	}
+	return s.finishDump(resp, cfg.CertPaths(), cfg.KeyPaths())
+}
+
+// finishDump completes a valid dump of nginx-dump or apache-dump: it warns about writable
+// configuration files, describes every certificate file (read, CERTIFICATE blocks only) and key
+// file (stat only) of the supported pairs, at most MaxServerFiles of them, and encodes the answer
+// within dumpBudget.
+func (s *sys) finishDump(resp helperproto.ServerDumpResponse, certs, keys []string) (any, error) {
 	warn := func(code string) {
 		if !slices.Contains(resp.Warnings, code) {
 			resp.Warnings = append(resp.Warnings, code)
@@ -381,16 +393,13 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 	if len(resp.Writable) > 0 {
 		warn(helperproto.WarnConfigFileWritable)
 	}
-	for _, sv := range cfg.Servers {
-		resp.Servers = append(resp.Servers, toWire(sv))
-	}
 	names := map[int]string{}
 	if accts, err := s.accounts(); err == nil {
 		names = owners(accts)
 	}
 	groups := s.groupNames()
 	n, pemBytes := 0, 0
-	for _, p := range cfg.CertPaths() {
+	for _, p := range certs {
 		if n++; n > helperproto.MaxServerFiles {
 			warn(helperproto.WarnTooManyFiles)
 			break
@@ -404,7 +413,7 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 		}
 		resp.Files = append(resp.Files, fi)
 	}
-	for _, p := range cfg.KeyPaths() {
+	for _, p := range keys {
 		if n++; n > helperproto.MaxServerFiles {
 			warn(helperproto.WarnTooManyFiles)
 			break

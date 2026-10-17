@@ -181,20 +181,43 @@ func TestParseIncludes(t *testing.T) {
 		"empty path":         h + root + "    (5) \n",
 		"relative path":      h + root + "    (5) conf.d/a.conf\n",
 		"relative root":      h + "  (*) apache2.conf\n",
-		"unclean path":       h + root + "    (5) /etc/apache2/../a.conf\n",
-		"dot segment":        h + root + "    (5) /etc/apache2/./a.conf\n",
-		"space in path":      h + root + "    (5) /etc/apache2/a b.conf\n",
 		"blank line":         h + root + "\n    (5) /etc/apache2/a.conf\n",
 		"stray text":         h + root + "AH00558: apache2: Could not reliably determine\n",
 		"crlf":               "Included configuration files:\r\n  (*) /etc/apache2/apache2.conf\r\n",
 		"nul":                h + "  (*) /etc/apache2/apache2.conf\x00\n",
 		"cr after the tree":  h + root + "Syntax OK\r\n",
-		"long path":          h + "  (*) /" + strings.Repeat("a", 4096) + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := ParseIncludes([]byte(in))
 			assert.ErrorIs(t, err, ErrOutput)
 			assert.Nil(t, got)
+		})
+	}
+	// A well-formed line that names a path the helper does not accept (Ruling 7: unsupported
+	// name_not_allowed, not malformed output).
+	for name, in := range map[string]string{
+		"unclean path":  h + root + "    (5) /etc/apache2/../a.conf\n",
+		"dot segment":   h + root + "    (5) /etc/apache2/./a.conf\n",
+		"space in path": h + root + "    (5) /etc/apache2/a b.conf\n",
+		"space in root": h + "  (*) /etc/apache2/my apache2.conf\n",
+		"long path":     h + "  (*) /" + strings.Repeat("a", 4096) + "\n",
+		"double slash":  h + root + "    (5) /etc/apache2//a.conf\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := ParseIncludes([]byte(in))
+			assert.ErrorIs(t, err, ErrName)
+			assert.NotErrorIs(t, err, ErrOutput)
+			assert.Nil(t, got)
+		})
+	}
+	// The name is checked only once the line is otherwise well-formed: a bad tag stays ErrOutput.
+	for name, in := range map[string]string{
+		"bad tag, bad name": h + root + "    (x) /etc/apache2/a b.conf\n",
+		"nul in name":       h + "  (*) /etc/apache2/apache2.conf\x00x\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := ParseIncludes([]byte(in))
+			assert.ErrorIs(t, err, ErrOutput)
 		})
 	}
 
@@ -410,7 +433,7 @@ func TestModuleName(t *testing.T) {
 
 // The error values are distinct and named after the package.
 func TestErrors(t *testing.T) {
-	all := []error{ErrTooLarge, ErrLineTooLong, ErrTooComplex, ErrTooDeep, ErrSyntax, ErrNUL, ErrOutput, ErrIncludeMismatch}
+	all := []error{ErrTooLarge, ErrLineTooLong, ErrTooComplex, ErrTooDeep, ErrSyntax, ErrNUL, ErrOutput, ErrIncludeMismatch, ErrName}
 	for i, a := range all {
 		assert.True(t, strings.HasPrefix(a.Error(), "apacheconf: "), a.Error())
 		for j, b := range all {

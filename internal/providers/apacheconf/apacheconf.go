@@ -49,6 +49,9 @@ var (
 	// ErrIncludeMismatch: the include tree names a file at an Include line the configuration text
 	// does not have there (the configuration changed between the runs, or the output is forged).
 	ErrIncludeMismatch = errors.New("apacheconf: the include tree does not match the Include directives of the configuration")
+	// ErrName: the include tree names a file whose path is not one the helper accepts
+	// (helperproto.ValidPath); the configuration is unsupported, not malformed.
+	ErrName = errors.New("apacheconf: the include tree names a path the helper does not accept")
 )
 
 // Reasons a pair is not supported (spec §8).

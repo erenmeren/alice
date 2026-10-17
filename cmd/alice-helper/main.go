@@ -49,6 +49,7 @@ func productionSys() *sys {
 		runNginx: func(ctx context.Context, args ...string) ([]byte, []byte, error) {
 			return runProgram(ctx, nginxPath, helperproto.MaxServerConfig, args...)
 		},
+		runApache: runApacheCtl,
 		runSystemctl: func(ctx context.Context, args ...string) error {
 			_, _, err := runProgram(ctx, systemctlPath, 64<<10, args...)
 			return err

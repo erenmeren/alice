@@ -55,6 +55,8 @@ var commands = map[string]command{
 	helperproto.SubNginxStatus:   {privileged: true, handle: cmdNginxStatus},
 	helperproto.SubNginxFence:    {privileged: true, handle: cmdNginxFence},
 	helperproto.SubTLSProbe:      {handle: cmdTLSProbe},
+	// Protocol 8 (Apache, discovery only): read-only, like nginx-dump.
+	helperproto.SubApacheDump: {privileged: true, handle: cmdApacheDump},
 	// Protocol 7 (ACME HTTP-01): one token file in helperproto.ACMEChallengeDir.
 	helperproto.SubACMEChallengePut: {privileged: true, handle: cmdACMEChallengePut},
 	helperproto.SubACMEChallengeRm:  {privileged: true, handle: cmdACMEChallengeRm},

@@ -101,7 +101,10 @@ const includesHeader = "Included configuration files:"
 // for a file loaded at line n of its parent, one space and an absolute clean path. Depth grows by
 // at most 1 per line; the parent is the nearest earlier entry one level up. A line exactly
 // "Syntax OK" is skipped; anything else is ErrOutput, and more than MaxFiles entries is
-// ErrTooComplex. It stops at the first bad line and copies only the paths it returns.
+// ErrTooComplex. A line that is well-formed but names a path the helper does not accept
+// (helperproto.ValidPath: a space, a "." or ".." segment, over 4096 bytes) is ErrName: Apache
+// can load such a file, the helper cannot read it. It stops at the first bad line and copies
+// only the paths it returns.
 func ParseIncludes(out []byte) ([]Included, error) {
 	if err := checkOutput(out); err != nil {
 		return nil, err
@@ -130,7 +133,7 @@ func ParseIncludes(out []byte) ([]Included, error) {
 		}
 		depth := (indent - 2) / 2
 		tag, path, ok := bytes.Cut(ln[indent:], []byte(" "))
-		if !ok || len(path) > maxPath || !helperproto.ValidPath(string(path)) {
+		if !ok || len(path) == 0 || path[0] != '/' || bytes.IndexByte(path, 0) >= 0 {
 			return nil, outputErr(n)
 		}
 		e := Included{Parent: -1}
@@ -152,6 +155,9 @@ func ParseIncludes(out []byte) ([]Included, error) {
 				return nil, ErrTooDeep
 			}
 			e.Parent, e.Line = last[depth-1], line
+		}
+		if len(path) > maxPath || !helperproto.ValidPath(string(path)) {
+			return nil, fmt.Errorf("%w (line %d)", ErrName, n)
 		}
 		if len(res) >= MaxFiles {
 			return nil, ErrTooComplex

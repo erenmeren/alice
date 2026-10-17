@@ -33,6 +33,10 @@ type sys struct {
 	// capped at helperproto.MaxServerConfig, stderr at 64 KiB. A missing binary is an
 	// fs.ErrNotExist error.
 	runNginx func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
+	// runApache runs Apache's control program (runApacheCtl: /usr/sbin/apache2ctl, else
+	// /usr/sbin/httpd) with fixed arguments through runProgram; stdout is capped at
+	// helperproto.MaxServerConfig, stderr at 64 KiB. A missing program is an fs.ErrNotExist error.
+	runApache func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
 	// runSystemctl runs /usr/bin/systemctl with fixed arguments (Task 6).
 	runSystemctl func(ctx context.Context, args ...string) error
 	// statfs returns the bytes available to root in the file system of a descriptor.
