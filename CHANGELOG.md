@@ -28,6 +28,15 @@
   format and range of both before it changes anything (Alice applies the final check when it starts) and, like Docker
   Compose, uses the last line of a key written twice (OPS-6, OPS-4).
 
+**Changed (API)**
+- A target's web-server facts move from `facts.nginx` to `facts.web_server`, which gains `software`; the warning codes
+  `nginx_not_found`, `nginx_profile_missing` and `nginx_config_invalid` become `web_server_not_found`,
+  `web_server_profile_missing` and `web_server_config_invalid`; the OpenAPI schema `NginxFacts` becomes
+  `WebServerFacts`.
+- New capability `http01_challenge`: only a server that has it may be the ACME HTTP-01 server.
+- Migration `00016` rewrites the stored facts, warnings, Nginx capabilities and `certificate_locations.kind`
+  (`nginx_file` becomes `server_file`). The helper is unchanged (protocol 7, 1.6.1).
+
 **Release and process**
 - Migrations `00001` to `00015` are frozen by SHA-256 (`migrations/frozen_test.go`); a schema change is a new
   migration (OPS-5).
