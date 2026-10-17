@@ -30,7 +30,8 @@ export const CAPABILITIES: readonly Capability[] = [
   'http01_challenge',
 ];
 
-// can: whether the server advertised the capability when it was added (the server checks it again).
+// can: whether the target's stored capability set has the capability. The server rewrites the set from the registered
+// provider at every startup (spec §8.1), so this always agrees with its own checks, which it still makes.
 export function can(target: Pick<Target, 'capabilities'>, capability: Capability): boolean {
   return target.capabilities.includes(capability);
 }

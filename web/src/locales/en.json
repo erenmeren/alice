@@ -544,6 +544,7 @@
       "target_created": "Server or Key Vault added",
       "target_updated": "Server or Key Vault changed",
       "target_deleted": "Server or Key Vault removed",
+      "target_capabilities_synced": "Server capabilities updated",
       "target_add_denied_license": "Server or Key Vault not added: license limit reached or license expired",
       "target_status_changed": "Server or Key Vault status changed",
       "target_discovered": "SSH keys scanned",

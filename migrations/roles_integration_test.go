@@ -160,9 +160,10 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.license": {"UPDATE": {"clock_jump", "state", "updated_at"}},
 	// Phase 3: only the columns the services write; identity columns (key material, fingerprints,
 	// target and credential references, the host key bytes) are never updated.
+	// 00017 adds capabilities (the startup sync, spec §8.1).
 	// Phase 5 adds credential_id (a vault's credential moves to its replacement; a trigger refuses it
 	// for any other kind of target) and poll_failures (it delays the next poll).
-	"public.targets": {"UPDATE": {"credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
+	"public.targets": {"UPDATE": {"capabilities", "credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
 		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "status", "updated_at", "version"}},
 	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
 	// Phase 6 adds retired_at (a rotation retires its old key; a key found live again is un-retired).
@@ -278,6 +279,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	require.NoError(t, err)
 	defer rows.Close()
 	columns := columnGrants(t, d, schemas)
+	apache := hasApacheType(t, d)
 	for rows.Next() {
 		var (
 			name, kind string
@@ -298,12 +300,28 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 		}
 		// A column-level privilege without the table-level one is a hidden extra grant
 		// (for example UPDATE on one audit_log column) unless it is listed exactly.
-		if !slices.Equal(want, privs) || !equalColumnGrants(explicitColumnGrants[name], columns[name]) {
+		wantColumns := explicitColumnGrants[name]
+		if name == "public.targets" && !apache {
+			// Below 00017 alice_app cannot update targets.capabilities. The guard describes the current schema, so a test that
+			// goes down further does not have to list it.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]),
+				func(c string) bool { return c == "capabilities" })}
+		}
+		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {
 			problems = append(problems, name)
 		}
 	}
 	require.NoError(t, rows.Err())
 	return problems
+}
+
+// hasApacheType: whether migration 00017 is applied (the targets.type check knows apache).
+func hasApacheType(t *testing.T, d *pgtest.DB) bool {
+	t.Helper()
+	var has bool
+	require.NoError(t, d.Owner.QueryRow(context.Background(),
+		"SELECT coalesce(bool_or(pg_get_constraintdef(oid) LIKE '%''apache''%'), false) FROM pg_constraint WHERE conname = 'targets_type_check'").Scan(&has))
+	return has
 }
 
 // columnGrants returns relation -> privilege -> sorted columns on which alice_app holds the

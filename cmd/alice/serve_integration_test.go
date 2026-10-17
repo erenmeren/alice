@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/assert"
@@ -51,7 +52,7 @@ func runServe(t *testing.T, cfg config.Config) (*lockedBuffer, func()) {
 	}
 }
 
-// An installation upgraded from Phase 3 starts: serve applies migrations 00006 to 00016 over the Phase 3
+// An installation upgraded from Phase 3 starts: serve applies migrations 00006 to 00017 over the Phase 3
 // schema and its data (the installation, the platform key, the audit chain), and the Phase 4
 // wiring needs no Nginx server to exist.
 func TestServeStartsOnAPhase3Database(t *testing.T) {
@@ -79,7 +80,7 @@ func TestServeStartsOnAPhase3Database(t *testing.T) {
 	logs, stop := runServe(t, cfg)
 	version, err = p.GetDBVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(16), version, "serve applied 00006 to 00016")
+	assert.Equal(t, int64(17), version, "serve applied 00006 to 00017")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM license"), "the same installation")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM credentials WHERE purpose = 'platform_ssh'"), "the same platform key")
 	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM targets"), "no Nginx server is needed")
@@ -325,4 +326,32 @@ func TestServeAuditsARecoveredCertificate(t *testing.T) {
 	assert.Regexp(t, `^[0-9a-f]{64}$`, got[0].fp)
 	code, out, errOut := i.run("", "selfcheck")
 	requireHealthy(t, code, out, errOut)
+}
+
+// Starting serve rewrites a live target's stored capabilities from the registered provider (spec §8.1).
+func TestServeSyncsCapabilitiesAtStartup(t *testing.T) {
+	i := newCLIInstall(t)
+	i.listening()
+	p, ok := i.services().registry.Get("nginx")
+	require.True(t, ok)
+	var want []string
+	for _, c := range p.Capabilities().Sorted() {
+		want = append(want, string(c))
+	}
+	require.Contains(t, want, "http01_challenge")
+
+	cred, target := uuid.New(), uuid.New()
+	_, err := i.d.Owner.Exec(i.ctx, `INSERT INTO credentials (id, purpose, kind, ciphertext, nonce, wrapped_dek, key_version, created_at)
+VALUES ($1, 'platform_ssh', 'ssh_private_key', '\x01', decode(repeat('00', 12), 'hex'), '\x02', 1, now())`, cred)
+	require.NoError(t, err)
+	_, err = i.d.Owner.Exec(i.ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, capabilities, created_at, updated_at)
+VALUES ($1, 'stale', 'nginx', '{"host":"10.0.0.1","port":22,"username":"alice-svc"}', $2, 'ok', '{test_connection}', now(), now())`, target, cred)
+	require.NoError(t, err)
+
+	stop := i.serve()
+	defer stop()
+	var got []string
+	require.NoError(t, i.d.Owner.QueryRow(i.ctx, "SELECT capabilities FROM targets WHERE id = $1", target).Scan(&got))
+	assert.Equal(t, want, got)
+	assert.Equal(t, 1, i.count("SELECT count(*) FROM audit_log WHERE action = 'target.capabilities_synced'"))
 }

@@ -301,6 +301,10 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	if err := checkWiring(svc.registry, runner, sched); err != nil {
 		return err
 	}
+	// Every live target's stored capabilities follow the registered provider (spec §8.1).
+	if _, err := svc.inventory.SyncCapabilities(ctx); err != nil {
+		return err
+	}
 	// Jobs whose worker died with the previous process are queued again before any request
 	// can list them (§8.8); Run repeats the pass before its workers start.
 	if _, err := runner.Recover(ctx); err != nil {

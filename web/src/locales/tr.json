@@ -544,6 +544,7 @@
       "target_created": "Sunucu veya Key Vault eklendi",
       "target_updated": "Sunucu veya Key Vault değiştirildi",
       "target_deleted": "Sunucu veya Key Vault kaldırıldı",
+      "target_capabilities_synced": "Sunucu özellikleri güncellendi",
       "target_add_denied_license": "Sunucu veya Key Vault eklenmedi: lisans sınırına ulaşıldı veya lisansın süresi doldu",
       "target_status_changed": "Sunucu veya Key Vault durumu değişti",
       "target_discovered": "SSH anahtarları tarandı",

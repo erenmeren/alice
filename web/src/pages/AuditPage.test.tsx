@@ -77,6 +77,7 @@ const PHASE3_ACTIONS = [
   'target.created',
   'target.updated',
   'target.deleted',
+  'target.capabilities_synced',
   'target.add.denied_license',
   'target.status_changed',
   'target.discovered',
