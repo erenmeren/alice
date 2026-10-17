@@ -342,7 +342,7 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	if req.OperationID != uuid.Nil {
 		d.out.Backup.Dir = backupDir(req.OperationID)
 	}
-	if err := s.open(); err != nil {
+	if err := s.Live(); err != nil {
 		return d.refuse(asProviderError(err))
 	}
 	if !req.Location.Supported {
@@ -372,7 +372,7 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 	if err := ctx.Err(); err != nil {
 		return d.refuse(providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": helperproto.SubNginxDeploy}))
 	}
-	res, runErr := s.conn.Run(ctx, cmd)
+	res, runErr := s.Conn().Run(ctx, cmd)
 	cmd.WipeInput()
 	c := decodeCall[helperproto.NginxDeployResponse](res, runErr, helperproto.SubNginxDeploy, deployRefusals)
 	switch {
@@ -724,7 +724,7 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, log providers.StepL
 	if err := ctx.Err(); err != nil {
 		return restoreResult{refusal: providers.NewError("ssh.timeout", true, err, map[string]string{"subcommand": sub})}, nil
 	}
-	res, runErr := s.conn.Run(ctx, cmd)
+	res, runErr := s.Conn().Run(ctx, cmd)
 	c := decodeCall[helperproto.NginxRestoreResponse](res, runErr, sub, restoreRefusals)
 	switch {
 	case c.uncertain != nil:
@@ -786,7 +786,7 @@ func (s *session) RollbackDeployment(ctx context.Context, req providers.Rollback
 	refuse := func(e *providers.Error) (providers.RollbackOutcome, error) {
 		return providers.RollbackOutcome{Result: providers.DeployNoChange, Reason: e.Code, Params: maps.Clone(e.Params)}, e
 	}
-	if err := s.open(); err != nil {
+	if err := s.Live(); err != nil {
 		return refuse(asProviderError(err))
 	}
 	r, err := s.restore(ctx, req.OperationID, log)
@@ -827,7 +827,7 @@ func (s *session) RollbackDeployment(ctx context.Context, req providers.Rollback
 // the backup directory then); every other phase's BackupDir is the operation's directory.
 func (s *session) DeploymentStatus(ctx context.Context, op uuid.UUID) (providers.DeploymentState, error) {
 	const sub = helperproto.SubNginxStatus
-	if err := s.open(); err != nil {
+	if err := s.Live(); err != nil {
 		return providers.DeploymentState{}, err
 	}
 	cmd, err := linuxssh.CmdNginxStatus(op)
@@ -845,7 +845,7 @@ func (s *session) DeploymentStatus(ctx context.Context, op uuid.UUID) (providers
 // nothing. A helper older than protocol 5 never gets here: Open refuses it (ssh.helper_outdated).
 func (s *session) FenceDeployment(ctx context.Context, op uuid.UUID) (providers.DeploymentState, error) {
 	const sub = helperproto.SubNginxFence
-	if err := s.open(); err != nil {
+	if err := s.Live(); err != nil {
 		return providers.DeploymentState{}, err
 	}
 	cmd, err := linuxssh.CmdNginxFence(op)
@@ -861,7 +861,7 @@ func (s *session) FenceDeployment(ctx context.Context, op uuid.UUID) (providers.
 
 // stateCall runs nginx-status or nginx-fence and checks the answer (see DeploymentStatus).
 func (s *session) stateCall(ctx context.Context, sub string, cmd linuxssh.HelperCommand, op uuid.UUID) (providers.DeploymentState, error) {
-	res, err := s.conn.Run(ctx, cmd)
+	res, err := s.Conn().Run(ctx, cmd)
 	if err != nil {
 		return providers.DeploymentState{}, err
 	}

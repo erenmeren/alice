@@ -26,6 +26,17 @@ const (
 	KindAzureKV  Kind = "azurekv"
 )
 
+// The reasons every web-server provider shares (internal/providers/webserver). The error code is
+// the provider kind, a dot and the reason (Kind.Reason): "nginx.not_found".
+const (
+	ReasonNotFound       = "not_found"       // the web server is not installed
+	ReasonProfileMissing = "profile_missing" // sudo refused a subcommand of the provider's sudoers profile
+	ReasonConfigInvalid  = "config_invalid"  // the web server's configuration test fails
+)
+
+// Reason is the error code of reason r for this provider kind: "<kind>.<r>".
+func (k Kind) Reason(r string) string { return string(k) + "." + r }
+
 // KindForTargetType maps targets.type to the provider kind (spec §6.4).
 func KindForTargetType(t string) (Kind, bool) {
 	switch t {

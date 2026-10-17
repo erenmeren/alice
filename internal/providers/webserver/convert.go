@@ -1,7 +1,6 @@
-package nginx
+package webserver
 
 import (
-	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"path"
@@ -14,7 +13,6 @@ import (
 
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
-	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
@@ -57,54 +55,7 @@ var (
 	fileProblems = []string{providers.CertProblemMissing, providers.CertProblemNotRootControlled, providers.CertProblemNotRegular,
 		providers.CertProblemHardLinked, providers.CertProblemTooLarge, providers.CertProblemNotACertificate, providers.CertProblemUnreadable,
 		providers.CertProblemBadName, providers.CertProblemSpecialFS, providers.CertProblemNameNotAllowed, providers.CertProblemLeafUnreadable}
-	usualFolders = []string{"/etc/ssl/", "/etc/nginx/", "/etc/pki/", "/etc/letsencrypt/"}
 )
-
-// Discover is linuxssh's discovery plus, when asked, the certificates of nginx-dump (spec §12.4).
-// Each half runs only when requested: a certificates-only request runs no SSH-key discovery, and
-// an SSH-keys-only request runs no Nginx command. A certificates-only result carries no SSH facts:
-// HostKeys, SSHD, Accounts, AccountsComplete (false), UID0Users, ReadFiles and the SSH warnings are
-// empty or unknown, not "none found". A caller must not overwrite stored host-key, sshd or account
-// facts, or mark anything missing, from such a result. Nginx missing fails the whole discovery (F-20:
-// no partial data); an invalid, untrusted or unsupported configuration is a result that says so.
-func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (providers.DiscoveryResult, error) {
-	if err := s.open(); err != nil {
-		return providers.DiscoveryResult{}, err
-	}
-	if !req.Certificates {
-		return s.Session.Discover(ctx, providers.DiscoverRequest{SSHKeys: req.SSHKeys})
-	}
-	// Nginx first: when it is missing nothing else is worth reading.
-	out, err := s.conn.Run(ctx, linuxssh.CmdNginxDump())
-	if err != nil {
-		return providers.DiscoveryResult{}, err
-	}
-	d, err := linuxssh.DecodeHelper[helperproto.ServerDumpResponse](out, helperproto.SubNginxDump)
-	if err != nil {
-		return providers.DiscoveryResult{}, mapHelper(err, helperproto.SubNginxDump)
-	}
-	var res providers.DiscoveryResult
-	if req.SSHKeys {
-		if res, err = s.Session.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err != nil {
-			return providers.DiscoveryResult{}, err
-		}
-	}
-	facts := nginxFacts(d)
-	res.WebServer = &facts
-	if !d.ConfigValid {
-		res.Warnings = append(res.Warnings, warning(providers.WarnWebServerConfigInvalid))
-		warns, cut := dumpWarnings(d, nil)
-		res.Warnings = append(res.Warnings, warns...)
-		if cut {
-			res.Warnings = append(res.Warnings, warning(providers.WarnListTruncated))
-		}
-		return res, nil
-	}
-	certs, warns := convert(d)
-	res.Certificates = certs
-	res.Warnings = append(res.Warnings, warns...)
-	return res, nil
-}
 
 // clean makes remote text safe to keep: invalid UTF-8, control and format characters go, the
 // result is trimmed and at most limit runes.
@@ -161,10 +112,10 @@ func knownOrEmpty(v string, set []string) string {
 	return ""
 }
 
-// nginxFacts is what the dump says about Nginx itself. The error fields describe an invalid
-// configuration only; an unknown class or reason is not passed on.
-func nginxFacts(d helperproto.ServerDumpResponse) providers.WebServerFacts {
-	f := providers.WebServerFacts{Software: "nginx", Found: true, Version: clean(d.Version, maxVersionLength), ConfPath: cleanPath(d.ConfPath), ConfigValid: d.ConfigValid}
+// webServerFacts is what the dump says about the web server itself (software is Spec.Software).
+// The error fields describe an invalid configuration only; an unknown class or reason is not passed on.
+func webServerFacts(software string, d helperproto.ServerDumpResponse) providers.WebServerFacts {
+	f := providers.WebServerFacts{Software: software, Found: true, Version: clean(d.Version, maxVersionLength), ConfPath: cleanPath(d.ConfPath), ConfigValid: d.ConfigValid}
 	if !d.ConfigValid {
 		f.ConfigError = knownOrEmpty(d.ConfigError, configErrors)
 		f.ConfigErrorReason = knownOrEmpty(d.ConfigErrorReason, configReasons)
@@ -239,8 +190,9 @@ func sameServer(a, b providers.CertServer) bool {
 
 // convert turns a valid dump into locations: one per certificate path (the raw value of an
 // unsupported pair when it has none), in the order the dump names them, with the server blocks
-// that use it. The warnings are the dump's, each once.
-func convert(d helperproto.ServerDumpResponse) ([]providers.DiscoveredCertificate, []providers.Warning) {
+// that use it. The warnings are the dump's, each once. A resolved certificate outside folders (the
+// web server's usual certificate folders) is a custom location.
+func convert(d helperproto.ServerDumpResponse, folders []string) ([]providers.DiscoveredCertificate, []providers.Warning) {
 	files := map[string]helperproto.DumpFile{}
 	for _, f := range d.Files {
 		// Keyed by the raw path, and only a valid one: a spelling that cleaning would turn into a
@@ -304,7 +256,7 @@ func convert(d helperproto.ServerDumpResponse) ([]providers.DiscoveredCertificat
 	}
 	out := make([]providers.DiscoveredCertificate, 0, len(order))
 	for _, b := range order {
-		out = append(out, finish(b, files))
+		out = append(out, finish(b, files, folders))
 	}
 	warns, cutWritable := dumpWarnings(d, out)
 	truncated = truncated || cutWritable
@@ -319,7 +271,7 @@ func convert(d helperproto.ServerDumpResponse) ([]providers.DiscoveredCertificat
 }
 
 // finish adds the described files to a location and decides whether it is supported.
-func finish(b *build, files map[string]helperproto.DumpFile) providers.DiscoveredCertificate {
+func finish(b *build, files map[string]helperproto.DumpFile, folders []string) providers.DiscoveredCertificate {
 	loc := b.loc
 	loc.KeyPath = b.key
 	dc := providers.DiscoveredCertificate{}
@@ -349,8 +301,8 @@ func finish(b *build, files map[string]helperproto.DumpFile) providers.Discovere
 			loc.KeyOwner = clean(kf.Owner, maxAccountLength)
 			loc.KeyGroup = clean(kf.Group, maxAccountLength)
 		}
-		loc.CustomLocation = customLocation(loc.ResolvedCertPath)
-		loc.Warnings = locationWarnings(descriptionOf(cf, haveCert), descriptionOf(kf, haveKey))
+		loc.CustomLocation = customLocation(loc.ResolvedCertPath, folders)
+		loc.Warnings = locationWarnings(descriptionOf(cf, haveCert), descriptionOf(kf, haveKey), folders)
 		if dropped {
 			loc.Warnings = append(loc.Warnings, providers.WarnCertificateBlockDropped)
 		}
@@ -462,12 +414,12 @@ func cleanMode(m string) string {
 
 // customLocation: a resolved path outside the usual certificate folders (an empty one is unknown,
 // not custom).
-func customLocation(resolved string) bool {
+func customLocation(resolved string, folders []string) bool {
 	if resolved == "" {
 		return false
 	}
 	c := path.Clean(resolved)
-	for _, dir := range usualFolders {
+	for _, dir := range folders {
 		if strings.HasPrefix(c, dir) {
 			return false
 		}
@@ -480,7 +432,7 @@ func customLocation(resolved string) bool {
 // than root, a group other than root's that can read it, or others that can read it), symlinked,
 // custom_location. The key rules apply to a key file the helper described and found without a
 // problem. nil when there are none.
-func locationWarnings(cf, kf helperproto.DumpFile) []string {
+func locationWarnings(cf, kf helperproto.DumpFile, folders []string) []string {
 	var w []string
 	mode, err := strconv.ParseUint(kf.Mode, 8, 32)
 	if kf.Mode != "" || kf.Exists {
@@ -498,7 +450,7 @@ func locationWarnings(cf, kf helperproto.DumpFile) []string {
 	if cf.Symlinked {
 		w = append(w, providers.WarnSymlinked)
 	}
-	if customLocation(cf.Resolved) {
+	if customLocation(cf.Resolved, folders) {
 		w = append(w, providers.WarnCustomLocation)
 	}
 	return w

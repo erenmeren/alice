@@ -1,22 +1,31 @@
-// Package nginx is the nginx provider (spec §6.6, §12): a linuxssh session plus certificate
-// discovery, deployment, rollback and verification through alice-helper's nginx subcommands.
+// Package nginx is the nginx provider (spec §6.6, §12): the shared web-server layer
+// (internal/providers/webserver: session, test, certificate discovery) plus deployment, rollback
+// and verification through alice-helper's nginx subcommands.
 package nginx
 
 import (
 	"context"
 	"errors"
 	"log/slog"
-	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
-
 	"alice/internal/platform/clock"
-	"alice/internal/platform/validate"
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/providers/webserver"
 )
+
+// spec is Nginx to the shared web-server layer.
+var spec = webserver.Spec{
+	Kind:           providers.KindNginx,
+	DisplayNameKey: "provider.nginx.name",
+	Dump:           linuxssh.CmdNginxDump,
+	Test:           linuxssh.CmdNginxTest,
+	Subcommands: []string{helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore,
+		helperproto.SubNginxStatus, helperproto.SubNginxFence},
+	UsualFolders: []string{"/etc/ssl/", "/etc/nginx/", "/etc/pki/", "/etc/letsencrypt/"},
+}
 
 // Options are the provider's dependencies.
 type Options struct {
@@ -26,9 +35,10 @@ type Options struct {
 	Attempts  int           // verification attempts per endpoint; 0 = 5
 }
 
-// Provider is the nginx provider.
+// Provider is the nginx provider: the shared web-server Base (kind, schemas, validation, the
+// connection pool) plus deployment and verification.
 type Provider struct {
-	ssh       *linuxssh.Provider
+	webserver.Base
 	prober    Prober
 	retryWait time.Duration
 	attempts  int
@@ -45,12 +55,14 @@ var (
 	_ providers.Session         = (*session)(nil)
 )
 
-// New returns the provider. It advertises what it implements: the linuxssh capabilities, certificate
-// discovery, deployment (DeployCertificate, RollbackDeployment, DeploymentStatus) and verification.
+// New returns the provider. It advertises what it implements: the shared web-server capabilities
+// (the linuxssh ones and certificate discovery), deployment (DeployCertificate, RollbackDeployment,
+// DeploymentStatus), verification and the ACME HTTP-01 token publisher. It panics on a nil
+// Options.SSH (webserver.NewBase).
 func New(o Options) *Provider {
-	p := &Provider{ssh: o.SSH, prober: o.Prober, retryWait: o.RetryWait, attempts: o.Attempts,
-		caps: providers.NewCapabilitySet(providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
-			providers.CapDiscoverCerts, providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapKeyLogin, providers.CapHTTP01)}
+	p := &Provider{Base: webserver.NewBase(o.SSH, spec), prober: o.Prober, retryWait: o.RetryWait, attempts: o.Attempts,
+		caps: providers.NewCapabilitySet(append(webserver.BaseCapabilities(),
+			providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapHTTP01)...)}
 	if p.prober == nil {
 		p.prober = TLSProber{}
 	}
@@ -64,42 +76,17 @@ func New(o Options) *Provider {
 	return p
 }
 
-// Kind implements providers.Provider.
-func (p *Provider) Kind() providers.Kind { return providers.KindNginx }
-
-// DisplayNameKey implements providers.Provider.
-func (p *Provider) DisplayNameKey() string { return "provider.nginx.name" }
-
 // Capabilities implements providers.Provider.
 func (p *Provider) Capabilities() providers.CapabilitySet { return p.caps.Clone() }
 
-// ConfigSchema implements providers.Provider: an Nginx server is an SSH server.
-func (p *Provider) ConfigSchema() providers.ConfigSchema { return p.ssh.ConfigSchema() }
-
-// CredentialSchema implements providers.Provider.
-func (p *Provider) CredentialSchema() providers.CredentialSchema { return p.ssh.CredentialSchema() }
-
-// ValidateConfig implements providers.Provider.
-func (p *Provider) ValidateConfig(cfg providers.TargetConfig) []validate.FieldError {
-	return p.ssh.ValidateConfig(cfg)
-}
-
-// ForgetTarget implements providers.ConnectionCache: the pool belongs to the linuxssh provider.
-func (p *Provider) ForgetTarget(target uuid.UUID) { p.ssh.ForgetTarget(target) }
-
-// Open opens a linuxssh session (same pool, pinned host key and helper protocol check) and keeps
-// its connection for the Nginx subcommands, the target's host for Alice's own TLS probes and the
-// environment's clock (the real one when none is given) for the waits between verification
-// attempts, and the environment's logger (none: discarded).
+// Open opens the shared web-server session (a linuxssh session: same pool, pinned host key and
+// helper protocol check) and keeps the target's host for Alice's own TLS probes, the environment's
+// clock (the real one when none is given) for the waits between verification attempts, and the
+// environment's logger (none: discarded).
 func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred providers.CredentialSource, env providers.Env) (providers.Session, error) {
-	s, err := p.ssh.Open(ctx, t, cred, env)
+	s, err := p.OpenSession(ctx, t, cred, env)
 	if err != nil {
 		return nil, err
-	}
-	conn, ok := linuxssh.ConnOf(s)
-	if !ok {
-		_ = s.Close()
-		return nil, providers.NewError("ssh.unreachable", true, errors.New("nginx: the linuxssh session has no connection"), nil)
 	}
 	cfg, _ := linuxssh.ParseConfig(t.Config) // valid: the linuxssh Open above refuses anything else
 	clk := env.Clock
@@ -110,117 +97,51 @@ func (p *Provider) Open(ctx context.Context, t providers.TargetRef, cred provide
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &session{Session: s, conn: conn, p: p, host: cfg.Host, clock: clk, log: log}, nil
+	return &session{Session: s, p: p, host: cfg.Host, clock: clk, log: log}, nil
 }
 
-// session is a linuxssh session with the certificate methods. It never keeps a helper command:
-// commands are built where they are run (a deploy command carries the key on its stdin).
+// session is the shared web-server session (test, discovery, Conn, Live, Close) with the
+// deployment and verification methods. It never keeps a helper command: commands are built where
+// they are run (a deploy command carries the key on its stdin).
 type session struct {
-	providers.Session
-	conn   *linuxssh.Conn
-	p      *Provider
-	host   string // the target's address, for Alice's own TLS probes
-	clock  clock.Clock
-	log    *slog.Logger
-	closed atomic.Bool
-}
-
-var errSessionClosed = errors.New("nginx: session closed")
-
-// Close closes the linuxssh session, which gives its connection back to the pool.
-func (s *session) Close() error {
-	s.closed.Store(true)
-	return s.Session.Close()
-}
-
-// open fails once the session is closed: its connection may already serve another session.
-func (s *session) open() error {
-	if s.closed.Load() {
-		return providers.NewError("ssh.unreachable", false, errSessionClosed, nil)
-	}
-	return nil
+	*webserver.Session
+	p     *Provider
+	host  string // the target's address, for Alice's own TLS probes
+	clock clock.Clock
+	log   *slog.Logger
 }
 
 // PublishHTTP01Token writes an HTTP-01 token file through the helper (linuxssh.Conn.PublishHTTP01Token: protocol 7,
 // the fixed challenge directory; an older helper or sudoers file is ssh.helper_outdated_http01, ALC-SSH-0013). With
 // RemoveHTTP01Token the session is the ACME HTTP-01 solver's publisher (http01.Publisher).
 func (s *session) PublishHTTP01Token(ctx context.Context, token string, keyAuthorization []byte) error {
-	if err := s.open(); err != nil {
+	if err := s.Live(); err != nil {
 		return err
 	}
-	return s.conn.PublishHTTP01Token(ctx, token, keyAuthorization)
+	return s.Conn().PublishHTTP01Token(ctx, token, keyAuthorization)
 }
 
 // RemoveHTTP01Token removes the token file again (removed is false when there was none).
 func (s *session) RemoveHTTP01Token(ctx context.Context, token string) (bool, error) {
-	if err := s.open(); err != nil {
+	if err := s.Live(); err != nil {
 		return false, err
 	}
-	return s.conn.RemoveHTTP01Token(ctx, token)
-}
-
-// TestConnection is linuxssh's test plus nginx-test, which proves the nginx sudoers profile (F-14).
-// A missing Nginx or an invalid configuration is a warning, not a failure.
-func (s *session) TestConnection(ctx context.Context) (providers.ConnectionReport, error) {
-	if err := s.open(); err != nil {
-		return providers.ConnectionReport{}, err
-	}
-	rep, err := s.Session.TestConnection(ctx)
-	if err != nil {
-		return rep, err
-	}
-	res, err := s.conn.Run(ctx, linuxssh.CmdNginxTest())
-	if err != nil {
-		return rep, err
-	}
-	t, err := linuxssh.DecodeHelper[helperproto.NginxTestResponse](res, helperproto.SubNginxTest)
-	switch {
-	case isHelperCode(err, helperproto.CodeNginxNotFound):
-		rep.WebServer = &providers.WebServerFacts{Software: "nginx"}
-		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerNotFound))
-		return rep, nil
-	case err != nil:
-		return rep, mapHelper(err, helperproto.SubNginxTest)
-	}
-	rep.WebServer = &providers.WebServerFacts{Software: "nginx", Found: true, ConfigValid: t.Valid}
-	if !t.Valid {
-		rep.WebServer.ConfigError = knownOrEmpty(t.Error, configErrors)
-		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerConfigInvalid))
-	}
-	return rep, nil
-}
-
-func warning(code string) providers.Warning {
-	return providers.Warning{Code: code, Params: map[string]string{}}
-}
-
-// isHelperCode reports whether err is a helper answer with the given code (the reason is
-// ssh.helper_refused, or ssh.file_changed for HASH_MISMATCH).
-func isHelperCode(err error, code string) bool {
-	var pe *providers.Error
-	return errors.As(err, &pe) && pe.Params["helper_code"] == code
+	return s.Conn().RemoveHTTP01Token(ctx, token)
 }
 
 // mapHelper maps the reasons of linuxssh's DecodeHelper for the Nginx subcommands to nginx.*
-// reasons; every other error is returned unchanged. sub is the helper subcommand.
+// reasons: first the shared web-server reasons (spec.SharedReason: nginx.profile_missing,
+// nginx.not_found, nginx.config_invalid), then the deployment's own; every other error is returned
+// unchanged. sub is the helper subcommand.
 func mapHelper(err error, sub string) error {
+	if pe := spec.SharedReason(err, sub); pe != nil {
+		return pe
+	}
 	var pe *providers.Error
-	if !errors.As(err, &pe) {
+	if !errors.As(err, &pe) || (pe.Code != "ssh.helper_refused" && pe.Code != "ssh.file_changed") {
 		return err
 	}
-	code := pe.Params["helper_code"]
-	switch {
-	case pe.Code == "ssh.helper_missing" && pe.Params["exit_code"] == "1" && isNginxSub(sub):
-		// sudo refused the command: the nginx profile is not installed.
-		return providers.NewError("nginx.profile_missing", false, err, map[string]string{"subcommand": sub, "profile": "nginx"})
-	case pe.Code != "ssh.helper_refused" && pe.Code != "ssh.file_changed":
-		return err
-	}
-	switch code {
-	case helperproto.CodeNginxNotFound:
-		return providers.NewError("nginx.not_found", false, err, nil)
-	case helperproto.CodeConfigInvalid:
-		return providers.NewError("nginx.config_invalid", false, err, nil)
+	switch pe.Params["helper_code"] {
 	case helperproto.CodeConfigChanged:
 		return providers.NewError("nginx.config_changed", false, err, nil)
 	case helperproto.CodeHashMismatch:
@@ -258,13 +179,4 @@ func mapHelper(err error, sub string) error {
 		return providers.NewError("certificate.invalid", false, err, nil)
 	}
 	return err
-}
-
-func isNginxSub(sub string) bool {
-	switch sub {
-	case helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore, helperproto.SubNginxStatus,
-		helperproto.SubNginxFence:
-		return true
-	}
-	return false
 }

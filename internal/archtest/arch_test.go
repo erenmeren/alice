@@ -33,7 +33,7 @@ var rules = map[string][]string{
 	"alice/internal/auth/...":      {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/..."},
 	"alice/internal/certs/...":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":     {platform, "alice/internal/secrets/..."},
-	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/..."},
+	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver"}, // a web-server provider embeds the shared layer
 	// The test world of the linuxssh provider runs the real nginx configuration parser, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
@@ -349,6 +349,8 @@ func TestAllowed(t *testing.T) {
 		ok             bool
 	}{
 		{"provider sibling denied", nginx, azurekv, false},
+		{"nginx to the shared web-server layer allowed", nginx, "alice/internal/providers/webserver", true},
+		{"the jobs to the shared web-server layer denied", "alice/internal/jobs/targetjobs", "alice/internal/providers/webserver", false},
 		{"azurekv to azureid allowed", azurekv, "alice/internal/platform/azureid", true},
 		{"azurekv to platform/netaddr allowed", azurekv, "alice/internal/platform/netaddr", true},
 		{"azurekv to the interface package allowed", azurekv, "alice/internal/providers", true},

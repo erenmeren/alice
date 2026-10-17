@@ -667,7 +667,7 @@ func TestFakeRollbackVerifyAndStatusDefaultsAndScripts(t *testing.T) {
 
 func TestFakeDiscoverServesCertificates(t *testing.T) {
 	ctx := context.Background()
-	p, s := openDeployFake(t, providers.CapDiscoverCerts)
+	p, s := openDeployFake(t, providers.CapDiscoverCerts, providers.CapTestConnection)
 	servers := []providers.CertServer{{Names: []string{"a"}}}
 	p.Configure(func(c *fake.Config) {
 		c.Discovery.Certificates = []providers.DiscoveredCertificate{{Location: providers.CertLocation{Servers: servers}}}
@@ -681,7 +681,15 @@ func TestFakeDiscoverServesCertificates(t *testing.T) {
 	again, _ := s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
 	assert.Equal(t, "a", again.Certificates[0].Location.Servers[0].Names[0], "callers cannot change the scripted data")
 	assert.True(t, again.WebServer.Found)
+	assert.Equal(t, "nginx", again.WebServer.Software, "facts without software name the provider kind")
 	p.Configure(func(c *fake.Config) { c.Report.WebServer = &providers.WebServerFacts{Found: true} })
+	rep, err := s.TestConnection(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, &providers.WebServerFacts{Software: "nginx", Found: true}, rep.WebServer)
+	p.Configure(func(c *fake.Config) { c.Report.WebServer = &providers.WebServerFacts{Software: "other", Found: true} })
+	rep, err = s.TestConnection(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "other", rep.WebServer.Software, "a scripted software is kept")
 }
 
 func TestFakeCallsOfDeployMethodsAreCopies(t *testing.T) {

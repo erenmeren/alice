@@ -15,6 +15,10 @@ import (
 // maxEndpoints bounds the (port, name) pairs one verification probes.
 const maxEndpoints = 10
 
+// maxChainCerts bounds the chain length a server probe may report (the dump conversion's bound,
+// internal/providers/webserver).
+const maxChainCerts = 20
+
 // Verification reasons (VerifyResult.Reason, and the Reason of a deployment whose verification
 // failed). reasonVerifyChain is an addition to the plan's contract (spec §12.8 item 5): the new leaf
 // is served, but with another number of certificates than the deployed chain has.
@@ -202,7 +206,7 @@ type served struct {
 // the SSH connection during a server-side probe; a website that cannot be reached is a result, not
 // an error.
 func (s *session) VerifyDeployment(ctx context.Context, req providers.VerifyRequest) (providers.VerifyResult, error) {
-	if err := s.open(); err != nil {
+	if err := s.Live(); err != nil {
 		return providers.VerifyResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -329,7 +333,7 @@ func (s *session) probeOnce(ctx context.Context, ep Endpoint, keyType string, lo
 	if err != nil {
 		return served{}, false, nil // not expressible as a server-side probe (a port out of range): not reached
 	}
-	out, err := s.conn.Run(ctx, cmd)
+	out, err := s.Conn().Run(ctx, cmd)
 	if err != nil {
 		return served{}, false, err
 	}

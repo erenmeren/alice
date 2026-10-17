@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import en from '../locales/en.json';
 import tr from '../locales/tr.json';
@@ -159,9 +159,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   // The SSH helper's warnings and the ones Alice makes from its unlisted accounts (protocol 6).
   const helperWarnings = goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
-  // The web-server providers' own warning(...) literals (internal/providers/webserver exists from Phase A Task 5 on).
-  const nginxWarnings = ['internal/providers/nginx', 'internal/providers/webserver']
-    .filter((dir) => existsSync(resolve(process.cwd(), '..', dir)))
+  // The web-server providers' own warning(...) literals (the shared layer and the providers built on it).
+  const webServerWarnings = ['internal/providers/nginx', 'internal/providers/webserver']
     .flatMap((dir) => goFiles(dir))
     .flatMap((f) => callArgsIn(readRepoFile(f), 'warning'));
   const openapiTargetWarnings = [...topLevelTargetWarningText().matchAll(/\b(web_server_[a-z_]+|[a-z]+_[a-z_]+)\b/g)].map((m) => m[1]);
@@ -209,7 +208,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   it('has no location warning, and no server-level Nginx warning, that no source reports', () => {
     const sources = new Set([...knownValues('CertificateLocation', 'warnings'), ...inventoryWarnings, ...typesWarnings]);
     for (const w of Object.keys(LOCATION_WARNINGS)) expect(sources.has(w), `location warning ${w} has no source`).toBe(true);
-    const server = new Set([...typesWarnings, ...nginxWarnings, ...openapiTargetWarnings]);
+    const server = new Set([...typesWarnings, ...webServerWarnings, ...openapiTargetWarnings]);
     const webServerOnly = ['web_server_not_found', 'web_server_profile_missing', 'web_server_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
     for (const w of webServerOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
     // every Nginx entry of the table is one of those (the rest are the SSH warnings of Phase 3)
@@ -251,7 +250,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   });
 
   it('knows every server-level warning of the Nginx provider, the scan job and the specification', () => {
-    for (const w of [...typesWarnings, ...nginxWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
+    for (const w of [...typesWarnings, ...webServerWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
     expect(openapiTargetWarnings).toEqual(expect.arrayContaining(['web_server_profile_missing', 'stream_tls', 'config_file_writable']));
   });
 

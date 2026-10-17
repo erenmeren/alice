@@ -76,18 +76,6 @@ func sources(t *testing.T) (helper, conf map[string]string) {
 	return helper, conf
 }
 
-// The vocabularies this package maps are copies of the helper's and the parser's: a value added
-// there without a mapping here must fail a test, not become "unknown" silently.
-func TestMappedVocabulariesEqualTheirSources(t *testing.T) {
-	helper, conf := sources(t)
-	assert.Equal(t, withPrefix(conf, "Reason"), sorted(pairReasons), "nginxconf.Reason* -> pairReasons")
-	assert.Equal(t, withPrefix(helper, "ConfigErr"), sorted(configErrors), "helperproto.ConfigErr* -> configErrors")
-	assert.Equal(t, withPrefix(helper, "ConfigReason"), sorted(configReasons), "helperproto.ConfigReason* -> configReasons")
-	assert.Equal(t, withPrefix(helper, "File"), sorted(fileProblems), "helperproto.File* -> fileProblems")
-	assert.NotContains(t, fileProblems, providers.CertProblemUnknown, "unknown is what an unmapped problem becomes")
-	assert.NotContains(t, pairReasons, providers.UnsupportedUnknown, "unknown is what an unmapped reason becomes, not a helper value")
-}
-
 // Every reason of the parser is carried through the real emulator and parser, with the raw text
 // that makes the parser arrive at it; a reason without raw text here fails.
 func TestEveryParserReasonIsCoveredByTheDiscoverTest(t *testing.T) {

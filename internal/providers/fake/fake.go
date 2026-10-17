@@ -271,6 +271,14 @@ func cloneKV(k *providers.KVInventory) *providers.KVInventory {
 // Kind implements providers.Provider.
 func (p *Provider) Kind() providers.Kind { return p.kind }
 
+// software fills in scripted web-server facts without a Software the way a real web-server
+// provider reports it: the provider kind (webserver.Spec.Software). f is the caller's copy.
+func (p *Provider) software(f *providers.WebServerFacts) {
+	if f != nil && f.Software == "" {
+		f.Software = string(p.kind)
+	}
+}
+
 // DisplayNameKey implements providers.Provider.
 func (p *Provider) DisplayNameKey() string { return "provider.fake.name" }
 
@@ -381,6 +389,7 @@ func (s *session) TestConnection(context.Context) (providers.ConnectionReport, e
 	if rep.HostKey.Fingerprint == "" {
 		rep.HostKey = cfg.PresentedKey
 	}
+	s.p.software(rep.WebServer)
 	return rep, cfg.TestErr
 }
 
@@ -416,6 +425,7 @@ func (s *session) Discover(_ context.Context, req providers.DiscoverRequest) (pr
 	if !req.Certificates {
 		res.Certificates, res.WebServer = nil, nil
 	}
+	s.p.software(res.WebServer)
 	return res, cfg.DiscoverErr
 }
 

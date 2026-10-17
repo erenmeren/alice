@@ -67,7 +67,7 @@ func TestDiscoverSSHPartIsLinuxSSHs(t *testing.T) {
 	e.emu.SetAccounts([]string{"root", "deploy", "alice-svc"}, true)
 	got := discover(t, e, providers.DiscoverRequest{SSHKeys: true, Certificates: true})
 
-	ls, err := e.prov.ssh.Open(context.Background(), e.ref, e.cred, providers.Env{})
+	ls, err := e.ssh.Open(context.Background(), e.ref, e.cred, providers.Env{})
 	require.NoError(t, err)
 	defer func() { _ = ls.Close() }()
 	want, err := ls.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
@@ -327,7 +327,8 @@ func TestDiscoverCertificateFileProblems(t *testing.T) {
 }
 
 // REM-4 (RA-02): a certificate file whose first block the helper cannot read is leaf_unreadable,
-// with no certificate: the intermediate after it never becomes the website's certificate.
+// with no certificate: the intermediate after it never becomes the website's certificate. (The
+// dump-only case is webserver's TestConvertLeafUnreadableHasNoCertificate.)
 func TestDiscoverLeafUnreadableHasNoCertificate(t *testing.T) {
 	check := func(t *testing.T, c providers.DiscoveredCertificate) {
 		t.Helper()
@@ -338,15 +339,6 @@ func TestDiscoverLeafUnreadableHasNoCertificate(t *testing.T) {
 		assert.Empty(t, c.PEMChain)
 		assert.Empty(t, c.FileSHA256)
 	}
-	t.Run("a dump file with the problem", func(t *testing.T) {
-		u := newUnitCerts(t)
-		const c, k = "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
-		cf := certFile(c, u.chain) // a helper that names the problem and still sends blocks: Alice uses none
-		cf.Problem = helperproto.FileLeafUnreadable
-		got, _ := convert(validDump([]helperproto.DumpServer{server([]string{"a"}, 443, pair(c, k))}, cf, keyFile(k)))
-		require.Len(t, got, 1)
-		check(t, got[0])
-	})
 	t.Run("an unreadable first block (emulated helper)", func(t *testing.T) {
 		e := newEnv(t)
 		forge(e)

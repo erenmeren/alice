@@ -28,6 +28,8 @@ import (
 
 var testTarget = uuid.MustParse("0190f5a0-0000-7000-8000-0000000000b1")
 
+var unitNow = time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+
 const (
 	wwwCert = "/etc/nginx/ssl/www.crt"
 	wwwKey  = "/etc/nginx/ssl/www.key"
@@ -156,6 +158,7 @@ type env struct {
 	emu    *linuxsshtest.Emulator
 	cred   *fakeCred
 	hk     *memHostKeys
+	ssh    *linuxssh.Provider // the linuxssh provider the nginx provider is built on
 	prov   *Provider
 	ref    providers.TargetRef
 	ca     *pki.CA
@@ -208,7 +211,7 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 		leaf.FullchainPEM, leaf.KeyPEM)
 	prober := &emuProber{emu: emu}
 	return &env{
-		srv: srv, emu: emu, cred: cred, hk: hk, ca: ca, leaf: leaf, now: now, prober: prober, op: uuid.New(),
+		srv: srv, emu: emu, cred: cred, hk: hk, ssh: lp, ca: ca, leaf: leaf, now: now, prober: prober, op: uuid.New(),
 		prov: func() *Provider {
 			p := New(Options{SSH: lp, Prober: prober, RetryWait: time.Millisecond})
 			p.restoreWait = time.Millisecond

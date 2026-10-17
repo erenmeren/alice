@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/providers"
+	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/providertest"
 )
@@ -21,9 +22,9 @@ func TestNginxProviderDescribesItself(t *testing.T) {
 	assert.Equal(t, "provider.nginx.name", e.prov.DisplayNameKey())
 	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDeployCertificate, providers.CapDiscoverCerts, providers.CapDiscoverSSHKeys, providers.CapHTTP01, providers.CapKeyLogin,
 		providers.CapTestConnection, providers.CapVerifyDeployment}, e.prov.Capabilities().Sorted())
-	assert.Equal(t, TLSProber{}, New(Options{}).prober, "Alice's own TLS probe when none is given")
+	assert.Equal(t, TLSProber{}, New(Options{SSH: e.ssh}).prober, "Alice's own TLS probe when none is given")
 	var _ providers.ConnectionCache = e.prov
-	assert.Equal(t, e.prov.ssh.ConfigSchema(), e.prov.ConfigSchema())
+	assert.Equal(t, e.ssh.ConfigSchema(), e.prov.ConfigSchema())
 	assert.Empty(t, e.prov.CredentialSchema().Fields)
 	e.prov.ForgetTarget(testTarget)
 	assert.Empty(t, e.prov.ValidateConfig(e.ref.Config))
@@ -212,10 +213,11 @@ func TestMapHelper(t *testing.T) {
 }
 
 func TestNewDefaults(t *testing.T) {
-	p := New(Options{})
+	ssh := linuxssh.New(linuxssh.Options{})
+	p := New(Options{SSH: ssh})
 	assert.Equal(t, 2*time.Second, p.retryWait)
 	assert.Equal(t, 5, p.attempts)
-	p = New(Options{RetryWait: time.Millisecond, Attempts: 3})
+	p = New(Options{SSH: ssh, RetryWait: time.Millisecond, Attempts: 3})
 	assert.Equal(t, time.Millisecond, p.retryWait)
 	assert.Equal(t, 3, p.attempts)
 }

@@ -159,6 +159,13 @@ func TestKindForTargetType(t *testing.T) {
 	}
 }
 
+// A shared web-server reason is the provider kind, a dot and the reason (plan Ruling 4).
+func TestKindReason(t *testing.T) {
+	assert.Equal(t, "nginx.not_found", providers.KindNginx.Reason(providers.ReasonNotFound))
+	assert.Equal(t, "nginx.profile_missing", providers.KindNginx.Reason(providers.ReasonProfileMissing))
+	assert.Equal(t, "nginx.config_invalid", providers.KindNginx.Reason(providers.ReasonConfigInvalid))
+}
+
 func TestCapabilitySet(t *testing.T) {
 	c := providers.NewCapabilitySet(providers.CapAuthorizedKeys, providers.CapTestConnection, providers.CapAuthorizedKeys)
 	assert.True(t, c.Has(providers.CapTestConnection))
