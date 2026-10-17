@@ -10,6 +10,7 @@ import {
   jobFixture,
   locationFixture,
   webServerFacts,
+  apacheTargetFixture,
   nginxTargetFixture,
   nginxTargetWith,
   keyLocationFixture,
@@ -511,6 +512,58 @@ describe('TargetDetailPage', () => {
       const websites = screen.getByRole('heading', { name: 'Websites on this server' });
       const keys = screen.getByRole('heading', { name: 'SSH keys on this server' });
       expect(websites.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    });
+
+    it('an Apache server shows its facts and websites with deployment disabled', async () => {
+      const combined = locationFixture({
+        id: 'loc-combined',
+        cert_path: '/etc/ssl/apache/combined.pem',
+        key_path: '/etc/ssl/apache/combined.pem',
+        key_mode: '0644',
+        warnings: [{ code: 'key_mode_open' }] as never,
+        servers: [{ names: ['combined.example.test'], listens: [{ addr: '', port: 8443, default_server: false }], file: '/etc/apache2/sites-enabled/a.conf', line: 3 }],
+      });
+      const second = locationFixture({
+        id: 'loc-second',
+        cert_path: '/etc/ssl/apache/two.crt',
+        key_path: '/etc/ssl/apache/two.key',
+        servers: [{ names: ['two.example.test'], listens: [{ addr: '', port: 8443, default_server: false }], file: '/etc/apache2/sites-enabled/b.conf', line: 5 }],
+      });
+      const cond = locationFixture({
+        id: 'loc-cond',
+        cert_path: '/etc/ssl/apache/cond.crt',
+        key_path: '/etc/ssl/apache/cond.key',
+        supported: false,
+        unsupported_reason: 'conditional',
+        servers: [{ names: ['cond.example.test'], listens: [{ addr: '', port: 8443, default_server: false }], file: '/etc/apache2/sites-enabled/c.conf', line: 7 }],
+      });
+      const open = async (lang: string, tag: string) => {
+        onServer('operator', apacheTargetFixture, [], lang);
+        server.use(http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [combined, second, cond], truncated: false })));
+        return renderRoute(`/servers/${apacheTargetFixture.id}`, { languages: [tag] });
+      };
+      const view = await open('en', 'en-US');
+      expect(await screen.findByText('Apache server', { selector: 'dd' })).toBeInTheDocument();
+      expect((await screen.findByText('Apache version', { selector: 'dt' })).nextElementSibling).toHaveTextContent('2.4.57');
+      expect(await screen.findByText(/combined\.pem/)).toBeInTheDocument();
+      expect(screen.getByText('This file is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used.')).toBeInTheDocument();
+      const buttons = [
+        ...screen.getAllByRole('button', { name: /^Deploy certificate:/ }),
+        ...screen.getAllByRole('button', { name: /^Verification settings:/ }),
+      ];
+      expect(buttons.length).toBeGreaterThanOrEqual(4);
+      for (const b of buttons) {
+        expect(b).toHaveAttribute('aria-disabled', 'true');
+        expect(b).toHaveAccessibleDescription('Not available for Apache servers yet');
+      }
+      // Reachable by keyboard: the first disabled control takes focus on tab.
+      buttons[0].focus();
+      expect(buttons[0]).toHaveFocus();
+      await userEvent.tab();
+      expect(buttons[0]).not.toHaveFocus();
+      view.unmount();
+      await open('tr', 'tr-TR');
+      expect((await screen.findAllByRole('button', { name: /^Sertifika dağıt/ }))[0]).toHaveAccessibleDescription('Apache sunucularında henüz kullanılamıyor');
     });
 
     it('names the software in Turkish without a suffix on it', async () => {

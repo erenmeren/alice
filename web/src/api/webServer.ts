@@ -1,7 +1,7 @@
 import type { CertificateLocation, Target } from './types';
 
 // The single list of web-server target types. Phases B and C extend only this list.
-export const WEB_SERVER_TYPES = ['nginx'] as const;
+export const WEB_SERVER_TYPES = ['nginx', 'apache'] as const;
 export type WebServerType = (typeof WEB_SERVER_TYPES)[number];
 
 export function isWebServer(type: string): type is WebServerType {

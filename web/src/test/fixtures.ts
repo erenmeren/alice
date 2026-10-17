@@ -271,6 +271,7 @@ export const platformKeyFixture: PlatformKeyInfo = {
   profiles: {
     linux: { sudoers: '# linux profile', script: '# linux setup script\nset -eu\n' },
     nginx: { sudoers: '# nginx profile', script: '# nginx setup script\nset -eu\n' },
+    apache: { sudoers: '# apache profile', script: '# apache setup script\nset -eu\n' },
   },
 };
 
@@ -609,6 +610,20 @@ export const nginxTargetFixture: Target = {
   host: 'nginx-01.example.com',
   capabilities: ['authorized_keys', 'deploy_certificate', 'discover_certificates', 'discover_ssh_keys', 'http01_challenge', 'key_login', 'test_connection', 'verify_deployment'],
   facts: { ...targetFixture.facts, web_server: webServerFacts() },
+};
+
+// apacheTargetFixture is an Apache server (discovery only: no deploy_certificate) whose last scan was fine.
+export const apacheTargetFixture: Target = {
+  ...targetFixture,
+  id: '0192b000-0000-7000-8000-0000000000a3',
+  name: 'web-apache',
+  type: 'apache',
+  host: 'apache-01.example.com',
+  capabilities: ['authorized_keys', 'discover_certificates', 'discover_ssh_keys', 'key_login', 'test_connection'],
+  facts: {
+    ...targetFixture.facts,
+    web_server: webServerFacts({ software: 'apache', version: '2.4.57', conf_path: '/etc/apache2/apache2.conf' }),
+  },
 };
 
 export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {

@@ -1066,7 +1066,8 @@
     "openServer": "Sunucuyu aç",
     "typeLabel": {
       "linux": "Linux sunucusu",
-      "nginx": "Nginx sunucusu"
+      "nginx": "Nginx sunucusu",
+      "apache": "Apache sunucusu"
     },
     "page": {
       "description": "Bağlı hedefleri, değişiklikleri ve incelenmesi gerekenleri görün.",

@@ -27,6 +27,7 @@ import {
   verifiedKey,
 } from './enums';
 import { CAPABILITIES } from './capabilities';
+import { WEB_SERVER_TYPES } from './webServer';
 import { LOCATION_WARNINGS, WARNING_PARAMS, locationWarningKey, warningKey } from './warnings';
 
 // The enums are read from api/openapi.yaml, so a value the API gains without a label fails here.
@@ -161,7 +162,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   const helperWarnings = goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
   // The web-server providers' own warning(...) literals (the shared layer and the providers built on it).
-  const webServerWarnings = ['internal/providers/nginx', 'internal/providers/webserver']
+  const webServerWarnings = ['internal/providers/nginx', 'internal/providers/apache', 'internal/providers/webserver']
     .flatMap((dir) => goFiles(dir))
     .flatMap((f) => callArgsIn(readRepoFile(f), 'warning'));
   const openapiTargetWarnings = [...topLevelTargetWarningText().matchAll(/\b(web_server_[a-z_]+|[a-z]+_[a-z_]+)\b/g)].map((m) => m[1]);
@@ -197,7 +198,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
     eq(knownValues('WebServerFacts', 'config_error'), CONFIG_ERRORS.filter((e) => e !== 'file_changed'));
     eq(goConsts('internal/providers/types.go', /^ConfigReason/), CONFIG_REASONS);
     eq(knownValues('WebServerFacts', 'config_error_reason'), CONFIG_REASONS);
-    eq(enumOf('WebServerFacts', 'software'), ['nginx']);
+    eq(enumOf('WebServerFacts', 'software'), [...WEB_SERVER_TYPES]);
   });
 
   it('knows every location warning of the specification and the inventory, and every provider warning at one level', () => {

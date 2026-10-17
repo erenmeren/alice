@@ -1066,7 +1066,8 @@
     "openServer": "Open the server",
     "typeLabel": {
       "linux": "Linux server",
-      "nginx": "Nginx server"
+      "nginx": "Nginx server",
+      "apache": "Apache server"
     },
     "page": {
       "description": "Know what is connected, what changed, and what needs a closer look.",
