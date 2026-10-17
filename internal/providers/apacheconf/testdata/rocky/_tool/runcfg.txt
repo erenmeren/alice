@@ -1,0 +1,8 @@
+ServerRoot: "/etc/httpd"
+Main DocumentRoot: "/var/www/html"
+Main ErrorLog: "/etc/httpd/logs/error_log"
+Mutex default: dir="/run/httpd/" mechanism=default 
+PidFile: "/run/httpd/httpd.pid"
+Define: DUMP_RUN_CFG
+User: name="apache" id=48
+Group: name="apache" id=48

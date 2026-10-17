@@ -1,0 +1,10 @@
+Server version: Apache/2.4.62 (Rocky Linux)
+Server built:   Aug 13 2026 00:00:00
+Server's Module Magic Number: 20120211:134
+Server MPM:     event
+Server compiled with....
+ -D HTTPD_ROOT="/etc/httpd"
+ -D SUEXEC_BIN="/usr/sbin/suexec"
+ -D DEFAULT_PIDLOG="run/httpd.pid"
+ -D AP_TYPES_CONFIG_FILE="conf/mime.types"
+ -D SERVER_CONFIG_FILE="conf/httpd.conf"

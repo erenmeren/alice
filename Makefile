@@ -364,8 +364,9 @@ fuzz-nginx: ## Fuzz the nginx -T parser ($(FUZZTIME); spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseNginxConfig -fuzztime $(FUZZTIME) ./internal/providers/nginx/nginxconf/
 
 .PHONY: fuzz-apache
-fuzz-apache: ## Fuzz the Apache DUMP_INCLUDES parser ($(FUZZTIME); spec §25.6)
+fuzz-apache: ## Fuzz the Apache DUMP_INCLUDES and configuration parsers ($(FUZZTIME) each; spec §25.6)
 	go test -count=1 -run '^$$' -fuzz FuzzParseApacheIncludes -fuzztime $(FUZZTIME) ./internal/providers/apacheconf/
+	go test -count=1 -run '^$$' -fuzz FuzzParseApacheConfig -fuzztime $(FUZZTIME) ./internal/providers/apacheconf/
 
 .PHONY: fuzz-netaddr
 fuzz-netaddr: ## Fuzz the scan address rule and the route table parsers ($(FUZZTIME) each; network discovery)
@@ -409,11 +410,11 @@ fuzz-api: ## Fuzz every create/update body of the API (needs Docker; $(FUZZTIME)
 	go test -count=1 -tags integration -run '^$$' -fuzz FuzzOpenAPIInputs -fuzztime $(FUZZTIME) ./internal/api/
 
 .PHONY: fuzz-nightly
-fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly; 30 targets, 300 minutes)
+fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly; 31 targets, 310 minutes)
 	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-ldap fuzz-nginx fuzz-apache fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-tlsprobe fuzz-api FUZZTIME=10m
 
 .PHONY: fuzz-release
-fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; 30 targets, about 15 hours)
+fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; 31 targets, about 15.5 hours)
 	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-ldap fuzz-nginx fuzz-apache fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-tlsprobe fuzz-api FUZZTIME=30m
 
 # Dynamic gates (Task 15; spec §22.7 stages 5 and 6, §25.7). zap-baseline, zap-full and testssl scan

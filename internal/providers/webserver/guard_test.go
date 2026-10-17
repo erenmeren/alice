@@ -4,7 +4,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -69,15 +68,9 @@ func sorted(in []string) []string { return slices.Sorted(slices.Values(in)) }
 func TestMappedVocabulariesEqualTheirSources(t *testing.T) {
 	helper := constStrings(t, "../linuxssh/helperproto/helperproto.go", nil)
 	conf := constStrings(t, "../nginx/nginxconf/nginxconf.go", helper)
-	reasons := withPrefix(conf, "Reason")
-	// apacheconf.Reason* join the union once that package exists; until then its only reason
-	// outside nginx's vocabulary, conditional, is named here.
-	if _, err := os.Stat("../apacheconf/apacheconf.go"); err == nil {
-		reasons = sorted(append(reasons, withPrefix(constStrings(t, "../apacheconf/apacheconf.go", helper), "Reason")...))
-		reasons = slices.Compact(reasons)
-	} else {
-		reasons = sorted(append(reasons, providers.UnsupportedConditional))
-	}
+	// pairReasons is the union of both parsers' vocabularies (config_file_writable is in both).
+	reasons := sorted(append(withPrefix(conf, "Reason"), withPrefix(constStrings(t, "../apacheconf/apacheconf.go", helper), "Reason")...))
+	reasons = slices.Compact(reasons)
 	assert.Equal(t, reasons, sorted(pairReasons), "nginxconf.Reason* and apacheconf.Reason* -> pairReasons")
 	assert.Equal(t, withPrefix(helper, "ConfigErr"), sorted(configErrors), "helperproto.ConfigErr* -> configErrors")
 	assert.Equal(t, withPrefix(helper, "ConfigReason"), sorted(configReasons), "helperproto.ConfigReason* -> configReasons")
