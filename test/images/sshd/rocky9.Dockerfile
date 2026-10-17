@@ -1,5 +1,6 @@
-# Real OpenSSH and Nginx target (spec §22.3) for internal/providers/linuxssh/containers_integration_test.go
-# (TestRealOpenSSH) and internal/providers/nginx/containers_integration_test.go (TestRealNginx).
+# Real OpenSSH, Nginx and Apache target (spec §22.3) for internal/providers/linuxssh/containers_integration_test.go
+# (TestRealOpenSSH), internal/providers/nginx/containers_integration_test.go (TestRealNginx) and
+# internal/providers/apache/containers_integration_test.go (TestRealApache).
 # Build context: test/images. alice-helper and the setup script are installed by the tests, not by
 # the image. Nginx is the distribution's package with its default configuration, untouched and not
 # started (TestRealNginx starts it); nginx-mod-stream and nginx-mod-mail add the stream and mail
@@ -7,8 +8,12 @@
 # target's test shims (test/images/e2e-target; the distribution's binaries move to
 # /usr/lib/alice-e2e/). The nginx package pulls in the systemd package here, so its systemctl is
 # moved aside, not missing.
+# httpd and mod_ssl are the distribution's Apache httpd with its default configuration: installed,
+# never started (discovery only reads its configuration; Nginx owns ports 80 and 443). ssl.conf's
+# localhost pair (which the service's first start would generate) is written by the test, never in
+# a layer.
 FROM rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f
-RUN dnf install -y openssh-server sudo shadow-utils procps-ng util-linux nginx nginx-mod-stream nginx-mod-mail openssl \
+RUN dnf install -y openssh-server sudo shadow-utils procps-ng util-linux nginx nginx-mod-stream nginx-mod-mail httpd mod_ssl openssl \
  && dnf clean all \
  && mkdir -p /run/sshd \
  && ssh-keygen -A \

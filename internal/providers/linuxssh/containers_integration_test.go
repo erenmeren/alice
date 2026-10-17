@@ -105,7 +105,7 @@ func startCtrHost(t *testing.T, image, helper string) *ctrHost {
 	ctr, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			FromDockerfile: testcontainers.FromDockerfile{
-				// The images TestRealNginx (internal/providers/nginx) uses too: Nginx is installed but
+				// The images TestRealNginx and TestRealApache use too: Nginx and Apache are installed but
 				// not started, which changes nothing for these tests.
 				Context:    filepath.Join("..", "..", "..", "test", "images"),
 				Dockerfile: "sshd/" + image + ".Dockerfile",
