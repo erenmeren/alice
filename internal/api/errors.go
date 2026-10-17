@@ -273,6 +273,12 @@ var (
 	ErrApacheProfileMissing = ErrorCode{Code: "ALC-APC-0003", Reason: "apache.profile_missing", Status: http.StatusBadGateway}
 	ErrApacheHelperTooOld   = ErrorCode{Code: "ALC-APC-0004", Reason: "apache.helper_too_old", Status: http.StatusBadGateway}
 
+	// HAProxy (discovery only). Its helper-too-old reason: haproxy-dump arrived with protocol 9.
+	ErrHAProxyNotFound       = ErrorCode{Code: "ALC-HAP-0001", Reason: "haproxy.not_found", Status: http.StatusBadGateway}
+	ErrHAProxyConfigInvalid  = ErrorCode{Code: "ALC-HAP-0002", Reason: "haproxy.config_invalid", Status: http.StatusConflict}
+	ErrHAProxyProfileMissing = ErrorCode{Code: "ALC-HAP-0003", Reason: "haproxy.profile_missing", Status: http.StatusBadGateway}
+	ErrHAProxyHelperTooOld   = ErrorCode{Code: "ALC-HAP-0004", Reason: "haproxy.helper_too_old", Status: http.StatusBadGateway}
+
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
@@ -497,6 +503,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,
 		ErrApacheNotFound, ErrApacheConfigInvalid, ErrApacheProfileMissing, ErrApacheHelperTooOld,
+		ErrHAProxyNotFound, ErrHAProxyConfigInvalid, ErrHAProxyProfileMissing, ErrHAProxyHelperTooOld,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,

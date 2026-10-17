@@ -895,6 +895,28 @@
         "action": "Apache profili alice-helper 1.7.0 veya daha yenisini gerektirir. Sunucular sayfasında Sunucu türü olarak Apache sunucusu seçeneğini seçin, komutları kopyalayın ve kurmak için sunucuda yeniden çalıştırın. Adımlar docs/apache-host-preparation.md dosyasında anlatılıyor."
       }
     },
+    "haproxy": {
+      "not_found": {
+        "title": "Bu sunucuda HAProxy bulunamadı.",
+        "cause": "Alice, standart paketlerin HAProxy'yi kurduğu /usr/sbin/haproxy dosyasını aradı.",
+        "action": "HAProxy'yi dağıtımınızdan kurun ya da bu sunucuyu Linux sunucu olarak ekleyin. Alice'in beklediklerini docs/haproxy-host-preparation.md dosyasında bulabilirsiniz."
+      },
+      "config_invalid": {
+        "title": "HAProxy yapılandırmasında bir sorun var, bu yüzden sorun giderilene kadar Alice bu sunucunun sertifikalarını okuyamaz.",
+        "cause": "HAProxy yapılandırmasında bir hata var ya da Alice'in güvenle okuyamadığı dosyalar veya ayarlar kullanılıyor. Hiçbir şey değiştirilmedi.",
+        "action": "Sunucuda haproxy -c -f /etc/haproxy/haproxy.cfg komutunu çalıştırın ve çıkan hataları giderin. Komut başarılıysa sunucunun sayfasında adı geçen dosyaya ve docs/haproxy-host-preparation.md dosyasına bakın, sonra Keşfet'i yeniden seçin."
+      },
+      "profile_missing": {
+        "title": "Bu sunucu HAProxy işleri için hazırlanmamış.",
+        "cause": "Alice hesabı alice-helper'ı HAProxy için değil, yalnızca SSH anahtarları için çalıştırabiliyor (Linux profili).",
+        "action": "Sunucular sayfasında Sunucu türü olarak HAProxy sunucusu seçeneğini seçin, komutları kopyalayın ve sunucuda yeniden çalıştırın. Hazırlık adımları docs/haproxy-host-preparation.md dosyasında anlatılıyor."
+      },
+      "helper_too_old": {
+        "title": "Bu sunucudaki alice-helper, HAProxy'yi okumak için çok eski.",
+        "cause": "HAProxy'yi okumak için alice-helper 1.8.0 veya daha yenisi gerekiyor, sunucuda kurulu olan ise daha eski.",
+        "action": "HAProxy profili alice-helper 1.8.0 veya daha yenisini gerektirir. Sunucular sayfasında Sunucu türü olarak HAProxy sunucusu seçeneğini seçin, komutları kopyalayın ve kurmak için sunucuda yeniden çalıştırın. Adımlar docs/haproxy-host-preparation.md dosyasında anlatılıyor."
+      }
+    },
     "certificate": {
       "invalid": {
         "title": "Bu, Alice'in okuyabildiği bir sertifika değil.",

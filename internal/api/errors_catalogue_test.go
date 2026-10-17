@@ -413,7 +413,7 @@ func troubleshootingSection(doc, code string) string {
 // exactly this label and should pin it against this list).
 var discoverKeys = []string{
 	"errors.nginx.config_invalid.action",
-	"errors.apache.config_invalid.action", "errors.nginx.config_changed.action", "errors.nginx.file_changed.action",
+	"errors.apache.config_invalid.action", "errors.haproxy.config_invalid.action", "errors.nginx.config_changed.action", "errors.nginx.file_changed.action",
 	"errors.nginx.location_unsupported.action", "errors.deployment.verify_other.action", "errors.deployment.superseded.action",
 	"errors.deployment.unknown_operation.action", "errors.deployment.recovery_exhausted.action",
 	"errors.deployment.outcome_unknown.action", "errors.deployment.rollback_file_changed.action",

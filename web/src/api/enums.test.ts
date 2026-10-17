@@ -162,7 +162,7 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   const helperWarnings = goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
   // The web-server providers' own warning(...) literals (the shared layer and the providers built on it).
-  const webServerWarnings = ['internal/providers/nginx', 'internal/providers/apache', 'internal/providers/webserver']
+  const webServerWarnings = ['internal/providers/nginx', 'internal/providers/apache', 'internal/providers/haproxy', 'internal/providers/webserver']
     .flatMap((dir) => goFiles(dir))
     .flatMap((f) => callArgsIn(readRepoFile(f), 'warning'));
   const openapiTargetWarnings = [...topLevelTargetWarningText().matchAll(/\b(web_server_[a-z_]+|[a-z]+_[a-z_]+)\b/g)].map((m) => m[1]);

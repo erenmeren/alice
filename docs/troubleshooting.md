@@ -172,6 +172,13 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   Alice version to the server, run the commands from **Servers → Prepare a server for Alice** with **Server type**
   **Apache server** again, then choose **Test connection** and **Discover**
   ([apache-host-preparation.md](apache-host-preparation.md#updating-the-helper)).
+- **The server's page says that HAProxy was not found, that the HAProxy permissions are not installed, that
+  HAProxy's configuration has an error, or that the helper is too old.** These are the web-server warnings of a
+  HAProxy server: install HAProxy (`ALC-HAP-0001`), run `haproxy -c -f /etc/haproxy/haproxy.cfg` and fix what it
+  reports (`ALC-HAP-0002`), run the setup commands with **Server type** **HAProxy server** again
+  (`ALC-HAP-0003`), or do the same after copying the `alice-helper` of this Alice version, which HAProxy needs
+  at 1.8.0 (protocol 9; `ALC-HAP-0004`). Then choose **Test connection** and **Discover**
+  ([haproxy-host-preparation.md](haproxy-host-preparation.md)).
 - **The Deploy controls of an Apache server are disabled ("Not available for Apache servers yet").** This is on
   purpose: Alice only reads Apache servers in this release. Renew their certificates with your own tools.
 - **"Alice cannot trust what the web server reported for this configuration" or "Alice cannot read this configuration safely".**
@@ -1975,6 +1982,38 @@ limitation).
 **Likely cause.** Reading Apache needs `alice-helper` 1.7.0 or newer, and the one installed on the server is older.
 
 **What to do.** The Apache profile needs `alice-helper` 1.7.0 or newer. On the Servers page choose Server type Apache server, copy the commands and run them on the server again to install it. [apache-host-preparation.md](apache-host-preparation.md) describes the steps.
+
+## ALC-HAP-0001: HAProxy not found
+
+**Meaning.** HAProxy was not found on this server. (HTTP 502, reason `haproxy.not_found`.)
+
+**Likely cause.** Alice looked for `/usr/sbin/haproxy`, where the standard packages install HAProxy.
+
+**What to do.** Install HAProxy from your distribution or add this server as a Linux server. [haproxy-host-preparation.md](haproxy-host-preparation.md) lists what Alice expects.
+
+## ALC-HAP-0002: HAProxy configuration has a problem
+
+**Meaning.** HAProxy's configuration has a problem, so Alice cannot read this server's certificates until it is fixed. (HTTP 409, reason `haproxy.config_invalid`.)
+
+**Likely cause.** HAProxy's configuration has an error, or it uses files or settings Alice cannot safely read. Nothing was changed.
+
+**What to do.** Run `haproxy -c -f /etc/haproxy/haproxy.cfg` on the server and fix any error. If it passes, check the file named on the server's page and [haproxy-host-preparation.md](haproxy-host-preparation.md), then choose Discover again.
+
+## ALC-HAP-0003: Server not prepared for HAProxy
+
+**Meaning.** This server is not prepared for HAProxy work. (HTTP 502, reason `haproxy.profile_missing`.)
+
+**Likely cause.** The Alice account may run `alice-helper` for SSH keys only (Linux profile), not for HAProxy.
+
+**What to do.** On the Servers page choose Server type HAProxy server, copy the commands and run them on the server again. [haproxy-host-preparation.md](haproxy-host-preparation.md) describes the preparation.
+
+## ALC-HAP-0004: alice-helper too old for HAProxy
+
+**Meaning.** The `alice-helper` on this server is too old to read HAProxy. (HTTP 502, reason `haproxy.helper_too_old`.)
+
+**Likely cause.** Reading HAProxy needs `alice-helper` 1.8.0 or newer, and the one installed on the server is older.
+
+**What to do.** The HAProxy profile needs `alice-helper` 1.8.0 or newer. On the Servers page choose Server type HAProxy server, copy the commands and run them on the server again to install it. [haproxy-host-preparation.md](haproxy-host-preparation.md) describes the steps.
 
 ## ALC-CRT-0001: Not a readable certificate
 

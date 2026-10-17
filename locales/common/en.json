@@ -895,6 +895,28 @@
         "action": "The Apache profile needs alice-helper 1.7.0 or newer. On the Servers page choose Server type Apache server, copy the commands and run them on the server again to install it. docs/apache-host-preparation.md describes the steps."
       }
     },
+    "haproxy": {
+      "not_found": {
+        "title": "HAProxy was not found on this server.",
+        "cause": "Alice looked for /usr/sbin/haproxy, where the standard packages install HAProxy.",
+        "action": "Install HAProxy from your distribution or add this server as a Linux server. docs/haproxy-host-preparation.md lists what Alice expects."
+      },
+      "config_invalid": {
+        "title": "HAProxy's configuration has a problem, so Alice cannot read this server's certificates until it is fixed.",
+        "cause": "HAProxy's configuration has an error, or it uses files or settings Alice cannot safely read. Nothing was changed.",
+        "action": "Run haproxy -c -f /etc/haproxy/haproxy.cfg on the server and fix any error. If it passes, check the file named on the server's page and docs/haproxy-host-preparation.md, then choose Discover again."
+      },
+      "profile_missing": {
+        "title": "This server is not prepared for HAProxy work.",
+        "cause": "The Alice account may run alice-helper for SSH keys only (Linux profile), not for HAProxy.",
+        "action": "On the Servers page choose Server type HAProxy server, copy the commands and run them on the server again. docs/haproxy-host-preparation.md describes the preparation."
+      },
+      "helper_too_old": {
+        "title": "The alice-helper on this server is too old to read HAProxy.",
+        "cause": "Reading HAProxy needs alice-helper 1.8.0 or newer, and the one installed on the server is older.",
+        "action": "The HAProxy profile needs alice-helper 1.8.0 or newer. On the Servers page choose Server type HAProxy server, copy the commands and run them on the server again to install it. docs/haproxy-host-preparation.md describes the steps."
+      }
+    },
     "certificate": {
       "invalid": {
         "title": "This is not a certificate Alice can read.",

@@ -90,7 +90,7 @@ var reasonCalls = map[string]int{"Fail": 0, "Attention": 0, "Retry": 0, "NewErro
 var unregisteredReasons = map[string]bool{"target.invalid_config": true, "license.unclassified": true}
 
 // reasonShapeRE matches the stored reasons of the Phase 3, 4, 5 and 6 areas (azure and kv: D40; rotation: F13).
-var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|apache|certificate|csr|deployment|azure|kv|rotation)\.[a-z_]+$`)
+var reasonShapeRE = regexp.MustCompile(`^(ssh|sshkey|target|job|hostkey|nginx|apache|haproxy|certificate|csr|deployment|azure|kv|rotation)\.[a-z_]+$`)
 
 // notReasons are reason-shaped literals that are audit actions, job types or email templates.
 var notReasons = map[string]bool{
