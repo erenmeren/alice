@@ -144,3 +144,19 @@ Each entry: the decision, why, and the cost if it is wrong.
    with what the running Apache serves, especially configurations with `<If>`, `Use`/`<Macro>`, `envvars`
    variables, command-line defines (`$OPTIONS`, `-DFOREGROUND`) and certificates inherited from the main server.
 3. Reinstall `alice-helper` 1.7.0 on servers that will be Apache servers (CHANGELOG upgrade notes).
+
+## Final gates (Task 15, 2026-10-17)
+
+- Static and unit: `go build`, `go vet` (both tag sets), `make lint`, `make test`, `make i18n-check`: pass.
+- `make test-integration`: pass. `make coverage`: pass on the second run. The first run failed once in
+  `internal/backup` `TestStopLeavesNoSession` (a session of closed pools still listed under load; unrelated, passes
+  alone and in `make test-integration`). Floors: `apache` 100.0 (98), `apacheconf` 100.0 (92), `webserver` 98.6 (98),
+  `cmd/alice-helper` 91.0 (90).
+- `make test-ssh`: pass (OpenSSH, Nginx and Apache real matrices, none skipped).
+- `make helper` checksums: linux-amd64 `e758ca8b92d9cb9eca5a5220fb070fc22e18c6cdcebd3d29db049fa86cba9df4`,
+  linux-arm64 `504190c8cba8167c1da36d03b267bcc73b73574a633d41cbbd4374dbb953f8c9`. The root-only helper suite
+  was not run (sudo needs a password): owner step 1 stays open.
+- `make fuzz-apache FUZZTIME=5m`: both targets pass, no crasher.
+- `make web-lint web-coverage`: pass (statements 96.42 %, branches 92.73 %). `make e2e`: 143 passed, 4 skipped
+  (the design-evidence specs, skipped by design), no failures or retries.
+- Grep checks: both print nothing.
