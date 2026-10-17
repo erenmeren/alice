@@ -422,7 +422,7 @@ describe('TargetsPage', () => {
       const type = within(dialog).getByLabelText('Server type');
       expect(type).toHaveValue('linux');
       expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux server', 'Nginx server', 'Apache server']);
-      expect(within(dialog).getByText('Choose Nginx server to manage its certificates too. Prepare the server with the Nginx commands first.')).toBeInTheDocument();
+      expect(within(dialog).getByText(/^Choose the web server software this server runs/)).toBeInTheDocument();
       expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# linux setup script');
       await userEvent.selectOptions(type, 'nginx');
       expect(within(dialog).getByTestId('add-server-script')).toHaveTextContent('# nginx setup script');

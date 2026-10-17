@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import type { ACMEProvider } from '../../api/acme';
-import { ACME_CERT_ID, ACME_HOOK_ID, ACME_ORDER_ID, ACME_PROVIDER_ID, acmeCertificateFixture, acmeHookFixture, acmeOrderFixture, acmeProviderFixture, adminSession, errorResponse, nginxTargetFixture, sessionFor, sessionHandlers } from '../../test/fixtures';
+import { ACME_CERT_ID, ACME_HOOK_ID, ACME_ORDER_ID, ACME_PROVIDER_ID, acmeCertificateFixture, acmeHookFixture, acmeOrderFixture, acmeProviderFixture, adminSession, errorResponse, apacheTargetFixture, nginxTargetFixture, sessionFor, sessionHandlers } from '../../test/fixtures';
 import { expectNoRawKeys } from '../../test/i18nAssert';
 import { renderWithStepUp } from '../../test/render';
 import { server } from '../../test/server';
@@ -260,6 +260,21 @@ describe('Get a certificate', () => {
     const two = await within(select).findByRole('option', { name: /web-2/ });
     expect(two).toBeDisabled();
     expect(two).toHaveTextContent('Not available for Nginx servers yet');
+    expect(within(select).getByRole('option', { name: 'web-nginx' })).toBeEnabled();
+  });
+
+  it('shows an Apache server in the web proof list disabled with the note', async () => {
+    base({ extra: [http.get('/api/v1/targets', () => HttpResponse.json({ items: [nginxTargetFixture, apacheTargetFixture], next_cursor: null }))] });
+    setup();
+    await pickAuthority();
+    await addName('www.example.com');
+    await next();
+    await userEvent.click(within(dialog()).getByRole('radio', { name: 'Web proof (file on the web server)' }));
+    await next();
+    const select = await within(dialog()).findByLabelText(/^Web server/);
+    const apache = await within(select).findByRole('option', { name: /web-apache/ });
+    expect(apache).toBeDisabled();
+    expect(apache).toHaveTextContent('Not available for Apache servers yet');
     expect(within(select).getByRole('option', { name: 'web-nginx' })).toBeEnabled();
   });
 

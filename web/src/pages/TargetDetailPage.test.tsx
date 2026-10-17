@@ -520,7 +520,7 @@ describe('TargetDetailPage', () => {
         cert_path: '/etc/ssl/apache/combined.pem',
         key_path: '/etc/ssl/apache/combined.pem',
         key_mode: '0644',
-        warnings: [{ code: 'key_mode_open' }] as never,
+        warnings: ['key_mode_open'],
         servers: [{ names: ['combined.example.test'], listens: [{ addr: '', port: 8443, default_server: false }], file: '/etc/apache2/sites-enabled/a.conf', line: 3 }],
       });
       const second = locationFixture({
@@ -545,7 +545,8 @@ describe('TargetDetailPage', () => {
       const view = await open('en', 'en-US');
       expect(await screen.findByText('Apache server', { selector: 'dd' })).toBeInTheDocument();
       expect((await screen.findByText('Apache version', { selector: 'dt' })).nextElementSibling).toHaveTextContent('2.4.57');
-      expect(await screen.findByText(/combined\.pem/)).toBeInTheDocument();
+      const combinedRow = (await screen.findByText(/combined\.pem/)).closest('tr')!;
+      expect(within(combinedRow).getByText('The private key file can be read by more users than needed: 0644')).toBeInTheDocument();
       expect(screen.getByText('This file is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used.')).toBeInTheDocument();
       const buttons = [
         ...screen.getAllByRole('button', { name: /^Deploy certificate:/ }),
@@ -556,11 +557,14 @@ describe('TargetDetailPage', () => {
         expect(b).toHaveAttribute('aria-disabled', 'true');
         expect(b).toHaveAccessibleDescription('Not available for Apache servers yet');
       }
-      // Reachable by keyboard: the first disabled control takes focus on tab.
-      buttons[0].focus();
-      expect(buttons[0]).toHaveFocus();
-      await userEvent.tab();
-      expect(buttons[0]).not.toHaveFocus();
+      // Reachable by keyboard: tabbing from the top of the page reaches the first row's Deploy control.
+      const first = screen.getAllByRole('button', { name: /^Deploy certificate:/ })[0];
+      (document.activeElement as HTMLElement | null)?.blur();
+      for (let i = 0; i < 80 && document.activeElement !== first; i++) await userEvent.tab();
+      expect(first).toHaveFocus();
+      expect(first).toHaveAttribute('aria-disabled', 'true');
+      expect(first).not.toHaveAttribute('disabled');
+      expect(first).toHaveAccessibleDescription('Not available for Apache servers yet');
       view.unmount();
       await open('tr', 'tr-TR');
       expect((await screen.findAllByRole('button', { name: /^Sertifika dağıt/ }))[0]).toHaveAccessibleDescription('Apache sunucularında henüz kullanılamıyor');
