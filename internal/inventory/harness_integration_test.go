@@ -135,6 +135,19 @@ func withNginxProvider() harnessOption {
 	}
 }
 
+// withApacheProvider registers a fake apache provider next to linuxssh.
+func withApacheProvider() harnessOption {
+	return func(c *inventory.Config) {
+		ssh, _ := c.Registry.Get(providers.KindLinuxSSH)
+		reg := providers.NewRegistry()
+		reg.Register(ssh)
+		reg.Register(fake.New(providers.KindApache, providers.CapTestConnection, providers.CapDiscoverSSHKeys,
+			providers.CapAuthorizedKeys, providers.CapDiscoverCerts, providers.CapKeyLogin))
+		reg.Freeze()
+		c.Registry = reg
+	}
+}
+
 // pinnedKey records a host key for the target, confirms it as a new Administrator and returns it
 // (the target is then checking, as after a real confirmation).
 func (h *harness) pinnedKey(target uuid.UUID) providers.HostKey {

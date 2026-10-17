@@ -23,6 +23,7 @@ type Kind string
 const (
 	KindLinuxSSH Kind = "linuxssh"
 	KindNginx    Kind = "nginx"
+	KindApache   Kind = "apache"
 	KindAzureKV  Kind = "azurekv"
 )
 
@@ -45,6 +46,8 @@ func KindForTargetType(t string) (Kind, bool) {
 		return KindLinuxSSH, true
 	case "nginx":
 		return KindNginx, true
+	case "apache":
+		return KindApache, true
 	case "azure_key_vault":
 		return KindAzureKV, true
 	default:

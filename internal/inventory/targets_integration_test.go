@@ -187,11 +187,11 @@ func TestNginxTargets(t *testing.T) {
 	assert.Equal(t, []map[string]string{{"name": "web-nginx", "host": "10.0.0.9", "port": "22", "username": "alice-svc", "type": "nginx"}},
 		h.auditDetails("target.created"))
 
-	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "x", Type: "apache", Host: "10.0.0.10"})
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "x", Type: "windows", Host: "10.0.0.10"})
 	var verrs validate.Errors
 	require.ErrorAs(t, err, &verrs)
 	assert.Equal(t, "type", verrs[0].Field)
-	assert.Equal(t, map[string]string{"values": "linux, nginx"}, verrs[0].Params)
+	assert.Equal(t, map[string]string{"values": "linux, nginx, apache"}, verrs[0].Params)
 	// The address rules are the same (SEC-065), and so is the endpoint uniqueness within the type.
 	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "meta", Type: inventory.TypeNginx, Host: "169.254.169.254"})
 	require.ErrorAs(t, err, &verrs)
@@ -232,7 +232,7 @@ func TestNginxTargets(t *testing.T) {
 	plain := newHarness(t)
 	_, _, err = plain.svc.CreateTarget(plain.ctx, plain.user("bo", rbac.Admin, ""), inventory.NewTarget{Name: "n", Type: inventory.TypeNginx, Host: "10.0.0.11"})
 	require.ErrorAs(t, err, &verrs)
-	assert.Equal(t, map[string]string{"values": "linux, nginx"}, verrs[0].Params)
+	assert.Equal(t, map[string]string{"values": "linux, nginx, apache"}, verrs[0].Params)
 }
 
 // Nginx targets count toward the license limit like every other target (L-74).
@@ -247,5 +247,28 @@ func TestNginxTargetsCountTowardTheLicense(t *testing.T) {
 	_, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "sixth", Type: inventory.TypeNginx, Host: "10.0.1.9"})
 	require.Error(t, err)
 	assert.Equal(t, 1, h.audits("target.add.denied_license"))
+	assert.Equal(t, 5, h.count("SELECT count(*) FROM targets WHERE deleted_at IS NULL"))
+}
+
+// Apache targets count toward the license limit like Nginx ones, and a deleted one does not.
+func TestApacheTargetsCountTowardTheLicense(t *testing.T) {
+	h := newHarness(t, withApacheProvider())
+	admin := h.user("ada", rbac.Admin, "")
+	var first uuid.UUID
+	for i := range 5 {
+		tg, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "a" + string(rune('a'+i)), Type: inventory.TypeApache,
+			Host: "10.0.2." + string(rune('1'+i))})
+		require.NoError(t, err)
+		if i == 0 {
+			first = tg.ID
+		}
+	}
+	_, _, err := h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "sixth", Type: inventory.TypeApache, Host: "10.0.2.9"})
+	require.Error(t, err)
+	assert.Equal(t, 1, h.audits("target.add.denied_license"))
+
+	require.NoError(t, h.svc.DeleteTarget(h.ctx, admin, first))
+	_, _, err = h.svc.CreateTarget(h.ctx, admin, inventory.NewTarget{Name: "sixth", Type: inventory.TypeApache, Host: "10.0.2.9"})
+	require.NoError(t, err, "a deleted target does not count")
 	assert.Equal(t, 5, h.count("SELECT count(*) FROM targets WHERE deleted_at IS NULL"))
 }

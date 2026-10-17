@@ -20,7 +20,7 @@ func Hex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Target inserts a live target of type typ ("linux", "nginx" or "azure_key_vault") with status. Servers share the one
+// Target inserts a live target of type typ ("linux", "nginx", "apache" or "azure_key_vault") with status. Servers share the one
 // platform credential, created on first use; a vault gets a credential of its own, which carries secret_expires_on
 // when secretExpires is set.
 func Target(ctx context.Context, pool *pgxpool.Pool, name, typ, status string, secretExpires *time.Time) (uuid.UUID, error) {

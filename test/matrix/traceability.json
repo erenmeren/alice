@@ -805,7 +805,8 @@
   "status": "test",
   "tests": [
    "internal/inventory:TestReconcileMissingChangedOutsideAndInvalidConfiguration",
-   "internal/providers/nginx:TestDiscoverWithoutNginxFails"
+   "internal/providers/nginx:TestDiscoverWithoutNginxFails",
+   "internal/providers/apache:TestDiscoverWithoutApacheFails"
   ]
  },
  {

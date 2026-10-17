@@ -9,7 +9,8 @@
         "username": { "label": "User name on the server", "help": "The service user the setup commands create, normally alice-svc." }
       }
     },
-    "nginx": { "name": "Nginx server" }
+    "nginx": { "name": "Nginx server" },
+    "apache": { "name": "Apache server" }
   },
   "enum": {
     "role": {

@@ -22,6 +22,7 @@
   "alice/cmd/alice-helper": 90,
   "alice/internal/api": 95,
   "alice/internal/certs": 98,
+  "alice/internal/providers/apache": 98,
   "alice/internal/providers/nginx": 98,
   "alice/internal/providers/nginx/nginxconf": 92,
   "alice/internal/providers/apacheconf": 92,

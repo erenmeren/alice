@@ -13,9 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Only the one web-server type list names Nginx: every other check asks inventory.IsWebServer
-// or a provider capability, so a discovery-only web server is never offered a deployment.
-func TestOnlyTheTypeListNamesNginx(t *testing.T) {
+// Only the one web-server type list names a web-server type (TypeNginx, TypeApache): every other
+// check asks inventory.IsWebServer or a provider capability, so a discovery-only web server is
+// never offered a deployment.
+func TestOnlyTheTypeListNamesWebServerTypes(t *testing.T) {
 	root := moduleRoot(t)
 	allowed := filepath.Join(root, "internal", "inventory", "types.go")
 	var violations []string
@@ -35,7 +36,7 @@ func TestOnlyTheTypeListNamesNginx(t *testing.T) {
 			}
 			scanned++
 			ast.Inspect(f, func(n ast.Node) bool {
-				if id, ok := n.(*ast.Ident); ok && id.Name == "TypeNginx" {
+				if id, ok := n.(*ast.Ident); ok && (id.Name == "TypeNginx" || id.Name == "TypeApache") {
 					violations = append(violations, fset.Position(id.Pos()).String())
 				}
 				return true
@@ -45,5 +46,5 @@ func TestOnlyTheTypeListNamesNginx(t *testing.T) {
 		require.NoError(t, err)
 	}
 	assert.Greater(t, scanned, 100, "the scan found the sources")
-	assert.Empty(t, violations, "TypeNginx is named by internal/inventory/types.go only")
+	assert.Empty(t, violations, "TypeNginx and TypeApache are named by internal/inventory/types.go only")
 }

@@ -9,7 +9,8 @@
         "username": { "label": "Sunucudaki kullanıcı adı", "help": "Kurulum komutlarının oluşturduğu hizmet kullanıcısı, normalde alice-svc." }
       }
     },
-    "nginx": { "name": "Nginx sunucu" }
+    "nginx": { "name": "Nginx sunucu" },
+    "apache": { "name": "Apache sunucusu" }
   },
   "enum": {
     "role": {
