@@ -55,8 +55,8 @@ func haproxyValid(err error) bool {
 // haproxyconf.Parse, then ResolveKeys. An invalid, unsupported or untrusted configuration is not an
 // error: meta.valid is false and the Config is empty, never partial; after an invalid "-c" nothing
 // is read. When haproxy.cfg or a read crt-list can be changed by a user other than root, every
-// pair becomes config_file_writable (MarkWritable) and every later failure reads "changed" naming
-// that file. Nothing is written.
+// pair becomes config_file_writable (MarkWritable, instead of ResolveKeys: no certificate file is
+// opened) and every later failure reads "changed" naming that file. Nothing is written.
 func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, error) {
 	var meta dumpMeta
 	invalid := func(e *configError) (haproxyconf.Config, dumpMeta, error) {
@@ -120,10 +120,15 @@ func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, 
 		}
 		return invalid(haproxyParseError(err))
 	}
-	// ResolveKeys first: until it runs no pair is supported (haproxyconf's pending pairs).
-	haproxyconf.ResolveKeys(&cfg, s.keyInCert)
 	if len(r.writable) > 0 {
+		// A user other than root can change the configuration: every pair is config_file_writable
+		// and no certificate file it names is opened, not even to resolve a key (keyInCert would
+		// tell that user whether a root-only file holds a private key). MarkWritable clears the
+		// pending pairs, so they carry no key path; ResolveKeys is not called.
 		haproxyconf.MarkWritable(&cfg)
+	} else {
+		// Until ResolveKeys runs no pair is supported (haproxyconf's pending pairs).
+		haproxyconf.ResolveKeys(&cfg, s.keyInCert)
 	}
 	meta.valid, meta.writable = true, r.writable
 	return cfg, meta, nil

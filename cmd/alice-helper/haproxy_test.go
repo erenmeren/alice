@@ -416,6 +416,63 @@ func TestHAProxyDumpWritableConfigMarksEveryPair(t *testing.T) {
 	})
 }
 
+// recordOpens makes fsMagic record the guest path of every descriptor it is asked about: rf.open
+// (describeCert, keyInCert) checks a file's file system on an O_PATH descriptor before it opens
+// the file for reading, and listings check only directories.
+func (w *haproxyWorld) recordOpens() *[]string {
+	var seen []string
+	w.f.s.fsMagic = func(fd int) (int64, error) {
+		if p, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", fd)); err == nil {
+			if g, ok := w.f.s.guest(p); ok {
+				seen = append(seen, g)
+			}
+		}
+		return unix.EXT4_SUPER_MAGIC, nil
+	}
+	return &seen
+}
+
+// Controller ruling on Task 6 concern 1: when a user other than root can change haproxy.cfg or
+// a crt-list, no certificate file it names is opened, not even by keyInCert, and no pair carries
+// a key path (no oracle on whether a root-only file holds a private key).
+func TestHAProxyDumpWritableConfigOpensNoCertificate(t *testing.T) {
+	certFiles := func(seen []string) []string {
+		var out []string
+		for _, p := range seen {
+			if strings.HasPrefix(p, "/etc/haproxy/certs/") {
+				out = append(out, p)
+			}
+		}
+		return out
+	}
+	t.Run("control: a root-only configuration opens them", func(t *testing.T) {
+		w := newHAProxyWorld(t)
+		seen := w.recordOpens()
+		code, m := w.dump(t)
+		require.Equal(t, 0, code, "%v", m)
+		assert.Contains(t, certFiles(*seen), "/etc/haproxy/certs/a.pem")
+	})
+	for name, file := range map[string]string{"haproxy.cfg": haproxyConfPath, "a crt-list": haproxyList} {
+		t.Run(name, func(t *testing.T) {
+			w := newHAProxyWorld(t)
+			require.NoError(t, os.Chmod(w.f.host(file), 0o666))
+			seen := w.recordOpens()
+			code, m := w.dump(t)
+			require.Equal(t, 0, code, "%v", m)
+			assert.Equal(t, true, m["config_valid"])
+			assert.Equal(t, []any{file}, m["writable"])
+			assert.Empty(t, certFiles(*seen), "no certificate file is opened")
+			assert.Equal(t, []any{}, m["files"])
+			for _, sv := range asList(m["servers"]) {
+				for _, p := range serverPairs(sv) {
+					assert.Equal(t, haproxyconf.ReasonConfigFileWritable, p["unsupported"])
+					assert.Equal(t, "", p["key"], "no key was resolved")
+				}
+			}
+		})
+	}
+}
+
 // Review Focus 4: a crt-list named by two frontends is read once.
 func TestHAProxyDumpReadsEachCrtListOnce(t *testing.T) {
 	w := newHAProxyWorld(t)

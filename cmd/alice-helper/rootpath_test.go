@@ -398,6 +398,31 @@ func TestListRootDir(t *testing.T) {
 		})
 	}
 
+	// Concern 5: the directory's own dirOK is checked before it is opened, so a directory that is
+	// not root-controlled is never opened (walkHook runs just before the open, fsMagic after it).
+	t.Run("an unsafe directory is never opened", func(t *testing.T) {
+		for _, mode := range []os.FileMode{0o777, 0o1777, 0o775} {
+			f := setup(t)
+			require.NoError(t, os.Chmod(f.host("/etc/haproxy/certs"), mode))
+			certs, opened, checked := f.host("/etc/haproxy/certs"), 0, 0
+			f.s.walkHook = func(name string) {
+				if name == "certs" {
+					opened++
+				}
+			}
+			f.s.fsMagic = func(fd int) (int64, error) {
+				if p, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", fd)); err == nil && p == certs {
+					checked++
+				}
+				return unix.EXT4_SUPER_MAGIC, nil
+			}
+			_, isDir, err := f.s.listRootDir("/etc/haproxy/certs")
+			require.NoError(t, err)
+			assert.False(t, isDir)
+			assert.Zero(t, opened, "mode %o: refused before the open", mode)
+			assert.Zero(t, checked, "mode %o", mode)
+		}
+	})
 	t.Run("a link to a directory", func(t *testing.T) {
 		for _, target := range []string{"certs", "/etc/haproxy/certs", "certs/", "certs/.", "/etc/haproxy/certs/sub/.."} {
 			f := setup(t)
