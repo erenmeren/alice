@@ -43,6 +43,8 @@ export const DISCOVERY_ONLY_TEXTS: Readonly<Record<string, string>> = {
   'locations.configInvalid': 'locations.configInvalidDiscovery',
   'locations.intro': 'locations.introDiscovery',
   'targets.page.operationsText': 'targets.page.operationsTextDiscovery',
+  'locations.ready': 'locations.readyDiscovery',
+  'locations.unsupported.unsupported_key': 'locations.unsupportedKeyDiscovery',
 };
 
 // capabilityText: the key of the text to show for the target: the discovery-only one when it cannot deploy.

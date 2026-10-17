@@ -160,7 +160,7 @@ The helper changes only files that Nginx itself uses as a certificate/key pair, 
 
 - It reads the configuration with its own `nginx -T` and compares every configuration file printed there with the
   real file on disk. If they differ, or a file cannot be checked, it trusts none of the configuration and changes
-  nothing ("Alice cannot trust Nginx's output for this configuration").
+  nothing ("Alice cannot trust what the web server reported for this configuration").
 - Every directory and every symbolic link on the way to a configuration file, a certificate file or a key file must
   belong to root, and no directory may be writable by its group or by others. Root-owned links are followed, so
   Let's Encrypt's `live/` links work (the link stays; the file it points to is replaced).

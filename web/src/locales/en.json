@@ -993,7 +993,7 @@
     "config_file_writable": "A configuration file used by {{software}} can be changed by users other than root: {{path}}",
     "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
     "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
-    "list_truncated": "Alice cut some long lists of this server (for example user accounts, key files or parts of the Nginx configuration), so what is shown is incomplete.",
+    "list_truncated": "Alice cut some long lists of this server (for example user accounts, key files or parts of the web server configuration), so what is shown is incomplete.",
     "key_mode_open": "A private key file can be read by more users than needed.",
     "symlinked": "A certificate file is a link. Another tool (for example certbot) may replace it.",
     "custom_location": "A certificate file is outside the usual certificate folders.",
@@ -1631,6 +1631,7 @@
     "defaultServer": "(default server)",
     "noWebsite": "(no server name)",
     "ready": "Ready",
+    "readyDiscovery": "Found",
     "notSupported": "Not supported",
     "missing": "No longer found",
     "missingSince": "No longer found since {{time}}",
@@ -1640,7 +1641,7 @@
     "settings": "Verification settings",
     "settingsNamed": "Verification settings: {{site}}",
     "noCertificate": "No readable certificate",
-    "inherited": "The certificate is set for all websites in the http block.",
+    "inherited": "Inherited: the certificate is set once in the server's configuration for all websites that do not set their own.",
     "changedOutside": "The certificate changed outside Alice.",
     "changedOutsideAt": "Changed outside Alice: {{time}}",
     "definedIn": "Defined in: {{file}}",
@@ -1663,20 +1664,19 @@
       "helper_too_old": "The alice-helper on this server is too old for {{software}}."
     },
     "rowUnavailable": {
-      "unsupported": "Alice cannot deploy to this place.",
       "missing": "This website is no longer found.",
       "deploying": "A deployment to this place is in progress."
     },
     "configError": {
       "key_mismatch": "The certificate and the private key do not belong together.",
       "file_missing": "A certificate or key file is missing.",
-      "cert_load": "Nginx could not load a certificate.",
-      "key_load": "Nginx could not load a private key.",
+      "cert_load": "The web server could not load a certificate.",
+      "key_load": "The web server could not load a private key.",
       "syntax": "The configuration has a syntax error.",
-      "untrusted": "Alice cannot trust Nginx's output for this configuration.",
+      "untrusted": "Alice cannot trust what the web server reported for this configuration.",
       "unsupported": "Alice cannot read this configuration safely.",
       "file_changed": "Another program changed the certificate or key files.",
-      "unknown": "Nginx reported a configuration problem that this version cannot describe."
+      "unknown": "The web server reported a configuration problem that this version cannot describe."
     },
     "configReason": {
       "not_root_controlled": "A file or folder of the configuration can be changed by users other than root.",
@@ -1685,10 +1685,10 @@
       "not_regular": "A file of the configuration is not a regular file.",
       "changed": "A file of the configuration changed while Alice read it.",
       "name_not_allowed": "A file name of the configuration is not allowed.",
-      "unexpected_text": "A file of the configuration contains unexpected text.",
+      "unexpected_text": "A file of the configuration, or what {{software}} reported about it, contains unexpected text.",
       "wrong_first_file": "The first configuration file is not the expected one.",
       "duplicate_file": "A configuration file is included twice.",
-      "no_conf_path": "Nginx did not report where its configuration is.",
+      "no_conf_path": "{{software}} did not report where its configuration is.",
       "too_large": "The configuration is too large for Alice.",
       "too_complex": "The configuration is too complex for Alice.",
       "include_loop": "Configuration files include each other in a loop.",
@@ -1763,7 +1763,8 @@
     },
     "definedLine": "Line: {{line}}",
     "configInvalidDiscovery": "{{software}}'s configuration on this server has an error. The websites below are as Alice last read them.",
-    "introDiscovery": "Each row is a certificate file that {{software}} uses. Alice reads these files and never changes them."
+    "introDiscovery": "Each row is a certificate file that {{software}} uses. Alice reads these files and never changes them.",
+    "unsupportedKeyDiscovery": "The certificate's key is neither RSA nor ECDSA."
   },
   "deploy": {
     "title": "Deploy a certificate",

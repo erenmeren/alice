@@ -174,7 +174,7 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   ([apache-host-preparation.md](apache-host-preparation.md#updating-the-helper)).
 - **The Deploy controls of an Apache server are disabled ("Not available for Apache servers yet").** This is on
   purpose: Alice only reads Apache servers in this release. Renew their certificates with your own tools.
-- **"Alice cannot trust Nginx's output for this configuration" or "Alice cannot read this configuration safely".**
+- **"Alice cannot trust what the web server reported for this configuration" or "Alice cannot read this configuration safely".**
   Alice refuses the whole server and names the reason and, where it can, the file with the problem. Usual causes: a
   configuration file or folder that users other than root can change (`chmod go-w` on it, owner root), an `include`
   written with `..` (write the path without `..`), a configuration file name with a space, or a comment in a real

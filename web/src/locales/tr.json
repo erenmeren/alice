@@ -993,7 +993,7 @@
     "config_file_writable": "{{software}} tarafından kullanılan bir yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
     "too_many_files": "Bu sunucu Alice'in listelediğinden fazla sertifika dosyası kullanıyor, bu yüzden bazıları okunmadı.",
     "locations_dropped": "Bu sunucuda Alice'in listelediğinden fazla web sitesi var, bu yüzden liste eksik ve hiçbir web sitesi artık bulunmuyor olarak işaretlenmiyor.",
-    "list_truncated": "Alice bu sunucunun bazı uzun listelerini (örneğin kullanıcı hesaplarını, anahtar dosyalarını veya Nginx yapılandırmasının bölümlerini) kısalttı, bu yüzden gösterilenler eksik.",
+    "list_truncated": "Alice bu sunucunun bazı uzun listelerini (örneğin kullanıcı hesaplarını, anahtar dosyalarını veya web sunucusu yapılandırmasının bölümlerini) kısalttı, bu yüzden gösterilenler eksik.",
     "key_mode_open": "Bir özel anahtar dosyasını gerekenden fazla kullanıcı okuyabiliyor.",
     "symlinked": "Bir sertifika dosyası bağlantı. Başka bir araç (örneğin certbot) dosyayı değiştirebilir.",
     "custom_location": "Bir sertifika dosyası alışılmış sertifika klasörlerinin dışında.",
@@ -1631,6 +1631,7 @@
     "defaultServer": "(varsayılan sunucu)",
     "noWebsite": "(sunucu adı yok)",
     "ready": "Hazır",
+    "readyDiscovery": "Bulundu",
     "notSupported": "Desteklenmiyor",
     "missing": "Artık bulunmuyor",
     "missingSince": "Şu tarihten beri bulunmuyor: {{time}}",
@@ -1640,7 +1641,7 @@
     "settings": "Doğrulama ayarları",
     "settingsNamed": "Doğrulama ayarları: {{site}}",
     "noCertificate": "Okunabilir sertifika yok",
-    "inherited": "Sertifika http bloğundaki tüm web siteleri için ayarlanmış.",
+    "inherited": "Devralınan: sertifika, kendi sertifikasını belirtmeyen tüm web siteleri için sunucunun yapılandırmasında bir kez ayarlanmış.",
     "changedOutside": "Sertifika Alice dışında değiştirildi.",
     "changedOutsideAt": "Alice dışında değiştirildi: {{time}}",
     "definedIn": "Tanımlandığı dosya: {{file}}",
@@ -1663,20 +1664,19 @@
       "helper_too_old": "Bu sunucudaki alice-helper {{software}} için çok eski."
     },
     "rowUnavailable": {
-      "unsupported": "Alice bu konuma dağıtım yapamaz.",
       "missing": "Bu web sitesi artık bulunmuyor.",
       "deploying": "Bu konuma bir dağıtım sürüyor."
     },
     "configError": {
       "key_mismatch": "Sertifika ve özel anahtar birbirine ait değil.",
       "file_missing": "Bir sertifika veya anahtar dosyası eksik.",
-      "cert_load": "Nginx bir sertifikayı yükleyemedi.",
-      "key_load": "Nginx bir özel anahtarı yükleyemedi.",
+      "cert_load": "Web sunucusu bir sertifikayı yükleyemedi.",
+      "key_load": "Web sunucusu bir özel anahtarı yükleyemedi.",
       "syntax": "Yapılandırmada bir söz dizimi hatası var.",
-      "untrusted": "Alice bu yapılandırma için Nginx'in çıktısına güvenemez.",
+      "untrusted": "Alice bu yapılandırma için web sunucusunun bildirdiklerine güvenemez.",
       "unsupported": "Alice bu yapılandırmayı güvenle okuyamaz.",
       "file_changed": "Başka bir program sertifika veya anahtar dosyalarını değiştirdi.",
-      "unknown": "Nginx, bu sürümün açıklayamadığı bir yapılandırma sorunu bildirdi."
+      "unknown": "Web sunucusu, bu sürümün açıklayamadığı bir yapılandırma sorunu bildirdi."
     },
     "configReason": {
       "not_root_controlled": "Yapılandırmanın bir dosyası veya klasörü root dışındaki kullanıcılar tarafından değiştirilebiliyor.",
@@ -1685,10 +1685,10 @@
       "not_regular": "Yapılandırmanın bir dosyası normal bir dosya değil.",
       "changed": "Yapılandırmanın bir dosyası Alice okurken değişti.",
       "name_not_allowed": "Yapılandırmanın bir dosya adına izin verilmiyor.",
-      "unexpected_text": "Yapılandırmanın bir dosyası beklenmeyen metin içeriyor.",
+      "unexpected_text": "Yapılandırmanın bir dosyası veya {{software}} çıktısı beklenmeyen metin içeriyor.",
       "wrong_first_file": "İlk yapılandırma dosyası beklenen dosya değil.",
       "duplicate_file": "Bir yapılandırma dosyası iki kez dahil edilmiş.",
-      "no_conf_path": "Nginx yapılandırmasının nerede olduğunu bildirmedi.",
+      "no_conf_path": "{{software}} yapılandırmasının nerede olduğunu bildirmedi.",
       "too_large": "Yapılandırma Alice için çok büyük.",
       "too_complex": "Yapılandırma Alice için çok karmaşık.",
       "include_loop": "Yapılandırma dosyaları birbirini döngü halinde dahil ediyor.",
@@ -1763,7 +1763,8 @@
     },
     "definedLine": "Satır: {{line}}",
     "configInvalidDiscovery": "Bu sunucudaki {{software}} yapılandırmasında bir hata var. Aşağıdaki web siteleri Alice'in son okuduğu hâliyle gösteriliyor.",
-    "introDiscovery": "Her satır {{software}} tarafından kullanılan bir sertifika dosyasıdır. Alice bu dosyaları okur, hiçbir zaman değiştirmez."
+    "introDiscovery": "Her satır {{software}} tarafından kullanılan bir sertifika dosyasıdır. Alice bu dosyaları okur, hiçbir zaman değiştirmez.",
+    "unsupportedKeyDiscovery": "Sertifikanın anahtarı RSA veya ECDSA değil."
   },
   "deploy": {
     "title": "Sertifika dağıtın",

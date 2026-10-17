@@ -82,8 +82,8 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
               <Text size="sm" fw={500}>
                 {t(capabilityText(target, 'locations.configInvalid'), { software })}
               </Text>
-              {webServer && webServer.config_error !== '' && <Text size="sm">{t(configErrorKey(webServer.config_error))}</Text>}
-              {webServer && webServer.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(webServer.config_error_reason))}</Text>}
+              {webServer && webServer.config_error !== '' && <Text size="sm">{t(configErrorKey(webServer.config_error), { software })}</Text>}
+              {webServer && webServer.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(webServer.config_error_reason), { software })}</Text>}
               {webServer && webServer.config_error_file !== '' && (
                 <LabelledCode text={t('locations.configFile', { file: '' })} value={webServer.config_error_file} />
               )}
@@ -243,7 +243,7 @@ function LocationRow({
               </StatusBadge>
             ) : l.supported ? (
               <StatusBadge tone="success" icon="CircleCheck" size="sm">
-                {t('locations.ready')}
+                {t(capabilityText(target, 'locations.ready'))}
               </StatusBadge>
             ) : (
               <StatusBadge tone="neutral" size="sm">
@@ -257,7 +257,7 @@ function LocationRow({
             )}
           </Group>
           {missing && <Text size="xs">{t('locations.missingSince', { time: formatDateTime(l.missing_since, i18n.language) })}</Text>}
-          {!l.supported && <Text size="xs">{t(unsupportedReasonKey(l.unsupported_reason))}</Text>}
+          {!l.supported && <Text size="xs">{t(capabilityText(target, unsupportedReasonKey(l.unsupported_reason)))}</Text>}
           {problems.map((p, i) => (
             <Text size="xs" key={`${p}-${i}`}>
               {t(i === 0 ? 'locations.problemCertificate' : 'locations.problemKey', { problem: t(fileProblemKey(p)) })}

@@ -9,6 +9,7 @@ import {
   keyLocationFixture,
   locationFixture,
   webServerFacts,
+  apacheTargetFixture,
   nginxTargetFixture,
   nginxTargetWith,
   sessionFor,
@@ -254,7 +255,7 @@ describe('WebsitesPanel on an Nginx server', () => {
       await renderRoute(path);
       const alert = await screen.findByTestId('config-invalid');
       expect(alert).toHaveTextContent("Nginx's configuration on this server has an error. Alice will not deploy until it is fixed.");
-      expect(alert).toHaveTextContent("Alice cannot trust Nginx's output for this configuration.");
+      expect(alert).toHaveTextContent('Alice cannot trust what the web server reported for this configuration.');
       expect(alert).toHaveTextContent('A file or folder of the configuration can be changed by users other than root.');
       expect(within(alert).getByText('/etc/nginx/conf.d/x.conf')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Deploy certificate: www.example.test' })).toBeDisabled();
@@ -329,5 +330,61 @@ describe('WebsitesPanel in the design', () => {
     const rows = await within(region).findAllByTestId('location-row');
     expect(within(rows[0]).getByText('Ready').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'success');
     expect(within(rows[1]).getByText('Deployment in progress').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'info');
+  });
+});
+
+describe('WebsitesPanel on an Apache server (discovery only)', () => {
+  const untrusted = (reason: string): Target => ({
+    ...apacheTargetFixture,
+    facts: { ...apacheTargetFixture.facts, web_server: webServerFacts({ software: 'apache', config_valid: false, config_error: 'untrusted', config_error_reason: reason }) },
+  });
+  const rows = [
+    locationFixture({ certificate: CERT, inherited: true, target_type: 'apache', deployable: false }),
+    locationFixture({ id: 'k', cert_path: '/etc/apache2/ssl/dsa.crt', supported: false, unsupported_reason: 'unsupported_key', target_type: 'apache', deployable: false }),
+  ];
+
+  it.each(['no_conf_path', 'unexpected_text'])('names Apache, never Nginx or its http block, for an untrusted configuration (%s) and an inherited pair', async (reason) => {
+    onNginx('operator', rows, untrusted(reason));
+    await renderRoute(`/servers/${apacheTargetFixture.id}`);
+    const alert = await screen.findByTestId('config-invalid');
+    expect(alert).toHaveTextContent('Alice cannot trust what the web server reported for this configuration.');
+    expect(alert).toHaveTextContent(reason === 'no_conf_path' ? 'Apache did not report where its configuration is.' : 'A file of the configuration, or what Apache reported about it, contains unexpected text.');
+    await screen.findAllByTestId('location-row');
+    expect(screen.getByText(/^Inherited: the certificate is set once/)).toBeInTheDocument();
+    const page = document.body.textContent ?? '';
+    expect(page).not.toMatch(/Nginx/);
+    expect(page).not.toMatch(/http block/);
+  });
+
+  it('calls a supported place Found, not Ready, and says the key type without claiming support', async () => {
+    onNginx('operator', rows, apacheTargetFixture);
+    await renderRoute(`/servers/${apacheTargetFixture.id}`);
+    const [first, second] = await screen.findAllByTestId('location-row');
+    expect(within(first).getByText('Found')).toBeInTheDocument();
+    expect(within(first).queryByText('Ready')).not.toBeInTheDocument();
+    expect(within(second).getByText("The certificate's key is neither RSA nor ECDSA.")).toBeInTheDocument();
+    expect(within(second).queryByText('Alice supports RSA and ECDSA certificates only.')).not.toBeInTheDocument();
+  });
+
+  it('keeps the same texts read-only in Turkish', async () => {
+    onNginx('operator', rows, untrusted('no_conf_path'), false, 'tr');
+    await renderRoute(`/servers/${apacheTargetFixture.id}`, { languages: ['tr-TR'] });
+    const alert = await screen.findByTestId('config-invalid');
+    expect(alert).toHaveTextContent('Apache yapılandırmasının nerede olduğunu bildirmedi.');
+    const [first, second] = await screen.findAllByTestId('location-row');
+    expect(within(first).getByText('Bulundu')).toBeInTheDocument();
+    expect(within(second).getByText('Sertifikanın anahtarı RSA veya ECDSA değil.')).toBeInTheDocument();
+    expect(document.body.textContent ?? '').not.toMatch(/Nginx|http blo/);
+    expectNoRawKeys();
+  });
+});
+
+describe('WebsitesPanel texts on an Nginx server that deploys', () => {
+  it('keeps Ready and the support wording', async () => {
+    onNginx('operator', [locationFixture({ certificate: CERT }), locationFixture({ id: 'k', cert_path: '/etc/nginx/ssl/dsa.crt', supported: false, unsupported_reason: 'unsupported_key' })]);
+    await renderRoute(path);
+    const [first, second] = await screen.findAllByTestId('location-row');
+    expect(within(first).getByText('Ready')).toBeInTheDocument();
+    expect(within(second).getByText('Alice supports RSA and ECDSA certificates only.')).toBeInTheDocument();
   });
 });
