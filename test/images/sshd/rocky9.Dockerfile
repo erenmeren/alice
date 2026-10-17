@@ -12,7 +12,7 @@
 # never started (discovery only reads its configuration; Nginx owns ports 80 and 443). ssl.conf's
 # localhost pair (which the service's first start would generate) is written by the test, never in
 # a layer.
-FROM rockylinux/rockylinux:9@sha256:8101994123cf3d0a8fee517bee7f39e555c7d92bd2d9eb3303cc988a0eeed00f
+FROM rockylinux/rockylinux:10@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
 RUN dnf install -y openssh-server sudo shadow-utils procps-ng util-linux nginx nginx-mod-stream nginx-mod-mail httpd mod_ssl openssl \
  && dnf clean all \
  && mkdir -p /run/sshd \
