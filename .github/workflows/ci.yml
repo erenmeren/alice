@@ -97,8 +97,10 @@ jobs:
       - run: make fs-scan
 
   stack:
+    # First complete-enough run (39014976446): 11 min to bring the stack up, then Chromium e2e ran
+    # 69 of about 145 tests in 19 min with none failing when 30 minutes cut it.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 75
     needs: [go, web]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

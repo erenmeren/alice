@@ -654,6 +654,9 @@ func TestImportSettlingFromPolls(t *testing.T) {
 		assert.Equal(t, 1, f.h.audits("kv.import.failed"))
 		f.h.reconcile(f.vault, kvResult())
 		assert.Equal(t, 1, f.h.emails("kv.import_outcome_unknown"), "once")
+		// keep the gate fresh: 25 fake hours passed, past license.MaxEvaluationAge, and the gate's own
+		// evaluation runs in the background (it raced this request on a slow runner)
+		require.NoError(t, f.h.lic.Tick(f.h.ctx))
 		_, err := f.request("settle-name", false)
 		assert.NoError(t, err, "the name is free again")
 	})
