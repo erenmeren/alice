@@ -126,6 +126,36 @@ func TestCreateTargetAcceptsApache(t *testing.T) {
 	assert.Equal(t, inventory.TypeApache, gotIn.Type)
 }
 
+// A HAProxy server is created like any other web server: the type reaches the inventory unchanged.
+func TestCreateTargetAcceptsHAProxy(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	var gotIn inventory.NewTarget
+	inv.CreateTargetFn = func(_ context.Context, _ inventory.Actor, in inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
+		gotIn = in
+		return sampleTarget(), jobID, nil
+	}
+	rec := call(NewHandler(d), http.MethodPost, "/api/v1/targets", "admin",
+		`{"name":"lb-01","type":"haproxy","host":"lb-01.example.com"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, inventory.TypeHAProxy, gotIn.Type)
+}
+
+// An unknown type is a 422 validation.one_of listing the four kinds. The list itself is made by the
+// inventory service (pinned against the real service in internal/inventory/targets_integration_test.go);
+// this test pins that the route turns that error into the documented response.
+func TestCreateTargetRefusesUnknownTypeWithTheFourKinds(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	inv.CreateTargetFn = func(context.Context, inventory.Actor, inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
+		var v validate.Errors
+		v.Add("type", validate.OneOf, map[string]string{"values": "linux, nginx, apache, haproxy"})
+		return inventory.Target{}, uuid.Nil, v
+	}
+	rec := call(NewHandler(d), http.MethodPost, "/api/v1/targets", "admin",
+		`{"name":"w-01","type":"iis","host":"w-01.example.com"}`)
+	require.Equal(t, http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
+	assert.Contains(t, rec.Body.String(), `{"field":"type","code":"validation.one_of","params":{"values":"linux, nginx, apache, haproxy"}}`)
+}
+
 func TestTargetJSONHasExactlyTheDocumentedFields(t *testing.T) {
 	raw, err := json.Marshal(targetJSON(sampleTarget()))
 	require.NoError(t, err)
