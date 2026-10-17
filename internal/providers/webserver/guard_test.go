@@ -68,10 +68,12 @@ func sorted(in []string) []string { return slices.Sorted(slices.Values(in)) }
 func TestMappedVocabulariesEqualTheirSources(t *testing.T) {
 	helper := constStrings(t, "../linuxssh/helperproto/helperproto.go", nil)
 	conf := constStrings(t, "../nginx/nginxconf/nginxconf.go", helper)
-	// pairReasons is the union of both parsers' vocabularies (config_file_writable is in both).
-	reasons := sorted(append(withPrefix(conf, "Reason"), withPrefix(constStrings(t, "../apacheconf/apacheconf.go", helper), "Reason")...))
-	reasons = slices.Compact(reasons)
-	assert.Equal(t, reasons, sorted(pairReasons), "nginxconf.Reason* and apacheconf.Reason* -> pairReasons")
+	// pairReasons is the union of the three parsers' vocabularies (config_file_writable is in all).
+	reasons := withPrefix(conf, "Reason")
+	reasons = append(reasons, withPrefix(constStrings(t, "../apacheconf/apacheconf.go", helper), "Reason")...)
+	reasons = append(reasons, withPrefix(constStrings(t, "../haproxyconf/haproxyconf.go", helper), "Reason")...)
+	reasons = slices.Compact(sorted(reasons))
+	assert.Equal(t, reasons, sorted(pairReasons), "nginxconf.Reason*, apacheconf.Reason* and haproxyconf.Reason* -> pairReasons")
 	assert.Equal(t, withPrefix(helper, "ConfigErr"), sorted(configErrors), "helperproto.ConfigErr* -> configErrors")
 	assert.Equal(t, withPrefix(helper, "ConfigReason"), sorted(configReasons), "helperproto.ConfigReason* -> configReasons")
 	assert.Equal(t, withPrefix(helper, "File"), sorted(fileProblems), "helperproto.File* -> fileProblems")

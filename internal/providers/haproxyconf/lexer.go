@@ -44,16 +44,34 @@ type line struct {
 // The input is bounded by MaxInput (ErrTooLarge), each line by MaxLine (ErrLineTooLong) and
 // the words of the file by MaxTokens (ErrTooComplex). Errors name the line.
 func lex(data []byte) ([]line, error) {
+	lines, _, err := lexBudget(data, MaxTokens)
+	return lines, err
+}
+
+// lexBudget is lex with a word budget: more than budget words is ErrTooComplex. It also returns
+// the number of words read, so that Parse counts MaxTokens across all files of the configuration.
+func lexBudget(data []byte, budget int) ([]line, int, error) {
 	if len(data) > MaxInput {
-		return nil, ErrTooLarge
+		return nil, 0, ErrTooLarge
 	}
 	if i := bytes.IndexByte(data, 0); i >= 0 {
-		return nil, lineErr(ErrNUL, bytes.Count(data[:i], []byte("\n"))+1)
+		return nil, 0, lineErr(ErrNUL, bytes.Count(data[:i], []byte("\n"))+1)
 	}
 	var (
-		lines  []line
+		// Sized once: append's growth would allocate about five times the final slice.
+		lines = sized[line](countLines(data, budget, func(text []byte) bool {
+			i := 0
+			for i < len(text) && isBlank(text[i]) {
+				i++
+			}
+			return i < len(text) && text[i] != '#'
+		}))
 		tokens int
 		buf    []byte // the word being read; reused
+		// arena holds the words of the lines read so far: each line's words are a capped
+		// slice of it, so a line costs no allocation of its own (review M3: the lexer held
+		// about 28-30 times its input).
+		arena []word
 	)
 	for pos, n := 0, 1; pos < len(data); n++ {
 		text := data[pos:]
@@ -64,15 +82,19 @@ func lex(data []byte) ([]line, error) {
 			pos = len(data)
 		}
 		if len(text) > MaxLine {
-			return nil, lineErr(ErrLineTooLong, n)
+			return nil, 0, lineErr(ErrLineTooLong, n)
 		}
+		if cap(arena)-len(arena) < 64 {
+			arena = make([]word, 0, 4096)
+		}
+		first := len(arena)
 		var (
-			words          []word
+			words          = arena[first:first]
 			inWord, dollar bool
 			quote          byte // 0, '"' or '\''
 		)
 		emit := func() error {
-			if tokens++; tokens > MaxTokens {
+			if tokens++; tokens > budget {
 				return ErrTooComplex
 			}
 			words = append(words, word{text: string(buf), dollar: dollar})
@@ -93,7 +115,7 @@ func lex(data []byte) ([]line, error) {
 			case c == '\\':
 				r, skip, err := escape(text[i+1:], quote)
 				if err != nil {
-					return nil, lineErr(err, n)
+					return nil, 0, lineErr(err, n)
 				}
 				c, i = r, i+skip
 			case c == '"' && quote == '"':
@@ -108,7 +130,7 @@ func lex(data []byte) ([]line, error) {
 			case isBlank(c):
 				if inWord {
 					if err := emit(); err != nil {
-						return nil, lineErr(err, n)
+						return nil, 0, lineErr(err, n)
 					}
 				}
 				continue
@@ -120,18 +142,46 @@ func lex(data []byte) ([]line, error) {
 			}
 		}
 		if quote != 0 {
-			return nil, lineErr(ErrSyntax, n)
+			return nil, 0, lineErr(ErrSyntax, n)
 		}
 		if inWord {
 			if err := emit(); err != nil {
-				return nil, lineErr(err, n)
+				return nil, 0, lineErr(err, n)
 			}
 		}
 		if len(words) > 0 {
-			lines = append(lines, line{n: n, words: words})
+			lines = append(lines, line{n: n, words: words[:len(words):len(words)]})
+			if len(words) <= cap(arena)-first {
+				arena = arena[:first+len(words)] // the words were read into the arena
+			}
 		}
 	}
-	return lines, nil
+	return lines, tokens, nil
+}
+
+// countLines counts the lines of data (split at LF) for which counts is true, up to limit.
+// Parsers size their output with it: counts says a line may give an entry.
+func countLines(data []byte, limit int, counts func(text []byte) bool) int {
+	n := 0
+	for pos := 0; pos < len(data) && n < limit; {
+		end := bytes.IndexByte(data[pos:], '\n')
+		if end < 0 {
+			end = len(data) - pos
+		}
+		if counts(data[pos : pos+end]) {
+			n++
+		}
+		pos += end + 1
+	}
+	return n
+}
+
+// sized is an empty slice with capacity n, nil for 0.
+func sized[T any](n int) []T {
+	if n == 0 {
+		return nil
+	}
+	return make([]T, 0, n)
 }
 
 // escape reads the escape after a backslash outside single quotes; rest is the line after the

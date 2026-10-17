@@ -51,10 +51,11 @@ var (
 		providers.ConfigReasonNotRegular, providers.ConfigReasonChanged, providers.ConfigReasonNameNotAllowed, providers.ConfigReasonUnexpectedText,
 		providers.ConfigReasonWrongFirstFile, providers.ConfigReasonDuplicateFile, providers.ConfigReasonNoConfPath, providers.ConfigReasonTooLarge,
 		providers.ConfigReasonTooComplex, providers.ConfigReasonIncludeLoop, providers.ConfigReasonNULByte}
-	// pairReasons are the reasons the helper gives an unsupported pair (nginxconf.Reason*, apacheconf.Reason*).
+	// pairReasons are the reasons the helper gives an unsupported pair (nginxconf.Reason*, apacheconf.Reason*,
+	// haproxyconf.Reason*).
 	pairReasons = []string{providers.UnsupportedVariable, providers.UnsupportedDataValue, providers.UnsupportedEngineKey, providers.UnsupportedKeyMissing,
 		providers.UnsupportedPasswordFile, providers.UnsupportedPathNotAllowed, providers.UnsupportedStream, providers.UnsupportedCombinedFile,
-		providers.UnsupportedConfigFileWritable, providers.UnsupportedConditional}
+		providers.UnsupportedConfigFileWritable, providers.UnsupportedConditional, providers.UnsupportedUnknownKeyword}
 	fileProblems = []string{providers.CertProblemMissing, providers.CertProblemNotRootControlled, providers.CertProblemNotRegular,
 		providers.CertProblemHardLinked, providers.CertProblemTooLarge, providers.CertProblemNotACertificate, providers.CertProblemUnreadable,
 		providers.CertProblemBadName, providers.CertProblemSpecialFS, providers.CertProblemNameNotAllowed, providers.CertProblemLeafUnreadable}

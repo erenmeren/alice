@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"alice/internal/providers/linuxssh/helperproto"
 )
 
 // FuzzParseCrtList (§25.6): the crt-list parser never panics; every line it returns has a
@@ -83,6 +85,68 @@ func FuzzLex(f *testing.F) {
 				if w.dollar != strings.Contains(w.text, "$") || strings.IndexByte(w.text, 0) >= 0 {
 					t.Fatalf("word %+v", w)
 				}
+			}
+		}
+	})
+}
+
+// FuzzParseHAProxyConfig (§25.6): Parse never panics on a hostile haproxy.cfg. The fuzzed data is
+// also every crt-list file, and every path ending "/d" is a directory with a certificate, a
+// dotfile and a key. Every supported pair has a helper path for its certificate and companion,
+// an unsupported one no path, every server a positive line and a pair, and the servers stay
+// within MaxServers; Parse is deterministic and ToWire never gives a nil slice.
+func FuzzParseHAProxyConfig(f *testing.F) {
+	f.Add([]byte("global\n  crt-base /c\n  ssl-load-extra-files ocsp key\n  ssl-load-extra-del-ext\n" +
+		"defaults\n  mode http\nfrontend fe\n  bind :9443,ipv6@[::1]:9444 ssl crt a.pem crt /c/d crt-list /l/x.txt alpn h2\n" +
+		"  disabled\n  enabled\nlisten li\n  bind *:9445 name crt crt /c/b.crt ssl\nbackend be\n  bind :1 ssl crt /x.pem\n"))
+	f.Add([]byte(".if 0\nfrontend a\n.elif defined(X)\nfrontend b\n.else\n.if 1\nglobal\n crt-base c\n.endif\n.endif\n" +
+		"  bind :1 ssl crt x.pem crt \"${D}/y\" crt '/c/../z' default-crt /q\n"))
+	f.Add([]byte("/c/a.pem [alpn h2] a.example.test !b\nfrontend f\n bind :1 ssl crt-list /f.txt crt-list rel crt-list /\n"))
+	f.Add([]byte(".if\n.endif\n.if\n"))
+	f.Add([]byte("frontend f\n bind " + strings.Repeat(":1,", 50) + " ssl crt /d crt /d\n"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		in := Input{Path: "/etc/haproxy/haproxy.cfg", Data: data, Version: "2.6.12",
+			ReadFile: func(string) ([]byte, error) { return data, nil },
+			ReadDir: func(path string) ([]string, bool, error) {
+				if strings.HasSuffix(path, "/d") {
+					return []string{"a.pem", ".b.pem", "c.key"}, true, nil
+				}
+				return nil, false, nil
+			},
+		}
+		got, err := Parse(in)
+		again, err2 := Parse(in)
+		if (err == nil) != (err2 == nil) || !reflect.DeepEqual(got, again) {
+			t.Fatalf("Parse is not deterministic")
+		}
+		if err != nil {
+			if got.Servers != nil || got.Warnings != nil {
+				t.Fatalf("a result with an error: %+v", got)
+			}
+			return
+		}
+		if len(got.Servers) > MaxServers {
+			t.Fatalf("%d servers", len(got.Servers))
+		}
+		for _, s := range got.Servers {
+			if s.Line < 1 || s.File != in.Path || len(s.Pairs) == 0 {
+				t.Fatalf("server %+v", s)
+			}
+			for _, p := range s.Pairs {
+				switch {
+				case p.Unsupported != "":
+					if p.Cert != "" || p.Key != "" || p.KeyBeside != "" {
+						t.Fatalf("unsupported pair with paths: %+v", p)
+					}
+				case !helperproto.ValidPath(p.Cert) || p.Cert == "/" || p.Key != p.Cert:
+					t.Fatalf("supported pair %+v", p)
+				case p.KeyBeside != "" && !helperproto.ValidPath(p.KeyBeside):
+					t.Fatalf("companion of %+v", p)
+				}
+			}
+			w := ToWire(s)
+			if w.Names == nil || w.Listens == nil || w.Pairs == nil || len(w.Pairs) != len(s.Pairs) {
+				t.Fatalf("wire %+v", w)
 			}
 		}
 	})

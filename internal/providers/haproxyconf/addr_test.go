@@ -31,7 +31,9 @@ func TestParseListens(t *testing.T) {
 		"bad entry kept out": {"unix@/x,:443,:0", []Listen{{"", 443}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			assert.Equal(t, tc.want, parseListens(tc.in))
+			got, cut := parseListens(tc.in, MaxListens)
+			assert.Equal(t, tc.want, got)
+			assert.False(t, cut)
 		})
 	}
 	for _, in := range []string{
@@ -42,18 +44,34 @@ func TestParseListens(t *testing.T) {
 		"[::1]:", "x@y:443", "\xff\xfe:443", "a\tb:443", "a\x7fb:443", strings.Repeat("a", 254) + ":443",
 	} {
 		t.Run(in, func(t *testing.T) {
-			assert.Empty(t, parseListens(in))
+			got, cut := parseListens(in, MaxListens)
+			assert.Empty(t, got)
+			assert.False(t, cut)
 		})
 	}
 	t.Run("253-byte host", func(t *testing.T) {
 		h := strings.Repeat("a", 253)
-		assert.Equal(t, []Listen{{h, 443}}, parseListens(h+":443"))
+		got, _ := parseListens(h+":443", MaxListens)
+		assert.Equal(t, []Listen{{h, 443}}, got)
 	})
 	t.Run("hostile list is quick", func(t *testing.T) {
 		start := time.Now()
-		_ = parseListens(strings.Repeat(":443,", MaxLine/5))
-		_ = parseListens(strings.Repeat(",", MaxLine))
+		got, cut := parseListens(strings.Repeat(":443,", MaxLine/5), MaxListens)
+		assert.Len(t, got, MaxListens)
+		assert.True(t, cut, "the entries past the limit are cut")
+		_, _ = parseListens(strings.Repeat(",", MaxLine), MaxListens)
 		assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+	})
+	t.Run("limit", func(t *testing.T) {
+		got, cut := parseListens(":1,:2,unix@/x,:3", 2)
+		assert.Equal(t, []Listen{{"", 1}, {"", 2}}, got)
+		assert.True(t, cut)
+		got, cut = parseListens(":1,:2,unix@/x", 2)
+		assert.Equal(t, []Listen{{"", 1}, {"", 2}}, got)
+		assert.False(t, cut, "an entry that gives no listen is not cut")
+		got, cut = parseListens(":1", 0)
+		assert.Empty(t, got)
+		assert.True(t, cut)
 	})
 }
 

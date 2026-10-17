@@ -28,14 +28,24 @@ type crtListLine struct {
 // The input is bounded as lex's is: MaxInput (ErrTooLarge), MaxLine (ErrLineTooLong), MaxTokens
 // words including the options (ErrTooComplex), and a NUL is ErrNUL. Errors name the line.
 func parseCrtList(data []byte) ([]crtListLine, error) {
+	lines, _, err := parseCrtListBudget(data, MaxTokens)
+	return lines, err
+}
+
+// parseCrtListBudget is parseCrtList with a word budget (see lexBudget); it also returns the
+// number of words read.
+func parseCrtListBudget(data []byte, budget int) ([]crtListLine, int, error) {
 	if len(data) > MaxInput {
-		return nil, ErrTooLarge
+		return nil, 0, ErrTooLarge
 	}
 	if i := bytes.IndexByte(data, 0); i >= 0 {
-		return nil, lineErr(ErrNUL, bytes.Count(data[:i], []byte("\n"))+1)
+		return nil, 0, lineErr(ErrNUL, bytes.Count(data[:i], []byte("\n"))+1)
 	}
 	var (
-		out    []crtListLine
+		// Sized once (see lex): the lines that are not skipped and hold a word.
+		out = sized[crtListLine](countLines(data, budget, func(text []byte) bool {
+			return len(text) > 0 && text[0] != '#' && text[0] != '\r' && len(bytes.TrimLeft(text, " \t\n\v\f\r")) > 0
+		}))
 		tokens int
 	)
 	for pos, n := 0, 1; pos < len(data); n++ {
@@ -47,24 +57,24 @@ func parseCrtList(data []byte) ([]crtListLine, error) {
 			pos = len(data)
 		}
 		if len(text) > MaxLine {
-			return nil, lineErr(ErrLineTooLong, n)
+			return nil, 0, lineErr(ErrLineTooLong, n)
 		}
 		if len(text) > 0 && (text[0] == '#' || text[0] == '\r') {
 			continue
 		}
 		l, words, err := crtListEntry(text)
 		if err != nil {
-			return nil, lineErr(err, n)
+			return nil, 0, lineErr(err, n)
 		}
-		if tokens += words; tokens > MaxTokens {
-			return nil, lineErr(ErrTooComplex, n)
+		if tokens += words; tokens > budget {
+			return nil, 0, lineErr(ErrTooComplex, n)
 		}
 		if l.path != "" {
 			l.n = n
 			out = append(out, l)
 		}
 	}
-	return out, nil
+	return out, tokens, nil
 }
 
 // crtListEntry reads one non-comment line. It returns the entry (an empty path for a blank

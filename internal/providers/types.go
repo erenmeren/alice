@@ -354,6 +354,7 @@ const (
 	UnsupportedCombinedFile       = "combined_file"
 	UnsupportedConfigFileWritable = "config_file_writable" // a configuration file can be changed by users other than root
 	UnsupportedConditional        = "conditional"          // the pair sits in a region whose condition cannot be evaluated
+	UnsupportedUnknownKeyword     = "unknown_keyword"      // an HAProxy bind line has a keyword Alice does not know
 	UnsupportedKeyConflict        = "key_conflict"         // one certificate file used with different key files
 	UnsupportedFile               = "file_problem"         // see Problem / KeyProblem
 	UnsupportedKeyType            = "unsupported_key"      // the certificate is not RSA or ECDSA (set by inventory)

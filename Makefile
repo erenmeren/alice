@@ -370,6 +370,11 @@ fuzz-apache: ## Fuzz the Apache DUMP_INCLUDES and configuration parsers ($(FUZZT
 	go test -count=1 -run '^$$' -fuzz FuzzParseApacheIncludes -fuzztime $(FUZZTIME) ./internal/providers/apacheconf/
 	go test -count=1 -run '^$$' -fuzz FuzzParseApacheConfig -fuzztime $(FUZZTIME) ./internal/providers/apacheconf/
 
+.PHONY: fuzz-haproxy
+fuzz-haproxy: ## Fuzz the HAProxy crt-list and configuration parsers ($(FUZZTIME) each; spec §25.6)
+	go test -count=1 -run '^$$' -fuzz FuzzParseCrtList -fuzztime $(FUZZTIME) ./internal/providers/haproxyconf/
+	go test -count=1 -run '^$$' -fuzz FuzzParseHAProxyConfig -fuzztime $(FUZZTIME) ./internal/providers/haproxyconf/
+
 .PHONY: fuzz-netaddr
 fuzz-netaddr: ## Fuzz the scan address rule and the route table parsers ($(FUZZTIME) each; network discovery)
 	go test -count=1 -run '^$$' -fuzz FuzzAllowedForScan -fuzztime $(FUZZTIME) ./internal/platform/netaddr/
@@ -412,12 +417,12 @@ fuzz-api: ## Fuzz every create/update body of the API (needs Docker; $(FUZZTIME)
 	go test -count=1 -tags integration -run '^$$' -fuzz FuzzOpenAPIInputs -fuzztime $(FUZZTIME) ./internal/api/
 
 .PHONY: fuzz-nightly
-fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly; 31 targets, 310 minutes)
-	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-ldap fuzz-nginx fuzz-apache fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-tlsprobe fuzz-api FUZZTIME=10m
+fuzz-nightly: ## Every fuzz target for 10 minutes (spec §25.6 nightly; 33 targets, 330 minutes)
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-ldap fuzz-nginx fuzz-apache fuzz-haproxy fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-tlsprobe fuzz-api FUZZTIME=10m
 
 .PHONY: fuzz-release
-fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; 31 targets, about 15.5 hours)
-	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-ldap fuzz-nginx fuzz-apache fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-tlsprobe fuzz-api FUZZTIME=30m
+fuzz-release: ## Every fuzz target for 30 minutes (spec §25.6 release; 33 targets, about 16.5 hours)
+	$(MAKE) fuzz-license fuzz-ssh fuzz-oidc fuzz-ldap fuzz-nginx fuzz-apache fuzz-haproxy fuzz-certs fuzz-backup fuzz-acme-docs fuzz-acme-order fuzz-netaddr fuzz-discovery fuzz-tlsprobe fuzz-api FUZZTIME=30m
 
 # Dynamic gates (Task 15; spec §22.7 stages 5 and 6, §25.7). zap-baseline, zap-full and testssl scan
 # the release image (alice:ci of make image) as compose project alice-zap on 127.0.0.1:9445

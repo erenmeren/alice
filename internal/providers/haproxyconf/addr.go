@@ -25,15 +25,20 @@ var listenPrefixes = []string{"ipv4@", "ipv6@", "tcp@", "tcp4@", "tcp6@", "udp@"
 // drops the entry, and so does a host with "$", "[", "]", a control character, invalid UTF-8 or
 // more than 253 bytes. Entries keep
 // their order; Addr is a copy, so the argument is not retained.
-func parseListens(arg string) []Listen {
-	var out []Listen
+//
+// At most limit listens are returned (one 1 MiB argument could otherwise name about 200,000);
+// cut is true when a further entry was left out.
+func parseListens(arg string, limit int) (out []Listen, cut bool) {
 	for rest := arg; ; {
 		entry, more, found := strings.Cut(rest, ",")
 		if l, ok := parseListen(entry); ok {
+			if len(out) >= limit {
+				return out, true
+			}
 			out = append(out, l)
 		}
 		if !found {
-			return out
+			return out, false
 		}
 		rest = more
 	}

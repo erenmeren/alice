@@ -36,7 +36,15 @@ const (
 	MaxPairs      = 1 << 16  // certificate pairs across all servers
 	MaxServers    = 1 << 16  // servers (a bind's crt pairs, or one crt-list line)
 	MaxNames      = 1 << 17  // SNI filters across all servers
+	// MaxListens bounds the listens of all binds together (controller ruling for Task 5): one
+	// 1 MiB address argument names about 200,000. A bind's listens are shared by all its
+	// servers and counted once; past the bound they are cut and Config.Warnings says
+	// WarnListTruncated, as Alice's other list bounds do.
+	MaxListens = 1 << 16
 )
+
+// WarnListTruncated is Config.Warnings' code for a list cut at its bound (providers.WarnListTruncated).
+const WarnListTruncated = "list_truncated"
 
 // Errors.
 var (

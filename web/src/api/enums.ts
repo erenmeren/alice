@@ -91,6 +91,7 @@ export const UNSUPPORTED_REASONS: readonly string[] = [
   'combined_file',
   'config_file_writable',
   'conditional',
+  'unknown_keyword',
   'key_conflict',
   'file_problem',
   'unsupported_key',

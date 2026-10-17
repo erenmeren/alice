@@ -6645,8 +6645,8 @@ components:
           type: string
           description: >-
             "" when supported. Known values: variable, data_value, engine_key, key_missing, password_file,
-            path_not_allowed, stream, combined_file, config_file_writable, conditional, key_conflict, file_problem (see problem and
-            key_problem), unsupported_key, unknown; a newer server may add others.
+            path_not_allowed, stream, combined_file, config_file_writable, conditional, unknown_keyword, key_conflict, file_problem (see
+            problem and key_problem), unsupported_key, unknown; a newer server may add others.
         problem: { $ref: "#/components/schemas/FileProblem" }
         key_problem: { $ref: "#/components/schemas/FileProblem" }
         inherited: { type: boolean }
