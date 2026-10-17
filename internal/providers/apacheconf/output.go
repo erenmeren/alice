@@ -1,8 +1,9 @@
 package apacheconf
 
 import (
+	"bytes"
 	"fmt"
-	"strconv"
+	"iter"
 	"strings"
 
 	"alice/internal/providers/linuxssh/helperproto"
@@ -12,18 +13,23 @@ import (
 // first "Server version: Apache/<v> (<os>)" line (the " (<os>)" part is optional), "" when it is
 // longer than 40 characters or holds a character outside [A-Za-z0-9.+-]. confPath is
 // -D SERVER_CONFIG_FILE, joined to -D HTTPD_ROOT when relative; it is "" unless the result is a
-// valid helper path other than "/" (a relative or unclean root gives "").
+// valid helper path other than "/" (a relative or unclean root gives ""). Output with a CR, or
+// larger than MaxInput, gives ("", ""). Only the lines it uses are copied.
 func ParseV(out []byte) (version, confPath string) {
+	if len(out) > MaxInput || bytes.IndexByte(out, '\r') >= 0 {
+		return "", ""
+	}
 	var root, file string
 	var seenVersion, seenRoot, seenFile bool
-	for _, ln := range strings.Split(string(out), "\n") {
-		ln = strings.TrimSuffix(ln, "\r")
-		if v, ok := strings.CutPrefix(ln, "Server version: "); ok {
+	for _, ln := range outputLines(out) {
+		if v, ok := bytes.CutPrefix(ln, []byte("Server version: ")); ok {
 			if !seenVersion {
 				seenVersion = true
-				if v, ok = strings.CutPrefix(v, "Apache/"); ok {
-					v, _, _ = strings.Cut(v, " (")
-					version = v
+				if v, ok = bytes.CutPrefix(v, []byte("Apache/")); ok {
+					v, _, _ = bytes.Cut(v, []byte(" ("))
+					if validVersion(v) {
+						version = string(v)
+					}
 				}
 			}
 			continue
@@ -34,9 +40,6 @@ func ParseV(out []byte) (version, confPath string) {
 		if v, ok := compiledDefine(ln, "SERVER_CONFIG_FILE"); ok && !seenFile {
 			seenFile, file = true, v
 		}
-	}
-	if !validVersion(version) {
-		version = ""
 	}
 	switch {
 	case strings.HasPrefix(file, "/"):
@@ -52,18 +55,25 @@ func ParseV(out []byte) (version, confPath string) {
 	return version, confPath
 }
 
-// compiledDefine reads a ` -D NAME="value"` line of "-V".
-func compiledDefine(ln, name string) (string, bool) {
-	v, ok := strings.CutPrefix(ln, ` -D `+name+`="`)
+// compiledDefine reads a ` -D NAME="value"` line of "-V". A value longer than a helper path is
+// returned as "" (it cannot be one).
+func compiledDefine(ln []byte, name string) (string, bool) {
+	v, ok := bytes.CutPrefix(ln, []byte(` -D `+name+`="`))
 	if !ok {
 		return "", false
 	}
-	return strings.CutSuffix(v, `"`)
+	if v, ok = bytes.CutSuffix(v, []byte(`"`)); !ok {
+		return "", false
+	}
+	if len(v) > maxPath {
+		return "", true
+	}
+	return string(v), true
 }
 
 // validVersion is nginx's version rule: 1 to 40 characters of [A-Za-z0-9.+-].
-func validVersion(v string) bool {
-	if v == "" || len(v) > 40 {
+func validVersion(v []byte) bool {
+	if len(v) == 0 || len(v) > 40 {
 		return false
 	}
 	for i := 0; i < len(v); i++ {
@@ -90,46 +100,53 @@ const includesHeader = "Included configuration files:"
 // indented by 2+2k spaces at include depth k, "(*)" for the root (exactly once, first) or "(<n>)"
 // for a file loaded at line n of its parent, one space and an absolute clean path. Depth grows by
 // at most 1 per line; the parent is the nearest earlier entry one level up. A line exactly
-// "Syntax OK" is skipped; anything else is ErrOutput.
+// "Syntax OK" is skipped; anything else is ErrOutput, and more than MaxFiles entries is
+// ErrTooComplex. It stops at the first bad line and copies only the paths it returns.
 func ParseIncludes(out []byte) ([]Included, error) {
-	if len(out) > MaxInput {
-		return nil, ErrTooLarge
-	}
-	lines := outputLines(out)
-	if len(lines) == 0 || lines[0] != includesHeader {
-		return nil, outputErr(1)
+	if err := checkOutput(out); err != nil {
+		return nil, err
 	}
 	var (
-		res  []Included
-		last []int // last[k]: index of the latest entry at depth k
+		res    []Included
+		last   []int // last[k]: index of the latest entry at depth k
+		header bool
+		total  int
 	)
-	for n, ln := range lines[1:] {
-		if ln == "Syntax OK" {
+	for n, ln := range outputLines(out) {
+		total = n
+		if !header {
+			if string(ln) != includesHeader {
+				return nil, outputErr(n)
+			}
+			header = true
 			continue
 		}
-		indent := len(ln) - len(strings.TrimLeft(ln, " "))
+		if string(ln) == "Syntax OK" {
+			continue
+		}
+		indent := len(ln) - len(bytes.TrimLeft(ln, " "))
 		if indent < 2 || indent%2 != 0 {
-			return nil, outputErr(n + 2)
+			return nil, outputErr(n)
 		}
 		depth := (indent - 2) / 2
-		tag, path, ok := strings.Cut(ln[indent:], " ")
-		if !ok || !helperproto.ValidPath(path) {
-			return nil, outputErr(n + 2)
+		tag, path, ok := bytes.Cut(ln[indent:], []byte(" "))
+		if !ok || len(path) > maxPath || !helperproto.ValidPath(string(path)) {
+			return nil, outputErr(n)
 		}
-		e := Included{Path: path, Parent: -1}
+		e := Included{Parent: -1}
 		switch {
-		case tag == "(*)":
+		case string(tag) == "(*)":
 			if depth != 0 || len(res) != 0 {
-				return nil, outputErr(n + 2)
+				return nil, outputErr(n)
 			}
 		case depth == 0 || len(res) == 0 || depth > len(last):
 			// a numbered entry at the root's level, before the root, or more than one level
 			// below the previous entry
-			return nil, outputErr(n + 2)
+			return nil, outputErr(n)
 		default:
 			line, ok := includeLine(tag)
 			if !ok {
-				return nil, outputErr(n + 2)
+				return nil, outputErr(n)
 			}
 			if depth > MaxDepth {
 				return nil, ErrTooDeep
@@ -139,31 +156,33 @@ func ParseIncludes(out []byte) ([]Included, error) {
 		if len(res) >= MaxFiles {
 			return nil, ErrTooComplex
 		}
+		e.Path = string(path)
 		last = append(last[:depth], len(res))
 		res = append(res, e)
 	}
 	if len(res) == 0 {
-		return nil, outputErr(len(lines))
+		return nil, outputErr(total + 1)
 	}
 	return res, nil
 }
 
 // includeLine reads "(<n>)": a positive decimal of at most 9 digits without a leading zero.
-func includeLine(tag string) (int, bool) {
-	s, ok := strings.CutPrefix(tag, "(")
+func includeLine(tag []byte) (int, bool) {
+	s, ok := bytes.CutPrefix(tag, []byte("("))
 	if !ok {
 		return 0, false
 	}
-	if s, ok = strings.CutSuffix(s, ")"); !ok || s == "" || len(s) > 9 || s[0] == '0' {
+	if s, ok = bytes.CutSuffix(s, []byte(")")); !ok || len(s) == 0 || len(s) > 9 || s[0] == '0' {
 		return 0, false
 	}
-	for i := 0; i < len(s); i++ {
-		if s[i] < '0' || s[i] > '9' {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
 			return 0, false
 		}
+		n = n*10 + int(c-'0')
 	}
-	n, err := strconv.Atoi(s)
-	return n, err == nil
+	return n, true
 }
 
 // Modules is "-D DUMP_MODULES -t": Static holds the modules compiled in, Loaded every module
@@ -174,43 +193,53 @@ type Modules struct {
 
 // ParseModules reads "-D DUMP_MODULES -t": the header "Loaded Modules:", then one line
 // " <name> (static)" or " <name> (shared)" per module. A name is 1 to 255 characters of
-// [A-Za-z0-9_.-]. Anything else is ErrOutput.
+// [A-Za-z0-9_.-]. Anything else is ErrOutput; more than MaxModules module lines is ErrTooComplex.
 func ParseModules(out []byte) (Modules, error) {
+	if err := checkOutput(out); err != nil {
+		return Modules{}, err
+	}
 	m := Modules{Static: map[string]bool{}, Loaded: map[string]bool{}}
-	if len(out) > MaxInput {
-		return Modules{}, ErrTooLarge
-	}
-	lines := outputLines(out)
-	if len(lines) == 0 || lines[0] != "Loaded Modules:" {
-		return Modules{}, outputErr(1)
-	}
-	for n, ln := range lines[1:] {
-		rest, ok := strings.CutPrefix(ln, " ")
+	header := false
+	for n, ln := range outputLines(out) {
+		if !header {
+			if string(ln) != "Loaded Modules:" {
+				return Modules{}, outputErr(n)
+			}
+			header = true
+			continue
+		}
+		if n-1 > MaxModules {
+			return Modules{}, ErrTooComplex
+		}
+		rest, ok := bytes.CutPrefix(ln, []byte(" "))
 		if !ok {
-			return Modules{}, outputErr(n + 2)
+			return Modules{}, outputErr(n)
 		}
-		name, kind, _ := strings.Cut(rest, " ")
+		name, kind, _ := bytes.Cut(rest, []byte(" "))
 		if !validModule(name) {
-			return Modules{}, outputErr(n + 2)
+			return Modules{}, outputErr(n)
 		}
-		switch kind {
+		switch string(kind) {
 		case "(static)":
-			m.Static[name] = true
+			m.Static[string(name)] = true
 		case "(shared)":
 		default:
-			return Modules{}, outputErr(n + 2)
+			return Modules{}, outputErr(n)
 		}
-		m.Loaded[name] = true
+		m.Loaded[string(name)] = true
+	}
+	if !header {
+		return Modules{}, outputErr(1)
 	}
 	return m, nil
 }
 
-func validModule(name string) bool {
-	if name == "" || len(name) > 255 {
+func validModule(name []byte) bool {
+	if len(name) == 0 || len(name) > 255 {
 		return false
 	}
-	for i := 0; i < len(name); i++ {
-		if c := name[i]; !identByte(c) && c != '.' && c != '-' {
+	for _, c := range name {
+		if !identByte(c) && c != '.' && c != '-' {
 			return false
 		}
 	}
@@ -228,46 +257,46 @@ type RunConfig struct {
 // ParseRunConfig reads "-D DUMP_RUN_CFG -t": the line `ServerRoot: "<path>"` (at most once; the
 // path must be a valid helper path once trailing slashes are removed) and the lines
 // "Define: NAME" and "Define: NAME=VALUE" (NAME is not empty and has no white space; VALUE is the
-// rest of the line). Every other line is ignored.
+// rest of the line). Every other line is ignored. More than MaxDefines Define lines is
+// ErrTooComplex.
 func ParseRunConfig(out []byte) (RunConfig, error) {
-	if len(out) > MaxInput {
-		return RunConfig{}, ErrTooLarge
+	if err := checkOutput(out); err != nil {
+		return RunConfig{}, err
 	}
 	rc := RunConfig{Defines: map[string]string{}}
 	seenRoot := false
+	defines := 0
 	for n, ln := range outputLines(out) {
-		ln = strings.TrimSuffix(ln, "\r")
-		if v, ok := strings.CutPrefix(ln, "ServerRoot: "); ok {
-			root, ok := unquote(v)
-			if trimmed := strings.TrimRight(root, "/"); trimmed != "" {
+		if v, ok := bytes.CutPrefix(ln, []byte("ServerRoot: ")); ok {
+			root, ok := bytes.CutPrefix(v, []byte(`"`))
+			if ok {
+				root, ok = bytes.CutSuffix(root, []byte(`"`))
+			}
+			if trimmed := bytes.TrimRight(root, "/"); len(trimmed) > 0 {
 				root = trimmed
-			} else if root != "" {
-				root = "/"
+			} else if len(root) > 0 {
+				root = []byte("/")
 			}
-			if seenRoot || !ok || !helperproto.ValidPath(root) {
-				return RunConfig{}, outputErr(n + 1)
+			if seenRoot || !ok || len(root) > maxPath || !helperproto.ValidPath(string(root)) {
+				return RunConfig{}, outputErr(n)
 			}
-			seenRoot, rc.ServerRoot = true, root
+			seenRoot, rc.ServerRoot = true, string(root)
 			continue
 		}
-		if v, ok := strings.CutPrefix(ln, "Define: "); ok {
-			name, value, _ := strings.Cut(v, "=")
-			if name == "" || strings.ContainsAny(name, " \t\v\f\r") {
-				return RunConfig{}, outputErr(n + 1)
+		if v, ok := bytes.CutPrefix(ln, []byte("Define: ")); ok {
+			if defines++; defines > MaxDefines {
+				return RunConfig{}, ErrTooComplex
 			}
-			if !strings.HasPrefix(name, "DUMP_") {
-				rc.Defines[name] = value
+			name, value, _ := bytes.Cut(v, []byte("="))
+			if len(name) == 0 || bytes.ContainsAny(name, " \t\v\f") {
+				return RunConfig{}, outputErr(n)
+			}
+			if !bytes.HasPrefix(name, []byte("DUMP_")) {
+				rc.Defines[string(name)] = string(value)
 			}
 		}
 	}
 	return rc, nil
-}
-
-func unquote(s string) (string, bool) {
-	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
-		return "", false
-	}
-	return s[1 : len(s)-1], true
 }
 
 // moduleFiles maps the source file names of the core and MPM modules, which do not follow the
@@ -315,12 +344,33 @@ func identByte(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_'
 }
 
-// outputLines splits tool output into lines; a final newline does not start an empty line.
-func outputLines(out []byte) []string {
-	if len(out) == 0 {
-		return nil
+// outputLines yields the lines of tool output (numbered from 1, without the "\n") as sub-slices
+// of out, without copying; a final newline does not start an empty line.
+func outputLines(out []byte) iter.Seq2[int, []byte] {
+	return func(yield func(int, []byte) bool) {
+		for n, pos := 1, 0; pos < len(out); n++ {
+			ln := out[pos:]
+			if end := bytes.IndexByte(ln, '\n'); end >= 0 {
+				ln = ln[:end]
+			}
+			pos += len(ln) + 1
+			if !yield(n, ln) {
+				return
+			}
+		}
 	}
-	return strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+}
+
+// checkOutput refuses tool output larger than MaxInput, and output with a CR: Apache writes LF
+// line ends only.
+func checkOutput(out []byte) error {
+	if len(out) > MaxInput {
+		return ErrTooLarge
+	}
+	if i := bytes.IndexByte(out, '\r'); i >= 0 {
+		return outputErr(bytes.Count(out[:i], []byte("\n")) + 1)
+	}
+	return nil
 }
 
 func outputErr(line int) error { return fmt.Errorf("%w (line %d)", ErrOutput, line) }

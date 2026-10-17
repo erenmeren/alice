@@ -110,20 +110,22 @@ func lex(file string, data []byte) ([]line, error) {
 
 // lexLine splits one trimmed, non-empty, non-comment logical line.
 func lexLine(text string) (line, error) {
+	if inner, ok := strings.CutPrefix(text, "</"); ok {
+		// Apache matches the raw trimmed line, before any unquoting, against "</Name>".
+		inner, ok = strings.CutSuffix(inner, ">")
+		if !ok || inner == "" || strings.ContainsAny(inner, " \t\n\v\f\r") {
+			return line{}, ErrSyntax
+		}
+		return line{name: asciiLower(inner), closing: true}, nil
+	}
 	name, rest, err := word(text)
 	if err != nil {
 		return line{}, err
 	}
-	if name == "" {
-		return line{}, ErrSyntax // an empty quoted name
-	}
-	if inner, ok := strings.CutPrefix(name, "</"); ok {
-		// Apache matches the whole trimmed line against "</Name>".
-		inner, ok = strings.CutSuffix(inner, ">")
-		if !ok || inner == "" || rest != "" {
-			return line{}, ErrSyntax
-		}
-		return line{name: asciiLower(inner), closing: true}, nil
+	if name == "" || strings.HasPrefix(name, "</") {
+		// an empty quoted name, or a quoted closing tag ("</If>"): Apache reads the latter as
+		// an unknown directive, never as the end of a section
+		return line{}, ErrSyntax
 	}
 	if inner, ok := strings.CutPrefix(name, "<"); ok {
 		// ap_build_config_sub drops a ">" that ends the name and, for "<Name>", gives the

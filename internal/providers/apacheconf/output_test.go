@@ -1,7 +1,9 @@
 package apacheconf
 
 import (
+	"bytes"
 	"errors"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -52,7 +54,10 @@ func TestParseV(t *testing.T) {
 		"rocky 9 real":     {rockyV, "2.4.62", "/etc/httpd/conf/httpd.conf"},
 		"rhel (brief)":     {"Server version: Apache/2.4.57 (Red Hat Enterprise Linux)\n -D HTTPD_ROOT=\"/etc/httpd\"\n -D SERVER_CONFIG_FILE=\"conf/httpd.conf\"\n", "2.4.57", "/etc/httpd/conf/httpd.conf"},
 		"no os token":      {"Server version: Apache/2.4.58\n -D SERVER_CONFIG_FILE=\"/etc/httpd.conf\"\n", "2.4.58", "/etc/httpd.conf"},
-		"crlf":             {"Server version: Apache/2.4.58 (Unix)\r\n -D SERVER_CONFIG_FILE=\"/etc/httpd.conf\"\r\n", "2.4.58", "/etc/httpd.conf"},
+		"crlf":             {"Server version: Apache/2.4.58 (Unix)\r\n -D SERVER_CONFIG_FILE=\"/etc/httpd.conf\"\r\n", "", ""},
+		"cr elsewhere":     {"Server version: Apache/2.4.58 (Unix)\n -D SERVER_CONFIG_FILE=\"/etc/httpd.conf\"\nX\ry\n", "", ""},
+		"too large":        {"Server version: Apache/2.4.58 (Unix)\n" + strings.Repeat("x", MaxInput), "", ""},
+		"long define":      {"Server version: Apache/2.4.58 (Unix)\n -D SERVER_CONFIG_FILE=\"/" + strings.Repeat("a", 4096) + "\"\n", "2.4.58", ""},
 		"absolute file":    {"Server version: Apache/2.4.58 (Unix)\n -D HTTPD_ROOT=\"/opt/x\"\n -D SERVER_CONFIG_FILE=\"/etc/a/httpd.conf\"\n", "2.4.58", "/etc/a/httpd.conf"},
 		"root slash":       {"Server version: Apache/2.4.58 (Unix)\n -D HTTPD_ROOT=\"/\"\n -D SERVER_CONFIG_FILE=\"httpd.conf\"\n", "2.4.58", "/httpd.conf"},
 		"space in version": {"Server version: Apache/2.4 .57 (Debian)\n", "", ""},
@@ -73,6 +78,7 @@ func TestParseV(t *testing.T) {
 		"space in path":   {"Server version: Apache/2.4.58 (Unix)\n -D SERVER_CONFIG_FILE=\"/etc/a b.conf\"\n", "2.4.58", ""},
 		"file is root":    {"Server version: Apache/2.4.58 (Unix)\n -D SERVER_CONFIG_FILE=\"/\"\n", "2.4.58", ""},
 		"unquoted define": {"Server version: Apache/2.4.58 (Unix)\n -D SERVER_CONFIG_FILE=/etc/httpd.conf\n", "2.4.58", ""},
+		"unclosed define": {"Server version: Apache/2.4.58 (Unix)\n -D SERVER_CONFIG_FILE=\"/etc/httpd.conf\n", "2.4.58", ""},
 		"empty":           {"", "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -182,6 +188,8 @@ func TestParseIncludes(t *testing.T) {
 		"stray text":         h + root + "AH00558: apache2: Could not reliably determine\n",
 		"crlf":               "Included configuration files:\r\n  (*) /etc/apache2/apache2.conf\r\n",
 		"nul":                h + "  (*) /etc/apache2/apache2.conf\x00\n",
+		"cr after the tree":  h + root + "Syntax OK\r\n",
+		"long path":          h + "  (*) /" + strings.Repeat("a", 4096) + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := ParseIncludes([]byte(in))
@@ -272,6 +280,7 @@ func TestParseModules(t *testing.T) {
 		"crlf":            "Loaded Modules:\r\n ssl_module (shared)\r\n",
 		"long name":       h + " " + strings.Repeat("a", 256) + " (shared)\n",
 		"stray stderr":    h + "AH00558: apache2: Could not reliably determine\n",
+		"cr in a name":    h + " ssl\r_module (shared)\n",
 		"name with space": h + " a b (shared)\n",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -311,14 +320,13 @@ func TestParseRunConfig(t *testing.T) {
 			RunConfig{ServerRoot: "/etc/httpd", Defines: map[string]string{"FOO": "", "CERTS": "/etc/ssl/a b", "EMPTY": "", "EQ": "a=b"}}},
 		"other dump defines dropped": {"Define: DUMP_INCLUDES\nDefine: DUMP_MODULES\nDefine: DUMP_VHOSTS\nDefine: DUMP_X=1\nDefine: SSL\n",
 			RunConfig{Defines: map[string]string{"SSL": ""}}},
-		"later define wins":     {"Define: A=1\nDefine: A=2\n", RunConfig{Defines: map[string]string{"A": "2"}}},
-		"no server root":        {"Define: X\n", RunConfig{Defines: map[string]string{"X": ""}}},
-		"trailing slash":        {"ServerRoot: \"/etc/httpd/\"\n", RunConfig{ServerRoot: "/etc/httpd", Defines: map[string]string{}}},
-		"server root is /":      {"ServerRoot: \"/\"\n", RunConfig{ServerRoot: "/", Defines: map[string]string{}}},
-		"server root is //":     {"ServerRoot: \"//\"\n", RunConfig{ServerRoot: "/", Defines: map[string]string{}}},
-		"other lines ignored":   {"Whatever: x\n\nAH00558: y\n", RunConfig{Defines: map[string]string{}}},
-		"empty":                 {"", RunConfig{Defines: map[string]string{}}},
-		"no final newline crlf": {"ServerRoot: \"/etc/httpd\"\r\nDefine: A=b\r\n", RunConfig{ServerRoot: "/etc/httpd", Defines: map[string]string{"A": "b"}}},
+		"later define wins":   {"Define: A=1\nDefine: A=2\n", RunConfig{Defines: map[string]string{"A": "2"}}},
+		"no server root":      {"Define: X\n", RunConfig{Defines: map[string]string{"X": ""}}},
+		"trailing slash":      {"ServerRoot: \"/etc/httpd/\"\n", RunConfig{ServerRoot: "/etc/httpd", Defines: map[string]string{}}},
+		"server root is /":    {"ServerRoot: \"/\"\n", RunConfig{ServerRoot: "/", Defines: map[string]string{}}},
+		"server root is //":   {"ServerRoot: \"//\"\n", RunConfig{ServerRoot: "/", Defines: map[string]string{}}},
+		"other lines ignored": {"Whatever: x\n\nAH00558: y\n", RunConfig{Defines: map[string]string{}}},
+		"empty":               {"", RunConfig{Defines: map[string]string{}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := ParseRunConfig([]byte(tc.in))
@@ -327,15 +335,19 @@ func TestParseRunConfig(t *testing.T) {
 		})
 	}
 	for name, in := range map[string]string{
-		"two server roots":   "ServerRoot: \"/etc/httpd\"\nServerRoot: \"/etc/x\"\n",
-		"unquoted root":      "ServerRoot: /etc/httpd\n",
-		"relative root":      "ServerRoot: \"etc/httpd\"\n",
-		"empty root":         "ServerRoot: \"\"\n",
-		"unclean root":       "ServerRoot: \"/etc/../httpd\"\n",
-		"root with space":    "ServerRoot: \"/etc/a b\"\n",
-		"empty define name":  "Define: \n",
-		"define name equals": "Define: =x\n",
-		"define name space":  "Define: A B\n",
+		"two server roots":      "ServerRoot: \"/etc/httpd\"\nServerRoot: \"/etc/x\"\n",
+		"unquoted root":         "ServerRoot: /etc/httpd\n",
+		"relative root":         "ServerRoot: \"etc/httpd\"\n",
+		"empty root":            "ServerRoot: \"\"\n",
+		"unclean root":          "ServerRoot: \"/etc/../httpd\"\n",
+		"root with space":       "ServerRoot: \"/etc/a b\"\n",
+		"empty define name":     "Define: \n",
+		"define name equals":    "Define: =x\n",
+		"define name space":     "Define: A B\n",
+		"crlf":                  "ServerRoot: \"/etc/httpd\"\r\nDefine: A=b\r\n",
+		"cr in a value":         "Define: A=b\rc\n",
+		"cr in an ignored line": "Main DocumentRoot: \"/var/www\r\"\n",
+		"long root":             "ServerRoot: \"/" + strings.Repeat("a", 4096) + "\"\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ParseRunConfig([]byte(in))
@@ -409,4 +421,65 @@ func TestErrors(t *testing.T) {
 	assert.Equal(t, "conditional", ReasonConditional)
 	assert.Equal(t, "path_not_allowed", ReasonPathNotAllowed)
 	assert.Equal(t, "config_file_writable", ReasonConfigFileWritable)
+}
+
+func TestOutputCaps(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("Loaded Modules:\n")
+	for i := range MaxModules {
+		b.WriteString(" m" + strconv.Itoa(i) + "_module (shared)\n")
+	}
+	m, err := ParseModules([]byte(b.String()))
+	require.NoError(t, err)
+	assert.Len(t, m.Loaded, MaxModules)
+	b.WriteString(" one_more_module (shared)\n")
+	_, err = ParseModules([]byte(b.String()))
+	assert.ErrorIs(t, err, ErrTooComplex)
+
+	b.Reset()
+	for i := range MaxDefines {
+		b.WriteString("Define: D" + strconv.Itoa(i) + "=v\n")
+	}
+	rc, err := ParseRunConfig([]byte(b.String()))
+	require.NoError(t, err)
+	assert.Len(t, rc.Defines, MaxDefines)
+	b.WriteString("Define: DUMP_RUN_CFG\n") // DUMP_* lines count too
+	_, err = ParseRunConfig([]byte(b.String()))
+	assert.ErrorIs(t, err, ErrTooComplex)
+}
+
+// allocated is the number of bytes f allocates.
+func allocated(f func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	f()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// The parsers run in the root helper on up to 20 MiB of hostile output: they never split it into
+// strings, so what they allocate stays far below the input size whatever its shape.
+func TestOutputAllocations(t *testing.T) {
+	newlines := append([]byte("Included configuration files:\n"), bytes.Repeat([]byte("\n"), MaxInput-64)...)
+	syntaxOK := append([]byte("Included configuration files:\n  (*) /etc/a.conf\n"), bytes.Repeat([]byte("Syntax OK\n"), MaxInput/10-8)...)
+	modules := append([]byte("Loaded Modules:\n"), bytes.Repeat([]byte(" a_module (shared)\n"), (MaxInput-64)/19)...)
+	ignored := bytes.Repeat([]byte("x\n"), MaxInput/2)
+	for name, tc := range map[string]struct {
+		in    []byte
+		parse func([]byte)
+	}{
+		"includes: newlines":     {newlines, func(b []byte) { _, _ = ParseIncludes(b) }},
+		"includes: Syntax OK":    {syntaxOK, func(b []byte) { _, _ = ParseIncludes(b) }},
+		"modules: many lines":    {modules, func(b []byte) { _, _ = ParseModules(b) }},
+		"run config: ignored":    {ignored, func(b []byte) { _, _ = ParseRunConfig(b) }},
+		"-V: ignored":            {ignored, func(b []byte) { _, _ = ParseV(b) }},
+		"modules: one long line": {append([]byte("Loaded Modules:\n "), bytes.Repeat([]byte("a"), MaxInput-64)...), func(b []byte) { _, _ = ParseModules(b) }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := allocated(func() { tc.parse(tc.in) })
+			t.Logf("%d bytes allocated for %d bytes of input", got, len(tc.in))
+			assert.Less(t, got, uint64(1<<20), "allocations must not grow with the input")
+		})
+	}
 }

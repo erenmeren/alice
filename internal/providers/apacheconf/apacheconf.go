@@ -7,7 +7,10 @@
 // tool output is that server's binary.
 //
 // The tool-output parsers are strict: a line that is not in the format Apache prints is an
-// ErrOutput, never a guess. The configuration lexer follows Apache's own reader (ap_cfg_getline
+// ErrOutput, never a guess, and so is any CR (Apache writes LF line ends only; ParseV, which
+// returns no error, then finds nothing). They walk the output line by line without splitting
+// it, stop at the first bad line, and copy only what they return, which MaxFiles, MaxModules
+// and MaxDefines bound. The configuration lexer follows Apache's own reader (ap_cfg_getline
 // and ap_getword_conf): a trailing backslash continues a line, "#" starts a comment only as the
 // first character of a line, and quotes group words. Every input is bounded (MaxInput, MaxLine,
 // MaxTokens, MaxDepth, MaxFiles).
@@ -21,11 +24,17 @@ import (
 
 // Limits (§25.6: deep nesting, huge lines and amplification are refused cleanly).
 const (
-	MaxInput  = 20 << 20 // bytes of one tool output, or of one configuration file
-	MaxFiles  = 4096     // entries of the include tree
-	MaxDepth  = 100      // nesting of sections, and of includes
-	MaxLine   = 1 << 20  // bytes of one logical configuration line (continuations joined)
-	MaxTokens = 1 << 20  // words (directive names and arguments) of one configuration file
+	MaxInput = 20 << 20 // bytes of one tool output, or of one configuration file
+	MaxFiles = 4096     // entries of the include tree
+	// MaxDepth bounds the nesting of sections, and of includes. It is deliberately below
+	// Apache's own include limit (AP_MAX_INCLUDE_DEPTH, 128): no real configuration comes near
+	// either, and a deeper one is refused rather than walked.
+	MaxDepth   = 100
+	MaxLine    = 1 << 20 // bytes of one logical configuration line (continuations joined)
+	MaxTokens  = 1 << 20 // words (directive names and arguments) of one configuration file
+	MaxModules = 1024    // module lines of DUMP_MODULES
+	MaxDefines = 4096    // Define lines of DUMP_RUN_CFG
+	maxPath    = 4096    // longest path a tool-output line may name (helperproto's argument limit)
 )
 
 // Errors.
