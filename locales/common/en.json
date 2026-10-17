@@ -890,8 +890,8 @@
       },
       "helper_too_old": {
         "title": "The alice-helper on this server is too old to read Apache.",
-        "cause": "Reading Apache needs a newer alice-helper than the one installed on the server.",
-        "action": "On the Servers page choose Server type Apache server, copy the commands and run them on the server again to install the current alice-helper. docs/apache-host-preparation.md describes the steps."
+        "cause": "Reading Apache needs alice-helper 1.7.0 or newer, and the one installed on the server is older.",
+        "action": "The Apache profile needs alice-helper 1.7.0 or newer. On the Servers page choose Server type Apache server, copy the commands and run them on the server again to install it. docs/apache-host-preparation.md describes the steps."
       }
     },
     "certificate": {

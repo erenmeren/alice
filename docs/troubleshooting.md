@@ -1957,9 +1957,9 @@ limitation).
 
 **Meaning.** The `alice-helper` on this server is too old to read Apache. (HTTP 502, reason `apache.helper_too_old`.)
 
-**Likely cause.** Reading Apache needs a newer `alice-helper` than the one installed on the server.
+**Likely cause.** Reading Apache needs `alice-helper` 1.7.0 or newer, and the one installed on the server is older.
 
-**What to do.** On the Servers page choose Server type Apache server, copy the commands and run them on the server again to install the current `alice-helper`. [apache-host-preparation.md](apache-host-preparation.md) describes the steps.
+**What to do.** The Apache profile needs `alice-helper` 1.7.0 or newer. On the Servers page choose Server type Apache server, copy the commands and run them on the server again to install it. [apache-host-preparation.md](apache-host-preparation.md) describes the steps.
 
 ## ALC-CRT-0001: Not a readable certificate
 

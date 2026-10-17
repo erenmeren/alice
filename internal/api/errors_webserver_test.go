@@ -16,9 +16,9 @@ func TestWebServerReasonsAreRegistered(t *testing.T) {
 			assert.NotEqual(t, ErrUnexpected, codeForReason(kind+"."+r), "%s.%s", kind, r)
 		}
 	}
-	for i, r := range []string{"not_found", "config_invalid", "profile_missing", "helper_too_old"} {
-		got := codeForReason("apache." + r)
-		assert.Equal(t, "ALC-APC-000"+string(rune('1'+i)), got.Code, r)
+	for i, want := range []string{"ALC-APC-0001", "ALC-APC-0002", "ALC-APC-0003", "ALC-APC-0004"} {
+		r := []string{"not_found", "config_invalid", "profile_missing", "helper_too_old"}[i]
+		assert.Equal(t, want, codeForReason("apache."+r).Code, r)
 	}
 	assert.Equal(t, 502, codeForReason("apache.not_found").Status)
 	assert.Equal(t, 409, codeForReason("apache.config_invalid").Status)

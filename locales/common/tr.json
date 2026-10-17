@@ -881,7 +881,7 @@
       "config_invalid": {
         "title": "Apache yapılandırmasında bir sorun var, bu yüzden sorun giderilene kadar Alice bu sunucunun sertifikalarını okuyamaz.",
         "cause": "Apache yapılandırmasında bir hata var ya da Alice'in güvenle okuyamadığı dosyalar veya ayarlar kullanılıyor. Hiçbir şey değiştirilmedi.",
-        "action": "Sunucuda apache2ctl -t (Debian, Ubuntu) ya da httpd -t (Red Hat ailesi) komutunu çalıştırın ve çıkan hataları giderin. Komut başarılıysa sunucunun sayfasında adı geçen dosyaya ve docs/apache-host-preparation.md dosyasına bakın, sonra yeniden Keşfet'i seçin."
+        "action": "Sunucuda apache2ctl -t (Debian, Ubuntu) ya da httpd -t (Red Hat ailesi) komutunu çalıştırın ve çıkan hataları giderin. Komut başarılıysa sunucunun sayfasında adı geçen dosyaya ve docs/apache-host-preparation.md dosyasına bakın, sonra Keşfet'i yeniden seçin."
       },
       "profile_missing": {
         "title": "Bu sunucu Apache işleri için hazırlanmamış.",
@@ -890,8 +890,8 @@
       },
       "helper_too_old": {
         "title": "Bu sunucudaki alice-helper, Apache'yi okumak için çok eski.",
-        "cause": "Apache'yi okumak için sunucuda kurulu olandan daha yeni bir alice-helper gerekiyor.",
-        "action": "Sunucular sayfasında Sunucu türü olarak Apache sunucusu seçeneğini seçin, komutları kopyalayın ve güncel alice-helper'ı kurmak için sunucuda yeniden çalıştırın. Adımlar docs/apache-host-preparation.md dosyasında anlatılıyor."
+        "cause": "Apache'yi okumak için alice-helper 1.7.0 veya daha yenisi gerekiyor, sunucuda kurulu olan ise daha eski.",
+        "action": "Apache profili alice-helper 1.7.0 veya daha yenisini gerektirir. Sunucular sayfasında Sunucu türü olarak Apache sunucusu seçeneğini seçin, komutları kopyalayın ve kurmak için sunucuda yeniden çalıştırın. Adımlar docs/apache-host-preparation.md dosyasında anlatılıyor."
       }
     },
     "certificate": {
