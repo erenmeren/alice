@@ -482,8 +482,6 @@ func TestParseUnstableKeys(t *testing.T) {
 		// /c/a.pem.key, but the literal value is neither "all" nor "key".
 		"Q1 variable value": {cfg: "global\n  ssl-load-extra-files \"${V}\"\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
 		"Q1 setenv":         {cfg: "global\n  setenv V all\n  ssl-load-extra-files \"${V}\"\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
-		// Q2 (K=ssl-load-extra-del-ext): HAProxy reads /c/a.key, not /c/a.crt.key.
-		"Q2 variable keyword": {cfg: "global\n  \"${K}\"\nfrontend f2\n  bind :9442 ssl crt /c/a.crt\n"},
 		// P5: /c//a.crt is a separate load from /c/a.crt, after del-ext: HAProxy reads /c//a.key.
 		"P5 doubled slash": {cfg: "global\n  ssl-load-extra-files all\nfrontend f1\n  bind :9441 ssl crt /c/a.crt\n" +
 			"global\n  ssl-load-extra-del-ext\nfrontend f2\n  bind :9442 ssl crt /c//a.crt\n"},
@@ -536,6 +534,28 @@ func TestParsePendingUntilResolved(t *testing.T) {
 		assert.Equal(t, ReasonConfigFileWritable, c.Servers[0].Pairs[1].Unsupported)
 		assert.Empty(t, c.CertPaths())
 	})
+	// Review S2: the key is not resolved, so neither the pair nor the wire may claim Key == Cert.
+	t.Run("MarkWritable clears the unresolved key", func(t *testing.T) {
+		c := parse()
+		MarkWritable(&c)
+		assert.Equal(t, []Pair{
+			{Cert: "/c/a.pem", CertRaw: "/c/a.pem", Unsupported: ReasonConfigFileWritable},
+			{Cert: "/c/b.pem", CertRaw: "/c/b.pem", Unsupported: ReasonConfigFileWritable},
+		}, c.Servers[0].Pairs)
+		for _, p := range ToWire(c.Servers[0]).Pairs {
+			assert.Equal(t, ReasonConfigFileWritable, p.Unsupported)
+			assert.Empty(t, p.Key)
+		}
+	})
+	// Review S3: a caller that marks a pending pair unsupported itself keeps that reason.
+	t.Run("marked unsupported before ResolveKeys", func(t *testing.T) {
+		c := parse()
+		c.Servers[0].Pairs[0].Unsupported = ReasonPathNotAllowed
+		ResolveKeys(&c, func(string) bool { return true })
+		assert.Equal(t, ReasonPathNotAllowed, c.Servers[0].Pairs[0].Unsupported)
+		assert.Empty(t, c.Servers[0].Pairs[1].Unsupported, "the other pair is still resolved")
+		assert.Equal(t, []string{"/c/b.pem"}, c.CertPaths())
+	})
 	t.Run("ResolveKeys", func(t *testing.T) {
 		c := parse()
 		ResolveKeys(&c, func(cert string) bool { return cert == "/c/a.pem" })
@@ -569,6 +589,41 @@ func TestParseCrtStore(t *testing.T) {
 				assert.Equal(t, []Pair{uns("/c/a.pem", ReasonConditional)}, s.Pairs)
 			}
 		})
+	}
+}
+
+// TestParseDollarKeyword (reviews R1 Q2 and S1): HAProxy expands a keyword's "${VAR}" before it
+// reads it, in any section, so the keyword may be a key setting, a hidden "bind" or a "crt-store"
+// header. Alice cannot tell, so every pair is conditional, whatever the certificate holds.
+func TestParseDollarKeyword(t *testing.T) {
+	for name, tc := range map[string]struct{ cfg, version string }{
+		// Q2 (K=ssl-load-extra-del-ext): HAProxy reads /c/a.key, not /c/a.crt.key.
+		"Q2 key setting in global": {cfg: "global\n  \"${K}\"\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n", version: "2.6.12"},
+		// S1 probe A (2.4-3.0, B=bind C=crt): f1 loads /c/a.pem with "all", so f2 gets /c/a.pem.key.
+		"A bind in a frontend": {cfg: "global\n  ssl-load-extra-files all\nfrontend f1\n  \"${B}\" :9441 ssl \"${C}\" /c/a.pem\n" +
+			"global\n  ssl-load-extra-files none\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n", version: "2.6.12"},
+		"A bind in global": {cfg: "global\n  ssl-load-extra-files all\n  \"${B}\" :9441 ssl \"${C}\" /c/a.pem\n" +
+			"  ssl-load-extra-files none\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n", version: "2.6.12"},
+		// S1 probe B (3.0, 3.2, S=crt-store): the bind's key is /c/a.key, served and checked.
+		"B crt-store header in a frontend": {cfg: "frontend f0\n  \"${S}\"\n  load crt /c/a.pem key /c/a.key\n" +
+			"frontend f2\n  bind :9442 ssl crt /c/a.pem\n", version: "3.0.30"},
+		// S1 probe X (3.0): the store's key overrides the one in the PEM.
+		"X crt-store header in global": {cfg: "global\n  \"${S}\"\n  load crt /c/a.pem key /c/a.key\n" +
+			"frontend f2\n  bind :9442 ssl crt /c/a.pem\n", version: "3.0.30"},
+		"in an inactive .if": {cfg: ".if 0\n  \"${S}\"\n.endif\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n", version: "3.0.30"},
+	} {
+		for _, inCert := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/key in PEM %v", name, inCert), func(t *testing.T) {
+				got, err := Parse(newFS().input(tc.cfg, tc.version))
+				require.NoError(t, err)
+				ResolveKeys(&got, func(string) bool { return inCert })
+				require.NotEmpty(t, got.Servers)
+				f2 := got.Servers[len(got.Servers)-1]
+				require.Equal(t, "f2", f2.Section)
+				assert.Equal(t, []Pair{uns("/c/a.pem", ReasonConditional)}, f2.Pairs)
+				assert.Empty(t, got.CertPaths())
+			})
+		}
 	}
 }
 

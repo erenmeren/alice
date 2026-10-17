@@ -8,7 +8,8 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
-// ResolveKeys makes every pending pair supported with its key file (Ruling 12): HAProxy takes the key from
+// ResolveKeys makes every pair still pending and conditional supported with its key file (Ruling 12;
+// review S3: a reason a caller set stays). HAProxy takes the key from
 // the certificate PEM first and looks for the companion file only when the PEM has none. So Key
 // is Cert when keyInCert(Cert) says the PEM holds a private key, or when key lookup is off
 // (KeyBeside ""); otherwise it is KeyBeside. When Parse found the key settings unstable, only a
@@ -28,7 +29,8 @@ func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
 		for j := range c.Servers[i].Pairs {
 			p := &c.Servers[i].Pairs[j]
 			switch {
-			case !p.pending:
+			case !p.pending || p.Unsupported != ReasonConditional:
+				// Review S3: a pair a caller marked unsupported itself stays so.
 			case p.keyUnsure && !inCert(p.Cert):
 				*p = Pair{CertRaw: p.CertRaw, Unsupported: ReasonConditional}
 			default:
@@ -45,12 +47,16 @@ func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
 // helper calls it when haproxy.cfg or a read crt-list can be changed by a user other than root:
 // crt-base and the global settings reach the whole configuration, so the rule is Apache's coarse
 // one (Ruling 4). A pending pair is no longer pending, so a later ResolveKeys never makes it
-// supported (review R2).
+// supported (review R2), and loses its unresolved Key (review S2).
 func MarkWritable(c *Config) {
 	for i := range c.Servers {
 		for j := range c.Servers[i].Pairs {
-			if p := &c.Servers[i].Pairs[j]; p.Unsupported == "" || p.pending {
-				p.Unsupported, p.pending, p.keyUnsure = ReasonConfigFileWritable, false, false
+			switch p := &c.Servers[i].Pairs[j]; {
+			case p.pending:
+				// Review S2: its Key is not resolved yet, so it is not shown.
+				*p = Pair{CertRaw: p.CertRaw, Cert: p.Cert, Unsupported: ReasonConfigFileWritable}
+			case p.Unsupported == "":
+				p.Unsupported = ReasonConfigFileWritable
 			}
 		}
 	}

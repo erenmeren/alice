@@ -266,12 +266,16 @@ func (p *parser) line(l line) error {
 	if strings.HasPrefix(kw, ".") {
 		return p.directive(l)
 	}
-	// Review R1: HAProxy expands "${VAR}" (and setenv's) before it reads the keyword, so a global
-	// line whose keyword has a "$" may be a key setting, and a key setting with a "$" has a value
-	// Alice cannot read.
-	dollarKw := l.words[0].dollar && p.sec.kinds&kindGlobal != 0
-	if dollarKw || kw == "ssl-load-extra-files" || kw == "ssl-load-extra-del-ext" {
-		p.unstable = p.unstable || dollarKw || slices.ContainsFunc(l.words[1:], func(w word) bool { return w.dollar }) ||
+	// Reviews R1 and S1 (probed on 2.4-3.2): HAProxy expands "${VAR}" (and setenv's) before it
+	// reads the keyword, so a keyword with a "$", in any section and even inactive, may be a key
+	// setting, "bind" (a hidden load), or a section header such as "global" or "crt-store" (an
+	// explicit key Alice never sees). Alice cannot expand it, so it counts as all of them, and
+	// every pair is conditional. A key setting with a "$" has a value Alice cannot read.
+	if l.words[0].dollar {
+		p.loaded, p.unstable, p.crtStore = true, true, true
+	}
+	if kw == "ssl-load-extra-files" || kw == "ssl-load-extra-del-ext" {
+		p.unstable = p.unstable || slices.ContainsFunc(l.words[1:], func(w word) bool { return w.dollar }) ||
 			len(p.conds) > 0 || p.loaded || p.sec.kinds != kindGlobal || p.sec.uncertain
 	}
 	// Review R3 (probed on 3.0): a crt-store's "load crt <path> key <file>" gives a bind's
