@@ -32,6 +32,7 @@ const (
 	ReasonNotFound       = "not_found"       // the web server is not installed
 	ReasonProfileMissing = "profile_missing" // sudo refused a subcommand of the provider's sudoers profile
 	ReasonConfigInvalid  = "config_invalid"  // the web server's configuration test fails
+	ReasonHelperTooOld   = "helper_too_old"  // the helper's protocol is below what the provider's dump needs
 )
 
 // Reason is the error code of reason r for this provider kind: "<kind>.<r>".

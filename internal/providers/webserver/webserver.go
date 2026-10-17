@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -24,8 +25,16 @@ import (
 type Spec struct {
 	Kind           providers.Kind
 	DisplayNameKey string
-	// Dump answers helperproto.ServerDumpResponse, Test helperproto.NginxTestResponse.
+	// Dump answers helperproto.ServerDumpResponse, Test helperproto.NginxTestResponse. Test is
+	// optional: without it the connection test runs Dump (a dump-only provider has no test
+	// subcommand; a successful dump is a found server).
 	Dump, Test func() linuxssh.HelperCommand
+	// NotFoundCode is the helper code of "the software is not installed" (nginx:
+	// helperproto.CodeNginxNotFound).
+	NotFoundCode string
+	// MinProtocol is the oldest helper protocol that has the provider's dump (at least
+	// helperproto.MinProtocol): an older helper makes discovery <kind>.helper_too_old.
+	MinProtocol int
 	// Subcommands are every helper subcommand of the provider's sudoers profile: sudo refusing
 	// one of them is <kind>.profile_missing.
 	Subcommands []string
@@ -54,7 +63,7 @@ func (s Spec) SharedReason(err error, sub string) *providers.Error {
 		return nil
 	}
 	switch pe.Params["helper_code"] {
-	case helperproto.CodeNginxNotFound:
+	case s.NotFoundCode:
 		return providers.NewError(s.Kind.Reason(providers.ReasonNotFound), false, err, nil)
 	case helperproto.CodeConfigInvalid:
 		return providers.NewError(s.Kind.Reason(providers.ReasonConfigInvalid), false, err, nil)
@@ -92,8 +101,12 @@ func NewBase(ssh *linuxssh.Provider, spec Spec) Base {
 		panic("webserver: NewBase without a linuxssh provider")
 	case spec.Kind == "", spec.DisplayNameKey == "":
 		panic("webserver: NewBase: a Spec needs Kind and DisplayNameKey")
-	case spec.Dump == nil, spec.Test == nil:
-		panic("webserver: NewBase: a Spec needs Dump and Test")
+	case spec.Dump == nil:
+		panic("webserver: NewBase: a Spec needs Dump")
+	case spec.NotFoundCode == "":
+		panic("webserver: NewBase: a Spec needs its NotFoundCode")
+	case spec.MinProtocol < helperproto.MinProtocol:
+		panic("webserver: NewBase: a Spec's MinProtocol is below the helper's")
 	case len(spec.Subcommands) == 0:
 		panic("webserver: NewBase: a Spec needs its profile's Subcommands")
 	}
@@ -165,8 +178,9 @@ func (s *Session) Close() error {
 }
 
 // TestConnection is linuxssh's test plus the web server's test subcommand, which proves the
-// provider's sudoers profile (F-14). A missing web server or an invalid configuration is a
-// warning, not a failure.
+// provider's sudoers profile (F-14); a Spec without Test proves it with the dump. A missing web
+// server, an invalid configuration and a helper too old for the provider are warnings, not
+// failures.
 func (s *Session) TestConnection(ctx context.Context) (providers.ConnectionReport, error) {
 	if err := s.Live(); err != nil {
 		return providers.ConnectionReport{}, err
@@ -175,6 +189,16 @@ func (s *Session) TestConnection(ctx context.Context) (providers.ConnectionRepor
 	if err != nil {
 		return rep, err
 	}
+	if err := s.requireProtocol(ctx); err != nil {
+		if isReason(err, s.spec.Kind.Reason(providers.ReasonHelperTooOld)) {
+			rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerHelperTooOld))
+			return rep, nil
+		}
+		return rep, err
+	}
+	if s.spec.Test == nil {
+		return s.testFromDump(ctx, rep)
+	}
 	cmd := s.spec.Test()
 	res, err := s.conn.Run(ctx, cmd)
 	if err != nil {
@@ -182,7 +206,7 @@ func (s *Session) TestConnection(ctx context.Context) (providers.ConnectionRepor
 	}
 	t, err := linuxssh.DecodeHelper[helperproto.NginxTestResponse](res, cmd.Subcommand())
 	switch {
-	case IsHelperCode(err, helperproto.CodeNginxNotFound):
+	case IsHelperCode(err, s.spec.NotFoundCode):
 		rep.WebServer = &providers.WebServerFacts{Software: s.spec.Software()}
 		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerNotFound))
 		return rep, nil
@@ -195,6 +219,50 @@ func (s *Session) TestConnection(ctx context.Context) (providers.ConnectionRepor
 		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerConfigInvalid))
 	}
 	return rep, nil
+}
+
+// testFromDump is the connection test of a Spec without Test: the dump says whether the server is
+// there and whether its configuration is valid.
+func (s *Session) testFromDump(ctx context.Context, rep providers.ConnectionReport) (providers.ConnectionReport, error) {
+	cmd := s.spec.Dump()
+	out, err := s.conn.Run(ctx, cmd)
+	if err != nil {
+		return rep, err
+	}
+	d, err := linuxssh.DecodeHelper[helperproto.ServerDumpResponse](out, cmd.Subcommand())
+	switch {
+	case IsHelperCode(err, s.spec.NotFoundCode):
+		rep.WebServer = &providers.WebServerFacts{Software: s.spec.Software()}
+		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerNotFound))
+		return rep, nil
+	case err != nil:
+		return rep, s.spec.sharedOrSame(err, cmd.Subcommand())
+	}
+	facts := webServerFacts(s.spec.Software(), d)
+	rep.WebServer = &facts
+	if !d.ConfigValid {
+		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerConfigInvalid))
+	}
+	return rep, nil
+}
+
+// requireProtocol is <kind>.helper_too_old when the helper's protocol is below the Spec's
+// MinProtocol (the protocol is the one stored at Open, else asked once).
+func (s *Session) requireProtocol(ctx context.Context) error {
+	p, err := s.conn.HelperProtocol(ctx)
+	if err != nil {
+		return err
+	}
+	if p < s.spec.MinProtocol {
+		return providers.NewError(s.spec.Kind.Reason(providers.ReasonHelperTooOld), false, nil,
+			map[string]string{"helper_protocol": strconv.Itoa(p), "required_protocol": strconv.Itoa(s.spec.MinProtocol)})
+	}
+	return nil
+}
+
+func isReason(err error, code string) bool {
+	var pe *providers.Error
+	return errors.As(err, &pe) && pe.Code == code
 }
 
 // Discover is linuxssh's discovery plus, when asked, the certificates of the dump (spec §12.4).
@@ -213,6 +281,9 @@ func (s *Session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		return s.Session.Discover(ctx, providers.DiscoverRequest{SSHKeys: req.SSHKeys})
 	}
 	// The web server first: when it is missing nothing else is worth reading.
+	if err := s.requireProtocol(ctx); err != nil {
+		return providers.DiscoveryResult{}, err
+	}
 	cmd := s.spec.Dump()
 	out, err := s.conn.Run(ctx, cmd)
 	if err != nil {

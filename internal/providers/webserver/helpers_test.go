@@ -35,6 +35,7 @@ var nginxFolders = []string{"/etc/ssl/", "/etc/nginx/", "/etc/pki/", "/etc/letse
 // testSpec is the Nginx web server as the nginx provider describes it.
 func testSpec() Spec {
 	return Spec{Kind: providers.KindNginx, DisplayNameKey: "provider.nginx.name", Dump: linuxssh.CmdNginxDump, Test: linuxssh.CmdNginxTest,
+		NotFoundCode: helperproto.CodeNginxNotFound, MinProtocol: helperproto.MinProtocol,
 		Subcommands: []string{helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore,
 			helperproto.SubNginxStatus, helperproto.SubNginxFence},
 		UsualFolders: nginxFolders}

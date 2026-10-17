@@ -22,6 +22,8 @@ var spec = webserver.Spec{
 	DisplayNameKey: "provider.nginx.name",
 	Dump:           linuxssh.CmdNginxDump,
 	Test:           linuxssh.CmdNginxTest,
+	NotFoundCode:   helperproto.CodeNginxNotFound,
+	MinProtocol:    helperproto.MinProtocol,
 	Subcommands: []string{helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubNginxDeploy, helperproto.SubNginxRestore,
 		helperproto.SubNginxStatus, helperproto.SubNginxFence},
 	UsualFolders: []string{"/etc/ssl/", "/etc/nginx/", "/etc/pki/", "/etc/letsencrypt/"},

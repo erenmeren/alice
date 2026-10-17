@@ -226,17 +226,23 @@ func (h *handlers) scan(jobCtx context.Context, j jobs.Job) (providers.Discovery
 	res, err := sess.Discover(ctx, req)
 	kind, _ := providers.KindForTargetType(t.Type)
 	if err != nil && req.Certificates && inventory.IsWebServer(t.Type) &&
-		(isCode(err, kind.Reason(providers.ReasonNotFound)) || isCode(err, kind.Reason(providers.ReasonProfileMissing))) {
+		(isCode(err, kind.Reason(providers.ReasonNotFound)) || isCode(err, kind.Reason(providers.ReasonProfileMissing)) ||
+			isCode(err, kind.Reason(providers.ReasonHelperTooOld))) {
 		// The certificate half cannot run, but the server's SSH keys are still scanned (inventory
 		// leaves the certificate locations as they are). Web-server software not installed (or no
-		// longer): the web-server facts say "not found". The kind's sudoers profile not installed:
-		// nothing is known of the software (no facts, the stored ones stay) and the warning
-		// web_server_profile_missing says why.
+		// longer): the web-server facts say "not found". The kind's sudoers profile not installed,
+		// or a helper too old for the kind's dump: nothing is known of the software (no facts, the
+		// stored ones stay) and the warning web_server_profile_missing or web_server_helper_too_old
+		// says why.
 		notFound := isCode(err, kind.Reason(providers.ReasonNotFound))
+		tooOld := isCode(err, kind.Reason(providers.ReasonHelperTooOld))
 		if res, err = sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err == nil {
 			code := providers.WarnWebServerProfileMissing
-			if notFound {
+			switch {
+			case notFound:
 				res.WebServer, code = &providers.WebServerFacts{Software: string(kind)}, providers.WarnWebServerNotFound
+			case tooOld:
+				code = providers.WarnWebServerHelperTooOld
 			}
 			res.Warnings = append(res.Warnings, providers.Warning{Code: code, Params: map[string]string{}})
 		}

@@ -489,7 +489,7 @@ type DumpFile struct {
 	FreeBytes int64  `json:"free_bytes"`
 }
 
-// ServerDumpResponse answers "nginx-dump".
+// ServerDumpResponse answers a web server's dump subcommand ("nginx-dump", "apache-dump").
 type ServerDumpResponse struct {
 	OK          bool   `json:"ok"`
 	Version     string `json:"version"`

@@ -16,6 +16,7 @@ import (
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/linuxsshtest"
+	"alice/internal/providers/webserver"
 	"alice/internal/testutil/pki"
 )
 
@@ -403,4 +404,27 @@ func TestVerifyQueryIsNotAVerification(t *testing.T) {
 	assert.False(t, vr.OK)
 	assert.Equal(t, "deployment.verify_other", vr.Reason)
 	assert.Equal(t, map[string]string{"port": "8443"}, vr.Params, "every endpoint is compared")
+}
+
+// A server-side probe that reports a chain longer than webserver.MaxChainCerts is not an answer
+// Alice can use: the endpoint is not reached.
+func TestVerifyRefusesAProbeWithTooLongAChain(t *testing.T) {
+	for _, tc := range []struct {
+		chain int
+		ok    bool
+	}{{webserver.MaxChainCerts, true}, {webserver.MaxChainCerts + 1, false}} {
+		e := newEnv(t)
+		e.prober.set(true, false)
+		h := e.emu.Handler()
+		leaf := pki.Fingerprint(e.leaf.Cert)
+		e.srv.SetHandler(func(cmd string, stdin []byte) linuxsshtest.Response {
+			if strings.Contains(cmd, " tls-probe ") {
+				return linuxsshtest.Response{Stdout: []byte(fmt.Sprintf(`{"ok":true,"leaf_sha256":%q,"chain_length":%d,"not_after":"2030-01-01T00:00:00Z"}`, leaf, tc.chain))}
+			}
+			return h(cmd, stdin)
+		})
+		vr, err := e.open(t).VerifyDeployment(context.Background(), providers.VerifyRequest{Location: e.location(t), Fingerprint: leaf})
+		require.NoError(t, err)
+		assert.Equal(t, tc.ok, vr.OK, "chain length %d", tc.chain)
+	}
 }

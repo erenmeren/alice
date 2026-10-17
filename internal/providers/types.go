@@ -290,7 +290,7 @@ const (
 	ConfigReasonNULByte           = "nul_byte"
 )
 
-// DiscoveredCertificate is one certificate file Nginx uses.
+// DiscoveredCertificate is one certificate file a web server uses.
 type DiscoveredCertificate struct {
 	Location CertLocation
 	// PEMChain is the file's CERTIFICATE blocks that parse as X.509, re-encoded in file order (not
@@ -303,7 +303,7 @@ type DiscoveredCertificate struct {
 	FileSHA256 string
 }
 
-// CertLocation is a certificate/key file pair of an Nginx server and the server blocks using it.
+// CertLocation is a certificate/key file pair of a web server and the server blocks (virtual hosts) using it.
 type CertLocation struct {
 	CertPath         string
 	KeyPath          string
@@ -351,6 +351,7 @@ const (
 	UnsupportedStream             = "stream"
 	UnsupportedCombinedFile       = "combined_file"
 	UnsupportedConfigFileWritable = "config_file_writable" // a configuration file can be changed by users other than root
+	UnsupportedConditional        = "conditional"          // the pair sits in a region whose condition cannot be evaluated
 	UnsupportedKeyConflict        = "key_conflict"         // one certificate file used with different key files
 	UnsupportedFile               = "file_problem"         // see Problem / KeyProblem
 	UnsupportedKeyType            = "unsupported_key"      // the certificate is not RSA or ECDSA (set by inventory)
@@ -367,7 +368,7 @@ const (
 	CertProblemHardLinked        = "hard_linked"
 	CertProblemTooLarge          = "too_large"
 	CertProblemNotACertificate   = "not_a_certificate"
-	CertProblemLeafUnreadable    = "leaf_unreadable" // the first certificate (the one Nginx serves) cannot be read (REM-4)
+	CertProblemLeafUnreadable    = "leaf_unreadable" // the first certificate (the one the web server serves) cannot be read (REM-4)
 	CertProblemUnreadable        = "unreadable"
 	CertProblemBadName           = "bad_name"
 	CertProblemSpecialFS         = "special_filesystem" // on FUSE or a pseudo file system
@@ -408,6 +409,9 @@ const (
 	WarnWebServerNotFound       = "web_server_not_found"
 	WarnWebServerProfileMissing = "web_server_profile_missing"
 	WarnWebServerConfigInvalid  = "web_server_config_invalid"
+	// WarnWebServerHelperTooOld: the helper is too old for the provider's dump (nothing of the
+	// web server was read; no facts).
+	WarnWebServerHelperTooOld = "web_server_helper_too_old"
 	// WarnKVItemUnreadable: a vault listing held items Alice could not use (a name, version or
 	// thumbprint outside the shapes Alice stores, details that did not fit); they were left out.
 	// Params: object (certificates | versions | keys | secrets) and count. Only the azurekv provider emits it.
@@ -509,7 +513,7 @@ type DeployStep struct {
 	Name   string // StepName*
 	Status StepStatus
 	// Error is a ConfigErr* class, DeployErrFileChanged or "" (also "" for a failed step whose
-	// cause is not a configuration error, such as a killed Nginx); never raw text.
+	// cause is not a configuration error, such as a killed web server); never raw text.
 	Error string
 }
 

@@ -212,10 +212,10 @@ func TestConvertCertificateFileHandling(t *testing.T) {
 		assert.Equal(t, []string{providers.WarnCertificateBlockDropped}, later.Location.Warnings)
 	})
 	t.Run("too many certificates", func(t *testing.T) {
-		got := one(certFile(c, []byte(strings.Repeat(string(u.leaf.CertPEM), maxChainCerts+1))), keyFile(k))
+		got := one(certFile(c, []byte(strings.Repeat(string(u.leaf.CertPEM), MaxChainCerts+1))), keyFile(k))
 		assert.Equal(t, providers.CertProblemTooLarge, got.Location.Problem)
 		assert.Empty(t, got.PEMChain)
-		ok := one(certFile(c, []byte(strings.Repeat(string(u.leaf.CertPEM), maxChainCerts))), keyFile(k))
+		ok := one(certFile(c, []byte(strings.Repeat(string(u.leaf.CertPEM), MaxChainCerts))), keyFile(k))
 		assert.Empty(t, ok.Location.Problem)
 	})
 	t.Run("a file over the helper's limit", func(t *testing.T) {

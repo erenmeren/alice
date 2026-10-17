@@ -52,3 +52,5 @@ func TestCertificateChainDropsBlocksOutsideYears1To9999(t *testing.T) {
 		assert.Equal(t, providers.CertProblemNotACertificate, problem, "as the first block it would be the leaf")
 	}
 }
+
+func TestMaxChainCertsIsTwenty(t *testing.T) { assert.Equal(t, 20, MaxChainCerts) }

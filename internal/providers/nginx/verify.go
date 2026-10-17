@@ -10,14 +10,11 @@ import (
 	"alice/internal/providers"
 	"alice/internal/providers/linuxssh"
 	"alice/internal/providers/linuxssh/helperproto"
+	"alice/internal/providers/webserver"
 )
 
 // maxEndpoints bounds the (port, name) pairs one verification probes.
 const maxEndpoints = 10
-
-// maxChainCerts bounds the chain length a server probe may report (the dump conversion's bound,
-// internal/providers/webserver).
-const maxChainCerts = 20
 
 // Verification reasons (VerifyResult.Reason, and the Reason of a deployment whose verification
 // failed). reasonVerifyChain is an addition to the plan's contract (spec §12.8 item 5): the new leaf
@@ -338,7 +335,7 @@ func (s *session) probeOnce(ctx context.Context, ep Endpoint, keyType string, lo
 		return served{}, false, err
 	}
 	r, err := linuxssh.DecodeHelper[helperproto.TLSProbeResponse](out, helperproto.SubTLSProbe)
-	if err != nil || !isHexSHA256(r.LeafSHA256) || r.ChainLength < 1 || r.ChainLength > maxChainCerts {
+	if err != nil || !isHexSHA256(r.LeafSHA256) || r.ChainLength < 1 || r.ChainLength > webserver.MaxChainCerts {
 		return served{}, false, nil // PROBE_FAILED, or an answer Alice cannot use: not reached
 	}
 	return served{leaf: r.LeafSHA256, chain: r.ChainLength, local: true}, true, nil

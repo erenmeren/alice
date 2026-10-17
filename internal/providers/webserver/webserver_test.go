@@ -34,6 +34,9 @@ func scriptOn(e *env, sub string, r linuxsshtest.Response) {
 func TestNewBaseRefusesAnIncompleteSpec(t *testing.T) {
 	lp := linuxssh.New(linuxssh.Options{})
 	assert.NotPanics(t, func() { NewBase(lp, testSpec()) })
+	dumpOnly := testSpec()
+	dumpOnly.Test = nil
+	assert.NotPanics(t, func() { NewBase(lp, dumpOnly) }, "Test is optional")
 	tests := []struct {
 		name string
 		ssh  *linuxssh.Provider
@@ -43,7 +46,8 @@ func TestNewBaseRefusesAnIncompleteSpec(t *testing.T) {
 		{"empty Kind", lp, func(s *Spec) { s.Kind = "" }},
 		{"empty DisplayNameKey", lp, func(s *Spec) { s.DisplayNameKey = "" }},
 		{"nil Dump", lp, func(s *Spec) { s.Dump = nil }},
-		{"nil Test", lp, func(s *Spec) { s.Test = nil }},
+		{"empty NotFoundCode", lp, func(s *Spec) { s.NotFoundCode = "" }},
+		{"MinProtocol below the helper's", lp, func(s *Spec) { s.MinProtocol = helperproto.MinProtocol - 1 }},
 		{"no Subcommands", lp, func(s *Spec) { s.Subcommands = nil }},
 	}
 	for _, tc := range tests {
@@ -328,4 +332,98 @@ func TestSessionConformance(t *testing.T) {
 			return s, nil
 		},
 	})
+}
+
+func TestTestConnectionFromTheDump(t *testing.T) {
+	dumpOnly := func(e *env) *Session {
+		spec := testSpec()
+		spec.Test = nil
+		e.base = NewBase(e.ssh, spec)
+		return e.open(t)
+	}
+	t.Run("valid", func(t *testing.T) {
+		e := newEnv(t, true)
+		n := len(e.srv.Commands())
+		rep, err := dumpOnly(e).TestConnection(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, &providers.WebServerFacts{Software: "nginx", Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: true}, rep.WebServer)
+		assert.Empty(t, rep.Warnings)
+		for _, line := range e.srv.Commands()[n:] {
+			assert.NotContains(t, line, helperproto.SubNginxTest)
+		}
+	})
+	t.Run("invalid", func(t *testing.T) {
+		e := newEnv(t, true)
+		e.emu.SetConfigInvalid(helperproto.ConfigErrSyntax)
+		rep, err := dumpOnly(e).TestConnection(context.Background())
+		require.NoError(t, err)
+		require.NotNil(t, rep.WebServer)
+		assert.False(t, rep.WebServer.ConfigValid)
+		assert.Equal(t, helperproto.ConfigErrSyntax, rep.WebServer.ConfigError)
+		assert.Equal(t, []string{providers.WarnWebServerConfigInvalid}, warningCodes(rep.Warnings))
+	})
+	t.Run("no nginx", func(t *testing.T) {
+		e := newEnv(t, false)
+		rep, err := dumpOnly(e).TestConnection(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, &providers.WebServerFacts{Software: "nginx"}, rep.WebServer)
+		assert.Equal(t, []string{providers.WarnWebServerNotFound}, warningCodes(rep.Warnings))
+	})
+	t.Run("profile missing", func(t *testing.T) {
+		e := newEnv(t, true)
+		e.emu.SetNginxProfile(false)
+		_, err := dumpOnly(e).TestConnection(context.Background())
+		assert.Equal(t, "nginx.profile_missing", providerErr(t, err).Code)
+	})
+}
+
+func TestSharedReasonUsesTheSpecsNotFoundCode(t *testing.T) {
+	spec := testSpec()
+	spec.NotFoundCode = "SOFTWARE_NOT_FOUND"
+	refusal := func(code string) error {
+		return providers.NewError("ssh.helper_refused", false, nil, map[string]string{"subcommand": "nginx-dump", "helper_code": code})
+	}
+	pe := spec.SharedReason(refusal("SOFTWARE_NOT_FOUND"), helperproto.SubNginxDump)
+	require.NotNil(t, pe)
+	assert.Equal(t, "nginx.not_found", pe.Code)
+	assert.Nil(t, spec.SharedReason(refusal(helperproto.CodeNginxNotFound), helperproto.SubNginxDump))
+}
+
+func TestHelperTooOldIsAWarningNotAFailure(t *testing.T) {
+	e := newEnv(t, true)
+	e.emu.SetProtocol(helperproto.MinProtocol)
+	spec := testSpec()
+	spec.MinProtocol = helperproto.MinProtocol + 1
+	e.base = NewBase(e.ssh, spec)
+	s := e.open(t)
+
+	rep, err := s.TestConnection(context.Background())
+	require.NoError(t, err)
+	assert.Nil(t, rep.WebServer)
+	assert.Equal(t, []string{providers.WarnWebServerHelperTooOld}, warningCodes(rep.Warnings))
+
+	n := len(e.srv.Commands())
+	_, err = s.Discover(context.Background(), providers.DiscoverRequest{Certificates: true})
+	pe := providerErr(t, err)
+	assert.Equal(t, "nginx.helper_too_old", pe.Code)
+	assert.False(t, pe.Retryable)
+	assert.Equal(t, map[string]string{"helper_protocol": "6", "required_protocol": "7"}, pe.Params)
+	for _, line := range e.srv.Commands()[n:] {
+		assert.NotContains(t, line, helperproto.SubNginxDump, "the dump is not asked of a helper that is too old")
+	}
+
+	res, err := s.Discover(context.Background(), providers.DiscoverRequest{SSHKeys: true})
+	require.NoError(t, err)
+	assert.Nil(t, res.WebServer)
+}
+
+func TestTestConnectionFromTheDumpFailures(t *testing.T) {
+	e := newEnv(t, true)
+	spec := testSpec()
+	spec.Test = nil
+	e.base = NewBase(e.ssh, spec)
+	s := e.open(t)
+	scriptOn(e, helperproto.SubNginxDump, linuxsshtest.Response{Hangup: true})
+	_, err := s.TestConnection(context.Background())
+	require.Error(t, err)
 }

@@ -709,6 +709,14 @@ func TestScanFallsBackForEveryWebServerKind(t *testing.T) {
 	require.Len(t, inv.reconciled, 1)
 	assert.Equal(t, &providers.WebServerFacts{Software: "nginx"}, inv.reconciled[0].WebServer)
 
+	// A helper too old for the kind's discovery: SSH keys are scanned, no facts, a warning.
+	inv, reqs, err = run(providers.KindNginx, inventory.TypeNginx, "nginx.helper_too_old")
+	require.NoError(t, err)
+	assert.Len(t, reqs, 2)
+	require.Len(t, inv.reconciled, 1)
+	assert.Nil(t, inv.reconciled[0].WebServer)
+	assert.Equal(t, "web_server_helper_too_old", inv.reconciled[0].Warnings[len(inv.reconciled[0].Warnings)-1].Code)
+
 	// Not a web server: no fallback, the provider's error is the job's.
 	inv, reqs, err = run(providers.KindLinuxSSH, inventory.TypeLinux, "nginx.not_found")
 	r, _ := reason(t, err)

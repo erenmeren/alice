@@ -225,3 +225,22 @@ func TestHTTP01WithoutTheNginxProfile(t *testing.T) {
 	assert.True(t, marked.HTTP01HelperOutdated())
 	assert.NotEmpty(t, ErrHTTP01HelperOutdated.Error())
 }
+
+// HelperProtocol asks "version" once on a connection that did not go through Open.
+func TestHelperProtocolIsAskedOnce(t *testing.T) {
+	emu := linuxsshtest.NewEmulator()
+	emu.SetProtocol(6)
+	srv, cfg, cred := testServer(t, emu.Handler())
+	hk := &memHostKeys{}
+	hk.pin(srv.HostKey())
+	c, err := newDialer(hk).Dial(context.Background(), testTarget, cfg, cred)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	for range 2 {
+		p, err := c.HelperProtocol(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, 6, p)
+	}
+	assert.Len(t, srv.Commands(), 1, "the second call reuses the stored protocol")
+	assert.Equal(t, "/usr/local/libexec/alice-helper version", srv.Commands()[0])
+}

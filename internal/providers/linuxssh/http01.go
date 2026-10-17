@@ -67,10 +67,9 @@ func (c *Conn) RemoveHTTP01Token(ctx context.Context, token string) (removed boo
 	return r.Removed, nil
 }
 
-// requireHTTP01 refuses a helper older than HTTP01MinProtocol and returns the helper's protocol. The
-// protocol is the one the helper reported when the session was opened; a connection that did not go
-// through Open asks it first.
-func (c *Conn) requireHTTP01(ctx context.Context) (int, error) {
+// HelperProtocol is the helper's protocol: the one it reported when the session was opened; a
+// connection that did not go through Open asks "version" once and keeps the answer.
+func (c *Conn) HelperProtocol(ctx context.Context) (int, error) {
 	p := int(c.helperProtocol.Load())
 	if p == 0 {
 		v, err := runHelper[helperproto.VersionResponse](ctx, c, CmdVersion())
@@ -79,6 +78,15 @@ func (c *Conn) requireHTTP01(ctx context.Context) (int, error) {
 		}
 		p = v.Protocol
 		c.helperProtocol.Store(int64(p))
+	}
+	return p, nil
+}
+
+// requireHTTP01 refuses a helper older than HTTP01MinProtocol and returns the helper's protocol.
+func (c *Conn) requireHTTP01(ctx context.Context) (int, error) {
+	p, err := c.HelperProtocol(ctx)
+	if err != nil {
+		return 0, err
 	}
 	if p < helperproto.HTTP01MinProtocol {
 		return p, http01Outdated(p)

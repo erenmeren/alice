@@ -16,18 +16,21 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
+// MaxChainCerts bounds the chain length of a certificate file and of a probed server (the nginx
+// provider's verification uses it too).
+const MaxChainCerts = 20
+
 // Bounds on what a remote server can make Alice carry (the server is not trusted).
 const (
 	maxNames              = 100
 	maxListens            = 100
 	maxServersPerLocation = 500
 	// maxMembershipsPerDump and maxNamesPerDump bound the whole dump (RA-01): the per-location and
-	// per-file bounds alone let one 16 MiB nginx-dump answer list 500 server blocks under each of
+	// per-file bounds alone let one 16 MiB dump answer list 500 server blocks under each of
 	// 1000 certificate paths, 500,000 server copies (~7 GiB) in memory and in the stored facts. A
 	// membership is one server block listed under one location; names counts their server names.
 	maxMembershipsPerDump = 20000
 	maxNamesPerDump       = 100000
-	maxChainCerts         = 20
 	maxWritable           = 50
 	maxVersionLength      = 64
 	maxPathLength         = 4096
@@ -48,10 +51,10 @@ var (
 		providers.ConfigReasonNotRegular, providers.ConfigReasonChanged, providers.ConfigReasonNameNotAllowed, providers.ConfigReasonUnexpectedText,
 		providers.ConfigReasonWrongFirstFile, providers.ConfigReasonDuplicateFile, providers.ConfigReasonNoConfPath, providers.ConfigReasonTooLarge,
 		providers.ConfigReasonTooComplex, providers.ConfigReasonIncludeLoop, providers.ConfigReasonNULByte}
-	// pairReasons are the reasons the helper gives an unsupported pair (nginxconf.Reason*).
+	// pairReasons are the reasons the helper gives an unsupported pair (nginxconf.Reason*, apacheconf.Reason*).
 	pairReasons = []string{providers.UnsupportedVariable, providers.UnsupportedDataValue, providers.UnsupportedEngineKey, providers.UnsupportedKeyMissing,
 		providers.UnsupportedPasswordFile, providers.UnsupportedPathNotAllowed, providers.UnsupportedStream, providers.UnsupportedCombinedFile,
-		providers.UnsupportedConfigFileWritable}
+		providers.UnsupportedConfigFileWritable, providers.UnsupportedConditional}
 	fileProblems = []string{providers.CertProblemMissing, providers.CertProblemNotRootControlled, providers.CertProblemNotRegular,
 		providers.CertProblemHardLinked, providers.CertProblemTooLarge, providers.CertProblemNotACertificate, providers.CertProblemUnreadable,
 		providers.CertProblemBadName, providers.CertProblemSpecialFS, providers.CertProblemNameNotAllowed, providers.CertProblemLeafUnreadable}
@@ -391,7 +394,7 @@ func certificateChain(f helperproto.DumpFile) (chain []byte, sum string, dropped
 			dropped = true
 			continue
 		}
-		if n++; n > maxChainCerts {
+		if n++; n > MaxChainCerts {
 			return nil, "", false, providers.CertProblemTooLarge
 		}
 		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: block.Bytes})...)

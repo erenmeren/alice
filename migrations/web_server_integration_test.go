@@ -111,7 +111,7 @@ VALUES (gen_random_uuid(), $1, $2, '/etc/nginx/ssl/' || gen_random_uuid()::text 
 		return err
 	}
 
-	_, err = p.Up(ctx)
+	_, err = p.UpTo(ctx, 16)
 	require.NoError(t, err)
 	version, err := p.GetDBVersion(ctx)
 	require.NoError(t, err)
