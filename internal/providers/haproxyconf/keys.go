@@ -8,13 +8,12 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
-// ResolveKeys sets the key file of every supported pair (Ruling 12): HAProxy takes the key from
+// ResolveKeys makes every pending pair supported with its key file (Ruling 12): HAProxy takes the key from
 // the certificate PEM first and looks for the companion file only when the PEM has none. So Key
 // is Cert when keyInCert(Cert) says the PEM holds a private key, or when key lookup is off
 // (KeyBeside ""); otherwise it is KeyBeside. When Parse found the key settings unstable, only a
-// key in the PEM is known, and a pair without one becomes conditional. keyInCert is asked once
-// per distinct certificate, and never for an unsupported pair. The caller runs it before using
-// the pairs.
+// key in the PEM is known, and a pair without one stays conditional. keyInCert is asked once
+// per distinct certificate, and only for pending pairs. Until it runs, no pair is supported.
 func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
 	known := map[string]bool{}
 	inCert := func(cert string) bool {
@@ -29,32 +28,29 @@ func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
 		for j := range c.Servers[i].Pairs {
 			p := &c.Servers[i].Pairs[j]
 			switch {
-			case p.Unsupported != "":
-			case p.keyUnsure:
-				if inCert(p.Cert) {
-					p.Key, p.keyUnsure = p.Cert, false
-				} else {
-					*p = Pair{CertRaw: p.CertRaw, Unsupported: ReasonConditional}
-				}
-			case p.KeyBeside == "":
-				p.Key = p.Cert
-			case inCert(p.Cert):
-				p.Key = p.Cert
+			case !p.pending:
+			case p.keyUnsure && !inCert(p.Cert):
+				*p = Pair{CertRaw: p.CertRaw, Unsupported: ReasonConditional}
 			default:
-				p.Key = p.KeyBeside
+				p.Unsupported, p.pending, p.keyUnsure = "", false, false
+				if p.Key = p.Cert; p.KeyBeside != "" && !inCert(p.Cert) {
+					p.Key = p.KeyBeside
+				}
 			}
 		}
 	}
 }
 
-// MarkWritable makes every supported pair unsupported config_file_writable. The root helper calls
-// it when haproxy.cfg or a read crt-list can be changed by a user other than root: crt-base and
-// the global settings reach the whole configuration, so the rule is Apache's coarse one (Ruling 4).
+// MarkWritable makes every supported or pending pair unsupported config_file_writable. The root
+// helper calls it when haproxy.cfg or a read crt-list can be changed by a user other than root:
+// crt-base and the global settings reach the whole configuration, so the rule is Apache's coarse
+// one (Ruling 4). A pending pair is no longer pending, so a later ResolveKeys never makes it
+// supported (review R2).
 func MarkWritable(c *Config) {
 	for i := range c.Servers {
 		for j := range c.Servers[i].Pairs {
-			if p := &c.Servers[i].Pairs[j]; p.Unsupported == "" {
-				p.Unsupported = ReasonConfigFileWritable
+			if p := &c.Servers[i].Pairs[j]; p.Unsupported == "" || p.pending {
+				p.Unsupported, p.pending, p.keyUnsure = ReasonConfigFileWritable, false, false
 			}
 		}
 	}
@@ -97,6 +93,9 @@ func ToWire(s Server) helperproto.DumpServer {
 	}
 	for _, p := range s.Pairs {
 		wp := helperproto.DumpPair{Cert: p.Cert, Key: p.Key, Unsupported: p.Unsupported}
+		if p.pending {
+			wp.Cert, wp.Key = "", "" // never resolved: shown as the conditional pair it is
+		}
 		if p.Unsupported != "" {
 			wp.Raw = shown(p.CertRaw) // Parse already gives it in this form: cheap (review I1)
 		}

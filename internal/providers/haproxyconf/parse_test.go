@@ -68,8 +68,9 @@ func (f *fakeFS) input(cfg, version string) Input {
 }
 
 // sup is a supported pair before ResolveKeys: the key is the certificate, beside its companion.
+// sup is a pair Parse can support, pending until ResolveKeys: conditional, with its paths.
 func sup(cert, raw, beside string) Pair {
-	return Pair{Cert: cert, Key: cert, CertRaw: raw, KeyBeside: beside}
+	return Pair{Cert: cert, Key: cert, CertRaw: raw, KeyBeside: beside, Unsupported: ReasonConditional, pending: true}
 }
 
 // plain is sup for an absolute path written as is, with the default companion.
@@ -79,7 +80,9 @@ func uns(raw, reason string) Pair { return Pair{CertRaw: raw, Unsupported: reaso
 
 // unsure is a pair whose key settings were not stable: no companion, the key in the file or
 // conditional after ResolveKeys.
-func unsure(cert string) Pair { return Pair{Cert: cert, Key: cert, CertRaw: cert, keyUnsure: true} }
+func unsure(cert string) Pair {
+	return Pair{Cert: cert, Key: cert, CertRaw: cert, Unsupported: ReasonConditional, pending: true, keyUnsure: true}
+}
 
 func srv(line int, section string, listens []Listen, pairs ...Pair) Server {
 	return Server{File: cfgPath, Line: line, Section: section, Listens: listens, Pairs: pairs}
@@ -475,6 +478,12 @@ func TestParseUnstableKeys(t *testing.T) {
 		// P3: f1's crt is conditional (uncertain crt-base); HAProxy first loads /c/a.pem at f2 with "all".
 		"P3 uncertain crt-base": {cfg: "global\n  ssl-load-extra-files none\n.if defined(X)\n  crt-base /c\n.endif\n" +
 			"frontend f1\n  bind :9441 ssl crt a.pem\nglobal\n  ssl-load-extra-files all\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
+		// Review R1, Q1 (2.4, 2.6, 2.8 with V=all, or "setenv V all"): the key is read from
+		// /c/a.pem.key, but the literal value is neither "all" nor "key".
+		"Q1 variable value": {cfg: "global\n  ssl-load-extra-files \"${V}\"\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
+		"Q1 setenv":         {cfg: "global\n  setenv V all\n  ssl-load-extra-files \"${V}\"\nfrontend f2\n  bind :9442 ssl crt /c/a.pem\n"},
+		// Q2 (K=ssl-load-extra-del-ext): HAProxy reads /c/a.key, not /c/a.crt.key.
+		"Q2 variable keyword": {cfg: "global\n  \"${K}\"\nfrontend f2\n  bind :9442 ssl crt /c/a.crt\n"},
 		// P5: /c//a.crt is a separate load from /c/a.crt, after del-ext: HAProxy reads /c//a.key.
 		"P5 doubled slash": {cfg: "global\n  ssl-load-extra-files all\nfrontend f1\n  bind :9441 ssl crt /c/a.crt\n" +
 			"global\n  ssl-load-extra-del-ext\nfrontend f2\n  bind :9442 ssl crt /c//a.crt\n"},
@@ -497,6 +506,85 @@ func TestParseUnstableKeys(t *testing.T) {
 			assert.Equal(t, p.Cert, p.Key)
 		})
 	}
+}
+
+// TestParsePendingUntilResolved (review R2): no pair is supported until ResolveKeys decides
+// its key, and MarkWritable first means it never is.
+func TestParsePendingUntilResolved(t *testing.T) {
+	parse := func() Config {
+		got, err := Parse(newFS().input(fe("  bind :9443 ssl crt /c/a.pem crt /c/b.pem"), ""))
+		require.NoError(t, err)
+		return got
+	}
+	noneSupported := func(t *testing.T, c Config) {
+		t.Helper()
+		assert.Empty(t, c.CertPaths())
+		assert.Empty(t, c.KeyPaths())
+		for _, s := range c.Servers {
+			for _, p := range ToWire(s).Pairs {
+				assert.NotEmpty(t, p.Unsupported)
+				assert.Empty(t, p.Cert, "a pending pair shows no path")
+			}
+		}
+	}
+	t.Run("without ResolveKeys", func(t *testing.T) { noneSupported(t, parse()) })
+	t.Run("MarkWritable then ResolveKeys", func(t *testing.T) {
+		c := parse()
+		MarkWritable(&c)
+		ResolveKeys(&c, func(string) bool { return true })
+		assert.Equal(t, ReasonConfigFileWritable, c.Servers[0].Pairs[0].Unsupported)
+		assert.Equal(t, ReasonConfigFileWritable, c.Servers[0].Pairs[1].Unsupported)
+		assert.Empty(t, c.CertPaths())
+	})
+	t.Run("ResolveKeys", func(t *testing.T) {
+		c := parse()
+		ResolveKeys(&c, func(cert string) bool { return cert == "/c/a.pem" })
+		assert.Equal(t, []Pair{
+			{Cert: "/c/a.pem", Key: "/c/a.pem", CertRaw: "/c/a.pem", KeyBeside: "/c/a.pem.key"},
+			{Cert: "/c/b.pem", Key: "/c/b.pem.key", CertRaw: "/c/b.pem", KeyBeside: "/c/b.pem.key"},
+		}, c.Servers[0].Pairs)
+		assert.Equal(t, []string{"/c/a.pem", "/c/b.pem"}, c.CertPaths())
+		ResolveKeys(&c, func(string) bool { panic("asked twice") })
+		MarkWritable(&c)
+		assert.Equal(t, ReasonConfigFileWritable, c.Servers[0].Pairs[1].Unsupported)
+	})
+}
+
+// TestParseCrtStore (review R3; probed on haproxy:3.0): "load crt /c/a.pem key /c/a.key" in a
+// crt-store gives the bind's "crt /c/a.pem" the key /c/a.key (without it, -c fails reading
+// /c/a.pem.key), so a configuration with a crt-store supports no pair.
+func TestParseCrtStore(t *testing.T) {
+	for name, cfg := range map[string]string{
+		"crt-store":           "crt-store\n  load crt /c/a.pem key /c/a.key\n" + fe("  bind :9443 ssl crt /c/a.pem"),
+		"named, after":        fe("  bind :9443 ssl crt /c/a.pem") + "crt-store st\n  load crt /c/b.pem key /c/b.key alias b\n",
+		"in an inactive .if":  ".if 0\ncrt-store\n.endif\n" + fe("  bind :9443 ssl crt /c/a.pem"),
+		"in an uncertain .if": ".if X\ncrt-store\n  load crt /c/a.pem key /c/a.key\n.endif\n" + fe("  bind :9443 ssl crt /c/a.pem"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := Parse(newFS().input(cfg, "3.0.30"))
+			require.NoError(t, err)
+			ResolveKeys(&got, func(string) bool { return true })
+			require.NotEmpty(t, got.Servers)
+			for _, s := range got.Servers {
+				assert.Equal(t, []Pair{uns("/c/a.pem", ReasonConditional)}, s.Pairs)
+			}
+		})
+	}
+}
+
+// TestParseListCacheIsPerPath (review R4): a crt-list is evaluated once per path whatever the
+// region of its namings. Its line here is just under the length that resolve refuses unscanned,
+// so only the cache keeps 65,535 uncertain namings cheap (about 1.6 s without it).
+func TestParseListCacheIsPerPath(t *testing.T) {
+	fs := newFS()
+	fs.files["/l/l.txt"] = "/" + strings.Repeat("a/", maxPath-3) + "a\n" // 8,188 bytes, every segment scanned
+	cfg := fe(".if defined(X)", strings.Repeat("  bind :1 ssl crt-list /l/l.txt\n", MaxServers-1)+".endif")
+	start := time.Now()
+	got, err := Parse(fs.input(cfg, ""))
+	elapsed := time.Since(start)
+	require.NoError(t, err)
+	require.Len(t, got.Servers, MaxServers-1)
+	assert.Less(t, elapsed, 400*time.Millisecond*raceSlowdown)
 }
 
 // TestParseUncertainListNamingsAreCheap (review N1): a crt-list is evaluated once per path,
@@ -779,13 +867,13 @@ func TestParseWireEstimate(t *testing.T) {
 		".if X\n  bind :1 ssl crt '\"<x>\"'\n.endif\n" + "listen " + strings.Repeat("\u00e9", 300) + "\n  bind :2 ssl crt " + strings.Repeat("r", 3000) + "\n"
 	got, err := Parse(fs.input(cfg, "2.4.30"))
 	require.NoError(t, err)
-	real := wireSize(t, got)
-	assert.GreaterOrEqual(t, got.wire, real)
+	assert.GreaterOrEqual(t, got.wire, wireSize(t, got), "pending")
 	ResolveKeys(&got, func(string) bool { return false })
-	assert.GreaterOrEqual(t, got.wire, wireSize(t, got), "after ResolveKeys")
+	resolved := wireSize(t, got)
+	assert.GreaterOrEqual(t, got.wire, resolved, "after ResolveKeys")
 	MarkWritable(&got)
 	assert.GreaterOrEqual(t, got.wire, wireSize(t, got), "after MarkWritable")
-	assert.Less(t, got.wire, 2*real)
+	assert.Less(t, got.wire, 2*resolved)
 }
 
 // TestParseWireBound: MaxWire refuses a configuration whose servers would not fit, before the

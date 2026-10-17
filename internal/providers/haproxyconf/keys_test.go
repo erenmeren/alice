@@ -57,12 +57,12 @@ func TestMarkWritable(t *testing.T) {
 
 func TestCertAndKeyPaths(t *testing.T) {
 	a := Pair{Cert: "/c/a.pem", Key: "/c/a.pem.key", CertRaw: "/c/a.pem", KeyBeside: "/c/a.pem.key"}
-	b := plain("/c/b.pem")
+	b := Pair{Cert: "/c/b.pem", Key: "/c/b.pem", CertRaw: "/c/b.pem"}
 	c := Config{Servers: []Server{
 		{Pairs: []Pair{b, a, uns("$X", ReasonVariable)}},
 		{Pairs: []Pair{a, {CertRaw: "/c/z.pem", Unsupported: ReasonConditional}}},
 	}}
-	assert.Equal(t, []string{"/c/b.pem", "/c/a.pem"}, c.CertPaths())
+	assert.Equal(t, []string{"/c/b.pem", "/c/a.pem"}, c.CertPaths(), "supported only: no pending, no unsupported")
 	assert.Equal(t, []string{"/c/b.pem", "/c/a.pem.key"}, c.KeyPaths())
 	assert.Empty(t, Config{}.CertPaths())
 }

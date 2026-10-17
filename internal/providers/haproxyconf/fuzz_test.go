@@ -148,12 +148,14 @@ func FuzzParseHAProxyConfig(f *testing.F) {
 			}
 			for _, p := range s.Pairs {
 				switch {
-				case p.Unsupported != "":
+				case p.Unsupported == "":
+					t.Fatalf("supported before ResolveKeys: %+v", p) // review R2
+				case !p.pending:
 					if p.Cert != "" || p.Key != "" || p.KeyBeside != "" {
 						t.Fatalf("unsupported pair with paths: %+v", p)
 					}
-				case !helperproto.ValidPath(p.Cert) || p.Cert == "/" || p.Key != p.Cert:
-					t.Fatalf("supported pair %+v", p)
+				case p.Unsupported != ReasonConditional || !helperproto.ValidPath(p.Cert) || p.Cert == "/" || p.Key != p.Cert:
+					t.Fatalf("pending pair %+v", p)
 				case p.KeyBeside != "" && !helperproto.ValidPath(p.KeyBeside):
 					t.Fatalf("companion of %+v", p)
 				}
@@ -169,7 +171,7 @@ func FuzzParseHAProxyConfig(f *testing.F) {
 		ResolveKeys(&got, func(string) bool { n++; return n%2 == 0 })
 		for _, s := range got.Servers {
 			for _, p := range s.Pairs {
-				if p.keyUnsure || p.Unsupported == "" && p.Key != p.Cert && p.Key != p.KeyBeside {
+				if p.keyUnsure || p.pending || p.Unsupported == "" && p.Key != p.Cert && p.Key != p.KeyBeside {
 					t.Fatalf("resolved pair %+v", p)
 				}
 			}

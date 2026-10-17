@@ -75,13 +75,15 @@ type Server struct {
 // path as written (a directory entry: the crt argument, "/" and the entry name), cleaned and cut
 // to 200 runes as the wire's Raw shows it.
 //
-// When the key settings are not stable (see Parse), KeyBeside is "" and the pair is supported
-// only if its certificate file holds the key: ResolveKeys, which the caller must run before
-// using the pairs, makes it conditional otherwise.
+// Parse returns every pair it can support as pending: conditional, with Cert, Key (== Cert) and
+// KeyBeside set, until ResolveKeys decides its key and makes it supported (review R2), so a
+// caller that skips ResolveKeys reports no supported pair. When the key settings are not
+// stable (see Parse), KeyBeside is "" and ResolveKeys supports the pair only if its certificate
+// file holds the key. A crt-store section makes every pair conditional (review R3).
 type Pair struct {
 	Cert, Key, CertRaw, KeyBeside string
 	Unsupported                   string
-	keyUnsure                     bool
+	pending, keyUnsure            bool
 }
 
 // Parse evaluates haproxy.cfg the way HAProxy reads it (Rulings 6-14):
@@ -101,7 +103,11 @@ type Pair struct {
 // or crt-list word), as configurations set them. Then every load used them, and each pair's
 // companion follows from them and the path as HAProxy builds it. Otherwise only a key in the
 // certificate file itself is known: ResolveKeys makes the other pairs conditional (controller
-// ruling for Task 5, fix round 2).
+// ruling for Task 5, fix round 2). A "$" in a global keyword or in a key setting is not stable
+// either (review R1). A crt-store section (HAProxy 3.0 on) may give a bind's certificate a key
+// file of its own, so it makes every pair conditional (review R3).
+//
+// Every pair Parse can support is returned pending; ResolveKeys completes it (see Pair).
 //
 // The walk is iterative. MaxTokens counts the words of haproxy.cfg and of every crt-list
 // together; MaxCrtLists, MaxDirs, MaxDirEntries, MaxPairs, MaxServers, MaxNames and MaxWire
@@ -119,10 +125,18 @@ func Parse(in Input) (Config, error) {
 		return Config{}, fmt.Errorf("%s: %w (an .if block is not closed)", in.Path, ErrSyntax)
 	}
 	p.closeSection()
-	if p.unstable {
-		for i := range p.out {
-			for j := range p.out[i].Pairs {
-				if pair := &p.out[i].Pairs[j]; pair.Unsupported == "" {
+	// Every supported pair waits for ResolveKeys as a conditional one (review R2): a caller that
+	// forgets it reports no pair as supported, never one with a wrong key.
+	for i := range p.out {
+		for j := range p.out[i].Pairs {
+			pair := &p.out[i].Pairs[j]
+			switch {
+			case pair.Unsupported != "":
+			case p.crtStore:
+				*pair = Pair{CertRaw: pair.CertRaw, Unsupported: ReasonConditional}
+			default:
+				pair.Unsupported, pair.pending = ReasonConditional, true
+				if p.unstable {
 					pair.KeyBeside, pair.keyUnsure = "", true
 				}
 			}
@@ -226,6 +240,7 @@ type parser struct {
 	// loaded: a line that may load a certificate was read; unstable: a key setting was read
 	// after one, outside global or inside an .if block (see Parse).
 	loaded, unstable       bool
+	crtStore               bool // a crt-store section appears (HAProxy 3.0 on)
 	skipDots, versionKnown bool // minorAtLeast(Version, 2, 6)
 
 	lists     map[string][]listEntry // evaluated at the first naming
@@ -251,8 +266,18 @@ func (p *parser) line(l line) error {
 	if strings.HasPrefix(kw, ".") {
 		return p.directive(l)
 	}
-	if kw == "ssl-load-extra-files" || kw == "ssl-load-extra-del-ext" {
-		p.unstable = p.unstable || len(p.conds) > 0 || p.loaded || p.sec.kinds != kindGlobal || p.sec.uncertain
+	// Review R1: HAProxy expands "${VAR}" (and setenv's) before it reads the keyword, so a global
+	// line whose keyword has a "$" may be a key setting, and a key setting with a "$" has a value
+	// Alice cannot read.
+	dollarKw := l.words[0].dollar && p.sec.kinds&kindGlobal != 0
+	if dollarKw || kw == "ssl-load-extra-files" || kw == "ssl-load-extra-del-ext" {
+		p.unstable = p.unstable || dollarKw || slices.ContainsFunc(l.words[1:], func(w word) bool { return w.dollar }) ||
+			len(p.conds) > 0 || p.loaded || p.sec.kinds != kindGlobal || p.sec.uncertain
+	}
+	// Review R3 (probed on 3.0): a crt-store's "load crt <path> key <file>" gives a bind's
+	// "crt <path>" that key, which Alice does not read.
+	if kw == "crt-store" {
+		p.crtStore = true
 	}
 	eff := p.eff()
 	if eff == inactive {
@@ -399,12 +424,21 @@ func (p *parser) closeSection() {
 				unsupport(&s.servers[i].Pairs[j], ReasonConditional)
 			}
 		}
-		p.out = append(p.out, s.servers...)
+		p.out = appendServers(p.out, s.servers)
 	case s.own && s.disabled:
 	default:
-		p.out = append(p.out, s.servers...)
+		p.out = appendServers(p.out, s.servers)
 	}
 	s.servers = nil
+}
+
+// appendServers appends a section's servers to the output, taking the section's slice as the
+// output when it is the first (review R5: one copy less of the largest slice).
+func appendServers(out, servers []Server) []Server {
+	if len(out) == 0 {
+		return servers
+	}
+	return append(out, servers...)
 }
 
 // unsupport makes a supported pair unsupported for reason; an unsupported pair keeps its reason.
@@ -472,10 +506,11 @@ func (p *parser) bind(l line, maybe bool) error {
 		section = ""
 	}
 	bindServer := Server{File: p.in.Path, Line: l.n, Section: section, Listens: listens}
-	var (
-		lists []Server
-		lineN = len(strconv.Itoa(l.n))
-	)
+	// The servers go straight into the section (review R5: no copies): a slot for the bind's
+	// own server first, filled or dropped at the end, then one per crt-list line.
+	start := len(p.sec.servers)
+	p.sec.servers = append(p.sec.servers, Server{})
+	lineN := len(strconv.Itoa(l.n))
 	for _, a := range args {
 		switch {
 		case a.unknown:
@@ -487,7 +522,7 @@ func (p *parser) bind(l line, maybe bool) error {
 				return err
 			}
 		default:
-			entries, pair, err := p.crtList(a.w, len(lists))
+			entries, pair, err := p.crtList(a.w, len(p.sec.servers)-start-1)
 			if err != nil {
 				return err
 			}
@@ -503,15 +538,16 @@ func (p *parser) bind(l line, maybe bool) error {
 					return err
 				}
 				p.wire += e.line.namesWire
-				lists = append(lists, s)
+				p.sec.servers = append(p.sec.servers, s)
 			}
 		}
 	}
-	var all []Server
 	if len(bindServer.Pairs) > 0 {
-		all = append(all, bindServer)
+		p.sec.servers[start] = bindServer
+	} else {
+		p.sec.servers = slices.Delete(p.sec.servers, start, start+1)
 	}
-	all = append(all, lists...)
+	all := p.sec.servers[start:]
 	for i := range all {
 		if err := p.addServer(&all[i], lineN); err != nil {
 			return err
@@ -526,7 +562,6 @@ func (p *parser) bind(l line, maybe bool) error {
 			}
 		}
 	}
-	p.sec.servers = append(p.sec.servers, all...)
 	return nil
 }
 
