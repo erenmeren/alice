@@ -281,7 +281,7 @@ func (h *nginxHost) nginxConfig() (nginxconf.Config, nginxMeta, error) {
 	}
 	out := h.dumpOutput()
 	switch {
-	case len(out) > helperproto.MaxNginxConfig:
+	case len(out) > helperproto.MaxServerConfig:
 		return invalid(unsupportedConf(helperproto.ConfigReasonTooLarge, ""))
 	case meta.confPath == "":
 		return invalid(unsupportedConf(helperproto.ConfigReasonNoConfPath, ""))
@@ -517,9 +517,9 @@ func (e *Emulator) nginxDump(args []string) Response {
 	case err != nil:
 		return refuse(helperproto.ExitFailed, helperproto.CodeIOError)
 	}
-	resp := helperproto.NginxDumpResponse{OK: true, Version: meta.version, ConfPath: meta.confPath, ConfigValid: meta.valid,
-		ConfigError: meta.class, ConfigErrorReason: meta.reason, ConfigErrorFile: meta.file, Servers: []helperproto.NginxServer{},
-		Files: []helperproto.NginxFile{}, Warnings: append([]string{}, cfg.Warnings...), Writable: append([]string{}, meta.writable...)}
+	resp := helperproto.ServerDumpResponse{OK: true, Version: meta.version, ConfPath: meta.confPath, ConfigValid: meta.valid,
+		ConfigError: meta.class, ConfigErrorReason: meta.reason, ConfigErrorFile: meta.file, Servers: []helperproto.DumpServer{},
+		Files: []helperproto.DumpFile{}, Warnings: append([]string{}, cfg.Warnings...), Writable: append([]string{}, meta.writable...)}
 	if !meta.valid {
 		return answer(resp)
 	}
@@ -536,11 +536,11 @@ func (e *Emulator) nginxDump(args []string) Response {
 	}
 	budget := h.dumpBudget
 	if budget <= 0 {
-		budget = helperproto.NginxDumpOutput
+		budget = helperproto.ServerDumpOutput
 	}
 	n, pemBytes := 0, 0
 	for _, p := range cfg.CertPaths() {
-		if n++; n > helperproto.MaxNginxFiles {
+		if n++; n > helperproto.MaxServerFiles {
 			warn(helperproto.WarnTooManyFiles)
 			break
 		}
@@ -554,7 +554,7 @@ func (e *Emulator) nginxDump(args []string) Response {
 		resp.Files = append(resp.Files, fi)
 	}
 	for _, p := range cfg.KeyPaths() {
-		if n++; n > helperproto.MaxNginxFiles {
+		if n++; n > helperproto.MaxServerFiles {
 			warn(helperproto.WarnTooManyFiles)
 			break
 		}
@@ -572,17 +572,17 @@ func (e *Emulator) nginxDump(args []string) Response {
 }
 
 // toWire converts a parsed server block (the helper's toWire).
-func toWire(sv nginxconf.Server) helperproto.NginxServer {
-	out := helperproto.NginxServer{File: clean(sv.File, 4096), Line: sv.Line, Names: []string{}, Listens: []helperproto.NginxListen{},
-		Pairs: []helperproto.NginxPair{}, Stream: sv.Stream}
+func toWire(sv nginxconf.Server) helperproto.DumpServer {
+	out := helperproto.DumpServer{File: clean(sv.File, 4096), Line: sv.Line, Names: []string{}, Listens: []helperproto.DumpListen{},
+		Pairs: []helperproto.DumpPair{}, Stream: sv.Stream}
 	for _, n := range sv.Names {
 		out.Names = append(out.Names, clean(n, 253))
 	}
 	for _, l := range nginxconf.SSLListens(sv) {
-		out.Listens = append(out.Listens, helperproto.NginxListen{Addr: clean(l.Addr, 253), Port: l.Port, DefaultServer: l.DefaultServer})
+		out.Listens = append(out.Listens, helperproto.DumpListen{Addr: clean(l.Addr, 253), Port: l.Port, DefaultServer: l.DefaultServer})
 	}
 	for _, p := range sv.Pairs {
-		wp := helperproto.NginxPair{Cert: p.Cert, Key: p.Key, Inherited: p.Inherited, Unsupported: p.Unsupported}
+		wp := helperproto.DumpPair{Cert: p.Cert, Key: p.Key, Inherited: p.Inherited, Unsupported: p.Unsupported}
 		if p.Unsupported != "" {
 			wp.Raw = cleanRunes(p.CertRaw, 200)
 		}
@@ -648,8 +648,8 @@ func (h *nginxHost) fileProblem(p string) string {
 func modeString(m uint32) string { return fmt.Sprintf("%04o", m&0o777) }
 
 // describeCert is the helper's describeCert on the emulated file.
-func (h *nginxHost) describeCert(p string) (fi helperproto.NginxFile, dropped bool) {
-	fi = helperproto.NginxFile{Path: p, Kind: "cert"}
+func (h *nginxHost) describeCert(p string) (fi helperproto.DumpFile, dropped bool) {
+	fi = helperproto.DumpFile{Path: p, Kind: "cert"}
 	if wp := h.walkProblem(p); wp != "" {
 		fi.Exists, fi.Problem = true, wp
 		return fi, false
@@ -694,8 +694,8 @@ func (h *nginxHost) describeCert(p string) (fi helperproto.NginxFile, dropped bo
 }
 
 // describeKey is the helper's describeKey: only the file's attributes, never its content.
-func (h *nginxHost) describeKey(p string) (fi helperproto.NginxFile, open bool) {
-	fi = helperproto.NginxFile{Path: p, Kind: "key"}
+func (h *nginxHost) describeKey(p string) (fi helperproto.DumpFile, open bool) {
+	fi = helperproto.DumpFile{Path: p, Kind: "key"}
 	if wp := h.walkProblem(p); wp != "" {
 		fi.Exists, fi.Problem = true, wp
 		return fi, false

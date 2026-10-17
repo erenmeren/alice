@@ -396,7 +396,7 @@ const (
 	// servers of a location, writable files); what is shown is incomplete.
 	WarnListTruncated = "list_truncated"
 	// WarnLocationsDropped: Alice left certificate locations of the dump out (more than
-	// helperproto.MaxNginxFiles): the list is not every location of the server, so inventory marks
+	// helperproto.MaxServerFiles): the list is not every location of the server, so inventory marks
 	// none missing. Only the provider emits it (too_many_files is the helper's own warning).
 	WarnLocationsDropped = "locations_dropped"
 	// WarnKVItemUnreadable: a vault listing held items Alice could not use (a name, version or

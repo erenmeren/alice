@@ -47,7 +47,7 @@ func productionSys() *sys {
 		stdout:   os.Stdout,
 		chown:    func(f *os.File, uid, gid int) error { return f.Chown(uid, gid) },
 		runNginx: func(ctx context.Context, args ...string) ([]byte, []byte, error) {
-			return runProgram(ctx, nginxPath, helperproto.MaxNginxConfig, args...)
+			return runProgram(ctx, nginxPath, helperproto.MaxServerConfig, args...)
 		},
 		runSystemctl: func(ctx context.Context, args ...string) error {
 			_, _, err := runProgram(ctx, systemctlPath, 64<<10, args...)

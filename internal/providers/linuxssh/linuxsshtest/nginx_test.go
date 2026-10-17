@@ -119,8 +119,8 @@ func (w *world) restore(op string) Response {
 
 func (w *world) assertPair(t *testing.T, leaf pki.Leaf) {
 	t.Helper()
-	assert.Equal(t, string(leaf.FullchainPEM), string(w.e.NginxFile(crt)))
-	assert.Equal(t, string(leaf.KeyPEM), string(w.e.NginxFile(key)))
+	assert.Equal(t, string(leaf.FullchainPEM), string(w.e.DumpFile(crt)))
+	assert.Equal(t, string(leaf.KeyPEM), string(w.e.DumpFile(key)))
 }
 
 // padded is a certificate file over the size limit that still loads (text outside PEM blocks is ignored).
@@ -134,7 +134,7 @@ func TestEmulatedNginxDeployAndRollback(t *testing.T) {
 
 	dump := w.run(line(true, helperproto.SubNginxDump), nil)
 	require.Equal(t, 0, dump.Exit)
-	d := decode[helperproto.NginxDumpResponse](t, dump)
+	d := decode[helperproto.ServerDumpResponse](t, dump)
 	require.True(t, d.ConfigValid, "%+v", d)
 	require.Len(t, d.Files, 2)
 	assert.Equal(t, string(w.old.FullchainPEM), d.Files[0].PEM)
@@ -145,8 +145,8 @@ func TestEmulatedNginxDeployAndRollback(t *testing.T) {
 	require.Len(t, d.Servers, 1)
 	assert.Equal(t, 1, d.Servers[0].Line)
 	assert.Equal(t, []string{"www.example.test"}, d.Servers[0].Names)
-	assert.Equal(t, []helperproto.NginxListen{{Port: 443}}, d.Servers[0].Listens)
-	assert.Equal(t, []helperproto.NginxPair{{Cert: crt, Key: key}}, d.Servers[0].Pairs)
+	assert.Equal(t, []helperproto.DumpListen{{Port: 443}}, d.Servers[0].Listens)
+	assert.Equal(t, []helperproto.DumpPair{{Cert: crt, Key: key}}, d.Servers[0].Pairs)
 
 	r := w.deploy(emuOp)
 	require.Equal(t, 0, r.Exit, string(r.Stdout))
@@ -341,8 +341,8 @@ func TestEmulatedHangupAndKill(t *testing.T) {
 	assert.False(t, st.Active)
 	assert.Equal(t, hexSum(w.old.FullchainPEM), st.CurrentCertSHA256)
 	assert.Equal(t, hexSum(w.nw.FullchainPEM), st.NewCertSHA256)
-	assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key), "the key was replaced, the certificate not: a mixed pair")
-	assert.Equal(t, w.old.FullchainPEM, w.e.NginxFile(crt))
+	assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key), "the key was replaced, the certificate not: a mixed pair")
+	assert.Equal(t, w.old.FullchainPEM, w.e.DumpFile(crt))
 	r = w.restore(emuOp)
 	require.Equal(t, 0, r.Exit, string(r.Stdout))
 	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, r).Phase)
@@ -454,11 +454,11 @@ func TestEmulatedFailedStepsAreRolledBack(t *testing.T) {
 			case "new":
 				w.assertPair(t, w.nw)
 			case "mixed":
-				assert.Equal(t, w.old.FullchainPEM, w.e.NginxFile(crt))
-				assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key))
+				assert.Equal(t, w.old.FullchainPEM, w.e.DumpFile(crt))
+				assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key))
 			case "foreign":
-				assert.Equal(t, "someone else's", string(w.e.NginxFile(crt)))
-				assert.Equal(t, w.old.KeyPEM, w.e.NginxFile(key), "this transaction's own key is put back")
+				assert.Equal(t, "someone else's", string(w.e.DumpFile(crt)))
+				assert.Equal(t, w.old.KeyPEM, w.e.DumpFile(key), "this transaction's own key is put back")
 			}
 			assert.Equal(t, pki.Fingerprint(w.old.Cert), w.e.Served(443, "www.example.test"), "no failed deployment changed what Nginx serves")
 			// The status says what the answer said.
@@ -485,7 +485,7 @@ func TestEmulatedWriteFailureOfTheCertificateOnly(t *testing.T) {
 	assert.Equal(t, helperproto.PhaseRestored, resp.Phase, "%+v", resp)
 	assert.Equal(t, helperproto.StepWriteCert, resp.FailedStep)
 	assert.Equal(t, stepFailed("write_cert", ""), resp.Steps[2])
-	assert.Equal(t, w.old.KeyPEM, w.e.NginxFile("/etc/nginx/key/a.key"))
+	assert.Equal(t, w.old.KeyPEM, w.e.DumpFile("/etc/nginx/key/a.key"))
 }
 
 func TestEmulatedRestoreRefusals(t *testing.T) {
@@ -501,7 +501,7 @@ func TestEmulatedRestoreRefusals(t *testing.T) {
 	r := w.restore(emuOp)
 	assert.Equal(t, helperproto.ExitPrecondition, r.Exit)
 	assert.Equal(t, helperproto.CodeHashMismatch, codeOf(t, r))
-	assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key))
+	assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key))
 	assert.Equal(t, helperproto.PhaseRestoreFailed, w.status(emuOp).Phase)
 	assert.Equal(t, helperproto.RestoreErrFileChanged, w.status(emuOp).Error)
 	// The same refusal again changes nothing.
@@ -545,7 +545,7 @@ func TestEmulatedSupersededRule(t *testing.T) {
 	require.Equal(t, 0, r.Exit)
 	r = w.restore(emuOp2)
 	require.Equal(t, 0, r.Exit, string(r.Stdout))
-	assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key))
+	assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key))
 }
 
 func TestEmulatedSupersededResentDeployment(t *testing.T) {
@@ -628,7 +628,7 @@ func TestEmulatedServedFollowsReloadsAndOtherListeners(t *testing.T) {
 	w.e.NoopReload(true)
 	require.Equal(t, 0, w.deploy(emuOp).Exit)
 	assert.Equal(t, oldFP, w.e.Served(443, "www.example.test"))
-	assert.Equal(t, w.nw.FullchainPEM, w.e.NginxFile(crt))
+	assert.Equal(t, w.nw.FullchainPEM, w.e.DumpFile(crt))
 	w.e.NoopReload(false)
 
 	// Something else answers on the port (F-06).
@@ -743,11 +743,11 @@ func TestEmulatorStateNeverPrintsAKey(t *testing.T) {
 func TestEmulatedNginxDumpFromAConfiguration(t *testing.T) {
 	w := newWorld(t)
 	w.e.AddUnsupported([]string{"var.example.test"}, 443, "/etc/nginx/ssl/$host.crt", nginxconf.ReasonVariable)
-	d := decode[helperproto.NginxDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
+	d := decode[helperproto.ServerDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
 	require.True(t, d.ConfigValid, "%+v", d)
 	require.Len(t, d.Servers, 2)
 	assert.Equal(t, 11, d.Servers[1].Line)
-	assert.Equal(t, helperproto.NginxPair{Cert: "", Key: "", Unsupported: "variable", Raw: "/etc/nginx/ssl/$host.crt"}, d.Servers[1].Pairs[0])
+	assert.Equal(t, helperproto.DumpPair{Cert: "", Key: "", Unsupported: "variable", Raw: "/etc/nginx/ssl/$host.crt"}, d.Servers[1].Pairs[0])
 	assert.Len(t, d.Files, 2, "an unsupported pair's files are not described")
 
 	// Every unsupported reason the real parser produces, through its real text.
@@ -766,7 +766,7 @@ func TestEmulatedNginxDumpFromAConfiguration(t *testing.T) {
 			e := NewEmulator()
 			e.EnableNginx("1.22.1")
 			e.AddUnsupported([]string{"u.example.test"}, 443, tc.raw, tc.reason)
-			d := decode[helperproto.NginxDumpResponse](t, e.handle(line(true, helperproto.SubNginxDump), nil))
+			d := decode[helperproto.ServerDumpResponse](t, e.handle(line(true, helperproto.SubNginxDump), nil))
 			require.True(t, d.ConfigValid, "%+v", d)
 			require.Len(t, d.Servers, 1)
 			require.Len(t, d.Servers[0].Pairs, 1)
@@ -789,36 +789,36 @@ func TestEmulatedNginxDumpFromAConfiguration(t *testing.T) {
 	e.EnableNginx("1.22.1")
 	e.AddSite(NginxSite{Names: []string{"a"}, Port: 443, CertPath: crt, KeyPath: key}, w.old.FullchainPEM, w.old.KeyPEM)
 	e.SetNginxFileMode("/etc/nginx/conf.d/emu.conf", "root", "root", 0o664)
-	d = decode[helperproto.NginxDumpResponse](t, e.handle(line(true, helperproto.SubNginxDump), nil))
+	d = decode[helperproto.ServerDumpResponse](t, e.handle(line(true, helperproto.SubNginxDump), nil))
 	assert.Equal(t, nginxconf.ReasonConfigFileWritable, d.Servers[0].Pairs[0].Unsupported)
 	assert.Equal(t, []string{"/etc/nginx/conf.d/emu.conf"}, d.Writable)
 	e.SetNginxFileMode("/etc/nginx/conf.d/emu.conf", "alice", "root", 0o644)
-	d = decode[helperproto.NginxDumpResponse](t, e.handle(line(true, helperproto.SubNginxDump), nil))
+	d = decode[helperproto.ServerDumpResponse](t, e.handle(line(true, helperproto.SubNginxDump), nil))
 	assert.Equal(t, nginxconf.ReasonConfigFileWritable, d.Servers[0].Pairs[0].Unsupported, "owned by a user other than root")
 }
 
 func TestEmulatedNginxDumpFilesAndWarnings(t *testing.T) {
 	w := newWorld(t)
-	dump := func() helperproto.NginxDumpResponse {
+	dump := func() helperproto.ServerDumpResponse {
 		r := w.run(line(true, helperproto.SubNginxDump), nil)
 		require.Equal(t, 0, r.Exit, string(r.Stdout))
-		return decode[helperproto.NginxDumpResponse](t, r)
+		return decode[helperproto.ServerDumpResponse](t, r)
 	}
-	file := func(d helperproto.NginxDumpResponse, kind string) helperproto.NginxFile {
+	file := func(d helperproto.ServerDumpResponse, kind string) helperproto.DumpFile {
 		for _, f := range d.Files {
 			if f.Kind == kind {
 				return f
 			}
 		}
 		t.Fatalf("no %s file in %+v", kind, d.Files)
-		return helperproto.NginxFile{}
+		return helperproto.DumpFile{}
 	}
 	d := dump()
 	c := file(d, "cert")
-	assert.Equal(t, helperproto.NginxFile{Path: crt, Kind: "cert", Exists: true, Resolved: crt, Mode: "0644", Owner: "root", Group: "root",
+	assert.Equal(t, helperproto.DumpFile{Path: crt, Kind: "cert", Exists: true, Resolved: crt, Mode: "0644", Owner: "root", Group: "root",
 		Size: int64(len(w.old.FullchainPEM)), SHA256: hexSum(w.old.FullchainPEM), PEM: string(w.old.FullchainPEM), FreeBytes: 1 << 30}, c)
 	k := file(d, "key")
-	assert.Equal(t, helperproto.NginxFile{Path: key, Kind: "key", Exists: true, Resolved: key, Mode: "0600", Owner: "root", Group: "root",
+	assert.Equal(t, helperproto.DumpFile{Path: key, Kind: "key", Exists: true, Resolved: key, Mode: "0600", Owner: "root", Group: "root",
 		Size: int64(len(w.old.KeyPEM)), FreeBytes: 1 << 30}, k)
 	assert.Equal(t, []string{}, d.Warnings)
 	assert.Equal(t, []string{}, d.Writable)
@@ -869,15 +869,15 @@ func TestEmulatedNginxDumpFilesAndWarnings(t *testing.T) {
 	w.e.SetNginxConfig("/etc/nginx/nginx.conf", "events {}\nhttp { include /etc/nginx/conf.d/*.conf; }\nmail { server { listen 995 ssl; ssl_certificate /x/a.crt; ssl_certificate_key /x/a.key; } }\n")
 	assert.Equal(t, []string{helperproto.WarnMailTLS}, dump().Warnings)
 
-	// Too many files: the helper lists at most MaxNginxFiles, certificates first.
+	// Too many files: the helper lists at most MaxServerFiles, certificates first.
 	w = newWorld(t)
-	for i := range helperproto.MaxNginxFiles {
+	for i := range helperproto.MaxServerFiles {
 		w.e.AddSite(NginxSite{Port: 10000 + i, CertPath: fmt.Sprintf("/etc/nginx/many/%d.crt", i), KeyPath: fmt.Sprintf("/etc/nginx/many/%d.key", i)},
 			w.old.CertPEM, w.old.KeyPEM)
 	}
 	d = dump()
 	assert.Contains(t, d.Warnings, helperproto.WarnTooManyFiles)
-	assert.Len(t, d.Files, helperproto.MaxNginxFiles)
+	assert.Len(t, d.Files, helperproto.MaxServerFiles)
 
 	// An answer over the budget is never truncated.
 	w = newWorld(t)
@@ -921,7 +921,7 @@ func TestEmulatedNginxDumpRefusalsSayWhyAndWhere(t *testing.T) {
 		{"empty dump", func(e *Emulator) { e.SetNginxDump("") }, "untrusted", helperproto.ConfigReasonWrongFirstFile, ""},
 		{"changed", func(e *Emulator) {
 			e.SetNginxDump(e.nx.dumpOutput())
-			e.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.NginxFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
+			e.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.DumpFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
 		}, "untrusted", helperproto.ConfigReasonChanged, "/etc/nginx/conf.d/emu.conf"},
 		{"no line feed after the file", func(e *Emulator) { e.SetNginxDump(strings.TrimSuffix(e.nx.dumpOutput(), "\n")) },
 			"untrusted", helperproto.ConfigReasonChanged, "/etc/nginx/conf.d/emu.conf"},
@@ -939,7 +939,7 @@ func TestEmulatedNginxDumpRefusalsSayWhyAndWhere(t *testing.T) {
 			tc.setup(w.e)
 			r := w.run(line(true, helperproto.SubNginxDump), nil)
 			require.Equal(t, 0, r.Exit, string(r.Stdout))
-			d := decode[helperproto.NginxDumpResponse](t, r)
+			d := decode[helperproto.ServerDumpResponse](t, r)
 			if tc.class == "" {
 				assert.True(t, d.ConfigValid, "a removed file is no file of the dump any more: %+v", d)
 				assert.Empty(t, d.Servers)
@@ -958,8 +958,8 @@ func TestEmulatedNginxDumpRefusalsSayWhyAndWhere(t *testing.T) {
 
 func TestEmulatedNginxDumpTooLargeAndKilled(t *testing.T) {
 	w := newWorld(t)
-	w.e.SetNginxConfig("/etc/nginx/nginx.conf", "# "+strings.Repeat("x", helperproto.MaxNginxConfig)+"\nhttp { include /etc/nginx/conf.d/*.conf; }\n")
-	d := decode[helperproto.NginxDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
+	w.e.SetNginxConfig("/etc/nginx/nginx.conf", "# "+strings.Repeat("x", helperproto.MaxServerConfig)+"\nhttp { include /etc/nginx/conf.d/*.conf; }\n")
+	d := decode[helperproto.ServerDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
 	assert.Equal(t, "unsupported", d.ConfigError)
 	assert.Equal(t, helperproto.ConfigReasonTooLarge, d.ConfigErrorReason)
 
@@ -995,7 +995,7 @@ func TestEmulatedMixedPairIsAConfigurationError(t *testing.T) {
 	w := newWorld(t)
 	w.e.KillAt(helperproto.StepWriteKey)
 	require.Equal(t, "KILL", w.deploy(emuOp).Signal)
-	d := decode[helperproto.NginxDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
+	d := decode[helperproto.ServerDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
 	assert.False(t, d.ConfigValid)
 	assert.Equal(t, helperproto.ConfigErrKeyMismatch, d.ConfigError)
 	assert.Equal(t, "1.22.1", d.Version)
@@ -1009,7 +1009,7 @@ func TestEmulatedMixedPairIsAConfigurationError(t *testing.T) {
 	require.Equal(t, 0, r.Exit, string(r.Stdout))
 	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, r).Phase)
 	w.assertPair(t, w.old)
-	d = decode[helperproto.NginxDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
+	d = decode[helperproto.ServerDumpResponse](t, w.run(line(true, helperproto.SubNginxDump), nil))
 	assert.True(t, d.ConfigValid)
 	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxDeployResponse](t, w.deploy(emuOp)).Phase, "a re-send answers from the journal")
 }

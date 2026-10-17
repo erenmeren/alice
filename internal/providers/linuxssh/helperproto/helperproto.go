@@ -123,7 +123,7 @@ const (
 	WarnStreamTLS          = "stream_tls"           // TLS in stream {} is listed but not supported (F-21, R23)
 	WarnMailTLS            = "mail_tls"             // TLS in mail {} is listed but not supported
 	WarnConfigFileWritable = "config_file_writable" // a configuration file can be changed by users other than root
-	WarnTooManyFiles       = "too_many_files"       // more referenced files than MaxNginxFiles
+	WarnTooManyFiles       = "too_many_files"       // more referenced files than MaxServerFiles
 	// WarnCertificateBlockDropped: a block labelled CERTIFICATE in a certificate file is not an
 	// X.509 certificate (or carries PEM headers); the helper dropped it and returned the others.
 	WarnCertificateBlockDropped = "certificate_block_dropped"
@@ -159,7 +159,7 @@ const (
 	CodeBusy          = "BUSY"            // another nginx-deploy or nginx-restore holds the lock
 	CodeUnknownOp     = "UNKNOWN_OP"      // nginx-restore: no journal for this operation
 	CodeProbeFailed   = "PROBE_FAILED"    // tls-probe could not connect or complete the handshake
-	// CodeOutputTooLarge: nginx-dump's answer would exceed NginxDumpOutput (exit 4); the helper
+	// CodeOutputTooLarge: nginx-dump's answer would exceed ServerDumpOutput (exit 4); the helper
 	// never sends a truncated answer.
 	CodeOutputTooLarge = "OUTPUT_TOO_LARGE"
 	// CodeSuperseded: nginx-restore (or a re-sent interrupted nginx-deploy) of an operation that a
@@ -211,13 +211,13 @@ type UnlistedAccount struct {
 
 // Phase 4 limits.
 const (
-	MaxNginxConfig  = 20 << 20  // nginx -T output the helper reads
-	MaxCertFileSize = 256 << 10 // a certificate or key file
-	MaxDeployInput  = 512 << 10 // nginx-deploy stdin
-	MaxNginxFiles   = 1000      // referenced certificate and key files nginx-dump describes
-	MinFreeBytes    = 10 << 20  // free space kept after a write (spec §12.6 step 1)
-	NginxDumpOutput = 16 << 20  // nginx-dump's answer: certificates are public and small
-	NginxBackupKeep = 7 * 24 * time.Hour
+	MaxServerConfig  = 20 << 20  // nginx -T output the helper reads
+	MaxCertFileSize  = 256 << 10 // a certificate or key file
+	MaxDeployInput   = 512 << 10 // nginx-deploy stdin
+	MaxServerFiles   = 1000      // referenced certificate and key files nginx-dump describes
+	MinFreeBytes     = 10 << 20  // free space kept after a write (spec §12.6 step 1)
+	ServerDumpOutput = 16 << 20  // nginx-dump's answer: certificates are public and small
+	NginxBackupKeep  = 7 * 24 * time.Hour
 )
 
 // Configuration error classes of nginx -t (never the raw text).
@@ -235,7 +235,7 @@ const (
 	ConfigErrUnsupported = "unsupported"
 )
 
-// Reasons of an untrusted or unsupported configuration (NginxDumpResponse.ConfigErrorReason), a
+// Reasons of an untrusted or unsupported configuration (ServerDumpResponse.ConfigErrorReason), a
 // closed set; ConfigErrorFile names the file when it can be carried.
 const (
 	ConfigReasonNotRootControlled = "not_root_controlled" // a directory or link on the file's path is not root's alone
@@ -445,15 +445,15 @@ type CleanupResponse struct {
 	Removed int  `json:"removed"`
 }
 
-// NginxListen is one SSL listen of a server block.
-type NginxListen struct {
+// DumpListen is one SSL listen of a server block.
+type DumpListen struct {
 	Addr          string `json:"addr"` // "" = any address
 	Port          int    `json:"port"`
 	DefaultServer bool   `json:"default_server"`
 }
 
-// NginxPair is one ssl_certificate / ssl_certificate_key pair of a server block.
-type NginxPair struct {
+// DumpPair is one ssl_certificate / ssl_certificate_key pair of a server block.
+type DumpPair struct {
 	Cert        string `json:"cert"`
 	Key         string `json:"key"`
 	Inherited   bool   `json:"inherited"`
@@ -461,19 +461,19 @@ type NginxPair struct {
 	Raw         string `json:"raw"`         // the directive's argument when unsupported (cleaned, at most 200 runes)
 }
 
-// NginxServer is one server block of the parsed configuration.
-type NginxServer struct {
-	File    string        `json:"file"`
-	Line    int           `json:"line"`
-	Names   []string      `json:"names"`
-	Listens []NginxListen `json:"listens"` // SSL listens only
-	Pairs   []NginxPair   `json:"pairs"`
-	Stream  bool          `json:"stream"`
+// DumpServer is one server block of the parsed configuration.
+type DumpServer struct {
+	File    string       `json:"file"`
+	Line    int          `json:"line"`
+	Names   []string     `json:"names"`
+	Listens []DumpListen `json:"listens"` // SSL listens only
+	Pairs   []DumpPair   `json:"pairs"`
+	Stream  bool         `json:"stream"`
 }
 
-// NginxFile describes one certificate or key file a supported pair references. Key files are
+// DumpFile describes one certificate or key file a supported pair references. Key files are
 // only stat'ed: their content is never read or returned.
-type NginxFile struct {
+type DumpFile struct {
 	Path      string `json:"path"`
 	Kind      string `json:"kind"` // "cert" | "key"
 	Exists    bool   `json:"exists"`
@@ -489,8 +489,8 @@ type NginxFile struct {
 	FreeBytes int64  `json:"free_bytes"`
 }
 
-// NginxDumpResponse answers "nginx-dump".
-type NginxDumpResponse struct {
+// ServerDumpResponse answers "nginx-dump".
+type ServerDumpResponse struct {
 	OK          bool   `json:"ok"`
 	Version     string `json:"version"`
 	ConfPath    string `json:"conf_path"`
@@ -498,12 +498,12 @@ type NginxDumpResponse struct {
 	ConfigError string `json:"config_error"` // a ConfigErr* class when !ConfigValid
 	// ConfigErrorReason (a ConfigReason*) and ConfigErrorFile (a cleaned absolute path, or "") say
 	// why and where for ConfigErrUntrusted and ConfigErrUnsupported.
-	ConfigErrorReason string        `json:"config_error_reason"`
-	ConfigErrorFile   string        `json:"config_error_file"`
-	Servers           []NginxServer `json:"servers"`
-	Files             []NginxFile   `json:"files"`
-	Warnings          []string      `json:"warnings"`
-	Writable          []string      `json:"writable"` // configuration files others than root can change
+	ConfigErrorReason string       `json:"config_error_reason"`
+	ConfigErrorFile   string       `json:"config_error_file"`
+	Servers           []DumpServer `json:"servers"`
+	Files             []DumpFile   `json:"files"`
+	Warnings          []string     `json:"warnings"`
+	Writable          []string     `json:"writable"` // configuration files others than root can change
 }
 
 // NginxTestResponse answers "nginx-test".

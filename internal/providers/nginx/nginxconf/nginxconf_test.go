@@ -712,7 +712,7 @@ func TestMailTLSWarns(t *testing.T) {
 func TestWarningCodesComeFromHelperproto(t *testing.T) {
 	assert.Equal(t, helperproto.WarnStreamTLS, WarnStreamTLS)
 	assert.Equal(t, helperproto.WarnMailTLS, WarnMailTLS)
-	assert.Equal(t, helperproto.MaxNginxConfig, MaxInput)
+	assert.Equal(t, helperproto.MaxServerConfig, MaxInput)
 }
 
 // Fix round 1 (helper minor 4): a section is Included only when an include of an earlier section

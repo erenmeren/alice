@@ -353,7 +353,7 @@ func parseNginxV(b []byte) (version, confPath string) {
 }
 
 // dumpBudget is the largest nginx-dump answer (S11); tests lower it.
-var dumpBudget = helperproto.NginxDumpOutput
+var dumpBudget = helperproto.ServerDumpOutput
 
 func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 	if len(args) != 0 {
@@ -367,8 +367,8 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 	case err != nil:
 		return nil, failed(helperproto.CodeIOError, "nginx could not be run to the end")
 	}
-	resp := helperproto.NginxDumpResponse{OK: true, Version: meta.version, ConfPath: meta.confPath, ConfigValid: meta.valid,
-		ConfigError: meta.class, ConfigErrorReason: meta.reason, ConfigErrorFile: meta.file, Servers: []helperproto.NginxServer{}, Files: []helperproto.NginxFile{},
+	resp := helperproto.ServerDumpResponse{OK: true, Version: meta.version, ConfPath: meta.confPath, ConfigValid: meta.valid,
+		ConfigError: meta.class, ConfigErrorReason: meta.reason, ConfigErrorFile: meta.file, Servers: []helperproto.DumpServer{}, Files: []helperproto.DumpFile{},
 		Warnings: append([]string{}, cfg.Warnings...), Writable: append([]string{}, meta.writable...)}
 	if !meta.valid {
 		return resp, nil
@@ -391,7 +391,7 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 	groups := s.groupNames()
 	n, pemBytes := 0, 0
 	for _, p := range cfg.CertPaths() {
-		if n++; n > helperproto.MaxNginxFiles {
+		if n++; n > helperproto.MaxServerFiles {
 			warn(helperproto.WarnTooManyFiles)
 			break
 		}
@@ -405,7 +405,7 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 		resp.Files = append(resp.Files, fi)
 	}
 	for _, p := range cfg.KeyPaths() {
-		if n++; n > helperproto.MaxNginxFiles {
+		if n++; n > helperproto.MaxServerFiles {
 			warn(helperproto.WarnTooManyFiles)
 			break
 		}
@@ -426,17 +426,17 @@ func cmdNginxDump(ctx context.Context, s *sys, args []string) (any, error) {
 }
 
 // toWire converts a parsed server block; slices are never nil (empty arrays on the wire).
-func toWire(sv nginxconf.Server) helperproto.NginxServer {
-	out := helperproto.NginxServer{File: clean(sv.File, 4096), Line: sv.Line, Names: []string{}, Listens: []helperproto.NginxListen{},
-		Pairs: []helperproto.NginxPair{}, Stream: sv.Stream}
+func toWire(sv nginxconf.Server) helperproto.DumpServer {
+	out := helperproto.DumpServer{File: clean(sv.File, 4096), Line: sv.Line, Names: []string{}, Listens: []helperproto.DumpListen{},
+		Pairs: []helperproto.DumpPair{}, Stream: sv.Stream}
 	for _, n := range sv.Names {
 		out.Names = append(out.Names, clean(n, 253))
 	}
 	for _, l := range nginxconf.SSLListens(sv) {
-		out.Listens = append(out.Listens, helperproto.NginxListen{Addr: clean(l.Addr, 253), Port: l.Port, DefaultServer: l.DefaultServer})
+		out.Listens = append(out.Listens, helperproto.DumpListen{Addr: clean(l.Addr, 253), Port: l.Port, DefaultServer: l.DefaultServer})
 	}
 	for _, p := range sv.Pairs {
-		wp := helperproto.NginxPair{Cert: p.Cert, Key: p.Key, Inherited: p.Inherited, Unsupported: p.Unsupported}
+		wp := helperproto.DumpPair{Cert: p.Cert, Key: p.Key, Inherited: p.Inherited, Unsupported: p.Unsupported}
 		if p.Unsupported != "" {
 			wp.Raw = cleanRunes(p.CertRaw, 200)
 		}
@@ -473,8 +473,8 @@ func cleanRunes(s string, maxRunes int) string {
 // describeCert reads a certificate file through resolveRoot and returns its certificate blocks.
 // dropped reports blocks labelled CERTIFICATE that are not X.509 certificates (S9). A file whose
 // first such block is dropped is leaf_unreadable, with no blocks (REM-4).
-func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperproto.NginxFile, dropped bool) {
-	fi = helperproto.NginxFile{Path: p, Kind: "cert"}
+func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperproto.DumpFile, dropped bool) {
+	fi = helperproto.DumpFile{Path: p, Kind: "cert"}
 	rf, err := s.resolveRoot(p)
 	if err != nil {
 		fi.Exists = !errors.Is(err, unix.ENOENT)
@@ -579,8 +579,8 @@ func certBlocks(data []byte) (blocks string, dropped, firstDropped bool) {
 // describeKey stats a key file through resolveRoot. Its content is never opened or read: only
 // fstatat's owner, group, mode, size, type and link count. open reports a key file that keyOpen
 // finds exposed (S10).
-func (s *sys) describeKey(p string, names, groups map[int]string) (fi helperproto.NginxFile, open bool) {
-	fi = helperproto.NginxFile{Path: p, Kind: "key"}
+func (s *sys) describeKey(p string, names, groups map[int]string) (fi helperproto.DumpFile, open bool) {
+	fi = helperproto.DumpFile{Path: p, Kind: "key"}
 	rf, err := s.resolveRoot(p)
 	if err != nil {
 		fi.Exists = !errors.Is(err, unix.ENOENT)

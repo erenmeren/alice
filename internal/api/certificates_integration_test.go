@@ -382,7 +382,7 @@ func TestSigningRequestJourney(t *testing.T) {
 	d := n.deployment(n.op, ref.ID)
 	assert.Equal(t, "succeeded", d.Status)
 	assert.Equal(t, pki.Fingerprint(signed.Cert), n.f.served(wwwName))
-	pair, err := tls.X509KeyPair(n.f.emu.NginxFile(wwwCert), n.f.emu.NginxFile(wwwKey))
+	pair, err := tls.X509KeyPair(n.f.emu.DumpFile(wwwCert), n.f.emu.DumpFile(wwwKey))
 	require.NoError(t, err, "the key Alice made belongs to the certificate on the server")
 	assert.Equal(t, signed.Cert.Raw, pair.Certificate[0])
 

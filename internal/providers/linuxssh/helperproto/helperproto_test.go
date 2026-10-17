@@ -166,7 +166,7 @@ func TestProtocol5(t *testing.T) {
 	assert.Equal(t, "nginx-fence", SubNginxFence)
 	assert.Equal(t, "fenced", PhaseFenced)
 	assert.Equal(t, "FENCED", CodeFenced)
-	assert.Equal(t, 20<<20, MaxNginxConfig)
+	assert.Equal(t, 20<<20, MaxServerConfig)
 	assert.Equal(t, 7*24*time.Hour, NginxBackupKeep)
 }
 
@@ -215,7 +215,7 @@ func TestProtocol4WireNames(t *testing.T) {
 	b, err = json.Marshal(AuthKeysListResponse{OK: true, Users: []UserFiles{}, Warnings: []string{}, Accounts: []string{"a"}, AccountsComplete: true})
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"accounts":["a"],"accounts_complete":true`)
-	b, err = json.Marshal(NginxFile{Path: "/p", Kind: "key", Exists: true})
+	b, err = json.Marshal(DumpFile{Path: "/p", Kind: "key", Exists: true})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"path":"/p","kind":"key","exists":true,"resolved":"","symlinked":false,"mode":"","owner":"","group":"","size":0,
 		"sha256":"","pem":"","problem":"","free_bytes":0}`, string(b))
@@ -244,8 +244,8 @@ func TestNginxConfigErrorWireNames(t *testing.T) {
 			ConfigReasonChanged, ConfigReasonNameNotAllowed, ConfigReasonUnexpectedText, ConfigReasonWrongFirstFile,
 			ConfigReasonDuplicateFile, ConfigReasonNoConfPath, ConfigReasonTooLarge, ConfigReasonTooComplex,
 			ConfigReasonIncludeLoop, ConfigReasonNULByte})
-	b, err := json.Marshal(NginxDumpResponse{OK: true, ConfigError: ConfigErrUntrusted, ConfigErrorReason: ConfigReasonNotRootControlled,
-		ConfigErrorFile: "/etc/nginx/conf.d/www.conf", Servers: []NginxServer{}, Files: []NginxFile{}, Warnings: []string{}, Writable: []string{}})
+	b, err := json.Marshal(ServerDumpResponse{OK: true, ConfigError: ConfigErrUntrusted, ConfigErrorReason: ConfigReasonNotRootControlled,
+		ConfigErrorFile: "/etc/nginx/conf.d/www.conf", Servers: []DumpServer{}, Files: []DumpFile{}, Warnings: []string{}, Writable: []string{}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"version":"","conf_path":"","config_valid":false,"config_error":"untrusted",
 		"config_error_reason":"not_root_controlled","config_error_file":"/etc/nginx/conf.d/www.conf",
@@ -453,4 +453,20 @@ func TestFitList(t *testing.T) {
 	marshal = func(any) ([]byte, error) { return nil, errors.New("boom") }
 	t.Cleanup(func() { marshal = json.Marshal })
 	assert.Equal(t, small, FitList(small))
+}
+
+// The dump types were renamed for every web server (Phase A); the helper's answer is byte-identical.
+func TestServerDumpWireNamesAreUnchanged(t *testing.T) {
+	b, err := json.Marshal(ServerDumpResponse{OK: true, Servers: []DumpServer{{Listens: []DumpListen{{}}, Pairs: []DumpPair{{}}}}, Files: []DumpFile{{}}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true,"version":"","conf_path":"","config_valid":false,"config_error":"","config_error_reason":"","config_error_file":"",`+
+		`"servers":[{"file":"","line":0,"names":null,"listens":[{"addr":"","port":0,"default_server":false}],`+
+		`"pairs":[{"cert":"","key":"","inherited":false,"unsupported":"","raw":""}],"stream":false}],`+
+		`"files":[{"path":"","kind":"","exists":false,"resolved":"","symlinked":false,"mode":"","owner":"","group":"","size":0,`+
+		`"sha256":"","pem":"","problem":"","free_bytes":0}],"warnings":null,"writable":null}`, string(b))
+	assert.Equal(t, 20<<20, MaxServerConfig)
+	assert.Equal(t, 1000, MaxServerFiles)
+	assert.Equal(t, 16<<20, ServerDumpOutput)
+	assert.Equal(t, 7, Protocol)
+	assert.Equal(t, "1.6.1", Version)
 }

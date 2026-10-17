@@ -79,7 +79,7 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 	if err != nil {
 		return providers.DiscoveryResult{}, err
 	}
-	d, err := linuxssh.DecodeHelper[helperproto.NginxDumpResponse](out, helperproto.SubNginxDump)
+	d, err := linuxssh.DecodeHelper[helperproto.ServerDumpResponse](out, helperproto.SubNginxDump)
 	if err != nil {
 		return providers.DiscoveryResult{}, mapHelper(err, helperproto.SubNginxDump)
 	}
@@ -163,7 +163,7 @@ func knownOrEmpty(v string, set []string) string {
 
 // nginxFacts is what the dump says about Nginx itself. The error fields describe an invalid
 // configuration only; an unknown class or reason is not passed on.
-func nginxFacts(d helperproto.NginxDumpResponse) providers.NginxFacts {
+func nginxFacts(d helperproto.ServerDumpResponse) providers.NginxFacts {
 	f := providers.NginxFacts{Found: true, Version: clean(d.Version, maxVersionLength), ConfPath: cleanPath(d.ConfPath), ConfigValid: d.ConfigValid}
 	if !d.ConfigValid {
 		f.ConfigError = knownOrEmpty(d.ConfigError, configErrors)
@@ -184,7 +184,7 @@ type build struct {
 
 // pairState classifies one pair: its unsupported reason, "" when the pair is supported. An empty
 // certificate with a raw value is unsupported, key_missing keeps its certificate and has no key.
-func pairState(p helperproto.NginxPair, stream bool) string {
+func pairState(p helperproto.DumpPair, stream bool) string {
 	switch {
 	case p.Unsupported != "":
 		return knownOrDefault(p.Unsupported, pairReasons, providers.UnsupportedUnknown)
@@ -210,7 +210,7 @@ func knownOrDefault(v string, set []string, def string) string {
 
 // certServer is a server block as Alice shows it, cleaned and bounded. The helper lists SSL listens
 // only (nginxconf.SSLListens), so none is filtered here; truncated reports a list cut at its bound.
-func certServer(s helperproto.NginxServer) (cs providers.CertServer, truncated bool) {
+func certServer(s helperproto.DumpServer) (cs providers.CertServer, truncated bool) {
 	cs = providers.CertServer{Names: []string{}, Listens: []providers.CertListen{}, File: clean(s.File, maxPathLength), Line: max(s.Line, 0)}
 	for _, n := range s.Names {
 		if n = clean(n, maxNameLength); n != "" {
@@ -240,8 +240,8 @@ func sameServer(a, b providers.CertServer) bool {
 // convert turns a valid dump into locations: one per certificate path (the raw value of an
 // unsupported pair when it has none), in the order the dump names them, with the server blocks
 // that use it. The warnings are the dump's, each once.
-func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate, []providers.Warning) {
-	files := map[string]helperproto.NginxFile{}
+func convert(d helperproto.ServerDumpResponse) ([]providers.DiscoveredCertificate, []providers.Warning) {
+	files := map[string]helperproto.DumpFile{}
 	for _, f := range d.Files {
 		// Keyed by the raw path, and only a valid one: a spelling that cleaning would turn into a
 		// real path never describes that path's file.
@@ -266,7 +266,7 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 			}
 			b := builds[certPath]
 			if b == nil {
-				if len(order) >= helperproto.MaxNginxFiles {
+				if len(order) >= helperproto.MaxServerFiles {
 					tooMany = true
 					continue
 				}
@@ -319,7 +319,7 @@ func convert(d helperproto.NginxDumpResponse) ([]providers.DiscoveredCertificate
 }
 
 // finish adds the described files to a location and decides whether it is supported.
-func finish(b *build, files map[string]helperproto.NginxFile) providers.DiscoveredCertificate {
+func finish(b *build, files map[string]helperproto.DumpFile) providers.DiscoveredCertificate {
 	loc := b.loc
 	loc.KeyPath = b.key
 	dc := providers.DiscoveredCertificate{}
@@ -376,9 +376,9 @@ func finish(b *build, files map[string]helperproto.NginxFile) providers.Discover
 
 // descriptionOf is the file as locationWarnings reads it: a file the dump did not describe
 // carries nothing.
-func descriptionOf(f helperproto.NginxFile, have bool) helperproto.NginxFile {
+func descriptionOf(f helperproto.DumpFile, have bool) helperproto.DumpFile {
 	if !have {
-		return helperproto.NginxFile{}
+		return helperproto.DumpFile{}
 	}
 	return f
 }
@@ -387,13 +387,13 @@ func descriptionOf(f helperproto.NginxFile, have bool) helperproto.NginxFile {
 // vocabulary cannot carry (A1-I1): the helper refuses to deploy to it, and a helper before that
 // fix would have deployed and then been unable to read its own journal. Alice treats it as
 // unsupported whatever the helper said.
-func resolvedOutsideVocabulary(f helperproto.NginxFile, have bool) bool {
+func resolvedOutsideVocabulary(f helperproto.DumpFile, have bool) bool {
 	return have && f.Resolved != "" && !helperproto.ValidPath(f.Resolved)
 }
 
 // fileProblem is the CertProblem* of a described file: the helper's problem (a value outside the
 // set is unreadable), missing for an absent file, unreadable for a file the dump did not describe.
-func fileProblem(f helperproto.NginxFile, have bool) string {
+func fileProblem(f helperproto.DumpFile, have bool) string {
 	switch {
 	case !have:
 		return providers.CertProblemUnreadable
@@ -410,7 +410,7 @@ func fileProblem(f helperproto.NginxFile, have bool) string {
 // text is kept. A block that does not parse, or whose validity dates lie outside the years 1 to 9999
 // in UTC (validate.CertificateTimes, the rule internal/certs applies: AUD-13), is dropped (dropped
 // is true); a file with none, too many or a malformed hash reports a problem for its location.
-func certificateChain(f helperproto.NginxFile) (chain []byte, sum string, dropped bool, problem string) {
+func certificateChain(f helperproto.DumpFile) (chain []byte, sum string, dropped bool, problem string) {
 	if !helperproto.ValidSHA256(f.SHA256) || f.SHA256 == helperproto.AbsentSHA256 {
 		return nil, "", false, providers.CertProblemUnreadable
 	}
@@ -480,7 +480,7 @@ func customLocation(resolved string) bool {
 // than root, a group other than root's that can read it, or others that can read it), symlinked,
 // custom_location. The key rules apply to a key file the helper described and found without a
 // problem. nil when there are none.
-func locationWarnings(cf, kf helperproto.NginxFile) []string {
+func locationWarnings(cf, kf helperproto.DumpFile) []string {
 	var w []string
 	mode, err := strconv.ParseUint(kf.Mode, 8, 32)
 	if kf.Mode != "" || kf.Exists {
@@ -511,7 +511,7 @@ func locationWarnings(cf, kf helperproto.NginxFile) []string {
 //
 // A2-I3: the loop is linear in the helper's list (a set of the codes seen) and at most
 // maxDumpWarnings distinct codes are kept; more set truncated (list_truncated).
-func dumpWarnings(d helperproto.NginxDumpResponse, locs []providers.DiscoveredCertificate) (out []providers.Warning, truncated bool) {
+func dumpWarnings(d helperproto.ServerDumpResponse, locs []providers.DiscoveredCertificate) (out []providers.Warning, truncated bool) {
 	seen := map[string]bool{}
 	keyGroupOpen := false
 	for _, w := range d.Warnings {

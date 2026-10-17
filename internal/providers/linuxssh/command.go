@@ -138,7 +138,7 @@ func CmdCleanup(op uuid.UUID) (HelperCommand, error) {
 // CmdNginxDump returns the parsed Nginx configuration and the referenced certificate files
 // (nginx -V and nginx -T, each bounded; the helper stops after helperproto.HelperBudget).
 func CmdNginxDump() HelperCommand {
-	return privileged(helperproto.SubNginxDump, LongCommandTimeout, helperproto.NginxDumpOutput)
+	return privileged(helperproto.SubNginxDump, LongCommandTimeout, helperproto.ServerDumpOutput)
 }
 
 // CmdNginxTest runs nginx -t.

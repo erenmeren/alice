@@ -62,7 +62,7 @@ type nginxWorld struct {
 	version string
 	tFails  string // stderr of a failing "nginx -t"/"-T"; "" = success
 	missing bool   // /usr/sbin/nginx does not exist
-	tooBig  bool   // nginx -T printed more than MaxNginxConfig
+	tooBig  bool   // nginx -T printed more than MaxServerConfig
 	calls   []string
 	leaf    pki.Leaf
 }
@@ -824,20 +824,20 @@ func TestNginxDumpOutputBudget(t *testing.T) {
 	dumpBudget = old
 	code, _ = w.f.run("nginx-dump")
 	assert.Equal(t, 0, code)
-	assert.Less(t, w.f.out.Len(), helperproto.NginxDumpOutput)
+	assert.Less(t, w.f.out.Len(), helperproto.ServerDumpOutput)
 }
 
 func TestNginxDumpTooManyFiles(t *testing.T) {
 	w := newNginxWorld(t)
 	var b strings.Builder
 	b.WriteString("http {\n")
-	for i := 0; i < helperproto.MaxNginxFiles/2+1; i++ {
+	for i := 0; i < helperproto.MaxServerFiles/2+1; i++ {
 		fmt.Fprintf(&b, "server { listen 443 ssl; ssl_certificate /etc/nginx/ssl/%d.crt; ssl_certificate_key /etc/nginx/ssl/%d.key; }\n", i, i)
 	}
 	b.WriteString("}\n")
 	w.setConf(confFile{"/etc/nginx/nginx.conf", b.String()})
 	_, m := w.f.run("nginx-dump")
-	assert.Len(t, m["files"], helperproto.MaxNginxFiles)
+	assert.Len(t, m["files"], helperproto.MaxServerFiles)
 	assert.Contains(t, m["warnings"], helperproto.WarnTooManyFiles)
 }
 
@@ -924,7 +924,7 @@ func TestToWireCleansText(t *testing.T) {
 	assert.Equal(t, "ab", w.Names[0])
 	assert.LessOrEqual(t, len(w.Names[1]), 253)
 	assert.True(t, strings.HasSuffix(w.Names[1], "é"), "cut on a rune boundary")
-	assert.Equal(t, []helperproto.NginxListen{{Addr: "::1", Port: 443, DefaultServer: true}}, w.Listens)
+	assert.Equal(t, []helperproto.DumpListen{{Addr: "::1", Port: 443, DefaultServer: true}}, w.Listens)
 	assert.Equal(t, 200, len([]rune(w.Pairs[0].Raw)))
 	assert.NotContains(t, w.Pairs[0].Raw, "\n")
 	empty := toWire(nginxconf.Server{})

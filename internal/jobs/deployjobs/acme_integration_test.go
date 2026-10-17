@@ -276,7 +276,7 @@ func TestACMERenewalDeployFailureRollsBack(t *testing.T) {
 			assert.Equal(t, fp1, state, "the website serves the previous leaf")
 			assert.Equal(t, fp1, probe, "Alice's TLS probe sees the previous leaf")
 			assert.NotEqual(t, fp2, state)
-			assert.Equal(t, fp1, leafOf(t, w.s.emu.NginxFile(wwwCert)), "the files are the previous pair")
+			assert.Equal(t, fp1, leafOf(t, w.s.emu.DumpFile(wwwCert)), "the files are the previous pair")
 
 			// The ACME certificate itself is fine: issued, the renewal current, no failure counted against it.
 			got := w.acmeCert(c.ID)

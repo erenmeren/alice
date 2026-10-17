@@ -478,13 +478,13 @@ func TestDeploymentEndsWhenAPendingOperationCannotBeRestored(t *testing.T) {
 	s := e.addServer("web-01", wwwSite())
 	op := e.foreignInterrupted(s)
 	s.emu.CorruptNginxJournal(op.String())
-	before := s.emu.NginxFile(wwwCert)
+	before := s.emu.DumpFile(wwwCert)
 	id := e.request(s.locs[wwwCert])[0]
 	d := e.settle(id)
 	assert.Equal(t, inventory.DeployStatusFailed, d.Status)
 	assert.Equal(t, "deployment.server_operation_pending", d.ErrorCode)
 	assert.Equal(t, op.String(), d.ErrorParams["operation_id"])
-	assert.Equal(t, before, s.emu.NginxFile(wwwCert), "nothing written")
+	assert.Equal(t, before, s.emu.DumpFile(wwwCert), "nothing written")
 	assert.Contains(t, stepList(d.Steps), "recover_pending:failed")
 }
 

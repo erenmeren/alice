@@ -152,8 +152,8 @@ func TestKVDeploymentEndToEnd(t *testing.T) {
 	}
 	for _, s := range []*server{s1, s2} {
 		w.assertPair(s, wwwCert, wwwKey, wwwName, w.nw)
-		assert.Equal(t, w.nw.FullchainPEM, s.emu.NginxFile(wwwCert), "the vault's leaf with its intermediate is what the website serves")
-		assert.Equal(t, w.nw.KeyPEM, s.emu.NginxFile(wwwKey))
+		assert.Equal(t, w.nw.FullchainPEM, s.emu.DumpFile(wwwCert), "the vault's leaf with its intermediate is what the website serves")
+		assert.Equal(t, w.nw.KeyPEM, s.emu.DumpFile(wwwKey))
 	}
 	assert.Equal(t, 2, w.reads(), "one secret read per deployment")
 	assert.Equal(t, 2, w.audits("kv.secret_read"))
@@ -260,7 +260,7 @@ func TestKVIncompleteChainNeedsTheConfirmation(t *testing.T) {
 	d = w.settle(id)
 	assert.Equal(t, inventory.DeployStatusSucceeded, d.Status)
 	assert.Equal(t, "chain_incomplete", w.stepsOf(id)[stepKVSecret+":ok"])
-	assert.Equal(t, w.nw.CertPEM, s.emu.NginxFile(wwwCert), "the chain as the vault delivered it")
+	assert.Equal(t, w.nw.CertPEM, s.emu.DumpFile(wwwCert), "the chain as the vault delivered it")
 	assert.Equal(t, pki.Fingerprint(w.nw.Cert), s.emu.Served(443, wwwName))
 }
 

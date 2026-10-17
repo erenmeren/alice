@@ -183,7 +183,7 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 		assert.Equal(t, tc.sudo, tc.cmd.sudo)
 	}
 	assert.Equal(t, input, deploy.input())
-	assert.Equal(t, int64(helperproto.NginxDumpOutput), CmdNginxDump().maxOutput)
+	assert.Equal(t, int64(helperproto.ServerDumpOutput), CmdNginxDump().maxOutput)
 	assert.Equal(t, LongCommandTimeout, CmdNginxDump().timeout)
 	assert.Equal(t, LongCommandTimeout, CmdNginxTest().timeout)
 	assert.Equal(t, DeployCommandTimeout, deploy.timeout)

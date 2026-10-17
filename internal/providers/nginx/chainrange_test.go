@@ -29,7 +29,7 @@ func TestCertificateChainDropsBlocksOutsideYears1To9999(t *testing.T) {
 		ca.IssueRawValidity(pki.Opts{CommonName: "high.example.test"}, pki.GeneralizedTime("20260101000000Z"), pki.GeneralizedTime("99991231235959-2359"), now),
 		ca.IssueRawValidity(pki.Opts{CommonName: "low.example.test"}, pki.GeneralizedTime("00000101000000+2359"), pki.GeneralizedTime("20300101000000Z"), now),
 	} {
-		chain, gotSum, dropped, problem := certificateChain(helperproto.NginxFile{SHA256: sum, PEM: string(good.CertPEM) + string(bad.CertPEM) + string(ca.IntermediatePEM)})
+		chain, gotSum, dropped, problem := certificateChain(helperproto.DumpFile{SHA256: sum, PEM: string(good.CertPEM) + string(bad.CertPEM) + string(ca.IntermediatePEM)})
 		require.Empty(t, problem)
 		assert.True(t, dropped)
 		assert.Equal(t, sum, gotSum)
@@ -48,7 +48,7 @@ func TestCertificateChainDropsBlocksOutsideYears1To9999(t *testing.T) {
 		require.NoError(t, err, "the leaf is stored")
 		assert.Equal(t, "good.example.test", p.SubjectCN)
 
-		_, _, _, problem = certificateChain(helperproto.NginxFile{SHA256: sum, PEM: string(bad.CertPEM) + string(good.CertPEM)})
+		_, _, _, problem = certificateChain(helperproto.DumpFile{SHA256: sum, PEM: string(bad.CertPEM) + string(good.CertPEM)})
 		assert.Equal(t, providers.CertProblemNotACertificate, problem, "as the first block it would be the leaf")
 	}
 }

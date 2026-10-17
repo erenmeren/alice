@@ -280,9 +280,9 @@ func (e *Emulator) RemoveNginxFile(p string) {
 	}
 }
 
-// NginxFile returns the content of a certificate, key or configuration file (nil when it does
+// DumpFile returns the content of a certificate, key or configuration file (nil when it does
 // not exist). Generated configuration files are included.
-func (e *Emulator) NginxFile(p string) []byte {
+func (e *Emulator) DumpFile(p string) []byte {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.nginx()

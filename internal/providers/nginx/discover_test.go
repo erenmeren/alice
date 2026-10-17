@@ -253,7 +253,7 @@ func TestDiscoverConfigurationErrorsAreResults(t *testing.T) {
 		}, providers.ConfigErrUntrusted, providers.ConfigReasonWrongFirstFile, "/etc/nginx/other.conf", confPath},
 		{"changed", func(e *env) {
 			e.emu.SetNginxDump(e.emu.NginxDumpText())
-			e.emu.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.emu.NginxFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
+			e.emu.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.emu.DumpFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
 		}, providers.ConfigErrUntrusted, providers.ConfigReasonChanged, "/etc/nginx/conf.d/emu.conf", confPath},
 		{"special file system", func(e *env) {
 			e.emu.SetFileProblem("/etc/nginx/conf.d/emu.conf", helperproto.FileSpecialFS)
@@ -343,7 +343,7 @@ func TestDiscoverLeafUnreadableHasNoCertificate(t *testing.T) {
 		const c, k = "/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"
 		cf := certFile(c, u.chain) // a helper that names the problem and still sends blocks: Alice uses none
 		cf.Problem = helperproto.FileLeafUnreadable
-		got, _ := convert(validDump([]helperproto.NginxServer{server([]string{"a"}, 443, pair(c, k))}, cf, keyFile(k)))
+		got, _ := convert(validDump([]helperproto.DumpServer{server([]string{"a"}, 443, pair(c, k))}, cf, keyFile(k)))
 		require.Len(t, got, 1)
 		check(t, got[0])
 	})
@@ -453,14 +453,14 @@ func TestDiscoverWarningsOfTheDump(t *testing.T) {
 
 func TestDiscoverTooManyFiles(t *testing.T) {
 	e := newEnv(t)
-	for i := range helperproto.MaxNginxFiles {
+	for i := range helperproto.MaxServerFiles {
 		e.emu.AddSite(linuxsshtest.NginxSite{Port: 10000 + i, CertPath: fmt.Sprintf("/etc/nginx/many/%d.crt", i), KeyPath: fmt.Sprintf("/etc/nginx/many/%d.key", i)},
 			e.leaf.CertPEM, e.leaf.KeyPEM)
 	}
 	res := discover(t, e, providers.DiscoverRequest{Certificates: true})
 	assert.Len(t, warningsOf(res.Warnings, providers.WarnTooManyFiles), 1)
 	assert.Len(t, warningsOf(res.Warnings, providers.WarnLocationsDropped), 1, "the default site makes 1001 locations: one is left out")
-	assert.Len(t, res.Certificates, helperproto.MaxNginxFiles, "bounded like the helper's file list")
+	assert.Len(t, res.Certificates, helperproto.MaxServerFiles, "bounded like the helper's file list")
 	for _, c := range res.Certificates {
 		if c.Location.KeyProblem == providers.CertProblemUnreadable {
 			assert.False(t, c.Location.Supported, "a key file the helper did not describe is not usable")

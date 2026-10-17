@@ -328,8 +328,8 @@ func (tw *twin) dump() answer { return tw.same(helperproto.SubNginxDump, "") }
 func (tw *twin) sameFiles(want string) {
 	tw.t.Helper()
 	cert, key := tw.w.f.read(fidCrt), tw.w.f.read(fidKey)
-	assert.Equal(tw.t, cert, string(tw.e.NginxFile(fidCrt)), "certificate file")
-	assert.Equal(tw.t, key, string(tw.e.NginxFile(fidKey)), "key file")
+	assert.Equal(tw.t, cert, string(tw.e.DumpFile(fidCrt)), "certificate file")
+	assert.Equal(tw.t, key, string(tw.e.DumpFile(fidKey)), "key file")
 	switch want {
 	case "old":
 		assert.Equal(tw.t, string(tw.w.leaf.FullchainPEM), cert)
@@ -451,7 +451,7 @@ func TestEmulatorFidelityDump(t *testing.T) {
 		}},
 		{"output over the cap", true, func(t *testing.T, tw *twin) {
 			tw.w.tooBig = true
-			conf(tw, main, "# "+strings.Repeat("x", helperproto.MaxNginxConfig)+"\nhttp { include /etc/nginx/conf.d/*.conf; }\n")
+			conf(tw, main, "# "+strings.Repeat("x", helperproto.MaxServerConfig)+"\nhttp { include /etc/nginx/conf.d/*.conf; }\n")
 			assert.Equal(t, helperproto.ConfigReasonTooLarge, tw.dump().m["config_error_reason"])
 		}},
 		{"duplicate file", true, func(t *testing.T, tw *twin) {
@@ -469,7 +469,7 @@ func TestEmulatorFidelityDump(t *testing.T) {
 		{"a file changed since nginx read it", true, func(t *testing.T, tw *twin) {
 			forge(tw, func(s string, _ bool) string { return s })
 			tw.put(wwwCfg, append(append([]byte{}, tw.w.f.read(wwwCfg)...), "#\n"...))
-			tw.e.SetNginxFile(emuCfg, append(tw.e.NginxFile(emuCfg), "#\n"...))
+			tw.e.SetNginxFile(emuCfg, append(tw.e.DumpFile(emuCfg), "#\n"...))
 			assert.Equal(t, helperproto.ConfigReasonChanged, tw.dump().m["config_error_reason"])
 		}},
 		{"no line feed after the file", true, func(t *testing.T, tw *twin) {

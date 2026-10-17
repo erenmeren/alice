@@ -30,7 +30,7 @@ type sys struct {
 	now      func() time.Time
 	runSSHD  func(ctx context.Context, args ...string) ([]byte, error)
 	// runNginx runs /usr/sbin/nginx with fixed arguments (-V, -T, -t) through runProgram; stdout is
-	// capped at helperproto.MaxNginxConfig, stderr at 64 KiB. A missing binary is an
+	// capped at helperproto.MaxServerConfig, stderr at 64 KiB. A missing binary is an
 	// fs.ErrNotExist error.
 	runNginx func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
 	// runSystemctl runs /usr/bin/systemctl with fixed arguments (Task 6).

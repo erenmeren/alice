@@ -110,7 +110,7 @@ type CertificatePage struct {
 }
 
 // MaxListedLocations bounds ListLocations and GetCertificate's locations. A target never has that
-// many locations in use (the provider lists at most helperproto.MaxNginxFiles, 1000); only missing
+// many locations in use (the provider lists at most helperproto.MaxServerFiles, 1000); only missing
 // ones accumulate, and those are listed last.
 const MaxListedLocations = 1000
 
