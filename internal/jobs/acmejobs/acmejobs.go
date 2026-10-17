@@ -463,12 +463,12 @@ func (h *handlers) openPublisher(ctx context.Context, targetID uuid.UUID) (http0
 	if !ok || !p.Capabilities().Has(providers.CapHTTP01) { // only a provider that publishes HTTP-01 tokens
 		return nil, nil, inventory.ErrACMEChallengeUnavailable
 	}
-	switch {
-	case t.Status == inventory.StatusDisabled:
+	switch t.Status {
+	case inventory.StatusDisabled:
 		return nil, nil, providers.NewError("target.disabled", false, nil, nil)
-	case t.Status == inventory.StatusHostKeyChanged:
+	case inventory.StatusHostKeyChanged:
 		return nil, nil, providers.NewError("target.host_key_changed", false, nil, nil)
-	case t.Status == inventory.StatusPendingHostKey:
+	case inventory.StatusPendingHostKey:
 		return nil, nil, providers.NewError("target.host_key_unconfirmed", false, nil, nil)
 	}
 	octx, cancel := context.WithTimeout(ctx, openTimeout)
