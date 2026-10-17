@@ -5,10 +5,23 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"alice/internal/providers/linuxssh/helperproto"
 )
+
+// MaxWire bounds the encoded size of all servers Parse returns (review C1 and I1 of Task 5): the
+// size of their helperproto.DumpServer JSON, estimated from above as they are built, counting
+// each server's own copy of the listens, names and pairs it shares with others. It is twice
+// the helper's whole answer (helperproto.ServerDumpOutput), so the bounds above, not this one,
+// limit an ordinary configuration, while no configuration makes the helper build or encode
+// more than this before it refuses the answer.
+const MaxWire = 2 * helperproto.ServerDumpOutput
+
+// maxRaw is the longest CertRaw in runes (the wire's Raw).
+const maxRaw = 200
 
 // Input is everything Parse reads: haproxy.cfg (Path and its text Data), the version of
 // "haproxy -v" (ParseV) and two callbacks through which the root helper reads the files the
@@ -36,14 +49,16 @@ type Input struct {
 type Config struct {
 	Servers  []Server
 	Warnings []string
+	wire     int // the estimated size of the servers on the wire (MaxWire)
 }
 
 // Server is one bind of a frontend or listen section with the keyword ssl (all its crt pairs,
 // files and directory entries, Names empty), or one line of a crt-list the bind names (that
 // line's SNI filters). File is haproxy.cfg and Line the bind line for all of them (Ruling 13).
-// Section is the frontend or listen name, "" when the section is uncertain. The servers of one
-// bind share one Listens slice, and the servers of one crt-list line (one per bind naming the
-// file) share its Names slice: neither may be changed.
+// Section is the frontend or listen name, cleaned and cut as on the wire, "" when the section
+// is uncertain. Names are cleaned and cut as on the wire. The servers of one bind share one
+// Listens slice (a server past MaxListens has a shorter prefix of it), and the servers of one
+// crt-list line (one per bind naming the file) share its Names slice: neither may be changed.
 type Server struct {
 	File    string
 	Line    int
@@ -57,7 +72,8 @@ type Server struct {
 // from: Key == Cert until ResolveKeys. KeyBeside is the companion "<cert>.key" HAProxy looks for
 // when the PEM holds no key ("" when key lookup is off; Ruling 12). Cert, Key and KeyBeside are
 // set only when Unsupported is "" (or config_file_writable, set by MarkWritable). CertRaw is the
-// path as written (a directory entry: the crt argument, "/" and the entry name).
+// path as written (a directory entry: the crt argument, "/" and the entry name), cleaned and cut
+// to 200 runes as the wire's Raw shows it.
 type Pair struct {
 	Cert, Key, CertRaw, KeyBeside string
 	Unsupported                   string
@@ -70,30 +86,31 @@ type Pair struct {
 //     and are uncertain otherwise; a pair in an uncertain region is conditional;
 //   - crt-base, ssl-load-extra-files and ssl-load-extra-del-ext are followed in read order;
 //   - each bind with ssl gives one server for its crt pairs and one per line of each crt-list
-//     it names; a crt naming a directory gives one pair per certificate entry. Each crt-list
-//     file, directory and certificate is evaluated once, with the settings in effect where it
-//     was first named, as HAProxy loads each once.
+//     it names; a crt naming a directory gives one pair per certificate entry.
+//
+// HAProxy loads each certificate once, with the settings in effect where it is first loaded.
+// The companion key of a certificate is therefore taken from its first certain naming. A load
+// Alice does not follow (a crt in an uncertain region, of a bind without ssl or after an unknown
+// bind keyword, a server's crt, a crt in another section) makes a later change of
+// ssl-load-extra-files or ssl-load-extra-del-ext uncertain: the pairs that depend on it are
+// conditional (review I2 of Task 5).
 //
 // The walk is iterative. MaxTokens counts the words of haproxy.cfg and of every crt-list
-// together; MaxCrtLists, MaxDirs, MaxDirEntries, MaxPairs, MaxServers and MaxNames are
-// ErrTooComplex, MaxDepth ErrTooDeep. Listens over MaxListens are cut with WarnListTruncated.
+// together; MaxCrtLists, MaxDirs, MaxDirEntries, MaxPairs, MaxServers, MaxNames and MaxWire
+// are ErrTooComplex, MaxDepth ErrTooDeep. The listens of all servers together (a bind's listens
+// count once per server that carries them) are cut at MaxListens with WarnListTruncated.
 // On error the Config is empty.
 func Parse(in Input) (Config, error) {
-	lines, used, err := lexBudget(in.Data, MaxTokens)
-	if err != nil {
+	p := &parser{in: in, keyLookup: true, lists: map[string][]listEntry{}, listFiles: map[string][]listLine{},
+		dirs: map[string]dirInfo{}, keys: map[string]keyInfo{}}
+	if err := lexEach(in.Data, &p.tokens, MaxTokens, p.line); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", in.Path, err)
-	}
-	p := &parser{in: in, tokens: used, keyLookup: true, lists: map[string][]listEntry{}, dirs: map[string]dirInfo{}, keys: map[string]keyInfo{}}
-	for _, l := range lines {
-		if err := p.line(l); err != nil {
-			return Config{}, err
-		}
 	}
 	if len(p.conds) > 0 {
 		return Config{}, fmt.Errorf("%s: %w (an .if block is not closed)", in.Path, ErrSyntax)
 	}
 	p.closeSection()
-	c := Config{Servers: p.out}
+	c := Config{Servers: p.out, wire: p.wire}
 	if p.truncated {
 		c.Warnings = []string{WarnListTruncated}
 	}
@@ -136,7 +153,7 @@ var sectionKinds = map[string]uint8{
 // servers are kept until the section ends, because a disabled line after a bind omits them.
 type section struct {
 	kinds     uint8
-	name      string
+	name      string // cleaned and cut as on the wire
 	uncertain bool
 	// defaults: a defaults section had a disabled or enabled line when this section began.
 	defaults bool
@@ -154,10 +171,18 @@ type setting struct {
 	uncertain bool
 }
 
-// listEntry is one line of a crt-list, evaluated when the file was first named.
+// listLine is one line of a crt-list file as read: the path as written, its shown form, and
+// the names cleaned and cut as on the wire with their wire size.
+type listLine struct {
+	path, raw string
+	names     []string
+	namesWire int
+}
+
+// listEntry is one line of a crt-list, evaluated where the file was first named for certain.
 type listEntry struct {
-	names []string
-	pair  Pair
+	line *listLine
+	pair Pair
 }
 
 // dirInfo is ReadDir's answer for one path: for a directory, the certificate entries in
@@ -167,7 +192,7 @@ type dirInfo struct {
 	names []string
 }
 
-// keyInfo is the companion key file of a certificate, from where it was first named.
+// keyInfo is the companion key file of a certificate, from its first certain naming.
 type keyInfo struct {
 	beside    string
 	bad       bool // the companion is not a helper path
@@ -184,13 +209,18 @@ type parser struct {
 	keyLookup, keyLookupUnc bool
 	delExt, delExtUnc       bool
 	defaultsTouched         bool
+	// unfollowed: a certificate may have been loaded where Alice does not follow it, so a later
+	// change of the key settings is uncertain (review I2).
+	unfollowed bool
 
-	lists                                  map[string][]listEntry
-	dirs                                   map[string]dirInfo
-	keys                                   map[string]keyInfo
-	nDirs                                  int
-	tokens, pairs, servers, names, listens int
-	truncated                              bool
+	lists     map[string][]listEntry // evaluated at the first certain naming
+	listFiles map[string][]listLine  // as read
+	dirs      map[string]dirInfo
+	keys      map[string]keyInfo // from the first certain naming
+	nDirs     int
+
+	tokens, pairs, servers, names, listens, wire int
+	truncated                                    bool
 }
 
 func (p *parser) eff() region {
@@ -200,9 +230,7 @@ func (p *parser) eff() region {
 	return p.conds[len(p.conds)-1].eff
 }
 
-func (p *parser) errAt(err error, n int) error {
-	return fmt.Errorf("%s: %w", p.in.Path, lineErr(err, n))
-}
+func (p *parser) errAt(err error, n int) error { return lineErr(err, n) }
 
 func (p *parser) line(l line) error {
 	kw := l.words[0].text
@@ -219,9 +247,18 @@ func (p *parser) line(l line) error {
 	}
 	maybe := eff == uncertain || p.sec.uncertain
 	args := l.words[1:]
+	if kw == "bind" && p.sec.kinds&kindProxy != 0 {
+		if err := p.bind(l, maybe); err != nil {
+			return lineErr(err, l.n) // review M3: every error names its line
+		}
+		return nil
+	}
+	// Any other line naming a certificate (a server's crt, a bind of peers or log-forward, a
+	// crt-store) loads it where Alice does not follow.
+	if slices.ContainsFunc(args, func(w word) bool { return w.text == "crt" || w.text == "crt-list" }) {
+		p.unfollowed = true
+	}
 	switch {
-	case kw == "bind" && p.sec.kinds&kindProxy != 0:
-		return p.bind(l, maybe)
 	case kw == "disabled" || kw == "enabled":
 		if p.sec.kinds&kindDefaults != 0 {
 			p.defaultsTouched = true
@@ -237,10 +274,14 @@ func (p *parser) line(l line) error {
 	case kw == "crt-base" && len(args) > 0:
 		p.crtBase = setting{value: args[0].text, set: true, dollar: args[0].dollar, uncertain: maybe}
 	case kw == "ssl-load-extra-files" && len(args) > 0:
-		p.keyLookup = slices.ContainsFunc(args, func(w word) bool { return w.text == "all" || w.text == "key" })
-		p.keyLookupUnc = maybe
+		on := slices.ContainsFunc(args, func(w word) bool { return w.text == "all" || w.text == "key" })
+		// A certain setting is certain from here on, unless a load Alice does not follow may
+		// have used an earlier, other or uncertain, value (review I2).
+		p.keyLookupUnc = maybe || p.unfollowed && (on != p.keyLookup || p.keyLookupUnc)
+		p.keyLookup = on
 	case kw == "ssl-load-extra-del-ext":
-		p.delExt, p.delExtUnc = true, maybe
+		p.delExtUnc = maybe || p.unfollowed && (!p.delExt || p.delExtUnc)
+		p.delExt = true
 	}
 	return nil
 }
@@ -331,7 +372,7 @@ func (p *parser) header(kind uint8, l line, eff region) {
 	p.closeSection()
 	p.sec = section{kinds: kind, defaults: p.defaultsTouched}
 	if kind == kindProxy && len(l.words) > 1 {
-		p.sec.name = l.words[1].text
+		p.sec.name = clean(l.words[1].text, maxText) // once per section, not per server (review I1)
 	}
 }
 
@@ -371,8 +412,8 @@ func (p *parser) bind(l line, maybe bool) error {
 		return nil
 	}
 	type arg struct {
-		list bool
-		w    word
+		list, unknown bool
+		w             word
 	}
 	var (
 		args         []arg
@@ -382,10 +423,20 @@ func (p *parser) bind(l line, maybe bool) error {
 		kw := words[i].text
 		n, ok := bindArity[kw]
 		if !ok {
-			// The arguments of an unknown keyword cannot be told from keywords; a later "ssl"
-			// may be one, so the bind is listed (unsupported) rather than left out.
+			// The arguments of an unknown keyword cannot be told from keywords. A later "ssl"
+			// may be one, so the bind is listed, and the word after each later "crt" or
+			// "crt-list" may be a certificate: it is listed unsupported, unread (review M1).
 			unknown = true
-			ssl = ssl || slices.ContainsFunc(words[i+1:], func(w word) bool { return w.text == "ssl" })
+			for j := i + 1; j < len(words); j++ {
+				switch words[j].text {
+				case "ssl":
+					ssl = true
+				case "crt", "crt-list":
+					if j+1 < len(words) {
+						args = append(args, arg{unknown: true, w: words[j+1]})
+					}
+				}
+			}
 			break
 		}
 		if i+n >= len(words) {
@@ -395,60 +446,73 @@ func (p *parser) bind(l line, maybe bool) error {
 		case "ssl":
 			ssl = true
 		case "crt", "crt-list":
-			args = append(args, arg{kw == "crt-list", words[i+1]})
+			args = append(args, arg{list: kw == "crt-list", w: words[i+1]})
 		}
 		i += 1 + n
 	}
-	if !ssl || len(args) == 0 {
+	if len(args) == 0 {
 		return nil
 	}
-	listens := p.listensOf(words[1].text)
+	if !ssl || maybe || unknown {
+		// HAProxy loads these certificates (a bind without ssl too, Ruling 8) where Alice
+		// does not follow the load for certain.
+		p.unfollowed = true
+	}
+	if !ssl {
+		return nil
+	}
+	listens := p.parseListens(words[1].text)
 	section := p.sec.name
 	if p.sec.uncertain {
 		section = ""
 	}
 	bindServer := Server{File: p.in.Path, Line: l.n, Section: section, Listens: listens}
-	var extra []Server
+	var (
+		lists []Server
+		lineN = len(strconv.Itoa(l.n))
+	)
 	for _, a := range args {
-		if !a.list {
-			if err := p.crt(a.w, &bindServer.Pairs); err != nil {
+		switch {
+		case a.unknown:
+			if err := p.addPair(&bindServer.Pairs, Pair{CertRaw: shown(a.w.text), Unsupported: ReasonUnknownKeyword}); err != nil {
 				return err
 			}
-			continue
-		}
-		entries, pair, err := p.crtList(a.w)
-		if err != nil {
-			return err
-		}
-		if pair != nil {
-			if err := p.addPairs(&bindServer.Pairs, *pair); err != nil {
+		case !a.list:
+			if err := p.crt(a.w, maybe, &bindServer.Pairs); err != nil {
 				return err
 			}
-			continue
-		}
-		if p.servers+len(entries) > MaxServers {
-			return ErrTooComplex
-		}
-		for _, e := range entries {
-			s := Server{File: p.in.Path, Line: l.n, Section: section, Names: e.names, Listens: listens}
-			if err := p.addPairs(&s.Pairs, e.pair); err != nil {
+		default:
+			entries, pair, err := p.crtList(a.w, maybe, len(lists))
+			if err != nil {
 				return err
 			}
-			if err := p.addServer(s); err != nil {
-				return err
+			if pair != nil {
+				if err := p.addPair(&bindServer.Pairs, *pair); err != nil {
+					return err
+				}
+				continue
 			}
-			extra = append(extra, s)
+			for _, e := range entries {
+				s := Server{File: p.in.Path, Line: l.n, Section: section, Names: e.line.names, Listens: listens}
+				if err := p.addPair(&s.Pairs, e.pair); err != nil {
+					return err
+				}
+				p.wire += e.line.namesWire
+				lists = append(lists, s)
+			}
 		}
 	}
+	var all []Server
 	if len(bindServer.Pairs) > 0 {
-		if err := p.addServer(bindServer); err != nil {
+		all = append(all, bindServer)
+	}
+	all = append(all, lists...)
+	for i := range all {
+		if err := p.addServer(&all[i], lineN); err != nil {
 			return err
 		}
-		extra = append([]Server{bindServer}, extra...)
-	}
-	for i := range extra {
-		for j := range extra[i].Pairs {
-			pair := &extra[i].Pairs[j]
+		for j := range all[i].Pairs {
+			pair := &all[i].Pairs[j]
 			switch {
 			case unknown:
 				*pair = Pair{CertRaw: pair.CertRaw, Unsupported: ReasonUnknownKeyword}
@@ -457,49 +521,68 @@ func (p *parser) bind(l line, maybe bool) error {
 			}
 		}
 	}
-	p.sec.servers = append(p.sec.servers, extra...)
+	p.sec.servers = append(p.sec.servers, all...)
 	return nil
 }
 
-// listensOf parses a bind address within what is left of MaxListens.
-func (p *parser) listensOf(arg string) []Listen {
+// parseListens parses a bind address within what is left of MaxListens (what every server of
+// the bind may still carry).
+func (p *parser) parseListens(arg string) []Listen {
 	listens, cut := parseListens(arg, MaxListens-p.listens)
-	p.listens += len(listens)
 	p.truncated = p.truncated || cut
 	return listens
 }
 
-func (p *parser) addServer(s Server) error {
+// addServer counts a server against MaxServers, MaxNames, MaxListens and MaxWire. Its listens,
+// shared with the other servers of its bind, count for it again: past MaxListens it carries a
+// shorter prefix of them, or none, and the parse warns WarnListTruncated (review C1).
+func (p *parser) addServer(s *Server, lineDigits int) error {
 	if p.servers++; p.servers > MaxServers {
 		return ErrTooComplex
 	}
 	if p.names += len(s.Names); p.names > MaxNames {
 		return ErrTooComplex
 	}
+	if left := MaxListens - p.listens; len(s.Listens) > left {
+		s.Listens = s.Listens[:left:left]
+		p.truncated = true
+	}
+	p.listens += len(s.Listens)
+	p.wire += serverWire(s.File, s.Section, lineDigits)
+	for _, l := range s.Listens {
+		p.wire += listenWire(l)
+	}
+	if p.wire > MaxWire {
+		return ErrTooComplex
+	}
 	return nil
 }
 
-func (p *parser) addPairs(to *[]Pair, pairs ...Pair) error {
-	if p.pairs += len(pairs); p.pairs > MaxPairs {
+// addPair adds a pair to a server, counting it against MaxPairs and MaxWire.
+func (p *parser) addPair(to *[]Pair, pair Pair) error {
+	if p.pairs++; p.pairs > MaxPairs {
 		return ErrTooComplex
 	}
-	*to = append(*to, pairs...)
+	if p.wire += pairWire(len(pair.Cert), len(pair.KeyBeside), pair.CertRaw); p.wire > MaxWire {
+		return ErrTooComplex
+	}
+	*to = append(*to, pair)
 	return nil
 }
 
 // crt reads one crt argument into pairs: a file, or the certificate entries of a directory.
-func (p *parser) crt(w word, pairs *[]Pair) error {
-	raw := w.text
-	path, reason := p.resolve(raw, w.dollar)
+func (p *parser) crt(w word, maybe bool, pairs *[]Pair) error {
+	raw := shown(w.text)
+	path, reason := p.resolve(w.text, w.dollar)
 	if path == "" {
-		return p.addPairs(pairs, Pair{CertRaw: raw, Unsupported: reason})
+		return p.addPair(pairs, Pair{CertRaw: raw, Unsupported: reason})
 	}
 	d, err := p.readDir(path)
 	if err != nil {
 		return err
 	}
 	if !d.isDir {
-		return p.addPairs(pairs, p.filePair(path, raw, reason))
+		return p.addPair(pairs, p.filePair(path, raw, reason, maybe))
 	}
 	// Dotfiles are loaded below 2.6 and skipped from 2.6 on (Ruling 10).
 	skipDots, known := minorAtLeast(p.in.Version, 2, 6)
@@ -513,11 +596,17 @@ func (p *parser) crt(w word, pairs *[]Pair) error {
 				r = ReasonConditional
 			}
 		}
-		pair := Pair{CertRaw: raw + "/" + name, Unsupported: ReasonPathNotAllowed}
-		if helperproto.ValidPath(path + "/" + name) {
-			pair = p.filePair(path+"/"+name, raw+"/"+name, r)
+		// The size is counted before the path is built: a long directory path repeated for
+		// every entry is what MaxWire bounds.
+		if p.wire+pairWire(len(path)+1+len(name), len(path)+1+len(name)+len(".key"), "") > MaxWire {
+			return ErrTooComplex
 		}
-		if err := p.addPairs(pairs, pair); err != nil {
+		entryRaw := shown(raw + "/" + name)
+		pair := Pair{CertRaw: entryRaw, Unsupported: ReasonPathNotAllowed}
+		if full := path + "/" + name; helperproto.ValidPath(full) {
+			pair = p.filePair(full, entryRaw, r, maybe)
+		}
+		if err := p.addPair(pairs, pair); err != nil {
 			return err
 		}
 	}
@@ -540,17 +629,21 @@ func (p *parser) resolve(raw string, dollar bool) (string, string) {
 	path, reason := raw, ""
 	if !strings.HasPrefix(raw, "/") {
 		base := p.crtBase
+		baseOK := strings.HasPrefix(base.value, "/") && cleanSegments(strings.TrimRight(base.value, "/")+"/x")
 		switch {
-		case base.uncertain && (!base.set || base.dollar || !strings.HasPrefix(base.value, "/") || !cleanSegments(strings.TrimRight(base.value, "/")+"/x")):
+		case base.uncertain && (!base.set || base.dollar || !baseOK):
 			return "", ReasonConditional
 		case !base.set:
 			return "", ReasonPathNotAllowed
 		case base.dollar:
 			return "", ReasonVariable
-		case !strings.HasPrefix(base.value, "/") || !cleanSegments(strings.TrimRight(base.value, "/")+"/x"):
+		case !baseOK:
 			return "", ReasonPathNotAllowed
 		case base.uncertain:
 			reason = ReasonConditional
+		}
+		if len(base.value)+1+len(raw) > 2*4096 {
+			return "", ReasonPathNotAllowed // never a helper path; not built
 		}
 		path = base.value + "/" + raw
 	}
@@ -579,8 +672,10 @@ func cleanSegments(raw string) bool {
 }
 
 // filePair is the pair of a certificate file with its companion key (Ruling 12). reason is ""
-// or conditional (from the crt-base or the version).
-func (p *parser) filePair(path, raw, reason string) Pair {
+// or conditional (from the crt-base or the version). The first certain naming of a path decides
+// its companion, as HAProxy's first load does; an uncertain naming (maybe) uses it when it is
+// known and never decides it (review I2).
+func (p *parser) filePair(path, raw, reason string, maybe bool) Pair {
 	k, ok := p.keys[path]
 	if !ok {
 		if p.keyLookup {
@@ -593,7 +688,9 @@ func (p *parser) filePair(path, raw, reason string) Pair {
 			k.bad = !helperproto.ValidPath(k.beside)
 		}
 		k.uncertain = p.keyLookupUnc || p.keyLookup && p.delExtUnc && strings.HasSuffix(path, ".crt")
-		p.keys[path] = k
+		if !maybe {
+			p.keys[path] = k
+		}
 	}
 	switch {
 	case k.bad:
@@ -636,46 +733,38 @@ func (p *parser) readDir(path string) (dirInfo, error) {
 	return d, nil
 }
 
-// crtList reads one crt-list argument. A path that cannot be read (a "$", relative, not a helper
-// path; never joined to crt-base) gives the one unsupported pair for the bind's server; else the
-// entries, read and evaluated once per path.
-func (p *parser) crtList(w word) ([]listEntry, *Pair, error) {
+// crtList reads one crt-list argument; pending is the number of servers the bind already
+// gives. A path that cannot be read (a "$", relative, not a helper path; never joined to
+// crt-base) gives the one unsupported pair for the bind's server; else the entries. The file is
+// read once; its entries are evaluated once at its first certain naming, and afresh (without
+// deciding any companion key) at an uncertain one (review I2).
+func (p *parser) crtList(w word, maybe bool, pending int) ([]listEntry, *Pair, error) {
 	raw := w.text
 	switch {
 	case w.dollar:
-		return nil, &Pair{CertRaw: raw, Unsupported: ReasonVariable}, nil
+		return nil, &Pair{CertRaw: shown(raw), Unsupported: ReasonVariable}, nil
 	case !strings.HasPrefix(raw, "/") || !cleanSegments(raw) || !helperproto.ValidPath(raw) || raw == "/":
-		return nil, &Pair{CertRaw: raw, Unsupported: ReasonPathNotAllowed}, nil
+		return nil, &Pair{CertRaw: shown(raw), Unsupported: ReasonPathNotAllowed}, nil
 	}
 	if entries, ok := p.lists[raw]; ok {
-		return entries, nil, nil
+		return entries, nil, p.fits(pending, len(entries))
 	}
-	if len(p.lists) >= MaxCrtLists {
-		return nil, nil, ErrTooComplex
-	}
-	if p.in.ReadFile == nil {
-		return nil, nil, errors.New("haproxyconf: no ReadFile")
-	}
-	data, err := p.in.ReadFile(raw)
+	lines, err := p.readList(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("haproxyconf: reading %s: %w", raw, err)
+		return nil, nil, err
 	}
-	lines, used, err := parseCrtListBudget(data, MaxTokens-p.tokens)
-	if err != nil {
-		return nil, nil, fmt.Errorf("%s: %w", raw, err)
-	}
-	p.tokens += used
 	// Every line becomes a server of this bind: a list over the bound is refused before its
 	// entries are looked at.
-	if p.servers+len(lines) > MaxServers {
-		return nil, nil, ErrTooComplex
+	if err := p.fits(pending, len(lines)); err != nil {
+		return nil, nil, err
 	}
 	entries := make([]listEntry, 0, len(lines))
-	for _, l := range lines {
-		e := listEntry{names: l.names}
+	for i := range lines {
+		l := &lines[i]
+		e := listEntry{line: l}
 		path, reason := p.resolve(l.path, strings.Contains(l.path, "$"))
 		if path == "" {
-			e.pair = Pair{CertRaw: l.path, Unsupported: reason}
+			e.pair = Pair{CertRaw: l.raw, Unsupported: reason}
 		} else {
 			d, err := p.readDir(path)
 			if err != nil {
@@ -683,13 +772,111 @@ func (p *parser) crtList(w word) ([]listEntry, *Pair, error) {
 			}
 			if d.isDir {
 				// HAProxy refuses a directory in a crt-list (Ruling 10).
-				e.pair = Pair{CertRaw: l.path, Unsupported: ReasonPathNotAllowed}
+				e.pair = Pair{CertRaw: l.raw, Unsupported: ReasonPathNotAllowed}
 			} else {
-				e.pair = p.filePair(path, l.path, reason)
+				e.pair = p.filePair(path, l.raw, reason, maybe)
 			}
 		}
 		entries = append(entries, e)
 	}
-	p.lists[raw] = entries
+	if !maybe {
+		p.lists[raw] = entries
+	}
 	return entries, nil, nil
+}
+
+// fits says whether n more servers, after pending ones of the bind, stay within MaxServers.
+func (p *parser) fits(pending, n int) error {
+	if p.servers+pending+n > MaxServers {
+		return ErrTooComplex
+	}
+	return nil
+}
+
+// readList reads and parses a crt-list file once, within the shared word budget. Names are
+// cleaned and cut once here, not per server that carries them (review I1).
+func (p *parser) readList(path string) ([]listLine, error) {
+	if lines, ok := p.listFiles[path]; ok {
+		return lines, nil
+	}
+	if len(p.listFiles) >= MaxCrtLists {
+		return nil, ErrTooComplex
+	}
+	if p.in.ReadFile == nil {
+		return nil, errors.New("haproxyconf: no ReadFile")
+	}
+	data, err := p.in.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("haproxyconf: reading %s: %w", path, err)
+	}
+	parsed, used, err := parseCrtListBudget(data, MaxTokens-p.tokens)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	p.tokens += used
+	lines := make([]listLine, len(parsed))
+	for i, l := range parsed {
+		lines[i] = listLine{path: l.path, raw: shown(l.path)}
+		if len(l.names) > 0 {
+			lines[i].names = make([]string, len(l.names))
+			for j, n := range l.names {
+				lines[i].names[j] = clean(n, maxText)
+				lines[i].namesWire += 3 + jsonLen(lines[i].names[j])
+			}
+		}
+	}
+	p.listFiles[path] = lines
+	return lines, nil
+}
+
+// maxText is the longest section name, SNI name or listen host on the wire, in bytes.
+const maxText = 253
+
+// shown is a path as the wire's Raw shows it: cleaned and cut to maxRaw runes. Only a prefix
+// is cleaned, so a long argument costs the same as a short one.
+func shown(raw string) string {
+	s := clean(raw[:min(len(raw), 64<<10)], 64<<10)
+	if utf8.RuneCountInString(s) > maxRaw {
+		s = string([]rune(s)[:maxRaw])
+	}
+	return s
+}
+
+// The wire size of a server, a listen and a pair: the length of its helperproto JSON with its
+// separating comma, from above. A pair counts its raw text and the longest reason even when it
+// is supported (MarkWritable may make it unsupported), and its key as the longer of Cert and
+// KeyBeside (ResolveKeys picks one).
+const (
+	serverWireFixed = len(`{"file":"","line":,"names":[],"listens":[],"pairs":[],"section":"","stream":false},`)
+	listenWireFixed = len(`{"addr":"","port":65535,"default_server":false},`)
+	pairWireFixed   = len(`{"cert":"","key":"","inherited":false,"unsupported":"config_file_writable","raw":""},`)
+)
+
+func serverWire(file, section string, lineDigits int) int {
+	return serverWireFixed + jsonLen(file) + lineDigits + jsonLen(section)
+}
+
+func listenWire(l Listen) int { return listenWireFixed + jsonLen(l.Addr) }
+
+func pairWire(cert, beside int, raw string) int {
+	return pairWireFixed + cert + max(cert, beside) + jsonLen(raw)
+}
+
+// jsonLen is the length of s inside a JSON string as encoding/json writes it: '"' and '\' take
+// two bytes; '<', '>', '&', a control character, an invalid byte, U+2028 and U+2029 six.
+func jsonLen(s string) int {
+	n := 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == '"' || r == '\\':
+			n += 2
+		case r == '<' || r == '>' || r == '&' || r < 0x20 || r == 0x2028 || r == 0x2029 || r == utf8.RuneError && size == 1:
+			n += 6
+		default:
+			n += size
+		}
+		i += size
+	}
+	return n
 }

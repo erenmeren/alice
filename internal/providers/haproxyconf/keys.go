@@ -71,23 +71,22 @@ func (c Config) paths(get func(Pair) string) []string {
 // ToWire converts a server for the helper's answer (shared by the helper and its emulator).
 // Slices are never nil, text is cleaned of control characters and invalid UTF-8 and cut (file
 // 4096 bytes; section, names and addresses 253 bytes), Raw is CertRaw cut to 200 runes for an
-// unsupported pair only, and Stream, DefaultServer and Inherited are false.
+// unsupported pair only, and Stream, DefaultServer and Inherited are false. Parse gives every
+// text already cleaned and cut, so the cost of a server does not grow with the configuration's
+// longest word, however many servers share it (review I1).
 func ToWire(s Server) helperproto.DumpServer {
-	out := helperproto.DumpServer{File: clean(s.File, 4096), Line: s.Line, Section: clean(s.Section, 253), Names: []string{},
+	out := helperproto.DumpServer{File: clean(s.File, 4096), Line: s.Line, Section: clean(s.Section, maxText), Names: []string{},
 		Listens: []helperproto.DumpListen{}, Pairs: []helperproto.DumpPair{}}
 	for _, n := range s.Names {
-		out.Names = append(out.Names, clean(n, 253))
+		out.Names = append(out.Names, clean(n, maxText))
 	}
 	for _, l := range s.Listens {
-		out.Listens = append(out.Listens, helperproto.DumpListen{Addr: clean(l.Addr, 253), Port: l.Port})
+		out.Listens = append(out.Listens, helperproto.DumpListen{Addr: clean(l.Addr, maxText), Port: l.Port})
 	}
 	for _, p := range s.Pairs {
 		wp := helperproto.DumpPair{Cert: p.Cert, Key: p.Key, Unsupported: p.Unsupported}
 		if p.Unsupported != "" {
-			wp.Raw = clean(p.CertRaw, len(p.CertRaw))
-			if r := []rune(wp.Raw); len(r) > 200 {
-				wp.Raw = string(r[:200])
-			}
+			wp.Raw = shown(p.CertRaw) // Parse already gives it in this form: cheap (review I1)
 		}
 		out.Pairs = append(out.Pairs, wp)
 	}

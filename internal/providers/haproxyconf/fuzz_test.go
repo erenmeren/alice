@@ -1,6 +1,7 @@
 package haproxyconf
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,6 +128,19 @@ func FuzzParseHAProxyConfig(f *testing.F) {
 		}
 		if len(got.Servers) > MaxServers {
 			t.Fatalf("%d servers", len(got.Servers))
+		}
+		// Review C1: the bounds hold on the wire, where shared listens are copied per server.
+		listens, wire := 0, 0
+		for _, s := range got.Servers {
+			listens += len(s.Listens)
+			b, err := json.Marshal(ToWire(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wire += len(b) + 1
+		}
+		if listens > MaxListens || wire > got.wire || got.wire > MaxWire {
+			t.Fatalf("%d listens, %d bytes on the wire, estimated %d", listens, wire, got.wire)
 		}
 		for _, s := range got.Servers {
 			if s.Line < 1 || s.File != in.Path || len(s.Pairs) == 0 {

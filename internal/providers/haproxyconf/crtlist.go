@@ -32,7 +32,7 @@ func parseCrtList(data []byte) ([]crtListLine, error) {
 	return lines, err
 }
 
-// parseCrtListBudget is parseCrtList with a word budget (see lexBudget); it also returns the
+// parseCrtListBudget is parseCrtList with a word budget (see lexEach); it also returns the
 // number of words read.
 func parseCrtListBudget(data []byte, budget int) ([]crtListLine, int, error) {
 	if len(data) > MaxInput {

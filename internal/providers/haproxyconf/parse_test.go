@@ -1,6 +1,7 @@
 package haproxyconf
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/providers"
+	"alice/internal/providers/linuxssh/helperproto"
 )
 
 const cfgPath = "/etc/haproxy/haproxy.cfg"
@@ -160,9 +162,11 @@ func TestParse(t *testing.T) {
 		"missing argument":            {cfg: fe("  bind :9443 ssl crt /c/a.pem crt"), want: feA(plain("/c/a.pem"))},
 		"no listen":                   {cfg: fe("  bind unix@/run/h.sock ssl crt /c/a.pem"), want: []Server{srv(2, "f", nil, plain("/c/a.pem"))}},
 		// crt-base (Ruling 9).
+		// HAProxy refuses a second crt-base (review M2), so a later global can only set the first.
 		"crt-base": {
-			cfg:  "global\n  crt-base /c\n" + "frontend f\n  bind :9443 ssl crt a.pem\n" + "global\n  crt-base /x\n",
-			want: []Server{srv(4, "f", any9443, sup("/c/a.pem", "a.pem", "/c/a.pem.key"))},
+			cfg: "frontend e\n  bind :9442 ssl crt a.pem\n" + "global\n  crt-base /c\n" + "frontend f\n  bind :9443 ssl crt a.pem\n",
+			want: []Server{srv(2, "e", []Listen{{"", 9442}}, uns("a.pem", ReasonPathNotAllowed)),
+				srv(6, "f", any9443, sup("/c/a.pem", "a.pem", "/c/a.pem.key"))},
 		},
 		"crt-base with a slash": {
 			cfg:  "global\n  crt-base /c/\nfrontend f\n  bind :9443 ssl crt a.pem crt /d/b.pem\n",
@@ -186,7 +190,54 @@ func TestParse(t *testing.T) {
 		"not a helper path":         {cfg: fe("  bind :9443 ssl crt '/c/a b.pem'"), want: feA(uns("/c/a b.pem", ReasonPathNotAllowed))},
 		"companion too long": {
 			cfg:  fe("  bind :9443 ssl crt /" + strings.Repeat("a", 4093)),
-			want: feA(uns("/"+strings.Repeat("a", 4093), ReasonPathNotAllowed)),
+			want: feA(uns("/"+strings.Repeat("a", maxRaw-1), ReasonPathNotAllowed)),
+		},
+		// Review I2: an uncertain naming never decides a certificate's companion key (probe k4,
+		// HAProxy 2.4, 2.6 and 2.8: f2 loads a.pem with "all", key a.pem.key). The change of the
+		// setting after it is uncertain, so f2's pair is conditional, never a wrong key.
+		"uncertain naming does not decide the key": {
+			cfg: "global\n  ssl-load-extra-files none\nfrontend f1\n.if defined(X)\n  bind :9443 ssl crt /c/a.pem\n.endif\n" +
+				"global\n  ssl-load-extra-files all\nfrontend f2\n  bind :9444 ssl crt /c/a.pem crt /c/b.pem\n",
+			want: []Server{srv(5, "f1", any9443, uns("/c/a.pem", ReasonConditional)),
+				srv(10, "f2", []Listen{{"", 9444}}, uns("/c/a.pem", ReasonConditional), uns("/c/b.pem", ReasonConditional))},
+		},
+		"a certain naming decides before an uncertain one": {
+			cfg: "global\n  ssl-load-extra-files none\n" + fe(bindA, ".if X", "  bind :9444 ssl crt /c/a.pem", ".endif") +
+				"frontend g\n  bind :9445 ssl crt /c/a.pem\n",
+			want: []Server{srv(4, "f", any9443, sup("/c/a.pem", "/c/a.pem", "")), srv(6, "f", []Listen{{"", 9444}}, uns("/c/a.pem", ReasonConditional)),
+				srv(9, "g", []Listen{{"", 9445}}, sup("/c/a.pem", "/c/a.pem", ""))},
+		},
+		"a server's crt is a load Alice does not follow": {
+			cfg: "global\n  ssl-load-extra-files none\nbackend be\n  server s 10.0.0.1:443 ssl crt /c/a.pem\n" +
+				"global\n  ssl-load-extra-files all\n" + fe(bindA),
+			want: []Server{srv(8, "f", any9443, uns("/c/a.pem", ReasonConditional))},
+		},
+		"a bind without ssl loads its crt": {
+			cfg: "global\n  ssl-load-extra-del-ext\n" + "frontend e\n  bind :80 crt /c/x.crt\n" +
+				"global\n  ssl-load-extra-files none\n" + "frontend f\n  bind :9443 ssl crt /c/x.crt\n",
+			want: []Server{srv(8, "f", any9443, uns("/c/x.crt", ReasonConditional))},
+		},
+		"a certain setting ends an uncertain one": {
+			cfg:  "global\n.if X\n  ssl-load-extra-files none\n.endif\n  ssl-load-extra-files all\n" + fe(bindA),
+			want: []Server{srv(7, "f", any9443, plain("/c/a.pem"))},
+		},
+		"no unfollowed load before the change": {
+			cfg:  "global\n  ssl-load-extra-files none\n  ssl-load-extra-files all\n  ssl-load-extra-del-ext\n" + fe("  bind :9443 ssl crt /c/x.crt"),
+			want: []Server{srv(6, "f", any9443, sup("/c/x.crt", "/c/x.crt", "/c/x.key"))},
+		},
+		"uncertain crt-list naming first": {
+			cfg:  fe(".if X", "  bind :9443 ssl crt-list /l/short.txt", ".endif", "  bind :9444 ssl crt-list /l/short.txt"),
+			want: []Server{named(srv(3, "f", any9443, uns("/c/s.pem", ReasonConditional)), "s.example.test"), named(srv(5, "f", []Listen{{"", 9444}}, plain("/c/s.pem")), "s.example.test")},
+		},
+		// Review M1: an unknown keyword before every crt still lists the words after crt and
+		// crt-list, unread.
+		"unknown keyword first": {
+			cfg:  fe("  bind :9443 ssl default-crt /c/b.pem crt /c/a.pem crt-list /l/list.txt crt"),
+			want: feA(uns("/c/a.pem", ReasonUnknownKeyword), uns("/l/list.txt", ReasonUnknownKeyword)),
+		},
+		"cleaned section and names": {
+			cfg:  "frontend \"f\\x01e\"\n  bind :9443 ssl crt-list /l/ctl.txt\n",
+			want: []Server{named(srv(2, "fe", any9443, plain("/c/s.pem")), "a.test", "b.test")},
 		},
 		// crt-list (Rulings 9 and 11).
 		"crt-list": {
@@ -323,10 +374,8 @@ func TestParse(t *testing.T) {
 			want: []Server{srv(6, "", any9443, uns("a.pem", ReasonConditional)), srv(8, "g", []Listen{{"", 9444}}, uns("b.pem", ReasonConditional))},
 		},
 		"crt-base in uncertain region": {
-			cfg: "global\n  crt-base /x\n.if X\n  crt-base /c\n.endif\n" + fe("  bind :9443 ssl crt a.pem crt /d/b.pem") +
-				"global\n  crt-base /e\n" + "frontend g\n  bind :9444 ssl crt c.pem\n",
-			want: []Server{srv(7, "f", any9443, uns("a.pem", ReasonConditional), plain("/d/b.pem")),
-				srv(11, "g", []Listen{{"", 9444}}, sup("/e/c.pem", "c.pem", "/e/c.pem.key"))},
+			cfg:  "global\n.if X\n  crt-base /c\n.endif\n" + fe("  bind :9443 ssl crt a.pem crt /d/b.pem"),
+			want: []Server{srv(6, "f", any9443, uns("a.pem", ReasonConditional), plain("/d/b.pem"))},
 		},
 		"crt-base uncertain and unset": {
 			cfg:  ".if X\nglobal\n  crt-base c\n.endif\n" + fe("  bind :9443 ssl crt a.pem"),
@@ -368,6 +417,7 @@ func TestParse(t *testing.T) {
 			fs.files["/l/list.txt"] = listSample
 			fs.files["/l/short.txt"] = "/c/s.pem s.example.test\n"
 			fs.files["/l/empty.txt"] = "# nothing\n"
+			fs.files["/l/ctl.txt"] = "/c/s.pem a\x01.test b\xff.test\n"
 			fs.dirs["/c/dir"] = dirEntries
 			fs.dirs["/c/odd"] = []string{"ok.pem", "sp ace.pem", "", ".", "..", "a/b"}
 			fs.dirs["/c/empty"] = nil
@@ -569,36 +619,126 @@ func TestParseBounds(t *testing.T) {
 	})
 }
 
+// TestParseListensBound: listens count once per server that carries them (review C1), so a
+// bind's listens shared by the servers of a crt-list are cut at MaxListens across them all.
 func TestParseListensBound(t *testing.T) {
 	entries := func(n int) string { return strings.TrimSuffix(strings.Repeat(":1,", n), ",") }
 	fs := newFS()
 	fs.files["/l/list.txt"] = "/c/a.pem\n/c/b.pem\n"
-	cfg := fe("  bind "+entries(MaxListens-10)+" ssl crt-list /l/list.txt", "  bind "+entries(10)+" ssl crt /c/c.pem")
+	cfg := fe("  bind "+entries(MaxListens/2-5)+" ssl crt-list /l/list.txt", "  bind "+entries(10)+" ssl crt /c/c.pem")
 	got, err := Parse(fs.input(cfg, ""))
 	require.NoError(t, err)
-	assert.Empty(t, got.Warnings, "exactly MaxListens listens")
+	assert.Empty(t, got.Warnings, "exactly MaxListens listens on the wire")
+	assert.Len(t, got.Servers[0].Listens, MaxListens/2-5)
+	assert.Len(t, got.Servers[1].Listens, MaxListens/2-5)
 	assert.Len(t, got.Servers[2].Listens, 10)
 
-	cfg = fe("  bind "+entries(MaxListens-10)+" ssl crt-list /l/list.txt", "  bind "+entries(11)+" ssl crt /c/c.pem", "  bind :2 ssl crt /c/d.pem")
+	cfg = fe("  bind "+entries(MaxListens/2-5)+" ssl crt-list /l/list.txt", "  bind "+entries(11)+" ssl crt /c/c.pem", "  bind :2 ssl crt /c/d.pem")
 	got, err = Parse(fs.input(cfg, ""))
 	require.NoError(t, err)
 	assert.Equal(t, []string{WarnListTruncated}, got.Warnings)
 	assert.Equal(t, providers.WarnListTruncated, WarnListTruncated)
 	require.Len(t, got.Servers, 4)
-	assert.Len(t, got.Servers[0].Listens, MaxListens-10)
-	assert.Len(t, got.Servers[1].Listens, MaxListens-10, "the servers of a crt-list share the bind's listens")
-	assert.Len(t, got.Servers[2].Listens, 10)
+	assert.Len(t, got.Servers[2].Listens, 10, "cut to what is left")
 	assert.Empty(t, got.Servers[3].Listens)
 	assert.Len(t, got.Servers[3].Pairs, 1, "the server is still listed")
 
-	// A single 1 MiB address word is cut, not copied per server.
-	cfg = fe("  bind " + strings.Repeat(":1,", (MaxLine-100)/3) + " ssl crt-list /l/list.txt")
+	// The reviewer's input: MaxListens listens on a bind naming a crt-list of MaxServers-1
+	// lines gave 4,294,901,760 listens on the wire.
+	fs.files["/l/big.txt"] = strings.Repeat("/c/a.pem\n", MaxServers-1)
+	cfg = fe("  bind " + strings.Repeat(":1,", (MaxLine-100)/3) + " ssl crt-list /l/big.txt")
 	start := time.Now()
 	got, err = Parse(fs.input(cfg, ""))
 	require.NoError(t, err)
-	assert.Len(t, got.Servers[0].Listens, MaxListens)
 	assert.Equal(t, []string{WarnListTruncated}, got.Warnings)
+	assert.Len(t, got.Servers[0].Listens, MaxListens)
+	assert.Equal(t, MaxListens, totalListens(got))
 	assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+}
+
+func totalListens(c Config) int {
+	n := 0
+	for _, s := range c.Servers {
+		n += len(s.Listens)
+	}
+	return n
+}
+
+// wireSize is what the servers take in the helper's JSON answer.
+func wireSize(t *testing.T, c Config) int {
+	n := 0
+	for _, s := range c.Servers {
+		b, err := json.Marshal(ToWire(s))
+		require.NoError(t, err)
+		n += len(b) + 1
+	}
+	return n
+}
+
+// TestParseWireEstimate: the size Parse counts against MaxWire is never below the real JSON,
+// also after ResolveKeys and MarkWritable, and not far above it.
+func TestParseWireEstimate(t *testing.T) {
+	fs := newFS()
+	fs.files["/l/list.txt"] = listSample + "/c/ctl.pem <a>&\"b\".test \xe2\x80\xa8.test\n"
+	fs.dirs["/c/dir"] = dirEntries
+	cfg := "global\n  crt-base /c\nfrontend \"<f>&\"\n  bind 10.0.0.1:9443,[::1]:443,*:1 ssl crt-list /l/list.txt crt dir crt a.pem crt $X\n" +
+		".if X\n  bind :1 ssl crt '\"<x>\"'\n.endif\n" + "listen " + strings.Repeat("\u00e9", 300) + "\n  bind :2 ssl crt " + strings.Repeat("r", 3000) + "\n"
+	got, err := Parse(fs.input(cfg, "2.4.30"))
+	require.NoError(t, err)
+	real := wireSize(t, got)
+	assert.GreaterOrEqual(t, got.wire, real)
+	ResolveKeys(&got, func(string) bool { return false })
+	assert.GreaterOrEqual(t, got.wire, wireSize(t, got), "after ResolveKeys")
+	MarkWritable(&got)
+	assert.GreaterOrEqual(t, got.wire, wireSize(t, got), "after MarkWritable")
+	assert.Less(t, got.wire, 2*real)
+}
+
+// TestParseWireBound: MaxWire refuses a configuration whose servers would not fit, before the
+// strings of a long directory path are built for every entry.
+func TestParseWireBound(t *testing.T) {
+	fs := newFS()
+	fs.files["/l/list.txt"] = strings.Repeat("/c/a.pem\n", MaxServers/2)
+	long := strings.Repeat("<", maxText) // each "<" is six bytes of JSON
+	_, err := Parse(fs.input("frontend f\n  bind :1 ssl crt-list /l/list.txt\n", ""))
+	require.NoError(t, err)
+	_, err = Parse(fs.input("frontend "+long+"\n  bind :1 ssl crt-list /l/list.txt\n", ""))
+	assert.ErrorIs(t, err, ErrTooComplex)
+
+	dir := "/" + strings.Repeat("d", 4000)
+	names := make([]string, MaxDirEntries)
+	for i := range names {
+		names[i] = fmt.Sprintf("%04d.pem", i)
+	}
+	fs.dirs[dir] = names
+	cfg := fe(strings.Repeat("  bind :1 ssl crt "+dir+"\n", MaxPairs/MaxDirEntries))
+	peak, _, _, err := measureHeap(func() (any, error) { return Parse(fs.input(cfg, "")) })
+	assert.ErrorIs(t, err, ErrTooComplex)
+	assert.Less(t, peak, uint64(MaxWire+(16<<20)), "refused near MaxWire, not at 2 x 4 KiB x 65,536 pairs")
+}
+
+// TestToWireSharedTextIsCheap: text shared by many servers (a 1 MiB frontend name, a crt-list
+// line of 1 MiB) is cleaned once in Parse, so ToWire of every server stays quick (review I1:
+// it took about 3 minutes).
+func TestToWireSharedTextIsCheap(t *testing.T) {
+	fs := newFS()
+	fs.files["/l/big.txt"] = "/" + strings.Repeat("a", MaxLine/2-10) + " " + strings.Repeat("n", MaxLine/2-10) + "\n"
+	binds := MaxServers / 2
+	for name, cfg := range map[string]string{
+		"crt-list line": fe(strings.Repeat("  bind :1 ssl crt-list /l/big.txt\n", binds)),
+		"section name":  "frontend " + strings.Repeat("s", MaxLine-100) + "\n" + strings.Repeat("  bind :1 ssl crt /c/a.pem\n", binds),
+	} {
+		t.Run(name, func(t *testing.T) {
+			start := time.Now()
+			got, err := Parse(fs.input(cfg, ""))
+			require.NoError(t, err)
+			require.Len(t, got.Servers, binds)
+			for _, s := range got.Servers {
+				_ = ToWire(s)
+			}
+			assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+		})
+	}
 }
 
 // TestParseHostileMemory measures the heap of Parse on hostile maximum-size inputs (controller
@@ -640,6 +780,11 @@ func TestParseHostileMemory(t *testing.T) {
 				strings.Repeat("a\n", MaxTokens-7-(2*(MaxServers-1)+1+MaxNames-MaxServers+1)),
 			files: map[string]string{"/l/list.txt": listLines + "/c/a.pem" + strings.Repeat(" n", MaxNames-MaxServers+1) + "\n"},
 		},
+		// Review C1: MaxListens listens on a bind naming a crt-list of MaxServers-1 lines.
+		"listens of a crt-list": {
+			cfg:   fe("  bind " + strings.Repeat(":1,", MaxListens) + " ssl crt-list /l/list.txt"),
+			files: map[string]string{"/l/list.txt": strings.Repeat("/c/a.pem\n", MaxServers-1)},
+		},
 		"max pairs": {
 			cfg:  fe("  bind :2 ssl" + strings.Repeat(" crt /c/dir", MaxPairs/MaxDirEntries)),
 			dirs: map[string][]string{"/c/dir": dir},
@@ -654,13 +799,24 @@ func TestParseHostileMemory(t *testing.T) {
 				fs.dirs = tc.dirs
 			}
 			in := fs.input(tc.cfg, "2.6.12")
-			peak, held, total, err := measureHeap(func() (any, error) { return Parse(in) })
+			// Parse, then everything the helper builds from it: the wire servers and their JSON.
+			peak, held, total, err := measureHeap(func() (any, error) {
+				c, err := Parse(in)
+				if err != nil {
+					return nil, err
+				}
+				wire := make([]helperproto.DumpServer, len(c.Servers))
+				for i, s := range c.Servers {
+					wire[i] = ToWire(s)
+				}
+				return json.Marshal(wire)
+			})
 			require.NoError(t, err)
 			t.Logf("%s: input %d MiB: peak heap %d MiB (sampled), held by the result %d MiB, allocated %d MiB",
 				name, len(in.Data)>>20, peak>>20, held>>20, total>>20)
-			// The whole-configuration budget keeps every case near 100 MiB (measured: at most
-			// about 110 MiB, for "max tokens and output").
-			assert.Less(t, peak, uint64(160<<20))
+			// With the wire servers and their JSON, the worst case measured about 84 MiB
+			// (streaming lexer, listens per server, MaxWire).
+			assert.Less(t, peak, uint64(128<<20))
 		})
 	}
 }

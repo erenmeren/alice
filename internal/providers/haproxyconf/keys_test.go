@@ -85,5 +85,4 @@ func TestToWire(t *testing.T) {
 	for _, p := range got.Pairs {
 		assert.False(t, p.Inherited)
 	}
-	_ = long
 }
