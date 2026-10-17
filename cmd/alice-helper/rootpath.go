@@ -130,6 +130,12 @@ func (f rootFile) checkFS(before unix.Stat_t) error {
 	return f.s.normalFS(pfd)
 }
 
+// userWritable reports a file a user other than root can change: owned by another user, or
+// writable by group or others (the configuration files of nginx-dump, apache-dump, haproxy-dump).
+func (s *sys) userWritable(st unix.Stat_t) bool {
+	return int(st.Uid) != s.rootUID || st.Mode&0o022 != 0
+}
+
 // dirOK: a directory nobody but root can change (root's, not writable by group or others; a
 // sticky world-writable directory such as /tmp is refused too: its entries are other users').
 func (s *sys) dirOK(st unix.Stat_t) bool { return int(st.Uid) == s.rootUID && st.Mode&0o022 == 0 }

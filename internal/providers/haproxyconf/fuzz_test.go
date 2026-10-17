@@ -2,6 +2,7 @@ package haproxyconf
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -107,10 +108,18 @@ func FuzzParseHAProxyConfig(f *testing.F) {
 	f.Add([]byte("frontend f\n bind " + strings.Repeat(":1,", 50) + " ssl crt /d crt /d\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		in := Input{Path: "/etc/haproxy/haproxy.cfg", Data: data, Version: "2.6.12",
-			ReadFile: func(string) ([]byte, error) { return data, nil },
+			ReadFile: func(path string) ([]byte, error) {
+				if strings.HasSuffix(path, "/n") {
+					return nil, fmt.Errorf("%w: missing", ErrNotRead) // review I2 of Task 6
+				}
+				return data, nil
+			},
 			ReadDir: func(path string) ([]string, bool, error) {
-				if strings.HasSuffix(path, "/d") {
+				switch {
+				case strings.HasSuffix(path, "/d"):
 					return []string{"a.pem", ".b.pem", "c.key"}, true, nil
+				case strings.HasSuffix(path, "/e"):
+					return nil, false, fmt.Errorf("%w: listing", ErrNotRead)
 				}
 				return nil, false, nil
 			},
@@ -119,6 +128,21 @@ func FuzzParseHAProxyConfig(f *testing.F) {
 		again, err2 := Parse(in)
 		if (err == nil) != (err2 == nil) || !reflect.DeepEqual(got, again) {
 			t.Fatalf("Parse is not deterministic")
+		}
+		// Review I1 of Task 6: a writable haproxy.cfg makes Parse call neither callback and
+		// leaves no pair it could support.
+		w := Input{Path: in.Path, Data: data, Version: in.Version, Writable: true,
+			ReadFile: func(string) ([]byte, error) { t.Fatal("ReadFile with Writable"); return nil, nil },
+			ReadDir:  func(string) ([]string, bool, error) { t.Fatal("ReadDir with Writable"); return nil, false, nil },
+		}
+		if wc, err := Parse(w); err == nil {
+			for _, s := range wc.Servers {
+				for _, p := range s.Pairs {
+					if p.pending || p.Cert != "" || p.Key != "" {
+						t.Fatalf("a pair of a writable configuration with paths: %+v", p)
+					}
+				}
+			}
 		}
 		if err != nil {
 			if got.Servers != nil || got.Warnings != nil {

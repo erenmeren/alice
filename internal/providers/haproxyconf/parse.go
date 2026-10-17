@@ -33,13 +33,20 @@ const maxRaw = 200
 //     path of a crt argument or crt-list entry; a path that is not a directory (or whose walk
 //     fails: the helper then describes the file) answers isDir false.
 //
-// An error of either callback is returned by Parse, wrapped with %w.
+// An error of either callback is returned by Parse, wrapped with %w, except one wrapping
+// ErrNotRead for a naming in an uncertain region (see ErrNotRead).
+//
+// Writable says a user other than root can change haproxy.cfg (review I1 of Task 6): Parse then
+// calls neither callback, so nothing that user names is read, listed or opened. Each crt or
+// crt-list argument it can resolve is one pair config_file_writable carrying only the text as
+// written (CertRaw); arguments it cannot resolve keep their reason (variable, path_not_allowed).
 type Input struct {
 	Path     string
 	Data     []byte
 	Version  string
 	ReadFile func(path string) ([]byte, error)
 	ReadDir  func(path string) (names []string, isDir bool, err error)
+	Writable bool
 }
 
 // Config is the evaluated configuration: the TLS servers in read order, and the server-level
@@ -116,7 +123,7 @@ type Pair struct {
 // On error the Config is empty.
 func Parse(in Input) (Config, error) {
 	p := &parser{in: in, keyLookup: true, lists: map[string][]listEntry{}, listFiles: map[string][]listLine{},
-		dirs: map[string]dirInfo{}}
+		dirs: map[string]dirInfo{}, failed: map[string]error{}}
 	p.skipDots, p.versionKnown = minorAtLeast(in.Version, 2, 6)
 	if err := lexEach(in.Data, &p.tokens, MaxTokens, p.line); err != nil {
 		return Config{}, fmt.Errorf("%s: %w", in.Path, err)
@@ -144,7 +151,10 @@ func Parse(in Input) (Config, error) {
 	}
 	c := Config{Servers: p.out, wire: p.wire}
 	if p.truncated {
-		c.Warnings = []string{WarnListTruncated}
+		c.Warnings = append(c.Warnings, WarnListTruncated)
+	}
+	if p.notRead {
+		c.Warnings = append(c.Warnings, WarnConfigFileNotRead)
 	}
 	return c, nil
 }
@@ -247,6 +257,10 @@ type parser struct {
 	listFiles map[string][]listLine  // as read
 	dirs      map[string]dirInfo
 	nDirs     int
+	// failed holds the ErrNotRead errors of crt-lists ("f" + path) and directories ("d" + path):
+	// each path is still asked for once, and a later active naming still fails (review I2).
+	failed  map[string]error
+	notRead bool // an uncertain naming could not be read: WarnConfigFileNotRead
 
 	tokens, pairs, servers, names, listens, wire int
 	truncated                                    bool
@@ -522,11 +536,11 @@ func (p *parser) bind(l line, maybe bool) error {
 				return err
 			}
 		case !a.list:
-			if err := p.crt(a.w, &bindServer.Pairs); err != nil {
+			if err := p.crt(a.w, maybe, &bindServer.Pairs); err != nil {
 				return err
 			}
 		default:
-			entries, pair, err := p.crtList(a.w, len(p.sec.servers)-start-1)
+			entries, pair, err := p.crtList(a.w, maybe, len(p.sec.servers)-start-1)
 			if err != nil {
 				return err
 			}
@@ -615,14 +629,21 @@ func (p *parser) addPair(to *[]Pair, pair Pair) error {
 }
 
 // crt reads one crt argument into pairs: a file, or the certificate entries of a directory.
-func (p *parser) crt(w word, pairs *[]Pair) error {
+// maybe says the naming lies in an uncertain region (notReadPair).
+func (p *parser) crt(w word, maybe bool, pairs *[]Pair) error {
 	raw := shown(w.text)
 	path, joined, reason := p.resolve(w.text, w.dollar)
-	if path == "" {
+	switch {
+	case path == "":
 		return p.addPair(pairs, Pair{CertRaw: raw, Unsupported: reason})
+	case p.in.Writable:
+		return p.addPair(pairs, Pair{CertRaw: raw, Unsupported: ReasonConfigFileWritable})
 	}
 	d, err := p.readDir(path)
 	if err != nil {
+		if pair, ok := p.notReadPair(err, maybe, raw); ok {
+			return p.addPair(pairs, pair)
+		}
 		return err
 	}
 	if !d.isDir {
@@ -746,12 +767,19 @@ func (p *parser) readDir(path string) (dirInfo, error) {
 	if d, ok := p.dirs[path]; ok {
 		return d, nil
 	}
+	if err := p.failed["d"+path]; err != nil {
+		return dirInfo{}, err
+	}
 	if p.in.ReadDir == nil {
 		return dirInfo{}, errors.New("haproxyconf: no ReadDir")
 	}
 	names, isDir, err := p.in.ReadDir(path)
 	if err != nil {
-		return dirInfo{}, fmt.Errorf("haproxyconf: listing %s: %w", path, err)
+		err = fmt.Errorf("haproxyconf: listing %s: %w", path, err)
+		if errors.Is(err, ErrNotRead) {
+			p.failed["d"+path] = err
+		}
+		return dirInfo{}, err
 	}
 	d := dirInfo{isDir: isDir}
 	if isDir {
@@ -778,25 +806,62 @@ func (p *parser) readDir(path string) (dirInfo, error) {
 // crt-base) gives the one unsupported pair for the bind's server; else the entries. The file is
 // read, and its entries evaluated, once per path whatever the region of the naming (review N1);
 // the bind applies its own region to the copies.
-func (p *parser) crtList(w word, pending int) ([]listEntry, *Pair, error) {
+func (p *parser) crtList(w word, maybe bool, pending int) ([]listEntry, *Pair, error) {
 	raw := w.text
 	switch {
 	case w.dollar:
 		return nil, &Pair{CertRaw: shown(raw), Unsupported: ReasonVariable}, nil
 	case !strings.HasPrefix(raw, "/") || !cleanSegments(raw) || !helperproto.ValidPath(raw) || raw == "/":
 		return nil, &Pair{CertRaw: shown(raw), Unsupported: ReasonPathNotAllowed}, nil
+	case p.in.Writable:
+		return nil, &Pair{CertRaw: shown(raw), Unsupported: ReasonConfigFileWritable}, nil
 	}
+	entries, err := p.listEntries(raw, pending)
+	if err != nil {
+		if pair, ok := p.notReadPair(err, maybe, shown(raw)); ok {
+			return nil, &pair, nil
+		}
+		return nil, nil, err
+	}
+	return entries, nil, nil
+}
+
+// notReadPair is the pair of a naming whose file could not be read (ErrNotRead) when the naming
+// lies in an uncertain region: "-c" may have skipped it, so it is one conditional pair and the
+// parse warns WarnConfigFileNotRead (review I2). Any other error, or an active naming, fails.
+func (p *parser) notReadPair(err error, maybe bool, raw string) (Pair, bool) {
+	if !maybe || !errors.Is(err, ErrNotRead) {
+		return Pair{}, false
+	}
+	p.notRead = true
+	return Pair{CertRaw: raw, Unsupported: ReasonConditional}, true
+}
+
+// listEntries reads a crt-list's lines and evaluates them, once per path.
+func (p *parser) listEntries(raw string, pending int) ([]listEntry, error) {
 	if entries, ok := p.lists[raw]; ok {
-		return entries, nil, p.fits(pending, len(entries))
+		return entries, p.fits(pending, len(entries))
 	}
+	if err := p.failed["f"+raw]; err != nil {
+		return nil, err
+	}
+	entries, err := p.evalList(raw, pending)
+	if errors.Is(err, ErrNotRead) {
+		p.failed["f"+raw] = err
+	}
+	return entries, err
+}
+
+// evalList reads a crt-list and evaluates its lines.
+func (p *parser) evalList(raw string, pending int) ([]listEntry, error) {
 	lines, err := p.readList(raw)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// Every line becomes a server of this bind: a list over the bound is refused before its
 	// entries are looked at.
 	if err := p.fits(pending, len(lines)); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	entries := make([]listEntry, 0, len(lines))
 	for i := range lines {
@@ -808,7 +873,7 @@ func (p *parser) crtList(w word, pending int) ([]listEntry, *Pair, error) {
 		} else {
 			d, err := p.readDir(path)
 			if err != nil {
-				return nil, nil, err
+				return nil, err
 			}
 			if d.isDir {
 				// HAProxy refuses a directory in a crt-list (Ruling 10).
@@ -820,7 +885,7 @@ func (p *parser) crtList(w word, pending int) ([]listEntry, *Pair, error) {
 		entries = append(entries, e)
 	}
 	p.lists[raw] = entries
-	return entries, nil, nil
+	return entries, nil
 }
 
 // fits says whether n more servers, after pending ones of the bind, stay within MaxServers.

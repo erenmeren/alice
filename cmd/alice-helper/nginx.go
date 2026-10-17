@@ -256,7 +256,7 @@ func (s *sys) authenticate(secs []nginxconf.Section, confPath string) ([]string,
 		if reason != "" {
 			return nil, masked(untrusted(reason, sec.File))
 		}
-		if int(st.Uid) != s.rootUID || st.Mode&0o022 != 0 {
+		if s.userWritable(st) {
 			writable = append(writable, sec.File)
 		}
 	}

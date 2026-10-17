@@ -43,11 +43,14 @@ func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
 	}
 }
 
-// MarkWritable makes every supported or pending pair unsupported config_file_writable. The root
-// helper calls it when haproxy.cfg or a read crt-list can be changed by a user other than root:
-// crt-base and the global settings reach the whole configuration, so the rule is Apache's coarse
-// one (Ruling 4). A pending pair is no longer pending, so a later ResolveKeys never makes it
-// supported (review R2), and loses its unresolved Key (review S2).
+// MarkWritable makes every supported, pending or conditional pair unsupported
+// config_file_writable. The root helper calls it when haproxy.cfg or a read crt-list can be
+// changed by a user other than root: crt-base and the global settings reach the whole
+// configuration, so the rule is Apache's coarse one (Ruling 4), and a conditional pair of such a
+// configuration is shown with the same reason (review M6 of Task 6). A pending pair is no longer
+// pending, so a later ResolveKeys never makes it supported (review R2), and loses its unresolved
+// Key (review S2). A pair with another reason (variable, path_not_allowed, unknown_keyword)
+// keeps it.
 func MarkWritable(c *Config) {
 	for i := range c.Servers {
 		for j := range c.Servers[i].Pairs {
@@ -57,6 +60,8 @@ func MarkWritable(c *Config) {
 				*p = Pair{CertRaw: p.CertRaw, Cert: p.Cert, Unsupported: ReasonConfigFileWritable}
 			case p.Unsupported == "":
 				p.Unsupported = ReasonConfigFileWritable
+			case p.Unsupported == ReasonConditional:
+				*p = Pair{CertRaw: p.CertRaw, Unsupported: ReasonConfigFileWritable}
 			}
 		}
 	}

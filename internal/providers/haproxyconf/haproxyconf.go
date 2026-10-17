@@ -46,6 +46,11 @@ const (
 // WarnListTruncated is Config.Warnings' code for a list cut at its bound (providers.WarnListTruncated).
 const WarnListTruncated = "list_truncated"
 
+// WarnConfigFileNotRead is Config.Warnings' code for a crt-list or crt directory that could not
+// be read (ErrNotRead) where every naming of it lies in an uncertain region: its pairs are
+// conditional, or there are none (review I2 of Task 6).
+const WarnConfigFileNotRead = "config_file_not_read"
+
 // Errors.
 var (
 	ErrTooLarge    = errors.New("haproxyconf: the input is larger than 20 MiB")
@@ -54,6 +59,12 @@ var (
 	ErrTooDeep     = errors.New("haproxyconf: .if blocks are nested deeper than 100 levels")
 	ErrSyntax      = errors.New("haproxyconf: an unterminated quote, an unknown escape, a malformed crt-list line or an unbalanced .if block")
 	ErrNUL         = errors.New("haproxyconf: the configuration contains a NUL byte")
+	// ErrNotRead is for the callbacks: an error wrapping it says the path could not be read
+	// (absent, not a regular file, not root-controlled, a listing error), as opposed to a bound.
+	// Parse then makes a naming in an uncertain region one conditional pair (and warns
+	// WarnConfigFileNotRead) and fails only for a naming in an active region: "-c" may have
+	// skipped an uncertain one (review I2 of Task 6).
+	ErrNotRead = errors.New("haproxyconf: a file the configuration names could not be read")
 )
 
 // Reasons a pair is not supported (spec §8).

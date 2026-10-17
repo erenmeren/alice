@@ -208,7 +208,7 @@ func (s *sys) readApacheFiles(tree []apacheconf.Included) (map[string][]byte, []
 		}
 		total += len(data)
 		files[e.Path] = data
-		if int(st.Uid) != s.rootUID || st.Mode&0o022 != 0 {
+		if s.userWritable(st) {
 			writable = append(writable, e.Path)
 		}
 	}

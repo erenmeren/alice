@@ -391,12 +391,12 @@ func TestHAProxyDumpWritableConfigMarksEveryPair(t *testing.T) {
 	}
 	assert.Equal(t, []any{}, m["files"], "no pair is supported, so no file is described")
 
-	t.Run("a writable haproxy.cfg, then a missing crt-list", func(t *testing.T) {
+	t.Run("a writable crt-list, then a missing crt-list", func(t *testing.T) {
 		w := newHAProxyWorld(t)
-		require.NoError(t, os.Chmod(w.f.host(haproxyConfPath), 0o666))
-		require.NoError(t, os.Remove(w.f.host(haproxyList)))
+		require.NoError(t, os.Chmod(w.f.host(haproxyList), 0o666))
+		w.f.write(haproxyConfPath, haproxyCfg+"frontend fe_two\n    bind :9445 ssl crt-list /etc/haproxy/lists/gone.lst\n", 0o644)
 		class, reason, file := w.refusal(t)
-		assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, haproxyConfPath}, []string{class, reason, file})
+		assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, haproxyList}, []string{class, reason, file})
 	})
 	t.Run("a writable haproxy.cfg, then a parse failure", func(t *testing.T) {
 		w := newHAProxyWorld(t)
@@ -404,15 +404,100 @@ func TestHAProxyDumpWritableConfigMarksEveryPair(t *testing.T) {
 		class, reason, file := w.refusal(t)
 		assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, haproxyConfPath}, []string{class, reason, file})
 	})
-	t.Run("a writable haproxy.cfg, then a directory with too many entries", func(t *testing.T) {
+	// Review I1: nothing a writable haproxy.cfg names is read, so a missing crt-list or a huge
+	// directory changes nothing: each naming is one config_file_writable pair of its text.
+	t.Run("a writable haproxy.cfg naming a missing crt-list and a huge directory", func(t *testing.T) {
 		w := newHAProxyWorld(t)
 		w.f.mkdir("/etc/haproxy/big", 0o755)
 		for i := range haproxyconf.MaxDirEntries + 1 {
 			w.f.write(fmt.Sprintf("/etc/haproxy/big/%04d.pem", i), "", 0o644)
 		}
-		w.f.write(haproxyConfPath, "frontend f\n    bind :9443 ssl crt /etc/haproxy/big\n", 0o666)
+		require.NoError(t, os.Remove(w.f.host(haproxyList)))
+		w.f.write(haproxyConfPath, "frontend f\n    bind :9443 ssl crt /etc/haproxy/big crt-list "+haproxyList+"\n", 0o666)
+		code, m := w.dump(t)
+		require.Equal(t, 0, code, "%v", m)
+		assert.Equal(t, true, m["config_valid"], "%v", m)
+		assert.Equal(t, []any{haproxyConfPath}, m["writable"])
+		assert.Equal(t, []map[string]any{
+			{"cert": "", "key": "", "inherited": false, "unsupported": haproxyconf.ReasonConfigFileWritable, "raw": "/etc/haproxy/big"},
+			{"cert": "", "key": "", "inherited": false, "unsupported": haproxyconf.ReasonConfigFileWritable, "raw": haproxyList},
+		}, serverPairs(asList(m["servers"])[0]))
+		assert.NotContains(t, w.f.out.String(), "0000.pem")
+	})
+}
+
+// Review I1 (the reviewer's cases): a haproxy.cfg a user other than root can change names
+// root-only files and directories, actively or in a region "-c" skips. The helper walks, lists
+// and opens none of them, and no line or entry name of theirs reaches the answer; only the text
+// the user wrote in haproxy.cfg does.
+func TestHAProxyDumpWritableConfigReadsNothingItNames(t *testing.T) {
+	for name, cfg := range map[string]string{
+		"in .if defined(X)": ".if defined(NEVER_SET)\nfrontend z\n    bind :9445 ssl crt-list /root/notes crt /root/keys\n.endif\n",
+		"active":            "frontend z\n    bind :9445 ssl crt-list /root/notes crt /root/keys\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newHAProxyWorld(t)
+			w.f.mkdir("/root/keys", 0o700)
+			w.f.write("/root/notes", "/s3cr3t-line-one\nTOPSECRET_two\n", 0o600)
+			w.f.write("/root/keys/db-password.txt", "hunter2", 0o600)
+			w.f.write("/root/keys/id_ed25519", "k", 0o600)
+			w.f.write(haproxyConfPath, haproxyCfg+cfg, 0o666)
+			seen := w.recordOpens()
+			code, m := w.dump(t)
+			require.Equal(t, 0, code, "%v", m)
+			assert.Equal(t, true, m["config_valid"], "%v", m)
+			assert.Zero(t, w.walked["root"], "/root is never walked: %v", w.walked)
+			for _, p := range *seen {
+				assert.NotContains(t, p, "/root", "opened %s", p)
+			}
+			out := w.f.out.String()
+			for _, secret := range []string{"s3cr3t", "TOPSECRET", "db-password", "id_ed25519", "hunter2"} {
+				assert.NotContains(t, out, secret)
+			}
+			servers := asList(m["servers"])
+			z := servers[len(servers)-1]
+			assert.Equal(t, []map[string]any{
+				{"cert": "", "key": "", "inherited": false, "unsupported": haproxyconf.ReasonConfigFileWritable, "raw": "/root/notes"},
+				{"cert": "", "key": "", "inherited": false, "unsupported": haproxyconf.ReasonConfigFileWritable, "raw": "/root/keys"},
+			}, serverPairs(z))
+			assert.Equal(t, []any{}, m["files"])
+		})
+	}
+}
+
+// Review I2: a crt-list named only in a region "-c" may have skipped, and absent, gives a
+// conditional pair and config_file_not_read; the rest of the dump stands. An active naming of
+// the same file still makes the configuration untrusted.
+func TestHAProxyDumpMissingCrtListInUncertainRegion(t *testing.T) {
+	staging := ".if defined(STAGING)\nfrontend z\n    bind :9445 ssl crt-list /etc/haproxy/lists/staging.lst\n.endif\n"
+	w := newHAProxyWorld(t)
+	w.f.write(haproxyConfPath, haproxyCfg+staging, 0o644)
+	code, m := w.dump(t)
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, true, m["config_valid"], "%v", m)
+	assert.Equal(t, []any{haproxyconf.WarnConfigFileNotRead}, m["warnings"])
+	servers := asList(m["servers"])
+	require.Len(t, servers, 3)
+	assert.Equal(t, []map[string]any{
+		{"cert": "", "key": "", "inherited": false, "unsupported": haproxyconf.ReasonConditional, "raw": "/etc/haproxy/lists/staging.lst"},
+	}, serverPairs(servers[2]))
+	assert.Len(t, m["files"], 6, "the other frontends are described as before")
+
+	t.Run("also named actively", func(t *testing.T) {
+		w := newHAProxyWorld(t)
+		w.f.write(haproxyConfPath, haproxyCfg+staging+"frontend y\n    bind :9446 ssl crt-list /etc/haproxy/lists/staging.lst\n", 0o644)
 		class, reason, file := w.refusal(t)
-		assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, haproxyConfPath}, []string{class, reason, file})
+		assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonMissing, "/etc/haproxy/lists/staging.lst"}, []string{class, reason, file})
+	})
+	t.Run("a bound is never softened", func(t *testing.T) {
+		old := haproxyReadBudget
+		defer func() { haproxyReadBudget = old }()
+		w := newHAProxyWorld(t)
+		w.f.write("/etc/haproxy/lists/staging.lst", strings.Repeat("#\n", 100), 0o644)
+		w.f.write(haproxyConfPath, haproxyCfg+staging, 0o644)
+		haproxyReadBudget = len(haproxyCfg) + len(staging) + len(haproxyListText) + 10
+		class, reason, _ := w.refusal(t)
+		assert.Equal(t, []string{helperproto.ConfigErrUnsupported, helperproto.ConfigReasonTooLarge}, []string{class, reason})
 	})
 }
 
@@ -740,37 +825,65 @@ func TestHAProxyDumpOutputBudget(t *testing.T) {
 	assert.Equal(t, helperproto.CodeOutputTooLarge, m["code"])
 }
 
+// outcome summarizes a dump: the error code, "valid" (with the writable files), or the
+// configuration error's class/reason.
+func outcome(code int, m map[string]any) string {
+	switch {
+	case code != 0:
+		return fmt.Sprint(m["code"])
+	case m["config_valid"] == true:
+		return fmt.Sprintf("valid writable=%v warnings=%v", m["writable"], m["warnings"])
+	}
+	return fmt.Sprintf("%v/%v", m["config_error"], m["config_error_reason"])
+}
+
+// Every outcome of a dump leaves the whole fixture root as it was: (path, size, mtime, mode) are
+// compared around each run, and each run is checked to be the outcome it is meant to be (review M5).
 func TestHAProxyDumpWritesNothing(t *testing.T) {
 	w := newHAProxyWorld(t)
 	w.f.mkdir(haproxyConfDir, 0o755)
 	w.f.write(haproxyConfDir+"/extra.cfg", "frontend x\n", 0o644)
 	require.NoError(t, os.Chmod(w.f.host("/etc/haproxy/certs/b.pem.key"), 0o644)) // a key others can read
-	before := snapshot(t, w.f.root)
-	outcomes := []func(){
-		func() {},
-		func() { w.set(haproxyArgsC, apacheAnswer{err: exitStatus(2)}) },
-		func() { w.set(haproxyArgsC, apacheAnswer{err: exitStatus(1)}) },
-		func() { w.set(haproxyArgsC, apacheAnswer{}) },
-		func() { require.NoError(t, os.Chmod(w.f.host(haproxyList), 0o666)) },
-		func() { require.NoError(t, os.Chmod(w.f.host(haproxyList), 0o644)) },
-		func() { require.NoError(t, os.Chmod(w.f.host(haproxyConfPath), 0o666)) },
-		func() { require.NoError(t, os.Chmod(w.f.host(haproxyConfPath), 0o644)) },
-		func() { require.NoError(t, os.Chmod(w.f.host("/etc/haproxy/lists"), 0o775)) },
-		func() { require.NoError(t, os.Chmod(w.f.host("/etc/haproxy/lists"), 0o755)) },
-		func() { require.NoError(t, os.Chmod(w.f.host(haproxyConfDir), 0o777)) },
-		func() { require.NoError(t, os.Chmod(w.f.host(haproxyConfDir), 0o755)) },
-		func() { w.set(haproxyArgsV, apacheAnswer{err: &programError{path: haproxyPath}}) },
-		func() { w.set(haproxyArgsV, apacheAnswer{out: haproxyV}) },
-		func() { w.set(haproxyArgsC, apacheAnswer{err: fmt.Errorf("%w", errProgramKilled)}) },
-		func() { w.set(haproxyArgsV, apacheAnswer{err: fs.ErrNotExist}) },
+	chmod := func(guest string, mode os.FileMode) func() {
+		return func() { require.NoError(t, os.Chmod(w.f.host(guest), mode)) }
 	}
-	for i, change := range outcomes {
-		change()
+	cfg := func(text string) func() { return func() { w.f.write(haproxyConfPath, text, 0o644) } }
+	dirNote := fmt.Sprintf("[%s %s]", helperproto.WarnConfigDirNotRead, helperproto.WarnKeyGroupOpen)
+	writableNote := fmt.Sprintf(" warnings=[%s %s]", helperproto.WarnConfigDirNotRead, helperproto.WarnConfigFileWritable)
+	for i, o := range []struct {
+		change func()
+		want   string
+	}{
+		{func() {}, "valid writable=[] warnings=" + dirNote},
+		{func() { w.set(haproxyArgsC, apacheAnswer{err: exitStatus(2)}) }, "valid writable=[] warnings=" + dirNote},
+		{func() { w.set(haproxyArgsC, apacheAnswer{err: exitStatus(1)}) }, "syntax/"},
+		{func() { w.set(haproxyArgsC, apacheAnswer{}) }, "valid writable=[] warnings=" + dirNote},
+		{chmod(haproxyList, 0o666), "valid writable=[" + haproxyList + "]" + writableNote},
+		{chmod(haproxyList, 0o644), "valid writable=[] warnings=" + dirNote},
+		{chmod(haproxyConfPath, 0o666), "valid writable=[" + haproxyConfPath + "]" + writableNote},
+		{chmod(haproxyConfPath, 0o644), "valid writable=[] warnings=" + dirNote},
+		{chmod("/etc/haproxy/lists", 0o775), "untrusted/not_root_controlled"},
+		{chmod("/etc/haproxy/lists", 0o755), "valid writable=[] warnings=" + dirNote},
+		{chmod(haproxyConfDir, 0o777), "valid writable=[] warnings=" + dirNote},
+		{chmod(haproxyConfDir, 0o755), "valid writable=[] warnings=" + dirNote},
+		{cfg(haproxyCfg + "frontend g\n    bind :1 ssl crt-list /etc/haproxy/lists/gone.lst\n"), "untrusted/missing"},
+		{cfg(haproxyCfg + ".if defined(X)\nfrontend g\n    bind :1 ssl crt-list /etc/haproxy/lists/gone.lst\n.endif\n"),
+			"valid writable=[] warnings=[" + haproxyconf.WarnConfigFileNotRead + " " + helperproto.WarnConfigDirNotRead + " " + helperproto.WarnKeyGroupOpen + "]"},
+		{cfg(haproxyCfg + "frontend g\n    bind :1 ssl crt \"/x\n"), "syntax/"},
+		{cfg(strings.Repeat(".if 1\n", haproxyconf.MaxDepth+1) + strings.Repeat(".endif\n", haproxyconf.MaxDepth+1)), "unsupported/too_complex"},
+		{cfg(haproxyCfg), "valid writable=[] warnings=" + dirNote},
+		{func() { w.set(haproxyArgsV, apacheAnswer{err: &programError{path: haproxyPath}}) }, "untrusted/not_root_controlled"},
+		{func() { w.set(haproxyArgsV, apacheAnswer{out: haproxyV}) }, "valid writable=[] warnings=" + dirNote},
+		{func() { w.set(haproxyArgsC, apacheAnswer{err: fmt.Errorf("%w", errProgramKilled)}) }, helperproto.CodeIOError},
+		{func() { w.set(haproxyArgsV, apacheAnswer{err: fs.ErrNotExist}) }, helperproto.CodeSoftwareNotFound},
+	} {
+		o.change()
+		before := snapshot(t, w.f.root)
 		code, m := w.dump(t)
-		assert.NotEqual(t, helperproto.ExitRefused, code, "outcome %d: %v", i, m)
+		assert.Equal(t, o.want, outcome(code, m), "outcome %d", i)
+		// The ctime is not compared.
+		assert.Equal(t, before, snapshot(t, w.f.root), "outcome %d wrote something", i)
 	}
-	// The chmod round trips restored every mode; the ctime is not compared.
-	assert.Equal(t, before, snapshot(t, w.f.root))
 }
 
 func TestHAProxyParseError(t *testing.T) {
@@ -864,4 +977,21 @@ func measurePeak(f func()) uint64 {
 	close(done)
 	wg.Wait()
 	return top.Load()
+}
+
+// Review M2: keyInCert reads at most MaxServerFiles certificates (what finishDump describes);
+// past that the answer is false without a read.
+func TestHAProxyDumpKeyInCertIsBounded(t *testing.T) {
+	w := newHAProxyWorld(t)
+	w.f.mkdir("/etc/haproxy/many", 0o755)
+	for i := range helperproto.MaxServerFiles + 1 {
+		w.f.write(fmt.Sprintf("/etc/haproxy/many/%04d.pem", i), "", 0o644)
+	}
+	w.f.write(haproxyConfPath, "frontend f\n    bind :9443 ssl crt /etc/haproxy/many\n", 0o644)
+	seen := w.recordOpens()
+	code, m := w.dump(t)
+	require.Equal(t, 0, code, "%v", m)
+	last := fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles)
+	assert.NotContains(t, *seen, last, "the certificate past the bound is never opened")
+	assert.Contains(t, *seen, fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles-1))
 }
