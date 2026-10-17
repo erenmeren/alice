@@ -488,11 +488,11 @@ func TestDeployOutcomeTable(t *testing.T) {
 			}
 			switch w.files {
 			case "old":
-				assert.Equal(t, string(e.leaf.FullchainPEM), string(e.emu.DumpFile(wwwCert)), "the old certificate file is in place")
-				assert.Equal(t, string(e.leaf.KeyPEM), string(e.emu.DumpFile(wwwKey)), "the old key file is in place")
+				assert.Equal(t, string(e.leaf.FullchainPEM), string(e.emu.NginxFile(wwwCert)), "the old certificate file is in place")
+				assert.Equal(t, string(e.leaf.KeyPEM), string(e.emu.NginxFile(wwwKey)), "the old key file is in place")
 			case "new":
-				assert.Equal(t, string(nw.FullchainPEM), string(e.emu.DumpFile(wwwCert)), "the new certificate file is in place")
-				assert.Equal(t, string(nw.KeyPEM), string(e.emu.DumpFile(wwwKey)), "the new key file is in place")
+				assert.Equal(t, string(nw.FullchainPEM), string(e.emu.NginxFile(wwwCert)), "the new certificate file is in place")
+				assert.Equal(t, string(nw.KeyPEM), string(e.emu.NginxFile(wwwKey)), "the new key file is in place")
 			}
 			cmds := strings.Join(e.srv.Commands()[before:], "\n")
 			if w.noDeploySent {
@@ -915,11 +915,11 @@ func TestRollbackOutcomeTable(t *testing.T) {
 			}
 			switch w.files {
 			case "old":
-				assert.Equal(t, string(e.leaf.FullchainPEM), string(e.emu.DumpFile(wwwCert)))
-				assert.Equal(t, string(e.leaf.KeyPEM), string(e.emu.DumpFile(wwwKey)))
+				assert.Equal(t, string(e.leaf.FullchainPEM), string(e.emu.NginxFile(wwwCert)))
+				assert.Equal(t, string(e.leaf.KeyPEM), string(e.emu.NginxFile(wwwKey)))
 			case "new":
-				assert.Equal(t, string(nw.FullchainPEM), string(e.emu.DumpFile(wwwCert)))
-				assert.Equal(t, string(nw.KeyPEM), string(e.emu.DumpFile(wwwKey)))
+				assert.Equal(t, string(nw.FullchainPEM), string(e.emu.NginxFile(wwwCert)))
+				assert.Equal(t, string(nw.KeyPEM), string(e.emu.NginxFile(wwwKey)))
 			}
 			var logged []string
 			for _, l := range log.list() {

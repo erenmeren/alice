@@ -386,7 +386,7 @@ func leafOf(t *testing.T, chain []byte) string {
 // the certificate the record claims (want: e.old or e.nw), and that the website serves exactly it.
 func (e *env) assertPair(s *server, certPath, keyPath, sni string, want pki.Leaf) {
 	e.t.Helper()
-	certPEM, keyPEM := s.emu.DumpFile(certPath), s.emu.DumpFile(keyPath)
+	certPEM, keyPEM := s.emu.NginxFile(certPath), s.emu.NginxFile(keyPath)
 	_, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(e.t, err, "the files on the server are a matching pair, never mixed")
 	assert.Equal(e.t, pki.Fingerprint(want.Cert), leafOf(e.t, certPEM), "the certificate file holds what the record claims")

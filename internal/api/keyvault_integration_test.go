@@ -118,7 +118,7 @@ func TestKeyVaultJourney(t *testing.T) {
 		f             *nginxFixture
 		cert, key, sn string
 	}{{k.f, wwwCert, wwwKey, wwwName}, {b, apiCert, apiKey, apiName}} {
-		certPEM, keyPEM := w.f.emu.DumpFile(w.cert), w.f.emu.DumpFile(w.key)
+		certPEM, keyPEM := w.f.emu.NginxFile(w.cert), w.f.emu.NginxFile(w.key)
 		require.NotEmpty(t, keyPEM)
 		assert.Equal(t, pki.Fingerprint(want), w.f.served(w.sn), "the website serves the renewed leaf")
 		assert.Equal(t, 2, strings.Count(string(certPEM), "BEGIN CERTIFICATE"), "the installed file holds the leaf and the vault's intermediate")

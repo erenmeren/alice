@@ -259,7 +259,7 @@ func (e *env) req(t *testing.T, leaf pki.Leaf) providers.DeployRequest {
 	return providers.DeployRequest{
 		OperationID:      e.op,
 		Location:         e.location(t),
-		ExpectCertSHA256: hexSHA(e.emu.DumpFile(wwwCert)),
+		ExpectCertSHA256: hexSHA(e.emu.NginxFile(wwwCert)),
 		CertificatePEM:   leaf.FullchainPEM,
 		PrivateKeyPEM:    secrets.NewPlaintext(append([]byte(nil), leaf.KeyPEM...)),
 		Fingerprint:      pki.Fingerprint(leaf.Cert),

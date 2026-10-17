@@ -438,7 +438,7 @@ func (f *nginxFixture) served(name string) string { return f.emu.Served(443, nam
 // the website serves exactly it: the record, the files and the served certificate agree.
 func (f *nginxFixture) requirePair(t *testing.T, certPath, keyPath, sni string, want pki.Leaf) {
 	t.Helper()
-	certPEM, keyPEM := f.emu.DumpFile(certPath), f.emu.DumpFile(keyPath)
+	certPEM, keyPEM := f.emu.NginxFile(certPath), f.emu.NginxFile(keyPath)
 	pair, err := tls.X509KeyPair(certPEM, keyPEM)
 	require.NoError(t, err, "the files on the server are a matching pair, never mixed")
 	leaf, err := x509.ParseCertificate(pair.Certificate[0])

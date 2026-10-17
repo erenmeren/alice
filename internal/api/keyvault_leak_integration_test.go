@@ -370,8 +370,8 @@ func TestSecretLeakSuiteWithAzureCanaries(t *testing.T) {
 	}
 	assert.Equal(t, pki.Fingerprint(k.kv.Leaf("web-cert", webV)), k.f.served(wwwName))
 	assert.Equal(t, pki.Fingerprint(k.kv.Leaf("pem-cert", pemV)), b.served(apiName))
-	assert.Equal(t, 2, strings.Count(string(k.f.emu.DumpFile(wwwCert)), "BEGIN CERTIFICATE"), "PFX deployment: leaf and intermediate installed")
-	assert.Equal(t, 2, strings.Count(string(b.emu.DumpFile(apiCert)), "BEGIN CERTIFICATE"), "PEM deployment: leaf and intermediate installed")
+	assert.Equal(t, 2, strings.Count(string(k.f.emu.NginxFile(wwwCert)), "BEGIN CERTIFICATE"), "PFX deployment: leaf and intermediate installed")
+	assert.Equal(t, 2, strings.Count(string(b.emu.NginxFile(apiCert)), "BEGIN CERTIFICATE"), "PEM deployment: leaf and intermediate installed")
 	assert.Equal(t, managedKeys, k.count("managed_private_keys"), "a Key Vault deployment seals no private key of its own")
 	assert.Equal(t, 2, secretReads(k.kv))
 	c.after("J2 deployments of a PFX and a PEM secret")

@@ -119,8 +119,8 @@ func (w *world) restore(op string) Response {
 
 func (w *world) assertPair(t *testing.T, leaf pki.Leaf) {
 	t.Helper()
-	assert.Equal(t, string(leaf.FullchainPEM), string(w.e.DumpFile(crt)))
-	assert.Equal(t, string(leaf.KeyPEM), string(w.e.DumpFile(key)))
+	assert.Equal(t, string(leaf.FullchainPEM), string(w.e.NginxFile(crt)))
+	assert.Equal(t, string(leaf.KeyPEM), string(w.e.NginxFile(key)))
 }
 
 // padded is a certificate file over the size limit that still loads (text outside PEM blocks is ignored).
@@ -341,8 +341,8 @@ func TestEmulatedHangupAndKill(t *testing.T) {
 	assert.False(t, st.Active)
 	assert.Equal(t, hexSum(w.old.FullchainPEM), st.CurrentCertSHA256)
 	assert.Equal(t, hexSum(w.nw.FullchainPEM), st.NewCertSHA256)
-	assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key), "the key was replaced, the certificate not: a mixed pair")
-	assert.Equal(t, w.old.FullchainPEM, w.e.DumpFile(crt))
+	assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key), "the key was replaced, the certificate not: a mixed pair")
+	assert.Equal(t, w.old.FullchainPEM, w.e.NginxFile(crt))
 	r = w.restore(emuOp)
 	require.Equal(t, 0, r.Exit, string(r.Stdout))
 	assert.Equal(t, helperproto.PhaseRestored, decode[helperproto.NginxRestoreResponse](t, r).Phase)
@@ -454,11 +454,11 @@ func TestEmulatedFailedStepsAreRolledBack(t *testing.T) {
 			case "new":
 				w.assertPair(t, w.nw)
 			case "mixed":
-				assert.Equal(t, w.old.FullchainPEM, w.e.DumpFile(crt))
-				assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key))
+				assert.Equal(t, w.old.FullchainPEM, w.e.NginxFile(crt))
+				assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key))
 			case "foreign":
-				assert.Equal(t, "someone else's", string(w.e.DumpFile(crt)))
-				assert.Equal(t, w.old.KeyPEM, w.e.DumpFile(key), "this transaction's own key is put back")
+				assert.Equal(t, "someone else's", string(w.e.NginxFile(crt)))
+				assert.Equal(t, w.old.KeyPEM, w.e.NginxFile(key), "this transaction's own key is put back")
 			}
 			assert.Equal(t, pki.Fingerprint(w.old.Cert), w.e.Served(443, "www.example.test"), "no failed deployment changed what Nginx serves")
 			// The status says what the answer said.
@@ -485,7 +485,7 @@ func TestEmulatedWriteFailureOfTheCertificateOnly(t *testing.T) {
 	assert.Equal(t, helperproto.PhaseRestored, resp.Phase, "%+v", resp)
 	assert.Equal(t, helperproto.StepWriteCert, resp.FailedStep)
 	assert.Equal(t, stepFailed("write_cert", ""), resp.Steps[2])
-	assert.Equal(t, w.old.KeyPEM, w.e.DumpFile("/etc/nginx/key/a.key"))
+	assert.Equal(t, w.old.KeyPEM, w.e.NginxFile("/etc/nginx/key/a.key"))
 }
 
 func TestEmulatedRestoreRefusals(t *testing.T) {
@@ -501,7 +501,7 @@ func TestEmulatedRestoreRefusals(t *testing.T) {
 	r := w.restore(emuOp)
 	assert.Equal(t, helperproto.ExitPrecondition, r.Exit)
 	assert.Equal(t, helperproto.CodeHashMismatch, codeOf(t, r))
-	assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key))
+	assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key))
 	assert.Equal(t, helperproto.PhaseRestoreFailed, w.status(emuOp).Phase)
 	assert.Equal(t, helperproto.RestoreErrFileChanged, w.status(emuOp).Error)
 	// The same refusal again changes nothing.
@@ -545,7 +545,7 @@ func TestEmulatedSupersededRule(t *testing.T) {
 	require.Equal(t, 0, r.Exit)
 	r = w.restore(emuOp2)
 	require.Equal(t, 0, r.Exit, string(r.Stdout))
-	assert.Equal(t, w.nw.KeyPEM, w.e.DumpFile(key))
+	assert.Equal(t, w.nw.KeyPEM, w.e.NginxFile(key))
 }
 
 func TestEmulatedSupersededResentDeployment(t *testing.T) {
@@ -628,7 +628,7 @@ func TestEmulatedServedFollowsReloadsAndOtherListeners(t *testing.T) {
 	w.e.NoopReload(true)
 	require.Equal(t, 0, w.deploy(emuOp).Exit)
 	assert.Equal(t, oldFP, w.e.Served(443, "www.example.test"))
-	assert.Equal(t, w.nw.FullchainPEM, w.e.DumpFile(crt))
+	assert.Equal(t, w.nw.FullchainPEM, w.e.NginxFile(crt))
 	w.e.NoopReload(false)
 
 	// Something else answers on the port (F-06).
@@ -921,7 +921,7 @@ func TestEmulatedNginxDumpRefusalsSayWhyAndWhere(t *testing.T) {
 		{"empty dump", func(e *Emulator) { e.SetNginxDump("") }, "untrusted", helperproto.ConfigReasonWrongFirstFile, ""},
 		{"changed", func(e *Emulator) {
 			e.SetNginxDump(e.nx.dumpOutput())
-			e.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.DumpFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
+			e.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.NginxFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
 		}, "untrusted", helperproto.ConfigReasonChanged, "/etc/nginx/conf.d/emu.conf"},
 		{"no line feed after the file", func(e *Emulator) { e.SetNginxDump(strings.TrimSuffix(e.nx.dumpOutput(), "\n")) },
 			"untrusted", helperproto.ConfigReasonChanged, "/etc/nginx/conf.d/emu.conf"},

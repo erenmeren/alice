@@ -253,7 +253,7 @@ func TestDiscoverConfigurationErrorsAreResults(t *testing.T) {
 		}, providers.ConfigErrUntrusted, providers.ConfigReasonWrongFirstFile, "/etc/nginx/other.conf", confPath},
 		{"changed", func(e *env) {
 			e.emu.SetNginxDump(e.emu.NginxDumpText())
-			e.emu.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.emu.DumpFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
+			e.emu.SetNginxFile("/etc/nginx/conf.d/emu.conf", append(e.emu.NginxFile("/etc/nginx/conf.d/emu.conf"), '#', '\n'))
 		}, providers.ConfigErrUntrusted, providers.ConfigReasonChanged, "/etc/nginx/conf.d/emu.conf", confPath},
 		{"special file system", func(e *env) {
 			e.emu.SetFileProblem("/etc/nginx/conf.d/emu.conf", helperproto.FileSpecialFS)
