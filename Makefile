@@ -23,23 +23,25 @@ test: ## Run Go unit tests with the race detector (release build, plus the e2e a
 test-integration: ## Run integration tests (needs Docker)
 	ALICE_REQUIRE_FLEET=1 go test -race -count=1 -timeout 45m -tags integration ./...
 
-# The real-Nginx and real-Apache matrices install the release-built helper (make helper) through the
-# nginx or apache profile's setup script, which checks it against the checksums linked into the test
-# binary exactly as make build links them into alice. They run only here (ALICE_REAL_MATRIX=1; make
-# coverage skips them). Apache is installed in the images but never started (discovery only). Each
+# The real-Nginx, real-Apache and real-HAProxy matrices install the release-built helper (make
+# helper) through the nginx, apache or haproxy profile's setup script, which checks it against the
+# checksums linked into the test binary exactly as make build links them into alice. They run only
+# here (ALICE_REAL_MATRIX=1; make coverage skips them). Apache and HAProxy are installed in the
+# images but never started (discovery only). Each
 # matrix line runs verbose and fails unless its test PASSED: a -run pattern that matches no test
 # ("[no tests to run]", which go test calls ok) or a skipped test fails the line. RUN, PAUSE, CONT
 # and passing subtest lines are not printed.
 SSH_MATRIX_PASSED = 2>&1 | awk -v t=$(1) '!/^=== |^ +--- PASS/ { print } /no tests to run/ || $$0 ~ "^--- SKIP: " t { bad = 1 } $$0 ~ "^--- PASS: " t " " { ok = 1 } END { exit bad || !ok }'
 
 .PHONY: test-ssh
-test-ssh: helper ## Run the real OpenSSH, Nginx and Apache matrices (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits them
+test-ssh: helper ## Run the real OpenSSH, Nginx, Apache and HAProxy matrices (Ubuntu 22.04, Debian 12, Rocky 9; needs Docker). ALICE_SSH_IMAGES=ubuntu22 limits them
 	@for sum in '$(call HELPER_SUM,amd64)' '$(call HELPER_SUM,arm64)'; do \
 	  echo "$$sum" | grep -Eqx '[0-9a-f]{64}' || { echo "bin/alice-helper.sha256 lacks a helper checksum; run make helper"; exit 1; }; \
 	done
 	set -o pipefail; go test -count=1 -v -tags integration -run '^TestRealOpenSSH$$' ./internal/providers/linuxssh/ $(call SSH_MATRIX_PASSED,TestRealOpenSSH)
 	set -o pipefail; ALICE_REAL_MATRIX=1 go test -count=1 -v -timeout 30m -tags integration -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealNginx' ./internal/providers/nginx/ $(call SSH_MATRIX_PASSED,TestRealNginx)
 	set -o pipefail; ALICE_REAL_MATRIX=1 go test -count=1 -v -timeout 30m -tags integration -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealApache' ./internal/providers/apache/ $(call SSH_MATRIX_PASSED,TestRealApache)
+	set -o pipefail; ALICE_REAL_MATRIX=1 go test -count=1 -v -timeout 30m -tags integration -ldflags "$(HELPER_LDFLAGS)" -run '^TestRealHAProxy' ./internal/providers/haproxy/ $(call SSH_MATRIX_PASSED,TestRealHAProxy)
 
 .PHONY: test-release
 test-release: ## Release harness: install, backup/restore drill, update and rollback in Ubuntu 22.04, Debian 12, Rocky 9 containers (Docker; no Playwright meanwhile; ~30 min)

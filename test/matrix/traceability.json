@@ -808,7 +808,8 @@
    "internal/providers/nginx:TestDiscoverWithoutNginxFails",
    "internal/providers/apache:TestDiscoverWithoutApacheFails",
    "internal/providers/haproxy:TestDiscoverWithoutHAProxyFails",
-   "internal/providers/apache:TestRealApache"
+   "internal/providers/apache:TestRealApache",
+   "internal/providers/haproxy:TestRealHAProxy"
   ]
  },
  {

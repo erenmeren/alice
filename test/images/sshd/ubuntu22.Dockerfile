@@ -1,6 +1,7 @@
-# Real OpenSSH, Nginx and Apache target (spec §22.3) for internal/providers/linuxssh/containers_integration_test.go
-# (TestRealOpenSSH), internal/providers/nginx/containers_integration_test.go (TestRealNginx) and
-# internal/providers/apache/containers_integration_test.go (TestRealApache).
+# Real OpenSSH, Nginx, Apache and HAProxy target (spec §22.3) for internal/providers/linuxssh/containers_integration_test.go
+# (TestRealOpenSSH), internal/providers/nginx/containers_integration_test.go (TestRealNginx),
+# internal/providers/apache/containers_integration_test.go (TestRealApache) and
+# internal/providers/haproxy/containers_integration_test.go (TestRealHAProxy).
 # Build context: test/images. alice-helper and the setup script are installed by the tests, not by
 # the image. Nginx is the distribution's package (with its stream and mail modules) and its default
 # configuration, untouched and not started (TestRealNginx starts it). ssl-cert brings Debian's
@@ -11,9 +12,12 @@
 # apache2 is the distribution's Apache httpd with its default configuration: installed, never
 # started (discovery only reads its configuration; Nginx owns ports 80 and 443); mod_ssl is enabled
 # by the test (a2enmod ssl), not in a layer.
+# haproxy is the distribution's package with its default configuration: installed, never started
+# (discovery only; Nginx owns 80 and 443); the test writes its fixture configuration on ports
+# 9443-9445 (TestRealHAProxy, internal/providers/haproxy/containers_integration_test.go).
 FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx apache2 openssl ssl-cert \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx apache2 haproxy openssl ssl-cert \
  && rm -rf /var/lib/apt/lists/* \
  && rm -f /etc/ssl/private/ssl-cert-snakeoil.key /etc/ssl/certs/ssl-cert-snakeoil.pem \
  && mkdir -p /run/sshd \
