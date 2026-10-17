@@ -170,6 +170,7 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 		sudo bool
 	}{
 		{CmdNginxDump(), pre + "nginx-dump", "nginx-dump", true},
+		{CmdApacheDump(), pre + "apache-dump", "apache-dump", true},
 		{CmdNginxTest(), pre + "nginx-test", "nginx-test", true},
 		{deploy, pre + "nginx-deploy --op " + op + " --cert '/etc/nginx/ssl/www.crt' --key '/etc/nginx/ssl/www.key' --expect-cert-sha256 '" + sha + "' --content-sha256 '" + hex.EncodeToString(h[:]) + "'", "nginx-deploy", true},
 		{restore, pre + "nginx-restore --op " + op, "nginx-restore", true},
@@ -185,6 +186,9 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 	assert.Equal(t, input, deploy.input())
 	assert.Equal(t, int64(helperproto.ServerDumpOutput), CmdNginxDump().maxOutput)
 	assert.Equal(t, LongCommandTimeout, CmdNginxDump().timeout)
+	assert.Equal(t, int64(helperproto.ServerDumpOutput), CmdApacheDump().maxOutput)
+	assert.Equal(t, LongCommandTimeout, CmdApacheDump().timeout)
+	assert.Empty(t, CmdApacheDump().tokens)
 	assert.Equal(t, LongCommandTimeout, CmdNginxTest().timeout)
 	assert.Equal(t, DeployCommandTimeout, deploy.timeout)
 	assert.Equal(t, DeployCommandTimeout, restore.timeout)

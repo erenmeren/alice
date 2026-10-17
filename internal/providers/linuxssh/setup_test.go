@@ -63,6 +63,20 @@ func TestSudoersProfilesMatchTheSpec(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestSudoersApacheProfile(t *testing.T) {
+	got, err := Sudoers("apache")
+	require.NoError(t, err)
+	want := sudoersHead + "\nCmnd_Alias ALICE_APACHE_ONLY = \\\n    /usr/local/libexec/alice-helper apache-dump\n" +
+		"\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_APACHE_ONLY\n"
+	assert.Equal(t, want, got)
+	assert.NotContains(t, got, "nginx", "an Apache server never gains nginx subcommands")
+	_, err = Sudoers("haproxy")
+	assert.ErrorIs(t, err, errUnknownProfile)
+	script, err := SetupScript("apache", "line", true)
+	require.NoError(t, err)
+	assert.Contains(t, script, "profile: apache")
+}
+
 // wantOptions is SEC-082 plus no-pty and no-user-rc.
 const wantOptions = "no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty,no-user-rc"
 

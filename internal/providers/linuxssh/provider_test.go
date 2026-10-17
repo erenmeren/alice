@@ -204,8 +204,8 @@ func TestSetupSnippetsForBothProfiles(t *testing.T) {
 	p := newProvEnv(t).prov
 	line := AuthorizedKeysLine("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", "")
 	snips := p.SetupSnippets(line)
-	require.Len(t, snips, 2)
-	for _, profile := range []string{"linux", "nginx"} {
+	require.Len(t, snips, 3)
+	for _, profile := range []string{"linux", "nginx", "apache"} {
 		s := snips[profile]
 		assert.Equal(t, profile, s.Profile)
 		want, err := Sudoers(profile)

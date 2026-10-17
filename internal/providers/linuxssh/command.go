@@ -141,6 +141,12 @@ func CmdNginxDump() HelperCommand {
 	return privileged(helperproto.SubNginxDump, LongCommandTimeout, helperproto.ServerDumpOutput)
 }
 
+// CmdApacheDump returns the parsed Apache configuration and the referenced certificate files
+// (apache-dump takes no arguments and writes nothing).
+func CmdApacheDump() HelperCommand {
+	return privileged(helperproto.SubApacheDump, LongCommandTimeout, helperproto.ServerDumpOutput)
+}
+
 // CmdNginxTest runs nginx -t.
 func CmdNginxTest() HelperCommand {
 	return privileged(helperproto.SubNginxTest, LongCommandTimeout, smallOutput)

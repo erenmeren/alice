@@ -6437,10 +6437,11 @@ components:
         helper_protocol: { type: integer }
         profiles:
           type: object
-          required: [linux, nginx]
+          required: [linux, nginx, apache]
           properties:
             linux: { $ref: "#/components/schemas/SetupSnippet" }
             nginx: { $ref: "#/components/schemas/SetupSnippet" }
+            apache: { $ref: "#/components/schemas/SetupSnippet" }
     Job:
       type: object
       required: [id, type, kind, status, target_id, deployment_id, import_id, ssh_key_id, rotation_id, attempts, max_attempts, error, result,

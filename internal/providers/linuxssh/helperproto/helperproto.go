@@ -33,8 +33,10 @@ const (
 	// other operation (MinProtocol); only an HTTP-01 challenge needs 7 (HTTP01MinProtocol).
 	// 1.6.1 (protocol 7 unchanged): nginx-dump reports `leaf_unreadable` for a certificate file
 	// whose first block cannot be read.
-	Protocol   = 7
-	Version    = "1.6.1"
+	// Protocol 8 (Apache, Phase B): apache-dump; nothing else changed: a protocol 6 helper serves every
+	// other operation (MinProtocol). 1.7.0 is the first helper that names it.
+	Protocol   = 8
+	Version    = "1.7.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -47,6 +49,9 @@ const MinProtocol = 6
 // HTTP01MinProtocol is the helper protocol an HTTP-01 challenge needs (acme-challenge-put and
 // acme-challenge-rm). Only that operation checks it.
 const HTTP01MinProtocol = 7
+
+// ApacheMinProtocol is the helper protocol an Apache server needs (apache-dump).
+const ApacheMinProtocol = 8
 
 // HelperBudget bounds one helper call on the server (R37 item 17): the helper gives up before
 // Alice's longest command budget (60 s) ends, with a 10 s margin, and never replaces a file after
@@ -147,18 +152,22 @@ const (
 	// an operation with any other journal is answered as nginx-status would, unchanged. The answer
 	// is a NginxStatusResponse (Active false: the fence holds the lock).
 	SubNginxFence = "nginx-fence"
+	// SubApacheDump (protocol 8) is the Apache counterpart of nginx-dump: no arguments, read-only.
+	SubApacheDump = "apache-dump"
 )
 
 // Phase 4 error codes.
 const (
 	CodeNginxNotFound = "NGINX_NOT_FOUND" // /usr/sbin/nginx does not exist (F-20)
-	CodeConfigInvalid = "CONFIG_INVALID"  // nginx -T/-t fails before anything changed (F-02)
-	CodeConfigChanged = "CONFIG_CHANGED"  // the paths are not a supported pair of the current configuration
-	CodeNoSpace       = "NO_SPACE"        // less free space than the new files plus MinFreeBytes (F-10, F-11)
-	CodeBadContent    = "BAD_CONTENT"     // stdin is not one certificate file and one unencrypted private key
-	CodeBusy          = "BUSY"            // another nginx-deploy or nginx-restore holds the lock
-	CodeUnknownOp     = "UNKNOWN_OP"      // nginx-restore: no journal for this operation
-	CodeProbeFailed   = "PROBE_FAILED"    // tls-probe could not connect or complete the handshake
+	// CodeSoftwareNotFound: the web server software of a dump subcommand is not installed (apache-dump).
+	CodeSoftwareNotFound = "SOFTWARE_NOT_FOUND"
+	CodeConfigInvalid    = "CONFIG_INVALID" // nginx -T/-t fails before anything changed (F-02)
+	CodeConfigChanged    = "CONFIG_CHANGED" // the paths are not a supported pair of the current configuration
+	CodeNoSpace          = "NO_SPACE"       // less free space than the new files plus MinFreeBytes (F-10, F-11)
+	CodeBadContent       = "BAD_CONTENT"    // stdin is not one certificate file and one unencrypted private key
+	CodeBusy             = "BUSY"           // another nginx-deploy or nginx-restore holds the lock
+	CodeUnknownOp        = "UNKNOWN_OP"     // nginx-restore: no journal for this operation
+	CodeProbeFailed      = "PROBE_FAILED"   // tls-probe could not connect or complete the handshake
 	// CodeOutputTooLarge: nginx-dump's answer would exceed ServerDumpOutput (exit 4); the helper
 	// never sends a truncated answer.
 	CodeOutputTooLarge = "OUTPUT_TOO_LARGE"

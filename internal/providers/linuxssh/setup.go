@@ -8,7 +8,7 @@ import (
 )
 
 // The sudoers file of spec §12.3. Profile "linux" allows only ALICE_COMMON (SSH-key work);
-// profile "nginx" also allows the certificate subcommands (implemented by the helper from Phase 4).
+// profile "nginx" also allows the certificate subcommands (implemented by the helper from Phase 4), profile "apache" apache-dump.
 const sudoersHead = `# Managed by Alice. Do not edit. Validate with: visudo -cf /etc/sudoers.d/alice
 Defaults:alice-svc !requiretty
 Defaults:alice-svc !lecture
@@ -54,7 +54,14 @@ Cmnd_Alias ALICE_NGINX_ONLY = \
     /usr/local/libexec/alice-helper acme-challenge-rm --token ` + sudoersToken + `
 `
 
-var errUnknownProfile = errors.New(`linuxssh: unknown sudoers profile (want "linux" or "nginx")`)
+// The Apache line (profile "apache", protocol 8): apache-dump takes no arguments, so its line ends
+// right after the subcommand.
+const sudoersApacheOnly = `
+Cmnd_Alias ALICE_APACHE_ONLY = \
+    /usr/local/libexec/alice-helper apache-dump
+`
+
+var errUnknownProfile = errors.New(`linuxssh: unknown sudoers profile (want "linux", "nginx" or "apache")`)
 
 // Sudoers returns /etc/sudoers.d/alice for a profile.
 func Sudoers(profile string) (string, error) {
@@ -63,6 +70,8 @@ func Sudoers(profile string) (string, error) {
 		return sudoersHead + "\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON\n", nil
 	case "nginx":
 		return sudoersHead + sudoersNginxOnly + "\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY\n", nil
+	case "apache":
+		return sudoersHead + sudoersApacheOnly + "\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_APACHE_ONLY\n", nil
 	default:
 		return "", errUnknownProfile
 	}
