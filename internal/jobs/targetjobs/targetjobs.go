@@ -220,20 +220,23 @@ func (h *handlers) scan(jobCtx context.Context, j jobs.Job) (providers.Discovery
 		return providers.DiscoveryResult{}, providers.DiscoverRequest{}, err
 	}
 	defer h.close(sess)
-	// A target that can discover certificates (an Nginx server) is scanned for both halves in one
+	// A target that can discover certificates (a web server) is scanned for both halves in one
 	// discovery, scheduled or not; inventory reconciles them in one transaction.
 	req := providers.DiscoverRequest{SSHKeys: true, Certificates: slices.Contains(t.Capabilities, string(providers.CapDiscoverCerts))}
 	res, err := sess.Discover(ctx, req)
-	if err != nil && req.Certificates && (isCode(err, "nginx.not_found") || isCode(err, "nginx.profile_missing")) {
+	kind, _ := providers.KindForTargetType(t.Type)
+	if err != nil && req.Certificates && inventory.IsWebServer(t.Type) &&
+		(isCode(err, kind.Reason(providers.ReasonNotFound)) || isCode(err, kind.Reason(providers.ReasonProfileMissing))) {
 		// The certificate half cannot run, but the server's SSH keys are still scanned (inventory
-		// leaves the certificate locations as they are). Nginx not installed (or no longer): the
-		// Nginx facts say "not found". The nginx sudoers profile not installed: nothing is known of
-		// Nginx (no facts, the stored ones stay) and the warning web_server_profile_missing says why.
-		notFound := isCode(err, "nginx.not_found")
+		// leaves the certificate locations as they are). Web-server software not installed (or no
+		// longer): the web-server facts say "not found". The kind's sudoers profile not installed:
+		// nothing is known of the software (no facts, the stored ones stay) and the warning
+		// web_server_profile_missing says why.
+		notFound := isCode(err, kind.Reason(providers.ReasonNotFound))
 		if res, err = sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err == nil {
 			code := providers.WarnWebServerProfileMissing
 			if notFound {
-				res.WebServer, code = &providers.WebServerFacts{Software: string(providers.KindNginx)}, providers.WarnWebServerNotFound
+				res.WebServer, code = &providers.WebServerFacts{Software: string(kind)}, providers.WarnWebServerNotFound
 			}
 			res.Warnings = append(res.Warnings, providers.Warning{Code: code, Params: map[string]string{}})
 		}

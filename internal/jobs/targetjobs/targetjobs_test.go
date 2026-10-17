@@ -687,3 +687,39 @@ func TestDiscoveryHasAJobTimeLimit(t *testing.T) {
 	assert.Equal(t, []string{"ssh.timeout"}, u.inv.failures, "the server shows the timeout")
 	assert.Equal(t, 20*time.Minute, old, "sized above the provider's own bounds (10 min reading + commands)")
 }
+
+// The certificate fallback is the web servers' alone and each kind answers to its own reason
+// prefix: another kind's code, and a target that is not a web server, fail the job as before.
+func TestScanFallsBackForEveryWebServerKind(t *testing.T) {
+	run := func(kind providers.Kind, typ, code string) (*stubInventory, []providers.DiscoverRequest, error) {
+		var reqs []providers.DiscoverRequest
+		prov := fake.New(kind, providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys, providers.CapDiscoverCerts)
+		reg := providers.NewRegistry()
+		reg.Register(notFoundProvider{prov, &reqs, code})
+		reg.Freeze()
+		inv := &stubInventory{target: inventory.Target{Name: "web-01", Type: typ, Status: inventory.StatusOK,
+			Capabilities: []string{"discover_certificates", "discover_ssh_keys"}}}
+		h := newHandlers(Deps{Inventory: inv, Registry: reg, Clock: clock.NewFake(time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC))})
+		_, err := h.discover(context.Background(), testJob, nil)
+		return inv, reqs, err
+	}
+	inv, reqs, err := run(providers.KindNginx, inventory.TypeNginx, "nginx.not_found")
+	require.NoError(t, err)
+	assert.Len(t, reqs, 2)
+	require.Len(t, inv.reconciled, 1)
+	assert.Equal(t, &providers.WebServerFacts{Software: "nginx"}, inv.reconciled[0].WebServer)
+
+	// Not a web server: no fallback, the provider's error is the job's.
+	inv, reqs, err = run(providers.KindLinuxSSH, inventory.TypeLinux, "nginx.not_found")
+	r, _ := reason(t, err)
+	assert.Equal(t, "nginx.not_found", r)
+	assert.Len(t, reqs, 1)
+	assert.Empty(t, inv.reconciled)
+
+	// Another kind's prefix is not this kind's.
+	inv, reqs, err = run(providers.KindNginx, inventory.TypeNginx, "apache.not_found")
+	r, _ = reason(t, err)
+	assert.Equal(t, "apache.not_found", r)
+	assert.Len(t, reqs, 1)
+	assert.Empty(t, inv.reconciled)
+}
