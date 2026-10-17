@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [fuzz-license, fuzz-ssh, fuzz-oidc, fuzz-ldap, fuzz-nginx, fuzz-certs, fuzz-backup, fuzz-acme-docs, fuzz-acme-order, fuzz-netaddr, fuzz-discovery, fuzz-tlsprobe, fuzz-api]
+        target: [fuzz-license, fuzz-ssh, fuzz-oidc, fuzz-ldap, fuzz-nginx, fuzz-apache, fuzz-certs, fuzz-backup, fuzz-acme-docs, fuzz-acme-order, fuzz-netaddr, fuzz-discovery, fuzz-tlsprobe, fuzz-api]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }

@@ -24,6 +24,7 @@
   "alice/internal/certs": 98,
   "alice/internal/providers/nginx": 98,
   "alice/internal/providers/nginx/nginxconf": 92,
+  "alice/internal/providers/apacheconf": 92,
   "alice/internal/providers/webserver": 98,
   "alice/internal/setup": 85,
   "alice/internal/platform/tlscert": 86,

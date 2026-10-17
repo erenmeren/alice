@@ -37,6 +37,8 @@ var rules = map[string][]string{
 	// The test world of the linuxssh provider runs the real nginx configuration parser, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
+	// The Apache configuration parser reads hostile input in the root helper: it stays pure.
+	"alice/internal/providers/apacheconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
 	// a hook's dns01 configuration; the client and solvers never import it back.
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
@@ -436,6 +438,9 @@ func TestAllowed(t *testing.T) {
 		{"linuxsshtest to the nginx provider denied", linuxsshtest, nginx, false},
 		{"linuxsshtest to platform/db denied", linuxsshtest, "alice/internal/platform/db", false},
 		{"nginxconf to platform/db denied", nginx + "/nginxconf", "alice/internal/platform/db", false},
+		{"apacheconf to helperproto allowed", "alice/internal/providers/apacheconf", "alice/internal/providers/linuxssh/helperproto", true},
+		{"apacheconf to platform/db denied", "alice/internal/providers/apacheconf", "alice/internal/platform/db", false},
+		{"apacheconf to linuxssh denied", "alice/internal/providers/apacheconf", "alice/internal/providers/linuxssh", false},
 		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
 		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},
 		{"api to provider impl denied", "alice/internal/api", nginx, false},
