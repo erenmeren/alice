@@ -547,7 +547,7 @@ describe('TargetDetailPage', () => {
       expect((await screen.findByText('Apache version', { selector: 'dt' })).nextElementSibling).toHaveTextContent('2.4.57');
       const combinedRow = (await screen.findByText(/combined\.pem/)).closest('tr')!;
       expect(within(combinedRow).getByText('The private key file can be read by more users than needed: 0644')).toBeInTheDocument();
-      expect(screen.getByText('This file is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used.')).toBeInTheDocument();
+      expect(screen.getByText('This file, or the name of its website, is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used.')).toBeInTheDocument();
       const buttons = [
         ...screen.getAllByRole('button', { name: /^Deploy certificate:/ }),
         ...screen.getAllByRole('button', { name: /^Verification settings:/ }),

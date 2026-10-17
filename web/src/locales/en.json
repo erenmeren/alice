@@ -1724,7 +1724,7 @@
       "unsupported_key": "Alice supports RSA and ECDSA certificates only.",
       "file_problem": "Alice cannot use the files at this place.",
       "unknown": "Alice cannot use this place for a reason this version does not know.",
-      "conditional": "This file is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used."
+      "conditional": "This file, or the name of its website, is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used."
     },
     "problems": {
       "missing": "The file does not exist.",

@@ -1724,7 +1724,7 @@
       "unsupported_key": "Alice yalnızca RSA ve ECDSA sertifikalarını destekler.",
       "file_problem": "Alice bu konumdaki dosyaları kullanamaz.",
       "unknown": "Alice bu konumu, bu sürümün bilmediği bir nedenle kullanamıyor.",
-      "conditional": "Bu dosya yapılandırmanın koşullu bir bölümünde (<If> ya da Alice'in değerlendiremediği bir test) tanımlanmış; Alice dosyanın ne zaman kullanıldığını bilemez."
+      "conditional": "Bu dosya veya web sitesinin adı yapılandırmanın koşullu bir bölümünde (<If> ya da Alice'in değerlendiremediği bir test) tanımlanmış; Alice ne zaman kullanıldığını bilemez."
     },
     "problems": {
       "missing": "Dosya yok.",
