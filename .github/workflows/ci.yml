@@ -98,9 +98,13 @@ jobs:
 
   stack:
     # First complete-enough run (39014976446): 11 min to bring the stack up, then Chromium e2e ran
-    # 69 of about 145 tests in 19 min with none failing when 30 minutes cut it.
+    # 69 of about 145 tests in 19 min with none failing when 30 minutes cut it. First full run
+    # (39017811229): 3 min setup and stack up, then all 141 Chromium tests in 61 min (64.5 min in
+    # all), with image-check and image-scan still to come (skipped after a failure) - too close to
+    # 75. The suite is serial by design (web/playwright.config.ts: workers 1, every test resets the
+    # one shared server), so workers or sharding would need one stack per shard; the job gets 100.
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 100
     needs: [go, web]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

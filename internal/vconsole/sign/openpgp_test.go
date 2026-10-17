@@ -107,8 +107,11 @@ func (c *hookCard) Close() error {
 	c.mu.Lock()
 	c.closes++
 	c.mu.Unlock()
+	// The card is closed before the blocked signing command is released, as with a real card
+	// whose touch wait ends because it was closed: an Issue that returns has a closed card.
+	err := c.sim.Close()
 	c.closeOnce.Do(func() { close(c.closed) })
-	return c.sim.Close()
+	return err
 }
 
 func (c *hookCard) closeCount() int {

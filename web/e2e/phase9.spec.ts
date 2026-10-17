@@ -12,6 +12,7 @@ import {
   resetInstall,
   runWizard,
   seedDashboard,
+  settleAnimations,
   signIn,
   signOut,
   test,
@@ -126,6 +127,11 @@ async function scanLayout(page: Page, label: string): Promise<void> {
   try {
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: original?.height ?? 720 });
+      // Crossing the "sm" breakpoint moves the main column by the sidebar's width with a 200 ms padding transition
+      // (Mantine's AppShell turns it off only once its resize listener re-renders, which can come after the first
+      // style pass). Measured mid-transition, the main column is still pushed right at 390 px and a detail page's
+      // fact links are squeezed to one character per line (CI run 39017811229): wait for the layout to settle.
+      await settleAnimations(page);
       expect.soft(await truncatedBadges(page), `truncated badge: ${label} at ${width} px`).toEqual([]);
       expect.soft(await clippedFocusRings(page), `clipped focus ring: ${label} at ${width} px`).toEqual([]);
     }
