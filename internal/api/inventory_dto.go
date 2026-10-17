@@ -102,7 +102,7 @@ type factsDTO struct {
 	HostKeys       []discoveredHostKeyDTO `json:"host_keys"`
 	Warnings       []warningDTO           `json:"warnings"`
 	Unreadable     []unreadableDTO        `json:"unreadable"`
-	Nginx          *nginxFactsDTO         `json:"nginx,omitempty"` // Nginx servers only
+	WebServer      *webServerFactsDTO     `json:"web_server,omitempty"` // web servers only
 }
 
 type targetDTO struct {
@@ -145,7 +145,7 @@ func factsJSON(f inventory.Facts) factsDTO {
 	d := factsDTO{
 		OS:            osDTO{ID: f.OS.ID, VersionID: f.OS.VersionID, PrettyName: f.OS.PrettyName},
 		HelperVersion: f.HelperVersion, HelperProtocol: f.HelperProtocol,
-		HostKeys: []discoveredHostKeyDTO{}, Warnings: []warningDTO{}, Unreadable: []unreadableDTO{}, Nginx: nginxFactsJSON(f.Nginx),
+		HostKeys: []discoveredHostKeyDTO{}, Warnings: []warningDTO{}, Unreadable: []unreadableDTO{}, WebServer: webServerFactsJSON(f.WebServer),
 	}
 	if f.SSHD != nil {
 		d.SSHD = &sshdDTO{

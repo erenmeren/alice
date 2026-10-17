@@ -116,7 +116,7 @@ func clean(s string) string {
 // Alice's connection key (SEC-081); the mark is never cleared here (the protection trigger would
 // refuse it). A successful scan also records the connection (markConnected): an unreachable or
 // checking target is "ok" again. With a complete account list, the keys of users that are no
-// longer accounts are marked missing as well. A result with Nginx facts also carries the
+// longer accounts are marked missing as well. A result with web server facts also carries the
 // certificate half (reconcileLocations), stored in the same transaction; a certificates-only
 // result (sshHalfRead) leaves the stored SSH facts as they are. With a Claim on ctx (the discovery
 // job's run) nothing is written once that run no longer holds its job: ErrClaimLost.
@@ -126,7 +126,7 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 	// The certificate files are parsed before the transaction (prepareScan), never under the
 	// target's row lock.
 	var scan preparedScan
-	if res.Nginx != nil && configUsable(res.Nginx) {
+	if res.WebServer != nil && configUsable(res.WebServer) {
 		var err error
 		if scan, err = s.prepareScan(ctx, res.Certificates, now); err != nil {
 			return ReconcileSummary{}, err
@@ -147,7 +147,7 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 		}
 		if !IsWebServer(t.Type) {
 			// Certificates belong to web servers only: another target type's result is its SSH half.
-			res.Nginx, res.Certificates = nil, nil
+			res.WebServer, res.Certificates = nil, nil
 		}
 		platformFP := ""
 		pk, err := loadPlatformKey(ctx, tx)
@@ -220,9 +220,9 @@ WHERE target_id = $1 AND missing_since IS NULL AND removed_by_alice_at IS NULL A
 		// configuration's certificates are stored; any other Nginx result (invalid, untrusted or
 		// unsupported configuration, Nginx not found) changes the facts only, which say why.
 		var certEvents []audit.Event
-		if res.Nginx != nil {
-			f.Nginx = mergeNginxFacts(f.Nginx, *res.Nginx)
-			if configUsable(res.Nginx) {
+		if res.WebServer != nil {
+			f.WebServer = mergeWebServerFacts(f.WebServer, *res.WebServer)
+			if configUsable(res.WebServer) {
 				cs, events, err := s.reconcileLocations(ctx, tx, t, scan, listsEveryLocation(res), now)
 				if err != nil {
 					return err
@@ -261,7 +261,7 @@ WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read, sshH
 		}
 		details := map[string]string{"key_count": strconv.Itoa(sum.Keys), "new_count": strconv.Itoa(sum.New),
 			"missing_count": strconv.Itoa(sum.Missing), "partial": strconv.FormatBool(res.Partial)}
-		if res.Nginx != nil { // a scan that asked for certificates
+		if res.WebServer != nil { // a scan that asked for certificates
 			details["certificate_count"], details["location_count"] = strconv.Itoa(sum.Certificates), strconv.Itoa(sum.Locations)
 			details["new_location_count"], details["missing_location_count"] = strconv.Itoa(sum.NewLocations), strconv.Itoa(sum.MissingLocations)
 			details["skipped_location_count"] = strconv.Itoa(sum.SkippedLocations)
@@ -274,12 +274,12 @@ WHERE id = $1`, id, raw, res.SSHD.KeysManagedElsewhere, now, res.SSHD.Read, sshH
 }
 
 // sshHalfRead reports whether res carries the SSH half of a discovery: linuxssh's host keys, sshd
-// settings and (when asked) keys and accounts. A result with Nginx facts and none of those is a
+// settings and (when asked) keys and accounts. A result with web server facts and none of those is a
 // certificates-only discovery (nginx.Discover without SSHKeys), which knows nothing about SSH: the
 // stored sshd, host-key, warning and account facts stay as they are. A combined scan that found
 // nothing at all on the SSH side is read the same way, which only keeps the earlier facts.
 func sshHalfRead(res providers.DiscoveryResult) bool {
-	return res.Nginx == nil || res.SSHD.Read || len(res.HostKeys) > 0 || len(res.SSHKeys) > 0 || len(res.ReadFiles) > 0 ||
+	return res.WebServer == nil || res.SSHD.Read || len(res.HostKeys) > 0 || len(res.SSHKeys) > 0 || len(res.ReadFiles) > 0 ||
 		len(res.UnreadableLines) > 0 || len(res.Accounts) > 0 || len(res.UID0Users) > 0
 }
 

@@ -175,19 +175,19 @@ func TestListDeployments(t *testing.T) {
 	assert.Equal(t, inventory.DeploymentFilter{Limit: 50}, got)
 }
 
-func TestTargetDTOCarriesNginxFacts(t *testing.T) {
+func TestTargetDTOCarriesWebServerFacts(t *testing.T) {
 	tg := sampleTarget()
 	tg.Type = inventory.TypeNginx
-	tg.Facts.Nginx = &providers.NginxFacts{Version: "1.24.0", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: false, ConfigError: "untrusted",
+	tg.Facts.WebServer = &providers.WebServerFacts{Software: "nginx", Version: "1.24.0", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: false, ConfigError: "untrusted",
 		ConfigErrorReason: "not_root_controlled", ConfigErrorFile: "/etc/nginx/conf.d/a b.conf", Found: true}
 	raw, err := json.Marshal(targetJSON(tg))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"type":"nginx"`)
-	assert.Contains(t, string(raw), `"nginx":{"version":"1.24.0","conf_path":"/etc/nginx/nginx.conf","config_valid":false,"config_error":"untrusted",`+
+	assert.Contains(t, string(raw), `"web_server":{"software":"nginx","version":"1.24.0","conf_path":"/etc/nginx/nginx.conf","config_valid":false,"config_error":"untrusted",`+
 		`"config_error_reason":"not_root_controlled","config_error_file":"/etc/nginx/conf.d/a b.conf","found":true}`)
 	raw, err = json.Marshal(targetJSON(sampleTarget()))
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), `"nginx"`, "a Linux server has no Nginx facts")
+	assert.NotContains(t, string(raw), `"web_server"`, "a Linux server has no web server facts")
 
 	d, inv := inventoryDeps(t)
 	var gotType string

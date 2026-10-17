@@ -62,7 +62,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
 
   const locs = useLocations(target.id, showMissing);
   const state = nginxState(target, discoveryFailed);
-  const nginx = target.facts.nginx;
+  const webServer = target.facts.web_server;
   const items = locs.data?.items ?? [];
   const settingsFor = items.find((l) => l.id === settingsId) ?? null;
   const asOf = websitesAsOf(items);
@@ -77,10 +77,10 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
               <Text size="sm" fw={500}>
                 {t('locations.configInvalid')}
               </Text>
-              {nginx && nginx.config_error !== '' && <Text size="sm">{t(configErrorKey(nginx.config_error))}</Text>}
-              {nginx && nginx.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(nginx.config_error_reason))}</Text>}
-              {nginx && nginx.config_error_file !== '' && (
-                <LabelledCode text={t('locations.configFile', { file: '' })} value={nginx.config_error_file} />
+              {webServer && webServer.config_error !== '' && <Text size="sm">{t(configErrorKey(webServer.config_error))}</Text>}
+              {webServer && webServer.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(webServer.config_error_reason))}</Text>}
+              {webServer && webServer.config_error_file !== '' && (
+                <LabelledCode text={t('locations.configFile', { file: '' })} value={webServer.config_error_file} />
               )}
             </Stack>
           </Alert>

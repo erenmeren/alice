@@ -42,7 +42,7 @@ const (
 
 var warningCodeRE = regexp.MustCompile(`^[a-z][a-z_]{0,39}$`)
 
-// configErrors are the classes of NginxFacts.ConfigError, configReasons those of ConfigErrorReason.
+// configErrors are the classes of WebServerFacts.ConfigError, configReasons those of ConfigErrorReason.
 var (
 	configErrors = []string{providers.ConfigErrKeyMismatch, providers.ConfigErrFileMissing, providers.ConfigErrCertLoad, providers.ConfigErrKeyLoad,
 		providers.ConfigErrSyntax, providers.ConfigErrUntrusted, providers.ConfigErrUnsupported}
@@ -90,9 +90,9 @@ func (s *session) Discover(ctx context.Context, req providers.DiscoverRequest) (
 		}
 	}
 	facts := nginxFacts(d)
-	res.Nginx = &facts
+	res.WebServer = &facts
 	if !d.ConfigValid {
-		res.Warnings = append(res.Warnings, warning("nginx_config_invalid"))
+		res.Warnings = append(res.Warnings, warning(providers.WarnWebServerConfigInvalid))
 		warns, cut := dumpWarnings(d, nil)
 		res.Warnings = append(res.Warnings, warns...)
 		if cut {
@@ -163,8 +163,8 @@ func knownOrEmpty(v string, set []string) string {
 
 // nginxFacts is what the dump says about Nginx itself. The error fields describe an invalid
 // configuration only; an unknown class or reason is not passed on.
-func nginxFacts(d helperproto.ServerDumpResponse) providers.NginxFacts {
-	f := providers.NginxFacts{Found: true, Version: clean(d.Version, maxVersionLength), ConfPath: cleanPath(d.ConfPath), ConfigValid: d.ConfigValid}
+func nginxFacts(d helperproto.ServerDumpResponse) providers.WebServerFacts {
+	f := providers.WebServerFacts{Software: "nginx", Found: true, Version: clean(d.Version, maxVersionLength), ConfPath: cleanPath(d.ConfPath), ConfigValid: d.ConfigValid}
 	if !d.ConfigValid {
 		f.ConfigError = knownOrEmpty(d.ConfigError, configErrors)
 		f.ConfigErrorReason = knownOrEmpty(d.ConfigErrorReason, configReasons)

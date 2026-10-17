@@ -309,7 +309,7 @@ func (f *f85) confirm(id uuid.UUID) {
 	require.Equal(f.t, inventory.StatusOK, tg.Status, "%s is connected and discovered", tg.Name)
 }
 
-var nginxFacts = &providers.NginxFacts{Found: true, ConfigValid: true, Version: "1.22.1"}
+var nginxFacts = &providers.WebServerFacts{Found: true, ConfigValid: true, Version: "1.22.1"}
 
 // nginxTargetWith adds an Nginx target serving leaf at /etc/nginx/ssl/www.crt.
 func (f *f85) nginxTargetWith(name string, leaf pki.Leaf) uuid.UUID {
@@ -323,8 +323,8 @@ func (f *f85) nginxTargetWith(name string, leaf pki.Leaf) uuid.UUID {
 	sum := sha256.Sum256(leaf.FullchainPEM)
 	f.nginx.Configure(func(c *fake.Config) {
 		c.PresentedKey = f.hkNginx
-		c.Report = providers.ConnectionReport{HostKey: f.hkNginx, HelperVersion: "1.0.0", HelperProtocol: 1, Nginx: nginxFacts}
-		c.Discovery = providers.DiscoveryResult{Nginx: nginxFacts,
+		c.Report = providers.ConnectionReport{HostKey: f.hkNginx, HelperVersion: "1.0.0", HelperProtocol: 1, WebServer: nginxFacts}
+		c.Discovery = providers.DiscoveryResult{WebServer: nginxFacts,
 			Certificates: []providers.DiscoveredCertificate{{Location: loc, PEMChain: leaf.FullchainPEM, FileSHA256: hex.EncodeToString(sum[:])}},
 			SSHKeys: []providers.DiscoveredSSHKey{{OSUser: fake.ConnectionAccount, FilePath: keyFile85(fake.ConnectionAccount), LineNo: 1,
 				PublicKey: pk.PublicKey, Fingerprint: pk.Fingerprint, KeyType: "ssh-ed25519", Bits: 256}},

@@ -25,7 +25,7 @@ func TestUpdateLocationVerificationSettings(t *testing.T) {
 	web := nginxTarget(t, h, admin, "web-01")
 	ca := pki.NewCA("Loc", pki.ECDSA256, h.clock.Now())
 	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, h.clock.Now())
-	found := providers.DiscoveryResult{Nginx: nginxOK,
+	found := providers.DiscoveryResult{WebServer: nginxOK,
 		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), l)}}
 	_, err := h.svc.Reconcile(h.ctx, web.ID, found)
 	require.NoError(t, err)

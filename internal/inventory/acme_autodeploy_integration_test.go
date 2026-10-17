@@ -233,7 +233,7 @@ func (w *acmeDeployWorld) moreLocations(n int) []uuid.UUID {
 	for i := range n {
 		certs = append(certs, dc(cl(fmt.Sprintf("/etc/nginx/ssl/x%d.crt", i), fmt.Sprintf("/etc/nginx/ssl/x%d.key", i), "www.example.test"), w.old))
 	}
-	_, err := w.h.svc.Reconcile(w.h.ctx, w.target1, providers.DiscoveryResult{Nginx: nginxOK, Certificates: certs})
+	_, err := w.h.svc.Reconcile(w.h.ctx, w.target1, providers.DiscoveryResult{WebServer: nginxOK, Certificates: certs})
 	require.NoError(w.h.t, err)
 	found := byPath(w.h.t, w.h, w.target1, false)
 	var ids []uuid.UUID

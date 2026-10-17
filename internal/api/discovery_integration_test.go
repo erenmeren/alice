@@ -359,7 +359,7 @@ VALUES ($1, $2, 'valid', now() - interval '1 day', now() + interval '1 day', 'ec
 		certID, validFP, seed.Hex(certID.String()))
 	require.NoError(t, err)
 	_, err = w.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, certificate_id, supported, first_seen_at, last_seen_at)
-VALUES ($1, $2, 'nginx_file', '/etc/ssl/valid.pem', $3, true, now(), now())`, uuid.New(), target, certID)
+VALUES ($1, $2, 'server_file', '/etc/ssl/valid.pem', $3, true, now(), now())`, uuid.New(), target, certID)
 	require.NoError(t, err)
 	licensed := w.licensedTargets()
 

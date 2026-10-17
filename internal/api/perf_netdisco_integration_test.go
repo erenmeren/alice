@@ -339,7 +339,7 @@ SELECT gen_random_uuid(), coalesce(m.fp, md5('c' || i) || md5('d' || i)), 'site'
 now() + ((i % 400) - 20) * interval '1 day', 'ecdsa', md5('k' || i) || md5('l' || i), '', 'discovered', now(), now(), now()
 FROM generate_series(1, 5000) AS i LEFT JOIN unnest($1::text[] || $2::text[]) WITH ORDINALITY AS m(fp, n) ON m.n = i`, []any{managed, known}},
 		{`INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported, servers, first_seen_at, last_seen_at)
-SELECT gen_random_uuid(), t.id, 'nginx_file', '/etc/nginx/ssl/' || c.subject_cn || '.crt', '/etc/nginx/ssl/' || c.subject_cn || '.key', c.id, true,
+SELECT gen_random_uuid(), t.id, 'server_file', '/etc/nginx/ssl/' || c.subject_cn || '.crt', '/etc/nginx/ssl/' || c.subject_cn || '.key', c.id, true,
 '[]'::jsonb, now(), now()
 FROM (SELECT id, subject_cn, row_number() OVER (ORDER BY fingerprint_sha256) AS n FROM certificates WHERE fingerprint_sha256 = ANY ($1::text[])) c
 JOIN (SELECT id, row_number() OVER (ORDER BY name) AS n FROM targets WHERE name LIKE 'perf-%') t ON t.n = c.n`, []any{managed}},

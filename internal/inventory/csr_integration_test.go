@@ -193,7 +193,7 @@ func TestCompleteSigningRequestForADiscoveredCertificate(t *testing.T) {
 	}
 
 	signed := ca.IssueForCSR(req, now)
-	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK,
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK,
 		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"), signed)}})
 	require.NoError(t, err)
 	page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{})

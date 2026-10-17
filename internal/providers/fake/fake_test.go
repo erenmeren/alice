@@ -551,14 +551,14 @@ func TestFakeDiscoverHonoursTheRequest(t *testing.T) {
 			SSHKeys: []providers.DiscoveredSSHKey{{Fingerprint: "SHA256:K"}}, HostKeys: []providers.DiscoveredHostKey{{Fingerprint: "SHA256:H"}},
 			SSHD: providers.SSHDSummary{Read: true}, UID0Users: []string{"root"}, Accounts: []string{"root"}, AccountsComplete: true,
 			ReadFiles: []string{"/root/.ssh/authorized_keys"}, UnreadableLines: []providers.UnreadableLine{{OSUser: "u"}},
-			Certificates: []providers.DiscoveredCertificate{{FileSHA256: "c"}}, Nginx: &providers.NginxFacts{Found: true},
+			Certificates: []providers.DiscoveredCertificate{{FileSHA256: "c"}}, WebServer: &providers.WebServerFacts{Found: true},
 			Warnings: []providers.Warning{{Code: "w"}},
 		}
 	})
 	certs, err := s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
 	require.NoError(t, err)
 	assert.Len(t, certs.Certificates, 1)
-	assert.NotNil(t, certs.Nginx)
+	assert.NotNil(t, certs.WebServer)
 	assert.Empty(t, certs.SSHKeys)
 	assert.Empty(t, certs.HostKeys)
 	assert.Empty(t, certs.Accounts)
@@ -573,7 +573,7 @@ func TestFakeDiscoverHonoursTheRequest(t *testing.T) {
 	assert.Len(t, keys.SSHKeys, 1)
 	assert.True(t, keys.AccountsComplete)
 	assert.Empty(t, keys.Certificates)
-	assert.Nil(t, keys.Nginx)
+	assert.Nil(t, keys.WebServer)
 	assert.Equal(t, []providers.Warning{{Code: "w"}}, keys.Warnings)
 }
 
@@ -671,17 +671,17 @@ func TestFakeDiscoverServesCertificates(t *testing.T) {
 	servers := []providers.CertServer{{Names: []string{"a"}}}
 	p.Configure(func(c *fake.Config) {
 		c.Discovery.Certificates = []providers.DiscoveredCertificate{{Location: providers.CertLocation{Servers: servers}}}
-		c.Discovery.Nginx = &providers.NginxFacts{Found: true}
+		c.Discovery.WebServer = &providers.WebServerFacts{Found: true}
 	})
 	res, err := s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
 	require.NoError(t, err)
 	require.Len(t, res.Certificates, 1)
 	res.Certificates[0].Location.Servers[0].Names[0] = "mutated"
-	res.Nginx.Found = false
+	res.WebServer.Found = false
 	again, _ := s.Discover(ctx, providers.DiscoverRequest{Certificates: true})
 	assert.Equal(t, "a", again.Certificates[0].Location.Servers[0].Names[0], "callers cannot change the scripted data")
-	assert.True(t, again.Nginx.Found)
-	p.Configure(func(c *fake.Config) { c.Report.Nginx = &providers.NginxFacts{Found: true} })
+	assert.True(t, again.WebServer.Found)
+	p.Configure(func(c *fake.Config) { c.Report.WebServer = &providers.WebServerFacts{Found: true} })
 }
 
 func TestFakeCallsOfDeployMethodsAreCopies(t *testing.T) {

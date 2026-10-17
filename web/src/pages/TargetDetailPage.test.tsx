@@ -9,7 +9,7 @@ import {
   hostKeyFixture,
   jobFixture,
   locationFixture,
-  nginxFacts,
+  webServerFacts,
   nginxTargetFixture,
   nginxTargetWith,
   keyLocationFixture,
@@ -514,7 +514,7 @@ describe('TargetDetailPage', () => {
     });
 
     it('shows no Nginx facts that the server never reported', async () => {
-      nginxServer('operator', nginxTargetWith({}, { nginx: undefined }));
+      nginxServer('operator', nginxTargetWith({}, { web_server: undefined }));
       await renderRoute(`/servers/${nginxTargetFixture.id}`);
       await screen.findByRole('button', { name: 'Discover' });
       expect(screen.queryByText(/Nginx version/)).not.toBeInTheDocument();
@@ -541,7 +541,7 @@ describe('TargetDetailPage', () => {
         { code: 'config_file_writable', params: { path: '/etc/nginx/conf.d/w.conf' } },
         { code: 'locations_dropped', params: {} },
       ];
-      nginxServer('operator', nginxTargetWith({}, { warnings, nginx: nginxFacts() }));
+      nginxServer('operator', nginxTargetWith({}, { warnings, web_server: webServerFacts() }));
       await renderRoute(`/servers/${nginxTargetFixture.id}`);
       expect(await screen.findByText(/TLS in stream blocks is not supported in this version/)).toBeInTheDocument();
       expect(screen.getByText('An Nginx configuration file can be changed by users other than root: /etc/nginx/conf.d/w.conf')).toBeInTheDocument();

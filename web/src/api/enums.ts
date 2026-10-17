@@ -112,11 +112,11 @@ export const FILE_PROBLEMS: readonly string[] = [
   'unknown',
 ];
 
-// CONFIG_ERRORS: NginxFacts.config_error (providers.ConfigErr*) and a deployment's helper_error,
+// CONFIG_ERRORS: WebServerFacts.config_error (providers.ConfigErr*) and a deployment's helper_error,
 // which adds file_changed.
 export const CONFIG_ERRORS: readonly string[] = ['key_mismatch', 'file_missing', 'cert_load', 'key_load', 'syntax', 'untrusted', 'unsupported', 'file_changed'];
 
-// CONFIG_REASONS: NginxFacts.config_error_reason (providers.ConfigReason*).
+// CONFIG_REASONS: WebServerFacts.config_error_reason (providers.ConfigReason*).
 export const CONFIG_REASONS: readonly string[] = [
   'not_root_controlled',
   'special_filesystem',

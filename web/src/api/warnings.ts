@@ -7,7 +7,7 @@ import type { Warning } from './types';
 // and a code this version does not know, get a generic text plus the code.
 //
 // Sources: internal/providers/linuxssh/helperproto (the SSH ones), internal/providers/types.go
-// (Warn*), internal/providers/nginx (warning("...")) and internal/jobs/targetjobs (nginx_*); the
+// (Warn*, the web_server_* codes included) and the web-server providers (warning("...")); the
 // completeness test reads them.
 export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   keys_managed_elsewhere: [],
@@ -38,10 +38,10 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   kv_version_conflict: ['object', 'count'],
   // The certificate listing came back empty although Alice knows certificates (kept until the next check).
   kv_listing_empty: [],
-  // Nginx servers
-  nginx_not_found: [],
-  nginx_profile_missing: [],
-  nginx_config_invalid: [],
+  // Web servers
+  web_server_not_found: [],
+  web_server_profile_missing: [],
+  web_server_config_invalid: [],
   locations_dropped: [],
   list_truncated: [],
   too_many_files: [],

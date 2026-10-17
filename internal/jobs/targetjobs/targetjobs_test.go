@@ -76,7 +76,7 @@ func (s *stubInventory) Reconcile(ctx context.Context, _ uuid.UUID, res provider
 	c, _ := inventory.ClaimFrom(ctx)
 	s.claims = append(s.claims, c)
 	sum := inventory.ReconcileSummary{Keys: 1}
-	if res.Nginx != nil {
+	if res.WebServer != nil {
 		sum.Certificates, sum.Locations, sum.NewLocations = 2, 3, 1
 	}
 	return sum, s.reconcileErr
@@ -526,7 +526,7 @@ func TestDiscoverReadsCertificatesOfNginxTargets(t *testing.T) {
 	linux, nginx := fake.New(providers.KindLinuxSSH), fake.New(providers.KindNginx, providers.CapTestConnection,
 		providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys, providers.CapDiscoverCerts)
 	nginx.Configure(func(c *fake.Config) {
-		c.Discovery = providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true}}
+		c.Discovery = providers.DiscoveryResult{WebServer: &providers.WebServerFacts{Found: true, ConfigValid: true}}
 	})
 	reg := providers.NewRegistry()
 	reg.Register(requestProvider{linux, &reqs})
@@ -605,10 +605,10 @@ func TestDiscoverWithoutNginxStillScansSSHKeys(t *testing.T) {
 	assert.Equal(t, []providers.DiscoverRequest{{SSHKeys: true, Certificates: true}, {SSHKeys: true}}, reqs)
 	require.Len(t, inv.reconciled, 1)
 	res := inv.reconciled[0]
-	assert.Equal(t, &providers.NginxFacts{}, res.Nginx, "Nginx not found")
+	assert.Equal(t, &providers.WebServerFacts{Software: "nginx"}, res.WebServer, "Nginx not found")
 	assert.Len(t, res.SSHKeys, 1)
 	assert.True(t, res.SSHD.Read)
-	assert.Equal(t, []string{"nginx_not_found"}, []string{res.Warnings[len(res.Warnings)-1].Code})
+	assert.Equal(t, []string{providers.WarnWebServerNotFound}, []string{res.Warnings[len(res.Warnings)-1].Code})
 	assert.Empty(t, inv.failures, "not a connection failure")
 	assert.Contains(t, out, "location_count")
 
@@ -624,9 +624,9 @@ func TestDiscoverWithoutNginxStillScansSSHKeys(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []providers.DiscoverRequest{{SSHKeys: true, Certificates: true}, {SSHKeys: true}}, reqs)
 	require.Len(t, inv.reconciled, 1)
-	assert.Nil(t, inv.reconciled[0].Nginx)
+	assert.Nil(t, inv.reconciled[0].WebServer)
 	assert.Len(t, inv.reconciled[0].SSHKeys, 1)
-	assert.Equal(t, "nginx_profile_missing", inv.reconciled[0].Warnings[len(inv.reconciled[0].Warnings)-1].Code)
+	assert.Equal(t, providers.WarnWebServerProfileMissing, inv.reconciled[0].Warnings[len(inv.reconciled[0].Warnings)-1].Code)
 	assert.Empty(t, inv.failures)
 
 	inv, reqs, _, err = run("nginx.config_changed", nil)

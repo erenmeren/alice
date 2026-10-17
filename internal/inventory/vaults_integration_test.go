@@ -909,7 +909,7 @@ func (h *harness) seedBinding(t *testing.T, vault, web uuid.UUID) uuid.UUID {
 	t.Helper()
 	ca := pki.NewCA("Bind", pki.ECDSA256, h.clock.Now())
 	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, h.clock.Now())
-	_, err := h.svc.Reconcile(h.ctx, web, providers.DiscoveryResult{Nginx: nginxOK,
+	_, err := h.svc.Reconcile(h.ctx, web, providers.DiscoveryResult{WebServer: nginxOK,
 		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"), l)}})
 	require.NoError(t, err)
 	loc := byPath(t, h, web, false)["/etc/nginx/ssl/www.crt"]

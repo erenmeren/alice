@@ -244,7 +244,7 @@ func TestUploadAttachesTheKeyOfADiscoveredCertificate(t *testing.T) {
 	l := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
 	leafOnly := providers.DiscoveredCertificate{Location: cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"),
 		PEMChain: l.CertPEM, FileSHA256: sha(l.CertPEM)}
-	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{leafOnly}})
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{leafOnly}})
 	require.NoError(t, err)
 	page, err := h.svc.ListCertificates(h.ctx, inventory.CertificateFilter{})
 	require.NoError(t, err)
@@ -285,7 +285,7 @@ func TestUploadAttachesTheKeyOfADiscoveredCertificate(t *testing.T) {
 	assert.Equal(t, c.Fingerprint, h.auditDetails("certificate.upload_rejected")[0]["fingerprint"])
 
 	// A later scan keeps the key, the label, the source and the uploaded chain.
-	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{leafOnly}})
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{leafOnly}})
 	require.NoError(t, err)
 	got, err = h.svc.GetCertificate(h.ctx, c.ID)
 	require.NoError(t, err)
@@ -306,7 +306,7 @@ func TestKeyAttachKeepsTheUploadersShorterChain(t *testing.T) {
 	admin := h.user("ada", rbac.Admin, "")
 	web := nginxTarget(t, h, admin, "web-01")
 	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, h.clock.Now())
-	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK,
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK,
 		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"), l)}})
 	require.NoError(t, err)
 	c, warnings, err := h.svc.UploadCertificate(h.ctx, admin, inventory.UploadInput{CertificatePEM: string(l.CertPEM), PrivateKeyPEM: string(l.KeyPEM)})
@@ -344,7 +344,7 @@ func TestUploadRacesDiscovery(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			_, errs[0] = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK,
+			_, errs[0] = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK,
 				Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"), l)}})
 		}()
 		go func() {

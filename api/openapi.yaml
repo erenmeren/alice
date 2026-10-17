@@ -5952,9 +5952,9 @@ components:
                 type: string
                 examples: [keys_managed_elsewhere]
                 description: >-
-                  Phase 4 values for Nginx servers include nginx_not_found, nginx_profile_missing, locations_dropped,
-                  list_truncated, too_many_files, stream_tls, mail_tls and config_file_writable (params.path); a newer
-                  server may add others.
+                  Phase 4 values for web servers include web_server_not_found, web_server_profile_missing,
+                  locations_dropped, list_truncated, too_many_files, stream_tls, mail_tls and config_file_writable
+                  (params.path); a newer server may add others.
               params: { type: object, additionalProperties: { type: string } }
         unreadable:
           type: array
@@ -5965,7 +5965,7 @@ components:
               os_user: { type: string }
               file_path: { type: string }
               line_no: { type: integer }
-        nginx: { $ref: "#/components/schemas/NginxFacts" }
+        web_server: { $ref: "#/components/schemas/WebServerFacts" }
     Target:
       type: object
       required: [id, name, type, host, port, username, status, last_error, last_success_at, last_discovery_at,
@@ -6503,11 +6503,12 @@ components:
       required: [items]
       properties:
         items: { type: array, items: { $ref: "#/components/schemas/Provider" } }
-    NginxFacts:
+    WebServerFacts:
       type: object
-      description: Present for Nginx servers that were tested or scanned
-      required: [version, conf_path, config_valid, config_error, config_error_reason, config_error_file, found]
+      description: Present for web servers that were tested or scanned
+      required: [software, version, conf_path, config_valid, config_error, config_error_reason, config_error_file, found]
       properties:
+        software: { type: string, enum: [nginx], description: 'The web server software; equals the target type' }
         version: { type: string, examples: [1.24.0] }
         conf_path: { type: string, examples: [/etc/nginx/nginx.conf] }
         config_valid: { type: boolean }

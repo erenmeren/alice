@@ -392,7 +392,8 @@ func deploymentDetailJSON(d inventory.Deployment) deploymentDetailDTO {
 	return out
 }
 
-type nginxFactsDTO struct {
+type webServerFactsDTO struct {
+	Software          string `json:"software"`
 	Version           string `json:"version"`
 	ConfPath          string `json:"conf_path"`
 	ConfigValid       bool   `json:"config_valid"`
@@ -402,10 +403,10 @@ type nginxFactsDTO struct {
 	Found             bool   `json:"found"`
 }
 
-func nginxFactsJSON(n *providers.NginxFacts) *nginxFactsDTO {
+func webServerFactsJSON(n *providers.WebServerFacts) *webServerFactsDTO {
 	if n == nil {
 		return nil
 	}
-	return &nginxFactsDTO{Version: n.Version, ConfPath: n.ConfPath, ConfigValid: n.ConfigValid, ConfigError: codeOrBlank(n.ConfigError),
+	return &webServerFactsDTO{Software: n.Software, Version: n.Version, ConfPath: n.ConfPath, ConfigValid: n.ConfigValid, ConfigError: codeOrBlank(n.ConfigError),
 		ConfigErrorReason: codeOrBlank(n.ConfigErrorReason), ConfigErrorFile: n.ConfigErrorFile, Found: n.Found}
 }

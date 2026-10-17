@@ -33,8 +33,8 @@ const (
 	WarnChainUnresolved = "chain_unresolved"
 )
 
-// locationKind is certificate_locations.kind of an Nginx certificate file.
-const locationKind = "nginx_file"
+// locationKind is certificate_locations.kind of a certificate file of a web server.
+const locationKind = "server_file"
 
 // Bounds of certificate_locations (migration 00006): a reported value that does not fit is cut,
 // emptied or flagged here, so that one odd location never fails the scan's transaction.
@@ -309,15 +309,15 @@ func locationWarnings(reported, added []string) []string {
 // writable files) and too_many_files (the helper's file descriptions cut, the locations still
 // listed) leave no location out.
 func listsEveryLocation(res providers.DiscoveryResult) bool {
-	return configUsable(res.Nginx) && !slices.ContainsFunc(res.Warnings, func(w providers.Warning) bool {
+	return configUsable(res.WebServer) && !slices.ContainsFunc(res.Warnings, func(w providers.Warning) bool {
 		return w.Code == providers.WarnLocationsDropped
 	})
 }
 
-// configUsable reports whether the Nginx facts describe a configuration whose certificates may be
-// stored: Nginx found, its configuration valid, and no error class (the provider sends none with a
+// configUsable reports whether the web server facts describe a configuration whose certificates may be
+// stored: the web server found, its configuration valid, and no error class (the provider sends none with a
 // valid configuration; one with an error class is treated as invalid).
-func configUsable(n *providers.NginxFacts) bool {
+func configUsable(n *providers.WebServerFacts) bool {
 	return n != nil && n.Found && n.ConfigValid && n.ConfigError == ""
 }
 

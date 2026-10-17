@@ -579,7 +579,7 @@ func TestKVCertificateBindingCountsLiveServersOnly(t *testing.T) {
 	cert := h.certRow(v, "web-cert")
 	binding := h.bindCertificate(cert.ID, v)
 	for _, tg := range []inventory.Target{live, dead} {
-		_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+		_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 			dc(cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"), h.kvLeaf("a.example.test"))}})
 		require.NoError(t, err)
 	}

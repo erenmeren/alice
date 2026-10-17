@@ -79,7 +79,7 @@ VALUES ($1, 'platform_ssh', 'ssh_private_key', '\x01', decode(repeat('00', 12), 
 	exec(`INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
 VALUES ($1, 'web-01', 'nginx', '{"host":"10.0.0.1","port":22,"username":"alice-svc"}', $2, 'ok', $3, $3)`, target, cred, now)
 	exec(`INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported, first_seen_at, last_seen_at)
-VALUES ($1, $2, 'nginx_file', '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $3, true, $4, $4)`, loc, target, cert, now)
+VALUES ($1, $2, 'server_file', '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $3, true, $4, $4)`, loc, target, cert, now)
 	exec(`INSERT INTO acme_bindings (acme_certificate_id, location_id, auto_deploy, created_at) VALUES ($1, $2, true, $3)`, acmeCert, loc, now)
 	exec(`INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status, new_fingerprint, cert_path, key_path, created_at, finished_at)
 VALUES ($1, $2, $3, $4, 'acme_renewal', 'done', 'succeeded', $5, '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $6, $6)`,

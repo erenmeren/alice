@@ -9,7 +9,7 @@ export interface NginxState {
   block: DeployBlock | null;
   // stale: the facts and websites shown are from an earlier scan and may no longer be true.
   stale: boolean;
-  // configInvalid: Nginx reports an error in its configuration (facts.nginx or the scan's warning).
+  // configInvalid: Nginx reports an error in its configuration (facts.web_server or the scan's warning).
   configInvalid: boolean;
 }
 
@@ -18,12 +18,12 @@ export interface NginxState {
 // for connection problems, which are the target's status and last_error).
 export function nginxState(target: Target, discoveryFailed = false): NginxState {
   const codes = new Set(target.facts.warnings.map((w) => w.code));
-  const nginx = target.facts.nginx;
-  const configInvalid = (nginx?.found === true && !nginx.config_valid) || codes.has('nginx_config_invalid');
+  const nginx = target.facts.web_server;
+  const configInvalid = (nginx?.found === true && !nginx.config_valid) || codes.has('web_server_config_invalid');
   let block: DeployBlock | null = null;
   if (target.status !== 'ok') block = 'status';
-  else if (codes.has('nginx_profile_missing')) block = 'profile_missing';
-  else if (codes.has('nginx_not_found') || (nginx !== undefined && !nginx.found && nginx.version === '')) block = 'nginx_not_found';
+  else if (codes.has('web_server_profile_missing')) block = 'profile_missing';
+  else if (codes.has('web_server_not_found') || (nginx !== undefined && !nginx.found && nginx.version === '')) block = 'nginx_not_found';
   else if (configInvalid) block = 'config_invalid';
   else if (target.last_error) block = 'last_error';
   else if (discoveryFailed) block = 'discovery_failed';

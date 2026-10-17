@@ -173,7 +173,7 @@ func TestKVCertificateDetail(t *testing.T) {
 	// A binding with two locations.
 	binding := h.bindCertificate(cert.ID, vault)
 	ca := pki.NewCA("Bind", pki.ECDSA256, h.clock.Now())
-	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/a.crt", "/etc/nginx/ssl/a.key"), ca.Issue(pki.Opts{CommonName: "a.example.test"}, h.clock.Now())),
 		dc(cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key"), ca.Issue(pki.Opts{CommonName: "b.example.test"}, h.clock.Now()))}})
 	require.NoError(t, err)

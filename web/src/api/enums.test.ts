@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import en from '../locales/en.json';
 import tr from '../locales/tr.json';
@@ -159,12 +159,15 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   // The SSH helper's warnings and the ones Alice makes from its unlisted accounts (protocol 6).
   const helperWarnings = goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Warn/);
   const inventoryWarnings = goConsts('internal/inventory/locations.go', /^Warn/);
-  const nginxWarnings = goFiles('internal/providers/nginx').flatMap((f) => callArgsIn(readRepoFile(f), 'warning'));
-  const jobWarnings = [...readRepoFile('internal/jobs/targetjobs/targetjobs.go').matchAll(/"(nginx_[a-z_]+)"/g)].map((m) => m[1]);
-  const openapiTargetWarnings = [...topLevelTargetWarningText().matchAll(/\b(nginx_[a-z_]+|[a-z]+_[a-z_]+)\b/g)].map((m) => m[1]);
+  // The web-server providers' own warning(...) literals (internal/providers/webserver exists from Phase A Task 5 on).
+  const nginxWarnings = ['internal/providers/nginx', 'internal/providers/webserver']
+    .filter((dir) => existsSync(resolve(process.cwd(), '..', dir)))
+    .flatMap((dir) => goFiles(dir))
+    .flatMap((f) => callArgsIn(readRepoFile(f), 'warning'));
+  const openapiTargetWarnings = [...topLevelTargetWarningText().matchAll(/\b(web_server_[a-z_]+|[a-z]+_[a-z_]+)\b/g)].map((m) => m[1]);
 
   function topLevelTargetWarningText(): string {
-    const m = /Phase 4 values for Nginx servers include ([^;]*?); a newer/.exec(schemaProp('TargetFacts', 'warnings').replace(/\s+/g, ' '));
+    const m = /Phase 4 values for web servers include ([^;]*?); a newer/.exec(schemaProp('TargetFacts', 'warnings').replace(/\s+/g, ' '));
     if (!m) throw new Error('target warning list not found');
     return m[1].replace(/\(params\.path\)/g, '').replace(/ and /g, ', ');
   }
@@ -191,9 +194,10 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   it('lists the configuration error classes and reasons', () => {
     eq(goConsts('internal/providers/types.go', /^ConfigErr/), CONFIG_ERRORS.filter((e) => e !== 'file_changed'));
     expect(goConsts('internal/providers/types.go', /^DeployErrFileChanged$/)).toEqual(['file_changed']);
-    eq(knownValues('NginxFacts', 'config_error'), CONFIG_ERRORS.filter((e) => e !== 'file_changed'));
+    eq(knownValues('WebServerFacts', 'config_error'), CONFIG_ERRORS.filter((e) => e !== 'file_changed'));
     eq(goConsts('internal/providers/types.go', /^ConfigReason/), CONFIG_REASONS);
-    eq(knownValues('NginxFacts', 'config_error_reason'), CONFIG_REASONS);
+    eq(knownValues('WebServerFacts', 'config_error_reason'), CONFIG_REASONS);
+    eq(enumOf('WebServerFacts', 'software'), ['nginx']);
   });
 
   it('knows every location warning of the specification and the inventory, and every provider warning at one level', () => {
@@ -205,13 +209,13 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   it('has no location warning, and no server-level Nginx warning, that no source reports', () => {
     const sources = new Set([...knownValues('CertificateLocation', 'warnings'), ...inventoryWarnings, ...typesWarnings]);
     for (const w of Object.keys(LOCATION_WARNINGS)) expect(sources.has(w), `location warning ${w} has no source`).toBe(true);
-    const server = new Set([...typesWarnings, ...nginxWarnings, ...jobWarnings, ...openapiTargetWarnings]);
-    const nginxOnly = ['nginx_not_found', 'nginx_profile_missing', 'nginx_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
-    for (const w of nginxOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
+    const server = new Set([...typesWarnings, ...nginxWarnings, ...openapiTargetWarnings]);
+    const webServerOnly = ['web_server_not_found', 'web_server_profile_missing', 'web_server_config_invalid', 'locations_dropped', 'list_truncated', 'too_many_files', 'stream_tls', 'mail_tls', 'config_file_writable', 'key_mode_open', 'symlinked', 'custom_location', 'key_group_open', 'certificate_block_dropped'];
+    for (const w of webServerOnly) expect(server.has(w), `server warning ${w} has no source`).toBe(true);
     // every Nginx entry of the table is one of those (the rest are the SSH warnings of Phase 3)
     const ssh = new Set(['keys_managed_elsewhere', 'keys_managed_elsewhere_user', 'certificates_in_use', 'pubkey_disabled', 'sshd_unreadable', 'sshd_unreadable_user', 'strict_modes', 'unsupported_path', 'unsupported_path_unnamed', 'file_unreadable', 'file_unparseable', 'file_too_large', 'directory_users_not_listed', 'too_many_users', 'account_name_unsupported', 'account_home_unsupported', 'account_id_unsupported', 'accounts_nul_byte', 'list_truncated_uid']);
     const keyVault = ['kv_item_unreadable', 'kv_version_conflict', 'kv_listing_empty']; // Phase 5: what a vault poll could not use or doubted (internal/providers/types.go, internal/inventory/kv_prepare.go)
-    for (const w of Object.keys(WARNING_PARAMS)) expect(ssh.has(w) || nginxOnly.includes(w) || keyVault.includes(w), `warning ${w} is in no group`).toBe(true);
+    for (const w of Object.keys(WARNING_PARAMS)) expect(ssh.has(w) || webServerOnly.includes(w) || keyVault.includes(w), `warning ${w} is in no group`).toBe(true);
   });
 
   it('knows every warning of the SSH helper and of its unlisted accounts (protocol 6, AUD-03)', () => {
@@ -247,8 +251,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
   });
 
   it('knows every server-level warning of the Nginx provider, the scan job and the specification', () => {
-    for (const w of [...typesWarnings, ...nginxWarnings, ...jobWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
-    expect(openapiTargetWarnings).toEqual(expect.arrayContaining(['nginx_profile_missing', 'stream_tls', 'config_file_writable']));
+    for (const w of [...typesWarnings, ...nginxWarnings, ...openapiTargetWarnings]) expect(Object.keys(WARNING_PARAMS), w).toContain(w);
+    expect(openapiTargetWarnings).toEqual(expect.arrayContaining(['web_server_profile_missing', 'stream_tls', 'config_file_writable']));
   });
 
   describe.each(['en', 'tr'] as const)('%s', (lang) => {

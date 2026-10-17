@@ -359,6 +359,8 @@ func TestMigration00015DownRefusesDirectoryDataAndIsCleanWithout(t *testing.T) {
 	ctx := context.Background()
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
 	require.NoError(t, err)
+	_, err = p.DownTo(ctx, 15) // later migrations first: this test is about 00015's Down
+	require.NoError(t, err)
 	version, err := p.GetDBVersion(ctx)
 	require.NoError(t, err)
 	require.Equal(t, int64(15), version)

@@ -905,7 +905,7 @@ VALUES ($1, $2, 'cn', now() - interval '1 day', now() + interval '1 day', 'ecdsa
 	require.NoError(t, err)
 	if target != nil {
 		_, err = p.Owner.Exec(bg(), `INSERT INTO certificate_locations (id, target_id, kind, cert_path, certificate_id, supported, first_seen_at, last_seen_at)
-VALUES ($1, $2, 'nginx_file', $3, $4, true, now(), now())`, uuid.New(), *target, "/etc/ssl/"+id.String(), id)
+VALUES ($1, $2, 'server_file', $3, $4, true, now(), now())`, uuid.New(), *target, "/etc/ssl/"+id.String(), id)
 		require.NoError(t, err)
 	}
 	return id

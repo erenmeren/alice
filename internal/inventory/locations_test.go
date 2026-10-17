@@ -140,44 +140,44 @@ func TestPrepareLocation(t *testing.T) {
 }
 
 func TestScanCoverage(t *testing.T) {
-	valid := &providers.NginxFacts{Found: true, ConfigValid: true}
-	assert.True(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid}))
+	valid := &providers.WebServerFacts{Found: true, ConfigValid: true}
+	assert.True(t, listsEveryLocation(providers.DiscoveryResult{WebServer: valid}))
 	for _, code := range []string{"stream_tls", providers.WarnListTruncated, providers.WarnTooManyFiles} {
-		assert.True(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid, Warnings: []providers.Warning{{Code: code}}}), code)
+		assert.True(t, listsEveryLocation(providers.DiscoveryResult{WebServer: valid, Warnings: []providers.Warning{{Code: code}}}), code)
 	}
-	assert.True(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid, Partial: true}), "Partial is about SSH files")
+	assert.True(t, listsEveryLocation(providers.DiscoveryResult{WebServer: valid, Partial: true}), "Partial is about SSH files")
 	assert.False(t, listsEveryLocation(providers.DiscoveryResult{}))
-	assert.False(t, listsEveryLocation(providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true}}))
-	assert.False(t, listsEveryLocation(providers.DiscoveryResult{Nginx: valid, Warnings: []providers.Warning{{Code: providers.WarnLocationsDropped}}}))
-	assert.False(t, configUsable(&providers.NginxFacts{Found: true}))
-	assert.False(t, configUsable(&providers.NginxFacts{ConfigValid: true}))
-	assert.False(t, configUsable(&providers.NginxFacts{Found: true, ConfigValid: true, ConfigError: providers.ConfigErrSyntax}))
+	assert.False(t, listsEveryLocation(providers.DiscoveryResult{WebServer: &providers.WebServerFacts{Found: true}}))
+	assert.False(t, listsEveryLocation(providers.DiscoveryResult{WebServer: valid, Warnings: []providers.Warning{{Code: providers.WarnLocationsDropped}}}))
+	assert.False(t, configUsable(&providers.WebServerFacts{Found: true}))
+	assert.False(t, configUsable(&providers.WebServerFacts{ConfigValid: true}))
+	assert.False(t, configUsable(&providers.WebServerFacts{Found: true, ConfigValid: true, ConfigError: providers.ConfigErrSyntax}))
 }
 
 func TestSSHHalfRead(t *testing.T) {
-	nginx := &providers.NginxFacts{Found: true, ConfigValid: true}
+	nginx := &providers.WebServerFacts{Found: true, ConfigValid: true}
 	assert.True(t, sshHalfRead(providers.DiscoveryResult{}), "a linuxssh result")
-	assert.False(t, sshHalfRead(providers.DiscoveryResult{Nginx: nginx}), "certificates only")
-	assert.False(t, sshHalfRead(providers.DiscoveryResult{Nginx: nginx, Partial: true}), "Partial is never set without the SSH half")
+	assert.False(t, sshHalfRead(providers.DiscoveryResult{WebServer: nginx}), "certificates only")
+	assert.False(t, sshHalfRead(providers.DiscoveryResult{WebServer: nginx, Partial: true}), "Partial is never set without the SSH half")
 	for _, r := range []providers.DiscoveryResult{
-		{Nginx: nginx, SSHD: providers.SSHDSummary{Read: true}},
-		{Nginx: nginx, HostKeys: []providers.DiscoveredHostKey{{}}},
-		{Nginx: nginx, SSHKeys: []providers.DiscoveredSSHKey{{}}},
-		{Nginx: nginx, ReadFiles: []string{"/root/.ssh/authorized_keys"}},
-		{Nginx: nginx, UnreadableLines: []providers.UnreadableLine{{}}},
-		{Nginx: nginx, Accounts: []string{"root"}},
-		{Nginx: nginx, UID0Users: []string{"root"}},
+		{WebServer: nginx, SSHD: providers.SSHDSummary{Read: true}},
+		{WebServer: nginx, HostKeys: []providers.DiscoveredHostKey{{}}},
+		{WebServer: nginx, SSHKeys: []providers.DiscoveredSSHKey{{}}},
+		{WebServer: nginx, ReadFiles: []string{"/root/.ssh/authorized_keys"}},
+		{WebServer: nginx, UnreadableLines: []providers.UnreadableLine{{}}},
+		{WebServer: nginx, Accounts: []string{"root"}},
+		{WebServer: nginx, UID0Users: []string{"root"}},
 	} {
 		assert.True(t, sshHalfRead(r), "%+v", r)
 	}
 }
 
-func TestMergeNginxFacts(t *testing.T) {
-	old := &providers.NginxFacts{Found: true, ConfigValid: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf"}
-	assert.Equal(t, &providers.NginxFacts{Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigError: "syntax"},
-		mergeNginxFacts(old, providers.NginxFacts{Found: true, ConfigError: "syntax"}))
-	assert.Equal(t, &providers.NginxFacts{}, mergeNginxFacts(old, providers.NginxFacts{}), "Nginx gone: nothing is kept")
-	assert.Equal(t, &providers.NginxFacts{Found: true, Version: "1.�"}, mergeNginxFacts(nil, providers.NginxFacts{Found: true, Version: "1.\x00"}))
+func TestMergeWebServerFacts(t *testing.T) {
+	old := &providers.WebServerFacts{Found: true, ConfigValid: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf"}
+	assert.Equal(t, &providers.WebServerFacts{Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigError: "syntax"},
+		mergeWebServerFacts(old, providers.WebServerFacts{Found: true, ConfigError: "syntax"}))
+	assert.Equal(t, &providers.WebServerFacts{}, mergeWebServerFacts(old, providers.WebServerFacts{}), "Nginx gone: nothing is kept")
+	assert.Equal(t, &providers.WebServerFacts{Found: true, Version: "1.�"}, mergeWebServerFacts(nil, providers.WebServerFacts{Found: true, Version: "1.\x00"}))
 }
 
 func TestLeafPEMIsTheFirstBlock(t *testing.T) {

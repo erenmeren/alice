@@ -608,7 +608,7 @@ func phase4Records(t *testing.T, s *stack, c *client, targetID string) map[strin
 	ctx := context.Background()
 	loc, dep := uuid.New(), uuid.Must(uuid.NewV7())
 	_, err := s.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
-servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'nginx_file', '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $3, true,
+servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'server_file', '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $3, true,
 '[{"names":["www.example.com"],"listens":[{"addr":"*","port":443,"default_server":false}],"file":"/etc/nginx/conf.d/www.conf","line":3}]',
 $4, $4)`, loc, targetID, stored.Certificate.ID, s.clock.Now())
 	require.NoError(t, err)

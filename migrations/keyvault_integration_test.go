@@ -80,10 +80,12 @@ VALUES (gen_random_uuid(), encode(sha256(gen_random_uuid()::text::bytea), 'hex')
 RETURNING id::text`)
 }
 
-func insertLocation(t *testing.T, d *pgtest.DB, target string) string {
+// insertLocation inserts a web server certificate file of kind ("server_file" at the latest version,
+// "nginx_file" below 00016).
+func insertLocation(t *testing.T, d *pgtest.DB, target, kind string) string {
 	t.Helper()
 	return scanID(t, d, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, first_seen_at, last_seen_at)
-VALUES (gen_random_uuid(), $1, 'nginx_file', '/etc/ssl/' || gen_random_uuid()::text || '.pem', true, now(), now()) RETURNING id::text`, target)
+VALUES (gen_random_uuid(), $1, $2, '/etc/ssl/' || gen_random_uuid()::text || '.pem', true, now(), now()) RETURNING id::text`, target, kind)
 }
 
 func insertBinding(t *testing.T, d *pgtest.DB, cert, vault string) error {
@@ -388,7 +390,7 @@ func TestKeyVaultDeploymentSource(t *testing.T) {
 	d := pgtest.New(t)
 	v := addVault(t, d, "kv1")
 	server := seedTarget(t, d, "web-01", "web-01.example.com")
-	loc := insertLocation(t, d, server)
+	loc := insertLocation(t, d, server, "server_file")
 	leaf := insertCertificate(t, d)
 	cert := insertKVCertificate(t, d, v.target, "web-cert")
 	version := insertKVVersion(t, d, cert, strings.Repeat("a", 32))
@@ -476,7 +478,7 @@ func TestAppRoleCannotRewriteKeyVaultHistory(t *testing.T) {
 	d := pgtest.New(t)
 	v := addVault(t, d, "kv1")
 	server := seedTarget(t, d, "web-01", "web-01.example.com")
-	loc := insertLocation(t, d, server)
+	loc := insertLocation(t, d, server, "server_file")
 	leaf := insertCertificate(t, d)
 	cert := insertKVCertificate(t, d, v.target, "web-cert")
 	version := insertKVVersion(t, d, cert, strings.Repeat("a", 32))
@@ -659,7 +661,7 @@ SELECT gen_random_uuid(), 'deg', 'linux', '{"host": "deg.example.com", "port": 2
 
 	// Phase 3 and Phase 4 data.
 	server := seedTarget(t, d, "web-01", "web-01.example.com")
-	loc := insertLocation(t, d, server)
+	loc := insertLocation(t, d, server, "nginx_file") // below 00016
 	leaf := insertCertificate(t, d)
 	require.NoError(t, exec(t, d.App, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status, new_fingerprint, cert_path, key_path, created_at)
 VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'queued', 'pending', repeat('e', 64), '/etc/ssl/a.pem', '/etc/ssl/a.key', now())`, leaf, loc, server))

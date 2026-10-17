@@ -127,7 +127,7 @@ type Facts struct {
 	Warnings       []providers.Warning           `json:"warnings,omitempty"`
 	Unreadable     []providers.UnreadableLine    `json:"unreadable,omitempty"`
 	UID0Users      []string                      `json:"uid0_users,omitempty"` // listed accounts with uid 0 (last-root-key guard)
-	Nginx          *providers.NginxFacts         `json:"nginx,omitempty"`      // what the last test or certificate scan learned of Nginx
+	WebServer      *providers.WebServerFacts     `json:"web_server,omitempty"` // what the last test or certificate scan learned of the web server
 	// KeyFiles: every account's candidate authorized_keys files of the last SSH scan (the files a
 	// deploy or a rotation may add a key to).
 	KeyFiles []providers.UserKeyFiles `json:"key_files,omitempty"`

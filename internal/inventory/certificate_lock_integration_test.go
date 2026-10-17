@@ -24,7 +24,7 @@ func TestCertificateChangesAreRefusedInLock(t *testing.T) {
 	web := nginxTarget(t, h, admin, "web-01")
 	ca := pki.NewCA("Up", pki.ECDSA256, h.clock.Now())
 	l := ca.Issue(pki.Opts{CommonName: "www.example.test"}, h.clock.Now())
-	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK,
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK,
 		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"), l)}})
 	require.NoError(t, err)
 	loc := byPath(t, h, web.ID, false)["/etc/nginx/ssl/www.crt"]

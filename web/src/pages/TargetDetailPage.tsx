@@ -354,7 +354,7 @@ function IdentityNotice({ target, admin, onReview }: { target: Target; admin: bo
 function connectionFacts(t: TFunction, i18n: I18n, target: Target, pinned: HostKey | null, discoveryFailed: boolean, asOf: string | null): Fact[] {
   const lang = i18n.language;
   const f = target.facts;
-  const nginx = target.type === 'nginx' ? f.nginx : undefined;
+  const nginx = target.type === 'nginx' ? f.web_server : undefined;
   const facts: Fact[] = [
     { key: 'state', label: t('targets.page.facts.state'), value: <TargetStatusBadge status={target.status} /> },
     { key: 'address', label: t('targets.page.facts.address'), value: <Code translate="no">{`${target.host}:${target.port}`}</Code> },

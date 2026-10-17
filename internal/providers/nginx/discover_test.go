@@ -33,8 +33,8 @@ func TestDiscoverListsWebsitesWithCertificates(t *testing.T) {
 	e := newEnv(t)
 	e.emu.SetFile("/home/deploy/.ssh/authorized_keys", []byte(authKeysLine+"\n"))
 	res := discover(t, e, providers.DiscoverRequest{SSHKeys: true, Certificates: true})
-	require.NotNil(t, res.Nginx)
-	assert.Equal(t, providers.NginxFacts{Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: true}, *res.Nginx)
+	require.NotNil(t, res.WebServer)
+	assert.Equal(t, providers.WebServerFacts{Software: "nginx", Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: true}, *res.WebServer)
 	require.Len(t, res.Certificates, 1)
 	c := res.Certificates[0]
 	assert.Equal(t, wwwCert, c.Location.CertPath)
@@ -100,7 +100,7 @@ func TestDiscoverHonoursTheRequest(t *testing.T) {
 	assert.Empty(t, res.SSHKeys)
 	assert.Empty(t, res.Accounts)
 	assert.Len(t, res.Certificates, 1)
-	require.NotNil(t, res.Nginx)
+	require.NotNil(t, res.WebServer)
 
 	n = len(e.srv.Commands())
 	res = discover(t, e, providers.DiscoverRequest{SSHKeys: true})
@@ -109,7 +109,7 @@ func TestDiscoverHonoursTheRequest(t *testing.T) {
 	}
 	assert.NotEmpty(t, res.SSHKeys)
 	assert.Empty(t, res.Certificates)
-	assert.Nil(t, res.Nginx)
+	assert.Nil(t, res.WebServer)
 
 	// Neither flag: linuxssh's own answer (host keys and sshd), no Nginx.
 	n = len(e.srv.Commands())
@@ -117,7 +117,7 @@ func TestDiscoverHonoursTheRequest(t *testing.T) {
 	for _, line := range e.srv.Commands()[n:] {
 		assert.NotContains(t, line, "nginx-")
 	}
-	assert.Nil(t, res.Nginx)
+	assert.Nil(t, res.WebServer)
 }
 
 func TestDiscoverSharedDualAndUnsupportedLocations(t *testing.T) {
@@ -144,7 +144,7 @@ func TestDiscoverSharedDualAndUnsupportedLocations(t *testing.T) {
 	assert.Empty(t, v.Location.KeyPath)
 	assert.Equal(t, providers.UnsupportedStream, byPath["/etc/ssl/mail.crt"].Location.Unsupported)
 	assert.Equal(t, []string{"stream_tls"}, warningCodes(res.Warnings), "F-21: a warning, the http websites are still listed")
-	assert.True(t, res.Nginx.ConfigValid)
+	assert.True(t, res.WebServer.ConfigValid)
 }
 
 // unsupportedRaws gives, per reason of the parser, the directive argument that makes the real
@@ -270,11 +270,11 @@ func TestDiscoverConfigurationErrorsAreResults(t *testing.T) {
 			e := newEnv(t)
 			tc.setup(e)
 			res := discover(t, e, providers.DiscoverRequest{Certificates: true})
-			require.NotNil(t, res.Nginx)
-			assert.Equal(t, providers.NginxFacts{Found: true, Version: "1.22.1", ConfPath: tc.confPath, ConfigValid: false,
-				ConfigError: tc.class, ConfigErrorReason: tc.reason, ConfigErrorFile: tc.file}, *res.Nginx)
+			require.NotNil(t, res.WebServer)
+			assert.Equal(t, providers.WebServerFacts{Software: "nginx", Found: true, Version: "1.22.1", ConfPath: tc.confPath, ConfigValid: false,
+				ConfigError: tc.class, ConfigErrorReason: tc.reason, ConfigErrorFile: tc.file}, *res.WebServer)
 			assert.Empty(t, res.Certificates)
-			assert.Equal(t, []string{"nginx_config_invalid"}, warningCodes(res.Warnings))
+			assert.Equal(t, []string{"web_server_config_invalid"}, warningCodes(res.Warnings))
 		})
 	}
 }
@@ -284,9 +284,9 @@ func TestDiscoverEmptyVersionAndConfPath(t *testing.T) {
 	e.emu.EnableNginx("")
 	e.emu.SetNginxConfPath("")
 	res := discover(t, e, providers.DiscoverRequest{Certificates: true})
-	assert.Empty(t, res.Nginx.Version)
-	assert.Empty(t, res.Nginx.ConfPath)
-	assert.True(t, res.Nginx.Found)
+	assert.Empty(t, res.WebServer.Version)
+	assert.Empty(t, res.WebServer.ConfPath)
+	assert.True(t, res.WebServer.Found)
 }
 
 // A forged dump is the way to reach what real nginx -T refuses (a pair file that is missing, not a
@@ -474,9 +474,9 @@ func TestDiscoverDeduplicatesAServerThatAppearsOncePerInclude(t *testing.T) {
 	e := newEnv(t)
 	e.emu.SetNginxConfig("/etc/nginx/nginx.conf", "events {}\nhttp { include /etc/nginx/conf.d/*.conf; include /etc/nginx/conf.d/emu.conf; }\n")
 	res := discover(t, e, providers.DiscoverRequest{Certificates: true})
-	require.NotNil(t, res.Nginx)
-	if !res.Nginx.ConfigValid {
-		t.Skipf("the helper refuses a file included twice (%s)", res.Nginx.ConfigErrorReason)
+	require.NotNil(t, res.WebServer)
+	if !res.WebServer.ConfigValid {
+		t.Skipf("the helper refuses a file included twice (%s)", res.WebServer.ConfigErrorReason)
 	}
 	require.Len(t, res.Certificates, 1)
 	assert.Len(t, res.Certificates[0].Location.Servers, 1)

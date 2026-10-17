@@ -56,7 +56,7 @@ func TestDiscoveryNeverRewritesAnUploadedCertificatesChain(t *testing.T) {
 	junk := pki.SelfSigned("attacker-chosen.example", pki.ECDSA256, h.clock.Now())
 	file := append(append(append([]byte{}, leaf.CertPEM...), junk.CertPEM...), ca.IntermediatePEM...)
 	hostile := nginxTarget(t, h, admin, "web-hostile")
-	_, err = h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err = h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		{Location: cl("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key", "www.example.test"), PEMChain: file, FileSHA256: sha(file)}}})
 	require.NoError(t, err)
 
@@ -71,7 +71,7 @@ func TestDiscoveryNeverRewritesAnUploadedCertificatesChain(t *testing.T) {
 	// What a deployment of it to another server sends: the uploaded chain, no foreign certificate.
 	web := nginxTarget(t, h, admin, "web-02")
 	current := ca.Issue(www, h.clock.Now())
-	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), current)}})
 	require.NoError(t, err)
 	reqd, err := h.svc.RequestDeployment(h.ctx, admin, inventory.DeployRequestInput{CertificateID: c.ID,
@@ -94,7 +94,7 @@ func TestDiscoveredCertificateStoresTheOrderedPathOnly(t *testing.T) {
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
 	junk := pki.SelfSigned("attacker-chosen.example", pki.ECDSA256, h.clock.Now())
 	file := append(append(append(append([]byte{}, leaf.CertPEM...), ca.RootPEM...), junk.CertPEM...), ca.IntermediatePEM...)
-	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		{Location: cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), PEMChain: file, FileSHA256: sha(file)}}})
 	require.NoError(t, err)
 	l := byPath(t, h, web.ID, false)["/etc/nginx/ssl/www.crt"]
@@ -163,7 +163,7 @@ func TestDiscoveryParsesFilesCheaplyAndOutsideTheTransaction(t *testing.T) {
 	})
 	defer restore()
 	started := time.Now()
-	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		{Location: cl("/etc/nginx/ssl/big.crt", "/etc/nginx/ssl/big.key", "big.example.test"), PEMChain: huge, FileSHA256: sha(huge)}}})
 	require.NoError(t, err)
 	assert.Less(t, time.Since(started), 3*time.Second)
@@ -188,7 +188,7 @@ func TestReconcileIsFencedToTheDiscoveryJobsClaim(t *testing.T) {
 	_, err = h.db.Owner.Exec(h.ctx, "UPDATE jobs SET status = 'running', attempts = 2 WHERE id = $1", job)
 	require.NoError(t, err)
 	leaf := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now()).Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
-	res := providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	res := providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), leaf)}}
 
 	stale := inventory.WithClaim(h.ctx, inventory.Claim{JobID: job, Attempt: 1})
@@ -226,7 +226,7 @@ func TestChangedOutsideBaselinesAndDeploymentsSinceTheLastScan(t *testing.T) {
 		} else {
 			d.Location.Problem = providers.CertProblemMissing
 		}
-		_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{d}})
+		_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{d}})
 		require.NoError(t, err)
 		return h.audits("location.changed_outside") > before
 	}
@@ -415,7 +415,7 @@ func TestKeyAttachTakesTheUploadersChain(t *testing.T) {
 	forged := append(append(append([]byte{}, leaf.CertPEM...), inter...), fakeRoot...)
 	full := append(append([]byte{}, benign.FullchainPEM...), ca.RootPEM...)
 	hostile := nginxTarget(t, h, admin, "web-hostile")
-	_, err := h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err := h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		{Location: cl("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key", "www.example.test"), PEMChain: forged, FileSHA256: sha(forged)},
 		{Location: cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "www.example.test"), PEMChain: full, FileSHA256: sha(full)}}})
 	require.NoError(t, err)
@@ -433,7 +433,7 @@ func TestKeyAttachTakesTheUploadersChain(t *testing.T) {
 
 	// A deployment to another server sends no certificate of the scanned server's file.
 	web := nginxTarget(t, h, admin, "web-02")
-	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), ca.Issue(www, h.clock.Now()))}})
 	require.NoError(t, err)
 	reqd, err := h.svc.RequestDeployment(h.ctx, admin, inventory.DeployRequestInput{CertificateID: c.ID,
@@ -444,7 +444,7 @@ func TestKeyAttachTakesTheUploadersChain(t *testing.T) {
 	assert.Equal(t, string(leaf.CertPEM), string(m.CertificatePEM))
 
 	// A later scan with the forged file changes nothing.
-	_, err = h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err = h.svc.Reconcile(h.ctx, hostile.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		{Location: cl("/etc/nginx/ssl/x.crt", "/etc/nginx/ssl/x.key", "www.example.test"), PEMChain: forged, FileSHA256: sha(forged)}}})
 	require.NoError(t, err)
 	got, err := h.svc.GetCertificate(h.ctx, c.ID)
@@ -480,7 +480,7 @@ func TestDiscoveryBoundsChainOrderingAndFollowsItsContext(t *testing.T) {
 		require.NoError(t, err)
 		file = append(file, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
 	}
-	res := providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	res := providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		{Location: cl("/etc/nginx/ssl/same.crt", "/etc/nginx/ssl/same.key", "www.example.test"), PEMChain: file, FileSHA256: sha(file)}}}
 
 	gone, cancel := context.WithCancel(h.ctx)

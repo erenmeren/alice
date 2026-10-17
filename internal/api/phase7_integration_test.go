@@ -339,13 +339,13 @@ WHERE subject_cn LIKE '%.export.test'`)
 	// Some certificates are on two servers (location_count 2).
 	_, err = s.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
 servers, first_seen_at, last_seen_at)
-SELECT gen_random_uuid(), t.id, 'nginx_file', '/etc/nginx/ssl/two-' || c.id || '.crt', '/etc/nginx/ssl/two-' || c.id || '.key', c.id, true,
+SELECT gen_random_uuid(), t.id, 'server_file', '/etc/nginx/ssl/two-' || c.id || '.crt', '/etc/nginx/ssl/two-' || c.id || '.key', c.id, true,
        '[]', now(), now()
 FROM certificates c, targets t WHERE c.subject_cn LIKE '%.export.test' AND hashtext(c.id::text) % 4 = 0 AND t.name = 'seed-web-3'`)
 	require.NoError(t, err)
 	_, err = s.db.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
 servers, first_seen_at, last_seen_at)
-SELECT gen_random_uuid(), t.id, 'nginx_file', '/etc/nginx/ssl/' || c.id || '.crt', '/etc/nginx/ssl/' || c.id || '.key', c.id, true, '[]',
+SELECT gen_random_uuid(), t.id, 'server_file', '/etc/nginx/ssl/' || c.id || '.crt', '/etc/nginx/ssl/' || c.id || '.key', c.id, true, '[]',
        now(), now()
 FROM certificates c, targets t WHERE c.subject_cn LIKE '%.export.test' AND t.name = 'seed-web-2'`)
 	require.NoError(t, err)

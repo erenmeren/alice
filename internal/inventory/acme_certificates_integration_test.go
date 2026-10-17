@@ -300,7 +300,7 @@ func TestACMECertificateLocks(t *testing.T) {
 	web := w.seedTarget("web-3", "nginx", "web3.example.test")
 	loc := uuid.New()
 	_, err := w.db.Owner.Exec(w.ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, first_seen_at, last_seen_at)
-VALUES ($1, $2, 'nginx_file', '/etc/nginx/ssl/lock.crt', true, now(), now())`, loc, web)
+VALUES ($1, $2, 'server_file', '/etc/nginx/ssl/lock.crt', true, now(), now())`, loc, web)
 	require.NoError(t, err)
 	_, err = w.db.App.Exec(w.ctx, "INSERT INTO acme_bindings (acme_certificate_id, location_id, created_at) VALUES ($1, $2, now())", c.ID, loc)
 	require.NoError(t, err)
@@ -773,7 +773,7 @@ func TestACMEChangesSeeAConcurrentOrder(t *testing.T) {
 			if tc.binding {
 				loc := uuid.New()
 				_, err = w.db.Owner.Exec(w.ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, first_seen_at, last_seen_at)
-VALUES ($1, $2, 'nginx_file', $3, true, now(), now())`, loc, web, "/etc/nginx/ssl/"+loc.String()+".crt")
+VALUES ($1, $2, 'server_file', $3, true, now(), now())`, loc, web, "/etc/nginx/ssl/"+loc.String()+".crt")
 				require.NoError(t, err)
 				_, err = tx.Exec(w.ctx, "INSERT INTO acme_bindings (acme_certificate_id, location_id, created_at) VALUES ($1, $2, now())", c.ID, loc)
 			} else {

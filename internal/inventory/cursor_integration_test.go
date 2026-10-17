@@ -41,7 +41,7 @@ func TestDiscoveryRefusesCertificatesOutsideYears1To9999(t *testing.T) {
 	for i, f := range files {
 		found = append(found, dc(cl(fmt.Sprintf("/etc/nginx/ssl/%d.crt", i), fmt.Sprintf("/etc/nginx/ssl/%d.key", i), f.cn), f.leaf))
 	}
-	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: found})
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: found})
 	require.NoError(t, err)
 
 	locs := byPath(t, h, web.ID, false)

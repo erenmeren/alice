@@ -85,7 +85,7 @@ VALUES ($1, $2, $3, $4::timestamptz - interval '90 days', $4::timestamptz, 'ecds
 	}
 	for _, tg := range targets {
 		if _, err := pool.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
-servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'nginx_file', $3, $4, $5, true, $6, now(), now())`,
+servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'server_file', $3, $4, $5, true, $6, now(), now())`,
 			uuid.New(), tg, "/etc/nginx/ssl/"+id.String()+".crt", "/etc/nginx/ssl/"+id.String()+".key", id, servers); err != nil {
 			return uuid.Nil, err
 		}

@@ -20,8 +20,8 @@ type ConnectionReport struct {
 	HelperProtocol int
 	OS             OSRelease
 	Warnings       []Warning
-	Nginx          *NginxFacts // what the Nginx provider found on the server; nil for linuxssh
-	Azure          *AzureFacts // the vault's access check; nil for other providers
+	WebServer      *WebServerFacts // what a web-server provider found on the server; nil for linuxssh
+	Azure          *AzureFacts     // the vault's access check; nil for other providers
 }
 
 // DiscoverRequest selects what Discover reads. SSHKeys and Certificates are Phase 3/4's; for a
@@ -47,8 +47,8 @@ type DiscoveryResult struct {
 	AccountsComplete bool     // Accounts is the whole list; only then may inventory mark vanished users' keys missing
 	ReadFiles        []string // files read completely: missing marking is limited to these, also in a partial scan (R37 #23)
 	Certificates     []DiscoveredCertificate
-	Nginx            *NginxFacts  // nil when certificates were not read
-	KV               *KVInventory // the Key Vault half; nil for other providers
+	WebServer        *WebServerFacts // nil when certificates were not read
+	KV               *KVInventory    // the Key Vault half; nil for other providers
 	// KeyFiles lists every account's candidate authorized_keys files as the helper resolved them
 	// (the SSH half only; nil when SSH keys were not read).
 	KeyFiles []UserKeyFiles
@@ -243,8 +243,11 @@ type Descriptor struct {
 	CredentialSchema CredentialSchema
 }
 
-// NginxFacts is what Alice shows about Nginx on a server.
-type NginxFacts struct {
+// WebServerFacts is what Alice shows about the web server software on a server.
+type WebServerFacts struct {
+	// Software is the web server software ("nginx"; later "apache", "haproxy"); it equals the
+	// provider kind and the target type.
+	Software    string `json:"software"`
 	Version     string `json:"version"`
 	ConfPath    string `json:"conf_path"`
 	ConfigValid bool   `json:"config_valid"`
@@ -257,7 +260,7 @@ type NginxFacts struct {
 	Found             bool   `json:"found"`
 }
 
-// Configuration error classes of NginxFacts.ConfigError and of a deployment step's Error. They
+// Configuration error classes of WebServerFacts.ConfigError and of a deployment step's Error. They
 // equal helperproto.ConfigErr* (a test compares them).
 const (
 	ConfigErrKeyMismatch = "key_mismatch"
@@ -269,7 +272,7 @@ const (
 	ConfigErrUnsupported = "unsupported" // a configuration Alice cannot read safely
 )
 
-// Reasons of NginxFacts.ConfigErrorReason (a closed set); they equal helperproto.ConfigReason*.
+// Reasons of WebServerFacts.ConfigErrorReason (a closed set); they equal helperproto.ConfigReason*.
 const (
 	ConfigReasonNotRootControlled = "not_root_controlled"
 	ConfigReasonSpecialFS         = "special_filesystem"
@@ -399,6 +402,12 @@ const (
 	// helperproto.MaxServerFiles): the list is not every location of the server, so inventory marks
 	// none missing. Only the provider emits it (too_many_files is the helper's own warning).
 	WarnLocationsDropped = "locations_dropped"
+	// The server-level codes of every web-server provider and of the scan job: the web server is
+	// not installed, its sudoers profile is missing (nothing of it was read), or its configuration
+	// has an error (Alice does not deploy).
+	WarnWebServerNotFound       = "web_server_not_found"
+	WarnWebServerProfileMissing = "web_server_profile_missing"
+	WarnWebServerConfigInvalid  = "web_server_config_invalid"
 	// WarnKVItemUnreadable: a vault listing held items Alice could not use (a name, version or
 	// thumbprint outside the shapes Alice stores, details that did not fit); they were left out.
 	// Params: object (certificates | versions | keys | secrets) and count. Only the azurekv provider emits it.

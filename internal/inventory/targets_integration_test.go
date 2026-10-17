@@ -204,29 +204,29 @@ func TestNginxTargets(t *testing.T) {
 	// Host-key flow: a confirmation, then the connection test stores what it found of Nginx.
 	k := h.pinnedKey(tg.ID)
 	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k,
-		Nginx: &providers.NginxFacts{Found: true, ConfigValid: true}}))
+		WebServer: &providers.WebServerFacts{Found: true, ConfigValid: true}}))
 	got, err := h.svc.GetTarget(h.ctx, tg.ID)
 	require.NoError(t, err)
 	assert.Equal(t, inventory.StatusOK, got.Status)
-	require.NotNil(t, got.Facts.Nginx)
-	assert.True(t, got.Facts.Nginx.ConfigValid)
+	require.NotNil(t, got.Facts.WebServer)
+	assert.True(t, got.Facts.WebServer.ConfigValid)
 
 	// A discovery learns the version; a later test (which knows no version) keeps it, a report
 	// without Nginx facts keeps them all.
-	_, err = h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true,
+	_, err = h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{WebServer: &providers.WebServerFacts{Found: true, ConfigValid: true,
 		Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf"}})
 	require.NoError(t, err)
 	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k,
-		Nginx: &providers.NginxFacts{Found: true, ConfigValid: false, ConfigError: providers.ConfigErrSyntax}}))
+		WebServer: &providers.WebServerFacts{Found: true, ConfigValid: false, ConfigError: providers.ConfigErrSyntax}}))
 	got, err = h.svc.GetTarget(h.ctx, tg.ID)
 	require.NoError(t, err)
-	assert.Equal(t, &providers.NginxFacts{Found: true, ConfigValid: false, ConfigError: providers.ConfigErrSyntax, Version: "1.22.1",
-		ConfPath: "/etc/nginx/nginx.conf"}, got.Facts.Nginx)
+	assert.Equal(t, &providers.WebServerFacts{Found: true, ConfigValid: false, ConfigError: providers.ConfigErrSyntax, Version: "1.22.1",
+		ConfPath: "/etc/nginx/nginx.conf"}, got.Facts.WebServer)
 	require.NoError(t, h.svc.RecordConnectionOK(h.ctx, tg.ID, providers.ConnectionReport{HostKey: k}))
 	got, err = h.svc.GetTarget(h.ctx, tg.ID)
 	require.NoError(t, err)
-	require.NotNil(t, got.Facts.Nginx)
-	assert.Equal(t, providers.ConfigErrSyntax, got.Facts.Nginx.ConfigError)
+	require.NotNil(t, got.Facts.WebServer)
+	assert.Equal(t, providers.ConfigErrSyntax, got.Facts.WebServer.ConfigError)
 
 	// A target of the nginx type without a registered nginx provider is refused like an unknown type.
 	plain := newHarness(t)

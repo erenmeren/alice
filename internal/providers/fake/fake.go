@@ -194,13 +194,13 @@ func (c Config) clone() Config {
 	c.Discovery.Warnings = slices.Clone(c.Discovery.Warnings)
 	c.Discovery.ReadFiles = slices.Clone(c.Discovery.ReadFiles)
 	c.Report.Warnings = slices.Clone(c.Report.Warnings)
-	if c.Report.Nginx != nil {
-		n := *c.Report.Nginx
-		c.Report.Nginx = &n
+	if c.Report.WebServer != nil {
+		n := *c.Report.WebServer
+		c.Report.WebServer = &n
 	}
-	if c.Discovery.Nginx != nil {
-		n := *c.Discovery.Nginx
-		c.Discovery.Nginx = &n
+	if c.Discovery.WebServer != nil {
+		n := *c.Discovery.WebServer
+		c.Discovery.WebServer = &n
 	}
 	if c.Discovery.Certificates != nil {
 		certs := make([]providers.DiscoveredCertificate, len(c.Discovery.Certificates))
@@ -414,7 +414,7 @@ func (s *session) Discover(_ context.Context, req providers.DiscoverRequest) (pr
 		res.KeyFiles = cfg.World.userKeyFiles(s.target) // a world answers for the key files unless a test scripted them
 	}
 	if !req.Certificates {
-		res.Certificates, res.Nginx = nil, nil
+		res.Certificates, res.WebServer = nil, nil
 	}
 	return res, cfg.DiscoverErr
 }

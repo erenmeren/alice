@@ -294,10 +294,12 @@ export interface SSHDSettings {
   certificates_in_use: boolean;
 }
 
-// NginxFacts are what the last scan or test learned about Nginx on an Nginx server (absent on other
-// servers and before the first scan). config_error and config_error_reason are codes (see
-// CONFIG_ERRORS and CONFIG_REASONS); config_error_file is text from the server.
-export interface NginxFacts {
+// WebServerFacts are what the last scan or test learned about the web server software on a web server
+// (absent on other servers and before the first scan). software equals the target type; config_error
+// and config_error_reason are codes (see CONFIG_ERRORS and CONFIG_REASONS); config_error_file is text
+// from the server.
+export interface WebServerFacts {
+  software: 'nginx';
   version: string;
   conf_path: string;
   config_valid: boolean;
@@ -315,7 +317,7 @@ export interface TargetFacts {
   host_keys: DiscoveredHostKey[];
   warnings: Warning[];
   unreadable: UnreadableLine[];
-  nginx?: NginxFacts;
+  web_server?: WebServerFacts;
 }
 
 export interface Target {

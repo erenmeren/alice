@@ -69,11 +69,11 @@ func newDeployFixture(t *testing.T) *deployFixture {
 	f.target1, f.target2 = t1.ID, t2.ID
 	unsupported := providers.CertLocation{CertPath: "/etc/nginx/ssl/var.crt", KeyPath: "/etc/nginx/ssl/var.key", Supported: false,
 		Unsupported: providers.UnsupportedVariable, Servers: []providers.CertServer{{Names: []string{"var.example.test"}}}}
-	_, err := h.svc.Reconcile(h.ctx, t1.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err := h.svc.Reconcile(h.ctx, t1.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), f.old),
 		dc(cl("/etc/nginx/ssl/b.crt", "/etc/nginx/ssl/b.key", "www.example.test"), f.old)}})
 	require.NoError(t, err)
-	_, err = h.svc.Reconcile(h.ctx, t2.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err = h.svc.Reconcile(h.ctx, t2.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), f.old),
 		dc(cl("/etc/nginx/ssl/api.crt", "/etc/nginx/ssl/api.key", "www.example.test"), f.old),
 		dc(cl("/etc/nginx/ssl/spare.crt", "/etc/nginx/ssl/spare.key", "www.example.test"), f.old),
@@ -115,7 +115,7 @@ func (f *deployFixture) setTargetStatus(id uuid.UUID, status string) {
 
 func (f *deployFixture) setConfigValid(id uuid.UUID, valid bool) {
 	f.h.t.Helper()
-	_, err := f.h.db.Owner.Exec(f.h.ctx, "UPDATE targets SET facts = jsonb_set(facts, '{nginx,config_valid}', to_jsonb($2::boolean)) WHERE id = $1",
+	_, err := f.h.db.Owner.Exec(f.h.ctx, "UPDATE targets SET facts = jsonb_set(facts, '{web_server,config_valid}', to_jsonb($2::boolean)) WHERE id = $1",
 		id, valid)
 	require.NoError(f.h.t, err)
 }
@@ -1212,7 +1212,7 @@ func TestAWebServerWhoseProviderDoesNotDeployIsRefused(t *testing.T) {
 	tg := nginxTarget(t, h, admin, "web-01")
 	now := h.clock.Now()
 	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, now)
-	_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err := h.svc.Reconcile(h.ctx, tg.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), leaf)}})
 	require.NoError(t, err)
 	loc := byPath(t, h, tg.ID, false)["/etc/nginx/ssl/www.crt"].ID

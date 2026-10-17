@@ -635,7 +635,7 @@ VALUES ($1, $2, $3, $4::timestamptz - interval '6 days', $4, 'ecdsa', $5, '', 'a
 		require.NoError(t, err)
 		for _, tg := range targets {
 			_, err = d.Owner.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported,
-servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'nginx_file', $3, $4, $5, true, '[{"names": ["`+cn+`"], "listens": [], "file": "/etc/nginx/conf.d/a.conf", "line": 1}]', now(), now())`,
+servers, first_seen_at, last_seen_at) VALUES ($1, $2, 'server_file', $3, $4, $5, true, '[{"names": ["`+cn+`"], "listens": [], "file": "/etc/nginx/conf.d/a.conf", "line": 1}]', now(), now())`,
 				uuid.New(), tg, "/etc/nginx/ssl/"+cn+".crt", "/etc/nginx/ssl/"+cn+".key", id)
 			require.NoError(t, err)
 		}

@@ -493,7 +493,7 @@ func TestReconcileMarksKeysOfVanishedUsersMissing(t *testing.T) {
 func TestCertificateScanNeverMarksKeysMissing(t *testing.T) {
 	f := newRemovalFixture(t)
 	h := f.h
-	res := providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true}, AccountsComplete: true}
+	res := providers.DiscoveryResult{WebServer: &providers.WebServerFacts{Found: true, ConfigValid: true}, AccountsComplete: true}
 	sum, err := h.svc.Reconcile(h.ctx, f.target.ID, res)
 	require.NoError(t, err)
 	assert.Zero(t, sum.Missing)

@@ -8,7 +8,7 @@ import {
   jobFixture,
   keyLocationFixture,
   locationFixture,
-  nginxFacts,
+  webServerFacts,
   nginxTargetFixture,
   nginxTargetWith,
   sessionFor,
@@ -201,7 +201,7 @@ describe('WebsitesPanel on an Nginx server', () => {
   describe('stale facts and a server that cannot be deployed to', () => {
     it('marks the websites stale with the time Alice last read them when the Nginx permissions are missing', async () => {
       // last_discovery_at moves when only the SSH keys were scanned, so it must not be shown.
-      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { warnings: [{ code: 'nginx_profile_missing', params: {} }] });
+      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { warnings: [{ code: 'web_server_profile_missing', params: {} }] });
       onNginx('admin', [locationFixture({ last_seen_at: '2026-09-20T10:00:00Z' }), locationFixture({ id: 'older', last_seen_at: '2026-09-10T10:00:00Z' })], target);
       await renderRoute(path);
       const stale = await screen.findByTestId('stale-websites');
@@ -216,14 +216,14 @@ describe('WebsitesPanel on an Nginx server', () => {
     });
 
     it('uses the same time for an invalid configuration', async () => {
-      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { nginx: nginxFacts({ config_valid: false, config_error: 'syntax' }) });
+      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { web_server: webServerFacts({ config_valid: false, config_error: 'syntax' }) });
       onNginx('operator', [locationFixture({ last_seen_at: '2026-09-22T10:00:00Z' })], target);
       await renderRoute(path);
       expect(await screen.findByTestId('stale-websites')).toHaveTextContent(/as it last read them, on .*Sep 22, 2026/);
     });
 
     it('gives no time when Alice has not read any website from the server yet', async () => {
-      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { warnings: [{ code: 'nginx_profile_missing', params: {} }] });
+      const target = nginxTargetWith({ last_discovery_at: '2026-09-30T08:00:00Z' }, { warnings: [{ code: 'web_server_profile_missing', params: {} }] });
       onNginx('operator', [], target);
       await renderRoute(path);
       const stale = await screen.findByTestId('stale-websites');
@@ -233,7 +233,7 @@ describe('WebsitesPanel on an Nginx server', () => {
     });
 
     it('shows the invalid configuration with its class, reason and file, and disables Deploy', async () => {
-      const target = nginxTargetWith({}, { nginx: nginxFacts({ config_valid: false, config_error: 'untrusted', config_error_reason: 'not_root_controlled', config_error_file: '/etc/nginx/conf.d/x.conf' }) });
+      const target = nginxTargetWith({}, { web_server: webServerFacts({ config_valid: false, config_error: 'untrusted', config_error_reason: 'not_root_controlled', config_error_file: '/etc/nginx/conf.d/x.conf' }) });
       onNginx('operator', [locationFixture()], target);
       await renderRoute(path);
       const alert = await screen.findByTestId('config-invalid');
@@ -246,7 +246,7 @@ describe('WebsitesPanel on an Nginx server', () => {
     });
 
     it('says that Nginx was not found without calling the configuration invalid', async () => {
-      const target = nginxTargetWith({}, { nginx: nginxFacts({ version: '', found: false, config_valid: false }), warnings: [{ code: 'nginx_not_found', params: {} }] });
+      const target = nginxTargetWith({}, { web_server: webServerFacts({ version: '', found: false, config_valid: false }), warnings: [{ code: 'web_server_not_found', params: {} }] });
       onNginx('operator', [locationFixture()], target);
       await renderRoute(path);
       expect(await screen.findByTestId('stale-websites')).toHaveTextContent('Nginx was not found on this server.');

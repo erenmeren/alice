@@ -771,7 +771,7 @@ func (w *world) nginxServer(name string, old pki.Leaf) uuid.UUID {
 	loc := providers.CertLocation{CertPath: "/etc/nginx/ssl/www.crt", KeyPath: "/etc/nginx/ssl/www.key", ResolvedCertPath: "/etc/nginx/ssl/www.crt",
 		Supported: true, KeyExists: true, KeyMode: "0600", KeyOwner: "root", KeyGroup: "root",
 		Servers: []providers.CertServer{{Names: []string{"www.example.test"}, Listens: []providers.CertListen{{Port: 443}}, File: "/etc/nginx/sites-enabled/default", Line: 1}}}
-	_, err = w.inv.Reconcile(w.ctx, tg.ID, providers.DiscoveryResult{Nginx: &providers.NginxFacts{Found: true, ConfigValid: true, Version: "1.22.1"},
+	_, err = w.inv.Reconcile(w.ctx, tg.ID, providers.DiscoveryResult{WebServer: &providers.WebServerFacts{Found: true, ConfigValid: true, Version: "1.22.1"},
 		Certificates: []providers.DiscoveredCertificate{{Location: loc, PEMChain: old.FullchainPEM, FileSHA256: hex.EncodeToString(sum[:])}}})
 	require.NoError(w.t, err)
 	page, err := w.inv.ListLocations(w.ctx, tg.ID, false)

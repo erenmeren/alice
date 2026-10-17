@@ -35,7 +35,7 @@ import type {
   LicenseBanner,
   LicenseDetail,
   LicenseStatus,
-  NginxFacts,
+  WebServerFacts,
   PlatformKeyInfo,
   Role,
   SessionInfo,
@@ -596,9 +596,9 @@ export function deploymentDetailFixture(o: Partial<DeploymentDetail> = {}): Depl
   return { ...deploymentFixture(), steps: [], ...o };
 }
 
-// nginxTargetFixture is an Nginx server whose last scan was fine; nginxFacts builds its facts.
-export function nginxFacts(o: Partial<NginxFacts> = {}): NginxFacts {
-  return { version: '1.24.0', conf_path: '/etc/nginx/nginx.conf', config_valid: true, config_error: '', config_error_reason: '', config_error_file: '', found: true, ...o };
+// nginxTargetFixture is an Nginx server whose last scan was fine; webServerFacts builds its facts.
+export function webServerFacts(o: Partial<WebServerFacts> = {}): WebServerFacts {
+  return { software: 'nginx', version: '1.24.0', conf_path: '/etc/nginx/nginx.conf', config_valid: true, config_error: '', config_error_reason: '', config_error_file: '', found: true, ...o };
 }
 
 export const nginxTargetFixture: Target = {
@@ -608,7 +608,7 @@ export const nginxTargetFixture: Target = {
   type: 'nginx',
   host: 'nginx-01.example.com',
   capabilities: ['discover_certs', 'deploy_certs', 'test_connection'],
-  facts: { ...targetFixture.facts, nginx: nginxFacts() },
+  facts: { ...targetFixture.facts, web_server: webServerFacts() },
 };
 
 export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {

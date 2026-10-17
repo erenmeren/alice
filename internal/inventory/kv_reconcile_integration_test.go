@@ -504,7 +504,7 @@ func TestMissingMarkingNeedsACompleteListing(t *testing.T) {
 	alpha := h.certRow(vault, "alpha")
 	binding := h.bindCertificate(alpha.ID, vault)
 	ca := pki.NewCA("Bind", pki.ECDSA256, h.clock.Now())
-	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK, Certificates: []providers.DiscoveredCertificate{
+	_, err := h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
 		dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key"), ca.Issue(pki.Opts{CommonName: "www.example.test"}, now))}})
 	require.NoError(t, err)
 	loc := byPath(t, h, web.ID, false)["/etc/nginx/ssl/www.crt"]

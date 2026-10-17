@@ -113,9 +113,9 @@ func (h *rnHost) testSetup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, helperproto.Protocol, rep.HelperProtocol)
 	assert.Equal(t, rnDistros[h.image], rep.OS.ID)
-	require.NotNil(t, rep.Nginx)
-	assert.True(t, rep.Nginx.Found)
-	assert.True(t, rep.Nginx.ConfigValid, "the distribution's default configuration passes nginx -t")
+	require.NotNil(t, rep.WebServer)
+	assert.True(t, rep.WebServer.Found)
+	assert.True(t, rep.WebServer.ConfigValid, "the distribution's default configuration passes nginx -t")
 	assert.Empty(t, rep.Warnings)
 }
 
@@ -219,12 +219,12 @@ func (h *rnHost) testSudo(t *testing.T) {
 // no certificate is listed.
 func (h *rnHost) testUntouchedLayout(t *testing.T) {
 	res, _ := h.discover(true)
-	require.NotNil(t, res.Nginx)
-	assert.True(t, res.Nginx.Found)
-	assert.True(t, res.Nginx.ConfigValid, "the default layout authenticates: %+v", *res.Nginx)
-	assert.Empty(t, res.Nginx.ConfigError)
-	assert.Contains(t, res.Nginx.Version, rnNginxVersions[h.image])
-	assert.Equal(t, "/etc/nginx/nginx.conf", res.Nginx.ConfPath)
+	require.NotNil(t, res.WebServer)
+	assert.True(t, res.WebServer.Found)
+	assert.True(t, res.WebServer.ConfigValid, "the default layout authenticates: %+v", *res.WebServer)
+	assert.Empty(t, res.WebServer.ConfigError)
+	assert.Contains(t, res.WebServer.Version, rnNginxVersions[h.image])
+	assert.Equal(t, "/etc/nginx/nginx.conf", res.WebServer.ConfPath)
 	assert.Empty(t, res.Certificates, "the default layout has no TLS server")
 	// No Nginx warning; the SSH half's only: the fixture user linky's authorized_keys is a link, the
 	// fixture's two entries the helper cannot list (uids 1009 and 1010, AUD-03) are reported, and
@@ -377,8 +377,8 @@ func osMode(m uint32) os.FileMode { return os.FileMode(m) }
 // produces, with its reason; the server-level warnings.
 func (h *rnHost) testDiscovery(t *testing.T) {
 	res, locs := h.discover(true)
-	require.NotNil(t, res.Nginx)
-	require.True(t, res.Nginx.ConfigValid, "%+v %v", *res.Nginx, res.Warnings)
+	require.NotNil(t, res.WebServer)
+	require.True(t, res.WebServer.ConfigValid, "%+v %v", *res.WebServer, res.Warnings)
 	supported := func(cert string) providers.DiscoveredCertificate {
 		t.Helper()
 		c, ok := locs[cert]
@@ -488,7 +488,7 @@ func (h *rnHost) testDiscovery(t *testing.T) {
 	writable := warningsOf(res.Warnings, providers.WarnConfigFileWritable)
 	require.Len(t, writable, 1)
 	assert.Equal(t, rnWRConf, writable[0].Params["path"])
-	assert.NotContains(t, codes, "nginx_config_invalid")
+	assert.NotContains(t, codes, "web_server_config_invalid")
 }
 
 // testIncludeSpellings (carry 1): one snippet included under two spellings (plain and ./) is
@@ -500,16 +500,16 @@ func (h *rnHost) testIncludeSpellings(t *testing.T) {
 	dump := h.sh(nginxBin + " -T 2>/dev/null | grep '^# configuration file .*alice-snippets/common.conf:'")
 	assert.Equal(t, 2, strings.Count(dump, "\n"), "nginx prints the snippet once per spelling: %s", dump)
 	res, locs := h.discover(false)
-	require.NotNil(t, res.Nginx)
-	assert.True(t, res.Nginx.ConfigValid, "plain and ./ spellings of one file: %+v", *res.Nginx)
+	require.NotNil(t, res.WebServer)
+	assert.True(t, res.WebServer.ConfigValid, "plain and ./ spellings of one file: %+v", *res.WebServer)
 	assert.True(t, locs[rnWWW].Location.Supported)
 
 	h.write(conf, []byte("server {\n    listen 8080;\n    server_name spell.example.test;\n    include alice-snippets/../alice-snippets/common.conf;\n}\n"), "root:root", 0o644)
 	res, _ = h.discover(false)
-	require.NotNil(t, res.Nginx)
-	assert.False(t, res.Nginx.ConfigValid, "an include through .. is refused (known limitation)")
-	assert.Equal(t, providers.ConfigErrUnsupported, res.Nginx.ConfigError)
-	assert.Equal(t, providers.ConfigReasonNameNotAllowed, res.Nginx.ConfigErrorReason)
+	require.NotNil(t, res.WebServer)
+	assert.False(t, res.WebServer.ConfigValid, "an include through .. is refused (known limitation)")
+	assert.Equal(t, providers.ConfigErrUnsupported, res.WebServer.ConfigError)
+	assert.Equal(t, providers.ConfigReasonNameNotAllowed, res.WebServer.ConfigErrorReason)
 	h.sh("rm -f " + conf)
 }
 
@@ -533,17 +533,17 @@ func (h *rnHost) testInvalidConfiguration(t *testing.T) {
 	} {
 		h.write(broken, []byte(c.conf), "root:root", 0o644)
 		res, _ := h.discover(false)
-		require.NotNil(t, res.Nginx)
-		assert.False(t, res.Nginx.ConfigValid, c.class)
-		assert.Equal(t, c.class, res.Nginx.ConfigError, "the class of real nginx's error text")
+		require.NotNil(t, res.WebServer)
+		assert.False(t, res.WebServer.ConfigValid, c.class)
+		assert.Equal(t, c.class, res.WebServer.ConfigError, "the class of real nginx's error text")
 		assert.Empty(t, res.Certificates, c.class)
-		assert.Contains(t, warningCodes(res.Warnings), "nginx_config_invalid", c.class)
+		assert.Contains(t, warningCodes(res.Warnings), "web_server_config_invalid", c.class)
 		rep, err := h.session(nil).TestConnection(context.Background())
 		require.NoError(t, err)
-		require.NotNil(t, rep.Nginx)
-		assert.False(t, rep.Nginx.ConfigValid, c.class)
-		assert.Equal(t, c.class, rep.Nginx.ConfigError, "nginx -t's class")
-		assert.Contains(t, warningCodes(rep.Warnings), "nginx_config_invalid", c.class)
+		require.NotNil(t, rep.WebServer)
+		assert.False(t, rep.WebServer.ConfigValid, c.class)
+		assert.Equal(t, c.class, rep.WebServer.ConfigError, "nginx -t's class")
+		assert.Contains(t, warningCodes(rep.Warnings), "web_server_config_invalid", c.class)
 	}
 }
 

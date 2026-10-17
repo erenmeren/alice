@@ -421,11 +421,11 @@ func TestConvertWarnings(t *testing.T) {
 func TestNginxFactsOfTheDump(t *testing.T) {
 	d := helperproto.ServerDumpResponse{OK: true, Version: " 1.22.1\x1b ", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: true,
 		ConfigError: "syntax", ConfigErrorReason: "changed", ConfigErrorFile: "/etc/nginx/x.conf"}
-	assert.Equal(t, providers.NginxFacts{Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: true}, nginxFacts(d),
+	assert.Equal(t, providers.WebServerFacts{Software: "nginx", Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: true}, nginxFacts(d),
 		"a valid configuration carries no error")
 
 	d.ConfigValid = false
-	assert.Equal(t, providers.NginxFacts{Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigError: "syntax",
+	assert.Equal(t, providers.WebServerFacts{Software: "nginx", Found: true, Version: "1.22.1", ConfPath: "/etc/nginx/nginx.conf", ConfigError: "syntax",
 		ConfigErrorReason: "changed", ConfigErrorFile: "/etc/nginx/x.conf"}, nginxFacts(d))
 
 	d.ConfigError, d.ConfigErrorReason, d.ConfigErrorFile = "bogus", "bogus", "relative\x1b/x"

@@ -176,16 +176,16 @@ func (s *session) TestConnection(ctx context.Context) (providers.ConnectionRepor
 	t, err := linuxssh.DecodeHelper[helperproto.NginxTestResponse](res, helperproto.SubNginxTest)
 	switch {
 	case isHelperCode(err, helperproto.CodeNginxNotFound):
-		rep.Nginx = &providers.NginxFacts{}
-		rep.Warnings = append(rep.Warnings, warning("nginx_not_found"))
+		rep.WebServer = &providers.WebServerFacts{Software: "nginx"}
+		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerNotFound))
 		return rep, nil
 	case err != nil:
 		return rep, mapHelper(err, helperproto.SubNginxTest)
 	}
-	rep.Nginx = &providers.NginxFacts{Found: true, ConfigValid: t.Valid}
+	rep.WebServer = &providers.WebServerFacts{Software: "nginx", Found: true, ConfigValid: t.Valid}
 	if !t.Valid {
-		rep.Nginx.ConfigError = knownOrEmpty(t.Error, configErrors)
-		rep.Warnings = append(rep.Warnings, warning("nginx_config_invalid"))
+		rep.WebServer.ConfigError = knownOrEmpty(t.Error, configErrors)
+		rep.Warnings = append(rep.Warnings, warning(providers.WarnWebServerConfigInvalid))
 	}
 	return rep, nil
 }

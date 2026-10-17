@@ -1134,7 +1134,7 @@ VALUES (gen_random_uuid(), $1, 'ssh-ed25519', 'k', now(), now())`, "SHA256:"+rep
 	require.NoError(t, exec(t, d.App, `INSERT INTO ssh_key_locations (id, ssh_key_id, target_id, os_user, file_path, line_no, first_seen_at, last_seen_at)
 VALUES (gen_random_uuid(), $1, $2, 'deploy', '/home/deploy/.ssh/authorized_keys', 1, now(), now())`, discovered, server))
 	leaf := insertCertificate(t, d)
-	loc := insertLocation(t, d, server)
+	loc := insertLocation(t, d, server, "nginx_file") // below 00016
 	addVault(t, d, "kv1")
 	require.NoError(t, exec(t, d.App, `INSERT INTO deployments (id, certificate_id, location_id, target_id, trigger, state, status, new_fingerprint, cert_path, key_path, created_at)
 VALUES (gen_random_uuid(), $1, $2, $3, 'manual', 'queued', 'pending', repeat('e', 64), '/etc/ssl/a.pem', '/etc/ssl/a.key', now())`, leaf, loc, server))

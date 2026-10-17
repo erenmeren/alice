@@ -102,7 +102,7 @@ VALUES ($1, 'web-01', 'nginx', '{"host":"10.0.0.1","port":22,"username":"alice-s
 first_seen_at, last_seen_at, created_at) VALUES ($1, $2, now(), now() + interval '90 days', 'ecdsa', $3, '', 'discovered', now(), now(), now())`,
 			[]any{cert, hex64("a"), hex64("b")}},
 		{`INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported, first_seen_at, last_seen_at)
-VALUES ($1, $2, 'nginx_file', '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $3, true, now(), now())`, []any{loc, target, cert}},
+VALUES ($1, $2, 'server_file', '/etc/nginx/ssl/www.crt', '/etc/nginx/ssl/www.key', $3, true, now(), now())`, []any{loc, target, cert}},
 	} {
 		_, err := d.Owner.Exec(ctx, q.sql, q.args...)
 		require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestCSRConstraints(t *testing.T) {
 
 func locationRow(w world, path string) map[string]any {
 	now := time.Now()
-	return map[string]any{"id": uuid.New(), "target_id": w.target, "kind": "nginx_file", "cert_path": path, "supported": true,
+	return map[string]any{"id": uuid.New(), "target_id": w.target, "kind": "server_file", "cert_path": path, "supported": true,
 		"first_seen_at": now, "last_seen_at": now}
 }
 
@@ -440,9 +440,9 @@ SELECT $1, 'web-02', 'nginx', '{"host":"10.0.0.2","port":22}', credential_id, 'o
 	// The conflict target and the lookup both use the hash expression.
 	var id uuid.UUID
 	require.NoError(t, d.App.QueryRow(ctx, `SELECT id FROM certificate_locations
-WHERE target_id = $1 AND kind = 'nginx_file' AND certificate_location_path_hash(cert_path) = certificate_location_path_hash($2) AND cert_path = $2`, w.target, incompressible).Scan(&id))
+WHERE target_id = $1 AND kind = 'server_file' AND certificate_location_path_hash(cert_path) = certificate_location_path_hash($2) AND cert_path = $2`, w.target, incompressible).Scan(&id))
 	tag, err := d.App.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, first_seen_at, last_seen_at)
-VALUES (gen_random_uuid(), $1, 'nginx_file', $2, true, now(), now())
+VALUES (gen_random_uuid(), $1, 'server_file', $2, true, now(), now())
 ON CONFLICT (target_id, kind, certificate_location_path_hash(cert_path)) DO UPDATE SET last_seen_at = now()`, w.target, incompressible)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, tag.RowsAffected())
@@ -459,7 +459,7 @@ func TestLocationServersBound(t *testing.T) {
 	w := seedWorld(t, d)
 	insert := func(path, expr string) error {
 		_, err := d.App.Exec(context.Background(), `INSERT INTO certificate_locations (id, target_id, kind, cert_path, supported, servers, first_seen_at, last_seen_at)
-SELECT gen_random_uuid(), $1, 'nginx_file', $2, true, `+expr+`, now(), now()`, w.target, path)
+SELECT gen_random_uuid(), $1, 'server_file', $2, true, `+expr+`, now(), now()`, w.target, path)
 		return err
 	}
 	// 500 servers x 100 names of 253 characters x 100 listens: about 15 MB.

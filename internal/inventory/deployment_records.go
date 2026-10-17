@@ -225,7 +225,7 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	if err := json.Unmarshal(facts, &f); err != nil {
 		return Material{}, fmt.Errorf("inventory: decode target facts: %w", err)
 	}
-	m.ConfigValid = f.Nginx != nil && f.Nginx.ConfigValid
+	m.ConfigValid = f.WebServer != nil && f.WebServer.ConfigValid
 	m.Location.CertPath, m.Location.KeyPath = d.CertPath, d.KeyPath
 	if verifyPort != nil {
 		m.Verify.Port = *verifyPort

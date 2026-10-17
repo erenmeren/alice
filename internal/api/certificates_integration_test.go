@@ -55,9 +55,10 @@ func TestNginxJourney(t *testing.T) {
 	s.pinServer(admin, targetID)
 
 	tg := s.target(admin, targetID)
-	nginxFacts := tg["facts"].(map[string]any)["nginx"].(map[string]any)
+	nginxFacts := tg["facts"].(map[string]any)["web_server"].(map[string]any)
 	assert.Equal(t, true, nginxFacts["config_valid"])
 	assert.Equal(t, true, nginxFacts["found"])
+	assert.Equal(t, "nginx", nginxFacts["software"])
 	assert.Equal(t, "1.22.1", nginxFacts["version"])
 
 	// Step 3: the scan lists both websites with the certificate they serve.
@@ -216,7 +217,7 @@ func TestDiscoverShowsSupportAndInvalidConfiguration(t *testing.T) {
 	// The configuration breaks: the target shows it, the known locations stay (not "missing").
 	f.emu.SetConfigInvalid("syntax")
 	s.discover(admin, targetID)
-	facts := s.target(admin, targetID)["facts"].(map[string]any)["nginx"].(map[string]any)
+	facts := s.target(admin, targetID)["facts"].(map[string]any)["web_server"].(map[string]any)
 	assert.Equal(t, false, facts["config_valid"])
 	assert.Equal(t, "syntax", facts["config_error"])
 	assert.Len(t, s.certificateLocations(admin, targetID, false), 5, "an invalid configuration removes no known location")
@@ -232,7 +233,7 @@ func TestDiscoverShowsSupportAndInvalidConfiguration(t *testing.T) {
 	// certificate any more.
 	f.emu.SetConfigInvalid("")
 	s.discover(admin, targetID)
-	assert.Equal(t, true, s.target(admin, targetID)["facts"].(map[string]any)["nginx"].(map[string]any)["config_valid"])
+	assert.Equal(t, true, s.target(admin, targetID)["facts"].(map[string]any)["web_server"].(map[string]any)["config_valid"])
 	oldCertID := s.location(admin, targetID, wwwCert)["certificate"].(map[string]any)["id"].(string)
 	before := decodeBody[map[string]any](t, admin.do(http.MethodGet, "/api/v1/certificates/"+oldCertID, nil))
 	require.Len(t, before["locations"], 2)

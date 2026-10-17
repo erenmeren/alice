@@ -284,7 +284,7 @@ func TestReconcileStoresKeyFiles(t *testing.T) {
 	require.NoError(t, err)
 
 	// A certificates-only result knows nothing about SSH: the earlier files stay.
-	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{Nginx: nginxOK})
+	_, err = h.svc.Reconcile(h.ctx, web.ID, providers.DiscoveryResult{WebServer: nginxOK})
 	require.NoError(t, err)
 	got, err = h.svc.GetTarget(h.ctx, web.ID)
 	require.NoError(t, err)

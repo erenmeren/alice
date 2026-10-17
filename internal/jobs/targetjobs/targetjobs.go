@@ -228,12 +228,12 @@ func (h *handlers) scan(jobCtx context.Context, j jobs.Job) (providers.Discovery
 		// The certificate half cannot run, but the server's SSH keys are still scanned (inventory
 		// leaves the certificate locations as they are). Nginx not installed (or no longer): the
 		// Nginx facts say "not found". The nginx sudoers profile not installed: nothing is known of
-		// Nginx (no facts, the stored ones stay) and the warning nginx_profile_missing says why.
+		// Nginx (no facts, the stored ones stay) and the warning web_server_profile_missing says why.
 		notFound := isCode(err, "nginx.not_found")
 		if res, err = sess.Discover(ctx, providers.DiscoverRequest{SSHKeys: true}); err == nil {
-			code := "nginx_profile_missing"
+			code := providers.WarnWebServerProfileMissing
 			if notFound {
-				res.Nginx, code = &providers.NginxFacts{}, "nginx_not_found"
+				res.WebServer, code = &providers.WebServerFacts{Software: string(providers.KindNginx)}, providers.WarnWebServerNotFound
 			}
 			res.Warnings = append(res.Warnings, providers.Warning{Code: code, Params: map[string]string{}})
 		}

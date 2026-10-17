@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"alice/internal/providers"
 )
 
 // statusAfterSuccess over every status, with and without a pinned key, for an explicit connection
@@ -78,4 +80,16 @@ func TestStatusForAddressNotAllowed(t *testing.T) {
 	assert.Equal(t, StatusUnreachable, statusFor(reason, StatusOK, true))
 	assert.Equal(t, StatusPendingHostKey, statusFor(reason, StatusPendingHostKey, false))
 	assert.Equal(t, StatusHostKeyChanged, statusFor(reason, StatusHostKeyChanged, true))
+}
+
+// A report that does not name the software keeps the stored one; a report that finds no web server
+// replaces the version and configuration path with "".
+func TestMergeWebServerFactsKeepsTheSoftware(t *testing.T) {
+	old := &providers.WebServerFacts{Software: "nginx", Found: true, Version: "1.24.0", ConfPath: "/etc/nginx/nginx.conf"}
+	got := mergeWebServerFacts(old, providers.WebServerFacts{Found: true, ConfigValid: true})
+	assert.Equal(t, &providers.WebServerFacts{Software: "nginx", Found: true, ConfigValid: true, Version: "1.24.0",
+		ConfPath: "/etc/nginx/nginx.conf"}, got)
+	gone := mergeWebServerFacts(old, providers.WebServerFacts{Software: "nginx", Found: false})
+	assert.Equal(t, &providers.WebServerFacts{Software: "nginx"}, gone, "not found: version and path are emptied")
+	assert.Equal(t, "ngin\ufffd", mergeWebServerFacts(nil, providers.WebServerFacts{Software: "ngin\x00"}).Software, "jsonb refuses NUL")
 }

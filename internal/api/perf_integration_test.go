@@ -41,7 +41,7 @@ now() + ((i % 400) - 20) * interval '1 day', 'ecdsa', md5('k' || i) || md5('l' |
 FROM generate_series(1, 5000) AS i`,
 		`INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, certificate_id, supported, servers, first_seen_at,
 last_seen_at)
-SELECT gen_random_uuid(), t.id, 'nginx_file', '/etc/nginx/ssl/' || c.subject_cn || '.crt', '/etc/nginx/ssl/' || c.subject_cn || '.key',
+SELECT gen_random_uuid(), t.id, 'server_file', '/etc/nginx/ssl/' || c.subject_cn || '.crt', '/etc/nginx/ssl/' || c.subject_cn || '.key',
 c.id, true, jsonb_build_array(jsonb_build_object('names', jsonb_build_array(c.subject_cn), 'listens', '[]'::jsonb,
 'file', '/etc/nginx/conf.d/site.conf', 'line', 1)), now(), now()
 FROM (SELECT id, subject_cn, row_number() OVER (ORDER BY subject_cn) AS n FROM certificates WHERE subject_cn LIKE 'site%') c

@@ -121,8 +121,8 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 		}
 		f := t.Facts
 		f.OS, f.HelperVersion, f.HelperProtocol = r.OS, r.HelperVersion, r.HelperProtocol
-		if r.Nginx != nil {
-			f.Nginx = mergeNginxFacts(f.Nginx, *r.Nginx)
+		if r.WebServer != nil {
+			f.WebServer = mergeWebServerFacts(f.WebServer, *r.WebServer)
 		}
 		raw, err := json.Marshal(f)
 		if err != nil {
@@ -132,11 +132,14 @@ func (s *Service) RecordConnectionOK(ctx context.Context, id uuid.UUID, r provid
 	})
 }
 
-// mergeNginxFacts is the stored Nginx facts after a report: the report replaces them, except that
-// a connection test (nginx-test) knows neither the version nor the configuration path, so those of
-// the last certificate scan stay while Nginx is still found. Remote text is made storable (jsonb
-// refuses NUL).
-func mergeNginxFacts(old *providers.NginxFacts, n providers.NginxFacts) *providers.NginxFacts {
+// mergeWebServerFacts is the stored web server facts after a report: the report replaces them, except
+// that a connection test (nginx-test) knows neither the version nor the configuration path, so those
+// of the last certificate scan stay while the web server is still found, and a report that does not
+// name the software keeps the stored one. Remote text is made storable (jsonb refuses NUL).
+func mergeWebServerFacts(old *providers.WebServerFacts, n providers.WebServerFacts) *providers.WebServerFacts {
+	if old != nil && n.Software == "" {
+		n.Software = old.Software
+	}
 	if old != nil && n.Found && old.Found {
 		if n.Version == "" {
 			n.Version = old.Version
@@ -145,7 +148,7 @@ func mergeNginxFacts(old *providers.NginxFacts, n providers.NginxFacts) *provide
 			n.ConfPath = old.ConfPath
 		}
 	}
-	n.Version, n.ConfPath, n.ConfigError = clean(n.Version), clean(n.ConfPath), clean(n.ConfigError)
+	n.Software, n.Version, n.ConfPath, n.ConfigError = clean(n.Software), clean(n.Version), clean(n.ConfPath), clean(n.ConfigError)
 	n.ConfigErrorReason, n.ConfigErrorFile = clean(n.ConfigErrorReason), clean(n.ConfigErrorFile)
 	return &n
 }

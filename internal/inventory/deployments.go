@@ -473,7 +473,7 @@ func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCe
 		return "location_unsupported", ErrLocationUnsupported
 	case !slices.Contains(targetReady, t.Status):
 		return "target_not_ready", ErrTargetNotReady
-	case t.Facts.Nginx == nil || !t.Facts.Nginx.ConfigValid:
+	case t.Facts.WebServer == nil || !t.Facts.WebServer.ConfigValid:
 		return "config_invalid", ErrNginxConfigInvalid
 	case !hex64RE.MatchString(l.fileSHA):
 		return "rescan_needed", ErrLocationNeedsDiscovery
