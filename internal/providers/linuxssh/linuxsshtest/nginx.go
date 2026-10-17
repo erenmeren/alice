@@ -750,7 +750,7 @@ func sudoRefusal() Response {
 // the helper: sudo refuses it.
 func sudoersAllows(sub string, args []string) bool {
 	switch sub {
-	case helperproto.SubNginxDump, helperproto.SubNginxTest:
+	case helperproto.SubNginxDump, helperproto.SubNginxTest, helperproto.SubApacheDump:
 		return len(args) == 0
 	case helperproto.SubNginxRestore, helperproto.SubNginxStatus, helperproto.SubNginxFence:
 		return len(args) == 2 && args[0] == "--op" && len(args[1]) == 36

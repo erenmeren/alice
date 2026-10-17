@@ -34,9 +34,10 @@ var rules = map[string][]string{
 	"alice/internal/certs/...":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":     {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver"}, // a web-server provider embeds the shared layer
-	// The test world of the linuxssh provider runs the real nginx configuration parser, so that an
+	// The test world of the linuxssh provider runs the real nginx and Apache configuration parsers, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
-	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf"},
+	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf",
+		"alice/internal/providers/apacheconf"},
 	// The Apache configuration parser reads hostile input in the root helper: it stays pure.
 	"alice/internal/providers/apacheconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
@@ -435,6 +436,7 @@ func TestAllowed(t *testing.T) {
 		{"provider to own subpackage allowed", nginx, nginx + "/internal", true},
 		{"nginxconf to helperproto allowed", nginx + "/nginxconf", "alice/internal/providers/linuxssh/helperproto", true},
 		{"linuxsshtest to nginxconf allowed", linuxsshtest, "alice/internal/providers/nginx/nginxconf", true},
+		{"linuxsshtest to apacheconf allowed", linuxsshtest, "alice/internal/providers/apacheconf", true},
 		{"linuxsshtest to the nginx provider denied", linuxsshtest, nginx, false},
 		{"linuxsshtest to platform/db denied", linuxsshtest, "alice/internal/platform/db", false},
 		{"nginxconf to platform/db denied", nginx + "/nginxconf", "alice/internal/platform/db", false},
