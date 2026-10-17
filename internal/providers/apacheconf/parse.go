@@ -251,6 +251,10 @@ type scope struct {
 	keys      []ref
 	listens   []Listen
 	uncertain bool // the vhost lies in an uncertain region, or a name with "${" was read in the scope
+	// nameUncertain: a ServerName or ServerAlias of the scope was read in an uncertain region, so the
+	// names shown may not be the ones Apache uses. The rows that show them are conditional, as for
+	// uncertain; at the main level only the rows that show the main server's name are.
+	nameUncertain bool
 }
 
 type listenKey struct {
@@ -469,7 +473,9 @@ func (p *parser) line(entry int, l line) ([]int, error) {
 	switch {
 	case l.name == "servername" && len(l.args) > 0:
 		sc.name, sc.hasName = p.hostName(l.args[0]), true
+		sc.nameUncertain = sc.nameUncertain || maybe
 	case l.name == "serveralias":
+		sc.nameUncertain = sc.nameUncertain || maybe
 		for _, a := range l.args {
 			if p.overBudget {
 				break
@@ -958,7 +964,8 @@ func (p *parser) servers() ([]Server, error) {
 			s.Names = []string{p.main.name}
 		}
 		certs := merge(nil, p.main.certs, len(p.main.certs))
-		if err := add(withPairs(s, certs, merge(nil, p.main.keys, len(certs)), p.main.uncertain || mainEngine != engineOn)); err != nil {
+		conditional := p.main.uncertain || p.main.nameUncertain || mainEngine != engineOn
+		if err := add(withPairs(s, certs, merge(nil, p.main.keys, len(certs)), conditional)); err != nil {
 			return nil, err
 		}
 	}
@@ -977,6 +984,7 @@ func (p *parser) servers() ([]Server, error) {
 		}
 		certs := merge(p.main.certs, v.certs, len(p.main.certs)+len(v.certs))
 		s := Server{File: v.file, Line: v.line, Listens: v.listens}
+		nameUncertain := v.nameUncertain
 		switch {
 		case v.hasName:
 			s.Names = append(s.Names, v.name)
@@ -984,11 +992,12 @@ func (p *parser) servers() ([]Server, error) {
 			// ap_fini_vhost_config: a vhost without a ServerName on a wildcard address takes the
 			// main server's (on a specific address Apache asks DNS, which Alice does not).
 			s.Names = append(s.Names, p.main.name)
+			nameUncertain = nameUncertain || p.main.nameUncertain
 		}
 		s.Names = append(s.Names, v.aliases...)
 		// A hidden directive at the main level (main.uncertain) may be any SSL directive every
-		// vhost inherits.
-		conditional := v.uncertain || p.main.uncertain || engine != engineOn
+		// vhost inherits. A name read in an uncertain region is never shown as certain.
+		conditional := v.uncertain || p.main.uncertain || nameUncertain || engine != engineOn
 		if err := add(withPairs(s, certs, merge(p.main.keys, v.keys, len(certs)), conditional)); err != nil {
 			return nil, err
 		}

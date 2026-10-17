@@ -183,6 +183,8 @@ Alice lists these websites as **Not supported** with the reason, or shows the pr
 - A certificate or key line inside `<If>`, `<ElseIf>`, `<Else>`, `<IfFile>`, `<IfDirective>`, `<IfSection>`, an
   `<IfVersion>` with a regular expression or an `<IfModule>` with a name Alice cannot map: "This file is set inside a
   conditional section of the configuration" (`conditional`). Alice cannot tell when it is used.
+  The same holds for a `ServerName` or `ServerAlias` line in such a section: the website's names may not be the ones
+  Apache uses, so its certificates are `conditional` too.
 - `Use` and `<Macro>` (mod_macro) are not expanded: certificates set through a macro are not seen.
 - Environment variables are not expanded: a path, name or address with `${APACHE_…}` from `envvars` or another
   variable that no `Define` sets is not supported ("The path uses a variable", `variable`).

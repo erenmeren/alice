@@ -764,3 +764,35 @@ func TestParseIsDeterministic(t *testing.T) {
 	assert.Equal(t, a, b)
 	assert.False(t, errors.Is(err, ErrOutput))
 }
+
+// A ServerName or ServerAlias read in an uncertain region is never shown as certain (review M-3):
+// the row that shows it is conditional, as for a name with "${". A main-level name read so only
+// affects the rows that show the main server's name.
+func TestUncertainServerNameIsNeverCertain(t *testing.T) {
+	keys := "SSLEngine on\nSSLCertificateFile /etc/ssl/a.pem\nSSLCertificateKeyFile /etc/ssl/a.key\n"
+	supported := []Pair{pair("/etc/ssl/a.pem", "/etc/ssl/a.key")}
+	conditional := []Pair{{CertRaw: "/etc/ssl/a.pem", KeyRaw: "/etc/ssl/a.key", Unsupported: ReasonConditional}}
+	for _, tc := range []struct {
+		name, text string
+		want       []Server
+	}{
+		{"a certain ServerName is supported", vhost("ServerName a.test\n" + keys),
+			[]Server{{File: rootConf, Line: 1, Names: []string{"a.test"}, Listens: []Listen{{"", 443, true}}, Pairs: supported}}},
+		{"ServerName under IfVersion ~ x", vhost("ServerName a.test\n<IfVersion ~ x>\nServerName b.test\n</IfVersion>\n" + keys),
+			[]Server{{File: rootConf, Line: 1, Names: []string{"b.test"}, Listens: []Listen{{"", 443, true}}, Pairs: conditional}}},
+		{"ServerName under If", vhost("<If true>\nServerName b.test\n</If>\n" + keys),
+			[]Server{{File: rootConf, Line: 1, Names: []string{"b.test"}, Listens: []Listen{{"", 443, true}}, Pairs: conditional}}},
+		{"ServerAlias under If", vhost("ServerName a.test\n<If true>\nServerAlias c.test\n</If>\n" + keys),
+			[]Server{{File: rootConf, Line: 1, Names: []string{"a.test", "c.test"}, Listens: []Listen{{"", 443, true}}, Pairs: conditional}}},
+		{"an uncertain main-level name affects only the vhost that takes it",
+			"<If true>\nServerName m.test\n</If>\n" + vhost(keys) + "<VirtualHost *:443>\nServerName own.test\n" + keys + "</VirtualHost>\n",
+			[]Server{{File: rootConf, Line: 4, Names: []string{"m.test"}, Listens: []Listen{{"", 443, true}}, Pairs: conditional},
+				{File: rootConf, Line: 9, Names: []string{"own.test"}, Listens: []Listen{{"", 443, false}}, Pairs: supported}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := Parse(testInput(root(tc.text)))
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.Servers)
+		})
+	}
+}
