@@ -57,7 +57,7 @@ function sources(dir: string): string[] {
 
 describe('web-server type literals', () => {
   it('has at least the types the guard is meant to cover', () => {
-    expect(WEB_SERVER_TYPES.length).toBeGreaterThan(0);
+    expect(WEB_SERVER_TYPES).toContain('nginx');
   });
 
   it('no component decides availability by a web-server type literal', () => {

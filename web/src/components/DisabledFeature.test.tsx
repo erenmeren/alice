@@ -69,6 +69,7 @@ describe('DisabledFeature', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent(note);
     await userEvent.click(b);
     await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard(' ');
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -83,5 +84,19 @@ describe('DisabledFeature', () => {
     expect(b).not.toHaveAttribute('aria-disabled');
     await userEvent.click(b);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('prevents the default action of a link-styled control', async () => {
+    await renderApp(
+      <DisabledFeature target={without} capability="deploy_certificate">
+        <Button component="a" href="/x">
+          Go
+        </Button>
+      </DisabledFeature>,
+    );
+    const a = screen.getByRole('link', { name: 'Go' });
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    a.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
   });
 });

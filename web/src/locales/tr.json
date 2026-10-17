@@ -990,7 +990,7 @@
     "web_server_config_invalid": "{{software}} yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
     "web_server_not_found": "Bu sunucuda {{software}} bulunamadı.",
     "web_server_profile_missing": "Bu sunucuda {{software}} izinleri kurulu değil, bu yüzden Alice web sitelerini okuyamıyor. Sunucu hazırlığı için {{software}} komutlarını çalıştırın, ardından Keşfet düğmesini seçin.",
-    "config_file_writable": "Bir {{software}} yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
+    "config_file_writable": "{{software}} tarafından kullanılan bir yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
     "too_many_files": "Bu sunucu Alice'in listelediğinden fazla sertifika dosyası kullanıyor, bu yüzden bazıları okunmadı.",
     "locations_dropped": "Bu sunucuda Alice'in listelediğinden fazla web sitesi var, bu yüzden liste eksik ve hiçbir web sitesi artık bulunmuyor olarak işaretlenmiyor.",
     "list_truncated": "Alice bu sunucunun bazı uzun listelerini (örneğin kullanıcı hesaplarını, anahtar dosyalarını veya Nginx yapılandırmasının bölümlerini) kısalttı, bu yüzden gösterilenler eksik.",

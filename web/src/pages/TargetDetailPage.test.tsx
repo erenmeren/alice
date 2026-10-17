@@ -593,7 +593,7 @@ describe('TargetDetailPage', () => {
       nginxServer('operator', nginxTargetWith({}, { warnings, web_server: webServerFacts() }));
       await renderRoute(`/servers/${nginxTargetFixture.id}`);
       expect(await screen.findByText(/TLS in stream blocks is not supported in this version/)).toBeInTheDocument();
-      expect(screen.getByText('A Nginx configuration file can be changed by users other than root: /etc/nginx/conf.d/w.conf')).toBeInTheDocument();
+      expect(screen.getByText('A configuration file used by Nginx can be changed by users other than root: /etc/nginx/conf.d/w.conf')).toBeInTheDocument();
       expect(screen.getByText(/more websites than Alice lists/)).toBeInTheDocument();
     });
   });

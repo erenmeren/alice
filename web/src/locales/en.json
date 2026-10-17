@@ -990,7 +990,7 @@
     "web_server_config_invalid": "{{software}}'s configuration has an error. Alice will not deploy until it is fixed.",
     "web_server_not_found": "{{software}} was not found on this server.",
     "web_server_profile_missing": "The {{software}} permissions are not installed on this server, so Alice cannot read its websites. Run the {{software}} commands for server preparation, then choose Discover.",
-    "config_file_writable": "A {{software}} configuration file can be changed by users other than root: {{path}}",
+    "config_file_writable": "A configuration file used by {{software}} can be changed by users other than root: {{path}}",
     "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
     "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
     "list_truncated": "Alice cut some long lists of this server (for example user accounts, key files or parts of the Nginx configuration), so what is shown is incomplete.",
