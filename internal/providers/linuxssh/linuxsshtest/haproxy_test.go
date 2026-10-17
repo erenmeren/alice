@@ -124,11 +124,46 @@ func TestHAProxyConfDirWarning(t *testing.T) {
 	assert.Empty(t, d.Warnings)
 }
 
-func TestHAProxyProtocol8AnswersVersion(t *testing.T) {
+func TestHAProxyProtocol8HelperDoesNotKnowTheSubcommand(t *testing.T) {
 	e, _ := haproxyWorld(t)
 	e.SetProtocol(8)
 	v := decode[helperproto.VersionResponse](t, e.handle(line(true, helperproto.SubVersion), nil))
 	assert.Equal(t, 8, v.Protocol)
+	r := e.handle(line(true, helperproto.SubHAProxyDump), nil)
+	assert.Equal(t, helperproto.ExitRefused, r.Exit)
+	assert.Equal(t, helperproto.CodeUnknownSubcommand, codeOf(t, r))
+	e.SetProtocol(9)
+	r, d := haproxyDump(t, e)
+	require.Equal(t, 0, r.Exit)
+	assert.True(t, d.ConfigValid)
+}
+
+func TestHAProxyTwoSNIFrontendsKeepTheirOwnCertificatesAndPorts(t *testing.T) {
+	ca := pki.NewCA("Emu HAProxy SNI", pki.ECDSA256, testNow)
+	a1, a2, b1 := ca.Issue(pki.Opts{CommonName: "a1.example.test"}, testNow), ca.Issue(pki.Opts{CommonName: "a2.example.test"}, testNow),
+		ca.Issue(pki.Opts{CommonName: "b1.example.test"}, testNow)
+	e := NewEmulator()
+	e.EnableHAProxy("")
+	e.AddHAProxySite(HAProxySite{Frontend: "fe_a", Port: 9443, CertPath: "/etc/haproxy/certs/a1.pem", SNI: []string{"a1.example.test"}}, a1.FullchainPEM, a1.KeyPEM)
+	e.AddHAProxySite(HAProxySite{Frontend: "fe_a", Port: 9444, CertPath: "/etc/haproxy/certs/a2.pem", SNI: []string{"a2.example.test"}}, a2.FullchainPEM, a2.KeyPEM)
+	e.AddHAProxySite(HAProxySite{Frontend: "fe_b", Port: 9445, CertPath: "/etc/haproxy/certs/b1.pem", SNI: []string{"b1.example.test"}}, b1.FullchainPEM, b1.KeyPEM)
+	r, d := haproxyDump(t, e)
+	require.Equal(t, 0, r.Exit, string(r.Stdout))
+	require.True(t, d.ConfigValid, "%+v", d)
+	require.Len(t, d.Servers, 3)
+	for i, want := range []struct {
+		section, cert, name string
+		port                int
+	}{{"fe_a", "/etc/haproxy/certs/a1.pem", "a1.example.test", 9443}, {"fe_a", "/etc/haproxy/certs/a2.pem", "a2.example.test", 9444},
+		{"fe_b", "/etc/haproxy/certs/b1.pem", "b1.example.test", 9445}} {
+		sv := d.Servers[i]
+		assert.Equal(t, want.section, sv.Section)
+		assert.Equal(t, []string{want.name}, sv.Names)
+		require.Len(t, sv.Pairs, 1, "each frontend lists only its own certificates")
+		assert.Equal(t, want.cert, sv.Pairs[0].Cert)
+		require.Len(t, sv.Listens, 1)
+		assert.Equal(t, want.port, sv.Listens[0].Port, "each site keeps its port")
+	}
 }
 
 func TestHAProxySetConfigAndWritable(t *testing.T) {
@@ -172,23 +207,23 @@ func TestHAProxyAndApacheOnOneHostStaySeparate(t *testing.T) {
 	e.EnableHAProxy("2.8.14")
 	e.AddHAProxySite(HAProxySite{Frontend: "fe", Port: 9443, CertPath: hCombined}, shop.FullchainPEM, shop.KeyPEM)
 
+	paths := func(fs []helperproto.DumpFile) []string {
+		var out []string
+		for _, f := range fs {
+			out = append(out, f.Path)
+		}
+		return out
+	}
 	_, ad := apacheDump(t, e)
 	require.Len(t, ad.Servers, 2)
+	assert.Equal(t, "", ad.Servers[0].Section, "Apache servers carry no section")
 	_, hd := haproxyDump(t, e)
 	require.Len(t, hd.Servers, 1)
 	assert.Equal(t, "fe", hd.Servers[0].Section)
 	assert.Equal(t, "2.8.14", hd.Version)
-	var as, hs string
-	for _, f := range ad.Files {
-		if f.Path == hCombined && f.Kind == "cert" {
-			as = f.SHA256
-		}
-	}
-	for _, f := range hd.Files {
-		if f.Path == hCombined && f.Kind == "cert" {
-			hs = f.SHA256
-		}
-	}
-	assert.NotEmpty(t, hs)
-	assert.Equal(t, as, hs, "the shared certificate is one file")
+	assert.Equal(t, "/etc/haproxy/haproxy.cfg", hd.ConfPath)
+	assert.ElementsMatch(t, []string{hCombined, hCombined}, paths(hd.Files), "HAProxy describes only its own certificate (as certificate and key)")
+	assert.Contains(t, paths(ad.Files), aCrt)
+	assert.NotContains(t, paths(hd.Files), aCrt, "an Apache-only certificate is not in the HAProxy dump")
+	assert.Equal(t, hexSum(append(append([]byte(nil), shop.FullchainPEM...), shop.KeyPEM...)), hd.Files[0].SHA256, "the shared path is one file")
 }

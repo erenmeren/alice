@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/providers/haproxyconf"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/linuxssh/linuxsshtest"
 	"alice/internal/testutil/pki"
@@ -27,9 +28,13 @@ import (
 // pairs, files (owner and group normalized), warnings and writable. The helper is the specification.
 
 const (
-	haCrtList = "/etc/haproxy/emu.crtlist"
 	haCertDir = "/etc/haproxy/certs"
 )
+
+// haList is the crt-list of the SNI sites of one frontend on one port (the emulator's naming, fixed here).
+func haList(frontend string, port int) string {
+	return "/etc/haproxy/emu-" + frontend + "-" + strconv.Itoa(port) + ".crtlist"
+}
 
 type haSite struct {
 	linuxsshtest.HAProxySite
@@ -43,11 +48,12 @@ type haproxyTwin struct {
 	sites []haSite
 }
 
-// haConf renders the sites as haproxy.cfg and the crt-list (written here, not taken from the
-// emulator): a frontend per distinct name, a "bind ... crt" per site without SNI names and one
-// "bind ... crt-list" per frontend that has sites with SNI names.
-func haConf(sites []haSite) (cfg, list string) {
-	var b, l strings.Builder
+// haConf renders the sites as haproxy.cfg and the crt-lists by path (written here, not taken from
+// the emulator): a frontend per distinct name, a "bind ... crt" per site without SNI names and one
+// "bind ... crt-list" per frontend and port that has sites with SNI names.
+func haConf(sites []haSite) (cfg string, lists map[string]string) {
+	var b strings.Builder
+	lists = map[string]string{}
 	b.WriteString("global\n    log /dev/log local0\ndefaults\n    mode http\n")
 	var order []string
 	for _, s := range sites {
@@ -57,26 +63,21 @@ func haConf(sites []haSite) (cfg, list string) {
 	}
 	for _, fe := range order {
 		b.WriteString("frontend " + fe + "\n")
-		bound := false
 		for _, s := range sites {
 			if s.Frontend != fe {
 				continue
 			}
-			switch {
-			case len(s.SNI) == 0:
+			if len(s.SNI) == 0 {
 				b.WriteString("    bind :" + strconv.Itoa(s.Port) + " ssl crt " + s.CertPath + "\n")
-			case !bound:
-				bound = true
-				b.WriteString("    bind :" + strconv.Itoa(s.Port) + " ssl crt-list " + haCrtList + "\n")
+				continue
 			}
+			if _, bound := lists[haList(fe, s.Port)]; !bound {
+				b.WriteString("    bind :" + strconv.Itoa(s.Port) + " ssl crt-list " + haList(fe, s.Port) + "\n")
+			}
+			lists[haList(fe, s.Port)] += s.CertPath + " " + strings.Join(s.SNI, " ") + "\n"
 		}
 	}
-	for _, s := range sites {
-		if len(s.SNI) > 0 {
-			l.WriteString(s.CertPath + " " + strings.Join(s.SNI, " ") + "\n")
-		}
-	}
-	return b.String(), l.String()
+	return b.String(), lists
 }
 
 func contains(l []string, v string) bool {
@@ -109,10 +110,10 @@ func newHAProxyTwin(t *testing.T, installed bool, sites []haSite) *haproxyTwin {
 		}
 		return nil, nil, errors.New("unexpected arguments")
 	}
-	cfg, list := haConf(sites)
+	cfg, lists := haConf(sites)
 	f.write(haproxyConfPath, cfg, 0o644)
-	if list != "" {
-		f.write(haCrtList, list, 0o644)
+	for p, text := range lists {
+		f.write(p, text, 0o644)
 	}
 	for _, s := range sites {
 		if s.KeyBeside {
@@ -170,6 +171,10 @@ func TestHAProxyEmulatorFidelity(t *testing.T) {
 	api := ca.Issue(pki.Opts{CommonName: "api.example.test"}, testNow)
 	wwwSite := haSite{linuxsshtest.HAProxySite{Frontend: "fe_www", Port: 9443, CertPath: haCertDir + "/www.pem"}, www}
 	besideSite := haSite{linuxsshtest.HAProxySite{Frontend: "fe_www", Port: 9444, CertPath: haCertDir + "/blog.pem", KeyBeside: true}, www}
+	api2Site := haSite{linuxsshtest.HAProxySite{Frontend: "fe_api2", Port: 9446, CertPath: haCertDir + "/api2.pem",
+		SNI: []string{"api2.example.test"}}, www}
+	api3Site := haSite{linuxsshtest.HAProxySite{Frontend: "fe_api", Port: 9447, CertPath: haCertDir + "/api3.pem",
+		SNI: []string{"api3.example.test"}}, www}
 	apiSite := haSite{linuxsshtest.HAProxySite{Frontend: "fe_api", Port: 9445, CertPath: haCertDir + "/api.pem",
 		SNI: []string{"api.example.test", "alt.example.test"}}, api}
 
@@ -203,6 +208,36 @@ func TestHAProxyEmulatorFidelity(t *testing.T) {
 			assert.Len(t, m["files"], 4)
 			assert.Equal(t, []any{}, m["warnings"])
 		}},
+		{name: "two frontends with SNI sites on different ports", installed: true, sites: []haSite{apiSite, api3Site, api2Site}, check: func(t *testing.T, m map[string]any, exit int) {
+			assert.Equal(t, 0, exit)
+			servers := asList(m["servers"])
+			require.Len(t, servers, 3)
+			for i, want := range []struct {
+				section, name string
+				port          float64
+			}{{"fe_api", "api.example.test", 9445}, {"fe_api", "api3.example.test", 9447}, {"fe_api2", "api2.example.test", 9446}} {
+				assert.Equal(t, want.section, servers[i]["section"])
+				assert.Equal(t, want.name, servers[i]["names"].([]any)[0])
+				assert.Len(t, serverPairs(servers[i]), 1, "only its own certificate")
+				assert.Equal(t, want.port, asList(servers[i]["listens"])[0]["port"])
+			}
+		}},
+		{name: "writable haproxy.cfg", installed: true, sites: []haSite{wwwSite, apiSite}, prep: func(tw *haproxyTwin) {
+			tw.chmod(haproxyConfPath, 0o666)
+		}, check: func(t *testing.T, m map[string]any, _ int) {
+			assert.Equal(t, []any{haproxyConfPath}, m["writable"])
+			assert.Equal(t, []any{helperproto.WarnConfigFileWritable}, m["warnings"])
+			assert.Empty(t, m["files"], "nothing the configuration names is opened")
+		}},
+		{name: "missing crt-list in an active region", installed: true, prep: func(tw *haproxyTwin) {
+			tw.setConfig("frontend f\n    bind :9443 ssl crt-list /etc/haproxy/gone.lst\n")
+		}, check: field(map[string]any{"config_valid": false, "config_error": helperproto.ConfigErrUntrusted, "config_error_reason": helperproto.ConfigReasonMissing})},
+		{name: "missing crt-list in an uncertain region", installed: true, sites: []haSite{wwwSite}, prep: func(tw *haproxyTwin) {
+			tw.setConfig("frontend f\n    bind :9443 ssl crt " + wwwSite.CertPath + "\n.if defined(X)\n    bind :9444 ssl crt-list /etc/haproxy/gone.lst\n.endif\n")
+		}, check: func(t *testing.T, m map[string]any, _ int) {
+			assert.Equal(t, true, m["config_valid"])
+			assert.Equal(t, []any{haproxyconf.WarnConfigFileNotRead}, m["warnings"])
+		}},
 		{name: "combined file", installed: true, sites: []haSite{wwwSite}, check: func(t *testing.T, m map[string]any, exit int) {
 			assert.Equal(t, 0, exit)
 			assert.Len(t, m["files"], 2, "the combined file is listed as a certificate and as a key")
@@ -233,9 +268,9 @@ func TestHAProxyEmulatorFidelity(t *testing.T) {
 			assert.Equal(t, []any{helperproto.WarnKeyGroupOpen}, m["warnings"])
 		}},
 		{name: "writable crt-list", installed: true, sites: []haSite{wwwSite, apiSite}, prep: func(tw *haproxyTwin) {
-			tw.chmod(haCrtList, 0o666)
+			tw.chmod(haList("fe_api", 9445), 0o666)
 		}, check: func(t *testing.T, m map[string]any, _ int) {
-			assert.Equal(t, []any{haCrtList}, m["writable"])
+			assert.Equal(t, []any{haList("fe_api", 9445)}, m["writable"])
 			assert.Equal(t, []any{helperproto.WarnConfigFileWritable}, m["warnings"])
 			assert.Empty(t, m["files"], "a writable configuration opens no certificate")
 		}},

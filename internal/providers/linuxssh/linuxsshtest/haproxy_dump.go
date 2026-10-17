@@ -20,6 +20,16 @@ import (
 // everything the helper's parser decides. The describe loop is the emulator's own, written to
 // behave exactly as finishDump does. Not modelled: "-c" does not look at certificate files or
 // server names, so a missing certificate is a "missing" place here, as it is for Apache.
+//
+// Emulator limits (the helper is the specification; the fidelity test covers the rest):
+//   - "-c" does not look at certificates, keys, crt-lists or server names; a missing haproxy.cfg is
+//     a "missing" untrusted place here, where the real "-c" fails first with class syntax.
+//   - conf.d is a plain set of files (SetHAProxyConfDir): a conf.d that exists but cannot be listed
+//     safely (not root's, writable by others, a pseudo file system, too many entries), which the
+//     helper reports as config_dir_not_read, cannot be expressed.
+//   - A certificate set with SetHAProxyFile keeps the default mode (0644, 0600 for *.key); only a
+//     combined site made by AddHAProxySite is created 0600.
+//   - Links are not modelled in crt directories (SetNginxFileResolved covers a certificate path).
 
 var errHAProxyMissing = errors.New("haproxy is not installed")
 var errHAProxyKilled = errors.New("haproxy timed out or was killed")

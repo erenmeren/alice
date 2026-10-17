@@ -18,14 +18,14 @@ import (
 const (
 	haproxyConfPath      = "/etc/haproxy/haproxy.cfg"
 	haproxyConfDir       = "/etc/haproxy/conf.d"
-	haproxyCrtListPath   = "/etc/haproxy/emu.crtlist"
 	defaultHAProxyVer    = "2.6.12"
 	haproxyVersionBanner = "HAProxy version %s 2025/10/03 - https://haproxy.org/\n"
 )
 
 // HAProxySite is one frontend bind that serves TLS with one certificate. KeyBeside means the key
 // is written to CertPath+".key" and not into the PEM. A site with SNI names is served through the
-// generated crt-list /etc/haproxy/emu.crtlist; one without has its own "bind ... crt" line.
+// generated crt-list of its frontend and port, /etc/haproxy/emu-<frontend>-<port>.crtlist (so each site keeps its
+// port and each frontend lists only its own certificates); one without has its own "bind ... crt" line.
 type HAProxySite struct {
 	Frontend  string
 	Port      int
@@ -101,7 +101,7 @@ func (e *Emulator) SetHAProxyConfig(text string) {
 func (e *Emulator) SetHAProxyFile(p string, content []byte) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if p == haproxyConfPath || p == haproxyCrtListPath {
+	if p == haproxyConfPath || isCrtListPath(p) {
 		e.haproxy().confs[p] = true
 	}
 	e.nginx().setContent(p, content)
@@ -151,13 +151,29 @@ func (e *Emulator) handleHAProxy(sudo bool, sub string, args []string) Response 
 	if !sudo {
 		return refuse(helperproto.ExitRefused, helperproto.CodeNotRoot)
 	}
+	e.mu.Lock()
+	old := e.protocol < helperproto.HAProxyMinProtocol
+	e.mu.Unlock()
+	if old { // a helper of protocol 8 or below does not know the subcommand
+		return refuse(helperproto.ExitRefused, helperproto.CodeUnknownSubcommand)
+	}
 	return e.haproxyDump(args)
 }
 
 // ---- the configuration text ---------------------------------------------------------------
 
+// crtListPath is the generated crt-list of the SNI sites of one frontend on one port.
+func crtListPath(frontend string, port int) string {
+	return "/etc/haproxy/emu-" + frontend + "-" + strconv.Itoa(port) + ".crtlist"
+}
+
+func isCrtListPath(p string) bool {
+	return strings.HasPrefix(p, "/etc/haproxy/emu-") && strings.HasSuffix(p, ".crtlist")
+}
+
 // mainText is the generated haproxy.cfg: one frontend per distinct Frontend, with a bind per site
-// without SNI and one bind on the crt-list for the sites with SNI names.
+// without SNI and, for the sites with SNI names, one bind per distinct port on the crt-list of
+// that frontend and port.
 func (x *haproxyHost) mainText() string {
 	var b strings.Builder
 	b.WriteString("global\n    log /dev/log local0\ndefaults\n    mode http\n")
@@ -169,27 +185,27 @@ func (x *haproxyHost) mainText() string {
 	}
 	for _, fe := range order {
 		b.WriteString("frontend " + fe + "\n")
-		listed := false
+		var listed []int
 		for _, s := range x.sites {
 			switch {
 			case s.Frontend != fe:
 			case len(s.SNI) == 0:
 				b.WriteString("    bind :" + strconv.Itoa(s.Port) + " ssl crt " + s.CertPath + "\n")
-			case !listed:
-				listed = true
-				b.WriteString("    bind :" + strconv.Itoa(s.Port) + " ssl crt-list " + haproxyCrtListPath + "\n")
+			case !slices.Contains(listed, s.Port):
+				listed = append(listed, s.Port)
+				b.WriteString("    bind :" + strconv.Itoa(s.Port) + " ssl crt-list " + crtListPath(fe, s.Port) + "\n")
 			}
 		}
 	}
 	return b.String()
 }
 
-// listText is the generated crt-list: one line per site with SNI names.
-func (x *haproxyHost) listText() (string, bool) {
+// listText is the generated crt-list at p: one line per site with SNI names of its frontend and port.
+func (x *haproxyHost) listText(p string) (string, bool) {
 	var b strings.Builder
 	found := false
 	for _, s := range x.sites {
-		if len(s.SNI) > 0 {
+		if len(s.SNI) > 0 && crtListPath(s.Frontend, s.Port) == p {
 			found = true
 			b.WriteString(s.CertPath + " " + strings.Join(s.SNI, " ") + "\n")
 		}
@@ -203,13 +219,11 @@ func (x *haproxyHost) confText(h *nginxHost, p string) ([]byte, bool) {
 		b, ok := h.content[p]
 		return b.bytes(), ok
 	}
-	switch p {
-	case haproxyConfPath:
+	if p == haproxyConfPath {
 		return []byte(x.mainText()), true
-	case haproxyCrtListPath:
-		if t, ok := x.listText(); ok {
-			return []byte(t), true
-		}
+	}
+	if t, ok := x.listText(p); ok {
+		return []byte(t), true
 	}
 	b, ok := h.content[p]
 	return b.bytes(), ok
