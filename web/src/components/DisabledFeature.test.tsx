@@ -28,7 +28,7 @@ describe('DisabledFeature', () => {
       </DisabledFeature>,
     );
     const b = screen.getByRole('button', { name: 'Deploy' });
-    expect(b).toBeDisabled();
+    expect(b).toHaveAttribute('aria-disabled', 'true');
     expect(b).toHaveAccessibleDescription('Not available for Nginx servers yet');
   });
 
@@ -50,5 +50,38 @@ describe('DisabledFeature', () => {
       ['tr'],
     );
     expect(screen.getByRole('button', { name: 'Deploy' })).toHaveAccessibleDescription('Nginx sunucularında henüz kullanılamıyor');
+  });
+
+  it('stays focusable, ignores activation and shows the note on focus', async () => {
+    const spy = vi.fn();
+    await renderApp(
+      <DisabledFeature target={without} capability="deploy_certificate">
+        <Button onClick={spy}>Deploy</Button>
+      </DisabledFeature>,
+    );
+    const b = screen.getByRole('button', { name: 'Deploy' });
+    expect(b).toHaveAttribute('aria-disabled', 'true');
+    expect(b).not.toBeDisabled();
+    const note = 'Not available for Nginx servers yet';
+    expect(document.getElementById(b.getAttribute('aria-describedby')!)).toHaveTextContent(note);
+    await userEvent.tab();
+    expect(b).toHaveFocus();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(note);
+    await userEvent.click(b);
+    await userEvent.keyboard('{Enter}');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('with the capability sets no aria-disabled and calls the handler', async () => {
+    const spy = vi.fn();
+    await renderApp(
+      <DisabledFeature target={withCap} capability="deploy_certificate">
+        <Button onClick={spy}>Deploy</Button>
+      </DisabledFeature>,
+    );
+    const b = screen.getByRole('button', { name: 'Deploy' });
+    expect(b).not.toHaveAttribute('aria-disabled');
+    await userEvent.click(b);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });

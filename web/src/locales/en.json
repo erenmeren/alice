@@ -963,7 +963,8 @@
   "webServer": {
     "notAvailable": "Not available for {{software}} servers yet",
     "software": {
-      "nginx": "Nginx"
+      "nginx": "Nginx",
+      "apache": "Apache"
     }
   },
   "warnings": {
@@ -989,7 +990,7 @@
     "web_server_config_invalid": "{{software}}'s configuration has an error. Alice will not deploy until it is fixed.",
     "web_server_not_found": "{{software}} was not found on this server.",
     "web_server_profile_missing": "The {{software}} permissions are not installed on this server, so Alice cannot read its websites. Run the {{software}} commands for server preparation, then choose Discover.",
-    "config_file_writable": "An Nginx configuration file can be changed by users other than root: {{path}}",
+    "config_file_writable": "A {{software}} configuration file can be changed by users other than root: {{path}}",
     "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
     "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
     "list_truncated": "Alice cut some long lists of this server (for example user accounts, key files or parts of the Nginx configuration), so what is shown is incomplete.",
@@ -1005,7 +1006,9 @@
     "list_truncated_uid": "Alice stopped listing the SSH keys of this server at the account with user ID {{uid}}, so the keys from there on are not shown.",
     "kv_item_unreadable": "Some items of this vault could not be read and were left out, so the list is incomplete. Kind: {{object}}. Items: {{count}}.",
     "kv_version_conflict": "Azure reported a version that Alice already knows with a different thumbprint. Alice kept what it had stored. Kind: {{object}}. Items: {{count}}.",
-    "kv_listing_empty": "The last check found no certificates in this vault, although Alice knows some. Alice keeps them until the next check confirms it."
+    "kv_listing_empty": "The last check found no certificates in this vault, although Alice knows some. Alice keeps them until the next check confirms it.",
+    "web_server_config_invalid_discovery": "{{software}}'s configuration has an error, so Alice cannot read its websites until it is fixed.",
+    "web_server_helper_too_old": "The alice-helper on this server is too old to read {{software}}. Update the helper; SSH keys are still read."
   },
   "targets": {
     "title": "Servers",
@@ -1021,10 +1024,10 @@
       "fingerprint": "Fingerprint of Alice's key",
       "profile": "Server type",
       "profileLinux": "Linux server",
-      "profileNginx": "Nginx server",
       "script": "Commands to run as root",
       "copy": "Copy commands",
-      "copied": "Copied"
+      "copied": "Copied",
+      "profileWebServer": "{{software}} server"
     },
     "form": {
       "name": "Name",
@@ -1035,9 +1038,9 @@
       "submit": "Connect",
       "type": "Server type",
       "typeLinux": "Linux server",
-      "typeNginx": "Nginx server",
       "typeHelp": "Choose Nginx server to manage its certificates too. Prepare the server with the Nginx commands first.",
-      "script": "Commands to prepare this server type"
+      "script": "Commands to prepare this server type",
+      "typeWebServer": "{{software}} server"
     },
     "connecting": "Connecting to the server…",
     "stillWorking": "Alice is still working on this. Open the server's page in a minute to see the result.",
@@ -1114,7 +1117,8 @@
       "operations": "Available operations",
       "operationsText": "Alice updates certificate and key files through its restricted helper. {{software}} configuration remains under your control.",
       "operationsTextLinux": "Alice reads and changes the SSH keys on this server through its restricted helper.",
-      "readOnly": "Read only"
+      "readOnly": "Read only",
+      "operationsTextDiscovery": "Alice reads the certificate files {{software}} uses through its restricted helper. It never changes {{software}} files or configuration."
     }
   },
   "hostKeys": {
@@ -1654,7 +1658,8 @@
       "profile_missing": "The {{software}} permissions are not installed on this server.",
       "server_not_found": "{{software}} was not found on this server.",
       "config_invalid": "{{software}}'s configuration has an error.",
-      "last_error": "The last scan failed."
+      "last_error": "The last scan failed.",
+      "helper_too_old": "The alice-helper on this server is too old for {{software}}."
     },
     "rowUnavailable": {
       "unsupported": "Alice cannot deploy to this place.",
@@ -1717,7 +1722,8 @@
       "key_conflict": "This certificate file is used with different key files.",
       "unsupported_key": "Alice supports RSA and ECDSA certificates only.",
       "file_problem": "Alice cannot use the files at this place.",
-      "unknown": "Alice cannot use this place for a reason this version does not know."
+      "unknown": "Alice cannot use this place for a reason this version does not know.",
+      "conditional": "This file is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used."
     },
     "problems": {
       "missing": "The file does not exist.",
@@ -1754,7 +1760,9 @@
       "sniInvalid": "Enter a domain name with letters, digits, dots and hyphens only. A part between dots cannot start or end with a hyphen.",
       "notSaved": "Your change was not saved because this website changed in the meantime. The current values are shown now. Check them and save again."
     },
-    "definedLine": "Line: {{line}}"
+    "definedLine": "Line: {{line}}",
+    "configInvalidDiscovery": "{{software}}'s configuration on this server has an error. The websites below are as Alice last read them.",
+    "introDiscovery": "Each row is a certificate file that {{software}} uses. Alice reads these files and never changes them."
   },
   "deploy": {
     "title": "Deploy a certificate",

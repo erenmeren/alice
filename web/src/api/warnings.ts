@@ -41,6 +41,7 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   // Web servers
   web_server_not_found: [],
   web_server_profile_missing: [],
+  web_server_helper_too_old: [],
   web_server_config_invalid: [],
   locations_dropped: [],
   list_truncated: [],

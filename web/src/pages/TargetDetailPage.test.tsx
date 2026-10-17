@@ -541,6 +541,49 @@ describe('TargetDetailPage', () => {
       expect(screen.getByRole('button', { name: 'Deploy certificate: www.example.test' })).toBeDisabled();
     });
 
+    describe('a server that cannot deploy reads as discovery-only', () => {
+      const discoveryOnly: Target['capabilities'] = ['test_connection', 'discover_certificates', 'discover_ssh_keys', 'authorized_keys', 'key_login'];
+      const locs = [locationFixture(), locationFixture({ id: '0192c000-0000-7000-8000-0000000000e2', supported: false, unsupported_reason: 'variable', cert_path: '/etc/nginx/ssl/$host.crt' })];
+      function visibleText(): string {
+        const main = document.querySelector('main')!.cloneNode(true) as HTMLElement;
+        main.querySelectorAll('[data-testid="disabled-feature"], .mantine-VisuallyHidden-root').forEach((n) => n.remove());
+        return main.textContent ?? '';
+      }
+      function discoveryTarget(caps: Target['capabilities']) {
+        return nginxTargetWith(
+          { capabilities: caps },
+          { warnings: [{ code: 'web_server_config_invalid', params: {} }], web_server: webServerFacts({ config_valid: false }) },
+        );
+      }
+
+      it('promises no deployment in English or Turkish, and keeps the usual texts with the capability', async () => {
+        for (const [lang, tag, rx, intro] of [
+          ['en', 'en-US', /deploy/i, 'Each row is a certificate file that Nginx uses. Alice reads these files and never changes them.'],
+          ['tr', 'tr-TR', /dağıt/i, 'Her satır Nginx tarafından kullanılan bir sertifika dosyasıdır. Alice bu dosyaları okur, hiçbir zaman değiştirmez.'],
+        ] as const) {
+          onServer('admin', discoveryTarget(discoveryOnly), [], lang);
+          server.use(http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: locs, truncated: false })));
+          const view = await renderRoute(`/servers/${nginxTargetFixture.id}`, { languages: [tag] });
+          await screen.findAllByTestId('location-row');
+          const text = visibleText();
+          expect(text, lang).not.toMatch(rx);
+          expect(text, lang).toContain(intro);
+          expect(text, lang).toContain(lang === 'en' ? 'Alice reads the certificate files Nginx uses through its restricted helper. It never changes Nginx files or configuration.' : 'Alice, Nginx tarafından kullanılan sertifika dosyalarını kısıtlı yardımcısıyla okur. Nginx dosyalarını ve yapılandırmasını hiçbir zaman değiştirmez.');
+          expect(text, lang).toContain(lang === 'en' ? "Nginx's configuration has an error, so Alice cannot read its websites until it is fixed." : 'Nginx yapılandırmasında bir hata var; düzeltilene kadar Alice web sitelerini okuyamaz.');
+          expect(text, lang).toContain(lang === 'en' ? "Nginx's configuration on this server has an error. The websites below are as Alice last read them." : 'Bu sunucudaki Nginx yapılandırmasında bir hata var. Aşağıdaki web siteleri Alice\'in son okuduğu hâliyle gösteriliyor.');
+          view.unmount();
+        }
+        onServer('admin', discoveryTarget(nginxTargetFixture.capabilities), [], 'en');
+        server.use(http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: locs, truncated: false })));
+        await renderRoute(`/servers/${nginxTargetFixture.id}`);
+        await screen.findAllByTestId('location-row');
+        const text = visibleText();
+        expect(text).toContain('Alice will not deploy until it is fixed.');
+        expect(text).toContain('Alice never changes the Nginx configuration, only these files.');
+        expect(text).toContain('Alice updates certificate and key files through its restricted helper.');
+      });
+    });
+
     it('lists the Nginx scan warnings in words', async () => {
       const warnings: Warning[] = [
         { code: 'stream_tls', params: {} },
@@ -550,7 +593,7 @@ describe('TargetDetailPage', () => {
       nginxServer('operator', nginxTargetWith({}, { warnings, web_server: webServerFacts() }));
       await renderRoute(`/servers/${nginxTargetFixture.id}`);
       expect(await screen.findByText(/TLS in stream blocks is not supported in this version/)).toBeInTheDocument();
-      expect(screen.getByText('An Nginx configuration file can be changed by users other than root: /etc/nginx/conf.d/w.conf')).toBeInTheDocument();
+      expect(screen.getByText('A Nginx configuration file can be changed by users other than root: /etc/nginx/conf.d/w.conf')).toBeInTheDocument();
       expect(screen.getByText(/more websites than Alice lists/)).toBeInTheDocument();
     });
   });

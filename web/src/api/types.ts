@@ -439,7 +439,7 @@ export interface PlatformKeyInfo {
   authorized_keys_line: string;
   helper_path: string;
   helper_protocol: number;
-  profiles: { linux: SetupSnippet; nginx: SetupSnippet };
+  profiles: { linux: SetupSnippet } & Partial<Record<WebServerType, SetupSnippet>>;
 }
 
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'dead' | 'blocked_license';

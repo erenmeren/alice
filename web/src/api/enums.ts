@@ -90,6 +90,7 @@ export const UNSUPPORTED_REASONS: readonly string[] = [
   'stream',
   'combined_file',
   'config_file_writable',
+  'conditional',
   'key_conflict',
   'file_problem',
   'unsupported_key',

@@ -247,6 +247,19 @@ describe('design rules', () => {
     expect(moduleCss).toMatch(/\.table :global\(\.mantine-ActionIcon-root\):focus-visible\s*\{\s*outline-offset:\s*-3px/);
   });
 
+  it('pins the Tooltip class in the theme, drawn from tokens only', () => {
+    expect(theme.components?.Tooltip?.classNames).toEqual({ tooltip: classes.tooltip });
+    const rule = /\.tooltip\s*\{([^}]*)\}/.exec(moduleCss);
+    expect(rule, 'a .tooltip rule').not.toBeNull();
+    const colours = [...rule![1].matchAll(/(?:background|color|border)[a-z-]*\s*:\s*([^;]*)/g)].map((m) => m[1]);
+    expect(colours.length).toBeGreaterThan(0);
+    for (const c of colours) {
+      const refs = c.match(/var\([^)]*\)/g) ?? [];
+      if (/--alice-|var\(/.test(c) || /px/.test(c)) for (const r of refs) expect(r).toMatch(/^var\(--/);
+      expect(c).not.toMatch(/#[0-9a-f]{3,8}\b|rgb|hsl/i);
+    }
+  });
+
   it('draws checked Checkbox, Radio and Switch with the design classes in dark mode', async () => {
     await renderApp(
       createElement('div', null,

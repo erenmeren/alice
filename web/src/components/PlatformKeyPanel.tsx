@@ -2,6 +2,8 @@ import { Button, Code, CopyButton, NativeSelect, Stack, Text } from '@mantine/co
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { WEB_SERVER_TYPES, type WebServerType } from '../api/webServer';
+import { softwareName } from './software';
 import { getPlatformKey } from '../api/endpoints';
 import { PLATFORM_KEY_KEY } from '../api/queryKeys';
 import { Icon } from '../design/Icon';
@@ -9,7 +11,7 @@ import { ErrorAlert } from './ErrorAlert';
 import { Panel } from './ui';
 import { WRAP } from './wrap';
 
-type Profile = 'linux' | 'nginx';
+type Profile = 'linux' | WebServerType;
 
 // PlatformKeyPanel shows Alice's public key and the commands that prepare a server (spec §12.2,
 // §18.5 step 7). The public key is not secret; the private key never leaves the secret store.
@@ -18,7 +20,7 @@ export function PlatformKeyPanel({ titleOrder = 2 }: { titleOrder?: 2 | 3 }) {
   const { t } = useTranslation();
   const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: getPlatformKey });
   const [profile, setProfile] = useState<Profile>('linux');
-  const script = key.data?.profiles[profile].script ?? '';
+  const script = key.data?.profiles[profile]?.script ?? '';
   return (
     <Panel title={t('targets.prepare.title')} description={t('targets.prepare.help')} headingOrder={titleOrder}>
       <Stack gap="xs">
@@ -43,7 +45,7 @@ export function PlatformKeyPanel({ titleOrder = 2 }: { titleOrder?: 2 | 3 }) {
               onChange={(e) => setProfile(e.currentTarget.value as Profile)}
               data={[
                 { value: 'linux', label: t('targets.prepare.profileLinux') },
-                { value: 'nginx', label: t('targets.prepare.profileNginx') },
+                ...WEB_SERVER_TYPES.map((type) => ({ value: type, label: t('targets.prepare.profileWebServer', { software: softwareName(t, type) }) })),
               ]}
               maw={320}
             />

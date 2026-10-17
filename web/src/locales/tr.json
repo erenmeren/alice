@@ -963,7 +963,8 @@
   "webServer": {
     "notAvailable": "{{software}} sunucularında henüz kullanılamıyor",
     "software": {
-      "nginx": "Nginx"
+      "nginx": "Nginx",
+      "apache": "Apache"
     }
   },
   "warnings": {
@@ -989,7 +990,7 @@
     "web_server_config_invalid": "{{software}} yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
     "web_server_not_found": "Bu sunucuda {{software}} bulunamadı.",
     "web_server_profile_missing": "Bu sunucuda {{software}} izinleri kurulu değil, bu yüzden Alice web sitelerini okuyamıyor. Sunucu hazırlığı için {{software}} komutlarını çalıştırın, ardından Keşfet düğmesini seçin.",
-    "config_file_writable": "Bir Nginx yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
+    "config_file_writable": "Bir {{software}} yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
     "too_many_files": "Bu sunucu Alice'in listelediğinden fazla sertifika dosyası kullanıyor, bu yüzden bazıları okunmadı.",
     "locations_dropped": "Bu sunucuda Alice'in listelediğinden fazla web sitesi var, bu yüzden liste eksik ve hiçbir web sitesi artık bulunmuyor olarak işaretlenmiyor.",
     "list_truncated": "Alice bu sunucunun bazı uzun listelerini (örneğin kullanıcı hesaplarını, anahtar dosyalarını veya Nginx yapılandırmasının bölümlerini) kısalttı, bu yüzden gösterilenler eksik.",
@@ -1005,7 +1006,9 @@
     "list_truncated_uid": "Alice bu sunucudaki SSH anahtarlarını listelemeyi kullanıcı kimliği {{uid}} olan hesapta durdurdu, bu yüzden bu hesaptan sonraki anahtarlar gösterilmiyor.",
     "kv_item_unreadable": "Bu kasadaki bazı öğeler okunamadı ve atlandı, bu yüzden liste eksik. Tür: {{object}}. Öğe sayısı: {{count}}.",
     "kv_version_conflict": "Azure, Alice'in zaten bildiği bir sürümü farklı bir parmak iziyle bildirdi. Alice kayıtlı olanı korudu. Tür: {{object}}. Öğe sayısı: {{count}}.",
-    "kv_listing_empty": "Son denetimde bu kasada hiç sertifika bulunamadı, oysa Alice bazılarını biliyor. Alice, bir sonraki denetim doğrulayana kadar onları korur."
+    "kv_listing_empty": "Son denetimde bu kasada hiç sertifika bulunamadı, oysa Alice bazılarını biliyor. Alice, bir sonraki denetim doğrulayana kadar onları korur.",
+    "web_server_config_invalid_discovery": "{{software}} yapılandırmasında bir hata var; düzeltilene kadar Alice web sitelerini okuyamaz.",
+    "web_server_helper_too_old": "Bu sunucudaki alice-helper, {{software}} bilgilerini okumak için çok eski. Yardımcıyı güncelleyin; SSH anahtarları okunmaya devam ediyor."
   },
   "targets": {
     "title": "Sunucular",
@@ -1021,10 +1024,10 @@
       "fingerprint": "Alice'in anahtarının parmak izi",
       "profile": "Sunucu türü",
       "profileLinux": "Linux sunucusu",
-      "profileNginx": "Nginx sunucusu",
       "script": "root olarak çalıştırılacak komutlar",
       "copy": "Komutları kopyala",
-      "copied": "Kopyalandı"
+      "copied": "Kopyalandı",
+      "profileWebServer": "{{software}} sunucusu"
     },
     "form": {
       "name": "Ad",
@@ -1035,9 +1038,9 @@
       "submit": "Bağlan",
       "type": "Sunucu türü",
       "typeLinux": "Linux sunucusu",
-      "typeNginx": "Nginx sunucusu",
       "typeHelp": "Sertifikalarını da yönetmek için Nginx sunucusu seçeneğini seçin. Sunucuyu önce Nginx komutlarıyla hazırlayın.",
-      "script": "Bu sunucu türünü hazırlayacak komutlar"
+      "script": "Bu sunucu türünü hazırlayacak komutlar",
+      "typeWebServer": "{{software}} sunucusu"
     },
     "connecting": "Sunucuya bağlanılıyor…",
     "stillWorking": "Alice bu iş üzerinde çalışmaya devam ediyor. Sonucu görmek için bir dakika sonra sunucunun sayfasını açın.",
@@ -1114,7 +1117,8 @@
       "operations": "Kullanılabilir işlemler",
       "operationsText": "Alice, kısıtlı yardımcı aracı üzerinden sertifika ve anahtar dosyalarını günceller. {{software}} yapılandırması sizin kontrolünüzdedir.",
       "operationsTextLinux": "Alice, bu sunucudaki SSH anahtarlarını kısıtlı yardımcı aracı üzerinden okur ve değiştirir.",
-      "readOnly": "Salt okunur"
+      "readOnly": "Salt okunur",
+      "operationsTextDiscovery": "Alice, {{software}} tarafından kullanılan sertifika dosyalarını kısıtlı yardımcısıyla okur. {{software}} dosyalarını ve yapılandırmasını hiçbir zaman değiştirmez."
     }
   },
   "hostKeys": {
@@ -1654,7 +1658,8 @@
       "profile_missing": "Bu sunucuda {{software}} izinleri kurulu değil.",
       "server_not_found": "Bu sunucuda {{software}} bulunamadı.",
       "config_invalid": "{{software}} yapılandırmasında bir hata var.",
-      "last_error": "Son tarama başarısız oldu."
+      "last_error": "Son tarama başarısız oldu.",
+      "helper_too_old": "Bu sunucudaki alice-helper {{software}} için çok eski."
     },
     "rowUnavailable": {
       "unsupported": "Alice bu konuma dağıtım yapamaz.",
@@ -1717,7 +1722,8 @@
       "key_conflict": "Bu sertifika dosyası farklı anahtar dosyalarıyla kullanılıyor.",
       "unsupported_key": "Alice yalnızca RSA ve ECDSA sertifikalarını destekler.",
       "file_problem": "Alice bu konumdaki dosyaları kullanamaz.",
-      "unknown": "Alice bu konumu, bu sürümün bilmediği bir nedenle kullanamıyor."
+      "unknown": "Alice bu konumu, bu sürümün bilmediği bir nedenle kullanamıyor.",
+      "conditional": "Bu dosya yapılandırmanın koşullu bir bölümünde (<If> ya da Alice'in değerlendiremediği bir test) tanımlanmış; Alice dosyanın ne zaman kullanıldığını bilemez."
     },
     "problems": {
       "missing": "Dosya yok.",
@@ -1754,7 +1760,9 @@
       "sniInvalid": "Yalnızca harf, rakam, nokta ve tire içeren bir alan adı girin. Noktalar arasındaki bir bölüm tireyle başlayıp bitemez.",
       "notSaved": "Bu web sitesi bu sırada değiştiği için değişikliğiniz kaydedilmedi. Güncel değerler gösteriliyor. Denetleyip yeniden kaydedin."
     },
-    "definedLine": "Satır: {{line}}"
+    "definedLine": "Satır: {{line}}",
+    "configInvalidDiscovery": "Bu sunucudaki {{software}} yapılandırmasında bir hata var. Aşağıdaki web siteleri Alice'in son okuduğu hâliyle gösteriliyor.",
+    "introDiscovery": "Her satır {{software}} tarafından kullanılan bir sertifika dosyasıdır. Alice bu dosyaları okur, hiçbir zaman değiştirmez."
   },
   "deploy": {
     "title": "Sertifika dağıtın",

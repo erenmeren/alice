@@ -2,6 +2,7 @@ import { Alert, Box, Button, Code, Group, Stack, Switch, Table, Text } from '@ma
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
+import { capabilityText, can } from '../api/capabilities';
 import { canDeployTo, firstServerName, listenAddrs, webServerState, serverNames, type DeployBlock } from '../api/webServer';
 import type { CertificateLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
@@ -25,6 +26,7 @@ import { WRAP } from './wrap';
 const BLOCK_KEYS: Record<DeployBlock, string> = {
   status: 'locations.unavailable.status',
   profile_missing: 'locations.unavailable.profile_missing',
+  helper_too_old: 'locations.unavailable.helper_too_old',
   server_not_found: 'locations.unavailable.server_not_found',
   config_invalid: 'locations.unavailable.config_invalid',
   last_error: 'locations.unavailable.last_error',
@@ -33,7 +35,7 @@ const BLOCK_KEYS: Record<DeployBlock, string> = {
 
 // RowButton is a button whose accessible name carries the website ("Deploy certificate: name").
 // The name text is data, so it sits in a hidden translate="no" element the button points at.
-function RowButton({ id, label, data, children, ...rest }: { id: string; label: string; data: boolean; children: string; onClick: () => void; disabled?: boolean; variant?: string; 'aria-describedby'?: string }) {
+function RowButton({ id, label, data, children, ...rest }: { id: string; label: string; data: boolean; children: string; onClick: () => void; disabled?: boolean; variant?: string; 'aria-describedby'?: string; 'aria-disabled'?: boolean; 'data-disabled'?: boolean }) {
   return (
     <>
       <span id={id} hidden translate={data ? 'no' : undefined}>
@@ -72,13 +74,13 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const lastScan = asOf ? formatDateTime(asOf, i18n.language) : '';
 
   return (
-    <Panel title={t('locations.title')} description={t('locations.intro', { software })} aria-label={t('locations.title')} padded={false}>
+    <Panel title={t('locations.title')} description={t(capabilityText(target, 'locations.intro'), { software })} aria-label={t('locations.title')} padded={false}>
       <Stack gap="sm" px={22} py="md">
         {state.configInvalid && (
           <Alert color="red" role="alert" data-testid="config-invalid">
             <Stack gap={2}>
               <Text size="sm" fw={500}>
-                {t('locations.configInvalid', { software })}
+                {t(capabilityText(target, 'locations.configInvalid'), { software })}
               </Text>
               {webServer && webServer.config_error !== '' && <Text size="sm">{t(configErrorKey(webServer.config_error))}</Text>}
               {webServer && webServer.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(webServer.config_error_reason))}</Text>}
@@ -92,9 +94,11 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
           <Alert color="yellow" role="status" title={t('locations.stale.title')} data-testid="stale-websites">
             <Stack gap={2}>
               <Text size="sm">{lastScan ? t('locations.stale.help', { time: lastScan }) : t('locations.stale.neverScanned')}</Text>
-              <Text size="sm" fw={500}>
-                {t('locations.deployUnavailable')}
-              </Text>
+              {can(target, 'deploy_certificate') && (
+                <Text size="sm" fw={500}>
+                  {t('locations.deployUnavailable')}
+                </Text>
+              )}
               {state.block && (
                 <Text size="sm">
                   {state.block === 'last_error' && target.last_error ? reasonTitle(t, i18n, target.last_error.reason) : t(BLOCK_KEYS[state.block], { software })}

@@ -16,7 +16,7 @@ export function isServerType(type: string): boolean {
 // Why Alice cannot deploy to a web server right now, in the order it is shown. The facts and
 // websites of the last successful scan stay visible but are stale for every reason except
 // 'checking' (a connection test is under way).
-export type DeployBlock = 'status' | 'profile_missing' | 'server_not_found' | 'config_invalid' | 'last_error' | 'discovery_failed';
+export type DeployBlock = 'status' | 'profile_missing' | 'helper_too_old' | 'server_not_found' | 'config_invalid' | 'last_error' | 'discovery_failed';
 
 export interface WebServerState {
   block: DeployBlock | null;
@@ -36,6 +36,7 @@ export function webServerState(target: Target, discoveryFailed = false): WebServ
   let block: DeployBlock | null = null;
   if (target.status !== 'ok') block = 'status';
   else if (codes.has('web_server_profile_missing')) block = 'profile_missing';
+  else if (codes.has('web_server_helper_too_old')) block = 'helper_too_old';
   else if (codes.has('web_server_not_found') || (ws !== undefined && !ws.found && ws.version === '')) block = 'server_not_found';
   else if (configInvalid) block = 'config_invalid';
   else if (target.last_error) block = 'last_error';

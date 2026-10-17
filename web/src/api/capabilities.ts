@@ -35,3 +35,17 @@ export const CAPABILITIES: readonly Capability[] = [
 export function can(target: Pick<Target, 'capabilities'>, capability: Capability): boolean {
   return target.capabilities.includes(capability);
 }
+
+// DISCOVERY_ONLY_TEXTS: the texts that mention deployment, with the key of the text a server that cannot
+// deploy_certificate shows instead (spec §8.4).
+export const DISCOVERY_ONLY_TEXTS: Readonly<Record<string, string>> = {
+  'warnings.web_server_config_invalid': 'warnings.web_server_config_invalid_discovery',
+  'locations.configInvalid': 'locations.configInvalidDiscovery',
+  'locations.intro': 'locations.introDiscovery',
+  'targets.page.operationsText': 'targets.page.operationsTextDiscovery',
+};
+
+// capabilityText: the key of the text to show for the target: the discovery-only one when it cannot deploy.
+export function capabilityText(target: Pick<Target, 'capabilities'>, key: string): string {
+  return !can(target, 'deploy_certificate') && Object.hasOwn(DISCOVERY_ONLY_TEXTS, key) ? DISCOVERY_ONLY_TEXTS[key] : key;
+}

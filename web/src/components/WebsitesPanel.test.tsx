@@ -144,9 +144,9 @@ describe('WebsitesPanel on an Nginx server', () => {
     const note = 'Not available for Nginx servers yet';
     const deploy = within(row).getByRole('button', { name: 'Deploy certificate: www.example.test' });
     const settings = within(row).getByRole('button', { name: 'Verification settings: www.example.test' });
-    expect(deploy).toBeDisabled();
+    expect(deploy).toHaveAttribute('aria-disabled', 'true');
     expect(deploy).toHaveAccessibleDescription(note);
-    expect(settings).toBeDisabled();
+    expect(settings).toHaveAttribute('aria-disabled', 'true');
     expect(settings).toHaveAccessibleDescription(note);
     await userEvent.click(within(row).getByRole('link', { name: 'www.example.test' }));
     await waitFor(() => expect(router.state.location.pathname).toBe(`/certificates/${CERT.id}`));

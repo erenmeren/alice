@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { can } from './capabilities';
-import { isServerType, isWebServer, webServerState } from './webServer';
+import { WEB_SERVER_TYPES, isServerType, isWebServer, webServerState } from './webServer';
 import { nginxTargetFixture, nginxTargetWith, webServerFacts } from '../test/fixtures';
 
 describe('isWebServer / isServerType', () => {
@@ -28,6 +28,9 @@ describe('webServerState', () => {
     expect(webServerState(nginxTargetWith({ status: 'checking' }))).toMatchObject({ block: 'status', stale: false });
     const w = (code: string) => ({ warnings: [{ code, params: {} }] });
     expect(webServerState(nginxTargetWith({}, w('web_server_profile_missing'))).block).toBe('profile_missing');
+    expect(webServerState(nginxTargetWith({}, w('web_server_helper_too_old'))).block).toBe('helper_too_old');
+    expect(webServerState(nginxTargetWith({}, { warnings: [{ code: 'web_server_helper_too_old', params: {} }, { code: 'web_server_profile_missing', params: {} }] })).block).toBe('profile_missing');
+    expect(webServerState(nginxTargetWith({}, { warnings: [{ code: 'web_server_helper_too_old', params: {} }, { code: 'web_server_not_found', params: {} }] })).block).toBe('helper_too_old');
     expect(webServerState(nginxTargetWith({}, w('web_server_not_found'))).block).toBe('server_not_found');
     expect(webServerState(nginxTargetWith({}, { web_server: webServerFacts({ found: false, version: '' }) })).block).toBe('server_not_found');
     const bad = webServerState(nginxTargetWith({}, { web_server: webServerFacts({ config_valid: false }) }));
@@ -53,11 +56,16 @@ function sources(dir: string): string[] {
 }
 
 describe('web-server type literals', () => {
+  it('has at least the types the guard is meant to cover', () => {
+    expect(WEB_SERVER_TYPES.length).toBeGreaterThan(0);
+  });
+
   it('no component decides availability by a web-server type literal', () => {
     const root = resolve(process.cwd(), 'src');
-    const allowed = ['api/webServer.ts', 'components/AddServerModal.tsx', 'components/PlatformKeyPanel.tsx'];
+    const allowed = ['api/webServer.ts'];
+    const literal = (type: string) => new RegExp(`(['"\`])${type}\\1`);
     const hits = sources(root)
-      .filter((f) => /(['"`])nginx\1/.test(readFileSync(f, 'utf8')))
+      .filter((f) => WEB_SERVER_TYPES.some((type) => literal(type).test(readFileSync(f, 'utf8'))))
       .map((f) => relative(root, f))
       .filter((f) => !f.startsWith('test/') && !allowed.includes(f));
     expect(hits).toEqual([]);

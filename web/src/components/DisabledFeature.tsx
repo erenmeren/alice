@@ -1,7 +1,7 @@
 import { Tooltip, VisuallyHidden } from '@mantine/core';
 import type { TFunction } from 'i18next';
 import { cloneElement, useId } from 'react';
-import type { ReactElement } from 'react';
+import type { MouseEvent, ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { can } from '../api/capabilities';
 import type { Capability } from '../api/capabilities';
@@ -13,8 +13,9 @@ export function unavailableNote(t: TFunction, target: Pick<Target, 'type'>): str
   return t('webServer.notAvailable', { software: softwareName(t, target.type) });
 }
 
-// DisabledFeature shows a control the server's provider does not support yet disabled, not hidden, with the note as its
-// tooltip (on a wrapper: a disabled button gets no pointer events) and as its accessible description.
+// DisabledFeature shows a control the server's provider does not support yet aria-disabled, not hidden, with the note as
+// its tooltip (on hover, touch and keyboard focus) and as its accessible description. The control is not `disabled`:
+// it stays a tab stop so the note is reachable by keyboard; its click is swallowed.
 export function DisabledFeature({
   target,
   capability,
@@ -22,7 +23,7 @@ export function DisabledFeature({
 }: {
   target: Pick<Target, 'type' | 'capabilities'>;
   capability: Capability;
-  children: ReactElement<{ disabled?: boolean; 'aria-describedby'?: string }>;
+  children: ReactElement<{ onClick?: (e: MouseEvent<HTMLElement>) => void; 'aria-describedby'?: string; 'aria-disabled'?: boolean; 'data-disabled'?: boolean }>;
 }): ReactElement {
   const { t } = useTranslation();
   const id = useId();
@@ -30,9 +31,14 @@ export function DisabledFeature({
   const note = unavailableNote(t, target);
   return (
     <>
-      <Tooltip label={note}>
+      <Tooltip label={note} events={{ hover: true, focus: true, touch: true }}>
         <span data-testid="disabled-feature" style={{ display: 'inline-block' }}>
-          {cloneElement(children, { disabled: true, 'aria-describedby': id })}
+          {cloneElement(children, {
+            'aria-disabled': true,
+            'data-disabled': true,
+            'aria-describedby': id,
+            onClick: (e: MouseEvent<HTMLElement>) => e.preventDefault(),
+          })}
         </span>
       </Tooltip>
       <VisuallyHidden id={id}>{note}</VisuallyHidden>

@@ -23,5 +23,6 @@
   "sshKeys.types.ecdsa-p256",
   "sshKeys.types.rsa-3072",
   "sshKeys.types.rsa-4096",
+  "webServer.software.apache",
   "webServer.software.nginx"
 ]

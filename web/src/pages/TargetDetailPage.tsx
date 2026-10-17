@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
-import { can } from '../api/capabilities';
+import { capabilityText } from '../api/capabilities';
 import { isServerType, isWebServer, webServerState } from '../api/webServer';
 import { softwareName } from '../components/software';
 import { CERTIFICATES_KEY, TARGETS_KEY, targetKey } from '../api/queryKeys';
@@ -243,7 +243,7 @@ export function TargetDetailPage() {
             <FactList facts={facts} />
           </Panel>
           <Panel title={t('targets.page.operations')}>
-            <Text className={classes.small}>{can(tg, 'deploy_certificate') ? t('targets.page.operationsText', { software: softwareName(t, tg.type) }) : t('targets.page.operationsTextLinux')}</Text>
+            <Text className={classes.small}>{isWebServer(tg.type) ? t(capabilityText(tg, 'targets.page.operationsText'), { software: softwareName(t, tg.type) }) : t('targets.page.operationsTextLinux')}</Text>
             <Group gap="xs" mt="lg">
               {canOperate ? (
                 <Button variant="default" leftSection={<Icon name="Network" size={15} />} disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
@@ -409,7 +409,7 @@ function FactWarnings({ target }: { target: Target }) {
     <Stack gap="xs">
       {warnings.map((w) => (
         <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP}>
-          {t(warningKey(w), { ...w.params, software })}
+          {t(capabilityText(target, warningKey(w)), { ...w.params, software })}
           {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? (
             <Code ml="xs">{w.code}</Code>
           ) : null}

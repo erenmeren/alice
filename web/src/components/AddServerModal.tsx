@@ -2,6 +2,8 @@ import { Button, Code, CopyButton, Group, Loader, NativeSelect, NumberInput, Sta
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { WEB_SERVER_TYPES, type WebServerType } from '../api/webServer';
+import { softwareName } from './software';
 import { confirmHostKey, createTarget, getPlatformKey, listHostKeys } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { PLATFORM_KEY_KEY, TARGETS_KEY } from '../api/queryKeys';
@@ -20,7 +22,7 @@ import { Icon } from '../design/Icon';
 // can only be left, never resubmitted).
 type Phase = 'form' | 'working' | 'confirm' | 'failed';
 
-type ServerType = 'linux' | 'nginx';
+type ServerType = 'linux' | WebServerType;
 
 // AddServerModal creates a Linux or an Nginx server, waits for the first connection test and, when the server
 // presented a fingerprint nobody confirmed yet, asks the Administrator to compare and confirm it.
@@ -171,7 +173,7 @@ export function AddServerModal({
               onChange={(e) => setType(e.currentTarget.value as ServerType)}
               data={[
                 { value: 'linux', label: t('targets.form.typeLinux') },
-                { value: 'nginx', label: t('targets.form.typeNginx') },
+                ...WEB_SERVER_TYPES.map((type) => ({ value: type, label: t('targets.form.typeWebServer', { software: softwareName(t, type) }) })),
               ]}
             />
             <ProfileScript type={type} />
@@ -225,7 +227,7 @@ export function AddServerModal({
 function ProfileScript({ type }: { type: ServerType }) {
   const { t } = useTranslation();
   const key = useQuery({ queryKey: PLATFORM_KEY_KEY, queryFn: getPlatformKey });
-  const script = key.data?.profiles[type].script;
+  const script = key.data?.profiles[type]?.script;
   if (!script) return <ErrorAlert error={key.error} />;
   return (
     <Stack gap={4}>
