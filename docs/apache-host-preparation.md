@@ -117,7 +117,7 @@ name). A run that fails after the first one also means the configuration is inva
 
 Each run may take at most 30 seconds, and all four, with the reading of the files, share one budget of 50 seconds
 for the whole `apache-dump` call; Alice waits 60 seconds for the answer. A run still going when the budget ends is
-stopped and the discovery fails with "Apache could not be run to the end" instead of a timeout. Apache resolves the
+stopped and the discovery fails with the helper's own error, not with a connection timeout. Apache resolves the
 host names of `<VirtualHost>` lines while it parses the configuration, in each of the three `-t` runs, so a slow DNS
 resolver on the server is the usual cause.
 
