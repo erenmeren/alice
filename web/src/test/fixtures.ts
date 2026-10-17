@@ -629,6 +629,19 @@ export const apacheTargetFixture: Target = {
   },
 };
 
+// haproxyTargetFixture is an HAProxy server (discovery only: no deploy_certificate) whose last scan was fine.
+export const haproxyTargetFixture: Target = {
+  ...apacheTargetFixture,
+  id: '0192b000-0000-7000-8000-0000000000a4',
+  name: 'web-haproxy',
+  type: 'haproxy',
+  host: 'haproxy-01.example.com',
+  facts: {
+    ...targetFixture.facts,
+    web_server: webServerFacts({ software: 'haproxy', version: '2.6.12-1+deb12u3', conf_path: '/etc/haproxy/haproxy.cfg' }),
+  },
+};
+
 export function nginxTargetWith(o: Partial<Target>, facts: Partial<Target['facts']> = {}): Target {
   return { ...nginxTargetFixture, ...o, facts: { ...nginxTargetFixture.facts, ...facts } };
 }

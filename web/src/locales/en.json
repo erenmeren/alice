@@ -964,7 +964,11 @@
     "notAvailable": "Not available for {{software}} servers yet",
     "software": {
       "nginx": "Nginx",
-      "apache": "Apache"
+      "apache": "Apache",
+      "haproxy": "HAProxy"
+    },
+    "siteColumn": {
+      "haproxy": "Frontend"
     }
   },
   "warnings": {
@@ -992,7 +996,8 @@
     "web_server_profile_missing": "The {{software}} permissions are not installed on this server, so Alice cannot read its websites. Run the {{software}} commands for server preparation, then choose Discover.",
     "config_file_writable": "A configuration file used by {{software}} can be changed by users other than root: {{path}}",
     "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
-    "config_dir_not_read": "Alice could not list a configuration folder of this server, so the files in it were not read.",
+    "config_dir_not_read": "{{software}} on this server also has configuration files in /etc/haproxy/conf.d. Alice reads only /etc/haproxy/haproxy.cfg, so websites defined there are not listed.",
+    "config_file_not_read": "Alice could not read a certificate list or folder that {{software}} uses, so the websites that depend on it are not fully listed.",
     "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
     "list_truncated": "Alice cut some long lists of this server (for example user accounts, key files or parts of the web server configuration), so what is shown is incomplete.",
     "key_mode_open": "A private key file can be read by more users than needed.",
@@ -1039,7 +1044,7 @@
       "submit": "Connect",
       "type": "Server type",
       "typeLinux": "Linux server",
-      "typeHelp": "Choose the web server software this server runs (Nginx or Apache) to see its websites too, or Linux server for SSH keys only. Prepare the server with the commands for the type you choose first.",
+      "typeHelp": "Choose the web server software this server runs (Nginx, Apache or HAProxy) to see its websites too, or Linux server for SSH keys only. Prepare the server with the commands for the type you choose first.",
       "script": "Commands to prepare this server type",
       "typeWebServer": "{{software}} server"
     },
@@ -1068,7 +1073,8 @@
     "typeLabel": {
       "linux": "Linux server",
       "nginx": "Nginx server",
-      "apache": "Apache server"
+      "apache": "Apache server",
+      "haproxy": "HAProxy server"
     },
     "page": {
       "description": "Know what is connected, what changed, and what needs a closer look.",
@@ -1631,6 +1637,7 @@
     },
     "defaultServer": "(default server)",
     "noWebsite": "(no server name)",
+    "frontend": "Frontend: {{name}}",
     "ready": "Ready",
     "readyDiscovery": "Found",
     "notSupported": "Not supported",
@@ -1725,7 +1732,7 @@
       "unsupported_key": "Alice supports RSA and ECDSA certificates only.",
       "file_problem": "Alice cannot use the files at this place.",
       "unknown": "Alice cannot use this place for a reason this version does not know.",
-      "conditional": "This file, or the name of its website, is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used.",
+      "conditional": "This file, or the name of its website, is set inside a conditional part of the configuration (such as an <If> or .if block, or a test Alice cannot evaluate), so Alice cannot tell when it is used.",
       "unknown_keyword": "This certificate is on a bind line with an option Alice does not know, so Alice cannot tell which files that line uses."
     },
     "problems": {

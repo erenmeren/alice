@@ -2,6 +2,8 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import commonEn from '@locales/common/en.json';
+import en from '../locales/en.json';
+import tr from '../locales/tr.json';
 import type { KeyLocation, Target, Warning } from '../api/types';
 import {
   aliceKeyLocation,
@@ -11,6 +13,7 @@ import {
   locationFixture,
   webServerFacts,
   apacheTargetFixture,
+  haproxyTargetFixture,
   nginxTargetFixture,
   nginxTargetWith,
   keyLocationFixture,
@@ -547,7 +550,7 @@ describe('TargetDetailPage', () => {
       expect((await screen.findByText('Apache version', { selector: 'dt' })).nextElementSibling).toHaveTextContent('2.4.57');
       const combinedRow = (await screen.findByText(/combined\.pem/)).closest('tr')!;
       expect(within(combinedRow).getByText('The private key file can be read by more users than needed: 0644')).toBeInTheDocument();
-      expect(screen.getByText('This file, or the name of its website, is set inside a conditional section of the configuration (<If>, or a test Alice cannot evaluate), so Alice cannot tell when it is used.')).toBeInTheDocument();
+      expect(screen.getByText('This file, or the name of its website, is set inside a conditional part of the configuration (such as an <If> or .if block, or a test Alice cannot evaluate), so Alice cannot tell when it is used.')).toBeInTheDocument();
       const buttons = [
         ...screen.getAllByRole('button', { name: /^Deploy certificate:/ }),
         ...screen.getAllByRole('button', { name: /^Verification settings:/ }),
@@ -568,6 +571,58 @@ describe('TargetDetailPage', () => {
       view.unmount();
       await open('tr', 'tr-TR');
       expect((await screen.findAllByRole('button', { name: /^Sertifika dağıt/ }))[0]).toHaveAccessibleDescription('Apache sunucularında henüz kullanılamıyor');
+    });
+
+    it('an HAProxy server shows frontends with deployment disabled', async () => {
+      const addrs = [{ addr: '', port: 9443, default_server: false }];
+      const fe = locationFixture({
+        id: 'loc-fe',
+        cert_path: '/etc/haproxy/certs/site.pem',
+        servers: [
+          { names: [], section: 'fe_https', listens: addrs, file: '/etc/haproxy/haproxy.cfg', line: 10 },
+          { names: ['sni.example.test'], section: 'li_sni', listens: addrs, file: '/etc/haproxy/haproxy.cfg', line: 20 },
+        ],
+      });
+      const unk = locationFixture({ id: 'loc-unk', cert_path: '/etc/haproxy/certs/u.pem', supported: false, unsupported_reason: 'unknown_keyword', servers: [{ names: [], section: 'fe_other', listens: addrs, file: '/etc/haproxy/haproxy.cfg', line: 30 }] });
+      const target = { ...haproxyTargetFixture, facts: { ...haproxyTargetFixture.facts, warnings: [{ code: 'config_dir_not_read', params: {} }] } };
+      for (const [lang, tag, col, site, note, dep, warn] of [
+        ['en', 'en-US', 'Frontend', 'Website', 'Not available for HAProxy servers yet', /deploy/i, 'HAProxy on this server also has configuration files in /etc/haproxy/conf.d. Alice reads only /etc/haproxy/haproxy.cfg, so websites defined there are not listed.'],
+        ['tr', 'tr-TR', 'Frontend', 'Web sitesi', 'HAProxy sunucularında henüz kullanılamıyor', /dağıt/i, 'Bu sunucudaki HAProxy için /etc/haproxy/conf.d içinde de yapılandırma dosyaları var. Alice yalnızca /etc/haproxy/haproxy.cfg dosyasını okur; orada tanımlanan web siteleri listelenmez.'],
+      ] as const) {
+        onServer('operator', target, [], lang);
+        server.use(http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [fe, unk], truncated: false })));
+        const view = await renderRoute(`/servers/${target.id}`, { languages: [tag] });
+        await screen.findAllByTestId('location-row');
+        expect(screen.getByRole('columnheader', { name: col })).toBeInTheDocument();
+        expect(screen.queryByRole('columnheader', { name: site })).not.toBeInTheDocument();
+        expect(screen.getByText('Frontend: fe_https')).toBeInTheDocument();
+        expect(screen.getByText('Frontend: li_sni')).toBeInTheDocument();
+        expect(screen.getByText('sni.example.test')).toBeInTheDocument();
+        expect(screen.getByText('Frontend: fe_other')).toBeInTheDocument();
+        expect(screen.queryByText(lang === 'en' ? '(no server name)' : '(sunucu adı yok)')).not.toBeInTheDocument();
+        expect(screen.getByText(warn)).toBeInTheDocument();
+        expect(screen.getByText(lang === 'en' ? en.locations.unsupported.unknown_keyword : tr.locations.unsupported.unknown_keyword)).toBeInTheDocument();
+        const buttons = [...screen.getAllByRole('button', { name: lang === 'en' ? /^Deploy certificate:/ : /^Sertifika dağıt/ }), ...screen.getAllByRole('button', { name: lang === 'en' ? /^Verification settings:/ : /^Doğrulama ayarları/ })];
+        expect(buttons.length).toBeGreaterThanOrEqual(3);
+        for (const b of buttons) {
+          expect(b).toHaveAttribute('aria-disabled', 'true');
+          expect(b).not.toHaveAttribute('disabled');
+          expect(b).toHaveAccessibleDescription(note);
+        }
+        const first = buttons[0];
+        (document.activeElement as HTMLElement | null)?.blur();
+        for (let i = 0; i < 80 && document.activeElement !== first; i++) await userEvent.tab();
+        expect(first).toHaveFocus();
+        const main = document.querySelector('main')!.cloneNode(true) as HTMLElement;
+        main.querySelectorAll('[data-testid="disabled-feature"], .mantine-VisuallyHidden-root').forEach((n) => n.remove());
+        expect(main.textContent ?? '', lang).not.toMatch(dep);
+        view.unmount();
+      }
+      onServer('operator', apacheTargetFixture);
+      server.use(http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [fe], truncated: false })));
+      await renderRoute(`/servers/${apacheTargetFixture.id}`);
+      await screen.findAllByTestId('location-row');
+      expect(screen.getByRole('columnheader', { name: 'Website' })).toBeInTheDocument();
     });
 
     it('names the software in Turkish without a suffix on it', async () => {

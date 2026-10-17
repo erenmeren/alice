@@ -615,6 +615,32 @@ func TestTargetCertificateLocations(t *testing.T) {
 	assert.JSONEq(t, `{"items":[],"truncated":false}`, rec.Body.String())
 }
 
+// An HAProxy location's servers carry the frontend (or listen) name as "section"; Nginx and Apache
+// servers have none and the field is omitted.
+func TestTargetCertificateLocationsCarryTheServerSection(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	inv.ListLocationsFn = func(context.Context, uuid.UUID, bool) (inventory.LocationList, error) {
+		loc := sampleLocation()
+		loc.Servers = []providers.CertServer{
+			{Names: []string{}, Listens: []providers.CertListen{}, File: "/etc/haproxy/haproxy.cfg", Line: 10, Section: "fe_https"},
+			{Names: []string{"sni.example.test"}, Listens: []providers.CertListen{}, File: "/etc/haproxy/haproxy.cfg", Line: 20},
+		}
+		return inventory.LocationList{Items: []inventory.CertificateLocation{loc}}, nil
+	}
+	rec := call(NewHandler(d), http.MethodGet, "/api/v1/targets/"+targetID.String()+"/certificate-locations", "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Items []struct {
+			Servers []map[string]any `json:"servers"`
+		} `json:"items"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Items, 1)
+	require.Len(t, body.Items[0].Servers, 2)
+	assert.Equal(t, "fe_https", body.Items[0].Servers[0]["section"])
+	assert.NotContains(t, body.Items[0].Servers[1], "section")
+}
+
 func TestUpdateLocationNeedsIfMatch(t *testing.T) {
 	d, inv := inventoryDeps(t)
 	var gotVersion int

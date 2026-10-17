@@ -5954,7 +5954,7 @@ components:
                 description: >-
                   Phase 4 values for web servers include web_server_not_found, web_server_profile_missing,
                   web_server_helper_too_old,
-                  locations_dropped, list_truncated, too_many_files, config_dir_not_read, stream_tls, mail_tls and
+                  locations_dropped, list_truncated, too_many_files, config_dir_not_read, config_file_not_read, stream_tls, mail_tls and
                   config_file_writable (params.path); a newer server may add others.
               params: { type: object, additionalProperties: { type: string } }
         unreadable:

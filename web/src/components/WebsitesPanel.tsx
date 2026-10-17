@@ -19,7 +19,7 @@ import { siteIsData } from './SiteName';
 import { useLocations, websitesAsOf } from './useLocations';
 import { useSiteLabel } from './useSiteLabel';
 import { DisabledFeature } from './DisabledFeature';
-import { softwareName } from './software';
+import { siteColumnLabel, softwareName } from './software';
 import { EmptyState, Panel, StatusBadge } from './ui';
 import { WRAP } from './wrap';
 
@@ -122,7 +122,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
           <Table aria-label={t('locations.tableLabel')} highlightOnHover>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>{t('locations.columns.website')}</Table.Th>
+                <Table.Th>{siteColumnLabel(t, target.type)}</Table.Th>
                 <Table.Th>{t('locations.columns.port')}</Table.Th>
                 <Table.Th>{t('locations.columns.file')}</Table.Th>
                 <Table.Th>{t('locations.columns.certificate')}</Table.Th>
@@ -175,6 +175,7 @@ function LocationRow({
   const { t, i18n } = useTranslation();
   const missing = l.missing_since !== null;
   const names = serverNames(l);
+  const sections = [...new Set(l.servers.map((x) => x.section ?? '').filter((n) => n !== ''))];
   const first = l.servers[0];
   const cert = l.certificate;
   const problems = l.unsupported_reason === 'file_problem' ? [l.problem, l.key_problem].filter((p) => p !== '') : [];
@@ -182,8 +183,13 @@ function LocationRow({
     <Table.Tr data-testid="location-row" data-location={l.id}>
       <Table.Td style={WRAP}>
         <Stack gap={2}>
+          {sections.map((n) => (
+            <Text key={n} size="sm">
+              {t('locations.frontend', { name: n })}
+            </Text>
+          ))}
           {names.length === 0 ? (
-            <Text size="sm">{t('locations.noWebsite')}</Text>
+            sections.length === 0 && <Text size="sm">{t('locations.noWebsite')}</Text>
           ) : (
             <Group gap={4}>
               {names.map((n) =>

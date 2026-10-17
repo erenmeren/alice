@@ -19,10 +19,13 @@
   "enum.keyAlgorithm.ed25519",
   "enum.keyAlgorithm.rsa",
   "license.change",
+  "locations.frontend",
   "rotation.countLine",
   "sshKeys.types.ecdsa-p256",
   "sshKeys.types.rsa-3072",
   "sshKeys.types.rsa-4096",
+  "webServer.siteColumn.haproxy",
   "webServer.software.apache",
+  "webServer.software.haproxy",
   "webServer.software.nginx"
 ]

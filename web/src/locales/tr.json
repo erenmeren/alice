@@ -964,7 +964,11 @@
     "notAvailable": "{{software}} sunucularında henüz kullanılamıyor",
     "software": {
       "nginx": "Nginx",
-      "apache": "Apache"
+      "apache": "Apache",
+      "haproxy": "HAProxy"
+    },
+    "siteColumn": {
+      "haproxy": "Frontend"
     }
   },
   "warnings": {
@@ -992,7 +996,8 @@
     "web_server_profile_missing": "Bu sunucuda {{software}} izinleri kurulu değil, bu yüzden Alice web sitelerini okuyamıyor. Sunucu hazırlığı için {{software}} komutlarını çalıştırın, ardından Keşfet düğmesini seçin.",
     "config_file_writable": "{{software}} tarafından kullanılan bir yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
     "too_many_files": "Bu sunucu Alice'in listelediğinden fazla sertifika dosyası kullanıyor, bu yüzden bazıları okunmadı.",
-    "config_dir_not_read": "Alice bu sunucunun bir yapılandırma klasörünü listeleyemedi, bu yüzden içindeki dosyalar okunmadı.",
+    "config_dir_not_read": "Bu sunucudaki {{software}} için /etc/haproxy/conf.d içinde de yapılandırma dosyaları var. Alice yalnızca /etc/haproxy/haproxy.cfg dosyasını okur; orada tanımlanan web siteleri listelenmez.",
+    "config_file_not_read": "Alice, {{software}} tarafından kullanılan bir sertifika listesini veya klasörünü okuyamadı; bu yüzden ona bağlı web siteleri tam olarak listelenmiyor.",
     "locations_dropped": "Bu sunucuda Alice'in listelediğinden fazla web sitesi var, bu yüzden liste eksik ve hiçbir web sitesi artık bulunmuyor olarak işaretlenmiyor.",
     "list_truncated": "Alice bu sunucunun bazı uzun listelerini (örneğin kullanıcı hesaplarını, anahtar dosyalarını veya web sunucusu yapılandırmasının bölümlerini) kısalttı, bu yüzden gösterilenler eksik.",
     "key_mode_open": "Bir özel anahtar dosyasını gerekenden fazla kullanıcı okuyabiliyor.",
@@ -1039,7 +1044,7 @@
       "submit": "Bağlan",
       "type": "Sunucu türü",
       "typeLinux": "Linux sunucusu",
-      "typeHelp": "Web sitelerini de görmek için sunucunun çalıştırdığı web sunucusu yazılımını (Nginx ya da Apache), yalnızca SSH anahtarları için Linux sunucusu seçeneğini seçin. Sunucuyu önce seçtiğiniz türün komutlarıyla hazırlayın.",
+      "typeHelp": "Web sitelerini de görmek için sunucunun çalıştırdığı web sunucusu yazılımını (Nginx, Apache ya da HAProxy), yalnızca SSH anahtarları için Linux sunucusu seçeneğini seçin. Sunucuyu önce seçtiğiniz türün komutlarıyla hazırlayın.",
       "script": "Bu sunucu türünü hazırlayacak komutlar",
       "typeWebServer": "{{software}} sunucusu"
     },
@@ -1068,7 +1073,8 @@
     "typeLabel": {
       "linux": "Linux sunucusu",
       "nginx": "Nginx sunucusu",
-      "apache": "Apache sunucusu"
+      "apache": "Apache sunucusu",
+      "haproxy": "HAProxy sunucusu"
     },
     "page": {
       "description": "Bağlı hedefleri, değişiklikleri ve incelenmesi gerekenleri görün.",
@@ -1631,6 +1637,7 @@
     },
     "defaultServer": "(varsayılan sunucu)",
     "noWebsite": "(sunucu adı yok)",
+    "frontend": "Frontend: {{name}}",
     "ready": "Hazır",
     "readyDiscovery": "Bulundu",
     "notSupported": "Desteklenmiyor",
@@ -1725,7 +1732,7 @@
       "unsupported_key": "Alice yalnızca RSA ve ECDSA sertifikalarını destekler.",
       "file_problem": "Alice bu konumdaki dosyaları kullanamaz.",
       "unknown": "Alice bu konumu, bu sürümün bilmediği bir nedenle kullanamıyor.",
-      "conditional": "Bu dosya veya web sitesinin adı yapılandırmanın koşullu bir bölümünde (<If> ya da Alice'in değerlendiremediği bir test) tanımlanmış; Alice ne zaman kullanıldığını bilemez.",
+      "conditional": "Bu dosya veya web sitesinin adı yapılandırmanın koşullu bir bölümünde (<If> ya da .if bloğu gibi, veya Alice'in değerlendiremediği bir test) tanımlanmış; Alice ne zaman kullanıldığını bilemez.",
       "unknown_keyword": "Bu sertifika, Alice'in tanımadığı bir seçenek içeren bir bind satırında; Alice bu satırın hangi dosyaları kullandığını bilemez."
     },
     "problems": {

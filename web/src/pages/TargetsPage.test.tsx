@@ -48,6 +48,8 @@ describe('TargetsPage', () => {
     expect(screen.getByTestId('setup-script')).toHaveTextContent('# nginx setup script');
     await userEvent.selectOptions(screen.getByLabelText('Server type'), 'apache');
     expect(screen.getByTestId('setup-script')).toHaveTextContent('# apache setup script');
+    await userEvent.selectOptions(screen.getByLabelText('Server type'), 'haproxy');
+    expect(screen.getByTestId('setup-script')).toHaveTextContent('# haproxy setup script');
   });
 
   it('shows operators the list without the administrator tools', async () => {
@@ -421,7 +423,7 @@ describe('TargetsPage', () => {
       const dialog = await screen.findByRole('dialog', { name: 'Add server' });
       const type = within(dialog).getByLabelText('Server type');
       expect(type).toHaveValue('linux');
-      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux server', 'Nginx server', 'Apache server']);
+      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux server', 'Nginx server', 'Apache server', 'HAProxy server']);
       expect(within(dialog).getByText(/^Choose the web server software this server runs/)).toBeInTheDocument();
       expect(await within(dialog).findByTestId('add-server-script')).toHaveTextContent('# linux setup script');
       await userEvent.selectOptions(type, 'nginx');
@@ -459,13 +461,39 @@ describe('TargetsPage', () => {
       expect(body).toEqual({ name: 'db-01', type: 'apache', host: 'db-01.example.com', port: 22, username: 'alice-svc' });
     });
 
+    it('shows the HAProxy commands and sends the type haproxy', async () => {
+      withTargets('admin', []);
+      let body: unknown = null;
+      server.use(
+        http.post('/api/v1/targets', async ({ request }) => {
+          body = await request.json();
+          return HttpResponse.json({ target: { ...pending, type: 'haproxy' }, job_id: 'job-1', status_url: '/api/v1/jobs/job-1' }, { status: 201 });
+        }),
+        http.get('/api/v1/jobs/:id', () => HttpResponse.json(jobFixture({ id: 'job-1', status: 'succeeded' }))),
+        http.get('/api/v1/targets/:id', () => HttpResponse.json(targetWith({ ...pending, type: 'haproxy', status: 'ok' }))),
+        http.get('/api/v1/targets/:id/host-keys', () => HttpResponse.json({ items: [] })),
+        http.get('/api/v1/targets/:id/ssh-keys', () => HttpResponse.json({ items: [] })),
+        http.get('/api/v1/targets/:id/certificate-locations', () => HttpResponse.json({ items: [], truncated: false })),
+      );
+      const { router } = await renderRoute('/servers');
+      await userEvent.click(await screen.findByRole('button', { name: 'Add server' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Add server' });
+      await userEvent.selectOptions(within(dialog).getByLabelText('Server type'), 'haproxy');
+      expect(within(dialog).getByTestId('add-server-script')).toHaveTextContent('# haproxy setup script');
+      await userEvent.type(within(dialog).getByLabelText(/^Name/), 'db-01');
+      await userEvent.type(within(dialog).getByLabelText(/^Address/), 'db-01.example.com');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
+      await waitFor(() => expect(router.state.location.pathname).toBe(`/servers/${pending.id}`));
+      expect(body).toEqual({ name: 'db-01', type: 'haproxy', host: 'db-01.example.com', port: 22, username: 'alice-svc' });
+    });
+
     it('shows the choice in Turkish', async () => {
       withTargets('admin', [], 'tr');
       await renderRoute('/servers', { languages: ['tr-TR'] });
       await userEvent.click(await screen.findByRole('button', { name: 'Sunucu ekle' }));
       const dialog = await screen.findByRole('dialog', { name: 'Sunucu ekle' });
       expect(within(dialog).getByLabelText('Sunucu türü')).toBeInTheDocument();
-      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux sunucusu', 'Nginx sunucusu', 'Apache sunucusu']);
+      expect(within(dialog).getAllByRole('option').map((o) => o.textContent)).toEqual(['Linux sunucusu', 'Nginx sunucusu', 'Apache sunucusu', 'HAProxy sunucusu']);
     });
   });
 });

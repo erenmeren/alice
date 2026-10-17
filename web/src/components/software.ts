@@ -6,3 +6,9 @@ import { isWebServer } from '../api/webServer';
 export function softwareName(t: TFunction, type: string): string {
   return isWebServer(type) ? t(`webServer.software.${type}`) : '';
 }
+
+// siteColumnLabel is the heading of the column that names a website: the software's own word for it
+// (HAProxy: "Frontend"), "Website" for any software without one.
+export function siteColumnLabel(t: TFunction, type: string): string {
+  return t(`webServer.siteColumn.${type}`, { defaultValue: t('locations.columns.website') });
+}
