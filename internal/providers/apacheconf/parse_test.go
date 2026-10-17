@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -261,6 +262,37 @@ func TestParse(t *testing.T) {
 				{File: rootConf, Line: 7, Names: []string{"${HOST}"}, Listens: []Listen{{"", 443, false}}, Pairs: []Pair{{Cert: "/etc/ssl/a.pem", Key: "/etc/ssl/a.pem", CertRaw: "/etc/ssl/a.pem"}}}}},
 		{name: "an unclosed bracket and an undefined alias", files: []tfile{root(vhost("ServerName http://[::1\nServerAlias ${NOPE}.test\nSSLEngine on\nSSLCertificateFile /etc/ssl/a.pem\n"))},
 			want: []Server{{File: rootConf, Line: 1, Names: []string{"[::1", "${NOPE}.test"}, Listens: []Listen{{"", 443, true}}, Pairs: []Pair{{Cert: "/etc/ssl/a.pem", Key: "/etc/ssl/a.pem", CertRaw: "/etc/ssl/a.pem"}}}}},
+		// fix round 1
+		{name: "a hidden directive name in a vhost", files: []tfile{root(vhost("SSLEngine on\nSSLCertificateFile /a.pem\n${K} /a.key\n"))},
+			edit: func(in *Input) { in.Run.Defines["K"] = "SSLCertificateKeyFile" }, want: conditional(1, "/a.pem", "")},
+		{name: "a hidden section name in a vhost", files: []tfile{root(vhost("SSLEngine on\nSSLCertificateFile /a.pem\n<${M} ssl_module>\nSSLCertificateKeyFile /a.key\n</${M}>\n"))},
+			want: conditional(1, "/a.pem", "")},
+		{name: "a hidden directive name at the main level", files: []tfile{root("${E} on\n" + vhost("SSLEngine on\nSSLCertificateFile /a.pem\n"))},
+			want: conditional(2, "/a.pem", "")},
+		{name: "a hidden name in a Directory changes nothing", files: []tfile{root(vhost("SSLEngine on\nSSLCertificateFile /a.pem\n<Directory />\n${K} x\n</Directory>\n"))},
+			want: []Server{{File: rootConf, Line: 1, Listens: []Listen{{"", 443, true}}, Pairs: []Pair{{Cert: "/a.pem", Key: "/a.pem", CertRaw: "/a.pem"}}}}},
+		{name: "a hidden Define name makes run defines uncertain", files: []tfile{root(vhost("SSLEngine on\nSSLCertificateFile ${D}/a.pem\n") + "Define ${N} /srv\n")},
+			edit: func(in *Input) { in.Run.Defines["D"] = "/srv" }, want: conditional(1, "${D}/a.pem", "")},
+		{name: "a hidden UnDefine name makes run defines uncertain", files: []tfile{root(vhost("SSLEngine on\nSSLCertificateFile ${D}/a.pem\n") + "UnDefine ${N}\n")},
+			edit: func(in *Input) { in.Run.Defines["D"] = "/srv" }, want: conditional(1, "${D}/a.pem", "")},
+		{name: "an uncertain certificate makes the later ones conditional", files: []tfile{root(vhost("SSLEngine on\nSSLCertificateFile /a.pem\n<IfFile /x>\nSSLCertificateFile /b.pem\n</IfFile>\nSSLCertificateFile /c.pem\n"))},
+			want: []Server{{File: rootConf, Line: 1, Listens: []Listen{{"", 443, true}}, Pairs: []Pair{{Cert: "/a.pem", Key: "/a.pem", CertRaw: "/a.pem"},
+				{CertRaw: "/b.pem", Unsupported: ReasonConditional}, {CertRaw: "/c.pem", Unsupported: ReasonConditional}}}}},
+		{name: "an uncertain key makes the later keys conditional", files: []tfile{root(vhost("SSLEngine on\nSSLCertificateFile /a.pem\nSSLCertificateFile /b.pem\n" +
+			"<If true>\nSSLCertificateKeyFile /a.key\n</If>\nSSLCertificateKeyFile /b.key\n"))},
+			want: []Server{{File: rootConf, Line: 1, Listens: []Listen{{"", 443, true}}, Pairs: []Pair{{CertRaw: "/a.pem", KeyRaw: "/a.key", Unsupported: ReasonConditional},
+				{CertRaw: "/b.pem", KeyRaw: "/b.key", Unsupported: ReasonConditional}}}}},
+		{name: "SSLEngine with an address is uncertain", files: []tfile{root(vhost("SSLEngine *:443\nSSLCertificateFile /a.pem\n"))},
+			want: conditional(1, "/a.pem", "")},
+		{name: "SSLEngine with addresses is uncertain", files: []tfile{root(vhost("SSLEngine 10.0.0.1:443 *:8443\nSSLCertificateFile /a.pem\n"))},
+			want: conditional(1, "/a.pem", "")},
+		{name: "a vhost without ServerName on a wildcard address takes the main server's", files: []tfile{root("ServerName https://main.test:443\n" +
+			vhost("ServerAlias b.test\nSSLEngine on\nSSLCertificateFile /a.pem\n") +
+			"<VirtualHost 10.0.0.1:443>\nSSLEngine on\nSSLCertificateFile /a.pem\n</VirtualHost>\n")},
+			want: []Server{{File: rootConf, Line: 2, Names: []string{"main.test", "b.test"}, Listens: []Listen{{"", 443, true}}, Pairs: []Pair{{Cert: "/a.pem", Key: "/a.pem", CertRaw: "/a.pem"}}},
+				{File: rootConf, Line: 7, Listens: []Listen{{"10.0.0.1", 443, true}}, Pairs: []Pair{{Cert: "/a.pem", Key: "/a.pem", CertRaw: "/a.pem"}}}}},
+		{name: "[::] is any address", files: []tfile{root("<VirtualHost [::]:443>\nSSLEngine on\nSSLCertificateFile /a.pem\n</VirtualHost>\n")},
+			want: []Server{{File: rootConf, Line: 1, Listens: []Listen{{"", 443, true}}, Pairs: []Pair{{Cert: "/a.pem", Key: "/a.pem", CertRaw: "/a.pem"}}}}},
 		{name: "IPv6 and _default_ listens", files: []tfile{root("<VirtualHost [::1]:8443>\n</VirtualHost>\n<VirtualHost [::1]:8443 _default_:443>\nSSLEngine on\nSSLCertificateFile /etc/ssl/a.pem\n</VirtualHost>\n")},
 			want: []Server{{File: rootConf, Line: 3, Listens: []Listen{{"::1", 8443, false}, {"", 443, true}}, Pairs: []Pair{{Cert: "/etc/ssl/a.pem", Key: "/etc/ssl/a.pem", CertRaw: "/etc/ssl/a.pem"}}}}},
 		{name: "the first vhost of an address is its default", files: []tfile{root("<VirtualHost [::1]:8443 10.0.0.1:443 0.0.0.0:443>\nSSLEngine on\nSSLCertificateFile /etc/ssl/a.pem\n</VirtualHost>\n" +
@@ -386,6 +418,36 @@ func TestParseWholeConfigurationLimits(t *testing.T) {
 		require.ErrorIs(t, err, ErrTooComplex)
 		_, err = Parse(testInput(root(strings.Repeat("SSLCertificateFile /a.pem\n", MaxPairs+1))))
 		require.NoError(t, err, "not a server: no pairs")
+	})
+	t.Run("one line of many expansions stops at the budget", func(t *testing.T) {
+		// 1 MB of configuration: one 8000-byte define, then ~200k references on one line.
+		cfg := "Define A /" + strings.Repeat("a", 7999) + "\n" + vhost("ServerAlias"+strings.Repeat(" ${A}", 200000)+"\n")
+		in := testInput(root(cfg))
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		start := time.Now()
+		_, err := Parse(in)
+		elapsed := time.Since(start)
+		runtime.ReadMemStats(&after)
+		require.ErrorIs(t, err, ErrTooComplex)
+		allocated := after.TotalAlloc - before.TotalAlloc
+		t.Logf("allocated %d bytes in %v", allocated, elapsed)
+		assert.Less(t, allocated, uint64(64<<20))
+		assert.Less(t, elapsed, 2*time.Second*raceSlowdown)
+	})
+	t.Run("one section line of many expansions stops at the budget", func(t *testing.T) {
+		cfg := "Define A /" + strings.Repeat("a", 7999) + "\n<VirtualHost" + strings.Repeat(" ${A}:443", 100000) + ">\n</VirtualHost>\n"
+		_, err := Parse(testInput(root(cfg)))
+		require.ErrorIs(t, err, ErrTooComplex)
+	})
+	t.Run("text after the last variable counts against 8 KiB", func(t *testing.T) {
+		cfg := vhost("SSLEngine on\nSSLCertificateFile ${D}/" + strings.Repeat("b", maxExpansion) + "\n")
+		in := testInput(root(cfg))
+		in.Run.Defines["D"] = "/etc"
+		got, err := Parse(in)
+		require.NoError(t, err)
+		assert.Equal(t, ReasonVariable, got.Servers[0].Pairs[0].Unsupported)
 	})
 	t.Run("an expansion longer than 8 KiB is not used", func(t *testing.T) {
 		var b strings.Builder

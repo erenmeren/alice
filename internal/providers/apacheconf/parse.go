@@ -45,7 +45,8 @@ type Config struct {
 // Server is a <VirtualHost> whose effective SSLEngine is on and that has at least one effective
 // SSLCertificateFile, or the main server (Main) when it has its own SSLEngine on and certificates.
 // File and Line are the <VirtualHost line (the main server's first SSLCertificateFile). Names are
-// the ServerName (scheme and port stripped) and then the ServerAlias arguments.
+// the ServerName (scheme and port stripped; a vhost without one on a wildcard address takes the
+// main server's) and then the ServerAlias arguments.
 type Server struct {
 	File    string
 	Line    int
@@ -249,7 +250,7 @@ type scope struct {
 	certs     []ref
 	keys      []ref
 	listens   []Listen
-	uncertain bool // the vhost lies in an uncertain region
+	uncertain bool // the vhost lies in an uncertain region, or a name with "${" was read in the scope
 }
 
 type listenKey struct {
@@ -275,6 +276,9 @@ type parser struct {
 	versionOK                      bool
 	firsts                         map[listenKey]bool
 	expanded                       int
+	// overBudget is sticky: the expansions produced more than MaxInput bytes. expand then
+	// returns at once, and the walk stops with ErrTooComplex after the line.
+	overBudget bool
 }
 
 func newParser(in Input) (*parser, error) {
@@ -317,6 +321,7 @@ func newParser(in Input) (*parser, error) {
 	cache := map[string][]line{}
 	defined, undefined := map[string]bool{}, map[string]bool{}
 	tokens := 0
+	hiddenDefine := false // a Define or UnDefine name holds "${": any name may be meant
 	for i, e := range in.Includes {
 		lines, ok := cache[e.Path]
 		if !ok {
@@ -332,7 +337,10 @@ func newParser(in Input) (*parser, error) {
 						defined[l.args[0]] = true
 					case "undefine":
 						undefined[l.args[0]] = true
+					default:
+						continue
 					}
+					hiddenDefine = hiddenDefine || strings.Contains(l.args[0], "${")
 				}
 			}
 		}
@@ -347,7 +355,7 @@ func newParser(in Input) (*parser, error) {
 	// sets came from the command line. One that a Define also sets, or one the configuration
 	// undefines and DUMP_RUN_CFG no longer lists, may or may not have been there at the start.
 	for name, v := range in.Run.Defines {
-		p.defines[name] = define{value: v, hasValue: v != "", maybe: defined[name]}
+		p.defines[name] = define{value: v, hasValue: v != "", maybe: defined[name] || hiddenDefine}
 	}
 	for name := range undefined {
 		if _, ok := in.Run.Defines[name]; !ok && !defined[name] {
@@ -377,7 +385,7 @@ func (p *parser) walk() error {
 		if err != nil {
 			return err
 		}
-		if p.expanded > MaxInput {
+		if p.overBudget {
 			return lexErr(ErrTooComplex, p.in.Includes[entry].Path, l.first)
 		}
 		for i := len(kids) - 1; i >= 0; i-- {
@@ -421,6 +429,7 @@ func (p *parser) line(entry int, l line) ([]int, error) {
 		s := section{kind: kindSkip, eff: inactive}
 		if eff != inactive {
 			var own region
+			p.hiddenName(l.name)
 			s.kind, own = p.open(file, l, eff)
 			s.eff = max(eff, own)
 		}
@@ -452,24 +461,30 @@ func (p *parser) line(entry int, l line) ([]int, error) {
 	case "loadmodule":
 		p.loadModule(l.args, maybe)
 	}
+	p.hiddenName(l.name)
 	if p.others > 0 {
 		return nil, nil
 	}
-	sc := &p.main
-	if p.cur >= 0 {
-		sc = &p.vhosts[p.cur]
-	}
+	sc := p.scope()
 	switch {
 	case l.name == "servername" && len(l.args) > 0:
 		sc.name, sc.hasName = p.hostName(l.args[0]), true
 	case l.name == "serveralias":
 		for _, a := range l.args {
+			if p.overBudget {
+				break
+			}
 			sc.aliases = append(sc.aliases, p.nameArg(a))
 		}
-	case l.name == "sslengine" && len(l.args) == 1:
-		v := engineOff
-		if asciiLower(l.args[0]) == "on" {
-			v = engineOn
+	case l.name == "sslengine" && len(l.args) > 0:
+		v := engineOn | engineOff // "SSLEngine addr:port …" (newer mod_ssl): on for some addresses
+		if len(l.args) == 1 {
+			switch asciiLower(l.args[0]) {
+			case "on":
+				v = engineOn
+			case "off", "optional":
+				v = engineOff
+			}
 		}
 		if maybe {
 			sc.engine |= v
@@ -477,11 +492,29 @@ func (p *parser) line(entry int, l line) ([]int, error) {
 			sc.engine = v
 		}
 	case l.name == "sslcertificatefile" && len(l.args) == 1:
-		sc.certs = append(sc.certs, p.ref(l.args[0], file, l.first, maybe))
+		sc.certs = p.appendRef(sc.certs, l.args[0], file, l.first, maybe)
 	case l.name == "sslcertificatekeyfile" && len(l.args) == 1:
-		sc.keys = append(sc.keys, p.ref(l.args[0], file, l.first, maybe))
+		sc.keys = p.appendRef(sc.keys, l.args[0], file, l.first, maybe)
 	}
 	return nil, nil
+}
+
+// scope is the main server or the vhost being collected.
+func (p *parser) scope() *scope {
+	if p.cur >= 0 {
+		return &p.vhosts[p.cur]
+	}
+	return &p.main
+}
+
+// hiddenName handles a directive or section name with "${": Apache expands the whole line before
+// it splits it (ap_resolve_env in ap_build_config_sub), so the name may be any directive, such
+// as an SSLCertificateKeyFile that would change a pair. The scope being collected becomes
+// uncertain.
+func (p *parser) hiddenName(name string) {
+	if p.others == 0 && strings.Contains(name, "${") {
+		p.scope().uncertain = true
+	}
 }
 
 // open evaluates a section start in a region that is not false.
@@ -557,7 +590,7 @@ func parseAddr(s string) (l Listen, isDefault, ok bool) {
 	switch host {
 	case "_default_":
 		isDefault, host = true, ""
-	case "*", "0.0.0.0":
+	case "*", "0.0.0.0", "::":
 		host = ""
 	}
 	return Listen{Addr: host, Port: n}, isDefault, true
@@ -570,6 +603,17 @@ func digits(s string) bool {
 		}
 	}
 	return s != ""
+}
+
+// appendRef adds one entry to a certificate or key list. Once the list holds a conditional entry,
+// every later entry is conditional too: whether that entry exists shifts their index, and so
+// the pair they belong to.
+func (p *parser) appendRef(list []ref, raw, file string, line int, maybe bool) []ref {
+	r := p.ref(raw, file, line, maybe)
+	if n := len(list); n > 0 && list[n-1].status == statusConditional {
+		r.status = statusConditional
+	}
+	return append(list, r)
 }
 
 // ref expands and resolves one SSLCertificateFile or SSLCertificateKeyFile argument.
@@ -650,19 +694,35 @@ func (p *parser) expand(s string) (string, uint8) {
 	}
 	var b strings.Builder
 	st := statusOK
+	// write accounts every piece before it is copied: the budget is never exceeded by more than
+	// one piece of at most maxExpansion bytes, whatever one line holds.
+	write := func(piece string) bool {
+		if p.overBudget {
+			return false
+		}
+		if p.expanded += len(piece); p.expanded > MaxInput {
+			p.overBudget = true
+			return false
+		}
+		if b.Len()+len(piece) > maxExpansion {
+			return false
+		}
+		b.WriteString(piece)
+		return true
+	}
 	for {
 		i := strings.Index(s, "${")
-		if i < 0 {
-			b.WriteString(s)
-			break
+		j := -1
+		if i >= 0 {
+			j = strings.IndexByte(s[i+2:], '}')
 		}
-		j := strings.IndexByte(s[i+2:], '}')
-		if j < 0 {
-			b.WriteString(s)
+		if i < 0 || j < 0 {
+			if !write(s) {
+				return "", max(st, statusVariable)
+			}
 			break
 		}
 		name := s[i+2 : i+2+j]
-		b.WriteString(s[:i])
 		d, ok := p.defines[name]
 		switch {
 		case ok && d.maybe:
@@ -670,17 +730,15 @@ func (p *parser) expand(s string) (string, uint8) {
 		case !ok || !d.hasValue || d.tainted:
 			st = max(st, statusVariable)
 		}
+		value := s[i : i+3+j]
 		if ok && d.hasValue {
-			b.WriteString(d.value)
-		} else {
-			b.WriteString(s[i : i+3+j])
+			value = d.value
 		}
-		if b.Len() > maxExpansion {
+		if !write(s[:i]) || !write(value) {
 			return "", max(st, statusVariable)
 		}
 		s = s[i+3+j:]
 	}
-	p.expanded += b.Len()
 	return b.String(), st
 }
 
@@ -900,7 +958,7 @@ func (p *parser) servers() ([]Server, error) {
 			s.Names = []string{p.main.name}
 		}
 		certs := merge(nil, p.main.certs, len(p.main.certs))
-		if err := add(withPairs(s, certs, merge(nil, p.main.keys, len(certs)), mainEngine != engineOn)); err != nil {
+		if err := add(withPairs(s, certs, merge(nil, p.main.keys, len(certs)), p.main.uncertain || mainEngine != engineOn)); err != nil {
 			return nil, err
 		}
 	}
@@ -919,15 +977,32 @@ func (p *parser) servers() ([]Server, error) {
 		}
 		certs := merge(p.main.certs, v.certs, len(p.main.certs)+len(v.certs))
 		s := Server{File: v.file, Line: v.line, Listens: v.listens}
-		if v.hasName {
+		switch {
+		case v.hasName:
 			s.Names = append(s.Names, v.name)
+		case p.main.hasName && anyAddress(v.listens):
+			// ap_fini_vhost_config: a vhost without a ServerName on a wildcard address takes the
+			// main server's (on a specific address Apache asks DNS, which Alice does not).
+			s.Names = append(s.Names, p.main.name)
 		}
 		s.Names = append(s.Names, v.aliases...)
-		if err := add(withPairs(s, certs, merge(p.main.keys, v.keys, len(certs)), v.uncertain || engine != engineOn)); err != nil {
+		// A hidden directive at the main level (main.uncertain) may be any SSL directive every
+		// vhost inherits.
+		conditional := v.uncertain || p.main.uncertain || engine != engineOn
+		if err := add(withPairs(s, certs, merge(p.main.keys, v.keys, len(certs)), conditional)); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
+}
+
+func anyAddress(listens []Listen) bool {
+	for _, l := range listens {
+		if l.Addr == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // merged is one entry of an effective certificate or key list.
