@@ -872,6 +872,28 @@
         "action": "Sunucuda systemctl status nginx komutunu çalıştırın, Nginx'i başlatın (systemctl start nginx), sonra yeniden dağıtın."
       }
     },
+    "apache": {
+      "not_found": {
+        "title": "Bu sunucuda Apache bulunamadı.",
+        "cause": "Alice, standart paketlerin Apache'yi kurduğu /usr/sbin/apache2ctl (Debian, Ubuntu) ve /usr/sbin/httpd (Red Hat ailesi) dosyalarını aradı.",
+        "action": "Apache'yi dağıtımınızdan kurun ya da bu sunucuyu Linux sunucu olarak ekleyin. Alice'in beklediklerini docs/apache-host-preparation.md dosyasında bulabilirsiniz."
+      },
+      "config_invalid": {
+        "title": "Apache yapılandırmasında bir sorun var, bu yüzden sorun giderilene kadar Alice bu sunucunun sertifikalarını okuyamaz.",
+        "cause": "Apache yapılandırmasında bir hata var ya da Alice'in güvenle okuyamadığı dosyalar veya ayarlar kullanılıyor. Hiçbir şey değiştirilmedi.",
+        "action": "Sunucuda apache2ctl -t (Debian, Ubuntu) ya da httpd -t (Red Hat ailesi) komutunu çalıştırın ve çıkan hataları giderin. Komut başarılıysa sunucunun sayfasında adı geçen dosyaya ve docs/apache-host-preparation.md dosyasına bakın, sonra yeniden Keşfet'i seçin."
+      },
+      "profile_missing": {
+        "title": "Bu sunucu Apache işleri için hazırlanmamış.",
+        "cause": "Alice hesabı alice-helper'ı Apache için değil, yalnızca SSH anahtarları için çalıştırabiliyor (Linux profili).",
+        "action": "Sunucular sayfasında Sunucu türü olarak Apache sunucusu seçeneğini seçin, komutları kopyalayın ve sunucuda yeniden çalıştırın. Hazırlık adımları docs/apache-host-preparation.md dosyasında anlatılıyor."
+      },
+      "helper_too_old": {
+        "title": "Bu sunucudaki alice-helper, Apache'yi okumak için çok eski.",
+        "cause": "Apache'yi okumak için sunucuda kurulu olandan daha yeni bir alice-helper gerekiyor.",
+        "action": "Sunucular sayfasında Sunucu türü olarak Apache sunucusu seçeneğini seçin, komutları kopyalayın ve güncel alice-helper'ı kurmak için sunucuda yeniden çalıştırın. Adımlar docs/apache-host-preparation.md dosyasında anlatılıyor."
+      }
+    },
     "certificate": {
       "invalid": {
         "title": "Bu, Alice'in okuyabildiği bir sertifika değil.",

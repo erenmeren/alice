@@ -267,6 +267,12 @@ var (
 	// the nginx unit is not active (a reload could not apply the files).
 	ErrNginxNotRunning = ErrorCode{Code: "ALC-NGX-0010", Reason: "nginx.not_running", Status: http.StatusBadGateway}
 
+	// Apache httpd (discovery only). Its helper-too-old reason exists only here: Nginx predates protocol 8.
+	ErrApacheNotFound       = ErrorCode{Code: "ALC-APC-0001", Reason: "apache.not_found", Status: http.StatusBadGateway}
+	ErrApacheConfigInvalid  = ErrorCode{Code: "ALC-APC-0002", Reason: "apache.config_invalid", Status: http.StatusConflict}
+	ErrApacheProfileMissing = ErrorCode{Code: "ALC-APC-0003", Reason: "apache.profile_missing", Status: http.StatusBadGateway}
+	ErrApacheHelperTooOld   = ErrorCode{Code: "ALC-APC-0004", Reason: "apache.helper_too_old", Status: http.StatusBadGateway}
+
 	ErrCertInvalid            = ErrorCode{Code: "ALC-CRT-0001", Reason: "certificate.invalid", Status: http.StatusUnprocessableEntity}
 	ErrCertKeyMismatch        = ErrorCode{Code: "ALC-CRT-0002", Reason: "certificate.key_mismatch", Status: http.StatusUnprocessableEntity}
 	ErrCertExpired            = ErrorCode{Code: "ALC-CRT-0003", Reason: "certificate.expired", Status: http.StatusUnprocessableEntity}
@@ -490,6 +496,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrJobNotWaiting, ErrJobLeaseExpired, ErrJobTampered, ErrJobUnknownType, ErrJobConflict,
 		ErrNginxNotFound, ErrNginxConfigInvalid, ErrNginxConfigChanged, ErrNginxProfileMissing, ErrNginxNoSpace,
 		ErrNginxFileChanged, ErrNginxLocationUnsupported, ErrNginxBusy, ErrNginxIOError, ErrNginxNotRunning,
+		ErrApacheNotFound, ErrApacheConfigInvalid, ErrApacheProfileMissing, ErrApacheHelperTooOld,
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,

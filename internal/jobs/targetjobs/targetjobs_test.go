@@ -717,6 +717,24 @@ func TestScanFallsBackForEveryWebServerKind(t *testing.T) {
 	assert.Nil(t, inv.reconciled[0].WebServer)
 	assert.Equal(t, "web_server_helper_too_old", inv.reconciled[0].Warnings[len(inv.reconciled[0].Warnings)-1].Code)
 
+	// Apache answers to its own prefix: not installed is no facts but the software; the other two
+	// fall back with their warnings.
+	inv, reqs, err = run(providers.KindApache, inventory.TypeApache, "apache.not_found")
+	require.NoError(t, err)
+	assert.Len(t, reqs, 2)
+	require.Len(t, inv.reconciled, 1)
+	assert.Equal(t, &providers.WebServerFacts{Software: "apache"}, inv.reconciled[0].WebServer)
+	for _, code := range []string{"apache.profile_missing", "apache.helper_too_old"} {
+		inv, reqs, err = run(providers.KindApache, inventory.TypeApache, code)
+		require.NoError(t, err, code)
+		assert.Len(t, reqs, 2, code)
+		require.Len(t, inv.reconciled, 1, code)
+		assert.Nil(t, inv.reconciled[0].WebServer, code)
+		w := inv.reconciled[0].Warnings
+		require.NotEmpty(t, w, code)
+		assert.Equal(t, "web_server_"+code[len("apache."):], w[len(w)-1].Code, code)
+	}
+
 	// Not a web server: no fallback, the provider's error is the job's.
 	inv, reqs, err = run(providers.KindLinuxSSH, inventory.TypeLinux, "nginx.not_found")
 	r, _ := reason(t, err)

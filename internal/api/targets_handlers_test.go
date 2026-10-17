@@ -112,6 +112,20 @@ func TestCreateTargetReturnsTargetAndJob(t *testing.T) {
 	assert.NotEmpty(t, gotActor.Audit.RequestID)
 }
 
+// An Apache server is created like any other web server: the type reaches the inventory unchanged.
+func TestCreateTargetAcceptsApache(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	var gotIn inventory.NewTarget
+	inv.CreateTargetFn = func(_ context.Context, _ inventory.Actor, in inventory.NewTarget) (inventory.Target, uuid.UUID, error) {
+		gotIn = in
+		return sampleTarget(), jobID, nil
+	}
+	rec := call(NewHandler(d), http.MethodPost, "/api/v1/targets", "admin",
+		`{"name":"web-02","type":"apache","host":"web-02.example.com"}`)
+	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+	assert.Equal(t, inventory.TypeApache, gotIn.Type)
+}
+
 func TestTargetJSONHasExactlyTheDocumentedFields(t *testing.T) {
 	raw, err := json.Marshal(targetJSON(sampleTarget()))
 	require.NoError(t, err)

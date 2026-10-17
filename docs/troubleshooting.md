@@ -1929,6 +1929,38 @@ ends **Outcome not confirmed**, `ALC-DEP-0018`). After any change to the sudoers
 A server that runs Nginx under another systemd unit name, or without systemd, cannot be deployed to (a known
 limitation).
 
+## ALC-APC-0001: Apache not found
+
+**Meaning.** Apache was not found on this server. (HTTP 502, reason `apache.not_found`.)
+
+**Likely cause.** Alice looked for `/usr/sbin/apache2ctl` (Debian, Ubuntu) and `/usr/sbin/httpd` (Red Hat family), where the standard packages install Apache.
+
+**What to do.** Install Apache from your distribution or add this server as a Linux server. [apache-host-preparation.md](apache-host-preparation.md) lists what Alice expects.
+
+## ALC-APC-0002: Apache configuration has a problem
+
+**Meaning.** Apache's configuration has a problem, so Alice cannot read this server's certificates until it is fixed. (HTTP 409, reason `apache.config_invalid`.)
+
+**Likely cause.** Apache's configuration has an error, or it uses files or settings Alice cannot safely read. Nothing was changed.
+
+**What to do.** Run `apache2ctl -t` (Debian, Ubuntu) or `httpd -t` (Red Hat family) on the server and fix any error. If it passes, check the file named on the server's page and [apache-host-preparation.md](apache-host-preparation.md), then choose Discover again.
+
+## ALC-APC-0003: Server not prepared for Apache
+
+**Meaning.** This server is not prepared for Apache work. (HTTP 502, reason `apache.profile_missing`.)
+
+**Likely cause.** The Alice account may run `alice-helper` for SSH keys only (Linux profile), not for Apache.
+
+**What to do.** On the Servers page choose Server type Apache server, copy the commands and run them on the server again. [apache-host-preparation.md](apache-host-preparation.md) describes the preparation.
+
+## ALC-APC-0004: alice-helper too old for Apache
+
+**Meaning.** The `alice-helper` on this server is too old to read Apache. (HTTP 502, reason `apache.helper_too_old`.)
+
+**Likely cause.** Reading Apache needs a newer `alice-helper` than the one installed on the server.
+
+**What to do.** On the Servers page choose Server type Apache server, copy the commands and run them on the server again to install the current `alice-helper`. [apache-host-preparation.md](apache-host-preparation.md) describes the steps.
+
 ## ALC-CRT-0001: Not a readable certificate
 
 **Meaning.** This is not a certificate Alice can read. (HTTP 422, reason `certificate.invalid`.)

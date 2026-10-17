@@ -740,11 +740,11 @@ paths:
       operationId: listTargets
       summary: Managed servers and Key Vaults (metadata only, never credentials)
       description: >-
-        type narrows the list to one kind (linux, nginx or azure_key_vault; anything else is 422 validation.one_of
+        type narrows the list to one kind (linux, nginx, apache or azure_key_vault; anything else is 422 validation.one_of
         on type). A Key Vault carries vault.
       x-permission: read
       parameters:
-        - { name: type, in: query, required: false, schema: { type: string, enum: [linux, nginx, azure_key_vault] } }
+        - { name: type, in: query, required: false, schema: { type: string, enum: [linux, nginx, apache, azure_key_vault] } }
       responses:
         "200":
           description: Servers
@@ -5897,7 +5897,7 @@ components:
       additionalProperties: false
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
-        type: { type: string, enum: [linux, nginx], default: linux, description: Fixed at creation }
+        type: { type: string, enum: [linux, nginx, apache], default: linux, description: Fixed at creation }
         host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. An address that is never a managed server (link-local, multicast, unspecified, broadcast and other reserved forms) is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
         port: { type: integer, minimum: 0, maximum: 65535, description: 0 or absent means 22 }
         username: { type: string, maxLength: 32, description: Absent means alice-svc }
@@ -5974,7 +5974,7 @@ components:
       properties:
         id: { type: string, format: uuid }
         name: { type: string }
-        type: { type: string, enum: [nginx, linux, azure_key_vault] }
+        type: { type: string, enum: [nginx, apache, linux, azure_key_vault] }
         host: { type: string }
         port: { type: integer }
         username: { type: string }
@@ -6477,7 +6477,7 @@ components:
       type: object
       required: [kind, display_name_key, capabilities, config_schema]
       properties:
-        kind: { type: string, enum: [linuxssh, nginx, azurekv] }
+        kind: { type: string, enum: [linuxssh, nginx, apache, azurekv] }
         display_name_key: { type: string }
         capabilities: { type: array, items: { type: string } }
         config_schema:
@@ -6510,7 +6510,7 @@ components:
       description: Present for web servers that were tested or scanned
       required: [software, version, conf_path, config_valid, config_error, config_error_reason, config_error_file, found]
       properties:
-        software: { type: string, enum: [nginx], description: 'The web server software; equals the target type' }
+        software: { type: string, enum: [nginx, apache], description: 'The web server software; equals the target type' }
         version: { type: string, examples: [1.24.0] }
         conf_path: { type: string, examples: [/etc/nginx/nginx.conf] }
         config_valid: { type: boolean }
