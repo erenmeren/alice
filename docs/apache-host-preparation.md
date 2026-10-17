@@ -109,7 +109,7 @@ can change them can run commands as root at the next discovery, as at the next s
 |---|---|
 | `-V` | The Apache version and the main configuration file (`SERVER_CONFIG_FILE`, joined to `HTTPD_ROOT` when relative). Without a `Server version: Apache/…` line Alice reports Apache as not found. |
 | `-D DUMP_INCLUDES -t` | The tree of configuration files Apache loads (`Include`, `IncludeOptional`), with the line of each `Include`. When this run fails, the configuration is invalid and nothing else is used (`ALC-APC-0002`). |
-| `-D DUMP_MODULES -t` | The modules Apache has loaded, for `<IfModule>`. |
+| `-D DUMP_MODULES -t` | The compiled-in modules; `LoadModule` lines are followed in read order, for `<IfModule>`. |
 | `-D DUMP_RUN_CFG -t` | `ServerRoot` (for relative certificate paths) and the defines that are set (for `<IfDefine>`). |
 
 The helper never uses what Apache prints on standard error (for example the `AH00558` notice about the server's

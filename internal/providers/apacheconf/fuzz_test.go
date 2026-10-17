@@ -71,7 +71,7 @@ func FuzzParseApacheConfig(f *testing.F) {
 		in := Input{
 			Includes: []Included{{Path: "/etc/apache2/apache2.conf", Parent: -1}},
 			Files:    map[string][]byte{"/etc/apache2/apache2.conf": data},
-			Modules:  Modules{Static: map[string]bool{"core_module": true, "ssl_module": true}, Loaded: map[string]bool{"core_module": true, "ssl_module": true}},
+			Modules:  Modules{Static: map[string]bool{"core_module": true, "ssl_module": true}},
 			Run:      RunConfig{ServerRoot: "/etc/apache2", Defines: map[string]string{"SSL": ""}},
 			Version:  "2.4.57",
 		}

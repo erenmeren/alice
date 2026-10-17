@@ -38,7 +38,7 @@ func root(text string) tfile { return tfile{rootConf, -1, 0, text} }
 func testInput(files ...tfile) Input {
 	in := Input{
 		Files:   map[string][]byte{},
-		Modules: Modules{Static: map[string]bool{"core_module": true, "ssl_module": true}, Loaded: map[string]bool{"core_module": true, "ssl_module": true}},
+		Modules: Modules{Static: map[string]bool{"core_module": true, "ssl_module": true}},
 		Run:     RunConfig{ServerRoot: "/etc/apache2", Defines: map[string]string{}},
 		Version: "2.4.57",
 	}
@@ -50,7 +50,7 @@ func testInput(files ...tfile) Input {
 }
 
 func noSSLModule(in *Input) {
-	in.Modules = Modules{Static: map[string]bool{"core_module": true}, Loaded: map[string]bool{"core_module": true}}
+	in.Modules = Modules{Static: map[string]bool{"core_module": true}}
 }
 
 func pair(cert, key string) Pair { return Pair{Cert: cert, Key: key, CertRaw: cert, KeyRaw: key} }

@@ -191,10 +191,11 @@ func includeLine(tag []byte) (int, bool) {
 	return n, true
 }
 
-// Modules is "-D DUMP_MODULES -t": Static holds the modules compiled in, Loaded every module
-// (compiled in and loaded with LoadModule).
+// Modules is "-D DUMP_MODULES -t": Static holds the modules compiled in. The shared modules it lists
+// are not kept: Parse follows LoadModule in read order from the static set (Ruling 8), so what
+// Apache had loaded by the end of the configuration says nothing about an earlier <IfModule>.
 type Modules struct {
-	Static, Loaded map[string]bool
+	Static map[string]bool
 }
 
 // ParseModules reads "-D DUMP_MODULES -t": the header "Loaded Modules:", then one line
@@ -204,7 +205,7 @@ func ParseModules(out []byte) (Modules, error) {
 	if err := checkOutput(out); err != nil {
 		return Modules{}, err
 	}
-	m := Modules{Static: map[string]bool{}, Loaded: map[string]bool{}}
+	m := Modules{Static: map[string]bool{}}
 	header := false
 	for n, ln := range outputLines(out) {
 		if !header {
@@ -232,7 +233,6 @@ func ParseModules(out []byte) (Modules, error) {
 		default:
 			return Modules{}, outputErr(n)
 		}
-		m.Loaded[string(name)] = true
 	}
 	if !header {
 		return Modules{}, outputErr(1)

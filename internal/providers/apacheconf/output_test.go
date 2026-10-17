@@ -268,24 +268,20 @@ func TestParseModules(t *testing.T) {
 	t.Run("debian 12 real", func(t *testing.T) {
 		m, err := ParseModules([]byte(debianModules))
 		require.NoError(t, err)
-		assert.Equal(t, map[string]bool{"core_module": true, "so_module": true, "http_module": true, "unixd_module": true}, m.Static)
-		assert.Equal(t, map[string]bool{"core_module": true, "so_module": true, "http_module": true, "unixd_module": true,
-			"alias_module": true, "mpm_event_module": true, "socache_shmcb_module": true, "ssl_module": true}, m.Loaded)
+		assert.Equal(t, map[string]bool{"core_module": true, "so_module": true, "http_module": true, "unixd_module": true}, m.Static,
+			"only the compiled-in modules are kept")
 	})
 	t.Run("rocky 9 real", func(t *testing.T) {
 		m, err := ParseModules([]byte("Loaded Modules:\n core_module (static)\n ssl_module (shared)"))
 		require.NoError(t, err)
 		assert.True(t, m.Static["core_module"])
-		assert.True(t, m.Loaded["core_module"])
 		assert.False(t, m.Static["ssl_module"])
-		assert.True(t, m.Loaded["ssl_module"])
 	})
 	t.Run("header only", func(t *testing.T) {
 		m, err := ParseModules([]byte("Loaded Modules:\n"))
 		require.NoError(t, err)
 		assert.NotNil(t, m.Static)
-		assert.NotNil(t, m.Loaded)
-		assert.Empty(t, m.Loaded)
+		assert.Empty(t, m.Static)
 	})
 	const h = "Loaded Modules:\n"
 	for name, in := range map[string]string{
@@ -450,11 +446,11 @@ func TestOutputCaps(t *testing.T) {
 	var b strings.Builder
 	b.WriteString("Loaded Modules:\n")
 	for i := range MaxModules {
-		b.WriteString(" m" + strconv.Itoa(i) + "_module (shared)\n")
+		b.WriteString(" m" + strconv.Itoa(i) + "_module (static)\n")
 	}
 	m, err := ParseModules([]byte(b.String()))
 	require.NoError(t, err)
-	assert.Len(t, m.Loaded, MaxModules)
+	assert.Len(t, m.Static, MaxModules)
 	b.WriteString(" one_more_module (shared)\n")
 	_, err = ParseModules([]byte(b.String()))
 	assert.ErrorIs(t, err, ErrTooComplex)
