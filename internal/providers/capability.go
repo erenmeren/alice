@@ -24,6 +24,8 @@ const (
 	CapReadCertificateSecret Capability = "read_certificate_secret" //nolint:gosec // G101 false positive: a capability name, not a credential
 	// CapKeyLogin: VerifyKeyLogin, one test login with one SSH key (spec §13.4).
 	CapKeyLogin Capability = "key_login"
+	// CapHTTP01: publish and remove an ACME HTTP-01 token on the server (http01.Publisher; spec 2026-10-17 §3.4).
+	CapHTTP01 Capability = "http01_challenge"
 )
 
 // CapabilitySet is the static set a provider advertises.
@@ -60,5 +62,5 @@ func (c CapabilitySet) Clone() CapabilitySet { return maps.Clone(c) }
 var knownCapabilities = NewCapabilitySet(
 	CapTestConnection, CapDiscoverCerts, CapDiscoverSSHKeys, CapDiscoverKVKeys, CapDiscoverKVSecrets,
 	CapDeployCertificate, CapImportCertificate, CapAuthorizedKeys, CapVerifyDeployment, CapReadCertificateSecret,
-	CapKeyLogin,
+	CapKeyLogin, CapHTTP01,
 )

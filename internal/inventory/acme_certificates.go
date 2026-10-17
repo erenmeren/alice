@@ -17,6 +17,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
 )
 
 // ACME certificate definitions (plan 2026-10-13 Task 10; design rows 1, 6, 7; amendments A9, A13).
@@ -227,7 +228,7 @@ func hasWildcard(names []string) bool {
 // are read FOR SHARE: a delete holding one (DeleteACMEProvider, DeleteACMEHook, DeleteTarget: FOR UPDATE) either
 // commits first, and the row is then not live here, or waits for this transaction and then sees the certificate that
 // uses the row.
-func checkACMECertRefs(ctx context.Context, tx pgx.Tx, f acmeCertFields) (uuid.UUID, error) {
+func (s *Service) checkACMECertRefs(ctx context.Context, tx pgx.Tx, f acmeCertFields) (uuid.UUID, error) {
 	p, err := readACMEProvider(ctx, tx, f.providerID, " FOR SHARE OF p")
 	if errors.Is(err, ErrNotFound) {
 		return uuid.Nil, validate.Errors{{Field: "provider_id", Code: validate.Required}}
@@ -261,7 +262,7 @@ func checkACMECertRefs(ctx context.Context, tx pgx.Tx, f acmeCertFields) (uuid.U
 		if err != nil {
 			return uuid.Nil, fmt.Errorf("inventory: read the HTTP-01 server: %w", err)
 		}
-		if typ != TypeNginx { // only the nginx profile's sudoers file has the HTTP-01 token lines
+		if !s.can(typ, providers.CapHTTP01) { // only a provider that publishes HTTP-01 tokens (the nginx profile's sudoers lines) may be the HTTP-01 server
 			return uuid.Nil, ErrACMEChallengeUnavailable
 		}
 	}
@@ -422,7 +423,7 @@ func (s *Service) CreateACMECertificate(ctx context.Context, a Actor, in ACMECer
 	now := s.clock.Now().UTC()
 	var out ACMECertificate
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		account, err := checkACMECertRefs(ctx, tx, f)
+		account, err := s.checkACMECertRefs(ctx, tx, f)
 		if err != nil {
 			return err
 		}
@@ -546,7 +547,7 @@ func (s *Service) UpdateACMECertificate(ctx context.Context, a Actor, id uuid.UU
 		}
 		account := cur.AccountID
 		if usesOrder {
-			if account, err = checkACMECertRefs(ctx, tx, f); err != nil {
+			if account, err = s.checkACMECertRefs(ctx, tx, f); err != nil {
 				return err
 			}
 		}

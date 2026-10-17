@@ -329,15 +329,18 @@ func TestIssueRefusalsEndTheOrder(t *testing.T) {
 			s.work = runningWork(inventory.ACMEChallengeHTTP01)
 			s.target = inventory.Target{Type: inventory.TypeLinux, Status: inventory.StatusOK}
 		}, openGate{}, acme.ReasonChallengeUnavailable},
-		{"disabled", func(s *stubInv, _ *handlers) {
+		{"disabled", func(s *stubInv, h *handlers) {
+			h.d.Registry = publishingRegistry()
 			s.work = runningWork(inventory.ACMEChallengeHTTP01)
 			s.target = inventory.Target{Type: inventory.TypeNginx, Status: inventory.StatusDisabled}
 		}, openGate{}, "target.disabled"},
-		{"host key changed", func(s *stubInv, _ *handlers) {
+		{"host key changed", func(s *stubInv, h *handlers) {
+			h.d.Registry = publishingRegistry()
 			s.work = runningWork(inventory.ACMEChallengeHTTP01)
 			s.target = inventory.Target{Type: inventory.TypeNginx, Status: inventory.StatusHostKeyChanged}
 		}, openGate{}, "target.host_key_changed"},
-		{"host key unconfirmed", func(s *stubInv, _ *handlers) {
+		{"host key unconfirmed", func(s *stubInv, h *handlers) {
+			h.d.Registry = publishingRegistry()
 			s.work = runningWork(inventory.ACMEChallengeHTTP01)
 			s.target = inventory.Target{Type: inventory.TypeNginx, Status: inventory.StatusPendingHostKey}
 		}, openGate{}, "target.host_key_unconfirmed"},
@@ -363,7 +366,7 @@ func TestIssueRefusalsEndTheOrder(t *testing.T) {
 // a solver that cannot be built closes the session.
 func TestOpenPublisher(t *testing.T) {
 	ok := job(map[string]string{"order_id": uuid.NewString()})
-	plain := fake.New(providers.KindNginx)
+	plain := fake.New(providers.KindNginx, providers.CapHTTP01)
 	reg := providers.NewRegistry()
 	reg.Register(plain)
 	reg.Freeze()
@@ -377,7 +380,7 @@ func TestOpenPublisher(t *testing.T) {
 	assert.Equal(t, "ssh.unreachable", failureOf(t, err).Reason)
 
 	pubReg := providers.NewRegistry()
-	pubReg.Register(pubProvider{Provider: fake.New(providers.KindNginx), pub: &memPublisher{files: map[string]string{}}})
+	pubReg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapHTTP01), pub: &memPublisher{files: map[string]string{}}})
 	pubReg.Freeze()
 	h = stubHandlers(t, inv, openGate{}, pubReg)
 	h.newHTTP01 = func(http01.Config) (solver.Solver, error) { return nil, http01.ErrVerify }
@@ -388,6 +391,29 @@ func TestOpenPublisher(t *testing.T) {
 	require.NoError(t, err)
 	closeFn()
 	assert.Equal(t, []string{solver.HTTP01}, s.Types())
+}
+
+// publishingRegistry holds a fake nginx provider that advertises the HTTP-01 capability.
+func publishingRegistry() *providers.Registry {
+	reg := providers.NewRegistry()
+	reg.Register(fake.New(providers.KindNginx, providers.CapHTTP01))
+	reg.Freeze()
+	return reg
+}
+
+// A server whose provider does not publish HTTP-01 tokens is no HTTP-01 server, and nothing is opened.
+func TestOpenPublisherNeedsTheHTTP01Capability(t *testing.T) {
+	nginx := fake.New(providers.KindNginx, providers.CapTestConnection)
+	reg := providers.NewRegistry()
+	reg.Register(pubProvider{Provider: nginx, pub: &memPublisher{files: map[string]string{}}})
+	reg.Freeze()
+	inv := &stubInv{target: inventory.Target{Type: inventory.TypeNginx, Status: inventory.StatusOK}}
+	h := stubHandlers(t, inv, openGate{}, reg)
+	_, _, err := h.openPublisher(context.Background(), uuid.New())
+	assert.ErrorIs(t, err, inventory.ErrACMEChallengeUnavailable)
+	for _, c := range nginx.Calls() {
+		assert.NotEqual(t, "Open", c.Method)
+	}
 }
 
 // fakeCA is an in-process fake CA with a registered client.
@@ -505,7 +531,7 @@ func TestCleanupOutcomes(t *testing.T) {
 	// A hook configuration the solver refuses, a server whose HTTP-01 solver cannot be built.
 	inv.hookErr, inv.hookCfg = nil, dns01.Config{URL: "http://x"}
 	pubReg := providers.NewRegistry()
-	pubReg.Register(pubProvider{Provider: fake.New(providers.KindNginx), pub: &memPublisher{files: map[string]string{}}})
+	pubReg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapHTTP01), pub: &memPublisher{files: map[string]string{}}})
 	pubReg.Freeze()
 	h = stubHandlers(t, inv, openGate{}, pubReg)
 	h.newHTTP01 = func(http01.Config) (solver.Solver, error) { return nil, http01.ErrVerify }
@@ -657,7 +683,7 @@ func TestPanicEndsTheOrder(t *testing.T) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	pubReg := providers.NewRegistry()
-	pubReg.Register(pubProvider{Provider: fake.New(providers.KindNginx), pub: &memPublisher{files: map[string]string{}}})
+	pubReg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapHTTP01), pub: &memPublisher{files: map[string]string{}}})
 	pubReg.Freeze()
 	inv := &stubInv{work: runningWork(inventory.ACMEChallengeHTTP01), client: client, key: key,
 		target: inventory.Target{Type: inventory.TypeNginx, Status: inventory.StatusOK}}

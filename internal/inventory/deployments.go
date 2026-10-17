@@ -499,11 +499,14 @@ func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCe
 // deployablePath is deployments.cert_path/key_path's CHECK: a path the helper accepts.
 func deployablePath(p string) bool { return len(p) <= 4096 && deployPathRE.MatchString(p) }
 
-// canDeploy reports whether the registered provider of the target type deploys certificates.
-func (s *Service) canDeploy(typ string) bool {
+// can reports whether the registered provider of the target type has the capability.
+func (s *Service) can(typ string, c providers.Capability) bool {
 	p, ok := s.providerFor(typ)
-	return ok && p.Capabilities().Has(providers.CapDeployCertificate)
+	return ok && p.Capabilities().Has(c)
 }
+
+// canDeploy reports whether the registered provider of the target type deploys certificates.
+func (s *Service) canDeploy(typ string) bool { return s.can(typ, providers.CapDeployCertificate) }
 
 // deploySource says where a deployment comes from: its trigger ("manual" for a person's request,
 // "kv_renewal" for the automatic planner), whether an Administrator confirmed an incomplete chain

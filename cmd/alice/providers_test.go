@@ -43,7 +43,7 @@ func TestRegisterProvidersShipsLinuxSSHNginxAndAzureKV(t *testing.T) {
 	assert.ElementsMatch(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverSSHKeys, providers.CapKeyLogin, providers.CapTestConnection},
 		byKind[providers.KindLinuxSSH].Capabilities)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
-		providers.CapDiscoverCerts, providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapKeyLogin}, byKind[providers.KindNginx].Capabilities)
+		providers.CapDiscoverCerts, providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapKeyLogin, providers.CapHTTP01}, byKind[providers.KindNginx].Capabilities)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapDiscoverKVKeys,
 		providers.CapDiscoverKVSecrets, providers.CapReadCertificateSecret, providers.CapImportCertificate}, byKind[providers.KindAzureKV].Capabilities)
 

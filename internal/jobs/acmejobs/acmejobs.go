@@ -458,18 +458,18 @@ func (h *handlers) openPublisher(ctx context.Context, targetID uuid.UUID) (http0
 		return nil, nil, inventory.ErrACMEChallengeUnavailable
 	case err != nil:
 		return nil, nil, err
-	case t.Type != inventory.TypeNginx:
+	}
+	p, ok := h.d.Registry.Get(ref.Kind)
+	if !ok || !p.Capabilities().Has(providers.CapHTTP01) { // only a provider that publishes HTTP-01 tokens
 		return nil, nil, inventory.ErrACMEChallengeUnavailable
+	}
+	switch {
 	case t.Status == inventory.StatusDisabled:
 		return nil, nil, providers.NewError("target.disabled", false, nil, nil)
 	case t.Status == inventory.StatusHostKeyChanged:
 		return nil, nil, providers.NewError("target.host_key_changed", false, nil, nil)
 	case t.Status == inventory.StatusPendingHostKey:
 		return nil, nil, providers.NewError("target.host_key_unconfirmed", false, nil, nil)
-	}
-	p, ok := h.d.Registry.Get(ref.Kind)
-	if !ok {
-		return nil, nil, inventory.ErrACMEChallengeUnavailable
 	}
 	octx, cancel := context.WithTimeout(ctx, openTimeout)
 	defer cancel()

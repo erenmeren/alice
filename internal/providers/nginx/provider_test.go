@@ -19,7 +19,7 @@ func TestNginxProviderDescribesItself(t *testing.T) {
 	providertest.CheckProvider(t, e.prov)
 	assert.Equal(t, providers.KindNginx, e.prov.Kind())
 	assert.Equal(t, "provider.nginx.name", e.prov.DisplayNameKey())
-	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDeployCertificate, providers.CapDiscoverCerts, providers.CapDiscoverSSHKeys, providers.CapKeyLogin,
+	assert.Equal(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDeployCertificate, providers.CapDiscoverCerts, providers.CapDiscoverSSHKeys, providers.CapHTTP01, providers.CapKeyLogin,
 		providers.CapTestConnection, providers.CapVerifyDeployment}, e.prov.Capabilities().Sorted())
 	assert.Equal(t, TLSProber{}, New(Options{}).prober, "Alice's own TLS probe when none is given")
 	var _ providers.ConnectionCache = e.prov

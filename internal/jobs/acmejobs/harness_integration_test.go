@@ -116,7 +116,7 @@ func newWorld(t *testing.T) *world {
 	w.queue = jobs.NewQueue(jobs.QueueConfig{Pool: w.db.App, Keyring: keyring, Audit: auditLog, Clock: w.clock, Gate: w.gate})
 	w.reg = providers.NewRegistry()
 	w.reg.Register(fake.New(providers.KindLinuxSSH))
-	w.reg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapTestConnection), pub: w.pub})
+	w.reg.Register(pubProvider{Provider: fake.New(providers.KindNginx, providers.CapTestConnection, providers.CapHTTP01), pub: w.pub})
 	w.reg.Freeze()
 	w.inv = inventory.New(inventory.Config{Pool: w.db.App, Keyring: keyring, Audit: auditLog, Clock: w.clock, License: w.gate, Registry: w.reg,
 		Jobs: w.queue, Notifier: notify.AdminNotifier{Clock: w.clock}, Log: log})

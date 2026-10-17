@@ -23,6 +23,8 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
+	"alice/internal/providers"
+	"alice/internal/providers/fake"
 	"alice/internal/rbac"
 	"alice/internal/secrets"
 	"alice/internal/testutil/fakeacme"
@@ -55,6 +57,7 @@ type certWorld struct {
 func newCertWorld(t *testing.T) *certWorld {
 	t.Helper()
 	w := newRegistryWorld(t, fakeacme.Options{NoTerms: true})
+	w.reg = registryWithNginx(w.reg, append(append([]providers.Capability{}, nginxCaps...), providers.CapHTTP01)...)
 	cw := &certWorld{registryWorld: w, lic: &lockableLicense{LicenseGate: w.lic}}
 	w.svc = inventory.New(inventory.Config{Pool: w.db.App, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: cw.lic,
 		Registry: w.reg, Jobs: w.jobs})
@@ -67,6 +70,33 @@ func newCertWorld(t *testing.T) *certWorld {
 	require.NoError(t, err)
 	cw.operator = w.user("otto", rbac.Operator, "")
 	return cw
+}
+
+// registryWithNginx is a registry holding the harness's linuxssh fake and a fake nginx provider with caps.
+func registryWithNginx(old *providers.Registry, caps ...providers.Capability) *providers.Registry {
+	ssh, _ := old.Get(providers.KindLinuxSSH)
+	reg := providers.NewRegistry()
+	reg.Register(ssh)
+	reg.Register(fake.New(providers.KindNginx, caps...))
+	reg.Freeze()
+	return reg
+}
+
+// Only a provider that publishes HTTP-01 tokens may be the HTTP-01 server.
+func TestACMEHTTP01NeedsAProviderThatPublishes(t *testing.T) {
+	w := newRegistryWorld(t, fakeacme.Options{})
+	provider := w.provider("Cert CA", false)
+	w.register(provider)
+	web := w.seedTarget("web-1", "nginx", "web1.example.test")
+	in := inventory.ACMECertificateInput{ProviderID: provider.ID, Names: []string{"www.example.test"}, Challenge: inventory.ACMEChallengeHTTP01, HTTPTargetID: &web}
+	create := func(caps ...providers.Capability) error {
+		svc := inventory.New(inventory.Config{Pool: w.db.App, Keyring: w.keyring, Audit: w.audit, Clock: w.clock, License: w.lic,
+			Registry: registryWithNginx(w.reg, caps...), Jobs: w.jobs})
+		_, err := svc.CreateACMECertificate(w.ctx, w.admin, in)
+		return err
+	}
+	require.ErrorIs(t, create(nginxCaps...), inventory.ErrACMEChallengeUnavailable)
+	require.NoError(t, create(append(append([]providers.Capability{}, nginxCaps...), providers.CapHTTP01)...))
 }
 
 func (w *certWorld) dnsInput(names ...string) inventory.ACMECertificateInput {

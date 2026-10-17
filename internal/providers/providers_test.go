@@ -23,6 +23,7 @@ import (
 
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
+	"alice/internal/providers/fake"
 	"alice/internal/providers/linuxssh/helperproto"
 	"alice/internal/providers/nginx/nginxconf"
 	"alice/internal/secrets"
@@ -564,6 +565,12 @@ func sortedCopy(in []string) []string {
 	out := append([]string(nil), in...)
 	sort.Strings(out)
 	return out
+}
+
+func TestHTTP01IsAKnownCapability(t *testing.T) {
+	assert.Equal(t, providers.Capability("http01_challenge"), providers.CapHTTP01)
+	reg := providers.NewRegistry()
+	assert.NotPanics(t, func() { reg.Register(fake.New(providers.KindNginx, providers.CapHTTP01)) })
 }
 
 func TestKeyLoginIsAKnownCapabilityAndUnsupportedByDefault(t *testing.T) {
