@@ -272,7 +272,7 @@ function LocationRow({
             </Box>
           )}
           {l.warnings.map((w) => (
-            <LocationWarning key={w} code={w} mode={l.key_mode} site={firstServerName(l) || site} />
+            <LocationWarning key={w} code={w} mode={l.key_mode} site={firstServerName(l) || site} target={target} />
           ))}
         </Stack>
       </Table.Td>

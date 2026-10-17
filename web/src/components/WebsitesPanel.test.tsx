@@ -340,7 +340,7 @@ describe('WebsitesPanel on an Apache server (discovery only)', () => {
   });
   const rows = [
     locationFixture({ certificate: CERT, inherited: true, target_type: 'apache', deployable: false }),
-    locationFixture({ id: 'k', cert_path: '/etc/apache2/ssl/dsa.crt', supported: false, unsupported_reason: 'unsupported_key', target_type: 'apache', deployable: false }),
+    locationFixture({ id: 'k', cert_path: '/etc/apache2/ssl/dsa.crt', supported: false, unsupported_reason: 'unsupported_key', target_type: 'apache', deployable: false, warnings: ['key_group_open'] }),
   ];
 
   it.each(['no_conf_path', 'unexpected_text'])('names Apache, never Nginx or its http block, for an untrusted configuration (%s) and an inherited pair', async (reason) => {
@@ -364,6 +364,8 @@ describe('WebsitesPanel on an Apache server (discovery only)', () => {
     expect(within(first).queryByText('Ready')).not.toBeInTheDocument();
     expect(within(second).getByText("The certificate's key is neither RSA nor ECDSA.")).toBeInTheDocument();
     expect(within(second).queryByText('Alice supports RSA and ECDSA certificates only.')).not.toBeInTheDocument();
+    expect(within(second).getByText('The private key file belongs to a user other than root or can be read by a group or by others.')).toBeInTheDocument();
+    expect(document.body.textContent ?? '').not.toMatch(/deployment keeps/i);
   });
 
   it('keeps the same texts read-only in Turkish', async () => {
@@ -381,10 +383,11 @@ describe('WebsitesPanel on an Apache server (discovery only)', () => {
 
 describe('WebsitesPanel texts on an Nginx server that deploys', () => {
   it('keeps Ready and the support wording', async () => {
-    onNginx('operator', [locationFixture({ certificate: CERT }), locationFixture({ id: 'k', cert_path: '/etc/nginx/ssl/dsa.crt', supported: false, unsupported_reason: 'unsupported_key' })]);
+    onNginx('operator', [locationFixture({ certificate: CERT }), locationFixture({ id: 'k', cert_path: '/etc/nginx/ssl/dsa.crt', supported: false, unsupported_reason: 'unsupported_key', warnings: ['key_group_open'] })]);
     await renderRoute(path);
     const [first, second] = await screen.findAllByTestId('location-row');
     expect(within(first).getByText('Ready')).toBeInTheDocument();
     expect(within(second).getByText('Alice supports RSA and ECDSA certificates only.')).toBeInTheDocument();
+    expect(within(second).getByText(/A deployment keeps these permissions\./)).toBeInTheDocument();
   });
 });

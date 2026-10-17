@@ -1764,7 +1764,8 @@
     "definedLine": "Satır: {{line}}",
     "configInvalidDiscovery": "Bu sunucudaki {{software}} yapılandırmasında bir hata var. Aşağıdaki web siteleri Alice'in son okuduğu hâliyle gösteriliyor.",
     "introDiscovery": "Her satır {{software}} tarafından kullanılan bir sertifika dosyasıdır. Alice bu dosyaları okur, hiçbir zaman değiştirmez.",
-    "unsupportedKeyDiscovery": "Sertifikanın anahtarı RSA veya ECDSA değil."
+    "unsupportedKeyDiscovery": "Sertifikanın anahtarı RSA veya ECDSA değil.",
+    "keyGroupOpenDiscovery": "Özel anahtar dosyası root dışında bir kullanıcıya ait veya bir grup ya da diğer kullanıcılar tarafından okunabiliyor."
   },
   "deploy": {
     "title": "Sertifika dağıtın",

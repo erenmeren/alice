@@ -1764,7 +1764,8 @@
     "definedLine": "Line: {{line}}",
     "configInvalidDiscovery": "{{software}}'s configuration on this server has an error. The websites below are as Alice last read them.",
     "introDiscovery": "Each row is a certificate file that {{software}} uses. Alice reads these files and never changes them.",
-    "unsupportedKeyDiscovery": "The certificate's key is neither RSA nor ECDSA."
+    "unsupportedKeyDiscovery": "The certificate's key is neither RSA nor ECDSA.",
+    "keyGroupOpenDiscovery": "The private key file belongs to a user other than root or can be read by a group or by others."
   },
   "deploy": {
     "title": "Deploy a certificate",
