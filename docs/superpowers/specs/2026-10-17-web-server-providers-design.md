@@ -180,3 +180,29 @@ Every check that today says "type is nginx" means one of two things and is rewri
   OpenAPI enums, SECURITY-REPORT threat-model delta (two new root subcommands, read-only).
 - Known limitations to record: HAProxy config path fixed; Apache `<If>` regions unsupported;
   no deployment for either.
+
+## 8. Amendments after Phase A (2026-10-17, from the Phase A final review)
+
+These settle the four items of `docs/superpowers/rulings/web-server-standard.md` and bind Phases B and C.
+
+1. **Capabilities come from the provider.** At startup, after providers are registered, Alice rewrites
+   `targets.capabilities` of every non-deleted target whose type maps to a registered provider kind to that
+   provider's current set (sorted like `CapabilitySet.Sorted`), in one transaction, audited once as a system
+   action only when something changed. The UI's `can()` and the server's registry checks therefore always agree,
+   and a capability added or enabled later needs no data migration.
+2. **`webserver.Spec` serves dump-only providers.** `Spec.Test` becomes optional: without it, `TestConnection`
+   runs `Spec.Dump` and reads `Found`, `Version`, `ConfPath`, `ConfigValid`, `ConfigError` from the
+   `ServerDumpResponse`. `Spec.NotFoundCode` names the helper code that means "software not installed"
+   (Nginx: `NGINX_NOT_FOUND`; Apache and HAProxy: a new shared code `SOFTWARE_NOT_FOUND`).
+   `Spec.MinProtocol` is the lowest helper protocol with the provider's subcommands; an older helper gives
+   `<kind>.helper_too_old` before any subcommand runs. `ConfigError` classes stay the shared `ConfigErr*` set;
+   Apache/HAProxy map their syntax check failure to `syntax` and say nothing else from the tool's output.
+3. **The disabled note is reachable by keyboard.** `DisabledFeature` uses `aria-disabled="true"` on a control
+   that stays focusable and ignores activation, and shows the tooltip on focus as well as hover; the
+   accessible description stays.
+4. **Texts follow capabilities.** Shared web-server texts that mention deployment are chosen by
+   `can(target, 'deploy_certificate')`; a discovery-only server gets texts that say Alice reads its
+   certificates and never changes its files. For HAProxy the websites panel's site column header reads
+   "Frontend".
+5. **Phase B helper version:** protocol 8, helper 1.7.0 (`apache-dump`); `MinProtocol` stays 6 for Linux and
+   Nginx.
