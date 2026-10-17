@@ -806,7 +806,8 @@
   "tests": [
    "internal/inventory:TestReconcileMissingChangedOutsideAndInvalidConfiguration",
    "internal/providers/nginx:TestDiscoverWithoutNginxFails",
-   "internal/providers/apache:TestDiscoverWithoutApacheFails"
+   "internal/providers/apache:TestDiscoverWithoutApacheFails",
+   "internal/providers/apache:TestRealApache"
   ]
  },
  {

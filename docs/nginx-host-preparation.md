@@ -23,8 +23,8 @@ safe.
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
    file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release ships
-   `alice-helper` 1.6.1 (protocol 7, which adds the two HTTP-01 challenge commands of "Publishing HTTP-01
-   challenges") and still works with a protocol 6 helper (`alice-helper` 1.5.0) for everything else. Protocol 6:
+   `alice-helper` 1.7.0 (protocol 8, which adds `apache-dump` for Apache servers; protocol 7 added the two HTTP-01
+   challenge commands of "Publishing HTTP-01 challenges") and still works with a protocol 6 helper (`alice-helper` 1.5.0) for everything else. Protocol 6:
    accounts with dots, capitals or a final `$` in their names are listed, accounts
    it cannot list are reported by user ID, and a scan reads the key files in one pass (protocol 6); the Nginx
    certificate commands with `nginx-fence` (protocol 5); and the protocol 3 rule that a key-file change whose content
@@ -51,15 +51,17 @@ safe.
 A restriction to Alice's source address (`from="…"` in the key line) is not added by the **Servers** page. If you
 want it, ask for the commands through the API with `GET /api/v1/ssh-keys/platform-key?from=<Alice's IP address>`.
 
-## Two profiles
+## Profiles
 
 | Profile | For | Allowed helper subcommands (with `sudo`) |
 |---|---|---|
 | `linux` | Servers where Alice manages SSH keys only | `sshd-dump`, `hostkeys`, `cleanup`, `authkeys-list`, `authkeys-read`, `authkeys-write` |
 | `nginx` | Nginx servers: their certificates and their SSH keys | everything in `linux` plus `nginx-dump`, `nginx-test`, `nginx-deploy`, `nginx-restore`, `nginx-status`, `nginx-fence`, `acme-challenge-put`, `acme-challenge-rm` |
+| `apache` | Apache servers: reading their certificates, and their SSH keys | everything in `linux` plus `apache-dump` (read-only; see [apache-host-preparation.md](apache-host-preparation.md)) |
 
-Choose the profile under **Server type** (**Linux server** or **Nginx server**) on the **Servers** page, and add the
-server in Alice with the same **Server type**. A Linux server never gets the Nginx permissions. Both profiles
+Choose the profile under **Server type** (**Linux server**, **Nginx server** or **Apache server**) on the **Servers**
+page, and add the server in Alice with the same **Server type**. A Linux server never gets the Nginx permissions. All
+profiles
 also let `alice-svc` run `alice-helper version` and `alice-helper tls-probe` without `sudo`: these need no root
 rights and have no sudoers line.
 
@@ -413,7 +415,7 @@ server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `
 removal, no deployment, no recovery. A protocol 6 helper is enough for everything but the HTTP-01 challenge commands
 (protocol 7): only a certificate request that uses that method on the server asks you to reinstall the helper.
 
-**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.6.1, protocol 7) also works
+**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.7.0, protocol 8) also works
 with the previous Alice release, so you can update every server ahead of time. If you update Alice first, every
 server whose helper is older shows "The alice-helper on this server is outdated." and a deployment that was being
 finished waits (**Confirming the outcome**) until that server's helper is updated. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new
@@ -422,6 +424,10 @@ server's page. The commands install the new helper and the new sudoers file toge
 `/etc/sudoers.d/alice` (by these commands or by hand), choose **Test connection** and **Discover** before deploying:
 a deployment that sudo refuses is not a clean failure (sudo may already have read the new key), it goes to
 **Confirming the outcome** until the lines are back.
+
+`alice-helper` 1.7.0 (protocol 8) adds `apache-dump` and the `apache` profile's sudoers line
+([apache-host-preparation.md](apache-host-preparation.md)); nothing changed for Linux and Nginx servers, which keep
+working with 1.6.x, and their sudoers files are the same.
 
 `alice-helper` 1.6.1 keeps protocol 7 and the same sudoers file. It changes one answer: a certificate file whose first
 certificate the helper cannot read (for example one with a negative serial number, which Nginx still loads) is

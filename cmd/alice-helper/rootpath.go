@@ -72,9 +72,11 @@ func (f rootFile) close() { _ = unix.Close(f.dirfd) }
 // side effects), and again on the descriptor, which must be the inode that was checked.
 func (f rootFile) open() (*os.File, unix.Stat_t, error) { return f.openLinked(false) }
 
-// openLinked is open; with anyLinks a file with more than one link is accepted (only for reads
-// that are compared and never returned: the configuration sections). Certificate reads and every
-// write keep open's one-link rule.
+// openLinked is open; with anyLinks a file with more than one link is accepted, only for
+// configuration files: nginx's sections, which are compared with nginx -T and never returned, and
+// the files of Apache's include tree, which apache-dump parses (a hard link needs a writable
+// directory to be made, and the walk accepts only root-controlled ones). Certificate reads and
+// every write keep open's one-link rule.
 //
 // The file system of the file itself is checked on an O_PATH descriptor before the file is opened
 // for reading (errSpecialFS): FUSE mounted over a user's regular file reports whatever owner, mode

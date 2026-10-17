@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased — Apache httpd (discovery only)
+
+**Added**
+- Server type **Apache server** (target type `apache`): Alice reads an Apache server's websites, their certificate
+  files and certificates, and its SSH keys. Apache servers are discovery only: Alice never deploys to them, never
+  changes an Apache file and never reloads Apache. Their deploy controls are shown disabled with the note "Not
+  available for Apache servers yet", which keyboard users now reach too (the control stays in the tab order with
+  `aria-disabled` and the note as its description). The page texts say that Alice only reads these files.
+- `alice-helper` 1.7.0 (protocol 8) with the read-only subcommand `apache-dump` and the sudoers profile `apache`
+  (**Server type** **Apache server** under **Prepare a server for Alice**). It runs `/usr/sbin/apache2ctl` (Debian,
+  Ubuntu) or `/usr/sbin/httpd` (Red Hat family) with `-V` and `-D DUMP_INCLUDES|DUMP_MODULES|DUMP_RUN_CFG -t`, reads
+  the included configuration files through the root-controlled walk, describes certificate files and only `stat`s
+  key files ([docs/apache-host-preparation.md](docs/apache-host-preparation.md)).
+- Error codes `ALC-APC-0001` (Apache not found), `ALC-APC-0002` (configuration has a problem), `ALC-APC-0003` (server
+  not prepared for Apache) and `ALC-APC-0004` (helper too old for Apache)
+  ([docs/troubleshooting.md](docs/troubleshooting.md)).
+- Warning `web_server_helper_too_old`: a web server whose helper is older than its software needs still passes
+  **Test connection** and still has its SSH keys read; its websites are not read until the helper is updated.
+- Unsupported reason `conditional`: a certificate or key set inside `<If>` or another condition Alice cannot
+  evaluate.
+- `SECURITY-REPORT.md` KI-40 (Apache discovery items); Phase B rulings in
+  `docs/superpowers/rulings/apache-provider.md`.
+
+**Changed (API)**
+- `type` of a target, the target list filter, the provider kind and `WebServerFacts.software` accept `apache`.
+- At startup Alice rewrites each server's `capabilities` from its provider, so capabilities added by a release reach
+  existing servers without a data migration; when anything changed it records one audit entry
+  `target.capabilities_synced` (actor `startup`, the number of servers in `targets`).
+- The warning `config_file_writable` names the software ("A configuration file used by Apache can be changed by
+  users other than root: …").
+- Migration `00017` adds the type `apache` and lets the application role update `targets.capabilities`. Its Down
+  refuses while Apache servers exist (deleted ones included); restore a backup taken before `00017` instead.
+
+**Helper**
+- `alice-helper` 1.7.0, protocol 8. New: `apache-dump` and the "software not installed" code
+  `SOFTWARE_NOT_FOUND`. Nothing changed for Linux and Nginx servers: their subcommands, answers and sudoers files are
+  the same, and they keep working with `alice-helper` 1.6.x.
+
+**Upgrade notes**
+- Reinstall the helper (1.7.0) on servers that will be Apache servers, with the commands of **Server type**
+  **Apache server**; Nginx and Linux servers keep working with 1.6.x. An Apache server with an older helper shows
+  `web_server_helper_too_old` and `ALC-APC-0004` until its helper is updated.
+- Owner steps before release: the root-only helper suite and a review of a real customer Apache configuration (see
+  the rulings file).
+
 ## Unreleased — Prod-readiness fixes
 
 **Fixes**

@@ -8,7 +8,8 @@ import (
 )
 
 // The sudoers file of spec §12.3. Profile "linux" allows only ALICE_COMMON (SSH-key work);
-// profile "nginx" also allows the certificate subcommands (implemented by the helper from Phase 4), profile "apache" apache-dump.
+// profile "nginx" also allows the Nginx certificate subcommands (from Phase 4), and profile
+// "apache" also allows the read-only apache-dump (protocol 8).
 const sudoersHead = `# Managed by Alice. Do not edit. Validate with: visudo -cf /etc/sudoers.d/alice
 Defaults:alice-svc !requiretty
 Defaults:alice-svc !lecture

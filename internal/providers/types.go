@@ -245,7 +245,7 @@ type Descriptor struct {
 
 // WebServerFacts is what Alice shows about the web server software on a server.
 type WebServerFacts struct {
-	// Software is the web server software ("nginx"; later "apache", "haproxy"); it equals the
+	// Software is the web server software ("nginx" or "apache"; later "haproxy"); it equals the
 	// provider kind and the target type.
 	Software    string `json:"software"`
 	Version     string `json:"version"`

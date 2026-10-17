@@ -477,6 +477,16 @@ scan could not read the websites (Nginx missing, its configuration has an error,
 installed), the page says so and that the list may be out of date. Why a website can be **Not supported** is
 explained in [nginx-host-preparation.md](nginx-host-preparation.md#configurations-alice-cannot-manage).
 
+An **Apache server** (discovery only) shows the same list, read through `apache-dump`
+([apache-host-preparation.md](apache-host-preparation.md)): its websites, their certificate files, certificates,
+expiry, states and warnings, and its certificates appear under **Certificates**. Alice never changes anything on it:
+the **Deploy certificate** and **Verification settings** controls in its rows are disabled, and the note "Not
+available for Apache servers yet" is shown when you point at them or reach them with the keyboard (Tab). The texts
+of the page say that Alice reads these files and never changes them. Why an Apache website can be **Not supported**
+is explained in [apache-host-preparation.md](apache-host-preparation.md#configurations-alice-cannot-read). Renew
+the certificates of an Apache server with your own tools; Alice shows the new certificate after the next
+**Discover**.
+
 A website shows **The certificate changed outside Alice.** when its file holds a certificate that Alice did not
 deploy (for example renewed by certbot or by hand). That is not an error: it tells you that something else manages
 this file.

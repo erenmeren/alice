@@ -157,8 +157,23 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   **Server type** **Nginx server** again), Nginx was not found (`ALC-NGX-0001`), Nginx's configuration has an error
   (`ALC-NGX-0002`: run `nginx -t` on the server), or the last scan failed. Fix it, then choose **Discover**.
 - **A website is "Not supported".** The row says why. The cases and what to change are in
-  [nginx-host-preparation.md](nginx-host-preparation.md#configurations-alice-cannot-manage). After a change on the
+  [nginx-host-preparation.md](nginx-host-preparation.md#configurations-alice-cannot-manage) and, on an Apache server,
+  [apache-host-preparation.md](apache-host-preparation.md#configurations-alice-cannot-read). After a change on the
   server, choose **Discover**.
+- **The server's page says that Apache was not found, that the Apache permissions are not installed, or that
+  Apache's configuration has an error.** These are the web-server warnings of an Apache server (the same as for
+  Nginx, with Apache's name): install Apache from the distribution's packages (`ALC-APC-0001`), run the setup
+  commands with **Server type** **Apache server** again (`ALC-APC-0003`), or run `apache2ctl -t` (Debian, Ubuntu)
+  or `httpd -t` (Red Hat family) and fix what it reports (`ALC-APC-0002`). Then choose **Discover**. A missing
+  certificate file is reported as a configuration error by Apache 2.4.52 (Ubuntu 22.04) and as a website whose file
+  does not exist by later versions ([apache-host-preparation.md](apache-host-preparation.md#a-certificate-file-that-does-not-exist)).
+- **Apache: the helper is too old (`ALC-APC-0004`).** "The alice-helper on this server is too old to read Apache."
+  Reading Apache needs `alice-helper` 1.7.0 (protocol 8). SSH keys are still read. Copy the `alice-helper` of this
+  Alice version to the server, run the commands from **Servers → Prepare a server for Alice** with **Server type**
+  **Apache server** again, then choose **Test connection** and **Discover**
+  ([apache-host-preparation.md](apache-host-preparation.md#updating-the-helper)).
+- **The Deploy controls of an Apache server are disabled ("Not available for Apache servers yet").** This is on
+  purpose: Alice only reads Apache servers in this release. Renew their certificates with your own tools.
 - **"Alice cannot trust Nginx's output for this configuration" or "Alice cannot read this configuration safely".**
   Alice refuses the whole server and names the reason and, where it can, the file with the problem. Usual causes: a
   configuration file or folder that users other than root can change (`chmod go-w` on it, owner root), an `include`

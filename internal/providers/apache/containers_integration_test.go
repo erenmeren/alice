@@ -265,7 +265,8 @@ func (h *raHost) fileSHA(path string) string {
 
 // readOnly runs fn (Alice's calls) and then requires that nothing under /etc or the helper's state
 // directory was written, created, renamed or chmodded meanwhile: every write of the step is the
-// test's own, made before the stamp.
+// test's own, made before the stamp. Apache's runtime and lock directories under /run and /var
+// (which apache2ctl may create, as on every start) are deliberately out of scope.
 func (h *raHost) readOnly(fn func()) {
 	h.t.Helper()
 	const stamp = "/root/.alice-stamp"
