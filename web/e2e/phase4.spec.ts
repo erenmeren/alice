@@ -205,10 +205,10 @@ function servedChainLength(name: string): number {
   );
 }
 
-// expectHelperProtocol: the helper installed on the target is the current build, protocol 7 (Alice still opens protocol 6; HTTP-01 needs 7).
+// expectHelperProtocol: the helper installed on the target is the current build, protocol 8 (Alice still opens protocol 6; HTTP-01 needs 7, Apache 8).
 function expectHelperProtocol(): void {
   const v = JSON.parse(targetExec(['/usr/local/libexec/alice-helper', 'version'])) as { helper: string; protocol: number };
-  expect(v.protocol, `alice-helper ${v.helper} on the target`).toBe(7);
+  expect(v.protocol, `alice-helper ${v.helper} on the target`).toBe(8);
 }
 
 // leafOf is the first certificate of a PEM chain (the website's own certificate, without the CA).

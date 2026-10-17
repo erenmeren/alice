@@ -5,6 +5,9 @@
 #   alice-e2e-pki init        create the CA (if missing) and the website pairs (if missing)
 #   alice-e2e-pki www         a fresh www.example.test pair
 #   alice-e2e-pki sites       a fresh pair for each of s1..s5.example.test
+#   alice-e2e-pki apache      fresh certificates for the Apache websites (apache-sites.conf):
+#                             apache.example.test as apache.crt and apache.key, combined.example.test
+#                             as combined.pem (certificate, CA and key in one file), in /etc/apache2/ssl
 #   alice-e2e-pki leaf NAMES DIR   write DIR/leaf.pem (leaf + CA) and DIR/leaf.key for NAMES (one
 #                                  name, or several separated by commas: the first is the CN)
 #   alice-e2e-pki sign NAMES  read a signing request on stdin and print a certificate for NAMES
@@ -94,6 +97,21 @@ sites() {
 	for i in 1 2 3 4 5; do pair "s$i.example.test" "s$i"; done
 }
 
+# apache: the two Apache websites' files (root-owned; keys and the combined file 0600).
+apache() {
+	install -d -m 0755 -o root -g root /etc/apache2/ssl
+	tmp=$(mktemp -d)
+	leaf apache.example.test "$tmp"
+	install -m 0644 -o root -g root "$tmp/leaf.pem" /etc/apache2/ssl/apache.crt
+	install -m 0600 -o root -g root "$tmp/leaf.key" /etc/apache2/ssl/apache.key
+	rm -rf "$tmp"
+	tmp=$(mktemp -d)
+	leaf combined.example.test "$tmp"
+	cat "$tmp/leaf.pem" "$tmp/leaf.key" >"$tmp/combined.pem"
+	install -m 0600 -o root -g root "$tmp/combined.pem" /etc/apache2/ssl/combined.pem
+	rm -rf "$tmp"
+}
+
 case "${1:-}" in
 init)
 	ensure_ca
@@ -102,6 +120,7 @@ init)
 	;;
 www) www ;;
 sites) sites ;;
+apache) apache ;;
 leaf)
 	[ "$#" -eq 3 ] || { echo "usage: alice-e2e-pki leaf NAMES DIR" >&2; exit 2; }
 	leaf "$2" "$3"
@@ -111,7 +130,7 @@ sign)
 	sign "$2"
 	;;
 *)
-	echo "usage: alice-e2e-pki init | www | sites | leaf NAMES DIR | sign NAMES" >&2
+	echo "usage: alice-e2e-pki init | www | sites | apache | leaf NAMES DIR | sign NAMES" >&2
 	exit 2
 	;;
 esac

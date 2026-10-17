@@ -201,7 +201,7 @@ func buildImages() error {
 	}
 	defer func() { _ = os.RemoveAll(ctx) }()
 	for _, p := range []string{"go.mod", "go.sum", "cmd/alice-helper", "internal/providers/linuxssh/helperproto",
-		"internal/providers/linuxssh/sshdconf", "internal/providers/nginx/nginxconf", "test/images/e2e-target"} {
+		"internal/providers/linuxssh/sshdconf", "internal/providers/nginx/nginxconf", "internal/providers/apacheconf", "test/images/e2e-target"} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(ctx, p)), 0o755); err != nil {
 			return err
 		}

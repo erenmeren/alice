@@ -1,8 +1,10 @@
 #!/bin/sh
 # Test only: the e2e SSH target's entry point. Creates the test CA and the www.example.test pair
-# (at container start, so no key is in an image layer), starts the distribution's nginx as a
-# daemon (as nginx.service would) and runs sshd in the foreground.
+# (at container start, so no key is in an image layer), issues the Apache websites' certificates
+# (Apache is configured and never started), starts the distribution's nginx as a daemon (as
+# nginx.service would) and runs sshd in the foreground.
 set -eu
 /usr/local/sbin/alice-e2e-pki init
+/usr/local/sbin/alice-e2e-pki apache
 /usr/sbin/nginx
 exec /usr/sbin/sshd -D -e

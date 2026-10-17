@@ -6,6 +6,9 @@
 # test CA and certificates are created when the container starts (alice-e2e-start), so no private
 # key is in any image layer. The container has no systemd: /usr/bin/systemctl is a test shim and
 # /usr/sbin/nginx a pass-through wrapper with fault injection for "nginx -t" (see both files).
+# From Phase B it also has the distribution's Apache (mod_ssl on, the default site off) with two TLS
+# websites on port 8443 (apache-sites.conf), configured and never started: Alice only discovers
+# Apache servers, and Nginx owns ports 80 and 443. Their certificates are issued at container start too.
 # The deploy account has no password but is not locked ("*", not useradd's "!"), so the Phase 6
 # journey's key login (a key Alice generated and deployed there) works with or without PAM.
 
@@ -23,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOAMD64=v1 GOARM64=v8.0 go build -trimpath -buildvc
 
 FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
 RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx openssl \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx apache2 openssl \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /run/sshd /opt/alice-bundle \
  && ssh-keygen -A \
@@ -52,7 +55,12 @@ RUN set -eu; \
     echo ok > /etc/alice-e2e/test-mode; \
     install -d -m 0755 -o root -g root /var/www/alice-acme /var/www/alice-acme/.well-known /var/www/alice-acme/.well-known/acme-challenge; \
     [ ! -e /usr/bin/systemctl ]
+# Apache as on a real Ubuntu server, with the test websites only. It is never started.
+RUN set -eu; \
+    a2enmod -q ssl; \
+    a2dissite -q 000-default
 COPY test/images/e2e-target/nginx-www.conf /etc/nginx/conf.d/www.conf
+COPY test/images/e2e-target/apache-sites.conf /etc/apache2/sites-enabled/alice-e2e.conf
 COPY test/images/e2e-target/nginx-wrapper /usr/sbin/nginx
 COPY test/images/e2e-target/systemctl /usr/bin/systemctl
 COPY --from=helper /out/alice-helper /opt/alice-bundle/alice-helper
@@ -62,6 +70,6 @@ COPY test/images/e2e-target/alice-e2e-prepare test/images/e2e-target/alice-e2e-r
      test/images/e2e-target/alice-e2e-reload-mode test/images/e2e-target/alice-e2e-test-mode \
      test/images/e2e-target/alice-e2e-nginx-reset test/images/e2e-target/alice-e2e-restore-hostkey \
      test/images/e2e-target/alice-e2e-config-mode /usr/local/sbin/
-RUN chmod 0644 /etc/nginx/conf.d/www.conf \
+RUN chmod 0644 /etc/nginx/conf.d/www.conf /etc/apache2/sites-enabled/alice-e2e.conf \
  && chmod 0755 /usr/sbin/nginx /usr/bin/systemctl /opt/alice-bundle/alice-helper /usr/local/sbin/alice-e2e-*
 CMD ["/usr/local/sbin/alice-e2e-start"]

@@ -43,7 +43,9 @@ services:
   # Ubuntu 22.04 with OpenSSH, sudo, fixture users and keys generated at image build time, alice-helper
   # built from this repository in /opt/alice-bundle, and the distribution's Nginx with two TLS
   # websites (www.example.test, supported; files.example.test, deliberately unsupported) whose test
-  # CA and certificates are created at container start. No systemd: /usr/bin/systemctl is a test
+  # CA and certificates are created at container start. It also has the distribution's Apache with
+  # two TLS websites on port 8443 (apache.example.test, combined.example.test; web/e2e/webservers.spec.ts),
+  # configured and not running: Alice only discovers Apache servers. No systemd: /usr/bin/systemctl is a test
   # shim. Playwright prepares it with the setup script Alice shows (alice-e2e-prepare), rotates its
   # host key (alice-e2e-rotate-hostkey) and drives Nginx (alice-e2e-newcert, -served, -reload-mode,
   # -test-mode, -nginx-reset) through "docker compose exec". Alice reaches it as sshtarget:22 and
