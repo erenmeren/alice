@@ -188,6 +188,10 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 	assert.Equal(t, LongCommandTimeout, CmdNginxDump().timeout)
 	assert.Equal(t, int64(helperproto.ServerDumpOutput), CmdApacheDump().maxOutput)
 	assert.Equal(t, LongCommandTimeout, CmdApacheDump().timeout)
+	// apache-dump runs the control program four times, but all four share the helper's one call budget
+	// (cmd/alice-helper TestApacheRunsShareTheCallDeadline): its worst case is HelperBudget plus the
+	// kill's WaitDelay, which the backend's timeout covers with at least a 9 s margin for sudo and SSH.
+	assert.GreaterOrEqual(t, CmdApacheDump().timeout, helperproto.HelperBudget+time.Second+9*time.Second)
 	assert.Empty(t, CmdApacheDump().tokens)
 	assert.Equal(t, LongCommandTimeout, CmdNginxTest().timeout)
 	assert.Equal(t, DeployCommandTimeout, deploy.timeout)

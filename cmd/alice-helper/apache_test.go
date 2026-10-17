@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -551,4 +552,31 @@ func TestApacheCtlLstatError(t *testing.T) {
 	_, _, err := runApacheCtl(context.Background(), "-V")
 	require.Error(t, err)
 	assert.False(t, missingProgram(err), "%v", err)
+}
+
+// The four control-program runs share the call's one deadline (commandBudget, derived by run): a
+// run that hangs is killed when the caller's context ends, and a later run never gets a fresh
+// programTimeout of its own. So apache-dump answers within helperproto.HelperBudget, below the
+// backend's timeout for it (linuxssh pins that side).
+func TestApacheRunsShareTheCallDeadline(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("needs /bin/sh")
+	}
+	old := apacheCtlPaths
+	defer func() { apacheCtlPaths = old }()
+	dir := t.TempDir()
+	ctl := filepath.Join(dir, "apache2ctl")
+	body := "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'Server version: Apache/2.4.68 (Debian)'; echo ' -D SERVER_CONFIG_FILE=\"apache2.conf\"'; exit 0; fi\nexec /bin/sleep 30\n"
+	require.NoError(t, os.WriteFile(ctl, []byte(body), 0o700)) //nolint:gosec // G306: a test program that must run
+	apacheCtlPaths = []string{ctl}
+	f := newFixture(t)
+	f.s.runApache = runApacheCtl
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, _, err := f.s.apacheConfig(ctx)
+	assert.ErrorIs(t, err, errProgramKilled)
+	assert.Less(t, time.Since(start), 5*time.Second, "the hanging run ends with the caller's deadline, not after programTimeout")
+	assert.Less(t, commandBudget, 4*programTimeout, "the call budget, not four program timeouts, bounds apache-dump")
 }

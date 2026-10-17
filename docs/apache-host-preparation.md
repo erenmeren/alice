@@ -115,6 +115,12 @@ can change them can run commands as root at the next discovery, as at the next s
 The helper never uses what Apache prints on standard error (for example the `AH00558` notice about the server's
 name). A run that fails after the first one also means the configuration is invalid: it changed between the runs.
 
+Each run may take at most 30 seconds, and all four, with the reading of the files, share one budget of 50 seconds
+for the whole `apache-dump` call; Alice waits 60 seconds for the answer. A run still going when the budget ends is
+stopped and the discovery fails with "Apache could not be run to the end" instead of a timeout. Apache resolves the
+host names of `<VirtualHost>` lines while it parses the configuration, in each of the three `-t` runs, so a slow DNS
+resolver on the server is the usual cause.
+
 ### The configuration files
 
 The helper then reads every file of the include tree itself, through the same root-controlled walk as for Nginx:
