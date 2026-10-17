@@ -111,3 +111,72 @@ func TestDownRefusesAndUpListensOnTheSamePort(t *testing.T) {
 	s.Clear()
 	assert.Empty(t, s.Messages())
 }
+
+// The goroutines below are driven synchronously: their exit paths (listener closed, peer gone, bad frame) otherwise
+// run on a scheduler-dependent goroutine that may not get to execute before the test binary exits, which made the
+// package's statement coverage vary between a fast machine and a loaded CI runner.
+
+func TestAcceptReturnsWhenTheListenerIsClosed(t *testing.T) {
+	s := &Server{conns: map[net.Conn]struct{}{}}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	require.NoError(t, ln.Close())
+	s.accept(ln) // returns on the Accept error instead of blocking
+	assert.Empty(t, s.conns)
+}
+
+func TestDatagramsReturnWhenTheSocketIsClosed(t *testing.T) {
+	s := &Server{}
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	require.NoError(t, pc.Close())
+	s.datagrams(pc)
+	assert.Empty(t, s.Messages())
+}
+
+func TestSessionEnds(t *testing.T) {
+	for name, tc := range map[string]struct {
+		in   string
+		want []string
+	}{
+		"clean close":               {"", nil},
+		"truncated body":            {"10 short", nil},
+		"truncated after a message": {"2 ok5 abc", []string{"ok"}},
+		"non digit":                 {"x", nil},
+		"leading space":             {" 1 a", nil},
+		"zero length":               {"0 ", nil},
+		"too many digits":           {"1234567 a", nil},
+		"over the frame bound":      {"65537 a", nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := &Server{conns: map[net.Conn]struct{}{}}
+			srv, cli := net.Pipe()
+			s.conns[srv] = struct{}{}
+			done := make(chan struct{})
+			go func() { s.session(srv); close(done) }()
+			go func() { _, _ = cli.Write([]byte(tc.in)); _ = cli.Close() }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("session did not end")
+			}
+			assert.Equal(t, tc.want, s.Messages())
+			assert.Empty(t, s.conns, "the session unregisters its connection")
+		})
+	}
+}
+
+func TestListenFailures(t *testing.T) {
+	hold, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = hold.Close() }()
+	s := &Server{conns: map[net.Conn]struct{}{}}
+	require.Error(t, s.listen(hold.Addr().String()), "TCP port taken")
+
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = pc.Close() }()
+	s = &Server{opts: Options{UDP: true}, conns: map[net.Conn]struct{}{}}
+	require.Error(t, s.listen(pc.LocalAddr().String()), "UDP port taken: the TCP listener is released again")
+	assert.Nil(t, s.ln)
+}

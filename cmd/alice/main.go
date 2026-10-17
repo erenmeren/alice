@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -357,6 +358,15 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		ErrorLog:          errLog,
 	}
 
+	// Both ports are bound before anything starts and before "alice is ready" is logged: a port in
+	// use stops the start with its error, and a client that waits for the ready line (the
+	// integration tests, an operator watching the log) can connect at once. Serve took the
+	// listeners in goroutines before, so the ready line could come before the ports listened.
+	publicLn, internalLn, err := listenBoth(ctx, public.Addr, internal.Addr)
+	if err != nil {
+		return err
+	}
+
 	// The scheduler and the workers start last: nothing below can fail before the shutdown path
 	// runs. The workers get their own context so a signal stops the HTTP servers and the
 	// scheduler first and the workers only afterwards (§8.8: stop claiming, let running jobs end).
@@ -389,8 +399,8 @@ func serve(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	stopDenialSummaries, denialSummariesDone := startDenialSummaries(ctx, apiServer)
 	defer stopDenialSummaries()
 	errCh := make(chan error, 2)
-	go func() { errCh <- ignoreClosed(public.ListenAndServeTLS("", "")) }()
-	go func() { errCh <- ignoreClosed(internal.ListenAndServe()) }()
+	go func() { errCh <- ignoreClosed(public.ServeTLS(publicLn, "", "")) }()
+	go func() { errCh <- ignoreClosed(internal.Serve(internalLn)) }()
 	log.Info("alice is ready", "https", cfg.ListenAddr, "health", cfg.HealthAddr)
 
 	var runErr error
@@ -684,6 +694,21 @@ func auditRecoveredCertificate(ctx context.Context, svc *services, log *slog.Log
 	return svc.audit.Write(ctx, audit.Event{Actor: audit.SystemActor("startup"), Action: "https.certificate_recovered",
 		ObjectType: "certificate", ObjectID: "https", Result: audit.Success, Details: map[string]string{
 			"fingerprint": info.FingerprintSHA256, "temporary": strconv.FormatBool(info.Temporary), "reason": reason}})
+}
+
+// listenBoth binds the public and the health address; when the second fails the first is closed.
+func listenBoth(ctx context.Context, publicAddr, healthAddr string) (net.Listener, net.Listener, error) {
+	var lc net.ListenConfig
+	publicLn, err := lc.Listen(ctx, "tcp", publicAddr)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listen on %s: %w", publicAddr, err)
+	}
+	healthLn, err := lc.Listen(ctx, "tcp", healthAddr)
+	if err != nil {
+		_ = publicLn.Close()
+		return nil, nil, fmt.Errorf("listen on %s: %w", healthAddr, err)
+	}
+	return publicLn, healthLn, nil
 }
 
 func ignoreClosed(err error) error {
