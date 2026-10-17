@@ -65,7 +65,9 @@ export function CertificateDetailPage() {
   const state = expiryState(c.not_after, now);
   const days = daysLeft(c.not_after, now);
   const soon = !expired && Date.parse(c.not_after) - now < 7 * DAY_MS;
-  const first = c.locations[0];
+  // Only places whose server's software deploys certificates count: a certificate found only on
+  // discovery-only servers (Apache) has nothing to deploy to from here.
+  const first = c.locations.find((l) => l.deployable);
   const canDeploy = canOperate && c.has_private_key && !expired && first !== undefined;
   const sourceKey = `enum.certificateSource.${c.source}`;
   const sourceText = i18n.exists(sourceKey) ? t(sourceKey) : c.source;

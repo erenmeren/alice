@@ -9,6 +9,7 @@ import { keyAlgorithmKey, unsupportedReasonKey, fileProblemKey } from '../api/en
 import { isApiError } from '../api/client';
 import { isAbort } from '../api/jobs';
 import { canDeployTo } from '../api/webServer';
+import { unavailableNote } from './DisabledFeature';
 import { CERTIFICATES_KEY, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
 import type { Certificate, CertificateLocation, DeployResult, DeploymentDetail } from '../api/types';
@@ -352,7 +353,7 @@ function DeployForm({
               <ErrorAlert error={detail.error} />
               {detail.isSuccess && places.length === 0 && <Text size="sm">{t('deploy.noWebsites')}</Text>}
               {places.map((p) => (
-                <WebsiteChoice key={p.id} place={p} refused={refused === p.id} refusedText={refusedText} disabled={!canDeployTo(p)} />
+                <WebsiteChoice key={p.id} place={p} refused={refused === p.id} refusedText={refusedText} disabled={!p.deployable || !canDeployTo(p)} />
               ))}
             </Stack>
           </Checkbox.Group>
@@ -386,10 +387,15 @@ function DeployForm({
 }
 
 // WebsiteChoice is one tickable website of a certificate: where it is, why it cannot be chosen, and
-// (after a refusal) that the server stopped here.
+// (after a refusal) that the server stopped here. A place whose server's software cannot deploy (the
+// server-computed deployable, from the deploy_certificate capability) is listed disabled with the
+// "not available yet" note, not hidden.
 function WebsiteChoice({ place, refused, refusedText, disabled }: { place: CertificateLocation; refused: boolean; refusedText: string; disabled: boolean }) {
   const { t } = useTranslation();
-  const reason = !place.supported
+  const unavailable = place.deployable ? '' : unavailableNote(t, { type: place.target_type });
+  const reason = unavailable
+    ? ''
+    : !place.supported
     ? t(unsupportedReasonKey(place.unsupported_reason))
     : place.missing_since !== null
       ? t('locations.rowUnavailable.missing')
@@ -414,6 +420,11 @@ function WebsiteChoice({ place, refused, refusedText, disabled }: { place: Certi
           </span>
         }
       />
+      {unavailable && (
+        <Text size="xs" ml={28} mt={2} data-testid="deploy-unavailable">
+          {unavailable}
+        </Text>
+      )}
       {reason && (
         <Group gap="xs" ml={28} mt={2}>
           <Badge variant="light" color="gray" tt="none">

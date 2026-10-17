@@ -298,6 +298,25 @@ describe('DeployDialog from a certificate', () => {
     expect(screen.getByText('A deployment to this place is in progress.')).toBeInTheDocument();
   });
 
+  it('lists a place on a server whose software cannot deploy disabled with the note, never as a choice', async () => {
+    asRole('operator');
+    certServer([l1, locationFixture({ id: L2, target_name: 'apache-01', target_type: 'apache', deployable: false, cert_path: '/etc/apache2/ssl/www.crt' })]);
+    let body: unknown = null;
+    server.use(http.post(`/api/v1/certificates/${NEW_ID}/deploy`, async ({ request }) => ((body = await request.json()), HttpResponse.json(accepted([D1, L1]), { status: 202 }))));
+    await showDialog({ certificate: NEW_CERT });
+    const boxes = await screen.findAllByRole('checkbox');
+    expect(boxes.map((b) => (b as HTMLInputElement).disabled)).toEqual([false, true]);
+    expect(screen.getByText('Not available for Apache servers yet')).toBeInTheDocument();
+    expect(screen.getByText('apache-01')).toBeInTheDocument();
+    expect(screen.queryByText('Not supported')).not.toBeInTheDocument();
+    await userEvent.click(boxes[1]);
+    expect(screen.getByRole('button', { name: 'Deploy' })).toBeDisabled();
+    await userEvent.click(boxes[0]);
+    await userEvent.click(screen.getByRole('button', { name: 'Deploy' }));
+    await waitFor(() => expect(body).not.toBeNull());
+    expect(JSON.stringify(body)).not.toContain(L2);
+  });
+
   it('refuses more than 20 websites with the limit and sends nothing', async () => {
     asRole('operator');
     const many = Array.from({ length: 21 }, (_, i) => locationFixture({ id: `l${i}`, cert_path: `/etc/nginx/ssl/${i}.crt` }));

@@ -8,6 +8,9 @@
   changes an Apache file and never reloads Apache. Their deploy controls are shown disabled with the note "Not
   available for Apache servers yet", which keyboard users now reach too (the control stays in the tab order with
   `aria-disabled` and the note as its description). The page texts say that Alice only reads these files.
+- A certificate's **Deploy** dialog lists the websites on Apache servers disabled, with the note "Not available for
+  Apache servers yet", instead of offering them as choices the server then refused; a certificate used only on Apache
+  servers has no **Deploy** button.
 - `alice-helper` 1.7.0 (protocol 8) with the read-only subcommand `apache-dump` and the sudoers profile `apache`
   (**Server type** **Apache server** under **Prepare a server for Alice**). It runs `/usr/sbin/apache2ctl` (Debian,
   Ubuntu) or `/usr/sbin/httpd` (Red Hat family) with `-V` and `-D DUMP_INCLUDES|DUMP_MODULES|DUMP_RUN_CFG -t`, reads
@@ -25,6 +28,9 @@
 
 **Changed (API)**
 - `type` of a target, the target list filter, the provider kind and `WebServerFacts.software` accept `apache`.
+- A certificate location (`GET /certificates/{id}`, `GET /targets/{id}/certificate-locations`, `PATCH /locations/{id}`) has two
+  new fields: `target_type` (the server's software) and `deployable` (whether that software deploys certificates;
+  `false` for Apache).
 - At startup Alice rewrites each server's `capabilities` from its provider, so capabilities added by a release reach
   existing servers without a data migration; when anything changed it records one audit entry
   `target.capabilities_synced` (actor `startup`, the number of servers in `targets`).

@@ -516,6 +516,8 @@ export function locationFixture(o: Partial<CertificateLocation> = {}): Certifica
     missing_since: null,
     version: 1,
     active_deployment_id: null,
+    target_type: 'nginx',
+    deployable: true,
     ...o,
   };
 }

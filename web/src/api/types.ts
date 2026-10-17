@@ -579,6 +579,9 @@ export interface CertificateLocation {
   missing_since: string | null;
   version: number;
   active_deployment_id: string | null;
+  target_type: WebServerType;
+  // deployable: the server's software deploys certificates (its deploy_certificate capability).
+  deployable: boolean;
 }
 
 export interface CertificateLocationList {

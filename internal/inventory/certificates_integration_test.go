@@ -22,6 +22,7 @@ import (
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
+	"alice/internal/providers/fake"
 	"alice/internal/rbac"
 	"alice/internal/testutil/pki"
 )
@@ -1155,4 +1156,54 @@ VALUES ($1, $2, $3, $4, $5, 'ecdsa', $2, '', $6, $4, $4, $4)`, id, sha([]byte(cn
 	var verrs validate.Errors
 	require.ErrorAs(t, err, &verrs)
 	assert.Equal(t, "expiry", verrs[0].Field)
+}
+
+// A certificate's places say whether their server's software deploys certificates: a place on a
+// discovery-only server (Apache, no deploy_certificate) is listed with Deployable false, so the
+// certificate's Deploy dialog shows it disabled instead of offering a deployment the server refuses.
+func TestCertificateLocationsSayWhetherTheServerDeploys(t *testing.T) {
+	h := newHarness(t, func(c *inventory.Config) {
+		ssh, _ := c.Registry.Get(providers.KindLinuxSSH)
+		reg := providers.NewRegistry()
+		reg.Register(ssh)
+		reg.Register(fake.New(providers.KindNginx, nginxCaps...))
+		reg.Register(fake.New(providers.KindApache, providers.CapTestConnection, providers.CapDiscoverSSHKeys,
+			providers.CapAuthorizedKeys, providers.CapDiscoverCerts, providers.CapKeyLogin))
+		reg.Freeze()
+		c.Registry = reg
+	})
+	admin := h.user("ada", rbac.Admin, "")
+	web := nginxTarget(t, h, admin, "web-01")
+	ap := okTarget(t, h, admin, "apache-01")
+	_, err := h.db.Owner.Exec(h.ctx, "UPDATE targets SET type = 'apache' WHERE id = $1", ap.ID)
+	require.NoError(t, err)
+	ca := pki.NewCA("Inv", pki.ECDSA256, h.clock.Now())
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, h.clock.Now())
+	for _, tg := range []uuid.UUID{web.ID, ap.ID} {
+		_, err := h.svc.Reconcile(h.ctx, tg, providers.DiscoveryResult{WebServer: nginxOK, Certificates: []providers.DiscoveredCertificate{
+			dc(cl("/etc/ssl/www.crt", "/etc/ssl/www.key", "www.example.test"), leaf)}})
+		require.NoError(t, err)
+	}
+	locs := byPath(t, h, web.ID, false)
+	require.Len(t, locs, 1)
+	c, err := h.svc.GetCertificate(h.ctx, locs["/etc/ssl/www.crt"].Certificate.ID)
+	require.NoError(t, err)
+	require.Len(t, c.Locations, 2)
+	got := map[uuid.UUID]inventory.CertificateLocation{}
+	for _, l := range c.Locations {
+		got[l.TargetID] = l
+	}
+	assert.True(t, got[web.ID].Deployable)
+	assert.Equal(t, inventory.TypeNginx, got[web.ID].TargetType)
+	assert.False(t, got[ap.ID].Deployable, "Apache is discovery only")
+	assert.Equal(t, inventory.TypeApache, got[ap.ID].TargetType)
+	assert.True(t, got[ap.ID].Supported, "supported, yet not deployable")
+
+	l, err := h.svc.GetLocation(h.ctx, got[ap.ID].ID)
+	require.NoError(t, err)
+	assert.False(t, l.Deployable)
+	al, err := h.svc.ListLocations(h.ctx, ap.ID, false)
+	require.NoError(t, err)
+	require.Len(t, al.Items, 1)
+	assert.False(t, al.Items[0].Deployable)
 }

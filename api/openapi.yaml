@@ -6619,12 +6619,12 @@ components:
     CertificateLocation:
       type: object
       description: >-
-        A certificate file an Nginx website uses, with its key file. Paths, names, files and accounts are text from
+        A certificate file a website uses, with its key file. Paths, names, files and accounts are text from
         the server (shown as is, never interpolated into a message).
       required: [id, target_id, target_name, cert_path, key_path, resolved_cert_path, key_type, certificate, servers, supported,
         unsupported_reason, problem, key_problem, inherited, custom_location, symlinked, key_exists, key_mode, key_owner, key_group,
         warnings, deployed_fingerprint, changed_outside_at, verify_port, verify_sni, skip_verify, first_seen_at, last_seen_at,
-        missing_since, version, active_deployment_id]
+        missing_since, version, active_deployment_id, target_type, deployable]
       properties:
         id: { type: string, format: uuid }
         target_id: { type: string, format: uuid }
@@ -6668,6 +6668,13 @@ components:
         missing_since: { type: [string, "null"], format: date-time }
         version: { type: integer, minimum: 1, description: 'The value If-Match names for PATCH /locations/{id}' }
         active_deployment_id: { type: [string, "null"], format: uuid }
+        target_type: { type: string, enum: [nginx, apache], description: "The server's target type (its web server software)" }
+        deployable:
+          type: boolean
+          description: >-
+            Whether the server's software deploys certificates (the deploy_certificate capability). A place on a
+            discovery-only server (Apache) is false: it is listed, and a deployment request for it is refused with
+            location_unsupported.
     FileProblem:
       type: string
       description: >-

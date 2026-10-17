@@ -41,7 +41,7 @@ func sampleLocation() inventory.CertificateLocation {
 		CustomLocation: true, Symlinked: true, CertFileSHA256: strings.Repeat("f", 64), KeyExists: true, KeyMode: "0640", KeyOwner: "root",
 		KeyGroup: "ssl-cert", Warnings: []string{"symlinked", "list_truncated"}, DeployedFingerprint: strings.Repeat("b", 64),
 		ChangedOutsideAt: &at, VerifyPort: &port, VerifySNI: "www.example.com", SkipVerify: true, FirstSeenAt: at, LastSeenAt: at,
-		MissingSince: &at, Version: 4, ActiveDeploymentID: &deployID,
+		MissingSince: &at, Version: 4, ActiveDeploymentID: &deployID, TargetType: inventory.TypeNginx, Deployable: true,
 	}
 }
 
@@ -92,7 +92,8 @@ func TestCertificateDTOsHaveExactlyTheDocumentedFields(t *testing.T) {
 	assert.Equal(t, sorted("id", "target_id", "target_name", "cert_path", "key_path", "resolved_cert_path", "key_type", "certificate", "servers",
 		"supported", "unsupported_reason", "problem", "key_problem", "inherited", "custom_location", "symlinked", "key_exists", "key_mode",
 		"key_owner", "key_group", "warnings", "deployed_fingerprint", "changed_outside_at", "verify_port", "verify_sni", "skip_verify",
-		"first_seen_at", "last_seen_at", "missing_since", "version", "active_deployment_id"), jsonKeys(t, locationJSON(sampleLocation())))
+		"first_seen_at", "last_seen_at", "missing_since", "version", "active_deployment_id", "target_type", "deployable"),
+		jsonKeys(t, locationJSON(sampleLocation())))
 	assert.Equal(t, sorted("id", "common_name", "sans", "key_algorithm", "key_bits", "csr_pem", "status", "certificate_id", "created_at",
 		"finished_at"), jsonKeys(t, csrJSON(sampleCSR())))
 
@@ -473,6 +474,35 @@ func TestGetCertificate(t *testing.T) {
 	assert.Equal(t, true, body["locations_truncated"])
 	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/certificates/"+uuid.NewString(), "auditor", "").Code)
 	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/certificates/upload", "auditor", "").Code, "not a UUID")
+}
+
+// Each place of a certificate carries its server's type and whether that server deploys
+// certificates: an Nginx place is deployable, a supported place on a discovery-only Apache server is not.
+func TestGetCertificateSaysWhichPlacesAreDeployable(t *testing.T) {
+	d, inv := inventoryDeps(t)
+	inv.GetCertificateFn = func(context.Context, uuid.UUID) (inventory.Certificate, error) {
+		c := sampleCertificate()
+		ap := sampleLocation()
+		ap.ID, ap.TargetName, ap.TargetType, ap.Deployable, ap.Supported, ap.UnsupportedReason = uuid.New(), "apache-01", inventory.TypeApache, false, true, ""
+		c.Locations = []inventory.CertificateLocation{sampleLocation(), ap}
+		return c, nil
+	}
+	rec := call(NewHandler(d), http.MethodGet, "/api/v1/certificates/"+certID.String(), "auditor", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Locations []struct {
+			TargetType string `json:"target_type"`
+			Deployable bool   `json:"deployable"`
+			Supported  bool   `json:"supported"`
+		} `json:"locations"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Locations, 2)
+	assert.Equal(t, "nginx", body.Locations[0].TargetType)
+	assert.True(t, body.Locations[0].Deployable)
+	assert.Equal(t, "apache", body.Locations[1].TargetType)
+	assert.False(t, body.Locations[1].Deployable)
+	assert.True(t, body.Locations[1].Supported)
 }
 
 func TestCSRRoutes(t *testing.T) {

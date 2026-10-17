@@ -91,6 +91,10 @@ type CertificateLocation struct {
 	MissingSince        *time.Time
 	Version             int
 	ActiveDeploymentID  *uuid.UUID
+	TargetType          string // the server's target type (names its software)
+	// Deployable says whether the target's provider deploys certificates (deploy_certificate);
+	// a place on a discovery-only server is listed but never offered for deployment.
+	Deployable bool
 }
 
 // CertificateFilter selects certificates for the certificate screen.
@@ -352,7 +356,7 @@ LIMIT $2`, id, MaxListedLocations+1)
 	if err != nil {
 		return Certificate{}, fmt.Errorf("inventory: list certificate locations: %w", err)
 	}
-	if c.Locations, err = collectCertLocations(rows); err != nil {
+	if c.Locations, err = s.collectCertLocations(rows); err != nil {
 		return Certificate{}, err
 	}
 	if len(c.Locations) > MaxListedLocations {

@@ -254,6 +254,25 @@ describe('CertificateDetailPage', () => {
       expect(within(dialog).getByRole('button', { name: 'Deploy' })).toBeDisabled();
     });
 
+    it('counts only places whose server can deploy: an Apache place is listed disabled with the note, the Nginx place is a choice', async () => {
+      const apache = locationFixture({ id: 'la', target_name: 'apache-01', target_type: 'apache', deployable: false, cert_path: '/etc/apache2/ssl/www.crt' });
+      certServer(certificateDetailFixture({ id: ID, locations: [apache, locationFixture()] }));
+      await renderRoute(`/certificates/${ID}`);
+      await userEvent.click(await screen.findByRole('button', { name: 'Deploy' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Deploy a certificate' });
+      const boxes = await within(dialog).findAllByRole('checkbox');
+      expect(boxes.map((b) => (b as HTMLInputElement).disabled)).toEqual([true, false]);
+      expect(within(dialog).getByText('Not available for Apache servers yet')).toBeInTheDocument();
+    });
+
+    it('is not offered for a certificate used only on servers that cannot deploy; the hint says how instead', async () => {
+      certServer(certificateDetailFixture({ id: ID, locations: [locationFixture({ target_type: 'apache', deployable: false })] }));
+      await renderRoute(`/certificates/${ID}`);
+      await screen.findByRole('heading', { level: 1 });
+      expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
+      expect(screen.getByTestId('deploy-hint')).toBeInTheDocument();
+    });
+
     it('is not shown to Auditors', async () => {
       certServer(undefined, [], auditorSession);
       await renderRoute(`/certificates/${ID}`);

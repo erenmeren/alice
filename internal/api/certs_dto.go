@@ -119,6 +119,8 @@ type locationDTO struct {
 	MissingSince        *time.Time         `json:"missing_since"`
 	Version             int                `json:"version"`
 	ActiveDeploymentID  *string            `json:"active_deployment_id"`
+	TargetType          string             `json:"target_type"`
+	Deployable          bool               `json:"deployable"`
 }
 
 func idPtr(id *uuid.UUID) *string {
@@ -152,7 +154,7 @@ func locationJSON(l inventory.CertificateLocation) locationDTO {
 		KeyGroup: l.KeyGroup, Warnings: nonNil(l.Warnings), DeployedFingerprint: l.DeployedFingerprint,
 		ChangedOutsideAt: utcPtr(l.ChangedOutsideAt), VerifyPort: l.VerifyPort, VerifySNI: l.VerifySNI, SkipVerify: l.SkipVerify,
 		FirstSeenAt: l.FirstSeenAt.UTC(), LastSeenAt: l.LastSeenAt.UTC(), MissingSince: utcPtr(l.MissingSince), Version: l.Version,
-		ActiveDeploymentID: idPtr(l.ActiveDeploymentID),
+		ActiveDeploymentID: idPtr(l.ActiveDeploymentID), TargetType: l.TargetType, Deployable: l.Deployable,
 	}
 	if c := l.Certificate; c != nil {
 		d.Certificate = &certificateRefDTO{ID: c.ID.String(), SubjectCN: c.SubjectCN, Label: c.Label, Fingerprint: c.Fingerprint,

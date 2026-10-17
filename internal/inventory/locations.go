@@ -680,13 +680,16 @@ c.id, coalesce(c.subject_cn, ''), coalesce(c.label, ''), coalesce(c.fingerprint_
 l.servers, l.supported, l.unsupported_reason, l.problem, l.key_problem, l.inherited, l.custom_location, l.symlinked, l.cert_file_sha256,
 l.key_exists, l.key_mode, l.key_owner, l.key_group, l.warnings, l.deployed_fingerprint, l.changed_outside_at, l.verify_port,
 coalesce(l.verify_sni, ''), l.skip_verify, l.first_seen_at, l.last_seen_at, l.missing_since, l.version,
-(SELECT d.id FROM deployments d WHERE d.location_id = l.id AND d.state <> 'done' LIMIT 1)
+(SELECT d.id FROM deployments d WHERE d.location_id = l.id AND d.state <> 'done' LIMIT 1), t.type
 FROM certificate_locations l
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
 LEFT JOIN certificates c ON c.id = l.certificate_id`
 
-func scanCertLocation(row pgx.Row) (CertificateLocation, error) {
+// scanCertLocation reads one certLocationSelect row; Deployable is the target type's
+// deploy_certificate capability (the same check a deployment request meets).
+func (s *Service) scanCertLocation(row pgx.Row) (CertificateLocation, error) {
 	var (
+		typ      string
 		l        CertificateLocation
 		certID   *uuid.UUID
 		ref      CertificateRef
@@ -697,7 +700,7 @@ func scanCertLocation(row pgx.Row) (CertificateLocation, error) {
 		&certID, &ref.SubjectCN, &ref.Label, &ref.Fingerprint, &notAfter,
 		&servers, &l.Supported, &l.UnsupportedReason, &l.Problem, &l.KeyProblem, &l.Inherited, &l.CustomLocation, &l.Symlinked, &l.CertFileSHA256,
 		&l.KeyExists, &l.KeyMode, &l.KeyOwner, &l.KeyGroup, &l.Warnings, &l.DeployedFingerprint, &l.ChangedOutsideAt, &l.VerifyPort,
-		&l.VerifySNI, &l.SkipVerify, &l.FirstSeenAt, &l.LastSeenAt, &l.MissingSince, &l.Version, &l.ActiveDeploymentID)
+		&l.VerifySNI, &l.SkipVerify, &l.FirstSeenAt, &l.LastSeenAt, &l.MissingSince, &l.Version, &l.ActiveDeploymentID, &typ)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CertificateLocation{}, ErrNotFound
 	}
@@ -719,14 +722,15 @@ func scanCertLocation(row pgx.Row) (CertificateLocation, error) {
 	}
 	l.FirstSeenAt, l.LastSeenAt = l.FirstSeenAt.UTC(), l.LastSeenAt.UTC()
 	l.ChangedOutsideAt, l.MissingSince = utcPtr(l.ChangedOutsideAt), utcPtr(l.MissingSince)
+	l.TargetType, l.Deployable = typ, s.canDeploy(typ)
 	return l, nil
 }
 
-func collectCertLocations(rows pgx.Rows) ([]CertificateLocation, error) {
+func (s *Service) collectCertLocations(rows pgx.Rows) ([]CertificateLocation, error) {
 	defer rows.Close()
 	out := []CertificateLocation{}
 	for rows.Next() {
-		l, err := scanCertLocation(rows)
+		l, err := s.scanCertLocation(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -756,7 +760,7 @@ LIMIT $3`, targetID, includeMissing, MaxListedLocations+1)
 	if err != nil {
 		return LocationList{}, fmt.Errorf("inventory: list certificate locations: %w", err)
 	}
-	items, err := collectCertLocations(rows)
+	items, err := s.collectCertLocations(rows)
 	if err != nil {
 		return LocationList{}, err
 	}
@@ -769,5 +773,5 @@ LIMIT $3`, targetID, includeMissing, MaxListedLocations+1)
 
 // GetLocation returns one certificate location on a live target.
 func (s *Service) GetLocation(ctx context.Context, id uuid.UUID) (CertificateLocation, error) {
-	return scanCertLocation(s.pool.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id))
+	return s.scanCertLocation(s.pool.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id))
 }

@@ -107,7 +107,7 @@ FROM certificate_locations l JOIN targets t ON t.id = l.target_id WHERE l.id = $
 WHERE id = $1`, id, port, curSNI, skip); err != nil {
 			return fmt.Errorf("inventory: update certificate location: %w", err)
 		}
-		if out, err = scanCertLocation(tx.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id)); err != nil {
+		if out, err = s.scanCertLocation(tx.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id)); err != nil {
 			return err
 		}
 		d := map[string]string{"location_id": id.String(), "verify_port": "", "verify_sni": "", "skip_verify": strconv.FormatBool(skip)}
