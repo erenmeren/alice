@@ -335,6 +335,7 @@ func TestRealApache(t *testing.T) {
 			run("invalid_configuration", h.testInvalidConfiguration)
 			run("missing_certificate_file", h.testMissingCertificate)
 			run("config_file_writable", h.testWritableConfig)
+			run("untrusted_control_program", h.testUntrustedProgram)
 			run("profile_missing", h.testProfileMissing)
 			run("not_found", h.testNotFound)
 		})
@@ -581,6 +582,44 @@ func (h *raHost) testWritableConfig(t *testing.T) {
 	for path, c := range locs {
 		assert.True(t, c.Location.Supported, path)
 	}
+}
+
+// testUntrustedProgram (Ruling 15): a group-writable control program (and on Debian and Ubuntu
+// a group-writable /etc/apache2/envvars or /usr/sbin/apache2, which apache2ctl sources and runs)
+// is never run as root: discovery and the connection test report the configuration untrusted,
+// not_root_controlled, naming the file. Each mode is put back.
+func (h *raHost) testUntrustedProgram(t *testing.T) {
+	paths := []string{h.ctl}
+	if h.debian() {
+		paths = append(paths, "/etc/apache2/envvars", "/usr/sbin/apache2")
+	}
+	// One subtest per file: the sessions discover and testConnection open close with it (the
+	// pool holds a few per target).
+	for _, p := range paths {
+		ok := t.Run(strings.TrimPrefix(p, "/"), func(t *testing.T) {
+			parent := h.t
+			h.t = t
+			defer func() { h.t = parent }()
+			mode := strings.TrimSpace(h.sh("stat -L -c %a " + p))
+			h.sh("chmod g+w " + p)
+			defer h.sh("chmod " + mode + " " + p)
+			res, locs := h.discover()
+			require.NotNil(t, res.WebServer, p)
+			assert.False(t, res.WebServer.ConfigValid, p)
+			assert.Equal(t, providers.ConfigErrUntrusted, res.WebServer.ConfigError, p)
+			assert.Equal(t, providers.ConfigReasonNotRootControlled, res.WebServer.ConfigErrorReason, p)
+			assert.Equal(t, p, res.WebServer.ConfigErrorFile)
+			assert.Empty(t, locs, p)
+			assert.Contains(t, warningCodes(res.Warnings), providers.WarnWebServerConfigInvalid, p)
+			rep := h.testConnection()
+			require.NotNil(t, rep.WebServer, p)
+			assert.False(t, rep.WebServer.ConfigValid, p)
+			assert.Equal(t, providers.ConfigErrUntrusted, rep.WebServer.ConfigError, p)
+		})
+		require.True(t, ok, p)
+	}
+	_, locs := h.discover()
+	assert.Equal(t, h.wantPaths(), pathsOf(locs))
 }
 
 // testProfileMissing: with the linux profile installed sudo refuses apache-dump:

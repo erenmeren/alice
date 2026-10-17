@@ -689,6 +689,7 @@ func TestRealNginx(t *testing.T) {
 			run("user_owned_symlink", h.testUserSymlink)
 			run("user_owned_directory", h.testUserDirectory)
 			run("config_file_writable", h.testWritableConfig)
+			run("untrusted_nginx_program", h.testUntrustedProgram)
 			run("busy", h.testBusy)
 			run("name_outside_vocabulary", h.testNameOutsideVocabulary)
 			run("fence", h.testFence)

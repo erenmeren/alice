@@ -165,16 +165,23 @@ func (s *sys) nginxConfig(ctx context.Context) (nginxconf.Config, dumpMeta, erro
 		meta.valid, meta.class, meta.reason, meta.file, meta.writable = false, e.class, e.reason, e.file, nil
 		return nginxconf.Config{}, meta, nil
 	}
+	// An nginx binary a user other than root can change never runs (Ruling 15): untrusted
+	// not_root_controlled naming it, whichever run meets it.
+	var pe *programError
 	_, verr, err := s.runNginx(ctx, "-V")
-	if missingProgram(err) {
+	switch {
+	case errors.As(err, &pe):
+		return invalid(untrusted(helperproto.ConfigReasonNotRootControlled, pe.path))
+	case missingProgram(err):
 		return nginxconf.Config{}, meta, errNginxMissing
-	}
-	if err != nil {
+	case err != nil:
 		return nginxconf.Config{}, meta, err
 	}
 	meta.version, meta.confPath = parseNginxV(verr)
 	out, terr, err := s.runNginx(ctx, "-T")
 	switch {
+	case errors.As(err, &pe):
+		return invalid(untrusted(helperproto.ConfigReasonNotRootControlled, pe.path))
 	case missingProgram(err):
 		return nginxconf.Config{}, meta, errNginxMissing
 	case errors.Is(err, errProgramKilled):
@@ -646,6 +653,9 @@ func cmdNginxTest(ctx context.Context, s *sys, args []string) (any, error) {
 		return nil, precondition(helperproto.CodeNginxNotFound, "nginx is not installed at /usr/sbin/nginx")
 	case errors.Is(err, errProgramKilled):
 		return nil, failed(helperproto.CodeIOError, "nginx could not be run to the end")
+	case errors.Is(err, errProgramUntrusted):
+		// The binary can be changed by a user other than root (Ruling 15): it did not run.
+		return helperproto.NginxTestResponse{OK: true, Valid: false, Error: helperproto.ConfigErrUntrusted}, nil
 	case err != nil:
 		return helperproto.NginxTestResponse{OK: true, Valid: false, Error: classifyNginxError(stderr)}, nil
 	}

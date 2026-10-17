@@ -975,3 +975,36 @@ func TestRunProgram(t *testing.T) {
 	_, _, err = runProgram(context.Background(), filepath.Join(t.TempDir(), "nginx"), 10, "-T")
 	assert.True(t, missingProgram(err), "%v", err)
 }
+
+// Ruling 15: an nginx binary that a user other than root can change is an untrusted
+// configuration naming it (nginx-dump, whichever run meets it), and nginx-test answers
+// valid: false with the class "untrusted".
+func TestNginxUntrustedProgram(t *testing.T) {
+	for _, arg := range []string{"-V", "-T"} {
+		t.Run(arg, func(t *testing.T) {
+			w := newNginxWorld(t)
+			run := w.f.s.runNginx
+			w.f.s.runNginx = func(ctx context.Context, args ...string) ([]byte, []byte, error) {
+				if args[0] == arg {
+					return nil, nil, &programError{path: nginxPath}
+				}
+				return run(ctx, args...)
+			}
+			code, m := w.f.run("nginx-dump")
+			require.Equal(t, 0, code, "%v", m)
+			assert.Equal(t, false, m["config_valid"])
+			assert.Equal(t, helperproto.ConfigErrUntrusted, m["config_error"])
+			assert.Equal(t, helperproto.ConfigReasonNotRootControlled, m["config_error_reason"])
+			assert.Equal(t, nginxPath, m["config_error_file"])
+			assert.Equal(t, []any{}, m["servers"])
+			assert.Equal(t, []any{}, m["files"])
+		})
+	}
+	w := newNginxWorld(t)
+	w.f.s.runNginx = func(context.Context, ...string) ([]byte, []byte, error) {
+		return nil, []byte("nginx: [emerg] unexpected"), &programError{path: nginxPath}
+	}
+	code, m := w.f.run("nginx-test")
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, map[string]any{"ok": true, "valid": false, "error": helperproto.ConfigErrUntrusted}, m)
+}

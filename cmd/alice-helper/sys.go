@@ -29,14 +29,18 @@ type sys struct {
 	sudoUser func() string
 	now      func() time.Time
 	runSSHD  func(ctx context.Context, args ...string) ([]byte, error)
-	// runNginx runs /usr/sbin/nginx with fixed arguments (-V, -T, -t) through runProgram; stdout is
-	// capped at helperproto.MaxServerConfig, stderr at 64 KiB. A missing binary is an
-	// fs.ErrNotExist error.
+	// runNginx runs /usr/sbin/nginx with fixed arguments (-V, -T, -t) through runGuarded (the
+	// root-control pre-check, then runProgram); stdout is capped at helperproto.MaxServerConfig,
+	// stderr at 64 KiB. A missing binary is an fs.ErrNotExist error, one that fails the pre-check a
+	// *programError (errProgramUntrusted).
 	runNginx func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
 	// runApache runs Apache's control program (runApacheCtl: /usr/sbin/apache2ctl, else
-	// /usr/sbin/httpd) with fixed arguments through runProgram; stdout is capped at
-	// helperproto.MaxServerConfig, stderr at 64 KiB. A missing program is an fs.ErrNotExist error.
+	// /usr/sbin/httpd) with fixed arguments through runGuarded; stdout is capped at
+	// helperproto.MaxServerConfig, stderr at 64 KiB. A missing program is an fs.ErrNotExist error,
+	// one that fails the pre-check (with envvars and apache2 for apache2ctl) a *programError.
 	runApache func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
+	// runHAProxy runs /usr/sbin/haproxy with fixed arguments through runGuarded, as runNginx.
+	runHAProxy func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
 	// runSystemctl runs /usr/bin/systemctl with fixed arguments (Task 6).
 	runSystemctl func(ctx context.Context, args ...string) error
 	// statfs returns the bytes available to root in the file system of a descriptor.

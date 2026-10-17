@@ -600,8 +600,9 @@ func (s *sys) writeBackups(dir *os.File, cert, key []byte) error {
 }
 
 // configTest runs nginx -t; on failure it returns the error class. A run that timed out or was
-// killed, or a missing nginx, says nothing about the configuration: its class is "" (never
-// "syntax"), and it fails the step all the same.
+// killed, a missing nginx, or one that failed the root-control pre-check (Ruling 15: it did not
+// run) says nothing about the configuration: its class is "" (never "syntax"), and it fails the
+// step all the same.
 func (s *sys) configTest(ctx context.Context) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, stepTimeout)
 	defer cancel()
@@ -609,7 +610,7 @@ func (s *sys) configTest(ctx context.Context) (string, error) {
 	switch {
 	case err == nil:
 		return "", nil
-	case errors.Is(err, errProgramKilled), missingProgram(err), errors.Is(err, errTooLarge):
+	case errors.Is(err, errProgramKilled), missingProgram(err), errors.Is(err, errTooLarge), errors.Is(err, errProgramUntrusted):
 		return "", err
 	}
 	return classifyNginxError(stderr), err

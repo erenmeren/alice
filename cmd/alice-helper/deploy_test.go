@@ -1267,3 +1267,94 @@ func TestDeployAsRootSetsOwnersAndRefusesUserDirectories(t *testing.T) {
 	assert.Equal(t, helperproto.CodePathNotAllowed, m["code"])
 	w.assertPair(t, false)
 }
+
+// guardNginx puts a real /usr/sbin/nginx file (mode) under the fixture root and makes the fake
+// nginx answer only when trustedProgram passes it, as productionSys's runner does. before runs
+// ahead of each check (a test changes the binary mid-transaction there).
+func (w *deployWorld) guardNginx(mode os.FileMode, before func(args []string)) {
+	w.f.mkdir("/usr", 0o755)
+	w.f.mkdir("/usr/sbin", 0o755)
+	w.f.write(nginxPath, "#!/bin/sh\n", mode)
+	inner := w.f.s.runNginx
+	w.f.s.runNginx = func(ctx context.Context, args ...string) ([]byte, []byte, error) {
+		if before != nil {
+			before(args)
+		}
+		if err := w.f.s.trustedProgram(nginxPath); err != nil {
+			return nil, nil, err
+		}
+		return inner(ctx, args...)
+	}
+}
+
+// configTest's mapping: an untrusted nginx says nothing about the configuration (class "") and
+// fails the step.
+func TestConfigTestUntrustedProgram(t *testing.T) {
+	w := newDeployWorld(t)
+	w.f.s.runNginx = func(context.Context, ...string) ([]byte, []byte, error) {
+		return nil, []byte("SSL_CTX_use_PrivateKey failed (key values mismatch)"), &programError{path: nginxPath}
+	}
+	class, err := w.f.s.configTest(context.Background())
+	assert.Equal(t, "", class)
+	assert.ErrorIs(t, err, errProgramUntrusted)
+}
+
+// C7: an nginx binary that a user other than root can change refuses a deployment up front
+// (nginxConfig: CONFIG_INVALID), with nothing written, no backup and no reload.
+func TestDeployUntrustedNginxChangesNothing(t *testing.T) {
+	w := newDeployWorld(t)
+	w.guardNginx(0o775, nil)
+	code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+	assert.Equal(t, helperproto.ExitPrecondition, code, "%v", m)
+	assert.Equal(t, helperproto.CodeConfigInvalid, m["code"])
+	w.assertPair(t, false)
+	w.assertNoLeftovers(t)
+	assert.Equal(t, 0, w.reloads)
+	_, err := os.Stat(w.opPath(opA))
+	assert.True(t, errors.Is(err, os.ErrNotExist), "no backup directory")
+	assert.Empty(t, w.calls, "nginx never ran")
+}
+
+// C7: a binary that becomes untrusted after nginx -T (only root can do that: its directory is
+// root's) fails config_test with class "", and the rollback's nginx -t fails the same way: the
+// files are back, nothing is reloaded, and the operation ends restore_failed.
+func TestDeployUntrustedNginxAtConfigTestEndsRestoreFailed(t *testing.T) {
+	w := newDeployWorld(t)
+	w.guardNginx(0o755, func(args []string) {
+		if args[0] == "-t" {
+			require.NoError(t, os.Chmod(w.f.host(nginxPath), 0o775))
+		}
+	})
+	code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+	require.Equal(t, 0, code, "%v", m)
+	assert.Equal(t, helperproto.PhaseRestoreFailed, m["phase"])
+	assert.Equal(t, helperproto.StepRollbackConfigTest, m["failed_step"])
+	assert.Equal(t, "", m["error"])
+	assert.Equal(t, []string{"backup:ok", "write_key:ok", "write_cert:ok", "config_test:failed", "restore:ok", "rollback_config_test:failed"}, stepsOf(m))
+	w.assertPair(t, false)
+	w.assertNoLeftovers(t)
+	assert.Equal(t, 0, w.reloads)
+}
+
+// C7: nginx-restore of a committed operation on a host whose nginx has since become untrusted:
+// the files are back, nginx is not reloaded, and the answer is restore_failed at
+// rollback_config_test.
+func TestRestoreUntrustedNginxEndsRestoreFailed(t *testing.T) {
+	w := newDeployWorld(t)
+	w.guardNginx(0o755, nil)
+	code, m := w.deploy(opA, w.newInput(), w.oldSHA())
+	require.Equal(t, 0, code, "%v", m)
+	require.Equal(t, helperproto.PhaseCommitted, m["phase"])
+	require.Equal(t, 1, w.reloads)
+
+	require.NoError(t, os.Chmod(w.f.host(nginxPath), 0o775))
+	code, r := w.f.run("nginx-restore", "--op", opA)
+	require.Equal(t, 0, code, "%v", r)
+	assert.Equal(t, helperproto.PhaseRestoreFailed, r["phase"])
+	assert.Equal(t, helperproto.StepRollbackConfigTest, r["failed_step"])
+	assert.Equal(t, "", r["error"])
+	assert.Equal(t, []string{"restore:ok", "rollback_config_test:failed"}, stepsOf(r))
+	w.assertPair(t, false)
+	w.assertNoLeftovers(t)
+	assert.Equal(t, 1, w.reloads, "no reload after the refused nginx -t")
+}

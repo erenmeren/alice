@@ -488,39 +488,6 @@ func TestApacheDumpWritesNothing(t *testing.T) {
 	assert.Equal(t, before, after)
 }
 
-func TestApacheCtlChoice(t *testing.T) {
-	assert.Equal(t, []string{"/usr/sbin/apache2ctl", "/usr/sbin/httpd"}, apacheCtlPaths)
-	assert.NotContains(t, apacheCtlPaths, "/usr/sbin/apachectl", "Rocky's apachectl refuses extra arguments")
-	if _, err := os.Stat("/bin/sh"); err != nil {
-		t.Skip("needs /bin/sh")
-	}
-	old := apacheCtlPaths
-	defer func() { apacheCtlPaths = old }()
-	dir := t.TempDir()
-	script := func(name string) string {
-		p := filepath.Join(dir, name)
-		require.NoError(t, os.WriteFile(p, []byte("#!/bin/sh\necho "+name+" \"$@\"\n"), 0o700)) //nolint:gosec // G306: a test program that must run
-		return p
-	}
-	ctl, httpd := filepath.Join(dir, "apache2ctl"), filepath.Join(dir, "httpd")
-	apacheCtlPaths = []string{ctl, httpd}
-
-	script("apachectl")
-	_, _, err := runApacheCtl(context.Background(), "-V")
-	assert.ErrorIs(t, err, fs.ErrNotExist, "neither present: apachectl is never used")
-	assert.True(t, missingProgram(err))
-
-	script("httpd")
-	out, _, err := runApacheCtl(context.Background(), "-D", "DUMP_INCLUDES", "-t")
-	require.NoError(t, err)
-	assert.Equal(t, "httpd -D DUMP_INCLUDES -t\n", string(out))
-
-	script("apache2ctl")
-	out, _, err = runApacheCtl(context.Background(), "-V")
-	require.NoError(t, err)
-	assert.Equal(t, "apache2ctl -V\n", string(out), "apache2ctl when both exist")
-}
-
 func TestApacheParseError(t *testing.T) {
 	for _, tc := range []struct {
 		err                 error
@@ -542,35 +509,15 @@ func TestApacheParseError(t *testing.T) {
 	}
 }
 
-// An lstat error other than "does not exist" is not "not installed": it is returned as is.
-func TestApacheCtlLstatError(t *testing.T) {
-	old := apacheCtlPaths
-	defer func() { apacheCtlPaths = old }()
-	file := filepath.Join(t.TempDir(), "file")
-	require.NoError(t, os.WriteFile(file, nil, 0o600))
-	apacheCtlPaths = []string{filepath.Join(file, "apache2ctl")}
-	_, _, err := runApacheCtl(context.Background(), "-V")
-	require.Error(t, err)
-	assert.False(t, missingProgram(err), "%v", err)
-}
-
 // The four control-program runs share the call's one deadline (commandBudget, derived by run): a
 // run that hangs is killed when the caller's context ends, and a later run never gets a fresh
 // programTimeout of its own. So apache-dump answers within helperproto.HelperBudget, below the
 // backend's timeout for it (linuxssh pins that side).
 func TestApacheRunsShareTheCallDeadline(t *testing.T) {
-	if _, err := os.Stat("/bin/sh"); err != nil {
-		t.Skip("needs /bin/sh")
-	}
-	old := apacheCtlPaths
-	defer func() { apacheCtlPaths = old }()
-	dir := t.TempDir()
-	ctl := filepath.Join(dir, "apache2ctl")
-	body := "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'Server version: Apache/2.4.68 (Debian)'; echo ' -D SERVER_CONFIG_FILE=\"apache2.conf\"'; exit 0; fi\nexec /bin/sleep 30\n"
-	require.NoError(t, os.WriteFile(ctl, []byte(body), 0o700)) //nolint:gosec // G306: a test program that must run
-	apacheCtlPaths = []string{ctl}
-	f := newFixture(t)
-	f.s.runApache = runApacheCtl
+	needSh(t)
+	f := programFixture(t)
+	f.write(apache2ctlPath, "#!/bin/sh\nif [ \"$1\" = -V ]; then echo 'Server version: Apache/2.4.68 (Debian)'; echo ' -D SERVER_CONFIG_FILE=\"apache2.conf\"'; exit 0; fi\nexec /bin/sleep 30\n", 0o755)
+	f.s.runApache = f.s.runApacheCtl
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
@@ -579,4 +526,23 @@ func TestApacheRunsShareTheCallDeadline(t *testing.T) {
 	assert.ErrorIs(t, err, errProgramKilled)
 	assert.Less(t, time.Since(start), 5*time.Second, "the hanging run ends with the caller's deadline, not after programTimeout")
 	assert.Less(t, commandBudget, 4*programTimeout, "the call budget, not four program timeouts, bounds apache-dump")
+}
+
+// Ruling 15: a control program (or envvars, or apache2) that a user other than root can change is
+// an untrusted configuration naming the file, whichever run meets it; nothing is read or listed.
+func TestApacheDumpUntrustedProgram(t *testing.T) {
+	for _, args := range []string{argsV, argsIncludes, argsModules, argsRunCfg} {
+		t.Run(args, func(t *testing.T) {
+			w := newApacheWorld(t)
+			w.set(args, apacheAnswer{err: &programError{path: apache2ctlPath}})
+			class, reason, file := w.refusal(t)
+			assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonNotRootControlled, apache2ctlPath},
+				[]string{class, reason, file})
+		})
+	}
+	w := newApacheWorld(t)
+	w.set(argsV, apacheAnswer{err: &programError{path: "/etc/apache2/envvars"}})
+	_, _, file := w.refusal(t)
+	assert.Equal(t, "/etc/apache2/envvars", file)
+	assert.Equal(t, []string{argsV}, w.calls, "no later run")
 }

@@ -1188,6 +1188,38 @@ func (h *rnHost) testWritableConfig(t *testing.T) {
 	h.refusedUnchanged(out, err, "nginx.config_changed", same)
 }
 
+// testUntrustedProgram (Ruling 15): a group-writable /usr/sbin/nginx is never run as root.
+// Discovery reports the configuration untrusted naming the binary, the connection test reports it
+// invalid ("untrusted"), and a deployment is refused before anything is written
+// (nginx.config_invalid). Mode 0755 is put back and discovery works again.
+func (h *rnHost) testUntrustedProgram(t *testing.T) {
+	c := h.location(rnWWW)
+	same := h.unchangedFiles(rnWWW)
+	h.sh("chmod g+w /usr/sbin/nginx")
+	defer h.sh("chmod 0755 /usr/sbin/nginx")
+	res, _ := h.discover(false)
+	require.NotNil(t, res.WebServer)
+	assert.False(t, res.WebServer.ConfigValid)
+	assert.Equal(t, providers.ConfigErrUntrusted, res.WebServer.ConfigError)
+	assert.Equal(t, providers.ConfigReasonNotRootControlled, res.WebServer.ConfigErrorReason)
+	assert.Equal(t, "/usr/sbin/nginx", res.WebServer.ConfigErrorFile)
+	assert.Empty(t, res.Certificates)
+	assert.Contains(t, warningCodes(res.Warnings), providers.WarnWebServerConfigInvalid)
+	rep, err := h.session(nil).TestConnection(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, rep.WebServer)
+	assert.False(t, rep.WebServer.ConfigValid)
+	assert.Equal(t, providers.ConfigErrUntrusted, rep.WebServer.ConfigError)
+	out, log, err := h.deploy(nil, h.request(c, h.leaf("www.example.test", pki.ECDSA256), true))
+	h.refusedUnchanged(out, err, "nginx.config_invalid", same)
+	assert.Empty(t, log)
+	h.sh("chmod 0755 /usr/sbin/nginx")
+	res, _ = h.discover(false)
+	require.NotNil(t, res.WebServer)
+	assert.True(t, res.WebServer.ConfigValid, "%+v", *res.WebServer)
+	h.servesRecorded(rnWWW, 443)
+}
+
 // testBusy: another process holds the helper's Nginx lock (as a running deployment does): the
 // connection test's status says active, and a deployment answers BUSY after the helper's wait,
 // changing nothing.

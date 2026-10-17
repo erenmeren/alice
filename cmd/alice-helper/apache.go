@@ -23,8 +23,12 @@ const (
 	httpdPath      = "/usr/sbin/httpd"
 )
 
-// apacheCtlPaths are the control programs in order of preference; tests point them elsewhere.
+// apacheCtlPaths are the control programs in order of preference (guest paths).
 var apacheCtlPaths = []string{apache2ctlPath, httpdPath}
+
+// apache2ctlLoads are the files apache2ctl sources and runs as root before Apache reads its
+// configuration (Ruling 15): they pass the root-control pre-check with it. httpd loads neither.
+var apache2ctlLoads = []string{"/etc/apache2/envvars", "/usr/sbin/apache2"}
 
 // apacheReadBudget bounds the bytes of all configuration files apache-dump reads together (each
 // distinct file once); tests lower it.
@@ -32,19 +36,25 @@ var apacheReadBudget = helperproto.MaxServerConfig
 
 var errApacheMissing = errors.New("apache is not installed")
 
-// runApacheCtl runs the first control program of apacheCtlPaths that lstat finds, through
-// runProgram (fixed environment, "/" as its directory, umask 022, 30 s, stdout capped at
-// MaxServerConfig, stderr at 64 KiB). Neither present is an fs.ErrNotExist error.
-func runApacheCtl(ctx context.Context, args ...string) ([]byte, []byte, error) {
+// runApacheCtl runs the first control program of apacheCtlPaths that lstat finds under s.root,
+// through runGuarded (the root-control pre-check of the program, and for apache2ctl of
+// apache2ctlLoads; then runProgram: fixed environment, "/" as its directory, umask 022, 30 s,
+// stdout capped at MaxServerConfig, stderr at 64 KiB). Neither present is an fs.ErrNotExist error;
+// a program that fails the pre-check is a *programError and never runs.
+func (s *sys) runApacheCtl(ctx context.Context, args ...string) ([]byte, []byte, error) {
 	for _, p := range apacheCtlPaths {
-		_, err := os.Lstat(p)
+		_, err := os.Lstat(s.host(p))
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			continue
 		case err != nil:
 			return nil, nil, err
 		}
-		return runProgram(ctx, p, helperproto.MaxServerConfig, args...)
+		var also []string
+		if p == apache2ctlPath {
+			also = apache2ctlLoads
+		}
+		return s.runGuarded(ctx, p, also, helperproto.MaxServerConfig, args...)
 	}
 	return nil, nil, &fs.PathError{Op: "lstat", Path: apache2ctlPath, Err: fs.ErrNotExist}
 }
@@ -70,12 +80,16 @@ func apacheParseError(err error) *configError {
 
 // apacheRun runs one "-D DUMP_<what> -t" of the control program. A missing program is
 // errApacheMissing and a killed or timed-out run its error (neither says anything about the
-// configuration). Output over the cap is unsupported too_large, and a non-zero exit is an invalid
-// configuration of class syntax (Ruling 5: for a later run, the configuration changed between
-// the runs); stderr is never used.
+// configuration). A program that fails the root-control pre-check is untrusted not_root_controlled
+// naming the file (Ruling 15). Output over the cap is unsupported too_large, and a non-zero exit
+// is an invalid configuration of class syntax (Ruling 5: for a later run, the configuration
+// changed between the runs); stderr is never used.
 func (s *sys) apacheRun(ctx context.Context, what string) ([]byte, *configError, error) {
 	out, _, err := s.runApache(ctx, "-D", "DUMP_"+what, "-t")
+	var pe *programError
 	switch {
+	case errors.As(err, &pe):
+		return nil, untrusted(helperproto.ConfigReasonNotRootControlled, pe.path), nil
 	case missingProgram(err):
 		return nil, nil, errApacheMissing
 	case errors.Is(err, errProgramKilled):
@@ -101,7 +115,11 @@ func (s *sys) apacheConfig(ctx context.Context) (apacheconf.Config, dumpMeta, er
 		return apacheconf.Config{}, meta, nil
 	}
 	out, _, err := s.runApache(ctx, "-V")
+	var pe *programError
 	switch {
+	case errors.As(err, &pe):
+		// The control program, envvars or apache2 can be changed by a user other than root (Ruling 15).
+		return invalid(untrusted(helperproto.ConfigReasonNotRootControlled, pe.path))
 	case missingProgram(err):
 		return apacheconf.Config{}, meta, errApacheMissing
 	case err != nil:
