@@ -40,13 +40,18 @@ const maxRaw = 200
 // calls neither callback, so nothing that user names is read, listed or opened. Each crt or
 // crt-list argument it can resolve is one pair config_file_writable carrying only the text as
 // written (CertRaw); arguments it cannot resolve keep their reason (variable, path_not_allowed).
+//
+// WritableFile, when set, says whether a user other than root can change a crt-list whose text
+// ReadFile just returned (re-review R1 of Task 6): its entries are then not looked at (no
+// ReadDir), and each one with a path is one pair config_file_writable carrying only its text.
 type Input struct {
-	Path     string
-	Data     []byte
-	Version  string
-	ReadFile func(path string) ([]byte, error)
-	ReadDir  func(path string) (names []string, isDir bool, err error)
-	Writable bool
+	Path         string
+	Data         []byte
+	Version      string
+	ReadFile     func(path string) ([]byte, error)
+	ReadDir      func(path string) (names []string, isDir bool, err error)
+	Writable     bool
+	WritableFile func(path string) bool
 }
 
 // Config is the evaluated configuration: the TLS servers in read order, and the server-level
@@ -863,14 +868,20 @@ func (p *parser) evalList(raw string, pending int) ([]listEntry, error) {
 	if err := p.fits(pending, len(lines)); err != nil {
 		return nil, err
 	}
+	// Re-review R1: the entries of a list a user other than root can change name paths of that
+	// user's choice; none is walked, listed or opened.
+	writable := p.in.WritableFile != nil && p.in.WritableFile(raw)
 	entries := make([]listEntry, 0, len(lines))
 	for i := range lines {
 		l := &lines[i]
 		e := listEntry{line: l}
 		path, joined, reason := p.resolve(l.path, l.dollar)
-		if path == "" {
+		switch {
+		case path == "":
 			e.pair = Pair{CertRaw: l.raw, Unsupported: reason}
-		} else {
+		case writable:
+			e.pair = Pair{CertRaw: l.raw, Unsupported: ReasonConfigFileWritable}
+		default:
 			d, err := p.readDir(path)
 			if err != nil {
 				return nil, err

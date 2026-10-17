@@ -58,8 +58,9 @@ func haproxyValid(err error) bool {
 // is read. When haproxy.cfg can be changed by a user other than root, nothing it names is read,
 // listed or opened (review I1: Input.Writable). When it or a read crt-list can, every pair becomes
 // config_file_writable (MarkWritable, instead of ResolveKeys: no certificate file is opened) and
-// every later failure reads "changed" naming that file. A crt-list or directory that cannot be
-// read is an untrusted configuration, unless every naming of it lies in an uncertain region
+// every later failure reads "changed" naming that file; the entries of a writable crt-list are
+// not looked at (re-review R1). A crt-list that cannot be read is an untrusted configuration,
+// unless it is absent or not a regular file and every naming of it lies in an uncertain region
 // (review I2: a conditional pair and config_file_not_read). Nothing is written.
 func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, error) {
 	var meta dumpMeta
@@ -107,12 +108,14 @@ func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, 
 	// crt and crt-list argument into a config_file_writable pair of the text as written.
 	r.cfgWritable = len(r.writable) > 0
 	cfg, err := haproxyconf.Parse(haproxyconf.Input{Path: haproxyConfPath, Data: data, Version: meta.version,
-		ReadFile: r.readList, ReadDir: r.readDir, Writable: r.cfgWritable})
+		ReadFile: r.readList, ReadDir: r.readDir, Writable: r.cfgWritable, WritableFile: r.isWritable})
 	if err != nil {
 		var ce *configError
 		switch {
-		case errors.As(err, &ce): // a read failure, already masked
-			return invalid(ce)
+		case errors.As(err, &ce):
+			// A read failure, masked when it happened; masked again here for one Parse cached
+			// before a writable file was read (re-review R3).
+			return invalid(r.masked(ce))
 		case len(r.writable) > 0:
 			// As for a read failure after a writable file: the user's configuration could have
 			// named any root-only file, so the reason must not describe it.
@@ -160,15 +163,23 @@ type haproxyReader struct {
 // ask when Input.Writable is set).
 var errNamedByWritable = errors.New("named by a haproxy.cfg a user other than root can change")
 
-// soft wraps a read failure of a file or directory (not a bound) with haproxyconf.ErrNotRead, so
-// that Parse makes a naming in an uncertain region one conditional pair (review I2). A masked
-// failure ("changed" after a writable file) and an unsupported one (a bound) stay hard.
+// soft wraps the failure of a crt-list that is absent or not a regular file with
+// haproxyconf.ErrNotRead, so that Parse makes a naming in an uncertain region one conditional
+// pair (review I2). Every other failure stays hard (re-review R2): a file that is not
+// root-controlled (a list in /tmp) may be loaded with certificates another user chose if HAProxy
+// takes that region, and must read untrusted; so do masked failures ("changed" after a writable
+// file) and bounds.
 func (r *haproxyReader) soft(e *configError) error {
-	if len(r.writable) == 0 && e.class == helperproto.ConfigErrUntrusted {
+	if len(r.writable) == 0 && e.class == helperproto.ConfigErrUntrusted &&
+		(e.reason == helperproto.ConfigReasonMissing || e.reason == helperproto.ConfigReasonNotRegular) {
 		return fmt.Errorf("%w: %w", haproxyconf.ErrNotRead, e)
 	}
 	return e
 }
+
+// isWritable is Parse's WritableFile: a crt-list readList read that a user other than root can
+// change (re-review R1).
+func (r *haproxyReader) isWritable(p string) bool { return slices.Contains(r.writable, p) }
 
 // readList is Parse's ReadFile: a crt-list through readFile.
 func (r *haproxyReader) readList(p string) ([]byte, error) {
@@ -206,8 +217,7 @@ func (r *haproxyReader) readFile(p string) ([]byte, *configError) {
 // readDir is Parse's ReadDir: listRootDir, with the names of all listings counted in the read
 // budget (Task 5 carry: 256 directories of 4096 long names must not reach Parse). A directory that
 // walked but cannot be listed is untrusted "changed" naming it (review M3: a read error, as
-// readConfigFile names one), soft for an uncertain naming; too many entries is unsupported
-// too_complex.
+// readConfigFile names one); too many entries is unsupported too_complex.
 func (r *haproxyReader) readDir(p string) ([]string, bool, error) {
 	if r.cfgWritable {
 		return nil, false, errNamedByWritable
@@ -217,7 +227,7 @@ func (r *haproxyReader) readDir(p string) ([]string, bool, error) {
 	case errors.Is(err, errTooManyEntries):
 		return nil, false, r.masked(unsupported(helperproto.ConfigReasonTooComplex, ""))
 	case err != nil:
-		return nil, false, r.soft(r.masked(untrusted(helperproto.ConfigReasonChanged, p)))
+		return nil, false, r.masked(untrusted(helperproto.ConfigReasonChanged, p))
 	}
 	for _, n := range names {
 		if r.total += len(n); r.total > haproxyReadBudget {

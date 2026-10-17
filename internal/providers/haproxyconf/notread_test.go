@@ -126,3 +126,24 @@ func TestMarkWritableConditional(t *testing.T) {
 	assert.Equal(t, []Pair{uns("/c/x.pem", ReasonConfigFileWritable), uns("rel", ReasonPathNotAllowed),
 		{Cert: "/c/a.pem", CertRaw: "/c/a.pem", Unsupported: ReasonConfigFileWritable}}, c.Servers[0].Pairs)
 }
+
+// Re-review R1 of Task 6: the entries of a crt-list WritableFile reports are not looked at.
+func TestParseWritableFileEntries(t *testing.T) {
+	fs := newFS()
+	fs.files["/l/w.lst"] = "/root/keys a.test\n/root/s.pem\n$X/a.pem\n"
+	fs.files["/l/r.lst"] = "/c/dir\n"
+	fs.dirs["/c/dir"] = []string{"a.pem"}
+	in := fs.input(fe("  bind :1 ssl crt-list /l/w.lst crt-list /l/r.lst"), "2.6.12")
+	in.WritableFile = func(p string) bool { return p == "/l/w.lst" }
+	c, err := Parse(in)
+	require.NoError(t, err)
+	require.Len(t, c.Servers, 4)
+	assert.Equal(t, []Pair{uns("/root/keys", ReasonConfigFileWritable)}, c.Servers[0].Pairs)
+	assert.Equal(t, []string{"a.test"}, c.Servers[0].Names)
+	assert.Equal(t, []Pair{uns("/root/s.pem", ReasonConfigFileWritable)}, c.Servers[1].Pairs)
+	assert.Equal(t, []Pair{uns("$X/a.pem", ReasonVariable)}, c.Servers[2].Pairs)
+	assert.Equal(t, []Pair{uns("/c/dir", ReasonPathNotAllowed)}, c.Servers[3].Pairs, "a root list's entries are still looked at")
+	assert.Zero(t, fs.dirCalls["/root/keys"])
+	assert.Zero(t, fs.dirCalls["/root/s.pem"])
+	assert.Equal(t, 1, fs.dirCalls["/c/dir"])
+}

@@ -995,3 +995,95 @@ func TestHAProxyDumpKeyInCertIsBounded(t *testing.T) {
 	assert.NotContains(t, *seen, last, "the certificate past the bound is never opened")
 	assert.Contains(t, *seen, fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles-1))
 }
+
+// Re-review R1: the entries of a crt-list a user other than root can write name paths of that
+// user's choice, even under a root-owned haproxy.cfg. None is walked, listed or opened: a
+// root-only directory, a file, an absent path and a directory over MaxDirEntries all give the
+// same config_file_writable pair of the entry's text, and the dump stands.
+func TestHAProxyDumpWritableCrtListReadsNothingItNames(t *testing.T) {
+	w := newHAProxyWorld(t)
+	w.f.mkdir("/root/keys", 0o700)
+	w.f.write("/root/keys/id_ed25519", "k", 0o600)
+	w.f.write("/root/secret.pem", "SECRET", 0o600)
+	w.f.mkdir("/etc/haproxy/big", 0o755)
+	for i := range haproxyconf.MaxDirEntries + 1 {
+		w.f.write(fmt.Sprintf("/etc/haproxy/big/%04d.pem", i), "", 0o644)
+	}
+	entries := []string{"/root/keys", "/root/secret.pem", "/root/absent.pem", "/etc/haproxy/big"}
+	w.f.write(haproxyList, strings.Join(entries, " x.test\n")+" x.test\n", 0o666)
+	seen := w.recordOpens()
+	code, m := w.dump(t)
+	require.Equal(t, 0, code, "%v", m)
+	require.Equal(t, true, m["config_valid"], "%v", m)
+	assert.Equal(t, []any{haproxyList}, m["writable"])
+	assert.Zero(t, w.walked["root"], "/root is never walked: %v", w.walked)
+	assert.Zero(t, w.walked["big"], "the big directory is never walked: %v", w.walked)
+	for _, p := range *seen {
+		assert.False(t, strings.HasPrefix(p, "/root") || strings.HasPrefix(p, "/etc/haproxy/big"), "opened %s", p)
+	}
+	servers := asList(m["servers"])
+	require.Len(t, servers, 1+len(entries))
+	for i, e := range entries {
+		assert.Equal(t, []map[string]any{{"cert": "", "key": "", "inherited": false,
+			"unsupported": haproxyconf.ReasonConfigFileWritable, "raw": e}}, serverPairs(servers[1+i]), e)
+	}
+	out := w.f.out.String()
+	for _, s := range []string{"id_ed25519", "SECRET", "0000.pem"} {
+		assert.NotContains(t, out, s)
+	}
+}
+
+// Re-review R2: only an absent or not-regular crt-list is softened in an uncertain region; one
+// that is not root-controlled (in a 1777 /tmp) stays untrusted there too.
+func TestHAProxyDumpUnsafeCrtListInUncertainRegion(t *testing.T) {
+	region := func(list string) string {
+		return haproxyCfg + ".if defined(PROD)\nfrontend z\n    bind :9445 ssl crt-list " + list + "\n.endif\n"
+	}
+	t.Run("in /tmp", func(t *testing.T) {
+		w := newHAProxyWorld(t)
+		w.f.mkdir("/tmp", 0o1777)
+		w.f.write("/tmp/x.lst", "/etc/haproxy/certs/a.pem\n", 0o644)
+		w.f.write(haproxyConfPath, region("/tmp/x.lst"), 0o644)
+		class, reason, file := w.refusal(t)
+		assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonNotRootControlled, "/tmp/x.lst"}, []string{class, reason, file})
+	})
+	t.Run("not a regular file is softened", func(t *testing.T) {
+		w := newHAProxyWorld(t)
+		w.f.mkdir("/etc/haproxy/lists/dir.lst", 0o755)
+		w.f.write(haproxyConfPath, region("/etc/haproxy/lists/dir.lst"), 0o644)
+		code, m := w.dump(t)
+		require.Equal(t, 0, code, "%v", m)
+		assert.Equal(t, true, m["config_valid"], "%v", m)
+		assert.Equal(t, []any{haproxyconf.WarnConfigFileNotRead}, m["warnings"])
+	})
+}
+
+// Re-review R3: a failure Parse cached before a writable file was read is masked when it ends
+// the dump after one: "changed" naming the writable file.
+func TestHAProxyDumpCachedFailureIsMasked(t *testing.T) {
+	w := newHAProxyWorld(t)
+	gone := "/etc/haproxy/lists/gone.lst"
+	w.f.write(haproxyConfPath, ".if defined(X)\nfrontend z\n    bind :9445 ssl crt-list "+gone+"\n.endif\n"+
+		haproxyCfg+"frontend y\n    bind :9446 ssl crt-list "+gone+"\n", 0o644)
+	require.NoError(t, os.Chmod(w.f.host(haproxyList), 0o666))
+	class, reason, file := w.refusal(t)
+	assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, haproxyList}, []string{class, reason, file})
+}
+
+// Review M3: a directory that walks but cannot be listed (its entries cannot be looked up: mode
+// 0444, no search bit) is untrusted "changed" naming it. Root ignores the mode bits, so the
+// root-only suite skips it.
+func TestHAProxyDumpUnlistableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a 0444 directory")
+	}
+	w := newHAProxyWorld(t)
+	d := "/etc/haproxy/ro"
+	w.f.mkdir(d, 0o755)
+	w.f.write(d+"/a.pem", "", 0o644)
+	require.NoError(t, os.Chmod(w.f.host(d), 0o444))
+	t.Cleanup(func() { _ = os.Chmod(w.f.host(d), 0o755) })
+	w.f.write(haproxyConfPath, "frontend f\n    bind :9443 ssl crt "+d+"\n", 0o644)
+	class, reason, file := w.refusal(t)
+	assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonChanged, d}, []string{class, reason, file})
+}
