@@ -11,7 +11,7 @@
 # apache2 is the distribution's Apache httpd with its default configuration: installed, never
 # started (discovery only reads its configuration; Nginx owns ports 80 and 443); mod_ssl is enabled
 # by the test (a2enmod ssl), not in a layer.
-FROM ubuntu:22.04@sha256:5ec03bb3441e8b0bf3b4f9cd4629a1ae763010dc3035bb8da3ae6cf026486401
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server sudo procps nginx apache2 openssl ssl-cert \
  && rm -rf /var/lib/apt/lists/* \
