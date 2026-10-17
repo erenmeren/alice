@@ -20,6 +20,7 @@ COPY internal/providers/linuxssh/helperproto/ internal/providers/linuxssh/helper
 COPY internal/providers/linuxssh/sshdconf/ internal/providers/linuxssh/sshdconf/
 COPY internal/providers/nginx/nginxconf/ internal/providers/nginx/nginxconf/
 COPY internal/providers/apacheconf/ internal/providers/apacheconf/
+COPY internal/providers/haproxyconf/ internal/providers/haproxyconf/
 # Built exactly as "make helper" and deploy/Dockerfile build it, so its checksum is the one the
 # e2e Alice image embeds and the setup script accepts it (R37 item 2).
 RUN CGO_ENABLED=0 GOOS=linux GOAMD64=v1 GOARM64=v8.0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/alice-helper ./cmd/alice-helper

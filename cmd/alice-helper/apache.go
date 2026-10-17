@@ -202,7 +202,7 @@ func (s *sys) readApacheFiles(tree []apacheconf.Included) (map[string][]byte, []
 		if _, done := files[e.Path]; done {
 			continue // Apache reads a file listed twice twice; Parse gets its content once
 		}
-		data, st, cerr := s.readApacheFile(e.Path, apacheReadBudget-total)
+		data, st, cerr := s.readConfigFile(e.Path, apacheReadBudget-total)
 		if cerr != nil {
 			return nil, nil, masked(cerr)
 		}
@@ -215,9 +215,10 @@ func (s *sys) readApacheFiles(tree []apacheconf.Included) (map[string][]byte, []
 	return files, writable, nil
 }
 
-// readApacheFile reads one configuration file of at most room bytes. A file that changes size
-// while it is read is untrusted "changed".
-func (s *sys) readApacheFile(name string, room int) ([]byte, unix.Stat_t, *configError) {
+// readConfigFile reads one configuration file of at most room bytes through walkRoot and
+// openLinked(true) (apache-dump's include tree; haproxy-dump's haproxy.cfg and crt-lists). A file
+// that changes size while it is read is untrusted "changed".
+func (s *sys) readConfigFile(name string, room int) ([]byte, unix.Stat_t, *configError) {
 	var st unix.Stat_t
 	rf, err := s.walkRoot(name)
 	if err != nil {

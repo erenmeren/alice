@@ -118,6 +118,9 @@ broken line
 		runApache: func(context.Context, ...string) ([]byte, []byte, error) {
 			return nil, nil, &fs.PathError{Op: "fork/exec", Path: apache2ctlPath, Err: fs.ErrNotExist}
 		},
+		runHAProxy: func(context.Context, ...string) ([]byte, []byte, error) {
+			return nil, nil, &fs.PathError{Op: "fork/exec", Path: haproxyPath, Err: fs.ErrNotExist}
+		},
 		statfs:  func(int) (int64, error) { return 1 << 30, nil },
 		fsMagic: func(int) (int64, error) { return unix.EXT4_SUPER_MAGIC, nil },
 		dial:    (&net.Dialer{}).DialContext,

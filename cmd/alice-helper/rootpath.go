@@ -157,7 +157,12 @@ func (s *sys) resolveRoot(p string) (rootFile, error) {
 // walkRoot is resolveRoot for any absolute path without a ".." element: "." and empty elements
 // (as nginx may print a file name, "/etc/nginx/./x" or "/etc/nginx//x") are skipped, as the
 // kernel does.
-func (s *sys) walkRoot(p string) (rootFile, error) {
+func (s *sys) walkRoot(p string) (rootFile, error) { return s.walk(p, false) }
+
+// walk is walkRoot; with dirLast, a directory as the last element (also one a link leads to) is
+// not refused but kept like a file: the rootFile holds its parent and its name, unopened, and the
+// caller opens and checks it (openRootDir).
+func (s *sys) walk(p string, dirLast bool) (rootFile, error) {
 	if !strings.HasPrefix(p, "/") || !helperproto.ValidArg(p) {
 		return rootFile{}, errEscaped
 	}
@@ -228,6 +233,9 @@ func (s *sys) walkRoot(p string) (rootFile, error) {
 			pending = append(strings.Split(target, "/"), pending...)
 		case unix.S_IFDIR:
 			if last {
+				if dirLast {
+					return s.keepLast(stack, names, c, symlinked), nil
+				}
 				return fail(errNotRegular)
 			}
 			if !s.dirOK(cst) {
@@ -259,6 +267,13 @@ func (s *sys) walkRoot(p string) (rootFile, error) {
 			}
 			return s.keepLast(stack, names, c, symlinked), nil
 		}
+	}
+	if dirLast && len(stack) > 1 {
+		// A link's target ended in "/" or "/.": the directory just opened is the last element.
+		// stack holds "/" and one descriptor per name: its parent is the one before it.
+		_ = unix.Close(stack[len(stack)-1])
+		n := len(names) - 1
+		return s.keepLast(stack[:n+1], names[:n], names[n], symlinked), nil
 	}
 	return fail(errEscaped) // the path ended at a directory ("x/." or a link to a directory)
 }

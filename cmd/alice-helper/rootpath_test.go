@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
+
+	"alice/internal/providers/haproxyconf"
 )
 
 func (f *fixture) symlink(target, guest string) {
@@ -343,4 +346,121 @@ func TestProductionFSMagic(t *testing.T) {
 	assert.NoError(t, s.normalFS(tmp))
 	assert.ErrorIs(t, (&sys{fsMagic: func(int) (int64, error) { return 0, unix.EBADF }}).normalFS(tmp), errSpecialFS,
 		"an unreadable file system type is refused")
+}
+
+// C9: listRootDir walks to the directory as walkRoot walks to a file, checks the directory itself
+// and lists only regular entries and links that walk to a regular file.
+func TestListRootDir(t *testing.T) {
+	setup := func(t *testing.T) *fixture {
+		f := newFixture(t)
+		for _, d := range []string{"/etc/haproxy", "/etc/haproxy/certs", "/etc/haproxy/certs/sub", "/srv"} {
+			f.mkdir(d, 0o755)
+		}
+		f.write("/etc/haproxy/certs/a.pem", "a", 0o644)
+		f.symlink("a.pem", "/etc/haproxy/certs/link.pem")
+		require.NoError(t, unix.Mkfifo(f.host("/etc/haproxy/certs/fifo"), 0o644))
+		return f
+	}
+	f := setup(t)
+	names, isDir, err := f.s.listRootDir("/etc/haproxy/certs")
+	require.NoError(t, err)
+	assert.True(t, isDir)
+	assert.Equal(t, []string{"a.pem", "link.pem"}, names)
+
+	for name, tc := range map[string]struct {
+		change func(f *fixture)
+		dir    string
+	}{
+		"a file":                    {func(*fixture) {}, "/etc/haproxy/certs/a.pem"},
+		"a link to a file":          {func(*fixture) {}, "/etc/haproxy/certs/link.pem"},
+		"missing":                   {func(*fixture) {}, "/etc/haproxy/none"},
+		"below a file":              {func(*fixture) {}, "/etc/haproxy/certs/a.pem/x"},
+		"a FIFO":                    {func(*fixture) {}, "/etc/haproxy/certs/fifo"},
+		"not a helper path":         {func(*fixture) {}, "/etc/haproxy/../haproxy/certs"},
+		"the root":                  {func(*fixture) {}, "/"},
+		"a 0777 directory":          {func(f *fixture) { require.NoError(t, os.Chmod(f.host("/etc/haproxy/certs"), 0o777)) }, "/etc/haproxy/certs"},
+		"a 1777 directory":          {func(f *fixture) { require.NoError(t, os.Chmod(f.host("/etc/haproxy/certs"), 0o1777)) }, "/etc/haproxy/certs"},
+		"a 0775 directory":          {func(f *fixture) { require.NoError(t, os.Chmod(f.host("/etc/haproxy/certs"), 0o775)) }, "/etc/haproxy/certs"},
+		"a group-writable parent":   {func(f *fixture) { require.NoError(t, os.Chmod(f.host("/etc/haproxy"), 0o775)) }, "/etc/haproxy/certs"},
+		"a link loop":               {func(f *fixture) { f.symlink("loop", "/etc/haproxy/loop") }, "/etc/haproxy/loop"},
+		"a link to a 1777 dir":      {func(f *fixture) { f.mkdir("/srv/tmp", 0o1777); f.symlink("/srv/tmp", "/etc/haproxy/t") }, "/etc/haproxy/t"},
+		"a link to a missing dir":   {func(f *fixture) { f.symlink("/srv/none", "/etc/haproxy/t") }, "/etc/haproxy/t"},
+		"a link to the root (dot)":  {func(f *fixture) { f.symlink("/.", "/etc/haproxy/t") }, "/etc/haproxy/t"},
+		"a link escaping by dotdot": {func(f *fixture) { f.symlink("../../..", "/etc/haproxy/t") }, "/etc/haproxy/t"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := setup(t)
+			tc.change(f)
+			names, isDir, err := f.s.listRootDir(tc.dir)
+			require.NoError(t, err)
+			assert.False(t, isDir)
+			assert.Nil(t, names)
+		})
+	}
+
+	t.Run("a link to a directory", func(t *testing.T) {
+		for _, target := range []string{"certs", "/etc/haproxy/certs", "certs/", "certs/.", "/etc/haproxy/certs/sub/.."} {
+			f := setup(t)
+			f.symlink(target, "/etc/haproxy/live")
+			names, isDir, err := f.s.listRootDir("/etc/haproxy/live")
+			require.NoError(t, err, target)
+			assert.True(t, isDir, target)
+			assert.Equal(t, []string{"a.pem", "link.pem"}, names, target)
+		}
+	})
+	t.Run("links inside", func(t *testing.T) {
+		f := setup(t)
+		f.mkdir("/srv/open", 0o777)
+		f.write("/srv/open/u.pem", "u", 0o644)
+		f.write("/srv/r.pem", "r", 0o644)
+		f.symlink("sub", "/etc/haproxy/certs/dir.pem")            // a directory: not followed
+		f.symlink("/srv/open/u.pem", "/etc/haproxy/certs/u.pem")  // through a 0777 directory
+		f.symlink("/srv/r.pem", "/etc/haproxy/certs/r.pem")       // elsewhere, root-controlled
+		f.symlink("/srv/gone.pem", "/etc/haproxy/certs/gone.pem") // dangling
+		f.symlink("/proc/self/x", "/etc/haproxy/certs/proc.pem")  // missing under the root
+		names, isDir, err := f.s.listRootDir("/etc/haproxy/certs")
+		require.NoError(t, err)
+		assert.True(t, isDir)
+		assert.Equal(t, []string{"a.pem", "link.pem", "r.pem"}, names)
+	})
+	t.Run("special file system", func(t *testing.T) {
+		f := setup(t)
+		certs := f.host("/etc/haproxy/certs")
+		f.s.fsMagic = func(fd int) (int64, error) {
+			if p, err := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", fd)); err == nil && p == certs {
+				return unix.FUSE_SUPER_MAGIC, nil
+			}
+			return unix.EXT4_SUPER_MAGIC, nil
+		}
+		_, isDir, err := f.s.listRootDir("/etc/haproxy/certs")
+		require.NoError(t, err)
+		assert.False(t, isDir)
+	})
+	t.Run("swapped for a link before the open", func(t *testing.T) {
+		f := setup(t)
+		f.mkdir("/srv/evil", 0o755)
+		f.s.walkHook = func(name string) {
+			if name == "certs" {
+				require.NoError(t, os.Rename(f.host("/etc/haproxy/certs"), f.host("/etc/haproxy/old")))
+				f.symlink("/srv/evil", "/etc/haproxy/certs")
+			}
+		}
+		_, isDir, err := f.s.listRootDir("/etc/haproxy/certs")
+		require.NoError(t, err)
+		assert.False(t, isDir)
+	})
+	t.Run("too many entries", func(t *testing.T) {
+		f := setup(t)
+		for i := range haproxyconf.MaxDirEntries - 3 { // a.pem, link.pem, fifo and sub are already there: 4097
+			f.write(fmt.Sprintf("/etc/haproxy/certs/%04d.pem", i), "", 0o644)
+		}
+		names, isDir, err := f.s.listRootDir("/etc/haproxy/certs")
+		assert.ErrorIs(t, err, errTooManyEntries)
+		assert.True(t, isDir)
+		assert.Nil(t, names)
+		require.NoError(t, os.Remove(f.host("/etc/haproxy/certs/0000.pem")))
+		names, _, err = f.s.listRootDir("/etc/haproxy/certs")
+		require.NoError(t, err)
+		assert.Len(t, names, haproxyconf.MaxDirEntries-2)
+	})
 }

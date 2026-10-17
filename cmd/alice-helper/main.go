@@ -80,7 +80,7 @@ func productionSys() *sys {
 	return s
 }
 
-// haproxyPath is HAProxy's program (Ruling 2); haproxy-dump (Task 6) runs it through runHAProxy.
+// haproxyPath is HAProxy's program (Ruling 2); haproxy-dump runs it through runHAProxy.
 const haproxyPath = "/usr/sbin/haproxy"
 
 // sshdPath is the OpenSSH server binary on every supported distribution (spec §12.1).
