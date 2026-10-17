@@ -767,9 +767,10 @@ async function checkWidths(page: Page, screen: string, widths: readonly number[]
   }
 }
 
-export async function seriousViolations(page: Page, only?: Locator): Promise<string[]> {
-  // Let opening dialogs finish their fade-in first: axe measures colors mid-transition as
-  // too pale. Endless animations (loaders) never finish, so they are not waited for.
+// settleAnimations waits until every finite animation and transition on the page has ended. Endless animations
+// (loaders) never finish, so they are not waited for. document.getAnimations() flushes styles first, so a transition
+// that a viewport change has just started is included.
+export async function settleAnimations(page: Page): Promise<void> {
   await page.evaluate(() =>
     Promise.all(
       document
@@ -778,6 +779,12 @@ export async function seriousViolations(page: Page, only?: Locator): Promise<str
         .map((a) => a.finished.catch(() => undefined)),
     ),
   );
+}
+
+export async function seriousViolations(page: Page, only?: Locator): Promise<string[]> {
+  // Let opening dialogs finish their fade-in first: axe measures colors mid-transition as
+  // too pale.
+  await settleAnimations(page);
   const axe = new AxeBuilder({ page });
   if (only) {
     await only.evaluate((el) => el.setAttribute('data-axe-only', ''));
