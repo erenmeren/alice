@@ -1191,7 +1191,9 @@ func (h *rnHost) testWritableConfig(t *testing.T) {
 // testUntrustedProgram (Ruling 15): a group-writable /usr/sbin/nginx is never run as root.
 // Discovery reports the configuration untrusted naming the binary, the connection test reports it
 // invalid ("untrusted"), and a deployment is refused before anything is written
-// (nginx.config_invalid). Mode 0755 is put back and discovery works again.
+// (nginx.config_invalid). Mode 0755 is put back and discovery works again. Then the same for a
+// /usr/sbin/nginx owned by a user other than root (uid 65534, mode 0755): the owner check of the
+// root-control pre-check, outside the root-only helper suite. The owner is put back.
 func (h *rnHost) testUntrustedProgram(t *testing.T) {
 	c := h.location(rnWWW)
 	same := h.unchangedFiles(rnWWW)
@@ -1214,6 +1216,28 @@ func (h *rnHost) testUntrustedProgram(t *testing.T) {
 	h.refusedUnchanged(out, err, "nginx.config_invalid", same)
 	assert.Empty(t, log)
 	h.sh("chmod 0755 /usr/sbin/nginx")
+	res, _ = h.discover(false)
+	require.NotNil(t, res.WebServer)
+	assert.True(t, res.WebServer.ConfigValid, "%+v", *res.WebServer)
+
+	owner := strings.TrimSpace(h.sh("stat -c %u:%g /usr/sbin/nginx"))
+	require.Equal(t, "0:0", owner)
+	h.sh("chown 65534 /usr/sbin/nginx")
+	defer h.sh("chown 0:0 /usr/sbin/nginx && chmod 0755 /usr/sbin/nginx")
+	require.Equal(t, "65534 755", strings.TrimSpace(h.sh("stat -c '%u %a' /usr/sbin/nginx")), "only the owner changed")
+	res, _ = h.discover(false)
+	require.NotNil(t, res.WebServer)
+	assert.False(t, res.WebServer.ConfigValid)
+	assert.Equal(t, providers.ConfigErrUntrusted, res.WebServer.ConfigError)
+	assert.Equal(t, providers.ConfigReasonNotRootControlled, res.WebServer.ConfigErrorReason)
+	assert.Equal(t, "/usr/sbin/nginx", res.WebServer.ConfigErrorFile)
+	assert.Empty(t, res.Certificates)
+	rep, err = h.session(nil).TestConnection(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, rep.WebServer)
+	assert.False(t, rep.WebServer.ConfigValid)
+	assert.Equal(t, providers.ConfigErrUntrusted, rep.WebServer.ConfigError)
+	h.sh("chown 0:0 /usr/sbin/nginx && chmod 0755 /usr/sbin/nginx")
 	res, _ = h.discover(false)
 	require.NotNil(t, res.WebServer)
 	assert.True(t, res.WebServer.ConfigValid, "%+v", *res.WebServer)
