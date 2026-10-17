@@ -128,6 +128,8 @@ func TestCloseEndsOpenConnectionsAndIsIdempotent(t *testing.T) {
 	defer func() { _ = c.Close() }()
 	_, err = c.Write(goClientHello(t))
 	require.NoError(t, err)
+	// Dial returns once the kernel queues the connection; Close before Accept would drop it unlogged.
+	require.Eventually(t, func() bool { return f.Server(KindSlowLoris).Accepted() == 1 }, 10*time.Second, time.Millisecond)
 	done := make(chan error, 1)
 	go func() { done <- f.Close() }()
 	select {
