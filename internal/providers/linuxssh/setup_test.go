@@ -70,11 +70,27 @@ func TestSudoersApacheProfile(t *testing.T) {
 		"\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_APACHE_ONLY\n"
 	assert.Equal(t, want, got)
 	assert.NotContains(t, got, "nginx", "an Apache server never gains nginx subcommands")
-	_, err = Sudoers("haproxy")
-	assert.ErrorIs(t, err, errUnknownProfile)
 	script, err := SetupScript("apache", "line", true)
 	require.NoError(t, err)
 	assert.Contains(t, script, "profile: apache")
+}
+
+func TestSudoersHAProxyProfile(t *testing.T) {
+	got, err := Sudoers("haproxy")
+	require.NoError(t, err)
+	want := sudoersHead + "\nCmnd_Alias ALICE_HAPROXY_ONLY = \\\n    /usr/local/libexec/alice-helper haproxy-dump\n" +
+		"\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_HAPROXY_ONLY\n"
+	assert.Equal(t, want, got)
+	assert.NotContains(t, got, "nginx", "a HAProxy server never gains nginx subcommands")
+	assert.NotContains(t, got, "apache", "a HAProxy server never gains apache subcommands")
+	_, err = Sudoers("iis")
+	assert.ErrorIs(t, err, errUnknownProfile)
+	for _, p := range []string{"linux", "nginx", "apache", "haproxy"} {
+		assert.Contains(t, errUnknownProfile.Error(), `"`+p+`"`)
+	}
+	script, err := SetupScript("haproxy", "line", true)
+	require.NoError(t, err)
+	assert.Contains(t, script, "profile: haproxy")
 }
 
 // wantOptions is SEC-082 plus no-pty and no-user-rc.

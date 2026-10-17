@@ -992,6 +992,7 @@
     "web_server_profile_missing": "Bu sunucuda {{software}} izinleri kurulu değil, bu yüzden Alice web sitelerini okuyamıyor. Sunucu hazırlığı için {{software}} komutlarını çalıştırın, ardından Keşfet düğmesini seçin.",
     "config_file_writable": "{{software}} tarafından kullanılan bir yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
     "too_many_files": "Bu sunucu Alice'in listelediğinden fazla sertifika dosyası kullanıyor, bu yüzden bazıları okunmadı.",
+    "config_dir_not_read": "Alice bu sunucunun bir yapılandırma klasörünü listeleyemedi, bu yüzden içindeki dosyalar okunmadı.",
     "locations_dropped": "Bu sunucuda Alice'in listelediğinden fazla web sitesi var, bu yüzden liste eksik ve hiçbir web sitesi artık bulunmuyor olarak işaretlenmiyor.",
     "list_truncated": "Alice bu sunucunun bazı uzun listelerini (örneğin kullanıcı hesaplarını, anahtar dosyalarını veya web sunucusu yapılandırmasının bölümlerini) kısalttı, bu yüzden gösterilenler eksik.",
     "key_mode_open": "Bir özel anahtar dosyasını gerekenden fazla kullanıcı okuyabiliyor.",

@@ -35,8 +35,11 @@ const (
 	// whose first block cannot be read.
 	// Protocol 8 (Apache, Phase B): apache-dump; nothing else changed: a protocol 6 helper serves every
 	// other operation (MinProtocol). 1.7.0 is the first helper that names it.
-	Protocol   = 8
-	Version    = "1.7.0"
+	// Protocol 9 (HAProxy, Phase C): haproxy-dump and the config_dir_not_read warning; nothing else
+	// changed: a protocol 6 helper serves every other operation (MinProtocol). 1.8.0 is the first
+	// helper that names them.
+	Protocol   = 9
+	Version    = "1.8.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -52,6 +55,9 @@ const HTTP01MinProtocol = 7
 
 // ApacheMinProtocol is the helper protocol an Apache server needs (apache-dump).
 const ApacheMinProtocol = 8
+
+// HAProxyMinProtocol is the helper protocol a HAProxy server needs (haproxy-dump).
+const HAProxyMinProtocol = 9
 
 // HelperBudget bounds one helper call on the server (R37 item 17): the helper gives up before
 // Alice's longest command budget (60 s) ends, with a 10 s margin, and never replaces a file after
@@ -129,6 +135,9 @@ const (
 	WarnMailTLS            = "mail_tls"             // TLS in mail {} is listed but not supported
 	WarnConfigFileWritable = "config_file_writable" // a configuration file can be changed by users other than root
 	WarnTooManyFiles       = "too_many_files"       // more referenced files than MaxServerFiles
+	// WarnConfigDirNotRead (protocol 9): a configuration directory of the server (haproxy's conf.d)
+	// could not be listed, so files in it were not read.
+	WarnConfigDirNotRead = "config_dir_not_read"
 	// WarnCertificateBlockDropped: a block labelled CERTIFICATE in a certificate file is not an
 	// X.509 certificate (or carries PEM headers); the helper dropped it and returned the others.
 	WarnCertificateBlockDropped = "certificate_block_dropped"
@@ -154,12 +163,14 @@ const (
 	SubNginxFence = "nginx-fence"
 	// SubApacheDump (protocol 8) is the Apache counterpart of nginx-dump: no arguments, read-only.
 	SubApacheDump = "apache-dump"
+	// SubHAProxyDump (protocol 9) is the HAProxy counterpart of nginx-dump: no arguments, read-only.
+	SubHAProxyDump = "haproxy-dump"
 )
 
 // Phase 4 error codes.
 const (
 	CodeNginxNotFound = "NGINX_NOT_FOUND" // /usr/sbin/nginx does not exist (F-20)
-	// CodeSoftwareNotFound: the web server software of a dump subcommand is not installed (apache-dump).
+	// CodeSoftwareNotFound: the web server software of a dump subcommand is not installed (apache-dump, haproxy-dump).
 	CodeSoftwareNotFound = "SOFTWARE_NOT_FOUND"
 	CodeConfigInvalid    = "CONFIG_INVALID" // nginx -T/-t fails before anything changed (F-02)
 	CodeConfigChanged    = "CONFIG_CHANGED" // the paths are not a supported pair of the current configuration
@@ -498,7 +509,7 @@ type DumpFile struct {
 	FreeBytes int64  `json:"free_bytes"`
 }
 
-// ServerDumpResponse answers a web server's dump subcommand ("nginx-dump", "apache-dump").
+// ServerDumpResponse answers a web server's dump subcommand ("nginx-dump", "apache-dump", "haproxy-dump").
 type ServerDumpResponse struct {
 	OK          bool   `json:"ok"`
 	Version     string `json:"version"`

@@ -548,7 +548,7 @@ func TestMirroredSetsAreCompleteAgainstTheirSources(t *testing.T) {
 		providers.StepNameRollbackConfigTest, providers.StepNameRollbackReload,
 	}), valueSet(stringConsts(t, hp, "Step")), "helper steps")
 
-	// The nginx-dump warnings; the first eight Warn* of helperproto belong to linuxssh (three are
+	// The dump warnings of the web servers; the first eight Warn* of helperproto belong to linuxssh (three are
 	// Alice's for unlisted accounts, AUD-03).
 	warns := stringConsts(t, hp, "Warn")
 	for _, linux := range []string{"WarnSSHDUnreadable", "WarnDirectoryUsers", "WarnUnsupportedPath", "WarnTooManyUsers",
@@ -557,8 +557,8 @@ func TestMirroredSetsAreCompleteAgainstTheirSources(t *testing.T) {
 	}
 	assert.Equal(t, sortedCopy([]string{
 		providers.WarnStreamTLS, providers.WarnMailTLS, providers.WarnConfigFileWritable, providers.WarnTooManyFiles,
-		providers.WarnCertificateBlockDropped, providers.WarnKeyGroupOpen,
-	}), valueSet(warns), "nginx-dump warnings")
+		providers.WarnCertificateBlockDropped, providers.WarnKeyGroupOpen, providers.WarnConfigDirNotRead,
+	}), valueSet(warns), "web-server dump warnings")
 
 	reasons := stringConsts(t, "nginx/nginxconf/nginxconf.go", "Reason")
 	assert.Equal(t, sortedCopy([]string{

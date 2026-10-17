@@ -396,6 +396,7 @@ const (
 	WarnMailTLS                 = "mail_tls"             // TLS in mail {} is listed, not supported
 	WarnConfigFileWritable      = "config_file_writable" // a configuration file can be changed by users other than root
 	WarnTooManyFiles            = "too_many_files"       // more referenced files than the helper describes
+	WarnConfigDirNotRead        = "config_dir_not_read"  // a configuration directory could not be listed, so files in it were not read
 	// WarnListTruncated: Alice cut a list of the dump at its bound (server names, listens or
 	// servers of a location, writable files); what is shown is incomplete.
 	WarnListTruncated = "list_truncated"

@@ -14,6 +14,7 @@ func TestPreparationGuideQuotesTheSudoersFile(t *testing.T) {
 	for _, tc := range []struct{ guide, alias, profile string }{
 		{"nginx-host-preparation.md", "ALICE_NGINX_ONLY", "nginx"},
 		{"apache-host-preparation.md", "ALICE_APACHE_ONLY", "apache"},
+		{"haproxy-host-preparation.md", "ALICE_HAPROXY_ONLY", "haproxy"},
 	} {
 		t.Run(tc.profile, func(t *testing.T) {
 			doc, err := os.ReadFile("../../../docs/" + tc.guide)

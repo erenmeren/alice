@@ -46,6 +46,7 @@ export const WARNING_PARAMS: Readonly<Record<string, readonly string[]>> = {
   locations_dropped: [],
   list_truncated: [],
   too_many_files: [],
+  config_dir_not_read: [],
   stream_tls: [],
   mail_tls: [],
   config_file_writable: ['path'],

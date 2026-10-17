@@ -992,6 +992,7 @@
     "web_server_profile_missing": "The {{software}} permissions are not installed on this server, so Alice cannot read its websites. Run the {{software}} commands for server preparation, then choose Discover.",
     "config_file_writable": "A configuration file used by {{software}} can be changed by users other than root: {{path}}",
     "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
+    "config_dir_not_read": "Alice could not list a configuration folder of this server, so the files in it were not read.",
     "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
     "list_truncated": "Alice cut some long lists of this server (for example user accounts, key files or parts of the web server configuration), so what is shown is incomplete.",
     "key_mode_open": "A private key file can be read by more users than needed.",

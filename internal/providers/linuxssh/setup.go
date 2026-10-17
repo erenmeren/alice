@@ -9,7 +9,8 @@ import (
 
 // The sudoers file of spec §12.3. Profile "linux" allows only ALICE_COMMON (SSH-key work);
 // profile "nginx" also allows the Nginx certificate subcommands (from Phase 4), and profile
-// "apache" also allows the read-only apache-dump (protocol 8).
+// "apache" also allows the read-only apache-dump (protocol 8), and profile "haproxy" the read-only
+// haproxy-dump (protocol 9).
 const sudoersHead = `# Managed by Alice. Do not edit. Validate with: visudo -cf /etc/sudoers.d/alice
 Defaults:alice-svc !requiretty
 Defaults:alice-svc !lecture
@@ -62,7 +63,14 @@ Cmnd_Alias ALICE_APACHE_ONLY = \
     /usr/local/libexec/alice-helper apache-dump
 `
 
-var errUnknownProfile = errors.New(`linuxssh: unknown sudoers profile (want "linux", "nginx" or "apache")`)
+// The HAProxy line (profile "haproxy", protocol 9): haproxy-dump takes no arguments, so its line
+// ends right after the subcommand.
+const sudoersHAProxyOnly = `
+Cmnd_Alias ALICE_HAPROXY_ONLY = \
+    /usr/local/libexec/alice-helper haproxy-dump
+`
+
+var errUnknownProfile = errors.New(`linuxssh: unknown sudoers profile (want "linux", "nginx", "apache" or "haproxy")`)
 
 // Sudoers returns /etc/sudoers.d/alice for a profile.
 func Sudoers(profile string) (string, error) {
@@ -73,6 +81,8 @@ func Sudoers(profile string) (string, error) {
 		return sudoersHead + sudoersNginxOnly + "\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_NGINX_ONLY\n", nil
 	case "apache":
 		return sudoersHead + sudoersApacheOnly + "\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_APACHE_ONLY\n", nil
+	case "haproxy":
+		return sudoersHead + sudoersHAProxyOnly + "\nalice-svc ALL=(root) NOPASSWD: ALICE_COMMON, ALICE_HAPROXY_ONLY\n", nil
 	default:
 		return "", errUnknownProfile
 	}

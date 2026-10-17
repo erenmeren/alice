@@ -157,7 +157,7 @@ func TestWireNames(t *testing.T) {
 	b, err = json.Marshal(HostKeysResponse{OK: true, Keys: []HostKeyInfo{{Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:x", Path: "/k.pub"}}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"keys":[{"type":"ssh-ed25519","bits":256,"fingerprint":"SHA256:x","path":"/k.pub"}]}`, string(b))
-	assert.Equal(t, 8, Protocol)
+	assert.Equal(t, 9, Protocol)
 	assert.Equal(t, "/usr/local/libexec/alice-helper", HelperPath)
 	assert.Equal(t, 1<<20, MaxAuthorizedKeysSize)
 }
@@ -373,7 +373,7 @@ func TestProtocol6WireShapes(t *testing.T) {
 	assert.NotContains(t, s[strings.Index(s, `"/x"`):], "content_b64", "an empty content is omitted")
 	assert.Contains(t, s, `"truncated":true`)
 	assert.Equal(t, 6, MinProtocol, "protocol 6 stays the minimum for every existing operation (A1)")
-	assert.Equal(t, "1.7.0", Version)
+	assert.Equal(t, "1.8.0", Version)
 	assert.Equal(t, "name", UnlistedName)
 	assert.Equal(t, "home", UnlistedHome)
 	assert.Equal(t, "account_name_unsupported", WarnAccountNameUnsupported)
@@ -467,19 +467,30 @@ func TestServerDumpWireNamesAreUnchanged(t *testing.T) {
 	assert.Equal(t, 20<<20, MaxServerConfig)
 	assert.Equal(t, 1000, MaxServerFiles)
 	assert.Equal(t, 16<<20, ServerDumpOutput)
-	assert.Equal(t, 8, Protocol)
-	assert.Equal(t, "1.7.0", Version)
+	assert.Equal(t, 9, Protocol)
+	assert.Equal(t, "1.8.0", Version)
 }
 
 // Protocol 8 (Apache, Phase B): apache-dump and SOFTWARE_NOT_FOUND; a protocol 6 helper still serves
 // every other operation.
 func TestProtocol8(t *testing.T) {
-	assert.Equal(t, 8, Protocol)
-	assert.Equal(t, "1.7.0", Version)
+	assert.Equal(t, 9, Protocol)
+	assert.Equal(t, "1.8.0", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 8, ApacheMinProtocol)
 	assert.LessOrEqual(t, HTTP01MinProtocol, ApacheMinProtocol)
 	assert.Equal(t, "apache-dump", SubApacheDump)
 	assert.Equal(t, "SOFTWARE_NOT_FOUND", CodeSoftwareNotFound)
 	assert.Equal(t, "NGINX_NOT_FOUND", CodeNginxNotFound)
+}
+
+// Protocol 9 (HAProxy, Phase C): haproxy-dump and config_dir_not_read; nothing else changed.
+func TestProtocol9(t *testing.T) {
+	assert.Equal(t, 9, Protocol)
+	assert.Equal(t, "1.8.0", Version)
+	assert.Equal(t, 6, MinProtocol)
+	assert.Equal(t, 8, ApacheMinProtocol)
+	assert.Equal(t, 9, HAProxyMinProtocol)
+	assert.Equal(t, "haproxy-dump", SubHAProxyDump)
+	assert.Equal(t, "config_dir_not_read", WarnConfigDirNotRead)
 }

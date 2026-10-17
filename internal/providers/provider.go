@@ -180,13 +180,13 @@ type ConnectionCache interface {
 
 // SetupGuide is implemented by providers that need host preparation (linuxssh).
 type SetupGuide interface {
-	SetupSnippets(authorizedKeysLine string) map[string]SetupSnippet // key: profile "linux" | "nginx" | "apache"
+	SetupSnippets(authorizedKeysLine string) map[string]SetupSnippet // key: profile "linux" | "nginx" | "apache" | "haproxy"
 	HelperInfo() (path string, protocol int)                         // "/usr/local/libexec/alice-helper", helperproto.Protocol
 }
 
 // SetupSnippet is the host preparation for one sudoers profile.
 type SetupSnippet struct {
-	Profile string // "linux" | "nginx" | "apache"
+	Profile string // "linux" | "nginx" | "apache" | "haproxy"
 	Sudoers string // content of /etc/sudoers.d/alice
 	Script  string // shell script to run as root on the target
 }

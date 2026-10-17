@@ -171,6 +171,7 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 	}{
 		{CmdNginxDump(), pre + "nginx-dump", "nginx-dump", true},
 		{CmdApacheDump(), pre + "apache-dump", "apache-dump", true},
+		{CmdHAProxyDump(), pre + "haproxy-dump", "haproxy-dump", true},
 		{CmdNginxTest(), pre + "nginx-test", "nginx-test", true},
 		{deploy, pre + "nginx-deploy --op " + op + " --cert '/etc/nginx/ssl/www.crt' --key '/etc/nginx/ssl/www.key' --expect-cert-sha256 '" + sha + "' --content-sha256 '" + hex.EncodeToString(h[:]) + "'", "nginx-deploy", true},
 		{restore, pre + "nginx-restore --op " + op, "nginx-restore", true},
@@ -193,6 +194,9 @@ func TestNginxCommandLinesAreExact(t *testing.T) {
 	// kill's WaitDelay, which the backend's timeout covers with at least a 9 s margin for sudo and SSH.
 	assert.GreaterOrEqual(t, CmdApacheDump().timeout, helperproto.HelperBudget+time.Second+9*time.Second)
 	assert.Empty(t, CmdApacheDump().tokens)
+	assert.Equal(t, int64(helperproto.ServerDumpOutput), CmdHAProxyDump().maxOutput)
+	assert.Equal(t, LongCommandTimeout, CmdHAProxyDump().timeout)
+	assert.Empty(t, CmdHAProxyDump().tokens)
 	assert.Equal(t, LongCommandTimeout, CmdNginxTest().timeout)
 	assert.Equal(t, DeployCommandTimeout, deploy.timeout)
 	assert.Equal(t, DeployCommandTimeout, restore.timeout)

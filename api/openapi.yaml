@@ -5954,8 +5954,8 @@ components:
                 description: >-
                   Phase 4 values for web servers include web_server_not_found, web_server_profile_missing,
                   web_server_helper_too_old,
-                  locations_dropped, list_truncated, too_many_files, stream_tls, mail_tls and config_file_writable
-                  (params.path); a newer server may add others.
+                  locations_dropped, list_truncated, too_many_files, config_dir_not_read, stream_tls, mail_tls and
+                  config_file_writable (params.path); a newer server may add others.
               params: { type: object, additionalProperties: { type: string } }
         unreadable:
           type: array
@@ -6437,11 +6437,12 @@ components:
         helper_protocol: { type: integer }
         profiles:
           type: object
-          required: [linux, nginx, apache]
+          required: [linux, nginx, apache, haproxy]
           properties:
             linux: { $ref: "#/components/schemas/SetupSnippet" }
             nginx: { $ref: "#/components/schemas/SetupSnippet" }
             apache: { $ref: "#/components/schemas/SetupSnippet" }
+            haproxy: { $ref: "#/components/schemas/SetupSnippet" }
     Job:
       type: object
       required: [id, type, kind, status, target_id, deployment_id, import_id, ssh_key_id, rotation_id, attempts, max_attempts, error, result,

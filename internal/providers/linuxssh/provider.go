@@ -77,7 +77,7 @@ func (p *Provider) ValidateConfig(cfg providers.TargetConfig) []validate.FieldEr
 // embedded in a shell script or the build cannot verify the helper (SetupScript refuses both).
 func (p *Provider) SetupSnippets(authorizedKeysLine string) map[string]providers.SetupSnippet {
 	out := map[string]providers.SetupSnippet{}
-	for _, profile := range []string{"linux", "nginx", "apache"} {
+	for _, profile := range []string{"linux", "nginx", "apache", "haproxy"} {
 		sudoers, _ := Sudoers(profile)
 		script, _ := SetupScript(profile, authorizedKeysLine, p.allowUnverified)
 		out[profile] = providers.SetupSnippet{Profile: profile, Sudoers: sudoers, Script: script}

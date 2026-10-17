@@ -147,6 +147,12 @@ func CmdApacheDump() HelperCommand {
 	return privileged(helperproto.SubApacheDump, LongCommandTimeout, helperproto.ServerDumpOutput)
 }
 
+// CmdHAProxyDump returns the parsed HAProxy configuration and the referenced certificate files
+// (haproxy-dump takes no arguments and writes nothing).
+func CmdHAProxyDump() HelperCommand {
+	return privileged(helperproto.SubHAProxyDump, LongCommandTimeout, helperproto.ServerDumpOutput)
+}
+
 // CmdNginxTest runs nginx -t.
 func CmdNginxTest() HelperCommand {
 	return privileged(helperproto.SubNginxTest, LongCommandTimeout, smallOutput)

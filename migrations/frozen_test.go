@@ -32,6 +32,7 @@ var frozen = map[string]string{
 	"00014_discovery.sql":                 "02ad411faabb3607d23093efcade34a7c21d07ad7e886e81bbaed83a1387331b",
 	"00015_ldap.sql":                      "f5afd408fca17918a6a3da4299325419a5f3d6da9c0a11a10f16568df29d1228",
 	"00016_web_server_standard.sql":       "9f7e32c7ec0b2ada3c645acca10506369bd87e5072eeac903fbc7350c4508492",
+	"00017_apache.sql":                    "b25dc2e6943518c3c3328e9332c86196c043468045dff58c8e564628c8d8fb81",
 }
 
 func TestReleasedMigrationsAreFrozen(t *testing.T) {

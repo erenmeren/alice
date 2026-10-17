@@ -272,6 +272,7 @@ export const platformKeyFixture: PlatformKeyInfo = {
     linux: { sudoers: '# linux profile', script: '# linux setup script\nset -eu\n' },
     nginx: { sudoers: '# nginx profile', script: '# nginx setup script\nset -eu\n' },
     apache: { sudoers: '# apache profile', script: '# apache setup script\nset -eu\n' },
+    haproxy: { sudoers: '# haproxy profile', script: '# haproxy setup script\nset -eu\n' },
   },
 };
 
