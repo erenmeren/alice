@@ -200,7 +200,7 @@ func TestValidateConfig(t *testing.T) {
 	assert.ElementsMatch(t, []string{"host", "port"}, fields)
 }
 
-func TestSetupSnippetsForBothProfiles(t *testing.T) {
+func TestSetupSnippetsForEveryProfile(t *testing.T) {
 	p := newProvEnv(t).prov
 	line := AuthorizedKeysLine("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGVtdWxhdGVk alice-platform", "")
 	snips := p.SetupSnippets(line)
