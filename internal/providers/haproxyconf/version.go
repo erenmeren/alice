@@ -39,16 +39,16 @@ func validVersion(v []byte) bool {
 	return true
 }
 
-// minorAtLeast says whether version, read as "<major>.<minor>" followed by anything, is at
-// least major.minor. known is false when version does not start that way (or a number has more
+// minorAtLeast says whether version, read as "<major>.<minor>" followed by the end or by ".",
+// "-" or "+" and anything, is at least major.minor. known is false when version does not start that way (or a number has more
 // than 9 digits): the caller then treats the version-dependent case as uncertain.
 func minorAtLeast(version string, major, minor int) (yes, known bool) {
 	vMajor, rest, ok := leadingNumber(version)
 	if !ok || rest == "" || rest[0] != '.' {
 		return false, false
 	}
-	vMinor, _, ok := leadingNumber(rest[1:])
-	if !ok {
+	vMinor, rest, ok := leadingNumber(rest[1:])
+	if !ok || (rest != "" && rest[0] != '.' && rest[0] != '-' && rest[0] != '+') {
 		return false, false
 	}
 	if vMajor != major {

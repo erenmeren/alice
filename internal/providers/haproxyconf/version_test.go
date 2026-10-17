@@ -61,7 +61,10 @@ func TestMinorAtLeast(t *testing.T) {
 		"letter minor":    {"2.x", 2, 6, false, false},
 		"huge major":      {"12345678901.0", 2, 6, false, false},
 		"huge minor":      {"2.12345678901", 2, 6, false, false},
-		"minor then text": {"2.6x", 2, 6, true, true},
+		"minor then text": {"2.6x", 2, 6, false, false},
+		"minor then plus": {"2.6+x", 2, 6, true, true},
+		"minor at end":    {"2.6", 2, 6, true, true},
+		"minor then dash": {"2.4-dev", 2, 6, false, true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			yes, known := minorAtLeast(tc.v, tc.major, tc.minor)

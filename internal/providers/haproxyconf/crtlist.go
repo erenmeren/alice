@@ -12,14 +12,16 @@ type crtListLine struct {
 }
 
 // parseCrtList reads a crt-list file the way HAProxy's crtlist_parse_line does (Ruling 11):
-//   - a line whose first byte is "#" is a comment (an indented "#" is a path); a line of blanks
-//     is skipped;
+//   - a line whose first byte is "#" is a comment (an indented "#" is a path), and a line whose
+//     first byte is CR is skipped whatever follows (crtlist_parse_file skips a line starting
+//     with "#", "\n" or "\r"; review I3); a line of blanks is skipped;
 //   - blanks (C isspace) separate words; there are no quotes (a '"' is part of the word) and no
 //     escapes, so a trailing "# x" is three filters, as HAProxy keeps it;
 //   - "[" and "]" also separate words, wherever they are, and enclose the option block, which is
-//     skipped. It must follow the path directly ("filters can't be between filename and
-//     options"); a "[" before the path, a second "[" or "]", a "]" without "[" or a "[" left
-//     open is ErrSyntax;
+//     skipped. A "[" before the path, a second "[" or "]", or a "]" without "[" is ErrSyntax,
+//     as HAProxy refuses them. Two forms HAProxy accepts are refused here to fail closed: a
+//     "[" left open (HAProxy reads the words after it as filters, silently) and an option
+//     block after a filter (HAProxy warns and drops the filters before the block);
 //   - the first word is the path; the words after the option block (or after the path) are
 //     the filters.
 //
@@ -47,7 +49,7 @@ func parseCrtList(data []byte) ([]crtListLine, error) {
 		if len(text) > MaxLine {
 			return nil, lineErr(ErrLineTooLong, n)
 		}
-		if len(text) > 0 && text[0] == '#' {
+		if len(text) > 0 && (text[0] == '#' || text[0] == '\r') {
 			continue
 		}
 		l, words, err := crtListEntry(text)

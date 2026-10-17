@@ -1,6 +1,9 @@
 package haproxyconf
 
-import "strings"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Listen is one address a bind listens on: Addr is "" for any address, Port is 1-65535.
 type Listen struct {
@@ -19,7 +22,8 @@ var listenPrefixes = []string{"ipv4@", "ipv6@", "tcp@", "tcp4@", "tcp6@", "udp@"
 // abns@, fd@, sockpair@, uxst@, uxdg@ or one Alice does not know) and a path ("/...") give no
 // listen; "[v6]:port" and "host:port" split at the last colon; "*", "", "0.0.0.0" and "::" are
 // any address (""). The port must be decimal 1-65535: a range, a sign, a "$" or anything else
-// drops the entry, and so does a host with "$", "[", "]" or more than 253 bytes. Entries keep
+// drops the entry, and so does a host with "$", "[", "]", a control character, invalid UTF-8 or
+// more than 253 bytes. Entries keep
 // their order; Addr is a copy, so the argument is not retained.
 func parseListens(arg string) []Listen {
 	var out []Listen
@@ -55,7 +59,7 @@ func parseListen(s string) (Listen, bool) {
 			return Listen{}, false
 		}
 	}
-	if strings.ContainsAny(host, "[]") || len(host) > maxHost {
+	if strings.ContainsAny(host, "[]") || len(host) > maxHost || !utf8.ValidString(host) || hasControl(host) {
 		return Listen{}, false
 	}
 	port, rest, ok := leadingNumber(portText)
@@ -67,4 +71,14 @@ func parseListen(s string) (Listen, bool) {
 		host = ""
 	}
 	return Listen{Addr: strings.Clone(host), Port: port}, true
+}
+
+// hasControl says whether s holds a C0 control character or DEL.
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }

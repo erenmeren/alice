@@ -39,7 +39,7 @@ func TestParseListens(t *testing.T) {
 		"abns@x", "sockpair@3", "uxst@/x", "uxdg@/x", "foo@:443", "ipv4@unix@:443",
 		":65536", ":+443", ":-1", ":", "443", "", ",", "*", ":443a", ":99999999999999999999",
 		"${IP}:443", "[::1]443", "[::1:443", "::1]:443", "[[::1]]:443", "a[b:443", "a]b:443",
-		"[::1]:", "x@y:443", strings.Repeat("a", 254) + ":443",
+		"[::1]:", "x@y:443", "\xff\xfe:443", "a\tb:443", "a\x7fb:443", strings.Repeat("a", 254) + ":443",
 	} {
 		t.Run(in, func(t *testing.T) {
 			assert.Empty(t, parseListens(in))

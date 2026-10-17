@@ -19,17 +19,27 @@ type line struct {
 }
 
 // lex splits haproxy.cfg into lines of words the way HAProxy's parse_line does (Ruling 5):
-//   - lines end at LF; there is no continuation, so a backslash before the line end (or the end
-//     of the input) is a literal backslash;
-//   - outside quotes, blanks (space, \t, \v, \f, \r) separate words and an unescaped "#" starts
-//     a comment that runs to the end of the line, even right after a word;
+//   - lines end at LF, and a CR after the first word has begun ends the line too (parse_line
+//     stops at "\r" as at "\n": "crt /a.pem<CR>crt /b.pem" holds one crt); a CR before the
+//     first word is a leading blank (readcfgfile skips it); there is no continuation, so a
+//     backslash before the line end is a literal backslash;
+//   - outside quotes, blanks (space, \t, \v, \f, and a leading \r) separate words and an
+//     unescaped "#" starts a comment that runs to the end of the line, even right after a word;
 //   - "..." and '...' group text, the quotes are removed, and quoted parts join adjacent text
-//     into one word ("" alone is an empty word); a quote that is not closed on its line is
-//     ErrSyntax;
-//   - outside single quotes, \\ \" \' \# \$ and "\ " stand for the character, \t \r \n for the
-//     control character and \xHH for the byte; any other escape is ErrSyntax, and \x00 is
-//     ErrNUL; inside single quotes a backslash is literal;
+//     into one word ("" alone is an empty word); a quote that is not closed when the line ends
+//     (at LF or CR) is ErrSyntax, as HAProxy's "unmatched quote";
+//   - outside single quotes, \\ \" \' \# and "\ " stand for the character, \t \r \n for the
+//     control character and \xHH for the byte; \$ stands for "$" inside double quotes only;
+//     any other escape (\q, a regex's \. or \d, a back-reference \1, \$ outside double
+//     quotes) is kept as written, backslash included, as HAProxy keeps it (Ruling 5 as amended
+//     by review I1). A truncated or invalid \xHH is ErrSyntax (HAProxy refuses it) and \x00
+//     is ErrNUL (HAProxy would truncate the word there); inside single quotes a backslash is
+//     literal;
 //   - a NUL anywhere is ErrNUL. Case is kept (keywords are case-sensitive).
+//
+// One difference is kept deliberately: an empty quoted word at the end of a line ("crt \"\"")
+// is returned, where parse_line drops an empty last argument (review M4; -c refuses the cases
+// where it matters, and an empty path or condition is never a supported one).
 //
 // The input is bounded by MaxInput (ErrTooLarge), each line by MaxLine (ErrLineTooLong) and
 // the words of the file by MaxTokens (ErrTooComplex). Errors name the line.
@@ -73,13 +83,15 @@ func lex(data []byte) ([]line, error) {
 		for i := 0; i < len(text); i++ {
 			c := text[i]
 			switch {
+			case c == '\r' && (inWord || quote != 0 || len(words) > 0):
+				break scan // the line ends here; an open quote is ErrSyntax below
 			case quote == '\'':
 				if c == '\'' {
 					quote = 0
 					continue
 				}
 			case c == '\\':
-				r, skip, err := escape(text[i+1:])
+				r, skip, err := escape(text[i+1:], quote)
 				if err != nil {
 					return nil, lineErr(err, n)
 				}
@@ -122,16 +134,22 @@ func lex(data []byte) ([]line, error) {
 	return lines, nil
 }
 
-// escape reads the escape after a backslash; rest is the line after the backslash. It returns
-// the byte the escape stands for and how many bytes of rest it used. A backslash at the end of
-// the line is a literal backslash (HAProxy has no line continuation).
-func escape(rest []byte) (c byte, used int, err error) {
-	if len(rest) == 0 || (len(rest) == 1 && rest[0] == '\r') {
+// escape reads the escape after a backslash outside single quotes; rest is the line after the
+// backslash and quote is 0 or '"'. It returns the byte the escape stands for and how many bytes
+// of rest it used. An escape HAProxy does not know, and a backslash at the end of the line
+// (there is no line continuation), is a literal backslash: used is 0 and the next byte is read
+// as usual.
+func escape(rest []byte, quote byte) (c byte, used int, err error) {
+	if len(rest) == 0 {
 		return '\\', 0, nil
 	}
 	switch rest[0] {
-	case '\\', '"', '\'', '#', '$', ' ':
+	case '\\', '"', '\'', '#', ' ':
 		return rest[0], 1, nil
+	case '$':
+		if quote == '"' {
+			return '$', 1, nil
+		}
 	case 't':
 		return '\t', 1, nil
 	case 'r':
@@ -152,7 +170,7 @@ func escape(rest []byte) (c byte, used int, err error) {
 		}
 		return c, 3, nil
 	}
-	return 0, 0, ErrSyntax
+	return '\\', 0, nil
 }
 
 func hexValue(c byte) (byte, bool) {
@@ -167,7 +185,8 @@ func hexValue(c byte) (byte, bool) {
 	return 0, false
 }
 
-// isBlank is isspace in the C locale, without the line end (lines are already split at LF).
+// isBlank is isspace in the C locale, without the line end (lines are already split at LF). lex
+// checks a CR first: there it is a blank only before a line's first word.
 func isBlank(c byte) bool {
 	return c == ' ' || c == '\t' || c == '\v' || c == '\f' || c == '\r'
 }

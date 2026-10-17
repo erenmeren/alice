@@ -36,10 +36,14 @@ func TestParseCrtListLines(t *testing.T) {
 		in   string
 		want []crtListLine
 	}{
-		"empty":                  {"", nil},
-		"comments and blanks":    {"#a\n\n\t\n#b", nil},
-		"no final newline":       {"/a.pem x", []crtListLine{{1, "/a.pem", []string{"x"}}}},
-		"crlf":                   {"/a.pem x\r\n/b.pem\r\n", []crtListLine{{1, "/a.pem", []string{"x"}}, {2, "/b.pem", nil}}},
+		"empty":               {"", nil},
+		"comments and blanks": {"#a\n\n\t\n#b", nil},
+		"no final newline":    {"/a.pem x", []crtListLine{{1, "/a.pem", []string{"x"}}}},
+		"crlf":                {"/a.pem x\r\n/b.pem\r\n", []crtListLine{{1, "/a.pem", []string{"x"}}, {2, "/b.pem", nil}}},
+		// Review I3 (probed on 2.4, 2.6 and 2.8): a line starting with CR is skipped; a CR
+		// later in the line is a blank.
+		"cr first":               {"\r/x/missing.pem x\n/a.pem\n", []crtListLine{{2, "/a.pem", nil}}},
+		"cr after a blank":       {" \r/a.pem x\n", []crtListLine{{1, "/a.pem", []string{"x"}}}},
 		"tabs":                   {"\t/a.pem\tx\ty\n", []crtListLine{{1, "/a.pem", []string{"x", "y"}}}},
 		"options only":           {"/a.pem [alpn h2]\n", []crtListLine{{1, "/a.pem", nil}}},
 		"options without blanks": {"/a.pem[alpn h2]x y\n", []crtListLine{{1, "/a.pem", []string{"x", "y"}}}},
@@ -63,15 +67,15 @@ func TestParseCrtListErrors(t *testing.T) {
 		in   string
 		want error
 	}{
-		"unclosed options":              {"[a b\n", ErrSyntax},
-		"unclosed options after a path": {"/a.pem [a b\n", ErrSyntax},
-		"options before the path":       {"  [alpn h2] /a.pem\n", ErrSyntax},
-		"two option blocks":             {"/a.pem [a] [b]\n", ErrSyntax},
-		"nested bracket":                {"/a.pem [a [b]]\n", ErrSyntax},
-		"closing without opening":       {"/a.pem a]\n", ErrSyntax},
-		"filters before options":        {"/a.pem x [alpn h2]\n", ErrSyntax},
-		"nul":                           {"/a.pem\x00\n", ErrNUL},
-		"nul in a comment":              {"#\x00\n", ErrNUL},
+		"unclosed options": {"[a b\n", ErrSyntax},
+		"unclosed options after a path (refused here to fail closed)": {"/a.pem [a b\n", ErrSyntax},
+		"options before the path":                                     {"  [alpn h2] /a.pem\n", ErrSyntax},
+		"two option blocks":                                           {"/a.pem [a] [b]\n", ErrSyntax},
+		"nested bracket":                                              {"/a.pem [a [b]]\n", ErrSyntax},
+		"closing without opening":                                     {"/a.pem a]\n", ErrSyntax},
+		"filters before options (refused here to fail closed)":        {"/a.pem x [alpn h2]\n", ErrSyntax},
+		"nul":              {"/a.pem\x00\n", ErrNUL},
+		"nul in a comment": {"#\x00\n", ErrNUL},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := parseCrtList([]byte(tc.in))

@@ -18,6 +18,7 @@ func FuzzParseCrtList(f *testing.F) {
 	f.Add([]byte("/a.pem ] [\n"))
 	f.Add([]byte("/a.pem x [y]\n"))
 	f.Add([]byte("/a.pem ! !! !x\r\n\t\v\f\n"))
+	f.Add([]byte("\r/x/missing.pem x\n \r/a.pem y\n"))
 	f.Add([]byte("/a\x00b\n"))
 	f.Add([]byte(strings.Repeat("/a.pem [x] y\n", 100)))
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -59,6 +60,7 @@ func FuzzLex(f *testing.F) {
 	f.Add([]byte("crt \"/a\n"))
 	f.Add([]byte("a\\x0\n"))
 	f.Add([]byte("a\r\n'b'\"c\"d#e\n"))
+	f.Add([]byte("acl st path_reg ^/a\\.b\\d+$\nx /\\1 \"\\q\\$\" \\$\n\r a\rb \"c\rd\"\n"))
 	f.Fuzz(func(t *testing.T, data []byte) {
 		got, err := lex(data)
 		again, err2 := lex(data)
