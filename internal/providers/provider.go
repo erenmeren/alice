@@ -24,6 +24,7 @@ const (
 	KindLinuxSSH Kind = "linuxssh"
 	KindNginx    Kind = "nginx"
 	KindApache   Kind = "apache"
+	KindHAProxy  Kind = "haproxy"
 	KindAzureKV  Kind = "azurekv"
 )
 
@@ -48,6 +49,8 @@ func KindForTargetType(t string) (Kind, bool) {
 		return KindNginx, true
 	case "apache":
 		return KindApache, true
+	case "haproxy":
+		return KindHAProxy, true
 	case "azure_key_vault":
 		return KindAzureKV, true
 	default:

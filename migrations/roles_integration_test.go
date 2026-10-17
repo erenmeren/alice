@@ -316,6 +316,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 }
 
 // hasApacheType: whether migration 00017 is applied (the targets.type check knows apache).
+// The LIKE matches the quoted word 'apache' only: it is true from 00017 on, and 00018's 'haproxy' does not change it.
 func hasApacheType(t *testing.T, d *pgtest.DB) bool {
 	t.Helper()
 	var has bool

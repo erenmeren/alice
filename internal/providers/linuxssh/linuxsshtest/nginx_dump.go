@@ -186,6 +186,9 @@ var (
 // configError is why a dump is refused: a class, a reason and the file when it can be carried.
 type configError struct{ class, reason, file string }
 
+// Error makes a configError an error for the HAProxy reader's callbacks (the helper's has one too).
+func (e *configError) Error() string { return e.class + ": " + e.reason }
+
 func untrusted(reason, file string) *configError {
 	return &configError{class: helperproto.ConfigErrUntrusted, reason: reason, file: carried(file)}
 }

@@ -19,19 +19,20 @@ const (
 	defaultInterval    = 24 * time.Hour
 )
 
-// Target types (targets.type): a Linux server (SSH keys), an Nginx or Apache server (SSH keys and
+// Target types (targets.type): a Linux server (SSH keys), an Nginx, Apache or HAProxy server (SSH keys and
 // certificates, spec §12) and an Azure Key Vault (spec §11). CreateTarget adds the servers,
 // CreateVault the vaults; neither accepts the other's type.
 const (
 	TypeLinux         = "linux"
 	TypeNginx         = "nginx"
 	TypeApache        = "apache"
+	TypeHAProxy       = "haproxy"
 	TypeAzureKeyVault = "azure_key_vault"
 )
 
 // webServerTypes is the one list of web-server target types (the only place that names the web-server types);
 // every other check asks IsWebServer, or a provider capability when the question is what a server can do.
-var webServerTypes = []string{TypeNginx, TypeApache}
+var webServerTypes = []string{TypeNginx, TypeApache, TypeHAProxy}
 
 // IsWebServer reports whether typ is a web-server target type.
 func IsWebServer(typ string) bool { return slices.Contains(webServerTypes, typ) }

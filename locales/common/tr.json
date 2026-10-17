@@ -10,7 +10,8 @@
       }
     },
     "nginx": { "name": "Nginx sunucu" },
-    "apache": { "name": "Apache sunucusu" }
+    "apache": { "name": "Apache sunucusu" },
+    "haproxy": { "name": "HAProxy sunucusu" }
   },
   "enum": {
     "role": {

@@ -64,6 +64,7 @@ type Emulator struct {
 	accounts    *accountList   // SetAccounts: the /etc/passwd names authkeys-list reports (derived from users when nil)
 	nx          *nginxHost     // the emulated Nginx (nginx.go); created on first use
 	ax          *apacheHost    // the emulated Apache (apache.go); created on first use
+	hx          *haproxyHost   // the emulated HAProxy (haproxy.go); created on first use
 	acmeWeb     *acmeState     // the emulated HTTP-01 webroot (acme.go); created on first use
 }
 
@@ -364,6 +365,9 @@ func (e *Emulator) handle(cmd string, stdin []byte) Response {
 	}
 	if isApacheSub(sub) {
 		return e.handleApache(sudo, sub, args)
+	}
+	if isHAProxySub(sub) {
+		return e.handleHAProxy(sudo, sub, args)
 	}
 	if isACMESub(sub) {
 		return e.handleACME(sudo, sub, args, stdin)

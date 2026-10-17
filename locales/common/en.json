@@ -10,7 +10,8 @@
       }
     },
     "nginx": { "name": "Nginx server" },
-    "apache": { "name": "Apache server" }
+    "apache": { "name": "Apache server" },
+    "haproxy": { "name": "HAProxy server" }
   },
   "enum": {
     "role": {

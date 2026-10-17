@@ -207,7 +207,7 @@ func normalize(sub string, a answer, helperSide bool) answer {
 	var m map[string]any
 	_ = json.Unmarshal([]byte(text), &m)
 	delete(m, "message")
-	if sub == helperproto.SubNginxDump || sub == helperproto.SubApacheDump {
+	if sub == helperproto.SubNginxDump || sub == helperproto.SubApacheDump || sub == helperproto.SubHAProxyDump {
 		for _, s := range asList(m["servers"]) {
 			delete(s, "file")
 			delete(s, "line")

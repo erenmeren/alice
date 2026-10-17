@@ -147,7 +147,7 @@ func TestRegistryRefusesBrokenProviders(t *testing.T) {
 
 func TestKindForTargetType(t *testing.T) {
 	for typ, want := range map[string]providers.Kind{
-		"linux": providers.KindLinuxSSH, "nginx": providers.KindNginx, "apache": providers.KindApache, "azure_key_vault": providers.KindAzureKV,
+		"linux": providers.KindLinuxSSH, "nginx": providers.KindNginx, "apache": providers.KindApache, "haproxy": providers.KindHAProxy, "azure_key_vault": providers.KindAzureKV,
 	} {
 		got, ok := providers.KindForTargetType(typ)
 		assert.True(t, ok, typ)

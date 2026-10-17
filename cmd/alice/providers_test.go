@@ -28,25 +28,27 @@ func newTestPool() *linuxssh.Pool {
 // the SSH key inventory needs, from Phase 4 nginx with the certificate capabilities on top, and
 // from Phase 5 azurekv (Key Vault); the registry is frozen afterwards. List sorts by kind, so the
 // rows are looked up by kind, never by position.
-func TestRegisterProvidersShipsLinuxSSHNginxApacheAndAzureKV(t *testing.T) {
+func TestRegisterProvidersShipsEveryProvider(t *testing.T) {
 	pool := newTestPool()
 	t.Cleanup(pool.Close)
 	reg := providers.NewRegistry()
 	registerProviders(reg, pool, slog.New(slog.DiscardHandler))
 
 	list := reg.List()
-	require.Len(t, list, 4)
+	require.Len(t, list, 5)
 	byKind := map[providers.Kind]providers.Descriptor{}
 	for _, d := range list {
 		byKind[d.Kind] = d
 	}
-	require.Len(t, byKind, 4)
+	require.Len(t, byKind, 5)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapAuthorizedKeys, providers.CapDiscoverSSHKeys, providers.CapKeyLogin, providers.CapTestConnection},
 		byKind[providers.KindLinuxSSH].Capabilities)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
 		providers.CapDiscoverCerts, providers.CapDeployCertificate, providers.CapVerifyDeployment, providers.CapKeyLogin, providers.CapHTTP01}, byKind[providers.KindNginx].Capabilities)
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
 		providers.CapDiscoverCerts, providers.CapKeyLogin}, byKind[providers.KindApache].Capabilities, "discovery only")
+	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverSSHKeys, providers.CapAuthorizedKeys,
+		providers.CapDiscoverCerts, providers.CapKeyLogin}, byKind[providers.KindHAProxy].Capabilities, "discovery only")
 	assert.ElementsMatch(t, []providers.Capability{providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapDiscoverKVKeys,
 		providers.CapDiscoverKVSecrets, providers.CapReadCertificateSecret, providers.CapImportCertificate}, byKind[providers.KindAzureKV].Capabilities)
 
@@ -65,6 +67,11 @@ func TestRegisterProvidersShipsLinuxSSHNginxApacheAndAzureKV(t *testing.T) {
 	providertest.CheckProvider(t, ap)
 	_, isCache = ap.(providers.ConnectionCache)
 	assert.True(t, isCache, "deleting an Apache server closes its connections")
+	hp, ok := reg.Get(providers.KindHAProxy)
+	require.True(t, ok)
+	providertest.CheckProvider(t, hp)
+	_, isCache = hp.(providers.ConnectionCache)
+	assert.True(t, isCache, "deleting an HAProxy server closes its connections")
 	a, ok := reg.Get(providers.KindAzureKV)
 	require.True(t, ok)
 	_, isCache = a.(providers.ConnectionCache)

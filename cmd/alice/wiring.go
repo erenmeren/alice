@@ -9,7 +9,7 @@ import (
 )
 
 // shippedProviders are the provider kinds this build registers (registerProviders).
-var shippedProviders = []providers.Kind{providers.KindLinuxSSH, providers.KindNginx, providers.KindApache, providers.KindAzureKV}
+var shippedProviders = []providers.Kind{providers.KindLinuxSSH, providers.KindNginx, providers.KindApache, providers.KindHAProxy, providers.KindAzureKV}
 
 // periodicTypes are the job types that run as periodic tasks of the scheduler (buildScheduler);
 // every other job type is a queue type and needs a handler on the runner. A new type is a queue
