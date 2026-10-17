@@ -40,6 +40,8 @@ var rules = map[string][]string{
 		"alice/internal/providers/apacheconf"},
 	// The Apache configuration parser reads hostile input in the root helper: it stays pure.
 	"alice/internal/providers/apacheconf": {"alice/internal/providers/linuxssh/helperproto"},
+	// The HAProxy configuration parser reads hostile input in the root helper: it stays pure.
+	"alice/internal/providers/haproxyconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
 	// a hook's dns01 configuration; the client and solvers never import it back.
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
@@ -443,6 +445,8 @@ func TestAllowed(t *testing.T) {
 		{"apacheconf to helperproto allowed", "alice/internal/providers/apacheconf", "alice/internal/providers/linuxssh/helperproto", true},
 		{"apacheconf to platform/db denied", "alice/internal/providers/apacheconf", "alice/internal/platform/db", false},
 		{"apacheconf to linuxssh denied", "alice/internal/providers/apacheconf", "alice/internal/providers/linuxssh", false},
+		{"haproxyconf to helperproto allowed", "alice/internal/providers/haproxyconf", "alice/internal/providers/linuxssh/helperproto", true},
+		{"haproxyconf to platform/db denied", "alice/internal/providers/haproxyconf", "alice/internal/platform/db", false},
 		{"platform to i18n denied", "alice/internal/platform/clock", "alice/internal/i18n", false},
 		{"platform to platform allowed", "alice/internal/platform/db", "alice/internal/platform/clock", true},
 		{"api to provider impl denied", "alice/internal/api", nginx, false},
