@@ -959,6 +959,11 @@
       "installation_restored": "Kurulum kaydı geri yüklendi"
     }
   },
+  "webServer": {
+    "software": {
+      "nginx": "Nginx"
+    }
+  },
   "warnings": {
     "file_unparseable": "Alice, {{user}} kullanıcısının {{path}} authorized_keys dosyasını okuyamadı; dosyadaki anahtarlar listelenmedi.",
     "keys_managed_elsewhere": "SSH sunucusu anahtarları bir programdan (AuthorizedKeysCommand) da alıyor, bu yüzden anahtar dosyaları tüm anahtarları göstermeyebilir. Alice burada anahtarları değiştirmez.",
@@ -979,9 +984,9 @@
     "incomplete": "Alice bu sunucu hakkında ayrıntıları olmayan bir not bildirdi.",
     "stream_tls": "Stream bloklarındaki TLS bu sürümde desteklenmiyor. http bloklarındaki web siteleri yine de listelenir.",
     "mail_tls": "Mail bloklarındaki TLS bu sürümde desteklenmiyor. http bloklarındaki web siteleri yine de listelenir.",
-    "web_server_config_invalid": "Nginx yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
-    "web_server_not_found": "Bu sunucuda Nginx bulunamadı.",
-    "web_server_profile_missing": "Bu sunucuda Nginx izinleri kurulu değil, bu yüzden Alice web sitelerini okuyamıyor. Sunucu hazırlığı için Nginx komutlarını çalıştırın, ardından Keşfet düğmesini seçin.",
+    "web_server_config_invalid": "{{software}} yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
+    "web_server_not_found": "Bu sunucuda {{software}} bulunamadı.",
+    "web_server_profile_missing": "Bu sunucuda {{software}} izinleri kurulu değil, bu yüzden Alice web sitelerini okuyamıyor. Sunucu hazırlığı için {{software}} komutlarını çalıştırın, ardından Keşfet düğmesini seçin.",
     "config_file_writable": "Bir Nginx yapılandırma dosyası root dışındaki kullanıcılar tarafından değiştirilebiliyor: {{path}}",
     "too_many_files": "Bu sunucu Alice'in listelediğinden fazla sertifika dosyası kullanıyor, bu yüzden bazıları okunmadı.",
     "locations_dropped": "Bu sunucuda Alice'in listelediğinden fazla web sitesi var, bu yüzden liste eksik ve hiçbir web sitesi artık bulunmuyor olarak işaretlenmiyor.",
@@ -1050,8 +1055,8 @@
     "hostKeyChanged": "Sunucunun kimliği değişti, bu yüzden Alice bu sunucudaki tüm işleri durdurdu. Değişikliği kabul etmeden önce güvenlik ekibinizden doğrulamasını isteyin.",
     "facts": {
       "neverScanned": "Henüz taranmadı.",
-      "nginxStale": "Aşağıdaki Nginx bilgileri güncel olmayabilir. Alice bu sunucudan web sitelerini en son {{time}} tarihinde okudu.",
-      "nginxNotFound": "Bu sunucuda Nginx bulunamadı."
+      "webServerStale": "Aşağıdaki {{software}} bilgileri güncel olmayabilir. Alice bu sunucudan web sitelerini en son {{time}} tarihinde okudu.",
+      "webServerNotFound": "Bu sunucuda {{software}} bulunamadı."
     },
     "openServer": "Sunucuyu aç",
     "typeLabel": {
@@ -1095,7 +1100,7 @@
         "platform": "Sunucu türü",
         "os": "İşletim sistemi",
         "helper": "alice-helper sürümü",
-        "nginx": "Nginx sürümü",
+        "webServer": "{{software}} sürümü",
         "lastConnected": "Son bağlantı",
         "lastScan": "Son tarama",
         "discoveryInterval": "Keşif aralığı",
@@ -1105,7 +1110,7 @@
       "everyHours_one": "Saatte bir",
       "everyHours_other": "{{count}} saatte bir",
       "operations": "Kullanılabilir işlemler",
-      "operationsText": "Alice, kısıtlı yardımcı aracı üzerinden sertifika ve anahtar dosyalarını günceller. Nginx yapılandırması sizin kontrolünüzdedir.",
+      "operationsText": "Alice, kısıtlı yardımcı aracı üzerinden sertifika ve anahtar dosyalarını günceller. {{software}} yapılandırması sizin kontrolünüzdedir.",
       "operationsTextLinux": "Alice, bu sunucudaki SSH anahtarlarını kısıtlı yardımcı aracı üzerinden okur ve değiştirir.",
       "readOnly": "Salt okunur"
     }
@@ -1603,7 +1608,7 @@
   },
   "locations": {
     "title": "Bu sunucudaki web siteleri",
-    "intro": "Her satır Nginx'in kullandığı bir sertifika dosyasıdır. Alice Nginx yapılandırmasını hiçbir zaman değiştirmez, yalnızca bu dosyaları değiştirir.",
+    "intro": "Her satır {{software}} tarafından kullanılan bir sertifika dosyasıdır. Alice {{software}} yapılandırmasını hiçbir zaman değiştirmez, yalnızca bu dosyaları değiştirir.",
     "discover": "Keşfet",
     "tableLabel": "Bu sunucudaki web siteleri",
     "empty": "Alice bu sunucuda henüz sertifika bulmadı. Keşfet düğmesini seçin.",
@@ -1634,7 +1639,7 @@
     "definedIn": "Tanımlandığı dosya: {{file}}",
     "showMissing": "Artık bulunmayan web sitelerini göster",
     "truncated": "Bu liste eksik: artık bulunmayan web sitelerinin yalnızca ilk 1000'i gösteriliyor.",
-    "configInvalid": "Bu sunucudaki Nginx yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
+    "configInvalid": "Bu sunucudaki {{software}} yapılandırmasında bir hata var. Hata giderilene kadar Alice dağıtım yapmaz.",
     "configFile": "Sorunlu dosya: {{file}}",
     "stale": {
       "title": "Bu web siteleri güncel olmayabilir",
@@ -1644,9 +1649,9 @@
     "deployUnavailable": "Dağıtım şu anda yapılamıyor.",
     "unavailable": {
       "status": "Sunucuyla şu anda bağlantı yok (yukarıdaki durumuna bakın).",
-      "profile_missing": "Bu sunucuda Nginx izinleri kurulu değil.",
-      "nginx_not_found": "Bu sunucuda Nginx bulunamadı.",
-      "config_invalid": "Nginx yapılandırmasında bir hata var.",
+      "profile_missing": "Bu sunucuda {{software}} izinleri kurulu değil.",
+      "server_not_found": "Bu sunucuda {{software}} bulunamadı.",
+      "config_invalid": "{{software}} yapılandırmasında bir hata var.",
       "last_error": "Son tarama başarısız oldu."
     },
     "rowUnavailable": {

@@ -2,7 +2,7 @@ import { Alert, Box, Button, Code, Group, Stack, Switch, Table, Text } from '@ma
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
-import { canDeployTo, firstServerName, listenAddrs, nginxState, serverNames, type DeployBlock } from '../api/nginx';
+import { canDeployTo, firstServerName, listenAddrs, webServerState, serverNames, type DeployBlock } from '../api/webServer';
 import type { CertificateLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { formatDateTime } from '../datetime';
@@ -17,13 +17,14 @@ import { reasonTitle } from './JobErrorAlert';
 import { siteIsData } from './SiteName';
 import { useLocations, websitesAsOf } from './useLocations';
 import { useSiteLabel } from './useSiteLabel';
+import { softwareName } from './software';
 import { EmptyState, Panel, StatusBadge } from './ui';
 import { WRAP } from './wrap';
 
 const BLOCK_KEYS: Record<DeployBlock, string> = {
   status: 'locations.unavailable.status',
   profile_missing: 'locations.unavailable.profile_missing',
-  nginx_not_found: 'locations.unavailable.nginx_not_found',
+  server_not_found: 'locations.unavailable.server_not_found',
   config_invalid: 'locations.unavailable.config_invalid',
   last_error: 'locations.unavailable.last_error',
   discovery_failed: 'locations.unavailable.last_error',
@@ -61,7 +62,8 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const [settingsId, setSettingsId] = useState<string | null>(null);
 
   const locs = useLocations(target.id, showMissing);
-  const state = nginxState(target, discoveryFailed);
+  const state = webServerState(target, discoveryFailed);
+  const software = softwareName(t, target.type);
   const webServer = target.facts.web_server;
   const items = locs.data?.items ?? [];
   const settingsFor = items.find((l) => l.id === settingsId) ?? null;
@@ -69,13 +71,13 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const lastScan = asOf ? formatDateTime(asOf, i18n.language) : '';
 
   return (
-    <Panel title={t('locations.title')} description={t('locations.intro')} aria-label={t('locations.title')} padded={false}>
+    <Panel title={t('locations.title')} description={t('locations.intro', { software })} aria-label={t('locations.title')} padded={false}>
       <Stack gap="sm" px={22} py="md">
         {state.configInvalid && (
           <Alert color="red" role="alert" data-testid="config-invalid">
             <Stack gap={2}>
               <Text size="sm" fw={500}>
-                {t('locations.configInvalid')}
+                {t('locations.configInvalid', { software })}
               </Text>
               {webServer && webServer.config_error !== '' && <Text size="sm">{t(configErrorKey(webServer.config_error))}</Text>}
               {webServer && webServer.config_error_reason !== '' && <Text size="sm">{t(configReasonKey(webServer.config_error_reason))}</Text>}
@@ -94,7 +96,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
               </Text>
               {state.block && (
                 <Text size="sm">
-                  {state.block === 'last_error' && target.last_error ? reasonTitle(t, i18n, target.last_error.reason) : t(BLOCK_KEYS[state.block])}
+                  {state.block === 'last_error' && target.last_error ? reasonTitle(t, i18n, target.last_error.reason) : t(BLOCK_KEYS[state.block], { software })}
                 </Text>
               )}
             </Stack>

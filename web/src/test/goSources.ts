@@ -84,10 +84,10 @@ export function backendJobTypes(): string[] {
 }
 
 // goStringConsts finds the string constants of a Go source whose names match nameRe (for example
-// /^StepName\w+$/): `Name = "value"` on its own line, with any spacing before the equals sign.
+// /^StepName\w+$/): `Name = "value"` or `Name Type = "value"` on its own line, with any spacing before the equals sign.
 export function goStringConsts(src: string, nameRe: RegExp): string[] {
   const found = new Set<string>();
-  for (const m of src.matchAll(/^\s*(?:const\s+)?([A-Za-z]\w*)\s*=\s*"([^"\n]*)"/gm)) if (nameRe.test(m[1])) found.add(m[2]);
+  for (const m of src.matchAll(/^\s*(?:const\s+)?([A-Za-z]\w*)(?:\s+[A-Za-z][\w.]*)?\s*=\s*"([^"\n]*)"/gm)) if (nameRe.test(m[1])) found.add(m[2]);
   return [...found].sort();
 }
 

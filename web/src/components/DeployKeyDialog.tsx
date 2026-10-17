@@ -6,6 +6,7 @@ import { listAllTargets } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
 import { keyFiles, sshKey, SSH_KEYS_KEY, TARGETS_KEY } from '../api/queryKeys';
 import { deployKey, getKeyFiles } from '../api/sshkeys';
+import { isServerType } from '../api/webServer';
 import type { JobError, Target } from '../api/types';
 import { useAbort } from '../api/useAbort';
 import { Icon } from '../design/Icon';
@@ -19,7 +20,7 @@ import { BlockedJobAlert, JobErrorAlert, StillWorkingAlert, StoppedJobAlert } fr
 // isDeployable: a Linux or Nginx server Alice can sign in to and may change: the host key is confirmed and has not changed,
 // and the server is not disabled (the server refuses those, so the screen does not offer them).
 const UNUSABLE: ReadonlySet<Target['status']> = new Set<Target['status']>(['pending_host_key', 'host_key_changed', 'disabled']);
-const isDeployable = (tg: Target) => (tg.type === 'linux' || tg.type === 'nginx') && !UNUSABLE.has(tg.status);
+const isDeployable = (tg: Target) => isServerType(tg.type) && !UNUSABLE.has(tg.status);
 
 // TONE: how an outcome is shown. Only a verified login or an already present key is a plain success; an unverified add or
 // an undone one needs the operator's eye, and a key that did not work and could not be removed is an error.

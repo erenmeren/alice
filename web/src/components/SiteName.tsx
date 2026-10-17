@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { firstServerName } from '../api/nginx';
+import { firstServerName } from '../api/webServer';
 import type { CertificateLocation } from '../api/types';
 
 // siteIsData: the website's name is a server name from the configuration (data), not one of the

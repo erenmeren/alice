@@ -8,7 +8,7 @@ import { deployCertificate, getCertificate } from '../api/endpoints';
 import { keyAlgorithmKey, unsupportedReasonKey, fileProblemKey } from '../api/enums';
 import { isApiError } from '../api/client';
 import { isAbort } from '../api/jobs';
-import { canDeployTo } from '../api/nginx';
+import { canDeployTo } from '../api/webServer';
 import { CERTIFICATES_KEY, certificateKey, DEPLOYMENTS_KEY } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
 import type { Certificate, CertificateLocation, DeployResult, DeploymentDetail } from '../api/types';

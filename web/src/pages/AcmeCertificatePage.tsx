@@ -23,7 +23,7 @@ import { ACME_CERTIFICATES_KEY, acmeCertificateKey, acmeOrdersKey, CERTIFICATES_
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
 import { AcmeBindingsPanel } from '../components/acme/AcmeBindingsPanel';
-import { hookName, ORDER_POLL_MS, Problem, providerName, renewal, stateIcon, stateTone, useChangesLocked, useHooks, useNginxServers, useProviders } from '../components/acme/issued';
+import { hookName, ORDER_POLL_MS, Problem, providerName, renewal, stateIcon, stateTone, useChangesLocked, useHooks, useWebServers, useProviders } from '../components/acme/issued';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { Expiry } from '../components/Expiry';
@@ -65,7 +65,7 @@ export function AcmeCertificatePage() {
     refetchInterval: (q) => (q.state.data?.items.some((o) => o.state === 'running') ? ORDER_POLL_MS : false),
   });
   const c = cert.data;
-  const servers = useNginxServers(c?.challenge === 'http01');
+  const servers = useWebServers(c?.challenge === 'http01');
   const running = !!c?.running_order_id || (orders.data?.items.some((o) => o.state === 'running') ?? false);
 
   // When an order starts or ends, the other reads follow: the orders list, the certificate (its new current

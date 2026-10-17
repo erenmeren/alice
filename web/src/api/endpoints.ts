@@ -301,7 +301,7 @@ export async function listAllTargets(type?: TargetType): Promise<{ items: Target
   return { items, next_cursor: null };
 }
 
-// listAllServers is the servers only (Linux and Nginx): a Key Vault is a target too, but it has its own page.
+// listAllServers is the servers only (Linux and web servers): a Key Vault is a target too, but it has its own page.
 export async function listAllServers(): Promise<{ items: Target[]; next_cursor: string | null }> {
   const all = await listAllTargets();
   return { items: all.items.filter((t) => t.type !== 'azure_key_vault'), next_cursor: null };

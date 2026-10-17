@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type { ACMECertificate, ACMECertificateState, ACMEProvider, ACMEHook } from '../../api/acme';
 import { listACMEHooks, listACMEProviders } from '../../api/acme';
-import { getLicenseStatus, listAllTargets } from '../../api/endpoints';
+import { getLicenseStatus, listAllServers } from '../../api/endpoints';
+import { isWebServer } from '../../api/webServer';
 import { ACME_HOOK_LIST_KEY, ACME_PROVIDER_LIST_KEY, LICENSE_STATUS_KEY } from '../../api/queryKeys';
 import type { ErrorRef } from '../../api/types';
 import type { IconName } from '../../design/Icon';
@@ -24,8 +25,8 @@ export const STATE_ICON: Record<ACMECertificateState, IconName> = { pending: 'Cl
 export const stateTone = (s: string): Tone => STATE_TONE[s as ACMECertificateState] ?? 'neutral';
 export const stateIcon = (s: string): IconName => STATE_ICON[s as ACMECertificateState] ?? 'CircleDot';
 
-// The query key of the Nginx servers (an HTTP-01 proof runs on one), apart from every other target list.
-export const NGINX_SERVERS_KEY = ['targets', 'list', 'nginx'] as const;
+// The query key of the web servers (an HTTP-01 proof runs on one), apart from every other target list.
+export const WEB_SERVERS_KEY = ['targets', 'list', 'web-servers'] as const;
 
 // The ACME key type of a certificate as the key family a website's file has (rsa, ecdsa), for the website list.
 export const keyFamily = (keyType: string): 'rsa' | 'ecdsa' | '' => (keyType.startsWith('rsa') ? 'rsa' : keyType.startsWith('ecdsa') ? 'ecdsa' : '');
@@ -102,7 +103,8 @@ export function providerProblem(p: ACMEProvider): string {
 // Settings components.
 export const useProviders = () => useQuery({ queryKey: ACME_PROVIDER_LIST_KEY, queryFn: () => listACMEProviders() });
 export const useHooks = () => useQuery({ queryKey: ACME_HOOK_LIST_KEY, queryFn: () => listACMEHooks() });
-export const useNginxServers = (enabled = true) => useQuery({ queryKey: NGINX_SERVERS_KEY, queryFn: () => listAllTargets('nginx'), enabled });
+export const useWebServers = (enabled = true) =>
+  useQuery({ queryKey: WEB_SERVERS_KEY, queryFn: async () => ({ items: (await listAllServers()).items.filter((s) => isWebServer(s.type)) }), enabled });
 
 export const providerName = (list: ACMEProvider[] | undefined, id: string) => list?.find((p) => p.id === id)?.name ?? '';
 export const hookName = (list: ACMEHook[] | undefined, id: string | null) => (id ? (list?.find((h) => h.id === id)?.name ?? '') : '');

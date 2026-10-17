@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate } from 'react-router';
 import { listAllServers } from '../api/endpoints';
+import { isServerType } from '../api/webServer';
 import { TARGETS_KEY } from '../api/queryKeys';
 import type { Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
@@ -134,7 +135,7 @@ function ServersTable({ items }: { items: Target[] }) {
               <span className={classes.mono} translate="no">{`${tg.host}:${tg.port}`}</span>
             </Table.Td>
             <Table.Td>
-              {(tg.type === 'linux' || tg.type === 'nginx') && (
+              {isServerType(tg.type) && (
                 <StatusBadge tone="neutral" icon="Server" size="sm">
                   {t(`targets.typeLabel.${tg.type}`)}
                 </StatusBadge>

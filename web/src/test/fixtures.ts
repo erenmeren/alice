@@ -607,7 +607,7 @@ export const nginxTargetFixture: Target = {
   name: 'web-nginx',
   type: 'nginx',
   host: 'nginx-01.example.com',
-  capabilities: ['discover_certs', 'deploy_certs', 'test_connection'],
+  capabilities: ['test_connection', 'discover_ssh_keys', 'authorized_keys', 'discover_certificates', 'key_login', 'deploy_certificate', 'verify_deployment', 'http01_challenge'],
   facts: { ...targetFixture.facts, web_server: webServerFacts() },
 };
 

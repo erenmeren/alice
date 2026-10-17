@@ -1,6 +1,7 @@
 // Wire types for the Alice REST API (snake_case, see api/openapi.yaml).
 
 import type { Vault } from './keyvault';
+import type { WebServerType } from './webServer';
 
 export type Role = 'admin' | 'operator' | 'auditor';
 export type TokenScope = 'read' | 'operate';
@@ -254,7 +255,7 @@ export interface LicenseUploadResult {
 // Phase 3: servers (targets), host keys, SSH key inventory, jobs (api/openapi.yaml).
 
 export type TargetStatus = 'pending_host_key' | 'checking' | 'ok' | 'degraded' | 'unreachable' | 'host_key_changed' | 'auth_failed' | 'disabled';
-export type TargetType = 'linux' | 'nginx' | 'azure_key_vault';
+export type TargetType = 'linux' | WebServerType | 'azure_key_vault';
 
 // Warning is a stable code (translated as warnings.<code>) and its parameters.
 export interface Warning {
@@ -299,7 +300,7 @@ export interface SSHDSettings {
 // and config_error_reason are codes (see CONFIG_ERRORS and CONFIG_REASONS); config_error_file is text
 // from the server.
 export interface WebServerFacts {
-  software: 'nginx';
+  software: WebServerType;
   version: string;
   conf_path: string;
   config_valid: boolean;
@@ -344,7 +345,7 @@ export interface Target {
 
 export interface TargetCreateRequest {
   name: string;
-  type: 'linux' | 'nginx';
+  type: 'linux' | WebServerType;
   host: string;
   port: number;
   username: string;

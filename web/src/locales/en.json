@@ -959,6 +959,11 @@
       "installation_restored": "Installation record restored"
     }
   },
+  "webServer": {
+    "software": {
+      "nginx": "Nginx"
+    }
+  },
   "warnings": {
     "file_unparseable": "Alice could not read the authorized_keys file {{path}} of {{user}}; its keys are not listed.",
     "keys_managed_elsewhere": "The SSH server also asks a program (AuthorizedKeysCommand) for keys, so the key files may not be the whole picture. Alice will not change keys here.",
@@ -979,9 +984,9 @@
     "incomplete": "Alice reported a note about this server without its details.",
     "stream_tls": "TLS in stream blocks is not supported in this version. The websites in http blocks are still listed.",
     "mail_tls": "TLS in mail blocks is not supported in this version. The websites in http blocks are still listed.",
-    "web_server_config_invalid": "Nginx's configuration has an error. Alice will not deploy until it is fixed.",
-    "web_server_not_found": "Nginx was not found on this server.",
-    "web_server_profile_missing": "The Nginx permissions are not installed on this server, so Alice cannot read its websites. Run the Nginx commands for server preparation, then choose Discover.",
+    "web_server_config_invalid": "{{software}}'s configuration has an error. Alice will not deploy until it is fixed.",
+    "web_server_not_found": "{{software}} was not found on this server.",
+    "web_server_profile_missing": "The {{software}} permissions are not installed on this server, so Alice cannot read its websites. Run the {{software}} commands for server preparation, then choose Discover.",
     "config_file_writable": "An Nginx configuration file can be changed by users other than root: {{path}}",
     "too_many_files": "This server uses more certificate files than Alice lists, so some were not read.",
     "locations_dropped": "This server has more websites than Alice lists, so the list is incomplete and no website is marked as no longer found.",
@@ -1050,8 +1055,8 @@
     "hostKeyChanged": "The server's identity has changed, so Alice stopped all work on it. Ask your security team to confirm the change before you accept it.",
     "facts": {
       "neverScanned": "Not scanned yet.",
-      "nginxStale": "The Nginx details below may be out of date. Alice last read websites from this server on {{time}}.",
-      "nginxNotFound": "Nginx was not found on this server."
+      "webServerStale": "The {{software}} details below may be out of date. Alice last read websites from this server on {{time}}.",
+      "webServerNotFound": "{{software}} was not found on this server."
     },
     "openServer": "Open the server",
     "typeLabel": {
@@ -1095,7 +1100,7 @@
         "platform": "Platform",
         "os": "Operating system",
         "helper": "alice-helper version",
-        "nginx": "Nginx version",
+        "webServer": "{{software}} version",
         "lastConnected": "Last connected",
         "lastScan": "Last scan",
         "discoveryInterval": "Discovery interval",
@@ -1105,7 +1110,7 @@
       "everyHours_one": "Every hour",
       "everyHours_other": "Every {{count}} hours",
       "operations": "Available operations",
-      "operationsText": "Alice updates certificate and key files through its restricted helper. Nginx configuration remains under your control.",
+      "operationsText": "Alice updates certificate and key files through its restricted helper. {{software}} configuration remains under your control.",
       "operationsTextLinux": "Alice reads and changes the SSH keys on this server through its restricted helper.",
       "readOnly": "Read only"
     }
@@ -1603,7 +1608,7 @@
   },
   "locations": {
     "title": "Websites on this server",
-    "intro": "Each row is a certificate file that Nginx uses. Alice never changes the Nginx configuration, only these files.",
+    "intro": "Each row is a certificate file that {{software}} uses. Alice never changes the {{software}} configuration, only these files.",
     "discover": "Discover",
     "tableLabel": "Websites on this server",
     "empty": "Alice has not found any certificates on this server yet. Choose Discover.",
@@ -1634,7 +1639,7 @@
     "definedIn": "Defined in: {{file}}",
     "showMissing": "Show websites that are no longer found",
     "truncated": "This list is incomplete: only the first 1000 websites that are no longer found are shown.",
-    "configInvalid": "Nginx's configuration on this server has an error. Alice will not deploy until it is fixed.",
+    "configInvalid": "{{software}}'s configuration on this server has an error. Alice will not deploy until it is fixed.",
     "configFile": "File with the problem: {{file}}",
     "stale": {
       "title": "These websites may be out of date",
@@ -1644,9 +1649,9 @@
     "deployUnavailable": "Deploying is unavailable for now.",
     "unavailable": {
       "status": "The server is not connected right now (see its status above).",
-      "profile_missing": "The Nginx permissions are not installed on this server.",
-      "nginx_not_found": "Nginx was not found on this server.",
-      "config_invalid": "Nginx's configuration has an error.",
+      "profile_missing": "The {{software}} permissions are not installed on this server.",
+      "server_not_found": "{{software}} was not found on this server.",
+      "config_invalid": "{{software}}'s configuration has an error.",
       "last_error": "The last scan failed."
     },
     "rowUnavailable": {

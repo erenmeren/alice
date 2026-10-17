@@ -513,6 +513,12 @@ describe('TargetDetailPage', () => {
       expect(websites.compareDocumentPosition(keys) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     });
 
+    it('names the software in Turkish without a suffix on it', async () => {
+      nginxServer('operator', nginxTargetFixture, 'tr');
+      await renderRoute(`/servers/${nginxTargetFixture.id}`, { languages: ['tr-TR'] });
+      expect((await screen.findByText('Nginx sürümü', { selector: 'dt' })).nextElementSibling).toHaveTextContent('1.24.0');
+    });
+
     it('shows no Nginx facts that the server never reported', async () => {
       nginxServer('operator', nginxTargetWith({}, { web_server: undefined }));
       await renderRoute(`/servers/${nginxTargetFixture.id}`);

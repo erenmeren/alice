@@ -6,7 +6,9 @@ import { useTranslation } from 'react-i18next';
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router';
 import { confirmHostKey, deleteTarget, discoverTarget, getTarget, listHostKeys, listTargetKeys, repinHostKey, testTarget } from '../api/endpoints';
 import { isAbort, JobTimeoutError, waitForJob } from '../api/jobs';
-import { nginxState } from '../api/nginx';
+import { can } from '../api/capabilities';
+import { isServerType, isWebServer, webServerState } from '../api/webServer';
+import { softwareName } from '../components/software';
 import { CERTIFICATES_KEY, TARGETS_KEY, targetKey } from '../api/queryKeys';
 import { useAbort } from '../api/useAbort';
 import { warningKey } from '../api/warnings';
@@ -66,7 +68,7 @@ export function TargetDetailPage() {
     enabled: target.isSuccess,
   });
 
-  const locations = useLocations(id, false, target.data?.type === 'nginx');
+  const locations = useLocations(id, false, target.data ? isWebServer(target.data.type) : false);
   const [error, setError] = useState<unknown>(null);
   const [jobError, setJobError] = useState<JobError | null>(null);
   const [done, setDone] = useState(false);
@@ -121,7 +123,7 @@ export function TargetDetailPage() {
   const pinned = hostKeys.data?.items.find((k) => k.status === 'pinned') ?? null;
   const observed = hostKeys.data?.items.find((k) => k.status === 'observed') ?? null;
   const added = addedNow;
-  const nginx = tg.type === 'nginx';
+  const webServer = isWebServer(tg.type);
   const visibleKeys = (keys.data?.items ?? []).filter((k) => !k.removed_at);
 
   const facts = connectionFacts(t, i18n, tg, pinned, discoveryFailed, websitesAsOf(locations.data?.items ?? []));
@@ -133,7 +135,7 @@ export function TargetDetailPage() {
       disabled={busy || tg.status === 'host_key_changed'}
       onClick={() => void runJob(() => discoverTarget(tg.id), true)}
     >
-      {t(nginx ? 'locations.discover' : 'targets.discover')}
+      {t(webServer ? 'locations.discover' : 'targets.discover')}
     </Button>
   );
 
@@ -190,7 +192,7 @@ export function TargetDetailPage() {
               <HostKeyConfirm host={tg.host} hostKey={observed} busy={busy} onYes={() => void runJob(() => confirmHostKey(tg.id, observed.id, observed.fingerprint))} />
             </Panel>
           )}
-          {nginx && <WebsitesPanel target={tg} discoveryFailed={discoveryFailed} />}
+          {webServer && <WebsitesPanel target={tg} discoveryFailed={discoveryFailed} />}
           <Panel title={t('targets.keysTitle')} padded={false}>
             <ErrorAlert error={keys.error} />
             {keys.isSuccess && visibleKeys.length === 0 && <EmptyState icon="KeyRound" title={t('targets.noKeys')} />}
@@ -241,7 +243,7 @@ export function TargetDetailPage() {
             <FactList facts={facts} />
           </Panel>
           <Panel title={t('targets.page.operations')}>
-            <Text className={classes.small}>{t(nginx ? 'targets.page.operationsText' : 'targets.page.operationsTextLinux')}</Text>
+            <Text className={classes.small}>{can(tg, 'deploy_certificate') ? t('targets.page.operationsText', { software: softwareName(t, tg.type) }) : t('targets.page.operationsTextLinux')}</Text>
             <Group gap="xs" mt="lg">
               {canOperate ? (
                 <Button variant="default" leftSection={<Icon name="Network" size={15} />} disabled={busy} onClick={() => void runJob(() => testTarget(tg.id))}>
@@ -354,17 +356,18 @@ function IdentityNotice({ target, admin, onReview }: { target: Target; admin: bo
 function connectionFacts(t: TFunction, i18n: I18n, target: Target, pinned: HostKey | null, discoveryFailed: boolean, asOf: string | null): Fact[] {
   const lang = i18n.language;
   const f = target.facts;
-  const nginx = target.type === 'nginx' ? f.web_server : undefined;
+  const ws = isWebServer(target.type) ? f.web_server : undefined;
+  const software = softwareName(t, target.type);
   const facts: Fact[] = [
     { key: 'state', label: t('targets.page.facts.state'), value: <TargetStatusBadge status={target.status} /> },
     { key: 'address', label: t('targets.page.facts.address'), value: <Code translate="no">{`${target.host}:${target.port}`}</Code> },
     { key: 'user', label: t('targets.page.facts.user'), value: <Code translate="no">{target.username}</Code> },
   ];
-  if (target.type === 'linux' || target.type === 'nginx') facts.push({ key: 'platform', label: t('targets.page.facts.platform'), value: t(`targets.typeLabel.${target.type}`) });
+  if (isServerType(target.type)) facts.push({ key: 'platform', label: t('targets.page.facts.platform'), value: t(`targets.typeLabel.${target.type}`) });
   if (f.os.pretty_name) facts.push({ key: 'os', label: t('targets.page.facts.os'), value: f.os.pretty_name });
   if (f.helper_version) facts.push({ key: 'helper', label: t('targets.page.facts.helper'), value: f.helper_version });
-  if (nginx?.version) facts.push({ key: 'nginx', label: t('targets.page.facts.nginx'), value: nginx.version });
-  else if (nginx && !nginx.found) facts.push({ key: 'nginx', label: t('targets.page.facts.nginx'), value: t('targets.facts.nginxNotFound') });
+  if (ws?.version) facts.push({ key: 'web_server', label: t('targets.page.facts.webServer', { software }), value: ws.version });
+  else if (ws && !ws.found) facts.push({ key: 'web_server', label: t('targets.page.facts.webServer', { software }), value: t('targets.facts.webServerNotFound', { software }) });
   facts.push({
     key: 'connected',
     label: t('targets.page.facts.lastConnected'),
@@ -376,9 +379,9 @@ function connectionFacts(t: TFunction, i18n: I18n, target: Target, pinned: HostK
     value: (
       <>
         {target.last_discovery_at ? formatDateTime(target.last_discovery_at, lang) : t('targets.facts.neverScanned')}
-        {nginx && nginxState(target, discoveryFailed).stale && asOf && (
+        {ws && webServerState(target, discoveryFailed).stale && asOf && (
           <Text size="xs" c="dimmed" role="note" mt={4}>
-            {t('targets.facts.nginxStale', { time: formatDateTime(asOf, lang) })}
+            {t('targets.facts.webServerStale', { software, time: formatDateTime(asOf, lang) })}
           </Text>
         )}
       </>
@@ -397,6 +400,7 @@ function connectionFacts(t: TFunction, i18n: I18n, target: Target, pinned: HostK
 // FactWarnings words what the last scan reported about the server (helper warnings and unreadable key lines).
 function FactWarnings({ target }: { target: Target }) {
   const { t } = useTranslation();
+  const software = softwareName(t, target.type);
   const f = target.facts;
   // unreadable_line is shown per line from facts.unreadable below, so the summary warning is skipped here.
   const warnings = f.warnings.filter((w) => w.code !== 'unreadable_line');
@@ -405,7 +409,7 @@ function FactWarnings({ target }: { target: Target }) {
     <Stack gap="xs">
       {warnings.map((w) => (
         <Alert key={`${w.code}-${JSON.stringify(w.params)}`} color="yellow" style={WRAP}>
-          {t(warningKey(w), w.params)}
+          {t(warningKey(w), { ...w.params, software })}
           {warningKey(w) === 'warnings.unknown' || warningKey(w) === 'warnings.incomplete' ? (
             <Code ml="xs">{w.code}</Code>
           ) : null}

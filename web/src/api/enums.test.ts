@@ -26,6 +26,7 @@ import {
   unsupportedReasonKey,
   verifiedKey,
 } from './enums';
+import { CAPABILITIES } from './capabilities';
 import { LOCATION_WARNINGS, WARNING_PARAMS, locationWarningKey, warningKey } from './warnings';
 
 // The enums are read from api/openapi.yaml, so a value the API gains without a label fails here.
@@ -290,5 +291,11 @@ describe('Nginx deployment, website and fact labels cover the specification and 
         expect(typeof t(lang, key), code).toBe('string');
       }
     });
+  });
+});
+
+describe('capabilities', () => {
+  it('lists every Go capability', () => {
+    eq(goConsts('internal/providers/capability.go', /^Cap/), CAPABILITIES);
   });
 });

@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import { firstServerName } from '../api/nginx';
+import { firstServerName } from '../api/webServer';
 import type { CertificateLocation } from '../api/types';
 
 // useSiteLabel returns a function that names a website: its first server name, "(default server)"

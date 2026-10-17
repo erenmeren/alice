@@ -24,7 +24,7 @@ import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
 import { DialogActions, FactList, Notice } from '../ui';
 import classes from './acme.module.css';
-import { dnsLower, isWildcard, nameAllowed, nameProblem, providerProblem, useHooks, useNginxServers, useProviders } from './issued';
+import { dnsLower, isWildcard, nameAllowed, nameProblem, providerProblem, useHooks, useWebServers, useProviders } from './issued';
 
 const STEPS = ['authority', 'names', 'proof', 'options', 'review'] as const;
 type Step = (typeof STEPS)[number];
@@ -63,7 +63,7 @@ export function GetCertificateDialog({ onClose, onOpen }: { onClose: () => void;
   const [created, setCreated] = useState<ACMECertificate | null>(null);
   const [starting, setStarting] = useState<'test' | 'order' | null>(null);
   const [startError, setStartError] = useState<unknown>(null);
-  const servers = useNginxServers(challenge === 'http01');
+  const servers = useWebServers(challenge === 'http01');
   const heading = useRef<HTMLHeadingElement>(null);
   const index = STEPS.indexOf(step);
 
