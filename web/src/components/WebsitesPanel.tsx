@@ -17,6 +17,7 @@ import { reasonTitle } from './JobErrorAlert';
 import { siteIsData } from './SiteName';
 import { useLocations, websitesAsOf } from './useLocations';
 import { useSiteLabel } from './useSiteLabel';
+import { DisabledFeature } from './DisabledFeature';
 import { softwareName } from './software';
 import { EmptyState, Panel, StatusBadge } from './ui';
 import { WRAP } from './wrap';
@@ -32,7 +33,7 @@ const BLOCK_KEYS: Record<DeployBlock, string> = {
 
 // RowButton is a button whose accessible name carries the website ("Deploy certificate: name").
 // The name text is data, so it sits in a hidden translate="no" element the button points at.
-function RowButton({ id, label, data, children, ...rest }: { id: string; label: string; data: boolean; children: string; onClick: () => void; disabled?: boolean; variant?: string }) {
+function RowButton({ id, label, data, children, ...rest }: { id: string; label: string; data: boolean; children: string; onClick: () => void; disabled?: boolean; variant?: string; 'aria-describedby'?: string }) {
   return (
     <>
       <span id={id} hidden translate={data ? 'no' : undefined}>
@@ -131,6 +132,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
                 <LocationRow
                   key={l.id}
                   l={l}
+                  target={target}
                   site={siteLabel(l)}
                   blocked={state.block !== null}
                   canDeploy={canDeploy}
@@ -151,6 +153,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
 
 function LocationRow({
   l,
+  target,
   site,
   blocked,
   canDeploy,
@@ -158,6 +161,7 @@ function LocationRow({
   onSettings,
 }: {
   l: CertificateLocation;
+  target: Target;
   site: string;
   blocked: boolean;
   canDeploy: boolean;
@@ -271,13 +275,17 @@ function LocationRow({
       <Table.Td>
         <Group gap="xs">
           {canDeploy && canDeployTo(l) && (
-            <RowButton id={`deploy-${l.id}`} data={siteIsData(l)} label={t('locations.deployNamed', { site })} onClick={onDeploy} disabled={blocked}>
-              {t('locations.deploy')}
-            </RowButton>
+            <DisabledFeature target={target} capability="deploy_certificate">
+              <RowButton id={`deploy-${l.id}`} data={siteIsData(l)} label={t('locations.deployNamed', { site })} onClick={onDeploy} disabled={blocked}>
+                {t('locations.deploy')}
+              </RowButton>
+            </DisabledFeature>
           )}
-          <RowButton id={`settings-${l.id}`} data={siteIsData(l)} label={t('locations.settingsNamed', { site })} variant="default" onClick={onSettings}>
-            {t('locations.settings')}
-          </RowButton>
+          <DisabledFeature target={target} capability="verify_deployment">
+            <RowButton id={`settings-${l.id}`} data={siteIsData(l)} label={t('locations.settingsNamed', { site })} variant="default" onClick={onSettings}>
+              {t('locations.settings')}
+            </RowButton>
+          </DisabledFeature>
         </Group>
       </Table.Td>
     </Table.Tr>

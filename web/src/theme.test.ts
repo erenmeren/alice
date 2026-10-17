@@ -106,10 +106,10 @@ describe('semantic colors', () => {
       if (!/data-mantine-color-scheme='dark'/.test(sel) || sel.trim().startsWith(':root')) continue;
       for (const [, shade] of body.matchAll(/--mantine-color-([a-z]+-\d)\b/g)) if (!shade.startsWith('dark-')) shades.add(shade);
     }
-    // Tooltip (gray-2) and the typography styles' <mark> (yellow-5): components the app does not use.
+    // Tooltip (gray-2; drawn from the tokens by the theme's Tooltip class) and the typography styles' <mark> (yellow-5): the app does not use the typography styles.
     expect([...shades].sort()).toEqual(['gray-2', 'yellow-5']);
     const sources = (readdirSync('src', { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f));
-    const users = sources.filter((f) => /\b(Tooltip|TypographyStylesProvider|Typography)\b/.test(readFileSync(`src/${f}`, 'utf8')));
+    const users = sources.filter((f) => /\b(TypographyStylesProvider|Typography)\b/.test(readFileSync(`src/${f}`, 'utf8')));
     expect(users).toEqual([]);
   });
   it('uses the bundled Geist fonts with system fallbacks', () => {

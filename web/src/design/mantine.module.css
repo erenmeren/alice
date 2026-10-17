@@ -96,3 +96,7 @@
 [data-mantine-color-scheme] .segmentedIndicator { background: var(--alice-surface); box-shadow: 0 1px 3px #00000010; border-radius: 4px; }
 [data-mantine-color-scheme] .segmentedLabel { color: var(--alice-text-secondary); font-size: 12px; font-weight: 500; }
 [data-mantine-color-scheme] .segmentedLabel:where([data-active], [data-active]:hover, :hover) { color: var(--alice-text); }
+
+/* The tooltip (a disabled control's note) on the raised surface in --alice-text with a border, in both schemes, not
+   Mantine's gray-9 / gray-2. */
+[data-mantine-color-scheme] .tooltip { background: var(--alice-surface-raised); color: var(--alice-text); border: 1px solid var(--alice-border-strong); font-size: 12px; }

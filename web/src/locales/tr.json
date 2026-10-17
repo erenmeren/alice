@@ -960,6 +960,7 @@
     }
   },
   "webServer": {
+    "notAvailable": "{{software}} sunucularında henüz kullanılamıyor",
     "software": {
       "nginx": "Nginx"
     }

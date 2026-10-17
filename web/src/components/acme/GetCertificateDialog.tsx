@@ -24,6 +24,8 @@ import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
 import { DialogActions, FactList, Notice } from '../ui';
 import classes from './acme.module.css';
+import { can } from '../../api/capabilities';
+import { unavailableNote } from '../DisabledFeature';
 import { dnsLower, isWildcard, nameAllowed, nameProblem, providerProblem, useHooks, useWebServers, useProviders } from './issued';
 
 const STEPS = ['authority', 'names', 'proof', 'options', 'review'] as const;
@@ -366,7 +368,7 @@ export function GetCertificateDialog({ onClose, onOpen }: { onClose: () => void;
                         value={targetId}
                         onChange={(e) => setTargetId(e.currentTarget.value)}
                         error={local === 'acme.issued.wizard.chooseServer' ? t(local) : fieldErrors.http_target_id}
-                        data={[{ value: '', label: t('acme.issued.wizard.chooseServerOption') }, ...(servers.data?.items ?? []).map((s) => ({ value: s.id, label: s.name }))]}
+                        data={[{ value: '', label: t('acme.issued.wizard.chooseServerOption') }, ...(servers.data?.items ?? []).map((s) => ({ value: s.id, label: can(s, 'http01_challenge') ? s.name : `${s.name} — ${unavailableNote(t, s)}`, disabled: !can(s, 'http01_challenge') }))]}
                       />
                     )}
                     <details className={classes.help}>

@@ -1,5 +1,5 @@
 import {
-  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, PasswordInput, Radio, SegmentedControl, Switch, Table, TableScrollContainer, TableTh, Tabs, Title,
+  Alert, Badge, Button, Card, Checkbox, Code, Input, InputWrapper, Modal, Paper, PasswordInput, Radio, SegmentedControl, Switch, Table, TableScrollContainer, TableTh, Tabs, Title, Tooltip,
   createTheme, defaultVariantColorsResolver,
   type CSSVariablesResolver, type MantineColorsTuple, type MantineThemeOverride, type VariantColorsResolver,
 } from '@mantine/core';
@@ -162,6 +162,7 @@ export function appTheme(scrollRegionLabel: string): MantineThemeOverride {
       TableTh: TableTh.extend({ defaultProps: { scope: 'col' } }),
       Tabs: Tabs.extend({ classNames: { list: classes.tabsList, tab: classes.tab } }),
       Title: Title.extend({ classNames: { root: classes.title } }),
+      Tooltip: Tooltip.extend({ classNames: { tooltip: classes.tooltip } }),
       Input: Input.extend({ classNames: { input: classes.input } }),
       // The real input of a password field fills a wrapper that clips its overflow; the wrapper draws the focus ring.
       PasswordInput: PasswordInput.extend({ classNames: { innerInput: classes.passwordInnerInput } }),

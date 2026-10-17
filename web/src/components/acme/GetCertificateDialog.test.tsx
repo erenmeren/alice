@@ -246,6 +246,23 @@ describe('Get a certificate', () => {
     expect(within(dialog()).getByText('A wildcard name needs the DNS proof.')).toBeInTheDocument();
   });
 
+  it('shows a web server without the web proof disabled with the note', async () => {
+    base({
+      extra: [http.get('/api/v1/targets', () => HttpResponse.json({ items: [nginxTargetFixture, { ...nginxTargetFixture, id: '0192b000-0000-7000-8000-0000000000a9', name: 'web-2', capabilities: ['test_connection'] }], next_cursor: null }))],
+    });
+    setup();
+    await pickAuthority();
+    await addName('www.example.com');
+    await next();
+    await userEvent.click(within(dialog()).getByRole('radio', { name: 'Web proof (file on the web server)' }));
+    await next();
+    const select = await within(dialog()).findByLabelText(/^Web server/);
+    const two = await within(select).findByRole('option', { name: /web-2/ });
+    expect(two).toBeDisabled();
+    expect(two).toHaveTextContent('Not available for Nginx servers yet');
+    expect(within(select).getByRole('option', { name: 'web-nginx' })).toBeEnabled();
+  });
+
   it('takes the web proof with a managed Nginx server and explains the one-time preparation', async () => {
     let body: unknown;
     base({ extra: [http.post('/api/v1/acme/certificates', async ({ request }) => ((body = await request.json()), HttpResponse.json(acmeCertificateFixture(), { status: 201 })))] });
