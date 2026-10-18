@@ -1046,6 +1046,13 @@ func TestHAProxyDumpKeyInCertIsBounded(t *testing.T) {
 	last := fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles)
 	assert.NotContains(t, *seen, last, "the certificate past the bound is never opened")
 	assert.Contains(t, *seen, fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles-1))
+	// Final review M1: the pair whose certificate was not read stays conditional, with no key
+	// guessed; the ones before it are resolved (no key in the file: the companion).
+	pairs := serverPairs(asList(m["servers"])[0])
+	require.Len(t, pairs, helperproto.MaxServerFiles+1)
+	assert.Equal(t, map[string]any{"cert": "", "key": "", "inherited": false, "unsupported": "conditional", "raw": last}, pairs[helperproto.MaxServerFiles])
+	before := fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles-1)
+	assert.Equal(t, map[string]any{"cert": before, "key": before + ".key", "inherited": false, "unsupported": "", "raw": ""}, pairs[helperproto.MaxServerFiles-1])
 }
 
 // Re-review R1: the entries of a crt-list a user other than root can write name paths of that

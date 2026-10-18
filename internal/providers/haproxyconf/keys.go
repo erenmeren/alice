@@ -8,16 +8,32 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
+// KeyAnswer is ResolveKeys' question answered: whether a certificate file holds a private key.
+type KeyAnswer uint8
+
+const (
+	// KeyNotInCert: the file was looked at and holds no private key, or cannot be read as a
+	// certificate (its problem is reported with the file).
+	KeyNotInCert KeyAnswer = iota
+	// KeyInCert: the file holds a private key; HAProxy takes the key from it.
+	KeyInCert
+	// KeyUnknown: the file was not looked at (the helper's MaxServerFiles bound): the pair stays
+	// conditional (final review M1), its key is never guessed.
+	KeyUnknown
+)
+
 // ResolveKeys makes every pair still pending and conditional supported with its key file (Ruling 12;
 // review S3: a reason a caller set stays). HAProxy takes the key from
 // the certificate PEM first and looks for the companion file only when the PEM has none. So Key
 // is Cert when keyInCert(Cert) says the PEM holds a private key, or when key lookup is off
 // (KeyBeside ""); otherwise it is KeyBeside. When Parse found the key settings unstable, only a
-// key in the PEM is known, and a pair without one stays conditional. keyInCert is asked once
-// per distinct certificate, and only for pending pairs. Until it runs, no pair is supported.
-func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
-	known := map[string]bool{}
-	inCert := func(cert string) bool {
+// key in the PEM is known, and a pair without one stays conditional. A pair whose answer is
+// KeyUnknown stays conditional too (final review M1). keyInCert is asked once per distinct
+// certificate, and only for pending pairs whose key depends on it. Until it runs, no pair is
+// supported.
+func ResolveKeys(c *Config, keyInCert func(cert string) KeyAnswer) {
+	known := map[string]KeyAnswer{}
+	answer := func(cert string) KeyAnswer {
 		v, ok := known[cert]
 		if !ok {
 			v = keyInCert(cert)
@@ -31,13 +47,15 @@ func ResolveKeys(c *Config, keyInCert func(cert string) bool) {
 			switch {
 			case !p.pending || p.Unsupported != ReasonConditional:
 				// Review S3: a pair a caller marked unsupported itself stays so.
-			case p.keyUnsure && !inCert(p.Cert):
+			case !p.keyUnsure && p.KeyBeside == "":
+				// Key lookup off: the key is the certificate file, whatever it holds.
+				p.Unsupported, p.pending, p.Key = "", false, p.Cert
+			case answer(p.Cert) == KeyInCert:
+				p.Unsupported, p.pending, p.keyUnsure, p.Key = "", false, false, p.Cert
+			case p.keyUnsure || answer(p.Cert) == KeyUnknown:
 				*p = Pair{CertRaw: p.CertRaw, Unsupported: ReasonConditional}
 			default:
-				p.Unsupported, p.pending, p.keyUnsure = "", false, false
-				if p.Key = p.Cert; p.KeyBeside != "" && !inCert(p.Cert) {
-					p.Key = p.KeyBeside
-				}
+				p.Unsupported, p.pending, p.Key = "", false, p.KeyBeside
 			}
 		}
 	}

@@ -9,6 +9,14 @@ import (
 	"alice/internal/providers/linuxssh/helperproto"
 )
 
+// keyIf is keyInCert's answer for a certificate that was read.
+func keyIf(in bool) KeyAnswer {
+	if in {
+		return KeyInCert
+	}
+	return KeyNotInCert
+}
+
 func TestResolveKeys(t *testing.T) {
 	c := Config{Servers: []Server{
 		{Pairs: []Pair{
@@ -20,9 +28,9 @@ func TestResolveKeys(t *testing.T) {
 		{Pairs: []Pair{sup("/c/beside.pem", "beside.pem", "/c/beside.pem.key")}},
 	}}
 	asked := map[string]int{}
-	ResolveKeys(&c, func(cert string) bool {
+	ResolveKeys(&c, func(cert string) KeyAnswer {
 		asked[cert]++
-		return cert == "/c/combined.pem"
+		return keyIf(cert == "/c/combined.pem")
 	})
 	assert.Equal(t, []Pair{
 		{Cert: "/c/combined.pem", Key: "/c/combined.pem", CertRaw: "/c/combined.pem", KeyBeside: "/c/combined.pem.key"},
@@ -39,7 +47,7 @@ func TestResolveKeys(t *testing.T) {
 // holds the key, and is conditional otherwise.
 func TestResolveKeysUnstable(t *testing.T) {
 	c := Config{Servers: []Server{{Pairs: []Pair{unsure("/c/in.pem"), unsure("/c/out.pem"), unsure("/c/in.pem")}}}}
-	ResolveKeys(&c, func(cert string) bool { return cert == "/c/in.pem" })
+	ResolveKeys(&c, func(cert string) KeyAnswer { return keyIf(cert == "/c/in.pem") })
 	assert.Equal(t, []Pair{
 		{Cert: "/c/in.pem", Key: "/c/in.pem", CertRaw: "/c/in.pem"},
 		uns("/c/out.pem", ReasonConditional),
@@ -97,4 +105,29 @@ func TestToWire(t *testing.T) {
 	for _, p := range got.Pairs {
 		assert.False(t, p.Inherited)
 	}
+}
+
+// TestResolveKeysUnknown (final review M1): a certificate keyInCert did not look at (the
+// helper's bound) leaves its pair conditional, never supported with a guessed companion; a pair
+// whose key does not depend on the answer (key lookup off) is still resolved.
+func TestResolveKeysUnknown(t *testing.T) {
+	c := Config{Servers: []Server{{Pairs: []Pair{
+		plain("/c/known.pem"),
+		plain("/c/unknown.pem"),
+		unsure("/c/unknown.pem"),
+		sup("/c/nolookup.pem", "/c/nolookup.pem", ""),
+	}}}}
+	ResolveKeys(&c, func(cert string) KeyAnswer {
+		if cert == "/c/known.pem" {
+			return KeyNotInCert
+		}
+		return KeyUnknown
+	})
+	assert.Equal(t, []Pair{
+		{Cert: "/c/known.pem", Key: "/c/known.pem.key", CertRaw: "/c/known.pem", KeyBeside: "/c/known.pem.key"},
+		uns("/c/unknown.pem", ReasonConditional),
+		uns("/c/unknown.pem", ReasonConditional),
+		{Cert: "/c/nolookup.pem", Key: "/c/nolookup.pem", CertRaw: "/c/nolookup.pem"},
+	}, c.Servers[0].Pairs)
+	assert.Equal(t, []string{"/c/known.pem", "/c/nolookup.pem"}, c.CertPaths())
 }

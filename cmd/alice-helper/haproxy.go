@@ -131,14 +131,18 @@ func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, 
 		haproxyconf.MarkWritable(&cfg)
 	} else {
 		// Until ResolveKeys runs no pair is supported (haproxyconf's pending pairs). It asks once
-		// per distinct certificate; past MaxServerFiles (what finishDump describes) the answer is
-		// false without a read, as for a file that cannot be read (review M2).
+		// per distinct certificate; past MaxServerFiles (what finishDump describes) nothing is
+		// read (review M2) and the answer is KeyUnknown, so that pair stays conditional rather
+		// than given a guessed companion key (final review M1).
 		asked := 0
-		haproxyconf.ResolveKeys(&cfg, func(p string) bool {
+		haproxyconf.ResolveKeys(&cfg, func(p string) haproxyconf.KeyAnswer {
 			if asked++; asked > helperproto.MaxServerFiles {
-				return false
+				return haproxyconf.KeyUnknown
 			}
-			return s.keyInCert(p)
+			if s.keyInCert(p) {
+				return haproxyconf.KeyInCert
+			}
+			return haproxyconf.KeyNotInCert
 		})
 	}
 	meta.valid, meta.writable = true, r.writable

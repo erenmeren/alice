@@ -493,12 +493,12 @@ func TestParseUnstableKeys(t *testing.T) {
 			require.Equal(t, "f2", f2.Section)
 			f2.Pairs = slices.Clone(f2.Pairs)
 			c := Config{Servers: []Server{f2}}
-			ResolveKeys(&c, func(string) bool { return false })
+			ResolveKeys(&c, func(string) KeyAnswer { return KeyNotInCert })
 			assert.Equal(t, ReasonConditional, c.Servers[0].Pairs[0].Unsupported, "no key in the PEM: conditional, never a guessed companion")
 
 			f2 = got.Servers[len(got.Servers)-1]
 			c = Config{Servers: []Server{f2}}
-			ResolveKeys(&c, func(string) bool { return true })
+			ResolveKeys(&c, func(string) KeyAnswer { return KeyInCert })
 			p := c.Servers[0].Pairs[0]
 			assert.Empty(t, p.Unsupported, "a key in the PEM is the one HAProxy reads first")
 			assert.Equal(t, p.Cert, p.Key)
@@ -529,7 +529,7 @@ func TestParsePendingUntilResolved(t *testing.T) {
 	t.Run("MarkWritable then ResolveKeys", func(t *testing.T) {
 		c := parse()
 		MarkWritable(&c)
-		ResolveKeys(&c, func(string) bool { return true })
+		ResolveKeys(&c, func(string) KeyAnswer { return KeyInCert })
 		assert.Equal(t, ReasonConfigFileWritable, c.Servers[0].Pairs[0].Unsupported)
 		assert.Equal(t, ReasonConfigFileWritable, c.Servers[0].Pairs[1].Unsupported)
 		assert.Empty(t, c.CertPaths())
@@ -551,20 +551,20 @@ func TestParsePendingUntilResolved(t *testing.T) {
 	t.Run("marked unsupported before ResolveKeys", func(t *testing.T) {
 		c := parse()
 		c.Servers[0].Pairs[0].Unsupported = ReasonPathNotAllowed
-		ResolveKeys(&c, func(string) bool { return true })
+		ResolveKeys(&c, func(string) KeyAnswer { return KeyInCert })
 		assert.Equal(t, ReasonPathNotAllowed, c.Servers[0].Pairs[0].Unsupported)
 		assert.Empty(t, c.Servers[0].Pairs[1].Unsupported, "the other pair is still resolved")
 		assert.Equal(t, []string{"/c/b.pem"}, c.CertPaths())
 	})
 	t.Run("ResolveKeys", func(t *testing.T) {
 		c := parse()
-		ResolveKeys(&c, func(cert string) bool { return cert == "/c/a.pem" })
+		ResolveKeys(&c, func(cert string) KeyAnswer { return keyIf(cert == "/c/a.pem") })
 		assert.Equal(t, []Pair{
 			{Cert: "/c/a.pem", Key: "/c/a.pem", CertRaw: "/c/a.pem", KeyBeside: "/c/a.pem.key"},
 			{Cert: "/c/b.pem", Key: "/c/b.pem.key", CertRaw: "/c/b.pem", KeyBeside: "/c/b.pem.key"},
 		}, c.Servers[0].Pairs)
 		assert.Equal(t, []string{"/c/a.pem", "/c/b.pem"}, c.CertPaths())
-		ResolveKeys(&c, func(string) bool { panic("asked twice") })
+		ResolveKeys(&c, func(string) KeyAnswer { panic("asked twice") })
 		MarkWritable(&c)
 		assert.Equal(t, ReasonConfigFileWritable, c.Servers[0].Pairs[1].Unsupported)
 	})
@@ -583,7 +583,7 @@ func TestParseCrtStore(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			got, err := Parse(newFS().input(cfg, "3.0.30"))
 			require.NoError(t, err)
-			ResolveKeys(&got, func(string) bool { return true })
+			ResolveKeys(&got, func(string) KeyAnswer { return KeyInCert })
 			require.NotEmpty(t, got.Servers)
 			for _, s := range got.Servers {
 				assert.Equal(t, []Pair{uns("/c/a.pem", ReasonConditional)}, s.Pairs)
@@ -616,7 +616,7 @@ func TestParseDollarKeyword(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/key in PEM %v", name, inCert), func(t *testing.T) {
 				got, err := Parse(newFS().input(tc.cfg, tc.version))
 				require.NoError(t, err)
-				ResolveKeys(&got, func(string) bool { return inCert })
+				ResolveKeys(&got, func(string) KeyAnswer { return keyIf(inCert) })
 				require.NotEmpty(t, got.Servers)
 				f2 := got.Servers[len(got.Servers)-1]
 				require.Equal(t, "f2", f2.Section)
@@ -923,7 +923,7 @@ func TestParseWireEstimate(t *testing.T) {
 	got, err := Parse(fs.input(cfg, "2.4.30"))
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, got.wire, wireSize(t, got), "pending")
-	ResolveKeys(&got, func(string) bool { return false })
+	ResolveKeys(&got, func(string) KeyAnswer { return KeyNotInCert })
 	resolved := wireSize(t, got)
 	assert.GreaterOrEqual(t, got.wire, resolved, "after ResolveKeys")
 	MarkWritable(&got)
@@ -1109,7 +1109,7 @@ func TestParseCrtListOverridesAreConditional(t *testing.T) {
 			fs.dirs["/c/d"] = []string{"z.pem"}
 			got, err := Parse(fs.input(fe("  bind :9443 ssl crt-list /l/a.lst"), version))
 			require.NoError(t, err)
-			ResolveKeys(&got, func(string) bool { return true })
+			ResolveKeys(&got, func(string) KeyAnswer { return KeyInCert })
 			assert.Equal(t, []Server{
 				named(srv(2, "f", any9443, uns("/c/a.pem", ReasonConditional)), "a.example"),
 				named(srv(2, "f", any9443, Pair{Cert: "/c/b.pem", Key: "/c/b.pem", CertRaw: "/c/b.pem", KeyBeside: "/c/b.pem.key"}), "b.example"),

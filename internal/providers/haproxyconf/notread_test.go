@@ -47,7 +47,7 @@ func TestParseWritableReadsNothing(t *testing.T) {
 	assert.Equal(t, []Pair{uns("/root/hidden", ReasonConfigFileWritable), uns("/etc/shadow", ReasonConfigFileWritable)}, c.Servers[1].Pairs)
 	assert.Empty(t, c.CertPaths())
 	assert.Empty(t, c.KeyPaths())
-	ResolveKeys(&c, func(string) bool { t.Error("keyInCert"); return false })
+	ResolveKeys(&c, func(string) KeyAnswer { t.Error("keyInCert"); return KeyNotInCert })
 	assert.Empty(t, c.CertPaths())
 }
 

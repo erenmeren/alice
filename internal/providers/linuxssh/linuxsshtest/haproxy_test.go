@@ -2,6 +2,7 @@ package linuxsshtest
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -194,6 +195,25 @@ func TestHAProxyCrtDirectory(t *testing.T) {
 	require.Len(t, d.Servers, 1)
 	require.Len(t, d.Servers[0].Pairs, 1)
 	assert.Equal(t, "/etc/haproxy/dir/x.pem", d.Servers[0].Pairs[0].Cert)
+}
+
+// Final review M1, as the helper: a certificate past MaxServerFiles is not read, so its pair stays
+// conditional instead of being given a guessed companion key.
+func TestHAProxyKeyInCertBound(t *testing.T) {
+	e, _ := haproxyWorld(t)
+	for i := range helperproto.MaxServerFiles + 1 {
+		e.SetHAProxyFile(fmt.Sprintf("/etc/haproxy/many/%04d.pem", i), nil)
+	}
+	e.SetHAProxyConfig("frontend f\n    bind :9443 ssl crt /etc/haproxy/many\n")
+	_, d := haproxyDump(t, e)
+	require.True(t, d.ConfigValid, "%+v", d)
+	require.Len(t, d.Servers, 1)
+	pairs := d.Servers[0].Pairs
+	require.Len(t, pairs, helperproto.MaxServerFiles+1)
+	last := fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles)
+	assert.Equal(t, helperproto.DumpPair{Unsupported: "conditional", Raw: last}, pairs[helperproto.MaxServerFiles])
+	before := fmt.Sprintf("/etc/haproxy/many/%04d.pem", helperproto.MaxServerFiles-1)
+	assert.Equal(t, helperproto.DumpPair{Cert: before, Key: before + ".key"}, pairs[helperproto.MaxServerFiles-1])
 }
 
 func TestHAProxyAndApacheOnOneHostStaySeparate(t *testing.T) {

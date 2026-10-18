@@ -244,11 +244,14 @@ func (x *haproxyHost) haproxyConfig(h *nginxHost) (haproxyconf.Config, nginxMeta
 		haproxyconf.MarkWritable(&cfg)
 	} else {
 		asked := 0
-		haproxyconf.ResolveKeys(&cfg, func(p string) bool {
+		haproxyconf.ResolveKeys(&cfg, func(p string) haproxyconf.KeyAnswer {
 			if asked++; asked > helperproto.MaxServerFiles {
-				return false
+				return haproxyconf.KeyUnknown
 			}
-			return h.keyInCert(p)
+			if h.keyInCert(p) {
+				return haproxyconf.KeyInCert
+			}
+			return haproxyconf.KeyNotInCert
 		})
 	}
 	meta.valid, meta.writable = true, r.writable
