@@ -8,6 +8,9 @@
 #   alice-e2e-pki apache      fresh certificates for the Apache websites (apache-sites.conf):
 #                             apache.example.test as apache.crt and apache.key, combined.example.test
 #                             as combined.pem (certificate, CA and key in one file), in /etc/apache2/ssl
+#   alice-e2e-pki haproxy     fresh certificates for the HAProxy sections (haproxy.cfg), in
+#                             /etc/haproxy/certs: haproxy.example.test as haproxy.pem (certificate, CA
+#                             and key in one file), sni.example.test as sni.pem with its key in sni.pem.key
 #   alice-e2e-pki leaf NAMES DIR   write DIR/leaf.pem (leaf + CA) and DIR/leaf.key for NAMES (one
 #                                  name, or several separated by commas: the first is the CN)
 #   alice-e2e-pki sign NAMES  read a signing request on stdin and print a certificate for NAMES
@@ -112,6 +115,21 @@ apache() {
 	rm -rf "$tmp"
 }
 
+# haproxy: the two HAProxy sections' files (root-owned; keys and the combined file 0600).
+haproxy() {
+	install -d -m 0755 -o root -g root /etc/haproxy/certs
+	tmp=$(mktemp -d)
+	leaf haproxy.example.test "$tmp"
+	cat "$tmp/leaf.pem" "$tmp/leaf.key" >"$tmp/haproxy.pem"
+	install -m 0600 -o root -g root "$tmp/haproxy.pem" /etc/haproxy/certs/haproxy.pem
+	rm -rf "$tmp"
+	tmp=$(mktemp -d)
+	leaf sni.example.test "$tmp"
+	install -m 0644 -o root -g root "$tmp/leaf.pem" /etc/haproxy/certs/sni.pem
+	install -m 0600 -o root -g root "$tmp/leaf.key" /etc/haproxy/certs/sni.pem.key
+	rm -rf "$tmp"
+}
+
 case "${1:-}" in
 init)
 	ensure_ca
@@ -121,6 +139,7 @@ init)
 www) www ;;
 sites) sites ;;
 apache) apache ;;
+haproxy) haproxy ;;
 leaf)
 	[ "$#" -eq 3 ] || { echo "usage: alice-e2e-pki leaf NAMES DIR" >&2; exit 2; }
 	leaf "$2" "$3"
@@ -130,7 +149,7 @@ sign)
 	sign "$2"
 	;;
 *)
-	echo "usage: alice-e2e-pki init | www | sites | apache | leaf NAMES DIR | sign NAMES" >&2
+	echo "usage: alice-e2e-pki init | www | sites | apache | haproxy | leaf NAMES DIR | sign NAMES" >&2
 	exit 2
 	;;
 esac

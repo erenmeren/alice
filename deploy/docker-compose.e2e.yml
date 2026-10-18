@@ -45,7 +45,9 @@ services:
   # websites (www.example.test, supported; files.example.test, deliberately unsupported) whose test
   # CA and certificates are created at container start. It also has the distribution's Apache with
   # two TLS websites on port 8443 (apache.example.test, combined.example.test; web/e2e/webservers.spec.ts),
-  # configured and not running: Alice only discovers Apache servers. No systemd: /usr/bin/systemctl is a test
+  # configured and not running: Alice only discovers Apache servers. It also has the distribution's HAProxy with
+  # two TLS sections on ports 9443 and 9444 (fe_https, li_sni with sni.example.test; web/e2e/webservers.spec.ts),
+  # configured and not running: Alice only discovers HAProxy servers. No systemd: /usr/bin/systemctl is a test
   # shim. Playwright prepares it with the setup script Alice shows (alice-e2e-prepare), rotates its
   # host key (alice-e2e-rotate-hostkey) and drives Nginx (alice-e2e-newcert, -served, -reload-mode,
   # -test-mode, -nginx-reset) through "docker compose exec". Alice reaches it as sshtarget:22 and

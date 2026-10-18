@@ -1,0 +1,2 @@
+# Test only: the crt-list of the e2e SSH target's li_sni (haproxy.cfg); sni.pem is relative to crt-base.
+sni.pem sni.example.test
