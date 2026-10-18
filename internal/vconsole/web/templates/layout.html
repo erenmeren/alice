@@ -3,28 +3,58 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>{{template "title" .}} · Alice licenses</title>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/passkey.js" defer></script>
 </head>
-<body>
-<header class="top">
-<span class="brand">Alice licenses</span>
 {{if .User.Name}}
-<form method="post" action="/logout" class="logout">
-<a href="/notifications" class="bell">Notifications{{with .Unread}} ({{.}}){{end}}</a>
-<span class="who">{{.User.Name}}</span>
-<button type="submit">Sign out</button>
+<body class="app">
+<aside class="sidebar">
+<div class="brand"><span class="logo">{{template "i-shield"}}</span><span class="brand-text">Alice licenses</span></div>
+<nav class="nav" aria-label="Main">
+<a href="/"{{if eq .Page "home"}} class="active" aria-current="page"{{end}}>{{template "i-home"}}Home</a>
+<a href="/customers"{{if eq .Page "customers"}} class="active" aria-current="page"{{end}}>{{template "i-users"}}Customers</a>
+<a href="/requests/new"{{if eq .Page "request_new"}} class="active" aria-current="page"{{end}}>{{template "i-file-plus"}}New request</a>
+<a href="/licenses"{{if eq .Page "licenses"}} class="active" aria-current="page"{{end}}>{{template "i-key"}}Licenses</a>
+<a href="/notifications"{{if eq .Page "notifications"}} class="active" aria-current="page"{{end}}>{{template "i-bell"}}Notifications{{with .Unread}} ({{.}}){{end}}</a>
+</nav>
+<form method="post" action="/logout" class="account">
+<span class="avatar" aria-hidden="true">{{template "i-user"}}</span>
+<span class="account-text"><span class="who">{{.User.Name}}</span><span class="role">{{.User.Role}}</span></span>
+<button type="submit" class="btn btn-ghost btn-icon" title="Sign out" aria-label="Sign out">{{template "i-logout"}}</button>
 </form>
-{{end}}
-</header>
-<main>
+</aside>
+<div class="main">
+<main class="content">
 {{template "content" .}}
 </main>
+</div>
 </body>
-</html>
-{{define "nav"}}
-<nav>
-<a href="/">Home</a> · <a href="/customers">Customers</a> · <a href="/requests/new">New request</a> · <a href="/licenses">Licenses</a> · <a href="/notifications">All notifications</a>
-</nav>
+{{else}}
+<body class="auth">
+<main class="auth-main">
+<div class="auth-brand"><span class="logo">{{template "i-shield"}}</span><span class="brand-text">Alice licenses</span></div>
+<div class="card auth-card">
+{{template "content" .}}
+</div>
+</main>
+</body>
 {{end}}
+</html>
+{{define "nav"}}{{end}}
+{{define "i-shield"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg>{{end}}
+{{define "i-user"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>{{end}}
+{{define "i-home"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>{{end}}
+{{define "i-users"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>{{end}}
+{{define "i-file-plus"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/><path d="M12 18v-6"/></svg>{{end}}
+{{define "i-key"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/></svg>{{end}}
+{{define "i-bell"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>{{end}}
+{{define "i-logout"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>{{end}}
+{{define "i-download"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></svg>{{end}}
+{{define "i-refresh"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>{{end}}
+{{define "i-plus"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5v14"/></svg>{{end}}
+{{define "i-inbox"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>{{end}}
+{{define "i-clock"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>{{end}}
+{{define "i-check"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>{{end}}
+{{define "i-fingerprint"}}<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/></svg>{{end}}

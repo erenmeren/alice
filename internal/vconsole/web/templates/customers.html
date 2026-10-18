@@ -1,23 +1,32 @@
 {{define "title"}}Customers{{end}}
 {{define "content"}}
-{{template "nav" .}}
-<h1>Customers</h1>
+<div class="page-head">
+<div><h1>Customers</h1><p>The companies you send licenses to.</p></div>
+</div>
+<div class="card">
 {{with .Data.Customers}}
-<table>
+<div class="table-wrap"><table>
 <thead><tr><th>Name</th><th>Contact</th><th>Notes</th><th></th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.Name}}</td><td>{{.Contact}}</td><td>{{.Notes}}</td><td><a href="/requests/new?customer={{.ID}}">New request</a></td></tr>
+{{range .}}<tr><td><strong>{{.Name}}</strong></td><td class="muted">{{.Contact}}</td><td class="wrap muted">{{.Notes}}</td><td class="actions"><a class="btn btn-outline btn-sm" href="/requests/new?customer={{.ID}}">{{template "i-plus"}}New request</a></td></tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{else}}
-<p class="hint">No customers yet.</p>
+<div class="empty">{{template "i-users"}}<span>No customers yet.</span></div>
 {{end}}
-<h2>Add a customer</h2>
+</div>
+<section class="section">
+<div class="card">
+<div class="card-head"><h2>Add a customer</h2><p>Name is required; contact and notes are for your team.</p></div>
+<div class="card-body">
+<form method="post" action="/customers" class="form">
 {{if .Data.Error}}<p role="alert" class="alert">{{.Data.Error}}</p>{{end}}
-<form method="post" action="/customers">
-<p><label for="name">Name</label><input type="text" id="name" name="name" value="{{.Data.Form.Name}}" maxlength="200" required></p>
-<p><label for="contact">Contact</label><input type="text" id="contact" name="contact" value="{{.Data.Form.Contact}}" maxlength="500"></p>
-<p><label for="notes">Notes</label><textarea id="notes" name="notes" rows="3" maxlength="4000">{{.Data.Form.Notes}}</textarea></p>
-<button type="submit">Add customer</button>
+<div class="field"><label for="name">Name</label><input type="text" id="name" name="name" value="{{.Data.Form.Name}}" maxlength="200" required></div>
+<div class="field"><label for="contact">Contact <span class="optional">(optional)</span></label><input type="text" id="contact" name="contact" value="{{.Data.Form.Contact}}" maxlength="500"></div>
+<div class="field"><label for="notes">Notes <span class="optional">(optional)</span></label><textarea id="notes" name="notes" rows="3" maxlength="4000">{{.Data.Form.Notes}}</textarea></div>
+<div class="form-actions"><button type="submit">Add customer</button></div>
 </form>
+</div>
+</div>
+</section>
 {{end}}

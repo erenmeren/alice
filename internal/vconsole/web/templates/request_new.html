@@ -1,22 +1,29 @@
 {{define "title"}}New request{{end}}
 {{define "content"}}
-{{template "nav" .}}
-<h1>New license request</h1>
+<div class="page-head">
+<div><h1>New license request</h1><p>A signer issues the license from this request.</p></div>
+</div>
+<div class="card">
+<div class="card-body">
+<form method="post" action="/requests" class="form">
 {{if .Data.Renewing}}<p class="notice">Renewing {{.Data.Renewing}}. Check the values, then send the request.</p>{{end}}
 {{if .Data.Error}}<p role="alert" class="alert">{{.Data.Error}}</p>{{end}}
-<form method="post" action="/requests">
-<p><label for="customer_id">Customer</label>
+<div class="field"><label for="customer_id">Customer</label>
 <select id="customer_id" name="customer_id" required>
 <option value="">Choose a customer</option>
 {{$sel := .Data.Form.CustomerID}}
 {{range .Data.Customers}}<option value="{{.ID}}"{{if eq (printf "%d" .ID) $sel}} selected{{end}}>{{.Name}}</option>
-{{end}}</select></p>
-<p><label for="installation">Installation ID</label><input type="text" id="installation" name="installation" value="{{.Data.Form.Installation}}" maxlength="64" required></p>
-<p><label for="targets">Targets</label><input type="text" id="targets" name="targets" value="{{.Data.Form.Targets}}" inputmode="numeric" required></p>
-<p><label for="months">Months (1 to 60)</label><input type="text" id="months" name="months" value="{{.Data.Form.Months}}" inputmode="numeric"></p>
-<p><label for="from">Starts on (optional, 2026-10-01)</label><input type="text" id="from" name="from" value="{{.Data.Form.From}}" maxlength="40"></p>
-<p><label for="features">Features (optional, comma separated)</label><input type="text" id="features" name="features" value="{{.Data.Form.Features}}"></p>
-<p><label for="replaces">Replaces license (optional)</label><input type="text" id="replaces" name="replaces" value="{{.Data.Form.Replaces}}" maxlength="64"></p>
-<button type="submit">Send request</button>
+{{end}}</select></div>
+<div class="field"><label for="installation">Installation ID</label><input type="text" id="installation" name="installation" value="{{.Data.Form.Installation}}" maxlength="64" placeholder="ALICE-XXXX-XXXX-XXXX-XXXX" spellcheck="false" required><p class="help">Shown on the customer's Alice license page.</p></div>
+<div class="form-grid">
+<div class="field"><label for="targets">Targets</label><input type="text" id="targets" name="targets" value="{{.Data.Form.Targets}}" inputmode="numeric" required><p class="help">How many servers the license covers.</p></div>
+<div class="field"><label for="months">Months <span class="optional">(1 to 60)</span></label><input type="text" id="months" name="months" value="{{.Data.Form.Months}}" inputmode="numeric"></div>
+<div class="field"><label for="from">Starts on <span class="optional">(optional)</span></label><input type="text" id="from" name="from" value="{{.Data.Form.From}}" maxlength="40" placeholder="2026-10-01"></div>
+<div class="field"><label for="replaces">Replaces license <span class="optional">(optional)</span></label><input type="text" id="replaces" name="replaces" value="{{.Data.Form.Replaces}}" maxlength="64" placeholder="LIC-..."></div>
+</div>
+<div class="field"><label for="features">Features <span class="optional">(optional, comma separated)</span></label><input type="text" id="features" name="features" value="{{.Data.Form.Features}}"></div>
+<div class="form-actions"><button type="submit">Send request</button><a class="btn btn-outline" href="/">Cancel</a></div>
 </form>
+</div>
+</div>
 {{end}}

@@ -1,22 +1,27 @@
 {{define "title"}}Notifications{{end}}
 {{define "content"}}
-{{template "nav" .}}
-<h1>Notifications</h1>
-<p>Show:
-<a href="/notifications">all</a> ·
-<a href="/notifications?unread=1">unread only</a>
-(showing: {{if .Data.UnreadOnly}}unread only{{else}}all{{end}})</p>
-<form method="post" action="/notifications/read-all"><button type="submit">Mark all as read</button></form>
+<div class="page-head">
+<div><h1>Notifications</h1><p>Reminders and news about requests and licenses.</p></div>
+<form method="post" action="/notifications/read-all" class="inline-form"><button type="submit" class="btn-outline">{{template "i-check"}}Mark all as read</button></form>
+</div>
+<div class="toolbar">
+<nav class="segmented" aria-label="Show">
+<a href="/notifications"{{if not .Data.UnreadOnly}} class="on"{{end}}>all</a>
+<a href="/notifications?unread=1"{{if .Data.UnreadOnly}} class="on"{{end}}>unread only</a>
+</nav>
+</div>
+<div class="card">
 {{with .Data.Items}}
 <ul class="notifications">
 {{range .}}<li class="{{if .Unread}}unread{{else}}read{{end}}">
 <p class="note-head"><span class="badge sev-{{.Level}}">{{.Level}}</span>{{if .Unread}} <strong>Unread</strong>{{end}} <span class="note-title">{{.Title}}</span></p>
-<p class="hint">{{.When}} UTC{{if .Subject}} · {{if .SubjectURL}}<a href="{{.SubjectURL}}">{{.Subject}}</a>{{else}}{{.Subject}}{{end}}{{end}}</p>
+<p class="note-meta">{{.When}} UTC{{if .Subject}} · {{if .SubjectURL}}<a href="{{.SubjectURL}}">{{.Subject}}</a>{{else}}{{.Subject}}{{end}}{{end}}</p>
 {{with .Body}}<details><summary>Details</summary><div class="note-body">{{.}}</div></details>{{end}}
-{{if .Unread}}<form method="post" action="/notifications/{{.ID}}/read"><button type="submit" class="small">Mark as read</button></form>{{end}}
+{{if .Unread}}<form method="post" action="/notifications/{{.ID}}/read" class="inline-form"><button type="submit" class="small btn-outline">Mark as read</button></form>{{end}}
 </li>
 {{end}}</ul>
 {{else}}
-<p class="hint">No notifications.</p>
+<div class="empty">{{template "i-bell"}}<span>No notifications.</span></div>
 {{end}}
+</div>
 {{end}}

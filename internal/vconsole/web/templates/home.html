@@ -1,32 +1,52 @@
 {{define "title"}}Home{{end}}
 {{define "content"}}
-{{template "nav" .}}
+<div class="page-head">
+<div><h1>Welcome, {{.User.Name}}</h1><p>License requests and renewals at a glance.</p></div>
+<a class="btn" href="/requests/new">{{template "i-plus"}}New request</a>
+</div>
+<div class="stats">
+<div class="card stat"><div class="stat-label">Open requests {{template "i-file-plus"}}</div><div class="stat-value">{{len .Data.Requests}}</div></div>
+<div class="card stat"><div class="stat-label">Ending within {{.Data.Days}} days {{template "i-clock"}}</div><div class="stat-value">{{len .Data.Licenses}}</div></div>
+<div class="card stat"><div class="stat-label">Unread notifications {{template "i-bell"}}</div><div class="stat-value">{{.Unread}}</div></div>
+</div>
 {{with .Data.Unread}}
-<h1>Unread notifications</h1>
+<section class="section">
+<div class="section-head"><h2>{{template "i-bell"}}Unread notifications</h2><a class="btn btn-ghost btn-sm" href="/notifications">View all</a></div>
+<div class="card">
 <ul class="unread-list">
 {{range .}}<li><span class="badge sev-{{.Level}}">{{.Level}}</span> <a href="/notifications">{{.Title}}</a></li>
 {{end}}</ul>
+</div>
+</section>
 {{end}}
-<h1>Open requests</h1>
+<section class="section">
+<div class="section-head"><h2>{{template "i-file-plus"}}Open requests</h2></div>
+<div class="card">
 {{with .Data.Requests}}
-<table>
+<div class="table-wrap"><table>
 <thead><tr><th>Request</th><th>Customer</th><th>Targets</th><th>Requested by</th></tr></thead>
 <tbody>
-{{range .}}<tr><td><a href="/requests/{{.ID}}">#{{.ID}}</a></td><td>{{.Customer}}</td><td>{{.Targets}}</td><td>{{.RequestedBy}}</td></tr>
+{{range .}}<tr><td><a href="/requests/{{.ID}}">#{{.ID}}</a></td><td>{{.Customer}}</td><td>{{.Targets}}</td><td class="muted">{{.RequestedBy}}</td></tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{else}}
-<p class="hint">No open requests.</p>
+<div class="empty">{{template "i-inbox"}}<span>No open requests.</span></div>
 {{end}}
-<h1>Licenses ending within {{.Data.Days}} days</h1>
+</div>
+</section>
+<section class="section">
+<div class="section-head"><h2>{{template "i-clock"}}Licenses ending within {{.Data.Days}} days</h2><a class="btn btn-ghost btn-sm" href="/licenses">All licenses</a></div>
+<div class="card">
 {{with .Data.Licenses}}
-<table>
+<div class="table-wrap"><table>
 <thead><tr><th>License</th><th>Customer</th><th>Ends</th></tr></thead>
 <tbody>
-{{range .}}<tr><td>{{.LicenseID}}</td><td>{{.Customer}}</td><td>{{.ValidUntil.Format "2006-01-02"}}</td></tr>
+{{range .}}<tr><td class="mono">{{.LicenseID}}</td><td>{{.Customer}}</td><td><span class="badge badge-warn">{{.ValidUntil.Format "2006-01-02"}}</span></td></tr>
 {{end}}</tbody>
-</table>
+</table></div>
 {{else}}
-<p class="hint">None.</p>
+<div class="empty">{{template "i-check"}}<span>None.</span></div>
 {{end}}
+</div>
+</section>
 {{end}}

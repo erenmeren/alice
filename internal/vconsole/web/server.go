@@ -246,6 +246,7 @@ type pageData struct {
 	User   webuser.User
 	Unread int64
 	Data   any
+	Page   string // the page's template name, set by render: the navigation marks it as the current page
 }
 
 // renderUser renders a signed-in page, with the bell's unread count read for this request.
@@ -261,6 +262,7 @@ func (s *Server) render(w http.ResponseWriter, status int, page string, data pag
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	data.Page = page
 	var b strings.Builder
 	if err := t.Execute(&b, data); err != nil {
 		s.log.Error("web: render", "page", page, "err", err)

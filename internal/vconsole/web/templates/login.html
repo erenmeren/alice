@@ -2,7 +2,7 @@
 {{define "content"}}
 <h1>Sign in</h1>
 <p>Sign in with the passkey you registered for this site.</p>
-<button type="button" id="login-button">Sign in with a passkey</button>
+<button type="button" id="login-button" class="btn-block">{{template "i-fingerprint"}}Sign in with a passkey</button>
 <p role="alert" id="message" class="alert"></p>
 <p class="hint">No passkey yet? Ask the owner for an enrollment code and <a href="/enroll">register one</a>.</p>
 {{end}}
