@@ -29,7 +29,7 @@ const maxRaw = 200
 //
 //   - ReadFile returns the text of a crt-list file. Each distinct path is asked for once.
 //   - ReadDir says whether path is a directory and, when it is, gives the names of its regular
-//     entries (a link counts when it resolves to a regular file). It is asked once per distinct
+//     entries (a link counts unless it certainly leads to nothing HAProxy loads). It is asked once per distinct
 //     path of a crt argument or crt-list entry; a path that is not a directory (or whose walk
 //     fails: the helper then describes the file) answers isDir false.
 //

@@ -224,7 +224,7 @@ func (r *haproxyReader) readDir(p string) ([]string, bool, error) {
 	}
 	names, isDir, err := r.s.listRootDir(p)
 	switch {
-	case errors.Is(err, errTooManyEntries):
+	case errors.Is(err, errTooManyEntries), errors.Is(err, errTooManyDirLinks):
 		return nil, false, r.masked(unsupported(helperproto.ConfigReasonTooComplex, ""))
 	case err != nil:
 		return nil, false, r.masked(untrusted(helperproto.ConfigReasonChanged, p))
@@ -297,7 +297,7 @@ func hasPrivateKeyLine(data []byte) bool {
 // confDirUnread reports whether /etc/haproxy/conf.d may hold configuration haproxy-dump does not
 // read (Ruling 2, C14: Rocky 9's unit loads it). It is false only when conf.d is absent, is not a
 // directory, or is a directory that can be listed safely (openRootDir) and holds no regular entry
-// (or link to one) named *.cfg. A conf.d that exists but cannot be listed safely (not root's,
+// (or link HAProxy may load, linkLoadable) named *.cfg. A conf.d that exists but cannot be listed safely (not root's,
 // writable by group or others, on a pseudo file system, too many entries) is true: an empty page
 // must never stand without a reason.
 func (s *sys) confDirUnread() bool {
@@ -324,6 +324,7 @@ func cmdHAProxyDump(ctx context.Context, s *sys, args []string) (any, error) {
 		return nil, refused(helperproto.CodeUsage, "haproxy-dump takes no arguments")
 	}
 	s.syslog(helperproto.SubHAProxyDump, "")
+	s.dirLinks = 0 // maxDirLinks is per dump
 	cfg, meta, err := s.haproxyConfig(ctx)
 	switch {
 	case errors.Is(err, errHAProxyMissing):

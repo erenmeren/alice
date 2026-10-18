@@ -349,7 +349,7 @@ func TestProductionFSMagic(t *testing.T) {
 }
 
 // C9: listRootDir walks to the directory as walkRoot walks to a file, checks the directory itself
-// and lists only regular entries and links that walk to a regular file.
+// and lists only regular entries and links HAProxy may load (final review I2).
 func TestListRootDir(t *testing.T) {
 	setup := func(t *testing.T) *fixture {
 		f := newFixture(t)
@@ -443,10 +443,42 @@ func TestListRootDir(t *testing.T) {
 		f.symlink("/srv/r.pem", "/etc/haproxy/certs/r.pem")       // elsewhere, root-controlled
 		f.symlink("/srv/gone.pem", "/etc/haproxy/certs/gone.pem") // dangling
 		f.symlink("/proc/self/x", "/etc/haproxy/certs/proc.pem")  // missing under the root
+		f.symlink("/etc/passwd/x", "/etc/haproxy/certs/nd.pem")   // below a file: missing
+		f.symlink("loop.pem", "/etc/haproxy/certs/loop.pem")      // a loop: kept, its problem shown
+		f.write("/etc/haproxy/certs/sub/s.pem", "s", 0o644)
+		f.symlink("sub/s.pem", "/etc/haproxy/certs/s.pem") // root-controlled, through sub
 		names, isDir, err := f.s.listRootDir("/etc/haproxy/certs")
 		require.NoError(t, err)
 		assert.True(t, isDir)
-		assert.Equal(t, []string{"a.pem", "link.pem", "r.pem"}, names)
+		// Final review I2: HAProxy stat()s every entry and loads every regular file, so a link
+		// through a directory that is not root-controlled is kept, and describeCert reports
+		// not_root_controlled, as for the same file named directly.
+		assert.Equal(t, []string{"a.pem", "link.pem", "loop.pem", "r.pem", "s.pem", "u.pem"}, names)
+	})
+	// Final review M5: every link is a walk from "/"; the links of all listings of one dump
+	// together are walked at most maxDirLinks times, then the listing is errTooManyLinks.
+	t.Run("links are walked within a budget", func(t *testing.T) {
+		f := setup(t)
+		f.mkdir("/etc/haproxy/more", 0o755)
+		for i := range maxDirLinks { // link.pem is one: maxDirLinks+1 in all
+			d := "/etc/haproxy/certs"
+			if i%2 == 0 {
+				d = "/etc/haproxy/more"
+			}
+			f.symlink("/etc/haproxy/certs/a.pem", fmt.Sprintf("%s/l%04d.pem", d, i))
+		}
+		names, isDir, err := f.s.listRootDir("/etc/haproxy/more")
+		require.NoError(t, err)
+		assert.True(t, isDir)
+		assert.Len(t, names, maxDirLinks/2)
+		names, isDir, err = f.s.listRootDir("/etc/haproxy/certs")
+		assert.ErrorIs(t, err, errTooManyDirLinks)
+		assert.True(t, isDir)
+		assert.Nil(t, names)
+		f.s.dirLinks = 0 // a new dump
+		names, _, err = f.s.listRootDir("/etc/haproxy/certs")
+		require.NoError(t, err)
+		assert.Len(t, names, 2+maxDirLinks/2)
 	})
 	t.Run("special file system", func(t *testing.T) {
 		f := setup(t)

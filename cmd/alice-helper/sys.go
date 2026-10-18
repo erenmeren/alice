@@ -41,6 +41,8 @@ type sys struct {
 	runApache func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
 	// runHAProxy runs /usr/sbin/haproxy with fixed arguments through runGuarded, as runNginx.
 	runHAProxy func(ctx context.Context, args ...string) (stdout, stderr []byte, err error)
+	// dirLinks counts the links the crt directory listings of one haproxy-dump walked (maxDirLinks).
+	dirLinks int
 	// runSystemctl runs /usr/bin/systemctl with fixed arguments (Task 6).
 	runSystemctl func(ctx context.Context, args ...string) error
 	// statfs returns the bytes available to root in the file system of a descriptor.

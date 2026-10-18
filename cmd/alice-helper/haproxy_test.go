@@ -599,6 +599,58 @@ func TestHAProxyDumpCrtDirectory(t *testing.T) {
 	assert.Equal(t, true, files[1]["symlinked"])
 }
 
+// Final review I2: a link in a crt folder whose target lies below a directory that is not
+// root-controlled is loaded by HAProxy; it is listed, and its file reports not_root_controlled,
+// as the same file named by crt does.
+func TestHAProxyDumpCrtDirectoryLinkNotRootControlled(t *testing.T) {
+	w := newHAProxyWorld(t)
+	d := "/etc/haproxy/certdir"
+	w.f.mkdir(d, 0o755)
+	w.f.mkdir("/srv", 0o755)
+	w.f.mkdir("/srv/acme", 0o777)
+	w.f.write("/srv/acme/x.pem", string(w.a.FullchainPEM)+string(w.a.KeyPEM), 0o600)
+	w.f.symlink("/srv/acme/x.pem", d+"/x.pem")
+	for _, cfg := range []string{"crt " + d, "crt /srv/acme/x.pem"} {
+		w.f.write(haproxyConfPath, "frontend f\n    bind :9443 ssl "+cfg+"\n", 0o644)
+		code, m := w.dump(t)
+		require.Equal(t, 0, code, "%v", m)
+		require.Len(t, asList(m["servers"]), 1, cfg)
+		pairs := serverPairs(asList(m["servers"])[0])
+		require.Len(t, pairs, 1, cfg)
+		files := asList(m["files"])
+		require.NotEmpty(t, files, cfg)
+		assert.Equal(t, pairs[0]["cert"], files[0]["path"], cfg)
+		assert.Equal(t, helperproto.FileNotRootControlled, files[0]["problem"], cfg)
+		assert.Equal(t, "", files[0]["pem"], cfg)
+	}
+}
+
+// Final review M5: past maxDirLinks links walked in all crt folders together, the discovery is
+// refused as too_complex rather than run into the helper's time limit.
+func TestHAProxyDumpCrtDirectoryLinkBudget(t *testing.T) {
+	w := newHAProxyWorld(t)
+	var cfg strings.Builder
+	cfg.WriteString("frontend f\n    bind :9443 ssl")
+	for j := range 2 {
+		d := fmt.Sprintf("/etc/haproxy/d%d", j)
+		w.f.mkdir(d, 0o755)
+		cfg.WriteString(" crt " + d)
+		for i := range maxDirLinks/2 + j {
+			w.f.symlink("/etc/haproxy/certs/a.pem", fmt.Sprintf("%s/l%04d.pem", d, i))
+		}
+	}
+	w.f.write(haproxyConfPath, cfg.String()+"\n", 0o644)
+	class, reason, file := w.refusal(t)
+	assert.Equal(t, []string{helperproto.ConfigErrUnsupported, helperproto.ConfigReasonTooComplex, ""}, []string{class, reason, file})
+	// Each dump has its own budget: one link fewer passes, twice.
+	require.NoError(t, os.Remove(w.f.host("/etc/haproxy/d1/l0000.pem")))
+	for range 2 {
+		code, m := w.dump(t)
+		require.Equal(t, 0, code, "%v", m)
+		require.Equal(t, true, m["config_valid"], "%v", m)
+	}
+}
+
 // C15: HAProxy loads "w.pem.rsa" as itself, but the helper reads and reports only files with a
 // certificate name (a link must never lead it to /etc/shadow): the location has problem bad_name.
 func TestHAProxyDumpCertWithoutCertExtension(t *testing.T) {

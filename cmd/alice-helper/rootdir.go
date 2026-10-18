@@ -16,8 +16,11 @@ var (
 	// errNotDirectory: the path names something that is not a directory.
 	errNotDirectory = errors.New("not a directory")
 	// errTooManyEntries: a directory holds more than haproxyconf.MaxDirEntries entries.
-	errTooManyEntries = errors.New("the directory has too many entries")
+	errTooManyEntries  = errors.New("the directory has too many entries")
+	errTooManyDirLinks = errors.New("too many links in crt directories")
 )
+
+const maxDirLinks = 4096
 
 // openRootDir opens the directory dir (a helper path, not "/") the way walkRoot reaches a file
 // (C9): the walk to its parent, every directory and link on the way root's and not writable by
@@ -68,11 +71,12 @@ func (s *sys) openRootDir(dir string) (int, string, error) {
 }
 
 // listRootDir lists a crt directory of haproxy-dump (Rulings 4 and 10): the names of its regular
-// entries, and of its links that walkRoot resolves to a regular file, in bytewise order. Links and
+// entries, and of its links HAProxy may load (linkLoadable), in bytewise order. Links and
 // directories inside are never followed for listing. isDir is false, with no error, when dir is
 // not a directory or its walk fails (openRootDir): haproxy-dump then describes it as a file, and
 // describeCert reports its problem. An error means a directory that walked but cannot be listed:
-// more than haproxyconf.MaxDirEntries entries of any kind (errTooManyEntries), or a read error.
+// more than haproxyconf.MaxDirEntries entries of any kind (errTooManyEntries), more than
+// maxDirLinks links in this dump's listings together (errTooManyDirLinks), or a read error.
 // At most MaxDirEntries names (each at most NAME_MAX bytes) are returned; the caller bounds the
 // names of all listings together.
 func (s *sys) listRootDir(dir string) (names []string, isDir bool, err error) {
@@ -90,9 +94,10 @@ func (s *sys) listRootDir(dir string) (names []string, isDir bool, err error) {
 }
 
 // rootDirNames reads the entries of the opened directory fd (resolved is its guest path) and keeps
-// the regular files and the links that walk to a regular file. Entries are counted whatever their
-// type: more than haproxyconf.MaxDirEntries is errTooManyEntries, so the work is bounded however
-// the directory is filled. An entry removed meanwhile is skipped.
+// the regular files and the links HAProxy may load (linkLoadable). Entries are counted whatever
+// their type: more than haproxyconf.MaxDirEntries is errTooManyEntries, so the work is bounded
+// however the directory is filled; links are counted across listings in s.dirLinks: more than
+// maxDirLinks is errTooManyDirLinks. An entry removed meanwhile is skipped.
 func (s *sys) rootDirNames(fd int, resolved string) ([]string, error) {
 	buf := make([]byte, 32<<10)
 	var names, batch []string
@@ -121,7 +126,10 @@ func (s *sys) rootDirNames(fd int, resolved string) ([]string, error) {
 			case unix.S_IFREG:
 				names = append(names, name)
 			case unix.S_IFLNK:
-				if s.walksToRegular(resolved + "/" + name) {
+				if s.dirLinks++; s.dirLinks > maxDirLinks {
+					return nil, errTooManyDirLinks
+				}
+				if s.linkLoadable(resolved + "/" + name) {
 					names = append(names, name)
 				}
 			}
@@ -129,13 +137,27 @@ func (s *sys) rootDirNames(fd int, resolved string) ([]string, error) {
 	}
 }
 
-// walksToRegular reports whether walkRoot resolves p to an existing regular file.
-func (s *sys) walksToRegular(p string) bool {
+// linkLoadable reports whether a link entry of a listed directory is kept (final review I2).
+// HAProxy stat()s every entry, following links, and loads each regular file, so a link is dropped
+// only when it certainly leads to nothing HAProxy loads: its walk ends in a missing file (ENOENT,
+// ENOTDIR), or reaches through root-controlled directories something that is not a regular file.
+// A link the walk cannot follow safely (a directory or link that is not root-controlled, a pseudo
+// or FUSE file system, a loop) is kept: describeCert then reports its problem, as it does for the
+// same path named by crt, instead of the certificate disappearing without a word.
+func (s *sys) linkLoadable(p string) bool {
 	rf, err := s.walkRoot(p)
-	if err != nil {
+	switch {
+	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ENOTDIR):
 		return false
+	case errors.Is(err, errNotRegular):
+		return false // a directory, reached through root-controlled directories
+	case err != nil:
+		return true
 	}
 	defer rf.close()
 	var st unix.Stat_t
-	return unix.Fstatat(rf.dirfd, rf.name, &st, unix.AT_SYMLINK_NOFOLLOW) == nil && st.Mode&unix.S_IFMT == unix.S_IFREG
+	if err := unix.Fstatat(rf.dirfd, rf.name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return !errors.Is(err, unix.ENOENT)
+	}
+	return st.Mode&unix.S_IFMT == unix.S_IFREG
 }
