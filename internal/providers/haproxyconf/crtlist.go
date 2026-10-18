@@ -36,8 +36,8 @@ func overrideOption(w []byte) bool {
 //   - "[" and "]" also separate words, wherever they are, and enclose the option block. Its
 //     words are not interpreted, only looked at: one that may name a file of the line's own
 //     (overrideOption: HAProxy 3.0's crt, key, ocsp, issuer and sctl) sets override, which makes
-//     the line's pair conditional (final review I1). A "[" before the path, a second "[" or "]", or a "]" without "[" is ErrSyntax,
-//     as HAProxy refuses them. Two forms HAProxy accepts are refused here to fail closed: a
+//     the line's pair conditional (final review I1). A "[" before the path, a second "[" or "]",
+//     or a "]" without "[" is ErrSyntax, as HAProxy refuses them. Two forms HAProxy accepts are refused here to fail closed: a
 //     "[" left open (HAProxy reads the words after it as filters, silently) and an option
 //     block after a filter (HAProxy warns and drops the filters before the block);
 //   - the first word is the path; the words after the option block (or after the path) are

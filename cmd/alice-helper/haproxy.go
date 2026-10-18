@@ -57,10 +57,10 @@ func haproxyValid(err error) bool {
 // haproxyconf.Parse, then ResolveKeys. An invalid, unsupported or untrusted configuration is not an
 // error: meta.valid is false and the Config is empty, never partial; after an invalid "-c" nothing
 // more is read. When haproxy.cfg can be changed by a user other than root, "-c" is not run and
-// nothing it names is read, listed or opened (review I1: Input.Writable). When it or a read crt-list can, every pair becomes
-// config_file_writable (MarkWritable, instead of ResolveKeys: no certificate file is opened) and
-// every later failure reads "changed" naming that file; the entries of a writable crt-list are
-// not looked at (re-review R1). A crt-list that cannot be read is an untrusted configuration,
+// nothing it names is read, listed or opened (review I1: Input.Writable). When it or a read
+// crt-list can, every pair becomes config_file_writable (MarkWritable, instead of ResolveKeys: no
+// certificate file is opened) and every later failure reads "changed" naming that file; the
+// entries of a writable crt-list are not looked at (re-review R1). A crt-list that cannot be read is an untrusted configuration,
 // unless it is absent or not a regular file and every naming of it lies in an uncertain region
 // (review I2: a conditional pair and config_file_not_read). Nothing is written.
 func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, error) {
@@ -309,9 +309,9 @@ func hasPrivateKeyLine(data []byte) bool {
 // confDirUnread reports whether /etc/haproxy/conf.d may hold configuration haproxy-dump does not
 // read (Ruling 2, C14: Rocky 9's unit loads it). It is false only when conf.d is absent, is not a
 // directory, or is a directory that can be listed safely (openRootDir) and holds no regular entry
-// (or link HAProxy may load, linkLoadable) named *.cfg. A conf.d that exists but cannot be listed safely (not root's,
-// writable by group or others, on a pseudo file system, too many entries) is true: an empty page
-// must never stand without a reason.
+// (or link HAProxy may load, linkLoadable) named *.cfg. A conf.d that exists but cannot be listed
+// safely (not root's, writable by group or others, on a pseudo file system, too many entries or
+// links) is true: an empty page must never stand without a reason.
 func (s *sys) confDirUnread() bool {
 	fd, resolved, err := s.openRootDir(haproxyConfDir)
 	switch {

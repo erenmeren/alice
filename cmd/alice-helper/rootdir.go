@@ -16,10 +16,16 @@ var (
 	// errNotDirectory: the path names something that is not a directory.
 	errNotDirectory = errors.New("not a directory")
 	// errTooManyEntries: a directory holds more than haproxyconf.MaxDirEntries entries.
-	errTooManyEntries  = errors.New("the directory has too many entries")
-	errTooManyDirLinks = errors.New("too many links in crt directories")
+	errTooManyEntries = errors.New("the directory has too many entries")
+	// errTooManyDirLinks: the listings of one dump hold more than maxDirLinks links together.
+	errTooManyDirLinks = errors.New("the directories hold too many links")
 )
 
+// maxDirLinks bounds the links the listings of one dump walk together (final review M5): each is a
+// walk from "/", and 256 directories of 4096 links would otherwise run past the helper's time
+// limit and fail as IO_ERROR without a reason. Past it the listing is errTooManyDirLinks, which
+// haproxy-dump reports as unsupported too_complex. sys.dirLinks counts them; cmdHAProxyDump resets
+// it.
 const maxDirLinks = 4096
 
 // openRootDir opens the directory dir (a helper path, not "/") the way walkRoot reaches a file
