@@ -70,7 +70,7 @@ if "${compose[@]}" config --services | grep -qx sshtarget; then
     # image (no network, removed at once) has none of it.
     check "sshtarget's image holds no test key or certificate" \
       "$(docker run --rm --network none --entrypoint /bin/sh "$(docker inspect -f '{{.Config.Image}}' "$target")" \
-        -c 'ls /opt/alice-test-ca /etc/nginx/ssl 2>/dev/null | wc -l')" "0"
+        -c 'find /opt/alice-test-ca /etc/nginx/ssl /etc/apache2/ssl /etc/haproxy/certs -mindepth 1 2>/dev/null | wc -l')" "0"
   fi
 fi
 # The e2e overlay adds the fake Azure service (Entra ID and Key Vault for the Phase 5 journeys): it must
