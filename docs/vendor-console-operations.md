@@ -1021,8 +1021,10 @@ These assumptions can only be checked on real hardware; the steps below are buil
 5. **The wrong-PIN status word.** A wrong PIN is assumed to be answered with status 6982 (YubiKey) or
    63Cx (other OpenPGP cards); both are shown as `wrong PIN (<n> tries left)`. Any other text in step
    6 is a finding.
-6. **The touch timeout status word.** A touch that never comes is assumed to end with status 6982 or
-   6985, shown as "the YubiKey was not touched in time". Any other text is a finding.
+6. **The touch timeout status word.** A touch that never comes ends with status 6600 on a YubiKey 5
+   (firmware 5.7.4, Linux, 2026-10-18; the first build showed `card status 6600 (unknown)`, now
+   fixed); other OpenPGP cards answer 6982 or 6985. All three are shown as "the YubiKey was not
+   touched in time". Any other text is a finding.
 7. **Exclusive access.** The console opens the card exclusively and resets it when it closes it.
    Whether gpg and scdaemon cope with that afterwards (step 8). On macOS (CryptoTokenKit) and on
    Windows, system services may open the card for a moment after it is plugged in: a brief
@@ -1224,7 +1226,7 @@ Fill in one row per run and keep the table in the paper log (or here, in a commi
 
 | Date | OS and version | YubiKey serial | Firmware | Touch policy | Steps passed | Result | Notes (max command length, chaining, any message that differed) |
 |---|---|---|---|---|---|---|---|
-| | Linux | | | | | not run | |
+| 2026-10-18 | Linux (CachyOS, kernel 7.2, pcsc-lite 2.5.2, ykman 5.9.2, gpg 2.4.9) | in the paper log | 5.7.4 (5C Nano, OpenPGP 3.4) | on | 2, 3, 4, 5, 6, 7, 8 | pass, with a **throwaway** key `vk-2099-01` (card reset afterwards); the real ceremony is still to do | max command length 3070, chaining yes; `--max-size` (1024 bytes) signed and verified; a 282-byte license issued and verified by `verify-licenses` and `licensectl verify`; touch timeout was status 6600 (fixed, see assumption 6); Ctrl-C at the confirmation question, sent through a script's pseudo-terminal, answered `not confirmed: nothing was signed and the request stays open` (safe; the interactive Ctrl-C text was not seen); gpg `--card-status` worked after the console; step 1 not run |
 | | Windows | | | | | not run | |
 | | macOS | | | | | not run | |
 

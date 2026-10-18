@@ -508,7 +508,8 @@ func verifiedApplet(t *testing.T, resp ...[]byte) (*openpgp.Applet, *scripted) {
 }
 
 func TestTouchNotGivenGivesErrTouchNeeded(t *testing.T) {
-	for _, sw := range []uint16{0x6982, 0x6985} {
+	// 6600 is what a real YubiKey 5 (firmware 5.7.4) answers when the touch times out (smoke test 2026-10-18).
+	for _, sw := range []uint16{0x6982, 0x6985, 0x6600} {
 		touched := 0
 		sim := openpgptest.New(openpgptest.Options{Key: newKey(t), UIF: openpgptest.UIFOn, TouchTimeoutSW: sw,
 			Touch: func() bool { touched++; return false }})

@@ -654,8 +654,9 @@ func (a *Applet) Sign(ctx context.Context, message []byte) ([]byte, error) {
 		return data, nil
 	case 0x6700, 0x6A80, 0x6884:
 		return nil, &LengthRefusedError{SW: sw, Part: part, Parts: parts, Length: len(message)}
-	case swSecurity, swConditions:
-		// PW1 was verified, so a refusal now is the touch timing out, if the key wants one.
+	case swSecurity, swConditions, swTouchTimeout:
+		// PW1 was verified, so a refusal now is the touch timing out, if the key wants one. A real
+		// YubiKey 5 (firmware 5.7.4) answers a missed touch with 6600; 6982 and 6985 are other cards'.
 		d, err := a.readAppData(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("openpgp: the card refused to sign (status %04X) and its touch policy could not be read: %w", sw, err)

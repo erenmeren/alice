@@ -44,6 +44,8 @@ func swText(sw uint16) string {
 		return fmt.Sprintf("verification failed, %d tries left", sw&0x0F)
 	}
 	switch sw {
+	case 0x6600:
+		return "security-related issue (YubiKey: touch timed out)"
 	case 0x6700:
 		return "wrong length"
 	case 0x6982:
@@ -77,6 +79,7 @@ const (
 	swSecurity      = 0x6982
 	swBlocked       = 0x6983
 	swConditions    = 0x6985
+	swTouchTimeout  = 0x6600 // YubiKey: security-related issue, answered when the touch times out
 	swNotFound      = 0x6A82
 	swDataNotFound  = 0x6A88
 	maxResponseSize = 64 << 10 // far above anything an OpenPGP card returns; stops a looping 61xx
