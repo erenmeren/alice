@@ -151,7 +151,7 @@ func TestLexHostileSizes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			start := time.Now()
 			_, _ = lex([]byte(in))
-			assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+			assert.Less(t, time.Since(start), 2*time.Second*slowdown())
 		})
 	}
 }

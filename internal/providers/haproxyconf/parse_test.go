@@ -639,7 +639,7 @@ func TestParseListCacheIsPerPath(t *testing.T) {
 	elapsed := time.Since(start)
 	require.NoError(t, err)
 	require.Len(t, got.Servers, MaxServers-1)
-	assert.Less(t, elapsed, 400*time.Millisecond*raceSlowdown)
+	assert.Less(t, elapsed, 400*time.Millisecond*slowdown())
 }
 
 // TestParseUncertainListNamingsAreCheap (review N1): a crt-list is evaluated once per path,
@@ -654,7 +654,7 @@ func TestParseUncertainListNamingsAreCheap(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Servers, MaxServers-1)
 	assert.Equal(t, ReasonPathNotAllowed, got.Servers[0].Pairs[0].Unsupported, "longer than a helper path; refused unscanned")
-	assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+	assert.Less(t, time.Since(start), 2*time.Second*slowdown())
 	assert.Equal(t, 1, fs.fileCalls["/l/big.txt"])
 }
 
@@ -890,7 +890,7 @@ func TestParseListensBound(t *testing.T) {
 	assert.Equal(t, []string{WarnListTruncated}, got.Warnings)
 	assert.Len(t, got.Servers[0].Listens, MaxListens)
 	assert.Equal(t, MaxListens, totalListens(got))
-	assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+	assert.Less(t, time.Since(start), 2*time.Second*slowdown())
 }
 
 func totalListens(c Config) int {
@@ -973,7 +973,7 @@ func TestToWireSharedTextIsCheap(t *testing.T) {
 			for _, s := range got.Servers {
 				_ = ToWire(s)
 			}
-			assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+			assert.Less(t, time.Since(start), 2*time.Second*slowdown())
 		})
 	}
 }

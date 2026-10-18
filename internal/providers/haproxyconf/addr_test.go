@@ -60,7 +60,7 @@ func TestParseListens(t *testing.T) {
 		assert.Len(t, got, MaxListens)
 		assert.True(t, cut, "the entries past the limit are cut")
 		_, _ = parseListens(strings.Repeat(",", MaxLine), MaxListens)
-		assert.Less(t, time.Since(start), 2*time.Second*raceSlowdown)
+		assert.Less(t, time.Since(start), 2*time.Second*slowdown())
 	})
 	t.Run("limit", func(t *testing.T) {
 		got, cut := parseListens(":1,:2,unix@/x,:3", 2)
