@@ -10,10 +10,16 @@
 - A **Frontend** column on a HAProxy server's page in place of the website column: each row shows "Frontend: name"
   and, for a `crt-list` line, its server names (SNI filters).
 - `alice-helper` 1.8.0 (protocol 9) with the read-only subcommand `haproxy-dump` and the sudoers profile `haproxy`
-  (**Server type** **HAProxy server** under **Prepare a server for Alice**). It runs `/usr/sbin/haproxy -v` and
-  `haproxy -c -f /etc/haproxy/haproxy.cfg`, reads `haproxy.cfg`, its `crt-list` files and `crt` folder listings
-  through the root-controlled walk, describes certificate files and only `stat`s key files
-  ([docs/haproxy-host-preparation.md](docs/haproxy-host-preparation.md)).
+  (**Server type** **HAProxy server** under **Prepare a server for Alice**). It runs `/usr/sbin/haproxy -v`, reads
+  `haproxy.cfg`, runs `haproxy -c -f /etc/haproxy/haproxy.cfg` unless `haproxy.cfg` can be changed by a user other
+  than root, reads its `crt-list` files and `crt` folder listings through the root-controlled walk, describes
+  certificate files and only `stat`s key files ([docs/haproxy-host-preparation.md](docs/haproxy-host-preparation.md)).
+- HAProxy places are shown `conditional`, never guessed, when a `crt-list` line's options name `crt`, `key`, `ocsp`,
+  `issuer` or `sctl` (HAProxy 3.0 and later) or hold a quote, backslash or `$`, and when a certificate lies past the
+  1000 files the helper opens to find keys. A link in a `crt` folder that leads below a folder not controlled by root
+  is listed with the problem `not_root_controlled` instead of being left out (at most 4096 links per discovery,
+  `too_complex` past that), and a `crt` folder that is not root-controlled reads `not_root_controlled` instead of
+  `not_regular`.
 - Warnings `config_dir_not_read` (frontends in `/etc/haproxy/conf.d`, which Alice does not read) and
   `config_file_not_read` (a certificate list or folder could not be read where it is named only in a part Alice cannot
   evaluate).

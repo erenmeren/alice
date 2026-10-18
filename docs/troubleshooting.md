@@ -203,6 +203,17 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
 - **A HAProxy certificate shows the problem "The file name does not end in .pem, .crt, …" (`bad_name`).** HAProxy
   loads names such as `w.pem.rsa`; Alice does not read files with other names, by design (a link must never lead the
   helper to a file such as `/etc/shadow`), and a link with a usual name does not change that.
+- **A HAProxy certificate shows "missing" although HAProxy serves it.** With the default `ssl-load-extra-files`
+  (`all`), HAProxy 2.3 and later load `foo.pem.rsa` and `foo.pem.ecdsa` when `crt foo.pem` does not exist; Alice
+  looks for `foo.pem` only. Name the combined PEM file directly
+  ([haproxy-host-preparation.md](haproxy-host-preparation.md#certificates-and-keys)).
+- **A HAProxy `crt-list` line is conditional.** From HAProxy 3.0 on, the line's options in `[` and `]` may name its own
+  `crt`, `key`, `ocsp`, `issuer` or `sctl` file, which Alice does not read; a block with a quote, a backslash or a `$`
+  is treated the same way. Move the key into the certificate file, or list the certificate without those options
+  ([haproxy-host-preparation.md](haproxy-host-preparation.md#configurations-alice-cannot-read)).
+- **A HAProxy certificate folder shows one place with the problem `not_root_controlled`.** The folder, or a folder a
+  link in it leads through, belongs to a user other than root or can be written by its group or others. Make it
+  root-owned and not group- or other-writable, then choose **Discover**.
 - **The Deploy controls of an Apache or HAProxy server are disabled ("Not available for Apache servers yet", "Not
   available for HAProxy servers yet").** This is on purpose: Alice only reads Apache and HAProxy servers in this
   release. Renew their certificates with your own tools.

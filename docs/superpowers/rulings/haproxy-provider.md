@@ -37,7 +37,9 @@ Each entry: the decision, why, and the cost if it is wrong.
 5. **Fail-closed conditions (Task 5 reviews R1, R3, S1).** Each of these makes every pair conditional: any keyword that
    contains `$` in any section (HAProxy expands it before it reads the keyword, so it may be a `bind`, a key setting
    or a section header); a `crt-store` section anywhere (HAProxy 3.0 on; it can give a certificate a key file of its
-   own); key settings that are not stable (Ruling 4). A `$` in a path makes that pair `variable` (pre-flight D4, even
+   own); key settings that are not stable (Ruling 4). The same feature reached through a `crt-list` line (HAProxy 3.0
+   takes `crt`, `key`, `ocsp`, `issuer` and `sctl` in the option block) makes that line's pair conditional (final
+   fix wave, I1). A `$` in a path makes that pair `variable` (pre-flight D4, even
    in single quotes). Cost if wrong: configurations with variable keywords or a `crt-store` show conditional.
 6. **Pending pairs (Task 5 review R2, Task 6).** `Parse` returns every pair it can support as pending and conditional;
    `ResolveKeys` decides its key and makes it supported, so a caller that forgets it reports no supported pair.
@@ -86,9 +88,11 @@ Each entry: the decision, why, and the cost if it is wrong.
     `docs/nginx-host-preparation.md`. Cost if wrong: a deployment-tool-managed binary under `/opt` owned by a deploy
     user is refused until it is root-owned.
 15. **Writable-configuration existence oracle (plan ruling 16, KI-41).** Server names of a writable configuration are
-    still listed, as for Apache (KI-40). The remaining channel is `haproxy -c` itself, which runs before anything is
-    read: a writer who names a root-only path learns from the check's verdict whether it is a loadable certificate.
-    Accepted, Low. Cost if wrong: none beyond KI-29.
+    still listed, as for Apache (KI-40). Amended by the final fix wave (M4): `haproxy.cfg` is now read before `-c`,
+    and `-c` is not run when it is writable, so the main-file writer has no oracle and Alice never runs that writer's
+    `lua-load`. The remaining channel is a writable `crt-list` named by a root-owned `haproxy.cfg`: its writer who
+    names a root-only path learns from the check's verdict whether it is a loadable certificate. Accepted, Low. Cost
+    if wrong: none beyond KI-29.
 16. **Known limitation (Task 6 review M4).** A path on a FUSE-backed file system can stall the root-control check until
     the helper's time limit; documented in the guide and in KI-41.
 17. **Rocky 9 prints a conf.d warning from `haproxy -c` on the main file.** It is harmless: the helper uses only the
@@ -182,3 +186,64 @@ Each entry: the decision, why, and the cost if it is wrong.
 - Accepted deviation: the rest of `make ci` was not run (`perf`, `test-backup-cycle`, `build`, `release-symcheck`,
   `fs-scan`, `image-check`, `image-scan`), as in Phase B (preflight C16).
 - Grep checks: both print nothing.
+
+## Final fix wave (2026-10-18)
+
+The final review (`.superpowers/sdd/2026-10-17-haproxy-provider/final-review.md`, "Ready to merge: With fixes") raised
+two Important and six Minor findings; all eight were fixed, test first.
+
+- **I1, crt-list options on HAProxy 3.x.** `parseCrtList` looks at the words of a line's option block without
+  interpreting them. A word `crt`, `key`, `ocsp`, `issuer` or `sctl` anywhere in the block (an argument spelled so
+  counts too), or a word holding a quote, a backslash or a `$` (this reader does not interpret them, a newer HAProxy
+  might: the "unparseable" block), makes the line's pair `conditional`, whatever the version (a 2.x `-c` refuses those
+  keywords anyway). The path of such a line is not looked at (no listing, no `keyInCert`). `ocsp-update` names no file
+  and does not count. A malformed line (unbalanced brackets, a block after a filter) stays `ErrSyntax`, as before.
+  Ruling 5 amended. Tests: `haproxyconf:TestParseCrtListOverrides`, `TestParseCrtListOverridesAreConditional`.
+- **I2, links in a crt folder.** `rootDirNames` keeps every link entry except one whose walk certainly leads to
+  nothing HAProxy loads: ENOENT or ENOTDIR, or a directory or other non-regular file reached through root-controlled
+  directories (`linkLoadable`). A link whose walk fails on a directory or link not controlled by root, a pseudo or
+  FUSE file system or a loop is kept, and `describeCert` reports its problem (`not_root_controlled` for the acme.sh
+  case), as for the same path named by `crt`. A kept link to a missing file below a user's directory shows as
+  `not_root_controlled` although HAProxy would skip it: accepted, it is visible, not silent. The emulator does not
+  model links in crt folders (unchanged limit); `confDirUnread` uses the same rule. Tests:
+  `cmd/alice-helper:TestListRootDir/links_inside`, `TestHAProxyDumpCrtDirectoryLinkNotRootControlled`.
+- **M1, key answer past the bound.** `ResolveKeys` takes a three-valued `haproxyconf.KeyAnswer` (`KeyNotInCert`,
+  `KeyInCert`, `KeyUnknown`). Past `MaxServerFiles` the helper and the emulator answer `KeyUnknown` without reading,
+  and the pair stays `conditional` instead of `KeyBeside`. A certificate that cannot be read still answers
+  `KeyNotInCert` (its problem is shown with the file). Tests: `haproxyconf:TestResolveKeysUnknown`,
+  `cmd/alice-helper:TestHAProxyDumpKeyInCertIsBounded`, `linuxsshtest:TestHAProxyKeyInCertBound`.
+- **M2, certificate sets.** Documentation only: the bundle fallback (`foo.pem.rsa`/`.ecdsa`/`.dsa` loaded when
+  `crt foo.pem` is missing, HAProxy 2.3+, `ssl-load-extra-files` default) is in the guide ("Certificates and keys" and
+  "Configurations Alice cannot read"), KI-41 and troubleshooting. The optional conditional display was not done: it
+  needs an existence answer per certificate and the bundle setting per version, which is neither small nor clearly
+  correct (a 2.2 or `ssl-load-extra-files none` host would then hide a real missing file). Cost if wrong: such a
+  place shows "missing" although HAProxy serves the set.
+- **M3, crt folder not root-controlled.** `describeCert` refines a walk that ends at a directory (`errNotRegular`)
+  with `dirProblem`: when `openRootDir` says the directory itself is not root-controlled (owner, group or other write
+  bit) or on a pseudo or FUSE file system, that is the problem (`not_root_controlled`, `special_filesystem`). A
+  root-controlled directory stays `not_regular`; this applies to Nginx and Apache certificate paths too, where a
+  directory is normally refused by the server's own check first. The emulator already answered so. Tests:
+  `cmd/alice-helper:TestHAProxyDumpCrtDirectoryNotRootControlled`, `linuxsshtest:TestHAProxyCrtDirectoryNotRootControlled`.
+- **M4, `-c` after the writable check.** `haproxyConfig` runs `-v`, reads `haproxy.cfg` (walk, owner, mode), and runs
+  `-c` only when `haproxy.cfg` is not writable by a user other than root; a writable one gives its
+  `config_file_writable` pairs whatever `-c` would say, and a `haproxy.cfg` that cannot be read safely is reported
+  without `-c`. Consequences: a missing `haproxy.cfg` is now `untrusted`/`missing` (was `syntax` from `-c`), which also
+  removes the emulator's old limit; an invalid writable configuration now shows `config_file_writable` places instead of
+  `syntax`. Ruling 15 and KI-41 amended. Tests: `cmd/alice-helper:TestHAProxyDumpWritableConfigSkipsCheck`,
+  `TestHAProxyDumpValidity` (only haproxy.cfg is walked before an invalid `-c`), `linuxsshtest:TestHAProxyWritableConfigSkipsCheck`.
+- **M5, link walks bounded (choice: refuse with `too_complex`).** The links of all crt-folder listings of one
+  `haproxy-dump` are walked at most `maxDirLinks` = 4096 times together (`sys.dirLinks`, reset per dump); past that
+  the listing is `errTooManyDirLinks`, which `readDir` reports as unsupported `too_complex`, as `errTooManyEntries`
+  is. Chosen over listing the rest unchecked because an unchecked link could be a dangling or directory link HAProxy
+  never loads (a wrong "missing" place) and because `too_complex` is the existing convention for every helper bound.
+  In `confDirUnread` the error means "cannot be listed safely": the `config_dir_not_read` warning. Cost if wrong: a
+  host with more than 4096 links in its certificate folders is refused as a whole. Tests:
+  `cmd/alice-helper:TestListRootDir/links_are_walked_within_a_budget`, `TestHAProxyDumpCrtDirectoryLinkBudget`.
+- **M6, guide wording.** "Other versions are read the same way" now says the rules are the same and that 3.0's key
+  features are shown conditional; the `crt-list` paragraph says the option block is looked at, not skipped.
+
+No new warning or reason reaches the web (`conditional`, `too_complex`, `not_root_controlled` and
+`config_file_writable` exist), so no locale text or TS enum changed. The root-only helper suite was not run (sudo
+needs a password): owner step 1 stays open, and now also covers `linkLoadable`, `dirProblem` and the reordered
+`haproxyConfig`.
+

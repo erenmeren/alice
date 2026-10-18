@@ -13,8 +13,11 @@ Supported systems: as in [nginx-host-preparation.md](nginx-host-preparation.md) 
 or later, RHEL, Rocky Linux or AlmaLinux 8 or later, on x86_64 or aarch64, with the OpenSSH server, `sudo` and
 `sha256sum`). HAProxy must come from the distribution's packages (`haproxy`, program `/usr/sbin/haproxy`, main
 configuration file `/etc/haproxy/haproxy.cfg`). Alice is tested with HAProxy 2.4 (Ubuntu 22.04), 2.6 (Debian 12)
-and 2.8 (Rocky Linux 9). Other versions are read the same way but are not tested; a build installed under another
-path and HAProxy in a container are not supported. HAProxy does not have to be running: Alice reads its
+and 2.8 (Rocky Linux 9). Other versions are read with the same rules but are not tested. HAProxy 3.0 and later add
+ways to name a certificate's key that Alice does not follow (a `crt-store` section, and file keywords in a `crt-list`
+line's options); Alice shows those places as conditional instead of guessing (see
+[Configurations Alice cannot read](#configurations-alice-cannot-read)). A build installed under another path and
+HAProxy in a container are not supported. HAProxy does not have to be running: Alice reads its
 configuration, not the running server.
 
 ## Steps
@@ -106,6 +109,12 @@ The environment of the service is not reproduced. The helper does not read `/etc
 | `-v` | The first line, `HAProxy version <version> …`. Without it Alice reports that HAProxy was not found (`ALC-HAP-0001`). |
 | `-c -f /etc/haproxy/haproxy.cfg` | Only whether HAProxy accepts the configuration: exit status 0, or 2 ("no listener"; HAProxy only warns). When it does not, the configuration is invalid and nothing else is read (`ALC-HAP-0002`). |
 
+Alice reads `haproxy.cfg` (and checks its owner and mode) after `-v` and before `-c`. When `haproxy.cfg` cannot be
+read safely, that is reported and `-c` is not run. When a user other than root can change it, `-c` is not run either:
+the check would load, as root, every file that user names and run its `lua-load`, so the page shows the places of
+the file as written, each **Not supported** because the configuration can be changed (see
+[Configurations Alice cannot read](#configurations-alice-cannot-read)).
+
 Both runs and the reading of the files together share one budget of 50 seconds for the whole `haproxy-dump` call;
 Alice waits 60 seconds for the answer. A run still going when the budget ends is stopped and the discovery fails with
 the helper's own error, not with a connection timeout.
@@ -154,8 +163,12 @@ truncated.
 The lexer follows HAProxy's own reader: blanks separate words, `#` outside quotes starts a comment, double and single
 quotes group words, a backslash escapes a fixed set of characters and an unknown escape is kept as written (as
 HAProxy does), there is no line continuation, and a carriage return in the middle of a line ends the line.
-`crt-list` lines have their own, simpler syntax: no quotes and no escapes, the option block in `[` and `]` is skipped,
-and a line that starts with `#` or with a carriage return is skipped.
+`crt-list` lines have their own, simpler syntax: no quotes and no escapes, and a line that starts with `#` or with a
+carriage return is skipped. The option block in `[` and `]` is not interpreted, only looked at: on HAProxy 2.x it
+holds TLS settings (`alpn`, `ssl-min-ver`, `verify`, ...) that do not change which files are loaded, but from HAProxy
+3.0 on it may also name files of the line's own with `crt`, `key`, `ocsp`, `issuer` or `sctl`. A line whose block holds
+one of these words (anywhere in the block), or a quote, a backslash or a `$` (which Alice does not interpret), is
+shown as conditional, whatever the version.
 
 From these files Alice reads the `frontend` and `listen` sections (and, for settings that reach them, `global` and
 `defaults`), following HAProxy's rules:
@@ -164,7 +177,12 @@ From these files Alice reads the `frontend` and `listen` sections (and, for sett
   of the bind, and the certificate file and line of the `bind`. A `bind` without `ssl` is not listed.
 - Each `crt` argument is one certificate file, or, when it names a folder, one per certificate in it (in byte order;
   files ending in `.key`, `.ocsp`, `.issuer` or `.sctl` are not certificates, and dotfiles are skipped from HAProxy
-  2.6 on and loaded below it).
+  2.6 on and loaded below it). A symbolic link in the folder is listed unless it certainly leads to nothing HAProxy
+  loads (a missing file, or a folder or special file reached through root-controlled folders). A link whose target
+  lies below a folder not controlled by root is listed with that problem (`not_root_controlled`), as the same file
+  named by `crt` would be, rather than left out. At most 4096 links are followed in all the folders of one discovery
+  together; past that the server is refused as `too_complex`. A folder that is itself not root-controlled (another
+  owner, or writable by its group or others) is not listed: it is one place whose problem is `not_root_controlled`.
 - Each `crt-list` argument is a file of lines `<path> [options] [server names]`: every line is one place with its own
   **server names** (SNI filters, without the negative `!` ones), so a frontend with a certificate list appears once
   for each line. A line without server names shows only the frontend.
@@ -202,6 +220,15 @@ The key settings `ssl-load-extra-files` and `ssl-load-extra-del-ext` decide wher
 Alice uses them only when they are stable: in the `global` section, outside any `.if` block and before the first line
 that can load a certificate (a `bind`, or any line with a `crt` or `crt-list` word), as configurations set them.
 Otherwise only a key inside the certificate file is known, and a certificate without one is shown as conditional.
+Alice opens at most 1000 certificate files to decide where their keys are (the same limit as the files it describes);
+a place whose certificate is past that limit is shown as conditional, never with a guessed key file.
+
+**Certificate sets (`foo.pem.rsa`, `foo.pem.ecdsa`).** With `ssl-load-extra-files` at its default (`all`, which
+includes `bundle`), HAProxy 2.3 and later load `foo.pem.rsa`, `foo.pem.ecdsa` and `foo.pem.dsa` when `crt foo.pem`
+names a file that does not exist, and `haproxy -c` passes. Alice does not follow this: it lists `foo.pem` as the place's
+certificate, and the file shows the problem "missing" although HAProxy serves the set. The `.rsa` and `.ecdsa` files
+are not read either (their names are `bad_name`, above). Name the combined PEM files directly where Alice should show
+the certificates.
 
 ## What Alice never changes
 
@@ -228,6 +255,10 @@ Alice lists these places as **Not supported** with the reason, or shows the prob
     setting or a section header);
   - a `crt-store` section (HAProxy 3.0 and later; it can give a certificate a key file of its own);
   - `ssl-load-extra-files` or `ssl-load-extra-del-ext` that are not stable (above).
+
+  A `crt-list` line is conditional when its option block names `crt`, `key`, `ocsp`, `issuer` or `sctl` (HAProxy 3.0
+  and later: the line's own certificate or key file, which Alice does not read), or holds a quote, a backslash or a
+  `$`. A place past the 1000 certificate files Alice opens to find keys is conditional too.
 - **Variables.** A `$` in a path, whatever its quoting (`crt /etc/haproxy/certs/$HOST.pem`, `${CERTDIR}/a.pem`), is
   not expanded: "The path uses a variable" (`variable`).
 - **Paths.** A relative `crt-list` path, a relative `crt` path without a usable `crt-base`, a path with a `.` or `..`
@@ -242,7 +273,8 @@ Alice lists these places as **Not supported** with the reason, or shows the prob
   or can be written by its group or others, **every** place of the server is **Not supported** ("A configuration file
   used by HAProxy can be changed by users other than root"), and the page names the file. `crt-base` and the global
   settings reach the whole configuration, so Alice cannot limit this to one place. When `haproxy.cfg` itself is
-  writable the helper reads nothing beyond it: no certificate list, no folder listing, no certificate file. The
+  writable the helper does not run `haproxy -c` and reads nothing beyond it: no certificate list, no folder listing,
+  no certificate file. The
   entries of a writable certificate list are never walked or opened either. Make the file root-owned and not group
   or other writable, then **Discover**.
 - **A certificate list that cannot be read.** One that is absent or not a regular file, and that is named only in a
@@ -250,6 +282,8 @@ Alice lists these places as **Not supported** with the reason, or shows the prob
   part HAProxy certainly reads makes Alice refuse the whole server, as above.
 - **The whole server**, when a configuration directory is not root-controlled, a file name contains a space, the
   configuration is larger than the limits above, contains a NUL byte, or changed while Alice read it.
+- **Certificate sets.** A `crt foo.pem` that HAProxy loads as `foo.pem.rsa` and `foo.pem.ecdsa` (above) shows the
+  problem "missing".
 - **Limits of the check.** A path on a FUSE file system can make the root-control check wait; Alice's time limit then
   ends the discovery, but the stall itself is a known limitation. Keep `/etc/haproxy` and the folders of the certificates on a local
   file system.
