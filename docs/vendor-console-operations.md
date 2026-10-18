@@ -79,8 +79,10 @@ Licenses can be signed in three ways (below). The YubiKey signer (option 3,
 The passphrase key file, its backups and its yearly recovery test follow
 [licensing-vendor.md](vendor/licensing-vendor.md) sections 1, 2 and 6 exactly (two
 hardware-encrypted USB drives, a printout, the passphrase paper stored apart).
-`internal/license/keys/production.json` lists no key today. Until it does, release builds accept no
-license. Embedding a key is section 2 of licensing-vendor.md.
+`internal/license/keys/production.json` lists one key: `vk-2026-02`, the owner's YubiKey (ceremony
+2026-10-18, fingerprint `SHA256:f7d91236f8c65e91795dc37464c88812a7269c5b82db3a58ba05a641abe007a9`).
+Release builds accept licenses signed by it only from the first release that embeds it; sign customer
+licenses with it only once that release has shipped. Embedding a key is section 2 of licensing-vendor.md.
 
 ### Signing options
 

@@ -1,3 +1,9 @@
 {
-  "keys": []
+  "keys": [
+    {
+      "key_id": "vk-2026-02",
+      "public_key": "56gmrTDoGmyqEsutxn6IGQ0RLNJZhTnZX0K22JEHLbU=",
+      "status": "active"
+    }
+  ]
 }
