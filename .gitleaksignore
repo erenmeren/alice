@@ -50,3 +50,6 @@ d968e45642f890e5b7dbb9b0dca5249beadbb17b:internal/archtest/arch_test.go:generic-
 f57194fbd2070b393c0e80966782c3405197cfca:internal/testutil/fakeldap/server.go:generic-api-key:68
 5c361e9648ef72656adcdda8a1d7e0926b54ecc4:test/images/openldap/bootstrap.ldif:generic-api-key:59
 5c361e9648ef72656adcdda8a1d7e0926b54ecc4:web/e2e/ldap.spec.ts:generic-api-key:53
+# Phase C: the fake 'AAAA' PEM bodies of the haproxy-dump private-key detection test (no key material).
+178978333c0d9cc2fbd420400aeb203e388b4129:cmd/alice-helper/haproxy_test.go:private-key:568
+178978333c0d9cc2fbd420400aeb203e388b4129:cmd/alice-helper/haproxy_test.go:private-key:570
