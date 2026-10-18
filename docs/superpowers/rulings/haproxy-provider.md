@@ -154,7 +154,31 @@ Each entry: the decision, why, and the cost if it is wrong.
 3. Reinstall `alice-helper` 1.8.0 on servers that will be HAProxy servers (CHANGELOG upgrade notes); other servers keep
    working with 1.6.x and 1.7.x but get the program pre-check only with 1.8.0.
 
-## Final gates (Task 13)
+## Final gates (Task 13, 2026-10-18)
 
-To be filled by Task 13 with the results of the static, unit, integration, `make test-ssh`, fuzz, web, e2e and docs
-gates, the helper checksums and the grep checks.
+- Static and unit: `go build`, `go vet` (both tag sets), `make lint`, `make test`, `make i18n-check`: pass.
+- `make test-integration`: pass after one fix. `TestServeStartsOnAPhase3Database` still expected schema version 17;
+  migration 00018 (the `haproxy` target type) makes it 18 (fixed in its own commit).
+- `make coverage`: pass on the third run. Runs 1 and 2 failed on two haproxyconf wall-clock limits that pass alone
+  (`TestLexHostileSizes/many_lines` 34 s and 29 s against 20 s, `TestParseListCacheIsPerPath` 9 s against 4 s):
+  the race detector plus atomic coverage is slower than the `raceSlowdown` factor of 10 allowed. The limits now
+  scale a further 5 times under `-cover` (own commit, test files only; the limits still bound the work, a quadratic
+  regression would still fail). Run 1 also failed once in `internal/api` `TestDirectoryLockoutReservesParallelAttempts`
+  (2 attempts reached the directory instead of 3, under load); it passed alone and in run 2 and 3: a flake, unrelated.
+  Floors: `haproxy` 100.0 (98), `haproxyconf` 98.7 (92), `webserver` 98.6 (98), `cmd/alice-helper` 91.6 (90).
+- `make test-ssh`: pass; the real HAProxy matrix ran on ubuntu22 (2.4.30), debian12 (2.6.12) and rocky9 (2.8.14).
+- `make helper` checksums: linux-amd64 `307ab523e80a6f1ac50d81f7b423c269826f272af5336f75aeea3b38427eb322`,
+  linux-arm64 `8df42561237dc5a67827d826dbe45c8f162f6fb240f7a2487cd0840d296774c6`. The root-only helper suite was not
+  run (sudo needs a password): owner step 1 stays open.
+- `make fuzz-haproxy FUZZTIME=5m`: `FuzzLex`, `FuzzParseCrtList` and `FuzzParseHAProxyConfig` pass, no crasher.
+- `make web-lint web-coverage`: pass (statements 96.43 %, branches 92.81 %). `make e2e`: 143 passed, 4 skipped (the
+  design-evidence specs, skipped by design), 2 flaky that passed on Playwright's retry (phase3:354 license banners,
+  phase6:458 Operator generates a key and deploys it); neither is on the known list, neither touches HAProxy.
+  `make e2e-down` run.
+- Extra gate (preflight C16): `make e2e-hardening-check` (stack up): pass. `make vuln`: pass, 0 vulnerabilities.
+  `make secrets-scan`: it found two false positives (the fake `AAAA` PEM bodies of the private-key detection test in
+  commit 17897833, `cmd/alice-helper/haproxy_test.go`); allowlisted by fingerprint in `.gitleaksignore` (own commit)
+  as Phase 8 did, then "no leaks found".
+- Accepted deviation: the rest of `make ci` was not run (`perf`, `test-backup-cycle`, `build`, `release-symcheck`,
+  `fs-scan`, `image-check`, `image-scan`), as in Phase B (preflight C16).
+- Grep checks: both print nothing.
