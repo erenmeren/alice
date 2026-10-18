@@ -51,12 +51,13 @@ func haproxyValid(err error) bool {
 	return err == nil || (errors.As(err, &exit) && exit.ExitCode() == 2)
 }
 
-// haproxyConfig runs "haproxy -v" and "haproxy -c -f /etc/haproxy/haproxy.cfg" (Ruling 3), then
-// reads haproxy.cfg, its crt-lists and its crt directories (Ruling 4) and evaluates them with
+// haproxyConfig runs "haproxy -v", reads haproxy.cfg, runs "haproxy -c -f /etc/haproxy/haproxy.cfg"
+// (Ruling 3) unless haproxy.cfg can be changed by a user other than root (final review M4), then
+// reads its crt-lists and its crt directories (Ruling 4) and evaluates them with
 // haproxyconf.Parse, then ResolveKeys. An invalid, unsupported or untrusted configuration is not an
 // error: meta.valid is false and the Config is empty, never partial; after an invalid "-c" nothing
-// is read. When haproxy.cfg can be changed by a user other than root, nothing it names is read,
-// listed or opened (review I1: Input.Writable). When it or a read crt-list can, every pair becomes
+// more is read. When haproxy.cfg can be changed by a user other than root, "-c" is not run and
+// nothing it names is read, listed or opened (review I1: Input.Writable). When it or a read crt-list can, every pair becomes
 // config_file_writable (MarkWritable, instead of ResolveKeys: no certificate file is opened) and
 // every later failure reads "changed" naming that file; the entries of a writable crt-list are
 // not looked at (re-review R1). A crt-list that cannot be read is an untrusted configuration,
@@ -83,21 +84,8 @@ func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, 
 	}
 	meta.confPath = haproxyConfPath
 
-	// stderr is never used: it names files and may quote configuration.
-	_, _, err = s.runHAProxy(ctx, "-c", "-f", haproxyConfPath)
-	switch {
-	case errors.As(err, &pe):
-		return invalid(untrusted(helperproto.ConfigReasonNotRootControlled, pe.path))
-	case missingProgram(err):
-		return haproxyconf.Config{}, meta, errHAProxyMissing
-	case errors.Is(err, errProgramKilled):
-		return haproxyconf.Config{}, meta, err // says nothing about the configuration
-	case errors.Is(err, errTooLarge):
-		return invalid(unsupported(helperproto.ConfigReasonTooLarge, ""))
-	case !haproxyValid(err):
-		return invalid(&configError{class: helperproto.ConfigErrSyntax})
-	}
-
+	// Final review M4: haproxy.cfg is read (and its owner and mode checked) before "-c". One that
+	// cannot be read safely is reported as such, and "-c" is not run on it.
 	r := &haproxyReader{s: s}
 	data, cerr := r.readFile(haproxyConfPath)
 	if cerr != nil {
@@ -107,6 +95,26 @@ func (s *sys) haproxyConfig(ctx context.Context) (haproxyconf.Config, dumpMeta, 
 	// beyond it (no crt-list, no listing, no certificate): Parse gets Writable and turns every
 	// crt and crt-list argument into a config_file_writable pair of the text as written.
 	r.cfgWritable = len(r.writable) > 0
+	if !r.cfgWritable {
+		// Final review M4: "-c" is never run on a haproxy.cfg a user other than root can change.
+		// It would load, as root and when Alice chooses, every file that user names (and run its
+		// lua-load), and its verdict would tell that user whether a root-only path is a loadable
+		// certificate (KI-41). Such a configuration's answer is its config_file_writable pairs.
+		// stderr is never used: it names files and may quote configuration.
+		_, _, err = s.runHAProxy(ctx, "-c", "-f", haproxyConfPath)
+		switch {
+		case errors.As(err, &pe):
+			return invalid(untrusted(helperproto.ConfigReasonNotRootControlled, pe.path))
+		case missingProgram(err):
+			return haproxyconf.Config{}, meta, errHAProxyMissing
+		case errors.Is(err, errProgramKilled):
+			return haproxyconf.Config{}, meta, err // says nothing about the configuration
+		case errors.Is(err, errTooLarge):
+			return invalid(unsupported(helperproto.ConfigReasonTooLarge, ""))
+		case !haproxyValid(err):
+			return invalid(&configError{class: helperproto.ConfigErrSyntax})
+		}
+	}
 	cfg, err := haproxyconf.Parse(haproxyconf.Input{Path: haproxyConfPath, Data: data, Version: meta.version,
 		ReadFile: r.readList, ReadDir: r.readDir, Writable: r.cfgWritable, WritableFile: r.isWritable})
 	if err != nil {

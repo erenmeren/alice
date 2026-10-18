@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,8 +236,9 @@ func TestHAProxyDumpValidity(t *testing.T) {
 			for _, s := range []string{"hunter2", "secret.cfg", "ALERT"} {
 				assert.NotContains(t, w.f.out.String(), s)
 			}
-			assert.Zero(t, w.walked["haproxy"], "neither haproxy.cfg nor a crt-list is opened: %v", w.walked)
-			assert.Zero(t, w.walked["etc"], "nothing is walked at all: %v", w.walked)
+			// Final review M4: haproxy.cfg is read before "-c"; after an invalid "-c" nothing it
+			// names is walked (no crt-list, no certificate).
+			assert.ElementsMatch(t, []string{"etc", "haproxy"}, slices.Collect(maps.Keys(w.walked)), "only haproxy.cfg is walked")
 		})
 	}
 }
@@ -291,7 +294,8 @@ func TestHAProxyDumpKilledIsIOError(t *testing.T) {
 			code, m := w.dump(t)
 			assert.Equal(t, helperproto.ExitFailed, code)
 			assert.Equal(t, helperproto.CodeIOError, m["code"])
-			assert.Zero(t, w.walked["haproxy"])
+			assert.Zero(t, w.walked["lists"], "nothing haproxy.cfg names is walked: %v", w.walked)
+			assert.Zero(t, w.walked["certs"], "%v", w.walked)
 		})
 	}
 	t.Run("-v exits non-zero", func(t *testing.T) {
@@ -431,6 +435,42 @@ func TestHAProxyDumpWritableConfigMarksEveryPair(t *testing.T) {
 // root-only files and directories, actively or in a region "-c" skips. The helper walks, lists
 // and opens none of them, and no line or entry name of theirs reaches the answer; only the text
 // the user wrote in haproxy.cfg does.
+// Final review M4: haproxy.cfg is read before "haproxy -c", and when a user other than root can
+// change it "-c" is never run (it would load, as root and on Alice's schedule, whatever that user
+// names, and its verdict would tell whether a root-only path is a loadable certificate): the
+// answer is the config_file_writable pairs, whatever "-c" would have said.
+func TestHAProxyDumpWritableConfigSkipsCheck(t *testing.T) {
+	for _, mode := range []os.FileMode{0o666, 0o664, 0o646} {
+		w := newHAProxyWorld(t)
+		w.f.write(haproxyConfPath, haproxyCfg, mode)
+		w.set(haproxyArgsC, apacheAnswer{err: exitStatus(1)}) // never asked
+		code, m := w.dump(t)
+		require.Equal(t, 0, code, "%v", m)
+		assert.Equal(t, []string{haproxyArgsV}, w.calls, "mode %o: -c is not run", mode)
+		assert.Equal(t, true, m["config_valid"], "%v", m)
+		assert.Equal(t, []any{haproxyConfPath}, m["writable"])
+		for _, sv := range asList(m["servers"]) {
+			for _, p := range serverPairs(sv) {
+				assert.Equal(t, haproxyconf.ReasonConfigFileWritable, p["unsupported"])
+			}
+		}
+	}
+	t.Run("a haproxy.cfg that cannot be read is reported without -c", func(t *testing.T) {
+		w := newHAProxyWorld(t)
+		require.NoError(t, os.Chmod(w.f.host("/etc/haproxy"), 0o775))
+		class, reason, file := w.refusal(t)
+		assert.Equal(t, []string{helperproto.ConfigErrUntrusted, helperproto.ConfigReasonNotRootControlled, haproxyConfPath}, []string{class, reason, file})
+		assert.Equal(t, []string{haproxyArgsV}, w.calls)
+	})
+	t.Run("a root-controlled haproxy.cfg is checked", func(t *testing.T) {
+		w := newHAProxyWorld(t)
+		w.set(haproxyArgsC, apacheAnswer{err: exitStatus(1)})
+		class, _, _ := w.refusal(t)
+		assert.Equal(t, helperproto.ConfigErrSyntax, class)
+		assert.Equal(t, []string{haproxyArgsV, haproxyArgsC}, w.calls)
+	})
+}
+
 func TestHAProxyDumpWritableConfigReadsNothingItNames(t *testing.T) {
 	for name, cfg := range map[string]string{
 		"in .if defined(X)": ".if defined(NEVER_SET)\nfrontend z\n    bind :9445 ssl crt-list /root/notes crt /root/keys\n.endif\n",

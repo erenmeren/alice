@@ -230,6 +230,23 @@ func TestHAProxyCrtDirectoryNotRootControlled(t *testing.T) {
 	assert.Equal(t, helperproto.FileNotRootControlled, d.Files[0].Problem)
 }
 
+// Final review M4, as the helper: a writable haproxy.cfg is answered without "-c", so an invalid
+// one still gives its config_file_writable pairs.
+func TestHAProxyWritableConfigSkipsCheck(t *testing.T) {
+	e, _ := haproxyWorld(t)
+	e.SetNginxFileMode(haproxyConfPath, "root", "root", 0o666)
+	e.SetHAProxyConfigInvalid(true)
+	_, d := haproxyDump(t, e)
+	require.True(t, d.ConfigValid, "%+v", d)
+	assert.Equal(t, []string{haproxyConfPath}, d.Writable)
+	assert.Equal(t, "config_file_writable", d.Servers[0].Pairs[0].Unsupported)
+
+	e.SetNginxFileMode(haproxyConfPath, "root", "root", 0o644)
+	_, d = haproxyDump(t, e)
+	assert.False(t, d.ConfigValid)
+	assert.Equal(t, helperproto.ConfigErrSyntax, d.ConfigError)
+}
+
 func TestHAProxyAndApacheOnOneHostStaySeparate(t *testing.T) {
 	ca := pki.NewCA("Emu HAProxy Apache", pki.ECDSA256, testNow)
 	shop := ca.Issue(pki.Opts{CommonName: "shop.example.test"}, testNow)

@@ -14,7 +14,7 @@ import (
 )
 
 // This file ports cmd/alice-helper/haproxy.go to the emulated host, in the helper's call order:
-// "haproxy -v", "haproxy -c", haproxy.cfg, Parse (reading the crt-lists and crt directories it
+// "haproxy -v", haproxy.cfg, "haproxy -c" (not for a writable haproxy.cfg), Parse (reading the crt-lists and crt directories it
 // names), then MarkWritable (when a file it read can be changed by a user other than root; nothing
 // is opened) or ResolveKeys, then the describe loop. The real haproxyconf parser decides
 // everything the helper's parser decides. The describe loop is the emulator's own, written to
@@ -22,8 +22,7 @@ import (
 // server names, so a missing certificate is a "missing" place here, as it is for Apache.
 //
 // Emulator limits (the helper is the specification; the fidelity test covers the rest):
-//   - "-c" does not look at certificates, keys, crt-lists or server names; a missing haproxy.cfg is
-//     a "missing" untrusted place here, where the real "-c" fails first with class syntax.
+//   - "-c" does not look at certificates, keys, crt-lists or server names.
 //   - conf.d is a plain set of files (SetHAProxyConfDir): a conf.d that exists but cannot be listed
 //     safely (not root's, writable by others, a pseudo file system, too many entries), which the
 //     helper reports as config_dir_not_read, cannot be expressed.
@@ -219,15 +218,15 @@ func (x *haproxyHost) haproxyConfig(h *nginxHost) (haproxyconf.Config, nginxMeta
 		return haproxyconf.Config{}, meta, errHAProxyMissing
 	}
 	meta.confPath = haproxyConfPath
-	if x.invalid {
-		return invalid(&configError{class: helperproto.ConfigErrSyntax})
-	}
 	r := &haproxyReader{x: x, h: h}
 	data, cerr := r.readFile(haproxyConfPath)
 	if cerr != nil {
 		return invalid(cerr)
 	}
 	r.cfgWritable = len(r.writable) > 0
+	if x.invalid && !r.cfgWritable { // "-c" is not run on a writable haproxy.cfg (final review M4)
+		return invalid(&configError{class: helperproto.ConfigErrSyntax})
+	}
 	cfg, err := haproxyconf.Parse(haproxyconf.Input{Path: haproxyConfPath, Data: data, Version: meta.version,
 		ReadFile: r.readList, ReadDir: r.readDir, Writable: r.cfgWritable, WritableFile: r.isWritable})
 	if err != nil {
