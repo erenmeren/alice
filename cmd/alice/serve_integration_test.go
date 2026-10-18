@@ -52,7 +52,7 @@ func runServe(t *testing.T, cfg config.Config) (*lockedBuffer, func()) {
 	}
 }
 
-// An installation upgraded from Phase 3 starts: serve applies migrations 00006 to 00017 over the Phase 3
+// An installation upgraded from Phase 3 starts: serve applies migrations 00006 to 00018 over the Phase 3
 // schema and its data (the installation, the platform key, the audit chain), and the Phase 4
 // wiring needs no Nginx server to exist.
 func TestServeStartsOnAPhase3Database(t *testing.T) {
@@ -80,7 +80,7 @@ func TestServeStartsOnAPhase3Database(t *testing.T) {
 	logs, stop := runServe(t, cfg)
 	version, err = p.GetDBVersion(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, int64(17), version, "serve applied 00006 to 00017")
+	assert.Equal(t, int64(18), version, "serve applied 00006 to 00018")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM license"), "the same installation")
 	assert.Equal(t, 1, countRows(t, d, "SELECT count(*) FROM credentials WHERE purpose = 'platform_ssh'"), "the same platform key")
 	assert.Zero(t, countRows(t, d, "SELECT count(*) FROM targets"), "no Nginx server is needed")
