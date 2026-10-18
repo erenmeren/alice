@@ -445,6 +445,9 @@ func TestListRootDir(t *testing.T) {
 		f.symlink("/proc/self/x", "/etc/haproxy/certs/proc.pem")  // missing under the root
 		f.symlink("/etc/passwd/x", "/etc/haproxy/certs/nd.pem")   // below a file: missing
 		f.symlink("loop.pem", "/etc/haproxy/certs/loop.pem")      // a loop: kept, its problem shown
+		f.symlink("/srv/", "/etc/haproxy/certs/slash.pem")        // written as a directory: dropped
+		f.symlink("sub/.", "/etc/haproxy/certs/dot.pem")          // written as a directory: dropped
+		f.symlink("sub/..", "/etc/haproxy/certs/dotdot.pem")      // written as a directory: dropped
 		f.write("/etc/haproxy/certs/sub/s.pem", "s", 0o644)
 		f.symlink("sub/s.pem", "/etc/haproxy/certs/s.pem") // root-controlled, through sub
 		names, isDir, err := f.s.listRootDir("/etc/haproxy/certs")

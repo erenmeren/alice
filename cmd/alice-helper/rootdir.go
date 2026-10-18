@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"slices"
+	"strings"
 
 	"golang.org/x/sys/unix"
 
@@ -135,12 +136,29 @@ func (s *sys) rootDirNames(fd int, resolved string) ([]string, error) {
 				if s.dirLinks++; s.dirLinks > maxDirLinks {
 					return nil, errTooManyDirLinks
 				}
+				if dirForm(fd, name) {
+					continue // written as a directory: HAProxy never loads it (final re-review N1)
+				}
 				if s.linkLoadable(resolved + "/" + name) {
 					names = append(names, name)
 				}
 			}
 		}
 	}
+}
+
+// dirForm reports whether the link name in the directory fd has a target written as a directory
+// ("x/", "x/.", "x/..", ".", ".."): stat() of it is a directory or fails, so HAProxy loads nothing
+// through it. The walk ends such a target with errEscaped, which linkLoadable must keep for links
+// it cannot follow safely, so the form is read from the link itself.
+func dirForm(fd int, name string) bool {
+	buf := make([]byte, unix.PathMax)
+	n, err := unix.Readlinkat(fd, name, buf)
+	if err != nil || n <= 0 || n >= len(buf) {
+		return false
+	}
+	t := string(buf[:n])
+	return t == "." || t == ".." || strings.HasSuffix(t, "/") || strings.HasSuffix(t, "/.") || strings.HasSuffix(t, "/..")
 }
 
 // linkLoadable reports whether a link entry of a listed directory is kept (final review I2).

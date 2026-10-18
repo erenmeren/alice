@@ -171,7 +171,8 @@ Each entry: the decision, why, and the cost if it is wrong.
   (2 attempts reached the directory instead of 3, under load); it passed alone and in run 2 and 3: a flake, unrelated.
   Floors: `haproxy` 100.0 (98), `haproxyconf` 98.7 (92), `webserver` 98.6 (98), `cmd/alice-helper` 91.6 (90).
 - `make test-ssh`: pass; the real HAProxy matrix ran on ubuntu22 (2.4.30), debian12 (2.6.12) and rocky9 (2.8.14).
-- `make helper` checksums: linux-amd64 `307ab523e80a6f1ac50d81f7b423c269826f272af5336f75aeea3b38427eb322`,
+- `make helper` checksums at Task 13 (before the final fix wave, which changed the helper; rebuild with `make helper`
+  for the release's own): linux-amd64 `307ab523e80a6f1ac50d81f7b423c269826f272af5336f75aeea3b38427eb322`,
   linux-arm64 `8df42561237dc5a67827d826dbe45c8f162f6fb240f7a2487cd0840d296774c6`. The root-only helper suite was not
   run (sudo needs a password): owner step 1 stays open.
 - `make fuzz-haproxy FUZZTIME=5m`: `FuzzLex`, `FuzzParseCrtList` and `FuzzParseHAProxyConfig` pass, no crasher.
@@ -247,3 +248,10 @@ No new warning or reason reaches the web (`conditional`, `too_complex`, `not_roo
 needs a password): owner step 1 stays open, and now also covers `linkLoadable`, `dirProblem` and the reordered
 `haproxyConfig`.
 
+### Final re-review residuals
+
+- N1: a link in a `crt` folder whose target is written as a directory (`x/`, `x/.`, `x/..`, `.`, `..`) is dropped,
+  read from the link itself (`dirForm`), since HAProxy never loads through it; the walk's `errEscaped` stays "kept".
+- N2: KI-41 now says the 4096-link bound counts every link in every listed folder (crt folders and `conf.d`).
+- Parked: N3 (the I1 keyword list is closed to HAProxy 3.0's; no `haproxy:3.0` matrix row) and N4 (an unreadable
+  certificate still gets the guessed `<cert>.key`, its own row shows the real problem; recorded choice).
