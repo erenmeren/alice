@@ -10,6 +10,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -649,6 +650,43 @@ func TestHAProxyDumpCrtDirectoryLinkBudget(t *testing.T) {
 		require.Equal(t, 0, code, "%v", m)
 		require.Equal(t, true, m["config_valid"], "%v", m)
 	}
+}
+
+// Final review M3: a crt folder that is not root-controlled is one location whose problem names
+// its owner or mode (not_root_controlled), never not_regular; a folder below one is the same. A
+// root-controlled directory that reaches describeCert (nginx names one) stays not_regular.
+func TestHAProxyDumpCrtDirectoryNotRootControlled(t *testing.T) {
+	for name, tc := range map[string]struct {
+		dir, mode string
+	}{
+		"group-writable folder":      {"/etc/haproxy/gw", "0775"},
+		"world-writable folder":      {"/etc/haproxy/gw", "0777"},
+		"folder in a 0777 directory": {"/etc/haproxy/open/gw", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newHAProxyWorld(t)
+			w.f.mkdir("/etc/haproxy/open", 0o777)
+			w.f.mkdir(tc.dir, 0o755)
+			w.f.write(tc.dir+"/a.pem", string(w.a.FullchainPEM)+string(w.a.KeyPEM), 0o600)
+			if tc.mode != "" {
+				mode, _ := strconv.ParseUint(tc.mode, 8, 32)
+				require.NoError(t, os.Chmod(w.f.host(tc.dir), os.FileMode(mode)))
+			}
+			w.f.write(haproxyConfPath, "frontend f\n    bind :9443 ssl crt "+tc.dir+"\n", 0o644)
+			code, m := w.dump(t)
+			require.Equal(t, 0, code, "%v", m)
+			files := asList(m["files"])
+			require.NotEmpty(t, files)
+			assert.Equal(t, tc.dir, files[0]["path"])
+			assert.Equal(t, helperproto.FileNotRootControlled, files[0]["problem"])
+		})
+	}
+	t.Run("a root-controlled directory is not_regular", func(t *testing.T) {
+		w := newHAProxyWorld(t)
+		fi, _ := w.f.s.describeCert("/etc/haproxy/certs", nil, nil)
+		assert.Equal(t, helperproto.FileNotRegular, fi.Problem)
+		assert.True(t, fi.Exists)
+	})
 }
 
 // C15: HAProxy loads "w.pem.rsa" as itself, but the helper reads and reports only files with a

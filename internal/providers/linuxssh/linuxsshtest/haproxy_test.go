@@ -216,6 +216,20 @@ func TestHAProxyKeyInCertBound(t *testing.T) {
 	assert.Equal(t, helperproto.DumpPair{Cert: before, Key: before + ".key"}, pairs[helperproto.MaxServerFiles-1])
 }
 
+// Final review M3, as the helper: a crt folder that is not root-controlled is one location with
+// the problem not_root_controlled.
+func TestHAProxyCrtDirectoryNotRootControlled(t *testing.T) {
+	e, l := haproxyWorld(t)
+	e.SetHAProxyFile("/etc/haproxy/dir/x.pem", append(append([]byte(nil), l.shop.FullchainPEM...), l.shop.KeyPEM...))
+	e.SetFileProblem("/etc/haproxy/dir", helperproto.FileNotRootControlled)
+	e.SetHAProxyConfig("frontend f\n    bind :9443 ssl crt /etc/haproxy/dir\n")
+	_, d := haproxyDump(t, e)
+	require.True(t, d.ConfigValid, "%+v", d)
+	require.NotEmpty(t, d.Files)
+	assert.Equal(t, "/etc/haproxy/dir", d.Files[0].Path)
+	assert.Equal(t, helperproto.FileNotRootControlled, d.Files[0].Problem)
+}
+
 func TestHAProxyAndApacheOnOneHostStaySeparate(t *testing.T) {
 	ca := pki.NewCA("Emu HAProxy Apache", pki.ECDSA256, testNow)
 	shop := ca.Issue(pki.Opts{CommonName: "shop.example.test"}, testNow)

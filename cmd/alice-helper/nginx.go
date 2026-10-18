@@ -492,6 +492,9 @@ func cleanRunes(s string, maxRunes int) string {
 func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperproto.DumpFile, dropped bool) {
 	fi = helperproto.DumpFile{Path: p, Kind: "cert"}
 	rf, err := s.resolveRoot(p)
+	if errors.Is(err, errNotRegular) {
+		err = s.dirProblem(p, err)
+	}
 	if err != nil {
 		fi.Exists = !errors.Is(err, unix.ENOENT)
 		fi.Problem = problemOf(err)
@@ -545,6 +548,22 @@ func (s *sys) describeCert(p string, names, groups map[int]string) (fi helperpro
 	}
 	fi.PEM = blocks
 	return fi, dropped
+}
+
+// dirProblem refines the walk error errNotRegular of a path that ends at a directory (a crt
+// folder haproxy-dump could not list, final review M3): when the directory itself is not
+// root-controlled (owner, group or other write bit) or lies on a pseudo or FUSE file system, that
+// is the problem to report (openRootDir's error), so the admin is pointed at its owner or mode
+// rather than told it is not a regular file. Otherwise err stays.
+func (s *sys) dirProblem(p string, err error) error {
+	fd, _, derr := s.openRootDir(p)
+	switch {
+	case derr == nil:
+		_ = unix.Close(fd)
+	case errors.Is(derr, errNotRootControlled), errors.Is(derr, errSpecialFS):
+		return derr
+	}
+	return err
 }
 
 var (
