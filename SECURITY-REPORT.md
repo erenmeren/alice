@@ -138,8 +138,9 @@ and a 30-second limit, and never uses its standard error. Before it runs a progr
 with `/etc/apache2/envvars` and `apache2`, `httpd`) it checks that the program and every directory above it belong to
 root and cannot be written by others (`cmd/alice-helper:TestTrustedProgram`). It reads `haproxy.cfg`, the certificate
 lists and the folder listings the configuration names itself, through the same root-controlled walk as Nginx's
-configuration, under the same limits (20 MiB in total, one budget for all files, 4096 entries per folder, 65,536
-pairs; a result over 32 MiB is refused, never truncated), and answers the same summary as `nginx-dump`: certificate
+configuration, under the same limits (20 MiB of bytes in total, one budget of 1,048,576 words for all files, 4096
+entries per folder, 65,536 pairs; the parser refuses more than 32 MiB of servers and the helper's answer is capped at
+16 MiB, both refusals, never a truncation), and answers the same summary as `nginx-dump`: certificate
 files are described, key files only `stat`ed
 (`cmd/alice-helper:TestHAProxyDumpWritesNothing`, `internal/providers/haproxy:TestRealHAProxy` on Ubuntu 22.04,
 Debian 12 and Rocky Linux 9). `haproxy -c` loads the configuration's certificates and runs configuration-chosen code

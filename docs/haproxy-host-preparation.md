@@ -142,11 +142,14 @@ where it can, the file. A certificate list that does not exist or is not a regul
 names only in a part Alice cannot evaluate, does not do that: the places that depend on it are listed as conditional
 and the page warns that a certificate list or folder could not be read (`config_file_not_read`).
 
-Limits: 20 MiB per file and 20 MiB in all (`haproxy.cfg`, each certificate list once, and the names in the folders it
-lists), 1 MiB per line, 100 levels of `.if` blocks, 256 certificate lists, 256 folders with at most 4096 entries each,
-65,536 certificate/key pairs and 65,536 listen addresses. Going over one is a refusal with the reason `too_large` or
-`too_complex`, or, for the listen addresses, a cut list with the warning `list_truncated`. The answer is never
-silently truncated: a configuration whose result would not fit in 32 MiB is refused.
+Limits: 20 MiB per file and 20 MiB of bytes in all (`haproxy.cfg`, each certificate list once, and the names in the
+folders it lists), 1 MiB per line, one budget of about one million words (1,048,576) shared by `haproxy.cfg` and all
+certificate lists together, 100 levels of `.if` blocks, 256 certificate lists, 256 folders with at most 4096 entries
+each, 65,536 certificate/key pairs and 65,536 listen addresses. Going over one is a refusal with the reason `too_large`
+or `too_complex`, or, for the listen addresses, a cut list with the warning `list_truncated`. Two limits apply to the
+result: the parser refuses a configuration whose servers would take more than 32 MiB on the wire (`too_complex`), and
+the helper's answer is capped at 16 MiB (`output_too_large`). Either way the answer is refused, never silently
+truncated.
 
 The lexer follows HAProxy's own reader: blanks separate words, `#` outside quotes starts a comment, double and single
 quotes group words, a backslash escapes a fixed set of characters and an unknown escape is kept as written (as
@@ -157,7 +160,7 @@ and a line that starts with `#` or with a carriage return is skipped.
 From these files Alice reads the `frontend` and `listen` sections (and, for settings that reach them, `global` and
 `defaults`), following HAProxy's rules:
 
-- A `bind` with the keyword `ssl` is a place. Its row shows the frontend (or `listen`) name, the addresses and ports
+- A `bind` with the keyword `ssl` and at least one `crt` or `crt-list` argument is a place. Its row shows the frontend (or `listen`) name, the addresses and ports
   of the bind, and the certificate file and line of the `bind`. A `bind` without `ssl` is not listed.
 - Each `crt` argument is one certificate file, or, when it names a folder, one per certificate in it (in byte order;
   files ending in `.key`, `.ocsp`, `.issuer` or `.sctl` are not certificates, and dotfiles are skipped from HAProxy
@@ -165,13 +168,14 @@ From these files Alice reads the `frontend` and `listen` sections (and, for sett
 - Each `crt-list` argument is a file of lines `<path> [options] [server names]`: every line is one place with its own
   **server names** (SNI filters, without the negative `!` ones), so a frontend with a certificate list appears once
   for each line. A line without server names shows only the frontend.
-- A relative `crt` path is joined to `crt-base` of the `global` section. `crt-base` is set once (HAProxy 2.4 and 2.6
-  refuse a second one, which is what the tests pin), so a relative path before it, or without it, is not usable
+- A relative `crt` path is joined to `crt-base` of the `global` section. HAProxy 2.4 and 2.6 refuse a
+  second `crt-base`; what 2.8 does is not verified. Alice uses the `crt-base` in effect in read order (a later one
+  replaces an earlier one), so a relative path read before any `crt-base`, or without one, is not usable
   (`path_not_allowed`).
 - A `disabled` or `enabled` line in a frontend or `listen` section (or in `defaults`) is followed. The `defaults`
   setting is sticky, as in HAProxy: once a `defaults` section has such a line, a later section that sets neither
   itself is shown as conditional.
-- `.if`, `.elif`, `.else` and `.endif` are evaluated when the condition is empty or one plain number (0 is false);
+- `.if`, `.elif`, `.else` and `.endif` are evaluated when the condition is empty (false) or one plain integer, which may be negative (0 is false, any other number true);
   any other condition is not evaluated and the lines it holds are conditional.
 
 ### Certificates and keys
@@ -217,8 +221,9 @@ Alice lists these places as **Not supported** with the reason, or shows the prob
   never read.
 - **Conditions.** An `.if` condition other than an empty one or a plain number (`.if streq(...)`, `.if feature(...)`,
   `.if "$X" -eq 1`, ...), or a `disabled` or `enabled` line in a place Alice cannot evaluate, makes the lines it
-  covers `conditional`: "This file, or the name of its frontend, is set inside a conditional section of the
-  configuration". Alice cannot tell when it is used. These also make every certificate conditional:
+  covers `conditional`: the page says that the file, or the name of its website, is set inside a conditional part of the
+  configuration (such as an `<If>` or `.if` block, or a test Alice cannot evaluate) and that Alice cannot tell when it
+  is used. These also make every certificate conditional:
   - any keyword that contains `$` (HAProxy expands it before it reads the keyword, so it may be a `bind`, a key
     setting or a section header);
   - a `crt-store` section (HAProxy 3.0 and later; it can give a certificate a key file of its own);

@@ -23,8 +23,9 @@ Each entry: the decision, why, and the cost if it is wrong.
 3. **`MaxListens` and the wire bound (Task 5).** The listens of all binds together are bounded at `MaxListens` =
    1<<16, counted on the wire (a bind's listens are shared by its servers and counted once per server that carries
    them); past it the list is cut with the warning `list_truncated`. The encoded size of all servers is bounded at
-   `MaxWire` = 32 MiB (twice the helper's answer); going over it is `ErrTooComplex`, never a truncation. One token
-   budget (`MaxTokens`) covers `haproxy.cfg` and every `crt-list` together. Why: one 1 MiB address argument names about
+   `MaxWire` = 32 MiB (twice the helper's answer); going over it is `ErrTooComplex`, never a truncation. The helper's
+   own answer is capped at 16 MiB (`ServerDumpOutput`, `output_too_large`). One word budget (`MaxTokens` = 1<<20)
+   covers `haproxy.cfg` and every `crt-list` together. Why: one 1 MiB address argument names about
    200,000 listens, and the bound must hold on the wire, not only in `Parse`. Cost if wrong: some very large
    configurations are cut or refused.
 4. **Key settings are used only when stable (Task 5, rounds 2-4).** `ssl-load-extra-files` and
@@ -68,9 +69,9 @@ Each entry: the decision, why, and the cost if it is wrong.
     in the guide, in troubleshooting and in KI-41. Cost if wrong: customers' extension-less HAProxy certificates show a
     file problem.
 12. **Duplicate `crt-base` is rejected by HAProxy 2.4 and 2.6 (Task 10).** `'crt-base' already specified`; the plan
-    (Ruling 9) assumed a later `crt-base` could override. The parser keeps `crt-base` as set-once (a relative path read
-    before it is `path_not_allowed`), and the real-matrix fixture has exactly one `crt-base`, in the distribution's
-    `global`. Nothing is claimed about 2.8: unverified. Cost if wrong: a relative path before a `crt-base` is
+    (Ruling 9) assumed a later `crt-base` could override. The parser is last-wins in read order (`parse.go`: each `crt-base` in `global` replaces the previous one; a relative
+    path read before any is `path_not_allowed`), and the real-matrix fixture has exactly one `crt-base`, in the
+    distribution's `global`, because 2.4 and 2.6 reject a second. Nothing is claimed about 2.8: unverified. Cost if wrong: a relative path before a `crt-base` is
     unsupported although a newer HAProxy would resolve it.
 13. **`defaults` is sticky (Task 5 carry M8).** Once a `defaults` section has a `disabled` or `enabled` line, every
     later frontend or `listen` that sets neither itself is conditional; the flag is never reset by a later `defaults`.
