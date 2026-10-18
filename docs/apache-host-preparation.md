@@ -71,8 +71,9 @@ reads its SSH keys and shows "The Apache permissions are not installed on this s
 
 ## The helper version
 
-Reading Apache needs `alice-helper` 1.7.0 (protocol 8), the helper of this release. It adds `apache-dump`; nothing
-changes for Linux and Nginx servers, which keep working with `alice-helper` 1.6.x. A server added as an Apache
+Reading Apache needs `alice-helper` 1.7.0 (protocol 8) or newer; the helper of this release is 1.8.0 (protocol 9),
+which also reads HAProxy. `alice-helper` 1.7.0 added `apache-dump`; nothing changes for Linux and Nginx servers,
+which keep working with `alice-helper` 1.6.x. A server added as an Apache
 server whose helper is older keeps working for its SSH keys: **Test connection** succeeds with the warning "The
 alice-helper on this server is too old to read Apache. Update the helper; SSH keys are still read.", and **Discover**
 reads the SSH keys but no websites (`ALC-APC-0004`).
@@ -99,9 +100,13 @@ The helper runs Apache's own control program, never a program Alice chooses:
   any argument ("Passing arguments to httpd using apachectl is no longer supported").
 - When neither exists, Alice reports that Apache was not found (`ALC-APC-0001`).
 
-The program runs as root with a fixed environment (`PATH`, `LANG=C`), in `/`, for at most 30 seconds per run. Keep
-the control program, `/etc/apache2/envvars` and the Apache binary owned by root and writable only by root: whoever
-can change them can run commands as root at the next discovery, as at the next start of Apache.
+The program runs as root with a fixed environment (`PATH`, `LANG=C`), in `/`, for at most 30 seconds per run. From
+`alice-helper` 1.8.0 the helper runs the control program only when it, `/etc/apache2/envvars` and
+`/usr/sbin/apache2` (on Debian and Ubuntu) or `/usr/sbin/httpd` (Red Hat family), and every directory above them,
+belong to root and nobody else can write them. Otherwise it runs nothing: the configuration is reported as untrusted
+(`not_root_controlled`, naming the file) and Alice shows no websites. A file that does not exist passes the check.
+Keep these files owned by root and writable only by root: whoever can change them could otherwise run commands as
+root at the next discovery, as at the next start of Apache.
 
 ### The four runs
 

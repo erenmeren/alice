@@ -157,8 +157,9 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   **Server type** **Nginx server** again), Nginx was not found (`ALC-NGX-0001`), Nginx's configuration has an error
   (`ALC-NGX-0002`: run `nginx -t` on the server), or the last scan failed. Fix it, then choose **Discover**.
 - **A website is "Not supported".** The row says why. The cases and what to change are in
-  [nginx-host-preparation.md](nginx-host-preparation.md#configurations-alice-cannot-manage) and, on an Apache server,
-  [apache-host-preparation.md](apache-host-preparation.md#configurations-alice-cannot-read). After a change on the
+  [nginx-host-preparation.md](nginx-host-preparation.md#configurations-alice-cannot-manage) on an Apache server,
+  [apache-host-preparation.md](apache-host-preparation.md#configurations-alice-cannot-read) and, on a HAProxy server,
+  [haproxy-host-preparation.md](haproxy-host-preparation.md#configurations-alice-cannot-read). After a change on the
   server, choose **Discover**.
 - **The server's page says that Apache was not found, that the Apache permissions are not installed, or that
   Apache's configuration has an error.** These are the web-server warnings of an Apache server (the same as for
@@ -179,8 +180,32 @@ Every error returned by the Alice API carries a stable code in the form `ALC-<AR
   (`ALC-HAP-0003`), or do the same after copying the `alice-helper` of this Alice version, which HAProxy needs
   at 1.8.0 (protocol 9; `ALC-HAP-0004`). Then choose **Test connection** and **Discover**
   ([haproxy-host-preparation.md](haproxy-host-preparation.md)).
-- **The Deploy controls of an Apache server are disabled ("Not available for Apache servers yet").** This is on
-  purpose: Alice only reads Apache servers in this release. Renew their certificates with your own tools.
+- **HAProxy: the helper is too old (`ALC-HAP-0004`).** "The alice-helper on this server is too old to read HAProxy."
+  Reading HAProxy needs `alice-helper` 1.8.0 (protocol 9). SSH keys are still read. Copy the `alice-helper` of this
+  Alice version to the server, run the commands from **Servers → Prepare a server for Alice** with **Server type**
+  **HAProxy server** again, then choose **Test connection** and **Discover**
+  ([haproxy-host-preparation.md](haproxy-host-preparation.md#updating-the-helper)).
+- **HAProxy: configuration error although HAProxy runs (`ALC-HAP-0002`).** Alice runs
+  `haproxy -c -f /etc/haproxy/haproxy.cfg` as root, with an empty environment, at the moment of the discovery. That
+  check also loads every certificate and key and resolves the host names of `server` lines, so it fails when a
+  certificate or key file is missing, when a server name does not resolve (DNS or `/etc/hosts` on the server, now,
+  or a slow resolver), or when the configuration needs variables that only the service unit sets. Run
+  `env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C /usr/sbin/haproxy -c -f /etc/haproxy/haproxy.cfg` as root, fix
+  what it reports (or use IP addresses in `server` lines), then choose **Discover**. On the Red Hat family the same
+  command may print a warning about `/etc/haproxy/conf.d`; the warning is harmless, Alice looks at the exit status
+  only ([haproxy-host-preparation.md](haproxy-host-preparation.md#a-configuration-error)).
+- **"… also has configuration files in /etc/haproxy/conf.d. Alice reads only /etc/haproxy/haproxy.cfg" (warning
+  `config_dir_not_read`).** The frontends defined in `conf.d` are not listed; that is why the list may be empty or
+  incomplete. The warning also appears when `conf.d` exists but cannot be listed safely (not owned by root, writable
+  by group or others, too many entries). Move the frontends into `haproxy.cfg` or make `conf.d` root-owned, then
+  choose **Discover**. A `conf.d` without a `.cfg` file gives no warning
+  ([haproxy-host-preparation.md](haproxy-host-preparation.md#configurations-alice-cannot-read)).
+- **A HAProxy certificate shows the problem "The file name does not end in .pem, .crt, …" (`bad_name`).** HAProxy
+  loads names such as `w.pem.rsa`; Alice does not read files with other names, by design (a link must never lead the
+  helper to a file such as `/etc/shadow`), and a link with a usual name does not change that.
+- **The Deploy controls of an Apache or HAProxy server are disabled ("Not available for Apache servers yet", "Not
+  available for HAProxy servers yet").** This is on purpose: Alice only reads Apache and HAProxy servers in this
+  release. Renew their certificates with your own tools.
 - **"Alice cannot trust what the web server reported for this configuration" or "Alice cannot read this configuration safely".**
   Alice refuses the whole server and names the reason and, where it can, the file with the problem. Usual causes: a
   configuration file or folder that users other than root can change (`chmod go-w` on it, owner root), an `include`

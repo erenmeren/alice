@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased — HAProxy (discovery only)
+
+**Added**
+- Server type **HAProxy server** (target type `haproxy`): Alice reads a HAProxy server's TLS `bind` lines (the
+  frontends and `listen` sections), their certificate files and certificates, and its SSH keys. HAProxy servers are
+  discovery only: Alice never deploys to them, never changes a HAProxy file and never reloads HAProxy. Their deploy
+  controls are shown disabled with the note "Not available for HAProxy servers yet".
+- A **Frontend** column on a HAProxy server's page in place of the website column: each row shows "Frontend: name"
+  and, for a `crt-list` line, its server names (SNI filters).
+- `alice-helper` 1.8.0 (protocol 9) with the read-only subcommand `haproxy-dump` and the sudoers profile `haproxy`
+  (**Server type** **HAProxy server** under **Prepare a server for Alice**). It runs `/usr/sbin/haproxy -v` and
+  `haproxy -c -f /etc/haproxy/haproxy.cfg`, reads `haproxy.cfg`, its `crt-list` files and `crt` folder listings
+  through the root-controlled walk, describes certificate files and only `stat`s key files
+  ([docs/haproxy-host-preparation.md](docs/haproxy-host-preparation.md)).
+- Warnings `config_dir_not_read` (frontends in `/etc/haproxy/conf.d`, which Alice does not read) and
+  `config_file_not_read` (a certificate list or folder could not be read where it is named only in a part Alice cannot
+  evaluate).
+- Unsupported reason `unknown_keyword`: the `bind` carries an option Alice does not know (usually a newer HAProxy's),
+  so its arguments cannot be read.
+- `SECURITY-REPORT.md` KI-41 (HAProxy discovery items); Phase C rulings in
+  `docs/superpowers/rulings/haproxy-provider.md`.
+
+**Changed (API)**
+- `type` of a target, the target list filter, the provider kind and `WebServerFacts.software` accept `haproxy`.
+- The server blocks of a certificate location (`servers[]`) have an optional field `section`: the `frontend` or
+  `listen` name for HAProxy, absent for Nginx and Apache.
+- Error codes `ALC-HAP-0001` (HAProxy not found), `ALC-HAP-0002` (configuration has a problem), `ALC-HAP-0003`
+  (server not prepared for HAProxy) and `ALC-HAP-0004` (helper too old for HAProxy)
+  ([docs/troubleshooting.md](docs/troubleshooting.md)).
+- Migration `00018` adds the type `haproxy`. Its Down refuses while HAProxy servers exist (deleted ones included);
+  restore a backup taken before `00018` instead.
+
+**Security**
+- The helper runs `nginx`, `apache2ctl` (with `/etc/apache2/envvars` and `apache2`), `httpd` and `haproxy` as root only
+  when the program and every directory above it belong to root and cannot be written by group or others (and are not
+  on a pseudo or FUSE file system). Otherwise nothing runs and the configuration is reported as untrusted
+  (`not_root_controlled`, naming the file). This closes the carry of Apache Ruling 7; `systemctl` is not covered
+  (`SECURITY-REPORT.md` KI-40).
+
+**Helper**
+- `alice-helper` 1.8.0, protocol 9. New: `haproxy-dump`, and the program pre-check above for the Nginx and Apache
+  commands. Nothing else changed for Linux, Nginx and Apache servers: their subcommands, answers and sudoers files are
+  the same, and they keep working with `alice-helper` 1.6.x and 1.7.x.
+
+**Upgrade notes**
+- Reinstall the helper (1.8.0) on servers that will be HAProxy servers, with the commands of **Server type**
+  **HAProxy server**; Nginx, Apache and Linux servers keep working with 1.6.x and 1.7.x, but get the program pre-check
+  only with 1.8.0. A HAProxy server with an older helper shows `web_server_helper_too_old` and `ALC-HAP-0004` until
+  its helper is updated. Migration `00018` runs at the first start of the new release.
+- Owner steps before release: run the root-only helper suite
+  (`sudo -E env "PATH=$PATH" go test -count=1 ./cmd/alice-helper/...`), reinstall helper 1.8.0 on the target servers,
+  and review a real customer HAProxy configuration (see the rulings file).
+
 ## Unreleased — Apache httpd (discovery only)
 
 **Added**

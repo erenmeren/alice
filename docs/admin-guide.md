@@ -1185,17 +1185,20 @@ confirmation**, **Checking…**, **Cannot be reached**, **Sign-in refused**, **S
 **Disabled**. Everyone can see the list and each server's details; nobody ever sees a password or private key there.
 
 - **Add server** (administrators): see [nginx-host-preparation.md](nginx-host-preparation.md) and, for an Apache
-  server, [apache-host-preparation.md](apache-host-preparation.md). Each server counts
+  server, [apache-host-preparation.md](apache-host-preparation.md) and, for a HAProxy server,
+  [haproxy-host-preparation.md](haproxy-host-preparation.md). Each server counts
   toward the license; when the license is full, Alice says "Your license allows N targets." and adds nothing. A
   server's address, SSH port and user cannot be changed later: remove the server and add it again.
 - **Test connection** and **Scan for SSH keys** (administrators and operators) run in the background; the page
-  updates when they finish. Test connection always opens a new connection to the server. On an **Nginx server** or an **Apache server** the
+  updates when they finish. Test connection always opens a new connection to the server. On an **Nginx server**, an **Apache server** or a **HAProxy server** the
   scan is called **Discover** (in **Websites on this server**) and reads the SSH keys and the websites together.
-- A server's **Server type** (**Linux server**, **Nginx server** or **Apache server**) is chosen when it is added and
+- A server's **Server type** (**Linux server**, **Nginx server**, **Apache server** or **HAProxy server**) is chosen when it is added and
   cannot be changed; see [nginx-host-preparation.md](nginx-host-preparation.md#changing-a-linux-server-into-an-nginx-server).
   An **Apache server** is discovery only: Alice reads its websites and certificates (with **Discover**, as on an
   Nginx server) and its SSH keys, and never deploys to it
-  ([apache-host-preparation.md](apache-host-preparation.md)).
+  ([apache-host-preparation.md](apache-host-preparation.md)). A **HAProxy server** is discovery only in the same
+  way: Alice reads its frontends and certificates and its SSH keys
+  ([haproxy-host-preparation.md](haproxy-host-preparation.md)).
 - Alice scans every **Connected** server on its own once per discovery interval (one day unless it was changed
   through the API; at least one hour), and starts at most one scheduled job per server per interval whatever its
   outcome. A server that **Cannot be reached** is tested again at that interval; when the test succeeds it is

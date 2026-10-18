@@ -17,6 +17,7 @@ with every release package (`docs/`) and are written in English.
 | Operator | update Alice to a new release, or understand a rollback | [upgrade.md](upgrade.md) |
 | Linux or Nginx administrator | prepare a server so that Alice can manage it | [nginx-host-preparation.md](nginx-host-preparation.md) |
 | Apache administrator | prepare an Apache server so that Alice can read its certificates (discovery only) | [apache-host-preparation.md](apache-host-preparation.md) |
+| HAProxy administrator | prepare a HAProxy server so that Alice can read its certificates (discovery only) | [haproxy-host-preparation.md](haproxy-host-preparation.md) |
 | Azure administrator | give Alice access to a Key Vault | [azure-setup.md](azure-setup.md) |
 | Customer administrator, purchasing | activate or renew the license, understand the evaluation and lock mode | [licensing.md](licensing.md) |
 | Anyone who sees an error or a code `ALC-…` | find the cause and the fix | [troubleshooting.md](troubleshooting.md) |

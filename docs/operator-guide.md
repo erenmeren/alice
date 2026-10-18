@@ -487,6 +487,18 @@ is explained in [apache-host-preparation.md](apache-host-preparation.md#configur
 the certificates of an Apache server with your own tools; Alice shows the new certificate after the next
 **Discover**.
 
+A **HAProxy server** (discovery only) shows the same list, read through `haproxy-dump`
+([haproxy-host-preparation.md](haproxy-host-preparation.md)), with a **Frontend** column in place of the website
+column: each row is one TLS `bind` of a `frontend` or `listen` section, or, for a `crt-list` file, one line of it. The
+row shows the frontend's name ("Frontend: name"), the addresses and ports of the `bind`, the server names (SNI
+filters) of that certificate-list line (none for a plain `crt`), the certificate file, its expiry,
+states and warnings. Its certificates appear under **Certificates**. Alice never changes anything on it: the
+**Deploy certificate** and **Verification settings** controls are disabled with the note "Not available for HAProxy
+servers yet". Why a HAProxy place can be **Not supported**, and what Alice does not read (for example
+`/etc/haproxy/conf.d`, which the page warns about), is explained in
+[haproxy-host-preparation.md](haproxy-host-preparation.md#configurations-alice-cannot-read). Renew the certificates
+of a HAProxy server with your own tools; Alice shows the new certificate after the next **Discover**.
+
 A website shows **The certificate changed outside Alice.** when its file holds a certificate that Alice did not
 deploy (for example renewed by certbot or by hand). That is not an error: it tells you that something else manages
 this file.
