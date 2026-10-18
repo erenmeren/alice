@@ -4,11 +4,27 @@ import "bytes"
 
 // crtListLine is one entry of a crt-list file: n is its 1-based physical line number, path the
 // certificate path as written (not joined to crt-base, not checked) and names its SNI filters
-// without the negative ("!") ones, in order.
+// without the negative ("!") ones, in order. override says the option block may name a file of
+// the line's own (overrideOption).
 type crtListLine struct {
-	n     int
-	path  string
-	names []string
+	n        int
+	path     string
+	names    []string
+	override bool
+}
+
+// overrideKeywords are the crt-store load keywords a crt-list option block takes from HAProxy 3.0
+// on ("sslbindconf also supports the following keywords from the crt-store load keyword"): each
+// names a file of the line's own, crt and key the very pair Alice would report (final review I1).
+// ocsp-update names no file and is not here.
+var overrideKeywords = map[string]bool{"crt": true, "key": true, "ocsp": true, "issuer": true, "sctl": true}
+
+// overrideOption reports whether an option-block word may name a file of the line's own: one of
+// overrideKeywords wherever it stands (a keyword's argument that happens to be spelled so counts
+// too: fail closed), or a word holding a quote, a backslash or a "$", which this reader does not
+// interpret and a newer HAProxy might (the block cannot be read with certainty).
+func overrideOption(w []byte) bool {
+	return overrideKeywords[string(w)] || bytes.ContainsAny(w, "\"'\\$")
 }
 
 // parseCrtList reads a crt-list file the way HAProxy's crtlist_parse_line does (Ruling 11):
@@ -17,8 +33,10 @@ type crtListLine struct {
 //     with "#", "\n" or "\r"; review I3); a line of blanks is skipped;
 //   - blanks (C isspace) separate words; there are no quotes (a '"' is part of the word) and no
 //     escapes, so a trailing "# x" is three filters, as HAProxy keeps it;
-//   - "[" and "]" also separate words, wherever they are, and enclose the option block, which is
-//     skipped. A "[" before the path, a second "[" or "]", or a "]" without "[" is ErrSyntax,
+//   - "[" and "]" also separate words, wherever they are, and enclose the option block. Its
+//     words are not interpreted, only looked at: one that may name a file of the line's own
+//     (overrideOption: HAProxy 3.0's crt, key, ocsp, issuer and sctl) sets override, which makes
+//     the line's pair conditional (final review I1). A "[" before the path, a second "[" or "]", or a "]" without "[" is ErrSyntax,
 //     as HAProxy refuses them. Two forms HAProxy accepts are refused here to fail closed: a
 //     "[" left open (HAProxy reads the words after it as filters, silently) and an option
 //     block after a filter (HAProxy warns and drops the filters before the block);
@@ -95,7 +113,7 @@ func crtListEntry(text []byte) (l crtListLine, words int, err error) {
 		case words == 0:
 			l.path = string(w)
 		case open && !closed:
-			// an option
+			l.override = l.override || overrideOption(w)
 		case w[0] != '!':
 			l.names = append(l.names, string(w))
 		}

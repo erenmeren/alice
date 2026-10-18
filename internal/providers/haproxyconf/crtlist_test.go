@@ -22,12 +22,12 @@ func TestParseCrtList(t *testing.T) {
 	got, err := parseCrtList([]byte(in))
 	require.NoError(t, err)
 	assert.Equal(t, []crtListLine{
-		{2, "/probe/certs/a.pem", nil},
-		{3, "h.pem", []string{"h.example.test", "*.h.example.test"}},
-		{4, "/b.pem", []string{"b.example.test", "other.example.test", "#", "trailing", "comment"}},
-		{6, "/a.pem", []string{"indented.example.test"}},
-		{7, "#", []string{"indented"}}, // an indented "#" is a path, and what follows are filters
-		{8, `"/a.pem"`, []string{"x"}},
+		{2, "/probe/certs/a.pem", nil, false},
+		{3, "h.pem", []string{"h.example.test", "*.h.example.test"}, false},
+		{4, "/b.pem", []string{"b.example.test", "other.example.test", "#", "trailing", "comment"}, false},
+		{6, "/a.pem", []string{"indented.example.test"}, false},
+		{7, "#", []string{"indented"}, false}, // an indented "#" is a path, and what follows are filters
+		{8, `"/a.pem"`, []string{"x"}, false},
 	}, got)
 }
 
@@ -38,21 +38,21 @@ func TestParseCrtListLines(t *testing.T) {
 	}{
 		"empty":               {"", nil},
 		"comments and blanks": {"#a\n\n\t\n#b", nil},
-		"no final newline":    {"/a.pem x", []crtListLine{{1, "/a.pem", []string{"x"}}}},
-		"crlf":                {"/a.pem x\r\n/b.pem\r\n", []crtListLine{{1, "/a.pem", []string{"x"}}, {2, "/b.pem", nil}}},
+		"no final newline":    {"/a.pem x", []crtListLine{{1, "/a.pem", []string{"x"}, false}}},
+		"crlf":                {"/a.pem x\r\n/b.pem\r\n", []crtListLine{{1, "/a.pem", []string{"x"}, false}, {2, "/b.pem", nil, false}}},
 		// Review I3 (probed on 2.4, 2.6 and 2.8): a line starting with CR is skipped; a CR
 		// later in the line is a blank.
-		"cr first":               {"\r/x/missing.pem x\n/a.pem\n", []crtListLine{{2, "/a.pem", nil}}},
-		"cr after a blank":       {" \r/a.pem x\n", []crtListLine{{1, "/a.pem", []string{"x"}}}},
-		"tabs":                   {"\t/a.pem\tx\ty\n", []crtListLine{{1, "/a.pem", []string{"x", "y"}}}},
-		"options only":           {"/a.pem [alpn h2]\n", []crtListLine{{1, "/a.pem", nil}}},
-		"options without blanks": {"/a.pem[alpn h2]x y\n", []crtListLine{{1, "/a.pem", []string{"x", "y"}}}},
-		"empty options":          {"/a.pem [] x\n", []crtListLine{{1, "/a.pem", []string{"x"}}}},
-		"tab inside options":     {"/a.pem [verify\tnone ] x\n", []crtListLine{{1, "/a.pem", []string{"x"}}}},
-		"only negative":          {"/a.pem !x !y\n", []crtListLine{{1, "/a.pem", nil}}},
-		"bang alone":             {"/a.pem ! x\n", []crtListLine{{1, "/a.pem", []string{"x"}}}},
-		"no escapes":             {`/a\ b.pem x\y`, []crtListLine{{1, `/a\`, []string{"b.pem", `x\y`}}}},
-		"dollar kept":            {"/a/${X}.pem x\n", []crtListLine{{1, "/a/${X}.pem", []string{"x"}}}},
+		"cr first":               {"\r/x/missing.pem x\n/a.pem\n", []crtListLine{{2, "/a.pem", nil, false}}},
+		"cr after a blank":       {" \r/a.pem x\n", []crtListLine{{1, "/a.pem", []string{"x"}, false}}},
+		"tabs":                   {"\t/a.pem\tx\ty\n", []crtListLine{{1, "/a.pem", []string{"x", "y"}, false}}},
+		"options only":           {"/a.pem [alpn h2]\n", []crtListLine{{1, "/a.pem", nil, false}}},
+		"options without blanks": {"/a.pem[alpn h2]x y\n", []crtListLine{{1, "/a.pem", []string{"x", "y"}, false}}},
+		"empty options":          {"/a.pem [] x\n", []crtListLine{{1, "/a.pem", []string{"x"}, false}}},
+		"tab inside options":     {"/a.pem [verify\tnone ] x\n", []crtListLine{{1, "/a.pem", []string{"x"}, false}}},
+		"only negative":          {"/a.pem !x !y\n", []crtListLine{{1, "/a.pem", nil, false}}},
+		"bang alone":             {"/a.pem ! x\n", []crtListLine{{1, "/a.pem", []string{"x"}, false}}},
+		"no escapes":             {`/a\ b.pem x\y`, []crtListLine{{1, `/a\`, []string{"b.pem", `x\y`}, false}}},
+		"dollar kept":            {"/a/${X}.pem x\n", []crtListLine{{1, "/a/${X}.pem", []string{"x"}, false}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got, err := parseCrtList([]byte(tc.in))
@@ -127,6 +127,47 @@ func TestParseCrtListHostileSizes(t *testing.T) {
 			start := time.Now()
 			_, _ = parseCrtList([]byte(in))
 			assert.Less(t, time.Since(start), 2*time.Second*slowdown())
+		})
+	}
+}
+
+// TestParseCrtListOverrides (final review I1): HAProxy 3.0's crt-list option block also takes the
+// crt-store load keywords crt, key, ocsp, issuer and sctl, which name files of the line's own.
+// A block holding one of them, anywhere, sets override; so does a block word with a quote, a
+// backslash or a "$", which this reader does not interpret (an unparseable block). Filters and
+// other options do not.
+func TestParseCrtListOverrides(t *testing.T) {
+	for _, kw := range []string{"key", "crt", "ocsp", "issuer", "sctl"} {
+		t.Run(kw, func(t *testing.T) {
+			got, err := parseCrtList([]byte("/c/a.pem [alpn h2 " + kw + " /k/other] a.example\n/c/b.pem [" + kw + " /k/x]\n"))
+			require.NoError(t, err)
+			assert.Equal(t, []crtListLine{
+				{1, "/c/a.pem", []string{"a.example"}, true},
+				{2, "/c/b.pem", nil, true},
+			}, got)
+		})
+	}
+	for name, tc := range map[string]struct {
+		in   string
+		want bool
+	}{
+		"other options":                {"/c/a.pem [alpn h2 ssl-min-ver TLSv1.2] key\n", false},
+		"a filter named key":           {"/c/a.pem key crt\n", false},
+		"no block":                     {"/c/a.pem\n", false},
+		"empty block":                  {"/c/a.pem [] x\n", false},
+		"keyword without blank":        {"/c/a.pem[key /k/x]x\n", true},
+		"ocsp-update is not a file":    {"/c/a.pem [ocsp-update on]\n", false},
+		"a quote (unparseable)":        {"/c/a.pem [alpn \"h2\"]\n", true},
+		"a single quote (unparseable)": {"/c/a.pem [alpn 'h2']\n", true},
+		"a backslash (unparseable)":    {"/c/a.pem [alpn h\\2]\n", true},
+		"a dollar (unparseable)":       {"/c/a.pem [alpn ${A}]\n", true},
+		"a quote in a filter":          {"/c/a.pem [alpn h2] \"x\"\n", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseCrtList([]byte(tc.in))
+			require.NoError(t, err)
+			require.Len(t, got, 1)
+			assert.Equal(t, tc.want, got[0].override)
 		})
 	}
 }

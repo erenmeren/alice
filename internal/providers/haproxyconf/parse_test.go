@@ -1096,3 +1096,34 @@ func measureHeap(f func() (any, error)) (peak, held, total uint64, err error) {
 	runtime.KeepAlive(res)
 	return max(top.Load(), held), held, after.TotalAlloc - before.TotalAlloc, err
 }
+
+// TestParseCrtListOverridesAreConditional (final review I1, probed by the reviewer on 3.0.5): a crt-list line
+// whose option block names a file of its own (key, crt, ocsp, issuer, sctl) is conditional, as a
+// crt-store makes every pair (Ruling 5), whatever the version and whatever the certificate holds;
+// its path is not listed. The other lines of the list are unaffected.
+func TestParseCrtListOverridesAreConditional(t *testing.T) {
+	for _, version := range []string{"3.0.5", "2.8.14", ""} {
+		t.Run(version, func(t *testing.T) {
+			fs := newFS()
+			fs.files["/l/a.lst"] = "/c/a.pem [key /k/other.key] a.example\n/c/b.pem [alpn h2] b.example\n/c/d [crt /c/x.pem] d.example\n"
+			fs.dirs["/c/d"] = []string{"z.pem"}
+			got, err := Parse(fs.input(fe("  bind :9443 ssl crt-list /l/a.lst"), version))
+			require.NoError(t, err)
+			ResolveKeys(&got, func(string) bool { return true })
+			assert.Equal(t, []Server{
+				named(srv(2, "f", any9443, uns("/c/a.pem", ReasonConditional)), "a.example"),
+				named(srv(2, "f", any9443, Pair{Cert: "/c/b.pem", Key: "/c/b.pem", CertRaw: "/c/b.pem", KeyBeside: "/c/b.pem.key"}), "b.example"),
+				named(srv(2, "f", any9443, uns("/c/d", ReasonConditional)), "d.example"),
+			}, got.Servers)
+			assert.Zero(t, fs.dirCalls["/c/a.pem"], "an overridden line is not looked at")
+			assert.Zero(t, fs.dirCalls["/c/d"])
+		})
+	}
+	t.Run("a variable path keeps its reason", func(t *testing.T) {
+		fs := newFS()
+		fs.files["/l/a.lst"] = "$X/a.pem [key /k/x]\n"
+		got, err := Parse(fs.input(fe("  bind :9443 ssl crt-list /l/a.lst"), "3.0.5"))
+		require.NoError(t, err)
+		assert.Equal(t, []Server{srv(2, "f", any9443, uns("$X/a.pem", ReasonVariable))}, got.Servers)
+	})
+}

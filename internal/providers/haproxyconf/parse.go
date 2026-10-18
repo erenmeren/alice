@@ -223,6 +223,8 @@ type setting struct {
 type listLine struct {
 	path, raw string
 	dollar    bool
+	// override: the option block may name a file of the line's own (crtListLine.override).
+	override  bool
 	names     []string
 	namesWire int
 }
@@ -881,6 +883,11 @@ func (p *parser) evalList(raw string, pending int) ([]listEntry, error) {
 			e.pair = Pair{CertRaw: l.raw, Unsupported: reason}
 		case writable:
 			e.pair = Pair{CertRaw: l.raw, Unsupported: ReasonConfigFileWritable}
+		case l.override:
+			// Final review I1 (HAProxy 3.0 on): the option block may give the line a certificate
+			// or key file of its own, which Alice does not read, as a crt-store may (Ruling 5).
+			// The path is not looked at.
+			e.pair = Pair{CertRaw: l.raw, Unsupported: ReasonConditional}
 		default:
 			d, err := p.readDir(path)
 			if err != nil {
@@ -930,7 +937,7 @@ func (p *parser) readList(path string) ([]listLine, error) {
 	p.tokens += used
 	lines := make([]listLine, len(parsed))
 	for i, l := range parsed {
-		lines[i] = listLine{path: l.path, raw: shown(l.path), dollar: strings.Contains(l.path, "$")}
+		lines[i] = listLine{path: l.path, raw: shown(l.path), dollar: strings.Contains(l.path, "$"), override: l.override}
 		if len(l.names) > 0 {
 			lines[i].names = make([]string, len(l.names))
 			for j, n := range l.names {
