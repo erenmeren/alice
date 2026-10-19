@@ -5,3 +5,4 @@
 # an expired line fails the check. Informational and Low alerts are listed in the summary and
 # reviewed at each release (docs/release-checklist.md).
 10062	IGNORE	PII Disclosure fires on Luhn-valid digit runs inside the 64-hex audit hash and prev_hash fields of GET /api/v1/audit (nightly 2026-10-15, evidence 5806971502941005); the audit log carries no personal numbers	2027-04-01
+40045	IGNORE	Spring4Shell fires when the safe request of the pair is rate-limited: both form bodies get 400 from POST /api/v1/certificates/csr until the 300-a-minute session limit answers the second with 429 (nightly 2026-10-19, run 39218073587); Alice is Go and has no Spring data binding	2027-04-01
