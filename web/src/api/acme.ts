@@ -162,6 +162,10 @@ export interface ACMECertificate {
   running_order_id: string | null;
   current: ACMECurrentCertificate | null;
   ari_window: { start: string; end: string } | null;
+  // When Alice renews the current certificate by itself (null before the first one): a time chosen once at random in the
+  // window the CA suggests (ca_window) or renew_before_days before the end (local).
+  renew_at: string | null;
+  renew_at_source: ACMERenewAtSource;
   deploy_held_reason: ACMEHeldReason;
   deploy_stopped: boolean;
   bindings_count: number;
@@ -174,6 +178,7 @@ export interface ACMECertificate {
 }
 
 export type ACMEFailureClass = '' | 'transient' | 'permanent';
+export type ACMERenewAtSource = '' | 'ca_window' | 'local';
 
 // The delivery of the newest renewal e-mail of a certificate: one copy per recipient, by outcome.
 export interface ACMENoticeDelivery {
@@ -232,7 +237,13 @@ export interface ACMEOrder {
   revoked_at: string | null;
   revocation_reason: RevocationReasonOrEmpty;
   compromised: boolean;
+  // The RFC 9773 identifier of the certificate an issue order renews ('' for a first order or a test run), and what
+  // became of it.
+  replaces: string;
+  replaces_outcome: ACMEReplacesOutcome;
 }
+
+export type ACMEReplacesOutcome = '' | 'sent' | 'adopted' | 'no_ari' | 'other_account' | 'already_replaced' | 'refused';
 
 export interface ACMEDeploy {
   location_ids?: string[];
@@ -247,6 +258,8 @@ export const ACME_CHALLENGES: readonly ACMEChallenge[] = ['dns01', 'http01'];
 export const ACME_KEY_TYPES: readonly ACMEKeyType[] = ['ecdsa_p256', 'ecdsa_p384', 'rsa_2048', 'rsa_3072', 'rsa_4096'];
 export const ACME_ORDER_STATES: readonly ACMEOrderState[] = ['running', 'succeeded', 'failed'];
 export const ACME_BINDING_STATES: readonly ACMEBindingState[] = ['current', 'pending', 'attention'];
+export const ACME_RENEW_AT_SOURCES: readonly ACMERenewAtSource[] = ['ca_window', 'local'];
+export const ACME_REPLACES_OUTCOMES: readonly ACMEReplacesOutcome[] = ['sent', 'adopted', 'no_ari', 'other_account', 'already_replaced', 'refused'];
 
 // The directory addresses a preset fills in (the CAs' documented ACME v2 directories). A preset only pre-fills the
 // form: nothing is contacted until the account is registered. "custom" (My own CA) leaves the address to the person.

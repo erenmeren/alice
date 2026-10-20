@@ -13,6 +13,8 @@ import {
   ACME_KEY_TYPES,
   ACME_ORDER_STATES,
   ACME_PRESETS,
+  ACME_RENEW_AT_SOURCES,
+  ACME_REPLACES_OUTCOMES,
   HOOK_POLL_MAX,
   HOOK_POLL_MIN,
   HOOK_SECRET_MAX,
@@ -65,6 +67,8 @@ describe('the ACME enums', () => {
     expect([...ACME_KEY_TYPES]).toEqual(enumOf('ACMECertificateCreate', 'key_type'));
     expect([...ACME_ORDER_STATES]).toEqual(enumOf('ACMEOrder', 'state'));
     expect([...ACME_BINDING_STATES]).toEqual(enumOf('ACMEBinding', 'state'));
+    expect([...ACME_RENEW_AT_SOURCES]).toEqual(enumOf('ACMECertificate', 'renew_at_source'));
+    expect([...ACME_REPLACES_OUTCOMES]).toEqual(enumOf('ACMEOrder', 'replaces_outcome'));
   });
 
   it('match the bounds of a DNS hook in api/openapi.yaml', () => {

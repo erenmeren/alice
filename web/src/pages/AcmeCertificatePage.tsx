@@ -384,7 +384,12 @@ function RenewalPanel({
       <Stack gap="sm">
         <FactList facts={facts} label={t('acme.issued.renewal.title')} />
         <Text size="sm">{t(c.auto_renew ? 'acme.issued.renewal.autoHelpOn' : 'acme.issued.renewal.autoHelpOff')}</Text>
-        {!admin && <Text size="xs" c="dimmed">{t('acme.issued.adminOnly')}</Text>}
+        {r.kind === 'planned' && c.renew_at_source === 'ca_window' && (
+          <Text size="sm" data-testid="ari-note">
+            {t('acme.issued.renewal.ariNote')}
+          </Text>
+        )}
+        {!admin &&<Text size="xs" c="dimmed">{t('acme.issued.adminOnly')}</Text>}
         {c.ca_not_before && (
           <Notice tone={c.ca_wait_critical ? 'danger' : 'warning'} title={t('acme.issued.renewal.caWaitTitle')} testId="ca-wait">
             <Text size="sm">{t('acme.issued.renewal.caWaitText', { time: formatDateTime(c.ca_not_before, lang), order: orderLabel })}</Text>

@@ -44,14 +44,17 @@ export type Renewal =
   | { kind: 'planned'; at: string; ari: boolean };
 
 // renewal says when Alice renews next, from what the API sends: a scheduled attempt (next_attempt_at) first; otherwise,
-// for an issued certificate, the server's rule renew_before_days before expiry (at most a third of the lifetime), or
-// the start of the authority's suggested window when that is earlier. Before the first issuance there is none.
+// for an issued certificate, renew_at (the time Alice chose in the authority's suggested window, or its own rule); from
+// an older server without it, the rule renew_before_days before expiry (at most a third of the lifetime), or the start
+// of the authority's window when that is earlier. Before the first issuance there is none.
 export function renewal(c: ACMECertificate): Renewal {
   // A certificate stopped after an outage is still retried by itself (recovering): its next attempt is shown.
   if (c.state === 'stopped' && !(c.recovering && c.next_attempt_at)) return { kind: 'stopped' };
   if (!c.auto_renew) return { kind: 'off' };
   if (c.next_attempt_at) return { kind: 'attempt', at: c.next_attempt_at };
   if (!c.current) return { kind: 'none' };
+  // The server's own answer (R50): a time chosen once at random in the authority's window, or the local rule.
+  if (c.renew_at && !Number.isNaN(Date.parse(c.renew_at))) return { kind: 'planned', at: c.renew_at, ari: c.renew_at_source === 'ca_window' };
   const end = Date.parse(c.current.not_after);
   const start = Date.parse(c.current.not_before);
   if (Number.isNaN(end)) return { kind: 'none' };

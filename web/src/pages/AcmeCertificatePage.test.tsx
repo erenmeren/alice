@@ -215,6 +215,34 @@ describe('Issued certificate status page', () => {
     expect(notice).toHaveTextContent('The administrators were e-mailed.');
   });
 
+  it('says when Alice renews: a time it chose in the window the certificate authority suggests (R50)', async () => {
+    base({
+      cert: issued({ ari_window: { start: '2026-11-20T00:00:00Z', end: '2026-11-25T00:00:00Z' }, renew_at: '2026-11-22T13:37:00Z', renew_at_source: 'ca_window' }),
+    });
+    await open();
+    const renews = await screen.findByTestId('renews');
+    expect(renews).toHaveTextContent('a time Alice chose in the window the authority suggests');
+    expect(renews).toHaveTextContent('2026');
+    expect(screen.getByTestId('ari-note')).toHaveTextContent('chose this time at random');
+  });
+
+  it('says the same in Turkish', async () => {
+    base({
+      session: sessionFor('admin', 'tr'),
+      cert: issued({ ari_window: { start: '2026-11-20T00:00:00Z', end: '2026-11-25T00:00:00Z' }, renew_at: '2026-11-22T13:37:00Z', renew_at_source: 'ca_window' }),
+    });
+    await open(['tr']);
+    expect(await screen.findByTestId('renews')).toHaveTextContent("Alice'in yetkilinin önerdiği aralıkta seçtiği zaman");
+    expect(screen.getByTestId('ari-note')).toHaveTextContent('rastgele');
+  });
+
+  it('follows the local rule when the server says so, without the note', async () => {
+    base({ cert: issued({ renew_at: '2026-12-01T09:00:00Z', renew_at_source: 'local', renew_before_days: 30 }) });
+    await open();
+    expect(await screen.findByTestId('renews')).toHaveTextContent(/\(30 days before it expires\)/);
+    expect(screen.queryByTestId('ari-note')).not.toBeInTheDocument();
+  });
+
   it('offers the order again once the wait is over (no ca_not_before)', async () => {
     base({ session: sessionFor('admin'), cert: issued({ state: 'failing', failures: 1, next_attempt_at: '2026-10-14T10:00:00Z' }) });
     await open();

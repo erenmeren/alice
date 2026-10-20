@@ -1109,6 +1109,8 @@ export function acmeCertificateFixture(o: Partial<ACMECertificate> = {}): ACMECe
     running_order_id: null,
     current: null,
     ari_window: null,
+    renew_at: null,
+    renew_at_source: '',
     deploy_held_reason: '',
     deploy_stopped: false,
     bindings_count: 0,
@@ -1140,6 +1142,8 @@ export function acmeOrderFixture(o: Partial<ACMEOrder> = {}): ACMEOrder {
     revoked_at: null,
     revocation_reason: '',
     compromised: false,
+    replaces: '',
+    replaces_outcome: '',
     ...o,
   };
 }
