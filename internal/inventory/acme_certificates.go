@@ -67,6 +67,10 @@ var (
 	ErrACMEChallengeUnavailable = errors.New("inventory: the proof method cannot be used for these names or this server")
 	// ErrACMEKeyTypeLocked: the key policy of a certificate with bindings cannot change (A13/M2).
 	ErrACMEKeyTypeLocked = errors.New("inventory: the key type of an ACME certificate with bound locations cannot change")
+	// ErrACMECAWait: the CA asked Alice to wait before a new order of the certificate (ca_not_before, R47). It comes as
+	// the cause of an *ACMEError with the reason acme.ca_rate_limited and the time left as RetryAfter (the API's
+	// ALC-ACM-0005 with Retry-After); the CA is not contacted.
+	ErrACMECAWait = errors.New("inventory: the certificate authority asked to wait before the next order")
 )
 
 // ACMECertificate is the view of an ACME certificate definition. It has no secret.
@@ -86,8 +90,11 @@ type ACMECertificate struct {
 	CurrentCertificateID *uuid.UUID `json:"current_certificate_id,omitempty"`
 	Failures             int        `json:"failures"`
 	NextAttemptAt        *time.Time `json:"next_attempt_at,omitempty"`
-	LastAttemptAt        *time.Time `json:"last_attempt_at,omitempty"`
-	LastErrorCode        string     `json:"last_error_code"`
+	// CANotBefore is the CA's earliest retry time (the Retry-After of a rate limit; R47), apart from NextAttemptAt
+	// (Alice's own backoff): no order starts before it.
+	CANotBefore   *time.Time `json:"ca_not_before,omitempty"`
+	LastAttemptAt *time.Time `json:"last_attempt_at,omitempty"`
+	LastErrorCode string     `json:"last_error_code"`
 	// LastFailureClass is the class of the last failure of the series (renew.ClassTransient, renew.ClassPermanent; ''
 	// without one); PermanentFailures counts the permanent ones (five stop automatic renewal).
 	LastFailureClass  string     `json:"last_failure_class"`
@@ -299,7 +306,7 @@ c.current_certificate_id IS NOT NULL AND c.deploy_stopped_certificate_id IS NOT 
 c.created_by, c.created_at, c.updated_at, c.last_failure_class, c.permanent_failures,
 (SELECT cur.revoked_at FROM certificates cur WHERE cur.id = c.current_certificate_id),
 (SELECT cur.revocation_reason FROM certificates cur WHERE cur.id = c.current_certificate_id),
-(SELECT cur.compromised_at IS NOT NULL FROM certificates cur WHERE cur.id = c.current_certificate_id)`
+(SELECT cur.compromised_at IS NOT NULL FROM certificates cur WHERE cur.id = c.current_certificate_id), c.ca_not_before`
 
 func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	var (
@@ -314,7 +321,7 @@ func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	err := row.Scan(&c.ID, &c.ProviderID, &c.AccountID, &c.Names, &c.KeyType, &c.Challenge, &c.HookID, &c.HTTPTargetID, &c.RenewBeforeDays,
 		&c.AutoRenew, &c.AutoDeploy, &c.State, &c.CurrentCertificateID, &c.Failures, &c.NextAttemptAt, &c.LastAttemptAt, &c.LastErrorCode,
 		&c.RunningOrderID, &c.Bindings, &fingerprint, &nb, &na, &chainOK, &c.ARIWindowStart, &c.ARIWindowEnd, &c.DeployHeldReason,
-		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures, &revokedAt, &reason, &compromised)
+		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures, &revokedAt, &reason, &compromised, &c.CANotBefore)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CurrentCertificateID != nil && fingerprint != nil && nb != nil && na != nil && chainOK != nil {
 		c.Current = &ACMECurrentCertificate{ID: *c.CurrentCertificateID, Fingerprint: *fingerprint, NotBefore: nb.UTC(), NotAfter: na.UTC(),
@@ -323,7 +330,7 @@ func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 			c.Current.RevocationReason = *reason
 		}
 	}
-	for _, t := range []**time.Time{&c.NextAttemptAt, &c.LastAttemptAt, &c.ARIWindowStart, &c.ARIWindowEnd} {
+	for _, t := range []**time.Time{&c.NextAttemptAt, &c.CANotBefore, &c.LastAttemptAt, &c.ARIWindowStart, &c.ARIWindowEnd} {
 		if *t != nil {
 			u := (*t).UTC()
 			*t = &u
@@ -626,13 +633,14 @@ func (s *Service) DeleteACMECertificate(ctx context.Context, a Actor, id uuid.UU
 // ReArmACMEAutoRenew is "Check again and resume" (the web's Renew now; owner decision 2026-10-20): it switches automatic
 // renewal of a live ACME certificate on, starts it afresh and checks again at once (an Administrator's act, e.g. after
 // it stopped or while it fails): state active with a current certificate (pending without one), failures 0 of either
-// class, no failure notice mark, no wait, no rate-limit series, with the audit row acme.auto_renew.rearmed; then, for an
-// issued certificate without a running order, an order of the person (trigger manual, acme.issue, audit
-// acme.order.started), all in one transaction. The licence gate is asked first (changes). An order that cannot start
-// refuses the whole act (ErrACMEAccountState, ErrACMERolloverPending: nothing changes); a job of an earlier order that
-// is still finishing (ErrACMEOrderRunning) leaves the re-arm without a new order, and the planner orders at its next
-// run. Switching auto_renew from off to on through UpdateACMECertificate re-arms without ordering. A successful order
-// re-arms as well (FinishACMEOrder). ErrNotFound.
+// class, no failure notice mark, no wait of Alice's own (the CA's ca_not_before stays, R47), no rate-limit series, with
+// the audit row acme.auto_renew.rearmed; then, for an issued certificate without a running order, an order of the
+// person (trigger manual, acme.issue, audit acme.order.started), all in one transaction. The licence gate is asked first
+// (changes). An order that cannot start refuses the whole act (ErrACMEAccountState, ErrACMERolloverPending: nothing
+// changes); a job of an earlier order that is still finishing (ErrACMEOrderRunning) or the CA's wait (ErrACMECAWait)
+// leaves the re-arm without a new order, and the planner orders at a later run. Switching auto_renew from off to on
+// through UpdateACMECertificate re-arms without ordering. A successful order re-arms as well (FinishACMEOrder).
+// ErrNotFound.
 func (s *Service) ReArmACMEAutoRenew(ctx context.Context, a Actor, id uuid.UUID) (ACMECertificate, error) {
 	if err := s.license.Allow(license.ClassChange); err != nil {
 		return ACMECertificate{}, err
@@ -655,7 +663,7 @@ func (s *Service) ReArmACMEAutoRenew(ctx context.Context, a Actor, id uuid.UUID)
 			}
 			_, err = s.startOrderTx(ctx, sp, a, cur, ACMEOrderIssue, ACMETriggerManual)
 			switch {
-			case errors.Is(err, ErrACMEOrderRunning):
+			case errors.Is(err, ErrACMEOrderRunning), errors.Is(err, ErrACMECAWait):
 				if rerr := sp.Rollback(ctx); rerr != nil {
 					return fmt.Errorf("inventory: roll back a savepoint: %w", rerr)
 				}

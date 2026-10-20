@@ -446,7 +446,7 @@ func TestACMEConcurrentRequestsMakeOneOrder(t *testing.T) {
 }
 
 // FailACMEOrder writes the failure state the renewal planner reads: failures, the error, the attempt and the next
-// attempt by the backoff table or the CA's Retry-After (capped at 24 h); a test run only honours a Retry-After.
+// attempt by the backoff table, and the CA's Retry-After as its own time (R47); a test run only honours a Retry-After.
 func TestACMEFailureState(t *testing.T) {
 	w := newCertWorld(t)
 	c := w.create(w.dnsInput("fail.example.test"))
@@ -472,29 +472,43 @@ func TestACMEFailureState(t *testing.T) {
 	assert.Equal(t, now.Add(time.Hour), *s.NextAttemptAt)
 	fail(inventory.ACMEOrderIssue, "acme.hook_refused", 0)
 	assert.Equal(t, now.Add(2*time.Hour), *state().NextAttemptAt)
+	// The CA's Retry-After is its own time (R47), apart from Alice's backoff (here the 2 h of a transient failure of a
+	// certificate that was never issued), and is honoured in full past the local cap of 24 h.
+	caOver := func() {
+		t.Helper()
+		_, err := w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET ca_not_before = NULL WHERE id = $1", c.ID) // the CA's time is over
+		require.NoError(t, err)
+	}
 	fail(inventory.ACMEOrderIssue, "acme.ca_rate_limited", 5*time.Hour)
 	s = state()
 	assert.Equal(t, 3, s.Failures)
-	assert.Equal(t, now.Add(5*time.Hour), *s.NextAttemptAt, "the CA's Retry-After when it is longer than the backoff")
+	assert.Equal(t, now.Add(2*time.Hour), *s.NextAttemptAt, "Alice's own backoff")
+	assert.Equal(t, now.Add(5*time.Hour), *s.CANotBefore, "the CA's Retry-After")
+	_, err := w.svc.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderIssue)
+	require.ErrorIs(t, err, inventory.ErrACMECAWait, "no order before the CA's time")
+	caOver()
 	fail(inventory.ACMEOrderIssue, "acme.ca_rate_limited", 72*time.Hour)
-	assert.Equal(t, now.Add(24*time.Hour), *state().NextAttemptAt, "capped at 24 h")
+	assert.Equal(t, now.Add(72*time.Hour), *state().CANotBefore, "in full, past the local cap of 24 h")
+	caOver()
 
-	// A test run: no failure counted; a Retry-After only pushes the next attempt later.
+	// A test run: no failure counted; a Retry-After is the CA's time too.
 	fail(inventory.ACMEOrderTest, "acme.validation_failed_dns", 0)
 	s = state()
 	assert.Equal(t, 4, s.Failures)
 	assert.Equal(t, "acme.ca_rate_limited", s.LastErrorCode)
-	fail(inventory.ACMEOrderTest, "acme.ca_rate_limited", time.Hour)
-	assert.Equal(t, now.Add(24*time.Hour), *state().NextAttemptAt, "never earlier than it was")
-	_, err := w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET next_attempt_at = NULL, state = 'stopped' WHERE id = $1", c.ID)
+	assert.Nil(t, s.CANotBefore)
+	_, err = w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET next_attempt_at = NULL, state = 'stopped' WHERE id = $1", c.ID)
 	require.NoError(t, err)
 	fail(inventory.ACMEOrderTest, "acme.ca_rate_limited", 3*time.Hour)
-	assert.Equal(t, now.Add(3*time.Hour), *state().NextAttemptAt)
+	s = state()
+	assert.Equal(t, now.Add(3*time.Hour), *s.CANotBefore)
+	assert.Nil(t, s.NextAttemptAt, "Alice's own backoff is not touched by a test run")
+	caOver()
 	fail(inventory.ACMEOrderIssue, "acme.hook_refused", 0)
 	assert.Equal(t, inventory.ACMEStateStopped, state().State, "a stopped certificate stays stopped")
 
 	assert.Equal(t, 5, w.audits("acme.order.failed"))
-	assert.Equal(t, 3, w.audits("acme.order.test_failed"))
+	assert.Equal(t, 2, w.audits("acme.order.test_failed"))
 	require.ErrorIs(t, w.svc.FailACMEOrder(w.ctx, uuid.New(), "acme.hook_refused", 0), inventory.ErrNotFound)
 	require.ErrorIs(t, w.svc.FailACMEOrder(w.ctx, uuid.New(), "not a code", 0), inventory.ErrACMEErrorCode)
 }

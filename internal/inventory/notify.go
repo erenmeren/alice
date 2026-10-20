@@ -95,10 +95,12 @@ const (
 // TemplateACMEAutoRenewStopped when the failures stopped automatic renewal (renew.ShouldStop). While a renewal fails,
 // one of the TemplateACMERenewalExpiring* e-mails goes 14, 7, 3 and 1 days before the current certificate ends (param
 // days: the whole days left): _transient after an outage (Alice keeps trying by itself), _permanent after a failure
-// that needs a person (Alice still tries a few times), _stopped when automatic renewal stopped. Params: name (the
-// certificate's first name), names (every name, comma-separated, bounded), count (the failures in a row), expires_at
-// (when the current certificate ends, "2006-01-02 15:04 UTC"), error_reason (the closed code of the last failure:
-// notify.Sender renders it as the plain title of the code in the reader's language, param reason) and
+// that needs a person (Alice still tries a few times), _stopped when automatic renewal stopped.
+// TemplateACMERenewalCAWait goes at once when the CA asked Alice to wait so long that less than half of the renewal
+// window is left after it (R47; params days and ca_not_before: when the CA accepts orders again, "2006-01-02 15:04
+// UTC"). Params: name (the certificate's first name), names (every name, comma-separated, bounded), count (the failures
+// in a row), expires_at (when the current certificate ends, "2006-01-02 15:04 UTC"), error_reason (the closed code of the
+// last failure: notify.Sender renders it as the plain title of the code in the reader's language, param reason) and
 // acme_certificate_id (not rendered: the certificate's page shows how its last e-mail was delivered). No URL, no CA
 // text.
 const (
@@ -107,12 +109,13 @@ const (
 	TemplateACMERenewalExpiringTransient = "acme.renewal_expiring_transient"
 	TemplateACMERenewalExpiringPermanent = "acme.renewal_expiring_permanent"
 	TemplateACMERenewalExpiringStopped   = "acme.renewal_expiring_stopped"
+	TemplateACMERenewalCAWait            = "acme.renewal_ca_wait"
 )
 
 // ACMETemplates lists the ACME renewal emails (render tests; their params differ from Templates' target_name).
 func ACMETemplates() []string {
 	return []string{TemplateACMERenewalFailed, TemplateACMEAutoRenewStopped, TemplateACMERenewalExpiringTransient,
-		TemplateACMERenewalExpiringPermanent, TemplateACMERenewalExpiringStopped}
+		TemplateACMERenewalExpiringPermanent, TemplateACMERenewalExpiringStopped, TemplateACMERenewalCAWait}
 }
 
 // Templates lists the inventory's email templates (render tests).

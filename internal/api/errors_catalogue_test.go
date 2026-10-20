@@ -86,6 +86,8 @@ var inventorySentinels = map[string]error{
 	// ACME (Task 10)
 	"ErrACMENameNotAllowed": inventory.ErrACMENameNotAllowed, "ErrACMEOrderRunning": inventory.ErrACMEOrderRunning,
 	"ErrACMEChallengeUnavailable": inventory.ErrACMEChallengeUnavailable, "ErrACMEKeyTypeLocked": inventory.ErrACMEKeyTypeLocked,
+	// The CA asked to wait (R47).
+	"ErrACMECAWait": inventory.ErrACMECAWait,
 	// ACME (Task 12): bindings and Deploy now, and the refusals of a queued automatic deployment judged again (the
 	// engine ends it with their reasons; the API maps them too, so none can become a 500).
 	"ErrACMENotIssued": inventory.ErrACMENotIssued, "ErrACMELocationBound": inventory.ErrACMELocationBound,

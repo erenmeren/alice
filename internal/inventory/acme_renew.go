@@ -18,7 +18,14 @@ package inventory
 //
 // Storm limits: at most ACMERenewWave orders start per run; a certificate waits renew.MinSpacing after its last order and
 // its backoff after failures; while one certificate of a provider waits for the CA's rate limit (last_error_code
-// acme.ca_rate_limited, next_attempt_at in the future), no other certificate of that provider is ordered.
+// acme.ca_rate_limited, next_attempt_at or ca_not_before in the future), no other certificate of that provider is
+// ordered.
+//
+// The CA's earliest retry time (R47; docs/superpowers/rulings/acme-ca-retry-after.md): the Retry-After of a rate limit is
+// stored as ca_not_before, apart from next_attempt_at (Alice's own backoff, capped at renew.MaxBackoff and repaired after
+// a clock step), and no order of the certificate starts before it, neither the planner's nor a person's (startOrderTx).
+// It is bounded only by renew.MaxCAWait when it is recorded; when it leaves less than half of the renewal window
+// (renew.CAWaitCritical), the Administrators are e-mailed at once (acmeCAWaitNotice) instead of Alice ordering sooner.
 //
 // Recovery after outages (owner decision 2026-10-20; docs/superpowers/rulings/acme-renewal-recovery.md): every failure is
 // counted with its class (transient or permanent, ACMEOrderFailure); only permanent failures stop automatic renewal
@@ -132,11 +139,12 @@ type renewCursor struct {
 // the start): auto renewal on, not stopped (or stopped with a transient last failure and a current certificate that
 // has not expired: the recovery), not deleted, issued, no running order, no order in the last renew.MinSpacing, not
 // waiting for a backoff (a next_attempt_at beyond the cap is a candidate: the planner repairs it), not held by a rate
-// limit of its provider, and either due by the local rule or an ARI window (one that ends after the current
+// limit of its provider, not waiting for the CA's earliest retry time (ca_not_before; one beyond renew.MaxCAWait is a
+// candidate: the planner bounds it), and either due by the local rule or an ARI window (one that ends after the current
 // certificate began), or owing an ARI lookup, or past the failures that stop it (renew.ShouldStop).
 //
 // The provider hold: while another certificate of the provider waits for the CA's rate limit (last_error_code
-// acme.ca_rate_limited, next_attempt_at in the future) and that series of rate limits began less than
+// acme.ca_rate_limited, next_attempt_at or ca_not_before in the future) and that series of rate limits began less than
 // acmeRateLimitHold ago, the candidate waits too (no storm against a limiting CA). The hold never applies to a
 // candidate past the middle of its renewal window (due + (not_after - due) / 2): that one is renewed regardless, so a
 // certificate the CA limits for days for its own names cannot make the provider's other certificates expire.
@@ -147,7 +155,7 @@ func (s *Service) acmeRenewCandidates(ctx context.Context, after *renewCursor) (
 		afterID, afterPrio = after.id, after.priority
 	}
 	rows, err := s.pool.Query(ctx, `WITH c AS (
-    SELECT c.id, c.provider_id, c.failures, c.permanent_failures, c.next_attempt_at, c.ari_next_check_at, x.not_after,
+    SELECT c.id, c.provider_id, c.failures, c.permanent_failures, c.next_attempt_at, c.ca_not_before, c.ari_next_check_at, x.not_after,
            CASE WHEN c.ari_window_end > x.not_before THEN c.ari_window_start END AS ari_start,
            -- A revoked or compromised current certificate (00021) is due at once: its start counts as its renewal time.
            CASE WHEN x.revoked_at IS NOT NULL OR x.compromised_at IS NOT NULL THEN x.not_before
@@ -163,15 +171,16 @@ WHERE NOT EXISTS (SELECT 1 FROM acme_orders o WHERE o.acme_certificate_id = c.id
   AND NOT EXISTS (SELECT 1 FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.kind = 'issue'
                   AND o.started_at > $1::timestamptz - make_interval(secs => $3) AND o.started_at <= $1::timestamptz + make_interval(secs => $4))
   AND (c.next_attempt_at IS NULL OR c.next_attempt_at <= $1 OR c.next_attempt_at > $1::timestamptz + make_interval(secs => $5))
+  AND (c.ca_not_before IS NULL OR c.ca_not_before <= $1 OR c.ca_not_before > $1::timestamptz + make_interval(secs => $10))
   AND (c.due + (c.not_after - c.due) / 2 <= $1
        OR NOT EXISTS (SELECT 1 FROM acme_certificates r WHERE r.provider_id = c.provider_id AND r.id <> c.id AND r.deleted_at IS NULL
-                      AND r.last_error_code = 'acme.ca_rate_limited' AND r.next_attempt_at > $1
+                      AND r.last_error_code = 'acme.ca_rate_limited' AND GREATEST(r.next_attempt_at, r.ca_not_before) > $1
                       AND r.rate_limited_since > $1::timestamptz - make_interval(secs => $9)))
   AND (c.due <= $1 OR c.ari_start <= $1 OR c.ari_next_check_at IS NULL OR c.ari_next_check_at <= $1 OR c.permanent_failures >= $6
        OR (c.failures >= $6 AND c.not_after <= $1))
   AND ($7::timestamptz IS NULL OR (c.priority, c.id) > ($7::timestamptz, $8::uuid))
 ORDER BY c.priority, c.id LIMIT $2`, now, acmeRenewPage, renew.MinSpacing.Seconds(), renew.SkewTolerance.Seconds(), renew.MaxBackoff.Seconds(),
-		renew.StopAfter, nullTime(afterPrio), afterID, acmeRateLimitHold.Seconds())
+		renew.StopAfter, nullTime(afterPrio), afterID, acmeRateLimitHold.Seconds(), renew.MaxCAWait.Seconds())
 	if err != nil {
 		return nil, fmt.Errorf("inventory: find the ACME certificates to renew: %w", err)
 	}
@@ -250,6 +259,12 @@ func (s *Service) renewTx(ctx context.Context, id uuid.UUID, run *ACMERenewRun) 
 				return fmt.Errorf("inventory: repair the next attempt of the ACME certificate: %w", err)
 			}
 		}
+		if d.RepairCANotBefore != nil {
+			if _, err := tx.Exec(ctx, "UPDATE acme_certificates SET ca_not_before = $2, updated_at = $3 WHERE id = $1", id, *d.RepairCANotBefore,
+				now); err != nil {
+				return fmt.Errorf("inventory: bound the CA's wait of the ACME certificate: %w", err)
+			}
+		}
 		switch d.Action {
 		case renew.Stop:
 			stopped, err = s.stopAutoRenew(ctx, tx, c.ID, c.Names, c.Failures, c.LastErrorCode, notAfter, now)
@@ -259,8 +274,8 @@ func (s *Service) renewTx(ctx context.Context, id uuid.UUID, run *ACMERenewRun) 
 			switch {
 			case err == nil:
 				started = true
-			case errors.Is(err, ErrACMEOrderRunning), errors.Is(err, ErrACMERolloverPending):
-				return errRenewSkip // a person's order or a key change that settles: the next run
+			case errors.Is(err, ErrACMEOrderRunning), errors.Is(err, ErrACMERolloverPending), errors.Is(err, ErrACMECAWait):
+				return errRenewSkip // a person's order, a key change that settles or the CA's wait: a later run
 			case errors.Is(err, ErrACMEAccountState):
 				// The provider has no active account (or is gone): the renewal cannot start. Counted like a failed order,
 				// so the backoff paces the planner and the e-mails tell the Administrators.
@@ -298,7 +313,7 @@ func (s *Service) renewTx(ctx context.Context, id uuid.UUID, run *ACMERenewRun) 
 func renewInput(ctx context.Context, tx pgx.Tx, c ACMECertificate, now time.Time) (renew.Input, *time.Time, error) {
 	in := renew.Input{Now: now, RenewBeforeDays: c.RenewBeforeDays, AutoRenew: c.AutoRenew, State: c.State, OrderRunning: c.RunningOrderID != nil,
 		Failures: c.Failures, PermanentFailures: c.PermanentFailures, LastFailureClass: c.LastFailureClass, NextAttemptAt: c.NextAttemptAt,
-		LastAttemptAt: c.LastAttemptAt}
+		CANotBefore: c.CANotBefore, LastAttemptAt: c.LastAttemptAt}
 	var nb, na, ws, we *time.Time
 	err := tx.QueryRow(ctx, `SELECT x.not_before, x.not_after, c.ari_window_start, c.ari_window_end, c.ari_checked_at, c.ari_next_check_at,
     (SELECT max(o.started_at) FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.kind = 'issue'
@@ -320,8 +335,10 @@ FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificat
 
 // countACMEFailure counts a failed renewal of an ACME certificate in tx: failures + 1 (permanent_failures + 1 when class
 // is renew.ClassPermanent), state failing (stopped stays), last_error_code, last_failure_class, last_attempt_at,
-// next_attempt_at = now + max(renew.RetryWait, retryAfter); then renew.AfterFailure: the "renewal failed" e-mail once per
-// series (failure_notified_at), or the stop (stopAutoRenew).
+// next_attempt_at = now + renew.RetryWait (Alice's own backoff) and, when the CA gave a Retry-After (retryAfter > 0,
+// bounded at renew.MaxCAWait), ca_not_before = now + retryAfter, never earlier than it was (R47); a CA wait that leaves
+// less than half of the renewal window e-mails the Administrators at once (acmeCAWaitNotice); then renew.AfterFailure:
+// the "renewal failed" e-mail once per series (failure_notified_at), or the stop (stopAutoRenew).
 func (s *Service) countACMEFailure(ctx context.Context, tx pgx.Tx, id uuid.UUID, code, class string, retryAfter time.Duration, now time.Time) error {
 	var (
 		failures, permanent int
@@ -329,11 +346,13 @@ func (s *Service) countACMEFailure(ctx context.Context, tx pgx.Tx, id uuid.UUID,
 		state               string
 		notified            bool
 		names               []string
-		notAfter            *time.Time
+		notBefore, notAfter *time.Time
+		renewBeforeDays     int
 	)
-	err := tx.QueryRow(ctx, `SELECT c.failures, c.permanent_failures, c.auto_renew, c.state, c.failure_notified_at IS NOT NULL, c.names, x.not_after
+	err := tx.QueryRow(ctx, `SELECT c.failures, c.permanent_failures, c.auto_renew, c.state, c.failure_notified_at IS NOT NULL, c.names, x.not_before,
+    x.not_after, c.renew_before_days
 FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificate_id WHERE c.id = $1 FOR UPDATE OF c`, id).
-		Scan(&failures, &permanent, &autoRenew, &state, &notified, &names, &notAfter)
+		Scan(&failures, &permanent, &autoRenew, &state, &notified, &names, &notBefore, &notAfter, &renewBeforeDays)
 	if err != nil {
 		return fmt.Errorf("inventory: read the ACME certificate's failures: %w", err)
 	}
@@ -348,15 +367,29 @@ FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificat
 	if notAfter != nil {
 		left = notAfter.Sub(now)
 	}
-	next := now.Add(max(renew.RetryWait(failures, class, left), retryAfter))
+	next := now.Add(renew.RetryWait(failures, class, left))
+	var caWait *time.Time
+	if retryAfter > 0 {
+		t := now.Add(min(retryAfter, renew.MaxCAWait))
+		caWait = &t
+	}
 	// rate_limited_since: when the current series of rate limits began (kept while the CA keeps limiting, NULL otherwise).
-	if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET failures = $2, permanent_failures = $6, last_failure_class = $7,
+	// ca_not_before: GREATEST skips a NULL, so a failure without a Retry-After keeps the CA's earlier time.
+	var caNotBefore *time.Time
+	if err := tx.QueryRow(ctx, `UPDATE acme_certificates SET failures = $2, permanent_failures = $6, last_failure_class = $7,
 state = CASE WHEN state = 'stopped' THEN state ELSE 'failing' END,
 rate_limited_since = CASE WHEN $3 <> 'acme.ca_rate_limited' THEN NULL
     WHEN last_error_code = 'acme.ca_rate_limited' AND rate_limited_since IS NOT NULL THEN rate_limited_since ELSE $4 END,
-last_error_code = $3, last_attempt_at = $4, next_attempt_at = $5, updated_at = $4 WHERE id = $1`, id, failures, code, now, next, permanent,
-		class); err != nil {
+ca_not_before = GREATEST(ca_not_before, $8::timestamptz),
+last_error_code = $3, last_attempt_at = $4, next_attempt_at = $5, updated_at = $4 WHERE id = $1 RETURNING ca_not_before`, id, failures, code, now,
+		next, permanent, class, caWait).Scan(&caNotBefore); err != nil {
 		return fmt.Errorf("inventory: record the ACME certificate's failure: %w", err)
+	}
+	if caWait != nil && caNotBefore != nil && autoRenew && notBefore != nil && notAfter != nil && now.Before(*notAfter) &&
+		renew.CAWaitCritical(*notBefore, *notAfter, renewBeforeDays, *caNotBefore) {
+		if err := s.acmeCAWaitNotice(ctx, tx, id, names, failures, code, notAfter.UTC(), caNotBefore.UTC(), now); err != nil {
+			return err
+		}
 	}
 	out := renew.AfterFailure(renew.FailureState{Failures: failures, PermanentFailures: permanent, AutoRenew: autoRenew, Issued: notAfter != nil,
 		Expired: notAfter != nil && !now.Before(*notAfter), Stopped: state == ACMEStateStopped, Notified: notified})

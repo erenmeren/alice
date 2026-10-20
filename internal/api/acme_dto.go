@@ -118,19 +118,23 @@ type acmeCertificateDTO struct {
 	Failures        int      `json:"failures"`
 	// LastFailureClass is transient or permanent ('' without a failure); PermanentFailures counts the permanent ones;
 	// Recovering: stopped after an outage and still ordered again by itself (until the certificate expires).
-	LastFailureClass  string            `json:"last_failure_class"`
-	PermanentFailures int               `json:"permanent_failures"`
-	Recovering        bool              `json:"recovering"`
-	NextAttemptAt     *time.Time        `json:"next_attempt_at"`
-	LastAttemptAt     *time.Time        `json:"last_attempt_at"`
-	LastError         *errorRefDTO      `json:"last_error"`
-	RunningOrderID    *string           `json:"running_order_id"`
-	Current           *acmeCurrentDTO   `json:"current"`
-	ARIWindow         *acmeWindowDTO    `json:"ari_window"`
-	DeployHeldReason  string            `json:"deploy_held_reason"`
-	DeployStopped     bool              `json:"deploy_stopped"`
-	BindingsCount     int               `json:"bindings_count"`
-	Bindings          *[]acmeBindingDTO `json:"bindings,omitempty"` // the certificate's own page only
+	LastFailureClass  string `json:"last_failure_class"`
+	PermanentFailures int    `json:"permanent_failures"`
+	Recovering        bool   `json:"recovering"`
+	// NextAttemptAt is the later of Alice's own backoff and the CA's wait; CANotBefore the CA's wait while it runs (R47),
+	// CAWaitCritical when it leaves less than half of the renewal window.
+	NextAttemptAt    *time.Time        `json:"next_attempt_at"`
+	CANotBefore      *time.Time        `json:"ca_not_before"`
+	CAWaitCritical   bool              `json:"ca_wait_critical"`
+	LastAttemptAt    *time.Time        `json:"last_attempt_at"`
+	LastError        *errorRefDTO      `json:"last_error"`
+	RunningOrderID   *string           `json:"running_order_id"`
+	Current          *acmeCurrentDTO   `json:"current"`
+	ARIWindow        *acmeWindowDTO    `json:"ari_window"`
+	DeployHeldReason string            `json:"deploy_held_reason"`
+	DeployStopped    bool              `json:"deploy_stopped"`
+	BindingsCount    int               `json:"bindings_count"`
+	Bindings         *[]acmeBindingDTO `json:"bindings,omitempty"` // the certificate's own page only
 	// LastNotice is how the newest renewal e-mail of the certificate was delivered (the certificate's own page only;
 	// absent when none was queued).
 	LastNotice *acmeNoticeDTO `json:"last_notice,omitempty"`
@@ -157,6 +161,13 @@ func acmeCertificateJSON(c inventory.ACMECertificate, now time.Time) acmeCertifi
 	}
 	d.Recovering = c.State == inventory.ACMEStateStopped && c.AutoRenew && c.LastFailureClass == renew.ClassTransient && c.Current != nil &&
 		now.Before(c.Current.NotAfter)
+	if c.CANotBefore != nil && now.Before(*c.CANotBefore) {
+		d.CANotBefore = utcPtr(c.CANotBefore)
+		if d.NextAttemptAt == nil || d.NextAttemptAt.Before(*d.CANotBefore) {
+			d.NextAttemptAt = d.CANotBefore
+		}
+		d.CAWaitCritical = c.Current != nil && renew.CAWaitCritical(c.Current.NotBefore, c.Current.NotAfter, c.RenewBeforeDays, *c.CANotBefore)
+	}
 	if c.Current != nil {
 		d.Current = &acmeCurrentDTO{ID: c.Current.ID.String(), Fingerprint: c.Current.Fingerprint, NotBefore: c.Current.NotBefore.UTC(),
 			NotAfter: c.Current.NotAfter.UTC(), ChainComplete: c.Current.ChainComplete, RevokedAt: utcPtr(c.Current.RevokedAt),

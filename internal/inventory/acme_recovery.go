@@ -31,6 +31,8 @@ import (
 const (
 	// acmeExpiryKind is the ledger kind of the notices (migration 00020).
 	acmeExpiryKind = "acme_renewal_expiry"
+	// acmeCAWaitKind is the ledger kind of the notices of a critical CA wait (migration 00022).
+	acmeCAWaitKind = "acme_renewal_ca_wait"
 	// acmeExpiryRead bounds the certificates one run looks at; acmeExpiryPerRun the notices it queues.
 	acmeExpiryRead   = 200
 	acmeExpiryPerRun = 20
@@ -163,6 +165,41 @@ func acmeExpiringTemplate(state, class string) string {
 		return TemplateACMERenewalExpiringStopped
 	}
 	return TemplateACMERenewalExpiringPermanent
+}
+
+// acmeCAWaitNotice records, in tx, a CA wait of a certificate that leaves less than half of its renewal window
+// (renew.CAWaitCritical, R47) in the alerts ledger (kind acmeCAWaitKind, threshold the whole days from the end of the
+// wait to notAfter, 0 when the wait outlasts it) and, only when the row is new, queues TemplateACMERenewalCAWait (params
+// of acmeNoticeParams, ca_not_before and days: the whole days left now). So each such wait is told once, and a CA that
+// asks for a longer wait again is told again. Alice does not order before the CA's time: the e-mail is the warning.
+func (s *Service) acmeCAWaitNotice(ctx context.Context, tx pgx.Tx, id uuid.UUID, names []string, failures int, code string, notAfter,
+	caNotBefore, now time.Time) error {
+	subject := "acme certificate"
+	if len(names) > 0 {
+		subject = truncRunes(names[0], 300)
+	}
+	left := min(max(int(notAfter.Sub(caNotBefore)/(24*time.Hour)), 0), 365)
+	var ledger uuid.UUID
+	err := tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8)
+ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING id`, uuid.Must(uuid.NewV7()), acmeCAWaitKind, id, subject, notAfter,
+		left, s.notifier != nil, now).Scan(&ledger)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil // told already
+	}
+	if err != nil {
+		return fmt.Errorf("inventory: record the CA's wait notice: %w", err)
+	}
+	if s.notifier == nil {
+		return nil
+	}
+	p := acmeNoticeParams(id, names, failures, code, &notAfter)
+	p["ca_not_before"] = caNotBefore.UTC().Format(acmeNoticeTime)
+	p["days"] = strconv.Itoa(expiry.DaysLeft(notAfter, now))
+	if err := s.notifier.NotifyAdmins(ctx, tx, TemplateACMERenewalCAWait, p); err != nil {
+		return fmt.Errorf("inventory: queue the CA's wait notice: %w", err)
+	}
+	return nil
 }
 
 // ACMENoticeDelivery is how the newest renewal e-mail of an ACME certificate was delivered: its template, when it was

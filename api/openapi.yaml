@@ -5403,8 +5403,9 @@ components:
     ACMECertificate:
       type: object
       required: [id, provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew,
-        auto_deploy, state, stopped_reason, failures, last_failure_class, permanent_failures, recovering, next_attempt_at, last_attempt_at,
-        last_error, running_order_id, current, ari_window, deploy_held_reason, deploy_stopped, bindings_count, created_at, updated_at]
+        auto_deploy, state, stopped_reason, failures, last_failure_class, permanent_failures, recovering, next_attempt_at, ca_not_before,
+        ca_wait_critical, last_attempt_at, last_error, running_order_id, current, ari_window, deploy_held_reason, deploy_stopped, bindings_count,
+        created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         provider_id: { type: string, format: uuid }
@@ -5429,7 +5430,22 @@ components:
             refused name, a wrong challenge answer); empty without a failure
         permanent_failures: { type: integer, description: 'The permanent failures among them; 5 stop automatic renewal (transient ones never do while the certificate is valid)' }
         recovering: { type: boolean, description: 'Stopped, but the last failure was an outage: Alice still orders it again by itself, slowly, until it expires' }
-        next_attempt_at: { type: [string, "null"], format: date-time }
+        next_attempt_at:
+          type: [string, "null"]
+          format: date-time
+          description: When Alice may try again after failures, the later of its own backoff and the CA's wait (ca_not_before)
+        ca_not_before:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            The CA asked Alice not to order this certificate again before this time (the Retry-After of a rate limit, honoured
+            in full up to seven days; R47); null when no such wait is running. No order starts before it, neither an automatic
+            one nor a person's (ALC-ACM-0005 with Retry-After). Only a successful order clears it.
+        ca_wait_critical:
+          type: boolean
+          description: >-
+            The CA's wait leaves less than half of the renewal window of the current certificate. Alice still waits for the
+            CA and has e-mailed the Administrators.
         last_attempt_at: { type: [string, "null"], format: date-time }
         last_error: { $ref: "#/components/schemas/ErrorRef" }
         running_order_id: { type: [string, "null"], format: uuid }

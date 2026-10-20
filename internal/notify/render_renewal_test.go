@@ -145,9 +145,9 @@ func TestACMERenewalTemplatesRenderInBothLanguages(t *testing.T) {
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"name": "www.örnek.example", "names": "www.örnek.example, api.example.com", "count": "3",
 		"expires_at": "2026-12-01 09:00 UTC", "error_reason": "acme.ca_rate_limited", "days": "7",
-		"acme_certificate_id": "0199f0a0-0000-7000-8000-000000000001"}
+		"acme_certificate_id": "0199f0a0-0000-7000-8000-000000000001", "ca_not_before": "2026-11-28 10:30 UTC"}
 	require.Equal(t, []string{"acme.renewal_failed", "acme.auto_renew_stopped", "acme.renewal_expiring_transient", "acme.renewal_expiring_permanent",
-		"acme.renewal_expiring_stopped"}, inventory.ACMETemplates())
+		"acme.renewal_expiring_stopped", "acme.renewal_ca_wait"}, inventory.ACMETemplates())
 	for _, tpl := range inventory.ACMETemplates() {
 		for _, lang := range []string{"en", "tr"} {
 			m := s.Render("ada@example.com", tpl, lang, params)
@@ -165,8 +165,11 @@ func TestACMERenewalTemplatesRenderInBothLanguages(t *testing.T) {
 			assert.Contains(t, m.Body, cat.T(lang, "errors.acme.ca_rate_limited.title", nil), "%s %s: the plain reason", tpl, lang)
 			assert.NotRegexp(t, `(?i)(: |\()(yes|no|true|false)(\.|\)|\n|$)`, text, "%s %s", tpl, lang)
 			assert.NotContains(t, text, "0199f0a0", "%s %s: the certificate's id ties the e-mail to its page, it is not shown", tpl, lang)
-			if strings.HasPrefix(tpl, "acme.renewal_expiring") {
+			if strings.HasPrefix(tpl, "acme.renewal_expiring") || tpl == inventory.TemplateACMERenewalCAWait {
 				assert.Contains(t, m.Subject, "7", "%s %s: the days left", tpl, lang)
+			}
+			if tpl == inventory.TemplateACMERenewalCAWait {
+				assert.Contains(t, m.Body, "2026-11-28 10:30 UTC", "%s %s: when the CA accepts orders again (R47)", tpl, lang)
 			}
 		}
 	}

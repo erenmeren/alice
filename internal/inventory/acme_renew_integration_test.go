@@ -413,7 +413,7 @@ func TestACMEPlannerStopsAtFiveFailures(t *testing.T) {
 	assert.Equal(t, 1, w.audits("acme.auto_renew.stopped"))
 }
 
-// The CA's rate limit: next_attempt_at is its Retry-After (longer than the backoff), and no other certificate of that
+// The CA's rate limit: ca_not_before is its Retry-After (longer than the backoff), and no other certificate of that
 // provider is ordered while it lasts; the wave bounds every run to five orders.
 func TestACMERateLimitAndWave(t *testing.T) {
 	w := newRenewWorld(t)
@@ -449,7 +449,8 @@ func TestACMERateLimitAndWave(t *testing.T) {
 		n++
 	}
 	r := w.get(limited.ID)
-	assert.Equal(t, w.clock.Now().UTC().Add(3*time.Hour), *r.NextAttemptAt, "the CA's wait, not the 1 h backoff")
+	assert.Equal(t, w.clock.Now().UTC().Add(time.Hour), *r.NextAttemptAt, "Alice's own backoff")
+	assert.Equal(t, w.clock.Now().UTC().Add(3*time.Hour), *r.CANotBefore, "the CA's wait, kept apart (R47)")
 	w.advance(time.Hour)
 	assert.Equal(t, inventory.ACMERenewRun{}, w.plan(), "the provider is rate limited: no storm")
 	w.advance(2 * time.Hour)

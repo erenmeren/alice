@@ -40,8 +40,8 @@ import (
 //
 // Boundary with Task 11 (the renewal planner): FailACMEOrderClass writes the failure state of an issue order
 // consistently (failures + 1 with the failure's class, state failing unless stopped, last_error_code, last_attempt_at,
-// next_attempt_at = now + max(renew.RetryWait, the CA's Retry-After capped at 24 h)); FinishACMEOrder resets it
-// (next_attempt_at NULL, no failures of either class). Deciding WHEN to order (renewal window, ARI, next_attempt_at,
+// next_attempt_at = now + renew.RetryWait, and ca_not_before = now + the CA's Retry-After bounded at seven days, R47);
+// FinishACMEOrder resets it (next_attempt_at and ca_not_before NULL, no failures of either class). Deciding WHEN to order (renewal window, ARI, next_attempt_at,
 // the stop rule renew.ShouldStop, the recovery after outages, e-mails) is Task 11's PlanACMERenewals, which calls
 // startOrderTx.
 
@@ -70,8 +70,12 @@ const (
 	ACMELicenseLocked = "license.locked"
 )
 
-// MaxACMEBackoff caps the wait after failed orders and a CA's Retry-After.
-const MaxACMEBackoff = renew.MaxBackoff
+// MaxACMEBackoff caps Alice's own wait after failed orders; MaxACMECAWait bounds a CA's Retry-After (R47: honoured in
+// full up to a week, stored apart as ca_not_before).
+const (
+	MaxACMEBackoff = renew.MaxBackoff
+	MaxACMECAWait  = renew.MaxCAWait
+)
 
 // Order triggers (acme_orders.trigger): a person's order, or the renewal planner's (acme.schedule).
 const (
@@ -175,8 +179,9 @@ ORDER BY o.started_at DESC, o.id DESC LIMIT $2`, acmeCertificateID, limit)
 // and the like: nothing is recorded, no CA is contacted). Then, holding the certificate's row: ErrNotFound for a
 // certificate that is not live; ErrACMEAccountState when its provider has no active account; ErrACMERolloverPending
 // while the account's key change is unsettled; ErrACMEOrderRunning when an order of it runs (one at a time, also
-// across processes: the unique index); the order (running), the acme.issue job and the audit row acme.order.started
-// commit together. An issue order puts the certificate in state issuing (a stopped one stays stopped).
+// across processes: the unique index); ErrACMECAWait (in an *ACMEError acme.ca_rate_limited with the time left) while
+// the CA's earliest retry time has not come (R47: a person's order does not override the CA either); the order
+// (running), the acme.issue job and the audit row acme.order.started commit together. An issue order puts the certificate in state issuing (a stopped one stays stopped).
 func (s *Service) RequestOrder(ctx context.Context, a Actor, acmeCertificateID uuid.UUID, kind string) (ACMEOrder, error) {
 	if kind != ACMEOrderIssue && kind != ACMEOrderTest {
 		return ACMEOrder{}, validate.Errors{{Field: "kind", Code: validate.OneOf, Params: map[string]string{"values": "issue, test"}}}
@@ -206,6 +211,10 @@ func (s *Service) startOrderTx(ctx context.Context, tx pgx.Tx, a Actor, c ACMECe
 	if c.RunningOrderID != nil {
 		return ACMEOrder{}, ErrACMEOrderRunning
 	}
+	now := s.clock.Now().UTC()
+	if c.CANotBefore != nil && now.Before(*c.CANotBefore) {
+		return ACMEOrder{}, &ACMEError{Reason: acme.ReasonCARateLimited, RetryAfter: c.CANotBefore.Sub(now), cause: ErrACMECAWait}
+	}
 	p, err := getACMEProvider(ctx, tx, c.ProviderID, false)
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -218,7 +227,6 @@ func (s *Service) startOrderTx(ctx context.Context, tx pgx.Tx, a Actor, c ACMECe
 		return ACMEOrder{}, ErrACMERolloverPending
 	}
 	id := uuid.Must(uuid.NewV7())
-	now := s.clock.Now().UTC()
 	// A savepoint: a refused insert (the unique index, another process) must not abort the caller's transaction.
 	sp, err := tx.Begin(ctx)
 	if err != nil {
@@ -452,12 +460,13 @@ func (s *Service) FailACMEOrder(ctx context.Context, orderID uuid.UUID, code str
 // acme.order.failed or acme.order.test_failed) and, in the same transaction, writes the ACME certificate's failure
 // state. class is the failure's class (renew.ClassTransient or renew.ClassPermanent, from ACMEOrderFailure; anything
 // else is renew.ClassOfCode(code)). An issue order: failures + 1 (and permanent_failures + 1 for a permanent one),
-// state failing (stopped stays), last_error_code, last_failure_class, last_attempt_at and next_attempt_at = now +
-// max(renew.RetryWait, retryAfter capped at 24 h); from the third failure in a row of an issued certificate with
+// state failing (stopped stays), last_error_code, last_failure_class, last_attempt_at, next_attempt_at = now +
+// renew.RetryWait and, with a CA's Retry-After, ca_not_before = now + retryAfter bounded at MaxACMECAWait (R47; never
+// earlier than it was); from the third failure in a row of an issued certificate with
 // automatic renewal on, the "renewal failed" e-mail goes once, and renew.ShouldStop (five permanent failures, or five
 // of any class once the certificate has expired) stops automatic renewal (state stopped, audit acme.auto_renew.stopped,
 // one e-mail; renew.AfterFailure). A neutral code (renew.Neutral: the licence lock, an interrupted job) counts nothing:
-// the order ends as AbandonACMEOrder ends it. A test run changes only next_attempt_at, and only to honour a CA's
+// the order ends as AbandonACMEOrder ends it. A test run changes only ca_not_before, and only to honour a CA's
 // Retry-After (never earlier than it was). When records are still published, the acme.cleanup job is queued. An order
 // that failed before only loses a leftover key (nothing else changes); ErrACMEOrderNotRunning for a succeeded order;
 // ErrACMEErrorCode; ErrNotFound.
@@ -471,7 +480,7 @@ func (s *Service) FailACMEOrderClass(ctx context.Context, orderID uuid.UUID, cod
 	if class != renew.ClassTransient && class != renew.ClassPermanent {
 		class = renew.ClassOfCode(code)
 	}
-	retryAfter = min(max(retryAfter, 0), MaxACMEBackoff)
+	retryAfter = min(max(retryAfter, 0), MaxACMECAWait)
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		ab, err := s.abortOrder(ctx, tx, orderID, code)
 		if err != nil || !ab.ended {
@@ -484,7 +493,7 @@ func (s *Service) FailACMEOrderClass(ctx context.Context, orderID uuid.UUID, cod
 			}
 		} else if retryAfter > 0 {
 			next := now.Add(retryAfter)
-			if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET next_attempt_at = GREATEST(COALESCE(next_attempt_at, $2), $2), updated_at = $3
+			if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET ca_not_before = GREATEST(ca_not_before, $2), updated_at = $3
 WHERE id = $1`, ab.acmeCertificateID, next, now); err != nil {
 				return fmt.Errorf("inventory: record the CA's wait: %w", err)
 			}
@@ -703,7 +712,7 @@ func ACMEOrderFailure(err error) (code, class string, retryAfter time.Duration) 
 	return code, class, retryAfter
 }
 
-// ACMEOrderErrorCode is the closed code an order fails with for err, and the CA's Retry-After (capped at 24 h) when
+// ACMEOrderErrorCode is the closed code an order fails with for err, and the CA's Retry-After (bounded at a week) when
 // it is a rate limit. Only registered reasons come out (an acme reason, license.locked, a provider's code, a few
 // inventory refusals, acme.order_abandoned or internal.unexpected); never a CA's or a database's text.
 func ACMEOrderErrorCode(err error) (string, time.Duration) {
@@ -716,13 +725,13 @@ func ACMEOrderErrorCode(err error) (string, time.Duration) {
 	case errors.Is(err, license.ErrLocked), errors.Is(err, license.ErrUnclassified):
 		return ACMELicenseLocked, 0
 	case errors.As(err, &ie):
-		return ie.Reason, min(ie.RetryAfter, MaxACMEBackoff)
+		return ie.Reason, min(ie.RetryAfter, MaxACMECAWait)
 	case errors.As(err, &ae):
 		reason := ae.Reason
 		if !slices.Contains(acme.Reasons(), reason) {
 			reason = acme.ReasonDirectoryInvalid
 		}
-		return reason, min(ae.RetryAfter(), MaxACMEBackoff)
+		return reason, min(ae.RetryAfter(), MaxACMECAWait)
 	case errors.Is(err, ErrACMENameNotAllowed):
 		return acme.ReasonNameNotAllowed, 0
 	case errors.Is(err, ErrACMEChallengeUnavailable):

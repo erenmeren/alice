@@ -28,6 +28,7 @@ func TestACMEFailureBackoff(t *testing.T) {
 
 func TestACMEOrderErrorCode(t *testing.T) {
 	rate := &ACMEError{Reason: acme.ReasonCARateLimited, RetryAfter: 48 * time.Hour}
+	flood := &ACMEError{Reason: acme.ReasonCARateLimited, RetryAfter: 30 * 24 * time.Hour}
 	for _, tc := range []struct {
 		err   error
 		code  string
@@ -36,7 +37,8 @@ func TestACMEOrderErrorCode(t *testing.T) {
 		{nil, "internal.unexpected", 0},
 		{license.ErrLocked, ACMELicenseLocked, 0},
 		{fmt.Errorf("wrapped: %w", license.ErrUnclassified), ACMELicenseLocked, 0},
-		{rate, acme.ReasonCARateLimited, MaxACMEBackoff},
+		{rate, acme.ReasonCARateLimited, 48 * time.Hour}, // the CA's wait in full, past the local cap (R47)
+		{flood, acme.ReasonCARateLimited, MaxACMECAWait},
 		{&acme.Error{Reason: acme.ReasonValidationFailedDNS}, acme.ReasonValidationFailedDNS, 0},
 		{&acme.Error{Reason: "acme.something_new"}, acme.ReasonDirectoryInvalid, 0},
 		{ErrACMENameNotAllowed, acme.ReasonNameNotAllowed, 0},
@@ -105,3 +107,8 @@ func TestHookPatchValidation(t *testing.T) {
 }
 
 func secretOf(s string) secrets.Plaintext { return secrets.NewPlaintext([]byte(s)) }
+
+// The client's bound of a CA's Retry-After and the planner's are one (R47).
+func TestACMECAWaitBoundsAgree(t *testing.T) {
+	assert.Equal(t, acme.MaxRetryAfter, MaxACMECAWait)
+}

@@ -715,6 +715,8 @@ var errorMap = []struct {
 	// ACME certificates and orders (Task 10).
 	{inventory.ErrACMENameNotAllowed, ErrACMNameNotAllowed, nil},
 	{inventory.ErrACMEOrderRunning, ErrACMOrderRunning, nil},
+	// The CA asked to wait (R47): it comes inside an *inventory.ACMEError (with the time left: Retry-After); bare, the same code.
+	{inventory.ErrACMECAWait, ErrACMCaRateLimited, nil},
 	{inventory.ErrACMEChallengeUnavailable, ErrACMChallengeUnavailable, nil},
 	{inventory.ErrACMEKeyTypeLocked, ErrACMKeyTypeLocked, nil},
 	// ACME bindings and Deploy now (Task 12).
@@ -954,7 +956,8 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 // acmeRetryAfter is the Retry-After of an ACME refusal in whole seconds ("" for none): the CA's own Retry-After of a
-// rate limit (*inventory.ACMEError, capped at 24 h by the client, Task 9 M7), a minute for a rate limit that named
+// rate limit (*inventory.ACMEError, bounded at seven days by the client, Task 9 M7 and R47; also the time left of a wait
+// the CA asked for, refused before the CA is contacted), a minute for a rate limit that named
 // none, and two seconds while another account operation of the provider holds its lock (it gives up after about two).
 func acmeRetryAfter(err error, ec ErrorCode) string {
 	var acmeErr *inventory.ACMEError

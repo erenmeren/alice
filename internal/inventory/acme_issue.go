@@ -320,7 +320,7 @@ type acmeOrderRow struct {
 // the provider's ca_bundle_pem added to the roots (A3); the key is sealed into a new managed_private_keys row and
 // the certificates row is inserted with source acme (placeCertificate, as uploads; a certificate Alice already
 // holds with its key is reused, ACMEIssued.Reused); the ACME certificate gets it as current certificate (state
-// active, failures 0, no error, next_attempt_at NULL for the planner to set); the order is succeeded with the
+// active, failures 0, no error, next_attempt_at and ca_not_before NULL: the CA issued); the order is succeeded with the
 // certificate and its pending key NULL; audit acme.order.succeeded (ids, names, fingerprint, algorithm; never
 // a key). ErrNotFound, ErrACMEOrderNotRunning, ErrACMEPendingKey, ErrCertificateTooLarge.
 func (s *Service) FinishACMEOrder(ctx context.Context, orderID uuid.UUID, chainDER [][]byte) (ACMEIssued, error) {
@@ -406,7 +406,7 @@ func (s *Service) recordIssued(ctx context.Context, tx pgx.Tx, orderID uuid.UUID
 	// the previous certificate (the planner asks the CA for the new one's).
 	if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET current_certificate_id = $2, state = 'active', failures = 0, permanent_failures = 0, last_failure_class = '',
     last_error_code = '',
-    last_attempt_at = $3, next_attempt_at = NULL, failure_notified_at = NULL, rate_limited_since = NULL, ari_window_start = NULL, ari_window_end = NULL,
+    last_attempt_at = $3, next_attempt_at = NULL, ca_not_before = NULL, failure_notified_at = NULL, rate_limited_since = NULL, ari_window_start = NULL, ari_window_end = NULL,
     ari_checked_at = NULL, ari_next_check_at = NULL, updated_at = $3 WHERE id = $1`, o.certificateID, out.CertificateID, at); err != nil {
 		return ACMEIssued{}, fmt.Errorf("inventory: record the ACME certificate's issuance: %w", err)
 	}

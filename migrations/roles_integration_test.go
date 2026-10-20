@@ -221,7 +221,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.acme_hooks": {"UPDATE": {"allowed_suffixes", "ca_bundle_pem", "deleted_at", "name", "poll_timeout_seconds",
 		"propagation_wait_seconds", "secret_ct", "secret_key_version", "secret_nonce", "secret_wrapped_dek", "updated_at", "url"}},
 	"public.acme_certificates": {"UPDATE": {"account_id", "ari_checked_at", "ari_next_check_at", "ari_window_end", "ari_window_start", "auto_deploy", "auto_renew",
-		"challenge", "current_certificate_id", "deleted_at", "deploy_held_certificate_id", "deploy_held_reason",
+		"ca_not_before", "challenge", "current_certificate_id", "deleted_at", "deploy_held_certificate_id", "deploy_held_reason",
 		"deploy_released_certificate_id", "deploy_stopped_certificate_id", "failure_notified_at", "failures", "hook_id",
 		"http_target_id", "key_type", "last_attempt_at", "last_error_code", "last_failure_class", "names", "next_attempt_at",
 		"permanent_failures", "provider_id", "rate_limited_since", "renew_before_days", "state", "updated_at"}},
@@ -292,6 +292,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	apache := hasApacheType(t, d)
 	recovery := hasColumn(t, d, "acme_certificates", "last_failure_class")
 	revocation := hasColumn(t, d, "certificates", "revoked_at")
+	caWait := hasColumn(t, d, "acme_certificates", "ca_not_before")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -323,6 +324,11 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00020 the failure class columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]),
 				func(c string) bool { return c == "last_failure_class" || c == "permanent_failures" })}
+		}
+		if name == "public.acme_certificates" && !caWait {
+			// Below 00022 the CA's earliest retry time does not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]),
+				func(c string) bool { return c == "ca_not_before" })}
 		}
 		if !revocation && (name == "public.certificates" || name == "public.discovery_certificates") {
 			// Below 00021 the revocation, compromise and public key columns do not exist.

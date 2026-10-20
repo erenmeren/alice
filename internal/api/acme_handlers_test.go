@@ -73,6 +73,34 @@ func sampleACMECert() inventory.ACMECertificate {
 		ARIWindowStart: &start, ARIWindowEnd: &end, DeployHeldReason: inventory.ACMEHoldLicense, CreatedAt: acmeAt, UpdatedAt: acmeAt}
 }
 
+// The CA's wait (R47): shown while it runs, as the next attempt when it is later than Alice's own backoff, and marked
+// critical when it leaves less than half of the renewal window.
+func TestACMECertificateJSONCAWait(t *testing.T) {
+	c := sampleACMECert() // valid acmeAt .. acmeAt + 90 d: due at + 60 d, the middle of the window at + 75 d
+	d := acmeCertificateJSON(c, acmeAt)
+	assert.Nil(t, d.CANotBefore)
+	assert.False(t, d.CAWaitCritical)
+
+	backoff, ca := acmeAt.Add(time.Hour), acmeAt.Add(48*time.Hour)
+	c.NextAttemptAt, c.CANotBefore = &backoff, &ca
+	d = acmeCertificateJSON(c, acmeAt)
+	require.NotNil(t, d.CANotBefore)
+	assert.Equal(t, ca, *d.CANotBefore)
+	assert.Equal(t, ca, *d.NextAttemptAt, "the later of the two")
+	assert.False(t, d.CAWaitCritical)
+	c.NextAttemptAt = nil
+	assert.Equal(t, ca, *acmeCertificateJSON(c, acmeAt).NextAttemptAt, "re-armed: the CA's wait alone")
+	assert.Nil(t, acmeCertificateJSON(c, ca).CANotBefore, "over: not shown")
+
+	late := acmeAt.Add(76 * 24 * time.Hour)
+	c.CANotBefore = &late
+	assert.True(t, acmeCertificateJSON(c, acmeAt.Add(70*24*time.Hour)).CAWaitCritical, "past the middle of the window")
+
+	raw, err := json.Marshal(acmeCertificateJSON(sampleACMECert(), acmeAt))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"ca_not_before":null,"ca_wait_critical":false`, "both always present (the openapi's required list)")
+}
+
 func sampleACMEBinding(auto bool) inventory.ACMEBinding {
 	at := acmeAt
 	return inventory.ACMEBinding{ACMECertificateID: acmeCertID, LocationID: acmeLocID, TargetID: targetID, TargetName: "web-01",
@@ -1186,6 +1214,7 @@ func TestACMEProviderPreviewHandler(t *testing.T) {
 		{&inventory.ACMEError{Reason: "acme.directory_invalid"}, 502, "ALC-ACM-0002", ""},
 		{&inventory.ACMEError{Reason: "acme.tls_trust_failed"}, 502, "ALC-ACM-0013", ""},
 		{&inventory.ACMEError{Reason: "acme.ca_rate_limited", RetryAfter: 30 * time.Second}, 503, "ALC-ACM-0005", "30"},
+		{&inventory.ACMEError{Reason: "acme.ca_rate_limited", RetryAfter: 48 * time.Hour}, 503, "ALC-ACM-0005", "172800"}, // in full (R47)
 		{inventory.ErrNotFound, 404, "ALC-SYS-0001", ""},
 	} {
 		f.PreviewACMEProviderFn = func(context.Context, uuid.UUID) (inventory.ACMEProviderPreview, error) {

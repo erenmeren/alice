@@ -74,11 +74,12 @@ var (
 )
 
 // ACMEError is a failure of a CA exchange: Reason is one of acme.Reasons() (the ALC-ACM reasons the API maps),
-// RetryAfter the CA's capped Retry-After of a rate limit. Its text never holds a CA body, URL or secret.
+// RetryAfter the CA's Retry-After of a rate limit (bounded at acme.MaxRetryAfter). Its text never holds a CA body, URL or
+// secret.
 type ACMEError struct {
 	Reason     string
 	RetryAfter time.Duration
-	cause      error // the *acme.Error (whose text is closed) or a transport sentinel
+	cause      error // the *acme.Error (whose text is closed), a transport sentinel or ErrACMECAWait
 }
 
 func (e *ACMEError) Error() string {
