@@ -136,10 +136,15 @@ func rowCounts(t *testing.T, q db.Querier) map[string]int64 {
 	return c
 }
 
+// migrationSeeds are the rows a freshly migrated database holds: 00025's environments, Default service and its first
+// policy (Load replaces them with the backup's).
+var migrationSeeds = map[string]int64{"environments": 4, "services": 1, "service_policies": 1}
+
+// requireEmpty checks that the database holds nothing but what the migrations seed.
 func requireEmpty(t *testing.T, d *pgtest.DB) {
 	t.Helper()
 	for name, n := range rowCounts(t, d.Owner) {
-		require.Zerof(t, n, "table %s of the fresh database has rows", name)
+		require.Equalf(t, migrationSeeds[name], n, "table %s of the fresh database has rows", name)
 	}
 }
 
@@ -336,7 +341,24 @@ VALUES ('d8000000-0000-4000-8000-000000000001', 'd6000000-0000-4000-8000-0000000
 INSERT INTO saved_views (id, user_id, page, name, query, created_at) SELECT gen_random_uuid(), id, 'certificates', 'view', '{}', now() FROM users LIMIT 1;
 INSERT INTO setup_sessions (id_hash, created_at, idle_expires_at) VALUES (sha256('setup'), now(), now() + interval '1 hour');
 INSERT INTO target_locks (target_id, job_id, operation, locked_by, heartbeat_at, lease_until)
-SELECT (SELECT id FROM targets LIMIT 1), id, 'deploy', 'worker', now(), now() + interval '1 minute' FROM jobs LIMIT 1;`)
+SELECT (SELECT id FROM targets LIMIT 1), id, 'deploy', 'worker', now(), now() + interval '1 minute' FROM jobs LIMIT 1;
+INSERT INTO certificate_incidents (id, certificate_id, public_key_sha256, state, revocation, created_at, updated_at)
+SELECT 'e1000000-0000-4000-8000-000000000001', id, public_key_sha256, 'awaiting_replacement', 'not_possible', now(), now()
+FROM certificates WHERE public_key_sha256 ~ '^[0-9a-f]{64}$' LIMIT 1;
+INSERT INTO certificate_incident_locations (incident_id, location_id, status, updated_at)
+SELECT 'e1000000-0000-4000-8000-000000000001', id, 'pending', now() FROM certificate_locations LIMIT 1;
+INSERT INTO services (id, name, environment_id, created_at, updated_at)
+VALUES ('e2000000-0000-4000-8000-000000000001', 'Payments', (SELECT id FROM environments WHERE key = 'production'), now(), now());
+INSERT INTO service_trusts (id, source_service_id, target_service_id, created_at)
+SELECT 'e2000000-0000-4000-8000-000000000002', id, 'e2000000-0000-4000-8000-000000000001', now() FROM services WHERE is_default;
+INSERT INTO directory_groups (id, source, ldap_directory_id, value, created_at)
+VALUES ('e2000000-0000-4000-8000-000000000003', 'ldap', 'b1000000-0000-4000-8000-000000000001', 'CN=Payments,DC=example,DC=test', now());
+INSERT INTO user_directory_groups (user_id, value, seen_at)
+VALUES ('b1000000-0000-4000-8000-000000000002', 'CN=Payments,DC=example,DC=test', now());
+INSERT INTO role_bindings (id, directory_group_id, role, service_id, created_at)
+VALUES ('e2000000-0000-4000-8000-000000000004', 'e2000000-0000-4000-8000-000000000003', 'operator', 'e2000000-0000-4000-8000-000000000001', now());
+INSERT INTO service_owners (id, service_id, directory_group_id, created_at)
+VALUES ('e2000000-0000-4000-8000-000000000005', 'e2000000-0000-4000-8000-000000000001', 'e2000000-0000-4000-8000-000000000003', now());`)
 	require.NoError(t, err)
 }
 
@@ -357,7 +379,7 @@ func TestDumpLoadRoundTripsEveryTable(t *testing.T) {
 	assert.Equal(t, countsA, counts)
 
 	b := pgtest.New(t)
-	requireEmpty(t, b) // migrations seed nothing; TRUNCATE is refused by audit_log_no_truncate (M-26)
+	requireEmpty(t, b) // migrations seed only migrationSeeds, which Load replaces; TRUNCATE is refused by audit_log_no_truncate (M-26)
 	st, err := load(t, b.Owner, payload, true)
 	require.NoError(t, err)
 	assert.Equal(t, dump.End, st.Next.Kind, "Load returns at the first frame after Q")

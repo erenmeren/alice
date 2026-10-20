@@ -17,6 +17,10 @@ import (
 // exactly the target's public sequences. Any difference is ErrSchemaMismatch (S-14). A row count that differs from
 // the E frame is ErrPayload. Load returns at the first frame after Q, which Stats.Next holds.
 //
+// The target is a freshly migrated database; the rows a migration seeds there (00025: the environments, the Default
+// service and its first policy) are replaced by the backup's: a table that holds rows is emptied before its rows are
+// copied (under the caller's session_replication_role = replica no trigger and no foreign key action runs).
+//
 // Load runs in the caller's transaction and never changes the connection's settings: the caller sets
 // session_replication_role and decides whether to commit. Nothing it copied is visible before that commit.
 func Load(ctx context.Context, conn *pgx.Conn, dec *Decoder, first Frame) (Stats, error) {
@@ -36,6 +40,9 @@ func Load(ctx context.Context, conn *pgx.Conn, dec *Decoder, first Frame) (Stats
 			return st, err
 		}
 		prev = t.Name
+		if err := clearSeeded(ctx, conn, t); err != nil {
+			return st, err
+		}
 		rows, err := copyTable(ctx, conn, dec, t)
 		if err != nil {
 			return st, err
@@ -63,6 +70,22 @@ func Load(ctx context.Context, conn *pgx.Conn, dec *Decoder, first Frame) (Stats
 		return st, err
 	}
 	return st, nil
+}
+
+// clearSeeded empties a target table that holds rows before the backup's are copied into it (see Load).
+func clearSeeded(ctx context.Context, conn *pgx.Conn, t Table) error {
+	name := pgx.Identifier{"public", t.Name}.Sanitize()
+	var seeded bool
+	if err := conn.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM "+name+")").Scan(&seeded); err != nil {
+		return fmt.Errorf("dump: read table %s: %w", t.Name, err)
+	}
+	if !seeded {
+		return nil
+	}
+	if _, err := conn.Exec(ctx, "DELETE FROM "+name); err != nil {
+		return fmt.Errorf("dump: empty table %s: %w", t.Name, err)
+	}
+	return nil
 }
 
 // checkTable parses a T frame and compares it with the target.
