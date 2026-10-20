@@ -1678,8 +1678,19 @@ now**); after that Alice plans every minute:
 
 - A certificate is renewed when the time left falls below **Renew how many days before it expires** (1 to 60, default
   30) or below a third of its lifetime, whichever is shorter, so a 90-day certificate renews 30 days before it expires
-  and a 6-day certificate 2 days before. When the authority publishes renewal information (ARI, RFC 9773) suggesting
-  an earlier time, Alice renews then; a later suggestion is ignored.
+  and a 6-day certificate 2 days before. When the authority publishes renewal information (ARI, RFC 9773), Alice
+  renews at a time it chooses at random inside the suggested window, so that many certificates do not reach the
+  authority at the same moment. It chooses the time once and keeps it (also after a restart) until the authority
+  moves its window, and the certificate's page shows it ("a time Alice chose in the window the authority suggests").
+  A window that lies in the past means "renew now" (an authority does this when it is about to revoke certificates).
+  Alice never renews later than the setting above: the part of a window after that time is not used, and a window
+  that starts after it is ignored. Without renewal information, or until the authority first answers, the setting
+  alone decides.
+- A renewal tells the authority which certificate it replaces (ARI's `replaces`), when the authority offers
+  renewal information and the certificate was ordered with the same account; Let's Encrypt treats such orders as
+  renewals. If the authority answers that another order already replaces the certificate, Alice finishes its own
+  earlier, interrupted order when it can, or orders once more without naming the certificate (`ALC-ACM-0041` only
+  when that fails too).
 - Each renewal gets a new private key, which Alice creates and stores encrypted; the certificate is added to
   **Certificates** ("Issued by ACME") and becomes the current one.
 - After a failure Alice waits 1, 2, 4, 8, 16 and then 24 hours, and never orders the same certificate twice within 15
@@ -1852,9 +1863,9 @@ log: `acme.provider.*`, `acme.account.*`, `acme.hook.*`, `acme.certificate.*`, `
 
 **Not in this version**: revoking a certificate Alice did not order (do it at the authority that issued it), revoking
 with the certificate's own key when the ordering account is gone, an HTTPS proxy, built-in DNS providers
-(the hook is the adapter), the TLS-ALPN-01 proof, more than one account per authority, and ACME profiles. Renewals
-are not marked as replacements of the previous certificate (ARI's `replaces`), so Let's Encrypt counts them against
-its usual limits; use **Let's Encrypt (staging, for tests)** for trials.
+(the hook is the adapter), the TLS-ALPN-01 proof, more than one account per authority, and ACME profiles. A
+certificate ordered with another account (for example before a change of directory) is renewed without naming it as
+the one replaced. Use **Let's Encrypt (staging, for tests)** for trials.
 
 ## Network discovery
 

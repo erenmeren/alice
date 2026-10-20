@@ -107,6 +107,8 @@ type ACMECertificate struct {
 	// The CA's suggested renewal window (ARI, RFC 9773) when one is cached.
 	ARIWindowStart *time.Time `json:"ari_window_start,omitempty"`
 	ARIWindowEnd   *time.Time `json:"ari_window_end,omitempty"`
+	// ARIRenewAt is the time chosen at random in that window (R50; renew.ChooseARIRenewAt), stored by the renewal planner.
+	ARIRenewAt *time.Time `json:"ari_renew_at,omitempty"`
 	// DeployHeldReason is why automatic deployment holds the current certificate ('' when it does not: never held, or
 	// released from the licence hold): ACMEHoldLicense or ACMEHoldChainIncomplete. DeployStopped: automatic deployment of
 	// the current certificate stopped after repeated failures.
@@ -311,7 +313,7 @@ c.current_certificate_id IS NOT NULL AND c.deploy_stopped_certificate_id IS NOT 
 c.created_by, c.created_at, c.updated_at, c.last_failure_class, c.permanent_failures,
 (SELECT cur.revoked_at FROM certificates cur WHERE cur.id = c.current_certificate_id),
 (SELECT cur.revocation_reason FROM certificates cur WHERE cur.id = c.current_certificate_id),
-(SELECT cur.compromised_at IS NOT NULL FROM certificates cur WHERE cur.id = c.current_certificate_id), c.ca_not_before, c.service_id`
+(SELECT cur.compromised_at IS NOT NULL FROM certificates cur WHERE cur.id = c.current_certificate_id), c.ca_not_before, c.ari_renew_at, c.service_id`
 
 func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	var (
@@ -327,7 +329,7 @@ func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 		&c.AutoRenew, &c.AutoDeploy, &c.State, &c.CurrentCertificateID, &c.Failures, &c.NextAttemptAt, &c.LastAttemptAt, &c.LastErrorCode,
 		&c.RunningOrderID, &c.Bindings, &fingerprint, &nb, &na, &chainOK, &c.ARIWindowStart, &c.ARIWindowEnd, &c.DeployHeldReason,
 		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures, &revokedAt, &reason, &compromised, &c.CANotBefore,
-		&c.ServiceID)
+		&c.ARIRenewAt, &c.ServiceID)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CurrentCertificateID != nil && fingerprint != nil && nb != nil && na != nil && chainOK != nil {
 		c.Current = &ACMECurrentCertificate{ID: *c.CurrentCertificateID, Fingerprint: *fingerprint, NotBefore: nb.UTC(), NotAfter: na.UTC(),
@@ -336,7 +338,7 @@ func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 			c.Current.RevocationReason = *reason
 		}
 	}
-	for _, t := range []**time.Time{&c.NextAttemptAt, &c.CANotBefore, &c.LastAttemptAt, &c.ARIWindowStart, &c.ARIWindowEnd} {
+	for _, t := range []**time.Time{&c.NextAttemptAt, &c.CANotBefore, &c.LastAttemptAt, &c.ARIWindowStart, &c.ARIWindowEnd, &c.ARIRenewAt} {
 		if *t != nil {
 			u := (*t).UTC()
 			*t = &u

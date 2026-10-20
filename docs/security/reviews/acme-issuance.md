@@ -129,10 +129,13 @@ directory change does not take the advisory lock (its transaction re-checks stat
 
 ARI (RFC 9773) is hand-written because the library has none: a second GET of the directory, then the `renewalInfo`
 GET, both through the guarded client, size-bounded and fuzzed. A window is used only to renew earlier than the local
-rule (`not_after − min(renew_before_days, lifetime/3)`), never later. Windows starting before 2000, ending at or before
+rule (`not_after − min(renew_before_days, lifetime/3)`), never later: the random time chosen in it (R50, stored as
+`ari_renew_at`) lies in the part of the window before the local rule. Windows starting before 2000, ending at or before
 the certificate's `not_before`, or ending more than 10 years ahead are ignored; ARI errors keep the cached window and
-never count as failures; at most 10 lookups per planner run. Alice cannot send RFC 9773 `replaces` with
-`golang.org/x/crypto/acme` v0.57.0 (L-ACME-1): renewals are not rate-limit-exempt at Let's Encrypt.
+never count as failures; at most 10 lookups per planner run. L-ACME-1 (no RFC 9773 `replaces`) is closed by R50: the
+one newOrder that carries the field is signed by Alice (`internal/acme/jws.go`, the account key only, no CA text kept
+from a refusal), sent only when the CA advertises `renewalInfo` and the predecessor is the account's; a refusal of
+the field falls back to one order without it (`docs/superpowers/rulings/acme-ari.md`).
 
 ### Rate-limit storms and retry loops
 
@@ -246,7 +249,8 @@ Critical; the plan reviews' blocking findings were design changes made before an
 - No HTTPS proxy support (environment proxies are ignored); no built-in DNS providers or RFC 2136; no TLS-ALPN-01;
   revocation only of certificates Alice ordered, signed with the account (added 2026-10-20,
   `docs/superpowers/rulings/certificate-revocation.md`; no revocation with the certificate key); no ACME profiles or short-lived presets; one account per CA; no `acme-dns`/CNAME helper.
-- Renewals do not send ARI `replaces` (L-ACME-1).
+- Renewals of a certificate ordered with another account (or before migration `00024` and refused by the CA) do not
+  carry ARI `replaces`; Let's Encrypt's treatment of replacement orders was not verified against the real CA (R50).
 - A restored copy shares the original's CA accounts (rollover or deactivation there affects the original).
 - The account's contact e-mail is visible to every `acme.view` caller (Auditors and read tokens).
 - In licence lock a binding's automatic deployment cannot be switched off (only removed).

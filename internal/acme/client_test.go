@@ -735,7 +735,7 @@ func TestErrorText(t *testing.T) {
 	assert.Zero(t, newError(ReasonIdentifierRefused, nil).RetryAfter())
 	assert.Equal(t, ReasonHookRefused, ReasonOf(fmt.Errorf("wrapped: %w", newError(ReasonHookRefused, nil))))
 	assert.Empty(t, ReasonOf(errors.New("x")))
-	assert.Len(t, Reasons(), 18)
+	assert.Len(t, Reasons(), 19)
 }
 
 func TestClassifyFallbacks(t *testing.T) {

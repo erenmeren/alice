@@ -301,7 +301,8 @@ Rulings recorded in the task report, adopted:
 - TLS-ALPN-01 (needs a stream listener, i.e. Nginx config edits: rejected).
 - Certificate revocation UI (`RevokeCert` exists in the library; follow-up proposal: revoke on key compromise).
 - ACME profiles and short-lived (6-day) certificate presets; more than one account per CA.
-- L-ACME-1: ARI `replaces` cannot be sent with `x/crypto/acme` v0.57.0; renewals are not rate-limit-exempt.
+- L-ACME-1: ARI `replaces` cannot be sent with `x/crypto/acme` v0.57.0; renewals are not rate-limit-exempt. Closed
+  2026-10-20 by R50 (`docs/superpowers/rulings/acme-ari.md`).
 - A ClassAlways route to switch a binding's automatic deployment off in lock (Task 13 M3).
 - Status page polling of deployments; one combined automatic deployment control; a restore banner (design gaps).
 - Expiry e-mails for ACME certificates not yet on a server (owner follow-up, Task 11 ruling 8).

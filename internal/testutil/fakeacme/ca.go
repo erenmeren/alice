@@ -154,6 +154,8 @@ type issued struct {
 	// revokedAt and reason: the certificate was revoked (RFC 8555 section 7.6) at that time for that RFC 5280 reason.
 	revokedAt time.Time
 	reason    int
+	// replacedBy is the order that replaces the certificate (RFC 9773 section 5; "" none yet).
+	replacedBy string
 }
 
 // issue signs a leaf for the CSR's key and names. The chains are leaf+intermediate (the root is

@@ -304,10 +304,11 @@ func TestACMESecretsNeverLeak(t *testing.T) {
 	require.Len(t, deps, 1)
 	require.Equal(t, "succeeded", w.settle(w.op, deps[0].ID).Status)
 
-	// A renewal the planner starts (the CA's renewal information says now): the acme.schedule tick logs it, and the
-	// renewal order runs through the hook and seals a second managed key.
+	// A renewal the planner starts (the CA's renewal information says now: a window already over, so the random time in
+	// it, R50, is in the past): the acme.schedule tick logs it, and the renewal order runs through the hook and seals a
+	// second managed key.
 	w.clock.Advance(16 * time.Minute) // past renew.MinSpacing since the order
-	require.NoError(t, w.fake.SetARIWindow(w.clock.Now().Add(-time.Hour), w.clock.Now().Add(time.Hour)))
+	require.NoError(t, w.fake.SetARIWindow(w.clock.Now().Add(-2*time.Hour), w.clock.Now().Add(-time.Minute)))
 	require.NoError(t, acmejobs.ScheduleTask(w.inv, time.Minute, w.logger()).Run(context.Background()))
 	renewed := w.waitIssued(w.op, certID)
 	require.NotEqual(t, issued["current"].(map[string]any)["id"], renewed["current"].(map[string]any)["id"], "the planner renewed the certificate")

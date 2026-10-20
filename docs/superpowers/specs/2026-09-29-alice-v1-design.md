@@ -71,6 +71,8 @@ Details: [05-operations.md §18–19](alice-v1/05-operations.md).
 
 **The CA's wait (owner decision 2026-10-20, R47):** Alice never orders before the time a certificate authority asked it to wait until (the `Retry-After` of a rate limit, honoured in full up to seven days, kept apart from Alice's own backoff of at most 24 hours), neither by itself nor at a person's request. When that wait leaves little of the renewal window, Alice does not cut it short: it e-mails the Administrators at once and the certificate's page shows "The certificate authority asked Alice to wait until …".
 
+**Renewal information (owner decision 2026-10-20, R50):** when the certificate authority publishes a suggested renewal window (ARI, RFC 9773), Alice renews at a time it chose once at random inside that window, never later than its own renewal setting, and keeps that time until the authority moves the window; the certificate page shows it. A renewal names the certificate it replaces, so an authority that rewards replacements (Let's Encrypt) can treat it as one.
+
 **Target limit:** exceeding it (including after a smaller renewal) only blocks adding new targets.
 
 **Clock:** the license uses the highest trusted time seen (MAC-protected high-water mark, build-time floor), so rolling the clock back never extends a license. Suspicious forward jumps warn first and only count after 24 h of uptime. Certificate dates are used only for warnings, never to lock.

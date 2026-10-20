@@ -199,6 +199,9 @@ func (s *stubInv) FailACMEOrderClass(_ context.Context, _ uuid.UUID, code, class
 	return s.failErr
 }
 func (s *stubInv) RecordACMEOrderURL(context.Context, uuid.UUID, string) error { return nil }
+func (s *stubInv) RecordACMEOrderReplaces(context.Context, uuid.UUID, string, string) error {
+	return nil
+}
 func (s *stubInv) AddACMEPresented(context.Context, uuid.UUID, inventory.ACMEPresented) error {
 	return nil
 }

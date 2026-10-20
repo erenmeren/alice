@@ -87,7 +87,8 @@ ORDER BY started_at DESC LIMIT 1`, c.ID).Scan(&trigger, &by))
 	w.noSecrets()
 }
 
-// The CA's renewal information pulls a renewal forward (a revocation at the CA): the planner orders before the local rule.
+// The CA's renewal information pulls a renewal forward (a revocation at the CA): a window already in the past makes the
+// certificate due now (R50: the time chosen in it is in the past), long before the local rule.
 func TestRenewalPulledForwardByARI(t *testing.T) {
 	w, task := renewing(t)
 	c := w.dnsCert("ari.example.test")
@@ -95,7 +96,7 @@ func TestRenewalPulledForwardByARI(t *testing.T) {
 	w.drain()
 	old, na := w.notAfter(c.ID)
 	w.setClock(na.Add(-80 * day)) // 50 days before the local rule
-	require.NoError(t, w.fake.SetARIWindow(w.clock.Now().Add(-time.Hour), w.clock.Now().Add(time.Hour)))
+	require.NoError(t, w.fake.SetARIWindow(w.clock.Now().Add(-2*time.Hour), w.clock.Now().Add(-time.Hour)))
 	aris := w.fake.Counters()["ari"]
 	require.NoError(t, task.Run(w.ctx))
 	w.drain()

@@ -23,11 +23,15 @@
 //   - nothing while an order runs;
 //   - due at RenewAt = not_after - min(renew_before_days, lifetime/3): a 90-day certificate 30 days before its end, a
 //     47-day one at two thirds of its life, a 6-day one two days before its end;
-//   - ARI (RFC 9773): the CA's suggested window start is used when it is EARLIER than the local rule, never when it
-//     is later. ARI can pull a renewal forward (a revocation or a mass-renewal event at the CA) but never push it past
-//     the local rule, so a wrong or hostile window cannot make a certificate expire; a window that ends at or before
-//     the current certificate's not_before is not about it and is ignored (no renewal loop). An ARI failure is never a
-//     failure of the certificate and never blocks a renewal: without a window the local rule alone decides;
+//   - ARI (RFC 9773; R50, docs/superpowers/rulings/acme-ari.md): Alice renews at a uniformly random time inside the CA's
+//     suggested window, cut at the local rule (ChooseARIRenewAt): the time is chosen once, stored with the current
+//     certificate (StoreARIRenewAt) and kept while it lies inside the window, so a restart or the next run never moves
+//     it; it is chosen again only when the window moves or shrinks past it, and a new certificate starts without one.
+//     A window already in the past makes the certificate due now. ARI can pull a renewal forward (a revocation or a
+//     mass-renewal event at the CA) but never push it past the local rule, so a wrong or hostile window cannot make a
+//     certificate expire: a window that starts at or after the local rule is not used, and a window that ends at or
+//     before the current certificate's not_before is not about it and is ignored (no renewal loop). An ARI failure is
+//     never a failure of the certificate and never blocks a renewal: without a window the local rule alone decides;
 //   - after failures, the next attempt waits RetryWait from the last attempt: Backoff(failures) (1 h, 2 h, 4 h, ...
 //     capped at 24 h), and after a transient failure never longer than RecoveryInterval of the time the certificate
 //     had left (24 h, 12 h within 7 days of its end, 6 h within 3 days, 2 h within the last day); or until
@@ -47,7 +51,10 @@
 //     the CA asked for.
 package renew
 
-import "time"
+import (
+	"math/rand/v2"
+	"time"
+)
 
 // States of an ACME certificate (inventory.ACMEState*).
 const (
@@ -116,6 +123,10 @@ type Input struct {
 	// ARINextCheckAt when it may be asked for again (the CA's Retry-After).
 	ARIWindow                    *Window
 	ARICheckedAt, ARINextCheckAt *time.Time
+	// ARIRenewAt is the time chosen in the window earlier (stored with the current certificate; nil: none yet). Rand is
+	// the source of a new choice (n > 0: a number in [0, n)); nil is math/rand/v2.
+	ARIRenewAt *time.Time
+	Rand       func(n int64) int64
 	// Locked: the licence gate refuses changes.
 	Locked bool
 	// Revoked: the current certificate was revoked at its CA or marked compromised (migration 00021). It is due at once
@@ -155,9 +166,13 @@ const (
 type Decision struct {
 	Action Action
 	Reason string
-	// RenewAt is when the certificate is due (the local rule, or an earlier ARI window start); zero without a
-	// current certificate.
+	// RenewAt is when the certificate is due (the local rule, or the earlier time chosen in the CA's window); zero
+	// without a current certificate.
 	RenewAt time.Time
+	// ARIRenewAt is the time chosen in the CA's window that applies (nil: none, the local rule decides);
+	// StoreARIRenewAt: it differs from Input.ARIRenewAt and the planner stores it (or clears the stored one).
+	ARIRenewAt      *time.Time
+	StoreARIRenewAt bool
 	// RetryAt is the earliest attempt the failures, the CA's time and the spacing allow (zero: no wait).
 	RetryAt time.Time
 	// RefreshARI: the planner should ask the CA for the renewal window (the certificate is not due yet by the rule
@@ -242,6 +257,56 @@ func NextARICheck(now time.Time, retryAfter time.Duration) time.Time {
 	return now.Add(min(max(retryAfter, MinARIRetry), MaxCAWait))
 }
 
+// ARIRange is the part of the CA's window w that Alice renews in, for a certificate valid from notBefore whose local
+// renewal time is local: from w.Start up to w.End or local, whichever comes first (to is excluded). ok is false without
+// a window, for a window that ends at or before notBefore (it is not about this certificate) and for one that starts at
+// or after local (ARI never pushes a renewal past the local rule).
+func ARIRange(w *Window, notBefore, local time.Time) (from, to time.Time, ok bool) {
+	if w == nil || !w.End.After(notBefore) || !w.Start.Before(local) || !w.Start.Before(w.End) {
+		return time.Time{}, time.Time{}, false
+	}
+	to = w.End
+	if local.Before(to) {
+		to = local
+	}
+	return w.Start, to, true
+}
+
+// ChooseARIRenewAt is the renewal time inside the CA's window (RFC 9773 section 4.2: a uniformly random time in it): the
+// stored time while it lies inside ARIRange, otherwise a new one, a whole number of seconds after its start drawn with
+// rnd (nil: math/rand/v2). nil when there is no range (the local rule decides). A window already in the past gives a
+// time in the past: the certificate is due now.
+func ChooseARIRenewAt(stored *time.Time, w *Window, notBefore, local time.Time, rnd func(n int64) int64) *time.Time {
+	from, to, ok := ARIRange(w, notBefore, local)
+	if !ok {
+		return nil
+	}
+	if stored != nil && !stored.Before(from) && stored.Before(to) {
+		t := *stored
+		return &t
+	}
+	if rnd == nil {
+		rnd = rand.Int64N
+	}
+	var off int64
+	if span := int64(to.Sub(from) / time.Second); span > 0 {
+		off = min(max(rnd(span), 0), span-1)
+	}
+	t := from.Add(time.Duration(off) * time.Second)
+	return &t
+}
+
+// RenewalTime is when a certificate valid from notBefore to notAfter is due, as shown: the stored time chosen in the
+// CA's window w while it lies inside ARIRange (fromCA), else the local rule. It chooses nothing.
+func RenewalTime(stored *time.Time, w *Window, notBefore, notAfter time.Time, renewBeforeDays int) (at time.Time, fromCA bool) {
+	local := RenewAt(notBefore, notAfter, renewBeforeDays)
+	from, to, ok := ARIRange(w, notBefore, local)
+	if ok && stored != nil && !stored.Before(from) && stored.Before(to) {
+		return *stored, true
+	}
+	return local, false
+}
+
 // CAWaitCritical reports whether the CA's earliest retry time caNotBefore leaves less than half of the renewal window of
 // a certificate valid from notBefore to notAfter: it ends after the middle between RenewAt and notAfter (the point from
 // which the provider hold no longer applies either). Alice still waits for the CA; the Administrators are told at once.
@@ -282,10 +347,12 @@ func Decide(in Input) Decision {
 	}
 	local := RenewAt(in.NotBefore, in.NotAfter, in.RenewBeforeDays)
 	d.RenewAt, d.Reason = local, ReasonDue
-	// A window that ends at or before the current certificate's start cannot be about it (a buggy or hostile CA):
-	// ignored, or every new certificate would be due at once.
-	if in.ARIWindow != nil && in.ARIWindow.Start.Before(local) && in.ARIWindow.End.After(in.NotBefore) {
-		d.RenewAt, d.Reason = in.ARIWindow.Start, ReasonDueARI
+	// The time chosen in the CA's window (always before the local rule); a window that ends at or before the current
+	// certificate's start cannot be about it (a buggy or hostile CA): ignored, or every new certificate would be due at once.
+	d.ARIRenewAt = ChooseARIRenewAt(in.ARIRenewAt, in.ARIWindow, in.NotBefore, local, in.Rand)
+	d.StoreARIRenewAt = !sameTime(d.ARIRenewAt, in.ARIRenewAt)
+	if d.ARIRenewAt != nil {
+		d.RenewAt, d.Reason = *d.ARIRenewAt, ReasonDueARI
 	}
 	if in.Revoked && now.Before(d.RenewAt) {
 		d.RenewAt, d.Reason = now, ReasonDueRevoked
@@ -336,6 +403,14 @@ func Decide(in Input) Decision {
 		d.Reason = ReasonRecovery
 	}
 	return d
+}
+
+// sameTime reports whether two optional times are both absent or the same instant.
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 // ariDue reports whether the cached renewal information is old enough to ask again.

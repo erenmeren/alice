@@ -54,7 +54,8 @@ func FailureClass(err error) string {
 // transientError is the classification table of an *Error (the RFC 8555 problem type, the HTTP status, the cause).
 func transientError(e *Error) bool {
 	switch e.Reason {
-	case ReasonCARateLimited, ReasonNotIssuedInTime:
+	case ReasonCARateLimited, ReasonNotIssuedInTime, ReasonAlreadyReplaced:
+		// alreadyReplaced: the order that replaces the certificate at the CA ends there by itself (R50).
 		return true
 	case ReasonProviderUnreachable:
 		// An address the network policy refuses is a setting, not an outage.

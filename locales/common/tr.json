@@ -1628,6 +1628,11 @@
         "title": "Sertifika yetkilisi bu sertifikayı iptal etmeyi reddetti.",
         "cause": "Sertifika yetkilisi bu hesabın bu sertifikayı iptal edemeyeceğini söylüyor: onu başka bir hesap istedi ya da yetkili onu tanımıyor (örneğin dizin değiştikten sonra).",
         "action": "Sertifikayı onu isteyen hesapla, gerekirse sertifika yetkilisinin kendi araçlarıyla iptal edin ve sunucularınızda değiştirin."
+      },
+      "already_replaced": {
+        "title": "Sertifika yetkilisinde başka bir sipariş bu sertifikanın yerini almak üzere.",
+        "cause": "Alice bu yenilemenin yerini aldığı sertifika olarak güncel sertifikayı bildirdi; sertifika yetkilisi ise başka bir siparişin bunu zaten yaptığını söylüyor. O sipariş Alice'in kendi siparişiyse Alice onu devralır, değilse sertifikayı bildirmeden bir kez daha sipariş verir; bu kod yalnızca bunlar da işe yaramadığında görünür.",
+        "action": "Genellikle hiçbir şey: diğer sipariş birkaç gün içinde sertifika yetkilisinde sona erer ve Alice kendiliğinden yeniden yeniler. Yenileme başarısız olmaya devam ederse bu süreden sonra sertifikanın sayfasında Yeniden dene ve sürdür'ü kullanın."
       }
     },
     "discovery": {

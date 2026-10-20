@@ -20,6 +20,7 @@ type orderOpts struct {
 	onFinalize func() error
 	onPresent  func(solver.Challenge) error
 	onCleanUp  func(solver.Challenge, error)
+	replaces   *Replaces
 }
 
 // WithOnOrder is called with the order's URL as soon as the CA created the order, before any challenge is
@@ -210,18 +211,21 @@ func (c *Client) authorize(ctx context.Context, names []string, s solver.Solver,
 	if c.cfg.Key == nil {
 		return nil, newError(ReasonAccountRejected, ErrNoKey)
 	}
-	if _, err := c.Discover(ctx); err != nil {
+	d, err := c.Discover(ctx)
+	if err != nil {
 		return nil, c.orderTimeout(err)
 	}
 	ids := make([]xacme.AuthzID, len(names))
 	for i, n := range names {
 		ids[i] = xacme.AuthzID{Type: "dns", Value: n}
 	}
-	if err := c.call(ctx, func(ctx context.Context) error {
-		var err error
-		o, err = c.lib.AuthorizeOrder(ctx, ids)
-		return err
-	}); err != nil {
+	o, outcome, err := c.newOrder(ctx, d, ids, names, oo.replaces)
+	if outcome != "" && oo.replaces.OnOutcome != nil {
+		if cerr := oo.replaces.OnOutcome(outcome); cerr != nil && err == nil {
+			return nil, &Error{Reason: ReasonDirectoryInvalid, cause: callbackCause{err: cerr}}
+		}
+	}
+	if err != nil {
 		return nil, c.classify(err, opOrder, "", "")
 	}
 	if o.URI == "" || len(o.AuthzURLs) == 0 || len(o.AuthzURLs) > len(names) {

@@ -112,6 +112,8 @@ interface OrderView {
   presented: number;
   cleanup_at: string | null;
   error: { code: string; reason: string } | null;
+  replaces: string;
+  replaces_outcome: string;
 }
 
 interface DeploymentView {
@@ -618,6 +620,9 @@ test.describe('Phase 10 ACME (en)', () => {
     expect(fp2).not.toBe(fp1);
     const renewalOrder = (await acmeOrders(s.api, id)).find((o) => o.certificate_id === second!.id);
     expect(renewalOrder?.trigger, 'the planner ordered it').toBe('renewal');
+    expect(renewalOrder?.replaces_outcome, 'the renewal named the certificate it replaces (RFC 9773, R50)').toBe('sent');
+    expect(renewalOrder?.replaces).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+    expect((await acmeOrders(s.api, id)).find((o) => o.certificate_id === first.id)?.replaces, 'a first order names none').toBe('');
     expect(served(WWW), 'nothing is deployed before the automatic deployment planner runs').toBe(fp1);
     await runScheduled(request, 'acme.auto_deploy');
     await drainUntil(request, async () => expect(served(WWW)).toBe(fp2));

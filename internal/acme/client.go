@@ -8,7 +8,8 @@
 //   - every error is an *Error with a stable reason of an ALC-ACM code; its text never holds a CA body or
 //     header, a URL, the account key or the external account binding key (plan A10);
 //   - the directory is read a second time by this package for renewalInfo (RFC 9773), which the library's
-//     Directory lacks, and RenewalInfo is hand-written;
+//     Directory lacks, and RenewalInfo is hand-written; so is the one newOrder of a renewal that carries RFC 9773
+//     replaces (WithReplaces: the library cannot send the field), signed with the account key in jws.go;
 //   - orders validate names locally, refuse wildcards without dns-01 before contacting the CA, and clean up
 //     every challenge they presented, whatever happens.
 //

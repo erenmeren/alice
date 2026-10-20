@@ -72,6 +72,7 @@ Commands:
         eab on|off | lifetime DURATION | stuck on|off | reject IDENTIFIER|clear
         validation-fail http-01|dns-01 on|off | challenges TYPE[,TYPE] | processing-polls N
         ari default | ari window START END | ari relative BEFORE [LENGTH]
+        ari certificate SERIAL START END   (one certificate's window, SERIAL in hex) | replacements
         advertise FIELD [URL|off]   (replace a URL the CA hands out; no URL restores it)
         clock RFC3339|real
 `
@@ -321,7 +322,9 @@ var ctlCommands = map[string]ctlCommand{
 	"ari default": {request: func([]string, map[string]string) (string, string, url.Values) {
 		return http.MethodPost, "/ari", form{"default": {"true"}}
 	}},
-	"ari window": withPos("/ari", "start", "end"),
+	"ari window":      withPos("/ari", "start", "end"),
+	"ari certificate": withPos("/ari", "serial", "start", "end"),
+	"replacements":    get("/replacements"),
 	"ari relative": {min: 1, max: 2, request: func(pos []string, _ map[string]string) (string, string, url.Values) {
 		q := form{"before": {pos[0]}}
 		if len(pos) > 1 {
