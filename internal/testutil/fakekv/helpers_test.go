@@ -30,6 +30,22 @@ func drain(c *fakekv.TestClient, req *http.Request) error {
 	return err
 }
 
+// requireCut requires req to end in an error (its context ended first); an answer instead fails with
+// its status and body, so a flake says which path answered.
+func requireCut(t *testing.T, c *fakekv.TestClient, req *http.Request) {
+	t.Helper()
+	resp, err := c.HTTPClient().Do(req)
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	t.Fatalf("expected the request to be cut by its context, got status %d: %s", resp.StatusCode, body)
+}
+
 // importBody is the JSON of an import of the leaf (PFX, empty password).
 func importBody(t *testing.T, leaf pki.Leaf) string {
 	t.Helper()

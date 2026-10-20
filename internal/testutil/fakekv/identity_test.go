@@ -531,7 +531,7 @@ func TestLatencyAndHold(t *testing.T) {
 	defer cancel()
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, s.VaultURL()+"/certificates?api-version="+fakekv.APIVersion, http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+s.TestClientToken())
-	require.Error(t, drain(c, req))
+	requireCut(t, c, req)
 	s.SetLatency(0)
 
 	// Hold: the next matching request waits for release; a context ends the wait.
@@ -555,7 +555,7 @@ func TestLatencyAndHold(t *testing.T) {
 	defer cancel2()
 	req, _ = http.NewRequestWithContext(ctx2, http.MethodGet, s.VaultURL()+"/keys?api-version="+fakekv.APIVersion, http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+s.TestClientToken())
-	require.Error(t, drain(c, req))
+	requireCut(t, c, req)
 	require.Eventually(t, func() bool { return s.Held() == 0 }, 3*time.Second, 5*time.Millisecond)
 
 	// Close releases a held request.
@@ -632,4 +632,22 @@ func TestExtraHostsAreLoggedAndRefused(t *testing.T) {
 	last := s.Requests()[len(s.Requests())-1]
 	assert.Equal(t, "evil.test", last.Host)
 	assert.Equal(t, 404, last.Status)
+}
+
+// A wall clock stepped back after a token was issued (a CI runner's time sync) does not make the token
+// "not yet valid" within the tolerated skew; beyond it the vault answers AKV10001.
+func TestTokenToleratesClockStepBack(t *testing.T) {
+	clk := clock.NewFake(time.Now())
+	s := fakekv.Start(t, fakekv.Options{Now: clk.Now})
+	c := s.TestClient()
+	issued := clk.Now()
+	assert.Equal(t, 200, c.Get(t, "/certificates").Status)
+
+	clk.Set(issued.Add(-time.Second))
+	assert.Equal(t, 200, c.Get(t, "/certificates").Status)
+
+	clk.Set(issued.Add(-6 * time.Minute))
+	r := c.Get(t, "/certificates")
+	assert.Equal(t, 401, r.Status)
+	assert.Contains(t, string(r.Body), "AKV10001")
 }

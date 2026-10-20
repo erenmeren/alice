@@ -11,6 +11,12 @@ import (
 
 var b64url = base64.RawURLEncoding
 
+// tokenSkew is the clock skew the vault tolerates before a token's nbf, as Entra-protected services do
+// (GUESS: five minutes, the usual JWT validation default). Without it a wall clock stepped back by a
+// fraction of a second (a CI runner's time sync) made a token issued a moment earlier "not yet valid",
+// and a request that should have waited in a latency or hold was answered 401 at once.
+const tokenSkew = 5 * time.Minute
+
 type issuedToken struct {
 	aud       string
 	nbf, exp  time.Time
@@ -92,7 +98,7 @@ func (s *Server) checkToken(r *http.Request) tokenState {
 	switch {
 	case !known:
 		return tokenUnknown
-	case !now.Before(t.exp) || now.Before(t.nbf):
+	case !now.Before(t.exp) || now.Add(tokenSkew).Before(t.nbf):
 		return tokenExpired
 	case t.aud != vaultResource:
 		return tokenWrongAudience
