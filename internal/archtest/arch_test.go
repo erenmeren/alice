@@ -20,20 +20,25 @@ import (
 // the package and everything below it; other entries are exact. A package may
 // always import packages inside its own rule subtree.
 var rules = map[string][]string{
-	"alice/internal/platform/...":  {},
-	"alice/internal/version/...":   {},
-	"alice/internal/webui/...":     {},
-	"alice/internal/archtest/...":  {},
-	"alice/internal/i18n/...":      {platform},
-	"alice/internal/rbac/...":      {platform},
-	"alice/internal/secrets/...":   {platform},
-	"alice/internal/audit/...":     {platform},
-	"alice/internal/license/...":   {platform, "alice/internal/secrets/...", "alice/internal/audit/..."},
-	"alice/internal/notify/...":    {platform, "alice/internal/i18n/...", "alice/internal/secrets/...", "alice/internal/audit/..."},
-	"alice/internal/auth/...":      {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/..."},
-	"alice/internal/certs/...":     {platform, "alice/internal/secrets/..."},
-	"alice/internal/providers":     {platform, "alice/internal/secrets/..."},
-	"alice/internal/providers/...": {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver"}, // a web-server provider embeds the shared layer
+	"alice/internal/platform/...": {},
+	"alice/internal/version/...":  {},
+	"alice/internal/webui/...":    {},
+	"alice/internal/archtest/...": {},
+	"alice/internal/i18n/...":     {platform},
+	"alice/internal/rbac/...":     {platform},
+	// Scoped access (R49): the value types and the two checks other modules run in their own transactions (which
+	// service a new resource goes to, whether a service accepts another's keys) know the platform only; the services,
+	// environments, trusts and assignment (authz/services) add the audit log. Only the API reaches authz/services.
+	"alice/internal/authz":          {platform},
+	"alice/internal/authz/services": {platform, "alice/internal/authz", "alice/internal/audit/..."},
+	"alice/internal/secrets/...":    {platform},
+	"alice/internal/audit/...":      {platform},
+	"alice/internal/license/...":    {platform, "alice/internal/secrets/...", "alice/internal/audit/..."},
+	"alice/internal/notify/...":     {platform, "alice/internal/i18n/...", "alice/internal/secrets/...", "alice/internal/audit/..."},
+	"alice/internal/auth/...":       {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/..."},
+	"alice/internal/certs/...":      {platform, "alice/internal/secrets/..."},
+	"alice/internal/providers":      {platform, "alice/internal/secrets/..."},
+	"alice/internal/providers/...":  {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver"}, // a web-server provider embeds the shared layer
 	// The test world of the linuxssh provider runs the real nginx, Apache and HAProxy configuration parsers, so that an
 	// emulated nginx-dump parses configuration text the way the helper does.
 	"alice/internal/providers/linuxssh/linuxsshtest": {platform, "alice/internal/providers/linuxssh/...", "alice/internal/providers/nginx/nginxconf",
@@ -47,7 +52,7 @@ var rules = map[string][]string{
 	// expiry thresholds (alerts/expiry).
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
 		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/renew",
-		"alice/internal/alerts/expiry"},
+		"alice/internal/alerts/expiry", "alice/internal/authz"},
 	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
 	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
 	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
@@ -67,10 +72,12 @@ var rules = map[string][]string{
 		// Network discovery (Task 9): the scope model and its errors, and the discovery service; never the probe.
 		"alice/internal/discovery", "alice/internal/discovery/discoverysvc",
 		// The renewal failure classes (pure) the ACME certificate DTO names.
-		"alice/internal/acme/renew"},
+		"alice/internal/acme/renew",
+		// Scoped access (R49): services, environments, trusts and assignment.
+		"alice/internal/authz/..."},
 	// SSH key lifecycle (Phase 6). keymat and plan are pure: exact keys win over the subtree rule.
 	"alice/internal/sshkeys/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...",
-		"alice/internal/rbac/...", "alice/internal/providers", "alice/internal/inventory/..."},
+		"alice/internal/rbac/...", "alice/internal/providers", "alice/internal/inventory/...", "alice/internal/authz"},
 	"alice/internal/sshkeys/keymat": {platform, "alice/internal/secrets/..."},
 	"alice/internal/sshkeys/plan":   {platform, "alice/internal/sshkeys/keymat"},
 	// Phase 7 (R42 row 1): the alert module, the read-only reports module and the pure packages.
@@ -123,7 +130,7 @@ var rules = map[string][]string{
 	// The discovery service behind the API (Task 9): scopes, settings, scans (queued with their job and audit row in one
 	// transaction through netdiscojobs.StartTx) and the read side; never the probe, the inventory or the providers.
 	"alice/internal/discovery/discoverysvc": {platform, "alice/internal/license/...", "alice/internal/audit", "alice/internal/jobs",
-		"alice/internal/discovery", "alice/internal/jobs/netdiscojobs"},
+		"alice/internal/discovery", "alice/internal/jobs/netdiscojobs", "alice/internal/authz"},
 	// The vendor console (plan 2026-10-15-vendor-console-phase-1) is the vendor's own tooling and never ships to customers.
 	// It uses the platform (database, clock) and the license format; it must not reach into the product's services.
 	"alice/internal/vconsole/...": {platform, "alice/internal/license/..."},
