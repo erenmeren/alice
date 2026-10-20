@@ -366,7 +366,7 @@ func TestContinuityJobTypes(t *testing.T) {
 	for _, typ := range Types() {
 		if typ.Class == license.ClassContinuity {
 			assert.Contains(t, []string{"acme.renew", "acme.schedule", "acme.auto_deploy", "certificate.deploy_auto", "kv.poll",
-				"kv.schedule", "kv.auto_deploy"}, typ.Name, "continuity is the upkeep of what is already managed only")
+				"kv.schedule", "kv.auto_deploy", "drift.repair"}, typ.Name, "continuity is the upkeep of what is already managed only")
 		}
 	}
 }

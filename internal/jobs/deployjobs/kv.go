@@ -127,6 +127,9 @@ var kvRefusals = []struct {
 	{inventory.ErrACMESuperseded, inventory.ReasonACMESuperseded},
 	{inventory.ErrACMEDeployStopped, inventory.ReasonACMEDeployStopped},
 	{inventory.ErrACMEDeployHeld, inventory.ReasonACMEDeployHeld},
+	// A queued automatic drift repair whose location no longer desires the certificate or is no longer in mode auto (R52).
+	{inventory.ErrDriftRepairSuperseded, inventory.ReasonDriftRepairSuperseded},
+	{inventory.ErrDriftRepairOff, inventory.ReasonDriftRepairOff},
 	// Any queued deployment whose certificate was revoked or marked compromised before the first send (migration 00021).
 	{inventory.ErrCertificateRevoked, inventory.ReasonCertificateRevoked},
 	{inventory.ErrCertificateCompromised, inventory.ReasonCertificateCompromised},

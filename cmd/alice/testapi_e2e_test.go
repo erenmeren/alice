@@ -261,6 +261,12 @@ func TestE2EBuildNeverTicksTheACMEAutoDeployPlanner(t *testing.T) {
 	assert.GreaterOrEqual(t, acmeAutoDeployEvery, 50*365*24*time.Hour)
 }
 
+// Nor the drift tasks: the journeys run drift.schedule and drift.repair with POST /test/scheduler/run (R52).
+func TestE2EBuildNeverTicksTheDriftTasks(t *testing.T) {
+	assert.GreaterOrEqual(t, driftScheduleEvery, 50*365*24*time.Hour)
+	assert.GreaterOrEqual(t, driftRepairEvery, 50*365*24*time.Hour)
+}
+
 // Nor the network discovery schedule or retention: the journeys start scans by hand and run netdisco.schedule and
 // netdisco.retention with POST /test/scheduler/run.
 func TestE2EBuildNeverTicksNetworkDiscovery(t *testing.T) {

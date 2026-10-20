@@ -80,6 +80,14 @@ const acmeAutoDeployEvery = 100 * 365 * 24 * time.Hour
 // journeys run it with POST /test/scheduler/run {"task": "incident.advance"}.
 const incidentAdvanceEvery = 100 * 365 * 24 * time.Hour
 
+// driftScheduleEvery and driftRepairEvery are the intervals of the certificate drift tasks in the e2e build: in effect
+// never, like the ACME planners (the demo clock would otherwise observe and repair between two Playwright steps). The
+// journeys run them with POST /test/scheduler/run {"task": "drift.schedule"} and {"task": "drift.repair"}.
+const (
+	driftScheduleEvery = 100 * 365 * 24 * time.Hour
+	driftRepairEvery   = 100 * 365 * 24 * time.Hour
+)
+
 // netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule and retention
 // in the e2e build: in effect never, like the ACME planners (the demo clock would otherwise queue scans or remove rows
 // between two Playwright steps). The tasks stay scheduled (checkWiring, RunNow): the journeys start scans by hand and

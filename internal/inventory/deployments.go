@@ -589,8 +589,9 @@ VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12)`, id, 
 	}
 	// A deployment the automatic planners queued is continuity work (certificate.deploy_auto: it runs in the continuity
 	// window of a lock); a person's is a change (certificate.deploy). Both share the handler and the dedupe namespace.
+	// An automatic drift repair (R52) is upkeep of an already managed certificate too.
 	jobType := JobCertificateDeploy
-	if src.Trigger == TriggerACMERenewal || src.Trigger == triggerKVRenewal {
+	if src.Trigger == TriggerACMERenewal || src.Trigger == triggerKVRenewal || src.Trigger == TriggerDriftRepair {
 		jobType = JobCertificateDeployAuto
 	}
 	jobID, err := s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: jobType, TargetID: l.target,

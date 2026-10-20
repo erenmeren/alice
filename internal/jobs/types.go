@@ -251,11 +251,12 @@ const (
 // cleanup of an order's leftover challenge records is tried 5 times on the queue's backoff (a hook or a server that is
 // briefly down), then the sweep (acme.sweep) queues it again after an hour. A network discovery scan runs once: a
 // failed or interrupted scan is started again by a person or by its scope's schedule, never by the queue's backoff (a
-// retry would probe the same hosts again within minutes).
+// retry would probe the same hosts again within minutes). An observation of a server's bound locations runs once too:
+// a failed probe is recorded on the locations, and the next one comes with the observation interval (R52).
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
 	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name,
-		inventory.JobACMERenew, NetdiscoScan.Name:
+		inventory.JobACMERenew, NetdiscoScan.Name, inventory.JobDriftObserve:
 		return 1
 	case inventory.JobDiscover, ACMECleanup.Name:
 		return 5
@@ -273,10 +274,11 @@ func MaxAttemptsFor(t Type) int {
 // on the vault's interval, so a dead-job email per cycle would only repeat it. A rotation's location job
 // is not either: the rotation sweep re-queues it and the rotation's own emails carry its failures. The cleanup of an
 // ACME order is not either: its failure is recorded on the order (cleanup_error_code, audit acme.order.cleanup_failed)
-// and the ACME sweep queues it again every hour, so a dead-job email would repeat every hour while a hook is down.
+// and the ACME sweep queues it again every hour, so a dead-job email would repeat every hour while a hook is down. An
+// observation of a server is not either: its failure is on the locations (unreachable) and in the drift notices.
 func AlertsWhenExhausted(t Type) bool {
 	return t.Name != inventory.JobDeployRecover && t.Name != inventory.JobKVPoll && t.Name != RotationLocation.Name &&
-		t.Name != ACMECleanup.Name
+		t.Name != ACMECleanup.Name && t.Name != inventory.JobDriftObserve
 }
 
 // maxRunning is the concurrency cap of a job type: the runner claims no job of the type while that many
@@ -302,6 +304,19 @@ func MaxRunningFor(t Type) (int, bool) {
 // starts an order or revokes at a CA. The name is a literal (the web's label guard reads literal Register calls) and
 // equals inventory.JobIncidentAdvance.
 var IncidentAdvance = Register("incident.advance", license.ClassAlways)
+
+// Certificate drift (R52, docs/superpowers/rulings/certificate-drift.md). drift.schedule is the periodic task that queues
+// the observation of the bound locations that are due, and drift.observe observes one server (a scan of its certificate
+// files and a probe of its websites): both only read managed systems (ClassReadOnly: paused in lock). drift.repair is
+// the periodic task that repairs drifted locations in mode auto through the deployment engine (each repair a
+// certificate.deploy_auto job): automatic upkeep of certificates already managed, ClassContinuity as
+// certificate.deploy_auto (R44). The names are literals (the web's label guard reads literal Register calls); the
+// observation's equals inventory.JobDriftObserve (TestDriftTypes).
+var (
+	DriftSchedule = Register("drift.schedule", license.ClassReadOnly)
+	DriftObserve  = Register("drift.observe", license.ClassReadOnly)
+	DriftRepair   = Register("drift.repair", license.ClassContinuity)
+)
 
 // Phase 7 periodic task (R42 rows 3 and 5; §8.2 alerts.evaluate, §8.6 "not gated"): the expiry scan sends notices in
 // every license state (in lock with the license note, L-28).

@@ -108,6 +108,9 @@ type CertificateLocation struct {
 	// Deployable says whether the target's provider deploys certificates (deploy_certificate);
 	// a place on a discovery-only server is listed but never offered for deployment.
 	Deployable bool
+	// Observation is what should be there, what Alice last deployed and what is observed today, with the health
+	// derived from it (R52); nil for a location that follows no binding.
+	Observation *LocationObservation
 }
 
 // CertificateFilter selects certificates for the certificate screen.

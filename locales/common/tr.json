@@ -1136,6 +1136,26 @@
         "cause": "Web sitesinin gönderdiği sertifika zinciri, Alice'in bu sertifika için bildiği sertifika yetkilisine göre doğrulanmıyor: bir ara sertifika eksik, yanlış, sırası bozuk ya da süresi dolmuş veya zincir Alice'in güvenmediği bir kök sertifikaya çıkıyor. Alice önceki sertifikayı geri koydu. Hatanın tam nedenini dağıtımın doğrulama bölümü gösterir.",
         "action": "Bu web sitesinin yapılandırmasının hangi sertifika ve zincir dosyalarını kullandığını ve sunucunun önündeki bir vekil sunucunun ya da yük dengeleyicinin başka bir zincir göndermediğini denetleyin, sonra yeniden dağıtın."
       },
+      "drift_repair_superseded": {
+        "title": "Onarım başlatılmadı: konumun artık bu sertifikaya ihtiyacı yok.",
+        "cause": "Otomatik onarım planlandıktan sonra ve başlamadan önce konumun bağlantısı kaldırıldı ya da sertifikası yenilendi. Sunucuda hiçbir şey değiştirilmedi.",
+        "action": "Yapacak bir şey yok: konumun bir sonraki denetimi yeniden karar verir."
+      },
+      "drift_repair_off": {
+        "title": "Onarım başlatılmadı: bu konum için otomatik onarım kapalı.",
+        "cause": "Onarım planlandıktan sonra biri konum için başka bir onarım kipi seçti ya da onarımlar geri döndüğü veya başarısız olduğu için otomatik onarım durdu. Sunucuda hiçbir şey değiştirilmedi.",
+        "action": "Doğru sertifikayı şimdi dağıtmak için sunucunun sayfasında Onar'ı seçin ya da otomatik onarımı yeniden seçin."
+      },
+      "drift_not_bound": {
+        "title": "Bu konum hiçbir sertifikayı izlemiyor.",
+        "cause": "Bir onarım kipi ve bir onarım, konumda olması gereken sertifikayı gerektirir: konumun bağlı olduğu, bir yetkiliden alınmış (ACME) sertifika ya da bir Key Vault bağlantısı.",
+        "action": "Önce konumu bir sertifikaya bağlayın."
+      },
+      "not_drifted": {
+        "title": "Bu konumun onarıma ihtiyacı yok.",
+        "cause": "Konumun en yeni denetimleri olması gereken sertifikayla uyuşuyor ya da sertifika oraya henüz dağıtılmadı.",
+        "action": "Onarılacak bir şey yok. Sertifikayı yine de dağıtmak için sertifikanın sayfasında Şimdi dağıt'ı kullanın."
+      },
       "nothing_to_restore": {
         "title": "Geri yüklenecek bir şey yoktu.",
         "cause": "alice-helper bu dağıtımın hiçbir dosyayı değiştirmediğini gördü; bu yüzden geri konacak bir şey yoktu.",
@@ -1932,6 +1952,28 @@
       "needs_attention_unconfirmed": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımın sonucunu henüz doğrulayamıyor",
         "body": "Alice {{target_name}} sunucusundaki bir sertifika dağıtımının nasıl sonuçlandığını henüz doğrulayamıyor (dosya: {{cert_path}}): sunucu beklendiği gibi yanıt vermedi.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini denetleyin. Dağıtım: {{deployment_id}}"
+      }
+    },
+    "location": {
+      "drift_detected": {
+        "subject": "{{target_name}} üzerinde sertifika Alice dışında değişti: {{cert_path}}",
+        "body": "{{target_name}} sunucusundaki {{cert_path}} dosyasını kullanan web sitesinde artık olması gereken sertifika ({{certificate_name}}) yok. Alice bunun yerine {{observed_name}} buldu; oysa doğru sertifika daha önce oradaydı: biri ya da başka bir araç dosyayı ya da web sitesinin sunduğunu değiştirdi.\n\nAlice doğru sertifikayı kendiliğinden geri koymadı.\n\nNe yapmalı: Alice'te sunucuyu açın. Sertifika listesi bu dosya için olması gereken sertifikayı, Alice'in son dağıttığını, dosyada bulunanı ve web sitesinin sunduğunu, her birini zamanıyla gösterir. Değişiklik istenmediyse doğru sertifikayı yeniden dağıtmak için Onar'ı seçin. Bu dosyayı başka bir araç yönetiyorsa konumu sertifikanın bağlantılarından kaldırın."
+      },
+      "drift_repair_ready": {
+        "subject": "Onarım hazır: {{target_name}} üzerinde sertifika Alice dışında değişti: {{cert_path}}",
+        "body": "{{target_name}} sunucusundaki {{cert_path}} dosyasını kullanan web sitesinde artık olması gereken sertifika ({{certificate_name}}) yok. Alice bunun yerine {{observed_name}} buldu; oysa doğru sertifika daha önce oradaydı: biri ya da başka bir araç dosyayı ya da web sitesinin sunduğunu değiştirdi.\n\nAlice onarımı hazırladı, ancak bu konum için kendiliğinden başlatmıyor.\n\nNe yapmalı: Alice'te sunucuyu açın ve konumu denetleyin. Değişiklik istenmediyse Onar'ı seçin: Alice doğru sertifikayı bir dağıtımın bütün denetimleriyle yeniden dağıtır. Bu dosyayı başka bir araç yönetiyorsa konumu sertifikanın bağlantılarından kaldırın."
+      },
+      "drift_repaired": {
+        "subject": "{{target_name}} üzerinde sertifika geri kondu: {{cert_path}}",
+        "body": "{{target_name}} sunucusundaki {{cert_path}} dosyasını kullanan web sitesinde olması gereken sertifika ({{certificate_name}}) yerine {{observed_name}} vardı. Alice {{certificate_name}} sertifikasını kendiliğinden yeniden dağıttı ve yeni bir denetim web sitesinin onu sunduğunu doğruladı.\n\nBu yeniden olursa dosyayı kimin değiştirdiğini bulun: Alice sertifikayı 24 saat içinde 3 kez geri koymak zorunda kalırsa bunu bırakır ve size bildirir."
+      },
+      "drift_flapping": {
+        "subject": "Alice {{target_name}} üzerindeki {{cert_path}} dosyasını onarmayı bıraktı: başka bir araç onu sürekli değiştiriyor",
+        "body": "Alice {{target_name}} sunucusundaki {{cert_path}} dosyasına 24 saat içinde 3 kez {{certificate_name}} sertifikasını geri koydu ve dosya her seferinde yeniden değiştirildi (Alice {{observed_name}} buldu). Başka bir araç bu dosyayı sürekli değiştiriyor; aynı dosyayı yöneten iki araç birbirine karşı çalışır.\n\nAlice bu konumu artık kendiliğinden onarmıyor: yalnızca değişiklikleri bildiriyor.\n\nNe yapmalı: bu dosyayı hangi aracın yöneteceğine karar verin. Alice ise öteki aracı durdurun (örneğin bir certbot zamanlayıcısı ya da bir yapılandırma yönetimi çalışması), sonra Alice'te sunucunun sayfasında otomatik onarımı yeniden seçin. Öteki araç ise konumu Alice'te sertifikanın bağlantılarından kaldırın."
+      },
+      "drift_repair_failing": {
+        "subject": "Alice {{target_name}} üzerindeki {{cert_path}} dosyasını onarmayı bıraktı: onarımlar başarısız oldu",
+        "body": "Alice 24 saat içinde 3 kez {{target_name}} sunucusundaki {{cert_path}} dosyasına {{certificate_name}} sertifikasını geri koymayı denedi (Alice {{observed_name}} buldu) ve her dağıtım başarısız oldu. Her adımı ve nedeni Alice'teki dağıtım geçmişi gösterir.\n\nAlice bu konumu artık kendiliğinden onarmıyor: yalnızca değişiklikleri bildiriyor.\n\nNe yapmalı: dağıtım geçmişinde gösterilen nedeni giderin, sonra Onar'ı seçin ya da Alice'te sunucunun sayfasında otomatik onarımı yeniden seçin."
       }
     },
     "target": {

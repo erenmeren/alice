@@ -25,6 +25,7 @@ import (
 	"alice/internal/jobs"
 	"alice/internal/jobs/acmejobs"
 	"alice/internal/jobs/deployjobs"
+	"alice/internal/jobs/driftjobs"
 	"alice/internal/jobs/kvjobs"
 	"alice/internal/jobs/netdiscojobs"
 	"alice/internal/jobs/sshkeyjobs"
@@ -318,7 +319,17 @@ func buildRunner(pool *pgxpool.Pool, svc *services, clk clock.Clock, log *slog.L
 	sshkeyjobs.Register(runner, sshkeyDeps(svc, clk, log))
 	acmejobs.Register(runner, acmeDeps(svc, clk, log))
 	netdiscojobs.Register(runner, netdiscoDeps(svc, clk, log))
+	driftjobs.Register(runner, driftDeps(svc, clk, log))
 	return runner
+}
+
+// driftDeps are the dependencies of the certificate drift work (R52): the observation job and its two tasks.
+func driftDeps(svc *services, clk clock.Clock, log *slog.Logger) driftjobs.Deps {
+	d := driftjobs.Deps{Registry: svc.registry, Clock: clk, Log: log}
+	if svc.inventory != nil { // a nil *inventory.Service must stay a nil interface, so Register refuses it
+		d.Inventory = svc.inventory
+	}
+	return d
 }
 
 // netdiscoDeps are the dependencies of the network discovery jobs and tasks: the application pool, the queue (a
@@ -492,6 +503,11 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 			_, err := svc.inventory.AdvanceIncidents(ctx)
 			return err
 		}},
+		// Certificate drift (R52): the observation schedule (ReadOnly: paused in lock; queues drift.observe jobs) and the
+		// repair planner (Continuity: repairs drifted locations in mode auto through the deployment engine). The e2e build
+		// never ticks them: the journeys run them with POST /test/scheduler/run.
+		driftjobs.ScheduleTask(svc.inventory, driftScheduleEvery, log),
+		driftjobs.RepairTask(svc.inventory, driftRepairEvery, log),
 	)
 }
 

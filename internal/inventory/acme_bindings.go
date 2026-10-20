@@ -53,11 +53,14 @@ var (
 	ErrACMETooManyBindings = errors.New("inventory: the ACME certificate is bound to more locations than one deployment request takes")
 )
 
-// Binding states (ACMEBinding.State).
+// Binding states (ACMEBinding.State). Since R52 a binding is current only while no observation newer than the
+// deployment of the current certificate disagrees with it: a past success alone no longer makes it current
+// (Observation.Health says how it is observed today).
 const (
-	ACMEBindingCurrent   = "current"   // the location serves (or got) the current certificate
-	ACMEBindingPending   = "pending"   // it does not yet
+	ACMEBindingCurrent   = "current"   // the location got the current certificate and no newer observation disagrees
+	ACMEBindingPending   = "pending"   // it does not have it yet
 	ACMEBindingAttention = "attention" // the last automatic deployment of the current certificate to it failed
+	ACMEBindingDrifted   = "drifted"   // it had the current certificate and a newer observation found another one (R52)
 )
 
 // ACMEBinding is the view of a binding.
@@ -74,6 +77,8 @@ type ACMEBinding struct {
 	ServedCertificateID *uuid.UUID `json:"served_certificate_id,omitempty"`
 	CreatedBy           *uuid.UUID `json:"created_by,omitempty"`
 	CreatedAt           time.Time  `json:"created_at"`
+	// Observation is the location's observation model and health (R52).
+	Observation *LocationObservation `json:"-"`
 }
 
 // ACMEDeployInput is a person's Deploy now: the bound locations (none: every bound location; at most
@@ -134,7 +139,35 @@ func (s *Service) ListACMEBindings(ctx context.Context, id uuid.UUID) ([]ACMEBin
 		}
 		out = append(out, b)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	return out, s.withACMEObservations(ctx, out)
+}
+
+// withACMEObservations attaches each binding's observation model (R52) and makes a binding whose location drifted
+// drifted (an attention mark stays first: the failed deployment is the newer news).
+func (s *Service) withACMEObservations(ctx context.Context, list []ACMEBinding) error {
+	ids := make([]uuid.UUID, 0, len(list))
+	for _, b := range list {
+		ids = append(ids, b.LocationID)
+	}
+	m, err := s.locationObservations(ctx, s.pool, ids)
+	if err != nil {
+		return err
+	}
+	for i := range list {
+		o, ok := m[list[i].LocationID]
+		if !ok {
+			continue
+		}
+		list[i].Observation = &o
+		if o.Health == HealthDrifted && list[i].State != ACMEBindingAttention {
+			list[i].State = ACMEBindingDrifted
+		}
+	}
+	return nil
 }
 
 // policyAlgorithm is the key algorithm ("rsa", "ecdsa") of an ACME key policy.
@@ -271,7 +304,11 @@ VALUES ($1, $2, $3, $4, $5)`, id, location, autoDeploy, nullableUser(a.UserID), 
 	if err != nil {
 		return ACMEBinding{}, err
 	}
-	return out, nil
+	list := []ACMEBinding{out}
+	if err := s.withACMEObservations(ctx, list); err != nil {
+		return ACMEBinding{}, err
+	}
+	return list[0], nil
 }
 
 // unattendedAllowed is the rule for switching UNATTENDED deployment on (ruling of Task 12 fix round 1, as the Key Vault

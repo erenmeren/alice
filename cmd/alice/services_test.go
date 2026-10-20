@@ -76,6 +76,12 @@ func TestReleasePlansACMEAutoDeploymentsEveryMinute(t *testing.T) {
 	assert.Equal(t, time.Minute, acmeAutoDeployEvery)
 }
 
+// The release build looks for due observations every five minutes and plans drift repairs every minute (R52).
+func TestReleaseSchedulesDriftWork(t *testing.T) {
+	assert.Equal(t, 5*time.Minute, driftScheduleEvery)
+	assert.Equal(t, time.Minute, driftRepairEvery)
+}
+
 // The release build plans due rotations and sweeps the live runs every minute (contract C1: the sweep
 // advances runs and checks the 15-minute re-check bound, so a coarser tick would delay a removal past
 // its re-check), and destroys retired private keys hourly (that task also reconciles ended deploys:

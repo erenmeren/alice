@@ -47,6 +47,14 @@ const acmeAutoDeployEvery = time.Minute
 // incidentAdvanceEvery is the interval of the key-compromise incident task (incident.advance).
 const incidentAdvanceEvery = 30 * time.Second
 
+// driftScheduleEvery and driftRepairEvery are the intervals of the certificate drift tasks (R52): the observation
+// schedule (each bound location is observed every inventory.DriftObserveInterval; the schedule only finds the due ones)
+// and the repair planner.
+const (
+	driftScheduleEvery = 5 * time.Minute
+	driftRepairEvery   = time.Minute
+)
+
 // netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule (a scope's
 // window is minute-exact) and its retention.
 const (

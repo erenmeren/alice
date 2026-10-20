@@ -628,17 +628,22 @@ UNION ALL
 	return &e, nil
 }
 
+// readFile reports whether the scan read the file's content: a certificate, or that the file holds none. Only then is
+// the scan an observation of the file (file_observed_at, R52); a file the helper did not describe keeps the last one.
+func (p preparedLocation) readFile() bool { return p.cert != nil || p.gone }
+
 func insertLocation(ctx context.Context, tx pgx.Tx, target uuid.UUID, p preparedLocation, certID *uuid.UUID, fileSHA, keyType string,
 	now time.Time) (uuid.UUID, error) {
 	l := p.loc
 	id := uuid.Must(uuid.NewV7())
 	_, err := tx.Exec(ctx, `INSERT INTO certificate_locations (id, target_id, kind, cert_path, key_path, resolved_cert_path, certificate_id,
     key_type, servers, supported, unsupported_reason, problem, key_problem, inherited, custom_location, symlinked, cert_file_sha256,
-    key_exists, key_mode, key_owner, key_group, warnings, first_seen_at, last_seen_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $23)`,
+    key_exists, key_mode, key_owner, key_group, warnings, first_seen_at, last_seen_at, file_observed_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $23,
+    CASE WHEN $24 THEN $23::timestamptz END)`,
 		id, target, locationKind, l.CertPath, l.KeyPath, l.ResolvedCertPath, certID, keyType, p.servers, l.Supported, l.Unsupported,
 		l.Problem, l.KeyProblem, l.Inherited, l.CustomLocation, l.Symlinked, fileSHA, l.KeyExists, l.KeyMode, l.KeyOwner, l.KeyGroup,
-		p.warnings, now)
+		p.warnings, now, p.readFile())
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("inventory: store certificate location: %w", err)
 	}
@@ -649,14 +654,18 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $
 // from what is stored (and the location was not missing), only last_seen_at is written, so a large
 // servers value is not written again on every scan and the version stays: an unchanged scan does
 // not make a pending If-Match stale. Settings a person made (verify_port, verify_sni,
-// skip_verify) and what a deployment recorded (deployed_fingerprint) are never touched.
+// skip_verify) and what a deployment recorded (deployed_fingerprint) are never touched. A scan
+// that read the file's content is its observation (file_observed_at, R52), also when nothing
+// changed; one that did not read it leaves the last observation's time.
 func updateLocation(ctx context.Context, tx pgx.Tx, id uuid.UUID, p preparedLocation, certID *uuid.UUID, fileSHA, keyType string,
 	changedOutside bool, now time.Time) error {
 	l := p.loc
 	args := []any{id, l.KeyPath, l.ResolvedCertPath, certID, keyType, p.servers, l.Supported, l.Unsupported, l.Problem, l.KeyProblem,
-		l.Inherited, l.CustomLocation, l.Symlinked, fileSHA, l.KeyExists, l.KeyMode, l.KeyOwner, l.KeyGroup, p.warnings, changedOutside, now}
+		l.Inherited, l.CustomLocation, l.Symlinked, fileSHA, l.KeyExists, l.KeyMode, l.KeyOwner, l.KeyGroup, p.warnings, changedOutside, now,
+		p.readFile()}
 	if !changedOutside {
-		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET last_seen_at = $21
+		tag, err := tx.Exec(ctx, `UPDATE certificate_locations SET last_seen_at = $21,
+    file_observed_at = CASE WHEN $22 THEN $21 ELSE file_observed_at END
 WHERE id = $1 AND missing_since IS NULL AND NOT $20::boolean
   AND (key_path, resolved_cert_path, certificate_id, key_type, servers, supported, unsupported_reason, problem, key_problem, inherited,
        custom_location, symlinked, cert_file_sha256, key_exists, key_mode, key_owner, key_group, warnings)
@@ -673,7 +682,8 @@ WHERE id = $1 AND missing_since IS NULL AND NOT $20::boolean
     key_path = $2, resolved_cert_path = $3, certificate_id = $4, key_type = $5, servers = $6, supported = $7, unsupported_reason = $8,
     problem = $9, key_problem = $10, inherited = $11, custom_location = $12, symlinked = $13, cert_file_sha256 = $14, key_exists = $15,
     key_mode = $16, key_owner = $17, key_group = $18, warnings = $19, last_seen_at = $21, missing_since = NULL,
-    changed_outside_at = CASE WHEN $20 THEN $21 ELSE changed_outside_at END
+    changed_outside_at = CASE WHEN $20 THEN $21 ELSE changed_outside_at END,
+    file_observed_at = CASE WHEN $22 THEN $21 ELSE file_observed_at END
 WHERE id = $1`, args...)
 	if err != nil {
 		return fmt.Errorf("inventory: update certificate location: %w", err)
@@ -776,10 +786,27 @@ LIMIT $3`, targetID, includeMissing, MaxListedLocations+1)
 	if len(items) > MaxListedLocations {
 		out.Items, out.Truncated = items[:MaxListedLocations], true
 	}
+	if err := s.withObservations(ctx, out.Items); err != nil {
+		return LocationList{}, err
+	}
 	return out, nil
 }
 
-// GetLocation returns one certificate location on a live target.
+// GetLocation returns one certificate location on a live target, with its observations when it is bound (R52).
 func (s *Service) GetLocation(ctx context.Context, id uuid.UUID) (CertificateLocation, error) {
-	return s.scanCertLocation(s.pool.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id))
+	l, err := s.scanCertLocation(s.pool.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id))
+	if err != nil {
+		return CertificateLocation{}, err
+	}
+	items := []CertificateLocation{l}
+	if err := s.withObservations(ctx, items); err != nil {
+		return CertificateLocation{}, err
+	}
+	return items[0], nil
+}
+
+// liveLocation reports ErrNotFound unless the location is on a live target.
+func (s *Service) liveLocation(ctx context.Context, id uuid.UUID) error {
+	_, err := s.scanCertLocation(s.pool.QueryRow(ctx, certLocationSelect+" WHERE l.id = $1", id))
+	return err
 }

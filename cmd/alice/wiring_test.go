@@ -81,6 +81,7 @@ func TestJobDepsCarryEveryDependency(t *testing.T) {
 	requireEveryFieldSet(t, kvDeps(svc, clock.Real{}, log))
 	requireEveryFieldSet(t, sshkeyDeps(svc, clock.Real{}, log))
 	requireEveryFieldSet(t, acmeDeps(svc, clock.Real{}, log))
+	requireEveryFieldSet(t, driftDeps(svc, clock.Real{}, log))
 	// Lease: the runner's default (discovery.DefaultLease); NewPolicy and Resolver: the production scan policy and the
 	// system resolver.
 	nd := netdiscoDeps(svc, clock.Real{}, log)
@@ -123,13 +124,13 @@ func TestServeWiringIsComplete(t *testing.T) {
 	for _, typ := range []jobs.Type{jobs.TargetTestConnection, jobs.TargetDiscover, jobs.SSHKeyRemove,
 		jobs.CertificateDeploy, jobs.CertificateDeployRecover, jobs.KVTestConnection, jobs.KVPoll, jobs.KVImport,
 		jobs.SSHKeyAdd, jobs.RotationLocation, jobs.ACMEIssue, jobs.ACMECleanup, jobs.NetdiscoScan,
-		jobs.ACMERenew, jobs.CertificateDeployAuto} {
+		jobs.ACMERenew, jobs.CertificateDeployAuto, jobs.DriftObserve} {
 		assert.True(t, runner.Handles(typ), "the runner handles %s", typ.Name)
 	}
 	for _, typ := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,
 		jobs.DiscoverySchedule, jobs.DeploymentRecoverySweep, jobs.KVSchedule, jobs.KVAutoDeploy,
 		jobs.RotationPlan, jobs.RotationSweep, jobs.SSHKeyDestroyRetired, jobs.ACMESchedule, jobs.ACMEAutoDeploy, jobs.ACMESweep,
-		jobs.NetdiscoSchedule, jobs.NetdiscoRetention} {
+		jobs.NetdiscoSchedule, jobs.NetdiscoRetention, jobs.DriftSchedule, jobs.DriftRepair} {
 		assert.True(t, sched.Schedules(typ), "%s is scheduled", typ.Name)
 	}
 	assert.Positive(t, netdiscoScheduleEvery, "the discovery schedule has an interval in every build")
@@ -137,6 +138,8 @@ func TestServeWiringIsComplete(t *testing.T) {
 	assert.Positive(t, acmeSweepEvery, "the ACME sweep has an interval in every build")
 	assert.Positive(t, acmeScheduleEvery, "the ACME renewal planner has an interval in every build")
 	assert.Positive(t, acmeAutoDeployEvery, "the ACME automatic deployment planner has an interval in every build")
+	assert.Positive(t, driftScheduleEvery, "the drift observation schedule has an interval in every build")
+	assert.Positive(t, driftRepairEvery, "the drift repair planner has an interval in every build")
 	assert.Positive(t, rotationPlanEvery, "the rotation planner has an interval in every build")
 	assert.Positive(t, rotationSweepEvery, "the rotation sweep has an interval in every build")
 	assert.Positive(t, destroyRetiredEvery, "the retired-key task has an interval in every build")

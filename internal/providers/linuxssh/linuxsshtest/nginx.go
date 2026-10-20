@@ -259,6 +259,14 @@ func (e *Emulator) SetNginxFile(p string, content []byte) {
 	}
 }
 
+// ReloadNginx reloads Nginx outside Alice (another tool after it changed a file with SetNginxFile): as the
+// helper's reload, a success makes Nginx serve the files now on disk.
+func (e *Emulator) ReloadNginx() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.nginx().reload()
+}
+
 // SetNginxConfig sets the text of a configuration file (replacing the generated one, or adding a
 // file; one outside conf.d must be included by another file's include directive).
 func (e *Emulator) SetNginxConfig(p, content string) {

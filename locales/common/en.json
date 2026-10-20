@@ -1136,6 +1136,26 @@
         "cause": "The certificate chain the website sends does not verify against the certificate authority Alice knows for this certificate: an intermediate certificate is missing, wrong, out of order or expired, or the chain leads to a root Alice does not trust. Alice put the previous certificate back. The deployment's verification shows the exact fault.",
         "action": "Check which certificate and chain files this website's configuration uses, and that nothing in front of the server (a proxy or a load balancer) sends another chain, then deploy again."
       },
+      "drift_repair_superseded": {
+        "title": "The repair was not started: the location no longer needs this certificate.",
+        "cause": "Between the planning of the automatic repair and its start, the location's binding was removed or its certificate was renewed. Nothing was changed on the server.",
+        "action": "Nothing to do: the next check of the location decides again."
+      },
+      "drift_repair_off": {
+        "title": "The repair was not started: automatic repair is off for this location.",
+        "cause": "After the repair was planned, a person chose another repair mode for the location, or automatic repair stopped because the repairs kept coming back or failing. Nothing was changed on the server.",
+        "action": "Choose Repair on the server's page to deploy the right certificate now, or choose automatic repair again."
+      },
+      "drift_not_bound": {
+        "title": "This location follows no certificate.",
+        "cause": "A repair mode and a repair need the certificate the location should have: an issued (ACME) certificate or a Key Vault binding that the location is bound to.",
+        "action": "Bind the location to a certificate first."
+      },
+      "not_drifted": {
+        "title": "This location does not need a repair.",
+        "cause": "The newest checks of the location agree with the certificate it should have, or the certificate has not been deployed there yet.",
+        "action": "Nothing to repair. To deploy the certificate anyway, use Deploy now on the certificate's page."
+      },
       "nothing_to_restore": {
         "title": "There was nothing to restore.",
         "cause": "alice-helper found that this deployment had not changed any file, so there was nothing to put back.",
@@ -1932,6 +1952,28 @@
       "needs_attention_unconfirmed": {
         "subject": "Alice cannot confirm a deployment on {{target_name}} yet",
         "body": "Alice cannot yet confirm how a certificate deployment on the server {{target_name}} ended (file {{cert_path}}): the server did not answer as expected.\n\nAlice tries again every 15 minutes for about a day, then asks for manual action. Until then, check the website. Deployment: {{deployment_id}}"
+      }
+    },
+    "location": {
+      "drift_detected": {
+        "subject": "Certificate changed outside Alice on {{target_name}}: {{cert_path}}",
+        "body": "The website that uses the file {{cert_path}} on the server {{target_name}} no longer has the certificate it should have ({{certificate_name}}). Alice found {{observed_name}} instead, although the right certificate was there before: someone or another tool changed the file or what the website serves.\n\nAlice did not put the right certificate back by itself.\n\nWhat to do: open the server in Alice. Its certificate list shows, for this file, the certificate it should have, what Alice last deployed, what the file holds and what the website serves, each with its time. If the change was not intended, choose Repair to deploy the right certificate again. If another tool manages this file, remove the location from the certificate's bindings."
+      },
+      "drift_repair_ready": {
+        "subject": "Repair ready: certificate changed outside Alice on {{target_name}}: {{cert_path}}",
+        "body": "The website that uses the file {{cert_path}} on the server {{target_name}} no longer has the certificate it should have ({{certificate_name}}). Alice found {{observed_name}} instead, although the right certificate was there before: someone or another tool changed the file or what the website serves.\n\nAlice prepared the repair but does not start it by itself for this location.\n\nWhat to do: open the server in Alice and check the location. If the change was not intended, choose Repair: Alice deploys the right certificate again, with every check of a deployment. If another tool manages this file, remove the location from the certificate's bindings."
+      },
+      "drift_repaired": {
+        "subject": "Certificate put back on {{target_name}}: {{cert_path}}",
+        "body": "The website that uses the file {{cert_path}} on the server {{target_name}} had {{observed_name}} instead of the certificate it should have ({{certificate_name}}). Alice deployed {{certificate_name}} again by itself, and a new check confirmed that the website has it.\n\nIf this happens again, find out who changes the file: when Alice has to put the certificate back 3 times within 24 hours, it stops doing so and tells you."
+      },
+      "drift_flapping": {
+        "subject": "Alice stopped repairing {{cert_path}} on {{target_name}}: another tool keeps changing it",
+        "body": "Alice put {{certificate_name}} back into the file {{cert_path}} on the server {{target_name}} 3 times within 24 hours, and each time the file was changed again (Alice found {{observed_name}}). Another tool keeps changing this file, and two tools that manage the same file work against each other.\n\nAlice no longer repairs this location by itself: it only reports changes now.\n\nWhat to do: decide which tool manages this file. If it is Alice, stop the other tool (for example a certbot timer or a configuration management run), then choose automatic repair again on the server's page in Alice. If it is the other tool, remove the location from the certificate's bindings in Alice."
+      },
+      "drift_repair_failing": {
+        "subject": "Alice stopped repairing {{cert_path}} on {{target_name}}: the repairs failed",
+        "body": "Alice tried 3 times within 24 hours to put {{certificate_name}} back into the file {{cert_path}} on the server {{target_name}} (Alice found {{observed_name}}), and each deployment failed. The deployment history in Alice shows each step and the reason.\n\nAlice no longer repairs this location by itself: it only reports changes now.\n\nWhat to do: remove the cause shown in the deployment history, then choose Repair, or choose automatic repair again on the server's page in Alice."
       }
     },
     "target": {

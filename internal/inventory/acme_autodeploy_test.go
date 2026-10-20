@@ -310,7 +310,7 @@ func TestInsertDeploymentHasOnlyCheckedCallers(t *testing.T) {
 		}
 	}
 	slices.Sort(inserters)
-	assert.Equal(t, []string{"RequestDeployment", "RequestKVDeployment", "planBinding", "prepareACMEDeployment"}, inserters)
+	assert.Equal(t, []string{"RequestDeployment", "RequestKVDeployment", "insertDriftRepair", "planBinding", "prepareACMEDeployment"}, inserters)
 	for _, fn := range inserters {
 		cs := calls[fn]
 		first := slices.Index(cs, "insertDeployment")

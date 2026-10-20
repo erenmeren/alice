@@ -334,6 +334,12 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	if m.OldSANs == nil {
 		m.OldSANs = []string{}
 	}
+	if withKey && d.Trigger == TriggerDriftRepair {
+		// A queued automatic drift repair is judged again before anything is opened or read (R52).
+		if err := s.driftRepairPrecheck(ctx, d); err != nil {
+			return Material{}, err
+		}
+	}
 	if d.BindingID != nil {
 		// A Key Vault deployment: the vault holds the key; the engine reads the secret itself
 		// (KVDeployMaterial) and Alice never has a key for the certificate.
