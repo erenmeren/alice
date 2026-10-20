@@ -367,7 +367,7 @@ log, an audit row, a job payload or an error (SEC-051's suite covers them: `Test
 
 ### 16.1 Goals and non-goals
 
-The license mechanism must (a) prevent casual tampering, sharing between installations and trivial extension of validity, (b) never harm a paying customer (no false lock, no data loss), (c) work fully offline. It is not DRM: a motivated customer with the binary can bypass it (16.6).
+The license mechanism must (a) prevent casual tampering, sharing between installations and trivial extension of validity, (b) never harm a paying customer (no false lock, no data loss), (c) work fully offline. It is not DRM: a motivated customer with the binary can bypass it (16.6). Goal (b) includes not turning a lapsed license into certificate outages at once: for 45 days after a licensed lock begins, certificates already managed keep renewing and deploying automatically (the continuity window, R44, §8.6); the license still ends everything else at the lock, and the window itself at its end.
 
 ### 16.2 File format (version 1)
 

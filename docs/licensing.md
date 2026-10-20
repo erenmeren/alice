@@ -53,7 +53,8 @@ nothing and is recorded in the audit log.
 |---|---|---|
 | 60, 30, 14, 7 and 1 days before the end | Administrators: yellow banner (orange at 7 and 1 days) and an email each time | Everything |
 | From the end date, for 7 days (168 hours) | Everyone: red banner with the day of the grace period; administrators get a daily email | Everything |
-| After the grace period (lock mode) | Everyone: red banner "License expired. Automatic tasks are paused. …" | See below |
+| After the grace period (lock mode), for 45 days | Everyone: red banner "License expired. Changes are paused, but certificates Alice already manages keep renewing and deploying automatically until … (N days left)." Administrators get an email that names that date | See below; certificates already managed keep renewing |
+| 45 days after the lock began | Everyone: red banner "License expired. Automatic tasks are paused, and since … certificates are no longer renewed or deployed automatically. …"; administrators get an email | See below; certificate renewal has stopped too |
 | After uploading a renewal | "License activated. All features are available again." | Everything, at once |
 
 Each warning email is sent once per license, also when Alice was stopped across several warning dates (only the
@@ -62,7 +63,8 @@ them the banners still appear.
 
 ## Lock mode
 
-In lock mode Alice makes no changes to your servers and stops automatic work that would change them. Your data is
+In lock mode Alice makes no changes to your servers and stops automatic work that would change them, with one
+exception for the first 45 days (the continuity window, below). Your data is
 kept and no certificate is revoked. These keep working: signing in, viewing everything, uploading a license,
 backups, the audit log and its export, inventory export, user administration, API tokens and settings. Actions that
 would change a server are refused with `ALC-LIC-0001` ("Not available while the license is expired."). Uploading a
@@ -77,7 +79,7 @@ administrator chooses **Run now** or **Discard** for each (nothing starts on its
 cancelled, `ALC-DEP-0022`, without a failure email). A deployment that had already
 reached a server when the lock began is still finished or undone, so no server is left half-changed.
 
-For Key Vaults, lock mode stops the vault checks, **Check now**, the access check, **Add Key Vault**, connecting
+For Key Vaults, lock mode (after the first 45 days for the vault checks and automatic deployment) stops the vault checks, **Check now**, the access check, **Add Key Vault**, connecting
 websites, **Deploy now** and imports, and automatic deployment deploys nothing. Switching automatic deployment off
 and deleting a connection stay possible. A new version that a vault check finds after the renewal, but that was
 created in Azure while the license was locked (or around the time it was renewed), is held for an administrator
@@ -85,12 +87,25 @@ instead of being deployed automatically: see "Held versions after a lock" in
 [operator-guide.md](operator-guide.md#held-versions-after-a-lock). Certificate
 expiry alerts by email with a note that the license expired arrive with the release that adds alerts.
 
-For certificates from certificate authorities, lock mode stops every contact with an authority or a DNS hook:
-orders, **Test run**, renewals, account registration, **Deploy now**, connecting websites and switching their
+For certificates from certificate authorities, lock mode (after the first 45 days; before that only the automatic
+renewals and deployments above run) stops every contact with an authority or a DNS hook: orders, **Test run**,
+renewals, account registration, **Deploy now**, connecting websites and switching their
 automatic deployment are refused or paused, and automatic deployment deploys nothing. Removing a website from a
 certificate and deleting a certificate stay possible. A certificate received before the license allowed changes
 again is held for an administrator instead of being deployed automatically
 ([admin-guide.md](admin-guide.md#while-the-license-is-locked)).
+
+### The first 45 days: certificates keep renewing
+
+So that a lapsed license does not turn into expired certificates on your websites, the automatic upkeep of what Alice
+already manages goes on for 45 days after the lock begins: certificates from certificate authorities that Alice has
+already issued are renewed when they are due, and renewed certificates (also new versions of Key Vault certificates,
+which Alice keeps checking for) are deployed automatically to the websites they are already connected to. Nothing a
+person starts runs in that time: no new certificates or orders, **Renew now**, **Deploy now**, uploads, signing
+requests, imports, servers or vaults, SSH key work or scans. The License page and the banner show until when
+certificates keep renewing. After the 45 days this stops too: renewals and automatic deployments that were waiting in
+the queue then wait under **Waiting for an administrator** like other changes. An evaluation has no such window: when
+it ends, everything stops at once.
 
 Alice checks the license when it starts, every hour, and after every upload. Between two checks it also counts the
 time itself, so a license that ends between two checks stops changes at the right minute; Alice then checks again at

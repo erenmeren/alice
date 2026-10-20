@@ -63,6 +63,8 @@ Details: [05-operations.md §18–19](alice-v1/05-operations.md).
 
 **In lock:** scheduled jobs that change external systems stop; user-initiated external changes are refused; in-flight operations finish or roll back safely; rotations never remove old keys; nothing is deleted, no certificate is revoked, no data is modified. Login, license upload, backup/restore, audit and inventory export remain available. Certificate expiry alert emails continue, marked "license expired". After renewal, read-only recurring jobs resume automatically and pending change jobs need Admin confirmation.
 
+**Continuity window (owner decision 2026-10-20, R44):** for 45 days after a licensed lock begins, the automatic upkeep of what is already managed goes on: ACME renewal of issued certificates, automatic deployment to the locations they are already bound to, and the Key Vault polls that see renewed versions. Nothing a person starts runs in that window (no new certificates or orders, targets, imports, uploads, CSRs, manual deploys, SSH key work or discovery scans). After the 45 days this stops too. The evaluation has no window. Administrators get an email when the lock begins (naming the window's end) and another when the window ends; the banners and the License page say until when certificates keep renewing.
+
 **Target limit:** exceeding it (including after a smaller renewal) only blocks adding new targets.
 
 **Clock:** the license uses the highest trusted time seen (MAC-protected high-water mark, build-time floor), so rolling the clock back never extends a license. Suspicious forward jumps warn first and only count after 24 h of uptime. Certificate dates are used only for warnings, never to lock.
