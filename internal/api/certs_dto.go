@@ -270,6 +270,61 @@ type deploymentDTO struct {
 	BindingID *string `json:"binding_id"`
 	KVVersion string  `json:"kv_version"`
 	VaultName string  `json:"vault_name"`
+	// Verification (R51): what the verification of the new certificate proved and found.
+	Verification deploymentVerificationDTO `json:"verification"`
+}
+
+// deploymentVerificationDTO is a deployment's verification evidence (R51): the level a finished deployment proved
+// (0 none, 1 installed, 2 served, 3 trusted; 4 is reserved for a service health check), what the verification found
+// about the served chains (null when not measured: skipped, or a deployment from before R51), and the kind of a
+// failed verification (network, certificate or trust; "" otherwise).
+type deploymentVerificationDTO struct {
+	Level   int                 `json:"level"`
+	Trust   *deploymentTrustDTO `json:"trust"`
+	Failure string              `json:"failure"`
+}
+
+// deploymentTrustDTO is what the verification found about the served chains: trusted, untrusted (error says why and
+// port where) or unchecked (an older helper answered without the chain); the trust store it checked against (system,
+// acme_bundle or uploaded_root); enforced: the anchor was known, so an untrusted chain failed the deployment (a name
+// mismatch never does).
+type deploymentTrustDTO struct {
+	Status   string `json:"status"`
+	Error    string `json:"error"`
+	Port     *int   `json:"port"`
+	Store    string `json:"store"`
+	Enforced bool   `json:"enforced"`
+}
+
+// verifyFailures are the kinds of the verification reasons (R51).
+var verifyFailures = map[string]string{
+	ErrDeployVerifyUnreachable.Reason: providers.VerifyFailureNetwork, ErrDeployVerifyFailed.Reason: providers.VerifyFailureCertificate,
+	ErrDeployVerifyOther.Reason: providers.VerifyFailureCertificate, ErrDeployVerifyChain.Reason: providers.VerifyFailureCertificate,
+	ErrDeployVerifyUntrusted.Reason: providers.VerifyFailureTrust,
+}
+
+// verificationJSON is d's verification evidence; values outside their closed lists read as not measured.
+func verificationJSON(d inventory.Deployment) deploymentVerificationDTO {
+	out := deploymentVerificationDTO{Level: d.Level, Failure: verifyFailures[d.ErrorCode]}
+	if out.Failure == "" {
+		out.Failure = verifyFailures[d.VerifyFailedReason]
+	}
+	if out.Level < providers.LevelNone || out.Level > providers.LevelTrusted {
+		out.Level = providers.LevelNone
+	}
+	t := d.Trust
+	if !slices.Contains([]string{providers.TrustTrusted, providers.TrustUntrusted, providers.TrustUnchecked}, t.Status) {
+		return out
+	}
+	tr := deploymentTrustDTO{Status: t.Status, Store: codeOrBlank(t.Store), Enforced: t.Enforced}
+	if slices.Contains(providers.TrustErrors, t.Error) {
+		tr.Error = t.Error
+	}
+	if t.Port >= 1 && t.Port <= 65535 && tr.Error != "" {
+		tr.Port = &t.Port
+	}
+	out.Trust = &tr
+	return out
 }
 
 // deploymentDetailDTO is GET /deployments/{id}: the record and its steps in order.
@@ -297,12 +352,13 @@ var (
 )
 
 // stepParamRules are the step params the API shows (inventory keeps error, port, mode, served,
-// reason and operation_id) with their value rule: an error class, a port, a verification mode, a
-// served leaf's fingerprint, a verification reason code and the unfinished earlier change a
-// recover_pending step put back. Any other key or value is dropped.
+// reason, operation_id, trust and trust_error) with their value rule: an error class, a port, a
+// verification mode, a served leaf's fingerprint, a verification reason code, the unfinished earlier
+// change a recover_pending step put back, and the served chain's trust and its reason (R51). Any
+// other key or value is dropped.
 var stepParamRules = map[string]*regexp.Regexp{
 	"error": codeValueRE, "port": paramPortRE, "mode": codeValueRE, "served": hex64ValueRE, "reason": reasonValueRE,
-	"operation_id": paramOperationRE,
+	"operation_id": paramOperationRE, "trust": paramTrustRE, "trust_error": paramTrustErrorRE,
 }
 
 func stepParams(in map[string]string) map[string]string {
@@ -321,7 +377,7 @@ func stepParams(in map[string]string) map[string]string {
 }
 
 // verifyReasons are the reasons whose text names the port probed ({{port}}).
-var verifyReasons = []string{ErrDeployVerifyUnreachable.Reason, ErrDeployVerifyChain.Reason}
+var verifyReasons = []string{ErrDeployVerifyUnreachable.Reason, ErrDeployVerifyChain.Reason, ErrDeployVerifyUntrusted.Reason}
 
 // refineReason splits a stored deployment.rollback_failed by what the record says happened: the
 // files are back but the previous certificate was not confirmed (phase restored), or the restore
@@ -393,6 +449,7 @@ func deploymentJSON(d inventory.Deployment) deploymentDTO {
 		RequestedBy: idPtr(d.RequestedBy), RequestedByName: d.RequestedByName, RecoveryAttempts: d.RecoveryAttempts,
 		RecoverAfter: utcPtr(d.RecoverAfter), CreatedAt: d.CreatedAt.UTC(), StartedAt: utcPtr(d.StartedAt), FinishedAt: utcPtr(d.FinishedAt),
 		Source: deploymentSource(d), BindingID: idPtr(d.BindingID), KVVersion: versionOrBlank(d.KVVersion), VaultName: d.VaultName,
+		Verification: verificationJSON(d),
 	}
 }
 

@@ -346,6 +346,10 @@ var (
 	// change left them (status rollback_failed; the website may be broken until another certificate is
 	// deployed).
 	ErrDeployRollbackForbidden = ErrorCode{Code: "ALC-DEP-0025", Reason: "deployment.rollback_forbidden", Status: http.StatusBadGateway}
+	// ErrDeployVerifyUntrusted (R51): the website serves the new certificate, but its chain does not verify against the
+	// known trust anchor (param trust_error says why: unknown_authority, wrong_intermediate, incomplete_chain,
+	// chain_order, expired, not_yet_valid, invalid_chain; param port); the change was rolled back.
+	ErrDeployVerifyUntrusted = ErrorCode{Code: "ALC-DEP-0026", Reason: "deployment.verify_untrusted", Status: http.StatusBadGateway}
 
 	// Phase 5: Azure Key Vault (R40). ALC-AKV-0001..0027 are the contract's table; 0028 and later
 	// cover what the code stores or answers that the table did not name (the reasons of a deployment
@@ -553,7 +557,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
 		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
 		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending, ErrDeployPendingChangeRestored,
-		ErrDeployRollbackForbidden,
+		ErrDeployRollbackForbidden, ErrDeployVerifyUntrusted,
 		ErrAzureAuthFailed, ErrAzureCredentialsExpired, ErrAzureForbidden, ErrAzureFirewall, ErrAzureVaultNotFound, ErrAzureUnreachable,
 		ErrAzureThrottled, ErrAzureUnexpectedResponse, ErrAzureClockSkew, ErrAzureManagedIdentityGone, ErrAzureAddressNotAllowed,
 		ErrAzureTLSUntrusted, ErrKVNotExportable, ErrKVVersionDisabled, ErrKVCertificateNotFound, ErrKVSecretUnreadable, ErrKVSecretMismatch,
@@ -1131,6 +1135,7 @@ var providerParamKeys = map[string]bool{
 	"port": true, "failed_step": true, "profile": true, "phase": true, "directory": true, "backup_dir": true,
 	"expected": true, "actual": true, "mode": true,
 	"operation_id": true, // deployment.server_operation_pending
+	"trust_error":  true, // deployment.verify_untrusted (R51)
 	// Phase 5 (Azure): the role a 403 asks for and the permission model, Entra's AADSTS number, the
 	// caller's address a vault firewall refused, the vault's own error code and request id (strict
 	// shapes, never Azure's text), and the certificate name an import conflicts with.
@@ -1167,6 +1172,10 @@ var (
 	paramRequestIDRE     = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 	paramCertNameRE      = regexp.MustCompile(`^[0-9A-Za-z-]{1,127}$`)
 	paramBoolRE          = regexp.MustCompile(`^(true|false)$`)
+	// paramTrustErrorRE: providers.TrustErrors (R51; a test compares them).
+	paramTrustErrorRE = regexp.MustCompile(`^(unknown_authority|wrong_intermediate|incomplete_chain|chain_order|name_mismatch|expired|not_yet_valid|invalid_chain)$`)
+	// paramTrustRE: a trust status of a verify step (R51).
+	paramTrustRE = regexp.MustCompile(`^(trusted|untrusted|unchecked)$`)
 )
 
 // providerParamRules bound every allowlisted param's value, whichever producer wrote it: a number,
@@ -1180,8 +1189,8 @@ var providerParamRules = map[string]*regexp.Regexp{
 	"required_protocol": paramNumberRE,
 	"port":              paramPortRE, "failed_step": paramCodeRE, "profile": paramCodeRE, "phase": paramCodeRE, "mode": paramCodeRE,
 	"expected": paramCodeRE, "actual": paramCodeRE, "directory": paramPathRE, "backup_dir": paramPathRE,
-	"operation_id": paramOperationRE,
-	"role":         paramRoleRE, "model": paramModelRE, "client_address": paramClientAddressRE, "aadsts": paramAADSTSRE,
+	"operation_id": paramOperationRE, "trust_error": paramTrustErrorRE,
+	"role": paramRoleRE, "model": paramModelRE, "client_address": paramClientAddressRE, "aadsts": paramAADSTSRE,
 	"azure_code": paramAzureCodeRE, "azure_request_id": paramRequestIDRE, "certificate_name": paramCertNameRE,
 	"auto_deploy_follows": paramBoolRE, "bound": paramBoolRE,
 }

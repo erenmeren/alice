@@ -1087,6 +1087,11 @@
         "cause": "The number of certificates the website sends differs from the chain Alice expected, for example because another file or a proxy adds or drops intermediate certificates. The deployment's status shows whether anything was changed.",
         "action": "Check which certificate files this website's configuration uses, then deploy again."
       },
+      "verify_untrusted": {
+        "title": "The website serves the new certificate, but its chain is not trusted (port {{port}}).",
+        "cause": "The certificate chain the website sends does not verify against the certificate authority Alice knows for this certificate: an intermediate certificate is missing, wrong, out of order or expired, or the chain leads to a root Alice does not trust. Alice put the previous certificate back. The deployment's verification shows the exact fault.",
+        "action": "Check which certificate and chain files this website's configuration uses, and that nothing in front of the server (a proxy or a load balancer) sends another chain, then deploy again."
+      },
       "nothing_to_restore": {
         "title": "There was nothing to restore.",
         "cause": "alice-helper found that this deployment had not changed any file, so there was nothing to put back.",
