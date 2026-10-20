@@ -53,6 +53,8 @@ var inventorySentinels = map[string]error{
 	"ErrChainUnconfirmed": inventory.ErrChainUnconfirmed, "ErrNginxConfigInvalid": inventory.ErrNginxConfigInvalid,
 	"ErrTargetNotReady": inventory.ErrTargetNotReady, "ErrDeploymentState": inventory.ErrDeploymentState,
 	"ErrCertificateNotYetValid": inventory.ErrCertificateNotYetValid, "ErrLocationNeedsDiscovery": inventory.ErrLocationNeedsDiscovery,
+	"ErrDriftNotBound": inventory.ErrDriftNotBound, "ErrDriftNotDrifted": inventory.ErrDriftNotDrifted,
+	"ErrDriftRepairSuperseded": inventory.ErrDriftRepairSuperseded, "ErrDriftRepairOff": inventory.ErrDriftRepairOff,
 	"ErrClaimLost": inventory.ErrClaimLost, "ErrCSRBusy": inventory.ErrCSRBusy, "ErrTooManyPendingCSRs": inventory.ErrTooManyPendingCSRs,
 	// Phase 5 (Tasks 10-14)
 	"ErrVaultHasBindings": inventory.ErrVaultHasBindings, "ErrNotAVault": inventory.ErrNotAVault, "ErrNotAServer": inventory.ErrNotAServer,

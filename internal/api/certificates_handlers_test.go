@@ -93,7 +93,7 @@ func TestCertificateDTOsHaveExactlyTheDocumentedFields(t *testing.T) {
 	assert.Equal(t, sorted("id", "target_id", "target_name", "cert_path", "key_path", "resolved_cert_path", "key_type", "certificate", "servers",
 		"supported", "unsupported_reason", "problem", "key_problem", "inherited", "custom_location", "symlinked", "key_exists", "key_mode",
 		"key_owner", "key_group", "warnings", "deployed_fingerprint", "changed_outside_at", "verify_port", "verify_sni", "skip_verify",
-		"first_seen_at", "last_seen_at", "missing_since", "version", "active_deployment_id", "target_type", "deployable"),
+		"first_seen_at", "last_seen_at", "missing_since", "version", "active_deployment_id", "target_type", "deployable", "observation"),
 		jsonKeys(t, locationJSON(sampleLocation())))
 	assert.Equal(t, sorted("id", "common_name", "sans", "key_algorithm", "key_bits", "csr_pem", "status", "certificate_id", "created_at",
 		"finished_at"), jsonKeys(t, csrJSON(sampleCSR(), nil)))

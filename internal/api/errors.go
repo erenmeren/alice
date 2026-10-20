@@ -352,6 +352,13 @@ var (
 	// known trust anchor (param trust_error says why: unknown_authority, wrong_intermediate, incomplete_chain,
 	// chain_order, expired, not_yet_valid, invalid_chain; param port); the change was rolled back.
 	ErrDeployVerifyUntrusted = ErrorCode{Code: "ALC-DEP-0026", Reason: "deployment.verify_untrusted", Status: http.StatusBadGateway}
+	// Certificate drift (R52): a queued automatic repair that no longer holds when its job runs (the location no longer
+	// desires the certificate, or is no longer in mode auto; stored reasons, nothing was sent), and the refusals of the
+	// repair mode and the one-action repair (the location follows no binding, or is not drifted).
+	ErrDeployDriftRepairSuperseded = ErrorCode{Code: "ALC-DEP-0027", Reason: "deployment.drift_repair_superseded", Status: http.StatusConflict}
+	ErrDeployDriftRepairOff        = ErrorCode{Code: "ALC-DEP-0028", Reason: "deployment.drift_repair_off", Status: http.StatusConflict}
+	ErrDeployDriftNotBound         = ErrorCode{Code: "ALC-DEP-0029", Reason: "deployment.drift_not_bound", Status: http.StatusConflict}
+	ErrDeployNotDrifted            = ErrorCode{Code: "ALC-DEP-0030", Reason: "deployment.not_drifted", Status: http.StatusConflict}
 
 	// Phase 5: Azure Key Vault (R40). ALC-AKV-0001..0027 are the contract's table; 0028 and later
 	// cover what the code stores or answers that the table did not name (the reasons of a deployment
@@ -573,7 +580,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
 		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
 		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending, ErrDeployPendingChangeRestored,
-		ErrDeployRollbackForbidden, ErrDeployVerifyUntrusted,
+		ErrDeployRollbackForbidden, ErrDeployVerifyUntrusted, ErrDeployDriftRepairSuperseded, ErrDeployDriftRepairOff, ErrDeployDriftNotBound,
+		ErrDeployNotDrifted,
 		ErrAzureAuthFailed, ErrAzureCredentialsExpired, ErrAzureForbidden, ErrAzureFirewall, ErrAzureVaultNotFound, ErrAzureUnreachable,
 		ErrAzureThrottled, ErrAzureUnexpectedResponse, ErrAzureClockSkew, ErrAzureManagedIdentityGone, ErrAzureAddressNotAllowed,
 		ErrAzureTLSUntrusted, ErrKVNotExportable, ErrKVVersionDisabled, ErrKVCertificateNotFound, ErrKVSecretUnreadable, ErrKVSecretMismatch,
@@ -721,6 +729,11 @@ var errorMap = []struct {
 	{inventory.ErrTargetNotReady, ErrDeployTargetNotReady, nil},
 	{inventory.ErrCertificateNotYetValid, ErrCertNotYetValid, nil},
 	{inventory.ErrLocationNeedsDiscovery, ErrDeployRescanNeeded, nil},
+	// Certificate drift (R52).
+	{inventory.ErrDriftRepairSuperseded, ErrDeployDriftRepairSuperseded, nil},
+	{inventory.ErrDriftRepairOff, ErrDeployDriftRepairOff, nil},
+	{inventory.ErrDriftNotBound, ErrDeployDriftNotBound, nil},
+	{inventory.ErrDriftNotDrifted, ErrDeployNotDrifted, nil},
 	// Phase 5. *inventory.ImportConfirmError is matched in classify with its certificate_name; the bare
 	// sentinel still gets its code. ErrNotAVault and ErrNotAServer name a target of the wrong kind on
 	// a route of the other: the route does not exist for it (404). ErrAdminRequired is a matter of

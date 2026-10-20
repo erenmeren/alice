@@ -461,6 +461,10 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.Read
 		case under(p, "/api/v1/certificates") && !safeMethod(rt.method):
 			want = rbac.CertificatesOperate
+		// Certificate drift (R52): the repair mode and the repair of a bound location are certificates.operate (the
+		// inventory requires an Administrator's step-up for automatic repair); the verification settings stay targets.manage.
+		case under(p, "/api/v1/locations") && (strings.HasSuffix(p, "/drift-mode") || strings.HasSuffix(p, "/actions/repair")):
+			want = rbac.CertificatesOperate
 		case under(p, "/api/v1/locations") && !safeMethod(rt.method):
 			want = rbac.TargetsManage
 		case under(p, "/api/v1/deployments") && !safeMethod(rt.method):

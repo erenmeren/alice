@@ -1962,6 +1962,66 @@ paths:
         "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/locations/{id}/drift-mode:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    put:
+      operationId: setLocationDriftMode
+      summary: Choose how Alice treats a drift of a bound location (observe, approve, auto or the default)
+      description: >-
+        R52. observe reports a drift and mails it; approve reports it with the repair prepared (POST
+        /locations/{id}/actions/repair); auto repairs it through the deployment engine and backs off to observe after 3
+        repairs within 24 hours that all came back (another tool keeps changing the file) or all failed. default is the
+        binding's default: auto when automatic deployment is on for the binding, observe otherwise. Choosing automatic
+        repair (auto, or a default that is auto) when it is not on already is switching unattended deployment on: only an
+        Administrator's browser session with a fresh step-up may (403 ALC-AUTH-0003 without the step-up, 403 ALC-AUTH-0002
+        for anyone else) and the license must allow changes. Any choice clears a back-off. 409 ALC-DEP-0029 when the
+        location follows no binding. The body is {"mode": ...} exactly (400 otherwise; 422 for an unknown mode), at most
+        1 KiB. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: certificates.operate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DriftModeInput" }
+      responses:
+        "200":
+          description: The location's observations with the new mode
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LocationObservation" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/locations/{id}/actions/repair:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: repairLocationDrift
+      summary: Repair a drifted location - deploy the certificate it should have again (one action)
+      description: >-
+        R52. The desired certificate is deployed again through its source's request path, with every check and refusal of
+        a person's deployment: Deploy now of the ACME certificate to this location, or the Key Vault binding's current
+        version. It works in every mode. 409 ALC-DEP-0029 (the location follows no binding), 409 ALC-DEP-0030 (it is not
+        drifted). The body is empty or {}. Refused with 403 ALC-LIC-0001 while the license is locked.
+      x-permission: certificates.operate
+      responses:
+        "202":
+          description: Queued; follow each job (status_url) or deployment (deployment_url)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DeployAccepted" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "413": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/deployments:
     get:
       operationId: listDeployments
@@ -6288,11 +6348,19 @@ components:
         target_name: { type: string }
         cert_path: { type: string }
         auto_deploy: { type: boolean }
-        state: { type: string, enum: [current, pending, attention], description: 'attention: the last automatic deployment of the current certificate failed' }
+        state:
+          type: string
+          enum: [current, pending, attention, drifted]
+          description: >-
+            attention: the last automatic deployment of the current certificate failed. current (since R52): the location
+            got the current certificate and no observation newer than that deployment disagrees; a past success alone no
+            longer makes it current. drifted (R52): it had the current certificate and a newer observation found another
+            one. observation.health says how the location is observed today.
         attention_at: { type: [string, "null"], format: date-time }
         attention: { $ref: "#/components/schemas/ErrorRef" }
         served_certificate_id: { type: [string, "null"], format: uuid }
         created_at: { type: string, format: date-time }
+        observation: { $ref: "#/components/schemas/LocationObservation" }
     ACMEBindingList:
       type: object
       required: [items]
@@ -7950,6 +8018,94 @@ components:
             Whether the server's software deploys certificates (the deploy_certificate capability). A place on a
             discovery-only server (Apache) is false: it is listed, and a deployment request for it is refused with
             location_unsupported.
+        observation:
+          description: R52. What the location should have, what Alice last deployed and what is observed today; null for a location that follows no binding.
+          oneOf:
+            - { $ref: "#/components/schemas/LocationObservation" }
+            - { type: "null" }
+    DriftModeInput:
+      type: object
+      required: [mode]
+      additionalProperties: false
+      properties:
+        mode: { type: string, enum: [observe, approve, auto, default] }
+    ObservedCertificate:
+      type: object
+      required: [certificate_id, fingerprint, not_after]
+      properties:
+        certificate_id: { type: [string, "null"], format: uuid, description: null when Alice does not hold the certificate }
+        fingerprint: { type: string, description: 'The leaf''s SHA-256 (hex); "" when the file holds no certificate' }
+        not_after: { type: [string, "null"], format: date-time }
+    LocationObservation:
+      type: object
+      description: >-
+        R52 (docs/superpowers/rulings/certificate-drift.md). Four facts, each with its own time: desired (the
+        binding's current certificate), last_deployment (the newest succeeded or unchanged deployment and the level it
+        proved), file (what the last scan that read the file found, observed_at being that scan's time, never the time
+        of a scan that could not read the file) and tls (what the websites served at the last probe that completed a
+        handshake: when, from where, the level and the served chain's trust). health is derived from them: in_sync
+        (the newest observations agree and one of them, or the deployment, is younger than 24 hours), drifted (the
+        location had the desired certificate and an observation newer than its deployment disagrees: the website served
+        another leaf, or a scan found another one in the file that Alice did not put there), pending (a deployment runs,
+        or the desired certificate has not reached the location), unreachable (the last probe completed no handshake),
+        stale (nothing newer than 24 hours says what the location holds), unmanaged (nothing is desired).
+      required: [health, source, source_id, desired, last_deployment, file, tls, tls_attempted_at, tls_error, mode, mode_setting,
+        default_mode, drift_since, drift_fingerprint, drift_source, backoff_reason, backed_off_at, active_deployment_id,
+        next_observe_at, repair_available]
+      properties:
+        health: { type: string, enum: [in_sync, drifted, pending, unreachable, stale, unmanaged] }
+        source: { type: string, enum: [acme, key_vault, ""] }
+        source_id: { type: [string, "null"], format: uuid, description: The ACME certificate or the Key Vault binding }
+        desired:
+          oneOf:
+            - { $ref: "#/components/schemas/ObservedCertificate" }
+            - { type: "null" }
+        last_deployment:
+          oneOf:
+            - type: object
+              required: [deployment_id, fingerprint, finished_at, level]
+              properties:
+                deployment_id: { type: string, format: uuid }
+                fingerprint: { type: string }
+                finished_at: { type: [string, "null"], format: date-time }
+                level: { type: integer, minimum: 0, maximum: 3, description: 'R51: 1 installed, 2 served, 3 trusted' }
+            - { type: "null" }
+        file:
+          oneOf:
+            - allOf:
+                - { $ref: "#/components/schemas/ObservedCertificate" }
+                - type: object
+                  required: [observed_at, changed_outside_at]
+                  properties:
+                    observed_at: { type: string, format: date-time }
+                    changed_outside_at: { type: [string, "null"], format: date-time }
+            - { type: "null" }
+        tls:
+          oneOf:
+            - allOf:
+                - { $ref: "#/components/schemas/ObservedCertificate" }
+                - type: object
+                  required: [observed_at, probe, level, trust, trust_error]
+                  properties:
+                    observed_at: { type: string, format: date-time }
+                    probe: { type: string, enum: [alice, helper], description: "alice: Alice's own probe; helper: the server itself (for at least one endpoint)" }
+                    level: { type: integer, minimum: 0, maximum: 3, description: '2 served or 3 trusted when the desired certificate was served, 0 otherwise' }
+                    trust: { type: string, enum: [trusted, untrusted, unchecked, ""] }
+                    trust_error: { type: string, description: 'R51 trust error when untrusted, "" otherwise' }
+            - { type: "null" }
+        tls_attempted_at: { type: [string, "null"], format: date-time }
+        tls_error: { $ref: "#/components/schemas/ErrorRef" }
+        mode: { type: string, enum: [observe, approve, auto], description: The effective repair mode }
+        mode_setting: { type: string, enum: [observe, approve, auto, default], description: 'The chosen mode; default follows default_mode' }
+        default_mode: { type: string, enum: [observe, auto], description: auto when automatic deployment is on for the binding }
+        drift_since: { type: [string, "null"], format: date-time, description: Since when the open drift episode lasts }
+        drift_fingerprint: { type: string, description: 'The leaf the observation that found the drift saw ("" for a file without one)' }
+        drift_source: { type: string, enum: [tls, file, ""] }
+        backoff_reason: { type: string, enum: [flapping, repair_failing, ""], description: Why automatic repair backed off to observe }
+        backed_off_at: { type: [string, "null"], format: date-time }
+        active_deployment_id: { type: [string, "null"], format: uuid }
+        next_observe_at: { type: [string, "null"], format: date-time }
+        repair_available: { type: boolean, description: 'The location is drifted; POST /locations/{id}/actions/repair repairs it' }
     FileProblem:
       type: string
       description: >-

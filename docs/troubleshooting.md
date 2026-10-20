@@ -2508,6 +2508,38 @@ The usual reason is that the website does not send the file Alice wrote: another
 
 **What to do.** Check which certificate and chain files this website's configuration uses (`ssl_certificate`), and that nothing in front of the server sends another chain; then deploy again. A name mismatch alone never fails a deployment: it is shown as a warning, because the name comes from the server's configuration and an undo would not change it.
 
+## ALC-DEP-0027: The repair was not started: the location no longer needs this certificate
+
+**Meaning.** An automatic repair of a drifted location (R52, see [admin-guide.md](admin-guide.md#drift-what-should-be-there-and-what-is-there)) was planned, but when its job started, the location no longer wanted the certificate the repair would deploy. Nothing was sent to the server. (HTTP 409, reason `deployment.drift_repair_superseded`, status failed, trigger `drift_repair`.)
+
+**Likely cause.** Between the planning and the start, the location's binding was removed, the location now follows another certificate, or the bound certificate was renewed (the renewal is deployed by the automatic deployment planner instead).
+
+**What to do.** Nothing. The next observation of the location decides again; the server's page shows what the location should have and what it has.
+
+## ALC-DEP-0028: The repair was not started: automatic repair is off for this location
+
+**Meaning.** An automatic repair of a drifted location was planned, but when its job started, the location was no longer in the repair mode **Automatic**. Nothing was sent to the server. (HTTP 409, reason `deployment.drift_repair_off`, status failed, trigger `drift_repair`.)
+
+**Likely cause.** A person chose **Observe** or **Approve** for the location after the repair was planned, or automatic repair backed off because three repairs within 24 hours came back or failed.
+
+**What to do.** If the location should get the certificate now, choose **Repair** on the server's page (a person's deployment, with every check). To let Alice repair by itself again, an administrator chooses **Automatic** as the location's repair mode.
+
+## ALC-DEP-0029: This location follows no certificate
+
+**Meaning.** A repair mode or a repair was asked for a location that is not bound to a certificate, so Alice does not know which certificate it should have. (HTTP 409, reason `deployment.drift_not_bound`.)
+
+**Likely cause.** The location was never bound to an issued (ACME) certificate or a Key Vault binding, or its binding was removed while the page was open.
+
+**What to do.** Bind the location on the certificate's page (issued certificates: **Locations**; Key Vault: the binding's websites) first, or deploy a certificate to it with **Deploy**.
+
+## ALC-DEP-0030: This location does not need a repair
+
+**Meaning.** A repair was asked for a location that is not drifted: its newest observations agree with the certificate it should have, or that certificate has not reached it yet. (HTTP 409, reason `deployment.not_drifted`.)
+
+**Likely cause.** The drift ended meanwhile (a repair or a person put the certificate back), a deployment is running, or the page showed an older state.
+
+**What to do.** Reload the page. To deploy the certificate anyway, use **Deploy now** on the certificate's page.
+
 ## ALC-AKV-0001: Azure sign-in refused
 
 **Meaning.** Azure refused Alice's sign-in with the details of this vault (the parameter `aadsts` carries Entra's AADSTS number when Azure sent one). (HTTP 502, reason `azure.auth_failed`.)

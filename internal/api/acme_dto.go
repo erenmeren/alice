@@ -241,15 +241,20 @@ type acmeBindingDTO struct {
 	Attention           *errorRefDTO `json:"attention"`
 	ServedCertificateID *string      `json:"served_certificate_id"`
 	CreatedAt           time.Time    `json:"created_at"`
+	// Observation (R52): the location's observation model and health.
+	Observation *locationObservationDTO `json:"observation"`
 }
 
-// acmeBindingStates are the values of a binding's state; anything else is shown as pending (the openapi enum).
-var acmeBindingStates = []string{inventory.ACMEBindingCurrent, inventory.ACMEBindingPending, inventory.ACMEBindingAttention}
+// acmeBindingStates are the values of a binding's state; anything else is shown as pending (the openapi enum). Since
+// R52 current means "got the current certificate and no newer observation disagrees"; drifted is new.
+var acmeBindingStates = []string{inventory.ACMEBindingCurrent, inventory.ACMEBindingPending, inventory.ACMEBindingAttention,
+	inventory.ACMEBindingDrifted}
 
 func acmeBindingJSON(b inventory.ACMEBinding) acmeBindingDTO {
 	d := acmeBindingDTO{ACMECertificateID: b.ACMECertificateID.String(), LocationID: b.LocationID.String(), TargetID: b.TargetID.String(),
 		TargetName: b.TargetName, CertPath: b.CertPath, AutoDeploy: b.AutoDeploy, State: b.State, AttentionAt: utcPtr(b.AttentionAt),
-		Attention: errorRef(b.AttentionCode, nil), ServedCertificateID: idPtr(b.ServedCertificateID), CreatedAt: b.CreatedAt.UTC()}
+		Attention: errorRef(b.AttentionCode, nil), ServedCertificateID: idPtr(b.ServedCertificateID), CreatedAt: b.CreatedAt.UTC(),
+		Observation: observationJSON(b.Observation)}
 	if !slices.Contains(acmeBindingStates, d.State) {
 		d.State = inventory.ACMEBindingPending
 	}

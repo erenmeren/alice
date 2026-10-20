@@ -157,6 +157,9 @@ type InventoryService interface {
 	CancelCSR(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.CSR, error)
 	ListLocations(ctx context.Context, targetID uuid.UUID, includeMissing bool) (inventory.LocationList, error)
 	UpdateLocation(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, p inventory.LocationPatch) (inventory.CertificateLocation, error)
+	// R52: the repair mode of a bound location and its one-action repair.
+	SetDriftMode(ctx context.Context, a inventory.Actor, id uuid.UUID, mode string, strictSession bool) (inventory.LocationObservation, error)
+	RepairDrift(ctx context.Context, a inventory.Actor, id uuid.UUID, strictSession bool) ([]inventory.RequestedDeployment, error)
 	RequestDeployment(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
 	ListDeployments(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
 	Deployment(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
@@ -824,6 +827,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.jobRoutes()...)
 	routes = append(routes, s.certificateRoutes()...)
 	routes = append(routes, s.locationRoutes()...)
+	routes = append(routes, s.driftRoutes()...)
 	routes = append(routes, s.deploymentRoutes()...)
 	routes = append(routes, s.vaultRoutes()...)
 	routes = append(routes, s.bindingRoutes()...)

@@ -144,6 +144,9 @@ type locationDTO struct {
 	ActiveDeploymentID  *string            `json:"active_deployment_id"`
 	TargetType          string             `json:"target_type"`
 	Deployable          bool               `json:"deployable"`
+	// Observation (R52): what the location should have, what Alice last deployed and what is observed today; null for
+	// a location that follows no binding.
+	Observation *locationObservationDTO `json:"observation"`
 }
 
 func idPtr(id *uuid.UUID) *string {
@@ -178,6 +181,7 @@ func locationJSON(l inventory.CertificateLocation) locationDTO {
 		ChangedOutsideAt: utcPtr(l.ChangedOutsideAt), VerifyPort: l.VerifyPort, VerifySNI: l.VerifySNI, SkipVerify: l.SkipVerify,
 		FirstSeenAt: l.FirstSeenAt.UTC(), LastSeenAt: l.LastSeenAt.UTC(), MissingSince: utcPtr(l.MissingSince), Version: l.Version,
 		ActiveDeploymentID: idPtr(l.ActiveDeploymentID), TargetType: l.TargetType, Deployable: l.Deployable,
+		Observation: observationJSON(l.Observation),
 	}
 	if c := l.Certificate; c != nil {
 		d.Certificate = &certificateRefDTO{ID: c.ID.String(), SubjectCN: c.SubjectCN, Label: c.Label, Fingerprint: c.Fingerprint,

@@ -532,6 +532,8 @@ type fakeInventory struct {
 	CancelCSRFn         func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.CSR, error)
 	ListLocationsFn     func(ctx context.Context, targetID uuid.UUID, includeMissing bool) (inventory.LocationList, error)
 	UpdateLocationFn    func(ctx context.Context, a inventory.Actor, id uuid.UUID, ifVersion int, p inventory.LocationPatch) (inventory.CertificateLocation, error)
+	SetDriftModeFn      func(ctx context.Context, a inventory.Actor, id uuid.UUID, mode string, strict bool) (inventory.LocationObservation, error)
+	RepairDriftFn       func(ctx context.Context, a inventory.Actor, id uuid.UUID, strict bool) ([]inventory.RequestedDeployment, error)
 	RequestDeploymentFn func(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error)
 	ListDeploymentsFn   func(ctx context.Context, f inventory.DeploymentFilter) (inventory.DeploymentPage, error)
 	DeploymentFn        func(ctx context.Context, id uuid.UUID) (inventory.Deployment, error)
@@ -625,6 +627,20 @@ func (f *fakeInventory) UpdateLocation(ctx context.Context, a inventory.Actor, i
 		return f.UpdateLocationFn(ctx, a, id, v, p)
 	}
 	return inventory.CertificateLocation{}, errNotConfigured
+}
+
+func (f *fakeInventory) SetDriftMode(ctx context.Context, a inventory.Actor, id uuid.UUID, mode string, strict bool) (inventory.LocationObservation, error) {
+	if f.SetDriftModeFn != nil {
+		return f.SetDriftModeFn(ctx, a, id, mode, strict)
+	}
+	return inventory.LocationObservation{}, errNotConfigured
+}
+
+func (f *fakeInventory) RepairDrift(ctx context.Context, a inventory.Actor, id uuid.UUID, strict bool) ([]inventory.RequestedDeployment, error) {
+	if f.RepairDriftFn != nil {
+		return f.RepairDriftFn(ctx, a, id, strict)
+	}
+	return nil, errNotConfigured
 }
 
 func (f *fakeInventory) RequestDeployment(ctx context.Context, a inventory.Actor, in inventory.DeployRequestInput) ([]inventory.RequestedDeployment, error) {
