@@ -136,7 +136,7 @@ func rowCounts(t *testing.T, q db.Querier) map[string]int64 {
 	return c
 }
 
-// migrationSeeds are the rows a freshly migrated database holds: 00025's environments, Default service and its first
+// migrationSeeds are the rows a freshly migrated database holds: 00026's environments, Default service and its first
 // policy (Load replaces them with the backup's).
 var migrationSeeds = map[string]int64{"environments": 4, "services": 1, "service_policies": 1}
 

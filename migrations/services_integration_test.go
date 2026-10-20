@@ -17,8 +17,8 @@ import (
 	"alice/migrations"
 )
 
-// SQLSTATE of the 00025 Down refusal: scoped access exists.
-const scopedAccessExists = "Z1025"
+// SQLSTATE of the 00026 Down refusal: scoped access exists.
+const scopedAccessExists = "Z1026"
 
 // ownedTables are the tables with an owning service (design §4.2).
 var ownedTables = []string{"targets", "certificates", "csr_requests", "ssh_keys", "acme_certificates", "discovery_scopes"}
@@ -45,10 +45,10 @@ func countsByTable(t *testing.T, d *pgtest.DB, service *uuid.UUID) map[string][2
 	return out
 }
 
-// 00025 (R49) goes up over a populated database: every owned row lands in the Default service (counts unchanged, no
+// 00026 (R49) goes up over a populated database: every owned row lands in the Default service (counts unchanged, no
 // history trigger fires: a finished incident is filled too), a job with a target and every alert take Default, an
 // enabled rotation policy is approved for Default; the Down works without scoped state and refuses with it.
-func TestMigration00025ServicesBackfillAndDown(t *testing.T) {
+func TestMigration00026ServicesBackfillAndDown(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
@@ -57,7 +57,7 @@ func TestMigration00025ServicesBackfillAndDown(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, tableExists(t, d, "services"))
 	assert.False(t, hasColumn(t, d, "targets", "service_id"))
-	assert.Empty(t, grantProblems(t, d), "the grant guard describes the schema below 00025 too")
+	assert.Empty(t, grantProblems(t, d), "the grant guard describes the schema below 00026 too")
 
 	// A populated installation: inventory, ACME, discovery, a signing request, an SSH key with an enabled and a disabled
 	// rotation policy, jobs with and without a target, an alert and a finished (frozen) incident.
@@ -170,7 +170,7 @@ func seedService(t *testing.T, d *pgtest.DB, name string, env *uuid.UUID) uuid.U
 }
 
 // The seeded rows and the constraints of the new tables.
-func TestMigration00025ServiceConstraints(t *testing.T) {
+func TestMigration00026ServiceConstraints(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
 	rows, err := d.App.Query(ctx, "SELECT key FROM environments ORDER BY sort")

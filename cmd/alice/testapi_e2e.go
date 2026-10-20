@@ -233,7 +233,7 @@ var testMailer notify.Mailer = e2eMailbox
 // jobs, the certificate tables) must be in the same TRUNCATE, and so must every table of the SSH key
 // rotation (migration 00010), which references ssh_keys, targets and users.  The ACME tables (00013) reference users, certificates and certificate_locations.
 // The network discovery tables (00014) reference users and each other. The LDAP directory tables (00015) reference users
-// (created_by) and users reference ldap_directories (ldap_directory_id). The service tables (00025) reference users and
+// (created_by) and users reference ldap_directories (ldap_directory_id). The service tables (00026) reference users and
 // every owned table references services: they are emptied too, and the seeded environments and the Default service with
 // its first policy are put back, as a fresh installation has them.
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,

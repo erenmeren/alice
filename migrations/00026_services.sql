@@ -200,7 +200,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON environments, services, directory_groups
 GRANT SELECT, INSERT ON service_policies TO alice_app;
 
 -- +goose Down
--- A Down never silently widens access: it refuses (SQLSTATE Z1025) while a second service, a role binding, an
+-- A Down never silently widens access: it refuses (SQLSTATE Z1026) while a second service, a role binding, an
 -- automation account or a user without a global role exists; nothing is changed then. Without them every resource is
 -- in the Default service and every user has its global role, which is the schema below.
 -- +goose StatementBegin
@@ -208,7 +208,7 @@ DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM services WHERE NOT is_default) OR EXISTS (SELECT 1 FROM role_bindings)
             OR EXISTS (SELECT 1 FROM users WHERE auth_source = 'automation' OR role IS NULL) THEN
-        RAISE EXCEPTION 'cannot migrate down: scoped access exists (a second service, a role binding, an automation account or a user without a global role); remove it first or restore a backup taken before 00025' USING ERRCODE = 'Z1025';
+        RAISE EXCEPTION 'cannot migrate down: scoped access exists (a second service, a role binding, an automation account or a user without a global role); remove it first or restore a backup taken before 00026' USING ERRCODE = 'Z1026';
     END IF;
 END $$;
 -- +goose StatementEnd

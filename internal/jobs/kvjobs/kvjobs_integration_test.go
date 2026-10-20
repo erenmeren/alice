@@ -1132,5 +1132,5 @@ func TestE2EResetStatementEmptiesTheVaultTables(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{"master_key_versions", "goose_db_version", "environments", "services", "service_policies"}, left,
-		"only the two kept tables and the seeded environments and Default service (00025) hold rows")
+		"only the two kept tables and the seeded environments and Default service (00026) hold rows")
 }

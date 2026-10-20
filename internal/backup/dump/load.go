@@ -17,7 +17,7 @@ import (
 // exactly the target's public sequences. Any difference is ErrSchemaMismatch (S-14). A row count that differs from
 // the E frame is ErrPayload. Load returns at the first frame after Q, which Stats.Next holds.
 //
-// The target is a freshly migrated database; the rows a migration seeds there (00025: the environments, the Default
+// The target is a freshly migrated database; the rows a migration seeds there (00026: the environments, the Default
 // service and its first policy) are replaced by the backup's: a table that holds rows is emptied before its rows are
 // copied (under the caller's session_replication_role = replica no trigger and no foreign key action runs).
 //

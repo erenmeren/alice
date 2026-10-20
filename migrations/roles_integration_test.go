@@ -153,7 +153,7 @@ var explicitGrants = map[string][]string{
 	// Key-compromise incidents (00021): history, never deleted; a finished incident is frozen (Z1023).
 	"public.certificate_incidents":          {"INSERT", "SELECT"},
 	"public.certificate_incident_locations": {"INSERT", "SELECT"},
-	// Services (00025, R49): a service's policy history is append-only.
+	// Services (00026, R49): a service's policy history is append-only.
 	"public.service_policies": {"INSERT", "SELECT"},
 }
 
@@ -168,7 +168,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// 00017 adds capabilities (the startup sync, spec §8.1).
 	// Phase 5 adds credential_id (a vault's credential moves to its replacement; a trigger refuses it
 	// for any other kind of target) and poll_failures (it delays the next poll).
-	// 00025 adds service_id here and on the other owned tables (moving a resource to another service, R49).
+	// 00026 adds service_id here and on the other owned tables (moving a resource to another service, R49).
 	"public.targets": {"UPDATE": {"capabilities", "credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
 		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "service_id", "status", "updated_at", "version"}},
 	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
@@ -183,7 +183,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.certificates": {"UPDATE": {"chain_complete", "compromised_at", "compromised_by", "label", "last_seen_at", "pem_chain", "private_key_id",
 		"revocation_reason", "revoked_at", "revoked_by", "service_id", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "service_id", "status"}},
-	// 00025 adds the binding attention mark (a website whose service does not accept the vault's keys, R49).
+	// 00026 adds the binding attention mark (a website whose service does not accept the vault's keys, R49).
 	"public.certificate_locations": {"UPDATE": {"binding_attention_at", "binding_attention_code", "binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
 		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
@@ -252,7 +252,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
 
-// serviceColumnTables are the relations whose service columns (00025) the application may update.
+// serviceColumnTables are the relations whose service columns (00026) the application may update.
 var serviceColumnTables = []string{"public.targets", "public.certificates", "public.csr_requests", "public.ssh_keys", "public.acme_certificates",
 	"public.discovery_scopes", "public.rotation_policies", "public.certificate_locations"}
 
@@ -353,7 +353,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			})}
 		}
 		if !services && slices.Contains(serviceColumnTables, name) {
-			// Below 00025 there is no owning service to move and no approval to record.
+			// Below 00026 there is no owning service to move and no approval to record.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "service_id" || c == "approved_service_ids" || strings.HasPrefix(c, "binding_attention_")
 			})}
