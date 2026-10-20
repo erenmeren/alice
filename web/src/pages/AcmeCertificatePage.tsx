@@ -23,6 +23,7 @@ import { ACME_CERTIFICATES_KEY, acmeCertificateKey, acmeOrdersKey, CERTIFICATES_
 import { useAuth } from '../auth/AuthProvider';
 import { PageLoader } from '../auth/guards';
 import { AcmeBindingsPanel } from '../components/acme/AcmeBindingsPanel';
+import { RevokeDialog, revocableVersions } from '../components/acme/RevokeDialog';
 import { hookName, ORDER_POLL_MS, Problem, providerName, renewal, stateIcon, stateTone, useChangesLocked, useHooks, useWebServers, useProviders } from '../components/acme/issued';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
@@ -108,6 +109,7 @@ export function AcmeCertificatePage() {
     [client, id],
   );
   const [deleting, setDeleting] = useState(false);
+  const [revoking, setRevoking] = useState(false);
   // After Check again and resume: 'ordered' when an order started at once, 'armed' when only renewal was re-armed.
   const [rearmed, setRearmed] = useState<'ordered' | 'armed' | null>(null);
 
@@ -202,6 +204,11 @@ export function AcmeCertificatePage() {
                 {orderLabel}
               </Button>
             )}
+            {admin && issued && (c.current?.revoked_at === null || revocableVersions(orders.data?.items).length > 0) && (
+              <Button variant="light" color="red" leftSection={<Icon name="ShieldAlert" size={15} />} disabled={locked} onClick={() => setRevoking(true)}>
+                {t('acme.issued.revoke.action')}
+              </Button>
+            )}
             {admin && (
               <Button variant="light" color="red" leftSection={<Icon name="X" size={15} />} onClick={() => setDeleting(true)}>
                 {t('acme.issued.delete')}
@@ -245,6 +252,7 @@ export function AcmeCertificatePage() {
           <CurrentPanel c={c} />
         </div>
       </div>
+      {revoking && <RevokeDialog c={c} orders={orders.data?.items} onClose={() => setRevoking(false)} />}
       {deleting && (
         <DeleteDialog
           c={c}
@@ -436,9 +444,21 @@ function OrdersPanel({ orders, error, pending }: { orders: ACMEOrder[] | undefin
                   </Table.Td>
                   <Table.Td>{t(o.kind === 'test' ? 'acme.issued.orders.test' : 'acme.issued.orders.issue')}</Table.Td>
                   <Table.Td>
-                    <StatusBadge tone={tone(o.state)} icon={icon(o.state)} size="sm">
-                      {t(orderStateKey(o.state))}
-                    </StatusBadge>
+                    <Group gap={4}>
+                      <StatusBadge tone={tone(o.state)} icon={icon(o.state)} size="sm">
+                        {t(orderStateKey(o.state))}
+                      </StatusBadge>
+                      {o.revoked_at && (
+                        <StatusBadge tone="danger" icon="ShieldAlert" size="sm" testId="order-revoked">
+                          {t('acme.issued.revoke.revokedBadge')}
+                        </StatusBadge>
+                      )}
+                      {!o.revoked_at && o.compromised && (
+                        <StatusBadge tone="danger" icon="KeyRound" size="sm">
+                          {t('acme.issued.revoke.compromisedBadge')}
+                        </StatusBadge>
+                      )}
+                    </Group>
                   </Table.Td>
                   <Table.Td>{o.error ? <Problem error={o.error} /> : o.cleanup_error ? <Problem error={o.cleanup_error} /> : ''}</Table.Td>
                   <Table.Td>{t(o.trigger === 'renewal' ? 'acme.issued.orders.renewal' : 'acme.issued.orders.manual')}</Table.Td>
@@ -477,6 +497,20 @@ function CurrentPanel({ c }: { c: ACMECertificate }) {
     { key: 'from', label: t('acme.issued.current.validFrom'), value: formatDate(cur.not_before, i18n.language) },
     { key: 'until', label: t('acme.issued.current.validUntil'), value: <Expiry notAfter={cur.not_after} /> },
     { key: 'chain', label: t('acme.issued.current.chain'), value: t(cur.chain_complete ? 'acme.issued.current.chainComplete' : 'acme.issued.current.chainIncomplete') },
+    ...(cur.revoked_at
+      ? [
+          {
+            key: 'revoked',
+            label: t('acme.issued.current.revoked'),
+            value: t('acme.issued.current.revokedValue', {
+              date: formatDateTime(cur.revoked_at, i18n.language),
+              reason: t(`acme.issued.revoke.reasons.${cur.revocation_reason || 'unspecified'}`),
+            }),
+            testId: 'current-revoked',
+          },
+        ]
+      : []),
+    ...(cur.compromised ? [{ key: 'compromised', label: t('acme.issued.current.compromised'), value: t('acme.issued.current.compromisedValue'), testId: 'current-compromised' }] : []),
   ];
   return (
     <Panel title={t('acme.issued.current.title')} testId="current-panel">

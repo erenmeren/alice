@@ -25,7 +25,7 @@ function base(opts: { session?: SessionInfo; items?: ACMECertificate[]; provider
 
 const issued = (o: Partial<ACMECertificate> = {}) =>
   acmeCertificateFixture({
-    current: { id: '0192c000-0000-7000-8000-0000000000c9', fingerprint_sha256: 'ab'.repeat(32), not_before: '2026-10-01T00:00:00Z', not_after: '2099-12-30T00:00:00Z', chain_complete: true },
+    current: { id: '0192c000-0000-7000-8000-0000000000c9', fingerprint_sha256: 'ab'.repeat(32), not_before: '2026-10-01T00:00:00Z', not_after: '2099-12-30T00:00:00Z', chain_complete: true, revoked_at: null, revocation_reason: '', compromised: false },
     ...o,
   });
 

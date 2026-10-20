@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { DeployResult, ErrorRef } from './types';
+import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty } from './types';
 
 // ACME certificate issuance (api/openapi.yaml, /api/v1/acme). The names follow the API's snake_case schemas. No type
 // here carries a secret the server keeps: the EAB HMAC key and the DNS hook secret are write-only request fields
@@ -111,6 +111,9 @@ export interface ACMECurrentCertificate {
   not_before: string;
   not_after: string;
   chain_complete: boolean;
+  revoked_at: string | null;
+  revocation_reason: RevocationReasonOrEmpty;
+  compromised: boolean;
 }
 
 export interface ACMEBinding {
@@ -221,6 +224,9 @@ export interface ACMEOrder {
   presented: number;
   cleanup_at: string | null;
   cleanup_error: ErrorRef | null;
+  revoked_at: string | null;
+  revocation_reason: RevocationReasonOrEmpty;
+  compromised: boolean;
 }
 
 export interface ACMEDeploy {
@@ -338,5 +344,11 @@ export const putACMEBinding = (id: string, locationId: string, autoDeploy: boole
   apiFetch<ACMEBinding>(`${v1}/certificates/${enc(id)}/bindings/${enc(locationId)}`, { method: 'PUT', body: { auto_deploy: autoDeploy } });
 export const deleteACMEBinding = (id: string, locationId: string) =>
   apiFetch<void>(`${v1}/certificates/${enc(id)}/bindings/${enc(locationId)}`, { method: 'DELETE' });
+// revokeACMECertificate revokes a version (none named: the current certificate) at the CA; it cannot be undone.
+export const revokeACMECertificate = (id: string, reason: RevocationReason, certificateId?: string) =>
+  apiFetch<Certificate>(`${v1}/certificates/${enc(id)}/revoke`, {
+    method: 'POST',
+    body: certificateId ? { reason, certificate_id: certificateId } : { reason },
+  });
 export const deployACMECertificate = (id: string, body: ACMEDeploy = {}) =>
   apiFetch<DeployResult>(`${v1}/certificates/${enc(id)}/deploy`, { method: 'POST', body });

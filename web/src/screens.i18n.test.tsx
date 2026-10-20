@@ -6,6 +6,8 @@ import type { ApiToken, AuditEntry } from './api/types';
 import {
   aliceKeyLocation,
   certificateDetailFixture,
+  certificateImpactFixture,
+  incidentFixture,
   certificateFixture,
   csrFixture,
   deploymentDetailFixture,
@@ -137,6 +139,8 @@ const dataHandlers = [
   http.get('/api/v1/certificates/csr', () => HttpResponse.json({ items: [csrFixture()] })),
   http.get('/api/v1/certificates', () => HttpResponse.json({ items: [certificateFixture(), certificateFixture({ id: 'c2', has_private_key: false, not_after: '2020-01-01T00:00:00Z' })], next_cursor: 'next' })),
   http.get('/api/v1/certificates/:id', () => HttpResponse.json(certificateDetailFixture({ id: '0192c000-0000-7000-8000-0000000000c1', chain_complete: false }))),
+  http.get('/api/v1/certificate-impact/:id', () => HttpResponse.json(certificateImpactFixture())),
+  http.get('/api/v1/incidents/:id', () => HttpResponse.json(incidentFixture())),
   http.get('/api/v1/deployments', () => HttpResponse.json({ items: [deploymentFixture(), deploymentFixture({ id: 'd2', status: 'needs_attention' })], next_cursor: null })),
   http.get('/api/v1/deployments/:id', () =>
     HttpResponse.json(

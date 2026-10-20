@@ -1,5 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
+import type { CertificateImpact, Incident } from '../api/incidents';
 import type { DashboardSummary } from '../api/phase7';
 import type { DiscoveredCertificate, DiscoveredEndpoint, DiscoveryPreview, DiscoveryScan, DiscoveryScope, DiscoverySettings } from '../api/discovery';
 import type { Provider } from '../api/sso';
@@ -482,6 +483,13 @@ export function certificateFixture(o: Partial<Certificate> = {}): Certificate {
     location_count: 1,
     first_seen_at: '2026-10-01T08:00:00Z',
     last_seen_at: '2026-10-01T08:00:00Z',
+    public_key_sha256: 'cd34'.repeat(16),
+    revoked_at: null,
+    revocation_reason: '',
+    revoked_by_name: '',
+    compromised_at: null,
+    acme_certificate_id: null,
+    capabilities: ['discover', 'deploy', 'verify'],
     ...o,
   };
 }
@@ -1127,6 +1135,9 @@ export function acmeOrderFixture(o: Partial<ACMEOrder> = {}): ACMEOrder {
     presented: 0,
     cleanup_at: null,
     cleanup_error: null,
+    revoked_at: null,
+    revocation_reason: '',
+    compromised: false,
     ...o,
   };
 }
@@ -1137,6 +1148,9 @@ export const acmeCurrentFixture = (o: Partial<NonNullable<ACMECertificate['curre
   not_before: '2026-10-13T09:00:00Z',
   not_after: '2099-01-11T09:00:00Z',
   chain_complete: true,
+  revoked_at: null,
+  revocation_reason: '',
+  compromised: false,
   ...o,
 });
 
@@ -1273,4 +1287,67 @@ export function discoveredCertificateFixture(o: Partial<DiscoveredCertificate> =
 
 export function discoveryPreviewFixture(o: Partial<DiscoveryPreview> = {}): DiscoveryPreview {
   return { addresses: 1024, excluded_addresses: 0, hostnames: 0, ports: 2, sni_names: 0, endpoints: 2048, builtin_exclusions: [], ...o };
+}
+
+// Revocation and key-compromise incidents (2026-10-20): the impact of the Phase 4 certificate (two files on a server, one
+// with another certificate made with the same key, and one endpoint network discovery found) and an incident of it.
+export const INCIDENT_ID = '0192f100-0000-7000-8000-0000000000b1';
+
+export function certificateImpactFixture(o: Partial<CertificateImpact> = {}): CertificateImpact {
+  const c = certificateFixture();
+  return {
+    certificate: c,
+    certificates: [
+      { id: c.id, fingerprint: c.fingerprint, subject_cn: c.subject_cn, label: '', source: c.source, not_after: c.not_after, revoked_at: null, compromised_at: null, match: 'certificate' },
+      { id: '0192c000-0000-7000-8000-0000000000c7', fingerprint: 'ef56'.repeat(16), subject_cn: 'other.example.test', label: '', source: 'discovered', not_after: c.not_after, revoked_at: null, compromised_at: null, match: 'key' },
+    ],
+    locations: [
+      { location_id: locationFixture().id, target_id: targetFixture.id, target_name: targetFixture.name, target_type: 'nginx', cert_path: '/etc/nginx/ssl/www.crt', certificate_id: c.id, fingerprint: c.fingerprint, match: 'certificate', deployable: true, acme_certificate_id: null, kv_bound: false },
+      { location_id: '0192c000-0000-7000-8000-0000000000e7', target_id: targetFixture.id, target_name: targetFixture.name, target_type: 'nginx', cert_path: '/etc/nginx/ssl/other.crt', certificate_id: '0192c000-0000-7000-8000-0000000000c7', fingerprint: 'ef56'.repeat(16), match: 'key', deployable: true, acme_certificate_id: null, kv_bound: false },
+    ],
+    vaults: [],
+    endpoints: [
+      { endpoint_id: '0192c000-0000-7000-8000-0000000000f7', scope_id: '0192c000-0000-7000-8000-0000000000f8', scope_name: 'Office LAN', address: '10.0.0.9', port: 443, sni: '', host: '', fingerprint: c.fingerprint, state: 'present', last_seen: '2026-10-19T08:00:00Z', match: 'certificate' },
+    ],
+    endpoints_hidden: false,
+    truncated: false,
+    open_incident_id: null,
+    ...o,
+  };
+}
+
+export function incidentFixture(o: Partial<Incident> = {}): Incident {
+  const c = certificateFixture();
+  return {
+    id: INCIDENT_ID,
+    certificate_id: c.id,
+    certificate_name: c.subject_cn,
+    fingerprint: c.fingerprint,
+    source: 'acme',
+    public_key_sha256: c.public_key_sha256,
+    acme_certificate_id: ACME_CERT_ID,
+    state: 'needs_attention',
+    revoke_mode: 'after_verified',
+    revocation: 'pending',
+    order_id: ACME_ORDER_ID,
+    order_state: 'succeeded',
+    replacement_certificate_id: ACME_CURRENT_ID,
+    replacement_fingerprint: '0123456789abcdef'.repeat(4),
+    attention: { code: 'ALC-INC-0010', reason: 'incident.deployments_failed' },
+    revoke_attempts: 0,
+    next_attempt_at: null,
+    revoked_at: null,
+    started_by: '0192a000-0000-7000-8000-0000000000u1',
+    started_by_name: 'Ada',
+    closed_by: null,
+    created_at: '2026-10-20T08:00:00Z',
+    updated_at: '2026-10-20T08:05:00Z',
+    finished_at: null,
+    counts: { verified: 1, failed: 1 },
+    locations: [
+      { location_id: locationFixture().id, target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/www.crt', status: 'verified', deployment_id: '0192c000-0000-7000-8000-0000000000d1', error: null, attempts: 1, updated_at: '2026-10-20T08:04:00Z' },
+      { location_id: '0192c000-0000-7000-8000-0000000000e7', target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/api.crt', status: 'failed', deployment_id: '0192c000-0000-7000-8000-0000000000d2', error: { code: 'ALC-DEP-0006', reason: 'deployment.reload_failed' }, attempts: 1, updated_at: '2026-10-20T08:04:00Z' },
+    ],
+    ...o,
+  };
 }

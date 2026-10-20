@@ -729,7 +729,20 @@
       "ldap_signin_tested": "Directory sign-in tested",
       "ldap_mapping_created": "Directory group mapping added",
       "ldap_mapping_deleted": "Directory group mapping removed",
-      "ldap_mapping_denied": "Directory group mapping refused"
+      "ldap_mapping_denied": "Directory group mapping refused",
+      "acme_certificate_revoked": "Certificate revoked at its certificate authority",
+      "acme_certificate_revoke_failed": "Certificate could not be revoked at its certificate authority",
+      "certificate_compromised": "Private key marked compromised",
+      "incident_started": "Key compromise incident started",
+      "incident_replacement_chosen": "Replacement chosen for a key compromise incident",
+      "incident_deployed": "Replacement deployed everywhere (key compromise incident)",
+      "incident_revoked": "Compromised certificate revoked (key compromise incident)",
+      "incident_completed": "Key compromise incident completed",
+      "incident_needs_attention": "Key compromise incident needs attention",
+      "incident_revoke_failed": "Revocation failed (key compromise incident)",
+      "incident_retried": "Key compromise incident retried",
+      "incident_revoke_now": "Revoke now chosen (key compromise incident)",
+      "incident_closed": "Key compromise incident closed"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -1387,6 +1400,9 @@
       },
       "tls": {
         "renew": "Temporary certificate renewal"
+      },
+      "incident": {
+        "advance": "Key compromise incidents"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
@@ -1634,6 +1650,82 @@
       "nextActionExpired": "Upload a valid replacement on the Certificates page, then deploy it to the same locations.",
       "readOnly": "Read only",
       "discovered": "Found on the network, not managed ({{count}})"
+    },
+    "capabilities": {
+      "title": "What Alice can do with it",
+      "description": "Depends on where the certificate comes from.",
+      "names": {
+        "discover": "Find",
+        "obtain": "Obtain",
+        "renew": "Renew",
+        "deploy": "Deploy",
+        "verify": "Verify",
+        "revoke": "Revoke",
+        "recovery": "Recover"
+      },
+      "yes": {
+        "discover": "Alice finds where it is used, on your servers and on the network.",
+        "obtain": "Alice gets it from its certificate authority herself.",
+        "renew": "Alice renews it before it expires.",
+        "deploy": "Alice can put it on your servers.",
+        "verify": "After a deployment Alice checks that the server serves it.",
+        "revoke": "Alice can ask its certificate authority to revoke it.",
+        "recovery": "After an outage of the authority, the DNS or a hook, Alice resumes its renewal by herself."
+      },
+      "no": {
+        "discover": "Alice does not look for it.",
+        "obtain": "It comes from outside Alice: someone brought it, or a key vault or a server holds it.",
+        "renew": "Alice does not renew it; its issuer (or Azure Key Vault) does.",
+        "deploy": "Alice does not hold its private key, so she cannot deploy it.",
+        "verify": "Alice checks only what she deploys.",
+        "revoke": "Alice did not order it from a certificate authority, so only its issuing authority can revoke it.",
+        "recovery": "Alice does not renew it, so there is no renewal to recover."
+      },
+      "revokedAlready": "It is revoked already.",
+      "deployBlocked": "It is revoked or its key is marked compromised, so Alice never deploys it again.",
+      "noRevokeTitle": "Revocation happens at the issuing authority",
+      "noRevokeText": "If its private key leaked, start a key compromise incident: Alice marks it compromised and replaces it everywhere, and you ask the authority that issued it to revoke it."
+    },
+    "impact": {
+      "title": "Where it is used",
+      "description": "Every place that holds this certificate or another certificate made with the same private key.",
+      "summary": "Servers: {{servers}} · Key vault versions: {{vaults}} · Network endpoints: {{endpoints}}",
+      "sameKey_one": "{{count}} other certificate was made with the same private key:",
+      "sameKey_other": "{{count}} other certificates were made with the same private key:",
+      "none": "Not in use anywhere Alice knows of",
+      "noneText": "No managed server, key vault or discovered endpoint holds this certificate or its key.",
+      "servers": "Servers",
+      "vaults": "Key vault versions",
+      "endpoints": "Network endpoints",
+      "columns": {
+        "match": "Holds",
+        "replace": "Replacement",
+        "vault": "Key vault",
+        "name": "Certificate",
+        "endpoint": "Endpoint",
+        "scope": "Scope",
+        "lastSeen": "Last seen"
+      },
+      "match": {
+        "certificate": "This certificate",
+        "key": "Same key"
+      },
+      "replace": {
+        "alice": "Alice can replace it",
+        "manual": "Replace by hand",
+        "vault": "Replace in the key vault"
+      },
+      "currentVersion": "(current version)",
+      "endpointsHidden": "Network endpoints are not shown to this sign-in (they need the network discovery permission).",
+      "truncated": "Only the first 1000 entries of a list are shown."
+    },
+    "revocation": {
+      "revokedTitle": "This certificate was revoked",
+      "revokedText": "Its certificate authority revoked it on {{date}} (reason: {{reason}}). Alice never deploys it again.",
+      "revokedBy": "Revoked by {{name}}.",
+      "compromisedTitle": "Its private key is marked compromised",
+      "compromisedText": "Marked on {{date}}. Alice never deploys it again. Only the authority that issued it can revoke it.",
+      "compromisedTextAcme": "Marked on {{date}}. Alice never deploys it again and revokes it at its certificate authority once it is replaced."
     }
   },
   "locations": {
@@ -3330,7 +3422,11 @@
         "chain": "Certificate chain",
         "chainComplete": "Complete",
         "chainIncomplete": "Incomplete: an administrator confirms before it is deployed",
-        "open": "Open in the certificate list"
+        "open": "Open in the certificate list",
+        "revoked": "Revoked",
+        "revokedValue": "{{date}} ({{reason}})",
+        "compromised": "Private key",
+        "compromisedValue": "Marked compromised"
       },
       "bindings": {
         "title": "Websites using this certificate",
@@ -3474,7 +3570,32 @@
         "testFirst": "Run a test first",
         "later": "Open the certificate"
       },
-      "rearmedOrdered": "Automatic renewal is on again, and Alice is ordering the certificate now. The orders below show how it goes."
+      "rearmedOrdered": "Automatic renewal is on again, and Alice is ordering the certificate now. The orders below show how it goes.",
+      "revoke": {
+        "action": "Revoke",
+        "title": "Revoke the certificate?",
+        "text": "Alice asks the certificate authority to revoke the certificate. This cannot be undone: browsers may refuse it from then on, and Alice never deploys it again.",
+        "leakedTitle": "Did the private key leak?",
+        "leakedText": "Then start a key compromise incident from the certificate's page instead: Alice first replaces it everywhere with a certificate made with a new key, and revokes it afterwards.",
+        "version": "Certificate",
+        "reason": "Reason",
+        "reasons": {
+          "unspecified": "Unspecified",
+          "keyCompromise": "Key compromise",
+          "affiliationChanged": "Affiliation changed",
+          "superseded": "Superseded",
+          "cessationOfOperation": "Cessation of operation"
+        },
+        "understood": "I understand that a revocation cannot be undone.",
+        "confirm": "Revoke the certificate",
+        "done": "The certificate is revoked.",
+        "doneRenew": "Automatic renewal is on: Alice orders a new certificate shortly. Deploy it where the revoked one is still served.",
+        "doneNoRenew": "Automatic renewal is off: order a new certificate with Order now and deploy it where the revoked one is still served.",
+        "currentVersion": "Current certificate (issued {{time}})",
+        "olderVersion": "Earlier certificate (issued {{time}})",
+        "revokedBadge": "Revoked",
+        "compromisedBadge": "Key compromised"
+      }
     }
   },
   "discovery": {
@@ -3906,5 +4027,128 @@
     "removeMappingTitle": "Remove the mapping for {{group}}?",
     "removeMappingText": "Members of this group no longer get this role at their next sign-in or confirmation.",
     "removeMappingConfirm": "Remove mapping"
+  },
+  "incidents": {
+    "openIncident": "Open the incident",
+    "title": "Key compromise incident",
+    "description": "Replacing this certificate everywhere:",
+    "backToCertificate": "Certificate",
+    "adminOnly": "Only an Administrator acts on an incident.",
+    "summary": "Summary",
+    "notRevocableTitle": "Revoke it at the issuing authority",
+    "notRevocableText": "Alice did not order this certificate from a certificate authority, so she cannot revoke it. Ask the authority that issued it to revoke it; Alice has marked it compromised and replaces it on your servers.",
+    "start": {
+      "action": "Key compromised…",
+      "title": "Start a key compromise incident?",
+      "intro": "Use this when the private key of this certificate is no longer secret. Alice then:",
+      "stepMark": "marks this certificate and every other certificate made with the same key as compromised, for good (they are never deployed again);",
+      "stepOrder": "orders a new certificate from the certificate authority, with a new private key;",
+      "stepChoose": "waits for you to choose the replacement: a certificate made with a new private key that you upload;",
+      "stepDeploy": "deploys the replacement to every server file that holds this certificate, and checks each one;",
+      "stepRevoke": "revokes this certificate at the certificate authority (reason: key compromise) once every replacement is verified.",
+      "stepNoRevoke": "cannot revoke it: only the authority that issued it can.",
+      "notRevocableTitle": "Alice cannot revoke this certificate",
+      "notRevocableText": "It does not come from an order Alice made. Ask the authority that issued it to revoke it.",
+      "revokeNow": "Revoke at once, without waiting for the replacement",
+      "revokeNowHelp": "Websites that still serve this certificate may stop working until the replacement is deployed.",
+      "understood": "I understand that this cannot be undone.",
+      "confirm": "Start the incident"
+    },
+    "facts": {
+      "certificate": "Compromised certificate",
+      "started": "Started",
+      "replacement": "Replacement",
+      "replacementOrdering": "Being ordered",
+      "replacementNone": "Not chosen yet",
+      "revocation": "Revocation",
+      "revokeMode": "Revoke",
+      "revokedAt": "Revoked",
+      "nextRevoke": "Next revocation attempt",
+      "nextRevokeValue": "{{time}} (attempt {{count}} failed)",
+      "finished": "Finished"
+    },
+    "states": {
+      "awaiting_replacement": "Waiting for the replacement",
+      "ordering": "Ordering a new certificate",
+      "deploying": "Deploying the replacement",
+      "revoking": "Revoking",
+      "needs_attention": "Needs attention",
+      "completed": "Completed",
+      "closed": "Closed"
+    },
+    "revocation": {
+      "pending": "Not yet",
+      "revoked": "Revoked at the certificate authority",
+      "failed": "Failed",
+      "not_possible": "Not possible (ask the issuing authority)"
+    },
+    "revokeMode": {
+      "after_verified": "After every replacement is verified",
+      "now": "At once"
+    },
+    "locationStatus": {
+      "pending": "Waiting",
+      "deploying": "Deploying",
+      "verified": "Replaced and checked",
+      "unverified": "Replaced, not checked",
+      "failed": "Failed",
+      "skipped": "Not replaced by Alice"
+    },
+    "busy": {
+      "ordering": "Alice is ordering the new certificate. This page updates itself.",
+      "deploying": "Alice is deploying the replacement. This page updates itself.",
+      "revoking": "Alice is revoking the compromised certificate. This page updates itself."
+    },
+    "notice": {
+      "awaiting_replacement": "Choose the replacement",
+      "ordering": "A new certificate is being ordered",
+      "deploying": "The replacement is being deployed",
+      "revoking": "The compromised certificate is being revoked",
+      "needs_attention": "This incident needs your attention",
+      "completed": "The incident is completed",
+      "closed": "The incident was closed"
+    },
+    "noticeText": {
+      "awaiting_replacement": "Upload a certificate made with a new private key, then choose it here. Alice deploys it to every affected place.",
+      "ordering": "The certificate authority is issuing a certificate with a new private key. Alice deploys it as soon as it arrives.",
+      "deploying": "Alice puts the replacement on every affected place and checks it. The compromised certificate is revoked afterwards.",
+      "revoking": "Every replacement is verified. Alice is asking the certificate authority to revoke the compromised certificate.",
+      "completed": "The replacement is deployed everywhere Alice could, and the compromised certificate is revoked where Alice can revoke it.",
+      "closed": "An administrator closed the incident. Places not replaced keep what they serve."
+    },
+    "actions": {
+      "retry": "Retry",
+      "choose": "Choose the replacement",
+      "revokeNow": "Revoke now regardless",
+      "close": "Close the incident"
+    },
+    "locations": {
+      "title": "Affected places",
+      "description": "Certificate files on managed servers that hold the compromised certificate or its key.",
+      "none": "No managed server holds the certificate. Check the network endpoints on the certificate's page.",
+      "status": "Status",
+      "detail": "Details",
+      "deployment": "Deployment"
+    },
+    "close": {
+      "title": "Close the incident?",
+      "text": "Alice stops working on it: no further deployment is requested and nothing more is revoked. Deployments already started go on. The certificates stay marked compromised.",
+      "confirm": "Close the incident"
+    },
+    "revokeNow": {
+      "title": "Revoke now regardless?",
+      "text": "Alice revokes the compromised certificate at its certificate authority now, without waiting for every replacement to be verified. Websites that still serve it may stop working. This cannot be undone.",
+      "confirm": "Revoke now"
+    },
+    "replacement": {
+      "title": "Choose the replacement",
+      "text": "Choose a certificate Alice holds the private key of, made with another key than the compromised one. Alice deploys it to every affected place.",
+      "certificate": "Replacement certificate",
+      "placeholder": "Choose a certificate",
+      "none": "No suitable certificate",
+      "uploadHint": "Not listed? Upload it first on the Certificates page.",
+      "openCertificates": "Open Certificates",
+      "confirm": "Use this certificate"
+    }
   }
 }

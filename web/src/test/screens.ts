@@ -1,5 +1,5 @@
 import type { SessionInfo, SetupStatus } from '../api/types';
-import { ACME_CERT_ID, freshStatus, installedStatus, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
+import { ACME_CERT_ID, freshStatus, INCIDENT_ID, installedStatus, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
 
 export interface Screen {
   path: string;
@@ -105,6 +105,8 @@ export const SCREENS: Screen[] = [
   { path: '/acme', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Next renewal', tr: 'Sonraki yenileme' } },
   { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'Websites using this certificate', tr: 'Bu sertifikayı kullanan web siteleri' } },
   { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Automatic renewal stopped', tr: 'Otomatik yenileme durdu' } },
+  // A key compromise incident that needs attention (2026-10-20).
+  { path: `/incidents/${INCIDENT_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Affected places', tr: 'Etkilenen yerler' } },
   // Network discovery: the Results, the Scopes with the no-network banner, and the Scans with a failed scan.
   { path: '/discovery', session: sessionFor('admin'), status: installedStatus, ready: { en: 'What “unmanaged” means', tr: '“Yönetilmiyor” ne demek?' } },
   {

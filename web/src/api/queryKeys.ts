@@ -88,6 +88,14 @@ export const acmeCertificateKey = (id: string) => ['acme', 'certificates', id] a
 export const acmeOrdersKey = (id: string) => ['acme', 'certificates', id, 'orders'] as const;
 export const acmeBindingsKey = (id: string) => ['acme', 'certificates', id, 'bindings'] as const;
 
+// Revocation and key-compromise incidents (2026-10-20). The impact of a certificate sits under its certificate key, so
+// invalidating CERTIFICATES_KEY refreshes it too; the incidents have a prefix of their own, lists under 'list'.
+export const certificateImpactKey = (id: string) => ['certificates', id, 'impact'] as const;
+export const CERTIFICATE_CAPABILITIES_KEY = ['certificate-capabilities'] as const;
+export const INCIDENTS_KEY = ['incidents'] as const;
+export const incidentKey = (id: string) => ['incidents', id] as const;
+export const incidentListKey = (filters: { open?: boolean; certificate_id?: string }) => ['incidents', 'list', filters] as const;
+
 // Network discovery. DISCOVERY_KEY is the prefix of everything; the lists sit under 'list' segments, so no id or
 // fingerprint can address the same entry. The scope preview is never cached (it is read with the form's own abort).
 export const DISCOVERY_KEY = ['discovery'] as const;

@@ -9,6 +9,7 @@ import { waitForJob } from './jobs';
 import { getKVImport } from './keyvault';
 import { getACMECertificate, listACMEOrders } from './acme';
 import { listAllDiscoveryScopes, listDiscoveryScans } from './discovery';
+import { getIncident } from './incidents';
 
 // AUD-01 follow-up: a request the SPA sends by itself (a poll) must never be state-changing: the
 // server slides a session's idle timeout on any non-GET request, so an automatic POST would keep
@@ -57,6 +58,8 @@ describe('polling', () => {
       'pages/DeploymentDetailPage.tsx',
       // the scan scopes while a scan is queued or running (listAllDiscoveryScopes: GETs)
       'pages/DiscoveryPage.tsx',
+      // an incident while Alice works on it (getIncident: a GET)
+      'pages/IncidentPage.tsx',
       'pages/KeyVaultDetailPage.tsx',
       'pages/RotationRunPage.tsx',
       'pages/TargetDetailPage.tsx',
@@ -81,6 +84,7 @@ describe('polling', () => {
       http.get('/api/v1/acme/certificates/:id/orders', () => HttpResponse.json({ items: [] })),
       http.get('/api/v1/discovery/scopes', () => HttpResponse.json({ items: [], next_cursor: null })),
       http.get('/api/v1/discovery/scans', () => HttpResponse.json({ items: [], next_cursor: null })),
+      http.get('/api/v1/incidents/:id', () => HttpResponse.json({})),
     );
     await getLicenseStatus();
     await getLicenseStatus({ keepalive: true });
@@ -93,6 +97,7 @@ describe('polling', () => {
     await listACMEOrders('a1', 20);
     await listAllDiscoveryScopes();
     await listDiscoveryScans();
+    await getIncident('i1');
     expect(methods.length).toBeGreaterThanOrEqual(10);
     expect(methods.filter((m) => !m.startsWith('GET '))).toEqual([]);
   });

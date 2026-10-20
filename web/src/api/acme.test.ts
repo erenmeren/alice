@@ -188,6 +188,8 @@ describe('the ACME client', () => {
       [() => acme.deleteACMEBinding('c1', 'l1'), 'DELETE', '/api/v1/acme/certificates/c1/bindings/l1'],
       [() => acme.deployACMECertificate('c1'), 'POST', '/api/v1/acme/certificates/c1/deploy', {}],
       [() => acme.deployACMECertificate('c1', { location_ids: ['l1'], confirm_incomplete_chain: true }), 'POST', '/api/v1/acme/certificates/c1/deploy', { location_ids: ['l1'], confirm_incomplete_chain: true }],
+      [() => acme.revokeACMECertificate('c1', 'superseded'), 'POST', '/api/v1/acme/certificates/c1/revoke', { reason: 'superseded' }],
+      [() => acme.revokeACMECertificate('c1', 'keyCompromise', 'l1'), 'POST', '/api/v1/acme/certificates/c1/revoke', { reason: 'keyCompromise', certificate_id: 'l1' }],
     ];
     for (const [call] of calls) await call();
     expect(seen).toEqual(calls.map(([, method, path, body]) => ({ method, path, body })));

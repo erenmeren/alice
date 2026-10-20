@@ -729,7 +729,20 @@
       "ldap_signin_tested": "Dizin ile oturum açma test edildi",
       "ldap_mapping_created": "Dizin grup eşlemesi eklendi",
       "ldap_mapping_deleted": "Dizin grup eşlemesi kaldırıldı",
-      "ldap_mapping_denied": "Dizin grup eşlemesi reddedildi"
+      "ldap_mapping_denied": "Dizin grup eşlemesi reddedildi",
+      "acme_certificate_revoked": "Sertifika, sertifika yetkilisinde iptal edildi",
+      "acme_certificate_revoke_failed": "Sertifika, sertifika yetkilisinde iptal edilemedi",
+      "certificate_compromised": "Özel anahtar ele geçirilmiş olarak işaretlendi",
+      "incident_started": "Anahtar ele geçirme olayı başladı",
+      "incident_replacement_chosen": "Anahtar ele geçirme olayı için yeni sertifika seçildi",
+      "incident_deployed": "Yeni sertifika her yere dağıtıldı (anahtar ele geçirme olayı)",
+      "incident_revoked": "Ele geçirilmiş sertifika iptal edildi (anahtar ele geçirme olayı)",
+      "incident_completed": "Anahtar ele geçirme olayı tamamlandı",
+      "incident_needs_attention": "Anahtar ele geçirme olayı ilgi gerektiriyor",
+      "incident_revoke_failed": "İptal başarısız oldu (anahtar ele geçirme olayı)",
+      "incident_retried": "Anahtar ele geçirme olayı yeniden denendi",
+      "incident_revoke_now": "Şimdi iptal seçildi (anahtar ele geçirme olayı)",
+      "incident_closed": "Anahtar ele geçirme olayı kapatıldı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -1387,6 +1400,9 @@
       },
       "tls": {
         "renew": "Geçici sertifika yenileme"
+      },
+      "incident": {
+        "advance": "Anahtar ele geçirme olayları"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
@@ -1634,6 +1650,82 @@
       "nextActionExpired": "Sertifikalar sayfasından geçerli bir yenisini yükleyin, ardından aynı konumlara dağıtın.",
       "readOnly": "Salt okunur",
       "discovered": "Ağda bulunan, yönetilmeyen ({{count}})"
+    },
+    "capabilities": {
+      "title": "Alice bununla ne yapabilir",
+      "description": "Sertifikanın nereden geldiğine bağlıdır.",
+      "names": {
+        "discover": "Bul",
+        "obtain": "Al",
+        "renew": "Yenile",
+        "deploy": "Dağıt",
+        "verify": "Doğrula",
+        "revoke": "İptal et",
+        "recovery": "Kurtar"
+      },
+      "yes": {
+        "discover": "Alice onun nerede kullanıldığını sunucularınızda ve ağda bulur.",
+        "obtain": "Alice onu sertifika yetkilisinden kendisi alır.",
+        "renew": "Alice onu süresi dolmadan yeniler.",
+        "deploy": "Alice onu sunucularınıza koyabilir.",
+        "verify": "Dağıtımdan sonra Alice sunucunun onu sunduğunu denetler.",
+        "revoke": "Alice sertifika yetkilisinden onu iptal etmesini isteyebilir.",
+        "recovery": "Yetkili, DNS ya da bir kanca kesintisinden sonra Alice yenilemeyi kendiliğinden sürdürür."
+      },
+      "no": {
+        "discover": "Alice onu aramaz.",
+        "obtain": "Alice'in dışından gelir: biri getirdi ya da bir anahtar kasası veya sunucu tutuyor.",
+        "renew": "Alice onu yenilemez; vereni (ya da Azure Key Vault) yeniler.",
+        "deploy": "Alice onun özel anahtarını tutmuyor, bu yüzden dağıtamaz.",
+        "verify": "Alice yalnızca kendi dağıttığını denetler.",
+        "revoke": "Alice onu bir sertifika yetkilisinden istemedi; bu yüzden onu yalnızca veren yetkili iptal edebilir.",
+        "recovery": "Alice onu yenilemez; dolayısıyla kurtarılacak bir yenileme yok."
+      },
+      "revokedAlready": "Zaten iptal edildi.",
+      "deployBlocked": "İptal edildi ya da anahtarı ele geçirilmiş olarak işaretlendi; Alice onu bir daha dağıtmaz.",
+      "noRevokeTitle": "İptal, veren yetkilide yapılır",
+      "noRevokeText": "Özel anahtarı sızdıysa bir anahtar ele geçirme olayı başlatın: Alice onu ele geçirilmiş olarak işaretler ve her yerde değiştirir; siz de veren yetkiliden onu iptal etmesini istersiniz."
+    },
+    "impact": {
+      "title": "Nerede kullanılıyor",
+      "description": "Bu sertifikayı ya da aynı özel anahtarla yapılmış başka bir sertifikayı tutan her yer.",
+      "summary": "Sunucular: {{servers}} · Anahtar kasası sürümleri: {{vaults}} · Ağ uç noktaları: {{endpoints}}",
+      "sameKey_one": "Aynı özel anahtarla {{count}} başka sertifika daha yapılmış:",
+      "sameKey_other": "Aynı özel anahtarla {{count}} başka sertifika daha yapılmış:",
+      "none": "Alice'in bildiği hiçbir yerde kullanılmıyor",
+      "noneText": "Hiçbir yönetilen sunucu, anahtar kasası ya da keşfedilen uç nokta bu sertifikayı veya anahtarını tutmuyor.",
+      "servers": "Sunucular",
+      "vaults": "Anahtar kasası sürümleri",
+      "endpoints": "Ağ uç noktaları",
+      "columns": {
+        "match": "Tuttuğu",
+        "replace": "Değiştirme",
+        "vault": "Anahtar kasası",
+        "name": "Sertifika",
+        "endpoint": "Uç nokta",
+        "scope": "Kapsam",
+        "lastSeen": "Son görülme"
+      },
+      "match": {
+        "certificate": "Bu sertifika",
+        "key": "Aynı anahtar"
+      },
+      "replace": {
+        "alice": "Alice değiştirebilir",
+        "manual": "Elle değiştirin",
+        "vault": "Anahtar kasasında değiştirin"
+      },
+      "currentVersion": "(güncel sürüm)",
+      "endpointsHidden": "Ağ uç noktaları bu oturuma gösterilmez (ağ keşfi izni gerekir).",
+      "truncated": "Bir listenin yalnızca ilk 1000 girdisi gösterilir."
+    },
+    "revocation": {
+      "revokedTitle": "Bu sertifika iptal edildi",
+      "revokedText": "Sertifika yetkilisi onu {{date}} tarihinde iptal etti (neden: {{reason}}). Alice onu bir daha dağıtmaz.",
+      "revokedBy": "İptal eden: {{name}}.",
+      "compromisedTitle": "Özel anahtarı ele geçirilmiş olarak işaretlendi",
+      "compromisedText": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz. Onu yalnızca veren yetkili iptal edebilir.",
+      "compromisedTextAcme": "{{date}} tarihinde işaretlendi. Alice onu bir daha dağıtmaz ve değiştirildikten sonra sertifika yetkilisinde iptal eder."
     }
   },
   "locations": {
@@ -3330,7 +3422,11 @@
         "chain": "Sertifika zinciri",
         "chainComplete": "Eksiksiz",
         "chainIncomplete": "Eksik: dağıtılmadan önce bir yönetici onaylar",
-        "open": "Sertifika listesinde aç"
+        "open": "Sertifika listesinde aç",
+        "revoked": "İptal edildi",
+        "revokedValue": "{{date}} (neden: {{reason}})",
+        "compromised": "Özel anahtar",
+        "compromisedValue": "Ele geçirilmiş olarak işaretlendi"
       },
       "bindings": {
         "title": "Bu sertifikayı kullanan web siteleri",
@@ -3474,7 +3570,32 @@
         "testFirst": "Önce bir deneme yap",
         "later": "Sertifikayı aç"
       },
-      "rearmedOrdered": "Otomatik yenileme yeniden açık ve Alice sertifikayı şimdi istiyor. Aşağıdaki istekler nasıl ilerlediğini gösterir."
+      "rearmedOrdered": "Otomatik yenileme yeniden açık ve Alice sertifikayı şimdi istiyor. Aşağıdaki istekler nasıl ilerlediğini gösterir.",
+      "revoke": {
+        "action": "İptal et",
+        "title": "Sertifika iptal edilsin mi?",
+        "text": "Alice sertifika yetkilisinden sertifikayı iptal etmesini ister. Bu geri alınamaz: tarayıcılar bundan sonra onu reddedebilir ve Alice onu bir daha dağıtmaz.",
+        "leakedTitle": "Özel anahtar mı sızdı?",
+        "leakedText": "O zaman bunun yerine sertifikanın sayfasından bir anahtar ele geçirme olayı başlatın: Alice önce onu her yerde yeni bir anahtarla yapılmış bir sertifikayla değiştirir, sonra iptal eder.",
+        "version": "Sertifika",
+        "reason": "Neden",
+        "reasons": {
+          "unspecified": "Belirtilmemiş",
+          "keyCompromise": "Anahtar ele geçirildi",
+          "affiliationChanged": "Bağlılık değişti",
+          "superseded": "Yerine yenisi geldi",
+          "cessationOfOperation": "Faaliyet sona erdi"
+        },
+        "understood": "Bir iptalin geri alınamayacağını anlıyorum.",
+        "confirm": "Sertifikayı iptal et",
+        "done": "Sertifika iptal edildi.",
+        "doneRenew": "Otomatik yenileme açık: Alice kısa süre içinde yeni bir sertifika ister. İptal edilen sertifikanın hâlâ sunulduğu yerlere onu dağıtın.",
+        "doneNoRenew": "Otomatik yenileme kapalı: Şimdi iste ile yeni bir sertifika isteyin ve iptal edilenin hâlâ sunulduğu yerlere dağıtın.",
+        "currentVersion": "Güncel sertifika ({{time}} tarihinde verildi)",
+        "olderVersion": "Önceki sertifika ({{time}} tarihinde verildi)",
+        "revokedBadge": "İptal edildi",
+        "compromisedBadge": "Anahtar ele geçirildi"
+      }
     }
   },
   "discovery": {
@@ -3906,5 +4027,128 @@
     "removeMappingTitle": "{{group}} eşlemesi kaldırılsın mı?",
     "removeMappingText": "Bu grubun üyeleri bir sonraki oturum açmada ya da kimlik onayında artık bu rolü almaz.",
     "removeMappingConfirm": "Eşlemeyi kaldır"
+  },
+  "incidents": {
+    "openIncident": "Olayı aç",
+    "title": "Anahtar ele geçirme olayı",
+    "description": "Bu sertifika her yerde değiştiriliyor:",
+    "backToCertificate": "Sertifika",
+    "adminOnly": "Bir olayda yalnızca bir Yönetici işlem yapar.",
+    "summary": "Özet",
+    "notRevocableTitle": "Onu veren yetkilide iptal edin",
+    "notRevocableText": "Alice bu sertifikayı bir sertifika yetkilisinden istemedi; bu yüzden onu iptal edemez. Veren yetkiliden onu iptal etmesini isteyin; Alice onu ele geçirilmiş olarak işaretledi ve sunucularınızda değiştiriyor.",
+    "start": {
+      "action": "Anahtar ele geçirildi…",
+      "title": "Bir anahtar ele geçirme olayı başlatılsın mı?",
+      "intro": "Bu sertifikanın özel anahtarı artık gizli değilse bunu kullanın. Alice sonra:",
+      "stepMark": "bu sertifikayı ve aynı anahtarla yapılmış diğer her sertifikayı kalıcı olarak ele geçirilmiş olarak işaretler (bir daha dağıtılmazlar);",
+      "stepOrder": "sertifika yetkilisinden yeni bir özel anahtarla yeni bir sertifika ister;",
+      "stepChoose": "yeni sertifikayı seçmenizi bekler: yüklediğiniz, yeni bir özel anahtarla yapılmış bir sertifika;",
+      "stepDeploy": "yeni sertifikayı bu sertifikayı tutan her sunucu dosyasına dağıtır ve her birini denetler;",
+      "stepRevoke": "her yeni sertifika doğrulandıktan sonra bu sertifikayı sertifika yetkilisinde iptal eder (neden: anahtar ele geçirildi).",
+      "stepNoRevoke": "onu iptal edemez: yalnızca veren yetkili edebilir.",
+      "notRevocableTitle": "Alice bu sertifikayı iptal edemez",
+      "notRevocableText": "Alice'in yaptığı bir siparişten gelmiyor. Veren yetkiliden onu iptal etmesini isteyin.",
+      "revokeNow": "Yeni sertifikayı beklemeden hemen iptal et",
+      "revokeNowHelp": "Bu sertifikayı hâlâ sunan web siteleri, yeni sertifika dağıtılana kadar çalışmayabilir.",
+      "understood": "Bunun geri alınamayacağını anlıyorum.",
+      "confirm": "Olayı başlat"
+    },
+    "facts": {
+      "certificate": "Ele geçirilmiş sertifika",
+      "started": "Başladı",
+      "replacement": "Yeni sertifika",
+      "replacementOrdering": "İsteniyor",
+      "replacementNone": "Henüz seçilmedi",
+      "revocation": "İptal",
+      "revokeMode": "İptal zamanı",
+      "revokedAt": "İptal edildi",
+      "nextRevoke": "Bir sonraki iptal denemesi",
+      "nextRevokeValue": "{{time}} ({{count}}. deneme başarısız oldu)",
+      "finished": "Bitti"
+    },
+    "states": {
+      "awaiting_replacement": "Yeni sertifika bekleniyor",
+      "ordering": "Yeni sertifika isteniyor",
+      "deploying": "Yeni sertifika dağıtılıyor",
+      "revoking": "İptal ediliyor",
+      "needs_attention": "İlgi gerekiyor",
+      "completed": "Tamamlandı",
+      "closed": "Kapatıldı"
+    },
+    "revocation": {
+      "pending": "Henüz değil",
+      "revoked": "Sertifika yetkilisinde iptal edildi",
+      "failed": "Başarısız",
+      "not_possible": "Mümkün değil (veren yetkiliye sorun)"
+    },
+    "revokeMode": {
+      "after_verified": "Her yeni sertifika doğrulandıktan sonra",
+      "now": "Hemen"
+    },
+    "locationStatus": {
+      "pending": "Bekliyor",
+      "deploying": "Dağıtılıyor",
+      "verified": "Değiştirildi ve denetlendi",
+      "unverified": "Değiştirildi, denetlenmedi",
+      "failed": "Başarısız",
+      "skipped": "Alice değiştirmiyor"
+    },
+    "busy": {
+      "ordering": "Alice yeni sertifikayı istiyor. Bu sayfa kendiliğinden güncellenir.",
+      "deploying": "Alice yeni sertifikayı dağıtıyor. Bu sayfa kendiliğinden güncellenir.",
+      "revoking": "Alice ele geçirilmiş sertifikayı iptal ediyor. Bu sayfa kendiliğinden güncellenir."
+    },
+    "notice": {
+      "awaiting_replacement": "Yeni sertifikayı seçin",
+      "ordering": "Yeni bir sertifika isteniyor",
+      "deploying": "Yeni sertifika dağıtılıyor",
+      "revoking": "Ele geçirilmiş sertifika iptal ediliyor",
+      "needs_attention": "Bu olay ilginizi gerektiriyor",
+      "completed": "Olay tamamlandı",
+      "closed": "Olay kapatıldı"
+    },
+    "noticeText": {
+      "awaiting_replacement": "Yeni bir özel anahtarla yapılmış bir sertifika yükleyin, sonra onu burada seçin. Alice onu etkilenen her yere dağıtır.",
+      "ordering": "Sertifika yetkilisi yeni bir özel anahtarla bir sertifika veriyor. Alice onu gelir gelmez dağıtır.",
+      "deploying": "Alice yeni sertifikayı etkilenen her yere koyar ve denetler. Ele geçirilmiş sertifika ardından iptal edilir.",
+      "revoking": "Her yeni sertifika doğrulandı. Alice sertifika yetkilisinden ele geçirilmiş sertifikayı iptal etmesini istiyor.",
+      "completed": "Yeni sertifika Alice'in yapabildiği her yere dağıtıldı ve ele geçirilmiş sertifika Alice'in iptal edebildiği yerde iptal edildi.",
+      "closed": "Bir yönetici olayı kapattı. Değiştirilmeyen yerler sundukları sertifikayı korur."
+    },
+    "actions": {
+      "retry": "Yeniden dene",
+      "choose": "Yeni sertifikayı seç",
+      "revokeNow": "Yine de şimdi iptal et",
+      "close": "Olayı kapat"
+    },
+    "locations": {
+      "title": "Etkilenen yerler",
+      "description": "Ele geçirilmiş sertifikayı ya da anahtarını tutan, yönetilen sunuculardaki sertifika dosyaları.",
+      "none": "Hiçbir yönetilen sunucu sertifikayı tutmuyor. Sertifikanın sayfasındaki ağ uç noktalarına bakın.",
+      "status": "Durum",
+      "detail": "Ayrıntılar",
+      "deployment": "Dağıtım"
+    },
+    "close": {
+      "title": "Olay kapatılsın mı?",
+      "text": "Alice olay üzerinde çalışmayı bırakır: başka dağıtım istenmez ve başka bir şey iptal edilmez. Başlamış dağıtımlar sürer. Sertifikalar ele geçirilmiş olarak işaretli kalır.",
+      "confirm": "Olayı kapat"
+    },
+    "revokeNow": {
+      "title": "Yine de şimdi iptal edilsin mi?",
+      "text": "Alice, her yeni sertifikanın doğrulanmasını beklemeden ele geçirilmiş sertifikayı şimdi sertifika yetkilisinde iptal eder. Onu hâlâ sunan web siteleri çalışmayabilir. Bu geri alınamaz.",
+      "confirm": "Şimdi iptal et"
+    },
+    "replacement": {
+      "title": "Yeni sertifikayı seçin",
+      "text": "Alice'in özel anahtarını tuttuğu ve ele geçirilmiş olandan başka bir anahtarla yapılmış bir sertifika seçin. Alice onu etkilenen her yere dağıtır.",
+      "certificate": "Yeni sertifika",
+      "placeholder": "Bir sertifika seçin",
+      "none": "Uygun sertifika yok",
+      "uploadHint": "Listede yok mu? Önce Sertifikalar sayfasında yükleyin.",
+      "openCertificates": "Sertifikaları aç",
+      "confirm": "Bu sertifikayı kullan"
+    }
   }
 }

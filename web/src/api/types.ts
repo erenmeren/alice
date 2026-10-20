@@ -525,7 +525,25 @@ export interface Certificate {
   location_count: number;
   first_seen_at: string;
   last_seen_at: string;
+  // Revocation, key compromise and the per-source capability matrix (2026-10-20).
+  public_key_sha256: string;
+  revoked_at: string | null;
+  revocation_reason: RevocationReasonOrEmpty;
+  revoked_by_name: string;
+  compromised_at: string | null;
+  acme_certificate_id: string | null;
+  capabilities: SourceCapability[];
 }
+
+// SourceCapability is one thing Alice can do with a certificate of a source (internal/inventory/source_capabilities.go;
+// a test keeps the lists equal).
+export type SourceCapability = 'discover' | 'obtain' | 'renew' | 'deploy' | 'verify' | 'revoke' | 'recovery';
+export const SOURCE_CAPABILITIES: readonly SourceCapability[] = ['discover', 'obtain', 'renew', 'deploy', 'verify', 'revoke', 'recovery'];
+
+// RevocationReason is an RFC 5280 reason a certificate owner gives (internal/acme/revoke.go).
+export type RevocationReason = 'unspecified' | 'keyCompromise' | 'affiliationChanged' | 'superseded' | 'cessationOfOperation';
+export type RevocationReasonOrEmpty = '' | RevocationReason;
+export const REVOCATION_REASONS: readonly RevocationReason[] = ['unspecified', 'keyCompromise', 'affiliationChanged', 'superseded', 'cessationOfOperation'];
 
 // CertificateDetail is GET /certificates/{id} and the certificate of an upload or a completion.
 export interface CertificateDetail extends Certificate {
