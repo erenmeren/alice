@@ -145,7 +145,7 @@ func TestReconcileStoresCertificatesAndLocations(t *testing.T) {
 	assert.Len(t, full.Locations, 2)
 
 	// A second identical run updates, never duplicates (S3 AC4), and changes nothing else.
-	before := locationRows(t, h, web1.ID, "last_seen_at")
+	before := locationRows(t, h, web1.ID, "last_seen_at", "file_observed_at")
 	h.clock.Advance(time.Hour)
 	sum, err := h.svc.Reconcile(h.ctx, web1.ID, providers.DiscoveryResult{WebServer: nginxOK,
 		Certificates: []providers.DiscoveredCertificate{dc(cl("/etc/nginx/ssl/www.crt", "/etc/nginx/ssl/www.key", "www.example.test"), shared)}})
@@ -158,7 +158,9 @@ func TestReconcileStoresCertificatesAndLocations(t *testing.T) {
 	assert.Equal(t, 1, got.Version, "an unchanged location keeps its version (an If-Match stays valid)")
 	assert.Equal(t, h.clock.Now(), got.LastSeenAt)
 	assert.Equal(t, l.FirstSeenAt, got.FirstSeenAt)
-	assert.Equal(t, before, locationRows(t, h, web1.ID, "last_seen_at"), "only last_seen_at moved")
+	assert.Equal(t, before, locationRows(t, h, web1.ID, "last_seen_at", "file_observed_at"), "only last_seen_at and the file observation moved")
+	assert.Equal(t, 1, h.count("SELECT count(*) FROM certificate_locations WHERE id = $1 AND file_observed_at = $2", l.ID, h.clock.Now()),
+		"a scan that read the file is its observation (R52)")
 	assert.Zero(t, h.audits("location.changed_outside"))
 	d := h.auditDetails("target.discovered")
 	require.Len(t, d, 3)
