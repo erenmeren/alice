@@ -838,13 +838,16 @@ earlier when the authority suggests it. **Next renewal** in the list is calculat
 and can differ from Alice's own plan by a few minutes.
 
 After a failed renewal Alice tries again after 1, 2, 4, 8 and 16 hours, then once a day, or later when the
-authority asks for a longer wait ("Renewal is failing … Alice tries again at <time>"). The alert recipients get an
-e-mail at the third failure in a row. After the fifth, the status is **Renewal stopped** and they get another
-e-mail; the current certificate keeps working until it expires. Fix the cause shown under **Last problem**, then:
+authority asks for a longer wait ("Renewal is failing … Alice tries again at <time>"). **Kind of the last problem**
+says whether it was a temporary outage (Alice keeps trying by itself, more often as the certificate nears its end,
+until it is renewed) or a cause that needs a person. The alert recipients get an e-mail at the third failure in a
+row, and reminders 14, 7, 3 and 1 days before the certificate ends while renewal fails. After the fifth failure that
+needs a person, the status is **Renewal stopped** and they get another e-mail; the current certificate keeps working
+until it expires. Fix the cause shown under **Last problem**, then:
 
 - an operator uses **Test run** to check, and **Order now** to renew at once: a successful order ends the stop;
-- an administrator can also choose **Renew now** (with a fresh code), which switches automatic renewal on again so
-  that Alice renews at the next planned time.
+- an administrator can also choose **Check again and resume** (with a fresh code), which switches automatic renewal
+  on again, clears the failures and orders the certificate at once.
 
 ### Websites of an issued certificate
 

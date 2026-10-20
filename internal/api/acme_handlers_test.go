@@ -420,11 +420,51 @@ func TestACMECertificateHandlers(t *testing.T) {
 
 	stopped := sampleACMECert()
 	stopped.State, stopped.Current, stopped.ARIWindowStart, stopped.ARIWindowEnd = inventory.ACMEStateStopped, nil, nil, nil
-	d := acmeCertificateJSON(stopped)
+	d := acmeCertificateJSON(stopped, acmeAt)
 	assert.Equal(t, acmeStoppedRenewalFailures, d.StoppedReason)
 	assert.Nil(t, d.Current)
 	assert.Nil(t, d.ARIWindow)
 	assert.Nil(t, d.Bindings, "the list carries no bindings")
+	assert.Nil(t, d.LastNotice, "the list carries no delivery")
+	assert.Equal(t, "", c["last_failure_class"])
+	assert.Equal(t, false, c["recovering"])
+	assert.NotContains(t, c, "last_notice", "no renewal e-mail yet")
+
+	// The failure class, the recovery after an outage and the delivery of the last renewal e-mail (owner decision
+	// 2026-10-20).
+	failing := sampleACMECert()
+	failing.State, failing.Failures, failing.PermanentFailures, failing.LastFailureClass = inventory.ACMEStateStopped, 7, 1, "transient"
+	f.GetACMECertificateFn = func(context.Context, uuid.UUID) (inventory.ACMECertificate, error) { return failing, nil }
+	sent := acmeAt.Add(time.Minute)
+	f.ACMENoticeDeliveryFn = func(context.Context, uuid.UUID) (*inventory.ACMENoticeDelivery, error) {
+		return &inventory.ACMENoticeDelivery{Template: "acme.renewal_expiring_transient", QueuedAt: acmeAt, Recipients: 3, Sent: 1, Pending: 1,
+			Failed: 1, SentAt: &sent, LastErrorCode: "smtp.auth"}, nil
+	}
+	rec = call(h, http.MethodGet, "/api/v1/acme/certificates/"+acmeCertID.String(), "alice_read_admin", "")
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+	c = jsonObj(t, rec)
+	assert.Equal(t, "transient", c["last_failure_class"])
+	assert.Equal(t, float64(1), c["permanent_failures"])
+	assert.Equal(t, true, c["recovering"], "stopped after an outage, the certificate still valid")
+	n := c["last_notice"].(map[string]any)
+	assert.Equal(t, "acme.renewal_expiring_transient", n["template"])
+	assert.Equal(t, float64(3), n["recipients"])
+	assert.Equal(t, float64(1), n["failed"])
+	assert.Equal(t, "smtp.auth", n["last_failure_code"])
+	assert.Equal(t, sent.UTC().Format(time.RFC3339), n["sent_at"])
+	expired := failing
+	cur := *failing.Current
+	cur.NotAfter = acmeAt.Add(-time.Hour)
+	expired.Current = &cur
+	assert.False(t, acmeCertificateJSON(expired, acmeAt).Recovering, "an expired certificate is not recovered by itself")
+	odd := failing
+	odd.LastFailureClass = "flaky"
+	assert.Equal(t, "", acmeCertificateJSON(odd, acmeAt).LastFailureClass)
+	f.ACMENoticeDeliveryFn = func(context.Context, uuid.UUID) (*inventory.ACMENoticeDelivery, error) {
+		return nil, inventory.ErrNotFound
+	}
+	assert.Equal(t, http.StatusNotFound, call(h, http.MethodGet, "/api/v1/acme/certificates/"+acmeCertID.String(), "alice_read_admin", "").Code)
+	f.ACMENoticeDeliveryFn = nil
 
 	// Patch and delete.
 	var patch inventory.ACMECertificatePatch
@@ -890,8 +930,8 @@ func TestACMEDTOFallbacks(t *testing.T) {
 	assert.Equal(t, inventory.ACMEBindingPending, acmeBindingJSON(b).State)
 	c := sampleACMECert()
 	c.DeployHeldReason = "bogus"
-	assert.Empty(t, acmeCertificateJSON(c).DeployHeldReason)
-	assert.Nil(t, acmeCertificateJSON(inventory.ACMECertificate{}).LastError)
+	assert.Empty(t, acmeCertificateJSON(c, acmeAt).DeployHeldReason)
+	assert.Nil(t, acmeCertificateJSON(inventory.ACMECertificate{}, acmeAt).LastError)
 	assert.Equal(t, []string{}, acmeProviderJSON(inventory.ACMEProvider{}).AllowedSuffixes)
 }
 

@@ -142,6 +142,12 @@ export interface ACMECertificate {
   state: ACMECertificateState;
   stopped_reason: '' | 'renewal_failures';
   failures: number;
+  // The class of the last failure: an outage that clears by itself, or a cause that needs a person ('' without one).
+  last_failure_class: ACMEFailureClass;
+  // The permanent failures among them: 5 stop automatic renewal; outages never do while the certificate is valid.
+  permanent_failures: number;
+  // Stopped, but the last failure was an outage: Alice still orders it again by itself, slowly, until it expires.
+  recovering: boolean;
   next_attempt_at: string | null;
   last_attempt_at: string | null;
   last_error: ErrorRef | null;
@@ -153,8 +159,25 @@ export interface ACMECertificate {
   bindings_count: number;
   // GET of one certificate only.
   bindings?: ACMEBinding[];
+  // GET of one certificate only, absent before its first renewal e-mail: how the newest one was delivered.
+  last_notice?: ACMENoticeDelivery;
   created_at: string;
   updated_at: string;
+}
+
+export type ACMEFailureClass = '' | 'transient' | 'permanent';
+
+// The delivery of the newest renewal e-mail of a certificate: one copy per recipient, by outcome.
+export interface ACMENoticeDelivery {
+  template: string;
+  queued_at: string;
+  recipients: number;
+  sent: number;
+  pending: number;
+  failed: number;
+  skipped: number;
+  sent_at: string | null;
+  last_failure_code: string;
 }
 
 export interface ACMECertificateCreate {

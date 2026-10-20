@@ -143,7 +143,51 @@ describe('Issued certificate status page', () => {
     expect(screen.queryAllByRole('button').filter((b) => !b.closest('aside') && !b.closest('header'))).toEqual([]);
   });
 
-  it('lets an Administrator renew a stopped certificate (Renew now) after a fresh step-up, and reads it again', async () => {
+  it('tells an outage from a cause that needs a person, and offers Check again and resume while it fails', async () => {
+    let rearms = 0;
+    base({
+      session: sessionFor('admin'),
+      cert: issued({ state: 'failing', failures: 4, last_failure_class: 'transient', next_attempt_at: '2026-10-14T10:00:00Z',
+        last_error: { code: 'ALC-ACM-0001', reason: 'acme.provider_unreachable' },
+        last_notice: { template: 'acme.renewal_failed', queued_at: '2026-10-13T09:00:00Z', recipients: 3, sent: 2, pending: 0, failed: 1, skipped: 0,
+          sent_at: '2026-10-13T09:01:00Z', last_failure_code: 'smtp.auth' } }),
+      extra: [http.post(`${BASE}/rearm`, () => (rearms++, HttpResponse.json(issued({ state: 'issuing', running_order_id: 'b1b1b1b1-0000-4000-8000-000000000001' }))))],
+    });
+    await open();
+    const failing = await screen.findByTestId('failing');
+    expect(failing).toHaveTextContent('The cause looks temporary');
+    expect(failing).toHaveTextContent('Alice keeps trying by itself, at least once a day');
+    expect(screen.getByTestId('failure-class')).toHaveTextContent('Temporary (an outage)');
+    expect(screen.getByTestId('last-notice')).toHaveTextContent(/Not delivered to 1 of 3 recipients \(smtp\.auth;/);
+    await userEvent.click(within(failing).getByRole('button', { name: 'Check again and resume' }));
+    await waitFor(() => expect(rearms).toBe(1));
+  });
+
+  it('counts down the permanent failures that stop renewal, and shows a recovering stop', async () => {
+    base({ session: sessionFor('operator'), cert: issued({ state: 'failing', failures: 3, permanent_failures: 3, last_failure_class: 'permanent' }) });
+    await open();
+    const failing = await screen.findByTestId('failing');
+    expect(failing).toHaveTextContent('If 2 more attempts fail like this, Alice stops trying by itself.');
+    expect(within(failing).queryByRole('button', { name: 'Check again and resume' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('failure-class')).toHaveTextContent('Needs a person');
+  });
+
+  it('says that a certificate stopped after an outage is still retried by itself', async () => {
+    base({
+      session: sessionFor('admin'),
+      cert: issued({ state: 'stopped', stopped_reason: 'renewal_failures', failures: 6, last_failure_class: 'transient', recovering: true,
+        next_attempt_at: '2026-10-14T10:00:00Z', last_notice: { template: 'acme.renewal_expiring_transient', queued_at: '2026-10-13T09:00:00Z',
+          recipients: 2, sent: 0, pending: 0, failed: 0, skipped: 2, sent_at: null, last_failure_code: 'smtp.not_configured' } }),
+    });
+    await open();
+    const notice = await screen.findByTestId('stopped');
+    expect(notice).toHaveTextContent('the last problem was a temporary outage: Alice still tries again by itself');
+    expect(screen.getByTestId('next-attempt')).toBeInTheDocument();
+    expect(screen.getByTestId('renews')).toHaveTextContent('Next attempt');
+    expect(screen.getByTestId('last-notice')).toHaveTextContent('Not sent: no mail server is set');
+  });
+
+  it('lets an Administrator resume a stopped certificate (Check again and resume) after a fresh step-up, and reads it again', async () => {
     let rearms = 0;
     let stopped = true;
     const counts = base({
@@ -154,7 +198,7 @@ describe('Issued certificate status page', () => {
           rearms++;
           if (rearms === 1) return errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required');
           stopped = false;
-          return HttpResponse.json(issued());
+          return HttpResponse.json(issued({ state: 'issuing', running_order_id: 'b1b1b1b1-0000-4000-8000-000000000001' }));
         }),
         http.post('/api/v1/auth/stepup', () => HttpResponse.json(steppedUp())),
       ],
@@ -164,23 +208,23 @@ describe('Issued certificate status page', () => {
     expect(notice).toHaveTextContent('Automatic renewal stopped');
     expect(notice).toHaveTextContent(/after 5 failed attempts in a row/);
     expect(screen.getByTestId('renews')).toHaveTextContent('Stopped');
-    // Renew now switches renewal on again; it does not order at once: the text says how to renew right now.
-    expect(notice).toHaveTextContent('To renew right now, use Order now.');
+    // Check again and resume switches renewal on again and orders at once (owner decision 2026-10-20).
+    expect(notice).toHaveTextContent('choose Check again and resume: Alice orders the certificate at once');
     const before = counts.cert;
-    await userEvent.click(within(notice).getByRole('button', { name: 'Renew now' }));
+    await userEvent.click(within(notice).getByRole('button', { name: 'Check again and resume' }));
     await stepUpFlow();
-    expect(await screen.findByText(/Automatic renewal is on again\..*To renew right now, use Order now\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Automatic renewal is on again, and Alice is ordering the certificate now\./)).toBeInTheDocument();
     expect(rearms).toBe(2);
     await waitFor(() => expect(counts.cert).toBeGreaterThan(before));
     await waitFor(() => expect(screen.queryByTestId('stopped')).not.toBeInTheDocument());
   });
 
-  it('tells an Operator how to go on with a stopped certificate, without Renew now', async () => {
+  it('tells an Operator how to go on with a stopped certificate, without Check again and resume', async () => {
     base({ session: sessionFor('operator'), cert: issued({ state: 'stopped', stopped_reason: 'renewal_failures', failures: 5 }) });
     await open();
     const notice = await screen.findByTestId('stopped');
-    expect(within(notice).queryByRole('button', { name: 'Renew now' })).not.toBeInTheDocument();
-    expect(notice).toHaveTextContent(/Only an administrator can switch automatic renewal on again \(Renew now\)/);
+    expect(within(notice).queryByRole('button', { name: 'Check again and resume' })).not.toBeInTheDocument();
+    expect(notice).toHaveTextContent(/Only an administrator can resume automatic renewal \(Check again and resume\)/);
     expect(notice).toHaveTextContent('use Test run or Order now.');
     expect(screen.getByRole('button', { name: 'Order now' })).toBeEnabled();
   });
@@ -201,7 +245,7 @@ describe('Issued certificate status page', () => {
       extra: [http.post(`${BASE}/rearm`, () => errorResponse(403, 'ALC-AUTH-0003', 'auth.stepup_required'))],
     });
     await open();
-    await userEvent.click(within(await screen.findByTestId('stopped')).getByRole('button', { name: 'Renew now' }));
+    await userEvent.click(within(await screen.findByTestId('stopped')).getByRole('button', { name: 'Check again and resume' }));
     const stepUp = await screen.findByRole('dialog', { name: "Confirm it's you" });
     await userEvent.click(within(stepUp).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
@@ -351,7 +395,7 @@ describe('Issued certificate status page', () => {
     expect(await screen.findByText('The license does not allow changes now')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Test run' })).toBeDisabled());
     expect(screen.getByRole('button', { name: 'Order now' })).toBeDisabled();
-    expect(within(screen.getByTestId('stopped')).getByRole('button', { name: 'Renew now' })).toBeDisabled();
+    expect(within(screen.getByTestId('stopped')).getByRole('button', { name: 'Check again and resume' })).toBeDisabled();
     expect(screen.getByTestId('stopped')).toHaveTextContent('The license does not allow this now.');
     expect(await screen.findByRole('button', { name: 'Deploy now' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Add websites' })).toBeDisabled();
@@ -399,7 +443,7 @@ describe('Issued certificate status page', () => {
   it('renders in Turkish with the e-mail labels', async () => {
     base({ session: { ...sessionFor('admin', 'tr'), stepup_until: null }, cert: issued({ state: 'stopped', stopped_reason: 'renewal_failures', failures: 3 }), bindings: [acmeBindingFixture()] });
     await open(['tr']);
-    expect(await screen.findByRole('button', { name: 'Şimdi yenile' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Yeniden dene ve sürdür' })).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Şimdi dağıt' })).toBeInTheDocument();
     expect(screen.getAllByText('Verilen sertifikalar').length).toBeGreaterThan(0);
     expectNoRawKeys();

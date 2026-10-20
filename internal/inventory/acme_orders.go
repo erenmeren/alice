@@ -38,11 +38,12 @@ import (
 // transaction) and taken out once it is removed again (RemoveACMEPresented), so whatever is left after an order ended
 // (a hook that was down, a crash) is removed by the acme.cleanup job, which runs in every license state.
 //
-// Boundary with Task 11 (the renewal planner): FailACMEOrder writes the failure state of an issue order consistently
-// (failures + 1, state failing unless stopped, last_error_code, last_attempt_at, next_attempt_at = now +
-// max(ACMEFailureBackoff(failures), the CA's Retry-After capped at 24 h)); FinishACMEOrder resets it (next_attempt_at
-// NULL). Deciding WHEN to order (renewal window, ARI, next_attempt_at, stop after 5 failures, e-mails) is Task 11's
-// PlanACMERenewals, which calls RequestOrder.
+// Boundary with Task 11 (the renewal planner): FailACMEOrderClass writes the failure state of an issue order
+// consistently (failures + 1 with the failure's class, state failing unless stopped, last_error_code, last_attempt_at,
+// next_attempt_at = now + max(renew.RetryWait, the CA's Retry-After capped at 24 h)); FinishACMEOrder resets it
+// (next_attempt_at NULL, no failures of either class). Deciding WHEN to order (renewal window, ARI, next_attempt_at,
+// the stop rule renew.ShouldStop, the recovery after outages, e-mails) is Task 11's PlanACMERenewals, which calls
+// startOrderTx.
 
 // Order kinds and states (acme_orders.kind, acme_orders.state).
 const (
@@ -434,22 +435,34 @@ func (s *Service) SucceedACMETestOrder(ctx context.Context, orderID uuid.UUID) e
 	})
 }
 
-// FailACMEOrder ends a running order as failed with code (AbortACMEOrder: the pending key is deleted, audit
-// acme.order.failed or acme.order.test_failed) and, in the same transaction, writes the ACME certificate's failure
-// state. An issue order: failures + 1, state failing (stopped stays), last_error_code, last_attempt_at and
-// next_attempt_at = now + max(ACMEFailureBackoff(failures), retryAfter capped at 24 h); from the third failure in a
-// row of an issued certificate with automatic renewal on, the "renewal failed" e-mail goes once, and the fifth stops
-// automatic renewal (state stopped, audit acme.auto_renew.stopped, one e-mail; renew.AfterFailure). A neutral code
-// (renew.Neutral: the licence lock, an interrupted job) counts nothing: the order ends as AbandonACMEOrder ends it. A
-// test run changes only next_attempt_at, and only to honour a CA's Retry-After (never earlier than it was). When
-// records are still published, the acme.cleanup job is queued. An order that failed before only loses a leftover key
-// (nothing else changes); ErrACMEOrderNotRunning for a succeeded order; ErrACMEErrorCode; ErrNotFound.
+// FailACMEOrder is FailACMEOrderClass with the class the code alone says (renew.ClassOfCode), for a caller that has
+// only the code.
 func (s *Service) FailACMEOrder(ctx context.Context, orderID uuid.UUID, code string, retryAfter time.Duration) error {
+	return s.FailACMEOrderClass(ctx, orderID, code, "", retryAfter)
+}
+
+// FailACMEOrderClass ends a running order as failed with code (AbortACMEOrder: the pending key is deleted, audit
+// acme.order.failed or acme.order.test_failed) and, in the same transaction, writes the ACME certificate's failure
+// state. class is the failure's class (renew.ClassTransient or renew.ClassPermanent, from ACMEOrderFailure; anything
+// else is renew.ClassOfCode(code)). An issue order: failures + 1 (and permanent_failures + 1 for a permanent one),
+// state failing (stopped stays), last_error_code, last_failure_class, last_attempt_at and next_attempt_at = now +
+// max(renew.RetryWait, retryAfter capped at 24 h); from the third failure in a row of an issued certificate with
+// automatic renewal on, the "renewal failed" e-mail goes once, and renew.ShouldStop (five permanent failures, or five
+// of any class once the certificate has expired) stops automatic renewal (state stopped, audit acme.auto_renew.stopped,
+// one e-mail; renew.AfterFailure). A neutral code (renew.Neutral: the licence lock, an interrupted job) counts nothing:
+// the order ends as AbandonACMEOrder ends it. A test run changes only next_attempt_at, and only to honour a CA's
+// Retry-After (never earlier than it was). When records are still published, the acme.cleanup job is queued. An order
+// that failed before only loses a leftover key (nothing else changes); ErrACMEOrderNotRunning for a succeeded order;
+// ErrACMEErrorCode; ErrNotFound.
+func (s *Service) FailACMEOrderClass(ctx context.Context, orderID uuid.UUID, code, class string, retryAfter time.Duration) error {
 	if !errorCodeRE.MatchString(code) {
 		return ErrACMEErrorCode
 	}
 	if renew.Neutral(code) {
 		return s.AbandonACMEOrder(ctx, orderID, code)
+	}
+	if class != renew.ClassTransient && class != renew.ClassPermanent {
+		class = renew.ClassOfCode(code)
 	}
 	retryAfter = min(max(retryAfter, 0), MaxACMEBackoff)
 	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
@@ -459,7 +472,7 @@ func (s *Service) FailACMEOrder(ctx context.Context, orderID uuid.UUID, code str
 		}
 		now := s.clock.Now().UTC()
 		if ab.kind == ACMEOrderIssue {
-			if err := s.countACMEFailure(ctx, tx, ab.acmeCertificateID, code, retryAfter, now); err != nil {
+			if err := s.countACMEFailure(ctx, tx, ab.acmeCertificateID, code, class, retryAfter, now); err != nil {
 				return err
 			}
 		} else if retryAfter > 0 {
@@ -671,6 +684,16 @@ func ACMEFinishRefused(err error) bool {
 		}
 	}
 	return false
+}
+
+// ACMEOrderFailure is ACMEOrderErrorCode with the failure's class: acme.FailureClass of err (its RFC 8555 problem type,
+// the HTTP status, a timeout or a network error), or renew.ClassOfCode(code) when err does not say.
+func ACMEOrderFailure(err error) (code, class string, retryAfter time.Duration) {
+	code, retryAfter = ACMEOrderErrorCode(err)
+	if class = acme.FailureClass(err); class == "" {
+		class = renew.ClassOfCode(code)
+	}
+	return code, class, retryAfter
 }
 
 // ACMEOrderErrorCode is the closed code an order fails with for err, and the CA's Retry-After (capped at 24 h) when

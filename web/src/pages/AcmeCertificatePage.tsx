@@ -108,7 +108,8 @@ export function AcmeCertificatePage() {
     [client, id],
   );
   const [deleting, setDeleting] = useState(false);
-  const [rearmed, setRearmed] = useState(false);
+  // After Check again and resume: 'ordered' when an order started at once, 'armed' when only renewal was re-armed.
+  const [rearmed, setRearmed] = useState<'ordered' | 'armed' | null>(null);
 
   const refresh = () => {
     void client.invalidateQueries({ queryKey: acmeCertificateKey(id) });
@@ -120,7 +121,7 @@ export function AcmeCertificatePage() {
     try {
       const res = await fn();
       if (kind === 'test') setTestId((res as ACMEOrder).id);
-      if (kind === 'rearm') setRearmed(true);
+      if (kind === 'rearm') setRearmed((res as ACMECertificate | undefined)?.running_order_id ? 'ordered' : 'armed');
     } catch (e) {
       setActionError(e);
     }
@@ -225,7 +226,7 @@ export function AcmeCertificatePage() {
         )}
         <TestResult orderId={testId} orders={orders.data?.items} running={running} />
         <ErrorAlert error={actionError} />
-        {rearmed && <Notice tone="success" role="status" title={t('acme.issued.rearmed', { order: orderLabel })} />}
+        {rearmed && <Notice tone="success" role="status" title={t(rearmed === 'ordered' ? 'acme.issued.rearmedOrdered' : 'acme.issued.rearmed', { order: orderLabel })} />}
       </Stack>
 
       <div className={classes.grid}>
@@ -310,6 +311,19 @@ function RenewalPanel({
   const { t, i18n } = useTranslation();
   const r = renewal(c);
   const lang = i18n.language;
+  // How the newest renewal e-mail was delivered, in one line.
+  const noticeText = (n: NonNullable<ACMECertificate['last_notice']>) => {
+    const at = formatDateTime(n.sent_at ?? n.queued_at, lang);
+    if (n.skipped > 0 && n.sent === 0) return t('acme.issued.renewal.notice.noServer', { time: at });
+    if (n.failed > 0) return t('acme.issued.renewal.notice.failed', { failed: n.failed, count: n.recipients, code: n.last_failure_code || '-', time: at });
+    if (n.pending > 0) return t('acme.issued.renewal.notice.pending', { pending: n.pending, count: n.recipients, code: n.last_failure_code || '-', time: at });
+    return t('acme.issued.renewal.notice.sent', { sent: n.sent, count: n.recipients, time: at });
+  };
+  const resume = admin ? (
+    <Button size="xs" loading={busy === 'rearm'} disabled={locked || busy !== null} onClick={onRearm}>
+      {t('acme.issued.renewNow')}
+    </Button>
+  ) : undefined;
   let renews: ReactNode;
   switch (r.kind) {
     case 'attempt':
@@ -345,8 +359,12 @@ function RenewalPanel({
       ),
     },
     { key: 'failures', label: t('acme.issued.renewal.failures'), value: String(c.failures), testId: 'failures' },
+    ...(c.failures > 0 && c.last_failure_class
+      ? [{ key: 'class', label: t('acme.issued.renewal.failureClass'), value: t(`acme.issued.renewal.class.${c.last_failure_class}`), testId: 'failure-class' }]
+      : []),
     ...(c.last_attempt_at ? [{ key: 'last', label: t('acme.issued.renewal.lastAttempt'), value: formatDateTime(c.last_attempt_at, lang) }] : []),
-    ...(c.next_attempt_at && c.state !== 'stopped' ? [{ key: 'next', label: t('acme.issued.renewal.nextAttempt'), value: formatDateTime(c.next_attempt_at, lang), testId: 'next-attempt' }] : []),
+    ...(c.next_attempt_at && (c.state !== 'stopped' || c.recovering) ? [{ key: 'next', label: t('acme.issued.renewal.nextAttempt'), value: formatDateTime(c.next_attempt_at, lang), testId: 'next-attempt' }] : []),
+    ...(c.last_notice ? [{ key: 'notice', label: t('acme.issued.renewal.lastNotice'), value: noticeText(c.last_notice), testId: 'last-notice' }] : []),
     ...(c.ari_window
       ? [{ key: 'ari', label: t('acme.issued.renewal.ari'), value: t('acme.issued.renewal.ariWindow', { start: formatDateTime(c.ari_window.start, lang), end: formatDateTime(c.ari_window.end, lang) }) }]
       : []),
@@ -358,24 +376,18 @@ function RenewalPanel({
         <Text size="sm">{t(c.auto_renew ? 'acme.issued.renewal.autoHelpOn' : 'acme.issued.renewal.autoHelpOff')}</Text>
         {!admin && <Text size="xs" c="dimmed">{t('acme.issued.adminOnly')}</Text>}
         {c.state === 'failing' && (
-          <Notice tone="warning" title={t('acme.issued.renewal.failingTitle')} testId="failing">
-            {c.next_attempt_at ? t('acme.issued.renewal.failingNext', { count: c.failures, time: formatDateTime(c.next_attempt_at, lang) }) : t('acme.issued.renewal.failingText', { count: c.failures })}
+          <Notice tone="warning" title={t('acme.issued.renewal.failingTitle')} testId="failing" action={resume}>
+            <Text size="sm">
+              {c.next_attempt_at ? t('acme.issued.renewal.failingNext', { count: c.failures, time: formatDateTime(c.next_attempt_at, lang) }) : t('acme.issued.renewal.failingText', { count: c.failures })}
+            </Text>
+            {c.last_failure_class === 'transient' && <Text size="sm">{t('acme.issued.renewal.transientText')}</Text>}
+            {c.last_failure_class === 'permanent' && <Text size="sm">{t('acme.issued.renewal.permanentText', { count: Math.max(1, 5 - c.permanent_failures) })}</Text>}
+            {admin && lockReason && <Text size="xs">{lockReason}</Text>}
           </Notice>
         )}
         {c.state === 'stopped' && (
-          <Notice
-            tone="danger"
-            title={t('acme.issued.renewal.stoppedTitle')}
-            testId="stopped"
-            action={
-              admin ? (
-                <Button size="xs" loading={busy === 'rearm'} disabled={locked || busy !== null} onClick={onRearm}>
-                  {t('acme.issued.renewNow')}
-                </Button>
-              ) : undefined
-            }
-          >
-            <Text size="sm">{t('acme.issued.renewal.stoppedText', { count: c.failures })}</Text>
+          <Notice tone={c.recovering ? 'warning' : 'danger'} title={t('acme.issued.renewal.stoppedTitle')} testId="stopped" action={resume}>
+            <Text size="sm">{t(c.recovering ? 'acme.issued.renewal.recoveringText' : 'acme.issued.renewal.stoppedText', { count: c.failures })}</Text>
             <Text size="sm">{t(admin ? 'acme.issued.renewal.stoppedAdmin' : canOperate ? 'acme.issued.renewal.stoppedOperator' : 'acme.issued.renewal.stoppedAuditor', { order: orderLabel })}</Text>
             {admin && lockReason && <Text size="xs">{lockReason}</Text>}
           </Notice>

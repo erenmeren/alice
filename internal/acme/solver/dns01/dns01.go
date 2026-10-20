@@ -33,6 +33,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -361,18 +362,32 @@ func (s *Solver) post(ctx context.Context, body []byte, sig, domain string) ([]b
 		if ce := ctx.Err(); ce != nil {
 			return nil, ce
 		}
-		return nil, refused(domain)
+		// An untrusted certificate is a setting (the hook's CA bundle); any other failure to get an answer (refused
+		// connection, timeout, DNS) is an outage the renewal planner retries (acme.FailureClass).
+		return nil, acme.HookError(domain, 0, !untrusted(err))
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusNoContent {
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, MaxReplyBytes))
-		return nil, refused(domain)
+		// The status only (a 5xx or 429 is an outage, another 4xx a setting); never the answer's text.
+		return nil, acme.HookError(domain, res.StatusCode, false)
 	}
 	b, err := io.ReadAll(io.LimitReader(res.Body, MaxReplyBytes+1))
 	if err != nil || len(b) > MaxReplyBytes {
 		return nil, nil // an unreadable or oversize answer carries no readiness information
 	}
 	return b, nil
+}
+
+// untrusted reports a TLS verification failure in err's chain.
+func untrusted(err error) bool {
+	var (
+		ua  x509.UnknownAuthorityError
+		he  x509.HostnameError
+		ci  x509.CertificateInvalidError
+		cve *tls.CertificateVerificationError
+	)
+	return errors.As(err, &ua) || errors.As(err, &he) || errors.As(err, &ci) || errors.As(err, &cve)
 }
 
 // parseHookReply reads the optional {"ready":bool} of a hook answer. known is false for anything else (no body,

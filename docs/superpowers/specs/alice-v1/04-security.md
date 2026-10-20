@@ -143,7 +143,7 @@ Legend: S spoofing, T tampering, R repudiation, I information disclosure, D deni
 | AC-2 | I | Account key, EAB HMAC key or hook secret leaked | Sealed with the keyring (AAD per row), write-only in the API, `secrets.Plaintext` zeroed; leak suite over logs (raw and redacted), API answers, tables, bytea, e-mails and backup manifest | Low |
 | AC-3 | T/E | Operator obtains certificates for names of their choice | Admin-only definitions with per-provider and per-hook domain-suffix allow-lists (empty = refuse all), re-checked at job time | Low |
 | AC-4 | T | Hostile CA chain or renewal window (ARI) | Chain must match the order's key and names and is placed through the upload rules; ARI only pulls renewal earlier, windows before 2000, ending before the certificate's start or more than 10 years ahead are ignored | Low |
-| AC-5 | D | Rate-limit storms against the CA | One attempt per job; backoff 1 h→24 h and Retry-After (≤24 h); 15 min spacing; wave of 5; provider hold while a sibling is rate-limited (≤24 h); stop after 5 failures | Low |
+| AC-5 | D | Rate-limit storms against the CA | One attempt per job; backoff 1 h→24 h and Retry-After (≤24 h); 15 min spacing; wave of 5; provider hold while a sibling is rate-limited (≤24 h); stop after 5 permanent failures, or 5 of any class once the certificate expired; the recovery after outages (R45) at most once a day before the last week, every 12/6/2 h in the last 7/3/1 days | Low |
 | AC-6 | T | A second deploy path or unattended deployment by an Operator | Deployments only through `RequestDeployment` / the checked `insertDeployment` path (AST test); switching unattended deployment on is Admin + fresh step-up inside the transaction | Low |
 | AC-7 | T | HTTP-01 token file abuse on a target | Helper writes one file under a fixed root-owned path, token charset and length fixed, body ≤512 bytes and exactly a key authorization, `O_NOFOLLOW` walk; Alice never edits Nginx config | Low |
 
@@ -252,7 +252,7 @@ OIDC SSO is delivered in Phase 7 ("Alerts, dashboard and SSO", R31); Phase 1 is 
 | Export inventory | Yes | Yes | Yes |
 
 (Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`; review `docs/security/reviews/acme-issuance.md`.) ACME rows: providers, accounts, DNS hooks, defining/editing/deleting ACME certificates, switching their
-automatic renewal on, re-arming (`Renew now`) and releasing a hold are **Admin** with step-up, never a token
+automatic renewal on, re-arming (`Check again and resume`, formerly `Renew now`, which also starts an order at once, R45) and releasing a hold are **Admin** with step-up, never a token
 (`acme.manage`); reading a CA's directory before registration is Admin without step-up (`acme.preview`); ordering,
 Test run, Deploy now, binding locations (with automatic deployment off) and switching a binding's automatic deployment
 off are **Admin and Operator**, also `operate` tokens (`acme.operate`); everything is readable by every role and `read`

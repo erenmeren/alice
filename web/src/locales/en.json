@@ -3201,7 +3201,7 @@
       "testRunHelp": "A Test run checks that the certificate authority can verify your names. Nothing is issued or installed.",
       "getNow": "Get certificate now",
       "orderNow": "Order now",
-      "renewNow": "Renew now",
+      "renewNow": "Check again and resume",
       "rearmed": "Automatic renewal is on again. Alice renews the certificate at the next planned time. To renew right now, use {{order}}.",
       "orderRunning": "Alice is talking to the certificate authority. This page updates by itself.",
       "deployNow": "Deploy now",
@@ -3270,11 +3270,31 @@
         "failingNext_one": "The last attempt failed. Alice tries again at {{time}}.",
         "failingNext_other": "The last {{count}} attempts failed. Alice tries again at {{time}}.",
         "stoppedTitle": "Automatic renewal stopped",
-        "stoppedText_one": "Alice stopped renewing this certificate by itself after {{count}} failed attempt, so that it does not keep asking the certificate authority in vain.",
-        "stoppedText_other": "Alice stopped renewing this certificate by itself after {{count}} failed attempts in a row, so that it does not keep asking the certificate authority in vain.",
-        "stoppedAdmin": "Fix the problem below, then choose Renew now: automatic renewal starts again at the next planned time. To renew right now, use {{order}}. A Test run first shows whether the names can be verified.",
-        "stoppedOperator": "Fix the problem below and use Test run or {{order}}. Only an administrator can switch automatic renewal on again (Renew now).",
-        "stoppedAuditor": "An administrator can switch automatic renewal on again with Renew now."
+        "stoppedText_one": "Alice stopped renewing this certificate by itself after {{count}} failed attempt, because the cause needs a person, so that it does not keep asking the certificate authority in vain.",
+        "stoppedText_other": "Alice stopped renewing this certificate by itself after {{count}} failed attempts in a row, because the cause needs a person, so that it does not keep asking the certificate authority in vain.",
+        "stoppedAdmin": "Fix the problem below, then choose Check again and resume: Alice orders the certificate at once and renews it by itself again. {{order}} also renews it at once. A Test run first shows whether the names can be verified.",
+        "stoppedOperator": "Fix the problem below and use Test run or {{order}}. Only an administrator can resume automatic renewal (Check again and resume).",
+        "stoppedAuditor": "An administrator can resume automatic renewal with Check again and resume.",
+        "failureClass": "Kind of the last problem",
+        "class": {
+          "transient": "Temporary (an outage)",
+          "permanent": "Needs a person"
+        },
+        "transientText": "The cause looks temporary: the certificate authority or the DNS service could not be reached, did not answer in time or limited the requests. Alice keeps trying by itself, at least once a day and more often as the certificate nears its end.",
+        "permanentText_one": "The cause needs a person (for example a setting, the account at the certificate authority or a refused name). If {{count}} more attempt fails like this, Alice stops trying by itself.",
+        "permanentText_other": "The cause needs a person (for example a setting, the account at the certificate authority or a refused name). If {{count}} more attempts fail like this, Alice stops trying by itself.",
+        "recoveringText_one": "Alice stopped after {{count}} failed attempt, but the last problem was a temporary outage: Alice still tries again by itself, at least once a day, until the certificate expires.",
+        "recoveringText_other": "Alice stopped after {{count}} failed attempts in a row, but the last problem was a temporary outage: Alice still tries again by itself, at least once a day, until the certificate expires.",
+        "lastNotice": "Last e-mail about it",
+        "notice": {
+          "sent_one": "Sent to {{sent}} of {{count}} recipient ({{time}})",
+          "sent_other": "Sent to {{sent}} of {{count}} recipients ({{time}})",
+          "pending_one": "Still being tried for {{pending}} of {{count}} recipient (last error: {{code}}; {{time}})",
+          "pending_other": "Still being tried for {{pending}} of {{count}} recipients (last error: {{code}}; {{time}})",
+          "failed_one": "Not delivered to {{failed}} of {{count}} recipient ({{code}}; {{time}})",
+          "failed_other": "Not delivered to {{failed}} of {{count}} recipients ({{code}}; {{time}})",
+          "noServer": "Not sent: no mail server is set ({{time}})"
+        }
       },
       "test": {
         "running": "Test run in progress",
@@ -3453,7 +3473,8 @@
         "testHelp": "A Test run (recommended) checks that the authority can verify your names, without issuing anything. Or get the certificate now.",
         "testFirst": "Run a test first",
         "later": "Open the certificate"
-      }
+      },
+      "rearmedOrdered": "Automatic renewal is on again, and Alice is ordering the certificate now. The orders below show how it goes."
     }
   },
   "discovery": {

@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — ACME renewal recovers after an outage
+
+**Changed**
+- A failed ACME renewal is now classified as a temporary outage (the certificate authority, its DNS lookups or the
+  DNS hook unreachable or timing out, a rate limit, a server error) or a cause that needs a person (a setting, the
+  account, a refused name, a wrong answer to the check). Only **5 failures that need a person** stop automatic
+  renewal; outages never do while the certificate is valid, and Alice keeps trying by itself (at most a day apart,
+  12/6/2 hours in the last 7/3/1 days), still honouring the authority's Retry-After. Once a certificate has expired, 5
+  failures of any kind stop it. A certificate stopped while its last problem was an outage (also one stopped before
+  this version) is retried by itself until it expires. Migration `00020`.
+- **Renew now** on an issued certificate is now **Check again and resume**: it switches automatic renewal on again,
+  clears the failures and orders the certificate at once (Administrator with a fresh code, as before; also offered
+  while renewal is failing). API: `POST /api/v1/acme/certificates/{id}/rearm` starts the order and may answer 409
+  `ALC-ACM-0023`/`ALC-ACM-0024`.
+- The "renewal failed" and "automatic renewal stopped" e-mails explain the two kinds of failure.
+
+**Added**
+- While renewal fails or is stopped, the alert recipients are reminded 14, 7, 3 and 1 days before the certificate
+  ends (three e-mails by the kind of the last problem, TR/EN), once per threshold.
+- The certificate page shows **Kind of the last problem** and **Last e-mail about it** (how the newest renewal e-mail
+  was delivered). API fields `last_failure_class`, `permanent_failures`, `recovering` and, on the single certificate,
+  `last_notice`. Rulings: `docs/superpowers/rulings/acme-renewal-recovery.md`.
+
 ## Unreleased — Directory sign-in: switch-off and unlock
 
 **Changed**

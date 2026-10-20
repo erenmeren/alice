@@ -331,6 +331,8 @@ func TestACMEFailureSequence(t *testing.T) {
 		require.NoError(t, w.svc.FailACMEOrder(w.ctx, w.running(c.ID), acme.ReasonValidationFailedDNS, 0))
 		r := w.get(c.ID)
 		assert.Equal(t, n, r.Failures)
+		assert.Equal(t, n, r.PermanentFailures, "a failed validation known only by its code needs a person")
+		assert.Equal(t, renew.ClassPermanent, r.LastFailureClass)
 		assert.Equal(t, acme.ReasonValidationFailedDNS, r.LastErrorCode)
 		if n < 5 {
 			assert.Equal(t, inventory.ACMEStateFailing, r.State)
@@ -348,7 +350,8 @@ func TestACMEFailureSequence(t *testing.T) {
 		require.Len(t, mails, 2, "failure %d: one e-mail per Administrator, once", n)
 		assert.Equal(t, []string{"en", "tr"}, []string{mails[0].Locale, mails[1].Locale})
 		assert.Equal(t, map[string]string{"name": "fail.example.test", "names": "fail.example.test, www.fail.example.test", "count": "3",
-			"error_reason": acme.ReasonValidationFailedDNS, "expires_at": na.Format("2006-01-02 15:04 UTC")}, mails[0].Params)
+			"error_reason": acme.ReasonValidationFailedDNS, "expires_at": na.Format("2006-01-02 15:04 UTC"), "acme_certificate_id": c.ID.String()},
+			mails[0].Params)
 		for _, m := range mails {
 			msg := sender.Render("x@example.test", m.Template, m.Locale, m.Params)
 			assert.Contains(t, msg.Subject, "fail.example.test")
@@ -385,21 +388,24 @@ func TestACMEFailureSequence(t *testing.T) {
 	r = w.get(c.ID)
 	assert.Equal(t, inventory.ACMEStateActive, r.State)
 	assert.Zero(t, r.Failures)
+	assert.Zero(t, r.PermanentFailures)
+	assert.Empty(t, r.LastFailureClass)
 	assert.Nil(t, r.NextAttemptAt)
 	assert.Zero(t, w.count("SELECT count(*) FROM acme_certificates WHERE id = $1 AND failure_notified_at IS NOT NULL", c.ID))
 }
 
-// A certificate that never stopped but reached five failures with renewal switched off is stopped by the planner
-// when renewal is switched on again (the backstop of the stop rule), once.
+// A certificate that never stopped but reached five permanent failures with renewal switched off is stopped by the
+// planner when renewal is switched on again (the backstop of the stop rule), once.
 func TestACMEPlannerStopsAtFiveFailures(t *testing.T) {
 	w := newRenewWorld(t)
 	require.NoError(t, w.fake.Advertise("renewalInfo", "off"))
 	c := w.issued("backstop.example.test")
 	w.setClock(w.notAfter(c).Add(-day))
-	_, err := w.db.Owner.Exec(w.ctx, "UPDATE acme_certificates SET failures = 6, state = 'failing', last_error_code = 'acme.hook_refused' WHERE id = $1", c.ID)
+	_, err := w.db.Owner.Exec(w.ctx, `UPDATE acme_certificates SET failures = 6, permanent_failures = 5, last_failure_class = 'permanent',
+    state = 'failing', last_error_code = 'acme.hook_refused' WHERE id = $1`, c.ID)
 	require.NoError(t, err)
 	run := w.plan()
-	assert.Equal(t, inventory.ACMERenewRun{Stopped: 1}, run)
+	assert.Equal(t, inventory.ACMERenewRun{Stopped: 1, Warned: 1}, run, "a day left: the expiry reminder goes too")
 	assert.Equal(t, inventory.ACMEStateStopped, w.get(c.ID).State)
 	assert.Equal(t, "acme.hook_refused", w.auditDetails("acme.auto_renew.stopped")[0]["error_code"])
 	assert.Len(t, w.outbox(inventory.TemplateACMEAutoRenewStopped), 2)
@@ -577,7 +583,7 @@ func TestACMEPlannerCountsAMissingAccount(t *testing.T) {
 	assert.Equal(t, "acme.account_state", r.LastErrorCode)
 	assert.Equal(t, w.clock.Now().UTC().Add(time.Hour), *r.NextAttemptAt)
 	assert.Zero(t, w.renewals(c.ID))
-	assert.Equal(t, inventory.ACMERenewRun{}, w.plan(), "the backoff paces it")
+	assert.Equal(t, inventory.ACMERenewRun{Warned: 1}, w.plan(), "the backoff paces it (a day left: the expiry reminder goes)")
 }
 
 // A next_attempt_at beyond the 24-hour cap (the clock moved back) is repaired instead of waited for.
@@ -816,11 +822,22 @@ func TestACMEReArm(t *testing.T) {
 	_, err := w.db.Owner.Exec(w.ctx, `UPDATE acme_certificates SET state = 'stopped', failures = 5, failure_notified_at = now(),
     next_attempt_at = $2, rate_limited_since = now(), last_error_code = 'acme.hook_refused' WHERE id = $1`, c.ID, w.clock.Now().Add(5*time.Hour))
 	require.NoError(t, err)
-	assert.Equal(t, inventory.ACMERenewRun{}, w.plan(), "stopped")
+	assert.Equal(t, inventory.ACMERenewRun{Warned: 1}, w.plan(), "stopped (a day left: the expiry reminder goes)")
+	orders := w.count("SELECT count(*) FROM acme_orders WHERE acme_certificate_id = $1", c.ID)
 	r, err := w.svc.ReArmACMEAutoRenew(w.ctx, w.admin, c.ID)
 	require.NoError(t, err)
-	assert.Equal(t, inventory.ACMEStateActive, r.State)
+	// Check again and resume (owner decision 2026-10-20): re-armed, and an order of the person started at once.
+	assert.Equal(t, inventory.ACMEStateIssuing, r.State, "an order runs")
+	require.NotNil(t, r.RunningOrderID)
+	o, err := w.svc.GetACMEOrder(w.ctx, *r.RunningOrderID)
+	require.NoError(t, err)
+	assert.Equal(t, inventory.ACMETriggerManual, o.Trigger)
+	assert.Equal(t, inventory.ACMEOrderIssue, o.Kind)
+	assert.Equal(t, orders+1, w.count("SELECT count(*) FROM acme_orders WHERE acme_certificate_id = $1", c.ID))
+	assert.Equal(t, inventory.JobACMEIssue, w.jobs.requests()[len(w.jobs.requests())-1].Type, "a person's order is a change, not continuity work")
 	assert.Zero(t, r.Failures)
+	assert.Zero(t, r.PermanentFailures)
+	assert.Empty(t, r.LastFailureClass)
 	assert.Nil(t, r.NextAttemptAt)
 	assert.True(t, r.AutoRenew)
 	assert.Equal(t, "acme.hook_refused", r.LastErrorCode, "the last reason stays for the record")
@@ -829,12 +846,17 @@ func TestACMEReArm(t *testing.T) {
 	require.Len(t, d, 1)
 	assert.Equal(t, map[string]string{"acme_certificate_id": c.ID.String(), "names": "rearm.example.test", "previous_state": "stopped",
 		"previous_failures": "5"}, d[0])
-	assert.Equal(t, 1, w.plan().Started, "renewed again")
+	started := w.auditDetails("acme.order.started")
+	assert.Equal(t, "manual", started[len(started)-1]["trigger"])
+	assert.Zero(t, w.plan().Started, "the order of the person runs")
 	_, err = w.svc.ReArmACMEAutoRenew(w.ctx, w.admin, uuid.New())
 	assert.ErrorIs(t, err, inventory.ErrNotFound)
 	r, err = w.svc.ReArmACMEAutoRenew(w.ctx, w.admin, c.ID)
 	require.NoError(t, err)
 	assert.Equal(t, inventory.ACMEStateIssuing, r.State, "an order runs")
+	assert.Equal(t, orders+1, w.count("SELECT count(*) FROM acme_orders WHERE acme_certificate_id = $1", c.ID), "no second order")
+	w.complete(*r.RunningOrderID)
+	assert.Equal(t, inventory.ACMEStateActive, w.get(c.ID).State)
 
 	// Automatic renewal off, five failed orders of a person, then switched on: no stop, it is renewed.
 	off := w.issued("off.example.test")

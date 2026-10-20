@@ -101,7 +101,7 @@ So that a lapsed license does not turn into expired certificates on your website
 already manages goes on for 45 days after the lock begins: certificates from certificate authorities that Alice has
 already issued are renewed when they are due, and renewed certificates (also new versions of Key Vault certificates,
 which Alice keeps checking for) are deployed automatically to the websites they are already connected to. Nothing a
-person starts runs in that time: no new certificates or orders, **Renew now**, **Deploy now**, uploads, signing
+person starts runs in that time: no new certificates or orders, **Check again and resume**, **Deploy now**, uploads, signing
 requests, imports, servers or vaults, SSH key work or scans. The License page and the banner show until when
 certificates keep renewing. After the 45 days this stops too: renewals and automatic deployments that were waiting in
 the queue then wait under **Waiting for an administrator** like other changes. An evaluation has no such window: when

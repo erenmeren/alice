@@ -7,7 +7,8 @@
 // opened by the inventory and live only for the call (A10); nothing secret is in a job payload, a result, a log line or
 // an error (the order's error code is a closed reason). An order is ended on every way out, a panic included (the
 // order is ended, then the panic goes on to the runner): success (inventory.FinishACMEOrder or SucceedACMETestOrder) or
-// inventory.FailACMEOrder with the order's code (a failure is counted and backed off), called on a context detached
+// inventory.FailACMEOrderClass with the order's code and class (a failure is counted with its transient or permanent
+// class and backed off; inventory.ACMEOrderFailure classifies it), called on a context detached
 // from the job's. Two ways out leave the order running with its key and its CA URL for the sweep to finish from the CA
 // (A8): a database failure while the issued certificate is stored, and a job context that ended (shutdown, lost
 // lease) after the CA created the order and its key was persisted. A job context that ended before that aborts the
@@ -54,7 +55,7 @@ type Inventory interface {
 	LoadPendingKey(ctx context.Context, orderID uuid.UUID) (crypto.Signer, error)
 	FinishACMEOrder(ctx context.Context, orderID uuid.UUID, chainDER [][]byte) (inventory.ACMEIssued, error)
 	SucceedACMETestOrder(ctx context.Context, orderID uuid.UUID) error
-	FailACMEOrder(ctx context.Context, orderID uuid.UUID, code string, retryAfter time.Duration) error
+	FailACMEOrderClass(ctx context.Context, orderID uuid.UUID, code, class string, retryAfter time.Duration) error
 	AbandonACMEOrder(ctx context.Context, orderID uuid.UUID, code string) error
 	GetACMEOrder(ctx context.Context, id uuid.UUID) (inventory.ACMEOrder, error)
 	RecordACMEOrderURL(ctx context.Context, orderID uuid.UUID, url string) error
@@ -205,7 +206,7 @@ var (
 )
 
 // run does the order and ends it on every way out, a panic included (the order is ended, then the panic goes on to
-// the runner). Outcomes: success; a failure (FailACMEOrder: failure counted, backoff); left running for the sweep (the
+// the runner). Outcomes: success; a failure (FailACMEOrderClass: failure counted with its class, backoff); left running for the sweep (the
 // issued certificate could not be stored, or the job's context ended after the CA created the order and its key was
 // persisted: a shutdown or a lost lease is not the certificate's failure); interrupted before that (AbandonACMEOrder
 // with job.lease_expired: nothing counted).
@@ -248,8 +249,8 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 				"event", "acme_order_left_running")
 			res, err = nil, jobs.Fail(reasonUnexpected, params, nil)
 		default:
-			code, after := inventory.ACMEOrderErrorCode(failure)
-			if ferr := inv.FailACMEOrder(dctx, o.id, code, after); ferr != nil && !errors.Is(ferr, inventory.ErrACMEOrderNotRunning) {
+			code, class, after := inventory.ACMEOrderFailure(failure)
+			if ferr := inv.FailACMEOrderClass(dctx, o.id, code, class, after); ferr != nil && !errors.Is(ferr, inventory.ErrACMEOrderNotRunning) {
 				o.h.d.Log.Error("could not end a failed ACME order", "order_id", o.id.String(), "error_type", fmt.Sprintf("%T", ferr))
 			}
 			res, err = nil, jobs.Fail(code, params, failure)

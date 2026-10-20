@@ -350,8 +350,16 @@ below.
   front of the block makes the proof fail (`ALC-ACM-0007`). An older helper gives `ALC-SSH-0013`.
 - **"This name is not allowed" (`ALC-ACM-0015`).** Every name must end in a domain ending allowed for the authority,
   and for the DNS proof also for the hook. An empty list allows nothing.
-- **A certificate is "Renewal stopped".** Five renewals in a row failed. Fix the cause shown under **Last problem**,
-  then **Order now**, or an administrator chooses **Renew now** to switch automatic renewal on again.
+- **A certificate is "Renewal stopped".** Five renewals failed for a cause that needs a person (or five in a row
+  after the certificate expired). Fix the cause shown under **Last problem**, then **Order now**, or an administrator
+  chooses **Check again and resume** to switch automatic renewal on again and order at once. If **Kind of the last
+  problem** says **Temporary (an outage)**, Alice is still trying again by itself (the page shows the next attempt);
+  check that Alice can reach the authority and the DNS hook.
+- **A certificate keeps failing with "Temporary (an outage)".** Alice tries at least once a day and more often in the
+  certificate's last week, and reminds the alert recipients 14, 7, 3 and 1 days before it ends. Check the network
+  path to the authority and the DNS hook (firewall, proxy, the hook's own service); **Last e-mail about it** on the
+  page shows whether the reminders were delivered (an `smtp.*` code means the mail server refused or could not be
+  reached: see the mail settings).
 - **A website did not get the renewed certificate.** Both the certificate's **Automatic deployment of new
   certificates** and the website's own switch must be on (the panel says "Will deploy automatically to N of M
   websites"). A certificate with an incomplete chain, or one that arrived before the license allowed changes again,

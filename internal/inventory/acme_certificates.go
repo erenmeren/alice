@@ -15,6 +15,7 @@ import (
 	"alice/internal/acme"
 	"alice/internal/acme/keygen"
 	"alice/internal/audit"
+	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
@@ -87,8 +88,12 @@ type ACMECertificate struct {
 	NextAttemptAt        *time.Time `json:"next_attempt_at,omitempty"`
 	LastAttemptAt        *time.Time `json:"last_attempt_at,omitempty"`
 	LastErrorCode        string     `json:"last_error_code"`
-	RunningOrderID       *uuid.UUID `json:"running_order_id,omitempty"`
-	Bindings             int        `json:"bindings"`
+	// LastFailureClass is the class of the last failure of the series (renew.ClassTransient, renew.ClassPermanent; ''
+	// without one); PermanentFailures counts the permanent ones (five stop automatic renewal).
+	LastFailureClass  string     `json:"last_failure_class"`
+	PermanentFailures int        `json:"permanent_failures"`
+	RunningOrderID    *uuid.UUID `json:"running_order_id,omitempty"`
+	Bindings          int        `json:"bindings"`
 	// The current certificate's leaf (nil before the first issuance): what is served once it is deployed.
 	Current *ACMECurrentCertificate `json:"current,omitempty"`
 	// The CA's suggested renewal window (ARI, RFC 9773) when one is cached.
@@ -287,7 +292,7 @@ CASE WHEN c.current_certificate_id IS NOT NULL AND c.deploy_held_certificate_id 
     AND NOT (c.deploy_held_reason = 'license' AND c.deploy_released_certificate_id IS NOT DISTINCT FROM c.current_certificate_id)
     THEN c.deploy_held_reason ELSE '' END,
 c.current_certificate_id IS NOT NULL AND c.deploy_stopped_certificate_id IS NOT DISTINCT FROM c.current_certificate_id,
-c.created_by, c.created_at, c.updated_at`
+c.created_by, c.created_at, c.updated_at, c.last_failure_class, c.permanent_failures`
 
 func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	var (
@@ -299,7 +304,7 @@ func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	err := row.Scan(&c.ID, &c.ProviderID, &c.AccountID, &c.Names, &c.KeyType, &c.Challenge, &c.HookID, &c.HTTPTargetID, &c.RenewBeforeDays,
 		&c.AutoRenew, &c.AutoDeploy, &c.State, &c.CurrentCertificateID, &c.Failures, &c.NextAttemptAt, &c.LastAttemptAt, &c.LastErrorCode,
 		&c.RunningOrderID, &c.Bindings, &fingerprint, &nb, &na, &chainOK, &c.ARIWindowStart, &c.ARIWindowEnd, &c.DeployHeldReason,
-		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt)
+		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CurrentCertificateID != nil && fingerprint != nil && nb != nil && na != nil && chainOK != nil {
 		c.Current = &ACMECurrentCertificate{ID: *c.CurrentCertificateID, Fingerprint: *fingerprint, NotBefore: nb.UTC(), NotAfter: na.UTC(),
@@ -605,12 +610,20 @@ func (s *Service) DeleteACMECertificate(ctx context.Context, a Actor, id uuid.UU
 	})
 }
 
-// ReArmACMEAutoRenew switches automatic renewal of a live ACME certificate on and starts it afresh (an Administrator's
-// act, e.g. after it stopped at five failures): state active with a current certificate (issuing while an order runs,
-// pending without a certificate), failures 0, no failure notice mark, no wait, no rate-limit series, in one statement
-// with the audit row acme.auto_renew.rearmed. Switching auto_renew from off to on through UpdateACMECertificate does
-// the same. A successful order re-arms as well (FinishACMEOrder). ErrNotFound.
+// ReArmACMEAutoRenew is "Check again and resume" (the web's Renew now; owner decision 2026-10-20): it switches automatic
+// renewal of a live ACME certificate on, starts it afresh and checks again at once (an Administrator's act, e.g. after
+// it stopped or while it fails): state active with a current certificate (pending without one), failures 0 of either
+// class, no failure notice mark, no wait, no rate-limit series, with the audit row acme.auto_renew.rearmed; then, for an
+// issued certificate without a running order, an order of the person (trigger manual, acme.issue, audit
+// acme.order.started), all in one transaction. The licence gate is asked first (changes). An order that cannot start
+// refuses the whole act (ErrACMEAccountState, ErrACMERolloverPending: nothing changes); a job of an earlier order that
+// is still finishing (ErrACMEOrderRunning) leaves the re-arm without a new order, and the planner orders at its next
+// run. Switching auto_renew from off to on through UpdateACMECertificate re-arms without ordering. A successful order
+// re-arms as well (FinishACMEOrder). ErrNotFound.
 func (s *Service) ReArmACMEAutoRenew(ctx context.Context, a Actor, id uuid.UUID) (ACMECertificate, error) {
+	if err := s.license.Allow(license.ClassChange); err != nil {
+		return ACMECertificate{}, err
+	}
 	var out ACMECertificate
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		cur, err := getACMECert(ctx, tx, id, true)
@@ -619,6 +632,28 @@ func (s *Service) ReArmACMEAutoRenew(ctx context.Context, a Actor, id uuid.UUID)
 		}
 		if err := s.rearmTx(ctx, tx, a, cur); err != nil {
 			return err
+		}
+		if cur.CurrentCertificateID != nil && cur.RunningOrderID == nil {
+			// A savepoint: an order refused because the previous order's job is still finishing must leave nothing behind
+			// (startOrderTx may have written the order row before the job's dedupe key refused it).
+			sp, err := tx.Begin(ctx)
+			if err != nil {
+				return fmt.Errorf("inventory: open a savepoint: %w", err)
+			}
+			_, err = s.startOrderTx(ctx, sp, a, cur, ACMEOrderIssue, ACMETriggerManual)
+			switch {
+			case errors.Is(err, ErrACMEOrderRunning):
+				if rerr := sp.Rollback(ctx); rerr != nil {
+					return fmt.Errorf("inventory: roll back a savepoint: %w", rerr)
+				}
+			case err != nil:
+				_ = sp.Rollback(ctx)
+				return err
+			default:
+				if err := sp.Commit(ctx); err != nil {
+					return fmt.Errorf("inventory: release a savepoint: %w", err)
+				}
+			}
 		}
 		out, err = getACMECert(ctx, tx, id, false)
 		return err
@@ -633,7 +668,8 @@ func (s *Service) ReArmACMEAutoRenew(ctx context.Context, a Actor, id uuid.UUID)
 func (s *Service) rearmTx(ctx context.Context, tx pgx.Tx, a Actor, cur ACMECertificate) error {
 	if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET auto_renew = true,
     state = CASE WHEN $2 THEN 'issuing' WHEN current_certificate_id IS NOT NULL THEN 'active' ELSE 'pending' END,
-    failures = 0, failure_notified_at = NULL, next_attempt_at = NULL, rate_limited_since = NULL, updated_at = $3 WHERE id = $1`,
+    failures = 0, permanent_failures = 0, last_failure_class = '', failure_notified_at = NULL, next_attempt_at = NULL, rate_limited_since = NULL,
+    updated_at = $3 WHERE id = $1`,
 		cur.ID, cur.RunningOrderID != nil, s.clock.Now().UTC()); err != nil {
 		return fmt.Errorf("inventory: re-arm the automatic renewal: %w", err)
 	}

@@ -47,7 +47,8 @@ export type Renewal =
 // for an issued certificate, the server's rule renew_before_days before expiry (at most a third of the lifetime), or
 // the start of the authority's suggested window when that is earlier. Before the first issuance there is none.
 export function renewal(c: ACMECertificate): Renewal {
-  if (c.state === 'stopped') return { kind: 'stopped' };
+  // A certificate stopped after an outage is still retried by itself (recovering): its next attempt is shown.
+  if (c.state === 'stopped' && !(c.recovering && c.next_attempt_at)) return { kind: 'stopped' };
   if (!c.auto_renew) return { kind: 'off' };
   if (c.next_attempt_at) return { kind: 'attempt', at: c.next_attempt_at };
   if (!c.current) return { kind: 'none' };

@@ -90,20 +90,29 @@ const (
 	TemplateKVStoppedMoreOne     = "kv.auto_deploys_stopped_more_one"
 )
 
-// ACME renewals (plan 2026-10-13 Task 11): TemplateACMERenewalFailed goes once when an issued certificate with
-// automatic renewal on failed to renew NotifyAfter (3) times in a row; TemplateACMEAutoRenewStopped when the fifth
-// failure stopped automatic renewal. Params: name (the certificate's first name), names (every name, comma-separated,
-// bounded), count (the failures in a row), expires_at (when the current certificate ends, "2006-01-02 15:04 UTC") and
-// error_reason (the closed code of the last failure: notify.Sender renders it as the plain title of the code in the
-// reader's language, param reason). No URL, no CA text.
+// ACME renewals (plan 2026-10-13 Task 11; recovery, owner decision 2026-10-20): TemplateACMERenewalFailed goes once
+// when an issued certificate with automatic renewal on failed to renew NotifyAfter (3) times in a row;
+// TemplateACMEAutoRenewStopped when the failures stopped automatic renewal (renew.ShouldStop). While a renewal fails,
+// one of the TemplateACMERenewalExpiring* e-mails goes 14, 7, 3 and 1 days before the current certificate ends (param
+// days: the whole days left): _transient after an outage (Alice keeps trying by itself), _permanent after a failure
+// that needs a person (Alice still tries a few times), _stopped when automatic renewal stopped. Params: name (the
+// certificate's first name), names (every name, comma-separated, bounded), count (the failures in a row), expires_at
+// (when the current certificate ends, "2006-01-02 15:04 UTC"), error_reason (the closed code of the last failure:
+// notify.Sender renders it as the plain title of the code in the reader's language, param reason) and
+// acme_certificate_id (not rendered: the certificate's page shows how its last e-mail was delivered). No URL, no CA
+// text.
 const (
-	TemplateACMERenewalFailed    = "acme.renewal_failed"
-	TemplateACMEAutoRenewStopped = "acme.auto_renew_stopped"
+	TemplateACMERenewalFailed            = "acme.renewal_failed"
+	TemplateACMEAutoRenewStopped         = "acme.auto_renew_stopped"
+	TemplateACMERenewalExpiringTransient = "acme.renewal_expiring_transient"
+	TemplateACMERenewalExpiringPermanent = "acme.renewal_expiring_permanent"
+	TemplateACMERenewalExpiringStopped   = "acme.renewal_expiring_stopped"
 )
 
-// ACMETemplates lists the ACME emails (render tests; their params differ from Templates' target_name).
+// ACMETemplates lists the ACME renewal emails (render tests; their params differ from Templates' target_name).
 func ACMETemplates() []string {
-	return []string{TemplateACMERenewalFailed, TemplateACMEAutoRenewStopped}
+	return []string{TemplateACMERenewalFailed, TemplateACMEAutoRenewStopped, TemplateACMERenewalExpiringTransient,
+		TemplateACMERenewalExpiringPermanent, TemplateACMERenewalExpiringStopped}
 }
 
 // Templates lists the inventory's email templates (render tests).

@@ -191,6 +191,12 @@ func TestSuccessStatusesAndRefusals(t *testing.T) {
 		}
 		require.Error(t, err, tc.code)
 		assert.Equal(t, acme.ReasonHookRefused, reasonOf(err), tc.code)
+		// A server error is an outage the renewal planner retries; any other refusal is a setting.
+		class := acme.ClassPermanent
+		if tc.code >= 500 {
+			class = acme.ClassTransient
+		}
+		assert.Equal(t, class, acme.FailureClass(err), tc.code)
 		assertClean(t, err, st.URL)
 		assertClean(t, s.CleanUp(ctx5(t), chal("a.example.test", "v")), st.URL)
 	}
@@ -348,6 +354,7 @@ func TestNoSecretInPrintsOrErrors(t *testing.T) {
 	err := ds.Present(ctx5(t), chal("a.example.test", "v"))
 	require.Error(t, err)
 	assert.Equal(t, acme.ReasonHookRefused, reasonOf(err))
+	assert.Equal(t, acme.ClassTransient, acme.FailureClass(err), "a hook that does not answer is an outage")
 	assertClean(t, err, dead.URL)
 	// unknown CA
 	other := newStub(t, ok)
@@ -355,6 +362,7 @@ func TestNoSecretInPrintsOrErrors(t *testing.T) {
 	require.NoError(t, err)
 	err = us.Present(ctx5(t), chal("a.example.test", "v"))
 	assert.Equal(t, acme.ReasonHookRefused, reasonOf(err))
+	assert.Equal(t, acme.ClassPermanent, acme.FailureClass(err), "an untrusted hook certificate is a setting")
 	assertClean(t, err, other.URL)
 }
 

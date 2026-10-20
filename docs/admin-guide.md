@@ -9,7 +9,7 @@ Alice has three roles:
 
 | Role | Can do | Cannot do |
 |---|---|---|
-| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on, directories), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs; certificate authorities: adding them, their accounts and DNS hooks, choosing which certificates Alice gets (**Get a certificate**), switching automatic renewal and automatic deployment on, **Renew now**, **Release**; network discovery: scan scopes, allowed scan networks, exclusions and retention, and everything an operator does | — |
+| Administrator | Everything: users, **Settings** (mail server, recipients, alerts, general, single sign-on, directories), audit log, API tokens of other people, a website's verification settings, deploying a certificate with an incomplete chain; Key Vaults: adding a vault, its credentials and check interval, automatic deployment, held versions, imports into a vault; SSH keys: downloading a private key, rotation policies and runs; certificate authorities: adding them, their accounts and DNS hooks, choosing which certificates Alice gets (**Get a certificate**), switching automatic renewal and automatic deployment on, **Check again and resume**, **Release**; network discovery: scan scopes, allowed scan networks, exclusions and retention, and everything an operator does | — |
 | Operator | View inventory; test servers, run discovery and remove SSH keys; generate SSH keys and deploy them; upload certificates, create signing requests and deploy certificates; check a Key Vault, connect its certificates to websites and deploy a version that is not held; for certificates from a certificate authority: **Test run**, **Order now**, **Deploy now**, connecting and removing websites, switching automatic deployment off; network discovery: start and cancel scans and read the results; own API tokens | Manage users, see the audit log, change settings or verification settings, deploy an incomplete chain, manage Key Vaults beyond that, download a private key, manage rotations, add certificate authorities or names to be certified, switch automatic deployment on, define scan scopes or the discovery settings |
 | Auditor | View inventory and network discovery results read-only, view and export the audit log, verify its integrity; own read-only API tokens | Change anything, manage users |
 
@@ -1462,14 +1462,14 @@ This section is the setup, which is for administrators.
 | Action | Who |
 |---|---|
 | Adding, changing and removing certificate authorities and DNS hooks; registering, rotating and deactivating an account | Administrator with a fresh authenticator code; never an API token |
-| **Get a certificate** (which names, which authority, how the names are proved), deleting it, its **Automatic renewal**, **Renew now**, **Release** of a held certificate | Administrator with a fresh authenticator code; never an API token |
+| **Get a certificate** (which names, which authority, how the names are proved), deleting it, its **Automatic renewal**, **Check again and resume**, **Release** of a held certificate | Administrator with a fresh authenticator code; never an API token |
 | Switching **Automatic deployment** on, for the certificate or for a website | Administrator with a fresh authenticator code; never an API token |
 | Reading the authority's terms before registering (done by the **Register account** dialog) | Administrator, no new code |
 | **Test run**, **Get certificate now** / **Order now**, **Deploy now**, connecting websites (with automatic deployment off), removing websites, switching automatic deployment off | Administrator or operator, also with a **Read and operate** API token |
 | Reading authorities, accounts (including their contact e-mail), hooks, certificates, orders and websites | Everyone |
 
 The full list per API route is in [authz-matrix.md](authz-matrix.md). Together, every person and token may start at
-most 10 of these actions a minute (orders, Test runs, Deploy now, **Renew now**, changes of a certificate, account
+most 10 of these actions a minute (orders, Test runs, Deploy now, **Check again and resume**, changes of a certificate, account
 operations, reading the terms); more are refused with `ALC-SYS-0005`.
 
 ### What Alice connects to
@@ -1637,15 +1637,29 @@ now**); after that Alice plans every minute:
 - Each renewal gets a new private key, which Alice creates and stores encrypted; the certificate is added to
   **Certificates** ("Issued by ACME") and becomes the current one.
 - After a failure Alice waits 1, 2, 4, 8, 16 and then 24 hours, or as long as the authority asks (at most 24 hours),
-  and never orders the same certificate twice within 15 minutes. While the authority limits the requests of one
+  and never orders the same certificate twice within 15 minutes. After a temporary outage the wait is shorter as the
+  certificate nears its end: at most 12 hours in its last 7 days, 6 hours in its last 3 days and 2 hours in its last
+  day. While the authority limits the requests of one
   certificate, the other certificates of that authority wait too (at most 24 hours, and never past the middle of
   their renewal time). At most 5 renewals start per minute.
-- After **3** failed renewals in a row the alert recipients get "Alice could not renew the certificate for …"; after
-  **5** Alice stops renewing it (**Renewal stopped**, e-mail "Automatic renewal stopped: …"). The certificate in use
-  keeps working until it expires. Remove the cause; then **Renew now** (administrators, with a fresh code) switches
-  automatic renewal on again, and Alice renews at the next planned time. To renew at once, use **Order now**; a
-  successful order also ends the stop. These e-mails are only about renewals: when the first order fails, the page
-  says so and nobody is e-mailed.
+- Alice tells two kinds of failure apart (the page shows it under **Kind of the last problem**): a **temporary
+  outage** (the authority or the DNS service could not be reached, did not answer in time, limited the requests or
+  had a server error) and a cause that **needs a person** (a setting, the account at the authority, a refused name, a
+  wrong answer to the check of the names, a DNS hook that refuses Alice's secret, anything Alice cannot tell).
+- After **3** failed renewals in a row the alert recipients get "Alice could not renew the certificate for …". After
+  **5** failures that need a person Alice stops renewing it (**Renewal stopped**, e-mail "Automatic renewal stopped:
+  …"). Temporary outages never stop it while the certificate is valid: Alice keeps trying by itself until it is
+  renewed. Once a certificate has expired, any 5 failures in a row stop it. A certificate that was stopped while its
+  last problem was an outage (for example by an older Alice version) is still tried again by itself, slowly, until it
+  expires. The certificate in use keeps working until it expires.
+- While a renewal fails or is stopped, the alert recipients are reminded **14, 7, 3 and 1 days** before the
+  certificate ends ("Certificate for … expires soon and its renewal is failing" or "… needs attention" or "… is no
+  longer renewed automatically"), once per threshold, with the days left and the last reason. The certificate's page
+  shows under **Last e-mail about it** whether the newest of these e-mails reached its recipients.
+- Remove the cause; then **Check again and resume** (administrators, with a fresh code; on a failing or a stopped
+  certificate) switches automatic renewal on again, clears the failures and orders the certificate at once. **Order
+  now** also renews at once; a successful order ends the stop. These e-mails are only about renewals: when the first
+  order fails, the page says so and nobody is e-mailed.
 
 ### Automatic deployment
 

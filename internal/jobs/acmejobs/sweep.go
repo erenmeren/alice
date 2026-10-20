@@ -22,7 +22,7 @@ import (
 //     FinishACMEOrder). It is ended only for good reasons (endStale) and temporary failures are tried again on the
 //     next ticks for ResumeFor. An interruption is not the certificate's failure: such an order is abandoned
 //     (acme.order_abandoned, key deleted, cleanup queued) without a failure counted; only a certificate the CA issued
-//     that cannot be stored counts (FailACMEOrder).
+//     that cannot be stored counts (FailACMEOrderClass).
 //  2. Every ended order that still lists challenge records, never cleaned or last tried more than CleanupRetry ago,
 //     gets an acme.cleanup job, until CleanupGiveUp after the order ended.
 //
@@ -136,15 +136,15 @@ func refusedByCA(err error) bool {
 }
 
 // abandon ends an interrupted order: an order the CA refused (refusedByCA) fails with its code and counts as the
-// certificate's failure (FailACMEOrder); any other is abandoned without counting (AbandonACMEOrder,
+// certificate's failure (FailACMEOrderClass); any other is abandoned without counting (AbandonACMEOrder,
 // acme.order_abandoned: no failure, no backoff). Its key is deleted and its cleanup queued either way; an order its job
 // ended meanwhile is left as it is.
 func (h *handlers) abandon(ctx context.Context, o inventory.ACMEStaleOrder, why string, cause error) error {
 	h.d.Log.Info("an interrupted ACME order is ended", "order_id", o.ID.String(), "reason", why)
 	var err error
 	if cause != nil && refusedByCA(cause) {
-		code, after := inventory.ACMEOrderErrorCode(cause)
-		err = h.d.Inventory.FailACMEOrder(ctx, o.ID, code, after)
+		code, class, after := inventory.ACMEOrderFailure(cause)
+		err = h.d.Inventory.FailACMEOrderClass(ctx, o.ID, code, class, after)
 	} else {
 		err = h.d.Inventory.AbandonACMEOrder(ctx, o.ID, inventory.ACMEOrderAbandoned)
 	}

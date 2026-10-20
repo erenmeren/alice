@@ -1,6 +1,7 @@
 package notify_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -143,8 +144,10 @@ func TestACMERenewalTemplatesRenderInBothLanguages(t *testing.T) {
 	require.NoError(t, err)
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"name": "www.örnek.example", "names": "www.örnek.example, api.example.com", "count": "3",
-		"expires_at": "2026-12-01 09:00 UTC", "error_reason": "acme.ca_rate_limited"}
-	require.Equal(t, []string{"acme.renewal_failed", "acme.auto_renew_stopped"}, inventory.ACMETemplates())
+		"expires_at": "2026-12-01 09:00 UTC", "error_reason": "acme.ca_rate_limited", "days": "7",
+		"acme_certificate_id": "0199f0a0-0000-7000-8000-000000000001"}
+	require.Equal(t, []string{"acme.renewal_failed", "acme.auto_renew_stopped", "acme.renewal_expiring_transient", "acme.renewal_expiring_permanent",
+		"acme.renewal_expiring_stopped"}, inventory.ACMETemplates())
 	for _, tpl := range inventory.ACMETemplates() {
 		for _, lang := range []string{"en", "tr"} {
 			m := s.Render("ada@example.com", tpl, lang, params)
@@ -161,21 +164,44 @@ func TestACMERenewalTemplatesRenderInBothLanguages(t *testing.T) {
 			assert.Contains(t, m.Body, "3", "%s %s", tpl, lang)
 			assert.Contains(t, m.Body, cat.T(lang, "errors.acme.ca_rate_limited.title", nil), "%s %s: the plain reason", tpl, lang)
 			assert.NotRegexp(t, `(?i)(: |\()(yes|no|true|false)(\.|\)|\n|$)`, text, "%s %s", tpl, lang)
+			assert.NotContains(t, text, "0199f0a0", "%s %s: the certificate's id ties the e-mail to its page, it is not shown", tpl, lang)
+			if strings.HasPrefix(tpl, "acme.renewal_expiring") {
+				assert.Contains(t, m.Subject, "7", "%s %s: the days left", tpl, lang)
+			}
 		}
 	}
+	// The expiry reminders say what Alice does next, by the class of the last failure (owner decision 2026-10-20).
+	transient := s.Render("ada@example.com", inventory.TemplateACMERenewalExpiringTransient, "en", params)
+	assert.Equal(t, "Certificate for www.örnek.example expires soon and its renewal is failing (days left: 7)", transient.Subject)
+	assert.Contains(t, transient.Body, "temporary outage")
+	assert.Contains(t, transient.Body, "keeps trying by itself")
+	assert.Contains(t, transient.Body, "Check again and resume")
+	permanent := s.Render("ada@example.com", inventory.TemplateACMERenewalExpiringPermanent, "en", params)
+	assert.Contains(t, permanent.Body, "not expected to go away by itself")
+	assert.Contains(t, permanent.Body, "stops after 5 such failures")
+	stoppedSoon := s.Render("ada@example.com", inventory.TemplateACMERenewalExpiringStopped, "en", params)
+	assert.Contains(t, stoppedSoon.Body, "does not try again by itself")
+	trTransient := s.Render("ada@example.com", inventory.TemplateACMERenewalExpiringTransient, "tr", params)
+	assert.Contains(t, trTransient.Subject, "kalan gün: 7")
+	assert.Contains(t, trTransient.Body, "geçici bir kesinti")
+	assert.Contains(t, trTransient.Body, "Yeniden dene ve sürdür")
 	en := s.Render("ada@example.com", inventory.TemplateACMERenewalFailed, "en", params)
 	assert.Equal(t, "Alice could not renew the certificate for www.örnek.example", en.Subject)
 	assert.Contains(t, en.Body, "Reason of the last attempt: The authority is limiting requests.")
 	assert.Contains(t, en.Body, "open Issued certificates in Alice")
 	assert.Contains(t, en.Body, "choose Order now", "the button that orders at once")
-	assert.NotContains(t, en.Body, "Renew now", "Renew now only re-arms a stopped certificate")
+	assert.Contains(t, en.Body, "temporary outage", "the failed e-mail tells outages from causes that need a person")
+	assert.Contains(t, en.Body, "stops after 5 such failures")
+	assert.NotContains(t, en.Body, "Renew now", "the old name of Check again and resume")
 	trFailed := s.Render("ada@example.com", inventory.TemplateACMERenewalFailed, "tr", params)
 	assert.Contains(t, trFailed.Body, "Şimdi iste")
 	assert.NotContains(t, trFailed.Body, "Şimdi yenile")
 	tr := s.Render("ada@example.com", inventory.TemplateACMEAutoRenewStopped, "tr", params)
 	assert.Equal(t, "Otomatik yenileme durdu: www.örnek.example sertifikası", tr.Subject)
-	assert.Contains(t, tr.Body, "Şimdi yenile")
+	assert.Contains(t, tr.Body, "Yeniden dene ve sürdür")
+	assert.NotContains(t, tr.Body, "Şimdi yenile")
 	assert.Contains(t, tr.Body, "Şimdi iste", "a stopped certificate is renewed at once with Order now")
+	assert.Contains(t, tr.Body, "14, 7, 3 ve 1 gün önce")
 	assert.Contains(t, tr.Body, "Lütfen yanıtlamayın.", "the footer is in the reader's language")
 }
 

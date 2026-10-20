@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"alice/internal/acme/renew"
 	"alice/internal/inventory"
 )
 
@@ -92,42 +93,52 @@ type acmeWindowDTO struct {
 }
 
 // acmeStoppedRenewalFailures is the stopped_reason of a certificate whose automatic renewal stopped after repeated
-// failures (state stopped, Task 11); only a successful order or an Administrator's re-arm starts it again.
+// failures (state stopped, Task 11); a successful order (also one of the recovery after an outage, recovering) or an
+// Administrator's Check again and resume (re-arm) starts it again.
 const acmeStoppedRenewalFailures = "renewal_failures"
 
 type acmeCertificateDTO struct {
-	ID               string            `json:"id"`
-	ProviderID       string            `json:"provider_id"`
-	AccountID        string            `json:"account_id"`
-	Names            []string          `json:"names"`
-	KeyType          string            `json:"key_type"`
-	Challenge        string            `json:"challenge"`
-	HookID           *string           `json:"hook_id"`
-	HTTPTargetID     *string           `json:"http_target_id"`
-	RenewBeforeDays  int               `json:"renew_before_days"`
-	AutoRenew        bool              `json:"auto_renew"`
-	AutoDeploy       bool              `json:"auto_deploy"`
-	State            string            `json:"state"`
-	StoppedReason    string            `json:"stopped_reason"`
-	Failures         int               `json:"failures"`
-	NextAttemptAt    *time.Time        `json:"next_attempt_at"`
-	LastAttemptAt    *time.Time        `json:"last_attempt_at"`
-	LastError        *errorRefDTO      `json:"last_error"`
-	RunningOrderID   *string           `json:"running_order_id"`
-	Current          *acmeCurrentDTO   `json:"current"`
-	ARIWindow        *acmeWindowDTO    `json:"ari_window"`
-	DeployHeldReason string            `json:"deploy_held_reason"`
-	DeployStopped    bool              `json:"deploy_stopped"`
-	BindingsCount    int               `json:"bindings_count"`
-	Bindings         *[]acmeBindingDTO `json:"bindings,omitempty"` // the certificate's own page only
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	ID              string   `json:"id"`
+	ProviderID      string   `json:"provider_id"`
+	AccountID       string   `json:"account_id"`
+	Names           []string `json:"names"`
+	KeyType         string   `json:"key_type"`
+	Challenge       string   `json:"challenge"`
+	HookID          *string  `json:"hook_id"`
+	HTTPTargetID    *string  `json:"http_target_id"`
+	RenewBeforeDays int      `json:"renew_before_days"`
+	AutoRenew       bool     `json:"auto_renew"`
+	AutoDeploy      bool     `json:"auto_deploy"`
+	State           string   `json:"state"`
+	StoppedReason   string   `json:"stopped_reason"`
+	Failures        int      `json:"failures"`
+	// LastFailureClass is transient or permanent ('' without a failure); PermanentFailures counts the permanent ones;
+	// Recovering: stopped after an outage and still ordered again by itself (until the certificate expires).
+	LastFailureClass  string            `json:"last_failure_class"`
+	PermanentFailures int               `json:"permanent_failures"`
+	Recovering        bool              `json:"recovering"`
+	NextAttemptAt     *time.Time        `json:"next_attempt_at"`
+	LastAttemptAt     *time.Time        `json:"last_attempt_at"`
+	LastError         *errorRefDTO      `json:"last_error"`
+	RunningOrderID    *string           `json:"running_order_id"`
+	Current           *acmeCurrentDTO   `json:"current"`
+	ARIWindow         *acmeWindowDTO    `json:"ari_window"`
+	DeployHeldReason  string            `json:"deploy_held_reason"`
+	DeployStopped     bool              `json:"deploy_stopped"`
+	BindingsCount     int               `json:"bindings_count"`
+	Bindings          *[]acmeBindingDTO `json:"bindings,omitempty"` // the certificate's own page only
+	// LastNotice is how the newest renewal e-mail of the certificate was delivered (the certificate's own page only;
+	// absent when none was queued).
+	LastNotice *acmeNoticeDTO `json:"last_notice,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
 // acmeHoldReasons are the values of deploy_held_reason; anything else is shown as no hold (the openapi enum).
 var acmeHoldReasons = []string{"", inventory.ACMEHoldLicense, inventory.ACMEHoldChainIncomplete}
 
-func acmeCertificateJSON(c inventory.ACMECertificate) acmeCertificateDTO {
+// acmeCertificateJSON is the view of c at now (recovering ends when the current certificate expires).
+func acmeCertificateJSON(c inventory.ACMECertificate, now time.Time) acmeCertificateDTO {
 	d := acmeCertificateDTO{ID: c.ID.String(), ProviderID: c.ProviderID.String(), AccountID: c.AccountID.String(), Names: nonNil(c.Names),
 		KeyType: c.KeyType, Challenge: c.Challenge, HookID: idPtr(c.HookID), HTTPTargetID: idPtr(c.HTTPTargetID), RenewBeforeDays: c.RenewBeforeDays,
 		AutoRenew: c.AutoRenew, AutoDeploy: c.AutoDeploy, State: c.State, Failures: c.Failures, NextAttemptAt: utcPtr(c.NextAttemptAt),
@@ -137,6 +148,11 @@ func acmeCertificateJSON(c inventory.ACMECertificate) acmeCertificateDTO {
 	if c.State == inventory.ACMEStateStopped {
 		d.StoppedReason = acmeStoppedRenewalFailures
 	}
+	if slices.Contains(acmeFailureClasses, c.LastFailureClass) {
+		d.LastFailureClass, d.PermanentFailures = c.LastFailureClass, c.PermanentFailures
+	}
+	d.Recovering = c.State == inventory.ACMEStateStopped && c.AutoRenew && c.LastFailureClass == renew.ClassTransient && c.Current != nil &&
+		now.Before(c.Current.NotAfter)
 	if c.Current != nil {
 		d.Current = &acmeCurrentDTO{ID: c.Current.ID.String(), Fingerprint: c.Current.Fingerprint, NotBefore: c.Current.NotBefore.UTC(),
 			NotAfter: c.Current.NotAfter.UTC(), ChainComplete: c.Current.ChainComplete}
@@ -148,6 +164,31 @@ func acmeCertificateJSON(c inventory.ACMECertificate) acmeCertificateDTO {
 		d.DeployHeldReason = ""
 	}
 	return d
+}
+
+// acmeFailureClasses are the values of last_failure_class; anything else is shown as none (the openapi enum).
+var acmeFailureClasses = []string{"", renew.ClassTransient, renew.ClassPermanent}
+
+// acmeNoticeDTO is the delivery of the newest renewal e-mail of a certificate: one copy per recipient, counted by
+// outcome; last_failure_code is the mail error of a copy that was not sent (smtp.*, as on the notifications banner).
+type acmeNoticeDTO struct {
+	Template        string     `json:"template"`
+	QueuedAt        time.Time  `json:"queued_at"`
+	Recipients      int        `json:"recipients"`
+	Sent            int        `json:"sent"`
+	Pending         int        `json:"pending"`
+	Failed          int        `json:"failed"`
+	Skipped         int        `json:"skipped"`
+	SentAt          *time.Time `json:"sent_at"`
+	LastFailureCode string     `json:"last_failure_code"`
+}
+
+func acmeNoticeJSON(n *inventory.ACMENoticeDelivery) *acmeNoticeDTO {
+	if n == nil {
+		return nil
+	}
+	return &acmeNoticeDTO{Template: n.Template, QueuedAt: n.QueuedAt.UTC(), Recipients: n.Recipients, Sent: n.Sent, Pending: n.Pending,
+		Failed: n.Failed, Skipped: n.Skipped, SentAt: utcPtr(n.SentAt), LastFailureCode: n.LastErrorCode}
 }
 
 type acmeBindingDTO struct {

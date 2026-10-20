@@ -711,7 +711,7 @@ func (s *server) listACMECertificates(w http.ResponseWriter, r *http.Request) {
 			next = acmeCertCursor(last)
 			break
 		}
-		items = append(items, acmeCertificateJSON(c))
+		items = append(items, acmeCertificateJSON(c, s.deps.Clock.Now()))
 		last = c
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor(next)})
@@ -742,7 +742,7 @@ func (s *server) createACMECertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/acme/certificates/"+c.ID.String())
-	writeJSON(w, http.StatusCreated, acmeCertificateJSON(c))
+	writeJSON(w, http.StatusCreated, acmeCertificateJSON(c, s.deps.Clock.Now()))
 }
 
 // getACMECertificate is one certificate with its bindings (state, attention mark) and its deploy hold and stop marks.
@@ -762,12 +762,18 @@ func (s *server) getACMECertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	d := acmeCertificateJSON(c)
+	notice, err := s.deps.ACME.ACMENoticeDelivery(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	d := acmeCertificateJSON(c, s.deps.Clock.Now())
 	list := make([]acmeBindingDTO, 0, len(bindings))
 	for _, b := range bindings {
 		list = append(list, acmeBindingJSON(b))
 	}
 	d.Bindings = &list
+	d.LastNotice = acmeNoticeJSON(notice)
 	writeJSON(w, http.StatusOK, d)
 }
 
@@ -797,7 +803,7 @@ func (s *server) updateACMECertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, acmeCertificateJSON(c))
+	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now()))
 }
 
 func (s *server) deleteACMECertificate(w http.ResponseWriter, r *http.Request) {
@@ -860,7 +866,9 @@ func (s *server) listACMEOrders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
-// rearmACME switches automatic renewal on again and starts it afresh (after it stopped at five failures).
+// rearmACME is "Check again and resume" (the web's Renew now): it switches automatic renewal on again, starts it afresh
+// (no failures, no wait) and queues an order of the person at once for an issued certificate (owner decision
+// 2026-10-20); 200 with the certificate, whose running_order_id names the order.
 func (s *server) rearmACME(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathUUID(r, "id")
 	if !ok {
@@ -872,7 +880,7 @@ func (s *server) rearmACME(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, acmeCertificateJSON(c))
+	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now()))
 }
 
 // releaseACMEHold releases the current certificate from the licence hold of automatic deployment.
@@ -891,7 +899,7 @@ func (s *server) releaseACMEHold(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, acmeCertificateJSON(c))
+	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now()))
 }
 
 func (s *server) listACMEBindings(w http.ResponseWriter, r *http.Request) {

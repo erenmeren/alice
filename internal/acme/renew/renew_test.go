@@ -64,14 +64,77 @@ func TestDecide(t *testing.T) {
 		{"locked: nothing", func() Input { i := issued(nb90, 90*day); i.Locked = true; return i }(), None, ReasonLocked, nil},
 		{"auto renewal off", func() Input { i := issued(nb90, 90*day); i.AutoRenew = false; return i }(), None, ReasonAutoRenewOff, nil},
 		{"stopped", func() Input { i := issued(nb90, 90*day); i.State = StateStopped; i.Failures = 5; return i }(), None, ReasonStopped, nil},
+		{"stopped, never issued, transient", Input{Now: t0, RenewBeforeDays: 30, AutoRenew: true, State: StateStopped, Failures: 5,
+			LastFailureClass: ClassTransient}, None, ReasonStopped, nil},
 		{"never issued: the first order is a person's", Input{Now: t0, RenewBeforeDays: 30, AutoRenew: true, State: StatePending}, None,
 			ReasonNeverIssued, nil},
 		{"never issued, failing", Input{Now: t0, RenewBeforeDays: 30, AutoRenew: true, State: StateFailing, Failures: 9}, None,
 			ReasonNeverIssued, nil},
-		{"five failures stop", func() Input { i := issued(nb90, 90*day); i.Failures = 5; i.State = StateFailing; return i }(), Stop,
-			ReasonStopAfterFailures, nil},
-		{"seven failures stop", func() Input { i := issued(nb90, 90*day); i.Failures = 7; i.State = StateFailing; return i }(), Stop,
-			ReasonStopAfterFailures, nil},
+		{"five permanent failures stop", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.PermanentFailures, i.LastFailureClass, i.State = 5, 5, ClassPermanent, StateFailing
+			return i
+		}(), Stop, ReasonStopAfterFailures, nil},
+		{"seven failures, five of them permanent, stop (the last one transient)", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.PermanentFailures, i.LastFailureClass, i.State = 7, 5, ClassTransient, StateFailing
+			return i
+		}(), Stop, ReasonStopAfterFailures, nil},
+		{"five transient failures do not stop: the backoff paces", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.LastFailureClass, i.State, i.LastAttemptAt = 5, ClassTransient, StateFailing, at(-time.Hour)
+			return i
+		}(), None, ReasonBackoff, at(15 * time.Hour)},
+		{"twenty transient failures, four permanent: no stop, the daily retry", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.PermanentFailures, i.LastFailureClass, i.State, i.LastAttemptAt = 20, 4, ClassTransient, StateFailing, at(-25*time.Hour)
+			return i
+		}(), Order, ReasonDue, nil},
+		{"expired: five failures of any class stop", func() Input {
+			i := issued(t0.Add(-100*day), 90*day)
+			i.Failures, i.LastFailureClass, i.State = 5, ClassTransient, StateFailing
+			return i
+		}(), Stop, ReasonStopAfterFailures, nil},
+		{"expired: four transient failures still order", func() Input {
+			i := issued(t0.Add(-100*day), 90*day)
+			i.Failures, i.LastFailureClass, i.State, i.LastAttemptAt = 4, ClassTransient, StateFailing, at(-9*time.Hour)
+			return i
+		}(), Order, ReasonDue, nil},
+		{"stopped after a transient failure: recovery once the wait passed", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.PermanentFailures, i.LastFailureClass, i.State, i.LastAttemptAt = 6, 5, ClassTransient, StateStopped, at(-25*time.Hour)
+			return i
+		}(), Order, ReasonRecovery, nil},
+		{"stopped after a transient failure: waits for the slow cadence", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.LastFailureClass, i.State, i.LastAttemptAt = 9, ClassTransient, StateStopped, at(-time.Hour)
+			return i
+		}(), None, ReasonBackoff, at(23 * time.Hour)},
+		{"stopped after a transient failure, expired: stays stopped", func() Input {
+			i := issued(t0.Add(-100*day), 90*day)
+			i.Failures, i.LastFailureClass, i.State, i.LastAttemptAt = 9, ClassTransient, StateStopped, at(-48*time.Hour)
+			return i
+		}(), None, ReasonStopped, nil},
+		{"stopped after a permanent failure: stays stopped", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.PermanentFailures, i.LastFailureClass, i.State, i.LastAttemptAt = 5, 5, ClassPermanent, StateStopped, at(-48*time.Hour)
+			return i
+		}(), None, ReasonStopped, nil},
+		{"stopped in recovery while an order runs", func() Input {
+			i := issued(nb90, 90*day)
+			i.Failures, i.LastFailureClass, i.State, i.OrderRunning = 9, ClassTransient, StateStopped, true
+			return i
+		}(), None, ReasonOrderRunning, nil},
+		{"transient failures near the expiry: the retry comes sooner", func() Input {
+			i := issued(t0.Add(-88*day), 90*day) // 2 days left
+			i.Failures, i.LastFailureClass, i.State, i.LastAttemptAt = 8, ClassTransient, StateFailing, at(-7*time.Hour)
+			return i
+		}(), Order, ReasonDue, nil},
+		{"permanent failures near the expiry: the ordinary backoff", func() Input {
+			i := issued(t0.Add(-88*day), 90*day)
+			i.Failures, i.PermanentFailures, i.LastFailureClass, i.State, i.LastAttemptAt = 4, 4, ClassPermanent, StateFailing, at(-7*time.Hour)
+			return i
+		}(), None, ReasonBackoff, at(time.Hour)},
 		{"an order runs", func() Input { i := issued(nb90, 90*day); i.OrderRunning = true; return i }(), None, ReasonOrderRunning, nil},
 		{"due by the local rule", issued(nb90, 90*day), Order, ReasonDue, nil},
 		{"not due yet", issued(t0.Add(-59*day), 90*day), None, ReasonNotDue, nil},
@@ -274,11 +337,16 @@ func TestAfterFailure(t *testing.T) {
 		{"three: the e-mail", FailureState{Failures: 3, AutoRenew: true, Issued: true}, true, false},
 		{"three, mailed already", FailureState{Failures: 3, AutoRenew: true, Issued: true, Notified: true}, false, false},
 		{"four, not mailed (switched on later)", FailureState{Failures: 4, AutoRenew: true, Issued: true}, true, false},
-		{"five: the stop", FailureState{Failures: 5, AutoRenew: true, Issued: true, Notified: true}, false, true},
-		{"five, never mailed: the stop only", FailureState{Failures: 5, AutoRenew: true, Issued: true}, false, true},
-		{"six, stopped already", FailureState{Failures: 6, AutoRenew: true, Issued: true, Stopped: true}, false, false},
-		{"auto renewal off: nothing", FailureState{Failures: 5, Issued: true}, false, false},
-		{"never issued: a person's first order, nothing", FailureState{Failures: 5, AutoRenew: true}, false, false},
+		{"five permanent: the stop", FailureState{Failures: 5, PermanentFailures: 5, AutoRenew: true, Issued: true, Notified: true}, false, true},
+		{"five permanent, never mailed: the stop only", FailureState{Failures: 5, PermanentFailures: 5, AutoRenew: true, Issued: true}, false, true},
+		{"five transient: no stop", FailureState{Failures: 5, AutoRenew: true, Issued: true, Notified: true}, false, false},
+		{"twelve, four permanent: no stop", FailureState{Failures: 12, PermanentFailures: 4, AutoRenew: true, Issued: true, Notified: true}, false, false},
+		{"eight, five permanent: the stop", FailureState{Failures: 8, PermanentFailures: 5, AutoRenew: true, Issued: true, Notified: true}, false, true},
+		{"expired, five transient: the stop", FailureState{Failures: 5, AutoRenew: true, Issued: true, Expired: true, Notified: true}, false, true},
+		{"expired, four transient: no stop", FailureState{Failures: 4, AutoRenew: true, Issued: true, Expired: true, Notified: true}, false, false},
+		{"six, stopped already", FailureState{Failures: 6, PermanentFailures: 6, AutoRenew: true, Issued: true, Stopped: true}, false, false},
+		{"auto renewal off: nothing", FailureState{Failures: 5, PermanentFailures: 5, Issued: true}, false, false},
+		{"never issued: a person's first order, nothing", FailureState{Failures: 5, PermanentFailures: 5, AutoRenew: true}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			o := AfterFailure(tc.in)
@@ -293,4 +361,48 @@ func TestNeutralCodes(t *testing.T) {
 	assert.True(t, Neutral("job.lease_expired"))
 	assert.False(t, Neutral("acme.ca_rate_limited"))
 	assert.False(t, Neutral(""))
+}
+
+func TestRecoveryInterval(t *testing.T) {
+	for left, want := range map[time.Duration]time.Duration{30 * day: 24 * time.Hour, 8 * day: 24 * time.Hour, 7 * day: 12 * time.Hour,
+		4 * day: 12 * time.Hour, 3 * day: 6 * time.Hour, 2 * day: 6 * time.Hour, day: 2 * time.Hour, time.Hour: 2 * time.Hour, -day: 2 * time.Hour} {
+		assert.Equal(t, want, RecoveryInterval(left), "left %s", left)
+	}
+}
+
+func TestRetryWait(t *testing.T) {
+	// Permanent (or unknown): the ordinary backoff, whatever is left.
+	assert.Equal(t, 4*time.Hour, RetryWait(3, ClassPermanent, 12*time.Hour))
+	assert.Equal(t, 24*time.Hour, RetryWait(9, "", 12*time.Hour))
+	// Transient: the backoff, but never longer than the recovery interval of the time left.
+	assert.Equal(t, 4*time.Hour, RetryWait(3, ClassTransient, 30*day))
+	assert.Equal(t, 24*time.Hour, RetryWait(9, ClassTransient, 30*day))
+	assert.Equal(t, 12*time.Hour, RetryWait(9, ClassTransient, 5*day))
+	assert.Equal(t, 6*time.Hour, RetryWait(9, ClassTransient, 2*day))
+	assert.Equal(t, 2*time.Hour, RetryWait(9, ClassTransient, 12*time.Hour))
+	assert.Equal(t, time.Hour, RetryWait(1, ClassTransient, 12*time.Hour))
+	assert.Equal(t, time.Duration(0), RetryWait(0, ClassTransient, 12*time.Hour))
+}
+
+func TestShouldStop(t *testing.T) {
+	assert.False(t, ShouldStop(4, 4, false))
+	assert.True(t, ShouldStop(5, 5, false))
+	assert.False(t, ShouldStop(50, 4, false), "transient failures alone never stop before the expiry")
+	assert.True(t, ShouldStop(5, 0, true), "after the expiry five of any class stop")
+	assert.False(t, ShouldStop(4, 0, true))
+}
+
+func TestClassOfCode(t *testing.T) {
+	for _, c := range []string{"acme.ca_rate_limited", "acme.provider_unreachable", "acme.not_issued_in_time", "acme.order_abandoned",
+		"acme.rollover_pending"} {
+		assert.Equal(t, ClassTransient, ClassOfCode(c), c)
+	}
+	for _, c := range []string{"acme.validation_failed_dns", "acme.hook_refused", "acme.account_rejected", "acme.identifier_refused",
+		"acme.account_state", "acme.directory_invalid", "internal.unexpected", ""} {
+		assert.Equal(t, ClassPermanent, ClassOfCode(c), c)
+	}
+}
+
+func TestExpiryNoticeDays(t *testing.T) {
+	assert.Equal(t, []int{14, 7, 3, 1}, ExpiryNoticeDays())
 }

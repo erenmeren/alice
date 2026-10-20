@@ -452,6 +452,8 @@ A single scheduler goroutine per process holds a Postgres advisory lock (`pg_try
 
 Handlers return a classified error: `Retryable`, `Permanent`, or `NeedsAttention`. Retryable failures re-queue with exponential backoff and jitter: `min(30s * 2^(attempt-1), 30m) +- 20%`; default `max_attempts`: discovery 5, deploy 3, notify 10, poll 3. Exhausted jobs move to `dead` and raise an alert. `Permanent` (auth failed, host key changed) never retries and marks the target status. Deployments and rotations retry only until their first mutating step; after a mutation the handler either completes or rolls back and reports `failed`/`rolled_back` (no blind retry of a partially applied state).
 
+**ACME renewal failures (R45, owner decision 2026-10-20).** An ACME order is not retried by the runner (one attempt per job); the renewal planner decides the next one. Its failures are classified `transient` (outage) or `permanent` (needs a person) from the RFC 8555 problem type, the HTTP status and the cause (`acme.FailureClass`); five permanent failures stop automatic renewal, transient ones never do while the certificate is valid (five of any class after it expired), the wait after a transient failure shrinks as the end nears (24 h, 12 h within 7 days, 6 h within 3, 2 h in the last day), and a certificate stopped with a transient last failure is ordered again by itself until it expires. Rulings: `docs/superpowers/rulings/acme-renewal-recovery.md`.
+
 ### 8.5 Concurrency limits
 
 - Global workers: default 8 (config `jobs.workers`).

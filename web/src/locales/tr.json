@@ -3201,7 +3201,7 @@
       "testRunHelp": "Deneme çalıştırması, sertifika yetkilisinin adlarınızı doğrulayabildiğini denetler. Hiçbir sertifika verilmez veya kurulmaz.",
       "getNow": "Sertifikayı şimdi al",
       "orderNow": "Şimdi iste",
-      "renewNow": "Şimdi yenile",
+      "renewNow": "Yeniden dene ve sürdür",
       "rearmed": "Otomatik yenileme yeniden açık. Alice sertifikayı bir sonraki planlanan zamanda yeniler. Hemen yenilemek için {{order}} düğmesini kullanın.",
       "orderRunning": "Alice sertifika yetkilisiyle görüşüyor. Bu sayfa kendiliğinden güncellenir.",
       "deployNow": "Şimdi dağıt",
@@ -3270,11 +3270,31 @@
         "failingNext_one": "Son deneme başarısız oldu. Alice {{time}} zamanında yeniden dener.",
         "failingNext_other": "Son {{count}} deneme başarısız oldu. Alice {{time}} zamanında yeniden dener.",
         "stoppedTitle": "Otomatik yenileme durdu",
-        "stoppedText_one": "Alice, sertifika yetkilisine boş yere sormaya devam etmemek için {{count}} başarısız denemeden sonra bu sertifikayı kendiliğinden yenilemeyi durdurdu.",
-        "stoppedText_other": "Alice, sertifika yetkilisine boş yere sormaya devam etmemek için art arda {{count}} başarısız denemeden sonra bu sertifikayı kendiliğinden yenilemeyi durdurdu.",
-        "stoppedAdmin": "Aşağıdaki sorunu giderin, ardından Şimdi yenile'yi seçin: otomatik yenileme bir sonraki planlanan zamanda yeniden başlar. Hemen yenilemek için {{order}} düğmesini kullanın. Önce yapılacak bir deneme çalıştırması, adların doğrulanıp doğrulanamadığını gösterir.",
-        "stoppedOperator": "Aşağıdaki sorunu giderin ve Deneme çalıştırması veya {{order}} düğmesini kullanın. Otomatik yenilemeyi yalnızca bir yönetici yeniden açabilir (Şimdi yenile).",
-        "stoppedAuditor": "Bir yönetici otomatik yenilemeyi Şimdi yenile ile yeniden açabilir."
+        "stoppedText_one": "Neden bir kişinin ilgilenmesini gerektirdiği için Alice, {{count}} başarısız denemeden sonra sertifika yetkilisine boş yere sormayı sürdürmemek için bu sertifikayı kendiliğinden yenilemeyi durdurdu.",
+        "stoppedText_other": "Neden bir kişinin ilgilenmesini gerektirdiği için Alice, art arda {{count}} başarısız denemeden sonra sertifika yetkilisine boş yere sormayı sürdürmemek için bu sertifikayı kendiliğinden yenilemeyi durdurdu.",
+        "stoppedAdmin": "Aşağıdaki sorunu giderin, ardından Yeniden dene ve sürdür düğmesini seçin: Alice sertifikayı hemen ister ve yeniden kendiliğinden yeniler. {{order}} de sertifikayı hemen yeniler. Önce bir Deneme çalıştırması adların doğrulanıp doğrulanamadığını gösterir.",
+        "stoppedOperator": "Aşağıdaki sorunu giderin ve Deneme çalıştırması ya da {{order}} kullanın. Otomatik yenilemeyi yalnızca bir yönetici sürdürebilir (Yeniden dene ve sürdür).",
+        "stoppedAuditor": "Bir yönetici otomatik yenilemeyi Yeniden dene ve sürdür ile sürdürebilir.",
+        "failureClass": "Son sorunun türü",
+        "class": {
+          "transient": "Geçici (bir kesinti)",
+          "permanent": "Bir kişinin ilgilenmesi gerekiyor"
+        },
+        "transientText": "Neden geçici görünüyor: sertifika yetkilisine ya da DNS hizmetine ulaşılamadı, zamanında yanıt alınamadı ya da istekler sınırlandı. Alice kendiliğinden denemeye devam eder; en az günde bir kez dener ve sertifikanın süresi dolmaya yaklaştıkça daha sık dener.",
+        "permanentText_one": "Nedenin bir kişi tarafından giderilmesi gerekiyor (örneğin bir ayar, sertifika yetkilisindeki hesap ya da reddedilen bir ad). {{count}} deneme daha bu şekilde başarısız olursa Alice kendiliğinden denemeyi bırakır.",
+        "permanentText_other": "Nedenin bir kişi tarafından giderilmesi gerekiyor (örneğin bir ayar, sertifika yetkilisindeki hesap ya da reddedilen bir ad). {{count}} deneme daha bu şekilde başarısız olursa Alice kendiliğinden denemeyi bırakır.",
+        "recoveringText_one": "Alice {{count}} başarısız denemeden sonra durdu, ancak son sorun geçici bir kesintiydi: Alice sertifikanın süresi dolana kadar en az günde bir kez kendiliğinden yeniden dener.",
+        "recoveringText_other": "Alice art arda {{count}} başarısız denemeden sonra durdu, ancak son sorun geçici bir kesintiydi: Alice sertifikanın süresi dolana kadar en az günde bir kez kendiliğinden yeniden dener.",
+        "lastNotice": "Bununla ilgili son e-posta",
+        "notice": {
+          "sent_one": "{{count}} alıcıdan {{sent}} alıcıya gönderildi ({{time}})",
+          "sent_other": "{{count}} alıcıdan {{sent}} alıcıya gönderildi ({{time}})",
+          "pending_one": "{{count}} alıcıdan {{pending}} alıcı için hâlâ deneniyor (son hata: {{code}}; {{time}})",
+          "pending_other": "{{count}} alıcıdan {{pending}} alıcı için hâlâ deneniyor (son hata: {{code}}; {{time}})",
+          "failed_one": "{{count}} alıcıdan {{failed}} alıcıya ulaştırılamadı ({{code}}; {{time}})",
+          "failed_other": "{{count}} alıcıdan {{failed}} alıcıya ulaştırılamadı ({{code}}; {{time}})",
+          "noServer": "Gönderilmedi: bir e-posta sunucusu ayarlanmamış ({{time}})"
+        }
       },
       "test": {
         "running": "Deneme çalıştırması sürüyor",
@@ -3453,7 +3473,8 @@
         "testHelp": "Deneme çalıştırması (önerilir), hiçbir şey vermeden yetkilinin adlarınızı doğrulayabildiğini denetler. Ya da sertifikayı şimdi alın.",
         "testFirst": "Önce bir deneme yap",
         "later": "Sertifikayı aç"
-      }
+      },
+      "rearmedOrdered": "Otomatik yenileme yeniden açık ve Alice sertifikayı şimdi istiyor. Aşağıdaki istekler nasıl ilerlediğini gösterir."
     }
   },
   "discovery": {

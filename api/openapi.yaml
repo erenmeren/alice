@@ -4249,10 +4249,15 @@ paths:
       - { $ref: "#/components/parameters/ID" }
     post:
       operationId: rearmACMECertificate
-      summary: Switch automatic renewal on again and start it afresh (after it stopped)
+      summary: Check again and resume (the web's Renew now) - switch automatic renewal on again, start it afresh and order now
       description: >-
-        Clears the failure count, the wait and the stopped state. Administrator with a fresh step-up, never an API token. At
-        most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is locked.
+        Switches automatic renewal on, clears the failure counts (of both classes), the wait, the "renewal failed" mark and
+        the stopped state, and, for a certificate that was issued and has no running order, starts an order of the person
+        at once (trigger manual; follow it in GET /orders and running_order_id), all in one transaction with the audit rows
+        acme.auto_renew.rearmed and acme.order.started. 409 ALC-ACM-0023 (no active account) and 409 ALC-ACM-0024 (key
+        change unsettled) refuse the whole act; while the job of an earlier order is still finishing, automatic renewal is
+        re-armed without a new order and the planner orders at its next run. Administrator with a fresh step-up, never an
+        API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
       responses:
         "200":
@@ -4262,6 +4267,7 @@ paths:
               schema: { $ref: "#/components/schemas/ACMECertificate" }
         "403": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
         "429": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
   /api/v1/acme/certificates/{id}/release-hold:
@@ -5172,8 +5178,8 @@ components:
     ACMECertificate:
       type: object
       required: [id, provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew,
-        auto_deploy, state, stopped_reason, failures, next_attempt_at, last_attempt_at, last_error, running_order_id, current, ari_window,
-        deploy_held_reason, deploy_stopped, bindings_count, created_at, updated_at]
+        auto_deploy, state, stopped_reason, failures, last_failure_class, permanent_failures, recovering, next_attempt_at, last_attempt_at,
+        last_error, running_order_id, current, ari_window, deploy_held_reason, deploy_stopped, bindings_count, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         provider_id: { type: string, format: uuid }
@@ -5187,8 +5193,17 @@ components:
         auto_renew: { type: boolean }
         auto_deploy: { type: boolean }
         state: { type: string, enum: [pending, issuing, active, failing, stopped] }
-        stopped_reason: { type: string, enum: ["", renewal_failures], description: 'renewal_failures: automatic renewal stopped after repeated failures (Renew now or re-arm)' }
-        failures: { type: integer }
+        stopped_reason: { type: string, enum: ["", renewal_failures], description: 'renewal_failures: automatic renewal stopped after repeated failures (Check again and resume: POST /rearm)' }
+        failures: { type: integer, description: 'Failed renewals in a row, of both classes' }
+        last_failure_class:
+          type: string
+          enum: ["", transient, permanent]
+          description: >-
+            The class of the last failure: transient (an outage that clears by itself: the CA, its lookups or the DNS hook
+            unreachable or timing out, a rate limit, a server error) or permanent (it needs a person: a setting, the account, a
+            refused name, a wrong challenge answer); empty without a failure
+        permanent_failures: { type: integer, description: 'The permanent failures among them; 5 stop automatic renewal (transient ones never do while the certificate is valid)' }
+        recovering: { type: boolean, description: 'Stopped, but the last failure was an outage: Alice still orders it again by itself, slowly, until it expires' }
         next_attempt_at: { type: [string, "null"], format: date-time }
         last_attempt_at: { type: [string, "null"], format: date-time }
         last_error: { $ref: "#/components/schemas/ErrorRef" }
@@ -5214,6 +5229,23 @@ components:
         deploy_stopped: { type: boolean, description: 'Automatic deployment of the current certificate stopped after repeated failures' }
         bindings_count: { type: integer }
         bindings: { type: array, description: GET of one certificate only, items: { $ref: "#/components/schemas/ACMEBinding" } }
+        last_notice:
+          type: object
+          description: >-
+            GET of one certificate only, absent when no renewal e-mail was queued for it: how the newest renewal e-mail
+            (renewal failed, automatic renewal stopped, expires soon while its renewal fails) was delivered, one copy per
+            recipient
+          required: [template, queued_at, recipients, sent, pending, failed, skipped, sent_at, last_failure_code]
+          properties:
+            template: { type: string, enum: [acme.renewal_failed, acme.auto_renew_stopped, acme.renewal_expiring_transient, acme.renewal_expiring_permanent, acme.renewal_expiring_stopped] }
+            queued_at: { type: string, format: date-time }
+            recipients: { type: integer }
+            sent: { type: integer }
+            pending: { type: integer, description: Still being tried }
+            failed: { type: integer, description: Given up }
+            skipped: { type: integer, description: Not sent because no mail server is set }
+            sent_at: { type: [string, "null"], format: date-time }
+            last_failure_code: { type: string, description: 'The mail error of a copy that was not sent (smtp.*), empty without one' }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     ACMECertificatePage:

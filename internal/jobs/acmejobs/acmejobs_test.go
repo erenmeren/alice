@@ -6,9 +6,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -139,6 +141,7 @@ type stubInv struct {
 	orderErr    error
 
 	failed    []string
+	classes   []string
 	aborted   []string
 	recorded  []string
 	finished  int
@@ -188,10 +191,11 @@ func (s *stubInv) SucceedACMETestOrder(context.Context, uuid.UUID) error {
 	s.succeeded++
 	return s.succeedErr
 }
-func (s *stubInv) FailACMEOrder(_ context.Context, _ uuid.UUID, code string, _ time.Duration) error {
+func (s *stubInv) FailACMEOrderClass(_ context.Context, _ uuid.UUID, code, class string, _ time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.failed = append(s.failed, code)
+	s.classes = append(s.classes, class)
 	return s.failErr
 }
 func (s *stubInv) RecordACMEOrderURL(context.Context, uuid.UUID, string) error { return nil }
@@ -469,6 +473,9 @@ func TestIssueStoreOutcomes(t *testing.T) {
 				assert.Equal(t, tc.reason, failureOf(t, err).Reason)
 			}
 			assert.Equal(t, tc.failed, inv.failed)
+			if tc.failed != nil {
+				assert.Equal(t, []string{acme.ClassPermanent}, inv.classes, "a chain that does not fit is not an outage")
+			}
 			assert.Equal(t, tc.finished, inv.finished)
 		})
 	}
@@ -795,4 +802,40 @@ func TestShutdownBeforeTheOrderURLIsNeutral(t *testing.T) {
 	assert.NotEqual(t, reasonLeaseExpired, f.Reason)
 	assert.Equal(t, []string{f.Reason}, inv.failed, "counted")
 	assert.Empty(t, inv.aborted)
+}
+
+// A failed order is counted with its class (owner decision 2026-10-20): a DNS hook that does not answer is an outage
+// (transient), one that refuses (4xx) or a name the allow-list no longer admits needs a person (permanent).
+func TestIssueFailuresCarryTheirClass(t *testing.T) {
+	ok := job(map[string]string{"order_id": uuid.NewString()})
+	s, client := fakeCA(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	dead := httptest.NewTLSServer(http.NotFoundHandler())
+	deadURL, deadCA := dead.URL, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: dead.Certificate().Raw}))
+	dead.Close()
+	refusing := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) }))
+	t.Cleanup(refusing.Close)
+	refusingCA := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: refusing.Certificate().Raw}))
+	for _, tc := range []struct {
+		name, code, class string
+		mut               func(*stubInv)
+	}{
+		{"hook unreachable", acme.ReasonHookRefused, acme.ClassTransient, func(i *stubInv) {
+			i.hookCfg.URL, i.hookCfg.CABundlePEM = deadURL, deadCA
+		}},
+		{"hook refuses", acme.ReasonHookRefused, acme.ClassPermanent, func(i *stubInv) {
+			i.hookCfg.URL, i.hookCfg.CABundlePEM = refusing.URL, refusingCA
+		}},
+		{"name no longer allowed", acme.ReasonNameNotAllowed, acme.ClassPermanent, func(i *stubInv) { i.work.ProviderSuffixes = nil }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inv := &stubInv{work: runningWork(inventory.ACMEChallengeDNS01), client: client, key: key, hookCfg: hookConfig(s)}
+			tc.mut(inv)
+			_, err := stubHandlers(t, inv, openGate{}, nil).issue(context.Background(), ok, nil)
+			assert.Equal(t, tc.code, failureOf(t, err).Reason)
+			assert.Equal(t, []string{tc.code}, inv.failed)
+			assert.Equal(t, []string{tc.class}, inv.classes)
+		})
+	}
 }

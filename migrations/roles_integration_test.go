@@ -218,8 +218,8 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.acme_certificates": {"UPDATE": {"account_id", "ari_checked_at", "ari_next_check_at", "ari_window_end", "ari_window_start", "auto_deploy", "auto_renew",
 		"challenge", "current_certificate_id", "deleted_at", "deploy_held_certificate_id", "deploy_held_reason",
 		"deploy_released_certificate_id", "deploy_stopped_certificate_id", "failure_notified_at", "failures", "hook_id",
-		"http_target_id", "key_type", "last_attempt_at", "last_error_code", "names", "next_attempt_at", "provider_id",
-		"rate_limited_since", "renew_before_days", "state", "updated_at"}},
+		"http_target_id", "key_type", "last_attempt_at", "last_error_code", "last_failure_class", "names", "next_attempt_at",
+		"permanent_failures", "provider_id", "rate_limited_since", "renew_before_days", "state", "updated_at"}},
 	"public.acme_orders": {"UPDATE": {"certificate_id", "cleanup_at", "cleanup_error_code", "error_code", "finished_at", "order_url",
 		"pending_key_ct", "pending_key_nonce", "pending_key_version", "pending_key_wrapped_dek", "presented", "state"}},
 	"public.acme_bindings": {"UPDATE": {"attention_at", "attention_code", "auto_deploy"}},
@@ -280,6 +280,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	defer rows.Close()
 	columns := columnGrants(t, d, schemas)
 	apache := hasApacheType(t, d)
+	recovery := hasColumn(t, d, "acme_certificates", "last_failure_class")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -307,6 +308,11 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]),
 				func(c string) bool { return c == "capabilities" })}
 		}
+		if name == "public.acme_certificates" && !recovery {
+			// Below 00020 the failure class columns do not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]),
+				func(c string) bool { return c == "last_failure_class" || c == "permanent_failures" })}
+		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {
 			problems = append(problems, name)
 		}
@@ -322,6 +328,15 @@ func hasApacheType(t *testing.T, d *pgtest.DB) bool {
 	var has bool
 	require.NoError(t, d.Owner.QueryRow(context.Background(),
 		"SELECT coalesce(bool_or(pg_get_constraintdef(oid) LIKE '%''apache''%'), false) FROM pg_constraint WHERE conname = 'targets_type_check'").Scan(&has))
+	return has
+}
+
+// hasColumn: whether table (schema public) has column (a migration that added it is applied).
+func hasColumn(t *testing.T, d *pgtest.DB, table, column string) bool {
+	t.Helper()
+	var has bool
+	require.NoError(t, d.Owner.QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2)`, table, column).Scan(&has))
 	return has
 }
 

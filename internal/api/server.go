@@ -212,6 +212,7 @@ type ACMEService interface {
 	RequestOrder(ctx context.Context, a inventory.Actor, acmeCertificateID uuid.UUID, kind string) (inventory.ACMEOrder, error)
 	ListACMEOrders(ctx context.Context, acmeCertificateID uuid.UUID, limit int) ([]inventory.ACMEOrder, error)
 	ReArmACMEAutoRenew(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.ACMECertificate, error)
+	ACMENoticeDelivery(ctx context.Context, id uuid.UUID) (*inventory.ACMENoticeDelivery, error)
 	ReleaseACMEDeployHold(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	ListACMEBindings(ctx context.Context, id uuid.UUID) ([]inventory.ACMEBinding, error)
 	AddACMEBindingStrict(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)

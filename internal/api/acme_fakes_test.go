@@ -35,6 +35,7 @@ type fakeACME struct {
 	RequestOrderFn          func(ctx context.Context, a inventory.Actor, acmeCertificateID uuid.UUID, kind string) (inventory.ACMEOrder, error)
 	ListACMEOrdersFn        func(ctx context.Context, acmeCertificateID uuid.UUID, limit int) ([]inventory.ACMEOrder, error)
 	ReArmACMEAutoRenewFn    func(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.ACMECertificate, error)
+	ACMENoticeDeliveryFn    func(ctx context.Context, id uuid.UUID) (*inventory.ACMENoticeDelivery, error)
 	ReleaseACMEDeployHoldFn func(ctx context.Context, a inventory.Actor, id uuid.UUID) error
 	ListACMEBindingsFn      func(ctx context.Context, id uuid.UUID) ([]inventory.ACMEBinding, error)
 	AddACMEBindingFn        func(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)
@@ -209,6 +210,14 @@ func (f *fakeACME) ReArmACMEAutoRenew(ctx context.Context, a inventory.Actor, id
 		return f.ReArmACMEAutoRenewFn(ctx, a, id)
 	}
 	return inventory.ACMECertificate{}, errNotConfigured
+}
+
+// ACMENoticeDelivery answers "no e-mail yet" unless the test sets it.
+func (f *fakeACME) ACMENoticeDelivery(ctx context.Context, id uuid.UUID) (*inventory.ACMENoticeDelivery, error) {
+	if f.ACMENoticeDeliveryFn != nil {
+		return f.ACMENoticeDeliveryFn(ctx, id)
+	}
+	return nil, nil
 }
 
 func (f *fakeACME) ReleaseACMEDeployHold(ctx context.Context, a inventory.Actor, id uuid.UUID) error {
