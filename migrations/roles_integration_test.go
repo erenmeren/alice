@@ -183,9 +183,10 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.certificates": {"UPDATE": {"chain_complete", "compromised_at", "compromised_by", "label", "last_seen_at", "pem_chain", "private_key_id",
 		"revocation_reason", "revoked_at", "revoked_by", "service_id", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "service_id", "status"}},
-	// 00026 adds the binding attention mark (a website whose service does not accept the vault's keys, R49).
+	// 00026 adds the binding attention mark (a website whose service does not accept the vault's keys, R49); 00027 adds
+	// file_observed_at (when a scan last read the file's content, R52).
 	"public.certificate_locations": {"UPDATE": {"binding_attention_at", "binding_attention_code", "binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
-		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
+		"deployed_fingerprint", "file_observed_at", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
 		"unsupported_reason", "verify_port", "verify_sni", "version", "warnings"}},
 	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "expect_cert_sha256", "failed_step", "finished_at",
@@ -307,6 +308,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	ari := hasColumn(t, d, "acme_certificates", "ari_renew_at")
 	trust := hasColumn(t, d, "deployments", "trust_status")
 	services := hasColumn(t, d, "targets", "service_id")
+	drift := hasColumn(t, d, "certificate_locations", "file_observed_at")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -372,6 +374,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00026 there is no owning service to move and no approval to record.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "service_id" || c == "approved_service_ids" || strings.HasPrefix(c, "binding_attention_")
+			})}
+		}
+		if name == "public.certificate_locations" && !drift {
+			// Below 00027 the file observation time does not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "file_observed_at"
 			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {
