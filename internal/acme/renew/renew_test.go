@@ -138,6 +138,18 @@ func TestDecide(t *testing.T) {
 		{"an order runs", func() Input { i := issued(nb90, 90*day); i.OrderRunning = true; return i }(), None, ReasonOrderRunning, nil},
 		{"due by the local rule", issued(nb90, 90*day), Order, ReasonDue, nil},
 		{"not due yet", issued(t0.Add(-59*day), 90*day), None, ReasonNotDue, nil},
+		{"a revoked current certificate is due at once", func() Input { i := issued(t0.Add(-day), 90*day); i.Revoked = true; return i }(),
+			Order, ReasonDueRevoked, nil},
+		{"a revoked current certificate keeps the spacing", func() Input {
+			i := issued(t0.Add(-day), 90*day)
+			i.Revoked, i.LastOrderAt = true, at(-time.Minute)
+			return i
+		}(), None, ReasonSpacing, at(14 * time.Minute)},
+		{"a revoked current certificate is not ordered with automatic renewal off", func() Input {
+			i := issued(t0.Add(-day), 90*day)
+			i.Revoked, i.AutoRenew = true, false
+			return i
+		}(), None, ReasonAutoRenewOff, nil},
 		{"exactly at the renewal time", issued(t0.Add(-60*day), 90*day), Order, ReasonDue, nil},
 		{"one second before", issued(t0.Add(-60*day).Add(time.Second), 90*day), None, ReasonNotDue, nil},
 		{"6-day certificate on day 4", issued(t0.Add(-4*day), 6*day), Order, ReasonDue, nil},

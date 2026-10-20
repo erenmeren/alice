@@ -449,6 +449,15 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 	for k, v := range discoveryIDs {
 		ids[k] = v
 	}
+	// Revocation and incidents (2026-10-20): the impact of the Phase 4 certificate, and one closed incident of it (stored
+	// directly: starting one changes servers, which is not what this test is about).
+	ids["/api/v1/certificate-impact/"] = ids["/api/v1/certificates/"]
+	incidentID := uuid.NewString()
+	_, err := s.db.Owner.Exec(context.Background(), `INSERT INTO certificate_incidents (id, certificate_id, public_key_sha256, state, revocation,
+    created_at, updated_at, finished_at) SELECT $1, id, public_key_sha256, 'closed', 'not_possible', now(), now(), now() FROM certificates
+WHERE id = $2`, incidentID, ids["/api/v1/certificates/"])
+	require.NoError(t, err)
+	ids["/api/v1/incidents/"] = incidentID
 	// Phase 8: one backup, so its download answers 200 (its only write is the backup.downloaded row).
 	rec = c.do(http.MethodPost, "/api/v1/backups", nil)
 	requireStatus(t, rec, http.StatusCreated)

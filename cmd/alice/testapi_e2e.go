@@ -76,6 +76,10 @@ const acmeScheduleEvery = 100 * 365 * 24 * time.Hour
 // (checkWiring, RunNow): the journeys run it with POST /test/scheduler/run {"task": "acme.auto_deploy"}.
 const acmeAutoDeployEvery = 100 * 365 * 24 * time.Hour
 
+// incidentAdvanceEvery is the incident task's interval in the e2e build: in effect never, like the ACME planners. The
+// journeys run it with POST /test/scheduler/run {"task": "incident.advance"}.
+const incidentAdvanceEvery = 100 * 365 * 24 * time.Hour
+
 // netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule and retention
 // in the e2e build: in effect never, like the ACME planners (the demo clock would otherwise queue scans or remove rows
 // between two Playwright steps). The tasks stay scheduled (checkWiring, RunNow): the journeys start scans by hand and
@@ -233,6 +237,7 @@ var testMailer notify.Mailer = e2eMailbox
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
 license, license_files, license_history, notifications_outbox,
 target_locks, job_attempts, jobs,
+certificate_incident_locations, certificate_incidents,
 acme_bindings, acme_orders, acme_certificates, acme_hooks, acme_accounts, acme_providers,
 discovery_endpoints, discovery_certificates, discovery_scans, discovery_scopes,
 rotation_op_ids, rotation_steps, rotation_locations, rotations, rotation_policies,

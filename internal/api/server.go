@@ -218,6 +218,7 @@ type ACMEService interface {
 	AddACMEBindingStrict(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)
 	RemoveACMEBinding(ctx context.Context, a inventory.Actor, id, location uuid.UUID) error
 	DeployACMENow(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error)
+	RevokeACMECertificate(ctx context.Context, a inventory.Actor, acmeCertID uuid.UUID, in inventory.ACMERevokeInput) (inventory.Certificate, error)
 }
 
 // JobsService is the part of jobs.Queue the HTTP layer uses.
@@ -409,6 +410,7 @@ type Deps struct {
 	Forward        ForwardService   // Phase 8: audit forwarding
 	ACME           ACMEService      // ACME issuance (inventory.Service)
 	Discovery      DiscoveryService // network certificate discovery (discoverysvc.Service)
+	Incidents      IncidentService  // the impact of a certificate and key-compromise incidents (inventory.Service)
 	TLSStore       HTTPSService     // Phase 8: the HTTPS certificate
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
@@ -788,6 +790,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.forwardingRoutes()...)
 	routes = append(routes, s.acmeRoutes()...)
 	routes = append(routes, s.discoveryRoutes()...)
+	routes = append(routes, s.incidentRoutes()...)
 	return routes
 }
 

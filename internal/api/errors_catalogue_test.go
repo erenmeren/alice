@@ -78,6 +78,11 @@ var inventorySentinels = map[string]error{
 	"ErrACMESecretUnreadable": inventory.ErrACMESecretUnreadable, "ErrACMEAccountExists": inventory.ErrACMEAccountExists,
 	"ErrACMEAccountState": inventory.ErrACMEAccountState, "ErrACMERolloverPending": inventory.ErrACMERolloverPending,
 	"ErrACMEProviderBusy": inventory.ErrACMEProviderBusy,
+	// Revocation and key-compromise incidents (2026-10-20)
+	"ErrCertificateRevoked": inventory.ErrCertificateRevoked, "ErrCertificateCompromised": inventory.ErrCertificateCompromised,
+	"ErrNotACMEVersion": inventory.ErrNotACMEVersion, "ErrIncidentOpen": inventory.ErrIncidentOpen,
+	"ErrIncidentState": inventory.ErrIncidentState, "ErrIncidentReplacement": inventory.ErrIncidentReplacement,
+	"ErrIncidentNotRevocable": inventory.ErrIncidentNotRevocable,
 	// ACME (Task 10)
 	"ErrACMENameNotAllowed": inventory.ErrACMENameNotAllowed, "ErrACMEOrderRunning": inventory.ErrACMEOrderRunning,
 	"ErrACMEChallengeUnavailable": inventory.ErrACMEChallengeUnavailable, "ErrACMEKeyTypeLocked": inventory.ErrACMEKeyTypeLocked,

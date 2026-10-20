@@ -66,6 +66,10 @@ func versionRefusal(v deployVersion, c kvCertInfo, leaf deployCertificate, a Act
 		return "certificate_missing", ErrKVCertificateMissing
 	case v.certificateRow == nil:
 		return "version_not_deployable", ErrVersionNotDeployable
+	case leaf.revoked:
+		return "revoked", ErrCertificateRevoked
+	case leaf.compromised:
+		return "compromised", ErrCertificateCompromised
 	case v.exportable != nil && !*v.exportable:
 		return "not_exportable", ErrNotExportable
 	case !v.enabled:

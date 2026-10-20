@@ -100,6 +100,10 @@ var expected = map[rbac.Permission]map[string]rbac.Decision{
 	rbac.DiscoveryManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	// Key-compromise incidents (2026-10-20): an Administrator with step-up, never a token.
+	rbac.CertificatesIncident: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
 	rbac.SSOManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
@@ -166,7 +170,7 @@ func TestUnknownPermissionIsDenied(t *testing.T) {
 
 func TestPermissionsAreSortedAndHavePolicies(t *testing.T) {
 	ps := rbac.Permissions()
-	assert.Len(t, ps, 31)
+	assert.Len(t, ps, 32)
 	assert.True(t, sort.SliceIsSorted(ps, func(i, j int) bool { return ps[i] < ps[j] }))
 	for _, p := range ps {
 		_, ok := rbac.PolicyFor(p)

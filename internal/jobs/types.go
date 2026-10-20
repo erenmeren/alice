@@ -296,6 +296,13 @@ func MaxRunningFor(t Type) (int, bool) {
 	return n, ok
 }
 
+// Key-compromise incidents (owner decision 2026-10-20, docs/superpowers/rulings/certificate-revocation.md): the periodic
+// task that advances every open incident (inventory.AdvanceIncidents). ClassAlways: it follows the deployments and orders
+// an incident started in every license state, and asks the gate itself (ClassChange) before it requests a deployment,
+// starts an order or revokes at a CA. The name is a literal (the web's label guard reads literal Register calls) and
+// equals inventory.JobIncidentAdvance.
+var IncidentAdvance = Register("incident.advance", license.ClassAlways)
+
 // Phase 7 periodic task (R42 rows 3 and 5; §8.2 alerts.evaluate, §8.6 "not gated"): the expiry scan sends notices in
 // every license state (in lock with the license note, L-28).
 var AlertsScan = Register("alerts.scan", license.ClassAlways)

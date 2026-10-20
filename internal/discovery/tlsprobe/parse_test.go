@@ -3,8 +3,10 @@ package tlsprobe
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"math/big"
 	"net"
 	"strings"
@@ -82,6 +84,20 @@ func TestLeafOfAnEmptyChain(t *testing.T) {
 func sharedFleetChain(t *testing.T) [][]byte {
 	t.Helper()
 	return sharedFleet(t).Server(fakefleet.KindValid).Chain()
+}
+
+// The public key hash is internal/certs' (SHA-256 of the SubjectPublicKeyInfo): the same key gives the same hash on a
+// managed certificate and on a discovered one.
+func TestPublicKeyHash(t *testing.T) {
+	der := sharedFleetChain(t)
+	c, err := ParsePresentedChain(der)
+	require.NoError(t, err)
+	x, err := x509.ParseCertificate(der[0])
+	require.NoError(t, err)
+	spki, err := x509.MarshalPKIXPublicKey(x.PublicKey)
+	require.NoError(t, err)
+	sum := sha256.Sum256(spki)
+	assert.Equal(t, hex.EncodeToString(sum[:]), leafOf(t, c).PublicKeySHA256)
 }
 
 // leafOf is the leaf of a chain that must have one.

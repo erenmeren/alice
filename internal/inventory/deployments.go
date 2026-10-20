@@ -284,6 +284,19 @@ type deployCertificate struct {
 	sans                []string
 	notBefore, notAfter time.Time
 	chainComplete       bool
+	// revoked and compromised: the final marks of migration 00021; a certificate carrying either is never deployed.
+	revoked, compromised bool
+}
+
+// revocationRefusal is the refusal of a revoked or compromised certificate and its audit reason ("" for none).
+func (c deployCertificate) revocationRefusal() (string, error) {
+	switch {
+	case c.revoked:
+		return "revoked", ErrCertificateRevoked
+	case c.compromised:
+		return "compromised", ErrCertificateCompromised
+	}
+	return "", nil
 }
 
 type deployLocation struct {
@@ -303,7 +316,7 @@ var targetReady = []string{StatusOK, StatusUnreachable, StatusChecking}
 // RequestDeployment validates and queues one deployment per location (spec §12.6): all or
 // nothing, in one transaction with their certificate.deploy jobs. Refusals, in this order: the
 // license lock (license.ErrLocked: a deployment changes a server, R38); the certificate
-// (ErrNotFound; ErrNoPrivateKey; ErrCertificateExpired when not before not_after; F-17
+// (ErrNotFound; ErrCertificateRevoked or ErrCertificateCompromised, migration 00021; ErrNoPrivateKey; ErrCertificateExpired when not before not_after; F-17
 // ErrChainUnconfirmed for an incomplete chain without an Administrator's confirmation); then per
 // location, after locking the targets (id order) and the locations (id order) as discovery does:
 // ErrNotFound (unknown, or its server deleted); ErrLocationUnsupported (missing at the last scan,
@@ -340,6 +353,9 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 			return err
 		}
 		now := s.clock.Now().UTC()
+		if reason, err := c.revocationRefusal(); err != nil {
+			return deny(uuid.Nil, reason, err)
+		}
 		switch {
 		case c.keyID == nil:
 			return deny(uuid.Nil, "no_private_key", ErrNoPrivateKey)
@@ -390,8 +406,10 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 
 func readDeployCertificate(ctx context.Context, q db.Querier, id uuid.UUID) (deployCertificate, error) {
 	var c deployCertificate
-	err := q.QueryRow(ctx, `SELECT id, private_key_id, fingerprint_sha256, key_algorithm, sans, not_before, not_after, chain_complete
-FROM certificates WHERE id = $1`, id).Scan(&c.id, &c.keyID, &c.fingerprint, &c.algorithm, &c.sans, &c.notBefore, &c.notAfter, &c.chainComplete)
+	err := q.QueryRow(ctx, `SELECT id, private_key_id, fingerprint_sha256, key_algorithm, sans, not_before, not_after, chain_complete,
+    revoked_at IS NOT NULL, compromised_at IS NOT NULL
+FROM certificates WHERE id = $1`, id).Scan(&c.id, &c.keyID, &c.fingerprint, &c.algorithm, &c.sans, &c.notBefore, &c.notAfter, &c.chainComplete,
+		&c.revoked, &c.compromised)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return deployCertificate{}, ErrNotFound
 	}

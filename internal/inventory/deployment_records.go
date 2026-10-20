@@ -199,11 +199,13 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
 		keyID                        *uuid.UUID
 		publicKey, pemChain, oldType string
 		facts                        []byte
+		revoked, compromised         bool
 	)
 	err = s.pool.QueryRow(ctx, `SELECT l.servers, l.supported AND l.missing_since IS NULL, l.resolved_cert_path, l.inherited, l.symlinked,
     l.custom_location, l.key_exists, l.key_mode, l.key_owner, l.key_group, l.cert_file_sha256, l.verify_port, coalesce(l.verify_sni, ''),
     l.skip_verify, coalesce(oc.fingerprint_sha256, ''), coalesce(oc.sans, '{}'), l.key_type,
-    c.pem_chain, c.fingerprint_sha256, c.sans, c.not_before, c.not_after, c.key_algorithm, c.private_key_id, c.public_key_sha256, t.facts
+    c.pem_chain, c.fingerprint_sha256, c.sans, c.not_before, c.not_after, c.key_algorithm, c.private_key_id, c.public_key_sha256, t.facts,
+    c.revoked_at IS NOT NULL, c.compromised_at IS NOT NULL
 FROM certificate_locations l
 JOIN certificates c ON c.id = $2
 JOIN targets t ON t.id = l.target_id
@@ -211,7 +213,7 @@ LEFT JOIN certificates oc ON oc.id = l.certificate_id
 WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supported, &m.Location.ResolvedCertPath, &m.Location.Inherited,
 		&m.Location.Symlinked, &m.Location.CustomLocation, &m.Location.KeyExists, &m.Location.KeyMode, &m.Location.KeyOwner,
 		&m.Location.KeyGroup, &fileSHA, &verifyPort, &m.Verify.SNI, &m.Verify.Skip, &m.CurrentFingerprint, &m.OldSANs, &currentType,
-		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts)
+		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts, &revoked, &compromised)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Material{}, ErrNotFound
 	}
@@ -220,6 +222,12 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	}
 	if err := json.Unmarshal(servers, &m.Location.Servers); err != nil {
 		return Material{}, fmt.Errorf("inventory: decode location servers: %w", err)
+	}
+	if !m.Recorded {
+		// A certificate revoked or marked compromised after its deployment was queued is never sent (00021).
+		if _, err := (deployCertificate{revoked: revoked, compromised: compromised}).revocationRefusal(); err != nil {
+			return Material{}, err
+		}
 	}
 	var f Facts
 	if err := json.Unmarshal(facts, &f); err != nil {

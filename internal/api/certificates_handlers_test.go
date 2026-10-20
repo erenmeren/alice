@@ -86,7 +86,8 @@ func sorted(keys ...string) []string {
 // documented additions), and none names a key or a secret.
 func TestCertificateDTOsHaveExactlyTheDocumentedFields(t *testing.T) {
 	certFields := []string{"id", "fingerprint", "subject_cn", "subject", "issuer", "serial", "sans", "not_before", "not_after", "key_algorithm",
-		"key_bits", "source", "label", "has_private_key", "chain_complete", "self_signed", "location_count", "first_seen_at", "last_seen_at"}
+		"key_bits", "source", "label", "has_private_key", "chain_complete", "self_signed", "location_count", "first_seen_at", "last_seen_at",
+		"public_key_sha256", "revoked_at", "revocation_reason", "revoked_by_name", "compromised_at", "acme_certificate_id", "capabilities"}
 	assert.Equal(t, sorted(certFields...), jsonKeys(t, certificateJSON(sampleCertificate())))
 	assert.Equal(t, sorted(append(certFields, "pem_chain", "locations", "locations_truncated")...), jsonKeys(t, certificateDetailJSON(sampleCertificate())))
 	assert.Equal(t, sorted("id", "target_id", "target_name", "cert_path", "key_path", "resolved_cert_path", "key_type", "certificate", "servers",

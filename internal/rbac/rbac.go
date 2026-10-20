@@ -145,6 +145,12 @@ const (
 	DiscoveryView    Permission = "discovery.view"
 	DiscoveryOperate Permission = "discovery.operate"
 	DiscoveryManage  Permission = "discovery.manage"
+
+	// Key-compromise incidents (owner decision 2026-10-20, docs/superpowers/rulings/certificate-revocation.md): starting
+	// one marks every certificate with the key compromised for good and replaces it on every server, acting on the
+	// incident (retry, revoke now regardless, choose the replacement, close) — an Administrator in a browser session with
+	// step-up, never an API token. Reading incidents and the impact of a certificate is Read.
+	CertificatesIncident Permission = "certificates.incident"
 )
 
 // Policy describes who may use a permission.
@@ -199,6 +205,8 @@ var policies = map[Permission]Policy{
 	DiscoveryView:    {Roles: allRoles, TokenScope: ScopeOperate},
 	DiscoveryOperate: {Roles: []Role{Admin, Operator}, TokenScope: ScopeOperate},
 	DiscoveryManage:  {Roles: []Role{Admin}, StepUp: true},
+
+	CertificatesIncident: {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

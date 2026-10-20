@@ -354,11 +354,12 @@ func chunks[T any](list []T, fn func([]T) error) error {
 }
 
 // upsertCertificates writes the certificates; a stored one only gets its last sighting and, once seen as a leaf, is a
-// leaf (its body never changes: the fingerprint is its hash).
+// leaf (its body never changes: the fingerprint is its hash); one stored before migration 00021 gets its public key hash.
 func upsertCertificates(ctx context.Context, tx pgx.Tx, certs []certRow, now time.Time) error {
 	return chunks(certs, func(part []certRow) error {
 		n := len(part)
 		fps, cns, issuers, algs, pems, sans := make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n), make([]string, n)
+		keys := make([]string, n)
 		leaves, selfSigned := make([]bool, n), make([]bool, n)
 		notBefore, notAfter := make([]time.Time, n), make([]time.Time, n)
 		for i, r := range part {
@@ -367,14 +368,16 @@ func upsertCertificates(ctx context.Context, tx pgx.Tx, certs []certRow, now tim
 			fps[i], leaves[i], cns[i], issuers[i], algs[i], selfSigned[i] = r.fp, r.leaf, c.SubjectCN, c.IssuerCN, c.KeyAlgorithm, c.SelfSigned
 			notBefore[i], notAfter[i], sans[i] = c.NotBefore, c.NotAfter, string(list)
 			pems[i] = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Raw}))
+			keys[i] = c.PublicKeySHA256
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO discovery_certificates AS d (fingerprint_sha256, is_leaf, subject_cn, sans, issuer_cn, not_before, not_after,
-    key_algorithm, self_signed, pem, first_seen, last_seen)
-SELECT u.fp, u.leaf, u.cn, ARRAY(SELECT jsonb_array_elements_text(u.sans::jsonb)), u.issuer, u.nb, u.na, u.alg, u.ss, u.pem, $1, $1
-FROM unnest($2::text[], $3::bool[], $4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::timestamptz[], $9::text[], $10::bool[], $11::text[])
-    AS u(fp, leaf, cn, sans, issuer, nb, na, alg, ss, pem)
-ON CONFLICT (fingerprint_sha256) DO UPDATE SET last_seen = greatest(d.last_seen, EXCLUDED.last_seen), is_leaf = d.is_leaf OR EXCLUDED.is_leaf`,
-			now, fps, leaves, cns, sans, issuers, notBefore, notAfter, algs, selfSigned, pems)
+    key_algorithm, self_signed, pem, first_seen, last_seen, public_key_sha256)
+SELECT u.fp, u.leaf, u.cn, ARRAY(SELECT jsonb_array_elements_text(u.sans::jsonb)), u.issuer, u.nb, u.na, u.alg, u.ss, u.pem, $1, $1, u.pk
+FROM unnest($2::text[], $3::bool[], $4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::timestamptz[], $9::text[], $10::bool[], $11::text[],
+    $12::text[]) AS u(fp, leaf, cn, sans, issuer, nb, na, alg, ss, pem, pk)
+ON CONFLICT (fingerprint_sha256) DO UPDATE SET last_seen = greatest(d.last_seen, EXCLUDED.last_seen), is_leaf = d.is_leaf OR EXCLUDED.is_leaf,
+    public_key_sha256 = CASE WHEN d.public_key_sha256 = '' THEN EXCLUDED.public_key_sha256 ELSE d.public_key_sha256 END`,
+			now, fps, leaves, cns, sans, issuers, notBefore, notAfter, algs, selfSigned, pems, keys)
 		return wrap("store the certificates", err)
 	})
 }

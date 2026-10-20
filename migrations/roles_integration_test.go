@@ -150,6 +150,9 @@ var explicitGrants = map[string][]string{
 	"public.discovery_scans":        {"DELETE", "INSERT", "SELECT"},
 	"public.discovery_certificates": {"DELETE", "INSERT", "SELECT"},
 	"public.discovery_endpoints":    {"DELETE", "INSERT", "SELECT"},
+	// Key-compromise incidents (00021): history, never deleted; a finished incident is frozen (Z1023).
+	"public.certificate_incidents":          {"INSERT", "SELECT"},
+	"public.certificate_incident_locations": {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -173,7 +176,9 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// Phase 4: identity columns (fingerprints, public key hashes, paths of a location or a
 	// deployment, the certificate, location and target of a deployment, every envelope column) are
 	// never updated; the lists are the columns the inventory and deployment services write.
-	"public.certificates": {"UPDATE": {"chain_complete", "label", "last_seen_at", "pem_chain", "private_key_id", "source"}},
+	// 00021 adds the revocation and compromise marks (final once set: Z1022).
+	"public.certificates": {"UPDATE": {"chain_complete", "compromised_at", "compromised_by", "label", "last_seen_at", "pem_chain", "private_key_id",
+		"revocation_reason", "revoked_at", "revoked_by", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "status"}},
 	"public.certificate_locations": {"UPDATE": {"binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
 		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
@@ -231,9 +236,14 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"window_start", "window_tz"}},
 	"public.discovery_scans": {"UPDATE": {"cancel_requested", "cert_churn", "certificates_new", "endpoints_answered", "endpoints_excluded",
 		"endpoints_failed", "endpoints_total", "error_code", "finished_at", "started_at", "state"}},
-	"public.discovery_certificates": {"UPDATE": {"is_leaf", "last_seen"}},
+	"public.discovery_certificates": {"UPDATE": {"is_leaf", "last_seen", "public_key_sha256"}},
 	"public.discovery_endpoints": {"UPDATE": {"chain_fingerprints", "chain_sha256", "cipher", "fingerprint_sha256", "gone_since",
 		"last_error_code", "last_scan_id", "last_scanned_at", "last_seen", "missed_scans", "previous_fingerprints", "state", "tls_version"}},
+	// Key-compromise incidents (00021): the certificate, its key, the ACME certificate, the starter and the creation time
+	// are fixed at INSERT, as are a location row's incident and location.
+	"public.certificate_incidents": {"UPDATE": {"attention_code", "closed_by", "finished_at", "next_attempt_at", "order_id", "replacement_certificate_id",
+		"revocation", "revoke_attempts", "revoke_mode", "revoked_at", "state", "updated_at"}},
+	"public.certificate_incident_locations": {"UPDATE": {"attempts", "deployment_id", "error_code", "status", "updated_at"}},
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
@@ -281,6 +291,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	columns := columnGrants(t, d, schemas)
 	apache := hasApacheType(t, d)
 	recovery := hasColumn(t, d, "acme_certificates", "last_failure_class")
+	revocation := hasColumn(t, d, "certificates", "revoked_at")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -312,6 +323,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00020 the failure class columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]),
 				func(c string) bool { return c == "last_failure_class" || c == "permanent_failures" })}
+		}
+		if !revocation && (name == "public.certificates" || name == "public.discovery_certificates") {
+			// Below 00021 the revocation, compromise and public key columns do not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return slices.Contains([]string{"compromised_at", "compromised_by", "revocation_reason", "revoked_at", "revoked_by", "public_key_sha256"}, c)
+			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {
 			problems = append(problems, name)

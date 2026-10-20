@@ -127,6 +127,9 @@ var kvRefusals = []struct {
 	{inventory.ErrACMESuperseded, inventory.ReasonACMESuperseded},
 	{inventory.ErrACMEDeployStopped, inventory.ReasonACMEDeployStopped},
 	{inventory.ErrACMEDeployHeld, inventory.ReasonACMEDeployHeld},
+	// Any queued deployment whose certificate was revoked or marked compromised before the first send (migration 00021).
+	{inventory.ErrCertificateRevoked, inventory.ReasonCertificateRevoked},
+	{inventory.ErrCertificateCompromised, inventory.ReasonCertificateCompromised},
 }
 
 // kvRefusal is the closed reason of an inventory refusal in kvRefusals.

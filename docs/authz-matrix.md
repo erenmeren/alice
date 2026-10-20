@@ -206,6 +206,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/acme/certificates/{id}/orders` | `acme.view` | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/acme/certificates/{id}/rearm` | `acme.manage` | no | yes | no | no | no | yes | no |
 | POST | `/api/v1/acme/certificates/{id}/release-hold` | `acme.manage` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/certificates/{id}/revoke` | `acme.manage` | no | yes | no | no | no | yes | no |
 | GET | `/api/v1/acme/certificates/{id}/bindings` | `acme.view` | no | yes | yes | yes | read | no | yes |
 | PUT | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | no |
 | DELETE | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | yes |
@@ -227,6 +228,15 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | GET | `/api/v1/discovery/endpoints` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
 | GET | `/api/v1/discovery/settings` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
 | PUT | `/api/v1/discovery/settings` | `discovery.manage` | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/certificates/capabilities` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/certificate-impact/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/{id}/incidents` | `certificates.incident` | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/incidents` | `read` | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/incidents/{id}` | `read` | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/incidents/{id}/retry` | `certificates.incident` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/incidents/{id}/revoke-now` | `certificates.incident` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/incidents/{id}/replacement` | `certificates.incident` | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/incidents/{id}/close` | `certificates.incident` | no | yes | no | no | no | yes | yes |
 
 ## Notes
 

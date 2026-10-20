@@ -99,17 +99,24 @@ type ACMEOrder struct {
 	Presented         int        `json:"presented"`
 	CleanupAt         *time.Time `json:"cleanup_at,omitempty"`
 	CleanupErrorCode  string     `json:"cleanup_error_code"`
+	// The issued certificate's revocation (RevokedAt, RevocationReason) and compromise marks (migration 00021).
+	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+	RevocationReason string     `json:"revocation_reason"`
+	Compromised      bool       `json:"compromised"`
 }
 
 const acmeOrderColumns = `o.id, o.acme_certificate_id, o.kind, o.state, o.started_at, o.finished_at, o.error_code, o.certificate_id,
-o.requested_by, o.trigger, jsonb_array_length(o.presented), o.cleanup_at, o.cleanup_error_code`
+o.requested_by, o.trigger, jsonb_array_length(o.presented), o.cleanup_at, o.cleanup_error_code,
+(SELECT x.revoked_at FROM certificates x WHERE x.id = o.certificate_id),
+coalesce((SELECT x.revocation_reason FROM certificates x WHERE x.id = o.certificate_id), ''),
+coalesce((SELECT x.compromised_at IS NOT NULL FROM certificates x WHERE x.id = o.certificate_id), false)`
 
 func scanACMEOrder(row pgx.Row) (ACMEOrder, error) {
 	var o ACMEOrder
 	err := row.Scan(&o.ID, &o.ACMECertificateID, &o.Kind, &o.State, &o.StartedAt, &o.FinishedAt, &o.ErrorCode, &o.CertificateID,
-		&o.RequestedBy, &o.Trigger, &o.Presented, &o.CleanupAt, &o.CleanupErrorCode)
+		&o.RequestedBy, &o.Trigger, &o.Presented, &o.CleanupAt, &o.CleanupErrorCode, &o.RevokedAt, &o.RevocationReason, &o.Compromised)
 	o.StartedAt = o.StartedAt.UTC()
-	for _, t := range []**time.Time{&o.FinishedAt, &o.CleanupAt} {
+	for _, t := range []**time.Time{&o.FinishedAt, &o.CleanupAt, &o.RevokedAt} {
 		if *t != nil {
 			u := (*t).UTC()
 			*t = &u

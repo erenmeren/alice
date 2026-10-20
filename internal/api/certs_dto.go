@@ -45,6 +45,23 @@ type certificateDTO struct {
 	LocationCount int       `json:"location_count"`
 	FirstSeenAt   time.Time `json:"first_seen_at"`
 	LastSeenAt    time.Time `json:"last_seen_at"`
+	// Revocation, key compromise and the per-source capability matrix (2026-10-20).
+	PublicKeySHA256   string     `json:"public_key_sha256"`
+	RevokedAt         *time.Time `json:"revoked_at"`
+	RevocationReason  string     `json:"revocation_reason"`
+	RevokedByName     string     `json:"revoked_by_name"`
+	CompromisedAt     *time.Time `json:"compromised_at"`
+	ACMECertificateID *string    `json:"acme_certificate_id"`
+	Capabilities      []string   `json:"capabilities"`
+}
+
+// capabilityNames is the wire form of a capability list.
+func capabilityNames(in []inventory.SourceCapability) []string {
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		out = append(out, string(c))
+	}
+	return out
 }
 
 // certificateDetailDTO is GET /certificates/{id} and the certificate of an upload or a signing
@@ -62,6 +79,9 @@ func certificateJSON(c inventory.Certificate) certificateDTO {
 		SANs: nonNil(c.SANs), NotBefore: c.NotBefore.UTC(), NotAfter: c.NotAfter.UTC(), KeyAlgorithm: c.KeyAlgorithm, KeyBits: c.KeyBits,
 		Source: c.Source, Label: c.Label, HasPrivateKey: c.HasPrivateKey, ChainComplete: c.ChainComplete, SelfSigned: c.SelfSigned,
 		LocationCount: c.LocationCount, FirstSeenAt: c.FirstSeenAt.UTC(), LastSeenAt: c.LastSeenAt.UTC(),
+		PublicKeySHA256: c.PublicKeySHA256, RevokedAt: utcPtr(c.RevokedAt), RevocationReason: c.RevocationReason, RevokedByName: c.RevokedByName,
+		CompromisedAt: utcPtr(c.CompromisedAt), ACMECertificateID: idPtr(c.ACMECertificateID),
+		Capabilities: capabilityNames(inventory.CertificateCapabilities(c)),
 	}
 }
 

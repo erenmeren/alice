@@ -370,6 +370,15 @@ below.
 - **A restored installation does not renew.** A restore switches automatic renewal off on every certificate from a
   certificate authority; switch it on again on each certificate's page.
 
+### A key compromise incident does not finish
+
+Open the incident from the certificate's page. **Waiting** places wait for Alice's next run (every 30 seconds; in a
+locked license nothing new is requested). A place that stays **Deploying** follows its deployment: open it from the
+row. **Needs attention** names the reason (`ALC-INC-…` or the deployment's own code); fix it and choose **Retry**. A
+revocation the authority could not answer is tried again after 1, 2, 4 and 8 minutes before it needs attention. If the
+authority refuses the revocation (`ALC-ACM-0038` to `0040`), revoke the certificate with the authority's own tools,
+then **Close the incident**.
+
 ## Alerts, e-mail and single sign-on
 
 - **No e-mails arrive.** Open **Settings → Email** and choose **Send test e-mail** (it uses the saved settings). Its
@@ -2210,6 +2219,22 @@ never leaves Alice), so its chain cannot be completed this way.
 
 **What to do.** Complete or cancel the signing requests you no longer need (under **Open signing requests** on the Certificates page), then create this one again.
 
+## ALC-CRT-0018: This certificate was revoked
+
+**Meaning.** Its certificate authority revoked it at Alice's request. Browsers may refuse a revoked certificate, so Alice never deploys it again. (HTTP 409, reason `certificate.revoked`.)
+
+**Likely cause.** The certificate was revoked from its ACME certificate's page or by a key compromise incident.
+
+**What to do.** Deploy a newer certificate instead. For a certificate from a certificate authority (ACME), choose Order now on its page; Alice also orders a new one by herself while automatic renewal is on.
+
+## ALC-CRT-0019: This certificate's private key is marked compromised
+
+**Meaning.** An administrator started a key compromise incident for this certificate or for another certificate made with the same private key. Alice never deploys a certificate with a compromised key again. (HTTP 409, reason `certificate.compromised`.)
+
+**Likely cause.** A key compromise incident marked every certificate made with the leaked key.
+
+**What to do.** Deploy the replacement chosen in the incident, or another certificate made with a new key. Open the incident from the certificate's page to follow the replacement.
+
 ## ALC-DEP-0001: Deployment already in progress
 
 **Meaning.** Another deployment to this website is in progress. (HTTP 409, reason `deployment.in_progress`.)
@@ -3113,6 +3138,142 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** The certificate is connected to many websites.
 
 **What to do.** Select the websites to deploy to, at most 20 at a time, and choose Deploy now again.
+
+## ALC-ACM-0037: This certificate was not issued for this ACME certificate
+
+**Meaning.** Only a certificate that an order of this ACME certificate produced can be revoked from its page. (HTTP 422, reason `acme.not_this_certificate`.)
+
+**Likely cause.** The request named another certificate's id, or a version of another ACME certificate.
+
+**What to do.** Choose a version listed under this certificate's orders, or leave the version out to revoke the current certificate.
+
+## ALC-ACM-0038: The certificate authority does not offer revocation
+
+**Meaning.** The certificate authority's directory lists no revokeCert address, so Alice cannot ask it to revoke a certificate. Nothing was sent. (HTTP 422, reason `acme.revoke_unsupported`.)
+
+**Likely cause.** The certificate authority does not implement RFC 8555 revocation, or its directory hides it.
+
+**What to do.** Revoke the certificate through the certificate authority's own tools, and replace it on your servers.
+
+## ALC-ACM-0039: The certificate authority does not accept this revocation reason
+
+**Meaning.** Alice sends the reasons a certificate owner may give (unspecified, key compromise, affiliation changed, superseded, cessation of operation); the certificate authority refused the one chosen. (HTTP 422, reason `acme.revoke_reason_refused`.)
+
+**Likely cause.** The certificate authority accepts fewer reasons than RFC 5280 lists.
+
+**What to do.** Choose another reason, for example Unspecified, and revoke again.
+
+## ALC-ACM-0040: The certificate authority refused to revoke this certificate
+
+**Meaning.** The certificate authority says this account may not revoke this certificate: another account ordered it, or the authority does not know it (for example after a change of directory). (HTTP 422, reason `acme.revoke_unauthorized`.)
+
+**Likely cause.** The certificate was ordered with another account, or the provider's directory changed since it was issued.
+
+**What to do.** Revoke the certificate with the account that ordered it, through the certificate authority's own tools if needed, and replace it on your servers.
+
+## ALC-INC-0001: This certificate already has an open incident
+
+**Meaning.** Alice runs one key compromise incident per certificate at a time. (HTTP 409, reason `incident.open`.)
+
+**Likely cause.** An incident was started for this certificate before (by you or another administrator) and is not finished.
+
+**What to do.** Open the running incident from the certificate's page and follow it there, or close it first.
+
+## ALC-INC-0002: This action does not fit the incident's current step
+
+**Meaning.** The incident moved on since the page was loaded, or it is finished. (HTTP 409, reason `incident.state`.)
+
+**Likely cause.** The incident advanced in the background, or another administrator acted on it.
+
+**What to do.** Reload the incident and choose one of the actions it offers now.
+
+## ALC-INC-0003: This certificate cannot replace the compromised one
+
+**Meaning.** A replacement must be a certificate Alice holds the private key of, made with another key, neither revoked nor compromised, and valid now. (HTTP 422, reason `incident.replacement_invalid`.)
+
+**Likely cause.** The chosen certificate is the compromised one, was made with the same key, has no private key in Alice, or is revoked, compromised or not valid now.
+
+**What to do.** Upload a certificate made with a new private key (or complete a signing request) and choose it as the replacement.
+
+## ALC-INC-0004: Alice cannot revoke this certificate
+
+**Meaning.** Alice revokes only certificates she ordered from a certificate authority (ACME). This certificate came from another source. (HTTP 409, reason `incident.not_revocable`.)
+
+**Likely cause.** The certificate was uploaded, came from a signing request, a key vault or a server, not from an ACME order.
+
+**What to do.** Ask the certificate authority that issued it to revoke it; Alice has marked it compromised and replaces it on your servers.
+
+## ALC-INC-0005: This place holds another certificate made with the same key
+
+**Meaning.** The file holds a different certificate (other names) that was made with the compromised private key, so Alice did not put this incident's replacement there. (HTTP 409, reason `incident.other_certificate`.)
+
+**Likely cause.** The same private key was used for more than one certificate.
+
+**What to do.** Start an incident for that certificate too, from its page, or replace it by hand.
+
+## ALC-INC-0006: Alice cannot deploy to this place
+
+**Meaning.** The file is on a server whose software Alice only discovers, its path or configuration is one Alice cannot change, or it needs a key of another type than the replacement has. (HTTP 409, reason `incident.not_deployable`.)
+
+**Likely cause.** The server is a discovery-only server, the file's path or configuration is one Alice does not change, or the place holds an RSA key and the replacement an ECDSA one (or the reverse).
+
+**What to do.** Replace the certificate in this file by hand, then scan the server again.
+
+## ALC-INC-0007: This place follows a certificate in a key vault
+
+**Meaning.** The file is connected to an Azure Key Vault certificate, so a deployment from the incident would be overwritten. (HTTP 409, reason `incident.follows_key_vault`.)
+
+**Likely cause.** The place is connected to a Key Vault certificate.
+
+**What to do.** Replace the certificate in the vault (with a new key); Alice deploys the new version to this place.
+
+## ALC-INC-0008: This place follows another certificate from a certificate authority
+
+**Meaning.** The file is connected to a different ACME certificate, so a deployment from the incident would be overwritten. (HTTP 409, reason `incident.follows_other_acme`.)
+
+**Likely cause.** The place is connected to another ACME certificate.
+
+**What to do.** Start an incident for that certificate too, or disconnect the place and replace it by hand.
+
+## ALC-INC-0009: This place stayed busy for too long
+
+**Meaning.** Another deployment, a recovery on the server or a server that was not ready kept Alice from deploying the replacement here, many times in a row. (HTTP 409, reason `incident.location_busy`.)
+
+**Likely cause.** A long deployment or recovery on the server, or a server that stayed unreachable or disabled.
+
+**What to do.** Check the server and its deployments, then choose Retry on the incident.
+
+## ALC-INC-0010: The replacement could not be deployed everywhere
+
+**Meaning.** At least one deployment of the replacement failed. The compromised certificate is not revoked yet, so the places that still serve it keep working. (HTTP 409, reason `incident.deployments_failed`.)
+
+**Likely cause.** A server refused the new files (configuration test, reload) or could not be reached.
+
+**What to do.** Look at the failed places and their deployments, fix the cause and choose Retry, or choose Revoke now regardless if the key must be revoked at once.
+
+## ALC-INC-0011: Some deployments of the replacement could not be checked
+
+**Meaning.** The replacement was deployed, but checking that the server serves it was switched off for some places. Alice revokes the compromised certificate only after every place is checked. (HTTP 409, reason `incident.deployments_unverified`.)
+
+**Likely cause.** Verification is switched off for some places (Skip verification).
+
+**What to do.** Check those websites yourself, then choose Revoke now regardless.
+
+## ALC-INC-0012: The new certificate uses the compromised key
+
+**Meaning.** The certificate chosen as the replacement was made with the same private key as the compromised one, so it is compromised too. (HTTP 409, reason `incident.key_reused`.)
+
+**Likely cause.** A certificate made with the old key was chosen or issued (it should never be issued by Alice: every order uses a new key).
+
+**What to do.** Order or upload a certificate made with a new private key and choose Retry.
+
+## ALC-INC-0013: The replacement certificate can no longer be used
+
+**Meaning.** The replacement was revoked, marked compromised, removed, or is no longer valid, or Alice does not hold its private key. (HTTP 409, reason `incident.replacement_unusable`.)
+
+**Likely cause.** The replacement changed after it was chosen.
+
+**What to do.** Order or upload another certificate made with a new private key and choose Retry.
 
 ## ALC-DSC-0001: This scope is too large to scan
 

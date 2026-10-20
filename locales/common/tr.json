@@ -987,6 +987,16 @@
         "title": "Alice başka PFX dosyalarını okumakla meşgul.",
         "cause": "Alice aynı anda en fazla iki PFX dosyası okur ve bu sınıra ulaşıldı. Hiçbir şey kaydedilmedi ya da bir sunucuya gönderilmedi.",
         "action": "Biraz bekleyip yeniden deneyin."
+      },
+      "revoked": {
+        "title": "Bu sertifika iptal edildi.",
+        "cause": "Sertifika yetkilisi onu Alice'in isteğiyle iptal etti. Tarayıcılar iptal edilmiş bir sertifikayı reddedebilir; bu yüzden Alice onu bir daha dağıtmaz.",
+        "action": "Bunun yerine daha yeni bir sertifika dağıtın. Bir sertifika yetkilisinden (ACME) alınan sertifika için sayfasında Şimdi iste'yi seçin; otomatik yenileme açıkken Alice yenisini kendisi de ister."
+      },
+      "compromised": {
+        "title": "Bu sertifikanın özel anahtarı ele geçirilmiş olarak işaretlendi.",
+        "cause": "Bir yönetici bu sertifika ya da aynı özel anahtarla yapılmış başka bir sertifika için anahtar ele geçirme olayı başlattı. Alice ele geçirilmiş anahtarlı bir sertifikayı bir daha dağıtmaz.",
+        "action": "Olayda seçilen yeni sertifikayı ya da yeni bir anahtarla yapılmış başka bir sertifikayı dağıtın. Değiştirmeyi izlemek için olayı sertifikanın sayfasından açın."
       }
     },
     "csr": {
@@ -1544,6 +1554,26 @@
         "title": "Dağıtılacak web sitelerini seçin.",
         "cause": "Bu sertifika, tek bir dağıtım isteğinin alabileceğinden daha fazla web sitesine bağlı (en fazla 20).",
         "action": "Dağıtılacak web sitelerini bir seferde en fazla 20 olacak şekilde seçin ve yeniden Şimdi dağıt düğmesine tıklayın."
+      },
+      "not_this_certificate": {
+        "title": "Bu sertifika bu ACME sertifikası için verilmedi.",
+        "cause": "Sayfasından yalnızca bu ACME sertifikasının bir siparişinin ürettiği sertifika iptal edilebilir.",
+        "action": "Bu sertifikanın siparişleri altında listelenen bir sürümü seçin ya da güncel sertifikayı iptal etmek için sürüm belirtmeyin."
+      },
+      "revoke_unsupported": {
+        "title": "Sertifika yetkilisi iptal sunmuyor.",
+        "cause": "Sertifika yetkilisinin dizininde revokeCert adresi yok; bu yüzden Alice ondan bir sertifikayı iptal etmesini isteyemez. Hiçbir şey gönderilmedi.",
+        "action": "Sertifikayı sertifika yetkilisinin kendi araçlarıyla iptal edin ve sunucularınızda değiştirin."
+      },
+      "revoke_reason_refused": {
+        "title": "Sertifika yetkilisi bu iptal nedenini kabul etmiyor.",
+        "cause": "Alice bir sertifika sahibinin verebileceği nedenleri gönderir (belirtilmemiş, anahtar ele geçirildi, bağlılık değişti, yerine yenisi geldi, faaliyet sona erdi); sertifika yetkilisi seçilen nedeni reddetti.",
+        "action": "Başka bir neden seçin, örneğin Belirtilmemiş, ve yeniden iptal edin."
+      },
+      "revoke_unauthorized": {
+        "title": "Sertifika yetkilisi bu sertifikayı iptal etmeyi reddetti.",
+        "cause": "Sertifika yetkilisi bu hesabın bu sertifikayı iptal edemeyeceğini söylüyor: onu başka bir hesap istedi ya da yetkili onu tanımıyor (örneğin dizin değiştikten sonra).",
+        "action": "Sertifikayı onu isteyen hesapla, gerekirse sertifika yetkilisinin kendi araçlarıyla iptal edin ve sunucularınızda değiştirin."
       }
     },
     "discovery": {
@@ -1638,6 +1668,73 @@
         "title": "Sertifika dosyası okunamadı.",
         "cause": "Yüklenen içerik ne sertifikayı ve şifrelenmemiş tek bir özel anahtarı içeren PEM metni ne de bir PFX dosyası ya da 1 MiB'tan büyük. Hiçbir şey değiştirilmedi.",
         "action": "Sertifikayı ve şifrelenmemiş özel anahtarını PEM olarak ya da parolasıyla birlikte bir PFX dosyası olarak yükleyin."
+      }
+    },
+    "incident": {
+      "open": {
+        "title": "Bu sertifikanın zaten açık bir olayı var.",
+        "cause": "Alice bir sertifika için aynı anda tek bir anahtar ele geçirme olayı yürütür.",
+        "action": "Süren olayı sertifikanın sayfasından açıp oradan izleyin ya da önce kapatın."
+      },
+      "state": {
+        "title": "Bu işlem olayın şu anki adımına uymuyor.",
+        "cause": "Sayfa yüklendiğinden beri olay ilerledi ya da bitti.",
+        "action": "Olayı yeniden yükleyin ve şimdi sunduğu işlemlerden birini seçin."
+      },
+      "replacement_invalid": {
+        "title": "Bu sertifika ele geçirilmiş olanın yerine geçemez.",
+        "cause": "Yeni sertifika, Alice'in özel anahtarını tuttuğu, başka bir anahtarla yapılmış, iptal edilmemiş ya da ele geçirilmemiş ve şu anda geçerli bir sertifika olmalıdır.",
+        "action": "Yeni bir özel anahtarla yapılmış bir sertifika yükleyin (ya da bir imzalama isteğini tamamlayın) ve onu yeni sertifika olarak seçin."
+      },
+      "not_revocable": {
+        "title": "Alice bu sertifikayı iptal edemez.",
+        "cause": "Alice yalnızca bir sertifika yetkilisinden (ACME) kendisinin istediği sertifikaları iptal eder. Bu sertifika başka bir kaynaktan geldi.",
+        "action": "Onu veren sertifika yetkilisinden iptal etmesini isteyin; Alice onu ele geçirilmiş olarak işaretledi ve sunucularınızda değiştiriyor."
+      },
+      "other_certificate": {
+        "title": "Bu yerde aynı anahtarla yapılmış başka bir sertifika var.",
+        "cause": "Dosyada ele geçirilmiş özel anahtarla yapılmış farklı bir sertifika (başka adlar) var; bu yüzden Alice bu olayın yeni sertifikasını oraya koymadı.",
+        "action": "O sertifika için de sayfasından bir olay başlatın ya da onu elle değiştirin."
+      },
+      "not_deployable": {
+        "title": "Alice bu yere dağıtım yapamaz.",
+        "cause": "Dosya, yazılımını Alice'in yalnızca keşfettiği bir sunucuda, yolu veya yapılandırması Alice'in değiştiremeyeceği türden ya da yeni sertifikanınkinden başka türde bir anahtar gerektiriyor.",
+        "action": "Bu dosyadaki sertifikayı elle değiştirin, sonra sunucuyu yeniden tarayın."
+      },
+      "follows_key_vault": {
+        "title": "Bu yer bir anahtar kasasındaki sertifikayı izliyor.",
+        "cause": "Dosya bir Azure Key Vault sertifikasına bağlı; olaydan yapılan bir dağıtımın üzerine yazılırdı.",
+        "action": "Sertifikayı kasada (yeni bir anahtarla) değiştirin; Alice yeni sürümü bu yere dağıtır."
+      },
+      "follows_other_acme": {
+        "title": "Bu yer bir sertifika yetkilisinden alınan başka bir sertifikayı izliyor.",
+        "cause": "Dosya farklı bir ACME sertifikasına bağlı; olaydan yapılan bir dağıtımın üzerine yazılırdı.",
+        "action": "O sertifika için de bir olay başlatın ya da yerin bağlantısını kaldırıp onu elle değiştirin."
+      },
+      "location_busy": {
+        "title": "Bu yer çok uzun süre meşgul kaldı.",
+        "cause": "Başka bir dağıtım, sunucudaki bir kurtarma ya da hazır olmayan bir sunucu, Alice'in yeni sertifikayı buraya dağıtmasını art arda birçok kez engelledi.",
+        "action": "Sunucuyu ve dağıtımlarını denetleyin, sonra olayda Yeniden dene'yi seçin."
+      },
+      "deployments_failed": {
+        "title": "Yeni sertifika her yere dağıtılamadı.",
+        "cause": "Yeni sertifikanın en az bir dağıtımı başarısız oldu. Ele geçirilmiş sertifika henüz iptal edilmedi; bu yüzden onu hâlâ sunan yerler çalışmaya devam eder.",
+        "action": "Başarısız yerlere ve dağıtımlarına bakın, nedeni giderip Yeniden dene'yi seçin ya da anahtarın hemen iptal edilmesi gerekiyorsa Yine de şimdi iptal et'i seçin."
+      },
+      "deployments_unverified": {
+        "title": "Yeni sertifikanın bazı dağıtımları denetlenemedi.",
+        "cause": "Yeni sertifika dağıtıldı, ancak bazı yerler için sunucunun onu sunduğunu denetleme kapalıydı. Alice ele geçirilmiş sertifikayı ancak her yer denetlendikten sonra iptal eder.",
+        "action": "O web sitelerini kendiniz denetleyin, sonra Yine de şimdi iptal et'i seçin."
+      },
+      "key_reused": {
+        "title": "Yeni sertifika ele geçirilmiş anahtarı kullanıyor.",
+        "cause": "Yeni sertifika olarak seçilen sertifika, ele geçirilmiş olanla aynı özel anahtarla yapılmış; dolayısıyla o da ele geçirilmiş durumda.",
+        "action": "Yeni bir özel anahtarla yapılmış bir sertifika isteyin ya da yükleyin ve Yeniden dene'yi seçin."
+      },
+      "replacement_unusable": {
+        "title": "Yeni sertifika artık kullanılamıyor.",
+        "cause": "Yeni sertifika iptal edildi, ele geçirilmiş olarak işaretlendi, kaldırıldı ya da artık geçerli değil veya Alice onun özel anahtarını tutmuyor.",
+        "action": "Yeni bir özel anahtarla yapılmış başka bir sertifika isteyin ya da yükleyin ve Yeniden dene'yi seçin."
       }
     }
   },

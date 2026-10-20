@@ -41,6 +41,14 @@ type fakeACME struct {
 	AddACMEBindingFn        func(ctx context.Context, a inventory.Actor, id, location uuid.UUID, autoDeploy, strictSession bool) (inventory.ACMEBinding, error)
 	RemoveACMEBindingFn     func(ctx context.Context, a inventory.Actor, id, location uuid.UUID) error
 	DeployACMENowFn         func(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMEDeployInput) ([]inventory.RequestedDeployment, error)
+	RevokeACMECertificateFn func(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMERevokeInput) (inventory.Certificate, error)
+}
+
+func (f *fakeACME) RevokeACMECertificate(ctx context.Context, a inventory.Actor, id uuid.UUID, in inventory.ACMERevokeInput) (inventory.Certificate, error) {
+	if f.RevokeACMECertificateFn != nil {
+		return f.RevokeACMECertificateFn(ctx, a, id, in)
+	}
+	return inventory.Certificate{}, errNotConfigured
 }
 
 func (f *fakeACME) ListACMEProviders(ctx context.Context) ([]inventory.ACMEProvider, error) {

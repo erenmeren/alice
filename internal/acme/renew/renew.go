@@ -105,6 +105,9 @@ type Input struct {
 	ARICheckedAt, ARINextCheckAt *time.Time
 	// Locked: the licence gate refuses changes.
 	Locked bool
+	// Revoked: the current certificate was revoked at its CA or marked compromised (migration 00021). It is due at once
+	// (ReasonDueRevoked); the backoff and the spacing still apply.
+	Revoked bool
 }
 
 // Action is what the planner does.
@@ -131,6 +134,7 @@ const (
 	ReasonDue               = "due"
 	ReasonDueARI            = "due_ari"
 	ReasonRecovery          = "recovery"
+	ReasonDueRevoked        = "due_revoked"
 )
 
 // Decision is the outcome for one certificate.
@@ -257,6 +261,9 @@ func Decide(in Input) Decision {
 	// ignored, or every new certificate would be due at once.
 	if in.ARIWindow != nil && in.ARIWindow.Start.Before(local) && in.ARIWindow.End.After(in.NotBefore) {
 		d.RenewAt, d.Reason = in.ARIWindow.Start, ReasonDueARI
+	}
+	if in.Revoked && now.Before(d.RenewAt) {
+		d.RenewAt, d.Reason = now, ReasonDueRevoked
 	}
 	if now.Before(d.RenewAt) {
 		d.Reason = ReasonNotDue

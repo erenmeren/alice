@@ -481,6 +481,12 @@ func buildScheduler(svc *services, sender *notify.Sender, clk clock.Clock, log *
 		// ended without them. The e2e build never ticks them: the journeys run them with POST /test/scheduler/run.
 		netdiscojobs.ScheduleTask(netdiscoDeps(svc, clk, log), netdiscoScheduleEvery),
 		netdiscojobs.RetentionTask(netdiscoDeps(svc, clk, log), netdiscoRetentionEvery),
+		// Key-compromise incidents: follow and advance every open incident (ClassAlways; the inventory asks the gate before
+		// it deploys, orders or revokes). The e2e build never ticks it: the journeys run it with POST /test/scheduler/run.
+		jobs.Task{Type: jobs.IncidentAdvance, Every: incidentAdvanceEvery, Run: func(ctx context.Context) error {
+			_, err := svc.inventory.AdvanceIncidents(ctx)
+			return err
+		}},
 	)
 }
 

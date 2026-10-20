@@ -116,6 +116,10 @@ type ACMECurrentCertificate struct {
 	NotBefore     time.Time `json:"not_before"`
 	NotAfter      time.Time `json:"not_after"`
 	ChainComplete bool      `json:"chain_complete"`
+	// RevokedAt and RevocationReason: the CA revoked it at Alice's request; Compromised: its key is marked compromised.
+	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
+	RevocationReason string     `json:"revocation_reason"`
+	Compromised      bool       `json:"compromised"`
 }
 
 // ACMECertificateInput is the input of CreateACMECertificate. KeyType "" is ecdsa_p256; RenewBeforeDays 0 is 30;
@@ -292,7 +296,10 @@ CASE WHEN c.current_certificate_id IS NOT NULL AND c.deploy_held_certificate_id 
     AND NOT (c.deploy_held_reason = 'license' AND c.deploy_released_certificate_id IS NOT DISTINCT FROM c.current_certificate_id)
     THEN c.deploy_held_reason ELSE '' END,
 c.current_certificate_id IS NOT NULL AND c.deploy_stopped_certificate_id IS NOT DISTINCT FROM c.current_certificate_id,
-c.created_by, c.created_at, c.updated_at, c.last_failure_class, c.permanent_failures`
+c.created_by, c.created_at, c.updated_at, c.last_failure_class, c.permanent_failures,
+(SELECT cur.revoked_at FROM certificates cur WHERE cur.id = c.current_certificate_id),
+(SELECT cur.revocation_reason FROM certificates cur WHERE cur.id = c.current_certificate_id),
+(SELECT cur.compromised_at IS NOT NULL FROM certificates cur WHERE cur.id = c.current_certificate_id)`
 
 func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	var (
@@ -300,15 +307,21 @@ func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 		fingerprint *string
 		nb, na      *time.Time
 		chainOK     *bool
+		revokedAt   *time.Time
+		reason      *string
+		compromised *bool
 	)
 	err := row.Scan(&c.ID, &c.ProviderID, &c.AccountID, &c.Names, &c.KeyType, &c.Challenge, &c.HookID, &c.HTTPTargetID, &c.RenewBeforeDays,
 		&c.AutoRenew, &c.AutoDeploy, &c.State, &c.CurrentCertificateID, &c.Failures, &c.NextAttemptAt, &c.LastAttemptAt, &c.LastErrorCode,
 		&c.RunningOrderID, &c.Bindings, &fingerprint, &nb, &na, &chainOK, &c.ARIWindowStart, &c.ARIWindowEnd, &c.DeployHeldReason,
-		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures)
+		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures, &revokedAt, &reason, &compromised)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CurrentCertificateID != nil && fingerprint != nil && nb != nil && na != nil && chainOK != nil {
 		c.Current = &ACMECurrentCertificate{ID: *c.CurrentCertificateID, Fingerprint: *fingerprint, NotBefore: nb.UTC(), NotAfter: na.UTC(),
-			ChainComplete: *chainOK}
+			ChainComplete: *chainOK, RevokedAt: utcPtr(revokedAt), Compromised: compromised != nil && *compromised}
+		if reason != nil {
+			c.Current.RevocationReason = *reason
+		}
 	}
 	for _, t := range []**time.Time{&c.NextAttemptAt, &c.LastAttemptAt, &c.ARIWindowStart, &c.ARIWindowEnd} {
 		if *t != nil {

@@ -97,6 +97,9 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.DiscoveryView:    row(unau, unau, unau, unau, unau, allw, allw, allw, allw, allw, allw, forb, allw, forb, allw),
 	rbac.DiscoveryOperate: row(unau, unau, unau, unau, unau, allw, allw, forb, allw, allw, forb, forb, allw, forb, allw),
 	rbac.DiscoveryManage:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+
+	// Key-compromise incidents (2026-10-20): an Administrator's browser session with step-up, never a token.
+	rbac.CertificatesIncident: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -432,6 +435,12 @@ func routeRuleViolations(routes []route) []string {
 			want = rbac.InventoryOperate
 		case under(p, "/api/v1/jobs") && !safeMethod(rt.method):
 			want = rbac.JobsConfirm
+		// Key-compromise incidents (2026-10-20): starting one and every action on one is certificates.incident; reading
+		// them and the impact of a certificate is read.
+		case p == "/api/v1/certificates/{id}/incidents", under(p, "/api/v1/incidents") && !safeMethod(rt.method):
+			want = rbac.CertificatesIncident
+		case under(p, "/api/v1/incidents"), under(p, "/api/v1/certificate-impact"):
+			want = rbac.Read
 		case under(p, "/api/v1/certificates") && !safeMethod(rt.method):
 			want = rbac.CertificatesOperate
 		case under(p, "/api/v1/locations") && !safeMethod(rt.method):
@@ -867,7 +876,9 @@ var (
 		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.
 		"/api/v1/acme",
 		// Network discovery (A5): starting a scan is ClassReadOnly (the scan itself is paused in lock).
-		"/api/v1/discovery"}
+		"/api/v1/discovery",
+		// Key-compromise incidents (2026-10-20): they deploy to servers and revoke at a CA.
+		"/api/v1/incidents"}
 	// lockAvailableRoutes are routes of a refused group that work in every license state because
 	// they only reduce what Alice will do (ClassAlways).
 	//
@@ -887,7 +898,9 @@ var (
 		// Network discovery (A5): a locked installation can still stop a scan, change or remove its scopes and the settings;
 		// none of them contacts a server (the preview resolves nothing; a scope's save looks its new names up only).
 		"POST /api/v1/discovery/scans/{id}/cancel": true, "POST /api/v1/discovery/scopes": true, "POST /api/v1/discovery/scopes/preview": true,
-		"PATCH /api/v1/discovery/scopes/{id}": true, "DELETE /api/v1/discovery/scopes/{id}": true, "PUT /api/v1/discovery/settings": true}
+		"PATCH /api/v1/discovery/scopes/{id}": true, "DELETE /api/v1/discovery/scopes/{id}": true, "PUT /api/v1/discovery/settings": true,
+		// Closing an incident only stops what Alice does for it; it contacts no server and no CA.
+		"POST /api/v1/incidents/{id}/close": true}
 )
 
 func underAny(pattern string, prefixes []string) bool {

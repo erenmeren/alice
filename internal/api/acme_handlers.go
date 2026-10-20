@@ -70,6 +70,8 @@ func (s *server) acmeRoutes() []route {
 		{method: http.MethodGet, pattern: certs + "/{id}/orders", perm: view, handler: s.listACMEOrders},
 		{method: http.MethodPost, pattern: certs + "/{id}/rearm", perm: manage, lic: change, limit: limitACME, handler: s.rearmACME},
 		{method: http.MethodPost, pattern: certs + "/{id}/release-hold", perm: manage, lic: change, handler: s.releaseACMEHold},
+		// Revocation at the CA (RFC 8555 section 7.6, 2026-10-20): cannot be undone; a CA call like an order.
+		{method: http.MethodPost, pattern: certs + "/{id}/revoke", perm: manage, lic: change, limit: limitACME, handler: s.revokeACME},
 		{method: http.MethodGet, pattern: certs + "/{id}/bindings", perm: view, handler: s.listACMEBindings},
 		{method: http.MethodPut, pattern: certs + "/{id}/bindings/{location_id}", perm: operate, lic: change, handler: s.putACMEBinding},
 		{method: http.MethodDelete, pattern: certs + "/{id}/bindings/{location_id}", perm: operate, lic: always, handler: s.deleteACMEBinding},

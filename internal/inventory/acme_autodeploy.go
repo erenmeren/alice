@@ -300,8 +300,9 @@ func (s *Service) prepareACMEDeployment(ctx context.Context, tx pgx.Tx, certific
 	if err != nil {
 		return 0, 0, err
 	}
-	if c.keyID == nil || (c.algorithm != "rsa" && c.algorithm != "ecdsa") || !now.Before(c.notAfter) || now.Before(c.notBefore) {
-		return 0, 0, nil
+	if c.keyID == nil || (c.algorithm != "rsa" && c.algorithm != "ecdsa") || !now.Before(c.notAfter) || now.Before(c.notBefore) ||
+		c.revoked || c.compromised {
+		return 0, 0, nil // a revoked or compromised version is never deployed (00021)
 	}
 	if !c.chainComplete {
 		budget = 0 // an incomplete chain needs an Administrator's confirmation, which the planner never gives

@@ -51,7 +51,18 @@ type Certificate struct {
 	LocationCount int // locations on live targets that are not missing
 	FirstSeenAt   time.Time
 	LastSeenAt    time.Time
-	Locations     []CertificateLocation // GetCertificate only: at most MaxListedLocations
+	// PublicKeySHA256 is the hex SHA-256 of the SubjectPublicKeyInfo: certificates made with the same key share it.
+	PublicKeySHA256 string
+	// Revocation (migration 00021): RevokedAt and RevocationReason (an RFC 5280 name) when the CA revoked it at Alice's
+	// request; CompromisedAt when Alice marked its private key compromised. Both are final, and either refuses deployment.
+	RevokedAt        *time.Time
+	RevocationReason string
+	RevokedByName    string // the display name of the person who revoked it ("" for none or Alice herself)
+	CompromisedAt    *time.Time
+	// ACMECertificateID is the ACME certificate whose order produced this version (nil for another source or an
+	// unknown one).
+	ACMECertificateID *uuid.UUID
+	Locations         []CertificateLocation // GetCertificate only: at most MaxListedLocations
 	// LocationsTruncated: GetCertificate left locations out (more than MaxListedLocations).
 	LocationsTruncated bool
 }
@@ -223,13 +234,15 @@ func leafPEM(p certs.Parsed) string {
 const certificateColumns = `c.id, c.fingerprint_sha256, c.subject_cn, c.subject, c.issuer, c.serial, c.sans, c.not_before, c.not_after,
 c.key_algorithm, c.key_bits, c.chain_complete, c.self_signed, c.source, c.label, c.private_key_id IS NOT NULL, c.first_seen_at, c.last_seen_at,
 (SELECT count(*) FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
- WHERE l.certificate_id = c.id AND l.missing_since IS NULL)`
+ WHERE l.certificate_id = c.id AND l.missing_since IS NULL),
+c.public_key_sha256, c.revoked_at, c.revocation_reason, coalesce((SELECT u.display_name FROM users u WHERE u.id = c.revoked_by), ''),
+c.compromised_at, (SELECT o.acme_certificate_id FROM acme_orders o WHERE o.certificate_id = c.id ORDER BY o.started_at DESC LIMIT 1)`
 
 func scanCertificate(row pgx.Row, extra ...any) (Certificate, error) {
 	var c Certificate
 	dest := []any{&c.ID, &c.Fingerprint, &c.SubjectCN, &c.Subject, &c.Issuer, &c.Serial, &c.SANs, &c.NotBefore, &c.NotAfter,
 		&c.KeyAlgorithm, &c.KeyBits, &c.ChainComplete, &c.SelfSigned, &c.Source, &c.Label, &c.HasPrivateKey, &c.FirstSeenAt, &c.LastSeenAt,
-		&c.LocationCount}
+		&c.LocationCount, &c.PublicKeySHA256, &c.RevokedAt, &c.RevocationReason, &c.RevokedByName, &c.CompromisedAt, &c.ACMECertificateID}
 	err := row.Scan(append(dest, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Certificate{}, ErrNotFound
@@ -238,6 +251,7 @@ func scanCertificate(row pgx.Row, extra ...any) (Certificate, error) {
 		return Certificate{}, fmt.Errorf("inventory: read certificate: %w", err)
 	}
 	c.NotBefore, c.NotAfter, c.FirstSeenAt, c.LastSeenAt = c.NotBefore.UTC(), c.NotAfter.UTC(), c.FirstSeenAt.UTC(), c.LastSeenAt.UTC()
+	c.RevokedAt, c.CompromisedAt = utcPtr(c.RevokedAt), utcPtr(c.CompromisedAt)
 	if c.SANs == nil {
 		c.SANs = []string{}
 	}

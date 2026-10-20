@@ -297,6 +297,10 @@ var (
 	ErrCertPFXBusy            = ErrorCode{Code: "ALC-CRT-0015", Reason: "certificate.pfx_busy", Status: http.StatusServiceUnavailable, Retryable: true}
 	ErrCSRBusy                = ErrorCode{Code: "ALC-CRT-0016", Reason: "csr.busy", Status: http.StatusServiceUnavailable, Retryable: true}
 	ErrCSRTooManyPending      = ErrorCode{Code: "ALC-CRT-0017", Reason: "csr.too_many_pending", Status: http.StatusConflict}
+	// Revocation and key compromise (migration 00021): a revoked or compromised certificate is never deployed again; also
+	// a deployment's result when the mark came after the request.
+	ErrCertRevoked     = ErrorCode{Code: "ALC-CRT-0018", Reason: "certificate.revoked", Status: http.StatusConflict}
+	ErrCertCompromised = ErrorCode{Code: "ALC-CRT-0019", Reason: "certificate.compromised", Status: http.StatusConflict}
 
 	ErrDeployInProgress           = ErrorCode{Code: "ALC-DEP-0001", Reason: "deployment.in_progress", Status: http.StatusConflict, Retryable: true}
 	ErrDeployRecoveryPending      = ErrorCode{Code: "ALC-DEP-0002", Reason: "deployment.recovery_pending", Status: http.StatusConflict, Retryable: true}
@@ -449,6 +453,28 @@ var (
 	// Deploy now without named websites (Task 13 fix round 1): none is bound, or more than one request takes.
 	ErrACMNoBindings      = ErrorCode{Code: "ALC-ACM-0035", Reason: "acme.no_bindings", Status: http.StatusConflict}
 	ErrACMTooManyBindings = ErrorCode{Code: "ALC-ACM-0036", Reason: "acme.too_many_bindings", Status: http.StatusUnprocessableEntity}
+	// Revocation (RFC 8555 section 7.6; 2026-10-20): the named certificate is not a version of this ACME certificate; the CA
+	// offers no revocation; the CA (or Alice) refuses the reason; the CA refuses this account for this certificate.
+	ErrACMNotThisCertificate  = ErrorCode{Code: "ALC-ACM-0037", Reason: "acme.not_this_certificate", Status: http.StatusUnprocessableEntity}
+	ErrACMRevokeUnsupported   = ErrorCode{Code: "ALC-ACM-0038", Reason: "acme.revoke_unsupported", Status: http.StatusUnprocessableEntity}
+	ErrACMRevokeReasonRefused = ErrorCode{Code: "ALC-ACM-0039", Reason: "acme.revoke_reason_refused", Status: http.StatusUnprocessableEntity}
+	ErrACMRevokeUnauthorized  = ErrorCode{Code: "ALC-ACM-0040", Reason: "acme.revoke_unauthorized", Status: http.StatusUnprocessableEntity}
+
+	// Key-compromise incidents (area INC, 2026-10-20). 0001-0004 answer a request; 0005-0013 are the codes an incident
+	// records on itself (attention_code) or on a location (error_code), never an answer.
+	ErrINCOpen                  = ErrorCode{Code: "ALC-INC-0001", Reason: "incident.open", Status: http.StatusConflict}
+	ErrINCState                 = ErrorCode{Code: "ALC-INC-0002", Reason: "incident.state", Status: http.StatusConflict}
+	ErrINCReplacementInvalid    = ErrorCode{Code: "ALC-INC-0003", Reason: "incident.replacement_invalid", Status: http.StatusUnprocessableEntity}
+	ErrINCNotRevocable          = ErrorCode{Code: "ALC-INC-0004", Reason: "incident.not_revocable", Status: http.StatusConflict}
+	ErrINCOtherCertificate      = ErrorCode{Code: "ALC-INC-0005", Reason: "incident.other_certificate", Status: http.StatusConflict}
+	ErrINCNotDeployable         = ErrorCode{Code: "ALC-INC-0006", Reason: "incident.not_deployable", Status: http.StatusConflict}
+	ErrINCFollowsKeyVault       = ErrorCode{Code: "ALC-INC-0007", Reason: "incident.follows_key_vault", Status: http.StatusConflict}
+	ErrINCFollowsOtherACME      = ErrorCode{Code: "ALC-INC-0008", Reason: "incident.follows_other_acme", Status: http.StatusConflict}
+	ErrINCLocationBusy          = ErrorCode{Code: "ALC-INC-0009", Reason: "incident.location_busy", Status: http.StatusConflict}
+	ErrINCDeploymentsFailed     = ErrorCode{Code: "ALC-INC-0010", Reason: "incident.deployments_failed", Status: http.StatusConflict}
+	ErrINCDeploymentsUnverified = ErrorCode{Code: "ALC-INC-0011", Reason: "incident.deployments_unverified", Status: http.StatusConflict}
+	ErrINCKeyReused             = ErrorCode{Code: "ALC-INC-0012", Reason: "incident.key_reused", Status: http.StatusConflict}
+	ErrINCReplacementUnusable   = ErrorCode{Code: "ALC-INC-0013", Reason: "incident.replacement_unusable", Status: http.StatusConflict}
 
 	// Network certificate discovery (area DSC). A scope's entries are refused at save time (0001-0003, 0009-0011); a
 	// scan start meets 0004, 0007 and 0013 (the scope is switched off: Task 9 ruling); 0005, 0006 and 0012 are the end of a
@@ -508,6 +534,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrCertInvalid, ErrCertKeyMismatch, ErrCertExpired, ErrCertKeyEncrypted, ErrCertPFXPassword, ErrCertWeak,
 		ErrCertUnsupportedKey, ErrCertDuplicate, ErrCertNoPrivateKey, ErrCertKeyTypeMismatch, ErrCertChainUnconfirmed,
 		ErrCSRNotPending, ErrCSRCertificateMismatch, ErrCertNotYetValid, ErrCertPFXBusy, ErrCSRBusy, ErrCSRTooManyPending,
+		ErrCertRevoked, ErrCertCompromised,
 		ErrDeployInProgress, ErrDeployRecoveryPending, ErrDeployVerifyFailed, ErrDeployVerifyOther, ErrDeployVerifyUnreachable,
 		ErrDeployReloadFailed, ErrDeployConfigTestFailed, ErrDeployRollbackFailed, ErrDeployRollbackReloadFailed,
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
@@ -530,7 +557,11 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMHookInUse, ErrACMNameTaken, ErrACMAccountExists, ErrACMDirectoryChangeUnconfirmed, ErrACMAccountState, ErrACMRolloverPending,
 		ErrACMSecretUnreadable, ErrACMOrderAbandoned, ErrACMNotIssued, ErrACMLocationBound, ErrACMLocationNotBound,
 		ErrACMBindingGone, ErrACMAutoDeployOff, ErrACMCertificateSuperseded, ErrACMDeployStopped, ErrACMDeployHeld,
-		ErrACMNoBindings, ErrACMTooManyBindings,
+		ErrACMNoBindings, ErrACMTooManyBindings, ErrACMNotThisCertificate, ErrACMRevokeUnsupported, ErrACMRevokeReasonRefused,
+		ErrACMRevokeUnauthorized,
+		ErrINCOpen, ErrINCState, ErrINCReplacementInvalid, ErrINCNotRevocable, ErrINCOtherCertificate, ErrINCNotDeployable,
+		ErrINCFollowsKeyVault, ErrINCFollowsOtherACME, ErrINCLocationBusy, ErrINCDeploymentsFailed, ErrINCDeploymentsUnverified,
+		ErrINCKeyReused, ErrINCReplacementUnusable,
 		ErrDSCScopeTooLarge, ErrDSCEntryNotAllowed, ErrDSCEntryInvalid, ErrDSCScanRunning, ErrDSCScanCancelled, ErrDSCScanTimedOut,
 		ErrDSCTooManyScans, ErrDSCScopeNotFound, ErrDSCScheduleInvalid, ErrDSCNameUnresolved, ErrDSCNameTaken, ErrDSCScanInterrupted,
 		ErrDSCScopeDisabled,
@@ -620,6 +651,13 @@ var errorMap = []struct {
 	{inventory.ErrCertificateInvalid, ErrCertInvalid, nil},
 	{inventory.ErrKeyMismatch, ErrCertKeyMismatch, nil},
 	{inventory.ErrCertificateExpired, ErrCertExpired, nil},
+	{inventory.ErrCertificateRevoked, ErrCertRevoked, nil},
+	{inventory.ErrCertificateCompromised, ErrCertCompromised, nil},
+	{inventory.ErrNotACMEVersion, ErrACMNotThisCertificate, nil},
+	{inventory.ErrIncidentOpen, ErrINCOpen, nil},
+	{inventory.ErrIncidentState, ErrINCState, nil},
+	{inventory.ErrIncidentReplacement, ErrINCReplacementInvalid, nil},
+	{inventory.ErrIncidentNotRevocable, ErrINCNotRevocable, nil},
 	{inventory.ErrKeyEncrypted, ErrCertKeyEncrypted, nil},
 	{inventory.ErrPFXPassword, ErrCertPFXPassword, nil},
 	{inventory.ErrWeakCertificate, ErrCertWeak, nil},

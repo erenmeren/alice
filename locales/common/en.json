@@ -987,6 +987,16 @@
         "title": "Alice is busy reading other PFX files.",
         "cause": "Alice reads at most two PFX files at a time, and that limit was reached. Nothing was stored or sent to a server.",
         "action": "Wait a moment and try again."
+      },
+      "revoked": {
+        "title": "This certificate was revoked.",
+        "cause": "Its certificate authority revoked it at Alice's request. Browsers may refuse a revoked certificate, so Alice never deploys it again.",
+        "action": "Deploy a newer certificate instead. For a certificate from a certificate authority (ACME), choose Order now on its page; Alice also orders a new one by herself while automatic renewal is on."
+      },
+      "compromised": {
+        "title": "This certificate's private key is marked compromised.",
+        "cause": "An administrator started a key compromise incident for this certificate or for another certificate made with the same private key. Alice never deploys a certificate with a compromised key again.",
+        "action": "Deploy the replacement chosen in the incident, or another certificate made with a new key. Open the incident from the certificate's page to follow the replacement."
       }
     },
     "csr": {
@@ -1544,6 +1554,26 @@
         "title": "Choose the websites to deploy to.",
         "cause": "This certificate is connected to more websites than one deployment request can take (at most 20).",
         "action": "Select the websites to deploy to, at most 20 at a time, and choose Deploy now again."
+      },
+      "not_this_certificate": {
+        "title": "This certificate was not issued for this ACME certificate.",
+        "cause": "Only a certificate that an order of this ACME certificate produced can be revoked from its page.",
+        "action": "Choose a version listed under this certificate's orders, or leave the version out to revoke the current certificate."
+      },
+      "revoke_unsupported": {
+        "title": "The certificate authority does not offer revocation.",
+        "cause": "The certificate authority's directory lists no revokeCert address, so Alice cannot ask it to revoke a certificate. Nothing was sent.",
+        "action": "Revoke the certificate through the certificate authority's own tools, and replace it on your servers."
+      },
+      "revoke_reason_refused": {
+        "title": "The certificate authority does not accept this revocation reason.",
+        "cause": "Alice sends the reasons a certificate owner may give (unspecified, key compromise, affiliation changed, superseded, cessation of operation); the certificate authority refused the one chosen.",
+        "action": "Choose another reason, for example Unspecified, and revoke again."
+      },
+      "revoke_unauthorized": {
+        "title": "The certificate authority refused to revoke this certificate.",
+        "cause": "The certificate authority says this account may not revoke this certificate: another account ordered it, or the authority does not know it (for example after a change of directory).",
+        "action": "Revoke the certificate with the account that ordered it, through the certificate authority's own tools if needed, and replace it on your servers."
       }
     },
     "discovery": {
@@ -1638,6 +1668,73 @@
         "title": "The certificate file could not be read.",
         "cause": "The upload is neither PEM text with the certificate and one unencrypted private key nor a PFX file, or it is larger than 1 MiB. Nothing was changed.",
         "action": "Upload the certificate and its unencrypted private key as PEM, or a PFX file with its password."
+      }
+    },
+    "incident": {
+      "open": {
+        "title": "This certificate already has an open incident.",
+        "cause": "Alice runs one key compromise incident per certificate at a time.",
+        "action": "Open the running incident from the certificate's page and follow it there, or close it first."
+      },
+      "state": {
+        "title": "This action does not fit the incident's current step.",
+        "cause": "The incident moved on since the page was loaded, or it is finished.",
+        "action": "Reload the incident and choose one of the actions it offers now."
+      },
+      "replacement_invalid": {
+        "title": "This certificate cannot replace the compromised one.",
+        "cause": "A replacement must be a certificate Alice holds the private key of, made with another key, neither revoked nor compromised, and valid now.",
+        "action": "Upload a certificate made with a new private key (or complete a signing request) and choose it as the replacement."
+      },
+      "not_revocable": {
+        "title": "Alice cannot revoke this certificate.",
+        "cause": "Alice revokes only certificates she ordered from a certificate authority (ACME). This certificate came from another source.",
+        "action": "Ask the certificate authority that issued it to revoke it; Alice has marked it compromised and replaces it on your servers."
+      },
+      "other_certificate": {
+        "title": "This place holds another certificate made with the same key.",
+        "cause": "The file holds a different certificate (other names) that was made with the compromised private key, so Alice did not put this incident's replacement there.",
+        "action": "Start an incident for that certificate too, from its page, or replace it by hand."
+      },
+      "not_deployable": {
+        "title": "Alice cannot deploy to this place.",
+        "cause": "The file is on a server whose software Alice only discovers, its path or configuration is one Alice cannot change, or it needs a key of another type than the replacement has.",
+        "action": "Replace the certificate in this file by hand, then scan the server again."
+      },
+      "follows_key_vault": {
+        "title": "This place follows a certificate in a key vault.",
+        "cause": "The file is connected to an Azure Key Vault certificate, so a deployment from the incident would be overwritten.",
+        "action": "Replace the certificate in the vault (with a new key); Alice deploys the new version to this place."
+      },
+      "follows_other_acme": {
+        "title": "This place follows another certificate from a certificate authority.",
+        "cause": "The file is connected to a different ACME certificate, so a deployment from the incident would be overwritten.",
+        "action": "Start an incident for that certificate too, or disconnect the place and replace it by hand."
+      },
+      "location_busy": {
+        "title": "This place stayed busy for too long.",
+        "cause": "Another deployment, a recovery on the server or a server that was not ready kept Alice from deploying the replacement here, many times in a row.",
+        "action": "Check the server and its deployments, then choose Retry on the incident."
+      },
+      "deployments_failed": {
+        "title": "The replacement could not be deployed everywhere.",
+        "cause": "At least one deployment of the replacement failed. The compromised certificate is not revoked yet, so the places that still serve it keep working.",
+        "action": "Look at the failed places and their deployments, fix the cause and choose Retry, or choose Revoke now regardless if the key must be revoked at once."
+      },
+      "deployments_unverified": {
+        "title": "Some deployments of the replacement could not be checked.",
+        "cause": "The replacement was deployed, but checking that the server serves it was switched off for some places. Alice revokes the compromised certificate only after every place is checked.",
+        "action": "Check those websites yourself, then choose Revoke now regardless."
+      },
+      "key_reused": {
+        "title": "The new certificate uses the compromised key.",
+        "cause": "The certificate chosen as the replacement was made with the same private key as the compromised one, so it is compromised too.",
+        "action": "Order or upload a certificate made with a new private key and choose Retry."
+      },
+      "replacement_unusable": {
+        "title": "The replacement certificate can no longer be used.",
+        "cause": "The replacement was revoked, marked compromised, removed, or is no longer valid, or Alice does not hold its private key.",
+        "action": "Order or upload another certificate made with a new private key and choose Retry."
       }
     }
   },

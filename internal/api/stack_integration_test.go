@@ -387,6 +387,7 @@ func (s *stack) deps() Deps {
 		Inventory:      s.inv,
 		ACME:           s.inv,
 		Discovery:      s.discovery,
+		Incidents:      s.inv,
 		Jobs:           s.queue,
 		Providers:      s.registry,
 		SSHKeys:        s.sshKeys,

@@ -85,6 +85,10 @@ type acmeCurrentDTO struct {
 	NotBefore     time.Time `json:"not_before"`
 	NotAfter      time.Time `json:"not_after"`
 	ChainComplete bool      `json:"chain_complete"`
+	// Revocation and key compromise of the current certificate (2026-10-20).
+	RevokedAt        *time.Time `json:"revoked_at"`
+	RevocationReason string     `json:"revocation_reason"`
+	Compromised      bool       `json:"compromised"`
 }
 
 type acmeWindowDTO struct {
@@ -155,7 +159,8 @@ func acmeCertificateJSON(c inventory.ACMECertificate, now time.Time) acmeCertifi
 		now.Before(c.Current.NotAfter)
 	if c.Current != nil {
 		d.Current = &acmeCurrentDTO{ID: c.Current.ID.String(), Fingerprint: c.Current.Fingerprint, NotBefore: c.Current.NotBefore.UTC(),
-			NotAfter: c.Current.NotAfter.UTC(), ChainComplete: c.Current.ChainComplete}
+			NotAfter: c.Current.NotAfter.UTC(), ChainComplete: c.Current.ChainComplete, RevokedAt: utcPtr(c.Current.RevokedAt),
+			RevocationReason: c.Current.RevocationReason, Compromised: c.Current.Compromised}
 	}
 	if c.ARIWindowStart != nil && c.ARIWindowEnd != nil {
 		d.ARIWindow = &acmeWindowDTO{Start: c.ARIWindowStart.UTC(), End: c.ARIWindowEnd.UTC()}
@@ -232,10 +237,15 @@ type acmeOrderDTO struct {
 	Presented         int          `json:"presented"`
 	CleanupAt         *time.Time   `json:"cleanup_at"`
 	CleanupError      *errorRefDTO `json:"cleanup_error"`
+	// The issued certificate's revocation and compromise marks (2026-10-20).
+	RevokedAt        *time.Time `json:"revoked_at"`
+	RevocationReason string     `json:"revocation_reason"`
+	Compromised      bool       `json:"compromised"`
 }
 
 func acmeOrderJSON(o inventory.ACMEOrder) acmeOrderDTO {
 	return acmeOrderDTO{ID: o.ID.String(), ACMECertificateID: o.ACMECertificateID.String(), Kind: o.Kind, State: o.State, Trigger: o.Trigger,
 		StartedAt: o.StartedAt.UTC(), FinishedAt: utcPtr(o.FinishedAt), Error: errorRef(o.ErrorCode, nil), CertificateID: idPtr(o.CertificateID),
-		RequestedBy: idPtr(o.RequestedBy), Presented: o.Presented, CleanupAt: utcPtr(o.CleanupAt), CleanupError: errorRef(o.CleanupErrorCode, nil)}
+		RequestedBy: idPtr(o.RequestedBy), Presented: o.Presented, CleanupAt: utcPtr(o.CleanupAt), CleanupError: errorRef(o.CleanupErrorCode, nil),
+		RevokedAt: utcPtr(o.RevokedAt), RevocationReason: o.RevocationReason, Compromised: o.Compromised}
 }

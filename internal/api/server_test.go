@@ -61,6 +61,7 @@ func testDeps(t *testing.T, health error) Deps {
 		License:   &fakeLicense{},
 		Inventory: &fakeInventory{},
 		ACME:      &fakeACME{},
+		Incidents: &fakeIncidents{},
 		// The Overview reads the discovery summary: answer it with no scope (no metric) by default.
 		Discovery: &fakeDiscovery{SummaryFn: func(context.Context) (discoverysvc.Summary, error) { return discoverysvc.Summary{}, nil }},
 		Jobs:      &fakeJobs{},

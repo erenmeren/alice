@@ -53,6 +53,23 @@ type Certificate struct {
 	IsCA               bool      // basic constraints CA
 	Serial             string    // upper-case hex without separators (internal/certs' format)
 	SignatureAlgorithm string    // Go's name, e.g. "SHA256-RSA", "SHA1-RSA", "ECDSA-SHA256"
+	// PublicKeySHA256 is the lower-case hex SHA-256 of the SubjectPublicKeyInfo (internal/certs' public key hash, so a
+	// certificate made with the same key as a managed one is found by it); "" when the key cannot be encoded.
+	PublicKeySHA256 string
+}
+
+// publicKeySHA256 is internal/certs' public key hash: the SHA-256 of the re-encoded SubjectPublicKeyInfo (the raw one
+// when Go cannot encode the key).
+func publicKeySHA256(c *x509.Certificate) string {
+	spki := c.RawSubjectPublicKeyInfo
+	if der, err := x509.MarshalPKIXPublicKey(c.PublicKey); err == nil {
+		spki = der
+	}
+	if len(spki) == 0 {
+		return ""
+	}
+	sum := sha256.Sum256(spki)
+	return hex.EncodeToString(sum[:])
 }
 
 // Chain is a parsed presented chain, leaf first, in the order presented. DroppedCerts counts the
@@ -106,6 +123,7 @@ func describe(c *x509.Certificate) Certificate {
 	out := Certificate{
 		Raw:                slices.Clone(c.Raw),
 		FingerprintSHA256:  hex.EncodeToString(sum[:]),
+		PublicKeySHA256:    publicKeySHA256(c),
 		SubjectCN:          cleanText(c.Subject.CommonName, maxNameBytes),
 		IssuerCN:           cleanText(c.Issuer.CommonName, maxNameBytes),
 		NotBefore:          c.NotBefore.UTC(),

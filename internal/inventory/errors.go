@@ -66,6 +66,20 @@ var (
 // Errors of deployments (Task 15). RequestDeployment refuses with the first that applies; the
 // API maps each to its code (Task 17).
 var (
+	// ErrCertificateRevoked: the certificate was revoked at its CA (migration 00021); it is never deployed again.
+	ErrCertificateRevoked = errors.New("inventory: the certificate was revoked")
+	// ErrCertificateCompromised: Alice marked the certificate's private key compromised; it is never deployed again.
+	ErrCertificateCompromised = errors.New("inventory: the certificate's private key is marked compromised")
+)
+
+// Closed reasons of a queued deployment whose certificate was revoked or marked compromised before it was sent
+// (deployments.error_code).
+const (
+	ReasonCertificateRevoked     = "certificate.revoked"
+	ReasonCertificateCompromised = "certificate.compromised"
+)
+
+var (
 	// ErrDeploymentInProgress: the location already has an unfinished deployment (F-15;
 	// deployments_one_active is the backstop for concurrent requests).
 	ErrDeploymentInProgress = errors.New("inventory: another deployment to this location is in progress")

@@ -149,7 +149,9 @@ func (s *Service) acmeRenewCandidates(ctx context.Context, after *renewCursor) (
 	rows, err := s.pool.Query(ctx, `WITH c AS (
     SELECT c.id, c.provider_id, c.failures, c.permanent_failures, c.next_attempt_at, c.ari_next_check_at, x.not_after,
            CASE WHEN c.ari_window_end > x.not_before THEN c.ari_window_start END AS ari_start,
-           x.not_after - LEAST(make_interval(days => c.renew_before_days), GREATEST(x.not_after - x.not_before, interval '0') / 3) AS due
+           -- A revoked or compromised current certificate (00021) is due at once: its start counts as its renewal time.
+           CASE WHEN x.revoked_at IS NOT NULL OR x.compromised_at IS NOT NULL THEN x.not_before
+                ELSE x.not_after - LEAST(make_interval(days => c.renew_before_days), GREATEST(x.not_after - x.not_before, interval '0') / 3) END AS due
     FROM acme_certificates c JOIN certificates x ON x.id = c.current_certificate_id
     WHERE c.deleted_at IS NULL AND c.auto_renew
       AND (c.state <> 'stopped' OR (c.last_failure_class = 'transient' AND x.not_after > $1))
@@ -300,9 +302,10 @@ func renewInput(ctx context.Context, tx pgx.Tx, c ACMECertificate, now time.Time
 	var nb, na, ws, we *time.Time
 	err := tx.QueryRow(ctx, `SELECT x.not_before, x.not_after, c.ari_window_start, c.ari_window_end, c.ari_checked_at, c.ari_next_check_at,
     (SELECT max(o.started_at) FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.kind = 'issue'
-     AND o.started_at <= $2::timestamptz + make_interval(secs => $3))
+     AND o.started_at <= $2::timestamptz + make_interval(secs => $3)),
+    coalesce(x.revoked_at IS NOT NULL OR x.compromised_at IS NOT NULL, false)
 FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificate_id WHERE c.id = $1`, c.ID, now, renew.SkewTolerance.Seconds()).
-		Scan(&nb, &na, &ws, &we, &in.ARICheckedAt, &in.ARINextCheckAt, &in.LastOrderAt)
+		Scan(&nb, &na, &ws, &we, &in.ARICheckedAt, &in.ARINextCheckAt, &in.LastOrderAt, &in.Revoked)
 	if err != nil {
 		return in, nil, fmt.Errorf("inventory: read the ACME certificate's renewal state: %w", err)
 	}

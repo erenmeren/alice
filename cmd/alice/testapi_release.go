@@ -44,6 +44,9 @@ const acmeScheduleEvery = time.Minute
 // acmeAutoDeployEvery is the interval of the ACME automatic deployment planner (acme.auto_deploy; design row 7).
 const acmeAutoDeployEvery = time.Minute
 
+// incidentAdvanceEvery is the interval of the key-compromise incident task (incident.advance).
+const incidentAdvanceEvery = 30 * time.Second
+
 // netdiscoScheduleEvery and netdiscoRetentionEvery are the intervals of the network discovery schedule (a scope's
 // window is minute-exact) and its retention.
 const (

@@ -717,7 +717,7 @@ func TestACMEManageRoutesNeedAFreshStepUp(t *testing.T) {
 			}
 		}
 	}
-	assert.Equal(t, 15, n, "providers 3 and the registration, accounts 3, hooks 3, certificates 3, re-arm, release")
+	assert.Equal(t, 16, n, "providers 3 and the registration, accounts 3, hooks 3, certificates 3, re-arm, release, revoke")
 	assert.False(t, called)
 }
 
