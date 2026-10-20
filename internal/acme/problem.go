@@ -55,8 +55,9 @@ func Reasons() []string {
 // ProblemPrefix is the namespace of RFC 8555 problem types; any other type is dropped.
 const ProblemPrefix = "urn:ietf:params:acme:error:"
 
-// MaxRetryAfter caps a CA's Retry-After.
-const MaxRetryAfter = 24 * time.Hour
+// MaxRetryAfter bounds a CA's Retry-After (R47): longer than Alice's own backoff cap (a CA's wait is honoured in full),
+// short enough that a hostile or buggy CA cannot park a renewal for months. renew.MaxCAWait is the same bound.
+const MaxRetryAfter = 7 * 24 * time.Hour
 
 // maxProblemBytes bounds a problem document this package parses itself.
 const maxProblemBytes = 64 << 10
@@ -111,7 +112,7 @@ func (e *Error) RetryAfter() time.Duration {
 	return 0
 }
 
-// RateLimitedError is the cause of a ReasonCARateLimited error: RetryAfter is the CA's Retry-After, capped at
+// RateLimitedError is the cause of a ReasonCARateLimited error: RetryAfter is the CA's Retry-After, bounded at
 // MaxRetryAfter (0 when the CA gave none).
 type RateLimitedError struct{ RetryAfter time.Duration }
 
@@ -210,7 +211,7 @@ func cleanProblemType(s string) string {
 
 func shortType(t string) string { return strings.TrimPrefix(t, ProblemPrefix) }
 
-// parseRetryAfter reads a Retry-After value (seconds or an HTTP date) and caps it at MaxRetryAfter.
+// parseRetryAfter reads a Retry-After value (seconds or an HTTP date) and bounds it at MaxRetryAfter.
 func parseRetryAfter(v string, now time.Time) time.Duration {
 	v = strings.TrimSpace(v)
 	var d time.Duration

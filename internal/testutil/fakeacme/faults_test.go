@@ -135,10 +135,11 @@ func TestFaultValidation(t *testing.T) {
 		{Endpoint: "*", Kind: "explode"},
 		{Endpoint: "*", Kind: FaultSlow},
 		{Endpoint: "*", Kind: FaultRateLimited, Times: -1},
-		{Endpoint: "*", Kind: FaultRateLimited, RetryAfter: 48 * time.Hour},
+		{Endpoint: "*", Kind: FaultRateLimited, RetryAfter: MaxFaultRetryAfter + time.Second},
 	} {
 		assert.Error(t, s.AddFault(f), "%+v", f)
 	}
+	assert.NoError(t, s.AddFault(Fault{Endpoint: "*", Kind: FaultRateLimited, RetryAfter: 48 * time.Hour}), "a CA's wait past a day")
 }
 
 func TestBadNonceFaultSkipsGETs(t *testing.T) {

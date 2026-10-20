@@ -335,7 +335,8 @@ func TestNextARICheck(t *testing.T) {
 	assert.Equal(t, t0.Add(ARIRefresh), NextARICheck(t0, 0))
 	assert.Equal(t, t0.Add(MinARIRetry), NextARICheck(t0, time.Minute), "a Retry-After under an hour is an hour")
 	assert.Equal(t, t0.Add(3*time.Hour), NextARICheck(t0, 3*time.Hour))
-	assert.Equal(t, t0.Add(MaxBackoff), NextARICheck(t0, 30*day), "capped at a day")
+	assert.Equal(t, t0.Add(48*time.Hour), NextARICheck(t0, 48*time.Hour), "the CA's 48 h in full, past the local cap (R47)")
+	assert.Equal(t, t0.Add(MaxCAWait), NextARICheck(t0, 30*day), "bounded at a week")
 }
 
 func TestAfterFailure(t *testing.T) {
@@ -417,4 +418,85 @@ func TestClassOfCode(t *testing.T) {
 
 func TestExpiryNoticeDays(t *testing.T) {
 	assert.Equal(t, []int{14, 7, 3, 1}, ExpiryNoticeDays())
+}
+
+// The CA's earliest retry time (R47): a Retry-After of 48 h is waited for in full, past the local cap of 24 h; it is
+// kept apart from the local backoff, so the repair of a skewed next_attempt_at never shortens it.
+func TestDecideWaitsForTheCA(t *testing.T) {
+	limited := func(now time.Duration) Input {
+		in := issued(t0.Add(-61*day), 90*day)
+		in.Now = t0.Add(now)
+		in.Failures, in.LastFailureClass, in.State = 1, ClassTransient, StateFailing
+		in.LastAttemptAt, in.NextAttemptAt, in.LastOrderAt = at(0), at(time.Hour), at(0)
+		in.CANotBefore = at(48 * time.Hour)
+		return in
+	}
+	d := Decide(limited(24 * time.Hour))
+	assert.Equal(t, None, d.Action, "24 hours after the limit: the CA said 48")
+	assert.Equal(t, ReasonCAWait, d.Reason)
+	assert.Equal(t, t0.Add(48*time.Hour), d.RetryAt)
+	assert.Nil(t, d.RepairNextAttempt)
+	assert.Nil(t, d.RepairCANotBefore)
+	assert.Equal(t, None, Decide(limited(48*time.Hour-time.Second)).Action)
+	assert.Equal(t, Order, Decide(limited(48*time.Hour)).Action, "the CA's time has come")
+
+	// A local next_attempt_at beyond its cap is repaired; the CA's time is not shortened by that repair.
+	in := limited(0)
+	in.NextAttemptAt = at(400 * day)
+	in.CANotBefore = at(5 * day)
+	d = Decide(in)
+	if assert.NotNil(t, d.RepairNextAttempt) {
+		assert.Equal(t, t0.Add(MaxBackoff), *d.RepairNextAttempt)
+	}
+	assert.Nil(t, d.RepairCANotBefore)
+	assert.Equal(t, t0.Add(5*day), d.RetryAt, "the CA's five days, not the local cap")
+	assert.Equal(t, ReasonCAWait, d.Reason)
+
+	// The later of the two decides, and so does the spacing.
+	in = limited(0)
+	in.CANotBefore = at(30 * time.Minute)
+	d = Decide(in)
+	assert.Equal(t, ReasonBackoff, d.Reason, "the local backoff ends later")
+	assert.Equal(t, t0.Add(time.Hour), d.RetryAt)
+	in = limited(0)
+	in.Failures, in.NextAttemptAt, in.LastAttemptAt, in.CANotBefore = 0, nil, nil, at(10*time.Minute)
+	d = Decide(in)
+	assert.Equal(t, ReasonSpacing, d.Reason)
+	in.CANotBefore = at(-time.Minute)
+	assert.Equal(t, Order, Decide(in.withNow(t0.Add(MinSpacing))).Action, "a CA time in the past is no wait")
+
+	// A CA time further than MaxCAWait is impossible unless the clock moved back (it was stored at most MaxCAWait after
+	// an earlier now): it is bounded to now + MaxCAWait, which is never earlier than what the CA asked for.
+	in = limited(0)
+	in.CANotBefore = at(400 * day)
+	d = Decide(in)
+	if assert.NotNil(t, d.RepairCANotBefore) {
+		assert.Equal(t, t0.Add(MaxCAWait), *d.RepairCANotBefore)
+	}
+	assert.Equal(t, t0.Add(MaxCAWait), d.RetryAt)
+	in.CANotBefore = at(MaxCAWait)
+	assert.Nil(t, Decide(in).RepairCANotBefore, "exactly the bound is no skew")
+	in.Locked = true
+	in.CANotBefore = at(400 * day)
+	assert.Nil(t, Decide(in).RepairCANotBefore, "nothing is written in lock")
+
+	// The recovery of a stopped certificate waits for the CA too.
+	in = limited(24 * time.Hour)
+	in.State = StateStopped
+	assert.Equal(t, ReasonCAWait, Decide(in).Reason)
+	assert.Equal(t, Order, Decide(in.withNow(t0.Add(48*time.Hour))).Action)
+}
+
+func (in Input) withNow(now time.Time) Input { in.Now = now; return in }
+
+func TestCAWaitCritical(t *testing.T) {
+	nb := t0
+	na := nb.Add(90 * day) // due at nb + 60 d, the middle of the window at nb + 75 d
+	assert.False(t, CAWaitCritical(nb, na, 30, nb.Add(61*day)))
+	assert.False(t, CAWaitCritical(nb, na, 30, nb.Add(75*day)), "exactly the middle")
+	assert.True(t, CAWaitCritical(nb, na, 30, nb.Add(75*day+time.Second)))
+	assert.True(t, CAWaitCritical(nb, na, 30, na.Add(day)), "past the end")
+	short := nb.Add(6 * day) // due at nb + 4 d, the middle at nb + 5 d
+	assert.True(t, CAWaitCritical(nb, short, 30, nb.Add(4*day+48*time.Hour)), "a 6-day certificate cannot wait 48 h at its renewal time")
+	assert.False(t, CAWaitCritical(nb, short, 30, nb.Add(4*day+time.Hour)))
 }

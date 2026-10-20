@@ -746,8 +746,10 @@ func TestClassifyFallbacks(t *testing.T) {
 	requireReason(t, c.classify(context.DeadlineExceeded, opOrder, "", ""), ReasonNotIssuedInTime)
 	requireReason(t, c.classify(timeoutErr{}, opAccount, "", ""), ReasonProviderUnreachable)
 	requireReason(t, c.classify(timeoutErr{}, opOrder, "", ""), ReasonNotIssuedInTime)
-	// A Retry-After over the cap from a CA.
+	// A Retry-After of three days is kept in full (R47); one over the bound of a week is bounded.
 	rl := &xacme.Error{StatusCode: 429, ProblemType: ProblemPrefix + "rateLimited", Header: http.Header{"Retry-After": {"259200"}}}
+	assert.Equal(t, 72*time.Hour, reasonErr(t, c.classify(rl, opOrder, "", ""), ReasonCARateLimited).RetryAfter())
+	rl = &xacme.Error{StatusCode: 429, ProblemType: ProblemPrefix + "rateLimited", Header: http.Header{"Retry-After": {"2592000"}}}
 	assert.Equal(t, MaxRetryAfter, reasonErr(t, c.classify(rl, opOrder, "", ""), ReasonCARateLimited).RetryAfter())
 	// An invalid order without a problem; an authorization refused for CAA.
 	requireReason(t, c.classify(&xacme.OrderError{Status: "invalid"}, opOrder, "", ""), ReasonNotIssuedInTime)

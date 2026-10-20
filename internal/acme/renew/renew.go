@@ -31,12 +31,20 @@
 //   - after failures, the next attempt waits RetryWait from the last attempt: Backoff(failures) (1 h, 2 h, 4 h, ...
 //     capped at 24 h), and after a transient failure never longer than RecoveryInterval of the time the certificate
 //     had left (24 h, 12 h within 7 days of its end, 6 h within 3 days, 2 h within the last day); or until
-//     next_attempt_at (a CA's Retry-After) when that is later;
+//     next_attempt_at (Alice's own backoff end) when that is later;
+//   - the CA's earliest retry time (R47, docs/superpowers/rulings/acme-ca-retry-after.md): CANotBefore, from the
+//     Retry-After of a rate limit, is kept apart from Alice's own backoff and waited for in full (ReasonCAWait), also past
+//     MaxBackoff; it is bounded only by MaxCAWait (a week) when it is recorded. The next attempt is the latest of the
+//     backoff, the CA's time and the spacing. A CA time that leaves less than half of the renewal window
+//     (CAWaitCritical) is not cut short: the Administrators are told at once instead;
 //   - MinSpacing (15 minutes) between two orders of one certificate, whatever ended the previous one (an interrupted
 //     order counts no failure, so without the spacing a persistent interruption would order every minute);
 //   - clock skew: a last attempt or a last order more than SkewTolerance in the future is ignored (the clock moved
 //     back); a next_attempt_at further away than MaxBackoff is impossible unless the clock moved, and is repaired to
-//     now + MaxBackoff (RepairNextAttempt) instead of waiting for it.
+//     now + MaxBackoff (RepairNextAttempt) instead of waiting for it. That repair never touches the CA's time: a
+//     CANotBefore further away than MaxCAWait (also impossible unless the clock moved: it was recorded at most MaxCAWait
+//     after an earlier now) is bounded to now + MaxCAWait (RepairCANotBefore), which is never earlier than the time
+//     the CA asked for.
 package renew
 
 import "time"
@@ -63,8 +71,11 @@ const (
 	StopAfter   = 5
 	// MinSpacing is the least time between two orders of one certificate started by the planner.
 	MinSpacing = 15 * time.Minute
-	// MaxBackoff caps the wait after failures, a CA's Retry-After and the ARI recheck.
+	// MaxBackoff caps Alice's own wait after failures (the backoff); never a wait the CA asked for.
 	MaxBackoff = 24 * time.Hour
+	// MaxCAWait bounds a wait the CA asked for (a Retry-After of a rate limit or of the renewal information): a hostile
+	// or buggy CA cannot park a renewal for longer (acme.MaxRetryAfter is the same bound).
+	MaxCAWait = 7 * 24 * time.Hour
 	// ARIRefresh is how often the renewal information of a certificate is asked for without a Retry-After;
 	// MinARIRetry is the shortest Retry-After honoured.
 	ARIRefresh  = 6 * time.Hour
@@ -95,8 +106,10 @@ type Input struct {
 	// PermanentFailures counts the permanent failures of the series; LastFailureClass is the class of the last one.
 	PermanentFailures int
 	LastFailureClass  string
-	NextAttemptAt     *time.Time
-	LastAttemptAt     *time.Time
+	// NextAttemptAt is the end of Alice's own backoff; CANotBefore the CA's earliest retry time (R47).
+	NextAttemptAt *time.Time
+	CANotBefore   *time.Time
+	LastAttemptAt *time.Time
 	// LastOrderAt is when the newest issue order of the certificate started (any requester).
 	LastOrderAt *time.Time
 	// ARIWindow is the cached window of the current certificate; ARICheckedAt when it was last asked for and
@@ -135,6 +148,7 @@ const (
 	ReasonDueARI            = "due_ari"
 	ReasonRecovery          = "recovery"
 	ReasonDueRevoked        = "due_revoked"
+	ReasonCAWait            = "ca_wait"
 )
 
 // Decision is the outcome for one certificate.
@@ -144,13 +158,15 @@ type Decision struct {
 	// RenewAt is when the certificate is due (the local rule, or an earlier ARI window start); zero without a
 	// current certificate.
 	RenewAt time.Time
-	// RetryAt is the earliest attempt the failures and the spacing allow (zero: no wait).
+	// RetryAt is the earliest attempt the failures, the CA's time and the spacing allow (zero: no wait).
 	RetryAt time.Time
 	// RefreshARI: the planner should ask the CA for the renewal window (the certificate is not due yet by the rule
 	// and the cached answer is old).
 	RefreshARI bool
-	// RepairNextAttempt is a next_attempt_at to store instead of one beyond MaxBackoff (clock skew).
+	// RepairNextAttempt is a next_attempt_at to store instead of one beyond MaxBackoff (clock skew); RepairCANotBefore a
+	// ca_not_before to store instead of one beyond MaxCAWait.
 	RepairNextAttempt *time.Time
+	RepairCANotBefore *time.Time
 }
 
 // Backoff is the wait after failures consecutive failed orders: 1 h, 2 h, 4 h, ... capped at MaxBackoff; no wait
@@ -217,12 +233,21 @@ func RenewAt(notBefore, notAfter time.Time, renewBeforeDays int) time.Time {
 }
 
 // NextARICheck is when renewal information may be asked for again after an answer (or a failure) at now with the
-// CA's Retry-After (0: none): ARIRefresh without one, else the Retry-After bounded to MinARIRetry..MaxBackoff.
+// CA's Retry-After (0: none): ARIRefresh without one, else the Retry-After bounded to MinARIRetry..MaxCAWait (the CA's
+// wait in full; the local rule renews meanwhile without a window).
 func NextARICheck(now time.Time, retryAfter time.Duration) time.Time {
 	if retryAfter <= 0 {
 		return now.Add(ARIRefresh)
 	}
-	return now.Add(min(max(retryAfter, MinARIRetry), MaxBackoff))
+	return now.Add(min(max(retryAfter, MinARIRetry), MaxCAWait))
+}
+
+// CAWaitCritical reports whether the CA's earliest retry time caNotBefore leaves less than half of the renewal window of
+// a certificate valid from notBefore to notAfter: it ends after the middle between RenewAt and notAfter (the point from
+// which the provider hold no longer applies either). Alice still waits for the CA; the Administrators are told at once.
+func CAWaitCritical(notBefore, notAfter time.Time, renewBeforeDays int, caNotBefore time.Time) bool {
+	due := RenewAt(notBefore, notAfter, renewBeforeDays)
+	return caNotBefore.After(due.Add(notAfter.Sub(due) / 2))
 }
 
 // Decide applies the rules of the package comment.
@@ -286,6 +311,17 @@ func Decide(in Input) Decision {
 		}
 	}
 	reason := ReasonBackoff
+	// The CA's time is never shortened by the local cap or the repair above (R47).
+	if in.CANotBefore != nil {
+		ca := *in.CANotBefore
+		if limit := now.Add(MaxCAWait); ca.After(limit) {
+			ca = limit
+			d.RepairCANotBefore = &limit
+		}
+		if ca.After(d.RetryAt) {
+			d.RetryAt, reason = ca, ReasonCAWait
+		}
+	}
 	if in.LastOrderAt != nil && !in.LastOrderAt.After(future) {
 		if s := in.LastOrderAt.Add(MinSpacing); s.After(d.RetryAt) {
 			d.RetryAt, reason = s, ReasonSpacing

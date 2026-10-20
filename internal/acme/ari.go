@@ -18,7 +18,7 @@ const maxARIBytes = 16 << 10
 // RenewalWindow is the CA's suggested renewal window (RFC 9773 section 4.2) and when to ask again.
 type RenewalWindow struct {
 	Start, End time.Time
-	// RetryAfter is the CA's Retry-After, capped at MaxRetryAfter; 0 when it gave none.
+	// RetryAfter is the CA's Retry-After, bounded at MaxRetryAfter; 0 when it gave none.
 	RetryAfter time.Duration
 }
 

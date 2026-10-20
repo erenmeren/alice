@@ -32,6 +32,10 @@ type Fault struct {
 
 const giantSize = 2 << 20
 
+// MaxFaultRetryAfter bounds the Retry-After of an injected rate limit: past Alice's sanity bound of a CA's wait (seven
+// days, R47), so that tests can show the bound.
+const MaxFaultRetryAfter = 30 * 24 * time.Hour
+
 // AddFault arms a fault.
 func (s *Server) AddFault(f Fault) error {
 	if f.Endpoint != "*" && !contains(Endpoints, f.Endpoint) {
@@ -46,7 +50,7 @@ func (s *Server) AddFault(f Fault) error {
 	default:
 		return fmt.Errorf("fakeacme: unknown fault kind %q", f.Kind)
 	}
-	if f.Times < 0 || f.Times > 1000 || f.RetryAfter < 0 || f.RetryAfter > 24*time.Hour {
+	if f.Times < 0 || f.Times > 1000 || f.RetryAfter < 0 || f.RetryAfter > MaxFaultRetryAfter {
 		return fmt.Errorf("fakeacme: fault times or retry-after out of range")
 	}
 	c := f

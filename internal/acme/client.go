@@ -3,7 +3,7 @@
 //
 //   - every call runs under a deadline (Config.CallTimeout per call, Config.OrderTimeout per order);
 //   - the library never sleeps on a rate limit or a server error: RetryBackoff answers 0 for both, so a 429
-//     surfaces at once as a *RateLimitedError with the CA's Retry-After (capped at 24 h) and a 5xx as
+//     surfaces at once as a *RateLimitedError with the CA's Retry-After (bounded at seven days) and a 5xx as
 //     ReasonProviderUnreachable; only badNonce is retried (three times, without a real pause);
 //   - every error is an *Error with a stable reason of an ALC-ACM code; its text never holds a CA body or
 //     header, a URL, the account key or the external account binding key (plan A10);
