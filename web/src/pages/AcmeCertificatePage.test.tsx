@@ -187,6 +187,42 @@ describe('Issued certificate status page', () => {
     expect(screen.getByTestId('last-notice')).toHaveTextContent('Not sent: no mail server is set');
   });
 
+  it('says that the certificate authority asked Alice to wait, and does not offer an order before then (R47)', async () => {
+    base({
+      session: sessionFor('admin'),
+      cert: issued({ state: 'failing', failures: 1, last_failure_class: 'transient', next_attempt_at: '2026-10-15T09:00:00Z', ca_not_before: '2026-10-15T09:00:00Z',
+        last_error: { code: 'ALC-ACM-0005', reason: 'acme.ca_rate_limited' } }),
+    });
+    await open();
+    const notice = await screen.findByTestId('ca-wait');
+    expect(notice).toHaveTextContent('Waiting for the certificate authority');
+    expect(notice).toHaveTextContent('The certificate authority asked Alice to wait until');
+    expect(notice).toHaveTextContent('ordering sooner only makes the wait longer');
+    expect(notice).not.toHaveTextContent('Little time is left');
+    expect(screen.getByRole('button', { name: 'Order now' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Test run' })).toBeDisabled();
+  });
+
+  it('warns more strongly when the wait the certificate authority asked for leaves little time', async () => {
+    base({
+      session: sessionFor('admin'),
+      cert: issued({ state: 'failing', failures: 2, last_failure_class: 'transient', next_attempt_at: '2026-10-20T09:00:00Z', ca_not_before: '2026-10-20T09:00:00Z',
+        ca_wait_critical: true }),
+    });
+    await open();
+    const notice = await screen.findByTestId('ca-wait');
+    expect(notice).toHaveTextContent('Little time is left after this wait: the current certificate ends at');
+    expect(notice).toHaveTextContent('The administrators were e-mailed.');
+  });
+
+  it('offers the order again once the wait is over (no ca_not_before)', async () => {
+    base({ session: sessionFor('admin'), cert: issued({ state: 'failing', failures: 1, next_attempt_at: '2026-10-14T10:00:00Z' }) });
+    await open();
+    await screen.findByTestId('failing');
+    expect(screen.queryByTestId('ca-wait')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Order now' })).toBeEnabled();
+  });
+
   it('lets an Administrator resume a stopped certificate (Check again and resume) after a fresh step-up, and reads it again', async () => {
     let rearms = 0;
     let stopped = true;

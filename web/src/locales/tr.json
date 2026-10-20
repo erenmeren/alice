@@ -3377,6 +3377,9 @@
         "permanentText_other": "Nedenin bir kişi tarafından giderilmesi gerekiyor (örneğin bir ayar, sertifika yetkilisindeki hesap ya da reddedilen bir ad). {{count}} deneme daha bu şekilde başarısız olursa Alice kendiliğinden denemeyi bırakır.",
         "recoveringText_one": "Alice {{count}} başarısız denemeden sonra durdu, ancak son sorun geçici bir kesintiydi: Alice sertifikanın süresi dolana kadar en az günde bir kez kendiliğinden yeniden dener.",
         "recoveringText_other": "Alice art arda {{count}} başarısız denemeden sonra durdu, ancak son sorun geçici bir kesintiydi: Alice sertifikanın süresi dolana kadar en az günde bir kez kendiliğinden yeniden dener.",
+        "caWaitTitle": "Sertifika otoritesi bekleniyor",
+        "caWaitText": "Sertifika otoritesi Alice'ten {{time}} tarihine kadar beklemesini istedi. Alice bu sertifikayı o zamana kadar ne kendiliğinden ne de {{order}} ya da Deneme çalıştırması ile ister, çünkü daha erken istemek beklemeyi yalnızca uzatır.",
+        "caWaitCritical": "Bu beklemeden sonra az zaman kalıyor: geçerli sertifikanın süresi {{end}} tarihinde doluyor. Yöneticilere e-posta gönderildi. Sertifika bekleyemiyorsa başka bir sertifika otoritesinden bir sertifika alıp yükleyin.",
         "lastNotice": "Bununla ilgili son e-posta",
         "notice": {
           "sent_one": "{{count}} alıcıdan {{sent}} alıcıya gönderildi ({{time}})",

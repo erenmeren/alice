@@ -1102,6 +1102,8 @@ export function acmeCertificateFixture(o: Partial<ACMECertificate> = {}): ACMECe
     permanent_failures: 0,
     recovering: false,
     next_attempt_at: null,
+    ca_not_before: null,
+    ca_wait_critical: false,
     last_attempt_at: null,
     last_error: null,
     running_order_id: null,

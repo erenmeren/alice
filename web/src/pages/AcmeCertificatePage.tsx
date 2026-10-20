@@ -181,6 +181,8 @@ export function AcmeCertificatePage() {
   ];
 
   const orderLabel = issued ? t('acme.issued.orderNow') : t('acme.issued.getNow');
+  // The CA asked Alice to wait (R47): the API refuses an order before that time, so the buttons wait too.
+  const caWait = c.ca_not_before !== null;
   return (
     <Stack gap={0}>
       <PageHeader
@@ -195,12 +197,12 @@ export function AcmeCertificatePage() {
         actions={
           <>
             {canOperate && (
-              <Button variant="default" leftSection={<Icon name="CirclePlay" size={15} />} loading={busy === 'test'} disabled={locked || running || busy !== null} onClick={() => void act('test', () => testACMECertificate(id))}>
+              <Button variant="default" leftSection={<Icon name="CirclePlay" size={15} />} loading={busy === 'test'} disabled={locked || running || caWait || busy !== null} onClick={() => void act('test', () => testACMECertificate(id))}>
                 {t('acme.issued.testRun')}
               </Button>
             )}
             {canOperate && (
-              <Button leftSection={<Icon name="RefreshCw" size={15} />} loading={busy === 'order'} disabled={locked || running || busy !== null} onClick={() => void act('order', () => orderACMECertificate(id))}>
+              <Button leftSection={<Icon name="RefreshCw" size={15} />} loading={busy === 'order'} disabled={locked || running || caWait || busy !== null} onClick={() => void act('order', () => orderACMECertificate(id))}>
                 {orderLabel}
               </Button>
             )}
@@ -383,6 +385,12 @@ function RenewalPanel({
         <FactList facts={facts} label={t('acme.issued.renewal.title')} />
         <Text size="sm">{t(c.auto_renew ? 'acme.issued.renewal.autoHelpOn' : 'acme.issued.renewal.autoHelpOff')}</Text>
         {!admin && <Text size="xs" c="dimmed">{t('acme.issued.adminOnly')}</Text>}
+        {c.ca_not_before && (
+          <Notice tone={c.ca_wait_critical ? 'danger' : 'warning'} title={t('acme.issued.renewal.caWaitTitle')} testId="ca-wait">
+            <Text size="sm">{t('acme.issued.renewal.caWaitText', { time: formatDateTime(c.ca_not_before, lang), order: orderLabel })}</Text>
+            {c.ca_wait_critical && c.current && <Text size="sm">{t('acme.issued.renewal.caWaitCritical', { end: formatDateTime(c.current.not_after, lang) })}</Text>}
+          </Notice>
+        )}
         {c.state === 'failing' && (
           <Notice tone="warning" title={t('acme.issued.renewal.failingTitle')} testId="failing" action={resume}>
             <Text size="sm">

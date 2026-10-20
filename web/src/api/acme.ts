@@ -151,7 +151,12 @@ export interface ACMECertificate {
   permanent_failures: number;
   // Stopped, but the last failure was an outage: Alice still orders it again by itself, slowly, until it expires.
   recovering: boolean;
+  // When Alice may try again: the later of its own backoff and the CA's wait.
   next_attempt_at: string | null;
+  // The CA asked Alice not to order again before this time (a rate limit's Retry-After; null when no such wait runs);
+  // ca_wait_critical: the wait leaves less than half of the renewal window (the administrators were e-mailed).
+  ca_not_before: string | null;
+  ca_wait_critical: boolean;
   last_attempt_at: string | null;
   last_error: ErrorRef | null;
   running_order_id: string | null;

@@ -3377,6 +3377,9 @@
         "permanentText_other": "The cause needs a person (for example a setting, the account at the certificate authority or a refused name). If {{count}} more attempts fail like this, Alice stops trying by itself.",
         "recoveringText_one": "Alice stopped after {{count}} failed attempt, but the last problem was a temporary outage: Alice still tries again by itself, at least once a day, until the certificate expires.",
         "recoveringText_other": "Alice stopped after {{count}} failed attempts in a row, but the last problem was a temporary outage: Alice still tries again by itself, at least once a day, until the certificate expires.",
+        "caWaitTitle": "Waiting for the certificate authority",
+        "caWaitText": "The certificate authority asked Alice to wait until {{time}}. Alice does not order this certificate before then, neither by itself nor with {{order}} or Test run, because ordering sooner only makes the wait longer.",
+        "caWaitCritical": "Little time is left after this wait: the current certificate ends at {{end}}. The administrators were e-mailed. If the certificate cannot wait, get one from another certificate authority and upload it.",
         "lastNotice": "Last e-mail about it",
         "notice": {
           "sent_one": "Sent to {{sent}} of {{count}} recipient ({{time}})",
