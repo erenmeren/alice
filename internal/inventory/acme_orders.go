@@ -462,6 +462,9 @@ WHERE o.id = $1 AND o.state = 'running'`, orderID, url)
 	return nil
 }
 
+// ACMEReplacesOutcomes lists the non-empty values of an order's ReplacesOutcome (acme.ReplacesOutcomes).
+func ACMEReplacesOutcomes() []string { return acme.ReplacesOutcomes() }
+
 // errReplacesOutcome is an outcome acme.WithReplaces never reports, or an identifier that is not one.
 var errReplacesOutcome = errors.New("inventory: not a replaces outcome")
 

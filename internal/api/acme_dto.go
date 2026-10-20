@@ -4,7 +4,6 @@ import (
 	"slices"
 	"time"
 
-	"alice/internal/acme"
 	"alice/internal/acme/renew"
 	"alice/internal/inventory"
 )
@@ -274,7 +273,7 @@ type acmeOrderDTO struct {
 	RevocationReason string     `json:"revocation_reason"`
 	Compromised      bool       `json:"compromised"`
 	// Replaces is the RFC 9773 identifier of the certificate an issue order renews ('' for a first order or a test run);
-	// ReplacesOutcome what became of it (acme.ReplacesOutcomes; R50).
+	// ReplacesOutcome what became of it (inventory.ACMEReplacesOutcomes; R50).
 	Replaces        string `json:"replaces"`
 	ReplacesOutcome string `json:"replaces_outcome"`
 }
@@ -284,7 +283,7 @@ func acmeOrderJSON(o inventory.ACMEOrder) acmeOrderDTO {
 		StartedAt: o.StartedAt.UTC(), FinishedAt: utcPtr(o.FinishedAt), Error: errorRef(o.ErrorCode, nil), CertificateID: idPtr(o.CertificateID),
 		RequestedBy: idPtr(o.RequestedBy), Presented: o.Presented, CleanupAt: utcPtr(o.CleanupAt), CleanupError: errorRef(o.CleanupErrorCode, nil),
 		RevokedAt: utcPtr(o.RevokedAt), RevocationReason: o.RevocationReason, Compromised: o.Compromised, Replaces: o.Replaces}
-	if slices.Contains(acme.ReplacesOutcomes(), o.ReplacesOutcome) {
+	if slices.Contains(inventory.ACMEReplacesOutcomes(), o.ReplacesOutcome) {
 		d.ReplacesOutcome = o.ReplacesOutcome
 	}
 	return d
