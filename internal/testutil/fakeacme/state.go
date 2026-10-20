@@ -45,6 +45,8 @@ type order struct {
 	certID      string
 	polls       int // further polls answered "processing" after finalize
 	problem     *problem
+	// replaces is the RFC 9773 identifier of the certificate the order replaces ("" none).
+	replaces string
 }
 
 // state is everything a Reset clears.
@@ -61,6 +63,11 @@ type state struct {
 	faults   []*Fault
 	counters map[string]int
 	log      []LogEntry
+
+	// ariWindows are windows set for one certificate (by its RFC 9773 identifier); replaced lists the orders that
+	// carried replaces, in order.
+	ariWindows map[string]ariWindow
+	replaced   []Replacement
 }
 
 // config is the behaviour toggles a Reset returns to the Options.
@@ -91,7 +98,7 @@ func newState() *state {
 	return &state{
 		accounts: map[string]*account{}, byThumb: map[string]string{}, nonces: map[string]struct{}{},
 		orders: map[string]*order{}, authzs: map[string]*authz{}, certs: map[string]*issued{}, byARI: map[string]*issued{},
-		dns: map[string][]string{}, targets: map[string]string{}, counters: map[string]int{},
+		ariWindows: map[string]ariWindow{}, dns: map[string][]string{}, targets: map[string]string{}, counters: map[string]int{},
 	}
 }
 

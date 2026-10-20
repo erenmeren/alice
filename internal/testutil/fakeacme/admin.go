@@ -39,7 +39,8 @@ func durArg(v string) (time.Duration, *adminError) {
 // its arguments in the query string. It answers loopback callers only (the listener is loopback
 // already: defence in depth). Routes: GET /ping, GET /credentials, GET /ca, POST /reset, GET /counters,
 // GET /requests, POST /requests/clear, GET /certificate (?serial=<hex>: valid or revoked, reason, time), POST /fault, POST /unfault, GET /dns, POST /dns,
-// POST /dns/clear, POST /http-target, POST /eab, POST /lifetime, POST /ari, POST /stuck,
+// POST /dns/clear, POST /http-target, POST /eab, POST /lifetime, POST /ari (?serial=<hex>: one certificate's window),
+// GET /replacements (the orders that carried RFC 9773 replaces), POST /stuck,
 // POST /reject, POST /reject/clear, POST /validation-fail, POST /advertise, POST /challenges,
 // POST /processing-polls, POST /clock.
 func (s *Server) AdminHandler() http.Handler {
@@ -137,6 +138,9 @@ func (s *Server) AdminHandler() http.Handler {
 		return ok, nil
 	})
 	route("POST /ari", func(q func(string) string) (any, *adminError) { return s.adminARI(q, ok) })
+	route("GET /replacements", func(func(string) string) (any, *adminError) {
+		return map[string]any{"replacements": s.Replacements()}, nil
+	})
 	route("POST /stuck", func(q func(string) string) (any, *adminError) {
 		on, aerr := boolArg(q("on"))
 		if aerr != nil {
@@ -207,11 +211,22 @@ func (s *Server) AdminHandler() http.Handler {
 	})
 }
 
-// adminARI: "default=true", or "start"+"end" (RFC 3339), or "before"+"length" (durations).
+// adminARI: "default=true" (also clears every window set for one certificate), or "start"+"end" (RFC 3339; with
+// "serial", a hexadecimal serial number, for that certificate only), or "before"+"length" (durations).
 func (s *Server) adminARI(q func(string) string, ok map[string]bool) (any, *adminError) {
 	switch {
 	case q("default") == "true":
 		s.SetARIRelative(0, 0)
+		s.ClearARIWindows()
+	case q("serial") != "":
+		start, err1 := time.Parse(time.RFC3339, q("start"))
+		end, err2 := time.Parse(time.RFC3339, q("end"))
+		if err1 != nil || err2 != nil {
+			return nil, bad("start and end must be RFC 3339 times")
+		}
+		if err := s.SetARIWindowForSerial(q("serial"), start, end); err != nil {
+			return nil, bad(err.Error())
+		}
 	case q("start") != "":
 		start, err1 := time.Parse(time.RFC3339, q("start"))
 		end, err2 := time.Parse(time.RFC3339, q("end"))

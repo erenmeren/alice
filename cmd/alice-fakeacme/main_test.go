@@ -240,6 +240,7 @@ func TestEveryCtlCommandReachesTheFake(t *testing.T) {
 		{"challenges", "dns-01"}, {"challenges", "http-01,dns-01"}, {"processing-polls", "0"},
 		{"ari", "default"}, {"ari", "window", "2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z"},
 		{"ari", "relative", "72h", "2h"}, {"ari", "relative", "72h"},
+		{"replacements"},
 		{"advertise", "newOrder", "http://169.254.169.254/x"}, {"advertise", "newOrder"}, {"advertise", "renewalInfo", "off"}, {"advertise", "renewalInfo"},
 		{"clock", "2031-01-01T00:00:00Z"}, {"clock", "real"}, {"reset"},
 	} {
@@ -262,6 +263,7 @@ func TestCtlRefusals(t *testing.T) {
 		{"fault", "set", "nope", "slow"}, {"fault", "set", "new-order"}, {"fault", "set", "new-order", "slow", "--bogus"},
 		{"fault", "set", "new-order", "slow", "--times"}, {"eab", "maybe"}, {"lifetime", "soon"},
 		{"clock", "yesterday"}, {"advertise", "bogus", "x"}, {"dns", "set", "a.test"}, {"ari", "window", "x", "y"},
+		{"ari", "certificate", "abc", "2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z"},
 	} {
 		code, _, errOut := st.ctl(args...)
 		assert.Equal(t, 1, code, "%v", args)

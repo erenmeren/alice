@@ -132,6 +132,9 @@ func TestAdminControlsTheFake(t *testing.T) {
 	assert.Zero(t, s.cfg.ariBefore)
 	a.fails("POST", "/ari")
 	a.fails("POST", "/ari", "start", "x", "end", "y")
+	a.fails("POST", "/ari", "serial", "abc", "start", "2030-01-01T00:00:00Z", "end", "2030-01-02T00:00:00Z") // no such certificate
+	a.fails("POST", "/ari", "serial", "abc", "start", "x", "end", "y")
+	a.ok("GET", "/replacements")
 	a.fails("POST", "/ari", "start", "2030-01-02T00:00:00Z", "end", "2030-01-01T00:00:00Z")
 	a.fails("POST", "/ari", "before", "x")
 	a.fails("POST", "/ari", "before", "1h", "length", "x")

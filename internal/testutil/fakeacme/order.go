@@ -55,6 +55,7 @@ func (s *Server) rejected(base string) bool {
 func (s *Server) handleNewOrder(w http.ResponseWriter, _ *http.Request, req *jwsReq) {
 	var p struct {
 		Identifiers []identifier `json:"identifiers"`
+		Replaces    string       `json:"replaces"`
 	}
 	if prob := decodeJSON(req.payload, &p); prob != nil {
 		s.writeProblem(w, prob)
@@ -62,6 +63,10 @@ func (s *Server) handleNewOrder(w http.ResponseWriter, _ *http.Request, req *jws
 	}
 	if len(p.Identifiers) == 0 || len(p.Identifiers) > maxIdents {
 		s.writeProblem(w, malformed(http.StatusBadRequest, "an order needs 1 to 100 identifiers"))
+		return
+	}
+	if p.Replaces != "" && !validARIID(p.Replaces) {
+		s.writeProblem(w, malformed(http.StatusBadRequest, "replaces is not an RFC 9773 certificate identifier"))
 		return
 	}
 	s.mu.Lock()
@@ -111,6 +116,13 @@ func (s *Server) handleNewOrder(w http.ResponseWriter, _ *http.Request, req *jws
 		o.authzs = append(o.authzs, az.id)
 	}
 	s.mu.Lock()
+	if p.Replaces != "" {
+		if prob := s.replacesLocked(p.Replaces, o); prob != nil {
+			s.mu.Unlock()
+			s.writeProblem(w, prob)
+			return
+		}
+	}
 	for _, az := range azs {
 		s.st.authzs[az.id] = az
 	}
@@ -134,6 +146,9 @@ func (s *Server) orderDoc(o *order) map[string]any {
 	}
 	if o.status == "valid" {
 		doc["certificate"] = s.override("certificate", base+"/acme/cert/"+o.certID)
+	}
+	if o.replaces != "" {
+		doc["replaces"] = o.replaces
 	}
 	if o.problem != nil {
 		doc["error"] = o.problem.doc()
