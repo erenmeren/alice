@@ -12,6 +12,9 @@ package inventory
 // downtime the skipped, less urgent ones are not sent). A renewal that succeeds gives a new expiry instant, so a later
 // series starts afresh. The notices go from the renewal planner, so they stop with it (in lock after the continuity
 // window, where the general expiry notices of the certificate still go).
+//
+// A CA wait that leaves less than half of the renewal window (R47, renew.CAWaitCritical) is told at once, when the
+// failure that carries it is counted (acmeCAWaitNotice: ledger kind acme_renewal_ca_wait, once per wait).
 
 import (
 	"context"
