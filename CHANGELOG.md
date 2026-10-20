@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — Renewal information (ARI) completed
+
+**Added**
+- When the certificate authority publishes renewal information (ARI, RFC 9773), Alice renews at a time it chooses at
+  random inside the suggested window (never later than **Renew how many days before it expires** allows), so that
+  certificates do not all reach the authority at once. The time is chosen once and kept, also across restarts, until
+  the authority moves its window; a window in the past renews at once. Without renewal information nothing changes.
+  The certificate page shows the time ("a time Alice chose in the window the authority suggests", TR/EN). API:
+  `renew_at` and `renew_at_source` on an ACME certificate. Migration `00024`.
+- A renewal names the certificate it replaces (ARI's `replaces`) when the authority offers renewal information and
+  the certificate was ordered with the same account, so Let's Encrypt can treat it as a renewal. If the authority says
+  another order already replaces it, Alice finishes its own interrupted earlier order when it can, or orders once more
+  without naming it; new code `ALC-ACM-0041` (`acme.already_replaced`) when even that fails. API: `replaces` and
+  `replaces_outcome` on an order. Rulings: `docs/superpowers/rulings/acme-ari.md` (R50).
+
+**Changed**
+- A suggested window is no longer used only by its start: a window that begins before the time Alice would renew by
+  itself now gives a random time between its start and the earlier of its end and that time (before this change,
+  every such certificate renewed at the window's start).
 ## Unreleased — No rollback puts a revoked or compromised certificate back
 
 **Security**
