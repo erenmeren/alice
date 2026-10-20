@@ -144,3 +144,117 @@ ALC-INC-0001..0013).
 - D5: OCSP/CRL checking of certificates found on servers or by discovery (Alice does not learn about revocations it did
   not make).
 - The revocation was exercised only against `fakeacme`; no public or company CA, no real CRL/OCSP publication.
+
+## Rollback guard (R48)
+
+Owner decision 2026-10-20 (the owner approved the work and was not available; the implementer chose the defaults below
+and records them here): a revoked or compromised certificate was refused by every *deploy* path, but the *rollback*
+paths put back the files from before a change without that check, so during a key-compromise incident a failed
+replacement could re-install the compromised key. No rollback path may ever do that. Spec: R48 in
+`docs/superpowers/specs/alice-v1/00-decisions.md`, AC-8 in `04-security.md`, the deployments table in
+`02-architecture.md`; user text in `docs/nginx-host-preparation.md` ("An undo never puts back a revoked or compromised
+certificate") and `docs/troubleshooting.md` (ALC-DEP-0025, ALC-SSH-0014).
+
+### The rollback paths found
+
+1. **The engine** (`internal/jobs/deployjobs`): every recovery rollback (`recover.go` `rollback`: a journal `writing`,
+   `restoring`, `restore_failed`, or `committed` whose own verification failed), the deploy job's one more restore after
+   the helper's `restore_failed` (`deploy.go` `rollbackAgain`), and the restore of an earlier operation Alice does not
+   track that blocks the files (`deploy.go` `recoverPending`).
+2. **The Nginx provider** (`internal/providers/nginx/deploy.go`): the inline rollback after the new certificate's
+   verification failed (`rollBack`) and `RollbackDeployment`; both send `nginx-restore`.
+3. **The helper** (`cmd/alice-helper/deploy.go`): its own restore inside the `nginx-deploy` transaction (a failed
+   `nginx -t`, reload, write or journal: `fail` → `restoreOp`), the restore of a re-sent interrupted operation
+   (`writing`/`restoring` journal), and `nginx-restore`. The emulator (`linuxsshtest`) mirrors all three.
+4. **None elsewhere**: the Apache and HAProxy providers are discovery only (no deployment, no restore); Alice never writes
+   a certificate back to a Key Vault (an import adds a version, nothing restores an older one); the SSH key rotation's
+   undo concerns `authorized_keys`, not certificates.
+
+### Rulings
+
+G1. **What is forbidden.** The leaf (SHA-256 of the DER) of a revoked or compromised certificate, and the public key
+    (SHA-256 of the re-encoded SubjectPublicKeyInfo, as `internal/certs`) of every compromised certificate, so a key
+    compromise covers every certificate made with that key. A certificate revoked for another reason forbids its leaf
+    only. Marks are final (Z1022), so "forbidden once" is "forbidden for good".
+
+G2. **The rollback target is recorded, not re-derived.** `StartDeployment` records, with the send values, the leaf and
+    public key of the certificate the location's file held (`deployments.rollback_leaf_sha256`, `rollback_spki_sha256`,
+    migration `00023`): the helper's compare-and-swap on the file's hash makes that exactly the backup. A discovery after
+    the start changes nothing. Neither known: the target is unknown (`TargetUnknown`).
+
+G3. **Computed at plan time, read again before every rollback.** `inventory.RollbackGuard(id)` checks the target
+    against the marks every time it is asked: with the material (plan time; the `deployment.started` audit row says
+    `rollback` = `allowed`, `forbidden` or `unknown`), before the provider's inline rollback (`DeployRequest.RecheckGuard`),
+    before every recovery rollback and the deploy job's one more restore, and before the restore of an untracked
+    operation. A compromise marked while the deployment runs therefore applies. A guard that cannot be read is no
+    rollback at all: the deploy path ends uncertain, the recovery unresolved, and the next recovery reads it again.
+
+G4. **Security first.** A rollback the guard refuses restores nothing. The files stay as the failed change left them
+    (after an interrupted write that can be a new key with the old certificate), no `nginx -t` or reload runs, and the
+    deployment ends `rollback_failed` with `deployment.rollback_forbidden` (ALC-DEP-0025), failed step `restore`,
+    helper error `forbidden`, phase `restore_forbidden` when the helper recorded the refusal ("" when nothing was
+    sent). It is never retried (only `restore_failed` is). Trade-off, accepted: **the website may stay broken** (Nginx
+    keeps what it loaded until its next reload or restart) until a valid certificate is deployed; that is preferred to
+    a compromised key in service. It is visible: its own e-mail `deployment.rollback_forbidden` (never the
+    rollback-failed e-mail, whose advice is to restore the backup by hand, and without `backup_dir`), the deployment
+    page's headline and "never restore it" next to the backup folder, and on an incident the place is `failed` with
+    the reason, so the incident needs attention (`incident.deployments_failed`); **Retry** deploys again (a
+    `restore_forbidden` operation does not block the files on the server).
+
+G5. **The helper checks too (defence in depth).** Alice's knowledge of a backup may be wrong (and an untracked
+    operation's backup is unknown to it), so the guard also carries the forbidden material: every compromised key
+    and every unexpired revoked certificate, the backup's own entry first, newest first, at most 128 of each
+    (`providers.MaxForbidden` = `helperproto.MaxForbidden`). `alice-helper` 1.9.0 (protocol 10) takes the lists in the
+    `nginx-deploy` input, keeps them in the operation's journal, takes the current lists on `nginx-restore`'s standard
+    input (the argument vector and the sudoers lines are unchanged), and before any restore reads both backups: the
+    leaf, the leaf's public key and the key file's public key; listed, or (with a list) not readable as a certificate
+    and its key, means nothing is restored and the journal says `restore_forbidden`, on all three restore paths. A
+    helper that receives the restore records the refusal itself, which keeps the next deployment of the files possible.
+
+G6. **Helper version skew.** The protocol is versioned (`helperproto.Protocol`, reported by `version` at every
+    session); the guard needs `RollbackGuardMinProtocol` = 10. A deployment whose guard is *Required* is refused on an
+    older helper before anything is sent (`ssh.helper_outdated_rollback_guard`, ALC-SSH-0014, params
+    `helper_protocol`, `required_protocol`), because such a helper restores the backup unchecked after a failed reload.
+    Required = the target is forbidden, or unknown while anything is forbidden, or the location is a pending or
+    deploying place of an open incident (every incident replacement). Any other deployment still runs on an older
+    helper, with the input it understands (no lists): the engine's own check (G3) is exact for the tracked backup, and
+    refusing every deployment on every older helper as soon as one key anywhere is compromised would stop the fleet.
+    An older helper never receives a restore the guard refuses (target forbidden, or unknown while anything is
+    forbidden): nothing is sent and the outcome is G4's with phase "". Alternatives rejected: a new subcommand or
+    argument (an older sudoers file would refuse it, and a refused `nginx-restore` reads as uncertain), and refusing
+    old helpers outright (above).
+
+G7. **Untracked operations.** The restore of an earlier operation that blocks the files uses its owner's recorded guard
+    when Alice knows the owner (a finished `rollback_failed` deployment of the location), else this deployment's lists
+    with an unknown target. A refused restore puts nothing back and the deployment ends
+    `deployment.server_operation_pending` (nothing re-sent), as for any restore that does not finish.
+
+G8. **A server that cannot be reached is never counted as cleaned.** An incident place counts as replaced only when its
+    deployment ended succeeded or unchanged *and verified* (ruling 13). While the deployment is in recovery (sent, the
+    outcome not confirmed: the server cannot be reached or the answer was lost) the place stays `deploying`, the
+    incident neither revokes nor completes, and the API says `outcome_uncertain: true` with the deployment's reason; the
+    page shows "Not confirmed: server not reached". When the recovery gives up the place is `failed`
+    (`deployment.outcome_unknown`).
+
+G9. **The fake provider honours the guard** by default (`RollbackDeployment` with `TargetForbidden` answers the
+    helper's refusal), so engine tests and the e2e stack behave like a protocol 10 server.
+
+G10. **Codes**: `deployment.rollback_forbidden` ALC-DEP-0025 (502) and `ssh.helper_outdated_rollback_guard` ALC-SSH-0014
+    (502), the next free numbers of their families; they may be renumbered at merge.
+
+### Residual risks and deferred items
+
+- RG1: the helper's own restore inside the `nginx-deploy` transaction checks the lists sent with that deployment (plan
+  time): a compromise marked during the at most 50 s of one `nginx-deploy` is caught only by later restores (the
+  provider's inline rollback and every recovery read the guard again).
+- RG2: an older helper doing a deployment that is not Required restores its own failed change unchecked; Alice's check
+  covers only the restores it asks for. Update every helper to 1.9.0 before an incident (the docs say so).
+- RG3: the backup holding the compromised key stays in `/var/lib/alice-helper/backups/<id>` until the 7-day sweep (or
+  `alice-helper cleanup --op <id>`); deleting it at once is deferred.
+- RG4: more than 128 compromised keys or revoked certificates: the helper's lists hold the backup's own entry and the
+  newest 128; the engine's check stays exact for the tracked backup.
+- RG5: a journal written by 1.9.0 with lists cannot be read by an older helper (strict decoding): downgrading the helper
+  is not supported.
+- RG6: nothing re-deploys automatically after a refused rollback; a person retries (incident **Retry** or Deploy).
+- RG7: exercised against the helper's unit tests, the emulator (with its fidelity tests against the real helper) and
+  the full stack on PostgreSQL; not against real servers, and the Playwright suite was not run for this change.

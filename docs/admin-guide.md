@@ -1779,7 +1779,15 @@ it everywhere:
   **Failed**, **Not replaced by Alice**) and the revocation. When something fails it says **Needs attention** with
   the reason: fix it and choose **Retry**, choose **Revoke now regardless**, or **Close the incident** (Alice stops; the
   certificates stay marked compromised). A place whose verification is switched off counts as **Replaced, not
-  checked**: check the website yourself, then choose **Revoke now regardless**.
+  checked**: check the website yourself, then choose **Revoke now regardless**. A place whose server Alice cannot
+  reach after sending the replacement shows **Not confirmed: server not reached** and is never counted as replaced.
+- **No undo ever puts the compromised certificate back.** When a replacement fails (`nginx -t`, the reload, or the
+  check of the website), Alice normally puts the previous files back; here they hold the compromised key, so Alice
+  restores nothing and the place fails with "Alice did not put the previous certificate back because it is revoked or
+  compromised" (`ALC-DEP-0025`). The website may not work until you fix the cause and choose **Retry**; never restore
+  the server's backup of that deployment by hand. The servers need `alice-helper` 1.9.0, which checks this itself: on
+  an older helper Alice refuses the replacement before sending anything (`ALC-SSH-0014`), so update the helpers before
+  you start an incident.
 
 Alice works on open incidents in the background every 30 seconds, also after a restart. While the license is locked
 she only follows what already runs; starting, **Retry**, **Revoke now regardless** and choosing the replacement are

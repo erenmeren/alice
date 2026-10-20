@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — No rollback puts a revoked or compromised certificate back
+
+**Security**
+- A failed deployment is never undone by putting back a certificate that was revoked or whose key is compromised
+  (R48). Alice records which certificate the replaced file held, reads the revocation and compromise marks again right
+  before every undo (also when the certificate was marked compromised while the deployment ran), and restores nothing
+  when they forbid it: the deployment ends rollback failed with `ALC-DEP-0025` (`deployment.rollback_forbidden`), its
+  own e-mail, and on a key compromise incident the place fails with that reason. The website may stay broken until a
+  valid certificate is deployed: security first, by design.
+- `alice-helper` 1.9.0 (protocol 10) checks the backup it would restore itself, on every restore path (its own undo
+  after a failed `nginx -t` or reload, an interrupted change, `nginx-restore`), against the list of compromised keys
+  and revoked certificates Alice sends; it records `restore_forbidden` and restores nothing. The sudoers lines are
+  unchanged. A replacement during an incident, or any deployment over a revoked or compromised certificate, is refused
+  on an older helper before anything is sent (`ALC-SSH-0014`, `ssh.helper_outdated_rollback_guard`).
+
+**Changed**
+- An incident place whose server cannot be reached after the replacement was sent shows **Not confirmed: server not
+  reached** and is never counted as replaced; the API's incident locations carry `outcome_uncertain`.
+- Deployments: phase `restore_forbidden`; the `deployment.started` audit row says whether a rollback could put the
+  previous certificate back (`rollback`: allowed, forbidden, unknown). Migration `00023`. Rulings:
+  `docs/superpowers/rulings/certificate-revocation.md` ("Rollback guard").
+
 ## Unreleased — Never retry before the certificate authority said we may
 
 **Fixed**

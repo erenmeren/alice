@@ -369,7 +369,7 @@ A DEK-only design also lets a compromised-data-key incident be limited to one ro
 
 ### 7.4 Operations
 
-**deployments**: `id`, `certificate_id FK`, `location_id FK`, `target_id FK`, `trigger CHECK IN ('manual','kv_renewal','retry')`, `requested_by FK NULL`, `status CHECK IN ('pending','running','verifying','succeeded','failed','rolled_back','rollback_failed','needs_attention')`, `rollback_info jsonb` (provider `BackupRef`, written before the first mutation), `previous_fingerprint`, `error_code`, `job_id FK`, `started_at`, `finished_at`. Partial UNIQUE `(location_id) WHERE status IN ('pending','running','verifying')` = at most one active deployment per location.
+**deployments**: `id`, `certificate_id FK`, `location_id FK`, `target_id FK`, `trigger CHECK IN ('manual','kv_renewal','retry')`, `requested_by FK NULL`, `status CHECK IN ('pending','running','verifying','succeeded','failed','rolled_back','rollback_failed','needs_attention')`, `rollback_info jsonb` (provider `BackupRef`, written before the first mutation), `previous_fingerprint`, `error_code`, `job_id FK`, `started_at`, `finished_at`. Partial UNIQUE `(location_id) WHERE status IN ('pending','running','verifying')` = at most one active deployment per location. (R48, migration `00023`: `rollback_leaf_sha256`, `rollback_spki_sha256`, the certificate the replaced file held, recorded with the send values; phase `restore_forbidden`: a rollback the guard refused.)
 
 **deployment_steps**: `id`, `deployment_id FK ON DELETE CASCADE`, `n`, `name`, `status CHECK IN ('started','ok','failed','skipped')`, `at`, `duration_ms`, `detail_key`, `params jsonb` (redacted); UNIQUE `(deployment_id, n)`.
 
