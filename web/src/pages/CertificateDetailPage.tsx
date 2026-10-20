@@ -159,7 +159,7 @@ export function CertificateDetailPage() {
                 {t('certificates.detail.selfSigned')}
               </StatusBadge>
             )}
-            <ServiceBadge service={c.service} />
+            <ServiceBadge service={c.service} link />
           </Group>
         }
         actions={

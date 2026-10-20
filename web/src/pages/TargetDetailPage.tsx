@@ -151,7 +151,7 @@ export function TargetDetailPage() {
         status={
           <Group gap="xs">
             <TargetStatusBadge status={tg.status} testId="target-status" />
-            <ServiceBadge service={tg.service} />
+            <ServiceBadge service={tg.service} link />
           </Group>
         }
         description={t('targets.address', { user: tg.username, host: tg.host, port: tg.port })}

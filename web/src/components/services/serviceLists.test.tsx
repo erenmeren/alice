@@ -56,7 +56,8 @@ describe('the service column and filters of the lists', () => {
     const { router } = await renderRoute('/certificates');
     const table = await screen.findByRole('table', { name: 'Certificates' });
     const badge = within(table).getByTestId('service-badge');
-    expect(within(badge).getByRole('link', { name: 'Payments' })).toHaveAttribute('href', `/services/${SERVICE_ID}`);
+    expect(within(badge).getByText('Payments')).toBeInTheDocument();
+    expect(within(badge).queryByRole('link')).not.toBeInTheDocument(); // the row keeps its one link
     expect(within(badge).getByText('Production')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('option', { name: 'Payments' })).toBeInTheDocument());
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Service' }), SERVICE_ID);
@@ -81,6 +82,7 @@ describe('Move to service on a detail page', () => {
     await renderRoute(`/certificates/${CERT}`);
     const badge = await screen.findByTestId('service-badge');
     expect(badge).toHaveTextContent('Default');
+    expect(within(badge).getByRole('link', { name: 'Default' })).toHaveAttribute('href', expect.stringMatching(/^\/services\//));
     await userEvent.click(screen.getByRole('button', { name: 'Move to service' }));
     const dialog = await screen.findByRole('dialog');
     await waitFor(() => expect(within(dialog).getByRole('option', { name: 'Payments' })).toBeInTheDocument());

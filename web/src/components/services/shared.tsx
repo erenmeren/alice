@@ -1,4 +1,4 @@
-import { Anchor, Group, NativeSelect } from '@mantine/core';
+import { Anchor, Group, NativeSelect, Text } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
@@ -25,15 +25,23 @@ export function EnvironmentBadge({ environment }: { environment: EnvironmentRef 
   );
 }
 
-// ServiceBadge is the owning service of a row (design §8.2): its name, linked to its page, and its environment. A row of
-// an older answer has none and shows nothing.
-export function ServiceBadge({ service }: { service: ServiceRef | null | undefined }) {
+// ServiceBadge is the owning service of a row (design §8.2): its name and its environment; on a detail page (link) the
+// name links to the service's page (a list row keeps its one link, to the row's own page). A row of an older answer has
+// none and shows nothing.
+export function ServiceBadge({ service, link = false }: { service: ServiceRef | null | undefined; link?: boolean }) {
   if (!service) return null;
+  const name = service.name || service.id;
   return (
     <Group gap={6} wrap="nowrap" data-testid="service-badge">
-      <Anchor component={Link} to={`/services/${service.id}`} size="sm" translate="no">
-        {service.name || service.id}
-      </Anchor>
+      {link ? (
+        <Anchor component={Link} to={`/services/${service.id}`} size="sm" translate="no">
+          {name}
+        </Anchor>
+      ) : (
+        <Text size="sm" translate="no">
+          {name}
+        </Text>
+      )}
       <EnvironmentBadge environment={service.environment} />
     </Group>
   );
