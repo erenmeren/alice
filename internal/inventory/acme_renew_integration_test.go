@@ -465,7 +465,8 @@ func TestACMEARIPullsARenewalEarlier(t *testing.T) {
 	c := w.issued("ari.example.test")
 	na := w.notAfter(c)
 	w.setClock(na.Add(-60 * day)) // 30 days before the local rule
-	require.NoError(t, w.fake.SetARIWindow(na.Add(-61*day), na.Add(-59*day)))
+	// A window already open and over by now: the random time in it (R50) is in the past, so the renewal starts at once.
+	require.NoError(t, w.fake.SetARIWindow(na.Add(-62*day), na.Add(-61*day)))
 	aris := w.fake.Counters()["ari"]
 	run := w.plan()
 	assert.Equal(t, inventory.ACMERenewRun{Started: 1, ARIChecked: 1}, run, "the CA asks for an early renewal")
@@ -473,8 +474,8 @@ func TestACMEARIPullsARenewalEarlier(t *testing.T) {
 	var start, end, checked, next time.Time
 	require.NoError(t, w.db.Owner.QueryRow(w.ctx, `SELECT ari_window_start, ari_window_end, ari_checked_at, ari_next_check_at FROM acme_certificates
 WHERE id = $1`, c.ID).Scan(&start, &end, &checked, &next))
-	assert.Equal(t, na.Add(-61*day), start.UTC())
-	assert.Equal(t, na.Add(-59*day), end.UTC())
+	assert.Equal(t, na.Add(-62*day), start.UTC())
+	assert.Equal(t, na.Add(-61*day), end.UTC())
 	assert.Equal(t, w.clock.Now().UTC(), checked.UTC())
 	assert.Equal(t, w.clock.Now().UTC().Add(6*time.Hour), next.UTC(), "the CA's Retry-After")
 	view, err := w.svc.GetACMECertificate(w.ctx, c.ID)
