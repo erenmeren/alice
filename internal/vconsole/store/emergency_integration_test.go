@@ -230,3 +230,39 @@ func TestListLicensesMarksExtensionsAndTheLatest(t *testing.T) {
 	assert.False(t, got["L-LATE"].Latest)
 	assert.False(t, got["L-REV"].Latest, "a revoked license is never the latest")
 }
+
+// One emergency extension per lapse (owner decision 2026-10-20): an extension is not extended, a
+// license with an open or issued extension gets no second one, and revoking the extension frees
+// the lapse for a new one.
+func TestOneEmergencyExtensionPerLapse(t *testing.T) {
+	d, cid, _ := emergencySetup(t, "t_em_once")
+	ctx := context.Background()
+	sales := d.Connect(t, "t_em_once")
+
+	first, err := store.AddEmergencyRequest(ctx, sales, store.NewEmergency{LicenseID: "L-LATE", Days: 14, Reason: "x"}, now)
+	require.NoError(t, err)
+	_, err = store.AddEmergencyRequest(ctx, sales, store.NewEmergency{LicenseID: "L-LATE", Days: 7, Reason: "y"}, now)
+	assert.ErrorIs(t, err, store.ErrAlreadyExtended, "an open request already extends it")
+	var invalid *store.InvalidError
+	assert.ErrorAs(t, err, &invalid, "shown to the person")
+	assert.NoError(t, store.CheckExtensionAllowed(ctx, sales, "L-LATE", first), "at signing, open rivals do not count")
+
+	_, err = d.Owner.Exec(ctx, `UPDATE license_requests SET status = 'cancelled' WHERE id = $1`, first)
+	require.NoError(t, err)
+	_, err = store.AddEmergencyRequest(ctx, sales, store.NewEmergency{LicenseID: "L-LATE", Days: 7, Reason: "y"}, now)
+	assert.NoError(t, err, "a cancelled request frees the lapse")
+
+	// An issued extension is the installation's latest license: it is not extended again.
+	inst2 := license.NewInstallationID()
+	start := now.Truncate(day)
+	seedFor(t, d, cid, inst2, seeded{id: "L-GONE", from: now.Add(-400 * day), until: now.Add(-2 * day), targets: 3})
+	seedFor(t, d, cid, inst2, seeded{id: "L-EXT2", from: start, until: start.Add(14 * day), targets: 3, emergency: true})
+	_, err = store.AddEmergencyRequest(ctx, sales, store.NewEmergency{LicenseID: "L-GONE", Days: 30, Reason: "x"}, now)
+	assert.ErrorIs(t, err, store.ErrAlreadyExtended, "the latest license is an extension")
+
+	// A revoked extension no longer counts: the original license is the latest again.
+	_, err = d.Owner.Exec(ctx, `UPDATE licenses SET revoked_at = $1 WHERE license_id = 'L-EXT2'`, now)
+	require.NoError(t, err)
+	_, err = store.AddEmergencyRequest(ctx, sales, store.NewEmergency{LicenseID: "L-GONE", Days: 14, Reason: "x"}, now)
+	assert.NoError(t, err)
+}

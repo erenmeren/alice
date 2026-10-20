@@ -148,3 +148,23 @@ func TestIssueRefusesALicenseStartingBeforeAnExtension(t *testing.T) {
 	assert.ErrorIs(t, err, store.ErrStartsBeforeExtension)
 	assert.ErrorContains(t, err, extRes.LicenseID)
 }
+
+// One extension per lapse holds at signing too: a second request for the same lapse (made before the
+// rule, or racing the first) is refused once the first is issued.
+func TestIssueRefusesASecondExtensionOfTheSameLapse(t *testing.T) {
+	e := setup(t, "em-once")
+	ctx := context.Background()
+	inst := e.lapsed(t, "LIC-2025-000009")
+	first, hash := e.emergency(t, "LIC-2025-000009", 14)
+	var second int64
+	require.NoError(t, e.d.Owner.QueryRow(ctx, `INSERT INTO license_requests (customer_id, installation, targets, features,
+		kind, months, days, reason, extends) VALUES ($1, $2, 7, '{audit,sso}', 'emergency', NULL, 7, 'again', 'LIC-2025-000009')
+		RETURNING id`, e.cust, inst).Scan(&second))
+
+	_, err := issue.Issue(ctx, e.signer, e.key, issue.Params{RequestID: first, ExpectedHash: hash}, now)
+	require.NoError(t, err)
+	r, err := store.GetRequest(ctx, e.signer, second)
+	require.NoError(t, err)
+	_, err = issue.Issue(ctx, e.signer, e.key, issue.Params{RequestID: second, ExpectedHash: store.RequestHash(r)}, now)
+	assert.ErrorIs(t, err, store.ErrAlreadyExtended)
+}

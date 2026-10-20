@@ -170,7 +170,8 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 
 // checkExtension applies the emergency extension rules at signing time: an extension still needs
 // its carried-over license unrevoked and must not be covered by a license already there; any other
-// license must not start before an extension of its installation unless it replaces it.
+// license must not start before an extension of its installation unless it replaces it. One extension per
+// lapse: an extension is not extended, and a license gets no second extension (store.CheckExtensionAllowed).
 func checkExtension(ctx context.Context, q audit.Q, req store.Request, p license.Payload) error {
 	if req.Kind != store.KindEmergency {
 		return store.CheckStartsBeforeExtension(ctx, q, p)
@@ -182,6 +183,9 @@ func checkExtension(ctx context.Context, q audit.Q, req store.Request, p license
 	}
 	if err != nil {
 		return fmt.Errorf("issue: read the extended license: %w", err)
+	}
+	if err := store.CheckExtensionAllowed(ctx, q, req.Extends, req.ID); err != nil {
+		return err
 	}
 	return store.CheckEmergencyNeeded(ctx, q, p)
 }

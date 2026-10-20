@@ -149,6 +149,6 @@ func TestEmergencyLicenseIsLabelledInTheList(t *testing.T) {
 	row := list[strings.Index(list, "LIC-2026-000020"):]
 	row = row[:strings.Index(row, "</tr>")]
 	assert.Contains(t, row, "Emergency extension")
-	assert.Contains(t, row, "emergency?license=LIC-2026-000020", "a further extension can be asked for from the extension")
+	assert.NotContains(t, row, "emergency?license=", "an extension is not extended again (one per lapse)")
 	assert.NotContains(t, list, "emergency?license=LIC-2025-000002", "the extension is now the latest")
 }

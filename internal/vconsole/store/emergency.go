@@ -30,6 +30,10 @@ var (
 	// ErrStartsBeforeExtension: a license starting before a running extension must replace it,
 	// or Alice keeps the extension (the later start) in force until it ends.
 	ErrStartsBeforeExtension = errors.New("the license starts before an emergency extension of this installation")
+	// ErrAlreadyExtended: one emergency extension per lapse (owner decision 2026-10-20). An extension is
+	// not extended again, and a license with an open or issued extension gets no second one; the next
+	// step is a regular license.
+	ErrAlreadyExtended = errors.New("this lapse already has an emergency extension; issue a regular license instead")
 )
 
 // EmergencyBasis is what an extension carries over: the installation's latest license that is not
@@ -115,6 +119,9 @@ func AddEmergencyRequest(ctx context.Context, q audit.Q, e NewEmergency, now tim
 	if err != nil {
 		return 0, &InvalidError{Err: err}
 	}
+	if err := CheckExtensionAllowed(ctx, q, b.LicenseID, 0); err != nil {
+		return 0, err
+	}
 	if err := CheckEmergencyNeeded(ctx, q, p); err != nil {
 		return 0, err
 	}
@@ -128,6 +135,33 @@ func AddEmergencyRequest(ctx context.Context, q audit.Q, e NewEmergency, now tim
 		return 0, fmt.Errorf("store: add emergency request: %w", err)
 	}
 	return id, nil
+}
+
+// CheckExtensionAllowed refuses a second emergency extension of the same lapse (ErrAlreadyExtended):
+// when the license to carry over, licenseID, was itself issued from an emergency request, or when
+// another emergency request extending it is signed with a license that is not revoked, or, for a new
+// request (self = 0), is open. When request self is signed, open rivals do not count: the first one
+// signed wins and the others are refused at their signing. Revoking an extension therefore allows a
+// new one in its place.
+func CheckExtensionAllowed(ctx context.Context, q audit.Q, licenseID string, self int64) error {
+	var extension, taken bool
+	err := q.QueryRow(ctx, `SELECT
+			EXISTS (SELECT 1 FROM licenses l JOIN license_requests r ON r.id = l.request_id
+				WHERE l.license_id = $1 AND r.kind = 'emergency'),
+			EXISTS (SELECT 1 FROM license_requests r
+				WHERE r.kind = 'emergency' AND r.extends = $1 AND r.id <> $2 AND ((r.status = 'open' AND $2 = 0)
+					OR (r.status = 'signed' AND EXISTS (SELECT 1 FROM licenses l
+						WHERE l.request_id = r.id AND l.revoked_at IS NULL))))`, licenseID, self).Scan(&extension, &taken)
+	if err != nil {
+		return fmt.Errorf("store: check the license's emergency extensions: %w", err)
+	}
+	switch {
+	case extension:
+		return &InvalidError{Err: fmt.Errorf("%w (%s is an emergency extension)", ErrAlreadyExtended, licenseID)}
+	case taken:
+		return &InvalidError{Err: fmt.Errorf("%w (%s already has one, requested or issued)", ErrAlreadyExtended, licenseID)}
+	}
+	return nil
 }
 
 // CheckEmergencyNeeded refuses an extension payload p when a license of its installation that is

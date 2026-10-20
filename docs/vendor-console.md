@@ -268,7 +268,9 @@ all requests.
 When a customer's license has lapsed (or is about to) and the renewal is not ready, anyone signed in
 can ask for an **emergency extension** from the licenses page: the button appears on an
 installation's latest license (not revoked) that ends before an extension signed today could end.
-The form shows what is carried over from that license (customer, installation, targets, features)
+There is **one extension per lapse**: an extension is not extended again, and a license that already
+has an open or issued extension gets no second one (revoke the extension to replace it). After an
+extension, issue a regular license. The form shows what is carried over from that license (customer, installation, targets, features)
 and takes only the number of days (default 14, at most 30) and a reason, which is required. The
 signed license is an ordinary license valid from 00:00 UTC of the signing day for that many days;
 the label lives only on the vendor side: in the request (`vendor-console request show` and `request

@@ -31,10 +31,11 @@ type emergencyData struct {
 }
 
 // canExtend says whether the licenses page offers an extension for r: the installation's latest
-// license, not revoked, ending before an extension signed today could end. The store decides.
+// license, not revoked and not itself an extension (one per lapse), ending before an extension signed
+// today could end. The store decides.
 func canExtend(r store.LicenseRow, now time.Time) bool {
 	limit := now.UTC().Truncate(24*time.Hour).AddDate(0, 0, store.MaxEmergencyDays)
-	return r.Latest && r.RevokedAt == nil && r.ValidUntil.Before(limit)
+	return r.Latest && !r.Emergency && r.RevokedAt == nil && r.ValidUntil.Before(limit)
 }
 
 func (s *Server) renderEmergency(w http.ResponseWriter, r *http.Request, u webuser.User, status int, id string, d emergencyData) {

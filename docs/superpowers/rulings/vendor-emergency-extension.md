@@ -43,8 +43,13 @@ license. Operator text: `docs/vendor-console.md`, "Emergency extensions".
    extension's end (`store.ErrExtensionNotNeeded`): the extension adds nothing and, as the later
    start, would hide that license in Alice. At signing time also refused if the carried-over
    license was revoked meanwhile (`issue.ErrExtendedRevoked`). An extension issued shortly before
-   the lapse is allowed (it ends later than the running license). Extensions may be chained; each
-   one is a separate, audited request with a reason.
+   the lapse is allowed (it ends later than the running license). **One extension per lapse** (owner
+   decision 2026-10-20, replacing the earlier "may be chained"): an extension is not extended again,
+   and a license with an open or issued (not revoked) extension gets no second one
+   (`store.ErrAlreadyExtended`, `store.CheckExtensionAllowed`). At signing only issued rivals count,
+   so the first request signed wins. Revoking an extension frees the lapse for a new one; the next
+   step after an extension is a regular license. The licenses page offers no extension on an
+   extension.
 8. **Audit and history.** `request.add` of an extension carries `kind: "emergency"`, `days`,
    `reason` (cleaned to one line) and `extends`; `license.issue` carries `kind` and `days`. The
    action names are unchanged so existing filters (`--action request.add`, `license.`) and the
@@ -84,9 +89,10 @@ license. Operator text: `docs/vendor-console.md`, "Emergency extensions".
     | The extension is valid from the start of the day it is signed (00:00 UTC) for the days below, at most 30. … cannot be changed here. For anything else, make a normal request. | Uzatma, imzalandığı günün başından (00:00 UTC) itibaren aşağıdaki gün sayısı kadar, en fazla 30 gün geçerlidir. … burada değiştirilemez. Başka bir şey için normal bir talep oluşturun. |
     | Emergency extension issued | Acil uzatma düzenlendi |
 
-## Open (owner)
+## Owner answers (2026-10-20)
 
-- Chaining is unlimited (ruling 7). If the owner wants a cap (e.g. one extension per lapse, or a
-  total of 30 days per installation), it is one query in `AddEmergencyRequest` and `checkExtension`.
-- The vendor-console CLI has no `request emergency` command; extensions are asked for on the web
-  (or by SQL as a database login). Add one if signers want to ask for and sign one alone.
+- Chaining: capped at one extension per lapse (ruling 7).
+- No `vendor-console request emergency` CLI command: the web form carries the values over on the
+  server side, which is safer; extensions are asked for on the web.
+- vendor-web stays English: only the vendor uses it. The Turkish table above waits for a vendor-web
+  i18n layer, if one is ever added.
