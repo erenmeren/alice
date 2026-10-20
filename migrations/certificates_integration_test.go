@@ -548,7 +548,7 @@ func TestDeploymentConstraints(t *testing.T) {
 	for _, res := range []string{"", "committed", "unchanged", "no_change", "rolled_back", "rollback_failed", "uncertain"} {
 		assert.NoError(t, insertRow(t, d.App, "deployments", with(deploymentRow(w), map[string]any{"state": "done", "status": "failed", "finished_at": now, "result": res})), res)
 	}
-	for _, ph := range []string{"", "none", "prepared", "writing", "committed", "unchanged", "restoring", "restored", "restore_failed"} {
+	for _, ph := range []string{"", "none", "prepared", "writing", "committed", "unchanged", "restoring", "restored", "restore_failed", "restore_forbidden"} {
 		assert.NoError(t, insertRow(t, d.App, "deployments", with(deploymentRow(w), map[string]any{"state": "done", "status": "failed", "finished_at": now, "phase": ph})), ph)
 	}
 	opID := uuid.New()

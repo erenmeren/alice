@@ -1233,6 +1233,22 @@ type again (they install the helper and the sudoers file together), then choose 
 proof method for this certificate. See
 [nginx-host-preparation.md](nginx-host-preparation.md#publishing-http-01-challenges-optional).
 
+## ALC-SSH-0014: Reinstall the helper on this server before Alice replaces this certificate there
+
+**Meaning.** Alice refused to deploy to this server because its `alice-helper` is older than 1.9.0 (protocol 10;
+`params.helper_protocol` and `params.required_protocol`), and the deployment needs the helper's own check that an undo
+never puts a revoked or compromised certificate back: the file it replaces holds a revoked or compromised certificate
+(or a certificate Alice does not know while a key is compromised), or the file is being replaced in a key-compromise
+incident. After a failed `nginx -t` or reload an older helper puts the previous files back on its own, without
+checking them. Alice sent nothing; every other deployment to this server keeps working. (HTTP 502, reason
+`ssh.helper_outdated_rollback_guard`; the deployment ended failed.)
+
+**Likely cause.** Alice was updated but the server's helper was not.
+
+**What to do.** Copy `alice-helper` from the current Alice bundle and run the preparation commands again (the sudoers
+file is the same), choose **Test connection**, then deploy again or choose **Retry** on the incident. See
+[nginx-host-preparation.md](nginx-host-preparation.md#an-undo-never-puts-back-a-revoked-or-compromised-certificate).
+
 ## ALC-KEY-0001: Alice's own key is protected
 
 **Meaning.** Alice refuses to remove its own connection key (HTTP 409), in any file and whatever its comment says, and
@@ -2310,7 +2326,7 @@ off in its verification settings (see [Deployments](#deployments)).
 
 A deployment may show `ALC-DEP-0019` (the files are back but the website was not confirmed) or `ALC-DEP-0020` (another program changed the files) instead; a task (job) record always shows this code.
 
-**What to do.** Check the website now. Compare the files with the backup on the server, then run `nginx -t` and `systemctl reload nginx`.
+**What to do.** Check the website now. Compare the files with the backup on the server, then run `nginx -t` and `systemctl reload nginx`. Do not put a backup back by hand when the previous certificate is revoked or compromised (its page says so): see `ALC-DEP-0025`.
 
 ## ALC-DEP-0009: Files restored but Nginx did not reload
 
@@ -2457,6 +2473,14 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** The earlier change was interrupted on the server (for example the helper was killed after replacing the files), and Alice had stopped following it: its outcome was recorded as unknown, the server was deleted and added again, or Alice's database was restored. The new deployment found the files blocked, restored them, and then could not write its own certificate, typically because the files no longer held what Alice had last read (it had read the earlier change's files).
 
 **What to do.** Choose **Discover** on the server's page so that Alice reads the files again, then deploy the certificate again.
+
+## ALC-DEP-0025: The change failed, and the previous certificate was not put back because it is revoked or compromised
+
+**Meaning.** The new certificate could not be put in service (`nginx -t`, the reload, or Alice's check of the website failed), and the files from before the change hold a certificate that was revoked or whose private key is compromised. Alice never puts such a certificate or key back on a server, so the files stay as the failed change left them. (HTTP 502, reason `deployment.rollback_forbidden`, status rollback failed; the deployment's history shows the step `restore` failed with `forbidden`, and the step that failed first.) Alice decides this with its records read again right before the undo, and the helper checks the backup itself too, so a certificate marked compromised while the deployment ran is covered. On a key-compromise incident the place shows as failed with this reason.
+
+**Likely cause.** A replacement during a key-compromise incident, or a deployment over a revoked or compromised certificate, failed for an ordinary reason: a configuration error, a reload that failed, or a website that does not serve the new certificate (another server answers, a load balancer in front of it).
+
+**What to do.** Check the website now: it may not work until another certificate is deployed (Nginx keeps serving what it loaded until its next reload or restart, and that may fail with the files as they are). Find the cause in the deployment's history and fix it, then deploy a valid certificate again, or choose **Retry** on the incident; this deployment does not block the next one. **Never restore the server's backup of this deployment by hand** (`/var/lib/alice-helper/backups/<deployment ID>`): it holds the compromised key. See [nginx-host-preparation.md](nginx-host-preparation.md#an-undo-never-puts-back-a-revoked-or-compromised-certificate).
 
 ## ALC-AKV-0001: Azure sign-in refused
 

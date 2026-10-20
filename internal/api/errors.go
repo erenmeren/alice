@@ -126,6 +126,10 @@ var (
 	// ErrHelperOutdatedHTTP01: the server's helper (or its sudoers file) predates the HTTP-01 challenge
 	// commands (protocol 7). Everything else keeps working on that server (A1 of the ACME plan).
 	ErrHelperOutdatedHTTP01 = ErrorCode{Code: "ALC-SSH-0013", Reason: "ssh.helper_outdated_http01", Status: http.StatusBadGateway}
+	// ErrHelperOutdatedRollbackGuard (R48): the server's helper predates the rollback guard (protocol
+	// 10); a deployment that needs it (an incident replacement, or one over a revoked or compromised
+	// certificate) is refused before anything is sent. Params helper_protocol, required_protocol.
+	ErrHelperOutdatedRollbackGuard = ErrorCode{Code: "ALC-SSH-0014", Reason: "ssh.helper_outdated_rollback_guard", Status: http.StatusBadGateway}
 
 	ErrOwnKeyProtected = ErrorCode{Code: "ALC-KEY-0001", Reason: "sshkey.own_key_protected", Status: http.StatusConflict}
 	ErrLastRootKey     = ErrorCode{Code: "ALC-KEY-0002", Reason: "sshkey.last_root_key", Status: http.StatusConflict}
@@ -337,6 +341,11 @@ var (
 	// longer tracked (param operation_id); the website serves the certificate from before that
 	// change; this deployment's certificate was not written (status rolled_back).
 	ErrDeployPendingChangeRestored = ErrorCode{Code: "ALC-DEP-0024", Reason: "deployment.pending_change_restored", Status: http.StatusConflict}
+	// ErrDeployRollbackForbidden (R48): the change failed and Alice did not put the previous files back
+	// because they hold a revoked or compromised certificate or key; the files are as the failed
+	// change left them (status rollback_failed; the website may be broken until another certificate is
+	// deployed).
+	ErrDeployRollbackForbidden = ErrorCode{Code: "ALC-DEP-0025", Reason: "deployment.rollback_forbidden", Status: http.StatusBadGateway}
 
 	// Phase 5: Azure Key Vault (R40). ALC-AKV-0001..0027 are the contract's table; 0028 and later
 	// cover what the code stores or answers that the table did not name (the reasons of a deployment
@@ -510,6 +519,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrTargetDuplicate, ErrHostKeyUnconfirmed, ErrHostKeyStale, ErrHostKeyChanged, ErrHostKeyState, ErrTargetDisabled,
 		ErrSSHUnreachable, ErrSSHAuthFailed, ErrSSHTimeout, ErrHelperMissing, ErrHelperOutdated, ErrHelperRefused,
 		ErrFileChanged, ErrKeysManagedElsewhere, ErrOutputTooLarge, ErrSSHProtocol, ErrHelperChecksums, ErrSSHAddressNotAllowed, ErrHelperOutdatedHTTP01,
+		ErrHelperOutdatedRollbackGuard,
 		ErrOwnKeyProtected, ErrLastRootKey, ErrKeyNotRemovable, ErrSSHDUnreadable, ErrKeyVerifyFailed,
 		ErrKeyNotManaged, ErrKeyRetired, ErrKeyDestroyed, ErrKeyConnectionAccount, ErrKeyLoginFailed, ErrKeyGenerateBusy,
 		ErrKeyAddUndoFailed, ErrKeyNotAKeyFile, ErrKeyConnectionFilesUnknown, ErrKeyClockBehind, ErrKeyAddUncertain,
@@ -540,6 +550,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrDeployInterrupted, ErrDeployTargetNotReady, ErrDeployVerifyChain, ErrDeployNothingToRestore, ErrDeploySuperseded,
 		ErrDeployUnknownOperation, ErrDeployTargetDeleted, ErrDeployRecoveryExhausted, ErrDeployOutcomeUnknown,
 		ErrDeployRestoredUnverified, ErrDeployRollbackFileChanged, ErrDeployRescanNeeded, ErrDeployCancelled, ErrDeployServerOperationPending, ErrDeployPendingChangeRestored,
+		ErrDeployRollbackForbidden,
 		ErrAzureAuthFailed, ErrAzureCredentialsExpired, ErrAzureForbidden, ErrAzureFirewall, ErrAzureVaultNotFound, ErrAzureUnreachable,
 		ErrAzureThrottled, ErrAzureUnexpectedResponse, ErrAzureClockSkew, ErrAzureManagedIdentityGone, ErrAzureAddressNotAllowed,
 		ErrAzureTLSUntrusted, ErrKVNotExportable, ErrKVVersionDisabled, ErrKVCertificateNotFound, ErrKVSecretUnreadable, ErrKVSecretMismatch,

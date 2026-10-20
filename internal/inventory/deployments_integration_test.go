@@ -483,7 +483,8 @@ func TestDeploymentStateMachine(t *testing.T) {
 	assert.Equal(t, "ecdsa", pre.KeyType)
 	v := m.SendValues(pki.Fingerprint(f.old.Cert), 2)
 	assert.Equal(t, inventory.SendValues{OperationID: id, ExpectCertSHA256: sha(f.old.FullchainPEM), NewChainLength: 2,
-		PreviousFingerprint: pki.Fingerprint(f.old.Cert), PreviousChainLength: 2}, v)
+		PreviousFingerprint: pki.Fingerprint(f.old.Cert), PreviousChainLength: 2, RollbackLeafSHA256: pki.Fingerprint(f.old.Cert),
+		RollbackSPKISHA256: f.discovered.PublicKeySHA256}, v, "R48: the file's certificate is the rollback target")
 	dr := m.DeployRequest(v)
 	assert.Equal(t, id, dr.OperationID)
 	assert.Equal(t, 2, dr.ChainLength)
@@ -516,9 +517,10 @@ func TestDeploymentStateMachine(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, rm.Recorded)
 	assert.Equal(t, sha(f.old.FullchainPEM), rm.ExpectCertSHA256)
-	rb := rm.RollbackRequest()
+	rb := rm.RollbackRequest(rm.Guard)
 	assert.Equal(t, providers.RollbackRequest{OperationID: id, Location: rm.Location, OldFingerprint: pki.Fingerprint(f.old.Cert), OldChainLength: 2,
-		OldSANs: []string{"www.example.test"}, KeyType: "ecdsa", Verify: rm.Verify}, rb)
+		OldSANs: []string{"www.example.test"}, KeyType: "ecdsa", Verify: rm.Verify, Guard: rm.Guard}, rb)
+	assert.True(t, rm.Guard.Empty(), "nothing is revoked or compromised here")
 	vr := rm.VerifyRequest()
 	assert.Equal(t, pki.Fingerprint(f.nw.Cert), vr.Fingerprint)
 	assert.Equal(t, 2, vr.ChainLength)

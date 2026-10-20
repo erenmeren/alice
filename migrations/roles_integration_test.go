@@ -186,8 +186,8 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"unsupported_reason", "verify_port", "verify_sni", "version", "warnings"}},
 	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "expect_cert_sha256", "failed_step", "finished_at",
 		"helper_error", "job_id", "new_chain_length", "operation_id", "phase", "previous_chain_length", "previous_fingerprint",
-		"recover_after", "recovery_attempts", "result", "rollback_info", "started_at", "state", "status", "verified",
-		"verify_failed_port", "verify_failed_reason"}},
+		"recover_after", "recovery_attempts", "result", "rollback_info", "rollback_leaf_sha256", "rollback_spki_sha256", "started_at", "state",
+		"status", "verified", "verify_failed_port", "verify_failed_reason"}},
 	// Phase 5: a location joins or leaves a binding; everything that names a vault object, a
 	// version, a thumbprint, a binding's certificate or an import's request is fixed at INSERT.
 	"public.kv_certificates": {"UPDATE": {"auto_renew", "content_type", "current_thumbprint", "current_version", "details_pending",
@@ -293,6 +293,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	recovery := hasColumn(t, d, "acme_certificates", "last_failure_class")
 	revocation := hasColumn(t, d, "certificates", "revoked_at")
 	caWait := hasColumn(t, d, "acme_certificates", "ca_not_before")
+	guard := hasColumn(t, d, "deployments", "rollback_leaf_sha256")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -334,6 +335,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00021 the revocation, compromise and public key columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return slices.Contains([]string{"compromised_at", "compromised_by", "revocation_reason", "revoked_at", "revoked_by", "public_key_sha256"}, c)
+			})}
+		}
+		if name == "public.deployments" && !guard {
+			// Below 00023 the rollback target columns do not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "rollback_leaf_sha256" || c == "rollback_spki_sha256"
 			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {

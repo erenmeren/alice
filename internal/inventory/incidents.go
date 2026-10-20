@@ -163,6 +163,11 @@ type IncidentLocation struct {
 	ErrorCode    string
 	Attempts     int
 	UpdatedAt    time.Time
+	// OutcomeUncertain (R48): the location's deployment was sent but Alice has not confirmed how it ended (its recovery
+	// cannot reach the server, or the answer was lost); UncertainCode is why (the deployment's code, "" when none). Such a
+	// place is never counted as replaced: it stays deploying until the recovery confirms it or gives up (failed).
+	OutcomeUncertain bool
+	UncertainCode    string
 }
 
 // IncidentInput starts an incident: RevokeMode "" or after_verified (revoke once every location is verified) or now.
@@ -215,15 +220,17 @@ func (s *Service) GetIncident(ctx context.Context, id uuid.UUID) (Incident, erro
 		return Incident{}, err
 	}
 	rows, err := s.pool.Query(ctx, `SELECT l.location_id, cl.target_id, t.name::text, cl.cert_path, l.status, l.deployment_id, l.error_code, l.attempts,
-    l.updated_at
+    l.updated_at, l.status = 'deploying' AND coalesce(d.state, '') = 'recovering', CASE WHEN d.state = 'recovering' THEN d.error_code ELSE '' END
 FROM certificate_incident_locations l JOIN certificate_locations cl ON cl.id = l.location_id JOIN targets t ON t.id = cl.target_id
+LEFT JOIN deployments d ON d.id = l.deployment_id
 WHERE l.incident_id = $1 ORDER BY t.name, cl.cert_path, l.location_id LIMIT $2`, id, MaxImpactRows)
 	if err != nil {
 		return Incident{}, fmt.Errorf("inventory: read the incident's locations: %w", err)
 	}
 	i.Locations, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (IncidentLocation, error) {
 		var l IncidentLocation
-		err := r.Scan(&l.LocationID, &l.TargetID, &l.TargetName, &l.CertPath, &l.Status, &l.DeploymentID, &l.ErrorCode, &l.Attempts, &l.UpdatedAt)
+		err := r.Scan(&l.LocationID, &l.TargetID, &l.TargetName, &l.CertPath, &l.Status, &l.DeploymentID, &l.ErrorCode, &l.Attempts, &l.UpdatedAt,
+			&l.OutcomeUncertain, &l.UncertainCode)
 		l.UpdatedAt = l.UpdatedAt.UTC()
 		return l, err
 	})

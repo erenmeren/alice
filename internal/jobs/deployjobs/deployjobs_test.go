@@ -55,6 +55,22 @@ type fakeInv struct {
 	// ops are the deployments that own operation ids (OperationDeployment).
 	ops map[uuid.UUID]inventory.OperationOwner
 	kv  kvFake // Key Vault deployments (kv_test.go)
+	// guard is what RollbackGuard answers (R48), per deployment id when guards names it; guardErr its
+	// error; guardReads counts the reads (kept out of log: the call sequences predate the guard).
+	guard      providers.RollbackGuard
+	guards     map[uuid.UUID]providers.RollbackGuard
+	guardErr   error
+	guardReads int
+}
+
+func (f *fakeInv) RollbackGuard(_ context.Context, id uuid.UUID) (providers.RollbackGuard, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.guardReads++
+	if g, ok := f.guards[id]; ok {
+		return g, f.guardErr
+	}
+	return f.guard, f.guardErr
 }
 
 var fencedWrites = []string{"BeginDeployment", "StartDeployment", "RecordDeploymentStep", "FinishDeployment", "RecordOutcome", "CheckClaim"}

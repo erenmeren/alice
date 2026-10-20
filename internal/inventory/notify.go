@@ -28,6 +28,11 @@ const (
 	// deployment.pending_change_restored); the website serves an older certificate. Params also
 	// operation_id (the earlier change, a UUID of Alice's or the helper's validated form).
 	TemplateDeploymentPendingChangeRestored = "deployment.pending_change_restored"
+	// TemplateDeploymentRollbackForbidden (R48): the change failed and Alice did not put the previous
+	// certificate back because it, or its key, is revoked or compromised (rollback_failed with
+	// deployment.rollback_forbidden); the website may be broken until another certificate is deployed.
+	// It never names the backup: restoring it by hand would put the compromised key back.
+	TemplateDeploymentRollbackForbidden = "deployment.rollback_forbidden"
 	// TemplateDeploymentNeedsAttention: Alice cannot reach the server to finish or undo a
 	// deployment and keeps trying (about a day); sent once per deployment.
 	TemplateDeploymentNeedsAttention = "deployment.needs_attention"
@@ -122,6 +127,7 @@ func ACMETemplates() []string {
 func Templates() []string {
 	return []string{TemplateHostKeyChanged, TemplateAuthFailed, TemplateDeploymentFailed, TemplateDeploymentRollbackFailed,
 		TemplateDeploymentOutcomeUnknown, TemplateDeploymentRestoredUnverified, TemplateDeploymentSuperseded, TemplateDeploymentPendingChangeRestored,
+		TemplateDeploymentRollbackForbidden,
 		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved,
 		TemplateKVCertificateRemovedBound, TemplateKVCertificatesRemovedMore, TemplateKVCertificatesRemovedOne, TemplateKVNewVersion, TemplateKVNewVersionHeldLicense,
 		TemplateKVNewVersionHeldChain, TemplateKVSkippedManual, TemplateKVSkippedDisabled, TemplateKVSkippedExpired, TemplateKVSkippedNotYetValid,

@@ -310,7 +310,7 @@ func TestDeploymentFlowLeaksNoKey(t *testing.T) {
 		require.NoError(t, err)
 		rm, err := f.h.svc.DeploymentMaterial(ctx, d.ID, false)
 		require.NoError(t, err)
-		s.add(full, rm, rm.RollbackRequest(), rm.VerifyRequest())
+		s.add(full, rm, rm.RollbackRequest(rm.Guard), rm.VerifyRequest())
 	}
 	require.NotEmpty(t, f.emails())
 	s.check()

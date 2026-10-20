@@ -339,6 +339,11 @@
         "cause": "Sunucudaki yardımcı program, Alice'in bu sürümünün beklediğinden daha eski.",
         "action": "Güncel Alice paketindeki alice-helper dosyasını sunucuya kopyalayın ve hazırlık komutlarını yeniden çalıştırın."
       },
+      "helper_outdated_rollback_guard": {
+        "title": "Alice bu sertifikayı orada değiştirmeden önce bu sunucudaki yardımcı programı yeniden kurun.",
+        "cause": "Bu sunucudaki alice-helper 1.9.0'dan eski (protokol {{helper_protocol}}; {{required_protocol}} gerekiyor). Böyle bir yardımcı program, başarısız bir değişiklikten sonra önceki dosyaları denetlemeden geri koyar; buradaki önceki sertifika ise iptal edilmiş ya da anahtarı ele geçirilmiş durumda veya bu yer bir anahtar ele geçirilmesi olayında değiştiriliyor. Alice hiçbir şey göndermedi; bu sunucuya yapılan diğer dağıtımlar çalışmaya devam eder.",
+        "action": "Güncel Alice paketindeki alice-helper dosyasını sunucuya kopyalayın ve hazırlık komutlarını yeniden çalıştırın, ardından dağıtımı veya olayı yeniden deneyin."
+      },
       "helper_outdated_http01": {
         "title": "Bu doğrulama yöntemini kullanmak için bu sunucudaki yardımcı programı yeniden kurun.",
         "cause": "Bu sunucudaki alice-helper veya sudoers dosyası, HTTP-01 doğrulama yönteminin gerektirdiğinden daha eski. Bu sunucudaki diğer her şey çalışmaya devam eder.",
@@ -1132,6 +1137,11 @@
         "cause": "Bir yönetici dağıtımın bekleyen işi için Vazgeç'i seçti; bu yüzden Alice sunucuya hiçbir şey göndermedi. Web sitesi önceki sertifikasını kullanmaya devam ediyor.",
         "action": "Sertifika hâlâ gerekiyorsa yeniden dağıtın."
       },
+      "rollback_forbidden": {
+        "title": "Değişiklik başarısız oldu ve Alice önceki sertifikayı iptal edildiği veya ele geçirildiği için geri koymadı.",
+        "cause": "Yeni sertifika kullanıma alınamadı ve değişiklikten önceki dosyalar iptal edilmiş ya da özel anahtarı ele geçirilmiş bir sertifika içeriyor. Alice böyle bir sertifikayı veya anahtarı bir sunucuya asla geri koymaz; bu yüzden dosyalar başarısız değişikliğin bıraktığı gibi kalır. Başka bir sertifika dağıtılana kadar web sitesi çalışmayabilir.",
+        "action": "Web sitesini hemen denetleyin. Dağıtım geçmişinde gösterilen nedeni (yapılandırma testi, yeniden yükleme veya web sitesinin denetimi) bulup giderin, ardından geçerli bir sertifikayı yeniden dağıtın ya da olayda Yeniden dene'yi seçin. Bu değişikliğin sunucudaki yedeğini asla elle geri yüklemeyin: ele geçirilmiş anahtarı içerir."
+      },
       "pending_change_restored": {
         "title": "Alice bu dosyalardaki tamamlanmamış önceki bir değişikliği geri aldı; bu sertifika dağıtılmadı.",
         "cause": "Bu sertifika dosyalarında sunucuda yapılan önceki bir değişiklik tamamlanmadı ve Alice onu artık izlemiyordu. Alice o değişikliğin yerini aldığı dosyaları geri koydu; web sitesi artık o değişiklikten önceki sertifikayı sunuyor. Bu dağıtımın sertifikası yazılmadı.",
@@ -1856,6 +1866,10 @@
       "needs_attention": {
         "subject": "Alice {{target_name}} sunucusundaki bir dağıtımı tamamlayamıyor",
         "body": "Bir sertifika dağıtımı sırasında {{target_name}} sunucusuyla bağlantı kesildi (dosya: {{cert_path}}) ve Alice dağıtımı tamamlamak veya geri almak için sunucuya erişemiyor.\n\nAlice yaklaşık bir gün boyunca 15 dakikada bir yeniden dener, sonra elle müdahale ister. O zamana kadar web sitesini ve sunucunun bağlantısını denetleyin. Dağıtım: {{deployment_id}}"
+      },
+      "rollback_forbidden": {
+        "subject": "Elle müdahale gerekiyor: {{target_name}} sunucusundaki başarısız bir dağıtım, önceki sertifika ele geçirildiği için geri alınmadı",
+        "body": "{{target_name}} sunucusundaki bir sertifika dağıtımı (dosya: {{cert_path}}) başarısız oldu. Alice önceki dosyaları geri koymadı, çünkü bu dosyalar iptal edilmiş ya da özel anahtarı ele geçirilmiş bir sertifika içeriyor. Dosyalar başarısız değişikliğin bıraktığı gibi kalır; bu yüzden başka bir sertifika dağıtılana kadar web sitesi çalışmayabilir.\n\nWeb sitesini hemen denetleyin. Alice'teki dağıtım geçmişinde gösterilen nedeni giderin, ardından geçerli bir sertifikayı yeniden dağıtın. Bu değişikliğin sunucudaki yedeğini elle geri yüklemeyin: ele geçirilmiş anahtarı içerir. Dağıtım: {{deployment_id}}"
       },
       "pending_change_restored": {
         "subject": "Alice {{target_name}} sunucusunda daha eski sertifika dosyalarını geri koydu; sertifikanız dağıtılmadı",

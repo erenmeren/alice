@@ -88,6 +88,9 @@ type Inventory interface {
 	// CheckClaim is ErrClaimLost when the job run on the context (inventory.WithClaim) no longer
 	// holds its job. Every write above checks the same in its own transaction.
 	CheckClaim(ctx context.Context) error
+	// RollbackGuard reads what a rollback of the deployment must never put back (R48), as it stands
+	// now: the engine reads it again before every rollback it sends or lets the provider send.
+	RollbackGuard(ctx context.Context, id uuid.UUID) (providers.RollbackGuard, error)
 
 	// VaultCredentials and KVDeployMaterial serve Key Vault deployments (R40 row 18, kv.go): the
 	// vault's sign-in, and the check of the deployment's version secret that yields the first send's

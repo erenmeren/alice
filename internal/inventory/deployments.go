@@ -236,6 +236,11 @@ type Deployment struct {
 	KVVersion string     // the vault version (32 hex) or ""
 	VaultName string     // the vault's name or ""
 	Source    string     // "key_vault" when BindingID is set, "acme" for a certificate ordered from a CA, else "upload"
+
+	// R48: the certificate the replaced file held (the backup a rollback would put back), recorded with the send
+	// values; "" before the first send and when Alice did not know the file's certificate.
+	RollbackLeafSHA256 string
+	RollbackSPKISHA256 string
 }
 
 // DeploymentFilter selects deployments, newest first.
@@ -611,7 +616,8 @@ d.location_id, d.target_id, t.name::text, d.cert_path, d.key_path, d.job_id, d.t
 d.state, d.status, d.new_fingerprint, d.previous_fingerprint, d.confirm_incomplete_chain, d.rollback_info, d.verified, d.error_code,
 d.error_params, d.failed_step, d.created_at, d.started_at, d.finished_at, d.result, d.phase, d.cause_step, d.helper_error,
 d.verify_failed_reason, d.verify_failed_port, d.operation_id, d.new_chain_length, d.previous_chain_length, d.expect_cert_sha256,
-d.recover_after, d.recovery_attempts, coalesce(j.status, ''), d.binding_id, coalesce(v.version, ''), coalesce(vt.name::text, ''), c.source
+d.recover_after, d.recovery_attempts, coalesce(j.status, ''), d.binding_id, coalesce(v.version, ''), coalesce(vt.name::text, ''), c.source,
+d.rollback_leaf_sha256, d.rollback_spki_sha256
 FROM deployments d
 JOIN certificates c ON c.id = d.certificate_id
 JOIN targets t ON t.id = d.target_id
@@ -631,7 +637,8 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 		&d.JobID, &d.Trigger, &d.RequestedBy, &d.RequestedByName, &d.State, &d.Status, &d.NewFingerprint, &d.PreviousFingerprint,
 		&d.ConfirmIncompleteChain, &backup, &d.Verified, &d.ErrorCode, &params, &d.FailedStep, &d.CreatedAt, &d.StartedAt, &d.FinishedAt,
 		&d.Result, &d.Phase, &d.CauseStep, &d.HelperError, &d.VerifyFailedReason, &d.VerifyFailedPort, &d.OperationID, &d.NewChainLength,
-		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus, &d.BindingID, &d.KVVersion, &d.VaultName, &certSource)
+		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus, &d.BindingID, &d.KVVersion, &d.VaultName, &certSource,
+		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}

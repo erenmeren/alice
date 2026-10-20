@@ -111,15 +111,22 @@ func (h *handlers) recoverJob(ctx context.Context, j jobs.Job, steps jobs.StepRe
 //	restore_failed                                                 rollback (this IS the one more             as the rollback
 //	                                                               nginx-restore after the helper's
 //	                                                               restore_failed), same cause
+//	restore_forbidden (the helper's guard refused a restore, R48)  rollback (the helper answers it as          as the rollback
+//	                                                               recorded: rollback_failed
+//	                                                               deployment.rollback_forbidden)
 //
-// rollback = RollbackDeployment(RollbackRequest: the recorded previous fingerprint and chain length),
-// mapped by inventory.RollbackOutcomeRecord with the cause, once more when it answers restore_failed
-// and this recovery has not sent its one extra restore yet:
+// rollback = RollbackDeployment(RollbackRequest: the recorded previous fingerprint and chain length,
+// and the rollback guard read right before it, R48: an unreadable guard is unresolved
+// internal.unexpected and nothing is sent), mapped by inventory.RollbackOutcomeRecord with the
+// cause, once more when it answers restore_failed and this recovery has not sent its one extra
+// restore yet:
 //
 //	rolled_back (files back; the previous certificate verified or not checkable)   rolled_back (error_code = cause)
 //	rollback_failed, phase restored (verify_old: files back, another certificate   rollback_failed (restored_unverified email)
 //	  served)
 //	rollback_failed, phase restore_failed (again) / "" (file_changed)              rollback_failed (rollback_failed email)
+//	rollback_failed deployment.rollback_forbidden (the guard refused: the backup   rollback_failed (rollback-forbidden email:
+//	  holds a revoked or compromised certificate or key; nothing restored)         the website may stay broken)
 //	no_change deployment.superseded (a later operation owns the files; final)      rollback_failed (superseded email)
 //	no_change "nothing to restore" (prepared / unchanged): contradicts the         uncertain deployment.interrupted
 //	  journal this recovery read (it is never sent for those phases)
@@ -282,8 +289,13 @@ func (h *handlers) rollback(ctx context.Context, sess providers.Session, d inven
 			}
 			return unresolved(m, jobs.Retry(reasonUnexpected, nil, cerr))
 		}
+		// R48: the guard as it stands now (a compromise marked since the deployment started applies).
+		guard, gerr := h.d.Inventory.RollbackGuard(ctx, d.ID)
+		if gerr != nil {
+			return unresolved(m, jobs.Retry(reasonUnexpected, nil, gerr))
+		}
 		var out providers.RollbackOutcome
-		out, err = sess.RollbackDeployment(ctx, mat.RollbackRequest(), rec)
+		out, err = sess.RollbackDeployment(ctx, mat.RollbackRequest(guard), rec)
 		r = rollbackRecord(out, err, c.reason)
 		if !r.RetryRollback || retries == 0 {
 			break

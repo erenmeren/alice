@@ -6327,7 +6327,7 @@ components:
         certificate_id: { type: string, format: uuid }
     IncidentLocation:
       type: object
-      required: [location_id, target_id, target_name, cert_path, status, deployment_id, error, attempts, updated_at]
+      required: [location_id, target_id, target_name, cert_path, status, deployment_id, error, attempts, updated_at, outcome_uncertain]
       properties:
         location_id: { type: string, format: uuid }
         target_id: { type: string, format: uuid }
@@ -6338,6 +6338,12 @@ components:
         error: { $ref: "#/components/schemas/ErrorRef" }
         attempts: { type: integer }
         updated_at: { type: string, format: date-time }
+        outcome_uncertain:
+          type: boolean
+          description: >-
+            The replacement was sent but Alice has not confirmed how it ended (the server cannot be reached, or its answer was
+            lost); error says why when the deployment knows. Such a place is never counted as replaced (R48): it stays
+            deploying until the deployment's recovery confirms it or gives up (failed).
     Incident:
       type: object
       required: [id, certificate_id, certificate_name, fingerprint, source, public_key_sha256, acme_certificate_id, state, revoke_mode,
@@ -7317,7 +7323,7 @@ components:
         state: { type: string, enum: [queued, precheck, deploying, recovering, done] }
         status: { type: string, enum: [pending, running, succeeded, unchanged, failed, rolled_back, rollback_failed, needs_attention] }
         result: { type: string, enum: ["", committed, unchanged, no_change, rolled_back, rollback_failed, uncertain] }
-        phase: { type: string, enum: ["", none, prepared, writing, committed, unchanged, restoring, restored, restore_failed] }
+        phase: { type: string, enum: ["", none, prepared, writing, committed, unchanged, restoring, restored, restore_failed, restore_forbidden] }
         new_fingerprint: { type: string }
         previous_fingerprint: { type: string }
         confirm_incomplete_chain: { type: boolean }

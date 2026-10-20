@@ -72,6 +72,10 @@ type SendValues struct {
 	NewChainLength      int
 	PreviousFingerprint string // "" when unknown (verification skipped)
 	PreviousChainLength int    // 0 = not compared
+	// R48: the certificate the file holds now, which a rollback would put back (its leaf fingerprint and public key
+	// hash; "" when Alice does not know the file's certificate).
+	RollbackLeafSHA256 string
+	RollbackSPKISHA256 string
 }
 
 // Material is what a deploy or recovery job needs to build its provider requests. The send values
@@ -103,6 +107,11 @@ type Material struct {
 	// Task 12 additions.
 	KV       *KVSource // set for a Key Vault deployment (nil: an uploaded or discovered certificate)
 	Warnings []string  // closed warnings of the material step ("chain_incomplete")
+	// R48 additions: the certificate a rollback would put back (recorded once Recorded; before, the location's
+	// current one) and the rollback guard as read with this material (RollbackGuard).
+	RollbackLeafSHA256 string
+	RollbackSPKISHA256 string
+	Guard              providers.RollbackGuard
 }
 
 // PrecheckRequest verifies what the website serves now, before any change: the location's current
@@ -116,15 +125,16 @@ func (m Material) PrecheckRequest() providers.VerifyRequest {
 // served (its fingerprint and chain length).
 func (m Material) SendValues(previousFingerprint string, previousChainLength int) SendValues {
 	return SendValues{OperationID: m.Deployment.ID, ExpectCertSHA256: m.ExpectCertSHA256, NewChainLength: m.NewChainLength,
-		PreviousFingerprint: previousFingerprint, PreviousChainLength: previousChainLength}
+		PreviousFingerprint: previousFingerprint, PreviousChainLength: previousChainLength, RollbackLeafSHA256: m.RollbackLeafSHA256,
+		RollbackSPKISHA256: m.RollbackSPKISHA256}
 }
 
-// DeployRequest is the first send of v (after StartDeployment recorded it). It shares
-// PrivateKeyPEM's holder: zeroing either zeroes both.
+// DeployRequest is the first send of v (after StartDeployment recorded it), with the rollback guard as read with the
+// material (the engine sets RecheckGuard). It shares PrivateKeyPEM's holder: zeroing either zeroes both.
 func (m Material) DeployRequest(v SendValues) providers.DeployRequest {
 	return providers.DeployRequest{OperationID: v.OperationID, Location: m.Location, ExpectCertSHA256: v.ExpectCertSHA256,
 		CertificatePEM: m.CertificatePEM, PrivateKeyPEM: m.PrivateKeyPEM, Fingerprint: m.Fingerprint, SANs: m.SANs, KeyType: m.KeyType,
-		OldFingerprint: v.PreviousFingerprint, OldSANs: m.OldSANs, Verify: m.Verify, ChainLength: v.NewChainLength}
+		OldFingerprint: v.PreviousFingerprint, OldSANs: m.OldSANs, Verify: m.Verify, ChainLength: v.NewChainLength, Guard: m.Guard}
 }
 
 // VerifyRequest checks the new certificate with the recorded fingerprint and chain length (a
@@ -134,14 +144,15 @@ func (m Material) VerifyRequest() providers.VerifyRequest {
 		PreviousFingerprint: m.PreviousFingerprint, SANs: m.SANs, KeyType: m.KeyType, Verify: m.Verify}
 }
 
-// RollbackRequest restores the recorded operation and checks the recorded previous certificate.
-func (m Material) RollbackRequest() providers.RollbackRequest {
+// RollbackRequest restores the recorded operation and checks the recorded previous certificate; g is the rollback
+// guard as read right before this rollback (RollbackGuard), never an older one.
+func (m Material) RollbackRequest(g providers.RollbackGuard) providers.RollbackRequest {
 	op := m.Deployment.ID
 	if m.Deployment.OperationID != nil {
 		op = *m.Deployment.OperationID
 	}
 	return providers.RollbackRequest{OperationID: op, Location: m.Location, OldFingerprint: m.PreviousFingerprint,
-		OldChainLength: m.PreviousChainLength, OldSANs: m.OldSANs, KeyType: m.oldKeyType(), Verify: m.Verify}
+		OldChainLength: m.PreviousChainLength, OldSANs: m.OldSANs, KeyType: m.oldKeyType(), Verify: m.Verify, Guard: g}
 }
 
 func (m Material) oldKeyType() string {
@@ -200,12 +211,13 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
 		publicKey, pemChain, oldType string
 		facts                        []byte
 		revoked, compromised         bool
+		oldKey                       string
 	)
 	err = s.pool.QueryRow(ctx, `SELECT l.servers, l.supported AND l.missing_since IS NULL, l.resolved_cert_path, l.inherited, l.symlinked,
     l.custom_location, l.key_exists, l.key_mode, l.key_owner, l.key_group, l.cert_file_sha256, l.verify_port, coalesce(l.verify_sni, ''),
     l.skip_verify, coalesce(oc.fingerprint_sha256, ''), coalesce(oc.sans, '{}'), l.key_type,
     c.pem_chain, c.fingerprint_sha256, c.sans, c.not_before, c.not_after, c.key_algorithm, c.private_key_id, c.public_key_sha256, t.facts,
-    c.revoked_at IS NOT NULL, c.compromised_at IS NOT NULL
+    c.revoked_at IS NOT NULL, c.compromised_at IS NOT NULL, coalesce(oc.public_key_sha256, '')
 FROM certificate_locations l
 JOIN certificates c ON c.id = $2
 JOIN targets t ON t.id = l.target_id
@@ -213,7 +225,7 @@ LEFT JOIN certificates oc ON oc.id = l.certificate_id
 WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supported, &m.Location.ResolvedCertPath, &m.Location.Inherited,
 		&m.Location.Symlinked, &m.Location.CustomLocation, &m.Location.KeyExists, &m.Location.KeyMode, &m.Location.KeyOwner,
 		&m.Location.KeyGroup, &fileSHA, &verifyPort, &m.Verify.SNI, &m.Verify.Skip, &m.CurrentFingerprint, &m.OldSANs, &currentType,
-		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts, &revoked, &compromised)
+		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts, &revoked, &compromised, &oldKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Material{}, ErrNotFound
 	}
@@ -245,6 +257,7 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	if m.Recorded {
 		m.ExpectCertSHA256, m.NewChainLength = d.ExpectCertSHA256, d.NewChainLength
 		m.PreviousFingerprint, m.PreviousChainLength = d.PreviousFingerprint, d.PreviousChainLength
+		m.RollbackLeafSHA256, m.RollbackSPKISHA256 = d.RollbackLeafSHA256, d.RollbackSPKISHA256
 		// The location may hold the new certificate by now: the previous one is the recorded leaf.
 		m.OldSANs, oldType = []string{}, ""
 		if d.PreviousFingerprint != "" {
@@ -256,6 +269,11 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		}
 	} else {
 		m.ExpectCertSHA256, m.NewChainLength = fileSHA, chainLength(m.CertificatePEM)
+		m.RollbackLeafSHA256, m.RollbackSPKISHA256 = m.CurrentFingerprint, oldKey
+	}
+	// R48: the guard as it stands now (at plan time for a first send, at recovery time for a recovery).
+	if m.Guard, err = rollbackGuard(ctx, s.pool, d.LocationID, m.RollbackLeafSHA256, m.RollbackSPKISHA256, s.clock.Now().UTC()); err != nil {
+		return Material{}, err
 	}
 	if oldType == "rsa" || oldType == "ecdsa" {
 		m.OldKeyType = oldType
@@ -486,19 +504,28 @@ func (s *Service) startDeployment(ctx context.Context, id uuid.UUID, v SendValue
 			return errors.New("inventory: the previous fingerprint is not a SHA-256")
 		case v.PreviousChainLength < 0:
 			return errors.New("inventory: a negative chain length")
+		case (v.RollbackLeafSHA256 != "" && !hex64RE.MatchString(v.RollbackLeafSHA256)) || (v.RollbackSPKISHA256 != "" && !hex64RE.MatchString(v.RollbackSPKISHA256)):
+			return errors.New("inventory: the rollback target is not a SHA-256")
+		}
+		// R48, at plan time: the audit row says whether a rollback could put the file's certificate back.
+		guard, err := rollbackGuard(ctx, tx, d.location, v.RollbackLeafSHA256, v.RollbackSPKISHA256, s.clock.Now().UTC())
+		if err != nil {
+			return err
 		}
 		backup, err := json.Marshal(providers.BackupRef{OperationID: id, Dir: BackupRoot + "/" + id.String()})
 		if err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `UPDATE deployments SET state = $2, operation_id = $3, expect_cert_sha256 = $4, new_chain_length = $5,
-    previous_fingerprint = $6, previous_chain_length = $7, rollback_info = $8, started_at = $9
+    previous_fingerprint = $6, previous_chain_length = $7, rollback_info = $8, started_at = $9, rollback_leaf_sha256 = $10,
+    rollback_spki_sha256 = $11
 WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.NewChainLength, v.PreviousFingerprint,
-			v.PreviousChainLength, backup, s.clock.Now().UTC()); err != nil {
+			v.PreviousChainLength, backup, s.clock.Now().UTC(), v.RollbackLeafSHA256, v.RollbackSPKISHA256); err != nil {
 			return fmt.Errorf("inventory: record the send: %w", err)
 		}
 		return s.appendAudit(ctx, tx, "deployment.started", audit.Success, id, map[string]string{"operation_id": id.String(),
-			"previous_fingerprint": v.PreviousFingerprint, "new_fingerprint": d.newFingerprint})
+			"previous_fingerprint": v.PreviousFingerprint, "new_fingerprint": d.newFingerprint,
+			"rollback": rollbackVerdict(guard, v.RollbackLeafSHA256)})
 	})
 }
 
@@ -509,6 +536,8 @@ var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "opera
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
 	"helper_code", "subcommand", "operation_id",
+	// R48: ssh.helper_outdated_rollback_guard names the server's helper protocol and the one the guard needs.
+	"helper_protocol", "required_protocol",
 	// The Key Vault provider's closed params (Phase 5): the role a forbidden secret read lacks (F-41),
 	// the permission model, Azure's strict-shape code and request id, a refused client address, and
 	// "reason" (tenant_mismatch).
@@ -626,8 +655,9 @@ type DeploymentFinish struct {
 }
 
 var (
-	results  = []string{"", "committed", "unchanged", "no_change", "rolled_back", "rollback_failed", "uncertain"}
-	phases   = []string{"", providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted, providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed}
+	results = []string{"", "committed", "unchanged", "no_change", "rolled_back", "rollback_failed", "uncertain"}
+	phases  = []string{"", providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted, providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed,
+		providers.PhaseRestoreForbidden}
 	verifies = []string{"", "remote", "local", "skipped"}
 )
 
@@ -807,6 +837,9 @@ func rollbackFailedTemplate(code, phase string) string {
 		return TemplateDeploymentSuperseded
 	case phase == providers.PhaseRestored:
 		return TemplateDeploymentRestoredUnverified
+	case code == providers.ReasonRollbackForbidden:
+		// R48: never the rollback-failed email, whose advice (restore the backup) would put the compromised key back.
+		return TemplateDeploymentRollbackForbidden
 	}
 	return TemplateDeploymentRollbackFailed
 }

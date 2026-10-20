@@ -222,6 +222,8 @@ type incidentLocationDTO struct {
 	Error        *errorRefDTO `json:"error"`
 	Attempts     int          `json:"attempts"`
 	UpdatedAt    time.Time    `json:"updated_at"`
+	// OutcomeUncertain: sent, not confirmed (R48); error is then why, when the deployment knows.
+	OutcomeUncertain bool `json:"outcome_uncertain"`
 }
 
 type incidentDTO struct {
@@ -271,9 +273,12 @@ func incidentJSON(i inventory.Incident, withLocations bool) incidentDTO {
 		list := make([]incidentLocationDTO, 0, len(i.Locations))
 		for _, l := range i.Locations {
 			x := incidentLocationDTO{LocationID: l.LocationID.String(), TargetID: l.TargetID.String(), TargetName: l.TargetName, CertPath: l.CertPath,
-				Status: l.Status, DeploymentID: idPtr(l.DeploymentID), Attempts: l.Attempts, UpdatedAt: l.UpdatedAt.UTC()}
-			if l.ErrorCode != "" {
+				Status: l.Status, DeploymentID: idPtr(l.DeploymentID), Attempts: l.Attempts, UpdatedAt: l.UpdatedAt.UTC(), OutcomeUncertain: l.OutcomeUncertain}
+			switch {
+			case l.ErrorCode != "":
 				x.Error = errorRef(l.ErrorCode, nil)
+			case l.OutcomeUncertain && l.UncertainCode != "":
+				x.Error = errorRef(l.UncertainCode, nil)
 			}
 			list = append(list, x)
 		}

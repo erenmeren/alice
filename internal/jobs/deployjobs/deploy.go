@@ -80,8 +80,11 @@ import (
 //	   no_change phase unchanged, verify failed (this call wrote nothing)    failed, verify_failed_reason     Fail reason
 //	   rolled_back (helper's own rollback, or inline after a failed verify)  rolled_back                      Fail reason
 //	   rollback_failed, phase restored (verify_old) or "" (file_changed)     rollback_failed                  Attention reason
+//	   rollback_failed, phase restore_forbidden (the guard refused, R48)     rollback_failed                  Attention reason
+//	                                                                         deployment.rollback_forbidden
 //	   rollback_failed, phase restore_failed (rec.RetryRollback)             RollbackDeployment(Rollback-     by that record (as recovery's
-//	                                                                         Request) ONCE more; record       rollback rows)
+//	                                                                         Request with the guard read      rollback rows)
+//	                                                                         again) ONCE more; record
 //	                                                                         RollbackOutcomeRecord of it
 //	   uncertain (transport, timeout, kill, 137, malformed; ctx ended after  uncertain with the reason; the   Attention deployment.interrupted
 //	     the command was sent; verify failed and the inline rollback could   verify failure kept
@@ -298,12 +301,23 @@ func (h *handlers) first(ctx context.Context, j jobs.Job, d inventory.Deployment
 	sendCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	rec.lost = stop
-	out, derr := sess.DeployCertificate(sendCtx, m.DeployRequest(v), rec)
+	out, derr := sess.DeployCertificate(sendCtx, h.deployRequest(m, v), rec)
 	if op, ok := pendingOperation(out, derr); ok {
 		out, derr = h.recoverPending(sendCtx, m, v, sess, rec, op, out, derr)
 	}
 	m.PrivateKeyPEM.Zero()
 	return h.afterSend(ctx, d, m, sess, rec, out, derr)
+}
+
+// deployRequest is m.DeployRequest(v) with the guard read again before the provider's own rollback
+// (R48): a certificate marked compromised while the deployment runs is never put back.
+func (h *handlers) deployRequest(m inventory.Material, v inventory.SendValues) providers.DeployRequest {
+	req := m.DeployRequest(v)
+	id := m.Deployment.ID
+	req.RecheckGuard = func(ctx context.Context) (providers.RollbackGuard, error) {
+		return h.d.Inventory.RollbackGuard(ctx, id)
+	}
+	return req
 }
 
 // runtimeRefusal is the reason the record alone refuses a send now ("" when it does not): the
@@ -349,10 +363,12 @@ func pendingOperation(out providers.DeployOutcome, err error) (uuid.UUID, bool) 
 //	a deployment of another server or location,   no restore; failed deployment.server_operation_pending
 //	  or finished succeeded / unchanged /           {operation_id} (an honest helper never names those)
 //	  rolled_back / failed
-//	unknown to Alice, or a finished               step recover_pending started {operation_id}; CheckClaim
-//	  rollback_failed deployment of this          (lost or failing: the refusal as it is, no restore sent);
-//	  server and location (it may have left       RollbackDeployment(op) once (verify_old skipped):
-//	  an unfinished change)
+//	unknown to Alice, or a finished               the rollback guard (R48: the owner's, else this
+//	  rollback_failed deployment of this          deployment's lists with an unknown target; unreadable:
+//	  server and location (it may have left       the refusal as it is);
+//	  an unfinished change)                       step recover_pending started {operation_id}; CheckClaim
+//	                                              (lost or failing: the refusal as it is, no restore sent);
+//	                                              RollbackDeployment(op) once (verify_old skipped):
 //	    files put back (rolled_back, or           step recover_pending ok; CheckClaim; the same operation
 //	      rollback_failed phase restored)         id sent once more: success or the deployment's own
 //	                                              rollback as usual; ANY refusal, or no send because the
@@ -362,7 +378,9 @@ func pendingOperation(out providers.DeployOutcome, err error) (uuid.UUID, bool) 
 //	      unchanged, superseded, unknown, or      its answer is the outcome (a refusal is truthful then);
 //	      HASH_MISMATCH: someone else's file)     a second RECOVERY_PENDING: server_operation_pending
 //	    anything else (restore_failed, IO_ERROR,  step recover_pending failed; failed
-//	      BUSY, sudo, uncertain)                  deployment.server_operation_pending {operation_id}
+//	      BUSY, sudo, uncertain, the guard's      deployment.server_operation_pending {operation_id}
+//	      refusal: restore_forbidden or a
+//	      helper that cannot check it)
 //
 // op's own deployment record is never touched: the restore and its steps are recorded under this
 // deployment only. A crash after the restore and before the second send leaves this deployment
@@ -382,11 +400,15 @@ func (h *handlers) recoverPending(ctx context.Context, m inventory.Material, v i
 		owner.Status != inventory.DeployStatusRollbackFailed) {
 		return serverOperationPending(out, params)
 	}
+	guard, err := h.pendingGuard(ctx, m, owner, known)
+	if err != nil {
+		return out, derr // no restore without the guard: the refusal is what happened
+	}
 	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
 		return out, derr // no restore is sent: the refusal is what happened
 	}
 	rec.Step(stepRecoverPending, providers.StepStarted, params)
-	req := m.RollbackRequest()
+	req := m.RollbackRequest(guard)
 	req.OperationID, req.OldFingerprint, req.OldChainLength, req.OldSANs = op, "", 0, nil
 	rb, rerr := sess.RollbackDeployment(ctx, req, rec)
 	if providers.CheckRollbackReturn(rb, rerr) != nil {
@@ -412,7 +434,7 @@ func (h *handlers) recoverPending(ctx context.Context, m inventory.Material, v i
 		}
 		return out, derr
 	}
-	again, aerr := sess.DeployCertificate(ctx, m.DeployRequest(v), rec)
+	again, aerr := sess.DeployCertificate(ctx, h.deployRequest(m, v), rec)
 	if putBack && again.Result == providers.DeployNoChange && providers.CheckDeployReturn(again, aerr) == nil {
 		// The website went back to the files from before op, and this certificate was not written.
 		return pendingRestoredOutcome(params)
@@ -421,6 +443,22 @@ func (h *handlers) recoverPending(ctx context.Context, m inventory.Material, v i
 		return serverOperationPending(out, params)
 	}
 	return again, aerr
+}
+
+// pendingGuard is the rollback guard of the earlier operation recoverPending restores (R48): its own
+// deployment's (a finished rollback_failed one of this location) when Alice knows it; else nothing is
+// known about its backup: this deployment's lists with an unknown target (a helper that cannot check
+// them restores nothing as soon as they forbid anything).
+func (h *handlers) pendingGuard(ctx context.Context, m inventory.Material, owner inventory.OperationOwner, known bool) (providers.RollbackGuard, error) {
+	if known {
+		return h.d.Inventory.RollbackGuard(ctx, owner.ID)
+	}
+	g, err := h.d.Inventory.RollbackGuard(ctx, m.Deployment.ID)
+	if err != nil {
+		return g, err
+	}
+	g.TargetForbidden, g.TargetUnknown = false, true
+	return g, nil
 }
 
 // serverOperationPending is the refusal deployment.server_operation_pending: op blocks the pair and
@@ -566,20 +604,21 @@ func (h *handlers) rollbackAgain(ctx context.Context, sess providers.Session, m 
 		cause = c.reason
 		first.Finish.VerifyFailedReason, first.Finish.VerifyFailedPort = c.reason, c.port
 	}
-	if err := h.d.Inventory.CheckClaim(ctx); err != nil {
+	guard, gerr := h.d.Inventory.RollbackGuard(ctx, m.Deployment.ID)
+	if err := h.d.Inventory.CheckClaim(ctx); err != nil || gerr != nil {
 		if errors.Is(err, inventory.ErrClaimLost) {
 			// A stale run restores nothing; its record write is refused the same way. The record of
 			// the first answer (restore_failed) is kept as the outcome to try to write.
 			return first
 		}
-		// B2 m3: the check itself failed: no restore is sent behind a claim that is not confirmed,
-		// and restore_failed is not recorded without the one more restore. Uncertain: the recovery
-		// reads the journal (restore_failed) and sends it.
+		// B2 m3: the check itself failed: no restore is sent behind a claim that is not confirmed
+		// (nor without the rollback guard, R48), and restore_failed is not recorded without the one
+		// more restore. Uncertain: the recovery reads the journal (restore_failed) and sends it.
 		r := uncertainRecord(reasonInterrupted)
 		r.Finish.VerifyFailedReason, r.Finish.VerifyFailedPort = first.Finish.VerifyFailedReason, first.Finish.VerifyFailedPort
 		return r
 	}
-	out, err := sess.RollbackDeployment(ctx, m.RollbackRequest(), rec)
+	out, err := sess.RollbackDeployment(ctx, m.RollbackRequest(guard), rec)
 	r := rollbackRecord(out, err, cause)
 	keepCause(&r, first.Finish)
 	return r
