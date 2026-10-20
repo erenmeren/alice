@@ -157,7 +157,7 @@ func TestWireNames(t *testing.T) {
 	b, err = json.Marshal(HostKeysResponse{OK: true, Keys: []HostKeyInfo{{Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:x", Path: "/k.pub"}}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"keys":[{"type":"ssh-ed25519","bits":256,"fingerprint":"SHA256:x","path":"/k.pub"}]}`, string(b))
-	assert.Equal(t, 10, Protocol)
+	assert.Equal(t, 11, Protocol)
 	assert.Equal(t, "/usr/local/libexec/alice-helper", HelperPath)
 	assert.Equal(t, 1<<20, MaxAuthorizedKeysSize)
 }
@@ -373,7 +373,7 @@ func TestProtocol6WireShapes(t *testing.T) {
 	assert.NotContains(t, s[strings.Index(s, `"/x"`):], "content_b64", "an empty content is omitted")
 	assert.Contains(t, s, `"truncated":true`)
 	assert.Equal(t, 6, MinProtocol, "protocol 6 stays the minimum for every existing operation (A1)")
-	assert.Equal(t, "1.9.0", Version)
+	assert.Equal(t, "1.10.0", Version)
 	assert.Equal(t, "name", UnlistedName)
 	assert.Equal(t, "home", UnlistedHome)
 	assert.Equal(t, "account_name_unsupported", WarnAccountNameUnsupported)
@@ -467,15 +467,15 @@ func TestServerDumpWireNamesAreUnchanged(t *testing.T) {
 	assert.Equal(t, 20<<20, MaxServerConfig)
 	assert.Equal(t, 1000, MaxServerFiles)
 	assert.Equal(t, 16<<20, ServerDumpOutput)
-	assert.Equal(t, 10, Protocol)
-	assert.Equal(t, "1.9.0", Version)
+	assert.Equal(t, 11, Protocol)
+	assert.Equal(t, "1.10.0", Version)
 }
 
 // Protocol 8 (Apache, Phase B): apache-dump and SOFTWARE_NOT_FOUND; a protocol 6 helper still serves
 // every other operation.
 func TestProtocol8(t *testing.T) {
-	assert.Equal(t, 10, Protocol)
-	assert.Equal(t, "1.9.0", Version)
+	assert.Equal(t, 11, Protocol)
+	assert.Equal(t, "1.10.0", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 8, ApacheMinProtocol)
 	assert.LessOrEqual(t, HTTP01MinProtocol, ApacheMinProtocol)
@@ -486,8 +486,8 @@ func TestProtocol8(t *testing.T) {
 
 // Protocol 9 (HAProxy, Phase C): haproxy-dump and config_dir_not_read; nothing else changed.
 func TestProtocol9(t *testing.T) {
-	assert.Equal(t, 10, Protocol)
-	assert.Equal(t, "1.9.0", Version)
+	assert.Equal(t, 11, Protocol)
+	assert.Equal(t, "1.10.0", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 8, ApacheMinProtocol)
 	assert.Equal(t, 9, HAProxyMinProtocol)
@@ -498,8 +498,8 @@ func TestProtocol9(t *testing.T) {
 // Protocol 10 (R48, rollback guard): the forbidden lists of nginx-deploy's input and nginx-restore's
 // stdin, and the restore_forbidden phase; nothing else changed.
 func TestProtocol10(t *testing.T) {
-	assert.Equal(t, 10, Protocol)
-	assert.Equal(t, "1.9.0", Version)
+	assert.Equal(t, 11, Protocol)
+	assert.Equal(t, "1.10.0", Version)
 	assert.Equal(t, 6, MinProtocol, "an older helper serves every other operation")
 	assert.Equal(t, 10, RollbackGuardMinProtocol)
 	assert.Equal(t, "restore_forbidden", PhaseRestoreForbidden)
@@ -515,6 +515,38 @@ func TestProtocol10(t *testing.T) {
 	b, err = json.Marshal(NginxRestoreInput{ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{h}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":["`+h+`"]}`, string(b))
+}
+
+// Protocol 11 (R51): tls-probe answers the presented chain; an answer without it (an older helper) is still read.
+func TestProtocol11(t *testing.T) {
+	assert.Equal(t, 11, Protocol)
+	assert.Equal(t, "1.10.0", Version)
+	assert.Equal(t, 6, MinProtocol, "an older helper serves every other operation")
+	b, err := json.Marshal(TLSProbeResponse{OK: true, LeafSHA256: "l", ChainLength: 1, NotAfter: "n"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"ok":true,"leaf_sha256":"l","chain_length":1,"not_after":"n"}`, string(b), "no chain: the answer of protocol 10")
+	b, err = json.Marshal(TLSProbeResponse{OK: true, Chain: ProbeChain([][]byte{{1, 2}, {3}})})
+	require.NoError(t, err)
+	assert.Contains(t, string(b), `"chain":["AQI=","Aw=="]`)
+
+	ders, ok := DecodeProbeChain([]string{"AQI=", "Aw=="})
+	assert.True(t, ok)
+	assert.Equal(t, [][]byte{{1, 2}, {3}}, ders)
+	for name, chain := range map[string][]string{"absent": nil, "not base64": {"!!"}, "an empty certificate": {""}} {
+		_, ok := DecodeProbeChain(chain)
+		assert.False(t, ok, name)
+	}
+	many := make([][]byte, MaxProbeChainCerts+1)
+	for i := range many {
+		many[i] = []byte{1}
+	}
+	assert.Nil(t, ProbeChain(many), "over MaxProbeChainCerts")
+	assert.Len(t, ProbeChain(many[:MaxProbeChainCerts]), MaxProbeChainCerts)
+	assert.Nil(t, ProbeChain([][]byte{make([]byte, MaxProbeChainBytes), {1}}), "over MaxProbeChainBytes")
+	assert.Len(t, ProbeChain([][]byte{make([]byte, MaxProbeChainBytes)}), 1)
+	_, ok = DecodeProbeChain(append(ProbeChain([][]byte{make([]byte, MaxProbeChainBytes)}), "AQ=="))
+	assert.False(t, ok, "over MaxProbeChainBytes")
+	assert.Nil(t, ProbeChain(nil))
 }
 
 func TestValidForbidden(t *testing.T) {

@@ -503,6 +503,8 @@ type DeployRequest struct {
 	// recovery decides.
 	Guard        RollbackGuard
 	RecheckGuard func(context.Context) (RollbackGuard, error) `json:"-"`
+	// Trust is the trust policy of the verification after the change (R51; nil: the served chains are not checked).
+	Trust *TrustPolicy `json:"-"`
 }
 
 func (r DeployRequest) redacted() string {
@@ -598,6 +600,9 @@ type DeployOutcome struct {
 	// Verified is "remote" | "local" | "skipped" | "".
 	Verified string
 	Backup   BackupRef
+	// Trust is what the verification of the new certificate found about the served chains (R51): kept for a success
+	// (a warning when untrusted and not enforced) and for a verification that failed on it (deployment.verify_untrusted).
+	Trust Trust
 }
 
 // BackupRef is persisted in deployments.rollback_info before the first change (spec §6.3 item 3).
@@ -647,7 +652,21 @@ type VerifyRequest struct {
 	SANs                []string
 	KeyType             string
 	Verify              VerifyOptions
+	// Trust (R51) checks every served chain against a trust store for the endpoint's name (nil: not checked, as for
+	// the pre-check, a query and the previous certificate after a rollback). A chain that does not verify fails the
+	// verification (deployment.verify_untrusted) when Trust.Enforce, and is a warning (Trust.Status untrusted at
+	// LevelServed) otherwise.
+	Trust *TrustPolicy
 }
+
+// Kinds of a failed verification (VerifyResult.Failure, R51): no endpoint completed a handshake on any attempt (nothing
+// is known about the certificate), an endpoint served another certificate or chain length, or the expected chain did
+// not verify against a known anchor.
+const (
+	VerifyFailureNetwork     = "network"
+	VerifyFailureCertificate = "certificate"
+	VerifyFailureTrust       = "trust"
+)
 
 // VerifyResult is the result of VerifyDeployment.
 type VerifyResult struct {
@@ -655,8 +674,15 @@ type VerifyResult struct {
 	Mode              string // "remote" | "local" | "skipped"
 	Served            string // the fingerprint served (first mismatching endpoint, or the first endpoint when Fingerprint == "")
 	ServedChainLength int    // certificates the endpoint served (the helper's chain_length); 0 when nothing was probed
-	Reason            string // "deployment.verify_failed" | "deployment.verify_other" | "deployment.verify_unreachable"
-	Params            map[string]string
+	// Reason: "deployment.verify_failed" | "deployment.verify_other" | "deployment.verify_chain" |
+	// "deployment.verify_unreachable" | "deployment.verify_untrusted" (param trust_error, R51)
+	Reason string
+	Params map[string]string
+	// R51 additions: the level a passed verification proved (Level*; LevelNone when it failed or for a query), the
+	// trust found (Trust.Status "" when no policy was given), and the kind of a failure (VerifyFailure*; "" when OK).
+	Level   int
+	Trust   Trust
+	Failure string
 }
 
 // Deployment phases of DeploymentState (the nginx provider reports the helper journal's phases,

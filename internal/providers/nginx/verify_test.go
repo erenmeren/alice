@@ -163,11 +163,12 @@ func TestVerifyReportsWhatIsServed(t *testing.T) {
 
 	vr, err = s.VerifyDeployment(context.Background(), providers.VerifyRequest{Location: e.location(t), Fingerprint: cur, Verify: providers.VerifyOptions{Skip: true}})
 	require.NoError(t, err)
-	assert.Equal(t, providers.VerifyResult{OK: true, Mode: "skipped"}, vr)
+	assert.Equal(t, providers.VerifyResult{OK: true, Mode: "skipped", Level: providers.LevelInstalled}, vr)
 
 	vr, err = s.VerifyDeployment(context.Background(), providers.VerifyRequest{Verify: providers.VerifyOptions{Port: 8443}})
 	require.NoError(t, err)
-	assert.Equal(t, providers.VerifyResult{Reason: "deployment.verify_unreachable", Params: map[string]string{"port": "8443"}}, vr, "nothing to probe")
+	assert.Equal(t, providers.VerifyResult{Reason: "deployment.verify_unreachable", Params: map[string]string{"port": "8443"}, Failure: providers.VerifyFailureNetwork}, vr,
+		"nothing to probe")
 }
 
 // An endpoint whose leaf is not the expected one yet is probed again (a graceful reload's old

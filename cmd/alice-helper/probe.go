@@ -15,7 +15,8 @@ import (
 var probeTimeout = 15 * time.Second
 
 // cmdTLSProbe connects to a TLS endpoint on the server itself and reports the served leaf
-// (spec §12.8 item 6, R38 item 6). It runs without sudo; it sends no application data and reads
+// (spec §12.8 item 6, R38 item 6) and, from protocol 11, the chain presented (R51: Alice checks its
+// trust; the helper judges nothing). It runs without sudo; it sends no application data and reads
 // nothing but the handshake. The vector is fixed: exactly these four flags in this order.
 func cmdTLSProbe(ctx context.Context, s *sys, args []string) (any, error) {
 	if len(args) != 8 || args[0] != "--addr" || args[2] != "--port" || args[4] != "--sni" || args[6] != "--key-type" {
@@ -45,6 +46,10 @@ func cmdTLSProbe(ctx context.Context, s *sys, args []string) (any, error) {
 		return nil, failed(helperproto.CodeProbeFailed, "the server sent no certificate")
 	}
 	leaf := cs.PeerCertificates[0]
+	ders := make([][]byte, 0, len(cs.PeerCertificates))
+	for _, c := range cs.PeerCertificates {
+		ders = append(ders, c.Raw)
+	}
 	return helperproto.TLSProbeResponse{OK: true, LeafSHA256: hexSHA(leaf.Raw), ChainLength: len(cs.PeerCertificates),
-		NotAfter: leaf.NotAfter.UTC().Format(time.RFC3339)}, nil
+		NotAfter: leaf.NotAfter.UTC().Format(time.RFC3339), Chain: helperproto.ProbeChain(ders)}, nil
 }

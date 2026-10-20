@@ -37,6 +37,8 @@ const (
 	smallOutput    = 64 << 10
 	hostKeysOutput = 1 << 20
 	readOutput     = 2 << 20 // base64 of a 1 MiB file plus the JSON around it
+	// probeOutput: base64 of helperproto.MaxProbeChainBytes of presented chain plus the JSON around it (R51)
+	probeOutput = 128 << 10
 )
 
 // OSReleaseCommand is the only command Alice runs that is not alice-helper (spec §6.6).
@@ -242,7 +244,7 @@ func CmdTLSProbe(addr string, port int, sni, keyType string) (HelperCommand, err
 		return HelperCommand{}, err
 	}
 	return HelperCommand{sub: helperproto.SubTLSProbe, tokens: []string{"--addr", t[0], "--port", t[1], "--sni", t[2], "--key-type", t[3]},
-		timeout: DefaultCommandTimeout, maxOutput: smallOutput}, nil
+		timeout: DefaultCommandTimeout, maxOutput: probeOutput}, nil
 }
 
 // quoteToken quotes an HTTP-01 token (helperproto.ValidACMEToken: 22 to 128 characters of

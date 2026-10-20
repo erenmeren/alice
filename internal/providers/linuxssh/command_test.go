@@ -327,3 +327,13 @@ func TestAWrappedCommandNeverPrintsItsStdin(t *testing.T) {
 	cp.WipeInput()
 	assert.Equal(t, make([]byte, len(secret)), c.input())
 }
+
+// R51: a tls-probe answer with the largest chain the helper sends fits what Alice reads of it.
+func TestTLSProbeOutputHoldsTheChain(t *testing.T) {
+	c, err := CmdTLSProbe("127.0.0.1", 443, "www.example.test", helperproto.ProbeAny)
+	require.NoError(t, err)
+	b, err := json.Marshal(helperproto.TLSProbeResponse{OK: true, LeafSHA256: strings.Repeat("a", 64), ChainLength: 1,
+		NotAfter: "2026-10-20T00:00:00Z", Chain: helperproto.ProbeChain([][]byte{make([]byte, helperproto.MaxProbeChainBytes)})})
+	require.NoError(t, err)
+	assert.Less(t, int64(len(b)), c.maxOutput)
+}

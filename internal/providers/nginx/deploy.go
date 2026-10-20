@@ -375,9 +375,14 @@ func backupDir(op uuid.UUID) string { return helperproto.BackupRoot + "/" + op.S
 // verification after a deployment is never vacuous. A request whose Fingerprint names another leaf
 // is refused (internal.unexpected) before anything is sent.
 //
+// With req.Trust (R51) the verification also checks the trust of every served chain: a chain that
+// does not verify against a known anchor is a failed verification (deployment.verify_untrusted,
+// params port and trust_error) and is rolled back like the others; otherwise it is a warning. The
+// outcome's Trust is what the verification found (also for a failed one).
+//
 // An uncertain outcome with a Reason, and Params["failed_step"] = "verify", means the new
 // certificate's verification had failed (Reason: deployment.verify_failed, verify_other,
-// verify_chain or verify_unreachable, Params["port"]; or deployment.interrupted when the call's
+// verify_chain, verify_untrusted or verify_unreachable, Params["port"]; or deployment.interrupted when the call's
 // context ended during it) before the rollback could be done or confirmed. The journal may then read
 // committed. A deploy engine must store that reason, and must never treat a journal reading
 // committed as success without verifying again (VerifyDeployment with the same fingerprint and chain
@@ -588,7 +593,7 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 	}
 	step(d.log, providers.StepNameVerify, providers.StepStarted, nil)
 	vr, verr := d.s.VerifyDeployment(ctx, providers.VerifyRequest{Location: req.Location, Fingerprint: d.fingerprint, ChainLength: chain,
-		PreviousFingerprint: req.OldFingerprint, SANs: req.SANs, KeyType: req.KeyType, Verify: req.Verify})
+		PreviousFingerprint: req.OldFingerprint, SANs: req.SANs, KeyType: req.KeyType, Verify: req.Verify, Trust: req.Trust})
 	if verr != nil && ctx.Err() != nil {
 		// The call's context ended during the verification: interrupted, not a failed check. The
 		// step status vocabulary has no "interrupted": the step is failed with param error =
@@ -613,9 +618,9 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		if vr.Mode == "skipped" {
 			status = providers.StepSkipped
 		}
-		step(d.log, providers.StepNameVerify, status, map[string]string{"mode": vr.Mode})
+		step(d.log, providers.StepNameVerify, status, verifyStepParams(vr))
 		d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: status})
-		d.out.Result, d.out.Phase, d.out.Verified = providers.DeployCommitted, providers.PhaseCommitted, vr.Mode
+		d.out.Result, d.out.Phase, d.out.Verified, d.out.Trust = providers.DeployCommitted, providers.PhaseCommitted, vr.Mode, vr.Trust
 		if phase == helperproto.PhaseUnchanged {
 			d.out.Result, d.out.Phase = providers.DeployUnchanged, providers.PhaseUnchanged
 		}
@@ -623,8 +628,9 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 	}
 	// The reason goes with the step: the step is recorded before the rollback is sent, so a deploy
 	// engine that dies during the rollback can still tell why it was rolled back.
-	step(d.log, providers.StepNameVerify, providers.StepFailed, map[string]string{"port": vr.Params["port"], "reason": vr.Reason})
+	step(d.log, providers.StepNameVerify, providers.StepFailed, verifyStepParams(vr))
 	d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: providers.StepFailed})
+	d.out.Trust = vr.Trust // a chain that did not verify (deployment.verify_untrusted) stays on the record
 	if phase == helperproto.PhaseUnchanged {
 		// This operation changed nothing (the files already were the new ones): nothing to roll back.
 		d.out.Result, d.out.Phase, d.out.FailedStep = providers.DeployNoChange, providers.PhaseUnchanged, providers.StepNameVerify
@@ -632,6 +638,27 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		return d.out, providers.NewError(vr.Reason, false, verr, maps.Clone(vr.Params))
 	}
 	return d.rollBack(ctx, vr)
+}
+
+// verifyStepParams are the params of the verify step: mode, and the trust status when measured (with
+// its reason when untrusted) for a passed verification; port and reason (and trust_error) for a
+// failed one.
+func verifyStepParams(vr providers.VerifyResult) map[string]string {
+	if !vr.OK {
+		p := map[string]string{"port": vr.Params["port"], "reason": vr.Reason}
+		if te := vr.Params["trust_error"]; te != "" {
+			p["trust_error"] = te
+		}
+		return p
+	}
+	p := map[string]string{"mode": vr.Mode}
+	if vr.Trust.Status != "" {
+		p["trust"] = vr.Trust.Status
+	}
+	if vr.Trust.Error != "" {
+		p["trust_error"] = vr.Trust.Error
+	}
+	return p
 }
 
 // unverifiable is the result of a verification that could not be made.
@@ -643,7 +670,7 @@ func unverifiable(loc providers.CertLocation, v providers.VerifyOptions, sans []
 	if port == 0 {
 		port = 443
 	}
-	return providers.VerifyResult{Reason: reasonVerifyUnreachable, Params: map[string]string{"port": strconv.Itoa(port)}}
+	return providers.VerifyResult{Reason: reasonVerifyUnreachable, Params: map[string]string{"port": strconv.Itoa(port)}, Failure: providers.VerifyFailureNetwork}
 }
 
 // rollBack restores the files of a committed operation whose verification failed (nginx-restore

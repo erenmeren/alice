@@ -22,9 +22,10 @@ const (
 )
 
 // TLSProber probes a TLS endpoint from Alice (spec §12.8, R38 item 6). It sends no application
-// data and trusts nothing: the client configuration is helperproto.ProbeTLSConfig (no certificate
-// verification, the only place Alice skips it), and only the served leaf's SHA-256 and the number
-// of certificates presented are used (spec §12.8 items 3 and 5). Zero timeouts mean 5 s to connect
+// data and trusts nothing during the handshake: the client configuration is
+// helperproto.ProbeTLSConfig (no certificate verification there), and the served leaf's SHA-256, the
+// number of certificates presented and the presented chain are reported (spec §12.8 items 3 and 5);
+// the chain's trust is checked afterwards, against the verification's trust policy (R51). Zero timeouts mean 5 s to connect
 // and 10 s for the handshake. The connection goes through netaddr.DialContext: the address host
 // resolves to is checked with the target rule on the socket that connects (AUD-25 a).
 type TLSProber struct {
@@ -75,5 +76,9 @@ func (p TLSProber) Probe(ctx context.Context, host string, port int, sni, keyTyp
 	}
 	leaf := cs.PeerCertificates[0]
 	sum := sha256.Sum256(leaf.Raw)
-	return Probe{LeafSHA256: hex.EncodeToString(sum[:]), ChainLength: len(cs.PeerCertificates), NotAfter: leaf.NotAfter.UTC()}, nil
+	chain := make([][]byte, 0, len(cs.PeerCertificates))
+	for _, c := range cs.PeerCertificates {
+		chain = append(chain, c.Raw)
+	}
+	return Probe{LeafSHA256: hex.EncodeToString(sum[:]), ChainLength: len(cs.PeerCertificates), NotAfter: leaf.NotAfter.UTC(), Chain: chain}, nil
 }

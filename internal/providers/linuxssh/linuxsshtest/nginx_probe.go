@@ -57,6 +57,7 @@ type served struct {
 	leafSHA  string
 	chain    int
 	notAfter string
+	ders     [][]byte // the certificates presented, leaf first (nil for ServeOther's, known only by its hash)
 }
 
 // otherNotAfter is the expiry reported for ServeOther's certificate, which the emulator knows
@@ -122,7 +123,7 @@ func (h *nginxHost) servedLocked(addr string, port int, sni, keyType string) (se
 				continue
 			}
 		}
-		return served{leafSHA: sum(leaf.Raw), chain: len(ders), notAfter: leaf.NotAfter.UTC().Format(time.RFC3339)}, true
+		return served{leafSHA: sum(leaf.Raw), chain: len(ders), notAfter: leaf.NotAfter.UTC().Format(time.RFC3339), ders: ders}, true
 	}
 	return served{}, false
 }
@@ -161,6 +162,10 @@ func selectServer(cands []listener, sni string) (listener, bool) {
 	return cands[0], true
 }
 
+// chainProtocol is the first helper protocol whose tls-probe answers the presented chain (R51): an
+// emulator set to an older protocol (SetProtocol) answers without it.
+const chainProtocol = 11
+
 // tlsProbe answers tls-probe (the helper's cmdTLSProbe), which runs without sudo.
 func (e *Emulator) tlsProbe(args []string) Response {
 	if len(args) != 8 || args[0] != "--addr" || args[2] != "--port" || args[4] != "--sni" || args[6] != "--key-type" {
@@ -182,5 +187,9 @@ func (e *Emulator) tlsProbe(args []string) Response {
 	if !ok {
 		return refuse(helperproto.ExitFailed, helperproto.CodeProbeFailed)
 	}
-	return answer(helperproto.TLSProbeResponse{OK: true, LeafSHA256: s.leafSHA, ChainLength: s.chain, NotAfter: s.notAfter})
+	r := helperproto.TLSProbeResponse{OK: true, LeafSHA256: s.leafSHA, ChainLength: s.chain, NotAfter: s.notAfter}
+	if e.protocol >= chainProtocol {
+		r.Chain = helperproto.ProbeChain(s.ders)
+	}
+	return answer(r)
 }
