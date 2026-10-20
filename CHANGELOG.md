@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased — Never retry before the certificate authority said we may
+
+**Fixed**
+- When a certificate authority limited the requests and asked Alice to wait longer than a day (`Retry-After`, for
+  example 48 hours), Alice ordered again after 24 hours. The authority's wait is now kept apart from Alice's own
+  backoff and honoured in full, up to 7 days (a longer answer counts as 7 days, so a faulty authority cannot stop
+  renewal for longer). No order of the certificate starts before that time: not by the renewal planner, not with
+  **Order now**, **Get certificate now** or **Test run** (`ALC-ACM-0005` with `Retry-After`, the authority is not
+  contacted), and **Check again and resume** switches renewal on again without ordering. The renewal information's
+  (ARI) `Retry-After` is honoured up to 7 days too. Migration `00022`.
+
+**Added**
+- The certificate page says "The certificate authority asked Alice to wait until …" and keeps **Order now** and
+  **Test run** unavailable meanwhile. When the wait leaves little time before the certificate ends, the notice is red
+  and the alert recipients get "The certificate authority asked Alice to wait before renewing the certificate for …"
+  at once (TR/EN), once per wait. API fields `ca_not_before` and `ca_wait_critical`; `next_attempt_at` is the later of
+  Alice's own backoff and the authority's wait. Rulings: `docs/superpowers/rulings/acme-ca-retry-after.md` (R47).
+
 ## Unreleased — Certificate revocation and key compromise incidents
 
 **Added**

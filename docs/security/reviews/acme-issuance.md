@@ -138,7 +138,8 @@ never count as failures; at most 10 lookups per planner run. Alice cannot send R
 
 Every `acme.issue` job has one attempt; retries are owned by the planner. The library's own retries are cut: the
 client's `RetryBackoff` answers 0 for 429, 5xx and unexpected statuses (only `badNonce` is retried, three times).
-Failure backoff 1, 2, 4, 8, 16, 24 hours; `Retry-After` and `rateLimited` push the next attempt (capped at 24 h);
+Failure backoff 1, 2, 4, 8, 16, 24 hours; a `Retry-After` of `rateLimited` is the CA's own time (`ca_not_before`, R47:
+honoured in full up to seven days, never shortened by the backoff cap or the clock-skew repair, no order before it);
 15 minutes between two issue orders of one certificate; at most 5 orders per planner run; while one certificate of a
 provider is rate-limited, the others of that provider wait (at most 24 h from the start of the series, never past the
 middle of their window); stop after 5 failures with an e-mail at 3. A licence lock or an interrupted job is neutral (no

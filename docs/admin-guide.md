@@ -1637,8 +1637,16 @@ now**); after that Alice plans every minute:
   an earlier time, Alice renews then; a later suggestion is ignored.
 - Each renewal gets a new private key, which Alice creates and stores encrypted; the certificate is added to
   **Certificates** ("Issued by ACME") and becomes the current one.
-- After a failure Alice waits 1, 2, 4, 8, 16 and then 24 hours, or as long as the authority asks (at most 24 hours),
-  and never orders the same certificate twice within 15 minutes. After a temporary outage the wait is shorter as the
+- After a failure Alice waits 1, 2, 4, 8, 16 and then 24 hours, and never orders the same certificate twice within 15
+  minutes. When the authority limits the requests and says how long to wait, Alice waits that long in full (up to 7
+  days; a longer answer counts as 7 days) and orders nothing for that certificate before then: neither by itself nor
+  with **Order now**, **Get certificate now** or **Test run**, which stay unavailable meanwhile (through the API they
+  answer `ALC-ACM-0005` with `Retry-After`). The page says "The certificate authority asked Alice to wait until …";
+  **Check again and resume** switches automatic renewal on again but orders only once that time has come. If the wait
+  leaves little time before the certificate ends (it ends past the middle of the renewal time), the notice turns red
+  and the alert recipients get "The certificate authority asked Alice to wait before renewing the certificate for …"
+  at once: Alice still waits, because ordering sooner only makes the wait longer. If the certificate cannot wait, get
+  one from another authority and upload it. After a temporary outage the wait is shorter as the
   certificate nears its end: at most 12 hours in its last 7 days, 6 hours in its last 3 days and 2 hours in its last
   day. While the authority limits the requests of one
   certificate, the other certificates of that authority wait too (at most 24 hours, and never past the middle of

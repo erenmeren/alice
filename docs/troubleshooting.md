@@ -355,6 +355,13 @@ below.
   chooses **Check again and resume** to switch automatic renewal on again and order at once. If **Kind of the last
   problem** says **Temporary (an outage)**, Alice is still trying again by itself (the page shows the next attempt);
   check that Alice can reach the authority and the DNS hook.
+- **"The certificate authority asked Alice to wait until …".** The authority limited the requests and said when it
+  accepts orders again. Alice waits that long in full (up to 7 days), and **Order now** and **Test run** stay
+  unavailable until then (`ALC-ACM-0005` through the API): ordering sooner only makes the wait longer. Find out which
+  limit was reached (the authority's documentation lists them) and avoid repeating it. A red notice means the wait
+  leaves little time before the certificate ends; the alert recipients got "The certificate authority asked Alice to
+  wait before renewing the certificate for …". If it cannot wait, get a certificate from another authority and upload
+  it.
 - **A certificate keeps failing with "Temporary (an outage)".** Alice tries at least once a day and more often in the
   certificate's last week, and reminds the alert recipients 14, 7, 3 and 1 days before it ends. Check the network
   path to the authority and the DNS hook (firewall, proxy, the hook's own service); **Last e-mail about it** on the
@@ -2887,9 +2894,9 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **Meaning.** The authority answered that a request limit was reached (too many orders, failed validations or certificates for the same names). Nothing was issued. (HTTP 503, reason `acme.ca_rate_limited`; retryable.)
 
-**Likely cause.** Too many tests or orders in a short time, or the same names were issued often.
+**Likely cause.** Too many tests or orders in a short time, or the same names were issued often. The same code answers an order or Test run requested while the wait the authority asked for is still running: Alice refuses it without contacting the authority, and `Retry-After` gives the seconds left. The authority's wait is honoured in full, up to 7 days.
 
-**What to do.** Wait until the limit passes, and use the authority's staging service for tests.
+**What to do.** Wait until the limit passes, and use the authority's staging service for tests. The certificate's page says "The certificate authority asked Alice to wait until …"; Alice orders nothing for it before then (automatic renewal resumes by itself after it). If that notice is red, little time is left before the certificate ends and the alert recipients were e-mailed: if the certificate cannot wait, get one from another authority and upload it.
 
 ## ALC-ACM-0006: The DNS proof failed
 

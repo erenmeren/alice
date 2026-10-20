@@ -838,7 +838,9 @@ earlier when the authority suggests it. **Next renewal** in the list is calculat
 and can differ from Alice's own plan by a few minutes.
 
 After a failed renewal Alice tries again after 1, 2, 4, 8 and 16 hours, then once a day, or later when the
-authority asks for a longer wait ("Renewal is failing … Alice tries again at <time>"). **Kind of the last problem**
+authority asks for a longer wait ("Renewal is failing … Alice tries again at <time>"). The authority's wait is
+honoured in full, up to 7 days: the page then says "The certificate authority asked Alice to wait until <time>", and
+**Order now** and **Test run** stay unavailable until that time (ordering sooner only makes the wait longer). **Kind of the last problem**
 says whether it was a temporary outage (Alice keeps trying by itself, more often as the certificate nears its end,
 until it is renewed) or a cause that needs a person. The alert recipients get an e-mail at the third failure in a
 row, and reminders 14, 7, 3 and 1 days before the certificate ends while renewal fails. After the fifth failure that

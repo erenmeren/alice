@@ -139,8 +139,9 @@ curl -fsS -H "Authorization: Bearer $ALICE_TOKEN" "https://alice.example.com/api
 
 `POST …/test` runs a Test run instead and `POST …/deploy` with `{"location_ids": [...]}` (at most 20) deploys the
 current certificate. These ACME actions share one limit of 10 a minute per person or token (429 `ALC-SYS-0005`); an
-authority that limits Alice answers 503 `ALC-ACM-0005` with `Retry-After`. The ids and states are in
-`GET /api/v1/acme/certificates`.
+authority that limits Alice answers 503 `ALC-ACM-0005` with `Retry-After`, and so does every order or Test run of
+that certificate until the time the authority named (`ca_not_before` on the certificate; up to 7 days). The ids and
+states are in `GET /api/v1/acme/certificates`.
 
 **Scan a scope and list the unmanaged certificates found on the network** (an administrator's or operator's **Read and
 operate** token; a read-only token is refused, because the results are a map of your network):

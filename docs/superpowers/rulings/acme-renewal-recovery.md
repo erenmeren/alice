@@ -27,8 +27,8 @@ in `02-architecture.md`; user text in `docs/admin-guide.md`, `docs/operator-guid
 
 ## Rulings made during execution
 
-1. **The classification table.** Transient: `acme.ca_rate_limited` (Retry-After still honoured, capped at 24 h);
-   `acme.provider_unreachable` (network errors, timeouts, CA 5xx, `serverInternal`, `badNonce`) except an address the
+1. **The classification table.** Transient: `acme.ca_rate_limited` (Retry-After still honoured; since R47 kept apart
+   and honoured in full up to seven days, `acme-ca-retry-after.md`); `acme.provider_unreachable` (network errors, timeouts, CA 5xx, `serverInternal`, `badNonce`) except an address the
    network policy refuses (`netaddr.ErrNotAllowed`: a setting); `acme.not_issued_in_time` (order deadline, DNS
    propagation/readiness timeout of the hook, `orderNotReady`); a validation failure whose problem type is `dns`,
    `connection`, `serverInternal`, `rateLimited` or `badNonce`, or that carries a 408/429/5xx status or a network
