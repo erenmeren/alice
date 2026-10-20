@@ -168,8 +168,9 @@ var nginxEntries = []string{journalName, journalTmp, certBackup, keyBackup}
 //
 // A directory without a journal (authkeys-write backups) is removed after backupRetention. A
 // directory with a journal is an Nginx operation, decided under the Nginx lock (skipped while
-// another helper holds it): committed, unchanged, restored and prepared operations are removed
-// after helperproto.NginxBackupKeep, restore_failed and unreadable journals after backupRetention,
+// another helper holds it): committed, unchanged, restored, restore_forbidden and prepared
+// operations are removed after helperproto.NginxBackupKeep, restore_failed and unreadable journals
+// after backupRetention,
 // and an operation that keepForRecovery keeps (writing, restoring, a failed rollback whose pair
 // still holds deployed content) is never removed, whatever its age (S3): its backups are the only
 // way back to a consistent pair. Everything is decided under the Nginx lock (skipped while another

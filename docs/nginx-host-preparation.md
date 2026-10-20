@@ -23,7 +23,8 @@ safe.
    development build of Alice without checksums prints a warning instead and installs the file unchecked.)
 2. Install the checked copy as `/usr/local/libexec/alice-helper`, owned by root, mode 0755. Alice cannot change this
    file; you update it yourself when a new Alice release asks for it ("helper outdated"). This release ships
-   `alice-helper` 1.8.0 (protocol 9, which adds `haproxy-dump` for HAProxy servers; protocol 8 added `apache-dump` for Apache servers; protocol 7 added the two HTTP-01
+   `alice-helper` 1.9.0 (protocol 10, which adds the check of "An undo never puts back a revoked or compromised
+   certificate"; protocol 9 added `haproxy-dump` for HAProxy servers; protocol 8 added `apache-dump` for Apache servers; protocol 7 added the two HTTP-01
    challenge commands of "Publishing HTTP-01 challenges") and still works with a protocol 6 helper (`alice-helper` 1.5.0) for everything else. Protocol 6:
    accounts with dots, capitals or a final `$` in their names are listed, accounts
    it cannot list are reported by user ID, and a scan reads the key files in one pass (protocol 6); the Nginx
@@ -193,6 +194,35 @@ The new files keep the owner and group of the files they replace. The key file b
 was 0640 (for example `root:ssl-cert` on Debian), which stays 0640. The certificate keeps its mode, limited to 0644.
 An SELinux label is copied from the replaced file (`restorecon` is not run).
 
+### An undo never puts back a revoked or compromised certificate
+
+When a certificate is revoked or its private key is marked compromised in Alice (for example by a key-compromise
+incident), the files a deployment replaces may hold exactly that certificate and key. If the new files then fail
+(`nginx -t`, the reload, or Alice's check of the website), the usual undo would put the compromised key back on the
+server. Alice therefore sends the helper, with every deployment and every undo, the list of what must never come back:
+the SHA-256 of the public key of every compromised key and the SHA-256 of every revoked certificate (at most 128 of
+each). The deployment's journal keeps the list. Before any undo (its own after a failed `nginx -t` or reload, the
+undo of an interrupted deployment, and `nginx-restore`, which reads Alice's current list from its standard input) the
+helper reads both copies in the deployment's backup folder: when the certificate copy, its public key or the public
+key of the key copy is on the list, or a copy cannot be read as a certificate and its key, it puts **nothing** back.
+The files stay as the deployment left them, no `nginx -t` or reload runs, and the journal says `restore_forbidden`.
+Alice shows the deployment as failed with the reason that the previous certificate was not put back because it is
+revoked or compromised, and an incident shows the place as failed.
+
+This is deliberate: the website may stay broken (Nginx keeps serving what it loaded until its next reload or restart,
+and that may fail with the new files). Fix the cause and deploy a valid certificate again, for example with **Retry**
+on the incident; a `restore_forbidden` deployment never blocks the next deployment of the same files. **Never restore
+such a backup by hand** (next sections): it holds the compromised key. The folder is removed 7 days later like any
+finished deployment's; you may remove it earlier with `alice-helper cleanup --op <deployment ID>`.
+
+The check needs `alice-helper` 1.9.0 (protocol 10). Alice refuses a deployment that replaces a revoked or compromised
+certificate, and every deployment of a key-compromise incident, on a server whose helper is older, before anything is
+sent (`ALC-SSH-0014`): an older helper would put the compromised key back on its own after a failed reload. Alice also
+checks every undo it asks for itself, against its records read again right before the undo: it never asks an older
+helper to undo a deployment whose previous certificate is revoked or compromised (or unknown while any key is
+compromised), and a 1.9.0 helper gets that undo with the list, refuses it and records `restore_forbidden`
+(`ALC-DEP-0025`).
+
 ### Backups of certificate files
 
 Each deployment has its own folder `/var/lib/alice-helper/backups/<deployment ID>` (root only, 0700) with
@@ -200,8 +230,9 @@ Each deployment has its own folder `/var/lib/alice-helper/backups/<deployment ID
 The deployment's page in Alice shows this folder as **Backup on the server**. The helper removes a folder, by the
 server's clock:
 
-- 7 days after the deployment succeeded, changed nothing, was undone, stopped before it replaced anything
-  (`prepared`), or was fenced (`nginx-fence`);
+- 7 days after the deployment succeeded, changed nothing, was undone, was not undone because its backup holds a
+  revoked or compromised certificate (`restore_forbidden`), stopped before it replaced anything (`prepared`), or was
+  fenced (`nginx-fence`);
 - 30 days after a deployment whose undo failed and that the helper can no longer finish, after a journal it cannot
   read, or for a folder without a journal;
 - never while a deployment was interrupted (writing or undoing) and has not been finished or undone yet, nor while a
@@ -226,8 +257,9 @@ undoes it or tells you how (`ALC-DEP-0002`, `ALC-DEP-0023`, `ALC-DEP-0024` in
 
 ### Restoring a previous certificate by hand
 
-Alice restores the previous files on its own when a deployment fails. Never restore a backup when a later
-deployment changed the same files, or when the deployment shows `ALC-DEP-0014` (a later change replaced the files)
+Alice restores the previous files on its own when a deployment fails. Never restore a backup whose deployment ended
+`restore_forbidden`, or whose certificate is revoked or marked compromised in Alice: it would put that key back on the
+website. Never restore a backup when a later deployment changed the same files, or when the deployment shows `ALC-DEP-0014` (a later change replaced the files)
 or `ALC-DEP-0020` (another program changed one of them): you would put back an older key or overwrite the other
 program's file. After `ALC-DEP-0020` Alice put back at most the file it had written itself, so the certificate and
 key may not belong together: run `nginx -t` first, and let the other program write a matching pair again or deploy
@@ -415,7 +447,7 @@ server's error "The alice-helper on this server is outdated." (`ALC-SSH-0005`, `
 removal, no deployment, no recovery. A protocol 6 helper is enough for everything but the HTTP-01 challenge commands
 (protocol 7): only a certificate request that uses that method on the server asks you to reinstall the helper.
 
-**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.8.0, protocol 9) also works
+**Update the helpers first, then Alice.** The helper of this release (`alice-helper` 1.9.0, protocol 10) also works
 with the previous Alice release, so you can update every server ahead of time. If you update Alice first, every
 server whose helper is older shows "The alice-helper on this server is outdated." and a deployment that was being
 finished waits (**Confirming the outcome**) until that server's helper is updated. To update, repeat steps 1 to 3 of "Steps" with the `alice-helper` of the new
@@ -425,7 +457,11 @@ server's page. The commands install the new helper and the new sudoers file toge
 a deployment that sudo refuses is not a clean failure (sudo may already have read the new key), it goes to
 **Confirming the outcome** until the lines are back.
 
-`alice-helper` 1.8.0 (protocol 9) adds `haproxy-dump` and the `haproxy` profile's sudoers line
+`alice-helper` 1.9.0 (protocol 10) adds the check of "An undo never puts back a revoked or compromised certificate":
+the deployment input and `nginx-restore`'s standard input carry the lists, and the journal phase `restore_forbidden`.
+The sudoers file is the same. A server whose helper is older keeps working for everything except a deployment that
+replaces a revoked or compromised certificate and the deployments of a key-compromise incident; update it before you
+start an incident. `alice-helper` 1.8.0 (protocol 9) added `haproxy-dump` and the `haproxy` profile's sudoers line
 ([haproxy-host-preparation.md](haproxy-host-preparation.md)); `alice-helper` 1.7.0 (protocol 8) added `apache-dump`
 and the `apache` profile's sudoers line ([apache-host-preparation.md](apache-host-preparation.md)). Nothing changed
 for Linux and Nginx servers, which keep working with 1.6.x, and their sudoers files are the same.

@@ -1209,16 +1209,16 @@ func TestKeepRunningSurvivesHangupAndPipe(t *testing.T) {
 }
 
 func TestParseDeployInput(t *testing.T) {
-	cert, key, err := parseDeployInput([]byte(` { "key_pem" : "k\nA\/\"\\\t\r\b\f" , "cert_pem":"c" } ` + "\n"))
+	in, err := parseDeployInput([]byte(` { "key_pem" : "k\nA\/\"\\\t\r\b\f" , "cert_pem":"c" } ` + "\n"))
 	require.NoError(t, err)
-	assert.Equal(t, "c", string(cert))
-	assert.Equal(t, "k\nA/\"\\\t\r\b\f", string(key))
+	assert.Equal(t, "c", string(in.cert))
+	assert.Equal(t, "k\nA/\"\\\t\r\b\f", string(in.key))
 	for _, bad := range []string{"", "{}", `{"cert_pem":"c"}`, `{"cert_pem":"c","cert_pem":"d"}`, `{"cert_pem":"c","key_pem":"k"`,
 		`{"cert_pem":"c","key_pem":"k"}x`, `{"cert_pem":1,"key_pem":"k"}`, `{"cert_pem":"c` + "\n" + `","key_pem":"k"}`,
 		`{"cert_pem":"\ud800","key_pem":"k"}`, `{"cert_pem":"\u00zz","key_pem":"k"}`, `{"cert_pem":"\x","key_pem":"k"}`,
 		`{"cert_pem":"c";"key_pem":"k"}`, `{"cert_pem":"c","key_pem":"k\`, `{"cert_pem":"c","key_pem":"\u12`,
 		`{"Cert_pem":"c","key_pem":"k"}`, `["c","k"]`} {
-		_, _, err := parseDeployInput([]byte(bad))
+		_, err := parseDeployInput([]byte(bad))
 		assert.Error(t, err, bad)
 	}
 }

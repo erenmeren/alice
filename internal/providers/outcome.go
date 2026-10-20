@@ -18,10 +18,12 @@ import (
 //	                 verification then failed: Phase unchanged, failed_step verify, a failed verify
 //	                 step in Steps (other steps allowed), no cause_step or error, reason required
 //	rolled_back      Phase "" or restored; failed_step and reason required
-//	rollback_failed  Phase "", restore_failed or restored; failed_step and reason required. Phase
-//	                 restored means the files ARE back and only the verification of the old
-//	                 certificate failed (failed_step must be verify_old); restore_failed means
-//	                 they are not (fully) back
+//	rollback_failed  Phase "", restore_failed, restored or restore_forbidden; failed_step and
+//	                 reason required. Phase restored means the files ARE back and only the
+//	                 verification of the old certificate failed (failed_step must be verify_old);
+//	                 restore_failed means they are not (fully) back; restore_forbidden (R48) means
+//	                 the guard refused the restore and nothing was put back (failed_step restore,
+//	                 error forbidden)
 //	uncertain        no phase, failed_step, cause_step or error
 //
 // Any other Result, including "", is invalid.
@@ -43,6 +45,10 @@ import (
 //	helper restore_failed (file_changed with the starting step as failed_step and Error
 //	file_changed; the restore step; rollback_reload; rollback_config_test)
 //	                              rollback_failed; restore_failed; <that step>; <cause>; nil
+//	the guard refused the restore (the helper's restore_forbidden, R48)
+//	                              rollback_failed; restore_forbidden; restore; <cause>; nil, Error forbidden
+//	the guard refused the restore before anything was sent (a helper that cannot check it)
+//	                              rollback_failed; ""; restore; <cause>; nil, Error forbidden
 //	anything unknown              uncertain; ""; ""; ""; non-nil error
 //
 // RollbackDeployment: an unknown operation and SUPERSEDED are no_change with phase "" and a *Error;
@@ -72,6 +78,21 @@ import (
 func restoredNeedsVerifyOld(phase, failedStep string) error {
 	if phase == PhaseRestored && failedStep != StepNameVerifyOld {
 		return fmt.Errorf("rollback_failed with phase restored: failed_step must be %s, got %q", StepNameVerifyOld, failedStep)
+	}
+	return nil
+}
+
+// forbiddenNeedsRestore: rollback_failed with Phase restore_forbidden (R48) is the guard's refusal
+// of the restore step: failed_step restore and error forbidden; and error forbidden names that
+// refusal only (failed_step restore, Phase "" or restore_forbidden).
+func forbiddenNeedsRestore(phase, failedStep, class string) error {
+	switch {
+	case phase == PhaseRestoreForbidden && (failedStep != StepNameRestore || class != DeployErrForbidden):
+		return fmt.Errorf("rollback_failed with phase restore_forbidden: failed_step must be %s and error %s, got %q and %q",
+			StepNameRestore, DeployErrForbidden, failedStep, class)
+	case class == DeployErrForbidden && (failedStep != StepNameRestore || (phase != "" && phase != PhaseRestoreForbidden)):
+		return fmt.Errorf("rollback_failed with error %s: failed_step must be %s and phase blank or %s", DeployErrForbidden, StepNameRestore,
+			PhaseRestoreForbidden)
 	}
 	return nil
 }
@@ -159,7 +180,8 @@ func (o DeployOutcome) Validate() error {
 		if o.Result == DeployRolledBack {
 			err = phaseIn(rule, o.Phase, PhaseRestored)
 		} else {
-			err = errors.Join(phaseIn(rule, o.Phase, PhaseRestoreFailed, PhaseRestored), restoredNeedsVerifyOld(o.Phase, o.FailedStep))
+			err = errors.Join(phaseIn(rule, o.Phase, PhaseRestoreFailed, PhaseRestored, PhaseRestoreForbidden),
+				restoredNeedsVerifyOld(o.Phase, o.FailedStep), forbiddenNeedsRestore(o.Phase, o.FailedStep, o.Error))
 		}
 		err = errors.Join(err, require(rule, "failed_step", o.FailedStep), require(rule, "reason", o.Reason))
 	case DeployUncertain:
@@ -177,7 +199,9 @@ func (o DeployOutcome) Validate() error {
 // Validate checks RollbackOutcome's invariants (Result by case; Steps may always be set):
 //
 //	rolled_back      Phase "" or restored; no failed_step, cause_step, error or reason
-//	rollback_failed  Phase "" or restore_failed; failed_step and reason required
+//	rollback_failed  Phase "", restore_failed, restored (verify_old failed) or restore_forbidden
+//	                 (the guard refused, R48: failed_step restore, error forbidden); failed_step and
+//	                 reason required
 //	no_change        Phase "", prepared or unchanged; no steps, failed_step, cause_step or
 //	                 error; reason required. Phase prepared or unchanged is the helper's answer
 //	                 "nothing to restore"; Phase "" is a refusal such as SUPERSEDED
@@ -196,7 +220,8 @@ func (o RollbackOutcome) Validate() error {
 		f["reason"] = o.Reason
 		err = errors.Join(phaseIn("rolled_back", o.Phase, PhaseRestored), forbid("rolled_back", f))
 	case DeployRollbackFailed:
-		err = errors.Join(phaseIn("rollback_failed", o.Phase, PhaseRestoreFailed, PhaseRestored), restoredNeedsVerifyOld(o.Phase, o.FailedStep),
+		err = errors.Join(phaseIn("rollback_failed", o.Phase, PhaseRestoreFailed, PhaseRestored, PhaseRestoreForbidden),
+			restoredNeedsVerifyOld(o.Phase, o.FailedStep), forbiddenNeedsRestore(o.Phase, o.FailedStep, o.Error),
 			require("rollback_failed", "failed_step", o.FailedStep), require("rollback_failed", "reason", o.Reason))
 	case DeployNoChange:
 		if len(o.Steps) > 0 {
@@ -243,7 +268,7 @@ func (s DeploymentState) Validate() error {
 		}
 	case PhaseCommitted, PhaseUnchanged:
 		err = forbid(s.Phase, map[string]string{"failed_step": s.FailedStep, "cause_step": s.CauseStep, "error": s.Error})
-	case PhasePrepared, PhaseWriting, PhaseRestoring, PhaseRestored, PhaseRestoreFailed:
+	case PhasePrepared, PhaseWriting, PhaseRestoring, PhaseRestored, PhaseRestoreFailed, PhaseRestoreForbidden:
 	default:
 		err = fmt.Errorf("blank or unknown phase %q", orBlank(s.Phase))
 	}

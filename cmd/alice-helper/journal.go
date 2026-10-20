@@ -103,10 +103,14 @@ type journal struct {
 	KeyIDs     keyIDs                  `json:"key_ids"`
 	Error      string                  `json:"error"`
 	Steps      []helperproto.NginxStep `json:"steps"`
+	// ForbiddenSPKI and ForbiddenLeaf are the rollback guard nginx-deploy received (protocol 10,
+	// R48): no restore of this operation puts back a backup that holds one of them.
+	ForbiddenSPKI []string `json:"forbidden_spki_sha256,omitempty"`
+	ForbiddenLeaf []string `json:"forbidden_leaf_sha256,omitempty"`
 }
 
 var journalPhases = []string{helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
-	helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed}
+	helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed, helperproto.PhaseRestoreForbidden}
 
 // valid reports a journal that describes operation op with paths the helper accepts. A fence's
 // tombstone (PhaseFenced) carries nothing but its operation and the pair record it may have handed
@@ -123,7 +127,8 @@ func (j journal) valid(op string) bool {
 		}
 	}
 	return j.Op == op && slices.Contains(journalPhases, j.Phase) && len(j.Steps) <= maxSteps &&
-		(j.PrevRecord == "" || helperproto.ValidOpID(j.PrevRecord))
+		(j.PrevRecord == "" || helperproto.ValidOpID(j.PrevRecord)) && helperproto.ValidForbidden(j.ForbiddenSPKI) &&
+		helperproto.ValidForbidden(j.ForbiddenLeaf)
 }
 
 // opDir opens (with create: makes) <BackupRoot>/<op>, root-only (0700), never through a link. op

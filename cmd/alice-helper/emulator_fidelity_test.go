@@ -1152,6 +1152,68 @@ func TestEmulatorFidelityRestoreAndSuperseded(t *testing.T) {
 
 // The helper is killed at every point of a deployment and of a rollback: what it leaves (status,
 // the files, what nginx-restore then answers) is the same in the emulator.
+// The rollback guard (protocol 10, R48): the same refusals, phases and steps on both, and neither
+// puts the forbidden pair back.
+func TestEmulatorFidelityRollbackGuard(t *testing.T) {
+	deployGuarded := func(tw *twin, op string, spki, leaf []string) answer {
+		in := guardedInput(tw.w.newLeaf.FullchainPEM, tw.w.newLeaf.KeyPEM, spki, leaf)
+		return tw.same(helperproto.SubNginxDeploy, in, tw.deployArgs(op, in, tw.w.oldSHA())...)
+	}
+	restoreGuarded := func(tw *twin, op, stdin string) answer {
+		return tw.same(helperproto.SubNginxRestore, stdin, "--op", op)
+	}
+	t.Run("the transaction's own rollback", func(t *testing.T) {
+		for name, fail := range map[string]func(tw *twin){"config test": func(tw *twin) { tw.failTest(1) }, "reload": func(tw *twin) { tw.failReload(1) }} {
+			t.Run(name, func(t *testing.T) {
+				tw := newTwin(t, true)
+				fail(tw)
+				a := deployGuarded(tw, opA, []string{spkiOf(t, tw.w.leaf.Cert)}, nil)
+				assert.Equal(t, helperproto.PhaseRestoreForbidden, a.m["phase"])
+				tw.status(opA)
+				restoreGuarded(tw, opA, "")
+				restoreGuarded(tw, opA, restoreInput([]string{spkiOf(t, tw.w.leaf.Cert)}, nil))
+				tw.sameFiles("new")
+			})
+		}
+	})
+	t.Run("nginx-restore of a committed operation", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		a := restoreGuarded(tw, opA, restoreInput(nil, []string{leafOf(tw.w.leaf.Cert)}))
+		assert.Equal(t, helperproto.PhaseRestoreForbidden, a.m["phase"])
+		tw.status(opA)
+		tw.sameFiles("new")
+	})
+	t.Run("an unrelated list restores as before", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.deploy(opA)
+		a := restoreGuarded(tw, opA, restoreInput([]string{spkiOf(t, tw.third.Cert)}, nil))
+		assert.Equal(t, helperproto.PhaseRestored, a.m["phase"])
+		tw.sameFiles("old")
+	})
+	t.Run("an interrupted operation re-sent with the list", func(t *testing.T) {
+		tw := newTwin(t, true)
+		tw.kill(helperproto.StepWriteCert)
+		in := tw.w.newInput()
+		tw.runHelper(helperproto.SubNginxDeploy, in, tw.deployArgs(opA, in, tw.w.oldSHA())...)
+		assert.True(t, tw.runEmu(helperproto.SubNginxDeploy, in, tw.deployArgs(opA, in, tw.w.oldSHA())...).killed)
+		tw.revive()
+		a := deployGuarded(tw, opA, []string{spkiOf(t, tw.w.leaf.Cert)}, nil)
+		assert.Equal(t, helperproto.PhaseRestoreForbidden, a.m["phase"])
+		tw.sameFiles("new")
+	})
+	t.Run("refusals", func(t *testing.T) {
+		tw := newTwin(t, true)
+		a := deployGuarded(tw, opA, []string{"absent"}, nil)
+		assert.Equal(t, helperproto.CodeBadContent, a.m["code"])
+		tw.deploy(opA)
+		for _, bad := range []string{"nope", `{"forbidden_spki_sha256":[]}`, `{"forbidden_spki_sha256":["ab"],"forbidden_leaf_sha256":[]}`} {
+			assert.Equal(t, helperproto.CodeInvalidArgument, restoreGuarded(tw, opA, bad).m["code"], bad)
+		}
+		tw.sameFiles("new")
+	})
+}
+
 func TestEmulatorFidelityKillPoints(t *testing.T) {
 	keyFile, certFile := stagedName(opA, kindKey), stagedName(opA, kindCert)
 	deployPoints := []string{

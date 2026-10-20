@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"maps"
@@ -75,14 +76,62 @@ var (
 	nginxClasses  = []string{helperproto.ConfigErrKeyMismatch, helperproto.ConfigErrFileMissing, helperproto.ConfigErrCertLoad,
 		helperproto.ConfigErrKeyLoad, helperproto.ConfigErrSyntax}
 	helperPhases = []string{helperproto.PhaseNone, helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
-		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed, helperproto.PhaseFenced}
+		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed, helperproto.PhaseFenced,
+		helperproto.PhaseRestoreForbidden}
 )
 
 // maxAnswerSteps bounds the steps of one answer (the helper trims its journal's list to 64).
 const maxAnswerSteps = 64
 
-func knownClass(c string, fileChanged bool) bool {
-	return c == "" || slices.Contains(nginxClasses, c) || (fileChanged && c == helperproto.RestoreErrFileChanged)
+// knownClass: an nginx -t class or ""; with restore true also a restore's own classes (file_changed,
+// and the rollback guard's forbidden, protocol 10).
+func knownClass(c string, restore bool) bool {
+	return c == "" || slices.Contains(nginxClasses, c) || (restore && (c == helperproto.RestoreErrFileChanged || c == helperproto.RestoreErrForbidden))
+}
+
+// forbiddenShape: the helper's guard refused a restore (protocol 10, R48): failed_step restore,
+// error forbidden, the cause any step of the transaction or "" (a restore of a committed operation).
+func forbiddenShape(failed, cause, class string) bool {
+	return failed == helperproto.StepRestore && class == helperproto.RestoreErrForbidden && (cause == "" || slices.Contains(causeSteps, cause))
+}
+
+// guardNeeded reports a rollback guard the provider must act on: it forbids something, or the
+// deployment requires a helper that checks it.
+func guardNeeded(g providers.RollbackGuard) bool { return g.Required || !g.Empty() }
+
+// validGuard: the lists are what the helper accepts (helperproto.ValidForbidden).
+func validGuard(g providers.RollbackGuard) bool {
+	return helperproto.ValidForbidden(g.ForbiddenSPKI) && helperproto.ValidForbidden(g.ForbiddenLeaf)
+}
+
+// appendHashList appends `,"name":["h",...]` (hashes already ValidForbidden: hex, nothing to escape);
+// nothing for an empty list.
+func appendHashList(dst []byte, name string, list []string) []byte {
+	if len(list) == 0 {
+		return dst
+	}
+	dst = append(append(append(dst, `,"`...), name...), `":[`...)
+	for i, h := range list {
+		if i > 0 {
+			dst = append(dst, ',')
+		}
+		dst = append(append(append(dst, '"'), h...), '"')
+	}
+	return append(dst, ']')
+}
+
+// restoreInput is the JSON of helperproto.NginxRestoreInput for a guard (both members, possibly
+// empty lists).
+func restoreInput(g providers.RollbackGuard) []byte {
+	spki, leaf := g.ForbiddenSPKI, g.ForbiddenLeaf
+	if spki == nil {
+		spki = []string{}
+	}
+	if leaf == nil {
+		leaf = []string{}
+	}
+	raw, _ := json.Marshal(helperproto.NginxRestoreInput{ForbiddenSPKI: spki, ForbiddenLeaf: leaf}) // strings only: cannot fail
+	return raw
 }
 
 // protocolError is the error of an answer that breaks the helper's contract: uncertain.
@@ -194,22 +243,31 @@ func logSteps(log providers.StepLogger, steps []providers.DeployStep) {
 	}
 }
 
-// deployInput is the JSON of helperproto.NginxDeployInput ({"cert_pem":"…","key_pem":"…"}), built
-// in one allocation of its final size and without a string copy of the key (a Go string cannot be
-// wiped; json.Marshal would make one and grow buffers it leaves behind). The caller clears it. ok
-// is false for an empty or non-ASCII PEM text (the helper would refuse it as BAD_CONTENT).
-func deployInput(cert, key []byte) ([]byte, bool) {
+// deployInput is the JSON of helperproto.NginxDeployInput ({"cert_pem":"…","key_pem":"…"}, and the
+// rollback guard's lists when not empty: protocol 10, R48), built in one allocation of its final size
+// and without a string copy of the key (a Go string cannot be wiped; json.Marshal would make one and
+// grow buffers it leaves behind). The caller clears it. ok is false for an empty or non-ASCII PEM
+// text (the helper would refuse it as BAD_CONTENT).
+func deployInput(cert, key []byte, spki, leaf []string) ([]byte, bool) {
 	cn, ok1 := jsonStringLen(cert)
 	kn, ok2 := jsonStringLen(key)
 	if !ok1 || !ok2 || len(cert) == 0 || len(key) == 0 {
 		return nil, false
 	}
 	const head, mid, tail = `{"cert_pem":`, `,"key_pem":`, `}`
-	out := make([]byte, 0, len(head)+cn+len(mid)+kn+len(tail))
+	lists := 0
+	for _, l := range [][]string{spki, leaf} {
+		if len(l) > 0 {
+			lists += len(`,"forbidden_spki_sha256":[]`) + len(l)*(64+2) + len(l) - 1 // both names are as long; quotes and commas
+		}
+	}
+	out := make([]byte, 0, len(head)+cn+len(mid)+kn+lists+len(tail))
 	out = append(out, head...)
 	out = appendJSONString(out, cert)
 	out = append(out, mid...)
 	out = appendJSONString(out, key)
+	out = appendHashList(out, "forbidden_spki_sha256", spki)
+	out = appendHashList(out, "forbidden_leaf_sha256", leaf)
 	return append(out, tail...), true
 }
 
@@ -337,6 +395,14 @@ func backupDir(op uuid.UUID) string { return helperproto.BackupRoot + "/" + op.S
 // log only after nginx-deploy has returned (one SSH exec answers once): a caller sees no live
 // progress inside the helper's transaction, only the steps that follow (verify, restore,
 // verify_old) as they happen.
+//
+// The rollback guard (R48, req.Guard): a helper of RollbackGuardMinProtocol gets the forbidden lists
+// in the input, keeps them in the operation's journal and checks every restore of the operation
+// against them itself (its own after a failed nginx -t or reload answers restore_forbidden:
+// rollback_failed deployment.rollback_forbidden). A deployment whose guard is Required is refused on
+// an older helper before anything is sent (ssh.helper_outdated_rollback_guard): such a helper would
+// put the backup back unchecked. The inline rollback after a failed verification reads the guard
+// again (req.RecheckGuard) and restores nothing that it forbids.
 func (s *session) DeployCertificate(ctx context.Context, req providers.DeployRequest, log providers.StepLogger) (providers.DeployOutcome, error) {
 	d := deployment{s: s, req: req, log: log, out: providers.DeployOutcome{Backup: providers.BackupRef{OperationID: req.OperationID}}}
 	if req.OperationID != uuid.Nil {
@@ -358,7 +424,23 @@ func (s *session) DeployCertificate(ctx context.Context, req providers.DeployReq
 		return d.refuse(providers.NewError(reasonUnexpected, false, errors.New("nginx: the fingerprint is not the chain's leaf"), nil))
 	}
 	d.fingerprint = leaf
-	input, ok := deployInput(req.CertificatePEM, req.PrivateKeyPEM.Bytes())
+	var spki, leaves []string
+	if guardNeeded(req.Guard) {
+		if !validGuard(req.Guard) {
+			return d.refuse(providers.NewError(reasonUnexpected, false, errors.New("nginx: the rollback guard is not a list the helper takes"), nil))
+		}
+		guarded, p, err := s.Conn().GuardsRollback(ctx)
+		switch {
+		case err != nil:
+			// The version is read before anything is sent: nothing changed.
+			return d.refuse(asProviderError(err))
+		case guarded:
+			spki, leaves = req.Guard.ForbiddenSPKI, req.Guard.ForbiddenLeaf
+		case req.Guard.Required:
+			return d.refuse(linuxssh.RollbackGuardOutdated(p))
+		}
+	}
+	input, ok := deployInput(req.CertificatePEM, req.PrivateKeyPEM.Bytes(), spki, leaves)
 	defer clear(input)
 	if !ok {
 		return d.refuse(providers.NewError(reasonInvalidCertificate, false, nil, nil))
@@ -462,6 +544,14 @@ func (d *deployment) answer(ctx context.Context, a helperproto.NginxDeployRespon
 			providers.DeployRolledBack, providers.PhaseRestored, a.FailedStep, a.CauseStep, a.Error
 		d.out.Reason = failedReason(a.FailedStep, a.Error)
 		return d.verifyOld(ctx)
+	case helperproto.PhaseRestoreForbidden:
+		// R48: the helper's own rollback found the backup forbidden and restored nothing.
+		if !forbiddenShape(a.FailedStep, a.CauseStep, a.Error) {
+			return d.uncertain(protocolError(sub, "a restore_forbidden answer outside the helper's contract"))
+		}
+		d.out.Steps = steps
+		logSteps(d.log, steps)
+		return d.forbidden(providers.PhaseRestoreForbidden, a.CauseStep)
 	case helperproto.PhaseRestoreFailed:
 		if !restoreFailedShape(a.FailedStep, a.CauseStep, a.Error) {
 			return d.uncertain(protocolError(sub, "a restore_failed answer outside the helper's contract"))
@@ -481,7 +571,7 @@ func (d *deployment) answer(ctx context.Context, a helperproto.NginxDeployRespon
 // (error file_changed, failed_step = cause_step = the step that started the rollback).
 func restoreFailedShape(failed, cause, class string) bool {
 	switch {
-	case !knownClass(class, true) || (cause != "" && !slices.Contains(causeSteps, cause)):
+	case !knownClass(class, true) || class == helperproto.RestoreErrForbidden || (cause != "" && !slices.Contains(causeSteps, cause)):
 		return false
 	case slices.Contains(rollbackSteps, failed):
 		return true
@@ -560,6 +650,11 @@ func unverifiable(loc providers.CertLocation, v providers.VerifyOptions, sans []
 // of the same operation) and verifies the previous certificate. The verification's reason and
 // params stay the outcome's when the rollback succeeds.
 //
+// The rollback guard is read again first (req.RecheckGuard, R48; an error restores nothing: uncertain
+// with the verification's reason). A restore the guard refuses (the helper's restore_forbidden, or
+// nothing sent to a helper that cannot check it) is rollback_failed deployment.rollback_forbidden:
+// the new files stay, unverified.
+//
 // The restore's answer decides: restored (then the old certificate is verified) or restore_failed
 // and HASH_MISMATCH (someone else's file) are known outcomes. BUSY (another deployment on the server
 // holds the helper's lock) is retried: s.p.restoreAttempts sends in all, s.p.restoreWait apart on
@@ -570,7 +665,15 @@ func unverifiable(loc providers.CertLocation, v providers.VerifyOptions, sans []
 // the verification's reason: the new files may still be live, unverified, and the deploy engine's
 // recovery reads the journal and finishes the rollback.
 func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (providers.DeployOutcome, error) {
-	r, err := d.restoreRetryingBusy(ctx)
+	guard := d.req.Guard
+	if d.req.RecheckGuard != nil {
+		g, err := d.req.RecheckGuard(ctx)
+		if err != nil {
+			return d.uncertainAfterVerify(vr.Reason, vr.Params, providers.NewError(reasonUnexpected, true, err, nil))
+		}
+		guard = g
+	}
+	r, err := d.restoreRetryingBusy(ctx, guard)
 	if err != nil {
 		return d.uncertainAfterVerify(vr.Reason, vr.Params, err)
 	}
@@ -581,6 +684,9 @@ func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (p
 		return d.out, nil
 	}
 	switch {
+	case r.forbidden:
+		// R48: nothing was sent; the new files stay, unverified.
+		return d.forbidden("", providers.StepNameVerify)
 	case r.refusal != nil && r.code == helperproto.CodeHashMismatch:
 		// Someone else's file is in place: nothing was restored.
 		return failed("", providers.StepNameRestore, providers.DeployErrFileChanged)
@@ -589,6 +695,8 @@ func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (p
 	}
 	d.out.Steps = append(d.out.Steps, r.steps...)
 	switch r.phase {
+	case helperproto.PhaseRestoreForbidden:
+		return d.forbidden(providers.PhaseRestoreForbidden, providers.StepNameVerify)
 	case helperproto.PhaseRestored:
 		d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
 			providers.DeployRolledBack, providers.PhaseRestored, providers.StepNameVerify, providers.StepNameVerify, ""
@@ -601,11 +709,21 @@ func (d *deployment) rollBack(ctx context.Context, vr providers.VerifyResult) (p
 	return d.uncertainAfterVerify(vr.Reason, vr.Params, protocolError(helperproto.SubNginxRestore, "nothing to restore after a committed deployment"))
 }
 
+// forbidden is rollback_failed deployment.rollback_forbidden (R48): the guard refused the restore,
+// nothing of the backup was put back (phase restore_forbidden: the helper recorded it; "": nothing
+// was sent). No backup_dir: restoring the backup by hand would put the forbidden key back.
+func (d *deployment) forbidden(phase, cause string) (providers.DeployOutcome, error) {
+	d.out.Result, d.out.Phase, d.out.FailedStep, d.out.CauseStep, d.out.Error =
+		providers.DeployRollbackFailed, phase, providers.StepNameRestore, cause, providers.DeployErrForbidden
+	d.out.Reason, d.out.Params = providers.ReasonRollbackForbidden, map[string]string{}
+	return d.out, nil
+}
+
 // restoreRetryingBusy is restore for the inline rollback, sent again while the helper answers BUSY
 // (see rollBack for the bound).
-func (d *deployment) restoreRetryingBusy(ctx context.Context) (restoreResult, error) {
+func (d *deployment) restoreRetryingBusy(ctx context.Context, guard providers.RollbackGuard) (restoreResult, error) {
 	for attempt := 1; ; attempt++ {
-		r, err := d.s.restore(ctx, d.req.OperationID, d.log)
+		r, err := d.s.restore(ctx, d.req.OperationID, guard, d.log)
 		if err != nil || r.code != helperproto.CodeBusy || attempt >= d.s.p.restoreAttempts {
 			return r, err
 		}
@@ -703,9 +821,10 @@ func rollbackReason(step string) string {
 }
 
 // restoreResult is one nginx-restore sorted: a refusal (refusal != nil, code), or an answer (phase,
-// failedStep, causeStep and class as the helper gave them, this call's steps). An uncertain call
-// is restore's error.
+// failedStep, causeStep and class as the helper gave them, this call's steps), or forbidden: the
+// rollback guard refused it before anything was sent (R48). An uncertain call is restore's error.
 type restoreResult struct {
+	forbidden                    bool
 	refusal                      *providers.Error
 	code                         string
 	phase                        string
@@ -715,9 +834,27 @@ type restoreResult struct {
 
 // restore runs nginx-restore for op once (a newly built command) and checks the answer against the
 // helper's contract; the error is an uncertain outcome. The steps are reported to log.
-func (s *session) restore(ctx context.Context, op uuid.UUID, log providers.StepLogger) (restoreResult, error) {
+//
+// The rollback guard (R48): a helper of RollbackGuardMinProtocol gets the lists on stdin and checks
+// the backup itself (restore_forbidden); an older one gets the plain command, unless the guard
+// refuses an unchecked restore (forbidden: nothing is sent).
+func (s *session) restore(ctx context.Context, op uuid.UUID, guard providers.RollbackGuard, log providers.StepLogger) (restoreResult, error) {
 	const sub = helperproto.SubNginxRestore
 	cmd, err := linuxssh.CmdNginxRestore(op)
+	if guardNeeded(guard) {
+		if !validGuard(guard) {
+			return restoreResult{refusal: providers.NewError(reasonUnexpected, false, errors.New("nginx: the rollback guard is not a list the helper takes"), nil)}, nil
+		}
+		guarded, _, perr := s.Conn().GuardsRollback(ctx)
+		switch {
+		case perr != nil:
+			return restoreResult{}, perr // nothing was restored; the caller does not know more than before
+		case guarded && !guard.Empty():
+			cmd, err = linuxssh.CmdNginxRestoreGuarded(op, restoreInput(guard))
+		case !guarded && guard.RefusesUnchecked():
+			return restoreResult{forbidden: true}, nil
+		}
+	}
 	if err != nil {
 		return restoreResult{refusal: providers.NewError(reasonUnexpected, false, err, nil)}, nil
 	}
@@ -758,6 +895,11 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, log providers.StepL
 		if !restoreFailedShape(a.FailedStep, a.CauseStep, a.Error) {
 			return restoreResult{}, protocolError(sub, "a restore_failed answer outside the helper's contract")
 		}
+	case helperproto.PhaseRestoreForbidden:
+		// R48: the guard refused the restore (now, or in an earlier call: answered as recorded).
+		if !forbiddenShape(a.FailedStep, a.CauseStep, a.Error) || slices.ContainsFunc(steps, func(st providers.DeployStep) bool { return st.Status != providers.StepFailed }) {
+			return restoreResult{}, protocolError(sub, "a restore_forbidden answer outside the helper's contract")
+		}
 	default:
 		return restoreResult{}, protocolError(sub, "an unknown phase")
 	}
@@ -778,6 +920,9 @@ func (s *session) restore(ctx context.Context, op uuid.UUID, log providers.StepL
 //     one was found changed by someone else, A1-I2: partly restored);
 //   - HASH_MISMATCH (someone else's file found before any rename; nothing restored):
 //     rollback_failed, Phase "", FailedStep restore, Error file_changed;
+//   - the rollback guard refused (R48; req.Guard): rollback_failed deployment.rollback_forbidden,
+//     failed_step restore, error forbidden, Phase restore_forbidden (the helper's answer, cause_step
+//     the journal's) or "" (nothing was sent to a helper that cannot check the guard itself);
 //   - nothing to restore (prepared, unchanged): no_change with that Phase and a nil error;
 //   - UNKNOWN_OP, SUPERSEDED and every other well-formed refusal, and a refusal before sending:
 //     no_change, Phase "", a *providers.Error ("nothing was restored", not "files unchanged");
@@ -789,9 +934,17 @@ func (s *session) RollbackDeployment(ctx context.Context, req providers.Rollback
 	if err := s.Live(); err != nil {
 		return refuse(asProviderError(err))
 	}
-	r, err := s.restore(ctx, req.OperationID, log)
+	r, err := s.restore(ctx, req.OperationID, req.Guard, log)
 	if err != nil {
 		return providers.RollbackOutcome{Result: providers.DeployUncertain}, err
+	}
+	if r.forbidden || r.phase == helperproto.PhaseRestoreForbidden {
+		out := providers.RollbackOutcome{Result: providers.DeployRollbackFailed, FailedStep: providers.StepNameRestore, Error: providers.DeployErrForbidden,
+			Reason: providers.ReasonRollbackForbidden, Params: map[string]string{}}
+		if !r.forbidden {
+			out.Phase, out.CauseStep, out.Steps = providers.PhaseRestoreForbidden, r.causeStep, r.steps
+		}
+		return out, nil
 	}
 	backup := map[string]string{"backup_dir": backupDir(req.OperationID)}
 	if r.refusal != nil {

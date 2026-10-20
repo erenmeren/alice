@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -432,6 +433,52 @@ type VerifyOptions struct {
 // Requests are validated by the provider, not by the framework: operation ids, paths, SNI, ports
 // and hashes pass through the provider's helperproto validators when it builds helper commands.
 
+// ReasonRollbackForbidden is the reason of a rollback that restored nothing because the files it
+// would put back hold a revoked or compromised certificate or key (R48): the files stay as the
+// failed deployment left them.
+const ReasonRollbackForbidden = "deployment.rollback_forbidden"
+
+// DeployErrForbidden is DeployOutcome.Error (and RollbackOutcome.Error) of a rollback the guard
+// refused (failed_step restore): nothing of the backup was put back.
+const DeployErrForbidden = "forbidden"
+
+// MaxForbidden bounds each list of a RollbackGuard (helperproto.MaxForbidden; a test compares them).
+const MaxForbidden = 128
+
+// RollbackGuard is what a rollback must never put back (R48, docs/superpowers/rulings/
+// certificate-revocation.md): ForbiddenSPKI holds the SHA-256 of the SubjectPublicKeyInfo of every
+// compromised key, ForbiddenLeaf the SHA-256 of the DER of revoked or compromised leaves (each list
+// hex, at most MaxForbidden, the deployment's own backup first). The engine knows which certificate
+// the replaced file held (the backup): TargetForbidden says it is revoked or compromised, and
+// TargetUnknown that Alice did not know it (or, for an operation Alice does not track, its backup).
+//
+// A provider whose server checks the guard itself sends every restore with the lists (the server
+// refuses a forbidden backup and records that it restored nothing). Any other provider never sends a
+// restore when TargetForbidden, or when TargetUnknown and a list is not empty: the rollback is
+// refused before anything is sent (rollback_failed, failed_step restore, error forbidden). Required
+// (DeployRequest only): the deployment must not run on a server that cannot check the guard itself
+// (an incident replacement, a forbidden or unknown backup while anything is forbidden), because the
+// server would restore the backup by itself after a failed change; the provider refuses it before
+// anything is sent.
+type RollbackGuard struct {
+	ForbiddenSPKI   []string
+	ForbiddenLeaf   []string
+	TargetForbidden bool
+	TargetUnknown   bool
+	Required        bool
+}
+
+// Empty reports a guard that forbids nothing.
+func (g RollbackGuard) Empty() bool {
+	return len(g.ForbiddenSPKI) == 0 && len(g.ForbiddenLeaf) == 0 && !g.TargetForbidden
+}
+
+// RefusesUnchecked reports a rollback that a server which cannot check the guard itself must not
+// carry out: the backup is forbidden, or unknown while anything is forbidden.
+func (g RollbackGuard) RefusesUnchecked() bool {
+	return g.TargetForbidden || (g.TargetUnknown && !g.Empty())
+}
+
 // DeployRequest asks for one deployment of a certificate file pair (spec §6.3). It carries a
 // private key: Format and LogValue print nothing but the operation id, so no fmt verb and no slog
 // handler shows the key, and the key has no JSON form (the wire form is helperproto's).
@@ -450,6 +497,12 @@ type DeployRequest struct {
 	// ChainLength is the number of certificates in CertificatePEM (>= 1), set by the caller that
 	// parsed the chain; the provider compares the served chain length with it (spec §12.8 item 5).
 	ChainLength int
+	// Guard is the rollback guard as planned (R48); RecheckGuard, when set, reads it again right
+	// before a rollback the provider starts itself (a compromise marked during the deployment still
+	// applies). An error from it restores nothing: the outcome is uncertain and the engine's
+	// recovery decides.
+	Guard        RollbackGuard
+	RecheckGuard func(context.Context) (RollbackGuard, error) `json:"-"`
 }
 
 func (r DeployRequest) redacted() string {
@@ -562,6 +615,8 @@ type RollbackRequest struct {
 	OldSANs        []string
 	KeyType        string
 	Verify         VerifyOptions
+	// Guard is the rollback guard as the engine read it right before this rollback (R48).
+	Guard RollbackGuard
 }
 
 // RollbackOutcome is the result of RollbackDeployment. Result is DeployRolledBack,
@@ -619,6 +674,9 @@ const (
 	// PhaseFenced: Session.FenceDeployment made sure the operation never runs on the server
 	// (AUD-05); nothing was written by it. DeploymentStatus reports it too.
 	PhaseFenced = "fenced"
+	// PhaseRestoreForbidden (R48): a rollback restored nothing because the backup holds a revoked
+	// or compromised certificate or key; the files are as the failed deployment left them. Final.
+	PhaseRestoreForbidden = "restore_forbidden"
 )
 
 // DeploymentState is what the server knows about an operation (helper journal).

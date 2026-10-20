@@ -157,7 +157,7 @@ func TestWireNames(t *testing.T) {
 	b, err = json.Marshal(HostKeysResponse{OK: true, Keys: []HostKeyInfo{{Type: "ssh-ed25519", Bits: 256, Fingerprint: "SHA256:x", Path: "/k.pub"}}})
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"ok":true,"keys":[{"type":"ssh-ed25519","bits":256,"fingerprint":"SHA256:x","path":"/k.pub"}]}`, string(b))
-	assert.Equal(t, 9, Protocol)
+	assert.Equal(t, 10, Protocol)
 	assert.Equal(t, "/usr/local/libexec/alice-helper", HelperPath)
 	assert.Equal(t, 1<<20, MaxAuthorizedKeysSize)
 }
@@ -373,7 +373,7 @@ func TestProtocol6WireShapes(t *testing.T) {
 	assert.NotContains(t, s[strings.Index(s, `"/x"`):], "content_b64", "an empty content is omitted")
 	assert.Contains(t, s, `"truncated":true`)
 	assert.Equal(t, 6, MinProtocol, "protocol 6 stays the minimum for every existing operation (A1)")
-	assert.Equal(t, "1.8.0", Version)
+	assert.Equal(t, "1.9.0", Version)
 	assert.Equal(t, "name", UnlistedName)
 	assert.Equal(t, "home", UnlistedHome)
 	assert.Equal(t, "account_name_unsupported", WarnAccountNameUnsupported)
@@ -467,15 +467,15 @@ func TestServerDumpWireNamesAreUnchanged(t *testing.T) {
 	assert.Equal(t, 20<<20, MaxServerConfig)
 	assert.Equal(t, 1000, MaxServerFiles)
 	assert.Equal(t, 16<<20, ServerDumpOutput)
-	assert.Equal(t, 9, Protocol)
-	assert.Equal(t, "1.8.0", Version)
+	assert.Equal(t, 10, Protocol)
+	assert.Equal(t, "1.9.0", Version)
 }
 
 // Protocol 8 (Apache, Phase B): apache-dump and SOFTWARE_NOT_FOUND; a protocol 6 helper still serves
 // every other operation.
 func TestProtocol8(t *testing.T) {
-	assert.Equal(t, 9, Protocol)
-	assert.Equal(t, "1.8.0", Version)
+	assert.Equal(t, 10, Protocol)
+	assert.Equal(t, "1.9.0", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 8, ApacheMinProtocol)
 	assert.LessOrEqual(t, HTTP01MinProtocol, ApacheMinProtocol)
@@ -486,13 +486,51 @@ func TestProtocol8(t *testing.T) {
 
 // Protocol 9 (HAProxy, Phase C): haproxy-dump and config_dir_not_read; nothing else changed.
 func TestProtocol9(t *testing.T) {
-	assert.Equal(t, 9, Protocol)
-	assert.Equal(t, "1.8.0", Version)
+	assert.Equal(t, 10, Protocol)
+	assert.Equal(t, "1.9.0", Version)
 	assert.Equal(t, 6, MinProtocol)
 	assert.Equal(t, 8, ApacheMinProtocol)
 	assert.Equal(t, 9, HAProxyMinProtocol)
 	assert.Equal(t, "haproxy-dump", SubHAProxyDump)
 	assert.Equal(t, "config_dir_not_read", WarnConfigDirNotRead)
+}
+
+// Protocol 10 (R48, rollback guard): the forbidden lists of nginx-deploy's input and nginx-restore's
+// stdin, and the restore_forbidden phase; nothing else changed.
+func TestProtocol10(t *testing.T) {
+	assert.Equal(t, 10, Protocol)
+	assert.Equal(t, "1.9.0", Version)
+	assert.Equal(t, 6, MinProtocol, "an older helper serves every other operation")
+	assert.Equal(t, 10, RollbackGuardMinProtocol)
+	assert.Equal(t, "restore_forbidden", PhaseRestoreForbidden)
+	assert.Equal(t, "forbidden", RestoreErrForbidden)
+	assert.Equal(t, 128, MaxForbidden)
+	b, err := json.Marshal(NginxDeployInput{CertPEM: "c", KeyPEM: "k"})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"cert_pem":"c","key_pem":"k"}`, string(b), "no lists: the input an older helper accepts")
+	h := strings.Repeat("a", 64)
+	b, err = json.Marshal(NginxDeployInput{CertPEM: "c", KeyPEM: "k", ForbiddenSPKI: []string{h}, ForbiddenLeaf: []string{h}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"cert_pem":"c","key_pem":"k","forbidden_spki_sha256":["`+h+`"],"forbidden_leaf_sha256":["`+h+`"]}`, string(b))
+	b, err = json.Marshal(NginxRestoreInput{ForbiddenSPKI: []string{}, ForbiddenLeaf: []string{h}})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"forbidden_spki_sha256":[],"forbidden_leaf_sha256":["`+h+`"]}`, string(b))
+}
+
+func TestValidForbidden(t *testing.T) {
+	h1, h2 := strings.Repeat("a", 64), strings.Repeat("0", 63)+"1"
+	assert.True(t, ValidForbidden(nil))
+	assert.True(t, ValidForbidden([]string{}))
+	assert.True(t, ValidForbidden([]string{h1, h2}))
+	full := make([]string, MaxForbidden)
+	for i := range full {
+		full[i] = fmt.Sprintf("%064x", i)
+	}
+	assert.True(t, ValidForbidden(full))
+	assert.False(t, ValidForbidden(append(full, h1)), "over MaxForbidden")
+	for _, bad := range [][]string{{h1, h1}, {AbsentSHA256}, {"ab"}, {strings.Repeat("A", 64)}, {h1 + "0"}, {""}} {
+		assert.False(t, ValidForbidden(bad), "%v", bad)
+	}
 }
 
 func TestDumpServerSectionIsOmittedWhenEmpty(t *testing.T) {

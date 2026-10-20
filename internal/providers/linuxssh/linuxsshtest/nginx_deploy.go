@@ -54,6 +54,7 @@ type emuJournal struct {
 	partial                                      bool
 	prevRecord                                   string
 	steps                                        []helperproto.NginxStep
+	guard                                        emuGuard // protocol 10: the lists nginx-deploy received
 }
 
 func (j *emuJournal) clone() *emuJournal {
@@ -449,8 +450,10 @@ type restoreFile struct {
 // restoreOp puts the backups back, tests and reloads (the helper's restoreOp, same order, same
 // outcomes): a file holding neither content is someone else's; for nginx-restore (partial false)
 // nothing is restored then, within the transaction's own rollback (partial true) the files this
-// transaction wrote are put back.
-func (h *nginxHost) restoreOp(op *opDir, j *emuJournal, partial bool) (*emuJournal, error) {
+// transaction wrote are put back. When a file would be restored, the rollback guard (the journal's
+// lists with extra's, protocol 10) is checked first: a forbidden backup is not put back at all
+// (restore_forbidden; no nginx -t, no reload).
+func (h *nginxHost) restoreOp(op *opDir, j *emuJournal, partial bool, extra emuGuard) (*emuJournal, error) {
 	j.steps = trimSteps(j.steps)
 	partial = partial || j.partial
 	failRestore := func(err error) (*emuJournal, error) {
@@ -491,6 +494,14 @@ func (h *nginxHost) restoreOp(op *opDir, j *emuJournal, partial bool) (*emuJourn
 			_ = h.writeJournal(op, j)
 			return j, errChanged
 		}
+	}
+	if (files[0].restore || files[1].restore) && h.backupForbidden(op, j, extra) {
+		j.steps = append(j.steps, stepFailed(helperproto.StepRestore, helperproto.RestoreErrForbidden))
+		j.phase, j.failedStep, j.errClass = helperproto.PhaseRestoreForbidden, helperproto.StepRestore, helperproto.RestoreErrForbidden
+		if err := h.writeJournal(op, j); err != nil {
+			return j, errJournalUnwritten
+		}
+		return j, nil
 	}
 	j.phase = helperproto.PhaseRestoring
 	if err := h.writeJournal(op, j); err != nil {
@@ -553,31 +564,44 @@ func (h *nginxHost) restoreOp(op *opDir, j *emuJournal, partial bool) (*emuJourn
 func (h *nginxHost) fail(op *opDir, j *emuJournal, step, class string) *emuJournal {
 	j.steps = append(j.steps, stepFailed(step, class))
 	j.failedStep, j.causeStep, j.errClass = step, step, class
-	j, _ = h.restoreOp(op, j, true)
+	j, _ = h.restoreOp(op, j, true, emuGuard{})
 	return j
 }
 
 // ---- content checks of stdin ------------------------------------------------------------------
 
 // parseDeployInput accepts exactly a JSON object with the two string members cert_pem and
-// key_pem, each once, in either order (the helper's strict hand parser; for the output of
-// json.Marshal(helperproto.NginxDeployInput) it accepts the same inputs).
-func parseDeployInput(raw []byte) (cert, key []byte, ok bool) {
+// key_pem and, when guarded (protocol 10), the optional array members forbidden_spki_sha256 and
+// forbidden_leaf_sha256 (ValidForbidden lists), each once, in any order (the helper's strict hand
+// parser; for the output of json.Marshal(helperproto.NginxDeployInput) it accepts the same inputs).
+func parseDeployInput(raw []byte, guarded bool) (cert, key []byte, g emuGuard, ok bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
-		return nil, nil, false
+		return nil, nil, emuGuard{}, false
 	}
-	var gotCert, gotKey bool
-	for range 2 {
+	var gotCert, gotKey, gotSPKI, gotLeaf bool
+	for dec.More() {
 		kt, err := dec.Token()
 		name, isStr := kt.(string)
 		if err != nil || !isStr {
-			return nil, nil, false
+			return nil, nil, emuGuard{}, false
+		}
+		if guarded && (name == "forbidden_spki_sha256" && !gotSPKI || name == "forbidden_leaf_sha256" && !gotLeaf) {
+			var list []string
+			if dec.Decode(&list) != nil || list == nil || !helperproto.ValidForbidden(list) {
+				return nil, nil, emuGuard{}, false
+			}
+			if name == "forbidden_spki_sha256" {
+				g.spki, gotSPKI = list, true
+			} else {
+				g.leaf, gotLeaf = list, true
+			}
+			continue
 		}
 		vt, err := dec.Token()
 		val, isStr := vt.(string)
 		if err != nil || !isStr {
-			return nil, nil, false
+			return nil, nil, emuGuard{}, false
 		}
 		switch {
 		case name == "cert_pem" && !gotCert:
@@ -585,16 +609,19 @@ func parseDeployInput(raw []byte) (cert, key []byte, ok bool) {
 		case name == "key_pem" && !gotKey:
 			key, gotKey = []byte(val), true
 		default:
-			return nil, nil, false
+			return nil, nil, emuGuard{}, false
 		}
 	}
+	if !gotCert || !gotKey {
+		return nil, nil, emuGuard{}, false
+	}
 	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
-		return nil, nil, false
+		return nil, nil, emuGuard{}, false
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, nil, false
+		return nil, nil, emuGuard{}, false
 	}
-	return cert, key, true
+	return cert, key, g, true
 }
 
 var pemBegin = []byte("-----BEGIN ")
@@ -683,7 +710,7 @@ func (e *Emulator) nginxDeploy(args []string, stdin []byte) (resp Response) {
 	defer h.consumeFaults()
 	defer h.recoverKill(&resp)
 	h.hangedUp = false
-	resp = h.deployCommand(args, stdin)
+	resp = h.deployCommand(args, stdin, e.protocol >= helperproto.RollbackGuardMinProtocol)
 	if h.hangedUp {
 		h.hangedUp = false
 		return Response{Hangup: true}
@@ -691,7 +718,7 @@ func (e *Emulator) nginxDeploy(args []string, stdin []byte) (resp Response) {
 	return resp
 }
 
-func (h *nginxHost) deployCommand(args []string, stdin []byte) Response {
+func (h *nginxHost) deployCommand(args []string, stdin []byte, guarded bool) Response {
 	if len(args) != 10 || args[0] != "--op" || args[2] != "--cert" || args[4] != "--key" ||
 		args[6] != "--expect-cert-sha256" || args[8] != "--content-sha256" {
 		return refuse(helperproto.ExitRefused, helperproto.CodeUsage)
@@ -714,7 +741,7 @@ func (h *nginxHost) deployCommand(args []string, stdin []byte) Response {
 	case sum(stdin) != want:
 		return refuse(helperproto.ExitPrecondition, helperproto.CodeContentMismatch)
 	}
-	cert, key, ok := parseDeployInput(stdin)
+	cert, key, g, ok := parseDeployInput(stdin, guarded)
 	switch {
 	case !ok:
 		return refuse(helperproto.ExitRefused, helperproto.CodeBadContent)
@@ -723,7 +750,7 @@ func (h *nginxHost) deployCommand(args []string, stdin []byte) Response {
 	case !goodContent(cert, key):
 		return refuse(helperproto.ExitRefused, helperproto.CodeBadContent)
 	}
-	return h.deploy(op, certPath, keyPath, expect, cert, key)
+	return h.deploy(op, certPath, keyPath, expect, cert, key, g)
 }
 
 // opCount is the number of operation directories that hold a journal, except fence tombstones
@@ -765,7 +792,7 @@ func (h *nginxHost) newOpDir(op string) (*opDir, *Response) {
 	return o, nil
 }
 
-func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newKey []byte) Response {
+func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newKey []byte, g emuGuard) Response {
 	h.deploys++
 	newCertSHA, newKeySHA := sum(newCert), sum(newKey)
 	var (
@@ -788,7 +815,7 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 			if h.superseded(j) {
 				return refuse(helperproto.ExitPrecondition, helperproto.CodeSuperseded)
 			}
-			j, _ = h.restoreOp(dir, j, false)
+			j, _ = h.restoreOp(dir, j, false, g)
 			return answer(deployAnswer(j))
 		case helperproto.PhasePrepared:
 			prior = j
@@ -824,7 +851,7 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 	}
 	j := &emuJournal{op: opID, phase: helperproto.PhasePrepared, certPath: certPath, keyPath: keyPath,
 		oldCertSHA: sum(cert.data), oldKeySHA: sum(key.data), newCertSHA: newCertSHA, newKeySHA: newKeySHA,
-		certMeta: cert.meta, keyMeta: key.meta, steps: []helperproto.NginxStep{}}
+		certMeta: cert.meta, keyMeta: key.meta, steps: []helperproto.NginxStep{}, guard: g}
 	rec := h.pairRecord(j)
 	j.prevRecord = rec
 	if prior != nil && rec == opID {
@@ -938,7 +965,9 @@ func (h *nginxHost) deploy(opID, certPath, keyPath, expect string, newCert, newK
 
 // ---- nginx-restore, nginx-status ---------------------------------------------------------------
 
-func (e *Emulator) nginxRestore(args []string) (resp Response) {
+// nginxRestore is the helper's cmdNginxRestore; from protocol 10 on its stdin is the rollback guard
+// (restoreGuard, read under the lock: BUSY answers first), an older emulator ignores it.
+func (e *Emulator) nginxRestore(args []string, stdin []byte) (resp Response) {
 	if len(args) != 2 || args[0] != "--op" {
 		return refuse(helperproto.ExitRefused, helperproto.CodeUsage)
 	}
@@ -955,6 +984,14 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	if h.locked {
 		return refuse(helperproto.ExitFailed, helperproto.CodeBusy)
 	}
+	var extra emuGuard
+	if e.protocol >= helperproto.RollbackGuardMinProtocol {
+		g, ok := restoreGuard(stdin)
+		if !ok {
+			return refuse(helperproto.ExitRefused, helperproto.CodeInvalidArgument)
+		}
+		extra = g
+	}
 	dir := h.ops[op]
 	if dir == nil || dir.j == nil {
 		return refuse(helperproto.ExitPrecondition, helperproto.CodeUnknownOp)
@@ -964,7 +1001,7 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	}
 	j := dir.j.clone()
 	switch j.phase {
-	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored, helperproto.PhaseFenced:
+	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored, helperproto.PhaseFenced, helperproto.PhaseRestoreForbidden:
 		return answer(helperproto.NginxRestoreResponse{OK: true, Phase: j.phase, FailedStep: j.failedStep, CauseStep: j.causeStep,
 			Error: j.errClass, Steps: []helperproto.NginxStep{}})
 	}
@@ -973,7 +1010,7 @@ func (e *Emulator) nginxRestore(args []string) (resp Response) {
 	}
 	j.steps = trimSteps(j.steps)
 	before := len(j.steps)
-	j, err := h.restoreOp(dir, j, false)
+	j, err := h.restoreOp(dir, j, false, extra)
 	switch {
 	case errors.Is(err, errChanged):
 		return refuse(helperproto.ExitPrecondition, helperproto.CodeHashMismatch)

@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -157,6 +158,7 @@ func stepFailed(name, class string) helperproto.NginxStep {
 type deployRequest struct {
 	op, certPath, keyPath, expect string
 	cert, key                     []byte
+	guard                         guard // protocol 10: what a restore of this operation never puts back
 }
 
 // cmdNginxDeploy replaces a certificate and key pair of the current Nginx configuration as one
@@ -206,7 +208,8 @@ func cmdNginxDeploy(ctx context.Context, s *sys, args []string) (out any, err er
 	case hexSHA(raw) != want:
 		return nil, precondition(helperproto.CodeContentMismatch, "the new content arrived incomplete")
 	}
-	d.cert, d.key, err = parseDeployInput(raw)
+	in, err := parseDeployInput(raw)
+	d.cert, d.key, d.guard = in.cert, in.key, in.guard
 	defer clear(d.key)
 	defer clear(d.cert)
 	switch {
@@ -277,7 +280,7 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 				case sup:
 					return nil, precondition(helperproto.CodeSuperseded, "a later deployment replaced these files; this one is not rolled back")
 				}
-				j, _ = s.restoreOp(context.WithoutCancel(ctx), dir, j, false)
+				j, _ = s.restoreOp(context.WithoutCancel(ctx), dir, j, false, d.guard)
 				return deployAnswer(j), nil
 			case helperproto.PhasePrepared:
 				prior = &j
@@ -334,7 +337,7 @@ func (s *sys) deploy(ctx context.Context, d deployRequest) (any, error) {
 		CertMeta: fileMeta{Mode: cert.st.Mode & 0o777, UID: int(cert.st.Uid), GID: int(cert.st.Gid)},
 		KeyMeta:  fileMeta{Mode: key.st.Mode & 0o777, UID: int(key.st.Uid), GID: int(key.st.Gid)},
 		KeyIDs:   keyIDs{Old: idOf(key.st)},
-		Steps:    []helperproto.NginxStep{}}
+		Steps:    []helperproto.NginxStep{}, ForbiddenSPKI: d.guard.SPKI, ForbiddenLeaf: d.guard.Leaf}
 	// The pair record before this operation (New-3): a re-run after a crash between taking the
 	// record and the writing journal finds itself there and keeps the previous value it saved (an
 	// unchanged re-run keeps it too, so the record resolves through it).
@@ -512,7 +515,7 @@ func replaceError(err error) error {
 func (s *sys) fail(ctx context.Context, dir *os.File, j journal, step, class string) journal {
 	j.Steps = append(j.Steps, stepFailed(step, class))
 	j.FailedStep, j.CauseStep, j.Error = step, step, class
-	j, _ = s.restoreOp(ctx, dir, j, true)
+	j, _ = s.restoreOp(ctx, dir, j, true, guard{})
 	return j
 }
 
@@ -761,7 +764,13 @@ func (s *sys) cleanStaged(j journal) {
 // A failure of the restore itself sets failed_step to restore (the pair may be mixed; another
 // nginx-restore can finish it); cause_step keeps the step that started the rollback. The
 // certificate is restored first, then the key (the reverse of the writes).
-func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bool) (journal, error) {
+//
+// The rollback guard (protocol 10, R48): when a file would be restored, the backups are checked
+// against the journal's lists and extra's (nginx-restore's, a re-sent operation's) first. A backup
+// that holds a forbidden leaf or public key is not put back at all, not even one file of it: the
+// files stay as they are, the restore step fails with error forbidden and the journal says
+// restore_forbidden (failed_step restore; no nginx -t, no reload). The answer is that outcome.
+func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bool, extra guard) (journal, error) {
 	j.Steps = trimSteps(j.Steps)
 	partial = partial || j.Partial // the transaction's own finding holds for a later nginx-restore too
 	failRestore := func(err error) (journal, error) {
@@ -819,6 +828,15 @@ func (s *sys) restoreOp(ctx context.Context, dir *os.File, j journal, partial bo
 			_ = s.writeJournal(dir, j)
 			return j, errChangedByOthers
 		}
+	}
+	if (files[0].restore || files[1].restore) && s.backupForbidden(dir, j, extra) {
+		s.cleanStaged(j)
+		j.Steps = append(j.Steps, stepFailed(helperproto.StepRestore, helperproto.RestoreErrForbidden))
+		j.Phase, j.FailedStep, j.Error = helperproto.PhaseRestoreForbidden, helperproto.StepRestore, helperproto.RestoreErrForbidden
+		if err := s.writeJournal(dir, j); err != nil {
+			return j, errJournalUnwritten
+		}
+		return j, nil
 	}
 	j.Phase = helperproto.PhaseRestoring
 	if err := s.writeJournal(dir, j); err != nil {
@@ -911,6 +929,30 @@ func (s *sys) fileState(path, resolved, oldSHA, newSHA string) (int, *target, er
 	}
 	t.close()
 	return 0, nil, errChangedByOthers
+}
+
+// backupForbidden reports that the operation's backups hold material the rollback guard forbids
+// (the journal's lists with extra's; see guard.forbids). A backup that cannot be read, or does not
+// hold what the journal recorded, is forbidden too while a list is given.
+func (s *sys) backupForbidden(dir *os.File, j journal, extra guard) bool {
+	g := guard{SPKI: j.ForbiddenSPKI, Leaf: j.ForbiddenLeaf}.with(extra)
+	if g.empty() {
+		return false
+	}
+	cert, err := readBackup(dir, certBackup)
+	if err != nil {
+		return true
+	}
+	defer clear(cert)
+	key, err := readBackup(dir, keyBackup)
+	if err != nil {
+		return true
+	}
+	defer clear(key)
+	if hexSHA(cert) != j.OldCertSHA || hexSHA(key) != j.OldKeySHA {
+		return true
+	}
+	return g.forbids(cert, key)
 }
 
 // fileUnknown: a file of the pair cannot be read (or stat'ed) right now, so its state is not known.
@@ -1018,7 +1060,9 @@ func deployAnswer(j journal) helperproto.NginxDeployResponse {
 }
 
 // cmdNginxRestore puts the backed-up pair of an operation back (nginx-restore --op <id>): after an
-// interrupted deployment (journal writing or restoring), or to undo a committed one.
+// interrupted deployment (journal writing or restoring), or to undo a committed one. Its stdin
+// (protocol 10, optional) is the rollback guard as Alice reads it now (helperproto.NginxRestoreInput);
+// an empty stdin, or a terminal (a person running it by hand), is no list.
 func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err error) {
 	if len(args) != 2 || args[0] != "--op" {
 		return nil, refused(helperproto.CodeUsage, "usage: nginx-restore --op <operation id>")
@@ -1038,6 +1082,11 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 		return nil, failed(helperproto.CodeBusy, "another certificate change is running on this server")
 	}
 	defer func() { _ = lock.Close() }()
+	// The guard is read under the lock, as nginx-deploy reads its input: BUSY answers first.
+	extra, err := s.restoreGuard(ctx)
+	if err != nil {
+		return nil, err
+	}
 	dir, err := s.opDir(op, false)
 	if errors.Is(err, unix.ENOENT) {
 		return nil, precondition(helperproto.CodeUnknownOp, "there is no deployment with this operation id")
@@ -1054,7 +1103,7 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 		return nil, precondition(helperproto.CodeUnknownOp, "there is no deployment with this operation id")
 	}
 	switch j.Phase {
-	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored, helperproto.PhaseFenced:
+	case helperproto.PhasePrepared, helperproto.PhaseUnchanged, helperproto.PhaseRestored, helperproto.PhaseFenced, helperproto.PhaseRestoreForbidden:
 		s.cleanStaged(j)
 		return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep,
 			Error: j.Error, Steps: []helperproto.NginxStep{}}, nil
@@ -1070,7 +1119,7 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 	j.Steps = trimSteps(j.Steps) // as restoreOp does: the steps it adds follow
 	before := len(j.Steps)
 	s.renamed = false
-	j, err = s.restoreOp(context.WithoutCancel(ctx), dir, j, false)
+	j, err = s.restoreOp(context.WithoutCancel(ctx), dir, j, false, extra)
 	if s.renamed && err != nil {
 		err = nil // restoreOp answers its outcome once it renamed (A1-I2); the journal says it
 	}
@@ -1083,6 +1132,37 @@ func cmdNginxRestore(ctx context.Context, s *sys, args []string) (out any, err e
 	}
 	return helperproto.NginxRestoreResponse{OK: true, Phase: j.Phase, FailedStep: j.FailedStep, CauseStep: j.CauseStep, Error: j.Error,
 		Steps: append([]helperproto.NginxStep{}, j.Steps[min(before, len(j.Steps)):]...)}, nil
+}
+
+// restoreGuard reads nginx-restore's optional stdin (see cmdNginxRestore): a JSON object with
+// exactly the two lists, each helperproto.ValidForbidden; anything else is INVALID_ARGUMENT before
+// anything is read from the server. No key material is involved, so encoding/json decodes it.
+func (s *sys) restoreGuard(ctx context.Context) (guard, error) {
+	if f, ok := s.stdin.(*os.File); ok {
+		if st, err := f.Stat(); err == nil && st.Mode()&os.ModeCharDevice != 0 {
+			return guard{}, nil
+		}
+	}
+	raw, err := readInput(ctx, s.stdin, helperproto.MaxRestoreInput)
+	switch {
+	case err != nil:
+		return guard{}, failed(helperproto.CodeIOError, "the restore input cannot be read")
+	case len(raw) > helperproto.MaxRestoreInput:
+		return guard{}, refused(helperproto.CodeInvalidArgument, "the restore input is too large")
+	case len(bytes.TrimSpace(raw)) == 0:
+		return guard{}, nil
+	}
+	var in struct {
+		SPKI *[]string `json:"forbidden_spki_sha256"`
+		Leaf *[]string `json:"forbidden_leaf_sha256"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&in); err != nil || dec.More() || in.SPKI == nil || in.Leaf == nil ||
+		!helperproto.ValidForbidden(*in.SPKI) || !helperproto.ValidForbidden(*in.Leaf) {
+		return guard{}, refused(helperproto.CodeInvalidArgument, "the restore input is not the rollback guard")
+	}
+	return guard{SPKI: *in.SPKI, Leaf: *in.Leaf}, nil
 }
 
 // cmdNginxStatus reports an operation's journal (nginx-status --op <id>): phase "none" when there

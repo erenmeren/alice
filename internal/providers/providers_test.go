@@ -376,6 +376,9 @@ func TestMirroredPhasesStepsAndErrorsEqualTheHelperProtocol(t *testing.T) {
 	assert.Equal(t, helperproto.StepRollbackReload, providers.StepNameRollbackReload)
 
 	assert.Equal(t, helperproto.RestoreErrFileChanged, providers.DeployErrFileChanged)
+	assert.Equal(t, helperproto.RestoreErrForbidden, providers.DeployErrForbidden)
+	assert.Equal(t, helperproto.MaxForbidden, providers.MaxForbidden)
+	assert.Equal(t, helperproto.PhaseRestoreForbidden, providers.PhaseRestoreForbidden)
 	assert.Equal(t, helperproto.ConfigErrKeyMismatch, providers.ConfigErrKeyMismatch)
 	assert.Equal(t, helperproto.ConfigErrFileMissing, providers.ConfigErrFileMissing)
 	assert.Equal(t, helperproto.ConfigErrCertLoad, providers.ConfigErrCertLoad)
@@ -541,6 +544,7 @@ func TestMirroredSetsAreCompleteAgainstTheirSources(t *testing.T) {
 	assert.Equal(t, sortedCopy([]string{
 		providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,
 		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced,
+		providers.PhaseRestoreForbidden,
 	}), valueSet(stringConsts(t, hp, "Phase")), "phases")
 	assert.Equal(t, sortedCopy([]string{
 		providers.StepNameBackup, providers.StepNameWriteKey, providers.StepNameWriteCert, providers.StepNameConfigTest,

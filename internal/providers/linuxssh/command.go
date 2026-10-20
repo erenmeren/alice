@@ -188,6 +188,22 @@ func CmdNginxRestore(op uuid.UUID) (HelperCommand, error) {
 	return opCommand(helperproto.SubNginxRestore, op, DeployCommandTimeout)
 }
 
+// CmdNginxRestoreGuarded is CmdNginxRestore with the rollback guard on stdin (protocol 10, R48:
+// helperproto.NginxRestoreInput, at most MaxRestoreInput bytes). The argument vector is the same,
+// so the sudoers line of every setup admits it; only a helper of RollbackGuardMinProtocol reads the
+// input (an older one ignores it: the caller checks the protocol first).
+func CmdNginxRestoreGuarded(op uuid.UUID, input []byte) (HelperCommand, error) {
+	if len(input) == 0 || len(input) > helperproto.MaxRestoreInput {
+		return HelperCommand{}, fmt.Errorf("%w: the restore input is empty or larger than %d bytes", ErrInvalidArgument, helperproto.MaxRestoreInput)
+	}
+	c, err := opCommand(helperproto.SubNginxRestore, op, DeployCommandTimeout)
+	if err != nil {
+		return HelperCommand{}, err
+	}
+	c.stdin = owned(input)
+	return c, nil
+}
+
 // CmdNginxStatus reports an operation's journal: the cheap poll after an uncertain deploy.
 func CmdNginxStatus(op uuid.UUID) (HelperCommand, error) {
 	return opCommand(helperproto.SubNginxStatus, op, DefaultCommandTimeout)

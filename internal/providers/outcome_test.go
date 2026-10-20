@@ -2,6 +2,7 @@ package providers_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -339,4 +340,49 @@ func TestLegalRollbackShapes(t *testing.T) {
 	} {
 		assert.NoError(t, providers.CheckRollbackReturn(tc.o, tc.err), name)
 	}
+}
+
+// R48: the guard's refusal of a restore is rollback_failed with failed_step restore and error forbidden, in phase
+// restore_forbidden (the helper recorded it) or "" (nothing was sent); error forbidden names nothing else.
+func TestRollbackForbiddenShapes(t *testing.T) {
+	for name, o := range map[string]providers.RollbackOutcome{
+		"helper refused": {Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreForbidden, FailedStep: "restore", CauseStep: "config_test",
+			Error: providers.DeployErrForbidden, Reason: providers.ReasonRollbackForbidden},
+		"nothing sent": {Result: providers.DeployRollbackFailed, FailedStep: "restore", Error: providers.DeployErrForbidden, Reason: providers.ReasonRollbackForbidden},
+	} {
+		require.NoError(t, providers.CheckRollbackReturn(o, nil), name)
+		d := providers.DeployOutcome{Result: o.Result, Phase: o.Phase, FailedStep: o.FailedStep, CauseStep: o.CauseStep, Error: o.Error, Reason: o.Reason}
+		require.NoError(t, providers.CheckDeployReturn(d, nil), name)
+	}
+	for name, o := range map[string]providers.RollbackOutcome{
+		"phase without the restore step": {Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreForbidden, FailedStep: "rollback_reload",
+			Error: providers.DeployErrForbidden, Reason: "r"},
+		"phase without the error": {Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreForbidden, FailedStep: "restore", Reason: "r"},
+		"error in another phase": {Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreFailed, FailedStep: "restore",
+			Error: providers.DeployErrForbidden, Reason: "r"},
+		"rolled back in that phase":        {Result: providers.DeployRolledBack, Phase: providers.PhaseRestoreForbidden},
+		"nothing to restore in that phase": {Result: providers.DeployNoChange, Phase: providers.PhaseRestoreForbidden, Reason: "r"},
+	} {
+		assert.Error(t, o.Validate(), name)
+	}
+	assert.Error(t, providers.DeployOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestoreForbidden, FailedStep: "verify",
+		Reason: "r"}.Validate())
+	assert.NoError(t, providers.DeploymentState{Phase: providers.PhaseRestoreForbidden, FailedStep: "restore", CauseStep: "verify",
+		Error: providers.DeployErrForbidden, NewCertSHA256: strings.Repeat("a", 64)}.Validate())
+}
+
+func TestRollbackGuardEmpty(t *testing.T) {
+	assert.True(t, providers.RollbackGuard{Required: true}.Empty(), "Required alone forbids nothing")
+	assert.False(t, providers.RollbackGuard{TargetForbidden: true}.Empty())
+	assert.False(t, providers.RollbackGuard{ForbiddenSPKI: []string{strings.Repeat("a", 64)}}.Empty())
+	assert.False(t, providers.RollbackGuard{ForbiddenLeaf: []string{strings.Repeat("a", 64)}}.Empty())
+}
+
+func TestRollbackGuardRefusesUnchecked(t *testing.T) {
+	h := strings.Repeat("a", 64)
+	assert.False(t, providers.RollbackGuard{}.RefusesUnchecked())
+	assert.False(t, providers.RollbackGuard{ForbiddenSPKI: []string{h}}.RefusesUnchecked(), "a known backup that is not listed")
+	assert.False(t, providers.RollbackGuard{TargetUnknown: true}.RefusesUnchecked(), "nothing is forbidden at all")
+	assert.True(t, providers.RollbackGuard{TargetUnknown: true, ForbiddenLeaf: []string{h}}.RefusesUnchecked())
+	assert.True(t, providers.RollbackGuard{TargetForbidden: true}.RefusesUnchecked())
 }

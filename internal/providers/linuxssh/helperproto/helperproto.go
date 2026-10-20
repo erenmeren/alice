@@ -36,10 +36,18 @@ const (
 	// Protocol 8 (Apache, Phase B): apache-dump; nothing else changed: a protocol 6 helper serves every
 	// other operation (MinProtocol). 1.7.0 is the first helper that names it.
 	// Protocol 9 (HAProxy, Phase C): haproxy-dump and the config_dir_not_read warning; nothing else
-	// changed: a protocol 6 helper serves every other operation (MinProtocol). 1.8.0 is the first
+	// changed: a protocol 6 helper serves every other operation (MinProtocol). 1.8.0 was the first
 	// helper that names them.
-	Protocol   = 9
-	Version    = "1.8.0"
+	// Protocol 10 (R48, rollback guard): nginx-deploy's input may carry the forbidden material
+	// (forbidden_spki_sha256, forbidden_leaf_sha256), which the operation's journal keeps;
+	// nginx-restore reads the same two lists from its standard input (NginxRestoreInput; none when
+	// stdin is empty); every restore (the transaction's own, a re-sent interrupted operation's,
+	// nginx-restore's) refuses to put back a backup whose leaf or public key is listed and leaves
+	// the files as they are (PhaseRestoreForbidden). Nothing else changed: a protocol 6 helper
+	// serves every other operation (MinProtocol); a deployment that needs the guard checks
+	// RollbackGuardMinProtocol. 1.9.0 is the first helper that names it.
+	Protocol   = 10
+	Version    = "1.9.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -58,6 +66,12 @@ const ApacheMinProtocol = 8
 
 // HAProxyMinProtocol is the helper protocol a HAProxy server needs (haproxy-dump).
 const HAProxyMinProtocol = 9
+
+// RollbackGuardMinProtocol is the helper protocol that checks a backup against the forbidden
+// material itself before it restores it (R48). Alice sends the lists only to such a helper, and a
+// deployment that needs the guard (an incident replacement, or one whose backup is forbidden) is
+// refused on an older one before anything is sent.
+const RollbackGuardMinProtocol = 10
 
 // HelperBudget bounds one helper call on the server (R37 item 17): the helper gives up before
 // Alice's longest command budget (60 s) ends, with a 10 s margin, and never replaces a file after
@@ -305,6 +319,10 @@ const (
 	PhaseRestored      = "restored"       // the backups are back and Nginx reloaded
 	PhaseRestoreFailed = "restore_failed" // the rollback could not finish
 	PhaseFenced        = "fenced"         // nginx-fence's tombstone: nothing was written and nothing will be
+	// PhaseRestoreForbidden (protocol 10): a rollback found that the backup holds forbidden material
+	// (a listed leaf or public key) and restored nothing; the files are as the operation left them.
+	// Final, like restored: the pair is not blocked for the next deployment.
+	PhaseRestoreForbidden = "restore_forbidden"
 )
 
 // Deploy step names (nginx-deploy and nginx-restore report them in order).
@@ -325,6 +343,17 @@ const (
 // RestoreErrFileChanged is the Error of PhaseRestoreFailed when a certificate or key file holds
 // neither the deployed nor the backed-up content (someone else changed it): nothing is restored.
 const RestoreErrFileChanged = "file_changed"
+
+// RestoreErrForbidden (protocol 10) is the Error of PhaseRestoreForbidden and of its failed restore
+// step: the backup holds a listed leaf or public key (or, with a list, cannot be read as a
+// certificate and its key), so nothing was restored.
+const RestoreErrForbidden = "forbidden"
+
+// Rollback guard bounds (protocol 10): entries of each forbidden list, and nginx-restore's stdin.
+const (
+	MaxForbidden    = 128
+	MaxRestoreInput = 32 << 10
+)
 
 // KeyTypes of tls-probe.
 const (
@@ -546,9 +575,16 @@ type NginxStep struct {
 // GoString and LogValue redact the values so %v, %+v, %#v, %s and slog never print them. The type
 // must still never be put into a log or an error: %d and json.Marshal print the fields (the wire
 // form requires marshaling).
+//
+// Protocol 10: ForbiddenSPKI and ForbiddenLeaf (each optional, at most MaxForbidden ValidForbidden
+// hashes) are the rollback guard (R48): the SHA-256 of the SubjectPublicKeyInfo of every public key
+// and the SHA-256 of the DER of every leaf a restore of this operation must never put back. An
+// older helper refuses an input with them (BAD_CONTENT, nothing changed).
 type NginxDeployInput struct {
-	CertPEM string `json:"cert_pem"`
-	KeyPEM  string `json:"key_pem"`
+	CertPEM       string   `json:"cert_pem"`
+	KeyPEM        string   `json:"key_pem"`
+	ForbiddenSPKI []string `json:"forbidden_spki_sha256,omitempty"`
+	ForbiddenLeaf []string `json:"forbidden_leaf_sha256,omitempty"`
 }
 
 // String redacts the key material so %v and %+v never print it.
@@ -563,7 +599,7 @@ func (NginxDeployInput) LogValue() slog.Value { return slog.StringValue("redacte
 // NginxDeployResponse answers "nginx-deploy".
 type NginxDeployResponse struct {
 	OK    bool   `json:"ok"`
-	Phase string `json:"phase"` // PhaseCommitted, PhaseUnchanged, PhaseRestored, PhaseRestoreFailed
+	Phase string `json:"phase"` // PhaseCommitted, PhaseUnchanged, PhaseRestored, PhaseRestoreFailed, PhaseRestoreForbidden
 	// FailedStep is the step that decided the outcome: for PhaseRestored the step that failed and
 	// started the rollback; for PhaseRestoreFailed the step that failed last (StepRestore,
 	// StepRollbackConfigTest, StepRollbackReload), or the starting step when the rollback left a
@@ -576,10 +612,33 @@ type NginxDeployResponse struct {
 	BackupDir string      `json:"backup_dir"`
 }
 
+// NginxRestoreInput (protocol 10) is the optional JSON on nginx-restore's stdin: the rollback
+// guard as it stands now (Alice reads it again before every rollback), checked together with the
+// lists the operation's journal keeps. Both members are required, each at most MaxForbidden
+// ValidForbidden hashes; an empty stdin is no list. An older helper never reads stdin.
+type NginxRestoreInput struct {
+	ForbiddenSPKI []string `json:"forbidden_spki_sha256"`
+	ForbiddenLeaf []string `json:"forbidden_leaf_sha256"`
+}
+
+// ValidForbidden reports a forbidden list: at most MaxForbidden entries, each 64 lowercase hex
+// digits (never AbsentSHA256), none twice.
+func ValidForbidden(list []string) bool {
+	if len(list) > MaxForbidden {
+		return false
+	}
+	for i, h := range list {
+		if h == AbsentSHA256 || !ValidSHA256(h) || slices.Contains(list[:i], h) {
+			return false
+		}
+	}
+	return true
+}
+
 // NginxRestoreResponse answers "nginx-restore".
 type NginxRestoreResponse struct {
 	OK         bool        `json:"ok"`
-	Phase      string      `json:"phase"` // PhaseRestored, PhaseRestoreFailed, or PhasePrepared/PhaseUnchanged (nothing to restore)
+	Phase      string      `json:"phase"` // PhaseRestored, PhaseRestoreFailed, PhaseRestoreForbidden, or PhasePrepared/PhaseUnchanged (nothing to restore)
 	FailedStep string      `json:"failed_step"`
 	CauseStep  string      `json:"cause_step"`
 	Error      string      `json:"error"`

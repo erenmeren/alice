@@ -67,7 +67,9 @@ type Config struct {
 	// simulate each outcome return DeployNoChange (a refusal), DeployUnchanged, DeployRolledBack,
 	// DeployRollbackFailed, or DeployUncertain together with an error.
 	Deploy func(req providers.DeployRequest) (providers.DeployOutcome, error)
-	// Rollback decides the outcome of RollbackDeployment; nil = rolled back.
+	// Rollback decides the outcome of RollbackDeployment; nil = rolled back, or (R48) the guard's
+	// refusal as a server that checks it answers when the request's guard forbids the backup
+	// (rollback_failed, phase restore_forbidden, deployment.rollback_forbidden).
 	Rollback func(req providers.RollbackRequest) (providers.RollbackOutcome, error)
 	// Verify decides VerifyDeployment; nil = OK, Served = req.Fingerprint, ServedChainLength =
 	// req.ChainLength.
@@ -163,11 +165,18 @@ func cloneCall(c Call) Call {
 	c.Deploy.OldSANs = slices.Clone(c.Deploy.OldSANs)
 	c.Rollback.Location = cloneLocation(c.Rollback.Location)
 	c.Rollback.OldSANs = slices.Clone(c.Rollback.OldSANs)
+	c.Rollback.Guard = cloneGuard(c.Rollback.Guard)
+	c.Deploy.Guard = cloneGuard(c.Deploy.Guard)
 	c.Verify.Location = cloneLocation(c.Verify.Location)
 	c.Verify.SANs = slices.Clone(c.Verify.SANs)
 	c.Discover.KVKnown = maps.Clone(c.Discover.KVKnown)
 	c.Discover.KVKnownKeys = maps.Clone(c.Discover.KVKnownKeys)
 	return c
+}
+
+func cloneGuard(g providers.RollbackGuard) providers.RollbackGuard {
+	g.ForbiddenSPKI, g.ForbiddenLeaf = slices.Clone(g.ForbiddenSPKI), slices.Clone(g.ForbiddenLeaf)
+	return g
 }
 
 func cloneLocation(l providers.CertLocation) providers.CertLocation {
@@ -566,6 +575,11 @@ func (s *session) RollbackDeployment(_ context.Context, req providers.RollbackRe
 		return providers.RollbackOutcome{}, providers.ErrUnsupported
 	}
 	out := providers.RollbackOutcome{Result: providers.DeployRolledBack, Phase: providers.PhaseRestored, Verified: "remote"}
+	if req.Guard.TargetForbidden {
+		out = providers.RollbackOutcome{Result: providers.DeployRollbackFailed, Phase: providers.PhaseRestoreForbidden, FailedStep: providers.StepNameRestore,
+			Error: providers.DeployErrForbidden, Reason: providers.ReasonRollbackForbidden, Params: map[string]string{},
+			Steps: []providers.DeployStep{{Name: providers.StepNameRestore, Status: providers.StepFailed, Error: providers.DeployErrForbidden}}}
+	}
 	var err error
 	if cfg.Rollback != nil {
 		out, err = cfg.Rollback(req)

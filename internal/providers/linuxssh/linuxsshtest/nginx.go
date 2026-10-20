@@ -783,7 +783,7 @@ func (e *Emulator) handleNginx(sudo bool, sub string, args []string, stdin []byt
 	case helperproto.SubNginxDeploy:
 		return e.nginxDeploy(args, stdin)
 	case helperproto.SubNginxRestore:
-		return e.nginxRestore(args)
+		return e.nginxRestore(args, stdin)
 	case helperproto.SubNginxFence:
 		return e.nginxFence(args)
 	default:

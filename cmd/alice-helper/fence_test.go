@@ -46,7 +46,7 @@ func TestFenceThenTheSameOperationsDeployIsRefusedNothingWritten(t *testing.T) {
 	code, m = w.fence(t, opA)
 	assert.Equal(t, helperproto.ExitOK, code, m)
 	assert.Equal(t, helperproto.PhaseFenced, m["phase"])
-	code, m = w.f.run("nginx-restore", "--op", opA)
+	code, m = w.restoreWith(opA, "") // the refused deploy left its stdin unread
 	assert.Equal(t, helperproto.ExitOK, code, m)
 	assert.Equal(t, helperproto.PhaseFenced, m["phase"])
 	assert.Equal(t, []any{}, m["steps"])
@@ -122,7 +122,7 @@ func TestFenceWhenAJournalExists(t *testing.T) {
 		code, m := w.deploy(opA, in, hexOf(string(w.newLeaf.FullchainPEM)))
 		assert.Equal(t, helperproto.CodeFenced, m["code"], code)
 		// The tombstone supersedes nothing: B is still the pair's latest and can be restored.
-		_, r := w.f.run("nginx-restore", "--op", opB)
+		_, r := w.restoreWith(opB, "") // the refused deploy left its stdin unread
 		assert.Equal(t, helperproto.PhaseRestored, r["phase"])
 		w.assertPair(t, false)
 	})

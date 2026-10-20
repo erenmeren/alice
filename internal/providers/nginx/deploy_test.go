@@ -677,7 +677,7 @@ func TestDeployResendBuildsANewCommand(t *testing.T) {
 func TestDeployInputEncoding(t *testing.T) {
 	cert := []byte("-----BEGIN CERTIFICATE-----\nMII\"\\\t\r\x01/\n-----END CERTIFICATE-----\n")
 	key := []byte("k\x1f")
-	b, ok := deployInput(cert, key)
+	b, ok := deployInput(cert, key, nil, nil)
 	require.True(t, ok)
 	assert.Equal(t, cap(b), len(b), "one allocation of the final size")
 	var in helperproto.NginxDeployInput
@@ -686,7 +686,7 @@ func TestDeployInputEncoding(t *testing.T) {
 	assert.Equal(t, string(key), in.KeyPEM)
 	assert.Equal(t, `{"cert_pem":"-----BEGIN CERTIFICATE-----\nMII\"\\\t\r\u0001/\n-----END CERTIFICATE-----\n","key_pem":"k\u001f"}`, string(b))
 	for _, bad := range [][2][]byte{{nil, key}, {cert, nil}, {cert, []byte("k\xc3\xa9")}, {[]byte("\x80"), key}} {
-		_, ok := deployInput(bad[0], bad[1])
+		_, ok := deployInput(bad[0], bad[1], nil, nil)
 		assert.False(t, ok)
 	}
 	l := pki.NewCA("C", pki.ECDSA256, unitNow).Issue(pki.Opts{CommonName: "c"}, unitNow)
@@ -958,16 +958,20 @@ func TestRollbackDeployment(t *testing.T) {
 // the helper's names.
 func TestPhaseAndStepNamesMatchTheHelper(t *testing.T) {
 	assert.Equal(t, []string{helperproto.PhaseNone, helperproto.PhasePrepared, helperproto.PhaseWriting, helperproto.PhaseCommitted,
-		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed, helperproto.PhaseFenced},
+		helperproto.PhaseUnchanged, helperproto.PhaseRestoring, helperproto.PhaseRestored, helperproto.PhaseRestoreFailed, helperproto.PhaseFenced,
+		helperproto.PhaseRestoreForbidden},
 		[]string{providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,
-			providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced})
+			providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced,
+			providers.PhaseRestoreForbidden})
 	assert.Equal(t, helperPhases, []string{providers.PhaseNone, providers.PhasePrepared, providers.PhaseWriting, providers.PhaseCommitted,
-		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced})
+		providers.PhaseUnchanged, providers.PhaseRestoring, providers.PhaseRestored, providers.PhaseRestoreFailed, providers.PhaseFenced,
+		providers.PhaseRestoreForbidden})
 	assert.Equal(t, []string{helperproto.StepBackup, helperproto.StepWriteKey, helperproto.StepWriteCert, helperproto.StepConfigTest, helperproto.StepReload,
 		helperproto.StepJournal, helperproto.StepRestore, helperproto.StepRollbackConfigTest, helperproto.StepRollbackReload},
 		[]string{providers.StepNameBackup, providers.StepNameWriteKey, providers.StepNameWriteCert, providers.StepNameConfigTest, providers.StepNameReload,
 			providers.StepNameJournal, providers.StepNameRestore, providers.StepNameRollbackConfigTest, providers.StepNameRollbackReload})
 	assert.Equal(t, helperproto.RestoreErrFileChanged, providers.DeployErrFileChanged)
+	assert.Equal(t, helperproto.RestoreErrForbidden, providers.DeployErrForbidden)
 	helper, _ := sources(t)
 	assert.Equal(t, withPrefix(helper, "Step"), sorted(helperSteps), "helperproto.Step* -> helperSteps")
 	assert.Equal(t, withPrefix(helper, "Phase"), sorted(helperPhases), "helperproto.Phase* -> helperPhases")

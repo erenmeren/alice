@@ -11,6 +11,8 @@ import (
 	"errors"
 	"io"
 	"unicode/utf8"
+
+	"alice/internal/providers/linuxssh/helperproto"
 )
 
 // readInput reads stdin, at most limit+1 bytes (the caller refuses more), into one buffer of that
@@ -43,56 +45,107 @@ func readInput(ctx context.Context, r io.Reader, limit int) ([]byte, error) {
 	}
 }
 
+// parsedInput is nginx-deploy's decoded stdin: the new pair (cleared by the caller) and the
+// rollback guard (protocol 10).
+type parsedInput struct {
+	cert, key []byte
+	guard     guard
+}
+
 // parseDeployInput decodes nginx-deploy's stdin, a JSON object with exactly the two string members
-// cert_pem and key_pem (helperproto.NginxDeployInput, either order, each once, nothing else). It
-// is a strict hand parser instead of encoding/json so that the private key is copied only into
-// buffers the caller clears (encoding/json keeps copies in strings and its own buffers). On error
-// nothing is returned and everything it wrote is cleared.
-func parseDeployInput(raw []byte) (cert, key []byte, err error) {
+// cert_pem and key_pem and, since protocol 10, the optional array members forbidden_spki_sha256
+// and forbidden_leaf_sha256 (helperproto.NginxDeployInput, any order, each once, nothing else; each
+// list a helperproto.ValidForbidden one). It is a strict hand parser instead of encoding/json so
+// that the private key is copied only into buffers the caller clears (encoding/json keeps copies in
+// strings and its own buffers). On error nothing is returned and everything it wrote is cleared.
+func parseDeployInput(raw []byte) (in parsedInput, err error) {
 	p := jsonScan{b: raw}
-	fail := func() ([]byte, []byte, error) {
-		clear(cert)
-		clear(key)
-		return nil, nil, errBadContent
+	var spki, leaf bool
+	fail := func() (parsedInput, error) {
+		clear(in.cert)
+		clear(in.key)
+		return parsedInput{}, errBadContent
 	}
 	if !p.lit('{') {
 		return fail()
 	}
-	for i := 0; i < 2; i++ {
-		if i == 1 && !p.lit(',') {
-			return fail()
+	for i := 0; ; i++ {
+		if i > 0 && !p.lit(',') {
+			break
 		}
-		name, ok := p.str(make([]byte, 0, 16), 16)
+		name, ok := p.str(make([]byte, 0, 32), 32)
 		if !ok || !p.lit(':') {
 			return fail()
 		}
 		switch string(name) {
 		case "cert_pem":
-			if cert != nil {
+			if in.cert != nil {
 				return fail()
 			}
-			if cert, ok = p.str(make([]byte, 0, len(raw)), len(raw)); !ok {
+			if in.cert, ok = p.str(make([]byte, 0, len(raw)), len(raw)); !ok {
 				return fail()
 			}
 		case "key_pem":
-			if key != nil {
+			if in.key != nil {
 				return fail()
 			}
-			if key, ok = p.str(make([]byte, 0, len(raw)), len(raw)); !ok {
+			if in.key, ok = p.str(make([]byte, 0, len(raw)), len(raw)); !ok {
+				return fail()
+			}
+		case "forbidden_spki_sha256":
+			if spki {
+				return fail()
+			}
+			spki = true
+			if in.guard.SPKI, ok = p.hashList(); !ok {
+				return fail()
+			}
+		case "forbidden_leaf_sha256":
+			if leaf {
+				return fail()
+			}
+			leaf = true
+			if in.guard.Leaf, ok = p.hashList(); !ok {
 				return fail()
 			}
 		default:
 			return fail()
 		}
 	}
-	if !p.lit('}') {
+	if in.cert == nil || in.key == nil || !p.lit('}') {
 		return fail()
 	}
 	p.ws()
 	if p.i != len(p.b) {
 		return fail()
 	}
-	return cert, key, nil
+	return in, nil
+}
+
+// hashList skips white space and decodes one JSON array of strings that is a
+// helperproto.ValidForbidden list.
+func (p *jsonScan) hashList() ([]string, bool) {
+	if !p.lit('[') {
+		return nil, false
+	}
+	list := []string{}
+	if p.lit(']') {
+		return list, true
+	}
+	for {
+		h, ok := p.str(make([]byte, 0, 64), 64)
+		if !ok || len(list) >= helperproto.MaxForbidden {
+			return nil, false
+		}
+		list = append(list, string(h))
+		if p.lit(']') {
+			break
+		}
+		if !p.lit(',') {
+			return nil, false
+		}
+	}
+	return list, helperproto.ValidForbidden(list)
 }
 
 // jsonScan reads the few JSON forms parseDeployInput accepts.
