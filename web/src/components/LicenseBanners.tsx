@@ -15,7 +15,18 @@ const COLORS: Record<BannerSeverity, string> = { info: 'blue', warning: 'yellow'
 const ICONS: Record<BannerSeverity, IconName> = { info: 'CircleDot', warning: 'CircleAlert', caution: 'CircleAlert', danger: 'ShieldAlert' };
 
 // Banner parameters that are instants; they are shown in the reader's language and time zone.
-const TIME_PARAMS = new Set(['ends_at', 'ended_at', 'valid_until', 'valid_from', 'locks_at', 'system_time', 'last_seen', 'last_checked']);
+const TIME_PARAMS = new Set([
+  'ends_at',
+  'ended_at',
+  'valid_until',
+  'valid_from',
+  'locks_at',
+  'system_time',
+  'last_seen',
+  'last_checked',
+  'continuity_ends_at',
+  'continuity_ended_at',
+]);
 
 // bannerValues turns the server's parameters into translation values. days_left and
 // jump_days also become "count", so i18next picks the singular or plural sentence.

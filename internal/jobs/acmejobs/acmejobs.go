@@ -15,10 +15,13 @@
 // (A12), removed from the record once it is gone, and the acme.cleanup job (ClassAlways) removes what is left in every
 // license state.
 //
-// Licence: acme.issue is ClassChange (the runner never claims it in lock); the handler asks the gate again before
-// each publication and once more right before finalize, so a lock that begins during an order publishes nothing more,
-// sends no CSR and ends the order (license.locked; what was published is cleaned up). The sweep contacts a CA only to
-// resume an interrupted order, and only while the gate allows changes.
+// Licence: acme.issue is ClassChange (the runner never claims it in lock); acme.renew, an order the renewal planner
+// started for an issued certificate, is ClassContinuity (it runs in the continuity window of a lock too; owner decision
+// 2026-10-20) and runs the same handler. The handler asks the gate for its job's class again before each publication
+// and once more right before finalize, so a lock (or the end of the continuity window) that begins during an order
+// publishes nothing more, sends no CSR and ends the order (license.locked; what was published is cleaned up). The sweep
+// contacts a CA only to resume an interrupted order, and only while the gate allows the order's class (continuity for
+// a renewal, change otherwise).
 package acmejobs
 
 import (
@@ -109,14 +112,15 @@ const (
 	reasonLeaseExpired = "job.lease_expired"
 )
 
-// Register registers acme.issue and acme.cleanup; it panics on a missing dependency, so a build that forgot one never
-// starts.
+// Register registers acme.issue, acme.renew (the same handler) and acme.cleanup; it panics on a missing dependency, so
+// a build that forgot one never starts.
 func Register(r *jobs.Runner, d Deps) {
 	if r == nil || d.Inventory == nil || d.Registry == nil || d.Gate == nil || d.Clock == nil {
 		panic("acmejobs: Register needs a runner, Deps.Inventory, Deps.Registry, Deps.Gate and Deps.Clock")
 	}
 	h := newHandlers(d)
 	r.Handle(jobs.ACMEIssue, h.issue)
+	r.Handle(jobs.ACMERenew, h.issue)
 	r.Handle(jobs.ACMECleanup, h.cleanup)
 }
 
@@ -176,7 +180,7 @@ func (h *handlers) issue(ctx context.Context, j jobs.Job, _ jobs.StepRecorder) (
 		// The sweep ended it (a job that was blocked in lock and confirmed later): nothing to do.
 		return map[string]any{"order_id": id.String(), "state": w.Order.State}, nil
 	}
-	o := &orderRun{h: h, w: w, id: id}
+	o := &orderRun{h: h, w: w, id: id, class: j.Type.Class}
 	return o.run(ctx)
 }
 
@@ -185,6 +189,9 @@ type orderRun struct {
 	h  *handlers
 	w  inventory.ACMEOrderWork
 	id uuid.UUID
+	// class is the job's licence class, which the gate is asked for at every step: ClassChange for acme.issue,
+	// ClassContinuity for acme.renew.
+	class license.Class
 	// crashed: the crash seam stopped the run (nothing more is done, as after a real crash).
 	crashed bool
 	// urlRecorded and keyStored: the CA created the order and its key is persisted, so the sweep can resume it.
@@ -258,7 +265,7 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 		failure = inventory.ErrNotFound
 		return nil, nil
 	}
-	if err := o.h.d.Gate.Allow(license.ClassChange); err != nil {
+	if err := o.h.d.Gate.Allow(o.class); err != nil {
 		failure = errLocked
 		return nil, nil
 	}
@@ -356,13 +363,13 @@ func (o *orderRun) options(ctx context.Context) []acme.OrderOption {
 			return nil
 		}),
 		acme.WithBeforeFinalize(func() error {
-			if err := o.h.d.Gate.Allow(license.ClassChange); err != nil {
+			if err := o.h.d.Gate.Allow(o.class); err != nil {
 				return errLocked
 			}
 			return nil
 		}),
 		acme.WithOnPresent(func(ch solver.Challenge) error {
-			if err := o.h.d.Gate.Allow(license.ClassChange); err != nil {
+			if err := o.h.d.Gate.Allow(o.class); err != nil {
 				return errLocked
 			}
 			dctx, cancel := detached(ctx)

@@ -36,7 +36,7 @@ func TestAutoDeployTask(t *testing.T) {
 	task := AutoDeployTask(p, time.Minute, nil)
 	assert.Equal(t, jobs.ACMEAutoDeploy, task.Type)
 	assert.Equal(t, time.Minute, task.Every)
-	assert.Equal(t, license.ClassReadOnly, task.Type.Class, "the scheduler pauses it in lock")
+	assert.Equal(t, license.ClassContinuity, task.Type.Class, "the scheduler pauses it in lock once the continuity window has ended")
 	require.NoError(t, task.Run(context.Background()))
 
 	var logs bytes.Buffer

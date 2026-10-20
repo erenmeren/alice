@@ -241,6 +241,11 @@ export interface LicenseDetail {
   locks_at: string;
   days_left: number;
   grace_day: number;
+  // The continuity window of a licensed lock (locks_at + 45 days): until then certificates already managed keep
+  // renewing and deploying automatically. null during the evaluation (it has no window).
+  continuity_ends_at: string | null;
+  // Whole days left in the window while locked inside it; 0 otherwise.
+  continuity_days_left: number;
   tampered: boolean;
   files: LicenseFileEntry[];
   history: LicenseHistoryEntry[];

@@ -119,6 +119,22 @@ func TestTickGraceAndLock(t *testing.T) {
 	assert.Equal(t, 2, e.countWhere("license_history", "event = 'state_change'"))
 	assert.ErrorIs(t, e.svc.Allow(license.ClassChange), license.ErrLocked)
 	assert.NoError(t, e.svc.Allow(license.ClassAlways))
+
+	// The continuity window (owner decision 2026-10-20): certificates already managed keep renewing for 45 days,
+	// then that stops too, announced once.
+	assert.NoError(t, e.svc.Allow(license.ClassContinuity), "inside the window")
+	ends := until.Add(license.GracePeriod + license.ContinuityPeriod)
+	e.tickAt(ends.Add(-time.Hour))
+	assert.NoError(t, e.svc.Allow(license.ClassContinuity))
+	e.tickAt(ends)
+	err = e.svc.Allow(license.ClassContinuity)
+	assert.ErrorIs(t, err, license.ErrLocked)
+	assert.True(t, license.ConfirmedLock(err), "an evaluation found the window ended")
+	e.restart()
+	e.tickAt(ends.Add(time.Hour))
+	assert.Equal(t, append(want, license.TemplateLocked, license.TemplateContinuityEnded), e.notices.templates(), "the end once")
+	assert.Equal(t, 1, e.countWhere("license_history", "notice = 'continuity_ended'"))
+	assert.Equal(t, "locked", e.state())
 }
 
 // L-07 and L-03: evaluation warnings at 7, 3 and 1 days, then the end (no grace).
@@ -350,7 +366,7 @@ func TestFailedTickDoesNotLoseAClockJump(t *testing.T) {
 
 func TestTemplatesListsEveryEmail(t *testing.T) {
 	assert.ElementsMatch(t, []string{"license.expiry_warning", "license.evaluation_warning", "license.evaluation_ended",
-		"license.grace", "license.locked", "license.clock_jump"}, license.Templates())
+		"license.grace", "license.locked", "license.continuity_ended", "license.clock_jump"}, license.Templates())
 }
 
 // B2: the evaluation that follows a committed upload does not depend on the request, so a

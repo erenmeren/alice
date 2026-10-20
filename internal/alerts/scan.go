@@ -69,7 +69,10 @@ func (s *Service) Scan(ctx context.Context) (ScanResult, error) {
 	if err != nil {
 		return res, err
 	}
-	note := noteFor(s.license.Snapshot().Eval.Locked(), g.PublicURL)
+	// The license note says automatic deployment waits for a renewal: not true inside the continuity window of a lock,
+	// where certificates already managed keep renewing and deploying (owner decision 2026-10-20).
+	ev := s.license.Snapshot().Eval
+	note := noteFor(ev.Locked() && !ev.InContinuity(), g.PublicURL)
 	dueByKind := map[Kind][]dueItem{}
 	for _, it := range items {
 		if level, due := expiry.Due(it.ExpiresAt, now, th.Days, sent[keyOf(it)]); due {

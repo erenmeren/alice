@@ -5713,8 +5713,12 @@ components:
       properties:
         kind:
           type: string
-          enum: [evaluation, evaluation_ended, expiry_warning, grace, locked, unverified, tampered, clock_behind, clock_jump, pending, over_limit, limit_reached]
-          description: unverified (everyone, danger, param last_checked) is shown while no license check has succeeded for 3 hours; changes are refused with ALC-LIC-0009 until one does
+          enum: [evaluation, evaluation_ended, expiry_warning, grace, locked_continuity, locked, unverified, tampered, clock_behind, clock_jump, pending, over_limit, limit_reached]
+          description: >-
+            unverified (everyone, danger, param last_checked) is shown while no license check has succeeded for 3 hours; changes are refused with
+            ALC-LIC-0009 until one does. locked_continuity (everyone, danger; params valid_until, continuity_ends_at, days_left) is a licensed
+            lock inside its continuity window: certificates already managed keep renewing and deploying automatically until continuity_ends_at.
+            locked (params valid_until, continuity_ended_at) is a lock after that window: automatic renewal and deployment have stopped too.
         severity: { type: string, enum: [info, warning, caution, danger] }
         params: { type: object, additionalProperties: { type: string } }
     LicenseStatus:
@@ -5763,7 +5767,7 @@ components:
     LicenseDetail:
       type: object
       required: [installation_id, installed_at, phase, effective_time, current, pending, max_targets, targets_used,
-        ends_at, locks_at, days_left, grace_day, tampered, files, history]
+        ends_at, locks_at, days_left, grace_day, continuity_ends_at, continuity_days_left, tampered, files, history]
       properties:
         installation_id: { type: string, examples: [ALICE-7F3K-9Q2M-XD41-B8TC] }
         installed_at: { type: string, format: date-time }
@@ -5783,6 +5787,13 @@ components:
         locks_at: { type: string, format: date-time }
         days_left: { type: integer }
         grace_day: { type: integer }
+        continuity_ends_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            End of the continuity window of a licensed lock (locks_at + 45 days): until then ACME renewal and automatic deployment of
+            certificates already managed go on in lock. Null during the evaluation (it has no window).
+        continuity_days_left: { type: integer, description: Whole days left in the continuity window while locked inside it; 0 otherwise }
         tampered: { type: boolean }
         files: { type: array, items: { $ref: "#/components/schemas/LicenseFile" } }
         history: { type: array, items: { $ref: "#/components/schemas/LicenseHistoryEntry" } }
@@ -6486,7 +6497,7 @@ components:
         deployment_id:
           type: [string, "null"]
           format: uuid
-          description: 'The deployment a certificate.deploy or certificate.deploy_recover job works on (uploads and Key Vault alike); null for other jobs'
+          description: 'The deployment a certificate.deploy, certificate.deploy_auto or certificate.deploy_recover job works on (uploads and Key Vault alike); null for other jobs'
         import_id: { type: [string, "null"], format: uuid, description: 'The import a kv.import job sends; null for other jobs' }
         ssh_key_id: { type: [string, "null"], format: uuid, description: 'The key a sshkey.add job deploys; null for other jobs' }
         rotation_id: { type: [string, "null"], format: uuid, description: 'The run a rotation.location job works for; null for other jobs' }

@@ -127,6 +127,7 @@ func newWorld(t *testing.T) *world {
 	w.runner = jobs.NewRunner(jobs.RunnerConfig{Pool: w.db.App, Queue: w.queue, Gate: w.gate, Audit: audit.New(w.clock), Clock: w.clock,
 		Log: log, Workers: 1, WorkerID: "acme-test", Jitter: func() float64 { return 0 }, Notifier: notify.AdminNotifier{Clock: w.clock}})
 	w.runner.Handle(jobs.ACMEIssue, w.h.issue)
+	w.runner.Handle(jobs.ACMERenew, w.h.issue)
 	w.runner.Handle(jobs.ACMECleanup, w.h.cleanup)
 
 	w.fake, err = fakeacme.New(fakeacme.Options{Now: w.clock.Now, NoTerms: true})

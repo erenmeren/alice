@@ -534,7 +534,13 @@ VALUES ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $14, $15, $12)`, id, 
 	if err != nil {
 		return RequestedDeployment{}, fmt.Errorf("inventory: store the deployment: %w", err)
 	}
-	jobID, err := s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobCertificateDeploy, TargetID: l.target,
+	// A deployment the automatic planners queued is continuity work (certificate.deploy_auto: it runs in the continuity
+	// window of a lock); a person's is a change (certificate.deploy). Both share the handler and the dedupe namespace.
+	jobType := JobCertificateDeploy
+	if src.Trigger == TriggerACMERenewal || src.Trigger == triggerKVRenewal {
+		jobType = JobCertificateDeployAuto
+	}
+	jobID, err := s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: jobType, TargetID: l.target,
 		Payload: map[string]string{"deployment_id": id.String()}, Kind: a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role),
 		DedupeKey: deployDedupePrefix + id.String()})
 	if err != nil {

@@ -100,9 +100,19 @@ export function LicensePage() {
     if (!d) return null;
     switch (d.phase) {
       case "locked":
+        // The continuity window (owner decision 2026-10-20): certificates already managed keep renewing and
+        // deploying until continuity_ends_at; after it the notice says that this stopped too.
+        if (d.continuity_ends_at && d.continuity_days_left > 0) {
+          return (
+            <Notice tone="danger" title={t("license.page.continuityTitle")} testId="license-continuity">
+              {t("license.page.continuityText", { date: fmt(d.continuity_ends_at), count: d.continuity_days_left })}
+            </Notice>
+          );
+        }
         return (
           <Notice tone="danger" title={t("license.page.lockedTitle")}>
             {t("license.page.lockedText")}
+            {d.continuity_ends_at && <> {t("license.page.continuityEnded", { date: fmt(d.continuity_ends_at) })}</>}
           </Notice>
         );
       case "evaluation_expired":

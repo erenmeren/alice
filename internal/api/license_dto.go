@@ -68,21 +68,25 @@ type licenseHistoryDTO struct {
 }
 
 type licenseDetailDTO struct {
-	InstallationID string              `json:"installation_id"`
-	InstalledAt    time.Time           `json:"installed_at"`
-	Phase          string              `json:"phase"`
-	EffectiveTime  time.Time           `json:"effective_time"`
-	Current        *licenseInfoDTO     `json:"current"`
-	Pending        *licenseInfoDTO     `json:"pending"`
-	MaxTargets     int                 `json:"max_targets"`
-	TargetsUsed    int                 `json:"targets_used"`
-	EndsAt         time.Time           `json:"ends_at"`
-	LocksAt        time.Time           `json:"locks_at"`
-	DaysLeft       int                 `json:"days_left"`
-	GraceDay       int                 `json:"grace_day"`
-	Tampered       bool                `json:"tampered"`
-	Files          []licenseFileDTO    `json:"files"`
-	History        []licenseHistoryDTO `json:"history"`
+	InstallationID string          `json:"installation_id"`
+	InstalledAt    time.Time       `json:"installed_at"`
+	Phase          string          `json:"phase"`
+	EffectiveTime  time.Time       `json:"effective_time"`
+	Current        *licenseInfoDTO `json:"current"`
+	Pending        *licenseInfoDTO `json:"pending"`
+	MaxTargets     int             `json:"max_targets"`
+	TargetsUsed    int             `json:"targets_used"`
+	EndsAt         time.Time       `json:"ends_at"`
+	LocksAt        time.Time       `json:"locks_at"`
+	DaysLeft       int             `json:"days_left"`
+	GraceDay       int             `json:"grace_day"`
+	// ContinuityEndsAt is the end of the continuity window of a licensed lock (null for the evaluation: it has
+	// none); ContinuityDaysLeft the whole days left in it while locked inside it (owner decision 2026-10-20).
+	ContinuityEndsAt   *time.Time          `json:"continuity_ends_at"`
+	ContinuityDaysLeft int                 `json:"continuity_days_left"`
+	Tampered           bool                `json:"tampered"`
+	Files              []licenseFileDTO    `json:"files"`
+	History            []licenseHistoryDTO `json:"history"`
 }
 
 func licenseDetailJSON(d license.Detail) licenseDetailDTO {
@@ -103,6 +107,11 @@ func licenseDetailJSON(d license.Detail) licenseDetailDTO {
 		Pending: licenseInfoJSON(e.Pending, pendingKey), MaxTargets: e.MaxTargets, TargetsUsed: s.Targets,
 		EndsAt: e.EndsAt.UTC(), LocksAt: e.LocksAt.UTC(), DaysLeft: e.DaysLeft, GraceDay: e.GraceDay, Tampered: s.Tampered,
 		Files: make([]licenseFileDTO, 0, len(d.Files)), History: make([]licenseHistoryDTO, 0, len(d.History)),
+		ContinuityDaysLeft: e.ContinuityDaysLeft,
+	}
+	if !e.ContinuityEndsAt.IsZero() {
+		at := e.ContinuityEndsAt.UTC()
+		out.ContinuityEndsAt = &at
 	}
 	for _, f := range d.Files {
 		out.Files = append(out.Files, licenseFileDTO{Status: f.Status, UploadedAt: f.UploadedAt.UTC(), License: licenseInfoJSON(f.Payload, f.KeyID)})

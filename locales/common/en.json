@@ -1888,11 +1888,15 @@
       },
       "grace": {
         "subject": "Alice license expired: automatic tasks stop on {{locks_at}}",
-        "body": "Your Alice license {{license_id}} for {{customer}} expired on {{ends_at}}. Everything still works during the 7-day grace period (grace day {{grace_day}} of 7). On {{locks_at}} Alice pauses automatic tasks.\n\nContact your vendor now and upload the renewed license on the License page. Your Installation ID is {{installation_id}}."
+        "body": "Your Alice license {{license_id}} for {{customer}} expired on {{ends_at}}. Everything still works during the 7-day grace period (grace day {{grace_day}} of 7). On {{locks_at}} Alice pauses automatic tasks; only the renewal and automatic deployment of certificates it already manages go on, until {{continuity_ends_at}}.\n\nContact your vendor now and upload the renewed license on the License page. Your Installation ID is {{installation_id}}."
       },
       "locked": {
         "subject": "Alice license expired: automatic tasks are paused",
-        "body": "The grace period of your Alice license {{license_id}} ended on {{locks_at}}. Automatic tasks are paused and changes to your servers are refused. Your data is safe, and certificate expiry alerts still arrive by email.\n\nUpload a new license on the License page to continue. Your Installation ID is {{installation_id}}."
+        "body": "The grace period of your Alice license {{license_id}} ended on {{locks_at}}. Automatic tasks are paused and changes to your servers are refused. Your data is safe, and certificate expiry alerts still arrive by email.\n\nSo that your websites do not go down, certificates Alice already manages keep renewing and are still deployed automatically to the places they are bound to until {{continuity_ends_at}} ({{continuity_days_left}} days). After that date this stops too.\n\nUpload a new license on the License page to continue. Your Installation ID is {{installation_id}}."
+      },
+      "continuity_ended": {
+        "subject": "Alice license expired: certificates are no longer renewed",
+        "body": "Your Alice license {{license_id}} has expired and its grace period ended on {{locks_at}}. Since {{continuity_ends_at}} Alice no longer renews the certificates it manages and no longer deploys them automatically. Certificates that expire from now on are not replaced, and websites that use them will show errors. Changes to your servers are refused. Your data is safe, and certificate expiry alerts still arrive by email.\n\nUpload a new license on the License page to continue. Your Installation ID is {{installation_id}}."
       },
       "clock_jump": {
         "subject": "Alice: the server clock jumped forward",

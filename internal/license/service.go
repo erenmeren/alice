@@ -307,6 +307,12 @@ func (s *Service) Close() {
 //     This is the gate's own estimate and can be wrong: a pending license may have started in
 //     between, or a renewal may have been uploaded in another process. Gated work is refused
 //     (fail closed), but nothing lasting is decided until an evaluation confirms the lock.
+//
+// ClassContinuity follows the same rules with the end of the continuity window in place of the lock:
+// it is allowed in a licensed lock whose window the evaluation found open, refused (ErrLocked) once an
+// evaluation found the window ended (or in an evaluation that ended: it has no window), and ErrLockDue
+// when the effective time advanced by the uptime since reaches ContinuityEndsAt (LocksAt for the
+// evaluation, which has no window).
 func allowIn(snap Snapshot, c Class, since time.Duration) error {
 	if !c.Valid() {
 		return ErrUnclassified
@@ -317,10 +323,14 @@ func allowIn(snap Snapshot, c Class, since time.Duration) error {
 	if !snap.Ready || since > MaxEvaluationAge {
 		return ErrUnverified
 	}
-	if snap.Eval.Locked() {
-		return ErrLocked
+	deadline := snap.Eval.LocksAt
+	if c == ClassContinuity && !snap.Eval.ContinuityEndsAt.IsZero() {
+		deadline = snap.Eval.ContinuityEndsAt
 	}
-	if !snap.Eval.LocksAt.IsZero() && !snap.Reading.Effective.Add(since).Before(snap.Eval.LocksAt) {
+	switch {
+	case snap.Eval.Locked() && (c != ClassContinuity || !snap.Eval.InContinuity()):
+		return ErrLocked
+	case !deadline.IsZero() && !snap.Reading.Effective.Add(since).Before(deadline):
 		return ErrLockDue
 	}
 	return nil

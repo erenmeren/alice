@@ -414,10 +414,13 @@ func licenseDenialReason(err error) string {
 	return "locked"
 }
 
-// gated reports whether lock mode refuses work of class c: changes to managed systems and
-// recurring read-only work on them (R9, §8.6). The guard and the route-table tests share this
-// one definition, so a new class cannot be gated in one place and not in the other.
-func gated(c license.Class) bool { return c == license.ClassChange || c == license.ClassReadOnly }
+// gated reports whether lock mode refuses work of class c: changes to managed systems,
+// recurring read-only work on them (R9, §8.6) and continuity work (refused after its window; no
+// route declares it: register refuses one). The guard and the route-table tests share this one
+// definition, so a new class cannot be gated in one place and not in the other.
+func gated(c license.Class) bool {
+	return c == license.ClassChange || c == license.ClassReadOnly || c == license.ClassContinuity
+}
 
 // auditLicenseDenied records a request refused by the license gate (L-26): reason "locked",
 // "lock_due" (the gate's own clock reached the lock time; no evaluation confirmed it yet) or

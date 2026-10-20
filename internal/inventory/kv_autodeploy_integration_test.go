@@ -174,7 +174,7 @@ func TestAutoDeployApplyTable(t *testing.T) {
 		assert.ElementsMatch(t, []uuid.UUID{f.loc1, f.loc2, f.loc3}, f.locationsOf(ver(2)))
 		deployJobs := 0
 		for _, r := range f.h.jobs.requests() {
-			if r.Type == inventory.JobCertificateDeploy {
+			if r.Type == inventory.JobCertificateDeployAuto { // continuity work (owner decision 2026-10-20)
 				deployJobs++
 				assert.Equal(t, "system", r.Kind)
 			}

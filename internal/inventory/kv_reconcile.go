@@ -395,6 +395,11 @@ func foldedNames[T any](items []T, fold func(T) string) []string {
 // gateClosedNow reports that the license gate refuses changes at this moment.
 func (s *Service) gateClosedNow() bool { return s.license.Allow(license.ClassChange) != nil }
 
+// continuityClosedNow reports that the license gate refuses continuity work at this moment. A poll (continuity work)
+// holds the versions it detects by it: in the continuity window of a lock a renewed version is not held, so the
+// automatic deployment (continuity work too) deploys it (owner decision 2026-10-20).
+func (s *Service) continuityClosedNow() bool { return s.license.Allow(license.ClassContinuity) != nil }
+
 // TemplateKVCertificatesRemovedOne is the summary mail of exactly one more removed certificate
 // (TemplateKVCertificatesRemovedMore with the plural text; same params).
 const TemplateKVCertificatesRemovedOne = "kv.certificates_removed_more_one"
@@ -467,7 +472,7 @@ func (h kvHold) rule(known bool, created *time.Time) string {
 // holdRule reads what decides the holds of this poll: the gate now, the time it last reopened and
 // the vault's last complete poll.
 func (s *Service) holdRule(ctx context.Context, id uuid.UUID) (kvHold, error) {
-	h := kvHold{closed: s.gateClosedNow()}
+	h := kvHold{closed: s.continuityClosedNow()}
 	var err error
 	if h.reopened, err = s.gateReopenedAt(ctx); err != nil {
 		return h, err

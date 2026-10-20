@@ -21,13 +21,14 @@ const (
 	TemplateEvaluationEnded   = "license.evaluation_ended"
 	TemplateGrace             = "license.grace"
 	TemplateLocked            = "license.locked"
+	TemplateContinuityEnded   = "license.continuity_ended"
 	TemplateClockJump         = "license.clock_jump"
 )
 
 // Templates lists every email template of the license module.
 func Templates() []string {
 	return []string{TemplateExpiryWarning, TemplateEvaluationWarning, TemplateEvaluationEnded,
-		TemplateGrace, TemplateLocked, TemplateClockJump}
+		TemplateGrace, TemplateLocked, TemplateContinuityEnded, TemplateClockJump}
 }
 
 // mailTime is how times appear in emails: unambiguous and language-neutral.
@@ -173,6 +174,10 @@ func dueNotice(snap Snapshot) (notice, bool) {
 	if e.Current != nil {
 		params["customer"], params["license_id"] = e.Current.Customer, e.Current.LicenseID
 	}
+	if !e.ContinuityEndsAt.IsZero() {
+		params["continuity_ends_at"] = mailTime(e.ContinuityEndsAt)
+		params["continuity_days_left"] = strconv.Itoa(e.ContinuityDaysLeft)
+	}
 	switch {
 	case e.Phase == PhaseEvaluation && e.Threshold > 0:
 		return notice{"evaluation:" + strconv.Itoa(e.Threshold), TemplateEvaluationWarning, params}, true
@@ -183,8 +188,13 @@ func dueNotice(snap Snapshot) (notice, bool) {
 	case e.Phase == PhaseGrace:
 		params["grace_day"] = strconv.Itoa(e.GraceDay)
 		return notice{"grace:" + strconv.Itoa(e.GraceDay), TemplateGrace, params}, true // a daily email (§19.3)
-	case e.Phase == PhaseLocked:
+	case e.InContinuity():
+		// The lock began: the e-mail names the end of the continuity window (owner decision 2026-10-20).
 		return notice{"locked", TemplateLocked, params}, true
+	case e.Phase == PhaseLocked:
+		// The continuity window ended: renewal and automatic deployment have stopped too. After downtime
+		// that spans the whole window only this notice is sent (L-16); its text stands on its own.
+		return notice{"continuity_ended", TemplateContinuityEnded, params}, true
 	}
 	return notice{}, false
 }

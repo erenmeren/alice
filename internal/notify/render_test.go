@@ -28,6 +28,7 @@ func TestEveryLicenseTemplateRendersInBothLanguages(t *testing.T) {
 		"installation_id": "ALICE-7F3K-9Q2M-XD41-B8TC", "days_left": "30", "ends_at": "2027-10-01 00:00 UTC",
 		"locks_at": "2027-10-08 00:00 UTC", "customer": "Örnek Bankası A.Ş.", "license_id": "LIC-2026-000123",
 		"grace_day": "3", "jump_days": "200", "system_time": "2028-04-18 09:00 UTC",
+		"continuity_ends_at": "2027-11-22 00:00 UTC", "continuity_days_left": "45",
 	}
 	for _, tpl := range license.Templates() {
 		for _, lang := range []string{"en", "tr"} {

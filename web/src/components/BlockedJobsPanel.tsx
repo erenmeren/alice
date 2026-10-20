@@ -11,8 +11,10 @@ import { ErrorAlert } from './ErrorAlert';
 import { InternalLink } from './InternalLink';
 import { Panel } from './ui';
 
-// DEPLOY_JOB is the job type of a deployment (internal/inventory/jobs.go JobCertificateDeploy).
-const DEPLOY_JOB = 'certificate.deploy';
+// DEPLOY_JOBS are the job types of a deployment (internal/inventory/jobs.go JobCertificateDeploy, and
+// JobCertificateDeployAuto: an automatic deployment, held when the license's continuity window ended).
+const DEPLOY_JOBS = new Set(['certificate.deploy', 'certificate.deploy_auto']);
+const isDeploy = (job: Job) => DEPLOY_JOBS.has(job.type);
 // IMPORT_JOB is the job type of an import into a vault (JobKVImport); its target is the vault.
 const IMPORT_JOB = 'kv.import';
 // The deployments of a server read to find the one a held job belongs to (the newest first; a held
@@ -40,8 +42,8 @@ export function BlockedJobsPanel() {
   // nothing, so the row says so. The job does not name its deployment; the deployments of its server
   // do (job_id).
   // A job that names its deployment (deployment_id) needs no search: that deployment is read by its id.
-  const deployTargets = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.target_id && !j.deployment_id).map((j) => j.target_id as string))];
-  const namedIds = [...new Set(items.filter((j) => j.type === DEPLOY_JOB && j.deployment_id).map((j) => j.deployment_id as string))];
+  const deployTargets = [...new Set(items.filter((j) => isDeploy(j) && j.target_id && !j.deployment_id).map((j) => j.target_id as string))];
+  const namedIds = [...new Set(items.filter((j) => isDeploy(j) && j.deployment_id).map((j) => j.deployment_id as string))];
   const named = useQueries({
     queries: namedIds.map((id) => ({ queryKey: deploymentKey(id), queryFn: () => getDeployment(id), retry: false })),
   });
@@ -95,8 +97,8 @@ export function BlockedJobsPanel() {
           <Table aria-label={t('jobs.blockedTitle')}>
             <Table.Tbody>
               {items.map((job) => {
-                const dep = job.type === DEPLOY_JOB ? deploymentOf(job) : undefined;
-                const depId = dep?.id ?? (job.type === DEPLOY_JOB ? job.deployment_id : null);
+                const dep = isDeploy(job) ? deploymentOf(job) : undefined;
+                const depId = dep?.id ?? (isDeploy(job) ? job.deployment_id : null);
                 const vault = job.type === IMPORT_JOB && job.import_id ? job.target_id : null;
                 return (
                 <Table.Tr key={job.id} data-testid="blocked-job">

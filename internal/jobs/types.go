@@ -92,23 +92,30 @@ var (
 	DeploymentRecoverySweep  = Register("deployment.recovery_sweep", license.ClassAlways)
 )
 
-// Phase 5 queue job types (Key Vault, spec §8.2, §11): the access check and the poll of a vault are
-// read-only work (paused in lock); an import into a vault changes a managed system (refused in
-// lock). The runners are in internal/jobs/kvjobs.
+// CertificateDeployAuto is a deployment the automatic planners (Key Vault and ACME) queued to a location the
+// certificate is already bound to (owner decision 2026-10-20). It runs the certificate.deploy handler and shares
+// its dedupe key namespace (certificate.deploy:<deployment id>), but its class is ClassContinuity: it runs in the
+// continuity window of a lock, while a person's deployment (certificate.deploy, ClassChange) is refused and held.
+var CertificateDeployAuto = Register(inventory.JobCertificateDeployAuto, license.ClassContinuity)
+
+// Phase 5 queue job types (Key Vault, spec §8.2, §11): the access check of a vault is read-only work
+// (paused in lock); an import into a vault changes a managed system (refused in lock). The poll of a vault
+// is continuity work (owner decision 2026-10-20): it is how a version renewed in Azure is seen, so it runs
+// in the continuity window of a lock too. The runners are in internal/jobs/kvjobs.
 var (
 	KVTestConnection = Register(inventory.JobKVTest, license.ClassReadOnly)
-	KVPoll           = Register(inventory.JobKVPoll, license.ClassReadOnly)
+	KVPoll           = Register(inventory.JobKVPoll, license.ClassContinuity)
 	KVImport         = Register(inventory.JobKVImport, license.ClassChange)
 )
 
-// Phase 5 periodic tasks (R40 row 29): the poll scheduler and the automatic deployment planner. Both
-// are ReadOnly: the scheduler refuses a ClassChange task (external-change work waits for a person),
-// and the gate treats ReadOnly and Change alike (unverified, locked and lock due stop both), so the
-// tick pauses in exactly the same states. The planner only queues certificate.deploy jobs (ClassChange,
-// refused and held in lock) and returns at once while the gate refuses changes (PlanKVAutoDeploy).
+// Phase 5 periodic tasks (R40 row 29): the poll scheduler and the automatic deployment planner. Both are
+// continuity work (owner decision 2026-10-20): they run wherever changes run and in the continuity window
+// of a lock (the scheduler refuses a ClassChange task: external-change work a person asked for waits for a
+// person). The planner queues certificate.deploy_auto jobs (ClassContinuity) and returns at once while the
+// gate refuses continuity work (PlanKVAutoDeploy).
 var (
-	KVSchedule   = Register("kv.schedule", license.ClassReadOnly)
-	KVAutoDeploy = Register("kv.auto_deploy", license.ClassReadOnly)
+	KVSchedule   = Register("kv.schedule", license.ClassContinuity)
+	KVAutoDeploy = Register("kv.auto_deploy", license.ClassContinuity)
 )
 
 // Phase 6 job types (spec §8.2, §8.6, §13.4-§13.6; R41 rows 18-20). Deploying a generated key changes a
@@ -137,20 +144,47 @@ var (
 	JobsHeartbeat  = Register("jobs.heartbeat", license.ClassAlways)
 )
 
-// ACME certificate issuance (the names are literals: the web's label guard reads literal Register calls). An order
-// contacts a certificate authority and may change a DNS zone through a hook, so it is refused and held in lock; cleanup
-// of leftover challenge records runs in every state; the renewal planner and the auto-deploy planner are periodic and
-// ReadOnly (the scheduler refuses a ClassChange task; the planners call license.Allow(ClassChange) themselves).
-// The sweep (acme.sweep, periodic, every license state) ends the orders a crash left running and queues the cleanup of
-// leftover challenge records, so it runs in lock too (it contacts a CA only to finish an issued order, and only when
-// the gate allows changes).
+// ACME certificate issuance (the names are literals: the web's label guard reads literal Register calls). An order a
+// person starts (first issuance, Renew now, a test run) contacts a certificate authority and may change a DNS zone
+// through a hook, so it is refused and held in lock (acme.issue). An order the renewal planner starts for an issued
+// certificate is continuity work (acme.renew, owner decision 2026-10-20): the same handler, the same dedupe key
+// (acme.issue:<acme certificate id>), but it runs in the continuity window of a lock. Cleanup of leftover challenge
+// records runs in every state; the renewal planner and the auto-deploy planner are periodic continuity work (the
+// scheduler refuses a ClassChange task; the planners call license.Allow(ClassContinuity) themselves). The sweep
+// (acme.sweep, periodic, every license state) ends the orders a crash left running and queues the cleanup of leftover
+// challenge records, so it runs in lock too (it contacts a CA only to finish an issued order, and only when the gate
+// allows the order's class).
 var (
 	ACMEIssue      = Register("acme.issue", license.ClassChange)
+	ACMERenew      = Register(inventory.JobACMERenew, license.ClassContinuity)
 	ACMECleanup    = Register("acme.cleanup", license.ClassAlways)
-	ACMESchedule   = Register("acme.schedule", license.ClassReadOnly)
-	ACMEAutoDeploy = Register("acme.auto_deploy", license.ClassReadOnly)
+	ACMESchedule   = Register("acme.schedule", license.ClassContinuity)
+	ACMEAutoDeploy = Register("acme.auto_deploy", license.ClassContinuity)
 	ACMESweep      = Register("acme.sweep", license.ClassAlways)
 )
+
+// continuityReadOnly lists the continuity job types that only read a managed system. After the continuity window
+// ends, the runner treats a queued continuity job as its kind of work was treated before the window existed: one that
+// only reads (a Key Vault poll) is cancelled, as read-only work is in lock, and re-planned by its scheduler after a
+// renewal; every other one (a renewal order, an automatic deployment) is held for an Administrator's confirmation, as
+// a change is (blocked_license, R29).
+var continuityReadOnly = map[string]bool{inventory.JobKVPoll: true}
+
+// continuityReadOnlyTypes is continuityReadOnly as a list (the runner's lock sweep).
+func continuityReadOnlyTypes() []string {
+	out := make([]string, 0, len(continuityReadOnly))
+	for name := range continuityReadOnly {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// heldInLock reports whether a job of type t that the confirmed lock refuses is held for an Administrator's
+// confirmation (blocked_license) rather than cancelled: a change, and continuity work that is not read-only.
+func heldInLock(t Type) bool {
+	return t.Class == license.ClassChange || (t.Class == license.ClassContinuity && !continuityReadOnly[t.Name])
+}
 
 // Network certificate discovery (plan amendments A1, A5). The namespace is netdisco.*: discovery.schedule above is the
 // SSH-key target discovery task and is a different thing. netdisco.scan probes the endpoints of one scope: read-only work
@@ -221,7 +255,7 @@ const (
 func MaxAttemptsFor(t Type) int {
 	switch t.Name {
 	case inventory.JobTestConnection, inventory.JobDeployRecover, inventory.JobKVTest, inventory.JobKVPoll, ACMEIssue.Name,
-		NetdiscoScan.Name:
+		inventory.JobACMERenew, NetdiscoScan.Name:
 		return 1
 	case inventory.JobDiscover, ACMECleanup.Name:
 		return 5

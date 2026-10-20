@@ -11,7 +11,8 @@ import (
 )
 
 // ScheduleKVPolls queues a poll (kv.poll, kind scheduled, dedupe key kv.poll:<id>) for every live,
-// enabled vault that is due (job kv.schedule, ClassReadOnly: nothing is queued in lock). A vault is
+// enabled vault that is due (job kv.schedule, ClassContinuity: polls are queued in the continuity window of a lock,
+// nothing after it). A vault is
 // due when it was never scheduled or when its last scheduled poll is older than
 // min(interval * 2^min(poll_failures, 2), max(interval, 1 h)): the interval while healthy, twice
 // that after one failed poll, four times after two or more, never more than an hour for an

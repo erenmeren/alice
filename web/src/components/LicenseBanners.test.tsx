@@ -23,7 +23,16 @@ const grace: LicenseBanner = {
   severity: 'danger',
   params: { valid_until: '2027-10-01T00:00:00Z', locks_at: '2027-10-08T00:00:00Z', grace_day: '3' },
 };
-const locked: LicenseBanner = { kind: 'locked', severity: 'danger', params: { valid_until: '2027-10-01T00:00:00Z' } };
+const locked: LicenseBanner = {
+  kind: 'locked',
+  severity: 'danger',
+  params: { valid_until: '2027-10-01T00:00:00Z', continuity_ended_at: '2027-11-22T00:00:00Z' },
+};
+const continuity: LicenseBanner = {
+  kind: 'locked_continuity',
+  severity: 'danger',
+  params: { valid_until: '2027-10-01T00:00:00Z', continuity_ends_at: '2027-11-22T00:00:00Z', days_left: '1' },
+};
 
 function useStatus(...banners: LicenseBanner[]) {
   server.use(http.get('/api/v1/license/status', () => HttpResponse.json(statusWith(...banners))));
@@ -86,8 +95,21 @@ describe('license banners', () => {
     const g = await screen.findByTestId('license-banner-grace');
     expect(g).toHaveAttribute('role', 'alert');
     expect(g).toHaveTextContent('Grace day 3 of 7.');
-    expect(screen.getByTestId('license-banner-locked')).toHaveTextContent('Automatic tasks are paused.');
+    expect(screen.getByTestId('license-banner-locked')).toHaveTextContent('Automatic tasks are paused, and since');
+    expect(screen.getByTestId('license-banner-locked')).toHaveTextContent(/certificates are no longer renewed or deployed automatically/);
+    expect(screen.getByTestId('license-banner-locked')).not.toHaveTextContent('{{');
     expect(within(g).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  // The continuity window (owner decision 2026-10-20): in lock, certificates already managed keep renewing until a date.
+  it('says until when certificates keep renewing in lock', async () => {
+    server.use(...sessionHandlers(sessionFor('operator')));
+    useStatus(continuity);
+    await renderRoute('/');
+    const banner = await screen.findByTestId('license-banner-locked_continuity');
+    expect(banner).toHaveAttribute('role', 'alert');
+    expect(banner).toHaveTextContent(/keep renewing and deploying automatically until \w{3} \d{1,2}, 2027, .*\(1 day left\)/);
+    expect(banner).not.toHaveTextContent('{{');
   });
 
   it('is translated into Turkish', async () => {

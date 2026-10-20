@@ -65,12 +65,12 @@ var acmeDeployInsertHook func(location uuid.UUID)
 
 // PlanACMEAutoDeploy runs the planner once over the ACME certificates that may have work and returns what it did (at most
 // autoDeployBatch, 50, deployments in all; AutoDeployWave per certificate). It does nothing while the licence gate
-// refuses changes (license.Allow(ClassChange) first; the gate is read again inside each certificate's transaction). A
+// refuses continuity work (license.Allow(ClassContinuity) first: it runs in the continuity window of a lock too; the gate is read again inside each certificate's transaction). A
 // certificate whose planning failed is skipped for this run; the others are still planned and the errors are returned
 // together. Audit rows: acme.auto_deploy.held, acme.auto_deploy.stopped (and the engine's deployment.requested).
 func (s *Service) PlanACMEAutoDeploy(ctx context.Context) (ACMEDeployRun, error) {
 	var run ACMEDeployRun
-	if s.license.Allow(license.ClassChange) != nil {
+	if s.license.Allow(license.ClassContinuity) != nil {
 		return run, nil
 	}
 	reopened, err := s.gateReopenedAt(ctx) // once per run
@@ -155,7 +155,7 @@ func (s *Service) planACMEDeploy(ctx context.Context, id uuid.UUID, reopened *ti
 			return fmt.Errorf("inventory: lock the ACME certificate: %w", err)
 		}
 		// The gate is read again here: the licence may have locked since the run began.
-		if s.license.Allow(license.ClassChange) != nil {
+		if s.license.Allow(license.ClassContinuity) != nil {
 			return errACMEDeploySkip
 		}
 		now := s.clock.Now().UTC()

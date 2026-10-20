@@ -320,7 +320,8 @@ func (c *claimed) fence(args ...any) []any {
 	return append([]any{c.id, c.token, c.attempts}, args...)
 }
 
-var allClasses = []string{license.ClassAlways.String(), license.ClassReadOnly.String(), license.ClassChange.String()}
+var allClasses = []string{license.ClassAlways.String(), license.ClassReadOnly.String(), license.ClassChange.String(),
+	license.ClassContinuity.String()}
 
 // maxCandidates bounds how many busy-target jobs one claim skips before it gives up.
 const maxCandidates = 10
@@ -330,11 +331,14 @@ const maxCandidates = 10
 // is taken over only when no job of that target is running any more, i.e. after the reaper
 // re-queued it (§8.1). In lock it first moves queued external-change jobs to blocked_license and
 // cancels queued read-only jobs (§8.6, in a transaction of its own), then claims only
-// always-class work. While the license cannot be verified (license.ErrUnverified) or its lock is
+// always-class work, and continuity work while the gate allows it (the continuity window of a
+// licensed lock, owner decision 2026-10-20). Once an evaluation found the window ended, the sweep
+// holds queued continuity work that changes a system and cancels the continuity work that only
+// reads (heldInLock). While the license cannot be verified (license.ErrUnverified) or its lock is
 // only due by the gate's own clock (license.ErrLockDue, AUD-02) it claims only always-class work
-// and leaves the rest queued: no evaluation decided a lock, so nothing is held or cancelled, and
-// the queued work starts by itself once an evaluation allows it (or is held then, if the
-// evaluation confirms the lock).
+// (and continuity work the gate allows) and leaves the rest queued: no evaluation decided a lock,
+// so nothing is held or cancelled, and the queued work starts by itself once an evaluation allows
+// it (or is held then, if the evaluation confirms the lock).
 func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	types := r.handled()
 	if len(types) == 0 {
@@ -343,10 +347,14 @@ func (r *Runner) claim(ctx context.Context) (*claimed, error) {
 	now := r.cfg.Clock.Now().UTC()
 	classes := allClasses
 	if gate := r.cfg.Gate.Allow(license.ClassChange); errors.Is(gate, license.ErrLocked) {
+		cont := r.cfg.Gate.Allow(license.ClassContinuity)
 		if license.ConfirmedLock(gate) {
-			r.sweepIfDue(ctx, now)
+			r.sweepIfDue(ctx, now, license.ConfirmedLock(cont))
 		}
 		classes = []string{license.ClassAlways.String()}
+		if cont == nil {
+			classes = append(classes, license.ClassContinuity.String())
+		}
 	}
 	capTypes, capMax := capTable()
 	var c *claimed
@@ -457,7 +465,7 @@ func capFull(ctx context.Context, tx pgx.Tx, typ string, limit int) (bool, error
 
 // sweepIfDue runs the lock-mode sweep at most once per Poll interval for the whole runner (not
 // once per worker). A failed sweep is logged; always-class work is still claimed.
-func (r *Runner) sweepIfDue(ctx context.Context, now time.Time) {
+func (r *Runner) sweepIfDue(ctx context.Context, now time.Time, continuityEnded bool) {
 	r.sweepMu.Lock()
 	if !sweepDue(r.lastSweep, now, r.cfg.Poll) {
 		r.sweepMu.Unlock()
@@ -465,7 +473,7 @@ func (r *Runner) sweepIfDue(ctx context.Context, now time.Time) {
 	}
 	r.lastSweep = now
 	r.sweepMu.Unlock()
-	if err := r.sweepLocked(ctx, now); err != nil && ctx.Err() == nil {
+	if err := r.sweepLocked(ctx, now, continuityEnded); err != nil && ctx.Err() == nil {
 		r.cfg.Log.Error("holding queued work in lock failed", "error_type", fmt.Sprintf("%T", err))
 	}
 }
@@ -479,16 +487,22 @@ func sweepDue(last, now time.Time, poll time.Duration) bool {
 
 // sweepLocked holds queued external-change work for an Administrator's confirmation and
 // cancels queued read-only work while the license is expired (spec §8.6, R29, L-81); each held
-// job is audited job.blocked_license and each cancelled one job.cancelled_license. The audit
-// rows are the transaction's last statements: the chain lock is held as briefly as possible.
-func (r *Runner) sweepLocked(ctx context.Context, now time.Time) error {
+// job is audited job.blocked_license and each cancelled one job.cancelled_license. Continuity work
+// is left alone while its window is open; once an evaluation found the window ended
+// (continuityEnded) it is held or cancelled as heldInLock says. The audit rows are the
+// transaction's last statements: the chain lock is held as briefly as possible.
+func (r *Runner) sweepLocked(ctx context.Context, now time.Time, continuityEnded bool) error {
+	readOnly := continuityReadOnlyTypes()
 	return db.InTx(ctx, r.cfg.Pool, func(tx pgx.Tx) error {
 		cancelled, err := touched(ctx, tx, `UPDATE jobs SET status = 'cancelled', last_error_code = 'license.locked', finished_at = $1
-WHERE status = 'queued' AND class = 'read_only' RETURNING id, type`, now)
+WHERE status = 'queued' AND (class = 'read_only' OR ($2 AND class = 'continuity' AND type = ANY($3))) RETURNING id, type`,
+			now, continuityEnded, readOnly)
 		if err != nil {
 			return fmt.Errorf("jobs: cancel read-only work in lock: %w", err)
 		}
-		blocked, err := touched(ctx, tx, `UPDATE jobs SET status = 'blocked_license' WHERE status = 'queued' AND class = 'change' RETURNING id, type`)
+		blocked, err := touched(ctx, tx, `UPDATE jobs SET status = 'blocked_license'
+WHERE status = 'queued' AND (class = 'change' OR ($1 AND class = 'continuity' AND NOT (type = ANY($2)))) RETURNING id, type`,
+			continuityEnded, readOnly)
 		if err != nil {
 			return fmt.Errorf("jobs: hold changes in lock: %w", err)
 		}
@@ -614,7 +628,7 @@ func (r *Runner) revert(ctx context.Context, c *claimed, t Type) {
 		}
 		return tag, nil
 	}
-	if t.Class == license.ClassChange {
+	if heldInLock(t) {
 		r.settle(ctx, c, "license.locked", func(tx pgx.Tx, _ time.Time) (pgconn.CommandTag, error) {
 			tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'blocked_license', attempts = attempts - 1, locked_by = NULL,
     locked_until = NULL `+mine, c.fence()...)

@@ -27,6 +27,7 @@ type fakeGate struct {
 	mu     sync.Mutex
 	locked bool
 	refuse error // the refusal of gated work while locked; nil = license.ErrLocked
+	window bool  // locked inside the continuity window: continuity work is allowed
 }
 
 func (g *fakeGate) Allow(c license.Class) error {
@@ -35,6 +36,8 @@ func (g *fakeGate) Allow(c license.Class) error {
 	switch {
 	case !c.Valid():
 		return license.ErrUnclassified
+	case c == license.ClassContinuity && g.locked && g.window && g.refuse == nil:
+		return nil
 	case c != license.ClassAlways && g.locked && g.refuse != nil:
 		return g.refuse
 	case c != license.ClassAlways && g.locked:
@@ -46,7 +49,14 @@ func (g *fakeGate) Allow(c license.Class) error {
 func (g *fakeGate) set(locked bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.locked, g.refuse = locked, nil
+	g.locked, g.refuse, g.window = locked, nil, false
+}
+
+// setWindow locks the license inside its continuity window (open) or after it (closed).
+func (g *fakeGate) setWindow(open bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.locked, g.refuse, g.window = true, nil, open
 }
 
 // setUnverified makes the gate refuse gated work as license.ErrUnverified (AUD-02), or opens it.

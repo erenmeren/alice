@@ -440,6 +440,9 @@ func TestRegisterRefusesUnclassifiedStateChangingRoute(t *testing.T) {
 	assert.NotPanics(t, func() {
 		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", perm: rbac.Session, handler: noop}})
 	}, "reads need no class")
+	assert.Panics(t, func() {
+		s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/x", perm: rbac.Session, lic: license.ClassContinuity, handler: noop}})
+	}, "continuity is automatic upkeep: a person's request is a change (owner decision 2026-10-20)")
 }
 
 // gated is the single definition of "refused while the license is locked" (R9, §8.6):
@@ -447,6 +450,7 @@ func TestRegisterRefusesUnclassifiedStateChangingRoute(t *testing.T) {
 func TestGatedClasses(t *testing.T) {
 	assert.True(t, gated(license.ClassChange))
 	assert.True(t, gated(license.ClassReadOnly))
+	assert.True(t, gated(license.ClassContinuity))
 	assert.False(t, gated(license.ClassAlways))
 	assert.False(t, gated(license.ClassUnset))
 }

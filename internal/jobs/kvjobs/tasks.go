@@ -32,7 +32,8 @@ var (
 // 13) and sweeps the imports nothing else would end (a job that ended without the handler finishing its
 // import: discarded, reaped before the mark, panicked on the last attempt; and the unconditional end of an
 // uncertain import). Each does its work whatever the other returns; the errors are logged by type and
-// returned together. It is read-only work: the scheduler's gate pauses it in lock, so no poll is queued then.
+// returned together. It is continuity work (owner decision 2026-10-20): it runs in the continuity window of a lock, so
+// renewed vault versions are still seen, and the scheduler's gate pauses it once the window has ended.
 func ScheduleTask(s PollScheduler, every time.Duration, log *slog.Logger) jobs.Task {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -65,10 +66,10 @@ var errScheduleFailed = errors.New("kvjobs: scheduling the polls or sweeping the
 var errPlanFailed = errors.New("kvjobs: the automatic deployment plan failed for some bindings")
 
 // AutoDeployTask is the periodic kv.auto_deploy: it plans the deployments of renewed vault versions
-// (PlanKVAutoDeploy; each deployment is a certificate.deploy job, ClassChange, refused and held in
-// lock). The task's class is ReadOnly because the scheduler refuses ClassChange tasks (scan D1); the
-// planner itself returns at once while the gate refuses changes, and the periodic gate stops it in the
-// same states. It runs on the scheduler's context, which carries no job claim.
+// (PlanKVAutoDeploy; each deployment is a certificate.deploy_auto job, ClassContinuity: it runs in the continuity
+// window of a lock and is held after it). The task is continuity work too (the scheduler refuses only ClassChange
+// tasks, scan D1); the planner itself returns at once while the gate refuses continuity work, and the periodic gate
+// stops it in the same states. It runs on the scheduler's context, which carries no job claim.
 func AutoDeployTask(p AutoDeployPlanner, every time.Duration, log *slog.Logger) jobs.Task {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)

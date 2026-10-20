@@ -167,6 +167,8 @@ export const licenseDetailFixture: LicenseDetail = {
   locks_at: '2027-10-08T00:00:00Z',
   days_left: 364,
   grace_day: 0,
+  continuity_ends_at: '2027-11-22T00:00:00Z',
+  continuity_days_left: 0,
   tampered: false,
   files: [{ status: 'current', uploaded_at: '2026-10-01T09:00:00Z', license: licenseInfoFixture }],
   history: [
@@ -176,7 +178,7 @@ export const licenseDetailFixture: LicenseDetail = {
 
 // statusWith builds a license status with the given banners (no banner = nothing to show).
 export function statusWith(...banners: LicenseBanner[]): LicenseStatus {
-  return { expired: banners.some((b) => ['grace', 'locked', 'evaluation_ended'].includes(b.kind)), banners };
+  return { expired: banners.some((b) => ['grace', 'locked', 'locked_continuity', 'evaluation_ended'].includes(b.kind)), banners };
 }
 
 // Phase 3 fixtures: one connected Linux server with three keys, Alice's own key and a finished job.

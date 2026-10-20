@@ -498,7 +498,7 @@ func TestACMEAutoDeployDeploysANewCertificate(t *testing.T) {
 	reqs := w.h.jobs.requests()[before:]
 	require.Len(t, reqs, 2)
 	for _, r := range reqs {
-		assert.Equal(t, inventory.JobCertificateDeploy, r.Type)
+		assert.Equal(t, inventory.JobCertificateDeployAuto, r.Type, "the planner's deployment is continuity work (owner decision 2026-10-20)")
 		assert.Equal(t, "system", r.Kind)
 	}
 	requested := w.h.auditDetails("deployment.requested")

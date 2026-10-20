@@ -22,6 +22,7 @@ import (
 	"alice/internal/acme/solver"
 	"alice/internal/i18n"
 	"alice/internal/inventory"
+	"alice/internal/license"
 	"alice/internal/notify"
 	"alice/internal/rbac"
 	"alice/internal/testutil/fakeacme"
@@ -189,7 +190,7 @@ func TestACMEPlannerRenewsADueCertificate(t *testing.T) {
 	require.Equal(t, 1, w.renewals(c.ID))
 	reqs := w.jobs.requests()[before:]
 	require.Len(t, reqs, 1)
-	assert.Equal(t, inventory.JobACMEIssue, reqs[0].Type)
+	assert.Equal(t, inventory.JobACMERenew, reqs[0].Type, "the planner's order is continuity work (owner decision 2026-10-20)")
 	assert.Equal(t, "system", reqs[0].Kind)
 	assert.Equal(t, "acme.issue:"+c.ID.String(), reqs[0].DedupeKey)
 	d := w.auditDetails("acme.order.started")
@@ -265,6 +266,33 @@ func TestACMEPlannerInLockDoesNothing(t *testing.T) {
 	w.lic.locked.Store(false)
 	assert.Equal(t, 1, w.plan().Started)
 	assert.Zero(t, w.get(c.ID).Failures)
+}
+
+// In the continuity window of a lock (owner decision 2026-10-20) the planner still renews an issued certificate: the
+// order is an acme.renew job (ClassContinuity) holding the acme.issue dedupe key, while a person's order is refused.
+// Once the window has ended the planner does nothing, as in lock before.
+func TestACMEPlannerRenewsInTheContinuityWindow(t *testing.T) {
+	w := newRenewWorld(t)
+	c := w.issued("window.example.test")
+	w.setClock(w.notAfter(c).Add(-day))
+	w.lic.locked.Store(true)
+	w.lic.window.Store(true)
+	_, err := w.svc.RequestOrder(w.ctx, w.operator, c.ID, inventory.ACMEOrderIssue)
+	require.ErrorIs(t, err, license.ErrLocked, "Renew now is a person's change")
+	before := len(w.jobs.requests())
+	assert.Equal(t, 1, w.plan().Started)
+	reqs := w.jobs.requests()[before:]
+	require.Len(t, reqs, 1)
+	assert.Equal(t, inventory.JobACMERenew, reqs[0].Type)
+	assert.Equal(t, w.running(c.ID).String(), reqs[0].Payload["order_id"])
+	assert.Equal(t, "acme.issue:"+c.ID.String(), reqs[0].DedupeKey, "one order per certificate across both job types")
+
+	w.complete(w.running(c.ID)) // the renewed certificate is due again later
+	w.setClock(w.notAfter(w.get(c.ID)).Add(-day))
+	w.lic.window.Store(false)
+	snap := w.snapshot()
+	assert.Equal(t, inventory.ACMERenewRun{}, w.plan(), "after the window the planner does nothing")
+	assert.Equal(t, snap, w.snapshot())
 }
 
 // A lock that ends an order (license.locked) is neutral: no failure, no backoff; the planner orders again after the

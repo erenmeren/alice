@@ -233,7 +233,13 @@ WHERE id = $1`, c.ID, now); err != nil {
 			return ACMEOrder{}, fmt.Errorf("inventory: mark the ACME certificate as issuing: %w", err)
 		}
 	}
-	_, err = s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobACMEIssue,
+	// The renewal planner's order of an issued certificate is continuity work (acme.renew: it runs in the continuity
+	// window of a lock); every other order is a change (acme.issue). Both hold the same dedupe key.
+	jobType := JobACMEIssue
+	if trigger == ACMETriggerRenewal {
+		jobType = JobACMERenew
+	}
+	_, err = s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: jobType,
 		Payload: map[string]string{"order_id": id.String(), "acme_certificate_id": c.ID.String()},
 		Kind:    a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role), DedupeKey: JobACMEIssue + ":" + c.ID.String()})
 	if errors.Is(err, ErrJobConflict) {
@@ -584,6 +590,7 @@ RETURNING acme_certificate_id, jsonb_array_length(presented)`, orderID, s.clock.
 type ACMEStaleOrder struct {
 	ID        uuid.UUID
 	Kind      string
+	Trigger   string // manual or renewal: a renewal is resumed under the continuity class (license.ClassContinuity)
 	Names     []string
 	OrderURL  string
 	HasKey    bool
@@ -595,16 +602,17 @@ type ACMEStaleOrder struct {
 // maxACMESweepBatch bounds one sweep step.
 const maxACMESweepBatch = 50
 
-// StaleACMEOrders lists running orders started more than olderThan ago that no queued or running acme.issue job holds
+// StaleACMEOrders lists running orders started more than olderThan ago that no queued or running acme.issue or acme.renew
+// job holds
 // (a queued job still runs the order, a running one owns it), oldest first, at most 50: their job ended without ending
 // them (a crash, a shutdown, a lost lease), or it is held in lock (blocked_license: an order is not kept waiting for an
 // Administrator's confirmation; a confirmed job finds its order ended and does nothing).
 func (s *Service) StaleACMEOrders(ctx context.Context, olderThan time.Duration) ([]ACMEStaleOrder, error) {
-	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, c.names, o.order_url, o.pending_key_ct IS NOT NULL, o.started_at,
+	rows, err := s.pool.Query(ctx, `SELECT o.id, o.kind, o.trigger, c.names, o.order_url, o.pending_key_ct IS NOT NULL, o.started_at,
     jsonb_array_length(o.presented), c.deleted_at IS NOT NULL
 FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id
 WHERE o.state = 'running' AND o.started_at < $1
-  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.type = 'acme.issue' AND j.status IN ('queued', 'running')
+  AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.type IN ('acme.issue', 'acme.renew') AND j.status IN ('queued', 'running')
                   AND j.payload->>'order_id' = o.id::text)
 ORDER BY o.started_at, o.id LIMIT $2`, s.clock.Now().UTC().Add(-olderThan), maxACMESweepBatch)
 	if err != nil {
@@ -614,7 +622,7 @@ ORDER BY o.started_at, o.id LIMIT $2`, s.clock.Now().UTC().Add(-olderThan), maxA
 	var out []ACMEStaleOrder
 	for rows.Next() {
 		var o ACMEStaleOrder
-		if err := rows.Scan(&o.ID, &o.Kind, &o.Names, &o.OrderURL, &o.HasKey, &o.StartedAt, &o.Presented, &o.Deleted); err != nil {
+		if err := rows.Scan(&o.ID, &o.Kind, &o.Trigger, &o.Names, &o.OrderURL, &o.HasKey, &o.StartedAt, &o.Presented, &o.Deleted); err != nil {
 			return nil, fmt.Errorf("inventory: read a stale ACME order: %w", err)
 		}
 		out = append(out, o)

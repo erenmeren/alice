@@ -1154,7 +1154,7 @@ func TestVaultJobTypesAreAcceptedByTheQueue(t *testing.T) {
 		assert.NotEmpty(t, typ)
 	}
 	assert.Equal(t, license.ClassChange, jobs.KVImport.Class, "an import changes the vault: refused in lock")
-	assert.Equal(t, license.ClassReadOnly, jobs.KVPoll.Class)
+	assert.Equal(t, license.ClassContinuity, jobs.KVPoll.Class, "a poll sees renewed versions in the continuity window of a lock")
 	assert.Equal(t, license.ClassReadOnly, jobs.KVTestConnection.Class)
 }
 

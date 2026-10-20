@@ -708,6 +708,10 @@ func (s *server) register(mux *http.ServeMux, routes []route) {
 		if !safeMethod(r.method) && !r.lic.Valid() {
 			panic(fmt.Sprintf("api: state-changing route %s %s declares no license class", r.method, r.pattern))
 		}
+		if r.lic == license.ClassContinuity {
+			// Continuity is automatic upkeep (owner decision 2026-10-20): what a person asks for is ClassChange.
+			panic(fmt.Sprintf("api: route %s %s declares the continuity class; a person's request is a change", r.method, r.pattern))
+		}
 		mux.HandleFunc(r.method+" "+r.pattern, s.guard(r))
 	}
 }

@@ -17,6 +17,13 @@ const (
 	// JobCertificateDeploy runs one deployment (payload deployment_id; dedupe
 	// "certificate.deploy:<id>": one job per deployment).
 	JobCertificateDeploy = "certificate.deploy"
+	// JobCertificateDeployAuto runs one deployment the automatic planners (Key Vault, ACME) queued: the
+	// certificate.deploy handler and dedupe key namespace, but continuity work (it runs in the continuity window
+	// of a lock; owner decision 2026-10-20).
+	JobCertificateDeployAuto = "certificate.deploy_auto"
+	// JobACMERenew runs an order the renewal planner started for an issued ACME certificate: the acme.issue
+	// handler and dedupe key (acme.issue:<acme certificate id>), but continuity work.
+	JobACMERenew = "acme.renew"
 	// JobDeployRecover finishes or undoes an interrupted deployment (payload deployment_id; dedupe
 	// "certificate.deploy_recover:<id>": at most one live recovery per deployment).
 	JobDeployRecover = "certificate.deploy_recover"

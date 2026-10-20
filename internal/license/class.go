@@ -18,10 +18,16 @@ const (
 	// key, import, add a target): refused while locked; after a renewal, work that was
 	// paused needs an Admin's confirmation (R29).
 	ClassChange
+	// ClassContinuity is automatic upkeep of what is already managed: ACME renewal of a managed
+	// certificate and automatic deployment to locations it is already bound to (with the Key Vault
+	// polls that see a renewed version). It runs wherever ClassChange runs and, in addition, during
+	// the continuity window of a licensed lock (ContinuityPeriod after the lock begins; the
+	// evaluation has none). A person's request is never of this class: no API route declares it.
+	ClassContinuity
 )
 
-// Valid reports whether c is one of the three real classes.
-func (c Class) Valid() bool { return c >= ClassAlways && c <= ClassChange }
+// Valid reports whether c is one of the four real classes.
+func (c Class) Valid() bool { return c >= ClassAlways && c <= ClassContinuity }
 
 func (c Class) String() string {
 	switch c {
@@ -31,6 +37,8 @@ func (c Class) String() string {
 		return "read_only"
 	case ClassChange:
 		return "change"
+	case ClassContinuity:
+		return "continuity"
 	default:
 		return "unset"
 	}

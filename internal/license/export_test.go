@@ -14,3 +14,9 @@ var AllowIn = allowIn
 
 // EvaluationRunning reports whether an evaluation, upload or shutdown save holds the evaluation lock.
 func EvaluationRunning(s *Service) bool { return len(s.evalMu) == 1 }
+
+// DueNotice is the notice of the snapshot's state: its de-duplication key, template and params.
+func DueNotice(s Snapshot) (string, string, map[string]string, bool) {
+	n, ok := dueNotice(s)
+	return n.key, n.template, n.params, ok
+}

@@ -709,7 +709,7 @@ func TestL87PollInFlightAtLock(t *testing.T) {
 	assert.Equal(t, "license", vs[ver(2)].HeldReason)
 	assert.False(t, vs[ver(1)].Held)
 	assert.Zero(t, w.count("SELECT count(*) FROM deployments"), "no deployment was planned")
-	assert.Zero(t, w.count("SELECT count(*) FROM jobs WHERE type = 'certificate.deploy'"))
+	assert.Zero(t, w.count("SELECT count(*) FROM jobs WHERE type IN ('certificate.deploy', 'certificate.deploy_auto')"))
 
 	// The planner is refused by the gate in lock (its periodic task), and called directly it plans nothing.
 	var planned atomic.Int32

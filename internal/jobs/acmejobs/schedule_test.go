@@ -37,7 +37,7 @@ func TestScheduleTask(t *testing.T) {
 	task := ScheduleTask(p, time.Minute, nil)
 	assert.Equal(t, jobs.ACMESchedule, task.Type)
 	assert.Equal(t, time.Minute, task.Every)
-	assert.Equal(t, license.ClassReadOnly, task.Type.Class, "the scheduler pauses it in lock")
+	assert.Equal(t, license.ClassContinuity, task.Type.Class, "the scheduler pauses it in lock once the continuity window has ended")
 	require.NoError(t, task.Run(context.Background()))
 
 	var logs bytes.Buffer
@@ -86,7 +86,7 @@ func (g *lockSwitch) Allow(c license.Class) error {
 	return nil
 }
 
-// The scheduler pauses acme.schedule in lock (ReadOnly class): the planner is not even called.
+// The scheduler pauses acme.schedule in lock after the continuity window (ClassContinuity): the planner is not even called.
 func TestScheduleTaskIsPausedInLock(t *testing.T) {
 	p := &stubPlanner{}
 	gate := &lockSwitch{locked: true}

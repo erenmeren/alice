@@ -111,6 +111,8 @@ var notReasons = map[string]bool{
 	"deployment.succeeded": true, "deployment.unchanged": true, "deployment.rolled_back": true,
 	// Phase 4 job types
 	"certificate.deploy": true, "certificate.deploy_recover": true, "deployment.recovery_sweep": true,
+	// the continuity window's automatic deployment (owner decision 2026-10-20)
+	"certificate.deploy_auto": true,
 	// Phase 4 email templates (deployment.rollback_failed, outcome_unknown, restored_unverified and superseded are also
 	// reasons and stay checked)
 	"deployment.failed": true, "deployment.needs_attention": true, "deployment.needs_attention_unconfirmed": true,

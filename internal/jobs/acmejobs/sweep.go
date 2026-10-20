@@ -77,7 +77,7 @@ func (h *handlers) endStale(ctx context.Context, o inventory.ACMEStaleOrder) err
 	switch {
 	case !resumable:
 		return h.abandon(ctx, o, "not_resumable", nil)
-	case h.d.Gate.Allow(license.ClassChange) != nil:
+	case h.d.Gate.Allow(orderClass(o)) != nil:
 		if o.Presented > 0 || expired {
 			return h.abandon(ctx, o, "locked", nil)
 		}
@@ -152,6 +152,15 @@ func (h *handlers) abandon(ctx context.Context, o inventory.ACMEStaleOrder, why 
 		return nil
 	}
 	return err
+}
+
+// orderClass is the licence class an interrupted order is resumed under: continuity for an order the renewal planner
+// started (acme.renew), change for any other (acme.issue).
+func orderClass(o inventory.ACMEStaleOrder) license.Class {
+	if o.Trigger == inventory.ACMETriggerRenewal {
+		return license.ClassContinuity
+	}
+	return license.ClassChange
 }
 
 // ResumeFor is how long the sweep keeps asking an unreachable CA for an interrupted order before it abandons it.

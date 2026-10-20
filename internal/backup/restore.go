@@ -706,8 +706,9 @@ func (r *restorer) verify(ctx context.Context) error {
 	return r.holdChanges(ctx)
 }
 
-// holdChanges holds the backup's unfinished work that changes servers or Key Vaults (class change, queued or running
-// at backup time) for an Administrator, as a confirmed license lock does (blocked_license, L-81): it would otherwise
+// holdChanges holds the backup's unfinished work that changes servers or Key Vaults (class change, and class continuity
+// except the Key Vault poll, which only reads: an ACME renewal order or an automatic deployment; queued or running at
+// backup time) for an Administrator, as a confirmed license lock does (blocked_license, L-81): it would otherwise
 // start with serve against targets whose state has moved on since the backup (a superseded certificate version
 // redeployed, a rotation step on keys rotated later). A running job's cut-off attempt is closed as the reaper closes
 // it and its target lock released. Read-only and platform work runs as usual. The count goes into system.restored. Automatic
@@ -716,7 +717,7 @@ func (r *restorer) verify(ctx context.Context) error {
 func (r *restorer) holdChanges(ctx context.Context) error {
 	return db.InTx(ctx, r.staging, func(tx pgx.Tx) error {
 		now := r.s.c.Clock.Now().UTC()
-		const running = `SELECT id FROM jobs WHERE status = 'running' AND class = 'change'`
+		const running = `SELECT id FROM jobs WHERE status = 'running' AND ` + heldClass
 		if _, err := tx.Exec(ctx, `UPDATE job_attempts SET finished_at = $1, error_code = 'job.lease_expired'
 WHERE finished_at IS NULL AND job_id IN (`+running+`)`, now); err != nil {
 			return fmt.Errorf("backup: close the attempts of the backup's running changes: %w", err)
@@ -725,7 +726,7 @@ WHERE finished_at IS NULL AND job_id IN (`+running+`)`, now); err != nil {
 			return fmt.Errorf("backup: release the target locks of the backup's running changes: %w", err)
 		}
 		tag, err := tx.Exec(ctx, `UPDATE jobs SET status = 'blocked_license', locked_by = NULL, locked_until = NULL
-WHERE class = 'change' AND status IN ('queued', 'running')`)
+WHERE `+heldClass+` AND status IN ('queued', 'running')`)
 		if err != nil {
 			return fmt.Errorf("backup: hold the backup's queued changes: %w", err)
 		}
@@ -750,6 +751,11 @@ WHERE class = 'change' AND status IN ('queued', 'running')`)
 		return r.endDiscoveryScans(ctx, tx, now)
 	})
 }
+
+// heldClass selects the jobs a restore holds (holdChanges): changes, and the continuity work that changes something (an
+// ACME renewal order, acme.renew; an automatic deployment, certificate.deploy_auto). The Key Vault poll (kv.poll) is
+// continuity work too but only reads, so it runs as usual like read-only work (jobs.heldInLock is the same rule).
+const heldClass = `(class = 'change' OR (class = 'continuity' AND type <> 'kv.poll'))`
 
 // endDiscoveryScans stops the clone from scanning the network on the original's behalf (the lesson of the ACME final
 // review): a scan queued or running at backup time is ended as failed with discovery.scan_interrupted (the counts and

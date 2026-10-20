@@ -1888,11 +1888,15 @@
       },
       "grace": {
         "subject": "Alice lisansının süresi doldu: otomatik işler duracak ({{locks_at}})",
-        "body": "{{customer}} için Alice lisansınızın ({{license_id}}) süresi şu tarihte doldu: {{ends_at}}. 7 günlük ek süre boyunca her şey çalışmaya devam eder (ek süre günü: {{grace_day}} / 7). Alice otomatik işleri şu tarihte duraklatacak: {{locks_at}}.\n\nHemen satıcınızla iletişime geçin ve yenilenen lisansı Lisans sayfasından yükleyin. Kurulum Kimliğiniz: {{installation_id}}."
+        "body": "{{customer}} için Alice lisansınızın ({{license_id}}) süresi şu tarihte doldu: {{ends_at}}. 7 günlük ek süre boyunca her şey çalışmaya devam eder (ek süre günü: {{grace_day}} / 7). Alice otomatik işleri şu tarihte duraklatacak: {{locks_at}}. Yalnızca zaten yönettiği sertifikaların yenilenmesi ve otomatik dağıtımı şu tarihe kadar sürer: {{continuity_ends_at}}.\n\nHemen satıcınızla iletişime geçin ve yenilenen lisansı Lisans sayfasından yükleyin. Kurulum Kimliğiniz: {{installation_id}}."
       },
       "locked": {
         "subject": "Alice lisansının süresi doldu: otomatik işler duraklatıldı",
-        "body": "Alice lisansınızın ({{license_id}}) ek süresi şu tarihte sona erdi: {{locks_at}}. Otomatik işler duraklatıldı ve sunucularınızdaki değişiklikler reddediliyor. Verileriniz güvende; sertifika süresi uyarıları e-postayla gelmeye devam ediyor.\n\nDevam etmek için Lisans sayfasından yeni bir lisans yükleyin. Kurulum Kimliğiniz: {{installation_id}}."
+        "body": "Alice lisansınızın ({{license_id}}) ek süresi şu tarihte sona erdi: {{locks_at}}. Otomatik işler duraklatıldı ve sunucularınızdaki değişiklikler reddediliyor. Verileriniz güvende; sertifika süresi uyarıları e-postayla gelmeye devam ediyor.\n\nWeb siteleriniz kesintiye uğramasın diye Alice'in zaten yönettiği sertifikalar şu tarihe kadar yenilenmeye ve bağlı oldukları yerlere otomatik olarak dağıtılmaya devam eder: {{continuity_ends_at}} ({{continuity_days_left}} gün). Bu tarihten sonra bu da durur.\n\nDevam etmek için Lisans sayfasından yeni bir lisans yükleyin. Kurulum Kimliğiniz: {{installation_id}}."
+      },
+      "continuity_ended": {
+        "subject": "Alice lisansının süresi doldu: sertifikalar artık yenilenmiyor",
+        "body": "Alice lisansınızın ({{license_id}}) süresi doldu ve ek süresi şu tarihte sona erdi: {{locks_at}}. Alice {{continuity_ends_at}} tarihinden beri yönettiği sertifikaları yenilemiyor ve otomatik olarak dağıtmıyor. Bundan sonra süresi dolan sertifikaların yerine yenisi gelmez ve bunları kullanan web siteleri hata gösterir. Sunucularınızdaki değişiklikler reddediliyor. Verileriniz güvende; sertifika süresi uyarıları e-postayla gelmeye devam ediyor.\n\nDevam etmek için Lisans sayfasından yeni bir lisans yükleyin. Kurulum Kimliğiniz: {{installation_id}}."
       },
       "clock_jump": {
         "subject": "Alice: sunucu saati ileri atladı",

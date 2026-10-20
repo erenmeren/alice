@@ -1479,7 +1479,7 @@ func TestRestoreEndsSessions(t *testing.T) {
 func TestRestoreHoldsQueuedChanges(t *testing.T) {
 	e := newRestoreEnv(t)
 	mac := make([]byte, 32)
-	add := func(class, status string) string {
+	addType := func(typ, class, status string) string {
 		id := uuid.NewString()
 		var lockedBy *string
 		var lockedUntil *time.Time
@@ -1489,8 +1489,8 @@ func TestRestoreHoldsQueuedChanges(t *testing.T) {
 			lockedBy, lockedUntil, attempts = &w, &until, 1
 		}
 		_, err := e.db.Owner.Exec(e.ctx, `INSERT INTO jobs (id, type, class, kind, payload, payload_mac, status, run_at, attempts,
-    max_attempts, locked_by, locked_until, created_at) VALUES ($1, 'test.job', $2, 'system', '{}', $3, $4, $5, $6, 3, $7, $8, $5)`,
-			id, class, mac, status, e.clk.Now(), attempts, lockedBy, lockedUntil)
+    max_attempts, locked_by, locked_until, created_at) VALUES ($1, $9, $2, 'system', '{}', $3, $4, $5, $6, 3, $7, $8, $5)`,
+			id, class, mac, status, e.clk.Now(), attempts, lockedBy, lockedUntil, typ)
 		require.NoError(t, err)
 		if status == "running" {
 			_, err = e.db.Owner.Exec(e.ctx, `INSERT INTO job_attempts (id, job_id, attempt, worker_id, started_at)
@@ -1499,8 +1499,12 @@ VALUES (gen_random_uuid(), $1, 1, 'worker-1/1', $2)`, id, e.clk.Now())
 		}
 		return id
 	}
+	add := func(class, status string) string { return addType("test.job", class, status) }
 	queuedChange, runningChange := add("change", "queued"), add("change", "running")
 	queuedRead, runningAlways, doneChange := add("read_only", "queued"), add("always", "running"), add("change", "succeeded")
+	// The continuity window's work (owner decision 2026-10-20): a renewal order and an automatic deployment change
+	// something and are held like changes; a Key Vault poll only reads and runs as usual.
+	queuedRenew, queuedPoll := addType("acme.renew", "continuity", "queued"), addType("kv.poll", "continuity", "queued")
 	info := e.create(backup.KindManual)
 
 	res, err := e.restore(info.Path, nil)
@@ -1510,7 +1514,7 @@ VALUES (gen_random_uuid(), $1, 1, 'worker-1/1', $2)`, id, e.clk.Now())
 		return st, lockedBy
 	}
 	for id, want := range map[string]string{queuedChange: "blocked_license", runningChange: "blocked_license", queuedRead: "queued",
-		runningAlways: "running", doneChange: "succeeded"} {
+		runningAlways: "running", doneChange: "succeeded", queuedRenew: "blocked_license", queuedPoll: "queued"} {
 		got, _ := status(id)
 		assert.Equal(t, want, got, id)
 	}
@@ -1520,8 +1524,8 @@ VALUES (gen_random_uuid(), $1, 1, 'worker-1/1', $2)`, id, e.clk.Now())
 		"the cut-off attempt is closed")
 	rows := e.auditRows("system.restored")
 	require.NotEmpty(t, rows)
-	assert.Equal(t, "2", rows[len(rows)-1]["held_jobs"])
-	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "2 tasks") }), res.Warnings)
+	assert.Equal(t, "3", rows[len(rows)-1]["held_jobs"])
+	assert.True(t, slices.ContainsFunc(res.Warnings, func(w string) bool { return strings.Contains(w, "3 tasks") }), res.Warnings)
 
 	// A backup without such work holds nothing and says so.
 	e.reload()

@@ -230,7 +230,7 @@ func TestE2EJobsDrainRunsDueJobs(t *testing.T) {
 func TestWiringRunsDeployJobs(t *testing.T) {
 	s := newE2EStack(t)
 	ctx := context.Background()
-	for _, typ := range []jobs.Type{jobs.CertificateDeployRecover, jobs.CertificateDeploy} {
+	for _, typ := range []jobs.Type{jobs.CertificateDeployRecover, jobs.CertificateDeploy, jobs.CertificateDeployAuto} {
 		id, _, err := s.svc.queue.Enqueue(ctx, jobs.Spec{Type: typ, Kind: jobs.KindSystem,
 			Payload: map[string]string{"deployment_id": uuid.NewString()}})
 		require.NoError(t, err, typ.Name)

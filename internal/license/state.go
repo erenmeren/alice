@@ -22,7 +22,11 @@ const (
 	EvaluationPeriod     = 30 * 24 * time.Hour
 	EvaluationMaxTargets = 5
 	GracePeriod          = 168 * time.Hour
-	day                  = 24 * time.Hour
+	// ContinuityPeriod is the continuity window (owner decision 2026-10-20): for this long after a licensed lock
+	// begins, ClassContinuity work (ACME renewal and automatic deployment of certificates already managed) goes
+	// on, so a lapsed license does not turn into certificate outages at once. The evaluation has no window.
+	ContinuityPeriod = 45 * day
+	day              = 24 * time.Hour
 )
 
 // Warning thresholds in days before the end, largest first.
@@ -51,6 +55,12 @@ type Evaluation struct {
 	Threshold  int       // warning threshold reached (60/30/14/7/1, evaluation 7/3/1); 0 = none
 	GraceDay   int       // 1..7 during grace: the n-th 24-hour period after valid_until (L-22)
 	MaxTargets int       // 5 during the evaluation, otherwise max_targets of Current
+	// ContinuityEndsAt is the end of the continuity window: LocksAt + ContinuityPeriod for a license (known
+	// before the lock too), zero for the evaluation (it has no window).
+	ContinuityEndsAt time.Time
+	// ContinuityDaysLeft: whole days until ContinuityEndsAt, rounded up, while locked inside the window; 0
+	// otherwise (before the lock, and once the window has ended).
+	ContinuityDaysLeft int
 }
 
 // Evaluate computes the license state at now (the trusted, effective time) from the
@@ -126,6 +136,7 @@ func Evaluate(now, installedAt time.Time, installed []Installed) Evaluation {
 		LocksAt:    current.ValidUntil.Add(GracePeriod),
 		MaxTargets: current.MaxTargets,
 	}
+	e.ContinuityEndsAt = e.LocksAt.Add(ContinuityPeriod)
 	switch {
 	case now.Before(current.ValidUntil):
 		e.Phase = PhaseActive
@@ -136,6 +147,7 @@ func Evaluate(now, installedAt time.Time, installed []Installed) Evaluation {
 		e.GraceDay = int(now.Sub(current.ValidUntil)/day) + 1
 	default:
 		e.Phase = PhaseLocked
+		e.ContinuityDaysLeft = daysLeft(e.ContinuityEndsAt.Sub(now))
 	}
 	return e
 }
@@ -161,6 +173,9 @@ func threshold(remaining time.Duration, days []int) int {
 
 // Locked reports lock behaviour: locked, or the evaluation has ended (R1).
 func (e Evaluation) Locked() bool { return e.Phase == PhaseLocked || e.Phase == PhaseEvaluationExpired }
+
+// InContinuity reports a licensed lock inside its continuity window: ClassContinuity work still runs.
+func (e Evaluation) InContinuity() bool { return e.Phase == PhaseLocked && e.ContinuityDaysLeft > 0 }
 
 // Expired reports whether the license or evaluation has ended (grace included).
 func (e Evaluation) Expired() bool { return e.Phase != PhaseEvaluation && e.Phase != PhaseActive }

@@ -125,6 +125,7 @@ func Register(r *jobs.Runner, d Deps) {
 	}
 	h := newHandlers(d)
 	r.Handle(jobs.CertificateDeploy, h.deploy)
+	r.Handle(jobs.CertificateDeployAuto, h.deploy)
 	r.Handle(jobs.CertificateDeployRecover, h.recoverJob)
 }
 

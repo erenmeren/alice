@@ -266,16 +266,16 @@ func TestJobsEmailTemplatesRenderInBothLanguages(t *testing.T) {
 	assert.NotContains(t, en.Body, "attempts", "a tampered job is not an exhausted one")
 }
 
-// Phase 5 (R40 row 29, scan D1): the access check and the poll are read-only work with one attempt
-// each; an import changes a vault (three attempts, retried only before the send); the poll
-// scheduler and the auto-deploy planner are periodic and therefore ReadOnly (the scheduler refuses a
-// ClassChange task; the gate treats both classes alike and the planner re-checks ClassChange itself).
+// Phase 5 (R40 row 29, scan D1): the access check is read-only work with one attempt; an import changes a
+// vault (three attempts, retried only before the send); the poll (one attempt), the poll scheduler and the
+// auto-deploy planner are continuity work (owner decision 2026-10-20: they run in the continuity window of a
+// lock; the scheduler refuses only a ClassChange task and the planner re-checks ClassContinuity itself).
 func TestPhase5JobTypes(t *testing.T) {
 	assert.Equal(t, license.ClassReadOnly, KVTestConnection.Class)
-	assert.Equal(t, license.ClassReadOnly, KVPoll.Class)
+	assert.Equal(t, license.ClassContinuity, KVPoll.Class)
 	assert.Equal(t, license.ClassChange, KVImport.Class)
-	assert.Equal(t, license.ClassReadOnly, KVSchedule.Class)
-	assert.Equal(t, license.ClassReadOnly, KVAutoDeploy.Class, "a ClassChange periodic task would panic at start-up")
+	assert.Equal(t, license.ClassContinuity, KVSchedule.Class)
+	assert.Equal(t, license.ClassContinuity, KVAutoDeploy.Class, "a ClassChange periodic task would panic at start-up")
 	assert.Equal(t, "kv.schedule", KVSchedule.Name)
 	assert.Equal(t, "kv.auto_deploy", KVAutoDeploy.Name)
 	assert.Equal(t, 1, MaxAttemptsFor(KVTestConnection))
@@ -317,15 +317,20 @@ func TestClassifyNeverReturnsNil(t *testing.T) {
 	assert.Equal(t, NeedsAttention, classify(Attention("x.y", nil, nil)).Class)
 }
 
-// ACME issuance: an order changes the world (a certificate authority and, through the hook, a DNS zone), so it is
-// refused and held in lock and runs once (a retry would start a second order and burn the authority's rate limit; the
-// planner paces repeats); cleanup of authorizations and leftover challenge records runs in every state; the renewal
-// planner and the auto-deploy planner are periodic and therefore ReadOnly like the Key Vault ones.
+// ACME issuance: an order a person starts changes the world (a certificate authority and, through the hook, a DNS
+// zone), so it is refused and held in lock and runs once (a retry would start a second order and burn the authority's
+// rate limit; the planner paces repeats); the renewal planner's order of an issued certificate (acme.renew) is
+// continuity work, also run once; cleanup of authorizations and leftover challenge records runs in every state; the
+// renewal planner and the auto-deploy planner are periodic continuity work like the Key Vault ones.
 func TestACMEJobTypes(t *testing.T) {
 	assert.Equal(t, license.ClassChange, ACMEIssue.Class)
+	assert.Equal(t, license.ClassContinuity, ACMERenew.Class)
+	assert.Equal(t, "acme.renew", ACMERenew.Name)
+	assert.Equal(t, 1, MaxAttemptsFor(ACMERenew))
+	assert.True(t, AlertsWhenExhausted(ACMERenew))
 	assert.Equal(t, license.ClassAlways, ACMECleanup.Class)
-	assert.Equal(t, license.ClassReadOnly, ACMESchedule.Class, "a ClassChange periodic task would panic at start-up")
-	assert.Equal(t, license.ClassReadOnly, ACMEAutoDeploy.Class)
+	assert.Equal(t, license.ClassContinuity, ACMESchedule.Class, "a ClassChange periodic task would panic at start-up")
+	assert.Equal(t, license.ClassContinuity, ACMEAutoDeploy.Class)
 	assert.Equal(t, "acme.issue", ACMEIssue.Name)
 	assert.Equal(t, "acme.cleanup", ACMECleanup.Name)
 	assert.Equal(t, "acme.schedule", ACMESchedule.Name)
@@ -342,4 +347,26 @@ func TestACMEJobTypes(t *testing.T) {
 			Task{Type: ACMEAutoDeploy, Every: time.Minute, Run: func(context.Context) error { return nil }},
 			Task{Type: ACMESweep, Every: time.Minute, Run: func(context.Context) error { return nil }})
 	})
+}
+
+// The continuity window (owner decision 2026-10-20): the automatic deployment shares certificate.deploy's handler and
+// dedupe namespace with the continuity class; after the window a refused continuity job is held when it changes a
+// system and cancelled when it only reads, as its kind of work was before.
+func TestContinuityJobTypes(t *testing.T) {
+	assert.Equal(t, license.ClassContinuity, CertificateDeployAuto.Class)
+	assert.Equal(t, "certificate.deploy_auto", CertificateDeployAuto.Name)
+	assert.Equal(t, MaxAttemptsFor(CertificateDeploy), MaxAttemptsFor(CertificateDeployAuto))
+	assert.True(t, heldInLock(CertificateDeploy))
+	assert.True(t, heldInLock(CertificateDeployAuto))
+	assert.True(t, heldInLock(ACMERenew))
+	assert.False(t, heldInLock(KVPoll), "a poll only reads: cancelled, and the scheduler queues it again after a renewal")
+	assert.False(t, heldInLock(TargetDiscover))
+	assert.False(t, heldInLock(AuditVerify))
+	assert.Equal(t, []string{"kv.poll"}, continuityReadOnlyTypes())
+	for _, typ := range Types() {
+		if typ.Class == license.ClassContinuity {
+			assert.Contains(t, []string{"acme.renew", "acme.schedule", "acme.auto_deploy", "certificate.deploy_auto", "kv.poll",
+				"kv.schedule", "kv.auto_deploy"}, typ.Name, "continuity is the upkeep of what is already managed only")
+		}
+	}
 }

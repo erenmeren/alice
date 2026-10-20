@@ -34,10 +34,11 @@ import (
 type lockableLicense struct {
 	inventory.LicenseGate
 	locked atomic.Bool
+	window atomic.Bool // with locked: inside the continuity window, continuity work is allowed
 }
 
 func (l *lockableLicense) Allow(c license.Class) error {
-	if l.locked.Load() && c != license.ClassAlways {
+	if l.locked.Load() && c != license.ClassAlways && (c != license.ClassContinuity || !l.window.Load()) {
 		return license.ErrLocked
 	}
 	return l.LicenseGate.Allow(c)

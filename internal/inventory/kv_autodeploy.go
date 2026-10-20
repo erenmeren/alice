@@ -31,13 +31,13 @@ import (
 
 // PlanKVAutoDeploy runs the planner once over the bindings that may have work and returns how many
 // deployments it created (at most autoDeployBatch, 50, in all; AutoDeployWave per binding). It does
-// nothing while the licence gate refuses changes (kv.auto_deploy is a ClassChange job; the gate is read
-// again inside each binding's transaction). A binding whose planning failed is skipped for this run;
+// nothing while the licence gate refuses continuity work (kv.auto_deploy is a ClassContinuity task: it runs in
+// the continuity window of a lock too; the gate is read again inside each binding's transaction). A binding whose planning failed is skipped for this run;
 // the others are still planned and the errors are returned together. The deployments are the Phase 4
 // kind (trigger kv_renewal, job kind system, audit deployment.requested); notices and stops are
 // described at planAutoDeploy. Audit rows: kv.auto_deploy.stopped.
 func (s *Service) PlanKVAutoDeploy(ctx context.Context) (int, error) {
-	if err := s.license.Allow(license.ClassChange); err != nil {
+	if err := s.license.Allow(license.ClassContinuity); err != nil {
 		return 0, nil
 	}
 	run := &planRun{limit: planMailLimit, sent: map[string]int{}, over: map[string]int{}, vaults: map[string]string{}}
@@ -256,7 +256,7 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 			return fmt.Errorf("inventory: lock the binding: %w", err)
 		}
 		// The gate is read again here: the licence may have locked since the run began.
-		if s.license.Allow(license.ClassChange) != nil {
+		if s.license.Allow(license.ClassContinuity) != nil {
 			return nil
 		}
 		now := s.clock.Now().UTC()

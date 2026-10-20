@@ -122,7 +122,8 @@ func TestServeWiringIsComplete(t *testing.T) {
 	}
 	for _, typ := range []jobs.Type{jobs.TargetTestConnection, jobs.TargetDiscover, jobs.SSHKeyRemove,
 		jobs.CertificateDeploy, jobs.CertificateDeployRecover, jobs.KVTestConnection, jobs.KVPoll, jobs.KVImport,
-		jobs.SSHKeyAdd, jobs.RotationLocation, jobs.ACMEIssue, jobs.ACMECleanup, jobs.NetdiscoScan} {
+		jobs.SSHKeyAdd, jobs.RotationLocation, jobs.ACMEIssue, jobs.ACMECleanup, jobs.NetdiscoScan,
+		jobs.ACMERenew, jobs.CertificateDeployAuto} {
 		assert.True(t, runner.Handles(typ), "the runner handles %s", typ.Name)
 	}
 	for _, typ := range []jobs.Type{jobs.LicenseEvaluate, jobs.NotifySend, jobs.AuditVerify, jobs.MaintenanceCleanup,

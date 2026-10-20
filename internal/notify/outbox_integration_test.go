@@ -211,11 +211,11 @@ func TestConcurrentDrainsSendEachEmailOnce(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	assert.Equal(t, 30, m.calls, "6 templates x 5 admins")
+	assert.Equal(t, 35, m.calls, "7 templates x 5 admins")
 	for k, n := range m.sent {
 		assert.Equal(t, 1, n, k)
 	}
-	assert.Equal(t, map[string]int{"sent": 30}, statuses(t, d))
+	assert.Equal(t, map[string]int{"sent": 35}, statuses(t, d))
 }
 
 // probeMailer checks, while it "sends", that the e-mail's row is neither locked nor holding a pooled connection, and

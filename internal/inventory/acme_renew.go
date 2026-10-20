@@ -71,13 +71,13 @@ var acmeRenewHook func(id uuid.UUID)
 var errRenewSkip = errors.New("inventory: the certificate is planned at the next run")
 
 // PlanACMERenewals runs the renewal planner once (acme.schedule; see the file comment). While the licence gate refuses
-// changes it returns at once: no CA contact, no row written, no failure counted. The candidates are read page by page
+// continuity work (license.ClassContinuity: it runs in the continuity window of a lock too) it returns at once: no CA contact, no row written, no failure counted. The candidates are read page by page
 // (at most acmeRenewPages pages of acmeRenewPage, most urgent first), so certificates that are skipped run after run
 // (a key change that does not settle, a job that is still finishing) do not hide the ones after them. The certificates
 // whose planning failed are skipped for this run and their errors returned together.
 func (s *Service) PlanACMERenewals(ctx context.Context) (ACMERenewRun, error) {
 	var run ACMERenewRun
-	if s.license.Allow(license.ClassChange) != nil {
+	if s.license.Allow(license.ClassContinuity) != nil {
 		return run, nil
 	}
 	var errs []error
@@ -213,7 +213,7 @@ func (s *Service) renewTx(ctx context.Context, id uuid.UUID, run *ACMERenewRun) 
 			return fmt.Errorf("inventory: lock the ACME certificate: %w", err)
 		}
 		// The gate is read again here: the licence may have locked since the run began.
-		if s.license.Allow(license.ClassChange) != nil {
+		if s.license.Allow(license.ClassContinuity) != nil {
 			return errRenewSkip
 		}
 		c, err := getACMECert(ctx, tx, id, true) // a fresh view of the running order, after the lock
@@ -389,7 +389,7 @@ func acmeNoticeParams(names []string, failures int, code string, notAfter *time.
 // waits renew.NextARICheck (the CA's Retry-After when it gave one), and a CA without renewal information clears the
 // window. It returns only database errors.
 func (s *Service) refreshACMEARI(ctx context.Context, t ariTarget) error {
-	if s.license.Allow(license.ClassChange) != nil {
+	if s.license.Allow(license.ClassContinuity) != nil {
 		return nil
 	}
 	window, err := s.acmeRenewalInfo(ctx, t)

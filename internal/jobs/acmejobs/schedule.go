@@ -24,11 +24,12 @@ var _ Planner = (*inventory.Service)(nil)
 var errPlanFailed = errors.New("acmejobs: the ACME renewal plan failed for some certificates")
 
 // ScheduleTask is the periodic acme.schedule: the renewal planner (inventory.PlanACMERenewals; each order is an
-// acme.issue job, ClassChange, which the runner never claims in lock). Its class is ReadOnly because the scheduler
-// refuses ClassChange tasks, so the scheduler's gate pauses it in lock and while the licence cannot be verified, and
-// the planner itself returns at once while the gate refuses changes (no CA contact, no row written). It runs on the
-// leader only (the scheduler's advisory lock), every minute in a release build and never on the wall clock in the e2e
-// build (the journeys run it with POST /test/scheduler/run after moving the demo clock).
+// acme.renew job, ClassContinuity). The task is continuity work too (owner decision 2026-10-20; the scheduler refuses
+// only ClassChange tasks): it runs in the continuity window of a lock, and the scheduler's gate pauses it once the
+// window has ended and while the licence cannot be verified; the planner itself returns at once while the gate refuses
+// continuity work (no CA contact, no row written). It runs on the leader only (the scheduler's advisory lock), every
+// minute in a release build and never on the wall clock in the e2e build (the journeys run it with
+// POST /test/scheduler/run after moving the demo clock).
 func ScheduleTask(p Planner, every time.Duration, log *slog.Logger) jobs.Task {
 	if p == nil {
 		panic("acmejobs: ScheduleTask needs a planner")

@@ -58,7 +58,15 @@ func (s Snapshot) Banners(admin bool) []Banner {
 		out = append(out, Banner{Kind: "grace", Severity: SeverityDanger, Params: map[string]string{
 			"valid_until": ts(e.EndsAt), "locks_at": ts(e.LocksAt), "grace_day": itoa(e.GraceDay)}})
 	case PhaseLocked:
-		out = append(out, Banner{Kind: "locked", Severity: SeverityDanger, Params: map[string]string{"valid_until": ts(e.EndsAt)}})
+		// The continuity window (owner decision 2026-10-20): certificates already managed keep renewing and
+		// deploying until continuity_ends_at; after it the lock banner says that this stopped too.
+		if e.InContinuity() {
+			out = append(out, Banner{Kind: "locked_continuity", Severity: SeverityDanger, Params: map[string]string{
+				"valid_until": ts(e.EndsAt), "continuity_ends_at": ts(e.ContinuityEndsAt), "days_left": itoa(e.ContinuityDaysLeft)}})
+		} else {
+			out = append(out, Banner{Kind: "locked", Severity: SeverityDanger, Params: map[string]string{
+				"valid_until": ts(e.EndsAt), "continuity_ended_at": ts(e.ContinuityEndsAt)}})
+		}
 	}
 	if s.Unverified {
 		// AUD-02: changes are paused for everyone until an evaluation succeeds; last_checked is the

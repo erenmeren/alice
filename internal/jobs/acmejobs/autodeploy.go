@@ -22,10 +22,11 @@ var _ AutoDeployPlanner = (*inventory.Service)(nil)
 var errDeployPlanFailed = errors.New("acmejobs: the ACME automatic deployment plan failed for some certificates")
 
 // AutoDeployTask is the periodic acme.auto_deploy: it plans the deployments of newly issued ACME certificates to their
-// bound locations (inventory.PlanACMEAutoDeploy). Each deployment is a certificate.deploy job (ClassChange, held in lock)
-// run by the existing deployment engine (deployjobs), exactly as a person's request and the Key Vault planner's are. The
-// task's class is ReadOnly because the scheduler refuses ClassChange tasks, so the scheduler's gate pauses it in lock;
-// the planner itself returns at once while the gate refuses changes. It runs on the leader only (the scheduler's advisory
+// bound locations (inventory.PlanACMEAutoDeploy). Each deployment is a certificate.deploy_auto job (ClassContinuity: it
+// runs in the continuity window of a lock and is held after it) run by the existing deployment engine (deployjobs),
+// exactly as a person's request and the Key Vault planner's are. The task is continuity work too (the scheduler refuses
+// only ClassChange tasks), so the scheduler's gate pauses it in lock once the window has ended; the planner itself
+// returns at once while the gate refuses continuity work. It runs on the leader only (the scheduler's advisory
 // lock), every minute in a release build and never on the wall clock in the e2e build (the journeys run it with
 // POST /test/scheduler/run {"task": "acme.auto_deploy"}).
 func AutoDeployTask(p AutoDeployPlanner, every time.Duration, log *slog.Logger) jobs.Task {

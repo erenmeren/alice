@@ -167,6 +167,22 @@ describe("license page", () => {
     expect(note.getAttribute("style")).toContain("--alert-bg: var(--alice-danger-soft)");
     first.unmount();
 
+    // In lock inside the continuity window the notice says until when certificates keep renewing (owner decision
+    // 2026-10-20); after it, that this stopped too.
+    server.use(detail({ phase: "locked", continuity_days_left: 12 }));
+    const inWindow = await renderRoute("/license");
+    note = await screen.findByTestId("license-continuity");
+    expect(note).toHaveTextContent("License expired · certificates keep renewing");
+    expect(note).toHaveTextContent(/deployed automatically to the places they are bound to until .*2027.* \(12 days left\)/);
+    inWindow.unmount();
+    server.use(detail({ phase: "locked", continuity_days_left: 0 }));
+    const after = await renderRoute("/license");
+    await screen.findByTestId("license-phase");
+    note = screen.getByRole("note");
+    expect(note).toHaveTextContent("License expired · external changes paused");
+    expect(note).toHaveTextContent(/Automatic renewal and deployment of certificates stopped on .*2027/);
+    after.unmount();
+
     server.use(detail({ phase: "evaluation", current: null, max_targets: 5, days_left: 30, files: [], history: [] }));
     const second = await renderRoute("/license");
     expect(await screen.findByTestId("license-phase")).toHaveAttribute("data-tone", "info");

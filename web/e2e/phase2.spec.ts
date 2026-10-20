@@ -40,7 +40,7 @@ const L = {
     installedPending: 'The license is installed and starts on ',
     warning: (days: number) => (days === 1 ? 'Your license expires in 1 day (' : `Your license expires in ${days} days (`),
     grace: (day: number) => `Grace day ${day} of 7.`,
-    locked: 'License expired. Automatic tasks are paused.',
+    locked: 'License expired. Changes are paused, but certificates Alice already manages keep renewing',
     clockBehind: 'The server clock changed unexpectedly',
     clockJump: (days: number) => `The server clock jumped forward by ${days} days.`,
     pending: (id: string) => `A new license (${id}) starts on `,
@@ -59,7 +59,7 @@ const L = {
     installedPending: 'Lisans yüklendi; şu tarihte başlıyor: ',
     warning: (days: number) => `Lisansınızın süresi ${days} gün sonra doluyor (`,
     grace: (day: number) => `Ek süre günü: ${day} / 7.`,
-    locked: 'Lisans süresi doldu. Otomatik işler duraklatıldı.',
+    locked: 'Lisans süresi doldu. Değişiklikler duraklatıldı; ancak Alice\'in zaten yönettiği sertifikalar',
     clockBehind: 'Sunucu saati beklenmedik biçimde değişti',
     clockJump: (days: number) => `Sunucu saati ${days} gün ileri atladı.`,
     pending: (id: string) => `Yeni bir lisans (${id}) şu tarihte başlıyor: `,
@@ -287,16 +287,17 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await platformAdministrationWorks(page, request, c, totpSecret, NEWCOMER);
       await expect(page.getByTestId('license-banner-grace')).toBeVisible();
 
-      // Lock: the red locked banner; sign-in, user administration and the audit log still work
-      // (Phase 2 has no route that lock mode refuses: those arrive with targets in Phase 3).
+      // Lock: the red locked banner (inside the continuity window: certificates already managed keep renewing,
+      // owner decision 2026-10-20); sign-in, user administration and the audit log still work (Phase 2 has no route
+      // that lock mode refuses: those arrive with targets in Phase 3).
       await advanceTo(request, end + 169 * HOUR);
       await signIn(page, request, ADA, totpSecret);
-      await expect(page.getByTestId('license-banner-locked')).toContainText(l.locked);
-      await expect(page.getByTestId('license-banner-locked')).toHaveAttribute('role', 'alert');
+      await expect(page.getByTestId('license-banner-locked_continuity')).toContainText(l.locked);
+      await expect(page.getByTestId('license-banner-locked_continuity')).toHaveAttribute('role', 'alert');
       expect((await mails(request)).at(-1)?.subject).toMatch(SUBJECT.locked);
       await expectBannerAccessible(page, 'home in lock');
       await platformAdministrationWorks(page, request, c, totpSecret, LATECOMER);
-      await expect(page.getByTestId('license-banner-locked')).toBeVisible();
+      await expect(page.getByTestId('license-banner-locked_continuity')).toBeVisible();
 
       // Renewal: everything works again at once (L-30).
       await openLicensePage(page, lang);
