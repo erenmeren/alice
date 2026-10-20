@@ -153,6 +153,8 @@ var explicitGrants = map[string][]string{
 	// Key-compromise incidents (00021): history, never deleted; a finished incident is frozen (Z1023).
 	"public.certificate_incidents":          {"INSERT", "SELECT"},
 	"public.certificate_incident_locations": {"INSERT", "SELECT"},
+	// Services (00025, R49): a service's policy history is append-only.
+	"public.service_policies": {"INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -166,11 +168,12 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// 00017 adds capabilities (the startup sync, spec §8.1).
 	// Phase 5 adds credential_id (a vault's credential moves to its replacement; a trigger refuses it
 	// for any other kind of target) and poll_failures (it delays the next poll).
+	// 00025 adds service_id here and on the other owned tables (moving a resource to another service, R49).
 	"public.targets": {"UPDATE": {"capabilities", "credential_id", "deleted_at", "discovery_interval_seconds", "facts", "keys_managed_elsewhere",
-		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "status", "updated_at", "version"}},
+		"last_discovery_at", "last_error_code", "last_scheduled_at", "last_success_at", "name", "poll_failures", "service_id", "status", "updated_at", "version"}},
 	"public.host_keys": {"UPDATE": {"confirmed_at", "confirmed_by", "observed_at", "status", "superseded_at"}},
 	// Phase 6 adds retired_at (a rotation retires its old key; a key found live again is un-retired).
-	"public.ssh_keys": {"UPDATE": {"is_platform_key", "retired_at", "weak"}},
+	"public.ssh_keys": {"UPDATE": {"is_platform_key", "retired_at", "service_id", "weak"}},
 	"public.ssh_key_locations": {"UPDATE": {"comment", "flags", "is_alice_connection_key", "last_seen_at", "line_no",
 		"missing_since", "options", "removed_by_alice_at"}},
 	// Phase 4: identity columns (fingerprints, public key hashes, paths of a location or a
@@ -178,8 +181,8 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// never updated; the lists are the columns the inventory and deployment services write.
 	// 00021 adds the revocation and compromise marks (final once set: Z1022).
 	"public.certificates": {"UPDATE": {"chain_complete", "compromised_at", "compromised_by", "label", "last_seen_at", "pem_chain", "private_key_id",
-		"revocation_reason", "revoked_at", "revoked_by", "source"}},
-	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "status"}},
+		"revocation_reason", "revoked_at", "revoked_by", "service_id", "source"}},
+	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "service_id", "status"}},
 	"public.certificate_locations": {"UPDATE": {"binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
 		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
@@ -205,7 +208,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// to NULL together with destroyed_at: managed_private_keys_guard). A rotation's plan, digest, key type,
 	// overlap, planning and notice times are fixed at INSERT, as are a location's identity columns.
 	"public.managed_private_keys": {"UPDATE": {"ciphertext", "destroyed_at", "download_count", "key_version", "last_downloaded_at", "nonce", "wrapped_dek"}},
-	"public.rotation_policies": {"UPDATE": {"deleted_at", "enabled", "interval_days", "name", "new_key_type", "next_run_at", "notify_before_hours",
+	"public.rotation_policies": {"UPDATE": {"approved_service_ids", "deleted_at", "enabled", "interval_days", "name", "new_key_type", "next_run_at", "notify_before_hours",
 		"overlap_minutes", "preview_mailed_at", "ssh_key_id", "updated_at", "version"}},
 	"public.rotations": {"UPDATE": {"awaiting_decision", "continued_at", "continued_by", "decision_due_at", "finished_at", "kept_count",
 		"new_ssh_key_id", "overlap_until", "paused_at", "paused_license", "reminder_sent_at", "removal_allowed", "renotified_at", "result_code",
@@ -224,7 +227,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"ca_not_before", "challenge", "current_certificate_id", "deleted_at", "deploy_held_certificate_id", "deploy_held_reason",
 		"deploy_released_certificate_id", "deploy_stopped_certificate_id", "failure_notified_at", "failures", "hook_id",
 		"http_target_id", "key_type", "last_attempt_at", "last_error_code", "last_failure_class", "names", "next_attempt_at",
-		"permanent_failures", "provider_id", "rate_limited_since", "renew_before_days", "state", "updated_at"}},
+		"permanent_failures", "provider_id", "rate_limited_since", "renew_before_days", "service_id", "state", "updated_at"}},
 	"public.acme_orders": {"UPDATE": {"certificate_id", "cleanup_at", "cleanup_error_code", "error_code", "finished_at", "order_url",
 		"pending_key_ct", "pending_key_nonce", "pending_key_version", "pending_key_wrapped_dek", "presented", "state"}},
 	"public.acme_bindings": {"UPDATE": {"attention_at", "attention_code", "auto_deploy"}},
@@ -232,7 +235,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 	// time, a certificate's body and parsed fields, an endpoint's key (scope, address, port, SNI), host and first sighting
 	// are fixed at INSERT.
 	"public.discovery_scopes": {"UPDATE": {"alert_on_expiry", "concurrency", "deleted_at", "enabled", "entries", "exclusions",
-		"last_scheduled_at", "name", "ports", "rate_per_sec", "schedule_hours", "sni_names", "updated_at", "version", "window_end",
+		"last_scheduled_at", "name", "ports", "rate_per_sec", "schedule_hours", "service_id", "sni_names", "updated_at", "version", "window_end",
 		"window_start", "window_tz"}},
 	"public.discovery_scans": {"UPDATE": {"cancel_requested", "cert_churn", "certificates_new", "endpoints_answered", "endpoints_excluded",
 		"endpoints_failed", "endpoints_total", "error_code", "finished_at", "started_at", "state"}},
@@ -247,6 +250,10 @@ var explicitColumnGrants = map[string]map[string][]string{
 }
 
 var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
+
+// serviceColumnTables are the relations whose service columns (00025) the application may update.
+var serviceColumnTables = []string{"public.targets", "public.certificates", "public.csr_requests", "public.ssh_keys", "public.acme_certificates",
+	"public.discovery_scopes", "public.rotation_policies"}
 
 // grantProblems returns every schema or relation whose effective alice_app privileges
 // (direct, through PUBLIC or role membership) differ from the explicit sets above.
@@ -294,6 +301,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	revocation := hasColumn(t, d, "certificates", "revoked_at")
 	caWait := hasColumn(t, d, "acme_certificates", "ca_not_before")
 	guard := hasColumn(t, d, "deployments", "rollback_leaf_sha256")
+	services := hasColumn(t, d, "targets", "service_id")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -341,6 +349,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00023 the rollback target columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "rollback_leaf_sha256" || c == "rollback_spki_sha256"
+			})}
+		}
+		if !services && slices.Contains(serviceColumnTables, name) {
+			// Below 00025 there is no owning service to move and no approval to record.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "service_id" || c == "approved_service_ids"
 			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {
