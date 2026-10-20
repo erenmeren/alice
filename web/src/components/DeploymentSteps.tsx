@@ -2,7 +2,7 @@ import { Text } from '@mantine/core';
 import type { i18n, TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { FINAL_STATUSES } from '../api/deployments';
-import { configErrorKey, stepNameKey, stepStatusKey } from '../api/enums';
+import { configErrorKey, stepNameKey, stepStatusKey, trustErrorKey, trustStatusKey } from '../api/enums';
 import type { DeploymentStatus, DeploymentStep } from '../api/types';
 import { OperationTimeline, type StepState } from './ui';
 import { WRAP } from './wrap';
@@ -73,6 +73,9 @@ function stepDetails(step: DeploymentStep, t: TFunction, i18n: i18n): React.Reac
   }
   if (p.port) lines.push(<Text key="port" size="xs">{t('deployments.stepDetail.port', { port: p.port })}</Text>);
   if (p.mode) lines.push(<Text key="mode" size="xs">{t('deployments.stepDetail.mode', { mode: t(`deployments.verified.${['remote', 'local', 'skipped'].includes(p.mode) ? p.mode : 'none'}`) })}</Text>);
+  // R51: the served chain's trust and, when it did not verify, the precise fault.
+  if (p.trust) lines.push(<Text key="trust" size="xs">{t('deployments.stepDetail.trust', { trust: t(trustStatusKey(p.trust)) })}</Text>);
+  if (p.trust_error) lines.push(<Text key="trustError" size="xs">{t('deployments.stepDetail.trustError', { reason: t(trustErrorKey(p.trust_error)) })}</Text>);
   if (step.name === 'recover_pending' && (step.status === 'ok' || step.status === 'skipped' || step.status === 'failed')) {
     lines.push(
       <Text key="recover" size="xs">

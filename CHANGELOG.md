@@ -25,6 +25,29 @@
   again right before they send, and the automatic deployments of ACME certificates and Key Vault connections leave such
   a website alone (marked **Not accepted by its service**, one e-mail: `acme.auto_deploy_untrusted`,
   `kv.auto_deploy_untrusted`). Rulings: `docs/superpowers/rulings/scoped-access.md`.
+## Unreleased — Deployment verification proves trust
+
+**Security**
+- After a deployment Alice no longer trusts only "the same certificate with the same number of certificates": it
+  verifies the chain each website sends with `crypto/x509` against a trusted root for the name it checked, at the time
+  of the check (R51). The roots are the system roots, the CA bundle of the ACME authority that issued the certificate,
+  and a root uploaded with the chain. When Alice can verify the chain it deploys against them, a website that sends a
+  chain that does not verify (another CA's intermediate, a missing or expired intermediate, the wrong order, an unknown
+  root) fails the deployment with `ALC-DEP-0026` (`deployment.verify_untrusted`, parameter `trust_error`), and the
+  previous certificate is put back (with the R48 guard). Otherwise, and for a name the certificate does not cover, the
+  deployment succeeds with a visible warning.
+- `alice-helper` 1.10.0 (protocol 11) reports the chain a website presents in the check from the server itself. An
+  older helper keeps working; its checks show the chain as not checked. The sudoers lines are unchanged.
+
+**Changed**
+- Every deployment shows its evidence: **Installed**, **Served** or **Trusted**, the chain's trust with the exact
+  fault and port, and whether a failed check was the network, the certificate or the chain (API `verification`
+  {`level`, `trust`, `failure`}; the verify step's params `trust`, `trust_error`). Level 4, a check of the service
+  itself, is reserved.
+- One check of a website that times out is measured again instead of being taken as an answer.
+- Migration `00025` (`deployments.trust_status`, `trust_error`, `trust_port`, `trust_store`, `trust_enforced`).
+  Rulings: `docs/superpowers/rulings/deployment-trust-verification.md`.
+
 ## Unreleased — Renewal information (ARI) completed
 
 **Added**

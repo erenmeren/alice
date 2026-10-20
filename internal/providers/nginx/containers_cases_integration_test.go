@@ -588,9 +588,12 @@ func (h *rnHost) testDeployVerified(t *testing.T) {
 	c := h.location(rnWWW)
 	l := h.leaf("www.example.test", pki.ECDSA256)
 	req := h.request(c, l, true)
+	req.Trust = h.trustPolicy(l.Cert, h.ca.Intermediate)
 	out, log, err := h.deploy(nil, req)
 	h.committed(out, err, req, l, "remote")
 	assert.Equal(t, []string{"backup:ok", "write_key:ok", "write_cert:ok", "config_test:ok", "reload:ok", "verify:started", "verify:ok"}, log)
+	// R51: the chain the real Nginx sends verifies against the test CA's root.
+	assert.Equal(t, providers.Trust{Status: providers.TrustTrusted, Store: providers.TrustStoreSystem, Enforced: true}, out.Trust)
 	h.settledServed(h.ip, 443, "www.example.test", "", pki.Fingerprint(l.Cert), "the new leaf")
 	assert.Equal(t, pki.Fingerprint(l.Cert), h.dialVerified(443, "www.example.test"), "the chain verifies against the test CA")
 	assert.Equal(t, "root:root 600", h.stat(rnWWWKey), "F-13: an open key mode becomes 0600")
@@ -710,8 +713,13 @@ func (h *rnHost) testListenAddresses(t *testing.T) {
 	loop := h.location(rnLoop)
 	l = h.leaf("loop.example.test", pki.ECDSA256)
 	req = h.request(loop, l, false)
+	req.Trust = h.trustPolicy(l.Cert)
 	out, _, err = h.deploy(nil, req)
 	h.committed(out, err, req, l, "local")
+	// R51: the real helper's tls-probe reports the chain (the leaf only): the trust is measured from the server
+	// itself, and a deployed chain that leads to no root Alice holds is a warning, not a failure.
+	assert.Equal(t, providers.Trust{Status: providers.TrustUntrusted, Error: providers.TrustErrUnknownAuthority, Port: 8443,
+		Store: providers.TrustStoreSystem}, out.Trust)
 	h.settledServed("127.0.0.1", 8443, "loop.example.test", "", pki.Fingerprint(l.Cert), "IPv4 loopback")
 	h.settledServed("::1", 8443, "loop.example.test", "", pki.Fingerprint(l.Cert), "IPv6 loopback")
 }

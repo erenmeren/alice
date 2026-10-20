@@ -233,32 +233,33 @@ func (h *handlers) verified(ctx context.Context, sess providers.Session, d inven
 		if vr.Mode == "skipped" {
 			status = providers.StepSkipped
 		}
-		rec.Step(providers.StepNameVerify, status, map[string]string{"mode": vr.Mode})
+		rec.Step(providers.StepNameVerify, status, vr.StepParams())
 		f := inventory.DeploymentFinish{Status: inventory.DeployStatusSucceeded, Result: string(providers.DeployCommitted), Phase: st.Phase,
-			Verified: vr.Mode, CertFileSHA256: st.NewCertSHA256, Params: map[string]string{}}
+			Verified: vr.Mode, CertFileSHA256: st.NewCertSHA256, Params: map[string]string{}, Trust: vr.Trust}
 		if st.Phase == providers.PhaseUnchanged {
 			f.Status, f.Result = inventory.DeployStatusUnchanged, string(providers.DeployUnchanged)
 		}
 		return h.recordFor(ctx, d, inventory.OutcomeRecord{Terminal: true, Finish: f}, m, nil)
 	}
-	rec.Step(providers.StepNameVerify, providers.StepFailed, map[string]string{"port": vr.Params["port"], "reason": vr.Reason})
-	cause := rollbackCause{reason: vr.Reason, port: portOf(vr.Params), step: providers.StepNameVerify}
+	rec.Step(providers.StepNameVerify, providers.StepFailed, vr.StepParams())
+	cause := rollbackCause{reason: vr.Reason, port: portOf(vr.Params), step: providers.StepNameVerify, trust: vr.Trust}
 	if st.Phase == providers.PhaseUnchanged {
 		// The files already held the new pair: this operation wrote nothing, nothing to roll back.
 		return h.recordFor(ctx, d, inventory.OutcomeRecord{Terminal: true, Finish: inventory.DeploymentFinish{
 			Status: inventory.DeployStatusFailed, Result: string(providers.DeployNoChange), Phase: providers.PhaseUnchanged,
 			NothingWritten: true, FailedStep: providers.StepNameVerify, ErrorCode: vr.Reason, Params: vr.Params, VerifyFailedReason: vr.Reason,
-			VerifyFailedPort: cause.port}}, m, nil)
+			VerifyFailedPort: cause.port, Trust: vr.Trust}}, m, nil)
 	}
 	return h.rollback(ctx, sess, d, mat, st, rec, m, cause, 1)
 }
 
-// rollbackCause is why a recovery rolls back: a verification it just made, or "" (the recorded one,
-// or the journal's).
+// rollbackCause is why a recovery rolls back: a verification it just made (with what it found about
+// the served chains), or "" (the recorded one, or the journal's).
 type rollbackCause struct {
 	reason string
 	port   *int
 	step   string
+	trust  providers.Trust // R51: what the verification found about the served chains
 }
 
 // rollback restores the recorded operation's files and records the mapped outcome (see
@@ -275,7 +276,7 @@ func (h *handlers) rollback(ctx context.Context, sess providers.Session, d inven
 		c.reason = causeReason(st.CauseStep, st.Error)
 		c.step = st.CauseStep
 	}
-	from := inventory.DeploymentFinish{CauseStep: c.step, HelperError: st.Error}
+	from := inventory.DeploymentFinish{CauseStep: c.step, HelperError: st.Error, Trust: c.trust}
 	if c.step == providers.StepNameVerify {
 		from.VerifyFailedReason, from.VerifyFailedPort = c.reason, c.port
 	}

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"net"
 	"strconv"
@@ -58,6 +59,8 @@ func TestTLSProbeReportsTheServedLeaf(t *testing.T) {
 	assert.Equal(t, pki.Fingerprint(leaf.Cert), m["leaf_sha256"])
 	assert.Equal(t, float64(2), m["chain_length"])
 	assert.Equal(t, leaf.Cert.NotAfter.UTC().Format(time.RFC3339), m["not_after"])
+	// Protocol 11 (R51): the presented chain, leaf first, so that Alice can check its trust.
+	assert.Equal(t, []any{base64.StdEncoding.EncodeToString(leaf.Cert.Raw), base64.StdEncoding.EncodeToString(ca.Intermediate.Raw)}, m["chain"])
 	assert.Equal(t, "www.example.test", <-sni)
 	code, m = f.run("tls-probe", "--addr", "127.0.0.1", "--port", port, "--sni", helperproto.NoSNI, "--key-type", "ecdsa")
 	require.Equal(t, 0, code, "%v", m)

@@ -478,6 +478,14 @@ func (h *rnHost) request(c providers.DiscoveredCertificate, leaf pki.Leaf, chain
 	}
 }
 
+// trustPolicy is the R51 policy for deploying chain with the test CA's root as the only root.
+func (h *rnHost) trustPolicy(chain ...*x509.Certificate) *providers.TrustPolicy {
+	roots := x509.NewCertPool()
+	roots.AddCert(h.ca.Root)
+	p := providers.TrustPolicyFor(chain, roots, providers.TrustStoreSystem, time.Now())
+	return &p
+}
+
 func rollbackRequestOf(req providers.DeployRequest, oldChain int) providers.RollbackRequest {
 	return providers.RollbackRequest{OperationID: req.OperationID, Location: req.Location, OldFingerprint: req.OldFingerprint,
 		OldChainLength: oldChain, OldSANs: req.OldSANs, KeyType: req.KeyType, Verify: req.Verify}

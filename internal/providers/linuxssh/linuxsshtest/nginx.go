@@ -658,6 +658,16 @@ func (e *Emulator) ProbeServed(addr string, port int, sni, keyType string) (leaf
 	return s.leafSHA, s.chain, ok
 }
 
+// ProbeServedChain is ProbeServed's presented chain: the DER of every certificate, leaf first (nil
+// when nothing answers, or for ServeOther's certificate, which the emulator knows only by its hash).
+// Test probers that stand for Alice's own probe report it like crypto/tls does (R51).
+func (e *Emulator) ProbeServedChain(addr string, port int, sni, keyType string) [][]byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	s, _ := e.nginx().servedLocked(addr, port, sni, keyType)
+	return s.ders
+}
+
 // Reloads counts the reloads Nginx was asked for (successful or not).
 func (e *Emulator) Reloads() int {
 	e.mu.Lock()

@@ -2491,6 +2491,23 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Check the website now: it may not work until another certificate is deployed (Nginx keeps serving what it loaded until its next reload or restart, and that may fail with the files as they are). Find the cause in the deployment's history and fix it, then deploy a valid certificate again, or choose **Retry** on the incident; this deployment does not block the next one. **Never restore the server's backup of this deployment by hand** (`/var/lib/alice-helper/backups/<deployment ID>`): it holds the compromised key. See [nginx-host-preparation.md](nginx-host-preparation.md#an-undo-never-puts-back-a-revoked-or-compromised-certificate).
 
+## ALC-DEP-0026: The website serves the new certificate, but its chain is not trusted
+
+**Meaning.** The website serves the new certificate with the expected number of certificates (port `<port>`), but the chain it sends does not verify against the trust anchor Alice knows for this certificate, so Alice put the previous certificate back. (HTTP 502, reason `deployment.verify_untrusted`, status rolled back; the parameter `trust_error` names the fault, and the deployment's **Verification** shows it in words.) Alice fails a deployment for this only when it knows the anchor: the chain it deployed verifies against the system roots, the issuing ACME authority's CA bundle, or a root that was uploaded with the chain. Otherwise the same finding is a warning on a succeeded deployment (level **Served**, see [admin-guide.md](admin-guide.md#how-alice-verifies-a-deployment)).
+
+**Likely cause.** By `trust_error`:
+
+- `unknown_authority`: the chain leads to no root of the trust store (for example a chain of another, private CA).
+- `wrong_intermediate`: no certificate the website sends after the leaf issued it (another CA's intermediate is configured).
+- `incomplete_chain`: an intermediate certificate of the deployed chain is missing (a file with the leaf only, or a proxy that drops it).
+- `chain_order`: the intermediates are sent in another order than the chain that verifies.
+- `expired`, `not_yet_valid`: an intermediate on the path (or the leaf) is outside its validity at the time of the check.
+- `invalid_chain`: a certificate the website sends cannot be read, or a constraint of the chain is violated.
+
+The usual reason is that the website does not send the file Alice wrote: another configuration file, a proxy or a load balancer in front of the server adds its own chain.
+
+**What to do.** Check which certificate and chain files this website's configuration uses (`ssl_certificate`), and that nothing in front of the server sends another chain; then deploy again. A name mismatch alone never fails a deployment: it is shown as a warning, because the name comes from the server's configuration and an undo would not change it.
+
 ## ALC-AKV-0001: Azure sign-in refused
 
 **Meaning.** Azure refused Alice's sign-in with the details of this vault (the parameter `aadsts` carries Entra's AADSTS number when Azure sent one). (HTTP 502, reason `azure.auth_failed`.)

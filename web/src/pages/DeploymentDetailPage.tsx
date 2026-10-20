@@ -4,7 +4,17 @@ import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
 import { deploymentView, rollbackForbidden } from '../api/deployments';
 import { getDeployment } from '../api/endpoints';
-import { configErrorKey, deploymentStateKey, stepNameKey, verifiedKey } from '../api/enums';
+import {
+  configErrorKey,
+  deploymentStateKey,
+  stepNameKey,
+  trustErrorKey,
+  trustStatusKey,
+  trustStoreKey,
+  verificationLevelKey,
+  verifiedKey,
+  verifyFailureKey,
+} from '../api/enums';
 import { deploymentKey } from '../api/queryKeys';
 import type { DeploymentDetail, DeploymentStep } from '../api/types';
 import { PageLoader } from '../auth/guards';
@@ -90,6 +100,12 @@ export function DeploymentDetailPage() {
   const recoveringNow = view !== 'final' && (d.state === 'recovering' || d.status === 'needs_attention');
   const recoveredEarlier = view === 'final' && d.recovery_attempts > 0;
   const served = servedFingerprint(d);
+  const trust = d.verification?.trust ?? null;
+  // trustText: "Trusted, checked against …", or the status with the precise fault (and its port) when not trusted.
+  const trustText = (tr: NonNullable<typeof trust>) =>
+    tr.status === 'untrusted'
+      ? t('deployments.trust.fault', { status: t(trustStatusKey(tr.status)), reason: t(trustErrorKey(tr.error)), port: tr.port ?? '' })
+      : t('deployments.trust.checked', { status: t(trustStatusKey(tr.status)), store: t(trustStoreKey(tr.store)) });
   const link = (to: string, name: string) => (
     <Anchor component={Link} to={to} translate="no" style={WRAP}>
       {name}
@@ -134,7 +150,11 @@ export function DeploymentDetailPage() {
     ...(d.started_at ? [{ key: 'started', label: t('deployments.startedLabel'), value: <span className={classes.mono}>{time(d.started_at)}</span> }] : []),
     ...(d.finished_at ? [{ key: 'finished', label: t('deployments.finishedLabel'), value: <span className={classes.mono}>{time(d.finished_at)}</span> }] : []),
     { key: 'verified', label: t('deployments.verifiedLabel'), value: t(verifiedKey(d.verified)), testId: 'deployment-verified' },
+    // R51: the level the verification proved, and what it found about the served chain (when it measured it).
+    { key: 'level', label: t('deployments.levelLabel'), value: t(verificationLevelKey(d.verification?.level ?? 0)), testId: 'deployment-level' },
+    ...(trust ? [{ key: 'trust', label: t('deployments.trustLabel'), value: trustText(trust), testId: 'deployment-trust' }] : []),
   ];
+  const failure = verifyFailureKey(d.verification?.failure ?? '');
   const evidence = d.new_fingerprint !== '' || d.previous_fingerprint !== '' || served !== '' || d.backup_dir !== '';
 
   return (
@@ -203,9 +223,14 @@ export function DeploymentDetailPage() {
               </div>
             </Panel>
           )}
-          {(d.failed_step || d.cause_step || d.helper_error) && (
+          {(d.failed_step || d.cause_step || d.helper_error || failure) && (
             <Panel title={t('deployments.technical')}>
               <Stack gap={2}>
+                {failure && (
+                  <Text size="sm" data-testid="deployment-failure">
+                    {t(failure)}
+                  </Text>
+                )}
                 {d.failed_step && <Text size="sm">{t('deployments.failedStep', { step: t(stepNameKey(d.failed_step)) })}</Text>}
                 {d.cause_step && <Text size="sm">{t('deployments.causeStep', { step: t(stepNameKey(d.cause_step)) })}</Text>}
                 {d.helper_error && <Text size="sm">{t('deployments.stepDetail.error', { reason: t(configErrorKey(d.helper_error)) })}</Text>}

@@ -43,6 +43,11 @@ export const PENDING_CHANGE_RESTORED = 'deployment.pending_change_restored';
 // revoked or compromised; the files stay as the failed change left them.
 export const ROLLBACK_FORBIDDEN = 'deployment.rollback_forbidden';
 
+// untrustedSuccess reports a succeeded deployment whose served chain did not verify (R51): Alice could not hold it
+// against a known root, or only the name did not match. Screens warn about it and never call it verified.
+export const untrustedSuccess = (d: Pick<Deployment, 'status' | 'verification'>): boolean =>
+  d.status === 'succeeded' && d.verification?.trust?.status === 'untrusted';
+
 // rollbackForbidden reports a deployment whose undo the rollback guard refused.
 export function rollbackForbidden(d: { phase: string; error?: { reason: string } | null }): boolean {
   return d.phase === 'restore_forbidden' || d.error?.reason === ROLLBACK_FORBIDDEN;

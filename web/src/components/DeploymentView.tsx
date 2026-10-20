@@ -1,6 +1,15 @@
 import { Alert, Stack, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
-import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED, rollbackForbidden, SERVER_OPERATION_PENDING } from '../api/deployments';
+import {
+  deploymentStatusText,
+  deploymentView,
+  isCancelled,
+  PENDING_CHANGE_RESTORED,
+  rollbackForbidden,
+  SERVER_OPERATION_PENDING,
+  untrustedSuccess,
+} from '../api/deployments';
+import { trustErrorKey } from '../api/enums';
 import type { Deployment, ErrorRef } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { Icon, type IconName } from '../design/Icon';
@@ -97,11 +106,24 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
   let extra = '';
   if (view === 'final') {
     switch (d.status) {
-      case 'succeeded':
-        color = d.verified === 'remote' || d.verified === 'local' ? 'green' : 'yellow';
-        headline = t(d.verified === 'remote' || d.verified === 'local' ? 'deploy.succeeded' : 'deploy.succeededUnverified');
+      case 'succeeded': {
+        const checked = d.verified === 'remote' || d.verified === 'local';
+        const trust = d.verification?.trust;
+        color = checked ? 'green' : 'yellow';
+        headline = t(checked ? 'deploy.succeeded' : 'deploy.succeededUnverified');
         extra = d.verified === 'local' ? t('deploy.verifiedLocally') : d.verified === 'skipped' ? t('deploy.verifySkipped') : '';
+        if (checked && untrustedSuccess(d) && trust) {
+          // R51: served, but the chain is not trusted: a warning that names the fault, never "verified".
+          color = 'yellow';
+          headline = t(trust.error === 'name_mismatch' ? 'deploy.succeededNameMismatch' : 'deploy.succeededUntrusted');
+          extra = t('deploy.trustFault', { reason: t(trustErrorKey(trust.error)), port: trust.port ?? '' });
+        } else if (checked && trust?.status === 'trusted') {
+          extra = [extra, t('deploy.trusted')].filter(Boolean).join(' ');
+        } else if (checked && trust?.status === 'unchecked') {
+          extra = [extra, t('deploy.trustUnchecked')].filter(Boolean).join(' ');
+        }
         break;
+      }
       case 'unchanged':
         color = 'gray';
         headline = t('deploy.unchanged');

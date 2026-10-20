@@ -117,7 +117,7 @@ func (p *emuProber) Probe(_ context.Context, host string, port int, sni, keyType
 	if !ok {
 		return Probe{}, ErrProbeFailed
 	}
-	return Probe{LeafSHA256: leaf, ChainLength: chain}, nil
+	return Probe{LeafSHA256: leaf, ChainLength: chain, Chain: p.emu.ProbeServedChain(host, port, sni, keyType)}, nil
 }
 
 func (p *emuProber) set(down, fails bool) {

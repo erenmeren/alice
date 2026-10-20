@@ -6,6 +6,7 @@ package helperproto
 
 import (
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
 	"net/netip"
@@ -46,8 +47,12 @@ const (
 	// the files as they are (PhaseRestoreForbidden). Nothing else changed: a protocol 6 helper
 	// serves every other operation (MinProtocol); a deployment that needs the guard checks
 	// RollbackGuardMinProtocol. 1.9.0 is the first helper that names it.
-	Protocol   = 10
-	Version    = "1.9.0"
+	// Protocol 11 (R51, trust verification): tls-probe also answers the chain the server presented
+	// (TLSProbeResponse.Chain), so that Alice checks its trust like the chain its own probe sees.
+	// Nothing else changed: a protocol 6 helper serves every other operation (MinProtocol), and Alice
+	// reads an answer without a chain as "trust not checked". 1.10.0 is the first helper that names it.
+	Protocol   = 11
+	Version    = "1.10.0"
 	HelperPath = "/usr/local/libexec/alice-helper"
 	BackupRoot = "/var/lib/alice-helper/backups"
 )
@@ -664,6 +669,52 @@ type TLSProbeResponse struct {
 	LeafSHA256  string `json:"leaf_sha256"` // hex SHA-256 of the served leaf's DER
 	ChainLength int    `json:"chain_length"`
 	NotAfter    string `json:"not_after"` // RFC 3339 UTC
+	// Chain (protocol 11, R51) is every certificate presented, leaf first, DER in standard base64
+	// (ProbeChain); absent beyond MaxProbeChainCerts certificates or MaxProbeChainBytes of DER, and
+	// from an older helper. Only public certificates: nothing secret is in a handshake.
+	Chain []string `json:"chain,omitempty"`
+}
+
+// Bounds of TLSProbeResponse.Chain: at most MaxProbeChainCerts certificates (webserver.MaxChainCerts,
+// a test compares them) and MaxProbeChainBytes of DER in all, so that a tls-probe answer stays within
+// what Alice reads of it (linuxssh's bound of the probe's output).
+const (
+	MaxProbeChainCerts = 20
+	MaxProbeChainBytes = 64 << 10
+)
+
+// ProbeChain encodes a presented chain (DER, leaf first) for TLSProbeResponse.Chain; nil when it is
+// empty or beyond MaxProbeChainCerts or MaxProbeChainBytes.
+func ProbeChain(ders [][]byte) []string {
+	if len(ders) == 0 || len(ders) > MaxProbeChainCerts {
+		return nil
+	}
+	total := 0
+	out := make([]string, 0, len(ders))
+	for _, d := range ders {
+		if total += len(d); len(d) == 0 || total > MaxProbeChainBytes {
+			return nil
+		}
+		out = append(out, base64.StdEncoding.EncodeToString(d))
+	}
+	return out
+}
+
+// DecodeProbeChain decodes TLSProbeResponse.Chain; ok is false for an absent chain or one outside
+// ProbeChain's bounds or encoding (Alice then does not check the chain's trust).
+func DecodeProbeChain(chain []string) (ders [][]byte, ok bool) {
+	if len(chain) == 0 || len(chain) > MaxProbeChainCerts {
+		return nil, false
+	}
+	total := 0
+	for _, c := range chain {
+		d, err := base64.StdEncoding.DecodeString(c)
+		if total += len(d); err != nil || len(d) == 0 || total > MaxProbeChainBytes {
+			return nil, false
+		}
+		ders = append(ders, d)
+	}
+	return ders, true
 }
 
 var (

@@ -694,6 +694,26 @@ export interface Deployment {
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
+  verification: DeploymentVerification;
+}
+
+// DeploymentVerification is what the verification of the new certificate proved and found (R51): level 0 none (not
+// succeeded), 1 installed (the check was skipped), 2 served, 3 trusted (4 is reserved for a service health check);
+// trust is null when the served chain was not measured; failure names the kind of a failed verification.
+export interface DeploymentVerification {
+  level: number;
+  trust: DeploymentTrust | null;
+  failure: '' | 'network' | 'certificate' | 'trust';
+}
+
+// DeploymentTrust: unchecked means an older alice-helper answered without the chain; enforced means Alice knew the
+// anchor, so an untrusted chain (other than a name mismatch) failed the deployment.
+export interface DeploymentTrust {
+  status: 'trusted' | 'untrusted' | 'unchecked';
+  error: string;
+  port: number | null;
+  store: '' | 'system' | 'acme_bundle' | 'uploaded_root';
+  enforced: boolean;
 }
 
 export interface DeploymentDetail extends Deployment {

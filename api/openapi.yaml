@@ -8053,7 +8053,8 @@ components:
           description: >-
             Allowlisted values only: error (a configuration error class or file_changed), port, mode (remote, local,
             skipped), served (a fingerprint), reason (a reason code), operation_id (on recover_pending: the
-            unfinished earlier change).
+            unfinished earlier change), trust (on verify: trusted, untrusted or unchecked) and trust_error (why a
+            served chain did not verify; R51).
           additionalProperties: { type: string }
     Deployment:
       type: object
@@ -8065,7 +8066,7 @@ components:
       required: [id, certificate_id, certificate_name, location_id, target_id, target_name, cert_path, key_path, job_id, job_status,
         trigger, state, status, result, phase, new_fingerprint, previous_fingerprint, confirm_incomplete_chain, verified,
         verify_failed, error, failed_step, cause_step, helper_error, backup_dir, requested_by, requested_by_name, recovery_attempts,
-        recover_after, created_at, started_at, finished_at, source, binding_id, kv_version, vault_name]
+        recover_after, created_at, started_at, finished_at, source, binding_id, kv_version, vault_name, verification]
       properties:
         id: { type: string, format: uuid }
         certificate_id: { type: string, format: uuid }
@@ -8091,6 +8092,7 @@ components:
         vault_name: { type: string, description: 'The vault''s name in Alice; "" for an upload' }
         verified: { type: string, enum: ["", remote, local, skipped] }
         verify_failed: { $ref: "#/components/schemas/ErrorRef", description: 'The verification failure that started a rollback (params.port)' }
+        verification: { $ref: "#/components/schemas/DeploymentVerification" }
         error:
           $ref: "#/components/schemas/ErrorRef"
           description: >-
@@ -8101,7 +8103,9 @@ components:
             back at most what it had written: the pair may not match). A deployment whose waiting job an
             Administrator discarded ends failed with deployment.cancelled (ALC-DEP-0022; nothing was sent). A Key Vault
             deployment whose vault's stored sign-in credentials Alice cannot decrypt ends failed at kv_secret with
-            kv.credential_unreadable (ALC-AKV-0041; nothing was read or sent; replace the vault's credentials).
+            kv.credential_unreadable (ALC-AKV-0041; nothing was read or sent; replace the vault's credentials). A served
+            chain that does not verify against a known trust anchor is deployment.verify_untrusted (ALC-DEP-0026, params
+            port and trust_error; R51).
         failed_step: { type: string, description: "The step that failed (verify_current when the pre-check refused; verify when the new certificate was not confirmed; kv_secret when a Key Vault deployment could not read or accept its certificate secret); \"\" when none" }
         cause_step: { type: string }
         helper_error: { type: string, description: "A configuration error class or file_changed; \"\" when none" }
@@ -8113,6 +8117,35 @@ components:
         created_at: { type: string, format: date-time }
         started_at: { type: [string, "null"], format: date-time, description: 'When the change started (the start record)' }
         finished_at: { type: [string, "null"], format: date-time }
+    DeploymentVerification:
+      type: object
+      description: >-
+        What the verification of the new certificate proved and found (R51). level: 0 none (not succeeded), 1 installed
+        (files written and the web server reloaded; the check was skipped), 2 served (every endpoint serves the expected
+        leaf with the deployed chain length), 3 trusted (and every served chain verifies with crypto/x509 against the
+        trust store for the endpoint's name at the probe time); 4 is reserved for a service health check and not
+        reported yet. A deployment from before R51 reads 2 when it succeeded with a check. failure: the kind of a failed
+        verification: network (no handshake on any attempt), certificate (another leaf or chain length) or trust
+        (deployment.verify_untrusted); "" otherwise.
+      required: [level, trust, failure]
+      properties:
+        level: { type: integer, minimum: 0, maximum: 4 }
+        failure: { type: string, enum: ["", network, certificate, trust] }
+        trust:
+          description: 'Null when not measured (the check was skipped, or a deployment from before R51)'
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [status, error, port, store, enforced]
+              properties:
+                status: { type: string, enum: [trusted, untrusted, unchecked], description: 'unchecked: an alice-helper older than 1.10.0 answered the in-target check without the chain' }
+                error:
+                  type: string
+                  enum: ["", unknown_authority, wrong_intermediate, incomplete_chain, chain_order, name_mismatch, expired, not_yet_valid, invalid_chain]
+                  description: 'Why the first untrusted chain did not verify; "" unless untrusted'
+                port: { type: [integer, "null"], description: 'The endpoint whose chain did not verify' }
+                store: { type: string, enum: ["", system, acme_bundle, uploaded_root], description: 'The trust store: system roots, with the issuing ACME authority''s CA bundle, or with the root uploaded with the chain' }
+                enforced: { type: boolean, description: 'The anchor was known (the deployed chain verifies against the store): an untrusted chain then fails the deployment, except a name mismatch, which is always a warning' }
     DeploymentDetail:
       allOf:
         - { $ref: "#/components/schemas/Deployment" }

@@ -205,10 +205,11 @@ function servedChainLength(name: string): number {
   );
 }
 
-// expectHelperProtocol: the helper installed on the target is the current build, protocol 9 (Alice still opens protocol 6; HTTP-01 needs 7, Apache 8, HAProxy 9).
+// expectHelperProtocol: the helper installed on the target is the current build, protocol 11 (Alice still opens protocol 6; HTTP-01 needs 7,
+// Apache 8, HAProxy 9, the rollback guard 10; 11 reports the presented chain for the trust check, R51).
 function expectHelperProtocol(): void {
   const v = JSON.parse(targetExec(['/usr/local/libexec/alice-helper', 'version'])) as { helper: string; protocol: number };
-  expect(v.protocol, `alice-helper ${v.helper} on the target`).toBe(9);
+  expect(v.protocol, `alice-helper ${v.helper} on the target`).toBe(11);
 }
 
 // leafOf is the first certificate of a PEM chain (the website's own certificate, without the CA).
@@ -524,7 +525,8 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await page.goto(`/servers/${targetId}`);
       const dialog = await openDeployFromWebsite(page, t, WWW, WWW);
       await dialog.getByRole('button', { name: t('deploy.submit'), exact: true }).click();
-      await settle(request, dialog.getByText(t('deploy.succeeded')));
+      // R51: the certificate does not cover the website's name: served, with a warning (a name mismatch never fails).
+      await settle(request, dialog.getByText(t('deploy.succeededNameMismatch')));
       await expect(dialog.getByText(t('locations.warnings.san_mismatch', { site: WWW }))).toBeVisible();
       expect(served(WWW), 'the certificate of the signing request is served').toBe(fingerprintHex(signed));
     });

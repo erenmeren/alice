@@ -108,7 +108,7 @@ func DeployOutcomeRecord(o providers.DeployOutcome, err error, resent bool) Outc
 		return uncertainRecord("", nil)
 	}
 	f := DeploymentFinish{Result: string(o.Result), Phase: o.Phase, FailedStep: o.FailedStep, CauseStep: o.CauseStep, HelperError: o.Error,
-		Verified: o.Verified, Params: paramsOf(o.Params, err)}
+		Verified: o.Verified, Params: paramsOf(o.Params, err), Trust: o.Trust}
 	switch o.Result {
 	case providers.DeployCommitted, providers.DeployUnchanged:
 		if oneOf(o.Verified, verifies) == "" {

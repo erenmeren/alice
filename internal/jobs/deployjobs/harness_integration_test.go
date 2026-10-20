@@ -87,8 +87,12 @@ func (g *lockGate) Allow(c license.Class) error {
 
 // emuProber is Alice's own TLS probe against the emulated Nginx. Every emulated host listens on
 // 127.0.0.1, so with several hosts Alice's probe cannot tell which one it would reach: it is then
-// unreachable and the server-side probe (tls-probe, per host) decides (verified "local").
-type emuProber struct{ emus func() []*server }
+// unreachable and the server-side probe (tls-probe, per host) decides (verified "local"). hook, when
+// it returns a function, changes each answer (R51: what the website presents on the way to Alice).
+type emuProber struct {
+	emus func() []*server
+	hook func() func(nginx.Probe) (nginx.Probe, error)
+}
 
 func (p emuProber) Probe(_ context.Context, _ string, port int, sni, keyType string) (nginx.Probe, error) {
 	emus := p.emus()
@@ -99,7 +103,13 @@ func (p emuProber) Probe(_ context.Context, _ string, port int, sni, keyType str
 	if !ok {
 		return nginx.Probe{}, nginx.ErrProbeFailed
 	}
-	return nginx.Probe{LeafSHA256: leaf, ChainLength: chain}, nil
+	pr := nginx.Probe{LeafSHA256: leaf, ChainLength: chain, Chain: emus[0].emu.ProbeServedChain("", port, sni, keyType)}
+	if p.hook != nil {
+		if h := p.hook(); h != nil {
+			return h(pr)
+		}
+	}
+	return pr, nil
 }
 
 // hookProvider lets a test wrap the sessions the nginx provider opens.
@@ -149,6 +159,7 @@ type env struct {
 	mu      sync.Mutex
 	servers []*server
 	wrap    atomic.Pointer[func(providers.TargetRef, providers.Session) providers.Session]
+	probe   atomic.Pointer[func(nginx.Probe) (nginx.Probe, error)]
 }
 
 func newEnv(t *testing.T) *env {
@@ -177,7 +188,7 @@ func newEnv(t *testing.T) *env {
 	ssh := linuxssh.New(linuxssh.Options{Pool: pool, AllowUnverifiedHelper: true})
 	// One verification attempt per endpoint: the provider's waits run on the session clock, which is
 	// the fake clock here.
-	e.prov = nginx.New(nginx.Options{SSH: ssh, Prober: emuProber{emus: e.serverList}, Attempts: 1})
+	e.prov = nginx.New(nginx.Options{SSH: ssh, Prober: emuProber{emus: e.serverList, hook: e.probeHook}, Attempts: 1})
 	e.reg.Register(hookProvider{Provider: e.prov, wrap: e.wrapSession})
 	e.az = fake.New(providers.KindAzureKV, providers.CapTestConnection, providers.CapDiscoverCerts, providers.CapReadCertificateSecret)
 	e.reg.Register(e.az)
@@ -194,6 +205,23 @@ VALUES ($1, 'ada', 'ada@example.com', 'Ada Yılmaz', 'x', 'admin', $2, $2)`, id,
 	www := pki.Opts{CommonName: wwwName, SANs: []string{wwwName, apiName}}
 	e.old, e.nw = e.ca.Issue(www, now), e.ca.Issue(www, now)
 	return e
+}
+
+// probeHook is the change setProbe installed (nil: none).
+func (e *env) probeHook() func(nginx.Probe) (nginx.Probe, error) {
+	if h := e.probe.Load(); h != nil {
+		return *h
+	}
+	return nil
+}
+
+// setProbe makes Alice's own probe pass every answer through h (nil: none).
+func (e *env) setProbe(h func(nginx.Probe) (nginx.Probe, error)) {
+	if h == nil {
+		e.probe.Store(nil)
+		return
+	}
+	e.probe.Store(&h)
 }
 
 func (e *env) serverList() []*server {

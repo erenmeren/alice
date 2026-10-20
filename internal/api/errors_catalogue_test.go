@@ -264,6 +264,7 @@ func TestPhase4ErrorTextsRenderWithTheirParams(t *testing.T) {
 	provided := map[string]map[string]string{
 		"deployment.verify_unreachable": {"port": "443"},
 		"deployment.verify_chain":       {"port": "8443"},
+		"deployment.verify_untrusted":   {"port": "443", "trust_error": "wrong_intermediate"},
 		"nginx.profile_missing":         {"subcommand": "nginx-dump", "profile": "nginx"},
 	}
 	// requestOnly reasons are answered to a request only (from a typed inventory error that carries

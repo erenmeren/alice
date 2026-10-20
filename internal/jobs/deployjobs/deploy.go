@@ -640,4 +640,7 @@ func keepCause(r *inventory.OutcomeRecord, from inventory.DeploymentFinish) {
 	if r.Finish.VerifyFailedReason == "" {
 		r.Finish.VerifyFailedReason, r.Finish.VerifyFailedPort = from.VerifyFailedReason, from.VerifyFailedPort
 	}
+	if r.Finish.Trust.Status == "" {
+		r.Finish.Trust = from.Trust // R51: an untrusted chain stays the recorded reason of the rollback
+	}
 }

@@ -1131,6 +1131,11 @@
         "cause": "Web sitesinin gönderdiği sertifika sayısı Alice'in beklediği zincirden farklı; örneğin başka bir dosya veya bir vekil sunucu ara sertifika ekliyor ya da çıkarıyor. Bir şeyin değiştirilip değiştirilmediğini dağıtımın durumu gösterir.",
         "action": "Bu web sitesinin yapılandırmasının hangi sertifika dosyalarını kullandığını denetleyin, sonra yeniden dağıtın."
       },
+      "verify_untrusted": {
+        "title": "Web sitesi yeni sertifikayı sunuyor, ancak zinciri güvenilir değil (bağlantı noktası: {{port}}).",
+        "cause": "Web sitesinin gönderdiği sertifika zinciri, Alice'in bu sertifika için bildiği sertifika yetkilisine göre doğrulanmıyor: bir ara sertifika eksik, yanlış, sırası bozuk ya da süresi dolmuş veya zincir Alice'in güvenmediği bir kök sertifikaya çıkıyor. Alice önceki sertifikayı geri koydu. Hatanın tam nedenini dağıtımın doğrulama bölümü gösterir.",
+        "action": "Bu web sitesinin yapılandırmasının hangi sertifika ve zincir dosyalarını kullandığını ve sunucunun önündeki bir vekil sunucunun ya da yük dengeleyicinin başka bir zincir göndermediğini denetleyin, sonra yeniden dağıtın."
+      },
       "nothing_to_restore": {
         "title": "Geri yüklenecek bir şey yoktu.",
         "cause": "alice-helper bu dağıtımın hiçbir dosyayı değiştirmediğini gördü; bu yüzden geri konacak bir şey yoktu.",
