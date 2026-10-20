@@ -17,6 +17,7 @@ import ui from '../components/ui/ui.module.css';
 import { WRAP } from '../components/wrap';
 import { Icon } from '../design/Icon';
 import { useDebouncedParam, useUrlFilters } from '../hooks/useUrlFilters';
+import { ServiceBadge, ServiceFilters, useServiceFilters } from '../components/services/shared';
 import classes from './SSHKeysPage.module.css';
 
 // The filters live in the address (useSearchParams), so a link, a saved view and the export reproduce the list.
@@ -45,12 +46,13 @@ export function SSHKeysPage() {
   const canGenerate = session?.user.role === 'admin' || session?.user.role === 'operator';
   const [generating, setGenerating] = useState(false);
   const [filters, setFilters, clearFilters] = useUrlFilters(SSH_FILTER_KEYS);
-  const filtered = Object.values(filters).some((v) => v !== '');
+  const [serviceFilter, setServiceFilter] = useServiceFilters();
+  const filtered = Object.values(filters).some((v) => v !== '') || Object.keys(serviceFilter).length > 0;
   const [search, onSearch, resetSearch] = useDebouncedParam(filters.q, (q) => setFilters({ q }));
   const [user, onUser, resetUser] = useDebouncedParam(filters.os_user, (os_user) => setFilters({ os_user }));
 
   const targets = useQuery({ queryKey: TARGETS_KEY, queryFn: listAllServers });
-  const filter: SSHKeyQuery = { q: filters.q, os_user: filters.os_user, target_id: filters.target_id, flag: filters.flag as KeyFlag | '', missing: filters.missing === 'true' };
+  const filter: SSHKeyQuery = { q: filters.q, os_user: filters.os_user, target_id: filters.target_id, flag: filters.flag as KeyFlag | '', missing: filters.missing === 'true', ...serviceFilter };
   const keys = useInfiniteQuery({
     queryKey: [...SSH_KEYS_KEY, filter],
     queryFn: ({ pageParam }) => listSSHKeys({ ...filter, cursor: pageParam }),
@@ -94,6 +96,7 @@ export function SSHKeysPage() {
         checked={filters.missing === 'true'}
         onChange={(e) => setFilters({ missing: e.currentTarget.checked ? 'true' : '' })}
       />
+      <ServiceFilters className={classes.select} value={serviceFilter} onChange={setServiceFilter} />
       <div className={classes.grow} />
       <SavedViews
         page="ssh_keys"
@@ -126,7 +129,7 @@ export function SSHKeysPage() {
         description={t('sshKeys.page.description')}
         actions={
           <>
-            <ExportButton kind="ssh-keys" filters={filters} />
+            <ExportButton kind="ssh-keys" filters={{ ...filters, ...serviceFilter }} />
             {canGenerate && (
               <Button leftSection={<Icon name="Plus" size={15} />} onClick={() => setGenerating(true)}>
                 {t('sshKeys.generate')}
@@ -190,6 +193,7 @@ function KeysTable({ items, t }: { items: SSHKey[]; t: TFunction }) {
             <Table.Th>{t('sshKeys.page.columns.algorithm')}</Table.Th>
             <Table.Th>{t('sshKeys.page.columns.locations')}</Table.Th>
             <Table.Th>{t('sshKeys.page.columns.managed')}</Table.Th>
+            <Table.Th>{t('services.column')}</Table.Th>
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
@@ -246,6 +250,9 @@ function KeysTable({ items, t }: { items: SSHKey[]; t: TFunction }) {
                 <StatusBadge tone={k.managed ? 'success' : 'neutral'} icon={k.managed ? 'ShieldCheck' : 'Search'}>
                   {k.managed ? t('sshKeys.managedBadge') : t('sshKeys.page.discovered')}
                 </StatusBadge>
+              </Table.Td>
+              <Table.Td>
+                <ServiceBadge service={k.service} />
               </Table.Td>
             </Table.Tr>
           ))}

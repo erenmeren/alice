@@ -48,7 +48,8 @@
       "inventory": "Envanter",
       "operations": "Operasyon",
       "administration": "Yönetim"
-    }
+    },
+    "services": "Hizmetler"
   },
   "ui": {
     "loading": "Yükleniyor…",
@@ -742,7 +743,18 @@
       "incident_revoke_failed": "İptal başarısız oldu (anahtar ele geçirme olayı)",
       "incident_retried": "Anahtar ele geçirme olayı yeniden denendi",
       "incident_revoke_now": "Şimdi iptal seçildi (anahtar ele geçirme olayı)",
-      "incident_closed": "Anahtar ele geçirme olayı kapatıldı"
+      "incident_closed": "Anahtar ele geçirme olayı kapatıldı",
+      "acme_auto_deploy_untrusted": "Sertifika yetkilisinden (ACME) gelen sertifika otomatik dağıtılmadı: alan hizmet bunu kabul etmiyor",
+      "kv_auto_deploy_untrusted": "Kasa sertifikası otomatik dağıtılmadı: alan hizmet bunu kabul etmiyor",
+      "environment_created": "Ortam eklendi",
+      "environment_updated": "Ortam değiştirildi",
+      "environment_deleted": "Ortam silindi",
+      "service_created": "Hizmet eklendi",
+      "service_updated": "Hizmet değiştirildi",
+      "service_deleted": "Hizmet silindi",
+      "service_assigned": "Bir hizmete taşındı",
+      "service_trust_added": "Hizmet güveni eklendi",
+      "service_trust_removed": "Hizmet güveni kaldırıldı"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -2799,7 +2811,8 @@
       "https": "HTTPS sertifikası",
       "acme": "Sertifika yetkilileri",
       "forwarding": "Denetim kaydı iletimi",
-      "directories": "Dizinler"
+      "directories": "Dizinler",
+      "environments": "Ortamlar"
     },
     "tabsLabel": "Ayar bölümleri",
     "mail": {
@@ -2867,7 +2880,8 @@
       "fingerprint": "Parmak izi (SHA-256)",
       "lastBackup": "Son yedek",
       "schedule": "Zamanlama",
-      "directories": "Kişilerin LDAP ya da Active Directory parolalarıyla oturum açmasına izin verin ve dizin gruplarını Alice rolleriyle eşleştirin."
+      "directories": "Kişilerin LDAP ya da Active Directory parolalarıyla oturum açmasına izin verin ve dizin gruplarını Alice rolleriyle eşleştirin.",
+      "environments": "Bir hizmetin bulunabileceği ortamlar, örneğin üretim veya hazırlık."
     }
   },
   "sso": {
@@ -4156,5 +4170,148 @@
       "openCertificates": "Sertifikaları aç",
       "confirm": "Bu sertifikayı kullan"
     }
+  },
+  "services": {
+    "title": "Hizmetler",
+    "page": {
+      "description": "Her sunucu, Key Vault, sertifika ve anahtar bir hizmete aittir. Hizmetin bir ortamı ve ilkesi vardır; güvenler hangi hizmetin hangisine sertifika ve anahtar gönderebileceğini söyler."
+    },
+    "add": "Hizmet ekle",
+    "empty": "Henüz hizmet yok",
+    "default": "Varsayılan hizmet",
+    "noEnvironment": "Ortam yok",
+    "policyVersion": "Sürüm {{version}}",
+    "column": "Hizmet",
+    "columns": {
+      "service": "Hizmet",
+      "environment": "Ortam",
+      "resources": "Kaynaklar",
+      "policy": "Hizmet ilkesi"
+    },
+    "counts": {
+      "servers_one": "{{count}} sunucu",
+      "servers_other": "{{count}} sunucu",
+      "keyVaults_one": "{{count}} Key Vault kasası",
+      "keyVaults_other": "{{count}} Key Vault kasası",
+      "certificates_one": "{{count}} sertifika",
+      "certificates_other": "{{count}} sertifika",
+      "acmeCertificates_one": "{{count}} ACME sertifikası",
+      "acmeCertificates_other": "{{count}} ACME sertifikası",
+      "sshKeys_one": "{{count}} SSH anahtarı",
+      "sshKeys_other": "{{count}} SSH anahtarı",
+      "scopes_one": "{{count}} tarama kapsamı",
+      "scopes_other": "{{count}} tarama kapsamı",
+      "none": "Henüz bir şey yok"
+    },
+    "environmentKeys": {
+      "production": "Üretim",
+      "staging": "Hazırlık",
+      "test": "Test ortamı",
+      "development": "Geliştirme"
+    },
+    "back": "Hizmetler",
+    "edit": "Düzenle",
+    "delete": "Hizmeti sil",
+    "deleteNotEmpty": "Önce kaynaklarını başka bir hizmete taşıyın.",
+    "deleteTitle": "{{name}} silinsin mi?",
+    "deleteText": "Hizmet ve ilkesi silinir. Hizmetin hiçbir şeyi olmadığı için hiçbir sunucu, sertifika veya anahtar değişmez.",
+    "tabsLabel": "Hizmet bölümleri",
+    "tabs": {
+      "overview": "Genel bakış",
+      "resources": "Kaynaklar",
+      "trusts": "Güvenler"
+    },
+    "overview": {
+      "title": "Bu hizmet hakkında",
+      "noDescription": "Açıklama yok",
+      "created": "Oluşturulma"
+    },
+    "policy": {
+      "title": "Hizmet ilkesi",
+      "description": "Bu hizmetin sahip olduklarına ilişkin kurallar. Bu sürümde ilke yalnızca okunabilir.",
+      "version": "Sürüm",
+      "rules": "Kurallar",
+      "none": "Henüz kural yok",
+      "some": "Kurallar tanımlı",
+      "changed": "Son değişiklik",
+      "changedBy": "{{date}}, {{name}}"
+    },
+    "resources": {
+      "all": "Tümünü göster",
+      "none": "Yok"
+    },
+    "kinds": {
+      "servers": "Sunucular",
+      "keyVaults": "Key Vault'lar",
+      "target": "Sunucu veya Key Vault",
+      "certificate": "Sertifikalar",
+      "acme_certificate": "ACME sertifikaları",
+      "ssh_key": "SSH anahtarları",
+      "discovery_scope": "Tarama kapsamları"
+    },
+    "moveHere": "Buraya taşı",
+    "moveTo": "Hizmete taşı",
+    "move": {
+      "toTitle": "{{name}} başka bir hizmete taşınsın",
+      "hereTitle": "{{name}} hizmetine taşı",
+      "intro": "Alice önce taşımanın neyi değiştireceğini denetler. Siz onaylayana kadar hiçbir şey taşınmaz.",
+      "kind": "Tür",
+      "resource": "Kaynak",
+      "pick": "Birini seçin",
+      "destination": "Hizmet",
+      "pickService": "Bir hizmet seçin",
+      "nothing": "Zaten o hizmette: hiçbir şey değişmez.",
+      "line": "{{name}}: {{from}} hizmetinden {{to}} hizmetine",
+      "untrustedTitle_one": "{{count}} bağlama artık otomatik dağıtılmaz",
+      "untrustedTitle_other": "{{count}} bağlama artık otomatik dağıtılmaz",
+      "untrustedLine": "{{server}} üzerindeki {{source}} ({{from}} → {{to}})",
+      "untrustedHelp": "Bu bağlamalar yerinde kalır, ancak alan hizmet gönderen hizmetten sertifika ve anahtar kabul edene kadar (Güvenler) otomatik dağıtım durur.",
+      "check": "Taşımayı denetle",
+      "confirm": "Taşı"
+    },
+    "trusts": {
+      "intro": "İki hizmet arasındaki bir bağlama yalnızca alan hizmet gönderen hizmetten sertifika ve anahtar kabul ediyorsa otomatik dağıtılır.",
+      "accepts": "Şu hizmetten sertifika ve anahtar kabul eder",
+      "sends": "Şu hizmete sertifika ve anahtar gönderir",
+      "none": "Yok",
+      "remove": "Kaldır",
+      "addTitle": "Güven ekle",
+      "direction": "Yön",
+      "other": "Hizmet",
+      "add": "Güven ekle"
+    },
+    "dialog": {
+      "createTitle": "Hizmet ekle",
+      "editTitle": "Hizmeti düzenle",
+      "environmentHelp": "Ortam, ortam genelindeki erişimin bu hizmete ulaşıp ulaşmayacağını belirler.",
+      "save": "Kaydet",
+      "create": "Hizmet ekle"
+    },
+    "fields": {
+      "name": "Ad",
+      "description": "Açıklama",
+      "environment": "Ortam"
+    },
+    "filter": {
+      "service": "Hizmet",
+      "allServices": "Tüm hizmetler",
+      "environment": "Ortam",
+      "allEnvironments": "Tüm ortamlar",
+      "noMatch": "Seçilen hizmette veya ortamda bir şey yok."
+    },
+    "environments": {
+      "name": "Ad",
+      "key": "Anahtar",
+      "keyHelp": "Küçük harf, rakam ve tire. Sonradan değiştirilemez.",
+      "keyPattern": "Harfle başlayan küçük harf, rakam ve tire kullanın.",
+      "order": "Sıra",
+      "services": "Hizmetler",
+      "rename": "Yeniden adlandır",
+      "renameTitle": "{{key}} yeniden adlandır",
+      "delete": "Sil",
+      "inUse": "Bu ortamı bir hizmet kullanıyor.",
+      "add": "Ortam ekle"
+    },
+    "untrustedMark": "Hizmeti kabul etmiyor"
   }
 }

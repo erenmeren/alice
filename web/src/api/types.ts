@@ -329,7 +329,21 @@ export interface TargetFacts {
   web_server?: WebServerFacts;
 }
 
+// The service that owns a row (R49): its id, name and environment (null for none).
+export interface EnvironmentRef {
+  id: string;
+  key: string;
+  name: string;
+}
+
+export interface ServiceRef {
+  id: string;
+  name: string;
+  environment: EnvironmentRef | null;
+}
+
 export interface Target {
+  service?: ServiceRef;
   id: string;
   name: string;
   type: TargetType;
@@ -405,6 +419,7 @@ export interface KeyLocation {
 }
 
 export interface SSHKey {
+  service?: ServiceRef;
   id: string;
   fingerprint: string;
   key_type: string;
@@ -432,6 +447,8 @@ export interface SSHKeyQuery {
   q?: string;
   flag?: KeyFlag | '';
   missing?: boolean;
+  service_id?: string;
+  environment_id?: string;
   cursor?: string | null;
   limit?: number;
 }
@@ -506,6 +523,7 @@ export type CSRKeyType = 'ecdsa-p256' | 'rsa-3072' | 'rsa-4096';
 export type ExpiryFilter = '' | 'expired' | '7' | '14' | '30' | '60' | '90';
 
 export interface Certificate {
+  service?: ServiceRef;
   id: string;
   fingerprint: string;
   subject_cn: string;
@@ -683,6 +701,7 @@ export interface DeploymentDetail extends Deployment {
 }
 
 export interface CSR {
+  service?: ServiceRef;
   id: string;
   common_name: string;
   sans: string[];
@@ -700,6 +719,8 @@ export interface CertificateQuery {
   source?: CertificateSourceFilter | '';
   q?: string;
   expiry?: ExpiryFilter;
+  service_id?: string;
+  environment_id?: string;
   cursor?: string | null;
   limit?: number;
 }

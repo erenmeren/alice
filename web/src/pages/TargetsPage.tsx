@@ -6,6 +6,7 @@ import { Link, useNavigate } from 'react-router';
 import { listAllServers } from '../api/endpoints';
 import { isServerType } from '../api/webServer';
 import { TARGETS_KEY } from '../api/queryKeys';
+import { inServiceFilter } from '../api/services';
 import type { Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { AddServerModal } from '../components/AddServerModal';
@@ -13,6 +14,7 @@ import { BlockedJobsPanel } from '../components/BlockedJobsPanel';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { reasonTitle } from '../components/JobErrorAlert';
 import { PlatformKeyPanel } from '../components/PlatformKeyPanel';
+import { ServiceBadge, ServiceFilters, useServiceFilters } from '../components/services/shared';
 import { TargetStatusBadge } from '../components/TargetStatusBadge';
 import { EmptyState, PageHeader, Panel, ResourceTable, StatusBadge } from '../components/ui';
 import { formatDateTime } from '../datetime';
@@ -99,10 +101,19 @@ function MiniStats({ items }: { items: Target[] }) {
   );
 }
 
-function ServersTable({ items }: { items: Target[] }) {
+// ServersTable filters by service and environment in the browser: the list is read completely.
+function ServersTable({ items: all }: { items: Target[] }) {
   const { t, i18n } = useTranslation();
+  const [serviceFilter, setServiceFilter] = useServiceFilters();
+  const items = all.filter((tg) => inServiceFilter(tg.service, serviceFilter));
   return (
-    <ResourceTable label={t('targets.title')} testId="targets-table" minWidth={760} footer={<span>{t('targets.page.vaultsElsewhere')}</span>}>
+    <ResourceTable
+      label={t('targets.title')}
+      testId="targets-table"
+      minWidth={760}
+      toolbar={<ServiceFilters value={serviceFilter} onChange={setServiceFilter} />}
+      footer={<span>{t('targets.page.vaultsElsewhere')}</span>}
+    >
       <Table.Thead>
         <Table.Tr>
           <Table.Th>{t('targets.page.columns.server')}</Table.Th>
@@ -110,12 +121,18 @@ function ServersTable({ items }: { items: Target[] }) {
           <Table.Th>{t('targets.page.columns.platform')}</Table.Th>
           <Table.Th>{t('targets.page.columns.connection')}</Table.Th>
           <Table.Th>{t('targets.page.columns.lastConnected')}</Table.Th>
+          <Table.Th>{t('services.column')}</Table.Th>
           <Table.Th>
             <VisuallyHidden>{t('targets.page.columns.open')}</VisuallyHidden>
           </Table.Th>
         </Table.Tr>
       </Table.Thead>
       <Table.Tbody>
+        {items.length === 0 && (
+          <Table.Tr>
+            <Table.Td colSpan={7}>{t('services.filter.noMatch')}</Table.Td>
+          </Table.Tr>
+        )}
         {items.map((tg) => (
           <Table.Tr key={tg.id}>
             <Table.Td>
@@ -147,6 +164,9 @@ function ServersTable({ items }: { items: Target[] }) {
             </Table.Td>
             <Table.Td>
               <span className={classes.mono}>{tg.last_success_at ? formatDateTime(tg.last_success_at, i18n.language) : t('targets.page.never')}</span>
+            </Table.Td>
+            <Table.Td>
+              <ServiceBadge service={tg.service} />
             </Table.Td>
             <Table.Td>
               <ActionIcon component={Link} to={`/servers/${tg.id}`} variant="subtle" color="gray" className={classes.openLink} aria-label={t('targets.page.openNamed', { name: tg.name })}>

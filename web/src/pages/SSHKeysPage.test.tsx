@@ -160,7 +160,7 @@ describe('SSHKeysPage', () => {
     await renderRoute('/ssh-keys');
     const table = await screen.findByTestId('ssh-keys-table');
     expect(table).toHaveAccessibleName('SSH keys');
-    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Key', 'Algorithm', 'Locations', 'Managed']);
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Key', 'Algorithm', 'Locations', 'Managed', 'Service']);
     const row = within(table).getByText('deploy@laptop').closest('tr')!;
     // Exactly one link per row: the e2e clicks the row's link.
     expect(within(row).getAllByRole('link')).toHaveLength(1);

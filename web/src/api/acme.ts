@@ -1,5 +1,5 @@
 import { apiFetch } from './client';
-import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty } from './types';
+import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty, ServiceRef } from './types';
 
 // ACME certificate issuance (api/openapi.yaml, /api/v1/acme). The names follow the API's snake_case schemas. No type
 // here carries a secret the server keeps: the EAB HMAC key and the DNS hook secret are write-only request fields
@@ -131,6 +131,7 @@ export interface ACMEBinding {
 }
 
 export interface ACMECertificate {
+  service?: ServiceRef;
   id: string;
   provider_id: string;
   account_id: string;
@@ -211,6 +212,8 @@ export interface ACMECertificateQuery {
   state?: ACMECertificateState;
   provider_id?: string;
   q?: string;
+  service_id?: string;
+  environment_id?: string;
   cursor?: string;
   limit?: number;
 }

@@ -116,6 +116,11 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
                       <StatusBadge tone={STATE_TONE[l.state] ?? 'neutral'} data-state={l.state} style={{ maxWidth: '100%' }}>
                         {l.state === 'deployed' ? <CodeText i18nKey="bindings.state.deployed" param="version" value={shortVersion(l.version)} /> : t(`bindings.state.${l.state}`)}
                       </StatusBadge>
+                      {l.attention_code === 'service.untrusted' && (
+                        <StatusBadge tone="warning" icon="ShieldAlert" size="sm" data-testid="binding-untrusted">
+                          {t('services.untrustedMark')}
+                        </StatusBadge>
+                      )}
                       {l.deployment_id && (
                         <Anchor component={Link} to={`/deployments/${l.deployment_id}`} size="xs">
                           {t('deploy.openDeployment')}

@@ -55,6 +55,14 @@ describe('BindingPanel without a connection', () => {
 });
 
 describe('BindingPanel with a connection', () => {
+  it('marks a website whose service does not accept the certificate', async () => {
+    await show('operator', {}, bindingFixture({ locations: [bindingLocationFixture({ attention_code: 'service.untrusted' })] }));
+    expect(await screen.findByTestId('binding-untrusted')).toHaveTextContent('Not accepted by its service');
+  });
+  it('marks it in Turkish too', async () => {
+    await show('operator', {}, bindingFixture({ locations: [bindingLocationFixture({ attention_code: 'service.untrusted' })] }), ['tr-TR']);
+    expect(await screen.findByTestId('binding-untrusted')).toHaveTextContent('Hizmeti kabul etmiyor');
+  });
   it('lists the websites with their state; a deployed one names its version in <code>', async () => {
     await show(
       'operator',

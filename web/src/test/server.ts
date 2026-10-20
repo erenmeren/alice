@@ -34,6 +34,9 @@ export const handlers = [
   http.get('/api/v1/rotation/policies', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/rotation/runs', () => HttpResponse.json({ items: [], next_cursor: null })),
   // Network discovery: the Certificates page reads the summary for its link (no scope by default: no link).
+  // Services (R49): the list toolbars read the services and the environments for their filters.
+  http.get('/api/v1/services', () => HttpResponse.json({ items: [] })),
+  http.get('/api/v1/environments', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/discovery/summary', () => HttpResponse.json({ unmanaged_total: 0, unmanaged_expiring_30d: 0, scopes: 0, last_scan_at: null })),
 ];
 

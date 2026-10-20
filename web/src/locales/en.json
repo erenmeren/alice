@@ -48,7 +48,8 @@
       "inventory": "Inventory",
       "operations": "Operations",
       "administration": "Administration"
-    }
+    },
+    "services": "Services"
   },
   "ui": {
     "loading": "Loading…",
@@ -742,7 +743,18 @@
       "incident_revoke_failed": "Revocation failed (key compromise incident)",
       "incident_retried": "Key compromise incident retried",
       "incident_revoke_now": "Revoke now chosen (key compromise incident)",
-      "incident_closed": "Key compromise incident closed"
+      "incident_closed": "Key compromise incident closed",
+      "acme_auto_deploy_untrusted": "Certificate from a certificate authority (ACME) not deployed automatically: the receiving service does not accept it",
+      "kv_auto_deploy_untrusted": "Vault certificate not deployed automatically: the receiving service does not accept it",
+      "environment_created": "Environment added",
+      "environment_updated": "Environment changed",
+      "environment_deleted": "Environment deleted",
+      "service_created": "Service added",
+      "service_updated": "Service changed",
+      "service_deleted": "Service deleted",
+      "service_assigned": "Moved to a service",
+      "service_trust_added": "Service trust added",
+      "service_trust_removed": "Service trust removed"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -2799,7 +2811,8 @@
       "https": "HTTPS certificate",
       "acme": "Certificate authorities",
       "forwarding": "Audit forwarding",
-      "directories": "Directories"
+      "directories": "Directories",
+      "environments": "Environments"
     },
     "tabsLabel": "Settings sections",
     "mail": {
@@ -2867,7 +2880,8 @@
       "fingerprint": "Fingerprint (SHA-256)",
       "lastBackup": "Last backup",
       "schedule": "Schedule",
-      "directories": "Let people sign in with their LDAP or Active Directory password and map directory groups to Alice roles."
+      "directories": "Let people sign in with their LDAP or Active Directory password and map directory groups to Alice roles.",
+      "environments": "The environments a service can be in, such as production or staging."
     }
   },
   "sso": {
@@ -4156,5 +4170,148 @@
       "openCertificates": "Open Certificates",
       "confirm": "Use this certificate"
     }
+  },
+  "services": {
+    "title": "Services",
+    "page": {
+      "description": "Every server, Key Vault, certificate and key belongs to one service. A service has an environment and a policy; trusts say which services may send certificates and keys to which."
+    },
+    "add": "Add service",
+    "empty": "No services yet",
+    "default": "Default service",
+    "noEnvironment": "No environment",
+    "policyVersion": "Version {{version}}",
+    "column": "Service",
+    "columns": {
+      "service": "Service",
+      "environment": "Environment",
+      "resources": "Resources",
+      "policy": "Service policy"
+    },
+    "counts": {
+      "servers_one": "{{count}} server",
+      "servers_other": "{{count}} servers",
+      "keyVaults_one": "{{count}} Key Vault",
+      "keyVaults_other": "{{count}} Key Vaults",
+      "certificates_one": "{{count}} certificate",
+      "certificates_other": "{{count}} certificates",
+      "acmeCertificates_one": "{{count}} ACME certificate",
+      "acmeCertificates_other": "{{count}} ACME certificates",
+      "sshKeys_one": "{{count}} SSH key",
+      "sshKeys_other": "{{count}} SSH keys",
+      "scopes_one": "{{count}} scan scope",
+      "scopes_other": "{{count}} scan scopes",
+      "none": "Nothing yet"
+    },
+    "environmentKeys": {
+      "production": "Production",
+      "staging": "Staging",
+      "test": "Test",
+      "development": "Development"
+    },
+    "back": "Services",
+    "edit": "Edit",
+    "delete": "Delete service",
+    "deleteNotEmpty": "Move its resources to another service first.",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteText": "The service and its policy are deleted. It owns nothing, so no server, certificate or key changes.",
+    "tabsLabel": "Service sections",
+    "tabs": {
+      "overview": "Overview",
+      "resources": "Resources",
+      "trusts": "Trusts"
+    },
+    "overview": {
+      "title": "About this service",
+      "noDescription": "No description",
+      "created": "Created"
+    },
+    "policy": {
+      "title": "Service policy",
+      "description": "The rules for what this service owns. In this version the policy is read-only.",
+      "version": "Version",
+      "rules": "Rules",
+      "none": "No rules yet",
+      "some": "Rules set",
+      "changed": "Last changed",
+      "changedBy": "{{date}} by {{name}}"
+    },
+    "resources": {
+      "all": "Show all",
+      "none": "None"
+    },
+    "kinds": {
+      "servers": "Servers",
+      "keyVaults": "Key Vaults",
+      "target": "Server or Key Vault",
+      "certificate": "Certificates",
+      "acme_certificate": "ACME certificates",
+      "ssh_key": "SSH keys",
+      "discovery_scope": "Scan scopes"
+    },
+    "moveHere": "Move here",
+    "moveTo": "Move to service",
+    "move": {
+      "toTitle": "Move {{name}} to another service",
+      "hereTitle": "Move something to {{name}}",
+      "intro": "Alice first checks what the move would change. Nothing moves until you confirm.",
+      "kind": "Kind",
+      "resource": "Resource",
+      "pick": "Choose one",
+      "destination": "Service",
+      "pickService": "Choose a service",
+      "nothing": "It is already in that service: nothing would change.",
+      "line": "{{name}}: {{from}} → {{to}}",
+      "untrustedTitle_one": "{{count}} binding would no longer deploy automatically",
+      "untrustedTitle_other": "{{count}} bindings would no longer deploy automatically",
+      "untrustedLine": "{{source}} on {{server}} ({{from}} → {{to}})",
+      "untrustedHelp": "These bindings stay in place, but automatic deployment stops until the receiving service accepts certificates and keys from the sending one (Trusts).",
+      "check": "Check the move",
+      "confirm": "Move"
+    },
+    "trusts": {
+      "intro": "A binding across two services deploys automatically only when the receiving service accepts certificates and keys from the sending one.",
+      "accepts": "Accepts certificates and keys from",
+      "sends": "Sends certificates and keys to",
+      "none": "None",
+      "remove": "Remove",
+      "addTitle": "Add a trust",
+      "direction": "Direction",
+      "other": "Service",
+      "add": "Add trust"
+    },
+    "dialog": {
+      "createTitle": "Add a service",
+      "editTitle": "Edit service",
+      "environmentHelp": "The environment decides which environment-wide access reaches this service.",
+      "save": "Save",
+      "create": "Add service"
+    },
+    "fields": {
+      "name": "Name",
+      "description": "Description",
+      "environment": "Environment"
+    },
+    "filter": {
+      "service": "Service",
+      "allServices": "All services",
+      "environment": "Environment",
+      "allEnvironments": "All environments",
+      "noMatch": "Nothing in the chosen service or environment."
+    },
+    "environments": {
+      "name": "Name",
+      "key": "Key",
+      "keyHelp": "Lowercase letters, digits and dashes. It cannot change later.",
+      "keyPattern": "Use lowercase letters, digits and dashes, starting with a letter.",
+      "order": "Order",
+      "services": "Services",
+      "rename": "Rename",
+      "renameTitle": "Rename {{key}}",
+      "delete": "Delete",
+      "inUse": "A service uses this environment.",
+      "add": "Add environment"
+    },
+    "untrustedMark": "Not accepted by its service"
   }
 }

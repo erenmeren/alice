@@ -1,4 +1,5 @@
 import { apiFetch, setCsrfToken } from './client';
+import { addServiceFilter } from './services';
 import type { SSHKeyDetail } from './sshkeys';
 import type {
   AdminEnrollmentRequest,
@@ -257,6 +258,7 @@ export function listSSHKeys(q: SSHKeyQuery = {}): Promise<SSHKeyPage> {
   if (q.q) params.set('q', q.q);
   if (q.flag) params.set('flag', q.flag);
   if (q.missing) params.set('missing', 'true');
+  addServiceFilter(params, q);
   if (q.cursor) params.set('cursor', q.cursor);
   if (q.limit) params.set('limit', String(q.limit));
   const qs = params.toString();
@@ -319,6 +321,7 @@ export function listCertificates(q: CertificateQuery = {}): Promise<{ items: Cer
   if (q.source) params.set('source', q.source);
   if (q.q) params.set('q', q.q);
   if (q.expiry) params.set('expiry', q.expiry);
+  addServiceFilter(params, q);
   if (q.cursor) params.set('cursor', q.cursor);
   if (q.limit) params.set('limit', String(q.limit));
   const qs = params.toString();

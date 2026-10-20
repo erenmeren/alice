@@ -1,5 +1,5 @@
 import type { SessionInfo, SetupStatus } from '../api/types';
-import { ACME_CERT_ID, freshStatus, INCIDENT_ID, installedStatus, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
+import { ACME_CERT_ID, freshStatus, INCIDENT_ID, installedStatus, SERVICE_ID, nginxTargetFixture, sessionFor, targetFixture, vaultFixture } from './fixtures';
 
 export interface Screen {
   path: string;
@@ -105,6 +105,12 @@ export const SCREENS: Screen[] = [
   { path: '/acme', session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Next renewal', tr: 'Sonraki yenileme' } },
   { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('operator'), status: installedStatus, ready: { en: 'Websites using this certificate', tr: 'Bu sertifikayı kullanan web siteleri' } },
   { path: `/acme/${ACME_CERT_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Automatic renewal stopped', tr: 'Otomatik yenileme durdu' } },
+  // Services and environments (R49): the list, a service's three tabs and Settings → Environments.
+  { path: '/services', session: sessionFor('admin'), status: installedStatus, ready: { en: '1 server, 1 certificate', tr: '1 sunucu, 1 sertifika' } },
+  { path: `/services/${SERVICE_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'No rules yet', tr: 'Henüz kural yok' } },
+  { path: `/services/${SERVICE_ID}?tab=resources`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Move here', tr: 'Buraya taşı' } },
+  { path: `/services/${SERVICE_ID}?tab=trusts`, session: sessionFor('auditor'), status: installedStatus, ready: { en: 'Accepts certificates and keys from', tr: 'Şu hizmetten sertifika ve anahtar kabul eder' } },
+  { path: '/settings?tab=environments', session: sessionFor('admin'), status: installedStatus, ready: { en: 'Add environment', tr: 'Ortam ekle' } },
   // A key compromise incident that needs attention (2026-10-20).
   { path: `/incidents/${INCIDENT_ID}`, session: sessionFor('admin'), status: installedStatus, ready: { en: 'Affected places', tr: 'Etkilenen yerler' } },
   // Network discovery: the Results, the Scopes with the no-network banner, and the Scans with a failed scan.

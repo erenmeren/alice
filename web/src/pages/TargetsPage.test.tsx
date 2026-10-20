@@ -573,7 +573,7 @@ describe('TargetsPage in the design', () => {
     await renderRoute('/servers');
     const table = await screen.findByTestId('targets-table');
     expect(within(table).getAllByRole('row')).toHaveLength(3);
-    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Server', 'Address', 'Platform', 'Connection', 'Last connected', 'Open']);
+    expect(within(table).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Server', 'Address', 'Platform', 'Connection', 'Last connected', 'Service', 'Open']);
     const row = within(table).getByRole('link', { name: 'web-01' }).closest('tr')!;
     expect(within(row).getByText('Ubuntu 22.04.4 LTS')).toBeInTheDocument();
     expect(within(row).getByText('Linux server')).toBeInTheDocument();

@@ -108,3 +108,14 @@ export const discoveryScanListKey = (filters: { scope_id?: string; state?: strin
 export const DISCOVERY_CERTIFICATES_KEY = ['discovery', 'certificates'] as const;
 export const discoveredCertificateListKey = (filters: Record<string, unknown>) => ['discovery', 'certificates', 'list', filters] as const;
 export const discoveredCertificateKey = (fingerprint: string) => ['discovery', 'certificates', fingerprint] as const;
+
+// Services and environments (R49). SERVICES_KEY is the prefix of every service query (the list, each service, its policy,
+// its resources and the trusts), so one invalidation after a change or a move reads them all again; a move also changes
+// the rows of the inventory lists, which their own keys refresh.
+export const SERVICES_KEY = ['services'] as const;
+export const SERVICE_LIST_KEY = ['services', 'list'] as const;
+export const serviceKey = (id: string) => ['services', id] as const;
+export const servicePolicyKey = (id: string) => ['services', id, 'policy'] as const;
+export const serviceResourcesKey = (id: string, kind: string) => ['services', id, 'resources', kind] as const;
+export const SERVICE_TRUSTS_KEY = ['services', 'trusts'] as const;
+export const ENVIRONMENTS_KEY = ['environments'] as const;

@@ -18,6 +18,7 @@ import { WRAP } from '../components/wrap';
 import { formatDate, formatDateTime } from '../datetime';
 import { Icon } from '../design/Icon';
 import { useUrlFilters } from '../hooks/useUrlFilters';
+import { ServiceBadge, ServiceFilters, useServiceFilters } from '../components/services/shared';
 import classes from './KeyVaults.module.css';
 
 const FILTER_KEYS = ['state', 'provider_id'] as const;
@@ -34,9 +35,10 @@ export function AcmeCertificatesPage() {
   const [urlFilters, setFilters, clearFilters] = useUrlFilters(FILTER_KEYS);
   // A value in the address that is not an option is ignored, so the select never says "all" over a filtered list.
   const filters = { ...urlFilters, state: (ACME_CERTIFICATE_STATES as readonly string[]).includes(urlFilters.state) ? urlFilters.state : '' };
-  const filtered = filters.state !== '' || filters.provider_id !== '';
+  const [serviceFilter, setServiceFilter] = useServiceFilters();
+  const filtered = filters.state !== '' || filters.provider_id !== '' || Object.keys(serviceFilter).length > 0;
   const providers = useProviders();
-  const query = { state: (filters.state || undefined) as ACMECertificateState | undefined, provider_id: filters.provider_id || undefined };
+  const query = { state: (filters.state || undefined) as ACMECertificateState | undefined, provider_id: filters.provider_id || undefined, ...serviceFilter };
   const list = useInfiniteQuery({
     queryKey: acmeCertificateListKey(query),
     queryFn: ({ pageParam }) => listACMECertificates({ ...query, cursor: pageParam ?? undefined }),
@@ -62,6 +64,7 @@ export function AcmeCertificatesPage() {
         onChange={(e) => setFilters({ provider_id: e.currentTarget.value })}
         data={[{ value: '', label: t('acme.issued.list.authorityAll') }, ...(providers.data?.items ?? []).map((p) => ({ value: p.id, label: p.name }))]}
       />
+      <ServiceFilters value={serviceFilter} onChange={setServiceFilter} />
       <div style={{ flex: '1 1 auto' }} />
       <Button variant="subtle" leftSection={<Icon name="X" size={15} />} onClick={clearFilters}>
         {t('filters.clear')}
@@ -124,6 +127,7 @@ export function AcmeCertificatesPage() {
                   {(['names', 'authority', 'state', 'proof', 'expires', 'renewal', 'automation'] as const).map((k) => (
                     <Table.Th key={k}>{t(`acme.issued.columns.${k}`)}</Table.Th>
                   ))}
+                  <Table.Th>{t('services.column')}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -220,6 +224,9 @@ function Row({ c, authority, lang }: { c: ACMECertificate; authority: string; la
             {t(c.auto_deploy ? 'acme.issued.autoDeployOn' : 'acme.issued.autoDeployOff')}
           </StatusBadge>
         </div>
+      </Table.Td>
+      <Table.Td>
+        <ServiceBadge service={c.service} />
       </Table.Td>
     </Table.Tr>
   );

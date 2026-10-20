@@ -192,6 +192,9 @@ export interface BindingLocation {
   state: BindingLocationState;
   version: string;
   deployment_id: string | null;
+  // "service.untrusted": the website's server is in a service that does not accept the vault's keys (R49); automatic
+  // deployment holds there until a trust allows it. "" otherwise (absent from an older answer).
+  attention_code?: string;
 }
 
 export interface Binding {

@@ -23,6 +23,7 @@ import { UploadCertificateDialog } from '../components/UploadCertificateDialog';
 import { WRAP } from '../components/wrap';
 import { Icon } from '../design/Icon';
 import { useDebouncedParam, useUrlFilters } from '../hooks/useUrlFilters';
+import { ServiceBadge, ServiceFilters, useServiceFilters } from '../components/services/shared';
 import classes from './CertificatesPage.module.css';
 
 // The sources the list can be filtered by (openapi: listCertificates source).
@@ -84,10 +85,11 @@ export function CertificatesPage() {
     source: SOURCES.some((s) => s.value === urlFilters.source) ? urlFilters.source : '',
     expiry: EXPIRIES.some((x) => x.value === urlFilters.expiry) ? urlFilters.expiry : '',
   };
-  const filtered = Object.values(filters).some((v) => v !== '');
+  const [serviceFilter, setServiceFilter] = useServiceFilters();
+  const filtered = Object.values(filters).some((v) => v !== '') || Object.keys(serviceFilter).length > 0;
   // Any filter other than the expiry window. The chips' counts come from the dashboard summary and count the whole
   // inventory (each equals the rows of ?expiry=N alone), so they are shown only while nothing else narrows the list.
-  const narrowed = Object.entries(filters).some(([k, v]) => k !== 'expiry' && v !== '');
+  const narrowed = Object.entries(filters).some(([k, v]) => k !== 'expiry' && v !== '') || Object.keys(serviceFilter).length > 0;
   const [search, onSearch, resetSearch] = useDebouncedParam(filters.q, (q) => setFilters({ q }));
   const [uploading, setUploading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -104,6 +106,7 @@ export function CertificatesPage() {
     source: filters.source as CertificateSourceFilter | '',
     q: filters.q,
     expiry: filters.expiry as ExpiryFilter,
+    ...serviceFilter,
   };
   const certs = useInfiniteQuery({
     queryKey: [...CERTIFICATES_KEY, filter],
@@ -159,6 +162,7 @@ export function CertificatesPage() {
         onChange={(e) => setFilters({ expiry: e.currentTarget.value })}
         data={[{ value: '', label: t('certificates.expiryAll') }, ...EXPIRIES.map((x) => ({ value: x.value, label: t(`certificates.${x.key}`) }))]}
       />
+      <ServiceFilters className={classes.select} value={serviceFilter} onChange={setServiceFilter} />
       <div className={classes.grow} />
       <SavedViews
         page="certificates"
@@ -183,7 +187,7 @@ export function CertificatesPage() {
         description={t('certificates.page.description')}
         actions={
           <>
-            <ExportButton kind="certificates" filters={filters} />
+            <ExportButton kind="certificates" filters={{ ...filters, ...serviceFilter }} />
             {canOperate && (
               <>
                 <Button variant="default" leftSection={<Icon name="FileKey2" size={15} />} onClick={() => setCreating(true)}>
@@ -267,6 +271,7 @@ export function CertificatesPage() {
                   <Table.Th>{t('certificates.columns.usedOn')}</Table.Th>
                   <Table.Th>{t('certificates.page.algorithm')}</Table.Th>
                   <Table.Th>{t('certificates.columns.key')}</Table.Th>
+                  <Table.Th>{t('services.column')}</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -308,6 +313,9 @@ export function CertificatesPage() {
                       <StatusBadge tone={c.has_private_key ? 'success' : 'neutral'} icon={c.has_private_key ? 'LockKeyhole' : 'Eye'}>
                         {c.has_private_key ? t('certificates.keyHeld') : t('certificates.keyNotHeld')}
                       </StatusBadge>
+                    </Table.Td>
+                    <Table.Td>
+                      <ServiceBadge service={c.service} />
                     </Table.Td>
                   </Table.Tr>
                 ))}

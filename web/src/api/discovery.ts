@@ -1,4 +1,5 @@
 import { ApiError, apiFetch } from './client';
+import type { ServiceRef } from './types';
 
 // Network certificate discovery (api/openapi.yaml, /api/v1/discovery). The names follow the API's snake_case schemas.
 // Nothing here is secret: scopes, scans and the certificates found are public facts of the network. The map of the
@@ -39,6 +40,7 @@ export interface DiscoveryScan {
 }
 
 export interface DiscoveryScope {
+  service?: ServiceRef;
   id: string;
   name: string;
   entries: string[];

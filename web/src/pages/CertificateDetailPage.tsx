@@ -20,6 +20,8 @@ import { ErrorAlert } from '../components/ErrorAlert';
 import { daysLeft, expiryState, useNow } from '../components/Expiry';
 import { ImportHistory } from '../components/ImportHistory';
 import { ImportToKeyVaultDialog } from '../components/ImportToKeyVaultDialog';
+import { MoveDialog } from '../components/services/MoveDialog';
+import { ServiceBadge } from '../components/services/shared';
 import { expiryTone, FactList, Notice, PageHeader, Panel, StatusBadge, type Fact } from '../components/ui';
 import { WRAP } from '../components/wrap';
 import { formatDate, formatDateTime } from '../datetime';
@@ -49,6 +51,7 @@ export function CertificateDetailPage() {
   const [deploying, setDeploying] = useState(false);
   const [importing, setImporting] = useState(false);
   const [incident, setIncident] = useState(false);
+  const [moving, setMoving] = useState(false);
   const cert = useQuery({ queryKey: certificateKey(id), queryFn: () => getCertificate(id) });
   // The impact (read by the panel too, one request) names the open key compromise incident, if any.
   const impact = useQuery({ queryKey: certificateImpactKey(id), queryFn: ({ signal }) => getCertificateImpact(id, signal) });
@@ -150,11 +153,14 @@ export function CertificateDetailPage() {
         }
         description={`${sourceText} · ${t('certificates.page.firstSeen', { date: formatDate(c.first_seen_at, i18n.language) })}`}
         status={
-          c.self_signed ? (
-            <StatusBadge tone="neutral" icon="CircleDot">
-              {t('certificates.detail.selfSigned')}
-            </StatusBadge>
-          ) : undefined
+          <Group gap="xs">
+            {c.self_signed && (
+              <StatusBadge tone="neutral" icon="CircleDot">
+                {t('certificates.detail.selfSigned')}
+              </StatusBadge>
+            )}
+            <ServiceBadge service={c.service} />
+          </Group>
         }
         actions={
           <>
@@ -173,6 +179,11 @@ export function CertificateDetailPage() {
             {openIncident && (
               <Button component={Link} to={`/incidents/${openIncident}`} variant="light" color="red" leftSection={<Icon name="ShieldAlert" size={15} />}>
                 {t('incidents.openIncident')}
+              </Button>
+            )}
+            {admin && (
+              <Button variant="default" leftSection={<Icon name="Layers" size={15} />} onClick={() => setMoving(true)}>
+                {t('services.moveTo')}
               </Button>
             )}
             {admin && !openIncident && impact.isSuccess && (
@@ -381,6 +392,7 @@ export function CertificateDetailPage() {
       </div>
       {importing && admin && <ImportToKeyVaultDialog certificate={c} onClose={() => setImporting(false)} />}
       {canDeploy && <DeployDialog opened={deploying} onClose={() => setDeploying(false)} certificate={c} />}
+      {moving && admin && <MoveDialog resource={{ type: 'certificate', id: c.id, name: name || c.fingerprint.slice(0, 16), service: c.service }} onClose={() => setMoving(false)} />}
       {incident && admin && <StartIncidentDialog certificate={c} onClose={() => setIncident(false)} />}
     </Stack>
   );

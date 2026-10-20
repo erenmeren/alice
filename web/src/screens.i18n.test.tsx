@@ -53,6 +53,11 @@ import {
   discoveryScanFixture,
   discoveryScopeFixture,
   discoverySettingsFixture,
+  defaultServiceFixture,
+  environmentFixture,
+  serviceFixture,
+  servicePolicyFixture,
+  serviceTrustFixture,
 } from './test/fixtures';
 import { expectNoRawKeys } from './test/i18nAssert';
 import { renderRoute } from './test/render';
@@ -89,6 +94,12 @@ const auditEntry: AuditEntry = {
 
 // Data for the list screens, so the sweep also covers rendered rows, not only the page chrome.
 const dataHandlers = [
+  // Services (R49): the Default service, Payments in production with a trust, and a custom environment.
+  http.get('/api/v1/services', () => HttpResponse.json({ items: [defaultServiceFixture, serviceFixture()] })),
+  http.get('/api/v1/services/:id', () => HttpResponse.json(serviceFixture())),
+  http.get('/api/v1/services/:id/policy', () => HttpResponse.json(servicePolicyFixture({ created_by_name: 'Ada Admin' }))),
+  http.get('/api/v1/service-trusts', () => HttpResponse.json({ items: [serviceTrustFixture()] })),
+  http.get('/api/v1/environments', () => HttpResponse.json({ items: [environmentFixture(), environmentFixture({ id: 'e2', key: 'lab', name: 'Lab', sort: 50, services: 0 })] })),
   http.get('/api/v1/users', () => HttpResponse.json({ items: [userFor('admin'), userFor('operator'), userFor('auditor')] })),
   http.get('/api/v1/tokens', () => HttpResponse.json({ items: [token] })),
   http.get('/api/v1/targets', ({ request }) => HttpResponse.json({ items: new URL(request.url).searchParams.get('type') === 'azure_key_vault' ? [vaultFixture] : [targetFixture], next_cursor: null })),

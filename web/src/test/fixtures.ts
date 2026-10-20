@@ -1,6 +1,7 @@
 import { http, HttpResponse } from 'msw';
 import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
 import type { CertificateImpact, Incident } from '../api/incidents';
+import type { AssignResult, Environment, Service, ServicePolicy, ServiceTrust } from '../api/services';
 import type { DashboardSummary } from '../api/phase7';
 import type { DiscoveredCertificate, DiscoveredEndpoint, DiscoveryPreview, DiscoveryScan, DiscoveryScope, DiscoverySettings } from '../api/discovery';
 import type { Provider } from '../api/sso';
@@ -1349,6 +1350,73 @@ export function incidentFixture(o: Partial<Incident> = {}): Incident {
     locations: [
       { location_id: locationFixture().id, target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/www.crt', status: 'verified', deployment_id: '0192c000-0000-7000-8000-0000000000d1', error: null, attempts: 1, updated_at: '2026-10-20T08:04:00Z', outcome_uncertain: false },
       { location_id: '0192c000-0000-7000-8000-0000000000e7', target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/api.crt', status: 'failed', deployment_id: '0192c000-0000-7000-8000-0000000000d2', error: { code: 'ALC-DEP-0006', reason: 'deployment.reload_failed' }, attempts: 1, updated_at: '2026-10-20T08:04:00Z', outcome_uncertain: false },
+    ],
+    ...o,
+  };
+}
+
+// Services and environments (R49): Production with one service owning a server and a certificate, the Default service,
+// and a trust from the Default service.
+export const SERVICE_ID = '0192f200-0000-7000-8000-0000000000a1';
+export const DEFAULT_SERVICE_ID = '0192f200-0000-7000-8000-000000000001';
+export const PRODUCTION_ID = '0192f200-0000-7000-8000-0000000000e1';
+
+export function environmentFixture(o: Partial<Environment> = {}): Environment {
+  return { id: PRODUCTION_ID, key: 'production', name: 'Production', sort: 10, version: 1, services: 1, created_at: '2026-10-20T08:00:00Z', updated_at: '2026-10-20T08:00:00Z', ...o };
+}
+
+export function serviceFixture(o: Partial<Service> = {}): Service {
+  return {
+    id: SERVICE_ID,
+    name: 'Payments',
+    description: 'Card payments and the checkout website.',
+    environment: { id: PRODUCTION_ID, key: 'production', name: 'Production' },
+    is_default: false,
+    policy_version: 1,
+    version: 1,
+    counts: { servers: 1, key_vaults: 0, certificates: 1, signing_requests: 0, acme_certificates: 0, ssh_keys: 0, discovery_scopes: 0 },
+    created_at: '2026-10-20T08:00:00Z',
+    updated_at: '2026-10-20T08:00:00Z',
+    ...o,
+  };
+}
+
+export const defaultServiceFixture = serviceFixture({
+  id: DEFAULT_SERVICE_ID,
+  name: 'Default',
+  description: '',
+  environment: null,
+  is_default: true,
+  counts: { servers: 2, key_vaults: 1, certificates: 3, signing_requests: 0, acme_certificates: 1, ssh_keys: 2, discovery_scopes: 1 },
+});
+
+export const serviceRef = { id: SERVICE_ID, name: 'Payments', environment: { id: PRODUCTION_ID, key: 'production', name: 'Production' } };
+export const defaultServiceRef = { id: DEFAULT_SERVICE_ID, name: 'Default', environment: null };
+
+export function servicePolicyFixture(o: Partial<ServicePolicy> = {}): ServicePolicy {
+  return { version: 1, body: { schema: 1 }, created_by: null, created_by_name: '', created_at: '2026-10-20T08:00:00Z', ...o };
+}
+
+export function serviceTrustFixture(o: Partial<ServiceTrust> = {}): ServiceTrust {
+  return { id: '0192f200-0000-7000-8000-0000000000f1', source: defaultServiceRef, target: serviceRef, created_by_name: 'Ada Admin', created_at: '2026-10-20T08:00:00Z', ...o };
+}
+
+export function assignResultFixture(o: Partial<AssignResult> = {}): AssignResult {
+  return {
+    dry_run: true,
+    destination: serviceRef,
+    moves: [{ type: 'target', id: targetFixture.id, name: targetFixture.name, from: defaultServiceRef, changed: true }],
+    untrusted: [
+      {
+        kind: 'key_vault',
+        source_id: '0192f200-0000-7000-8000-0000000000b1',
+        source_name: 'www-cert',
+        location_id: '0192f200-0000-7000-8000-0000000000b2',
+        target_id: targetFixture.id,
+        target_name: targetFixture.name,
+        source_service: defaultServiceRef,
+        target_service: serviceRef,
+      },
     ],
     ...o,
   };

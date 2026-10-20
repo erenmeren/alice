@@ -22,6 +22,8 @@ import { BlockedJobAlert, JobErrorAlert, reasonTitle, StillWorkingAlert, Stopped
 import { KeyFlags } from '../components/KeyFlags';
 import { RemoveKeyDialog } from '../components/RemoveKeyDialog';
 import { useStepUp } from '../components/StepUpProvider';
+import { MoveDialog } from '../components/services/MoveDialog';
+import { ServiceBadge } from '../components/services/shared';
 import { TargetStatusBadge } from '../components/TargetStatusBadge';
 import { useLocations, websitesAsOf } from '../components/useLocations';
 import { WebsitesPanel } from '../components/WebsitesPanel';
@@ -78,6 +80,7 @@ export function TargetDetailPage() {
   const abort = useAbort();
   const [repinning, setRepinning] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [removing, setRemoving] = useState<KeyLocation | null>(null);
 
   // A scan changes the websites and certificates too, which live under their own query keys.
@@ -145,12 +148,22 @@ export function TargetDetailPage() {
         back={{ to: '/servers', label: t('targets.page.back') }}
         icon="Server"
         title={<span translate="no">{tg.name}</span>}
-        status={<TargetStatusBadge status={tg.status} testId="target-status" />}
+        status={
+          <Group gap="xs">
+            <TargetStatusBadge status={tg.status} testId="target-status" />
+            <ServiceBadge service={tg.service} />
+          </Group>
+        }
         description={t('targets.address', { user: tg.username, host: tg.host, port: tg.port })}
         actions={
           canOperate && (
             <>
               {scan}
+              {admin && (
+                <Button variant="default" leftSection={<Icon name="Layers" size={15} />} onClick={() => setMoving(true)}>
+                  {t('services.moveTo')}
+                </Button>
+              )}
               {admin && (
                 <Button variant="light" color="red" disabled={busy} onClick={() => setDeleting(true)}>
                   {t('targets.delete')}
@@ -271,6 +284,7 @@ export function TargetDetailPage() {
           }}
         />
       )}
+      {moving && admin && <MoveDialog resource={{ type: 'target', id: tg.id, name: tg.name, service: tg.service }} onClose={() => setMoving(false)} />}
       {deleting && (
         <DeleteTargetDialog
           target={tg}

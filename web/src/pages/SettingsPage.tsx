@@ -12,12 +12,13 @@ import { MailSettings } from '../components/settings/MailSettings';
 import { RecipientsSettings } from '../components/settings/RecipientsSettings';
 import { SSOSettings } from '../components/sso/SSOSettings';
 import { DirectoriesSettings } from '../components/directories/DirectoriesSettings';
+import { EnvironmentsSettings } from '../components/settings/EnvironmentsSettings';
 import { PageHeader, Panel } from '../components/ui';
 import { Icon, type IconName } from '../design/Icon';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import classes from './SettingsPage.module.css';
 
-const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories'] as const;
+const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories', 'environments'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
@@ -32,6 +33,7 @@ const ICONS: Record<Tab, IconName> = {
   forwarding: 'Network',
   sso: 'ShieldCheck',
   directories: 'Server',
+  environments: 'Layers',
 };
 
 const BODIES: Record<Tab, () => ReactNode> = {
@@ -45,6 +47,7 @@ const BODIES: Record<Tab, () => ReactNode> = {
   forwarding: () => <ForwardingTab />,
   sso: () => <SSOSettings />,
   directories: () => <DirectoriesSettings />,
+  environments: () => <EnvironmentsSettings />,
 };
 
 // SettingsPage holds the Administrator's settings: mail, recipients, alert thresholds, general, backups, the HTTPS

@@ -203,8 +203,8 @@ describe('SettingsPage, mail', () => {
 });
 
 describe('SettingsPage, design', () => {
-  const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories'] as const;
-  const LABELS = ['Email', 'Recipients', 'Alerts', 'General', 'Backups', 'HTTPS certificate', 'Certificate authorities', 'Audit forwarding', 'Single sign-on', 'Directories'];
+  const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories', 'environments'] as const;
+  const LABELS = ['Email', 'Recipients', 'Alerts', 'General', 'Backups', 'HTTPS certificate', 'Certificate authorities', 'Audit forwarding', 'Single sign-on', 'Directories', 'Environments'];
   const DESCRIPTIONS: Record<(typeof TABS)[number], string> = {
     mail: 'The mail server Alice uses to send alerts.',
     recipients: 'The people who receive operational alerts.',
@@ -216,6 +216,7 @@ describe('SettingsPage, design', () => {
     forwarding: 'Send audit events to an independent syslog or SIEM destination.',
     sso: 'Connect an OpenID Connect provider and map groups to Alice roles.',
     directories: 'Let people sign in with their LDAP or Active Directory password and map directory groups to Alice roles.',
+    environments: 'The environments a service can be in, such as production or staging.',
   };
   const SAVE: Partial<Record<(typeof TABS)[number], string>> = {
     mail: 'Save mail settings',
@@ -241,14 +242,14 @@ describe('SettingsPage, design', () => {
     );
   }
 
-  it('has the design header and lists the ten sections in order, each with an icon', async () => {
+  it('has the design header and lists the eleven sections in order, each with an icon', async () => {
     every();
     await renderRoute('/settings');
     expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
     expect(screen.getByText('Make Alice work the way your team does.')).toBeInTheDocument();
     const list = screen.getByRole('tablist', { name: 'Settings sections' });
     const tabs = within(list).getAllByRole('tab');
-    expect(tabs).toHaveLength(10);
+    expect(tabs).toHaveLength(11);
     tabs.forEach((tab, i) => {
       expect(tab).toHaveTextContent(LABELS[i]);
       expect(tab.textContent).toBe(LABELS[i]);
@@ -296,10 +297,10 @@ describe('SettingsPage, design', () => {
       await userEvent.keyboard('{ArrowUp}');
       expect(general).toHaveFocus();
       await userEvent.keyboard('{End}');
-      expect(screen.getByRole('tab', { name: 'Directories' })).toHaveFocus();
+      expect(screen.getByRole('tab', { name: 'Environments' })).toHaveFocus();
       await userEvent.keyboard('{Enter}');
-      expect(await screen.findByRole('tab', { name: 'Directories', selected: true })).toBeInTheDocument();
-      await waitFor(() => expect(router.state.location.search).toBe('?tab=directories'));
+      expect(await screen.findByRole('tab', { name: 'Environments', selected: true })).toBeInTheDocument();
+      await waitFor(() => expect(router.state.location.search).toBe('?tab=environments'));
     }));
 
   it('draws the sections as a horizontal list on a phone', async () => {
@@ -321,10 +322,10 @@ describe('SettingsPage, design', () => {
     const general = await screen.findByRole('tab', { name: 'General', selected: true });
     general.focus();
     await userEvent.keyboard('{End}');
-    expect(screen.getByRole('tab', { name: 'Directories' })).toHaveFocus();
+    expect(screen.getByRole('tab', { name: 'Environments' })).toHaveFocus();
     await userEvent.keyboard('{Enter}');
-    expect(await screen.findByRole('tab', { name: 'Directories', selected: true })).toBeInTheDocument();
-    await waitFor(() => expect(router.state.location.search).toBe('?tab=directories'));
+    expect(await screen.findByRole('tab', { name: 'Environments', selected: true })).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe('?tab=environments'));
     await userEvent.keyboard('{Home}');
     expect(screen.getByRole('tab', { name: 'Email' })).toHaveFocus();
   });

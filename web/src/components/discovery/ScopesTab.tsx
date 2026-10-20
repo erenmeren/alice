@@ -4,12 +4,14 @@ import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { deleteDiscoveryScope, updateDiscoveryScope, type DiscoveryScope, type DiscoverySettings, type Page } from '../../api/discovery';
 import { DISCOVERY_CERTIFICATES_KEY, DISCOVERY_SCOPE_LIST_KEY, DISCOVERY_SCOPES_KEY, DISCOVERY_SUMMARY_KEY } from '../../api/queryKeys';
+import { inServiceFilter } from '../../api/services';
 import { formatDateTime } from '../../datetime';
 import { Icon } from '../../design/Icon';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
+import { ServiceBadge, ServiceFilters, useServiceFilters } from '../services/shared';
 import { DialogActions, EmptyState, FactList, Notice, Panel, StatusBadge } from '../ui';
 import classes from './discovery.module.css';
 import { ScanStateBadge, scheduleText, useDiscoveryRole } from './shared';
@@ -77,8 +79,11 @@ export function ScopesTab({
   );
 }
 
-function ScopeTable({ scopes, ctx, onEdit, onDelete }: { scopes: DiscoveryScope[]; ctx: StartContext; onEdit: (s: DiscoveryScope) => void; onDelete: (s: DiscoveryScope) => void }) {
+function ScopeTable({ scopes: all, ctx, onEdit, onDelete }: { scopes: DiscoveryScope[]; ctx: StartContext; onEdit: (s: DiscoveryScope) => void; onDelete: (s: DiscoveryScope) => void }) {
   const { t, i18n } = useTranslation();
+  // The scopes are read completely: the service and environment filters apply in the browser.
+  const [serviceFilter, setServiceFilter] = useServiceFilters();
+  const scopes = all.filter((s) => inServiceFilter(s.service, serviceFilter));
   const { admin, canOperate } = useDiscoveryRole();
   const { run } = useStepUp();
   const client = useQueryClient();
@@ -89,13 +94,19 @@ function ScopeTable({ scopes, ctx, onEdit, onDelete }: { scopes: DiscoveryScope[
   return (
     <Stack gap="xs">
       <ErrorAlert error={toggle.error} />
+      <Group gap="sm" align="flex-end">
+        <ServiceFilters value={serviceFilter} onChange={setServiceFilter} />
+      </Group>
+      {scopes.length === 0 && <Text size="sm">{t('services.filter.noMatch')}</Text>}
       <Table.ScrollContainer minWidth={980}>
         <Table aria-label={t('discovery.scopes.title')} data-testid="discovery-scopes-table" highlightOnHover>
           <Table.Thead>
             <Table.Tr>
-              {(['name', 'ports', 'schedule', 'enabled', 'alerts', 'lastScan', 'actions'] as const).map((k) => (
+              {(['name', 'ports', 'schedule', 'enabled', 'alerts', 'lastScan'] as const).map((k) => (
                 <Table.Th key={k}>{t(`discovery.scopes.columns.${k}`)}</Table.Th>
               ))}
+              <Table.Th>{t('services.column')}</Table.Th>
+              <Table.Th>{t('discovery.scopes.columns.actions')}</Table.Th>
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
@@ -154,6 +165,9 @@ function ScopeTable({ scopes, ctx, onEdit, onDelete }: { scopes: DiscoveryScope[
                     ) : (
                       <span className={classes.small}>{t('discovery.scopes.never')}</span>
                     )}
+                  </Table.Td>
+                  <Table.Td>
+                    <ServiceBadge service={s.service} />
                   </Table.Td>
                   <Table.Td>
                     <div className={classes.actionsCell}>

@@ -25,6 +25,8 @@ import { RotationRunPage } from './pages/RotationRunPage';
 import { RouteErrorPage } from './pages/RouteErrorPage';
 import { TargetDetailPage } from './pages/TargetDetailPage';
 import { TargetsPage } from './pages/TargetsPage';
+import { ServicePage } from './pages/ServicePage';
+import { ServicesPage } from './pages/ServicesPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { SetupPage } from './pages/SetupPage';
 import { RotationsPage } from './pages/RotationsPage';
@@ -83,6 +85,9 @@ export function routes(): RouteObject[] {
             { path: 'ssh-keys/:id', element: <SSHKeyDetailPage /> },
             { path: 'rotations', element: <RotationsPage /> },
             { path: 'rotation/runs/:id', element: <RotationRunPage /> },
+            // Services (R49): every role reads them; the pages hide what a role cannot change.
+            { path: 'services', element: <ServicesPage /> },
+            { path: 'services/:id', element: <ServicePage /> },
             {
               path: 'users',
               element: (
