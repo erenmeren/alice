@@ -28,6 +28,10 @@ type userDTO struct {
 	AuthSource      string     `json:"auth_source"`
 	SSOProviderID   *uuid.UUID `json:"sso_provider_id"`
 	LDAPDirectoryID *uuid.UUID `json:"ldap_directory_id"`
+	// DirectorySignInLockedUntil is, in the user administration's answers only, when the directory sign-in lockout of
+	// a directory user ends (this process's lockout: the user's account or stored sign-in name); omitted when it is
+	// not locked.
+	DirectorySignInLockedUntil *time.Time `json:"directory_sign_in_locked_until,omitempty"`
 }
 
 func userJSON(u auth.User) userDTO {

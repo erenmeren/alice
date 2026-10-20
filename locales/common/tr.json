@@ -792,6 +792,11 @@
         "title": "Hesabınız dizinle oturum açmıyor.",
         "cause": "Yalnızca dizin kullanıcıları dizin parolalarıyla onay verir.",
         "action": "Bunun yerine doğrulama kodunuzla onaylayın."
+      },
+      "user_not_directory": {
+        "title": "Bu kullanıcı dizinle oturum açmıyor.",
+        "cause": "Yalnızca bir dizin kullanıcısının oturum açması başarısız dizin parolalarından sonra kilitlenebilir.",
+        "action": "Yerel bir hesabın oturum açma gecikmesi veya kilidi için sunucuda alice admin unlock komutunu kullanın."
       }
     },
     "job": {

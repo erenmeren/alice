@@ -526,6 +526,25 @@ paths:
         "204": { description: Sessions ended and API tokens revoked }
         "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/users/{id}/actions/unlock-directory-sign-in:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: unlockDirectorySignIn
+      summary: End a directory user's sign-in lockout
+      description: >-
+        Three failed directory passwords within 30 minutes lock a sign-in name and a directory account for 45 minutes
+        (audited as auth.ldap.lockout). This ends the lock, and clears the failures, of the user's account and of the
+        sign-in name the directory last returned for the user; other names of the account (aliases, other spellings)
+        keep their own name lock until it ends. Recorded as user.directory_unlocked with name_locked and account_locked.
+        The lockout is kept in memory by each Alice process; this acts on the process that answers. Answers 204 also
+        when nothing was locked. A user who does not sign in through a directory is 409 ALC-LDAP-0009.
+      x-permission: users.manage
+      responses:
+        "204": { description: The lockout is ended }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/tokens:
     get:
       operationId: listTokens
@@ -3322,6 +3341,10 @@ paths:
         account (a new address, bind DN, unique ID attribute or certificate authority) needs bind_password again (422).
         While people have signed in through the directory its addresses and unique ID attribute cannot change (409
         ALC-LDAP-0003). null is not a value (400). 412 ALC-SYS-0008 when If-Match is missing or names another version.
+        Switching the directory off (enabled from true to false) ends, in the same transaction, every session and API
+        token of its users: each user who had one gets a user.sessions_ended row (reason provider_disabled) and each
+        token a token.revoked row, and the ldap.directory_changed row carries signed_out_count. A sign-in whose password
+        the directory accepted just before is refused (503 ALC-LDAP-0002).
       x-permission: sso.manage
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
@@ -5806,6 +5829,13 @@ components:
         auth_source: { type: string, enum: [local, oidc, ldap], description: 'How the person signs in: a local account, single sign-on or a directory (LDAP or Active Directory). SSO and directory users have no Alice password and their role comes from their groups; SSO users have no Alice authenticator, directory users do' }
         sso_provider_id: { type: [string, "null"], format: uuid, description: The identity provider of an SSO user; null for every other user }
         ldap_directory_id: { type: [string, "null"], format: uuid, description: The directory of a directory user; null for every other user }
+        directory_sign_in_locked_until:
+          type: string
+          format: date-time
+          description: >-
+            Only in the user administration's answers (/users), for a directory user whose directory sign-in is locked
+            in the answering Alice process (the account or the stored sign-in name): when the lock ends. Omitted when it
+            is not locked.
     SessionInfo:
       type: object
       required: [user, csrf_token, expires_at, idle_expires_at, stepup_until]

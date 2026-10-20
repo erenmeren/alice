@@ -508,6 +508,54 @@ func TestDirectorySignInLockout(t *testing.T) {
 	requireStatus(t, rec, http.StatusOK)
 }
 
+// The start of a lockout is audited (auth.ldap.lockout, the user as actor and object), the user administration shows
+// the lock, and an Administrator with step-up ends it (user.directory_unlocked): the right password signs in at once.
+func TestDirectoryLockoutAuditAndUnlock(t *testing.T) {
+	s, admin, adminAcct := installed(t)
+	dir := s.directoryReady(t, admin, adminAcct, false)
+	rec, _ := s.dirLogin(s.freshClient(), dir, "deniz", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+	var deniz string
+	require.NoError(t, s.db.Owner.QueryRow(context.Background(), `SELECT id::text FROM users WHERE ldap_login = 'deniz'`).Scan(&deniz))
+	lockedUntil := func() string {
+		rec := admin.do(http.MethodGet, "/api/v1/users/"+deniz, nil)
+		requireStatus(t, rec, http.StatusOK)
+		v, _ := decodeBody[map[string]any](t, rec)["directory_sign_in_locked_until"].(string)
+		return v
+	}
+	assert.Empty(t, lockedUntil())
+
+	for range 3 {
+		rec, _ := s.dirLogin(s.freshClient(), dir, "deniz", "wrong-password")
+		requireError(t, rec, http.StatusUnauthorized, "ALC-LDAP-0001")
+	}
+	assert.Equal(t, 1, s.countWhere("audit_log", `action = 'auth.ldap.lockout' AND result = 'failure' AND object_id = '`+deniz+`'
+AND actor_type = 'user' AND details->>'scope' = 'name,account' AND details->>'minutes' = '45' AND details->>'login_name' = 'deniz'`))
+	until, err := time.Parse(time.RFC3339Nano, lockedUntil())
+	require.NoError(t, err)
+	assert.WithinDuration(t, s.clock.Now().Add(ldapLockoutFor), until, 2*time.Second, "45 minutes from the third failure (before its 1.5-second hold)")
+	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz", dirUserPassword)
+	requireError(t, rec, http.StatusTooManyRequests, "ALC-SYS-0005")
+	assert.Equal(t, 1, s.countWhere("audit_log", "action = 'auth.ldap.lockout'"), "a refused attempt on a lock starts no new one")
+
+	unlock := "/api/v1/users/" + deniz + "/actions/unlock-directory-sign-in"
+	s.clock.Advance(6 * time.Minute) // the step-up window has passed
+	requireError(t, admin.do(http.MethodPost, unlock, nil), http.StatusForbidden, "ALC-AUTH-0003")
+	s.stepUp(admin, adminAcct)
+	requireStatus(t, admin.do(http.MethodPost, unlock, nil), http.StatusNoContent)
+	assert.Equal(t, 1, s.countWhere("audit_log", `action = 'user.directory_unlocked' AND object_id = '`+deniz+`' AND actor_name = 'ada'
+AND details->>'name_locked' = 'true' AND details->>'account_locked' = 'true' AND details->>'directory_id' = '`+dir+`'`))
+	assert.Empty(t, lockedUntil())
+	rec, _ = s.dirLogin(s.freshClient(), dir, "deniz", dirUserPassword)
+	requireStatus(t, rec, http.StatusOK)
+
+	requireError(t, admin.do(http.MethodPost, "/api/v1/users/"+s.userID("ada")+"/actions/unlock-directory-sign-in", nil),
+		http.StatusConflict, "ALC-LDAP-0009")
+	requireError(t, admin.do(http.MethodPost, "/api/v1/users/"+uuid.NewString()+"/actions/unlock-directory-sign-in", nil),
+		http.StatusNotFound, "ALC-SYS-0001")
+	assert.Equal(t, 1, s.countWhere("audit_log", "action = 'user.directory_unlocked'"))
+}
+
 // uuidSuffix is the last 12 hex digits of a fresh UUID (a made-up directory ID with a real one's prefix).
 func uuidSuffix() string { u := uuid.NewString(); return u[24:] }
 
@@ -642,9 +690,10 @@ ORDER BY seq DESC LIMIT 1`).Scan(&actorID))
 	s.requireNoDirectoryCanary(t)
 }
 
-// A refused step-up ends the session user's sessions when the refusal says they have no access any more: removed from
-// every mapped group (no_access), or the directory switched off (provider_disabled, answered ALC-LDAP-0002). MFA is
-// off here, so the sign-in opens a full session at once and the step-up needs the password only.
+// A refused step-up ends the session user's sessions when the refusal says they have no access any more (removed from
+// every mapped group: no_access); switching the directory off ends them at once, without waiting for a step-up
+// (provider_disabled). MFA is off here, so the sign-in opens a full session at once and the step-up needs the
+// password only.
 func TestDirectoryStepUpRefusalEndsTheSessions(t *testing.T) {
 	s, admin, adminAcct := installed(t)
 	dir := s.directoryReady(t, admin, adminAcct, false)
@@ -677,18 +726,24 @@ func TestDirectoryStepUpRefusalEndsTheSessions(t *testing.T) {
 	requireError(t, other.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
 	requireStatus(t, ayse.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK)
 
-	// The directory is switched off: Ayşe's confirmation is refused and her session ends.
+	// The directory is switched off: the switch itself ends Ayşe's session at once (owner-approved review change), by
+	// the Administrator with reason provider_disabled; Selin had nothing left to end.
 	s.stepUp(admin, adminAcct)
 	rec = admin.do(http.MethodGet, "/api/v1/ldap/directories/"+dir, nil)
 	requireStatus(t, admin.do(http.MethodPatch, "/api/v1/ldap/directories/"+dir, map[string]any{"enabled": false},
 		ifMatchOf(etagVersion(t, rec))), http.StatusOK)
-	requireStatus(t, ayse.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK) // switching off ends nothing by itself
-	rec, _ = s.timedDo(ayse, http.MethodPost, stepup, map[string]string{"password": dirUserPassword})
-	requireError(t, rec, http.StatusServiceUnavailable, "ALC-LDAP-0002")
-	reason, _, actor = s.lastDenial(t)
-	assert.Equal(t, [2]string{"provider_disabled", "user"}, [2]string{reason, actor})
 	requireError(t, ayse.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusUnauthorized, "ALC-AUTH-0001")
 	assert.Equal(t, 2, s.countWhere("audit_log", "action = 'user.sessions_ended'"))
+	assert.Equal(t, 1, s.countWhere("audit_log", `action = 'user.sessions_ended' AND details->>'reason' = 'provider_disabled'
+AND actor_name = 'ada'`))
+	assert.Equal(t, 1, s.countWhere("audit_log", `action = 'ldap.directory_changed' AND details->>'signed_out_count' = '1'`))
+	requireStatus(t, admin.do(http.MethodGet, "/api/v1/auth/session", nil), http.StatusOK) // a local Administrator keeps the session
+
+	// A confirmation on the ended session is refused before the directory is asked; a sign-in through the switched-off
+	// directory is ALC-LDAP-0002.
+	requireError(t, ayse.do(http.MethodPost, stepup, map[string]string{"password": dirUserPassword}), http.StatusUnauthorized, "ALC-AUTH-0001")
+	rec, _ = s.dirLogin(s.freshClient(), dir, "ayse", dirUserPassword)
+	requireError(t, rec, http.StatusServiceUnavailable, "ALC-LDAP-0002")
 
 	s.requireNoDirectoryCanary(t)
 }

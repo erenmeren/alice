@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — Directory sign-in: switch-off and unlock
+
+**Changed**
+- Switching a directory off (**Allow sign-in with this directory** off) now signs out every user of that directory at
+  once: all their sessions end and all their API tokens are revoked in the same change, audited as
+  `user.sessions_ended` (reason `provider_disabled`, by the Administrator) and `token.revoked`; the
+  `ldap.directory_changed` entry carries `signed_out_count`. A sign-in whose password the directory accepted just before
+  the switch is refused (`ALC-LDAP-0002`). The directory form says so before it is saved. Before, open sessions lasted
+  until the next confirmation or until they expired.
+
+**Added**
+- Audit entry `auth.ldap.lockout` when three failed directory passwords lock a sign-in name or a directory account
+  (`scope`, `minutes`; the person and the sign-in name only when the directory found the entry).
+- **People & access** shows **Directory sign-in locked** with the time it ends, and **Manage → Unlock directory
+  sign-in** ends it (Administrator with a fresh verification; audited `user.directory_unlocked`). API:
+  `POST /api/v1/users/{id}/actions/unlock-directory-sign-in` (`users.manage`) and the optional field
+  `directory_sign_in_locked_until` of a user in `/api/v1/users` answers. New error code `ALC-LDAP-0009` (the user does
+  not sign in through a directory). The 3-failure, 45-minute rule is unchanged. Rulings:
+  `docs/superpowers/rulings/ldap-disable-and-unlock.md`.
+
 ## Unreleased — HAProxy (discovery only)
 
 **Added**

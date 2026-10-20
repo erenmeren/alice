@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"alice/internal/audit"
+	"alice/internal/auth"
 	"alice/internal/auth/ldap"
 	"alice/internal/platform/clock"
 	"alice/internal/platform/netaddr"
@@ -58,6 +59,7 @@ type harness struct {
 	kr    *secrets.Keyring
 	srv   *fakeldap.Server
 	svc   *ldap.Service
+	auth  *auth.Service
 	logs  *syncBuffer
 	dials atomic.Int64
 	// redirect, when set, sends a dial for this host:port to the real server instead.
@@ -74,7 +76,11 @@ func newHarness(t *testing.T) *harness {
 	require.NoError(t, err)
 	x := &harness{ctx: context.Background(), d: d, clk: clk, kr: kr, srv: fakeldap.Start(t), logs: &syncBuffer{}}
 	x.redirect.Store("")
-	x.svc = ldap.New(ldap.Config{Pool: d.App, Keyring: kr, Audit: audit.New(clk), Clock: clk, Log: slog.New(slog.NewTextHandler(x.logs, nil)),
+	auditLog := audit.New(clk)
+	hasher := auth.NewHasher(auth.Argon2Params{MemoryKiB: 64, Time: 1, Threads: 1, SaltLen: 16, KeyLen: 32}, 2)
+	authSvc := auth.NewService(auth.Config{Pool: d.App, Keyring: kr, Audit: auditLog, Clock: clk, Hasher: hasher, RecoveryHasher: hasher})
+	x.auth = authSvc
+	x.svc = ldap.New(ldap.Config{Pool: d.App, Keyring: kr, Audit: auditLog, Clock: clk, Log: slog.New(slog.NewTextHandler(x.logs, nil)), Auth: authSvc,
 		Dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			x.dials.Add(1)
 			if r := x.redirect.Load().(string); r != "" && r == addr {

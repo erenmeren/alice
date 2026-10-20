@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,6 +39,11 @@ var (
 	// ErrLDAPEnrolmentRequired: a directory step-up needs the TOTP (mfa_required) but the user has none enrolled (the
 	// setting was switched on during the session); nothing is counted, and the person signs in again to enrol.
 	ErrLDAPEnrolmentRequired = errors.New("auth: the directory user must enrol a TOTP first")
+	// ErrLDAPDirectoryDisabled: the directory was switched off (or deleted) between the directory's check of the
+	// password and the sign-in's transaction (audit reason provider_disabled).
+	ErrLDAPDirectoryDisabled = errors.New("auth: the directory is switched off")
+	// ErrNotDirectoryUser: the user does not sign in through a directory.
+	ErrNotDirectoryUser = errors.New("auth: the user is not a directory user")
 )
 
 // ldapIdentityLockNamespace is the first key of the per-identity advisory lock SignInLDAP takes, so two first
@@ -126,6 +133,55 @@ FROM users u WHERE u.ldap_directory_id = $1 AND u.ldap_unique_id = $2 FOR UPDATE
 	return u, true, nil
 }
 
+// directoryEnabled locks a directory's row FOR SHARE and refuses one that is switched off or gone
+// (ErrLDAPDirectoryDisabled).
+func directoryEnabled(ctx context.Context, tx pgx.Tx, directoryID uuid.UUID) error {
+	var enabled bool
+	err := tx.QueryRow(ctx, "SELECT enabled FROM ldap_directories WHERE id = $1 FOR SHARE", directoryID).Scan(&enabled)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return ErrLDAPDirectoryDisabled
+	case err != nil:
+		return fmt.Errorf("read the directory: %w", err)
+	case !enabled:
+		return ErrLDAPDirectoryDisabled
+	}
+	return nil
+}
+
+// EndDirectoryAccess ends the access of every user of a directory that is being switched off, inside the caller's
+// transaction, which must already have updated the directory's row: a sign-in that has not locked that row yet waits
+// for the switch-off and is refused (directoryEnabled), and one that locked it first has committed its session before
+// the users are read here. The users' rows are locked in ID order; for each one every session is ended and every API
+// token revoked, as for a refusal that says the user has no access any more (endAccess, reason provider_disabled),
+// audited by a: token.revoked per token and one user.sessions_ended per user that had a session or a token to end.
+// signedOut is the number of those users.
+func (s *Service) EndDirectoryAccess(ctx context.Context, tx pgx.Tx, a audit.Actor, directoryID uuid.UUID) (signedOut int, err error) {
+	rows, err := tx.Query(ctx, "SELECT id FROM users WHERE ldap_directory_id = $1 ORDER BY id FOR UPDATE", directoryID)
+	if err != nil {
+		return 0, fmt.Errorf("lock the directory's users: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return 0, fmt.Errorf("lock the directory's users: %w", err)
+	}
+	var events []audit.Event
+	for _, id := range ids {
+		ended, err := s.endAccess(ctx, tx, a, id, ldapReasonDisabled)
+		if err != nil {
+			return 0, err
+		}
+		if ended.Details["ended_count"] == "0" && ended.Details["revoked_tokens_count"] == "0" {
+			continue // nothing to end: no row for a user who was not signed in
+		}
+		events = append(events, ended)
+	}
+	return len(events), s.appendAll(ctx, tx, events)
+}
+
+// ldapReasonDisabled is the refusal reason of a switched-off directory (ldap.ReasonDisabled).
+const ldapReasonDisabled = "provider_disabled"
+
 // provisionLDAPUser inserts a new directory user (provisionUser): no password, the role from the group mappings.
 // lastLogin is set only when the sign-in opens a full session (nil while MFA is pending; VerifyMFA sets it).
 func provisionLDAPUser(ctx context.Context, tx pgx.Tx, userID uuid.UUID, id LDAPIdentity, role rbac.Role, locale string, now time.Time, lastLogin *time.Time) (string, error) {
@@ -170,6 +226,12 @@ func (s *Service) SignInLDAP(ctx context.Context, id LDAPIdentity, role rbac.Rol
 			return fmt.Errorf("lock directory identity: %w", err)
 		}
 		if role, err = capRole(ctx, tx, role); err != nil {
+			return err
+		}
+		// The directory's row FOR SHARE, before the user's row (the order a switch-off takes them in, see
+		// EndDirectoryAccess): a switch-off that committed first refuses this sign-in, and one that waits for this
+		// transaction ends the session it opens.
+		if err := directoryEnabled(ctx, tx, id.DirectoryID); err != nil {
 			return err
 		}
 		now := s.clock.Now().UTC()
@@ -426,4 +488,72 @@ func deniedLoginName(id LDAPIdentity, reason string) string {
 		return string(r[:maxDeniedLoginRunes])
 	}
 	return id.Login
+}
+
+// RecordLDAPLockout records that the directory sign-in lockout locked a key (auth.ldap.lockout, result failure): scope
+// names the keys that were locked ("name", "account" or "name,account"), minutes how long. The lockout itself is the
+// HTTP layer's (in memory per process); this only writes the row. id.DirectoryID is required; id.UniqueID is set when
+// the directory found the entry (the account key's gate ran), and then the user of that identity, when one exists, is
+// the actor and the object, as in RefuseLDAP. The sign-in name is recorded under the rule of auth.ldap.denied
+// (deniedLoginName): only for an entry the directory found, never for a name nothing matched.
+func (s *Service) RecordLDAPLockout(ctx context.Context, id LDAPIdentity, scope string, minutes int, m Meta) error {
+	return db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		actor := audit.Actor{Type: audit.ActorSystem, Name: unknownUserName, IP: m.IP, RequestID: m.RequestID}
+		objectID := ""
+		if id.DirectoryID != uuid.Nil && uniqueIDRE.MatchString(id.UniqueID) {
+			var (
+				userID   uuid.UUID
+				username string
+			)
+			err := tx.QueryRow(ctx, "SELECT id, username::text FROM users WHERE ldap_directory_id = $1 AND ldap_unique_id = $2",
+				id.DirectoryID, id.UniqueID).Scan(&userID, &username)
+			switch {
+			case err == nil:
+				actor, objectID = userActor(userID, username, m), userID.String()
+			case !errors.Is(err, pgx.ErrNoRows):
+				return fmt.Errorf("read directory user: %w", err)
+			}
+		}
+		details := map[string]string{"directory_id": id.DirectoryID.String(), "scope": scope, "minutes": strconv.Itoa(minutes)}
+		if login := deniedLoginName(id, "bad_credentials"); login != "" {
+			details["login_name"] = login
+		}
+		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: actor, Action: "auth.ldap.lockout", ObjectType: "user", ObjectID: objectID,
+			Result: audit.Failure, Details: details})
+		return err
+	})
+}
+
+// UnlockDirectorySignIn records an Administrator's ending of a directory user's sign-in lockout
+// (user.directory_unlocked by p, under the user's row lock). The lockout lives in the HTTP layer's memory: peek is
+// called with the user's directory identity inside the transaction and returns what the row records about it (which
+// keys were locked); the caller clears the keys once this returns without an error, so a lockout is never ended
+// without its row. A user who does not sign in through a directory is refused with ErrNotDirectoryUser, a missing one
+// with ErrNotFound.
+func (s *Service) UnlockDirectorySignIn(ctx context.Context, p Principal, m Meta, id uuid.UUID, peek func(LDAPIdentity) map[string]string) (LDAPIdentity, error) {
+	var ident LDAPIdentity
+	details := map[string]string{}
+	err := s.adminChange(ctx, p.Actor(m), id, "user.directory_unlocked", details, func(tx pgx.Tx) error {
+		var (
+			source      string
+			directoryID *uuid.UUID
+			uniqueID    *string
+			login       *string
+		)
+		if err := tx.QueryRow(ctx, "SELECT auth_source, ldap_directory_id, ldap_unique_id, ldap_login FROM users WHERE id = $1", id).
+			Scan(&source, &directoryID, &uniqueID, &login); err != nil {
+			return fmt.Errorf("read directory user: %w", err)
+		}
+		if source != AuthLDAP || directoryID == nil || uniqueID == nil || login == nil {
+			return ErrNotDirectoryUser
+		}
+		ident = LDAPIdentity{DirectoryID: *directoryID, UniqueID: *uniqueID, Login: *login}
+		details["directory_id"] = directoryID.String()
+		maps.Copy(details, peek(ident))
+		return nil
+	})
+	if err != nil {
+		return LDAPIdentity{}, err
+	}
+	return ident, nil
 }

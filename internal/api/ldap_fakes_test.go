@@ -35,6 +35,22 @@ func (f *fakeAuth) RefuseLDAP(ctx context.Context, id auth.LDAPIdentity, reason 
 	return nil
 }
 
+func (f *fakeAuth) RecordLDAPLockout(ctx context.Context, id auth.LDAPIdentity, scope string, minutes int, m auth.Meta) error {
+	if f.RecordLDAPLockoutFn != nil {
+		return f.RecordLDAPLockoutFn(ctx, id, scope, minutes, m)
+	}
+	return nil
+}
+
+func (f *fakeAuth) UnlockDirectorySignIn(ctx context.Context, p auth.Principal, m auth.Meta, id uuid.UUID,
+	peek func(auth.LDAPIdentity) map[string]string,
+) (auth.LDAPIdentity, error) {
+	if f.UnlockDirectorySignInFn != nil {
+		return f.UnlockDirectorySignInFn(ctx, p, m, id, peek)
+	}
+	return auth.LDAPIdentity{}, errNotConfigured
+}
+
 // fakeLDAP implements LDAPService: one function field per method (errNotConfigured when nil), a call counter. The
 // public list answers empty by default (testDeps).
 type fakeLDAP struct {

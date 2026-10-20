@@ -504,7 +504,9 @@ func hasUsers(ctx context.Context, q db.Querier, id uuid.UUID) (bool, error) {
 // PEM authority needs the password again (a 422 on bind_password), so the stored one is never sent to another server
 // or account. While the directory has users, its unique id attribute cannot change (ErrDirectoryInUse): its users are
 // matched by that attribute's value. Its addresses can (servers of one directory hold the same entries): removing and
-// reordering need nothing, adding needs the password and is audited with addresses_added_count.
+// reordering need nothing, adding needs the password and is audited with addresses_added_count. Switching a directory
+// off ends, in the same transaction, every session and API token of its users (auth.EndDirectoryAccess, reason
+// provider_disabled), audited with signed_out_count.
 func (s *Service) UpdateDirectory(ctx context.Context, a audit.Actor, id uuid.UUID, version int, p DirectoryPatch) (Directory, error) {
 	cur, err := loadDirectory(ctx, s.pool, id)
 	if err != nil {
@@ -596,6 +598,18 @@ WHERE id = $1 AND version = $2`, id, version, d.Name, d.Addresses, d.UserBaseDN,
 			}
 		}
 		details := directoryDetails(d)
+		if cur.Enabled && !d.Enabled {
+			// Switching off ends its users' access at once (sessions and API tokens), after the directory's row was
+			// updated above, so no sign-in can slip in between (auth.EndDirectoryAccess).
+			if s.auth == nil {
+				return errors.New("ldap: switching a directory off needs the auth service")
+			}
+			n, err := s.auth.EndDirectoryAccess(ctx, tx, a, id)
+			if err != nil {
+				return err
+			}
+			details["signed_out_count"] = strconv.Itoa(n)
+		}
 		details["bind_replaced"] = strconv.FormatBool(p.BindPassword != nil)
 		if n := addedAddresses(cur.Addresses, d.Addresses); n > 0 {
 			details["addresses_added_count"] = strconv.Itoa(n)

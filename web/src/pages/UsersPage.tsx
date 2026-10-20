@@ -11,6 +11,7 @@ import {
   resetUserMfa,
   resetUserPassword,
   revokeUserSessions,
+  unlockDirectorySignIn,
   updateUser,
 } from '../api/endpoints';
 import type { Role, User } from '../api/types';
@@ -33,6 +34,7 @@ type Dialog =
   | { kind: 'resetPassword'; user: User }
   | { kind: 'resetMfa'; user: User }
   | { kind: 'revoke'; user: User }
+  | { kind: 'unlock'; user: User }
   | { kind: 'toggle'; user: User };
 
 export function UsersPage() {
@@ -114,6 +116,16 @@ export function UsersPage() {
                 </Table.Td>
                 <Table.Td>
                   <StatusBadge tone={u.disabled ? 'neutral' : 'success'}>{u.disabled ? t('users.status.disabled') : t('users.status.active')}</StatusBadge>
+                  {u.directory_sign_in_locked_until && (
+                    <div className={classes.method}>
+                      <StatusBadge tone="warning" icon="LockKeyhole">
+                        {t('users.status.directoryLocked')}
+                      </StatusBadge>
+                      <p className={classes.secondary}>
+                        {t('users.status.directoryLockedUntil', { time: formatDateTime(u.directory_sign_in_locked_until, i18n.language) })}
+                      </p>
+                    </div>
+                  )}
                 </Table.Td>
                 <Table.Td className={classes.time}>{u.last_login_at ? formatDateTime(u.last_login_at, i18n.language) : t('users.never')}</Table.Td>
                 <Table.Td>
@@ -136,7 +148,7 @@ export function UsersPage() {
       {dialog?.kind === 'manage' && <ManageModal user={dialog.user} onChoose={setDialog} onClose={close} />}
       {dialog?.kind === 'edit' && <EditUserModal user={dialog.user} onClose={close} />}
       {dialog?.kind === 'resetPassword' && <ResetPasswordModal user={dialog.user} onClose={close} />}
-      {(dialog?.kind === 'resetMfa' || dialog?.kind === 'revoke' || dialog?.kind === 'toggle') && (
+      {(dialog?.kind === 'resetMfa' || dialog?.kind === 'revoke' || dialog?.kind === 'toggle' || dialog?.kind === 'unlock') && (
         <ConfirmModal kind={dialog.kind} user={dialog.user} onClose={close} />
       )}
     </Stack>
@@ -211,6 +223,13 @@ function ManageModal({ user, onChoose, onClose }: { user: User; onChoose: (d: Di
         <Button variant="default" onClick={() => onChoose({ kind: 'revoke', user })}>
           {t('users.actions.revokeSessions')}
         </Button>
+        {/* Three failed directory passwords lock a directory user's sign-in for 45 minutes; anyone who knows the name
+            can cause it, so an Administrator can end it. */}
+        {user.auth_source === 'ldap' && user.directory_sign_in_locked_until && (
+          <Button variant="default" onClick={() => onChoose({ kind: 'unlock', user })}>
+            {t('users.actions.unlockDirectory')}
+          </Button>
+        )}
         <Button variant="default" color={user.disabled ? undefined : 'red'} onClick={() => onChoose({ kind: 'toggle', user })}>
           {user.disabled ? t('users.actions.enable') : t('users.actions.disable')}
         </Button>
@@ -357,7 +376,7 @@ function ResetPasswordModal({ user, onClose }: { user: User; onClose: () => void
   );
 }
 
-function ConfirmModal({ kind, user, onClose }: { kind: 'resetMfa' | 'revoke' | 'toggle'; user: User; onClose: () => void }) {
+function ConfirmModal({ kind, user, onClose }: { kind: 'resetMfa' | 'revoke' | 'toggle' | 'unlock'; user: User; onClose: () => void }) {
   const { t } = useTranslation();
   const { perform, error, busy } = useUserAction(onClose);
   const name = user.username;
@@ -375,6 +394,11 @@ function ConfirmModal({ kind, user, onClose }: { kind: 'resetMfa' | 'revoke' | '
     text = t('users.confirm.revokeText');
     button = t('users.actions.revokeSessions');
     action = () => revokeUserSessions(user.id);
+  } else if (kind === 'unlock') {
+    title = t('users.confirm.unlockTitle', { name });
+    text = t('users.confirm.unlockText');
+    button = t('users.actions.unlockDirectory');
+    action = () => unlockDirectorySignIn(user.id);
   } else if (user.disabled) {
     title = t('users.confirm.enableTitle', { name });
     text = t('users.confirm.enableText');

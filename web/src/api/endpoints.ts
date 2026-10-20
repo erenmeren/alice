@@ -163,6 +163,10 @@ export const resetUserPassword = (id: string, password: string) =>
 export const revokeUserSessions = (id: string) =>
   apiFetch<void>(`${v1}/users/${encodeURIComponent(id)}/actions/revoke-sessions`, { method: 'POST' });
 
+// unlockDirectorySignIn ends a directory user's sign-in lockout after failed directory passwords.
+export const unlockDirectorySignIn = (id: string) =>
+  apiFetch<void>(`${v1}/users/${encodeURIComponent(id)}/actions/unlock-directory-sign-in`, { method: 'POST' });
+
 // API tokens
 export function listTokens(userId?: string): Promise<{ items: ApiToken[] }> {
   const q = userId ? `?user_id=${encodeURIComponent(userId)}` : '';

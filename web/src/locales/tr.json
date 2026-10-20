@@ -363,7 +363,9 @@
     },
     "status": {
       "active": "Etkin",
-      "disabled": "Devre dışı"
+      "disabled": "Devre dışı",
+      "directoryLocked": "Dizinle oturum açma kilitli",
+      "directoryLockedUntil": "Bitiş: {{time}}, üç başarısız dizin parolasından sonra"
     },
     "mfa": {
       "atProvider": "Kimlik sağlayıcıda"
@@ -373,6 +375,7 @@
       "resetMfa": "İki adımlı girişi sıfırla",
       "resetPassword": "Yeni parola belirle",
       "revokeSessions": "Tüm oturumları kapat",
+      "unlockDirectory": "Dizinle oturum açma kilidini kaldır",
       "disable": "Devre dışı bırak",
       "enable": "Etkinleştir"
     },
@@ -386,7 +389,9 @@
       "disableButton": "Kullanıcıyı devre dışı bırak",
       "enableTitle": "Etkinleştirilecek kullanıcı: {{name}}",
       "enableText": "Kişi parolası ve doğrulama uygulamasıyla yeniden giriş yapabilir.",
-      "enableButton": "Kullanıcıyı etkinleştir"
+      "enableButton": "Kullanıcıyı etkinleştir",
+      "unlockTitle": "Dizinle oturum açma kilidi kaldırılacak kullanıcı: {{name}}",
+      "unlockText": "Üç başarısız dizin parolasından sonraki kilit şimdi sona erer ve kişi dizin parolasıyla hemen oturum açabilir. Aynı dizin hesabının diğer adları kendi kilitleri bitene kadar kilitli kalır. Kilidin kaldırılması denetim kaydına yazılır."
     },
     "sso": "Çoklu oturum açma",
     "page": {
@@ -699,6 +704,8 @@
       "sso_admin_role_disallowed": "SSO kullanıcıları Yönetici olabilir kapatıldı",
       "auth_oidc_denied": "Çoklu oturum açma reddedildi",
       "auth_ldap_denied": "Dizin ile oturum açma reddedildi",
+      "auth_ldap_lockout": "Başarısız parolalardan sonra dizinle oturum açma kilitlendi",
+      "user_directory_unlocked": "Dizinle oturum açma kilidi kaldırıldı",
       "user_provisioned": "Kullanıcı çoklu oturum açmayla oluşturuldu",
       "user_role_synced": "Rol kimlik sağlayıcıdan güncellendi",
       "user_sessions_ended": "Oturumlar sonlandırıldı",
@@ -3827,7 +3834,8 @@
       "groupNameHelp": "Grup değeri olarak grubun DN'sini kullanmak için boş bırakın.",
       "caPem": "Sertifika yetkilisi (isteğe bağlı, PEM)",
       "mfaRequired": "Dizin parolasından sonra Alice doğrulama kodunu iste",
-      "enabled": "Bu dizinle oturum açmaya izin ver"
+      "enabled": "Bu dizinle oturum açmaya izin ver",
+      "switchOffWarning": "Kaydettiğinizde bu dizinle oturum açmış tüm kullanıcıların oturumları hemen kapatılır ve API anahtarları çalışmaz olur. Oturum açmaya yeniden izin verene kadar bu dizinle oturum açamazlar."
     },
     "templateRules": "Filtre kuralları: {login} ve {dn} yalnızca değer yerinde durur, örneğin (uid={login}). Süslü parantezin kendisini \\7b ya da \\7d olarak yazın. Denetim karakterlerine izin verilmez.",
     "save": "Dizini kaydet",

@@ -297,6 +297,7 @@ func TestDirectoryErrorsAreMapped(t *testing.T) {
 	}{
 		{auth.ErrDirectoryUser, http.StatusConflict, "ALC-USR-0003"},
 		{auth.ErrLDAPEnrolmentRequired, http.StatusConflict, "ALC-LDAP-0007"},
+		{auth.ErrNotDirectoryUser, http.StatusConflict, "ALC-LDAP-0009"},
 		{auth.ErrLDAPEmailInUse, http.StatusUnauthorized, "ALC-LDAP-0001"},
 		{auth.ErrLDAPUserDisabled, http.StatusUnauthorized, "ALC-LDAP-0001"},
 		{auth.ErrLDAPUserLocked, http.StatusUnauthorized, "ALC-LDAP-0001"},
@@ -339,6 +340,7 @@ func TestDirectoryRefusalReasons(t *testing.T) {
 		{auth.ErrLDAPUserLocked, "locked", ErrLDAPSignInRefused},
 		{auth.ErrLDAPIdentityInvalid, "identity_invalid", ErrLDAPSignInRefused},
 		{auth.ErrLDAPOtherUser, "stepup_other_user", ErrLDAPSignInRefused},
+		{auth.ErrLDAPDirectoryDisabled, "provider_disabled", ErrLDAPDirectoryUnavailable},
 		{&ldap.LoginError{Reason: ldap.ReasonBadCredentials}, "bad_credentials", ErrLDAPSignInRefused},
 		{&ldap.LoginError{Reason: ldap.ReasonUnreachable}, "directory_unreachable", ErrLDAPDirectoryUnavailable},
 	} {
@@ -384,7 +386,7 @@ func TestLDAPCodesHaveTroubleshootingSections(t *testing.T) {
 			}
 		}
 	}
-	assert.Equal(t, 8, n)
+	assert.Equal(t, 9, n)
 	// The reused codes name directory users too.
 	for _, reason := range []string{"user.sso_user", "sso.admin_mapping_disabled", "sso.admin_mappings_exist"} {
 		text := cat.T("en", "errors."+reason+".title", nil) + cat.T("en", "errors."+reason+".cause", nil)

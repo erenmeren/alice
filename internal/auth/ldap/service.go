@@ -49,6 +49,8 @@ type Config struct {
 	Clock   clock.Clock
 	Dial    func(ctx context.Context, network, addr string) (net.Conn, error) // nil: netaddr.DialContext
 	Log     *slog.Logger
+	// Auth ends the sessions and API tokens of a directory's users when the directory is switched off (EndDirectoryAccess).
+	Auth *auth.Service
 	// NewClient replaces the network client (tests of the callers); nil: the real client.
 	NewClient func() Client
 }
@@ -64,6 +66,7 @@ type Service struct {
 	clock     clock.Clock
 	dial      func(ctx context.Context, network, addr string) (net.Conn, error)
 	log       *slog.Logger
+	auth      *auth.Service
 	newClient func() Client
 	limits    timeouts
 	logged    *ratelimit.Recent // directories whose failing service bind was logged in the last misconfiguredLogEvery
@@ -75,7 +78,7 @@ func New(c Config) *Service {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, dial: c.Dial, log: log, newClient: c.NewClient,
+	return &Service{pool: c.Pool, keyring: c.Keyring, audit: c.Audit, clock: c.Clock, dial: c.Dial, log: log, auth: c.Auth, newClient: c.NewClient,
 		limits: timeouts{dial: DialTimeout, operation: OperationTimeout, verify: VerifyTimeout},
 		logged: ratelimit.NewRecent(c.Clock, misconfiguredLogEvery, 100)}
 }

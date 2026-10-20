@@ -347,6 +347,7 @@ test.describe('Directory sign-in (LDAP)', () => {
         'ldap.mapping_created',
         'ldap.directory_changed',
         'auth.ldap.denied',
+        'auth.ldap.lockout',
         'user.provisioned',
         'auth.stepup',
         'user.sessions_ended',

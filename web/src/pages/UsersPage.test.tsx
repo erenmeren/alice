@@ -338,6 +338,43 @@ describe('UsersPage access and step-up', () => {
     expect(body).not.toHaveProperty('role');
   });
 
+  it('shows a directory sign-in lockout and unlocks it after a confirmation', async () => {
+    signedInAs(adminSession);
+    const dir: User = { ...operator, id: 'u-dir', username: 'deniz', auth_source: 'ldap', ldap_directory_id: DIRECTORY_ID, mfa_enrolled: true };
+    const locked: User = { ...dir, directory_sign_in_locked_until: '2026-10-20T10:45:00Z' };
+    let current = locked;
+    const calls: string[] = [];
+    server.use(
+      http.get('/api/v1/users', () => HttpResponse.json({ items: [operator, current] })),
+      http.get('/api/v1/ldap/directories', () => HttpResponse.json({ items: [directoryFixture()] })),
+      http.post('/api/v1/users/:id/actions/:action', ({ params }) => {
+        calls.push(`${String(params.id)} ${String(params.action)}`);
+        current = dir;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await renderRoute('/users');
+    const row = (await screen.findByText('deniz')).closest('tr')!;
+    expect(within(row).getByText('Directory sign-in locked')).toBeInTheDocument();
+    expect(within(row).getByText(/after three failed directory passwords/)).toBeInTheDocument();
+    const local = screen.getByText('operator1').closest('tr')!;
+    expect(within(local).queryByText('Directory sign-in locked')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage operator1' }));
+    expect(within(await screen.findByRole('dialog')).queryByRole('button', { name: 'Unlock directory sign-in' })).not.toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('button', { name: 'Manage deniz' }));
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Unlock directory sign-in' }));
+    const confirm = await screen.findByRole('dialog', { name: 'Unlock directory sign-in for deniz?' });
+    expect(confirm).toHaveTextContent('Other names of the same directory account stay locked until their own lock ends.');
+    expect(calls).toEqual([]);
+    await userEvent.click(within(confirm).getByRole('button', { name: 'Unlock directory sign-in' }));
+    await waitFor(() => expect(calls).toEqual(['u-dir unlock-directory-sign-in']));
+    await waitFor(() => expect(screen.queryByText('Directory sign-in locked')).not.toBeInTheDocument());
+  });
+
   it('leaves the directory name out when the directories cannot be read without a fresh verification', async () => {
     signedInAs(adminSession);
     withUsers([{ ...operator, id: 'u-dir', username: 'deniz', auth_source: 'ldap', ldap_directory_id: DIRECTORY_ID }]);

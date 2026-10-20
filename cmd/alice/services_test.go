@@ -137,4 +137,5 @@ func TestReleaseMailSettingsHaveNoDialerOverrideOrFallback(t *testing.T) {
 	assert.Same(t, svc.auditLog, lc.Audit)
 	assert.Same(t, clk, lc.Clock)
 	assert.Same(t, log, lc.Log)
+	assert.Same(t, svc.auth, lc.Auth, "switching a directory off ends its users' sessions through the auth service")
 }

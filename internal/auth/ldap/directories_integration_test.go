@@ -359,3 +359,46 @@ func TestMappingCreateWaitsForTheSwitch(t *testing.T) {
 	require.NoError(t, tx.Commit(x.ctx))
 	assert.ErrorIs(t, <-done, ldap.ErrAdminMappingDisabled)
 }
+
+// Switching a directory off ends its users' sessions and API tokens in the same transaction (audited with
+// signed_out_count and one user.sessions_ended per user, by the Administrator); other changes, and switching it on
+// again, end nothing.
+func TestSwitchingADirectoryOffEndsItsUsersAccess(t *testing.T) {
+	x := newHarness(t)
+	signIn := func(uniqueID, login string) {
+		_, err := x.auth.SignInLDAP(x.ctx, auth.LDAPIdentity{DirectoryID: x.dir.ID, UniqueID: uniqueID, Login: login}, rbac.Operator, false, auth.Meta{})
+		require.NoError(t, err)
+	}
+	signIn("a1", "ada")
+	signIn("a1", "ada")
+	signIn("b2", "berk")
+	live := func() int {
+		return x.count(t, `SELECT count(*) FROM sessions s JOIN users u ON u.id = s.user_id WHERE u.ldap_directory_id = $1 AND s.revoked_at IS NULL`, x.dir.ID)
+	}
+	require.Equal(t, 3, live())
+	lastChange := func(key string) string {
+		var v *string
+		require.NoError(t, x.d.Owner.QueryRow(x.ctx, `SELECT details->>$1 FROM audit_log WHERE action = 'ldap.directory_changed'
+ORDER BY seq DESC LIMIT 1`, key).Scan(&v))
+		if v == nil {
+			return "-"
+		}
+		return *v
+	}
+
+	x.update(t, ldap.DirectoryPatch{Name: ptr("Corp LDAP (renamed)")})
+	assert.Equal(t, 3, live(), "another change ends nothing")
+	assert.Equal(t, "-", lastChange("signed_out_count"))
+
+	x.update(t, ldap.DirectoryPatch{Enabled: ptr(false)})
+	assert.Zero(t, live())
+	assert.Equal(t, "2", lastChange("signed_out_count"))
+	assert.Equal(t, 2, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.sessions_ended' AND actor_name = 'ada-admin'
+AND details->>'reason' = 'provider_disabled'`))
+
+	x.update(t, ldap.DirectoryPatch{Name: ptr("Corp LDAP")})
+	assert.Equal(t, "-", lastChange("signed_out_count"), "already off: nothing to end")
+	x.update(t, ldap.DirectoryPatch{Enabled: ptr(true)})
+	assert.Equal(t, "-", lastChange("signed_out_count"))
+	assert.Equal(t, 2, x.count(t, `SELECT count(*) FROM audit_log WHERE action = 'user.sessions_ended'`))
+}

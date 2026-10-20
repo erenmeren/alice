@@ -49,6 +49,7 @@ changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 | POST | `/api/v1/users/{id}/actions/reset-mfa` | `users.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/users/{id}/actions/reset-password` | `users.manage` | no | yes | no | no | no | yes | yes |
 | POST | `/api/v1/users/{id}/actions/revoke-sessions` | `users.manage` | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/unlock-directory-sign-in` | `users.manage` | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/tokens` | `session` | no | yes | yes | yes | no | no | yes |
 | POST | `/api/v1/tokens` | `session.stepup` | no | yes | yes | yes | no | yes | yes |
 | DELETE | `/api/v1/tokens/{id}` | `session` | no | yes | yes | yes | no | no | yes |

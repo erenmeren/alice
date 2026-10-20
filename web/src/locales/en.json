@@ -363,7 +363,9 @@
     },
     "status": {
       "active": "Active",
-      "disabled": "Disabled"
+      "disabled": "Disabled",
+      "directoryLocked": "Directory sign-in locked",
+      "directoryLockedUntil": "Until {{time}}, after three failed directory passwords"
     },
     "mfa": {
       "atProvider": "At the identity provider"
@@ -373,6 +375,7 @@
       "resetMfa": "Reset two-factor sign-in",
       "resetPassword": "Set a new password",
       "revokeSessions": "Sign out everywhere",
+      "unlockDirectory": "Unlock directory sign-in",
       "disable": "Disable",
       "enable": "Enable"
     },
@@ -386,7 +389,9 @@
       "disableButton": "Disable user",
       "enableTitle": "Enable {{name}}?",
       "enableText": "The person can sign in again with their password and authenticator app.",
-      "enableButton": "Enable user"
+      "enableButton": "Enable user",
+      "unlockTitle": "Unlock directory sign-in for {{name}}?",
+      "unlockText": "The lockout after three failed directory passwords ends now, and the person can sign in with their directory password at once. Other names of the same directory account stay locked until their own lock ends. The unlock is recorded in the audit log."
     },
     "sso": "Single sign-on",
     "page": {
@@ -699,6 +704,8 @@
       "sso_admin_role_disallowed": "SSO users may be Admin switched off",
       "auth_oidc_denied": "Single sign-on refused",
       "auth_ldap_denied": "Directory sign-in refused",
+      "auth_ldap_lockout": "Directory sign-in locked after failed passwords",
+      "user_directory_unlocked": "Directory sign-in unlocked",
       "user_provisioned": "User created by single sign-on",
       "user_role_synced": "Role updated from the identity provider",
       "user_sessions_ended": "Sessions ended",
@@ -3827,7 +3834,8 @@
       "groupNameHelp": "Leave empty to use the group's DN as the group value.",
       "caPem": "Certificate authority (optional, PEM)",
       "mfaRequired": "Ask for Alice's authenticator code after the directory password",
-      "enabled": "Allow sign-in with this directory"
+      "enabled": "Allow sign-in with this directory",
+      "switchOffWarning": "Saving signs out every signed-in user of this directory at once and stops their API tokens. They cannot sign in through it until you allow sign-in again."
     },
     "templateRules": "Filter rules: {login} and {dn} stand only in a value position, for example (uid={login}). Write a literal brace as \\7b or \\7d. Control characters are not allowed.",
     "save": "Save directory",

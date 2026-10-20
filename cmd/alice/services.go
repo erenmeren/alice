@@ -268,6 +268,7 @@ func ldapConfig(svc *services, clk clock.Clock, log *slog.Logger) ldap.Config {
 		Audit:   svc.auditLog,
 		Clock:   clk,
 		Log:     log,
+		Auth:    svc.auth,
 	}
 }
 

@@ -503,8 +503,11 @@ requests" (see the lockout below). The page never says more, on purpose. Work th
      group's full DN).
 4. **Too many requests** (HTTP 429, `ALC-SYS-0005`) for one name: three failed attempts for that name at that
    directory within 30 minutes lock it in Alice for 45 minutes, also for the right password and from every address.
-   Wait (the answer says how long). An Administrator cannot end it; a restart of Alice clears it. If it happens again,
-   check the audit log for `auth.ldap.denied` entries of that name: someone may be guessing. The general limit of 10
+   Wait (the answer says how long), or, for a person who has signed in before, an Administrator ends it on **People &
+   access**: the row shows **Directory sign-in locked**, and **Manage → Unlock directory sign-in** clears the person's
+   account and usual sign-in name (another name of the account, such as a UPN, stays locked until its lock ends). The
+   start of every lock is in the audit log as `auth.ldap.lockout` (**Directory sign-in locked after failed passwords**);
+   if it happens again, check the `auth.ldap.denied` entries of that name: someone may be guessing. The general limit of 10
    sign-in attempts a minute per address also answers "Too many requests"; wait a minute.
 5. **Everyone gets "The directory cannot be used"** although Test connection works: check whether **Allow sign-in with
    this directory** is on, whether the service account's password changed (Alice's log has a warning at most every 10
@@ -1655,6 +1658,14 @@ server again.
 **Likely cause.** Only directory users confirm with their directory password.
 
 **What to do.** Confirm with your authenticator code instead.
+
+## ALC-LDAP-0009: This user does not sign in through a directory
+
+**Meaning.** **Unlock directory sign-in** was asked for a user who does not sign in through a directory. (HTTP 409, reason `ldap.user_not_directory`.)
+
+**Likely cause.** Only a directory user's sign-in is locked after three failed directory passwords; local and single sign-on users have no such lock.
+
+**What to do.** For a local account's sign-in delay or lockout after failed attempts, run `alice admin unlock <username>` on the host (`make unlock ACCOUNT=<username>`).
 
 ## ALC-ROT-0001: This key already has a rotation policy
 

@@ -1071,8 +1071,12 @@ later one whose e-mail changed to a local account's; Alice never joins a directo
   session.
 - **Disable on People & access** ends the person's sessions at once and refuses their directory sign-in from then on.
   Use it to stop someone immediately.
-- **The directory switched off (Allow sign-in off):** nobody signs in through it, and each directory user's next
-  confirmation is refused and ends their sessions; open sessions are not ended by the switch itself.
+- **The directory switched off (Allow sign-in off):** saving the switch signs out every user of the directory at once:
+  all their sessions end and all their API tokens are revoked, in the same change (audit: **Sessions ended**,
+  `user.sessions_ended` with reason `provider_disabled`, by the Administrator, and `token.revoked` per token; the
+  **Directory changed** entry carries `signed_out_count`). Nobody signs in through it until sign-in is allowed again;
+  a sign-in whose password the directory accepted a moment before the switch is refused as well. The form says so
+  before you save.
 - **Renamed in the directory:** the person keeps their account (the unique ID decides); the stored sign-in name follows
   at their next sign-in.
 - **Deleting a directory** removes its mappings and its stored password. A directory through which people have signed
@@ -1122,8 +1126,19 @@ how many directory sign-ins run at once.
 **The trade-off.** Anyone who can reach the sign-in page can lock a person's directory sign-in in Alice for 45 minutes
 by typing three wrong passwords for their name (or any name of their account); this is the same trade-off as AD's own
 lockout, but in Alice only. Alice stops after three failed attempts per name and per account, so the guesses it sends
-stay below a typical directory lockout threshold; it cannot stop guesses sent to the directory by other means. There is no way for an Administrator to end this lockout: it is kept in memory, and
-only a restart of Alice clears it (`alice admin unlock` does not touch it). The local administrator is never affected.
+stay below a typical directory lockout threshold; it cannot stop guesses sent to the directory by other means. The local administrator is never affected.
+
+**Seeing and ending a lockout.** When a name or an account is locked, Alice writes one audit entry **Directory sign-in
+locked after failed passwords** (`auth.ldap.lockout`, result failure) with the directory, `scope` (`name`, `account` or
+`name,account`) and `minutes`; when the directory found the entry, the person (if they have signed in before) is the
+actor and the sign-in name is recorded, otherwise neither is (the same rule as for refusals). On **People & access** a
+locked directory user shows **Directory sign-in locked** with the time it ends, and **Manage** offers **Unlock directory
+sign-in** (Administrator, with a fresh verification; `POST /api/v1/users/{id}/actions/unlock-directory-sign-in`). It
+ends the lock and clears the failures of the person's account and of the sign-in name the directory last returned for
+them, and is recorded as **Directory sign-in unlocked** (`user.directory_unlocked`, with `name_locked` and
+`account_locked`). Other names of the same account (a UPN beside the `sAMAccountName`) keep their own name lock until it
+ends; the person signs in with their usual name. The 3-failure, 45-minute rule itself is unchanged. `alice admin
+unlock` does not touch this lockout (it ends a local account's block), and a restart of Alice clears it.
 Each lockout table holds 100,000 keys; when it is full of keys that are still counting, locked or in use, keys that
 are not in it yet are refused (and Alice logs a warning, at most once every 10 minutes) until entries expire (an entry lives for the 30-minute window after its first failure, or until
 its lock ends: up to about 75 minutes after the first failure), while the names already in it are answered as usual.
@@ -1149,7 +1164,9 @@ recovery codes safe. A directory user can never take that place.
   every exchange has a timeout.
 - A directory administrator controls group membership and therefore roles in Alice, and can reset a person's password;
   with MFA on, Alice's authenticator code still stands in the way.
-- The lockout and the 1.5-second delay are kept in memory per Alice process.
+- The lockout and the 1.5-second delay are kept in memory per Alice process. Alice runs as one process; if you ever
+  run more than one behind a load balancer, each keeps its own count and **Unlock directory sign-in** acts only on the
+  one that answers.
 
 ## Saved views and export
 

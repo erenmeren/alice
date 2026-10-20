@@ -287,7 +287,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	if s.dir == nil {
 		s.dir = newFakeDirectory(s.clock)
 	}
-	s.ldap = ldap.New(ldap.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Log: log,
+	s.ldap = ldap.New(ldap.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Log: log, Auth: s.auth,
 		NewClient: func() ldap.Client { return s.dir }})
 	s.discovery = discoverysvc.New(discoverysvc.Config{Pool: s.db.App, Audit: auditLog, Queue: s.queue, Clock: s.clock, Resolver: stackResolver{s}})
 	s.runner = s.newRunner("", 0)

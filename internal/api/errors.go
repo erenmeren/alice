@@ -207,6 +207,7 @@ var (
 	ErrLDAPSignInTestFailed     = ErrorCode{Code: "ALC-LDAP-0006", Reason: "ldap.signin_test_failed", Status: http.StatusUnprocessableEntity}
 	ErrLDAPEnrolmentRequired    = ErrorCode{Code: "ALC-LDAP-0007", Reason: "ldap.enrolment_required", Status: http.StatusConflict}
 	ErrLDAPNotDirectoryUser     = ErrorCode{Code: "ALC-LDAP-0008", Reason: "ldap.not_directory_user", Status: http.StatusConflict}
+	ErrLDAPUserNotDirectory     = ErrorCode{Code: "ALC-LDAP-0009", Reason: "ldap.user_not_directory", Status: http.StatusConflict}
 
 	// Phase 6: rotation policies and runs (R41, C11). The run results (rotations.result_code) and the location
 	// errors (rotation_locations.error_code) are stored reasons; the API also answers the request refusals with them.
@@ -493,7 +494,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrSSONoAccess, ErrSSOGroupsOverage, ErrSSOEmailInUse, ErrSSOIdPUnreachable, ErrSSOLoginInvalid, ErrSSOLoginExpired,
 		ErrSSOUserDisabled, ErrSSOProviderDisabled, ErrSSOStepUpOtherUser, ErrSSOIdPError, ErrSSONotSSOUser,
 		ErrLDAPSignInRefused, ErrLDAPDirectoryUnavailable, ErrLDAPDirectoryInUse, ErrLDAPConnectionTestFailed,
-		ErrLDAPTooManyDirectories, ErrLDAPSignInTestFailed, ErrLDAPEnrolmentRequired, ErrLDAPNotDirectoryUser,
+		ErrLDAPTooManyDirectories, ErrLDAPSignInTestFailed, ErrLDAPEnrolmentRequired, ErrLDAPNotDirectoryUser, ErrLDAPUserNotDirectory,
 		ErrRotPolicyExists, ErrRotInProgress, ErrRotPlanChanged, ErrRotNothingToRotate, ErrRotNotWaiting, ErrRotAddFailed,
 		ErrRotVerifyFailed, ErrRotUndoFailed, ErrRotRemoveIncomplete, ErrRotDecisionTimeout, ErrRotPausedLicense,
 		ErrRotCancelledLicense, ErrRotStopped, ErrRotPolicyOff, ErrRotNewKeyFailed, ErrRotRetriesExhausted,
@@ -723,6 +724,7 @@ var errorMap = []struct {
 	// Phase 7 (C15). An untrusted certificate (a *notify.CertError, or the bare sentinel) is also a TLS failure: it is
 	// matched first. A stale settings version is the precondition answer of every If-Match.
 	{auth.ErrSSOUser, ErrSSOUser, nil},
+	{auth.ErrNotDirectoryUser, ErrLDAPUserNotDirectory, nil},
 	{notify.ErrNotConfigured, ErrSMTPNotConfigured, nil},
 	{notify.ErrSMTPUntrusted, ErrSMTPUntrusted, nil},
 	{notify.ErrSMTPConnect, ErrSMTPConnect, nil},

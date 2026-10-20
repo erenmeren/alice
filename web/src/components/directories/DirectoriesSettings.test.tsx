@@ -222,6 +222,14 @@ describe('Directories settings', () => {
     expect(within(dialog).getByLabelText(/^Addresses/)).toHaveValue('ldaps://dc1.corp.example:636\nldaps://dc2.corp.example');
     await userEvent.clear(within(dialog).getByLabelText(/^Name shown/));
     await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Renamed');
+    expect(within(dialog).queryByTestId('directory-switch-off-warning')).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('switch', { name: 'Allow sign-in with this directory' }));
+    // Switching an enabled directory off signs its users out at once: the form says so before it is saved.
+    expect(within(dialog).getByTestId('directory-switch-off-warning')).toHaveTextContent(
+      'Saving signs out every signed-in user of this directory at once and stops their API tokens.',
+    );
+    await userEvent.click(within(dialog).getByRole('switch', { name: 'Allow sign-in with this directory' }));
+    expect(within(dialog).queryByTestId('directory-switch-off-warning')).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole('switch', { name: 'Allow sign-in with this directory' }));
     await save(dialog);
     await waitFor(() => expect(patch).toBeDefined());

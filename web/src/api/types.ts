@@ -29,6 +29,9 @@ export interface User {
   sso_provider_id: string | null;
   // The directory of a directory user; null for every other user.
   ldap_directory_id: string | null;
+  // Only in the user administration's answers: when a directory user's directory sign-in lockout ends (three failed
+  // directory passwords lock it for 45 minutes); absent when it is not locked.
+  directory_sign_in_locked_until?: string;
 }
 
 export type AuthSource = 'local' | 'oidc' | 'ldap';

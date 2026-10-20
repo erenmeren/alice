@@ -86,6 +86,10 @@ type AuthService interface {
 	StepUpLDAP(ctx context.Context, p auth.Principal, id auth.LDAPIdentity, role rbac.Role, mfaCode string, mfaRequired bool,
 		m auth.Meta) (auth.SessionResult, error)
 	RefuseLDAP(ctx context.Context, id auth.LDAPIdentity, reason string, m auth.Meta) error
+	// RecordLDAPLockout writes auth.ldap.lockout when the in-memory lockout locks a key; UnlockDirectorySignIn records an
+	// Administrator's unlock (the keys are cleared by the caller once it returns).
+	RecordLDAPLockout(ctx context.Context, id auth.LDAPIdentity, scope string, minutes int, m auth.Meta) error
+	UnlockDirectorySignIn(ctx context.Context, p auth.Principal, m auth.Meta, id uuid.UUID, peek func(auth.LDAPIdentity) map[string]string) (auth.LDAPIdentity, error)
 }
 
 // SetupService is the part of setup.Service the HTTP layer uses.

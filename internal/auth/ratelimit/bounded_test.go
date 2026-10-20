@@ -179,3 +179,38 @@ func TestBoundedLockoutNeverEvictsLiveKeys(t *testing.T) {
 	r3.Release()
 	reserve(t, l, "s").Release()
 }
+
+// LockedUntil reports a lock and its end; Clear forgets one key (its lock and its failures) and nothing else, and an
+// attempt in flight on the cleared key settles as a no-op.
+func TestBoundedLockoutLockedUntilAndClear(t *testing.T) {
+	c := clock.NewFake(t0)
+	l := NewBoundedLockout(c, 3, 30*time.Minute, 45*time.Minute, 100)
+	_, locked := l.LockedUntil("k")
+	assert.False(t, locked, "an unknown key")
+	failN(t, l, "k", 2)
+	_, locked = l.LockedUntil("k")
+	assert.False(t, locked, "counting is not locked")
+	assert.False(t, l.Clear("k"), "it was not locked")
+	failN(t, l, "k", 2)
+	_, locked = l.LockedUntil("k")
+	assert.False(t, locked, "Clear forgot the failures")
+	failN(t, l, "k", 1)
+	until, locked := l.LockedUntil("k")
+	require.True(t, locked)
+	assert.Equal(t, t0.Add(45*time.Minute), until)
+	failN(t, l, "other", 3)
+
+	failN(t, l, "other2", 2)
+	inflight := reserve(t, l, "other2")
+	assert.True(t, l.Clear("k"))
+	assert.False(t, l.Locked("k"))
+	assert.False(t, reserve(t, l, "k").Fail(), "a cleared key starts from nothing")
+	assert.True(t, l.Locked("other"), "another key keeps its lock")
+	assert.False(t, l.Clear("other2"))
+	assert.False(t, inflight.Fail(), "an attempt in flight on a cleared key counts nothing")
+	_, locked = l.LockedUntil("other2")
+	assert.False(t, locked)
+	c.Advance(45 * time.Minute)
+	_, locked = l.LockedUntil("other")
+	assert.False(t, locked, "a lock that ended")
+}

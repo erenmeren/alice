@@ -143,6 +143,10 @@ type User struct {
 	SSOProviderID *uuid.UUID // the identity provider of an SSO user, nil for a local user
 	// LDAPDirectoryID is the directory of a directory user, nil for every other user.
 	LDAPDirectoryID *uuid.UUID
+	// LDAPUniqueID and LDAPLogin are a directory user's unique id at the directory and the sign-in name the directory
+	// last returned (the keys of the directory sign-in lockout); empty for every other user. Never sent to clients.
+	LDAPUniqueID string
+	LDAPLogin    string
 }
 
 // Authentication sources of a user (users.auth_source).

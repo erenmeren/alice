@@ -792,6 +792,11 @@
         "title": "Your account does not sign in through a directory.",
         "cause": "Only directory users confirm with their directory password.",
         "action": "Confirm with your authenticator code instead."
+      },
+      "user_not_directory": {
+        "title": "This user does not sign in through a directory.",
+        "cause": "Only a directory user's sign-in can be locked after failed directory passwords.",
+        "action": "For a local account's sign-in delay or lockout, use alice admin unlock on the host."
       }
     },
     "job": {

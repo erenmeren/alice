@@ -220,6 +220,30 @@ func (l *BoundedLockout) Locked(key string) bool {
 	return ok && l.clock.Now().Before(e.lockedUntil)
 }
 
+// LockedUntil reports whether key is locked now and until when (it reserves nothing).
+func (l *BoundedLockout) LockedUntil(key string) (time.Time, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok || !l.clock.Now().Before(e.lockedUntil) {
+		return time.Time{}, false
+	}
+	return e.lockedUntil, true
+}
+
+// Clear forgets one key, its lock and its failures (an Administrator's unlock), and reports whether it was locked.
+// Reservations of the key taken before it settle as no-ops, as after Reset.
+func (l *BoundedLockout) Clear(key string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.entries[key]
+	if !ok {
+		return false
+	}
+	delete(l.entries, key)
+	return l.clock.Now().Before(e.lockedUntil)
+}
+
 // Reset forgets every key; reservations taken before it settle as no-ops.
 func (l *BoundedLockout) Reset() {
 	l.mu.Lock()

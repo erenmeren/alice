@@ -58,9 +58,11 @@ type fakeAuth struct {
 	ListTokensFn              func(ctx context.Context, p auth.Principal, m auth.Meta, userID uuid.UUID) ([]auth.Token, error)
 	RevokeTokenFn             func(ctx context.Context, p auth.Principal, m auth.Meta, id uuid.UUID) error
 	// Directory sign-in (ldap_fakes_test.go).
-	SignInLDAPFn func(ctx context.Context, id auth.LDAPIdentity, role rbac.Role, mfaRequired bool, m auth.Meta) (auth.LoginResult, error)
-	StepUpLDAPFn func(ctx context.Context, p auth.Principal, id auth.LDAPIdentity, role rbac.Role, code string, mfaRequired bool, m auth.Meta) (auth.SessionResult, error)
-	RefuseLDAPFn func(ctx context.Context, id auth.LDAPIdentity, reason string, m auth.Meta) error
+	SignInLDAPFn            func(ctx context.Context, id auth.LDAPIdentity, role rbac.Role, mfaRequired bool, m auth.Meta) (auth.LoginResult, error)
+	StepUpLDAPFn            func(ctx context.Context, p auth.Principal, id auth.LDAPIdentity, role rbac.Role, code string, mfaRequired bool, m auth.Meta) (auth.SessionResult, error)
+	RefuseLDAPFn            func(ctx context.Context, id auth.LDAPIdentity, reason string, m auth.Meta) error
+	RecordLDAPLockoutFn     func(ctx context.Context, id auth.LDAPIdentity, scope string, minutes int, m auth.Meta) error
+	UnlockDirectorySignInFn func(ctx context.Context, p auth.Principal, m auth.Meta, id uuid.UUID, peek func(auth.LDAPIdentity) map[string]string) (auth.LDAPIdentity, error)
 }
 
 func (f *fakeAuth) AuthenticatePassive(ctx context.Context, t string) (auth.Principal, error) {

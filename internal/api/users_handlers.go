@@ -21,6 +21,8 @@ func (s *server) userRoutes() []route {
 		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-mfa", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserMFA},
 		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-password", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserPassword},
 		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/revoke-sessions", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.revokeUserSessions},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/unlock-directory-sign-in", perm: rbac.UsersManage, lic: license.ClassAlways,
+			handler: s.unlockDirectorySignIn},
 	}
 }
 
@@ -41,7 +43,7 @@ func (s *server) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]userDTO, 0, len(users))
 	for _, u := range users {
-		items = append(items, userJSON(u))
+		items = append(items, s.adminUserJSON(u))
 	}
 	writeJSON(w, http.StatusOK, map[string][]userDTO{"items": items})
 }
@@ -85,7 +87,7 @@ func (s *server) getUser(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, userJSON(u))
+	writeJSON(w, http.StatusOK, s.adminUserJSON(u))
 }
 
 func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
@@ -119,7 +121,7 @@ func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, userJSON(u))
+	writeJSON(w, http.StatusOK, s.adminUserJSON(u))
 }
 
 func (s *server) resetUserMFA(w http.ResponseWriter, r *http.Request) {

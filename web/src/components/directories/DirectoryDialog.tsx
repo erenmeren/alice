@@ -9,7 +9,7 @@ import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
 import { fieldErrorsOf } from '../fieldErrors';
 import { useStepUp } from '../StepUpProvider';
-import { DialogActions } from '../ui';
+import { DialogActions, Notice } from '../ui';
 
 // The form's text fields: everything of a directory except the switches, the addresses (one per line) and the password.
 type TextField = Exclude<keyof DirectoryInput, 'addresses' | 'bind_password' | 'mfa_required' | 'enabled'>;
@@ -262,6 +262,9 @@ export function DirectoryDialog({ directory, onClose }: { directory: Directory |
           <Textarea label={t('directories.fields.caPem')} {...text('ca_pem')} error={fe.ca_pem} autosize minRows={3} maxRows={8} spellCheck={false} styles={MONO} />
           <Switch role="switch" label={t('directories.fields.mfaRequired')} checked={form.mfa_required} onChange={(e) => set('mfa_required', e.currentTarget.checked)} />
           <Switch role="switch" label={t('directories.fields.enabled')} checked={form.enabled} onChange={(e) => set('enabled', e.currentTarget.checked)} />
+          {/* Switching an enabled directory off signs its users out at once (the server ends their sessions and API tokens
+              in the same change): the form says so before it is saved. */}
+          {base?.enabled && !form.enabled && <Notice tone="warning" title={t('directories.fields.switchOffWarning')} testId="directory-switch-off-warning" />}
           <ErrorAlert error={error} />
           <DialogActions>
             <Button variant="default" onClick={onClose}>
