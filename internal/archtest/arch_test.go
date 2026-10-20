@@ -43,9 +43,11 @@ var rules = map[string][]string{
 	// The HAProxy configuration parser reads hostile input in the root helper: it stays pure.
 	"alice/internal/providers/haproxyconf": {"alice/internal/providers/linuxssh/helperproto"},
 	// The inventory drives the ACME client for the account operations (Task 9) and reads the dns01 limits and builds
-	// a hook's dns01 configuration; the client and solvers never import it back.
+	// a hook's dns01 configuration; the client and solvers never import it back. The renewal reminders reuse the pure
+	// expiry thresholds (alerts/expiry).
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
-		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/renew"},
+		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/renew",
+		"alice/internal/alerts/expiry"},
 	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
 	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
 	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
@@ -63,7 +65,9 @@ var rules = map[string][]string{
 		"alice/internal/auth/...", "alice/internal/setup/...", "alice/internal/inventory/...", "alice/internal/jobs/...", "alice/internal/providers", "alice/internal/sshkeys/...",
 		"alice/internal/alerts/...", "alice/internal/reports/...", "alice/internal/backup/...",
 		// Network discovery (Task 9): the scope model and its errors, and the discovery service; never the probe.
-		"alice/internal/discovery", "alice/internal/discovery/discoverysvc"},
+		"alice/internal/discovery", "alice/internal/discovery/discoverysvc",
+		// The renewal failure classes (pure) the ACME certificate DTO names.
+		"alice/internal/acme/renew"},
 	// SSH key lifecycle (Phase 6). keymat and plan are pure: exact keys win over the subtree rule.
 	"alice/internal/sshkeys/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...",
 		"alice/internal/rbac/...", "alice/internal/providers", "alice/internal/inventory/..."},

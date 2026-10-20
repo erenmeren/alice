@@ -544,12 +544,13 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await expectKeyVaultSteps(page, t, kv.readStep);
       await expect(page.getByTestId('deployment-status')).toHaveText(t('enum.deploymentStatus.succeeded'));
 
-      // The background job that ran it names the deployment (GET /api/v1/jobs: deployment_id).
+      // The background job that ran it names the deployment (GET /api/v1/jobs: deployment_id); an automatic
+      // deployment is a certificate.deploy_auto job (continuity class).
       const deploymentId = new URL(page.url()).pathname.split('/').pop() ?? '';
       expect(deploymentId).toMatch(/^[0-9a-f-]{36}$/);
       const api = await apiAs(page);
       const jobs = await json<{ items: { type: string; status: string; deployment_id: string | null; import_id: string | null }[] }>(await api.get('/api/v1/jobs?limit=100'));
-      const deployJobs = jobs.items.filter((j) => j.type === 'certificate.deploy');
+      const deployJobs = jobs.items.filter((j) => j.type === 'certificate.deploy_auto');
       expect(deployJobs.map((j) => [j.deployment_id, j.status, j.import_id])).toEqual([[deploymentId, 'succeeded', null]]);
     });
 
