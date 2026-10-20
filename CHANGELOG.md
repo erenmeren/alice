@@ -19,6 +19,7 @@
 - A suggested window is no longer used only by its start: a window that begins before the time Alice would renew by
   itself now gives a random time between its start and the earlier of its end and that time (before this change,
   every such certificate renewed at the window's start).
+
 ## Unreleased — No rollback puts a revoked or compromised certificate back
 
 **Security**
