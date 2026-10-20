@@ -9,7 +9,7 @@ import (
 // providerRoutes describe the compiled-in providers for the add-server form (§6.4, §9.6).
 func (s *server) providerRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/providers", perm: rbac.Read, handler: s.listProviders},
+		{method: http.MethodGet, pattern: "/api/v1/providers", scope: scopeAny, perm: rbac.Read, handler: s.listProviders},
 	}
 }
 

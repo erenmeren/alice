@@ -34,7 +34,7 @@ type probeBody struct {
 func decodeHandler(t *testing.T) http.Handler {
 	t.Helper()
 	s := newServer(testDeps(t, nil))
-	return s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/probe", perm: rbac.Public, lic: license.ClassAlways, handler: func(w http.ResponseWriter, r *http.Request) {
+	return s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/probe", scope: scopeAny, perm: rbac.Public, lic: license.ClassAlways, handler: func(w http.ResponseWriter, r *http.Request) {
 		var b probeBody
 		if !s.decode(w, r, &b) {
 			return

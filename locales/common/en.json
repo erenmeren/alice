@@ -21,6 +21,50 @@
     }
   },
   "errors": {
+    "service": {
+      "not_found": {
+        "title": "This service does not exist.",
+        "cause": "The service was deleted, or the address is mistyped.",
+        "action": "Open Services and choose the service again."
+      },
+      "name_taken": {
+        "title": "A service with this name exists.",
+        "cause": "Service names are unique, whatever the letter case.",
+        "action": "Choose another name."
+      },
+      "not_empty": {
+        "title": "The service still owns resources.",
+        "cause": "A service is deleted only when it owns no server, Key Vault, certificate, signing request, ACME certificate, SSH key or scan scope ({{count}} left).",
+        "action": "Move them to another service (Move here on that service's page), then delete this one."
+      },
+      "default_protected": {
+        "title": "The Default service cannot be deleted.",
+        "cause": "Every resource without a service of its own belongs to the Default service.",
+        "action": "Rename it if you want, or leave it as it is."
+      },
+      "untrusted": {
+        "title": "The destination service does not accept certificates and keys from the source service.",
+        "cause": "The certificate or SSH key belongs to one service and the server or Key Vault to another, and no trust lets the second accept the first one's keys. Automatic deployments stop there until a trust exists.",
+        "action": "An Administrator adds the trust on the service page (Trusts), or moves the server or the certificate to the same service. Then try again."
+      },
+      "trust_exists": {
+        "title": "This trust exists.",
+        "cause": "The service already accepts certificates and keys from the other service.",
+        "action": "Nothing more is needed."
+      }
+    },
+    "environment": {
+      "in_use": {
+        "title": "This environment is in use.",
+        "cause": "A service or a role binding names the environment.",
+        "action": "Give those services another environment (or none) first, then delete it."
+      },
+      "key_taken": {
+        "title": "An environment with this key exists.",
+        "cause": "Environment keys are unique.",
+        "action": "Choose another key."
+      }
+    },
     "system": {
       "not_found": {
         "title": "This page or item does not exist.",
@@ -1947,6 +1991,10 @@
         "subject": "A version of {{certificate_name}} was replaced before it was deployed: Key Vault {{target_name}}",
         "body": "A new version of the certificate {{certificate_name}} in the Key Vault {{target_name}} was replaced by a newer version before Alice deployed it, so Alice skipped it and deploys the newest version instead.\n\nAlice will not mention this version again."
       },
+      "auto_deploy_untrusted": {
+        "subject": "Automatic deployment of {{certificate_name}} stopped at {{count}} websites: Key Vault {{target_name}}",
+        "body": "Alice did not deploy the certificate {{certificate_name}} from the Key Vault {{target_name}} to {{count}} connected websites, because their servers belong to a service that does not accept certificates and keys from the vault's service.\n\nThe websites keep their current certificate. Alice deploys there again once a trust allows it.\n\nWhat to do: an administrator opens Services in Alice, chooses the service of the servers and adds a trust for the vault's service (Trusts), or moves the servers or the vault to the same service."
+      },
       "auto_deploy_stopped": {
         "subject": "Automatic deployment of {{certificate_name}} stopped: Key Vault {{target_name}}",
         "body": "Alice stopped deploying the new version of the certificate {{certificate_name}} from the Key Vault {{target_name}} automatically, after {{count}} deployments failed.\n\nWebsites that already received the version keep it; the others keep their current certificate. The deployment history in Alice shows the reason for each failure. Automatic deployment continues with the next version. To try this version again, open the certificate in Alice and choose Deploy now."
@@ -2054,6 +2102,10 @@
       "renewal_ca_wait": {
         "subject": "The certificate authority asked Alice to wait before renewing the certificate for {{name}} (days left: {{days}})",
         "body": "The certificate authority limited the requests for the certificate for {{names}} and asked Alice not to order it again before {{ca_not_before}}. The current certificate ends at {{expires_at}}. Days left: {{days}}. Alice has tried {{count}} times in a row.\n\nReason of the last attempt: {{reason}}\n\nAlice waits until then and orders the certificate again by itself afterwards; ordering sooner only makes the wait longer. Little time is left after this wait to renew the certificate before it ends.\n\nWhat to do: find out why the authority limits the requests (for example too many certificates for the same names, or too many failed checks) and keep the limit from recurring. If the certificate cannot wait, get one from another certificate authority and upload it to Alice. Open Issued certificates in Alice and choose this certificate: its page shows when the authority accepts orders again."
+      },
+      "auto_deploy_untrusted": {
+        "subject": "Automatic deployment stopped at {{count}} websites: certificate for {{name}}",
+        "body": "Alice did not put the certificate for {{names}} on {{count}} bound websites by itself, because their servers belong to a service that does not accept certificates and keys from the certificate's service.\n\nThe websites keep their current certificate. Alice deploys there again once a trust allows it.\n\nWhat to do: an administrator opens Services in Alice, chooses the service of the servers and adds a trust for the certificate's service (Trusts), or moves the servers or the certificate to the same service."
       },
       "auto_deploy_stopped": {
         "subject": "Automatic deployment stopped: certificate for {{name}}",

@@ -46,10 +46,10 @@ const (
 // (the sign-in form's limit per address plus ldapLockout per directory and name) and a directory user's step-up.
 func (s *server) ldapSignInRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/auth/ldap/directories", perm: rbac.Public, handler: s.ldapPublicDirectories},
-		{method: http.MethodPost, pattern: "/api/v1/auth/ldap/{id}/login", perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/auth/ldap/directories", scope: scopeNone, perm: rbac.Public, handler: s.ldapPublicDirectories},
+		{method: http.MethodPost, pattern: "/api/v1/auth/ldap/{id}/login", scope: scopeNone, perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways,
 			handler: s.ldapLogin},
-		{method: http.MethodPost, pattern: "/api/v1/auth/ldap/stepup", perm: rbac.Session, limit: limitMFA, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/auth/ldap/stepup", scope: scopeSelf, perm: rbac.Session, limit: limitMFA, lic: license.ClassAlways,
 			handler: s.ldapStepUp},
 	}
 }
@@ -58,19 +58,19 @@ func (s *server) ldapSignInRoutes() []route {
 // Every one is sso.manage (an Administrator's browser session with step-up, never an API token) and works in lock.
 func (s *server) ldapRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/ldap/directories", perm: rbac.SSOManage, handler: s.listDirectories},
-		{method: http.MethodPost, pattern: "/api/v1/ldap/directories", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.createDirectory},
-		{method: http.MethodGet, pattern: "/api/v1/ldap/directories/{id}", perm: rbac.SSOManage, handler: s.getDirectory},
-		{method: http.MethodPatch, pattern: "/api/v1/ldap/directories/{id}", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.updateDirectory},
-		{method: http.MethodDelete, pattern: "/api/v1/ldap/directories/{id}", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.deleteDirectory},
-		{method: http.MethodPost, pattern: "/api/v1/ldap/directories/{id}/actions/test-connection", perm: rbac.SSOManage, limit: limitDirectoryTest,
+		{method: http.MethodGet, pattern: "/api/v1/ldap/directories", scope: scopePlatform, perm: rbac.SSOManage, handler: s.listDirectories},
+		{method: http.MethodPost, pattern: "/api/v1/ldap/directories", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.createDirectory},
+		{method: http.MethodGet, pattern: "/api/v1/ldap/directories/{id}", scope: scopePlatform, perm: rbac.SSOManage, handler: s.getDirectory},
+		{method: http.MethodPatch, pattern: "/api/v1/ldap/directories/{id}", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.updateDirectory},
+		{method: http.MethodDelete, pattern: "/api/v1/ldap/directories/{id}", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.deleteDirectory},
+		{method: http.MethodPost, pattern: "/api/v1/ldap/directories/{id}/actions/test-connection", scope: scopePlatform, perm: rbac.SSOManage, limit: limitDirectoryTest,
 			lic: license.ClassAlways, handler: s.testDirectoryConnection},
-		{method: http.MethodPost, pattern: "/api/v1/ldap/directories/{id}/actions/test-signin", perm: rbac.SSOManage, limit: limitDirectoryTest,
+		{method: http.MethodPost, pattern: "/api/v1/ldap/directories/{id}/actions/test-signin", scope: scopePlatform, perm: rbac.SSOManage, limit: limitDirectoryTest,
 			lic: license.ClassAlways, handler: s.testDirectorySignIn},
-		{method: http.MethodGet, pattern: "/api/v1/ldap/group-mappings", perm: rbac.SSOManage, handler: s.listDirectoryMappings},
-		{method: http.MethodPost, pattern: "/api/v1/ldap/group-mappings", perm: rbac.SSOManage, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/ldap/group-mappings", scope: scopePlatform, perm: rbac.SSOManage, handler: s.listDirectoryMappings},
+		{method: http.MethodPost, pattern: "/api/v1/ldap/group-mappings", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways,
 			handler: s.createDirectoryMapping},
-		{method: http.MethodDelete, pattern: "/api/v1/ldap/group-mappings/{id}", perm: rbac.SSOManage, lic: license.ClassAlways,
+		{method: http.MethodDelete, pattern: "/api/v1/ldap/group-mappings/{id}", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways,
 			handler: s.deleteDirectoryMapping},
 	}
 }

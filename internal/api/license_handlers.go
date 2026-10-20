@@ -14,10 +14,10 @@ import (
 // (spec §9.6, §19.1, §25.1). Uploading works in every license state (R9).
 func (s *server) licenseRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/license/status", perm: rbac.Read, handler: s.licenseStatus},
-		{method: http.MethodGet, pattern: "/api/v1/license", perm: rbac.LicenseRead, handler: s.licenseDetail},
-		{method: http.MethodPost, pattern: "/api/v1/license/preview", perm: rbac.LicenseManage, lic: license.ClassAlways, handler: s.licensePreview},
-		{method: http.MethodPost, pattern: "/api/v1/license", perm: rbac.LicenseManage, lic: license.ClassAlways, handler: s.licenseInstall},
+		{method: http.MethodGet, pattern: "/api/v1/license/status", scope: scopeAny, perm: rbac.Read, handler: s.licenseStatus},
+		{method: http.MethodGet, pattern: "/api/v1/license", scope: scopePlatform, perm: rbac.LicenseRead, handler: s.licenseDetail},
+		{method: http.MethodPost, pattern: "/api/v1/license/preview", scope: scopePlatform, perm: rbac.LicenseManage, lic: license.ClassAlways, handler: s.licensePreview},
+		{method: http.MethodPost, pattern: "/api/v1/license", scope: scopePlatform, perm: rbac.LicenseManage, lic: license.ClassAlways, handler: s.licenseInstall},
 	}
 }
 

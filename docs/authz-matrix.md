@@ -10,233 +10,253 @@ must also allow the route). Step-up: a fresh verification code (5 minutes) is re
 In lock: whether the operation still works after the license (or the evaluation) has expired;
 changes to managed systems are refused with ALC-LIC-0001 (spec R9).
 
-| Method | Path | Permission | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |
-|---|---|---|---|---|---|---|---|---|---|
-| GET | `/livez` | `public` | yes | yes | yes | yes | yes | no | yes |
-| GET | `/healthz` | `public` | yes | yes | yes | yes | yes | no | yes |
-| GET | `/api/v1/version` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/i18n/locales` | `public` | yes | yes | yes | yes | yes | no | yes |
-| GET | `/api/v1/setup/status` | `public` | yes | yes | yes | yes | yes | no | yes |
-| POST | `/api/v1/setup/session` | `public` | yes | yes | yes | yes | yes | no | yes |
-| PUT | `/api/v1/setup/language` | `setup` | wizard | no | no | no | no | no | yes |
-| POST | `/api/v1/setup/admin/enrollment` | `setup` | wizard | no | no | no | no | no | yes |
-| POST | `/api/v1/setup/admin` | `setup` | wizard | no | no | no | no | no | yes |
-| POST | `/api/v1/setup/recovery-passphrase` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/setup/evaluation` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/setup/complete` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/setup/https/keep-temporary` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/setup/mail/skip` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/auth/login` | `public` | yes | yes | yes | yes | yes | no | yes |
-| POST | `/api/v1/auth/mfa/enroll` | `mfa_pending` | pending | no | no | no | no | no | yes |
-| POST | `/api/v1/auth/mfa/verify` | `mfa_pending` | pending | no | no | no | no | no | yes |
-| GET | `/api/v1/auth/session` | `session` | no | yes | yes | yes | no | no | yes |
-| POST | `/api/v1/auth/logout` | `session` | no | yes | yes | yes | no | no | yes |
-| POST | `/api/v1/auth/stepup` | `session` | no | yes | yes | yes | no | no | yes |
-| POST | `/api/v1/auth/password` | `session` | no | yes | yes | yes | no | no | yes |
-| POST | `/api/v1/auth/recovery-codes` | `session.stepup` | no | yes | yes | yes | no | yes | yes |
-| PUT | `/api/v1/auth/locale` | `session` | no | yes | yes | yes | no | no | yes |
-| GET | `/api/v1/auth/oidc/providers` | `public` | yes | yes | yes | yes | yes | no | yes |
-| POST | `/api/v1/auth/oidc/{id}/start` | `public` | yes | yes | yes | yes | yes | no | yes |
-| GET | `/api/v1/auth/oidc/{id}/callback` | `public` | yes | yes | yes | yes | yes | no | yes |
-| POST | `/api/v1/auth/oidc/stepup` | `session` | no | yes | yes | yes | no | no | yes |
-| GET | `/api/v1/auth/ldap/directories` | `public` | yes | yes | yes | yes | yes | no | yes |
-| POST | `/api/v1/auth/ldap/{id}/login` | `public` | yes | yes | yes | yes | yes | no | yes |
-| POST | `/api/v1/auth/ldap/stepup` | `session` | no | yes | yes | yes | no | no | yes |
-| GET | `/api/v1/users` | `users.read` | no | yes | no | no | read | no | yes |
-| POST | `/api/v1/users` | `users.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/users/{id}` | `users.read` | no | yes | no | no | read | no | yes |
-| PATCH | `/api/v1/users/{id}` | `users.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/users/{id}/actions/reset-mfa` | `users.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/users/{id}/actions/reset-password` | `users.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/users/{id}/actions/revoke-sessions` | `users.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/users/{id}/actions/unlock-directory-sign-in` | `users.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/tokens` | `session` | no | yes | yes | yes | no | no | yes |
-| POST | `/api/v1/tokens` | `session.stepup` | no | yes | yes | yes | no | yes | yes |
-| DELETE | `/api/v1/tokens/{id}` | `session` | no | yes | yes | yes | no | no | yes |
-| GET | `/api/v1/audit` | `audit.read` | no | yes | no | yes | read | no | yes |
-| GET | `/api/v1/audit/export` | `audit.read` | no | yes | no | yes | read | no | yes |
-| POST | `/api/v1/audit/verify` | `audit.read` | no | yes | no | yes | read | no | yes |
-| GET | `/api/v1/license/status` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/license` | `license.read` | no | yes | no | yes | read | no | yes |
-| POST | `/api/v1/license/preview` | `license.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/license` | `license.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/providers` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/targets` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/targets` | `targets.manage` | no | yes | no | no | operate | no | no |
-| GET | `/api/v1/targets/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| PATCH | `/api/v1/targets/{id}` | `targets.manage` | no | yes | no | no | operate | no | no |
-| DELETE | `/api/v1/targets/{id}` | `targets.manage` | no | yes | no | no | operate | no | no |
-| POST | `/api/v1/targets/{id}/actions/test` | `inventory.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/targets/{id}/actions/discover` | `inventory.operate` | no | yes | yes | no | operate | no | no |
-| GET | `/api/v1/targets/{id}/host-keys` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm` | `hostkeys.confirm` | no | yes | no | no | no | no | no |
-| POST | `/api/v1/targets/{id}/host-keys/{key_id}/actions/repin` | `hostkeys.repin` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/targets/{id}/ssh-keys` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/targets/{id}/certificate-locations` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/ssh-keys` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/ssh-keys/platform-key` | `targets.manage` | no | yes | no | no | operate | no | yes |
-| GET | `/api/v1/ssh-keys/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/ssh-keys/export` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/ssh-keys/locations/{id}/actions/remove` | `inventory.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/ssh-keys/generate` | `inventory.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/ssh-keys/{id}/actions/deploy` | `inventory.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/ssh-keys/{id}/actions/download-private-key` | `sshkeys.download` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/targets/{id}/key-files` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/rotation/policies` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/rotation/policies` | `rotation.manage` | no | yes | no | no | operate | no | no |
-| GET | `/api/v1/rotation/policies/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| PATCH | `/api/v1/rotation/policies/{id}` | `rotation.manage` | no | yes | no | no | operate | no | no |
-| DELETE | `/api/v1/rotation/policies/{id}` | `rotation.manage` | no | yes | no | no | operate | no | no |
-| POST | `/api/v1/rotation/policies/{id}/actions/enable` | `rotation.operate` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/rotation/policies/{id}/actions/disable` | `rotation.manage` | no | yes | no | no | operate | no | no |
-| POST | `/api/v1/rotation/policies/{id}/actions/preview` | `rotation.manage` | no | yes | no | no | operate | no | no |
-| POST | `/api/v1/rotation/policies/{id}/actions/run` | `rotation.operate` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/rotation/runs` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/rotation/runs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/rotation/runs/{id}/actions/continue` | `rotation.operate` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/rotation/runs/{id}/actions/finish-now` | `rotation.operate` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/rotation/runs/{id}/actions/keep-old` | `rotation.operate` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/rotation/runs/{id}/actions/abort` | `rotation.manage` | no | yes | no | no | operate | no | yes |
-| GET | `/api/v1/jobs` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/jobs/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/jobs/{id}/actions/confirm` | `jobs.confirm` | no | yes | no | no | no | no | no |
-| POST | `/api/v1/jobs/{id}/actions/discard` | `jobs.confirm` | no | yes | no | no | no | no | yes |
-| GET | `/api/v1/certificates` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/certificates/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/certificates/export` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/certificates/upload` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/certificates/{id}/deploy` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| GET | `/api/v1/certificates/csr` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/certificates/csr` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| GET | `/api/v1/certificates/csr/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/certificates/csr/{id}/actions/complete` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/certificates/csr/{id}/actions/cancel` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| PATCH | `/api/v1/locations/{id}` | `targets.manage` | no | yes | no | no | operate | no | no |
-| GET | `/api/v1/deployments` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/deployments/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/key-vaults` | `credentials.manage` | no | yes | no | no | no | yes | no |
-| PUT | `/api/v1/targets/{id}/vault-credentials` | `credentials.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/targets/{id}/kv/certificates` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/targets/{id}/kv/certificates/{certificate_id}` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release` | `credentials.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/targets/{id}/kv/keys` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/targets/{id}/kv/secrets` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/certificate-locations` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/bindings` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| GET | `/api/v1/bindings/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| PATCH | `/api/v1/bindings/{id}` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| PUT | `/api/v1/bindings/{id}/auto-deploy` | `credentials.manage` | no | yes | no | no | no | yes | yes |
-| DELETE | `/api/v1/bindings/{id}` | `certificates.operate` | no | yes | yes | no | operate | no | yes |
-| POST | `/api/v1/bindings/{id}/actions/deploy` | `certificates.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/certificates/{id}/actions/import-to-key-vault` | `credentials.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/targets/{id}/kv/imports` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/targets/{id}/kv/imports/{import_id}` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/settings/smtp` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/settings/smtp` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| DELETE | `/api/v1/settings/smtp` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/settings/smtp/actions/test` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/settings/smtp/actions/trust` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/settings/smtp/actions/untrust` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/settings/notifications` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/settings/notifications` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/settings/alerts` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/settings/alerts` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/settings/general` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/settings/general` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/dashboard/summary` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/dashboard/expiring` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/alerts` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/notifications/status` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/views` | `session` | no | yes | yes | yes | no | no | yes |
-| POST | `/api/v1/views` | `session` | no | yes | yes | yes | no | no | yes |
-| DELETE | `/api/v1/views/{id}` | `session` | no | yes | yes | yes | no | no | yes |
-| GET | `/api/v1/sso/providers` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/sso/providers` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/sso/providers/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| PATCH | `/api/v1/sso/providers/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| DELETE | `/api/v1/sso/providers/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/sso/providers/{id}/actions/refresh` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/sso/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/sso/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| DELETE | `/api/v1/sso/group-mappings/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/sso/settings` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/ldap/directories` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/ldap/directories` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/ldap/directories/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| PATCH | `/api/v1/ldap/directories/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| DELETE | `/api/v1/ldap/directories/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/ldap/directories/{id}/actions/test-connection` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/ldap/directories/{id}/actions/test-signin` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/ldap/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/ldap/group-mappings` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| DELETE | `/api/v1/ldap/group-mappings/{id}` | `sso.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/backups` | `backup.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/backups` | `backup.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/backups/{name}/download` | `backup.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/settings/backups` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/settings/backups` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/settings/https` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/settings/https` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/settings/audit-forwarding` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| PUT | `/api/v1/settings/audit-forwarding` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/settings/audit-forwarding/test` | `settings.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/acme/providers` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/acme/providers` | `acme.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/acme/providers/{id}` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| PATCH | `/api/v1/acme/providers/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
-| DELETE | `/api/v1/acme/providers/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/acme/providers/{id}/account` | `acme.manage` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/acme/providers/{id}/preview` | `acme.preview` | no | yes | no | no | no | no | no |
-| POST | `/api/v1/acme/accounts/{id}/rollover` | `acme.manage` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/acme/accounts/{id}/rollover/recover` | `acme.manage` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/acme/accounts/{id}/deactivate` | `acme.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/acme/hooks` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/acme/hooks` | `acme.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/acme/hooks/{id}` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| PATCH | `/api/v1/acme/hooks/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
-| DELETE | `/api/v1/acme/hooks/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/acme/certificates` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/acme/certificates` | `acme.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/acme/certificates/{id}` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| PATCH | `/api/v1/acme/certificates/{id}` | `acme.manage` | no | yes | no | no | no | yes | no |
-| DELETE | `/api/v1/acme/certificates/{id}` | `acme.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/acme/certificates/{id}/order` | `acme.operate` | no | yes | yes | no | operate | no | no |
-| POST | `/api/v1/acme/certificates/{id}/test` | `acme.operate` | no | yes | yes | no | operate | no | no |
-| GET | `/api/v1/acme/certificates/{id}/orders` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/acme/certificates/{id}/rearm` | `acme.manage` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/acme/certificates/{id}/release-hold` | `acme.manage` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/acme/certificates/{id}/revoke` | `acme.manage` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/acme/certificates/{id}/bindings` | `acme.view` | no | yes | yes | yes | read | no | yes |
-| PUT | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | no |
-| DELETE | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | no | yes | yes | no | operate | no | yes |
-| POST | `/api/v1/acme/certificates/{id}/deploy` | `acme.operate` | no | yes | yes | no | operate | no | no |
-| GET | `/api/v1/discovery/summary` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| GET | `/api/v1/discovery/scopes` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| POST | `/api/v1/discovery/scopes` | `discovery.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/discovery/scopes/preview` | `discovery.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/discovery/scopes/{id}` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| PATCH | `/api/v1/discovery/scopes/{id}` | `discovery.manage` | no | yes | no | no | no | yes | yes |
-| DELETE | `/api/v1/discovery/scopes/{id}` | `discovery.manage` | no | yes | no | no | no | yes | yes |
-| POST | `/api/v1/discovery/scopes/{id}/scans` | `discovery.operate` | no | yes | yes | no | operate | no | no |
-| GET | `/api/v1/discovery/scans` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| GET | `/api/v1/discovery/scans/{id}` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| POST | `/api/v1/discovery/scans/{id}/cancel` | `discovery.operate` | no | yes | yes | no | operate | no | yes |
-| GET | `/api/v1/discovery/certificates` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| GET | `/api/v1/discovery/certificates/export` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| GET | `/api/v1/discovery/certificates/{fingerprint}` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| GET | `/api/v1/discovery/endpoints` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| GET | `/api/v1/discovery/settings` | `discovery.view` | no | yes | yes | yes | operate | no | yes |
-| PUT | `/api/v1/discovery/settings` | `discovery.manage` | no | yes | no | no | no | yes | yes |
-| GET | `/api/v1/certificates/capabilities` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/certificate-impact/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/certificates/{id}/incidents` | `certificates.incident` | no | yes | no | no | no | yes | no |
-| GET | `/api/v1/incidents` | `read` | no | yes | yes | yes | read | no | yes |
-| GET | `/api/v1/incidents/{id}` | `read` | no | yes | yes | yes | read | no | yes |
-| POST | `/api/v1/incidents/{id}/retry` | `certificates.incident` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/incidents/{id}/revoke-now` | `certificates.incident` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/incidents/{id}/replacement` | `certificates.incident` | no | yes | no | no | no | yes | no |
-| POST | `/api/v1/incidents/{id}/close` | `certificates.incident` | no | yes | no | no | no | yes | yes |
+Scope: how the operation meets scoped access (R49): platform (a global grant only), resource (the resource
+the path names, by its service), list (filtered by the caller's services), create (the body's service_id),
+cross (the source and the destination service), any (some grant), self (the caller's own records) or none (no
+grant is involved). Until scoped role bindings exist every grant is global, so the scope changes no answer.
+
+| Method | Path | Permission | Scope | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |
+|---|---|---|---|---|---|---|---|---|---|---|
+| GET | `/livez` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| GET | `/healthz` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| GET | `/api/v1/version` | `read` | any | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/i18n/locales` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| GET | `/api/v1/setup/status` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/setup/session` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| PUT | `/api/v1/setup/language` | `setup` | none | wizard | no | no | no | no | no | yes |
+| POST | `/api/v1/setup/admin/enrollment` | `setup` | none | wizard | no | no | no | no | no | yes |
+| POST | `/api/v1/setup/admin` | `setup` | none | wizard | no | no | no | no | no | yes |
+| POST | `/api/v1/setup/recovery-passphrase` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/evaluation` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/complete` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/https/keep-temporary` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/setup/mail/skip` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/auth/login` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/mfa/enroll` | `mfa_pending` | none | pending | no | no | no | no | no | yes |
+| POST | `/api/v1/auth/mfa/verify` | `mfa_pending` | none | pending | no | no | no | no | no | yes |
+| GET | `/api/v1/auth/session` | `session` | self | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/logout` | `session` | self | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/stepup` | `session` | self | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/password` | `session` | self | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/auth/recovery-codes` | `session.stepup` | self | no | yes | yes | yes | no | yes | yes |
+| PUT | `/api/v1/auth/locale` | `session` | self | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/auth/oidc/providers` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/oidc/{id}/start` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| GET | `/api/v1/auth/oidc/{id}/callback` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/oidc/stepup` | `session` | self | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/auth/ldap/directories` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/ldap/{id}/login` | `public` | none | yes | yes | yes | yes | yes | no | yes |
+| POST | `/api/v1/auth/ldap/stepup` | `session` | self | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/users` | `users.read` | platform | no | yes | no | no | read | no | yes |
+| POST | `/api/v1/users` | `users.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/users/{id}` | `users.read` | platform | no | yes | no | no | read | no | yes |
+| PATCH | `/api/v1/users/{id}` | `users.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/reset-mfa` | `users.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/reset-password` | `users.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/revoke-sessions` | `users.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/users/{id}/actions/unlock-directory-sign-in` | `users.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/tokens` | `session` | self | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/tokens` | `session.stepup` | self | no | yes | yes | yes | no | yes | yes |
+| DELETE | `/api/v1/tokens/{id}` | `session` | self | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/audit` | `audit.read` | platform | no | yes | no | yes | read | no | yes |
+| GET | `/api/v1/audit/export` | `audit.read` | platform | no | yes | no | yes | read | no | yes |
+| POST | `/api/v1/audit/verify` | `audit.read` | platform | no | yes | no | yes | read | no | yes |
+| GET | `/api/v1/license/status` | `read` | any | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/license` | `license.read` | platform | no | yes | no | yes | read | no | yes |
+| POST | `/api/v1/license/preview` | `license.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/license` | `license.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/providers` | `read` | any | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/targets` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/targets` | `targets.manage` | create | no | yes | no | no | operate | no | no |
+| GET | `/api/v1/targets/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/targets/{id}` | `targets.manage` | resource | no | yes | no | no | operate | no | no |
+| DELETE | `/api/v1/targets/{id}` | `targets.manage` | resource | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/targets/{id}/actions/test` | `inventory.operate` | resource | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/targets/{id}/actions/discover` | `inventory.operate` | resource | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/targets/{id}/host-keys` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm` | `hostkeys.confirm` | resource | no | yes | no | no | no | no | no |
+| POST | `/api/v1/targets/{id}/host-keys/{key_id}/actions/repin` | `hostkeys.repin` | resource | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/targets/{id}/ssh-keys` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/targets/{id}/certificate-locations` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/ssh-keys` | `read` | list | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/ssh-keys/platform-key` | `targets.manage` | any | no | yes | no | no | operate | no | yes |
+| GET | `/api/v1/ssh-keys/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/ssh-keys/export` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/ssh-keys/locations/{id}/actions/remove` | `inventory.operate` | resource | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/ssh-keys/generate` | `inventory.operate` | create | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/ssh-keys/{id}/actions/deploy` | `inventory.operate` | cross | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/ssh-keys/{id}/actions/download-private-key` | `sshkeys.download` | resource | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/targets/{id}/key-files` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/rotation/policies` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/rotation/policies` | `rotation.manage` | create | no | yes | no | no | operate | no | no |
+| GET | `/api/v1/rotation/policies/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/rotation/policies/{id}` | `rotation.manage` | resource | no | yes | no | no | operate | no | no |
+| DELETE | `/api/v1/rotation/policies/{id}` | `rotation.manage` | resource | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/enable` | `rotation.operate` | cross | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/disable` | `rotation.manage` | resource | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/preview` | `rotation.manage` | resource | no | yes | no | no | operate | no | no |
+| POST | `/api/v1/rotation/policies/{id}/actions/run` | `rotation.operate` | cross | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/rotation/runs` | `read` | list | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/rotation/runs/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/rotation/runs/{id}/actions/continue` | `rotation.operate` | cross | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/finish-now` | `rotation.operate` | cross | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/keep-old` | `rotation.operate` | cross | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/rotation/runs/{id}/actions/abort` | `rotation.manage` | resource | no | yes | no | no | operate | no | yes |
+| GET | `/api/v1/jobs` | `read` | list | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/jobs/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/jobs/{id}/actions/confirm` | `jobs.confirm` | resource | no | yes | no | no | no | no | no |
+| POST | `/api/v1/jobs/{id}/actions/discard` | `jobs.confirm` | resource | no | yes | no | no | no | no | yes |
+| GET | `/api/v1/certificates` | `read` | list | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/certificates/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/certificates/export` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/upload` | `certificates.operate` | create | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/certificates/{id}/deploy` | `certificates.operate` | cross | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/certificates/csr` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/csr` | `certificates.operate` | create | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/certificates/csr/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/csr/{id}/actions/complete` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/certificates/csr/{id}/actions/cancel` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
+| PATCH | `/api/v1/locations/{id}` | `targets.manage` | resource | no | yes | no | no | operate | no | no |
+| GET | `/api/v1/deployments` | `read` | list | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/deployments/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/key-vaults` | `credentials.manage` | create | no | yes | no | no | no | yes | no |
+| PUT | `/api/v1/targets/{id}/vault-credentials` | `credentials.manage` | resource | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/targets/{id}/kv/certificates` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/targets/{id}/kv/certificates/{certificate_id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release` | `credentials.manage` | resource | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/targets/{id}/kv/keys` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/targets/{id}/kv/secrets` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/certificate-locations` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/bindings` | `certificates.operate` | cross | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/bindings/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/bindings/{id}` | `certificates.operate` | cross | no | yes | yes | no | operate | no | no |
+| PUT | `/api/v1/bindings/{id}/auto-deploy` | `credentials.manage` | resource | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/bindings/{id}` | `certificates.operate` | resource | no | yes | yes | no | operate | no | yes |
+| POST | `/api/v1/bindings/{id}/actions/deploy` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/certificates/{id}/actions/import-to-key-vault` | `credentials.manage` | cross | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/targets/{id}/kv/imports` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/targets/{id}/kv/imports/{import_id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/settings/smtp` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/smtp` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/settings/smtp` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/smtp/actions/test` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/smtp/actions/trust` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/smtp/actions/untrust` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/notifications` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/notifications` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/alerts` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/alerts` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/general` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/general` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/dashboard/summary` | `read` | any | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/dashboard/expiring` | `read` | any | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/alerts` | `read` | list | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/notifications/status` | `read` | any | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/views` | `session` | self | no | yes | yes | yes | no | no | yes |
+| POST | `/api/v1/views` | `session` | self | no | yes | yes | yes | no | no | yes |
+| DELETE | `/api/v1/views/{id}` | `session` | self | no | yes | yes | yes | no | no | yes |
+| GET | `/api/v1/sso/providers` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/sso/providers` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/sso/providers/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| PATCH | `/api/v1/sso/providers/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/sso/providers/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/sso/providers/{id}/actions/refresh` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/sso/group-mappings` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/sso/group-mappings` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/sso/group-mappings/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/sso/settings` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/sso/settings` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/ldap/directories` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/directories` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/ldap/directories/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| PATCH | `/api/v1/ldap/directories/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/ldap/directories/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/directories/{id}/actions/test-connection` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/directories/{id}/actions/test-signin` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/ldap/group-mappings` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/ldap/group-mappings` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/ldap/group-mappings/{id}` | `sso.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/backups` | `backup.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/backups` | `backup.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/backups/{name}/download` | `backup.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/backups` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/backups` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/https` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/https` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/settings/audit-forwarding` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| PUT | `/api/v1/settings/audit-forwarding` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/settings/audit-forwarding/test` | `settings.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/acme/providers` | `acme.view` | any | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/providers` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/providers/{id}` | `acme.view` | any | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/acme/providers/{id}` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| DELETE | `/api/v1/acme/providers/{id}` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/providers/{id}/account` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/providers/{id}/preview` | `acme.preview` | platform | no | yes | no | no | no | no | no |
+| POST | `/api/v1/acme/accounts/{id}/rollover` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/accounts/{id}/rollover/recover` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/accounts/{id}/deactivate` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/hooks` | `acme.view` | any | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/hooks` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/hooks/{id}` | `acme.view` | any | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/acme/hooks/{id}` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| DELETE | `/api/v1/acme/hooks/{id}` | `acme.manage` | platform | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/certificates` | `acme.view` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/certificates` | `acme.manage` | create | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/certificates/{id}` | `acme.view` | resource | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/acme/certificates/{id}` | `acme.manage` | resource | no | yes | no | no | no | yes | no |
+| DELETE | `/api/v1/acme/certificates/{id}` | `acme.manage` | resource | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/acme/certificates/{id}/order` | `acme.operate` | resource | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/acme/certificates/{id}/test` | `acme.operate` | resource | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/acme/certificates/{id}/orders` | `acme.view` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/acme/certificates/{id}/rearm` | `acme.manage` | resource | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/certificates/{id}/release-hold` | `acme.manage` | resource | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/acme/certificates/{id}/revoke` | `acme.manage` | resource | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/acme/certificates/{id}/bindings` | `acme.view` | resource | no | yes | yes | yes | read | no | yes |
+| PUT | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | cross | no | yes | yes | no | operate | no | no |
+| DELETE | `/api/v1/acme/certificates/{id}/bindings/{location_id}` | `acme.operate` | resource | no | yes | yes | no | operate | no | yes |
+| POST | `/api/v1/acme/certificates/{id}/deploy` | `acme.operate` | resource | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/discovery/summary` | `discovery.view` | any | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/scopes` | `discovery.view` | list | no | yes | yes | yes | operate | no | yes |
+| POST | `/api/v1/discovery/scopes` | `discovery.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/discovery/scopes/preview` | `discovery.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/discovery/scopes/{id}` | `discovery.view` | resource | no | yes | yes | yes | operate | no | yes |
+| PATCH | `/api/v1/discovery/scopes/{id}` | `discovery.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/discovery/scopes/{id}` | `discovery.manage` | platform | no | yes | no | no | no | yes | yes |
+| POST | `/api/v1/discovery/scopes/{id}/scans` | `discovery.operate` | resource | no | yes | yes | no | operate | no | no |
+| GET | `/api/v1/discovery/scans` | `discovery.view` | list | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/scans/{id}` | `discovery.view` | resource | no | yes | yes | yes | operate | no | yes |
+| POST | `/api/v1/discovery/scans/{id}/cancel` | `discovery.operate` | resource | no | yes | yes | no | operate | no | yes |
+| GET | `/api/v1/discovery/certificates` | `discovery.view` | list | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/certificates/export` | `discovery.view` | list | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/certificates/{fingerprint}` | `discovery.view` | resource | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/endpoints` | `discovery.view` | list | no | yes | yes | yes | operate | no | yes |
+| GET | `/api/v1/discovery/settings` | `discovery.view` | platform | no | yes | yes | yes | operate | no | yes |
+| PUT | `/api/v1/discovery/settings` | `discovery.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/certificates/capabilities` | `read` | any | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/certificate-impact/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/certificates/{id}/incidents` | `certificates.incident` | cross | no | yes | no | no | no | yes | no |
+| GET | `/api/v1/incidents` | `read` | list | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/incidents/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/incidents/{id}/retry` | `certificates.incident` | cross | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/incidents/{id}/revoke-now` | `certificates.incident` | cross | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/incidents/{id}/replacement` | `certificates.incident` | cross | no | yes | no | no | no | yes | no |
+| POST | `/api/v1/incidents/{id}/close` | `certificates.incident` | cross | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/environments` | `read` | any | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/environments` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
+| PATCH | `/api/v1/environments/{id}` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/environments/{id}` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/services` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/services` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/services/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| PATCH | `/api/v1/services/{id}` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/services/{id}` | `services.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/services/{id}/policy` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| GET | `/api/v1/services/{id}/policy/versions` | `read` | resource | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/services/{id}/actions/assign` | `services.assign` | cross | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/service-trusts` | `read` | list | no | yes | yes | yes | read | no | yes |
+| POST | `/api/v1/service-trusts` | `services.trust` | cross | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/service-trusts/{id}` | `services.trust` | cross | no | yes | no | no | no | yes | yes |
 
 ## Notes
 
@@ -323,3 +343,11 @@ for 45 minutes after 3 failed passwords within 30 minutes (attempts in flight co
 sign-in clears the failures). A directory user's step-up
 (`POST /api/v1/auth/ldap/stepup`) needs the user's own session and repeats the directory password for the stored sign-in
 name (and the authenticator code when the directory asks for MFA).
+
+**Services (R49).** Reading services, environments, service policies and trusts is `read`. Creating, changing and deleting
+services and environments is `services.manage`, moving resources to another service
+(`POST /api/v1/services/{id}/actions/assign`) is `services.assign` and making and removing trusts is `services.trust`: each
+an Administrator's browser session with a fresh step-up, never an API token. They change only Alice's own records, so they work
+in lock. A deployment, a Key Vault or ACME binding, an import into a Key Vault and an SSH key deploy that would place a key owned
+by one service on a server or into a Key Vault of another service need a trust from the destination service to the source
+service (409 ALC-SVC-0007); the deployment engine and the automatic deployments check it again before they send.

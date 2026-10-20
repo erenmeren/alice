@@ -39,6 +39,7 @@ type SSHKey struct {
 	Missing       bool // every location of the key is missing or removed, and it is not a retired key Alice removed everywhere
 	Retired       bool // a rotation retired the key
 	FirstSeenAt   time.Time
+	ServiceID     uuid.UUID // the owning service (R49): a key found on a server goes to the server's service
 	Locations     []KeyLocation
 }
 
@@ -72,6 +73,8 @@ type KeyFilter struct {
 	IncludeMissing bool
 	Cursor         string
 	Limit          int
+	// ServiceIDs keeps the keys owned by these services (R49); nil = every service, empty = none.
+	ServiceIDs []uuid.UUID
 }
 
 // KeyPage is one page of keys.
@@ -168,7 +171,7 @@ func (s *Service) Reconcile(ctx context.Context, id uuid.UUID, res providers.Dis
 			done[tp] = true
 			entries = append(entries, k)
 		}
-		keyIDs, err := upsertKeys(ctx, tx, entries, platformFP, now)
+		keyIDs, err := upsertKeys(ctx, tx, entries, platformFP, t.ServiceID, now)
 		if err != nil {
 			return err
 		}
@@ -287,7 +290,8 @@ func sshHalfRead(res providers.DiscoveryResult) bool {
 // fingerprint. The rows are upserted in fingerprint order: scans of different servers that share
 // keys (the platform key, an administrator's key) lock the shared rows in the same order and so
 // never deadlock, whatever order each server lists its keys in.
-func upsertKeys(ctx context.Context, tx pgx.Tx, entries []providers.DiscoveredSSHKey, platformFP string, now time.Time) (map[string]uuid.UUID, error) {
+func upsertKeys(ctx context.Context, tx pgx.Tx, entries []providers.DiscoveredSSHKey, platformFP string, service uuid.UUID,
+	now time.Time) (map[string]uuid.UUID, error) {
 	byFP := map[string]providers.DiscoveredSSHKey{}
 	newIDs := map[string]uuid.UUID{} // allocated in discovery order: keys first seen together list in that order
 	weak := map[string]bool{}
@@ -308,12 +312,13 @@ func upsertKeys(ctx context.Context, tx pgx.Tx, entries []providers.DiscoveredSS
 	for _, fp := range fps {
 		k := byFP[fp]
 		var keyID uuid.UUID
-		err := tx.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, is_platform_key, weak, first_seen_at, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+		err := tx.QueryRow(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, is_platform_key, weak, first_seen_at, created_at,
+    service_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9)
 ON CONFLICT (fingerprint_sha256) DO UPDATE SET is_platform_key = ssh_keys.is_platform_key OR EXCLUDED.is_platform_key,
     weak = EXCLUDED.weak
 RETURNING id`, newIDs[fp], fp, clean(k.KeyType), k.Bits, clean(k.PublicKey), platformFP != "" && k.Fingerprint == platformFP,
-			weak[fp], now).Scan(&keyID)
+			weak[fp], now, service).Scan(&keyID)
 		if err != nil {
 			return nil, fmt.Errorf("inventory: store ssh key: %w", err)
 		}
@@ -493,7 +498,7 @@ func (s *Service) ListSSHKeys(ctx context.Context, f KeyFilter) (KeyPage, error)
     coalesce((array_agg(l.comment ORDER BY l.last_seen_at DESC, l.id DESC) FILTER (WHERE l.id IS NOT NULL))[1], k.key_comment),
     coalesce(bool_and(l.missing_since IS NOT NULL OR l.removed_by_alice_at IS NOT NULL) FILTER (WHERE l.id IS NOT NULL), false)
       AND NOT (k.retired_at IS NOT NULL AND coalesce(bool_and(l.removed_by_alice_at IS NOT NULL) FILTER (WHERE l.id IS NOT NULL), false)),
-    k.retired_at IS NOT NULL
+    k.retired_at IS NOT NULL, k.service_id
 FROM ssh_keys k
 LEFT JOIN (ssh_key_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL) ON l.ssh_key_id = k.id
 WHERE (l.id IS NOT NULL OR (k.managed AND ($5::boolean OR k.retired_at IS NULL) AND $1::uuid IS NULL AND $2::text = '' AND $4::text = ''))
@@ -509,9 +514,10 @@ WHERE (l.id IS NOT NULL OR (k.managed AND ($5::boolean OR k.retired_at IS NULL) 
        OR (k.managed AND k.retired_at IS NULL AND NOT EXISTS (SELECT 1 FROM ssh_key_locations x JOIN targets xt ON xt.id = x.target_id AND xt.deleted_at IS NULL
                                      WHERE x.ssh_key_id = k.id AND x.missing_since IS NULL AND x.removed_by_alice_at IS NULL)))
   AND ($6::timestamptz IS NULL OR (k.first_seen_at, k.id) > ($6::timestamptz, $7::uuid))
+  AND ($9::uuid[] IS NULL OR k.service_id = ANY($9))
 GROUP BY k.id
 ORDER BY k.first_seen_at, k.id
-LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID, limit+1)
+LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID, limit+1, f.ServiceIDs)
 	if err != nil {
 		return KeyPage{}, fmt.Errorf("inventory: list ssh keys: %w", err)
 	}
@@ -520,7 +526,7 @@ LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID
 	for rows.Next() {
 		var k SSHKey
 		if err := rows.Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak,
-			&k.FirstSeenAt, &k.LocationCount, &k.TargetCount, &k.Comment, &k.Missing, &k.Retired); err != nil {
+			&k.FirstSeenAt, &k.LocationCount, &k.TargetCount, &k.Comment, &k.Missing, &k.Retired, &k.ServiceID); err != nil {
 			return KeyPage{}, fmt.Errorf("inventory: read ssh key: %w", err)
 		}
 		k.FirstSeenAt = k.FirstSeenAt.UTC()
@@ -541,9 +547,9 @@ LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID
 func (s *Service) GetSSHKey(ctx context.Context, id uuid.UUID) (SSHKey, error) {
 	var k SSHKey
 	err := s.pool.QueryRow(ctx, `SELECT id, fingerprint_sha256, key_type, bits, public_key, managed, is_platform_key, weak, first_seen_at, key_comment,
-    retired_at IS NOT NULL
+    retired_at IS NOT NULL, service_id
 FROM ssh_keys WHERE id = $1`, id).Scan(&k.ID, &k.Fingerprint, &k.KeyType, &k.Bits, &k.PublicKey, &k.Managed, &k.IsPlatformKey, &k.Weak, &k.FirstSeenAt, &k.Comment,
-		&k.Retired)
+		&k.Retired, &k.ServiceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SSHKey{}, ErrNotFound
 	}

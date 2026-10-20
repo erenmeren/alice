@@ -333,8 +333,12 @@ func (s *Service) StartIncident(ctx context.Context, a Actor, certificateID uuid
 		if err != nil {
 			return fmt.Errorf("inventory: open a savepoint: %w", err)
 		}
+		// service_ids (R49): the certificate's service and every service of a server holding a certificate with the key.
 		_, err = sp.Exec(ctx, `INSERT INTO certificate_incidents (id, certificate_id, public_key_sha256, acme_certificate_id, state, revoke_mode, revocation,
-    revoked_at, started_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)`,
+    revoked_at, started_by, created_at, updated_at, service_ids) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10,
+    ARRAY(SELECT c.service_id FROM certificates c WHERE c.id = $2
+          UNION SELECT t.service_id FROM certificate_locations l JOIN certificates k ON k.id = l.certificate_id JOIN targets t ON t.id = l.target_id
+              WHERE k.public_key_sha256 = $3 AND l.missing_since IS NULL AND t.deleted_at IS NULL))`,
 			id, certificateID, key, acmeID, state, mode, revocation, revoked, nullableUser(a.UserID), now)
 		if db.IsUniqueViolationOn(err, "certificate_incidents_one_open") {
 			_ = sp.Rollback(ctx)

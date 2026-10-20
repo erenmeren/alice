@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
@@ -58,6 +59,9 @@ type BindingLocation struct {
 	State                string     // BindingLocation*
 	Version              string     // the vault version served or deployed ("" unless State is deployed)
 	DeploymentID         *uuid.UUID // the latest deployment of this binding to the website
+	// AttentionCode is why automatic deployment holds the website ("" for nothing): ReasonServiceUntrusted when its
+	// server's service does not accept the vault's keys (R49).
+	AttentionCode string
 }
 
 // Binding is a vault certificate's connection to websites. Locations is filled by Binding (and
@@ -160,14 +164,15 @@ func mapBindingError(err error) error {
 type lockedVault struct {
 	id        uuid.UUID
 	name, url string
+	service   uuid.UUID // the vault's service (R49): the source of the keys its bindings deploy
 }
 
 // lockVault locks a live vault (FOR NO KEY UPDATE: the poll's batches take the same lock, DeleteVault
 // a stronger one). A deleted or unknown vault is ErrNotFound.
 func lockVault(ctx context.Context, tx pgx.Tx, id uuid.UUID) (lockedVault, error) {
 	v := lockedVault{id: id}
-	err := tx.QueryRow(ctx, `SELECT name::text, coalesce(config->>'vault_url', '') FROM targets
-WHERE id = $1 AND type = 'azure_key_vault' AND deleted_at IS NULL FOR NO KEY UPDATE`, id).Scan(&v.name, &v.url)
+	err := tx.QueryRow(ctx, `SELECT name::text, coalesce(config->>'vault_url', ''), service_id FROM targets
+WHERE id = $1 AND type = 'azure_key_vault' AND deleted_at IS NULL FOR NO KEY UPDATE`, id).Scan(&v.name, &v.url, &v.service)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return lockedVault{}, ErrNotFound
 	}
@@ -332,6 +337,19 @@ func (s *Service) finishDenial(ctx context.Context, a Actor, err error, denial *
 	return err
 }
 
+// checkBindingTrust is design §5.6 (c) for websites joining a binding (R49): the server of each must be in the source
+// service (the vault's, the ACME certificate's) or its service must accept the source's keys. It returns the first
+// website refused and its *authz.UntrustedError.
+func checkBindingTrust(ctx context.Context, tx pgx.Tx, source uuid.UUID, ids []uuid.UUID, targets map[uuid.UUID]Target,
+	locs map[uuid.UUID]deployLocation) (uuid.UUID, error) {
+	for _, id := range ids {
+		if err := authz.CheckTrust(ctx, tx, source, targets[locs[id].target].ServiceID); err != nil {
+			return id, err
+		}
+	}
+	return uuid.Nil, nil
+}
+
 // locationRefusal reads the website named by a lockDeployTargets failure.
 func locationOfRefusal(err error) uuid.UUID {
 	var lr *LocationRefusalError
@@ -411,6 +429,9 @@ func (s *Service) CreateBinding(ctx context.Context, a Actor, in BindingInput) (
 		if reason, loc, err := s.checkBindable(c, in.LocationIDs, uuid.Nil, targets, locs, bound); err != nil {
 			return denyWith(&denial, reason, loc, err)
 		}
+		if loc, err := checkBindingTrust(ctx, tx, vault.service, in.LocationIDs, targets, locs); err != nil {
+			return denyWith(&denial, ReasonServiceUntrusted, loc, err)
+		}
 		now := s.clock.Now().UTC()
 		id := uuid.Must(uuid.NewV7())
 		if _, err := tx.Exec(ctx, `INSERT INTO bindings (id, kv_certificate_id, kv_target_id, created_by, created_at) VALUES ($1, $2, $3, $4, $5)`,
@@ -465,7 +486,7 @@ func (s *Service) UpdateBindingLocationsStrict(ctx context.Context, a Actor, id 
 	)
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		out, denial = Binding{}, nil
-		_, b, err := lockBinding(ctx, tx, id)
+		vault, b, err := lockBinding(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -520,6 +541,9 @@ func (s *Service) UpdateBindingLocationsStrict(ctx context.Context, a Actor, id 
 			if reason, loc, err := s.checkBindable(c, added, id, targets, locs, bound); err != nil {
 				return denyWith(&denial, reason, loc, err)
 			}
+			if loc, err := checkBindingTrust(ctx, tx, vault.service, added, targets, locs); err != nil {
+				return denyWith(&denial, ReasonServiceUntrusted, loc, err)
+			}
 			if _, err := tx.Exec(ctx, "UPDATE certificate_locations SET binding_id = $2 WHERE id = ANY($1)", added, id); err != nil {
 				return fmt.Errorf("inventory: connect the websites: %w", err)
 			}
@@ -529,7 +553,8 @@ func (s *Service) UpdateBindingLocationsStrict(ctx context.Context, a Actor, id 
 			if _, err := tx.Exec(ctx, "SELECT 1 FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE", removed); err != nil {
 				return fmt.Errorf("inventory: lock the websites to release: %w", err)
 			}
-			if _, err := tx.Exec(ctx, "UPDATE certificate_locations SET binding_id = NULL WHERE id = ANY($1) AND binding_id = $2", removed, id); err != nil {
+			if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET binding_id = NULL, binding_attention_code = '', binding_attention_at = NULL
+WHERE id = ANY($1) AND binding_id = $2`, removed, id); err != nil {
 				return fmt.Errorf("inventory: release the websites: %w", err)
 			}
 		}
@@ -627,7 +652,7 @@ func (s *Service) releaseBindingTx(ctx context.Context, tx pgx.Tx, a Actor, id u
 	if _, err := tx.Exec(ctx, "UPDATE bindings SET deleted_at = $2, version = version + 1 WHERE id = $1", id, now); err != nil {
 		return fmt.Errorf("inventory: remove a binding: %w", err)
 	}
-	tag, err := tx.Exec(ctx, "UPDATE certificate_locations SET binding_id = NULL WHERE binding_id = $1", id)
+	tag, err := tx.Exec(ctx, "UPDATE certificate_locations SET binding_id = NULL, binding_attention_code = '', binding_attention_at = NULL WHERE binding_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("inventory: release a binding's locations: %w", err)
 	}
@@ -718,7 +743,8 @@ func readBindingLocations(ctx context.Context, q db.Querier, b Binding) ([]Bindi
               WHERE v.kv_certificate_id = $2 ORDER BY v.detected_at DESC, v.id DESC LIMIT 1), ''),
     coalesce((SELECT v.version FROM deployments d JOIN kv_certificate_versions v ON v.id = d.kv_version_id
               WHERE d.location_id = l.id AND v.kv_certificate_id = $2 AND d.status IN ('succeeded', 'unchanged')
-              ORDER BY d.created_at DESC, d.id DESC LIMIT 1), '')
+              ORDER BY d.created_at DESC, d.id DESC LIMIT 1), ''),
+    l.binding_attention_code
 FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
 WHERE l.binding_id = $1
 ORDER BY lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id`, b.ID, b.KVCertificateID)
@@ -733,7 +759,8 @@ ORDER BY lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id`, b.ID, 
 			pending, latest            *uuid.UUID
 			latestStatus, served, done string
 		)
-		if err := rows.Scan(&l.LocationID, &l.TargetID, &l.TargetName, &l.CertPath, &pending, &latest, &latestStatus, &served, &done); err != nil {
+		if err := rows.Scan(&l.LocationID, &l.TargetID, &l.TargetName, &l.CertPath, &pending, &latest, &latestStatus, &served, &done,
+			&l.AttentionCode); err != nil {
 			return nil, fmt.Errorf("inventory: read a binding website: %w", err)
 		}
 		deployed := served

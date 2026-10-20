@@ -41,11 +41,14 @@ const (
 	TemplateACMEAutoDeployStopped     = "acme.auto_deploy_stopped"
 	TemplateACMEAutoDeployHeldLicense = "acme.auto_deploy_held_license"
 	TemplateACMEAutoDeployHeldChain   = "acme.auto_deploy_held_chain"
+	// TemplateACMEAutoDeployUntrusted: automatic deployment stopped for count bound locations whose server's service does
+	// not accept the certificate's keys (R49, design §5.6): sent when the bindings are first marked.
+	TemplateACMEAutoDeployUntrusted = "acme.auto_deploy_untrusted"
 )
 
 // ACMEDeployTemplates lists the ACME automatic deployment e-mails (render tests).
 func ACMEDeployTemplates() []string {
-	return []string{TemplateACMEAutoDeployStopped, TemplateACMEAutoDeployHeldLicense, TemplateACMEAutoDeployHeldChain}
+	return []string{TemplateACMEAutoDeployStopped, TemplateACMEAutoDeployHeldLicense, TemplateACMEAutoDeployHeldChain, TemplateACMEAutoDeployUntrusted}
 }
 
 // acmeDeployPage is the size of a page of candidate certificates (the run reads every page until the batch is used).
@@ -166,14 +169,23 @@ func (s *Service) planACMEDeploy(ctx context.Context, id uuid.UUID, reopened *ti
 		sn.gateOpen, sn.reopened, sn.remaining = true, reopened, autoDeployBatch-run.Created
 		p := planACMEAutoDeploy(sn)
 
+		var untrusted []string
 		for _, m := range p.attention {
 			if _, err := tx.Exec(ctx, `UPDATE acme_bindings SET attention_code = $3, attention_at = CASE WHEN $3 = '' THEN NULL ELSE $4::timestamptz END
 WHERE acme_certificate_id = $1 AND location_id = $2`, id, m.location, m.code, now); err != nil {
 				return fmt.Errorf("inventory: mark the binding: %w", err)
 			}
+			if m.code == ReasonServiceUntrusted { // a mark changes only when it is new: the notice goes out once
+				untrusted = append(untrusted, m.location.String())
+			}
+		}
+		if len(untrusted) > 0 {
+			if err := s.untrustedACMEDeploy(ctx, tx, id, names, untrusted); err != nil {
+				return err
+			}
 		}
 		if p.hold != "" {
-			_, deployable, err := s.prepareACMEDeployment(ctx, tx, sn.current.id, p.candidate, 0, now)
+			_, deployable, err := s.prepareACMEDeployment(ctx, tx, sn.current.id, sn.service, p.candidate, 0, now)
 			if err != nil || deployable == 0 {
 				return err // nothing could be deployed now: nothing is held and nothing is said
 			}
@@ -186,7 +198,7 @@ WHERE acme_certificate_id = $1 AND location_id = $2`, id, m.location, m.code, no
 			}
 		}
 		if len(p.deploy) > 0 && p.budget > 0 {
-			if created, _, err = s.prepareACMEDeployment(ctx, tx, sn.current.id, p.deploy, p.budget, now); err != nil {
+			if created, _, err = s.prepareACMEDeployment(ctx, tx, sn.current.id, sn.service, p.deploy, p.budget, now); err != nil {
 				return err
 			}
 		}
@@ -224,8 +236,8 @@ func readACMEDeploySnapshot(ctx context.Context, tx pgx.Tx, id uuid.UUID, now ti
 		stoppedID                 *uuid.UUID
 	)
 	err := tx.QueryRow(ctx, `SELECT auto_deploy, names, current_certificate_id, deploy_held_certificate_id, deploy_held_reason,
-    deploy_released_certificate_id, deploy_stopped_certificate_id FROM acme_certificates WHERE id = $1`, id).
-		Scan(&sn.autoDeploy, &names, &current, &heldID, &sn.heldReason, &released, &stoppedID)
+    deploy_released_certificate_id, deploy_stopped_certificate_id, service_id FROM acme_certificates WHERE id = $1`, id).
+		Scan(&sn.autoDeploy, &names, &current, &heldID, &sn.heldReason, &released, &stoppedID, &sn.service)
 	if err != nil {
 		return sn, nil, fmt.Errorf("inventory: read the ACME certificate's deployment state: %w", err)
 	}
@@ -247,16 +259,18 @@ FROM certificates x WHERE x.id = $1`, c.id, id).Scan(&c.notBefore, &c.notAfter, 
 	c.notBefore, c.notAfter, c.issuedAt = c.notBefore.UTC(), c.notAfter.UTC(), c.issuedAt.UTC()
 	sn.current = &c
 
-	rows, err := tx.Query(ctx, `SELECT b.location_id, b.auto_deploy, b.created_at, l.certificate_id, b.attention_code
+	// untrusted (R49): the server's service is not the certificate's and does not accept its keys.
+	rows, err := tx.Query(ctx, `SELECT b.location_id, b.auto_deploy, b.created_at, l.certificate_id, b.attention_code,
+    t.service_id <> $2 AND NOT EXISTS (SELECT 1 FROM service_trusts st WHERE st.source_service_id = $2 AND st.target_service_id = t.service_id)
 FROM acme_bindings b JOIN certificate_locations l ON l.id = b.location_id
 JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
-WHERE b.acme_certificate_id = $1 ORDER BY b.location_id`, id)
+WHERE b.acme_certificate_id = $1 ORDER BY b.location_id`, id, sn.service)
 	if err != nil {
 		return sn, nil, fmt.Errorf("inventory: read the bindings: %w", err)
 	}
 	sn.bindings, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (acmeDeployBinding, error) {
 		var b acmeDeployBinding
-		err := r.Scan(&b.location, &b.autoDeploy, &b.createdAt, &b.served, &b.attentionCode)
+		err := r.Scan(&b.location, &b.autoDeploy, &b.createdAt, &b.served, &b.attentionCode, &b.untrusted)
 		b.createdAt = b.createdAt.UTC()
 		return b, err
 	})
@@ -294,12 +308,13 @@ FROM deployments d WHERE d.location_id = ANY($1) AND (d.state <> 'done' OR d.cer
 // aborts only that location). It creates at most budget deployments and also reports how many of the locations passed
 // the checks (budget 0: the checks only, for a hold). A location that vanished or whose server was deleted ends the
 // attempt without an error (the next run sees it gone).
-func (s *Service) prepareACMEDeployment(ctx context.Context, tx pgx.Tx, certificate uuid.UUID, locations []uuid.UUID, budget int,
+func (s *Service) prepareACMEDeployment(ctx context.Context, tx pgx.Tx, certificate, service uuid.UUID, locations []uuid.UUID, budget int,
 	now time.Time) (created, deployable int, err error) {
 	c, err := readDeployCertificate(ctx, tx, certificate)
 	if err != nil {
 		return 0, 0, err
 	}
+	c.service = service // the ACME certificate's key: its service is the source (R49, design §5.6)
 	if c.keyID == nil || (c.algorithm != "rsa" && c.algorithm != "ecdsa") || !now.Before(c.notAfter) || now.Before(c.notBefore) ||
 		c.revoked || c.compromised {
 		return 0, 0, nil // a revoked or compromised version is never deployed (00021)
@@ -405,6 +420,25 @@ WHERE id = $1 AND deploy_stopped_certificate_id IS DISTINCT FROM $2`, id, curren
 		}
 	}
 	return true, nil
+}
+
+// untrustedACMEDeploy records that automatic deployment stopped at the bound locations newly marked
+// ReasonServiceUntrusted (R49, design §5.6): audit acme.auto_deploy.untrusted and one e-mail.
+func (s *Service) untrustedACMEDeploy(ctx context.Context, tx pgx.Tx, id uuid.UUID, names, locations []string) error {
+	if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "acme.auto_deploy.untrusted", ObjectType: "acme_certificate",
+		ObjectID: id.String(), Result: audit.Success, Details: map[string]string{"acme_certificate_id": id.String(),
+			"names": truncRunes(strings.Join(names, ","), maxAuditNames), "location_ids": strings.Join(locations, ","),
+			"location_count": strconv.Itoa(len(locations))}}); err != nil {
+		return err
+	}
+	if s.notifier != nil {
+		p := acmeDeployParams(names)
+		p["count"] = strconv.Itoa(len(locations))
+		if err := s.notifier.NotifyAdmins(ctx, tx, TemplateACMEAutoDeployUntrusted, p); err != nil {
+			return fmt.Errorf("inventory: queue the untrusted notice: %w", err)
+		}
+	}
+	return nil
 }
 
 // acmeDeployParams are the params every automatic deployment e-mail has.

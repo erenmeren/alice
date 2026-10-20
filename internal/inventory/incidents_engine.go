@@ -381,8 +381,9 @@ func (s *Service) requestIncidentDeployment(ctx context.Context, i Incident, l i
 	if l.activeDep != nil && l.activeDepCrt != nil && *l.activeDepCrt == *i.ReplacementCertificateID {
 		return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationDeploying, l.activeDep, "", l.attempts)
 	}
+	// An incident replaces a key that is already there: no trust is needed (R49, design §5.6).
 	got, err := s.RequestDeployment(ctx, Actor{Audit: incidentActor}, DeployRequestInput{CertificateID: *i.ReplacementCertificateID,
-		LocationIDs: []uuid.UUID{l.location}})
+		LocationIDs: []uuid.UUID{l.location}, incident: true})
 	switch {
 	case err == nil:
 		return s.setLocation(ctx, i.ID, l.location, IncidentLocationPending, IncidentLocationDeploying, &got[0].ID, "", l.attempts+1)

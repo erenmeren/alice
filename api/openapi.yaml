@@ -22,6 +22,7 @@ paths:
       operationId: getLivez
       summary: Process liveness (no dependencies checked)
       x-permission: public
+      x-scope: none
       responses:
         "200": { $ref: "#/components/responses/StatusOK" }
         default: { $ref: "#/components/responses/Error" }
@@ -34,6 +35,7 @@ paths:
         with Retry-After after that). The internal health listener (ALICE_HEALTH_ADDR) is not
         limited; container healthchecks and orchestrators use that one.
       x-permission: public
+      x-scope: none
       responses:
         "200": { $ref: "#/components/responses/StatusOK" }
         "429": { $ref: "#/components/responses/Error" }
@@ -44,6 +46,7 @@ paths:
       operationId: getVersion
       summary: Build information
       x-permission: read
+      x-scope: any
       responses:
         "200":
           description: Build information
@@ -56,6 +59,7 @@ paths:
       operationId: listLocales
       summary: Supported UI languages
       x-permission: public
+      x-scope: none
       responses:
         "200":
           description: Supported locales
@@ -68,6 +72,7 @@ paths:
       operationId: getSetupStatus
       summary: Whether the first-run wizard is still needed
       x-permission: public
+      x-scope: none
       responses:
         "200":
           description: Setup status
@@ -80,6 +85,7 @@ paths:
       operationId: startSetupSession
       summary: Exchange the one-time setup code for a wizard session (sets the __Host-alice_setup cookie)
       x-permission: public
+      x-scope: none
       requestBody:
         required: true
         content:
@@ -105,6 +111,7 @@ paths:
       operationId: setSetupLanguage
       summary: Choose the default language
       x-permission: setup
+      x-scope: none
       requestBody:
         required: true
         content:
@@ -123,6 +130,7 @@ paths:
       operationId: startAdminEnrollment
       summary: Validate the administrator details and create a TOTP secret to scan
       x-permission: setup
+      x-scope: none
       requestBody:
         required: true
         content:
@@ -149,6 +157,7 @@ paths:
       operationId: createAdmin
       summary: Confirm the first TOTP code, create the administrator and sign in
       x-permission: setup
+      x-scope: none
       requestBody:
         required: true
         content:
@@ -174,6 +183,7 @@ paths:
       operationId: setRecoveryPassphrase
       summary: Choose the recovery passphrase and create the backup key pair
       x-permission: settings.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -195,6 +205,7 @@ paths:
       operationId: chooseEvaluation
       summary: Complete the wizard's license step with the 30-day evaluation (it runs from the installation timestamp)
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: Setup status after the choice
@@ -208,6 +219,7 @@ paths:
       operationId: completeSetup
       summary: Finish the wizard (needs the recovery passphrase and a license choice)
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: Setup status after completion
@@ -221,6 +233,7 @@ paths:
       operationId: login
       summary: Check username and password; sets a pending session cookie for the MFA step
       x-permission: public
+      x-scope: none
       requestBody:
         required: true
         content:
@@ -252,6 +265,7 @@ paths:
       operationId: enrollMFA
       summary: Create the TOTP secret for a user who has none yet
       x-permission: mfa_pending
+      x-scope: none
       responses:
         "200":
           description: TOTP secret, shown once
@@ -265,6 +279,7 @@ paths:
       operationId: verifyMFA
       summary: Complete sign-in with a TOTP code or a recovery code (new session cookie)
       x-permission: mfa_pending
+      x-scope: none
       requestBody:
         required: true
         content:
@@ -289,6 +304,7 @@ paths:
       operationId: getSession
       summary: The signed-in user, the CSRF token and session limits
       x-permission: session
+      x-scope: self
       responses:
         "200":
           description: Current session
@@ -302,6 +318,7 @@ paths:
       operationId: logout
       summary: End this session
       x-permission: session
+      x-scope: self
       responses:
         "204": { description: Signed out; cookie cleared }
         default: { $ref: "#/components/responses/Error" }
@@ -313,6 +330,7 @@ paths:
         For local users. A single sign-on user confirms at the identity provider (/auth/oidc/stepup), a directory user
         with the directory password (/auth/ldap/stepup); a directory user is refused here with 409 ALC-USR-0003.
       x-permission: session
+      x-scope: self
       requestBody:
         required: true
         content:
@@ -336,6 +354,7 @@ paths:
       operationId: changePassword
       summary: Change the own password; ends every other session
       x-permission: session
+      x-scope: self
       requestBody:
         required: true
         content:
@@ -360,6 +379,7 @@ paths:
       operationId: regenerateRecoveryCodes
       summary: Replace the own recovery codes (the old ones stop working)
       x-permission: session.stepup
+      x-scope: self
       responses:
         "200":
           description: New recovery codes, shown once
@@ -376,6 +396,7 @@ paths:
       operationId: setMyLocale
       summary: Save the own UI language
       x-permission: session
+      x-scope: self
       requestBody:
         required: true
         content:
@@ -394,6 +415,7 @@ paths:
       operationId: listUsers
       summary: All users (administrators only)
       x-permission: users.read
+      x-scope: platform
       responses:
         "200":
           description: Users ordered by username
@@ -409,6 +431,7 @@ paths:
       operationId: createUser
       summary: Create a local user; they set up their authenticator app at first sign-in
       x-permission: users.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -439,6 +462,7 @@ paths:
       operationId: getUser
       summary: One user
       x-permission: users.read
+      x-scope: platform
       responses:
         "200":
           description: The user
@@ -451,6 +475,7 @@ paths:
       operationId: updateUser
       summary: Change name, email, role or disabled state; role changes and disabling end the user's sessions
       x-permission: users.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -480,6 +505,7 @@ paths:
       operationId: resetUserMFA
       summary: Remove the user's authenticator app and recovery codes; ends their sessions
       x-permission: users.manage
+      x-scope: platform
       responses:
         "204": { description: MFA reset }
         "404": { $ref: "#/components/responses/Error" }
@@ -496,6 +522,7 @@ paths:
         user.password_reset row carries revoked_tokens_count). The tokens are refused from the next request on.
         A user changing their own password (POST /api/v1/auth/password) keeps their tokens.
       x-permission: users.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -522,6 +549,7 @@ paths:
         audited as token.revoked by its ID; the user.sessions_revoked row carries revoked_tokens_count). The
         tokens are refused from the next request on. Also applies when administrators use it on themselves.
       x-permission: users.manage
+      x-scope: platform
       responses:
         "204": { description: Sessions ended and API tokens revoked }
         "404": { $ref: "#/components/responses/Error" }
@@ -540,6 +568,7 @@ paths:
         The lockout is kept in memory by each Alice process; this acts on the process that answers. Answers 204 also
         when nothing was locked. A user who does not sign in through a directory is 409 ALC-LDAP-0009.
       x-permission: users.manage
+      x-scope: platform
       responses:
         "204": { description: The lockout is ended }
         "404": { $ref: "#/components/responses/Error" }
@@ -550,6 +579,7 @@ paths:
       operationId: listTokens
       summary: Own API tokens, or another user's with user_id (administrators only)
       x-permission: session
+      x-scope: self
       parameters:
         - { name: user_id, in: query, required: false, schema: { type: string, format: uuid } }
       responses:
@@ -568,6 +598,7 @@ paths:
       operationId: createToken
       summary: Create an API token; the secret is returned once. A single sign-on user gets none (409 ALC-USR-0003)
       x-permission: session.stepup
+      x-scope: self
       requestBody:
         required: true
         content:
@@ -601,6 +632,7 @@ paths:
       operationId: revokeToken
       summary: Revoke a token (own, or any token for administrators)
       x-permission: session
+      x-scope: self
       responses:
         "204": { description: Token revoked }
         "404": { $ref: "#/components/responses/Error" }
@@ -610,6 +642,7 @@ paths:
       operationId: listAudit
       summary: Audit log entries, newest first (administrators and auditors)
       x-permission: audit.read
+      x-scope: platform
       parameters:
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
         - { name: cursor, in: query, required: false, schema: { type: string, pattern: "^[0-9]+$" }, description: next_cursor of the previous page }
@@ -634,6 +667,7 @@ paths:
       operationId: exportAudit
       summary: Download the whole audit log with its verification result (read-only verification; the export itself is audited)
       x-permission: audit.read
+      x-scope: platform
       parameters:
         - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
       description: >-
@@ -673,6 +707,7 @@ paths:
         Recomputes the whole chain from the first entry (for up to 10 minutes). One verification or export runs at a
         time per Alice process; another one is refused with 503 ALC-AUD-0001 (retryable, Retry-After).
       x-permission: audit.read
+      x-scope: platform
       responses:
         "200":
           description: Verification result
@@ -686,6 +721,7 @@ paths:
       operationId: getLicenseStatus
       summary: Whether the license has expired, and the license banners the caller sees
       x-permission: read
+      x-scope: any
       responses:
         "200":
           description: License status
@@ -698,6 +734,7 @@ paths:
       operationId: getLicense
       summary: Installation ID, license in force, uploaded files and history
       x-permission: license.read
+      x-scope: platform
       responses:
         "200":
           description: License details
@@ -709,6 +746,7 @@ paths:
       operationId: installLicense
       summary: Upload a license file; it takes effect at once
       x-permission: license.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -728,6 +766,7 @@ paths:
       operationId: previewLicense
       summary: Check a license file and show what uploading it would do, without storing it
       x-permission: license.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -747,6 +786,7 @@ paths:
       operationId: listProviders
       summary: Compiled-in providers with their capabilities and configuration schema (add-server form)
       x-permission: read
+      x-scope: any
       responses:
         "200":
           description: Providers
@@ -762,7 +802,10 @@ paths:
         type narrows the list to one kind (linux, nginx, apache, haproxy or azure_key_vault; anything else is 422 validation.one_of
         on type). A Key Vault carries vault.
       x-permission: read
+      x-scope: list
       parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: type, in: query, required: false, schema: { type: string, enum: [linux, nginx, apache, haproxy, azure_key_vault] } }
       responses:
         "200":
@@ -778,6 +821,7 @@ paths:
         A 409 answer is ALC-TGT-0001 (another server has this name, or this address and port) or
         ALC-LIC-0008 (the license's target limit is reached). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
+      x-scope: create
       requestBody:
         required: true
         content:
@@ -802,6 +846,7 @@ paths:
       operationId: getTarget
       summary: One server
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The server
@@ -821,6 +866,7 @@ paths:
         that is no longer current. 404 when the server does not exist; 409 ALC-TGT-0001 when the new name is
         taken (ALC-AKV-0028 for a vault). poll_interval_minutes is for vaults only. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: targets.manage
+      x-scope: resource
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -851,6 +897,7 @@ paths:
         (403 ALC-AUTH-0003 without it, 403 ALC-AUTH-0002 for an API token). Refused with 403 ALC-LIC-0001 while the
         license is locked.
       x-permission: targets.manage
+      x-scope: resource
       parameters:
         - { name: remove_bindings, in: query, required: false, schema: { type: boolean, default: false } }
       responses:
@@ -872,6 +919,7 @@ paths:
         key is not exportable, ALC-AKV-0021 when Alice has not read a current version). Refused with 403
         ALC-LIC-0001 while the license is locked.
       x-permission: inventory.operate
+      x-scope: resource
       requestBody:
         required: false
         content:
@@ -897,6 +945,7 @@ paths:
         For a vault this queues a poll of its certificates, keys and secrets. Refused with 403 ALC-LIC-0001 while
         the license is locked.
       x-permission: inventory.operate
+      x-scope: resource
       responses:
         "202":
           description: Queued
@@ -914,6 +963,7 @@ paths:
       operationId: listHostKeys
       summary: The server's pinned, observed and superseded host keys
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: Host keys, newest first
@@ -931,6 +981,7 @@ paths:
       description: >-
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: hostkeys.confirm
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -957,6 +1008,7 @@ paths:
         Re-pinning the key that is already pinned dismisses the change instead: the server is unblocked with
         its confirmed fingerprint and the audit log records hostkey.change_dismissed. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: hostkeys.repin
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -980,6 +1032,7 @@ paths:
       operationId: listTargetKeys
       summary: The SSH keys found on one server, with their users and files
       x-permission: read
+      x-scope: resource
       parameters:
         - { name: missing, in: query, required: false, schema: { type: boolean } }
       responses:
@@ -1000,6 +1053,7 @@ paths:
         account's key files completely and once, items is empty and refusal is ALC-KEY-0014 (scan the server again).
         The default file of a user is the first one the SSH server reads. 404 for a Key Vault.
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: Users and their key files
@@ -1018,6 +1072,7 @@ paths:
         At most 1000 locations; truncated is true when some (missing ones) were left out. 404 when the server does
         not exist or was deleted. A Linux server has none.
       x-permission: read
+      x-scope: resource
       parameters:
         - { name: missing, in: query, required: false, schema: { type: boolean } }
       responses:
@@ -1034,7 +1089,10 @@ paths:
       operationId: listSSHKeys
       summary: SSH key inventory with filters
       x-permission: read
+      x-scope: list
       parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: os_user, in: query, required: false, schema: { type: string, maxLength: 32 } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
@@ -1055,6 +1113,7 @@ paths:
       operationId: getPlatformKey
       summary: Alice's public key, its authorized_keys line and the setup snippets per sudoers profile
       x-permission: targets.manage
+      x-scope: any
       parameters:
         - { name: from, in: query, required: false, schema: { type: string, description: IP address for the from= option } }
       responses:
@@ -1072,6 +1131,7 @@ paths:
       operationId: getSSHKey
       summary: One SSH key and every place it is used
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The key
@@ -1089,6 +1149,7 @@ paths:
       description: >-
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: inventory.operate
+      x-scope: resource
       requestBody:
         required: false
         content:
@@ -1113,6 +1174,7 @@ paths:
         most two keys are generated at once (503 ALC-KEY-0011 with Retry-After). Refused with 403 ALC-LIC-0001 while
         the license is locked.
       x-permission: inventory.operate
+      x-scope: create
       requestBody:
         required: true
         content:
@@ -1143,6 +1205,7 @@ paths:
         job; with other options 409 ALC-JOB-0005. Refusals that protect access are recorded in the audit log. Refused
         with 403 ALC-LIC-0001 while the license is locked.
       x-permission: inventory.operate
+      x-scope: cross
       requestBody:
         required: true
         content:
@@ -1177,6 +1240,7 @@ paths:
         a destroyed private key 410 ALC-KEY-0008, a clock set back behind the last download 503 ALC-KEY-0015
         (retryable). Allowed while the license is locked.
       x-permission: sshkeys.download
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -1208,6 +1272,7 @@ paths:
       operationId: listRotationPolicies
       summary: Rotation policies by name
       x-permission: read
+      x-scope: list
       responses:
         "200":
           description: Every live policy
@@ -1223,6 +1288,7 @@ paths:
         retired key too (409 ALC-KEY-0007); each key has one policy (409 ALC-ROT-0001); the new key of a running
         rotation cannot get one (409 ALC-ROT-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.manage
+      x-scope: create
       requestBody:
         required: true
         content:
@@ -1249,6 +1315,7 @@ paths:
       operationId: getRotationPolicy
       summary: One rotation policy
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The policy
@@ -1269,6 +1336,7 @@ paths:
         ALC-SYS-0008 when the If-Match header is missing (answered first, before the body is read) or names another
         version. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.manage
+      x-scope: resource
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -1297,6 +1365,7 @@ paths:
         A previewed run is cancelled; a started run refuses the deletion (409 ALC-ROT-0002). 412 ALC-SYS-0008 when the
         If-Match header is missing or names another version. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.manage
+      x-scope: resource
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       responses:
@@ -1317,6 +1386,7 @@ paths:
         it starts, and a scheduled run starts only after that email was delivered. 412 ALC-SYS-0008 when the If-Match
         header is missing or names another version. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.operate
+      x-scope: cross
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       responses:
@@ -1341,6 +1411,7 @@ paths:
         No run is planned; a previewed run is cancelled, a started run continues. 412 ALC-SYS-0008 when the If-Match
         header is missing or names another version. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.manage
+      x-scope: resource
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       responses:
@@ -1366,6 +1437,7 @@ paths:
         was). A plan in which nothing can change is answered with its skipped places. Run now must send plan_digest
         back. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.manage
+      x-scope: resource
       responses:
         "200":
           description: The plan
@@ -1387,6 +1459,7 @@ paths:
         created or started (409 ALC-ROT-0003); a running rotation of the key is 409 ALC-ROT-0002; a plan in which nothing
         can change 409 ALC-ROT-0004. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.operate
+      x-scope: cross
       requestBody:
         required: true
         content:
@@ -1410,6 +1483,7 @@ paths:
       operationId: listRotations
       summary: Rotation runs, newest first (counts of their places; places, steps and decisions only on GET /rotation/runs/{id})
       x-permission: read
+      x-scope: list
       parameters:
         - { name: policy_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: ssh_key_id, in: query, required: false, schema: { type: string, format: uuid, description: The old or the new key of the run } }
@@ -1431,6 +1505,7 @@ paths:
       operationId: getRotation
       summary: One rotation run with its places and steps
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The run
@@ -1450,6 +1525,7 @@ paths:
         queued (409 ALC-ROT-0021, retryable); every removal of the old key is still preceded by a fresh login with the
         new key. 409 ALC-ROT-0005 when the run is not paused.
       x-permission: rotation.operate
+      x-scope: cross
       responses:
         "204": { description: Continued }
         "403": { $ref: "#/components/responses/Error" }
@@ -1466,6 +1542,7 @@ paths:
         The administrators are emailed the new removal time. 409 ALC-ROT-0005 when the run is not in its overlap or is
         paused. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.operate
+      x-scope: cross
       responses:
         "204": { description: The overlap ends now }
         "403": { $ref: "#/components/responses/Error" }
@@ -1483,6 +1560,7 @@ paths:
         kept too. At least one place where the new key works must remain. Otherwise 409 ALC-ROT-0005 and nothing
         changes. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: rotation.operate
+      x-scope: cross
       requestBody:
         required: true
         content:
@@ -1506,6 +1584,7 @@ paths:
         Administrator; operate tokens allowed (no step-up: stopping only takes back what the run added). The old key is never touched. A previewed run is cancelled. Once the old key's removal began, 409 ALC-ROT-0005.
         Allowed while the license is locked: undoing the run's own additions is always allowed.
       x-permission: rotation.manage
+      x-scope: resource
       responses:
         "204": { description: Stopped }
         "403": { $ref: "#/components/responses/Error" }
@@ -1517,6 +1596,7 @@ paths:
       operationId: listJobs
       summary: Background tasks, newest first
       x-permission: read
+      x-scope: list
       parameters:
         - { name: status, in: query, required: false, schema: { type: string, enum: [queued, running, succeeded, failed, cancelled, dead, blocked_license] } }
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
@@ -1537,6 +1617,7 @@ paths:
       operationId: getJob
       summary: One background task
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The task
@@ -1556,6 +1637,7 @@ paths:
         and confirmed_at and recorded in the job.confirmed audit entry.
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: jobs.confirm
+      x-scope: resource
       responses:
         "200":
           description: The task, queued again
@@ -1583,6 +1665,7 @@ paths:
         of who did it and when.
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: jobs.confirm
+      x-scope: resource
       responses:
         "200":
           description: The cancelled task
@@ -1603,7 +1686,10 @@ paths:
       operationId: listCertificates
       summary: Certificate inventory, soonest expiry first (no chain, no locations; see GET /certificates/{id})
       x-permission: read
+      x-scope: list
       parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid }, description: 'Certificates in use on this server' }
         - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv, acme] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 }, description: 'Part of the subject CN, a SAN, the label or the fingerprint' }
@@ -1636,6 +1722,7 @@ paths:
         fails; sending it again is then refused with ALC-CRT-0008 and the certificate is in the list. Refused with
         403 ALC-LIC-0001 while the license is locked, before the body is read.
       x-permission: certificates.operate
+      x-scope: create
       requestBody:
         required: true
         content:
@@ -1666,6 +1753,10 @@ paths:
       operationId: listCSRs
       summary: Signing requests (every pending one, newest first, then the 50 most recently finished)
       x-permission: read
+      x-scope: list
+      parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
       responses:
         "200":
           description: Signing requests
@@ -1683,6 +1774,7 @@ paths:
         Retry-After) when Alice already generates two signing-request keys; 409 ALC-CRT-0017 when 1000 signing
         requests are open. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
+      x-scope: create
       requestBody:
         required: true
         content:
@@ -1710,6 +1802,7 @@ paths:
       operationId: getCSR
       summary: One signing request
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The signing request
@@ -1731,6 +1824,7 @@ paths:
         differ from the request is stored with the warning csr_name_mismatch. Keys are matched exactly (lower case)
         and each may appear once; anything else is 400. The body is limited to 384 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -1761,6 +1855,7 @@ paths:
         No body (or {}; at most 4 KiB; anything else is 400). 409 ALC-CRT-0012 when the request is no longer pending. Refused with 403 ALC-LIC-0001 while
         the license is locked.
       x-permission: certificates.operate
+      x-scope: resource
       responses:
         "200":
           description: The cancelled signing request
@@ -1780,6 +1875,7 @@ paths:
       operationId: getCertificate
       summary: One certificate with its chain and the locations that use it
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The certificate
@@ -1810,6 +1906,7 @@ paths:
         block. There is no retry or rollback operation: request again to deploy again. Refused with 403
         ALC-LIC-0001 while the license is locked, before the body is read.
       x-permission: certificates.operate
+      x-scope: cross
       requestBody:
         required: true
         content:
@@ -1842,6 +1939,7 @@ paths:
         type, is 400. The body is limited to 4 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the
         license is locked.
       x-permission: targets.manage
+      x-scope: resource
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -1869,6 +1967,7 @@ paths:
       operationId: listDeployments
       summary: Deployment history, newest first
       x-permission: read
+      x-scope: list
       parameters:
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: certificate_id, in: query, required: false, schema: { type: string, format: uuid } }
@@ -1890,6 +1989,7 @@ paths:
       operationId: getDeployment
       summary: One deployment with its steps
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The deployment
@@ -1916,6 +2016,7 @@ paths:
         limit is reached), 422 ALC-AKV-0027 (a sign-in certificate without a usable RSA key). 202-style follow-up: job_id is the
         first poll of the vault. Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: credentials.manage
+      x-scope: create
       requestBody:
         required: true
         content:
@@ -1950,6 +2051,7 @@ paths:
         is kept sealed in Alice's database as history and is never used again. job_id is the poll queued after the replacement
         (null when the vault is disabled). Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: credentials.manage
+      x-scope: resource
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -1983,6 +2085,7 @@ paths:
       description: >-
         404 for an unknown vault or a target that is not a vault. Names are ordered and matched by their ASCII lower-case form.
       x-permission: read
+      x-scope: resource
       parameters:
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
         - { name: expires_before, in: query, required: false, schema: { type: string, maxLength: 40 }, description: 'An RFC 3339 date-time (2027-01-01T00:00:00Z) or a date (2027-01-01, midnight UTC); anything else is 422 validation.pattern' }
@@ -2006,6 +2109,7 @@ paths:
       operationId: getKVCertificate
       summary: One vault certificate with its versions (newest first), its connection to websites and what is known of deploy access
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The certificate
@@ -2029,6 +2133,7 @@ paths:
         409 ALC-CRT-0011 otherwise; that is an acknowledgement for the release only: automatic deployment never deploys an
         incomplete chain and holds the version again, and every manual deployment of it needs the confirmation again). 409 ALC-AKV-0035 when the version is not held. The body is optional. Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: credentials.manage
+      x-scope: resource
       requestBody:
         required: false
         content:
@@ -2052,6 +2157,7 @@ paths:
       operationId: listKVKeys
       summary: The keys of a vault (metadata only, never key material)
       x-permission: read
+      x-scope: resource
       parameters:
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
         - { name: expires_before, in: query, required: false, schema: { type: string, maxLength: 40 }, description: 'An RFC 3339 date-time (2027-01-01T00:00:00Z) or a date (2027-01-01, midnight UTC); anything else is 422 validation.pattern' }
@@ -2074,6 +2180,7 @@ paths:
       operationId: listKVSecrets
       summary: The secrets of a vault (metadata only, never a value)
       x-permission: read
+      x-scope: resource
       parameters:
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
         - { name: expires_before, in: query, required: false, schema: { type: string, maxLength: 40 }, description: 'An RFC 3339 date-time (2027-01-01T00:00:00Z) or a date (2027-01-01, midnight UTC); anything else is 422 validation.pattern' }
@@ -2100,6 +2207,7 @@ paths:
         form) narrow the list in the query, before limit. next_cursor pages it; a cursor belongs to the vault it came from
         (another vault's cursor is 422 validation.pattern). 404 for an unknown or removed vault and for a target that is not a vault.
       x-permission: read
+      x-scope: resource
       parameters:
         - { name: certificate_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: certificate_name, in: query, required: false, schema: { type: string, maxLength: 127, pattern: "^[0-9A-Za-z-]+$" } }
@@ -2122,6 +2230,7 @@ paths:
       operationId: getKVImport
       summary: One import
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The import
@@ -2138,6 +2247,7 @@ paths:
         key_type keeps websites whose certificate has that key type (a website of an unknown type is listed under every type);
         unbound=true hides websites that already follow a vault certificate. Ordered by server name, path and id.
       x-permission: read
+      x-scope: list
       parameters:
         - { name: key_type, in: query, required: false, schema: { type: string, enum: [rsa, ecdsa] } }
         - { name: unbound, in: query, required: false, schema: { type: boolean } }
@@ -2162,6 +2272,7 @@ paths:
         has a connection), 422 ALC-AKV-0013 (key not exportable), 409 ALC-AKV-0015 (certificate no longer in the vault), 409
         ALC-AKV-0021 (Alice has not read the certificate's details yet: no current version; Check now, then try again). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
+      x-scope: cross
       requestBody:
         required: true
         content:
@@ -2190,6 +2301,7 @@ paths:
       operationId: getBinding
       summary: One connection with the state of each website
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The connection
@@ -2213,6 +2325,7 @@ paths:
         about the change is judged).
         Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
+      x-scope: cross
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -2242,6 +2355,7 @@ paths:
       description: >-
         A safety action: it works while the license is locked. A deployment of the connection that is still unfinished runs on.
       x-permission: certificates.operate
+      x-scope: resource
       responses:
         "204": { description: Removed }
         "403": { $ref: "#/components/responses/Error" }
@@ -2258,6 +2372,7 @@ paths:
         wave is forgotten. 422 ALC-AKV-0013 when the key is not exportable. Switching it off is a safety action that also works while the
         license is locked; switching it on is refused with 403 ALC-LIC-0001 then. Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002).
       x-permission: credentials.manage
+      x-scope: resource
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -2295,6 +2410,7 @@ paths:
         is deployed by an Administrator only, with a fresh step-up and no API token (an Operator: 403 ALC-AKV-0022; an
         Administrator without step-up: 403 ALC-AUTH-0003; a token: 403 ALC-AUTH-0002); holding stays. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -2330,6 +2446,7 @@ paths:
         returned. If the answer of the vault is lost the import stays uncertain: it is never sent again, a poll that sees its
         thumbprint settles it, and otherwise it ends as ALC-AKV-0026. Needs an Administrator's browser session with a fresh step-up verification code (403 ALC-AUTH-0003 without it) and is never available to API tokens (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: credentials.manage
+      x-scope: cross
       requestBody:
         required: true
         content:
@@ -2366,7 +2483,10 @@ paths:
         ALC-SYS-0009 without running the export. Works while the license is
         expired. A failure after the first byte aborts the connection: a cut file never looks complete.
       x-permission: read
+      x-scope: list
       parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: source, in: query, required: false, schema: { type: string, enum: [discovered, uploaded, csr, azure_kv, acme] } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
@@ -2393,7 +2513,10 @@ paths:
         id,fingerprint,key_type,bits,comment,managed,platform_key,weak,location_count,target_count,missing,retired,first_seen_at
         and the file name alice-ssh-keys-<yyyy-mm-dd>.csv. No key material besides the public fingerprint is exported.
       x-permission: read
+      x-scope: list
       parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: target_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: os_user, in: query, required: false, schema: { type: string, maxLength: 32 } }
         - { name: q, in: query, required: false, schema: { type: string, maxLength: 200 } }
@@ -2421,6 +2544,7 @@ paths:
         except for Administrators and their API tokens; audit is null for Operators (and before the first checkpoint); for Operators
         license.phase is "" and license.ends_at and license.days_left are null.
       x-permission: read
+      x-scope: any
       responses:
         "200":
           description: The summary
@@ -2433,6 +2557,7 @@ paths:
       operationId: listExpiring
       summary: Certificates in use and Key Vault certificates, keys and client secrets that expire soon, soonest first
       x-permission: read
+      x-scope: any
       parameters:
         - { name: days, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 365, default: 30 }, description: 'Expiring within this many days (expired ones included)' }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -2456,6 +2581,7 @@ paths:
         Servers whose identity changed or whose sign-in failed and failed deployments for everyone; a broken audit
         chain for Administrators and Auditors; failing e-mail delivery for Administrators only.
       x-permission: read
+      x-scope: list
       responses:
         "200":
           description: The conditions
@@ -2475,6 +2601,7 @@ paths:
         Administrators and their API tokens (a token acts with its owner's role) get the delivery state, with the closed
         label of the last failure (for example smtp.auth); every other role gets only {"failing": false}.
       x-permission: read
+      x-scope: any
       responses:
         "200":
           description: The delivery state
@@ -2494,6 +2621,7 @@ paths:
       operationId: listViews
       summary: The caller's saved views of one list page, by name
       x-permission: session
+      x-scope: self
       parameters:
         - { name: page, in: query, required: true, schema: { type: string, enum: [certificates, ssh_keys] } }
       responses:
@@ -2517,6 +2645,7 @@ paths:
         characters and unique per person and page in any letter case (409 ALC-RPT-0003). At most 50 views per person
         (409 ALC-RPT-0002). Works while the license is expired.
       x-permission: session
+      x-scope: self
       requestBody:
         required: true
         content:
@@ -2539,6 +2668,7 @@ paths:
       operationId: deleteView
       summary: Delete one of the caller's saved views (another person's view is not found)
       x-permission: session
+      x-scope: self
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Error" }
@@ -2549,6 +2679,7 @@ paths:
       summary: The mail server settings (never the password)
       description: ETag is the settings version, "0" when no mail server is configured.
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: The settings
@@ -2569,6 +2700,7 @@ paths:
         If-Match header is missing (answered first, before the body is read) or names another version. Changing the
         server name or port forgets a certificate a test e-mail saw. Works while the license is expired.
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
       requestBody:
@@ -2595,6 +2727,7 @@ paths:
         E-mails are then recorded as skipped. The ALICE_SMTP_* variables are not imported again. 409 ALC-NTF-0002 when
         nothing is configured.
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       responses:
@@ -2613,6 +2746,7 @@ paths:
         which can then be trusted within one hour), 0006 (sign-in), 0007 (message refused), 409 ALC-NTF-0009 (address
         Alice never connects to); 422 when to is not an address.
       x-permission: settings.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -2648,6 +2782,7 @@ paths:
         and the expiry are not checked: the fingerprint is the decision). 409 ALC-NTF-0008 when no test e-mail to the
         configured server and port saw this fingerprint in the last hour.
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -2678,6 +2813,7 @@ paths:
       operationId: untrustSMTPCertificate
       summary: Stop trusting the pinned certificate (If-Match required; the body is empty or {})
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"4"'] } }
       responses:
@@ -2697,6 +2833,7 @@ paths:
       operationId: getRecipients
       summary: 'Who receives the e-mails Alice sends to Administrators (never saved: every Administrator, version 0)'
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: The recipients
@@ -2714,6 +2851,7 @@ paths:
         (administrators or an address). Each address object has exactly the keys email and locale. Both keys must be
         present: an omitted one is 422 with validation.required on that field and nothing is stored (null is 400).
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
       requestBody:
@@ -2738,6 +2876,7 @@ paths:
       operationId: getAlertSettings
       summary: 'The expiry thresholds in days, largest first (never saved: 60, 30, 14, 7, 1 at version 0)'
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: The thresholds
@@ -2754,6 +2893,7 @@ paths:
         1 to 10 different whole days from 1 to 365; refusals are 422 field errors on thresholds_days
         (validation.required, validation.too_long, validation.out_of_range, validation.duplicate).
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
       requestBody:
@@ -2783,6 +2923,7 @@ paths:
       operationId: getGeneralSettings
       summary: Alice's own address and how long retired SSH private keys are kept
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: The general settings
@@ -2799,6 +2940,7 @@ paths:
         Both keys must be present: an omitted one is 422 with validation.required on that field and nothing is stored
         (null is 400).
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
       requestBody:
@@ -2829,6 +2971,7 @@ paths:
       operationId: listPublicIdentityProviders
       summary: The identity providers the sign-in page offers (switched on; ID and name only)
       x-permission: public
+      x-scope: none
       responses:
         "200":
           description: The providers, by name
@@ -2853,6 +2996,7 @@ paths:
         (429), as the sign-in form. 404 for an unknown provider, 403 ALC-SSO-0013 for a switched-off one (provider IDs are random; the answer helps a person with a stale link), 409
         ALC-SSO-0004 while Alice's address is not set.
       x-permission: public
+      x-scope: none
       requestBody:
         required: false
         content:
@@ -2895,6 +3039,7 @@ paths:
         anonymous 60 per minute per address (S-11; not the sign-in form's 10, so the browsers behind one company address
         still finish their sign-ins). HEAD is refused with 405 ALC-SYS-0009 without completing anything.
       x-permission: public
+      x-scope: none
       parameters:
         - { name: code, in: query, required: false, schema: { type: string } }
         - { name: state, in: query, required: false, schema: { type: string } }
@@ -2916,6 +3061,7 @@ paths:
         step-up window of this session when the same person answers within 5 minutes. A local user is refused with 409
         ALC-SSO-0016 (confirm with the authenticator code instead). At most 5 per minute per address.
       x-permission: session
+      x-scope: self
       requestBody:
         required: false
         content:
@@ -2943,6 +3089,7 @@ paths:
       operationId: listPublicDirectories
       summary: The directories the sign-in page offers under "Sign in to" (switched on; ID and name only, never an address)
       x-permission: public
+      x-scope: none
       responses:
         "200":
           description: The directories, by name
@@ -2973,6 +3120,7 @@ paths:
         takes at least 1.5 seconds. A directory that is unreachable, misconfigured, switched off or unknown is 503
         ALC-LDAP-0002. The password is never stored, logged or returned.
       x-permission: public
+      x-scope: none
       requestBody:
         required: true
         content:
@@ -3015,6 +3163,7 @@ paths:
         ALC-LDAP-0008. 5 per minute per address, and the sign-in's lockout per directory and name. The session ID is
         regenerated.
       x-permission: session
+      x-scope: self
       requestBody:
         required: true
         content:
@@ -3044,6 +3193,7 @@ paths:
       operationId: listIdentityProviders
       summary: The configured identity providers, by name (never a client secret)
       x-permission: sso.manage
+      x-scope: platform
       responses:
         "200":
           description: The providers
@@ -3064,6 +3214,7 @@ paths:
         returned or logged. A provider is created switched off unless enabled is true (switch it on once Alice's address
         is set and the provider is registered). Works while the license is expired.
       x-permission: sso.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3088,6 +3239,7 @@ paths:
       operationId: getIdentityProvider
       summary: One identity provider
       x-permission: sso.manage
+      x-scope: platform
       responses:
         "200":
           description: The provider
@@ -3106,6 +3258,7 @@ paths:
         refused while people have signed in through the provider. null is not a value (400). client_secret replaces the
         stored secret. 412 ALC-SYS-0008 when If-Match is missing or names another version.
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -3132,6 +3285,7 @@ paths:
       summary: Delete an identity provider and its group mappings (If-Match required)
       description: 409 ALC-SSO-0005 while people have signed in through it (switch it off instead).
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       responses:
@@ -3147,6 +3301,7 @@ paths:
       operationId: refreshIdentityProvider
       summary: Read the provider's discovery document and key list again (If-Match required; the body is empty or {})
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       responses:
@@ -3167,6 +3322,7 @@ paths:
       operationId: listGroupMappings
       summary: A provider's group mappings, by group
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: provider_id, in: query, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -3189,6 +3345,7 @@ paths:
         "SSO users may be Admin" is on (409 ALC-SSO-0002, recorded in the audit log). A person with several mapped groups
         gets the highest role.
       x-permission: sso.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3220,6 +3377,7 @@ paths:
       summary: Remove a group mapping of the provider named by provider_id
       description: 404 when that provider has no mapping with this ID. Sessions of people whose role it gave end at their next sign-in check.
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: provider_id, in: query, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -3232,6 +3390,7 @@ paths:
       operationId: getSSOSettings
       summary: The "SSO users may be Admin" switch (never saved - off, version 0)
       x-permission: sso.manage
+      x-scope: platform
       responses:
         "200":
           description: The switch
@@ -3250,6 +3409,7 @@ paths:
         Administrators to Operator and ends their sessions. allow_admin_role is required (422 validation.required when it
         is missing; null is 400): the switch is never turned off by an omitted key.
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
       requestBody:
@@ -3279,6 +3439,7 @@ paths:
       operationId: listDirectories
       summary: The configured directories, by name (never the service account password)
       x-permission: sso.manage
+      x-scope: platform
       responses:
         "200":
           description: The directories
@@ -3299,6 +3460,7 @@ paths:
         enabled is true, and with MFA on unless mfa_required is false. Field errors are 422 ALC-SYS-0006. Works while the
         license is expired.
       x-permission: sso.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3323,6 +3485,7 @@ paths:
       operationId: getDirectory
       summary: One directory
       x-permission: sso.manage
+      x-scope: platform
       responses:
         "200":
           description: The directory
@@ -3346,6 +3509,7 @@ paths:
         token a token.revoked row, and the ldap.directory_changed row carries signed_out_count. A sign-in whose password
         the directory accepted just before is refused (503 ALC-LDAP-0002).
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       requestBody:
@@ -3372,6 +3536,7 @@ paths:
       summary: Delete a directory, its group mappings and its stored password (If-Match required)
       description: 409 ALC-LDAP-0003 while people have signed in through it (switch it off instead).
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"3"'] } }
       responses:
@@ -3391,6 +3556,7 @@ paths:
         reason and detail (closed labels, never the server's text). Every run is recorded in the audit log. 5 per minute
         per user, shared with Test sign-in.
       x-permission: sso.manage
+      x-scope: platform
       responses:
         "200":
           description: The connection works
@@ -3417,6 +3583,7 @@ paths:
         attempt is 422 ALC-LDAP-0006 with params reason and detail. Every run is recorded in the audit log with the
         sign-in name and the result. 5 per minute per user, shared with Test connection.
       x-permission: sso.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3444,6 +3611,7 @@ paths:
       operationId: listDirectoryGroupMappings
       summary: A directory's group mappings, by group
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: directory_id, in: query, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -3467,6 +3635,7 @@ paths:
         group). A group can be mapped to Administrator only while "SSO users may be Admin" is on (409 ALC-SSO-0002,
         recorded in the audit log). A person with several mapped groups gets the highest role.
       x-permission: sso.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3498,6 +3667,7 @@ paths:
       summary: Remove a group mapping of the directory named by directory_id
       description: 404 when that directory has no mapping with this ID. The role of people it gave changes at their next sign-in or step-up.
       x-permission: sso.manage
+      x-scope: platform
       parameters:
         - { name: directory_id, in: query, required: true, schema: { type: string, format: uuid } }
       responses:
@@ -3514,6 +3684,7 @@ paths:
         unreadable header, or unreadable with code permission_denied or io). state.free_bytes is the free space of the
         backups directory. Administrators with step-up only; never an API token. Works while the license is expired.
       x-permission: backup.manage
+      x-scope: platform
       responses:
         "200":
           description: The backups
@@ -3536,6 +3707,7 @@ paths:
         not be written (also when the free space is under twice the newest backup plus 1 GiB). Audited backup.created
         or backup.failed. Works while the license is expired.
       x-permission: backup.manage
+      x-scope: platform
       responses:
         "201":
           description: The backup made
@@ -3556,6 +3728,7 @@ paths:
         ALC-BAK-0003 without touching the file system. The download is audited (backup.downloaded) before the first
         byte. No range requests (Accept-Ranges none); HEAD is 405. At most 5 per minute per user.
       x-permission: backup.manage
+      x-scope: platform
       parameters:
         - { name: name, in: path, required: true, schema: { type: string, maxLength: 255 } }
       responses:
@@ -3575,6 +3748,7 @@ paths:
       operationId: getBackupSchedule
       summary: The daily backup schedule (ETag is its version, "0" before the first save)
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: The schedule
@@ -3592,6 +3766,7 @@ paths:
         ALC-SYS-0008 when If-Match is missing or names another version. Audited backup.settings_changed. Works while the
         license is expired.
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
       requestBody:
@@ -3623,6 +3798,7 @@ paths:
       operationId: getHTTPSCertificate
       summary: The HTTPS certificate Alice serves (never its key)
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: The certificate
@@ -3640,6 +3816,7 @@ paths:
         name_mismatch, chain_incomplete and expires_soon. The key and the password never appear in an answer, a log or
         the audit row https.certificate_replaced. At most 5 per minute per user.
       x-permission: settings.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3668,6 +3845,7 @@ paths:
       summary: The wizard's HTTPS step - keep Alice's temporary certificate for now
       description: Audited setup.https_kept_temporary. After completion it answers the status and changes nothing.
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: Setup status
@@ -3681,6 +3859,7 @@ paths:
       summary: The wizard's mail step - skip it for now
       description: Audited setup.mail_skipped. After completion, or with mail settings stored, it answers the status and changes nothing.
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: Setup status
@@ -3693,6 +3872,7 @@ paths:
       operationId: getAuditForwarding
       summary: Audit forwarding to syslog, with its progress (the CA bundle is write-only)
       x-permission: settings.manage
+      x-scope: platform
       responses:
         "200":
           description: The setting
@@ -3710,6 +3890,7 @@ paths:
         ALC-AUD-0002 for an address Alice never connects to, 412 ALC-SYS-0008 for a missing or stale If-Match. Audited
         audit.forwarding_changed (without the bundle).
       x-permission: settings.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: true, schema: { type: string, examples: ['"0"'] } }
       requestBody:
@@ -3737,6 +3918,7 @@ paths:
         204 when it was written; 502 ALC-AUD-0003 (unreachable, retryable), 502 ALC-AUD-0004 (certificate not trusted),
         422 ALC-AUD-0002 (an address Alice never connects to). At most 5 per minute per user.
       x-permission: settings.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3755,6 +3937,7 @@ paths:
       description: >-
         No secret is listed: the EAB HMAC key is write-only (eab_configured). The CA bundle holds public certificates only.
       x-permission: acme.view
+      x-scope: any
       responses:
         "200":
           description: The providers
@@ -3772,6 +3955,7 @@ paths:
         fresh step-up (403 ALC-AUTH-0003 without it), never an API token (403 ALC-AUTH-0002). Refused with 403 ALC-LIC-0001
         while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3798,6 +3982,7 @@ paths:
       operationId: getACMEProvider
       summary: One certificate authority with its accounts (newest first)
       x-permission: acme.view
+      x-scope: any
       responses:
         "200":
           description: The provider
@@ -3815,6 +4000,7 @@ paths:
         ALC-ACM-0024 while a key change is unsettled. Administrator with a fresh step-up, never an API token. Refused with 403
         ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -3841,6 +4027,7 @@ paths:
         the certificates first). Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the
         license is locked.
       x-permission: acme.manage
+      x-scope: platform
       responses:
         "204": { description: Removed }
         "403": { $ref: "#/components/responses/Error" }
@@ -3862,6 +4049,7 @@ paths:
         Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001
         while the license is locked (the CA is not contacted).
       x-permission: acme.manage
+      x-scope: platform
       requestBody:
         required: false
         content:
@@ -3898,6 +4086,7 @@ paths:
         and for every API token). At most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is locked (the
         CA is not contacted).
       x-permission: acme.preview
+      x-scope: platform
       responses:
         "200":
           description: What the directory says
@@ -3923,6 +4112,7 @@ paths:
         Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001
         while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       responses:
         "200":
           description: The new active account
@@ -3948,6 +4138,7 @@ paths:
         yet. Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with 403
         ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       responses:
         "200":
           description: The active account after settling
@@ -3973,6 +4164,7 @@ paths:
         operation running). Administrator with a fresh step-up, never an API token. At most 10 a minute per user. Refused with
         403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       responses:
         "200":
           description: The deactivated account
@@ -3992,6 +4184,7 @@ paths:
       summary: DNS hooks (the webhooks that publish DNS-01 records), oldest first
       description: The secret is write-only (secret_configured).
       x-permission: acme.view
+      x-scope: any
       responses:
         "200":
           description: The hooks
@@ -4008,6 +4201,7 @@ paths:
         60) are at most 120. 409 ALC-ACM-0020 (name taken). Administrator with a fresh step-up, never an API token. Refused with
         403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -4034,6 +4228,7 @@ paths:
       operationId: getACMEHook
       summary: One DNS hook
       x-permission: acme.view
+      x-scope: any
       responses:
         "200":
           description: The hook
@@ -4048,6 +4243,7 @@ paths:
       description: >-
         Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -4073,6 +4269,7 @@ paths:
         409 ALC-ACM-0019 while live ACME certificates use it. Administrator with a fresh step-up, never an API token. Refused
         with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: platform
       responses:
         "204": { description: Removed }
         "403": { $ref: "#/components/responses/Error" }
@@ -4084,7 +4281,10 @@ paths:
       operationId: listACMECertificates
       summary: ACME certificates (Issued certificates), oldest first, in pages
       x-permission: acme.view
+      x-scope: list
       parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: state, in: query, schema: { type: string, enum: [pending, issuing, active, failing, stopped] } }
         - { name: provider_id, in: query, schema: { type: string, format: uuid } }
         - { name: q, in: query, description: A part of one of the names, schema: { type: string, maxLength: 200 } }
@@ -4108,6 +4308,7 @@ paths:
         auto_deploy true switches unattended deployment on (the license must allow changes). Administrator with a fresh step-up,
         never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: create
       requestBody:
         required: true
         content:
@@ -4134,6 +4335,7 @@ paths:
       operationId: getACMECertificate
       summary: One ACME certificate with its bindings, its current certificate and its renewal and deployment marks
       x-permission: acme.view
+      x-scope: resource
       responses:
         "200":
           description: The certificate
@@ -4151,6 +4353,7 @@ paths:
         the license. Administrator with a fresh step-up, never an API token. At most 10 a minute per user (the ACME actions'
         limit). Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -4177,6 +4380,7 @@ paths:
         409 ALC-ACM-0016 while an order runs. Only reduces what Alice does: it also works while the license is locked.
         Administrator with a fresh step-up, never an API token.
       x-permission: acme.manage
+      x-scope: resource
       responses:
         "204": { description: Removed }
         "403": { $ref: "#/components/responses/Error" }
@@ -4194,6 +4398,7 @@ paths:
         change unsettled). Follow the order in GET /orders and the certificate's state. At most 10 a minute per user or token.
         Refused with 403 ALC-LIC-0001 while the license is locked (nothing is recorded, the CA is not contacted).
       x-permission: acme.operate
+      x-scope: resource
       responses:
         "202":
           description: The order (running)
@@ -4215,6 +4420,7 @@ paths:
         The refusals of an order. At most 10 a minute per user or token. Refused with 403 ALC-LIC-0001 while the license is
         locked.
       x-permission: acme.operate
+      x-scope: resource
       responses:
         "202":
           description: The test order (running)
@@ -4233,6 +4439,7 @@ paths:
       operationId: listACMEOrders
       summary: The newest orders of an ACME certificate
       x-permission: acme.view
+      x-scope: resource
       parameters:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
       responses:
@@ -4259,6 +4466,7 @@ paths:
         re-armed without a new order and the planner orders at its next run. Administrator with a fresh step-up, never an
         API token. At most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: resource
       responses:
         "200":
           description: The certificate
@@ -4282,6 +4490,7 @@ paths:
         is not released (409 ALC-CRT-0011; Deploy now with confirm_incomplete_chain deploys it). Not held: nothing changes.
         Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.manage
+      x-scope: resource
       responses:
         "200":
           description: The certificate
@@ -4299,6 +4508,7 @@ paths:
       operationId: listACMEBindings
       summary: The locations an ACME certificate is bound to, with their state and attention mark
       x-permission: acme.view
+      x-scope: resource
       responses:
         "200":
           description: The bindings
@@ -4324,6 +4534,7 @@ paths:
         without the step-up. Refused with 403 ALC-LIC-0001 while the license is locked, switching off included (in lock,
         DELETE of the binding stops its automatic deployment).
       x-permission: acme.operate
+      x-scope: cross
       requestBody:
         required: false
         content:
@@ -4347,6 +4558,7 @@ paths:
       summary: Remove a binding (the location keeps what it serves)
       description: A safety action that only reduces what Alice does; it also works while the license is locked.
       x-permission: acme.operate
+      x-scope: resource
       responses:
         "204": { description: Removed }
         "403": { $ref: "#/components/responses/Error" }
@@ -4364,6 +4576,7 @@ paths:
         bound) and the Phase 4 refusals of a deployment. 409 ALC-ACM-0027 (not issued yet), 409 ALC-CRT-0011 (an incomplete chain; an Administrator's confirm_incomplete_chain). At most 10 a minute per
         user or token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: acme.operate
+      x-scope: resource
       requestBody:
         required: false
         content:
@@ -4402,6 +4615,7 @@ paths:
         fresh step-up, never an API token; at most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is
         locked (nothing is sent).
       x-permission: acme.manage
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -4426,6 +4640,7 @@ paths:
       operationId: certificateCapabilities
       summary: What Alice can do with a certificate of each source (discover, obtain, renew, deploy, verify, revoke, recovery)
       x-permission: read
+      x-scope: any
       responses:
         "200":
           description: The capability matrix
@@ -4445,6 +4660,7 @@ paths:
         found presenting one of them (present, or unreachable since). Each list holds at most 1000 entries (truncated). The
         endpoints are the internal network map: a caller without discovery.view gets none (endpoints_hidden true). Read-only.
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The impact
@@ -4470,6 +4686,7 @@ paths:
         validation (revoke_mode), 404, 409 ALC-INC-0001 (an incident is open), 409 ALC-ACM-0023 or 0024 (no usable account).
         Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.incident
+      x-scope: cross
       requestBody:
         required: false
         content:
@@ -4494,6 +4711,7 @@ paths:
       operationId: listIncidents
       summary: The newest key compromise incidents
       x-permission: read
+      x-scope: list
       parameters:
         - { name: open, in: query, schema: { type: string, enum: ["true", "false"] }, description: Open incidents only }
         - { name: certificate_id, in: query, schema: { type: string, format: uuid } }
@@ -4513,6 +4731,7 @@ paths:
       operationId: getIncident
       summary: One incident with its locations
       x-permission: read
+      x-scope: resource
       responses:
         "200":
           description: The incident
@@ -4530,6 +4749,7 @@ paths:
       description: >-
         A failed order is ordered again, failed locations are requested again and a failed revocation is tried again (audit incident.retried); the incident.advance task does the work. 409 ALC-INC-0002 unless the incident needs attention. Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.incident
+      x-scope: cross
       responses:
         "200":
           description: The incident with its locations
@@ -4550,6 +4770,7 @@ paths:
       description: >-
         The compromised ACME versions are revoked (keyCompromise) at the next run of incident.advance, without waiting for every location to be verified (audit incident.revoke_now). 409 ALC-INC-0004 for a certificate Alice did not order over ACME, 409 ALC-INC-0002 when it is revoked already or the incident is finished. Administrator with a fresh step-up, never an API token; at most 10 a minute per user. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.incident
+      x-scope: cross
       responses:
         "200":
           description: The incident with its locations
@@ -4571,6 +4792,7 @@ paths:
       description: >-
         A certificate Alice holds the private key of, made with another key, neither revoked nor compromised and valid now (422 ALC-INC-0003 otherwise); the incident then deploys it (audit incident.replacement_chosen). 409 ALC-INC-0002 for an ACME incident or one that does not wait for a replacement. Administrator with a fresh step-up, never an API token. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.incident
+      x-scope: cross
       requestBody:
         required: true
         content:
@@ -4597,6 +4819,7 @@ paths:
       description: >-
         Finishes the incident (closed; audit incident.closed): Alice requests no more deployments and revokes nothing more for it; deployments already requested go on. 409 ALC-INC-0002 for a finished incident. Administrator with a fresh step-up, never an API token; available in every license state.
       x-permission: certificates.incident
+      x-scope: cross
       responses:
         "200":
           description: The incident with its locations
@@ -4618,6 +4841,7 @@ paths:
         finished. Index-backed counts. discovery.view: every role in a browser; an API token needs the operate scope (read
         tokens never read the network map).
       x-permission: discovery.view
+      x-scope: any
       responses:
         "200":
           description: The summary
@@ -4631,7 +4855,10 @@ paths:
       summary: Scan scopes, oldest first, in pages
       description: discovery.view (an API token needs the operate scope).
       x-permission: discovery.view
+      x-scope: list
       parameters:
+        - { name: service_id, in: query, description: "R49: rows owned by these services (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, description: "R49: rows owned by services of these environments (repeatable)", schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
         - { name: cursor, in: query, schema: { type: string, maxLength: 512 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
@@ -4656,6 +4883,7 @@ paths:
         missing name). The answer's ETag is the scope's version. An Administrator's browser session with a fresh step-up,
         never an API token; at most 30 a minute per user (with PATCH). Works while the license is locked.
       x-permission: discovery.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -4688,6 +4916,7 @@ paths:
         built-in exclusions the ranges overlap. The refusals of a save except ALC-DSC-0010 and ALC-DSC-0011. An
         Administrator's browser session with a fresh step-up; at most 60 a minute per user, in a budget of its own.
       x-permission: discovery.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -4713,6 +4942,7 @@ paths:
       summary: One scan scope with its scan in flight and its last finished scan
       description: The ETag is the scope's version. 404 ALC-DSC-0008 for a deleted or unknown scope.
       x-permission: discovery.view
+      x-scope: resource
       responses:
         "200":
           description: The scope
@@ -4735,6 +4965,7 @@ paths:
         scan in flight to stop. Recorded as discovery.scope.updated. An Administrator's browser session with a fresh step-up; at
         most 30 a minute per user. Works while the license is locked.
       x-permission: discovery.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: false, schema: { type: string } }
       requestBody:
@@ -4767,6 +4998,7 @@ paths:
         If-Match (optional) must be the scope's version. Recorded as discovery.scope.deleted. An Administrator's browser
         session with a fresh step-up. Works while the license is locked.
       x-permission: discovery.manage
+      x-scope: platform
       parameters:
         - { name: If-Match, in: header, required: false, schema: { type: string } }
       responses:
@@ -4788,6 +5020,7 @@ paths:
         409 ALC-DSC-0013 for a scope that is switched off, 404 ALC-DSC-0008 for a deleted or unknown scope. At most 10 a
         minute per user or token (with cancel). Refused with 403 ALC-LIC-0001 while the license is locked (nothing queued).
       x-permission: discovery.operate
+      x-scope: resource
       responses:
         "202":
           description: The scan (queued)
@@ -4806,6 +5039,7 @@ paths:
       operationId: listDiscoveryScans
       summary: Scans, newest first, in pages
       x-permission: discovery.view
+      x-scope: list
       parameters:
         - { name: scope_id, in: query, schema: { type: string, format: uuid } }
         - { name: state, in: query, schema: { type: string, enum: [queued, running, done, cancelled, timed_out, failed] } }
@@ -4826,6 +5060,7 @@ paths:
       operationId: getDiscoveryScan
       summary: One scan
       x-permission: discovery.view
+      x-scope: resource
       responses:
         "200":
           description: The scan
@@ -4846,6 +5081,7 @@ paths:
         is recorded; the first request is recorded as discovery.scan.cancelled. At most 10 a minute per user or token (with
         start). Works while the license is locked.
       x-permission: discovery.operate
+      x-scope: resource
       responses:
         "200":
           description: The scan
@@ -4867,6 +5103,7 @@ paths:
         is not gone presents or last presented it), the definition of the summary's unmanaged counts; without it a
         certificate stays listed until retention removes it.
       x-permission: discovery.view
+      x-scope: list
       parameters:
         - { name: status, in: query, schema: { type: string, enum: [all, unmanaged, managed, known] } }
         - { name: expiring_within_days, in: query, schema: { type: integer, minimum: 1, maximum: 3650 } }
@@ -4898,6 +5135,7 @@ paths:
         of any kind at a time per person (409 ALC-RPT-0004, retryable, Retry-After); at most 10 exports a minute per user or
         token (429). cursor or limit is refused with 422; HEAD with 405. Works while the license is locked.
       x-permission: discovery.view
+      x-scope: list
       parameters:
         - { name: status, in: query, schema: { type: string, enum: [all, unmanaged, managed, known] } }
         - { name: expiring_within_days, in: query, schema: { type: integer, minimum: 1, maximum: 3650 } }
@@ -4926,6 +5164,7 @@ paths:
       operationId: getDiscoveredCertificate
       summary: One discovered leaf certificate with the endpoints presenting it (at most 200)
       x-permission: discovery.view
+      x-scope: resource
       responses:
         "200":
           description: The certificate
@@ -4943,6 +5182,7 @@ paths:
         SNI name and id. fingerprint selects the endpoints presenting one leaf. target is the live server whose address or
         host name is the endpoint's (null when none).
       x-permission: discovery.view
+      x-scope: list
       parameters:
         - { name: scope_id, in: query, schema: { type: string, format: uuid } }
         - { name: fingerprint, in: query, schema: { type: string, pattern: "^[0-9a-f]{64}$" } }
@@ -4964,6 +5204,7 @@ paths:
         scanning_enabled is false while no allowed scan network is set: nothing may be scanned then. builtin_exclusions are
         the ranges Alice never scans whatever the settings say.
       x-permission: discovery.view
+      x-scope: platform
       responses:
         "200":
           description: The settings
@@ -4981,6 +5222,7 @@ paths:
         nothing may be scanned. Recorded as discovery.exclusions.updated with both lists and their counts. An
         Administrator's browser session with a fresh step-up, never an API token. Works while the license is locked.
       x-permission: discovery.manage
+      x-scope: platform
       requestBody:
         required: true
         content:
@@ -4996,6 +5238,320 @@ paths:
         "403": { $ref: "#/components/responses/Error" }
         "413": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/environments:
+    get:
+      operationId: listEnvironments
+      summary: Environment labels of services (seeded production, staging, test, development), in their order
+      description: >-
+        The UI shows a seeded key's name in the reader's language until an Administrator renames it. services is how many
+        services carry the environment (R49).
+      x-permission: read
+      x-scope: any
+      responses:
+        "200":
+          description: The environments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnvironmentList" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createEnvironment
+      summary: Add an environment (at most 50)
+      description: >-
+        key is fixed once made (lower-case letters, digits and hyphens, a letter first, at most 32 characters). 409
+        ALC-SVC-0017 for a key in use; 422 validation (validation.out_of_range on key when 50 exist). Administrator with a
+        fresh step-up, never an API token; works in lock.
+      x-permission: services.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnvironmentCreate" }
+      responses:
+        "201":
+          description: The environment
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/environments/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    patch:
+      operationId: updateEnvironment
+      summary: Rename or reorder an environment
+      description: >-
+        If-Match names the version read (412 ALC-SYS-0008 otherwise). Administrator with a fresh step-up, never an API token.
+      x-permission: services.manage
+      x-scope: platform
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnvironmentPatch" }
+      responses:
+        "200":
+          description: The environment
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "404": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteEnvironment
+      summary: Delete an environment no service and no role binding uses
+      description: >-
+        409 ALC-SVC-0016 while a service or a role binding uses it; 412 for a stale If-Match. Administrator with a fresh
+        step-up, never an API token.
+      x-permission: services.manage
+      x-scope: platform
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/services:
+    get:
+      operationId: listServices
+      summary: Services (the Default service first, then by name) with what each owns
+      description: >-
+        A service groups servers, Key Vaults, certificates, signing requests, ACME certificates, SSH keys and scan scopes
+        (R49). service_id and environment_id (each repeatable) narrow the list.
+      x-permission: read
+      x-scope: list
+      parameters:
+        - { name: service_id, in: query, schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+        - { name: environment_id, in: query, schema: { type: array, items: { type: string, format: uuid } }, style: form, explode: true }
+      responses:
+        "200":
+          description: The services
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceList" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createService
+      summary: Add a service (at most 500) with its first policy version (the empty policy)
+      description: >-
+        Names are unique without regard to letter case (409 ALC-SVC-0002). An unknown environment_id is 422 validation.required
+        on the field. Administrator with a fresh step-up, never an API token; works in lock.
+      x-permission: services.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceCreate" }
+      responses:
+        "201":
+          description: The service
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/services/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getService
+      summary: One service with what it owns
+      x-permission: read
+      x-scope: resource
+      responses:
+        "200":
+          description: The service
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    patch:
+      operationId: updateService
+      summary: Change a service's name, description or environment
+      description: >-
+        environment_id null removes the environment. Changing the environment changes which environment role bindings reach
+        the service; it is audited with both environments. The service a resource belongs to is never changed here (POST
+        /api/v1/services/{id}/actions/assign). If-Match names the version read (412 otherwise). Administrator with a fresh
+        step-up, never an API token.
+      x-permission: services.manage
+      x-scope: platform
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServicePatch" }
+      responses:
+        "200":
+          description: The service
+          headers:
+            ETag: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Service" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    delete:
+      operationId: deleteService
+      summary: Delete a service that owns nothing
+      description: >-
+        409 ALC-SVC-0004 for the Default service; 409 ALC-SVC-0003 while it owns a live resource (params: the count of each
+        kind). Its deleted servers, ACME certificates and scan scopes are history and move to the Default service; its trusts
+        and policy history go with it. Administrator with a fresh step-up, never an API token.
+      x-permission: services.manage
+      x-scope: platform
+      parameters:
+        - { name: If-Match, in: header, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "412": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/services/{id}/policy:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: getServicePolicy
+      summary: The service's current policy (version 1 is the empty policy {"schema":1})
+      x-permission: read
+      x-scope: resource
+      responses:
+        "200":
+          description: The policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServicePolicy" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/services/{id}/policy/versions:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listServicePolicyVersions
+      summary: Every version of the service's policy, newest first
+      x-permission: read
+      x-scope: resource
+      responses:
+        "200":
+          description: The versions
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServicePolicyList" }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/services/{id}/actions/assign:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    post:
+      operationId: assignToService
+      summary: Move resources to this service
+      description: >-
+        Moves up to 500 servers or Key Vaults (target), certificates, signing requests (csr), SSH keys, ACME certificates and
+        scan scopes. Each row is locked while it moves; bindings stay in place. untrusted lists the binding locations that
+        cross services without a trust after the move: their automatic deployments stop there, and a person's deployment is
+        refused (409 ALC-SVC-0007), until a trust is made. With dry_run=true nothing changes and nothing is audited. An
+        unknown, deleted or repeated resource is 422 validation on resources.N. Audited once (service.assigned) with every
+        resource moved. Administrator with a fresh step-up, never an API token; works in lock.
+      x-permission: services.assign
+      x-scope: cross
+      parameters:
+        - { name: dry_run, in: query, schema: { type: boolean, default: false } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AssignRequest" }
+      responses:
+        "200":
+          description: What the move does (or would do)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AssignResult" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/service-trusts:
+    get:
+      operationId: listServiceTrusts
+      summary: Trusts between services (with service_id, those with the service on either side)
+      x-permission: read
+      x-scope: list
+      parameters:
+        - { name: service_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: The trusts
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceTrustList" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createServiceTrust
+      summary: The target service accepts certificates and SSH keys owned by the source service
+      description: >-
+        Directed: a deployment, a Key Vault or ACME binding, an import into a Key Vault or an SSH key deploy from the source
+        service to a server or a Key Vault of the target service is allowed from then on. 409 ALC-SVC-0018 when it exists; 422
+        validation for the same service twice or an unknown one. At most 200 trusts per service. Administrator with a fresh
+        step-up, never an API token.
+      x-permission: services.trust
+      x-scope: cross
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ServiceTrustCreate" }
+      responses:
+        "201":
+          description: The trust
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServiceTrust" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/service-trusts/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    delete:
+      operationId: deleteServiceTrust
+      summary: Remove a trust
+      description: >-
+        Deployments already made stay; the next deployment from the source to the target is refused (a person's with 409
+        ALC-SVC-0007; the deployment engine's first send and the automatic deployments with the reason service.untrusted, and
+        the bindings are marked so). Administrator with a fresh step-up, never an API token.
+      x-permission: services.trust
+      x-scope: cross
+      responses:
+        "204": { description: Removed }
+        "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
 components:
   parameters:
@@ -5045,11 +5601,186 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
   schemas:
+    EnvironmentRef:
+      type: [object, "null"]
+      required: [id, key, name]
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string }
+        name: { type: string }
+    ServiceRef:
+      type: object
+      description: The service that owns a row (R49).
+      required: [id, name, environment]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        environment: { $ref: "#/components/schemas/EnvironmentRef" }
+    Environment:
+      type: object
+      required: [id, key, name, sort, version, services, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        key: { type: string }
+        name: { type: string }
+        sort: { type: integer }
+        version: { type: integer, minimum: 1 }
+        services: { type: integer, description: How many services carry it }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EnvironmentList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Environment" } }
+    EnvironmentCreate:
+      type: object
+      required: [key, name]
+      additionalProperties: false
+      properties:
+        key: { type: string, pattern: "^[a-z][a-z0-9-]{0,31}$", examples: [qa] }
+        name: { type: string, minLength: 1, maxLength: 60, examples: [QA] }
+        sort: { type: integer, minimum: 0, maximum: 32767, default: 0 }
+    EnvironmentPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60, examples: [Quality assurance] }
+        sort: { type: integer, minimum: 0, maximum: 32767 }
+    ServiceCounts:
+      type: object
+      required: [servers, key_vaults, certificates, signing_requests, acme_certificates, ssh_keys, discovery_scopes]
+      properties:
+        servers: { type: integer }
+        key_vaults: { type: integer }
+        certificates: { type: integer }
+        signing_requests: { type: integer }
+        acme_certificates: { type: integer }
+        ssh_keys: { type: integer }
+        discovery_scopes: { type: integer }
+    Service:
+      type: object
+      required: [id, name, description, environment, is_default, policy_version, version, counts, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        environment: { $ref: "#/components/schemas/EnvironmentRef" }
+        is_default: { type: boolean, description: The Default service; it cannot be deleted }
+        policy_version: { type: integer, minimum: 1 }
+        version: { type: integer, minimum: 1 }
+        counts: { $ref: "#/components/schemas/ServiceCounts" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ServiceList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Service" } }
+    ServiceCreate:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100, examples: [Payments] }
+        description: { type: string, maxLength: 500, examples: [Card processing] }
+        environment_id: { type: [string, "null"], format: uuid }
+    ServicePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100, examples: [Payments] }
+        description: { type: string, maxLength: 500 }
+        environment_id: { type: [string, "null"], format: uuid, description: null removes the environment }
+    ServicePolicy:
+      type: object
+      required: [version, body, created_by, created_by_name, created_at]
+      properties:
+        version: { type: integer, minimum: 1 }
+        body: { type: object, description: 'The policy document; version 1 is {"schema":1}' }
+        created_by: { type: [string, "null"], format: uuid }
+        created_by_name: { type: string }
+        created_at: { type: string, format: date-time }
+    ServicePolicyList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ServicePolicy" } }
+    AssignRequest:
+      type: object
+      required: [resources]
+      additionalProperties: false
+      properties:
+        resources:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            type: object
+            required: [type, id]
+            additionalProperties: false
+            properties:
+              type: { type: string, enum: [target, certificate, csr, ssh_key, acme_certificate, discovery_scope] }
+              id: { type: string, format: uuid }
+          examples: [[{ type: target, id: "01900000-0000-7000-8000-000000000001" }]]
+    AssignResult:
+      type: object
+      required: [dry_run, destination, moves, untrusted]
+      properties:
+        dry_run: { type: boolean }
+        destination: { $ref: "#/components/schemas/ServiceRef" }
+        moves:
+          type: array
+          items:
+            type: object
+            required: [type, id, name, from, changed]
+            properties:
+              type: { type: string }
+              id: { type: string, format: uuid }
+              name: { type: string }
+              from: { $ref: "#/components/schemas/ServiceRef" }
+              changed: { type: boolean, description: false when it is in the destination already }
+        untrusted:
+          type: array
+          items:
+            type: object
+            required: [kind, source_id, source_name, location_id, target_id, target_name, source_service, target_service]
+            properties:
+              kind: { type: string, enum: [key_vault, acme] }
+              source_id: { type: string, format: uuid, description: The vault certificate or the ACME certificate }
+              source_name: { type: string }
+              location_id: { type: string, format: uuid }
+              target_id: { type: string, format: uuid, description: The server }
+              target_name: { type: string }
+              source_service: { $ref: "#/components/schemas/ServiceRef" }
+              target_service: { $ref: "#/components/schemas/ServiceRef" }
+    ServiceTrust:
+      type: object
+      required: [id, source, target, created_by_name, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        source: { $ref: "#/components/schemas/ServiceRef" }
+        target: { $ref: "#/components/schemas/ServiceRef" }
+        created_by_name: { type: string }
+        created_at: { type: string, format: date-time }
+    ServiceTrustList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ServiceTrust" } }
+    ServiceTrustCreate:
+      type: object
+      required: [source_service_id, target_service_id]
+      additionalProperties: false
+      properties:
+        source_service_id: { type: string, format: uuid, description: The service whose keys are accepted }
+        target_service_id: { type: string, format: uuid, description: The service whose servers and Key Vaults accept them }
     DiscoveryScopeCreate:
       type: object
       required: [name, entries, ports]
       additionalProperties: false
       properties:
+        service_id: { type: string, format: uuid, description: "R49: the service the new scope goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         name: { type: string, maxLength: 100, examples: [Data centre] }
         entries:
           type: array
@@ -5090,6 +5821,7 @@ components:
       required: [id, name, entries, ports, sni_names, exclusions, enabled, schedule_hours, window_start, window_end, window_tz, alert_on_expiry,
         rate_per_sec, concurrency, version, created_by, created_at, updated_at, last_scheduled_at, active_scan_id, last_scan]
       properties:
+        service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
         name: { type: string }
         entries: { type: array, items: { type: string } }
@@ -5378,6 +6110,7 @@ components:
       required: [provider_id, names, challenge]
       additionalProperties: false
       properties:
+        service_id: { type: string, format: uuid, description: "R49: the service the new ACME certificate goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         provider_id: { type: string, format: uuid }
         names: { type: array, minItems: 1, maxItems: 100, items: { type: string, maxLength: 253 }, examples: [[www.example.com]] }
         key_type: { type: string, enum: [ecdsa_p256, ecdsa_p384, rsa_2048, rsa_3072, rsa_4096], default: ecdsa_p256 }
@@ -5407,6 +6140,7 @@ components:
         ca_wait_critical, last_attempt_at, last_error, running_order_id, current, ari_window, deploy_held_reason, deploy_stopped, bindings_count,
         created_at, updated_at]
       properties:
+        service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
         provider_id: { type: string, format: uuid }
         account_id: { type: string, format: uuid }
@@ -5575,6 +6309,7 @@ components:
       required: [name, vault_url, auth]
       additionalProperties: false
       properties:
+        service_id: { type: string, format: uuid, description: "R49: the service the new Key Vault goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         name: { type: string, minLength: 1, maxLength: 100 }
         vault_url: { type: string, maxLength: 253, examples: ["https://contoso.vault.azure.net"], description: 'Only a public-cloud vault: https://name.vault.azure.net or just the name (3 to 24 characters). Any other scheme, port, path, suffix or host is validation.pattern.' }
         auth: { type: string, enum: [certificate, client_secret, managed_identity] }
@@ -5826,6 +6561,7 @@ components:
         state: { type: string, enum: [not_deployed, pending, deployed, failed, stopped], description: 'stopped: the automatic wave of the current version stopped after 3 failures' }
         version: { type: string, description: 'The vault version served or deployed; "" unless deployed' }
         deployment_id: { type: [string, "null"], format: uuid }
+        attention_code: { type: string, enum: ["", service.untrusted], description: 'Why automatic deployment holds the website: service.untrusted when its server''s service does not accept the vault''s keys (R49); "" for nothing' }
     Binding:
       type: object
       required: [id, kv_certificate_id, vault_id, certificate_name, vault_name, auto_deploy, auto_since, stopped_version, location_count,
@@ -6399,6 +7135,7 @@ components:
       required: [name, host]
       additionalProperties: false
       properties:
+        service_id: { type: string, format: uuid, description: "R49: the service the new server goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         name: { type: string, minLength: 1, maxLength: 100 }
         type: { type: string, enum: [linux, nginx, apache, haproxy], default: linux, description: Fixed at creation }
         host: { type: string, maxLength: 253, description: "Host name or IP address; no scheme and no port. An address that is never a managed server (link-local, multicast, unspecified, broadcast and other reserved forms) is refused (validation.host_not_allowed). A host name is checked again on the address it resolves to at every connection Alice opens; a refused address fails the connection with ALC-SSH-0012 (ssh.address_not_allowed), shown as the server's last_error." }
@@ -6475,6 +7212,7 @@ components:
       required: [id, name, type, host, port, username, status, last_error, last_success_at, last_discovery_at,
         discovery_interval_hours, keys_managed_elsewhere, capabilities, facts, version, created_at, updated_at]
       properties:
+        service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
         name: { type: string }
         type: { type: string, enum: [nginx, apache, haproxy, linux, azure_key_vault] }
@@ -6580,6 +7318,7 @@ components:
       required: [id, fingerprint, key_type, bits, public_key, managed, is_platform_key, weak, comment, location_count,
         target_count, missing, first_seen_at]
       properties:
+        service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
         fingerprint: { type: string }
         key_type: { type: string }
@@ -6622,6 +7361,7 @@ components:
       required: [label, key_type]
       additionalProperties: false
       properties:
+        service_id: { type: string, format: uuid, description: "R49: the service the new key goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         label: { type: string, minLength: 1, maxLength: 100, description: '1-100 characters without control, format or bidi characters' }
         key_type: { type: string, enum: [ed25519, rsa-3072, rsa-4096, ecdsa-p256] }
     DeployKey:
@@ -7047,6 +7787,7 @@ components:
         label, has_private_key, chain_complete, self_signed, location_count, first_seen_at, last_seen_at, public_key_sha256, revoked_at,
         revocation_reason, revoked_by_name, compromised_at, acme_certificate_id, capabilities]
       properties:
+        service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
         fingerprint: { type: string, pattern: "^[0-9a-f]{64}$", description: 'SHA-256 of the leaf (DER), hex' }
         subject_cn: { type: string }
@@ -7095,6 +7836,7 @@ components:
       type: object
       additionalProperties: false
       properties:
+        service_id: { type: string, format: uuid, description: "R49: the service the new certificate goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         label: { type: string, maxLength: 100 }
         certificate_pem: { type: string, maxLength: 262144, description: 'Leaf first, then the chain' }
         private_key_pem: { type: string, maxLength: 262144, writeOnly: true, description: 'Unencrypted PKCS#8, PKCS#1 or SEC 1' }
@@ -7221,6 +7963,7 @@ components:
       description: A signing request (public). Its key stays in Alice.
       required: [id, common_name, sans, key_algorithm, key_bits, csr_pem, status, certificate_id, created_at, finished_at]
       properties:
+        service: { $ref: "#/components/schemas/ServiceRef" }
         id: { type: string, format: uuid }
         common_name: { type: string }
         sans: { type: array, items: { type: string }, description: 'The request''s DNS names, the common name first' }
@@ -7241,6 +7984,7 @@ components:
       required: [common_name, key_type]
       additionalProperties: false
       properties:
+        service_id: { type: string, format: uuid, description: "R49: the service the new signing request (and its certificate) goes to; absent: the Default service. An unknown one is 422 validation.required on service_id. Never changed by an update: POST /api/v1/services/{id}/actions/assign moves it." }
         common_name: { type: string, maxLength: 64 }
         sans: { type: array, maxItems: 50, items: { type: string } }
         key_type: { type: string, enum: [ecdsa-p256, rsa-3072, rsa-4096] }

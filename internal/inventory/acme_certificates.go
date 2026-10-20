@@ -15,6 +15,7 @@ import (
 	"alice/internal/acme"
 	"alice/internal/acme/keygen"
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
@@ -114,6 +115,8 @@ type ACMECertificate struct {
 	CreatedBy        *uuid.UUID `json:"created_by,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+	// ServiceID is the owning service (R49): its issued certificates go there.
+	ServiceID uuid.UUID `json:"service_id"`
 }
 
 // ACMECurrentCertificate summarises the current certificate of an ACME certificate (no key, no PEM).
@@ -141,6 +144,8 @@ type ACMECertificateInput struct {
 	RenewBeforeDays int
 	AutoRenew       *bool
 	AutoDeploy      bool
+	// ServiceID is the service the definition goes to (R49); uuid.Nil = the Default service.
+	ServiceID uuid.UUID
 }
 
 // ACMECertificatePatch is the input of UpdateACMECertificate: nil fields stay. When the proof method changes, the id
@@ -306,7 +311,7 @@ c.current_certificate_id IS NOT NULL AND c.deploy_stopped_certificate_id IS NOT 
 c.created_by, c.created_at, c.updated_at, c.last_failure_class, c.permanent_failures,
 (SELECT cur.revoked_at FROM certificates cur WHERE cur.id = c.current_certificate_id),
 (SELECT cur.revocation_reason FROM certificates cur WHERE cur.id = c.current_certificate_id),
-(SELECT cur.compromised_at IS NOT NULL FROM certificates cur WHERE cur.id = c.current_certificate_id), c.ca_not_before`
+(SELECT cur.compromised_at IS NOT NULL FROM certificates cur WHERE cur.id = c.current_certificate_id), c.ca_not_before, c.service_id`
 
 func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	var (
@@ -321,7 +326,8 @@ func scanACMECert(row pgx.Row) (ACMECertificate, error) {
 	err := row.Scan(&c.ID, &c.ProviderID, &c.AccountID, &c.Names, &c.KeyType, &c.Challenge, &c.HookID, &c.HTTPTargetID, &c.RenewBeforeDays,
 		&c.AutoRenew, &c.AutoDeploy, &c.State, &c.CurrentCertificateID, &c.Failures, &c.NextAttemptAt, &c.LastAttemptAt, &c.LastErrorCode,
 		&c.RunningOrderID, &c.Bindings, &fingerprint, &nb, &na, &chainOK, &c.ARIWindowStart, &c.ARIWindowEnd, &c.DeployHeldReason,
-		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures, &revokedAt, &reason, &compromised, &c.CANotBefore)
+		&c.DeployStopped, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.LastFailureClass, &c.PermanentFailures, &revokedAt, &reason, &compromised, &c.CANotBefore,
+		&c.ServiceID)
 	c.CreatedAt, c.UpdatedAt = c.CreatedAt.UTC(), c.UpdatedAt.UTC()
 	if c.CurrentCertificateID != nil && fingerprint != nil && nb != nil && na != nil && chainOK != nil {
 		c.Current = &ACMECurrentCertificate{ID: *c.CurrentCertificateID, Fingerprint: *fingerprint, NotBefore: nb.UTC(), NotAfter: na.UTC(),
@@ -448,14 +454,18 @@ func (s *Service) CreateACMECertificate(ctx context.Context, a Actor, in ACMECer
 	now := s.clock.Now().UTC()
 	var out ACMECertificate
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		service, err := authz.ResolveService(ctx, tx, in.ServiceID)
+		if err != nil {
+			return err
+		}
 		account, err := s.checkACMECertRefs(ctx, tx, f)
 		if err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, hook_id, http_target_id,
-renew_before_days, auto_renew, auto_deploy, state, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13)`, id, f.providerID, account, f.names, f.keyType, f.challenge,
-			f.hookID, f.httpTargetID, f.renewBefore, f.autoRenew, f.autoDeploy, actorRef(a), now); err != nil {
+renew_before_days, auto_renew, auto_deploy, state, created_by, created_at, updated_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13, $14)`, id, f.providerID, account, f.names, f.keyType, f.challenge,
+			f.hookID, f.httpTargetID, f.renewBefore, f.autoRenew, f.autoDeploy, actorRef(a), now, service); err != nil {
 			return fmt.Errorf("inventory: store the ACME certificate: %w", err)
 		}
 		if out, err = getACMECert(ctx, tx, id, false); err != nil {

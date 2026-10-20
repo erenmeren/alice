@@ -163,9 +163,9 @@ func probeServer(t *testing.T) (http.Handler, *int) {
 		}
 	}
 	h := s.handler([]route{
-		{method: http.MethodPost, pattern: "/api/v1/probe", perm: rbac.Public, lic: license.ClassAlways, handler: handle(s.decode)},
-		{method: http.MethodPost, pattern: "/api/v1/probe-optional", perm: rbac.Public, lic: license.ClassAlways, handler: handle(s.decodeOptional)},
-		{method: http.MethodPost, pattern: "/api/v1/probe-exact", perm: rbac.Public, lic: license.ClassAlways, handler: handle(func(w http.ResponseWriter, r *http.Request, dst any) bool {
+		{method: http.MethodPost, pattern: "/api/v1/probe", scope: scopeAny, perm: rbac.Public, lic: license.ClassAlways, handler: handle(s.decode)},
+		{method: http.MethodPost, pattern: "/api/v1/probe-optional", scope: scopeAny, perm: rbac.Public, lic: license.ClassAlways, handler: handle(s.decodeOptional)},
+		{method: http.MethodPost, pattern: "/api/v1/probe-exact", scope: scopeAny, perm: rbac.Public, lic: license.ClassAlways, handler: handle(func(w http.ResponseWriter, r *http.Request, dst any) bool {
 			return s.decodeExact(w, r, dst, 1<<20, "name", "pfx_base64", "tags", "items")
 		})},
 	})
@@ -289,7 +289,7 @@ func TestWriteJSONNeverTruncatesAnAnswer(t *testing.T) {
 		Name     string    `json:"name"`
 		NotAfter time.Time `json:"not_after"`
 	}
-	h := s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/probe", perm: rbac.Public, handler: func(w http.ResponseWriter, _ *http.Request) {
+	h := s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/probe", scope: scopeAny, perm: rbac.Public, handler: func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, secretDTO{Name: "canary-value", NotAfter: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)})
 	}}})
 	rec := call(h, http.MethodGet, "/api/v1/probe", "", "")

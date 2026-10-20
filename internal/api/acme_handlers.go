@@ -42,40 +42,40 @@ func (s *server) acmeRoutes() []route {
 	view, operate, manage := rbac.AcmeView, rbac.AcmeOperate, rbac.AcmeManage
 	change, always := license.ClassChange, license.ClassAlways
 	return []route{
-		{method: http.MethodGet, pattern: providers, perm: view, handler: s.listACMEProviders},
-		{method: http.MethodPost, pattern: providers, perm: manage, lic: change, handler: s.createACMEProvider},
-		{method: http.MethodGet, pattern: providers + "/{id}", perm: view, handler: s.getACMEProvider},
-		{method: http.MethodPatch, pattern: providers + "/{id}", perm: manage, lic: change, handler: s.updateACMEProvider},
-		{method: http.MethodDelete, pattern: providers + "/{id}", perm: manage, lic: change, handler: s.deleteACMEProvider},
-		{method: http.MethodPost, pattern: providers + "/{id}/account", perm: manage, lic: change, limit: limitACME, handler: s.registerACMEAccount},
-		{method: http.MethodPost, pattern: providers + "/{id}/preview", perm: rbac.AcmePreview, lic: change, limit: limitACME,
+		{method: http.MethodGet, pattern: providers, scope: scopeAny, perm: view, handler: s.listACMEProviders},
+		{method: http.MethodPost, pattern: providers, scope: scopePlatform, perm: manage, lic: change, handler: s.createACMEProvider},
+		{method: http.MethodGet, pattern: providers + "/{id}", scope: scopeAny, perm: view, handler: s.getACMEProvider},
+		{method: http.MethodPatch, pattern: providers + "/{id}", scope: scopePlatform, perm: manage, lic: change, handler: s.updateACMEProvider},
+		{method: http.MethodDelete, pattern: providers + "/{id}", scope: scopePlatform, perm: manage, lic: change, handler: s.deleteACMEProvider},
+		{method: http.MethodPost, pattern: providers + "/{id}/account", scope: scopePlatform, perm: manage, lic: change, limit: limitACME, handler: s.registerACMEAccount},
+		{method: http.MethodPost, pattern: providers + "/{id}/preview", scope: scopePlatform, perm: rbac.AcmePreview, lic: change, limit: limitACME,
 			handler: s.previewACMEProvider},
-		{method: http.MethodPost, pattern: accounts + "/{id}/rollover", perm: manage, lic: change, limit: limitACME, handler: s.rolloverACMEAccount},
-		{method: http.MethodPost, pattern: accounts + "/{id}/rollover/recover", perm: manage, lic: change, limit: limitACME,
+		{method: http.MethodPost, pattern: accounts + "/{id}/rollover", scope: scopePlatform, perm: manage, lic: change, limit: limitACME, handler: s.rolloverACMEAccount},
+		{method: http.MethodPost, pattern: accounts + "/{id}/rollover/recover", scope: scopePlatform, perm: manage, lic: change, limit: limitACME,
 			handler: s.recoverACMERollover},
-		{method: http.MethodPost, pattern: accounts + "/{id}/deactivate", perm: manage, lic: change, limit: limitACME, handler: s.deactivateACMEAccount},
-		{method: http.MethodGet, pattern: hooks, perm: view, handler: s.listACMEHooks},
-		{method: http.MethodPost, pattern: hooks, perm: manage, lic: change, handler: s.createACMEHook},
-		{method: http.MethodGet, pattern: hooks + "/{id}", perm: view, handler: s.getACMEHook},
-		{method: http.MethodPatch, pattern: hooks + "/{id}", perm: manage, lic: change, handler: s.updateACMEHook},
-		{method: http.MethodDelete, pattern: hooks + "/{id}", perm: manage, lic: change, handler: s.deleteACMEHook},
-		{method: http.MethodGet, pattern: certs, perm: view, handler: s.listACMECertificates},
-		{method: http.MethodPost, pattern: certs, perm: manage, lic: change, handler: s.createACMECertificate},
-		{method: http.MethodGet, pattern: certs + "/{id}", perm: view, handler: s.getACMECertificate},
+		{method: http.MethodPost, pattern: accounts + "/{id}/deactivate", scope: scopePlatform, perm: manage, lic: change, limit: limitACME, handler: s.deactivateACMEAccount},
+		{method: http.MethodGet, pattern: hooks, scope: scopeAny, perm: view, handler: s.listACMEHooks},
+		{method: http.MethodPost, pattern: hooks, scope: scopePlatform, perm: manage, lic: change, handler: s.createACMEHook},
+		{method: http.MethodGet, pattern: hooks + "/{id}", scope: scopeAny, perm: view, handler: s.getACMEHook},
+		{method: http.MethodPatch, pattern: hooks + "/{id}", scope: scopePlatform, perm: manage, lic: change, handler: s.updateACMEHook},
+		{method: http.MethodDelete, pattern: hooks + "/{id}", scope: scopePlatform, perm: manage, lic: change, handler: s.deleteACMEHook},
+		{method: http.MethodGet, pattern: certs, scope: scopeList, perm: view, handler: s.listACMECertificates},
+		{method: http.MethodPost, pattern: certs, scope: scopeCreate, perm: manage, lic: change, handler: s.createACMECertificate},
+		{method: http.MethodGet, pattern: certs + "/{id}", scope: scopeResource, perm: view, handler: s.getACMECertificate},
 		// limitACME: switching auto_renew on re-arms automatic renewal (a fresh series against the CA, like /rearm).
-		{method: http.MethodPatch, pattern: certs + "/{id}", perm: manage, lic: change, limit: limitACME, handler: s.updateACMECertificate},
-		{method: http.MethodDelete, pattern: certs + "/{id}", perm: manage, lic: always, handler: s.deleteACMECertificate},
-		{method: http.MethodPost, pattern: certs + "/{id}/order", perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderIssue)},
-		{method: http.MethodPost, pattern: certs + "/{id}/test", perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderTest)},
-		{method: http.MethodGet, pattern: certs + "/{id}/orders", perm: view, handler: s.listACMEOrders},
-		{method: http.MethodPost, pattern: certs + "/{id}/rearm", perm: manage, lic: change, limit: limitACME, handler: s.rearmACME},
-		{method: http.MethodPost, pattern: certs + "/{id}/release-hold", perm: manage, lic: change, handler: s.releaseACMEHold},
+		{method: http.MethodPatch, pattern: certs + "/{id}", scope: scopeResource, perm: manage, lic: change, limit: limitACME, handler: s.updateACMECertificate},
+		{method: http.MethodDelete, pattern: certs + "/{id}", scope: scopeResource, perm: manage, lic: always, handler: s.deleteACMECertificate},
+		{method: http.MethodPost, pattern: certs + "/{id}/order", scope: scopeResource, perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderIssue)},
+		{method: http.MethodPost, pattern: certs + "/{id}/test", scope: scopeResource, perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderTest)},
+		{method: http.MethodGet, pattern: certs + "/{id}/orders", scope: scopeResource, perm: view, handler: s.listACMEOrders},
+		{method: http.MethodPost, pattern: certs + "/{id}/rearm", scope: scopeResource, perm: manage, lic: change, limit: limitACME, handler: s.rearmACME},
+		{method: http.MethodPost, pattern: certs + "/{id}/release-hold", scope: scopeResource, perm: manage, lic: change, handler: s.releaseACMEHold},
 		// Revocation at the CA (RFC 8555 section 7.6, 2026-10-20): cannot be undone; a CA call like an order.
-		{method: http.MethodPost, pattern: certs + "/{id}/revoke", perm: manage, lic: change, limit: limitACME, handler: s.revokeACME},
-		{method: http.MethodGet, pattern: certs + "/{id}/bindings", perm: view, handler: s.listACMEBindings},
-		{method: http.MethodPut, pattern: certs + "/{id}/bindings/{location_id}", perm: operate, lic: change, handler: s.putACMEBinding},
-		{method: http.MethodDelete, pattern: certs + "/{id}/bindings/{location_id}", perm: operate, lic: always, handler: s.deleteACMEBinding},
-		{method: http.MethodPost, pattern: certs + "/{id}/deploy", perm: operate, lic: change, limit: limitACME, handler: s.deployACME},
+		{method: http.MethodPost, pattern: certs + "/{id}/revoke", scope: scopeResource, perm: manage, lic: change, limit: limitACME, handler: s.revokeACME},
+		{method: http.MethodGet, pattern: certs + "/{id}/bindings", scope: scopeResource, perm: view, handler: s.listACMEBindings},
+		{method: http.MethodPut, pattern: certs + "/{id}/bindings/{location_id}", scope: scopeCross, perm: operate, lic: change, handler: s.putACMEBinding},
+		{method: http.MethodDelete, pattern: certs + "/{id}/bindings/{location_id}", scope: scopeResource, perm: operate, lic: always, handler: s.deleteACMEBinding},
+		{method: http.MethodPost, pattern: certs + "/{id}/deploy", scope: scopeResource, perm: operate, lic: change, limit: limitACME, handler: s.deployACME},
 	}
 }
 
@@ -608,6 +608,8 @@ type acmeCertBody struct {
 	RenewBeforeDays *int      `json:"renew_before_days"`
 	AutoRenew       *bool     `json:"auto_renew"`
 	AutoDeploy      *bool     `json:"auto_deploy"`
+	// ServiceID: a new definition's service (R49; absent: the Default service). A change never takes it (assign moves).
+	ServiceID *uuid.UUID `json:"service_id"`
 }
 
 var acmeCertKeys = []string{"provider_id", "names", "key_type", "challenge", "hook_id", "http_target_id", "renew_before_days", "auto_renew",
@@ -665,11 +667,13 @@ func parseACMECertCursor(raw string) (time.Time, uuid.UUID, bool) {
 // listACMECertificates is the list of ACME certificates, oldest first, in pages (cursor, limit 1..200, default 50) with
 // the filters state, provider_id and q (a part of one of the names).
 func (s *server) listACMECertificates(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	q := r.URL.Query()
 	var v validate.Errors
 	state, query, cursor := q.Get("state"), asciiLower(strings.TrimSpace(q.Get("q"))), q.Get("cursor")
 	provider := optionalUUID(q.Get("provider_id"), "provider_id", &v)
 	limit := pageLimit(q.Get("limit"), &v)
+	filter := s.serviceFilter(r, &v) // R49: service_id and environment_id
 	if state != "" && !slices.Contains(acmeCertStates, state) {
 		v.Add("state", validate.OneOf, map[string]string{"values": strings.Join(acmeCertStates, ", ")})
 	}
@@ -705,7 +709,7 @@ func (s *server) listACMECertificates(w http.ResponseWriter, r *http.Request) {
 		if cursor != "" && (c.CreatedAt.Before(afterT) || (c.CreatedAt.Equal(afterT) && c.ID.String() <= afterID.String())) {
 			continue
 		}
-		if (state != "" && c.State != state) || (provider != uuid.Nil && c.ProviderID != provider) ||
+		if (state != "" && c.State != state) || (provider != uuid.Nil && c.ProviderID != provider) || !inServices(filter, c.ServiceID) ||
 			(query != "" && !slices.ContainsFunc(c.Names, func(n string) bool { return strings.Contains(n, query) })) {
 			continue
 		}
@@ -713,15 +717,16 @@ func (s *server) listACMECertificates(w http.ResponseWriter, r *http.Request) {
 			next = acmeCertCursor(last)
 			break
 		}
-		items = append(items, acmeCertificateJSON(c, s.deps.Clock.Now()))
+		items = append(items, acmeCertificateJSON(c, s.deps.Clock.Now(), refs))
 		last = c
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor(next)})
 }
 
 func (s *server) createACMECertificate(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	var req acmeCertBody
-	if !s.decodeExact(w, r, &req, maxACMECertBody, acmeCertKeys...) {
+	if !s.decodeExact(w, r, &req, maxACMECertBody, append(slices.Clone(acmeCertKeys), "service_id")...) {
 		return
 	}
 	var v validate.Errors
@@ -731,7 +736,7 @@ func (s *server) createACMECertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := inventory.ACMECertificateInput{ProviderID: *provider, Names: *req.Names, KeyType: deref(req.KeyType), Challenge: deref(req.Challenge),
-		HookID: hook, HTTPTargetID: target, AutoRenew: req.AutoRenew}
+		HookID: hook, HTTPTargetID: target, AutoRenew: req.AutoRenew, ServiceID: derefOr(req.ServiceID, uuid.Nil)}
 	if req.RenewBeforeDays != nil {
 		in.RenewBeforeDays = *req.RenewBeforeDays
 	}
@@ -744,11 +749,12 @@ func (s *server) createACMECertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/acme/certificates/"+c.ID.String())
-	writeJSON(w, http.StatusCreated, acmeCertificateJSON(c, s.deps.Clock.Now()))
+	writeJSON(w, http.StatusCreated, acmeCertificateJSON(c, s.deps.Clock.Now(), refs))
 }
 
 // getACMECertificate is one certificate with its bindings (state, attention mark) and its deploy hold and stop marks.
 func (s *server) getACMECertificate(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -769,7 +775,7 @@ func (s *server) getACMECertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	d := acmeCertificateJSON(c, s.deps.Clock.Now())
+	d := acmeCertificateJSON(c, s.deps.Clock.Now(), refs)
 	list := make([]acmeBindingDTO, 0, len(bindings))
 	for _, b := range bindings {
 		list = append(list, acmeBindingJSON(b))
@@ -780,6 +786,7 @@ func (s *server) getACMECertificate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) updateACMECertificate(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -805,7 +812,7 @@ func (s *server) updateACMECertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now()))
+	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now(), refs))
 }
 
 func (s *server) deleteACMECertificate(w http.ResponseWriter, r *http.Request) {
@@ -872,6 +879,7 @@ func (s *server) listACMEOrders(w http.ResponseWriter, r *http.Request) {
 // (no failures, no wait) and queues an order of the person at once for an issued certificate (owner decision
 // 2026-10-20); 200 with the certificate, whose running_order_id names the order.
 func (s *server) rearmACME(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -882,11 +890,12 @@ func (s *server) rearmACME(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now()))
+	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now(), refs))
 }
 
 // releaseACMEHold releases the current certificate from the licence hold of automatic deployment.
 func (s *server) releaseACMEHold(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -901,7 +910,7 @@ func (s *server) releaseACMEHold(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now()))
+	writeJSON(w, http.StatusOK, acmeCertificateJSON(c, s.deps.Clock.Now(), refs))
 }
 
 func (s *server) listACMEBindings(w http.ResponseWriter, r *http.Request) {

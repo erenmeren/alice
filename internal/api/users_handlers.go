@@ -14,14 +14,14 @@ import (
 // every change needs step-up; R10 break-glass is enforced by auth).
 func (s *server) userRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/users", perm: rbac.UsersRead, handler: s.listUsers},
-		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.createUser},
-		{method: http.MethodGet, pattern: "/api/v1/users/{id}", perm: rbac.UsersRead, handler: s.getUser},
-		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.updateUser},
-		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-mfa", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserMFA},
-		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-password", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserPassword},
-		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/revoke-sessions", perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.revokeUserSessions},
-		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/unlock-directory-sign-in", perm: rbac.UsersManage, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/users", scope: scopePlatform, perm: rbac.UsersRead, handler: s.listUsers},
+		{method: http.MethodPost, pattern: "/api/v1/users", scope: scopePlatform, perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.createUser},
+		{method: http.MethodGet, pattern: "/api/v1/users/{id}", scope: scopePlatform, perm: rbac.UsersRead, handler: s.getUser},
+		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", scope: scopePlatform, perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.updateUser},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-mfa", scope: scopePlatform, perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserMFA},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/reset-password", scope: scopePlatform, perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.resetUserPassword},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/revoke-sessions", scope: scopePlatform, perm: rbac.UsersManage, lic: license.ClassAlways, handler: s.revokeUserSessions},
+		{method: http.MethodPost, pattern: "/api/v1/users/{id}/actions/unlock-directory-sign-in", scope: scopePlatform, perm: rbac.UsersManage, lic: license.ClassAlways,
 			handler: s.unlockDirectorySignIn},
 	}
 }

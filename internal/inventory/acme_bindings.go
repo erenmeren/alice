@@ -30,6 +30,7 @@ import (
 
 	"alice/internal/acme/keygen"
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
@@ -222,6 +223,13 @@ func (s *Service) AddACMEBindingStrict(ctx context.Context, a Actor, id, locatio
 				return &LocationRefusalError{LocationID: location, Err: &KeyTypeMismatchError{Expected: l.keyType, Actual: alg}}
 			}
 		}
+		// R49 (design §5.6 (c)): the server's service accepts the ACME certificate's keys (a new binding; an existing
+		// one keeps working until it deploys, where the planner and the engine check again).
+		if acmeBound == nil {
+			if err := authz.CheckTrust(ctx, tx, c.ServiceID, t.ServiceID); err != nil {
+				return &LocationRefusalError{LocationID: location, Err: err}
+			}
+		}
 		if autoDeploy && (acmeBound == nil || !autoBefore) {
 			if err := s.unattendedAllowed(a, strictSession); err != nil {
 				return err
@@ -344,8 +352,9 @@ func (s *Service) DeployACMENow(ctx context.Context, a Actor, id uuid.UUID, in A
 			return nil, &LocationRefusalError{LocationID: l, Err: ErrACMELocationNotBound}
 		}
 	}
+	// The key is the ACME certificate's: its service is the source (R49, design §5.6).
 	return s.RequestDeployment(ctx, a, DeployRequestInput{CertificateID: *c.CurrentCertificateID, LocationIDs: locations,
-		ConfirmIncompleteChain: in.ConfirmIncompleteChain})
+		ConfirmIncompleteChain: in.ConfirmIncompleteChain, source: &c.ServiceID})
 }
 
 // ReleaseACMEDeployHold releases the current certificate of a live ACME certificate from the licence hold (an

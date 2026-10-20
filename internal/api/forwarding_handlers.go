@@ -12,10 +12,10 @@ import (
 // message (rate limited like a download: it opens a connection). settings.manage, in lock too.
 func (s *server) forwardingRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/settings/audit-forwarding", perm: rbac.SettingsManage, handler: s.getForwarding},
-		{method: http.MethodPut, pattern: "/api/v1/settings/audit-forwarding", perm: rbac.SettingsManage, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/settings/audit-forwarding", scope: scopePlatform, perm: rbac.SettingsManage, handler: s.getForwarding},
+		{method: http.MethodPut, pattern: "/api/v1/settings/audit-forwarding", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways,
 			handler: s.putForwarding},
-		{method: http.MethodPost, pattern: "/api/v1/settings/audit-forwarding/test", perm: rbac.SettingsManage, limit: limitForwardTest,
+		{method: http.MethodPost, pattern: "/api/v1/settings/audit-forwarding/test", scope: scopePlatform, perm: rbac.SettingsManage, limit: limitForwardTest,
 			lic: license.ClassAlways, handler: s.testForwarding},
 	}
 }

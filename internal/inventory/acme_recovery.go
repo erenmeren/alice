@@ -133,8 +133,8 @@ FROM acme_certificates c LEFT JOIN certificates x ON x.id = c.current_certificat
 			subject = truncRunes(names[0], 300)
 		}
 		var ledger uuid.UUID
-		err = tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8)
+		err = tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, (SELECT c.service_id FROM acme_certificates c WHERE c.id = $3))
 ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING id`, uuid.Must(uuid.NewV7()), acmeExpiryKind, id, subject, notAfter,
 			level, s.notifier != nil, now).Scan(&ledger)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -183,8 +183,8 @@ func (s *Service) acmeCAWaitNotice(ctx context.Context, tx pgx.Tx, id uuid.UUID,
 	}
 	left := min(max(int(notAfter.Sub(caNotBefore)/(24*time.Hour)), 0), 365)
 	var ledger uuid.UUID
-	err := tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8)
+	err := tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, (SELECT c.service_id FROM acme_certificates c WHERE c.id = $3))
 ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING id`, uuid.Must(uuid.NewV7()), acmeCAWaitKind, id, subject, notAfter,
 		left, s.notifier != nil, now).Scan(&ledger)
 	if errors.Is(err, pgx.ErrNoRows) {

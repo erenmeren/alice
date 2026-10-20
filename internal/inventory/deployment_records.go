@@ -56,6 +56,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/certs"
 	"alice/internal/platform/db"
 	"alice/internal/providers"
@@ -240,6 +241,10 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		if _, err := (deployCertificate{revoked: revoked, compromised: compromised}).revocationRefusal(); err != nil {
 			return Material{}, err
 		}
+		// Nor one whose server's service stopped accepting the source's keys (a trust removed, R49, design §5.6 (c)).
+		if err := checkDeploymentTrust(ctx, s.pool, d); err != nil {
+			return Material{}, err
+		}
 	}
 	var f Facts
 	if err := json.Unmarshal(facts, &f); err != nil {
@@ -302,6 +307,41 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 		}
 	}
 	return m, nil
+}
+
+// checkDeploymentTrust is design §5.6 (c) at a deployment's first send (R49): the server's service must be the source's or
+// accept its keys. The source of a Key Vault deployment is the vault's service; otherwise the certificate's or, for a
+// certificate Alice ordered over ACME, the ACME certificate's (the planner's and Deploy now's source). The replacement
+// of a key-compromise incident at one of its locations needs no trust (the key it replaces is there already). A missing
+// trust is an *authz.UntrustedError.
+func checkDeploymentTrust(ctx context.Context, q db.Querier, d Deployment) error {
+	var (
+		ok             bool
+		source, target uuid.UUID
+	)
+	err := q.QueryRow(ctx, `WITH src AS (
+    SELECT v.service_id FROM bindings b JOIN targets v ON v.id = b.kv_target_id WHERE b.id = $4
+    UNION SELECT c.service_id FROM certificates c WHERE c.id = $2 AND $4::uuid IS NULL
+    UNION SELECT ac.service_id FROM acme_orders o JOIN acme_certificates ac ON ac.id = o.acme_certificate_id
+        WHERE o.certificate_id = $2 AND $4::uuid IS NULL)
+SELECT EXISTS (SELECT 1 FROM certificate_incidents i JOIN certificate_incident_locations il ON il.incident_id = i.id
+               WHERE i.replacement_certificate_id = $2 AND il.location_id = $3)
+    OR EXISTS (SELECT 1 FROM src WHERE src.service_id = t.service_id
+               OR EXISTS (SELECT 1 FROM service_trusts st WHERE st.source_service_id = src.service_id AND st.target_service_id = t.service_id)),
+    coalesce((SELECT v.service_id FROM bindings b JOIN targets v ON v.id = b.kv_target_id WHERE b.id = $4),
+             (SELECT c.service_id FROM certificates c WHERE c.id = $2)),
+    t.service_id
+FROM targets t WHERE t.id = $1`, d.TargetID, d.CertificateID, d.LocationID, d.BindingID).Scan(&ok, &source, &target)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("inventory: read the deployment's services: %w", err)
+	}
+	if !ok {
+		return &authz.UntrustedError{Source: source, Target: target}
+	}
+	return nil
 }
 
 // kvSource reads the vault, certificate and version a Key Vault deployment names.

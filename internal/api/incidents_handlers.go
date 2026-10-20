@@ -48,22 +48,23 @@ func (s *server) incidentRoutes() []route {
 	const incidents = "/api/v1/incidents"
 	incident, change, always := rbac.CertificatesIncident, license.ClassChange, license.ClassAlways
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/certificates/capabilities", perm: rbac.Read, handler: s.certificateCapabilities},
-		{method: http.MethodGet, pattern: "/api/v1/certificate-impact/{id}", perm: rbac.Read, handler: s.certificateImpact},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/incidents", perm: incident, lic: change, handler: s.startIncident},
-		{method: http.MethodGet, pattern: incidents, perm: rbac.Read, handler: s.listIncidents},
-		{method: http.MethodGet, pattern: incidents + "/{id}", perm: rbac.Read, handler: s.getIncident},
-		{method: http.MethodPost, pattern: incidents + "/{id}/retry", perm: incident, lic: change, handler: s.incidentAction(actRetry)},
-		{method: http.MethodPost, pattern: incidents + "/{id}/revoke-now", perm: incident, lic: change, limit: limitACME,
+		{method: http.MethodGet, pattern: "/api/v1/certificates/capabilities", scope: scopeAny, perm: rbac.Read, handler: s.certificateCapabilities},
+		{method: http.MethodGet, pattern: "/api/v1/certificate-impact/{id}", scope: scopeResource, perm: rbac.Read, handler: s.certificateImpact},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/incidents", scope: scopeCross, perm: incident, lic: change, handler: s.startIncident},
+		{method: http.MethodGet, pattern: incidents, scope: scopeList, perm: rbac.Read, handler: s.listIncidents},
+		{method: http.MethodGet, pattern: incidents + "/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getIncident},
+		{method: http.MethodPost, pattern: incidents + "/{id}/retry", scope: scopeCross, perm: incident, lic: change, handler: s.incidentAction(actRetry)},
+		{method: http.MethodPost, pattern: incidents + "/{id}/revoke-now", scope: scopeCross, perm: incident, lic: change, limit: limitACME,
 			handler: s.incidentAction(actRevokeNow)},
-		{method: http.MethodPost, pattern: incidents + "/{id}/replacement", perm: incident, lic: change, handler: s.chooseReplacement},
-		{method: http.MethodPost, pattern: incidents + "/{id}/close", perm: incident, lic: always, handler: s.incidentAction(actClose)},
+		{method: http.MethodPost, pattern: incidents + "/{id}/replacement", scope: scopeCross, perm: incident, lic: change, handler: s.chooseReplacement},
+		{method: http.MethodPost, pattern: incidents + "/{id}/close", scope: scopeCross, perm: incident, lic: always, handler: s.incidentAction(actClose)},
 	}
 }
 
 // revokeACME revokes a version of an ACME certificate at its CA (none named: the current certificate) with an RFC 5280
 // reason; 200 with the certificate as it is now.
 func (s *server) revokeACME(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -87,7 +88,7 @@ func (s *server) revokeACME(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, certificateJSON(c))
+	writeJSON(w, http.StatusOK, certificateJSON(c, refs))
 }
 
 type sourceCapabilitiesDTO struct {
@@ -169,7 +170,7 @@ type impactDTO struct {
 }
 
 func impactJSON(m inventory.CertificateImpact, showEndpoints bool) impactDTO {
-	d := impactDTO{Certificate: certificateJSON(m.Certificate), Certificates: []impactCertificateDTO{}, Locations: []impactLocationDTO{},
+	d := impactDTO{Certificate: certificateJSON(m.Certificate, nil), Certificates: []impactCertificateDTO{}, Locations: []impactLocationDTO{},
 		Vaults: []impactVaultDTO{}, Endpoints: []impactEndpointDTO{}, EndpointsHidden: !showEndpoints, Truncated: m.Truncated,
 		OpenIncidentID: idPtr(m.OpenIncidentID)}
 	for _, c := range m.Certificates {

@@ -233,7 +233,9 @@ var testMailer notify.Mailer = e2eMailbox
 // jobs, the certificate tables) must be in the same TRUNCATE, and so must every table of the SSH key
 // rotation (migration 00010), which references ssh_keys, targets and users.  The ACME tables (00013) reference users, certificates and certificate_locations.
 // The network discovery tables (00014) reference users and each other. The LDAP directory tables (00015) reference users
-// (created_by) and users reference ldap_directories (ldap_directory_id).
+// (created_by) and users reference ldap_directories (ldap_directory_id). The service tables (00025) reference users and
+// every owned table references services: they are emptied too, and the seeded environments and the Default service with
+// its first policy are put back, as a fresh installation has them.
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
 license, license_files, license_history, notifications_outbox,
 target_locks, job_attempts, jobs,
@@ -246,7 +248,13 @@ deployment_steps, deployments, certificate_locations, csr_requests, certificates
 kv_imports, bindings, kv_certificate_versions, kv_certificates, kv_keys, kv_secrets,
 ldap_group_mappings, ldap_directories,
 oidc_login_states, oidc_group_mappings, oidc_providers, setting_secrets, saved_views, alerts,
-targets, credentials`
+targets, credentials,
+service_owners, service_trusts, role_bindings, user_directory_groups, directory_groups, service_policies, services, environments;
+INSERT INTO environments (id, key, name, sort, created_at, updated_at) VALUES
+    (gen_random_uuid(), 'production', 'Production', 10, now(), now()), (gen_random_uuid(), 'staging', 'Staging', 20, now(), now()),
+    (gen_random_uuid(), 'test', 'Test', 30, now(), now()), (gen_random_uuid(), 'development', 'Development', 40, now(), now());
+INSERT INTO services (id, name, is_default, created_at, updated_at) VALUES (gen_random_uuid(), 'Default', true, now(), now());
+INSERT INTO service_policies (service_id, version, body, created_at) SELECT id, 1, '{"schema":1}', now() FROM services`
 
 // decodeTest reads a JSON body strictly; an empty body is an empty object.
 func decodeTest(w http.ResponseWriter, r *http.Request, dst any) bool {

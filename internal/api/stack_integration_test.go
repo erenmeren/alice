@@ -32,6 +32,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
+	"alice/internal/authz/services"
 	"alice/internal/backup"
 	"alice/internal/discovery/discoverysvc"
 	"alice/internal/i18n"
@@ -163,6 +164,8 @@ type stack struct {
 	// name to its addresses; any other name does not resolve, so no test ever asks a real name server).
 	discovery *discoverysvc.Service
 	names     map[string][]netip.Addr
+	// Scoped access (R49): services, environments, trusts and assignment, as cmd/alice builds them.
+	serviceStore *services.Store
 
 	mu        sync.Mutex
 	nginxSrvs []*nginxFixture // the emulated Nginx hosts Alice's own TLS probe can reach
@@ -290,6 +293,7 @@ func (s *stack) startInventory(keyring *secrets.Keyring, auditLog *audit.Log) {
 	s.ldap = ldap.New(ldap.Config{Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Log: log, Auth: s.auth,
 		NewClient: func() ldap.Client { return s.dir }})
 	s.discovery = discoverysvc.New(discoverysvc.Config{Pool: s.db.App, Audit: auditLog, Queue: s.queue, Clock: s.clock, Resolver: stackResolver{s}})
+	s.serviceStore = services.New(s.db.App, auditLog, s.clock)
 	s.runner = s.newRunner("", 0)
 }
 
@@ -388,6 +392,7 @@ func (s *stack) deps() Deps {
 		ACME:           s.inv,
 		Discovery:      s.discovery,
 		Incidents:      s.inv,
+		Services:       s.serviceStore,
 		Jobs:           s.queue,
 		Providers:      s.registry,
 		SSHKeys:        s.sshKeys,

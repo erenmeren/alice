@@ -241,7 +241,7 @@ func (s *Service) start(ctx context.Context, runID uuid.UUID, a inventory.Actor,
 			changed = true
 			return s.cancelRun(ctx, tx, a.Audit, run, ReasonPlanChanged)
 		}
-		nk, err := s.storeGeneratedTx(ctx, tx, a.Audit, a.UserID, m, oldKey.label, &oldKey.id)
+		nk, err := s.storeGeneratedTx(ctx, tx, a.Audit, a.UserID, m, oldKey.label, &oldKey.id, uuid.Nil)
 		if err != nil {
 			return err
 		}

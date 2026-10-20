@@ -113,12 +113,17 @@ const (
 	DenyNotManaged             = "not_managed"
 	DenyDestroyed              = "destroyed"
 	DenyRetired                = "retired" // rotation.policy.denied
+	// DenyServiceUntrusted: the server's service does not accept the key's service's keys (R49, design §5.6 (c)); the
+	// error is an *authz.UntrustedError (ErrServiceUntrusted).
+	DenyServiceUntrusted = "service_untrusted"
 )
 
 // GenerateInput asks for a new key.
 type GenerateInput struct {
 	Label   string // 1-100 runes, no control, format or bidi characters
 	KeyType string // keymat type; "" = ed25519
+	// ServiceID is the service the key goes to (R49); uuid.Nil = the Default service.
+	ServiceID uuid.UUID
 }
 
 // ManagedKey is a key Alice generated, with its private key's public facts. It never carries the
@@ -137,6 +142,7 @@ type ManagedKey struct {
 	LastDownloadedAt       *time.Time
 	PolicyID               *uuid.UUID // the live rotation policy of the key
 	OpenRotationID         *uuid.UUID // the unfinished rotation that replaces this key
+	ServiceID              uuid.UUID  // the owning service (R49); a rotation's new key takes the old key's
 }
 
 // DeployInput asks for one key line on one server, user and file.

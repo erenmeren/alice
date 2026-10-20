@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/certs"
 	"alice/internal/license"
 	"alice/internal/platform/azureid"
@@ -76,6 +77,8 @@ type NewVault struct {
 	SecretExpiresOn     *time.Time
 	Certificate         certs.Upload
 	PollIntervalMinutes int // 0 = 15; 5..1440
+	// ServiceID is the service the vault goes to (R49); uuid.Nil = the Default service.
+	ServiceID uuid.UUID
 }
 
 func (n NewVault) credential() VaultCredentialInput {
@@ -504,6 +507,10 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 	if err := s.checkVaultFree(ctx, n.Name, vault.Host); err != nil {
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
 	}
+	// An unknown service is refused before Azure is asked anything (and again in the transaction).
+	if _, err := authz.ResolveService(ctx, s.pool, in.ServiceID); err != nil {
+		return Target{}, providers.ConnectionReport{}, uuid.Nil, err
+	}
 	p, ok := s.registry.Get(providers.KindAzureKV)
 	if !ok {
 		return Target{}, providers.ConnectionReport{}, uuid.Nil, errors.New("inventory: the azurekv provider is not registered")
@@ -548,16 +555,19 @@ func (s *Service) CreateVault(ctx context.Context, a Actor, in NewVault) (Target
 	var jobID uuid.UUID
 	var created Target
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		service, err := authz.ResolveService(ctx, tx, in.ServiceID)
+		if err != nil {
+			return err
+		}
 		if err := s.insertVaultCredential(ctx, tx, cred, id, now); err != nil {
 			return err
 		}
 		if err := s.insertTarget(ctx, tx, targetRow{ID: id, Name: n.Name, Type: TypeAzureKeyVault,
 			Config:       targetConfig{Host: vault.Host, Port: 443, VaultURL: vault.URL},
 			CredentialID: cred.ID, Status: status, LastErrorCode: errorCode, LastSuccessAt: lastSuccess, Capabilities: caps,
-			IntervalSeconds: n.PollIntervalMinutes * 60, Facts: facts, By: a.UserID}); err != nil {
+			IntervalSeconds: n.PollIntervalMinutes * 60, Facts: facts, By: a.UserID, ServiceID: service}); err != nil {
 			return err
 		}
-		var err error
 		if created, err = getTarget(ctx, tx, id, false); err != nil {
 			return err
 		}

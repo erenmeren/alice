@@ -40,6 +40,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/certs"
 	"alice/internal/license"
 	"alice/internal/platform/azureid"
@@ -361,6 +362,12 @@ func (s *Service) RequestImport(ctx context.Context, a Actor, in ImportInput) (K
 		if err != nil {
 			return err
 		}
+		// The private key leaves the certificate's service for the vault's (R49, design §5.6 (c)).
+		if err := authz.CheckTrust(ctx, tx, c.service, t.service); errors.Is(err, ErrServiceUntrusted) {
+			return denyWith(&denial, ReasonServiceUntrusted, uuid.Nil, err)
+		} else if err != nil {
+			return err
+		}
 		now := s.clock.Now().UTC()
 		switch {
 		case c.keyID == nil:
@@ -443,12 +450,14 @@ type importCertificate struct {
 	fingerprint string
 	algorithm   string
 	bits        int
+	service     uuid.UUID // the owning service (R49): the source of the key an import moves into a vault
 }
 
 func readImportCertificate(ctx context.Context, tx pgx.Tx, id uuid.UUID) (importCertificate, error) {
 	c := importCertificate{id: id}
-	err := tx.QueryRow(ctx, `SELECT private_key_id, not_before, not_after, pem_chain, fingerprint_sha256, key_algorithm, key_bits FROM certificates WHERE id = $1 FOR SHARE`, id).
-		Scan(&c.keyID, &c.notBefore, &c.notAfter, &c.pemChain, &c.fingerprint, &c.algorithm, &c.bits)
+	err := tx.QueryRow(ctx, `SELECT private_key_id, not_before, not_after, pem_chain, fingerprint_sha256, key_algorithm, key_bits, service_id
+FROM certificates WHERE id = $1 FOR SHARE`, id).
+		Scan(&c.keyID, &c.notBefore, &c.notAfter, &c.pemChain, &c.fingerprint, &c.algorithm, &c.bits, &c.service)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return importCertificate{}, ErrNotFound
 	}
@@ -516,8 +525,11 @@ func (s *Service) ImportMaterial(ctx context.Context, id uuid.UUID) (ImportMater
 		if !admin {
 			return ErrAdminRequired
 		}
-		c, err = readImportCertificate(ctx, tx, im.CertificateID)
-		return err
+		if c, err = readImportCertificate(ctx, tx, im.CertificateID); err != nil {
+			return err
+		}
+		// Judged again before the vault is called: a trust removed since the request stops the import (R49).
+		return authz.CheckTrust(ctx, tx, c.service, vault.service)
 	})
 	if err != nil {
 		return ImportMaterial{}, err

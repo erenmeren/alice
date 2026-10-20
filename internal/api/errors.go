@@ -18,6 +18,8 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
+	"alice/internal/authz"
+	"alice/internal/authz/services"
 	"alice/internal/backup"
 	"alice/internal/discovery"
 	"alice/internal/discovery/discoverysvc"
@@ -502,6 +504,20 @@ var (
 	ErrDSCNameTaken       = ErrorCode{Code: "ALC-DSC-0011", Reason: "discovery.name_taken", Status: http.StatusConflict}
 	ErrDSCScanInterrupted = ErrorCode{Code: "ALC-DSC-0012", Reason: "discovery.scan_interrupted", Status: http.StatusConflict}
 	ErrDSCScopeDisabled   = ErrorCode{Code: "ALC-DSC-0013", Reason: "discovery.scope_disabled", Status: http.StatusConflict}
+
+	// Services and environments (area SVC, R49, design §8.3). The numbers the design reserves for the later phases
+	// (0005, 0006, 0008-0015: scoped callers and service policy) are not registered until a phase produces them.
+	// ErrSVCUntrusted is also the closed reason of a deployment, a Key Vault import or an SSH key deploy refused at its
+	// first send, and of a binding marked by the automatic deployment planners, for a trust removed meanwhile.
+	ErrSVCNotFound         = ErrorCode{Code: "ALC-SVC-0001", Reason: "service.not_found", Status: http.StatusNotFound}
+	ErrSVCNameTaken        = ErrorCode{Code: "ALC-SVC-0002", Reason: "service.name_taken", Status: http.StatusConflict}
+	ErrSVCNotEmpty         = ErrorCode{Code: "ALC-SVC-0003", Reason: "service.not_empty", Status: http.StatusConflict}
+	ErrSVCDefaultProtected = ErrorCode{Code: "ALC-SVC-0004", Reason: "service.default_protected", Status: http.StatusConflict}
+	ErrSVCUntrusted        = ErrorCode{Code: "ALC-SVC-0007", Reason: "service.untrusted", Status: http.StatusConflict}
+	ErrSVCEnvironmentInUse = ErrorCode{Code: "ALC-SVC-0016", Reason: "environment.in_use", Status: http.StatusConflict}
+	ErrSVCEnvironmentTaken = ErrorCode{Code: "ALC-SVC-0017", Reason: "environment.key_taken", Status: http.StatusConflict}
+	// ErrSVCTrustExists: the next free number (the design names no code for a trust made twice).
+	ErrSVCTrustExists = ErrorCode{Code: "ALC-SVC-0018", Reason: "service.trust_exists", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -576,6 +592,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrDSCScopeTooLarge, ErrDSCEntryNotAllowed, ErrDSCEntryInvalid, ErrDSCScanRunning, ErrDSCScanCancelled, ErrDSCScanTimedOut,
 		ErrDSCTooManyScans, ErrDSCScopeNotFound, ErrDSCScheduleInvalid, ErrDSCNameUnresolved, ErrDSCNameTaken, ErrDSCScanInterrupted,
 		ErrDSCScopeDisabled,
+		ErrSVCNotFound, ErrSVCNameTaken, ErrSVCNotEmpty, ErrSVCDefaultProtected, ErrSVCUntrusted, ErrSVCEnvironmentInUse,
+		ErrSVCEnvironmentTaken, ErrSVCTrustExists,
 	}
 }
 
@@ -632,6 +650,18 @@ var errorMap = []struct {
 	{license.ErrWrongInstallation, ErrLicenseWrongInstallation, nil},
 	{license.ErrNoInstallation, ErrUnavailable, nil},
 	{inventory.ErrNotFound, ErrNotFound, nil},
+	// Services (R49). A deployment, binding, import or SSH key deploy across services without a trust: an
+	// *authz.UntrustedError (the services are named by fail).
+	{authz.ErrUntrusted, ErrSVCUntrusted, nil},
+	{services.ErrNotFound, ErrSVCNotFound, nil},
+	{services.ErrEnvironmentNotFound, ErrNotFound, nil},
+	{services.ErrTrustNotFound, ErrNotFound, nil},
+	{services.ErrNameTaken, ErrSVCNameTaken, nil},
+	{services.ErrDefaultProtected, ErrSVCDefaultProtected, nil},
+	{services.ErrEnvironmentInUse, ErrSVCEnvironmentInUse, nil},
+	{services.ErrEnvironmentKeyTaken, ErrSVCEnvironmentTaken, nil},
+	{services.ErrTrustExists, ErrSVCTrustExists, nil},
+	{services.ErrVersionMismatch, ErrPreconditionFailed, nil},
 	{inventory.ErrNoPlatformKey, ErrUnavailable, nil},     // EnsurePlatformKey runs before serving; only a broken start reaches this
 	{inventory.ErrNoSetupScript, ErrHelperChecksums, nil}, // a non-development build without the helper checksums
 	{inventory.ErrDuplicateTarget, ErrTargetDuplicate, nil},
@@ -954,6 +984,9 @@ func (s *server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	if after := acmeRetryAfter(err, ec); after != "" {
 		w.Header().Set("Retry-After", after)
 	}
+	if names := s.untrustedParams(r, err); names != nil {
+		params = names // the two services of a cross-service refusal (R49)
+	}
 	var refused *inventory.LocationRefusalError
 	if errors.As(err, &refused) {
 		// A deployment request is all or nothing: name the location that refused it.
@@ -987,6 +1020,15 @@ func acmeRetryAfter(err error, ec ErrorCode) string {
 // classify maps a domain error to its API code and params; ok is false for an error no table
 // knows (answered as ErrUnexpected by fail).
 func classify(err error) (ErrorCode, map[string]string, bool) {
+	var notEmpty *services.NotEmptyError
+	if errors.As(err, &notEmpty) {
+		// How many resources of each kind the service still owns (it is deleted when it owns none).
+		c := notEmpty.Counts
+		return ErrSVCNotEmpty, map[string]string{"count": strconv.Itoa(c.Total()), "servers": strconv.Itoa(c.Servers),
+			"key_vaults": strconv.Itoa(c.KeyVaults), "certificates": strconv.Itoa(c.Certificates), "signing_requests": strconv.Itoa(c.SigningRequests),
+			"acme_certificates": strconv.Itoa(c.ACMECertificates), "ssh_keys": strconv.Itoa(c.SSHKeys),
+			"discovery_scopes": strconv.Itoa(c.DiscoveryScopes)}, true
+	}
 	var wrong *license.WrongInstallationError
 	if errors.As(err, &wrong) {
 		// Only the six-character ID suffixes, never file content (L-43).

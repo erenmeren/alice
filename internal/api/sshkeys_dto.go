@@ -50,12 +50,12 @@ type sshKeyDetailDTO struct {
 }
 
 // generatedKeyJSON is the answer of a generation: the key as the detail route shows it, without locations yet.
-func generatedKeyJSON(m sshkeys.ManagedKey) sshKeyDetailDTO {
+func generatedKeyJSON(m sshkeys.ManagedKey, refs serviceRefs) sshKeyDetailDTO {
 	sshType, _, _ := strings.Cut(m.PublicKey, " ")
 	return sshKeyDetailDTO{
 		sshKeyDTO: sshKeyDTO{
 			ID: m.ID.String(), Fingerprint: m.Fingerprint, KeyType: sshType, Bits: m.Bits, PublicKey: m.PublicKey, Managed: true,
-			Comment: m.Comment, FirstSeenAt: m.CreatedAt.UTC(),
+			Comment: m.Comment, FirstSeenAt: m.CreatedAt.UTC(), Service: refs.of(m.ServiceID),
 		},
 		ManagedKey: managedKeyJSON(m),
 	}

@@ -15,6 +15,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/db"
@@ -93,12 +94,16 @@ func (s *Service) Generate(ctx context.Context, a inventory.Actor, in GenerateIn
 	if len(errs) > 0 {
 		return ManagedKey{}, errs
 	}
+	// An unknown service is refused before a key is generated (and again in the transaction).
+	if _, err := authz.ResolveService(ctx, s.pool, in.ServiceID); err != nil {
+		return ManagedKey{}, err
+	}
 	m, err := s.generate(ctx, kt)
 	if err != nil {
 		return ManagedKey{}, err
 	}
 	defer m.PKCS8.Zero()
-	return s.storeGenerated(ctx, a, m, label, nil)
+	return s.storeGenerated(ctx, a, m, label, in.ServiceID)
 }
 
 // generate takes a generation slot and makes the key; the caller zeroes m.PKCS8.
@@ -124,20 +129,30 @@ func (s *Service) generate(ctx context.Context, kt keymat.KeyType) (keymat.Mater
 }
 
 // storeGenerated seals m and inserts its private key, its ssh_keys row and the audit row in one
-// transaction. rotatedFrom links a rotation's new key to the key it replaces (Task 9).
-func (s *Service) storeGenerated(ctx context.Context, a inventory.Actor, m keymat.Material, label string, rotatedFrom *uuid.UUID) (ManagedKey, error) {
+// transaction, in the service named (uuid.Nil: the Default service).
+func (s *Service) storeGenerated(ctx context.Context, a inventory.Actor, m keymat.Material, label string, service uuid.UUID) (ManagedKey, error) {
 	var out ManagedKey
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var err error
-		out, err = s.storeGeneratedTx(ctx, tx, a.Audit, a.UserID, m, label, rotatedFrom)
+		out, err = s.storeGeneratedTx(ctx, tx, a.Audit, a.UserID, m, label, nil, service)
 		return err
 	})
 	return out, err
 }
 
-// storeGeneratedTx is storeGenerated in the caller's transaction.
+// storeGeneratedTx is storeGenerated in the caller's transaction. rotatedFrom links a rotation's new key to the key it
+// replaces (Task 9); the new key then goes to that key's service and service is not used (design §4.4).
 func (s *Service) storeGeneratedTx(ctx context.Context, tx pgx.Tx, actor audit.Actor, by uuid.UUID, m keymat.Material, label string,
-	rotatedFrom *uuid.UUID) (ManagedKey, error) {
+	rotatedFrom *uuid.UUID, service uuid.UUID) (ManagedKey, error) {
+	var err error
+	if rotatedFrom != nil {
+		err = tx.QueryRow(ctx, "SELECT service_id FROM ssh_keys WHERE id = $1", *rotatedFrom).Scan(&service)
+	} else {
+		service, err = authz.ResolveService(ctx, tx, service)
+	}
+	if err != nil {
+		return ManagedKey{}, err
+	}
 	now := s.clock.Now().UTC()
 	pkID, keyID := uuid.Must(uuid.NewV7()), uuid.Must(uuid.NewV7())
 	env, err := s.keyring.Seal(keyLocation(pkID), m.PKCS8.Bytes())
@@ -154,8 +169,8 @@ func (s *Service) storeGeneratedTx(ctx context.Context, tx pgx.Tx, actor audit.A
 	comment := keymat.Comment(label, now)
 	sshType, _, _ := strings.Cut(m.PublicKey, " ")
 	_, err = tx.Exec(ctx, `INSERT INTO ssh_keys (id, fingerprint_sha256, key_type, bits, public_key, managed, label, first_seen_at, created_at,
-    private_key_id, key_comment, rotated_from, created_by) VALUES ($1, $2, $3, $4, $5, true, $6, $7, $7, $8, $9, $10, $11)`,
-		keyID, m.Fingerprint, sshType, m.Bits, m.PublicKey, label, now, pkID, comment, rotatedFrom, createdBy)
+    private_key_id, key_comment, rotated_from, created_by, service_id) VALUES ($1, $2, $3, $4, $5, true, $6, $7, $7, $8, $9, $10, $11, $12)`,
+		keyID, m.Fingerprint, sshType, m.Bits, m.PublicKey, label, now, pkID, comment, rotatedFrom, createdBy, service)
 	if err != nil {
 		return ManagedKey{}, fmt.Errorf("sshkeys: store the key: %w", err)
 	}
@@ -182,7 +197,7 @@ const managedKeySelect = `SELECT k.id, k.private_key_id, k.fingerprint_sha256, k
     k.label, k.key_comment, k.created_by, k.created_at, k.retired_at, p.destroyed_at, k.rotated_from, coalesce(p.download_count, 0),
     p.last_downloaded_at,
     (SELECT r.id FROM rotation_policies r WHERE r.ssh_key_id = k.id AND r.deleted_at IS NULL),
-    (SELECT o.id FROM rotations o WHERE o.old_ssh_key_id = k.id AND o.status NOT IN ` + finishedStatuses + `)
+    (SELECT o.id FROM rotations o WHERE o.old_ssh_key_id = k.id AND o.status NOT IN ` + finishedStatuses + `), k.service_id
 FROM ssh_keys k LEFT JOIN managed_private_keys p ON p.id = k.private_key_id`
 
 // getManagedKey reads one generated key: ErrNotFound, or ErrNotManaged for a key Alice holds no
@@ -195,7 +210,7 @@ func getManagedKey(ctx context.Context, q db.Querier, id uuid.UUID) (ManagedKey,
 	)
 	err := q.QueryRow(ctx, managedKeySelect+" WHERE k.id = $1", id).Scan(&k.ID, &pkID, &k.Fingerprint, &k.PublicKey, &algorithm,
 		&k.Bits, &k.Label, &k.Comment, &by, &k.CreatedAt, &k.RetiredAt, &k.DestroyedAt, &k.RotatedFrom, &k.DownloadCount,
-		&k.LastDownloadedAt, &k.PolicyID, &k.OpenRotationID)
+		&k.LastDownloadedAt, &k.PolicyID, &k.OpenRotationID, &k.ServiceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ManagedKey{}, ErrNotFound
 	}

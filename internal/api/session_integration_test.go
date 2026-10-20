@@ -458,6 +458,10 @@ func TestA06GETRoutesNeverChangeState(t *testing.T) {
 WHERE id = $2`, incidentID, ids["/api/v1/certificates/"])
 	require.NoError(t, err)
 	ids["/api/v1/incidents/"] = incidentID
+	// Services (R49): the Default service the migration seeds.
+	var defaultService string
+	require.NoError(t, s.db.Owner.QueryRow(context.Background(), "SELECT id::text FROM services WHERE is_default").Scan(&defaultService))
+	ids["/api/v1/services/"] = defaultService
 	// Phase 8: one backup, so its download answers 200 (its only write is the backup.downloaded row).
 	rec = c.do(http.MethodPost, "/api/v1/backups", nil)
 	requireStatus(t, rec, http.StatusCreated)

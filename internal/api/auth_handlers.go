@@ -15,15 +15,15 @@ import (
 // (spec §9.2, SEC-006..SEC-009, SEC-018, SEC-019).
 func (s *server) authRoutes() []route {
 	return []route{
-		{method: http.MethodPost, pattern: "/api/v1/auth/login", perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways, handler: s.authLogin},
-		{method: http.MethodPost, pattern: "/api/v1/auth/mfa/enroll", perm: rbac.MFAPending, lic: license.ClassAlways, handler: s.authEnroll},
-		{method: http.MethodPost, pattern: "/api/v1/auth/mfa/verify", perm: rbac.MFAPending, limit: limitMFA, lic: license.ClassAlways, handler: s.authVerify},
-		{method: http.MethodGet, pattern: "/api/v1/auth/session", perm: rbac.Session, handler: s.authSession},
-		{method: http.MethodPost, pattern: "/api/v1/auth/logout", perm: rbac.Session, lic: license.ClassAlways, handler: s.authLogout},
-		{method: http.MethodPost, pattern: "/api/v1/auth/stepup", perm: rbac.Session, limit: limitMFA, lic: license.ClassAlways, handler: s.authStepUp},
-		{method: http.MethodPost, pattern: "/api/v1/auth/password", perm: rbac.Session, limit: limitLogin, lic: license.ClassAlways, handler: s.authPassword},
-		{method: http.MethodPost, pattern: "/api/v1/auth/recovery-codes", perm: rbac.SessionStepUp, lic: license.ClassAlways, handler: s.authRecoveryCodes},
-		{method: http.MethodPut, pattern: "/api/v1/auth/locale", perm: rbac.Session, lic: license.ClassAlways, handler: s.authLocale},
+		{method: http.MethodPost, pattern: "/api/v1/auth/login", scope: scopeNone, perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways, handler: s.authLogin},
+		{method: http.MethodPost, pattern: "/api/v1/auth/mfa/enroll", scope: scopeNone, perm: rbac.MFAPending, lic: license.ClassAlways, handler: s.authEnroll},
+		{method: http.MethodPost, pattern: "/api/v1/auth/mfa/verify", scope: scopeNone, perm: rbac.MFAPending, limit: limitMFA, lic: license.ClassAlways, handler: s.authVerify},
+		{method: http.MethodGet, pattern: "/api/v1/auth/session", scope: scopeSelf, perm: rbac.Session, handler: s.authSession},
+		{method: http.MethodPost, pattern: "/api/v1/auth/logout", scope: scopeSelf, perm: rbac.Session, lic: license.ClassAlways, handler: s.authLogout},
+		{method: http.MethodPost, pattern: "/api/v1/auth/stepup", scope: scopeSelf, perm: rbac.Session, limit: limitMFA, lic: license.ClassAlways, handler: s.authStepUp},
+		{method: http.MethodPost, pattern: "/api/v1/auth/password", scope: scopeSelf, perm: rbac.Session, limit: limitLogin, lic: license.ClassAlways, handler: s.authPassword},
+		{method: http.MethodPost, pattern: "/api/v1/auth/recovery-codes", scope: scopeSelf, perm: rbac.SessionStepUp, lic: license.ClassAlways, handler: s.authRecoveryCodes},
+		{method: http.MethodPut, pattern: "/api/v1/auth/locale", scope: scopeSelf, perm: rbac.Session, lic: license.ClassAlways, handler: s.authLocale},
 	}
 }
 

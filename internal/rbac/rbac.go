@@ -151,6 +151,14 @@ const (
 	// incident (retry, revoke now regardless, choose the replacement, close) — an Administrator in a browser session with
 	// step-up, never an API token. Reading incidents and the impact of a certificate is Read.
 	CertificatesIncident Permission = "certificates.incident"
+
+	// Scoped access and service ownership (R49, docs/superpowers/specs/2026-10-21-scoped-rbac-and-service-ownership-design.md
+	// §5.2): ServicesManage creates, changes and deletes services and environments; ServicesAssign moves resources
+	// between services; ServicesTrust lets one service accept another's certificates and SSH keys. They decide who may
+	// reach what: a global Administrator's browser session with step-up, never an API token.
+	ServicesManage Permission = "services.manage"
+	ServicesAssign Permission = "services.assign"
+	ServicesTrust  Permission = "services.trust"
 )
 
 // Policy describes who may use a permission.
@@ -207,6 +215,10 @@ var policies = map[Permission]Policy{
 	DiscoveryManage:  {Roles: []Role{Admin}, StepUp: true},
 
 	CertificatesIncident: {Roles: []Role{Admin}, StepUp: true},
+
+	ServicesManage: {Roles: []Role{Admin}, StepUp: true},
+	ServicesAssign: {Roles: []Role{Admin}, StepUp: true},
+	ServicesTrust:  {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.

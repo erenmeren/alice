@@ -66,8 +66,9 @@ func testDeps(t *testing.T, health error) Deps {
 		Discovery: &fakeDiscovery{SummaryFn: func(context.Context) (discoverysvc.Summary, error) { return discoverysvc.Summary{}, nil }},
 		Jobs:      &fakeJobs{},
 		Providers: fakeProviders{},
-		SSO:       newFakeSSO(),  // the public OIDC routes answer as with no provider configured (C-s4-04)
-		LDAP:      newFakeLDAP(), // the public directory list answers empty
+		SSO:       newFakeSSO(),    // the public OIDC routes answer as with no provider configured (C-s4-04)
+		LDAP:      newFakeLDAP(),   // the public directory list answers empty
+		Services:  &fakeServices{}, // R49: rows show their service by id alone
 	}
 }
 

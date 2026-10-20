@@ -14,8 +14,8 @@ import (
 // rollback operation (R38 item 13): a new request deploys again.
 func (s *server) deploymentRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/deployments", perm: rbac.Read, handler: s.listDeployments},
-		{method: http.MethodGet, pattern: "/api/v1/deployments/{id}", perm: rbac.Read, handler: s.getDeployment},
+		{method: http.MethodGet, pattern: "/api/v1/deployments", scope: scopeList, perm: rbac.Read, handler: s.listDeployments},
+		{method: http.MethodGet, pattern: "/api/v1/deployments/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getDeployment},
 	}
 }
 

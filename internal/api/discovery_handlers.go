@@ -39,24 +39,24 @@ func (s *server) discoveryRoutes() []route {
 	view, operate, manage := rbac.DiscoveryView, rbac.DiscoveryOperate, rbac.DiscoveryManage
 	always, readOnly := license.ClassAlways, license.ClassReadOnly
 	return []route{
-		{method: http.MethodGet, pattern: base + "/summary", perm: view, handler: s.discoverySummary},
-		{method: http.MethodGet, pattern: base + "/scopes", perm: view, handler: s.listDiscoveryScopes},
-		{method: http.MethodPost, pattern: base + "/scopes", perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.createDiscoveryScope},
-		{method: http.MethodPost, pattern: base + "/scopes/preview", perm: manage, lic: always, limit: limitDiscoveryPreview, handler: s.previewDiscoveryScope},
-		{method: http.MethodGet, pattern: base + "/scopes/{id}", perm: view, handler: s.getDiscoveryScope},
-		{method: http.MethodPatch, pattern: base + "/scopes/{id}", perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.updateDiscoveryScope},
-		{method: http.MethodDelete, pattern: base + "/scopes/{id}", perm: manage, lic: always, handler: s.deleteDiscoveryScope},
-		{method: http.MethodPost, pattern: base + "/scopes/{id}/scans", perm: operate, lic: readOnly, limit: limitDiscovery, handler: s.startDiscoveryScan},
-		{method: http.MethodGet, pattern: base + "/scans", perm: view, handler: s.listDiscoveryScans},
-		{method: http.MethodGet, pattern: base + "/scans/{id}", perm: view, handler: s.getDiscoveryScan},
-		{method: http.MethodPost, pattern: base + "/scans/{id}/cancel", perm: operate, lic: always, limit: limitDiscovery, handler: s.cancelDiscoveryScan},
-		{method: http.MethodGet, pattern: base + "/certificates", perm: view, handler: s.listDiscoveredCertificates},
-		{method: http.MethodGet, pattern: base + "/certificates/export", perm: view, limit: limitExport, getOnly: true,
+		{method: http.MethodGet, pattern: base + "/summary", scope: scopeAny, perm: view, handler: s.discoverySummary},
+		{method: http.MethodGet, pattern: base + "/scopes", scope: scopeList, perm: view, handler: s.listDiscoveryScopes},
+		{method: http.MethodPost, pattern: base + "/scopes", scope: scopePlatform, perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.createDiscoveryScope},
+		{method: http.MethodPost, pattern: base + "/scopes/preview", scope: scopePlatform, perm: manage, lic: always, limit: limitDiscoveryPreview, handler: s.previewDiscoveryScope},
+		{method: http.MethodGet, pattern: base + "/scopes/{id}", scope: scopeResource, perm: view, handler: s.getDiscoveryScope},
+		{method: http.MethodPatch, pattern: base + "/scopes/{id}", scope: scopePlatform, perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.updateDiscoveryScope},
+		{method: http.MethodDelete, pattern: base + "/scopes/{id}", scope: scopePlatform, perm: manage, lic: always, handler: s.deleteDiscoveryScope},
+		{method: http.MethodPost, pattern: base + "/scopes/{id}/scans", scope: scopeResource, perm: operate, lic: readOnly, limit: limitDiscovery, handler: s.startDiscoveryScan},
+		{method: http.MethodGet, pattern: base + "/scans", scope: scopeList, perm: view, handler: s.listDiscoveryScans},
+		{method: http.MethodGet, pattern: base + "/scans/{id}", scope: scopeResource, perm: view, handler: s.getDiscoveryScan},
+		{method: http.MethodPost, pattern: base + "/scans/{id}/cancel", scope: scopeResource, perm: operate, lic: always, limit: limitDiscovery, handler: s.cancelDiscoveryScan},
+		{method: http.MethodGet, pattern: base + "/certificates", scope: scopeList, perm: view, handler: s.listDiscoveredCertificates},
+		{method: http.MethodGet, pattern: base + "/certificates/export", scope: scopeList, perm: view, limit: limitExport, getOnly: true,
 			handler: s.exportDiscoveredCertificates},
-		{method: http.MethodGet, pattern: base + "/certificates/{fingerprint}", perm: view, handler: s.getDiscoveredCertificate},
-		{method: http.MethodGet, pattern: base + "/endpoints", perm: view, handler: s.listDiscoveredEndpoints},
-		{method: http.MethodGet, pattern: base + "/settings", perm: view, handler: s.getDiscoverySettings},
-		{method: http.MethodPut, pattern: base + "/settings", perm: manage, lic: always, handler: s.putDiscoverySettings},
+		{method: http.MethodGet, pattern: base + "/certificates/{fingerprint}", scope: scopeResource, perm: view, handler: s.getDiscoveredCertificate},
+		{method: http.MethodGet, pattern: base + "/endpoints", scope: scopeList, perm: view, handler: s.listDiscoveredEndpoints},
+		{method: http.MethodGet, pattern: base + "/settings", scope: scopePlatform, perm: view, handler: s.getDiscoverySettings},
+		{method: http.MethodPut, pattern: base + "/settings", scope: scopePlatform, perm: manage, lic: always, handler: s.putDiscoverySettings},
 	}
 }
 
@@ -77,19 +77,22 @@ func (s *server) discoveryActor(r *http.Request) discoverysvc.Actor {
 // --- scopes ---
 
 type discoveryScopeBody struct {
-	Name          *string   `json:"name"`
-	Entries       *[]string `json:"entries"`
-	Ports         *[]int    `json:"ports"`
-	SNINames      *[]string `json:"sni_names"`
-	Exclusions    *[]string `json:"exclusions"`
-	Enabled       *bool     `json:"enabled"`
-	ScheduleHours *int      `json:"schedule_hours"`
-	WindowStart   *string   `json:"window_start"`
-	WindowEnd     *string   `json:"window_end"`
-	WindowTZ      *string   `json:"window_tz"`
-	AlertOnExpiry *bool     `json:"alert_on_expiry"`
-	RatePerSec    *int      `json:"rate_per_sec"`
-	Concurrency   *int      `json:"concurrency"`
+	// ServiceID is a new scope's service (R49; nil: the Default service). A change never takes it: a scope moves to
+	// another service only by POST /api/v1/services/{id}/actions/assign.
+	ServiceID     *uuid.UUID `json:"service_id"`
+	Name          *string    `json:"name"`
+	Entries       *[]string  `json:"entries"`
+	Ports         *[]int     `json:"ports"`
+	SNINames      *[]string  `json:"sni_names"`
+	Exclusions    *[]string  `json:"exclusions"`
+	Enabled       *bool      `json:"enabled"`
+	ScheduleHours *int       `json:"schedule_hours"`
+	WindowStart   *string    `json:"window_start"`
+	WindowEnd     *string    `json:"window_end"`
+	WindowTZ      *string    `json:"window_tz"`
+	AlertOnExpiry *bool      `json:"alert_on_expiry"`
+	RatePerSec    *int       `json:"rate_per_sec"`
+	Concurrency   *int       `json:"concurrency"`
 }
 
 var discoveryScopeKeys = []string{"name", "entries", "ports", "sni_names", "exclusions", "enabled", "schedule_hours", "window_start", "window_end",
@@ -129,9 +132,9 @@ func (b *discoveryScopeBody) patch() discoverysvc.ScopePatch {
 	return p
 }
 
-func (s *server) writeDiscoveryScope(w http.ResponseWriter, status int, v discoverysvc.ScopeView) {
+func (s *server) writeDiscoveryScope(w http.ResponseWriter, r *http.Request, status int, v discoverysvc.ScopeView) {
 	w.Header().Set("ETag", etag(v.Version))
-	writeJSON(w, status, discoveryScopeJSON(v))
+	writeJSON(w, status, discoveryScopeJSON(v, s.serviceRefs(r)))
 }
 
 // timeIDCursor is a keyset position of (time, id): "<unix nanoseconds>.<uuid>".
@@ -162,9 +165,11 @@ func parseScopeCursor(raw string) (discoverysvc.ScopeCursor, bool) {
 }
 
 func (s *server) listDiscoveryScopes(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	q := r.URL.Query()
 	var v validate.Errors
-	f := discoverysvc.ScopeFilter{Limit: pageLimit(q.Get("limit"), &v), After: cursorParam(q.Get("cursor"), parseScopeCursor, &v)}
+	f := discoverysvc.ScopeFilter{Limit: pageLimit(q.Get("limit"), &v), After: cursorParam(q.Get("cursor"), parseScopeCursor, &v),
+		ServiceIDs: s.serviceFilter(r, &v)}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
@@ -176,7 +181,7 @@ func (s *server) listDiscoveryScopes(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]discoveryScopeDTO, 0, len(list))
 	for _, sc := range list {
-		items = append(items, discoveryScopeJSON(sc))
+		items = append(items, discoveryScopeJSON(sc, refs))
 	}
 	next := ""
 	if more && len(list) > 0 {
@@ -188,16 +193,16 @@ func (s *server) listDiscoveryScopes(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) createDiscoveryScope(w http.ResponseWriter, r *http.Request) {
 	var req discoveryScopeBody
-	if !s.decodeExact(w, r, &req, maxDiscoveryScopeBody, discoveryScopeKeys...) {
+	if !s.decodeExact(w, r, &req, maxDiscoveryScopeBody, append(slices.Clone(discoveryScopeKeys), "service_id")...) {
 		return
 	}
-	v, err := s.deps.Discovery.CreateScope(r.Context(), s.discoveryActor(r), req.scope())
+	v, err := s.deps.Discovery.CreateScopeIn(r.Context(), s.discoveryActor(r), req.scope(), derefOr(req.ServiceID, uuid.Nil))
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/api/v1/discovery/scopes/"+v.ID.String())
-	s.writeDiscoveryScope(w, http.StatusCreated, v)
+	s.writeDiscoveryScope(w, r, http.StatusCreated, v)
 }
 
 // previewDiscoveryScope is the scope form's live size (no name resolved, nothing dialed, nothing stored). A body
@@ -230,7 +235,7 @@ func (s *server) getDiscoveryScope(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.writeDiscoveryScope(w, http.StatusOK, v)
+	s.writeDiscoveryScope(w, r, http.StatusOK, v)
 }
 
 // optionalIfMatch reads an optional strong If-Match: absent is nil; anything else that is not one strong validator is
@@ -271,7 +276,7 @@ func (s *server) updateDiscoveryScope(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	s.writeDiscoveryScope(w, http.StatusOK, v)
+	s.writeDiscoveryScope(w, r, http.StatusOK, v)
 }
 
 func (s *server) deleteDiscoveryScope(w http.ResponseWriter, r *http.Request) {

@@ -159,6 +159,7 @@ FROM kv_certificate_versions WHERE id = $1 FOR SHARE`, in.VersionID).Scan(&v.cer
 		if reason, err := versionRefusal(v, c, leaf, a, now); err != nil {
 			return denyWith(&denial, reason, uuid.Nil, err)
 		}
+		leaf.service = vault.service // the vault's key (R49, design §5.6)
 		if v.held && !in.StrictSession {
 			return denyWith(&denial, "held_needs_step_up", uuid.Nil, ErrHeldNeedsStepUp)
 		}

@@ -22,18 +22,18 @@ import (
 // classes are refused in lock (R9).
 func (s *server) targetRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read, handler: s.listTargets},
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.createTarget},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}", perm: rbac.Read, handler: s.getTarget},
-		{method: http.MethodPatch, pattern: "/api/v1/targets/{id}", perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateTarget},
-		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.deleteTarget},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.testTarget},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.discoverTarget},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", perm: rbac.Read, handler: s.listHostKeys},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", perm: rbac.HostKeysConfirm, lic: license.ClassChange, handler: s.confirmHostKey},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", perm: rbac.HostKeysRepin, lic: license.ClassChange, handler: s.repinHostKey},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/ssh-keys", perm: rbac.Read, handler: s.listTargetKeys},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.Read, handler: s.listTargetLocations},
+		{method: http.MethodGet, pattern: "/api/v1/targets", scope: scopeList, perm: rbac.Read, handler: s.listTargets},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeCreate, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.createTarget},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getTarget},
+		{method: http.MethodPatch, pattern: "/api/v1/targets/{id}", scope: scopeResource, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateTarget},
+		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", scope: scopeResource, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.deleteTarget},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", scope: scopeResource, perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.testTarget},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", scope: scopeResource, perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.discoverTarget},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", scope: scopeResource, perm: rbac.Read, handler: s.listHostKeys},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", scope: scopeResource, perm: rbac.HostKeysConfirm, lic: license.ClassChange, handler: s.confirmHostKey},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", scope: scopeResource, perm: rbac.HostKeysRepin, lic: license.ClassChange, handler: s.repinHostKey},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/ssh-keys", scope: scopeResource, perm: rbac.Read, handler: s.listTargetKeys},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", scope: scopeResource, perm: rbac.Read, handler: s.listTargetLocations},
 	}
 }
 
@@ -76,10 +76,14 @@ func parseBool(raw, field string, v *validate.Errors) bool {
 }
 
 func (s *server) listTargets(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	typ := r.URL.Query().Get("type")
+	var v validate.Errors
 	if typ != "" && !slices.Contains(vaultTypes, typ) {
-		var v validate.Errors
 		v.Add("type", validate.OneOf, map[string]string{"values": strings.Join(vaultTypes, ", ")})
+	}
+	filter := s.serviceFilter(r, &v) // R49: service_id and environment_id
+	if err := v.Err(); err != nil {
 		s.fail(w, r, v)
 		return
 	}
@@ -90,20 +94,24 @@ func (s *server) listTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]targetDTO, 0, len(ts))
 	for _, t := range ts {
-		if typ == "" || t.Type == typ {
-			items = append(items, targetJSON(t))
+		if (typ == "" || t.Type == typ) && inServices(filter, t.ServiceID) {
+			items = append(items, targetJSON(t, refs))
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nil})
 }
 
 func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	var req struct {
 		Name     string `json:"name"`
 		Type     string `json:"type"`
 		Host     string `json:"host"`
 		Port     int    `json:"port"`
 		Username string `json:"username"`
+		// ServiceID is the service the new resource goes to (R49; absent: the Default service). Changes never take it:
+		// a resource moves only by POST /api/v1/services/{id}/actions/assign.
+		ServiceID *uuid.UUID `json:"service_id"`
 	}
 	if !s.decode(w, r, &req) {
 		return
@@ -112,7 +120,7 @@ func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
 		req.Type = "linux"
 	}
 	t, jobID, err := s.deps.Inventory.CreateTarget(r.Context(), s.actor(r), inventory.NewTarget{
-		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username,
+		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username, ServiceID: derefOr(req.ServiceID, uuid.Nil),
 	})
 	if err != nil {
 		s.fail(w, r, err)
@@ -120,10 +128,11 @@ func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	a := accepted(jobID)
 	w.Header().Set("ETag", etag(t.Version))
-	writeJSON(w, http.StatusCreated, map[string]any{"target": targetJSON(t), "job_id": a.JobID, "status_url": a.StatusURL})
+	writeJSON(w, http.StatusCreated, map[string]any{"target": targetJSON(t, refs), "job_id": a.JobID, "status_url": a.StatusURL})
 }
 
 func (s *server) getTarget(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -135,10 +144,11 @@ func (s *server) getTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", etag(t.Version))
-	writeJSON(w, http.StatusOK, targetJSON(t))
+	writeJSON(w, http.StatusOK, targetJSON(t, refs))
 }
 
 func (s *server) updateTarget(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -164,7 +174,7 @@ func (s *server) updateTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("ETag", etag(t.Version))
-	writeJSON(w, http.StatusOK, targetJSON(t))
+	writeJSON(w, http.StatusOK, targetJSON(t, refs))
 }
 
 func (s *server) deleteTarget(w http.ResponseWriter, r *http.Request) {

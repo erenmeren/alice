@@ -53,6 +53,8 @@ type certificateDTO struct {
 	CompromisedAt     *time.Time `json:"compromised_at"`
 	ACMECertificateID *string    `json:"acme_certificate_id"`
 	Capabilities      []string   `json:"capabilities"`
+	// Service is the owning service (R49, design §8.2).
+	Service *serviceRefDTO `json:"service,omitempty"`
 }
 
 // capabilityNames is the wire form of a capability list.
@@ -73,7 +75,7 @@ type certificateDetailDTO struct {
 	LocationsTruncated bool          `json:"locations_truncated"`
 }
 
-func certificateJSON(c inventory.Certificate) certificateDTO {
+func certificateJSON(c inventory.Certificate, refs serviceRefs) certificateDTO {
 	return certificateDTO{
 		ID: c.ID.String(), Fingerprint: c.Fingerprint, SubjectCN: c.SubjectCN, Subject: c.Subject, Issuer: c.Issuer, Serial: c.Serial,
 		SANs: nonNil(c.SANs), NotBefore: c.NotBefore.UTC(), NotAfter: c.NotAfter.UTC(), KeyAlgorithm: c.KeyAlgorithm, KeyBits: c.KeyBits,
@@ -81,12 +83,12 @@ func certificateJSON(c inventory.Certificate) certificateDTO {
 		LocationCount: c.LocationCount, FirstSeenAt: c.FirstSeenAt.UTC(), LastSeenAt: c.LastSeenAt.UTC(),
 		PublicKeySHA256: c.PublicKeySHA256, RevokedAt: utcPtr(c.RevokedAt), RevocationReason: c.RevocationReason, RevokedByName: c.RevokedByName,
 		CompromisedAt: utcPtr(c.CompromisedAt), ACMECertificateID: idPtr(c.ACMECertificateID),
-		Capabilities: capabilityNames(inventory.CertificateCapabilities(c)),
+		Capabilities: capabilityNames(inventory.CertificateCapabilities(c)), Service: refs.of(c.ServiceID),
 	}
 }
 
-func certificateDetailJSON(c inventory.Certificate) certificateDetailDTO {
-	d := certificateDetailDTO{certificateDTO: certificateJSON(c), PEMChain: c.PEMChain, Locations: make([]locationDTO, 0, len(c.Locations)),
+func certificateDetailJSON(c inventory.Certificate, refs serviceRefs) certificateDetailDTO {
+	d := certificateDetailDTO{certificateDTO: certificateJSON(c, refs), PEMChain: c.PEMChain, Locations: make([]locationDTO, 0, len(c.Locations)),
 		LocationsTruncated: c.LocationsTruncated}
 	for _, l := range c.Locations {
 		d.Locations = append(d.Locations, locationJSON(l))
@@ -195,13 +197,15 @@ type csrDTO struct {
 	CertificateID *string    `json:"certificate_id"`
 	CreatedAt     time.Time  `json:"created_at"`
 	FinishedAt    *time.Time `json:"finished_at"`
+	// Service is the owning service (R49, design §8.2).
+	Service *serviceRefDTO `json:"service,omitempty"`
 }
 
-func csrJSON(c inventory.CSR) csrDTO {
+func csrJSON(c inventory.CSR, refs serviceRefs) csrDTO {
 	return csrDTO{
 		ID: c.ID.String(), CommonName: c.CommonName, SANs: nonNil(c.SANs), KeyAlgorithm: c.KeyAlgorithm, KeyBits: c.KeyBits,
 		CSRPEM: c.CSRPEM, Status: c.Status, CertificateID: idPtr(c.CertificateID), CreatedAt: c.CreatedAt.UTC(),
-		FinishedAt: utcPtr(c.FinishedAt),
+		FinishedAt: utcPtr(c.FinishedAt), Service: refs.of(c.ServiceID),
 	}
 }
 

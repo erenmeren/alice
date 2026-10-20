@@ -15,10 +15,10 @@ import (
 // fills only what the caller's role may see (R42 row 13). Reads work in lock.
 func (s *server) dashboardRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/dashboard/summary", perm: rbac.Read, handler: s.dashboardSummary},
-		{method: http.MethodGet, pattern: "/api/v1/dashboard/expiring", perm: rbac.Read, handler: s.dashboardExpiring},
-		{method: http.MethodGet, pattern: "/api/v1/alerts", perm: rbac.Read, handler: s.listAlerts},
-		{method: http.MethodGet, pattern: "/api/v1/notifications/status", perm: rbac.Read, handler: s.notificationStatus},
+		{method: http.MethodGet, pattern: "/api/v1/dashboard/summary", scope: scopeAny, perm: rbac.Read, handler: s.dashboardSummary},
+		{method: http.MethodGet, pattern: "/api/v1/dashboard/expiring", scope: scopeAny, perm: rbac.Read, handler: s.dashboardExpiring},
+		{method: http.MethodGet, pattern: "/api/v1/alerts", scope: scopeList, perm: rbac.Read, handler: s.listAlerts},
+		{method: http.MethodGet, pattern: "/api/v1/notifications/status", scope: scopeAny, perm: rbac.Read, handler: s.notificationStatus},
 	}
 }
 

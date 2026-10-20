@@ -51,8 +51,12 @@ func StartTx(ctx context.Context, tx pgx.Tx, q Enqueuer, r StartRequest) (scanID
 	if err != nil {
 		return uuid.Nil, uuid.Nil, err
 	}
+	var service uuid.UUID // the scope's (R49)
+	if err := tx.QueryRow(ctx, "SELECT service_id FROM discovery_scopes WHERE id = $1", r.ScopeID).Scan(&service); err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("netdiscojobs: read the scope's service: %w", err)
+	}
 	spec := jobs.Spec{Type: jobs.NetdiscoScan, Kind: kind, Payload: map[string]string{PayloadScanID: scanID.String()},
-		DedupeKey: jobs.NetdiscoScanDedupeKey(r.ScopeID)}
+		DedupeKey: jobs.NetdiscoScanDedupeKey(r.ScopeID), ServiceID: service}
 	if by != nil {
 		spec.CreatedBy, spec.CreatedByRole = *by, r.Role
 	}

@@ -374,7 +374,7 @@ func TestACMEAutoDeployPlanIsPure(t *testing.T) {
 }
 
 func TestACMEDeployTemplates(t *testing.T) {
-	assert.Equal(t, []string{"acme.auto_deploy_stopped", "acme.auto_deploy_held_license", "acme.auto_deploy_held_chain"}, ACMEDeployTemplates())
+	assert.Equal(t, []string{"acme.auto_deploy_stopped", "acme.auto_deploy_held_license", "acme.auto_deploy_held_chain", "acme.auto_deploy_untrusted"}, ACMEDeployTemplates())
 	assert.Equal(t, map[string]string{"name": "a.example", "names": "a.example, b.example"}, acmeDeployParams([]string{"a.example", "b.example"}))
 	assert.Equal(t, map[string]string{"names": ""}, acmeDeployParams(nil))
 	assert.Equal(t, "ecdsa", policyAlgorithm("ecdsa_p384"))

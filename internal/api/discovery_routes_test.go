@@ -101,16 +101,16 @@ func TestDiscoveryLimitsFollowTheirPermissions(t *testing.T) {
 
 func TestDiscoveryLimitViolationsCatchMistakes(t *testing.T) {
 	bad := []route{
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/{id}/scans", perm: rbac.DiscoveryOperate, limit: limitDiscoveryResolve},
-		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates", perm: rbac.DiscoveryView, limit: limitDiscoveryResolve},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", perm: rbac.DiscoveryManage, limit: limitDiscovery},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryManage},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryManage, limit: limitDiscoveryResolve},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", perm: rbac.DiscoveryManage, limit: limitDiscoveryPreview},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryOperate, limit: limitDiscoveryPreview},
-		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates/export", perm: rbac.DiscoveryView, getOnly: true},
-		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates/export", perm: rbac.DiscoveryView, limit: limitExport},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", perm: rbac.DiscoveryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/{id}/scans", scope: scopeAny, perm: rbac.DiscoveryOperate, limit: limitDiscoveryResolve},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates", scope: scopeAny, perm: rbac.DiscoveryView, limit: limitDiscoveryResolve},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", scope: scopeAny, perm: rbac.DiscoveryManage, limit: limitDiscovery},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", scope: scopeAny, perm: rbac.DiscoveryManage},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", scope: scopeAny, perm: rbac.DiscoveryManage, limit: limitDiscoveryResolve},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", scope: scopeAny, perm: rbac.DiscoveryManage, limit: limitDiscoveryPreview},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", scope: scopeAny, perm: rbac.DiscoveryOperate, limit: limitDiscoveryPreview},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates/export", scope: scopeAny, perm: rbac.DiscoveryView, getOnly: true},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates/export", scope: scopeAny, perm: rbac.DiscoveryView, limit: limitExport},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", scope: scopeAny, perm: rbac.DiscoveryOperate},
 	}
 	for _, rt := range bad {
 		assert.Len(t, discoveryLimitViolations([]route{rt}), 1, fmt.Sprintf("%+v", rt))

@@ -27,20 +27,20 @@ import (
 // refused by the inventory, the provider and a database trigger (SEC-081).
 func (s *server) sshKeyRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys", perm: rbac.Read, handler: s.listSSHKeys},
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.TargetsManage, handler: s.platformKey},
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, handler: s.getSSHKey},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys", scope: scopeList, perm: rbac.Read, handler: s.listSSHKeys},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", scope: scopeAny, perm: rbac.TargetsManage, handler: s.platformKey},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getSSHKey},
 		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read, limit: limitExport, getOnly: true,
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", scope: scopeList, perm: rbac.Read, limit: limitExport, getOnly: true,
 			handler: s.exportSSHKeys},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.removeKeyLocation},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", scope: scopeResource, perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.removeKeyLocation},
 		// Phase 6 (C13): generation and deploy are Operators' too (R41 row 7); the private key leaves Alice only through
 		// the download, an Administrator's browser session with step-up, 5 per minute, allowed in lock (row 5).
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.generateSSHKey},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/deploy", perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.deploySSHKey},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", perm: rbac.SSHKeysDownload, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", scope: scopeCreate, perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.generateSSHKey},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/deploy", scope: scopeCross, perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.deploySSHKey},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", scope: scopeResource, perm: rbac.SSHKeysDownload, lic: license.ClassAlways,
 			limit: limitDownload, handler: s.downloadPrivateKey},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/key-files", perm: rbac.Read, handler: s.keyFiles},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/key-files", scope: scopeResource, perm: rbac.Read, handler: s.keyFiles},
 	}
 }
 
@@ -82,6 +82,7 @@ func optionalUUID(raw, field string, v *validate.Errors) uuid.UUID {
 }
 
 func (s *server) listSSHKeys(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	f, ok := s.sshKeyFilter(w, r, true)
 	if !ok {
 		return
@@ -93,7 +94,7 @@ func (s *server) listSSHKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]sshKeyDTO, 0, len(page.Items))
 	for _, k := range page.Items {
-		items = append(items, sshKeyJSON(k, false))
+		items = append(items, sshKeyJSON(k, false, refs))
 	}
 	var next any
 	if page.NextCursor != "" {
@@ -114,6 +115,7 @@ func (s *server) sshKeyFilter(w http.ResponseWriter, r *http.Request, paged bool
 		Flag:           q.Get("flag"),
 		IncludeMissing: parseBool(q.Get("missing"), "missing", &v),
 	}
+	f.ServiceIDs = s.serviceFilter(r, &v) // R49: service_id and environment_id
 	if paged {
 		f.Cursor, f.Limit = q.Get("cursor"), pageLimit(q.Get("limit"), &v)
 	} else {
@@ -139,6 +141,7 @@ func (s *server) sshKeyFilter(w http.ResponseWriter, r *http.Request, paged bool
 }
 
 func (s *server) getSSHKey(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -149,7 +152,7 @@ func (s *server) getSSHKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	d := sshKeyDetailDTO{sshKeyDTO: sshKeyJSON(k, true)}
+	d := sshKeyDetailDTO{sshKeyDTO: sshKeyJSON(k, true, refs)}
 	if k.Managed && s.deps.SSHKeys != nil {
 		m, err := s.deps.SSHKeys.ManagedKey(r.Context(), id)
 		switch {
@@ -228,8 +231,11 @@ func (s *server) generateSSHKey(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Label   string `json:"label"`
 		KeyType string `json:"key_type"`
+		// ServiceID is the service the new resource goes to (R49; absent: the Default service). Changes never take it:
+		// a resource moves only by POST /api/v1/services/{id}/actions/assign.
+		ServiceID *uuid.UUID `json:"service_id"`
 	}
-	if !s.decodeExact(w, r, &req, maxKeyActionBody, "label", "key_type") {
+	if !s.decodeExact(w, r, &req, maxKeyActionBody, "label", "key_type", "service_id") {
 		return
 	}
 	// key_type is required (C13 "exact keys"; the web always sends it): an absent one is not a silent Ed25519.
@@ -244,12 +250,13 @@ func (s *server) generateSSHKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	m, err := s.deps.SSHKeys.Generate(r.Context(), s.actor(r), sshkeys.GenerateInput{Label: req.Label, KeyType: req.KeyType})
+	m, err := s.deps.SSHKeys.Generate(r.Context(), s.actor(r), sshkeys.GenerateInput{Label: req.Label, KeyType: req.KeyType,
+		ServiceID: derefOr(req.ServiceID, uuid.Nil)})
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, generatedKeyJSON(m))
+	writeJSON(w, http.StatusCreated, generatedKeyJSON(m, s.serviceRefs(r)))
 }
 
 // deploySSHKey queues the deploy of a generated key to one user's key file on a server (spec §13.4). The service

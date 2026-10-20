@@ -45,6 +45,8 @@ type JobRequest struct {
 	CreatedBy     uuid.UUID
 	CreatedByRole string
 	DedupeKey     string
+	// ServiceID is the service the work is for (R49); uuid.Nil = the target's service (none without a target).
+	ServiceID uuid.UUID
 }
 
 // Enqueuer is jobs.Queue: the job row is written in the caller's transaction, so a target and

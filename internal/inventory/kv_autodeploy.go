@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -151,7 +152,7 @@ func noticeKind(template string) string {
 	switch template {
 	case TemplateKVNewVersion, TemplateKVNewVersionHeldLicense, TemplateKVNewVersionHeldChain:
 		return "new"
-	case TemplateKVAutoDeployStopped:
+	case TemplateKVAutoDeployStopped, TemplateKVAutoDeployUntrusted:
 		return "stopped"
 	}
 	return "skipped"
@@ -228,9 +229,11 @@ func (s *Service) planBinding(ctx context.Context, id uuid.UUID, remaining int, 
 		}
 		var (
 			vaultName, vaultURL, vaultStatus string
+			vaultService                     uuid.UUID
 		)
-		err = tx.QueryRow(ctx, `SELECT name::text, coalesce(config->>'vault_url', ''), status FROM targets
-WHERE id = $1 AND type = 'azure_key_vault' AND deleted_at IS NULL FOR NO KEY UPDATE SKIP LOCKED`, vaultID).Scan(&vaultName, &vaultURL, &vaultStatus)
+		err = tx.QueryRow(ctx, `SELECT name::text, coalesce(config->>'vault_url', ''), status, service_id FROM targets
+WHERE id = $1 AND type = 'azure_key_vault' AND deleted_at IS NULL FOR NO KEY UPDATE SKIP LOCKED`, vaultID).Scan(&vaultName, &vaultURL, &vaultStatus,
+			&vaultService)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil // deleted, or busy: the next run
 		}
@@ -279,6 +282,11 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 
 		// Websites first: a vanished server aborts before anything is written, and the next run sees it gone.
 		// For a hold the same checks decide whether there is a website to deploy to at all.
+		// R49: a website whose server's service accepts the vault's keys again loses its mark.
+		if err := clearKVUntrusted(ctx, tx, id, vaultService); err != nil {
+			return err
+		}
+		var untrusted []uuid.UUID
 		candidates, holdApplied := p.deploy, false
 		if p.hold != nil {
 			candidates = p.hold.candidates
@@ -288,6 +296,7 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 			if err != nil {
 				return err
 			}
+			leaf.service = vaultService // the vault's key (R49, design §5.6)
 			targets, locs, err := s.lockDeployTargets(ctx, tx, candidates)
 			if errors.Is(err, ErrNotFound) {
 				s.log.Debug("automatic deployment skipped: a website or its server is gone", "binding_id", id)
@@ -319,6 +328,9 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 				}
 				l := locs[locID]
 				if _, err := s.checkDeployLocation(ctx, tx, leaf, l, targets[l.target]); err != nil {
+					if errors.Is(err, ErrServiceUntrusted) {
+						untrusted = append(untrusted, locID) // held until a trust allows it (marked below)
+					}
 					continue // no person asked: no audit row, the website is simply not ready
 				}
 				if planInsertHook != nil {
@@ -340,6 +352,12 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 					return fmt.Errorf("inventory: release a savepoint: %w", err)
 				}
 				created++
+			}
+		}
+
+		if len(untrusted) > 0 {
+			if err := s.markKVUntrusted(ctx, tx, mails, id, vaultID, certID, vaultName, certName, untrusted, now); err != nil {
+				return err
 			}
 		}
 
@@ -413,6 +431,54 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 		run.merge(mails)
 	}
 	return created, err
+}
+
+// markKVUntrusted marks the binding's websites whose server's service does not accept the vault's keys (R49, design
+// §5.6) with ReasonServiceUntrusted; the websites newly marked are audited kv.auto_deploy.untrusted and named in one
+// e-mail (the mark is the once-only flag).
+func (s *Service) markKVUntrusted(ctx context.Context, tx pgx.Tx, mails *planRun, binding, vault, cert uuid.UUID, vaultName, certName string,
+	locations []uuid.UUID, now time.Time) error {
+	rows, err := tx.Query(ctx, `UPDATE certificate_locations SET binding_attention_code = $3, binding_attention_at = $4
+WHERE id = ANY($1) AND binding_id = $2 AND binding_attention_code <> $3 RETURNING id`, locations, binding, ReasonServiceUntrusted, now)
+	if err != nil {
+		return fmt.Errorf("inventory: mark the websites: %w", err)
+	}
+	marked, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("inventory: mark the websites: %w", err)
+	}
+	if len(marked) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(marked))
+	for _, m := range marked {
+		ids = append(ids, m.String())
+	}
+	if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.auto_deploy.untrusted", ObjectType: "binding",
+		ObjectID: binding.String(), Result: audit.Success, Details: map[string]string{"binding_id": binding.String(), "kv_certificate_id": cert.String(),
+			"certificate_name": certName, "location_ids": strings.Join(ids, ","), "location_count": strconv.Itoa(len(marked))}}); err != nil {
+		return err
+	}
+	if s.notifier != nil && mails.take(vault, vaultName, TemplateKVAutoDeployUntrusted) {
+		if err := s.notifier.NotifyAdmins(ctx, tx, TemplateKVAutoDeployUntrusted, map[string]string{"target_name": vaultName,
+			"certificate_name": certName, "count": strconv.Itoa(len(marked))}); err != nil {
+			return fmt.Errorf("inventory: queue the untrusted notice: %w", err)
+		}
+	}
+	return nil
+}
+
+// clearKVUntrusted clears the ReasonServiceUntrusted mark of the binding's websites whose server is in the vault's
+// service or whose service accepts the vault's keys now.
+func clearKVUntrusted(ctx context.Context, tx pgx.Tx, binding, vaultService uuid.UUID) error {
+	_, err := tx.Exec(ctx, `UPDATE certificate_locations l SET binding_attention_code = '', binding_attention_at = NULL
+FROM targets t WHERE l.binding_id = $1 AND l.binding_attention_code = $3 AND t.id = l.target_id
+  AND (t.service_id = $2 OR EXISTS (SELECT 1 FROM service_trusts st WHERE st.source_service_id = $2 AND st.target_service_id = t.service_id))`,
+		binding, vaultService, ReasonServiceUntrusted)
+	if err != nil {
+		return fmt.Errorf("inventory: clear the websites' marks: %w", err)
+	}
+	return nil
 }
 
 // readPlanSnapshot fills the version, website and deployment parts of the snapshot (under the locks).

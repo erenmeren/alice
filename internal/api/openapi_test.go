@@ -24,6 +24,7 @@ var (
 	pathLevelRE  = regexp.MustCompile(`^    [^ ]`)
 	pathParamRE  = regexp.MustCompile(`\{[a-z_]+\}`)
 	permissionRE = regexp.MustCompile(`^\s*x-permission:\s*(\S+)\s*$`)
+	scopeRE      = regexp.MustCompile(`^\s*x-scope:\s*(\S+)\s*$`)
 )
 
 const errorDefaultRef = `default: { $ref: "#/components/responses/Error" }`
@@ -58,6 +59,16 @@ func (o operation) has(prefix string) bool {
 func (o operation) permission() string {
 	for _, l := range o.lines {
 		if m := permissionRE.FindStringSubmatch(l); m != nil {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// scope returns the operation's x-scope value (R49), or "".
+func (o operation) scope() string {
+	for _, l := range o.lines {
+		if m := scopeRE.FindStringSubmatch(l); m != nil {
 			return m[1]
 		}
 	}
@@ -152,6 +163,18 @@ func TestRoutePermissionsMatchSpec(t *testing.T) {
 	}
 }
 
+// Each route's scope in the table must equal its x-scope in the spec (R49, design §8.2).
+func TestRouteScopesMatchSpec(t *testing.T) {
+	spec := map[string]string{}
+	for _, o := range specOps() {
+		spec[o.key()] = o.scope()
+	}
+	for _, r := range tableRoutes() {
+		k := r.method + " " + r.pattern
+		assert.Equal(t, r.scope.String(), spec[k], "x-scope of %s", k)
+	}
+}
+
 // Every documented operation must be routed: an anonymous request gets a JSON
 // answer (401 for protected routes, 400 for public ones without a body) and
 // never the SPA or the catch-all 404.
@@ -181,6 +204,13 @@ func TestEveryOperationDeclaresPermission(t *testing.T) {
 	ops := specOps()
 	assert.NotEmpty(t, ops)
 	assert.Empty(t, missing(ops, "x-permission:"))
+}
+
+// Every operation must declare x-scope (R49).
+func TestEveryOperationDeclaresScope(t *testing.T) {
+	ops := specOps()
+	assert.NotEmpty(t, ops)
+	assert.Empty(t, missing(ops, "x-scope:"))
 }
 
 // Every operation must fall back to the shared Error response for undeclared statuses.

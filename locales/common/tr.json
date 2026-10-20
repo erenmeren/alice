@@ -21,6 +21,50 @@
     }
   },
   "errors": {
+    "service": {
+      "not_found": {
+        "title": "Bu hizmet bulunamadı.",
+        "cause": "Hizmet silinmiş ya da adres yanlış yazılmış olabilir.",
+        "action": "Hizmetler sayfasını açıp hizmeti yeniden seçin."
+      },
+      "name_taken": {
+        "title": "Bu adda bir hizmet var.",
+        "cause": "Hizmet adları büyük-küçük harf farkı gözetilmeden benzersizdir.",
+        "action": "Başka bir ad seçin."
+      },
+      "not_empty": {
+        "title": "Hizmetin hâlâ kaynakları var.",
+        "cause": "Bir hizmet ancak hiçbir sunucusu, Key Vault'u, sertifikası, imza isteği, ACME sertifikası, SSH anahtarı veya tarama kapsamı kalmadığında silinir (kalan: {{count}}).",
+        "action": "Bunları başka bir hizmete taşıyın (o hizmetin sayfasında Buraya taşı), sonra bu hizmeti silin."
+      },
+      "default_protected": {
+        "title": "Varsayılan hizmet silinemez.",
+        "cause": "Kendi hizmeti olmayan her kaynak Varsayılan hizmete aittir.",
+        "action": "İsterseniz adını değiştirin ya da olduğu gibi bırakın."
+      },
+      "untrusted": {
+        "title": "Hedef hizmet, kaynak hizmetin sertifika ve anahtarlarını kabul etmiyor.",
+        "cause": "Sertifika veya SSH anahtarı bir hizmete, sunucu veya Key Vault başka bir hizmete ait ve ikincinin birincinin anahtarlarını kabul etmesini sağlayan bir güven ilişkisi yok. Bir güven ilişkisi kurulana kadar otomatik dağıtımlar orada durur.",
+        "action": "Bir yönetici hizmet sayfasında (Güven ilişkileri) güven ilişkisini ekler ya da sunucuyu veya sertifikayı aynı hizmete taşır. Sonra yeniden deneyin."
+      },
+      "trust_exists": {
+        "title": "Bu güven ilişkisi zaten var.",
+        "cause": "Hizmet diğer hizmetin sertifika ve anahtarlarını zaten kabul ediyor.",
+        "action": "Başka bir şey gerekmez."
+      }
+    },
+    "environment": {
+      "in_use": {
+        "title": "Bu ortam kullanımda.",
+        "cause": "Bir hizmet veya bir rol ataması bu ortamı kullanıyor.",
+        "action": "Önce o hizmetlere başka bir ortam verin (ya da hiçbirini), sonra silin."
+      },
+      "key_taken": {
+        "title": "Bu anahtarla bir ortam var.",
+        "cause": "Ortam anahtarları benzersizdir.",
+        "action": "Başka bir anahtar seçin."
+      }
+    },
     "system": {
       "not_found": {
         "title": "Bu sayfa veya öğe bulunamadı.",
@@ -1947,6 +1991,10 @@
         "subject": "{{certificate_name}} sürümü dağıtılmadan önce değiştirildi: {{target_name}} Key Vault kasası",
         "body": "{{target_name}} Key Vault kasasında {{certificate_name}} sertifikasının yeni sürümü, Alice onu dağıtmadan önce daha yeni bir sürümle değiştirildi; Alice bu sürümü atladı ve onun yerine en yeni sürümü dağıtır.\n\nAlice bu sürümden bir daha söz etmeyecek."
       },
+      "auto_deploy_untrusted": {
+        "subject": "{{certificate_name}} için otomatik dağıtım {{count}} web sitesinde durdu: {{target_name}} Key Vault kasası",
+        "body": "Alice, {{target_name}} Key Vault kasasındaki {{certificate_name}} sertifikasını bağlı {{count}} web sitesine dağıtmadı; çünkü bu sitelerin sunucuları, kasanın hizmetinin sertifika ve anahtarlarını kabul etmeyen bir hizmete ait.\n\nWeb siteleri şu anki sertifikalarını korur. Bir güven ilişkisi izin verdiğinde Alice oraya yeniden dağıtır.\n\nYapmanız gerekenler: bir yönetici Alice'te Hizmetler sayfasını açar, sunucuların hizmetini seçer ve kasanın hizmeti için bir güven ilişkisi ekler (Güven ilişkileri) ya da sunucuları veya kasayı aynı hizmete taşır."
+      },
       "auto_deploy_stopped": {
         "subject": "{{certificate_name}} için otomatik dağıtım durdu: {{target_name}} Key Vault kasası",
         "body": "Alice, {{count}} dağıtım başarısız olduğu için {{target_name}} Key Vault kasasındaki {{certificate_name}} sertifikasının yeni sürümünü otomatik dağıtmayı durdurdu.\n\nSürümü zaten alan web siteleri onu korur; diğerleri şu anki sertifikalarını kullanmaya devam eder. Alice'teki dağıtım geçmişi her başarısızlığın nedenini gösterir. Otomatik dağıtım bir sonraki sürümle devam eder. Bu sürümü yeniden denemek için sertifikayı Alice'te açın ve Şimdi dağıt düğmesine tıklayın."
@@ -2054,6 +2102,10 @@
       "renewal_ca_wait": {
         "subject": "Sertifika otoritesi {{name}} sertifikasının yenilenmesi için Alice'ten beklemesini istedi (kalan gün: {{days}})",
         "body": "Sertifika otoritesi {{names}} için sertifika isteklerini sınırladı ve Alice'ten sertifikayı {{ca_not_before}} tarihinden önce yeniden istememesini istedi. Geçerli sertifikanın süresi {{expires_at}} tarihinde doluyor. Kalan gün: {{days}}. Alice art arda {{count}} kez denedi.\n\nSon denemenin nedeni: {{reason}}\n\nAlice o zamana kadar bekler ve sertifikayı sonra kendiliğinden yeniden ister; daha erken istemek beklemeyi yalnızca uzatır. Bu bekleme bittikten sonra sertifikayı süresi dolmadan yenilemek için az zaman kalıyor.\n\nYapmanız gerekenler: otoritenin istekleri neden sınırladığını bulun (örneğin aynı adlar için çok sayıda sertifika ya da çok sayıda başarısız denetim) ve sınırın yinelenmesini önleyin. Sertifika bekleyemiyorsa başka bir sertifika otoritesinden bir sertifika alıp Alice'e yükleyin. Alice'te Verilen sertifikalar sayfasını açın ve bu sertifikayı seçin: sayfasında otoritenin istekleri ne zaman yeniden kabul edeceği yer alır."
+      },
+      "auto_deploy_untrusted": {
+        "subject": "Otomatik dağıtım {{count}} web sitesinde durdu: {{name}} sertifikası",
+        "body": "Alice, {{names}} sertifikasını bağlı {{count}} web sitesine kendiliğinden yerleştirmedi; çünkü bu sitelerin sunucuları, sertifikanın hizmetinin sertifika ve anahtarlarını kabul etmeyen bir hizmete ait.\n\nWeb siteleri şu anki sertifikalarını korur. Bir güven ilişkisi izin verdiğinde Alice oraya yeniden dağıtır.\n\nYapmanız gerekenler: bir yönetici Alice'te Hizmetler sayfasını açar, sunucuların hizmetini seçer ve sertifikanın hizmeti için bir güven ilişkisi ekler (Güven ilişkileri) ya da sunucuları veya sertifikayı aynı hizmete taşır."
       },
       "auto_deploy_stopped": {
         "subject": "Otomatik dağıtım durdu: {{name}} sertifikası",

@@ -541,6 +541,7 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		ACME:           acmeAPI(svc),
 		Discovery:      discoveryAPI(svc),
 		Incidents:      incidentAPI(svc),
+		Services:       servicesAPI(svc),
 		Jobs:           svc.queue,
 		Providers:      svc.registry,
 		SSHKeys:        sshKeysAPI(svc),
@@ -603,6 +604,14 @@ func incidentAPI(svc *services) api.IncidentService {
 		return nil
 	}
 	return svc.inventory
+}
+
+// servicesAPI is the services module (R49); a nil store stays a nil interface, as discoveryAPI does.
+func servicesAPI(svc *services) api.ServicesService {
+	if svc.serviceStore == nil {
+		return nil
+	}
+	return svc.serviceStore
 }
 
 // discoveryAPI is the network discovery service; a nil service stays a nil interface, as acmeAPI does.

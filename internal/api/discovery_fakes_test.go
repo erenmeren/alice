@@ -17,6 +17,7 @@ type fakeDiscovery struct {
 	ListScopesFn       func(ctx context.Context, f discoverysvc.ScopeFilter) ([]discoverysvc.ScopeView, bool, error)
 	GetScopeFn         func(ctx context.Context, id uuid.UUID) (discoverysvc.ScopeView, error)
 	CreateScopeFn      func(ctx context.Context, in discovery.Scope) (discoverysvc.ScopeView, error)
+	createService      uuid.UUID // the service CreateScopeIn was given (R49)
 	UpdateScopeFn      func(ctx context.Context, id uuid.UUID, ifVersion *int, p discoverysvc.ScopePatch) (discoverysvc.ScopeView, error)
 	DeleteScopeFn      func(ctx context.Context, id uuid.UUID, ifVersion *int) error
 	PreviewFn          func(ctx context.Context, sc discovery.Scope) (discovery.Preview, error)
@@ -63,9 +64,10 @@ func (f *fakeDiscovery) GetScope(ctx context.Context, id uuid.UUID) (discoverysv
 	return discoverysvc.ScopeView{}, errNotConfigured
 }
 
-func (f *fakeDiscovery) CreateScope(ctx context.Context, a discoverysvc.Actor, in discovery.Scope) (discoverysvc.ScopeView, error) {
+func (f *fakeDiscovery) CreateScopeIn(ctx context.Context, a discoverysvc.Actor, in discovery.Scope, service uuid.UUID) (discoverysvc.ScopeView, error) {
 	f.record()
 	f.actor(a)
+	f.createService = service
 	if f.CreateScopeFn != nil {
 		return f.CreateScopeFn(ctx, in)
 	}

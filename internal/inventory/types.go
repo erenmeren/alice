@@ -115,6 +115,7 @@ type Target struct {
 	Facts                Facts
 	Vault                *VaultInfo // set for a Key Vault (Type TypeAzureKeyVault), nil for a server
 	Capabilities         []string
+	ServiceID            uuid.UUID // the owning service (R49)
 	Version              int
 	CreatedAt, UpdatedAt time.Time
 }
@@ -167,6 +168,8 @@ type NewTarget struct {
 	Host     string
 	Port     int    // 0 = 22
 	Username string // "" = alice-svc
+	// ServiceID is the service the server goes to (R49); uuid.Nil = the Default service.
+	ServiceID uuid.UUID
 }
 
 // TargetPatch is the input of UpdateTarget; nil fields stay unchanged (R37 item 10).

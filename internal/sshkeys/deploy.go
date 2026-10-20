@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/db"
@@ -179,7 +180,8 @@ type deployCheck struct {
 }
 
 // checkDeploy applies every deploy rule (spec §13.4; S7) in tx: the key is one Alice generated,
-// not retired, never Alice's own key, not the new key of an unfinished rotation run; the server is ready for a key change for that user; neither
+// not retired, never Alice's own key, not the new key of an unfinished rotation run; the server's service accepts the
+// key's service's keys (R49, a trust; checked again when the job runs); the server is ready for a key change for that user; neither
 // the user nor the file belongs to Alice's connection account; the file is one of the user's key
 // files as the last scan found them. Refusals that protect access are *denial.
 func (s *Service) checkDeploy(ctx context.Context, tx pgx.Tx, keyID, targetID uuid.UUID, user, file string, lock bool) (deployCheck, error) {
@@ -214,6 +216,11 @@ func (s *Service) checkDeploy(ctx context.Context, tx pgx.Tx, keyID, targetID uu
 	}
 	if !inventory.IsServer(c.target.Type) {
 		return c, inventory.ErrNotAServer
+	}
+	if err := authz.CheckTrust(ctx, tx, c.key.service, c.target.ServiceID); errors.Is(err, authz.ErrUntrusted) {
+		return c, &denial{reason: DenyServiceUntrusted, err: err}
+	} else if err != nil {
+		return c, err
 	}
 	conn := connectionUser(c.target)
 	if user == conn || slices.Contains(filesOf(c.target.Facts, conn), file) {

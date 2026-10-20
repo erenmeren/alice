@@ -86,6 +86,9 @@ type Spec struct {
 	DedupeKey     string
 	CreatedBy     uuid.UUID
 	CreatedByRole string
+	// ServiceID is the service the work is for (R49: the ACME certificate's, the scope's); uuid.Nil = the target's
+	// service, or none (platform work: backup, license, audit) for a job without a target.
+	ServiceID uuid.UUID
 }
 
 // Job is what a handler receives.
@@ -226,13 +229,15 @@ func (q *Queue) Add(ctx context.Context, tx pgx.Tx, s Spec) (uuid.UUID, bool, er
 		id := uuid.Must(uuid.NewV7())
 		var inserted uuid.UUID
 		err := tx.QueryRow(ctx, `INSERT INTO jobs (id, type, class, kind, payload, payload_mac, target_id, dedupe_key, status,
-    priority, run_at, max_attempts, created_by, created_by_role, created_at)
-VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'queued', $9, $10, $11, $12, $13, $14)
+    priority, run_at, max_attempts, created_by, created_by_role, created_at, service_id)
+VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'queued', $9, $10, $11, $12, $13, $14,
+    coalesce($15::uuid, (SELECT t.service_id FROM targets t WHERE t.id = $7)))
 ON CONFLICT (dedupe_key) WHERE status IN `+liveStatuses+` DO NOTHING
 RETURNING id`,
 			id, s.Type.Name, s.Type.Class.String(), string(s.Kind), string(payload),
 			q.mac(id, s.Type.Name, string(s.Kind), s.TargetID, payload, s.CreatedBy, s.CreatedByRole, maxAttempts),
 			nullUUID(s.TargetID), nullString(s.DedupeKey), priority, runAt, maxAttempts, nullUUID(s.CreatedBy), s.CreatedByRole, now,
+			nullUUID(s.ServiceID),
 		).Scan(&inserted)
 		if err == nil {
 			return inserted, false, nil
@@ -274,7 +279,7 @@ func (q *Queue) EnqueueTx(ctx context.Context, tx pgx.Tx, r inventory.JobRequest
 	}
 	id, dup, err := q.Add(ctx, tx, Spec{
 		Type: t, TargetID: r.TargetID, Payload: r.Payload, Kind: Kind(r.Kind), DedupeKey: r.DedupeKey,
-		CreatedBy: r.CreatedBy, CreatedByRole: r.CreatedByRole,
+		CreatedBy: r.CreatedBy, CreatedByRole: r.CreatedByRole, ServiceID: r.ServiceID,
 	})
 	if err != nil || !dup {
 		return id, err

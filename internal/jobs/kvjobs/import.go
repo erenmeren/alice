@@ -287,6 +287,8 @@ var permanentMaterial = []struct {
 	{inventory.ErrKeyMismatch, "certificate.key_mismatch"},
 	{inventory.ErrImportChanged, providers.CodeKVImportInvalid},
 	{inventory.ErrAdminRequired, "auth.forbidden"},
+	// The vault's service stopped accepting the certificate's service's keys (a trust removed, R49).
+	{inventory.ErrServiceUntrusted, inventory.ReasonServiceUntrusted},
 }
 
 // materialFailure maps what ImportMaterial refuses (nothing was sent).

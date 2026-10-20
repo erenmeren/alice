@@ -139,10 +139,10 @@ func auditGetHandler(d Deps) (http.Handler, *Server) {
 	s := newServer(d)
 	srv := &Server{s: s}
 	srv.h = s.handler([]route{
-		{method: http.MethodGet, pattern: "/api/v1/audit", perm: rbac.AuditRead, handler: func(w http.ResponseWriter, _ *http.Request) {
+		{method: http.MethodGet, pattern: "/api/v1/audit", scope: scopeAny, perm: rbac.AuditRead, handler: func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}},
-		{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/audit/verify", scope: scopeAny, perm: rbac.AuditRead, lic: license.ClassAlways,
 			handler: func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }},
 	})
 	return srv.h, srv

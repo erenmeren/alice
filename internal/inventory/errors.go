@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz"
 	"alice/internal/certs"
 )
 
@@ -78,6 +79,15 @@ const (
 	ReasonCertificateRevoked     = "certificate.revoked"
 	ReasonCertificateCompromised = "certificate.compromised"
 )
+
+// ErrServiceUntrusted: the deployment would place a certificate's private key of one service on a server of another
+// service that does not accept it (no trust, R49, design §5.6 (c)). The error returned is an *authz.UntrustedError
+// naming both services; a queued deployment refused for it at its first send ends with ReasonServiceUntrusted.
+var ErrServiceUntrusted = authz.ErrUntrusted
+
+// ReasonServiceUntrusted is the closed reason (deployments.error_code, a binding's attention code) of a deployment across
+// services without a trust.
+const ReasonServiceUntrusted = "service.untrusted"
 
 var (
 	// ErrDeploymentInProgress: the location already has an unfinished deployment (F-15;

@@ -62,7 +62,9 @@ type Certificate struct {
 	// ACMECertificateID is the ACME certificate whose order produced this version (nil for another source or an
 	// unknown one).
 	ACMECertificateID *uuid.UUID
-	Locations         []CertificateLocation // GetCertificate only: at most MaxListedLocations
+	// ServiceID is the owning service (R49): a new row takes the service of what brought it (design §4.4).
+	ServiceID uuid.UUID
+	Locations []CertificateLocation // GetCertificate only: at most MaxListedLocations
 	// LocationsTruncated: GetCertificate left locations out (more than MaxListedLocations).
 	LocationsTruncated bool
 }
@@ -116,6 +118,8 @@ type CertificateFilter struct {
 	Expiry   string    // "" | "expired" | "7" | "14" | "30" | "60" | "90" (days; the window includes expired ones)
 	Cursor   string
 	Limit    int // 1..200, default 50
+	// ServiceIDs keeps the certificates owned by these services (R49); nil = every service, empty = none.
+	ServiceIDs []uuid.UUID
 }
 
 // CertificatePage is one page of certificates.
@@ -160,8 +164,10 @@ type discoveredCertificate struct {
 // rows in the same order and so never deadlock (as upsertKeys).
 //
 // source is the source of a row this call inserts: "discovered" for a server's file and "azure_kv"
-// for the leaf of a vault certificate's version (kv_reconcile.go). An existing row keeps its own.
-func upsertCertificates(ctx context.Context, tx pgx.Tx, found map[string]discoveredCertificate, source string, now time.Time) (map[string]uuid.UUID, error) {
+// for the leaf of a vault certificate's version (kv_reconcile.go). An existing row keeps its own. service is the owning
+// service of a row this call inserts: the server's or the vault's (design §4.4); an existing row keeps its own.
+func upsertCertificates(ctx context.Context, tx pgx.Tx, found map[string]discoveredCertificate, source string, service uuid.UUID,
+	now time.Time) (map[string]uuid.UUID, error) {
 	fps := make([]string, 0, len(found))
 	for fp := range found {
 		fps = append(fps, fp)
@@ -177,8 +183,8 @@ func upsertCertificates(ctx context.Context, tx pgx.Tx, found map[string]discove
 		sans, _ := boundSANs(d.p.SANs)
 		var id uuid.UUID
 		err := tx.QueryRow(ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, subject, issuer, serial, sans, not_before, not_after,
-    key_algorithm, key_bits, public_key_sha256, pem_chain, chain_complete, self_signed, source, first_seen_at, last_seen_at, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $17, $16, $16, $16)
+    key_algorithm, key_bits, public_key_sha256, pem_chain, chain_complete, self_signed, source, first_seen_at, last_seen_at, created_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $17, $16, $16, $16, $18)
 ON CONFLICT (fingerprint_sha256) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at,
     pem_chain = CASE WHEN certificates.source = 'discovered' AND certificates.private_key_id IS NULL
                           AND NOT certificates.chain_complete AND EXCLUDED.chain_complete
@@ -187,7 +193,7 @@ ON CONFLICT (fingerprint_sha256) DO UPDATE SET last_seen_at = EXCLUDED.last_seen
                           THEN certificates.chain_complete OR EXCLUDED.chain_complete ELSE certificates.chain_complete END
 RETURNING id`, uuid.Must(uuid.NewV7()), fp, boundText(d.p.SubjectCN), boundText(d.p.Subject), boundText(d.p.Issuer), boundText(d.p.Serial), sans,
 			d.p.NotBefore.UTC(), d.p.NotAfter.UTC(), d.p.Algorithm, d.p.Bits, d.p.PublicKeySHA256, pemChain, d.complete, d.p.SelfSigned,
-			now, source).Scan(&id)
+			now, source, service).Scan(&id)
 		if err != nil {
 			return nil, fmt.Errorf("inventory: store certificate: %w", err)
 		}
@@ -236,13 +242,15 @@ c.key_algorithm, c.key_bits, c.chain_complete, c.self_signed, c.source, c.label,
 (SELECT count(*) FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
  WHERE l.certificate_id = c.id AND l.missing_since IS NULL),
 c.public_key_sha256, c.revoked_at, c.revocation_reason, coalesce((SELECT u.display_name FROM users u WHERE u.id = c.revoked_by), ''),
-c.compromised_at, (SELECT o.acme_certificate_id FROM acme_orders o WHERE o.certificate_id = c.id ORDER BY o.started_at DESC LIMIT 1)`
+c.compromised_at, (SELECT o.acme_certificate_id FROM acme_orders o WHERE o.certificate_id = c.id ORDER BY o.started_at DESC LIMIT 1),
+c.service_id`
 
 func scanCertificate(row pgx.Row, extra ...any) (Certificate, error) {
 	var c Certificate
 	dest := []any{&c.ID, &c.Fingerprint, &c.SubjectCN, &c.Subject, &c.Issuer, &c.Serial, &c.SANs, &c.NotBefore, &c.NotAfter,
 		&c.KeyAlgorithm, &c.KeyBits, &c.ChainComplete, &c.SelfSigned, &c.Source, &c.Label, &c.HasPrivateKey, &c.FirstSeenAt, &c.LastSeenAt,
-		&c.LocationCount, &c.PublicKeySHA256, &c.RevokedAt, &c.RevocationReason, &c.RevokedByName, &c.CompromisedAt, &c.ACMECertificateID}
+		&c.LocationCount, &c.PublicKeySHA256, &c.RevokedAt, &c.RevocationReason, &c.RevokedByName, &c.CompromisedAt, &c.ACMECertificateID,
+		&c.ServiceID}
 	err := row.Scan(append(dest, extra...)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Certificate{}, ErrNotFound
@@ -329,8 +337,9 @@ WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM certificate_locations x WHERE x
        OR translate(c.fingerprint_sha256, 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $5 ESCAPE '\'
        OR translate(array_to_string(c.sans, ' '), 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $5 ESCAPE '\')
   AND ($6::timestamptz IS NULL OR (c.not_after, c.id) > ($6::timestamptz, $7::uuid))
+  AND ($9::uuid[] IS NULL OR c.service_id = ANY($9))
 ORDER BY c.not_after, c.id
-LIMIT $8`, target, f.Source, expiredBy, before, pattern, afterAt, afterID, limit+1)
+LIMIT $8`, target, f.Source, expiredBy, before, pattern, afterAt, afterID, limit+1, f.ServiceIDs)
 	if err != nil {
 		return CertificatePage{}, fmt.Errorf("inventory: list certificates: %w", err)
 	}

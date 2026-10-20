@@ -125,7 +125,7 @@ var notReasons = map[string]bool{
 	"kv.certificates_removed_more_one": true, "kv.new_version_available": true, "kv.new_version_held_license": true,
 	"kv.new_version_held_chain": true, "kv.version_skipped_manual": true, "kv.version_skipped_disabled": true,
 	"kv.version_skipped_expired": true, "kv.version_skipped_not_yet_valid": true, "kv.version_skipped_older": true,
-	"kv.version_skipped_superseded": true, "kv.auto_deploy_stopped": true, "kv.import_failed": true,
+	"kv.version_skipped_superseded": true, "kv.auto_deploy_stopped": true, "kv.auto_deploy_untrusted": true, "kv.import_failed": true,
 	"kv.new_versions_more": true, "kv.new_versions_more_one": true, "kv.versions_skipped_more": true, "kv.versions_skipped_more_one": true,
 	"kv.auto_deploys_stopped_more": true, "kv.auto_deploys_stopped_more_one": true,
 	// Phase 6 audit actions (F13; rotation.old_kept is also the reason of a kept location's audit row and step, never a

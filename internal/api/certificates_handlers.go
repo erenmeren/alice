@@ -21,19 +21,19 @@ import (
 // certificates.operate (Admin and Operator, operate tokens; R38 item 12); reads need read.
 func (s *server) certificateRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/certificates", perm: rbac.Read, handler: s.listCertificates},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.Read, handler: s.getCertificate},
+		{method: http.MethodGet, pattern: "/api/v1/certificates", scope: scopeList, perm: rbac.Read, handler: s.listCertificates},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getCertificate},
 		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
-		{method: http.MethodGet, pattern: "/api/v1/certificates/export", perm: rbac.Read, limit: limitExport, getOnly: true,
+		{method: http.MethodGet, pattern: "/api/v1/certificates/export", scope: scopeList, perm: rbac.Read, limit: limitExport, getOnly: true,
 			handler: s.exportCertificates},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.uploadCertificate},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployCertificate},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/csr", perm: rbac.Read, handler: s.listCSRs},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/csr", perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.createCSR},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/csr/{id}", perm: rbac.Read, handler: s.getCSR},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/complete", perm: rbac.CertificatesOperate, lic: license.ClassChange,
+		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", scope: scopeCreate, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.uploadCertificate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", scope: scopeCross, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployCertificate},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/csr", scope: scopeList, perm: rbac.Read, handler: s.listCSRs},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr", scope: scopeCreate, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.createCSR},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/csr/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getCSR},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/complete", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassChange,
 			handler: s.completeCSR},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", perm: rbac.CertificatesOperate, lic: license.ClassChange,
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassChange,
 			handler: s.cancelCSR},
 	}
 }
@@ -43,7 +43,7 @@ func (s *server) certificateRoutes() []route {
 // GET /targets/{id}/certificate-locations.
 func (s *server) locationRoutes() []route {
 	return []route{
-		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateLocation},
+		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", scope: scopeResource, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateLocation},
 	}
 }
 
@@ -68,6 +68,7 @@ var (
 )
 
 func (s *server) listCertificates(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	f, ok := s.certificateFilter(w, r, true)
 	if !ok {
 		return
@@ -79,7 +80,7 @@ func (s *server) listCertificates(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]certificateDTO, 0, len(page.Items))
 	for _, c := range page.Items {
-		items = append(items, certificateJSON(c))
+		items = append(items, certificateJSON(c, refs))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "next_cursor": nextCursor(page.NextCursor)})
 }
@@ -95,6 +96,7 @@ func (s *server) certificateFilter(w http.ResponseWriter, r *http.Request, paged
 		Query:    q.Get("q"),
 		Expiry:   q.Get("expiry"),
 	}
+	f.ServiceIDs = s.serviceFilter(r, &v) // R49: service_id and environment_id
 	if paged {
 		f.Cursor, f.Limit = q.Get("cursor"), pageLimit(q.Get("limit"), &v)
 	} else {
@@ -128,6 +130,7 @@ func nextCursor(c string) any {
 }
 
 func (s *server) getCertificate(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -138,7 +141,7 @@ func (s *server) getCertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, certificateDetailJSON(c))
+	writeJSON(w, http.StatusOK, certificateDetailJSON(c, refs))
 }
 
 // uploadResult is what an upload or a signing request's completion answers: the certificate as
@@ -163,13 +166,16 @@ func (s *server) uploadCertificate(w http.ResponseWriter, r *http.Request) {
 		PrivateKeyPEM  string `json:"private_key_pem"`
 		PFXBase64      string `json:"pfx_base64"`
 		PFXPassword    string `json:"pfx_password"`
+		// ServiceID is the service the new resource goes to (R49; absent: the Default service). Changes never take it:
+		// a resource moves only by POST /api/v1/services/{id}/actions/assign.
+		ServiceID *uuid.UUID `json:"service_id"`
 	}
-	if !s.decodeExact(w, r, &req, maxUploadBody, "label", "certificate_pem", "private_key_pem", "pfx_base64", "pfx_password") {
+	if !s.decodeExact(w, r, &req, maxUploadBody, "label", "certificate_pem", "private_key_pem", "pfx_base64", "pfx_password", "service_id") {
 		return
 	}
 	c, warnings, err := s.deps.Inventory.UploadCertificate(r.Context(), s.actor(r), inventory.UploadInput{
 		CertificatePEM: req.CertificatePEM, PrivateKeyPEM: req.PrivateKeyPEM, PFXBase64: req.PFXBase64, PFXPassword: req.PFXPassword,
-		Label: req.Label,
+		Label: req.Label, ServiceID: derefOr(req.ServiceID, uuid.Nil),
 	})
 	s.writeUpload(w, r, c, warnings, err)
 }
@@ -188,7 +194,7 @@ func (s *server) writeUpload(w http.ResponseWriter, r *http.Request, c inventory
 	} else {
 		w.Header().Set("Location", "/api/v1/certificates/"+c.ID.String())
 	}
-	writeJSON(w, status, uploadResult{Certificate: certificateDetailJSON(c), Warnings: nonNil(warnings)})
+	writeJSON(w, status, uploadResult{Certificate: certificateDetailJSON(c, s.serviceRefs(r)), Warnings: nonNil(warnings)})
 }
 
 func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {
@@ -244,6 +250,13 @@ func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listCSRs(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
+	var v validate.Errors
+	filter := s.serviceFilter(r, &v) // R49: service_id and environment_id
+	if err := v.Err(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
 	csrs, err := s.deps.Inventory.ListCSRs(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
@@ -251,32 +264,40 @@ func (s *server) listCSRs(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]csrDTO, 0, len(csrs))
 	for _, c := range csrs {
-		items = append(items, csrJSON(c))
+		if inServices(filter, c.ServiceID) {
+			items = append(items, csrJSON(c, refs))
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string][]csrDTO{"items": items})
 }
 
 func (s *server) createCSR(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	var req struct {
 		CommonName string   `json:"common_name"`
 		SANs       []string `json:"sans"`
 		KeyType    string   `json:"key_type"`
+		// ServiceID is the service the new resource goes to (R49; absent: the Default service). Changes never take it:
+		// a resource moves only by POST /api/v1/services/{id}/actions/assign.
+		ServiceID *uuid.UUID `json:"service_id"`
 	}
-	if !s.decodeExact(w, r, &req, maxCSRBody, "common_name", "sans", "key_type") {
+	if !s.decodeExact(w, r, &req, maxCSRBody, "common_name", "sans", "key_type", "service_id") {
 		return
 	}
 	// The name rules (a DNS name, at most 64 characters; at most 50 names) and the key types are
 	// the inventory's.
-	c, err := s.deps.Inventory.CreateCSR(r.Context(), s.actor(r), inventory.CSRInput{CommonName: req.CommonName, SANs: req.SANs, KeyType: req.KeyType})
+	c, err := s.deps.Inventory.CreateCSR(r.Context(), s.actor(r), inventory.CSRInput{CommonName: req.CommonName, SANs: req.SANs, KeyType: req.KeyType,
+		ServiceID: derefOr(req.ServiceID, uuid.Nil)})
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	w.Header().Set("Location", "/api/v1/certificates/csr/"+c.ID.String())
-	writeJSON(w, http.StatusCreated, csrJSON(c))
+	writeJSON(w, http.StatusCreated, csrJSON(c, refs))
 }
 
 func (s *server) getCSR(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -287,7 +308,7 @@ func (s *server) getCSR(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, csrJSON(c))
+	writeJSON(w, http.StatusOK, csrJSON(c, refs))
 }
 
 // completeCSR stores the certificate a CA signed for a pending request (with the request's key,
@@ -310,6 +331,7 @@ func (s *server) completeCSR(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) cancelCSR(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -324,7 +346,7 @@ func (s *server) cancelCSR(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, csrJSON(c))
+	writeJSON(w, http.StatusOK, csrJSON(c, refs))
 }
 
 // listTargetLocations lists a server's certificate locations (in use first; missing ones with

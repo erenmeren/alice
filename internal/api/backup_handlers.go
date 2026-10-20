@@ -22,13 +22,13 @@ import (
 // settings. Everything works in lock (platform administration, ClassAlways).
 func (s *server) backupRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/backups", perm: rbac.BackupManage, handler: s.listBackups},
-		{method: http.MethodPost, pattern: "/api/v1/backups", perm: rbac.BackupManage, limit: limitBackupNow, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/backups", scope: scopePlatform, perm: rbac.BackupManage, handler: s.listBackups},
+		{method: http.MethodPost, pattern: "/api/v1/backups", scope: scopePlatform, perm: rbac.BackupManage, limit: limitBackupNow, lic: license.ClassAlways,
 			handler: s.createBackup},
-		{method: http.MethodGet, pattern: "/api/v1/backups/{name}/download", perm: rbac.BackupManage, limit: limitDownload, getOnly: true,
+		{method: http.MethodGet, pattern: "/api/v1/backups/{name}/download", scope: scopePlatform, perm: rbac.BackupManage, limit: limitDownload, getOnly: true,
 			handler: s.downloadBackup},
-		{method: http.MethodGet, pattern: "/api/v1/settings/backups", perm: rbac.SettingsManage, handler: s.getBackupSchedule},
-		{method: http.MethodPut, pattern: "/api/v1/settings/backups", perm: rbac.SettingsManage, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/settings/backups", scope: scopePlatform, perm: rbac.SettingsManage, handler: s.getBackupSchedule},
+		{method: http.MethodPut, pattern: "/api/v1/settings/backups", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways,
 			handler: s.putBackupSchedule},
 	}
 }

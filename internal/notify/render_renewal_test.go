@@ -241,8 +241,8 @@ func TestACMEAutoDeployTemplatesRenderInBothLanguages(t *testing.T) {
 	s := &notify.Sender{Catalog: cat}
 	params := map[string]string{"name": "www.örnek.example", "names": "www.örnek.example, api.example.com", "count": "3",
 		"error_reason": "deployment.reload_failed"}
-	require.Equal(t, []string{"acme.auto_deploy_stopped", "acme.auto_deploy_held_license", "acme.auto_deploy_held_chain"},
-		inventory.ACMEDeployTemplates())
+	require.Equal(t, []string{"acme.auto_deploy_stopped", "acme.auto_deploy_held_license", "acme.auto_deploy_held_chain",
+		"acme.auto_deploy_untrusted"}, inventory.ACMEDeployTemplates())
 	for _, tpl := range inventory.ACMEDeployTemplates() {
 		for _, lang := range []string{"en", "tr"} {
 			m := s.Render("ada@example.com", tpl, lang, params)

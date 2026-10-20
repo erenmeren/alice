@@ -22,19 +22,19 @@ import (
 // SEC-009) and works in lock (platform administration, ClassAlways).
 func (s *server) ssoRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/sso/providers", perm: rbac.SSOManage, handler: s.listSSOProviders},
-		{method: http.MethodPost, pattern: "/api/v1/sso/providers", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.createSSOProvider},
-		{method: http.MethodGet, pattern: "/api/v1/sso/providers/{id}", perm: rbac.SSOManage, handler: s.getSSOProvider},
-		{method: http.MethodPatch, pattern: "/api/v1/sso/providers/{id}", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.updateSSOProvider},
-		{method: http.MethodDelete, pattern: "/api/v1/sso/providers/{id}", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.deleteSSOProvider},
-		{method: http.MethodPost, pattern: "/api/v1/sso/providers/{id}/actions/refresh", perm: rbac.SSOManage, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/sso/providers", scope: scopePlatform, perm: rbac.SSOManage, handler: s.listSSOProviders},
+		{method: http.MethodPost, pattern: "/api/v1/sso/providers", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.createSSOProvider},
+		{method: http.MethodGet, pattern: "/api/v1/sso/providers/{id}", scope: scopePlatform, perm: rbac.SSOManage, handler: s.getSSOProvider},
+		{method: http.MethodPatch, pattern: "/api/v1/sso/providers/{id}", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.updateSSOProvider},
+		{method: http.MethodDelete, pattern: "/api/v1/sso/providers/{id}", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.deleteSSOProvider},
+		{method: http.MethodPost, pattern: "/api/v1/sso/providers/{id}/actions/refresh", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways,
 			handler: s.refreshSSOProvider},
-		{method: http.MethodGet, pattern: "/api/v1/sso/group-mappings", perm: rbac.SSOManage, handler: s.listSSOMappings},
-		{method: http.MethodPost, pattern: "/api/v1/sso/group-mappings", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.createSSOMapping},
-		{method: http.MethodDelete, pattern: "/api/v1/sso/group-mappings/{id}", perm: rbac.SSOManage, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/sso/group-mappings", scope: scopePlatform, perm: rbac.SSOManage, handler: s.listSSOMappings},
+		{method: http.MethodPost, pattern: "/api/v1/sso/group-mappings", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.createSSOMapping},
+		{method: http.MethodDelete, pattern: "/api/v1/sso/group-mappings/{id}", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways,
 			handler: s.deleteSSOMapping},
-		{method: http.MethodGet, pattern: "/api/v1/sso/settings", perm: rbac.SSOManage, handler: s.getSSOSettings},
-		{method: http.MethodPut, pattern: "/api/v1/sso/settings", perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.putSSOSettings},
+		{method: http.MethodGet, pattern: "/api/v1/sso/settings", scope: scopePlatform, perm: rbac.SSOManage, handler: s.getSSOSettings},
+		{method: http.MethodPut, pattern: "/api/v1/sso/settings", scope: scopePlatform, perm: rbac.SSOManage, lic: license.ClassAlways, handler: s.putSSOSettings},
 	}
 }
 

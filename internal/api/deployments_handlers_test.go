@@ -180,12 +180,12 @@ func TestTargetDTOCarriesWebServerFacts(t *testing.T) {
 	tg.Type = inventory.TypeNginx
 	tg.Facts.WebServer = &providers.WebServerFacts{Software: "nginx", Version: "1.24.0", ConfPath: "/etc/nginx/nginx.conf", ConfigValid: false, ConfigError: "untrusted",
 		ConfigErrorReason: "not_root_controlled", ConfigErrorFile: "/etc/nginx/conf.d/a b.conf", Found: true}
-	raw, err := json.Marshal(targetJSON(tg))
+	raw, err := json.Marshal(targetJSON(tg, nil))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"type":"nginx"`)
 	assert.Contains(t, string(raw), `"web_server":{"software":"nginx","version":"1.24.0","conf_path":"/etc/nginx/nginx.conf","config_valid":false,"config_error":"untrusted",`+
 		`"config_error_reason":"not_root_controlled","config_error_file":"/etc/nginx/conf.d/a b.conf","found":true}`)
-	raw, err = json.Marshal(targetJSON(sampleTarget()))
+	raw, err = json.Marshal(targetJSON(sampleTarget(), nil))
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), `"web_server"`, "a Linux server has no web server facts")
 

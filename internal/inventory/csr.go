@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/certs"
 	"alice/internal/license"
 	"alice/internal/platform/db"
@@ -34,6 +35,8 @@ type CSRInput struct {
 	CommonName string
 	SANs       []string
 	KeyType    string // "ecdsa-p256" | "rsa-3072" | "rsa-4096"
+	// ServiceID is the service the request (and the certificate that completes it) goes to (R49); uuid.Nil = Default.
+	ServiceID uuid.UUID
 }
 
 // CSR is a signing request. It never carries its key.
@@ -48,6 +51,7 @@ type CSR struct {
 	CertificateID *uuid.UUID
 	CreatedAt     time.Time
 	FinishedAt    *time.Time
+	ServiceID     uuid.UUID // the owning service (R49)
 }
 
 // Signing request statuses (csr_requests.status).
@@ -167,6 +171,10 @@ func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, err
 	if err := checkPendingCSRs(ctx, s.pool); err != nil {
 		return CSR{}, err
 	}
+	// An unknown service is refused before a key is generated (and again in the transaction).
+	if _, err := authz.ResolveService(ctx, s.pool, in.ServiceID); err != nil {
+		return CSR{}, err
+	}
 	release, ok := acquireCSRSlot()
 	if !ok {
 		return CSR{}, ErrCSRBusy
@@ -195,12 +203,17 @@ func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, err
 		if err := checkPendingCSRs(ctx, tx); err != nil {
 			return err
 		}
+		service, err := authz.ResolveService(ctx, tx, in.ServiceID)
+		if err != nil {
+			return err
+		}
 		keyID, err := s.storeKey(ctx, tx, "csr", key, info, a.UserID)
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO csr_requests (id, private_key_id, common_name, sans, csr_pem, status, created_by, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, id, keyID, cn, requestNames(cn, sans), csrPEM, CSRPending, nullableUser(a.UserID), s.clock.Now().UTC())
+		_, err = tx.Exec(ctx, `INSERT INTO csr_requests (id, private_key_id, common_name, sans, csr_pem, status, created_by, created_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, keyID, cn, requestNames(cn, sans), csrPEM, CSRPending, nullableUser(a.UserID), s.clock.Now().UTC(),
+			service)
 		if err != nil {
 			return fmt.Errorf("inventory: store the signing request: %w", err)
 		}
@@ -230,12 +243,14 @@ func checkPendingCSRs(ctx context.Context, q db.Querier) error {
 	return nil
 }
 
-const csrSelect = `SELECT r.id, r.common_name, r.sans, k.algorithm, k.bits, r.csr_pem, r.status, r.certificate_id, r.created_at, r.finished_at
+const csrSelect = `SELECT r.id, r.common_name, r.sans, k.algorithm, k.bits, r.csr_pem, r.status, r.certificate_id, r.created_at, r.finished_at,
+    r.service_id
 FROM csr_requests r JOIN managed_private_keys k ON k.id = r.private_key_id`
 
 func scanCSR(row pgx.Row) (CSR, error) {
 	var c CSR
-	err := row.Scan(&c.ID, &c.CommonName, &c.SANs, &c.KeyAlgorithm, &c.KeyBits, &c.CSRPEM, &c.Status, &c.CertificateID, &c.CreatedAt, &c.FinishedAt)
+	err := row.Scan(&c.ID, &c.CommonName, &c.SANs, &c.KeyAlgorithm, &c.KeyBits, &c.CSRPEM, &c.Status, &c.CertificateID, &c.CreatedAt, &c.FinishedAt,
+		&c.ServiceID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return CSR{}, ErrNotFound
 	}
@@ -268,7 +283,7 @@ func (s *Service) GetCSR(ctx context.Context, id uuid.UUID) (CSR, error) {
 // most recently finished.
 func (s *Service) ListCSRs(ctx context.Context) ([]CSR, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.common_name, r.sans, k.algorithm, k.bits, r.csr_pem, r.status, r.certificate_id, r.created_at,
-    r.finished_at
+    r.finished_at, r.service_id
 FROM ((SELECT 0 AS grp, created_at AS at, id FROM csr_requests WHERE status = 'pending' ORDER BY created_at DESC, id DESC LIMIT $1)
       UNION ALL
       (SELECT 1, finished_at, id FROM csr_requests WHERE status <> 'pending' ORDER BY finished_at DESC, id DESC LIMIT $2)) sel
@@ -388,7 +403,9 @@ JOIN managed_private_keys k ON k.id = r.private_key_id WHERE r.id = $1`, id).Sca
 		if cur.Status != CSRPending {
 			return ErrCSRNotPending
 		}
-		placed, err = s.placeCertificate(ctx, tx, p, complete, false, label, "csr", a.UserID, func() (uuid.UUID, error) { return keyID, nil })
+		// A new certificate goes to the request's service (design §4.4).
+		placed, err = s.placeCertificate(ctx, tx, p, complete, false, label, "csr", a.UserID, cur.ServiceID,
+			func() (uuid.UUID, error) { return keyID, nil })
 		if err != nil {
 			return err
 		}

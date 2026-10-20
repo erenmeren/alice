@@ -124,6 +124,8 @@ type targetDTO struct {
 	Version                int          `json:"version"`
 	CreatedAt              time.Time    `json:"created_at"`
 	UpdatedAt              time.Time    `json:"updated_at"`
+	// Service is the owning service (R49, design §8.2).
+	Service *serviceRefDTO `json:"service,omitempty"`
 }
 
 func utcPtr(t *time.Time) *time.Time {
@@ -171,14 +173,14 @@ func factsJSON(f inventory.Facts) factsDTO {
 	return d
 }
 
-func targetJSON(t inventory.Target) targetDTO {
+func targetJSON(t inventory.Target, refs serviceRefs) targetDTO {
 	return targetDTO{
 		ID: t.ID.String(), Name: t.Name, Type: t.Type, Host: t.Host, Port: t.Port, Username: t.Username,
 		Status: t.Status, LastError: vaultLastError(t),
 		LastSuccessAt: utcPtr(t.LastSuccessAt), LastDiscoveryAt: utcPtr(t.LastDiscoveryAt),
 		DiscoveryIntervalHours: int(t.DiscoveryInterval / time.Hour), KeysManagedElsewhere: t.KeysManagedElsewhere,
 		Capabilities: nonNil(t.Capabilities), Facts: factsJSON(t.Facts), Vault: vaultJSON(t), Version: t.Version,
-		CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(),
+		CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(), Service: refs.of(t.ServiceID),
 	}
 }
 
@@ -247,14 +249,17 @@ type sshKeyDTO struct {
 	Missing       bool             `json:"missing"`
 	FirstSeenAt   time.Time        `json:"first_seen_at"`
 	Locations     []keyLocationDTO `json:"locations,omitempty"`
+	// Service is the owning service (R49, design §8.2).
+	Service *serviceRefDTO `json:"service,omitempty"`
 }
 
 // sshKeyJSON renders a key; withLocations adds the locations array (always present, possibly empty).
-func sshKeyJSON(k inventory.SSHKey, withLocations bool) sshKeyDTO {
+func sshKeyJSON(k inventory.SSHKey, withLocations bool, refs serviceRefs) sshKeyDTO {
 	d := sshKeyDTO{
 		ID: k.ID.String(), Fingerprint: k.Fingerprint, KeyType: k.KeyType, Bits: k.Bits, PublicKey: k.PublicKey,
 		Managed: k.Managed, IsPlatformKey: k.IsPlatformKey, Weak: k.Weak, Comment: k.Comment,
 		LocationCount: k.LocationCount, TargetCount: k.TargetCount, Missing: k.Missing, FirstSeenAt: k.FirstSeenAt.UTC(),
+		Service: refs.of(k.ServiceID),
 	}
 	if withLocations {
 		d.Locations = make([]keyLocationDTO, 0, len(k.Locations))

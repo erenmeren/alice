@@ -17,6 +17,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/certs"
 	"alice/internal/license"
 	"alice/internal/platform/db"
@@ -41,6 +42,9 @@ type UploadInput struct {
 	PFXBase64      string
 	PFXPassword    string
 	Label          string
+	// ServiceID is the service a new certificate goes to (R49); uuid.Nil = the Default service. A certificate Alice
+	// already knows keeps its service (design §4.4).
+	ServiceID uuid.UUID
 }
 
 // maxLabelRunes is certificates.label's bound.
@@ -278,8 +282,11 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 
 	var placed placement
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		var err error
-		placed, err = s.placeCertificate(ctx, tx, v.Parsed, v.ChainComplete, true, label, "uploaded", a.UserID, func() (uuid.UUID, error) {
+		service, err := authz.ResolveService(ctx, tx, in.ServiceID)
+		if err != nil {
+			return err
+		}
+		placed, err = s.placeCertificate(ctx, tx, v.Parsed, v.ChainComplete, true, label, "uploaded", a.UserID, service, func() (uuid.UUID, error) {
 			return s.storeKey(ctx, tx, "certificate", v.PrivateKeyDER, info, a.UserID)
 		})
 		if err != nil {
@@ -413,7 +420,7 @@ type placement struct {
 // placeCertificate stores the certificate p with a key, in tx. key stores (or names) the key row;
 // it is called at most once, and only when the key will be used. The certificate row is found by
 // fingerprint and locked:
-//   - absent: inserted with source, label, the key and created_by (ON CONFLICT DO NOTHING: a scan
+//   - absent: inserted with source, label, the key, created_by and the owning service (R49; ON CONFLICT DO NOTHING: a scan
 //     may insert the same row concurrently; it is then read again and handled as present);
 //   - present with a key: ErrCertificateDuplicate, nothing changes (a key is never replaced, and
 //     the same certificate's key is the same key); except, when completeChain (an upload), a stored
@@ -430,7 +437,7 @@ type placement struct {
 //
 // Only this certificate row is locked, never a target (lock order: target, certificates, locations).
 func (s *Service) placeCertificate(ctx context.Context, tx pgx.Tx, p certs.Parsed, complete, completeChain bool, label, source string,
-	by uuid.UUID, key func() (uuid.UUID, error)) (placement, error) {
+	by, service uuid.UUID, key func() (uuid.UUID, error)) (placement, error) {
 	pemChain := p.PEMChain
 	if len(pemChain) > maxPEMChain {
 		pemChain, complete = leafPEM(p), false
@@ -460,12 +467,12 @@ func (s *Service) placeCertificate(ctx context.Context, tx pgx.Tx, p certs.Parse
 		id := uuid.Must(uuid.NewV7())
 		err = tx.QueryRow(ctx, `INSERT INTO certificates (id, fingerprint_sha256, subject_cn, subject, issuer, serial, sans, not_before, not_after,
     key_algorithm, key_bits, public_key_sha256, pem_chain, chain_complete, self_signed, source, label, private_key_id, first_seen_at, last_seen_at,
-    created_by, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19, $20, $19)
+    created_by, created_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $19, $20, $19, $21)
 ON CONFLICT (fingerprint_sha256) DO NOTHING
 RETURNING id`, id, p.Fingerprint, boundText(p.SubjectCN), boundText(p.Subject), boundText(p.Issuer), boundText(p.Serial), sans,
 			p.NotBefore.UTC(), p.NotAfter.UTC(), p.Algorithm, p.Bits, p.PublicKeySHA256, pemChain, complete, p.SelfSigned, source, label, kid,
-			now, nullableUser(by)).Scan(&id)
+			now, nullableUser(by), service).Scan(&id)
 		switch {
 		case err == nil:
 			return placement{id: id, complete: complete}, nil

@@ -14,9 +14,9 @@ import (
 // tokens have no use for them) and kept in lock (they change nothing outside Alice, ClassAlways).
 func (s *server) viewRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/views", perm: rbac.Session, handler: s.listViews},
-		{method: http.MethodPost, pattern: "/api/v1/views", perm: rbac.Session, lic: license.ClassAlways, handler: s.createView},
-		{method: http.MethodDelete, pattern: "/api/v1/views/{id}", perm: rbac.Session, lic: license.ClassAlways, handler: s.deleteView},
+		{method: http.MethodGet, pattern: "/api/v1/views", scope: scopeSelf, perm: rbac.Session, handler: s.listViews},
+		{method: http.MethodPost, pattern: "/api/v1/views", scope: scopeSelf, perm: rbac.Session, lic: license.ClassAlways, handler: s.createView},
+		{method: http.MethodDelete, pattern: "/api/v1/views/{id}", scope: scopeSelf, perm: rbac.Session, lic: license.ClassAlways, handler: s.deleteView},
 	}
 }
 

@@ -85,6 +85,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
@@ -168,6 +169,11 @@ type DeployRequestInput struct {
 	CertificateID          uuid.UUID
 	LocationIDs            []uuid.UUID // 1..20
 	ConfirmIncompleteChain bool        // counts only for an Administrator (F-17)
+	// source is the service whose key the deployment places (R49, design §5.6): nil for the certificate's own, the ACME
+	// certificate's for its Deploy now. incident: a key-compromise incident's replacement, which needs no trust (the
+	// key it replaces is there already).
+	source   *uuid.UUID
+	incident bool
 }
 
 // RequestedDeployment is one queued deployment.
@@ -291,6 +297,11 @@ type deployCertificate struct {
 	chainComplete       bool
 	// revoked and compromised: the final marks of migration 00021; a certificate carrying either is never deployed.
 	revoked, compromised bool
+	// service is the source service of the key (R49): the certificate's own, or the vault's or the ACME certificate's
+	// for their deployments; a server of another service must accept it (design §5.6 (c)) unless trustExempt (an
+	// incident's replacement).
+	service     uuid.UUID
+	trustExempt bool
 }
 
 // revocationRefusal is the refusal of a revoked or compromised certificate and its audit reason ("" for none).
@@ -357,6 +368,10 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 		if err != nil {
 			return err
 		}
+		if in.source != nil {
+			c.service = *in.source
+		}
+		c.trustExempt = in.incident
 		now := s.clock.Now().UTC()
 		if reason, err := c.revocationRefusal(); err != nil {
 			return deny(uuid.Nil, reason, err)
@@ -412,9 +427,9 @@ func (s *Service) RequestDeployment(ctx context.Context, a Actor, in DeployReque
 func readDeployCertificate(ctx context.Context, q db.Querier, id uuid.UUID) (deployCertificate, error) {
 	var c deployCertificate
 	err := q.QueryRow(ctx, `SELECT id, private_key_id, fingerprint_sha256, key_algorithm, sans, not_before, not_after, chain_complete,
-    revoked_at IS NOT NULL, compromised_at IS NOT NULL
+    revoked_at IS NOT NULL, compromised_at IS NOT NULL, service_id
 FROM certificates WHERE id = $1`, id).Scan(&c.id, &c.keyID, &c.fingerprint, &c.algorithm, &c.sans, &c.notBefore, &c.notAfter, &c.chainComplete,
-		&c.revoked, &c.compromised)
+		&c.revoked, &c.compromised, &c.service)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return deployCertificate{}, ErrNotFound
 	}
@@ -487,7 +502,9 @@ FROM certificate_locations WHERE id = ANY($1) ORDER BY id FOR NO KEY UPDATE`, id
 	return targets, locs, nil
 }
 
-// checkDeployLocation is RequestDeployment's per-location refusal and its audit reason.
+// checkDeployLocation is RequestDeployment's per-location refusal and its audit reason. It is every deploy path's check
+// (a person's request, a Key Vault or ACME binding's Deploy now, both automatic planners): one of them is the trust of
+// R49 (design §5.6 (c)), an *authz.UntrustedError when the server's service does not accept the source service's keys.
 func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCertificate, l deployLocation, t Target) (string, error) {
 	switch {
 	case l.missing || !l.supported || !deployablePath(l.certPath) || !deployablePath(l.keyPath):
@@ -502,6 +519,13 @@ func (s *Service) checkDeployLocation(ctx context.Context, tx pgx.Tx, c deployCe
 		return "rescan_needed", ErrLocationNeedsDiscovery
 	case l.keyType != "" && l.keyType != c.algorithm:
 		return "key_type_mismatch", &KeyTypeMismatchError{Expected: l.keyType, Actual: c.algorithm}
+	}
+	if !c.trustExempt {
+		if err := authz.CheckTrust(ctx, tx, c.service, t.ServiceID); errors.Is(err, ErrServiceUntrusted) {
+			return ReasonServiceUntrusted, err
+		} else if err != nil {
+			return "", err
+		}
 	}
 	var recovering, active bool
 	err := tx.QueryRow(ctx, `SELECT

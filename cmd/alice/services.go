@@ -17,6 +17,7 @@ import (
 	"alice/internal/auth"
 	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
+	svcstore "alice/internal/authz/services"
 	"alice/internal/backup"
 	"alice/internal/discovery/discoverysvc"
 	"alice/internal/i18n"
@@ -82,6 +83,9 @@ type services struct {
 
 	// Network discovery (plan 2026-10-13-network-discovery, Task 9): scopes, settings, scans and results behind the API.
 	discovery *discoverysvc.Service
+
+	// Scoped access (R49): services, environments, trusts and assignment behind the API.
+	serviceStore *svcstore.Store
 
 	// Phase 8 (contract C8, C10, C11).
 	backup   *backup.Service    // backups, their schedule, state and alarm
@@ -186,6 +190,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.Config, c
 	svc.ldap = ldap.New(ldapConfig(svc, clk, log))
 	// The system resolver only (nil Resolver): the save-time look-up of the names an Administrator listed (air-gap rule).
 	svc.discovery = discoverysvc.New(discoverysvc.Config{Pool: pool, Audit: auditLog, Queue: queue, Clock: clk})
+	svc.serviceStore = svcstore.New(pool, auditLog, clk)
 	svc.backup = backup.New(backupServiceConfig(cfg, svc, clk, log))
 	svc.forward = forward.New(forwardConfig(cfg, svc, clk, log))
 	return svc, nil

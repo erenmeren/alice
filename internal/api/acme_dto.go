@@ -140,19 +140,21 @@ type acmeCertificateDTO struct {
 	LastNotice *acmeNoticeDTO `json:"last_notice,omitempty"`
 	CreatedAt  time.Time      `json:"created_at"`
 	UpdatedAt  time.Time      `json:"updated_at"`
+	// Service is the owning service (R49, design §8.2).
+	Service *serviceRefDTO `json:"service,omitempty"`
 }
 
 // acmeHoldReasons are the values of deploy_held_reason; anything else is shown as no hold (the openapi enum).
 var acmeHoldReasons = []string{"", inventory.ACMEHoldLicense, inventory.ACMEHoldChainIncomplete}
 
 // acmeCertificateJSON is the view of c at now (recovering ends when the current certificate expires).
-func acmeCertificateJSON(c inventory.ACMECertificate, now time.Time) acmeCertificateDTO {
+func acmeCertificateJSON(c inventory.ACMECertificate, now time.Time, refs serviceRefs) acmeCertificateDTO {
 	d := acmeCertificateDTO{ID: c.ID.String(), ProviderID: c.ProviderID.String(), AccountID: c.AccountID.String(), Names: nonNil(c.Names),
 		KeyType: c.KeyType, Challenge: c.Challenge, HookID: idPtr(c.HookID), HTTPTargetID: idPtr(c.HTTPTargetID), RenewBeforeDays: c.RenewBeforeDays,
 		AutoRenew: c.AutoRenew, AutoDeploy: c.AutoDeploy, State: c.State, Failures: c.Failures, NextAttemptAt: utcPtr(c.NextAttemptAt),
 		LastAttemptAt: utcPtr(c.LastAttemptAt), LastError: errorRef(c.LastErrorCode, nil), RunningOrderID: idPtr(c.RunningOrderID),
 		DeployHeldReason: c.DeployHeldReason, DeployStopped: c.DeployStopped, BindingsCount: c.Bindings, CreatedAt: c.CreatedAt.UTC(),
-		UpdatedAt: c.UpdatedAt.UTC()}
+		UpdatedAt: c.UpdatedAt.UTC(), Service: refs.of(c.ServiceID)}
 	if c.State == inventory.ACMEStateStopped {
 		d.StoppedReason = acmeStoppedRenewalFailures
 	}

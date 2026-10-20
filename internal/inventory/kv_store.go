@@ -33,6 +33,7 @@ func (d kvDropped) Error() string { return "inventory: the vault is " + string(d
 type kvTarget struct {
 	name, url, status string
 	deleted           bool
+	service           uuid.UUID // the vault's service (R49): a certificate first read from it goes there
 }
 
 func (t kvTarget) dropped() string {
@@ -55,13 +56,13 @@ func readKVTarget(ctx context.Context, q db.Querier, id uuid.UUID, lock string) 
 	var row pgx.Row
 	switch lock {
 	case "FOR UPDATE":
-		row = q.QueryRow(ctx, `SELECT name::text, type, status, deleted_at, coalesce(config->>'vault_url', '') FROM targets WHERE id = $1 FOR UPDATE`, id)
+		row = q.QueryRow(ctx, `SELECT name::text, type, status, deleted_at, coalesce(config->>'vault_url', ''), service_id FROM targets WHERE id = $1 FOR UPDATE`, id)
 	case "FOR NO KEY UPDATE":
-		row = q.QueryRow(ctx, `SELECT name::text, type, status, deleted_at, coalesce(config->>'vault_url', '') FROM targets WHERE id = $1 FOR NO KEY UPDATE`, id)
+		row = q.QueryRow(ctx, `SELECT name::text, type, status, deleted_at, coalesce(config->>'vault_url', ''), service_id FROM targets WHERE id = $1 FOR NO KEY UPDATE`, id)
 	default:
-		row = q.QueryRow(ctx, `SELECT name::text, type, status, deleted_at, coalesce(config->>'vault_url', '') FROM targets WHERE id = $1`, id)
+		row = q.QueryRow(ctx, `SELECT name::text, type, status, deleted_at, coalesce(config->>'vault_url', ''), service_id FROM targets WHERE id = $1`, id)
 	}
-	err := row.Scan(&t.name, &typ, &t.status, &deleted, &t.url)
+	err := row.Scan(&t.name, &typ, &t.status, &deleted, &t.url, &t.service)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return kvTarget{}, ErrNotFound
@@ -356,7 +357,7 @@ JOIN unnest($1::text[], $2::text[]) AS u(id, version) ON v.kv_certificate_id = u
 	for _, c := range ok {
 		found[c.details.leaf.Fingerprint] = discoveredCertificate{p: c.details.leaf, complete: c.details.complete}
 	}
-	certIDs, err := upsertCertificates(ctx, tx, found, "azure_kv", now)
+	certIDs, err := upsertCertificates(ctx, tx, found, "azure_kv", t.service, now)
 	if err != nil {
 		return nil, err
 	}

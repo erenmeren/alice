@@ -15,12 +15,12 @@ import (
 // writes, R42 row 18; limited per binding cookie, S-11) and an SSO user's step-up.
 func (s *server) oidcRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/providers", perm: rbac.Public, handler: s.oidcProviders},
-		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/{id}/start", perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/providers", scope: scopeNone, perm: rbac.Public, handler: s.oidcProviders},
+		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/{id}/start", scope: scopeNone, perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways,
 			handler: s.oidcStart},
-		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/{id}/callback", perm: rbac.Public, limit: limitOIDCCallback, getOnly: true,
+		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/{id}/callback", scope: scopeNone, perm: rbac.Public, limit: limitOIDCCallback, getOnly: true,
 			handler: s.oidcCallback},
-		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/stepup", perm: rbac.Session, limit: limitMFA, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/stepup", scope: scopeSelf, perm: rbac.Session, limit: limitMFA, lic: license.ClassAlways,
 			handler: s.oidcStepUp},
 	}
 }

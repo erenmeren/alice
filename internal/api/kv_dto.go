@@ -381,6 +381,8 @@ type bindingLocationDTO struct {
 	State        string  `json:"state"`
 	Version      string  `json:"version"`
 	DeploymentID *string `json:"deployment_id"`
+	// AttentionCode: why automatic deployment holds the website ("" for nothing; service.untrusted, R49).
+	AttentionCode string `json:"attention_code"`
 }
 
 var bindingStates = []string{inventory.BindingLocationNotDeployed, inventory.BindingLocationPending, inventory.BindingLocationDeployed,
@@ -415,6 +417,7 @@ func bindingJSON(b inventory.Binding) bindingDTO {
 		out.Locations = append(out.Locations, bindingLocationDTO{
 			LocationID: l.LocationID.String(), TargetID: l.TargetID.String(), TargetName: l.TargetName, CertPath: l.CertPath,
 			State: oneOfOr(l.State, bindingStates, inventory.BindingLocationNotDeployed), Version: versionOrBlank(l.Version), DeploymentID: idPtr(l.DeploymentID),
+			AttentionCode: l.AttentionCode,
 		})
 	}
 	return out

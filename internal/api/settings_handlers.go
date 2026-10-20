@@ -22,20 +22,20 @@ import (
 // needs the strong If-Match of the version it was based on; "0" names a value never saved.
 func (s *server) settingsRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/settings/smtp", perm: rbac.SettingsManage, handler: s.getSMTP},
-		{method: http.MethodPut, pattern: "/api/v1/settings/smtp", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putSMTP},
-		{method: http.MethodDelete, pattern: "/api/v1/settings/smtp", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.deleteSMTP},
-		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/test", perm: rbac.SettingsManage, limit: limitTestMail,
+		{method: http.MethodGet, pattern: "/api/v1/settings/smtp", scope: scopePlatform, perm: rbac.SettingsManage, handler: s.getSMTP},
+		{method: http.MethodPut, pattern: "/api/v1/settings/smtp", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putSMTP},
+		{method: http.MethodDelete, pattern: "/api/v1/settings/smtp", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.deleteSMTP},
+		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/test", scope: scopePlatform, perm: rbac.SettingsManage, limit: limitTestMail,
 			lic: license.ClassAlways, handler: s.testMail},
-		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/trust", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.trustSMTP},
-		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/untrust", perm: rbac.SettingsManage, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/trust", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.trustSMTP},
+		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/untrust", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways,
 			handler: s.untrustSMTP},
-		{method: http.MethodGet, pattern: "/api/v1/settings/notifications", perm: rbac.SettingsManage, handler: s.getRecipients},
-		{method: http.MethodPut, pattern: "/api/v1/settings/notifications", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putRecipients},
-		{method: http.MethodGet, pattern: "/api/v1/settings/alerts", perm: rbac.SettingsManage, handler: s.getThresholds},
-		{method: http.MethodPut, pattern: "/api/v1/settings/alerts", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putThresholds},
-		{method: http.MethodGet, pattern: "/api/v1/settings/general", perm: rbac.SettingsManage, handler: s.getGeneral},
-		{method: http.MethodPut, pattern: "/api/v1/settings/general", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putGeneral},
+		{method: http.MethodGet, pattern: "/api/v1/settings/notifications", scope: scopePlatform, perm: rbac.SettingsManage, handler: s.getRecipients},
+		{method: http.MethodPut, pattern: "/api/v1/settings/notifications", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putRecipients},
+		{method: http.MethodGet, pattern: "/api/v1/settings/alerts", scope: scopePlatform, perm: rbac.SettingsManage, handler: s.getThresholds},
+		{method: http.MethodPut, pattern: "/api/v1/settings/alerts", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putThresholds},
+		{method: http.MethodGet, pattern: "/api/v1/settings/general", scope: scopePlatform, perm: rbac.SettingsManage, handler: s.getGeneral},
+		{method: http.MethodPut, pattern: "/api/v1/settings/general", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.putGeneral},
 	}
 }
 

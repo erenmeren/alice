@@ -362,7 +362,7 @@ type HTTPSService interface {
 type DiscoveryService interface {
 	ListScopes(ctx context.Context, f discoverysvc.ScopeFilter) ([]discoverysvc.ScopeView, bool, error)
 	GetScope(ctx context.Context, id uuid.UUID) (discoverysvc.ScopeView, error)
-	CreateScope(ctx context.Context, a discoverysvc.Actor, in discovery.Scope) (discoverysvc.ScopeView, error)
+	CreateScopeIn(ctx context.Context, a discoverysvc.Actor, in discovery.Scope, service uuid.UUID) (discoverysvc.ScopeView, error)
 	UpdateScope(ctx context.Context, a discoverysvc.Actor, id uuid.UUID, ifVersion *int, p discoverysvc.ScopePatch) (discoverysvc.ScopeView, error)
 	DeleteScope(ctx context.Context, a discoverysvc.Actor, id uuid.UUID, ifVersion *int) error
 	Preview(ctx context.Context, sc discovery.Scope) (discovery.Preview, error)
@@ -411,6 +411,7 @@ type Deps struct {
 	ACME           ACMEService      // ACME issuance (inventory.Service)
 	Discovery      DiscoveryService // network certificate discovery (discoverysvc.Service)
 	Incidents      IncidentService  // the impact of a certificate and key-compromise incidents (inventory.Service)
+	Services       ServicesService  // R49: services, environments, trusts and assignment (authz/services.Store)
 	TLSStore       HTTPSService     // Phase 8: the HTTPS certificate
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
@@ -462,12 +463,55 @@ const (
 	ldapLockoutKeys     = 100_000
 )
 
+// routeScope is how an operation meets scoped access (R49, design
+// docs/superpowers/specs/2026-10-21-scoped-rbac-and-service-ownership-design.md §5.3, §11): whether a global grant, a
+// grant on the resource's service, or some grant at all allows it. Every route declares one (register refuses a route
+// without); openapi.yaml repeats it as x-scope. Until scoped bindings exist (Phase 2) every grant is global, so the
+// scope changes no answer: the table is complete and checked before the first scoped grant can be made.
+type routeScope int
+
+const (
+	scopeUnset    routeScope = iota // never valid: register refuses it
+	scopeNone                       // public, the setup wizard, a pending sign-in: no grant is involved
+	scopePlatform                   // a global grant only (people, settings, license, SSO, backups, audit, ...)
+	scopeAny                        // some grant allows it; the answer is computed over the caller's reach
+	scopeSelf                       // the caller's own records (session, tokens, saved views)
+	scopeResource                   // the resource the path names is checked against the caller's reach
+	scopeList                       // a list filtered by the caller's reach
+	scopeCreate                     // a create: the body's service_id (or the Default service) is checked
+	scopeCross                      // the path resource, then the source and destination services (design §5.6)
+)
+
+// String is the scope's name in docs/authz-matrix.md and openapi.yaml's x-scope.
+func (s routeScope) String() string {
+	switch s {
+	case scopeNone:
+		return "none"
+	case scopePlatform:
+		return "platform"
+	case scopeAny:
+		return "any"
+	case scopeSelf:
+		return "self"
+	case scopeResource:
+		return "resource"
+	case scopeList:
+		return "list"
+	case scopeCreate:
+		return "create"
+	case scopeCross:
+		return "cross"
+	}
+	return ""
+}
+
 // route is one documented operation. The route table is the single source of
 // truth for what the muxes serve and which permission each operation needs;
 // openapi.yaml must list exactly these operations with the same x-permission.
 type route struct {
 	method  string
 	pattern string
+	scope   routeScope // R49: every route declares one
 	perm    rbac.Permission
 	limit   limitClass
 	// lic is how lock mode treats this operation. Every non-GET route declares it: ClassAlways
@@ -611,8 +655,8 @@ type Server struct {
 }
 
 // New builds the public HTTPS handler. It panics if a route declares an
-// unknown permission or a state-changing route declares no license class, so a
-// misconfigured route table never starts (SEC-016, R9).
+// unknown permission or no scope, or a state-changing route declares no license class, so a
+// misconfigured route table never starts (SEC-016, R9, R49).
 func New(d Deps) *Server {
 	s := newServer(d)
 	return &Server{s: s, h: s.handler(s.apiRoutes())}
@@ -708,6 +752,10 @@ func (s *server) register(mux *http.ServeMux, routes []route) {
 		if _, ok := rbac.PolicyFor(r.perm); !ok {
 			panic(fmt.Sprintf("api: route %s %s has unknown permission %q", r.method, r.pattern, r.perm))
 		}
+		if r.scope.String() == "" {
+			// Deny by default (SEC-016, R49): a route whose scoped-access class is not decided never starts.
+			panic(fmt.Sprintf("api: route %s %s declares no scope", r.method, r.pattern))
+		}
 		if !safeMethod(r.method) && !r.lic.Valid() {
 			panic(fmt.Sprintf("api: state-changing route %s %s declares no license class", r.method, r.pattern))
 		}
@@ -728,10 +776,10 @@ func (s *server) probeRoutes(public bool) []route {
 		health = limitHealth
 	}
 	return []route{
-		{method: http.MethodGet, pattern: "/livez", perm: rbac.Public, limit: limitNone, handler: func(w http.ResponseWriter, _ *http.Request) {
+		{method: http.MethodGet, pattern: "/livez", scope: scopeNone, perm: rbac.Public, limit: limitNone, handler: func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		}},
-		{method: http.MethodGet, pattern: "/healthz", perm: rbac.Public, limit: health, handler: func(w http.ResponseWriter, r *http.Request) {
+		{method: http.MethodGet, pattern: "/healthz", scope: scopeNone, perm: rbac.Public, limit: health, handler: func(w http.ResponseWriter, r *http.Request) {
 			if err := s.deps.Health.Check(r.Context()); err != nil {
 				s.deps.Log.Warn("health check failed", "request_id", RequestID(r.Context()), "reason", healthReason(err))
 				s.writeError(w, r, ErrUnavailable)
@@ -745,10 +793,10 @@ func (s *server) probeRoutes(public bool) []route {
 // systemRoutes are small informational endpoints.
 func (s *server) systemRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/version", perm: rbac.Read, handler: func(w http.ResponseWriter, _ *http.Request) {
+		{method: http.MethodGet, pattern: "/api/v1/version", scope: scopeAny, perm: rbac.Read, handler: func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, s.deps.Version)
 		}},
-		{method: http.MethodGet, pattern: "/api/v1/i18n/locales", perm: rbac.Public, handler: func(w http.ResponseWriter, _ *http.Request) {
+		{method: http.MethodGet, pattern: "/api/v1/i18n/locales", scope: scopeNone, perm: rbac.Public, handler: func(w http.ResponseWriter, _ *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]any{"default": s.deps.Catalog.Default(), "locales": s.deps.Catalog.Locales()})
 		}},
 	}
@@ -791,6 +839,7 @@ func (s *server) apiRoutes() []route {
 	routes = append(routes, s.acmeRoutes()...)
 	routes = append(routes, s.discoveryRoutes()...)
 	routes = append(routes, s.incidentRoutes()...)
+	routes = append(routes, s.serviceRoutes()...)
 	return routes
 }
 

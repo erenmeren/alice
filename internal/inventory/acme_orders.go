@@ -257,7 +257,8 @@ WHERE id = $1`, c.ID, now); err != nil {
 	}
 	_, err = s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: jobType,
 		Payload: map[string]string{"order_id": id.String(), "acme_certificate_id": c.ID.String()},
-		Kind:    a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role), DedupeKey: JobACMEIssue + ":" + c.ID.String()})
+		Kind:    a.jobKind(), CreatedBy: a.UserID, CreatedByRole: string(a.Role), DedupeKey: JobACMEIssue + ":" + c.ID.String(),
+		ServiceID: c.ServiceID})
 	if errors.Is(err, ErrJobConflict) {
 		return ACMEOrder{}, ErrACMEOrderRunning // the job of the previous order is still finishing
 	}
@@ -542,8 +543,13 @@ func (s *Service) enqueueCleanupTx(ctx context.Context, tx pgx.Tx, orderID uuid.
 	if left == 0 {
 		return nil
 	}
+	var service uuid.UUID // the ACME certificate's (R49)
+	if err := tx.QueryRow(ctx, `SELECT c.service_id FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id
+WHERE o.id = $1`, orderID).Scan(&service); err != nil {
+		return fmt.Errorf("inventory: read the ACME order's service: %w", err)
+	}
 	_, err := s.jobs.EnqueueTx(ctx, tx, JobRequest{Type: JobACMECleanup, Payload: map[string]string{"order_id": orderID.String()},
-		Kind: "system", DedupeKey: JobACMECleanup + ":" + orderID.String()})
+		Kind: "system", DedupeKey: JobACMECleanup + ":" + orderID.String(), ServiceID: service})
 	return err
 }
 

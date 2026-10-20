@@ -16,18 +16,18 @@ import (
 // check setup.Service repeats for both.
 func (s *server) setupRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/setup/status", perm: rbac.Public, handler: s.setupStatus},
-		{method: http.MethodPost, pattern: "/api/v1/setup/session", perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways, handler: s.setupStartSession},
-		{method: http.MethodPut, pattern: "/api/v1/setup/language", perm: rbac.Setup, lic: license.ClassAlways, handler: s.setupLanguage},
-		{method: http.MethodPost, pattern: "/api/v1/setup/admin/enrollment", perm: rbac.Setup, lic: license.ClassAlways, handler: s.setupEnrollment},
-		{method: http.MethodPost, pattern: "/api/v1/setup/admin", perm: rbac.Setup, limit: limitMFA, lic: license.ClassAlways, handler: s.setupCreateAdmin},
-		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupRecoveryPassphrase},
-		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupEvaluation},
-		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupComplete},
+		{method: http.MethodGet, pattern: "/api/v1/setup/status", scope: scopeNone, perm: rbac.Public, handler: s.setupStatus},
+		{method: http.MethodPost, pattern: "/api/v1/setup/session", scope: scopeNone, perm: rbac.Public, limit: limitLogin, lic: license.ClassAlways, handler: s.setupStartSession},
+		{method: http.MethodPut, pattern: "/api/v1/setup/language", scope: scopeNone, perm: rbac.Setup, lic: license.ClassAlways, handler: s.setupLanguage},
+		{method: http.MethodPost, pattern: "/api/v1/setup/admin/enrollment", scope: scopeNone, perm: rbac.Setup, lic: license.ClassAlways, handler: s.setupEnrollment},
+		{method: http.MethodPost, pattern: "/api/v1/setup/admin", scope: scopeNone, perm: rbac.Setup, limit: limitMFA, lic: license.ClassAlways, handler: s.setupCreateAdmin},
+		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupRecoveryPassphrase},
+		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupEvaluation},
+		{method: http.MethodPost, pattern: "/api/v1/setup/complete", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupComplete},
 		// Phase 8 (C12): the wizard's HTTPS and mail steps. After completion both answer the status and change nothing (S-39).
-		{method: http.MethodPost, pattern: "/api/v1/setup/https/keep-temporary", perm: rbac.SettingsManage, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/setup/https/keep-temporary", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways,
 			handler: s.setupKeepTemporary},
-		{method: http.MethodPost, pattern: "/api/v1/setup/mail/skip", perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupSkipMail},
+		{method: http.MethodPost, pattern: "/api/v1/setup/mail/skip", scope: scopePlatform, perm: rbac.SettingsManage, lic: license.ClassAlways, handler: s.setupSkipMail},
 	}
 }
 

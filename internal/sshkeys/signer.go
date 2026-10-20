@@ -26,6 +26,7 @@ type keyRow struct {
 	retired, destroyed bool
 	algorithm          string
 	bits               int
+	service            uuid.UUID // the owning service (R49)
 }
 
 // readKeyRow reads one ssh_keys row with its private key's state; ErrNotFound.
@@ -35,9 +36,9 @@ func readKeyRow(ctx context.Context, q db.Querier, id uuid.UUID) (keyRow, error)
 		pkID *uuid.UUID
 	)
 	err := q.QueryRow(ctx, `SELECT k.id, k.private_key_id, k.fingerprint_sha256, k.public_key, k.label, k.key_comment, k.is_platform_key,
-    k.retired_at IS NOT NULL, coalesce(p.destroyed_at IS NOT NULL, false), coalesce(p.algorithm, ''), coalesce(p.bits, 0)
+    k.retired_at IS NOT NULL, coalesce(p.destroyed_at IS NOT NULL, false), coalesce(p.algorithm, ''), coalesce(p.bits, 0), k.service_id
 FROM ssh_keys k LEFT JOIN managed_private_keys p ON p.id = k.private_key_id WHERE k.id = $1`, id).Scan(&r.id, &pkID, &r.fingerprint,
-		&r.publicKey, &r.label, &r.comment, &r.isPlatform, &r.retired, &r.destroyed, &r.algorithm, &r.bits)
+		&r.publicKey, &r.label, &r.comment, &r.isPlatform, &r.retired, &r.destroyed, &r.algorithm, &r.bits, &r.service)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return keyRow{}, ErrNotFound
 	}

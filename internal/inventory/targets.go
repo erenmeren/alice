@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
@@ -25,7 +26,7 @@ import (
 // The last column is the public information of a vault's own credential ('null' for a server);
 // every query that uses the list reads FROM targets without an alias.
 const targetColumns = `id, name::text, type, config, status, last_error_code, last_success_at, last_discovery_at,
-discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at,
+discovery_interval_seconds, keys_managed_elsewhere, facts, capabilities, version, created_at, updated_at, service_id,
 coalesce((SELECT c.public_info FROM credentials c WHERE c.id = targets.credential_id AND c.purpose = 'azure_vault'), 'null'::jsonb)`
 
 func scanTarget(row pgx.Row) (Target, error) {
@@ -33,7 +34,7 @@ func scanTarget(row pgx.Row) (Target, error) {
 	var cfg, facts, vaultInfoRaw []byte
 	var interval int
 	err := row.Scan(&t.ID, &t.Name, &t.Type, &cfg, &t.Status, &t.LastErrorCode, &t.LastSuccessAt, &t.LastDiscoveryAt,
-		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &vaultInfoRaw)
+		&interval, &t.KeysManagedElsewhere, &facts, &t.Capabilities, &t.Version, &t.CreatedAt, &t.UpdatedAt, &t.ServiceID, &vaultInfoRaw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Target{}, ErrNotFound
 	}
@@ -157,11 +158,15 @@ func (s *Service) CreateTarget(ctx context.Context, a Actor, in NewTarget) (Targ
 	var jobID uuid.UUID
 	var created Target
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		if err := s.insertTarget(ctx, tx, targetRow{ID: id, Name: n.Name, Type: n.Type, Config: cfg, CredentialID: pk.ID,
-			Status: StatusPendingHostKey, Capabilities: caps, IntervalSeconds: int(defaultInterval / time.Second), By: a.UserID}); err != nil {
+		service, err := authz.ResolveService(ctx, tx, n.ServiceID)
+		if err != nil {
 			return err
 		}
-		var err error
+		if err := s.insertTarget(ctx, tx, targetRow{ID: id, Name: n.Name, Type: n.Type, Config: cfg, CredentialID: pk.ID,
+			Status: StatusPendingHostKey, Capabilities: caps, IntervalSeconds: int(defaultInterval / time.Second), By: a.UserID,
+			ServiceID: service}); err != nil {
+			return err
+		}
 		if created, err = getTarget(ctx, tx, id, false); err != nil {
 			return err
 		}
@@ -197,6 +202,7 @@ type targetRow struct {
 	IntervalSeconds int
 	Facts           []byte // nil = {}
 	By              uuid.UUID
+	ServiceID       uuid.UUID // resolved by the caller (authz.ResolveService)
 }
 
 // insertTarget checks the license limit and inserts the row in the same transaction: the check
@@ -218,9 +224,9 @@ func (s *Service) insertTarget(ctx context.Context, tx pgx.Tx, r targetRow) erro
 	}
 	now := s.clock.Now().UTC()
 	_, err = tx.Exec(ctx, `INSERT INTO targets (id, name, type, config, credential_id, status, last_error_code, last_success_at, capabilities,
-discovery_interval_seconds, facts, created_by, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)`,
+discovery_interval_seconds, facts, created_by, created_at, updated_at, service_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13, $14)`,
 		r.ID, r.Name, r.Type, raw, r.CredentialID, r.Status, r.LastErrorCode, r.LastSuccessAt, r.Capabilities, r.IntervalSeconds, facts,
-		nullableUser(r.By), now)
+		nullableUser(r.By), now, r.ServiceID)
 	if e, ok := closedTargetWriteError(err); ok {
 		return e
 	}

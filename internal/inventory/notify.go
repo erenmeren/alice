@@ -72,6 +72,10 @@ const (
 	TemplateKVSkippedOlder          = "kv.version_skipped_older"
 	TemplateKVSkippedSuperseded     = "kv.version_skipped_superseded"
 	TemplateKVAutoDeployStopped     = "kv.auto_deploy_stopped"
+	// TemplateKVAutoDeployUntrusted: automatic deployment stopped for count websites whose server's service does not
+	// accept the vault's keys (R49, design §5.6); sent when the websites are first marked (count, target_name,
+	// certificate_name).
+	TemplateKVAutoDeployUntrusted = "kv.auto_deploy_untrusted"
 )
 
 // Imports into a vault (Task 14): an import ended without a version in the vault, with a reason in the
@@ -131,7 +135,7 @@ func Templates() []string {
 		TemplateDeploymentNeedsAttention, TemplateDeploymentNeedsAttentionUnconfirmed, TemplateKVAuthFailed, TemplateKVCertificateRemoved,
 		TemplateKVCertificateRemovedBound, TemplateKVCertificatesRemovedMore, TemplateKVCertificatesRemovedOne, TemplateKVNewVersion, TemplateKVNewVersionHeldLicense,
 		TemplateKVNewVersionHeldChain, TemplateKVSkippedManual, TemplateKVSkippedDisabled, TemplateKVSkippedExpired, TemplateKVSkippedNotYetValid,
-		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped, TemplateKVNewVersionsMore, TemplateKVNewVersionsMoreOne, TemplateKVSkippedMore,
+		TemplateKVSkippedOlder, TemplateKVSkippedSuperseded, TemplateKVAutoDeployStopped, TemplateKVAutoDeployUntrusted, TemplateKVNewVersionsMore, TemplateKVNewVersionsMoreOne, TemplateKVSkippedMore,
 		TemplateKVSkippedMoreOne, TemplateKVStoppedMore, TemplateKVStoppedMoreOne, TemplateKVImportFailed,
 		TemplateKVImportOutcomeUnknown}
 }

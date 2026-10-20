@@ -13,8 +13,8 @@ import (
 // applied without a restart. settings.manage; the upload is rate limited like a download (it parses PFX files).
 func (s *server) httpsRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/settings/https", perm: rbac.SettingsManage, handler: s.getHTTPS},
-		{method: http.MethodPut, pattern: "/api/v1/settings/https", perm: rbac.SettingsManage, limit: limitHTTPSUpload, lic: license.ClassAlways,
+		{method: http.MethodGet, pattern: "/api/v1/settings/https", scope: scopePlatform, perm: rbac.SettingsManage, handler: s.getHTTPS},
+		{method: http.MethodPut, pattern: "/api/v1/settings/https", scope: scopePlatform, perm: rbac.SettingsManage, limit: limitHTTPSUpload, lic: license.ClassAlways,
 			handler: s.putHTTPS},
 	}
 }

@@ -1040,6 +1040,7 @@ func TestImportDecisionTable(t *testing.T) {
 			inventory.ErrKeyMismatch:            "certificate.key_mismatch",
 			inventory.ErrImportChanged:          "kv.import_invalid",
 			inventory.ErrAdminRequired:          "auth.forbidden",
+			inventory.ErrServiceUntrusted:       "service.untrusted",
 		} {
 			f, _ := importFixture(t)
 			f.inv.materialErr = fmt.Errorf("wrapped: %w", err)

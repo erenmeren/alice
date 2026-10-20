@@ -40,6 +40,9 @@ type acmeDeployBinding struct {
 	createdAt     time.Time
 	served        *uuid.UUID // the certificate the location served at the last scan
 	attentionCode string     // "" when the binding is not marked
+	// untrusted: the location's server is in another service that does not accept the ACME certificate's keys (R49,
+	// design §5.6 (c)); the binding is marked ReasonServiceUntrusted and never deployed to while it lasts.
+	untrusted bool
 }
 
 // acmeDeployment is a deployment the plan needs to know: every unfinished one of a bound location, and every one of the
@@ -56,6 +59,7 @@ type acmeDeployment struct {
 }
 
 type acmeDeploySnapshot struct {
+	service              uuid.UUID // the ACME certificate's service (R49)
 	now                  time.Time
 	gateOpen, autoDeploy bool
 	current              *acmeDeployCert
@@ -91,15 +95,17 @@ type acmeDeployPlan struct {
 //
 //   - nothing while the licence gate is closed, automatic deployment of the certificate is off, or it has no current
 //     certificate;
-//   - the attention marks: a binding whose last automatic deployment of the current certificate (since the binding
-//     exists) failed for a counted reason is marked with that reason; one whose location got or serves the current
-//     certificate, or whose last such deployment did not fail, is cleared (also when nothing else is planned);
+//   - the attention marks: a binding whose server's service does not accept the certificate's keys (no trust, R49) is
+//     marked ReasonServiceUntrusted; else a binding whose last automatic deployment of the current certificate (since
+//     the binding exists) failed for a counted reason is marked with that reason; one whose location got or serves the
+//     current certificate, or whose last such deployment did not fail, is cleared (also when nothing else is planned);
 //   - a current certificate that is held (and not released) or whose wave stopped is left alone; an expired or not
 //     yet valid one too (renewal is the renewal planner's matter);
 //   - three failed automatic deployments of the current certificate (counted as the Key Vault planner counts:
 //     the neutral reasons are exempt, a location whose attempts are used up by failures and internal faults counts
 //     as much) stop the wave: no more deployments, one notice;
-//   - the locations: only bindings with automatic deployment on; not those with an unfinished deployment of any kind,
+//   - the locations: only bindings with automatic deployment on and a trust where one is needed; not those with an
+//     unfinished deployment of any kind,
 //     not those that serve the current certificate or got it, not those within AutoDeployRetryAfter of a failed
 //     attempt of it (whatever its trigger), not those with three attempts; fresh locations before retries. Unlike a
 //     vault binding's website, a bound location whose certificate ends later than the current one is NOT skipped: the
@@ -183,6 +189,9 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 		if d, ok := lastAuto[b.location]; ok && !served && !deployed[b.location] && failedStatus(d.status) && !neutralReason(d.errorCode) {
 			want = d.errorCode
 		}
+		if b.untrusted {
+			want = ReasonServiceUntrusted
+		}
 		if want != b.attentionCode {
 			p.attention = append(p.attention, acmeAttention{location: b.location, code: want})
 		}
@@ -210,7 +219,7 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 	for _, b := range sn.bindings {
 		l := b.location
 		switch {
-		case !auto[l], busy[l], deployed[l]:
+		case !auto[l], busy[l], deployed[l], b.untrusted:
 		case !lastAny[l].IsZero() && lastAny[l].Add(AutoDeployRetryAfter).After(sn.now):
 		case b.served != nil && *b.served == cur.id:
 		case capped[l] >= AutoDeployMaxFailed:

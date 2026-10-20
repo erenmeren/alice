@@ -18,10 +18,10 @@ import (
 // The history is read through the vault (the inventory scopes imports by vault).
 func (s *server) importRoutes() []route {
 	return []route{
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/actions/import-to-key-vault", perm: rbac.CredentialsManage, lic: license.ClassChange,
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/actions/import-to-key-vault", scope: scopeCross, perm: rbac.CredentialsManage, lic: license.ClassChange,
 			handler: s.importToVault},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/imports", perm: rbac.Read, handler: s.listImports},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/imports/{import_id}", perm: rbac.Read, handler: s.getImport},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/imports", scope: scopeResource, perm: rbac.Read, handler: s.listImports},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/imports/{import_id}", scope: scopeResource, perm: rbac.Read, handler: s.getImport},
 	}
 }
 

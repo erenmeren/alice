@@ -29,14 +29,14 @@ import (
 // scoped by vault, so a vault certificate, version or import is never reachable under another vault's id.
 func (s *server) vaultRoutes() []route {
 	return []route{
-		{method: http.MethodPost, pattern: "/api/v1/key-vaults", perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.createVault},
-		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/vault-credentials", perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.replaceVaultCredentials},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates", perm: rbac.Read, handler: s.listKVCertificates},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}", perm: rbac.Read, handler: s.getKVCertificate},
+		{method: http.MethodPost, pattern: "/api/v1/key-vaults", scope: scopeCreate, perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.createVault},
+		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/vault-credentials", scope: scopeResource, perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.replaceVaultCredentials},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates", scope: scopeResource, perm: rbac.Read, handler: s.listKVCertificates},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}", scope: scopeResource, perm: rbac.Read, handler: s.getKVCertificate},
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release",
-			perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.releaseVersion},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/keys", perm: rbac.Read, handler: s.listKVKeys},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/secrets", perm: rbac.Read, handler: s.listKVSecrets},
+			scope: scopeResource, perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.releaseVersion},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/keys", scope: scopeResource, perm: rbac.Read, handler: s.listKVKeys},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/secrets", scope: scopeResource, perm: rbac.Read, handler: s.listKVSecrets},
 	}
 }
 
@@ -64,6 +64,7 @@ type secretBody struct {
 	PFXBase64           secretText `json:"pfx_base64"`
 	PFXPassword         secretText `json:"pfx_password"`
 	PollIntervalMinutes int        `json:"poll_interval_minutes"`
+	ServiceID           *uuid.UUID `json:"service_id"` // a new vault's service (R49; absent: the Default service)
 	pfx                 []byte     // PFXBase64 decoded
 }
 
@@ -78,7 +79,7 @@ func (b *secretBody) zero() {
 }
 
 var vaultCreateKeys = []string{"name", "vault_url", "auth", "tenant_id", "client_id", "client_secret", "secret_expires_on", "certificate_pem",
-	"private_key_pem", "pfx_base64", "pfx_password", "poll_interval_minutes"}
+	"private_key_pem", "pfx_base64", "pfx_password", "poll_interval_minutes", "service_id"}
 
 var vaultCredentialKeys = []string{"auth", "tenant_id", "client_id", "client_secret", "secret_expires_on", "certificate_pem", "private_key_pem",
 	"pfx_base64", "pfx_password"}
@@ -117,6 +118,7 @@ func (b *secretBody) credential(v *validate.Errors) inventory.VaultCredentialInp
 }
 
 func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	var req secretBody
 	defer req.zero()
 	if !s.decodeExact(w, r, &req, maxVaultBody, vaultCreateKeys...) {
@@ -135,6 +137,7 @@ func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
 	t, rep, jobID, err := s.deps.Inventory.CreateVault(r.Context(), s.actor(r), inventory.NewVault{
 		Name: req.Name, VaultURL: pv.URL, Auth: in.Auth, TenantID: in.TenantID, ClientID: in.ClientID, ClientSecret: in.ClientSecret,
 		SecretExpiresOn: in.SecretExpiresOn, Certificate: in.Certificate, PollIntervalMinutes: req.PollIntervalMinutes,
+		ServiceID: derefOr(req.ServiceID, uuid.Nil),
 	})
 	req.zero()
 	if err != nil {
@@ -144,7 +147,7 @@ func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
 	a := accepted(jobID)
 	w.Header().Set("ETag", etag(t.Version))
 	w.Header().Set("Location", "/api/v1/targets/"+t.ID.String())
-	writeJSON(w, http.StatusCreated, map[string]any{"target": targetJSON(t), "access": accessJSON(rep.Azure), "job_id": a.JobID, "status_url": a.StatusURL})
+	writeJSON(w, http.StatusCreated, map[string]any{"target": targetJSON(t, refs), "access": accessJSON(rep.Azure), "job_id": a.JobID, "status_url": a.StatusURL})
 }
 
 // failVault is fail with the vault's own wording of a duplicate.
@@ -157,6 +160,7 @@ func (s *server) failVault(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func (s *server) replaceVaultCredentials(w http.ResponseWriter, r *http.Request) {
+	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
 	if !ok {
 		s.writeError(w, r, ErrNotFound)
@@ -190,7 +194,7 @@ func (s *server) replaceVaultCredentials(w http.ResponseWriter, r *http.Request)
 		job = &j
 	}
 	w.Header().Set("ETag", etag(t.Version))
-	writeJSON(w, http.StatusOK, map[string]any{"target": targetJSON(t), "access": accessJSON(rep.Azure), "job_id": job})
+	writeJSON(w, http.StatusOK, map[string]any{"target": targetJSON(t, refs), "access": accessJSON(rep.Azure), "job_id": job})
 }
 
 // strictAction reports whether the caller meets credentials.manage right now: an Administrator's browser

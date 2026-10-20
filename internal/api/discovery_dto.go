@@ -38,6 +38,8 @@ type discoveryScopeDTO struct {
 	LastScheduledAt *time.Time        `json:"last_scheduled_at"`
 	ActiveScanID    *string           `json:"active_scan_id"`
 	LastScan        *discoveryScanDTO `json:"last_scan"`
+	// Service is the owning service (R49, design §8.2).
+	Service *serviceRefDTO `json:"service,omitempty"`
 }
 
 func nullID(id uuid.NullUUID) *string {
@@ -48,13 +50,13 @@ func nullID(id uuid.NullUUID) *string {
 	return &s
 }
 
-func discoveryScopeJSON(v discoverysvc.ScopeView) discoveryScopeDTO {
+func discoveryScopeJSON(v discoverysvc.ScopeView, refs serviceRefs) discoveryScopeDTO {
 	sc := v.Scope
 	d := discoveryScopeDTO{ID: v.ID.String(), Name: sc.Name, Entries: nonNil(sc.Entries), Ports: nonNil(sc.Ports), SNINames: nonNil(sc.SNINames),
 		Exclusions: nonNil(sc.Exclusions), Enabled: sc.Enabled, ScheduleHours: sc.Schedule.Hours, WindowStart: sc.Schedule.WindowStart,
 		WindowEnd: sc.Schedule.WindowEnd, WindowTZ: sc.Schedule.TimeZone, AlertOnExpiry: sc.AlertOnExpiry, RatePerSec: sc.RatePerSec,
 		Concurrency: sc.Concurrency, Version: v.Version, CreatedBy: nullID(v.CreatedBy), CreatedAt: v.CreatedAt.UTC(), UpdatedAt: v.UpdatedAt.UTC(),
-		LastScheduledAt: utcPtr(v.LastScheduledAt), ActiveScanID: nullID(v.ActiveScanID)}
+		LastScheduledAt: utcPtr(v.LastScheduledAt), ActiveScanID: nullID(v.ActiveScanID), Service: refs.of(v.ServiceID)}
 	if v.LastScan != nil {
 		s := discoveryScanJSON(*v.LastScan)
 		d.LastScan = &s

@@ -25,10 +25,10 @@ func guardedHandler(t *testing.T, d Deps, perm rbac.Permission, limit limitClass
 	t.Helper()
 	s := newServer(d)
 	h := s.handler([]route{
-		{method: http.MethodGet, pattern: "/api/v1/probe", perm: perm, limit: limit, handler: func(w http.ResponseWriter, r *http.Request) {
+		{method: http.MethodGet, pattern: "/api/v1/probe", scope: scopeAny, perm: perm, limit: limit, handler: func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"user": principalFrom(r.Context()).Username})
 		}},
-		{method: http.MethodPost, pattern: "/api/v1/probe", perm: perm, limit: limit, lic: license.ClassAlways, handler: func(w http.ResponseWriter, _ *http.Request) {
+		{method: http.MethodPost, pattern: "/api/v1/probe", scope: scopeAny, perm: perm, limit: limit, lic: license.ClassAlways, handler: func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}},
 	})
@@ -207,7 +207,7 @@ func TestSpoofedForwardedForCannotEvadeLoginLimit(t *testing.T) {
 func TestUnknownPermissionPanicsAtStartup(t *testing.T) {
 	s := newServer(testDeps(t, nil))
 	assert.Panics(t, func() {
-		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", perm: "nobody.knows", handler: func(http.ResponseWriter, *http.Request) {}}})
+		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", scope: scopeAny, perm: "nobody.knows", handler: func(http.ResponseWriter, *http.Request) {}}})
 	})
 }
 
@@ -287,7 +287,7 @@ func TestAuthenticationBackendErrorIsUnavailable(t *testing.T) {
 			tc.set(d)
 			called := false
 			s := newServer(d)
-			h := s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/probe", perm: perm, handler: func(w http.ResponseWriter, _ *http.Request) {
+			h := s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/probe", scope: scopeAny, perm: perm, handler: func(w http.ResponseWriter, _ *http.Request) {
 				called = true
 				w.WriteHeader(http.StatusOK)
 			}}})
@@ -339,7 +339,7 @@ func TestCancelledAuthenticationWritesNothing(t *testing.T) {
 
 func gatedHandler(d Deps, class license.Class) http.Handler {
 	s := newServer(d)
-	return s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Session, lic: class,
+	return s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.Session, lic: class,
 		handler: func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }}})
 }
 
@@ -434,15 +434,56 @@ func TestRegisterRefusesUnclassifiedStateChangingRoute(t *testing.T) {
 	noop := func(http.ResponseWriter, *http.Request) {}
 	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete} {
 		assert.Panics(t, func() {
-			s.handler([]route{{method: m, pattern: "/api/v1/x", perm: rbac.Session, handler: noop}})
+			s.handler([]route{{method: m, pattern: "/api/v1/x", scope: scopeAny, perm: rbac.Session, handler: noop}})
 		}, m)
 	}
 	assert.NotPanics(t, func() {
-		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", perm: rbac.Session, handler: noop}})
+		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", scope: scopeAny, perm: rbac.Session, handler: noop}})
 	}, "reads need no class")
 	assert.Panics(t, func() {
-		s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/x", perm: rbac.Session, lic: license.ClassContinuity, handler: noop}})
+		s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/x", scope: scopeAny, perm: rbac.Session, lic: license.ClassContinuity, handler: noop}})
 	}, "continuity is automatic upkeep: a person's request is a change (owner decision 2026-10-20)")
+}
+
+// Deny by default (SEC-016, R49): a route whose scoped-access class is not decided never starts.
+func TestRegisterRefusesRouteWithoutScope(t *testing.T) {
+	s := newServer(testDeps(t, nil))
+	noop := func(http.ResponseWriter, *http.Request) {}
+	assert.PanicsWithValue(t, "api: route GET /api/v1/x declares no scope", func() {
+		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", perm: rbac.Session, handler: noop}})
+	})
+	assert.Panics(t, func() {
+		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", scope: routeScope(99), perm: rbac.Session, handler: noop}})
+	}, "an unknown scope is no scope")
+	assert.NotPanics(t, func() {
+		s.handler([]route{{method: http.MethodGet, pattern: "/api/v1/x", scope: scopeAny, perm: rbac.Session, handler: noop}})
+	})
+}
+
+// Every route of the table declares the class design §11 gives it (and §8.1 for the service routes): the totals of the
+// 225 operations it lists, plus the 15 service routes.
+func TestRouteScopesMatchTheDesign(t *testing.T) {
+	counts := map[routeScope]int{}
+	for _, rt := range newServer(Deps{}).apiRoutes() {
+		counts[rt.scope]++
+	}
+	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6, scopeResource: 61 + 3, scopeList: 19 + 2, scopeCross: 16 + 3, scopeNone: 16,
+		scopeSelf: 14, scopeAny: 13 + 1, scopeCreate: 7}, counts)
+	for key, want := range map[string]routeScope{
+		"GET /api/v1/discovery/settings": scopePlatform, "GET /api/v1/ssh-keys/platform-key": scopeAny,
+		"POST /api/v1/certificates/{id}/deploy": scopeCross, "POST /api/v1/key-vaults": scopeCreate, "GET /api/v1/jobs": scopeList,
+		"PUT /api/v1/acme/certificates/{id}/bindings/{location_id}": scopeCross, "DELETE /api/v1/acme/certificates/{id}/bindings/{location_id}": scopeResource,
+		"GET /api/v1/auth/session": scopeSelf, "POST /api/v1/auth/login": scopeNone, "POST /api/v1/services/{id}/actions/assign": scopeCross,
+	} {
+		found := false
+		for _, rt := range newServer(Deps{}).apiRoutes() {
+			if rt.method+" "+rt.pattern == key {
+				found = true
+				assert.Equal(t, want.String(), rt.scope.String(), key)
+			}
+		}
+		assert.True(t, found, key)
+	}
 }
 
 // gated is the single definition of "refused while the license is locked" (R9, §8.6):
@@ -576,7 +617,7 @@ func TestRecordActivityFailureIsUnavailable(t *testing.T) {
 	d.Auth.(*fakeAuth).RecordActivityFn = func(context.Context, auth.Principal) error { return errors.New("db down: password=s3cret-pw") }
 	called := false
 	s := newServer(d)
-	h := s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/probe", perm: rbac.Session, lic: license.ClassAlways, handler: func(w http.ResponseWriter, _ *http.Request) {
+	h := s.handler([]route{{method: http.MethodPost, pattern: "/api/v1/probe", scope: scopeAny, perm: rbac.Session, lic: license.ClassAlways, handler: func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusNoContent)
 	}}})

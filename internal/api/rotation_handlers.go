@@ -24,22 +24,22 @@ func (s *server) rotationRoutes() []route {
 	const r = "/api/v1/rotation/runs"
 	change := license.ClassChange
 	return []route{
-		{method: http.MethodGet, pattern: p, perm: rbac.Read, handler: s.listPolicies},
-		{method: http.MethodPost, pattern: p, perm: rbac.RotationManage, lic: change, handler: s.createPolicy},
-		{method: http.MethodGet, pattern: p + "/{id}", perm: rbac.Read, handler: s.getPolicy},
-		{method: http.MethodPatch, pattern: p + "/{id}", perm: rbac.RotationManage, lic: change, handler: s.updatePolicy},
-		{method: http.MethodDelete, pattern: p + "/{id}", perm: rbac.RotationManage, lic: change, handler: s.deletePolicy},
-		{method: http.MethodPost, pattern: p + "/{id}/actions/enable", perm: rbac.RotationOperate, lic: change, handler: s.setPolicyEnabled(true)},
-		{method: http.MethodPost, pattern: p + "/{id}/actions/disable", perm: rbac.RotationManage, lic: change, handler: s.setPolicyEnabled(false)},
-		{method: http.MethodPost, pattern: p + "/{id}/actions/preview", perm: rbac.RotationManage, lic: change, handler: s.previewPolicy},
-		{method: http.MethodPost, pattern: p + "/{id}/actions/run", perm: rbac.RotationOperate, lic: change, handler: s.runPolicy},
-		{method: http.MethodGet, pattern: r, perm: rbac.Read, handler: s.listRotations},
-		{method: http.MethodGet, pattern: r + "/{id}", perm: rbac.Read, handler: s.getRotation},
-		{method: http.MethodPost, pattern: r + "/{id}/actions/continue", perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.continueRotation)},
-		{method: http.MethodPost, pattern: r + "/{id}/actions/finish-now", perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.finishRotation)},
-		{method: http.MethodPost, pattern: r + "/{id}/actions/keep-old", perm: rbac.RotationOperate, lic: change, handler: s.keepOld},
+		{method: http.MethodGet, pattern: p, scope: scopeList, perm: rbac.Read, handler: s.listPolicies},
+		{method: http.MethodPost, pattern: p, scope: scopeCreate, perm: rbac.RotationManage, lic: change, handler: s.createPolicy},
+		{method: http.MethodGet, pattern: p + "/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getPolicy},
+		{method: http.MethodPatch, pattern: p + "/{id}", scope: scopeResource, perm: rbac.RotationManage, lic: change, handler: s.updatePolicy},
+		{method: http.MethodDelete, pattern: p + "/{id}", scope: scopeResource, perm: rbac.RotationManage, lic: change, handler: s.deletePolicy},
+		{method: http.MethodPost, pattern: p + "/{id}/actions/enable", scope: scopeCross, perm: rbac.RotationOperate, lic: change, handler: s.setPolicyEnabled(true)},
+		{method: http.MethodPost, pattern: p + "/{id}/actions/disable", scope: scopeResource, perm: rbac.RotationManage, lic: change, handler: s.setPolicyEnabled(false)},
+		{method: http.MethodPost, pattern: p + "/{id}/actions/preview", scope: scopeResource, perm: rbac.RotationManage, lic: change, handler: s.previewPolicy},
+		{method: http.MethodPost, pattern: p + "/{id}/actions/run", scope: scopeCross, perm: rbac.RotationOperate, lic: change, handler: s.runPolicy},
+		{method: http.MethodGet, pattern: r, scope: scopeList, perm: rbac.Read, handler: s.listRotations},
+		{method: http.MethodGet, pattern: r + "/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getRotation},
+		{method: http.MethodPost, pattern: r + "/{id}/actions/continue", scope: scopeCross, perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.continueRotation)},
+		{method: http.MethodPost, pattern: r + "/{id}/actions/finish-now", scope: scopeCross, perm: rbac.RotationOperate, lic: change, handler: s.decideRotation(s.finishRotation)},
+		{method: http.MethodPost, pattern: r + "/{id}/actions/keep-old", scope: scopeCross, perm: rbac.RotationOperate, lic: change, handler: s.keepOld},
 		// Stop and undo is accepted in lock: it only takes back what the run added, and its undo follows L-86.
-		{method: http.MethodPost, pattern: r + "/{id}/actions/abort", perm: rbac.RotationManage, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: r + "/{id}/actions/abort", scope: scopeResource, perm: rbac.RotationManage, lic: license.ClassAlways,
 			handler: s.decideRotation(s.abortRotation)},
 	}
 }

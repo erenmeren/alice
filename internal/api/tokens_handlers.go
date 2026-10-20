@@ -16,9 +16,9 @@ import (
 // needs step-up; the secret is returned exactly once.
 func (s *server) tokenRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: tokensPattern, perm: rbac.Session, handler: s.listTokens},
-		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.SessionStepUp, lic: license.ClassAlways, handler: s.createToken},
-		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", perm: rbac.Session, lic: license.ClassAlways, handler: s.revokeToken},
+		{method: http.MethodGet, pattern: tokensPattern, scope: scopeSelf, perm: rbac.Session, handler: s.listTokens},
+		{method: http.MethodPost, pattern: "/api/v1/tokens", scope: scopeSelf, perm: rbac.SessionStepUp, lic: license.ClassAlways, handler: s.createToken},
+		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", scope: scopeSelf, perm: rbac.Session, lic: license.ClassAlways, handler: s.revokeToken},
 	}
 }
 
@@ -73,7 +73,7 @@ func (s *server) listTokens(w http.ResponseWriter, r *http.Request) {
 		userID = id
 	}
 	if userID != p.UserID && p.Role != rbac.Admin {
-		s.auditNotOwner(r, p, route{method: http.MethodGet, pattern: tokensPattern, perm: rbac.Session}, "user", userID.String())
+		s.auditNotOwner(r, p, route{method: http.MethodGet, pattern: tokensPattern, scope: scopeSelf, perm: rbac.Session}, "user", userID.String())
 		s.fail(w, r, auth.ErrNotFound)
 		return
 	}

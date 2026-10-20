@@ -169,11 +169,20 @@ func (s *Service) record(ctx context.Context, it Item, level int, now time.Time,
 	return inserted, nil
 }
 
+// alertService is the owning service of a notice's object when the row is written (R49): the certificate's, the vault's
+// (its certificate, key or credential), none for a discovered certificate (the scopes that saw it may be several).
+const alertService = `CASE $2::text
+    WHEN 'certificate_expiry' THEN (SELECT c.service_id FROM certificates c WHERE c.id = $3)
+    WHEN 'kv_certificate_expiry' THEN (SELECT t.service_id FROM kv_certificates k JOIN targets t ON t.id = k.target_id WHERE k.id = $3)
+    WHEN 'kv_key_expiry' THEN (SELECT t.service_id FROM kv_keys k JOIN targets t ON t.id = k.target_id WHERE k.id = $3)
+    WHEN 'kv_credential_expiry' THEN (SELECT t.service_id FROM targets t WHERE t.id = $3)
+END`
+
 // insertNotice is the ledger insert (ON CONFLICT DO NOTHING RETURNING) with its email and audit row, inside tx.
 func (s *Service) insertNotice(ctx context.Context, tx pgx.Tx, it Item, level int, now time.Time, note licenseNote, emailed bool) (bool, error) {
 	var id uuid.UUID
-	err := tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	err := tx.QueryRow(ctx, `INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, `+alertService+`)
 ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING id`,
 		uuid.Must(uuid.NewV7()), string(it.Kind), it.ObjectID, subjectOf(it), it.ExpiresAt, level, note.locked, emailed, now).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {

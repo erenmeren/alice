@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"alice/internal/authz"
 	"alice/internal/discovery"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
@@ -30,6 +31,7 @@ type ScopeView struct {
 	LastScheduledAt *time.Time
 	ActiveScanID    uuid.NullUUID
 	LastScan        *ScanView
+	ServiceID       uuid.UUID // the owning service (R49): its scans, endpoints and findings belong to it
 }
 
 // ScopeCursor is the position after a scope in the list's order (created_at, id).
@@ -42,6 +44,8 @@ type ScopeCursor struct {
 type ScopeFilter struct {
 	After *ScopeCursor
 	Limit int
+	// ServiceIDs keeps the scopes owned by these services (R49); nil = every service, empty = none.
+	ServiceIDs []uuid.UUID
 }
 
 // ScopePatch is a change of a scope: nil fields stay. Schedule replaces the whole schedule.
@@ -91,7 +95,7 @@ func pageSize(n int) int {
 
 const scopeColumns = `s.id, s.name::text, s.entries, s.ports, s.sni_names, s.exclusions, s.enabled, s.schedule_hours,
     coalesce(to_char(s.window_start, 'HH24:MI'), ''), coalesce(to_char(s.window_end, 'HH24:MI'), ''), s.window_tz, s.alert_on_expiry,
-    s.rate_per_sec, s.concurrency, s.version, s.created_by, s.created_at, s.updated_at, s.last_scheduled_at, a.id, l.id
+    s.rate_per_sec, s.concurrency, s.version, s.created_by, s.created_at, s.updated_at, s.last_scheduled_at, a.id, l.id, s.service_id
 FROM discovery_scopes s
 LEFT JOIN LATERAL (SELECT id FROM discovery_scans WHERE scope_id = s.id AND state IN ('queued', 'running') LIMIT 1) a ON true
 LEFT JOIN LATERAL (SELECT id FROM discovery_scans WHERE scope_id = s.id AND state NOT IN ('queued', 'running')
@@ -109,7 +113,8 @@ func scanScope(row pgx.Row) (scopeRow, error) {
 	var hours *int
 	err := row.Scan(&v.ID, &v.Scope.Name, &v.Scope.Entries, &v.Scope.Ports, &v.Scope.SNINames, &v.Scope.Exclusions, &v.Scope.Enabled, &hours,
 		&v.Scope.Schedule.WindowStart, &v.Scope.Schedule.WindowEnd, &v.Scope.Schedule.TimeZone, &v.Scope.AlertOnExpiry, &v.Scope.RatePerSec,
-		&v.Scope.Concurrency, &v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt, &v.LastScheduledAt, &v.ActiveScanID, &r.last)
+		&v.Scope.Concurrency, &v.Version, &v.CreatedBy, &v.CreatedAt, &v.UpdatedAt, &v.LastScheduledAt, &v.ActiveScanID, &r.last,
+		&v.ServiceID)
 	if err != nil {
 		return scopeRow{}, err
 	}
@@ -161,10 +166,10 @@ func (s *Service) GetScope(ctx context.Context, id uuid.UUID) (ScopeView, error)
 // ListScopes lists the live scopes, oldest first; more reports whether a page follows.
 func (s *Service) ListScopes(ctx context.Context, f ScopeFilter) (list []ScopeView, more bool, err error) {
 	n := pageSize(f.Limit)
-	args := []any{n + 1}
-	cond := ""
+	args := []any{n + 1, f.ServiceIDs}
+	cond := " AND ($2::uuid[] IS NULL OR s.service_id = ANY($2))"
 	if f.After != nil {
-		cond = " AND (s.created_at, s.id) > ($2, $3)"
+		cond += " AND (s.created_at, s.id) > ($3, $4)"
 		args = append(args, f.After.CreatedAt, f.After.ID)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT `+scopeColumns+` WHERE s.deleted_at IS NULL`+cond+` ORDER BY s.created_at, s.id LIMIT $1`, args...)
@@ -230,11 +235,20 @@ func scheduleArgs(sc discovery.Scope) (hours *int, start, end *string) {
 
 func nameTaken(err error) bool { return db.IsUniqueViolationOn(err, "discovery_scopes_name") }
 
-// CreateScope validates in (the settings' allowed networks and exclusions, then ALC-DSC-0010 for its host names) and
-// stores it canonical with the discovery.scope.created row in one transaction.
+// CreateScope is CreateScopeIn the Default service.
 func (s *Service) CreateScope(ctx context.Context, a Actor, in discovery.Scope) (ScopeView, error) {
+	return s.CreateScopeIn(ctx, a, in, uuid.Nil)
+}
+
+// CreateScopeIn validates in (the settings' allowed networks and exclusions, then ALC-DSC-0010 for its host names) and
+// stores it canonical with the discovery.scope.created row in one transaction, in the service named (R49; uuid.Nil: the
+// Default service; an unknown one is refused before any name is looked up).
+func (s *Service) CreateScopeIn(ctx context.Context, a Actor, in discovery.Scope, service uuid.UUID) (ScopeView, error) {
 	sc, err := s.validate(ctx, in)
 	if err != nil {
+		return ScopeView{}, err
+	}
+	if _, err := authz.ResolveService(ctx, s.pool, service); err != nil {
 		return ScopeView{}, err
 	}
 	if err := s.checkNames(ctx, in.Entries, sc.Entries, nil); err != nil {
@@ -244,11 +258,15 @@ func (s *Service) CreateScope(ctx context.Context, a Actor, in discovery.Scope) 
 	hours, start, end := scheduleArgs(sc)
 	var v ScopeView
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, `INSERT INTO discovery_scopes (id, name, entries, ports, sni_names, exclusions, enabled, schedule_hours, window_start,
-    window_end, window_tz, alert_on_expiry, rate_per_sec, concurrency, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::time, $10::time, $11, $12, $13, $14, $15, $16, $16)`, id, sc.Name, sc.Entries, sc.Ports,
+		service, err := authz.ResolveService(ctx, tx, service)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO discovery_scopes (id, name, entries, ports, sni_names, exclusions, enabled, schedule_hours, window_start,
+    window_end, window_tz, alert_on_expiry, rate_per_sec, concurrency, created_by, created_at, updated_at, service_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::time, $10::time, $11, $12, $13, $14, $15, $16, $16, $17)`, id, sc.Name, sc.Entries, sc.Ports,
 			nonNil(sc.SNINames), nonNil(sc.Exclusions), sc.Enabled, hours, start, end, sc.Schedule.TimeZone, sc.AlertOnExpiry, sc.RatePerSec,
-			sc.Concurrency, a.userRef(), now)
+			sc.Concurrency, a.userRef(), now, service)
 		switch {
 		case nameTaken(err):
 			return ErrNameTaken

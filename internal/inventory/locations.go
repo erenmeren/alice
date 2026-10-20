@@ -518,7 +518,7 @@ func (s *Service) reconcileLocations(ctx context.Context, tx pgx.Tx, t Target, s
 	now time.Time) (certSummary, []audit.Event, error) {
 	sum := certSummary{Skipped: scan.skipped, Certificates: len(scan.read)}
 	items := scan.items
-	certIDs, err := upsertCertificates(ctx, tx, scan.read, "discovered", now)
+	certIDs, err := upsertCertificates(ctx, tx, scan.read, "discovered", t.ServiceID, now)
 	if err != nil {
 		return certSummary{}, nil, err
 	}

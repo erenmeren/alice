@@ -311,6 +311,7 @@ type acmeOrderRow struct {
 	version         *int
 	names           []string
 	keyType, bundle string
+	service         uuid.UUID // the ACME certificate's service: an issued certificate goes there (R49, design §4.4)
 }
 
 // FinishACMEOrder stores the chain the CA issued for a running issue order (leaf first, DER, as acme.Client.Order
@@ -335,10 +336,10 @@ func (s *Service) FinishACMEOrder(ctx context.Context, orderID uuid.UUID, chainD
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var o acmeOrderRow
 		err := tx.QueryRow(ctx, `SELECT o.state, o.kind, o.acme_certificate_id, o.requested_by, o.pending_key_ct, o.pending_key_nonce,
-    o.pending_key_wrapped_dek, o.pending_key_version, c.names, c.key_type, p.ca_bundle_pem
+    o.pending_key_wrapped_dek, o.pending_key_version, c.names, c.key_type, p.ca_bundle_pem, c.service_id
 FROM acme_orders o JOIN acme_certificates c ON c.id = o.acme_certificate_id JOIN acme_providers p ON p.id = c.provider_id
 WHERE o.id = $1 FOR UPDATE OF o, c`, orderID).Scan(&o.state, &o.kind, &o.certificateID, &o.requestedBy, &o.env.Ciphertext, &o.env.Nonce,
-			&o.env.WrappedDEK, &o.version, &o.names, &o.keyType, &o.bundle)
+			&o.env.WrappedDEK, &o.version, &o.names, &o.keyType, &o.bundle, &o.service)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 			return ErrNotFound
@@ -384,7 +385,7 @@ func (s *Service) recordIssued(ctx context.Context, tx pgx.Tx, orderID uuid.UUID
 	if o.requestedBy != nil {
 		by = *o.requestedBy
 	}
-	placed, err := s.placeCertificate(ctx, tx, p, complete, true, "", "acme", by, func() (uuid.UUID, error) {
+	placed, err := s.placeCertificate(ctx, tx, p, complete, true, "", "acme", by, o.service, func() (uuid.UUID, error) {
 		return s.storeKey(ctx, tx, "certificate", key.DER, info, by)
 	})
 	out := ACMEIssued{CertificateID: placed.id, Fingerprint: p.Fingerprint, ChainComplete: placed.complete}

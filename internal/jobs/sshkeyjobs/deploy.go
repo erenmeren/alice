@@ -332,6 +332,7 @@ var deployRefusals = []struct {
 	{inventory.ErrTargetDisabled, "target.disabled"},
 	{inventory.ErrKeysManagedElsewhere, "ssh.keys_managed_elsewhere"},
 	{inventory.ErrSSHDUnreadable, "sshkey.sshd_unreadable"},
+	{inventory.ErrServiceUntrusted, inventory.ReasonServiceUntrusted}, // a trust removed after the request (R49)
 }
 
 // deployRefusal classifies an error of DeployJob: a refusal of the deploy's rules is permanent; a

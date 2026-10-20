@@ -95,6 +95,8 @@ var inventorySentinels = map[string]error{
 	"ErrACMEAutoDeployOff": inventory.ErrACMEAutoDeployOff, "ErrACMESuperseded": inventory.ErrACMESuperseded,
 	"ErrACMEDeployStopped": inventory.ErrACMEDeployStopped, "ErrACMEDeployHeld": inventory.ErrACMEDeployHeld,
 	"ErrACMENoBindings": inventory.ErrACMENoBindings, "ErrACMETooManyBindings": inventory.ErrACMETooManyBindings,
+	// Scoped access (R49): a deployment, binding, import or key deploy across services without a trust.
+	"ErrServiceUntrusted": inventory.ErrServiceUntrusted,
 }
 
 // engineOnlySentinels are returned only by the methods the deployment engine calls (StartDeployment,

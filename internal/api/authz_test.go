@@ -100,6 +100,12 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 
 	// Key-compromise incidents (2026-10-20): an Administrator's browser session with step-up, never a token.
 	rbac.CertificatesIncident: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+
+	// Scoped access (R49): services, environments, assignment and trusts change who may reach what: a global
+	// Administrator's browser session with step-up, never a token.
+	rbac.ServicesManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	rbac.ServicesAssign: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	rbac.ServicesTrust:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {
@@ -193,8 +199,12 @@ func authzMatrixDoc() string {
 	b.WriteString("must also allow the route). Step-up: a fresh verification code (5 minutes) is required.\n\n")
 	b.WriteString("In lock: whether the operation still works after the license (or the evaluation) has expired;\n")
 	b.WriteString("changes to managed systems are refused with ALC-LIC-0001 (spec R9).\n\n")
-	b.WriteString("| Method | Path | Permission | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |\n")
-	b.WriteString("|---|---|---|---|---|---|---|---|---|---|\n")
+	b.WriteString("Scope: how the operation meets scoped access (R49): platform (a global grant only), resource (the resource\n")
+	b.WriteString("the path names, by its service), list (filtered by the caller's services), create (the body's service_id),\n")
+	b.WriteString("cross (the source and the destination service), any (some grant), self (the caller's own records) or none (no\n")
+	b.WriteString("grant is involved). Until scoped role bindings exist every grant is global, so the scope changes no answer.\n\n")
+	b.WriteString("| Method | Path | Permission | Scope | Anonymous | Admin | Operator | Auditor | API token | Step-up | In lock |\n")
+	b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|\n")
 	for _, rt := range newServer(Deps{}).apiRoutes() {
 		pol, _ := rbac.PolicyFor(rt.perm)
 		anon := yesNo(pol.Anonymous)
@@ -215,8 +225,8 @@ func authzMatrixDoc() string {
 		if gated(rt.lic) {
 			inLock = "no"
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s |\n",
-			rt.method, rt.pattern, rt.perm, anon, role(rbac.Admin), role(rbac.Operator), role(rbac.Auditor), token, yesNo(pol.StepUp), inLock)
+		fmt.Fprintf(&b, "| %s | `%s` | `%s` | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+			rt.method, rt.pattern, rt.perm, rt.scope, anon, role(rbac.Admin), role(rbac.Operator), role(rbac.Auditor), token, yesNo(pol.StepUp), inLock)
 	}
 	b.WriteString(authzNotes)
 	return b.String()
@@ -318,6 +328,14 @@ for 45 minutes after 3 failed passwords within 30 minutes (attempts in flight co
 sign-in clears the failures). A directory user's step-up
 (` + "`POST /api/v1/auth/ldap/stepup`" + `) needs the user's own session and repeats the directory password for the stored sign-in
 name (and the authenticator code when the directory asks for MFA).
+
+**Services (R49).** Reading services, environments, service policies and trusts is ` + "`read`" + `. Creating, changing and deleting
+services and environments is ` + "`services.manage`" + `, moving resources to another service
+(` + "`POST /api/v1/services/{id}/actions/assign`" + `) is ` + "`services.assign`" + ` and making and removing trusts is ` + "`services.trust`" + `: each
+an Administrator's browser session with a fresh step-up, never an API token. They change only Alice's own records, so they work
+in lock. A deployment, a Key Vault or ACME binding, an import into a Key Vault and an SSH key deploy that would place a key owned
+by one service on a server or into a Key Vault of another service need a trust from the destination service to the source
+service (409 ALC-SVC-0007); the deployment engine and the automatic deployments check it again before they send.
 `
 
 func TestAuthzMatrixDocIsCurrent(t *testing.T) {
@@ -730,135 +748,135 @@ func TestSensitiveRoutesHaveTheirFixedPermissions(t *testing.T) {
 
 func TestRouteRuleViolationsCatchesWeakPermissions(t *testing.T) {
 	bad := []route{
-		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", perm: rbac.UsersRead},
-		{method: http.MethodGet, pattern: "/api/v1/users", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.Session},
-		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", perm: rbac.Read},
-		{method: http.MethodPut, pattern: "/api/v1/settings/locale", perm: rbac.Session},
-		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.Session},
-		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.Session},
-		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.Session},
-		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/license/status", perm: rbac.LicenseRead},
-		{method: http.MethodGet, pattern: "/api/v1/license", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/license/preview", perm: rbac.LicenseRead},
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.InventoryOperate},
-		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.TargetsManage},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", perm: rbac.TargetsManage},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", perm: rbac.HostKeysConfirm},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", perm: rbac.TargetsManage},
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", perm: rbac.InventoryOperate},
-		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.InventoryOperate},
-		{method: http.MethodGet, pattern: "/api/v1/jobs", perm: rbac.JobsConfirm},
-		{method: http.MethodGet, pattern: "/api/v1/providers", perm: rbac.Session},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", perm: rbac.InventoryOperate},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", perm: rbac.TargetsManage},
-		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", perm: rbac.CertificatesOperate},
-		{method: http.MethodGet, pattern: "/api/v1/deployments", perm: rbac.CertificatesOperate},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.CertificatesOperate},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.TargetsManage},
+		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", scope: scopeAny, perm: rbac.UsersRead},
+		{method: http.MethodGet, pattern: "/api/v1/users", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/tokens", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodDelete, pattern: "/api/v1/tokens/{id}", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPut, pattern: "/api/v1/settings/locale", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/setup/complete", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodGet, pattern: "/api/v1/audit/export", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/license/status", scope: scopeAny, perm: rbac.LicenseRead},
+		{method: http.MethodGet, pattern: "/api/v1/license", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/license/preview", scope: scopeAny, perm: rbac.LicenseRead},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.InventoryOperate},
+		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", scope: scopeAny, perm: rbac.HostKeysConfirm},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", scope: scopeAny, perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", scope: scopeAny, perm: rbac.InventoryOperate},
+		{method: http.MethodGet, pattern: "/api/v1/jobs", scope: scopeAny, perm: rbac.JobsConfirm},
+		{method: http.MethodGet, pattern: "/api/v1/providers", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", scope: scopeAny, perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/deployments", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", scope: scopeAny, perm: rbac.TargetsManage},
 		// Phase 5: a weaker permission on what moves a key or switches automatic deployment.
-		{method: http.MethodPost, pattern: "/api/v1/key-vaults", perm: rbac.TargetsManage},
-		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/vault-credentials", perm: rbac.TargetsManage},
-		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", perm: rbac.CertificatesOperate},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/actions/import-to-key-vault", perm: rbac.CertificatesOperate},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release", perm: rbac.CertificatesOperate},
-		{method: http.MethodPost, pattern: "/api/v1/bindings", perm: rbac.CredentialsManage},
-		{method: http.MethodGet, pattern: "/api/v1/bindings/{id}", perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/key-vaults", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/vault-credentials", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/actions/import-to-key-vault", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/bindings", scope: scopeAny, perm: rbac.CredentialsManage},
+		{method: http.MethodGet, pattern: "/api/v1/bindings/{id}", scope: scopeAny, perm: rbac.CertificatesOperate},
 		// Phase 6: a private key or a change on servers behind a weaker permission.
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", perm: rbac.InventoryOperate},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/enable", perm: rbac.RotationManage},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/run", perm: rbac.RotationManage},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/keep-old", perm: rbac.RotationManage},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", perm: rbac.RotationOperate},
-		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.InventoryOperate},
-		{method: http.MethodGet, pattern: "/api/v1/rotation/runs", perm: rbac.RotationManage},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", scope: scopeAny, perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/enable", scope: scopeAny, perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/run", scope: scopeAny, perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/keep-old", scope: scopeAny, perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", scope: scopeAny, perm: rbac.RotationOperate},
+		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", scope: scopeAny, perm: rbac.InventoryOperate},
+		{method: http.MethodGet, pattern: "/api/v1/rotation/runs", scope: scopeAny, perm: rbac.RotationManage},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", scope: scopeAny, perm: rbac.Read},
 		// Phase 7: settings behind less than settings.manage, the dashboard behind more than read, views for tokens.
-		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/test", perm: rbac.Session},
-		{method: http.MethodGet, pattern: "/api/v1/settings/smtp", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/dashboard/summary", perm: rbac.AuditRead},
-		{method: http.MethodGet, pattern: "/api/v1/notifications/status", perm: rbac.SettingsManage},
-		{method: http.MethodGet, pattern: "/api/v1/alerts", perm: rbac.Session},
-		{method: http.MethodPost, pattern: "/api/v1/views", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/export", perm: rbac.AuditRead},
-		{method: http.MethodPost, pattern: "/api/v1/sso/providers", perm: rbac.SettingsManage},
-		{method: http.MethodGet, pattern: "/api/v1/sso/settings", perm: rbac.UsersRead},
-		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/stepup", perm: rbac.SessionStepUp},
-		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/{id}/callback", perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/settings/smtp/actions/test", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodGet, pattern: "/api/v1/settings/smtp", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/dashboard/summary", scope: scopeAny, perm: rbac.AuditRead},
+		{method: http.MethodGet, pattern: "/api/v1/notifications/status", scope: scopeAny, perm: rbac.SettingsManage},
+		{method: http.MethodGet, pattern: "/api/v1/alerts", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/views", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/export", scope: scopeAny, perm: rbac.AuditRead},
+		{method: http.MethodPost, pattern: "/api/v1/sso/providers", scope: scopeAny, perm: rbac.SettingsManage},
+		{method: http.MethodGet, pattern: "/api/v1/sso/settings", scope: scopeAny, perm: rbac.UsersRead},
+		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/stepup", scope: scopeAny, perm: rbac.SessionStepUp},
+		{method: http.MethodGet, pattern: "/api/v1/auth/oidc/{id}/callback", scope: scopeAny, perm: rbac.Session},
 		// ACME: a definition, provider, hook or account behind acme.operate, an order behind acme.manage, a read behind more.
-		{method: http.MethodPost, pattern: "/api/v1/acme/certificates", perm: rbac.AcmeOperate},
-		{method: http.MethodPatch, pattern: "/api/v1/acme/certificates/{id}", perm: rbac.AcmeOperate},
-		{method: http.MethodPost, pattern: "/api/v1/acme/providers", perm: rbac.AcmeOperate},
-		{method: http.MethodPost, pattern: "/api/v1/acme/accounts/{id}/rollover", perm: rbac.AcmeOperate},
-		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/rearm", perm: rbac.AcmeOperate},
-		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/order", perm: rbac.AcmeManage},
-		{method: http.MethodPut, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/acme/certificates", perm: rbac.AcmeOperate},
-		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/preview", perm: rbac.AcmeView},
-		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/account", perm: rbac.AcmePreview},
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodPatch, pattern: "/api/v1/acme/certificates/{id}", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/providers", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/accounts/{id}/rollover", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/rearm", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/order", scope: scopeAny, perm: rbac.AcmeManage},
+		{method: http.MethodPut, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/acme/certificates", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/preview", scope: scopeAny, perm: rbac.AcmeView},
+		{method: http.MethodPost, pattern: "/api/v1/acme/providers/{id}/account", scope: scopeAny, perm: rbac.AcmePreview},
 		// Network discovery: a scope behind operate, a scan start behind view, a read behind manage, the settings behind operate.
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", perm: rbac.DiscoveryOperate},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/{id}/scans", perm: rbac.DiscoveryView},
-		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates", perm: rbac.DiscoveryManage},
-		{method: http.MethodGet, pattern: "/api/v1/discovery/endpoints", perm: rbac.Read},
-		{method: http.MethodPut, pattern: "/api/v1/discovery/settings", perm: rbac.DiscoveryOperate},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", perm: rbac.DiscoveryManage},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes", scope: scopeAny, perm: rbac.DiscoveryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/{id}/scans", scope: scopeAny, perm: rbac.DiscoveryView},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/certificates", scope: scopeAny, perm: rbac.DiscoveryManage},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/endpoints", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPut, pattern: "/api/v1/discovery/settings", scope: scopeAny, perm: rbac.DiscoveryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", scope: scopeAny, perm: rbac.DiscoveryManage},
 	}
 	assert.Len(t, routeRuleViolations(bad), len(bad))
 	good := []route{
-		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", perm: rbac.UsersManage},
-		{method: http.MethodGet, pattern: "/api/v1/users/{id}", perm: rbac.UsersRead},
-		{method: http.MethodPost, pattern: "/api/v1/tokens", perm: rbac.SessionStepUp},
-		{method: http.MethodGet, pattern: "/api/v1/tokens", perm: rbac.Session},
-		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", perm: rbac.SettingsManage},
-		{method: http.MethodPost, pattern: "/api/v1/setup/complete", perm: rbac.SettingsManage},
-		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", perm: rbac.SettingsManage},
-		{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead},
-		{method: http.MethodGet, pattern: "/api/v1/usersettings", perm: rbac.Session},
-		{method: http.MethodGet, pattern: "/api/v1/license/status", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/license", perm: rbac.LicenseRead},
-		{method: http.MethodPost, pattern: "/api/v1/license", perm: rbac.LicenseManage},
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.TargetsManage},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", perm: rbac.InventoryOperate},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", perm: rbac.HostKeysRepin},
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", perm: rbac.TargetsManage},
-		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", perm: rbac.JobsConfirm},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", perm: rbac.CertificatesOperate},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", perm: rbac.CertificatesOperate},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", perm: rbac.CertificatesOperate},
-		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", perm: rbac.TargetsManage},
-		{method: http.MethodGet, pattern: "/api/v1/deployments", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/key-vaults", perm: rbac.CredentialsManage},
-		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", perm: rbac.CredentialsManage},
-		{method: http.MethodPost, pattern: "/api/v1/bindings", perm: rbac.CertificatesOperate},
-		{method: http.MethodGet, pattern: "/api/v1/certificate-locations", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", perm: rbac.SSHKeysDownload},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/enable", perm: rbac.RotationOperate},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/disable", perm: rbac.RotationManage},
-		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", perm: rbac.RotationManage},
-		{method: http.MethodGet, pattern: "/api/v1/rotation/runs/{id}", perm: rbac.Read},
-		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", perm: rbac.RotationManage},
-		{method: http.MethodPut, pattern: "/api/v1/settings/general", perm: rbac.SettingsManage},
-		{method: http.MethodGet, pattern: "/api/v1/dashboard/expiring", perm: rbac.Read},
-		{method: http.MethodDelete, pattern: "/api/v1/views/{id}", perm: rbac.Session},
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", perm: rbac.Read},
-		{method: http.MethodDelete, pattern: "/api/v1/sso/group-mappings/{id}", perm: rbac.SSOManage},
-		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/{id}/start", perm: rbac.Public},
-		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/test", perm: rbac.AcmeOperate},
-		{method: http.MethodDelete, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", perm: rbac.AcmeOperate},
-		{method: http.MethodDelete, pattern: "/api/v1/acme/hooks/{id}", perm: rbac.AcmeManage},
-		{method: http.MethodGet, pattern: "/api/v1/acme/hooks/{id}", perm: rbac.AcmeView},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", perm: rbac.DiscoveryManage},
-		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", perm: rbac.DiscoveryOperate},
-		{method: http.MethodGet, pattern: "/api/v1/discovery/settings", perm: rbac.DiscoveryView},
+		{method: http.MethodPatch, pattern: "/api/v1/users/{id}", scope: scopeAny, perm: rbac.UsersManage},
+		{method: http.MethodGet, pattern: "/api/v1/users/{id}", scope: scopeAny, perm: rbac.UsersRead},
+		{method: http.MethodPost, pattern: "/api/v1/tokens", scope: scopeAny, perm: rbac.SessionStepUp},
+		{method: http.MethodGet, pattern: "/api/v1/tokens", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodPost, pattern: "/api/v1/setup/recovery-passphrase", scope: scopeAny, perm: rbac.SettingsManage},
+		{method: http.MethodPost, pattern: "/api/v1/setup/complete", scope: scopeAny, perm: rbac.SettingsManage},
+		{method: http.MethodPost, pattern: "/api/v1/setup/evaluation", scope: scopeAny, perm: rbac.SettingsManage},
+		{method: http.MethodPost, pattern: "/api/v1/audit/verify", scope: scopeAny, perm: rbac.AuditRead},
+		{method: http.MethodGet, pattern: "/api/v1/usersettings", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodGet, pattern: "/api/v1/license/status", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/license", scope: scopeAny, perm: rbac.LicenseRead},
+		{method: http.MethodPost, pattern: "/api/v1/license", scope: scopeAny, perm: rbac.LicenseManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", scope: scopeAny, perm: rbac.InventoryOperate},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", scope: scopeAny, perm: rbac.HostKeysRepin},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", scope: scopeAny, perm: rbac.JobsConfirm},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", scope: scopeAny, perm: rbac.TargetsManage},
+		{method: http.MethodGet, pattern: "/api/v1/deployments", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/key-vaults", scope: scopeAny, perm: rbac.CredentialsManage},
+		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", scope: scopeAny, perm: rbac.CredentialsManage},
+		{method: http.MethodPost, pattern: "/api/v1/bindings", scope: scopeAny, perm: rbac.CertificatesOperate},
+		{method: http.MethodGet, pattern: "/api/v1/certificate-locations", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", scope: scopeAny, perm: rbac.SSHKeysDownload},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/enable", scope: scopeAny, perm: rbac.RotationOperate},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/policies/{id}/actions/disable", scope: scopeAny, perm: rbac.RotationManage},
+		{method: http.MethodPatch, pattern: "/api/v1/rotation/policies/{id}", scope: scopeAny, perm: rbac.RotationManage},
+		{method: http.MethodGet, pattern: "/api/v1/rotation/runs/{id}", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/rotation/runs/{id}/actions/abort", scope: scopeAny, perm: rbac.RotationManage},
+		{method: http.MethodPut, pattern: "/api/v1/settings/general", scope: scopeAny, perm: rbac.SettingsManage},
+		{method: http.MethodGet, pattern: "/api/v1/dashboard/expiring", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodDelete, pattern: "/api/v1/views/{id}", scope: scopeAny, perm: rbac.Session},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodDelete, pattern: "/api/v1/sso/group-mappings/{id}", scope: scopeAny, perm: rbac.SSOManage},
+		{method: http.MethodPost, pattern: "/api/v1/auth/oidc/{id}/start", scope: scopeAny, perm: rbac.Public},
+		{method: http.MethodPost, pattern: "/api/v1/acme/certificates/{id}/test", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodDelete, pattern: "/api/v1/acme/certificates/{id}/bindings/{location_id}", scope: scopeAny, perm: rbac.AcmeOperate},
+		{method: http.MethodDelete, pattern: "/api/v1/acme/hooks/{id}", scope: scopeAny, perm: rbac.AcmeManage},
+		{method: http.MethodGet, pattern: "/api/v1/acme/hooks/{id}", scope: scopeAny, perm: rbac.AcmeView},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scopes/preview", scope: scopeAny, perm: rbac.DiscoveryManage},
+		{method: http.MethodPost, pattern: "/api/v1/discovery/scans/{id}/cancel", scope: scopeAny, perm: rbac.DiscoveryOperate},
+		{method: http.MethodGet, pattern: "/api/v1/discovery/settings", scope: scopeAny, perm: rbac.DiscoveryView},
 	}
 	assert.Empty(t, routeRuleViolations(good))
 }
@@ -870,7 +888,10 @@ var (
 		// Phase 7 (C13): the Dashboard, its conditions and the delivery state are reads; saved views change nothing outside Alice.
 		"/api/v1/dashboard", "/api/v1/alerts", "/api/v1/views", "/api/v1/notifications", "/api/v1/sso",
 		// Directory sign-in (Task 5): platform administration like single sign-on's.
-		"/api/v1/ldap"}
+		"/api/v1/ldap",
+		// Scoped access (R49): services, environments and trusts are Alice's own records; moving a resource to another
+		// service changes no managed system.
+		"/api/v1/services", "/api/v1/environments", "/api/v1/service-trusts"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings",
 		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.
@@ -962,21 +983,21 @@ func TestEveryStateChangingRouteDeclaresALicenseClass(t *testing.T) {
 
 func TestLockRuleViolationsCatchesMistakes(t *testing.T) {
 	bad := []route{
-		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage},
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassAlways},
-		{method: http.MethodDelete, pattern: "/api/v1/ssh-keys/{id}", perm: rbac.Read, lic: license.ClassAlways},
-		{method: http.MethodPost, pattern: "/api/v1/license", perm: rbac.LicenseManage, lic: license.ClassChange},
-		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/users", scope: scopeAny, perm: rbac.UsersManage},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.Read, lic: license.ClassAlways},
+		{method: http.MethodDelete, pattern: "/api/v1/ssh-keys/{id}", scope: scopeAny, perm: rbac.Read, lic: license.ClassAlways},
+		{method: http.MethodPost, pattern: "/api/v1/license", scope: scopeAny, perm: rbac.LicenseManage, lic: license.ClassChange},
+		{method: http.MethodGet, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.Read, lic: license.ClassChange},
 		// Carry 1: a group in neither list, a gated public route, an ungated infrastructure route.
-		{method: http.MethodPost, pattern: "/api/v1/widgets", perm: rbac.Read, lic: license.ClassAlways},
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Public, lic: license.ClassChange},
-		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", perm: rbac.Read, lic: license.ClassAlways},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.Setup, lic: license.ClassReadOnly},
+		{method: http.MethodPost, pattern: "/api/v1/widgets", scope: scopeAny, perm: rbac.Read, lic: license.ClassAlways},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.Public, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", scope: scopeAny, perm: rbac.Read, lic: license.ClassAlways},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", scope: scopeAny, perm: rbac.Setup, lic: license.ClassReadOnly},
 		// Fix wave C-9: a gated route of a pending sign-in, and permissions the policy table does
 		// not know (otherwise valid routes, so the unknown permission is their only violation).
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.MFAPending, lic: license.ClassChange},
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: "targets.nonexistent", lic: license.ClassChange},
-		{method: http.MethodGet, pattern: "/api/v1/targets", perm: "targets.nonexistent"},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.MFAPending, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: "targets.nonexistent", lic: license.ClassChange},
+		{method: http.MethodGet, pattern: "/api/v1/targets", scope: scopeAny, perm: "targets.nonexistent"},
 	}
 	for _, rt := range bad {
 		assert.Len(t, lockRuleViolations([]route{rt}), 1, "%s %s", rt.method, rt.pattern)
@@ -984,16 +1005,16 @@ func TestLockRuleViolationsCatchesMistakes(t *testing.T) {
 	// A route group in both lock lists is a mistake in the lists themselves.
 	saved := lockAvailable
 	lockAvailable = append(append([]string{}, saved...), "/api/v1/targets")
-	both := lockRuleViolations([]route{{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange}})
+	both := lockRuleViolations([]route{{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.Read, lic: license.ClassChange}})
 	lockAvailable = saved
 	assert.Equal(t, []string{"POST /api/v1/targets: route group is in both lock lists"}, both)
 	good := []route{
-		{method: http.MethodPost, pattern: "/api/v1/targets", perm: rbac.Read, lic: license.ClassChange},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", perm: rbac.Read, lic: license.ClassReadOnly},
-		{method: http.MethodPost, pattern: "/api/v1/users", perm: rbac.UsersManage, lic: license.ClassAlways},
-		{method: http.MethodPost, pattern: "/api/v1/setup/session", perm: rbac.Public, lic: license.ClassAlways},
-		{method: http.MethodGet, pattern: "/api/v1/targets", perm: rbac.Read},
-		{method: http.MethodGet, pattern: "/api/v1/widgets", perm: rbac.Read},
+		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.Read, lic: license.ClassChange},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", scope: scopeAny, perm: rbac.Read, lic: license.ClassReadOnly},
+		{method: http.MethodPost, pattern: "/api/v1/users", scope: scopeAny, perm: rbac.UsersManage, lic: license.ClassAlways},
+		{method: http.MethodPost, pattern: "/api/v1/setup/session", scope: scopeAny, perm: rbac.Public, lic: license.ClassAlways},
+		{method: http.MethodGet, pattern: "/api/v1/targets", scope: scopeAny, perm: rbac.Read},
+		{method: http.MethodGet, pattern: "/api/v1/widgets", scope: scopeAny, perm: rbac.Read},
 	}
 	assert.Empty(t, lockRuleViolations(good))
 }

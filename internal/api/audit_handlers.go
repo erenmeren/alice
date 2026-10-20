@@ -23,9 +23,9 @@ import (
 // auditRoutes expose the audit log to Administrators and Auditors (SEC-070..075).
 func (s *server) auditRoutes() []route {
 	return []route{
-		{method: http.MethodGet, pattern: "/api/v1/audit", perm: rbac.AuditRead, handler: s.listAudit},
-		{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.AuditRead, getOnly: true, handler: s.exportAudit},
-		{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead, lic: license.ClassAlways, handler: s.verifyAudit},
+		{method: http.MethodGet, pattern: "/api/v1/audit", scope: scopePlatform, perm: rbac.AuditRead, handler: s.listAudit},
+		{method: http.MethodGet, pattern: "/api/v1/audit/export", scope: scopePlatform, perm: rbac.AuditRead, getOnly: true, handler: s.exportAudit},
+		{method: http.MethodPost, pattern: "/api/v1/audit/verify", scope: scopePlatform, perm: rbac.AuditRead, lic: license.ClassAlways, handler: s.verifyAudit},
 	}
 }
 
@@ -199,8 +199,8 @@ func extendWriteDeadline(w http.ResponseWriter) {
 }
 
 var (
-	exportRoute = route{method: http.MethodGet, pattern: "/api/v1/audit/export", perm: rbac.AuditRead}
-	verifyRoute = route{method: http.MethodPost, pattern: "/api/v1/audit/verify", perm: rbac.AuditRead}
+	exportRoute = route{method: http.MethodGet, pattern: "/api/v1/audit/export", scope: scopePlatform, perm: rbac.AuditRead}
+	verifyRoute = route{method: http.MethodPost, pattern: "/api/v1/audit/verify", scope: scopePlatform, perm: rbac.AuditRead}
 )
 
 func (s *server) verifyAudit(w http.ResponseWriter, r *http.Request) {
