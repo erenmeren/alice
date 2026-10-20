@@ -603,7 +603,8 @@ func TestF84OlderSchemaMigratesForward(t *testing.T) {
 	old, err := db.Open(e.ctx, oldURL)
 	require.NoError(t, err)
 	defer old.Close()
-	require.NoError(t, db.MigrateTo(e.ctx, old, migrations.FS, latest-1))
+	previous := pgtest.PreviousVersion(t)
+	require.NoError(t, db.MigrateTo(e.ctx, old, migrations.FS, previous))
 
 	keysDir, stateDir, dir := t.TempDir(), t.TempDir(), t.TempDir()
 	k, err := secrets.LoadOrCreateMasterKey(e.ctx, old, keysDir, e.clk.Now())
@@ -639,7 +640,7 @@ VALUES (1, $1, $2, 'evaluation', $2, $3)`, id, at, backup.InstallationSeal(k, id
 
 	o, res, err := e.restoreElsewhere(path, target, nil)
 	require.NoError(t, err)
-	assert.Equal(t, latest-1, res.Manifest.SchemaVersion)
+	assert.Equal(t, previous, res.Manifest.SchemaVersion)
 	v, err := db.SchemaVersion(e.ctx, o.db.Owner)
 	require.NoError(t, err)
 	assert.Equal(t, latest, v)

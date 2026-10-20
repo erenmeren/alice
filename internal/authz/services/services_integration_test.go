@@ -126,7 +126,7 @@ func TestServicesLifecycle(t *testing.T) {
 	assert.Equal(t, 1, pay.PolicyVersion)
 	p, err := w.store.Policy(ctx, pay.ID)
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"schema":1}`, string(p.Body))
+	assert.JSONEq(t, `{"schema":1}`, string(p.Document))
 	assert.Equal(t, "Ada", p.CreatedByName)
 	versions, err := w.store.PolicyVersions(ctx, pay.ID)
 	require.NoError(t, err)

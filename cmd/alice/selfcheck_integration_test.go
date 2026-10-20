@@ -17,9 +17,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"alice/internal/platform/db"
 	"alice/internal/platform/settings"
 	"alice/internal/platform/tlscert"
+	"alice/internal/testutil/pgtest"
 	"alice/migrations"
 )
 
@@ -119,14 +119,12 @@ func TestSelfcheckReportsEachFailure(t *testing.T) {
 	t.Run("schema one behind", func(t *testing.T) {
 		i := newCLIInstall(t)
 		i.listening()
-		latest, err := db.LatestVersion(migrations.FS)
-		require.NoError(t, err)
 		// 00012's down migration refuses while a sender key exists.
-		_, err = i.d.Owner.Exec(i.ctx, "DELETE FROM setting_secrets WHERE key = 'backup.sender'")
+		_, err := i.d.Owner.Exec(i.ctx, "DELETE FROM setting_secrets WHERE key = 'backup.sender'")
 		require.NoError(t, err)
 		p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(i.d.Owner), migrations.FS)
 		require.NoError(t, err)
-		_, err = p.DownTo(i.ctx, latest-1)
+		_, err = p.DownTo(i.ctx, pgtest.PreviousVersion(t))
 		require.NoError(t, err)
 		assert.Regexp(t, `^\[FAIL\] Database schema is current \(version [0-9]+\): this Alice needs version [0-9]+$`,
 			failLine(t, i, "[FAIL] Database schema is current"))

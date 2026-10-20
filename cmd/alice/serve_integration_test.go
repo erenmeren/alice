@@ -124,7 +124,8 @@ func TestServeRefusesAStaleSchemaWhenMigrationsAreExternal(t *testing.T) {
 	require.NoError(t, err)
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
 	require.NoError(t, err)
-	_, err = p.DownTo(ctx, latest-1)
+	previous := pgtest.PreviousVersion(t)
+	_, err = p.DownTo(ctx, previous)
 	require.NoError(t, err)
 
 	cfg := externalConfig(t, d, "127.0.0.1:0")
@@ -134,12 +135,12 @@ func TestServeRefusesAStaleSchemaWhenMigrationsAreExternal(t *testing.T) {
 	err = serve(runCtx, cfg, logging.New(logs, slog.LevelInfo))
 	require.Error(t, err)
 	assert.Equal(t, fmt.Sprintf("database schema is at version %d but this Alice needs %d: run the migrate service first "+
-		"(docker compose run --rm migrate)", latest-1, latest), err.Error())
+		"(docker compose run --rm migrate)", previous, latest), err.Error())
 	assert.NotContains(t, logs.String(), "alice is ready")
 
 	v, err := db.SchemaVersion(ctx, d.Owner)
 	require.NoError(t, err)
-	assert.Equal(t, latest-1, v, "serve applied nothing")
+	assert.Equal(t, previous, v, "serve applied nothing")
 
 	// The same through the command line: exit 1, the message in the log.
 	code, _, errOut := runCLI(t, env(map[string]string{
@@ -185,7 +186,7 @@ func TestMigrateCommandNeedsOnlyTheOwnerURL(t *testing.T) {
 	require.NoError(t, err)
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
 	require.NoError(t, err)
-	_, err = p.DownTo(ctx, latest-1)
+	_, err = p.DownTo(ctx, pgtest.PreviousVersion(t))
 	require.NoError(t, err)
 
 	code, out, errOut := runCLI(t, env(map[string]string{"ALICE_MIGRATE_DATABASE_URL": d.OwnerURL}), "migrate")

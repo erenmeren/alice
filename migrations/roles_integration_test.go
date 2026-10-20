@@ -183,7 +183,8 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.certificates": {"UPDATE": {"chain_complete", "compromised_at", "compromised_by", "label", "last_seen_at", "pem_chain", "private_key_id",
 		"revocation_reason", "revoked_at", "revoked_by", "service_id", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "service_id", "status"}},
-	"public.certificate_locations": {"UPDATE": {"binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
+	// 00025 adds the binding attention mark (a website whose service does not accept the vault's keys, R49).
+	"public.certificate_locations": {"UPDATE": {"binding_attention_at", "binding_attention_code", "binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
 		"deployed_fingerprint", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
 		"unsupported_reason", "verify_port", "verify_sni", "version", "warnings"}},
@@ -253,7 +254,7 @@ var appTableGrants = []string{"DELETE", "INSERT", "SELECT", "UPDATE"}
 
 // serviceColumnTables are the relations whose service columns (00025) the application may update.
 var serviceColumnTables = []string{"public.targets", "public.certificates", "public.csr_requests", "public.ssh_keys", "public.acme_certificates",
-	"public.discovery_scopes", "public.rotation_policies"}
+	"public.discovery_scopes", "public.rotation_policies", "public.certificate_locations"}
 
 // grantProblems returns every schema or relation whose effective alice_app privileges
 // (direct, through PUBLIC or role membership) differ from the explicit sets above.
@@ -354,7 +355,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 		if !services && slices.Contains(serviceColumnTables, name) {
 			// Below 00025 there is no owning service to move and no approval to record.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
-				return c == "service_id" || c == "approved_service_ids"
+				return c == "service_id" || c == "approved_service_ids" || strings.HasPrefix(c, "binding_attention_")
 			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {

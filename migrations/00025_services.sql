@@ -174,16 +174,26 @@ GRANT UPDATE (approved_service_ids) ON rotation_policies TO alice_app;
 -- NULL: the owner's whole reach; otherwise a narrowing to these services.
 ALTER TABLE api_tokens ADD COLUMN service_ids uuid[] CHECK (cardinality(service_ids) BETWEEN 1 AND 50);
 
+-- A Key Vault binding's website whose server's service does not accept the vault's keys (no trust, design §5.6): the
+-- automatic deployment planner marks it service.untrusted (its notice goes out when the mark is set) and clears it when
+-- a trust allows it again or the website leaves the binding. An ACME binding has its own mark (acme_bindings).
+ALTER TABLE certificate_locations ADD COLUMN binding_attention_code text NOT NULL DEFAULT ''
+    CHECK (binding_attention_code ~ '^[A-Za-z0-9._-]{0,100}$');
+ALTER TABLE certificate_locations ADD COLUMN binding_attention_at timestamptz;
+ALTER TABLE certificate_locations ADD CONSTRAINT certificate_locations_binding_attention
+    CHECK ((binding_attention_at IS NULL) = (binding_attention_code = ''));
+GRANT UPDATE (binding_attention_code, binding_attention_at) ON certificate_locations TO alice_app;
+
 -- People without a global role (scoped bindings only) and automation accounts: a non-person that never signs in and only
--- holds API tokens; never the break-glass account, never a global Administrator. The break-glass account is always a
--- global Administrator.
+-- holds API tokens; never the break-glass account, never a global Administrator. (The design's "break-glass account is
+-- always a global Administrator" CHECK is not added: today another Administrator may demote it, and Phase 1 changes
+-- nobody's rights.)
 ALTER TABLE users ALTER COLUMN role DROP NOT NULL;
 ALTER TABLE users ADD COLUMN description text NOT NULL DEFAULT '' CHECK (char_length(description) <= 500);
 ALTER TABLE users DROP CONSTRAINT users_auth_source_check;
 ALTER TABLE users ADD CONSTRAINT users_auth_source_check CHECK (auth_source IN ('local', 'oidc', 'ldap', 'automation'));
 ALTER TABLE users ADD CONSTRAINT users_automation_not_person CHECK (auth_source <> 'automation'
     OR (password_hash IS NULL AND NOT is_break_glass AND role_source = 'manual' AND (role IS NULL OR role IN ('operator', 'auditor'))));
-ALTER TABLE users ADD CONSTRAINT users_break_glass_admin CHECK (NOT is_break_glass OR role = 'admin');
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON environments, services, directory_groups, user_directory_groups, role_bindings,
     service_trusts, service_owners TO alice_app;
@@ -205,12 +215,15 @@ END $$;
 REVOKE SELECT, INSERT ON service_policies FROM alice_app;
 REVOKE SELECT, INSERT, UPDATE, DELETE ON environments, services, directory_groups, user_directory_groups, role_bindings,
     service_trusts, service_owners FROM alice_app;
-ALTER TABLE users DROP CONSTRAINT users_break_glass_admin;
 ALTER TABLE users DROP CONSTRAINT users_automation_not_person;
 ALTER TABLE users DROP CONSTRAINT users_auth_source_check;
 ALTER TABLE users ADD CONSTRAINT users_auth_source_check CHECK (auth_source IN ('local', 'oidc', 'ldap'));
 ALTER TABLE users DROP COLUMN description;
 ALTER TABLE users ALTER COLUMN role SET NOT NULL;
+REVOKE UPDATE (binding_attention_code, binding_attention_at) ON certificate_locations FROM alice_app;
+ALTER TABLE certificate_locations DROP CONSTRAINT certificate_locations_binding_attention;
+ALTER TABLE certificate_locations DROP COLUMN binding_attention_at;
+ALTER TABLE certificate_locations DROP COLUMN binding_attention_code;
 ALTER TABLE api_tokens DROP COLUMN service_ids;
 REVOKE UPDATE (approved_service_ids) ON rotation_policies FROM alice_app;
 ALTER TABLE rotation_policies DROP COLUMN approved_service_ids;

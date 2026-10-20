@@ -134,7 +134,7 @@ func (s Service) Ref() authz.ServiceRef {
 // Policy is one version of a service's policy (version 1 is the empty policy {"schema":1}; Phase 5 writes later ones).
 type Policy struct {
 	Version       int
-	Body          json.RawMessage
+	Document      json.RawMessage
 	CreatedBy     *uuid.UUID
 	CreatedByName string
 	CreatedAt     time.Time
@@ -282,7 +282,7 @@ func environmentKeyRE(k string) bool {
 	}
 	for i := 1; i < len(k); i++ {
 		c := k[i]
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
 			return false
 		}
 	}
@@ -690,6 +690,6 @@ func scanPolicy(r pgx.CollectableRow) (Policy, error) {
 	var p Policy
 	var body []byte
 	err := r.Scan(&p.Version, &body, &p.CreatedBy, &p.CreatedByName, &p.CreatedAt)
-	p.Body = body
+	p.Document = body
 	return p, err
 }

@@ -428,7 +428,7 @@ func TestCLIMigrateToLatest(t *testing.T) {
 	require.NoError(t, err)
 	p, err := goose.NewProvider(goose.DialectPostgres, stdlib.OpenDBFromPool(d.Owner), migrations.FS)
 	require.NoError(t, err)
-	_, err = p.DownTo(ctx, latest-1)
+	_, err = p.DownTo(ctx, pgtest.PreviousVersion(t))
 	require.NoError(t, err)
 	code, out, errOut := runCLI(t, env(map[string]string{"ALICE_MIGRATE_DATABASE_URL": d.OwnerURL}), "migrate", "--to-latest")
 	require.Equal(t, 0, code, errOut)

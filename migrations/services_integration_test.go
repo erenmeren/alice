@@ -232,11 +232,12 @@ func TestMigration00025ServiceConstraints(t *testing.T) {
 	require.NoError(t, exec(t, d.App, "UPDATE certificates SET service_id = $2 WHERE id = $1", w.cert, payments))
 	assert.Equal(t, "23503", sqlState(exec(t, d.App, "DELETE FROM services WHERE id = $1", payments)), "a service with resources is kept")
 
-	// Users: a role may be absent; automation accounts are no people; the break-glass account is a global Administrator.
+	// Users: a role may be absent; automation accounts are no people; the break-glass account may still be demoted (as
+	// today: Phase 1 changes nobody's rights).
 	user := seedUser(t, d, "Grace", "grace@example.test")
 	require.NoError(t, exec(t, d.App, "UPDATE users SET role = NULL WHERE id = $1", user))
 	require.NoError(t, exec(t, d.App, "UPDATE users SET role = 'admin', is_break_glass = true WHERE id = $1", user))
-	assert.Equal(t, checkViolation, sqlState(exec(t, d.App, "UPDATE users SET role = 'operator' WHERE id = $1", user)))
+	require.NoError(t, exec(t, d.App, "UPDATE users SET role = 'operator' WHERE id = $1", user))
 	automation := func(role any, password any) error {
 		return exec(t, d.App, `INSERT INTO users (id, username, display_name, auth_source, role, password_hash, created_at, updated_at)
 VALUES ($1, $2, 'Bot', 'automation', $3, $4, now(), now())`, uuid.New(), "bot-"+uuid.NewString()[:8], role, password)

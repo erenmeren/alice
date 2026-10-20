@@ -12,8 +12,12 @@ package pgtest
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
+	"slices"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -142,4 +146,31 @@ func withDatabase(base, name string, user *url.Userinfo) string {
 		u.User = user
 	}
 	return u.String()
+}
+
+// PreviousVersion is the version of the migration before the latest one: tests that go one migration down use it, so
+// a gap in the numbering (a version another branch takes) does not break them.
+func PreviousVersion(t testing.TB) int64 {
+	t.Helper()
+	entries, err := fs.ReadDir(migrations.FS, ".")
+	if err != nil {
+		t.Fatalf("pgtest: read the migrations: %v", err)
+	}
+	var versions []int64
+	for _, e := range entries {
+		head, _, ok := strings.Cut(e.Name(), "_")
+		if !ok || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		v, err := strconv.ParseInt(head, 10, 64)
+		if err != nil {
+			t.Fatalf("pgtest: migration %s has no version number", e.Name())
+		}
+		versions = append(versions, v)
+	}
+	slices.Sort(versions)
+	if len(versions) < 2 {
+		t.Fatal("pgtest: fewer than two migrations")
+	}
+	return versions[len(versions)-2]
 }
