@@ -44,7 +44,7 @@ deployment"), `docs/troubleshooting.md` (ALC-DEP-0026) and `docs/nginx-host-prep
 - `alice-helper` 1.10.0 (protocol 11): `tls-probe` answers `chain` (standard base64 DER, leaf first; at most 20
   certificates and 64 KiB of DER, else omitted). Alice reads at most 128 KiB of a probe answer. An answer without a
   chain, or whose chain disagrees with its own `chain_length`, leaves the trust `unchecked`.
-- The record (`00026`): `deployments.trust_status`, `trust_error`, `trust_port`, `trust_store`, `trust_enforced`,
+- The record (`00025`): `deployments.trust_status`, `trust_error`, `trust_port`, `trust_store`, `trust_enforced`,
   written with the final update, for every status (a deployment rolled back for its chain keeps why). The level is not
   stored: `providers.VerificationLevel(verified, trust_status)` for a succeeded or unchanged deployment, none
   otherwise.
@@ -98,7 +98,7 @@ deployment"), `docs/troubleshooting.md` (ALC-DEP-0026) and `docs/nginx-host-prep
    `network`, `certificate` or `trust` (`VerifyResult.Failure`; the API derives it from the stored reason).
 9. **Level 4 is a hook, not a feature.** `providers.LevelHealthy` is reserved and documented; nothing measures it and
    the API's `level` never reports it yet.
-10. **Numbers.** Migration `00026` (`00024` and `00025` are taken by parallel branches), error code ALC-DEP-0026 (the
+10. **Numbers.** Migration `00025` (`00024` and `00025` are taken by parallel branches), error code ALC-DEP-0026 (the
     next free deployment code), decision R51 and helper protocol 11 / 1.10.0 may be renumbered when the branches are
     merged.
 

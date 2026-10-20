@@ -354,7 +354,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			})}
 		}
 		if name == "public.deployments" && !trust {
-			// Below 00026 the trust columns do not exist.
+			// Below 00025 the trust columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return strings.HasPrefix(c, "trust_")
 			})}

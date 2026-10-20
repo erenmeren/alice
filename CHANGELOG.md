@@ -20,8 +20,9 @@
   {`level`, `trust`, `failure`}; the verify step's params `trust`, `trust_error`). Level 4, a check of the service
   itself, is reserved.
 - One check of a website that times out is measured again instead of being taken as an answer.
-- Migration `00026` (`deployments.trust_status`, `trust_error`, `trust_port`, `trust_store`, `trust_enforced`).
+- Migration `00025` (`deployments.trust_status`, `trust_error`, `trust_port`, `trust_store`, `trust_enforced`).
   Rulings: `docs/superpowers/rulings/deployment-trust-verification.md`.
+
 ## Unreleased — Renewal information (ARI) completed
 
 **Added**

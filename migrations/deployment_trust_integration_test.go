@@ -16,10 +16,10 @@ import (
 	"alice/migrations"
 )
 
-// 00026 (R51): a deployment records what its verification found about the served chains (status, reason, port,
+// 00025 (R51): a deployment records what its verification found about the served chains (status, reason, port,
 // store, whether the anchor was known), written by the application; a reason goes with untrusted only; the Down keeps
 // a finished deployment's other history.
-func TestMigration00026DeploymentTrust(t *testing.T) {
+func TestMigration00025DeploymentTrust(t *testing.T) {
 	d := pgtest.New(t)
 	ctx := context.Background()
 	w := seedWorld(t, d)
