@@ -220,13 +220,14 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.acme_accounts": {"UPDATE": {"account_url", "contact_email", "state", "tos_accepted_at", "tos_accepted_by", "tos_url", "updated_at"}},
 	"public.acme_hooks": {"UPDATE": {"allowed_suffixes", "ca_bundle_pem", "deleted_at", "name", "poll_timeout_seconds",
 		"propagation_wait_seconds", "secret_ct", "secret_key_version", "secret_nonce", "secret_wrapped_dek", "updated_at", "url"}},
-	"public.acme_certificates": {"UPDATE": {"account_id", "ari_checked_at", "ari_next_check_at", "ari_window_end", "ari_window_start", "auto_deploy", "auto_renew",
+	"public.acme_certificates": {"UPDATE": {"account_id", "ari_checked_at", "ari_next_check_at", "ari_renew_at", "ari_window_end", "ari_window_start", "auto_deploy",
+		"auto_renew",
 		"ca_not_before", "challenge", "current_certificate_id", "deleted_at", "deploy_held_certificate_id", "deploy_held_reason",
 		"deploy_released_certificate_id", "deploy_stopped_certificate_id", "failure_notified_at", "failures", "hook_id",
 		"http_target_id", "key_type", "last_attempt_at", "last_error_code", "last_failure_class", "names", "next_attempt_at",
 		"permanent_failures", "provider_id", "rate_limited_since", "renew_before_days", "state", "updated_at"}},
-	"public.acme_orders": {"UPDATE": {"certificate_id", "cleanup_at", "cleanup_error_code", "error_code", "finished_at", "order_url",
-		"pending_key_ct", "pending_key_nonce", "pending_key_version", "pending_key_wrapped_dek", "presented", "state"}},
+	"public.acme_orders": {"UPDATE": {"account_url", "certificate_id", "cleanup_at", "cleanup_error_code", "error_code", "finished_at", "order_url",
+		"pending_key_ct", "pending_key_nonce", "pending_key_version", "pending_key_wrapped_dek", "presented", "replaces", "replaces_outcome", "state"}},
 	"public.acme_bindings": {"UPDATE": {"attention_at", "attention_code", "auto_deploy"}},
 	// Network discovery (00014): ids, a scope's creator and creation time, a scan's scope, trigger, requester and queue
 	// time, a certificate's body and parsed fields, an endpoint's key (scope, address, port, SNI), host and first sighting
@@ -294,6 +295,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	revocation := hasColumn(t, d, "certificates", "revoked_at")
 	caWait := hasColumn(t, d, "acme_certificates", "ca_not_before")
 	guard := hasColumn(t, d, "deployments", "rollback_leaf_sha256")
+	ari := hasColumn(t, d, "acme_certificates", "ari_renew_at")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -330,6 +332,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00022 the CA's earliest retry time does not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]),
 				func(c string) bool { return c == "ca_not_before" })}
+		}
+		if !ari && (name == "public.acme_certificates" || name == "public.acme_orders") {
+			// Below 00024 the chosen renewal time and the replaces columns do not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return slices.Contains([]string{"ari_renew_at", "account_url", "replaces", "replaces_outcome"}, c)
+			})}
 		}
 		if !revocation && (name == "public.certificates" || name == "public.discovery_certificates") {
 			// Below 00021 the revocation, compromise and public key columns do not exist.

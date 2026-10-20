@@ -2,11 +2,14 @@ package inventory
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,18 +110,23 @@ type ACMEOrder struct {
 	RevokedAt        *time.Time `json:"revoked_at,omitempty"`
 	RevocationReason string     `json:"revocation_reason"`
 	Compromised      bool       `json:"compromised"`
+	// Replaces is the RFC 9773 identifier of the certificate the order renews ('' for a first order or a test run) and
+	// ReplacesOutcome what became of it (acme.ReplacesOutcomes; migration 00024, R50).
+	Replaces        string `json:"replaces"`
+	ReplacesOutcome string `json:"replaces_outcome"`
 }
 
 const acmeOrderColumns = `o.id, o.acme_certificate_id, o.kind, o.state, o.started_at, o.finished_at, o.error_code, o.certificate_id,
 o.requested_by, o.trigger, jsonb_array_length(o.presented), o.cleanup_at, o.cleanup_error_code,
 (SELECT x.revoked_at FROM certificates x WHERE x.id = o.certificate_id),
 coalesce((SELECT x.revocation_reason FROM certificates x WHERE x.id = o.certificate_id), ''),
-coalesce((SELECT x.compromised_at IS NOT NULL FROM certificates x WHERE x.id = o.certificate_id), false)`
+coalesce((SELECT x.compromised_at IS NOT NULL FROM certificates x WHERE x.id = o.certificate_id), false), o.replaces, o.replaces_outcome`
 
 func scanACMEOrder(row pgx.Row) (ACMEOrder, error) {
 	var o ACMEOrder
 	err := row.Scan(&o.ID, &o.ACMECertificateID, &o.Kind, &o.State, &o.StartedAt, &o.FinishedAt, &o.ErrorCode, &o.CertificateID,
-		&o.RequestedBy, &o.Trigger, &o.Presented, &o.CleanupAt, &o.CleanupErrorCode, &o.RevokedAt, &o.RevocationReason, &o.Compromised)
+		&o.RequestedBy, &o.Trigger, &o.Presented, &o.CleanupAt, &o.CleanupErrorCode, &o.RevokedAt, &o.RevocationReason, &o.Compromised, &o.Replaces,
+		&o.ReplacesOutcome)
 	o.StartedAt = o.StartedAt.UTC()
 	for _, t := range []**time.Time{&o.FinishedAt, &o.CleanupAt, &o.RevokedAt} {
 		if *t != nil {
@@ -293,7 +301,27 @@ type ACMEOrderWork struct {
 	HookSuffixes     []string // nil without a hook (or a deleted one: then nothing is admitted)
 	// Deleted: the ACME certificate was deleted (the job ends the order without contacting the CA).
 	Deleted bool
+	// Replaces is the predecessor an issue order renews (RFC 9773 replaces; R50); nil for a first order, a test run, or
+	// a current certificate that shares no name with the order or whose leaf cannot be read.
+	Replaces *ACMEOrderReplaces
 }
+
+// ACMEOrderReplaces is the predecessor of an issue order: the current certificate's RFC 9773 identifier, the CA
+// account its order ran under (empty when that is not known: ordered before migration 00024), and the CA URLs of the
+// earlier orders of the certificate that were created replacing it (newest first, at most acmeAdoptOrders, started
+// within acmeOrderLifetime), which the client may take over after alreadyReplaced.
+type ACMEOrderReplaces struct {
+	CertID     string
+	AccountURL string
+	Earlier    []string
+}
+
+// The earlier orders a renewal may take over: at most acmeAdoptOrders, started within acmeOrderLifetime (the longest
+// life of an order at a public CA; an older one has expired there).
+const (
+	acmeAdoptOrders   = 3
+	acmeOrderLifetime = 7 * 24 * time.Hour
+)
 
 // ACMEOrderWork reads an order with its certificate, provider and hook (ErrNotFound).
 func (s *Service) ACMEOrderWork(ctx context.Context, orderID uuid.UUID) (ACMEOrderWork, error) {
@@ -310,7 +338,58 @@ WHERE o.id = $1`, orderID).Scan(&w.OrderURL, &w.HasKey, &w.Names, &w.Challenge, 
 	if err != nil {
 		return ACMEOrderWork{}, fmt.Errorf("inventory: read the ACME order's certificate: %w", err)
 	}
+	if o.Kind == ACMEOrderIssue {
+		if w.Replaces, err = s.acmeOrderReplaces(ctx, o, w.Names); err != nil {
+			return ACMEOrderWork{}, err
+		}
+	}
 	return w, nil
+}
+
+// acmeOrderReplaces is the predecessor of the issue order o for names (ACMEOrderReplaces): the ACME certificate's
+// current certificate when it shares at least one name with the order (RFC 9773 section 5). nil without one.
+func (s *Service) acmeOrderReplaces(ctx context.Context, o ACMEOrder, names []string) (*ACMEOrderReplaces, error) {
+	var (
+		chain   string
+		account *string
+	)
+	err := s.pool.QueryRow(ctx, `SELECT x.pem_chain, (SELECT p.account_url FROM acme_orders p WHERE p.certificate_id = x.id AND p.state = 'succeeded'
+    ORDER BY p.finished_at DESC LIMIT 1)
+FROM acme_certificates c JOIN certificates x ON x.id = c.current_certificate_id WHERE c.id = $1`, o.ACMECertificateID).Scan(&chain, &account)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil // a first order
+	}
+	if err != nil {
+		return nil, fmt.Errorf("inventory: read the certificate the order renews: %w", err)
+	}
+	block, _ := pem.Decode([]byte(chain))
+	if block == nil {
+		return nil, nil
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil || !slices.ContainsFunc(leaf.DNSNames, func(n string) bool {
+		return slices.ContainsFunc(names, func(m string) bool { return strings.EqualFold(n, m) })
+	}) {
+		return nil, nil
+	}
+	id, err := acme.CertID(leaf)
+	if err != nil {
+		return nil, nil
+	}
+	r := &ACMEOrderReplaces{CertID: id}
+	if account != nil {
+		r.AccountURL = *account
+	}
+	rows, err := s.pool.Query(ctx, `SELECT order_url FROM acme_orders WHERE acme_certificate_id = $1 AND id <> $2 AND replaces = $3
+    AND replaces_outcome IN ('sent', 'adopted') AND order_url <> '' AND started_at > $4
+ORDER BY started_at DESC, id DESC LIMIT $5`, o.ACMECertificateID, o.ID, id, s.clock.Now().UTC().Add(-acmeOrderLifetime), acmeAdoptOrders)
+	if err != nil {
+		return nil, fmt.Errorf("inventory: read the earlier orders replacing the certificate: %w", err)
+	}
+	if r.Earlier, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+		return nil, fmt.Errorf("inventory: read the earlier orders replacing the certificate: %w", err)
+	}
+	return r, nil
 }
 
 // NamesAllowed reports whether every name is still admitted by the provider's allow-list and, for DNS-01, the hook's.
@@ -364,14 +443,38 @@ WHERE o.id = $1 AND c.deleted_at IS NULL`, orderID).Scan(&state, &certID, &provi
 	return s.acmeClientFor(p, signer, url)
 }
 
-// RecordACMEOrderURL stores the CA's URL of a running order (acme.WithOnOrder), so a crash can be resumed.
+// RecordACMEOrderURL stores the CA's URL of a running order (acme.WithOnOrder), so a crash can be resumed, and the CA
+// account the order runs under (the account of its ACME certificate, which ACMEOrderClient moved to the provider's
+// active one), so a later renewal knows whether this certificate is its account's (RFC 9773 replaces).
 func (s *Service) RecordACMEOrderURL(ctx context.Context, orderID uuid.UUID, url string) error {
 	if len(url) > 2048 {
 		return ErrACMEOrderNotRunning
 	}
-	tag, err := s.pool.Exec(ctx, "UPDATE acme_orders SET order_url = $2 WHERE id = $1 AND state = 'running'", orderID, url)
+	tag, err := s.pool.Exec(ctx, `UPDATE acme_orders o SET order_url = $2, account_url = coalesce((SELECT a.account_url FROM acme_certificates c
+    JOIN acme_accounts a ON a.id = c.account_id WHERE c.id = o.acme_certificate_id), '')
+WHERE o.id = $1 AND o.state = 'running'`, orderID, url)
 	if err != nil {
 		return fmt.Errorf("inventory: record the ACME order's URL: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrACMEOrderNotRunning
+	}
+	return nil
+}
+
+// errReplacesOutcome is an outcome acme.WithReplaces never reports, or an identifier that is not one.
+var errReplacesOutcome = errors.New("inventory: not a replaces outcome")
+
+// RecordACMEOrderReplaces stores on a running order the RFC 9773 identifier of the certificate it renews and what became
+// of the replaces field (acme.Replaces.OnOutcome). ErrACMEOrderNotRunning for an order that ended.
+func (s *Service) RecordACMEOrderReplaces(ctx context.Context, orderID uuid.UUID, certID, outcome string) error {
+	if certID == "" || len(certID) > 512 || !slices.Contains(acme.ReplacesOutcomes(), outcome) {
+		return errReplacesOutcome
+	}
+	tag, err := s.pool.Exec(ctx, "UPDATE acme_orders SET replaces = $2, replaces_outcome = $3 WHERE id = $1 AND state = 'running'", orderID, certID,
+		outcome)
+	if err != nil {
+		return fmt.Errorf("inventory: record the ACME order's replaces: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return ErrACMEOrderNotRunning

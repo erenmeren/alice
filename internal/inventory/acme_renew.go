@@ -14,7 +14,9 @@ package inventory
 // the provider's guarded transport and only while the gate allows changes; the answer is cached on the row (window,
 // when asked, when it may be asked again: renew.NextARICheck) and cleared when a new certificate is issued. A failed
 // lookup is never a failure of the certificate and never blocks its renewal: the cached window (if any) stays and the
-// local rule decides.
+// local rule decides. The time chosen at random in the window (R50; renew.ChooseARIRenewAt) is stored on the row in the
+// certificate's transaction (ari_renew_at), so a restart or the next run never moves it; renew.Decide chooses again only
+// when the window moved or shrank past it, and it is cleared with the window when a new certificate is issued.
 //
 // Storm limits: at most ACMERenewWave orders start per run; a certificate waits renew.MinSpacing after its last order and
 // its backoff after failures; while one certificate of a provider waits for the CA's rate limit (last_error_code
@@ -82,6 +84,10 @@ type ACMERenewRun struct {
 // acmeRenewHook runs after a certificate's candidate was read and before its transaction (tests: the world changes).
 var acmeRenewHook func(id uuid.UUID)
 
+// acmeRenewRand is the source of the time chosen in a CA's renewal window (renew.Input.Rand; nil: math/rand/v2; tests
+// choose).
+var acmeRenewRand func(n int64) int64
+
 // errRenewSkip rolls back a certificate's transaction without an error (the next run plans it again).
 var errRenewSkip = errors.New("inventory: the certificate is planned at the next run")
 
@@ -140,8 +146,8 @@ type renewCursor struct {
 // has not expired: the recovery), not deleted, issued, no running order, no order in the last renew.MinSpacing, not
 // waiting for a backoff (a next_attempt_at beyond the cap is a candidate: the planner repairs it), not held by a rate
 // limit of its provider, not waiting for the CA's earliest retry time (ca_not_before; one beyond renew.MaxCAWait is a
-// candidate: the planner bounds it), and either due by the local rule or an ARI window (one that ends after the current
-// certificate began), or owing an ARI lookup, or past the failures that stop it (renew.ShouldStop).
+// candidate: the planner bounds it), and either due by the local rule or by the time chosen in an ARI window (one
+// that ends after the current certificate began; the window's start while no time inside it is stored), or owing an ARI lookup, or past the failures that stop it (renew.ShouldStop).
 //
 // The provider hold: while another certificate of the provider waits for the CA's rate limit (last_error_code
 // acme.ca_rate_limited, next_attempt_at or ca_not_before in the future) and that series of rate limits began less than
@@ -156,7 +162,10 @@ func (s *Service) acmeRenewCandidates(ctx context.Context, after *renewCursor) (
 	}
 	rows, err := s.pool.Query(ctx, `WITH c AS (
     SELECT c.id, c.provider_id, c.failures, c.permanent_failures, c.next_attempt_at, c.ca_not_before, c.ari_next_check_at, x.not_after,
-           CASE WHEN c.ari_window_end > x.not_before THEN c.ari_window_start END AS ari_start,
+           -- The time chosen in the CA's window (R50) while it lies inside it; the window's start before one is chosen.
+           CASE WHEN c.ari_window_end > x.not_before THEN
+                CASE WHEN c.ari_renew_at >= c.ari_window_start AND c.ari_renew_at < c.ari_window_end THEN c.ari_renew_at ELSE c.ari_window_start END
+           END AS ari_due,
            -- A revoked or compromised current certificate (00021) is due at once: its start counts as its renewal time.
            CASE WHEN x.revoked_at IS NOT NULL OR x.compromised_at IS NOT NULL THEN x.not_before
                 ELSE x.not_after - LEAST(make_interval(days => c.renew_before_days), GREATEST(x.not_after - x.not_before, interval '0') / 3) END AS due
@@ -164,7 +173,7 @@ func (s *Service) acmeRenewCandidates(ctx context.Context, after *renewCursor) (
     WHERE c.deleted_at IS NULL AND c.auto_renew
       AND (c.state <> 'stopped' OR (c.last_failure_class = 'transient' AND x.not_after > $1))
 ), p AS (
-    SELECT c.*, LEAST(c.due, COALESCE(c.ari_start, c.due)) AS priority FROM c
+    SELECT c.*, LEAST(c.due, COALESCE(c.ari_due, c.due)) AS priority FROM c
 )
 SELECT c.id, c.priority FROM p c
 WHERE NOT EXISTS (SELECT 1 FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.state = 'running')
@@ -176,7 +185,7 @@ WHERE NOT EXISTS (SELECT 1 FROM acme_orders o WHERE o.acme_certificate_id = c.id
        OR NOT EXISTS (SELECT 1 FROM acme_certificates r WHERE r.provider_id = c.provider_id AND r.id <> c.id AND r.deleted_at IS NULL
                       AND r.last_error_code = 'acme.ca_rate_limited' AND GREATEST(r.next_attempt_at, r.ca_not_before) > $1
                       AND r.rate_limited_since > $1::timestamptz - make_interval(secs => $9)))
-  AND (c.due <= $1 OR c.ari_start <= $1 OR c.ari_next_check_at IS NULL OR c.ari_next_check_at <= $1 OR c.permanent_failures >= $6
+  AND (c.due <= $1 OR c.ari_due <= $1 OR c.ari_next_check_at IS NULL OR c.ari_next_check_at <= $1 OR c.permanent_failures >= $6
        OR (c.failures >= $6 AND c.not_after <= $1))
   AND ($7::timestamptz IS NULL OR (c.priority, c.id) > ($7::timestamptz, $8::uuid))
 ORDER BY c.priority, c.id LIMIT $2`, now, acmeRenewPage, renew.MinSpacing.Seconds(), renew.SkewTolerance.Seconds(), renew.MaxBackoff.Seconds(),
@@ -253,6 +262,12 @@ func (s *Service) renewTx(ctx context.Context, id uuid.UUID, run *ACMERenewRun) 
 			return err
 		}
 		d := renew.Decide(in)
+		if d.StoreARIRenewAt {
+			// The time chosen in the CA's window, stored with the current certificate so that no later run moves it (R50).
+			if _, err := tx.Exec(ctx, "UPDATE acme_certificates SET ari_renew_at = $2 WHERE id = $1", id, d.ARIRenewAt); err != nil {
+				return fmt.Errorf("inventory: store the renewal time chosen in the CA's window: %w", err)
+			}
+		}
 		if d.RepairNextAttempt != nil {
 			if _, err := tx.Exec(ctx, "UPDATE acme_certificates SET next_attempt_at = $2, updated_at = $3 WHERE id = $1", id, *d.RepairNextAttempt,
 				now); err != nil {
@@ -313,7 +328,7 @@ func (s *Service) renewTx(ctx context.Context, id uuid.UUID, run *ACMERenewRun) 
 func renewInput(ctx context.Context, tx pgx.Tx, c ACMECertificate, now time.Time) (renew.Input, *time.Time, error) {
 	in := renew.Input{Now: now, RenewBeforeDays: c.RenewBeforeDays, AutoRenew: c.AutoRenew, State: c.State, OrderRunning: c.RunningOrderID != nil,
 		Failures: c.Failures, PermanentFailures: c.PermanentFailures, LastFailureClass: c.LastFailureClass, NextAttemptAt: c.NextAttemptAt,
-		CANotBefore: c.CANotBefore, LastAttemptAt: c.LastAttemptAt}
+		CANotBefore: c.CANotBefore, LastAttemptAt: c.LastAttemptAt, ARIRenewAt: c.ARIRenewAt, Rand: acmeRenewRand}
 	var nb, na, ws, we *time.Time
 	err := tx.QueryRow(ctx, `SELECT x.not_before, x.not_after, c.ari_window_start, c.ari_window_end, c.ari_checked_at, c.ari_next_check_at,
     (SELECT max(o.started_at) FROM acme_orders o WHERE o.acme_certificate_id = c.id AND o.kind = 'issue'
@@ -456,7 +471,7 @@ func acmeNoticeParams(id uuid.UUID, names []string, failures int, code string, n
 // while the row still names that certificate). Only while the gate allows changes; through the provider's guarded
 // transport; bounded by acmeARITimeout. A failure is not the certificate's: the cached window stays, the next lookup
 // waits renew.NextARICheck (the CA's Retry-After when it gave one), and a CA without renewal information clears the
-// window. It returns only database errors.
+// window and the time chosen in it. It returns only database errors.
 func (s *Service) refreshACMEARI(ctx context.Context, t ariTarget) error {
 	if s.license.Allow(license.ClassContinuity) != nil {
 		return nil
@@ -469,7 +484,8 @@ func (s *Service) refreshACMEARI(ctx context.Context, t ariTarget) error {
 		_, err = s.pool.Exec(ctx, `UPDATE acme_certificates SET ari_window_start = $3, ari_window_end = $4, ari_checked_at = $5, ari_next_check_at = $6
 WHERE id = $1 AND current_certificate_id = $2`, t.acmeCertificate, t.current, window.Start, window.End, now, renew.NextARICheck(now, window.RetryAfter))
 	case errors.Is(err, acme.ErrNoARI):
-		_, err = s.pool.Exec(ctx, `UPDATE acme_certificates SET ari_window_start = NULL, ari_window_end = NULL, ari_checked_at = $3, ari_next_check_at = $4
+		_, err = s.pool.Exec(ctx, `UPDATE acme_certificates SET ari_window_start = NULL, ari_window_end = NULL, ari_renew_at = NULL, ari_checked_at = $3,
+    ari_next_check_at = $4
 WHERE id = $1 AND current_certificate_id = $2`, t.acmeCertificate, t.current, now, renew.NextARICheck(now, 0))
 	default:
 		retry := time.Duration(0)

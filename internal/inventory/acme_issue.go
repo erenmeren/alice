@@ -403,11 +403,11 @@ func (s *Service) recordIssued(ctx context.Context, tx pgx.Tx, orderID uuid.UUID
 	out.Warnings = signedWarnings(p, out.ChainComplete, o.names, now)
 	at := now.UTC()
 	// A new current certificate starts afresh: no failures (and no notice of them), no wait, and no renewal window of
-	// the previous certificate (the planner asks the CA for the new one's).
+	// the previous certificate nor a time chosen in it (the planner asks the CA for the new one's).
 	if _, err := tx.Exec(ctx, `UPDATE acme_certificates SET current_certificate_id = $2, state = 'active', failures = 0, permanent_failures = 0, last_failure_class = '',
     last_error_code = '',
     last_attempt_at = $3, next_attempt_at = NULL, ca_not_before = NULL, failure_notified_at = NULL, rate_limited_since = NULL, ari_window_start = NULL, ari_window_end = NULL,
-    ari_checked_at = NULL, ari_next_check_at = NULL, updated_at = $3 WHERE id = $1`, o.certificateID, out.CertificateID, at); err != nil {
+    ari_renew_at = NULL, ari_checked_at = NULL, ari_next_check_at = NULL, updated_at = $3 WHERE id = $1`, o.certificateID, out.CertificateID, at); err != nil {
 		return ACMEIssued{}, fmt.Errorf("inventory: record the ACME certificate's issuance: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `UPDATE acme_orders SET state = 'succeeded', finished_at = $2, certificate_id = $3, pending_key_ct = NULL,

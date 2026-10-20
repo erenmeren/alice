@@ -13,6 +13,10 @@ var t0 = time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
 
 func at(d time.Duration) *time.Time { t := t0.Add(d); return &t }
 
+// first chooses the start of the CA's window (a deterministic Input.Rand); last its last second.
+func first(int64) int64  { return 0 }
+func last(n int64) int64 { return n - 1 }
+
 // issued is an active certificate valid from nb to nb+life, auto renewal on, 30-day window.
 func issued(nb time.Time, life time.Duration) Input {
 	return Input{Now: t0, NotBefore: nb, NotAfter: nb.Add(life), RenewBeforeDays: 30, AutoRenew: true, State: StateActive}
@@ -159,7 +163,17 @@ func TestDecide(t *testing.T) {
 		{"expired certificate is due", issued(t0.Add(-100*day), 90*day), Order, ReasonDue, nil},
 		{"ARI pulls the renewal earlier", func() Input {
 			i := issued(t0.Add(-10*day), 90*day)
-			i.ARIWindow = &Window{Start: t0.Add(-time.Hour), End: t0.Add(day)}
+			i.ARIWindow, i.Rand = &Window{Start: t0.Add(-time.Hour), End: t0.Add(day)}, first
+			return i
+		}(), Order, ReasonDueARI, nil},
+		{"ARI: the time chosen in the window has not come", func() Input {
+			i := issued(t0.Add(-10*day), 90*day)
+			i.ARIWindow, i.Rand = &Window{Start: t0.Add(-time.Hour), End: t0.Add(day)}, last
+			return i
+		}(), None, ReasonNotDue, nil},
+		{"ARI window already in the past: renewed now", func() Input {
+			i := issued(t0.Add(-10*day), 90*day)
+			i.ARIWindow, i.Rand = &Window{Start: t0.Add(-2 * day), End: t0.Add(-day)}, last
 			return i
 		}(), Order, ReasonDueARI, nil},
 		{"ARI window later than the local rule is ignored", func() Input {
@@ -316,7 +330,7 @@ func TestDecideRenewAtAndARIRefresh(t *testing.T) {
 	in.ARICheckedAt = at(-2 * time.Hour)
 	assert.True(t, Decide(in).RefreshARI, "the CA's Retry-After is over")
 
-	in.ARIWindow = &Window{Start: t0.Add(5 * day), End: t0.Add(6 * day)}
+	in.ARIWindow, in.Rand = &Window{Start: t0.Add(5 * day), End: t0.Add(6 * day)}, first
 	assert.Equal(t, t0.Add(5*day), Decide(in).RenewAt, "the window pulls the renewal earlier")
 
 	due := issued(t0.Add(-61*day), 90*day)

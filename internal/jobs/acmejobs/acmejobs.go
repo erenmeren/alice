@@ -59,6 +59,7 @@ type Inventory interface {
 	AbandonACMEOrder(ctx context.Context, orderID uuid.UUID, code string) error
 	GetACMEOrder(ctx context.Context, id uuid.UUID) (inventory.ACMEOrder, error)
 	RecordACMEOrderURL(ctx context.Context, orderID uuid.UUID, url string) error
+	RecordACMEOrderReplaces(ctx context.Context, orderID uuid.UUID, certID, outcome string) error
 	AddACMEPresented(ctx context.Context, orderID uuid.UUID, p inventory.ACMEPresented) error
 	RemoveACMEPresented(ctx context.Context, orderID uuid.UUID, p inventory.ACMEPresented) error
 	EnqueueACMECleanup(ctx context.Context, orderID uuid.UUID) error
@@ -350,10 +351,20 @@ func (o *orderRun) run(ctx context.Context) (res map[string]any, err error) {
 // options are the order's callbacks: the CA's order URL is stored for a resume (A8); each challenge is persisted
 // before it is published (A12), after the gate was asked again (a lock that began during the order publishes
 // nothing more), and the gate is asked once more right before finalize; a challenge that was removed again is taken
-// out of the record (one whose removal failed stays for the cleanup job).
+// out of the record (one whose removal failed stays for the cleanup job). An issue order that renews a certificate
+// names it in newOrder (RFC 9773 replaces, R50) and records what became of the field on the order.
 func (o *orderRun) options(ctx context.Context) []acme.OrderOption {
 	inv := o.h.d.Inventory
-	return []acme.OrderOption{
+	var opts []acme.OrderOption
+	if r := o.w.Replaces; r != nil && o.w.Order.Kind == inventory.ACMEOrderIssue {
+		opts = append(opts, acme.WithReplaces(acme.Replaces{CertID: r.CertID, AccountURL: r.AccountURL, Earlier: r.Earlier,
+			OnOutcome: func(outcome string) error {
+				dctx, cancel := detached(ctx)
+				defer cancel()
+				return inv.RecordACMEOrderReplaces(dctx, o.id, r.CertID, outcome)
+			}}))
+	}
+	return append(opts,
 		acme.WithOnOrder(func(url string) error {
 			dctx, cancel := detached(ctx)
 			defer cancel()
@@ -392,7 +403,7 @@ func (o *orderRun) options(ctx context.Context) []acme.OrderOption {
 				o.h.d.Log.Error("could not forget a removed challenge record", "order_id", o.id.String(), "error_type", fmt.Sprintf("%T", err))
 			}
 		}),
-	}
+	)
 }
 
 // record is the persisted form of a challenge with what publishes it.
