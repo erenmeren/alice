@@ -1366,6 +1366,38 @@ Choose **Save**. Every change is recorded in the audit log (`location.updated`).
 in the meantime, Alice shows the current values and asks you to save again. Operators and auditors see the settings
 read-only.
 
+### How Alice verifies a deployment
+
+A deployment's page shows under **Evidence** how much Alice proved about the new certificate (R51):
+
+| Evidence | What Alice proved |
+|---|---|
+| **Installed** | The files were written and Nginx was reloaded. The website was not checked (the check is skipped for it). |
+| **Served** | Every checked port serves the new certificate with the number of certificates Alice deployed. |
+| **Trusted** | And the chain each port sends verifies against a trusted root for the name it was checked with, at the time of the check: the right intermediates, in order, none expired. |
+| **None** | The deployment did not succeed. |
+
+**Certificate chain** says what Alice found: **Trusted**, **Not trusted** with the exact fault and the port, or
+**Not checked** (the check ran on the server itself and its `alice-helper` is older than 1.10.0, which does not
+report the chain; update it, see [nginx-host-preparation.md](nginx-host-preparation.md)).
+
+Which roots Alice trusts: the system roots of the Alice server; for a certificate Alice ordered over ACME, also the
+**CA bundle** of its certificate authority (for a private CA, paste its root there: Alice uses it for the
+authority's own address and for the certificates it issues); for an uploaded chain that ends with its own root, that
+root.
+
+When the check fails a deployment: when Alice can verify the chain it deploys against those roots (a public CA, a
+private CA whose root is in the authority's bundle, an upload with its root), a website that sends a chain that does
+not verify fails the deployment with `ALC-DEP-0026`, and Alice puts the previous certificate back as for any failed
+check. When Alice cannot (a private CA whose root Alice does not have, a chain you confirmed as incomplete), the
+deployment succeeds at **Served** with a warning that names the fault. A name the certificate does not cover is
+always a warning: the name comes from the website's configuration (or **Name to check**), which an undo would not
+change.
+
+One check that times out is not taken as an answer: Alice checks each port up to five times, two seconds apart, and
+a failed deployment says whether the website could not be reached (the network), served another certificate, or sent
+a chain that is not trusted.
+
 ### Incomplete chains
 
 A certificate whose chain does not lead to a trusted root is marked "The certificate chain is incomplete: some

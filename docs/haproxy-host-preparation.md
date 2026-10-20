@@ -73,7 +73,7 @@ reads its SSH keys and shows "The HAProxy permissions are not installed on this 
 
 ## The helper version
 
-Reading HAProxy needs `alice-helper` 1.8.0 (protocol 9) or newer (this release ships 1.9.0, protocol 10). 1.8.0 added `haproxy-dump`; nothing
+Reading HAProxy needs `alice-helper` 1.8.0 (protocol 9) or newer (this release ships 1.10.0, protocol 11). 1.8.0 added `haproxy-dump`; nothing
 changes for Linux, Nginx and Apache servers, which keep working with `alice-helper` 1.6.x and 1.7.x. A server added
 as a HAProxy server whose helper is older keeps working for its SSH keys: **Test connection** succeeds with the
 warning "The alice-helper on this server is too old to read HAProxy. Update the helper; SSH keys are still read.",
