@@ -76,7 +76,9 @@ deployment"), `docs/troubleshooting.md` (ALC-DEP-0026) and `docs/nginx-host-prep
    configuration (`server_name`, else the certificate's first name, or the location's configured SNI), which the
    deployment did not change: an undo would not mend it, and failing would block every renewal of a website whose
    `server_name` lists a name the certificate never covered. It is checked last (only for a chain that verifies), so a
-   name mismatch never hides a chain fault, and the level stays served.
+   name mismatch never hides a chain fault, and the level stays served. The outcome has its own headline ("The new
+   certificate is served, but it does not cover the name the website was checked with."), not the chain's; the e2e
+   journey of a signing request completed for another name now expects it (it showed "live and verified" before).
 4. **Wrong order is a fault, by the verified path.** The served intermediates must follow the order of a path
    `crypto/x509` verified (positions 1, 2, … of the chain; a root from the store need not be sent; extra certificates
    after the path are tolerated). Alice writes chains in order, so this catches a file someone else ordered differently.
@@ -113,3 +115,9 @@ deployment"), `docs/troubleshooting.md` (ALC-DEP-0026) and `docs/nginx-host-prep
 - Integration: `internal/jobs/deployjobs/trust_integration_test.go` (the record: trusted, an unknown anchor's warning,
   an uploaded root, an untrusted chain rolled back with its email, an older helper) and
   `migrations/deployment_trust_integration_test.go`.
+- Real servers: `ALICE_SSH_IMAGES=ubuntu22 make test-ssh` (the Nginx matrix asserts a trusted chain from Alice and the
+  real helper's chain from `tls-probe`).
+- e2e: the uploads of the target's test CA carry its self-signed root (`uploaded_root`, enforced, trusted) and the
+  fake ACME authority's bundle carries its issuing root (`acme_bundle`), so the existing journeys of `phase4.spec.ts`
+  and `phase10.spec.ts` keep showing "live and verified". `phase4.spec.ts` pinned helper protocol 9 (stale since R48);
+  it now expects 11.

@@ -1921,6 +1921,7 @@
     "partial": "Güncellenen web siteleri: {{ok}} / {{total}}",
     "succeededUnverified": "Yeni sertifika dağıtıldı ve Nginx yeniden yüklendi.",
     "succeededUntrusted": "Yeni sertifika sunuluyor, ancak web sitesinin sertifika zinciri güvenilir değil.",
+    "succeededNameMismatch": "Yeni sertifika sunuluyor, ancak web sitesinin denetlendiği adı kapsamıyor.",
     "trustFault": "{{reason}} (bağlantı noktası: {{port}}).",
     "trusted": "Alice web sitesinin sertifika zincirini de güvenilir bir köke göre doğruladı.",
     "trustUnchecked": "Alice sertifika zincirini denetlemedi: sunucudaki alice-helper 1.10.0 sürümünden eski.",
@@ -1944,7 +1945,8 @@
       "triggeredBy": "Başlatan",
       "system": "Alice (otomatik)",
       "verification": "Doğrulama: {{state}}",
-      "untrusted": "Sunuluyor, ancak sertifika zinciri güvenilir değil"
+      "untrusted": "Sunuluyor, ancak sertifika zinciri güvenilir değil",
+      "nameMismatch": "Sunuluyor, ancak sertifika denetlenen adı kapsamıyor"
     },
     "title": "Dağıtımlar",
     "intro": "Sonuçlarıyla birlikte tüm sertifika dağıtımları. Her adımı görmek için birini açın.",

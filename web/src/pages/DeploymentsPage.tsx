@@ -127,7 +127,11 @@ function Row({ d, when }: { d: Deployment; when: string }) {
         <DeploymentStatusBadge d={d} tone={unverified || untrusted ? 'warning' : undefined} />
         {unverified && <p className={classes.secondary}>{t('deployments.page.verification', { state: t(verifiedKey(d.verified)) })}</p>}
         {/* R51: served, but the chain is not trusted: the same warning tone, and a line that says so. */}
-        {untrusted && <p className={classes.secondary}>{t('deployments.page.untrusted')}</p>}
+        {untrusted && (
+          <p className={classes.secondary}>
+            {t(d.verification.trust?.error === 'name_mismatch' ? 'deployments.page.nameMismatch' : 'deployments.page.untrusted')}
+          </p>
+        )}
         {view === 'recovering' && <p className={classes.secondary}>{t(deploymentStateKey(d.state))}</p>}
         {view === 'held' && <p className={classes.secondary}>{t('deployments.held')}</p>}
       </Table.Td>

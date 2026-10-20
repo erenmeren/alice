@@ -1921,6 +1921,7 @@
     "partial": "Updated websites: {{ok}} of {{total}}",
     "succeededUnverified": "The new certificate was deployed and Nginx was reloaded.",
     "succeededUntrusted": "The new certificate is served, but the website's certificate chain is not trusted.",
+    "succeededNameMismatch": "The new certificate is served, but it does not cover the name the website was checked with.",
     "trustFault": "{{reason}} (port {{port}}).",
     "trusted": "Alice also verified the website's certificate chain against a trusted root.",
     "trustUnchecked": "Alice did not check the certificate chain: the server's alice-helper is older than 1.10.0.",
@@ -1944,7 +1945,8 @@
       "triggeredBy": "Triggered by",
       "system": "Alice (automatic)",
       "verification": "Verification: {{state}}",
-      "untrusted": "Served, but the certificate chain is not trusted"
+      "untrusted": "Served, but the certificate chain is not trusted",
+      "nameMismatch": "Served, but the certificate does not cover the checked name"
     },
     "title": "Deployments",
     "intro": "Every certificate deployment with its result. Open one to see each step.",

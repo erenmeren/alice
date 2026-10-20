@@ -115,7 +115,7 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         if (checked && untrustedSuccess(d) && trust) {
           // R51: served, but the chain is not trusted: a warning that names the fault, never "verified".
           color = 'yellow';
-          headline = t('deploy.succeededUntrusted');
+          headline = t(trust.error === 'name_mismatch' ? 'deploy.succeededNameMismatch' : 'deploy.succeededUntrusted');
           extra = t('deploy.trustFault', { reason: t(trustErrorKey(trust.error)), port: trust.port ?? '' });
         } else if (checked && trust?.status === 'trusted') {
           extra = [extra, t('deploy.trusted')].filter(Boolean).join(' ');

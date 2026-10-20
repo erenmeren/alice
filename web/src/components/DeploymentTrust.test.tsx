@@ -33,12 +33,13 @@ describe('DeploymentOutcome and the trust of the served chain', () => {
     expectNoRawKeys();
   });
 
-  it('a name mismatch with a known root is a warning too', async () => {
+  it('a name mismatch with a known root is a warning too, with its own headline', async () => {
     const d = deploymentFixture({
       status: 'succeeded',
       verification: { level: 2, failure: '', trust: { status: 'untrusted', error: 'name_mismatch', port: 443, store: 'system', enforced: true } },
     });
-    const alert = await outcome(d, "The new certificate is served, but the website's certificate chain is not trusted.");
+    const alert = await outcome(d, 'The new certificate is served, but it does not cover the name the website was checked with.');
+    expect(alert.getAttribute('style')).toContain('--alert-bg: var(--alice-warning-soft)');
     expect(alert).toHaveTextContent('The certificate does not cover the name the website was checked with (port 443).');
   });
 
