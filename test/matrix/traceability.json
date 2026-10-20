@@ -1760,5 +1760,95 @@
    "internal/auth:TestProductionParametersMatchSpec",
    "internal/auth/breached:TestContains"
   ]
+ },
+ {
+  "id": "SR-01",
+  "status": "test",
+  "tests": [
+   "migrations:TestMigration00026ServicesBackfillAndDown",
+   "migrations:TestMigration00026ServiceConstraints"
+  ]
+ },
+ {
+  "id": "SR-02",
+  "status": "test",
+  "tests": [
+   "internal/api:TestAuthzMatrix",
+   "internal/api:TestRouteScopesMatchTheDesign",
+   "internal/api:TestRouteScopesMatchSpec",
+   "internal/rbac:TestDecideMatchesDocumentedMatrix"
+  ]
+ },
+ {
+  "id": "SR-03",
+  "status": "test",
+  "tests": [
+   "internal/api:TestRegisterRefusesRouteWithoutScope"
+  ]
+ },
+ {
+  "id": "SR-04",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestCreatePathsNameAService",
+   "internal/inventory:TestDiscoveredRowsTakeTheServersService",
+   "internal/authz/services:TestResolveService",
+   "internal/api:TestServiceFilter",
+   "internal/api:TestRowsShowTheirService"
+  ]
+ },
+ {
+  "id": "SR-05",
+  "status": "test",
+  "tests": [
+   "internal/authz/services:TestAssignMovesEachKindAndListsUntrustedBindings",
+   "internal/authz/services:TestResolveVisibleFrom",
+   "internal/api:TestAssignReadsDryRunAndTheResources"
+  ]
+ },
+ {
+  "id": "SR-06",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestDeploymentAcrossServicesNeedsATrust",
+   "internal/inventory:TestDeploymentsAndBindingsAcrossServicesNeedATrust",
+   "internal/inventory:TestFirstSendChecksTheTrustAgain",
+   "internal/api:TestUntrustedDeploymentNamesBothServices"
+  ]
+ },
+ {
+  "id": "SR-07",
+  "status": "test",
+  "tests": [
+   "internal/jobs/deployjobs:TestACMEAutoDeployAcrossServicesHoldsUntilATrust",
+   "internal/inventory:TestKVAutoDeployAcrossServicesHoldsUntilATrust",
+   "internal/inventory:TestDeploymentsAndBindingsAcrossServicesNeedATrust"
+  ]
+ },
+ {
+  "id": "SR-08",
+  "status": "test",
+  "tests": [
+   "internal/sshkeys:TestGeneratedKeysAndDeploysAcrossServices",
+   "internal/jobs/kvjobs:TestImportDecisionTable"
+  ]
+ },
+ {
+  "id": "SR-09",
+  "status": "test",
+  "tests": [
+   "internal/authz/services:TestServicesLifecycle",
+   "internal/authz/services:TestEnvironments",
+   "internal/authz/services:TestTrusts",
+   "internal/api:TestServiceErrorsHaveTheirCodes"
+  ]
+ },
+ {
+  "id": "SR-10",
+  "status": "test",
+  "tests": [
+   "web/e2e/services.spec.ts:an Administrator adds a service in production, moves a server and its certificate there and filters by it",
+   "web/src/pages/ServicesPage.test.tsx:lets an Administrator add a service in an environment and opens it"
+  ]
  }
 ]

@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — Services, environments and trusts (scoped access, phase 1)
+
+**Added**
+- **Services**: a service groups servers, Key Vaults, certificates, signing requests, ACME certificates, SSH keys and
+  scan scopes (for example "Payments (production)"), with an optional **environment** (production, staging, test and
+  development come with Alice; Settings → Environments). Every existing resource is in the protected **Default**
+  service, and nothing changes for anybody until a second service exists (R49). Administrators create, rename and
+  delete services (only an empty one, `ALC-SVC-0003`; never the Default service, `ALC-SVC-0004`), move resources to a
+  service (**Move here**, with a preview of what stops) and decide which service accepts the certificates and keys of
+  which (**Trusts**); each is a step-up action, never an API token, and works in lock. Lists show each row's service
+  and filter by service and environment.
+- API: `/api/v1/services` (with `/policy`, `/policy/versions` and `/actions/assign?dry_run=true`),
+  `/api/v1/environments`, `/api/v1/service-trusts`; permissions `services.manage`, `services.assign`, `services.trust`;
+  optional `service_id` on the create bodies of servers, Key Vaults, uploads, signing requests, generated SSH keys,
+  ACME certificates and scan scopes (absent: the Default service); `service` on those rows; list filters `service_id`
+  and `environment_id`; `x-scope` on every operation and a Scope column in `docs/authz-matrix.md`. Codes `ALC-SVC-0001`
+  to `0004`, `0007`, `0016` to `0018`. Migration `00026` (its Down refuses while a second service exists).
+
+**Security**
+- A certificate's private key or an SSH key of one service goes to a server or into a Key Vault of another service only
+  when that service trusts the first one (SEC-029): deployments, new Key Vault and ACME connections, Key Vault imports
+  and SSH key deploys are refused otherwise (`ALC-SVC-0007`), the deployment engine and the import and key jobs check
+  again right before they send, and the automatic deployments of ACME certificates and Key Vault connections leave such
+  a website alone (marked **Not accepted by its service**, one e-mail: `acme.auto_deploy_untrusted`,
+  `kv.auto_deploy_untrusted`). Rulings: `docs/superpowers/rulings/scoped-access.md`.
+
 ## Unreleased — No rollback puts a revoked or compromised certificate back
 
 **Security**

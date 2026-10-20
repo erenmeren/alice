@@ -263,6 +263,24 @@ tokens (`acme.view`), including the account's contact e-mail. **Switching unatte
 a binding's `auto_deploy`) is Admin with a fresh step-up, decided inside the inventory transaction (KV ruling S6 applied
 to ACME). All ACME actions of one person or token share a 10/min limit (`limitACME`).
 
+(Amendment R49, Phase 1, 2026-10-21; rulings `docs/superpowers/rulings/scoped-access.md`.) Services: creating, changing
+and deleting services and environments (`services.manage`), moving resources between services (`services.assign`) and
+making or removing trusts (`services.trust`) are **Admin** with step-up, never a token, and work in lock (ClassAlways);
+reading services, environments, policies and trusts is every role's (`read`). Until scoped role bindings exist (R49
+Phase 2) every role is held globally, so these rows are the whole change to the table above. Every route also declares
+a scope class (platform, resource, list, create, cross, any, self, none); a route without one fails at startup, like a
+route without a permission (SEC-016).
+
+- **SEC-029** (R49) A certificate's private key or an SSH key owned by one service is placed on a server or into a Key
+  Vault of another service only when the destination service trusts the source service (a directed `service_trusts`
+  row, made with `services.trust`): every deploy request (a person's, a Key Vault or ACME binding's Deploy now), a new
+  Key Vault or ACME binding and websites added to one, the Key Vault import and the SSH key deploy refuse otherwise
+  (`ALC-SVC-0007`) before anything is queued; the deployment engine's first send, the Key Vault import job and the SSH
+  key deploy job check it again before anything is sent; the ACME and Key Vault automatic deployment planners hold the
+  website (mark `service.untrusted`, one e-mail). A trust is checked under a row lock, so its removal waits for a
+  deployment being queued under it; removing it undoes nothing already deployed. The replacement of a key-compromise
+  incident needs no trust (the key it replaces is there already). [T]
+
 ### 15.5 Sessions, CSRF, rate limiting
 
 - **SEC-018** Session ID is 256-bit from `crypto/rand`; only its SHA-256 is stored server-side. Cookie: `__Host-alice_session`, HttpOnly, Secure, SameSite=Strict, Path=/, no Domain. [T]

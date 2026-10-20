@@ -457,6 +457,23 @@ Go native fuzzing (`go test -fuzz`), with seed corpora committed under `testdata
 | X-05 | Break-glass: with OIDC misconfigured or down, the local Admin with TOTP logs in |
 | X-06 | Password policy: length 11 rejected, 12 accepted, listed breached password rejected (offline list), Argon2id parameters at least the documented minimum (test reads the stored hash prefix) |
 
+### 25.9 Scoped access (R49)
+
+Phase 1 (services, environments, assignment, trusts); the IDs of the later phases follow from SR-11 on.
+
+| ID | Test |
+|---|---|
+| SR-01 | Migration 00026 over a populated database: every owned row lands in the Default service with unchanged counts (a finished incident included), jobs with a target and alerts take Default, enabled rotation policies are approved for it, every user keeps its role; the Down works without scoped state and refuses (Z1026) with a second service, a binding, an automation account or a user without a global role |
+| SR-02 | Every existing route keeps its permission and matrix row; the three new permissions are an Administrator's with step-up and never a token; every route declares the scope class of the design (totals of §11) and its `x-scope` |
+| SR-03 | A route without a scope class stops the start (like a route without a permission) |
+| SR-04 | Every create path names a service: without `service_id` the Default service, with one that service, an unknown one 422 on `service_id`; what a scan finds goes to the server's service; the lists filter by service and environment |
+| SR-05 | Moving resources: each kind moves, a dry run changes nothing and lists the bindings that would cross services without a trust, one audit row names every resource moved; unknown, repeated or deleted resources are refused |
+| SR-06 | A certificate of one service deployed to a server of another: refused (ALC-SVC-0007, naming both services) before anything is queued or sent; with a trust it deploys; the trust removed after the request: the first send refuses it and the server is never contacted |
+| SR-07 | The ACME and Key Vault automatic deployments hold a website whose service does not trust the source (mark `service.untrusted`, one audit row, one e-mail, once) and deploy at the next run once a trust exists; a Key Vault binding across services needs a trust |
+| SR-08 | The SSH key deploy and the Key Vault import across services need a trust at the request and again when their job runs; a generated key goes to the named service |
+| SR-09 | Services and environments: the Default service cannot be deleted, a service with resources is kept, names and keys are unique, a relabel is audited with both environments, trusts are directed and unique |
+| SR-10 | Browser journey: an Administrator creates a service in production, moves a server and its certificate there, and sees the service and the filters on the lists |
+
 ---
 
 ## 26. Development Phases and Definition of Done

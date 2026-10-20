@@ -1,9 +1,10 @@
 # Scoped access and service ownership: design
 
-Status: draft for the owner's review. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to
-`00021`, decisions up to R46). Numbers reserved here: migration `00024` (Phase 1 creates the whole schema of §4, so the
-later phases need no migration; one that does after review takes the next free number at merge time) and decision
-**R49**. When accepted, R49 amends `alice-v1/04-security.md` §15.4 (SEC-014, SEC-016,
+Status: Phase 1 implemented (2026-10-21, see "Phase 1 as built" in §12); Phases 2-5 open; the questions of §14 stay
+open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
+to R46). Numbers: migration `00026` (Phase 1 creates the whole schema of §4, so the later phases need no migration; one
+that does after review takes the next free number at merge time; `00024` and `00026` went to parallel branches) and decision
+**R49** (recorded in `alice-v1/00-decisions.md` with Phase 1). When accepted, R49 amends `alice-v1/04-security.md` §15.4 (SEC-014, SEC-016,
 SEC-017, the role table), §15.5 (SEC-025, SEC-026) and `alice-v1/02-architecture.md` (data model, route groups).
 
 The owner approved on 2026-10-20 that work proceeds on the recommended defaults of §14 while the questions stay open.
@@ -77,7 +78,7 @@ Non-goals (not in this design; some get hooks, §7.4):
 
 ## 4. Data model
 
-### 4.1 New tables (migration `00024`)
+### 4.1 New tables (migration `00026`)
 
 ```sql
 CREATE TABLE environments (
@@ -216,7 +217,7 @@ expiry lists). Derived resources get no column: host keys, certificate locations
 Key Vault certificates/keys/secrets/imports, KV bindings, ACME bindings, ACME orders, rotation policies (through their
 key), rotation runs, discovery scans and endpoints, incident locations.
 
-### 4.3 Migration `00024` and backfill
+### 4.3 Migration `00026` and backfill
 
 In one transaction (goose default):
 
@@ -232,7 +233,7 @@ In one transaction (goose default):
 4. Grants for `alice_app` as the other tables (`service_policies`: SELECT, INSERT).
 
 Down migration drops everything added; it refuses (RAISE) when a second service, a binding or an automation account
-exists, so a down never silently widens access. `migrations/frozen_test.go` gains `00024` once Phase 1 merges.
+exists, so a down never silently widens access. `migrations/frozen_test.go` gains `00026` once Phase 1 merges.
 
 Effect: every user keeps its `users.role`; every resource is in Default; no binding exists. Every route answers as
 before (asserted by the unchanged authorization matrix, §12 Phase 1).
@@ -865,7 +866,7 @@ behind no flag: every phase is inert until an Administrator creates a second ser
 
 ### Phase 1 — Services, environments, assignment, trusts (size L, ~9 tasks)
 
-Migration `00024` (§4.1–4.3 except it leaves `role_bindings`, `directory_groups`, `user_directory_groups`,
+Migration `00026` (§4.1–4.3 except it leaves `role_bindings`, `directory_groups`, `user_directory_groups`,
 `service_owners` empty and unused); `internal/authz` resolvers (read/owning service per §4.5) used by the new routes;
 services, environments, policy read (version 1 only), assignment with dry run, trusts; `service_id` on create bodies
 and `service` on DTOs; the cross-service trust check (§5.6 (c)) in `checkDeployLocation`, the engine's first send, the
@@ -887,12 +888,55 @@ Acceptance:
 - Startup refuses a route without `scope` (unit test with a bad table, like `authz_test.go`'s `bad` routes).
 - e2e: create a service in production, move a server and its certificate, see the badges and filters.
 
+#### Phase 1 as built (2026-10-21)
+
+What Phase 1 delivers, and where it differs from the text above (rulings in `docs/superpowers/rulings/scoped-access.md`):
+
+- Migration `00026` (not `00024`). The owning-service columns keep a column default, `default_service_id()` (a STABLE
+  function reading the Default service): adding them with it fills every existing row without an `UPDATE`, so no
+  history trigger fires (a finished incident is frozen, Z1023), and a row written by other means (a test, a restore of
+  an older dump) still lands in Default. The application names the service of every row it creates; the default is a
+  safety net, not the rule. `jobs.service_id` and `alerts.service_id` reference services `ON DELETE SET NULL` (history
+  of a service, not its content). The Down refuses with SQLSTATE **Z1026** (also while a user has no global role). Added
+  beyond §4: `service_trusts_target` (index) and the Key Vault binding website mark
+  `certificate_locations.binding_attention_code`/`binding_attention_at` (the ACME binding has its own mark), set by the
+  Key Vault planner to `service.untrusted`. The break-glass CHECK of §4.2 (`NOT is_break_glass OR role = 'admin'`) is
+  **not** added: today another Administrator may demote the break-glass account (SEC-015 only keeps one enabled
+  Administrator), and Phase 1 changes nobody's rights. It comes with the phase that lets a person hold no global role,
+  together with an application refusal ahead of it.
+- Deleting a service refuses while it owns a live resource (`ALC-SVC-0003` with the counts); its soft-deleted servers,
+  ACME certificates and scan scopes are history and move to the Default service with the deletion.
+- Error codes registered now: `ALC-SVC-0001` to `0004`, `0007`, `0016`, `0017`, and **`ALC-SVC-0018`
+  `service.trust_exists`** (409, the next free number: §8.3 has no code for a trust made twice). The other numbers of
+  §8.3 stay reserved until their phase produces them. A stale `If-Match` on a service or an environment is the
+  existing `ALC-SYS-0008` (412), as for servers; `ALC-SVC-0010` stays for the body versions of policy and owners.
+- The ACME and Key Vault planners hold a website across services without a trust with the mark `service.untrusted`
+  and send one e-mail per newly marked set: their own templates `acme.auto_deploy_untrusted` and
+  `kv.auto_deploy_untrusted` (the "automatic deployment stopped" texts count failed deployments, which would be untrue
+  here). `service.untrusted` is a neutral reason (never counted towards a wave's stop).
+- The engine's first send (`DeploymentMaterial`) accepts a deployment whose server's service is, or trusts, one of its
+  sources: the vault's service for a Key Vault deployment; otherwise the certificate's own or, for a certificate an ACME
+  order issued, the ACME certificate's (the planner's and Deploy now's source). A key-compromise incident's replacement
+  at one of its locations needs no trust. The Key Vault import checks the trust at the request and again in the job
+  before the vault is called; the SSH key deploy at the request and again when the job runs.
+- Audit rows are unchanged (no `details.service_id` before Phase 2, as §5.8 says). New actions: `service.created`,
+  `service.updated`, `service.deleted`, `environment.created`, `environment.updated`, `environment.deleted`,
+  `service.trust_added`, `service.trust_removed`, `service.assigned` (once per call; `details.resources` lists
+  `kind:id` of each resource moved: the audit details refuse a key named `*_key_ids`), `acme.auto_deploy.untrusted`,
+  `kv.auto_deploy.untrusted`.
+- `certificate_incidents.service_ids` is filled when an incident starts (the certificate's service and every service of
+  a server holding a certificate with the key), ready for Phase 2.
+- The resolvers of §4.5 exist (`authz/services.Store.Resolve`, owning and visible-from per kind, tested) but `guard`
+  does not call them before Phase 2; the route field `resolver` and the session's `access` arrive with Phase 2.
+- `x-scope` is on every operation of `api/openapi.yaml` (tested against the route table); the "—" class is written
+  `none`. `GET /api/v1/discovery/settings` is classed platform but keeps `discovery.view` until Phase 2 enforces classes.
+
 ### Phase 2 — Scoped role bindings for people (size XL, ~14 tasks)
 
 `role_bindings` for `user_id` subjects; grants loading in session and token lookup; `rbac` reach; `guard` per §5.3–5.4;
 reach filters in every list/count/export/dashboard/alerts/jobs/discovery function (§5.8); cross rules (§5.6) in the
 service functions; `allowed_actions` and `hidden_count` in DTOs; `details.service_id` in audit rows; a person
-without a global role (`users.role` NULL, nullable since `00024`; every read of the column handles NULL); bindings API and People & access *Access* section; service
+without a global role (`users.role` NULL, nullable since `00026`; every read of the column handles NULL); bindings API and People & access *Access* section; service
 page *Access* tab; UI gating moved from roles to `can`/`canOn`; no-access page.
 
 Acceptance:

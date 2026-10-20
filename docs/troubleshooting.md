@@ -386,6 +386,15 @@ revocation the authority could not answer is tried again after 1, 2, 4 and 8 min
 authority refuses the revocation (`ALC-ACM-0038` to `0040`), revoke the certificate with the authority's own tools,
 then **Close the incident**.
 
+### A deployment or an automatic deployment says the service does not accept the certificate
+
+Since services exist (R49), a certificate's private key or an SSH key owned by one service goes to a server or a Key
+Vault of another service only when that service trusts the first one. Look at the deployment's reason
+(`service.untrusted`, ALC-SVC-0007) or at the binding's websites: a website marked **Not accepted by its service** gets
+no automatic deployment, and Alice sent one e-mail when it was marked. Open **Services**, choose the service of the
+server, **Trusts** tab, and add a trust for the certificate's (or the vault's) service, or move them to the same service
+(**Move here**). The mark clears at the next automatic deployment run.
+
 ## Alerts, e-mail and single sign-on
 
 - **No e-mails arrive.** Open **Settings → Email** and choose **Send test e-mail** (it uses the saved settings). Its
@@ -3409,6 +3418,75 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 **Likely cause.** The scope was switched off, by an Administrator or by a restore from a backup (a restored copy switches off the scopes that have a schedule). A scope that is switched off is scanned neither by its schedule nor by hand.
 
 **What to do.** Switch the scope on in its settings on the Scopes tab, then start the scan again.
+
+## ALC-SVC-0001: This service does not exist
+
+**Meaning.** A service named in the address or the request was not found. (HTTP 404, reason `service.not_found`.)
+
+**Likely cause.** The service was deleted, or the address is mistyped.
+
+**What to do.** Open **Services** and choose the service again.
+
+## ALC-SVC-0002: A service with this name exists
+
+**Meaning.** Service names are unique, whatever the letter case. Nothing was saved. (HTTP 409, reason `service.name_taken`.)
+
+**Likely cause.** Another service has this name.
+
+**What to do.** Choose another name, for example with the environment in it: "Payments (production)".
+
+## ALC-SVC-0003: The service still owns resources
+
+**Meaning.** A service is deleted only when it owns no server, Key Vault, certificate, signing request, ACME
+certificate, SSH key or scan scope. The answer counts what is left of each kind. (HTTP 409, reason `service.not_empty`.)
+
+**Likely cause.** Certificates and SSH keys stay in Alice's inventory even when no server shows them any more; they
+still belong to the service.
+
+**What to do.** Open the service's page, **Resources** tab, and move what it owns to another service (**Move here** on
+that service's page), then delete the empty service.
+
+## ALC-SVC-0004: The Default service cannot be deleted
+
+**Meaning.** The Default service holds every resource that has no service of its own. (HTTP 409, reason
+`service.default_protected`.)
+
+**What to do.** Nothing; rename it if another name suits you better.
+
+## ALC-SVC-0007: The destination service does not accept certificates and keys from the source service
+
+**Meaning.** A deployment, a Key Vault or ACME binding, an import into a Key Vault or an SSH key deploy would place a
+certificate's private key or an SSH key owned by one service on a server or into a Key Vault of another service, and
+the destination service has no trust for the source service. Nothing was changed on the server. The answer names both
+services. (HTTP 409, reason `service.untrusted`.) The same reason ends a queued deployment, an import or an SSH key
+deploy whose trust was removed before Alice sent it, and marks the websites where automatic deployment stopped.
+
+**Likely cause.** The server (or the vault) and the certificate (or the key) were moved to different services, or a
+trust was removed.
+
+**What to do.** An Administrator opens **Services**, chooses the destination service, **Trusts** tab, and adds a trust
+for the source service; or moves both to the same service. Then deploy again. Removing a trust never undoes what was
+deployed before.
+
+## ALC-SVC-0016: This environment is in use
+
+**Meaning.** A service or a role binding names the environment, so it cannot be deleted. (HTTP 409, reason
+`environment.in_use`.)
+
+**What to do.** Give those services another environment (or none) on their pages first, then delete it.
+
+## ALC-SVC-0017: An environment with this key exists
+
+**Meaning.** Environment keys are unique; nothing was saved. (HTTP 409, reason `environment.key_taken`.)
+
+**What to do.** Choose another key. A key never changes once made (only the name and the order do).
+
+## ALC-SVC-0018: This trust exists
+
+**Meaning.** The destination service already accepts certificates and keys from the source service. (HTTP 409, reason
+`service.trust_exists`.)
+
+**What to do.** Nothing more is needed.
 
 ## Install and start problems
 

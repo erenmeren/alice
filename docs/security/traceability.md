@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-202 IDs: 193 test, 7 partial, 0 owner, 2 deferred, 0 gap.
+212 IDs: 203 test, 7 partial, 0 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -212,3 +212,13 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | X-04 | TOFU test with an active MITM (proxy presenting another host key after pinning) is F-31 | test | `internal/api:TestChangedHostKeyJourney`<br>Same case as F-31. |
 | X-05 | Break-glass: with OIDC misconfigured or down, the local Admin with TOTP logs in | test | `internal/api:TestX05BreakGlassWhileIdPDown` |
 | X-06 | Password policy: length 11 rejected, 12 accepted, listed breached password rejected (offline list), Argon2id parameters... | test | `internal/auth:TestPasswordPolicy`<br>`internal/auth:TestProductionParametersMatchSpec`<br>`internal/auth/breached:TestContains` |
+| SR-01 | Migration 00026 over a populated database: every owned row lands in the Default service with unchanged counts (a finishe... | test | `migrations:TestMigration00026ServicesBackfillAndDown`<br>`migrations:TestMigration00026ServiceConstraints` |
+| SR-02 | Every existing route keeps its permission and matrix row; the three new permissions are an Administrator's with step-up... | test | `internal/api:TestAuthzMatrix`<br>`internal/api:TestRouteScopesMatchTheDesign`<br>`internal/api:TestRouteScopesMatchSpec`<br>`internal/rbac:TestDecideMatchesDocumentedMatrix` |
+| SR-03 | A route without a scope class stops the start (like a route without a permission) | test | `internal/api:TestRegisterRefusesRouteWithoutScope` |
+| SR-04 | Every create path names a service: without service_id the Default service, with one that service, an unknown one 422 on... | test | `internal/inventory:TestCreatePathsNameAService`<br>`internal/inventory:TestDiscoveredRowsTakeTheServersService`<br>`internal/authz/services:TestResolveService`<br>`internal/api:TestServiceFilter`<br>`internal/api:TestRowsShowTheirService` |
+| SR-05 | Moving resources: each kind moves, a dry run changes nothing and lists the bindings that would cross services without a... | test | `internal/authz/services:TestAssignMovesEachKindAndListsUntrustedBindings`<br>`internal/authz/services:TestResolveVisibleFrom`<br>`internal/api:TestAssignReadsDryRunAndTheResources` |
+| SR-06 | A certificate of one service deployed to a server of another: refused (ALC-SVC-0007, naming both services) before anythi... | test | `internal/jobs/deployjobs:TestDeploymentAcrossServicesNeedsATrust`<br>`internal/inventory:TestDeploymentsAndBindingsAcrossServicesNeedATrust`<br>`internal/inventory:TestFirstSendChecksTheTrustAgain`<br>`internal/api:TestUntrustedDeploymentNamesBothServices` |
+| SR-07 | The ACME and Key Vault automatic deployments hold a website whose service does not trust the source (mark service.untrus... | test | `internal/jobs/deployjobs:TestACMEAutoDeployAcrossServicesHoldsUntilATrust`<br>`internal/inventory:TestKVAutoDeployAcrossServicesHoldsUntilATrust`<br>`internal/inventory:TestDeploymentsAndBindingsAcrossServicesNeedATrust` |
+| SR-08 | The SSH key deploy and the Key Vault import across services need a trust at the request and again when their job runs; a... | test | `internal/sshkeys:TestGeneratedKeysAndDeploysAcrossServices`<br>`internal/jobs/kvjobs:TestImportDecisionTable` |
+| SR-09 | Services and environments: the Default service cannot be deleted, a service with resources is kept, names and keys are u... | test | `internal/authz/services:TestServicesLifecycle`<br>`internal/authz/services:TestEnvironments`<br>`internal/authz/services:TestTrusts`<br>`internal/api:TestServiceErrorsHaveTheirCodes` |
+| SR-10 | Browser journey: an Administrator creates a service in production, moves a server and its certificate there, and sees th... | test | `web/e2e/services.spec.ts:an Administrator adds a service in production, moves a server and its certificate there and filters by it`<br>`web/src/pages/ServicesPage.test.tsx:lets an Administrator add a service in an environment and opens it` |

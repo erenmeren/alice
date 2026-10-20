@@ -154,6 +154,13 @@ Three roles: **Administrator**, **Operator** and **Auditor**. Every route of the
 every permission to the roles and token scopes that may use it; a route without a permission does not exist (a test
 checks every route against every role and token). The full matrix is in [authz-matrix.md](authz-matrix.md).
 
+Resources belong to **services** (servers, Key Vaults, certificates, signing requests, SSH keys, ACME certificates and
+scan scopes; the Default service holds everything else). A certificate's private key or an SSH key of one service is
+placed on a server or into a Key Vault of another service only when the receiving service trusts the sending one, and
+Alice checks that again right before every send, also for automatic deployments. Only administrators, with a fresh
+code and never with an API token, create services, move resources between them and make trusts. Roles are still held
+for every service; limiting a person to some services comes with a later version.
+
 ## Audit log
 
 - Every sign-in, failure, refused request and change is recorded with actor, address, object and result.

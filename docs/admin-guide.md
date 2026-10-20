@@ -1195,6 +1195,51 @@ sent. Limits: at most 50,000 rows (`ALC-RPT-0001`: narrow the filter), one expor
 (`ALC-RPT-0004`) and 10 a minute per person or API token. Scripts call `GET /api/v1/certificates/export` or
 `GET /api/v1/ssh-keys/export` with the list's filter parameters (without `cursor` and `limit`).
 
+## Services
+
+A **service** groups what belongs together: servers, Key Vaults, certificates, signing requests, ACME certificates,
+SSH keys and scan scopes, for example "Payments (production)". Every installation has the **Default** service; it
+holds everything that has no other service and cannot be deleted. Until you create a second service nothing changes:
+everybody keeps their role and sees what they saw before.
+
+**Services** (in the administration menu) lists each service with its environment and how many resources of each kind
+it owns. Administrators create, rename and delete services (a fresh confirmation code is asked for, as for other
+administration). A service can be deleted only when it owns nothing (`ALC-SVC-0003` says how many of each kind are
+left); its deleted servers and ACME certificates are history and move to the Default service. Names are unique,
+whatever the letter case (`ALC-SVC-0002`).
+
+**Environments** (Settings) are the labels a service can carry: production, staging, test and development come with
+Alice; Administrators rename, reorder, add and delete them (only when no service uses one, `ALC-SVC-0016`). A key such
+as `production` never changes; the name you see does.
+
+**Where new things go.** Every create form and API call takes an optional service (`service_id`); without one the new
+server, Key Vault, certificate, signing request, generated SSH key, ACME certificate or scan scope goes to the Default
+service, and an unknown one is refused. What Alice finds itself goes where it was found: a certificate or an SSH key
+seen first on a server goes to the server's service, a Key Vault certificate to the vault's, an issued ACME certificate
+to its ACME certificate's, a completed signing request's certificate to the request's, and a rotation's new key to the
+old key's. A certificate Alice already knows keeps its service.
+
+**Moving.** On a service's page, **Resources**, **Move here** moves servers, Key Vaults, certificates, signing requests,
+SSH keys, ACME certificates and scan scopes to that service (also **Move to service** on a server's or a certificate's
+page). Alice first shows what the move would do, including every Key Vault or ACME connection that would then cross
+services without a trust (see below): its automatic deployments stop there until a trust exists. The move is one entry
+in the audit log (**Resources moved**) naming each resource.
+
+**Trusts.** A certificate's private key or an SSH key of one service is put on a server or into a Key Vault of another
+service only when the receiving service trusts the sending one. On the receiving service's page, **Trusts**, add the
+sending service ("Accepts certificates and keys from"). A trust has a direction: Payments accepting Default's keys does
+not let Default accept Payments'. Without one, a deployment, a new Key Vault or ACME connection, an import into a Key
+Vault and an SSH key deploy are refused (`ALC-SVC-0007`, which names both services), and the automatic deployments of
+ACME certificates and Key Vault connections leave such a website alone, mark it **Not accepted by its service** and
+send one e-mail. Removing a trust does not undo what was deployed; it stops what comes next, also deployments already
+queued: Alice checks the trust again right before it sends. The replacement of a key-compromise incident needs no
+trust: the compromised key is there already.
+
+Creating, changing and deleting services and environments, moving resources and making or removing trusts are an
+Administrator's acts with a fresh confirmation code, never an API token; they work while the license is locked.
+Reading them is everyone's. Services do not yet limit who sees what: role bindings per service come with a later
+version (R49).
+
 ## Servers
 
 **Servers** lists every server Alice manages with its status: **Connected**, **Waiting for fingerprint
