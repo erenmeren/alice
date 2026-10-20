@@ -101,6 +101,44 @@ func TestACMECertificateJSONCAWait(t *testing.T) {
 	assert.Contains(t, string(raw), `"ca_not_before":null,"ca_wait_critical":false`, "both always present (the openapi's required list)")
 }
 
+// The renewal time (R50): the time chosen in the CA's window while it applies (renew_at_source ca_window), else the
+// local rule (local); none before the first certificate. An order shows its replaces identifier and outcome.
+func TestACMECertificateJSONRenewAt(t *testing.T) {
+	c := sampleACMECert() // valid acmeAt .. acmeAt + 90 d: due at + 60 d by the local rule
+	d := acmeCertificateJSON(c, acmeAt)
+	require.NotNil(t, d.RenewAt)
+	assert.Equal(t, acmeAt.Add(60*24*time.Hour), *d.RenewAt)
+	assert.Equal(t, "local", d.RenewAtSource)
+
+	ws, we, chosen := acmeAt.Add(40*24*time.Hour), acmeAt.Add(45*24*time.Hour), acmeAt.Add(42*24*time.Hour)
+	c.ARIWindowStart, c.ARIWindowEnd, c.ARIRenewAt = &ws, &we, &chosen
+	d = acmeCertificateJSON(c, acmeAt)
+	assert.Equal(t, chosen, *d.RenewAt)
+	assert.Equal(t, "ca_window", d.RenewAtSource)
+
+	outside := acmeAt.Add(50 * 24 * time.Hour)
+	c.ARIRenewAt = &outside
+	d = acmeCertificateJSON(c, acmeAt)
+	assert.Equal(t, acmeAt.Add(60*24*time.Hour), *d.RenewAt, "a stored time outside the window is not used")
+	assert.Equal(t, "local", d.RenewAtSource)
+
+	c.Current = nil
+	d = acmeCertificateJSON(c, acmeAt)
+	assert.Nil(t, d.RenewAt)
+	assert.Empty(t, d.RenewAtSource)
+	raw, err := json.Marshal(d)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"renew_at":null,"renew_at_source":""`, "both always present (the openapi's required list)")
+
+	o := sampleACMEOrder(inventory.ACMEOrderIssue)
+	o.Replaces, o.ReplacesOutcome = "aYhba4dGQEHhs3uEe6CuLN4ByNQ.AIdlQyE", "already_replaced"
+	od := acmeOrderJSON(o)
+	assert.Equal(t, o.Replaces, od.Replaces)
+	assert.Equal(t, "already_replaced", od.ReplacesOutcome)
+	o.ReplacesOutcome = "bogus"
+	assert.Empty(t, acmeOrderJSON(o).ReplacesOutcome, "an unknown outcome is shown as none (the openapi enum)")
+}
+
 func sampleACMEBinding(auto bool) inventory.ACMEBinding {
 	at := acmeAt
 	return inventory.ACMEBinding{ACMECertificateID: acmeCertID, LocationID: acmeLocID, TargetID: targetID, TargetName: "web-01",

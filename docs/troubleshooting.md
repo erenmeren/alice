@@ -3202,6 +3202,14 @@ If `nginx-restore` answers `IO_ERROR`, the change's record (`/var/lib/alice-help
 
 **What to do.** Revoke the certificate with the account that ordered it, through the certificate authority's own tools if needed, and replace it on your servers.
 
+## ALC-ACM-0041: Another order at the certificate authority is already replacing this certificate
+
+**Meaning.** A renewal names the certificate it replaces (RFC 9773 `replaces`), and the certificate authority answered that another order already replaces it (`alreadyReplaced`). Alice first takes that order over when it is one of its own (an earlier renewal that was interrupted), otherwise it orders once more without naming the certificate; this code is an order's result only when that did not work either. It counts as an outage that clears by itself: the planner keeps retrying and does not stop automatic renewal for it. (HTTP 409, reason `acme.already_replaced`; retryable.)
+
+**Likely cause.** An order created outside Alice with the same account (another ACME client sharing the account key), or a certificate authority that keeps an abandoned order for longer than usual.
+
+**What to do.** Usually nothing: the other order ends at the certificate authority within a few days (seven at most at Let's Encrypt) and Alice renews again by itself. If the renewal keeps failing after that, stop the other ACME client from using the account, then use **Check again and resume** on the certificate's page.
+
 ## ALC-INC-0001: This certificate already has an open incident
 
 **Meaning.** Alice runs one key compromise incident per certificate at a time. (HTTP 409, reason `incident.open`.)

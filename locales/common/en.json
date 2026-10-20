@@ -1584,6 +1584,11 @@
         "title": "The certificate authority refused to revoke this certificate.",
         "cause": "The certificate authority says this account may not revoke this certificate: another account ordered it, or the authority does not know it (for example after a change of directory).",
         "action": "Revoke the certificate with the account that ordered it, through the certificate authority's own tools if needed, and replace it on your servers."
+      },
+      "already_replaced": {
+        "title": "Another order at the certificate authority is already replacing this certificate.",
+        "cause": "Alice named the current certificate as the one this renewal replaces, and the certificate authority says another order already does. Alice takes that order over when it is one of its own, or orders once more without naming the certificate; this code appears only when that did not help either.",
+        "action": "Nothing, usually: the other order ends at the certificate authority within a few days and Alice renews again by itself. If the renewal keeps failing, use Check again and resume on the certificate's page after that time."
       }
     },
     "discovery": {

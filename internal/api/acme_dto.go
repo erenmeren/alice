@@ -4,6 +4,7 @@ import (
 	"slices"
 	"time"
 
+	"alice/internal/acme"
 	"alice/internal/acme/renew"
 	"alice/internal/inventory"
 )
@@ -135,6 +136,10 @@ type acmeCertificateDTO struct {
 	DeployStopped    bool              `json:"deploy_stopped"`
 	BindingsCount    int               `json:"bindings_count"`
 	Bindings         *[]acmeBindingDTO `json:"bindings,omitempty"` // the certificate's own page only
+	// RenewAt is when the planner renews the current certificate: the time chosen at random in the CA's window
+	// (RenewAtSource ca_window, R50) or the local rule (local); null and '' before the first certificate.
+	RenewAt       *time.Time `json:"renew_at"`
+	RenewAtSource string     `json:"renew_at_source"`
 	// LastNotice is how the newest renewal e-mail of the certificate was delivered (the certificate's own page only;
 	// absent when none was queued).
 	LastNotice *acmeNoticeDTO `json:"last_notice,omitempty"`
@@ -173,14 +178,30 @@ func acmeCertificateJSON(c inventory.ACMECertificate, now time.Time) acmeCertifi
 			NotAfter: c.Current.NotAfter.UTC(), ChainComplete: c.Current.ChainComplete, RevokedAt: utcPtr(c.Current.RevokedAt),
 			RevocationReason: c.Current.RevocationReason, Compromised: c.Current.Compromised}
 	}
+	var window *renew.Window
 	if c.ARIWindowStart != nil && c.ARIWindowEnd != nil {
 		d.ARIWindow = &acmeWindowDTO{Start: c.ARIWindowStart.UTC(), End: c.ARIWindowEnd.UTC()}
+		window = &renew.Window{Start: *c.ARIWindowStart, End: *c.ARIWindowEnd}
+	}
+	if c.Current != nil {
+		at, fromCA := renew.RenewalTime(c.ARIRenewAt, window, c.Current.NotBefore, c.Current.NotAfter, c.RenewBeforeDays)
+		at = at.UTC()
+		d.RenewAt, d.RenewAtSource = &at, acmeRenewLocal
+		if fromCA {
+			d.RenewAtSource = acmeRenewCAWindow
+		}
 	}
 	if !slices.Contains(acmeHoldReasons, d.DeployHeldReason) {
 		d.DeployHeldReason = ""
 	}
 	return d
 }
+
+// The values of renew_at_source: the time chosen in the CA's suggested window (ARI, R50) or the local rule.
+const (
+	acmeRenewCAWindow = "ca_window"
+	acmeRenewLocal    = "local"
+)
 
 // acmeFailureClasses are the values of last_failure_class; anything else is shown as none (the openapi enum).
 var acmeFailureClasses = []string{"", renew.ClassTransient, renew.ClassPermanent}
@@ -252,11 +273,19 @@ type acmeOrderDTO struct {
 	RevokedAt        *time.Time `json:"revoked_at"`
 	RevocationReason string     `json:"revocation_reason"`
 	Compromised      bool       `json:"compromised"`
+	// Replaces is the RFC 9773 identifier of the certificate an issue order renews ('' for a first order or a test run);
+	// ReplacesOutcome what became of it (acme.ReplacesOutcomes; R50).
+	Replaces        string `json:"replaces"`
+	ReplacesOutcome string `json:"replaces_outcome"`
 }
 
 func acmeOrderJSON(o inventory.ACMEOrder) acmeOrderDTO {
-	return acmeOrderDTO{ID: o.ID.String(), ACMECertificateID: o.ACMECertificateID.String(), Kind: o.Kind, State: o.State, Trigger: o.Trigger,
+	d := acmeOrderDTO{ID: o.ID.String(), ACMECertificateID: o.ACMECertificateID.String(), Kind: o.Kind, State: o.State, Trigger: o.Trigger,
 		StartedAt: o.StartedAt.UTC(), FinishedAt: utcPtr(o.FinishedAt), Error: errorRef(o.ErrorCode, nil), CertificateID: idPtr(o.CertificateID),
 		RequestedBy: idPtr(o.RequestedBy), Presented: o.Presented, CleanupAt: utcPtr(o.CleanupAt), CleanupError: errorRef(o.CleanupErrorCode, nil),
-		RevokedAt: utcPtr(o.RevokedAt), RevocationReason: o.RevocationReason, Compromised: o.Compromised}
+		RevokedAt: utcPtr(o.RevokedAt), RevocationReason: o.RevocationReason, Compromised: o.Compromised, Replaces: o.Replaces}
+	if slices.Contains(acme.ReplacesOutcomes(), o.ReplacesOutcome) {
+		d.ReplacesOutcome = o.ReplacesOutcome
+	}
+	return d
 }

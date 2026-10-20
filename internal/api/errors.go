@@ -468,6 +468,9 @@ var (
 	ErrACMRevokeUnsupported   = ErrorCode{Code: "ALC-ACM-0038", Reason: "acme.revoke_unsupported", Status: http.StatusUnprocessableEntity}
 	ErrACMRevokeReasonRefused = ErrorCode{Code: "ALC-ACM-0039", Reason: "acme.revoke_reason_refused", Status: http.StatusUnprocessableEntity}
 	ErrACMRevokeUnauthorized  = ErrorCode{Code: "ALC-ACM-0040", Reason: "acme.revoke_unauthorized", Status: http.StatusUnprocessableEntity}
+	// RFC 9773 alreadyReplaced (R50): another order at the authority replaces the certificate already; an order's code only
+	// (a renewal takes that order over or orders once more without replaces first). Transient: that order ends there.
+	ErrACMAlreadyReplaced = ErrorCode{Code: "ALC-ACM-0041", Reason: "acme.already_replaced", Status: http.StatusConflict, Retryable: true}
 
 	// Key-compromise incidents (area INC, 2026-10-20). 0001-0004 answer a request; 0005-0013 are the codes an incident
 	// records on itself (attention_code) or on a location (error_code), never an answer.
@@ -569,7 +572,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMSecretUnreadable, ErrACMOrderAbandoned, ErrACMNotIssued, ErrACMLocationBound, ErrACMLocationNotBound,
 		ErrACMBindingGone, ErrACMAutoDeployOff, ErrACMCertificateSuperseded, ErrACMDeployStopped, ErrACMDeployHeld,
 		ErrACMNoBindings, ErrACMTooManyBindings, ErrACMNotThisCertificate, ErrACMRevokeUnsupported, ErrACMRevokeReasonRefused,
-		ErrACMRevokeUnauthorized,
+		ErrACMRevokeUnauthorized, ErrACMAlreadyReplaced,
 		ErrINCOpen, ErrINCState, ErrINCReplacementInvalid, ErrINCNotRevocable, ErrINCOtherCertificate, ErrINCNotDeployable,
 		ErrINCFollowsKeyVault, ErrINCFollowsOtherACME, ErrINCLocationBusy, ErrINCDeploymentsFailed, ErrINCDeploymentsUnverified,
 		ErrINCKeyReused, ErrINCReplacementUnusable,

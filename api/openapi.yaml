@@ -5405,7 +5405,7 @@ components:
       required: [id, provider_id, account_id, names, key_type, challenge, hook_id, http_target_id, renew_before_days, auto_renew,
         auto_deploy, state, stopped_reason, failures, last_failure_class, permanent_failures, recovering, next_attempt_at, ca_not_before,
         ca_wait_critical, last_attempt_at, last_error, running_order_id, current, ari_window, deploy_held_reason, deploy_stopped, bindings_count,
-        created_at, updated_at]
+        renew_at, renew_at_source, created_at, updated_at]
       properties:
         id: { type: string, format: uuid }
         provider_id: { type: string, format: uuid }
@@ -5469,6 +5469,17 @@ components:
           properties:
             start: { type: string, format: date-time }
             end: { type: string, format: date-time }
+        renew_at:
+          type: [string, "null"]
+          format: date-time
+          description: >-
+            When Alice renews the current certificate by itself (null before the first certificate): a time it chose once at
+            random in the window the CA suggests (ARI, RFC 9773; kept until the CA moves the window past it), never later than
+            renew_before_days allows; otherwise renew_before_days before the end (at most a third of the lifetime)
+        renew_at_source:
+          type: string
+          enum: ["", ca_window, local]
+          description: 'ca_window: renew_at was chosen in the window the CA suggests (R50); local: renew_before_days; empty before the first certificate'
         deploy_held_reason: { type: string, enum: ["", license, chain_incomplete], description: 'Why automatic deployment holds the current certificate' }
         deploy_stopped: { type: boolean, description: 'Automatic deployment of the current certificate stopped after repeated failures' }
         bindings_count: { type: integer }
@@ -5501,7 +5512,7 @@ components:
     ACMEOrder:
       type: object
       required: [id, acme_certificate_id, kind, state, trigger, started_at, finished_at, error, certificate_id, requested_by, presented,
-        cleanup_at, cleanup_error, revoked_at, revocation_reason, compromised]
+        cleanup_at, cleanup_error, revoked_at, revocation_reason, compromised, replaces, replaces_outcome]
       properties:
         id: { type: string, format: uuid }
         acme_certificate_id: { type: string, format: uuid }
@@ -5519,6 +5530,19 @@ components:
         revoked_at: { type: [string, "null"], format: date-time, description: The issued certificate's revocation }
         revocation_reason: { $ref: "#/components/schemas/RevocationReasonOrEmpty" }
         compromised: { type: boolean, description: The issued certificate's key is marked compromised }
+        replaces:
+          type: string
+          description: >-
+            The RFC 9773 identifier (base64url authority key identifier "." base64url serial number) of the certificate an
+            issue order renews; empty for a first order and a test run
+        replaces_outcome:
+          type: string
+          enum: ["", sent, adopted, no_ari, other_account, already_replaced, refused]
+          description: >-
+            What became of replaces (R50): sent with the order; adopted (the CA said alreadyReplaced and an earlier interrupted
+            order of Alice's that replaces it was finished instead); not sent because the CA has no renewal information (no_ari)
+            or the certificate was ordered with another account (other_account); or sent and refused, then ordered once more
+            without it (already_replaced, refused). Empty when replaces is empty
     ACMEOrderList:
       type: object
       required: [items]
