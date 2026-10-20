@@ -247,7 +247,7 @@ func TestConfirmationShowsEveryFieldOfThePayload(t *testing.T) {
 		ValidUntil: time.Date(2027, 4, 15, 0, 0, 0, 0, time.UTC), MaxTargets: 25, Features: []string{"alpha", "beta"},
 		Format: 1, Replaces: "LIC-2026-000001"}
 	var w bytes.Buffer
-	writeConfirmation(&w, p, 437, strings.Repeat("ab", 32), testKeyID, "12345678")
+	writeConfirmation(&w, p, 437, strings.Repeat("ab", 32), testKeyID, "12345678", false)
 	got := w.String()
 	for _, want := range []string{"signed bytes: 437 bytes", "Acme Ltd", p.InstallationID, "targets          25", "2026-10-15T00:00:00Z", "2027-04-15T00:00:00Z",
 		"months           6", "alpha,beta", "LIC-2026-000001", "LIC-2026-123456", "2026-10-15T09:01:02Z", "format           1",
@@ -256,6 +256,21 @@ func TestConfirmationShowsEveryFieldOfThePayload(t *testing.T) {
 	}
 	// A test against forgetting a field added to the payload later: the display must be extended with it.
 	assert.Equal(t, 10, reflect.TypeFor[license.Payload]().NumField(), "a new payload field must be added to the confirmation display")
+	assert.Contains(t, got, "The YubiKey will sign this license.")
+}
+
+func TestConfirmationNamesAnEmergencyExtension(t *testing.T) {
+	from := time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)
+	p := license.Payload{LicenseID: "LIC-2026-123457", Customer: "Acme Ltd", InstallationID: license.NewInstallationID(),
+		IssuedAt: from.Add(9 * time.Hour), ValidFrom: from, ValidUntil: from.AddDate(0, 0, 14), MaxTargets: 7, Features: []string{},
+		Format: 1}
+	var w bytes.Buffer
+	writeConfirmation(&w, p, 400, strings.Repeat("cd", 32), testKeyID, "12345678", true)
+	got := w.String()
+	assert.Contains(t, got, "The YubiKey will sign this EMERGENCY EXTENSION.")
+	assert.Contains(t, got, "days             14")
+	assert.NotContains(t, got, "months")
+	assert.Contains(t, got, "replaces         (none)")
 }
 
 func TestReadAnswer(t *testing.T) {

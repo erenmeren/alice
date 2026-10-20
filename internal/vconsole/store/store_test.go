@@ -1,6 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -39,4 +42,31 @@ func TestRequestHashIgnoresStatusAndTimes(t *testing.T) {
 	a := Request{Status: "open", RequestedBy: "x"}
 	b := Request{Status: "signed", RequestedBy: "y"}
 	assert.Equal(t, RequestHash(a), RequestHash(b))
+}
+
+// An emergency extension's kind, days, reason and extended license are content the signer
+// approves; a normal request hashes exactly as before the extension existed (a hash shown by an
+// older build still matches).
+func TestRequestHashCoversTheEmergencyFields(t *testing.T) {
+	normal := Request{Customer: "Acme Ltd", NewRequest: NewRequest{Installation: "ALICE-AAAAA-BBBBB", Targets: 5,
+		Months: 12, Features: []string{"ssh"}}}
+	raw, _ := json.Marshal([]any{"Acme Ltd", "ALICE-AAAAA-BBBBB", 5, "", 12, []string{"ssh"}, ""})
+	sum := sha256.Sum256(raw)
+	assert.Equal(t, hex.EncodeToString(sum[:]), RequestHash(normal))
+	normal.Kind = KindLicense
+	assert.Equal(t, hex.EncodeToString(sum[:]), RequestHash(normal), "kind license is the old hash")
+
+	ext := Request{Customer: "Acme Ltd", Kind: KindEmergency, Days: 14, Reason: "PO delayed", Extends: "LIC-1",
+		NewRequest: NewRequest{Installation: "ALICE-AAAAA-BBBBB", Targets: 5, Features: []string{"ssh"}}}
+	h := RequestHash(ext)
+	for name, mutate := range map[string]func(*Request){
+		"kind":    func(r *Request) { r.Kind = KindLicense },
+		"days":    func(r *Request) { r.Days = 30 },
+		"reason":  func(r *Request) { r.Reason = "other" },
+		"extends": func(r *Request) { r.Extends = "LIC-2" },
+	} {
+		changed := ext
+		mutate(&changed)
+		assert.NotEqual(t, h, RequestHash(changed), name)
+	}
 }

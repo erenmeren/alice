@@ -258,10 +258,35 @@ itself: no inline script or style.
 ### Pages
 
 `/login` and `/enroll` need no session. After sign-in: `/` (home), `/customers`, `/requests/new`,
-`/requests/ID`, `/licenses`, `/licenses/ID/download`, `/notifications`. The pages are the same for
+`/requests/emergency`, `/requests/ID`, `/licenses`, `/licenses/ID/download`, `/notifications`. The pages are the same for
 both roles; the role only decides which notifications a person sees. Any other path shows nothing to a signed-out
 visitor except the sign-in page. A person can cancel only their own open requests; everyone can read
 all requests.
+
+### Emergency extensions
+
+When a customer's license has lapsed (or is about to) and the renewal is not ready, anyone signed in
+can ask for an **emergency extension** from the licenses page: the button appears on an
+installation's latest license (not revoked) that ends before an extension signed today could end.
+The form shows what is carried over from that license (customer, installation, targets, features)
+and takes only the number of days (default 14, at most 30) and a reason, which is required. The
+signed license is an ordinary license valid from 00:00 UTC of the signing day for that many days;
+the label lives only on the vendor side: in the request (`vendor-console request show` and `request
+list` say EMERGENCY EXTENSION), on the YubiKey confirmation, in the audit log (`request.add` and
+`license.issue` with `"kind": "emergency"`, the days, the reason and the carried-over license), in
+the owner's notification ("Emergency extension issued") and on the license list.
+
+It is signed like any request (`vendor-console issue`, same PIN, touch and confirmation rules). At
+signing time it is refused when the carried-over license was revoked meanwhile, or when a license
+valid on the start day already runs at least as long (for example the real renewal was signed
+first): cancel the request then.
+
+The real renewal: use **Renew** on the extension's row (or on its reminder). It starts where the
+extension ends and takes over in Alice at that moment without a gap. A renewal that should start
+earlier (backdated to the original lapse) must name the extension in **Replaces license**;
+otherwise the console refuses it, because Alice would keep the extension, the later start, in force
+with its end warnings until it ends. A renewal starting on the day it is signed needs nothing
+special. Rulings: `docs/superpowers/rulings/vendor-emergency-extension.md`.
 
 ### Sales people
 

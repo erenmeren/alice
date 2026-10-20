@@ -482,6 +482,33 @@ func TestBuildPayloadClampsTheTermToTheMonthEnd(t *testing.T) {
 	}
 }
 
+// An emergency extension (vendor console) has a term in days: 1 to MaxEmergencyDays, from the
+// start of the signing day, never together with months, a start date or a correction.
+func TestBuildPayloadTermInDays(t *testing.T) {
+	id := license.NewInstallationID()
+	p, err := issuer.BuildPayload(issuer.Request{Installation: id, Customer: "C", Targets: 3, Days: 14}, now)
+	require.NoError(t, err)
+	assert.True(t, p.ValidFrom.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)), "today, 00:00 UTC")
+	assert.True(t, p.ValidUntil.Equal(time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)), "14 days")
+	assert.Empty(t, p.Replaces)
+
+	p, err = issuer.BuildPayload(issuer.Request{Installation: id, Customer: "C", Targets: 3, Days: issuer.MaxEmergencyDays}, now)
+	require.NoError(t, err)
+	assert.Equal(t, 30*24*time.Hour, p.ValidUntil.Sub(p.ValidFrom))
+
+	for name, req := range map[string]issuer.Request{
+		"31 days":         {Days: 31},
+		"negative":        {Days: -1},
+		"with months":     {Days: 14, Months: 12},
+		"with a start":    {Days: 14, From: "2026-10-01"},
+		"as a correction": {Days: 14, Replaces: "LIC-X-1"},
+	} {
+		req.Installation, req.Customer, req.Targets = id, "C", 3
+		_, err := issuer.BuildPayload(req, now)
+		assert.Error(t, err, name)
+	}
+}
+
 // NormalizePayload is what Issue signs: a hardware signer (vendor console) signs the same bytes.
 func TestNormalizePayloadIsWhatIssueSigns(t *testing.T) {
 	priv, _, err := issuer.GenerateKey("vk-2026-01", []byte(testWords), fastKDF)

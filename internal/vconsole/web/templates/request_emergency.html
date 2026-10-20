@@ -1,0 +1,32 @@
+{{define "title"}}Emergency extension{{end}}
+{{define "content"}}
+<div class="page-head">
+<div><h1>Emergency extension</h1><p>A short license so a lapsed installation keeps working until its renewal arrives. A signer issues it like any request.</p></div>
+</div>
+<div class="card">
+<dl class="details">
+<dt>Customer</dt><dd>{{.Data.Basis.Customer}}</dd>
+<dt>Installation</dt><dd class="mono">{{.Data.Basis.Installation}}</dd>
+<dt>Targets</dt><dd>{{.Data.Basis.Targets}}</dd>
+<dt>Features</dt><dd>{{range $i, $f := .Data.Basis.Features}}{{if $i}}, {{end}}{{$f}}{{else}}none{{end}}</dd>
+<dt>Carried over from</dt><dd><span class="mono">{{.Data.Basis.LicenseID}}</span> <span class="muted">(valid until {{.Data.Basis.ValidUntil.Format "2006-01-02"}})</span></dd>
+</dl>
+</div>
+<section class="section">
+<div class="section-head"><h2>{{template "i-zap"}}Term and reason</h2></div>
+<div class="card">
+<div class="card-body">
+<form method="post" action="/requests/emergency" class="form">
+<p class="notice notice-warn">The extension is valid from the start of the day it is signed (00:00 UTC) for the days below, at most {{.Data.Max}}. Customer, installation, targets and features are carried over from {{.Data.Basis.LicenseID}}, the installation's latest license, and cannot be changed here. For anything else, make a normal request.</p>
+{{if .Data.Error}}<p role="alert" class="alert">{{.Data.Error}}</p>{{end}}
+<input type="hidden" name="license" value="{{.Data.Basis.LicenseID}}">
+<div class="form-grid">
+<div class="field"><label for="days">Days <span class="optional">(1 to {{.Data.Max}})</span></label><input type="number" id="days" name="days" value="{{.Data.Days}}" min="1" max="{{.Data.Max}}" step="1" inputmode="numeric" required><p class="help">{{.Data.Default}} unless there is a reason for more.</p></div>
+</div>
+<div class="field"><label for="reason">Reason</label><input type="text" id="reason" name="reason" value="{{.Data.Reason}}" maxlength="{{.Data.MaxLen}}" placeholder="Renewal order delayed in procurement" required><p class="help">Recorded in the audit log and shown to the signer and the owner.</p></div>
+<div class="form-actions"><button type="submit">Request the extension</button><a class="btn btn-outline" href="/licenses">Cancel</a></div>
+</form>
+</div>
+</div>
+</section>
+{{end}}

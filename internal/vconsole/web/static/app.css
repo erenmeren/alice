@@ -152,12 +152,12 @@ button:disabled { opacity: 0.55; cursor: progress; }
 label { font-weight: 500; font-size: 0.875rem; }
 .optional { color: var(--muted); font-weight: 400; }
 .help { color: var(--muted); font-size: 0.8125rem; margin: 0; }
-input[type="text"], select, textarea {
+input[type="text"], input[type="number"], select, textarea {
   width: 100%; height: 2.25rem; padding: 0 0.75rem; font: inherit; color: var(--fg);
   background: var(--bg); border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px); box-shadow: var(--shadow);
 }
 textarea { height: auto; min-height: 5rem; padding: 0.5rem 0.75rem; resize: vertical; }
-input[type="text"]:focus, select:focus, textarea:focus { outline: none; border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent); }
+input[type="text"]:focus, input[type="number"]:focus, select:focus, textarea:focus { outline: none; border-color: var(--ring); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 35%, transparent); }
 input::placeholder, textarea::placeholder { color: var(--muted); }
 .form-actions { display: flex; gap: 0.5rem; padding-top: 0.25rem; }
 
@@ -175,6 +175,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 .alert:empty { display: none; }
 .alert:not(:empty) { padding: 0.65rem 0.85rem; border: 1px solid var(--danger-border); background: var(--danger-bg); border-radius: var(--radius); }
 .notice { padding: 0.75rem 1rem; border: 1px solid var(--info-border); background: var(--info-bg); color: var(--info-fg); border-radius: var(--radius); }
+.notice-warn { border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-fg); }
 .hint { color: var(--muted); }
 .muted { color: var(--muted); }
 

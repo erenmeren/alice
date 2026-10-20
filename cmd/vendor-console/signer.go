@@ -20,6 +20,7 @@ import (
 	"alice/internal/vconsole/issue"
 	"alice/internal/vconsole/sign"
 	"alice/internal/vconsole/sign/openpgp"
+	"alice/internal/vconsole/store"
 )
 
 // interactiveLimit bounds the interactive signing step, from the confirmation display to the
@@ -225,11 +226,17 @@ func (c *cli) issueOpenPGP(o openPGPIssue) int {
 	defer step.end()
 	licenseID := o.params.LicenseID
 	p := o.params
+	// Only for the display: Issue checks the request against the hash the signer approved, which
+	// covers the kind, so a request that changed kind after this read is refused.
+	emergency := false
+	if req, err := store.GetRequest(tctx, pool, p.RequestID); err == nil {
+		emergency = req.Kind == store.KindEmergency
+	}
 	p.Confirm = func(pl license.Payload, sum string) error {
 		// From here the request row is locked.
 		step.start(tctx)
 		licenseID = pl.LicenseID
-		writeConfirmation(c.err, pl, len(license.SignedBytes(pl)), sum, key.ID, s.Serial())
+		writeConfirmation(c.err, pl, len(license.SignedBytes(pl)), sum, key.ID, s.Serial(), emergency)
 		if o.yes {
 			return nil
 		}
@@ -345,8 +352,9 @@ func (c *cli) signErr(err error, afterTouch bool) int {
 }
 
 // writeConfirmation prints every field of the payload exactly as it will be signed, the key ID
-// and card, the length of the signed bytes and their SHA-256.
-func writeConfirmation(w io.Writer, p license.Payload, size int, sum, keyID, serial string) {
+// and card, the length of the signed bytes and their SHA-256. An emergency extension is named as
+// one and its term is shown in days (the payload itself is an ordinary license).
+func writeConfirmation(w io.Writer, p license.Payload, size int, sum, keyID, serial string, emergency bool) {
 	none := func(s string) string {
 		if s == "" {
 			return "(none)"
@@ -357,13 +365,18 @@ func writeConfirmation(w io.Writer, p license.Payload, size int, sum, keyID, ser
 	for i, f := range p.Features {
 		features[i] = termSafe(f)
 	}
-	_, _ = fmt.Fprintf(w, "\nThe YubiKey will sign this license. Check every line against the request and what the customer sent:\n"+
+	what, term := "this license", fmt.Sprintf("months           %d", termMonths(p.ValidFrom, p.ValidUntil))
+	if emergency {
+		what = "this EMERGENCY EXTENSION"
+		term = fmt.Sprintf("days             %d", int(p.ValidUntil.Sub(p.ValidFrom)/(24*time.Hour)))
+	}
+	_, _ = fmt.Fprintf(w, "\nThe YubiKey will sign %s. Check every line against the request and what the customer sent:\n"+
 		"  customer         %s\n  installation ID  %s\n  targets          %d\n  valid from       %s\n  valid until      %s\n"+
-		"  months           %d\n  features         %s\n  replaces         %s\n  license ID       %s\n  issued at        %s\n"+
+		"  %s\n  features         %s\n  replaces         %s\n  license ID       %s\n  issued at        %s\n"+
 		"  format           %d\n  key ID           %s\n  card serial      %s\n"+
 		"signed bytes: %d bytes\nSHA-256 of the signed bytes: %s\n",
-		termSafe(p.Customer), termSafe(p.InstallationID), p.MaxTargets, p.ValidFrom.UTC().Format(time.RFC3339),
-		p.ValidUntil.UTC().Format(time.RFC3339), termMonths(p.ValidFrom, p.ValidUntil), none(strings.Join(features, ",")),
+		what, termSafe(p.Customer), termSafe(p.InstallationID), p.MaxTargets, p.ValidFrom.UTC().Format(time.RFC3339),
+		p.ValidUntil.UTC().Format(time.RFC3339), term, none(strings.Join(features, ",")),
 		none(p.Replaces), termSafe(p.LicenseID), p.IssuedAt.UTC().Format(time.RFC3339), p.Format, termSafe(keyID), termSafe(serial), size, sum)
 }
 

@@ -78,11 +78,22 @@ type NewRequest struct {
 	Replaces     string   // license ID a correction replaces
 }
 
-// Request is a stored request.
+// Request kinds.
+const (
+	KindLicense   = "license"   // a license as typed (new, renewal or correction)
+	KindEmergency = "emergency" // an emergency extension (AddEmergencyRequest)
+)
+
+// Request is a stored request. An emergency extension has Kind KindEmergency, a term of Days
+// (Months is 0), no From or Replaces, a Reason and the license it carries over (Extends).
 type Request struct {
 	ID       int64
 	Customer string // the customer's name
 	NewRequest
+	Kind        string
+	Days        int
+	Reason      string
+	Extends     string
 	Status      string
 	RequestedBy string
 	RequestedAt time.Time
@@ -108,11 +119,15 @@ func AddRequest(ctx context.Context, q audit.Q, r NewRequest, now time.Time) (in
 		}
 		return 0, fmt.Errorf("store: read customer: %w", err)
 	}
-	if _, err := issuer.BuildPayload(issuer.Request{
+	p, err := issuer.BuildPayload(issuer.Request{
 		Installation: r.Installation, Customer: name, Targets: r.Targets, From: r.From,
 		Months: r.Months, Features: r.Features, Replaces: r.Replaces,
-	}, now); err != nil {
+	}, now)
+	if err != nil {
 		return 0, &InvalidError{Err: err}
+	}
+	if err := CheckStartsBeforeExtension(ctx, q, p); err != nil {
+		return 0, err
 	}
 	inst, err := license.ParseInstallationID(r.Installation)
 	if err != nil {
@@ -133,13 +148,13 @@ func AddRequest(ctx context.Context, q audit.Q, r NewRequest, now time.Time) (in
 	return id, nil
 }
 
-const requestColumns = `r.id, c.name, r.customer_id, r.installation, r.targets, r.valid_from, r.months, r.features,
-	r.replaces, r.status, r.requested_by, r.requested_at`
+const requestColumns = `r.id, c.name, r.customer_id, r.installation, r.targets, r.valid_from, coalesce(r.months, 0),
+	r.features, r.replaces, r.kind, coalesce(r.days, 0), r.reason, r.extends, r.status, r.requested_by, r.requested_at`
 
 func scanRequest(row pgx.Row) (Request, error) {
 	var r Request
 	err := row.Scan(&r.ID, &r.Customer, &r.CustomerID, &r.Installation, &r.Targets, &r.From, &r.Months, &r.Features,
-		&r.Replaces, &r.Status, &r.RequestedBy, &r.RequestedAt)
+		&r.Replaces, &r.Kind, &r.Days, &r.Reason, &r.Extends, &r.Status, &r.RequestedBy, &r.RequestedAt)
 	return r, err
 }
 
@@ -173,15 +188,20 @@ func ListRequests(ctx context.Context, q audit.Q, status string) ([]Request, err
 }
 
 // RequestHash is the SHA-256 (hex) of the content a signer approves: customer name, canonical
-// installation ID, targets, start, months, features and the license it replaces. A JSON array
-// keeps the fields apart. It is recomputed from the database row at signing time, so a request
-// that changed after the signer looked at it is noticed.
+// installation ID, targets, start, months, features and the license it replaces, and for an
+// emergency extension also its kind, days, reason and extended license (a normal request hashes as
+// it did before extensions existed). A JSON array keeps the fields apart. It is recomputed from the
+// database row at signing time, so a request that changed after the signer looked at it is noticed.
 func RequestHash(r Request) string {
 	feats := r.Features
 	if feats == nil {
 		feats = []string{}
 	}
-	raw, _ := json.Marshal([]any{r.Customer, r.Installation, r.Targets, r.From, r.Months, feats, r.Replaces})
+	fields := []any{r.Customer, r.Installation, r.Targets, r.From, r.Months, feats, r.Replaces}
+	if r.Kind != "" && r.Kind != KindLicense {
+		fields = append(fields, r.Kind, r.Days, r.Reason, r.Extends)
+	}
+	raw, _ := json.Marshal(fields)
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }

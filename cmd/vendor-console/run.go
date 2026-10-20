@@ -365,7 +365,11 @@ func (c *cli) requestList(args []string) int {
 		return c.fail(err)
 	}
 	for _, r := range list {
-		_, _ = fmt.Fprintf(c.out, "%d  %s  %s  %d  %s\n", r.ID, r.Status, r.Customer, r.Targets, r.Installation)
+		kind := ""
+		if r.Kind == store.KindEmergency {
+			kind = fmt.Sprintf("  EMERGENCY EXTENSION %d days", r.Days)
+		}
+		_, _ = fmt.Fprintf(c.out, "%d  %s  %s  %d  %s%s\n", r.ID, r.Status, r.Customer, r.Targets, r.Installation, kind)
 	}
 	return 0
 }
@@ -393,6 +397,14 @@ func (c *cli) requestShow(args []string) int {
 	from := r.From
 	if from == "" {
 		from = "(the day it is signed)"
+	}
+	if r.Kind == store.KindEmergency {
+		_, _ = fmt.Fprintf(c.out, "request       %d\nstatus        %s\nkind          EMERGENCY EXTENSION\ncustomer      %s\n"+
+			"installation  %s\ntargets       %d\nfrom          %s\ndays          %d\nfeatures      %s\nreason        %s\n"+
+			"carries over  %s\nrequested by  %s\nhash %s\n",
+			r.ID, r.Status, termSafe(r.Customer), r.Installation, r.Targets, from, r.Days, termSafe(strings.Join(r.Features, ",")),
+			termSafe(r.Reason), termSafe(r.Extends), termSafe(r.RequestedBy), store.RequestHash(r))
+		return 0
 	}
 	_, _ = fmt.Fprintf(c.out, "request       %d\nstatus        %s\ncustomer      %s\ninstallation  %s\ntargets       %d\nfrom          %s\nmonths        %d\nfeatures      %s\nreplaces      %s\nrequested by  %s\nhash %s\n",
 		r.ID, r.Status, r.Customer, r.Installation, r.Targets, from, r.Months, strings.Join(r.Features, ","), r.Replaces,

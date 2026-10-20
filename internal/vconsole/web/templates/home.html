@@ -26,7 +26,7 @@
 <div class="table-wrap"><table>
 <thead><tr><th>Request</th><th>Customer</th><th>Targets</th><th>Requested by</th></tr></thead>
 <tbody>
-{{range .}}<tr><td><a href="/requests/{{.ID}}">#{{.ID}}</a></td><td>{{.Customer}}</td><td>{{.Targets}}</td><td class="muted">{{.RequestedBy}}</td></tr>
+{{range .}}<tr><td><a href="/requests/{{.ID}}">#{{.ID}}</a>{{if eq .Kind "emergency"}} <span class="badge badge-warn">Emergency extension</span>{{end}}</td><td>{{.Customer}}</td><td>{{.Targets}}</td><td class="muted">{{.RequestedBy}}</td></tr>
 {{end}}</tbody>
 </table></div>
 {{else}}

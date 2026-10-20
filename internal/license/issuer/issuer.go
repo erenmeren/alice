@@ -501,7 +501,14 @@ type Request struct {
 	Features     []string // empty entries are dropped
 	Replaces     string   // license ID a correction replaces (R7)
 	LicenseID    string   // "" = LIC-<year>-<6 random digits>
+	// Days, when not 0, is a term of 1 to MaxEmergencyDays days instead of months, from the start
+	// of the signing day (an emergency extension of the vendor console). It excludes Months, From
+	// and Replaces. The payload is an ordinary license; only the vendor records what it is.
+	Days int
 }
+
+// MaxEmergencyDays is the longest term in days (an emergency extension).
+const MaxEmergencyDays = 30
 
 // addMonths returns t plus n calendar months on the same day of the month, or on the last day of a shorter target
 // month (2026-01-31 + 1 month = 2026-02-28). time.AddDate would carry the overflow into the next month (2026-03-03,
@@ -528,12 +535,24 @@ func BuildPayload(req Request, now time.Time) (license.Payload, error) {
 			return license.Payload{}, err
 		}
 	}
+	if req.Days != 0 {
+		switch {
+		case req.Days < 1 || req.Days > MaxEmergencyDays:
+			return license.Payload{}, fmt.Errorf("an emergency extension lasts 1 to %d days", MaxEmergencyDays)
+		case req.Months != 0 || strings.TrimSpace(req.From) != "" || strings.TrimSpace(req.Replaces) != "":
+			return license.Payload{}, errors.New("an emergency extension starts on the signing day and is not a correction: it has no months, start date or replaced license")
+		}
+	}
 	months := req.Months
 	if months == 0 {
 		months = 12
 	}
 	if months < 1 || months > 60 {
 		return license.Payload{}, errors.New("--months must be between 1 and 60")
+	}
+	until := addMonths(from, months)
+	if req.Days != 0 {
+		until = from.AddDate(0, 0, req.Days)
 	}
 	issued := now
 	if now.After(from.Add(24 * time.Hour)) {
@@ -562,7 +581,7 @@ func BuildPayload(req Request, now time.Time) (license.Payload, error) {
 		InstallationID: id,
 		IssuedAt:       issued,
 		ValidFrom:      from,
-		ValidUntil:     addMonths(from, months),
+		ValidUntil:     until,
 		MaxTargets:     req.Targets,
 		Features:       features,
 		Format:         license.FormatVersion,

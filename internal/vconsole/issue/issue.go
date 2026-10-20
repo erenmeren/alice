@@ -31,6 +31,9 @@ var (
 	ErrOtherInstallation  = errors.New("issue: the replaced license is for another installation")
 	ErrShortensTerm       = errors.New("issue: the correction ends earlier than the license it replaces; set Shorten if that is intended")
 	ErrDuplicateLicenseID = errors.New("issue: a license with this ID was already issued")
+	// ErrExtendedRevoked: the license an emergency extension carries over was revoked after the
+	// request was made; what it carries over may be wrong.
+	ErrExtendedRevoked = errors.New("issue: the license this emergency extension carries over was revoked; cancel the request and make a new one")
 	// ErrNotConfirmed is what a Confirm hook returns when the operator answers no.
 	ErrNotConfirmed = errors.New("issue: the signer did not confirm the license; nothing was signed")
 	// ErrOutcomeUnknown: every write succeeded but the commit did not report back (a lost
@@ -91,12 +94,15 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 		}
 		payload, err := issuer.BuildPayload(issuer.Request{
 			Installation: req.Installation, Customer: req.Customer, Targets: req.Targets, From: req.From,
-			Months: req.Months, Features: req.Features, Replaces: req.Replaces, LicenseID: p.LicenseID,
+			Months: req.Months, Features: req.Features, Replaces: req.Replaces, LicenseID: p.LicenseID, Days: req.Days,
 		}, now)
 		if err != nil {
 			return fmt.Errorf("issue: the request can no longer become a license (%w); cancel it and make a new request", err)
 		}
 		if err := checkCorrection(ctx, tx, payload, p.Shorten); err != nil {
+			return err
+		}
+		if err := checkExtension(ctx, tx, req, payload); err != nil {
 			return err
 		}
 		confirmed := ""
@@ -160,6 +166,24 @@ func Issue(ctx context.Context, pool *pgxpool.Pool, s sign.Signer, p Params, now
 		return Result{}, err
 	}
 	return res, nil
+}
+
+// checkExtension applies the emergency extension rules at signing time: an extension still needs
+// its carried-over license unrevoked and must not be covered by a license already there; any other
+// license must not start before an extension of its installation unless it replaces it.
+func checkExtension(ctx context.Context, q audit.Q, req store.Request, p license.Payload) error {
+	if req.Kind != store.KindEmergency {
+		return store.CheckStartsBeforeExtension(ctx, q, p)
+	}
+	var revoked bool
+	err := q.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM licenses WHERE license_id = $1`, req.Extends).Scan(&revoked)
+	if errors.Is(err, pgx.ErrNoRows) || revoked {
+		return ErrExtendedRevoked
+	}
+	if err != nil {
+		return fmt.Errorf("issue: read the extended license: %w", err)
+	}
+	return store.CheckEmergencyNeeded(ctx, q, p)
 }
 
 // checkCorrection applies the rules licensectl's ledger applies to a license that replaces another.

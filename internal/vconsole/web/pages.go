@@ -35,6 +35,8 @@ func (s *Server) pages(mux *http.ServeMux) {
 	mux.HandleFunc("GET /customers", s.authed(s.customersPage))
 	mux.HandleFunc("POST /customers", s.authed(s.customerAdd))
 	mux.HandleFunc("GET /requests/new", s.authed(s.requestNewPage))
+	mux.HandleFunc("GET /requests/emergency", s.authed(s.emergencyPage))
+	mux.HandleFunc("POST /requests/emergency", s.authed(s.emergencyAdd))
 	mux.HandleFunc("POST /requests", s.authed(s.requestAdd))
 	mux.HandleFunc("GET /requests/{id}", s.authed(s.requestPage))
 	mux.HandleFunc("POST /requests/{id}/cancel", s.authed(s.requestCancel))
@@ -339,8 +341,14 @@ func (s *Server) requestCancel(w http.ResponseWriter, r *http.Request, u webuser
 }
 
 type licensesData struct {
-	Licenses []store.LicenseRow
+	Licenses []licenseView
 	Ending   string // "30", "60", "90" or "all"
+}
+
+// licenseView is a row of the licenses page: CanExtend offers the emergency extension.
+type licenseView struct {
+	store.LicenseRow
+	CanExtend bool
 }
 
 func (s *Server) licensesPage(w http.ResponseWriter, r *http.Request, u webuser.User) {
@@ -359,7 +367,11 @@ func (s *Server) licensesPage(w http.ResponseWriter, r *http.Request, u webuser.
 		s.serverError(w, "list licenses", err)
 		return
 	}
-	s.renderUser(w, r, http.StatusOK, "licenses", u, licensesData{Licenses: rows, Ending: ending})
+	views := make([]licenseView, len(rows))
+	for i, row := range rows {
+		views[i] = licenseView{LicenseRow: row, CanExtend: canExtend(row, s.cfg.Clock.Now())}
+	}
+	s.renderUser(w, r, http.StatusOK, "licenses", u, licensesData{Licenses: views, Ending: ending})
 }
 
 func (s *Server) licenseDownload(w http.ResponseWriter, r *http.Request, u webuser.User) {

@@ -15,11 +15,14 @@ import (
 )
 
 // LicenseRow is one issued license as the list shows it (the signed file is fetched separately).
+// Emergency: issued from an emergency extension request. Latest: the installation's latest
+// license that is not revoked (the one an emergency extension carries over).
 type LicenseRow struct {
 	LicenseID, Customer, Installation, KeyID, SignedBy, Replaces string
 	IssuedAt, ValidFrom, ValidUntil                              time.Time
 	Targets                                                      int
 	RevokedAt                                                    *time.Time
+	Emergency, Latest                                            bool
 }
 
 // ListLicenses returns licenses ordered by valid_until ascending. endingWithinDays 0 means all;
@@ -27,8 +30,11 @@ type LicenseRow struct {
 // included only when includeEnded is true.
 func ListLicenses(ctx context.Context, q audit.Q, now time.Time, endingWithinDays int, includeEnded bool) ([]LicenseRow, error) {
 	rows, err := q.Query(ctx, `SELECT l.license_id, c.name, l.installation, l.key_id, l.signed_by, l.replaces,
-			l.issued_at, l.valid_from, l.valid_until, l.targets, l.revoked_at
-		FROM licenses l JOIN customers c ON c.id = l.customer_id
+			l.issued_at, l.valid_from, l.valid_until, l.targets, l.revoked_at, r.kind = 'emergency',
+			l.revoked_at IS NULL AND l.license_id = (SELECT n.license_id FROM licenses n
+				WHERE n.installation = l.installation AND n.revoked_at IS NULL
+				ORDER BY n.valid_until DESC, n.issued_at DESC, n.license_id DESC LIMIT 1)
+		FROM licenses l JOIN customers c ON c.id = l.customer_id JOIN license_requests r ON r.id = l.request_id
 		WHERE $2 = 0 OR (l.revoked_at IS NULL
 			AND l.valid_until <= $1::timestamptz + make_interval(days => $2)
 			AND ($3 OR l.valid_until >= $1::timestamptz))
@@ -41,7 +47,7 @@ func ListLicenses(ctx context.Context, q audit.Q, now time.Time, endingWithinDay
 	for rows.Next() {
 		var r LicenseRow
 		if err := rows.Scan(&r.LicenseID, &r.Customer, &r.Installation, &r.KeyID, &r.SignedBy, &r.Replaces,
-			&r.IssuedAt, &r.ValidFrom, &r.ValidUntil, &r.Targets, &r.RevokedAt); err != nil {
+			&r.IssuedAt, &r.ValidFrom, &r.ValidUntil, &r.Targets, &r.RevokedAt, &r.Emergency, &r.Latest); err != nil {
 			return nil, fmt.Errorf("store: list licenses: %w", err)
 		}
 		out = append(out, r)
