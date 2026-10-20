@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — Certificate revocation and key compromise incidents
+
+**Added**
+- **Revoke** on an issued certificate (ACME): Alice asks the certificate authority to revoke the current certificate or
+  an earlier one (RFC 8555 §7.6, signed with the account), with an RFC 5280 reason. Administrator with a fresh code; it
+  cannot be undone. The revocation (time, reason, who) is kept on the certificate and shown in the inventory and the
+  orders; a revoked certificate is never deployed again, and a revoked current certificate is renewed at once while
+  automatic renewal is on. API: `POST /api/v1/acme/certificates/{id}/revoke`; codes `ALC-ACM-0037` to `ALC-ACM-0040`,
+  `ALC-CRT-0018`.
+- **Where it is used** on every certificate: the server files, Key Vault versions and network endpoints that hold the
+  certificate or another certificate made with the same private key. API: `GET /api/v1/certificate-impact/{id}`.
+- **Key compromised…**: a key compromise incident marks every certificate with the key compromised (never deployed
+  again, `ALC-CRT-0019`), replaces the certificate on every server file through the deployment engine (a new order with
+  a new key for an issued certificate, a replacement you choose for other sources), and revokes an issued certificate
+  with the reason key compromise once the replacements are verified (or at once, when you choose so). The incident page
+  shows each place, the revocation, and **Retry**, **Revoke now regardless**, **Choose the replacement** and **Close
+  the incident**. New permission `certificates.incident` (Administrator with step-up), periodic task
+  `incident.advance`, routes under `/api/v1/incidents`, codes `ALC-INC-0001` to `ALC-INC-0013`.
+- **What Alice can do with it**: every certificate shows what Alice can do with it by its source (find, obtain, renew,
+  deploy, verify, revoke, recover), and says when only the issuing authority can revoke it. API: `capabilities` on each
+  certificate and `GET /api/v1/certificates/capabilities`.
+- The fake certificate authority (`alice-fakeacme`) implements revocation (`alreadyRevoked`, `unauthorized`,
+  `badRevocationReason`) and reports the status of a certificate (`GET /certificate?serial=` on its control port).
+
+**Changed**
+- Network discovery stores the public key hash of the certificates it finds (filled as scans see them again).
+- Migration `00021`. Rulings: `docs/superpowers/rulings/certificate-revocation.md`.
+
 ## Unreleased — ACME renewal recovers after an outage
 
 **Changed**

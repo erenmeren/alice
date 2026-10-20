@@ -37,6 +37,8 @@ administrator-configured HTTPS endpoint that publishes DNS-01 records; may answe
 existing ACME certificate, i.e. the renewal of names an Admin pre-approved; it cannot add names, change a provider or a
 hook, or switch unattended deployment on.
 
+(Amendment 2026-10-20, R46.) Key-compromise incidents: starting one and every action on one (retry, revoke now regardless, choosing the replacement, closing) is **Admin** with step-up, never a token (`certificates.incident`); reading incidents and the impact of a certificate is every role and `read` tokens, except the network discovery endpoints of an impact, which need `discovery.view`.
+
 ### 14.3 Trust boundaries
 
 ```
@@ -145,6 +147,7 @@ Legend: S spoofing, T tampering, R repudiation, I information disclosure, D deni
 | AC-4 | T | Hostile CA chain or renewal window (ARI) | Chain must match the order's key and names and is placed through the upload rules; ARI only pulls renewal earlier, windows before 2000, ending before the certificate's start or more than 10 years ahead are ignored | Low |
 | AC-5 | D | Rate-limit storms against the CA | One attempt per job; backoff 1 h→24 h and Retry-After (≤24 h); 15 min spacing; wave of 5; provider hold while a sibling is rate-limited (≤24 h); stop after 5 permanent failures, or 5 of any class once the certificate expired; the recovery after outages (R45) at most once a day before the last week, every 12/6/2 h in the last 7/3/1 days | Low |
 | AC-6 | T | A second deploy path or unattended deployment by an Operator | Deployments only through `RequestDeployment` / the checked `insertDeployment` path (AST test); switching unattended deployment on is Admin + fresh step-up inside the transaction | Low |
+| AC-8 | T/R | A leaked private key stays deployed, a revocation is lost, or an Operator revokes or replaces certificates | Revocation and key-compromise incidents are Administrator acts with a fresh step-up, never a token (`acme.manage`, `certificates.incident`); the compromise mark is set for every certificate with the key in the starting transaction and is final (Z1022), and every deploy path and the engine's first send refuse a revoked or compromised certificate; revocation waits for verified replacements unless a person chooses otherwise; the incident is a stored state machine (frozen when finished, Z1023) advanced by a periodic task, every step audited (R46) | Low: a certificate from another source is revoked by its CA, not by Alice; a place holding another certificate with the same key needs its own incident |
 | AC-7 | T | HTTP-01 token file abuse on a target | Helper writes one file under a fixed root-owned path, token charset and length fixed, body ≤512 bytes and exactly a key authorization, `O_NOFOLLOW` walk; Alice never edits Nginx config | Low |
 
 #### License module
@@ -252,7 +255,7 @@ OIDC SSO is delivered in Phase 7 ("Alerts, dashboard and SSO", R31); Phase 1 is 
 | Export inventory | Yes | Yes | Yes |
 
 (Amendment, ACME issuance 2026-10-13, a deviation recorded in `docs/superpowers/rulings/acme-issuance.md`; review `docs/security/reviews/acme-issuance.md`.) ACME rows: providers, accounts, DNS hooks, defining/editing/deleting ACME certificates, switching their
-automatic renewal on, re-arming (`Check again and resume`, formerly `Renew now`, which also starts an order at once, R45) and releasing a hold are **Admin** with step-up, never a token
+automatic renewal on, re-arming (`Check again and resume`, formerly `Renew now`, which also starts an order at once, R45), revoking a certificate at its CA (R46) and releasing a hold are **Admin** with step-up, never a token
 (`acme.manage`); reading a CA's directory before registration is Admin without step-up (`acme.preview`); ordering,
 Test run, Deploy now, binding locations (with automatic deployment off) and switching a binding's automatic deployment
 off are **Admin and Operator**, also `operate` tokens (`acme.operate`); everything is readable by every role and `read`

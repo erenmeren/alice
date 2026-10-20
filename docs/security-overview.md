@@ -245,7 +245,8 @@ The full table, with severities and customer guidance, is in `SECURITY-REPORT.md
   the customer's protection. No hardware key storage in version 1.
 - **Blast radius.** Alice can reach every managed server through its key and helper.
 - **Certificate authorities.** Alice's ACME account can request certificates for the names an administrator allowed;
-  revocation is done at the authority, not in Alice. Behaviour against real public or company authorities, real DNS
+  Alice revokes the certificates it ordered (and, in a key compromise incident, only after replacing them everywhere);
+  a certificate from another source is revoked at the authority that issued it. Behaviour against real public or company authorities, real DNS
   and real renewal information was tested during development only against a simulated authority; check it with your
   authority (for example its staging service) before relying on it.
 - **Network discovery trusts nothing it finds.** To see expired, self-signed and wrongly chained certificates, the scan

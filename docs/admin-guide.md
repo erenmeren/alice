@@ -1464,6 +1464,7 @@ This section is the setup, which is for administrators.
 | Adding, changing and removing certificate authorities and DNS hooks; registering, rotating and deactivating an account | Administrator with a fresh authenticator code; never an API token |
 | **Get a certificate** (which names, which authority, how the names are proved), deleting it, its **Automatic renewal**, **Check again and resume**, **Release** of a held certificate | Administrator with a fresh authenticator code; never an API token |
 | Switching **Automatic deployment** on, for the certificate or for a website | Administrator with a fresh authenticator code; never an API token |
+| **Revoke**, and every action of a key compromise incident (**Key compromised…**, **Retry**, **Revoke now regardless**, **Choose the replacement**, **Close the incident**) | Administrator with a fresh authenticator code; never an API token |
 | Reading the authority's terms before registering (done by the **Register account** dialog) | Administrator, no new code |
 | **Test run**, **Get certificate now** / **Order now**, **Deploy now**, connecting websites (with automatic deployment off), removing websites, switching automatic deployment off | Administrator or operator, also with a **Read and operate** API token |
 | Reading authorities, accounts (including their contact e-mail), hooks, certificates, orders and websites | Everyone |
@@ -1709,6 +1710,75 @@ held like other changes ([backup-restore.md](backup-restore.md)). A restored cop
 authorities as the original: do not rotate or deactivate an account on a test copy, it would change the original's
 account too.
 
+### Revoking a certificate
+
+**Revoke** on an issued certificate's page (Administrator with a fresh authenticator code; never an API token) asks
+the certificate authority to revoke the current certificate, or an earlier one that is not revoked yet, for a reason:
+**Unspecified**, **Key compromise**, **Affiliation changed**, **Superseded** or **Cessation of operation** (the reasons
+of RFC 5280 a certificate owner gives). Alice signs the request with the authority account (the same account after a
+key rotation). **It cannot be undone**: browsers may refuse the certificate from then on, Alice records the time, the
+reason and who revoked it on the certificate, never deploys it again, and, while **Automatic renewal** is on, orders a
+new certificate at once when the revoked one was the current one (deploy it where the revoked one is still served).
+An expired certificate is not revoked. It counts as one of the 10 actions a minute and is refused while the license is
+locked. Audit: `acme.certificate.revoked`, `acme.certificate.revoke_failed`.
+
+If the **private key leaked**, do not revoke first: start a key compromise incident (below), which replaces the
+certificate everywhere and revokes it afterwards, so the websites never serve a revoked certificate.
+
+Deleting an issued certificate or a certificate from the inventory revokes nothing.
+
+### What Alice can do with a certificate
+
+Every certificate's page shows **What Alice can do with it**, by where the certificate comes from; the page's buttons
+follow it (API: `capabilities` of each certificate, the whole table in `GET /api/v1/certificates/capabilities`).
+
+| Source | Find | Obtain | Renew | Deploy | Verify | Revoke | Recover |
+|---|---|---|---|---|---|---|---|
+| Issued (ACME) | yes | yes | yes | yes | yes | yes | yes |
+| Key Vault | yes | no (Azure issues it) | no (Azure renews it; Alice follows new versions) | yes | yes | no | no |
+| Uploaded, signing request | yes | no | no | yes (with its key) | yes | no | no |
+| Found on a server | yes | no | no | no (no key in Alice) | no | no | no |
+
+*Revoke* means Alice asks the authority herself; a certificate from any other source is revoked by the authority that
+issued it. *Recover* is the renewal's own recovery after an outage. A revoked or compromised certificate loses
+**Deploy** and **Verify**.
+
+### Key compromise: replace a certificate everywhere
+
+When the private key of a certificate is no longer secret, its page answers "which servers are affected?" and replaces
+it everywhere:
+
+- **Where it is used** lists every certificate file on your servers that holds the certificate, or another certificate
+  made with the same private key (**Same key**), every Key Vault version of it, and the network endpoints that
+  discovery found presenting it (people without access to network discovery, and API tokens with the read scope, do
+  not see the endpoints). API: `GET /api/v1/certificate-impact/{id}`.
+- **Key compromised…** (Administrator with a fresh authenticator code; never an API token) starts an incident after
+  you confirm that it cannot be undone. Alice at once marks the certificate **and every other certificate made with
+  the same key** as compromised (none of them is deployed again), then:
+  1. **Issued (ACME) certificate:** orders a new certificate from the authority, always with a new private key.
+     **Other sources:** waits until you **Choose the replacement**, a certificate Alice holds the key of, made with
+     another key (upload it first under **Certificates**).
+  2. Deploys the replacement to every file that holds the compromised certificate (and every website connected to the
+     issued certificate) through the ordinary deployment, with its checks, verification and automatic undo.
+  3. **Issued (ACME) certificate:** when every replacement is deployed and verified, revokes the compromised
+     certificate at the authority with the reason **Key compromise**. **Revoke at once, without waiting for the
+     replacement** (when starting) or **Revoke now regardless** (later) revokes without waiting. **Other sources:**
+     Alice cannot revoke it: ask the authority that issued it.
+- Files that hold **another certificate made with the same key** are listed as not replaced ("This place holds
+  another certificate made with the same key"): start an incident for that certificate too. Files connected to a Key
+  Vault certificate are replaced in the vault; files Alice cannot deploy to are replaced by hand.
+- The incident page shows each place (**Waiting**, **Deploying**, **Replaced and checked**, **Replaced, not checked**,
+  **Failed**, **Not replaced by Alice**) and the revocation. When something fails it says **Needs attention** with
+  the reason: fix it and choose **Retry**, choose **Revoke now regardless**, or **Close the incident** (Alice stops; the
+  certificates stay marked compromised). A place whose verification is switched off counts as **Replaced, not
+  checked**: check the website yourself, then choose **Revoke now regardless**.
+
+Alice works on open incidents in the background every 30 seconds, also after a restart. While the license is locked
+she only follows what already runs; starting, **Retry**, **Revoke now regardless** and choosing the replacement are
+refused, **Close** works. Audit: `certificate.compromised`, `incident.started`, `incident.replacement_chosen`,
+`incident.deployed`, `incident.revoked`, `acme.certificate.revoked`, `incident.needs_attention`,
+`incident.revoke_failed`, `incident.retried`, `incident.revoke_now`, `incident.completed`, `incident.closed`.
+
 ### What Alice keeps, and the audit log
 
 The account keys, the external account keys and the hook secrets are stored encrypted with the master key, each
@@ -1719,7 +1789,8 @@ log: `acme.provider.*`, `acme.account.*`, `acme.hook.*`, `acme.certificate.*`, `
 `acme.auto_renew.*` and `acme.auto_deploy.*`; deployments keep their `deployment.*` entries, with the trigger
 `acme_renewal` for automatic ones.
 
-**Not in this version**: revoking a certificate (do it at the authority), an HTTPS proxy, built-in DNS providers
+**Not in this version**: revoking a certificate Alice did not order (do it at the authority that issued it), revoking
+with the certificate's own key when the ordering account is gone, an HTTPS proxy, built-in DNS providers
 (the hook is the adapter), the TLS-ALPN-01 proof, more than one account per authority, and ACME profiles. Renewals
 are not marked as replacements of the previous certificate (ARI's `replaces`), so Let's Encrypt counts them against
 its usual limits; use **Let's Encrypt (staging, for tests)** for trials.

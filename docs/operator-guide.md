@@ -898,6 +898,16 @@ the switches of a saved certificate; to change its names, authority, proof metho
 saves a new certificate (or uses `PATCH /api/v1/acme/certificates/{id}`). The key type cannot change while websites
 are connected (`ALC-ACM-0018`).
 
+### Revoked and compromised certificates
+
+An issued certificate that an administrator revoked shows **Revoked** in its orders and on the certificate's page,
+with the time and the reason; one whose private key was marked compromised shows **Key compromised**. Neither is
+deployed again: **Deploy now** and automatic deployment refuse it (`ALC-CRT-0018`, `ALC-CRT-0019`), and a deployment
+that was waiting for it ends without sending anything. While automatic renewal is on, Alice orders a new certificate
+at once. Revoking and key compromise incidents are administrators' work
+([admin-guide.md](admin-guide.md#key-compromise-replace-a-certificate-everywhere)); everyone can read **Where it is
+used** and the incident pages.
+
 ### While the license is locked
 
 The page says "The license does not allow changes now": **Test run**, ordering, **Deploy now**, adding websites and

@@ -381,6 +381,8 @@ A DEK-only design also lets a compromised-data-key incident be limited to one ro
 
 **alerts**: `id`, `kind` (`cert_expiring`, `host_key_changed`, `kv_key_expiring`, `license_expiring`, `clock_anomaly`, `discovery_failed`, `backup_stale` (no successful backup for 48 h), ...), `subject_type`, `subject_id`, `severity`, `first_raised_at`, `resolved_at`, `last_notified_at`, `params jsonb`. UNIQUE `(kind, subject_type, subject_id) WHERE resolved_at IS NULL` for dedupe.
 
+**certificate_incidents** (R46, migration `00021`): `id`, `certificate_id FK`, `public_key_sha256`, `acme_certificate_id FK NULL`, `state CHECK IN ('awaiting_replacement','ordering','deploying','revoking','needs_attention','completed','closed')`, `revoke_mode CHECK IN ('after_verified','now')`, `revocation CHECK IN ('pending','revoked','failed','not_possible')`, `order_id FK NULL`, `replacement_certificate_id FK NULL`, `attention_code`, `revoke_attempts`, `next_attempt_at`, `revoked_at`, `started_by`, `closed_by`, `created_at`, `updated_at`, `finished_at`; one open incident per certificate; frozen once finished (Z1023). **certificate_incident_locations**: `incident_id FK`, `location_id FK`, `status CHECK IN ('pending','deploying','verified','unverified','failed','skipped')`, `deployment_id FK NULL`, `error_code`, `attempts`, `updated_at`. **certificates** gains `revoked_at`, `revocation_reason`, `revoked_by`, `compromised_at`, `compromised_by` (final once set, Z1022); **discovery_certificates** gains `public_key_sha256`.
+
 ### 7.5 Audit
 
 **audit_log** (append-only): `seq bigint PK` (assigned by `audit.Append` as max+1 under the advisory lock, so the sequence is gapless and any gap is tampering; R35), `at timestamptz`, `actor_type CHECK IN ('user','api_token','system','oidc')`, `actor_id uuid NULL`, `actor_name text` (denormalized), `ip inet`, `action text` (e.g. `target.create`), `object_type`, `object_id`, `result CHECK IN ('success','failure','denied')`, `details jsonb` (redacted; secrets impossible by construction: details are built from allowlisted fields; Phase 1 enforces this with a case-insensitive key-segment denylist, R35), `request_id`, `prev_hash bytea`, `hash bytea`.
@@ -443,6 +445,7 @@ The handler additionally takes the target's `target_locks` row (lease-based, 7.4
 | `backup.auto` | scheduled (daily) | backup encrypted to the backup public key, keep 14; raises `backup_stale` after 48 h without success |
 | `maintenance.cleanup` | scheduled | prune sessions, login_attempts, old jobs (90 days) |
 | `secrets.rewrap` | user | master-key rotation rewrap |
+| `incident.advance` | scheduled (30 s) | advance every open key-compromise incident: follow its order, request and follow the replacement's deployments, revoke at the CA (R46; ClassAlways, the gate is asked before each change) |
 
 ### 8.3 Scheduler
 
@@ -546,6 +549,7 @@ Cursor pagination for large lists (`audit`, `jobs`, `certificates`): `?limit=50&
 | `providers` | `GET /providers` (kinds, capabilities, config schemas for form generation) |
 | `certificates` | list/get, `/certificates/upload`, `/certificates/csr`, `/{id}/locations`, `/{id}/deploy`, `/{id}/private-key/download` (Admin, reason, step-up), bindings `/locations/{id}/binding` |
 | `deployments` | list/get with steps, `/deployments/{id}/actions/retry|rollback` |
+| `incidents` (R46) | `POST /certificates/{id}/incidents`, `GET /incidents`, `GET /incidents/{id}`, `/incidents/{id}/retry|revoke-now|replacement|close`, `GET /certificate-impact/{id}`, `GET /certificates/capabilities`, `POST /acme/certificates/{id}/revoke` |
 | `ssh-keys` | list/get, `/ssh-keys/generate`, `/{id}/deploy`, `/locations/{id}/remove`, `/ssh-keys/platform-key` (public key for the wizard) |
 | `rotation` | `/rotation/policies` CRUD, `/rotation/runs`, `/rotation/runs/{id}/actions/approve|abort|dry-run` |
 | `keyvault` | vault-specific views: `/targets/{id}/kv/keys`, `/kv/secrets` (metadata), `/kv/certificates` |

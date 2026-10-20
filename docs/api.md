@@ -44,8 +44,8 @@ settings (mail, single sign-on, HTTPS certificate, audit forwarding, backup sche
 download, re-pinning a server's host key, adding a Key Vault and its credentials, enabling a rotation policy and the
 decisions in a rotation run, **backups** (list, back up now, download), and for certificate authorities (ACME) adding
 authorities, accounts and DNS hooks, defining which certificates Alice gets and switching their automatic renewal or
-automatic deployment on, and for network discovery defining scan scopes, the allowed scan networks, the exclusions and
-the retention. A few other actions need a person too,
+automatic deployment on, revoking a certificate at its authority, every action of a key compromise incident, and for
+network discovery defining scan scopes, the allowed scan networks, the exclusions and the retention. A few other actions need a person too,
 such as confirming a server's fingerprint and confirming or discarding a waiting job. The exact list, operation by
 operation, is the "API token" column of [authz-matrix.md](authz-matrix.md). Backups and restores are done by an
 administrator in the web interface or by the operator on the server ([backup-restore.md](backup-restore.md)).

@@ -242,8 +242,9 @@ Critical; the plan reviews' blocking findings were design changes made before an
 - **fakeacme fidelity gaps**: no expiry of orders, authorizations or nonces; finalize with the account key not refused;
   `revokeCert` answers 501; no account `orders` list; ARI defaults and its `Retry-After` (6 h) are guesses;
   certificates not tied to account ownership beyond the key ID; no TLS-ALPN-01; DNS is a table, not a resolver.
-- No HTTPS proxy support (environment proxies are ignored); no built-in DNS providers or RFC 2136; no TLS-ALPN-01; no
-  revocation in Alice; no ACME profiles or short-lived presets; one account per CA; no `acme-dns`/CNAME helper.
+- No HTTPS proxy support (environment proxies are ignored); no built-in DNS providers or RFC 2136; no TLS-ALPN-01;
+  revocation only of certificates Alice ordered, signed with the account (added 2026-10-20,
+  `docs/superpowers/rulings/certificate-revocation.md`; no revocation with the certificate key); no ACME profiles or short-lived presets; one account per CA; no `acme-dns`/CNAME helper.
 - Renewals do not send ARI `replaces` (L-ACME-1).
 - A restored copy shares the original's CA accounts (rollover or deactivation there affects the original).
 - The account's contact e-mail is visible to every `acme.view` caller (Auditors and read tokens).
