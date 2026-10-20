@@ -1347,8 +1347,8 @@ export function incidentFixture(o: Partial<Incident> = {}): Incident {
     finished_at: null,
     counts: { verified: 1, failed: 1 },
     locations: [
-      { location_id: locationFixture().id, target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/www.crt', status: 'verified', deployment_id: '0192c000-0000-7000-8000-0000000000d1', error: null, attempts: 1, updated_at: '2026-10-20T08:04:00Z' },
-      { location_id: '0192c000-0000-7000-8000-0000000000e7', target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/api.crt', status: 'failed', deployment_id: '0192c000-0000-7000-8000-0000000000d2', error: { code: 'ALC-DEP-0006', reason: 'deployment.reload_failed' }, attempts: 1, updated_at: '2026-10-20T08:04:00Z' },
+      { location_id: locationFixture().id, target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/www.crt', status: 'verified', deployment_id: '0192c000-0000-7000-8000-0000000000d1', error: null, attempts: 1, updated_at: '2026-10-20T08:04:00Z', outcome_uncertain: false },
+      { location_id: '0192c000-0000-7000-8000-0000000000e7', target_id: targetFixture.id, target_name: targetFixture.name, cert_path: '/etc/nginx/ssl/api.crt', status: 'failed', deployment_id: '0192c000-0000-7000-8000-0000000000d2', error: { code: 'ALC-DEP-0006', reason: 'deployment.reload_failed' }, attempts: 1, updated_at: '2026-10-20T08:04:00Z', outcome_uncertain: false },
     ],
     ...o,
   };

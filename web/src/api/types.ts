@@ -652,7 +652,7 @@ export interface Deployment {
   state: DeploymentState;
   status: DeploymentStatus | '';
   result: '' | 'committed' | 'unchanged' | 'no_change' | 'rolled_back' | 'rollback_failed' | 'uncertain';
-  phase: '' | 'none' | 'prepared' | 'writing' | 'committed' | 'unchanged' | 'restoring' | 'restored' | 'restore_failed';
+  phase: '' | 'none' | 'prepared' | 'writing' | 'committed' | 'unchanged' | 'restoring' | 'restored' | 'restore_failed' | 'restore_forbidden';
   new_fingerprint: string;
   previous_fingerprint: string;
   confirm_incomplete_chain: boolean;

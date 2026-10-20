@@ -1921,6 +1921,7 @@
     "partial": "Updated websites: {{ok}} of {{total}}",
     "succeededUnverified": "The new certificate was deployed and Nginx was reloaded.",
     "rollbackFailedRestored": "The previous files are back, but Alice could not confirm that the website serves the previous certificate. Check the website now.",
+    "rollbackForbidden": "Alice did not undo the failed change: the previous certificate is revoked or compromised, so it stays off the server. Check the website now.",
     "finishing": "The background job has finished. Alice is recording the result.",
     "partialOpen": "Websites not finished yet: {{open}}. Follow them in the deployment history.",
     "listCut": "The list of certificates was cut after {{count}} entries, so some certificates are not offered here.",
@@ -1960,6 +1961,7 @@
     "previous": "Previous certificate: {{fingerprint}}",
     "new": "New certificate: {{fingerprint}}",
     "backup": "Backup on the server: {{path}}",
+    "backupForbidden": "Backup on the server (it holds the compromised key: never restore it): {{path}}",
     "stepsTitle": "Steps",
     "statusLabel": "Status",
     "stateLabel": "State",
@@ -4095,7 +4097,8 @@
       "verified": "Replaced and checked",
       "unverified": "Replaced, not checked",
       "failed": "Failed",
-      "skipped": "Not replaced by Alice"
+      "skipped": "Not replaced by Alice",
+      "uncertain": "Not confirmed: server not reached"
     },
     "busy": {
       "ordering": "Alice is ordering the new certificate. This page updates itself.",

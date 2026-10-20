@@ -2,7 +2,7 @@ import { Anchor, Code, Stack, Text, VisuallyHidden } from '@mantine/core';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { Link, useParams } from 'react-router';
-import { deploymentView } from '../api/deployments';
+import { deploymentView, rollbackForbidden } from '../api/deployments';
 import { getDeployment } from '../api/endpoints';
 import { configErrorKey, deploymentStateKey, stepNameKey, verifiedKey } from '../api/enums';
 import { deploymentKey } from '../api/queryKeys';
@@ -197,7 +197,9 @@ export function DeploymentDetailPage() {
                 {d.new_fingerprint !== '' && <LabelledCode text={t('deployments.new', { fingerprint: '' })} value={d.new_fingerprint} />}
                 {served !== '' && <LabelledCode text={t('deployments.stepDetail.served', { fingerprint: '' })} value={served} />}
                 {d.previous_fingerprint !== '' && <LabelledCode text={t('deployments.previous', { fingerprint: '' })} value={d.previous_fingerprint} />}
-                {d.backup_dir !== '' && <LabelledCode text={t('deployments.backup', { path: '' })} value={d.backup_dir} />}
+                {d.backup_dir !== '' && (
+                  <LabelledCode text={t(rollbackForbidden(d) ? 'deployments.backupForbidden' : 'deployments.backup', { path: '' })} value={d.backup_dir} />
+                )}
               </div>
             </Panel>
           )}

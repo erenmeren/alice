@@ -1,6 +1,6 @@
 import { Alert, Stack, Text } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
-import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED, SERVER_OPERATION_PENDING } from '../api/deployments';
+import { deploymentStatusText, deploymentView, isCancelled, PENDING_CHANGE_RESTORED, rollbackForbidden, SERVER_OPERATION_PENDING } from '../api/deployments';
 import type { Deployment, ErrorRef } from '../api/types';
 import { formatDateTime } from '../datetime';
 import { Icon, type IconName } from '../design/Icon';
@@ -117,9 +117,12 @@ export function DeploymentOutcome({ d }: { d: Deployment }) {
         break;
       default:
         // rollback_failed: the headline follows the phase, so it never contradicts the cause. With
-        // the files back (phase restored) only the check of the website is missing.
+        // the files back (phase restored) only the check of the website is missing; an undo the rollback
+        // guard refused (R48) put nothing back on purpose.
         color = 'red';
-        headline = t(d.phase === 'restored' ? 'deploy.rollbackFailedRestored' : 'deploy.rollbackFailed');
+        headline = t(
+          rollbackForbidden(d) ? 'deploy.rollbackForbidden' : d.phase === 'restored' ? 'deploy.rollbackFailedRestored' : 'deploy.rollbackFailed',
+        );
     }
   } else if (view === 'held') {
     color = 'yellow';

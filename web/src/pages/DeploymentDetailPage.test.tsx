@@ -308,6 +308,22 @@ describe('DeploymentDetailPage', () => {
     expect(card).not.toHaveTextContent('confirmed');
   });
 
+  it('warns never to restore the backup of a deployment whose undo the rollback guard refused (R48)', async () => {
+    show(
+      deploymentDetailFixture({
+        id: ID,
+        status: 'rollback_failed',
+        phase: 'restore_forbidden',
+        failed_step: 'restore',
+        backup_dir: '/var/lib/alice-helper/backups/own',
+        error: { code: 'ALC-DEP-0025', reason: 'deployment.rollback_forbidden' },
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText(/it holds the compromised key: never restore it/)).toBeInTheDocument();
+    expect(screen.getByText(/Alice did not undo the failed change/)).toBeInTheDocument();
+  });
+
   it('shows no recovery card for a finished deployment that never needed one', async () => {
     show(deploymentDetailFixture({ id: ID, recovery_attempts: 0 }));
     await renderRoute(`/deployments/${ID}`);

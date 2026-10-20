@@ -93,6 +93,15 @@ describe('DeploymentOutcome', () => {
     expectTone(alert, 'danger');
   });
 
+  it('rollback forbidden (R48): danger, its own headline, never "restored"', async () => {
+    const alert = await outcome(
+      deploymentFixture({ status: 'rollback_failed', phase: 'restore_forbidden', error: { code: 'ALC-DEP-0025', reason: 'deployment.rollback_forbidden' } }),
+      /Alice did not undo the failed change: the previous certificate is revoked or compromised/,
+    );
+    expectTone(alert, 'danger');
+    expect(alert).not.toHaveTextContent('Manual action is needed.');
+  });
+
   it('held for the license: a warning', async () => {
     const alert = await outcome(deploymentFixture({ status: 'pending', state: 'queued', job_status: 'blocked_license' }), /The license has expired, so this deployment is on hold/);
     expectTone(alert, 'warning');

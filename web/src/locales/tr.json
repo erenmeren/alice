@@ -1921,6 +1921,7 @@
     "partial": "Güncellenen web siteleri: {{ok}} / {{total}}",
     "succeededUnverified": "Yeni sertifika dağıtıldı ve Nginx yeniden yüklendi.",
     "rollbackFailedRestored": "Önceki dosyalar geri yüklendi, ancak Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin.",
+    "rollbackForbidden": "Alice başarısız değişikliği geri almadı: önceki sertifika iptal edilmiş veya ele geçirilmiş, bu yüzden sunucuya geri konmaz. Web sitesini şimdi denetleyin.",
     "finishing": "Arka plandaki iş tamamlandı. Alice sonucu kaydediyor.",
     "partialOpen": "Henüz tamamlanmayan web siteleri: {{open}}. Bunları dağıtım geçmişinden izleyin.",
     "listCut": "Sertifika listesi {{count}} kayıttan sonra kesildi, bu yüzden bazı sertifikalar burada sunulmuyor.",
@@ -1960,6 +1961,7 @@
     "previous": "Önceki sertifika: {{fingerprint}}",
     "new": "Yeni sertifika: {{fingerprint}}",
     "backup": "Sunucudaki yedek: {{path}}",
+    "backupForbidden": "Sunucudaki yedek (ele geçirilmiş anahtarı içerir: asla geri yüklemeyin): {{path}}",
     "stepsTitle": "Adımlar",
     "statusLabel": "Durum",
     "stateLabel": "Aşama",
@@ -4095,7 +4097,8 @@
       "verified": "Değiştirildi ve denetlendi",
       "unverified": "Değiştirildi, denetlenmedi",
       "failed": "Başarısız",
-      "skipped": "Alice değiştirmiyor"
+      "skipped": "Alice değiştirmiyor",
+      "uncertain": "Doğrulanmadı: sunucuya ulaşılamadı"
     },
     "busy": {
       "ordering": "Alice yeni sertifikayı istiyor. Bu sayfa kendiliğinden güncellenir.",

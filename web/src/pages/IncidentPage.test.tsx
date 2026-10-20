@@ -174,6 +174,27 @@ describe('IncidentPage', () => {
     expectNoRawKeys();
   });
 
+  it('shows a place whose server cannot be reached as not confirmed, and a refused undo with its reason (R48)', async () => {
+    const base = incidentFixture();
+    const [first, second] = base.locations ?? [];
+    incidentPage(
+      incidentFixture({
+        state: 'deploying',
+        attention: null,
+        locations: [
+          { ...first, status: 'deploying', outcome_uncertain: true, error: { code: 'ALC-SSH-0001', reason: 'ssh.unreachable' } },
+          { ...second, status: 'failed', error: { code: 'ALC-DEP-0025', reason: 'deployment.rollback_forbidden' } },
+        ],
+      }),
+    );
+    await renderRoute(`/incidents/${INCIDENT_ID}`);
+    const rows = await screen.findAllByTestId('incident-location');
+    expect(within(rows[0]).getByTestId('location-uncertain')).toHaveTextContent('Not confirmed: server not reached');
+    expect(within(rows[0]).queryByText('Replaced and checked')).not.toBeInTheDocument();
+    expect(within(rows[1]).getByText(/did not put the previous certificate back because it is revoked or compromised/)).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
   it('lets the Administrator choose the replacement of an uploaded certificate', async () => {
     const calls = incidentPage(
       incidentFixture({ source: 'uploaded', acme_certificate_id: null, state: 'awaiting_replacement', revocation: 'not_possible', attention: null, replacement_certificate_id: null, replacement_fingerprint: '', order_id: null, order_state: '', locations: [] }),

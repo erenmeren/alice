@@ -229,9 +229,15 @@ export function IncidentPage() {
                       </Code>
                     </Table.Td>
                     <Table.Td>
-                      <StatusBadge tone={LOCATION_TONE[l.status]} size="sm">
-                        {t(`incidents.locationStatus.${l.status}`)}
-                      </StatusBadge>
+                      {l.outcome_uncertain ? (
+                        <StatusBadge tone="warning" size="sm" testId="location-uncertain">
+                          {t('incidents.locationStatus.uncertain')}
+                        </StatusBadge>
+                      ) : (
+                        <StatusBadge tone={LOCATION_TONE[l.status]} size="sm">
+                          {t(`incidents.locationStatus.${l.status}`)}
+                        </StatusBadge>
+                      )}
                     </Table.Td>
                     <Table.Td>
                       {l.error && <Problem error={l.error} />}

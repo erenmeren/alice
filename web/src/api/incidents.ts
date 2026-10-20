@@ -92,6 +92,8 @@ export interface IncidentLocation {
   error: ErrorRef | null;
   attempts: number;
   updated_at: string;
+  // Sent but not confirmed (R48): never counted as replaced.
+  outcome_uncertain: boolean;
 }
 
 export interface Incident {
