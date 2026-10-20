@@ -1920,6 +1920,10 @@
     "openDeployment": "Open this deployment",
     "partial": "Updated websites: {{ok}} of {{total}}",
     "succeededUnverified": "The new certificate was deployed and Nginx was reloaded.",
+    "succeededUntrusted": "The new certificate is served, but the website's certificate chain is not trusted.",
+    "trustFault": "{{reason}} (port {{port}}).",
+    "trusted": "Alice also verified the website's certificate chain against a trusted root.",
+    "trustUnchecked": "Alice did not check the certificate chain: the server's alice-helper is older than 1.10.0.",
     "rollbackFailedRestored": "The previous files are back, but Alice could not confirm that the website serves the previous certificate. Check the website now.",
     "rollbackForbidden": "Alice did not undo the failed change: the previous certificate is revoked or compromised, so it stays off the server. Check the website now.",
     "finishing": "The background job has finished. Alice is recording the result.",
@@ -1939,7 +1943,8 @@
       "evidence": "Evidence",
       "triggeredBy": "Triggered by",
       "system": "Alice (automatic)",
-      "verification": "Verification: {{state}}"
+      "verification": "Verification: {{state}}",
+      "untrusted": "Served, but the certificate chain is not trusted"
     },
     "title": "Deployments",
     "intro": "Every certificate deployment with its result. Open one to see each step.",
@@ -1978,6 +1983,47 @@
       "local": "Checked from the server itself",
       "skipped": "Skipped",
       "none": "Not done"
+    },
+    "levelLabel": "Evidence",
+    "level": {
+      "none": "None",
+      "installed": "Installed: files written and Nginx reloaded, the website not checked",
+      "served": "Served: the website serves the expected certificate",
+      "trusted": "Trusted: the served chain verifies against a trusted root",
+      "unknown": "Unknown"
+    },
+    "trustLabel": "Certificate chain",
+    "trust": {
+      "status": {
+        "trusted": "Trusted",
+        "untrusted": "Not trusted",
+        "unchecked": "Not checked",
+        "unknown": "Unknown"
+      },
+      "error": {
+        "unknown_authority": "The chain leads to a root certificate Alice does not trust",
+        "wrong_intermediate": "No certificate the website sends after its own certificate issued it (a wrong intermediate certificate)",
+        "incomplete_chain": "An intermediate certificate of the deployed chain is missing",
+        "chain_order": "The intermediate certificates are sent in the wrong order",
+        "name_mismatch": "The certificate does not cover the name the website was checked with",
+        "expired": "A certificate of the chain has expired",
+        "not_yet_valid": "A certificate of the chain is not valid yet",
+        "invalid_chain": "The chain cannot be verified (an unreadable certificate or a broken constraint)",
+        "unknown": "The chain is not trusted"
+      },
+      "store": {
+        "system": "the system roots",
+        "acme_bundle": "the certificate authority's CA bundle",
+        "uploaded_root": "the root uploaded with the chain",
+        "unknown": "an unknown trust store"
+      },
+      "checked": "{{status}}, checked against {{store}}",
+      "fault": "{{status}}. {{reason}} (port {{port}})"
+    },
+    "failure": {
+      "network": "Alice could not reach the website (a network problem, not a wrong certificate).",
+      "certificate": "The website served another certificate or another chain.",
+      "trust": "The website's certificate chain is not trusted."
     },
     "failedStep": "Failed at: {{step}}",
     "causeStep": "Cause: {{step}}",
@@ -2028,6 +2074,8 @@
       "mode": "Checked: {{mode}}",
       "served": "Served certificate: {{fingerprint}}",
       "reason": "Cause: {{reason}}",
+      "trust": "Chain: {{trust}}",
+      "trustError": "Chain fault: {{reason}}",
       "recoverPending": {
         "ok": "Alice put back the files from before the unfinished earlier change.",
         "skipped": "There was nothing to put back.",

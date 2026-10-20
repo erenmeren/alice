@@ -1920,6 +1920,10 @@
     "openDeployment": "Bu dağıtımı aç",
     "partial": "Güncellenen web siteleri: {{ok}} / {{total}}",
     "succeededUnverified": "Yeni sertifika dağıtıldı ve Nginx yeniden yüklendi.",
+    "succeededUntrusted": "Yeni sertifika sunuluyor, ancak web sitesinin sertifika zinciri güvenilir değil.",
+    "trustFault": "{{reason}} (bağlantı noktası: {{port}}).",
+    "trusted": "Alice web sitesinin sertifika zincirini de güvenilir bir köke göre doğruladı.",
+    "trustUnchecked": "Alice sertifika zincirini denetlemedi: sunucudaki alice-helper 1.10.0 sürümünden eski.",
     "rollbackFailedRestored": "Önceki dosyalar geri yüklendi, ancak Alice web sitesinin önceki sertifikayı sunduğunu doğrulayamadı. Web sitesini şimdi denetleyin.",
     "rollbackForbidden": "Alice başarısız değişikliği geri almadı: önceki sertifika iptal edilmiş veya ele geçirilmiş, bu yüzden sunucuya geri konmaz. Web sitesini şimdi denetleyin.",
     "finishing": "Arka plandaki iş tamamlandı. Alice sonucu kaydediyor.",
@@ -1939,7 +1943,8 @@
       "evidence": "Kanıt",
       "triggeredBy": "Başlatan",
       "system": "Alice (otomatik)",
-      "verification": "Doğrulama: {{state}}"
+      "verification": "Doğrulama: {{state}}",
+      "untrusted": "Sunuluyor, ancak sertifika zinciri güvenilir değil"
     },
     "title": "Dağıtımlar",
     "intro": "Sonuçlarıyla birlikte tüm sertifika dağıtımları. Her adımı görmek için birini açın.",
@@ -1978,6 +1983,47 @@
       "local": "Sunucunun kendisinden denetlendi",
       "skipped": "Atlandı",
       "none": "Yapılmadı"
+    },
+    "levelLabel": "Kanıt düzeyi",
+    "level": {
+      "none": "Yok",
+      "installed": "Kuruldu: dosyalar yazıldı ve Nginx yeniden yüklendi, web sitesi denetlenmedi",
+      "served": "Sunuluyor: web sitesi beklenen sertifikayı sunuyor",
+      "trusted": "Güvenilir: sunulan zincir güvenilir bir köke göre doğrulanıyor",
+      "unknown": "Bilinmiyor"
+    },
+    "trustLabel": "Sertifika zinciri",
+    "trust": {
+      "status": {
+        "trusted": "Güvenilir",
+        "untrusted": "Güvenilir değil",
+        "unchecked": "Denetlenmedi",
+        "unknown": "Bilinmiyor"
+      },
+      "error": {
+        "unknown_authority": "Zincir, Alice'in güvenmediği bir kök sertifikaya çıkıyor",
+        "wrong_intermediate": "Web sitesinin kendi sertifikasından sonra gönderdiği sertifikaların hiçbiri onu imzalamamış (yanlış ara sertifika)",
+        "incomplete_chain": "Dağıtılan zincirin bir ara sertifikası eksik",
+        "chain_order": "Ara sertifikalar yanlış sırayla gönderiliyor",
+        "name_mismatch": "Sertifika, web sitesinin denetlendiği adı kapsamıyor",
+        "expired": "Zincirdeki bir sertifikanın süresi dolmuş",
+        "not_yet_valid": "Zincirdeki bir sertifika henüz geçerli değil",
+        "invalid_chain": "Zincir doğrulanamıyor (okunamayan bir sertifika veya bozulmuş bir kısıt)",
+        "unknown": "Zincir güvenilir değil"
+      },
+      "store": {
+        "system": "sistem kök sertifikalarına",
+        "acme_bundle": "sertifika yetkilisinin CA paketine",
+        "uploaded_root": "zincirle birlikte yüklenen kök sertifikaya",
+        "unknown": "bilinmeyen bir güven deposuna"
+      },
+      "checked": "{{status}}, {{store}} göre denetlendi",
+      "fault": "{{status}}. {{reason}} (bağlantı noktası: {{port}})"
+    },
+    "failure": {
+      "network": "Alice web sitesine ulaşamadı (bir ağ sorunu, yanlış sertifika değil).",
+      "certificate": "Web sitesi başka bir sertifika ya da başka bir zincir sundu.",
+      "trust": "Web sitesinin sertifika zinciri güvenilir değil."
     },
     "failedStep": "Başarısız olduğu adım: {{step}}",
     "causeStep": "Neden olan adım: {{step}}",
@@ -2028,6 +2074,8 @@
       "mode": "Denetim: {{mode}}",
       "served": "Sunulan sertifika: {{fingerprint}}",
       "reason": "Neden: {{reason}}",
+      "trust": "Zincir: {{trust}}",
+      "trustError": "Zincir hatası: {{reason}}",
       "recoverPending": {
         "ok": "Alice tamamlanmamış önceki değişiklikten önceki dosyaları geri koydu.",
         "skipped": "Geri konacak bir şey yoktu.",

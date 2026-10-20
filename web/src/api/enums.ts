@@ -148,3 +148,27 @@ export const fileProblemKey = (p: string) => `locations.problems.${known(FILE_PR
 export const configErrorKey = (e: string) => `locations.configError.${known(CONFIG_ERRORS, e) ? e : 'unknown'}`;
 export const configReasonKey = (r: string) => `locations.configReason.${known(CONFIG_REASONS, r) ? r : 'unknown'}`;
 export const verifiedKey = (v: string) => `deployments.verified.${known(VERIFIED_MODES, v) ? v : 'none'}`;
+
+// R51: the verification levels a deployment reports (index = level; 4, a service health check, is reserved), the
+// trust statuses, the reasons a served chain does not verify (providers.TrustErrors), the trust stores and the kinds of
+// a failed verification.
+export const VERIFICATION_LEVELS: readonly string[] = ['none', 'installed', 'served', 'trusted'];
+export const TRUST_STATUSES: readonly string[] = ['trusted', 'untrusted', 'unchecked'];
+export const TRUST_ERRORS: readonly string[] = [
+  'unknown_authority',
+  'wrong_intermediate',
+  'incomplete_chain',
+  'chain_order',
+  'name_mismatch',
+  'expired',
+  'not_yet_valid',
+  'invalid_chain',
+];
+export const TRUST_STORES: readonly string[] = ['system', 'acme_bundle', 'uploaded_root'];
+export const VERIFY_FAILURES: readonly string[] = ['network', 'certificate', 'trust'];
+
+export const verificationLevelKey = (level: number) => `deployments.level.${VERIFICATION_LEVELS[level] ?? 'unknown'}`;
+export const trustStatusKey = (s: string) => `deployments.trust.status.${known(TRUST_STATUSES, s) ? s : 'unknown'}`;
+export const trustErrorKey = (e: string) => `deployments.trust.error.${known(TRUST_ERRORS, e) ? e : 'unknown'}`;
+export const trustStoreKey = (s: string) => `deployments.trust.store.${known(TRUST_STORES, s) ? s : 'unknown'}`;
+export const verifyFailureKey = (f: string) => (known(VERIFY_FAILURES, f) ? `deployments.failure.${f}` : '');

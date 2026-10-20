@@ -38,6 +38,59 @@ describe('DeploymentDetailPage', () => {
     expectNoRawKeys();
   });
 
+  // R51: the operation details show the level the verification proved and what it found about the served chain.
+  it('shows the evidence level and the trust of the served chain', async () => {
+    show(
+      deploymentDetailFixture({
+        id: ID,
+        steps: [...okSteps.slice(0, 6), stepFixture(7, 'verify', 'ok', { mode: 'remote', trust: 'trusted' })],
+        verification: { level: 3, failure: '', trust: { status: 'trusted', error: '', port: null, store: 'acme_bundle', enforced: true } },
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByTestId('deployment-level')).toHaveTextContent('Trusted: the served chain verifies against a trusted root');
+    expect(screen.getByTestId('deployment-trust')).toHaveTextContent("Trusted, checked against the certificate authority's CA bundle");
+    expect(within(screen.getByRole('list', { name: 'Steps' })).getByText('Chain: Trusted')).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('shows a deployment rolled back for an untrusted chain with the precise fault and the kind of failure', async () => {
+    show(
+      deploymentDetailFixture({
+        id: ID,
+        status: 'rolled_back',
+        result: 'rolled_back',
+        phase: 'restored',
+        failed_step: 'verify',
+        cause_step: 'verify',
+        error: { code: 'ALC-DEP-0026', reason: 'deployment.verify_untrusted', params: { port: '443', trust_error: 'wrong_intermediate' } },
+        steps: [...okSteps.slice(0, 6), stepFixture(7, 'verify', 'failed', { port: '443', reason: 'deployment.verify_untrusted', trust_error: 'wrong_intermediate' })],
+        verification: { level: 0, failure: 'trust', trust: { status: 'untrusted', error: 'wrong_intermediate', port: 443, store: 'system', enforced: true } },
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByText('The website serves the new certificate, but its chain is not trusted (port 443).')).toBeInTheDocument();
+    expect(screen.getByTestId('deployment-level')).toHaveTextContent('None');
+    expect(screen.getByTestId('deployment-trust')).toHaveTextContent('Not trusted. No certificate the website sends after its own certificate issued it (a wrong intermediate certificate) (port 443)');
+    expect(screen.getByTestId('deployment-failure')).toHaveTextContent("The website's certificate chain is not trusted.");
+    expect(within(screen.getByRole('list', { name: 'Steps' })).getByText(/Chain fault: No certificate the website sends/)).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('tells a network failure from a wrong certificate', async () => {
+    show(
+      deploymentDetailFixture({
+        id: ID,
+        status: 'rolled_back',
+        error: { code: 'ALC-DEP-0005', reason: 'deployment.verify_unreachable', params: { port: '443' } },
+        verification: { level: 0, failure: 'network', trust: null },
+      }),
+    );
+    await renderRoute(`/deployments/${ID}`);
+    expect(await screen.findByTestId('deployment-failure')).toHaveTextContent('Alice could not reach the website (a network problem, not a wrong certificate).');
+    expect(screen.queryByTestId('deployment-trust')).not.toBeInTheDocument();
+  });
+
   it('has the design layout: header with the way back and the status, the outcome notice, the sequence, operation details and evidence', async () => {
     show(
       deploymentDetailFixture({

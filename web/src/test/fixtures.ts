@@ -597,6 +597,7 @@ export function deploymentFixture(o: Partial<Deployment> = {}): Deployment {
     created_at: '2026-10-02T10:00:00Z',
     started_at: '2026-10-02T10:00:01Z',
     finished_at: '2026-10-02T10:00:09Z',
+    verification: { level: 2, trust: null, failure: '' },
     ...o,
   };
 }
