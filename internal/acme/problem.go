@@ -42,6 +42,8 @@ const (
 	ReasonRevokeUnsupported   = "acme.revoke_unsupported"
 	ReasonRevokeReasonRefused = "acme.revoke_reason_refused"
 	ReasonRevokeUnauthorized  = "acme.revoke_unauthorized"
+	// alreadyReplaced (RFC 9773 section 7.4): another order at the CA replaces the certificate already (R50).
+	ReasonAlreadyReplaced = "acme.already_replaced"
 )
 
 // Reasons lists every reason an *Error of this package can carry.
@@ -49,7 +51,7 @@ func Reasons() []string {
 	return []string{ReasonProviderUnreachable, ReasonDirectoryInvalid, ReasonTermsNotAccepted, ReasonAccountRejected,
 		ReasonCARateLimited, ReasonValidationFailedDNS, ReasonValidationFailedHTTP, ReasonHookRefused, ReasonIdentifierRefused,
 		ReasonNotIssuedInTime, ReasonKeyPolicyNotAllowed, ReasonTLSTrustFailed, ReasonRolloverUnsupported, ReasonChallengeUnavailable,
-		ReasonNameNotAllowed, ReasonRevokeUnsupported, ReasonRevokeReasonRefused, ReasonRevokeUnauthorized}
+		ReasonNameNotAllowed, ReasonRevokeUnsupported, ReasonRevokeReasonRefused, ReasonRevokeUnauthorized, ReasonAlreadyReplaced}
 }
 
 // ProblemPrefix is the namespace of RFC 8555 problem types; any other type is dropped.
@@ -378,6 +380,8 @@ func (c *Client) fromProblem(e *Error, p *xacme.Error) {
 		e.Reason = ReasonValidationFailedHTTP
 	case t == "orderNotReady":
 		e.Reason = ReasonNotIssuedInTime
+	case t == "alreadyReplaced":
+		e.Reason = ReasonAlreadyReplaced
 	case t == "serverInternal", t == "badNonce", p.StatusCode >= 500:
 		e.Reason, e.cause = ReasonProviderUnreachable, errUnreachable
 	default:
