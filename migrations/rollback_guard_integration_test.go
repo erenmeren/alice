@@ -16,7 +16,7 @@ import (
 	"alice/migrations"
 )
 
-// 00023 (R48): a deployment records the certificate the replaced file held (its leaf and public key hash, hex or ''),
+// 00023 (R48): a deployment records the certificate the replaced file held (its leaf and public key hash, hex or empty),
 // written by the application; the phase restore_forbidden is a phase; the Down keeps a finished deployment's phase.
 func TestMigration00023RollbackGuard(t *testing.T) {
 	d := pgtest.New(t)
