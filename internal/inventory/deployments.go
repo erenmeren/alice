@@ -241,6 +241,12 @@ type Deployment struct {
 	// values; "" before the first send and when Alice did not know the file's certificate.
 	RollbackLeafSHA256 string
 	RollbackSPKISHA256 string
+
+	// R51: what the verification of the new certificate found about the served chains (Trust.Status "" when not
+	// measured: skipped, or a deployment from before R51), and the level a finished deployment proved
+	// (providers.Level*: none unless it succeeded or was unchanged; then installed, served or trusted).
+	Trust providers.Trust
+	Level int
 }
 
 // DeploymentFilter selects deployments, newest first.
@@ -617,7 +623,7 @@ d.state, d.status, d.new_fingerprint, d.previous_fingerprint, d.confirm_incomple
 d.error_params, d.failed_step, d.created_at, d.started_at, d.finished_at, d.result, d.phase, d.cause_step, d.helper_error,
 d.verify_failed_reason, d.verify_failed_port, d.operation_id, d.new_chain_length, d.previous_chain_length, d.expect_cert_sha256,
 d.recover_after, d.recovery_attempts, coalesce(j.status, ''), d.binding_id, coalesce(v.version, ''), coalesce(vt.name::text, ''), c.source,
-d.rollback_leaf_sha256, d.rollback_spki_sha256
+d.rollback_leaf_sha256, d.rollback_spki_sha256, d.trust_status, d.trust_error, d.trust_port, d.trust_store, d.trust_enforced
 FROM deployments d
 JOIN certificates c ON c.id = d.certificate_id
 JOIN targets t ON t.id = d.target_id
@@ -632,13 +638,14 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 		d              Deployment
 		backup, params []byte
 		certSource     string
+		trustPort      *int
 	)
 	err := row.Scan(&d.ID, &d.CertificateID, &d.CertificateName, &d.LocationID, &d.TargetID, &d.TargetName, &d.CertPath, &d.KeyPath,
 		&d.JobID, &d.Trigger, &d.RequestedBy, &d.RequestedByName, &d.State, &d.Status, &d.NewFingerprint, &d.PreviousFingerprint,
 		&d.ConfirmIncompleteChain, &backup, &d.Verified, &d.ErrorCode, &params, &d.FailedStep, &d.CreatedAt, &d.StartedAt, &d.FinishedAt,
 		&d.Result, &d.Phase, &d.CauseStep, &d.HelperError, &d.VerifyFailedReason, &d.VerifyFailedPort, &d.OperationID, &d.NewChainLength,
 		&d.PreviousChainLength, &d.ExpectCertSHA256, &d.RecoverAfter, &d.RecoveryAttempts, &d.JobStatus, &d.BindingID, &d.KVVersion, &d.VaultName, &certSource,
-		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256)
+		&d.RollbackLeafSHA256, &d.RollbackSPKISHA256, &d.Trust.Status, &d.Trust.Error, &trustPort, &d.Trust.Store, &d.Trust.Enforced)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Deployment{}, ErrNotFound
 	}
@@ -657,6 +664,12 @@ func scanDeployment(row pgx.Row) (Deployment, error) {
 	}
 	if d.ErrorParams == nil {
 		d.ErrorParams = map[string]string{}
+	}
+	if trustPort != nil {
+		d.Trust.Port = *trustPort
+	}
+	if d.Status == DeployStatusSucceeded || d.Status == DeployStatusUnchanged {
+		d.Level = providers.VerificationLevel(d.Verified, d.Trust.Status)
 	}
 	switch {
 	case d.BindingID != nil:

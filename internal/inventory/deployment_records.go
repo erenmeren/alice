@@ -39,6 +39,7 @@ package inventory
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -112,6 +113,43 @@ type Material struct {
 	RollbackLeafSHA256 string
 	RollbackSPKISHA256 string
 	Guard              providers.RollbackGuard
+	// R51 additions: the trust store the verification after the change checks the served chains against (the system
+	// roots, with the issuing ACME authority's CA bundle for an ACME certificate) and when the material was read.
+	// TrustPolicy builds the policy from CertificatePEM (the chain sent, also once KVDeployMaterial filled it).
+	TrustRoots *x509.CertPool
+	TrustStore string
+	TrustAt    time.Time
+}
+
+// TrustPolicy is the verification's trust policy for the chain sent (R51; providers.TrustPolicyFor): nil when the
+// material has no trust store or its chain cannot be read (the trust is then not checked).
+func (m Material) TrustPolicy() *providers.TrustPolicy {
+	chain := pemChain(m.CertificatePEM)
+	if m.TrustRoots == nil || len(chain) == 0 {
+		return nil
+	}
+	p := providers.TrustPolicyFor(chain, m.TrustRoots, m.TrustStore, m.TrustAt)
+	return &p
+}
+
+// pemChain parses every CERTIFICATE block of a PEM text, leaf first; nil when one cannot be read.
+func pemChain(p []byte) []*x509.Certificate {
+	var out []*x509.Certificate
+	for rest := p; ; {
+		var b *pem.Block
+		b, rest = pem.Decode(rest)
+		if b == nil {
+			return out
+		}
+		if b.Type != "CERTIFICATE" {
+			continue
+		}
+		c, err := x509.ParseCertificate(b.Bytes)
+		if err != nil {
+			return nil
+		}
+		out = append(out, c)
+	}
 }
 
 // PrecheckRequest verifies what the website serves now, before any change: the location's current
@@ -134,14 +172,15 @@ func (m Material) SendValues(previousFingerprint string, previousChainLength int
 func (m Material) DeployRequest(v SendValues) providers.DeployRequest {
 	return providers.DeployRequest{OperationID: v.OperationID, Location: m.Location, ExpectCertSHA256: v.ExpectCertSHA256,
 		CertificatePEM: m.CertificatePEM, PrivateKeyPEM: m.PrivateKeyPEM, Fingerprint: m.Fingerprint, SANs: m.SANs, KeyType: m.KeyType,
-		OldFingerprint: v.PreviousFingerprint, OldSANs: m.OldSANs, Verify: m.Verify, ChainLength: v.NewChainLength, Guard: m.Guard}
+		OldFingerprint: v.PreviousFingerprint, OldSANs: m.OldSANs, Verify: m.Verify, ChainLength: v.NewChainLength, Guard: m.Guard,
+		Trust: m.TrustPolicy()}
 }
 
 // VerifyRequest checks the new certificate with the recorded fingerprint and chain length (a
-// committed journal is never success without it).
+// committed journal is never success without it) and the trust policy of the chain (R51).
 func (m Material) VerifyRequest() providers.VerifyRequest {
 	return providers.VerifyRequest{Location: m.Location, Fingerprint: m.Fingerprint, ChainLength: m.NewChainLength,
-		PreviousFingerprint: m.PreviousFingerprint, SANs: m.SANs, KeyType: m.KeyType, Verify: m.Verify}
+		PreviousFingerprint: m.PreviousFingerprint, SANs: m.SANs, KeyType: m.KeyType, Verify: m.Verify, Trust: m.TrustPolicy()}
 }
 
 // RollbackRequest restores the recorded operation and checks the recorded previous certificate; g is the rollback
@@ -209,6 +248,7 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
 		fileSHA, currentType         string
 		keyID                        *uuid.UUID
 		publicKey, pemChain, oldType string
+		bundle                       *string
 		facts                        []byte
 		revoked, compromised         bool
 		oldKey                       string
@@ -217,7 +257,9 @@ func (s *Service) DeploymentMaterial(ctx context.Context, id uuid.UUID, withKey 
     l.custom_location, l.key_exists, l.key_mode, l.key_owner, l.key_group, l.cert_file_sha256, l.verify_port, coalesce(l.verify_sni, ''),
     l.skip_verify, coalesce(oc.fingerprint_sha256, ''), coalesce(oc.sans, '{}'), l.key_type,
     c.pem_chain, c.fingerprint_sha256, c.sans, c.not_before, c.not_after, c.key_algorithm, c.private_key_id, c.public_key_sha256, t.facts,
-    c.revoked_at IS NOT NULL, c.compromised_at IS NOT NULL, coalesce(oc.public_key_sha256, '')
+    c.revoked_at IS NOT NULL, c.compromised_at IS NOT NULL, coalesce(oc.public_key_sha256, ''),
+    (SELECT p.ca_bundle_pem FROM acme_orders o JOIN acme_certificates ac ON ac.id = o.acme_certificate_id
+     JOIN acme_providers p ON p.id = ac.provider_id WHERE o.certificate_id = c.id ORDER BY o.finished_at DESC NULLS LAST LIMIT 1)
 FROM certificate_locations l
 JOIN certificates c ON c.id = $2
 JOIN targets t ON t.id = l.target_id
@@ -225,7 +267,8 @@ LEFT JOIN certificates oc ON oc.id = l.certificate_id
 WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supported, &m.Location.ResolvedCertPath, &m.Location.Inherited,
 		&m.Location.Symlinked, &m.Location.CustomLocation, &m.Location.KeyExists, &m.Location.KeyMode, &m.Location.KeyOwner,
 		&m.Location.KeyGroup, &fileSHA, &verifyPort, &m.Verify.SNI, &m.Verify.Skip, &m.CurrentFingerprint, &m.OldSANs, &currentType,
-		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts, &revoked, &compromised, &oldKey)
+		&pemChain, &m.Fingerprint, &m.SANs, &m.NotBefore, &m.NotAfter, &m.KeyType, &keyID, &publicKey, &facts, &revoked, &compromised, &oldKey,
+		&bundle)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Material{}, ErrNotFound
 	}
@@ -253,6 +296,11 @@ WHERE l.id = $1`, d.LocationID, d.CertificateID).Scan(&servers, &m.Location.Supp
 	m.NotBefore, m.NotAfter = m.NotBefore.UTC(), m.NotAfter.UTC()
 	m.CertificatePEM = []byte(pemChain)
 	m.NewCertSHA256 = sha256Hex(m.CertificatePEM)
+	// R51: the system roots, and the CA bundle of the ACME authority that issued the certificate (its private root).
+	m.TrustRoots, m.TrustStore, m.TrustAt = s.roots, providers.TrustStoreSystem, s.clock.Now().UTC()
+	if bundle != nil && strings.TrimSpace(*bundle) != "" {
+		m.TrustRoots, m.TrustStore = s.rootsWith(*bundle), providers.TrustStoreACME
+	}
 	oldType = currentType
 	if m.Recorded {
 		m.ExpectCertSHA256, m.NewChainLength = d.ExpectCertSHA256, d.NewChainLength
@@ -531,13 +579,15 @@ WHERE id = $1`, id, DeployStateDeploying, v.OperationID, v.ExpectCertSHA256, v.N
 
 // stepParamKeys are the step params a record keeps (providers.StepLogger's primitives; reason is the
 // failed verification's reason code, which a recovery reads back after a crash).
-var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id"}
+var stepParamKeys = []string{"error", "port", "mode", "served", "reason", "operation_id", "trust", "trust_error"}
 
 // errorParamKeys are the error params a record keeps (the providers' allowlist, Tasks 11 and 17).
 var errorParamKeys = []string{"port", "failed_step", "profile", "phase", "directory", "backup_dir", "expected", "actual", "mode",
 	"helper_code", "subcommand", "operation_id",
 	// R48: ssh.helper_outdated_rollback_guard names the server's helper protocol and the one the guard needs.
 	"helper_protocol", "required_protocol",
+	// R51: deployment.verify_untrusted names why the served chain did not verify.
+	"trust_error",
 	// The Key Vault provider's closed params (Phase 5): the role a forbidden secret read lacks (F-41),
 	// the permission model, Azure's strict-shape code and request id, a refused client address, and
 	// "reason" (tenant_mismatch).
@@ -647,12 +697,37 @@ type DeploymentFinish struct {
 	// defence in depth: a path that only lost track of the send can never record "nothing written").
 	NothingWritten bool
 
+	// Trust is what the verification of the new certificate found about the served chains (R51; Status "" when not
+	// measured): stored for every finish, so a deployment rolled back for an untrusted chain keeps why.
+	Trust providers.Trust
+
 	// CertFileSHA256 is the certificate file's hash after a success: Material.NewCertSHA256 after
 	// the first send (the helper writes the PEM sent verbatim), the journal's NewCertSHA256 after a
 	// recovery. "" leaves the location's hash unknown: the next deployment is refused
 	// (ErrLocationNeedsDiscovery) until a discovery reads the file again.
 	CertFileSHA256 string
 }
+
+// recordedTrust is f.Trust as the record keeps it (R51): a status, reason and store outside the closed lists are
+// blank, a reason only with untrusted (and untrusted only with a reason), the port only with a reason (nil
+// otherwise or out of range).
+func recordedTrust(t providers.Trust) (providers.Trust, *int) {
+	out := providers.Trust{Status: oneOf(t.Status, trustStatuses), Error: oneOf(t.Error, providers.TrustErrors),
+		Store: oneOf(t.Store, trustStores), Enforced: t.Enforced}
+	if (out.Status == providers.TrustUntrusted) != (out.Error != "") {
+		out.Status, out.Error = "", ""
+	}
+	if out.Error == "" || t.Port < 1 || t.Port > 65535 {
+		return out, nil
+	}
+	out.Port = t.Port
+	return out, &out.Port
+}
+
+var (
+	trustStatuses = []string{"", providers.TrustTrusted, providers.TrustUntrusted, providers.TrustUnchecked}
+	trustStores   = []string{"", providers.TrustStoreSystem, providers.TrustStoreACME, providers.TrustStoreUploadedRoot}
+)
 
 var (
 	results = []string{"", "committed", "unchanged", "no_change", "rolled_back", "rollback_failed", "uncertain"}
@@ -786,6 +861,7 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
 	if f.VerifyFailedPort != nil && *f.VerifyFailedPort >= 1 && *f.VerifyFailedPort <= 65535 {
 		port = f.VerifyFailedPort
 	}
+	trust, trustPort := recordedTrust(f.Trust)
 	now := s.clock.Now().UTC()
 	// A finish without a failed step keeps the recorded one, or names the verification whose
 	// failure the deployment was recovered from (a rollback's outcome carries no step).
@@ -796,10 +872,11 @@ func (s *Service) finishLocked(ctx context.Context, tx pgx.Tx, d lockedDeploymen
                        WHEN verify_failed_reason <> '' OR $12::text <> '' THEN 'verify' ELSE '' END,
     cause_step = $9, helper_error = $10, verified = $11,
     verify_failed_reason = CASE WHEN $12::text = '' THEN verify_failed_reason ELSE $12::text END,
-    verify_failed_port = coalesce($13::integer, verify_failed_port), finished_at = $14, recover_after = NULL
+    verify_failed_port = coalesce($13::integer, verify_failed_port), finished_at = $14, recover_after = NULL,
+    trust_status = $15, trust_error = $16, trust_port = $17, trust_store = $18, trust_enforced = $19
 WHERE id = $1 RETURNING failed_step`, d.id, DeployStateDone, f.Status, oneOf(f.Result, results), oneOf(f.Phase, phases), code, params,
 		stepOrBlank(f.FailedStep), stepOrBlank(f.CauseStep), stepOrBlank(f.HelperError), verified,
-		sanitizeCode(f.VerifyFailedReason, ""), port, now).Scan(&failedStep)
+		sanitizeCode(f.VerifyFailedReason, ""), port, now, trust.Status, trust.Error, trustPort, trust.Store, trust.Enforced).Scan(&failedStep)
 	if isFrozen(err) {
 		return errAlreadyFinished
 	}

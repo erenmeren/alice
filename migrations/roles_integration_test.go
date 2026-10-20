@@ -187,7 +187,8 @@ var explicitColumnGrants = map[string]map[string][]string{
 	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "expect_cert_sha256", "failed_step", "finished_at",
 		"helper_error", "job_id", "new_chain_length", "operation_id", "phase", "previous_chain_length", "previous_fingerprint",
 		"recover_after", "recovery_attempts", "result", "rollback_info", "rollback_leaf_sha256", "rollback_spki_sha256", "started_at", "state",
-		"status", "verified", "verify_failed_port", "verify_failed_reason"}},
+		"status", "trust_enforced", "trust_error", "trust_port", "trust_status", "trust_store", "verified", "verify_failed_port",
+		"verify_failed_reason"}},
 	// Phase 5: a location joins or leaves a binding; everything that names a vault object, a
 	// version, a thumbprint, a binding's certificate or an import's request is fixed at INSERT.
 	"public.kv_certificates": {"UPDATE": {"auto_renew", "content_type", "current_thumbprint", "current_version", "details_pending",
@@ -296,6 +297,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	caWait := hasColumn(t, d, "acme_certificates", "ca_not_before")
 	guard := hasColumn(t, d, "deployments", "rollback_leaf_sha256")
 	ari := hasColumn(t, d, "acme_certificates", "ari_renew_at")
+	trust := hasColumn(t, d, "deployments", "trust_status")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -349,6 +351,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00023 the rollback target columns do not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "rollback_leaf_sha256" || c == "rollback_spki_sha256"
+			})}
+		}
+		if name == "public.deployments" && !trust {
+			// Below 00026 the trust columns do not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return strings.HasPrefix(c, "trust_")
 			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {

@@ -183,6 +183,26 @@ func VerificationLevel(verified, trust string) int {
 	return LevelNone
 }
 
+// StepParams are the params of a verify step for vr: mode, and the trust status when measured (with its reason when
+// untrusted) for a passed verification; port and reason (and trust_error) for a failed one.
+func (vr VerifyResult) StepParams() map[string]string {
+	if !vr.OK {
+		p := map[string]string{"port": vr.Params["port"], "reason": vr.Reason}
+		if te := vr.Params["trust_error"]; te != "" {
+			p["trust_error"] = te
+		}
+		return p
+	}
+	p := map[string]string{"mode": vr.Mode}
+	if vr.Trust.Status != "" {
+		p["trust"] = vr.Trust.Status
+	}
+	if vr.Trust.Error != "" {
+		p["trust_error"] = vr.Trust.Error
+	}
+	return p
+}
+
 // validity is expired or not_yet_valid for a certificate outside its validity at now, "" inside it.
 func validity(c *x509.Certificate, now time.Time) string {
 	switch {

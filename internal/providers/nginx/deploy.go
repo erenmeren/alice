@@ -618,7 +618,7 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		if vr.Mode == "skipped" {
 			status = providers.StepSkipped
 		}
-		step(d.log, providers.StepNameVerify, status, verifyStepParams(vr))
+		step(d.log, providers.StepNameVerify, status, vr.StepParams())
 		d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: status})
 		d.out.Result, d.out.Phase, d.out.Verified, d.out.Trust = providers.DeployCommitted, providers.PhaseCommitted, vr.Mode, vr.Trust
 		if phase == helperproto.PhaseUnchanged {
@@ -628,7 +628,7 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 	}
 	// The reason goes with the step: the step is recorded before the rollback is sent, so a deploy
 	// engine that dies during the rollback can still tell why it was rolled back.
-	step(d.log, providers.StepNameVerify, providers.StepFailed, verifyStepParams(vr))
+	step(d.log, providers.StepNameVerify, providers.StepFailed, vr.StepParams())
 	d.out.Steps = append(d.out.Steps, providers.DeployStep{Name: providers.StepNameVerify, Status: providers.StepFailed})
 	d.out.Trust = vr.Trust // a chain that did not verify (deployment.verify_untrusted) stays on the record
 	if phase == helperproto.PhaseUnchanged {
@@ -638,27 +638,6 @@ func (d *deployment) verifyNew(ctx context.Context, phase string) (providers.Dep
 		return d.out, providers.NewError(vr.Reason, false, verr, maps.Clone(vr.Params))
 	}
 	return d.rollBack(ctx, vr)
-}
-
-// verifyStepParams are the params of the verify step: mode, and the trust status when measured (with
-// its reason when untrusted) for a passed verification; port and reason (and trust_error) for a
-// failed one.
-func verifyStepParams(vr providers.VerifyResult) map[string]string {
-	if !vr.OK {
-		p := map[string]string{"port": vr.Params["port"], "reason": vr.Reason}
-		if te := vr.Params["trust_error"]; te != "" {
-			p["trust_error"] = te
-		}
-		return p
-	}
-	p := map[string]string{"mode": vr.Mode}
-	if vr.Trust.Status != "" {
-		p["trust"] = vr.Trust.Status
-	}
-	if vr.Trust.Error != "" {
-		p["trust_error"] = vr.Trust.Error
-	}
-	return p
 }
 
 // unverifiable is the result of a verification that could not be made.
