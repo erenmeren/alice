@@ -224,7 +224,9 @@ func TestRateLimitedOrderStoresTheWait(t *testing.T) {
 	assert.Equal(t, inventory.ACMEStateFailing, got.State)
 	assert.Equal(t, 1, got.Failures)
 	assert.Equal(t, acme.ReasonCARateLimited, got.LastErrorCode)
-	assert.Equal(t, w.clock.Now().UTC().Add(3*time.Hour), *got.NextAttemptAt, "the CA's Retry-After, longer than the 1 h backoff")
+	assert.Equal(t, w.clock.Now().UTC().Add(time.Hour), *got.NextAttemptAt, "Alice's own 1 h backoff")
+	require.NotNil(t, got.CANotBefore)
+	assert.Equal(t, w.clock.Now().UTC().Add(3*time.Hour), *got.CANotBefore, "the CA's Retry-After, kept apart (R47)")
 }
 
 // A failed validation: the order and the certificate carry the code, the records are removed, the key is deleted.
