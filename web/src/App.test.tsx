@@ -33,7 +33,7 @@ describe('application shell', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Overview' })).toBeInTheDocument();
     expect(screen.getByTestId('current-user')).toHaveTextContent(/^Ayşe Yılmaz$/);
     await waitFor(() => expect(screen.getByTestId('server-status')).toHaveTextContent('Server version: 1.2.3'));
-    expect(navLabels()).toEqual(['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'Services', 'People & access', 'Settings', 'License', 'Your account', 'API tokens']);
+    expect(navLabels()).toEqual(['Overview', 'Certificates', 'Issued certificates', 'Network discovery', 'SSH keys', 'Servers', 'Key Vaults', 'Deployments', 'Key rotations', 'Audit trail', 'People & access', 'Services', 'Settings', 'License', 'Your account', 'API tokens']);
   });
 
   it('hides People & access and Audit trail from operators', async () => {
