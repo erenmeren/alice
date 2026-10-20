@@ -151,6 +151,9 @@ type issued struct {
 	account string
 	leaf    *x509.Certificate
 	chains  [][]byte
+	// revokedAt and reason: the certificate was revoked (RFC 8555 section 7.6) at that time for that RFC 5280 reason.
+	revokedAt time.Time
+	reason    int
 }
 
 // issue signs a leaf for the CSR's key and names. The chains are leaf+intermediate (the root is

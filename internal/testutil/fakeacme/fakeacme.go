@@ -1,6 +1,6 @@
 // Package fakeacme is an in-process fake of an ACME certificate authority (RFC 8555) for Alice's
 // tests: directory, nonces, accounts (external account binding, terms of service, key rollover,
-// deactivation), orders, authorizations with real HTTP-01 and DNS-01 validation, finalize with CSR
+// deactivation), orders, authorizations, revocation (RFC 8555 section 7.6) with real HTTP-01 and DNS-01 validation, finalize with CSR
 // checks, certificate download with alternates, and ACME Renewal Information (RFC 9773). It speaks
 // the wire format golang.org/x/crypto/acme expects, over TLS with a CA of its own, and issues
 // leaves from an issuing CA of its own (root, intermediate and, for alternates, further

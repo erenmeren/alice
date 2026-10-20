@@ -243,13 +243,3 @@ func TestLifetimeAndClock(t *testing.T) {
 	s.SetClock(time.Time{})
 	assert.WithinDuration(t, time.Now(), s.Now(), 5*time.Second)
 }
-
-func TestRevokeIsNotImplemented(t *testing.T) {
-	s := start(t, Options{})
-	c := newClient(t, s)
-	register(t, c)
-	der, _ := issue(t, s, c, nil, DNS01, "a.example.test")
-	c.RetryBackoff = func(int, *http.Request, *http.Response) time.Duration { return 0 } // 5xx is retried otherwise
-	err := c.RevokeCert(ctx(t), nil, der[0], acme.CRLReasonUnspecified)
-	assert.Equal(t, 501, problemOf(t, err).StatusCode)
-}

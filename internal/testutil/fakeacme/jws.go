@@ -191,8 +191,9 @@ func macOK(key []byte, input string, sig []byte) bool {
 type jwsMode int
 
 const (
-	modeJWK jwsMode = iota // newAccount: the key is in the header
-	modeKID                // everything else: the account URL is the kid
+	modeJWK    jwsMode = iota // newAccount: the key is in the header
+	modeKID                   // everything else: the account URL is the kid
+	modeEither                // revokeCert (RFC 8555 section 7.6): the account's kid or the certificate key's jwk
 )
 
 // authenticate reads, checks and consumes a JWS request.
@@ -209,13 +210,13 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request, mode jwsMo
 	}
 	out := &jwsReq{header: h}
 	switch {
-	case mode == modeJWK && len(h.JWK) > 0 && h.KID == "":
+	case (mode == modeJWK || mode == modeEither) && len(h.JWK) > 0 && h.KID == "":
 		pub, err := parseJWK(h.JWK)
 		if err != nil {
 			return nil, malformed(http.StatusBadRequest, "the JWK is not acceptable: "+err.Error())
 		}
 		out.key = pub
-	case mode == modeKID && h.KID != "" && len(h.JWK) == 0:
+	case (mode == modeKID || mode == modeEither) && h.KID != "" && len(h.JWK) == 0:
 		a := s.accountByURL(h.KID)
 		if a == nil {
 			return nil, newProblem(http.StatusBadRequest, "accountDoesNotExist", "no account for this key id")

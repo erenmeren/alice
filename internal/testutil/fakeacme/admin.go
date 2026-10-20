@@ -38,7 +38,7 @@ func durArg(v string) (time.Duration, *adminError) {
 // AdminHandler is the control API of the e2e service: every route answers one JSON object and takes
 // its arguments in the query string. It answers loopback callers only (the listener is loopback
 // already: defence in depth). Routes: GET /ping, GET /credentials, GET /ca, POST /reset, GET /counters,
-// GET /requests, POST /requests/clear, POST /fault, POST /unfault, GET /dns, POST /dns,
+// GET /requests, POST /requests/clear, GET /certificate (?serial=<hex>: valid or revoked, reason, time), POST /fault, POST /unfault, GET /dns, POST /dns,
 // POST /dns/clear, POST /http-target, POST /eab, POST /lifetime, POST /ari, POST /stuck,
 // POST /reject, POST /reject/clear, POST /validation-fail, POST /advertise, POST /challenges,
 // POST /processing-polls, POST /clock.
@@ -64,6 +64,7 @@ func (s *Server) AdminHandler() http.Handler {
 	route("GET /ca", func(func(string) string) (any, *adminError) {
 		return map[string]string{"ca_pem": string(s.CAPEM()), "issuer_root_pem": string(s.IssuerRootPEM())}, nil
 	})
+	route("GET /certificate", s.adminCertificate)
 	route("POST /reset", func(func(string) string) (any, *adminError) { s.Reset(); return s.Credentials(), nil })
 	route("GET /counters", func(func(string) string) (any, *adminError) { return s.Counters(), nil })
 	route("GET /requests", func(func(string) string) (any, *adminError) { return map[string]any{"requests": s.Requests()}, nil })

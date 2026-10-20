@@ -19,6 +19,7 @@ type Directory struct {
 	NewOrder    string
 	KeyChange   string // "" when the CA cannot roll account keys over
 	RenewalInfo string // "" when the CA has no ARI
+	RevokeCert  string // "" when the CA offers no revocation (RFC 8555 section 7.6)
 	// TermsOfService is the URL an Admin must accept ("" when the CA has none).
 	TermsOfService string
 	Website        string
@@ -31,6 +32,9 @@ func (d Directory) SupportsRollover() bool { return d.KeyChange != "" }
 
 // SupportsARI reports whether the CA offers renewal information.
 func (d Directory) SupportsARI() bool { return d.RenewalInfo != "" }
+
+// SupportsRevocation reports whether the CA offers certificate revocation (revokeCert).
+func (d Directory) SupportsRevocation() bool { return d.RevokeCert != "" }
 
 var errDirectory = errors.New("acme: the directory is not an ACME directory")
 
@@ -47,6 +51,7 @@ func ParseDirectory(b []byte) (Directory, error) {
 		NewOrder    any `json:"newOrder"`
 		KeyChange   any `json:"keyChange"`
 		RenewalInfo any `json:"renewalInfo"`
+		RevokeCert  any `json:"revokeCert"`
 		Meta        struct {
 			Terms       any `json:"termsOfService"`
 			Website     any `json:"website"`
@@ -58,7 +63,7 @@ func ParseDirectory(b []byte) (Directory, error) {
 	}
 	d := Directory{
 		NewNonce: httpsURL(v.NewNonce), NewAccount: httpsURL(v.NewAccount), NewOrder: httpsURL(v.NewOrder),
-		KeyChange: httpsURL(v.KeyChange), RenewalInfo: httpsURL(v.RenewalInfo),
+		KeyChange: httpsURL(v.KeyChange), RenewalInfo: httpsURL(v.RenewalInfo), RevokeCert: httpsURL(v.RevokeCert),
 		TermsOfService: webURL(v.Meta.Terms), Website: webURL(v.Meta.Website),
 	}
 	d.ExternalAccountRequired, _ = v.Meta.EABRequired.(bool)

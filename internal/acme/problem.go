@@ -37,6 +37,11 @@ const (
 	ReasonRolloverUnsupported  = "acme.rollover_unsupported"
 	ReasonChallengeUnavailable = "acme.challenge_unavailable"
 	ReasonNameNotAllowed       = "acme.name_not_allowed"
+	// Revocation (RFC 8555 section 7.6): the CA has no revokeCert; the CA (or Alice) refuses the reason; the CA refuses
+	// this account for this certificate (or does not know the certificate).
+	ReasonRevokeUnsupported   = "acme.revoke_unsupported"
+	ReasonRevokeReasonRefused = "acme.revoke_reason_refused"
+	ReasonRevokeUnauthorized  = "acme.revoke_unauthorized"
 )
 
 // Reasons lists every reason an *Error of this package can carry.
@@ -44,7 +49,7 @@ func Reasons() []string {
 	return []string{ReasonProviderUnreachable, ReasonDirectoryInvalid, ReasonTermsNotAccepted, ReasonAccountRejected,
 		ReasonCARateLimited, ReasonValidationFailedDNS, ReasonValidationFailedHTTP, ReasonHookRefused, ReasonIdentifierRefused,
 		ReasonNotIssuedInTime, ReasonKeyPolicyNotAllowed, ReasonTLSTrustFailed, ReasonRolloverUnsupported, ReasonChallengeUnavailable,
-		ReasonNameNotAllowed}
+		ReasonNameNotAllowed, ReasonRevokeUnsupported, ReasonRevokeReasonRefused, ReasonRevokeUnauthorized}
 }
 
 // ProblemPrefix is the namespace of RFC 8555 problem types; any other type is dropped.
@@ -227,7 +232,7 @@ func parseRetryAfter(v string, now time.Time) time.Duration {
 type op int
 
 const (
-	opAccount op = iota // directory, registration, rollover, deactivation, ARI
+	opAccount op = iota // directory, registration, rollover, deactivation, ARI, revocation
 	opOrder             // order, authorizations, finalize, download
 )
 

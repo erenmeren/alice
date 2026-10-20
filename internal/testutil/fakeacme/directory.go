@@ -86,9 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /acme/new-acct", s.route("new-account", true, modeJWK, s.handleNewAccount))
 	mux.HandleFunc("POST /acme/acct/{id}", s.route("account", true, modeKID, s.handleAccount))
 	mux.HandleFunc("POST /acme/key-change", s.route("key-change", true, modeKID, s.handleKeyChange))
-	mux.HandleFunc("POST /acme/revoke-cert", s.route("revoke-cert", true, modeKID, func(w http.ResponseWriter, _ *http.Request, _ *jwsReq) {
-		s.writeProblem(w, newProblem(http.StatusNotImplemented, "serverInternal", "revocation is not implemented by the fake"))
-	}))
+	mux.HandleFunc("POST /acme/revoke-cert", s.route("revoke-cert", true, modeEither, s.handleRevoke))
 	mux.HandleFunc("POST /acme/new-order", s.route("new-order", true, modeKID, s.handleNewOrder))
 	mux.HandleFunc("POST /acme/order/{id}", s.route("order", true, modeKID, s.handleOrder))
 	mux.HandleFunc("POST /acme/finalize/{id}", s.route("finalize", true, modeKID, s.handleFinalize))
