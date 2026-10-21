@@ -56,6 +56,19 @@ test-azure: ## Optional real Azure Key Vault suite; needs ALICE_AZURE_TEST_* (se
 record-azure: ## Optional: rewrite test/testdata/kv-recordings from a real vault's answers (shapes and placeholders only); needs ALICE_AZURE_TEST_*; never part of ci
 	ALICE_AZURE_RECORD=1 go test -count=1 -v -tags azure -run '^TestRecordShapes$$' ./internal/providers/azurekv/
 
+# The Let's Encrypt staging acceptance harness (test/lestaging, docs/dev/le-staging-acceptance.md): Alice's real ACME
+# code against the real staging service, for a domain the owner controls. It is a test binary built with the lestaging
+# tag (built separately so it can be run with sudo for port 80); without the ALICE_LE_* variables it skips. Never part
+# of ci. It refuses the production Let's Encrypt service unless ALICE_LE_ALLOW_PRODUCTION=yes.
+.PHONY: le-staging-build
+le-staging-build: ## Build the Let's Encrypt staging acceptance harness into bin/le-staging.test
+	@mkdir -p bin
+	go test -c -tags lestaging -o bin/le-staging.test ./test/lestaging/
+
+.PHONY: le-staging
+le-staging: le-staging-build ## Run the Let's Encrypt staging acceptance harness (needs ALICE_LE_*, skips without them; never part of ci)
+	ALICE_LE_STATE_DIR="$${ALICE_LE_STATE_DIR:-$(CURDIR)/bin/le-staging}" ./bin/le-staging.test -test.v -test.count=1 -test.timeout 2h -test.run '^TestLetsEncryptStaging$$'
+
 .PHONY: i18n-check
 i18n-check: ## Verify EN/TR translation catalogs have identical keys and placeholders
 	go run ./tools/i18n-check locales/common web/src/locales
@@ -295,6 +308,7 @@ lint: ## Run golangci-lint (gosec, forbidigo, ...) on the release and the e2e bu
 	golangci-lint run --build-tags integration ./internal/providers/azurekv/...
 	golangci-lint run --build-tags systemd ./internal/providers/nginx/...
 	golangci-lint run --build-tags release ./test/release/...
+	golangci-lint run --build-tags lestaging ./test/lestaging/...
 
 .PHONY: vuln
 vuln: ## Verify the Go module cache against go.sum, then check Go and npm dependencies for known vulnerabilities

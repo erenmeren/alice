@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Let's Encrypt staging acceptance harness
+
+**Added**
+- `make le-staging` (with `make le-staging-build`): an acceptance run of Alice's real ACME code against the Let's
+  Encrypt staging service, for a domain the owner controls. It covers the account (reused between runs), an order with
+  the web proof (HTTP-01, served by the harness or through a webroot) or the DNS proof (DNS-01 through the DNS hook, or
+  by hand; optionally with a wildcard), finalize, the chain checked against the staging roots fetched from
+  letsencrypt.org, renewal information (ARI), a renewal with `replaces`, revocation and the clean-up. It prints PASS or
+  FAIL per step. It honours the CA's `Retry-After`, revokes what an interrupted run left behind, skips without its
+  `ALICE_LE_*` variables and refuses the production service unless `ALICE_LE_ALLOW_PRODUCTION=yes`. Runbook:
+  `docs/dev/le-staging-acceptance.md`. The harness (`test/lestaging`) is tested against the fake CA in `make test`; DNS
+  providers plug in through `RegisterDNSProvider`. Nothing in `make ci` contacts Let's Encrypt.
+
 ## Unreleased — Service owners and e-mails routed by service (scoped access, phase 4)
 
 **Added**

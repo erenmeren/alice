@@ -81,5 +81,6 @@
   "alice/tools/matrixcheck": 85,
   "alice/tools/docscheck": 91,
   "alice/tools/zaprules": 93,
-  "alice/tools/zapsession": 80
+  "alice/tools/zapsession": 80,
+  "alice/test/lestaging": 90
 }
