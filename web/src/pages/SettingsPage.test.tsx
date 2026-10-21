@@ -203,8 +203,8 @@ describe('SettingsPage, mail', () => {
 });
 
 describe('SettingsPage, design', () => {
-  const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories', 'environments'] as const;
-  const LABELS = ['Email', 'Recipients', 'Alerts', 'General', 'Backups', 'HTTPS certificate', 'Certificate authorities', 'Audit forwarding', 'Single sign-on', 'Directories', 'Environments'];
+  const TABS = ['mail', 'recipients', 'alerts', 'general', 'environments', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories'] as const;
+  const LABELS = ['Email', 'Recipients', 'Alerts', 'General', 'Environments', 'Backups', 'HTTPS certificate', 'Certificate authorities', 'Audit forwarding', 'Single sign-on', 'Directories'];
   const DESCRIPTIONS: Record<(typeof TABS)[number], string> = {
     mail: 'The mail server Alice uses to send alerts.',
     recipients: 'The people who receive operational alerts.',
@@ -293,14 +293,14 @@ describe('SettingsPage, design', () => {
       const general = await screen.findByRole('tab', { name: 'General', selected: true });
       general.focus();
       await userEvent.keyboard('{ArrowDown}');
-      expect(screen.getByRole('tab', { name: 'Backups' })).toHaveFocus();
+      expect(screen.getByRole('tab', { name: 'Environments' })).toHaveFocus();
       await userEvent.keyboard('{ArrowUp}');
       expect(general).toHaveFocus();
       await userEvent.keyboard('{End}');
-      expect(screen.getByRole('tab', { name: 'Environments' })).toHaveFocus();
+      expect(screen.getByRole('tab', { name: 'Directories' })).toHaveFocus();
       await userEvent.keyboard('{Enter}');
-      expect(await screen.findByRole('tab', { name: 'Environments', selected: true })).toBeInTheDocument();
-      await waitFor(() => expect(router.state.location.search).toBe('?tab=environments'));
+      expect(await screen.findByRole('tab', { name: 'Directories', selected: true })).toBeInTheDocument();
+      await waitFor(() => expect(router.state.location.search).toBe('?tab=directories'));
     }));
 
   it('draws the sections as a horizontal list on a phone', async () => {
@@ -322,10 +322,10 @@ describe('SettingsPage, design', () => {
     const general = await screen.findByRole('tab', { name: 'General', selected: true });
     general.focus();
     await userEvent.keyboard('{End}');
-    expect(screen.getByRole('tab', { name: 'Environments' })).toHaveFocus();
+    expect(screen.getByRole('tab', { name: 'Directories' })).toHaveFocus();
     await userEvent.keyboard('{Enter}');
-    expect(await screen.findByRole('tab', { name: 'Environments', selected: true })).toBeInTheDocument();
-    await waitFor(() => expect(router.state.location.search).toBe('?tab=environments'));
+    expect(await screen.findByRole('tab', { name: 'Directories', selected: true })).toBeInTheDocument();
+    await waitFor(() => expect(router.state.location.search).toBe('?tab=directories'));
     await userEvent.keyboard('{Home}');
     expect(screen.getByRole('tab', { name: 'Email' })).toHaveFocus();
   });

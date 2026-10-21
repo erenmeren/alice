@@ -18,7 +18,7 @@ import { Icon, type IconName } from '../design/Icon';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import classes from './SettingsPage.module.css';
 
-const TABS = ['mail', 'recipients', 'alerts', 'general', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories', 'environments'] as const;
+const TABS = ['mail', 'recipients', 'alerts', 'general', 'environments', 'backups', 'https', 'acme', 'forwarding', 'sso', 'directories'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
