@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
@@ -165,5 +166,95 @@ func TestVerificationLevel(t *testing.T) {
 		{"", providers.TrustTrusted, providers.LevelNone},
 	} {
 		assert.Equal(t, tc.want, providers.VerificationLevel(tc.verified, tc.trust), "%q %q", tc.verified, tc.trust)
+	}
+}
+
+// A chain x509 refuses for a reason other than its anchor or validity (here an intermediate whose name constraints do
+// not cover the leaf) is invalid_chain, never unknown_authority: adding roots would not mend it.
+func TestCheckServedChainConstraintViolated(t *testing.T) {
+	ca := pki.NewCA("Trust", pki.ECDSA256, trustNow)
+	ikey := pki.NewKey(pki.ECDSA256)
+	itmpl := &x509.Certificate{SerialNumber: big.NewInt(91), Subject: pkix.Name{CommonName: "Constrained Intermediate"},
+		NotBefore: trustNow.AddDate(0, 0, -1), NotAfter: trustNow.AddDate(1, 0, 0), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign, PermittedDNSDomainsCritical: true, PermittedDNSDomains: []string{"other.test"}}
+	der, err := x509.CreateCertificate(rand.Reader, itmpl, ca.Root, ikey.Public(), ca.RootKey)
+	require.NoError(t, err)
+	inter, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+	lkey := pki.NewKey(pki.ECDSA256)
+	ltmpl := &x509.Certificate{SerialNumber: big.NewInt(92), Subject: pkix.Name{CommonName: "www.example.test"},
+		DNSNames: []string{"www.example.test"}, NotBefore: trustNow.Add(-time.Hour), NotAfter: trustNow.AddDate(0, 0, 30),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err = x509.CreateCertificate(rand.Reader, ltmpl, inter, lkey.Public(), ikey)
+	require.NoError(t, err)
+	leaf, err := x509.ParseCertificate(der)
+	require.NoError(t, err)
+
+	policy := providers.TrustPolicy{Roots: rootsOf(ca.Root), Expected: []*x509.Certificate{leaf, inter}, Enforce: true}
+	status, code := providers.CheckServedChain(ders(leaf, inter), policy, "www.example.test", trustNow)
+	assert.Equal(t, providers.TrustUntrusted, status)
+	assert.Equal(t, providers.TrustErrInvalidChain, code)
+}
+
+// With no store given, the anchor of a chain ending in a self-signed root is checked against the system roots plus that
+// root; when the system pool cannot be loaded, the root alone anchors it.
+func TestTrustPolicyForSystemRoots(t *testing.T) {
+	ca := pki.NewCA("Trust", pki.ECDSA256, trustNow)
+	leaf := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, trustNow)
+	chain := []*x509.Certificate{leaf.Cert, ca.Intermediate, ca.Root}
+
+	p := providers.TrustPolicyFor(chain, nil, providers.TrustStoreSystem, trustNow)
+	assert.True(t, p.Enforce)
+	assert.Equal(t, providers.TrustStoreUploadedRoot, p.Store)
+	require.NotNil(t, p.Roots)
+
+	restore := providers.SetSystemCertPool(func() (*x509.CertPool, error) { return nil, errors.New("no system roots") })
+	defer restore()
+	p = providers.TrustPolicyFor(chain, nil, providers.TrustStoreACME, trustNow)
+	assert.True(t, p.Enforce, "the uploaded root anchors the chain without system roots")
+	assert.Equal(t, providers.TrustStoreACME, p.Store, "the ACME authority's store keeps its name")
+	status, _ := providers.CheckServedChain(ders(leaf.Cert, ca.Intermediate), p, "www.example.test", trustNow)
+	assert.Equal(t, providers.TrustTrusted, status)
+	other := pki.NewCA("Other", pki.ECDSA256, trustNow)
+	otherLeaf := other.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"}}, trustNow)
+	status, code := providers.CheckServedChain(ders(otherLeaf.Cert, other.Intermediate), p, "www.example.test", trustNow)
+	assert.Equal(t, providers.TrustUntrusted, status)
+	assert.Equal(t, providers.TrustErrUnknownAuthority, code, "the fallback pool holds no other root")
+}
+
+// A leaf that is not valid yet (issued for a deployment ahead of its start) is checked as of its NotBefore: its chain
+// still tells whether the anchor is known.
+func TestTrustPolicyForFutureLeaf(t *testing.T) {
+	ca := pki.NewCA("Trust", pki.ECDSA256, trustNow)
+	future := ca.Issue(pki.Opts{CommonName: "www.example.test", SANs: []string{"www.example.test"},
+		NotBefore: trustNow.AddDate(0, 0, 2), NotAfter: trustNow.AddDate(0, 0, 60)}, trustNow)
+	p := providers.TrustPolicyFor([]*x509.Certificate{future.Cert, ca.Intermediate}, rootsOf(ca.Root), providers.TrustStoreSystem, trustNow)
+	assert.True(t, p.Enforce)
+	assert.Equal(t, providers.TrustStoreSystem, p.Store)
+	status, code := providers.CheckServedChain(ders(future.Cert, ca.Intermediate), p, "www.example.test", trustNow)
+	assert.Equal(t, providers.TrustUntrusted, status)
+	assert.Equal(t, providers.TrustErrNotYetValid, code)
+}
+
+// The verify step's params: mode and the measured trust for a pass; port, reason and the trust reason for a failure.
+func TestVerifyResultStepParams(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		vr   providers.VerifyResult
+		want map[string]string
+	}{
+		{"passed, trust not measured", providers.VerifyResult{OK: true, Mode: "remote"}, map[string]string{"mode": "remote"}},
+		{"passed and trusted", providers.VerifyResult{OK: true, Mode: "local", Trust: providers.Trust{Status: providers.TrustTrusted}},
+			map[string]string{"mode": "local", "trust": providers.TrustTrusted}},
+		{"passed with an untrusted warning", providers.VerifyResult{OK: true, Mode: "remote",
+			Trust: providers.Trust{Status: providers.TrustUntrusted, Error: providers.TrustErrNameMismatch}},
+			map[string]string{"mode": "remote", "trust": providers.TrustUntrusted, "trust_error": providers.TrustErrNameMismatch}},
+		{"failed", providers.VerifyResult{Mode: "remote", Reason: "deployment.verify_failed", Params: map[string]string{"port": "443"}},
+			map[string]string{"port": "443", "reason": "deployment.verify_failed"}},
+		{"failed untrusted", providers.VerifyResult{Mode: "remote", Reason: "deployment.verify_untrusted",
+			Params: map[string]string{"port": "8443", "trust_error": providers.TrustErrIncompleteChain}},
+			map[string]string{"port": "8443", "reason": "deployment.verify_untrusted", "trust_error": providers.TrustErrIncompleteChain}},
+	} {
+		assert.Equal(t, tc.want, tc.vr.StepParams(), tc.name)
 	}
 }

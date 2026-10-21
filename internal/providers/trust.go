@@ -285,9 +285,12 @@ func poolOf(cs []*x509.Certificate) *x509.CertPool {
 	return p
 }
 
+// systemCertPool is x509.SystemCertPool (a test replaces it to reach the fallback of systemRoots).
+var systemCertPool = x509.SystemCertPool
+
 // systemRoots is the operating system's roots, or an empty pool.
 func systemRoots() *x509.CertPool {
-	if p, err := x509.SystemCertPool(); err == nil && p != nil {
+	if p, err := systemCertPool(); err == nil && p != nil {
 		return p
 	}
 	return x509.NewCertPool()
