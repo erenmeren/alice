@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -24,16 +25,16 @@ func (s *server) targetRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/targets", scope: scopeList, perm: rbac.Read, handler: s.listTargets},
 		{method: http.MethodPost, pattern: "/api/v1/targets", scope: scopeCreate, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.createTarget},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getTarget},
-		{method: http.MethodPatch, pattern: "/api/v1/targets/{id}", scope: scopeResource, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateTarget},
-		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", scope: scopeResource, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.deleteTarget},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", scope: scopeResource, perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.testTarget},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", scope: scopeResource, perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.discoverTarget},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", scope: scopeResource, perm: rbac.Read, handler: s.listHostKeys},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", scope: scopeResource, perm: rbac.HostKeysConfirm, lic: license.ClassChange, handler: s.confirmHostKey},
-		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", scope: scopeResource, perm: rbac.HostKeysRepin, lic: license.ClassChange, handler: s.repinHostKey},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/ssh-keys", scope: scopeResource, perm: rbac.Read, handler: s.listTargetKeys},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", scope: scopeResource, perm: rbac.Read, handler: s.listTargetLocations},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.getTarget},
+		{method: http.MethodPatch, pattern: "/api/v1/targets/{id}", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateTarget},
+		{method: http.MethodDelete, pattern: "/api/v1/targets/{id}", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.deleteTarget},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/test", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.testTarget},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/actions/discover", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.InventoryOperate, lic: license.ClassReadOnly, handler: s.discoverTarget},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/host-keys", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listHostKeys},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/confirm", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.HostKeysConfirm, lic: license.ClassChange, handler: s.confirmHostKey},
+		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/host-keys/{key_id}/actions/repin", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.HostKeysRepin, lic: license.ClassChange, handler: s.repinHostKey},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/ssh-keys", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listTargetKeys},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/certificate-locations", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listTargetLocations},
 	}
 }
 
@@ -43,7 +44,9 @@ const maxRepinBody = 8 << 10
 // actor is the caller as the inventory needs it: audit identity, user and role.
 func (s *server) actor(r *http.Request) inventory.Actor {
 	p := principalFrom(r.Context())
-	return inventory.Actor{Audit: p.Actor(s.meta(r)), UserID: p.UserID, Role: p.Role}
+	// Role is the caller's role on the path resource's service (R49 Phase 2, design §5.5: the inventory's conditional
+	// permissions are judged there); Access is every grant, for the checks the inventory makes under its row locks.
+	return inventory.Actor{Audit: p.Actor(s.meta(r)), UserID: p.UserID, Role: s.roleOn(r), Access: s.accessOf(r)}
 }
 
 // etag is the strong validator of a target version.

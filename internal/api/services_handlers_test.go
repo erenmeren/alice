@@ -31,6 +31,9 @@ type fakeServices struct {
 	ServicesFn      func() ([]services.Service, error)
 	AssignFn        func(dest uuid.UUID, resources []services.Resource, dryRun bool) (services.AssignResult, error)
 	CreateTrustFn   func(source, target uuid.UUID) (services.Trust, error)
+	ResolveFn       func(kind string, id any) (services.Resolution, error)
+	BindingsFn      func(f services.BindingFilter) ([]services.Binding, error)
+	CreateBindingFn func(in services.BindingInput) (services.Binding, error)
 }
 
 var _ ServicesService = (*fakeServices)(nil)
@@ -109,6 +112,35 @@ func (f *fakeServices) Assign(_ context.Context, a services.Actor, dest uuid.UUI
 }
 func (f *fakeServices) Refs(context.Context) (map[uuid.UUID]authz.ServiceRef, error) {
 	return f.refs, nil
+}
+func (f *fakeServices) Resolve(_ context.Context, kind string, id any) (services.Resolution, error) {
+	if f.ResolveFn != nil {
+		return f.ResolveFn(kind, id)
+	}
+	return services.Resolution{}, services.ErrResourceNotFound
+}
+func (f *fakeServices) Bindings(_ context.Context, fl services.BindingFilter) ([]services.Binding, error) {
+	if f.BindingsFn != nil {
+		return f.BindingsFn(fl)
+	}
+	return nil, errNotConfigured
+}
+func (f *fakeServices) Binding(context.Context, uuid.UUID) (services.Binding, error) {
+	return services.Binding{}, services.ErrBindingNotFound
+}
+func (f *fakeServices) CreateBinding(_ context.Context, a services.Actor, in services.BindingInput) (services.Binding, error) {
+	f.lastActor = a
+	if f.CreateBindingFn != nil {
+		return f.CreateBindingFn(in)
+	}
+	return services.Binding{}, errNotConfigured
+}
+func (f *fakeServices) DeleteBinding(_ context.Context, a services.Actor, _ uuid.UUID) error {
+	f.lastActor = a
+	return errNotConfigured
+}
+func (f *fakeServices) Access(context.Context, uuid.UUID) (services.UserAccess, error) {
+	return services.UserAccess{}, errNotConfigured
 }
 
 var (

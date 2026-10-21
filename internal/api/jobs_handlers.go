@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"alice/internal/audit"
+	"alice/internal/authz/services"
 	"alice/internal/jobs"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -21,11 +22,11 @@ import (
 func (s *server) jobRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/jobs", scope: scopeList, perm: rbac.Read, handler: s.listJobs},
-		{method: http.MethodGet, pattern: "/api/v1/jobs/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getJob},
-		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", scope: scopeResource, perm: rbac.JobsConfirm, lic: license.ClassChange, handler: s.confirmJob},
+		{method: http.MethodGet, pattern: "/api/v1/jobs/{id}", scope: scopeResource, resolve: by(services.KindJob, "id"), perm: rbac.Read, handler: s.getJob},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/confirm", scope: scopeResource, resolve: by(services.KindJob, "id"), perm: rbac.JobsConfirm, lic: license.ClassChange, handler: s.confirmJob},
 		// Discarding only reduces what Alice will do, so it works in every license state (AUD-02 fix
 		// round: also while the license is locked or could not be checked).
-		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", scope: scopeResource, perm: rbac.JobsConfirm, lic: license.ClassAlways, handler: s.discardJob},
+		{method: http.MethodPost, pattern: "/api/v1/jobs/{id}/actions/discard", scope: scopeResource, resolve: by(services.KindJob, "id"), perm: rbac.JobsConfirm, lic: license.ClassAlways, handler: s.discardJob},
 	}
 }
 

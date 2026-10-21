@@ -38,6 +38,14 @@ type ServicesService interface {
 	DeleteTrust(ctx context.Context, a services.Actor, id uuid.UUID) error
 	Assign(ctx context.Context, a services.Actor, dest uuid.UUID, resources []services.Resource, dryRun bool) (services.AssignResult, error)
 	Refs(ctx context.Context) (map[uuid.UUID]authz.ServiceRef, error)
+	// R49 Phase 2: where a resource belongs (guard's check of the path's resource), the role bindings and a person's
+	// access.
+	Resolve(ctx context.Context, kind string, id any) (services.Resolution, error)
+	Bindings(ctx context.Context, f services.BindingFilter) ([]services.Binding, error)
+	Binding(ctx context.Context, id uuid.UUID) (services.Binding, error)
+	CreateBinding(ctx context.Context, a services.Actor, in services.BindingInput) (services.Binding, error)
+	DeleteBinding(ctx context.Context, a services.Actor, id uuid.UUID) error
+	Access(ctx context.Context, userID uuid.UUID) (services.UserAccess, error)
 }
 
 var _ ServicesService = (*services.Store)(nil)
@@ -59,15 +67,15 @@ func (s *server) serviceRoutes() []route {
 		{method: http.MethodDelete, pattern: envs + "/{id}", scope: scopePlatform, perm: rbac.ServicesManage, lic: always, handler: s.deleteEnvironment},
 		{method: http.MethodGet, pattern: svcs, scope: scopeList, perm: rbac.Read, handler: s.listServices},
 		{method: http.MethodPost, pattern: svcs, scope: scopePlatform, perm: rbac.ServicesManage, lic: always, handler: s.createService},
-		{method: http.MethodGet, pattern: svcs + "/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getService},
+		{method: http.MethodGet, pattern: svcs + "/{id}", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.getService},
 		{method: http.MethodPatch, pattern: svcs + "/{id}", scope: scopePlatform, perm: rbac.ServicesManage, lic: always, handler: s.updateService},
 		{method: http.MethodDelete, pattern: svcs + "/{id}", scope: scopePlatform, perm: rbac.ServicesManage, lic: always, handler: s.deleteService},
-		{method: http.MethodGet, pattern: svcs + "/{id}/policy", scope: scopeResource, perm: rbac.Read, handler: s.getServicePolicy},
-		{method: http.MethodGet, pattern: svcs + "/{id}/policy/versions", scope: scopeResource, perm: rbac.Read, handler: s.listServicePolicies},
-		{method: http.MethodPost, pattern: svcs + "/{id}/actions/assign", scope: scopeCross, perm: rbac.ServicesAssign, lic: always, handler: s.assignToService},
+		{method: http.MethodGet, pattern: svcs + "/{id}/policy", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.getServicePolicy},
+		{method: http.MethodGet, pattern: svcs + "/{id}/policy/versions", scope: scopeResource, resolve: by(services.KindService, "id"), perm: rbac.Read, handler: s.listServicePolicies},
+		{method: http.MethodPost, pattern: svcs + "/{id}/actions/assign", scope: scopeCross, resolve: by(services.KindService, "id"), perm: rbac.ServicesAssign, lic: always, handler: s.assignToService},
 		{method: http.MethodGet, pattern: trusts, scope: scopeList, perm: rbac.Read, handler: s.listTrusts},
 		{method: http.MethodPost, pattern: trusts, scope: scopeCross, perm: rbac.ServicesTrust, lic: always, handler: s.createTrust},
-		{method: http.MethodDelete, pattern: trusts + "/{id}", scope: scopeCross, perm: rbac.ServicesTrust, lic: always, handler: s.deleteTrust},
+		{method: http.MethodDelete, pattern: trusts + "/{id}", scope: scopeCross, resolve: &resolver{kind: services.KindServiceTrust, param: "id", anyVisible: true}, perm: rbac.ServicesTrust, lic: always, handler: s.deleteTrust},
 	}
 }
 

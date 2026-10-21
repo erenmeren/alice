@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -61,21 +62,21 @@ func (s *server) acmeRoutes() []route {
 		{method: http.MethodDelete, pattern: hooks + "/{id}", scope: scopePlatform, perm: manage, lic: change, handler: s.deleteACMEHook},
 		{method: http.MethodGet, pattern: certs, scope: scopeList, perm: view, handler: s.listACMECertificates},
 		{method: http.MethodPost, pattern: certs, scope: scopeCreate, perm: manage, lic: change, handler: s.createACMECertificate},
-		{method: http.MethodGet, pattern: certs + "/{id}", scope: scopeResource, perm: view, handler: s.getACMECertificate},
+		{method: http.MethodGet, pattern: certs + "/{id}", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: view, handler: s.getACMECertificate},
 		// limitACME: switching auto_renew on re-arms automatic renewal (a fresh series against the CA, like /rearm).
-		{method: http.MethodPatch, pattern: certs + "/{id}", scope: scopeResource, perm: manage, lic: change, limit: limitACME, handler: s.updateACMECertificate},
-		{method: http.MethodDelete, pattern: certs + "/{id}", scope: scopeResource, perm: manage, lic: always, handler: s.deleteACMECertificate},
-		{method: http.MethodPost, pattern: certs + "/{id}/order", scope: scopeResource, perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderIssue)},
-		{method: http.MethodPost, pattern: certs + "/{id}/test", scope: scopeResource, perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderTest)},
-		{method: http.MethodGet, pattern: certs + "/{id}/orders", scope: scopeResource, perm: view, handler: s.listACMEOrders},
-		{method: http.MethodPost, pattern: certs + "/{id}/rearm", scope: scopeResource, perm: manage, lic: change, limit: limitACME, handler: s.rearmACME},
-		{method: http.MethodPost, pattern: certs + "/{id}/release-hold", scope: scopeResource, perm: manage, lic: change, handler: s.releaseACMEHold},
+		{method: http.MethodPatch, pattern: certs + "/{id}", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: manage, lic: change, limit: limitACME, handler: s.updateACMECertificate},
+		{method: http.MethodDelete, pattern: certs + "/{id}", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: manage, lic: always, handler: s.deleteACMECertificate},
+		{method: http.MethodPost, pattern: certs + "/{id}/order", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderIssue)},
+		{method: http.MethodPost, pattern: certs + "/{id}/test", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: operate, lic: change, limit: limitACME, handler: s.orderACME(inventory.ACMEOrderTest)},
+		{method: http.MethodGet, pattern: certs + "/{id}/orders", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: view, handler: s.listACMEOrders},
+		{method: http.MethodPost, pattern: certs + "/{id}/rearm", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: manage, lic: change, limit: limitACME, handler: s.rearmACME},
+		{method: http.MethodPost, pattern: certs + "/{id}/release-hold", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: manage, lic: change, handler: s.releaseACMEHold},
 		// Revocation at the CA (RFC 8555 section 7.6, 2026-10-20): cannot be undone; a CA call like an order.
-		{method: http.MethodPost, pattern: certs + "/{id}/revoke", scope: scopeResource, perm: manage, lic: change, limit: limitACME, handler: s.revokeACME},
-		{method: http.MethodGet, pattern: certs + "/{id}/bindings", scope: scopeResource, perm: view, handler: s.listACMEBindings},
-		{method: http.MethodPut, pattern: certs + "/{id}/bindings/{location_id}", scope: scopeCross, perm: operate, lic: change, handler: s.putACMEBinding},
-		{method: http.MethodDelete, pattern: certs + "/{id}/bindings/{location_id}", scope: scopeResource, perm: operate, lic: always, handler: s.deleteACMEBinding},
-		{method: http.MethodPost, pattern: certs + "/{id}/deploy", scope: scopeResource, perm: operate, lic: change, limit: limitACME, handler: s.deployACME},
+		{method: http.MethodPost, pattern: certs + "/{id}/revoke", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: manage, lic: change, limit: limitACME, handler: s.revokeACME},
+		{method: http.MethodGet, pattern: certs + "/{id}/bindings", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: view, handler: s.listACMEBindings},
+		{method: http.MethodPut, pattern: certs + "/{id}/bindings/{location_id}", scope: scopeCross, resolve: by(services.KindACMECertificate, "id"), perm: operate, lic: change, handler: s.putACMEBinding},
+		{method: http.MethodDelete, pattern: certs + "/{id}/bindings/{location_id}", scope: scopeResource, resolve: byEither(services.KindACMECertificate, "id", services.KindACMEBindingPlace, "location_id"), perm: operate, lic: always, handler: s.deleteACMEBinding},
+		{method: http.MethodPost, pattern: certs + "/{id}/deploy", scope: scopeResource, resolve: by(services.KindACMECertificate, "id"), perm: operate, lic: change, limit: limitACME, handler: s.deployACME},
 	}
 }
 

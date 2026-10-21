@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"alice/internal/alerts/expiry"
+	"alice/internal/authz/services"
 	"alice/internal/discovery"
 	"alice/internal/discovery/discoverysvc"
 	"alice/internal/license"
@@ -43,17 +44,17 @@ func (s *server) discoveryRoutes() []route {
 		{method: http.MethodGet, pattern: base + "/scopes", scope: scopeList, perm: view, handler: s.listDiscoveryScopes},
 		{method: http.MethodPost, pattern: base + "/scopes", scope: scopePlatform, perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.createDiscoveryScope},
 		{method: http.MethodPost, pattern: base + "/scopes/preview", scope: scopePlatform, perm: manage, lic: always, limit: limitDiscoveryPreview, handler: s.previewDiscoveryScope},
-		{method: http.MethodGet, pattern: base + "/scopes/{id}", scope: scopeResource, perm: view, handler: s.getDiscoveryScope},
+		{method: http.MethodGet, pattern: base + "/scopes/{id}", scope: scopeResource, resolve: by(services.KindDiscoveryScope, "id"), perm: view, handler: s.getDiscoveryScope},
 		{method: http.MethodPatch, pattern: base + "/scopes/{id}", scope: scopePlatform, perm: manage, lic: always, limit: limitDiscoveryResolve, handler: s.updateDiscoveryScope},
 		{method: http.MethodDelete, pattern: base + "/scopes/{id}", scope: scopePlatform, perm: manage, lic: always, handler: s.deleteDiscoveryScope},
-		{method: http.MethodPost, pattern: base + "/scopes/{id}/scans", scope: scopeResource, perm: operate, lic: readOnly, limit: limitDiscovery, handler: s.startDiscoveryScan},
+		{method: http.MethodPost, pattern: base + "/scopes/{id}/scans", scope: scopeResource, resolve: by(services.KindDiscoveryScope, "id"), perm: operate, lic: readOnly, limit: limitDiscovery, handler: s.startDiscoveryScan},
 		{method: http.MethodGet, pattern: base + "/scans", scope: scopeList, perm: view, handler: s.listDiscoveryScans},
-		{method: http.MethodGet, pattern: base + "/scans/{id}", scope: scopeResource, perm: view, handler: s.getDiscoveryScan},
-		{method: http.MethodPost, pattern: base + "/scans/{id}/cancel", scope: scopeResource, perm: operate, lic: always, limit: limitDiscovery, handler: s.cancelDiscoveryScan},
+		{method: http.MethodGet, pattern: base + "/scans/{id}", scope: scopeResource, resolve: by(services.KindDiscoveryScan, "id"), perm: view, handler: s.getDiscoveryScan},
+		{method: http.MethodPost, pattern: base + "/scans/{id}/cancel", scope: scopeResource, resolve: by(services.KindDiscoveryScan, "id"), perm: operate, lic: always, limit: limitDiscovery, handler: s.cancelDiscoveryScan},
 		{method: http.MethodGet, pattern: base + "/certificates", scope: scopeList, perm: view, handler: s.listDiscoveredCertificates},
 		{method: http.MethodGet, pattern: base + "/certificates/export", scope: scopeList, perm: view, limit: limitExport, getOnly: true,
 			handler: s.exportDiscoveredCertificates},
-		{method: http.MethodGet, pattern: base + "/certificates/{fingerprint}", scope: scopeResource, perm: view, handler: s.getDiscoveredCertificate},
+		{method: http.MethodGet, pattern: base + "/certificates/{fingerprint}", scope: scopeResource, resolve: by(services.KindDiscoveredCert, "fingerprint"), perm: view, handler: s.getDiscoveredCertificate},
 		{method: http.MethodGet, pattern: base + "/endpoints", scope: scopeList, perm: view, handler: s.listDiscoveredEndpoints},
 		{method: http.MethodGet, pattern: base + "/settings", scope: scopePlatform, perm: view, handler: s.getDiscoverySettings},
 		{method: http.MethodPut, pattern: base + "/settings", scope: scopePlatform, perm: manage, lic: always, handler: s.putDiscoverySettings},

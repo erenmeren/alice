@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -22,18 +23,18 @@ import (
 func (s *server) certificateRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/certificates", scope: scopeList, perm: rbac.Read, handler: s.listCertificates},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getCertificate},
+		{method: http.MethodGet, pattern: "/api/v1/certificates/{id}", scope: scopeResource, resolve: by(services.KindCertificate, "id"), perm: rbac.Read, handler: s.getCertificate},
 		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
 		{method: http.MethodGet, pattern: "/api/v1/certificates/export", scope: scopeList, perm: rbac.Read, limit: limitExport, getOnly: true,
 			handler: s.exportCertificates},
 		{method: http.MethodPost, pattern: "/api/v1/certificates/upload", scope: scopeCreate, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.uploadCertificate},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", scope: scopeCross, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployCertificate},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/deploy", scope: scopeCross, resolve: by(services.KindCertificate, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployCertificate},
 		{method: http.MethodGet, pattern: "/api/v1/certificates/csr", scope: scopeList, perm: rbac.Read, handler: s.listCSRs},
 		{method: http.MethodPost, pattern: "/api/v1/certificates/csr", scope: scopeCreate, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.createCSR},
-		{method: http.MethodGet, pattern: "/api/v1/certificates/csr/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getCSR},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/complete", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassChange,
+		{method: http.MethodGet, pattern: "/api/v1/certificates/csr/{id}", scope: scopeResource, resolve: by(services.KindCSR, "id"), perm: rbac.Read, handler: s.getCSR},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/complete", scope: scopeResource, resolve: by(services.KindCSR, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange,
 			handler: s.completeCSR},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassChange,
+		{method: http.MethodPost, pattern: "/api/v1/certificates/csr/{id}/actions/cancel", scope: scopeResource, resolve: by(services.KindCSR, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange,
 			handler: s.cancelCSR},
 	}
 }
@@ -43,7 +44,7 @@ func (s *server) certificateRoutes() []route {
 // GET /targets/{id}/certificate-locations.
 func (s *server) locationRoutes() []route {
 	return []route{
-		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", scope: scopeResource, perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateLocation},
+		{method: http.MethodPatch, pattern: "/api/v1/locations/{id}", scope: scopeResource, resolve: by(services.KindLocation, "id"), perm: rbac.TargetsManage, lic: license.ClassChange, handler: s.updateLocation},
 	}
 }
 

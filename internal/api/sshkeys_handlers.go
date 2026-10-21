@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -29,18 +30,18 @@ func (s *server) sshKeyRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys", scope: scopeList, perm: rbac.Read, handler: s.listSSHKeys},
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/platform-key", scope: scopeAny, perm: rbac.TargetsManage, handler: s.platformKey},
-		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getSSHKey},
+		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/{id}", scope: scopeResource, resolve: by(services.KindSSHKey, "id"), perm: rbac.Read, handler: s.getSSHKey},
 		// Phase 7 (C13): the list as a CSV file, with the list's filters; a read, so it works in lock.
 		{method: http.MethodGet, pattern: "/api/v1/ssh-keys/export", scope: scopeList, perm: rbac.Read, limit: limitExport, getOnly: true,
 			handler: s.exportSSHKeys},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", scope: scopeResource, perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.removeKeyLocation},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/locations/{id}/actions/remove", scope: scopeResource, resolve: by(services.KindSSHKeyLocation, "id"), perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.removeKeyLocation},
 		// Phase 6 (C13): generation and deploy are Operators' too (R41 row 7); the private key leaves Alice only through
 		// the download, an Administrator's browser session with step-up, 5 per minute, allowed in lock (row 5).
 		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/generate", scope: scopeCreate, perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.generateSSHKey},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/deploy", scope: scopeCross, perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.deploySSHKey},
-		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", scope: scopeResource, perm: rbac.SSHKeysDownload, lic: license.ClassAlways,
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/deploy", scope: scopeCross, resolve: by(services.KindSSHKey, "id"), perm: rbac.InventoryOperate, lic: license.ClassChange, handler: s.deploySSHKey},
+		{method: http.MethodPost, pattern: "/api/v1/ssh-keys/{id}/actions/download-private-key", scope: scopeResource, resolve: by(services.KindSSHKey, "id"), perm: rbac.SSHKeysDownload, lic: license.ClassAlways,
 			limit: limitDownload, handler: s.downloadPrivateKey},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/key-files", scope: scopeResource, perm: rbac.Read, handler: s.keyFiles},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/key-files", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.keyFiles},
 	}
 }
 

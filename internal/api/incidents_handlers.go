@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -49,15 +50,15 @@ func (s *server) incidentRoutes() []route {
 	incident, change, always := rbac.CertificatesIncident, license.ClassChange, license.ClassAlways
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/certificates/capabilities", scope: scopeAny, perm: rbac.Read, handler: s.certificateCapabilities},
-		{method: http.MethodGet, pattern: "/api/v1/certificate-impact/{id}", scope: scopeResource, perm: rbac.Read, handler: s.certificateImpact},
-		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/incidents", scope: scopeCross, perm: incident, lic: change, handler: s.startIncident},
+		{method: http.MethodGet, pattern: "/api/v1/certificate-impact/{id}", scope: scopeResource, resolve: &resolver{kind: services.KindIncidentReach, param: "id", allVisible: true}, perm: rbac.Read, handler: s.certificateImpact},
+		{method: http.MethodPost, pattern: "/api/v1/certificates/{id}/incidents", scope: scopeCross, resolve: by(services.KindCertificate, "id"), perm: incident, lic: change, handler: s.startIncident},
 		{method: http.MethodGet, pattern: incidents, scope: scopeList, perm: rbac.Read, handler: s.listIncidents},
-		{method: http.MethodGet, pattern: incidents + "/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getIncident},
-		{method: http.MethodPost, pattern: incidents + "/{id}/retry", scope: scopeCross, perm: incident, lic: change, handler: s.incidentAction(actRetry)},
-		{method: http.MethodPost, pattern: incidents + "/{id}/revoke-now", scope: scopeCross, perm: incident, lic: change, limit: limitACME,
+		{method: http.MethodGet, pattern: incidents + "/{id}", scope: scopeResource, resolve: by(services.KindIncident, "id"), perm: rbac.Read, handler: s.getIncident},
+		{method: http.MethodPost, pattern: incidents + "/{id}/retry", scope: scopeCross, resolve: &resolver{kind: services.KindIncident, param: "id", allVisible: true}, perm: incident, lic: change, handler: s.incidentAction(actRetry)},
+		{method: http.MethodPost, pattern: incidents + "/{id}/revoke-now", scope: scopeCross, resolve: &resolver{kind: services.KindIncident, param: "id", allVisible: true}, perm: incident, lic: change, limit: limitACME,
 			handler: s.incidentAction(actRevokeNow)},
-		{method: http.MethodPost, pattern: incidents + "/{id}/replacement", scope: scopeCross, perm: incident, lic: change, handler: s.chooseReplacement},
-		{method: http.MethodPost, pattern: incidents + "/{id}/close", scope: scopeCross, perm: incident, lic: always, handler: s.incidentAction(actClose)},
+		{method: http.MethodPost, pattern: incidents + "/{id}/replacement", scope: scopeCross, resolve: &resolver{kind: services.KindIncident, param: "id", allVisible: true}, perm: incident, lic: change, handler: s.chooseReplacement},
+		{method: http.MethodPost, pattern: incidents + "/{id}/close", scope: scopeCross, resolve: &resolver{kind: services.KindIncident, param: "id", allVisible: true}, perm: incident, lic: always, handler: s.incidentAction(actClose)},
 	}
 }
 

@@ -33,7 +33,9 @@ func principalFrom(ctx context.Context) auth.Principal {
 // limit and authentication (AUD-16; only for routes that are not public), rate limiting,
 // the same-origin check, the CSRF check, recording a person's activity on the
 // session (AUD-01), the permission decision (SEC-016, SEC-017, SEC-021,
-// SEC-024) and the license lock gate (R9). Nothing reaches rt.handler unless
+// SEC-024; by the route's scope class, R49 Phase 2), the check of the resource the
+// path names against the caller's reach (scopeResource and scopeCross routes,
+// design §5.4) and the license lock gate (R9). Nothing reaches rt.handler unless
 // rbac allows it and, for ClassChange/ClassReadOnly routes, license.Service.Allow does.
 func (s *server) guard(rt route) http.HandlerFunc {
 	policy, _ := rbac.PolicyFor(rt.perm) // register has checked the permission exists
@@ -74,8 +76,14 @@ func (s *server) guard(rt route) http.HandlerFunc {
 				return
 			}
 		}
-		switch rbac.Decide(rt.perm, p.Subject(s.deps.Clock.Now())) {
+		switch scopedDecision(rt, p.Subject(s.deps.Clock.Now())) {
 		case rbac.Allow:
+			if rt.resolve != nil {
+				var ok bool
+				if r, ok = s.checkResource(w, r, rt, p); !ok {
+					return // R49 Phase 2: the path's resource is out of the caller's reach (404) or not theirs to change (403)
+				}
+			}
 			if gated(rt.lic) {
 				if err := s.licenseGate(rt.lic); err != nil {
 					s.auditLicenseDenied(r, rt, p, err)

@@ -532,6 +532,21 @@ var (
 	ErrSVCEnvironmentTaken = ErrorCode{Code: "ALC-SVC-0017", Reason: "environment.key_taken", Status: http.StatusConflict}
 	// ErrSVCTrustExists: the next free number (the design names no code for a trust made twice).
 	ErrSVCTrustExists = ErrorCode{Code: "ALC-SVC-0018", Reason: "service.trust_exists", Status: http.StatusConflict}
+
+	// Scoped callers (R49 Phase 2, design §4.4, §5.6, §5.10). ErrSVCRequired: a create by a caller who may create in
+	// several services (or none) names no service_id; ErrSVCNotAllowed: the named service is outside the caller's
+	// reach; ErrSVCSpansServices: a cross-service action reaches a service the caller holds no right on (params.count,
+	// never a name).
+	ErrSVCRequired      = ErrorCode{Code: "ALC-SVC-0005", Reason: "service.required", Status: http.StatusUnprocessableEntity}
+	ErrSVCNotAllowed    = ErrorCode{Code: "ALC-SVC-0006", Reason: "service.not_allowed", Status: http.StatusForbidden}
+	ErrSVCSpansServices = ErrorCode{Code: "ALC-SVC-0012", Reason: "service.spans_services", Status: http.StatusForbidden}
+
+	// Role bindings (area ACC, R49 Phase 2, design §8.3): the same role on the same service or environment twice, and
+	// more bindings for one person than the bound allows.
+	ErrACCBindingDuplicate = ErrorCode{Code: "ALC-ACC-0001", Reason: "binding.duplicate", Status: http.StatusConflict}
+	ErrACCBindingLimit     = ErrorCode{Code: "ALC-ACC-0005", Reason: "binding.limit", Status: http.StatusUnprocessableEntity}
+	// ErrBreakGlassGlobalRole: removing the global role of the break-glass account (R53; the next USR number).
+	ErrBreakGlassGlobalRole = ErrorCode{Code: "ALC-USR-0004", Reason: "user.break_glass_global_role", Status: http.StatusConflict}
 )
 
 // AllErrorCodes lists every registered code; tests check format, uniqueness, translations and docs.
@@ -608,7 +623,8 @@ func AllErrorCodes() []ErrorCode {
 		ErrDSCTooManyScans, ErrDSCScopeNotFound, ErrDSCScheduleInvalid, ErrDSCNameUnresolved, ErrDSCNameTaken, ErrDSCScanInterrupted,
 		ErrDSCScopeDisabled,
 		ErrSVCNotFound, ErrSVCNameTaken, ErrSVCNotEmpty, ErrSVCDefaultProtected, ErrSVCUntrusted, ErrSVCEnvironmentInUse,
-		ErrSVCEnvironmentTaken, ErrSVCTrustExists,
+		ErrSVCEnvironmentTaken, ErrSVCTrustExists, ErrSVCRequired, ErrSVCNotAllowed, ErrSVCSpansServices,
+		ErrACCBindingDuplicate, ErrACCBindingLimit, ErrBreakGlassGlobalRole,
 	}
 }
 
@@ -676,6 +692,11 @@ var errorMap = []struct {
 	{services.ErrEnvironmentInUse, ErrSVCEnvironmentInUse, nil},
 	{services.ErrEnvironmentKeyTaken, ErrSVCEnvironmentTaken, nil},
 	{services.ErrTrustExists, ErrSVCTrustExists, nil},
+	{services.ErrBindingNotFound, ErrNotFound, nil},
+	{services.ErrUserNotFound, ErrNotFound, nil},
+	{services.ErrBindingDuplicate, ErrACCBindingDuplicate, nil},
+	{services.ErrBindingLimit, ErrACCBindingLimit, map[string]string{"max": strconv.Itoa(services.MaxBindingsPerSubject)}},
+	{auth.ErrBreakGlassGlobalRole, ErrBreakGlassGlobalRole, nil},
 	{services.ErrVersionMismatch, ErrPreconditionFailed, nil},
 	{inventory.ErrNoPlatformKey, ErrUnavailable, nil},     // EnsurePlatformKey runs before serving; only a broken start reaches this
 	{inventory.ErrNoSetupScript, ErrHelperChecksums, nil}, // a non-development build without the helper checksums

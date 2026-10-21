@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/azureid"
@@ -30,13 +31,13 @@ import (
 func (s *server) vaultRoutes() []route {
 	return []route{
 		{method: http.MethodPost, pattern: "/api/v1/key-vaults", scope: scopeCreate, perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.createVault},
-		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/vault-credentials", scope: scopeResource, perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.replaceVaultCredentials},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates", scope: scopeResource, perm: rbac.Read, handler: s.listKVCertificates},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}", scope: scopeResource, perm: rbac.Read, handler: s.getKVCertificate},
+		{method: http.MethodPut, pattern: "/api/v1/targets/{id}/vault-credentials", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.replaceVaultCredentials},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listKVCertificates},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.getKVCertificate},
 		{method: http.MethodPost, pattern: "/api/v1/targets/{id}/kv/certificates/{certificate_id}/versions/{version_id}/actions/release",
-			scope: scopeResource, perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.releaseVersion},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/keys", scope: scopeResource, perm: rbac.Read, handler: s.listKVKeys},
-		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/secrets", scope: scopeResource, perm: rbac.Read, handler: s.listKVSecrets},
+			scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.CredentialsManage, lic: license.ClassChange, handler: s.releaseVersion},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/keys", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listKVKeys},
+		{method: http.MethodGet, pattern: "/api/v1/targets/{id}/kv/secrets", scope: scopeResource, resolve: by(services.KindTarget, "id"), perm: rbac.Read, handler: s.listKVSecrets},
 	}
 }
 

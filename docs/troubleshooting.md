@@ -783,6 +783,16 @@ is told to delete it.
 
 **What to do.** Change the user's groups at the identity provider or in the directory; disable the user here if they must stop at once.
 
+## ALC-USR-0004: The emergency administrator keeps a global role
+
+**Meaning.** Removing the global role ("No role on all services") was refused for the account the setup wizard created,
+the break-glass account. (HTTP 409, reason `user.break_glass_global_role`.)
+
+**Likely cause.** That account must work without any role binding. It may be demoted to Operator or Auditor, as before,
+but it always holds a role on all services.
+
+**What to do.** Choose a global role for it. Give other people roles on their services only.
+
 ## ALC-TOK-0001: Token access not allowed
 
 **Meaning.** The requested token access exceeds what the owner's role allows (HTTP 422).
@@ -3510,6 +3520,22 @@ that service's page), then delete the empty service.
 
 **What to do.** Nothing; rename it if another name suits you better.
 
+## ALC-SVC-0005: Choose a service
+
+**Meaning.** A server, Key Vault, certificate, signing request, SSH key, ACME certificate or rotation policy was to be
+created without a service, and you hold the needed role on more than one service, so Alice cannot choose for you.
+(HTTP 422, reason `service.required`; the field is `service_id`.)
+
+**What to do.** Choose the service in the form (the **Service** field), then try again.
+
+## ALC-SVC-0006: You cannot add anything to this service
+
+**Meaning.** The service named in the form is not one where you hold the role this action needs. Nothing was created.
+(HTTP 403, reason `service.not_allowed`; the field is `service_id`.)
+
+**What to do.** Choose one of your services, or ask an Administrator for a role on this one (**People & access**, the
+person's **Access** section).
+
 ## ALC-SVC-0007: The destination service does not accept certificates and keys from the source service
 
 **Meaning.** A deployment, a Key Vault or ACME binding, an import into a Key Vault or an SSH key deploy would place a
@@ -3524,6 +3550,30 @@ trust was removed.
 **What to do.** An Administrator opens **Services**, chooses the destination service, **Trusts** tab, and adds a trust
 for the source service; or moves both to the same service. Then deploy again. Removing a trust never undoes what was
 deployed before.
+
+## ALC-SVC-0012: This reaches outside your services
+
+**Meaning.** The action would also act on servers, Key Vaults or resources of services where you hold no role for it:
+a deployment to a website of another service, a key-compromise incident or a rotation that reaches servers of other
+services, a move of a resource out of a service that is not yours. Nothing was changed. The answer counts those
+services (`params.count`) and never names them. (HTTP 403, reason `service.spans_services`.)
+
+**What to do.** Limit the action to your own services (choose only their websites or servers), or ask an Administrator
+with a role on every service involved to do it.
+
+## ALC-ACC-0001: This person already holds this role there
+
+**Meaning.** The role binding exists: the person holds this role on this service or environment already. Nothing was
+added. (HTTP 409, reason `binding.duplicate`.)
+
+**What to do.** Nothing more is needed.
+
+## ALC-ACC-0005: This person holds the most role bindings allowed
+
+**Meaning.** A person can hold at most 200 role bindings (`params.max`). Nothing was added. (HTTP 422, reason
+`binding.limit`.)
+
+**What to do.** Remove bindings that are no longer needed, or bind an environment instead of its services one by one.
 
 ## ALC-SVC-0016: This environment is in use
 

@@ -106,6 +106,8 @@ var expectedMatrix = map[rbac.Permission]map[string]int{
 	rbac.ServicesManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 	rbac.ServicesAssign: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 	rbac.ServicesTrust:  row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
+	// Role bindings (R49 Phase 2): a global Administrator's browser session with step-up, never a token.
+	rbac.AccessManage: row(unau, unau, unau, unau, unau, step, forb, forb, allw, forb, forb, forb, forb, forb, forb),
 }
 
 func row(codes ...int) map[string]int {

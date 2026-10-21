@@ -515,6 +515,10 @@ type route struct {
 	method  string
 	pattern string
 	scope   routeScope // R49: every route declares one
+	// resolve names the resource the path points at (scopeResource, and scopeCross with a path resource): guard checks
+	// it against the caller's reach before the handler runs (R49 Phase 2, design §5.4). register refuses a resource
+	// route without one.
+	resolve *resolver
 	perm    rbac.Permission
 	limit   limitClass
 	// lic is how lock mode treats this operation. Every non-GET route declares it: ClassAlways
@@ -758,6 +762,16 @@ func (s *server) register(mux *http.ServeMux, routes []route) {
 		if r.scope.String() == "" {
 			// Deny by default (SEC-016, R49): a route whose scoped-access class is not decided never starts.
 			panic(fmt.Sprintf("api: route %s %s declares no scope", r.method, r.pattern))
+		}
+		hasParam := strings.Contains(r.pattern, "{")
+		switch {
+		case r.scope == scopeResource && r.resolve == nil, r.scope == scopeCross && hasParam && r.resolve == nil:
+			// Deny by default (R49 Phase 2, design §5.3): a route that names a resource checks it against the reach.
+			panic(fmt.Sprintf("api: route %s %s names a resource and has no resolver", r.method, r.pattern))
+		case (r.scope == scopeList || r.scope == scopeCreate) && hasParam:
+			panic(fmt.Sprintf("api: route %s %s names a resource but is classed %s", r.method, r.pattern, r.scope))
+		case r.resolve != nil && !strings.Contains(r.pattern, "{"+r.resolve.param+"}"):
+			panic(fmt.Sprintf("api: route %s %s resolves a path parameter it does not have", r.method, r.pattern))
 		}
 		if !safeMethod(r.method) && !r.lic.Valid() {
 			panic(fmt.Sprintf("api: state-changing route %s %s declares no license class", r.method, r.pattern))

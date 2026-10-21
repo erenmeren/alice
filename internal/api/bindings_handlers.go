@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -22,11 +23,11 @@ func (s *server) bindingRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/certificate-locations", scope: scopeList, perm: rbac.Read, handler: s.listDeployableLocations},
 		{method: http.MethodPost, pattern: "/api/v1/bindings", scope: scopeCross, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.createBinding},
-		{method: http.MethodGet, pattern: "/api/v1/bindings/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getBinding},
-		{method: http.MethodPatch, pattern: "/api/v1/bindings/{id}", scope: scopeCross, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.updateBinding},
-		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", scope: scopeResource, perm: rbac.CredentialsManage, lic: license.ClassAlways, handler: s.setAutoDeploy},
-		{method: http.MethodDelete, pattern: "/api/v1/bindings/{id}", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassAlways, handler: s.deleteBinding},
-		{method: http.MethodPost, pattern: "/api/v1/bindings/{id}/actions/deploy", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployBinding},
+		{method: http.MethodGet, pattern: "/api/v1/bindings/{id}", scope: scopeResource, resolve: &resolver{kind: services.KindKVBinding, param: "id", anyVisible: true}, perm: rbac.Read, handler: s.getBinding},
+		{method: http.MethodPatch, pattern: "/api/v1/bindings/{id}", scope: scopeCross, resolve: by(services.KindKVBinding, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.updateBinding},
+		{method: http.MethodPut, pattern: "/api/v1/bindings/{id}/auto-deploy", scope: scopeResource, resolve: by(services.KindKVBinding, "id"), perm: rbac.CredentialsManage, lic: license.ClassAlways, handler: s.setAutoDeploy},
+		{method: http.MethodDelete, pattern: "/api/v1/bindings/{id}", scope: scopeResource, resolve: by(services.KindKVBinding, "id"), perm: rbac.CertificatesOperate, lic: license.ClassAlways, handler: s.deleteBinding},
+		{method: http.MethodPost, pattern: "/api/v1/bindings/{id}/actions/deploy", scope: scopeResource, resolve: by(services.KindKVBinding, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange, handler: s.deployBinding},
 	}
 }
 

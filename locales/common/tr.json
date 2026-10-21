@@ -51,6 +51,33 @@
         "title": "Bu güven ilişkisi zaten var.",
         "cause": "Hizmet diğer hizmetin sertifika ve anahtarlarını zaten kabul ediyor.",
         "action": "Başka bir şey gerekmez."
+      },
+      "required": {
+        "title": "Bir hizmet seçin.",
+        "cause": "Bunu birden fazla hizmette oluşturabildiğiniz için Alice sizin yerinize seçemez.",
+        "action": "Formda hizmeti seçin ve yeniden deneyin."
+      },
+      "not_allowed": {
+        "title": "Bu hizmete bir şey ekleyemezsiniz.",
+        "cause": "Rolleriniz seçilen hizmette bu işlemi kapsamıyor.",
+        "action": "Kendi hizmetlerinizden birini seçin ya da bir yöneticiden bu hizmette rol isteyin."
+      },
+      "spans_services": {
+        "title": "Bu işlem hizmetlerinizin dışına uzanıyor.",
+        "cause": "İşlem, bu iş için rolünüz olmayan {{count}} hizmete daha dokunuyor. Alice bu hizmetlerin adını vermez.",
+        "action": "İşlemi kendi hizmetlerinizle sınırlayın ya da ilgili her hizmette yetkisi olan bir yöneticiden yapmasını isteyin."
+      }
+    },
+    "binding": {
+      "duplicate": {
+        "title": "Bu kişi orada bu role zaten sahip.",
+        "cause": "Bir rol her hizmette ya da ortamda yalnızca bir kez verilir.",
+        "action": "Başka bir şey gerekmez."
+      },
+      "limit": {
+        "title": "Bu kişi izin verilen en çok rol atamasına sahip.",
+        "cause": "Bir kişinin en çok {{max}} rol ataması olabilir.",
+        "action": "Artık gerekmeyen atamaları kaldırın ya da hizmetleri tek tek atamak yerine ortamı atayın."
       }
     },
     "environment": {
@@ -195,6 +222,11 @@
         "title": "Bu değişiklik çoklu oturum açma ya da dizin kullanıcısı için yapılamaz.",
         "cause": "Çoklu oturum açma ya da dizin kullanıcısının rolü gruplarından gelir. Bu kullanıcının Alice parolası yoktur, API anahtarı oluşturamaz ve kimliğini kimlik sağlayıcıda ya da dizin parolasıyla doğrular.",
         "action": "Kullanıcının gruplarını kimlik sağlayıcıda ya da dizinde değiştirin; hemen durması gerekiyorsa kullanıcıyı burada devre dışı bırakın."
+      },
+      "break_glass_global_role": {
+        "title": "Acil durum yöneticisi genel bir rolünü korur.",
+        "cause": "Kurulum sihirbazının oluşturduğu hesap hiçbir rol ataması olmadan çalışabilmelidir. Operatör ya da Denetçi olabilir, ama her zaman tüm hizmetlerde bir rolü vardır.",
+        "action": "Bu hesap için genel bir rol seçin."
       }
     },
     "token": {

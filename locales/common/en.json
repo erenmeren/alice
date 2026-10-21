@@ -51,6 +51,33 @@
         "title": "This trust exists.",
         "cause": "The service already accepts certificates and keys from the other service.",
         "action": "Nothing more is needed."
+      },
+      "required": {
+        "title": "Choose a service.",
+        "cause": "You may create this in more than one service, so Alice cannot choose for you.",
+        "action": "Choose the service in the form, then try again."
+      },
+      "not_allowed": {
+        "title": "You cannot add anything to this service.",
+        "cause": "Your roles do not include this action on the chosen service.",
+        "action": "Choose one of your services, or ask an Administrator for a role on this one."
+      },
+      "spans_services": {
+        "title": "This reaches outside your services.",
+        "cause": "The action also touches {{count}} service(s) where you hold no role for it. Alice does not name them.",
+        "action": "Limit the action to your own services, or ask an Administrator with rights on every service involved to do it."
+      }
+    },
+    "binding": {
+      "duplicate": {
+        "title": "This person already holds this role there.",
+        "cause": "A role is held once on each service or environment.",
+        "action": "Nothing more is needed."
+      },
+      "limit": {
+        "title": "This person holds the most role bindings allowed.",
+        "cause": "A person can hold at most {{max}} role bindings.",
+        "action": "Remove bindings that are no longer needed, or bind an environment instead of its services one by one."
       }
     },
     "environment": {
@@ -195,6 +222,11 @@
         "title": "This change is not possible for a single sign-on or directory user.",
         "cause": "The role of a single sign-on or directory user comes from their groups. They have no Alice password and cannot create API tokens, and they confirm it's them at their identity provider or with their directory password.",
         "action": "Change the user's groups at the identity provider or in the directory; disable the user here if they must stop at once."
+      },
+      "break_glass_global_role": {
+        "title": "The emergency administrator keeps a global role.",
+        "cause": "The account the setup wizard created must work without any role binding. It may be an Operator or an Auditor, but it always has a role on all services.",
+        "action": "Choose a global role for it."
       }
     },
     "token": {

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/providers"
@@ -22,9 +23,9 @@ import (
 // refused in lock).
 func (s *server) driftRoutes() []route {
 	return []route{
-		{method: http.MethodPut, pattern: "/api/v1/locations/{id}/drift-mode", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassChange,
+		{method: http.MethodPut, pattern: "/api/v1/locations/{id}/drift-mode", scope: scopeResource, resolve: by(services.KindLocation, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange,
 			handler: s.putDriftMode},
-		{method: http.MethodPost, pattern: "/api/v1/locations/{id}/actions/repair", scope: scopeResource, perm: rbac.CertificatesOperate, lic: license.ClassChange,
+		{method: http.MethodPost, pattern: "/api/v1/locations/{id}/actions/repair", scope: scopeResource, resolve: by(services.KindLocation, "id"), perm: rbac.CertificatesOperate, lic: license.ClassChange,
 			handler: s.repairDrift},
 	}
 }

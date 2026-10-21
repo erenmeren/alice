@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
@@ -15,7 +16,7 @@ import (
 func (s *server) deploymentRoutes() []route {
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/deployments", scope: scopeList, perm: rbac.Read, handler: s.listDeployments},
-		{method: http.MethodGet, pattern: "/api/v1/deployments/{id}", scope: scopeResource, perm: rbac.Read, handler: s.getDeployment},
+		{method: http.MethodGet, pattern: "/api/v1/deployments/{id}", scope: scopeResource, resolve: by(services.KindDeployment, "id"), perm: rbac.Read, handler: s.getDeployment},
 	}
 }
 
