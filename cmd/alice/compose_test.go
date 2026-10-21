@@ -278,7 +278,8 @@ func TestE2EFakeAzureIsTestOnlyHardenedAndSharesItsCA(t *testing.T) {
 }
 
 // The fake ACME CA exists only in the test overlay, publishes nothing, sits only on the internal backend
-// network under acme.test.alice, is hardened like the other fakes and shares its TLS CA with alice read-only.
+// network under acme.test.alice (and, as the fake DNS providers of R57, under the Cloudflare and AWS API names on that
+// network only), is hardened like the other fakes and shares its TLS CA with alice read-only.
 func TestE2EFakeACMEIsTestOnlyHardenedAndSharesItsCA(t *testing.T) {
 	overlay := readCompose(t, "../../deploy/docker-compose.e2e.yml")
 	fake, ok := overlay.Services["fakeacme"]
@@ -288,7 +289,7 @@ func TestE2EFakeACMEIsTestOnlyHardenedAndSharesItsCA(t *testing.T) {
 
 	assert.Empty(t, fake.Ports, "the fake ACME CA publishes nothing")
 	assert.Equal(t, []string{"backend"}, fake.Networks.names(), "only the internal network")
-	assert.Equal(t, []string{"acme.test.alice"}, fake.Networks["backend"].Aliases)
+	assert.Equal(t, []string{"acme.test.alice", "api.cloudflare.com", "route53.amazonaws.com", "sts.amazonaws.com"}, fake.Networks["backend"].Aliases)
 	assert.True(t, fake.ReadOnly)
 	assert.Equal(t, []string{"ALL"}, fake.CapDrop)
 	assert.Empty(t, fake.CapAdd, "port 443 is bound through the unprivileged port start sysctl, not a capability")
@@ -303,7 +304,7 @@ func TestE2EFakeACMEIsTestOnlyHardenedAndSharesItsCA(t *testing.T) {
 	_, err := os.Stat("../../" + fake.Build.Dockerfile)
 	assert.NoError(t, err)
 	assert.Equal(t, []string{"CMD", "/alice-fakeacme", "ctl", "ping"}, fake.Healthcheck.Test)
-	assert.Equal(t, []string{"serve", "--listen", ":443", "--admin", "127.0.0.1:9091", "--ca-out", marker + "/ca.pem"}, fake.Command,
+	assert.Equal(t, []string{"serve", "--listen", ":443", "--admin", "127.0.0.1:9091", "--ca-out", marker + "/ca.pem", "--dns-providers"}, fake.Command,
 		"the admin API stays on loopback; the TLS CA goes to the shared volume")
 
 	assert.Equal(t, []string{"fakeacme-ca:" + marker}, fake.Volumes)
