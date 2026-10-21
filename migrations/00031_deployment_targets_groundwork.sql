@@ -73,7 +73,7 @@ ALTER TABLE certificate_locations ADD COLUMN details jsonb NOT NULL DEFAULT '{}'
 -- internal address, an address without a route domain), next to verify_port and verify_sni. A host name or an IP
 -- literal; only a location of an API or Windows kind takes one in this phase.
 ALTER TABLE certificate_locations ADD COLUMN verify_address text
-    CHECK (verify_address ~ '^[A-Za-z0-9][A-Za-z0-9.:-]{0,252}$');
+    CHECK (verify_address ~ '^[A-Za-z0-9:][A-Za-z0-9.:-]{0,252}$');
 ALTER TABLE certificate_locations ADD CONSTRAINT certificate_locations_kind_shape CHECK (CASE WHEN kind = 'server_file'
     THEN locator IS NULL AND details = '{}'::jsonb AND verify_address IS NULL
     ELSE locator IS NOT NULL AND char_length(cert_path) <= 1024 AND key_path = '' AND resolved_cert_path = '' AND key_mode = ''
