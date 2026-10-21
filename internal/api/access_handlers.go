@@ -254,4 +254,3 @@ func (s *server) sessionAccess(r *http.Request) sessionAccessDTO {
 	}
 	return out
 }
-

@@ -46,7 +46,7 @@ SELECT 'certificate_expiry'::text AS kind, c.id AS object_id,
 FROM certificates c
 WHERE 'certificate_expiry' = ANY ($1::text[]) AND c.not_after <= $2::timestamptz
   AND EXISTS (SELECT 1 FROM live x WHERE x.certificate_id = c.id)
-  AND `+authz.CertificateVisible("c", "$4")+`
+  AND ` + authz.CertificateVisible("c", "$4") + `
 UNION ALL
 SELECT 'kv_certificate_expiry', kc.id, kc.name, kc.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM kv_certificates kc JOIN targets t ON t.id = kc.target_id AND t.deleted_at IS NULL
@@ -54,20 +54,20 @@ WHERE 'kv_certificate_expiry' = ANY ($1::text[]) AND kc.missing_since IS NULL AN
   AND kc.expires <= $2::timestamptz
   AND NOT EXISTS (SELECT 1 FROM kv_certificate_versions v JOIN live x ON x.certificate_id = v.certificate_id
                   WHERE v.kv_certificate_id = kc.id AND v.version = kc.current_version)
-  AND `+authz.OwnedVisible("t", "$4")+`
+  AND ` + authz.OwnedVisible("t", "$4") + `
 UNION ALL
 SELECT 'kv_key_expiry', k.id, k.name, k.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
 WHERE 'kv_key_expiry' = ANY ($1::text[]) AND k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL
   AND k.expires <= $2::timestamptz
-  AND `+authz.OwnedVisible("t", "$4")+`
+  AND ` + authz.OwnedVisible("t", "$4") + `
 UNION ALL
 SELECT 'kv_credential_expiry', t.id, t.name::text, (cr.public_info->>'secret_expires_on')::timestamptz, '', '{}'::text[],
        '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM targets t JOIN credentials cr ON cr.id = t.credential_id
 WHERE 'kv_credential_expiry' = ANY ($1::text[]) AND t.type = 'azure_key_vault' AND t.deleted_at IS NULL
   AND cr.public_info ? 'secret_expires_on' AND (cr.public_info->>'secret_expires_on')::timestamptz <= $2::timestamptz
-  AND `+authz.OwnedVisible("t", "$4")+`
+  AND ` + authz.OwnedVisible("t", "$4") + `
 UNION ALL
 SELECT 'discovered_certificate_expiry', NULL::uuid,
        coalesce(nullif(d.subject_cn, ''), d.sans[1], left(d.fingerprint_sha256, 16)), d.not_after, d.fingerprint_sha256,
@@ -80,7 +80,7 @@ FROM discovery_certificates d
 WHERE 'discovered_certificate_expiry' = ANY ($1::text[]) AND d.is_leaf AND d.not_after <= $2::timestamptz
   AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
   AND EXISTS (SELECT 1 FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256)
-  AND `+authz.DiscoveredCertificateVisible("d", "$4")+`
+  AND ` + authz.DiscoveredCertificateVisible("d", "$4") + `
 ORDER BY 4, 2, 5
 LIMIT NULLIF($3::int, 0)`
 
@@ -161,19 +161,19 @@ WITH live AS (
     WHERE l.missing_since IS NULL AND l.certificate_id IS NOT NULL
 ),
 mon AS (SELECT c.not_after FROM certificates c WHERE EXISTS (SELECT 1 FROM live x WHERE x.certificate_id = c.id)
-    AND `+authz.CertificateVisible("c", "$2")+`),
+    AND ` + authz.CertificateVisible("c", "$2") + `),
 kv AS (
     SELECT kc.expires FROM kv_certificates kc JOIN targets t ON t.id = kc.target_id AND t.deleted_at IS NULL
     WHERE kc.missing_since IS NULL AND kc.enabled AND kc.expires IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM kv_certificate_versions v JOIN live x ON x.certificate_id = v.certificate_id
                       WHERE v.kv_certificate_id = kc.id AND v.version = kc.current_version)
-      AND `+authz.OwnedVisible("t", "$2")+`
+      AND ` + authz.OwnedVisible("t", "$2") + `
     UNION ALL
     SELECT k.expires FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
-    WHERE k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL AND `+authz.OwnedVisible("t", "$2")+`
+    WHERE k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL AND ` + authz.OwnedVisible("t", "$2") + `
     UNION ALL
     SELECT (cr.public_info->>'secret_expires_on')::timestamptz FROM targets t JOIN credentials cr ON cr.id = t.credential_id
-    WHERE t.type = 'azure_key_vault' AND t.deleted_at IS NULL AND cr.public_info ? 'secret_expires_on' AND `+authz.OwnedVisible("t", "$2")+`
+    WHERE t.type = 'azure_key_vault' AND t.deleted_at IS NULL AND cr.public_info ? 'secret_expires_on' AND ` + authz.OwnedVisible("t", "$2") + `
 )
 SELECT (SELECT count(*) FROM mon),
        (SELECT count(*) FROM mon WHERE not_after <= $1::timestamptz),
