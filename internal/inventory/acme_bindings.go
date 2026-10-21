@@ -267,6 +267,14 @@ func (s *Service) AddACMEBindingStrict(ctx context.Context, a Actor, id, locatio
 			if err := s.unattendedAllowed(a, strictSession); err != nil {
 				return err
 			}
+			// R55: the ACME certificate's service's policy may forbid automatic deployment.
+			policy, err := authz.LoadPolicy(ctx, tx, c.ServiceID)
+			if err != nil {
+				return err
+			}
+			if err := policy.CheckAutoDeploy(); err != nil {
+				return err
+			}
 		}
 		now := s.clock.Now().UTC()
 		action := "acme.binding.added"

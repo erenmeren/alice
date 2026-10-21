@@ -70,6 +70,9 @@ type acmeDeploySnapshot struct {
 	bindings             []acmeDeployBinding // in location id order
 	deployments          []acmeDeployment
 	remaining            int // deployments the run may still create (all certificates)
+	// forbidden: the service's policy forbids automatic deployment (R55): every binding with automatic deployment on is
+	// marked ReasonAutoDeployForbidden and nothing is deployed, held or stopped while it lasts.
+	forbidden bool
 }
 
 // acmeAttention is a change of a binding's attention mark: code "" clears it.
@@ -99,6 +102,9 @@ type acmeDeployPlan struct {
 //     marked ReasonServiceUntrusted; else a binding whose last automatic deployment of the current certificate (since
 //     the binding exists) failed for a counted reason is marked with that reason; one whose location got or serves the
 //     current certificate, or whose last such deployment did not fail, is cleared (also when nothing else is planned);
+//   - while the service's policy forbids automatic deployment (R55), every binding with automatic deployment on is
+//     marked ReasonAutoDeployForbidden and nothing else is planned (the bindings stay on; the mark clears and the plan
+//     resumes once the policy allows it);
 //   - a current certificate that is held (and not released) or whose wave stopped is left alone; an expired or not
 //     yet valid one too (renewal is the renewal planner's matter);
 //   - three failed automatic deployments of the current certificate (counted as the Key Vault planner counts:
@@ -192,9 +198,15 @@ func planACMEAutoDeploy(sn acmeDeploySnapshot) acmeDeployPlan {
 		if b.untrusted {
 			want = ReasonServiceUntrusted
 		}
+		if sn.forbidden && b.autoDeploy {
+			want = ReasonAutoDeployForbidden
+		}
 		if want != b.attentionCode {
 			p.attention = append(p.attention, acmeAttention{location: b.location, code: want})
 		}
+	}
+	if sn.forbidden {
+		return p
 	}
 
 	releasedFromLicence := sn.heldReason == ACMEHoldLicense && sn.released

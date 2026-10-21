@@ -171,8 +171,13 @@ func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, err
 	if err := checkPendingCSRs(ctx, s.pool); err != nil {
 		return CSR{}, err
 	}
-	// An unknown service is refused before a key is generated (and again in the transaction).
-	if _, err := authz.ResolveService(ctx, s.pool, in.ServiceID); err != nil {
+	// An unknown service, and a request its policy refuses (R55), are refused before a key is generated (and again in the
+	// transaction).
+	service, err := authz.ResolveService(ctx, s.pool, in.ServiceID)
+	if err != nil {
+		return CSR{}, err
+	}
+	if err := checkCSRPolicy(ctx, s.pool, service, cn, sans); err != nil {
 		return CSR{}, err
 	}
 	release, ok := acquireCSRSlot()
@@ -207,6 +212,9 @@ func (s *Service) CreateCSR(ctx context.Context, a Actor, in CSRInput) (CSR, err
 		if err != nil {
 			return err
 		}
+		if err := checkCSRPolicy(ctx, tx, service, cn, sans); err != nil {
+			return err
+		}
 		keyID, err := s.storeKey(ctx, tx, "csr", key, info, a.UserID)
 		if err != nil {
 			return err
@@ -229,6 +237,22 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, id, keyID, cn, requestNames(cn, sa
 		return CSR{}, err
 	}
 	return out, nil
+}
+
+// checkCSRPolicy is the service's policy for a new signing request (R55, design §7.3): the source csr, and the common
+// name and the other names within its domains (*authz.DomainError naming the field).
+func checkCSRPolicy(ctx context.Context, q db.Querier, service uuid.UUID, cn string, sans []string) error {
+	policy, err := authz.LoadPolicy(ctx, q, service)
+	if err != nil {
+		return err
+	}
+	if err := policy.CheckSource(authz.SourceCSR); err != nil {
+		return err
+	}
+	if err := policy.CheckNames("common_name", []string{cn}); err != nil {
+		return err
+	}
+	return policy.CheckNames("sans", sans)
 }
 
 // checkPendingCSRs refuses a new signing request when maxPendingCSRs are open.

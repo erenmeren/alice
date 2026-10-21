@@ -486,15 +486,22 @@ func (p Policy) CheckSource(source string) error {
 // CheckACME refuses an ACME certificate whose provider, challenge or key type the policy does not allow
 // (*ACMEPolicyError naming the request field).
 func (p Policy) CheckACME(provider uuid.UUID, challenge, keyType string) error {
+	return p.CheckACMEChanges(&provider, &challenge, &keyType)
+}
+
+// CheckACMEChanges is CheckACME for a change of an ACME certificate: only the values given (non-nil) are judged, so a
+// policy made stricter after the certificate was created refuses no change of its other fields (a policy is never
+// applied to what exists).
+func (p Policy) CheckACMEChanges(provider *uuid.UUID, challenge, keyType *string) error {
 	a := p.ACME
 	switch {
 	case a == nil:
 		return nil
-	case len(a.Providers) > 0 && !slices.Contains(a.Providers, provider):
+	case provider != nil && len(a.Providers) > 0 && !slices.Contains(a.Providers, *provider):
 		return &ACMEPolicyError{Field: "provider_id"}
-	case len(a.Challenges) > 0 && !slices.Contains(a.Challenges, challenge):
+	case challenge != nil && len(a.Challenges) > 0 && !slices.Contains(a.Challenges, *challenge):
 		return &ACMEPolicyError{Field: "challenge"}
-	case len(a.KeyTypes) > 0 && !slices.Contains(a.KeyTypes, keyType):
+	case keyType != nil && len(a.KeyTypes) > 0 && !slices.Contains(a.KeyTypes, *keyType):
 		return &ACMEPolicyError{Field: "key_type"}
 	}
 	return nil

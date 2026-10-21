@@ -196,6 +196,29 @@ func TestACMEAutoDeployPlanTable(t *testing.T) {
 			attention: func(f *acmePlanFixture) []acmeAttention {
 				return []acmeAttention{{f.a, ReasonInternal}, {f.b, "deployment.reload_failed"}}
 			}},
+		// R55: the service's policy forbids automatic deployment: the automatic bindings are marked, nothing is planned.
+		{name: "a policy that forbids automatic deployment holds every automatic binding", mutate: func(f *acmePlanFixture) {
+			f.sn.forbidden = true
+			f.binding(f.b).autoDeploy = false
+			f.binding(f.c).untrusted = true
+			f.sn.current.chainComplete = false // would be held otherwise
+		}, deploy: none, attention: func(f *acmePlanFixture) []acmeAttention {
+			return []acmeAttention{{f.a, ReasonAutoDeployForbidden}, {f.c, ReasonAutoDeployForbidden}}
+		}},
+		{name: "a forbidden mark already set is not written again and nothing stops", mutate: func(f *acmePlanFixture) {
+			f.sn.forbidden = true
+			for _, l := range []uuid.UUID{f.a, f.b, f.c} {
+				f.binding(l).attentionCode = ReasonAutoDeployForbidden
+				f.failed(l, time.Hour, "deployment.reload_failed")
+			}
+		}, deploy: none},
+		{name: "the policy allows it again: the marks clear and the wave resumes", mutate: func(f *acmePlanFixture) {
+			for _, l := range []uuid.UUID{f.a, f.b, f.c} {
+				f.binding(l).attentionCode = ReasonAutoDeployForbidden
+			}
+		}, deploy: all, budget: AutoDeployWave, attention: func(f *acmePlanFixture) []acmeAttention {
+			return []acmeAttention{{f.a, ""}, {f.b, ""}, {f.c, ""}}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newACMEPlanFixture()

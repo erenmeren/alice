@@ -89,6 +89,11 @@ var ErrServiceUntrusted = authz.ErrUntrusted
 // services without a trust.
 const ReasonServiceUntrusted = "service.untrusted"
 
+// ReasonAutoDeployForbidden is the attention code of a binding's website that automatic deployment holds because the
+// policy of the source's service forbids automatic deployment (R55, design §7.3): the binding stays on and resumes when
+// the policy allows it again.
+const ReasonAutoDeployForbidden = "service.auto_deploy_forbidden"
+
 var (
 	// ErrDeploymentInProgress: the location already has an unfinished deployment (F-15;
 	// deployments_one_active is the backstop for concurrent requests).

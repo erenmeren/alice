@@ -286,6 +286,21 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		if err != nil {
 			return err
 		}
+		// R55: the service's policy, before anything is stored: the source uploaded, the names within its domains.
+		policy, err := authz.LoadPolicy(ctx, tx, service)
+		if err != nil {
+			return err
+		}
+		if err := policy.CheckSource(authz.SourceUploaded); err != nil {
+			return err
+		}
+		field := "certificate_pem"
+		if format == formatPFX {
+			field = "pfx_base64"
+		}
+		if err := policy.CheckNames(field, authz.CertificateNames(v.SubjectCN, v.SANs)); err != nil {
+			return err
+		}
 		placed, err = s.placeCertificate(ctx, tx, v.Parsed, v.ChainComplete, true, label, "uploaded", a.UserID, service, func() (uuid.UUID, error) {
 			return s.storeKey(ctx, tx, "certificate", v.PrivateKeyDER, info, a.UserID)
 		})
@@ -314,6 +329,10 @@ func (s *Service) UploadCertificate(ctx context.Context, a Actor, in UploadInput
 		_, err = s.audit.Append(ctx, tx, ev)
 		return err
 	})
+	if errors.Is(err, authz.ErrDomainNotAllowed) || errors.Is(err, authz.ErrSourceNotAllowed) {
+		s.auditRejection(ctx, a, rejected{format: format, reason: "policy", fingerprint: v.Fingerprint})
+		return Certificate{}, nil, err
+	}
 	if errors.Is(err, ErrCertificateDuplicate) || errors.Is(err, ErrKeyMismatch) {
 		reason := "duplicate"
 		if errors.Is(err, ErrKeyMismatch) {

@@ -582,7 +582,8 @@ WHERE id = ANY($1) AND binding_id = $2`, removed, id); err != nil {
 // are safety actions that work in lock. On records auto_since (the planner deploys only versions
 // detected after it) and clears stopped_version; that does NOT make a stopped version deployable again
 // (the new auto_since is later than it, so it stays "deploy manually": Deploy now is the way); a certificate whose key the vault cannot export
-// (ErrNotExportable) cannot be switched on. Switching on never releases a held version. ifVersion is
+// (ErrNotExportable) cannot be switched on, nor one whose vault's service's policy forbids automatic deployment
+// (authz.ErrAutoDeployForbidden, R55). Switching on never releases a held version. ifVersion is
 // the binding's version as the caller read it; a request that changes nothing is a success without an
 // audit row. Audited binding.auto_deploy_changed.
 func (s *Service) SetAutoDeploy(ctx context.Context, a Actor, id uuid.UUID, ifVersion int, enabled bool) (Binding, error) {
@@ -602,7 +603,7 @@ func (s *Service) SetAutoDeploy(ctx context.Context, a Actor, id uuid.UUID, ifVe
 	)
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		out, denial = Binding{}, nil
-		_, b, err := lockBinding(ctx, tx, id)
+		v, b, err := lockBinding(ctx, tx, id)
 		if err != nil {
 			return err
 		}
@@ -614,6 +615,14 @@ func (s *Service) SetAutoDeploy(ctx context.Context, a Actor, id uuid.UUID, ifVe
 			return err
 		}
 		if enabled {
+			// R55: the vault's service's policy may forbid automatic deployment.
+			policy, err := authz.LoadPolicy(ctx, tx, v.service)
+			if err != nil {
+				return err
+			}
+			if err := policy.CheckAutoDeploy(); err != nil {
+				return denyWith(&denial, "auto_deploy_forbidden", uuid.Nil, err)
+			}
 			c, err := kvCertificateOf(ctx, tx, b.certificate)
 			if err != nil {
 				return err

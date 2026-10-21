@@ -33,7 +33,9 @@ import (
 // list admits nothing): ErrACMENameNotAllowed (ALC-ACM-0015) otherwise. A wildcard needs DNS-01. The key policy
 // cannot change while the certificate has bindings (A13/M2: the bound locations hold a key of the old type;
 // ErrACMEKeyTypeLocked, ALC-ACM-0018), and nothing an order uses (names, provider, proof method, hook, server, key
-// policy) changes while an order runs (ErrACMEOrderRunning, ALC-ACM-0016). No network call is made here.
+// policy) changes while an order runs (ErrACMEOrderRunning, ALC-ACM-0016). No network call is made here. The owning
+// service's policy (R55) is judged in the same transaction before anything is stored: the source acme, the names within
+// its domains, the provider, challenge and key type, automatic deployment; its renewal window is the default of a new one.
 
 // ACME certificate states (acme_certificates.state).
 const (
@@ -431,7 +433,8 @@ func (s *Service) CreateACMECertificate(ctx context.Context, a Actor, in ACMECer
 	if f.keyType == "" {
 		f.keyType = string(keygen.Default)
 	}
-	if f.renewBefore == 0 {
+	renewDefault := f.renewBefore == 0 // the service's policy may set the default (R55)
+	if renewDefault {
 		f.renewBefore = DefaultACMERenewBeforeDays
 	}
 	if in.AutoRenew != nil {
@@ -466,6 +469,17 @@ func (s *Service) CreateACMECertificate(ctx context.Context, a Actor, in ACMECer
 		service, err := authz.ResolveService(ctx, tx, in.ServiceID)
 		if err != nil {
 			return err
+		}
+		// R55: the service's policy, before anything is stored (no order is ever placed here).
+		policy, err := authz.LoadPolicy(ctx, tx, service)
+		if err != nil {
+			return err
+		}
+		if err := checkACMEPolicy(policy, f, true, nil); err != nil {
+			return err
+		}
+		if renewDefault && policy.RenewBeforeDays() > 0 {
+			f.renewBefore = policy.RenewBeforeDays()
 		}
 		account, err := s.checkACMECertRefs(ctx, tx, f)
 		if err != nil {
@@ -552,6 +566,41 @@ func patchACMECert(cur ACMECertificate, p ACMECertificatePatch) (acmeCertFields,
 	return f, changed, errs
 }
 
+// checkACMEPolicy is the service's policy for a definition (R55, design §7.3): the source acme, the names within the
+// domains, the provider, challenge and key type among the allowed ones, and automatic deployment not forbidden. A new
+// definition is judged whole; a change (changed lists its fields) only in what it changes.
+func checkACMEPolicy(p authz.Policy, f acmeCertFields, create bool, changed []string) error {
+	has := func(field string) bool { return create || slices.Contains(changed, field) }
+	if create {
+		if err := p.CheckSource(authz.SourceACME); err != nil {
+			return err
+		}
+	}
+	if has("names") {
+		if err := p.CheckNames("names", f.names); err != nil {
+			return err
+		}
+	}
+	var provider *uuid.UUID
+	var challenge, keyType *string
+	if has("provider_id") {
+		provider = &f.providerID
+	}
+	if has("challenge") {
+		challenge = &f.challenge
+	}
+	if has("key_type") {
+		keyType = &f.keyType
+	}
+	if err := p.CheckACMEChanges(provider, challenge, keyType); err != nil {
+		return err
+	}
+	if f.autoDeploy && has("auto_deploy") {
+		return p.CheckAutoDeploy()
+	}
+	return nil
+}
+
 // orderInputs are the fields an order uses: they cannot change while one runs.
 var orderInputs = []string{"provider_id", "names", "key_type", "challenge", "hook_id", "http_target_id"}
 
@@ -588,6 +637,14 @@ func (s *Service) UpdateACMECertificate(ctx context.Context, a Actor, id uuid.UU
 			if err := s.unattendedAllowed(a, true); err != nil {
 				return err
 			}
+		}
+		// R55: the changed fields are judged by the service's policy (the others were judged when they were set).
+		policy, err := authz.LoadPolicy(ctx, tx, cur.ServiceID)
+		if err != nil {
+			return err
+		}
+		if err := checkACMEPolicy(policy, f, false, changed); err != nil {
+			return err
 		}
 		account := cur.AccountID
 		if usesOrder {

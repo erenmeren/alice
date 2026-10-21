@@ -27,6 +27,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 )
@@ -169,18 +170,30 @@ func (s *Service) planACMEDeploy(ctx context.Context, id uuid.UUID, reopened *ti
 		sn.gateOpen, sn.reopened, sn.remaining = true, reopened, autoDeployBatch-run.Created
 		p := planACMEAutoDeploy(sn)
 
-		var untrusted []string
+		var untrusted, forbidden []string
 		for _, m := range p.attention {
 			if _, err := tx.Exec(ctx, `UPDATE acme_bindings SET attention_code = $3, attention_at = CASE WHEN $3 = '' THEN NULL ELSE $4::timestamptz END
 WHERE acme_certificate_id = $1 AND location_id = $2`, id, m.location, m.code, now); err != nil {
 				return fmt.Errorf("inventory: mark the binding: %w", err)
 			}
-			if m.code == ReasonServiceUntrusted { // a mark changes only when it is new: the notice goes out once
+			switch m.code { // a mark changes only when it is new: the notice goes out once
+			case ReasonServiceUntrusted:
 				untrusted = append(untrusted, m.location.String())
+			case ReasonAutoDeployForbidden:
+				forbidden = append(forbidden, m.location.String())
 			}
 		}
 		if len(untrusted) > 0 {
 			if err := s.untrustedACMEDeploy(ctx, tx, id, names, untrusted); err != nil {
+				return err
+			}
+		}
+		if len(forbidden) > 0 {
+			// R55: the policy's own change is the cause and is audited with its author; the hold is recorded once, no e-mail.
+			if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "acme.auto_deploy.forbidden", ObjectType: "acme_certificate",
+				ObjectID: id.String(), Result: audit.Success, Details: map[string]string{"acme_certificate_id": id.String(),
+					"names": truncRunes(strings.Join(names, ","), maxAuditNames), "location_ids": strings.Join(forbidden, ","),
+					"location_count": strconv.Itoa(len(forbidden))}}); err != nil {
 				return err
 			}
 		}
@@ -241,6 +254,11 @@ func readACMEDeploySnapshot(ctx context.Context, tx pgx.Tx, id uuid.UUID, now ti
 	if err != nil {
 		return sn, nil, fmt.Errorf("inventory: read the ACME certificate's deployment state: %w", err)
 	}
+	policy, err := authz.LoadPolicy(ctx, tx, sn.service) // R55: automatic deployment may be forbidden for the service
+	if err != nil {
+		return sn, nil, err
+	}
+	sn.forbidden = policy.AutoDeployForbidden()
 	if current == nil {
 		return sn, names, nil
 	}

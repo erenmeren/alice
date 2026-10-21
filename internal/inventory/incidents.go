@@ -293,7 +293,8 @@ WHERE o.certificate_id = $1 AND o.state = 'succeeded' ORDER BY o.started_at DESC
 	return &id, nil
 }
 
-// StartIncident starts a key-compromise incident for a certificate (see the file comment). Refusals: the revoke mode
+// StartIncident starts a key-compromise incident for a certificate (see the file comment). Without a revoke mode the
+// certificate's service's policy chooses it (incident.revoke_mode, R55), else after_verified. Refusals: the revoke mode
 // (validate.Errors); the licence gate (ClassChange); ErrNotFound; ErrIncidentOpen; for an ACME certificate whose provider
 // has no usable account ErrACMEAccountState or ErrACMERolloverPending (an order already running is waited for).
 // Audited incident.started and certificate.compromised (with the number of certificates marked).
@@ -311,13 +312,23 @@ func (s *Service) StartIncident(ctx context.Context, a Actor, certificateID uuid
 	id := uuid.Must(uuid.NewV7())
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		var key, fingerprint string
-		err := tx.QueryRow(ctx, "SELECT public_key_sha256, fingerprint_sha256 FROM certificates WHERE id = $1 FOR UPDATE", certificateID).
-			Scan(&key, &fingerprint)
+		var service uuid.UUID
+		err := tx.QueryRow(ctx, "SELECT public_key_sha256, fingerprint_sha256, service_id FROM certificates WHERE id = $1 FOR UPDATE", certificateID).
+			Scan(&key, &fingerprint, &service)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return fmt.Errorf("inventory: lock the certificate: %w", err)
+		}
+		if in.RevokeMode == "" { // R55: the certificate's service's policy sets the default
+			policy, err := authz.LoadPolicy(ctx, tx, service)
+			if err != nil {
+				return err
+			}
+			if m := policy.RevokeMode(); m != "" {
+				mode = m
+			}
 		}
 		acmeID, err := incidentACME(ctx, tx, certificateID)
 		if err != nil {

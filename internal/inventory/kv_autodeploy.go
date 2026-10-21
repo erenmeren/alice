@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/rbac"
@@ -272,6 +274,23 @@ WHERE b.id = $1 AND b.deleted_at IS NULL FOR UPDATE OF b SKIP LOCKED`, id).Scan(
 		}
 		sn.reopened = run.reopened // the poll's own helper, read once per run
 		p := planAutoDeploy(sn)
+		// R55: while the vault's service's policy forbids automatic deployment, the websites it would deploy to are marked
+		// and nothing else is planned (the binding stays on); once it allows it again the marks clear and the plan resumes.
+		policy, err := authz.LoadPolicy(ctx, tx, vaultService)
+		if err != nil {
+			return err
+		}
+		if policy.AutoDeployForbidden() && sn.autoDeploy {
+			held := slices.Clone(p.deploy)
+			if p.hold != nil {
+				held = append(held, p.hold.candidates...)
+			}
+			return s.markKVForbidden(ctx, tx, id, certID, certName, held, now)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET binding_attention_code = '', binding_attention_at = NULL
+WHERE binding_id = $1 AND binding_attention_code = $2`, id, ReasonAutoDeployForbidden); err != nil {
+			return fmt.Errorf("inventory: clear the websites' marks: %w", err)
+		}
 		var holdAudit *audit.Event
 		var cur *planVersion
 		for i := range sn.versions {
@@ -466,6 +485,35 @@ WHERE id = ANY($1) AND binding_id = $2 AND binding_attention_code <> $3 RETURNIN
 		}
 	}
 	return nil
+}
+
+// markKVForbidden marks the binding's websites automatic deployment would deploy to with ReasonAutoDeployForbidden (R55):
+// the vault's service's policy forbids automatic deployment. The websites newly marked are audited kv.auto_deploy.forbidden
+// once (no e-mail: the policy change is the cause, audited with its author).
+func (s *Service) markKVForbidden(ctx context.Context, tx pgx.Tx, binding, cert uuid.UUID, certName string, locations []uuid.UUID, now time.Time) error {
+	if len(locations) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, `UPDATE certificate_locations SET binding_attention_code = $3, binding_attention_at = $4
+WHERE id = ANY($1) AND binding_id = $2 AND binding_attention_code <> $3 RETURNING id`, locations, binding, ReasonAutoDeployForbidden, now)
+	if err != nil {
+		return fmt.Errorf("inventory: mark the websites: %w", err)
+	}
+	marked, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("inventory: mark the websites: %w", err)
+	}
+	if len(marked) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(marked))
+	for _, m := range marked {
+		ids = append(ids, m.String())
+	}
+	_, err = s.audit.Append(ctx, tx, audit.Event{Actor: jobsActor, Action: "kv.auto_deploy.forbidden", ObjectType: "binding",
+		ObjectID: binding.String(), Result: audit.Success, Details: map[string]string{"binding_id": binding.String(), "kv_certificate_id": cert.String(),
+			"certificate_name": certName, "location_ids": strings.Join(ids, ","), "location_count": strconv.Itoa(len(marked))}})
+	return err
 }
 
 // clearKVUntrusted clears the ReasonServiceUntrusted mark of the binding's websites whose server is in the vault's
