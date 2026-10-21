@@ -542,6 +542,7 @@ func newAPIDeps(cfg config.Config, svc *services, health api.HealthChecker, cata
 		Discovery:      discoveryAPI(svc),
 		Incidents:      incidentAPI(svc),
 		Services:       servicesAPI(svc),
+		Automation:     svc.auth,
 		Jobs:           svc.queue,
 		Providers:      svc.registry,
 		SSHKeys:        sshKeysAPI(svc),

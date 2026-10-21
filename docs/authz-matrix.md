@@ -266,6 +266,15 @@ never a platform one. A resource outside the caller's services answers the opera
 | POST | `/api/v1/role-bindings` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
 | DELETE | `/api/v1/role-bindings/{id}` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
 | GET | `/api/v1/users/{id}/access` | `users.read` | platform | no | yes | no | no | read | no | yes |
+| GET | `/api/v1/directory-groups` | `users.read` | platform | no | yes | no | no | read | no | yes |
+| POST | `/api/v1/directory-groups` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/directory-groups/{id}` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/automation-accounts` | `users.read` | platform | no | yes | no | no | read | no | yes |
+| POST | `/api/v1/automation-accounts` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
+| PATCH | `/api/v1/automation-accounts/{id}` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
+| GET | `/api/v1/automation-accounts/{id}/tokens` | `users.read` | platform | no | yes | no | no | read | no | yes |
+| POST | `/api/v1/automation-accounts/{id}/tokens` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
+| DELETE | `/api/v1/automation-accounts/{id}/tokens/{token_id}` | `access.manage` | platform | no | yes | no | no | no | yes | yes |
 
 ## Notes
 

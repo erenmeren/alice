@@ -109,10 +109,39 @@
         "cause": "Bir rol her hizmette ya da ortamda yalnızca bir kez verilir.",
         "action": "Başka bir şey gerekmez."
       },
+      "role_not_allowed": {
+        "title": "Bir otomasyon hesabı tüm hizmetlerde Yönetici olamaz.",
+        "cause": "Bir otomasyon hesabı tüm hizmetlerde Operatör ya da Denetçi olabilir; bir hizmette ya da ortamda ise her role sahip olabilir.",
+        "action": "Operatör, Denetçi ya da genel rol yok seçeneğini seçin; Yönetici rolünü bunun yerine gereken hizmetlerde verin."
+      },
       "limit": {
-        "title": "Bu kişi izin verilen en çok rol atamasına sahip.",
-        "cause": "Bir kişinin en çok {{max}} rol ataması olabilir.",
+        "title": "Bu kişi ya da grup izin verilen en çok rol atamasına sahip.",
+        "cause": "Bir kişinin, otomasyon hesabının ya da dizin grubunun en çok {{max}} rol ataması olabilir.",
         "action": "Artık gerekmeyen atamaları kaldırın ya da hizmetleri tek tek atamak yerine ortamı atayın."
+      }
+    },
+    "directory_group": {
+      "not_found": {
+        "title": "Bu dizin grubu bilinmiyor.",
+        "cause": "Grup kaldırılmış ya da hiç eklenmemiş.",
+        "action": "Gruplar sekmesini yenileyip grubu yeniden seçin ya da önce grubu ekleyin."
+      },
+      "exists": {
+        "title": "Bu dizin grubu zaten eklenmiş.",
+        "cause": "Bir grup her kimlik sağlayıcısı ya da dizin için bir kez eklenir.",
+        "action": "Var olan grubu kullanın."
+      }
+    },
+    "automation": {
+      "not_a_person": {
+        "title": "Bu değişiklik bir otomasyon hesabı için yapılamaz.",
+        "cause": "Otomasyon hesabının parolası, doğrulayıcısı ve bu sayfada kişisel bir rolü yoktur; hiçbir zaman oturum açmaz.",
+        "action": "Kişiler ve erişim, Otomasyon hesapları bölümünü açıp değişikliği orada yapın."
+      },
+      "disabled": {
+        "title": "Bu otomasyon hesabı devre dışı.",
+        "cause": "Devre dışı bir otomasyon hesabının anahtarı olamaz.",
+        "action": "Önce hesabı etkinleştirin, sonra anahtarı oluşturun."
       }
     },
     "environment": {
@@ -269,6 +298,11 @@
         "title": "Rolünüz bu anahtar erişimine izin vermiyor.",
         "cause": "Bir anahtar, sahibinin rolünün izin verdiğinden fazlasını yapamaz.",
         "action": "Salt okunur erişimi seçin."
+      },
+      "service_not_allowed": {
+        "title": "Bu anahtar bu hizmetlerle sınırlanamaz.",
+        "cause": "Bir anahtar yalnızca sahibinin rolü olan hizmetlerle sınırlanabilir ve her hizmet var olmalıdır.",
+        "action": "Yalnızca sahibinin rolü olan hizmetleri seçin ya da anahtarı sınırsız bırakın."
       }
     },
     "audit": {

@@ -23,14 +23,16 @@ func (s *server) tokenRoutes() []route {
 }
 
 type tokenDTO struct {
-	ID         string     `json:"id"`
-	UserID     string     `json:"user_id"`
-	Name       string     `json:"name"`
-	Prefix     string     `json:"prefix"`
-	Scope      string     `json:"scope"`
-	ExpiresAt  time.Time  `json:"expires_at"`
-	LastUsedAt *time.Time `json:"last_used_at"`
-	CreatedAt  time.Time  `json:"created_at"`
+	ID     string `json:"id"`
+	UserID string `json:"user_id"`
+	Name   string `json:"name"`
+	Prefix string `json:"prefix"`
+	Scope  string `json:"scope"`
+	// ServiceIDs are the services the token is limited to (R54, design §6.3); null: the owner's whole reach.
+	ServiceIDs []uuid.UUID `json:"service_ids"`
+	ExpiresAt  time.Time   `json:"expires_at"`
+	LastUsedAt *time.Time  `json:"last_used_at"`
+	CreatedAt  time.Time   `json:"created_at"`
 }
 
 func tokenJSON(t auth.Token) tokenDTO {
@@ -45,6 +47,7 @@ func tokenJSON(t auth.Token) tokenDTO {
 		Name:       t.Name,
 		Prefix:     t.Prefix,
 		Scope:      string(t.Scope),
+		ServiceIDs: t.ServiceIDs,
 		ExpiresAt:  t.ExpiresAt.UTC(),
 		LastUsedAt: last,
 		CreatedAt:  t.CreatedAt.UTC(),
@@ -89,25 +92,38 @@ func (s *server) listTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string][]tokenDTO{"items": items})
 }
 
-func (s *server) createToken(w http.ResponseWriter, r *http.Request) {
+// decodeNewToken reads the body of a new token: its name, scope, lifetime and the optional services it is limited to
+// (service_ids: absent or null for none; an empty list is refused by auth as a validation error).
+func (s *server) decodeNewToken(w http.ResponseWriter, r *http.Request) (auth.NewToken, bool) {
 	var req struct {
-		Name          string `json:"name"`
-		Scope         string `json:"scope"`
-		ExpiresInDays int    `json:"expires_in_days"`
+		Name          string       `json:"name"`
+		Scope         string       `json:"scope"`
+		ExpiresInDays int          `json:"expires_in_days"`
+		ServiceIDs    *[]uuid.UUID `json:"service_ids"`
 	}
 	if !s.decode(w, r, &req) {
-		return
+		return auth.NewToken{}, false
 	}
 	scope, ok := rbac.ParseScope(req.Scope)
 	if !ok {
 		var v validate.Errors
 		v.Add("scope", validate.OneOf, map[string]string{"values": "read, operate"})
 		s.fail(w, r, v)
+		return auth.NewToken{}, false
+	}
+	in := auth.NewToken{Name: req.Name, Scope: scope, ExpiresInDays: req.ExpiresInDays}
+	if req.ServiceIDs != nil {
+		in.ServiceIDs = append([]uuid.UUID{}, *req.ServiceIDs...)
+	}
+	return in, true
+}
+
+func (s *server) createToken(w http.ResponseWriter, r *http.Request) {
+	in, ok := s.decodeNewToken(w, r)
+	if !ok {
 		return
 	}
-	secret, t, err := s.deps.Auth.CreateToken(r.Context(), principalFrom(r.Context()), s.meta(r), auth.NewToken{
-		Name: req.Name, Scope: scope, ExpiresInDays: req.ExpiresInDays,
-	})
+	secret, t, err := s.deps.Auth.CreateToken(r.Context(), principalFrom(r.Context()), s.meta(r), in)
 	if err != nil {
 		s.fail(w, r, err)
 		return

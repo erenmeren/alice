@@ -384,6 +384,7 @@ func (s *stack) deps() Deps {
 		UI:             fstest.MapFS{"index.html": {Data: []byte(stackIndexHTML)}},
 		Log:            s.logger(),
 		Clock:          s.clock,
+		Automation:     s.auth,
 		Auth:           s.auth,
 		Setup:          s.setup,
 		Audit:          s.auditSvc,

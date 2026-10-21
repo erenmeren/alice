@@ -556,6 +556,17 @@ var (
 	// more bindings for one person than the bound allows.
 	ErrACCBindingDuplicate = ErrorCode{Code: "ALC-ACC-0001", Reason: "binding.duplicate", Status: http.StatusConflict}
 	ErrACCBindingLimit     = ErrorCode{Code: "ALC-ACC-0005", Reason: "binding.limit", Status: http.StatusUnprocessableEntity}
+	// Directory groups, automation accounts and tokens limited to services (R54, design §6, §8.3). ErrACCRoleNotAllowed:
+	// an automation account as a global Administrator; ErrACCGroupNotFound: an unknown directory group. The next free
+	// numbers (the design names none): ErrACCAutomationAccount, a person-only change of an automation account through
+	// People & access; ErrACCAutomationDisabled, a token for a disabled automation account; ErrACCGroupExists, a group
+	// declared twice. ErrTokenServiceNotAllowed: a token limited to a service its owner holds no role on.
+	ErrACCRoleNotAllowed      = ErrorCode{Code: "ALC-ACC-0002", Reason: "binding.role_not_allowed", Status: http.StatusUnprocessableEntity}
+	ErrACCGroupNotFound       = ErrorCode{Code: "ALC-ACC-0003", Reason: "directory_group.not_found", Status: http.StatusNotFound}
+	ErrACCAutomationAccount   = ErrorCode{Code: "ALC-ACC-0006", Reason: "automation.not_a_person", Status: http.StatusConflict}
+	ErrACCAutomationDisabled  = ErrorCode{Code: "ALC-ACC-0007", Reason: "automation.disabled", Status: http.StatusConflict}
+	ErrACCGroupExists         = ErrorCode{Code: "ALC-ACC-0008", Reason: "directory_group.exists", Status: http.StatusConflict}
+	ErrTokenServiceNotAllowed = ErrorCode{Code: "ALC-TOK-0002", Reason: "token.service_not_allowed", Status: http.StatusUnprocessableEntity}
 	// ErrBreakGlassGlobalRole: removing the global role of the break-glass account (R53; the next USR number).
 	ErrBreakGlassGlobalRole = ErrorCode{Code: "ALC-USR-0004", Reason: "user.break_glass_global_role", Status: http.StatusConflict}
 )
@@ -638,6 +649,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrSVCDomainNotAllowed, ErrSVCSourceNotAllowed, ErrSVCVersionConflict, ErrSVCDomainsGlobalOnly, ErrSVCAutoDeployForbidden,
 		ErrSVCACMENotAllowed, ErrSVCPolicyFieldUnavailable,
 		ErrACCBindingDuplicate, ErrACCBindingLimit, ErrBreakGlassGlobalRole,
+		ErrACCRoleNotAllowed, ErrACCGroupNotFound, ErrACCAutomationAccount, ErrACCAutomationDisabled, ErrACCGroupExists, ErrTokenServiceNotAllowed,
 	}
 }
 
@@ -710,6 +722,12 @@ var errorMap = []struct {
 	{services.ErrBindingDuplicate, ErrACCBindingDuplicate, nil},
 	{services.ErrBindingLimit, ErrACCBindingLimit, map[string]string{"max": strconv.Itoa(services.MaxBindingsPerSubject)}},
 	{auth.ErrBreakGlassGlobalRole, ErrBreakGlassGlobalRole, nil},
+	{auth.ErrAutomationAdmin, ErrACCRoleNotAllowed, nil},
+	{auth.ErrAutomationAccount, ErrACCAutomationAccount, nil},
+	{auth.ErrAutomationDisabled, ErrACCAutomationDisabled, nil},
+	{auth.ErrTokenServiceNotAllowed, ErrTokenServiceNotAllowed, nil},
+	{services.ErrDirectoryGroupNotFound, ErrACCGroupNotFound, nil},
+	{services.ErrDirectoryGroupExists, ErrACCGroupExists, nil},
 	{services.ErrVersionMismatch, ErrPreconditionFailed, nil},
 	// Service policy (R55); the typed errors are answered with their params and field by policyRefusal.
 	{services.ErrPolicyVersion, ErrSVCVersionConflict, nil},

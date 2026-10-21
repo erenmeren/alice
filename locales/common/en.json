@@ -109,10 +109,39 @@
         "cause": "A role is held once on each service or environment.",
         "action": "Nothing more is needed."
       },
+      "role_not_allowed": {
+        "title": "An automation account cannot be an Administrator on all services.",
+        "cause": "An automation account may be an Operator or an Auditor on all services, or hold any role on a service or an environment.",
+        "action": "Choose Operator, Auditor or no global role, and give it the Administrator role on the services it needs instead."
+      },
       "limit": {
-        "title": "This person holds the most role bindings allowed.",
-        "cause": "A person can hold at most {{max}} role bindings.",
+        "title": "This person or group holds the most role bindings allowed.",
+        "cause": "A person, an automation account or a directory group can hold at most {{max}} role bindings.",
         "action": "Remove bindings that are no longer needed, or bind an environment instead of its services one by one."
+      }
+    },
+    "directory_group": {
+      "not_found": {
+        "title": "This directory group is not known.",
+        "cause": "The group was removed, or it was never added.",
+        "action": "Reload the Groups tab and choose the group again, or add it first."
+      },
+      "exists": {
+        "title": "This directory group is added already.",
+        "cause": "A group is added once for each identity provider or directory.",
+        "action": "Use the existing group."
+      }
+    },
+    "automation": {
+      "not_a_person": {
+        "title": "This change is not possible for an automation account.",
+        "cause": "An automation account has no password, no authenticator and no personal role on this page; it never signs in.",
+        "action": "Open People & access, Automation accounts, and change it there."
+      },
+      "disabled": {
+        "title": "This automation account is disabled.",
+        "cause": "A disabled automation account holds no tokens.",
+        "action": "Enable the account first, then create the token."
       }
     },
     "environment": {
@@ -269,6 +298,11 @@
         "title": "Your role does not allow this token access.",
         "cause": "A token can never do more than its owner's role allows.",
         "action": "Choose read-only access."
+      },
+      "service_not_allowed": {
+        "title": "This token cannot be limited to these services.",
+        "cause": "A token can be limited only to services its owner holds a role on, and each service must exist.",
+        "action": "Choose only services the owner has a role on, or leave the token unlimited."
       }
     },
     "audit": {

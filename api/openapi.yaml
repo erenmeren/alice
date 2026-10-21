@@ -621,9 +621,10 @@ paths:
       operationId: createRoleBinding
       summary: Give a person a role on one service or on every service of an environment
       description: >-
-        Exactly one of service_id and environment_id. Takes effect at the person's next request. 409 ALC-ACC-0001 when
-        the person holds the role there already; 422 ALC-ACC-0005 beyond 200 bindings per person; 422 validation for an
-        unknown person, service or environment. Audited as access.binding_added. Administrator with a fresh step-up,
+        Exactly one of user_id (a person or an automation account) and directory_group_id (R54), and exactly one of
+        service_id and environment_id. Takes effect at the subject's next request (a group's at its members' next
+        request). 409 ALC-ACC-0001 when the subject holds the role there already; 422 ALC-ACC-0005 beyond 200 bindings per
+        subject; 422 validation for an unknown person, group, service or environment. Audited as access.binding_added. Administrator with a fresh step-up,
         never an API token.
       x-permission: access.manage
       x-scope: platform
@@ -656,6 +657,231 @@ paths:
         "204": { description: Removed }
         "404": { $ref: "#/components/responses/Error" }
         default: { $ref: "#/components/responses/Error" }
+  /api/v1/directory-groups:
+    get:
+      operationId: listDirectoryGroups
+      summary: Directory groups role bindings name, and the group values seen at sign-in
+      description: >-
+        items are the declared groups (per SSO provider or directory, with the people seen in them at their last sign-in
+        and their bindings); seen are the values seen at the sign-ins of every provider and directory (at most 500, most
+        people first), with the declared group of that value if there is one (R54).
+      x-permission: users.read
+      x-scope: platform
+      responses:
+        "200":
+          description: The groups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, seen]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/DirectoryGroup" } }
+                  seen: { type: array, items: { $ref: "#/components/schemas/SeenGroup" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createDirectoryGroup
+      summary: Declare a group of an SSO provider or a directory
+      description: >-
+        The value exactly as the provider's groups claim or the directory's group search returns it (case-sensitive; no
+        white space at its ends, no invisible characters, at most 1024 characters). 409 ALC-ACC-0008 when the provider or
+        directory has the group already; 422 validation for an unknown provider or directory. Audited as
+        access.directory_group_added. Administrator with a fresh step-up, never an API token.
+      x-permission: access.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [source, value]
+              properties:
+                source: { type: string, enum: [oidc, ldap] }
+                provider_id: { type: string, format: uuid, description: The SSO provider (source oidc) }
+                directory_id: { type: string, format: uuid, description: The directory (source ldap) }
+                value: { type: string, minLength: 1, maxLength: 1024 }
+                label: { type: string, maxLength: 100 }
+      responses:
+        "201":
+          description: The group
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DirectoryGroup" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/directory-groups/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    delete:
+      operationId: deleteDirectoryGroup
+      summary: Remove a directory group with its role bindings and owner entries
+      description: >-
+        Its members lose what its bindings gave them at their next request. The answer counts what went with it. 404
+        ALC-ACC-0003 for an unknown group. Audited as access.directory_group_removed. Administrator with a fresh step-up,
+        never an API token.
+      x-permission: access.manage
+      x-scope: platform
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [bindings_removed, owners_removed]
+                properties:
+                  bindings_removed: { type: integer, minimum: 0 }
+                  owners_removed: { type: integer, minimum: 0 }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/automation-accounts:
+    get:
+      operationId: listAutomationAccounts
+      summary: Automation accounts (non-persons that only hold API tokens)
+      x-permission: users.read
+      x-scope: platform
+      responses:
+        "200":
+          description: The accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AutomationAccount" } }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createAutomationAccount
+      summary: Create an automation account
+      description: >-
+        A user name under the user name rule (one name space with people), a display name, a description and a global
+        role of null (none), operator or auditor; admin is 422 ALC-ACC-0002 (a role binding as Administrator on a service
+        is possible). It never signs in. 409 ALC-USR-0001 for a taken name. Audited as automation.created. Administrator
+        with a fresh step-up, never an API token (R54).
+      x-permission: access.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [username, display_name]
+              properties:
+                username: { type: string, pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$" }
+                display_name: { type: string, minLength: 1, maxLength: 100 }
+                description: { type: string, maxLength: 500 }
+                role: { type: [string, "null"], enum: [operator, auditor, null] }
+      responses:
+        "201":
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutomationAccount" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/automation-accounts/{id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    patch:
+      operationId: updateAutomationAccount
+      summary: Change an automation account's display name, description, global role or enabled state
+      description: >-
+        Disabling revokes every token of the account for good (enabling it again brings none back). Audited as
+        automation.updated. Administrator with a fresh step-up, never an API token.
+      x-permission: access.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                display_name: { type: string, minLength: 1, maxLength: 100 }
+                description: { type: string, maxLength: 500 }
+                role: { type: [string, "null"], enum: [operator, auditor, null] }
+                disabled: { type: boolean }
+      responses:
+        "200":
+          description: The account
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AutomationAccount" }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/automation-accounts/{id}/tokens:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+    get:
+      operationId: listAutomationTokens
+      summary: The live tokens of an automation account
+      x-permission: users.read
+      x-scope: platform
+      responses:
+        "200":
+          description: The tokens
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/APIToken" } }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+    post:
+      operationId: createAutomationToken
+      summary: Create a token of an automation account; the secret is returned once
+      description: >-
+        The rules of personal tokens (name, scope, at most 365 days, optional service_ids); the account's grants decide the
+        scope (422 ALC-TOK-0001) and must hold every service of service_ids (422 ALC-TOK-0002). 409 ALC-ACC-0007 for a
+        disabled account. The audit row token.created names the Administrator and the account. Administrator with a fresh
+        step-up, never an API token.
+      x-permission: access.manage
+      x-scope: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TokenCreate" }
+      responses:
+        "201":
+          description: Token created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, item]
+                properties:
+                  token: { type: string, description: "alice_ followed by 43 characters; store it now, it is never shown again" }
+                  item: { $ref: "#/components/schemas/APIToken" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
+  /api/v1/automation-accounts/{id}/tokens/{token_id}:
+    parameters:
+      - { $ref: "#/components/parameters/ID" }
+      - { name: token_id, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      operationId: revokeAutomationToken
+      summary: Revoke a token of an automation account
+      description: Audited as token.revoked. Administrator with a fresh step-up, never an API token.
+      x-permission: access.manage
+      x-scope: platform
+      responses:
+        "204": { description: Token revoked }
+        "404": { $ref: "#/components/responses/Error" }
+        default: { $ref: "#/components/responses/Error" }
   /api/v1/tokens:
     get:
       operationId: listTokens
@@ -679,20 +905,16 @@ paths:
     post:
       operationId: createToken
       summary: Create an API token; the secret is returned once. A single sign-on user gets none (409 ALC-USR-0003)
+      description: >-
+        service_ids limits the token to services its owner holds a role on (422 ALC-TOK-0002 otherwise): it then acts
+        with the owner's grants on those services only and passes no platform route (R54).
       x-permission: session.stepup
       x-scope: self
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              additionalProperties: false
-              required: [name, scope, expires_in_days]
-              properties:
-                name: { type: string, minLength: 1, maxLength: 100 }
-                scope: { type: string, enum: [read, operate] }
-                expires_in_days: { type: integer, minimum: 1, maximum: 365 }
+            schema: { $ref: "#/components/schemas/TokenCreate" }
       responses:
         "201":
           description: Token created
@@ -6001,7 +6223,17 @@ components:
         user_id: { type: [string, "null"], format: uuid }
         username: { type: string }
         display_name: { type: string }
-        directory_group_id: { type: [string, "null"], format: uuid, description: A directory group subject (Phase 3) }
+        automation: { type: boolean, description: The user is an automation account }
+        directory_group_id: { type: [string, "null"], format: uuid, description: A directory group subject (R54) }
+        group:
+          type: object
+          description: The directory group of a group binding
+          required: [source, source_name, value, label]
+          properties:
+            source: { type: string, enum: [oidc, ldap] }
+            source_name: { type: string }
+            value: { type: string }
+            label: { type: string }
         role: { type: string, enum: [admin, operator, auditor] }
         service:
           description: The service of a binding on one service; null for an environment binding
@@ -6020,19 +6252,80 @@ components:
         items: { type: array, items: { $ref: "#/components/schemas/RoleBinding" } }
     RoleBindingCreate:
       type: object
-      required: [user_id, role]
+      required: [role]
       additionalProperties: false
+      description: Exactly one of user_id (a person or an automation account) and directory_group_id.
       properties:
         user_id: { type: string, format: uuid }
+        directory_group_id: { type: string, format: uuid }
         role: { type: string, enum: [admin, operator, auditor] }
         service_id: { type: string, format: uuid, description: One of service_id and environment_id }
         environment_id: { type: string, format: uuid }
     UserAccess:
       type: object
-      required: [global_role, bindings, grants, admin_capped]
+      required: [global_role, bindings, group_bindings, grants, admin_capped]
       properties:
         global_role: { type: [string, "null"], enum: [admin, operator, auditor, null] }
         bindings: { type: array, items: { $ref: "#/components/schemas/RoleBinding" } }
+        group_bindings:
+          type: array
+          items: { $ref: "#/components/schemas/RoleBinding" }
+          description: The bindings of the directory groups the person was in at their last sign-in or step-up
+    DirectoryGroup:
+      type: object
+      required: [id, source, provider_id, directory_id, source_name, value, label, members, bindings, created_by, created_by_name, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        source: { type: string, enum: [oidc, ldap] }
+        provider_id: { type: [string, "null"], format: uuid }
+        directory_id: { type: [string, "null"], format: uuid }
+        source_name: { type: string, description: The SSO provider's or the directory's name }
+        value: { type: string }
+        label: { type: string }
+        members: { type: integer, minimum: 0, description: People of that provider or directory in the group at their last sign-in }
+        bindings: { type: integer, minimum: 0 }
+        created_by: { type: [string, "null"], format: uuid }
+        created_by_name: { type: string }
+        created_at: { type: string, format: date-time }
+    SeenGroup:
+      type: object
+      required: [source, provider_id, directory_id, source_name, value, users, directory_group_id]
+      properties:
+        source: { type: string, enum: [oidc, ldap] }
+        provider_id: { type: [string, "null"], format: uuid }
+        directory_id: { type: [string, "null"], format: uuid }
+        source_name: { type: string }
+        value: { type: string }
+        users: { type: integer, minimum: 1 }
+        directory_group_id: { type: [string, "null"], format: uuid, description: "The declared group of this value, if any" }
+    AutomationAccount:
+      type: object
+      required: [id, username, display_name, description, role, disabled, tokens, last_used_at, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        username: { type: string }
+        display_name: { type: string }
+        description: { type: string }
+        role: { type: [string, "null"], enum: [operator, auditor, null], description: "The global role; null: none" }
+        disabled: { type: boolean }
+        tokens: { type: integer, minimum: 0, description: Live tokens }
+        last_used_at: { type: [string, "null"], format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    TokenCreate:
+      type: object
+      additionalProperties: false
+      required: [name, scope, expires_in_days]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        scope: { type: string, enum: [read, operate] }
+        expires_in_days: { type: integer, minimum: 1, maximum: 365 }
+        service_ids:
+          type: [array, "null"]
+          minItems: 1
+          maxItems: 50
+          items: { type: string, format: uuid }
+          description: "Limit the token to these services (each one its owner holds a role on); null or absent: no limit"
         grants:
           type: array
           items:
@@ -7201,13 +7494,17 @@ components:
               description: Present only right after MFA enrollment or administrator creation
     APIToken:
       type: object
-      required: [id, user_id, name, prefix, scope, expires_at, last_used_at, created_at]
+      required: [id, user_id, name, prefix, scope, service_ids, expires_at, last_used_at, created_at]
       properties:
         id: { type: string, format: uuid }
         user_id: { type: string, format: uuid }
         name: { type: string }
         prefix: { type: string, examples: [alice_Xy12Ab] }
         scope: { type: string, enum: [read, operate] }
+        service_ids:
+          type: [array, "null"]
+          items: { type: string, format: uuid }
+          description: "The services the token is limited to (R54); null: its owner's whole reach"
         expires_at: { type: string, format: date-time }
         last_used_at: { type: [string, "null"], format: date-time }
         created_at: { type: string, format: date-time }

@@ -3636,12 +3636,59 @@ added. (HTTP 409, reason `binding.duplicate`.)
 
 **What to do.** Nothing more is needed.
 
-## ALC-ACC-0005: This person holds the most role bindings allowed
+## ALC-ACC-0005: This person or group holds the most role bindings allowed
 
-**Meaning.** A person can hold at most 200 role bindings (`params.max`). Nothing was added. (HTTP 422, reason
-`binding.limit`.)
+**Meaning.** A person, an automation account or a directory group can hold at most 200 role bindings (`params.max`).
+Nothing was added. (HTTP 422, reason `binding.limit`.)
 
 **What to do.** Remove bindings that are no longer needed, or bind an environment instead of its services one by one.
+
+## ALC-ACC-0002: An automation account cannot be an Administrator on all services
+
+**Meaning.** An automation account's global role is none, Operator or Auditor, never Administrator: a token of a robot
+must never manage people, settings or the license. It may still hold the Administrator role on a service or an
+environment (a role binding). Nothing was changed. (HTTP 422, reason `binding.role_not_allowed`.)
+
+**What to do.** Choose Operator, Auditor or no global role, and add a role binding as Administrator on the services the
+account needs (People & access, **Automation accounts**, the account's **Access**).
+
+## ALC-ACC-0003: This directory group is not known
+
+**Meaning.** The directory group named in a role binding was removed, or was never added. (HTTP 404, reason
+`directory_group.not_found`.)
+
+**What to do.** Reload **People & access**, **Groups**, and choose the group again, or add it first.
+
+## ALC-ACC-0006: This change is not possible for an automation account
+
+**Meaning.** A password, an authenticator, a role or another person-only change was asked for an automation account
+through the people routes. An automation account never signs in; it has no password and no authenticator. (HTTP 409,
+reason `automation.not_a_person`.)
+
+**What to do.** Open **People & access**, **Automation accounts**, and change the account there (display name,
+description, global role, disabled, tokens).
+
+## ALC-ACC-0007: This automation account is disabled
+
+**Meaning.** A token was asked for a disabled automation account. Disabling an account revoked its tokens, and it holds
+none while it stays disabled. (HTTP 409, reason `automation.disabled`.)
+
+**What to do.** Enable the account first (its old tokens do not come back), then create a new token.
+
+## ALC-ACC-0008: This directory group is added already
+
+**Meaning.** The same value of the same identity provider or directory is added once. Nothing was added. (HTTP 409,
+reason `directory_group.exists`.)
+
+**What to do.** Use the existing group on the **Groups** tab.
+
+## ALC-TOK-0002: This token cannot be limited to these services
+
+**Meaning.** A token can be limited only to services its owner holds a role on now (a global role counts for every
+service), and each service must exist. Nothing was created. (HTTP 422, reason `token.service_not_allowed`.)
+
+**What to do.** Choose only services the owner has a role on, or leave the token unlimited: it then acts with the
+owner's whole reach.
 
 ## ALC-SVC-0016: This environment is in use
 

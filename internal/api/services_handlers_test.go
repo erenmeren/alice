@@ -42,6 +42,18 @@ type fakeServices struct {
 
 var _ ServicesService = (*fakeServices)(nil)
 
+func (f *fakeServices) DirectoryGroups(context.Context) ([]services.DirectoryGroup, []services.SeenGroup, error) {
+	return nil, nil, errNotConfigured
+}
+
+func (f *fakeServices) CreateDirectoryGroup(context.Context, services.Actor, services.DirectoryGroupInput) (services.DirectoryGroup, error) {
+	return services.DirectoryGroup{}, errNotConfigured
+}
+
+func (f *fakeServices) DeleteDirectoryGroup(context.Context, services.Actor, uuid.UUID) (services.GroupRemoval, error) {
+	return services.GroupRemoval{}, errNotConfigured
+}
+
 func (f *fakeServices) Environments(context.Context) ([]services.Environment, error) {
 	return nil, errNotConfigured
 }

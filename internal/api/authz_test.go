@@ -904,7 +904,9 @@ var (
 		// service changes no managed system.
 		"/api/v1/services", "/api/v1/environments", "/api/v1/service-trusts",
 		// Role bindings (R49 Phase 2): who may reach what, Alice's own records like people.
-		"/api/v1/role-bindings"}
+		"/api/v1/role-bindings",
+		// Directory groups and automation accounts (R54): Alice's own records like the bindings.
+		"/api/v1/directory-groups", "/api/v1/automation-accounts"}
 	lockRefused = []string{"/api/v1/targets", "/api/v1/certificates", "/api/v1/locations", "/api/v1/deployments",
 		"/api/v1/ssh-keys", "/api/v1/rotation", "/api/v1/keyvault", "/api/v1/jobs", "/api/v1/key-vaults", "/api/v1/bindings",
 		// ACME (A13): user routes that contact a CA or a target are ClassChange and answer 403 license.locked.

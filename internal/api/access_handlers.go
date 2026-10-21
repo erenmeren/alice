@@ -14,17 +14,33 @@ import (
 	"alice/internal/rbac"
 )
 
-// accessRoutes are the role bindings of people (R49 Phase 2, design §8.1): who holds which role on which service or
-// environment, beside the global role of People & access. Reading them is users.read (a global Administrator's, read
+// accessRoutes are the role bindings (R49 Phase 2, design §8.1): who holds which role on which service or environment,
+// beside the global role of People & access; and (Phase 3, R54) the directory groups bindings name and the automation
+// accounts with their tokens. Reading them is users.read (a global Administrator's, read
 // tokens too, as the people list); adding and removing them decides who may reach what: access.manage, a global
 // Administrator's browser session with step-up, never a token, in lock too (Alice's own records, ClassAlways).
 func (s *server) accessRoutes() []route {
+	const automation = "/api/v1/automation-accounts"
 	always := license.ClassAlways
 	return []route{
 		{method: http.MethodGet, pattern: "/api/v1/role-bindings", scope: scopePlatform, perm: rbac.UsersRead, handler: s.listRoleBindings},
 		{method: http.MethodPost, pattern: "/api/v1/role-bindings", scope: scopePlatform, perm: rbac.AccessManage, lic: always, handler: s.createRoleBinding},
 		{method: http.MethodDelete, pattern: "/api/v1/role-bindings/{id}", scope: scopePlatform, perm: rbac.AccessManage, lic: always, handler: s.deleteRoleBinding},
 		{method: http.MethodGet, pattern: "/api/v1/users/{id}/access", scope: scopePlatform, perm: rbac.UsersRead, handler: s.userAccess},
+		// R54 (Phase 3): directory groups and automation accounts, under the same rules.
+		{method: http.MethodGet, pattern: "/api/v1/directory-groups", scope: scopePlatform, perm: rbac.UsersRead, handler: s.listDirectoryGroups},
+		{method: http.MethodPost, pattern: "/api/v1/directory-groups", scope: scopePlatform, perm: rbac.AccessManage, lic: always, handler: s.createDirectoryGroup},
+		{method: http.MethodDelete, pattern: "/api/v1/directory-groups/{id}", scope: scopePlatform, perm: rbac.AccessManage, lic: always,
+			handler: s.deleteDirectoryGroup},
+		{method: http.MethodGet, pattern: automation, scope: scopePlatform, perm: rbac.UsersRead, handler: s.listAutomationAccounts},
+		{method: http.MethodPost, pattern: automation, scope: scopePlatform, perm: rbac.AccessManage, lic: always, handler: s.createAutomationAccount},
+		{method: http.MethodPatch, pattern: automation + "/{id}", scope: scopePlatform, perm: rbac.AccessManage, lic: always,
+			handler: s.updateAutomationAccount},
+		{method: http.MethodGet, pattern: automation + "/{id}/tokens", scope: scopePlatform, perm: rbac.UsersRead, handler: s.listAutomationTokens},
+		{method: http.MethodPost, pattern: automation + "/{id}/tokens", scope: scopePlatform, perm: rbac.AccessManage, lic: always,
+			handler: s.createAutomationToken},
+		{method: http.MethodDelete, pattern: automation + "/{id}/tokens/{token_id}", scope: scopePlatform, perm: rbac.AccessManage, lic: always,
+			handler: s.revokeAutomationToken},
 	}
 }
 
@@ -36,7 +52,9 @@ type roleBindingDTO struct {
 	UserID      *uuid.UUID         `json:"user_id"`
 	Username    string             `json:"username,omitempty"`
 	DisplayName string             `json:"display_name,omitempty"`
+	Automation  bool               `json:"automation,omitempty"` // the user is an automation account
 	GroupID     *uuid.UUID         `json:"directory_group_id"`
+	Group       *bindingGroupDTO   `json:"group,omitempty"`
 	Role        string             `json:"role"`
 	Service     *serviceRefDTO     `json:"service"`
 	Environment *environmentRefDTO `json:"environment"`
@@ -47,10 +65,21 @@ type roleBindingDTO struct {
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
+// bindingGroupDTO is the directory group of a group binding.
+type bindingGroupDTO struct {
+	Source     string `json:"source"`
+	SourceName string `json:"source_name"`
+	Value      string `json:"value"`
+	Label      string `json:"label"`
+}
+
 func roleBindingJSON(b services.Binding) roleBindingDTO {
-	d := roleBindingDTO{ID: b.ID, UserID: b.UserID, Username: b.Username, DisplayName: b.DisplayName, GroupID: b.DirectoryGroupID,
+	d := roleBindingDTO{ID: b.ID, UserID: b.UserID, Username: b.Username, DisplayName: b.DisplayName, Automation: b.Automation, GroupID: b.DirectoryGroupID,
 		Role: string(b.Role), Environment: environmentRefJSON(b.Environment), Services: make([]serviceRefDTO, 0, len(b.Services)),
 		CreatedBy: b.CreatedBy, CreatedByName: b.CreatedByName, CreatedAt: b.CreatedAt.UTC()}
+	if b.Group != nil {
+		d.Group = &bindingGroupDTO{Source: b.Group.Source, SourceName: b.Group.SourceName, Value: b.Group.Value, Label: b.Group.Label}
+	}
 	if b.Service != nil {
 		ref := serviceRefJSON(*b.Service)
 		d.Service = &ref
@@ -103,16 +132,17 @@ func (s *server) createRoleBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		UserID        uuid.UUID  `json:"user_id"`
-		Role          string     `json:"role"`
-		ServiceID     *uuid.UUID `json:"service_id"`
-		EnvironmentID *uuid.UUID `json:"environment_id"`
+		UserID           uuid.UUID  `json:"user_id"`
+		DirectoryGroupID uuid.UUID  `json:"directory_group_id"`
+		Role             string     `json:"role"`
+		ServiceID        *uuid.UUID `json:"service_id"`
+		EnvironmentID    *uuid.UUID `json:"environment_id"`
 	}
-	if !s.decodeExact(w, r, &req, maxRoleBindingBody, "user_id", "role", "service_id", "environment_id") {
+	if !s.decodeExact(w, r, &req, maxRoleBindingBody, "user_id", "directory_group_id", "role", "service_id", "environment_id") {
 		return
 	}
-	b, err := s.deps.Services.CreateBinding(r.Context(), s.serviceActor(r), services.BindingInput{UserID: req.UserID, Role: req.Role,
-		ServiceID: req.ServiceID, EnvironmentID: req.EnvironmentID})
+	b, err := s.deps.Services.CreateBinding(r.Context(), s.serviceActor(r), services.BindingInput{UserID: req.UserID,
+		DirectoryGroupID: req.DirectoryGroupID, Role: req.Role, ServiceID: req.ServiceID, EnvironmentID: req.EnvironmentID})
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -149,8 +179,10 @@ type accessGrantDTO struct {
 type userAccessDTO struct {
 	GlobalRole *string          `json:"global_role"`
 	Bindings   []roleBindingDTO `json:"bindings"`
-	Grants     []accessGrantDTO `json:"grants"`
-	AdminCap   bool             `json:"admin_capped"`
+	// GroupBindings reach the person through the directory groups seen at their last sign-in (R54).
+	GroupBindings []roleBindingDTO `json:"group_bindings"`
+	Grants        []accessGrantDTO `json:"grants"`
+	AdminCap      bool             `json:"admin_capped"`
 }
 
 func (s *server) userAccess(w http.ResponseWriter, r *http.Request) {
@@ -168,14 +200,17 @@ func (s *server) userAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	refs := s.serviceRefs(r)
-	out := userAccessDTO{Bindings: make([]roleBindingDTO, 0, len(acc.Bindings)), Grants: make([]accessGrantDTO, 0, len(acc.Grants)),
-		AdminCap: acc.AdminCap}
+	out := userAccessDTO{Bindings: make([]roleBindingDTO, 0, len(acc.Bindings)), GroupBindings: make([]roleBindingDTO, 0, len(acc.GroupBindings)),
+		Grants: make([]accessGrantDTO, 0, len(acc.Grants)), AdminCap: acc.AdminCap}
 	if acc.GlobalRole != "" {
 		g := string(acc.GlobalRole)
 		out.GlobalRole = &g
 	}
 	for _, b := range acc.Bindings {
 		out.Bindings = append(out.Bindings, roleBindingJSON(b))
+	}
+	for _, b := range acc.GroupBindings {
+		out.GroupBindings = append(out.GroupBindings, roleBindingJSON(b))
 	}
 	for _, g := range acc.Grants {
 		out.Grants = append(out.Grants, accessGrantDTO{Role: string(g.Role), Services: refList(refs, g.Services)})

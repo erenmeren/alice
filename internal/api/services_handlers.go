@@ -50,6 +50,10 @@ type ServicesService interface {
 	CreateBinding(ctx context.Context, a services.Actor, in services.BindingInput) (services.Binding, error)
 	DeleteBinding(ctx context.Context, a services.Actor, id uuid.UUID) error
 	Access(ctx context.Context, userID uuid.UUID) (services.UserAccess, error)
+	// R54 (Phase 3): the directory groups role bindings name.
+	DirectoryGroups(ctx context.Context) ([]services.DirectoryGroup, []services.SeenGroup, error)
+	CreateDirectoryGroup(ctx context.Context, a services.Actor, in services.DirectoryGroupInput) (services.DirectoryGroup, error)
+	DeleteDirectoryGroup(ctx context.Context, a services.Actor, id uuid.UUID) (services.GroupRemoval, error)
 }
 
 var _ ServicesService = (*services.Store)(nil)

@@ -409,14 +409,15 @@ type Deps struct {
 	Alerts         AlertsService
 	Reports        ReportsService
 	SSO            SSOService
-	LDAP           LDAPService      // directory (LDAP and Active Directory) sign-in
-	Backup         BackupService    // Phase 8: nil leaves the backup routes and the dashboard's backup section unavailable
-	Forward        ForwardService   // Phase 8: audit forwarding
-	ACME           ACMEService      // ACME issuance (inventory.Service)
-	Discovery      DiscoveryService // network certificate discovery (discoverysvc.Service)
-	Incidents      IncidentService  // the impact of a certificate and key-compromise incidents (inventory.Service)
-	Services       ServicesService  // R49: services, environments, trusts and assignment (authz/services.Store)
-	TLSStore       HTTPSService     // Phase 8: the HTTPS certificate
+	LDAP           LDAPService       // directory (LDAP and Active Directory) sign-in
+	Backup         BackupService     // Phase 8: nil leaves the backup routes and the dashboard's backup section unavailable
+	Forward        ForwardService    // Phase 8: audit forwarding
+	ACME           ACMEService       // ACME issuance (inventory.Service)
+	Discovery      DiscoveryService  // network certificate discovery (discoverysvc.Service)
+	Incidents      IncidentService   // the impact of a certificate and key-compromise incidents (inventory.Service)
+	Services       ServicesService   // R49: services, environments, trusts and assignment (authz/services.Store)
+	Automation     AutomationService // R54: automation accounts and their tokens (auth.Service)
+	TLSStore       HTTPSService      // Phase 8: the HTTPS certificate
 	TrustedProxies []netip.Prefix
 	TestHandler    http.Handler // nil in release builds; mounted at "/test/" by the e2e build
 }

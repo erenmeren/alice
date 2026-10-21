@@ -468,7 +468,7 @@ func TestRouteScopesMatchTheDesign(t *testing.T) {
 	for _, rt := range newServer(Deps{}).apiRoutes() {
 		counts[rt.scope]++
 	}
-	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6 + 4, scopeResource: 61 + 3 + 2 + 1, scopeList: 19 + 2, scopeCross: 16 + 3, scopeNone: 16,
+	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6 + 4 + 9, scopeResource: 61 + 3 + 2 + 1, scopeList: 19 + 2, scopeCross: 16 + 3, scopeNone: 16,
 		scopeSelf: 14, scopeAny: 13 + 1, scopeCreate: 7}, counts)
 	for key, want := range map[string]routeScope{
 		"GET /api/v1/discovery/settings": scopePlatform, "GET /api/v1/ssh-keys/platform-key": scopeAny,

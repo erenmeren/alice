@@ -37,7 +37,7 @@ func TestListTokensDefaultsToCaller(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, operatorID, asked)
 	assert.JSONEq(t, `{"items":[{"id":"0190f5a0-0000-7000-8000-0000000000aa","user_id":"0190f5a0-0000-7000-8000-000000000002",
-	  "name":"CI pipeline","prefix":"alice_Xy12Ab","scope":"read","expires_at":"2026-12-29T12:00:00Z","last_used_at":null,
+	  "name":"CI pipeline","prefix":"alice_Xy12Ab","scope":"read","service_ids":null,"expires_at":"2026-12-29T12:00:00Z","last_used_at":null,
 	  "created_at":"2026-09-30T12:00:00Z"}]}`, rec.Body.String())
 
 	assert.NotEmpty(t, askedMeta.RequestID, "the service gets the request meta")

@@ -69,6 +69,8 @@ func testDeps(t *testing.T, health error) Deps {
 		SSO:       newFakeSSO(),    // the public OIDC routes answer as with no provider configured (C-s4-04)
 		LDAP:      newFakeLDAP(),   // the public directory list answers empty
 		Services:  &fakeServices{}, // R49: rows show their service by id alone
+		// R54: the automation account routes answer through the fake (errNotConfigured unless a test sets a Fn).
+		Automation: &fakeAutomation{},
 	}
 }
 
