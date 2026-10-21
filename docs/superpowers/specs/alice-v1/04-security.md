@@ -302,6 +302,19 @@ discovery settings and scopes, services and environments) need a global role. Ro
   (`ALC-SVC-0012`, counted, never named); a create into a service outside the reach is `ALC-SVC-0006`. Detail answers
   leave related rows of other services out and count them (`hidden_count`); a service outside the reach shows as
   `{"outside": true}`. Generated test: `TestScopedIDOR`. [T]
+- **SEC-108** (R54, R49 Phase 3) Directory groups, automation accounts and limited tokens. (a) Every SSO and directory
+  sign-in and step-up stores the user's groups (the first 1000 storable values; more are dropped and audited
+  `user.groups_truncated`) in its transaction; the role bindings of a directory group of the user's own provider or
+  directory whose value is among them count as the user's (SEC-027), capped at Operator for Administrator while "SSO
+  users may be Admin" is off. A user without a mapped group signs in only when a binding reaches them; otherwise the
+  refusal is `no_access` as before, which ends the user's sessions, revokes their tokens and forgets their groups. (b)
+  An automation account (`auth_source = 'automation'`) has no password and never a global Administrator role (CHECK);
+  no session, TOTP or recovery code can be stored for it (migration `00029`, SQLSTATE Z1029); the password form answers
+  its name as an unknown one; only a global Administrator with step-up makes, changes and disables it and makes and
+  revokes its tokens (`access.manage`, never a token); disabling revokes its tokens for good. (c) A token may be
+  limited to 1 to 50 services its owner holds a role on: its rights are the owner's grants now ∩ its scope ∩ those
+  services; the global role becomes a grant on them, so no platform route passes (`ALC-AUTH-0002`), whoever the
+  owner. [T]
 
 ### 15.5 Sessions, CSRF, rate limiting
 

@@ -2,8 +2,8 @@
 
 Owner approval 2026-10-20: work proceeds on the recommended defaults of the design
 (`docs/superpowers/specs/2026-10-21-scoped-rbac-and-service-ownership-design.md`, §14) while its questions stay open.
-Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md`; SEC-029 in `alice-v1/04-security.md`; the data model in
-`alice-v1/02-architecture.md`; SR-01 to SR-10 in `alice-v1/06-quality.md`; user text in `docs/admin-guide.md`
+Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md` (R53 Phase 2, R54 Phase 3); SEC-027 to SEC-029 and SEC-108 in
+`alice-v1/04-security.md`; the data model in `alice-v1/02-architecture.md`; SR-01 to SR-21 in `alice-v1/06-quality.md`; user text in `docs/admin-guide.md`
 ("Services") and `docs/troubleshooting.md`.
 
 ## Phase 1: services, environments, assignment, trusts (2026-10-21)
@@ -172,6 +172,82 @@ Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md`; SEC-029 in `alic
   were reviewed (they name what the caller sent, a refused location's id, or what it holds rights on, a destination
   vault's certificate name, and an untrusted refusal names only the services the caller sees), and the leak check covers
   every route-level answer; no body-dependent conflict is exercised against a resource of another service yet.
+
+## Phase 3: directory groups, automation accounts, limited tokens (2026-10-21, R54)
+
+### The design as built
+
+- **Groups at sign-in.** `auth.SignInOIDC`, `StepUpOIDC`, `SignInLDAP` and `StepUpLDAP` receive the groups with the
+  identity (`OIDCIdentity.Groups`, `LDAPIdentity.Groups`) and rewrite `user_directory_groups` in their transaction,
+  under the user's row lock. `authz.LoadGrants` adds the bindings of every `directory_groups` row of the user's own
+  provider or directory whose value is among them; the SSO Admin cap applies to them as to the user's own bindings.
+- **The refusal of design §6.1.** No mapped group is now `auth.NoGlobalRole` (the OIDC service and the LDAP handlers no
+  longer refuse it themselves); auth refuses with `auth.ErrNoAccess` inside the transaction when no binding reaches the
+  user, their own or a group's, and the callers record it as before (`no_access`: sessions ended, tokens revoked).
+- **Directory groups** (`internal/authz/services/groups.go`): declared, listed with members and the values seen at
+  sign-in, removed with their bindings and owner entries; a binding's subject is a person, an automation account or a
+  group (`BindingInput.DirectoryGroupID`).
+- **Automation accounts** (`internal/auth/automation.go`): `auth_source = 'automation'`, made, changed and disabled by a
+  global Administrator; their tokens through `CreateAutomationToken`, `ListAutomationTokens`, `RevokeAutomationToken`.
+- **Limited tokens**: `api_tokens.service_ids`; `AuthenticateToken` narrows the principal with `rbac.Subject.Within`
+  (the global role becomes a grant on the services, scoped grants keep only them).
+- New routes (platform, `users.read` / `access.manage`, ClassAlways): `GET/POST /api/v1/directory-groups`,
+  `DELETE /api/v1/directory-groups/{id}`, `GET/POST /api/v1/automation-accounts`, `PATCH /api/v1/automation-accounts/{id}`,
+  `GET/POST /api/v1/automation-accounts/{id}/tokens`, `DELETE /api/v1/automation-accounts/{id}/tokens/{token_id}`.
+  `TestScopedIDOR` covers them (platform: 403 for every identity of B) and gains a fifth identity, a global
+  Administrator's operate token limited to B.
+- Migration `00029` (the tables and columns came with `00026`): a trigger refuses a session, a TOTP or a recovery code
+  of an automation account (SQLSTATE **Z1029**); `user_directory_groups (value)` is indexed.
+
+### Rulings made during execution
+
+1. **Truncation is its own audit row.** The groups kept are the first 1000 distinct values the column can hold (not
+   empty, at most 1024 characters) in the order received; a dropped value is counted and the sign-in or step-up writes
+   `user.groups_truncated` (`method`, `groups_kept`, `groups_dropped`). The design says "an audit detail"; a row of its
+   own is used because a directory sign-in waiting for MFA writes no `auth.login` in that transaction. The existing
+   upper bounds stay: an OIDC groups claim with more than 1000 values is still refused (`login_invalid`, detail
+   `groups`) and a directory group search with more than 1000 entries still `directory_misconfigured` (`size_limit`),
+   both stricter than cutting (fewer rights). Truncation is therefore reached by a directory whose group name
+   attribute has several values per group, or by values longer than 1024 characters. **Owner to confirm** whether the
+   OIDC refusal should become a cut.
+2. **Any binding of the user's own counts** for the refusal, also an environment binding that covers no service yet:
+   such a person signs in and sees "You do not have access to anything yet", like a local person without a grant.
+3. **A refusal forgets the groups.** `endAccess` (no_access, groups_overage, provider_disabled, a directory switched off)
+   deletes the user's `user_directory_groups` with the sessions and tokens, so no group binding reaches a user whose
+   access ended until a sign-in lets them in again. A refused sign-in itself changes nothing (its transaction rolls back).
+4. **A directory step-up checks the access before the code**: a person without mapped groups and bindings is refused
+   before the TOTP is checked or counted, as before when only mapped groups counted.
+5. **Group values** follow the mappings' rules (exact and case-sensitive, no white space at the ends, no invisible
+   characters), at most 1024 characters for both sources (the column's limit; OIDC mappings keep their 256), a label of
+   at most 100. One value once per provider or directory (`ALC-ACC-0008` `directory_group.exists`, the next free number).
+   At most 1000 groups per installation (the design sets no bound; `validation.out_of_range`). Members are the users of
+   that provider or directory whose kept groups hold the value.
+6. **Automation accounts are not people.** `GET /api/v1/users` lists people only; `GET /api/v1/users/{id}` still shows an
+   account (`auth_source: automation`) and `PATCH .../users/{id}` may disable it (its tokens are revoked, as on its own
+   page); a role change, a password reset and an MFA reset are refused with `ALC-ACC-0006` `automation.not_a_person`
+   (the next free number). Their bindings use `POST /api/v1/role-bindings` with `user_id`. No `GET` of one account: the
+   list carries everything its page shows.
+7. **The password form answers an automation account's name as an unknown name** (`unknown_user`, the same work and
+   timing). `ALC-ACC-0004` (`automation.cannot_sign_in`) is therefore not registered: no answer or audit reason needs it.
+   SSO and directory sign-ins never match an automation account (they match by provider and subject, directory and
+   unique id); a provisioned name that collides gets the next free suffix.
+8. **Automation account tokens**: the account's row is locked `FOR SHARE` (a disabling waits or refuses the token); a
+   disabled account is `ALC-ACC-0007` `automation.disabled`; `token.created` is written with the Administrator as the
+   actor and `account_id`, `account` in the details. A token of another account (or of a person) is the route's 404.
+9. **Limited tokens.** `service_ids` is deduplicated and sorted; an empty list is `validation.required` on the field,
+   more than 50 `validation.out_of_range`; a service that does not exist or that the owner holds no role on is
+   `ALC-TOK-0002` (the same answer for both). The audit row records `service_ids`. A limited token's principal has no
+   global role, so every check of `Role == admin` (another person's token list, revoking another's token) is false for
+   it. When none of its services is still reached by the owner's grants it is refused at use (401), like an unlimited
+   token whose scope no grant allows any more. SSO and directory users still hold no personal token (R42).
+10. **The LDAP "Test sign-in"** still reports by the mappings only (`no_access` when no group is mapped) and does not
+    evaluate role bindings: see "What remains".
+
+### What remains (Phase 3 as built)
+
+- The LDAP "Test sign-in" of a directory does not say that a person without mapped groups would be let in by a binding.
+- Owner teams naming directory groups and the notification routing by group membership (Phase 4).
+- The Phase 2 list ("What remains (Phase 2 as built)") is unchanged.
 
 ## Phase 5: service policy v1 (2026-10-21, R55)
 

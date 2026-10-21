@@ -258,6 +258,10 @@ A person who held roles on single services (role bindings, R53) keeps them while
 **Access** section (or `DELETE /api/v1/role-bindings/<id>`, listed by `GET /api/v1/role-bindings?user_id=<id>`) when the
 account is to be used again by someone else. A removed binding takes effect at the person's next request.
 
+A single sign-on or directory user whose only access is a group's role on a service (R54) loses it at their next sign-in
+after leaving the group; **Disable** stops them at once. A pipeline's automation account is disabled the same way on
+**People & access**, **Automation accounts**: its tokens are revoked for good.
+
 ## Moving to a new server
 
 1. Make a manual backup on the old server (`sudo /opt/alice/alicectl backup`) and copy it with its `.sha256` file to

@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — Groups, automation accounts and tokens limited to services (scoped access, phase 3)
+
+**Added**
+- A role on a service or an environment can be given to a group of a single sign-on provider or a directory (R54).
+  **People & access**, **Groups** lists the groups added, with the people Alice saw in them at their last sign-in and
+  the group values seen at sign-ins, adds and removes groups and their roles (a fresh confirmation code; audited). A
+  person's **Access** shows the rights they have through groups.
+- A single sign-on or directory user without a group mapped to a role on all services signs in when a role on a service
+  reaches them, their own or a group's, and then reaches only those services. Without either the sign-in is refused as
+  before. Leaving the group takes effect at the next sign-in or confirmation.
+- **Automation accounts** on **People & access**: accounts for pipelines and scripts that never sign in and only hold API
+  tokens, made by an Administrator. Their role on all services is none, Operator or Auditor; they may hold any role on
+  services or environments. An Administrator creates and revokes their tokens; disabling an account revokes its tokens.
+- **Limit to services** on **API tokens** (and on an automation account's tokens): the token then acts only on those
+  services, never on People & access, settings, the license, backups or the audit log, even an Administrator's.
+- API: `GET/POST /api/v1/directory-groups`, `DELETE /api/v1/directory-groups/{id}`, `GET/POST /api/v1/automation-accounts`,
+  `PATCH /api/v1/automation-accounts/{id}`, `GET/POST /api/v1/automation-accounts/{id}/tokens`,
+  `DELETE /api/v1/automation-accounts/{id}/tokens/{token_id}` (`access.manage`); `directory_group_id` on
+  `POST /api/v1/role-bindings`; `group_bindings` in `GET /api/v1/users/{id}/access`; `service_ids` on tokens; codes
+  `ALC-ACC-0002`, `ALC-ACC-0003`, `ALC-ACC-0006`, `ALC-ACC-0007`, `ALC-ACC-0008`, `ALC-TOK-0002`.
+
+**Changed**
+- Alice keeps the groups of single sign-on and directory users from their last sign-in (at most 1000; more are dropped
+  and recorded). A refused sign-in for no access also forgets them. `GET /api/v1/users` lists people only.
+- Migration `00029`: no session, authenticator or recovery code can ever be stored for an automation account; the groups
+  seen at sign-in are indexed by value. Rulings: `docs/superpowers/rulings/scoped-access.md` ("Phase 3").
+
 ## Unreleased — Service policy (scoped access, phase 5)
 
 **Added**

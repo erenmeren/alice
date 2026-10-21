@@ -134,7 +134,15 @@ is different: it belongs to the account and follows the person to every browser.
 minutes. The token is shown once; copy it immediately. Scripts send it as `Authorization: Bearer alice_…`.
 A token never has more rights than its owner's current role, and tokens cannot manage users, settings or tokens.
 Revoking a token stops it at once. People who sign in through single sign-on or a directory cannot create tokens
-([Single sign-on](#roles-sso-users-may-be-admin-and-sso-users), [directory users](#directory-users-on-people--access)).
+([Single sign-on](#roles-sso-users-may-be-admin-and-sso-users), [directory users](#directory-users-on-people--access));
+an Administrator makes an [automation account](#automation-accounts) for their scripts instead.
+
+**Limit to services** (optional) narrows a token to some of the services its owner holds a role on (R54): it then acts
+with the owner's role on those services only, never on anything else, and never on People & access, settings, the
+license, backups or the audit log, even when its owner is an Administrator on all services (`service_ids` in the API;
+a service the owner holds no role on is refused, `ALC-TOK-0002`). The list shows a token's services, or **All my
+services**. A limited token, like every token, follows its owner's roles as they are now: a removed role binding
+narrows it at the next request.
 
 Administrators can list and revoke anyone's tokens through the API: `GET /api/v1/tokens?user_id=<id>` and
 `DELETE /api/v1/tokens/<token id>`, from a signed-in browser session. The **API tokens** page shows your own
@@ -1257,6 +1265,47 @@ as if it did not exist. Creating something in a service, deploying to a website 
 trusting need the role on every service involved (`ALC-SVC-0006`, `ALC-SVC-0012`). People, settings, the license,
 single sign-on and directories, backups, the audit log, ACME providers, accounts and hooks and network discovery's
 scopes and settings stay with roles on all services. Changes made to a resource are audited with its service.
+
+### Directory groups
+
+A role on a service or an environment can also be given to a group of a single sign-on provider or a directory (R54):
+everyone in the group then holds it. On **People & access**, **Groups**, **Add group** names the provider or directory
+and the group exactly as it sends it (the groups claim of the provider, or what the directory's group search returns:
+the group's DN or its name attribute, case-sensitive, as for the [group mappings](#ldap-and-active-directory)); the
+list of values Alice has seen at sign-ins, with how many people had each, helps to pick one. Then add the group's roles
+on services or environments. Adding and removing groups and their roles need a fresh confirmation code and are audited
+(**Directory group added**, **Directory group removed**, **Role binding added**).
+
+Alice keeps the groups each SSO and directory user had at their last sign-in or confirmation (the first 1000; more are
+dropped, which can only give fewer rights, and recorded as **Groups cut at sign-in**). A change of membership at the
+provider or in the directory takes effect at the person's next sign-in or **Confirm it's you**; **Disable** on People &
+access stops them at once.
+
+**Who may sign in.** A single sign-on or directory user is let in when a group mapping gives them a role on all
+services (as before), **or** when a role on a service reaches them, their own or one of their groups'. Otherwise the
+sign-in is refused as before ("no access"), their sessions end and Alice forgets their groups. A user let in only by
+roles on services has **No role on all services**. While **SSO users may be Admin** is off, an Administrator role on a
+service given to an SSO or directory user, or to their group, counts as Operator, as the role on all services does.
+
+Removing a group removes its roles and its owner entries; its members lose them at their next request. Removing a
+provider or a directory removes its groups.
+
+### Automation accounts
+
+An automation account is not a person: it never signs in (no password, no confirmation code, no session) and only
+holds API tokens, which an Administrator makes for it. Use one for a pipeline or a script instead of a person's token,
+in particular when the people sign in through single sign-on or a directory (they cannot hold tokens).
+
+On **People & access**, **Automation accounts**, **Create** takes a user name (it shares the user names of people and
+stays taken for good: an automation account is never deleted), a display name, a description and a role on all
+services: none, Operator or Auditor, never Administrator (`ALC-ACC-0002`). Give it roles on services or environments
+like a person, Administrator included: an operate token of an account that is an Administrator of a service may add
+and change that service's servers and rotation policies. **Tokens** on the account's page creates a token (the rules of
+[API tokens](#api-tokens), **Limit to services** included; shown once) and revokes one. Every change needs a fresh
+confirmation code and is audited (**Automation account created**, **Automation account changed**; a token's creation
+names the Administrator who made it and the account). **Disable** revokes every token of the account for good:
+enabling it again brings none back. Automation accounts are not listed among the people, and the password form answers
+their name as it answers any unknown name.
 
 **Service policy** (R55). A service's page, **Policy**, holds the rules for what may enter the service and how its
 certificates behave. Every rule is optional; one left empty sets no limit, and a new service has none. The rules apply

@@ -1903,6 +1903,45 @@
   ]
  },
  {
+  "id": "SR-17",
+  "status": "test",
+  "tests": [
+   "internal/authz/services:TestDirectoryGroups",
+   "internal/api:TestDirectoryGroupBindingsOverTheWire"
+  ]
+ },
+ {
+  "id": "SR-18",
+  "status": "test",
+  "tests": [
+   "internal/auth:TestSSOSignInWithGroupBindings",
+   "internal/auth:TestDirectorySignInWithGroupBindings",
+   "internal/auth/ldap:TestDirectoryGroupBindingOverOpenLDAP",
+   "internal/api:TestDirectoryGroupBindingsOverTheWire",
+   "internal/authz/services:TestDirectoryGroups"
+  ]
+ },
+ {
+  "id": "SR-19",
+  "status": "test",
+  "tests": [
+   "internal/auth:TestAutomationAccounts",
+   "internal/api:TestAutomationAccountsOverTheWire",
+   "internal/api:TestAutomationAccountRoutes",
+   "migrations:TestMigration00029DirectoryGroupsAutomation"
+  ]
+ },
+ {
+  "id": "SR-20",
+  "status": "test",
+  "tests": [
+   "internal/rbac:TestSubjectWithin",
+   "internal/auth:TestTokensLimitedToServices",
+   "internal/api:TestTokenLimitedToAServiceOverTheWire",
+   "internal/api:TestScopedIDOR"
+  ]
+ },
+ {
   "id": "SR-30",
   "status": "test",
   "tests": [

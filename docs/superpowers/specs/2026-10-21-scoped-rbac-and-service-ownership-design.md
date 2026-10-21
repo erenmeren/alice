@@ -1,7 +1,7 @@
 # Scoped access and service ownership: design
 
-Status: Phases 1, 2 and 5 implemented (2026-10-21, see "Phase 1 as built", "Phase 2 as built" and "Phase 5 as built" in
-§12); Phases 3 and 4 open; the questions of §14 stay open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
+Status: Phases 1, 2, 3 and 5 implemented (2026-10-21, see "Phase 1 as built", "Phase 2 as built", "Phase 3 as built" and
+"Phase 5 as built" in §12); Phase 4 open; the questions of §14 stay open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
 to R46). Numbers: migration `00026` (Phase 1 creates the whole schema of §4, so the later phases need no migration; one
 that does after review takes the next free number at merge time; `00024` and `00026` went to parallel branches) and decision
 **R49** (recorded in `alice-v1/00-decisions.md` with Phase 1). When accepted, R49 amends `alice-v1/04-security.md` §15.4 (SEC-014, SEC-016,
@@ -1003,6 +1003,33 @@ Acceptance:
   (`ALC-ACC-0002`).
 - A global Administrator's token limited to B: platform routes 403, A resources 404, B resources work.
 - A token's rights shrink when its owner's binding is removed (next request).
+
+#### Phase 3 as built (2026-10-21, R54)
+
+What Phase 3 delivers, and where it differs from the text above (rulings in `docs/superpowers/rulings/scoped-access.md`,
+"Phase 3"):
+
+- Migration `00029` (the tables and columns came with `00026`): a trigger refuses a session, a TOTP or a recovery code
+  of an automation account (SQLSTATE Z1029); `user_directory_groups (value)` indexed.
+- §6.1 as written, with the groups kept at every SSO and directory sign-in and step-up (the first 1000 distinct
+  storable values; more audited as its own row, `user.groups_truncated`, not as a detail), the refusal decided inside
+  auth's sign-in transaction (`auth.ErrNoAccess`, reason `no_access`), and a refusal for no access forgetting the
+  groups with the sessions and tokens. The existing bounds above 1000 (an OIDC claim refused, a directory search
+  misconfigured) stay: owner to confirm.
+- §6.2 as written; automation accounts are left out of `GET /users` and refused person-only changes with
+  `ALC-ACC-0006`; their name on the password form is answered as an unknown name, so `ALC-ACC-0004` is not registered.
+  A token for a disabled account is `ALC-ACC-0007`.
+- §6.3 as written (`rbac.Subject.Within` at token authentication); an empty `service_ids` is a validation error.
+- Directory groups: one value once per provider or directory (`ALC-ACC-0008`), at most 1000 per installation; the
+  delete answers `{bindings_removed, owners_removed}`.
+- Codes `ALC-ACC-0002`, `0003`, `0006`, `0007`, `0008`, `ALC-TOK-0002`; SEC-108; SR-17 to SR-21.
+- Tests: `internal/auth:TestSSOSignInWithGroupBindings`, `TestDirectorySignInWithGroupBindings`, `TestAutomationAccounts`,
+  `TestTokensLimitedToServices`; `internal/auth/ldap:TestDirectoryGroupBindingOverOpenLDAP` (real OpenLDAP);
+  `internal/authz/services:TestDirectoryGroups`; `internal/rbac:TestSubjectWithin`; `internal/api:TestScopedIDOR` (a fifth
+  identity: a global Administrator's token limited to B), `TestDirectoryGroupBindingsOverTheWire` (fake OIDC IdP and the
+  fake directory), `TestAutomationAccountsOverTheWire`, `TestTokenLimitedToAServiceOverTheWire`;
+  `migrations:TestMigration00029DirectoryGroupsAutomation`.
+- Not built: the LDAP "Test sign-in" still reports by the mappings only.
 
 ### Phase 4 — Owners and notification routing (size M, ~5 tasks)
 

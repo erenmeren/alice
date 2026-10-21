@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-223 IDs: 214 test, 7 partial, 0 owner, 2 deferred, 0 gap.
+227 IDs: 218 test, 7 partial, 0 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -228,6 +228,10 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | SR-14 | Role bindings: adding and removing them is a global Administrator's with step-up, never a token; each is audited with th... | test | `internal/authz/services:TestBindingsAndGrants`<br>`internal/api:TestAuthzMatrix`<br>`internal/api:TestScopedIDOR` |
 | SR-15 | Every audit row about a resource carries the resource's service (details.service_id) | test | `internal/inventory:TestCreatePathsNameAService` |
 | SR-16 | Browser journey: a person with an Operator role on one service signs in, sees only that service's servers and certificat... | test | `web/e2e/rbac.spec.ts:a person with the Operator role on one service sees only that service and is refused another`<br>`web/src/components/access/access.test.tsx:adds a binding on an environment with a fresh step-up`<br>`web/src/pages/NoAccessPage.test.tsx:still signs out` |
+| SR-17 | Phase 3 (R54) directory groups: declared per SSO provider or directory under the mappings' value rules (one value once p... | test | `internal/authz/services:TestDirectoryGroups`<br>`internal/api:TestDirectoryGroupBindingsOverTheWire` |
+| SR-18 | Sign-in with group bindings (fake OIDC IdP, the API's fake directory and a real OpenLDAP): a user in group G bound opera... | test | `internal/auth:TestSSOSignInWithGroupBindings`<br>`internal/auth:TestDirectorySignInWithGroupBindings`<br>`internal/auth/ldap:TestDirectoryGroupBindingOverOpenLDAP`<br>`internal/api:TestDirectoryGroupBindingsOverTheWire`<br>`internal/authz/services:TestDirectoryGroups` |
+| SR-19 | Automation accounts: never a global Administrator (ALC-ACC-0002), never a session, TOTP or recovery code (00029, Z1029),... | test | `internal/auth:TestAutomationAccounts`<br>`internal/api:TestAutomationAccountsOverTheWire`<br>`internal/api:TestAutomationAccountRoutes`<br>`migrations:TestMigration00029DirectoryGroupsAutomation` |
+| SR-20 | Tokens limited to services: rights = the owner's grants now ∩ scope ∩ services; a global Administrator's token limited t... | test | `internal/rbac:TestSubjectWithin`<br>`internal/auth:TestTokensLimitedToServices`<br>`internal/api:TestTokenLimitedToAServiceOverTheWire`<br>`internal/api:TestScopedIDOR` |
 | SR-30 | Phase 5 (R55) policy document: schema 1 with every unknown field refused, the reserved keys refused (ALC-SVC-0015), ever... | test | `internal/authz:TestParsePolicyNormalizes`<br>`internal/authz:TestParsePolicyRefuses`<br>`internal/authz:TestPolicyDomains`<br>`internal/authz:TestPolicyChecks`<br>`internal/inventory:TestPolicyValuesMatchTheInventorys` |
 | SR-31 | Saving a policy: a new version against the version read (a stale one 409 ALC-SVC-0010), the same document stores nothing... | test | `internal/authz/services:TestSetPolicyVersionsAndAudit`<br>`internal/api:TestPutServicePolicy`<br>`internal/api:TestServicePolicyThroughTheAPI`<br>`internal/api:TestAuthzMatrix`<br>`internal/api:TestScopedIDOR`<br>`internal/authz:TestChangedKeys` |
 | SR-32 | Enforcement before anything is stored, ordered or generated: an ACME certificate (create: source, names, provider, chall... | test | `internal/inventory:TestPolicyACMECertificates`<br>`internal/inventory:TestPolicyUploadsAndSigningRequests`<br>`internal/inventory:TestPolicyIncidentRevokeModeDefault`<br>`internal/authz/services:TestAssignChecksTheDestinationsDomains`<br>`internal/api:TestServicePolicyThroughTheAPI` |
