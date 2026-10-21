@@ -241,6 +241,65 @@ func TestDriftApproveIsRepairedByOneAction(t *testing.T) {
 	assert.ErrorIs(t, err, inventory.ErrDriftNotDrifted, "in sync after the deployment")
 }
 
+// A Key Vault binding drifts and is repaired the same way: the desired certificate is the binding's current version,
+// and the repair (automatic, then by one action) is a deployment of that version through the engine, which reads the
+// vault's secret again.
+func TestDriftOfAKeyVaultBindingIsRepairedThroughTheVault(t *testing.T) {
+	w := newKVWorld(t)
+	driftjobs.Register(w.runner, driftjobs.Deps{Inventory: w.inv, Registry: w.reg, Clock: w.clock, Log: w.log()})
+	schedule, repair := driftjobs.ScheduleTask(w.inv, time.Minute, w.log()), driftjobs.RepairTask(w.inv, time.Minute, w.log())
+	s := w.addServer("web-01", wwwSite())
+	loc := s.locs[wwwCert]
+	b := w.bind(loc)
+	for _, id := range w.deploy(b, false) {
+		require.Equal(t, inventory.DeployStatusSucceeded, w.settle(id).Status)
+	}
+	observe := func() inventory.LocationObservation {
+		w.clock.Advance(inventory.DriftObserveInterval + time.Hour)
+		w.evaluate()
+		require.NoError(t, schedule.Run(w.ctx))
+		w.drain()
+		o, err := w.inv.LocationObservation(w.ctx, loc)
+		require.NoError(t, err)
+		return o
+	}
+	o := observe()
+	require.Equal(t, inventory.HealthInSync, o.Health)
+	assert.Equal(t, inventory.DriftSourceKeyVault, o.Source)
+	assert.Equal(t, inventory.DriftModeObserve, o.Mode, "automatic deployment is off for the binding: the default only reports")
+
+	putBack := func() {
+		s.emu.SetNginxFile(wwwCert, w.old.FullchainPEM)
+		s.emu.SetNginxFile(wwwKey, w.old.KeyPEM)
+		require.NoError(t, s.emu.ReloadNginx())
+	}
+	putBack()
+	require.Equal(t, inventory.HealthDrifted, observe().Health)
+	_, err := w.inv.SetDriftMode(w.ctx, w.admin, loc, inventory.DriftModeAuto, true)
+	require.NoError(t, err)
+	reads := w.reads()
+	w.evaluate()
+	require.NoError(t, repair.Run(w.ctx))
+	w.drain()
+	var status, trigger string
+	require.NoError(t, w.db.Owner.QueryRow(w.ctx, "SELECT status, trigger FROM deployments WHERE trigger = 'drift_repair'").Scan(&status, &trigger))
+	assert.Equal(t, inventory.DeployStatusSucceeded, status)
+	assert.Equal(t, reads+1, w.reads(), "the repair read the vault's secret")
+	w.assertPair(s, wwwCert, wwwKey, wwwName, w.nw)
+	assert.Equal(t, inventory.HealthInSync, observe().Health)
+
+	putBack()
+	_, err = w.inv.SetDriftMode(w.ctx, w.admin, loc, inventory.DriftModeApprove, false)
+	require.NoError(t, err)
+	require.Equal(t, inventory.HealthDrifted, observe().Health)
+	got, err := w.inv.RepairDrift(w.ctx, w.admin, loc, false)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Equal(t, inventory.DeployStatusSucceeded, w.settle(got[0].ID).Status)
+	assert.Equal(t, "manual", w.deployment(got[0].ID).Trigger)
+	w.assertPair(s, wwwCert, wwwKey, wwwName, w.nw)
+}
+
 // leafServed is the leaf the emulated website serves for www.
 func leafServed(d *driftWorld) string {
 	state, _ := d.served()
