@@ -1134,7 +1134,7 @@ describe('DNS providers (R57)', () => {
     await userEvent.clear(within(dialog).getByLabelText(/^Access key ID/));
     await userEvent.type(within(dialog).getByLabelText(/^Access key ID/), 'TESTACCESSKEYID0001');
     await userEvent.clear(within(dialog).getByLabelText(/^Secret access key/));
-    await userEvent.type(within(dialog).getByLabelText(/^Secret access key/), 'canary-aws-secret-key-0123');
+    await userEvent.type(within(dialog).getByLabelText(/^Secret access key/), 'aaaa-bbbb-cccc-dddd-eeee');
     await userEvent.clear(within(dialog).getByLabelText(/^Role to assume/));
     await userEvent.type(within(dialog).getByLabelText(/^Role to assume/), 'arn:aws:iam::123456789012:role/dns');
     await userEvent.type(within(dialog).getByLabelText(/^External ID/), 'ext-1');
@@ -1145,7 +1145,7 @@ describe('DNS providers (R57)', () => {
       access_key_id: 'TESTACCESSKEYID0001',
       role_arn: 'arn:aws:iam::123456789012:role/dns',
       external_id: 'ext-1',
-      secret_access_key: 'canary-aws-secret-key-0123',
+      secret_access_key: 'aaaa-bbbb-cccc-dddd-eeee',
     });
   });
 

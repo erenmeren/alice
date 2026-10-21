@@ -59,3 +59,5 @@ f57194fbd2070b393c0e80966782c3405197cfca:internal/testutil/fakeldap/server.go:ge
 20b19407375c2f7d9e084220fc008f2b70917ae0:web/e2e/service-owners.spec.ts:generic-api-key:10
 # A made-up base64 EAB HMAC key the ACME input normaliser test trims (not key material).
 c0ce5361da0e010d14cf261193a2a3bcaa9aa2b4:internal/inventory/coverage_unit_test.go:generic-api-key:148
+# The UI test's typed AWS secret access key canary (a made-up word, replaced by a low-entropy one in the next commits).
+d75db308a67dbaf20e2f3d6e43c526dd379f63c6:web/src/components/acme/AcmeSettings.test.tsx:generic-api-key:1135
