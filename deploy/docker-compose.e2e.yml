@@ -113,13 +113,15 @@ services:
   # hook, POST https://acme.test.alice/hook) and issues from CAs it generates when it starts. Playwright drives
   # it with "docker compose exec fakeacme /alice-fakeacme ctl ...", which talks to its loopback-only admin API.
   # It publishes nothing and runs as a non-root user: port 443 is bindable because the container's
-  # unprivileged port start is 0 (a namespaced sysctl), not because of a capability.
+  # unprivileged port start is 0 (a namespaced sysctl), not because of a capability. With --dns-providers it also
+  # answers as the fake Cloudflare and Route 53 APIs (R57; aliases api.cloudflare.com, route53.amazonaws.com and
+  # sts.amazonaws.com on this network only), which mirror their TXT values into its DNS table.
   fakeacme:
     image: alice-e2e-fakeacme
     build:
       context: ..
       dockerfile: test/images/fakeacme/Dockerfile
-    command: ["serve", "--listen", ":443", "--admin", "127.0.0.1:9091", "--ca-out", "/run/alice-e2e-acme/ca.pem"]
+    command: ["serve", "--listen", ":443", "--admin", "127.0.0.1:9091", "--ca-out", "/run/alice-e2e-acme/ca.pem", "--dns-providers"]
     user: "65532:65532"
     read_only: true
     cap_drop: [ALL]
@@ -133,7 +135,7 @@ services:
       - fakeacme-ca:/run/alice-e2e-acme
     networks:
       backend:
-        aliases: [acme.test.alice]
+        aliases: [acme.test.alice, api.cloudflare.com, route53.amazonaws.com, sts.amazonaws.com]
     healthcheck:
       test: ["CMD", "/alice-fakeacme", "ctl", "ping"]
       interval: 5s

@@ -167,6 +167,10 @@ func (s *Server) Close() {
 // Handler serves the API (any host, any listener).
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serve) }
 
+// TLSConfig is the fake's server TLS configuration (its certificate for api.cloudflare.com), for a harness that serves
+// Handler on a listener of its own (the e2e fake ACME container).
+func (s *Server) TLSConfig() *tls.Config { return s.srv.TLS.Clone() }
+
 // CAPool returns a pool holding only the fake's root.
 func (s *Server) CAPool() *x509.CertPool { return s.pool.Clone() }
 

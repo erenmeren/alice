@@ -1214,6 +1214,19 @@ export function acmeDns(): Record<string, string[]> {
   return acmeCtl<Record<string, string[]>>('dns', 'list');
 }
 
+// AcmeDnsProviders are the fake DNS providers of the fake CA's container (serve --dns-providers, R57): the credentials
+// they accept and the TXT values each holds (name -> values). They answer as api.cloudflare.com, route53.amazonaws.com
+// and sts.amazonaws.com on the e2e network only, and their credentials die with the stack.
+export interface AcmeDnsProviders {
+  zone: string;
+  cloudflare: { token: string; records: Record<string, string[]> };
+  route53: { access_key_id: string; secret_access_key: string; records: Record<string, string[]> };
+}
+
+export function acmeDnsProviders(): AcmeDnsProviders {
+  return acmeCtl<AcmeDnsProviders>('dns-providers');
+}
+
 // acmeLifetime sets the lifetime of the certificates the fake issues from now on (a Go duration: 30m, 720h).
 export function acmeLifetime(duration: string): void {
   acmeCtl('lifetime', duration);

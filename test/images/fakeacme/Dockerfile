@@ -12,6 +12,10 @@ RUN go mod download
 COPY cmd/alice-fakeacme/ cmd/alice-fakeacme/
 COPY internal/platform/clock/ internal/platform/clock/
 COPY internal/testutil/fakeacme/ internal/testutil/fakeacme/
+# The fake DNS providers of serve --dns-providers (R57) and the test PKI they make their TLS certificates with.
+COPY internal/testutil/pki/ internal/testutil/pki/
+COPY internal/testutil/fakecloudflare/ internal/testutil/fakecloudflare/
+COPY internal/testutil/fakeroute53/ internal/testutil/fakeroute53/
 RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags "-s -w" -o /out/alice-fakeacme ./cmd/alice-fakeacme \
  && mkdir -p /out/ca
 

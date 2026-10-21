@@ -6,7 +6,7 @@
 // bearer token and an HMAC signature) Alice's DNS-01 webhook solver calls.
 //
 //	alice-fakeacme serve [--listen :443] [--admin 127.0.0.1:9091] [--ca-out FILE] [--base-url URL]
-//	                     [--require-eab] [--alternates N]
+//	                     [--require-eab] [--alternates N] [--dns-providers]
 //	alice-fakeacme ctl [--admin ADDR] COMMAND [ARGS]
 //
 // serve generates a TLS CA, a TLS certificate for the base URL's host, an issuing CA chain, the
@@ -16,7 +16,8 @@
 // authentication beyond its address: it listens on loopback only (serve refuses any other address),
 // ctl talks to loopback only, and it runs inside the container ("docker compose exec fakeacme
 // /alice-fakeacme ctl ..."). The EAB HMAC key and the hook secret are printed by "ctl credentials"
-// and never written to the log.
+// and never written to the log. --dns-providers also serves the fake Cloudflare and Route 53 APIs (dns.go) on the
+// same listener; "ctl dns-providers" prints their credentials and records.
 package main
 
 import (
@@ -59,12 +60,14 @@ func main() {
 const usage = `Usage: alice-fakeacme <command>
 
 Commands:
-  serve [--listen ADDR] [--admin ADDR] [--ca-out FILE] [--base-url URL] [--require-eab] [--alternates N]
+  serve [--listen ADDR] [--admin ADDR] [--ca-out FILE] [--base-url URL] [--require-eab] [--alternates N] [--dns-providers]
         Run the fake: the ACME directory and the DNS hook over TLS on --listen (default :443), the admin
-        API on --admin (default 127.0.0.1:9091, loopback only), the TLS CA written to --ca-out.
+        API on --admin (default 127.0.0.1:9091, loopback only), the TLS CA written to --ca-out. With
+        --dns-providers also the fake Cloudflare and Route 53 APIs for api.cloudflare.com,
+        route53.amazonaws.com and sts.amazonaws.com (their CAs are added to --ca-out).
   ctl [--admin ADDR] <command> [args]
         Drive a running fake (JSON on stdout, errors on stderr, exit 1 on failure):
-        ping | credentials | ca | reset | counters | requests | clear-requests
+        ping | credentials | ca | reset | counters | requests | clear-requests | dns-providers
         fault set ENDPOINT KIND [--times N] [--retry-after SECONDS] [--delay DURATION] | fault clear
           kinds: badNonce rateLimited serverInternal slow giant; endpoint * = all
         dns set NAME VALUE | dns clear [NAME [VALUE]] | dns list
@@ -102,6 +105,8 @@ type serveConfig struct {
 	BaseURL    string
 	RequireEAB bool
 	Alternates int
+	// DNSProviders also serves the fake DNS providers (dns.go).
+	DNSProviders bool
 	// ready, when set, is called with the bound addresses once everything listens (tests).
 	ready func(listen, admin string)
 }
@@ -116,6 +121,7 @@ func runServe(ctx context.Context, args []string, stderr io.Writer) int {
 	fs.StringVar(&cfg.BaseURL, "base-url", fakeacme.DefaultBaseURL, "public base URL of the CA")
 	fs.BoolVar(&cfg.RequireEAB, "require-eab", false, "require an external account binding")
 	fs.IntVar(&cfg.Alternates, "alternates", 0, "alternate certificate chains to offer")
+	fs.BoolVar(&cfg.DNSProviders, "dns-providers", false, "also serve the fake Cloudflare and Route 53 APIs")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -150,6 +156,16 @@ func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
 		return err
 	}
 	defer f.Close()
+	handler, adminHandler, tlsConf, caPEM := f.Handler(), f.AdminHandler(), f.TLSConfig(), f.CAPEM()
+	if cfg.DNSProviders {
+		d, err := newDNSFakes(f)
+		if err != nil {
+			return err
+		}
+		defer d.Close()
+		handler, adminHandler, tlsConf = d.handler(handler), d.admin(adminHandler), d.tlsConfig(tlsConf)
+		caPEM = append(append([]byte{}, caPEM...), d.caPEM()...)
+	}
 
 	lc := &net.ListenConfig{}
 	tlsLn, err := lc.Listen(ctx, "tcp", cfg.Listen)
@@ -167,16 +183,16 @@ func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
 		return err
 	}
 	if cfg.CAOut != "" {
-		if err := writeCA(cfg.CAOut, f.CAPEM()); err != nil {
+		if err := writeCA(cfg.CAOut, caPEM); err != nil {
 			_ = tlsLn.Close()
 			_ = adminLn.Close()
 			return err
 		}
 	}
-	acmeSrv := &http.Server{Handler: f.Handler(), ReadHeaderTimeout: 10 * time.Second}
-	admin := &http.Server{Handler: f.AdminHandler(), ReadHeaderTimeout: 10 * time.Second}
+	acmeSrv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	admin := &http.Server{Handler: adminHandler, ReadHeaderTimeout: 10 * time.Second}
 	errs := make(chan error, 2)
-	go func() { errs <- acmeSrv.Serve(tls.NewListener(tlsLn, f.TLSConfig())) }()
+	go func() { errs <- acmeSrv.Serve(tls.NewListener(tlsLn, tlsConf)) }()
 	go func() { errs <- admin.Serve(adminLn) }()
 	log.Info("alice-fakeacme is serving", "acme", tlsLn.Addr().String(), "admin", adminLn.Addr().String(),
 		"directory", f.DirectoryURL(), "ca_out", cfg.CAOut)
@@ -283,6 +299,7 @@ func onOff(v string) string { return map[string]string{"on": "true", "off": "fal
 var ctlCommands = map[string]ctlCommand{
 	"ping":           get("/ping"),
 	"credentials":    get("/credentials"),
+	"dns-providers":  get("/dns-providers"),
 	"ca":             get("/ca"),
 	"reset":          post("/reset"),
 	"counters":       get("/counters"),

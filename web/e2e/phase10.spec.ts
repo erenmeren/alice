@@ -7,6 +7,7 @@ import {
   acmeCounters,
   acmeCtl,
   acmeDns,
+  acmeDnsProviders,
   acmeFault,
   acmeHttpTarget,
   acmeLifetime,
@@ -393,7 +394,7 @@ async function getCertificateInUI(page: Page, request: APIRequestContext, lang: 
   await next.click();
   await dialog.getByRole('radio', { name: t('acme.enum.challenge.dns01') }).check();
   if (names.some((n) => n.startsWith('*.'))) await expect(dialog.getByRole('radio', { name: t('acme.enum.challenge.http01') })).toBeDisabled();
-  await field(dialog, t('acme.issued.wizard.hook')).selectOption({ label: HOOK_NAME });
+  await field(dialog, t('acme.issued.wizard.hook')).selectOption({ label: `${HOOK_NAME} (${t('acme.enum.hookKind.webhook')})` });
   if (opts.scan) await expectAccessible(page, `get a certificate: proof ${lang}`, { soft: true, dialog });
   await next.click();
   await expect(field(dialog, t('acme.issued.wizard.keyType'))).toHaveValue('ecdsa_p256');
@@ -665,6 +666,61 @@ test.describe('Phase 10 ACME (en)', () => {
     await expect(bindingRow(page)).toContainText(t('acme.issued.bindings.servedOlder'));
     expect((await acmeCert(s.api, id)).state).toBe('active');
     await expectAccessible(page, 'status page, a website needs attention', { soft: true });
+  });
+
+  // Built-in DNS providers (R57): the fake CA's container answers as the Cloudflare and Route 53 APIs and mirrors their
+  // records into its DNS. Their credentials are typed and sent, as the hook secret is: they are the fakes' own and die
+  // with the stack.
+  test('DNS providers: Cloudflare added in Settings issues a wildcard certificate, Route 53 passes a Test run', async ({ page, request }) => {
+    test.setTimeout(JOURNEY_TIMEOUT);
+    const s = await install(page, request, lang);
+    const a = await addAuthorityByApi(s.api, s.creds);
+    const dns = acmeDnsProviders();
+    expect(dns.zone).toBe(DOMAIN);
+    await openSettingsAcme(page, s.api, s.totpSecret, t);
+    await page.getByRole('button', { name: t('acme.settings.addDnsProvider'), exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: t('acme.dns.addTitle') });
+    await expect(dialog).toBeVisible();
+    await expect(field(dialog, t('acme.dns.kind'))).toHaveValue('cloudflare');
+    await field(dialog, t('acme.hook.name')).fill('Cloudflare DNS');
+    await field(dialog, t('acme.dns.apiToken')).fill(dns.cloudflare.token);
+    await field(dialog, t('acme.hook.wait')).fill('0');
+    await addSuffix(dialog, t, DOMAIN);
+    await expectAccessible(page, `add DNS provider dialog ${lang}`, { soft: true, dialog });
+    await dialog.getByRole('button', { name: t('acme.dns.save'), exact: true }).click();
+    await expect(dialog.getByText(t('settings.saved'), { exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: t('ui.continue'), exact: true }).click();
+    const region = page.getByRole('region', { name: 'Cloudflare DNS', exact: true });
+    await expect(region.getByText(t('acme.settings.credentialsConfigured'), { exact: true })).toBeVisible();
+    await expect(region.getByText('api.cloudflare.com', { exact: true })).toBeVisible();
+    expect(await page.content()).not.toContain(dns.cloudflare.token);
+
+    const hooks = await json<{ items: { id: string; name: string; kind: string; secret_configured: boolean }[] }>(await s.api.get('/api/v1/acme/hooks'));
+    const cf = hooks.items.find((h) => h.name === 'Cloudflare DNS');
+    expect(cf?.kind).toBe('cloudflare');
+    expect(JSON.stringify(hooks)).not.toContain(dns.cloudflare.token);
+    const id = await createCertificateByApi(s.api, { providerId: a.providerId, hookId: cf!.id }, [WWW, WILDCARD]);
+    const issued = await orderAndWait(s.api, request, id);
+    expect(issued.state, JSON.stringify(issued.error)).toBe('succeeded');
+    expect(acmeDns(), 'the CA sees no challenge value any more').toEqual({});
+    expect(acmeDnsProviders().cloudflare.records, 'Alice removed its values at Cloudflare').toEqual({});
+
+    const r53 = await json<{ id: string }>(
+      await s.api.post('/api/v1/acme/hooks', {
+        kind: 'route53',
+        name: 'Route 53',
+        access_key_id: dns.route53.access_key_id,
+        secret_access_key: dns.route53.secret_access_key,
+        allowed_suffixes: [DOMAIN],
+        propagation_wait_seconds: 0,
+        poll_timeout_seconds: 20,
+      }),
+      201,
+    );
+    const testId = await createCertificateByApi(s.api, { providerId: a.providerId, hookId: r53.id }, ['api.example.test']);
+    const tested = await orderAndWait(s.api, request, testId, 'test');
+    expect(tested.state, JSON.stringify(tested.error)).toBe('succeeded');
+    expect(acmeDnsProviders().route53.records, 'Alice removed its value at Route 53').toEqual({});
   });
 
   test('failures: the CA rate limits, the hook is down, records left by a failed order are cleaned up', async ({ page, request }) => {
