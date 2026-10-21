@@ -595,22 +595,6 @@ func (e *env) restoreElsewhere(path, ownerURL string, edit func(*backup.RestoreI
 	return o, res, err
 }
 
-// previousVersion is the highest migration number below latest (the numbers may have gaps).
-func previousVersion(t *testing.T, latest int64) int64 {
-	t.Helper()
-	names, err := fs.Glob(migrations.FS, "*.sql")
-	require.NoError(t, err)
-	var prev int64
-	for _, n := range names {
-		var v int64
-		if _, err := fmt.Sscanf(n, "%05d_", &v); err == nil && v < latest && v > prev {
-			prev = v
-		}
-	}
-	require.Positive(t, prev)
-	return prev
-}
-
 func TestF84OlderSchemaMigratesForward(t *testing.T) {
 	e := newRestoreEnv(t)
 	latest, err := db.LatestVersion(migrations.FS)
