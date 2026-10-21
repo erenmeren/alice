@@ -293,6 +293,18 @@ func TestScopedIDOR(t *testing.T) {
 		if id.acct != nil {
 			s.stepUp(id.c, id.acct)
 		}
+		// Every answer to a person of B, refusals and errors included, names nothing of A (the leak-style check of design
+		// §12 Phase 2: no foreign object's id or name in any error text).
+		do := func(method, path string, body any) *httptest.ResponseRecorder {
+			rec := id.c.do(method, path, body)
+			for _, a := range w.aIDs {
+				if strings.Contains(path, a) {
+					continue // the caller named it: an echo is not a leak (no answer echoes a path today)
+				}
+				assert.NotContains(t, rec.Body.String(), a, "%s %s as %s names a resource of A", method, path, id.name)
+			}
+			return rec
+		}
 		for _, rt := range routes {
 			key := rt.method + " " + rt.pattern
 			if rt.scope == scopeNone || rt.scope == scopeSelf || rt.pattern == "/livez" || rt.pattern == "/healthz" {
@@ -303,14 +315,14 @@ func TestScopedIDOR(t *testing.T) {
 			allowed := rbac.DecideAnywhere(rt.perm, id.subject) == rbac.Allow
 			switch rt.scope {
 			case scopePlatform:
-				got := answerOf(id.c.do(rt.method, fillPath(rt, w, true), map[string]any{}))
+				got := answerOf(do(rt.method, fillPath(rt, w, true), map[string]any{}))
 				assert.Equal(t, answer{http.StatusForbidden, ErrForbidden.Code}, got, name)
 			case scopeResource, scopeCross:
 				if rt.resolve == nil {
 					continue // a cross route without a path resource (POST /bindings, POST /service-trusts): checked below
 				}
-				inA := answerOf(id.c.do(rt.method, fillPath(rt, w, false), map[string]any{}))
-				absent := answerOf(id.c.do(rt.method, fillPath(rt, w, true), map[string]any{}))
+				inA := answerOf(do(rt.method, fillPath(rt, w, false), map[string]any{}))
+				absent := answerOf(do(rt.method, fillPath(rt, w, true), map[string]any{}))
 				assert.Equal(t, absent, inA, "%s: a resource of A answers as an absent one (no existence oracle)", name)
 				if allowed {
 					assert.Equal(t, answer{http.StatusNotFound, notFoundOf(rt.resolve.kind).Code}, inA, name)
@@ -321,7 +333,7 @@ func TestScopedIDOR(t *testing.T) {
 				if rt.method != http.MethodGet || strings.Contains(rt.pattern, "{") {
 					continue // a platform object by id (an ACME provider or hook): readable by every holder, no service
 				}
-				rec := id.c.do(rt.method, rt.pattern, nil)
+				rec := do(rt.method, rt.pattern, nil)
 				if !allowed {
 					assert.Equal(t, http.StatusForbidden, rec.Code, name)
 					continue
@@ -336,7 +348,7 @@ func TestScopedIDOR(t *testing.T) {
 			case scopeCreate:
 				body, ok := creates[key]
 				require.True(t, ok, "%s: the suite has no body for this create route", key)
-				got := answerOf(id.c.do(rt.method, rt.pattern, body))
+				got := answerOf(do(rt.method, rt.pattern, body))
 				switch {
 				case !allowed:
 					assert.Equal(t, http.StatusForbidden, got.status, name)
@@ -349,15 +361,15 @@ func TestScopedIDOR(t *testing.T) {
 		}
 		// The cross routes without a path resource name A's resources in the body.
 		if rbac.DecideAnywhere(rbac.CertificatesOperate, id.subject) == rbac.Allow {
-			got := answerOf(id.c.do(http.MethodPost, "/api/v1/bindings", map[string]any{
+			got := answerOf(do(http.MethodPost, "/api/v1/bindings", map[string]any{
 				"kv_certificate_id": w.byKind[services.KindKVCertificate], "location_ids": []string{w.bLocation.String()}}))
 			assert.Equal(t, answer{http.StatusNotFound, ErrNotFound.Code}, got, "POST /bindings from a vault of A as %s", id.name)
-			got = answerOf(id.c.do(http.MethodPost, fmt.Sprintf("/api/v1/certificates/%s/deploy", w.bCert), map[string]any{
+			got = answerOf(do(http.MethodPost, fmt.Sprintf("/api/v1/certificates/%s/deploy", w.bCert), map[string]any{
 				"location_ids": []string{fmt.Sprint(w.byKind[services.KindLocation])}}))
 			assert.Equal(t, answer{http.StatusForbidden, ErrSVCSpansServices.Code}, got, "deploying B's certificate to A's website as %s", id.name)
 		}
 		if rbac.DecideAnywhere(rbac.ServicesTrust, id.subject) == rbac.Allow {
-			got := answerOf(id.c.do(http.MethodPost, "/api/v1/service-trusts", map[string]any{"source_service_id": w.a, "target_service_id": w.b}))
+			got := answerOf(do(http.MethodPost, "/api/v1/service-trusts", map[string]any{"source_service_id": w.a, "target_service_id": w.b}))
 			assert.Equal(t, answer{http.StatusForbidden, ErrSVCSpansServices.Code}, got, "a trust with A as %s", id.name)
 		}
 	}
