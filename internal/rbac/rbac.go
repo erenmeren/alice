@@ -3,7 +3,12 @@
 // turns (permission, subject) into an authorization decision.
 package rbac
 
-import "sort"
+import (
+	"slices"
+	"sort"
+
+	"github.com/google/uuid"
+)
 
 // Role is a user's role. Roles are stored lowercase in the database.
 type Role string
@@ -159,13 +164,20 @@ const (
 	ServicesManage Permission = "services.manage"
 	ServicesAssign Permission = "services.assign"
 	ServicesTrust  Permission = "services.trust"
+	// AccessManage adds and removes role bindings (R49 Phase 2, design §5.2): who holds which role on which service or
+	// environment. A global Administrator's browser session with step-up, never an API token, like the services.
+	AccessManage Permission = "access.manage"
 )
 
 // Policy describes who may use a permission.
 type Policy struct {
-	Anonymous  bool   // anyone, authenticated or not
-	Setup      bool   // setup (wizard) session only
-	Pending    bool   // pending login session only (password verified, MFA not done)
+	Anonymous bool // anyone, authenticated or not
+	Setup     bool // setup (wizard) session only
+	Pending   bool // pending login session only (password verified, MFA not done)
+	// SignedIn: every signed-in person, whatever their grants, a person without any role included (R49 Phase 2: a
+	// person whose only rights are role bindings, or who has none yet, still reads and ends their own session, changes
+	// their password and language). Roles is not consulted for a user session then; API tokens follow TokenScope.
+	SignedIn   bool
 	Roles      []Role // roles allowed for user sessions and API tokens
 	TokenScope Scope  // "" = API tokens rejected; otherwise the minimum scope (operate ⊇ read)
 	StepUp     bool   // user sessions must have an active step-up window
@@ -177,8 +189,8 @@ var policies = map[Permission]Policy{
 	Public:         {Anonymous: true},
 	Setup:          {Setup: true},
 	MFAPending:     {Pending: true},
-	Session:        {Roles: allRoles},
-	SessionStepUp:  {Roles: allRoles, StepUp: true},
+	Session:        {SignedIn: true, Roles: allRoles},
+	SessionStepUp:  {SignedIn: true, Roles: allRoles, StepUp: true},
 	Read:           {Roles: allRoles, TokenScope: ScopeRead},
 	AuditRead:      {Roles: []Role{Admin, Auditor}, TokenScope: ScopeRead},
 	UsersRead:      {Roles: []Role{Admin}, TokenScope: ScopeRead},
@@ -219,6 +231,7 @@ var policies = map[Permission]Policy{
 	ServicesManage: {Roles: []Role{Admin}, StepUp: true},
 	ServicesAssign: {Roles: []Role{Admin}, StepUp: true},
 	ServicesTrust:  {Roles: []Role{Admin}, StepUp: true},
+	AccessManage:   {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.
@@ -255,10 +268,21 @@ const (
 
 // Subject is the caller as seen by the authorization check.
 type Subject struct {
-	Kind   SubjectKind
+	Kind SubjectKind
+	// Role is the global role (users.role; "" for a person without one, R49 Phase 2): it holds on every service.
 	Role   Role
 	Scope  Scope // API tokens only
 	StepUp bool  // user sessions only: step-up window is active
+	// Grants are the roles held on services only (role bindings, design §5.1), each with the services it covers now
+	// (an environment binding expanded to the services that carry the environment at this request).
+	Grants []ScopedGrant
+}
+
+// ScopedGrant is a role held on a set of services: a role binding on one service, or on an environment expanded to the
+// services that carry it (design §5.1). A grant with no services allows nothing.
+type ScopedGrant struct {
+	Role     Role
+	Services []uuid.UUID
 }
 
 // Decision is the outcome of Decide.
@@ -272,8 +296,120 @@ const (
 	DenyStepUp
 )
 
-// Decide is the single authorization function (deny by default).
+// Decide is the authorization function of a global grant (deny by default): the subject's global role, or, for a
+// SignedIn permission, any signed-in person. Scoped grants never satisfy it: it is the check of every platform route
+// (design §5.3) and of every route before scoped access existed.
 func Decide(p Permission, s Subject) Decision {
+	return decide(p, s, func(roles []Role) bool { return hasRole(roles, s.Role) })
+}
+
+// DecideAnywhere is Decide where a scoped grant on any service counts as well (design §5.3, the route-level check of
+// the resource, list, create, cross and "any" routes): the caller may use the permission somewhere. What it may reach
+// is Reach; the resource of a route is checked against it afterwards.
+func DecideAnywhere(p Permission, s Subject) Decision {
+	return decide(p, s, func(roles []Role) bool {
+		if hasRole(roles, s.Role) {
+			return true
+		}
+		for _, g := range s.Grants {
+			if len(g.Services) > 0 && hasRole(roles, g.Role) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// DecideIn is the decision on one service: the global role, or a scoped grant whose services include service.
+func DecideIn(p Permission, s Subject, service uuid.UUID) Decision {
+	return decide(p, s, func(roles []Role) bool {
+		if hasRole(roles, s.Role) {
+			return true
+		}
+		for _, g := range s.Grants {
+			if hasRole(roles, g.Role) && slices.Contains(g.Services, service) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// Reach is where the subject may use permission p (design §5.1): all is true when its global role allows p;
+// otherwise services are the services of its scoped grants whose role allows p (sorted, without repeats; nil when
+// none). The token scope applies as in Decide (a read token reaches nothing with an operate permission); the step-up
+// window does not (Decide asks for it). A subject that is not a signed-in person or a token reaches nothing, and so
+// does a permission that is not a role's (public, the wizard, a pending sign-in).
+func Reach(p Permission, s Subject) (all bool, services []uuid.UUID) {
+	pol, ok := policies[p]
+	if !ok || pol.Anonymous || pol.Setup || pol.Pending {
+		return false, nil
+	}
+	switch s.Kind {
+	case UserSession:
+	case APIToken:
+		if pol.TokenScope == "" || !s.Scope.satisfies(pol.TokenScope) {
+			return false, nil
+		}
+	default:
+		return false, nil
+	}
+	if hasRole(pol.Roles, s.Role) {
+		return true, nil
+	}
+	for _, g := range s.Grants {
+		if hasRole(pol.Roles, g.Role) {
+			services = append(services, g.Services...)
+		}
+	}
+	if len(services) == 0 {
+		return false, nil
+	}
+	slices.SortFunc(services, compareUUID)
+	return false, slices.Compact(services)
+}
+
+// HasAnyGrant reports whether the subject holds a role anywhere: a global role or a scoped grant on some service. A
+// signed-in person without one sees only the "no access yet" page (design §9).
+func (s Subject) HasAnyGrant() bool {
+	if _, ok := ParseRole(string(s.Role)); ok {
+		return true
+	}
+	for _, g := range s.Grants {
+		if len(g.Services) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// AllowsScopeAnywhere reports whether some grant of the subject (its global role, or a scoped grant on some service)
+// may hold an API token of scope sc (design §6.3: the token scope check at creation and at every use).
+func (s Subject) AllowsScopeAnywhere(sc Scope) bool {
+	if s.Role.AllowsScope(sc) {
+		return true
+	}
+	for _, g := range s.Grants {
+		if len(g.Services) > 0 && g.Role.AllowsScope(sc) {
+			return true
+		}
+	}
+	return false
+}
+
+func compareUUID(a, b uuid.UUID) int {
+	for i := range a {
+		switch {
+		case a[i] < b[i]:
+			return -1
+		case a[i] > b[i]:
+			return 1
+		}
+	}
+	return 0
+}
+
+func decide(p Permission, s Subject, roleOK func([]Role) bool) Decision {
 	pol, ok := policies[p]
 	switch {
 	case !ok:
@@ -287,7 +423,8 @@ func Decide(p Permission, s Subject) Decision {
 	}
 	switch s.Kind {
 	case UserSession:
-		if !hasRole(pol.Roles, s.Role) {
+		signedIn := pol.SignedIn && (s.Role == "" || hasRole(allRoles, s.Role))
+		if !signedIn && !roleOK(pol.Roles) {
 			return DenyForbidden
 		}
 		if pol.StepUp && !s.StepUp {
@@ -295,7 +432,7 @@ func Decide(p Permission, s Subject) Decision {
 		}
 		return Allow
 	case APIToken:
-		if pol.TokenScope == "" || !s.Scope.satisfies(pol.TokenScope) || !hasRole(pol.Roles, s.Role) {
+		if pol.TokenScope == "" || !s.Scope.satisfies(pol.TokenScope) || !roleOK(pol.Roles) {
 			return DenyForbidden
 		}
 		return Allow

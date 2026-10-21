@@ -5,6 +5,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -110,6 +111,10 @@ var expected = map[rbac.Permission]map[string]rbac.Decision{
 	rbac.ServicesTrust: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
 		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
+	// Role bindings (R49 Phase 2): a global Administrator with step-up, never a token.
+	rbac.AccessManage: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
+		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
+		"token-operate-operator": F, "token-read-auditor": F, "token-noscope-admin": F, "session-unknown-role": F},
 	// Key-compromise incidents (2026-10-20): an Administrator with step-up, never a token.
 	rbac.CertificatesIncident: {"anon": U, "setup": U, "pending": U, "admin": S, "admin+stepup": A, "operator": F, "operator+stepup": F,
 		"auditor": F, "auditor+stepup": F, "token-read-admin": F, "token-operate-admin": F, "token-read-operator": F,
@@ -180,7 +185,7 @@ func TestUnknownPermissionIsDenied(t *testing.T) {
 
 func TestPermissionsAreSortedAndHavePolicies(t *testing.T) {
 	ps := rbac.Permissions()
-	assert.Len(t, ps, 35)
+	assert.Len(t, ps, 36)
 	assert.True(t, sort.SliceIsSorted(ps, func(i, j int) bool { return ps[i] < ps[j] }))
 	for _, p := range ps {
 		_, ok := rbac.PolicyFor(p)
@@ -324,4 +329,69 @@ func TestDiscoveryPolicies(t *testing.T) {
 	assert.Equal(t, []rbac.Role{rbac.Admin}, manage.Roles, "D1: defining what is scanned is the SSRF-relevant act")
 	assert.True(t, manage.StepUp)
 	assert.Empty(t, manage.TokenScope, "no token defines scopes, exclusions or allowed networks")
+}
+
+// Scoped grants (R49 Phase 2, design §5.1): a role held on services satisfies DecideAnywhere and DecideIn on those
+// services, never Decide (the check of platform routes); Reach unions the services of the grants whose role allows the
+// permission, and a global role reaches everything.
+func TestScopedGrants(t *testing.T) {
+	a, b, c := uuid.MustParse("00000000-0000-0000-0000-00000000000a"), uuid.MustParse("00000000-0000-0000-0000-00000000000b"),
+		uuid.MustParse("00000000-0000-0000-0000-00000000000c")
+	opB := rbac.Subject{Kind: rbac.UserSession, Grants: []rbac.ScopedGrant{{Role: rbac.Operator, Services: []uuid.UUID{b}}}}
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.Read, opB), "a scoped grant is never global")
+	assert.Equal(t, rbac.Allow, rbac.DecideAnywhere(rbac.Read, opB))
+	assert.Equal(t, rbac.Allow, rbac.DecideAnywhere(rbac.CertificatesOperate, opB))
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideAnywhere(rbac.TargetsManage, opB), "an Operator is no Administrator on B either")
+	assert.Equal(t, rbac.Allow, rbac.DecideIn(rbac.CertificatesOperate, opB, b))
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideIn(rbac.CertificatesOperate, opB, a))
+	all, svcs := rbac.Reach(rbac.Read, opB)
+	assert.False(t, all)
+	assert.Equal(t, []uuid.UUID{b}, svcs)
+	all, svcs = rbac.Reach(rbac.TargetsManage, opB)
+	assert.False(t, all)
+	assert.Nil(t, svcs)
+
+	// A global Auditor who also operates B and C: reads everywhere, operates on B and C only, sorted and once each.
+	mixed := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Auditor, Grants: []rbac.ScopedGrant{
+		{Role: rbac.Operator, Services: []uuid.UUID{c, b}}, {Role: rbac.Admin, Services: []uuid.UUID{b}}}}
+	all, _ = rbac.Reach(rbac.Read, mixed)
+	assert.True(t, all)
+	_, svcs = rbac.Reach(rbac.CertificatesOperate, mixed)
+	assert.Equal(t, []uuid.UUID{b, c}, svcs)
+	_, svcs = rbac.Reach(rbac.TargetsManage, mixed)
+	assert.Equal(t, []uuid.UUID{b}, svcs)
+
+	// Step-up still applies to a scoped Administrator; Reach ignores it (Decide asks for it).
+	adminB := rbac.Subject{Kind: rbac.UserSession, Grants: []rbac.ScopedGrant{{Role: rbac.Admin, Services: []uuid.UUID{b}}}}
+	assert.Equal(t, rbac.DenyStepUp, rbac.DecideIn(rbac.HostKeysRepin, adminB, b))
+	adminB.StepUp = true
+	assert.Equal(t, rbac.Allow, rbac.DecideIn(rbac.HostKeysRepin, adminB, b))
+	assert.Equal(t, rbac.DenyForbidden, rbac.Decide(rbac.UsersManage, adminB), "a service Administrator manages no people")
+
+	// Tokens: the scope narrows every grant; a read token of an Operator on B reaches nothing with an operate permission.
+	readTok := rbac.Subject{Kind: rbac.APIToken, Scope: rbac.ScopeRead, Grants: opB.Grants}
+	assert.Equal(t, rbac.Allow, rbac.DecideAnywhere(rbac.Read, readTok))
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideAnywhere(rbac.CertificatesOperate, readTok))
+	all, svcs = rbac.Reach(rbac.CertificatesOperate, readTok)
+	assert.False(t, all)
+	assert.Nil(t, svcs)
+	assert.True(t, readTok.AllowsScopeAnywhere(rbac.ScopeOperate), "the owner's grants decide which scopes a token may have")
+	assert.False(t, rbac.Subject{Grants: []rbac.ScopedGrant{{Role: rbac.Auditor, Services: []uuid.UUID{b}}}}.AllowsScopeAnywhere(rbac.ScopeOperate))
+
+	// A grant with no services (an environment no service carries) allows nothing.
+	empty := rbac.Subject{Kind: rbac.UserSession, Grants: []rbac.ScopedGrant{{Role: rbac.Admin}}}
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideAnywhere(rbac.Read, empty))
+	assert.False(t, empty.HasAnyGrant())
+	assert.True(t, opB.HasAnyGrant())
+
+	// A person without any grant still has their own session (SignedIn), never anything else.
+	none := rbac.Subject{Kind: rbac.UserSession}
+	assert.Equal(t, rbac.Allow, rbac.Decide(rbac.Session, none))
+	assert.Equal(t, rbac.DenyStepUp, rbac.Decide(rbac.SessionStepUp, none))
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideAnywhere(rbac.Read, none))
+	all, svcs = rbac.Reach(rbac.Read, none)
+	assert.False(t, all)
+	assert.Nil(t, svcs)
+	all, _ = rbac.Reach(rbac.Read, rbac.Subject{Kind: rbac.PendingSession, Role: rbac.Admin})
+	assert.False(t, all, "a pending sign-in reaches nothing")
 }
