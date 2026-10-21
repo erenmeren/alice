@@ -762,7 +762,10 @@
       "location_drift_repair_requested": "Sertifika konumunun otomatik onarımı istendi",
       "location_drift_backoff": "Sertifika konumunun otomatik onarımı durdu",
       "access_binding_added": "Erişim eklendi",
-      "access_binding_removed": "Erişim kaldırıldı"
+      "access_binding_removed": "Erişim kaldırıldı",
+      "service_policy_changed": "Hizmet ilkesi değiştirildi",
+      "acme_auto_deploy_forbidden": "Sertifika yetkilisinden (ACME) gelen sertifika otomatik dağıtılmadı: hizmetinin ilkesi bunu yasaklıyor",
+      "kv_auto_deploy_forbidden": "Kasa sertifikası otomatik dağıtılmadı: hizmetinin ilkesi bunu yasaklıyor"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -4285,7 +4288,8 @@
       "overview": "Genel bakış",
       "resources": "Kaynaklar",
       "trusts": "Güvenler",
-      "access": "Erişim"
+      "access": "Erişim",
+      "policy": "İlke"
     },
     "overview": {
       "title": "Bu hizmet hakkında",
@@ -4294,7 +4298,7 @@
     },
     "policy": {
       "title": "Hizmet ilkesi",
-      "description": "Bu hizmetin sahip olduklarına ilişkin kurallar. Bu sürümde ilke yalnızca okunabilir.",
+      "description": "Bu hizmetin sahip olduklarına ilişkin kurallar. İlke sekmesi bunları gösterir ve değiştirir.",
       "version": "Sürüm",
       "rules": "Kurallar",
       "none": "Henüz kural yok",
@@ -4378,7 +4382,78 @@
       "inUse": "Bu ortamı bir hizmet kullanıyor.",
       "add": "Ortam ekle"
     },
-    "untrustedMark": "Hizmeti kabul etmiyor"
+    "untrustedMark": "Hizmeti kabul etmiyor",
+    "policyForm": {
+      "intro": "İlke bu hizmete nelerin girebileceğini ve sertifikalarının nasıl davranacağını belirler. Her kural isteğe bağlıdır: boş bırakılan kural sınır koymaz. Var olanlara değil, bundan sonra oluşturulan ya da değiştirilenlere uygulanır; tek istisna, otomatik dağıtımı yasaklamak açık olan dağıtımları bekletir.",
+      "names": {
+        "title": "Adlar ve kaynaklar",
+        "description": "Bu hizmetin sertifikalarının hangi adları taşıyabileceği ve sertifikaların hizmete nasıl girebileceği."
+      },
+      "domains": "Alan adları",
+      "domainsHelp": "Satır başına bir tane, en çok {{max}}: bir ad (pay.example.com), bir joker karakter (*.pay.example.com altındaki her adı, her derinlikte kapsar ama pay.example.com'un kendisini kapsamaz), bir IP adresi ya da bir CIDR bloğu (10.20.0.0/16). Boş: her ad.",
+      "domainsGlobalOnly": "Alan adlarını yalnızca tüm hizmetlerde yönetici olan biri değiştirir.",
+      "sources": "Sertifika kaynakları",
+      "sourcesHelp": "Yeni sertifikaların hizmete hangi yollarla girebileceği. Hiçbiri işaretli değilse: her yol.",
+      "source": {
+        "acme": "ACME sertifikaları",
+        "uploaded": "Yüklemeler",
+        "csr": "İmzalama istekleri"
+      },
+      "acme": {
+        "title": "ACME sertifikaları",
+        "description": "Bu hizmetin ACME sertifikalarının neleri kullanabileceği ve yenilerinin hangi yenileme süresiyle başlayacağı."
+      },
+      "providers": "Sertifika yetkilileri",
+      "providerGone": "Kaldırılmış bir sertifika yetkilisi",
+      "noProviders": "Henüz bir sertifika yetkilisi kurulmadı.",
+      "challenges": "Kanıtlama yöntemleri",
+      "keyTypes": "Anahtar türleri",
+      "anyHelp": "Hiçbiri işaretli değilse: hepsi.",
+      "renewDays": "Süre dolmadan önce yenile (gün)",
+      "renewDaysHelp": "Bu hizmetin yeni ACME sertifikaları için varsayılan, 1 ile 60 arası. Boş: Alice'in varsayılanı (30).",
+      "behaviour": {
+        "title": "Dağıtım ve olaylar"
+      },
+      "autoDeploy": "Otomatik dağıtım",
+      "autoDeployHelp": "Yasak: bu hizmetin Key Vault bağlamaları ve ACME sertifikaları için otomatik dağıtım açılamaz; açık olanlar yeniden izin verilene kadar (her web sitesinde bir işaretle) bekler.",
+      "autoDeployValue": {
+        "allowed": "İzin verilir",
+        "forbidden": "Yasak"
+      },
+      "revokeMode": "Anahtar ele geçirilme olayında iptal",
+      "revokeModeHelp": "Bu hizmetin sertifikalarında başlatılan yeni bir olayın başlangıç seçimi.",
+      "aliceDefault": "Alice'in varsayılanı (her yenisi doğrulandıktan sonra)",
+      "notifications": {
+        "title": "E-postalar",
+        "description": "Bu hizmetin e-postalarını başka kimlerin alacağı. İlkeyle birlikte kaydedilir; e-postalar hizmete göre yönlendirilene kadar eskisi gibi yöneticilere gider."
+      },
+      "administrators": "Tüm hizmetlerdeki yöneticiler bu hizmetin e-postalarını alır",
+      "address": "Ek adres",
+      "locale": "Dil",
+      "addAddress": "Adres ekle",
+      "removeAddress": "Bu adresi kaldır",
+      "save": "İlkeyi kaydet",
+      "saved": "Sürüm {{version}} olarak kaydedildi.",
+      "keys": {
+        "domains": "Alan adları",
+        "certificate_sources": "Sertifika kaynakları",
+        "acme": "ACME sertifikaları",
+        "deployment": "Otomatik dağıtım",
+        "incident": "Olaylar",
+        "notifications": "E-postalar"
+      },
+      "history": {
+        "title": "Sürümler",
+        "none": "Henüz sürüm yok.",
+        "changed": "Değişen",
+        "by": "Yapan",
+        "when": "Ne zaman",
+        "first": "İlk sürüm (kural yok)",
+        "nothing": "Hiçbir şey",
+        "system": "Alice (sistem)"
+      }
+    },
+    "forbiddenMark": "Bekletiliyor: hizmeti otomatik dağıtımı yasaklıyor"
   },
   "drift": {
     "health": {

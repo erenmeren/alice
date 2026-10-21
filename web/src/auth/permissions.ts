@@ -37,6 +37,7 @@ const ADMIN: Permission[] = [
   'services.assign',
   'services.trust',
   'access.manage',
+  'services.policy',
 ];
 
 export const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = { admin: ADMIN, operator: OPERATOR, auditor: AUDITOR };

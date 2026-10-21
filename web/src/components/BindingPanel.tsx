@@ -122,6 +122,11 @@ export function BindingPanel({ vaultId, certificate, canOperate, admin }: { vaul
                           {t('services.untrustedMark')}
                         </StatusBadge>
                       )}
+                      {l.attention_code === 'service.auto_deploy_forbidden' && (
+                        <StatusBadge tone="warning" icon="Pause" size="sm" data-testid="binding-policy-held">
+                          {t('services.forbiddenMark')}
+                        </StatusBadge>
+                      )}
                       {l.deployment_id && (
                         <Anchor component={Link} to={`/deployments/${l.deployment_id}`} size="xs">
                           {t('deploy.openDeployment')}

@@ -14,6 +14,7 @@ import { ServiceAccess } from '../components/access/ServiceAccess';
 import { AppModal } from '../components/AppModal';
 import { ErrorAlert } from '../components/ErrorAlert';
 import { MoveDialog } from '../components/services/MoveDialog';
+import { PolicyPanel } from '../components/services/PolicyPanel';
 import { ServiceDialog } from '../components/services/ServiceDialog';
 import { EnvironmentBadge } from '../components/services/shared';
 import { useStepUp } from '../components/StepUpProvider';
@@ -22,13 +23,14 @@ import { formatDateTime } from '../datetime';
 import { useUrlFilters } from '../hooks/useUrlFilters';
 import { resourceSummary } from './ServicesPage';
 
-const TABS = ['overview', 'resources', 'access', 'trusts'] as const;
+const TABS = ['overview', 'resources', 'access', 'policy', 'trusts'] as const;
 type Tab = (typeof TABS)[number];
 const TAB_KEYS = ['tab'] as const;
 
-// ServicePage is one service (R49): its environment, description and policy (Overview), what it owns (Resources, with
-// Move here), who reaches it (Access, for the people administration) and which services it accepts certificates and keys
-// from or sends them to (Trusts). Every role reads it; changes are an Administrator's with a fresh step-up.
+// ServicePage is one service (R49): its environment, description and policy summary (Overview), what it owns (Resources,
+// with Move here), who reaches it (Access, for the people administration), its policy and the versions of it (Policy,
+// R55) and which services it accepts certificates and keys from or sends them to (Trusts). Every role reads it; changes
+// are an Administrator's with a fresh step-up.
 export function ServicePage() {
   const { id = '' } = useParams();
   const { t } = useTranslation();
@@ -106,6 +108,9 @@ export function ServicePage() {
             <ServiceAccess service={s} />
           </Tabs.Panel>
         )}
+        <Tabs.Panel value="policy" pt="md">
+          <PolicyPanel service={s} />
+        </Tabs.Panel>
         <Tabs.Panel value="trusts" pt="md">
           <Trusts service={s} admin={canTrust} />
         </Tabs.Panel>

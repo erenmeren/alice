@@ -38,7 +38,8 @@ export type Permission =
   | 'services.manage'
   | 'services.assign'
   | 'services.trust'
-  | 'access.manage';
+  | 'access.manage'
+  | 'services.policy';
 export type TokenScope = 'read' | 'operate';
 
 export interface VersionInfo {

@@ -762,7 +762,10 @@
       "location_drift_repair_requested": "Automatic repair of a certificate location requested",
       "location_drift_backoff": "Automatic repair of a certificate location stopped",
       "access_binding_added": "Access added",
-      "access_binding_removed": "Access removed"
+      "access_binding_removed": "Access removed",
+      "service_policy_changed": "Service policy changed",
+      "acme_auto_deploy_forbidden": "Certificate from a certificate authority (ACME) not deployed automatically: its service's policy forbids it",
+      "kv_auto_deploy_forbidden": "Vault certificate not deployed automatically: its service's policy forbids it"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -4285,7 +4288,8 @@
       "overview": "Overview",
       "resources": "Resources",
       "trusts": "Trusts",
-      "access": "Access"
+      "access": "Access",
+      "policy": "Policy"
     },
     "overview": {
       "title": "About this service",
@@ -4294,7 +4298,7 @@
     },
     "policy": {
       "title": "Service policy",
-      "description": "The rules for what this service owns. In this version the policy is read-only.",
+      "description": "The rules for what this service owns. The Policy tab shows and changes them.",
       "version": "Version",
       "rules": "Rules",
       "none": "No rules yet",
@@ -4378,7 +4382,78 @@
       "inUse": "A service uses this environment.",
       "add": "Add environment"
     },
-    "untrustedMark": "Not accepted by its service"
+    "untrustedMark": "Not accepted by its service",
+    "policyForm": {
+      "intro": "The policy decides what may enter this service and how its certificates behave. Every rule is optional: a rule left empty sets no limit. It applies to what is created or changed from now on, never to what exists, except that forbidding automatic deployment holds the deployments already switched on.",
+      "names": {
+        "title": "Names and sources",
+        "description": "Which names this service's certificates may carry and how certificates may enter it."
+      },
+      "domains": "Domains",
+      "domainsHelp": "One per line, at most {{max}}: a name (pay.example.com), a wildcard (*.pay.example.com covers every name below it, at any depth, but not pay.example.com itself), an IP address or a CIDR block (10.20.0.0/16). Empty: any name.",
+      "domainsGlobalOnly": "Only an Administrator of all services changes the domains.",
+      "sources": "Certificate sources",
+      "sourcesHelp": "How new certificates may enter the service. None ticked: every way.",
+      "source": {
+        "acme": "ACME certificates",
+        "uploaded": "Uploads",
+        "csr": "Signing requests"
+      },
+      "acme": {
+        "title": "ACME certificates",
+        "description": "What this service's ACME certificates may use, and the renewal window a new one starts with."
+      },
+      "providers": "Certificate authorities",
+      "providerGone": "A removed certificate authority",
+      "noProviders": "No certificate authority is set up yet.",
+      "challenges": "Proof methods",
+      "keyTypes": "Key types",
+      "anyHelp": "None ticked: any.",
+      "renewDays": "Renew before expiry (days)",
+      "renewDaysHelp": "The default for new ACME certificates of this service, 1 to 60. Empty: Alice's default (30).",
+      "behaviour": {
+        "title": "Deployment and incidents"
+      },
+      "autoDeploy": "Automatic deployment",
+      "autoDeployHelp": "Forbidden: automatic deployment cannot be switched on for this service's Key Vault bindings and ACME certificates, and those already on wait (with a mark on each website) until it is allowed again.",
+      "autoDeployValue": {
+        "allowed": "Allowed",
+        "forbidden": "Forbidden"
+      },
+      "revokeMode": "Revocation in a key-compromise incident",
+      "revokeModeHelp": "The choice a new incident on this service's certificates starts with.",
+      "aliceDefault": "Alice's default (after every replacement is verified)",
+      "notifications": {
+        "title": "E-mails",
+        "description": "Who else receives this service's e-mails. Saved with the policy; until e-mails are routed by service, they still go to the Administrators as before."
+      },
+      "administrators": "Administrators of all services receive this service's e-mails",
+      "address": "Extra address",
+      "locale": "Language",
+      "addAddress": "Add an address",
+      "removeAddress": "Remove this address",
+      "save": "Save the policy",
+      "saved": "Saved as version {{version}}.",
+      "keys": {
+        "domains": "Domains",
+        "certificate_sources": "Certificate sources",
+        "acme": "ACME certificates",
+        "deployment": "Automatic deployment",
+        "incident": "Incidents",
+        "notifications": "E-mails"
+      },
+      "history": {
+        "title": "Versions",
+        "none": "No versions yet.",
+        "changed": "Changed",
+        "by": "By",
+        "when": "When",
+        "first": "The first version (no rules)",
+        "nothing": "Nothing",
+        "system": "Alice"
+      }
+    },
+    "forbiddenMark": "Held: its service forbids automatic deployment"
   },
   "drift": {
     "health": {

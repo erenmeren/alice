@@ -57,9 +57,32 @@ export interface ServicePatch {
   environment_id?: string | null;
 }
 
+// PolicyDocument is a service policy, schema 1 (R55, design §7.3). Every field is optional; an empty list is no
+// constraint. domains: DNS names, "*.suffix" wildcards (any depth), IP addresses and CIDR blocks.
+export interface PolicyDocument {
+  schema: 1;
+  domains?: string[];
+  certificate_sources?: PolicySource[];
+  acme?: { providers?: string[]; challenges?: PolicyChallenge[]; key_types?: string[]; renew_before_days?: number };
+  deployment?: { auto_deploy?: 'allowed' | 'forbidden' };
+  incident?: { revoke_mode?: 'after_verified' | 'now' };
+  // Who else receives the service's e-mails (read by the notification routing by service).
+  notifications?: { administrators?: boolean; addresses?: { email: string; locale: string }[] };
+}
+
+export type PolicySource = 'acme' | 'uploaded' | 'csr';
+export type PolicyChallenge = 'dns01' | 'http01';
+export const POLICY_SOURCES: readonly PolicySource[] = ['acme', 'uploaded', 'csr'];
+export const POLICY_CHALLENGES: readonly PolicyChallenge[] = ['dns01', 'http01'];
+export const POLICY_KEY_TYPES: readonly string[] = ['ecdsa_p256', 'ecdsa_p384', 'rsa_2048', 'rsa_3072', 'rsa_4096'];
+// The top-level keys of a policy in the order the history names them.
+export const POLICY_KEYS = ['domains', 'certificate_sources', 'acme', 'deployment', 'incident', 'notifications'] as const;
+export const MAX_POLICY_DOMAINS = 200;
+export const MAX_POLICY_ADDRESSES = 20;
+
 export interface ServicePolicy {
   version: number;
-  body: Record<string, unknown>;
+  body: PolicyDocument;
   created_by: string | null;
   created_by_name: string;
   created_at: string;
@@ -155,6 +178,19 @@ export const updateService = (id: string, version: number, body: ServicePatch) =
   apiFetch<Service>(`${v1}/services/${enc(id)}`, { method: 'PATCH', body, headers: ifMatch(version) });
 export const deleteService = (id: string, version: number) => apiFetch<void>(`${v1}/services/${enc(id)}`, { method: 'DELETE', headers: ifMatch(version) });
 export const getServicePolicy = (id: string, signal?: AbortSignal) => apiFetch<ServicePolicy>(`${v1}/services/${enc(id)}/policy`, { signal });
+export const listServicePolicyVersions = (id: string, signal?: AbortSignal) =>
+  apiFetch<{ items: ServicePolicy[] }>(`${v1}/services/${enc(id)}/policy/versions`, { signal });
+// putServicePolicy saves a new version: version is the one read (409 ALC-SVC-0010 when someone saved since); the domains
+// need an Administrator of all services (403 ALC-SVC-0011).
+export const putServicePolicy = (id: string, version: number, body: PolicyDocument) =>
+  apiFetch<ServicePolicy>(`${v1}/services/${enc(id)}/policy`, { method: 'PUT', body: { version, body } });
+
+// changedPolicyKeys lists the top-level keys whose value differs between two policy documents (what a version changed).
+export function changedPolicyKeys(before: PolicyDocument | undefined, after: PolicyDocument): string[] {
+  const a = (before ?? { schema: 1 }) as unknown as Record<string, unknown>;
+  const b = after as unknown as Record<string, unknown>;
+  return POLICY_KEYS.filter((k) => JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null));
+}
 
 // assignToService moves resources to the service (dryRun: only what the move would do; nothing changes).
 export const assignToService = (id: string, resources: AssignResource[], dryRun: boolean) =>
