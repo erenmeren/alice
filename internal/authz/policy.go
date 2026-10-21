@@ -337,8 +337,20 @@ func normalizeDomainEntry(s string) (string, bool) {
 		}
 		return a.Unmap().String(), true
 	}
-	n := strings.ToLower(s)
+	n := foldASCII(s)
 	return n, validDNSName(n)
+}
+
+// foldASCII lowers the ASCII letters only (a DNS name is ASCII; strings.ToLower would follow the Unicode rules, which
+// the Turkish dotted and dotless i make locale-dependent).
+func foldASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
 }
 
 // validDNSName is certs.ValidDNSName (authz knows the platform only): lower-case LDH labels of 1..63, at most 253 in
@@ -435,7 +447,7 @@ func (p Policy) NameAllowed(name string) bool {
 		}
 		return false
 	}
-	n := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(name)), ".")
+	n := strings.TrimSuffix(foldASCII(strings.TrimSpace(name)), ".")
 	for _, e := range p.Domains {
 		if suffix, ok := strings.CutPrefix(e, "*"); ok {
 			if len(n) > len(suffix) && strings.HasSuffix(n, suffix) {
@@ -469,7 +481,7 @@ func CertificateNames(commonName string, sans []string) []string {
 	if cn == "" || slices.ContainsFunc(out, func(s string) bool { return strings.EqualFold(s, cn) }) {
 		return out
 	}
-	if _, err := netip.ParseAddr(cn); err == nil || validDNSName(strings.ToLower(cn)) {
+	if _, err := netip.ParseAddr(cn); err == nil || validDNSName(foldASCII(cn)) {
 		out = append([]string{cn}, out...)
 	}
 	return out
