@@ -1,6 +1,6 @@
 import { http, HttpResponse } from 'msw';
 import { setupServer } from 'msw/node';
-import { backupListFixture, backupScheduleFixture, emptyDashboardSummary, forwardingFixture, httpsInfoFixture, licenseDetailFixture, platformKeyFixture, sessionHandlers, smtpFixture } from './fixtures';
+import { backupListFixture, backupScheduleFixture, emptyDashboardSummary, forwardingFixture, httpsInfoFixture, licenseDetailFixture, platformKeyFixture, servicePolicyFixture, sessionHandlers, smtpFixture } from './fixtures';
 
 // Default handlers: an installed system with nobody signed in. Tests override
 // them with server.use(...); unknown requests fail the test (onUnhandledRequest: 'error').
@@ -18,6 +18,8 @@ export const handlers = [
   http.get('/api/v1/dashboard/expiring', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/alerts', () => HttpResponse.json({ items: [] })),
   http.get('/api/v1/views', () => HttpResponse.json({ items: [] })),
+  // R55: a service's policy (the incident dialog reads its revocation default); no rules unless a test says otherwise.
+  http.get('/api/v1/services/:id/policy', () => HttpResponse.json(servicePolicyFixture())),
   // Phase 7 single sign-on: the sign-in page lists the public providers (none by default).
   http.get('/api/v1/auth/oidc/providers', () => HttpResponse.json({ items: [] })),
   // Directory sign-in: the sign-in page lists the switched-on directories (none by default: no "Sign in to" select).

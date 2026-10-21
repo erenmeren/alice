@@ -15,6 +15,9 @@ import {
   certificateImpactFixture,
   incidentFixture,
   INCIDENT_ID,
+  SERVICE_ID,
+  servicePolicyFixture,
+  serviceRef,
   sessionFor,
   sessionHandlers,
 } from '../test/fixtures';
@@ -97,6 +100,18 @@ describe('the certificate page: capabilities, impact and the incident', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Start a key compromise incident?' });
     expect(within(dialog).queryByTestId('not-revocable')).not.toBeInTheDocument();
     await userEvent.click(within(dialog).getByLabelText(/Revoke at once/));
+    await userEvent.click(within(dialog).getByLabelText('I understand that this cannot be undone.'));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Start the incident' }));
+    await waitFor(() => expect(started).toEqual([{ revoke_mode: 'now' }]));
+  });
+
+  it("starts with revoke-now ticked when the certificate's service's policy says so (R55)", async () => {
+    const started = certificatePage({ detail: { source: 'acme', service: serviceRef, capabilities: ['discover', 'obtain', 'renew', 'deploy', 'verify', 'revoke', 'recovery'] } });
+    server.use(http.get(`/api/v1/services/${SERVICE_ID}/policy`, () => HttpResponse.json(servicePolicyFixture({ version: 2, body: { schema: 1, incident: { revoke_mode: 'now' } } }))));
+    await renderRoute(`/certificates/${CERT}`);
+    await userEvent.click(await screen.findByRole('button', { name: 'Key compromised…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Start a key compromise incident?' });
+    await waitFor(() => expect(within(dialog).getByLabelText(/Revoke at once/)).toBeChecked());
     await userEvent.click(within(dialog).getByLabelText('I understand that this cannot be undone.'));
     await userEvent.click(within(dialog).getByRole('button', { name: 'Start the incident' }));
     await waitFor(() => expect(started).toEqual([{ revoke_mode: 'now' }]));

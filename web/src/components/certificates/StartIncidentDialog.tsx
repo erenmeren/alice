@@ -1,10 +1,11 @@
 import { Button, Checkbox, List, Stack, Text } from '@mantine/core';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 import { startIncident } from '../../api/incidents';
-import { CERTIFICATES_KEY, INCIDENTS_KEY } from '../../api/queryKeys';
+import { CERTIFICATES_KEY, INCIDENTS_KEY, servicePolicyKey } from '../../api/queryKeys';
+import { getServicePolicy } from '../../api/services';
 import type { Certificate } from '../../api/types';
 import { AppModal } from '../AppModal';
 import { ErrorAlert } from '../ErrorAlert';
@@ -13,14 +14,18 @@ import { DialogActions, Notice } from '../ui';
 
 // StartIncidentDialog starts a key compromise incident ("this private key leaked"): it says, before anything happens,
 // that every certificate with the key is marked compromised for good, where the replacement comes from, and when (and
-// whether) Alice revokes the certificate. An Administrator with a fresh step-up; it cannot be undone.
-export function StartIncidentDialog({ certificate, onClose }: { certificate: Pick<Certificate, 'id' | 'source'>; onClose: () => void }) {
+// whether) Alice revokes the certificate. An Administrator with a fresh step-up; it cannot be undone. The certificate's
+// service's policy (R55, incident.revoke_mode) chooses whether "revoke now" starts ticked.
+export function StartIncidentDialog({ certificate, onClose }: { certificate: Pick<Certificate, 'id' | 'source' | 'service'>; onClose: () => void }) {
   const { t } = useTranslation();
   const { run } = useStepUp();
   const navigate = useNavigate();
   const client = useQueryClient();
   const acme = certificate.source === 'acme';
-  const [now, setNow] = useState(false);
+  const serviceId = certificate.service?.id ?? '';
+  const policy = useQuery({ queryKey: servicePolicyKey(serviceId), queryFn: ({ signal }) => getServicePolicy(serviceId, signal), enabled: acme && serviceId !== '' });
+  const [chosen, setNow] = useState<boolean | null>(null);
+  const now = chosen ?? policy.data?.body.incident?.revoke_mode === 'now';
   const [understood, setUnderstood] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
