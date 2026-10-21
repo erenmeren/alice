@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — What should be there, what was deployed, what is there today
+
+**Added**
+- For every certificate file that follows a certificate (an issued certificate or a Key Vault certificate), Alice
+  keeps four facts apart, each with its own time: the certificate it should have, what Alice last deployed, what the
+  file held at the last scan that read it, and what the website served at the last check (from Alice or from the
+  server itself, with the R51 trust). Its state comes from them: **In sync**, **Changed outside Alice**, **Waiting for
+  deployment**, **Not reachable**, **Not checked recently** (R52). The issued certificate's page and the server's page
+  show them per place, with a summary ("Live and verified on 17 of 20 places; 2 not reachable; 1 serves another
+  certificate (it ends in 18 h)").
+- Alice checks those places about every 6 hours (`drift.schedule` and `drift.observe`, read-only: a certificate-only
+  scan and the deployment's own check of the website).
+- Per place, what Alice does when it changes outside Alice: **Report only**, **Prepare a repair** (**Repair** deploys
+  the right certificate again with one click) or **Repair automatically** (`drift.repair`, continuity work: a
+  deployment through the engine, with every guard; an administrator's choice with a fresh code). Automatic repair stops
+  after 3 repairs within 24 hours that came back ("another tool keeps changing this file") or failed. E-mails, once
+  each: changed outside Alice, repair ready, put back, stopped (TR/EN).
+- API: `observation` on every certificate location and ACME binding; `PUT /api/v1/locations/{id}/drift-mode`, `POST
+  /api/v1/locations/{id}/actions/repair`; codes `ALC-DEP-0027` to `ALC-DEP-0030`.
+
+**Changed**
+- An ACME binding is **Up to date** (`current`) only while no check newer than the deployment disagrees; a past
+  successful deployment alone no longer counts. New state `drifted` (**Changed outside Alice**).
+- Places connected before this version keep **Report only**: nothing is repaired until you choose. A place connected
+  later repairs automatically by default when automatic deployment is on for it.
+- Migration `00027` (`certificate_locations.file_observed_at`, `location_observations`, the deployment trigger
+  `drift_repair`, three alert kinds). Rulings: `docs/superpowers/rulings/certificate-drift.md`.
+
 ## Unreleased — Services, environments and trusts (scoped access, phase 1)
 
 **Added**

@@ -1443,6 +1443,60 @@ One check that times out is not taken as an answer: Alice checks each port up to
 a failed deployment says whether the website could not be reached (the network), served another certificate, or sent
 a chain that is not trusted.
 
+### Drift: what should be there and what is there
+
+A successful deployment says what Alice put on a server at that moment, not what the server has today: another tool,
+a person or a restored backup can put an older certificate back. For every certificate file that **follows a
+certificate** (a website connected to an issued certificate, or to a Key Vault certificate), Alice keeps four facts
+apart, each with its own time, and shows them on the issued certificate's page and on the server's page (R52):
+
+| Fact | Where it comes from |
+|---|---|
+| **Should have** | The certificate the binding names: the issued certificate's current one, the Key Vault certificate's current version. |
+| **Alice last deployed** | The newest successful deployment to the file, with its evidence ([How Alice verifies a deployment](#how-alice-verifies-a-deployment)). |
+| **The file held** | What the last scan that could read the file found in it, and when. A scan that could not read the file does not move this time. |
+| **The website served** | What the website served at the last check that reached it, when, and from where: **checked from Alice**, or **checked from the server itself** (when Alice cannot reach the port directly), with the trust of the chain it sent. |
+
+From these Alice derives the state of each place: **In sync**, **Changed outside Alice** (the place had the right
+certificate, and a newer check found another one on the website, or a newer scan found another one in the file that
+Alice did not put there), **Waiting for deployment**, **Not reachable** (the last check could not reach the website),
+**Not checked recently** (nothing in the last 24 hours says what the place has). A past success alone never counts
+as **In sync** once a newer check disagrees. The certificate's page sums it up, for example "Live and verified on 17
+of 20 places; 2 not reachable; 1 serves another certificate (it ends in 18 h)".
+
+**How often.** Alice checks every such place about every 6 hours: it scans the server's certificate files (as
+**Discover** does, without the SSH keys) and checks the websites the way a deployment's verification does. Each
+server is checked by one job at a time, and at most 20 places per server per check.
+
+**When it changes outside Alice.** Each place has a choice, **When it changes**:
+
+- **Report only**: Alice shows the change and e-mails the alert recipients once ("Certificate changed outside Alice
+  on <server>"). Nothing is changed on the server.
+- **Prepare a repair**: the same e-mail says that the repair is ready; **Repair** on the place deploys the right
+  certificate again, as **Deploy now** would, with every check of a deployment.
+- **Repair automatically**: Alice deploys the right certificate again by itself, through the same deployment as
+  always (the undo protection for revoked or compromised certificates, the check of the website and its chain, the
+  check that the file is the one Alice scanned all apply), and e-mails "Certificate put back" once a new check saw the
+  place in sync. A change that no repair ended within an hour is e-mailed as in **Report only**.
+- **Default**: **Repair automatically** when automatic deployment is on for the binding, **Report only** otherwise.
+  The places that were connected before Alice could check them keep **Report only** until you choose.
+
+**Only an administrator, with a fresh code and never with an API token, can choose Repair automatically** (as
+switching automatic deployment on). Operators can choose **Report only** and **Prepare a repair** and use **Repair**.
+**Repair** is available in every mode while the place is changed outside Alice. While the license is locked these
+choices and **Repair** are refused (`ALC-LIC-0001`); automatic repairs continue in the continuity window of a lock, like
+automatic deployments.
+
+**Two tools on one file.** When another tool (a certbot timer, configuration management) manages the same file, the
+two would undo each other's work. Alice repairs a place at most after a new check since its last repair, and when it
+had to repair the same place 3 times within 24 hours and the change came back each time, it stops repairing it by
+itself, switches it to **Report only** and e-mails "another tool keeps changing it". The same happens after 3 failed
+repairs. Decide which tool manages the file: stop the other one and choose **Repair automatically** again, or remove the
+place from the certificate's websites. A place of an open key-compromise incident is never repaired automatically.
+
+Repairs are deployments: their history, steps and e-mails are those of any deployment. A repair that was waiting is
+checked again just before it runs (`ALC-DEP-0027`, `ALC-DEP-0028`).
+
 ### Incomplete chains
 
 A certificate whose chain does not lead to a trusted root is marked "The certificate chain is incomplete: some

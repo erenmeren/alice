@@ -858,9 +858,20 @@ this certificate, with the server, the file, what the website serves now and its
 
 | State | Meaning |
 |---|---|
-| **Up to date** | The website serves the current certificate. |
+| **Up to date** | The website got the current certificate and no newer check disagrees. |
 | **Waiting for deployment** | The website does not serve the current certificate yet: nothing was deployed yet, a deployment is waiting or running, or automatic deployment is off for it. |
 | **Needs attention** | The last automatic deployment of the current certificate to this website failed. The row shows the problem and since when. The website kept its previous certificate (a failed deployment is undone). |
+| **Changed outside Alice** | The website had the current certificate, and a newer check found another one on it or in its file (R52). |
+
+**Observed today** shows, for each website, what it should have, what Alice last deployed, what the file held at the
+last scan that read it and what the website served at the last check (each with its time, and whether the website
+was checked from Alice or from the server itself). Alice checks each website about every 6 hours. **Changes outside
+Alice** is the choice of what Alice does when a website changes outside Alice: **Report only**, **Prepare a repair**
+(then **Repair** deploys the right certificate again with one click, as **Deploy now** would) or **Repair
+automatically** (an administrator's choice, with a fresh code); after 3 repairs within 24 hours that came back, Alice
+stops repairing the website by itself because another tool keeps changing it, and says so in the row. See
+[admin-guide.md](admin-guide.md#drift-what-should-be-there-and-what-is-there). The server's page shows the same for its
+certificate files.
 
 **Needs attention** appears at the next run of the automatic deployment planner, about a minute after the
 deployment failed, not at the moment it fails. **Deployments** has the details of each deployment at once.
@@ -877,8 +888,9 @@ deployment failed, not at the moment it fails. **Deployments** has the details o
   A certificate whose chain is incomplete is deployed only by an administrator who confirms the chain.
 - **Remove** takes a website out: Alice no longer deploys this certificate to it, and the website keeps the
   certificate it serves. It works also while the license is locked.
-- Before you change one of these websites' certificate by hand, remove the website here or switch off its automatic
-  deployment; otherwise Alice may put this certificate back at the next renewal.
+- Before you change one of these websites' certificate by hand, remove the website here, or switch off its automatic
+  deployment and choose **Report only**; otherwise Alice may put this certificate back at the next renewal or, with
+  automatic repair, at the next check.
 
 **Automatic deployment** needs two switches: **Automatic deployment of new certificates** for the certificate, and
 the switch of each website. The panel says "Will deploy automatically to N of M websites" and warns when only one
