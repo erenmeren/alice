@@ -251,6 +251,9 @@ func fillRest(t *testing.T, d *pgtest.DB) {
 	_, err = d.Owner.Exec(ctx, `
 INSERT INTO license (id, installation_id, installed_at, state, updated_at)
 VALUES (1, 'ALICE-ABCD-EFGH-JKLM-NPQR', now(), 'evaluation', now()) ON CONFLICT (id) DO NOTHING;
+INSERT INTO location_observations (location_id, drift_mode, tls_observed_at, tls_fingerprint, tls_probe, tls_level,
+    drift_since, drift_fingerprint, drift_source, updated_at)
+SELECT id, 'approve', now(), repeat('c', 64), 'alice', 2, now(), repeat('c', 64), 'tls', now() FROM certificate_locations LIMIT 1;
 INSERT INTO alerts (id, kind, object_id, subject, expires_at, threshold_days, license_locked, emailed, created_at)
 SELECT gen_random_uuid(), 'certificate_expiry', id, 'alert subject', now() + interval '30 days', 30, false, false, now() FROM certificates LIMIT 1;
 INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, expires_at, created_at)
