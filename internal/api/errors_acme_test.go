@@ -43,7 +43,8 @@ var acmeTable = []struct {
 	{"ALC-ACM-0035", "acme.no_bindings", 409, false}, {"ALC-ACM-0036", "acme.too_many_bindings", 422, false},
 	{"ALC-ACM-0037", "acme.not_this_certificate", 422, false}, {"ALC-ACM-0038", "acme.revoke_unsupported", 422, false},
 	{"ALC-ACM-0039", "acme.revoke_reason_refused", 422, false}, {"ALC-ACM-0040", "acme.revoke_unauthorized", 422, false},
-	{"ALC-ACM-0041", "acme.already_replaced", 409, true},
+	{"ALC-ACM-0041", "acme.already_replaced", 409, true}, {"ALC-ACM-0042", "acme.dns_zone_not_found", 422, false},
+	{"ALC-ACM-0043", "acme.dns_auth_failed", 502, false}, {"ALC-ACM-0044", "acme.dns_provider_error", 502, true},
 }
 
 // Every ACME code is registered as the table says, translated in English and Turkish without placeholders, and has a

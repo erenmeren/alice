@@ -3278,6 +3278,30 @@ The usual reason is that the website does not send the file Alice wrote: another
 
 **What to do.** Usually nothing: the other order ends at the certificate authority within a few days (seven at most at Let's Encrypt) and Alice renews again by itself. If the renewal keeps failing after that, stop the other ACME client from using the account, then use **Check again and resume** on the certificate's page.
 
+## ALC-ACM-0042: No DNS zone of the provider holds this name
+
+**Meaning.** A certificate publishes its proof record through a built-in DNS provider (Cloudflare, Azure DNS or Amazon Route 53), and none of the zones the provider's credentials can see holds the record's name `_acme-challenge.<name>`. Alice takes the longest zone that does (a zone `www.example.com` before `example.com`); a CNAME at `_acme-challenge` is not followed. Nothing was published. (HTTP 422, reason `acme.dns_zone_not_found`.)
+
+**Likely cause.** The zone is in another account, subscription or resource group; a Cloudflare token limited to other zones; a Route 53 zone that is private (Alice uses public hosted zones only); a typing error in the certificate's names.
+
+**What to do.** Check that the zone exists where the DNS provider's settings point (for Azure DNS: the subscription and resource group) and that the credentials may list it, correct the settings or the names, then use **Get certificate now** or **Test run** again.
+
+## ALC-ACM-0043: The DNS provider refused the credentials
+
+**Meaning.** The DNS provider, or the sign-in service in front of it (Microsoft Entra ID for Azure DNS, AWS STS for an assumed role), did not accept the credentials of the DNS provider in Settings, or they may not change the zone's records. Alice never shows the provider's answer. (HTTP 502, reason `acme.dns_auth_failed`.)
+
+**Likely cause.** An expired or revoked Cloudflare API token, Azure client secret or AWS access key; a token without the Zone Read and DNS Edit permissions; a service principal or managed identity without the DNS Zone Contributor role on the zone; an IAM policy without `route53:ChangeResourceRecordSets`, `route53:ListResourceRecordSets`, `route53:GetChange` and `route53:ListHostedZonesByName`; a role whose trust policy does not admit the access key or wants another external ID.
+
+**What to do.** Check the credentials and their permissions in the provider's console (the admin guide lists the minimum permissions), enter new ones in **Settings, ACME, DNS publishing**, then order again.
+
+## ALC-ACM-0044: The DNS provider could not publish the proof record
+
+**Meaning.** The DNS provider's API refused the change, failed, or could not be reached, so the authority could not check the name. An outage, a timeout, a rate limit (HTTP 429) or a server error (5xx) counts as one that clears by itself: automatic renewal keeps retrying. Any other refusal is a setting. (HTTP 502, reason `acme.dns_provider_error`; retryable.)
+
+**Likely cause.** The provider's service is down or limits the requests; Alice cannot reach the provider (firewall, outbound proxy: Alice never uses one); the zone does not accept the record (a CNAME or another record type already at `_acme-challenge.<name>`, a record limit of the plan).
+
+**What to do.** Check the provider's status page and the records at `_acme-challenge.<name>` in the zone, make sure Alice's server can reach `api.cloudflare.com`, `management.azure.com` and `login.microsoftonline.com`, or `route53.amazonaws.com` and `sts.amazonaws.com` on port 443, then order again.
+
 ## ALC-INC-0001: This certificate already has an open incident
 
 **Meaning.** Alice runs one key compromise incident per certificate at a time. (HTTP 409, reason `incident.open`.)

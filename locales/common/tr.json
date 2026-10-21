@@ -1764,6 +1764,21 @@
         "title": "Sertifika yetkilisinde başka bir sipariş bu sertifikanın yerini almak üzere.",
         "cause": "Alice bu yenilemenin yerini aldığı sertifika olarak güncel sertifikayı bildirdi; sertifika yetkilisi ise başka bir siparişin bunu zaten yaptığını söylüyor. O sipariş Alice'in kendi siparişiyse Alice onu devralır, değilse sertifikayı bildirmeden bir kez daha sipariş verir; bu kod yalnızca bunlar da işe yaramadığında görünür.",
         "action": "Genellikle hiçbir şey: diğer sipariş birkaç gün içinde sertifika yetkilisinde sona erer ve Alice kendiliğinden yeniden yeniler. Yenileme başarısız olmaya devam ederse bu süreden sonra sertifikanın sayfasında Yeniden dene ve sürdür'ü kullanın."
+      },
+      "dns_zone_not_found": {
+        "title": "Sağlayıcının hiçbir DNS bölgesi bu adı barındırmıyor.",
+        "cause": "Alice kanıt kaydının adını barındıran bölgeyi DNS sağlayıcısının kimlik bilgilerinin görebildiği bölgeler arasında aradı ve bulamadı. Hiçbir şey yayımlanmadı.",
+        "action": "Bölgenin sağlayıcı hesabında (Azure DNS için ayarlardaki abonelik ve kaynak grubunda) bulunduğunu ve kimlik bilgilerinin onu okuyabildiğini kontrol edip yeniden sipariş verin."
+      },
+      "dns_auth_failed": {
+        "title": "DNS sağlayıcısı kimlik bilgilerini reddetti.",
+        "cause": "DNS sağlayıcısı ya da oturum açma hizmeti, Ayarlar'daki DNS sağlayıcısının API belirtecini, anahtarını veya kimliğini kabul etmedi ya da bunların bölgenin kayıtlarını değiştirme izni yok.",
+        "action": "Kimlik bilgilerini ve izinlerini sağlayıcının konsolunda kontrol edin, Ayarlar'da güncelleyin ve yeniden sipariş verin."
+      },
+      "dns_provider_error": {
+        "title": "DNS sağlayıcısı kanıt kaydını yayımlayamadı.",
+        "cause": "DNS sağlayıcısının API'si değişikliği reddetti, hata verdi ya da erişilemedi; bu yüzden otorite adı kontrol edemedi. Bir kesinti, istek sınırı ya da sunucu hatası kendiliğinden geçer ve otomatik yenileme denemeyi sürdürür.",
+        "action": "Sağlayıcının durum sayfasını ve bölgenin kayıtlarını kontrol edip yeniden sipariş verin; başarısız olmaya devam ederse DNS sağlayıcısının ayarlarını kontrol edin."
       }
     },
     "discovery": {

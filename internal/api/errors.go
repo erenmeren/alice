@@ -484,6 +484,12 @@ var (
 	// RFC 9773 alreadyReplaced (R50): another order at the authority replaces the certificate already; an order's code only
 	// (a renewal takes that order over or orders once more without replaces first). Transient: that order ends there.
 	ErrACMAlreadyReplaced = ErrorCode{Code: "ALC-ACM-0041", Reason: "acme.already_replaced", Status: http.StatusConflict, Retryable: true}
+	// Built-in DNS providers (R57): no zone of the provider's account holds the name; the provider (or its sign-in)
+	// refused the credentials; the provider's API failed or could not be reached (transient for an outage, a rate
+	// limit or a server error, acme.FailureClass).
+	ErrACMDNSZoneNotFound  = ErrorCode{Code: "ALC-ACM-0042", Reason: "acme.dns_zone_not_found", Status: http.StatusUnprocessableEntity}
+	ErrACMDNSAuthFailed    = ErrorCode{Code: "ALC-ACM-0043", Reason: "acme.dns_auth_failed", Status: http.StatusBadGateway}
+	ErrACMDNSProviderError = ErrorCode{Code: "ALC-ACM-0044", Reason: "acme.dns_provider_error", Status: http.StatusBadGateway, Retryable: true}
 
 	// Key-compromise incidents (area INC, 2026-10-20). 0001-0004 answer a request; 0005-0013 are the codes an incident
 	// records on itself (attention_code) or on a location (error_code), never an answer.
@@ -640,7 +646,7 @@ func AllErrorCodes() []ErrorCode {
 		ErrACMSecretUnreadable, ErrACMOrderAbandoned, ErrACMNotIssued, ErrACMLocationBound, ErrACMLocationNotBound,
 		ErrACMBindingGone, ErrACMAutoDeployOff, ErrACMCertificateSuperseded, ErrACMDeployStopped, ErrACMDeployHeld,
 		ErrACMNoBindings, ErrACMTooManyBindings, ErrACMNotThisCertificate, ErrACMRevokeUnsupported, ErrACMRevokeReasonRefused,
-		ErrACMRevokeUnauthorized, ErrACMAlreadyReplaced,
+		ErrACMRevokeUnauthorized, ErrACMAlreadyReplaced, ErrACMDNSZoneNotFound, ErrACMDNSAuthFailed, ErrACMDNSProviderError,
 		ErrINCOpen, ErrINCState, ErrINCReplacementInvalid, ErrINCNotRevocable, ErrINCOtherCertificate, ErrINCNotDeployable,
 		ErrINCFollowsKeyVault, ErrINCFollowsOtherACME, ErrINCLocationBusy, ErrINCDeploymentsFailed, ErrINCDeploymentsUnverified,
 		ErrINCKeyReused, ErrINCReplacementUnusable,

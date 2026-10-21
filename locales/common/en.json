@@ -1764,6 +1764,21 @@
         "title": "Another order at the certificate authority is already replacing this certificate.",
         "cause": "Alice named the current certificate as the one this renewal replaces, and the certificate authority says another order already does. Alice takes that order over when it is one of its own, or orders once more without naming the certificate; this code appears only when that did not help either.",
         "action": "Nothing, usually: the other order ends at the certificate authority within a few days and Alice renews again by itself. If the renewal keeps failing, use Check again and resume on the certificate's page after that time."
+      },
+      "dns_zone_not_found": {
+        "title": "No DNS zone of the provider holds this name.",
+        "cause": "Alice looked for the zone that holds the proof record's name among the zones the DNS provider's credentials can see, and found none. Nothing was published.",
+        "action": "Check that the zone exists in the provider's account (for Azure DNS in the subscription and resource group of the settings) and that the credentials may read it, then order again."
+      },
+      "dns_auth_failed": {
+        "title": "The DNS provider refused the credentials.",
+        "cause": "The DNS provider, or its sign-in service, did not accept the API token, key or identity of the DNS provider in Settings, or they lack the permission to change the zone's records.",
+        "action": "Check the credentials and their permissions in the provider's console, update them in Settings, then order again."
+      },
+      "dns_provider_error": {
+        "title": "The DNS provider could not publish the proof record.",
+        "cause": "The DNS provider's API refused the change, failed or could not be reached, so the authority could not check the name. An outage, a rate limit or a server error clears by itself and automatic renewal keeps retrying.",
+        "action": "Check the provider's status page and the zone's records, then order again; if it keeps failing, check the settings of the DNS provider."
       }
     },
     "discovery": {
