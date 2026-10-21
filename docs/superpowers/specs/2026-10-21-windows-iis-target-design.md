@@ -1,0 +1,511 @@
+# Windows servers and IIS as a deployment target: design
+
+Status: design only, nothing built. Date: 2026-10-21. Written against `main` at `72fa1f9a` (migrations up to `00029`,
+decisions up to R56; R57 and R58 are taken by parallel work). Decision number: **R59+ when implemented** (recorded in
+`alice-v1/00-decisions.md` by the phase that builds it, not before). Migration and error-code numbers: the next free
+ones at merge time. Roadmap and shared groundwork: [2026-10-21-deployment-targets-roadmap.md](2026-10-21-deployment-targets-roadmap.md).
+
+Like [the scoped access design](2026-10-21-scoped-rbac-and-service-ownership-design.md), the implementation proceeds
+on the recommended defaults of §15 while the questions stay open, once the owner approves the defaults in advance.
+
+## 1. Purpose and agreed understanding
+
+Customers run a large share of their TLS endpoints on Windows Server: IIS websites, and services that take their
+certificate from the Windows certificate store (Remote Desktop, the WinRM HTTPS listener, SQL Server, AD FS, Exchange).
+Today Alice deploys only to Nginx over SSH (`internal/providers/nginx`, `alice-helper` protocol 11), discovers Apache and
+HAProxy, and reads and writes Azure Key Vault. A Windows server is invisible to Alice unless network discovery happens
+to probe it.
+
+This design adds a **Windows server** target whose first consumer is **IIS**. It keeps every guarantee the Nginx path
+has: a compare-and-swap against what discovery saw, a journal on the server that survives Alice or the server dying at
+any point, a fence for a send that may arrive late (AUD-05), a rollback that never puts a revoked or compromised
+certificate back (R48, checked on the server too), verification levels with trust (R51), and drift observation (R52).
+
+| Decision | Choice |
+|---|---|
+| Transport | **OpenSSH Server for Windows** with Alice's existing platform SSH key and host key pinning; WinRM is a later, optional transport for the same helper (§4). |
+| What runs on the server | **`alice-helper.exe`**, a Go program built from this repository (no PowerShell at run time), reached only through an sshd `ForceCommand`: the equivalent of the Linux helper behind sudoers. |
+| Where the certificate goes | Imported into `LocalMachine\My` (or `LocalMachine\WebHosting` when the binding already uses it), private key non-exportable, intermediates into `LocalMachine\CA`. |
+| What changes for IIS | The **http.sys SSL binding** (`ipport`, `hostnameport`), updated in one call that keeps every other setting; `applicationHost.config` is never written. |
+| Rollback | Re-point the binding to the previous certificate, which stays in the store until a cleanup removes it. |
+| Location | One http.sys SSL binding (kind `win_sslbinding`); the IIS sites and bindings that use it are its servers, as Nginx server blocks share a file pair. |
+| Versions | Windows Server 2019, 2022 and 2025 (Desktop Experience and Server Core), IIS 10. |
+| Licensing | A Windows server is one target, like a Linux server. |
+
+## 2. Goals and non-goals
+
+Goals:
+
+- G1. Add a Windows server with the platform SSH key, pin its host key, check the helper, and see its facts (OS build,
+  IIS version, elevation, stores).
+- G2. Discover every http.sys SSL binding, the certificate each one serves (from the store, with its chain and key
+  facts), and the IIS sites and bindings that use it; non-IIS consumers of http.sys are listed but not deployable.
+- G3. Deploy a certificate to an IIS binding, manually and through ACME and Key Vault bindings (automatic deployment),
+  with the same outcome model as Nginx (`DeployOutcome`, journal phases, fence, recovery).
+- G4. Verify with Alice's own TLS probe and, when Alice cannot reach the binding, the helper's probe on the server;
+  report R51 levels.
+- G5. Roll back to the previous certificate under the R48 guard, checked by Alice and again by the helper.
+- G6. Observe drift (R52): a binding re-pointed in IIS Manager, a certificate deleted from the store.
+- G7. Remove certificates Alice imported once nothing uses them and no rollback can need them.
+- G8. Test everything on Linux CI with an emulated Windows host, and the helper itself on real Windows runners.
+
+Non-goals (some get later phases, §13):
+
+- Windows clients (Windows 10/11), Windows Server 2016 and older, Nano Server.
+- A permanent agent or a Windows service of Alice's on the server.
+- PowerShell scripts at run time, PowerShell remoting, JEA endpoints (in v1).
+- Writing `applicationHost.config`, creating sites or bindings, changing SSL flags, protocols or cipher settings.
+- SSH key inventory and rotation on Windows (`administrators_authorized_keys`); Windows targets are certificate targets.
+- ACME HTTP-01 on IIS (DNS-01 and Key Vault sources work, as for any location).
+- Exchange, AD FS, SQL Server, SSTP and other store consumers (listed by discovery only; RDP is a later phase).
+- TPM-backed keys (Microsoft Platform Crypto Provider) and smart-card or HSM key storage providers.
+- Active Directory Certificate Services enrolment or autoenrolment.
+
+## 3. Vocabulary
+
+| Term | Meaning |
+|---|---|
+| http.sys SSL binding | An entry of the HTTP Server API's SSL configuration (`netsh http show sslcert`): `ipport` (IP:port, `0.0.0.0:443` for every address), `hostnameport` (SNI name:port) or `ccs` (port, Centralized Certificate Store). It names the certificate by SHA-1 hash and store name, and an application id. |
+| IIS binding | A `<binding>` of a site in `applicationHost.config` (`https`, `ip:port:host`, `sslFlags`). IIS asks http.sys to serve it; the certificate lives only in the http.sys entry. |
+| Location | One http.sys SSL binding Alice can deploy to (kind `win_sslbinding`). Its servers are the IIS bindings that use it. |
+| Store | A certificate store of the local machine: `My` (Personal), `WebHosting`, `CA` (intermediates), `Root`. |
+| Helper | `alice-helper.exe` (`C:\Program Files\Alice\alice-helper.exe`), protocol `winproto` (§7). |
+| Alice-imported | A certificate the helper imported and recorded in its own inventory (`C:\ProgramData\Alice\helper\imports.json`) and marked with a friendly name `Alice <first SAN> <notAfter> <op8>`. Only these are ever deleted. |
+
+## 4. Transport choice
+
+### 4.1 Options
+
+| Criterion | WinRM over HTTPS (5986) | OpenSSH Server + helper (22) | An Alice agent (Windows service) |
+|---|---|---|---|
+| Present on the server | WinRM service on by default since 2012; an HTTPS listener needs a certificate and setup. | Optional feature since 2019 (`Add-WindowsCapability`); installed but stopped on 2025. | A new install and its updates. |
+| Authentication without a stored password | Certificate mapping (local accounts only; the account's password is typed once on the server for the mapping); Kerberos needs a domain account's password or keytab and the KDC and DNS reachable from Alice's container; NTLM and Basic need a password. | Alice's platform SSH key, the same in a domain and a workgroup; no password anywhere. | Enrolment token, then a client certificate. |
+| Server identity | The listener's certificate, usually self-signed: Alice would need TLS pinning (new) or the customer's CA; Kerberos gives mutual authentication in a domain. | SSH host key pinning, built and reviewed (`providers.HostKeyStore`, the confirm flow, `host_key_changed`). | The agent's certificate. |
+| Limiting what Alice can run | WinRS gives a full shell of the account. Only JEA limits it, and JEA needs the PowerShell Remoting Protocol (PSRP), which no maintained Go library implements. | `ForceCommand` to the helper: the account can only run helper subcommands with validated arguments, as sudoers + helper on Linux (SEC-063). | The agent decides. |
+| Secrets in Windows logs | Commands are PowerShell or cmd text; PowerShell script block logging (event 4104) and transcription can record what was sent. | Key material travels on the helper's standard input, never on a command line, never through PowerShell. | Agent protocol. |
+| Code Alice reuses | None: WS-Management SOAP, message encryption, NTLM or Kerberos (new dependencies such as `masterzen/winrm`, `gokrb5`), envelope size limits for the key upload. | The SSH pool, dial budgets, host keys, `StepLogger`, the helper journal semantics, the fence, the rollback guard, the emulator infrastructure. | Little; plus an inbound port on Alice, enrolment, update channel. |
+| Customer familiarity | High (Ansible, SCCM). | Lower; one setup script enables it. | Agents are often refused in regulated networks. |
+| Firewall | 5986 from Alice. | 22 from Alice. | Outbound from every server to Alice. |
+
+### 4.2 Recommendation
+
+**OpenSSH Server with a forced command to `alice-helper.exe`** (Q1). Reasons, in order: it is the only option where
+Alice can run nothing but its own validated subcommands without building PSRP; it needs no password in Alice or on the
+server; it reuses the reviewed SSH identity model; key material never passes through PowerShell or a command line.
+The cost is customer acceptance of sshd on Windows; the setup script (§6.1) makes that one step, and Windows Server 2025
+already ships the binaries.
+
+WinRM stays possible later (Phase W7, only on customer demand): the helper and its protocol do not change; the transport
+would be WinRS with certificate authentication, the listener's certificate pinned by SPKI (the shared TLS pinning of the
+roadmap's groundwork), Basic, NTLM and unencrypted HTTP refused; and the security analysis would state that the account
+is not limited to the helper unless PSRP and a JEA endpoint are built.
+
+No agent (non-goal): a permanent service with its own update channel is a larger attack surface than one validated
+binary invoked per call.
+
+### 4.3 Account and privileges
+
+The helper needs administrative rights (machine store, http.sys configuration). Two setups, both supported, chosen by
+the customer in the setup guide:
+
+- **Workgroup or default**: a local account `alice` in `Administrators`, created by the setup script with a random
+  32-character password that is never printed (password sign-in is also refused by sshd for this account), and the user
+  rights "Deny log on locally" and "Deny log on through Remote Desktop Services".
+- **Domain with a hardened baseline** (where "Deny access to this computer from the network" includes *Local account
+  and member of Administrators group*, S-1-5-114, which may block a local administrator's network logon): a dedicated
+  domain account that a GPO adds to the local `Administrators` of the managed servers, with the same deny rights.
+
+Either way the key line goes into `C:\ProgramData\ssh\administrators_authorized_keys` (the file Windows OpenSSH reads
+for administrators) with `restrict`, and `sshd_config` gets:
+
+```
+Match User alice
+    ForceCommand "C:\Program Files\Alice\alice-helper.exe" ssh
+    AuthenticationMethods publickey
+    PermitTTY no
+    AllowTcpForwarding no
+    AllowStreamLocalForwarding no
+    X11Forwarding no
+    PermitTunnel no
+```
+
+`alice-helper.exe ssh` reads `SSH_ORIGINAL_COMMAND`, splits it into a subcommand and arguments with the protocol's own
+validators (no shell, no `cmd.exe` parsing), refuses anything else (`UNKNOWN_SUBCOMMAND`), and checks that its token is
+elevated (`NOT_ELEVATED` otherwise; UAC remote restrictions on local accounts are the usual cause, §11).
+
+## 5. Data model
+
+All changes ride on the shared groundwork of the roadmap (location kinds with a locator, TLS pinning, backup models).
+Windows-specific:
+
+- `targets.type`: new value `windows` (provider kind `windows`). IIS is a fact of the server (`WebServerFacts` with
+  `server: iis`, version, sites count), as Nginx is for a `nginx` target; later consumers (RDP) are more facts and
+  location kinds of the same target.
+- Credential: none new. The target uses the platform SSH key (`credentials.purpose = 'platform_ssh'`), its
+  `os_user` (`alice` or `DOMAIN\alice-svc`) and port in `targets.config`.
+- Host keys: `host_keys` unchanged (an SSH host key).
+- `certificate_locations.kind`: new value `win_sslbinding`. Locator (`certificate_locations.locator`, groundwork):
+
+  ```json
+  {"type": "hostnameport", "host": "www.example.com", "port": 443, "app_id": "{4dc3e181-e14b-4a21-b022-59fc669b0914}"}
+  {"type": "ipport", "ip": "0.0.0.0", "port": 443, "app_id": "{4dc3e181-e14b-4a21-b022-59fc669b0914}"}
+  ```
+
+  `cert_path` holds the canonical text `http.sys/hostnameport/www.example.com:443` (unique per target, shown in the UI);
+  `key_path` is empty; `cert_file_sha256` holds the SHA-256 of the DER of the certificate the binding names (the
+  compare-and-swap token); `servers` holds the IIS sites and bindings (`CertServer.Names` = host headers,
+  `Section` = site name, `Listens` = `ip:port`); the key facts (provider, exportable, store, usable by SYSTEM) go into
+  the location's `details` (groundwork) instead of the Unix `key_mode`, `key_owner` and `key_group`, which stay empty.
+- `deployments.rollback_info` (`BackupRef`): `{"operation_id", "store": "My", "previous_sha1": "...",
+  "previous_sha256": "..."}`; the previous certificate stays in the store, so no key leaves the server.
+- No table for imports: the helper's inventory on the server is the source of truth for what may be deleted (§6.8);
+  Alice shows it from the dump.
+
+New location problems (`CertProblem*`): `cert_missing` (the binding names a hash not in the store), `key_missing`,
+`key_inaccessible` (the store has the certificate but http.sys cannot use its key). New unsupported reasons
+(`Unsupported*`): `win_foreign_app` (an http.sys binding of another application: WinRM, AD FS, SSTP...), `win_ccs` (a
+`ccs` binding, until Phase W5), `win_store_unsupported` (a store other than `My` and `WebHosting`), `win_ctl` (a binding
+with a certificate trust list or client certificate mapping Alice does not model; deployable, warned).
+
+## 6. Flows
+
+### 6.1 Adding a server
+
+1. The Administrator picks **Windows server** and gets the setup snippet (`SetupGuide.SetupSnippets`, profile
+   `windows`): a PowerShell script to run once as an administrator. It installs OpenSSH Server if missing (from the
+   Windows capability, or an MSI the customer downloads in an air-gapped network), sets sshd to start automatically,
+   creates the account (or takes the domain account's name), writes `administrators_authorized_keys` with the platform
+   key and fixes its ACL (Administrators and SYSTEM only, as sshd requires), adds the `Match` block, installs
+   `alice-helper.exe` after checking its SHA-256 against the value embedded in the script (Q2), creates
+   `C:\ProgramData\Alice\helper` with an ACL of SYSTEM and Administrators only, adds a firewall rule for port 22 from
+   Alice's address only, and registers the event source `Alice Helper`. The script is shown for review, never pushed.
+2. Alice tests the connection: first contact shows the host key for confirmation (the existing flow); `version` answers
+   the helper version and `winproto`; `win-facts` answers the OS build, IIS presence and version, elevation, the stores
+   and the OpenSSH version.
+3. Discovery runs (`iis-dump`), and the server counts toward the license from creation, as every target.
+
+### 6.2 Discovery (`iis-dump`, read-only)
+
+The helper reads, in this order, with a budget (the Linux `HelperBudget` rule):
+
+1. Every http.sys SSL binding (`HttpQueryServiceConfiguration` for `HttpServiceConfigSslCertInfo`,
+   `HttpServiceConfigSslSniCertInfo`, `HttpServiceConfigSslCcsCertInfo`): type, address or name, port, hash, store,
+   application id and the flags Alice must preserve.
+2. For each hash, the certificate from the named store: DER, the chain Windows builds for it in the machine context
+   (`CertGetCertificateChain`, excluding the root), the private key's presence, provider, exportability, and whether the
+   SYSTEM account can open it.
+3. IIS sites and bindings through `%windir%\system32\inetsrv\appcmd.exe list site /config /xml` (so shared
+   configuration and location paths are resolved by IIS itself, not by Alice's parser), parsed with `encoding/xml` into
+   site name, id, state, `https` bindings and `sslFlags`.
+4. Facts that warn: IIS shared configuration enabled, the `IIS-AutoCertRebind` scheduled task enabled (AD CS renewal
+   can re-point bindings: another writer), Centralized Certificate Store enabled and its path, the count of expired
+   certificates in `My` and `WebHosting`, the helper's import inventory.
+
+The answer is bounded like `nginx-dump` (entries, certificates, total size); a cut list carries
+`WarnListTruncated`. Each http.sys binding becomes a `CertLocation`; IIS bindings that match no http.sys entry (a site
+whose certificate was removed) are reported with `cert_missing`.
+
+### 6.3 Deployment (`iis-deploy`)
+
+Alice's side is the existing engine (`internal/jobs/deployjobs`): pre-check, start record, send, outcome, verify,
+rollback, recovery. The provider builds the input on standard input (JSON, `winproto.DeployInput`): operation id,
+locator, expected current DER SHA-256, certificate chain PEM, private key PEM, target store, the R48 forbidden lists,
+and nothing else. The helper:
+
+1. Validates every field; takes the helper lock (one change at a time per server); refuses when not elevated.
+2. Refuses an operation id it already knows (`OPERATION_EXISTS`) or has fenced (`FENCED`).
+3. Reads the binding; refuses with `HASH_MISMATCH` (exit 3, nothing changed) when its certificate's DER SHA-256 is not
+   the expected one, and answers `unchanged` when it already names the new certificate.
+4. Journal `prepared` (`C:\ProgramData\Alice\helper\journal\<op>.json`, written to a temporary file, flushed, then
+   `MoveFileEx` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`): the binding's full previous settings, the
+   previous hash and store, the new hash, the forbidden lists.
+5. Step `import_chain`: adds each intermediate to `LocalMachine\CA` when absent (never replaces one), recorded.
+6. Step `import_certificate`: builds a PKCS #12 in memory with a random one-time password and imports it with
+   `PFXImportCertStore` (`CRYPT_MACHINE_KEYSET`, CNG "Microsoft Software Key Storage Provider", **not exportable**),
+   then adds the certificate to the target store. When the same certificate is already in the store (imported by
+   someone else), it is used as is and recorded as *not* Alice-imported. The in-memory PFX and password are zeroed.
+7. Journal `writing`. Step `bind`: `HttpUpdateServiceConfiguration` with the entry read in step 3, only the hash and
+   store changed: one call, no moment without a certificate, every other setting (client certificate negotiation,
+   revocation checks, TLS 1.3 and legacy TLS flags, CTL) preserved.
+8. Reads the entry back; a mismatch restores the previous entry itself (with the guard, §6.5) and answers
+   `rolled_back` with failed step `bind`.
+9. Journal `committed`; an Application event (id 1001, no key material: operation, binding, old and new SHA-256).
+
+The engine then verifies (§6.4). A failed verification makes the provider call `iis-restore` (§6.5) exactly as the
+Nginx provider calls `nginx-restore`.
+
+### 6.4 Verification
+
+Endpoints per location: `hostnameport` → the target's address at the port with SNI = the name; `ipport` with
+`0.0.0.0` → the target's address with SNI from the IIS host headers or the certificate (the existing `SNIFor` rule);
+a specific IP → that IP when Alice can reach it (the existing `probeFromAlice` rule), otherwise the helper's own
+`tls-probe` from the server (same answer shape as protocol 11, chain included). The Administrator's per-location
+settings (port, SNI, skip, and the groundwork's probe address) apply unchanged.
+
+Every probe uses a fresh TLS session (no session ticket): http.sys serves the new certificate to new handshakes at once,
+so polling is not needed; a short retry (the existing attempts) covers the first handshake after the change.
+
+Chain length: Windows builds the served chain itself (schannel sends what `CertGetCertificateChain` finds), which can
+differ from what Alice deployed (a cross-signed intermediate already in the store). The provider therefore compares
+the served chain length with the chain the helper reported for the new certificate after the import (step 6), not
+with Alice's chain; when the two differ, the deployment carries the warning `win.chain_differs` (params: deployed and
+built lengths) and the R51 trust check decides as usual.
+
+### 6.5 Rollback and recovery
+
+- **Restore** (`iis-restore <op>`, the forbidden lists on standard input): only when the journal is `committed` or
+  `writing` and the binding still names the new certificate (otherwise `SUPERSEDED` or `file_changed`, nothing done);
+  the previous certificate must still be in its store (`BACKUP_MISSING` otherwise); the helper checks its leaf SHA-256
+  and SPKI SHA-256 against the lists (R48: `restore_forbidden`, nothing restored); then one
+  `HttpUpdateServiceConfiguration` back to the previous entry, read back, journal `restored`.
+- **Status** (`iis-status <op>`) and **fence** (`iis-fence <op>`) have the Linux semantics: a fence on an unknown
+  operation writes a `fenced` journal, and a late `iis-deploy` with that id is refused.
+- **Guard required** (R48 `Required`): the helper checks the guard itself, so incident replacements are allowed on
+  every supported helper; `GuardsRollback` answers true from `winproto` 1.
+- A reboot in the middle: the http.sys configuration is persistent (registry) and the journal is on disk; the next
+  `iis-status` reports the phase, and the engine's existing recovery table decides.
+
+### 6.6 Drift (R52)
+
+`drift.observe` works unchanged through `Reconcile` and `VerifyDeployment`: the dump's hash for the binding is the
+"file" fact (`file_observed_at`), the probe is the "website" fact. Windows-specific causes are reported with their own
+codes in the notice: re-pointed binding (another hash), certificate removed from the store (`cert_missing`), key no
+longer usable (`key_inaccessible`), and the `IIS-AutoCertRebind` warning on the server. Repair is a deployment with
+trigger `drift_repair`, guarded as every deployment.
+
+### 6.7 Old certificate cleanup
+
+A periodic job `windows.cleanup` (ClassChange, daily, per Windows target; switch per target, on by default) asks
+`iis-cleanup --plan` for candidates and sends `iis-cleanup --apply` with the ids Alice accepts. A certificate is removed
+only when every rule holds:
+
+1. Alice-imported (in the helper's inventory and with Alice's friendly name);
+2. no http.sys binding of any application names it, and neither the RDP listener's hash nor a WinRM listener's
+   thumbprint (`win-facts` reads both);
+3. no journal of an operation that is not final references it, and Alice says no deployment that may still roll back to
+   it exists (the engine's view: the newest final deployment of each location keeps its previous certificate for
+   7 days, Q6);
+4. it was replaced at least 7 days ago, or it is expired, or (incident) it is the replaced certificate of a closed
+   key-compromise incident place (removed at once after the replacement verified, Q7).
+
+The private key is deleted with the certificate (`CertDeleteCertificateFromStore` plus the CNG key). Intermediates are
+never deleted. Expired certificates Alice did not import are only counted (`win.expired_in_store`).
+
+## 7. The helper (`cmd/alice-winhelper`, installed as `alice-helper.exe`)
+
+- Go, `GOOS=windows`, amd64 and arm64, `CGO_ENABLED=0`, calls through `golang.org/x/sys/windows` (crypt32, ncrypt) and a
+  small hand-written binding of `httpapi.dll` (`HttpInitialize`, `HttpQueryServiceConfiguration`,
+  `HttpUpdateServiceConfiguration`, `HttpSetServiceConfiguration`, `HttpTerminate`). No PowerShell, no .NET.
+- Protocol package `internal/providers/windows/winproto` (standard library only, imported by the helper and by Alice):
+  subcommands, exit codes (the Linux ones: 0, 2, 3, 4), error codes (the Linux names where they mean the same:
+  `INVALID_ARGUMENT`, `HASH_MISMATCH`, `FENCED`, `SUPERSEDED`, `OUTCOME_UNKNOWN`; new: `NOT_ELEVATED`, `IIS_NOT_FOUND`,
+  `BINDING_NOT_FOUND`, `BACKUP_MISSING`, `STORE_ERROR`), journal phases equal to `providers.Phase*` (a test compares
+  them), and the TLS probe answer shared with `helperproto` (moved to a common package if import rules require).
+  Protocol starts at 1 and evolves on its own; `MinProtocol` rules as on Linux.
+- Subcommands of protocol 1: `version`, `win-facts`, `iis-dump`, `iis-deploy`, `iis-restore`, `iis-status`, `iis-fence`,
+  `iis-cleanup`, `tls-probe`.
+- Code shared with the Linux helper, where it is platform-neutral: the rollback guard check (leaf and SPKI hashes), the
+  journal's state machine, input validation, the probe. Platform code lives behind build tags; the Linux helper is not
+  changed by this design.
+- Release: built reproducibly with the other artifacts, listed in `SHA256SUMS` (signed with the release key, §17.5 of
+  `04-security.md`); the setup script embeds the SHA-256 of the helper it installs. Authenticode signing: Q2.
+
+## 8. Provider (`internal/providers/windows`)
+
+- Kind `windows`, capabilities: `test_connection`, `discover_certificates`, `deploy_certificate`, `verify_deployment`.
+- `Open` reuses `linuxssh`'s pool and dial (host key pinning, budgets, `FreshConnection`); the command line sent is the
+  bare subcommand and its arguments (no `sudo`), which the forced command receives as `SSH_ORIGINAL_COMMAND`.
+- `ConfigSchema`: `address`, `port` (22), `os_user`, `discovery_interval`. `CredentialSchema`: the platform key.
+- `SetupGuide`: profile `windows`, the PowerShell snippet of §6.1, `HelperInfo` = path and `winproto.Protocol`.
+- Every outcome rule of `providers` (`CheckDeployReturn`, `CheckRollbackReturn`, `DeploymentState.Validate`) applies; the
+  conformance suite (`providertest`) runs against the emulator (§12).
+
+## 9. Security analysis
+
+| Threat | Mitigation |
+|---|---|
+| **Alice compromised runs arbitrary code on Windows servers** | Forced command: only helper subcommands with validated arguments; no shell, no forwarding, no TTY. The residual (an attacker with Alice deploys any certificate to any binding, or removes Alice-imported certificates) equals Nginx's. |
+| **Password theft** | No password exists in Alice; the local account's password is random and never shown; sshd refuses password sign-in for it. |
+| **Man in the middle on first contact** | SSH host key confirmation by an Administrator (existing flow); a changed key blocks the target (`host_key_changed`). The setup script prints the host key fingerprint so the Administrator can compare. |
+| **Private key exposure on the server** | The key travels in the SSH channel on standard input, is imported non-exportable into the machine CNG store (ACL SYSTEM and Administrators), and never touches disk as a file or PFX; the in-memory PFX password is random and zeroed. |
+| **Key material in Windows logs** | No PowerShell, no command-line secrets (process creation auditing, event 4688, sees only the subcommand); the helper's events carry hashes only. |
+| **Helper binary replaced on the server** | Same as Linux: an administrator of the server can replace it; the directory ACL limits it to Administrators. The setup script checks the hash at install; Authenticode (Q2) helps WDAC customers. |
+| **Rollback reinstalling a compromised certificate** | Alice checks the R48 guard before sending; the helper checks it again on every restore path (step 8 of §6.3, `iis-restore`). |
+| **Deleting a certificate someone else uses** | Only Alice-imported certificates, only when no http.sys binding of any application, no RDP or WinRM listener and no live journal references them; intermediates never. |
+| **UAC remote restrictions silently filtering the token** | The helper checks elevation and refuses (`NOT_ELEVATED`), never half-works. |
+| **Elevation of the `alice` account** | Interactive and RDP logon denied; sshd allows public key only; `administrators_authorized_keys` ACL fixed by the script. |
+| **Lateral movement from a Windows server to Alice** | Alice dials out; nothing on the server can call Alice. |
+| **Shared IIS configuration across a farm** | Alice never writes `applicationHost.config`; each server's http.sys binding is its own location. |
+
+## 10. Verification levels (R51)
+
+| Level | When |
+|---|---|
+| 0 none | The deployment failed or was rolled back. |
+| 1 installed | The binding names the new certificate (read back by the helper) and verification is skipped for the location. |
+| 2 served | Every endpoint (Alice's probe or the helper's) serves the new leaf with the chain length Windows built. |
+| 3 trusted | And every served chain verifies against the trust store for the endpoint's name (`providers.CheckServedChain`). |
+| 4 healthy | Reserved, as everywhere. |
+
+## 11. Failure modes
+
+| Failure | Outcome |
+|---|---|
+| sshd unreachable, timeout, host key changed | As Linux: `ssh.*` codes, target status; a deploy send that may have arrived is uncertain and recovered through `iis-status` and the fence. |
+| Helper missing or too old | `windows.helper_missing`, `windows.helper_outdated`: nothing sent. |
+| Token not elevated (UAC remote restrictions on a local account) | `windows.not_elevated` with the fix (the domain-account setup, or `LocalAccountTokenFilterPolicy` as a documented last resort). |
+| IIS not installed | Facts say so; locations of other applications still listed; nothing deployable. |
+| Binding changed since discovery | `HASH_MISMATCH`: no change, the engine's precondition failure (`deployment.precondition`), a new discovery is queued. |
+| Binding removed since discovery | `BINDING_NOT_FOUND`: no change. |
+| Import fails (store, key provider, policy) | `STORE_ERROR` before the bind: nothing changed for the website; anything imported is recorded and cleaned later. |
+| Bind call fails or reads back wrong | The helper restores the previous entry (guarded) and answers `rolled_back`. |
+| Alice killed at any point | Journal plus fence plus the engine's recovery (the F-66 table run against the emulator). |
+| Server reboots during a deployment | The journal phase decides at the next status; http.sys settings are persistent. |
+| Verification fails (wrong leaf, network, trust) | `iis-restore` under the guard; the R51 rules decide warning or failure. |
+| Schannel serves another chain than deployed | Warning `win.chain_differs`, trust decides. |
+| The key is unusable by http.sys | Handshake fails: verification fails with `network` kind on every endpoint; rollback. The dump flags `key_inaccessible` beforehand when it can. |
+| Antivirus or EDR blocks the helper | `STORE_ERROR` or process failure; uncertain outcomes recovered; documented exclusion for the helper path. |
+| AD CS autoenrolment re-points the binding later | Drift (`drifted`), with the `IIS-AutoCertRebind` warning naming the likely cause. |
+| Journal directory full or unwritable | Refused before any change (`JOURNAL_FAILED`), as on Linux. |
+
+## 12. Test strategy
+
+1. **Unit tests** (Linux CI): `winproto` validators and shapes; the provider's command building, outcome mapping and
+   verification judgement against canned answers; the cleanup rules as a table.
+2. **Emulated Windows host** (`internal/providers/windows/wintest`, Linux CI, the pattern of `linuxsshtest`): an
+   in-process SSH server that answers the `winproto` subcommands from a modelled host — machine stores (certificates,
+   keys, exportable flag, friendly names), the http.sys binding table, IIS sites and bindings, the helper's journal and
+   import inventory — computed by ports of the helper's own decision code (shared, platform-neutral packages), and a real
+   TLS listener per binding serving the bound certificate with SNI routing, so Alice's real probe and trust check run.
+   Faults: bind fails, read-back differs, not elevated, hash mismatch, kill at every journal point, chain built
+   differently, key inaccessible (handshake failure), slow first handshake.
+3. **Engine and jobs integration** (Linux, Postgres): the Nginx world of `internal/jobs/deployjobs` gains a Windows
+   server on the emulator: manual, ACME and Key Vault deployments, the crash table (F-66), the rollback guard rows,
+   drift observe and repair, cleanup.
+4. **Real Windows, helper level** (GitHub `windows-2022` and `windows-2025` runners, nightly and on changes under the
+   Windows paths): install IIS (`Install-WindowsFeature Web-Server`), create sites with SNI and IP bindings, run
+   `go test ./cmd/alice-winhelper/... ./internal/providers/windows/...` natively (real stores, real http.sys, real
+   schannel), and the **fidelity test**: the same scenario list run against the emulator and against the real helper,
+   answers compared field by field (like `emulator_fidelity_test.go`).
+5. **Real Windows, provider level** (same runners): install OpenSSH Server (pinned Win32-OpenSSH MSI by SHA-256 if the
+   capability install is slow or unavailable on the image), run the setup script, and run the provider's tests (tag
+   `windows_integration`) dialing `localhost`: providers have no database, so no Postgres is needed on Windows.
+6. **Manual matrix before release** (owner, §15): Windows Server 2019 (no GitHub image any more), a domain-joined
+   server with the security baseline, Server Core.
+7. **e2e** (Linux stack): an emulated Windows host container (`test/images/fakewindows`, wrapping `wintest`) so the
+   browser suite adds, discovers, deploys and rolls back on a Windows server.
+
+## 13. Phases
+
+Each phase is its own branch, fully green (`make ci`, e2e), fast-forward merged before the next, behind no flag (a
+phase is inert until an Administrator adds a Windows server). Sizes as in the scoped access design.
+
+### Phase W0 — Spike on real Windows (size S, ~3 tasks, no merge of product code)
+
+Confirm the facts of §14 on Windows Server 2022 and 2025 runners with a throwaway program; write the results into this
+document. Acceptance: every row of §14 marked confirmed or changed, with the design amended where a fact differs.
+
+### Phase W1 — Target, connection and discovery (size L, ~9 tasks)
+
+Groundwork items it needs (roadmap); `targets.type` `windows`; `winproto` 1 with `version`, `win-facts`, `iis-dump`,
+`tls-probe`; the helper's read half; the provider's `Open`, `TestConnection`, `Discover`; setup snippet; emulator read
+half; UI: add a Windows server, setup script, facts, locations with IIS sites, problems and unsupported reasons (TR/EN).
+
+Acceptance:
+- A Windows server is added, its host key confirmed, its facts shown; a helper that is missing, old or not elevated is
+  named precisely.
+- Discovery lists every http.sys binding; IIS bindings are their servers; foreign applications and CCS bindings are
+  unsupported with their reason; truncation warns.
+- The certificate of each binding is linked to inventory by fingerprint (network discovery and inventory show it
+  managed).
+- Real-runner helper tests and the fidelity test pass for the read subcommands.
+
+### Phase W2 — Deployment, verification, rollback (size XL, ~12 tasks)
+
+`iis-deploy`, `iis-restore`, `iis-status`, `iis-fence`; import and bind; the journal; the guard on the server; the
+provider's `DeployCertificate`, `RollbackDeployment`, `DeploymentStatus`, `FenceDeployment`, `VerifyDeployment`;
+locations bindable to ACME and Key Vault certificates; `win.chain_differs`; error codes; UI deployment pages unchanged
+apart from the Windows step names (`import_chain`, `import_certificate`, `bind`).
+
+Acceptance:
+- Manual deploy to an SNI and an IP binding: committed, level 3 with a public-CA chain, level 2 with a private CA
+  without root, level 1 with skip.
+- A hash mismatch changes nothing; an unchanged certificate answers unchanged.
+- A failed verification rolls back to the previous certificate; a forbidden backup restores nothing and ends
+  `rollback_failed` with `deployment.rollback_forbidden` (the helper's own refusal tested on a real runner too).
+- The crash table passes on the emulator; the fidelity test passes for every write subcommand on real Windows.
+- ACME and Key Vault automatic deployment reach a Windows location; the scoped-access trust check applies.
+
+### Phase W3 — Drift and cleanup (size M, ~5 tasks)
+
+R52 observation for Windows locations; the Windows causes in notices; `iis-cleanup` and `windows.cleanup`; the incident
+cleanup rule.
+
+Acceptance:
+- A binding re-pointed outside Alice is `drifted`; `auto` repairs it; flapping backs off.
+- Cleanup removes only Alice-imported, unreferenced, aged certificates; a certificate bound by a foreign application,
+  RDP, WinRM or a live journal is kept (table test on the emulator, one real-runner case).
+
+### Phase W4 — Real-Windows CI job and release (size M, ~4 tasks)
+
+Nightly and path-filtered workflow jobs on `windows-2022` and `windows-2025`; the helper in release artifacts and
+`SHA256SUMS`; documentation (`docs/admin-guide.md` "Windows servers", operator guide, security overview,
+`SECURITY-REPORT.md` delta, `06-quality.md` test IDs `WIN-01..` and `test/matrix/traceability.json`).
+
+Acceptance: the jobs are required for changes under the Windows paths; `make matrix-check` passes; the owner's manual
+matrix (§12 item 6) is listed as an owner step.
+
+### Phase W5 — Centralized Certificate Store (size M, ~5 tasks; on demand)
+
+A CCS location belongs to the Windows server that hosts the CCS folder (a `windows` target, location kind
+`win_ccs_file`, the PFX named `<host>.pfx` or `_.<domain>.pfx`), written with the CCS PFX password (an Alice location
+secret entered by an Administrator), atomically (temporary file, `ReplaceFile` with a backup file kept for rollback).
+The IIS servers' `ccs` bindings are linked to it for verification. No double hop: the helper writes a local path only.
+
+### Phase W6 — Remote Desktop certificate (size M, ~4 tasks; on demand)
+
+Location kind `win_rdp` (the RDP-Tcp listener): import as in §6.3, grant read on the key to `NETWORK SERVICE`, set the
+listener's hash (the `SSLCertificateSHA1Hash` value, Q8), verify by a TLS handshake on 3389 after the RDP security layer
+negotiation (new probe mode). Key ACLs are the new risk and get their own review.
+
+### Phase W7 — WinRM transport (size L; only if customers refuse SSH)
+
+§4.2: the same helper over WinRS with certificate authentication and listener SPKI pinning.
+
+### Interactions with other work
+
+- Scoped access (R49, R53-R56): a Windows server belongs to a service like any target; cross-service deployment needs
+  the trust; the service policy applies to what is deployed, unchanged.
+- License (R9, R44): discovery ClassReadOnly, deployment and cleanup ClassChange, automatic deployment and drift repair
+  ClassContinuity, as for Nginx.
+- Revocation and incidents (R46, R48): Windows locations are incident places; the guard is checked twice (§6.5).
+- Network discovery: an endpoint whose certificate a Windows location holds shows as managed.
+
+## 14. Facts to confirm in Phase W0
+
+| # | Fact the design relies on | If it is wrong |
+|---|---|---|
+| F1 | IIS keeps an HTTPS binding's certificate only in the http.sys SSL configuration; changing it there is what IIS Manager does, and IIS picks it up without a restart or `applicationHost.config` change. | Write the binding through `appcmd` as well; re-review. |
+| F2 | `HttpUpdateServiceConfiguration` updates an `ipport` and a `hostnameport` entry in one call on 2019, 2022, 2025. | Delete and set in two calls inside the journal (a short window without a certificate, recorded as a known risk). |
+| F3 | A key-based OpenSSH logon of an administrator account gets an elevated token (domain account; local account without UAC filtering). | Recommend the domain account only; document `LocalAccountTokenFilterPolicy`. |
+| F4 | `PFXImportCertStore` with `CRYPT_MACHINE_KEYSET` and the CNG provider gives a non-exportable key http.sys can use without extra ACLs. | Set the key's ACL explicitly (SYSTEM read). |
+| F5 | Schannel sends the chain Windows builds from `CA` and does not send the root. | Adjust the chain-length rule of §6.4. |
+| F6 | `appcmd list site /config /xml` resolves shared configuration and is available on Server Core. | Read `applicationHost.config` with redirection handled by the helper. |
+| F7 | OpenSSH Server installs on the GitHub Windows images in reasonable time. | Pinned Win32-OpenSSH MSI. |
+| F8 | The application ids of WinRM, AD FS and SSTP bindings, for the `win_foreign_app` names. | Show the raw id. |
+
+## 15. Open questions for the owner (the implementation proceeds on the default)
+
+| # | Question | Recommended default |
+|---|---|---|
+| Q1 | Transport: OpenSSH with a forced command, WinRM HTTPS, or an agent? | **OpenSSH + forced command to `alice-helper.exe`** (§4.2). WinRM only as a later alternative if customers refuse sshd; no agent. |
+| Q2 | Sign `alice-helper.exe` with Authenticode (a code-signing certificate on a hardware token, a yearly cost)? | **Before the first customer that runs WDAC or AppLocker; until then** the release-key-signed `SHA256SUMS` and the hash check in the setup script. Recommended before general availability. |
+| Q3 | Windows Server 2016? | **No** (extended support ends 2027-01-12; no built-in OpenSSH). Revisit only for a paying customer. |
+| Q4 | A separate helper binary for Windows or one multi-platform `alice-helper`? | **Separate** (`cmd/alice-winhelper`, own protocol `winproto`), sharing platform-neutral packages; the Linux helper's protocol and release are untouched. |
+| Q5 | One location per http.sys binding, or one per certificate across the bindings that use it? | **Per http.sys binding** (the unit that changes atomically, like a file pair); the UI groups locations of one server that show the same certificate. |
+| Q6 | How long does the previous certificate stay in the store? | **7 days after the replacing deployment is final**, and never while a rollback can need it. |
+| Q7 | After a key-compromise replacement, remove the compromised certificate from the store at once? | **Yes when Alice imported it** (after the replacement verified); otherwise a notice to the owners that it is still in the store. |
+| Q8 | RDP and other store consumers: when? | **After W4, on demand**, RDP first (W6). Exchange, AD FS, SQL Server stay discovery-only. |
+| Q9 | Store for new imports when the binding's store is not `WebHosting`? | **The binding's current store** (`My` by default); never move a binding between stores. |
+| Q10 | Does the Windows Application event log get an event per change? | **Yes** (hashes and binding names only), so the customer's SIEM sees Alice's changes from the server's side. |
+| Q11 | Licensing: does a Windows server count as one target whatever it hosts (IIS, later RDP)? | **Yes, one target**, like a Linux server with Nginx. |
