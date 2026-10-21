@@ -54,6 +54,10 @@ func (s *server) importToVault(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// R49 Phase 2, design §5.6 (b): credentials.manage on the vault's service too (the guard checked the certificate's).
+	if !s.checkDestinationsOf(w, r, rbac.CredentialsManage, services.KindTarget, []uuid.UUID{vault}) {
+		return
+	}
 	im, err := s.deps.Inventory.RequestImport(r.Context(), s.actor(r), inventory.ImportInput{
 		VaultID: vault, CertificateID: id, Name: req.Name, ConfirmExisting: req.ConfirmNewVersion,
 	})

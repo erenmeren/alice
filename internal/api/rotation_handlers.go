@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -105,6 +106,30 @@ func (s *server) getPolicy(w http.ResponseWriter, r *http.Request) {
 
 // createPolicy creates a policy for a key Alice generated, switched off (§13.6). The service refuses Alice's own
 // key, a key Alice holds no private key for, a retired key and the new key of a running rotation.
+// checkPolicyKey is design §11 for a new rotation policy: it belongs to its key's service, so a caller with role
+// bindings needs rotation.manage there; a key the caller cannot see is answered as an unknown one (404).
+func (s *server) checkPolicyKey(w http.ResponseWriter, r *http.Request, keyID uuid.UUID) bool {
+	reach := s.reachOf(r, rbac.RotationManage)
+	if reach.All() || keyID == uuid.Nil || s.deps.Services == nil {
+		return true
+	}
+	res, err := s.deps.Services.Resolve(r.Context(), services.KindSSHKey, keyID)
+	switch {
+	case errors.Is(err, services.ErrResourceNotFound):
+		return true // the service answers the unknown key
+	case err != nil:
+		s.fail(w, r, err)
+		return false
+	case !s.reachOf(r, rbac.Read).ContainsAny(res.Visible):
+		s.writeError(w, r, ErrNotFound)
+		return false
+	case !reach.Contains(res.Owning):
+		s.writeErrorWith(w, r, ErrSVCNotAllowed, nil, []validate.FieldError{{Field: "ssh_key_id", Code: "service.not_allowed"}})
+		return false
+	}
+	return true
+}
+
 func (s *server) createPolicy(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SSHKeyID          string  `json:"ssh_key_id"`
@@ -127,6 +152,9 @@ func (s *server) createPolicy(w http.ResponseWriter, r *http.Request) {
 	overlap := defaultOverlapDays
 	if req.OverlapDays != nil {
 		overlap = *req.OverlapDays
+	}
+	if !s.checkPolicyKey(w, r, keyID) {
+		return
 	}
 	in := sshkeys.PolicyInput{SSHKeyID: keyID, Name: req.Name, IntervalDays: req.IntervalDays, OverlapDays: overlap}
 	if req.NotifyBeforeHours != nil {
@@ -301,9 +329,24 @@ func (s *server) callerActions(r *http.Request, allowed []string) []string {
 	if sub.Kind == rbac.UserSession {
 		sub.StepUp = true
 	}
+	// On the run's own services (R49 Phase 2): every service the run is visible from, as the guard asks of its actions.
+	decide := func(p rbac.Permission) rbac.Decision { return rbac.Decide(p, sub) }
+	if res, ok := pathResource(r.Context()); ok {
+		decide = func(p rbac.Permission) rbac.Decision {
+			if len(res.Visible) == 0 {
+				return rbac.DenyForbidden
+			}
+			for _, svc := range res.Visible {
+				if d := rbac.DecideIn(p, sub, svc); d != rbac.Allow {
+					return d
+				}
+			}
+			return rbac.Allow
+		}
+	}
 	out := []string{}
 	for _, a := range allowed {
-		if perm, ok := perms[actionRoutes[a]]; ok && rbac.Decide(perm, sub) == rbac.Allow {
+		if perm, ok := perms[actionRoutes[a]]; ok && decide(perm) == rbac.Allow {
 			out = append(out, a)
 		}
 	}

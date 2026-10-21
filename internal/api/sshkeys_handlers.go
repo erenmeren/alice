@@ -260,8 +260,13 @@ func (s *server) generateSSHKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// R49 Phase 2, design §4.4: the service the new key goes to, checked against the caller's reach.
+	service, ok := s.serviceForCreate(w, r, rbac.InventoryOperate, req.ServiceID)
+	if !ok {
+		return
+	}
 	m, err := s.deps.SSHKeys.Generate(r.Context(), s.actor(r), sshkeys.GenerateInput{Label: req.Label, KeyType: req.KeyType,
-		ServiceID: derefOr(req.ServiceID, uuid.Nil)})
+		ServiceID: service})
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -298,6 +303,10 @@ func (s *server) deploySSHKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
+		return
+	}
+	// R49 Phase 2, design §5.6 (b): inventory.operate on the server's service too (the guard checked the key's).
+	if !s.checkDestinationsOf(w, r, rbac.InventoryOperate, services.KindTarget, []uuid.UUID{target}) {
 		return
 	}
 	jobID, err := s.deps.SSHKeys.RequestDeploy(r.Context(), s.actor(r), sshkeys.DeployInput{KeyID: id, TargetID: target,

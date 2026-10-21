@@ -459,6 +459,9 @@ WHERE id = $1`, id, enabled, next, now); err != nil {
 			return policyWriteError(err)
 		}
 		if enabled {
+			if err := approveServices(ctx, tx, id); err != nil {
+				return err
+			}
 			if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "rotation.policy_enabled", ObjectType: "rotation_policy",
 				ObjectID: id.String(), Result: audit.Success, Details: map[string]string{"policy_id": id.String(),
 					"next_run_at": next.Format(time.RFC3339)}}); err != nil {
@@ -504,6 +507,21 @@ func (s *Service) DeletePolicy(ctx context.Context, a inventory.Actor, id uuid.U
 func (s *Service) Policy(ctx context.Context, id uuid.UUID) (Policy, error) {
 	p, err := getPolicy(ctx, s.pool, id, false)
 	return p.Policy, err
+}
+
+// approveServices records on a policy the services a person approved by switching it on or running it (R49 Phase 2,
+// design §5.6, §5.7: approved_service_ids): its key's service and the service of every server holding a live location
+// of the key, the services the API checked the person's rotation.operate on. The policy's row is locked by the caller.
+func approveServices(ctx context.Context, tx pgx.Tx, policyID uuid.UUID) error {
+	_, err := tx.Exec(ctx, `UPDATE rotation_policies p SET approved_service_ids = ARRAY(
+    SELECT k.service_id FROM ssh_keys k WHERE k.id = p.ssh_key_id
+    UNION SELECT t.service_id FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id
+        WHERE l.ssh_key_id = p.ssh_key_id AND l.missing_since IS NULL AND t.deleted_at IS NULL)
+WHERE p.id = $1`, policyID)
+	if err != nil {
+		return fmt.Errorf("sshkeys: record the approved services: %w", err)
+	}
+	return nil
 }
 
 // Policies returns the live policies by name.

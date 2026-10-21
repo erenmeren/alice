@@ -136,6 +136,9 @@ func (s *Service) RunNow(ctx context.Context, a inventory.Actor, policyID uuid.U
 		if p.Digest() != digest {
 			return ErrPlanChanged
 		}
+		if err := approveServices(ctx, tx, policyID); err != nil {
+			return err
+		}
 		if run != nil {
 			runID = run.id
 			return nil

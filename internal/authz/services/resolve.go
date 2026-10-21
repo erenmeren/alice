@@ -47,6 +47,8 @@ const (
 	// KindRotationReach is a rotation policy as switching it on or running it reaches: its key's service and every
 	// service of a server holding a live location of the key (what approved_service_ids records, design §5.7).
 	KindRotationReach = "rotation_reach"
+	// KindKVCertificate is a certificate in a Key Vault: its vault's service (the source of a new Key Vault binding).
+	KindKVCertificate = "kv_certificate"
 )
 
 // resolvers is one indexed query per resource kind: the owning service, then every service the row is visible from.
@@ -113,6 +115,8 @@ FROM certificates c WHERE c.id = $1`,
     UNION SELECT t.service_id FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id
         WHERE l.ssh_key_id = k.id AND l.missing_since IS NULL AND t.deleted_at IS NULL)
 FROM rotation_policies p JOIN ssh_keys k ON k.id = p.ssh_key_id WHERE p.id = $1 AND p.deleted_at IS NULL`,
+	KindKVCertificate: `SELECT v.service_id, ARRAY[v.service_id] FROM kv_certificates kc JOIN targets v ON v.id = kc.target_id
+WHERE kc.id = $1 AND v.deleted_at IS NULL`,
 	KindService:      `SELECT id, ARRAY[id] FROM services WHERE id = $1`,
 	KindServiceTrust: `SELECT target_service_id, ARRAY[source_service_id, target_service_id] FROM service_trusts WHERE id = $1`,
 }

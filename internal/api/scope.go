@@ -220,6 +220,17 @@ func (s *server) roleOn(r *http.Request) rbac.Role {
 	return strongestRole(p.Role, p.Grants, res.Owning)
 }
 
+// decideOn is the decision of a permission inside a handler (design §5.5: a conditional permission, the strict
+// session of a held version or of an automatic deployment switched on): on the path resource's owning service when
+// guard resolved one (a caller with role bindings), otherwise the global decision, as before scoped access.
+func (s *server) decideOn(r *http.Request, p rbac.Permission) rbac.Decision {
+	sub := s.subjectOf(r)
+	if res, ok := pathResource(r.Context()); ok && res.Owning != uuid.Nil {
+		return rbac.DecideIn(p, sub, res.Owning)
+	}
+	return rbac.Decide(p, sub)
+}
+
 // strongestRole is the strongest of global and of the grants that cover service ("" when none does).
 func strongestRole(global rbac.Role, grants []rbac.ScopedGrant, service uuid.UUID) rbac.Role {
 	held := []rbac.Role{global}
@@ -282,6 +293,21 @@ func (s *server) checkDestinations(w http.ResponseWriter, r *http.Request, p rba
 	}
 	s.writeErrorWith(w, r, ErrSVCSpansServices, map[string]string{"count": strconv.Itoa(outside)}, nil)
 	return false
+}
+
+// checkDestinationsOf is checkDestinations for the resources of one kind a cross action places a key on (locations,
+// servers, Key Vaults): their owning services must all be in the caller's reach for p. Without role bindings nothing is
+// looked up.
+func (s *server) checkDestinationsOf(w http.ResponseWriter, r *http.Request, p rbac.Permission, kind string, ids []uuid.UUID) bool {
+	if s.reachOf(r, p).All() {
+		return true
+	}
+	dest, err := s.servicesOf(r.Context(), kind, ids)
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	return s.checkDestinations(w, r, p, dest)
 }
 
 // servicesOf resolves the owning services of resources of one kind (the destinations of a cross action), in the

@@ -185,9 +185,14 @@ func (s *server) uploadCertificate(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExact(w, r, &req, maxUploadBody, "label", "certificate_pem", "private_key_pem", "pfx_base64", "pfx_password", "service_id") {
 		return
 	}
+	// R49 Phase 2, design §4.4: the service the new certificate goes to, checked against the caller's reach.
+	service, ok := s.serviceForCreate(w, r, rbac.CertificatesOperate, req.ServiceID)
+	if !ok {
+		return
+	}
 	c, warnings, err := s.deps.Inventory.UploadCertificate(r.Context(), s.actor(r), inventory.UploadInput{
 		CertificatePEM: req.CertificatePEM, PrivateKeyPEM: req.PrivateKeyPEM, PFXBase64: req.PFXBase64, PFXPassword: req.PFXPassword,
-		Label: req.Label, ServiceID: derefOr(req.ServiceID, uuid.Nil),
+		Label: req.Label, ServiceID: service,
 	})
 	s.writeUpload(w, r, c, warnings, err)
 }
@@ -245,6 +250,10 @@ func (s *server) deployCertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// R49 Phase 2, design §5.6 (b): certificates.operate on every website's service (the guard checked the certificate's).
+	if !s.checkDestinationsOf(w, r, rbac.CertificatesOperate, services.KindLocation, ids) {
+		return
+	}
 	// confirm_incomplete_chain is passed on as sent: the inventory counts it for an Administrator
 	// only (F-17) and refuses an Operator's incomplete chain with ALC-CRT-0011.
 	got, err := s.deps.Inventory.RequestDeployment(r.Context(), s.actor(r), inventory.DeployRequestInput{
@@ -298,8 +307,13 @@ func (s *server) createCSR(w http.ResponseWriter, r *http.Request) {
 	}
 	// The name rules (a DNS name, at most 64 characters; at most 50 names) and the key types are
 	// the inventory's.
+	// R49 Phase 2, design §4.4: the service the new signing request goes to, checked against the caller's reach.
+	service, ok := s.serviceForCreate(w, r, rbac.CertificatesOperate, req.ServiceID)
+	if !ok {
+		return
+	}
 	c, err := s.deps.Inventory.CreateCSR(r.Context(), s.actor(r), inventory.CSRInput{CommonName: req.CommonName, SANs: req.SANs, KeyType: req.KeyType,
-		ServiceID: derefOr(req.ServiceID, uuid.Nil)})
+		ServiceID: service})
 	if err != nil {
 		s.fail(w, r, err)
 		return

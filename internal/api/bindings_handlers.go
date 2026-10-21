@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"slices"
 	"strconv"
@@ -115,6 +116,10 @@ func (s *server) createBinding(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// R49 Phase 2, design §5.6: certificates.operate on the vault's service (the source) and on every website's.
+	if !s.checkBindingSource(w, r, cert) || !s.checkDestinationsOf(w, r, rbac.CertificatesOperate, services.KindLocation, ids) {
+		return
+	}
 	b, err := s.deps.Inventory.CreateBinding(r.Context(), s.actor(r), inventory.BindingInput{KVCertificateID: cert, LocationIDs: ids})
 	if err != nil {
 		s.fail(w, r, err)
@@ -175,7 +180,10 @@ func (s *server) updateBinding(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, ErrPreconditionFailed) // changed since the caller read it: nothing else is judged
 		return
 	}
-	if principalFrom(r.Context()).Role == rbac.Admin && cur.AutoDeploy && addsLocations(cur, ids) && !s.strictAction(w, r) {
+	if ids, ok = s.bindingChange(w, r, cur, ids); !ok {
+		return
+	}
+	if s.roleOn(r) == rbac.Admin && cur.AutoDeploy && addsLocations(cur, ids) && !s.strictAction(w, r) {
 		return
 	}
 	b, err := s.deps.Inventory.UpdateBindingLocationsStrict(r.Context(), s.actor(r), id, version, ids, s.strictSession(r))
@@ -184,6 +192,86 @@ func (s *server) updateBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.bindingAnswer(w, r, http.StatusOK, b)
+}
+
+// checkBindingSource is design §5.6 (a) for a new Key Vault binding: certificates.operate on the vault's service. A
+// vault certificate the caller cannot see is answered as an unknown one (404); one it sees but may not bind, 403.
+func (s *server) checkBindingSource(w http.ResponseWriter, r *http.Request, kvCert uuid.UUID) bool {
+	reach := s.reachOf(r, rbac.CertificatesOperate)
+	if reach.All() || s.deps.Services == nil {
+		return true
+	}
+	res, err := s.deps.Services.Resolve(r.Context(), services.KindKVCertificate, kvCert)
+	switch {
+	case errors.Is(err, services.ErrResourceNotFound):
+		return true // the inventory answers the unknown certificate
+	case err != nil:
+		s.fail(w, r, err)
+		return false
+	case !s.reachOf(r, rbac.Read).ContainsAny(res.Visible):
+		s.writeError(w, r, ErrNotFound)
+		return false
+	case !reach.Contains(res.Owning):
+		s.writeError(w, r, ErrForbidden)
+		return false
+	}
+	return true
+}
+
+// bindingChange is design §5.6 for a change of a Key Vault binding's websites. With certificates.operate on the
+// vault's service the caller may add websites (each needs the permission on its own service) and release any. Without
+// it, the caller holds the permission on the service of one of the websites only (the guard checked): it may release
+// its own websites and nothing else. The websites the caller does not see are kept as they are, whatever the list
+// names (the caller cannot name them), so the list it answers is the one the inventory stores. It writes the refusal
+// and returns false.
+func (s *server) bindingChange(w http.ResponseWriter, r *http.Request, cur inventory.Binding, ids []uuid.UUID) ([]uuid.UUID, bool) {
+	reach := s.reachOf(r, rbac.CertificatesOperate)
+	if reach.All() {
+		return ids, true
+	}
+	target := func(l inventory.BindingLocation) uuid.UUID { return l.TargetID }
+	seen, err := s.targetsSeen(r, targetIDsOf(cur.Locations, target))
+	if err != nil {
+		s.fail(w, r, err)
+		return nil, false
+	}
+	out := slices.Clone(ids)
+	for _, l := range cur.Locations {
+		if !seen(l.TargetID) && !slices.Contains(out, l.LocationID) {
+			out = append(out, l.LocationID) // a website of another service stays
+		}
+	}
+	res, _ := pathResource(r.Context())
+	vaultSide := res.Owning != uuid.Nil && reach.Contains(res.Owning)
+	var added []uuid.UUID
+	for _, id := range out {
+		if !slices.ContainsFunc(cur.Locations, func(l inventory.BindingLocation) bool { return l.LocationID == id }) {
+			added = append(added, id)
+		}
+	}
+	if len(added) > 0 {
+		if !vaultSide {
+			s.writeError(w, r, ErrForbidden)
+			return nil, false
+		}
+		if !s.checkDestinationsOf(w, r, rbac.CertificatesOperate, services.KindLocation, added) {
+			return nil, false
+		}
+	}
+	if !vaultSide {
+		owners, err := s.deps.Services.TargetServices(r.Context(), targetIDsOf(cur.Locations, target))
+		if err != nil {
+			s.fail(w, r, err)
+			return nil, false
+		}
+		for _, l := range cur.Locations {
+			if !slices.Contains(out, l.LocationID) && !reach.Contains(owners[l.TargetID]) {
+				s.writeError(w, r, ErrForbidden) // releasing a website the caller sees but holds no right on
+				return nil, false
+			}
+		}
+	}
+	return out, true
 }
 
 // addsLocations reports whether ids names a website the binding does not have.
@@ -218,6 +306,22 @@ func (s *server) setAutoDeploy(w http.ResponseWriter, r *http.Request) {
 		v.Add("enabled", validate.Required, nil)
 		s.fail(w, r, v)
 		return
+	}
+	if *req.Enabled && !s.reachOf(r, rbac.CertificatesOperate).All() {
+		// R49 Phase 2, design §11: switching automatic deployment on also needs certificates.operate on the service of
+		// every website it will deploy to.
+		cur, err := s.deps.Inventory.Binding(r.Context(), id)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		locs := make([]uuid.UUID, 0, len(cur.Locations))
+		for _, l := range cur.Locations {
+			locs = append(locs, l.LocationID)
+		}
+		if !s.checkDestinationsOf(w, r, rbac.CertificatesOperate, services.KindLocation, locs) {
+			return
+		}
 	}
 	b, err := s.deps.Inventory.SetAutoDeploy(r.Context(), s.actor(r), id, version, *req.Enabled)
 	if err != nil {
@@ -271,7 +375,7 @@ func (s *server) deployBinding(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	admin := principalFrom(r.Context()).Role == rbac.Admin
+	admin := s.roleOn(r) == rbac.Admin // the role on the vault's service (R49 Phase 2, design §5.5)
 	// The version must be one of this connection's certificate's versions, for every role: another certificate's
 	// version id is as unknown as a random one (404), and a held one needs the strict session.
 	held, err := s.versionHeld(r, id, version)

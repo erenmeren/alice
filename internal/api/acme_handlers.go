@@ -736,8 +736,13 @@ func (s *server) createACMECertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// R49 Phase 2, design §4.4: the service the new ACME certificate goes to, checked against the caller's reach.
+	service, ok := s.serviceForCreate(w, r, rbac.AcmeManage, req.ServiceID)
+	if !ok || !s.checkHTTPServer(w, r, target) {
+		return
+	}
 	in := inventory.ACMECertificateInput{ProviderID: *provider, Names: *req.Names, KeyType: deref(req.KeyType), Challenge: deref(req.Challenge),
-		HookID: hook, HTTPTargetID: target, AutoRenew: req.AutoRenew, ServiceID: derefOr(req.ServiceID, uuid.Nil)}
+		HookID: hook, HTTPTargetID: target, AutoRenew: req.AutoRenew, ServiceID: service}
 	if req.RenewBeforeDays != nil {
 		in.RenewBeforeDays = *req.RenewBeforeDays
 	}
@@ -786,6 +791,21 @@ func (s *server) getACMECertificate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
+// checkHTTPServer is design §5.6 for an ACME certificate's HTTP-01 server: Alice writes a challenge file there, so the
+// caller needs certificates.operate on the server's service too (ALC-SVC-0012 otherwise). No server named: nothing to
+// check; an unknown one is the inventory's refusal.
+func (s *server) checkHTTPServer(w http.ResponseWriter, r *http.Request, target *uuid.UUID) bool {
+	if target == nil || *target == uuid.Nil {
+		return true
+	}
+	dest, err := s.servicesOf(r.Context(), services.KindTarget, []uuid.UUID{*target})
+	if err != nil {
+		s.fail(w, r, err)
+		return false
+	}
+	return s.checkDestinations(w, r, rbac.CertificatesOperate, dest)
+}
+
 func (s *server) updateACMECertificate(w http.ResponseWriter, r *http.Request) {
 	refs := s.serviceRefs(r)
 	id, ok := pathUUID(r, "id")
@@ -804,6 +824,9 @@ func (s *server) updateACMECertificate(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
+		return
+	}
+	if !s.checkHTTPServer(w, r, target) {
 		return
 	}
 	c, err := s.deps.ACME.UpdateACMECertificate(r.Context(), s.actor(r), id, inventory.ACMECertificatePatch{ProviderID: provider, Names: req.Names,
@@ -960,6 +983,10 @@ func (s *server) putACMEBinding(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeExactOptional(w, r, &req, maxACMEBindingBody, "auto_deploy") {
 		return
 	}
+	// R49 Phase 2, design §5.6 (b): acme.operate on the website's service too (the guard checked the certificate's).
+	if !s.checkDestinationsOf(w, r, rbac.AcmeOperate, services.KindLocation, []uuid.UUID{loc}) {
+		return
+	}
 	if req.AutoDeploy {
 		on, err := s.bindingAutoDeployOn(r, id, loc)
 		if err != nil {
@@ -970,7 +997,7 @@ func (s *server) putACMEBinding(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	strict := rbac.Decide(rbac.AcmeManage, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) == rbac.Allow
+	strict := s.decideOn(r, rbac.AcmeManage) == rbac.Allow
 	b, err := s.deps.ACME.AddACMEBindingStrict(r.Context(), s.actor(r), id, loc, req.AutoDeploy, strict)
 	if err != nil {
 		s.fail(w, r, err)

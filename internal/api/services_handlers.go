@@ -663,6 +663,25 @@ func (s *server) assignToService(w http.ResponseWriter, r *http.Request) {
 	for _, res := range req.Resources {
 		in = append(in, services.Resource{Type: res.Type, ID: res.ID})
 	}
+	// R49 Phase 2, design §5.6: services.assign on each resource's current service too (the guard checked the
+	// destination's): nobody pulls another service's resource into their own. An unknown kind is the store's refusal.
+	if !s.reachOf(r, rbac.ServicesAssign).All() {
+		var from []uuid.UUID
+		for _, res := range in {
+			if !slices.Contains(services.AssignKinds, res.Type) {
+				continue
+			}
+			got, err := s.servicesOf(r.Context(), res.Type, []uuid.UUID{res.ID})
+			if err != nil {
+				s.fail(w, r, err)
+				return
+			}
+			from = append(from, got...)
+		}
+		if !s.checkDestinations(w, r, rbac.ServicesAssign, from) {
+			return
+		}
+	}
 	res, err := s.deps.Services.Assign(r.Context(), s.serviceActor(r), id, in, dryRun)
 	if err != nil {
 		s.fail(w, r, err)
@@ -710,6 +729,10 @@ func (s *server) createTrust(w http.ResponseWriter, r *http.Request) {
 		TargetServiceID uuid.UUID `json:"target_service_id"`
 	}
 	if !s.decodeLimit(w, r, &req, maxServiceBody) {
+		return
+	}
+	// R49 Phase 2, design §5.6: services.trust on both services.
+	if !s.checkDestinations(w, r, rbac.ServicesTrust, []uuid.UUID{req.SourceServiceID, req.TargetServiceID}) {
 		return
 	}
 	t, err := s.deps.Services.CreateTrust(r.Context(), s.serviceActor(r), req.SourceServiceID, req.TargetServiceID)

@@ -123,8 +123,13 @@ func (s *server) createTarget(w http.ResponseWriter, r *http.Request) {
 	if req.Type == "" {
 		req.Type = "linux"
 	}
+	// R49 Phase 2, design §4.4: the service the new server goes to, checked against the caller's reach.
+	service, ok := s.serviceForCreate(w, r, rbac.TargetsManage, req.ServiceID)
+	if !ok {
+		return
+	}
 	t, jobID, err := s.deps.Inventory.CreateTarget(r.Context(), s.actor(r), inventory.NewTarget{
-		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username, ServiceID: derefOr(req.ServiceID, uuid.Nil),
+		Name: req.Name, Type: req.Type, Host: req.Host, Port: req.Port, Username: req.Username, ServiceID: service,
 	})
 	if err != nil {
 		s.fail(w, r, err)

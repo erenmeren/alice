@@ -135,10 +135,16 @@ func (s *server) createVault(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// R49 Phase 2, design §4.4: the service the new Key Vault goes to, checked against the caller's reach.
+	service, ok := s.serviceForCreate(w, r, rbac.CredentialsManage, req.ServiceID)
+	if !ok {
+		req.zero()
+		return
+	}
 	t, rep, jobID, err := s.deps.Inventory.CreateVault(r.Context(), s.actor(r), inventory.NewVault{
 		Name: req.Name, VaultURL: pv.URL, Auth: in.Auth, TenantID: in.TenantID, ClientID: in.ClientID, ClientSecret: in.ClientSecret,
 		SecretExpiresOn: in.SecretExpiresOn, Certificate: in.Certificate, PollIntervalMinutes: req.PollIntervalMinutes,
-		ServiceID: derefOr(req.ServiceID, uuid.Nil),
+		ServiceID: service,
 	})
 	req.zero()
 	if err != nil {
@@ -212,7 +218,7 @@ func (s *server) strictAction(w http.ResponseWriter, r *http.Request) bool {
 func (s *server) strictActionFor(w http.ResponseWriter, r *http.Request, perm rbac.Permission) bool {
 	p := principalFrom(r.Context())
 	rt := route{method: r.Method, pattern: strings.TrimPrefix(r.Pattern, r.Method+" "), perm: perm}
-	switch rbac.Decide(perm, p.Subject(s.deps.Clock.Now())) {
+	switch s.decideOn(r, perm) {
 	case rbac.Allow:
 		return true
 	case rbac.DenyStepUp:
@@ -229,7 +235,7 @@ func (s *server) strictActionFor(w http.ResponseWriter, r *http.Request, perm rb
 // with a fresh step-up, not an API token). It is handed to the inventory on every call that has a strict case,
 // which refuses that case itself without it.
 func (s *server) strictSession(r *http.Request) bool {
-	return rbac.Decide(rbac.CredentialsManage, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) == rbac.Allow
+	return s.decideOn(r, rbac.CredentialsManage) == rbac.Allow
 }
 
 // kvFilter reads the query of a vault inventory list: q, expires_before (RFC 3339 or a date), missing, cursor, limit.
