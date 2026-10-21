@@ -117,6 +117,8 @@ grant is involved). Until scoped role bindings exist every grant is global, so t
 | POST | `/api/v1/certificates/csr/{id}/actions/complete` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
 | POST | `/api/v1/certificates/csr/{id}/actions/cancel` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
 | PATCH | `/api/v1/locations/{id}` | `targets.manage` | resource | no | yes | no | no | operate | no | no |
+| PUT | `/api/v1/locations/{id}/drift-mode` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
+| POST | `/api/v1/locations/{id}/actions/repair` | `certificates.operate` | resource | no | yes | yes | no | operate | no | no |
 | GET | `/api/v1/deployments` | `read` | list | no | yes | yes | yes | read | no | yes |
 | GET | `/api/v1/deployments/{id}` | `read` | resource | no | yes | yes | yes | read | no | yes |
 | POST | `/api/v1/key-vaults` | `credentials.manage` | create | no | yes | no | no | no | yes | no |

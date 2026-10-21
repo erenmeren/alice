@@ -461,13 +461,13 @@ func TestRegisterRefusesRouteWithoutScope(t *testing.T) {
 }
 
 // Every route of the table declares the class design §11 gives it (and §8.1 for the service routes): the totals of the
-// 225 operations it lists, plus the 15 service routes.
+// 225 operations it lists, plus the 15 service routes and the 2 drift routes of R52 (a location: resource).
 func TestRouteScopesMatchTheDesign(t *testing.T) {
 	counts := map[routeScope]int{}
 	for _, rt := range newServer(Deps{}).apiRoutes() {
 		counts[rt.scope]++
 	}
-	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6, scopeResource: 61 + 3, scopeList: 19 + 2, scopeCross: 16 + 3, scopeNone: 16,
+	assert.Equal(t, map[routeScope]int{scopePlatform: 79 + 6, scopeResource: 61 + 3 + 2, scopeList: 19 + 2, scopeCross: 16 + 3, scopeNone: 16,
 		scopeSelf: 14, scopeAny: 13 + 1, scopeCreate: 7}, counts)
 	for key, want := range map[string]routeScope{
 		"GET /api/v1/discovery/settings": scopePlatform, "GET /api/v1/ssh-keys/platform-key": scopeAny,

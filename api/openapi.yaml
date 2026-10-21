@@ -1979,6 +1979,7 @@ paths:
         location follows no binding. The body is {"mode": ...} exactly (400 otherwise; 422 for an unknown mode), at most
         1 KiB. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
+      x-scope: resource
       requestBody:
         required: true
         content:
@@ -2009,6 +2010,7 @@ paths:
         version. It works in every mode. 409 ALC-DEP-0029 (the location follows no binding), 409 ALC-DEP-0030 (it is not
         drifted). The body is empty or {}. Refused with 403 ALC-LIC-0001 while the license is locked.
       x-permission: certificates.operate
+      x-scope: resource
       responses:
         "202":
           description: Queued; follow each job (status_url) or deployment (deployment_url)

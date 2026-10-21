@@ -53,6 +53,7 @@
   again right before they send, and the automatic deployments of ACME certificates and Key Vault connections leave such
   a website alone (marked **Not accepted by its service**, one e-mail: `acme.auto_deploy_untrusted`,
   `kv.auto_deploy_untrusted`). Rulings: `docs/superpowers/rulings/scoped-access.md`.
+
 ## Unreleased — Deployment verification proves trust
 
 **Security**
