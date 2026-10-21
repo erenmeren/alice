@@ -209,6 +209,7 @@ func TestPolicyForbidsACMEAutomaticDeployment(t *testing.T) {
 	assert.Equal(t, 1, w.h.count("SELECT count(*) FROM audit_log WHERE action = 'acme.auto_deploy.forbidden'"), "the mark is recorded once")
 	assert.True(t, w.get(c.ID).AutoDeploy, "the certificate's automatic deployment stays on")
 
+	// Allowed again: the held binding resumes by itself at the next run.
 	setPolicy(t, w.h.ctx, w.h.db.Owner, def, `{"schema":1,"deployment":{"auto_deploy":"allowed"}}`)
 	run = w.plan()
 	assert.Equal(t, 1, run.Created, "it resumes")
@@ -240,6 +241,7 @@ func TestPolicyForbidsKeyVaultAutomaticDeployment(t *testing.T) {
 	}
 
 	off := f.setAuto(false)
+	assert.Zero(t, marked(), "switched off, nothing is held any more")
 	_, err = h.svc.SetAutoDeploy(h.ctx, f.admin, f.bind.ID, off.Version, true)
 	assert.ErrorIs(t, err, authz.ErrAutoDeployForbidden)
 	assert.Equal(t, 1, h.count(`SELECT count(*) FROM audit_log WHERE action = 'binding.denied' AND details->>'reason' = 'auto_deploy_forbidden'`))

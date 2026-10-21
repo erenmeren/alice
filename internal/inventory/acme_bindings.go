@@ -291,8 +291,11 @@ VALUES ($1, $2, $3, $4, $5)`, id, location, autoDeploy, nullableUser(a.UserID), 
 			}
 		case autoBefore != autoDeploy:
 			action = "acme.binding.updated"
-			if _, err := tx.Exec(ctx, "UPDATE acme_bindings SET auto_deploy = $3 WHERE acme_certificate_id = $1 AND location_id = $2", id, location,
-				autoDeploy); err != nil {
+			// Switched off, a website held by the policy (R55) is no longer held: the planner does not visit it again.
+			if _, err := tx.Exec(ctx, `UPDATE acme_bindings SET auto_deploy = $3,
+    attention_code = CASE WHEN NOT $3 AND attention_code = $4 THEN '' ELSE attention_code END,
+    attention_at = CASE WHEN NOT $3 AND attention_code = $4 THEN NULL ELSE attention_at END
+WHERE acme_certificate_id = $1 AND location_id = $2`, id, location, autoDeploy, ReasonAutoDeployForbidden); err != nil {
 				return fmt.Errorf("inventory: update the ACME binding: %w", err)
 			}
 		default:

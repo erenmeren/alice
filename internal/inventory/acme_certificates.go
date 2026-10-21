@@ -664,6 +664,13 @@ hook_id = $7, http_target_id = $8, renew_before_days = $9, auto_renew = $10, aut
 			ObjectID: id.String(), Result: audit.Success, Details: d}); err != nil {
 			return err
 		}
+		if slices.Contains(changed, "auto_deploy") && !f.autoDeploy {
+			// Switched off: the websites held by the policy (R55) are no longer held (the planner does not visit it again).
+			if _, err := tx.Exec(ctx, `UPDATE acme_bindings SET attention_code = '', attention_at = NULL
+WHERE acme_certificate_id = $1 AND attention_code = $2`, id, ReasonAutoDeployForbidden); err != nil {
+				return fmt.Errorf("inventory: clear the bindings' marks: %w", err)
+			}
+		}
 		if slices.Contains(changed, "auto_renew") && f.autoRenew {
 			// Switched on again: a fresh start (the failures of the time it was off do not stop it at once).
 			if err := s.rearmTx(ctx, tx, a, cur); err != nil {

@@ -640,6 +640,13 @@ func (s *Service) SetAutoDeploy(ctx context.Context, a Actor, id uuid.UUID, ifVe
     stopped_version = CASE WHEN $2 THEN '' ELSE stopped_version END, version = version + 1 WHERE id = $1`, id, enabled, since); err != nil {
 			return fmt.Errorf("inventory: switch automatic deployment: %w", err)
 		}
+		if !enabled {
+			// Switched off: the websites held by the policy (R55) are no longer held (the planner does not visit it again).
+			if _, err := tx.Exec(ctx, `UPDATE certificate_locations SET binding_attention_code = '', binding_attention_at = NULL
+WHERE binding_id = $1 AND binding_attention_code = $2`, id, ReasonAutoDeployForbidden); err != nil {
+				return fmt.Errorf("inventory: clear the websites' marks: %w", err)
+			}
+		}
 		if _, err := s.audit.Append(ctx, tx, audit.Event{Actor: a.Audit, Action: "binding.auto_deploy_changed", ObjectType: "binding", ObjectID: id.String(),
 			Result: audit.Success, Details: map[string]string{"binding_id": id.String(), "kv_certificate_id": b.certificate.String(),
 				"certificate_name": b.certificateName, "enabled": strconv.FormatBool(enabled)}}); err != nil {

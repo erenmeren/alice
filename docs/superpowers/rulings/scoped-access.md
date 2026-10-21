@@ -235,7 +235,9 @@ Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md`; SEC-029 in `alic
     no stop, no notice). A newly marked set is audited once (`acme.auto_deploy.forbidden`, `kv.auto_deploy.forbidden`)
     and sends no e-mail: the policy change is the cause and is audited with its author. When the policy allows it again
     the marks clear and the next run deploys. Deployments queued before the policy changed are not stopped (the engine's
-    first send does not read the policy), and Deploy now is never held. **Owner to confirm** "no e-mail".
+    first send does not read the policy), and Deploy now is never held. Switching automatic deployment off (the ACME
+    certificate, one of its websites, a Key Vault binding) clears its marks: the planner does not visit it again. **Owner
+    to confirm** "no e-mail".
 12. **Defaults.** `acme.renew_before_days` is used when a new ACME certificate names no window; `incident.revoke_mode`
     when an incident is started without a mode; the incident dialog starts with "revoke at once" as the policy says.
 13. **Upload refusals** are audited like every refused upload (`certificate.upload_rejected`, reason `policy`).
