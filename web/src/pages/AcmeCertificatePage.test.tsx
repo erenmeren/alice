@@ -16,9 +16,11 @@ import {
   acmeProviderFixture,
   certificateDetailFixture,
   deployableLocationFixture,
+  driftedObservationFixture,
   errorResponse,
   LOCATION_ID,
   nginxTargetFixture,
+  observationFixture,
   sessionFor,
   sessionHandlers,
 } from '../test/fixtures';
@@ -536,7 +538,7 @@ describe('websites using an issued certificate', () => {
     expect(within(rows[2]).getByText('Needs attention').closest('.mantine-Badge-root')).toHaveAttribute('data-tone', 'warning');
     expect(within(rows[2]).getByText('Does not serve a certificate from here yet.')).toBeInTheDocument();
     expect(within(within(rows[2]).getByTestId('attention')).getByText(/Error code: ALC-DEP-0006/)).toBeInTheDocument();
-    expect(screen.getByText(/Remove the website here, or switch off its automatic deployment, before you change its certificate by hand/)).toBeInTheDocument();
+    expect(screen.getByText(/Remove the website here, or switch off its automatic deployment and choose Report only for its changes, before you change its certificate by hand/)).toBeInTheDocument();
     expectNoRawKeys();
   });
 
@@ -858,6 +860,61 @@ describe('websites: refusals and the quick paths', () => {
     expect(await within(confirm).findByRole('alert')).toHaveTextContent('ALC-AUTH-0002');
     await userEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+});
+
+describe('what each website should have, what Alice last deployed and what is observed today (R52)', () => {
+  it('shows a website that serves another certificate although Alice deployed the right one, with the summary', async () => {
+    base({
+      session: sessionFor('operator'),
+      cert: issued(),
+      bindings: [
+        acmeBindingFixture({ observation: observationFixture() }),
+        acmeBindingFixture({ location_id: 'l2', target_name: 'web-2', cert_path: '/etc/nginx/b.crt', state: 'drifted', observation: driftedObservationFixture({ mode: 'observe', mode_setting: 'observe' }) }),
+        acmeBindingFixture({ location_id: 'l3', target_name: 'web-3', cert_path: '/etc/nginx/c.crt', observation: observationFixture({ health: 'unreachable', tls_error: { code: 'ALC-DEP-0005', reason: 'deployment.verify_unreachable' } }) }),
+      ],
+    });
+    await open();
+    const rows = await screen.findAllByTestId('acme-binding');
+    expect(within(rows[0]).getByText('In sync')).toBeInTheDocument();
+    expect(within(rows[0]).getByTestId('fact-tls')).toHaveTextContent(/The website served the right certificate at .* \(checked from Alice\)\./);
+    expect(within(rows[1]).getAllByText('Changed outside Alice')).toHaveLength(2);
+    expect(within(rows[1]).getByTestId('fact-tls')).toHaveTextContent(/served another certificate \(fedcba9876543210\) at .* \(checked from the server itself\)/);
+    expect(within(rows[1]).getByTestId('fact-file')).toHaveTextContent(/The file held another certificate \(fedcba9876543210\) at the scan of/);
+    expect(within(rows[1]).getByText(/Alice last deployed the right certificate at/)).toBeInTheDocument();
+    expect(within(rows[2]).getByText('Not reachable')).toBeInTheDocument();
+    const summary = within(await screen.findByTestId('drift-summary'));
+    expect(summary.getByText(/^Live and verified on 1 of 3 places; 1 not reachable; 1 serves another certificate \(it ends in \d+ h\)$/)).toBeInTheDocument();
+    expectNoRawKeys();
+  });
+
+  it('repairs a drifted website with one action, and lets an Operator choose observe or approve but not automatic repair', async () => {
+    const calls: unknown[] = [];
+    base({
+      session: sessionFor('operator'),
+      cert: issued(),
+      bindings: [acmeBindingFixture({ state: 'drifted', observation: driftedObservationFixture({ mode: 'observe', mode_setting: 'observe', default_mode: 'observe' }) })],
+      extra: [
+        http.post(`/api/v1/locations/${LOCATION_ID}/actions/repair`, () => (calls.push('repair'), HttpResponse.json({ deployments: [{ id: 'd1', job_id: 'j1', location_id: LOCATION_ID, status_url: '', deployment_url: '', warnings: [] }] }, { status: 202 }))),
+        http.put(`/api/v1/locations/${LOCATION_ID}/drift-mode`, async ({ request }) => (calls.push(await request.json()), HttpResponse.json(driftedObservationFixture({ mode: 'approve', mode_setting: 'approve' })))),
+      ],
+    });
+    await open();
+    const row = (await screen.findAllByTestId('acme-binding'))[0];
+    const select = within(row).getByRole('combobox', { name: 'When "web-nginx" /etc/nginx/ssl/www.crt changes outside Alice' });
+    expect(within(select).getByRole('option', { name: 'Repair automatically' })).toBeDisabled();
+    expect(within(select).getByRole('option', { name: 'Default (Report only)' })).not.toBeDisabled();
+    await userEvent.selectOptions(select, 'approve');
+    await waitFor(() => expect(calls).toEqual([{ mode: 'approve' }]));
+    await userEvent.click(within(row).getByRole('button', { name: 'Repair "web-nginx" /etc/nginx/ssl/www.crt' }));
+    await waitFor(() => expect(calls).toContain('repair'));
+    expect(await within(row).findByRole('link', { name: 'Repair queued: open the deployment' })).toHaveAttribute('href', '/deployments/d1');
+  });
+
+  it('says why automatic repair stopped', async () => {
+    base({ session: sessionFor('admin'), cert: issued(), bindings: [acmeBindingFixture({ state: 'drifted', observation: driftedObservationFixture({ mode: 'observe', mode_setting: 'observe', backoff_reason: 'flapping', backed_off_at: '2026-10-21T00:00:00Z' }) })] });
+    await open();
+    expect(await screen.findByTestId('drift-backoff')).toHaveTextContent('another tool kept changing this file');
   });
 });
 

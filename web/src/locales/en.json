@@ -754,7 +754,12 @@
       "service_deleted": "Service deleted",
       "service_assigned": "Moved to a service",
       "service_trust_added": "Service trust added",
-      "service_trust_removed": "Service trust removed"
+      "service_trust_removed": "Service trust removed",
+      "location_drift_detected": "Certificate location changed outside Alice",
+      "location_drift_resolved": "Certificate location in sync again",
+      "location_drift_mode_changed": "Repair mode of a certificate location changed",
+      "location_drift_repair_requested": "Automatic repair of a certificate location requested",
+      "location_drift_backoff": "Automatic repair of a certificate location stopped"
     },
     "detailsToggle": "Details ({{n}})",
     "detailKeys": {
@@ -1415,6 +1420,11 @@
       },
       "incident": {
         "advance": "Key compromise incidents"
+      },
+      "drift": {
+        "schedule": "Scheduled checks of certificate locations",
+        "observe": "Check of a server's certificate locations",
+        "repair": "Automatic repair of changed certificate locations"
       }
     },
     "blockedNotice": "This task is paused and waits for an administrator to run it.",
@@ -3325,7 +3335,8 @@
       "bindingState": {
         "current": "Up to date",
         "pending": "Waiting for deployment",
-        "attention": "Needs attention"
+        "attention": "Needs attention",
+        "drifted": "Changed outside Alice"
       }
     },
     "issued": {
@@ -3531,7 +3542,7 @@
         "autoConfirmStepUp": "You confirm it's you with a fresh code.",
         "autoConfirm": "Switch on",
         "byHandTitle": "Changing one of these websites by hand",
-        "byHand": "Remove the website here, or switch off its automatic deployment, before you change its certificate by hand. Otherwise Alice may put this certificate back at the next renewal.",
+        "byHand": "Remove the website here, or switch off its automatic deployment and choose Report only for its changes, before you change its certificate by hand. Otherwise Alice may put this certificate back at the next renewal or, with automatic repair, at the next check.",
         "heldTitle": "Automatic deployment is waiting for an administrator",
         "heldAdmin": "This certificate was issued while the license did not allow changes. Check it, then choose Release so that automatic deployment may use it, or use Deploy now.",
         "heldOther": "This certificate was issued while the license did not allow changes. An administrator checks it and releases it, or you use Deploy now.",
@@ -4364,5 +4375,66 @@
       "add": "Add environment"
     },
     "untrustedMark": "Not accepted by its service"
+  },
+  "drift": {
+    "health": {
+      "in_sync": "In sync",
+      "drifted": "Changed outside Alice",
+      "pending": "Waiting for deployment",
+      "unreachable": "Not reachable",
+      "stale": "Not checked recently",
+      "unmanaged": "Not bound"
+    },
+    "mode": {
+      "label": "When it changes",
+      "named": "When {{site}} changes outside Alice",
+      "current": "When it changes: {{mode}}",
+      "observe": "Report only",
+      "approve": "Prepare a repair",
+      "auto": "Repair automatically",
+      "default": "Default",
+      "defaultIs": "Default ({{mode}})"
+    },
+    "columns": {
+      "observed": "Observed today",
+      "repair": "Changes outside Alice"
+    },
+    "facts": {
+      "desired": "Should have:",
+      "desiredOne": "the right certificate",
+      "other": "another certificate ({{fp}})",
+      "none": "no certificate",
+      "lastDeployed": "Alice last deployed {{cert}} at {{time}}.",
+      "openDeployment": "Open deployment",
+      "neverDeployed": "Alice has not deployed a certificate here yet.",
+      "file": "The file held {{cert}} at the scan of {{time}}.",
+      "fileNever": "No scan has read the file yet.",
+      "tlsAlice": "The website served {{cert}} at {{time}} (checked from Alice).",
+      "tlsHelper": "The website served {{cert}} at {{time}} (checked from the server itself).",
+      "tlsNever": "The website has not been checked yet.",
+      "untrusted": "Its certificate chain is not trusted.",
+      "lastProbeFailed": "The check at {{time}} could not reach the website.",
+      "driftSince": "Changed outside Alice since {{time}}."
+    },
+    "backoff": {
+      "flapping": "Alice stopped repairing it by itself: another tool kept changing this file. Choose Repair automatically again once that tool is stopped.",
+      "repair_failing": "Alice stopped repairing it by itself: the repairs failed. See the deployment history."
+    },
+    "repair": "Repair",
+    "repairNamed": "Repair {{site}}",
+    "repairQueued": "Repair queued: open the deployment",
+    "summary": {
+      "inSync_one": "Live and verified on {{n}} of {{count}} place",
+      "inSync_other": "Live and verified on {{n}} of {{count}} places",
+      "unreachable_one": "{{count}} not reachable",
+      "unreachable_other": "{{count}} not reachable",
+      "drifted_one": "{{count}} serves another certificate",
+      "drifted_other": "{{count}} serve another certificate",
+      "driftedEnds_one": "{{count}} serves another certificate (it ends in {{hours}} h)",
+      "driftedEnds_other": "{{count}} serve another certificate (the first ends in {{hours}} h)",
+      "other_one": "{{count}} waiting or not checked recently",
+      "other_other": "{{count}} waiting or not checked recently",
+      "driftedHelp": "Someone or another tool changed what these places have, after Alice had deployed the right certificate. The rows below show what each should have, what Alice last deployed, what the file holds and what the website serves, each with its time."
+    }
   }
 }

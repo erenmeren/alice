@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw';
 import type { CertificateLocation, Target } from '../api/types';
 import {
   certificateFixture,
+  driftedObservationFixture,
   errorResponse,
   jobFixture,
   keyLocationFixture,
@@ -377,6 +378,26 @@ describe('WebsitesPanel on an Apache server (discovery only)', () => {
     expect(within(first).getByText('Bulundu')).toBeInTheDocument();
     expect(within(second).getByText('Sertifikanın anahtarı RSA veya ECDSA değil.')).toBeInTheDocument();
     expect(document.body.textContent ?? '').not.toMatch(/Nginx|http blo/);
+    expectNoRawKeys();
+  });
+});
+
+describe('WebsitesPanel observations of bound files (R52)', () => {
+  it('shows what a bound file should have and what is observed today, the summary and the repair; nothing for an unbound one', async () => {
+    let repaired = 0;
+    onNginx('operator', [
+      locationFixture({ certificate: CERT, observation: driftedObservationFixture() }),
+      locationFixture({ id: 'l2', cert_path: '/etc/nginx/ssl/other.crt' }),
+    ]);
+    server.use(http.post(`/api/v1/locations/${locationFixture().id}/actions/repair`, () => (repaired++, HttpResponse.json({ deployments: [] }, { status: 202 }))));
+    await renderRoute(path);
+    const [bound, unbound] = await screen.findAllByTestId('location-row');
+    expect(within(bound).getByText('Changed outside Alice')).toBeInTheDocument();
+    expect(within(bound).getByTestId('fact-tls')).toHaveTextContent('checked from the server itself');
+    expect(within(unbound).queryByTestId('location-observation')).not.toBeInTheDocument();
+    expect(await screen.findByText(/^Live and verified on 0 of 1 place; 1 serves another certificate/)).toBeInTheDocument();
+    await userEvent.click(within(bound).getByRole('button', { name: /^Repair / }));
+    await waitFor(() => expect(repaired).toBe(1));
     expectNoRawKeys();
   });
 });

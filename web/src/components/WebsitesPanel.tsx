@@ -1,4 +1,5 @@
 import { Alert, Box, Button, Code, Group, Stack, Switch, Table, Text } from '@mantine/core';
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fileProblemKey, configErrorKey, configReasonKey, unsupportedReasonKey } from '../api/enums';
@@ -8,6 +9,7 @@ import type { CertificateLocation, Target } from '../api/types';
 import { useAuth } from '../auth/AuthProvider';
 import { formatDateTime } from '../datetime';
 import { DeployDialog } from './DeployDialog';
+import { DriftControls, DriftSummaryLine, HealthBadge, ObservationFacts } from './drift/LocationDrift';
 import { ErrorAlert } from './ErrorAlert';
 import { Expiry } from './Expiry';
 import { InternalLink } from './InternalLink';
@@ -60,6 +62,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
   const canDeploy = role === 'admin' || role === 'operator';
   const admin = role === 'admin';
   const siteLabel = useSiteLabel();
+  const client = useQueryClient();
   const [showMissing, setShowMissing] = useState(false);
   const [deploying, setDeploying] = useState<CertificateLocation | null>(null);
   const [settingsId, setSettingsId] = useState<string | null>(null);
@@ -110,6 +113,7 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
 
         <Switch label={t('locations.showMissing')} checked={showMissing} onChange={(e) => setShowMissing(e.currentTarget.checked)} />
         <ErrorAlert error={locs.error} />
+        {items.length > 0 && <DriftSummaryLine observations={items.map((l) => l.observation)} />}
         {locs.data?.truncated && (
           <Alert color="yellow" role="status">
             {t('locations.truncated')}
@@ -140,8 +144,11 @@ export function WebsitesPanel({ target, discoveryFailed = false }: { target: Tar
                   site={siteLabel(l)}
                   blocked={state.block !== null}
                   canDeploy={canDeploy}
+                  admin={admin}
+                  locked={false}
                   onDeploy={() => setDeploying(l)}
                   onSettings={() => setSettingsId(l.id)}
+                  onDriftChanged={() => void client.invalidateQueries({ queryKey: ['locations'] })}
                 />
               ))}
             </Table.Tbody>
@@ -161,16 +168,22 @@ function LocationRow({
   site,
   blocked,
   canDeploy,
+  admin,
+  locked,
   onDeploy,
   onSettings,
+  onDriftChanged,
 }: {
   l: CertificateLocation;
   target: Target;
   site: string;
   blocked: boolean;
   canDeploy: boolean;
+  admin: boolean;
+  locked: boolean;
   onDeploy: () => void;
   onSettings: () => void;
+  onDriftChanged: () => void;
 }) {
   const { t, i18n } = useTranslation();
   const missing = l.missing_since !== null;
@@ -280,6 +293,12 @@ function LocationRow({
           {l.warnings.map((w) => (
             <LocationWarning key={w} code={w} mode={l.key_mode} site={firstServerName(l) || site} target={target} />
           ))}
+          {l.observation && (
+            <Stack gap={4} align="flex-start" data-testid="location-observation">
+              <HealthBadge observation={l.observation} />
+              <ObservationFacts observation={l.observation} />
+            </Stack>
+          )}
         </Stack>
       </Table.Td>
       <Table.Td>
@@ -297,6 +316,11 @@ function LocationRow({
             </RowButton>
           </DisabledFeature>
         </Group>
+        {l.observation && (
+          <Box mt="xs">
+            <DriftControls locationId={l.id} label={site} observation={l.observation} admin={admin} canOperate={canDeploy} locked={locked} onChanged={onDriftChanged} />
+          </Box>
+        )}
       </Table.Td>
     </Table.Tr>
   );

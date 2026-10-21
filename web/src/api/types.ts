@@ -1,6 +1,7 @@
 // Wire types for the Alice REST API (snake_case, see api/openapi.yaml).
 
 import type { Vault } from './keyvault';
+import type { LocationObservation } from './drift';
 import type { WebServerType } from './webServer';
 
 export type Role = 'admin' | 'operator' | 'auditor';
@@ -627,6 +628,9 @@ export interface CertificateLocation {
   target_type: WebServerType;
   // deployable: the server's software deploys certificates (its deploy_certificate capability).
   deployable: boolean;
+  // R52: what the location should have, what Alice last deployed and what is observed today; null when it follows
+  // no binding.
+  observation: LocationObservation | null;
 }
 
 export interface CertificateLocationList {

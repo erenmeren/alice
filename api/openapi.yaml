@@ -6348,14 +6348,7 @@ components:
         target_name: { type: string }
         cert_path: { type: string }
         auto_deploy: { type: boolean }
-        state:
-          type: string
-          enum: [current, pending, attention, drifted]
-          description: >-
-            attention: the last automatic deployment of the current certificate failed. current (since R52): the location
-            got the current certificate and no observation newer than that deployment disagrees; a past success alone no
-            longer makes it current. drifted (R52): it had the current certificate and a newer observation found another
-            one. observation.health says how the location is observed today.
+        state: { type: string, enum: [current, pending, attention, drifted], description: 'attention: the last automatic deployment of the current certificate failed. current (since R52): the location got the current certificate and no observation newer than that deployment disagrees; a past success alone no longer makes it current. drifted (R52): it had the current certificate and a newer observation found another one. observation.health says how the location is observed today.' }
         attention_at: { type: [string, "null"], format: date-time }
         attention: { $ref: "#/components/schemas/ErrorRef" }
         served_certificate_id: { type: [string, "null"], format: uuid }

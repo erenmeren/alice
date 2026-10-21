@@ -754,7 +754,12 @@
       "service_deleted": "Hizmet silindi",
       "service_assigned": "Bir hizmete taşındı",
       "service_trust_added": "Hizmet güveni eklendi",
-      "service_trust_removed": "Hizmet güveni kaldırıldı"
+      "service_trust_removed": "Hizmet güveni kaldırıldı",
+      "location_drift_detected": "Sertifika konumu Alice dışında değişti",
+      "location_drift_resolved": "Sertifika konumu yeniden uyumlu",
+      "location_drift_mode_changed": "Sertifika konumunun onarım kipi değişti",
+      "location_drift_repair_requested": "Sertifika konumunun otomatik onarımı istendi",
+      "location_drift_backoff": "Sertifika konumunun otomatik onarımı durdu"
     },
     "detailsToggle": "Ayrıntılar ({{n}})",
     "detailKeys": {
@@ -1415,6 +1420,11 @@
       },
       "incident": {
         "advance": "Anahtar ele geçirme olayları"
+      },
+      "drift": {
+        "schedule": "Sertifika konumlarının zamanlanmış denetimleri",
+        "observe": "Bir sunucunun sertifika konumlarının denetimi",
+        "repair": "Değişen sertifika konumlarının otomatik onarımı"
       }
     },
     "blockedNotice": "Bu iş duraklatıldı ve bir yöneticinin çalıştırmasını bekliyor.",
@@ -3325,7 +3335,8 @@
       "bindingState": {
         "current": "Güncel",
         "pending": "Dağıtım bekliyor",
-        "attention": "İlgilenilmesi gerekiyor"
+        "attention": "İlgilenilmesi gerekiyor",
+        "drifted": "Alice dışında değişti"
       }
     },
     "issued": {
@@ -3531,7 +3542,7 @@
         "autoConfirmStepUp": "Kimliğinizi yeni bir kodla doğrularsınız.",
         "autoConfirm": "Aç",
         "byHandTitle": "Bu web sitelerinden birini elle değiştirmek",
-        "byHand": "Bir web sitesinin sertifikasını elle değiştirmeden önce onu buradan kaldırın veya otomatik dağıtımını kapatın. Aksi hâlde Alice bir sonraki yenilemede bu sertifikayı geri koyabilir.",
+        "byHand": "Sertifikasını elle değiştirmeden önce web sitesini buradan kaldırın ya da otomatik dağıtımını kapatıp değişiklikleri için Yalnızca bildir'i seçin. Aksi halde Alice bu sertifikayı bir sonraki yenilemede ya da otomatik onarımla bir sonraki denetimde geri koyabilir.",
         "heldTitle": "Otomatik dağıtım bir yöneticiyi bekliyor",
         "heldAdmin": "Bu sertifika, lisans değişikliğe izin vermezken verildi. Denetleyin, ardından otomatik dağıtımın kullanabilmesi için Serbest bırak'ı seçin veya Şimdi dağıt'ı kullanın.",
         "heldOther": "Bu sertifika, lisans değişikliğe izin vermezken verildi. Bir yönetici onu denetleyip serbest bırakır veya siz Şimdi dağıt'ı kullanırsınız.",
@@ -4364,5 +4375,66 @@
       "add": "Ortam ekle"
     },
     "untrustedMark": "Hizmeti kabul etmiyor"
+  },
+  "drift": {
+    "health": {
+      "in_sync": "Uyumlu",
+      "drifted": "Alice dışında değişti",
+      "pending": "Dağıtım bekleniyor",
+      "unreachable": "Erişilemiyor",
+      "stale": "Yakın zamanda denetlenmedi",
+      "unmanaged": "Bağlı değil"
+    },
+    "mode": {
+      "label": "Değiştiğinde",
+      "named": "{{site}} Alice dışında değiştiğinde",
+      "current": "Değiştiğinde: {{mode}}",
+      "observe": "Yalnızca bildir",
+      "approve": "Onarımı hazırla",
+      "auto": "Kendiliğinden onar",
+      "default": "Varsayılan",
+      "defaultIs": "Varsayılan ({{mode}})"
+    },
+    "columns": {
+      "observed": "Bugün görülen",
+      "repair": "Alice dışındaki değişiklikler"
+    },
+    "facts": {
+      "desired": "Olması gereken:",
+      "desiredOne": "doğru sertifika",
+      "other": "başka bir sertifika ({{fp}})",
+      "none": "sertifika yok",
+      "lastDeployed": "Alice en son {{time}} tarihinde {{cert}} dağıttı.",
+      "openDeployment": "Dağıtımı aç",
+      "neverDeployed": "Alice buraya henüz bir sertifika dağıtmadı.",
+      "file": "{{time}} taramasında dosyada {{cert}} vardı.",
+      "fileNever": "Dosyayı henüz hiçbir tarama okumadı.",
+      "tlsAlice": "Web sitesi {{time}} tarihinde {{cert}} sundu (Alice'ten denetlendi).",
+      "tlsHelper": "Web sitesi {{time}} tarihinde {{cert}} sundu (sunucunun kendisinden denetlendi).",
+      "tlsNever": "Web sitesi henüz denetlenmedi.",
+      "untrusted": "Sertifika zinciri güvenilir değil.",
+      "lastProbeFailed": "{{time}} tarihindeki denetim web sitesine erişemedi.",
+      "driftSince": "{{time}} tarihinden beri Alice dışında değişmiş."
+    },
+    "backoff": {
+      "flapping": "Alice kendiliğinden onarmayı bıraktı: başka bir araç bu dosyayı sürekli değiştirdi. O araç durdurulunca Kendiliğinden onar'ı yeniden seçin.",
+      "repair_failing": "Alice kendiliğinden onarmayı bıraktı: onarımlar başarısız oldu. Dağıtım geçmişine bakın."
+    },
+    "repair": "Onar",
+    "repairNamed": "{{site}} için onar",
+    "repairQueued": "Onarım sıraya alındı: dağıtımı açın",
+    "summary": {
+      "inSync_one": "{{count}} yerin {{n}} tanesinde canlı ve doğrulanmış",
+      "inSync_other": "{{count}} yerin {{n}} tanesinde canlı ve doğrulanmış",
+      "unreachable_one": "{{count}} yere erişilemiyor",
+      "unreachable_other": "{{count}} yere erişilemiyor",
+      "drifted_one": "{{count}} yer başka bir sertifika sunuyor",
+      "drifted_other": "{{count}} yer başka bir sertifika sunuyor",
+      "driftedEnds_one": "{{count}} yer başka bir sertifika sunuyor (süresi {{hours}} saat içinde doluyor)",
+      "driftedEnds_other": "{{count}} yer başka bir sertifika sunuyor (ilkinin süresi {{hours}} saat içinde doluyor)",
+      "other_one": "{{count}} yer bekliyor ya da yakın zamanda denetlenmedi",
+      "other_other": "{{count}} yer bekliyor ya da yakın zamanda denetlenmedi",
+      "driftedHelp": "Alice doğru sertifikayı dağıttıktan sonra biri ya da başka bir araç bu yerlerde olanı değiştirdi. Aşağıdaki satırlar her birinde olması gerekeni, Alice'in son dağıttığını, dosyada bulunanı ve web sitesinin sunduğunu, her birini zamanıyla gösterir."
+    }
   }
 }

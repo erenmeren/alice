@@ -1,4 +1,5 @@
 import { apiFetch } from './client';
+import type { LocationObservation } from './drift';
 import type { Certificate, DeployResult, ErrorRef, RevocationReason, RevocationReasonOrEmpty, ServiceRef } from './types';
 
 // ACME certificate issuance (api/openapi.yaml, /api/v1/acme). The names follow the API's snake_case schemas. No type
@@ -13,7 +14,7 @@ export type ACMEKeyType = 'ecdsa_p256' | 'ecdsa_p384' | 'rsa_2048' | 'rsa_3072' 
 export type ACMEOrderKind = 'issue' | 'test';
 export type ACMEOrderState = 'running' | 'succeeded' | 'failed';
 export type ACMEOrderTrigger = 'manual' | 'renewal';
-export type ACMEBindingState = 'current' | 'pending' | 'attention';
+export type ACMEBindingState = 'current' | 'pending' | 'attention' | 'drifted';
 export type ACMEHeldReason = '' | 'license' | 'chain_incomplete';
 
 export interface ACMEAccount {
@@ -128,6 +129,8 @@ export interface ACMEBinding {
   attention: ErrorRef | null;
   served_certificate_id: string | null;
   created_at: string;
+  // R52: what the location should have, what Alice last deployed and what is observed today.
+  observation: LocationObservation | null;
 }
 
 export interface ACMECertificate {
@@ -260,7 +263,7 @@ export const ACME_CERTIFICATE_STATES: readonly ACMECertificateState[] = ['pendin
 export const ACME_CHALLENGES: readonly ACMEChallenge[] = ['dns01', 'http01'];
 export const ACME_KEY_TYPES: readonly ACMEKeyType[] = ['ecdsa_p256', 'ecdsa_p384', 'rsa_2048', 'rsa_3072', 'rsa_4096'];
 export const ACME_ORDER_STATES: readonly ACMEOrderState[] = ['running', 'succeeded', 'failed'];
-export const ACME_BINDING_STATES: readonly ACMEBindingState[] = ['current', 'pending', 'attention'];
+export const ACME_BINDING_STATES: readonly ACMEBindingState[] = ['current', 'pending', 'attention', 'drifted'];
 export const ACME_RENEW_AT_SOURCES: readonly ACMERenewAtSource[] = ['ca_window', 'local'];
 export const ACME_REPLACES_OUTCOMES: readonly ACMEReplacesOutcome[] = ['sent', 'adopted', 'no_ari', 'other_account', 'already_replaced', 'refused'];
 

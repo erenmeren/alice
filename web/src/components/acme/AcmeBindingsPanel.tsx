@@ -14,6 +14,7 @@ import { Icon } from '../../design/Icon';
 import { AppModal } from '../AppModal';
 import deploy from '../deploy.module.css';
 import { ErrorAlert } from '../ErrorAlert';
+import { DriftControls, DriftSummaryLine, HealthBadge, ObservationFacts } from '../drift/LocationDrift';
 import { InternalLink } from '../InternalLink';
 import { LoadingIndicator } from '../LoadingIndicator';
 import { useStepUp } from '../StepUpProvider';
@@ -21,8 +22,8 @@ import { DialogActions, EmptyState, Notice, Panel, StatusBadge, type Tone } from
 import { WRAP } from '../wrap';
 import { keyFamily, MAX_DEPLOY, Problem } from './issued';
 
-const STATE_TONE: Record<string, Tone> = { current: 'success', pending: 'info', attention: 'warning' };
-const STATE_ICON = { current: 'CircleCheck', pending: 'Clock3', attention: 'CircleAlert' } as const;
+const STATE_TONE: Record<string, Tone> = { current: 'success', pending: 'info', attention: 'warning', drifted: 'danger' };
+const STATE_ICON = { current: 'CircleCheck', pending: 'Clock3', attention: 'CircleAlert', drifted: 'CircleX' } as const;
 
 // AcmeBindingsPanel is "Websites using this certificate": the websites that follow an issued certificate, what each
 // serves, automatic deployment (the certificate's and each website's), the hold and stop marks of automatic deployment,
@@ -99,18 +100,21 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
           {!admin && <Text size="xs" c="dimmed">{t('acme.issued.adminOnly')}</Text>}
         </Stack>
         {issued && bindings.isSuccess && items.length > 0 && <AutoSummary c={c} items={items} />}
+        {issued && bindings.isSuccess && items.length > 0 && <DriftSummaryLine observations={items.map((b) => b.observation)} />}
         {bindings.isPending && <LoadingIndicator />}
         <ErrorAlert error={bindings.error} />
         {issued && bindings.isSuccess && items.length === 0 && <Text size="sm">{t('acme.issued.bindings.none')}</Text>}
         {items.length > 0 && (
-          <Table.ScrollContainer minWidth={720}>
+          <Table.ScrollContainer minWidth={1100}>
             <Table aria-label={t('acme.issued.bindings.title')} highlightOnHover>
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>{t('acme.issued.bindings.columns.server')}</Table.Th>
                   <Table.Th>{t('acme.issued.bindings.columns.file')}</Table.Th>
                   <Table.Th>{t('acme.issued.bindings.columns.state')}</Table.Th>
+                  <Table.Th>{t('drift.columns.observed')}</Table.Th>
                   <Table.Th>{t('acme.issued.bindings.columns.auto')}</Table.Th>
+                  <Table.Th>{t('drift.columns.repair')}</Table.Th>
                   {canOperate && (
                     <Table.Th>
                       <VisuallyHidden>{t('acme.issued.bindings.columns.actions')}</VisuallyHidden>
@@ -150,7 +154,31 @@ export function AcmeBindingsPanel({ certificate: c, admin, canOperate, locked }:
                       </Stack>
                     </Table.Td>
                     <Table.Td>
+                      {b.observation && (
+                        <Stack gap={4} align="flex-start">
+                          <HealthBadge observation={b.observation} />
+                          <ObservationFacts observation={b.observation} />
+                        </Stack>
+                      )}
+                    </Table.Td>
+                    <Table.Td>
                       <BindingAuto b={b} admin={admin} canOperate={canOperate} locked={locked} busy={busy !== null} onChange={(on) => setBindingAuto(b, on)} />
+                    </Table.Td>
+                    <Table.Td>
+                      {b.observation && (
+                        <DriftControls
+                          locationId={b.location_id}
+                          label={`"${b.target_name}" ${b.cert_path}`}
+                          observation={b.observation}
+                          admin={admin}
+                          canOperate={canOperate}
+                          locked={locked}
+                          onChanged={() => {
+                            void client.invalidateQueries({ queryKey: acmeBindingsKey(c.id) });
+                            refresh();
+                          }}
+                        />
+                      )}
                     </Table.Td>
                     {canOperate && (
                       <Table.Td>

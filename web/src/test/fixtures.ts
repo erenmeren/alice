@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw';
 import type { ACMEAccount, ACMEBinding, ACMECertificate, ACMEHook, ACMEOrder, ACMEProvider } from '../api/acme';
 import type { CertificateImpact, Incident } from '../api/incidents';
 import type { AssignResult, Environment, Service, ServicePolicy, ServiceTrust } from '../api/services';
+import type { LocationObservation } from '../api/drift';
 import type { DashboardSummary } from '../api/phase7';
 import type { DiscoveredCertificate, DiscoveredEndpoint, DiscoveryPreview, DiscoveryScan, DiscoveryScope, DiscoverySettings } from '../api/discovery';
 import type { Provider } from '../api/sso';
@@ -530,6 +531,7 @@ export function locationFixture(o: Partial<CertificateLocation> = {}): Certifica
     active_deployment_id: null,
     target_type: 'nginx',
     deployable: true,
+    observation: null,
     ...o,
   };
 }
@@ -1175,8 +1177,62 @@ export function acmeBindingFixture(o: Partial<ACMEBinding> = {}): ACMEBinding {
     attention: null,
     served_certificate_id: ACME_CURRENT_ID,
     created_at: '2026-10-13T09:05:00Z',
+    observation: null,
     ...o,
   };
+}
+
+// The observation of a bound location (R52): Alice deployed the current certificate, the file and the website agree.
+export const DESIRED_FP = '0123456789abcdef'.repeat(4);
+export const OLD_FP = 'fedcba9876543210'.repeat(4);
+export function observationFixture(o: Partial<LocationObservation> = {}): LocationObservation {
+  return {
+    health: 'in_sync',
+    source: 'acme',
+    source_id: ACME_CERT_ID,
+    desired: { certificate_id: ACME_CURRENT_ID, fingerprint: DESIRED_FP, not_after: '2099-01-11T09:00:00Z' },
+    last_deployment: { deployment_id: '0192c000-0000-7000-8000-0000000000d9', fingerprint: DESIRED_FP, finished_at: '2026-10-13T09:10:00Z', level: 3 },
+    file: { certificate_id: ACME_CURRENT_ID, fingerprint: DESIRED_FP, not_after: '2099-01-11T09:00:00Z', observed_at: '2026-10-20T06:00:00Z', changed_outside_at: null },
+    tls: {
+      certificate_id: ACME_CURRENT_ID,
+      fingerprint: DESIRED_FP,
+      not_after: '2099-01-11T09:00:00Z',
+      observed_at: '2026-10-20T06:00:05Z',
+      probe: 'alice',
+      level: 3,
+      trust: 'trusted',
+      trust_error: '',
+    },
+    tls_attempted_at: '2026-10-20T06:00:05Z',
+    tls_error: null,
+    mode: 'auto',
+    mode_setting: 'default',
+    default_mode: 'auto',
+    drift_since: null,
+    drift_fingerprint: '',
+    drift_source: '',
+    backoff_reason: '',
+    backed_off_at: null,
+    active_deployment_id: null,
+    next_observe_at: '2026-10-20T12:00:00Z',
+    repair_available: false,
+    ...o,
+  };
+}
+
+// A drifted observation: another tool put an older certificate back (it ends soon).
+export function driftedObservationFixture(o: Partial<LocationObservation> = {}): LocationObservation {
+  const old = { certificate_id: null, fingerprint: OLD_FP, not_after: '2026-10-21T06:00:00Z' };
+  return observationFixture({
+    health: 'drifted',
+    file: { ...old, observed_at: '2026-10-20T12:00:00Z', changed_outside_at: '2026-10-20T12:00:00Z' },
+    tls: { ...old, observed_at: '2026-10-20T12:00:05Z', probe: 'helper', level: 0, trust: '', trust_error: '' },
+    drift_since: '2026-10-20T12:00:05Z',
+    drift_fingerprint: OLD_FP,
+    drift_source: 'tls',
+    repair_available: true,
+    ...o,
+  });
 }
 
 // Network discovery.
