@@ -425,3 +425,47 @@ func TestSubjectWithin(t *testing.T) {
 	assert.Empty(t, op.Within([]uuid.UUID{other}).Grants, "a service the owner holds nothing on adds nothing")
 	assert.False(t, op.Within(nil).HasAnyGrant())
 }
+
+// A global role needs no scoped grant: it decides on every service and reaches all of them, and it is a grant of its own.
+func TestGlobalRoleBeforeScopedGrants(t *testing.T) {
+	b := uuid.MustParse("00000000-0000-0000-0000-00000000000b")
+	anywhere := uuid.MustParse("00000000-0000-0000-0000-0000000000ff")
+	op := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Operator}
+	assert.Equal(t, rbac.Allow, rbac.DecideAnywhere(rbac.CertificatesOperate, op))
+	assert.Equal(t, rbac.Allow, rbac.DecideIn(rbac.CertificatesOperate, op, anywhere), "a global Operator operates on any service")
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideIn(rbac.TargetsManage, op, anywhere))
+	all, svcs := rbac.Reach(rbac.CertificatesOperate, op)
+	assert.True(t, all)
+	assert.Nil(t, svcs, "reaching everything lists no service")
+	assert.True(t, op.HasAnyGrant())
+	assert.True(t, op.AllowsScopeAnywhere(rbac.ScopeOperate))
+
+	// A global Auditor with an Operator grant on B: the scoped grant decides where the global role does not.
+	aud := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Auditor, Grants: []rbac.ScopedGrant{{Role: rbac.Operator, Services: []uuid.UUID{b}}}}
+	assert.Equal(t, rbac.Allow, rbac.DecideIn(rbac.Read, aud, anywhere))
+	assert.Equal(t, rbac.Allow, rbac.DecideIn(rbac.CertificatesOperate, aud, b))
+	assert.Equal(t, rbac.DenyForbidden, rbac.DecideIn(rbac.CertificatesOperate, aud, anywhere))
+	assert.True(t, aud.AllowsScopeAnywhere(rbac.ScopeRead))
+	assert.True(t, aud.AllowsScopeAnywhere(rbac.ScopeOperate), "through the grant on B")
+
+	// An unknown global role is no grant.
+	assert.False(t, rbac.Subject{Kind: rbac.UserSession, Role: "superuser"}.HasAnyGrant())
+}
+
+// Reach is empty for a permission that is not a role's (an unknown one, public, the wizard, a pending sign-in) and for
+// a subject that is no signed-in person or token, whatever its role.
+func TestReachOutsideRoles(t *testing.T) {
+	admin := rbac.Subject{Kind: rbac.UserSession, Role: rbac.Admin}
+	for _, p := range []rbac.Permission{"nope", rbac.Public, rbac.Setup, rbac.MFAPending} {
+		all, svcs := rbac.Reach(p, admin)
+		assert.False(t, all, p)
+		assert.Nil(t, svcs, p)
+	}
+	for _, s := range []rbac.Subject{{Kind: rbac.Anonymous, Role: rbac.Admin}, {Kind: rbac.SetupSession, Role: rbac.Admin}} {
+		all, svcs := rbac.Reach(rbac.Read, s)
+		assert.False(t, all)
+		assert.Nil(t, svcs)
+	}
+	all, _ := rbac.Reach(rbac.TargetsManage, rbac.Subject{Kind: rbac.APIToken, Role: rbac.Admin, Scope: rbac.ScopeOperate})
+	assert.True(t, all, "an operate token of a global Administrator")
+}
