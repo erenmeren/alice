@@ -86,8 +86,11 @@ func TestDiscoveredCertificatesAlertOnlyWhenUnmanagedOnAnAlertingScope(t *testin
 	items, err := s.Items(ctx, []alerts.Kind{alerts.KindDiscoveredCertificate}, t0.Add(60*day), 0)
 	require.NoError(t, err)
 	require.Len(t, items, 2)
+	var def uuid.UUID
+	require.NoError(t, d.Owner.QueryRow(ctx, "SELECT id FROM services WHERE is_default").Scan(&def))
 	assert.Equal(t, alerts.Item{Kind: alerts.KindDiscoveredCertificate, ObjectID: alerts.DiscoveredObjectID(expired), Name: "old.example.com",
-		ExpiresAt: t0.Add(-day), Fingerprint: expired, Endpoints: []string{"10.0.0.10:443"}, Scopes: []string{"Data centre"}}, items[0],
+		ExpiresAt: t0.Add(-day), Fingerprint: expired, Endpoints: []string{"10.0.0.10:443"}, Scopes: []string{"Data centre"},
+		Services: []uuid.UUID{def}}, items[0],
 		"no CN: the first name; no location, server or vault")
 	assert.Equal(t, alerts.DiscoveredObjectID(legacy), items[1].ObjectID)
 	assert.Equal(t, "legacy.example.com", items[1].Name)

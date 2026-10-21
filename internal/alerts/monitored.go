@@ -26,12 +26,12 @@ const maxListed = 10
 // MATERIALIZED for the same reason as live: the endpoint fingerprint index.
 var itemsSQL = `
 WITH live AS NOT MATERIALIZED (
-    SELECT l.certificate_id, l.servers, t.id AS target_id, t.name::text AS target_name
+    SELECT l.certificate_id, l.servers, t.id AS target_id, t.name::text AS target_name, t.service_id AS target_service
     FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
     WHERE l.missing_since IS NULL AND l.certificate_id IS NOT NULL
 ),
 alerting AS NOT MATERIALIZED (
-    SELECT e.fingerprint_sha256, e.host, e.address, e.port, sc.name::text AS scope_name
+    SELECT e.fingerprint_sha256, e.host, e.address, e.port, sc.name::text AS scope_name, sc.service_id AS scope_service
     FROM discovery_endpoints e JOIN discovery_scopes sc ON sc.id = e.scope_id AND sc.deleted_at IS NULL AND sc.enabled AND sc.alert_on_expiry
     WHERE e.state NOT IN ('gone', 'excluded') AND e.fingerprint_sha256 IS NOT NULL
 )
@@ -42,13 +42,16 @@ SELECT 'certificate_expiry'::text AS kind, c.id AS object_id,
              WHERE x.certificate_id = c.id ORDER BY n LIMIT 11)::text[] AS websites,
        array(SELECT DISTINCT x.target_name FROM live x WHERE x.certificate_id = c.id ORDER BY 1 LIMIT 11)::text[] AS servers,
        array(SELECT DISTINCT x.target_id FROM live x WHERE x.certificate_id = c.id)::text[] AS target_ids,
-       ''::text AS vault, NULL::uuid AS vault_id
+       ''::text AS vault, NULL::uuid AS vault_id,
+       (ARRAY[c.service_id] || array(SELECT DISTINCT x.target_service FROM live x
+                                     WHERE x.certificate_id = c.id AND x.target_service <> c.service_id ORDER BY 1))::text[] AS services
 FROM certificates c
 WHERE 'certificate_expiry' = ANY ($1::text[]) AND c.not_after <= $2::timestamptz
   AND EXISTS (SELECT 1 FROM live x WHERE x.certificate_id = c.id)
   AND ` + authz.CertificateVisible("c", "$4") + `
 UNION ALL
-SELECT 'kv_certificate_expiry', kc.id, kc.name, kc.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
+SELECT 'kv_certificate_expiry', kc.id, kc.name, kc.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id,
+       ARRAY[t.service_id]::text[]
 FROM kv_certificates kc JOIN targets t ON t.id = kc.target_id AND t.deleted_at IS NULL
 WHERE 'kv_certificate_expiry' = ANY ($1::text[]) AND kc.missing_since IS NULL AND kc.enabled AND kc.expires IS NOT NULL
   AND kc.expires <= $2::timestamptz
@@ -56,14 +59,15 @@ WHERE 'kv_certificate_expiry' = ANY ($1::text[]) AND kc.missing_since IS NULL AN
                   WHERE v.kv_certificate_id = kc.id AND v.version = kc.current_version)
   AND ` + authz.OwnedVisible("t", "$4") + `
 UNION ALL
-SELECT 'kv_key_expiry', k.id, k.name, k.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
+SELECT 'kv_key_expiry', k.id, k.name, k.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id,
+       ARRAY[t.service_id]::text[]
 FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
 WHERE 'kv_key_expiry' = ANY ($1::text[]) AND k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL
   AND k.expires <= $2::timestamptz
   AND ` + authz.OwnedVisible("t", "$4") + `
 UNION ALL
 SELECT 'kv_credential_expiry', t.id, t.name::text, (cr.public_info->>'secret_expires_on')::timestamptz, '', '{}'::text[],
-       '{}'::text[], '{}'::text[], t.name::text, t.id
+       '{}'::text[], '{}'::text[], t.name::text, t.id, ARRAY[t.service_id]::text[]
 FROM targets t JOIN credentials cr ON cr.id = t.credential_id
 WHERE 'kv_credential_expiry' = ANY ($1::text[]) AND t.type = 'azure_key_vault' AND t.deleted_at IS NULL
   AND cr.public_info ? 'secret_expires_on' AND (cr.public_info->>'secret_expires_on')::timestamptz <= $2::timestamptz
@@ -75,7 +79,8 @@ SELECT 'discovered_certificate_expiry', NULL::uuid,
                  CASE family(e.address) WHEN 6 THEN '[' || host(e.address) || ']' ELSE host(e.address) END) || ':' || e.port
              FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 ORDER BY 1 LIMIT 11)::text[],
        array(SELECT DISTINCT e.scope_name FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 ORDER BY 1 LIMIT 11)::text[],
-       '{}'::text[], '', NULL::uuid
+       '{}'::text[], '', NULL::uuid,
+       array(SELECT DISTINCT e.scope_service FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 ORDER BY 1)::text[]
 FROM discovery_certificates d
 WHERE 'discovered_certificate_expiry' = ANY ($1::text[]) AND d.is_leaf AND d.not_after <= $2::timestamptz
   AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
@@ -113,9 +118,10 @@ func (s *Service) ItemsIn(ctx context.Context, kinds []Kind, until time.Time, li
 			vaultID  *uuid.UUID
 			websites []string
 			servers  []string
+			services []string
 		)
 		if err := rows.Scan(&kind, &objectID, &it.Name, &it.ExpiresAt, &it.Fingerprint, &websites, &servers, &targets,
-			&it.Vault, &vaultID); err != nil {
+			&it.Vault, &vaultID, &services); err != nil {
 			return nil, fmt.Errorf("alerts: read the monitored items: %w", err)
 		}
 		it.Kind, it.ExpiresAt = Kind(kind), it.ExpiresAt.UTC()
@@ -136,6 +142,13 @@ func (s *Service) ItemsIn(ctx context.Context, kinds []Kind, until time.Time, li
 				return nil, fmt.Errorf("alerts: read the monitored items: %w", err)
 			}
 			it.TargetIDs = append(it.TargetIDs, id)
+		}
+		for _, sv := range services {
+			id, err := uuid.Parse(sv)
+			if err != nil {
+				return nil, fmt.Errorf("alerts: read the monitored items: %w", err)
+			}
+			it.Services = append(it.Services, id)
 		}
 		if vaultID != nil {
 			it.VaultID = *vaultID

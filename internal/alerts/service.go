@@ -71,6 +71,10 @@ type Item struct {
 	VaultID     uuid.UUID
 	Endpoints   []string // discovered certificates: host:port of the alerting scopes' endpoints that present it (sorted, at most 10)
 	Scopes      []string // discovered certificates: names of those scopes (sorted, at most 10)
+	// Services are the services the item's notice is about (R56, design §7.2): a certificate's owning service, then
+	// the services of the servers holding it; a Key Vault object's vault's service; the services of the scopes that
+	// saw a discovered certificate.
+	Services []uuid.UUID
 
 	moreWebsites, moreServers bool // an eleventh entry exists (Websites and Endpoints, Servers and Scopes)
 }
@@ -97,9 +101,11 @@ type ScanResult struct {
 // LicenseState gives the current license evaluation.
 type LicenseState interface{ Snapshot() license.Snapshot }
 
-// Notifier queues an Administrator e-mail inside tx.
+// Notifier queues the e-mails of services inside tx (notify.ServiceNotifier; R56, design §7.2): a notice goes to the
+// recipients of its item's services, a summary is built per recipient over the items that made it one.
 type Notifier interface {
-	NotifyAdmins(ctx context.Context, tx pgx.Tx, template string, params map[string]string) error
+	NotifyServices(ctx context.Context, tx pgx.Tx, services []uuid.UUID, template string, params map[string]string) error
+	NotifyDigest(ctx context.Context, tx pgx.Tx, template string, items [][]uuid.UUID, params func(count int) map[string]string) error
 }
 
 // Config wires Service.

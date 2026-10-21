@@ -192,7 +192,7 @@ ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING i
 		return false, fmt.Errorf("alerts: record the notice: %w", err)
 	}
 	if emailed {
-		if err := s.notifier.NotifyAdmins(ctx, tx, templateFor(it.Kind, level), paramsOf(it, now, level, note)); err != nil {
+		if err := s.notifier.NotifyServices(ctx, tx, it.Services, templateFor(it.Kind, level), paramsOf(it, now, level, note)); err != nil {
 			return false, fmt.Errorf("alerts: queue the notice: %w", err)
 		}
 	}
@@ -204,12 +204,14 @@ ON CONFLICT (kind, object_id, expires_at, threshold_days) DO NOTHING RETURNING i
 	return err == nil, err
 }
 
-// recordSuppressed records the over-cap notices of a kind (not e-mailed one by one) and queues the one "and N more"
-// email with the number actually inserted, all in one transaction.
+// recordSuppressed records the over-cap notices of a kind (not e-mailed one by one) and queues the "and N more"
+// email, all in one transaction: built per recipient (R56, design §7.2), with the number of inserted notices whose
+// services made it a recipient (the Administrators, kept by every policy, count them all).
 func (s *Service) recordSuppressed(ctx context.Context, k Kind, due []dueItem, now time.Time, note licenseNote) (int, error) {
 	n := 0
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		n = 0
+		var items [][]uuid.UUID
 		for _, d := range due {
 			ok, err := s.insertNotice(ctx, tx, d.it, d.level, now, note, false)
 			if err != nil {
@@ -217,20 +219,26 @@ func (s *Service) recordSuppressed(ctx context.Context, k Kind, due []dueItem, n
 			}
 			if ok {
 				n++
+				items = append(items, d.it.Services)
 			}
 		}
 		if n == 0 {
 			return nil
 		}
-		params := map[string]string{"count": strconv.Itoa(n), "kind": string(k)}
 		template := "alert.more"
 		if k == KindDiscoveredCertificate {
 			// The Overview does not list unmanaged certificates: this summary sends its reader to the discovery page.
 			template = "alert.more_discovered"
-			params["discovery_url"] = discoveryURL(note)
 		}
-		addNote(params, k, note)
-		if err := s.notifier.NotifyAdmins(ctx, tx, template, params); err != nil {
+		params := func(count int) map[string]string {
+			p := map[string]string{"count": strconv.Itoa(count), "kind": string(k)}
+			if k == KindDiscoveredCertificate {
+				p["discovery_url"] = discoveryURL(note)
+			}
+			addNote(p, k, note)
+			return p
+		}
+		if err := s.notifier.NotifyDigest(ctx, tx, template, items, params); err != nil {
 			return fmt.Errorf("alerts: queue the summary: %w", err)
 		}
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: audit.SystemActor("alerts"), Action: "alert.summarized",

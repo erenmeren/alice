@@ -37,6 +37,7 @@ const day = 24 * time.Hour
 type queued struct {
 	template string
 	params   map[string]string
+	services []uuid.UUID // a notice's services; a summary's: every item's, in order
 }
 
 // recorder is the Notifier: it records what the scan queued (the outbox itself is notify's, tested there).
@@ -48,7 +49,7 @@ type recorder struct {
 	failOnce string // fail the next notice of this template, once
 }
 
-func (r *recorder) NotifyAdmins(_ context.Context, _ pgx.Tx, template string, params map[string]string) error {
+func (r *recorder) NotifyServices(_ context.Context, _ pgx.Tx, services []uuid.UUID, template string, params map[string]string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.failOnce != "" && template == r.failOnce {
@@ -58,8 +59,17 @@ func (r *recorder) NotifyAdmins(_ context.Context, _ pgx.Tx, template string, pa
 	if r.fail != nil || (r.failName != "" && params["name"] == r.failName) {
 		return errors.New("queue failed")
 	}
-	r.got = append(r.got, queued{template, params})
+	r.got = append(r.got, queued{template, params, services})
 	return nil
+}
+
+// NotifyDigest records the summary as one recipient counting every item would get it.
+func (r *recorder) NotifyDigest(ctx context.Context, tx pgx.Tx, template string, items [][]uuid.UUID, params func(count int) map[string]string) error {
+	var all []uuid.UUID
+	for _, s := range items {
+		all = append(all, s...)
+	}
+	return r.NotifyServices(ctx, tx, all, template, params(len(items)))
 }
 
 func (r *recorder) templates() []string {
@@ -285,7 +295,7 @@ func TestL18NoSMTP(t *testing.T) {
 	_, err := d.Owner.Exec(ctx, `INSERT INTO users (id, username, display_name, email, password_hash, role, locale, created_at, updated_at)
 VALUES (gen_random_uuid(), 'ada', 'Ada', 'ada@example.com', '$argon2id$x', 'admin', 'tr', now(), now())`)
 	require.NoError(t, err)
-	s := alerts.New(alerts.Config{Pool: d.App, Audit: audit.New(clk), Clock: clk, License: lic{}, Notifier: notify.AdminNotifier{Clock: clk}})
+	s := alerts.New(alerts.Config{Pool: d.App, Audit: audit.New(clk), Clock: clk, License: lic{}, Notifier: notify.ServiceNotifier{Clock: clk}})
 	web := seedTarget(t, d, "web-01", "nginx", nil)
 	seedCert(t, d, "www.example.com", t0.Add(6*day), []uuid.UUID{web}, "www.example.com")
 	_, err = s.Scan(ctx)
