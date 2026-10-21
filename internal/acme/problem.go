@@ -44,6 +44,11 @@ const (
 	ReasonRevokeUnauthorized  = "acme.revoke_unauthorized"
 	// alreadyReplaced (RFC 9773 section 7.4): another order at the CA replaces the certificate already (R50).
 	ReasonAlreadyReplaced = "acme.already_replaced"
+	// DNS providers (R57): no zone the credentials manage holds the name; the provider refused the credentials (or
+	// the sign-in failed); the provider's API failed or could not be reached.
+	ReasonDNSZoneNotFound  = "acme.dns_zone_not_found"
+	ReasonDNSAuthFailed    = "acme.dns_auth_failed"
+	ReasonDNSProviderError = "acme.dns_provider_error"
 )
 
 // Reasons lists every reason an *Error of this package can carry.
@@ -51,7 +56,8 @@ func Reasons() []string {
 	return []string{ReasonProviderUnreachable, ReasonDirectoryInvalid, ReasonTermsNotAccepted, ReasonAccountRejected,
 		ReasonCARateLimited, ReasonValidationFailedDNS, ReasonValidationFailedHTTP, ReasonHookRefused, ReasonIdentifierRefused,
 		ReasonNotIssuedInTime, ReasonKeyPolicyNotAllowed, ReasonTLSTrustFailed, ReasonRolloverUnsupported, ReasonChallengeUnavailable,
-		ReasonNameNotAllowed, ReasonRevokeUnsupported, ReasonRevokeReasonRefused, ReasonRevokeUnauthorized, ReasonAlreadyReplaced}
+		ReasonNameNotAllowed, ReasonRevokeUnsupported, ReasonRevokeReasonRefused, ReasonRevokeUnauthorized, ReasonAlreadyReplaced,
+		ReasonDNSZoneNotFound, ReasonDNSAuthFailed, ReasonDNSProviderError}
 }
 
 // ProblemPrefix is the namespace of RFC 8555 problem types; any other type is dropped.

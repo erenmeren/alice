@@ -80,6 +80,33 @@ func TestHookErrorText(t *testing.T) {
 	assert.NotContains(t, HookError("a.example", 0, false).Error(), "reached")
 }
 
+func TestDNSProviderErrors(t *testing.T) {
+	cases := []struct {
+		name   string
+		err    *Error
+		reason string
+		class  string
+	}{
+		{"unreachable", DNSProviderError("a.example", 0, true), ReasonDNSProviderError, ClassTransient},
+		{"server error", DNSProviderError("a.example", 503, false), ReasonDNSProviderError, ClassTransient},
+		{"rate limited", DNSProviderError("a.example", 429, false), ReasonDNSProviderError, ClassTransient},
+		{"bad request", DNSProviderError("a.example", 400, false), ReasonDNSProviderError, ClassPermanent},
+		{"unauthorized", DNSProviderError("a.example", 401, false), ReasonDNSAuthFailed, ClassPermanent},
+		{"forbidden", DNSProviderError("a.example", 403, false), ReasonDNSAuthFailed, ClassPermanent},
+		{"sign-in refused", DNSSignInError("a.example", 400, false), ReasonDNSAuthFailed, ClassPermanent},
+		{"sign-in outage", DNSSignInError("a.example", 502, false), ReasonDNSProviderError, ClassTransient},
+		{"sign-in unreachable", DNSSignInError("a.example", 0, true), ReasonDNSProviderError, ClassTransient},
+		{"no zone", DNSZoneNotFound("a.example"), ReasonDNSZoneNotFound, ClassPermanent},
+	}
+	for _, c := range cases {
+		assert.Equal(t, c.reason, c.err.Reason, c.name)
+		assert.Equal(t, c.class, FailureClass(c.err), c.name)
+		assert.Equal(t, "a.example", c.err.Identifier, c.name)
+	}
+	assert.ErrorIs(t, DNSProviderError("a.example", 0, true), ErrDNSProviderUnreachable)
+	assert.Equal(t, "acme: acme.dns_auth_failed for a.example status 403", DNSProviderError("a.example", 403, false).Error())
+}
+
 func TestClassesMatchTheRenewalPolicy(t *testing.T) {
 	assert.Equal(t, renew.ClassTransient, ClassTransient)
 	assert.Equal(t, renew.ClassPermanent, ClassPermanent)

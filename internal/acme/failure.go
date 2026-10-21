@@ -32,6 +32,38 @@ func HookError(identifier string, status int, unreachable bool) *Error {
 	return e
 }
 
+// ErrDNSProviderUnreachable is the cause of a DNS provider call that got no answer (a transport error or a timeout).
+var ErrDNSProviderUnreachable = errors.New("acme: the DNS provider could not be reached")
+
+// DNSProviderError is the *Error of a DNS provider API call (R57) that failed for identifier: status is the
+// provider's HTTP status (0 when it gave none); unreachable says the provider gave no answer. A 401 or 403 is
+// ReasonDNSAuthFailed, anything else ReasonDNSProviderError. Its text holds no part of the provider's answer.
+func DNSProviderError(identifier string, status int, unreachable bool) *Error {
+	e := &Error{Reason: ReasonDNSProviderError, Identifier: identifier, Status: status}
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		e.Reason = ReasonDNSAuthFailed
+	}
+	if unreachable {
+		e.cause = ErrDNSProviderUnreachable
+	}
+	return e
+}
+
+// DNSSignInError is the *Error of a DNS provider sign-in that failed for identifier (a token the identity service
+// refused, an assumed role it did not give): ReasonDNSAuthFailed, or ReasonDNSProviderError marked unreachable when
+// the identity service gave no answer or answered with a server error.
+func DNSSignInError(identifier string, status int, unreachable bool) *Error {
+	if unreachable || serverTrouble(status) {
+		return DNSProviderError(identifier, status, true)
+	}
+	return &Error{Reason: ReasonDNSAuthFailed, Identifier: identifier, Status: status}
+}
+
+// DNSZoneNotFound is the *Error of a name no zone of the DNS provider's account holds (R57).
+func DNSZoneNotFound(identifier string) *Error {
+	return &Error{Reason: ReasonDNSZoneNotFound, Identifier: identifier}
+}
+
 // FailureClass classifies an order's failure: ClassTransient, ClassPermanent, or "" when err holds no *Error of this
 // package and is neither a timeout nor a network error (the caller decides from its own code).
 func FailureClass(err error) string {
@@ -62,6 +94,10 @@ func transientError(e *Error) bool {
 		return !errors.Is(e.cause, netaddr.ErrNotAllowed)
 	case ReasonHookRefused:
 		return errors.Is(e.cause, ErrHookUnreachable) || serverTrouble(e.Status) || networkTrouble(e.cause)
+	case ReasonDNSProviderError:
+		// A DNS provider that did not answer, timed out, limited the requests or failed itself (R57); a refused
+		// request (a 4xx) is a setting.
+		return errors.Is(e.cause, ErrDNSProviderUnreachable) || serverTrouble(e.Status) || networkTrouble(e.cause)
 	case ReasonValidationFailedDNS, ReasonValidationFailedHTTP:
 		switch shortType(e.ProblemType) {
 		case "dns", "connection", "serverInternal", "rateLimited", "badNonce":

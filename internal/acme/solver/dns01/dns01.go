@@ -72,8 +72,7 @@ const (
 	UserAgent = "alice-acme/1"
 
 	cleanupTimeout = 30 * time.Second
-	maxValueBytes  = 512
-	labelPrefix    = "_acme-challenge."
+	labelPrefix    = solver.ChallengeLabel
 )
 
 // Configuration errors (fixed text: never the URL or the secret).
@@ -141,7 +140,7 @@ type Solver struct {
 	pollMax  time.Duration
 	pollStep time.Duration
 	ttl      int
-	suffixes []string // normalized: leading "." for subdomain-only entries
+	suffixes solver.Suffixes
 
 	// Test seams (unexported: the dialer is never replaceable from outside the transport).
 	now   func() time.Time
@@ -187,12 +186,8 @@ func New(cfg Config) (*Solver, error) {
 	if s.ttl < 0 || s.ttl > 86400 {
 		return nil, ErrTTL
 	}
-	for _, raw := range cfg.AllowedSuffixes {
-		n, ok := normSuffix(raw)
-		if !ok {
-			return nil, ErrSuffix
-		}
-		s.suffixes = append(s.suffixes, n)
+	if s.suffixes, err = solver.ParseSuffixes(cfg.AllowedSuffixes); err != nil {
+		return nil, ErrSuffix
 	}
 	if s.client, err = transport.NewWithRoots(cfg.CABundlePEM, cfg.BaseRoots); err != nil {
 		return nil, ErrCABundle
@@ -297,7 +292,7 @@ func refused(domain string) error {
 
 // prepare checks the challenge and the allow-list, before any network call, and returns the fqdn.
 func (s *Solver) prepare(ch solver.Challenge) (string, error) {
-	if ch.Type != solver.DNS01 || ch.DNSValue == "" || len(ch.DNSValue) > maxValueBytes || !printable(ch.DNSValue) {
+	if ch.Type != solver.DNS01 || !solver.PrintableValue(ch.DNSValue) {
 		return "", refused(ch.Domain)
 	}
 	d, ok := normDomain(ch.Domain)
@@ -316,15 +311,6 @@ func safeID(domain string) string {
 		return d
 	}
 	return ""
-}
-
-func printable(v string) bool {
-	for i := 0; i < len(v); i++ {
-		if v[i] < 0x21 || v[i] > 0x7e {
-			return false
-		}
-	}
-	return true
 }
 
 // hookRequest has the fixed field order of the wire contract.
@@ -409,60 +395,6 @@ func parseHookReply(b []byte) (ready, known bool) {
 	return false, false
 }
 
-// normDomain lower-cases a challenge domain, strips "*." and a trailing dot and checks its characters.
-func normDomain(d string) (string, bool) {
-	d = strings.TrimSuffix(strings.TrimPrefix(asciiLower(d), "*."), ".")
-	if d == "" || len(d) > 253-len(labelPrefix) {
-		return "", false
-	}
-	for _, l := range strings.Split(d, ".") {
-		if l == "" || len(l) > 63 || l[0] == '-' || l[len(l)-1] == '-' {
-			return "", false
-		}
-		for i := 0; i < len(l); i++ {
-			c := l[i]
-			if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-				return "", false
-			}
-		}
-	}
-	return d, true
-}
+func normDomain(d string) (string, bool) { return solver.NormalizeDomain(d) }
 
-// normSuffix keeps a leading dot (subdomains only) and validates the rest.
-func normSuffix(raw string) (string, bool) {
-	raw = strings.TrimSpace(raw)
-	dot := strings.HasPrefix(raw, ".")
-	d, ok := normDomain(strings.TrimPrefix(raw, "."))
-	if !ok || strings.HasPrefix(raw, "*") || strings.HasSuffix(raw, ".") {
-		return "", false
-	}
-	if dot {
-		return "." + d, true
-	}
-	return d, true
-}
-
-func (s *Solver) allowed(d string) bool {
-	for _, sf := range s.suffixes {
-		if strings.HasPrefix(sf, ".") {
-			if strings.HasSuffix(d, sf) {
-				return true
-			}
-		} else if d == sf || strings.HasSuffix(d, "."+sf) {
-			return true
-		}
-	}
-	return false
-}
-
-// asciiLower lower-cases ASCII letters only (DNS names are case-insensitive in ASCII, and nothing else is valid here).
-func asciiLower(s string) string {
-	b := []byte(s)
-	for i, c := range b {
-		if c >= 'A' && c <= 'Z' {
-			b[i] = c + 'a' - 'A'
-		}
-	}
-	return string(b)
-}
+func (s *Solver) allowed(d string) bool { return s.suffixes.Allows(d) }
