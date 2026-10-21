@@ -306,6 +306,7 @@ func TestStartWithoutVendorKeys(t *testing.T) {
 		StateDir: e.stateDir, Log: slog.New(slog.NewTextHandler(&logs, nil)),
 	})
 	require.NoError(t, svc.Start(e.ctx))
+	t.Cleanup(svc.Close)
 	assert.Contains(t, logs.String(), "docs/vendor/licensing-vendor.md")
 	assert.Equal(t, license.PhaseEvaluation, svc.Snapshot().Eval.Phase)
 	now := e.clk.Now()

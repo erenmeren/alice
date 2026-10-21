@@ -209,6 +209,7 @@ func newEnvWith(t *testing.T, real func(e *env)) *env {
 	lic := license.New(license.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, Uptime: e.tick,
 		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Notifier: notify.AdminNotifier{Clock: e.tick}, Log: e.log})
 	require.NoError(t, lic.Start(e.ctx))
+	t.Cleanup(lic.Close)
 	e.gate = &lockGate{Service: lic}
 	e.notifier = &recordingNotifier{next: notify.ServiceNotifier{Clock: e.tick}}
 	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, Gate: e.gate})

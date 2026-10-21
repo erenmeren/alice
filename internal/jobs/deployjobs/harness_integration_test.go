@@ -174,6 +174,7 @@ func newEnv(t *testing.T) *env {
 	e.lic = license.New(license.Config{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, Uptime: e.clock,
 		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Notifier: notify.AdminNotifier{Clock: e.clock}, Log: log})
 	require.NoError(t, e.lic.Start(e.ctx))
+	t.Cleanup(e.lic.Close)
 	e.gate = &lockGate{Service: e.lic}
 	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.clock, Gate: e.gate})
 	e.ca = pki.NewCA("Deploy", pki.ECDSA256, now)

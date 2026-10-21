@@ -119,6 +119,7 @@ func newWorldWith(t *testing.T, roots func() (*x509.CertPool, error)) *world {
 	w.lic = license.New(license.Config{Pool: w.db.App, Keyring: keyring, Audit: auditLog, Clock: w.clock, Uptime: w.clock,
 		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Notifier: notify.AdminNotifier{Clock: w.clock}, Log: log})
 	require.NoError(t, w.lic.Start(w.ctx))
+	t.Cleanup(w.lic.Close)
 	w.gate = &lockGate{Service: w.lic}
 	w.queue = jobs.NewQueue(jobs.QueueConfig{Pool: w.db.App, Keyring: keyring, Audit: auditLog, Clock: w.clock, Gate: w.gate})
 	w.reg = providers.NewRegistry()

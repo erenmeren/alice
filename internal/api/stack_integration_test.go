@@ -226,6 +226,7 @@ func (s *stack) start() {
 		RowLockTimeout: 200 * time.Millisecond, // tests that hold the license row (AUD-02) do not wait 30 s
 	})
 	require.NoError(t, s.license.Start(ctx))
+	t.Cleanup(s.license.Close)
 	s.auth = auth.NewService(auth.Config{
 		Pool: s.db.App, Keyring: keyring, Audit: auditLog, Clock: s.clock, Hasher: hasher, RecoveryHasher: hasher,
 	})

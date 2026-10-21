@@ -92,11 +92,14 @@ func newEnv(t *testing.T) *env {
 }
 
 func (e *env) newService() *license.Service {
-	return license.New(license.Config{
+	svc := license.New(license.Config{
 		Pool: e.db.App, Keyring: e.keyring, Audit: audit.New(e.clk), Clock: e.clk, Uptime: e.clk,
 		Keys: licensetest.KeySet(), StateDir: e.stateDir, BuildTime: e.buildTime, Notifier: e.notifier(),
 		Targets: e.targets, Log: slog.New(slog.DiscardHandler),
 	})
+	// before the state dir's TempDir cleanup: a background evaluation may still write the state file
+	e.t.Cleanup(svc.Close)
+	return svc
 }
 
 // notifier returns the recording notifier, or none when the test runs without email (L-18).

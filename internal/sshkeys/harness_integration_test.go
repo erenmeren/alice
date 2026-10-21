@@ -181,6 +181,7 @@ func newEnv(t *testing.T) *env {
 		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Notifier: notify.AdminNotifier{Clock: e.clock},
 		Log: quiet})
 	require.NoError(t, e.lic.Start(e.ctx))
+	t.Cleanup(e.lic.Close)
 	e.gate = &lockGate{Service: e.lic}
 	e.queue = jobs.NewQueue(jobs.QueueConfig{Pool: e.db.App, Keyring: e.keyring, Audit: e.audit, Clock: e.tick, Gate: e.gate})
 	reg := providers.NewRegistry()

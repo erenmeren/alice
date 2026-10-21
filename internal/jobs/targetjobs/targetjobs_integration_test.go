@@ -71,6 +71,7 @@ func newEnv(t *testing.T, wrap func(providers.Session) providers.Session) *env {
 	e.lic = license.New(license.Config{Pool: e.db.App, Keyring: keyring, Audit: auditLog, Clock: e.clock, Uptime: e.clock,
 		Keys: licensetest.KeySet(), StateDir: t.TempDir(), Targets: inventory.Counter{}, Log: log})
 	require.NoError(t, e.lic.Start(e.ctx))
+	t.Cleanup(e.lic.Close)
 	e.prov = fake.New(providers.KindLinuxSSH)
 	reg := providers.NewRegistry()
 	reg.Register(wrapProvider{Provider: e.prov, wrap: wrap})
