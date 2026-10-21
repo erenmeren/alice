@@ -281,6 +281,28 @@ route without a permission (SEC-016).
   deployment being queued under it; removing it undoes nothing already deployed. The replacement of a key-compromise
   incident needs no trust (the key it replaces is there already). [T]
 
+(Amendment R49 Phase 2 / R53, 2026-10-21; rulings `docs/superpowers/rulings/scoped-access.md`.) A person holds a role
+**globally** (`users.role`, now optional) or **on a service** or **on an environment** (every service that carries
+it, now and later) through role bindings; the role columns above then hold on that service's resources only. Platform
+operations (people, settings, license, SSO and directories, backups, audit, ACME providers, accounts and hooks,
+discovery settings and scopes, services and environments) need a global role. Role bindings are added and removed with
+`access.manage`: **Admin** (global) with step-up, never a token, ClassAlways.
+
+- **SEC-027** (R53) Grants are read on every request with the session or the token (SEC-017): the global role and every
+  role binding of the person, an environment binding expanded to the services that carry it at that request, an SSO or
+  directory user's Administrator binding counted as Operator while "SSO users may be Admin" is off. A token acts with its
+  owner's grants as they are now, narrowed by its scope; it is valid while some grant allows its scope. The reach of a
+  permission (every service, or the services of the grants whose role allows it) filters every list, count, export, the
+  dashboard and the discovery summary inside their queries, before paging. The break-glass account always keeps a
+  global role (00028 CHECK, `ALC-USR-0004`). [T]
+- **SEC-028** (R53) Every route that names a resource in its path declares a resolver (startup refuses one without); a
+  caller with role bindings is checked against the resource before the handler runs: a resource it cannot see answers
+  exactly as an absent one (the route's 404, audited `authz.denied` reason `out_of_scope`), one it sees but holds no
+  right on 403 `ALC-AUTH-0002` (reason `scope`). Cross-service actions need the permission on every destination service
+  (`ALC-SVC-0012`, counted, never named); a create into a service outside the reach is `ALC-SVC-0006`. Detail answers
+  leave related rows of other services out and count them (`hidden_count`); a service outside the reach shows as
+  `{"outside": true}`. Generated test: `TestScopedIDOR`. [T]
+
 ### 15.5 Sessions, CSRF, rate limiting
 
 - **SEC-018** Session ID is 256-bit from `crypto/rand`; only its SHA-256 is stored server-side. Cookie: `__Host-alice_session`, HttpOnly, Secure, SameSite=Strict, Path=/, no Domain. [T]

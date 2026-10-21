@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — Roles on services (scoped access, phase 2)
+
+**Added**
+- A person's role can be held on single services or on an environment ("every service in Production") besides, or
+  instead of, **All services** (R53). On **People & access**, a person's **Access** section lists their roles and adds
+  or removes them (a fresh confirmation code; audited); **Explain** shows what they add up to; a service's page has an
+  **Access** tab. A person may have **No role on all services**; with no role at all they see "You do not have access
+  to anything yet".
+- Such a person sees, counts, exports and acts on only their services' servers, Key Vaults, certificates, signing
+  requests, SSH keys, ACME certificates, scan scopes and findings, jobs, deployments and incidents; the dashboard counts
+  them only. Anything of another service answers as if it did not exist; a certificate or key of another service on one
+  of their servers shows the places on their servers and "and N more outside your services". Creating in, deploying to,
+  moving between and trusting services need the role on every service involved. People, settings, the license, single
+  sign-on and directories, backups, the audit log and discovery scopes stay with roles on all services.
+- API: `GET/POST /api/v1/role-bindings`, `DELETE /api/v1/role-bindings/{id}`, `GET /api/v1/users/{id}/access`
+  (permission `access.manage`: an Administrator with all services and a fresh code, never a token); `access` in
+  `GET /api/v1/auth/session`; `allowed_actions` on rows, `hidden_count` on detail lists, `{"outside": true}` for a
+  service outside the caller's; codes `ALC-SVC-0005`, `ALC-SVC-0006`, `ALC-SVC-0012`, `ALC-ACC-0001`, `ALC-ACC-0005`,
+  `ALC-USR-0004`.
+
+**Changed**
+- A user's `role` may be `null` (no role on all services). Every audit entry about a resource names its service
+  (`details.service_id`); an export by a person with roles on some services records them (`details.reach`).
+- Nothing changes for an installation without role bindings: everybody keeps their role on all services.
+- Migration `00028`: the administrator the setup wizard created always keeps a role on all services; role bindings are
+  indexed by service and environment. Rulings: `docs/superpowers/rulings/scoped-access.md` ("Phase 2").
+
 ## Unreleased — What should be there, what was deployed, what is there today
 
 **Added**

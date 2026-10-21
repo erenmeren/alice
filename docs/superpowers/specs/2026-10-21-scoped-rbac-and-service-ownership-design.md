@@ -1,6 +1,6 @@
 # Scoped access and service ownership: design
 
-Status: Phase 1 implemented (2026-10-21, see "Phase 1 as built" in §12); Phases 2-5 open; the questions of §14 stay
+Status: Phases 1 and 2 implemented (2026-10-21, see "Phase 1 as built" and "Phase 2 as built" in §12); Phases 3-5 open; the questions of §14 stay
 open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
 to R46). Numbers: migration `00026` (Phase 1 creates the whole schema of §4, so the later phases need no migration; one
 that does after review takes the next free number at merge time; `00024` and `00026` went to parallel branches) and decision
@@ -958,6 +958,33 @@ Acceptance:
 - Error texts: no foreign object name in any error answer to `operator@B` (leak-style test over the fixtures, like
   the secret-leak suite).
 - e2e: a scoped Operator signs in, sees only B, deploys within B, is refused in A.
+
+#### Phase 2 as built (2026-10-21, R53)
+
+What Phase 2 delivers, and where it differs from the text above (rulings in `docs/superpowers/rulings/scoped-access.md`,
+"Phase 2"):
+
+- Migration `00028` (no new table: `00026` made them): the break-glass CHECK as `NOT is_break_glass OR role IS NOT
+  NULL` (the stricter `role = 'admin'` of §4.2 would refuse demoting the wizard's administrator, which SEC-015 allows
+  today; ruling 2, owner to confirm) and indexes of `role_bindings` by service and by environment.
+- Grants (`authz.LoadGrants`, with every session and token lookup), `rbac.Reach`/`DecideAnywhere`/`DecideIn`, the guard
+  per §5.3-5.4 with a mandatory resolver per resource route (`route.resolve`), reach filters inside the queries of every
+  list, count, export, the dashboard, alerts, jobs and discovery (`internal/authz/sql.go`), the cross rules of §5.6 in
+  the handlers (`ALC-SVC-0012`), creates per §4.4 (`ALC-SVC-0005`, `ALC-SVC-0006`), `allowed_actions` on the six owned
+  kinds, `hidden_count` on the detail lists, `{"outside": true}` for a service outside the reach, `details.service_id`
+  on every audit row about a resource (added by the audit log in the row's transaction), `users.role` NULL handled on
+  every read (`role: null` on the wire; `POST /users` and `PATCH /users/{id}` take it), the bindings API (`access.manage`)
+  and `GET /users/{id}/access`, the session's `access`.
+- Codes `ALC-SVC-0005`, `0006`, `0012`, `ALC-ACC-0001`, `0005`, and `ALC-USR-0004` `user.break_glass_global_role`
+  (the next USR number; §8.3 has none for it).
+- Tests: `TestScopedIDOR` (generated from the route table, four identities, every class; also the leak-style check:
+  no answer to a person of B names a resource of A), `TestScopedPeopleWorkInTheirService`, the grants and bindings
+  tests of `internal/authz/services`, `internal/auth:TestPersonWithoutAGlobalRole`, `internal/rbac:TestScopedGrants`,
+  `migrations:TestMigration00028ScopedBindings`.
+- Not built in this phase (each listed under "What remains" in the rulings): the re-check under the row lock inside the
+  service functions (`authz.Assert`, §5.4; the checks run in the guard and the handlers before the call); the rotation
+  runner's check of `approved_service_ids` (§5.7; the approvals are recorded at switch-on and Run now); `service` on
+  the derived rows and `service_id`/`environment_id` filters on their lists; the perf measurement of the grants read.
 
 ### Phase 3 — Directory groups, automation accounts, limited tokens (size L, ~8 tasks)
 

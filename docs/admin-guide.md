@@ -1237,8 +1237,26 @@ trust: the compromised key is there already.
 
 Creating, changing and deleting services and environments, moving resources and making or removing trusts are an
 Administrator's acts with a fresh confirmation code, never an API token; they work while the license is locked.
-Reading them is everyone's. Services do not yet limit who sees what: role bindings per service come with a later
-version (R49).
+Reading them is everyone's.
+
+**Who may reach a service.** A person's role (Administrator, Operator, Auditor) is held on **All services** (the role
+on **People & access**, as before) or on single services and environments (R53). On **People & access**, a person's
+**Access** section lists the role on all services first, then each role on a service or an environment ("every service
+in Production", which also covers a service created in production later and stops covering one moved to another
+environment); **Add** and **Remove** need a fresh confirmation code and are audited (**Role binding added**, **Role
+binding removed**). **Explain** shows what the roles add up to now. A person may have **No role on all services**: they
+then reach only the services of their role bindings, or, with none yet, see only "You do not have access to anything
+yet". The administrator the setup wizard created always keeps a role on all services (`ALC-USR-0004`). A service's page,
+**Access**, lists who reaches it: directly, through its environment, and the people with a role on all services.
+
+A person with roles on some services sees, lists, counts and exports only those services' servers, Key Vaults,
+certificates, keys, ACME certificates, scan scopes and their findings, jobs, deployments and incidents; the dashboard
+counts them only. A certificate or SSH key of another service that is on one of their servers is visible to them, with
+the places on their servers and "and N more outside your services" for the others. Anything of another service answers
+as if it did not exist. Creating something in a service, deploying to a website or vault of a service, moving and
+trusting need the role on every service involved (`ALC-SVC-0006`, `ALC-SVC-0012`). People, settings, the license,
+single sign-on and directories, backups, the audit log, ACME providers, accounts and hooks and network discovery's
+scopes and settings stay with roles on all services. Changes made to a resource are audited with its service.
 
 ## Servers
 

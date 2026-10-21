@@ -254,6 +254,10 @@ When someone leaves:
 
 After a restore of an older backup, check again: disabled people and revoked tokens come back with it.
 
+A person who held roles on single services (role bindings, R53) keeps them while disabled; remove them on the person's
+**Access** section (or `DELETE /api/v1/role-bindings/<id>`, listed by `GET /api/v1/role-bindings?user_id=<id>`) when the
+account is to be used again by someone else. A removed binding takes effect at the person's next request.
+
 ## Moving to a new server
 
 1. Make a manual backup on the old server (`sudo /opt/alice/alicectl backup`) and copy it with its `.sha256` file to
