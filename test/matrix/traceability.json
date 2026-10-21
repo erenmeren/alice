@@ -1942,6 +1942,17 @@
   ]
  },
  {
+  "id": "SR-21",
+  "status": "test",
+  "tests": [
+   "web/e2e/rbac.spec.ts:an automation account with a token limited to one service sees only that service",
+   "web/src/components/access/phase3.test.tsx:adds a group from a value seen at sign-in, with a fresh step-up",
+   "web/src/components/access/phase3.test.tsx:makes a token limited to a service and shows its secret once",
+   "web/src/components/access/phase3.test.tsx:shows an SSO person the roles their groups give them, read-only",
+   "web/src/pages/TokensPage.test.tsx:limits a new token to the chosen services and shows the limit in the list (R54)"
+  ]
+ },
+ {
   "id": "SR-30",
   "status": "test",
   "tests": [

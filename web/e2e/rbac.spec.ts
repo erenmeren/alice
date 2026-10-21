@@ -92,5 +92,42 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       await firstSignIn(page, request, nora);
       await expect(page.getByText(translator(await uiLang(page))('access.none.title'))).toBeVisible();
     });
+
+    // R54 (scoped access phase 3): an Administrator creates an automation account on People & access, gives it the
+    // Operator role on Bravo and a token limited to Bravo; the token lists Bravo's server only and is refused People &
+    // access. The automation account is not among the people.
+    test('an automation account with a token limited to one service sees only that service', async ({ page, request }) => {
+      test.setTimeout(JOURNEY_TIMEOUT);
+      await resetInstall(request);
+      const { totpSecret } = await runWizard(page, request, lang);
+      const admin = await apiAs(page);
+      await admin.stepUp(totpSecret);
+      await place(admin, 'Alpha', 'alpha-web', 'alpha.example.test');
+      const bravo = await place(admin, 'Bravo', 'bravo-web', 'bravo.example.test');
+      await page.reload(); // the step-up rotated the session: the page reads the new CSRF token
+      const t = translator(await uiLang(page));
+
+      await page.goto('/users?tab=automation');
+      await page.getByRole('button', { name: t('automation.add') }).first().click();
+      const dialog = page.getByRole('dialog');
+      await dialog.getByLabel(t('users.fields.username')).fill('ci-deployer');
+      await dialog.getByLabel(t('automation.fields.displayName')).fill('CI deployer');
+      await dialog.getByRole('button', { name: t('automation.create') }).click();
+      await expect(page.getByTestId('automation-table')).toContainText('ci-deployer');
+
+      const api = await apiAs(page);
+      const accounts = await json<{ items: { id: string; username: string }[] }>(await api.get('/api/v1/automation-accounts'), 200);
+      const robot = accounts.items.find((a) => a.username === 'ci-deployer');
+      expect(robot).toBeTruthy();
+      await json(await api.post('/api/v1/role-bindings', { user_id: robot!.id, role: 'operator', service_id: bravo.serviceId }), 201);
+      const made = await json<{ token: string }>(await api.post(`/api/v1/automation-accounts/${robot!.id}/tokens`, {
+        name: 'pipeline', scope: 'operate', expires_in_days: 1, service_ids: [bravo.serviceId] }), 201);
+      const bearer = { Authorization: `Bearer ${made.token}` };
+      const listed = await json<{ items: { name: string }[] }>(await request.get('/api/v1/targets', { headers: bearer }), 200);
+      expect(listed.items.map((x) => x.name)).toEqual(['bravo-web']);
+      expect((await request.get('/api/v1/users', { headers: bearer })).status()).toBe(403);
+      const people = await json<{ items: { username: string }[] }>(await api.get('/api/v1/users'), 200);
+      expect(people.items.map((x) => x.username)).not.toContain('ci-deployer');
+    });
   });
 }
