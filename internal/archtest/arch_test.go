@@ -52,13 +52,15 @@ var rules = map[string][]string{
 	// expiry thresholds (alerts/expiry).
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
 		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/renew",
+		// The DNS providers of R57: the inventory builds a publisher's solver configuration and reads the providers' limits.
+		"alice/internal/acme/solver/dnssolver", "alice/internal/acme/solver/dnsapi/...",
 		"alice/internal/alerts/expiry", "alice/internal/authz"},
 	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/...", "alice/internal/authz"},
 	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
 	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
 	"alice/internal/jobs/acmejobs": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
 		"alice/internal/providers", "alice/internal/jobs", "alice/internal/acme", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01",
-		"alice/internal/acme/solver/http01", "alice/internal/acme/keygen", "alice/internal/secrets"},
+		"alice/internal/acme/solver/dnssolver", "alice/internal/acme/solver/http01", "alice/internal/acme/keygen", "alice/internal/secrets"},
 	// The network discovery jobs run the scanner (the scan handler, the schedule and the retention tasks) and queue a scan
 	// with its job in one transaction: the scanner package and the job queue, never the probe or the inventory. The audit
 	// log takes the discovery.scan.finished row where a scan ends.
@@ -97,6 +99,12 @@ var rules = map[string][]string{
 	// The DNS-01 hook solver implements the solver contract, goes out through the guarded transport, reports its
 	// failures as the client's *acme.Error and holds the hook secret as a secrets.Plaintext. No database.
 	"alice/internal/acme/solver/dns01": {platform, "alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/secrets"},
+	// The DNS provider solver (R57) and its providers (Cloudflare, Azure DNS, Route 53) implement the solver contract,
+	// go out through their own guarded client (netaddr, fixed hosts), report failures as the client's *acme.Error and
+	// hold credentials as secrets.Plaintext values. No database, no inventory, no Key Vault provider (the Azure sign-in
+	// uses azidentity directly with the same guards). The factory maps a publisher's kind to its solver.
+	"alice/internal/acme/solver/dnsapi/...": {platform, "alice/internal/acme", "alice/internal/acme/solver", "alice/internal/secrets"},
+	"alice/internal/acme/solver/dnssolver":  {"alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/solver/dnsapi/..."},
 	// The HTTP-01 solver publishes through a Publisher interface of its own (the linuxssh connection satisfies it;
 	// the provider is never imported) and fetches the token URL through netaddr. No database, no secret.
 	"alice/internal/acme/solver/http01": {platform, "alice/internal/acme", "alice/internal/acme/solver"},
@@ -192,6 +200,8 @@ var denied = map[string][]string{
 	"alice/internal/acme/solver":                       {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver/dns01":                 {"alice/internal/platform/db/..."},
 	"alice/internal/acme/solver/http01":                {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver/dnsapi/...":            {"alice/internal/platform/db/..."},
+	"alice/internal/acme/solver/dnssolver":             {"alice/internal/platform/db/..."},
 	"alice/internal/acme/keygen":                       {"alice/internal/platform/db/..."},
 	"alice/internal/acme/renew":                        {"alice/internal/platform/db/..."},
 }
