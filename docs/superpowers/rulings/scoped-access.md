@@ -153,7 +153,10 @@ Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md`; SEC-029 in `alic
 14. **The dashboard** counts, lists and warns over the caller's read reach (certificates by visibility, Key Vault
     objects by their vault, deployments by server or certificate, servers, rotations by their policy); the backup state,
     the setup checklist, the audit head, the license detail and the delivery state stay a global grant's.
-15. **SSO and directory users** may hold role bindings; the SSO Admin cap applies to them at every request. Their
+15. **The platform class is enforced**: `GET /api/v1/discovery/settings` (classed platform in Phase 1, permission
+    `discovery.view`) now needs a global grant, as every platform route; nobody loses it, since every role is global
+    without role bindings.
+16. **SSO and directory users** may hold role bindings; the SSO Admin cap applies to them at every request. Their
     sign-in still needs a mapped group (the refusal change of design §6.1 is Phase 3).
 
 ### What remains (Phase 2 as built)
