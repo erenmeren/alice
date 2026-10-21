@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 
@@ -20,6 +21,10 @@ func TestDNSProvidersThroughTheTool(t *testing.T) {
 	token := creds["cloudflare"].(map[string]any)["token"].(string)
 	require.NotEmpty(t, token)
 	assert.NotEmpty(t, creds["route53"].(map[string]any)["secret_access_key"])
+	// One CA covers the providers' names too: the e2e build of Alice trusts a CA file of exactly one certificate.
+	raw, err := os.ReadFile(st.caFile)
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(raw), "BEGIN CERTIFICATE"))
 	c := st.client()
 	do := func(method, url, body string) map[string]any {
 		t.Helper()

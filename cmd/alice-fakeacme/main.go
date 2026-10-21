@@ -64,7 +64,7 @@ Commands:
         Run the fake: the ACME directory and the DNS hook over TLS on --listen (default :443), the admin
         API on --admin (default 127.0.0.1:9091, loopback only), the TLS CA written to --ca-out. With
         --dns-providers also the fake Cloudflare and Route 53 APIs for api.cloudflare.com,
-        route53.amazonaws.com and sts.amazonaws.com (their CAs are added to --ca-out).
+        route53.amazonaws.com and sts.amazonaws.com (named by the fake's own TLS certificate).
   ctl [--admin ADDR] <command> [args]
         Drive a running fake (JSON on stdout, errors on stderr, exit 1 on failure):
         ping | credentials | ca | reset | counters | requests | clear-requests | dns-providers
@@ -151,20 +151,23 @@ func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
 	if u, err := url.Parse(cfg.BaseURL); err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.User != nil {
 		return errors.New("base-url must be an https URL with a host and no path")
 	}
-	f, err := fakeacme.New(fakeacme.Options{BaseURL: cfg.BaseURL, RequireEAB: cfg.RequireEAB, Alternates: cfg.Alternates})
+	opts := fakeacme.Options{BaseURL: cfg.BaseURL, RequireEAB: cfg.RequireEAB, Alternates: cfg.Alternates}
+	if cfg.DNSProviders {
+		opts.Hosts = dnsHosts
+	}
+	f, err := fakeacme.New(opts)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	handler, adminHandler, tlsConf, caPEM := f.Handler(), f.AdminHandler(), f.TLSConfig(), f.CAPEM()
+	handler, adminHandler := f.Handler(), f.AdminHandler()
 	if cfg.DNSProviders {
 		d, err := newDNSFakes(f)
 		if err != nil {
 			return err
 		}
 		defer d.Close()
-		handler, adminHandler, tlsConf = d.handler(handler), d.admin(adminHandler), d.tlsConfig(tlsConf)
-		caPEM = append(append([]byte{}, caPEM...), d.caPEM()...)
+		handler, adminHandler = d.handler(handler), d.admin(adminHandler)
 	}
 
 	lc := &net.ListenConfig{}
@@ -183,7 +186,7 @@ func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
 		return err
 	}
 	if cfg.CAOut != "" {
-		if err := writeCA(cfg.CAOut, caPEM); err != nil {
+		if err := writeCA(cfg.CAOut, f.CAPEM()); err != nil {
 			_ = tlsLn.Close()
 			_ = adminLn.Close()
 			return err
@@ -192,7 +195,7 @@ func serve(ctx context.Context, cfg serveConfig, log *slog.Logger) error {
 	acmeSrv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	admin := &http.Server{Handler: adminHandler, ReadHeaderTimeout: 10 * time.Second}
 	errs := make(chan error, 2)
-	go func() { errs <- acmeSrv.Serve(tls.NewListener(tlsLn, tlsConf)) }()
+	go func() { errs <- acmeSrv.Serve(tls.NewListener(tlsLn, f.TLSConfig())) }()
 	go func() { errs <- admin.Serve(adminLn) }()
 	log.Info("alice-fakeacme is serving", "acme", tlsLn.Addr().String(), "admin", adminLn.Addr().String(),
 		"directory", f.DirectoryURL(), "ca_out", cfg.CAOut)

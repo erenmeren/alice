@@ -1,7 +1,6 @@
 package main
 
 import (
-	"crypto/tls"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -13,9 +12,8 @@ import (
 )
 
 // The fake DNS providers of the e2e stack (R57; serve --dns-providers): the fake Cloudflare API and the fake Route 53
-// and STS, served on the fake CA's own listener for the host names the compose file gives this container as aliases
-// (api.cloudflare.com, route53.amazonaws.com, sts.amazonaws.com), each with its own certificate chosen by the TLS
-// server name, and the CAs of all three in the --ca-out file the e2e build of Alice trusts. Both mirror every TXT
+// and STS, served on the fake CA's own listener, under its own TLS certificate, for the host names the compose file
+// gives this container as aliases (api.cloudflare.com, route53.amazonaws.com, sts.amazonaws.com). Both mirror every TXT
 // value into the fake CA's DNS table, so the CA validates what Alice published through them. The zone is the e2e
 // stack's domain, example.test. Their credentials are generated at start and printed by "ctl dns-providers" only.
 
@@ -45,10 +43,9 @@ func (d *dnsFakes) Close() {
 	d.r53.Close()
 }
 
-// caPEM is the CAs of both fakes.
-func (d *dnsFakes) caPEM() []byte {
-	return append(append([]byte{}, d.cf.CAPEM()...), d.r53.CAPEM()...)
-}
+// dnsHosts are the providers' API host names: the fake CA's own TLS certificate names them too (fakeacme.Options.Hosts),
+// so the one CA file the e2e build of Alice trusts covers them (cmd/alice acmeRoots takes exactly one CA).
+var dnsHosts = []string{fakecloudflare.Host, fakeroute53.Route53Host, fakeroute53.STSHost}
 
 func hostOnly(h string) string {
 	if host, _, err := net.SplitHostPort(h); err == nil {
@@ -61,22 +58,6 @@ func hostOnly(h string) string {
 		}
 	}
 	return string(b)
-}
-
-// tlsConfig is base with a certificate per server name: a fake provider's for its hosts, base's for every other name.
-func (d *dnsFakes) tlsConfig(base *tls.Config) *tls.Config {
-	c := base.Clone()
-	cf, r53 := d.cf.TLSConfig().Certificates[0], d.r53.TLSConfig().Certificates[0]
-	c.GetCertificate = func(h *tls.ClientHelloInfo) (*tls.Certificate, error) {
-		switch hostOnly(h.ServerName) {
-		case fakecloudflare.Host:
-			return &cf, nil
-		case fakeroute53.Route53Host, fakeroute53.STSHost:
-			return &r53, nil
-		}
-		return nil, nil // the fake CA's own certificate
-	}
-	return c
 }
 
 // handler routes a request by its host: the fake providers' hosts to them, everything else to the CA.
