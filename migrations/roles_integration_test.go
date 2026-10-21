@@ -225,7 +225,7 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"eab_hmac_nonce", "eab_hmac_wrapped_dek", "eab_kid", "name", "preset", "updated_at"}},
 	"public.acme_accounts": {"UPDATE": {"account_url", "contact_email", "state", "tos_accepted_at", "tos_accepted_by", "tos_url", "updated_at"}},
 	"public.acme_hooks": {"UPDATE": {"allowed_suffixes", "ca_bundle_pem", "deleted_at", "name", "poll_timeout_seconds",
-		"propagation_wait_seconds", "secret_ct", "secret_key_version", "secret_nonce", "secret_wrapped_dek", "updated_at", "url"}},
+		"propagation_wait_seconds", "secret_ct", "secret_key_version", "secret_nonce", "secret_wrapped_dek", "settings", "updated_at", "url"}},
 	"public.acme_certificates": {"UPDATE": {"account_id", "ari_checked_at", "ari_next_check_at", "ari_renew_at", "ari_window_end", "ari_window_start", "auto_deploy",
 		"auto_renew",
 		"ca_not_before", "challenge", "current_certificate_id", "deleted_at", "deploy_held_certificate_id", "deploy_held_reason",
@@ -309,6 +309,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	trust := hasColumn(t, d, "deployments", "trust_status")
 	services := hasColumn(t, d, "targets", "service_id")
 	drift := hasColumn(t, d, "certificate_locations", "file_observed_at")
+	dnsProviders := hasColumn(t, d, "acme_hooks", "settings")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -380,6 +381,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00027 the file observation time does not exist.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "file_observed_at"
+			})}
+		}
+		if name == "public.acme_hooks" && !dnsProviders {
+			// Below 00030 a DNS publisher has no provider settings.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "settings"
 			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {

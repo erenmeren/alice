@@ -321,6 +321,9 @@ INSERT INTO acme_accounts (id, provider_id, key_ct, key_nonce, key_wrapped_dek, 
 VALUES ('d2000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', '\x01', '\x000000000000000000000002', '\x01', 1, 'active', now(), now());
 INSERT INTO acme_hooks (id, name, url, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, created_at, updated_at)
 VALUES ('d3000000-0000-4000-8000-000000000001', 'hook', 'https://dns.example.test/hook', '\x01', '\x000000000000000000000003', '\x01', 1, now(), now());
+INSERT INTO acme_hooks (id, name, kind, url, settings, secret_ct, secret_nonce, secret_wrapped_dek, secret_key_version, created_at, updated_at)
+VALUES ('d3000000-0000-4000-8000-000000000002', 'route 53', 'route53', '', '{"access_key_id": "TESTACCESSKEYID0001", "role_arn": ""}', '\x01',
+        '\x000000000000000000000013', '\x01', 1, now(), now());
 INSERT INTO acme_certificates (id, provider_id, account_id, names, key_type, challenge, hook_id, created_at, updated_at)
 VALUES ('d4000000-0000-4000-8000-000000000001', 'd1000000-0000-4000-8000-000000000001', 'd2000000-0000-4000-8000-000000000001',
         '{www.example.test}', 'ecdsa_p256', 'dns01', 'd3000000-0000-4000-8000-000000000001', now(), now());
