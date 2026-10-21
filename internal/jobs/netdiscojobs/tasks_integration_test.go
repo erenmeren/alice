@@ -90,6 +90,20 @@ func TestScheduleSkipsBusyScopesAndCountsManualScans(t *testing.T) {
 	assert.Equal(t, 2, w.active())
 }
 
+// A scope read as due whose scan started in between (a manual scan queued after the schedule's read): starting it
+// reports false and writes nothing, its last_scheduled_at included.
+func TestStartScheduledSkipsAScopeThatGotAScanInFlight(t *testing.T) {
+	w := newWorld(t)
+	scope := w.scope("lab", scopeOpts{hours: 1})
+	_, _, err := w.start(scope, TriggerManual)
+	require.NoError(t, err)
+	started, err := newTasks(w.deps).startScheduled(w.ctx, candidate{id: scope}, t0)
+	require.NoError(t, err)
+	assert.False(t, started)
+	assert.Zero(t, w.scansOf(scope, "schedule"))
+	assert.Zero(t, w.count(`SELECT count(*) FROM discovery_scopes WHERE last_scheduled_at IS NOT NULL`), "the update rolled back")
+}
+
 // The window is evaluated in the scope's time zone: a scope with a window 22:00-04:30 in Istanbul (UTC+3) is not
 // scheduled at noon there and is at 22:00.
 func TestScheduleHonoursTheWindowInTheScopesZone(t *testing.T) {
