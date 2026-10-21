@@ -54,7 +54,7 @@ export function ObservationFacts({ observation: o }: { observation: LocationObse
         {o.last_deployment ? (
           <>
             {t('drift.facts.lastDeployed', { cert: cert(o.last_deployment.fingerprint), time: time(o.last_deployment.finished_at) })}{' '}
-            <InternalLink to={`/deployments/${o.last_deployment.deployment_id}`} size="xs">
+            <InternalLink to={`/deployments/${o.last_deployment.deployment_id}`} size="xs" underline="always">
               {t('drift.facts.openDeployment')}
             </InternalLink>
           </>
@@ -149,7 +149,7 @@ export function DriftControls({ locationId, label, observation: o, admin, canOpe
         </Button>
       )}
       {repaired && (
-        <InternalLink to={`/deployments/${repaired}`} size="xs">
+        <InternalLink to={`/deployments/${repaired}`} size="xs" underline="always">
           {t('drift.repairQueued')}
         </InternalLink>
       )}
