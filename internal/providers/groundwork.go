@@ -130,9 +130,7 @@ func (l Locator) Canonical() ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(norm); err != nil { // map keys are sorted by encoding/json
-		return nil, ErrLocator
-	}
+	_ = enc.Encode(norm) // strings, integers and booleans cannot fail; map keys are sorted by encoding/json
 	out := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	if len(out) > MaxLocatorBytes {
 		return nil, ErrLocator
