@@ -1,7 +1,7 @@
 # Scoped access and service ownership: design
 
-Status: Phases 1 and 2 implemented (2026-10-21, see "Phase 1 as built" and "Phase 2 as built" in §12); Phases 3-5 open; the questions of §14 stay
-open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
+Status: Phases 1, 2 and 5 implemented (2026-10-21, see "Phase 1 as built", "Phase 2 as built" and "Phase 5 as built" in
+§12); Phases 3 and 4 open; the questions of §14 stay open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
 to R46). Numbers: migration `00026` (Phase 1 creates the whole schema of §4, so the later phases need no migration; one
 that does after review takes the next free number at merge time; `00024` and `00026` went to parallel branches) and decision
 **R49** (recorded in `alice-v1/00-decisions.md` with Phase 1). When accepted, R49 amends `alice-v1/04-security.md` §15.4 (SEC-014, SEC-016,
@@ -1031,6 +1031,30 @@ Acceptance:
 - `auto_deploy: forbidden`: switching on refused; existing automatic bindings hold with attention, resume when allowed.
 - Stale version → 409; history lists every version with author; audit shows changed keys.
 - Reserved keys → 422 `ALC-SVC-0015`.
+
+#### Phase 5 as built (2026-10-21, R55)
+
+What Phase 5 delivers, and where it differs from the text above (rulings in `docs/superpowers/rulings/scoped-access.md`,
+"Phase 5"):
+
+- No migration: `00026` already holds the history (`service_policies`) and `services.policy_version`; the number `00030`
+  set aside for this phase is unused. The stored document is normalized (empty lists and objects dropped).
+- `authz.Policy` / `ParsePolicy` / `LoadPolicy` and pure checks; `services.Store.SetPolicy`; `PUT /api/v1/services/{id}/policy`
+  (`{"version", "body"}`) with the new permission `services.policy` (Administrator of the service, step-up, never a
+  token, resource scope, ClassAlways); the domains need a global grant. Codes `ALC-SVC-0008` to `0011` and `0013` to
+  `0015`; an unknown field is the generic 400 (`ALC-SYS-0004`).
+- Every enforcement point of §7.3 (ACME certificate create and change, signing request before its key, upload, the
+  destination's domains on an assignment, switching automatic deployment on for an ACME certificate, its websites and a
+  Key Vault binding) and the hold of the ACME and Key Vault planners (mark `service.auto_deploy_forbidden`, audited once
+  per newly marked set, no e-mail; resumed at the next run once allowed). Automatic deployment is judged on the source's
+  service. A change of an ACME certificate is judged in the fields it changes only.
+- `renew_before_days` and `revoke_mode` are the server's defaults when a request gives none; the incident dialog starts
+  as the policy says. `notifications` is stored and validated, read by Phase 4.
+- UI: the service page's **Policy** tab (every field of schema 1, domains read-only without a global grant, the
+  versions with what changed and who saved them); the Key Vault binding's held websites show their mark.
+- Tests SR-30 to SR-34 (numbered apart from Phases 3 and 4, built in parallel).
+- Not built: the ACME create dialog's default window from the policy (no create dialog has a service picker yet), the
+  policy-aware hints in the create dialogs, a re-check of `auto_deploy` at the engine's first send.
 
 ### Documents per phase
 

@@ -1258,6 +1258,36 @@ trusting need the role on every service involved (`ALC-SVC-0006`, `ALC-SVC-0012`
 single sign-on and directories, backups, the audit log, ACME providers, accounts and hooks and network discovery's
 scopes and settings stay with roles on all services. Changes made to a resource are audited with its service.
 
+**Service policy** (R55). A service's page, **Policy**, holds the rules for what may enter the service and how its
+certificates behave. Every rule is optional; one left empty sets no limit, and a new service has none. The rules apply
+to what is created or changed from now on, never to what exists:
+
+- **Domains**: the names the service's certificates may carry, one per line: a name (`pay.example.com`), a wildcard
+  (`*.pay.example.com` covers every name below it at any depth, wildcard names included, but not `pay.example.com`
+  itself), an IP address or a CIDR block (`10.20.0.0/16`). A new ACME certificate or a change of its names, a signing
+  request, an upload and a certificate, signing request or ACME certificate moved into the service must have every name
+  (and an IP address among the names) inside them, or Alice refuses before anything is stored, ordered or generated
+  (`ALC-SVC-0008`, naming the first name outside). Only an Administrator of all services changes the domains
+  (`ALC-SVC-0011`): an Administrator of the service alone could otherwise widen them.
+- **Certificate sources**: whether new certificates may come as ACME certificates, uploads or signing requests
+  (`ALC-SVC-0009`). Certificates Alice finds on servers or in Key Vaults are not limited.
+- **ACME certificates**: the certificate authorities, proof methods and key types its ACME certificates may use
+  (`ALC-SVC-0014`), and the renewal window a new one starts with when none is given.
+- **Automatic deployment**: when forbidden, automatic deployment cannot be switched on for the service's Key Vault
+  connections and ACME certificates (`ALC-SVC-0013`), and those already on wait: their websites show **Held: its service
+  forbids automatic deployment** (one audit entry each time new websites are held) until the policy allows it again; then
+  they deploy at the next run. The service judged is the one the certificate comes from (the Key Vault's, the ACME
+  certificate's). Deploy now still works.
+- **Revocation in a key-compromise incident**: whether a new incident on the service's certificates starts with
+  **Revoke at once** ticked.
+- **E-mails**: whether Administrators of all services receive the service's e-mails and which other addresses do. They
+  are saved with the policy; until e-mails are routed by service, every e-mail still goes to the Administrators as before.
+
+Saving needs a fresh confirmation code and an Administrator of the service (never an API token); it works while the
+license is locked. Each save is a new version: **Versions** lists them all with what changed and who saved it, and the
+audit log has one entry (**Service policy changed**) naming the changed parts. A save based on an older version is
+refused (`ALC-SVC-0010`): reload and save again. Everybody with a role on the service reads the policy.
+
 ## Servers
 
 **Servers** lists every server Alice manages with its status: **Connected**, **Waiting for fingerprint

@@ -13,7 +13,7 @@ import (
 	"alice/internal/authz/services"
 )
 
-// Service policy (R55, design §12 Phase 5, SR-17..SR-20): an Administrator of service B changes B's policy with step-up
+// Service policy (R55, design §12 Phase 5, SR-31, SR-32): an Administrator of service B changes B's policy with step-up
 // except its domains (403 ALC-SVC-0011), which a global Administrator changes; a stale version is 409 ALC-SVC-0010; a
 // reserved key 422 ALC-SVC-0015; the history lists every version with its author; the audit row names the changed
 // keys; an action outside the policy is refused with its code before anything is stored.

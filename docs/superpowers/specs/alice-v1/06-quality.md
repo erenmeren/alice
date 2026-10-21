@@ -459,7 +459,7 @@ Go native fuzzing (`go test -fuzz`), with seed corpora committed under `testdata
 
 ### 25.9 Scoped access (R49)
 
-Phase 1 (services, environments, assignment, trusts): SR-01 to SR-10; Phase 2 (scoped role bindings for people, R53): SR-11 to SR-16; the later phases follow from SR-17 on.
+Phase 1 (services, environments, assignment, trusts): SR-01 to SR-10; Phase 2 (scoped role bindings for people, R53): SR-11 to SR-16; Phases 3 and 4 follow from SR-17 on; Phase 5 (service policy, R55): SR-30 to SR-34 (numbered apart, so that the phases built in parallel do not collide).
 
 | ID | Test |
 |---|---|
@@ -479,6 +479,11 @@ Phase 1 (services, environments, assignment, trusts): SR-01 to SR-10; Phase 2 (s
 | SR-14 | Role bindings: adding and removing them is a global Administrator's with step-up, never a token; each is audited with the subject, the role and where; duplicates and unknown references are refused; a person's access explains the grants |
 | SR-15 | Every audit row about a resource carries the resource's service (details.service_id) |
 | SR-16 | Browser journey: a person with an Operator role on one service signs in, sees only that service's servers and certificates, and is refused another service's (the no-access page for a person without any role) |
+| SR-30 | Phase 5 (R55) policy document: schema 1 with every unknown field refused, the reserved keys refused (ALC-SVC-0015), every value checked (domains: names, wildcards, IP addresses, CIDR blocks; closed lists; bounds), empty lists no constraint, the stored form normalized; domains match exactly, a wildcard at any depth (wildcard names included, never its own suffix), an IP address inside a CIDR block |
+| SR-31 | Saving a policy: a new version against the version read (a stale one 409 ALC-SVC-0010), the same document stores nothing, every version listed with its author, one audit row naming the changed keys; an Administrator of the service changes every field but the domains (403 ALC-SVC-0011), a global Administrator the domains; never a token |
+| SR-32 | Enforcement before anything is stored, ordered or generated: an ACME certificate (create: source, names, provider, challenge, key type; change: what changes only), a signing request (before its key is generated), an upload (CN and SANs; audited as a policy refusal), a move into the service (the destination's domains, in a dry run too); the policy's renewal window and revocation mode are the defaults when none is given |
+| SR-33 | Automatic deployment forbidden: switching it on is refused for an ACME certificate, one of its websites and a Key Vault binding; the ACME and Key Vault planners hold the automatic bindings with the mark `service.auto_deploy_forbidden` (recorded once) and deploy at the next run once it is allowed |
+| SR-34 | The Policy tab: every rule of schema 1 saved as one document with the version read, the domains read-only for an Administrator of the service alone, read-only for an Operator, the versions with what changed; the incident dialog starts as the policy says; browser journey: a service limited to its domain refuses an upload outside it |
 
 ---
 

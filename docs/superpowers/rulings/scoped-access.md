@@ -172,3 +172,85 @@ Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md`; SEC-029 in `alic
   were reviewed (they name what the caller sent, a refused location's id, or what it holds rights on, a destination
   vault's certificate name, and an untrusted refusal names only the services the caller sees), and the leak check covers
   every route-level answer; no body-dependent conflict is exercised against a resource of another service yet.
+
+## Phase 5: service policy v1 (2026-10-21, R55)
+
+### The design as built
+
+- The policy is `authz.Policy` (schema 1, design §7.3), parsed by `authz.ParsePolicy` with every unknown field refused
+  and the reserved keys of §7.4 refused (`ALC-SVC-0015`, field `body.<key>`); `authz.LoadPolicy` reads the current
+  version in the caller's transaction and the checks (`CheckNames`, `CheckSource`, `CheckACME`/`CheckACMEChanges`,
+  `CheckAutoDeploy`) are pure. `services.Store.SetPolicy` saves a version; the API's `PUT /api/v1/services/{id}/policy`
+  takes `{"version": <the version read>, "body": <the whole document>}`.
+- New permission `services.policy`: Administrator, step-up, never a token, resource scope (resolved by the service),
+  ClassAlways. The domains need it with a global grant (`rbac.Reach(...).All()`), checked by the store under the service's
+  row lock against the version the caller read.
+- Enforcement points, each before anything is stored, ordered or generated: `CreateACMECertificate` and
+  `UpdateACMECertificate`, `CreateCSR` (before the key is generated and again in the transaction), `UploadCertificate`
+  (after the file is read, before it is stored), `services.Store.Assign` (the destination's domains), `SetAutoDeploy`
+  (Key Vault), `AddACMEBindingStrict`, and the planners `planACMEDeploy` / `planBinding`. `StartIncident` and
+  `CreateACMECertificate` take the policy's defaults.
+- No migration: `00026` made `service_policies` (append-only) and `services.policy_version`. `00030`, set aside for this
+  phase, is not used.
+- Tests: SR-30 to SR-34 (`internal/authz:TestParsePolicy*`, `TestPolicyDomains`, `TestPolicyChecks`,
+  `internal/authz/services:TestSetPolicyVersionsAndAudit`, `TestAssignChecksTheDestinationsDomains`,
+  `internal/inventory:TestPolicy*`, `internal/api:TestPutServicePolicy`, `TestServicePolicyThroughTheAPI`,
+  `TestScopedIDOR` (the new route), the web `PolicyPanel` tests and `web/e2e/service-policy.spec.ts`). The numbers start at
+  SR-30 so that Phases 3 and 4, built in parallel, keep SR-17 onwards.
+
+### Rulings made during execution
+
+1. **Every list: empty is no constraint.** §7.3 says so for `domains`; the same holds for `certificate_sources`,
+   `acme.providers`, `acme.challenges`, `acme.key_types` and `notifications.addresses` (a service that admits nothing
+   would be a deletion in disguise). The stored document drops empty lists and objects, so equal policies are equal
+   documents and the history's "what changed" is exact.
+2. **`schema` is required and is 1.** An unknown field (at any depth) or a wrong type is the generic 400
+   (`ALC-SYS-0004`), as for every other body; a reserved key is 422 `ALC-SVC-0015`; an invalid value is 422 validation
+   on `body.<path>` (`body.domains.2`, `body.acme.renew_before_days`). **Owner to confirm** the 400 for an unknown field
+   (the design names no code).
+3. **Domains.** An entry is a lower-case DNS name, `*.suffix` over at least two labels, an IP address or a CIDR block
+   written with its network address (host bits set, or IPv4 written as IPv6, are refused: say what is meant). A
+   certificate's names are its SANs and its CN when the CN is a DNS name or an IP address ("My server" names no host);
+   comparison ignores case and a trailing dot. A wildcard entry never admits its own suffix (`*.pay.example.com` does
+   not admit `pay.example.com`), an exact entry no name below it.
+4. **The domains rule for a service Administrator** compares sets: saving a document whose domains are the current ones
+   in another order is allowed; any other change is `ALC-SVC-0011`.
+5. **The same document stores nothing**: no version, no audit row; the answer is the current version.
+6. **Audit**: `service.policy_changed` with `details.fields` (the changed top-level keys; the audit log refuses a details
+   key named `keys`), `version`, `old_version` and the service's name.
+7. **An ACME provider named by the policy must exist** when the policy is saved (422 on `body.acme.providers.N`, the
+   provider key-share locked); one deleted later simply matches no certificate.
+8. **A change is judged in what it changes.** An ACME certificate's change checks the names only when they change, the
+   provider, challenge and key type only those that change, automatic deployment only when it is switched on: a policy
+   made stricter afterwards refuses no unrelated change (§7.3: never retroactive).
+9. **The policy is read, not locked**, in the action's own transaction: a policy saved while an action runs applies from
+   the next action (as an Administrator's change of a role does).
+10. **Automatic deployment is judged on the source's service**: the Key Vault's for its bindings, the ACME certificate's
+    for it and its websites (§7.3: "the service's KV bindings and ACME certificates/bindings"). A destination service
+    cannot forbid automatic deployments to its servers by policy (it can refuse the trust). **Owner to confirm.**
+11. **The hold.** The ACME planner marks every binding of the certificate with automatic deployment on
+    (`acme_bindings.attention_code`), the Key Vault planner the websites it would have deployed to
+    (`certificate_locations.binding_attention_code`), with `service.auto_deploy_forbidden`; the mark takes precedence over
+    `service.untrusted`; nothing else is planned for that certificate or binding while it lasts (no deployment, no hold,
+    no stop, no notice). A newly marked set is audited once (`acme.auto_deploy.forbidden`, `kv.auto_deploy.forbidden`)
+    and sends no e-mail: the policy change is the cause and is audited with its author. When the policy allows it again
+    the marks clear and the next run deploys. Deployments queued before the policy changed are not stopped (the engine's
+    first send does not read the policy), and Deploy now is never held. **Owner to confirm** "no e-mail".
+12. **Defaults.** `acme.renew_before_days` is used when a new ACME certificate names no window; `incident.revoke_mode`
+    when an incident is started without a mode; the incident dialog starts with "revoke at once" as the policy says.
+13. **Upload refusals** are audited like every refused upload (`certificate.upload_rejected`, reason `policy`).
+14. **What is not judged**: certificates Alice finds (server scans, Key Vault syncs, network discovery), the completion of
+    a signing request (its names were judged at creation), renewals and incident replacements of an ACME certificate (its
+    names were judged when set), and the sources and ACME rules on a move (only the destination's domains, §7.3).
+15. **`notifications` is stored** with the policy and validated (at most 20 addresses, bare `local@domain`, locale `en`
+    or `tr`, no address twice); nothing reads it until Phase 4. The Policy tab says so.
+
+### What remains (Phase 5 as built)
+
+- The ACME certificate dialog has no service picker (no create dialog has one yet): it still proposes 30 days, and the
+  policy's renewal window applies to API calls that give none. The policy-aware hints in the create dialogs (allowed
+  names, sources) are not built; the refusal names the rule.
+- The engine's first send does not re-check `deployment.auto_deploy`; a deployment queued before the policy forbade it
+  still goes.
+- `notifications` is read by the routing of Phase 4.
+

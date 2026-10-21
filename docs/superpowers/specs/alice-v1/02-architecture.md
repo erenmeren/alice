@@ -566,7 +566,7 @@ Cursor pagination for large lists (`audit`, `jobs`, `certificates`): `?limit=50&
 | `settings` | `/settings/smtp` (+ test mail), `/settings/syslog`, `/settings/general` |
 | `backup` | `POST /backup` (streams encrypted file), `GET /backups`; restore is CLI-only (no web restore) |
 | `system` | `/livez`, `/healthz`, `/version`, `/i18n/locales` |
-| `services` (R49) | `/services` (CRUD, `/{id}/policy`, `/{id}/policy/versions`, `/{id}/actions/assign?dry_run=`), `/environments` (CRUD), `/service-trusts` (list, create, delete), `/role-bindings` (list, create, delete) and `/users/{id}/access` (R53); every route of the table also declares a scope class (platform, resource, list, create, cross, any, self, none) and every route naming a resource a resolver |
+| `services` (R49) | `/services` (CRUD, `/{id}/policy` (read; `PUT` saves a new version, R55), `/{id}/policy/versions`, `/{id}/actions/assign?dry_run=`), `/environments` (CRUD), `/service-trusts` (list, create, delete), `/role-bindings` (list, create, delete) and `/users/{id}/access` (R53); every route of the table also declares a scope class (platform, resource, list, create, cross, any, self, none) and every route naming a resource a resolver |
 
 Lock mode: all groups remain routable for reads; mutating endpoints outside {`auth`, `license`, `backup`, `audit export`, `inventory export`, `settings/smtp`, `tokens`} return `403 license.locked`.
 

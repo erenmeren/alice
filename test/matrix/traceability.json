@@ -1901,5 +1901,59 @@
    "web/src/components/access/access.test.tsx:adds a binding on an environment with a fresh step-up",
    "web/src/pages/NoAccessPage.test.tsx:still signs out"
   ]
+ },
+ {
+  "id": "SR-30",
+  "status": "test",
+  "tests": [
+   "internal/authz:TestParsePolicyNormalizes",
+   "internal/authz:TestParsePolicyRefuses",
+   "internal/authz:TestPolicyDomains",
+   "internal/authz:TestPolicyChecks",
+   "internal/inventory:TestPolicyValuesMatchTheInventorys"
+  ]
+ },
+ {
+  "id": "SR-31",
+  "status": "test",
+  "tests": [
+   "internal/authz/services:TestSetPolicyVersionsAndAudit",
+   "internal/api:TestPutServicePolicy",
+   "internal/api:TestServicePolicyThroughTheAPI",
+   "internal/api:TestAuthzMatrix",
+   "internal/api:TestScopedIDOR",
+   "internal/authz:TestChangedKeys"
+  ]
+ },
+ {
+  "id": "SR-32",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestPolicyACMECertificates",
+   "internal/inventory:TestPolicyUploadsAndSigningRequests",
+   "internal/inventory:TestPolicyIncidentRevokeModeDefault",
+   "internal/authz/services:TestAssignChecksTheDestinationsDomains",
+   "internal/api:TestServicePolicyThroughTheAPI"
+  ]
+ },
+ {
+  "id": "SR-33",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestPolicyForbidsACMEAutomaticDeployment",
+   "internal/inventory:TestPolicyForbidsKeyVaultAutomaticDeployment",
+   "internal/inventory:TestACMEAutoDeployPlanTable"
+  ]
+ },
+ {
+  "id": "SR-34",
+  "status": "test",
+  "tests": [
+   "web/src/components/services/PolicyPanel.test.tsx:lets a global Administrator change every field and save the whole document with the version read",
+   "web/src/components/services/PolicyPanel.test.tsx:keeps the domains read-only for an Administrator of the service alone",
+   "web/src/components/services/PolicyPanel.test.tsx:lists every version with what it changed and who saved it",
+   "web/src/pages/IncidentPage.test.tsx:starts with revoke-now ticked when the certificate's service's policy says so (R55)",
+   "web/e2e/service-policy.spec.ts:an Administrator limits a service to its domain and forbids automatic deployment; an upload outside it is refused"
+  ]
  }
 ]

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — Service policy (scoped access, phase 5)
+
+**Added**
+- Each service has a versioned policy (R55), on its page's new **Policy** tab: the domains its certificates may carry
+  (names, wildcards at any depth, IP addresses and CIDR blocks), how certificates may enter it (ACME, upload, signing
+  request), the certificate authorities, proof methods and key types of its ACME certificates and their default renewal
+  window, whether automatic deployment is allowed, the default revocation of a key-compromise incident, and who else
+  receives its e-mails (saved now, used once e-mails are routed by service). **Versions** lists every version with what
+  changed and who saved it.
+- A new ACME certificate or a change of its names or settings, a signing request, an upload and a move into the service
+  outside the policy are refused before anything is stored, ordered or generated. While automatic deployment is
+  forbidden it cannot be switched on, and the automatic deployments already on wait with a mark on each website until it
+  is allowed again.
+- An Administrator of the service changes the policy with a fresh confirmation code; the domains are an Administrator
+  of all services' only. API: `PUT /api/v1/services/{id}/policy` (permission `services.policy`, never a token; the
+  version read in the body); codes `ALC-SVC-0008` to `ALC-SVC-0011` and `ALC-SVC-0013` to `ALC-SVC-0015`. Audit
+  entries **Service policy changed** (with the changed parts) and the automatic deployment holds.
+
+**Changed**
+- Nothing changes for a service without rules: every service starts with the empty policy. No migration. Rulings:
+  `docs/superpowers/rulings/scoped-access.md` ("Phase 5").
+
 ## Unreleased — Roles on services (scoped access, phase 2)
 
 **Added**
