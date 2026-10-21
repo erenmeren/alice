@@ -24,18 +24,21 @@ var (
 	ErrBindingLimit     = errors.New("services: the subject holds the most role bindings allowed")
 )
 
-// MaxBindingsPerSubject bounds the bindings of one person (design §4.1).
+// MaxBindingsPerSubject bounds the bindings of one subject: a person, an automation account or a directory group
+// (design §4.1).
 const MaxBindingsPerSubject = 200
 
-// Binding is a role a person holds on one service or on every service of an environment (design §4.1, §5.1). The
-// global role is not a binding: it stays users.role. Directory group subjects come with Phase 3; a group binding
-// written by other means is listed with its group id.
+// Binding is a role a person, an automation account or a directory group holds on one service or on every service of
+// an environment (design §4.1, §5.1; groups R54). The global role is not a binding: it stays users.role (and the group
+// mappings).
 type Binding struct {
 	ID               uuid.UUID
 	UserID           *uuid.UUID
-	Username         string // the person's user name ("" for a group binding)
+	Username         string // the person's or automation account's user name ("" for a group binding)
 	DisplayName      string
+	Automation       bool // the user is an automation account
 	DirectoryGroupID *uuid.UUID
+	Group            *GroupRef // the directory group of a group binding
 	Role             rbac.Role
 	Service          *authz.ServiceRef     // set for a binding on one service
 	Environment      *authz.EnvironmentRef // set for a binding on an environment
@@ -47,6 +50,15 @@ type Binding struct {
 	CreatedAt     time.Time
 }
 
+// GroupRef is how a binding shows its directory group: the source, the provider's or directory's name, the value and
+// the label.
+type GroupRef struct {
+	Source     string
+	SourceName string
+	Value      string
+	Label      string
+}
+
 // BindingFilter narrows Bindings; every set field must match. ServiceID also matches the environment bindings that
 // reach the service through its environment (the service page's Access tab).
 type BindingFilter struct {
@@ -56,15 +68,18 @@ type BindingFilter struct {
 	EnvironmentID    *uuid.UUID
 }
 
-// BindingInput is a new binding: a person, a role and either a service or an environment.
+// BindingInput is a new binding: a person or automation account (UserID) or a directory group (DirectoryGroupID), a
+// role and either a service or an environment.
 type BindingInput struct {
-	UserID        uuid.UUID
-	Role          string
-	ServiceID     *uuid.UUID
-	EnvironmentID *uuid.UUID
+	UserID           uuid.UUID
+	DirectoryGroupID uuid.UUID
+	Role             string
+	ServiceID        *uuid.UUID
+	EnvironmentID    *uuid.UUID
 }
 
-const bindingSelect = `SELECT rb.id, rb.user_id, coalesce(u.username::text, ''), coalesce(u.display_name, ''), rb.directory_group_id,
+const bindingSelect = `SELECT rb.id, rb.user_id, coalesce(u.username::text, ''), coalesce(u.display_name, ''), coalesce(u.auth_source = 'automation', false),
+    rb.directory_group_id, g.source, coalesce(op.name, ld.name, ''), g.value, g.label,
     rb.role, rb.created_by, coalesce(cb.display_name, ''), rb.created_at,
     sv.id, coalesce(sv.name::text, ''), se.id, coalesce(se.key, ''), coalesce(se.name, ''),
     e.id, coalesce(e.key, ''), coalesce(e.name, ''),
@@ -72,6 +87,9 @@ const bindingSelect = `SELECT rb.id, rb.user_id, coalesce(u.username::text, ''),
          ELSE ARRAY(SELECT s2.id FROM services s2 WHERE s2.environment_id = rb.environment_id) END
 FROM role_bindings rb
 LEFT JOIN users u ON u.id = rb.user_id
+LEFT JOIN directory_groups g ON g.id = rb.directory_group_id
+LEFT JOIN oidc_providers op ON op.id = g.oidc_provider_id
+LEFT JOIN ldap_directories ld ON ld.id = g.ldap_directory_id
 LEFT JOIN users cb ON cb.id = rb.created_by
 LEFT JOIN services sv ON sv.id = rb.service_id LEFT JOIN environments se ON se.id = sv.environment_id
 LEFT JOIN environments e ON e.id = rb.environment_id`
@@ -85,11 +103,17 @@ func scanBinding(r pgx.CollectableRow) (Binding, error) {
 		seKey, seName      string
 		eKey, eName        string
 		covered            []uuid.UUID
+		gSource, gValue    *string
+		gLabel             *string
+		gFrom              string
 	)
-	err := r.Scan(&b.ID, &b.UserID, &b.Username, &b.DisplayName, &b.DirectoryGroupID, &role, &b.CreatedBy, &b.CreatedByName, &b.CreatedAt,
-		&svID, &svName, &svEnv, &seKey, &seName, &envID, &eKey, &eName, &covered)
+	err := r.Scan(&b.ID, &b.UserID, &b.Username, &b.DisplayName, &b.Automation, &b.DirectoryGroupID, &gSource, &gFrom, &gValue, &gLabel,
+		&role, &b.CreatedBy, &b.CreatedByName, &b.CreatedAt, &svID, &svName, &svEnv, &seKey, &seName, &envID, &eKey, &eName, &covered)
 	if err != nil {
 		return Binding{}, err
+	}
+	if gSource != nil && gValue != nil && gLabel != nil {
+		b.Group = &GroupRef{Source: *gSource, SourceName: gFrom, Value: *gValue, Label: *gLabel}
 	}
 	b.Role = rbac.Role(role)
 	b.CreatedAt = b.CreatedAt.UTC()
@@ -129,7 +153,7 @@ WHERE ($1::uuid IS NULL OR rb.user_id = $1)
   AND ($2::uuid IS NULL OR rb.directory_group_id = $2)
   AND ($3::uuid IS NULL OR rb.service_id = $3 OR rb.environment_id = (SELECT environment_id FROM services WHERE id = $3))
   AND ($4::uuid IS NULL OR rb.environment_id = $4)
-ORDER BY lower(coalesce(u.username::text, '')), rb.directory_group_id NULLS FIRST, rb.role, lower(coalesce(sv.name::text, '')),
+ORDER BY lower(coalesce(u.username::text, '')), rb.directory_group_id NULLS FIRST, g.value, rb.role, lower(coalesce(sv.name::text, '')),
     coalesce(e.sort, 0), rb.id`, f.UserID, f.DirectoryGroupID, f.ServiceID, f.EnvironmentID)
 	if err != nil {
 		return nil, fmt.Errorf("services: list the role bindings: %w", err)
@@ -172,14 +196,18 @@ func getBinding(ctx context.Context, q db.Querier, id uuid.UUID) (Binding, error
 	return bs[0], nil
 }
 
-// CreateBinding gives a person a role on one service or on every service of an environment (design §8.2): at most
-// MaxBindingsPerSubject per person; audit access.binding_added with the subject, the role and where. It takes effect at
-// the person's next request (grants are read per request, SEC-017). An unknown person, service or environment is a
-// validation error on its field. ErrBindingDuplicate, ErrBindingLimit.
+// CreateBinding gives a person, an automation account or a directory group a role on one service or on every service
+// of an environment (design §8.2): at most MaxBindingsPerSubject per subject; audit access.binding_added with the
+// subject, the role and where. It takes effect at the subject's next request (grants are read per request, SEC-017;
+// a group's at its members' next request, by the groups seen at their last sign-in). An unknown person, group, service
+// or environment is a validation error on its field. ErrBindingDuplicate, ErrBindingLimit.
 func (s *Store) CreateBinding(ctx context.Context, a Actor, in BindingInput) (Binding, error) {
 	var v validate.Errors
-	if in.UserID == uuid.Nil {
+	switch {
+	case in.UserID == uuid.Nil && in.DirectoryGroupID == uuid.Nil:
 		v.Add("user_id", validate.Required, nil)
+	case in.UserID != uuid.Nil && in.DirectoryGroupID != uuid.Nil:
+		v.Add("directory_group_id", validate.Pattern, nil) // one subject, never both
 	}
 	role, ok := rbac.ParseRole(in.Role)
 	if !ok {
@@ -196,16 +224,33 @@ func (s *Store) CreateBinding(ctx context.Context, a Actor, in BindingInput) (Bi
 	}
 	id := uuid.Must(uuid.NewV7())
 	err := db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
-		// The person's row is locked: two additions for one person count their bindings one after the other.
-		var username string
-		err := tx.QueryRow(ctx, "SELECT username::text FROM users WHERE id = $1 FOR UPDATE", in.UserID).Scan(&username)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return validate.Errors{{Field: "user_id", Code: validate.Required}}
+		// The subject's row is locked: two additions for one subject count its bindings one after the other.
+		details := map[string]string{"role": string(role)}
+		var subjectCount string
+		var subject any
+		if in.UserID != uuid.Nil {
+			var username string
+			err := tx.QueryRow(ctx, "SELECT username::text FROM users WHERE id = $1 FOR UPDATE", in.UserID).Scan(&username)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return validate.Errors{{Field: "user_id", Code: validate.Required}}
+			}
+			if err != nil {
+				return fmt.Errorf("services: lock the person: %w", err)
+			}
+			details["user_id"], details["username"] = in.UserID.String(), username
+			subjectCount, subject = "SELECT count(*) FROM role_bindings WHERE user_id = $1", in.UserID
+		} else {
+			var source, value string
+			err := tx.QueryRow(ctx, "SELECT source, value FROM directory_groups WHERE id = $1 FOR UPDATE", in.DirectoryGroupID).Scan(&source, &value)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return validate.Errors{{Field: "directory_group_id", Code: validate.Required}}
+			}
+			if err != nil {
+				return fmt.Errorf("services: lock the directory group: %w", err)
+			}
+			details["directory_group_id"], details["group_source"], details["group"] = in.DirectoryGroupID.String(), source, value
+			subjectCount, subject = "SELECT count(*) FROM role_bindings WHERE directory_group_id = $1", in.DirectoryGroupID
 		}
-		if err != nil {
-			return fmt.Errorf("services: lock the person: %w", err)
-		}
-		where := map[string]string{}
 		if in.ServiceID != nil {
 			var one int
 			err := tx.QueryRow(ctx, "SELECT 1 FROM services WHERE id = $1 FOR KEY SHARE", *in.ServiceID).Scan(&one)
@@ -215,32 +260,34 @@ func (s *Store) CreateBinding(ctx context.Context, a Actor, in BindingInput) (Bi
 			if err != nil {
 				return fmt.Errorf("services: read the service: %w", err)
 			}
-			where["service_id"] = in.ServiceID.String()
+			details["service_id"] = in.ServiceID.String()
 		}
 		if in.EnvironmentID != nil {
 			if err := checkEnvironment(ctx, tx, in.EnvironmentID); err != nil {
 				return err
 			}
-			where["environment_id"] = in.EnvironmentID.String()
+			details["environment_id"] = in.EnvironmentID.String()
 		}
 		var n int
-		if err := tx.QueryRow(ctx, "SELECT count(*) FROM role_bindings WHERE user_id = $1", in.UserID).Scan(&n); err != nil {
+		if err := tx.QueryRow(ctx, subjectCount, subject).Scan(&n); err != nil {
 			return fmt.Errorf("services: count the role bindings: %w", err)
 		}
 		if n >= MaxBindingsPerSubject {
 			return ErrBindingLimit
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO role_bindings (id, user_id, role, service_id, environment_id, created_by, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7)`, id, in.UserID, string(role), in.ServiceID, in.EnvironmentID, a.createdBy(), s.clock.Now().UTC())
+		var userID, groupID *uuid.UUID
+		if in.UserID != uuid.Nil {
+			userID = &in.UserID
+		} else {
+			groupID = &in.DirectoryGroupID
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO role_bindings (id, user_id, directory_group_id, role, service_id, environment_id, created_by, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, id, userID, groupID, string(role), in.ServiceID, in.EnvironmentID, a.createdBy(), s.clock.Now().UTC())
 		if db.IsUniqueViolation(err) { // the only unique constraint besides the new id: subject, role and where
 			return ErrBindingDuplicate
 		}
 		if err != nil {
 			return fmt.Errorf("services: store the role binding: %w", err)
-		}
-		details := map[string]string{"user_id": in.UserID.String(), "username": username, "role": string(role)}
-		for k, val := range where {
-			details[k] = val
 		}
 		return s.appendAudit(ctx, tx, a, "access.binding_added", "role_binding", id, details)
 	})
@@ -271,6 +318,9 @@ func (s *Store) DeleteBinding(ctx context.Context, a Actor, id uuid.UUID) error 
 		}
 		if b.DirectoryGroupID != nil {
 			details["directory_group_id"] = b.DirectoryGroupID.String()
+			if b.Group != nil {
+				details["group_source"], details["group"] = b.Group.Source, b.Group.Value
+			}
 		}
 		if b.Service != nil {
 			details["service_id"] = b.Service.ID.String()
@@ -283,12 +333,15 @@ func (s *Store) DeleteBinding(ctx context.Context, a Actor, id uuid.UUID) error 
 }
 
 // UserAccess is a person's effective access and where each part comes from (GET /api/v1/users/{id}/access): the
-// global role, every binding with the services it covers now, and whether the "SSO users may be Admin" cap lowers
-// their Administrator bindings to Operator.
+// global role, every binding with the services it covers now, the bindings of the directory groups they were in at
+// their last sign-in, and whether the "SSO users may be Admin" cap lowers their Administrator bindings to Operator.
 type UserAccess struct {
 	GlobalRole rbac.Role // "" for none
 	Bindings   []Binding
-	AdminCap   bool
+	// GroupBindings are the bindings of directory groups of the user's own provider or directory whose value was among
+	// the user's groups at the last sign-in or step-up (R54).
+	GroupBindings []Binding
+	AdminCap      bool
 	// Grants are the bindings as the authorization check sees them (rbac.ScopedGrant: one per role, the union of its
 	// services, the cap applied).
 	Grants []rbac.ScopedGrant
@@ -310,6 +363,9 @@ func (s *Store) Access(ctx context.Context, userID uuid.UUID) (UserAccess, error
 	if out.Bindings, err = s.Bindings(ctx, BindingFilter{UserID: &userID}); err != nil {
 		return UserAccess{}, err
 	}
+	if out.GroupBindings, err = s.groupBindingsOf(ctx, userID); err != nil {
+		return UserAccess{}, err
+	}
 	if out.Grants, err = authz.LoadGrants(ctx, s.pool, userID); err != nil {
 		return UserAccess{}, err
 	}
@@ -322,6 +378,32 @@ func (s *Store) Access(ctx context.Context, userID uuid.UUID) (UserAccess, error
 		}
 		out.AdminCap = !allow
 	}
+	return out, nil
+}
+
+// groupBindingsOf lists the bindings that reach a user through the directory groups seen at their last sign-in (the
+// rule of authz.LoadGrants).
+func (s *Store) groupBindingsOf(ctx context.Context, userID uuid.UUID) ([]Binding, error) {
+	rows, err := s.pool.Query(ctx, bindingSelect+`
+WHERE rb.directory_group_id IN (
+    SELECT dg.id FROM users du JOIN user_directory_groups ug ON ug.user_id = du.id
+    JOIN directory_groups dg ON dg.value = ug.value
+         AND ((du.auth_source = 'oidc' AND dg.source = 'oidc' AND dg.oidc_provider_id = du.oidc_provider_id)
+           OR (du.auth_source = 'ldap' AND dg.source = 'ldap' AND dg.ldap_directory_id = du.ldap_directory_id))
+    WHERE du.id = $1)
+ORDER BY g.value, rb.role, lower(coalesce(sv.name::text, '')), coalesce(e.sort, 0), rb.id`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("services: list the user's group bindings: %w", err)
+	}
+	out, err := pgx.CollectRows(rows, scanBinding)
+	if err != nil {
+		return nil, fmt.Errorf("services: list the user's group bindings: %w", err)
+	}
+	refs, err := readRefs(ctx, s.pool)
+	if err != nil {
+		return nil, err
+	}
+	withRefs(out, refs)
 	return out, nil
 }
 
