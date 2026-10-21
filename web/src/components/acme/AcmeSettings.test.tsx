@@ -1029,7 +1029,7 @@ describe('DNS providers (R57)', () => {
     expect(cached(client)).not.toContain('canary-cloudflare-token');
   });
 
-  it('adds an Azure DNS provider with each sign-in method and checks its IDs first', async () => {
+  it('adds an Azure DNS provider with a client secret and checks its IDs first', async () => {
     const bodies: Record<string, unknown>[] = [];
     base({
       hooks: [],
@@ -1037,7 +1037,7 @@ describe('DNS providers (R57)', () => {
     });
     await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
-    let dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    const dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
     await userEvent.selectOptions(within(dialog).getByLabelText('DNS provider'), 'azure_dns');
     await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Azure');
     await userEvent.type(within(dialog).getByLabelText(/^Directory \(tenant\) ID/), 'not-a-guid');
@@ -1064,11 +1064,17 @@ describe('DNS providers (R57)', () => {
       resource_group: 'dns-rg',
       client_secret: 'canary-azure-secret',
     });
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+  });
 
-    // A certificate needs its key; a managed identity has no tenant and no secret.
+  it('adds an Azure DNS provider with a certificate, which needs its key', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    base({
+      hooks: [],
+      extra: [http.post(HOOKS, async ({ request }) => (bodies.push((await request.json()) as Record<string, unknown>), HttpResponse.json(azHook(), { status: 201 })))],
+    });
+    await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
-    dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    const dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
     await userEvent.selectOptions(within(dialog).getByLabelText('DNS provider'), 'azure_dns');
     await userEvent.selectOptions(within(dialog).getByLabelText('Sign-in method'), 'certificate');
     await userEvent.type(within(dialog).getByLabelText(/^Name shown/), 'Azure cert');
@@ -1082,12 +1088,19 @@ describe('DNS providers (R57)', () => {
     fireEvent.change(within(dialog).getByLabelText(/^Private key of the certificate/), { target: { value: '-----BEGIN PRIVATE KEY-----\nBB\n-----END PRIVATE KEY-----' } });
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
     expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
-    expect(bodies[1]).toMatchObject({ auth: 'certificate', certificate_pem: expect.stringContaining('BEGIN CERTIFICATE'), private_key_pem: expect.stringContaining('PRIVATE KEY') });
-    expect(bodies[1]).not.toHaveProperty('client_secret');
-    await userEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
+    expect(bodies[0]).toMatchObject({ auth: 'certificate', certificate_pem: expect.stringContaining('BEGIN CERTIFICATE'), private_key_pem: expect.stringContaining('PRIVATE KEY') });
+    expect(bodies[0]).not.toHaveProperty('client_secret');
+  });
 
+  it('adds an Azure DNS provider with the managed identity: no tenant, no secret', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    base({
+      hooks: [],
+      extra: [http.post(HOOKS, async ({ request }) => (bodies.push((await request.json()) as Record<string, unknown>), HttpResponse.json(azHook(), { status: 201 })))],
+    });
+    await open();
     await userEvent.click(await screen.findByRole('button', { name: 'Add DNS provider' }));
-    dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
+    const dialog = await screen.findByRole('dialog', { name: 'Add DNS provider' });
     await userEvent.selectOptions(within(dialog).getByLabelText('DNS provider'), 'azure_dns');
     await userEvent.selectOptions(within(dialog).getByLabelText('Sign-in method'), 'managed_identity');
     expect(within(dialog).queryByLabelText(/^Directory \(tenant\) ID/)).not.toBeInTheDocument();
@@ -1096,7 +1109,7 @@ describe('DNS providers (R57)', () => {
     await userEvent.type(within(dialog).getByLabelText(/^Resource group/), 'dns-rg');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save DNS provider' }));
     expect(await within(dialog).findByText('Saved.')).toBeInTheDocument();
-    expect(bodies[2]).toMatchObject({ kind: 'azure_dns', auth: 'managed_identity', tenant_id: '', client_id: '' });
+    expect(bodies[0]).toMatchObject({ kind: 'azure_dns', auth: 'managed_identity', tenant_id: '', client_id: '' });
   });
 
   it('adds a Route 53 provider with a role, and refuses a malformed key ID and role first', async () => {
