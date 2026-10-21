@@ -329,6 +329,11 @@ func TestTLSAndMapAddr(t *testing.T) {
 	_ = conn.Close()
 	_, err = tls.Dial("tcp", s.Addr(), &tls.Config{RootCAs: s.CAPool(), ServerName: "example.com", MinVersion: tls.VersionTLS12})
 	require.Error(t, err)
+	// TLSConfig is the listener's (a copy): another harness serves Handler with it.
+	c := s.TLSConfig()
+	require.Len(t, c.Certificates, 1)
+	c.Certificates = nil
+	assert.Len(t, s.TLSConfig().Certificates, 1, "a copy")
 }
 
 func TestRequestLogHasNoSecrets(t *testing.T) {
