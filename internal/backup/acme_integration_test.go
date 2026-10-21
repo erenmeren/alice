@@ -102,8 +102,9 @@ func TestACMEBackupCycle(t *testing.T) {
 	}
 
 	// The installation loses its ACME data after the backup (TRUNCATE: an account row other than a pending rollover
-	// key refuses a DELETE, Z1018).
-	_, err = e.db.Owner.Exec(e.ctx, "TRUNCATE acme_bindings, acme_orders, acme_certificates, acme_hooks, acme_accounts, acme_providers")
+	// key refuses a DELETE, Z1018; the key-compromise incidents of 00021 refer to ACME certificates and orders).
+	_, err = e.db.Owner.Exec(e.ctx, "TRUNCATE certificate_incident_locations, certificate_incidents, acme_bindings, acme_orders, "+
+		"acme_certificates, acme_hooks, acme_accounts, acme_providers")
 	require.NoError(t, err)
 	require.Zero(t, e.count("SELECT count(*) FROM acme_accounts"))
 

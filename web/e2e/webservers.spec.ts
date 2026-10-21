@@ -147,7 +147,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(installed, 'sudoers of the target grant apache-dump').toContain(APACHE_DUMP_LINE);
       expect(installed).not.toContain('nginx-dump');
       const helper = JSON.parse(targetExec(['/usr/local/libexec/alice-helper', 'version'])) as { helper: string; protocol: number };
-      expect(helper.protocol, `alice-helper ${helper.helper} on the target`).toBe(9);
+      expect(helper.protocol, `alice-helper ${helper.helper} on the target`).toBe(11);
 
       // 2. Add the server with the type Apache server; compare the fingerprint with the server's own.
       await page.getByRole('button', { name: t('targets.add') }).click();
@@ -262,7 +262,7 @@ for (const lang of ['en', 'tr'] as Lang[]) {
       expect(installed, 'sudoers of the target grant haproxy-dump').toContain(HAPROXY_DUMP_LINE);
       expect(installed).not.toContain('nginx-dump');
       const helper = JSON.parse(targetExec(['/usr/local/libexec/alice-helper', 'version'])) as { helper: string; protocol: number };
-      expect(helper.protocol, `alice-helper ${helper.helper} on the target`).toBe(9);
+      expect(helper.protocol, `alice-helper ${helper.helper} on the target`).toBe(11);
 
       // 2. Add the server with the type HAProxy server; compare the fingerprint with the server's own.
       await page.getByRole('button', { name: t('targets.add') }).click();
