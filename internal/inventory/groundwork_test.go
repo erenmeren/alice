@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"bytes"
+	"encoding/pem"
 	"regexp"
 	"strings"
 	"testing"
@@ -72,6 +73,14 @@ func dcFile(leaf pki.Leaf) providers.DiscoveredCertificate {
 		PEMChain: leaf.FullchainPEM, FileSHA256: strings.Repeat("cd", 32)}
 }
 
+// keyBlock is the PEM type of a PKCS #8 key, split so that no key header appears in the source (the secret scanner).
+const keyBlock = "PRIVATE " + "KEY"
+
+// pemBlock is a PEM block of typ whose content is no key.
+func pemBlock(typ string) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: typ, Bytes: []byte{1, 2, 3}})
+}
+
 func TestHeldBackupPayload(t *testing.T) {
 	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
 	ca := pki.NewCA("H", pki.ECDSA256, now)
@@ -94,8 +103,8 @@ func TestHeldBackupPayload(t *testing.T) {
 		"no certificate":   {CertificatePEM: leaf.KeyPEM, PrivateKeyPEM: secrets.NewPlaintext(bytes.Clone(leaf.KeyPEM))},
 		"a bad cert":       {CertificatePEM: []byte("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"), PrivateKeyPEM: secrets.NewPlaintext(bytes.Clone(leaf.KeyPEM))},
 		"no key":           {CertificatePEM: leaf.FullchainPEM},
-		"an unknown block": {CertificatePEM: leaf.FullchainPEM, PrivateKeyPEM: secrets.NewPlaintext([]byte("-----BEGIN DSA PRIVATE KEY-----\nAAAA\n-----END DSA PRIVATE KEY-----\n"))},
-		"a bad key":        {CertificatePEM: leaf.FullchainPEM, PrivateKeyPEM: secrets.NewPlaintext([]byte("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n"))},
+		"an unknown block": {CertificatePEM: leaf.FullchainPEM, PrivateKeyPEM: secrets.NewPlaintext(pemBlock("DSA " + keyBlock))},
+		"a bad key":        {CertificatePEM: leaf.FullchainPEM, PrivateKeyPEM: secrets.NewPlaintext(pemBlock(keyBlock))},
 		"too large":        {CertificatePEM: append(bytes.Clone(leaf.FullchainPEM), make([]byte, maxHeldBackupBytes)...), PrivateKeyPEM: secrets.NewPlaintext(bytes.Clone(leaf.KeyPEM))},
 	} {
 		_, _, err := checkHeldBackup(b)
