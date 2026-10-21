@@ -315,6 +315,15 @@ discovery settings and scopes, services and environments) need a global role. Ro
   limited to 1 to 50 services its owner holds a role on: its rights are the owner's grants now ∩ its scope ∩ those
   services; the global role becomes a grant on them, so no platform route passes (`ALC-AUTH-0002`), whoever the
   owner. [T]
+- **SEC-109** (R56, R49 Phase 4) Service owners and e-mail routing. (a) Ownership grants no access: owners are only
+  e-mail recipients and are named on the service; a service's owners are replaced by a global Administrator only
+  (`services.manage`, step-up, never a token), audited with what was added and removed; an automation account is never
+  an owner. (b) A service's e-mails reach only the recipients of the services they concern (the Administrators while a
+  policy keeps them, the owners, the policy's addresses); a member of an owner group receives them only while enabled,
+  of the group's own provider or directory, and in the group at the last sign-in or step-up. (c) The platform e-mails
+  (license, backup, sign-in block, audit chain, a tampered job, the test e-mail) go to the Administrator recipients only,
+  through a notifier that cannot reach an owner. (d) Whether a role of an owner reaches the service is answered to a
+  global `users.read` only. [T]
 
 ### 15.5 Sessions, CSRF, rate limiting
 

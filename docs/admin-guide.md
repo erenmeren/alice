@@ -322,6 +322,13 @@ At least one of the two is needed. **Save recipients** records the change with t
 enabled administrator with an address), Alice still records them and writes a warning to its log
 (`alerts.no_recipients`).
 
+These are the recipients of every e-mail while you have only the Default service and name no owners. Once services
+have owners or their own e-mail rules, an e-mail about a service's servers, Key Vaults, certificates, ACME
+certificates, deployments, SSH key rotations or stopped tasks also goes to them, and a service may leave the
+administrators out of its own e-mails (see [Owners and their e-mails](#owners-and-their-e-mails)). The e-mails about
+Alice itself (the license, backups, the sign-in block, the audit chain, a tampered task, the test e-mail) always go to
+these recipients only.
+
 **Sign-in block e-mail**: when a local account is blocked for 15 minutes after 10 wrong attempts, the recipients get
 "Sign-in blocked: <username>" with the number of attempts and the minutes (see [Sign-in protection](#sign-in-protection)).
 
@@ -1329,13 +1336,57 @@ to what is created or changed from now on, never to what exists:
   certificate's). Deploy now still works.
 - **Revocation in a key-compromise incident**: whether a new incident on the service's certificates starts with
   **Revoke at once** ticked.
-- **E-mails**: whether Administrators of all services receive the service's e-mails and which other addresses do. They
-  are saved with the policy; until e-mails are routed by service, every e-mail still goes to the Administrators as before.
+- **E-mails**: whether the recipients of **Settings → Recipients** (the administrators of all services and the extra
+  addresses there) receive the service's e-mails, and which other addresses (up to 20, each with a language) receive
+  them too. See [Owners and their e-mails](#owners-and-their-e-mails).
 
 Saving needs a fresh confirmation code and an Administrator of the service (never an API token); it works while the
 license is locked. Each save is a new version: **Versions** lists them all with what changed and who saved it, and the
 audit log has one entry (**Service policy changed**) naming the changed parts. A save based on an older version is
 refused (`ALC-SVC-0010`): reload and save again. Everybody with a role on the service reads the policy.
+
+### Owners and their e-mails
+
+A service's **owners** are the people and the [directory groups](#directory-groups) responsible for it (R56). Being an
+owner gives no access: it decides who receives the service's e-mails and who is shown as responsible. Give an owner a
+role on the service (its **Access** tab, or People & access) to let them open it too.
+
+On a service's page, **Overview**, **Owners** lists them; an Administrator of all services changes them with **Edit
+owners** (a fresh confirmation code, never an API token; it works while the license is locked; at most 50). People are
+chosen from **People & access** (automation accounts cannot own a service, `ALC-SVC-0019`), groups from the declared
+directory groups. Alice warns about an owner that receives e-mails but cannot open the service, a person without an
+e-mail address and a disabled person (both receive nothing). A save based on an older state of the service is refused
+(`ALC-SVC-0010`): reload and save again. Each change is one audit entry (**Service owners changed**) naming who was
+added and who was removed. Removing a directory group removes it from every service's owners.
+
+**Who receives a service's e-mail.** An e-mail about something a service owns goes, each person or address once and
+each in their own language, to:
+
+1. the recipients of **Settings → Recipients**, unless the service's policy (**E-mails**) leaves them out;
+2. the service's owners: each enabled person with an e-mail address, and every enabled person of an owner group's
+   provider or directory who was in the group at their last sign-in or **Confirm it's you**, with an e-mail address;
+3. the extra addresses of the service's policy.
+
+When an e-mail concerns several services (a certificate of one service on a server of another, a deployment from one
+service to another's server), it goes to the recipients of each, and the administrators get it unless every one of
+those services leaves them out. Which services an e-mail concerns:
+
+| E-mail | Services |
+|---|---|
+| A certificate expires | the certificate's service and the services of the servers that hold it |
+| A Key Vault certificate, key or client secret expires; every Key Vault e-mail | the Key Vault's service |
+| A certificate found on the network expires | the services of the scan scopes that saw it |
+| A deployment; a website's drift | the server's service and the certificate's |
+| A server's identity changed; sign-in to a server refused | the server's service |
+| ACME certificates (renewal, automatic deployment) | the ACME certificate's service |
+| SSH key rotations | the key's service and every service approved when the rotation was switched on or run |
+| A stopped task | the task's service; a task of Alice itself goes to the administrators only |
+
+The "and N more" e-mail of a large expiry check counts, for each recipient, only the notices that concern them: a
+service's owner learns how many more of their service's certificates expire, the administrators how many in all. An
+e-mail that would reach nobody (the service leaves the administrators out and has no owner or address that receives
+it) goes to the administrators, so nothing is lost. A rotation's notice that reached an owner counts as delivered: the
+scheduled run then starts, as it does when an administrator received it.
 
 ## Servers
 

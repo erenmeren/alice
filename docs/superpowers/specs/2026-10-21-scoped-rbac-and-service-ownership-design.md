@@ -1,7 +1,7 @@
 # Scoped access and service ownership: design
 
-Status: Phases 1, 2, 3 and 5 implemented (2026-10-21, see "Phase 1 as built", "Phase 2 as built", "Phase 3 as built" and
-"Phase 5 as built" in §12); Phase 4 open; the questions of §14 stay open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
+Status: every phase implemented (2026-10-21, see "Phase 1 as built" to "Phase 5 as built" in §12 and the closing summary
+of §15); the questions of §14 stay open on their defaults. Date: 2026-10-21. Written against `main` at `bdbf9b3b` (migrations up to `00021`, decisions up
 to R46). Numbers: migration `00026` (Phase 1 creates the whole schema of §4, so the later phases need no migration; one
 that does after review takes the next free number at merge time; `00024` and `00026` went to parallel branches) and decision
 **R49** (recorded in `alice-v1/00-decisions.md` with Phase 1). When accepted, R49 amends `alice-v1/04-security.md` §15.4 (SEC-014, SEC-016,
@@ -1045,6 +1045,37 @@ Acceptance:
 - Platform e-mails (license, backup, lockout, audit) never go to owners.
 - Rotation notice delivered only to an owner opens the gate (ruling §7.2).
 
+#### Phase 4 as built (2026-10-21, R56)
+
+What Phase 4 delivers, and where it differs from the text above (rulings in `docs/superpowers/rulings/scoped-access.md`,
+"Phase 4"):
+
+- No migration: `00026` made `service_owners`. Owners are people and declared directory groups (at most 50, each once;
+  an automation account `ALC-SVC-0019`, the next free number); `GET /api/v1/services/{id}/owners` (read, resource) and
+  `PUT /api/v1/services/{id}/owners` (`services.manage`, platform, step-up, never a token) replacing the team with the
+  service's version (`ALC-SVC-0010`; a change raises the version), audited `service.owners_changed`. Each owner says
+  whether a role reaches the service (`reaches_service`, to a global `users.read` only) for the editor's warning.
+- `notify.ServiceNotifier` (`NotifyServices`, `NotifyDigest`, and `NotifyAdmins` for the platform e-mails) with the
+  recipients of §7.2; `notify` may import `authz` (the policy parser). Every enqueue site of §7.2 passes its services;
+  the drift e-mails of R52 (not in the table) go as deployments' (the server's and the certificate's services). There
+  are no incident e-mails of their own (R46 incidents send `deployment.*`).
+- Beyond §7.2: an e-mail with no service is a platform e-mail; a service e-mail that would reach nobody (every policy
+  leaves the Administrators out, no owner or address receives it) goes to the Administrators (**owner to confirm**).
+- The alerts' "and N more" summary is built per recipient; the inventory's summaries concern one vault each.
+- The rotation gate needed no change: it counts any delivered copy of the notice.
+- UI: the service page's Overview lists the owners and their warnings, with **Edit owners** for a global
+  Administrator; the Policy tab's E-mails section says how the routing uses it.
+- Tests SR-22 to SR-29 (`internal/notify:TestOnlyDefaultQueuesTodaysRows` with the golden file
+  `internal/notify/testdata/only_default.golden`, checked against `main`'s AdminNotifier; `TestOwnerGroupsReachTheirEnabledMembers`,
+  `TestPolicyNotificationsDecideTheAdministratorsAndAddExtraAddresses`, `TestPlatformEmailsNeverReachOwners`;
+  `internal/alerts:TestOwnersGetTheirServicesNotices`, `TestDigestIsBuiltPerRecipient`;
+  `internal/inventory:TestServerEmailsGoToTheServicesOwners`, `TestDeploymentEmailsGoToBothServicesOwners`;
+  `internal/jobs:TestDeadJobsGoToTheirServicesOwners`; `internal/sshkeys:TestRotationNoticeDeliveredOnlyToAnOwnerOpensTheGate`;
+  `internal/authz/services:TestServiceOwners`; `internal/api:TestServiceOwnersRoutes`, `TestServiceOwnersThroughTheAPI`,
+  `TestScopedIDOR` (an owner of A planted); the web Owners tests and `web/e2e/service-owners.spec.ts`). Phase 3's
+  remaining "owner teams naming directory groups and the routing by group membership" is this phase.
+- Not built: owners on the services list; members of an owner group by name.
+
 ### Phase 5 — Service policy v1 (size L, ~7 tasks)
 
 The §7.3 struct, validation, versioning, history API and UI; enforcement points of §7.3; `domains` global-only;
@@ -1120,3 +1151,25 @@ environment", SEC-027 scoped reach, SEC-028 resolvers and 404, SEC-029 cross-ser
 | Q13 | Owning service of a discovered certificate or SSH key? | **The service of the server it was first seen on**; it is visible from every service holding it; an Administrator can move it. |
 | Q14 | Can a directory or SSO user with only scoped bindings (no global group mapping) sign in? | **Yes**. A local person with no grant at all can sign in and sees the "no access yet" page; a directory or SSO user with no grant at all is refused as today. |
 | Q15 | Seeded environments? | `production`, `staging`, `test`, `development`; Administrators rename, add, reorder, delete unused ones. |
+
+## 15. Closing summary (2026-10-21, after Phase 4)
+
+Every phase of §12 is built and merged on its defaults (R49 Phase 1, R53, R54, R56, R55): services, environments,
+assignment and trusts; role bindings for people; directory groups, automation accounts and limited tokens; owners and
+e-mail routing; the service policy. What remains across the phases (each in its phase's "What remains" in the rulings):
+
+- **Authorization depth**: the re-check under the row lock inside the service functions (`authz.Assert`, §5.4); the
+  rotation runner's check of `approved_service_ids` before a run starts or continues (§5.7; the approvals are
+  recorded); the engine's first send does not re-check the policy's `deployment.auto_deploy`.
+- **Answers**: derived rows (deployments, bindings, jobs, incidents) do not show their `service` and their lists have no
+  `service_id`/`environment_id` filters (they are filtered by reach); a body-dependent conflict against a resource of
+  another service is not exercised by the leak check.
+- **Performance**: the R32 list budgets for a person with role bindings (only the grants read is measured).
+- **UI**: the create dialogs have no service picker (the ACME dialog's default window from the policy, the policy-aware
+  hints); the services list does not show owners; an owner group's members are counted, not named.
+- **Directories**: the LDAP "Test sign-in" does not evaluate role bindings.
+- **Owner decisions pending** (rulings marked "Owner to confirm"): the break-glass CHECK `role IS NOT NULL` (Phase 2
+  ruling 2); the OIDC groups claim above 1000 refused rather than cut (Phase 3 ruling 1); the 400 for an unknown policy
+  field, automatic deployment judged on the source's service and no e-mail for a policy hold (Phase 5 rulings 2, 10,
+  11); a service e-mail that would reach nobody going to the Administrators (Phase 4 ruling 2); and the open questions
+  Q1 to Q15 of §14, all on their defaults.

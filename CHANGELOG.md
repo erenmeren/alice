@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — Service owners and e-mails routed by service (scoped access, phase 4)
+
+**Added**
+- Each service has **owners** (R56): people and directory groups responsible for it, listed on its page's
+  **Overview** and changed by an Administrator of all services with **Edit owners** (a fresh confirmation code; audited
+  as **Service owners changed**). Being an owner gives no access; Alice warns about an owner who receives e-mails but
+  cannot open the service.
+- The e-mails about a service's servers, Key Vaults, certificates, ACME certificates, deployments, website drift, SSH
+  key rotations and stopped tasks go to its owners (an enabled person with an address; the enabled members of an owner
+  group seen at their last sign-in, with an address) and to the extra addresses of its policy, besides the recipients of
+  **Settings → Recipients**, whom a service's policy may leave out of its own e-mails. An e-mail about several services
+  goes to the recipients of each. The "and N more" expiry e-mail counts, for each recipient, only the notices that
+  concern them.
+- API: `GET /api/v1/services/{id}/owners` (everyone who sees the service), `PUT /api/v1/services/{id}/owners`
+  (`services.manage`, never a token; the service's version in the body); code `ALC-SVC-0019` (an automation account
+  cannot own a service).
+
+**Changed**
+- With only the Default service, no owners and the default policy, every e-mail goes to exactly today's recipients.
+  The e-mails about Alice itself (the license, backups, the sign-in block, the audit chain, a tampered task, the test
+  e-mail) always go to the recipients of **Settings → Recipients** only. A service e-mail that would reach nobody goes to
+  those recipients. A rotation notice delivered to an owner lets the scheduled run start. `ALC-SVC-0010` now also
+  answers a change of owners based on an older state of the service. No migration (`00026` holds the owners). Rulings:
+  `docs/superpowers/rulings/scoped-access.md` ("Phase 4").
+
 ## Unreleased — Groups, automation accounts and tokens limited to services (scoped access, phase 3)
 
 **Added**

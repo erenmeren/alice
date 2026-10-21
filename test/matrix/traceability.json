@@ -1953,6 +1953,74 @@
   ]
  },
  {
+  "id": "SR-22",
+  "status": "test",
+  "tests": [
+   "internal/notify:TestOnlyDefaultQueuesTodaysRows"
+  ]
+ },
+ {
+  "id": "SR-23",
+  "status": "test",
+  "tests": [
+   "internal/alerts:TestOwnersGetTheirServicesNotices",
+   "internal/alerts:TestDigestIsBuiltPerRecipient"
+  ]
+ },
+ {
+  "id": "SR-24",
+  "status": "test",
+  "tests": [
+   "internal/notify:TestOwnerGroupsReachTheirEnabledMembers",
+   "internal/notify:TestPolicyNotificationsDecideTheAdministratorsAndAddExtraAddresses"
+  ]
+ },
+ {
+  "id": "SR-25",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestServerEmailsGoToTheServicesOwners",
+   "internal/inventory:TestDeploymentEmailsGoToBothServicesOwners",
+   "internal/jobs:TestDeadJobsGoToTheirServicesOwners"
+  ]
+ },
+ {
+  "id": "SR-26",
+  "status": "test",
+  "tests": [
+   "internal/notify:TestPlatformEmailsNeverReachOwners",
+   "cmd/alice:TestSSHKeysConfigIsTheProductionOne"
+  ]
+ },
+ {
+  "id": "SR-27",
+  "status": "test",
+  "tests": [
+   "internal/sshkeys:TestRotationNoticeDeliveredOnlyToAnOwnerOpensTheGate"
+  ]
+ },
+ {
+  "id": "SR-28",
+  "status": "test",
+  "tests": [
+   "internal/authz/services:TestServiceOwners",
+   "internal/api:TestServiceOwnersRoutes",
+   "internal/api:TestServiceOwnersThroughTheAPI",
+   "internal/api:TestAuthzMatrix",
+   "internal/api:TestScopedIDOR"
+  ]
+ },
+ {
+  "id": "SR-29",
+  "status": "test",
+  "tests": [
+   "web/src/components/services/OwnersPanel.test.tsx:lists people and groups with their notes and the warning for owners who cannot open the service",
+   "web/src/components/services/OwnersPanel.test.tsx:lets a global Administrator add a person and a group, remove one, and save the list with the version read after a fresh code",
+   "web/src/components/services/OwnersPanel.test.tsx:shows the refusal of a stale version and reloads the owners, then saves with the new version",
+   "web/e2e/service-owners.spec.ts:SR-29 (R56): an Administrator names a person without a role as owner and sees that they cannot open the service"
+  ]
+ },
+ {
   "id": "SR-30",
   "status": "test",
   "tests": [

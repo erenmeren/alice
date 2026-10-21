@@ -262,6 +262,11 @@ A single sign-on or directory user whose only access is a group's role on a serv
 after leaving the group; **Disable** stops them at once. A pipeline's automation account is disabled the same way on
 **People & access**, **Automation accounts**: its tokens are revoked for good.
 
+A person who leaves stops receiving a service's e-mails as its owner (R56) as soon as they are disabled; an owner
+group's member at their next sign-in after leaving the group. Remove them from the service's **Owners** (its
+**Overview**, **Edit owners**) when someone else takes over: a disabled owner receives nothing, so the service's
+e-mails would otherwise reach only its other owners and the administrators.
+
 ## Moving to a new server
 
 1. Make a manual backup on the old server (`sudo /opt/alice/alicectl backup`) and copy it with its `.sha256` file to

@@ -2,9 +2,9 @@
 
 Owner approval 2026-10-20: work proceeds on the recommended defaults of the design
 (`docs/superpowers/specs/2026-10-21-scoped-rbac-and-service-ownership-design.md`, §14) while its questions stay open.
-Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md` (R53 Phase 2, R54 Phase 3); SEC-027 to SEC-029 and SEC-108 in
-`alice-v1/04-security.md`; the data model in `alice-v1/02-architecture.md`; SR-01 to SR-21 in `alice-v1/06-quality.md`; user text in `docs/admin-guide.md`
-("Services") and `docs/troubleshooting.md`.
+Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md` (R53 Phase 2, R54 Phase 3, R55 Phase 5, R56 Phase 4); SEC-027 to
+SEC-029, SEC-108 and SEC-109 in `alice-v1/04-security.md`; the data model in `alice-v1/02-architecture.md`; SR-01 to SR-34 in
+`alice-v1/06-quality.md`; user text in `docs/admin-guide.md` ("Services", "Owners and their e-mails") and `docs/troubleshooting.md`.
 
 ## Phase 1: services, environments, assignment, trusts (2026-10-21)
 
@@ -249,6 +249,79 @@ Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md` (R53 Phase 2, R54
 - Owner teams naming directory groups and the notification routing by group membership (Phase 4).
 - The Phase 2 list ("What remains (Phase 2 as built)") is unchanged.
 
+## Phase 4: owners and notification routing (2026-10-21, R56)
+
+### The design as built
+
+- **Owners** (`internal/authz/services/owners.go`): `service_owners` (made by `00026`, no migration) holds people and
+  declared directory groups; `Store.Owners` reads the team with the service's version and, per owner, whether a role
+  reaches the service; `Store.SetOwners` replaces it as a whole. Routes `GET /api/v1/services/{id}/owners` (`read`,
+  resource, resolved by the service) and `PUT /api/v1/services/{id}/owners` (`services.manage`, platform, step-up, never
+  a token, ClassAlways). The scoped IDOR suite plants an owner of A (its name and id must appear in no answer to B).
+- **Routing** (`internal/notify/routing.go`): `notify.ServiceNotifier` has `NotifyAdmins` (the AdminNotifier's),
+  `NotifyServices(services, template, params)` and `NotifyDigest(template, items, params(count))`. Recipients of a
+  service e-mail for *S*, in this order, every mailbox once (`sameMailbox`), each in its first language: the
+  Administrator recipients of R42 row 6 (enabled global Administrators with an address and the setting's extra
+  addresses, as the setting says) while some service of *S* keeps them; the owners of each service of *S* (enabled
+  people with an address; the enabled people of an owner group's own provider or directory who were in it at their last
+  sign-in or step-up, with an address); each service's `notifications.addresses`. The policy and the owners are read in
+  the e-mail's transaction (one query each for all of *S*).
+- **Enqueue sites** pass their services (design §7.2): alerts (a certificate: its owning service, then the services of
+  the servers holding it; a Key Vault object: the vault's; a discovered certificate: the scopes' that saw it), the
+  inventory (`target.*` and `kv.*`: the target's; `acme.*`: the ACME certificate's; `deployment.*`: the destination
+  server's and the certificate's; `location.drift_*`: the website's server's and its certificate's), the rotations (the
+  key's service and the policy's `approved_service_ids`), `job.dead` (`jobs.service_id`). The inventory's and the
+  rotations' notifier interfaces have `NotifyServices` only; the jobs runner both (`job.tampered` is platform); license,
+  backup, sign-in block and audit check keep `notify.AdminNotifier`, which cannot reach an owner.
+- **Digests.** The alerts' "and N more" summary (`alert.more`, `alert.more_discovered`) is `NotifyDigest`: every
+  recipient of at least one suppressed notice gets one e-mail counting the notices whose services made it a recipient.
+  The inventory's summaries (`kv.*_more*`) concern one vault each and are plain service e-mails.
+- **The rotation gate** is unchanged: it already counts any delivered copy of the run's notice
+  (`sshkeys.noticeDelivered`), so a notice delivered to an owner only opens it (ruling of design §7.2; SR-27).
+- Tests SR-22 to SR-29; the golden file `internal/notify/testdata/only_default.golden` was also checked against the
+  `AdminNotifier` of `main` before routing.
+
+### Rulings made during execution
+
+1. **An e-mail with no service is a platform e-mail** (the Administrator recipients): a job without a service, a row
+   deleted before its e-mail is queued (it names no service). A service that no longer exists has the default policy
+   and no owners.
+2. **A service e-mail never reaches nobody.** When every service of *S* leaves the Administrators out
+   (`notifications.administrators: false`) and no owner or address receives it, the Administrator recipients get it.
+   Design §7.2 would send it to no one; a lost expiry or deployment alert is worse than an unwanted one. **Owner to
+   confirm.**
+3. **Order and language.** Administrators first, then owners (by user name, service by service), then the policies'
+   addresses; the first form of a mailbox wins with its language, so a person who is an owner and also an address of
+   the policy gets their own language.
+4. **A stored policy Alice cannot read** keeps the Administrators and adds no address for that service (fewer
+   recipients than it may say, never none); it never fails the change that queues the e-mail.
+5. **Drift e-mails** (`location.drift_*`, R52, not in design §7.2's table) are routed as deployments: the website's
+   server's service and the service of the certificate it holds.
+6. **Rotation e-mails before any approval** (a preview of a policy never switched on, "nothing to rotate") use the
+   policy's `approved_service_ids` as stored, possibly empty: the key's service alone.
+7. **Incident e-mails** (design §7.2 row "incident e-mails (R46)"): Alice sends none of its own today (an incident's
+   deployments send `deployment.*`, routed as deployments). Nothing to route.
+8. **Owners are replaced with the service's version**, which a change raises (as the owners are part of the service);
+   a stale one is `ALC-SVC-0010` (its text now names the policy or the owners). A team equal to the current one stores
+   nothing and audits nothing. `service.owners_changed` names `added` and `removed` as `user:<id>` / `group:<id>`.
+9. **An automation account as an owner** is `ALC-SVC-0019` `service.owner_not_a_person` (422, the next free number;
+   the design says only "refused (422)"), with the entry as the field. An unknown person or group is a validation error
+   on `owners.N.user_id` / `owners.N.directory_group_id`; a disabled person may be named (they receive nothing until
+   enabled; the editor says so).
+10. **`reaches_service`** (the editor's warning, design §7.1) is answered to a caller with a global `users.read` only:
+    whether a person holds a role is People & access's. A person reaches the service by any grant (the global role,
+    a binding, a group's binding); a group by a binding of its own on the service or its environment, or a mapping of
+    its value to a role on all services.
+11. **Group members** are judged at queue time by `user_directory_groups` (the last sign-in or step-up), as the
+    bindings are: a person who left the group in the directory still receives the service's e-mails until their next
+    sign-in or step-up; **Disable** stops them at once.
+
+### What remains (Phase 4 as built)
+
+- The service list does not show the owners (the service page's Overview does).
+- An owner group's members are listed nowhere by name (their count only, as on the Groups tab).
+- The Phase 2, Phase 3 and Phase 5 lists are unchanged.
+
 ## Phase 5: service policy v1 (2026-10-21, R55)
 
 ### The design as built
@@ -330,5 +403,5 @@ Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md` (R53 Phase 2, R54
   names, sources) are not built; the refusal names the rule.
 - The engine's first send does not re-check `deployment.auto_deploy`; a deployment queued before the policy forbade it
   still goes.
-- `notifications` is read by the routing of Phase 4.
+- Done in Phase 4 (R56): `notifications` is read by the routing.
 
