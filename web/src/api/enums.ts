@@ -77,6 +77,17 @@ export const DEPLOYMENT_STEP_NAMES: readonly string[] = [
   'verify',
   'verify_old',
   'recover_pending',
+  // R59: the Windows server (import into the stores, re-point the binding), BIG-IP (upload, install, one transaction,
+  // device-group sync, save) and Kubernetes (write the Secret) steps.
+  'import_chain',
+  'import_certificate',
+  'bind',
+  'upload',
+  'install',
+  'commit',
+  'sync',
+  'save',
+  'write_secret',
 ];
 
 // UNSUPPORTED_REASONS: CertificateLocation.unsupported_reason (providers.Unsupported*).

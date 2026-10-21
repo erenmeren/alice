@@ -1920,7 +1920,10 @@
       "sniIp": "Enter a domain name, not an IP address.",
       "sniWildcard": "Enter one domain name without a wildcard (*).",
       "sniInvalid": "Enter a domain name with letters, digits, dots and hyphens only. A part between dots cannot start or end with a hyphen.",
-      "notSaved": "Your change was not saved because this website changed in the meantime. The current values are shown now. Check them and save again."
+      "notSaved": "Your change was not saved because this website changed in the meantime. The current values are shown now. Check them and save again.",
+      "address": "Address to check (empty: the address Alice finds itself)",
+      "addressHelp": "For example a load balancer's internal address. Enter a domain name or an IP address.",
+      "addressInvalid": "Enter a domain name or an IP address (an IPv6 address without a zone)."
     },
     "definedLine": "Line: {{line}}",
     "configInvalidDiscovery": "{{software}}'s configuration on this server has an error. The websites below are as Alice last read them.",
@@ -2103,7 +2106,16 @@
       "rollback_reload": "Reload again",
       "verify_old": "Verify the previous certificate",
       "unknown": "Other step",
-      "recover_pending": "Undo an unfinished earlier change"
+      "recover_pending": "Undo an unfinished earlier change",
+      "import_chain": "Import the intermediate certificates",
+      "import_certificate": "Import the certificate",
+      "bind": "Point the binding to it",
+      "upload": "Upload",
+      "install": "Install",
+      "commit": "Switch the profiles",
+      "sync": "Synchronise the device group",
+      "save": "Save the configuration",
+      "write_secret": "Write the Secret"
     },
     "stepStatus": {
       "started": "Running",

@@ -713,7 +713,15 @@ export interface CertificateLocation {
   // R52: what the location should have, what Alice last deployed and what is observed today; null when it follows
   // no binding.
   observation: LocationObservation | null;
+  // R59: the location's kind (a certificate file, or an http.sys binding, a BIG-IP profile entry, a TLS Secret), the
+  // identity of a location that is not a file (null for a file), the kind's facts and the probe address ("" when not set).
+  kind?: LocationKind;
+  locator?: Record<string, string | number | boolean> | null;
+  details?: Record<string, unknown>;
+  verify_address?: string;
 }
+
+export type LocationKind = 'server_file' | 'win_sslbinding' | 'f5_clientssl' | 'k8s_tls_secret';
 
 export interface CertificateLocationList {
   items: CertificateLocation[];
@@ -871,6 +879,8 @@ export interface LocationPatch {
   verify_port?: number;
   verify_sni?: string;
   skip_verify?: boolean;
+  // R59: not for a certificate file.
+  verify_address?: string;
 }
 
 // Phase 8 (contract C12). Backups: the list, the state and the schedule.

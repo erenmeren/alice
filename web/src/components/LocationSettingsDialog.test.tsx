@@ -176,4 +176,49 @@ describe('LocationSettingsDialog', () => {
     expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Close' })).toHaveLength(2);
   });
+
+  // R59: a location that is not a certificate file may name the address Alice probes; a file never shows the field.
+  it('offers no probe address for a certificate file', async () => {
+    listServer(locationFixture({ id: LID, kind: 'server_file', verify_address: '' }));
+    await renderApp(<Harness />);
+    expect(await screen.findByLabelText(/Port to check/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Address to check/)).not.toBeInTheDocument();
+  });
+
+  it('sends the probe address of a location of another kind, and refuses one that is not an address', async () => {
+    listServer(
+      locationFixture({ id: LID, kind: 'k8s_tls_secret', locator: { namespace: 'shop', name: 'shop-tls' }, verify_address: '10.20.0.5', cert_path: 'shop/shop-tls' }),
+    );
+    let body: unknown = null;
+    let sent = 0;
+    server.use(
+      http.patch(`/api/v1/locations/${LID}`, async ({ request }) => {
+        sent++;
+        body = await request.json();
+        return HttpResponse.json(locationFixture({ id: LID, kind: 'k8s_tls_secret', verify_address: '2001:db8::7' }));
+      }),
+    );
+    await renderApp(<Harness />);
+    const address = await screen.findByLabelText(/Address to check/);
+    expect(address).toHaveValue('10.20.0.5');
+    expect(screen.getByText("For example a load balancer's internal address. Enter a domain name or an IP address.")).toBeInTheDocument();
+    for (const bad of ['10.0.0.5%2', 'fe80::1%eth0', 'lb internal', '*.example.test']) {
+      await userEvent.clear(address);
+      await userEvent.type(address, bad);
+      await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(await screen.findByText('Enter a domain name or an IP address (an IPv6 address without a zone).')).toBeInTheDocument();
+    }
+    expect(sent).toBe(0);
+    await userEvent.clear(address);
+    await userEvent.type(address, '2001:DB8::7');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(body).toEqual({ verify_address: '2001:DB8::7' }));
+    await userEvent.clear(address);
+    await userEvent.type(address, 'LB.Internal.example.test');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(body).toEqual({ verify_address: 'LB.Internal.example.test' }));
+    await userEvent.clear(address);
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(body).toEqual({ verify_address: '' }), { timeout: 2000 });
+  });
 });

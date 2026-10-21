@@ -6,7 +6,7 @@ import { isApiError } from '../api/client';
 import { updateLocation } from '../api/endpoints';
 import { locationsKey } from '../api/queryKeys';
 import type { CertificateLocation, LocationPatch } from '../api/types';
-import { parsePort, validateSNI } from '../api/validation';
+import { parsePort, validateProbeAddress, validateSNI } from '../api/validation';
 import { Icon } from '../design/Icon';
 import { AppModal } from './AppModal';
 import { ErrorAlert } from './ErrorAlert';
@@ -43,6 +43,7 @@ function SettingsForm({ location, canEdit, onClose }: Props) {
   const [port, setPort] = useState(portText(location));
   const [sni, setSni] = useState(location.verify_sni);
   const [skip, setSkip] = useState(location.skip_verify);
+  const [address, setAddress] = useState(location.verify_address ?? '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [saved, setSaved] = useState(false);
@@ -60,6 +61,7 @@ function SettingsForm({ location, canEdit, onClose }: Props) {
     setPort(portText(location));
     setSni(location.verify_sni);
     setSkip(location.skip_verify);
+    setAddress(location.verify_address ?? '');
   }, [version, location]);
 
   const portValue = parsePort(port);
@@ -69,8 +71,15 @@ function SettingsForm({ location, canEdit, onClose }: Props) {
   // The server folds the name to lower case, so "WWW.Example.test" equals what it stored.
   if (sni.trim().localeCompare(location.verify_sni, 'en', { sensitivity: 'accent' }) !== 0) patch.verify_sni = sni.trim();
   if (skip !== location.skip_verify) patch.skip_verify = skip;
+  // R59: a location that is not a certificate file may name the address Alice probes (a file never has one).
+  const takesAddress = location.kind !== undefined && location.kind !== 'server_file';
+  const addressValid = validateProbeAddress(address);
+  if (takesAddress && address.trim().localeCompare(location.verify_address ?? '', 'en', { sensitivity: 'accent' }) !== 0) {
+    patch.verify_address = address.trim();
+  }
   const changed = Object.keys(patch).length > 0;
-  const valid = portValue !== null && sniProblem === null;
+  const valid = portValue !== null && sniProblem === null && (!takesAddress || addressValid);
+  const addressError = touched && takesAddress && !addressValid ? t('locations.verify.addressInvalid') : undefined;
   const portError = touched && portValue === null ? t('locations.verify.portInvalid') : undefined;
   const sniError =
     touched && sniProblem
@@ -138,6 +147,22 @@ function SettingsForm({ location, canEdit, onClose }: Props) {
           autoComplete="off"
           spellCheck={false}
         />
+        {takesAddress && (
+          <TextInput
+            label={t('locations.verify.address')}
+            description={t('locations.verify.addressHelp')}
+            value={address}
+            onChange={(e) => {
+              reloadFrom.current = null;
+              setAddress(e.currentTarget.value);
+            }}
+            disabled={!canEdit}
+            error={addressError}
+            maxLength={253}
+            autoComplete="off"
+            spellCheck={false}
+          />
+        )}
         <Checkbox
           label={t('locations.verify.skip')}
           description={t('locations.verify.skipHelp')}

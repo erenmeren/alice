@@ -152,6 +152,8 @@ describe('Nginx deployment, website and fact labels cover the specification and 
 
   const stepNames = [
     ...goConsts('internal/providers/types.go', /^StepName/),
+    // R59: the steps of the Windows, BIG-IP and Kubernetes targets.
+    ...goConsts('internal/providers/groundwork.go', /^StepName/),
     ...goConsts('internal/providers/linuxssh/helperproto/helperproto.go', /^Step(?!s)[A-Z]\w*$/),
     // The engine's own steps: the pre-check (stepPrecheck) and every other step* constant of the
     // package (stepRecoverPending, W1 fix round 1).

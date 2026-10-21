@@ -1920,7 +1920,10 @@
       "sniIp": "Bir IP adresi değil, alan adı girin.",
       "sniWildcard": "Joker karakter (*) olmadan tek bir alan adı girin.",
       "sniInvalid": "Yalnızca harf, rakam, nokta ve tire içeren bir alan adı girin. Noktalar arasındaki bir bölüm tireyle başlayıp bitemez.",
-      "notSaved": "Bu web sitesi bu sırada değiştiği için değişikliğiniz kaydedilmedi. Güncel değerler gösteriliyor. Denetleyip yeniden kaydedin."
+      "notSaved": "Bu web sitesi bu sırada değiştiği için değişikliğiniz kaydedilmedi. Güncel değerler gösteriliyor. Denetleyip yeniden kaydedin.",
+      "address": "Denetlenecek adres (boş: Alice'in kendi bulduğu adres)",
+      "addressHelp": "Örneğin bir yük dengeleyicinin iç adresi. Bir alan adı ya da IP adresi girin.",
+      "addressInvalid": "Bir alan adı ya da IP adresi girin (bölge belirtmeyen bir IPv6 adresi)."
     },
     "definedLine": "Satır: {{line}}",
     "configInvalidDiscovery": "Bu sunucudaki {{software}} yapılandırmasında bir hata var. Aşağıdaki web siteleri Alice'in son okuduğu hâliyle gösteriliyor.",
@@ -2103,7 +2106,16 @@
       "rollback_reload": "Yeniden yükleme (tekrar)",
       "verify_old": "Önceki sertifikayı doğrulama",
       "unknown": "Başka bir adım",
-      "recover_pending": "Tamamlanmamış önceki değişikliği geri alma"
+      "recover_pending": "Tamamlanmamış önceki değişikliği geri alma",
+      "import_chain": "Ara sertifikaları içe aktarma",
+      "import_certificate": "Sertifikayı içe aktarma",
+      "bind": "Bağlamayı sertifikaya yöneltme",
+      "upload": "Yükleme",
+      "install": "Kurma",
+      "commit": "Profilleri değiştirme",
+      "sync": "Cihaz grubunu eşitleme",
+      "save": "Yapılandırmayı kaydetme",
+      "write_secret": "Secret'ı yazma"
     },
     "stepStatus": {
       "started": "Çalışıyor",

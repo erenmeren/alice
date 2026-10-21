@@ -19,6 +19,16 @@ export function validateSNI(value: string): SNIProblem | null {
   return s.split('.').every((l) => LABEL.test(l)) ? null : 'invalid';
 }
 
+// validateProbeAddress checks a location's probe address (R59): '' (not set), an IPv4 or IPv6 literal without a zone,
+// or a domain name as validateSNI takes it. The server folds the name to lower case and the address to one form.
+export function validateProbeAddress(value: string): boolean {
+  const s = value.trim();
+  if (s === '') return true;
+  if (IPV4.test(s)) return true;
+  if (s.includes(':')) return /^[0-9A-Fa-f:.]+$/.test(s) && s.length <= 45 && !s.includes('%');
+  return validateSNI(s) === null;
+}
+
 // parsePort reads the port field: '' means "not set" (0 on the wire), a number from 0 to 65535 is
 // kept; anything else is null (invalid). 0 is accepted because the API treats it as "clear".
 export function parsePort(value: string): number | null {
