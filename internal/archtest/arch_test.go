@@ -29,13 +29,13 @@ var rules = map[string][]string{
 	// Scoped access (R49): the value types and the two checks other modules run in their own transactions (which
 	// service a new resource goes to, whether a service accepts another's keys) know the platform only; the services,
 	// environments, trusts and assignment (authz/services) add the audit log. Only the API reaches authz/services.
-	"alice/internal/authz":          {platform},
-	"alice/internal/authz/services": {platform, "alice/internal/authz", "alice/internal/audit/..."},
+	"alice/internal/authz":          {platform, "alice/internal/rbac"},
+	"alice/internal/authz/services": {platform, "alice/internal/authz", "alice/internal/audit/...", "alice/internal/rbac"},
 	"alice/internal/secrets/...":    {platform},
 	"alice/internal/audit/...":      {platform},
 	"alice/internal/license/...":    {platform, "alice/internal/secrets/...", "alice/internal/audit/..."},
 	"alice/internal/notify/...":     {platform, "alice/internal/i18n/...", "alice/internal/secrets/...", "alice/internal/audit/..."},
-	"alice/internal/auth/...":       {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/..."},
+	"alice/internal/auth/...":       {platform, "alice/internal/rbac/...", "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/notify/...", "alice/internal/authz"},
 	"alice/internal/certs/...":      {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers":      {platform, "alice/internal/secrets/..."},
 	"alice/internal/providers/...":  {platform, "alice/internal/providers", "alice/internal/providers/linuxssh/...", "alice/internal/providers/webserver"}, // a web-server provider embeds the shared layer

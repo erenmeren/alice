@@ -119,7 +119,7 @@ type ldapUser struct {
 func lockLDAPUser(ctx context.Context, tx pgx.Tx, directoryID uuid.UUID, uniqueID string) (ldapUser, bool, error) {
 	var u ldapUser
 	var role string
-	err := tx.QueryRow(ctx, `SELECT u.id, u.username::text, u.role, u.email::text, u.disabled_at IS NOT NULL,
+	err := tx.QueryRow(ctx, `SELECT u.id, u.username::text, coalesce(u.role, ''), u.email::text, u.disabled_at IS NOT NULL,
 EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL), u.locked_until
 FROM users u WHERE u.ldap_directory_id = $1 AND u.ldap_unique_id = $2 FOR UPDATE OF u`, directoryID, uniqueID).
 		Scan(&u.id, &u.username, &role, &u.email, &u.disabled, &u.enrolled, &u.lockedUntil)
@@ -361,7 +361,7 @@ func (s *Service) StepUpLDAP(ctx context.Context, p Principal, id LDAPIdentity, 
 				uniqueID    *string
 				curRole     string
 			)
-			if err := tx.QueryRow(ctx, "SELECT ldap_directory_id, ldap_unique_id, role FROM users WHERE id = $1", p.UserID).
+			if err := tx.QueryRow(ctx, "SELECT ldap_directory_id, ldap_unique_id, coalesce(role, '') FROM users WHERE id = $1", p.UserID).
 				Scan(&directoryID, &uniqueID, &curRole); err != nil {
 				return fmt.Errorf("read directory user: %w", err)
 			}

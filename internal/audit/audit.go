@@ -123,6 +123,11 @@ func (l *Log) Append(ctx context.Context, tx pgx.Tx, e Event) (Entry, error) {
 	if err := lockChain(ctx, tx); err != nil {
 		return Entry{}, err
 	}
+	withService, serr := withServiceID(ctx, tx, e)
+	if serr != nil {
+		return Entry{}, serr
+	}
+	e.Details = withService
 	var lastSeq int64
 	prev := make([]byte, sha256.Size)
 	err := tx.QueryRow(ctx, "SELECT seq, hash FROM audit_log ORDER BY seq DESC LIMIT 1").Scan(&lastSeq, &prev)

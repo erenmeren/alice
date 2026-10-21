@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
@@ -78,7 +79,7 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 	if err := v.Err(); err != nil {
 		return "", Token{}, err
 	}
-	if !p.Role.AllowsScope(in.Scope) {
+	if !p.Subject(s.clock.Now()).AllowsScopeAnywhere(in.Scope) {
 		return "", Token{}, ErrTokenScopeNotAllowed
 	}
 	b := make([]byte, 32)
@@ -92,7 +93,7 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 		// against the owner's current row, held with FOR SHARE so UpdateUser (FOR UPDATE)
 		// cannot change it before this transaction commits.
 		var role, source string
-		err := tx.QueryRow(ctx, "SELECT role, auth_source FROM users WHERE id = $1 AND disabled_at IS NULL FOR SHARE", p.UserID).Scan(&role, &source)
+		err := tx.QueryRow(ctx, "SELECT coalesce(role, ''), auth_source FROM users WHERE id = $1 AND disabled_at IS NULL FOR SHARE", p.UserID).Scan(&role, &source)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrUnauthenticated
 		}
@@ -112,7 +113,12 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, m Meta, in NewTo
 		if !live {
 			return ErrUnauthenticated
 		}
-		if !rbac.Role(role).AllowsScope(in.Scope) {
+		// The owner's current grants (the global role and its roles on services, R49 Phase 2) decide the scope.
+		grants, err := authz.LoadGrants(ctx, tx, p.UserID)
+		if err != nil {
+			return err
+		}
+		if !(rbac.Subject{Role: rbac.Role(role), Grants: grants}).AllowsScopeAnywhere(in.Scope) {
 			return ErrTokenScopeNotAllowed
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, expires_at, created_at)
@@ -248,7 +254,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, bearer string) (Princip
 		disabled bool
 	)
 	err := s.pool.QueryRow(ctx, `SELECT t.id, t.scopes[1], t.expires_at, t.revoked_at IS NOT NULL,
-u.id, u.username::text, u.display_name, u.role, u.locale, u.disabled_at IS NOT NULL
+u.id, u.username::text, u.display_name, coalesce(u.role, ''), u.locale, u.disabled_at IS NOT NULL
 FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1`, tokenHash(bearer)).Scan(
 		&p.TokenID, &scope, &expires, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -258,7 +264,15 @@ FROM api_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1`, tok
 		return Principal{}, fmt.Errorf("read token: %w", err)
 	}
 	p.Kind, p.Role, p.Scope = rbac.APIToken, rbac.Role(role), rbac.Scope(scope)
-	if revoked || disabled || !now.Before(expires) || !p.Role.AllowsScope(p.Scope) {
+	if revoked || disabled || !now.Before(expires) {
+		return Principal{}, ErrUnauthenticated
+	}
+	// The owner's roles on services count as its global role does (R49 Phase 2): the token is valid while some grant of
+	// the owner still allows its scope, and acts with the owner's grants as they are now (design §6.3).
+	if p.Grants, err = authz.LoadGrants(ctx, s.pool, p.UserID); err != nil {
+		return Principal{}, err
+	}
+	if !p.Subject(now).AllowsScopeAnywhere(p.Scope) {
 		return Principal{}, ErrUnauthenticated
 	}
 	// Last use is recorded at minute granularity so a busy token does not write on every request.

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/platform/db"
 	"alice/internal/rbac"
 )
@@ -115,7 +116,7 @@ func (s *Service) AuthenticatePassive(ctx context.Context, sessionToken string) 
 		uniqueID, login   *string
 	)
 	err := s.pool.QueryRow(ctx, `SELECT s.kind, s.expires_at, s.idle_expires_at, s.stepup_until, s.revoked_at IS NOT NULL,
-u.id, u.username::text, u.display_name, u.role, u.locale, u.disabled_at IS NOT NULL, u.auth_source, u.ldap_directory_id,
+u.id, u.username::text, u.display_name, coalesce(u.role, ''), u.locale, u.disabled_at IS NOT NULL, u.auth_source, u.ldap_directory_id,
 u.ldap_unique_id, u.ldap_login
 FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1`, h).Scan(
 		&kind, &expires, &idle, &stepUp, &revoked, &p.UserID, &p.Username, &p.DisplayName, &role, &p.Locale, &disabled, &p.AuthSource, &directory,
@@ -140,6 +141,11 @@ FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.id_hash = $1`, h).Scan(
 	p.Kind = rbac.PendingSession
 	if kind == "full" {
 		p.Kind = rbac.UserSession
+		// The person's roles on services (R49 Phase 2), read on every request like the role (SEC-017). A pending
+		// sign-in has none: it may only finish its verification.
+		if p.Grants, err = authz.LoadGrants(ctx, s.pool, p.UserID); err != nil {
+			return Principal{}, err
+		}
 	}
 	return p, nil
 }

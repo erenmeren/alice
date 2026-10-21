@@ -16,10 +16,38 @@ var ErrResourceNotFound = errors.New("services: resource not found")
 // Resolution is where a resource belongs (design §4.5): the owning service (writes need rights there) and the services
 // it is visible from (reads need rights on one of them; the owning service is always one). Certificates and SSH keys
 // are de-duplicated installation-wide, so one row can be on servers of several services.
+//
+// A resource without an owning service has uuid.Nil as Owning: a discovered certificate (read-only, visible through
+// the scopes that saw it) and platform work (a job of no service, visible to global grants only, so Visible is empty).
 type Resolution struct {
 	Owning  uuid.UUID
 	Visible []uuid.UUID
 }
+
+// The resource kinds the routes resolve beyond the ones that can be moved (design §4.5, §11): each is derived from
+// a parent (a location from its server, a scan from its scope, ...) or carries its services itself (a job, an
+// incident).
+const (
+	KindLocation         = "location"           // a certificate location: its server's service
+	KindSSHKeyLocation   = "ssh_key_location"   // an SSH key location: its server's service
+	KindDiscoveryScan    = "discovery_scan"     // a scan: its scope's service
+	KindDiscoveredCert   = "discovery_cert"     // a discovered certificate (by fingerprint): the scopes that saw it
+	KindDeployment       = "deployment"         // a deployment: its server's service; visible from the certificate's too
+	KindKVBinding        = "kv_binding"         // a Key Vault binding: the vault's service; visible from its websites' too
+	KindIncident         = "incident"           // a key-compromise incident: its certificate's service; visible from service_ids
+	KindJob              = "job"                // a job: jobs.service_id (none: platform work)
+	KindRotationPolicy   = "rotation_policy"    // a rotation policy: its key's service; visible from the approved ones too
+	KindRotationRun      = "rotation_run"       // a rotation run: its policy's
+	KindService          = "service"            // a service itself
+	KindServiceTrust     = "service_trust"      // a trust: its target service; visible from (and removable by) either side
+	KindACMEBindingPlace = "acme_binding_place" // the server of an ACME binding's location (by location id)
+	// KindIncidentReach is a certificate as a key-compromise incident would reach it: its service and every service of
+	// a server holding a certificate with its key (what certificate_incidents.service_ids records at the start).
+	KindIncidentReach = "incident_reach"
+	// KindRotationReach is a rotation policy as switching it on or running it reaches: its key's service and every
+	// service of a server holding a live location of the key (what approved_service_ids records, design §5.7).
+	KindRotationReach = "rotation_reach"
+)
 
 // resolvers is one indexed query per resource kind: the owning service, then every service the row is visible from.
 var resolvers = map[string]string{
@@ -47,23 +75,80 @@ FROM ssh_keys k WHERE k.id = $1`,
         JOIN targets t ON t.id = l.target_id WHERE ab.acme_certificate_id = ac.id AND t.deleted_at IS NULL)
 FROM acme_certificates ac WHERE ac.id = $1 AND ac.deleted_at IS NULL`,
 	KindDiscoveryScope: `SELECT service_id, ARRAY[service_id] FROM discovery_scopes WHERE id = $1 AND deleted_at IS NULL`,
+
+	KindLocation: `SELECT t.service_id, ARRAY[t.service_id] FROM certificate_locations l JOIN targets t ON t.id = l.target_id
+WHERE l.id = $1 AND t.deleted_at IS NULL`,
+	KindACMEBindingPlace: `SELECT t.service_id, ARRAY[t.service_id] FROM certificate_locations l JOIN targets t ON t.id = l.target_id
+WHERE l.id = $1`,
+	KindSSHKeyLocation: `SELECT t.service_id, ARRAY[t.service_id] FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id
+WHERE l.id = $1 AND t.deleted_at IS NULL`,
+	KindDiscoveryScan: `SELECT ds.service_id, ARRAY[ds.service_id] FROM discovery_scans sc JOIN discovery_scopes ds ON ds.id = sc.scope_id
+WHERE sc.id = $1`,
+	// A discovered certificate: every scope with an endpoint presenting it, as the leaf or in the chain (design §4.5).
+	KindDiscoveredCert: `SELECT NULL::uuid, ARRAY(
+    SELECT DISTINCT ds.service_id FROM discovery_endpoints e JOIN discovery_scopes ds ON ds.id = e.scope_id
+    WHERE e.fingerprint_sha256 = dc.fingerprint_sha256 OR dc.fingerprint_sha256 = ANY (e.chain_fingerprints))
+FROM discovery_certificates dc WHERE dc.fingerprint_sha256 = $1`,
+	KindDeployment: `SELECT t.service_id, ARRAY(SELECT t.service_id UNION SELECT c.service_id)
+FROM deployments d JOIN targets t ON t.id = d.target_id JOIN certificates c ON c.id = d.certificate_id WHERE d.id = $1`,
+	KindKVBinding: `SELECT v.service_id, ARRAY(
+    SELECT v.service_id
+    UNION SELECT t.service_id FROM certificate_locations l JOIN targets t ON t.id = l.target_id
+        WHERE l.binding_id = b.id AND t.deleted_at IS NULL)
+FROM bindings b JOIN targets v ON v.id = b.kv_target_id WHERE b.id = $1`,
+	KindIncident: `SELECT c.service_id, ARRAY(SELECT c.service_id UNION SELECT unnest(i.service_ids))
+FROM certificate_incidents i JOIN certificates c ON c.id = i.certificate_id WHERE i.id = $1`,
+	KindJob: `SELECT j.service_id, CASE WHEN j.service_id IS NULL THEN '{}'::uuid[] ELSE ARRAY[j.service_id] END FROM jobs j WHERE j.id = $1`,
+	KindRotationPolicy: `SELECT k.service_id, ARRAY(SELECT k.service_id UNION SELECT unnest(p.approved_service_ids))
+FROM rotation_policies p JOIN ssh_keys k ON k.id = p.ssh_key_id WHERE p.id = $1 AND p.deleted_at IS NULL`,
+	KindRotationRun: `SELECT k.service_id, ARRAY(SELECT k.service_id UNION SELECT unnest(p.approved_service_ids))
+FROM rotations r JOIN rotation_policies p ON p.id = r.policy_id JOIN ssh_keys k ON k.id = p.ssh_key_id WHERE r.id = $1`,
+	KindIncidentReach: `SELECT c.service_id, ARRAY(
+    SELECT c.service_id
+    UNION SELECT t.service_id FROM certificate_locations l JOIN certificates k ON k.id = l.certificate_id JOIN targets t ON t.id = l.target_id
+        WHERE k.public_key_sha256 = c.public_key_sha256 AND l.missing_since IS NULL AND t.deleted_at IS NULL)
+FROM certificates c WHERE c.id = $1`,
+	KindRotationReach: `SELECT k.service_id, ARRAY(
+    SELECT k.service_id
+    UNION SELECT t.service_id FROM ssh_key_locations l JOIN targets t ON t.id = l.target_id
+        WHERE l.ssh_key_id = k.id AND l.missing_since IS NULL AND t.deleted_at IS NULL)
+FROM rotation_policies p JOIN ssh_keys k ON k.id = p.ssh_key_id WHERE p.id = $1 AND p.deleted_at IS NULL`,
+	KindService:      `SELECT id, ARRAY[id] FROM services WHERE id = $1`,
+	KindServiceTrust: `SELECT target_service_id, ARRAY[source_service_id, target_service_id] FROM service_trusts WHERE id = $1`,
 }
 
-// Resolve answers where a resource of kind belongs. ErrResourceNotFound; an unknown kind is an error.
-func (s *Store) Resolve(ctx context.Context, kind string, id uuid.UUID) (Resolution, error) {
+// ResolveKinds lists every kind Resolve knows (the API's route table and its scoped IDOR test name them).
+func ResolveKinds() []string {
+	out := make([]string, 0, len(resolvers))
+	for k := range resolvers {
+		out = append(out, k)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Resolve answers where a resource of kind belongs. id is the resource's id (a uuid.UUID), or the fingerprint (a
+// string) of a discovered certificate. ErrResourceNotFound; an unknown kind is an error.
+func (s *Store) Resolve(ctx context.Context, kind string, id any) (Resolution, error) {
 	q, ok := resolvers[kind]
 	if !ok {
 		return Resolution{}, fmt.Errorf("services: no resolver for %q", kind)
 	}
 	var r Resolution
-	err := s.pool.QueryRow(ctx, q, id).Scan(&r.Owning, &r.Visible)
+	var owning *uuid.UUID
+	err := s.pool.QueryRow(ctx, q, id).Scan(&owning, &r.Visible)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Resolution{}, ErrResourceNotFound
 	}
 	if err != nil {
 		return Resolution{}, fmt.Errorf("services: resolve the %s: %w", kind, err)
 	}
+	if owning != nil {
+		r.Owning = *owning
+	}
+	r.Visible = slices.DeleteFunc(r.Visible, func(id uuid.UUID) bool { return id == uuid.Nil })
 	slices.SortFunc(r.Visible, func(a, b uuid.UUID) int { return compareIDs(a, b) })
+	r.Visible = slices.Compact(r.Visible)
 	return r, nil
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/providers"
 	"alice/internal/rbac"
 )
@@ -67,11 +68,14 @@ const (
 	StatusDegraded = "degraded"
 )
 
-// Actor is who asks: the audit actor plus the user and role behind it.
+// Actor is who asks: the audit actor plus the user and role behind it. Role is the person's role on the service of the
+// resource the request names (R49 Phase 2, design §5.5; the global role when it names none). Access is every grant of
+// the person (the zero value: Alice's own work, unrestricted), for the checks made under a row lock (design §5.4).
 type Actor struct {
 	Audit  audit.Actor
 	UserID uuid.UUID
 	Role   rbac.Role
+	Access authz.Access
 }
 
 // jobKind is "user" for a person's request and "system" for Alice's own.

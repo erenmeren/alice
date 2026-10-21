@@ -23,16 +23,24 @@ var (
 	ErrUsernameTaken        = errors.New("auth: username already taken")
 	ErrLastAdmin            = errors.New("auth: the last enabled local administrator cannot be removed")
 	ErrTokenScopeNotAllowed = errors.New("auth: token scope exceeds the owner's role")
+	// ErrBreakGlassGlobalRole: the break-glass account (the administrator the setup wizard created, R10) always keeps a
+	// global role (R49 Phase 2, migration 00028): a person without one holds only role bindings, which an emergency
+	// account must not depend on.
+	ErrBreakGlassGlobalRole = errors.New("auth: the break-glass account keeps a global role")
 )
 
-// NewUser is the input of CreateUser.
+// NoGlobalRole is the Role of NewUser and UserUpdate for a person without a global role (users.role NULL, R49 Phase 2):
+// their rights are their role bindings only, or none yet.
+const NoGlobalRole rbac.Role = ""
+
+// NewUser is the input of CreateUser. Role NoGlobalRole creates a person without a global role.
 type NewUser struct {
 	Username, DisplayName, Email string
 	Role                         rbac.Role
 	Password                     string
 }
 
-// UserUpdate changes selected fields; nil fields stay unchanged.
+// UserUpdate changes selected fields; nil fields stay unchanged. Role pointing at NoGlobalRole removes the global role.
 type UserUpdate struct {
 	DisplayName *string
 	Email       *string
@@ -41,9 +49,28 @@ type UserUpdate struct {
 }
 
 func validateRole(v *validate.Errors, r rbac.Role) {
+	if r == NoGlobalRole {
+		return
+	}
 	if _, ok := rbac.ParseRole(string(r)); !ok {
 		v.Add("role", validate.OneOf, map[string]string{"values": "admin, operator, auditor"})
 	}
+}
+
+// roleParam is a role as the users.role parameter: NULL for NoGlobalRole.
+func roleParam(r rbac.Role) any {
+	if r == NoGlobalRole {
+		return nil
+	}
+	return string(r)
+}
+
+// roleLabel is a role in an audit row's details: "none" for NoGlobalRole.
+func roleLabel(r rbac.Role) string {
+	if r == NoGlobalRole {
+		return "none"
+	}
+	return string(r)
 }
 
 // ListUsers returns all users ordered by username.
@@ -94,14 +121,14 @@ func (s *Service) CreateUser(ctx context.Context, p Principal, m Meta, in NewUse
 	now := s.clock.Now().UTC()
 	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO users (id, username, email, display_name, auth_source, password_hash, role, password_changed_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'local', $5, $6, $7, $7, $7)`, id, in.Username, in.Email, in.DisplayName, hash, string(in.Role), now); err != nil {
+VALUES ($1, $2, $3, $4, 'local', $5, $6, $7, $7, $7)`, id, in.Username, in.Email, in.DisplayName, hash, roleParam(in.Role), now); err != nil {
 			if db.IsUniqueViolationOn(err, UsernameConstraint) {
 				return ErrUsernameTaken
 			}
 			return fmt.Errorf("create user: %w", err)
 		}
 		_, err := s.audit.Append(ctx, tx, audit.Event{Actor: p.Actor(m), Action: "user.created", ObjectType: "user", ObjectID: id.String(),
-			Result: audit.Success, Details: map[string]string{"username": in.Username, "role": string(in.Role)}})
+			Result: audit.Success, Details: map[string]string{"username": in.Username, "role": roleLabel(in.Role)}})
 		return err
 	})
 	if errors.Is(err, ErrUsernameTaken) {
@@ -192,6 +219,16 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 		if (roleChanged || disable) && slices.Contains(admins, id) && len(admins) <= 1 {
 			return ErrLastAdmin
 		}
+		if roleChanged && *in.Role == NoGlobalRole {
+			// The break-glass account keeps a global role (R49 Phase 2; the CHECK of migration 00028 holds it too).
+			var breakGlass bool
+			if err := tx.QueryRow(ctx, "SELECT is_break_glass FROM users WHERE id = $1", id).Scan(&breakGlass); err != nil {
+				return fmt.Errorf("read user: %w", err)
+			}
+			if breakGlass {
+				return ErrBreakGlassGlobalRole
+			}
+		}
 		details := map[string]string{}
 		if in.DisplayName != nil && *in.DisplayName != cur.DisplayName {
 			details["display_name"] = "changed"
@@ -206,8 +243,8 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 			}
 		}
 		if roleChanged {
-			details["role_from"], details["role_to"] = string(cur.Role), string(*in.Role)
-			if _, err := tx.Exec(ctx, "UPDATE users SET role = $2 WHERE id = $1", id, string(*in.Role)); err != nil {
+			details["role_from"], details["role_to"] = roleLabel(cur.Role), roleLabel(*in.Role)
+			if _, err := tx.Exec(ctx, "UPDATE users SET role = $2 WHERE id = $1", id, roleParam(*in.Role)); err != nil {
 				return fmt.Errorf("update user: %w", err)
 			}
 		}
@@ -248,6 +285,12 @@ func (s *Service) UpdateUser(ctx context.Context, p Principal, m Meta, id uuid.U
 			return User{}, aerr
 		}
 		return User{}, ErrLastAdmin
+	}
+	if errors.Is(err, ErrBreakGlassGlobalRole) {
+		if aerr := s.adminFailure(ctx, p, m, "user.updated", id.String(), "break_glass_global_role"); aerr != nil {
+			return User{}, aerr
+		}
+		return User{}, ErrBreakGlassGlobalRole
 	}
 	if err := s.auditSSORefusal(ctx, p, m, err, "user.updated", id); err != nil {
 		return User{}, err

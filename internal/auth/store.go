@@ -16,7 +16,7 @@ import (
 )
 
 // userColumns selects a User from "users u".
-const userColumns = `u.id, u.username::text, u.display_name, u.email::text, u.role, u.locale,
+const userColumns = `u.id, u.username::text, u.display_name, u.email::text, coalesce(u.role, ''), u.locale,
 u.disabled_at IS NOT NULL,
 EXISTS (SELECT 1 FROM user_mfa m WHERE m.user_id = u.id AND m.enrolled_at IS NOT NULL),
 u.last_login_at, u.created_at, u.auth_source, u.oidc_provider_id, u.ldap_directory_id, coalesce(u.ldap_unique_id, ''), coalesce(u.ldap_login, '')`

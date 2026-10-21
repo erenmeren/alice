@@ -175,6 +175,9 @@ type Principal struct {
 	LDAPDirectoryID uuid.UUID
 	LDAPUniqueID    string
 	LDAPLogin       string
+	// Grants are the person's roles on services (role bindings, R49 Phase 2), read with the session or token on every
+	// request (SEC-017); Role is the global role ("" when the person has none). A token's owner's grants.
+	Grants []rbac.ScopedGrant
 }
 
 // Subject converts the principal into the input of rbac.Decide.
@@ -184,6 +187,7 @@ func (p Principal) Subject(now time.Time) rbac.Subject {
 		Role:   p.Role,
 		Scope:  p.Scope,
 		StepUp: p.Kind == rbac.UserSession && now.Before(p.StepUpUntil),
+		Grants: p.Grants,
 	}
 }
 

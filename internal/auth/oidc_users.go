@@ -103,7 +103,7 @@ type ssoUser struct {
 func lockSSOUser(ctx context.Context, tx pgx.Tx, providerID uuid.UUID, subject string) (ssoUser, bool, error) {
 	var u ssoUser
 	var role string
-	err := tx.QueryRow(ctx, `SELECT id, username::text, role, email::text, disabled_at IS NOT NULL FROM users
+	err := tx.QueryRow(ctx, `SELECT id, username::text, coalesce(role, ''), email::text, disabled_at IS NOT NULL FROM users
 WHERE oidc_provider_id = $1 AND oidc_subject = $2 FOR UPDATE`, providerID, subject).Scan(&u.id, &u.username, &role, &u.email, &u.disabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ssoUser{}, false, nil
@@ -434,7 +434,7 @@ func (s *Service) StepUpOIDC(ctx context.Context, sessionHash []byte, userID uui
 			subject    *string
 			curRole    string
 		)
-		err = tx.QueryRow(ctx, `SELECT username::text, role, auth_source, oidc_provider_id, oidc_subject, disabled_at IS NOT NULL
+		err = tx.QueryRow(ctx, `SELECT username::text, coalesce(role, ''), auth_source, oidc_provider_id, oidc_subject, disabled_at IS NOT NULL
 FROM users WHERE id = $1 FOR UPDATE`, userID).Scan(&u.username, &curRole, &source, &providerID, &subject, &u.disabled)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrUnauthenticated
