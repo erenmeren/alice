@@ -984,7 +984,7 @@ What Phase 2 delivers, and where it differs from the text above (rulings in `doc
 - Not built in this phase (each listed under "What remains" in the rulings): the re-check under the row lock inside the
   service functions (`authz.Assert`, §5.4; the checks run in the guard and the handlers before the call); the rotation
   runner's check of `approved_service_ids` (§5.7; the approvals are recorded at switch-on and Run now); `service` on
-  the derived rows and `service_id`/`environment_id` filters on their lists; the perf measurement of the grants read.
+  the derived rows and `service_id`/`environment_id` filters on their lists; the R32 list budgets for a person with role bindings (the grants read is measured: `TestR53GrantsReadBudget`, p95 about 1 ms).
 
 ### Phase 3 — Directory groups, automation accounts, limited tokens (size L, ~8 tasks)
 

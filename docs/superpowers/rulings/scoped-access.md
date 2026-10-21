@@ -163,7 +163,8 @@ Spec: R49 in `docs/superpowers/specs/alice-v1/00-decisions.md`; SEC-029 in `alic
 - The rotation background check of design §5.7 (`approved_service_ids` is recorded, not yet enforced by the runner).
 - Derived rows (deployments, bindings, jobs, incidents) do not show their `service` yet, and their lists have no
   `service_id`/`environment_id` filters (they are filtered by reach).
-- The perf budget (p95 overhead of the grants read < 2 ms) is not measured by the perf suite yet.
+- The perf budget is measured for the grants read only (`internal/api:TestR53GrantsReadBudget`, perf build tag: p95 about 1 ms
+  at 500 services and 200 bindings, budget 2 ms); the lists of a person with role bindings are not in the R32 suite yet.
 - Conflict errors that name another object (design §10, "Error texts naming foreign objects"): the error parameters
   were reviewed (they name what the caller sent, a refused location's id, or what it holds rights on, a destination
   vault's certificate name, and an untrusted refusal names only the services the caller sees), and the leak check covers
