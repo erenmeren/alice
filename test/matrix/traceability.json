@@ -1850,5 +1850,56 @@
    "web/e2e/services.spec.ts:an Administrator adds a service in production, moves a server and its certificate there and filters by it",
    "web/src/pages/ServicesPage.test.tsx:lets an Administrator add a service in an environment and opens it"
   ]
+ },
+ {
+  "id": "SR-11",
+  "status": "test",
+  "tests": [
+   "internal/rbac:TestScopedGrants",
+   "internal/authz/services:TestBindingsAndGrants",
+   "internal/authz/services:TestGrantsCapSSOAdministrators",
+   "internal/auth:TestPersonWithoutAGlobalRole",
+   "migrations:TestMigration00028ScopedBindings"
+  ]
+ },
+ {
+  "id": "SR-12",
+  "status": "test",
+  "tests": [
+   "internal/api:TestScopedIDOR"
+  ]
+ },
+ {
+  "id": "SR-13",
+  "status": "test",
+  "tests": [
+   "internal/api:TestScopedPeopleWorkInTheirService",
+   "internal/api:TestScopedIDOR"
+  ]
+ },
+ {
+  "id": "SR-14",
+  "status": "test",
+  "tests": [
+   "internal/authz/services:TestBindingsAndGrants",
+   "internal/api:TestAuthzMatrix",
+   "internal/api:TestScopedIDOR"
+  ]
+ },
+ {
+  "id": "SR-15",
+  "status": "test",
+  "tests": [
+   "internal/inventory:TestCreatePathsNameAService"
+  ]
+ },
+ {
+  "id": "SR-16",
+  "status": "test",
+  "tests": [
+   "web/e2e/rbac.spec.ts:a person with the Operator role on one service sees only that service and is refused another",
+   "web/src/components/access/access.test.tsx:adds a binding on an environment with a fresh step-up",
+   "web/src/pages/NoAccessPage.test.tsx:still signs out"
+  ]
  }
 ]

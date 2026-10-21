@@ -6,7 +6,7 @@ Status: `test` (named automated tests), `partial` (the named tests prove part of
 evidence says what is missing and which ruling or owner step covers it), `owner` (proven by an
 owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 
-212 IDs: 203 test, 7 partial, 0 owner, 2 deferred, 0 gap.
+218 IDs: 209 test, 7 partial, 0 owner, 2 deferred, 0 gap.
 
 | ID | Case | Status | Evidence |
 | --- | --- | --- | --- |
@@ -222,3 +222,9 @@ owner step), `deferred` (a ruling defers it), `gap` (nothing proves it yet).
 | SR-08 | The SSH key deploy and the Key Vault import across services need a trust at the request and again when their job runs; a... | test | `internal/sshkeys:TestGeneratedKeysAndDeploysAcrossServices`<br>`internal/jobs/kvjobs:TestImportDecisionTable` |
 | SR-09 | Services and environments: the Default service cannot be deleted, a service with resources is kept, names and keys are u... | test | `internal/authz/services:TestServicesLifecycle`<br>`internal/authz/services:TestEnvironments`<br>`internal/authz/services:TestTrusts`<br>`internal/api:TestServiceErrorsHaveTheirCodes` |
 | SR-10 | Browser journey: an Administrator creates a service in production, moves a server and its certificate there, and sees th... | test | `web/e2e/services.spec.ts:an Administrator adds a service in production, moves a server and its certificate there and filters by it`<br>`web/src/pages/ServicesPage.test.tsx:lets an Administrator add a service in an environment and opens it` |
+| SR-11 | Phase 2 (R53) grants: a role binding on a service or an environment is read with every session and token (an environment... | test | `internal/rbac:TestScopedGrants`<br>`internal/authz/services:TestBindingsAndGrants`<br>`internal/authz/services:TestGrantsCapSSOAdministrators`<br>`internal/auth:TestPersonWithoutAGlobalRole`<br>`migrations:TestMigration00028ScopedBindings` |
+| SR-12 | Generated from the route table: an Operator, an Auditor and an Administrator of service B and an operate token of the Op... | test | `internal/api:TestScopedIDOR` |
+| SR-13 | The same people in their own service: lists, details, the dashboard and creates without a service work; rows show allowe... | test | `internal/api:TestScopedPeopleWorkInTheirService`<br>`internal/api:TestScopedIDOR` |
+| SR-14 | Role bindings: adding and removing them is a global Administrator's with step-up, never a token; each is audited with th... | test | `internal/authz/services:TestBindingsAndGrants`<br>`internal/api:TestAuthzMatrix`<br>`internal/api:TestScopedIDOR` |
+| SR-15 | Every audit row about a resource carries the resource's service (details.service_id) | test | `internal/inventory:TestCreatePathsNameAService` |
+| SR-16 | Browser journey: a person with an Operator role on one service signs in, sees only that service's servers and certificat... | test | `web/e2e/rbac.spec.ts:a person with the Operator role on one service sees only that service and is refused another`<br>`web/src/components/access/access.test.tsx:adds a binding on an environment with a fresh step-up`<br>`web/src/pages/NoAccessPage.test.tsx:still signs out` |

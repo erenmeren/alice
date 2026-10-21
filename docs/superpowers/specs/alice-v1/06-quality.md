@@ -459,7 +459,7 @@ Go native fuzzing (`go test -fuzz`), with seed corpora committed under `testdata
 
 ### 25.9 Scoped access (R49)
 
-Phase 1 (services, environments, assignment, trusts); the IDs of the later phases follow from SR-11 on.
+Phase 1 (services, environments, assignment, trusts): SR-01 to SR-10; Phase 2 (scoped role bindings for people, R53): SR-11 to SR-16; the later phases follow from SR-17 on.
 
 | ID | Test |
 |---|---|
@@ -473,6 +473,12 @@ Phase 1 (services, environments, assignment, trusts); the IDs of the later phase
 | SR-08 | The SSH key deploy and the Key Vault import across services need a trust at the request and again when their job runs; a generated key goes to the named service |
 | SR-09 | Services and environments: the Default service cannot be deleted, a service with resources is kept, names and keys are unique, a relabel is audited with both environments, trusts are directed and unique |
 | SR-10 | Browser journey: an Administrator creates a service in production, moves a server and its certificate there, and sees the service and the filters on the lists |
+| SR-11 | Phase 2 (R53) grants: a role binding on a service or an environment is read with every session and token (an environment binding covers a service created in it afterwards and stops covering one relabelled away; a removed binding stops at the next request); an SSO user's Administrator binding counts as Operator while the switch is off; a person without a global role signs in and may hold a token only while a grant allows its scope; the break-glass account keeps a global role (00028) |
+| SR-12 | Generated from the route table: an Operator, an Auditor and an Administrator of service B and an operate token of the Operator get, for every resource kind of service A, the answer of an absent resource (the route's 404 when the permission is held somewhere), a 403 on every platform route, no row of A in any list, count or export, ALC-SVC-0006 on a create into A; no answer names a resource of A; a resource route without a resolver fails |
+| SR-13 | The same people in their own service: lists, details, the dashboard and creates without a service work; rows show allowed_actions; a deploy or a trust reaching another service is ALC-SVC-0012 |
+| SR-14 | Role bindings: adding and removing them is a global Administrator's with step-up, never a token; each is audited with the subject, the role and where; duplicates and unknown references are refused; a person's access explains the grants |
+| SR-15 | Every audit row about a resource carries the resource's service (details.service_id) |
+| SR-16 | Browser journey: a person with an Operator role on one service signs in, sees only that service's servers and certificates, and is refused another service's (the no-access page for a person without any role) |
 
 ---
 
