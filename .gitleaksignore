@@ -53,3 +53,7 @@ f57194fbd2070b393c0e80966782c3405197cfca:internal/testutil/fakeldap/server.go:ge
 # Phase C: the fake 'AAAA' PEM bodies of the haproxy-dump private-key detection test (no key material).
 178978333c0d9cc2fbd420400aeb203e388b4129:cmd/alice-helper/haproxy_test.go:private-key:568
 178978333c0d9cc2fbd420400aeb203e388b4129:cmd/alice-helper/haproxy_test.go:private-key:570
+# Throwaway passwords of the people the scoped access e2e journeys create on a test stack (rbac, service owners).
+3f4d6ceeeec11d1fe254e3201cb4a3404c35ab20:web/e2e/rbac.spec.ts:generic-api-key:54
+3f4d6ceeeec11d1fe254e3201cb4a3404c35ab20:web/e2e/rbac.spec.ts:generic-api-key:55
+20b19407375c2f7d9e084220fc008f2b70917ae0:web/e2e/service-owners.spec.ts:generic-api-key:10
