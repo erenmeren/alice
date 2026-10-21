@@ -3,7 +3,7 @@
 # Never part of a release and never pushed. It holds no key material: its certificate and its SMTP password are
 # generated when the container starts (cmd/alice-fakesmtp serve). Both base images are the ones deploy/Dockerfile pins.
 
-FROM golang:1.27.2-alpine@sha256:f92b6ef800e499660581efdabdf25d9d817a9d124eaf900924f0504e7e27e12d AS build
+FROM golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

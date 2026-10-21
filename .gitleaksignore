@@ -57,3 +57,5 @@ f57194fbd2070b393c0e80966782c3405197cfca:internal/testutil/fakeldap/server.go:ge
 3f4d6ceeeec11d1fe254e3201cb4a3404c35ab20:web/e2e/rbac.spec.ts:generic-api-key:54
 3f4d6ceeeec11d1fe254e3201cb4a3404c35ab20:web/e2e/rbac.spec.ts:generic-api-key:55
 20b19407375c2f7d9e084220fc008f2b70917ae0:web/e2e/service-owners.spec.ts:generic-api-key:10
+# A made-up base64 EAB HMAC key the ACME input normaliser test trims (not key material).
+c0ce5361da0e010d14cf261193a2a3bcaa9aa2b4:internal/inventory/coverage_unit_test.go:generic-api-key:148
