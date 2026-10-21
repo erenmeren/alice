@@ -37,6 +37,14 @@ func TestLocationSettingsAreAdminOnly(t *testing.T) {
 	assert.Equal(t, float64(8443), updated["verify_port"])
 	assert.Equal(t, wwwName, updated["verify_sni"])
 	assert.Equal(t, 1, n.auditCount("location.updated"))
+	assert.Equal(t, "server_file", updated["kind"], "R59: a certificate file")
+	assert.Nil(t, updated["locator"])
+	assert.Equal(t, map[string]any{}, updated["details"])
+	assert.Equal(t, "", updated["verify_address"])
+	// A certificate file takes no probe address (R59 G4): refused, nothing changed.
+	requireStatus(t, n.admin.do(http.MethodPatch, "/api/v1/locations/"+id, map[string]any{"verify_address": "10.0.0.9"}, ifMatchOf("2")),
+		http.StatusUnprocessableEntity)
+	assert.Equal(t, 2.0, n.location(n.admin, n.targetID, wwwCert)["version"])
 
 	requireError(t, n.admin.do(http.MethodPatch, "/api/v1/locations/"+id, body, ifMatchOf("1")), http.StatusPreconditionFailed, "ALC-SYS-0008")
 	requireError(t, n.admin.do(http.MethodPatch, "/api/v1/locations/"+id, body), http.StatusPreconditionFailed, "ALC-SYS-0008")

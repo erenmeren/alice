@@ -2238,7 +2238,8 @@ paths:
       description: >-
         If-Match must be a single strong validator with the location's current version (its version field), for
         example "3"; a missing or malformed If-Match, a weak validator, a list or * answers 412 ALC-SYS-0008, as does
-        a version that is no longer current. At least one field; verify_port 0 and verify_sni "" clear the value.
+        a version that is no longer current. At least one field; verify_port 0, verify_sni "" and verify_address ""
+        clear the value. verify_address is refused (422 validation.pattern) for a certificate file (kind server_file).
         Keys are matched exactly (lower case) and each may appear once; anything else, or a value of the wrong
         type, is 400. The body is limited to 4 KiB (413 ALC-SYS-0007). Refused with 403 ALC-LIC-0001 while the
         license is locked.
@@ -8653,12 +8654,12 @@ components:
       required: [id, target_id, target_name, cert_path, key_path, resolved_cert_path, key_type, certificate, servers, supported,
         unsupported_reason, problem, key_problem, inherited, custom_location, symlinked, key_exists, key_mode, key_owner, key_group,
         warnings, deployed_fingerprint, changed_outside_at, verify_port, verify_sni, skip_verify, first_seen_at, last_seen_at,
-        missing_since, version, active_deployment_id, target_type, deployable]
+        missing_since, version, active_deployment_id, target_type, deployable, kind, locator, details, verify_address]
       properties:
         id: { type: string, format: uuid }
         target_id: { type: string, format: uuid }
         target_name: { type: string }
-        cert_path: { type: string }
+        cert_path: { type: string, description: 'A certificate file''s path; for another kind the canonical text of its locator' }
         key_path: { type: string }
         resolved_cert_path: { type: string, description: 'The file a symbolic link leads to; "" when not known' }
         key_type: { type: string, description: "The key type of the certificate in the file: rsa, ecdsa or \"\"" }
@@ -8697,7 +8698,27 @@ components:
         missing_since: { type: [string, "null"], format: date-time }
         version: { type: integer, minimum: 1, description: 'The value If-Match names for PATCH /locations/{id}' }
         active_deployment_id: { type: [string, "null"], format: uuid }
-        target_type: { type: string, enum: [nginx, apache, haproxy], description: "The server's target type (its web server software)" }
+        target_type:
+          type: string
+          enum: [nginx, apache, haproxy, windows, f5_bigip, kubernetes]
+          description: "The server's target type (its web server software); windows, f5_bigip and kubernetes are reserved (R59)"
+        kind:
+          type: string
+          enum: [server_file, win_sslbinding, f5_clientssl, k8s_tls_secret]
+          description: >-
+            R59. The location's kind: a certificate file (server_file), or a Windows http.sys SSL binding, a BIG-IP
+            client SSL profile entry, a Kubernetes TLS Secret (reserved for the targets that report them).
+        locator:
+          description: >-
+            R59. The identity of a location that is not a file (a flat object of short strings, integers and booleans);
+            null for a certificate file.
+          oneOf:
+            - { type: object, additionalProperties: { type: [string, integer, boolean] } }
+            - { type: "null" }
+        details: { type: object, description: 'R59. Facts of the location''s kind shown as they are; {} for a certificate file' }
+        verify_address:
+          type: string
+          description: 'R59. Where Alice''s probe reaches the endpoints (a DNS name or an IP literal); "" when not set, always "" for a file' 
         deployable:
           type: boolean
           description: >-
@@ -8814,6 +8835,10 @@ components:
         verify_port: { type: integer, minimum: 0, maximum: 65535, description: '0 clears (the website''s own ports are probed)' }
         verify_sni: { type: string, maxLength: 253, description: 'A DNS name; "" clears (the first server name is sent)' }
         skip_verify: { type: boolean }
+        verify_address:
+          type: string
+          maxLength: 253
+          description: 'R59. A DNS name or an IP literal Alice probes instead of the address it derives; "" clears. Not for a certificate file.'
     CSR:
       type: object
       description: A signing request (public). Its key stays in Alice.
@@ -8886,8 +8911,9 @@ components:
           type: string
           description: >-
             Known values: verify_current, kv_secret, recover_pending, backup, write_key, write_cert, config_test, reload,
-            journal, restore, rollback_config_test, rollback_reload, verify, verify_old; a newer server may add
-            others.
+            journal, restore, rollback_config_test, rollback_reload, verify, verify_old, import_chain, import_certificate,
+            bind, upload, install, commit, sync, save, write_secret (the last nine: the Windows, BIG-IP and Kubernetes
+            targets, R59); a newer server may add others.
         status: { type: string, enum: [started, ok, failed, skipped] }
         at: { type: string, format: date-time }
         params:

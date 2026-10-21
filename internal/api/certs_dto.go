@@ -151,6 +151,11 @@ type locationDTO struct {
 	// Observation (R52): what the location should have, what Alice last deployed and what is observed today; null for
 	// a location that follows no binding.
 	Observation *locationObservationDTO `json:"observation"`
+	// R59 G1, G4: the kind, the locator (null for a file), the kind's details ({} for a file) and the probe address.
+	Kind          string         `json:"kind"`
+	Locator       map[string]any `json:"locator"`
+	Details       map[string]any `json:"details"`
+	VerifyAddress string         `json:"verify_address"`
 }
 
 func idPtr(id *uuid.UUID) *string {
@@ -185,7 +190,11 @@ func locationJSON(l inventory.CertificateLocation) locationDTO {
 		ChangedOutsideAt: utcPtr(l.ChangedOutsideAt), VerifyPort: l.VerifyPort, VerifySNI: l.VerifySNI, SkipVerify: l.SkipVerify,
 		FirstSeenAt: l.FirstSeenAt.UTC(), LastSeenAt: l.LastSeenAt.UTC(), MissingSince: utcPtr(l.MissingSince), Version: l.Version,
 		ActiveDeploymentID: idPtr(l.ActiveDeploymentID), TargetType: l.TargetType, Deployable: l.Deployable,
-		Observation: observationJSON(l.Observation),
+		Observation: observationJSON(l.Observation), Kind: string(l.Kind.OrFile()), Locator: l.Locator, Details: l.Details,
+		VerifyAddress: l.VerifyAddress,
+	}
+	if d.Details == nil {
+		d.Details = map[string]any{}
 	}
 	if c := l.Certificate; c != nil {
 		d.Certificate = &certificateRefDTO{ID: c.ID.String(), SubjectCN: c.SubjectCN, Label: c.Label, Fingerprint: c.Fingerprint,

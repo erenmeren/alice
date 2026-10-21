@@ -415,17 +415,18 @@ func (s *server) updateLocation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		VerifyPort *int    `json:"verify_port"`
-		VerifySNI  *string `json:"verify_sni"`
-		SkipVerify *bool   `json:"skip_verify"`
+		VerifyPort    *int    `json:"verify_port"`
+		VerifySNI     *string `json:"verify_sni"`
+		SkipVerify    *bool   `json:"skip_verify"`
+		VerifyAddress *string `json:"verify_address"`
 	}
-	if !s.decodeExact(w, r, &req, maxLocationBody, "verify_port", "verify_sni", "skip_verify") {
+	if !s.decodeExact(w, r, &req, maxLocationBody, "verify_port", "verify_sni", "skip_verify", "verify_address") {
 		return
 	}
 	// The value rules (port 0..65535 with 0 clearing, a DNS name or "" for the name, at least one
 	// field) are the inventory's.
 	l, err := s.deps.Inventory.UpdateLocation(r.Context(), s.actor(r), id, version,
-		inventory.LocationPatch{VerifyPort: req.VerifyPort, VerifySNI: req.VerifySNI, SkipVerify: req.SkipVerify})
+		inventory.LocationPatch{VerifyPort: req.VerifyPort, VerifySNI: req.VerifySNI, SkipVerify: req.SkipVerify, VerifyAddress: req.VerifyAddress})
 	if err != nil {
 		s.fail(w, r, err)
 		return
