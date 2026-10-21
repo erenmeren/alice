@@ -112,7 +112,8 @@ func checkAssign(resources []Resource) validate.Errors {
 // write that ran first is followed by the move), moved, and the binding locations that end up crossing services
 // without a trust are listed. One audit row service.assigned names every resource moved. With dryRun nothing is
 // changed or audited: the answer says what the move would do. An unknown, deleted or repeated resource is a validation
-// error on resources.N; ErrNotFound for dest.
+// error on resources.N; ErrNotFound for dest. A certificate, signing request or ACME certificate with a name outside the
+// destination's domains is an *authz.DomainError (R55), in a dry run too.
 func (s *Store) Assign(ctx context.Context, a Actor, dest uuid.UUID, resources []Resource, dryRun bool) (AssignResult, error) {
 	if v := checkAssign(resources); len(v) > 0 {
 		return AssignResult{}, v
@@ -133,6 +134,10 @@ func (s *Store) Assign(ctx context.Context, a Actor, dest uuid.UUID, resources [
 			return err
 		}
 		out.Destination = refs[dest]
+		policy, err := authz.LoadPolicy(ctx, tx, dest) // the destination's domains judge the certificates moved in (R55)
+		if err != nil {
+			return err
+		}
 		index := map[Resource]int{}
 		for i, r := range resources {
 			index[r] = i
@@ -184,6 +189,11 @@ func (s *Store) Assign(ctx context.Context, a Actor, dest uuid.UUID, resources [
 					audited = append(audited, kind+":"+id.String())
 				}
 			}
+			if err := checkMovedNames(ctx, tx, policy, kind, moved[kind], func(id uuid.UUID) string {
+				return "resources." + strconv.Itoa(index[Resource{Type: kind, ID: id}])
+			}); err != nil {
+				return err
+			}
 			if len(moved[kind]) > 0 {
 				if _, err := tx.Exec(ctx, "UPDATE "+t.table+" SET service_id = $2 WHERE id = ANY($1)", moved[kind], dest); err != nil {
 					return fmt.Errorf("services: move the %s rows: %w", kind, err)
@@ -209,6 +219,42 @@ func (s *Store) Assign(ctx context.Context, a Actor, dest uuid.UUID, resources [
 		return AssignResult{}, err
 	}
 	return out, nil
+}
+
+// namesOf reads the names the domains rule judges of each kind that carries certificate names: a certificate's common
+// name and subject alternative names, a signing request's names, an ACME certificate's names.
+var namesOf = map[string]string{
+	KindCertificate:     "SELECT id, subject_cn, sans FROM certificates WHERE id = ANY($1) ORDER BY id",
+	KindCSR:             "SELECT id, common_name, sans FROM csr_requests WHERE id = ANY($1) ORDER BY id",
+	KindACMECertificate: "SELECT id, '', names FROM acme_certificates WHERE id = ANY($1) ORDER BY id",
+}
+
+// checkMovedNames is the destination's domains rule (design §7.3) for the certificates, signing requests and ACME
+// certificates an assignment moves in: an *authz.DomainError naming the first name outside and the resource's field.
+func checkMovedNames(ctx context.Context, tx pgx.Tx, policy authz.Policy, kind string, ids []uuid.UUID, field func(uuid.UUID) string) error {
+	query, ok := namesOf[kind]
+	if !ok || len(ids) == 0 || len(policy.Domains) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, query, ids)
+	if err != nil {
+		return fmt.Errorf("services: read the names of the %s rows: %w", kind, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			id   uuid.UUID
+			cn   string
+			sans []string
+		)
+		if err := rows.Scan(&id, &cn, &sans); err != nil {
+			return fmt.Errorf("services: read the names of a %s row: %w", kind, err)
+		}
+		if err := policy.CheckNames(field(id), authz.CertificateNames(cn, sans)); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 // untrustedAfter lists the live binding locations that touch a moved server, Key Vault or ACME certificate and now

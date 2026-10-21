@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,6 +39,11 @@ var (
 	ErrEnvironmentInUse    = errors.New("services: a service or a role binding uses the environment")
 	ErrTrustExists         = errors.New("services: the trust exists")
 	ErrVersionMismatch     = errors.New("services: the row changed since it was read")
+	// ErrPolicyVersion: the policy changed since the caller read it (the body's version is not the current one).
+	ErrPolicyVersion = errors.New("services: the policy changed since it was read")
+	// ErrDomainsGlobalOnly: the policy's domains change, and the caller holds services.policy on the service only (a
+	// service Administrator widening their own service's names would defeat the rule, design §7.3).
+	ErrDomainsGlobalOnly = errors.New("services: the policy's domains are changed by a global Administrator only")
 )
 
 // NotEmptyError refuses deleting a service that still owns resources: how many of each kind.
@@ -131,7 +137,7 @@ func (s Service) Ref() authz.ServiceRef {
 	return authz.ServiceRef{ID: s.ID, Name: s.Name, Environment: s.Environment}
 }
 
-// Policy is one version of a service's policy (version 1 is the empty policy {"schema":1}; Phase 5 writes later ones).
+// Policy is one version of a service's policy (version 1 is the empty policy {"schema":1}; SetPolicy writes later ones).
 type Policy struct {
 	Version       int
 	Document      json.RawMessage
@@ -692,4 +698,78 @@ func scanPolicy(r pgx.CollectableRow) (Policy, error) {
 	err := r.Scan(&p.Version, &body, &p.CreatedBy, &p.CreatedByName, &p.CreatedAt)
 	p.Document = body
 	return p, err
+}
+
+// SetPolicy saves a new version of a service's policy (R55, design §7.3): body is the whole document (authz.ParsePolicy:
+// validate.Errors, authz.ErrPolicyMalformed, *authz.FieldUnavailableError), version the policy version the caller read
+// (ErrPolicyVersion when it is not the current one). The domains change only with domainsGlobal (the caller holds a
+// global grant; ErrDomainsGlobalOnly otherwise). Every ACME provider named must exist (a field error otherwise). The
+// version is stored as policy_version + 1 with the caller as its author, and audited service.policy_changed with the
+// top-level keys that changed; a document equal to the current one stores nothing and answers the current version.
+// ErrNotFound.
+func (s *Store) SetPolicy(ctx context.Context, a Actor, id uuid.UUID, version int, body json.RawMessage, domainsGlobal bool) (Policy, error) {
+	next, err := authz.ParsePolicy(body, "body.")
+	if err != nil {
+		return Policy{}, err
+	}
+	err = db.InTx(ctx, s.pool, func(tx pgx.Tx) error {
+		cur, err := getService(ctx, tx, id, true)
+		if err != nil {
+			return err
+		}
+		if cur.PolicyVersion != version {
+			return ErrPolicyVersion
+		}
+		old, err := authz.LoadPolicy(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !domainsGlobal && !authz.SameDomains(old, next) {
+			return ErrDomainsGlobalOnly
+		}
+		if err := checkPolicyProviders(ctx, tx, next); err != nil {
+			return err
+		}
+		keys := authz.ChangedKeys(old, next)
+		if len(keys) == 0 {
+			return nil
+		}
+		now := s.clock.Now().UTC()
+		if _, err := tx.Exec(ctx, `INSERT INTO service_policies (service_id, version, body, created_by, created_at) VALUES ($1, $2, $3, $4, $5)`,
+			id, version+1, []byte(next.Document()), a.createdBy(), now); err != nil {
+			return fmt.Errorf("services: store the policy: %w", err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE services SET policy_version = $2 WHERE id = $1", id, version+1); err != nil {
+			return fmt.Errorf("services: change the policy version: %w", err)
+		}
+		return s.appendAudit(ctx, tx, a, "service.policy_changed", "service", id, map[string]string{"name": cur.Name,
+			"old_version": strconv.Itoa(version), "version": strconv.Itoa(version + 1), "fields": strings.Join(keys, ",")})
+	})
+	if err != nil {
+		return Policy{}, err
+	}
+	return s.Policy(ctx, id)
+}
+
+// checkPolicyProviders refuses an ACME provider the policy names that does not exist (or was deleted), as an unknown
+// reference: a field error on body.acme.providers.N. The rows are key-share locked, so a deletion waits for the save.
+func checkPolicyProviders(ctx context.Context, tx pgx.Tx, p authz.Policy) error {
+	if p.ACME == nil || len(p.ACME.Providers) == 0 {
+		return nil
+	}
+	rows, err := tx.Query(ctx, "SELECT id FROM acme_providers WHERE id = ANY($1) AND deleted_at IS NULL FOR KEY SHARE", p.ACME.Providers)
+	if err != nil {
+		return fmt.Errorf("services: read the ACME providers: %w", err)
+	}
+	found, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
+	if err != nil {
+		return fmt.Errorf("services: read the ACME providers: %w", err)
+	}
+	var v validate.Errors
+	for i, id := range p.ACME.Providers {
+		if !slices.Contains(found, id) {
+			v.Add("body.acme.providers."+strconv.Itoa(i), validate.Required, nil)
+		}
+	}
+	return v.Err()
 }

@@ -167,6 +167,10 @@ const (
 	// AccessManage adds and removes role bindings (R49 Phase 2, design §5.2): who holds which role on which service or
 	// environment. A global Administrator's browser session with step-up, never an API token, like the services.
 	AccessManage Permission = "access.manage"
+	// ServicesPolicy changes a service's policy (R55, design §5.2, §7.3): an Administrator of that service with step-up,
+	// never an API token. The policy's domains need a global grant besides (the API checks it): a service
+	// Administrator widening their own service's names would defeat the rule.
+	ServicesPolicy Permission = "services.policy"
 )
 
 // Policy describes who may use a permission.
@@ -232,6 +236,7 @@ var policies = map[Permission]Policy{
 	ServicesAssign: {Roles: []Role{Admin}, StepUp: true},
 	ServicesTrust:  {Roles: []Role{Admin}, StepUp: true},
 	AccessManage:   {Roles: []Role{Admin}, StepUp: true},
+	ServicesPolicy: {Roles: []Role{Admin}, StepUp: true},
 }
 
 // PolicyFor returns the policy of p. The returned Roles slice is a copy.
