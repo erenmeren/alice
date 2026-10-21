@@ -283,6 +283,21 @@ func TestRollbackDeploymentUnderTheGuard(t *testing.T) {
 	})
 }
 
+// A deployment whose guard lists are not what the helper takes is the caller's error: refused before anything is sent,
+// the site's pair untouched.
+func TestDeployWithListsTheHelperDoesNotTake(t *testing.T) {
+	e := newEnv(t)
+	req := e.req(t, e.newLeaf())
+	req.Guard = providers.RollbackGuard{ForbiddenLeaf: []string{"NOT-HEX"}, Required: true}
+	out, err := e.open(t).DeployCertificate(context.Background(), req, nil)
+	require.Error(t, err)
+	require.NoError(t, providers.CheckDeployReturn(out, err))
+	assert.Equal(t, providers.DeployNoChange, out.Result)
+	assert.Equal(t, reasonUnexpected, out.Reason)
+	assert.Empty(t, e.emu.DeployStdins(), "nothing was sent")
+	assert.Equal(t, string(e.leaf.KeyPEM), string(e.emu.NginxFile(wwwKey)))
+}
+
 func TestDeployInputCarriesTheLists(t *testing.T) {
 	spki, leaf := []string{strings.Repeat("a", 64), strings.Repeat("b", 64)}, []string{strings.Repeat("c", 64)}
 	b, ok := deployInput([]byte("CERT"), []byte("KEY"), spki, leaf)

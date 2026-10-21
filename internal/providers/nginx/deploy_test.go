@@ -1269,6 +1269,18 @@ func TestFenceDeployment(t *testing.T) {
 		e.emu.HoldLock(false)
 		assert.Empty(t, e.emu.NginxPhase(e.op.String()), "no journal")
 	})
+	t.Run("answers outside the helper's contract are errors, never a fence", func(t *testing.T) {
+		e := newEnv(t)
+		for name, r := range map[string]helperproto.NginxStatusResponse{
+			"fenced while another helper held the lock": {OK: true, Phase: helperproto.PhaseFenced, Active: true},
+			"fenced with a failed step":                 {OK: true, Phase: helperproto.PhaseFenced, FailedStep: "reload"},
+			"fenced with a new certificate":             {OK: true, Phase: helperproto.PhaseFenced, NewCertSHA256: strings.Repeat("a", 64)},
+		} {
+			scriptOn(e, helperproto.SubNginxFence, linuxsshtest.Response{Stdout: answerJSON(t, r)})
+			_, err := fence(t, e)
+			assert.Equal(t, "ssh.protocol_error", providerErr(t, err).Code, name)
+		}
+	})
 	t.Run("sudoers without the line: an error", func(t *testing.T) {
 		e := newEnv(t)
 		e.emu.SetNginxProfile(false)
