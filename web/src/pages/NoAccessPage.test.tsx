@@ -32,8 +32,8 @@ describe('NoAccessPage', () => {
       }),
     );
     const { router } = await renderRoute('/certificates');
-    const page = await screen.findByTestId('no-access');
-    await userEvent.click(within(page).getByRole('button', { name: 'Sign out' }));
+    await screen.findByTestId('no-access');
+    await userEvent.click(screen.getByRole('button', { name: 'Sign out' })); // the shell's own, the page's only one
     await waitFor(() => expect(router.state.location.pathname).toBe('/login'));
     expect(loggedOut).toBe(true);
   });
