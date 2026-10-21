@@ -338,6 +338,17 @@ Each case has an ID, is automated unless marked (M) manual, and lists observable
 
 ---
 
+### 24.6 ACME built-in DNS providers (R57)
+
+| ID | Failure injected (test environment) | Expected behavior |
+|---|---|---|
+| F-98 | The DNS provider refuses the credentials: a wrong Cloudflare token, a token limited to other zones, an AWS signature or key the fake refuses, a refused assumed role, an Entra sign-in that fails (wrong secret, unknown tenant, unassigned managed identity), Azure writes denied | The order fails with `acme.dns_auth_failed` (ALC-ACM-0043), class permanent; nothing is published; no provider answer text in an error, a log or the audit |
+| F-99 | The DNS provider is down or limits the requests: 5xx, 429, a reset connection, Route 53 Throttling, an Entra or metadata outage | The order fails with `acme.dns_provider_error` (ALC-ACM-0044), class transient (renewal retries); what was published is removed |
+| F-100 | No zone of the account holds the name: no zone, a private zone only, an unknown resource group, NoSuchHostedZone | `acme.dns_zone_not_found` (ALC-ACM-0042), permanent; the longest public zone wins when several hold the name |
+| F-101 | The provider never reports the change live (Route 53 stays PENDING) | Present gives up at the poll time (`acme.not_issued_in_time`, transient); the record is removed |
+| F-102 | Another writer changes the record set between Alice's read and write (Azure 412), or a removal races a delete (Route 53) | Alice reads the set again and retries (at most 3 times), keeping every other value; a value already gone is success |
+| F-103 | The removal fails after the order (the provider fails the delete), then the provider is deleted | The cleanup job retries and removes the record with the deleted provider's stored credentials |
+
 ## 25. Security Test Plan
 
 ### 25.1 Authorization matrix (generated)
@@ -367,6 +378,7 @@ A set of canary secrets is created per test run and inserted everywhere secrets 
 | S-09 | Private key download | Requires Admin plus MFA step-up plus non-empty reason; audit event written before the response is sent; response has `Cache-Control: no-store`; second download attempt is also audited |
 | S-10 | Print/debug endpoints | `/debug/pprof`, `/metrics` and `/test/*` are not reachable in release build without authentication (`/test/*` absent) |
 | S-11 | Memory hygiene (best effort) | Decrypted key material is held in `[]byte` and zeroed after use (unit tests for the helper; no guarantee claimed against the Go GC) |
+| S-12 | Built-in DNS providers (R57): a Cloudflare token, an AWS secret access key, an Azure client secret and an Azure sign-in certificate's key, given through the API, replaced, and used by Test runs through the three fakes | No canary in any API answer (lists, details, audit, jobs), table row, log, e-mail or error; the credentials are sealed (AAD acme_hooks/<id>/secret) and write-only; a canary in a provider's error answer never reaches an error |
 
 ### 25.3 Rate limiting and lockout
 

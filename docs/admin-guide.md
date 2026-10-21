@@ -1839,11 +1839,13 @@ records who registered the account, the terms' address and whether an external a
 
 ### DNS hooks (DNS proof)
 
-With the DNS proof (DNS-01) the authority looks up a TXT record `_acme-challenge.<name>` in your DNS. Alice does not
-talk to DNS servers or DNS providers itself: you run a small HTTPS service, the **DNS hook**, that adds and removes
-that record in your DNS, and Alice calls it. A hook can be a few lines in front of your DNS provider's API, your
-internal DNS automation or a dynamic-update (RFC 2136) script. The DNS proof is the only proof for wildcard names
-(`*.example.com`) and needs nothing on your web servers.
+With the DNS proof (DNS-01) the authority looks up a TXT record `_acme-challenge.<name>` in your DNS. Alice adds and
+removes that record in one of two ways: through a **built-in DNS provider** (Cloudflare, Azure DNS or Amazon Route 53,
+next section), where Alice signs in to the provider's API itself, or through a **DNS hook**, a small HTTPS service of
+yours that Alice calls. A hook can be a few lines in front of any other DNS provider's API, your internal DNS
+automation or a dynamic-update (RFC 2136) script. The DNS proof is the only proof for wildcard names
+(`*.example.com`) and needs nothing on your web servers. **Settings → Certificate authorities → DNS publishing** lists
+both; a certificate chooses one of them.
 
 Choose **Add DNS hook** under **Settings → Certificate authorities**:
 
@@ -1880,6 +1882,71 @@ User-Agent: alice-acme/1
 **Remove** is refused while certificates use the hook (`ALC-ACM-0019`). Records that a failed or interrupted order
 left behind are removed by a clean-up task, also while the license is locked; it tries again every hour for up to
 seven days.
+
+### Built-in DNS providers (DNS proof)
+
+Choose **Add DNS provider** under **Settings → Certificate authorities**, then the provider. Saving contacts no one:
+the provider is first called when a certificate is ordered. The credentials are encrypted like every secret of Alice,
+are never shown again (**Credentials stored**), and an empty credential field on a change keeps them. The name, the
+**Allowed names** and the two waits work as for a hook; for a provider, **Time to wait for the record** bounds the wait
+for the provider to report the record live (Route 53 reports when every one of its servers has it; Cloudflare and
+Azure DNS have it at once), and **Wait after adding the record** follows it.
+
+Alice finds the zone of each name itself: of the zones the credentials can see, the one with the longest name that
+the record name ends in (a zone `www.example.com` before `example.com`, a zone `_acme-challenge.example.com` before
+both). Public zones only. A CNAME at `_acme-challenge.<name>` that delegates the record to another zone is not
+followed; use a hook for that setup. A wildcard and its base name share the record name and keep both values side by
+side; Alice removes only the value it added.
+
+**Cloudflare.** An **API token** (never the Global API Key) with the permissions **Zone → Zone → Read** and
+**Zone → DNS → Edit**, limited to the zones Alice may use (Cloudflare dashboard, **My Profile → API Tokens → Create
+Token**, template **Edit zone DNS**). A zone the token cannot see reads as "no zone holds this name"
+(`ALC-ACM-0042`). Alice talks to `api.cloudflare.com` only. The record's TTL is at least 60 seconds (Cloudflare's
+minimum).
+
+**Azure DNS.** The zones of one **Subscription ID** and **Resource group**. **Sign-in method**, as for a Key Vault:
+
+- **Client secret**: an app registration (service principal) with its **Directory (tenant) ID**, **Application
+  (client) ID** and a client secret. Alice does not know when the secret expires: renew it in Azure before then and
+  enter the new one here.
+- **Certificate**: the app registration's certificate and its RSA private key (PEM; a PFX through the API,
+  `pfx_base64`). Alice shows its thumbprint.
+- **Managed identity of this machine**: when Alice runs on an Azure VM; optionally the client ID of a user-assigned
+  identity. No secret is stored.
+
+The identity needs the role **DNS Zone Contributor** on the zone (or the resource group) and **Reader** on the
+resource group to list the zones. Alice talks to `login.microsoftonline.com` and `management.azure.com` only (and to
+`169.254.169.254` for a managed identity), public cloud only, with the same guards as the Key Vault sign-in: it refuses
+to sign in while `AZURE_REGIONAL_AUTHORITY_NAME`, `MSAL_FORCE_REGION` or `AZURE_SDK_GO_LOGGING` is set in its
+environment.
+
+**Amazon Route 53.** An IAM **Access key ID** and its **Secret access key**, and optionally a **Role to assume** (an IAM
+role ARN, with an **External ID** when the role's trust policy asks for one): Alice then signs in to STS with the key
+and works with the role's temporary credentials (15 minutes, renewed as needed). The policy of the key, or of the role,
+needs:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow", "Action": ["route53:ListHostedZonesByName"], "Resource": "*"},
+    {"Effect": "Allow", "Action": ["route53:ListResourceRecordSets", "route53:ChangeResourceRecordSets"],
+     "Resource": "arn:aws:route53:::hostedzone/<zone ID>"},
+    {"Effect": "Allow", "Action": ["route53:GetChange"], "Resource": "arn:aws:route53:::change/*"}
+  ]
+}
+```
+
+and the key `sts:AssumeRole` on the role when one is used. Alice talks to `route53.amazonaws.com` and
+`sts.amazonaws.com` only (requests signed with AWS Signature Version 4 for `us-east-1`). Private hosted zones are
+skipped. Route 53 has no conditional write: do not let another tool change the same `_acme-challenge` record while
+Alice orders.
+
+When it fails: no zone holds the name (`ALC-ACM-0042`), the provider refused the credentials (`ALC-ACM-0043`; a
+permanent failure, automatic renewal stops until you fix them), or the provider failed or could not be reached
+(`ALC-ACM-0044`; an outage, a rate limit or a server error is retried by automatic renewal). Alice never shows or
+stores the provider's answer. **Remove** is refused while certificates use the provider (`ALC-ACM-0019`); a removed
+provider's credentials are still used to remove records an earlier order left behind.
 
 ### The web proof (HTTP-01)
 

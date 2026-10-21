@@ -807,7 +807,7 @@ renews and deploys automatically. Filter by **Status** and **Certificate authori
    Each shows the domain endings it may issue for.
 2. **Names**: up to 100 names, each with at least two parts (`www.example.com`). A wildcard is only allowed as the whole
    first part (`*.example.com`). No IP addresses. Alice warns at once about a name outside the allowed endings.
-3. **Proof method**: **DNS proof (DNS hook)**, with the hook to use; or **Web proof (file on the web server)**, with
+3. **Proof method**: **DNS proof (DNS record)**, with the DNS provider or hook to use; or **Web proof (file on the web server)**, with
    the Nginx server that answers for the names on port 80 (not for wildcard names). **Prepare the server once**
    shows the three Nginx lines the server's administrator adds.
 4. **Websites and options**: **Key type** (ECDSA P-256 is recommended; ECDSA P-384, RSA 2048, 3072 or 4096),

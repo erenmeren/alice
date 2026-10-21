@@ -39,7 +39,8 @@ Data flows:
   ([nginx-host-preparation.md](nginx-host-preparation.md)).
 - Alice reads certificates from Azure Key Vault over HTTPS when vaults are configured ([azure-setup.md](azure-setup.md)).
 - When an administrator sets up a certificate authority (ACME), Alice talks to that authority over HTTPS, calls the
-  customer's DNS hook over HTTPS, and for the web proof checks `http://<name>/.well-known/acme-challenge/…` on port
+  customer's DNS hook over HTTPS or the API of a built-in DNS provider (Cloudflare, Azure DNS, Amazon Route 53) with
+  the credentials the administrator gave, and for the web proof checks `http://<name>/.well-known/acme-challenge/…` on port
   80 itself; nothing is contacted before an administrator acts
   ([admin-guide.md](admin-guide.md#certificate-authorities-acme)).
 - When an administrator adds a network discovery scan scope and an operator or administrator (or the scope's
@@ -72,7 +73,7 @@ Data flows:
 | Data | Where | Protection |
 |---|---|---|
 | Users, roles, password hashes (Argon2id), authenticator secrets, recovery codes, sessions, API token hashes | Database | Authenticator secrets encrypted with envelope encryption; passwords and tokens stored only as hashes. |
-| Managed private keys (TLS keys, generated SSH keys), Alice's own SSH key, Key Vault credentials, SMTP password, identity-provider client secrets, directory service account passwords, ACME account keys, external account binding keys, DNS hook secrets | Database | Envelope encryption under the master key, each value bound to its row. |
+| Managed private keys (TLS keys, generated SSH keys), Alice's own SSH key, Key Vault credentials, SMTP password, identity-provider client secrets, directory service account passwords, ACME account keys, external account binding keys, DNS hook secrets, DNS provider credentials (Cloudflare API tokens, Azure DNS client secrets and sign-in certificate keys, AWS secret access keys) | Database | Envelope encryption under the master key, each value bound to its row. |
 | Inventory: servers, certificates, SSH public keys, deployments, rotations | Database | Database access control. |
 | Network discovery: scan scopes, and the public certificates and chains that scanned servers presented, with the address, port and TLS version where each was found | Database | Database access control. Public data only: no private key and no secret is read or stored. It is a map of the customer's network, so API tokens need the operate scope to read it. |
 | Audit log | Database | Hash chain; insert and read only for the application. |
@@ -190,6 +191,7 @@ for every service; limiting a person to some services comes with a later version
 | Out | TCP 22 | Managed Linux and Nginx servers |
 | Out | TCP 443 | Azure (`login.microsoftonline.com`, `*.vault.azure.net`) when Key Vault is used; the identity provider when single sign-on is used |
 | Out | HTTPS (443 or the port in the address) | A certificate authority's ACME directory and the addresses its answers name, and the DNS hook, when an administrator set them up; never through a proxy, never following a redirect |
+| Out | TCP 443 | A built-in DNS provider when one is set up: `api.cloudflare.com`; `login.microsoftonline.com` and `management.azure.com` (and the metadata address `169.254.169.254:80` for a managed identity); `route53.amazonaws.com` and `sts.amazonaws.com`; those hosts only, never through a proxy, never following a redirect |
 | Out | TCP 80 (HTTP) | Each name proved by the ACME web proof (HTTP-01), to check the proof file before the authority does; only for certificates that use that proof |
 | Out | TCP, the ports of a scan scope (443 and the like) | Network discovery: a TLS handshake to each address and port of a scope an administrator wrote, inside the networks an administrator allowed; nothing before an administrator adds a scope; never through a proxy |
 | Out | TCP 636 by default (or the port in the address) | The LDAP directory or Active Directory domain controllers over `ldaps://`, when directory sign-in is set up; TLS verified, no plain `ldap://`, no StartTLS, no referrals |

@@ -2073,5 +2073,84 @@
    "web/src/pages/IncidentPage.test.tsx:starts with revoke-now ticked when the certificate's service's policy says so (R55)",
    "web/e2e/service-policy.spec.ts:an Administrator limits a service to its domain and forbids automatic deployment; an upload outside it is refused"
   ]
+ },
+ {
+  "id": "F-98",
+  "status": "test",
+  "tests": [
+   "internal/jobs/acmejobs:TestDNSProviderFailuresAreClassified",
+   "internal/acme/solver/dnsapi/cloudflare:TestWrongToken",
+   "internal/acme/solver/dnsapi/cloudflare:TestZoneOutsideTheTokenIsAuthFailed",
+   "internal/acme/solver/dnsapi/route53:TestWrongSecretIsAuthFailure",
+   "internal/acme/solver/dnsapi/route53:TestAssumeRoleFailures",
+   "internal/acme/solver/dnsapi/azuredns:TestWrongClientSecretIsAuthFailed",
+   "internal/acme/solver/dnsapi/azuredns:TestUnknownTenantAndUnknownCertificateAreAuthFailed",
+   "internal/acme/solver/dnsapi/azuredns:TestManagedIdentityThatIsNotAssignedIsAuthFailed",
+   "internal/acme/solver/dnsapi/azuredns:TestWritesDeniedAreAuthFailed"
+  ]
+ },
+ {
+  "id": "F-99",
+  "status": "test",
+  "tests": [
+   "internal/jobs/acmejobs:TestDNSProviderFailuresAreClassified",
+   "internal/acme:TestDNSProviderErrors",
+   "internal/acme/solver/dnsapi/cloudflare:TestAnswersAreClassified",
+   "internal/acme/solver/dnsapi/route53:TestFailureClasses",
+   "internal/acme/solver/dnsapi/azuredns:TestEntraOutageIsTransient",
+   "internal/acme/solver/dnsapi/azuredns:TestIMDSOutageIsTransient",
+   "internal/acme/solver/dnsapi/azuredns:TestFailuresAreClassified"
+  ]
+ },
+ {
+  "id": "F-100",
+  "status": "test",
+  "tests": [
+   "internal/acme/solver/dnsapi/cloudflare:TestZoneNotFound",
+   "internal/acme/solver/dnsapi/cloudflare:TestLongestZoneWins",
+   "internal/acme/solver/dnsapi/route53:TestIssuanceFailsWithoutAZone",
+   "internal/acme/solver/dnsapi/route53:TestFindZonePublicAndPrivateOfOneName",
+   "internal/acme/solver/dnsapi/azuredns:TestZoneNotFound",
+   "internal/acme/solver/dnsapi/azuredns:TestPrivateOnlyZoneIsNotFound",
+   "internal/acme/solver/dnsapi/azuredns:TestLongestZoneAndPrivateZoneSkipped",
+   "internal/acme/solver/dnsapi:TestLongest"
+  ]
+ },
+ {
+  "id": "F-101",
+  "status": "test",
+  "tests": [
+   "internal/acme/solver/dnsapi:TestPresentWaitsForTheChange",
+   "internal/acme/solver/dnsapi/route53:TestEndToEndPresentAndCleanUpWaitsForInsync"
+  ]
+ },
+ {
+  "id": "F-102",
+  "status": "test",
+  "tests": [
+   "internal/acme/solver/dnsapi/azuredns:TestPreconditionFailedIsRetried",
+   "internal/acme/solver/dnsapi/azuredns:TestPreconditionFailedForeverGivesUp",
+   "internal/acme/solver/dnsapi/route53:TestRemoveTXTDeleteRace"
+  ]
+ },
+ {
+  "id": "F-103",
+  "status": "test",
+  "tests": [
+   "internal/jobs/acmejobs:TestCleanupThroughADeletedProvider"
+  ]
+ },
+ {
+  "id": "S-12",
+  "status": "test",
+  "tests": [
+   "internal/api:TestDNSProviderCredentialsNeverLeak",
+   "internal/api:TestACMEDNSProviderHandlers",
+   "internal/inventory:TestACMEDNSProviderCloudflareLifecycle",
+   "internal/acme/solver/dnsapi/cloudflare:TestCanaryInAnswersNeverReachesAnError",
+   "internal/acme/solver/dnsapi/route53:TestNoSecretOrAnswerTextLeaks",
+   "internal/acme/solver/dnsapi/azuredns:TestNoSecretKeyTokenOrAnswerTextLeaks",
+   "internal/acme/solver/dnsapi/azuredns:TestEntraAnswerTextNeverReachesAnError"
+  ]
  }
 ]

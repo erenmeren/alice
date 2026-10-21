@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased — Built-in DNS providers for the DNS proof (Cloudflare, Azure DNS, Amazon Route 53)
+
+**Added**
+- Alice can publish the DNS proof record itself through **Cloudflare** (an API token), **Azure DNS** (a service
+  principal with a client secret or a certificate, or the managed identity of the machine Alice runs on) and **Amazon
+  Route 53** (an access key, optionally assuming a role), besides a DNS hook (R57). **Settings → Certificate
+  authorities → DNS publishing → Add DNS provider**; a certificate chooses a provider like a hook. Alice finds the zone
+  of each name (the longest public zone that holds it), keeps every other value of the record, waits until Route 53
+  reports the change on all its servers, and removes only its own value afterwards, also through a provider that was
+  removed since.
+- The credentials are encrypted and write-only like the hook secret; an empty field on a change keeps them. Alice
+  reaches only the providers' own API hosts.
+- Codes `ALC-ACM-0042` (no zone of the provider holds the name), `ALC-ACM-0043` (the provider refused the credentials;
+  automatic renewal stops) and `ALC-ACM-0044` (the provider failed or could not be reached; automatic renewal retries
+  an outage), with troubleshooting entries.
+- API: `/api/v1/acme/hooks` takes `kind` (`webhook`, `cloudflare`, `azure_dns`, `route53`, fixed at creation) and the
+  provider's settings and credentials, and shows `kind` and `settings`.
+
+**Changed**
+- The section **DNS hooks** is now **DNS publishing**, and the proof method reads **DNS proof (DNS record)**. Existing
+  hooks are unchanged (migration `00030`; a downgrade below it is refused while a provider exists). Rulings:
+  `docs/superpowers/rulings/acme-dns-providers.md`.
+
 ## Unreleased — Let's Encrypt staging acceptance harness
 
 **Added**
