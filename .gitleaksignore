@@ -63,3 +63,5 @@ c0ce5361da0e010d14cf261193a2a3bcaa9aa2b4:internal/inventory/coverage_unit_test.g
 a8c3f77ce09b8cf604e7008f4771db4f7ba75946:web/src/components/acme/AcmeSettings.test.tsx:generic-api-key:1135
 # Field names (AccessKeyID, SecretAccessKey) copied from the fake Route 53 into the fake CA's state: no value.
 37ef5a297818da6260deb657117ea6955a7e0334:cmd/alice-fakeacme/dns.go:generic-api-key:129
+# PEM wrappers around "AAAA" (no key body) in the held-backup refusal table; the next commit splits the headers.
+499d62b3355086c8fdb1875a051fdfba2368e18b:internal/inventory/groundwork_test.go:private-key:97
