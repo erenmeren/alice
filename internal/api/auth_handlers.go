@@ -93,7 +93,7 @@ func (s *server) authVerify(w http.ResponseWriter, r *http.Request) {
 	}
 	s.rotated.Add(sessionTokenFrom(r)) // a late 401 for the old cookie must not delete the new one
 	s.issueSessionCookie(w, res.Token) // new session ID after MFA (fixation defence)
-	writeJSON(w, http.StatusOK, sessionJSON(res.Info, res.RecoveryCodes))
+	writeJSON(w, http.StatusOK, s.sessionAnswer(r, res.Info, res.RecoveryCodes))
 }
 
 func (s *server) authSession(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +132,7 @@ func (s *server) authStepUp(w http.ResponseWriter, r *http.Request) {
 	}
 	s.rotated.Add(sessionTokenFrom(r)) // a late 401 for the old cookie must not delete the new one
 	s.issueSessionCookie(w, res.Token) // session ID is regenerated on step-up (SEC-019)
-	writeJSON(w, http.StatusOK, sessionJSON(res.Info, nil))
+	writeJSON(w, http.StatusOK, s.sessionAnswer(r, res.Info, nil))
 }
 
 func (s *server) authPassword(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +150,7 @@ func (s *server) authPassword(w http.ResponseWriter, r *http.Request) {
 	}
 	s.rotated.Add(sessionTokenFrom(r)) // a late 401 for the old cookie must not delete the new one
 	s.issueSessionCookie(w, res.Token) // every other session was revoked
-	writeJSON(w, http.StatusOK, sessionJSON(res.Info, nil))
+	writeJSON(w, http.StatusOK, s.sessionAnswer(r, res.Info, nil))
 }
 
 func (s *server) authRecoveryCodes(w http.ResponseWriter, r *http.Request) {

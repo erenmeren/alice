@@ -154,7 +154,7 @@ func (s *server) setupCreateAdmin(w http.ResponseWriter, r *http.Request) {
 	s.issueSessionCookie(w, res.Token)
 	s.recent.Remove(setupTokenFrom(r))
 	clearSetupCookie(w)
-	writeJSON(w, http.StatusOK, sessionJSON(res.Info, res.RecoveryCodes))
+	writeJSON(w, http.StatusOK, s.sessionAnswer(r, res.Info, res.RecoveryCodes))
 }
 
 func (s *server) setupRecoveryPassphrase(w http.ResponseWriter, r *http.Request) {

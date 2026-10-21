@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/auth"
 	"alice/internal/authz/services"
 	"alice/internal/license"
 	"alice/internal/platform/validate"
@@ -212,7 +213,30 @@ type sessionServiceDTO struct {
 
 // sessionAccess builds the session's access answer from the request's grants.
 func (s *server) sessionAccess(r *http.Request) sessionAccessDTO {
-	sub := s.subjectOf(r)
+	return s.sessionAccessOf(r, s.subjectOf(r))
+}
+
+// sessionAnswer is the answer of a session that was just opened or renewed (sign-in, step-up, a password change, the
+// wizard's administrator): the session with its access, read for the session's person (the request's own principal
+// may still be the pending sign-in).
+func (s *server) sessionAnswer(r *http.Request, si auth.SessionInfo, recoveryCodes []string) sessionDTO {
+	d := sessionJSON(si, recoveryCodes)
+	sub := rbac.Subject{Kind: rbac.UserSession, Role: si.User.Role}
+	if s.deps.Services != nil {
+		grants, err := s.deps.Services.Grants(r.Context(), si.User.ID)
+		if err != nil {
+			// The session is open; its access is read again by GET /auth/session.
+			s.deps.Log.Warn("could not read the grants of a new session", append([]any{"request_id", RequestID(r.Context())}, errorAttrs(err)...)...)
+			return d
+		}
+		sub.Grants = grants
+	}
+	acc := s.sessionAccessOf(r, sub)
+	d.Access = &acc
+	return d
+}
+
+func (s *server) sessionAccessOf(r *http.Request, sub rbac.Subject) sessionAccessDTO {
 	if sub.Kind == rbac.UserSession {
 		sub.StepUp = true
 	}
@@ -233,7 +257,7 @@ func (s *server) sessionAccess(r *http.Request) sessionAccessDTO {
 			}
 		}
 	}
-	refs := s.serviceRefs(r)
+	refs := s.serviceRefsFor(r, sub)
 	for _, sv := range order {
 		ref := refs.of(sv)
 		if ref == nil {

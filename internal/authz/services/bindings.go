@@ -325,5 +325,11 @@ func (s *Store) Access(ctx context.Context, userID uuid.UUID) (UserAccess, error
 	return out, nil
 }
 
+// Grants are a person's grants as the authorization check reads them (authz.LoadGrants), for the access of a session
+// that was just opened.
+func (s *Store) Grants(ctx context.Context, userID uuid.UUID) ([]rbac.ScopedGrant, error) {
+	return authz.LoadGrants(ctx, s.pool, userID)
+}
+
 // ErrUserNotFound: the person whose access was asked for does not exist.
 var ErrUserNotFound = errors.New("services: person not found")

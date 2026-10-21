@@ -447,7 +447,7 @@ func (s *server) ldapStepUp(w http.ResponseWriter, r *http.Request) {
 	att.settle(nil)
 	s.rotated.Add(sessionTokenFrom(r))     // a late 401 for the old cookie must not delete the new one
 	s.issueSessionCookie(w, stepped.Token) // session ID is regenerated on step-up (SEC-019)
-	writeJSON(w, http.StatusOK, sessionJSON(stepped.Info, nil))
+	writeJSON(w, http.StatusOK, s.sessionAnswer(r, stepped.Info, nil))
 }
 
 func (s *server) writeDirectory(w http.ResponseWriter, status int, d ldap.Directory) {

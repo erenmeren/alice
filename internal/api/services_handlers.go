@@ -42,6 +42,7 @@ type ServicesService interface {
 	// access.
 	Resolve(ctx context.Context, kind string, id any) (services.Resolution, error)
 	TargetServices(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	Grants(ctx context.Context, userID uuid.UUID) ([]rbac.ScopedGrant, error)
 	Bindings(ctx context.Context, f services.BindingFilter) ([]services.Binding, error)
 	Binding(ctx context.Context, id uuid.UUID) (services.Binding, error)
 	CreateBinding(ctx context.Context, a services.Actor, in services.BindingInput) (services.Binding, error)
@@ -191,7 +192,12 @@ func (refs serviceRefs) of(id uuid.UUID) *serviceRefDTO {
 // serviceRefs reads the services the rows of an answer name. It never fails the answer: without the services module,
 // or when the read fails (logged), the rows show the service's id alone.
 func (s *server) serviceRefs(r *http.Request) serviceRefs {
-	out := serviceRefs{subject: s.subjectOf(r)}
+	return s.serviceRefsFor(r, s.subjectOf(r))
+}
+
+// serviceRefsFor is serviceRefs as sub sees them (a session just opened: its person, not the pending sign-in).
+func (s *server) serviceRefsFor(r *http.Request, sub rbac.Subject) serviceRefs {
+	out := serviceRefs{subject: sub}
 	if s.deps.Services == nil {
 		return out
 	}
@@ -201,7 +207,7 @@ func (s *server) serviceRefs(r *http.Request) serviceRefs {
 		return out
 	}
 	// A person with role bindings sees the name of a service in their read reach only (R49 Phase 2, design §5.8).
-	if reach := s.reachOf(r, rbac.Read); reach.Limited {
+	if reach := authz.ReachOf(rbac.Read, sub); reach.Limited {
 		for id := range refs {
 			if !reach.Contains(id) {
 				refs[id] = authz.ServiceRef{ID: id, Name: outsideName}

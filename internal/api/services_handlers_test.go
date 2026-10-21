@@ -131,6 +131,7 @@ func (f *fakeServices) TargetServices(_ context.Context, ids []uuid.UUID) (map[u
 	}
 	return out, nil
 }
+func (f *fakeServices) Grants(context.Context, uuid.UUID) ([]rbac.ScopedGrant, error) { return nil, nil }
 func (f *fakeServices) Bindings(_ context.Context, fl services.BindingFilter) ([]services.Binding, error) {
 	if f.BindingsFn != nil {
 		return f.BindingsFn(fl)
