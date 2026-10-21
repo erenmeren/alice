@@ -244,7 +244,7 @@ var testMailer notify.Mailer = e2eMailbox
 // (created_by) and users reference ldap_directories (ldap_directory_id). The service tables (00026) reference users and
 // every owned table references services: they are emptied too, and the seeded environments and the Default service with
 // its first policy are put back, as a fresh installation has them. The location observations (00027) reference
-// certificate_locations.
+// certificate_locations, and the held backups (00031) reference deployments and certificate_locations.
 const resetSQL = `TRUNCATE users, user_mfa, recovery_codes, sessions, api_tokens, setup_sessions, settings, audit_log,
 license, license_files, license_history, notifications_outbox,
 target_locks, job_attempts, jobs,
@@ -253,7 +253,7 @@ acme_bindings, acme_orders, acme_certificates, acme_hooks, acme_accounts, acme_p
 discovery_endpoints, discovery_certificates, discovery_scans, discovery_scopes,
 rotation_op_ids, rotation_steps, rotation_locations, rotations, rotation_policies,
 ssh_key_locations, ssh_keys, host_keys,
-location_observations, deployment_steps, deployments, certificate_locations, csr_requests, certificates, managed_private_keys,
+location_observations, deployment_backups, deployment_steps, deployments, certificate_locations, csr_requests, certificates, managed_private_keys,
 kv_imports, bindings, kv_certificate_versions, kv_certificates, kv_keys, kv_secrets,
 ldap_group_mappings, ldap_directories,
 oidc_login_states, oidc_group_mappings, oidc_providers, setting_secrets, saved_views, alerts,

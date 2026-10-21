@@ -155,6 +155,9 @@ var explicitGrants = map[string][]string{
 	"public.certificate_incident_locations": {"INSERT", "SELECT"},
 	// Services (00026, R49): a service's policy history is append-only.
 	"public.service_policies": {"INSERT", "SELECT"},
+	// Held backups (00031, R59): written once before a change, deleted by the retention (never while the deployment is
+	// unfinished: Z1032), never updated.
+	"public.deployment_backups": {"DELETE", "INSERT", "SELECT"},
 }
 
 // Column-level grants of alice_app (a privilege it holds on some columns but not on the
@@ -184,11 +187,12 @@ var explicitColumnGrants = map[string]map[string][]string{
 		"revocation_reason", "revoked_at", "revoked_by", "service_id", "source"}},
 	"public.csr_requests": {"UPDATE": {"certificate_id", "finished_at", "service_id", "status"}},
 	// 00026 adds the binding attention mark (a website whose service does not accept the vault's keys, R49); 00027 adds
-	// file_observed_at (when a scan last read the file's content, R52).
+	// file_observed_at (when a scan last read the file's content, R52); 00031 adds the kind's details and the probe
+	// address (R59; the locator is the location's identity and is never updated).
 	"public.certificate_locations": {"UPDATE": {"binding_attention_at", "binding_attention_code", "binding_id", "cert_file_sha256", "certificate_id", "changed_outside_at", "custom_location",
-		"deployed_fingerprint", "file_observed_at", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
+		"deployed_fingerprint", "details", "file_observed_at", "inherited", "key_exists", "key_group", "key_mode", "key_owner", "key_path", "key_problem", "key_type",
 		"last_seen_at", "missing_since", "problem", "resolved_cert_path", "servers", "skip_verify", "supported", "symlinked",
-		"unsupported_reason", "verify_port", "verify_sni", "version", "warnings"}},
+		"unsupported_reason", "verify_address", "verify_port", "verify_sni", "version", "warnings"}},
 	"public.deployments": {"UPDATE": {"cause_step", "error_code", "error_params", "expect_cert_sha256", "failed_step", "finished_at",
 		"helper_error", "job_id", "new_chain_length", "operation_id", "phase", "previous_chain_length", "previous_fingerprint",
 		"recover_after", "recovery_attempts", "result", "rollback_info", "rollback_leaf_sha256", "rollback_spki_sha256", "started_at", "state",
@@ -310,6 +314,7 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 	services := hasColumn(t, d, "targets", "service_id")
 	drift := hasColumn(t, d, "certificate_locations", "file_observed_at")
 	dnsProviders := hasColumn(t, d, "acme_hooks", "settings")
+	groundwork := hasColumn(t, d, "certificate_locations", "locator")
 	for rows.Next() {
 		var (
 			name, kind string
@@ -387,6 +392,12 @@ WHERE n.nspname = ANY($1) AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')`, sche
 			// Below 00030 a DNS publisher has no provider settings.
 			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
 				return c == "settings"
+			})}
+		}
+		if name == "public.certificate_locations" && !groundwork {
+			// Below 00031 the kind's details and the probe address do not exist.
+			wantColumns = map[string][]string{"UPDATE": slices.DeleteFunc(slices.Clone(wantColumns["UPDATE"]), func(c string) bool {
+				return c == "details" || c == "verify_address"
 			})}
 		}
 		if !slices.Equal(want, privs) || !equalColumnGrants(wantColumns, columns[name]) {

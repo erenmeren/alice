@@ -371,7 +371,18 @@ INSERT INTO users (id, username, display_name, auth_source, role, description, c
 VALUES ('e2000000-0000-4000-8000-000000000007', 'ci-deployer', 'CI deployer', 'automation', NULL, 'Deploys from the pipeline', now(), now());
 INSERT INTO api_tokens (id, user_id, name, token_hash, token_prefix, scopes, service_ids, expires_at, created_at)
 VALUES ('e2000000-0000-4000-8000-000000000008', 'e2000000-0000-4000-8000-000000000007', 'pipeline', sha256('automation token'), 'alice_autom1',
-        '{operate}', '{e2000000-0000-4000-8000-000000000001}', now() + interval '30 days', now());`)
+        '{operate}', '{e2000000-0000-4000-8000-000000000001}', now() + interval '30 days', now());
+INSERT INTO deployment_backups (deployment_id, location_id, leaf_sha256, spki_sha256, ciphertext, nonce, wrapped_dek, key_version, created_at)
+SELECT id, location_id, repeat('a', 64), repeat('b', 64), '\x01', '\x000000000000000000000006', '\x01', 1, now() FROM deployments WHERE state <> 'done' LIMIT 1;
+INSERT INTO credentials (id, purpose, kind, public_info, ciphertext, nonce, wrapped_dek, key_version, created_at, target_id)
+VALUES ('e3000000-0000-4000-8000-000000000001', 'kubernetes_cluster', 'k8s_token', '{"api_url":"https://k8s.example.test:6443"}', '\x01',
+        '\x000000000000000000000007', '\x01', 1, now(), 'e3000000-0000-4000-8000-000000000002');
+INSERT INTO targets (id, name, type, config, credential_id, status, created_at, updated_at)
+VALUES ('e3000000-0000-4000-8000-000000000002', 'cluster-1', 'kubernetes', '{"host":"k8s.example.test","port":6443}',
+        'e3000000-0000-4000-8000-000000000001', 'ok', now(), now());
+INSERT INTO certificate_locations (id, target_id, kind, cert_path, locator, details, verify_address, supported, first_seen_at, last_seen_at)
+VALUES ('e3000000-0000-4000-8000-000000000003', 'e3000000-0000-4000-8000-000000000002', 'k8s_tls_secret', 'shop/shop-tls',
+        '{"namespace":"shop","name":"shop-tls"}', '{"resource_version":"12","immutable":false}', '10.0.0.9', true, now(), now());`)
 	require.NoError(t, err)
 }
 
