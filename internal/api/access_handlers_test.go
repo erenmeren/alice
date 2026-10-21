@@ -44,9 +44,13 @@ func TestCreateRoleBindingAnswersTheBinding(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPost, "/api/v1/role-bindings", "alice_operate_admin", body).Code, "never a token")
 	assert.Equal(t, http.StatusForbidden, call(h, http.MethodPost, "/api/v1/role-bindings", "operator-stepup", body).Code)
 
-	f.CreateBindingFn = func(services.BindingInput) (services.Binding, error) { return services.Binding{}, services.ErrBindingDuplicate }
+	f.CreateBindingFn = func(services.BindingInput) (services.Binding, error) {
+		return services.Binding{}, services.ErrBindingDuplicate
+	}
 	assert.Equal(t, ErrACCBindingDuplicate.Code, decodeErr(t, call(h, http.MethodPost, "/api/v1/role-bindings", "admin-stepup", body)).Error.Code)
-	f.CreateBindingFn = func(services.BindingInput) (services.Binding, error) { return services.Binding{}, services.ErrBindingLimit }
+	f.CreateBindingFn = func(services.BindingInput) (services.Binding, error) {
+		return services.Binding{}, services.ErrBindingLimit
+	}
 	assert.Equal(t, ErrACCBindingLimit.Code, decodeErr(t, call(h, http.MethodPost, "/api/v1/role-bindings", "admin-stepup", body)).Error.Code)
 }
 
