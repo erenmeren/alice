@@ -49,7 +49,7 @@ $3, '{openid}', 'groups', 'https://idp.example.test/a', 'https://idp.example.tes
 		{services.DirectoryGroupInput{Source: services.SourceOIDC, Value: "x"}, "provider_id", validate.Required},
 		{services.DirectoryGroupInput{Source: services.SourceLDAP, ProviderID: &provider, Value: "x"}, "directory_id", validate.Required},
 		{services.DirectoryGroupInput{Source: services.SourceOIDC, ProviderID: &provider, Value: " pay-ops"}, "value", validate.Pattern},
-		{services.DirectoryGroupInput{Source: services.SourceOIDC, ProviderID: &provider, Value: "pay​ops"}, "value", validate.Pattern},
+		{services.DirectoryGroupInput{Source: services.SourceOIDC, ProviderID: &provider, Value: "pay\u200bops"}, "value", validate.Pattern},
 		{services.DirectoryGroupInput{Source: services.SourceOIDC, ProviderID: &provider, Value: ""}, "value", validate.Required},
 	} {
 		_, err := w.store.CreateDirectoryGroup(ctx, w.admin, bad.in)
