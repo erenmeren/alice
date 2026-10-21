@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz"
 	"alice/internal/inventory"
 )
 
@@ -41,7 +42,7 @@ func (f *fakeIncidents) GetIncident(ctx context.Context, id uuid.UUID) (inventor
 	return inventory.Incident{}, errNotConfigured
 }
 
-func (f *fakeIncidents) ListIncidents(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int) ([]inventory.Incident, error) {
+func (f *fakeIncidents) ListIncidentsIn(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int, _ authz.Reach) ([]inventory.Incident, error) {
 	if f.ListIncidentsFn != nil {
 		return f.ListIncidentsFn(ctx, certificateID, openOnly, limit)
 	}

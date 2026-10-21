@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"alice/internal/authz"
 	"alice/internal/platform/db"
 )
 
@@ -105,6 +106,9 @@ type CertificateFilter struct {
 	Now         time.Time
 	After       *CertificateCursor
 	Limit       int
+	// Reach keeps the certificates seen by a scope of the caller's services (R49 Phase 2); the zero value is every
+	// service.
+	Reach authz.Reach
 }
 
 // ErrFilterNeedsNow: a time filter of a certificate list was given without its reference time.
@@ -180,6 +184,9 @@ func ListCertificates(ctx context.Context, q db.Querier, f CertificateFilter) ([
 	if f.Fingerprint != "" {
 		in.and("d.fingerprint_sha256 = " + in.arg(f.Fingerprint))
 	}
+	if f.Reach.Limited {
+		in.and(authz.DiscoveredCertificateVisible("d", in.arg(f.Reach.SQL())))
+	}
 	if f.After != nil {
 		in.and("(d.not_after, d.fingerprint_sha256) > (" + in.arg(f.After.NotAfter) + "::timestamptz, " + in.arg(f.After.Fingerprint) + "::text)")
 	}
@@ -254,6 +261,8 @@ type EndpointFilter struct {
 	Fingerprint string
 	After       *EndpointCursor
 	Limit       int
+	// Reach keeps the endpoints of scopes of the caller's services (R49 Phase 2); the zero value is every service.
+	Reach authz.Reach
 }
 
 // ListEndpoints lists endpoints. Inside a scope the order is the unique key (scope_id, address, port, sni)
@@ -267,6 +276,9 @@ func ListEndpoints(ctx context.Context, q db.Querier, f EndpointFilter) ([]Endpo
 	}
 	if f.Fingerprint != "" {
 		w.and("e.fingerprint_sha256 = " + w.arg(f.Fingerprint))
+	}
+	if f.Reach.Limited {
+		w.and(authz.ScopeVisible("e", w.arg(f.Reach.SQL())))
 	}
 	if c := f.After; c != nil {
 		key := "(" + w.arg(c.Address) + "::inet, " + w.arg(c.Port) + "::int, " + w.arg(c.SNI) + "::text"

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"alice/internal/authz"
 	"alice/internal/discovery"
 )
 
@@ -33,6 +34,13 @@ const MaxDetailEndpoints = 200
 // Certificate is one discovered leaf with the endpoints presenting it (or that last presented it), at most
 // MaxDetailEndpoints; ErrNotFound for a fingerprint that is no discovered leaf.
 func (s *Service) Certificate(ctx context.Context, fingerprint string) (c discovery.CertificateRow, eps []discovery.EndpointRow, more bool, err error) {
+	return s.CertificateIn(ctx, fingerprint, authz.Everywhere())
+}
+
+// CertificateIn is Certificate with the endpoints of the scopes in reach only (R49 Phase 2, design §5.8: the endpoints
+// of other services' scopes are left out; the guard has checked that the certificate is visible at all).
+func (s *Service) CertificateIn(ctx context.Context, fingerprint string, reach authz.Reach) (c discovery.CertificateRow, eps []discovery.EndpointRow,
+	more bool, err error) {
 	list, err := discovery.ListCertificates(ctx, s.pool, discovery.CertificateFilter{Fingerprint: fingerprint, Limit: 1})
 	if err != nil {
 		return discovery.CertificateRow{}, nil, false, err
@@ -40,7 +48,7 @@ func (s *Service) Certificate(ctx context.Context, fingerprint string) (c discov
 	if len(list) == 0 {
 		return discovery.CertificateRow{}, nil, false, ErrNotFound
 	}
-	eps, err = discovery.ListEndpoints(ctx, s.pool, discovery.EndpointFilter{Fingerprint: fingerprint, Limit: MaxDetailEndpoints + 1})
+	eps, err = discovery.ListEndpoints(ctx, s.pool, discovery.EndpointFilter{Fingerprint: fingerprint, Limit: MaxDetailEndpoints + 1, Reach: reach})
 	if err != nil {
 		return discovery.CertificateRow{}, nil, false, err
 	}
@@ -80,14 +88,22 @@ type Summary struct {
 // the leaves by nature (a count of them all); Task 12 measured 9 ms at 5,000 and 22 ms at 50,000 (33 ms in the CTE
 // form), far inside the dashboard budget.
 func (s *Service) Summary(ctx context.Context) (Summary, error) {
+	return s.SummaryIn(ctx, authz.Everywhere())
+}
+
+// SummaryIn is Summary over the scopes of the services in reach (R49 Phase 2): their certificates, their scopes and
+// their scans.
+func (s *Service) SummaryIn(ctx context.Context, reach authz.Reach) (Summary, error) {
 	now := s.now()
 	var out Summary
 	err := s.pool.QueryRow(ctx, `SELECT count(*)::int, (count(*) FILTER (WHERE d.not_after >= $1 AND d.not_after <= $2))::int,
-    (SELECT count(*) FROM discovery_scopes WHERE deleted_at IS NULL)::int, (SELECT max(finished_at) FROM discovery_scans)
+    (SELECT count(*) FROM discovery_scopes s WHERE s.deleted_at IS NULL AND `+authz.OwnedVisible("s", "$3")+`)::int,
+    (SELECT max(finished_at) FROM discovery_scans x WHERE `+authz.ScopeVisible("x", "$3")+`)
 FROM discovery_certificates d
 WHERE d.is_leaf AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
-  AND EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND `+discovery.CurrentEndpointSQL+`)`,
-		now, now.AddDate(0, 0, 30)).Scan(&out.UnmanagedTotal, &out.UnmanagedExpiring30d, &out.Scopes, &out.LastScanAt)
+  AND EXISTS (SELECT 1 FROM discovery_endpoints e WHERE e.fingerprint_sha256 = d.fingerprint_sha256 AND `+discovery.CurrentEndpointSQL+`
+      AND `+authz.ScopeVisible("e", "$3")+`)`,
+		now, now.AddDate(0, 0, 30), reach.SQL()).Scan(&out.UnmanagedTotal, &out.UnmanagedExpiring30d, &out.Scopes, &out.LastScanAt)
 	if err != nil {
 		return Summary{}, fmt.Errorf("discoverysvc: read the summary: %w", err)
 	}

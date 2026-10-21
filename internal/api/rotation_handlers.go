@@ -77,7 +77,7 @@ func writePolicy(w http.ResponseWriter, status int, p sshkeys.Policy) {
 }
 
 func (s *server) listPolicies(w http.ResponseWriter, r *http.Request) {
-	ps, err := s.deps.SSHKeys.Policies(r.Context())
+	ps, err := s.deps.SSHKeys.PoliciesIn(r.Context(), s.reachOf(r, rbac.Read))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -318,6 +318,7 @@ func (s *server) listRotations(w http.ResponseWriter, r *http.Request) {
 		KeyID:    optionalUUID(q.Get("ssh_key_id"), "ssh_key_id", &v),
 		Cursor:   q.Get("cursor"),
 		Limit:    pageLimit(q.Get("limit"), &v),
+		Reach:    s.reachOf(r, rbac.Read), // R49 Phase 2: the runs of policies the caller sees
 	}
 	if len(f.Cursor) > maxCursorBytes {
 		v.Add("cursor", validate.TooLong, map[string]string{"max": strconv.Itoa(maxCursorBytes)})

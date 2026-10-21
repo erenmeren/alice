@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz"
 	"alice/internal/inventory"
 )
 
@@ -164,7 +165,7 @@ func (f *fakeACME) DeleteACMEHook(ctx context.Context, a inventory.Actor, id uui
 	return errNotConfigured
 }
 
-func (f *fakeACME) ListACMECertificates(ctx context.Context) ([]inventory.ACMECertificate, error) {
+func (f *fakeACME) ListACMECertificatesIn(ctx context.Context, _ authz.Reach) ([]inventory.ACMECertificate, error) {
 	if f.ListACMECertificatesFn != nil {
 		return f.ListACMECertificatesFn(ctx)
 	}

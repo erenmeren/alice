@@ -57,6 +57,9 @@ func (s *Service) ExportCertificates(ctx context.Context, a audit.Actor, f inven
 	if f.TargetID != uuid.Nil {
 		details["target_id"] = f.TargetID.String()
 	}
+	if f.Reach.Limited {
+		details["reach"] = f.Reach.String() // R49 Phase 2: the services the caller sees (absent: every service)
+	}
 	now := s.clock.Now()
 	page := func(cursor string) ([][]string, string, error) {
 		g := f
@@ -90,6 +93,9 @@ func (s *Service) ExportSSHKeys(ctx context.Context, a audit.Actor, f inventory.
 	}
 	if f.IncludeMissing {
 		details["missing"] = "true"
+	}
+	if f.Reach.Limited {
+		details["reach"] = f.Reach.String() // R49 Phase 2: the services the caller sees (absent: every service)
 	}
 	page := func(cursor string) ([][]string, string, error) {
 		g := f

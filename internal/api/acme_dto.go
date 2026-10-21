@@ -146,6 +146,8 @@ type acmeCertificateDTO struct {
 	UpdatedAt  time.Time      `json:"updated_at"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
+	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
+	AllowedActions []string `json:"allowed_actions,omitempty"`
 }
 
 // acmeHoldReasons are the values of deploy_held_reason; anything else is shown as no hold (the openapi enum).
@@ -158,7 +160,7 @@ func acmeCertificateJSON(c inventory.ACMECertificate, now time.Time, refs servic
 		AutoRenew: c.AutoRenew, AutoDeploy: c.AutoDeploy, State: c.State, Failures: c.Failures, NextAttemptAt: utcPtr(c.NextAttemptAt),
 		LastAttemptAt: utcPtr(c.LastAttemptAt), LastError: errorRef(c.LastErrorCode, nil), RunningOrderID: idPtr(c.RunningOrderID),
 		DeployHeldReason: c.DeployHeldReason, DeployStopped: c.DeployStopped, BindingsCount: c.Bindings, CreatedAt: c.CreatedAt.UTC(),
-		UpdatedAt: c.UpdatedAt.UTC(), Service: refs.of(c.ServiceID)}
+		UpdatedAt: c.UpdatedAt.UTC(), Service: refs.of(c.ServiceID), AllowedActions: refs.actions(c.ServiceID)}
 	if c.State == inventory.ACMEStateStopped {
 		d.StoppedReason = acmeStoppedRenewalFailures
 	}

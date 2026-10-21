@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
 )
@@ -30,6 +31,8 @@ type LocationFilter struct {
 	Unbound        bool
 	Cursor         string
 	Limit          int
+	// Reach keeps the websites on servers the caller sees (R49 Phase 2); the zero value is every service.
+	Reach authz.Reach
 }
 
 // DeployableLocation is one website that can be connected.
@@ -132,8 +135,9 @@ WHERE l.supported AND l.missing_since IS NULL
        OR EXISTS (SELECT 1 FROM jsonb_array_elements(l.servers) s, jsonb_array_elements_text(s->'names') n
                   WHERE lower(n COLLATE "C") LIKE $4 ESCAPE '\'))
   AND ($5::text IS NULL OR (lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id) > ($5::text COLLATE "C", $6::text COLLATE "C", $7::uuid))
+  AND `+authz.OwnedVisible("t", "$10")+`
 ORDER BY lower(t.name::text COLLATE "C"), l.cert_path COLLATE "C", l.id
-LIMIT $8`, deployPathSQL, f.KeyType, f.Unbound, pattern, cName, cPath, cID, limit+1, s.deployTypes())
+LIMIT $8`, deployPathSQL, f.KeyType, f.Unbound, pattern, cName, cPath, cID, limit+1, s.deployTypes(), f.Reach.SQL())
 	if err != nil {
 		return DeployableLocationPage{}, fmt.Errorf("inventory: list deployable locations: %w", err)
 	}

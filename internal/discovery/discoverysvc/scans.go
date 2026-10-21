@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"alice/internal/authz"
 	"alice/internal/discovery"
 	"alice/internal/jobs/netdiscojobs"
 	"alice/internal/platform/db"
@@ -50,6 +51,8 @@ type ScanFilter struct {
 	State   string
 	After   *ScanCursor
 	Limit   int
+	// Reach keeps the scans of scopes of the caller's services (R49 Phase 2); the zero value is every service.
+	Reach authz.Reach
 }
 
 const scanColumns = `x.id, x.scope_id, s.name::text, x.trigger, x.state, x.cancel_requested, x.endpoints_total, x.endpoints_answered,
@@ -115,6 +118,9 @@ func (s *Service) ListScans(ctx context.Context, f ScanFilter) (list []ScanView,
 	}
 	if f.State != "" {
 		where = append(where, "x.state = "+arg(f.State))
+	}
+	if f.Reach.Limited {
+		where = append(where, authz.OwnedVisible("s", arg(f.Reach.SQL())))
 	}
 	if f.After != nil {
 		where = append(where, "(x.queued_at, x.id) < ("+arg(f.After.QueuedAt)+"::timestamptz, "+arg(f.After.ID)+"::uuid)")

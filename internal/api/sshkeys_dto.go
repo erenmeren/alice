@@ -47,6 +47,9 @@ func managedKeyJSON(m sshkeys.ManagedKey) *managedKeyDTO {
 type sshKeyDetailDTO struct {
 	sshKeyDTO
 	ManagedKey *managedKeyDTO `json:"managed_key"`
+	// HiddenCount is how many locations are on servers outside the caller's services (R49 Phase 2, design §5.8): left
+	// out of locations, counted, never named.
+	HiddenCount int `json:"hidden_count"`
 }
 
 // generatedKeyJSON is the answer of a generation: the key as the detail route shows it, without locations yet.
@@ -55,7 +58,7 @@ func generatedKeyJSON(m sshkeys.ManagedKey, refs serviceRefs) sshKeyDetailDTO {
 	return sshKeyDetailDTO{
 		sshKeyDTO: sshKeyDTO{
 			ID: m.ID.String(), Fingerprint: m.Fingerprint, KeyType: sshType, Bits: m.Bits, PublicKey: m.PublicKey, Managed: true,
-			Comment: m.Comment, FirstSeenAt: m.CreatedAt.UTC(), Service: refs.of(m.ServiceID),
+			Comment: m.Comment, FirstSeenAt: m.CreatedAt.UTC(), Service: refs.of(m.ServiceID), AllowedActions: refs.actions(m.ServiceID),
 		},
 		ManagedKey: managedKeyJSON(m),
 	}

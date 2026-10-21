@@ -98,6 +98,7 @@ func (s *server) certificateFilter(w http.ResponseWriter, r *http.Request, paged
 		Expiry:   q.Get("expiry"),
 	}
 	f.ServiceIDs = s.serviceFilter(r, &v) // R49: service_id and environment_id
+	f.Reach = s.reachOf(r, rbac.Read)     // R49 Phase 2: the certificates the caller sees
 	if paged {
 		f.Cursor, f.Limit = q.Get("cursor"), pageLimit(q.Get("limit"), &v)
 	} else {
@@ -142,7 +143,17 @@ func (s *server) getCertificate(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, certificateDetailJSON(c, refs))
+	target := func(l inventory.CertificateLocation) uuid.UUID { return l.TargetID }
+	seen, err := s.targetsSeen(r, targetIDsOf(c.Locations, target))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var hidden int
+	c.Locations, hidden = keepSeen(c.Locations, target, seen) // R49 Phase 2: the locations on the caller's servers
+	d := certificateDetailJSON(c, refs)
+	d.HiddenCount = hidden
+	writeJSON(w, http.StatusOK, d)
 }
 
 // uploadResult is what an upload or a signing request's completion answers: the certificate as
@@ -258,7 +269,7 @@ func (s *server) listCSRs(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	csrs, err := s.deps.Inventory.ListCSRs(r.Context())
+	csrs, err := s.deps.Inventory.ListCSRsIn(r.Context(), s.reachOf(r, rbac.Read))
 	if err != nil {
 		s.fail(w, r, err)
 		return

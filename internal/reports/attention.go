@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"alice/internal/authz"
 	"alice/internal/jobs"
 	"alice/internal/rbac"
 )
@@ -37,7 +38,7 @@ func (s *Service) Attention(ctx context.Context, v Viewer) ([]Condition, error) 
 	now := s.clock.Now().UTC()
 	var out []Condition
 	rows, err := s.pool.Query(ctx, `SELECT status, id::text, name::text, updated_at, last_error_code FROM targets
-WHERE deleted_at IS NULL AND status IN ('host_key_changed', 'auth_failed')`)
+WHERE deleted_at IS NULL AND status IN ('host_key_changed', 'auth_failed') AND `+authz.OwnedVisible("targets", "$1"), v.Reach.SQL())
 	if err != nil {
 		return nil, fmt.Errorf("reports: read the targets needing action: %w", err)
 	}
@@ -54,7 +55,7 @@ WHERE deleted_at IS NULL AND status IN ('host_key_changed', 'auth_failed')`)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reports: read the targets needing action: %w", err)
 	}
-	failed, err := s.failedDeployments(ctx, now, 0)
+	failed, err := s.failedDeployments(ctx, now, 0, v.Reach)
 	if err != nil {
 		return nil, err
 	}

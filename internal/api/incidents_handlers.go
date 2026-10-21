@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz"
 	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/license"
@@ -30,7 +32,7 @@ type IncidentService interface {
 	CertificateImpact(ctx context.Context, id uuid.UUID) (inventory.CertificateImpact, error)
 	StartIncident(ctx context.Context, a inventory.Actor, certificateID uuid.UUID, in inventory.IncidentInput) (inventory.Incident, error)
 	GetIncident(ctx context.Context, id uuid.UUID) (inventory.Incident, error)
-	ListIncidents(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int) ([]inventory.Incident, error)
+	ListIncidentsIn(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int, reach authz.Reach) ([]inventory.Incident, error)
 	RetryIncident(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Incident, error)
 	RevokeIncidentNow(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.Incident, error)
 	ChooseIncidentReplacement(ctx context.Context, a inventory.Actor, id, certificateID uuid.UUID) (inventory.Incident, error)
@@ -168,10 +170,13 @@ type impactDTO struct {
 	EndpointsHidden bool                   `json:"endpoints_hidden"`
 	Truncated       bool                   `json:"truncated"`
 	OpenIncidentID  *string                `json:"open_incident_id"`
+	// HiddenCount is how many certificates, locations and Key Vault versions with the key are outside the caller's
+	// services (R49 Phase 2, design §5.8): an Operator of one service learns that the key is also elsewhere, not where.
+	HiddenCount int `json:"hidden_count"`
 }
 
 func impactJSON(m inventory.CertificateImpact, showEndpoints bool) impactDTO {
-	d := impactDTO{Certificate: certificateJSON(m.Certificate, nil), Certificates: []impactCertificateDTO{}, Locations: []impactLocationDTO{},
+	d := impactDTO{Certificate: certificateJSON(m.Certificate, serviceRefs{}), Certificates: []impactCertificateDTO{}, Locations: []impactLocationDTO{},
 		Vaults: []impactVaultDTO{}, Endpoints: []impactEndpointDTO{}, EndpointsHidden: !showEndpoints, Truncated: m.Truncated,
 		OpenIncidentID: idPtr(m.OpenIncidentID)}
 	for _, c := range m.Certificates {
@@ -210,8 +215,46 @@ func (s *server) certificateImpact(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// The network map of the endpoints is a global reader's (discovery.view with a global grant): the scopes behind them
+	// are not filtered by service here.
 	show := rbac.Decide(rbac.DiscoveryView, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) == rbac.Allow
-	writeJSON(w, http.StatusOK, impactJSON(m, show))
+	hidden, err := s.hideImpact(r, &m)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	d := impactJSON(m, show)
+	d.HiddenCount = hidden
+	writeJSON(w, http.StatusOK, d)
+}
+
+// hideImpact leaves out of an impact the locations and Key Vault versions on servers and vaults outside the caller's
+// services and the other certificates with the key it does not see (R49 Phase 2, design §5.8), and counts them.
+func (s *server) hideImpact(r *http.Request, m *inventory.CertificateImpact) (int, error) {
+	if s.reachOf(r, rbac.Read).All() {
+		return 0, nil
+	}
+	ids := targetIDsOf(m.Locations, func(l inventory.ImpactLocation) uuid.UUID { return l.TargetID })
+	ids = append(ids, targetIDsOf(m.Vaults, func(v inventory.ImpactVaultVersion) uuid.UUID { return v.VaultID })...)
+	seen, err := s.targetsSeen(r, ids)
+	if err != nil {
+		return 0, err
+	}
+	var h1, h2, h3 int
+	m.Locations, h1 = keepSeen(m.Locations, func(l inventory.ImpactLocation) uuid.UUID { return l.TargetID }, seen)
+	m.Vaults, h2 = keepSeen(m.Vaults, func(v inventory.ImpactVaultVersion) uuid.UUID { return v.VaultID }, seen)
+	reach := s.reachOf(r, rbac.Read)
+	certSeen := map[uuid.UUID]bool{}
+	for _, c := range m.Certificates {
+		res, err := s.deps.Services.Resolve(r.Context(), services.KindCertificate, c.ID)
+		if err != nil && !errors.Is(err, services.ErrResourceNotFound) {
+			return 0, err
+		}
+		certSeen[c.ID] = err == nil && reach.ContainsAny(res.Visible)
+	}
+	m.Certificates, h3 = keepSeen(m.Certificates, func(c inventory.ImpactCertificate) uuid.UUID { return c.ID },
+		func(id uuid.UUID) bool { return certSeen[id] })
+	return h1 + h2 + h3, nil
 }
 
 type incidentLocationDTO struct {
@@ -255,6 +298,8 @@ type incidentDTO struct {
 	FinishedAt               *time.Time             `json:"finished_at"`
 	Counts                   map[string]int         `json:"counts"`
 	Locations                *[]incidentLocationDTO `json:"locations,omitempty"` // GET /incidents/{id} and the actions only
+	// HiddenCount is how many locations are on servers outside the caller's services (R49 Phase 2), with Locations.
+	HiddenCount *int `json:"hidden_count,omitempty"`
 }
 
 func incidentJSON(i inventory.Incident, withLocations bool) incidentDTO {
@@ -308,7 +353,7 @@ func (s *server) startIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/incidents/"+i.ID.String())
-	writeJSON(w, http.StatusCreated, incidentJSON(i, true))
+	s.incidentAnswer(w, r, http.StatusCreated, i)
 }
 
 // listIncidents is the newest incidents (?open=true: open ones only; ?certificate_id=: of one certificate; ?limit=
@@ -340,7 +385,7 @@ func (s *server) listIncidents(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	list, err := s.deps.Incidents.ListIncidents(r.Context(), cert, open, limit)
+	list, err := s.deps.Incidents.ListIncidentsIn(r.Context(), cert, open, limit, s.reachOf(r, rbac.Read)) // R49 Phase 2: the caller's services
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -363,7 +408,23 @@ func (s *server) getIncident(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, incidentJSON(i, true))
+	s.incidentAnswer(w, r, http.StatusOK, i)
+}
+
+// incidentAnswer writes an incident with its locations; those on servers outside the caller's services are left out
+// and counted (R49 Phase 2, design §5.8: hidden_count).
+func (s *server) incidentAnswer(w http.ResponseWriter, r *http.Request, status int, i inventory.Incident) {
+	target := func(l inventory.IncidentLocation) uuid.UUID { return l.TargetID }
+	seen, err := s.targetsSeen(r, targetIDsOf(i.Locations, target))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var hidden int
+	i.Locations, hidden = keepSeen(i.Locations, target, seen)
+	d := incidentJSON(i, true)
+	d.HiddenCount = &hidden
+	writeJSON(w, status, d)
 }
 
 // The actions without a body.
@@ -399,7 +460,7 @@ func (s *server) incidentAction(act int) http.HandlerFunc {
 			s.fail(w, r, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, incidentJSON(i, true))
+		s.incidentAnswer(w, r, http.StatusOK, i)
 	}
 }
 
@@ -430,5 +491,5 @@ func (s *server) chooseReplacement(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, incidentJSON(i, true))
+	s.incidentAnswer(w, r, http.StatusOK, i)
 }

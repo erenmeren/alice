@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/db"
@@ -507,7 +508,13 @@ func (s *Service) Policy(ctx context.Context, id uuid.UUID) (Policy, error) {
 
 // Policies returns the live policies by name.
 func (s *Service) Policies(ctx context.Context) ([]Policy, error) {
-	rows, err := s.pool.Query(ctx, policySelect+" WHERE p.deleted_at IS NULL ORDER BY p.name, p.id")
+	return s.PoliciesIn(ctx, authz.Everywhere())
+}
+
+// PoliciesIn is Policies over those the caller sees (R49 Phase 2: the key's service or an approved one).
+func (s *Service) PoliciesIn(ctx context.Context, reach authz.Reach) ([]Policy, error) {
+	rows, err := s.pool.Query(ctx, policySelect+" WHERE p.deleted_at IS NULL AND "+authz.RotationPolicyVisible("p", "$1")+
+		" ORDER BY p.name, p.id", reach.SQL())
 	if err != nil {
 		return nil, fmt.Errorf("sshkeys: list rotation policies: %w", err)
 	}

@@ -55,6 +55,8 @@ type certificateDTO struct {
 	Capabilities      []string   `json:"capabilities"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
+	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
+	AllowedActions []string `json:"allowed_actions,omitempty"`
 }
 
 // capabilityNames is the wire form of a capability list.
@@ -73,6 +75,8 @@ type certificateDetailDTO struct {
 	PEMChain           string        `json:"pem_chain"`
 	Locations          []locationDTO `json:"locations"`
 	LocationsTruncated bool          `json:"locations_truncated"`
+	// HiddenCount is how many locations are on servers outside the caller's services (R49 Phase 2, design §5.8).
+	HiddenCount int `json:"hidden_count"`
 }
 
 func certificateJSON(c inventory.Certificate, refs serviceRefs) certificateDTO {
@@ -83,7 +87,7 @@ func certificateJSON(c inventory.Certificate, refs serviceRefs) certificateDTO {
 		LocationCount: c.LocationCount, FirstSeenAt: c.FirstSeenAt.UTC(), LastSeenAt: c.LastSeenAt.UTC(),
 		PublicKeySHA256: c.PublicKeySHA256, RevokedAt: utcPtr(c.RevokedAt), RevocationReason: c.RevocationReason, RevokedByName: c.RevokedByName,
 		CompromisedAt: utcPtr(c.CompromisedAt), ACMECertificateID: idPtr(c.ACMECertificateID),
-		Capabilities: capabilityNames(inventory.CertificateCapabilities(c)), Service: refs.of(c.ServiceID),
+		Capabilities: capabilityNames(inventory.CertificateCapabilities(c)), Service: refs.of(c.ServiceID), AllowedActions: refs.actions(c.ServiceID),
 	}
 }
 
@@ -203,13 +207,15 @@ type csrDTO struct {
 	FinishedAt    *time.Time `json:"finished_at"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
+	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
+	AllowedActions []string `json:"allowed_actions,omitempty"`
 }
 
 func csrJSON(c inventory.CSR, refs serviceRefs) csrDTO {
 	return csrDTO{
 		ID: c.ID.String(), CommonName: c.CommonName, SANs: nonNil(c.SANs), KeyAlgorithm: c.KeyAlgorithm, KeyBits: c.KeyBits,
 		CSRPEM: c.CSRPEM, Status: c.Status, CertificateID: idPtr(c.CertificateID), CreatedAt: c.CreatedAt.UTC(),
-		FinishedAt: utcPtr(c.FinishedAt), Service: refs.of(c.ServiceID),
+		FinishedAt: utcPtr(c.FinishedAt), Service: refs.of(c.ServiceID), AllowedActions: refs.actions(c.ServiceID),
 	}
 }
 

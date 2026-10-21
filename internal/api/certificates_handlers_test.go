@@ -88,15 +88,15 @@ func TestCertificateDTOsHaveExactlyTheDocumentedFields(t *testing.T) {
 	certFields := []string{"id", "fingerprint", "subject_cn", "subject", "issuer", "serial", "sans", "not_before", "not_after", "key_algorithm",
 		"key_bits", "source", "label", "has_private_key", "chain_complete", "self_signed", "location_count", "first_seen_at", "last_seen_at",
 		"public_key_sha256", "revoked_at", "revocation_reason", "revoked_by_name", "compromised_at", "acme_certificate_id", "capabilities"}
-	assert.Equal(t, sorted(certFields...), jsonKeys(t, certificateJSON(sampleCertificate(), nil)))
-	assert.Equal(t, sorted(append(certFields, "pem_chain", "locations", "locations_truncated")...), jsonKeys(t, certificateDetailJSON(sampleCertificate(), nil)))
+	assert.Equal(t, sorted(certFields...), jsonKeys(t, certificateJSON(sampleCertificate(), serviceRefs{})))
+	assert.Equal(t, sorted(append(certFields, "pem_chain", "locations", "locations_truncated", "hidden_count")...), jsonKeys(t, certificateDetailJSON(sampleCertificate(), serviceRefs{})))
 	assert.Equal(t, sorted("id", "target_id", "target_name", "cert_path", "key_path", "resolved_cert_path", "key_type", "certificate", "servers",
 		"supported", "unsupported_reason", "problem", "key_problem", "inherited", "custom_location", "symlinked", "key_exists", "key_mode",
 		"key_owner", "key_group", "warnings", "deployed_fingerprint", "changed_outside_at", "verify_port", "verify_sni", "skip_verify",
 		"first_seen_at", "last_seen_at", "missing_since", "version", "active_deployment_id", "target_type", "deployable", "observation"),
 		jsonKeys(t, locationJSON(sampleLocation())))
 	assert.Equal(t, sorted("id", "common_name", "sans", "key_algorithm", "key_bits", "csr_pem", "status", "certificate_id", "created_at",
-		"finished_at"), jsonKeys(t, csrJSON(sampleCSR(), nil)))
+		"finished_at"), jsonKeys(t, csrJSON(sampleCSR(), serviceRefs{})))
 
 	raw, err := json.Marshal(locationJSON(sampleLocation()))
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestCertificateDTOsHaveExactlyTheDocumentedFields(t *testing.T) {
 	assert.Contains(t, string(raw), `"servers":[{"names":["www.example.com"],"listens":[{"addr":"*","port":443,"default_server":true}],"file":"/etc/nginx/conf.d/www.conf","line":3}]`)
 	assert.Contains(t, string(raw), `"active_deployment_id":"`+deployID.String()+`"`)
 	assert.NotContains(t, string(raw), strings.Repeat("f", 64), "the file hash (compare-and-swap value) stays internal")
-	for _, v := range []any{certificateDetailJSON(sampleCertificate(), nil), csrJSON(sampleCSR(), nil), locationJSON(sampleLocation())} {
+	for _, v := range []any{certificateDetailJSON(sampleCertificate(), serviceRefs{}), csrJSON(sampleCSR(), serviceRefs{}), locationJSON(sampleLocation())} {
 		for _, k := range jsonKeys(t, v) {
 			for _, bad := range []string{"private_key_id", "password", "secret", "envelope", "ciphertext", "pfx"} {
 				assert.NotContains(t, k, bad)
@@ -118,11 +118,11 @@ func TestCertificateDTOsHaveExactlyTheDocumentedFields(t *testing.T) {
 	assert.Contains(t, string(raw), `"servers":[]`)
 	assert.Contains(t, string(raw), `"warnings":[]`)
 	assert.Contains(t, string(raw), `"certificate":null`)
-	raw, err = json.Marshal(certificateDetailJSON(inventory.Certificate{}, nil))
+	raw, err = json.Marshal(certificateDetailJSON(inventory.Certificate{}, serviceRefs{}))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"sans":[]`)
 	assert.Contains(t, string(raw), `"locations":[]`)
-	raw, err = json.Marshal(csrJSON(inventory.CSR{}, nil))
+	raw, err = json.Marshal(csrJSON(inventory.CSR{}, serviceRefs{}))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"sans":[]`)
 	assert.Contains(t, string(raw), `"certificate_id":null`)

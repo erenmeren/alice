@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"alice/internal/authz"
 	"alice/internal/certs"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
@@ -123,6 +124,9 @@ type CertificateFilter struct {
 	Limit    int // 1..200, default 50
 	// ServiceIDs keeps the certificates owned by these services (R49); nil = every service, empty = none.
 	ServiceIDs []uuid.UUID
+	// Reach keeps the certificates the caller sees (R49 Phase 2, design §5.8: visible from a service in it); the zero
+	// value is every service.
+	Reach authz.Reach
 }
 
 // CertificatePage is one page of certificates.
@@ -341,8 +345,9 @@ WHERE ($1::uuid IS NULL OR EXISTS (SELECT 1 FROM certificate_locations x WHERE x
        OR translate(array_to_string(c.sans, ' '), 'ABCDEFGHIJKLMNOPQRSTUVWXYZİı', 'abcdefghijklmnopqrstuvwxyzii') LIKE $5 ESCAPE '\')
   AND ($6::timestamptz IS NULL OR (c.not_after, c.id) > ($6::timestamptz, $7::uuid))
   AND ($9::uuid[] IS NULL OR c.service_id = ANY($9))
+  AND `+authz.CertificateVisible("c", "$10")+`
 ORDER BY c.not_after, c.id
-LIMIT $8`, target, f.Source, expiredBy, before, pattern, afterAt, afterID, limit+1, f.ServiceIDs)
+LIMIT $8`, target, f.Source, expiredBy, before, pattern, afterAt, afterID, limit+1, f.ServiceIDs, f.Reach.SQL())
 	if err != nil {
 		return CertificatePage{}, fmt.Errorf("inventory: list certificates: %w", err)
 	}

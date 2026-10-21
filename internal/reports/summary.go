@@ -9,16 +9,20 @@ import (
 
 	"alice/internal/alerts"
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/jobs"
 	"alice/internal/notify"
 	"alice/internal/platform/validate"
 	"alice/internal/rbac"
 )
 
-// Viewer is who asks; the role decides which parts of the summary are filled.
+// Viewer is who asks; the role decides which parts of the summary are filled. Role is the global role (the audit head,
+// the license detail and the delivery state are a global grant's); Reach is what the numbers count (R49 Phase 2: the
+// caller's read reach, design §5.8; the zero value is every service).
 type Viewer struct {
 	UserID uuid.UUID
 	Role   rbac.Role
+	Reach  authz.Reach
 }
 
 // Summary is the dashboard's data. The certificate counts are cumulative windows with the list filter's semantics
@@ -100,16 +104,16 @@ func (s *Service) Summary(ctx context.Context, v Viewer) (Summary, error) {
 	now := s.clock.Now().UTC()
 	out := Summary{GeneratedAt: now}
 	var err error
-	if out.Certificates, err = s.certificateCounts(ctx, now); err != nil {
+	if out.Certificates, err = s.certificateCounts(ctx, now, v.Reach); err != nil {
 		return Summary{}, err
 	}
-	if out.Deployments.Failed7d, err = s.countFailedDeployments(ctx, now); err != nil {
+	if out.Deployments.Failed7d, err = s.countFailedDeployments(ctx, now, v.Reach); err != nil {
 		return Summary{}, err
 	}
-	if out.Deployments.Recent, err = s.failedDeployments(ctx, now, 5); err != nil {
+	if out.Deployments.Recent, err = s.failedDeployments(ctx, now, 5, v.Reach); err != nil {
 		return Summary{}, err
 	}
-	if out.Targets, err = s.targetSummary(ctx); err != nil {
+	if out.Targets, err = s.targetSummary(ctx, v.Reach); err != nil {
 		return Summary{}, err
 	}
 	ev := s.license.Snapshot().Eval
@@ -118,7 +122,7 @@ func (s *Service) Summary(ctx context.Context, v Viewer) (Summary, error) {
 		ends, days := ev.EndsAt.UTC(), ev.DaysLeft
 		out.License.Phase, out.License.EndsAt, out.License.DaysLeft = string(ev.Phase), &ends, &days
 	}
-	if out.Rotation, err = s.rotationSummary(ctx, now); err != nil {
+	if out.Rotation, err = s.rotationSummary(ctx, now, v.Reach); err != nil {
 		return Summary{}, err
 	}
 	if v.Role == rbac.Admin {
@@ -145,32 +149,32 @@ func (s *Service) Summary(ctx context.Context, v Viewer) (Summary, error) {
 // filter (every certificate row; expired is not_after <= now, a window of n days is not_after < now + n days, expired
 // ones included), so each count equals the rows its dashboard link opens. The Key Vault line counts Key Vault keys and
 // client secrets, which the certificate list does not hold (Key Vault certificates are certificates).
-const countsSQL = `
+var countsSQL = `
 WITH kv AS (
     SELECT k.expires FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
-    WHERE k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL
+    WHERE k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL AND ` + authz.OwnedVisible("t", "$5") + `
     UNION ALL
     SELECT (cr.public_info->>'secret_expires_on')::timestamptz FROM targets t JOIN credentials cr ON cr.id = t.credential_id
-    WHERE t.type = 'azure_key_vault' AND t.deleted_at IS NULL AND cr.public_info ? 'secret_expires_on'
+    WHERE t.type = 'azure_key_vault' AND t.deleted_at IS NULL AND cr.public_info ? 'secret_expires_on' AND ` + authz.OwnedVisible("t", "$5") + `
 )
 SELECT c.expired, c.d7, c.d30, c.d60, k.expired, k.d30
 FROM (SELECT count(*) FILTER (WHERE not_after <= $1::timestamptz) AS expired,
              count(*) FILTER (WHERE not_after < $2::timestamptz) AS d7,
              count(*) FILTER (WHERE not_after < $3::timestamptz) AS d30,
-             count(*) FILTER (WHERE not_after < $4::timestamptz) AS d60 FROM certificates) c,
+             count(*) FILTER (WHERE not_after < $4::timestamptz) AS d60 FROM certificates cc WHERE ` + authz.CertificateVisible("cc", "$5") + `) c,
      (SELECT count(*) FILTER (WHERE expires <= $1::timestamptz) AS expired,
              count(*) FILTER (WHERE expires < $3::timestamptz) AS d30 FROM kv) k`
 
 // certificateCounts fills the cumulative windows in one statement. Monitored (certificates in use) is the alerts
 // package's one definition.
-func (s *Service) certificateCounts(ctx context.Context, now time.Time) (alerts.Counts, error) {
-	base, err := s.alerts.Counts(ctx)
+func (s *Service) certificateCounts(ctx context.Context, now time.Time, reach authz.Reach) (alerts.Counts, error) {
+	base, err := s.alerts.CountsIn(ctx, reach)
 	if err != nil {
 		return alerts.Counts{}, fmt.Errorf("reports: %w", err)
 	}
 	c := alerts.Counts{Monitored: base.Monitored}
 	day := 24 * time.Hour
-	err = s.pool.QueryRow(ctx, countsSQL, now, now.Add(7*day), now.Add(30*day), now.Add(60*day)).
+	err = s.pool.QueryRow(ctx, countsSQL, now, now.Add(7*day), now.Add(30*day), now.Add(60*day), reach.SQL()).
 		Scan(&c.Expired, &c.Within7, &c.Within30, &c.Within60, &c.KVExpired, &c.KVWithin30)
 	if err != nil {
 		return alerts.Counts{}, fmt.Errorf("reports: count the certificates: %w", err)
@@ -178,10 +182,11 @@ func (s *Service) certificateCounts(ctx context.Context, now time.Time) (alerts.
 	return c, nil
 }
 
-func (s *Service) countFailedDeployments(ctx context.Context, now time.Time) (int, error) {
+func (s *Service) countFailedDeployments(ctx context.Context, now time.Time, reach authz.Reach) (int, error) {
 	var n int
-	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM deployments WHERE status IN `+failedStatuses+`
-AND (status = 'needs_attention' OR coalesce(finished_at, created_at) >= $1)`, now.Add(-FailedWindow)).Scan(&n)
+	err := s.pool.QueryRow(ctx, `SELECT count(*) FROM deployments d WHERE d.status IN `+failedStatuses+`
+AND (d.status = 'needs_attention' OR coalesce(d.finished_at, d.created_at) >= $1) AND `+authz.DeploymentVisible("d", "$2"),
+		now.Add(-FailedWindow), reach.SQL()).Scan(&n)
 	if err != nil {
 		return 0, fmt.Errorf("reports: count the failed deployments: %w", err)
 	}
@@ -189,12 +194,13 @@ AND (status = 'needs_attention' OR coalesce(finished_at, created_at) >= $1)`, no
 }
 
 // failedDeployments lists the failed deployments of FailedWindow, newest first; limit 0 lists all.
-func (s *Service) failedDeployments(ctx context.Context, now time.Time, limit int) ([]FailedDeployment, error) {
+func (s *Service) failedDeployments(ctx context.Context, now time.Time, limit int, reach authz.Reach) ([]FailedDeployment, error) {
 	rows, err := s.pool.Query(ctx, `SELECT d.id, coalesce(nullif(c.subject_cn, ''), nullif(c.label, ''), left(c.fingerprint_sha256, 16)),
 t.id, t.name::text, d.status, d.error_code, coalesce(d.finished_at, d.created_at)
 FROM deployments d JOIN certificates c ON c.id = d.certificate_id JOIN targets t ON t.id = d.target_id
 WHERE d.status IN `+failedStatuses+` AND (d.status = 'needs_attention' OR coalesce(d.finished_at, d.created_at) >= $1)
-ORDER BY coalesce(d.finished_at, d.created_at) DESC, d.id DESC LIMIT NULLIF($2::int, 0)`, now.Add(-FailedWindow), limit)
+  AND `+authz.DeploymentVisible("d", "$3")+`
+ORDER BY coalesce(d.finished_at, d.created_at) DESC, d.id DESC LIMIT NULLIF($2::int, 0)`, now.Add(-FailedWindow), limit, reach.SQL())
 	if err != nil {
 		return nil, fmt.Errorf("reports: read the failed deployments: %w", err)
 	}
@@ -214,12 +220,13 @@ ORDER BY coalesce(d.finished_at, d.created_at) DESC, d.id DESC LIMIT NULLIF($2::
 	return out, nil
 }
 
-func (s *Service) targetSummary(ctx context.Context) (TargetSummary, error) {
+func (s *Service) targetSummary(ctx context.Context, reach authz.Reach) (TargetSummary, error) {
 	ts := TargetSummary{ByStatus: map[string]int{}}
 	for _, st := range knownTargetStatuses {
 		ts.ByStatus[st] = 0
 	}
-	rows, err := s.pool.Query(ctx, `SELECT status, count(*) FROM targets WHERE deleted_at IS NULL GROUP BY status`)
+	rows, err := s.pool.Query(ctx, `SELECT status, count(*) FROM targets WHERE deleted_at IS NULL AND `+authz.OwnedVisible("targets", "$1")+
+		` GROUP BY status`, reach.SQL())
 	if err != nil {
 		return TargetSummary{}, fmt.Errorf("reports: count the targets: %w", err)
 	}
@@ -239,11 +246,12 @@ func (s *Service) targetSummary(ctx context.Context) (TargetSummary, error) {
 	return ts, nil
 }
 
-func (s *Service) rotationSummary(ctx context.Context, now time.Time) (RotationSummary, error) {
+func (s *Service) rotationSummary(ctx context.Context, now time.Time, reach authz.Reach) (RotationSummary, error) {
 	var rs RotationSummary
 	rows, err := s.pool.Query(ctx, `SELECT p.id, p.ssh_key_id, k.label, p.next_run_at FROM rotation_policies p
 JOIN ssh_keys k ON k.id = p.ssh_key_id
-WHERE p.enabled AND p.deleted_at IS NULL AND p.next_run_at <= $1 ORDER BY p.next_run_at, p.id LIMIT 5`, now.Add(RotationWindow))
+WHERE p.enabled AND p.deleted_at IS NULL AND p.next_run_at <= $1 AND `+authz.RotationPolicyVisible("p", "$2")+`
+ORDER BY p.next_run_at, p.id LIMIT 5`, now.Add(RotationWindow), reach.SQL())
 	if err != nil {
 		return RotationSummary{}, fmt.Errorf("reports: read the upcoming rotations: %w", err)
 	}
@@ -261,7 +269,9 @@ WHERE p.enabled AND p.deleted_at IS NULL AND p.next_run_at <= $1 ORDER BY p.next
 	}
 	rows.Close()
 	err = s.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE status NOT IN ('completed', 'aborted', 'cancelled', 'needs_attention')),
-count(*) FILTER (WHERE status = 'needs_attention') FROM rotations`).Scan(&rs.Running, &rs.NeedsAttention)
+count(*) FILTER (WHERE status = 'needs_attention') FROM rotations r
+WHERE $1::uuid[] IS NULL OR EXISTS (SELECT 1 FROM rotation_policies vp WHERE vp.id = r.policy_id AND `+authz.RotationPolicyVisible("vp", "$1")+`)`,
+		reach.SQL()).Scan(&rs.Running, &rs.NeedsAttention)
 	if err != nil {
 		return RotationSummary{}, fmt.Errorf("reports: count the rotations: %w", err)
 	}
@@ -287,6 +297,11 @@ func (s *Service) auditHead(ctx context.Context) (*AuditHead, error) {
 // Expiring lists the monitored items that expire within days (1..365), soonest first, expired ones included. Only the
 // managed kinds: an unmanaged certificate a scan found is not in the Overview's list (decision D2).
 func (s *Service) Expiring(ctx context.Context, days, limit int) ([]alerts.Item, error) {
+	return s.ExpiringIn(ctx, days, limit, authz.Everywhere())
+}
+
+// ExpiringIn is Expiring over what the services in reach see (R49 Phase 2).
+func (s *Service) ExpiringIn(ctx context.Context, days, limit int, reach authz.Reach) ([]alerts.Item, error) {
 	var v validate.Errors
 	if days < 1 || days > 365 {
 		v.Add("days", validate.OutOfRange, map[string]string{"min": "1", "max": "365"})
@@ -297,7 +312,7 @@ func (s *Service) Expiring(ctx context.Context, days, limit int) ([]alerts.Item,
 	if err := v.Err(); err != nil {
 		return nil, err
 	}
-	items, err := s.alerts.Items(ctx, alerts.ManagedKinds(), s.clock.Now().UTC().Add(time.Duration(days)*24*time.Hour), limit)
+	items, err := s.alerts.ItemsIn(ctx, alerts.ManagedKinds(), s.clock.Now().UTC().Add(time.Duration(days)*24*time.Hour), limit, reach)
 	if err != nil {
 		return nil, fmt.Errorf("reports: %w", err)
 	}

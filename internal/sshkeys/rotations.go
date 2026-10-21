@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"alice/internal/authz"
 	"alice/internal/platform/db"
 	"alice/internal/sshkeys/plan"
 )
@@ -219,6 +220,9 @@ type RotationFilter struct {
 	PolicyID, KeyID uuid.UUID // uuid.Nil = any; KeyID matches the old or the new key
 	Cursor          string
 	Limit           int // 1..200, default 50
+	// Reach keeps the runs of policies the caller sees (R49 Phase 2: the key's service or an approved one); the zero
+	// value is every service.
+	Reach authz.Reach
 }
 
 // ErrBadCursor: the list cursor is not one this service returned.
@@ -383,7 +387,8 @@ CROSS JOIN LATERAL (SELECT count(*) AS total,
     FROM rotation_locations l WHERE l.rotation_id = r.id) c
 WHERE ($1::uuid IS NULL OR r.policy_id = $1) AND ($2::uuid IS NULL OR r.old_ssh_key_id = $2 OR r.new_ssh_key_id = $2)
   AND ($3::timestamptz IS NULL OR (r.created_at, r.id) < ($3, $4::uuid))
-ORDER BY r.created_at DESC, r.id DESC LIMIT $5`, nilUUID(f.PolicyID), nilUUID(f.KeyID), afterAt, afterID, limit+1)
+  AND ($6::uuid[] IS NULL OR EXISTS (SELECT 1 FROM rotation_policies vp WHERE vp.id = r.policy_id AND `+authz.RotationPolicyVisible("vp", "$6")+`))
+ORDER BY r.created_at DESC, r.id DESC LIMIT $5`, nilUUID(f.PolicyID), nilUUID(f.KeyID), afterAt, afterID, limit+1, f.Reach.SQL())
 	if err != nil {
 		return nil, "", fmt.Errorf("sshkeys: list rotations: %w", err)
 	}

@@ -26,6 +26,7 @@ import (
 	"alice/internal/auth/ldap"
 	"alice/internal/auth/oidc"
 	"alice/internal/auth/ratelimit"
+	"alice/internal/authz"
 	"alice/internal/backup"
 	"alice/internal/discovery"
 	"alice/internal/discovery/discoverysvc"
@@ -151,7 +152,7 @@ type InventoryService interface {
 	GetCertificate(ctx context.Context, id uuid.UUID) (inventory.Certificate, error)
 	UploadCertificate(ctx context.Context, a inventory.Actor, in inventory.UploadInput) (inventory.Certificate, []string, error)
 	CreateCSR(ctx context.Context, a inventory.Actor, in inventory.CSRInput) (inventory.CSR, error)
-	ListCSRs(ctx context.Context) ([]inventory.CSR, error)
+	ListCSRsIn(ctx context.Context, reach authz.Reach) ([]inventory.CSR, error)
 	GetCSR(ctx context.Context, id uuid.UUID) (inventory.CSR, error)
 	CompleteCSR(ctx context.Context, a inventory.Actor, id uuid.UUID, certificatePEM, label string) (inventory.Certificate, []string, error)
 	CancelCSR(ctx context.Context, a inventory.Actor, id uuid.UUID) (inventory.CSR, error)
@@ -207,7 +208,7 @@ type ACMEService interface {
 	CreateACMEHook(ctx context.Context, a inventory.Actor, in inventory.ACMEHookInput) (inventory.ACMEHook, error)
 	UpdateACMEHook(ctx context.Context, a inventory.Actor, id uuid.UUID, p inventory.ACMEHookPatch) (inventory.ACMEHook, error)
 	DeleteACMEHook(ctx context.Context, a inventory.Actor, id uuid.UUID) error
-	ListACMECertificates(ctx context.Context) ([]inventory.ACMECertificate, error)
+	ListACMECertificatesIn(ctx context.Context, reach authz.Reach) ([]inventory.ACMECertificate, error)
 	GetACMECertificate(ctx context.Context, id uuid.UUID) (inventory.ACMECertificate, error)
 	CreateACMECertificate(ctx context.Context, a inventory.Actor, in inventory.ACMECertificateInput) (inventory.ACMECertificate, error)
 	UpdateACMECertificate(ctx context.Context, a inventory.Actor, id uuid.UUID, p inventory.ACMECertificatePatch) (inventory.ACMECertificate, error)
@@ -244,7 +245,7 @@ type SSHKeysService interface {
 	SetPolicyEnabled(ctx context.Context, a inventory.Actor, id uuid.UUID, version int, enabled bool) (sshkeys.Policy, error)
 	DeletePolicy(ctx context.Context, a inventory.Actor, id uuid.UUID, version int) error
 	Policy(ctx context.Context, id uuid.UUID) (sshkeys.Policy, error)
-	Policies(ctx context.Context) ([]sshkeys.Policy, error)
+	PoliciesIn(ctx context.Context, reach authz.Reach) ([]sshkeys.Policy, error)
 	Preview(ctx context.Context, a inventory.Actor, id uuid.UUID) (sshkeys.Preview, error)
 	RunNow(ctx context.Context, a inventory.Actor, id uuid.UUID, digest string) (sshkeys.Rotation, error)
 	Rotation(ctx context.Context, id uuid.UUID) (sshkeys.Rotation, error)
@@ -281,7 +282,7 @@ type AlertsService interface {
 // saved views.
 type ReportsService interface {
 	Summary(ctx context.Context, v reports.Viewer) (reports.Summary, error)
-	Expiring(ctx context.Context, days, limit int) ([]alerts.Item, error)
+	ExpiringIn(ctx context.Context, days, limit int, reach authz.Reach) ([]alerts.Item, error)
 	Attention(ctx context.Context, v reports.Viewer) ([]reports.Condition, error)
 	ExportCertificates(ctx context.Context, a audit.Actor, f inventory.CertificateFilter, w io.Writer) (int, error)
 	ExportSSHKeys(ctx context.Context, a audit.Actor, f inventory.KeyFilter, w io.Writer) (int, error)
@@ -374,11 +375,11 @@ type DiscoveryService interface {
 	GetScan(ctx context.Context, id uuid.UUID) (discoverysvc.ScanView, error)
 	ListScans(ctx context.Context, f discoverysvc.ScanFilter) ([]discoverysvc.ScanView, bool, error)
 	ListCertificates(ctx context.Context, f discovery.CertificateFilter) ([]discovery.CertificateRow, bool, error)
-	Certificate(ctx context.Context, fingerprint string) (discovery.CertificateRow, []discovery.EndpointRow, bool, error)
+	CertificateIn(ctx context.Context, fingerprint string, reach authz.Reach) (discovery.CertificateRow, []discovery.EndpointRow, bool, error)
 	ListEndpoints(ctx context.Context, f discovery.EndpointFilter) ([]discovery.EndpointRow, bool, error)
 	Settings(ctx context.Context) (discoverysvc.SettingsView, error)
 	SaveSettings(ctx context.Context, a discoverysvc.Actor, in discoverysvc.Settings) (discoverysvc.SettingsView, error)
-	Summary(ctx context.Context) (discoverysvc.Summary, error)
+	SummaryIn(ctx context.Context, reach authz.Reach) (discoverysvc.Summary, error)
 }
 
 var _ DiscoveryService = (*discoverysvc.Service)(nil)

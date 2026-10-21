@@ -29,6 +29,7 @@ func (s *server) listDeployments(w http.ResponseWriter, r *http.Request) {
 		LocationID:    optionalUUID(q.Get("location_id"), "location_id", &v),
 		Cursor:        q.Get("cursor"),
 		Limit:         pageLimit(q.Get("limit"), &v),
+		Reach:         s.reachOf(r, rbac.Read), // R49 Phase 2: the deployments the caller sees
 	}
 	if len(f.Cursor) > maxCursorBytes {
 		v.Add("cursor", validate.TooLong, map[string]string{"max": strconv.Itoa(maxCursorBytes)})

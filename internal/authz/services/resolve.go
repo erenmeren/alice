@@ -152,6 +152,32 @@ func (s *Store) Resolve(ctx context.Context, kind string, id any) (Resolution, e
 	return r, nil
 }
 
+// TargetServices is the service of each of the servers and Key Vaults named (deleted ones included: a detail answer
+// may name a location on a deleted server), by id; an unknown id is absent. The detail answers use it to leave out the
+// related rows of servers outside the caller's reach (design §5.8, hidden_count).
+func (s *Store) TargetServices(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	out := map[uuid.UUID]uuid.UUID{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := s.pool.Query(ctx, "SELECT id, service_id FROM targets WHERE id = ANY($1)", ids)
+	if err != nil {
+		return nil, fmt.Errorf("services: read the servers' services: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, service uuid.UUID
+		if err := rows.Scan(&id, &service); err != nil {
+			return nil, fmt.Errorf("services: read the servers' services: %w", err)
+		}
+		out[id] = service
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("services: read the servers' services: %w", err)
+	}
+	return out, nil
+}
+
 func compareIDs(a, b uuid.UUID) int {
 	for i := range a {
 		switch {

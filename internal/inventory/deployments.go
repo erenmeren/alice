@@ -262,6 +262,9 @@ type DeploymentFilter struct {
 	LocationID    uuid.UUID
 	Cursor        string
 	Limit         int // 1..200, default 50
+	// Reach keeps the deployments the caller sees (R49 Phase 2: its server's service or its certificate's); the zero
+	// value is every service.
+	Reach authz.Reach
 }
 
 // DeploymentPage is one page of deployments.
@@ -773,8 +776,9 @@ WHERE ($1::uuid IS NULL OR d.target_id = $1)
   AND ($2::uuid IS NULL OR d.certificate_id = $2)
   AND ($3::uuid IS NULL OR d.location_id = $3)
   AND ($4::timestamptz IS NULL OR (d.created_at, d.id) < ($4::timestamptz, $5::uuid))
+  AND `+authz.DeploymentVisible("d", "$7")+`
 ORDER BY d.created_at DESC, d.id DESC
-LIMIT $6`, nullID(f.TargetID), nullID(f.CertificateID), nullID(f.LocationID), afterAt, afterID, limit+1)
+LIMIT $6`, nullID(f.TargetID), nullID(f.CertificateID), nullID(f.LocationID), afterAt, afterID, limit+1, f.Reach.SQL())
 	if err != nil {
 		return DeploymentPage{}, fmt.Errorf("inventory: list deployments: %w", err)
 	}

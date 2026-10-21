@@ -77,26 +77,26 @@ func sampleACMECert() inventory.ACMECertificate {
 // critical when it leaves less than half of the renewal window.
 func TestACMECertificateJSONCAWait(t *testing.T) {
 	c := sampleACMECert() // valid acmeAt .. acmeAt + 90 d: due at + 60 d, the middle of the window at + 75 d
-	d := acmeCertificateJSON(c, acmeAt, nil)
+	d := acmeCertificateJSON(c, acmeAt, serviceRefs{})
 	assert.Nil(t, d.CANotBefore)
 	assert.False(t, d.CAWaitCritical)
 
 	backoff, ca := acmeAt.Add(time.Hour), acmeAt.Add(48*time.Hour)
 	c.NextAttemptAt, c.CANotBefore = &backoff, &ca
-	d = acmeCertificateJSON(c, acmeAt, nil)
+	d = acmeCertificateJSON(c, acmeAt, serviceRefs{})
 	require.NotNil(t, d.CANotBefore)
 	assert.Equal(t, ca, *d.CANotBefore)
 	assert.Equal(t, ca, *d.NextAttemptAt, "the later of the two")
 	assert.False(t, d.CAWaitCritical)
 	c.NextAttemptAt = nil
-	assert.Equal(t, ca, *acmeCertificateJSON(c, acmeAt, nil).NextAttemptAt, "re-armed: the CA's wait alone")
-	assert.Nil(t, acmeCertificateJSON(c, ca, nil).CANotBefore, "over: not shown")
+	assert.Equal(t, ca, *acmeCertificateJSON(c, acmeAt, serviceRefs{}).NextAttemptAt, "re-armed: the CA's wait alone")
+	assert.Nil(t, acmeCertificateJSON(c, ca, serviceRefs{}).CANotBefore, "over: not shown")
 
 	late := acmeAt.Add(76 * 24 * time.Hour)
 	c.CANotBefore = &late
-	assert.True(t, acmeCertificateJSON(c, acmeAt.Add(70*24*time.Hour), nil).CAWaitCritical, "past the middle of the window")
+	assert.True(t, acmeCertificateJSON(c, acmeAt.Add(70*24*time.Hour), serviceRefs{}).CAWaitCritical, "past the middle of the window")
 
-	raw, err := json.Marshal(acmeCertificateJSON(sampleACMECert(), acmeAt, nil))
+	raw, err := json.Marshal(acmeCertificateJSON(sampleACMECert(), acmeAt, serviceRefs{}))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"ca_not_before":null,"ca_wait_critical":false`, "both always present (the openapi's required list)")
 }
@@ -105,25 +105,25 @@ func TestACMECertificateJSONCAWait(t *testing.T) {
 // local rule (local); none before the first certificate. An order shows its replaces identifier and outcome.
 func TestACMECertificateJSONRenewAt(t *testing.T) {
 	c := sampleACMECert() // valid acmeAt .. acmeAt + 90 d: due at + 60 d by the local rule
-	d := acmeCertificateJSON(c, acmeAt, nil)
+	d := acmeCertificateJSON(c, acmeAt, serviceRefs{})
 	require.NotNil(t, d.RenewAt)
 	assert.Equal(t, acmeAt.Add(60*24*time.Hour), *d.RenewAt)
 	assert.Equal(t, "local", d.RenewAtSource)
 
 	ws, we, chosen := acmeAt.Add(40*24*time.Hour), acmeAt.Add(45*24*time.Hour), acmeAt.Add(42*24*time.Hour)
 	c.ARIWindowStart, c.ARIWindowEnd, c.ARIRenewAt = &ws, &we, &chosen
-	d = acmeCertificateJSON(c, acmeAt, nil)
+	d = acmeCertificateJSON(c, acmeAt, serviceRefs{})
 	assert.Equal(t, chosen, *d.RenewAt)
 	assert.Equal(t, "ca_window", d.RenewAtSource)
 
 	outside := acmeAt.Add(50 * 24 * time.Hour)
 	c.ARIRenewAt = &outside
-	d = acmeCertificateJSON(c, acmeAt, nil)
+	d = acmeCertificateJSON(c, acmeAt, serviceRefs{})
 	assert.Equal(t, acmeAt.Add(60*24*time.Hour), *d.RenewAt, "a stored time outside the window is not used")
 	assert.Equal(t, "local", d.RenewAtSource)
 
 	c.Current = nil
-	d = acmeCertificateJSON(c, acmeAt, nil)
+	d = acmeCertificateJSON(c, acmeAt, serviceRefs{})
 	assert.Nil(t, d.RenewAt)
 	assert.Empty(t, d.RenewAtSource)
 	raw, err := json.Marshal(d)
@@ -486,7 +486,7 @@ func TestACMECertificateHandlers(t *testing.T) {
 
 	stopped := sampleACMECert()
 	stopped.State, stopped.Current, stopped.ARIWindowStart, stopped.ARIWindowEnd = inventory.ACMEStateStopped, nil, nil, nil
-	d := acmeCertificateJSON(stopped, acmeAt, nil)
+	d := acmeCertificateJSON(stopped, acmeAt, serviceRefs{})
 	assert.Equal(t, acmeStoppedRenewalFailures, d.StoppedReason)
 	assert.Nil(t, d.Current)
 	assert.Nil(t, d.ARIWindow)
@@ -522,10 +522,10 @@ func TestACMECertificateHandlers(t *testing.T) {
 	cur := *failing.Current
 	cur.NotAfter = acmeAt.Add(-time.Hour)
 	expired.Current = &cur
-	assert.False(t, acmeCertificateJSON(expired, acmeAt, nil).Recovering, "an expired certificate is not recovered by itself")
+	assert.False(t, acmeCertificateJSON(expired, acmeAt, serviceRefs{}).Recovering, "an expired certificate is not recovered by itself")
 	odd := failing
 	odd.LastFailureClass = "flaky"
-	assert.Equal(t, "", acmeCertificateJSON(odd, acmeAt, nil).LastFailureClass)
+	assert.Equal(t, "", acmeCertificateJSON(odd, acmeAt, serviceRefs{}).LastFailureClass)
 	f.ACMENoticeDeliveryFn = func(context.Context, uuid.UUID) (*inventory.ACMENoticeDelivery, error) {
 		return nil, inventory.ErrNotFound
 	}
@@ -996,8 +996,8 @@ func TestACMEDTOFallbacks(t *testing.T) {
 	assert.Equal(t, inventory.ACMEBindingPending, acmeBindingJSON(b).State)
 	c := sampleACMECert()
 	c.DeployHeldReason = "bogus"
-	assert.Empty(t, acmeCertificateJSON(c, acmeAt, nil).DeployHeldReason)
-	assert.Nil(t, acmeCertificateJSON(inventory.ACMECertificate{}, acmeAt, nil).LastError)
+	assert.Empty(t, acmeCertificateJSON(c, acmeAt, serviceRefs{}).DeployHeldReason)
+	assert.Nil(t, acmeCertificateJSON(inventory.ACMECertificate{}, acmeAt, serviceRefs{}).LastError)
 	assert.Equal(t, []string{}, acmeProviderJSON(inventory.ACMEProvider{}).AllowedSuffixes)
 }
 

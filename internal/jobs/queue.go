@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/inventory"
 	"alice/internal/license"
 	"alice/internal/platform/clock"
@@ -137,6 +138,9 @@ type ListFilter struct {
 	TargetID uuid.UUID // uuid.Nil = all
 	Cursor   string
 	Limit    int // 1..200, default 50
+	// Reach keeps the jobs of the caller's services (R49 Phase 2, design §5.8); platform work (no service) only for
+	// every service. The zero value is every service.
+	Reach authz.Reach
 }
 
 // canonicalPayload is the payload's JSON with sorted keys; a nil payload is {}.
@@ -420,8 +424,9 @@ func (q *Queue) List(ctx context.Context, f ListFilter) ([]View, string, error) 
 WHERE ($1::text IS NULL OR status = $1)
   AND ($2::uuid IS NULL OR target_id = $2)
   AND ($3::timestamptz IS NULL OR (created_at, id) < ($3, $4::uuid))
+  AND `+authz.OwnedVisible("jobs", "$6")+`
 ORDER BY created_at DESC, id DESC
-LIMIT $5`, nullString(string(f.Status)), nullUUID(f.TargetID), afterAt, afterID, limit+1)
+LIMIT $5`, nullString(string(f.Status)), nullUUID(f.TargetID), afterAt, afterID, limit+1, f.Reach.SQL())
 	if err != nil {
 		return nil, "", fmt.Errorf("jobs: list: %w", err)
 	}

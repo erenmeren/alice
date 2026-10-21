@@ -41,6 +41,7 @@ type ServicesService interface {
 	// R49 Phase 2: where a resource belongs (guard's check of the path's resource), the role bindings and a person's
 	// access.
 	Resolve(ctx context.Context, kind string, id any) (services.Resolution, error)
+	TargetServices(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 	Bindings(ctx context.Context, f services.BindingFilter) ([]services.Binding, error)
 	Binding(ctx context.Context, id uuid.UUID) (services.Binding, error)
 	CreateBinding(ctx context.Context, a services.Actor, in services.BindingInput) (services.Binding, error)
@@ -109,12 +110,26 @@ type environmentRefDTO struct {
 	Name string    `json:"name"`
 }
 
-// serviceRefDTO is how a row shows the service that owns it (design §8.2).
+// serviceRefDTO is how a row shows the service that owns it (design §8.2). A service outside the caller's reach is
+// {"outside": true}: a person with role bindings learns that the row belongs elsewhere, never where (design §5.8).
 type serviceRefDTO struct {
 	ID          uuid.UUID          `json:"id"`
 	Name        string             `json:"name"`
 	Environment *environmentRefDTO `json:"environment"`
+	Outside     bool               `json:"-"`
 }
+
+// MarshalJSON writes {"outside": true} for a service outside the caller's reach.
+func (d serviceRefDTO) MarshalJSON() ([]byte, error) {
+	if d.Outside {
+		return []byte(`{"outside":true}`), nil
+	}
+	type plain serviceRefDTO
+	return json.Marshal(plain(d))
+}
+
+// outsideName marks, in a serviceRefs map, a service the caller cannot see (no service name holds a control character).
+const outsideName = "\x00outside"
 
 func environmentRefJSON(e *authz.EnvironmentRef) *environmentRefDTO {
 	if e == nil {
@@ -127,8 +142,35 @@ func serviceRefJSON(ref authz.ServiceRef) serviceRefDTO {
 	return serviceRefDTO{ID: ref.ID, Name: ref.Name, Environment: environmentRefJSON(ref.Environment)}
 }
 
-// serviceRefs are the services of one answer by id (read once per request, at most services.MaxServices).
-type serviceRefs map[uuid.UUID]authz.ServiceRef
+// serviceRefs are the services of one answer by id (read once per request, at most services.MaxServices), and the
+// caller whose allowed_actions the rows show.
+type serviceRefs struct {
+	byID    map[uuid.UUID]authz.ServiceRef
+	subject rbac.Subject
+}
+
+// resourcePermissions are the permissions a row's allowed_actions may name (design §8.2: what the caller holds on the
+// row's owning service), in a fixed order.
+var resourcePermissions = []rbac.Permission{rbac.Read, rbac.TargetsManage, rbac.HostKeysConfirm, rbac.HostKeysRepin, rbac.InventoryOperate,
+	rbac.JobsConfirm, rbac.CertificatesOperate, rbac.CredentialsManage, rbac.SSHKeysDownload, rbac.RotationManage, rbac.RotationOperate,
+	rbac.AcmeView, rbac.AcmeOperate, rbac.AcmeManage, rbac.DiscoveryView, rbac.DiscoveryOperate, rbac.CertificatesIncident,
+	rbac.ServicesAssign, rbac.ServicesTrust}
+
+// actions is a row's allowed_actions: the permissions the caller holds on its owning service (a global grant counts on
+// every service; the token scope narrows; the step-up window is not considered: the web UI asks for it when needed).
+func (refs serviceRefs) actions(service uuid.UUID) []string {
+	sub := refs.subject
+	if sub.Kind == rbac.UserSession {
+		sub.StepUp = true
+	}
+	out := []string{}
+	for _, p := range resourcePermissions {
+		if rbac.DecideIn(p, sub, service) == rbac.Allow {
+			out = append(out, string(p))
+		}
+	}
+	return out
+}
 
 // of is the owning service of a row as its DTO shows it: nil for no service (a test double's zero id); a service the
 // answer did not read (deleted meanwhile) shows its id alone.
@@ -136,7 +178,10 @@ func (refs serviceRefs) of(id uuid.UUID) *serviceRefDTO {
 	if id == uuid.Nil {
 		return nil
 	}
-	if ref, ok := refs[id]; ok {
+	if ref, ok := refs.byID[id]; ok {
+		if ref.Name == outsideName {
+			return &serviceRefDTO{Outside: true}
+		}
 		d := serviceRefJSON(ref)
 		return &d
 	}
@@ -146,15 +191,25 @@ func (refs serviceRefs) of(id uuid.UUID) *serviceRefDTO {
 // serviceRefs reads the services the rows of an answer name. It never fails the answer: without the services module,
 // or when the read fails (logged), the rows show the service's id alone.
 func (s *server) serviceRefs(r *http.Request) serviceRefs {
+	out := serviceRefs{subject: s.subjectOf(r)}
 	if s.deps.Services == nil {
-		return nil
+		return out
 	}
 	refs, err := s.deps.Services.Refs(r.Context())
 	if err != nil {
 		s.deps.Log.Warn("could not read the services of an answer", append([]any{"request_id", RequestID(r.Context())}, errorAttrs(err)...)...)
-		return nil
+		return out
 	}
-	return refs
+	// A person with role bindings sees the name of a service in their read reach only (R49 Phase 2, design §5.8).
+	if reach := s.reachOf(r, rbac.Read); reach.Limited {
+		for id := range refs {
+			if !reach.Contains(id) {
+				refs[id] = authz.ServiceRef{ID: id, Name: outsideName}
+			}
+		}
+	}
+	out.byID = refs
+	return out
 }
 
 // serviceFilter reads the list filters service_id and environment_id (each repeatable, design §5.8) as the set of
@@ -176,7 +231,7 @@ func (s *server) serviceFilter(r *http.Request, v *validate.Errors) []uuid.UUID 
 	}
 	refs := s.serviceRefs(r)
 	out := []uuid.UUID{}
-	for id, ref := range refs {
+	for id, ref := range refs.byID {
 		if wantServices != nil && !slices.Contains(wantServices, id) {
 			continue
 		}
@@ -185,7 +240,7 @@ func (s *server) serviceFilter(r *http.Request, v *validate.Errors) []uuid.UUID 
 		}
 		out = append(out, id)
 	}
-	if refs == nil && wantEnvs == nil {
+	if refs.byID == nil && wantEnvs == nil {
 		out = wantServices // without the module the ids are taken as given
 	}
 	slices.SortFunc(out, func(a, b uuid.UUID) int { return bytes.Compare(a[:], b[:]) })
@@ -428,9 +483,10 @@ func (s *server) listServices(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	reach := s.reachOf(r, rbac.Read) // R49 Phase 2: the caller's services; every service for a global grant
 	items := make([]serviceDTO, 0, len(list))
 	for _, sv := range list {
-		if inServices(filter, sv.ID) {
+		if inServices(filter, sv.ID) && reach.Contains(sv.ID) {
 			items = append(items, serviceJSON(sv))
 		}
 	}
@@ -633,9 +689,14 @@ func (s *server) listTrusts(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	reach := s.reachOf(r, rbac.Read) // R49 Phase 2: the trusts with either side in the caller's reach
 	items := make([]serviceTrustDTO, 0, len(list))
 	for _, t := range list {
-		items = append(items, serviceTrustJSON(t))
+		if reach.Contains(t.Source.ID) || reach.Contains(t.Target.ID) {
+			d := serviceTrustJSON(t)
+			d.Source.Outside, d.Target.Outside = !reach.Contains(t.Source.ID), !reach.Contains(t.Target.ID) // the other side unnamed
+			items = append(items, d)
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
@@ -680,10 +741,10 @@ func (s *server) untrustedParams(r *http.Request, err error) map[string]string {
 	}
 	refs := s.serviceRefs(r)
 	params := map[string]string{"source_service_id": u.Source.String(), "target_service_id": u.Target.String()}
-	if ref, ok := refs[u.Source]; ok {
+	if ref, ok := refs.byID[u.Source]; ok && ref.Name != outsideName {
 		params["source_service"] = ref.Name
 	}
-	if ref, ok := refs[u.Target]; ok {
+	if ref, ok := refs.byID[u.Target]; ok && ref.Name != outsideName {
 		params["target_service"] = ref.Name
 	}
 	return params

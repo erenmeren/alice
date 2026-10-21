@@ -126,6 +126,8 @@ type targetDTO struct {
 	UpdatedAt              time.Time    `json:"updated_at"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
+	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
+	AllowedActions []string `json:"allowed_actions,omitempty"`
 }
 
 func utcPtr(t *time.Time) *time.Time {
@@ -180,7 +182,7 @@ func targetJSON(t inventory.Target, refs serviceRefs) targetDTO {
 		LastSuccessAt: utcPtr(t.LastSuccessAt), LastDiscoveryAt: utcPtr(t.LastDiscoveryAt),
 		DiscoveryIntervalHours: int(t.DiscoveryInterval / time.Hour), KeysManagedElsewhere: t.KeysManagedElsewhere,
 		Capabilities: nonNil(t.Capabilities), Facts: factsJSON(t.Facts), Vault: vaultJSON(t), Version: t.Version,
-		CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(), Service: refs.of(t.ServiceID),
+		CreatedAt: t.CreatedAt.UTC(), UpdatedAt: t.UpdatedAt.UTC(), Service: refs.of(t.ServiceID), AllowedActions: refs.actions(t.ServiceID),
 	}
 }
 
@@ -251,6 +253,8 @@ type sshKeyDTO struct {
 	Locations     []keyLocationDTO `json:"locations,omitempty"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
+	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
+	AllowedActions []string `json:"allowed_actions,omitempty"`
 }
 
 // sshKeyJSON renders a key; withLocations adds the locations array (always present, possibly empty).
@@ -259,7 +263,7 @@ func sshKeyJSON(k inventory.SSHKey, withLocations bool, refs serviceRefs) sshKey
 		ID: k.ID.String(), Fingerprint: k.Fingerprint, KeyType: k.KeyType, Bits: k.Bits, PublicKey: k.PublicKey,
 		Managed: k.Managed, IsPlatformKey: k.IsPlatformKey, Weak: k.Weak, Comment: k.Comment,
 		LocationCount: k.LocationCount, TargetCount: k.TargetCount, Missing: k.Missing, FirstSeenAt: k.FirstSeenAt.UTC(),
-		Service: refs.of(k.ServiceID),
+		Service: refs.of(k.ServiceID), AllowedActions: refs.actions(k.ServiceID),
 	}
 	if withLocations {
 		d.Locations = make([]keyLocationDTO, 0, len(k.Locations))

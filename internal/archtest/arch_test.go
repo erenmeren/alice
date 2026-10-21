@@ -53,7 +53,7 @@ var rules = map[string][]string{
 	"alice/internal/inventory/...": {platform, "alice/internal/secrets/...", "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/rbac/...", "alice/internal/providers", "alice/internal/certs/...", "alice/internal/acme/keygen",
 		"alice/internal/acme", "alice/internal/acme/transport", "alice/internal/acme/solver", "alice/internal/acme/solver/dns01", "alice/internal/acme/renew",
 		"alice/internal/alerts/expiry", "alice/internal/authz"},
-	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/..."},
+	"alice/internal/jobs/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...", "alice/internal/providers", "alice/internal/notify/...", "alice/internal/sshkeys/...", "alice/internal/authz"},
 	// The ACME jobs drive an order: the client, the solver contract and both solvers (an HTTP-01 publisher is the target
 	// session of the provider registry, reached through the providers interface), the key and CSR, and the inventory.
 	"alice/internal/jobs/acmejobs": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
@@ -81,10 +81,10 @@ var rules = map[string][]string{
 	"alice/internal/sshkeys/keymat": {platform, "alice/internal/secrets/..."},
 	"alice/internal/sshkeys/plan":   {platform, "alice/internal/sshkeys/keymat"},
 	// Phase 7 (R42 row 1): the alert module, the read-only reports module and the pure packages.
-	"alice/internal/alerts/...":    {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/..."},
+	"alice/internal/alerts/...":    {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/notify/...", "alice/internal/authz"},
 	"alice/internal/alerts/expiry": {platform},
 	"alice/internal/reports/...": {platform, "alice/internal/audit/...", "alice/internal/license/...", "alice/internal/inventory/...",
-		"alice/internal/notify/...", "alice/internal/alerts/...", "alice/internal/jobs/...", "alice/internal/rbac/..."},
+		"alice/internal/notify/...", "alice/internal/alerts/...", "alice/internal/jobs/...", "alice/internal/rbac/...", "alice/internal/authz"},
 	"alice/internal/auth/oidc/claims": {platform, "alice/internal/rbac/..."},
 	// Directory sign-in (plan 2026-10-15): the pure helpers (escaping, filter templates, names, unique ids).
 	"alice/internal/auth/ldap/ldapx": {platform, "alice/internal/rbac/..."},
@@ -125,7 +125,7 @@ var rules = map[string][]string{
 	// Network certificate discovery (plan 2026-10-13-network-discovery): the scope model, its expansion and the
 	// scanner know the platform (netaddr's scan policy above all) and the license gate (the scanner asks it before every
 	// batch, amendment A5); the probe knows the platform only.
-	"alice/internal/discovery/...":      {platform, "alice/internal/license/..."},
+	"alice/internal/discovery/...":      {platform, "alice/internal/license/...", "alice/internal/authz"},
 	"alice/internal/discovery/tlsprobe": {platform},
 	// The discovery service behind the API (Task 9): scopes, settings, scans (queued with their job and audit row in one
 	// transaction through netdiscojobs.StartTx) and the read side; never the probe, the inventory or the providers.

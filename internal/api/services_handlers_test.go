@@ -13,17 +13,20 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"alice/internal/auth"
 	"alice/internal/authz"
 	"alice/internal/authz/services"
 	"alice/internal/inventory"
 	"alice/internal/platform/validate"
+	"alice/internal/rbac"
 )
 
 // fakeServices is ServicesService for the handler tests: every method answers through its Fn, or errNotConfigured;
 // Refs answers the services of refs.
 type fakeServices struct {
-	refs      map[uuid.UUID]authz.ServiceRef
-	lastActor services.Actor
+	refs           map[uuid.UUID]authz.ServiceRef
+	lastActor      services.Actor
+	targetServices map[uuid.UUID]uuid.UUID // TargetServices' answer
 
 	CreateServiceFn func(in services.ServiceInput) (services.Service, error)
 	UpdateServiceFn func(id uuid.UUID, version int, p services.ServicePatch) (services.Service, error)
@@ -118,6 +121,15 @@ func (f *fakeServices) Resolve(_ context.Context, kind string, id any) (services
 		return f.ResolveFn(kind, id)
 	}
 	return services.Resolution{}, services.ErrResourceNotFound
+}
+func (f *fakeServices) TargetServices(_ context.Context, ids []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	out := map[uuid.UUID]uuid.UUID{}
+	for _, id := range ids {
+		if svc, ok := f.targetServices[id]; ok {
+			out[id] = svc
+		}
+	}
+	return out, nil
 }
 func (f *fakeServices) Bindings(_ context.Context, fl services.BindingFilter) ([]services.Binding, error) {
 	if f.BindingsFn != nil {
@@ -297,7 +309,10 @@ func TestServiceFilter(t *testing.T) {
 	s := newServer(d)
 	filter := func(q string) ([]uuid.UUID, validate.Errors) {
 		var v validate.Errors
-		got := s.serviceFilter(newJSONRequest(http.MethodGet, "/api/v1/targets?"+q, ""), &v)
+		r := newJSONRequest(http.MethodGet, "/api/v1/targets?"+q, "")
+		// A global grant: the filter is not narrowed by a reach (a person without one sees no service's name).
+		r = r.WithContext(context.WithValue(r.Context(), principalKey{}, auth.Principal{Kind: rbac.UserSession, Role: rbac.Auditor}))
+		got := s.serviceFilter(r, &v)
 		return got, v
 	}
 	got, v := filter("")
@@ -334,7 +349,7 @@ func TestRowsShowTheirService(t *testing.T) {
 	require.Len(t, list.Items, 1, "the filter keeps the production service's server")
 	assert.Equal(t, "Payments", list.Items[0].Service["name"])
 	assert.Equal(t, "production", list.Items[0].Service["environment"].(map[string]any)["key"])
-	raw, err := json.Marshal(targetJSON(tg, nil))
+	raw, err := json.Marshal(targetJSON(tg, serviceRefs{}))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"service":{"id":"`+svcPay.String()+`","name":"","environment":null}`)
 }

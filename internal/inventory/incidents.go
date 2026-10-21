@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/license"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
@@ -246,6 +247,12 @@ const MaxIncidentsListed = 200
 // ListIncidents returns the newest incidents (open ones only when openOnly), of one certificate when certificateID is
 // not nil; at most limit (1..MaxIncidentsListed, 0 = 50).
 func (s *Service) ListIncidents(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int) ([]Incident, error) {
+	return s.ListIncidentsIn(ctx, certificateID, openOnly, limit, authz.Everywhere())
+}
+
+// ListIncidentsIn is ListIncidents over the incidents visible from the services in reach (R49 Phase 2: the
+// certificate's service or one in service_ids); the limit counts those only.
+func (s *Service) ListIncidentsIn(ctx context.Context, certificateID *uuid.UUID, openOnly bool, limit int, reach authz.Reach) ([]Incident, error) {
 	if limit == 0 {
 		limit = 50
 	}
@@ -254,8 +261,8 @@ func (s *Service) ListIncidents(ctx context.Context, certificateID *uuid.UUID, o
 			Params: map[string]string{"min": "1", "max": strconv.Itoa(MaxIncidentsListed)}}}
 	}
 	rows, err := s.pool.Query(ctx, incidentSelect+`
-WHERE ($1::uuid IS NULL OR i.certificate_id = $1) AND (NOT $2 OR i.finished_at IS NULL)
-ORDER BY i.created_at DESC, i.id DESC LIMIT $3`, certificateID, openOnly, limit)
+WHERE ($1::uuid IS NULL OR i.certificate_id = $1) AND (NOT $2 OR i.finished_at IS NULL) AND `+authz.IncidentVisible("i", "$4")+`
+ORDER BY i.created_at DESC, i.id DESC LIMIT $3`, certificateID, openOnly, limit, reach.SQL())
 	if err != nil {
 		return nil, fmt.Errorf("inventory: list incidents: %w", err)
 	}

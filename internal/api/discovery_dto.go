@@ -40,6 +40,8 @@ type discoveryScopeDTO struct {
 	LastScan        *discoveryScanDTO `json:"last_scan"`
 	// Service is the owning service (R49, design §8.2).
 	Service *serviceRefDTO `json:"service,omitempty"`
+	// AllowedActions are the permissions the caller holds on the row's owning service (R49 Phase 2, design §8.2).
+	AllowedActions []string `json:"allowed_actions,omitempty"`
 }
 
 func nullID(id uuid.NullUUID) *string {
@@ -56,7 +58,7 @@ func discoveryScopeJSON(v discoverysvc.ScopeView, refs serviceRefs) discoverySco
 		Exclusions: nonNil(sc.Exclusions), Enabled: sc.Enabled, ScheduleHours: sc.Schedule.Hours, WindowStart: sc.Schedule.WindowStart,
 		WindowEnd: sc.Schedule.WindowEnd, WindowTZ: sc.Schedule.TimeZone, AlertOnExpiry: sc.AlertOnExpiry, RatePerSec: sc.RatePerSec,
 		Concurrency: sc.Concurrency, Version: v.Version, CreatedBy: nullID(v.CreatedBy), CreatedAt: v.CreatedAt.UTC(), UpdatedAt: v.UpdatedAt.UTC(),
-		LastScheduledAt: utcPtr(v.LastScheduledAt), ActiveScanID: nullID(v.ActiveScanID), Service: refs.of(v.ServiceID)}
+		LastScheduledAt: utcPtr(v.LastScheduledAt), ActiveScanID: nullID(v.ActiveScanID), Service: refs.of(v.ServiceID), AllowedActions: refs.actions(v.ServiceID)}
 	if v.LastScan != nil {
 		s := discoveryScanJSON(*v.LastScan)
 		d.LastScan = &s

@@ -40,6 +40,7 @@ func (s *server) listJobs(w http.ResponseWriter, r *http.Request) {
 		TargetID: optionalUUID(q.Get("target_id"), "target_id", &v),
 		Cursor:   q.Get("cursor"),
 		Limit:    pageLimit(q.Get("limit"), &v),
+		Reach:    s.reachOf(r, rbac.Read), // R49 Phase 2: the jobs of the caller's services; platform work for global grants
 	}
 	if f.Status != "" && !slices.Contains(jobStatuses, string(f.Status)) {
 		v.Add("status", validate.OneOf, map[string]string{"values": strings.Join(jobStatuses, ", ")})

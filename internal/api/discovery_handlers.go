@@ -170,7 +170,7 @@ func (s *server) listDiscoveryScopes(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var v validate.Errors
 	f := discoverysvc.ScopeFilter{Limit: pageLimit(q.Get("limit"), &v), After: cursorParam(q.Get("cursor"), parseScopeCursor, &v),
-		ServiceIDs: s.serviceFilter(r, &v)}
+		ServiceIDs: s.serviceFilter(r, &v), Reach: s.reachOf(r, rbac.DiscoveryView)}
 	if err := v.Err(); err != nil {
 		s.fail(w, r, err)
 		return
@@ -328,7 +328,7 @@ func (s *server) listDiscoveryScans(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var v validate.Errors
 	f := discoverysvc.ScanFilter{ScopeID: optionalUUID(q.Get("scope_id"), "scope_id", &v), State: q.Get("state"),
-		Limit: pageLimit(q.Get("limit"), &v), After: cursorParam(q.Get("cursor"), parseScanCursor, &v)}
+		Limit: pageLimit(q.Get("limit"), &v), After: cursorParam(q.Get("cursor"), parseScanCursor, &v), Reach: s.reachOf(r, rbac.DiscoveryView)}
 	if f.State != "" && !slices.Contains(discoveryScanStates, f.State) {
 		v.Add("state", validate.OneOf, map[string]string{"values": strings.Join(discoveryScanStates, ", ")})
 	}
@@ -429,7 +429,7 @@ func (s *server) discoveryCertificateFilter(w http.ResponseWriter, r *http.Reque
 	now := s.deps.Clock.Now().UTC()
 	f := discovery.CertificateFilter{Now: now, ScopeID: optionalUUID(q.Get("scope_id"), "scope_id", &v),
 		Expired: triState(q.Get("expired"), "expired", &v), SelfSigned: triState(q.Get("self_signed"), "self_signed", &v),
-		Query: strings.TrimSpace(q.Get("q"))}
+		Query: strings.TrimSpace(q.Get("q")), Reach: s.reachOf(r, rbac.DiscoveryView)}
 	// current: only certificates some endpoint that is not gone presents or last presented (the summary's definition).
 	if c := triState(q.Get("current"), "current", &v); c != nil {
 		f.Current = *c
@@ -498,7 +498,7 @@ func (s *server) getDiscoveredCertificate(w http.ResponseWriter, r *http.Request
 		s.writeError(w, r, ErrNotFound)
 		return
 	}
-	c, eps, more, err := s.deps.Discovery.Certificate(r.Context(), fp)
+	c, eps, more, err := s.deps.Discovery.CertificateIn(r.Context(), fp, s.reachOf(r, rbac.DiscoveryView))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -528,6 +528,9 @@ func (s *server) exportDiscoveredCertificates(w http.ResponseWriter, r *http.Req
 		return
 	}
 	details["kind"], details["format"] = "discovery_certificates", "csv"
+	if f.Reach.Limited {
+		details["reach"] = f.Reach.String() // R49 Phase 2: the services the caller sees (absent: every service)
+	}
 	page := func(ctx context.Context, cursor string) ([][]string, string, error) {
 		g := f
 		g.Limit, g.After = 200, nil
@@ -600,7 +603,7 @@ func (s *server) listDiscoveredEndpoints(w http.ResponseWriter, r *http.Request)
 	q := r.URL.Query()
 	var v validate.Errors
 	f := discovery.EndpointFilter{ScopeID: optionalUUID(q.Get("scope_id"), "scope_id", &v), Fingerprint: q.Get("fingerprint"),
-		Limit: pageLimit(q.Get("limit"), &v), After: cursorParam(q.Get("cursor"), parseEndpointCursor, &v)}
+		Limit: pageLimit(q.Get("limit"), &v), After: cursorParam(q.Get("cursor"), parseEndpointCursor, &v), Reach: s.reachOf(r, rbac.DiscoveryView)}
 	if f.Fingerprint != "" && !fingerprintRE.MatchString(f.Fingerprint) {
 		v.Add("fingerprint", validate.Pattern, nil)
 	}
@@ -675,7 +678,7 @@ func (s *server) putDiscoverySettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) discoverySummary(w http.ResponseWriter, r *http.Request) {
-	v, err := s.deps.Discovery.Summary(r.Context())
+	v, err := s.deps.Discovery.SummaryIn(r.Context(), s.reachOf(r, rbac.DiscoveryView))
 	if err != nil {
 		s.fail(w, r, err)
 		return

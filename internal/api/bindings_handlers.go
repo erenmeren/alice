@@ -53,16 +53,28 @@ func parseIDList(raw []string, field string, max int, v *validate.Errors) []uuid
 	return ids
 }
 
-func bindingAnswer(w http.ResponseWriter, status int, b inventory.Binding) {
+// bindingAnswer writes a binding with its strong validator. Its websites on servers outside the caller's services are
+// left out and counted (R49 Phase 2, design §5.8: hidden_count).
+func (s *server) bindingAnswer(w http.ResponseWriter, r *http.Request, status int, b inventory.Binding) {
+	target := func(l inventory.BindingLocation) uuid.UUID { return l.TargetID }
+	seen, err := s.targetsSeen(r, targetIDsOf(b.Locations, target))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var hidden int
+	b.Locations, hidden = keepSeen(b.Locations, target, seen)
+	d := bindingJSON(b)
+	d.HiddenCount = hidden
 	w.Header().Set("ETag", etag(b.Version))
-	writeJSON(w, status, bindingJSON(b))
+	writeJSON(w, status, d)
 }
 
 func (s *server) listDeployableLocations(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var v validate.Errors
 	f := inventory.LocationFilter{Query: q.Get("q"), KeyType: q.Get("key_type"), Unbound: parseBool(q.Get("unbound"), "unbound", &v),
-		Cursor: q.Get("cursor"), Limit: pageLimit(q.Get("limit"), &v)}
+		Cursor: q.Get("cursor"), Limit: pageLimit(q.Get("limit"), &v), Reach: s.reachOf(r, rbac.Read)}
 	if f.KeyType != "" && f.KeyType != "rsa" && f.KeyType != "ecdsa" {
 		v.Add("key_type", validate.OneOf, map[string]string{"values": "rsa, ecdsa"})
 	}
@@ -109,7 +121,7 @@ func (s *server) createBinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Location", "/api/v1/bindings/"+b.ID.String())
-	bindingAnswer(w, http.StatusCreated, b)
+	s.bindingAnswer(w, r, http.StatusCreated, b)
 }
 
 func (s *server) getBinding(w http.ResponseWriter, r *http.Request) {
@@ -123,7 +135,7 @@ func (s *server) getBinding(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	bindingAnswer(w, http.StatusOK, b)
+	s.bindingAnswer(w, r, http.StatusOK, b)
 }
 
 // updateBinding replaces the websites of a binding. Adding websites to a binding that deploys automatically
@@ -171,7 +183,7 @@ func (s *server) updateBinding(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	bindingAnswer(w, http.StatusOK, b)
+	s.bindingAnswer(w, r, http.StatusOK, b)
 }
 
 // addsLocations reports whether ids names a website the binding does not have.
@@ -212,7 +224,7 @@ func (s *server) setAutoDeploy(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	bindingAnswer(w, http.StatusOK, b)
+	s.bindingAnswer(w, r, http.StatusOK, b)
 }
 
 func (s *server) deleteBinding(w http.ResponseWriter, r *http.Request) {

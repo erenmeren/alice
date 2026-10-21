@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"alice/internal/authz"
 )
 
 const maxListed = 10
@@ -22,7 +24,7 @@ const maxListed = 10
 // alert), presents it or last presented it (the definition
 // of the discovery summary). Its object id is DiscoveredObjectID, computed by Items (NULL here). alerting is NOT
 // MATERIALIZED for the same reason as live: the endpoint fingerprint index.
-const itemsSQL = `
+var itemsSQL = `
 WITH live AS NOT MATERIALIZED (
     SELECT l.certificate_id, l.servers, t.id AS target_id, t.name::text AS target_name
     FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
@@ -44,6 +46,7 @@ SELECT 'certificate_expiry'::text AS kind, c.id AS object_id,
 FROM certificates c
 WHERE 'certificate_expiry' = ANY ($1::text[]) AND c.not_after <= $2::timestamptz
   AND EXISTS (SELECT 1 FROM live x WHERE x.certificate_id = c.id)
+  AND `+authz.CertificateVisible("c", "$4")+`
 UNION ALL
 SELECT 'kv_certificate_expiry', kc.id, kc.name, kc.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM kv_certificates kc JOIN targets t ON t.id = kc.target_id AND t.deleted_at IS NULL
@@ -51,17 +54,20 @@ WHERE 'kv_certificate_expiry' = ANY ($1::text[]) AND kc.missing_since IS NULL AN
   AND kc.expires <= $2::timestamptz
   AND NOT EXISTS (SELECT 1 FROM kv_certificate_versions v JOIN live x ON x.certificate_id = v.certificate_id
                   WHERE v.kv_certificate_id = kc.id AND v.version = kc.current_version)
+  AND `+authz.OwnedVisible("t", "$4")+`
 UNION ALL
 SELECT 'kv_key_expiry', k.id, k.name, k.expires, '', '{}'::text[], '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
 WHERE 'kv_key_expiry' = ANY ($1::text[]) AND k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL
   AND k.expires <= $2::timestamptz
+  AND `+authz.OwnedVisible("t", "$4")+`
 UNION ALL
 SELECT 'kv_credential_expiry', t.id, t.name::text, (cr.public_info->>'secret_expires_on')::timestamptz, '', '{}'::text[],
        '{}'::text[], '{}'::text[], t.name::text, t.id
 FROM targets t JOIN credentials cr ON cr.id = t.credential_id
 WHERE 'kv_credential_expiry' = ANY ($1::text[]) AND t.type = 'azure_key_vault' AND t.deleted_at IS NULL
   AND cr.public_info ? 'secret_expires_on' AND (cr.public_info->>'secret_expires_on')::timestamptz <= $2::timestamptz
+  AND `+authz.OwnedVisible("t", "$4")+`
 UNION ALL
 SELECT 'discovered_certificate_expiry', NULL::uuid,
        coalesce(nullif(d.subject_cn, ''), d.sans[1], left(d.fingerprint_sha256, 16)), d.not_after, d.fingerprint_sha256,
@@ -74,17 +80,25 @@ FROM discovery_certificates d
 WHERE 'discovered_certificate_expiry' = ANY ($1::text[]) AND d.is_leaf AND d.not_after <= $2::timestamptz
   AND NOT EXISTS (SELECT 1 FROM certificates c WHERE c.fingerprint_sha256 = d.fingerprint_sha256)
   AND EXISTS (SELECT 1 FROM alerting e WHERE e.fingerprint_sha256 = d.fingerprint_sha256)
+  AND `+authz.DiscoveredCertificateVisible("d", "$4")+`
 ORDER BY 4, 2, 5
 LIMIT NULLIF($3::int, 0)`
 
 // Items lists the monitored items of kinds that expire before until, soonest first, expired ones included. limit 0
 // is no limit.
 func (s *Service) Items(ctx context.Context, kinds []Kind, until time.Time, limit int) ([]Item, error) {
+	return s.ItemsIn(ctx, kinds, until, limit, authz.Everywhere())
+}
+
+// ItemsIn is Items over what the services in reach see (R49 Phase 2, the dashboard's expiring list of a person with
+// role bindings): a certificate visible from one of them, a Key Vault object of a vault of one of them, a discovered
+// certificate seen by a scope of one of them.
+func (s *Service) ItemsIn(ctx context.Context, kinds []Kind, until time.Time, limit int, reach authz.Reach) ([]Item, error) {
 	names := make([]string, len(kinds))
 	for i, k := range kinds {
 		names[i] = string(k)
 	}
-	rows, err := s.pool.Query(ctx, itemsSQL, names, until.UTC(), limit)
+	rows, err := s.pool.Query(ctx, itemsSQL, names, until.UTC(), limit, reach.SQL())
 	if err != nil {
 		return nil, fmt.Errorf("alerts: read the monitored items: %w", err)
 	}
@@ -141,23 +155,25 @@ func capList(in []string) ([]string, bool) {
 	return in, false
 }
 
-const countsSQL = `
+var countsSQL = `
 WITH live AS (
     SELECT l.certificate_id FROM certificate_locations l JOIN targets t ON t.id = l.target_id AND t.deleted_at IS NULL
     WHERE l.missing_since IS NULL AND l.certificate_id IS NOT NULL
 ),
-mon AS (SELECT c.not_after FROM certificates c WHERE EXISTS (SELECT 1 FROM live x WHERE x.certificate_id = c.id)),
+mon AS (SELECT c.not_after FROM certificates c WHERE EXISTS (SELECT 1 FROM live x WHERE x.certificate_id = c.id)
+    AND `+authz.CertificateVisible("c", "$2")+`),
 kv AS (
     SELECT kc.expires FROM kv_certificates kc JOIN targets t ON t.id = kc.target_id AND t.deleted_at IS NULL
     WHERE kc.missing_since IS NULL AND kc.enabled AND kc.expires IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM kv_certificate_versions v JOIN live x ON x.certificate_id = v.certificate_id
                       WHERE v.kv_certificate_id = kc.id AND v.version = kc.current_version)
+      AND `+authz.OwnedVisible("t", "$2")+`
     UNION ALL
     SELECT k.expires FROM kv_keys k JOIN targets t ON t.id = k.target_id AND t.deleted_at IS NULL
-    WHERE k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL
+    WHERE k.missing_since IS NULL AND k.enabled AND k.expires IS NOT NULL AND `+authz.OwnedVisible("t", "$2")+`
     UNION ALL
     SELECT (cr.public_info->>'secret_expires_on')::timestamptz FROM targets t JOIN credentials cr ON cr.id = t.credential_id
-    WHERE t.type = 'azure_key_vault' AND t.deleted_at IS NULL AND cr.public_info ? 'secret_expires_on'
+    WHERE t.type = 'azure_key_vault' AND t.deleted_at IS NULL AND cr.public_info ? 'secret_expires_on' AND `+authz.OwnedVisible("t", "$2")+`
 )
 SELECT (SELECT count(*) FROM mon),
        (SELECT count(*) FROM mon WHERE not_after <= $1::timestamptz),
@@ -169,8 +185,13 @@ SELECT (SELECT count(*) FROM mon),
 
 // Counts are the dashboard's numbers, computed from the same definition of "monitored".
 func (s *Service) Counts(ctx context.Context) (Counts, error) {
+	return s.CountsIn(ctx, authz.Everywhere())
+}
+
+// CountsIn is Counts over what the services in reach see (R49 Phase 2), as ItemsIn.
+func (s *Service) CountsIn(ctx context.Context, reach authz.Reach) (Counts, error) {
 	var c Counts
-	err := s.pool.QueryRow(ctx, countsSQL, s.clock.Now().UTC()).Scan(&c.Monitored, &c.Expired, &c.Within7, &c.Within30, &c.Within60,
+	err := s.pool.QueryRow(ctx, countsSQL, s.clock.Now().UTC(), reach.SQL()).Scan(&c.Monitored, &c.Expired, &c.Within7, &c.Within30, &c.Within60,
 		&c.KVExpired, &c.KVWithin30)
 	if err != nil {
 		return Counts{}, fmt.Errorf("alerts: count the monitored items: %w", err)

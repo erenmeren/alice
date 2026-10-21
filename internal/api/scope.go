@@ -306,6 +306,50 @@ func (s *server) servicesOf(ctx context.Context, kind string, ids []uuid.UUID) (
 	return out, nil
 }
 
+// targetsSeen answers which of the servers and Key Vaults a detail answer names the caller sees (design §5.8: a
+// certificate's, an SSH key's, a binding's, an incident's locations and a certificate's impact list only the rows in
+// reach; hidden_count counts the others). Every one for a caller whose read reach is every service, without a query.
+func (s *server) targetsSeen(r *http.Request, ids []uuid.UUID) (func(uuid.UUID) bool, error) {
+	reach := s.reachOf(r, rbac.Read)
+	if reach.All() {
+		return func(uuid.UUID) bool { return true }, nil
+	}
+	if s.deps.Services == nil {
+		return func(uuid.UUID) bool { return false }, nil
+	}
+	of, err := s.deps.Services.TargetServices(r.Context(), ids)
+	if err != nil {
+		return nil, err
+	}
+	return func(id uuid.UUID) bool {
+		svc, ok := of[id]
+		return ok && reach.Contains(svc)
+	}, nil
+}
+
+// keepSeen filters rows by their target (seen reports whether the caller sees it) and counts the rows left out.
+func keepSeen[T any](rows []T, target func(T) uuid.UUID, seen func(uuid.UUID) bool) ([]T, int) {
+	out := make([]T, 0, len(rows))
+	hidden := 0
+	for _, row := range rows {
+		if seen(target(row)) {
+			out = append(out, row)
+		} else {
+			hidden++
+		}
+	}
+	return out, hidden
+}
+
+// targetIDsOf lists the targets of rows.
+func targetIDsOf[T any](rows []T, target func(T) uuid.UUID) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, target(row))
+	}
+	return out
+}
+
 // visibleTo reports whether a row visible from services is in the caller's read reach (the related rows of a detail
 // answer, design §5.8).
 func visibleTo(reach authz.Reach, services ...uuid.UUID) bool { return reach.ContainsAny(services) }

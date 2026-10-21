@@ -282,14 +282,21 @@ func (s *Service) GetCSR(ctx context.Context, id uuid.UUID) (CSR, error) {
 // ListCSRs returns the pending requests, newest first (at most maxListedPendingCSRs), then the 50
 // most recently finished.
 func (s *Service) ListCSRs(ctx context.Context) ([]CSR, error) {
+	return s.ListCSRsIn(ctx, authz.Everywhere())
+}
+
+// ListCSRsIn is ListCSRs over the requests of the services in reach (R49 Phase 2): the bounds count those only.
+func (s *Service) ListCSRsIn(ctx context.Context, reach authz.Reach) ([]CSR, error) {
 	rows, err := s.pool.Query(ctx, `SELECT r.id, r.common_name, r.sans, k.algorithm, k.bits, r.csr_pem, r.status, r.certificate_id, r.created_at,
     r.finished_at, r.service_id
-FROM ((SELECT 0 AS grp, created_at AS at, id FROM csr_requests WHERE status = 'pending' ORDER BY created_at DESC, id DESC LIMIT $1)
+FROM ((SELECT 0 AS grp, created_at AS at, id FROM csr_requests x WHERE status = 'pending' AND `+authz.OwnedVisible("x", "$3")+`
+       ORDER BY created_at DESC, id DESC LIMIT $1)
       UNION ALL
-      (SELECT 1, finished_at, id FROM csr_requests WHERE status <> 'pending' ORDER BY finished_at DESC, id DESC LIMIT $2)) sel
+      (SELECT 1, finished_at, id FROM csr_requests x WHERE status <> 'pending' AND `+authz.OwnedVisible("x", "$3")+`
+       ORDER BY finished_at DESC, id DESC LIMIT $2)) sel
 JOIN csr_requests r ON r.id = sel.id
 JOIN managed_private_keys k ON k.id = r.private_key_id
-ORDER BY sel.grp, sel.at DESC, sel.id DESC`, maxListedPendingCSRs, listedFinishedCSRs)
+ORDER BY sel.grp, sel.at DESC, sel.id DESC`, maxListedPendingCSRs, listedFinishedCSRs, reach.SQL())
 	if err != nil {
 		return nil, fmt.Errorf("inventory: list signing requests: %w", err)
 	}

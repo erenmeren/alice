@@ -14,6 +14,7 @@ import (
 	"alice/internal/audit"
 	"alice/internal/auth"
 	"alice/internal/auth/oidc"
+	"alice/internal/authz"
 	"alice/internal/inventory"
 	"alice/internal/jobs"
 	"alice/internal/license"
@@ -587,7 +588,7 @@ func (f *fakeInventory) CreateCSR(ctx context.Context, a inventory.Actor, in inv
 	return inventory.CSR{}, errNotConfigured
 }
 
-func (f *fakeInventory) ListCSRs(ctx context.Context) ([]inventory.CSR, error) {
+func (f *fakeInventory) ListCSRsIn(ctx context.Context, _ authz.Reach) ([]inventory.CSR, error) {
 	if f.ListCSRsFn != nil {
 		return f.ListCSRsFn(ctx)
 	}
@@ -1060,7 +1061,7 @@ func (f *fakeSSHKeys) Policy(ctx context.Context, id uuid.UUID) (sshkeys.Policy,
 	return sshkeys.Policy{}, errNotConfigured
 }
 
-func (f *fakeSSHKeys) Policies(ctx context.Context) ([]sshkeys.Policy, error) {
+func (f *fakeSSHKeys) PoliciesIn(ctx context.Context, _ authz.Reach) ([]sshkeys.Policy, error) {
 	f.record("Policies")
 	if f.PoliciesFn != nil {
 		return f.PoliciesFn(ctx)
@@ -1363,7 +1364,7 @@ func (f *fakeReports) Summary(ctx context.Context, v reports.Viewer) (reports.Su
 	return reports.Summary{}, errNotConfigured
 }
 
-func (f *fakeReports) Expiring(ctx context.Context, days, limit int) ([]alerts.Item, error) {
+func (f *fakeReports) ExpiringIn(ctx context.Context, days, limit int, _ authz.Reach) ([]alerts.Item, error) {
 	f.record()
 	if f.ExpiringFn != nil {
 		return f.ExpiringFn(ctx, days, limit)

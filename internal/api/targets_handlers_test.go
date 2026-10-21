@@ -157,7 +157,7 @@ func TestCreateTargetRefusesUnknownTypeWithTheFourKinds(t *testing.T) {
 }
 
 func TestTargetJSONHasExactlyTheDocumentedFields(t *testing.T) {
-	raw, err := json.Marshal(targetJSON(sampleTarget(), nil))
+	raw, err := json.Marshal(targetJSON(sampleTarget(), serviceRefs{}))
 	require.NoError(t, err)
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(raw, &m))
@@ -184,7 +184,7 @@ func TestTargetWithoutErrorHasNullLastError(t *testing.T) {
 	tg := sampleTarget()
 	tg.LastErrorCode = ""
 	tg.Facts = inventory.Facts{}
-	raw, err := json.Marshal(targetJSON(tg, nil))
+	raw, err := json.Marshal(targetJSON(tg, serviceRefs{}))
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"last_error":null`)
 	assert.Contains(t, string(raw), `"host_keys":[]`, "lists are never null")

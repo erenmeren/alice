@@ -382,7 +382,14 @@ func (s *Service) GetACMECertificate(ctx context.Context, id uuid.UUID) (ACMECer
 
 // ListACMECertificates returns the live ACME certificates, oldest first.
 func (s *Service) ListACMECertificates(ctx context.Context) ([]ACMECertificate, error) {
-	rows, err := s.pool.Query(ctx, "SELECT "+acmeCertColumns+" FROM acme_certificates c WHERE c.deleted_at IS NULL ORDER BY c.created_at, c.id")
+	return s.ListACMECertificatesIn(ctx, authz.Everywhere())
+}
+
+// ListACMECertificatesIn is ListACMECertificates over those visible from the services in reach (R49 Phase 2: the
+// owning service or a bound location's server's).
+func (s *Service) ListACMECertificatesIn(ctx context.Context, reach authz.Reach) ([]ACMECertificate, error) {
+	rows, err := s.pool.Query(ctx, "SELECT "+acmeCertColumns+" FROM acme_certificates c WHERE c.deleted_at IS NULL AND "+
+		authz.ACMECertificateVisible("c", "$1")+" ORDER BY c.created_at, c.id", reach.SQL())
 	if err != nil {
 		return nil, fmt.Errorf("inventory: list the ACME certificates: %w", err)
 	}

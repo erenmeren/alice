@@ -404,6 +404,8 @@ type bindingDTO struct {
 	CreatedAt       time.Time            `json:"created_at"`
 	CreatedBy       *string              `json:"created_by"`
 	Locations       []bindingLocationDTO `json:"locations"`
+	// HiddenCount is how many websites are on servers outside the caller's services (R49 Phase 2, design §5.8).
+	HiddenCount int `json:"hidden_count"`
 }
 
 func bindingJSON(b inventory.Binding) bindingDTO {

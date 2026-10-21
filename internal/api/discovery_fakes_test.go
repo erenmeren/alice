@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"alice/internal/authz"
 	"alice/internal/discovery"
 	"alice/internal/discovery/discoverysvc"
 )
@@ -142,7 +143,7 @@ func (f *fakeDiscovery) ListCertificates(ctx context.Context, fl discovery.Certi
 	return nil, false, errNotConfigured
 }
 
-func (f *fakeDiscovery) Certificate(ctx context.Context, fp string) (discovery.CertificateRow, []discovery.EndpointRow, bool, error) {
+func (f *fakeDiscovery) CertificateIn(ctx context.Context, fp string, _ authz.Reach) (discovery.CertificateRow, []discovery.EndpointRow, bool, error) {
 	f.record()
 	if f.CertificateFn != nil {
 		return f.CertificateFn(ctx, fp)
@@ -175,7 +176,7 @@ func (f *fakeDiscovery) SaveSettings(ctx context.Context, a discoverysvc.Actor, 
 	return discoverysvc.SettingsView{}, errNotConfigured
 }
 
-func (f *fakeDiscovery) Summary(ctx context.Context) (discoverysvc.Summary, error) {
+func (f *fakeDiscovery) SummaryIn(ctx context.Context, _ authz.Reach) (discoverysvc.Summary, error) {
 	f.record()
 	if f.SummaryFn != nil {
 		return f.SummaryFn(ctx)

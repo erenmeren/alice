@@ -698,7 +698,7 @@ func (s *server) listACMECertificates(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	all, err := s.deps.ACME.ListACMECertificates(r.Context())
+	all, err := s.deps.ACME.ListACMECertificatesIn(r.Context(), s.reachOf(r, rbac.AcmeView))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -925,11 +925,18 @@ func (s *server) listACMEBindings(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	target := func(b inventory.ACMEBinding) uuid.UUID { return b.TargetID }
+	seen, err := s.targetsSeen(r, targetIDsOf(list, target))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	list, hidden := keepSeen(list, target, seen) // R49 Phase 2: the bindings on the caller's servers
 	items := make([]acmeBindingDTO, 0, len(list))
 	for _, b := range list {
 		items = append(items, acmeBindingJSON(b))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "hidden_count": hidden})
 }
 
 // putACMEBinding binds a location to the certificate (or changes its auto_deploy). Switching unattended deployment ON

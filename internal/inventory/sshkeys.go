@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"alice/internal/audit"
+	"alice/internal/authz"
 	"alice/internal/platform/db"
 	"alice/internal/platform/validate"
 	"alice/internal/providers"
@@ -75,6 +76,8 @@ type KeyFilter struct {
 	Limit          int
 	// ServiceIDs keeps the keys owned by these services (R49); nil = every service, empty = none.
 	ServiceIDs []uuid.UUID
+	// Reach keeps the keys the caller sees (R49 Phase 2, design §5.8); the zero value is every service.
+	Reach authz.Reach
 }
 
 // KeyPage is one page of keys.
@@ -515,9 +518,10 @@ WHERE (l.id IS NOT NULL OR (k.managed AND ($5::boolean OR k.retired_at IS NULL) 
                                      WHERE x.ssh_key_id = k.id AND x.missing_since IS NULL AND x.removed_by_alice_at IS NULL)))
   AND ($6::timestamptz IS NULL OR (k.first_seen_at, k.id) > ($6::timestamptz, $7::uuid))
   AND ($9::uuid[] IS NULL OR k.service_id = ANY($9))
+  AND `+authz.SSHKeyVisible("k", "$10")+`
 GROUP BY k.id
 ORDER BY k.first_seen_at, k.id
-LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID, limit+1, f.ServiceIDs)
+LIMIT $8`, target, f.OSUser, pattern, f.Flag, f.IncludeMissing, afterAt, afterID, limit+1, f.ServiceIDs, f.Reach.SQL())
 	if err != nil {
 		return KeyPage{}, fmt.Errorf("inventory: list ssh keys: %w", err)
 	}

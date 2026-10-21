@@ -23,9 +23,11 @@ func (s *server) dashboardRoutes() []route {
 }
 
 // viewer is the caller as the dashboard filters for it.
-func viewer(r *http.Request) reports.Viewer {
+func (s *server) viewer(r *http.Request) reports.Viewer {
 	p := principalFrom(r.Context())
-	return reports.Viewer{UserID: p.UserID, Role: p.Role}
+	// Role is the global role (the audit head, the license detail, the delivery state); Reach what the numbers count
+	// (R49 Phase 2, design §5.8: the caller's read reach).
+	return reports.Viewer{UserID: p.UserID, Role: p.Role, Reach: s.reachOf(r, rbac.Read)}
 }
 
 // phase8SummaryDTO is the summary with the Phase 8 sections (R43 row 18): the backup state for Administrators and
@@ -48,7 +50,7 @@ type dashboardDiscoveryDTO struct {
 
 func (s *server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	sum, err := s.deps.Reports.Summary(ctx, viewer(r))
+	sum, err := s.deps.Reports.Summary(ctx, s.viewer(r))
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -92,10 +94,10 @@ func (s *server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
 // one): nil without the discovery service, for a caller DiscoveryView refuses (its summary is then not read) and while
 // no scope exists.
 func (s *server) dashboardDiscovery(r *http.Request) (*dashboardDiscoveryDTO, error) {
-	if s.deps.Discovery == nil || rbac.Decide(rbac.DiscoveryView, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) != rbac.Allow {
+	if s.deps.Discovery == nil || rbac.DecideAnywhere(rbac.DiscoveryView, principalFrom(r.Context()).Subject(s.deps.Clock.Now())) != rbac.Allow {
 		return nil, nil //nolint:nilnil // no metric for this caller is a normal answer, the field is optional
 	}
-	v, err := s.deps.Discovery.Summary(r.Context())
+	v, err := s.deps.Discovery.SummaryIn(r.Context(), s.reachOf(r, rbac.DiscoveryView))
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +156,7 @@ func (s *server) dashboardExpiring(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	items, err := s.deps.Reports.Expiring(r.Context(), days, limit)
+	items, err := s.deps.Reports.ExpiringIn(r.Context(), days, limit, s.reachOf(r, rbac.Read)) // R49 Phase 2: over the caller's services
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -169,7 +171,7 @@ func (s *server) dashboardExpiring(w http.ResponseWriter, r *http.Request) {
 
 // listAlerts lists the conditions that need attention, filtered for the caller's role as reports.Attention does.
 func (s *server) listAlerts(w http.ResponseWriter, r *http.Request) {
-	conds, err := s.deps.Reports.Attention(r.Context(), viewer(r))
+	conds, err := s.deps.Reports.Attention(r.Context(), s.viewer(r))
 	if err != nil {
 		s.fail(w, r, err)
 		return

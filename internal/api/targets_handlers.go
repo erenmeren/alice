@@ -90,6 +90,7 @@ func (s *server) listTargets(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, v)
 		return
 	}
+	reach := s.reachOf(r, rbac.Read) // R49 Phase 2: the servers and Key Vaults of the caller's services
 	ts, err := s.deps.Inventory.ListTargets(r.Context())
 	if err != nil {
 		s.fail(w, r, err)
@@ -97,7 +98,7 @@ func (s *server) listTargets(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]targetDTO, 0, len(ts))
 	for _, t := range ts {
-		if (typ == "" || t.Type == typ) && inServices(filter, t.ServiceID) {
+		if (typ == "" || t.Type == typ) && inServices(filter, t.ServiceID) && reach.Contains(t.ServiceID) {
 			items = append(items, targetJSON(t, refs))
 		}
 	}

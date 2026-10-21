@@ -46,6 +46,8 @@ type ScopeFilter struct {
 	Limit int
 	// ServiceIDs keeps the scopes owned by these services (R49); nil = every service, empty = none.
 	ServiceIDs []uuid.UUID
+	// Reach keeps the scopes of the caller's services (R49 Phase 2); the zero value is every service.
+	Reach authz.Reach
 }
 
 // ScopePatch is a change of a scope: nil fields stay. Schedule replaces the whole schedule.
@@ -166,10 +168,10 @@ func (s *Service) GetScope(ctx context.Context, id uuid.UUID) (ScopeView, error)
 // ListScopes lists the live scopes, oldest first; more reports whether a page follows.
 func (s *Service) ListScopes(ctx context.Context, f ScopeFilter) (list []ScopeView, more bool, err error) {
 	n := pageSize(f.Limit)
-	args := []any{n + 1, f.ServiceIDs}
-	cond := " AND ($2::uuid[] IS NULL OR s.service_id = ANY($2))"
+	args := []any{n + 1, f.ServiceIDs, f.Reach.SQL()}
+	cond := " AND ($2::uuid[] IS NULL OR s.service_id = ANY($2)) AND " + authz.OwnedVisible("s", "$3")
 	if f.After != nil {
-		cond += " AND (s.created_at, s.id) > ($3, $4)"
+		cond += " AND (s.created_at, s.id) > ($4, $5)"
 		args = append(args, f.After.CreatedAt, f.After.ID)
 	}
 	rows, err := s.pool.Query(ctx, `SELECT `+scopeColumns+` WHERE s.deleted_at IS NULL`+cond+` ORDER BY s.created_at, s.id LIMIT $1`, args...)

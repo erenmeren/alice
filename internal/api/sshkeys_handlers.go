@@ -117,6 +117,7 @@ func (s *server) sshKeyFilter(w http.ResponseWriter, r *http.Request, paged bool
 		IncludeMissing: parseBool(q.Get("missing"), "missing", &v),
 	}
 	f.ServiceIDs = s.serviceFilter(r, &v) // R49: service_id and environment_id
+	f.Reach = s.reachOf(r, rbac.Read)     // R49 Phase 2: the keys the caller sees
 	if paged {
 		f.Cursor, f.Limit = q.Get("cursor"), pageLimit(q.Get("limit"), &v)
 	} else {
@@ -153,7 +154,15 @@ func (s *server) getSSHKey(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	d := sshKeyDetailDTO{sshKeyDTO: sshKeyJSON(k, true, refs)}
+	target := func(l inventory.KeyLocation) uuid.UUID { return l.TargetID }
+	seen, err := s.targetsSeen(r, targetIDsOf(k.Locations, target))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var hidden int
+	k.Locations, hidden = keepSeen(k.Locations, target, seen) // R49 Phase 2: the locations on the caller's servers
+	d := sshKeyDetailDTO{sshKeyDTO: sshKeyJSON(k, true, refs), HiddenCount: hidden}
 	if k.Managed && s.deps.SSHKeys != nil {
 		m, err := s.deps.SSHKeys.ManagedKey(r.Context(), id)
 		switch {
