@@ -152,8 +152,15 @@ func TestOnlyProbeTLSConfigSkipsVerification(t *testing.T) {
 		}
 	}
 	// internal/vconsole/store/tls.go (the vendor's own tool, not the product) only reads the field, to refuse a database
-	// connection that does not verify the server certificate; it skips nothing.
-	assert.Equal(t, []string{"cmd/alice/selfcheck.go", "internal/discovery/tlsprobe/probe.go", "internal/notify/pin.go", "internal/providers/linuxssh/helperproto/helperproto.go", "internal/vconsole/store/tls.go"}, found)
+	// connection that does not verify the server certificate; it skips nothing. R59 G2 adds internal/providers/tlspin, whose
+	// VerifyConnection accepts only the pinned SubjectPublicKeyInfo.
+	assert.Equal(t, []string{"cmd/alice/selfcheck.go", "internal/discovery/tlsprobe/probe.go", "internal/notify/pin.go", "internal/providers/linuxssh/helperproto/helperproto.go",
+		"internal/providers/tlspin/tlspin.go", "internal/vconsole/store/tls.go"}, found)
+	tp, err := os.ReadFile(filepath.Join(root, "internal", "providers", "tlspin", "tlspin.go")) //nolint:gosec // G304: a fixed source file of the repository
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(string(tp), needle), "tlspin skips the chain check in one place only")
+	assert.Contains(t, string(tp), "cfg.VerifyConnection = v.verify", "tlspin checks the pinned identity itself")
+	assert.Contains(t, string(tp), "subtle.ConstantTimeCompare(", "tlspin compares the pin")
 	self, err := os.ReadFile(filepath.Join(root, "cmd", "alice", "selfcheck.go")) //nolint:gosec // G304: a fixed source file of the repository
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(string(self), needle+":"), "selfcheck skips the chain check in one place only")

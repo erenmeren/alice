@@ -41,6 +41,8 @@ var allowedSkipVerify = map[string]int{
 	// The vendor console (not part of the product) only reads the field, to refuse a database connection that
 	// would not verify the server certificate; it skips nothing.
 	"internal/vconsole/store/tls.go": 1,
+	// R59 G2: an API target's server identity, compared with the pinned SubjectPublicKeyInfo in VerifyConnection.
+	"internal/providers/tlspin/tlspin.go": 1,
 }
 
 // rootSkips are the directories, by exact root-relative path, that hold other projects' Go files
@@ -100,7 +102,7 @@ func TestInsecureSkipVerifyOnlyInTheAllowedSites(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, problems)
 	assert.Greater(t, scanned, 300, "the walk saw the repository")
-	assert.Equal(t, allowedSkipVerify, found, "%s may appear only in %s (in %s) and the three pinned production sites, once each",
+	assert.Equal(t, allowedSkipVerify, found, "%s may appear only in %s (in %s) and the pinned production sites, once each",
 		skipVerify, probeFile, probeFunc)
 }
 
